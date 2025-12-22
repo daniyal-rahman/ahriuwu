@@ -1,5 +1,15 @@
 """Reward extraction modules."""
 
-from .reward_extractor import RewardExtractor
+from .reward_extractor import (
+    RewardConfig,
+    RewardExtractor,
+    RewardInfo,
+    compute_rewards_for_sequence,
+)
 
-__all__ = ["RewardExtractor"]
+__all__ = [
+    "RewardConfig",
+    "RewardExtractor",
+    "RewardInfo",
+    "compute_rewards_for_sequence",
+]
