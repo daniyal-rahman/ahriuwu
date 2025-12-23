@@ -279,3 +279,111 @@ class FrameWithStateDataset(Dataset):
             "video_id": seq_info["video_id"],
             "start_idx": start_idx,
         }
+
+
+class LatentSequenceDataset(Dataset):
+    """Dataset of pre-tokenized latent sequences for dynamics model training.
+
+    Loads latent vectors from .pt files instead of raw frames.
+    Much faster I/O than loading and resizing JPEGs.
+    """
+
+    def __init__(
+        self,
+        latents_dir: Path | str,
+        sequence_length: int = 64,
+        stride: int = 1,
+    ):
+        """Initialize dataset.
+
+        Args:
+            latents_dir: Directory containing video subdirs with latent .pt files
+            sequence_length: Number of frames per sequence
+            stride: Step between sequence start indices
+        """
+        self.latents_dir = Path(latents_dir)
+        self.sequence_length = sequence_length
+        self.stride = stride
+
+        self.sequences = []
+        self._index_latents()
+
+    def _index_latents(self):
+        """Build index of all valid sequences."""
+        for video_dir in sorted(self.latents_dir.iterdir()):
+            if not video_dir.is_dir():
+                continue
+
+            latent_files = sorted(video_dir.glob("latent_*.pt"))
+            if len(latent_files) < self.sequence_length:
+                continue
+
+            video_id = video_dir.name
+
+            # Extract frame numbers and sort
+            frame_nums = []
+            for f in latent_files:
+                try:
+                    num = int(f.stem.split("_")[1])
+                    frame_nums.append(num)
+                except (ValueError, IndexError):
+                    continue
+
+            frame_nums.sort()
+
+            # Find contiguous sequences
+            # We need sequence_length consecutive frames
+            if not frame_nums:
+                continue
+
+            # Build list of start indices for contiguous sequences
+            contiguous_start = frame_nums[0]
+            contiguous_count = 1
+
+            for i in range(1, len(frame_nums)):
+                if frame_nums[i] == frame_nums[i - 1] + 1:
+                    contiguous_count += 1
+                else:
+                    # End of contiguous block - add sequences
+                    if contiguous_count >= self.sequence_length:
+                        for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
+                            self.sequences.append({
+                                "video_id": video_id,
+                                "start_frame": contiguous_start + start_offset,
+                                "video_dir": video_dir,
+                            })
+                    # Reset for new block
+                    contiguous_start = frame_nums[i]
+                    contiguous_count = 1
+
+            # Handle last contiguous block
+            if contiguous_count >= self.sequence_length:
+                for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
+                    self.sequences.append({
+                        "video_id": video_id,
+                        "start_frame": contiguous_start + start_offset,
+                        "video_dir": video_dir,
+                    })
+
+        print(f"Indexed {len(self.sequences)} latent sequences from {self.latents_dir}")
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, idx: int) -> dict:
+        seq_info = self.sequences[idx]
+        video_dir = seq_info["video_dir"]
+        start_frame = seq_info["start_frame"]
+
+        latents = []
+        for i in range(self.sequence_length):
+            frame_num = start_frame + i
+            latent_path = video_dir / f"latent_{frame_num:06d}.pt"
+            latent = torch.load(latent_path, weights_only=True)
+            latents.append(latent)
+
+        return {
+            "latents": torch.stack(latents),  # (T, C, H, W) = (T, 256, 16, 16)
+            "video_id": seq_info["video_id"],
+            "start_frame": start_frame,
+        }
