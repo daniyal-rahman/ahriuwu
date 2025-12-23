@@ -17,8 +17,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.cuda.amp import GradScaler, autocast
 
-from src.ahriuwu.data.dataset import SingleFrameDataset
-from src.ahriuwu.models import create_tokenizer, TokenizerLoss, psnr
+from ahriuwu.data.dataset import SingleFrameDataset
+from ahriuwu.models import create_tokenizer, TokenizerLoss, psnr
 
 
 def parse_args():
