@@ -37,6 +37,16 @@ REPLAY_HUD_1080P = {
     # Game timer - bottom of top_scoreboard, centered on screen, 70x30
     "game_clock": (925, 70, 70, 30),  # x: 960-35, y: 100-30
 
+    # Garen's health bar text - shows "current/total" format (e.g., "1234/2500")
+    # Located in bottom-left HUD area
+    "garen_health_text": (70, 850, 100, 20),
+
+    # Enemy health bars on side panels (use based on which side Garen is on)
+    # If Garen is RED team -> enemies are on BLUE side (left panel)
+    # If Garen is BLUE team -> enemies are on RED side (right panel)
+    "enemy_health_blue_side": (30, 203, 46, 8),  # Left panel (blue team)
+    "enemy_health_red_side": (1845, 203, 46, 8),  # Right panel (1920-75)
+
     # CS comes from scorecard - need to find Garen's row
     # Gold comes from scorecard (flashes) or top_scoreboard (team total)
 }

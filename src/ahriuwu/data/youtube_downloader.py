@@ -70,6 +70,9 @@ SIDE_PATTERNS = [
     (r"\bred\s*side\b", "red"),
 ]
 
+# Pattern for domisumReplay descriptions: "EUW-7646979958-TOP-RED" or "TOP-BLUE"
+SIDE_FROM_DESC_PATTERN = re.compile(r"-(RED|BLUE)\s*$", re.IGNORECASE)
+
 
 def parse_elo_from_title(title: str) -> str | None:
     """Extract elo tier from video title."""
@@ -92,12 +95,24 @@ def parse_patch_from_title(title: str) -> str | None:
     return None
 
 
-def parse_side_from_title(title: str) -> str:
-    """Extract side (blue/red) from video title."""
+def parse_side_from_title(title: str, description: str = "") -> str:
+    """Extract side (blue/red) from video title or description.
+
+    Checks:
+    1. Title for "blue side" / "red side"
+    2. Description for domisumReplay format: "EUW-xxx-TOP-RED" or "-BLUE"
+    """
     title_lower = title.lower()
     for pattern, side in SIDE_PATTERNS:
         if re.search(pattern, title_lower):
             return side
+
+    # Check description for domisumReplay format (e.g., "TOP-RED" at end)
+    if description:
+        match = SIDE_FROM_DESC_PATTERN.search(description)
+        if match:
+            return match.group(1).lower()
+
     return "unknown"
 
 
@@ -154,6 +169,7 @@ class YouTubeDownloader:
         """Create VideoMetadata from yt-dlp video info."""
         video_id = video_info.get("id", video_info.get("url", "").split("=")[-1])
         title = video_info.get("title", "")
+        description = video_info.get("description", "")
 
         # Get HUD type from known channels
         hud_type = KNOWN_CHANNELS.get(channel_name, {}).get("hud_type", "unknown")
@@ -166,7 +182,7 @@ class YouTubeDownloader:
             duration_seconds=video_info.get("duration", 0),
             url=f"https://www.youtube.com/watch?v={video_id}",
             hud_type=hud_type,
-            side=parse_side_from_title(title),
+            side=parse_side_from_title(title, description),
             patch_version=parse_patch_from_title(title),
             elo_tier=parse_elo_from_title(title),
         )
