@@ -98,7 +98,8 @@ def read_garen_health_from_crop(crop: np.ndarray, reader) -> dict | None:
 def read_enemy_health_from_crop(crop: np.ndarray) -> float | None:
     """Estimate enemy health percentage from health bar via color detection.
 
-    The side panel health bars use green to show remaining health.
+    The side panel health bars fill horizontally with green.
+    We detect where the green ends to calculate fill percentage.
 
     Args:
         crop: Cropped image of health bar region
@@ -118,15 +119,19 @@ def read_enemy_health_from_crop(crop: np.ndarray) -> float | None:
 
     mask = cv2.inRange(hsv, green_lower, green_upper)
 
-    # Calculate percentage of green pixels
-    green_pixels = np.sum(mask > 0)
-    total_pixels = mask.shape[0] * mask.shape[1]
+    # Find the rightmost column with green pixels
+    # Health bars fill left-to-right, so rightmost green = current health
+    col_has_green = np.any(mask > 0, axis=0)  # True for each column with green
+    green_cols = np.where(col_has_green)[0]
 
-    if total_pixels == 0:
-        return None
+    if len(green_cols) == 0:
+        return 0.0  # No green = 0% health
 
-    # Return ratio of green pixels (health bar fill)
-    return green_pixels / total_pixels
+    rightmost_green = green_cols[-1]
+    bar_width = mask.shape[1]
+
+    # Return fill percentage (rightmost green column / total width)
+    return (rightmost_green + 1) / bar_width
 
 
 def load_video_metadata(metadata_dir: Path, video_id: str) -> dict | None:
