@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 
 from ahriuwu.data.dataset import SingleFrameDataset
 from ahriuwu.models import create_tokenizer, TokenizerLoss, psnr
@@ -300,7 +300,7 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
 
     # Create scaler for mixed precision
-    scaler = GradScaler()
+    scaler = GradScaler("cuda")
 
     # Resume if checkpoint provided
     start_epoch = 0
