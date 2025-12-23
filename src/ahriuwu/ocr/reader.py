@@ -78,13 +78,13 @@ def read_cs(frame: np.ndarray, region: tuple[int, int, int, int]) -> int | None:
 def read_game_clock(frame: np.ndarray, region: tuple[int, int, int, int]) -> int | None:
     """Read game clock and return total seconds.
 
-    Expects format like "12:34" or "1:23".
+    Expects format like "12:34", "1:23", or "03.35" (OCR sometimes reads : as .)
     Returns total seconds (e.g., 754 for 12:34).
     """
     text = read_text(frame, region)
 
-    # Try to parse MM:SS format
-    match = re.search(r"(\d{1,2}):(\d{2})", text)
+    # Try to parse MM:SS or MM.SS format (OCR can confuse : and .)
+    match = re.search(r"(\d{1,2})[:.](\d{2})", text)
     if match:
         minutes = int(match.group(1))
         seconds = int(match.group(2))

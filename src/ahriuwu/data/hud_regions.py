@@ -1,29 +1,54 @@
 """Fixed HUD region coordinates for 1080p LoL footage.
 
-These are hardcoded regions for known video sources. Coordinates are (x, y, width, height).
-Tweak these values based on sample frames from each source.
+Coordinates are (x, y, width, height) where (x,y) is top-left corner.
+Screen is 1920x1080.
 """
 
 # Replay HUD (domisumReplay-Garen channel)
-# TODO: Verify these coordinates with actual frames
+# Based on actual frame analysis
 REPLAY_HUD_1080P = {
-    "gold": (880, 40, 100, 30),
-    "cs": (920, 60, 60, 25),
-    "game_clock": (930, 10, 60, 25),
-    "minimap": (1630, 790, 280, 280),
-    "player_health": (850, 880, 220, 30),
-    "enemy_health": None,  # Need to detect dynamically or skip
+    # Left side - blue team champion portraits/status
+    "blue_team": (0, 145, 100, 500),
+
+    # Right side - red team champion portraits/status
+    "red_team": (1820, 145, 100, 500),  # 1920-100 = 1820
+
+    # Bottom left - domisumReplay watermark (ignore for OCR)
+    "watermark": (0, 958, 300, 122),  # y = 1080-122
+
+    # Garen's ability bar (Q/W/E/R cooldowns, summoners, buffs)
+    # Right above watermark
+    "garen_hud": (0, 773, 310, 185),  # y = 958-185
+
+    # Bottom center - scorecard with all 10 champs (CS, items, KDA)
+    # Occasionally flashes individual gold
+    "scorecard": (600, 847, 740, 233),  # y = 1080-233
+
+    # Bottom right of scorecard - drake/objective timer
+    "objective_timer": (1340, 980, 270, 100),  # x = 600+740
+
+    # Bottom right corner - minimap
+    "minimap": (1650, 810, 270, 270),  # 1920-270, 1080-270
+
+    # Top middle - team gold, kills, neutrals, game timer
+    "top_scoreboard": (385, 0, 1150, 100),  # centered: (1920-1150)/2
+
+    # === Derived regions for OCR ===
+    # Game timer - bottom of top_scoreboard, centered on screen, 70x30
+    "game_clock": (925, 70, 70, 30),  # x: 960-35, y: 100-30
+
+    # CS comes from scorecard - need to find Garen's row
+    # Gold comes from scorecard (flashes) or top_scoreboard (team total)
 }
 
 # Live gameplay HUD (GarenChallenger channel)
-# TODO: Verify these coordinates with actual frames
+# TODO: Get sample frame and map regions
 LIVE_HUD_1080P = {
-    "gold": (1750, 1040, 100, 30),
-    "cs": (1650, 1040, 60, 25),
-    "game_clock": (1870, 10, 50, 25),
-    "minimap": (1630, 790, 280, 280),
-    "player_health": (850, 880, 220, 30),
-    "enemy_health": None,
+    "gold": None,  # TODO
+    "cs": None,  # TODO
+    "game_clock": None,  # TODO
+    "minimap": None,  # TODO
+    "player_health": None,  # TODO
 }
 
 # Map channel names to their HUD config
@@ -42,5 +67,7 @@ def get_hud_regions(channel: str) -> dict:
 
 def crop_region(frame, region: tuple[int, int, int, int]):
     """Crop a region from a frame. frame is numpy array (H, W, C)."""
+    if region is None:
+        return None
     x, y, w, h = region
     return frame[y:y+h, x:x+w]
