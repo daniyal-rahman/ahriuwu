@@ -8,6 +8,74 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+# Default target resolution for world model
+TARGET_SIZE = (256, 256)
+
+
+class SingleFrameDataset(Dataset):
+    """Dataset of individual frames for tokenizer training.
+
+    Loads frames from video directories, resizes to target size.
+    """
+
+    def __init__(
+        self,
+        frames_dir: Path | str,
+        target_size: tuple[int, int] = TARGET_SIZE,
+        file_ext: str = "jpg",
+        transform=None,
+    ):
+        """Initialize dataset.
+
+        Args:
+            frames_dir: Directory containing video subdirs with frames
+            target_size: (width, height) to resize frames to
+            file_ext: Frame file extension (jpg or png)
+            transform: Optional torchvision transform
+        """
+        self.frames_dir = Path(frames_dir)
+        self.target_size = target_size
+        self.file_ext = file_ext
+        self.transform = transform
+
+        # Index all frames
+        self.frame_paths = []
+        self._index_frames()
+
+    def _index_frames(self):
+        """Build index of all frames."""
+        for video_dir in self.frames_dir.iterdir():
+            if not video_dir.is_dir():
+                continue
+
+            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
+            self.frame_paths.extend(frames)
+
+        print(f"Indexed {len(self.frame_paths)} frames from {self.frames_dir}")
+
+    def __len__(self) -> int:
+        return len(self.frame_paths)
+
+    def __getitem__(self, idx: int) -> dict:
+        frame_path = self.frame_paths[idx]
+
+        # Load and resize
+        frame = cv2.imread(str(frame_path))
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
+
+        if self.transform:
+            frame = self.transform(frame)
+        else:
+            # Default: normalize to [0, 1] and convert to tensor
+            frame = torch.from_numpy(frame).float() / 255.0
+            frame = frame.permute(2, 0, 1)  # HWC -> CHW
+
+        return {
+            "frame": frame,  # (C, H, W)
+            "path": str(frame_path),
+        }
+
 
 class FrameSequenceDataset(Dataset):
     """Dataset of frame sequences for world model training.
@@ -20,6 +88,8 @@ class FrameSequenceDataset(Dataset):
         frames_dir: Path | str,
         sequence_length: int = 192,  # 9.6 seconds at 20 FPS
         stride: int = 1,
+        target_size: tuple[int, int] = TARGET_SIZE,
+        file_ext: str = "jpg",
         transform=None,
     ):
         """Initialize dataset.
@@ -28,11 +98,15 @@ class FrameSequenceDataset(Dataset):
             frames_dir: Directory containing video subdirs with frames
             sequence_length: Number of frames per sequence
             stride: Step between sequence start indices
+            target_size: (width, height) to resize frames to
+            file_ext: Frame file extension (jpg or png)
             transform: Optional torchvision transform
         """
         self.frames_dir = Path(frames_dir)
         self.sequence_length = sequence_length
         self.stride = stride
+        self.target_size = target_size
+        self.file_ext = file_ext
         self.transform = transform
 
         # Index all videos and their frames
@@ -45,7 +119,7 @@ class FrameSequenceDataset(Dataset):
             if not video_dir.is_dir():
                 continue
 
-            frames = sorted(video_dir.glob("frame_*.png"))
+            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
             if len(frames) < self.sequence_length:
                 continue
 
@@ -70,9 +144,10 @@ class FrameSequenceDataset(Dataset):
 
         frames = []
         for i in range(self.sequence_length):
-            frame_path = video_dir / f"frame_{start_idx + i:06d}.png"
+            frame_path = video_dir / f"frame_{start_idx + i:06d}.{self.file_ext}"
             frame = cv2.imread(str(frame_path))
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
 
             if self.transform:
                 frame = self.transform(frame)
@@ -102,6 +177,8 @@ class FrameWithStateDataset(Dataset):
         states_dir: Path | str,
         sequence_length: int = 192,
         stride: int = 1,
+        target_size: tuple[int, int] = TARGET_SIZE,
+        file_ext: str = "jpg",
         transform=None,
     ):
         """Initialize dataset.
@@ -111,12 +188,16 @@ class FrameWithStateDataset(Dataset):
             states_dir: Directory containing game state JSON files
             sequence_length: Number of frames per sequence
             stride: Step between sequence start indices
+            target_size: (width, height) to resize frames to
+            file_ext: Frame file extension (jpg or png)
             transform: Optional torchvision transform
         """
         self.frames_dir = Path(frames_dir)
         self.states_dir = Path(states_dir)
         self.sequence_length = sequence_length
         self.stride = stride
+        self.target_size = target_size
+        self.file_ext = file_ext
         self.transform = transform
 
         self.sequences = []
@@ -134,7 +215,7 @@ class FrameWithStateDataset(Dataset):
             if not states_file.exists():
                 continue
 
-            frames = sorted(video_dir.glob("frame_*.png"))
+            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
             states = json.loads(states_file.read_text())
 
             # Use minimum of frames and states
@@ -169,9 +250,10 @@ class FrameWithStateDataset(Dataset):
             frame_idx = start_idx + i
 
             # Load frame
-            frame_path = video_dir / f"frame_{frame_idx:06d}.png"
+            frame_path = video_dir / f"frame_{frame_idx:06d}.{self.file_ext}"
             frame = cv2.imread(str(frame_path))
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
 
             if self.transform:
                 frame = self.transform(frame)

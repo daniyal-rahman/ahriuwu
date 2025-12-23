@@ -46,8 +46,8 @@ data/frames/
 *.avi
 *.webm
 
-# Model weights
-models/
+# Model weights (saved checkpoints, not source code)
+/models/
 checkpoints/
 *.pt
 *.pth

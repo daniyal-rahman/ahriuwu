@@ -20,7 +20,8 @@ def extract_frames(
     video_path: Path,
     output_dir: Path,
     fps: int = 20,
-    format: str = "png",
+    format: str = "jpg",
+    quality: int = 2,
 ) -> int:
     """Extract frames from video at target FPS.
 
@@ -28,7 +29,8 @@ def extract_frames(
         video_path: Path to video file
         output_dir: Directory to save frames
         fps: Target frames per second (default 20)
-        format: Output format (png or jpg)
+        format: Output format (jpg or png). jpg is ~10x smaller.
+        quality: JPEG quality 2-31 (2=best, only used for jpg)
 
     Returns:
         Number of frames extracted
@@ -41,8 +43,13 @@ def extract_frames(
         "-vf", f"fps={fps}",
         "-start_number", "0",
         "-y",
-        str(output_pattern),
     ]
+
+    # Add JPEG quality setting (2=best, 31=worst)
+    if format == "jpg":
+        cmd.extend(["-qscale:v", str(quality)])
+
+    cmd.append(str(output_pattern))
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
