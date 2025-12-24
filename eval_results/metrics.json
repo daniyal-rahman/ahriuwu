@@ -1,0 +1,8 @@
+{
+  "checkpoint": "checkpoints/tokenizer_best.pt",
+  "epoch": 9,
+  "step": 107740,
+  "psnr": 35.286022605895994,
+  "mse": 0.0002963682249537669,
+  "num_samples": 3200
+}

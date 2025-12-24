@@ -10,8 +10,8 @@ Usage:
     python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt --resume
 
 Output:
-    data/processed/latents/{video_id}/latent_{frame:06d}.pt
-    Each file contains a (256, 16, 16) float16 tensor
+    data/processed/latents/{video_id}/latent_{frame:06d}.npy
+    Each file contains a (256, 16, 16) float16 numpy array
 """
 
 import argparse
@@ -61,7 +61,7 @@ class FrameDatasetForEncoding(Dataset):
             for frame_path in frames:
                 # Extract frame number
                 frame_num = int(frame_path.stem.split("_")[1])
-                output_path = output_video_dir / f"latent_{frame_num:06d}.pt"
+                output_path = output_video_dir / f"latent_{frame_num:06d}.npy"
 
                 # Skip if already exists and resume mode
                 if self.skip_existing and output_path.exists():
@@ -123,12 +123,12 @@ def process_batch(model, batch, device):
         with torch.amp.autocast(device_type=device.split(":")[0], dtype=torch.float16):
             latents = model.encode(frames)
 
-    # Save each latent
-    latents = latents.cpu().half()  # Convert to float16 for storage
+    # Save each latent as numpy (much smaller files than torch.save)
+    latents = latents.cpu().numpy().astype(np.float16)
     for i, output_path in enumerate(output_paths):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(latents[i], output_path)
+        np.save(output_path, latents[i])
 
 
 def main():

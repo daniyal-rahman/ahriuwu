@@ -284,7 +284,7 @@ class FrameWithStateDataset(Dataset):
 class LatentSequenceDataset(Dataset):
     """Dataset of pre-tokenized latent sequences for dynamics model training.
 
-    Loads latent vectors from .pt files instead of raw frames.
+    Loads latent vectors from .npy files instead of raw frames.
     Much faster I/O than loading and resizing JPEGs.
     """
 
@@ -297,7 +297,7 @@ class LatentSequenceDataset(Dataset):
         """Initialize dataset.
 
         Args:
-            latents_dir: Directory containing video subdirs with latent .pt files
+            latents_dir: Directory containing video subdirs with latent .npy files
             sequence_length: Number of frames per sequence
             stride: Step between sequence start indices
         """
@@ -314,7 +314,7 @@ class LatentSequenceDataset(Dataset):
             if not video_dir.is_dir():
                 continue
 
-            latent_files = sorted(video_dir.glob("latent_*.pt"))
+            latent_files = sorted(video_dir.glob("latent_*.npy"))
             if len(latent_files) < self.sequence_length:
                 continue
 
@@ -378,9 +378,9 @@ class LatentSequenceDataset(Dataset):
         latents = []
         for i in range(self.sequence_length):
             frame_num = start_frame + i
-            latent_path = video_dir / f"latent_{frame_num:06d}.pt"
-            latent = torch.load(latent_path, weights_only=True)
-            latents.append(latent)
+            latent_path = video_dir / f"latent_{frame_num:06d}.npy"
+            latent = np.load(latent_path)
+            latents.append(torch.from_numpy(latent))
 
         return {
             "latents": torch.stack(latents),  # (T, C, H, W) = (T, 256, 16, 16)
