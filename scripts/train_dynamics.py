@@ -198,10 +198,11 @@ def train_epoch(
 
         optimizer.zero_grad()
 
-        # Sample random timesteps
-        tau = schedule.sample_timesteps(B, device=device)
+        # Sample per-timestep noise levels (diffusion forcing)
+        # This creates temporal causality: clean past → noisy future
+        tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
 
-        # Add noise
+        # Add noise with per-timestep levels
         z_tau, noise = schedule.add_noise(z_0, tau)
 
         # Mixed precision forward
@@ -232,10 +233,13 @@ def train_epoch(
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
             samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
+            # Show tau range: context (low) to target (high)
+            tau_min = tau.min().item()
+            tau_max = tau.max().item()
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {loss.item():.4f} "
-                f"Tau: {tau.mean().item():.2f} "
+                f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
                 f"({samples_per_sec:.1f} seqs/s)"
             )
 

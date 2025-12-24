@@ -82,6 +82,65 @@ class DiffusionSchedule:
         tau = min_tau + (max_tau - min_tau) * tau
         return tau
 
+    def sample_diffusion_forcing_timesteps(
+        self,
+        batch_size: int,
+        seq_length: int,
+        device: torch.device | str | None = None,
+        tau_ctx: float = 0.1,
+        tau_max: float = 1.0,
+    ) -> torch.Tensor:
+        """Sample per-timestep noise levels for diffusion forcing.
+
+        Implements DreamerV4's diffusion forcing where:
+        - A random horizon h is sampled for each batch item
+        - Frames before h: low noise (τ_ctx, context frames)
+        - Frames at/after h: increasing noise (prediction targets)
+
+        This creates temporal causality: model must use clean past
+        to predict noisy future.
+
+        Args:
+            batch_size: Number of sequences
+            seq_length: Number of frames per sequence (T)
+            device: Device to create tensor on
+            tau_ctx: Noise level for context frames (default 0.1)
+            tau_max: Maximum noise level for target frames
+
+        Returns:
+            tau: Per-timestep noise levels, shape (B, T)
+        """
+        device = device or self.device
+
+        # Sample random horizon for each batch item: where prediction starts
+        # Horizon is uniformly distributed from 1 to T-1
+        # (at least 1 context frame, at least 1 prediction frame)
+        horizon = torch.randint(1, seq_length, (batch_size,), device=device)
+
+        # Create position indices: 0, 1, 2, ..., T-1
+        positions = torch.arange(seq_length, device=device).unsqueeze(0)  # (1, T)
+        horizon = horizon.unsqueeze(1)  # (B, 1)
+
+        # Frames before horizon get low noise (context)
+        # Frames at/after horizon get linearly increasing noise
+        # distance = how far past the horizon (0 for context, 1+ for targets)
+        distance = (positions - horizon).clamp(min=0).float()  # (B, T)
+
+        # Normalize distance: frames at horizon=0, last frame has max distance
+        max_distance = (seq_length - 1 - horizon).clamp(min=1).float()  # (B, 1)
+        normalized_dist = distance / max_distance  # (B, T) in [0, 1]
+
+        # Context frames (before horizon) get tau_ctx
+        # Target frames get tau_ctx + normalized_dist * (tau_max - tau_ctx)
+        is_context = positions < horizon  # (B, T)
+        tau = torch.where(
+            is_context,
+            torch.full_like(normalized_dist, tau_ctx),
+            tau_ctx + normalized_dist * (tau_max - tau_ctx)
+        )
+
+        return tau
+
     @torch.no_grad()
     def sample(
         self,
@@ -307,14 +366,33 @@ if __name__ == "__main__":
     print(f"z_0 shape: {z_0.shape}")
     print(f"z_tau shape: {z_tau.shape}")
 
-    # Test loss
+    # Test diffusion forcing timesteps
+    print("\nTesting diffusion forcing...")
+    B, T = 4, 16
+    tau_df = schedule.sample_diffusion_forcing_timesteps(B, T, device="cpu")
+    print(f"Diffusion forcing tau shape: {tau_df.shape}")  # Should be (4, 16)
+    print(f"Sample tau sequence: {tau_df[0].tolist()}")
+    print(f"  Context frames (low tau): {tau_df[0, :4].tolist()}")
+    print(f"  Target frames (high tau): {tau_df[0, -4:].tolist()}")
+
+    # Verify temporal structure: later frames should have higher tau
+    assert tau_df.shape == (B, T), f"Expected ({B}, {T}), got {tau_df.shape}"
+
+    # Test with per-timestep tau
+    z_tau_df, _ = schedule.add_noise(z_0, tau_df)
+    print(f"Noisy latents shape with per-timestep tau: {z_tau_df.shape}")
+
+    # Test loss with per-timestep tau
     pred = z_0 + 0.1 * torch.randn_like(z_0)  # Simulated prediction
-    loss = x_prediction_loss(pred, z_0, tau)
-    print(f"Loss: {loss.item():.4f}")
+    loss = x_prediction_loss(pred, z_0, tau_df)
+    print(f"Loss with per-timestep tau: {loss.item():.4f}")
 
     # Test timestep embedding
     emb = TimestepEmbedding(512)
     tau_emb = emb(tau)
-    print(f"Timestep embedding shape: {tau_emb.shape}")
+    print(f"Timestep embedding shape (B,): {tau_emb.shape}")
 
-    print("All tests passed!")
+    tau_emb_df = emb(tau_df)
+    print(f"Timestep embedding shape (B,T): {tau_emb_df.shape}")
+
+    print("\nAll tests passed!")
