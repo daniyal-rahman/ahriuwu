@@ -325,30 +325,119 @@ class ShortcutForcing:
         P(d) ∝ 1/d
 
         Returns:
-            step_sizes: (B,) tensor of step sizes
+            step_sizes: (B,) tensor of integer step sizes
         """
-        # Sample inverse uniformly
-        idx = torch.randint(0, len(self.step_sizes), (batch_size,), device=device)
-        return torch.tensor([self.step_sizes[i] for i in idx], device=device)
+        # Compute inverse weights: P(d) ∝ 1/d
+        weights = torch.tensor([1.0 / d for d in self.step_sizes], device=device)
+        weights = weights / weights.sum()
+
+        # Sample indices according to weights
+        idx = torch.multinomial(weights.expand(batch_size, -1), num_samples=1).squeeze(-1)
+
+        # Return step sizes as integers
+        step_sizes_tensor = torch.tensor(self.step_sizes, device=device)
+        return step_sizes_tensor[idx]
 
     def compute_loss(
         self,
         model: nn.Module,
+        schedule: "DiffusionSchedule",
         z_0: torch.Tensor,
         tau: torch.Tensor,
         step_size: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict]:
         """Compute shortcut forcing loss.
 
-        For small step sizes: standard x-prediction
-        For large step sizes: bootstrap from two smaller steps
+        For d=1 (base step): standard x-prediction loss
+        For d>1: bootstrap loss from two smaller steps
 
-        Not yet implemented - placeholder for Phase 2.
+        Args:
+            model: Dynamics model with step_size conditioning
+            schedule: DiffusionSchedule for adding noise
+            z_0: Clean latents, shape (B, T, C, H, W)
+            tau: Noise levels, shape (B,) or (B, T)
+            step_size: Step sizes (integers), shape (B,)
+
+        Returns:
+            loss: Combined loss
+            info: Dict with loss breakdown
         """
-        raise NotImplementedError(
-            "Shortcut forcing not yet implemented. "
-            "Use standard diffusion with x_prediction_loss() for MVP."
-        )
+        B = z_0.shape[0]
+
+        # Normalize step sizes to [0, 1] for model conditioning
+        d_normalized = step_size.float() / self.k_max
+
+        # Add noise to get z_tau
+        z_tau, noise = schedule.add_noise(z_0, tau)
+
+        # Split batch by step size
+        is_base_step = (step_size == 1)
+
+        loss_std = torch.tensor(0.0, device=z_0.device)
+        loss_boot = torch.tensor(0.0, device=z_0.device)
+        n_std = 0
+        n_boot = 0
+
+        # Standard loss for d=1 (smallest step)
+        if is_base_step.any():
+            idx = is_base_step
+            z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx], step_size=d_normalized[idx])
+            loss_std = x_prediction_loss(z_pred, z_0[idx], tau[idx] if tau.dim() > 1 else tau[idx])
+            n_std = idx.sum().item()
+
+        # Bootstrap loss for d>1
+        if (~is_base_step).any():
+            idx = ~is_base_step
+            with torch.no_grad():
+                # Teacher: take 2 half-steps
+                d_half = step_size[idx] // 2
+                d_half_norm = d_half.float() / self.k_max
+
+                # First half-step: predict z_0 from z_tau
+                z_mid = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx], step_size=d_half_norm)
+
+                # Compute tau after half-step (denoising increases tau toward clean in paper convention)
+                # But our convention: tau=0 is clean, tau=1 is noise
+                # Denoising DECREASES tau toward 0
+                half_step_amount = step_size[idx].float() / self.k_max / 2
+                if tau.dim() > 1:
+                    tau_mid = (tau[idx] - half_step_amount.unsqueeze(-1)).clamp(min=0)
+                else:
+                    tau_mid = (tau[idx] - half_step_amount).clamp(min=0)
+
+                # Re-noise z_mid to tau_mid level for second half-step
+                # z_tau_mid = (1 - tau_mid) * z_mid + tau_mid * noise
+                if tau_mid.dim() == 1:
+                    tau_mid_expanded = tau_mid.view(-1, 1, 1, 1, 1)
+                else:
+                    tau_mid_expanded = tau_mid.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                z_tau_mid = (1 - tau_mid_expanded) * z_mid + tau_mid_expanded * noise[idx]
+
+                # Second half-step: predict z_0 from z_tau_mid
+                z_target = model(z_tau_mid, tau_mid, step_size=d_half_norm)
+
+            # Student: take 1 full step directly
+            z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx], step_size=d_normalized[idx])
+
+            # Bootstrap loss: match the teacher's final prediction
+            loss_boot = F.mse_loss(z_pred, z_target.detach())
+            n_boot = idx.sum().item()
+
+        # Combine losses (weighted by number of samples)
+        total = n_std + n_boot
+        if total > 0:
+            loss = (loss_std * n_std + loss_boot * n_boot) / total
+        else:
+            loss = loss_std
+
+        info = {
+            "loss_std": loss_std.item(),
+            "loss_boot": loss_boot.item(),
+            "n_std": n_std,
+            "n_boot": n_boot,
+        }
+
+        return loss, info
 
 
 if __name__ == "__main__":

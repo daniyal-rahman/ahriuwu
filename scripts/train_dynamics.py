@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import random
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +28,7 @@ from ahriuwu.models import (
     create_dynamics,
     DiffusionSchedule,
     x_prediction_loss,
+    ShortcutForcing,
 )
 
 
@@ -61,19 +63,55 @@ def parse_args():
         "--sequence-length",
         type=int,
         default=64,
-        help="Number of frames per sequence",
+        help="Number of frames per sequence (ignored if --alternating-lengths)",
     )
     parser.add_argument(
         "--stride",
         type=int,
-        default=16,
-        help="Stride between sequences (for data augmentation)",
+        default=8,
+        help="Stride between sequences (for data augmentation, 8=50% overlap)",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=4,
-        help="Batch size (sequences per batch)",
+        help="Batch size (sequences per batch, ignored if --alternating-lengths)",
+    )
+    # Alternating batch lengths (DreamerV4 Section 3.4)
+    parser.add_argument(
+        "--alternating-lengths",
+        action="store_true",
+        help="Use alternating short/long batch lengths (DreamerV4 style)",
+    )
+    parser.add_argument(
+        "--seq-len-short",
+        type=int,
+        default=32,
+        help="Short sequence length for alternating (default 32 = 1.6 sec)",
+    )
+    parser.add_argument(
+        "--seq-len-long",
+        type=int,
+        default=64,
+        help="Long sequence length for alternating (default 64 = 3.2 sec)",
+    )
+    parser.add_argument(
+        "--batch-size-short",
+        type=int,
+        default=2,
+        help="Batch size for short sequences",
+    )
+    parser.add_argument(
+        "--batch-size-long",
+        type=int,
+        default=1,
+        help="Batch size for long sequences",
+    )
+    parser.add_argument(
+        "--long-ratio",
+        type=float,
+        default=0.1,
+        help="Ratio of long batches (default 0.1 = 10%% long, 90%% short)",
     )
     parser.add_argument(
         "--epochs",
@@ -112,6 +150,12 @@ def parse_args():
         help="Save checkpoint every N epochs",
     )
     parser.add_argument(
+        "--save-steps",
+        type=int,
+        default=0,
+        help="Save checkpoint every N steps (0 to disable)",
+    )
+    parser.add_argument(
         "--resume",
         type=str,
         default=None,
@@ -122,6 +166,17 @@ def parse_args():
         action="store_true",
         default=True,
         help="Use gradient checkpointing to save memory",
+    )
+    parser.add_argument(
+        "--shortcut-forcing",
+        action="store_true",
+        help="Enable shortcut forcing for few-step inference",
+    )
+    parser.add_argument(
+        "--shortcut-k-max",
+        type=int,
+        default=64,
+        help="Maximum step size for shortcut forcing (default 64)",
     )
     parser.add_argument(
         "--device",
@@ -176,7 +231,7 @@ def load_checkpoint(
 
 def train_epoch(
     model: nn.Module,
-    dataloader: DataLoader,
+    dataloader: DataLoader | None,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     schedule: DiffusionSchedule,
@@ -184,14 +239,63 @@ def train_epoch(
     epoch: int,
     global_step: int,
     args: argparse.Namespace,
+    checkpoint_dir: Path = None,
+    shortcut: ShortcutForcing | None = None,
+    dataloader_short: DataLoader | None = None,
+    dataloader_long: DataLoader | None = None,
 ):
-    """Train for one epoch."""
+    """Train for one epoch.
+
+    If dataloader is provided, uses single dataloader mode.
+    If dataloader_short and dataloader_long are provided, uses alternating mode.
+    """
     model.train()
     total_loss = 0.0
     num_batches = 0
     start_time = time.time()
 
-    for batch_idx, batch in enumerate(dataloader):
+    # Determine mode and setup iterators
+    if dataloader is not None:
+        # Single dataloader mode
+        batch_iterator = iter(dataloader)
+        total_batches = len(dataloader)
+        alternating = False
+    else:
+        # Alternating dataloader mode
+        iter_short = iter(dataloader_short)
+        iter_long = iter(dataloader_long)
+        # Estimate total batches based on short loader (most batches come from there)
+        total_batches = len(dataloader_short) + int(len(dataloader_short) * args.long_ratio / (1 - args.long_ratio))
+        alternating = True
+
+    batch_idx = 0
+    while True:
+        # Get next batch
+        try:
+            if alternating:
+                # Ratio-based selection: long_ratio chance of long batch
+                use_long = random.random() < args.long_ratio
+                if use_long:
+                    try:
+                        batch = next(iter_long)
+                        seq_type = "L"
+                    except StopIteration:
+                        iter_long = iter(dataloader_long)
+                        batch = next(iter_long)
+                        seq_type = "L"
+                else:
+                    try:
+                        batch = next(iter_short)
+                        seq_type = "S"
+                    except StopIteration:
+                        # Short loader exhausted = epoch done
+                        break
+            else:
+                batch = next(batch_iterator)
+                seq_type = ""
+        except StopIteration:
+            break
+
         # Get latent sequences: (B, T, C, H, W)
         z_0 = batch["latents"].to(device)
         B, T, C, H, W = z_0.shape
@@ -208,11 +312,14 @@ def train_epoch(
         # Mixed precision forward
         amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
-            # Predict clean latents
-            z_pred = model(z_tau, tau)
-
-            # Compute loss
-            loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+            if shortcut is not None:
+                # Shortcut forcing: sample step sizes and use bootstrap loss
+                step_size = shortcut.sample_step_size(B, device=device)
+                loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size)
+            else:
+                # Standard training: predict clean latents
+                z_pred = model(z_tau, tau)
+                loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
 
         # Backward with scaling
         scaler.scale(loss).backward()
@@ -232,18 +339,50 @@ def train_epoch(
         # Log
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
-            samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
+            batches_per_sec = (batch_idx + 1) / elapsed if elapsed > 0 else 0
             # Show tau range: context (low) to target (high)
             tau_min = tau.min().item()
             tau_max = tau.max().item()
-            print(
-                f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
-                f"Loss: {loss.item():.4f} "
-                f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                f"({samples_per_sec:.1f} seqs/s)"
+
+            # Format progress string
+            if alternating:
+                progress = f"Epoch {epoch} [{batch_idx}/{total_batches}] {seq_type} T={T}"
+            else:
+                progress = f"Epoch {epoch} [{batch_idx}/{total_batches}]"
+
+            if shortcut is not None:
+                # Show shortcut forcing info
+                print(
+                    f"{progress} "
+                    f"Loss: {loss.item():.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
+                    f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
+                    f"({batches_per_sec:.1f} batch/s)"
+                )
+            else:
+                print(
+                    f"{progress} "
+                    f"Loss: {loss.item():.4f} "
+                    f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
+                    f"({batches_per_sec:.1f} batch/s)"
+                )
+
+        # Step-based checkpoint saving
+        if args.save_steps > 0 and global_step % args.save_steps == 0 and checkpoint_dir is not None:
+            step_path = checkpoint_dir / f"dynamics_step_{global_step:07d}.pt"
+            save_checkpoint(
+                model, optimizer, scaler, epoch, global_step,
+                loss.item(), args, step_path
+            )
+            # Also update latest
+            latest_path = checkpoint_dir / "dynamics_latest.pt"
+            save_checkpoint(
+                model, optimizer, scaler, epoch, global_step,
+                loss.item(), args, latest_path
             )
 
-    avg_loss = total_loss / num_batches
+        batch_idx += 1
+
+    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
 
     return {
         "loss": avg_loss,
@@ -260,8 +399,13 @@ def main():
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
     print(f"Latent dim: {args.latent_dim}")
-    print(f"Sequence length: {args.sequence_length}")
-    print(f"Batch size: {args.batch_size}")
+    if args.alternating_lengths:
+        print(f"Alternating lengths: short={args.seq_len_short} (batch={args.batch_size_short}), "
+              f"long={args.seq_len_long} (batch={args.batch_size_long})")
+        print(f"Long ratio: {args.long_ratio:.0%}")
+    else:
+        print(f"Sequence length: {args.sequence_length}")
+        print(f"Batch size: {args.batch_size}")
     print(f"Learning rate: {args.lr}")
     print("=" * 60)
 
@@ -269,29 +413,72 @@ def main():
     checkpoint_dir = Path(args.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create dataset
+    # Create dataset(s) and dataloader(s)
     print(f"\nLoading latent sequences from {args.latents_dir}...")
-    dataset = LatentSequenceDataset(
-        latents_dir=args.latents_dir,
-        sequence_length=args.sequence_length,
-        stride=args.stride,
-    )
 
-    if len(dataset) == 0:
-        print("ERROR: No sequences found!")
-        print("Make sure to run pretokenize_frames.py first.")
-        return
+    if args.alternating_lengths:
+        # Two datasets with different sequence lengths
+        dataset_short = LatentSequenceDataset(
+            latents_dir=args.latents_dir,
+            sequence_length=args.seq_len_short,
+            stride=args.stride,
+        )
+        dataset_long = LatentSequenceDataset(
+            latents_dir=args.latents_dir,
+            sequence_length=args.seq_len_long,
+            stride=args.stride,
+        )
 
-    print(f"Found {len(dataset)} sequences")
+        if len(dataset_short) == 0 or len(dataset_long) == 0:
+            print("ERROR: No sequences found!")
+            print("Make sure to run pretokenize_frames.py first.")
+            return
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=True,
-        drop_last=True,
-    )
+        print(f"Short sequences: {len(dataset_short)} (T={args.seq_len_short})")
+        print(f"Long sequences: {len(dataset_long)} (T={args.seq_len_long})")
+
+        dataloader_short = DataLoader(
+            dataset_short,
+            batch_size=args.batch_size_short,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            drop_last=True,
+        )
+        dataloader_long = DataLoader(
+            dataset_long,
+            batch_size=args.batch_size_long,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            drop_last=True,
+        )
+        dataloader = None  # Will use alternating loaders
+    else:
+        # Single dataset/dataloader
+        dataset = LatentSequenceDataset(
+            latents_dir=args.latents_dir,
+            sequence_length=args.sequence_length,
+            stride=args.stride,
+        )
+
+        if len(dataset) == 0:
+            print("ERROR: No sequences found!")
+            print("Make sure to run pretokenize_frames.py first.")
+            return
+
+        print(f"Found {len(dataset)} sequences")
+
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            drop_last=True,
+        )
+        dataloader_short = None
+        dataloader_long = None
 
     # Create model
     model = create_dynamics(args.model_size, latent_dim=args.latent_dim)
@@ -314,6 +501,12 @@ def main():
 
     # Create diffusion schedule
     schedule = DiffusionSchedule(device=args.device)
+
+    # Create shortcut forcing if enabled
+    shortcut = None
+    if args.shortcut_forcing:
+        shortcut = ShortcutForcing(k_max=args.shortcut_k_max)
+        print(f"Shortcut forcing enabled (k_max={args.shortcut_k_max})")
 
     # Create scaler for mixed precision
     scaler = GradScaler("cuda")
@@ -340,7 +533,8 @@ def main():
 
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, schedule, args.device,
-            epoch, global_step, args
+            epoch, global_step, args, checkpoint_dir, shortcut,
+            dataloader_short, dataloader_long
         )
 
         global_step = metrics["global_step"]

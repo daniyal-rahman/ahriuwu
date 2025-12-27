@@ -321,6 +321,8 @@ class DynamicsTransformer(nn.Module):
 
         # Timestep embedding for diffusion
         self.time_embed = TimestepEmbedding(model_dim)
+        # Step size embedding for shortcut forcing
+        self.step_embed = TimestepEmbedding(model_dim)
 
         # Transformer blocks
         self.blocks = nn.ModuleList()
@@ -362,6 +364,7 @@ class DynamicsTransformer(nn.Module):
         self,
         z_tau: torch.Tensor,
         tau: torch.Tensor,
+        step_size: torch.Tensor | None = None,
         context: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass: predict clean latents from noisy input.
@@ -369,6 +372,8 @@ class DynamicsTransformer(nn.Module):
         Args:
             z_tau: Noisy latents, shape (B, T, C, H, W)
             tau: Diffusion timesteps, shape (B,) or (B, T)
+            step_size: Optional step size for shortcut forcing, shape (B,)
+                       Normalized to [0, 1] where 1.0 = k_max steps
             context: Optional context frames (not used in MVP)
 
         Returns:
@@ -389,6 +394,11 @@ class DynamicsTransformer(nn.Module):
 
         # Get timestep embedding
         time_emb = self.time_embed(tau)  # (B, D) or (B, T, D)
+
+        # Add step size embedding for shortcut forcing
+        if step_size is not None:
+            step_emb = self.step_embed(step_size)  # (B, D)
+            time_emb = time_emb + step_emb  # additive combination
 
         # Transformer blocks
         for block in self.blocks:

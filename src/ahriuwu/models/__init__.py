@@ -7,6 +7,7 @@ from .diffusion import (
     TimestepEmbedding,
     x_prediction_loss,
     ramp_weight,
+    ShortcutForcing,
 )
 from .dynamics import DynamicsTransformer, create_dynamics
 
@@ -23,6 +24,7 @@ __all__ = [
     "TimestepEmbedding",
     "x_prediction_loss",
     "ramp_weight",
+    "ShortcutForcing",
     # Dynamics
     "DynamicsTransformer",
     "create_dynamics",

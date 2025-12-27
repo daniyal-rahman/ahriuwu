@@ -22,6 +22,8 @@ def extract_frames(
     fps: int = 20,
     format: str = "jpg",
     quality: int = 2,
+    use_gpu: bool = True,
+    resolution: int = 256,
 ) -> int:
     """Extract frames from video at target FPS.
 
@@ -31,6 +33,8 @@ def extract_frames(
         fps: Target frames per second (default 20)
         format: Output format (jpg or png). jpg is ~10x smaller.
         quality: JPEG quality 2-31 (2=best, only used for jpg)
+        use_gpu: Use NVIDIA GPU acceleration (NVDEC) if available
+        resolution: Output resolution (default 256 for tokenizer input)
 
     Returns:
         Number of frames extracted
@@ -38,12 +42,18 @@ def extract_frames(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_pattern = output_dir / f"frame_%06d.{format}"
 
-    cmd = [
-        "ffmpeg", "-i", str(video_path),
-        "-vf", f"fps={fps}",
+    cmd = ["ffmpeg"]
+
+    # Add NVIDIA hardware acceleration for decoding
+    if use_gpu:
+        cmd.extend(["-hwaccel", "cuda"])
+
+    cmd.extend([
+        "-i", str(video_path),
+        "-vf", f"fps={fps},scale={resolution}:{resolution}",
         "-start_number", "0",
         "-y",
-    ]
+    ])
 
     # Add JPEG quality setting (2=best, 31=worst)
     if format == "jpg":
