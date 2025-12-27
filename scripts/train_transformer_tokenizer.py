@@ -109,6 +109,12 @@ def parse_args():
         help="Save checkpoint every N epochs",
     )
     parser.add_argument(
+        "--step-save-interval",
+        type=int,
+        default=30000,
+        help="Save checkpoint every N steps (0 to disable)",
+    )
+    parser.add_argument(
         "--resume",
         type=str,
         default=None,
@@ -226,6 +232,7 @@ def train_epoch(
     epoch: int,
     global_step: int,
     args: argparse.Namespace,
+    checkpoint_dir: Path = None,
 ):
     """Train for one epoch with MAE training."""
     model.train()
@@ -282,6 +289,14 @@ def train_epoch(
         num_batches += 1
         global_step += 1
 
+        # Step-based checkpoint saving
+        if checkpoint_dir and args.step_save_interval > 0 and global_step % args.step_save_interval == 0:
+            step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
+            save_checkpoint(model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, step_path)
+            # Also save as latest
+            latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
+            save_checkpoint(model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, latest_path)
+
         # Log
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
@@ -325,6 +340,7 @@ def main():
     print(f"Learning rate: {args.lr}")
     print(f"LPIPS weight: {args.lpips_weight}")
     print(f"Mask ratio: U({args.mask_ratio_min}, {args.mask_ratio_max})")
+    print(f"Step save interval: {args.step_save_interval}")
     print("=" * 60)
 
     # Create directories
@@ -394,7 +410,7 @@ def main():
 
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, loss_fn, args.device,
-            epoch, global_step, args
+            epoch, global_step, args, checkpoint_dir
         )
 
         global_step = metrics["global_step"]
