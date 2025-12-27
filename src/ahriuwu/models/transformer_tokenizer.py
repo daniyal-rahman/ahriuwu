@@ -296,7 +296,7 @@ class TransformerEncoder(nn.Module):
         if mask_indices is not None and mask_embed is not None:
             mask_indices = mask_indices.reshape(B, num_frames, self.num_patches)
             patches = patches.clone()
-            patches[mask_indices] = mask_embed
+            patches[mask_indices] = mask_embed.to(patches.dtype)
 
         # Add position embeddings to patches
         patches = patches + self.patch_pos_embed
