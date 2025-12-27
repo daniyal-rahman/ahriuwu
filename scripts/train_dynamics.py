@@ -219,7 +219,14 @@ def load_checkpoint(
 ):
     """Load training checkpoint."""
     checkpoint_data = torch.load(path, map_location="cpu")
-    model.load_state_dict(checkpoint_data["model_state_dict"])
+
+    # Load model state dict with strict=False to handle new parameters (e.g., step_embed)
+    missing, unexpected = model.load_state_dict(checkpoint_data["model_state_dict"], strict=False)
+    if missing:
+        print(f"Note: Initializing new parameters: {missing}")
+    if unexpected:
+        print(f"Warning: Unexpected keys in checkpoint: {unexpected}")
+
     optimizer.load_state_dict(checkpoint_data["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint_data["scaler_state_dict"])
     return (
