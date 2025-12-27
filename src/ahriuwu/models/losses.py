@@ -303,10 +303,12 @@ class MAELoss(nn.Module):
             masked_target = target_patches[mask_indices]
 
             if masked_pred.numel() == 0:
+                # Return zero loss with grad_fn by using pred
+                zero = (pred * 0).sum()
                 return {
-                    "loss": torch.tensor(0.0, device=pred.device),
-                    "mse": torch.tensor(0.0, device=pred.device),
-                    "lpips": torch.tensor(0.0, device=pred.device),
+                    "loss": zero,
+                    "mse": zero,
+                    "lpips": zero,
                 }
 
             mse_loss = F.mse_loss(masked_pred, masked_target)
