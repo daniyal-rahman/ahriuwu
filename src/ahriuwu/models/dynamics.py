@@ -398,6 +398,9 @@ class DynamicsTransformer(nn.Module):
         # Add step size embedding for shortcut forcing
         if step_size is not None:
             step_emb = self.step_embed(step_size)  # (B, D)
+            # Handle broadcasting when tau is per-timestep (B, T)
+            if time_emb.dim() == 3:  # (B, T, D)
+                step_emb = step_emb.unsqueeze(1)  # (B, 1, D) for broadcasting
             time_emb = time_emb + step_emb  # additive combination
 
         # Transformer blocks

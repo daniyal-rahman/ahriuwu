@@ -322,3 +322,143 @@ python scripts/train_dynamics.py \
 
 # If T=64 works, try T=80 or T=100 for --seq-len-long
 ```
+
+---
+
+## 2024-12-27: DreamerV4 Code Review - Critical Fixes
+
+### Summary
+Comprehensive multi-scale code review identified 5 critical equation bugs that were fixed. See `/code_review/summary.md` for full analysis.
+
+### Fix 1: Ramp Weight Formula (CRITICAL)
+**File:** `src/ahriuwu/models/diffusion.py:209`
+
+**Bug:** Formula was inverted due to tau convention mismatch
+```python
+# BEFORE (WRONG): gave HIGH weight to noise, LOW weight to clean
+def ramp_weight(tau):
+    return 0.9 * tau + 0.1
+
+# AFTER (CORRECT): gives HIGH weight to clean, LOW weight to noise
+def ramp_weight(tau):
+    return 1.0 - 0.9 * tau
+```
+
+**Impact:** Model was focusing on noisy samples (least informative gradients) instead of clean samples (most informative). This likely degraded training quality significantly.
+
+### Fix 2: Tau Grid Sampling for Shortcut Forcing (CRITICAL)
+**File:** `src/ahriuwu/models/diffusion.py`
+
+**Bug:** Tau was sampled independently of step size, but paper Eq. 4 requires:
+```
+tau ∈ {0, d/k_max, 2d/k_max, ..., 1 - d/k_max}
+```
+
+**Fix:** Added two new methods:
+- `sample_tau_for_step_size(step_size, device)` - single tau value
+- `sample_tau_for_step_size_2d(step_size, seq_length, device, tau_ctx)` - per-timestep for diffusion forcing
+
+These sample tau from the correct grid aligned with the step size.
+
+### Fix 3: Velocity-Space Bootstrap Loss (CRITICAL)
+**File:** `src/ahriuwu/models/diffusion.py:419-423`
+
+**Bug:** Bootstrap loss was simple MSE in x-space
+```python
+# BEFORE
+loss_boot = F.mse_loss(z_pred, z_target.detach())
+```
+
+**Fix:** Implemented paper Eq. 7 - velocity space with τ² scaling:
+```python
+# Velocities: b = (prediction - noisy) / tau
+b_prime = (z_mid - z_tau) / tau
+b_double_prime = (z_target - z_tau_mid) / tau_mid
+avg_velocity = (b_prime + b_double_prime) / 2
+b_student = (z_pred - z_tau) / tau
+
+# Loss with τ² scaling
+velocity_diff = b_student - avg_velocity.detach()
+velocity_mse = (velocity_diff ** 2).mean()
+loss_boot = velocity_mse * (tau ** 2)
+```
+
+### Fix 4: Checkpoint Loading strict=False (HIGH)
+**File:** `scripts/eval_dynamics.py`
+
+**Bug:** `strict=True` (default) causes RuntimeError when loading old checkpoints without `step_embed` weights.
+
+**Fix:**
+```python
+missing, unexpected = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+if missing:
+    print(f"Warning: Missing keys in checkpoint: {missing}")
+```
+
+### Fix 5: step_emb Broadcast Mismatch (HIGH)
+**File:** `src/ahriuwu/models/dynamics.py:400-401`
+
+**Bug:** When tau is 2D `(B, T)`, time_emb is `(B, T, D)` but step_emb is `(B, D)`, causing shape mismatch on addition.
+
+**Fix:**
+```python
+if step_size is not None:
+    step_emb = self.step_embed(step_size)  # (B, D)
+    if time_emb.dim() == 3:  # (B, T, D)
+        step_emb = step_emb.unsqueeze(1)  # (B, 1, D)
+    time_emb = time_emb + step_emb
+```
+
+### Concerns & Things That Could Go Wrong
+
+1. **Tau Convention Inversion**: Our codebase uses τ=0 clean, τ=1 noise (opposite of paper). All formulas must be mentally translated. Easy to make mistakes when adding new diffusion-related code.
+
+2. **Bootstrap Loss Numerical Stability**: Dividing by tau when tau→0 can cause NaN. Currently clamped to `tau.clamp(min=1e-6)` but worth monitoring.
+
+3. **Shortcut Forcing + Diffusion Forcing Interaction**: The combination of per-timestep tau (diffusion forcing) with step-size conditioning (shortcut forcing) is complex. Not fully battle-tested yet.
+
+4. **Old Checkpoints**: Existing checkpoints trained without these fixes may behave differently. Consider retraining from scratch after implementing transformer tokenizer.
+
+### What's Still Missing (Medium Priority)
+- RoPE position embeddings (using learned)
+- QKNorm and attention soft capping
+- Tanh bottleneck in tokenizer
+- RMS loss normalization for multi-loss training
+
+---
+
+## 2024-12-27: Transformer Tokenizer Implementation
+
+### Why Change from CNN
+DreamerV4 Section 3.1 uses a block-causal transformer tokenizer:
+- Better for video (temporal consistency across frames)
+- Enables MAE pre-training
+- Reduces spatial tokens 512→256 via latent bottleneck
+
+### Architecture
+**Encoder:**
+- Patches: 16x16 patches from 256x256 frame → 256 patches per frame
+- Patch embeddings + learned position embeddings
+- 256 learned latent tokens per frame
+- Block-causal attention:
+  - Patches ONLY see same-frame patches (no temporal, no cross-frame)
+  - Latents see ALL tokens causally (patches + latents from past frames)
+- Bottleneck: linear projection (512×D → 512×16) → tanh → reshape to 256×32
+
+**Decoder:**
+- Fresh learned patch query tokens (NOT encoder patches)
+- Block-causal attention:
+  - Patches see own-frame patches + ALL latents (from all frames)
+  - Latents ONLY see latents (no patches)
+- Output projection to pixel space
+
+### MAE Training
+- Mask ratio p ~ U(0, 0.9) per frame
+- Patches replaced with learned [MASK] embedding
+- Loss: MSE + 0.2 * LPIPS (VGG backbone)
+
+### Concerns
+1. **VRAM**: Transformer tokenizer is larger than CNN. May need to reduce batch size.
+2. **Complexity**: Block-causal masks are intricate. Easy to get wrong.
+3. **Training Time**: MAE pre-training is separate phase before dynamics training.
+4. **LPIPS Library**: External dependency, need to handle device placement correctly.

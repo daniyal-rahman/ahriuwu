@@ -192,13 +192,15 @@ class DiffusionSchedule:
 def ramp_weight(tau: torch.Tensor) -> torch.Tensor:
     """Compute ramp loss weight from DreamerV4.
 
-    Higher weight at high signal levels (low τ) focuses learning
-    on regions with more structure.
+    Higher weight at high signal levels (low τ in our convention) focuses
+    learning on regions with more structure.
 
-    Formula: w(τ) = 0.9τ + 0.1
+    Paper formula: w(τ) = 0.9τ + 0.1 (where paper τ=0 is noise, τ=1 is clean)
+    Our convention: τ=0 is clean, τ=1 is noise
+    Inverted formula: w(τ) = 1.0 - 0.9τ
 
-    At τ=0 (clean): w = 0.1
-    At τ=1 (noise): w = 1.0
+    At τ=0 (clean): w = 1.0 (high weight - more informative gradients)
+    At τ=1 (noise): w = 0.1 (low weight - less useful gradients)
 
     Args:
         tau: Timesteps, shape (B,) or (B, T)
@@ -206,7 +208,7 @@ def ramp_weight(tau: torch.Tensor) -> torch.Tensor:
     Returns:
         weights: Loss weights, same shape as tau
     """
-    return 0.9 * tau + 0.1
+    return 1.0 - 0.9 * tau
 
 
 def x_prediction_loss(
@@ -338,6 +340,82 @@ class ShortcutForcing:
         step_sizes_tensor = torch.tensor(self.step_sizes, device=device)
         return step_sizes_tensor[idx]
 
+    def sample_tau_for_step_size(
+        self,
+        step_size: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Sample tau from grid aligned with step size (Paper Eq. 4).
+
+        For step size d, tau must come from grid {0, d/k_max, 2d/k_max, ..., 1-d/k_max}
+        This ensures after stepping by d, tau lands on valid grid points.
+
+        Args:
+            step_size: Step sizes (integers), shape (B,)
+            device: Device for tensor creation
+
+        Returns:
+            tau: Sampled tau values, shape (B,) in [0, 1-d/k_max]
+        """
+        B = step_size.shape[0]
+        tau = torch.zeros(B, device=device)
+
+        for d in self.step_sizes:
+            mask = (step_size == d)
+            if mask.any():
+                n = mask.sum().item()
+                # Grid spacing for this step size
+                grid_spacing = d / self.k_max
+                # Number of valid grid points: 0, 1, 2, ..., (k_max/d - 1)
+                num_grid_points = self.k_max // d
+                # Sample grid indices uniformly
+                grid_idx = torch.randint(0, num_grid_points, (n,), device=device)
+                # Convert to tau values
+                tau[mask] = grid_idx.float() * grid_spacing
+
+        return tau
+
+    def sample_tau_for_step_size_2d(
+        self,
+        step_size: torch.Tensor,
+        seq_length: int,
+        device: torch.device,
+        tau_ctx: float = 0.1,
+    ) -> torch.Tensor:
+        """Sample per-timestep tau from grid aligned with step size (Paper Eq. 4).
+
+        Extension for diffusion forcing: samples tau for each position in sequence,
+        maintaining grid alignment while having per-timestep variation.
+
+        Args:
+            step_size: Step sizes (integers), shape (B,)
+            seq_length: Sequence length T
+            device: Device for tensor creation
+            tau_ctx: Minimum tau for context frames
+
+        Returns:
+            tau: Sampled tau values, shape (B, T)
+        """
+        B = step_size.shape[0]
+        tau = torch.zeros(B, seq_length, device=device)
+
+        for d in self.step_sizes:
+            mask = (step_size == d)
+            if mask.any():
+                n = mask.sum().item()
+                # Grid spacing for this step size
+                grid_spacing = d / self.k_max
+                # Number of valid grid points
+                num_grid_points = self.k_max // d
+                # Minimum grid index to stay above tau_ctx
+                min_grid_idx = int(tau_ctx / grid_spacing) if tau_ctx > 0 else 0
+                # Sample grid indices for all positions
+                grid_idx = torch.randint(min_grid_idx, num_grid_points, (n, seq_length), device=device)
+                # Convert to tau values
+                tau[mask] = grid_idx.float() * grid_spacing
+
+        return tau
+
     def compute_loss(
         self,
         model: nn.Module,
@@ -346,10 +424,16 @@ class ShortcutForcing:
         tau: torch.Tensor,
         step_size: torch.Tensor,
     ) -> tuple[torch.Tensor, dict]:
-        """Compute shortcut forcing loss.
+        """Compute shortcut forcing loss (Paper Eq. 7).
 
         For d=1 (base step): standard x-prediction loss
-        For d>1: bootstrap loss from two smaller steps
+        For d>1: bootstrap loss in velocity space with τ² scaling
+
+        Paper Eq. 7 (our convention where τ=0 clean, τ=1 noise):
+            L = τ² || (ẑ_0 - z_τ) / τ - sg(b' + b'')/2 ||²
+        where:
+            b' = (z_mid - z_τ) / τ         (first half-step velocity)
+            b'' = (z_target - z_τ_mid) / τ_mid  (second half-step velocity)
 
         Args:
             model: Dynamics model with step_size conditioning
@@ -385,42 +469,68 @@ class ShortcutForcing:
             loss_std = x_prediction_loss(z_pred, z_0[idx], tau[idx] if tau.dim() > 1 else tau[idx])
             n_std = idx.sum().item()
 
-        # Bootstrap loss for d>1
+        # Bootstrap loss for d>1 (velocity space with τ² scaling)
         if (~is_base_step).any():
             idx = ~is_base_step
+            tau_idx = tau[idx] if tau.dim() > 1 else tau[idx]
+
             with torch.no_grad():
                 # Teacher: take 2 half-steps
                 d_half = step_size[idx] // 2
                 d_half_norm = d_half.float() / self.k_max
 
                 # First half-step: predict z_0 from z_tau
-                z_mid = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx], step_size=d_half_norm)
+                z_mid = model(z_tau[idx], tau_idx, step_size=d_half_norm)
 
-                # Compute tau after half-step (denoising increases tau toward clean in paper convention)
-                # But our convention: tau=0 is clean, tau=1 is noise
-                # Denoising DECREASES tau toward 0
-                half_step_amount = step_size[idx].float() / self.k_max / 2
-                if tau.dim() > 1:
-                    tau_mid = (tau[idx] - half_step_amount.unsqueeze(-1)).clamp(min=0)
+                # First half-step velocity: b' = (z_mid - z_tau) / tau
+                # Expand tau for broadcasting
+                if tau_idx.dim() == 1:
+                    tau_expanded = tau_idx.view(-1, 1, 1, 1, 1)
                 else:
-                    tau_mid = (tau[idx] - half_step_amount).clamp(min=0)
+                    tau_expanded = tau_idx.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                # Clamp tau to avoid division by zero
+                tau_safe = tau_expanded.clamp(min=1e-6)
+                b_prime = (z_mid - z_tau[idx]) / tau_safe
 
-                # Re-noise z_mid to tau_mid level for second half-step
-                # z_tau_mid = (1 - tau_mid) * z_mid + tau_mid * noise
-                if tau_mid.dim() == 1:
+                # Compute tau after half-step
+                # Our convention: denoising DECREASES tau toward 0
+                half_step_amount = step_size[idx].float() / self.k_max / 2
+                if tau_idx.dim() == 1:
+                    tau_mid = (tau_idx - half_step_amount).clamp(min=1e-6)
                     tau_mid_expanded = tau_mid.view(-1, 1, 1, 1, 1)
                 else:
+                    tau_mid = (tau_idx - half_step_amount.unsqueeze(-1)).clamp(min=1e-6)
                     tau_mid_expanded = tau_mid.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+
+                # Re-noise z_mid to tau_mid level for second half-step
                 z_tau_mid = (1 - tau_mid_expanded) * z_mid + tau_mid_expanded * noise[idx]
 
                 # Second half-step: predict z_0 from z_tau_mid
                 z_target = model(z_tau_mid, tau_mid, step_size=d_half_norm)
 
-            # Student: take 1 full step directly
-            z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx], step_size=d_normalized[idx])
+                # Second half-step velocity: b'' = (z_target - z_tau_mid) / tau_mid
+                b_double_prime = (z_target - z_tau_mid) / tau_mid_expanded.clamp(min=1e-6)
 
-            # Bootstrap loss: match the teacher's final prediction
-            loss_boot = F.mse_loss(z_pred, z_target.detach())
+                # Average teacher velocities
+                avg_velocity = (b_prime + b_double_prime) / 2
+
+            # Student: take 1 full step directly
+            z_pred = model(z_tau[idx], tau_idx, step_size=d_normalized[idx])
+
+            # Student velocity: (z_pred - z_tau) / tau
+            b_student = (z_pred - z_tau[idx]) / tau_safe
+
+            # Bootstrap loss in velocity space with τ² scaling (Paper Eq. 7)
+            # L = τ² || b_student - sg(avg_velocity) ||²
+            velocity_diff = b_student - avg_velocity.detach()
+            velocity_mse = (velocity_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W
+
+            # Apply τ² scaling
+            if tau_idx.dim() == 1:
+                tau_weight = tau_idx ** 2
+            else:
+                tau_weight = (tau_idx ** 2).mean(dim=-1)  # Average over T if per-timestep
+            loss_boot = (velocity_mse * tau_weight).mean()
             n_boot = idx.sum().item()
 
         # Combine losses (weighted by number of samples)

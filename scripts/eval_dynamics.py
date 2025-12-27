@@ -283,7 +283,11 @@ def load_dynamics(checkpoint_path: Path, device: str):
     latent_dim = args.get("latent_dim", 256)
 
     model = create_dynamics(model_size, latent_dim=latent_dim)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    missing, unexpected = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+    if missing:
+        print(f"Warning: Missing keys in checkpoint (using random init): {missing}")
+    if unexpected:
+        print(f"Warning: Unexpected keys in checkpoint (ignored): {unexpected}")
     model = model.to(device)
     model.eval()
 
@@ -298,7 +302,11 @@ def load_tokenizer(checkpoint_path: Path, device: str):
     model_size = args.get("model_size", "small")
 
     model = create_tokenizer(model_size)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    missing, unexpected = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+    if missing:
+        print(f"Warning: Missing keys in tokenizer checkpoint (using random init): {missing}")
+    if unexpected:
+        print(f"Warning: Unexpected keys in tokenizer checkpoint (ignored): {unexpected}")
     model = model.to(device)
     model.eval()
 
