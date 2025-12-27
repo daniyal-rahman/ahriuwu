@@ -403,6 +403,7 @@ def latents_to_frames(
     tokenizer: torch.nn.Module,
     latents: torch.Tensor,
     device: str,
+    batch_size: int = 8,
 ) -> torch.Tensor:
     """Decode latents to pixel frames.
 
@@ -410,6 +411,7 @@ def latents_to_frames(
         tokenizer: Tokenizer with decode method
         latents: (B, T, C, H, W) latents
         device: Device
+        batch_size: Decode batch size to avoid OOM
 
     Returns:
         frames: (B, T, 3, 256, 256) decoded frames
@@ -417,12 +419,17 @@ def latents_to_frames(
     B, T, C, H, W = latents.shape
 
     # Reshape to (B*T, C, H, W) for batched decoding
-    # Use reshape instead of view for non-contiguous tensors
     latents_flat = latents.reshape(B * T, C, H, W)
 
+    # Decode in batches to avoid OOM
+    frames_list = []
     with torch.no_grad():
-        # Convert to float32 for decode (model expects float32, latents may be float16)
-        frames_flat = tokenizer.decode(latents_flat.float())
+        for i in range(0, B * T, batch_size):
+            batch = latents_flat[i:i + batch_size].float()
+            decoded = tokenizer.decode(batch)
+            frames_list.append(decoded.cpu())  # Move to CPU to free GPU memory
+
+    frames_flat = torch.cat(frames_list, dim=0).to(device)
 
     # Reshape back
     frames = frames_flat.reshape(B, T, 3, 256, 256)
