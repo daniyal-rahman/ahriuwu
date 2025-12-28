@@ -91,6 +91,12 @@ def parse_args():
         help="Maximum mask ratio (paper uses 0.9)",
     )
     parser.add_argument(
+        "--mask-warmup-steps",
+        type=int,
+        default=50000,
+        help="Steps to linearly ramp mask_ratio_max from 0 to target (curriculum learning)",
+    )
+    parser.add_argument(
         "--num-workers",
         type=int,
         default=4,
@@ -251,8 +257,15 @@ def train_epoch(
     for batch_idx, batch in enumerate(dataloader):
         frames = batch["frame"].to(device)
 
-        # Sample mask ratio from U(min, max) for each batch
-        mask_ratio = random.uniform(args.mask_ratio_min, args.mask_ratio_max)
+        # Curriculum learning: ramp up mask_ratio_max over warmup steps
+        if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
+            warmup_progress = global_step / args.mask_warmup_steps
+            current_mask_max = args.mask_ratio_max * warmup_progress
+        else:
+            current_mask_max = args.mask_ratio_max
+
+        # Sample mask ratio from U(min, current_max) for each batch
+        mask_ratio = random.uniform(args.mask_ratio_min, current_mask_max)
 
         # Mixed precision forward
         with autocast(device_type=device_type, dtype=dtype):
@@ -301,13 +314,16 @@ def train_epoch(
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
             samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
+            mask_info = f"Mask: {mask_ratio:.2f}"
+            if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
+                mask_info += f" (max: {current_mask_max:.2f})"
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {losses['loss'].item():.4f} "
                 f"MSE: {losses['mse'].item():.4f} "
                 f"LPIPS: {losses['lpips'].item():.4f} "
                 f"PSNR: {batch_psnr:.2f} dB "
-                f"Mask: {mask_ratio:.2f} "
+                f"{mask_info} "
                 f"({samples_per_sec:.1f} samples/s)"
             )
 
@@ -340,6 +356,7 @@ def main():
     print(f"Learning rate: {args.lr}")
     print(f"LPIPS weight: {args.lpips_weight}")
     print(f"Mask ratio: U({args.mask_ratio_min}, {args.mask_ratio_max})")
+    print(f"Mask warmup steps: {args.mask_warmup_steps} (curriculum learning)")
     print(f"Step save interval: {args.step_save_interval}")
     print("=" * 60)
 

@@ -462,3 +462,79 @@ DreamerV4 Section 3.1 uses a block-causal transformer tokenizer:
 2. **Complexity**: Block-causal masks are intricate. Easy to get wrong.
 3. **Training Time**: MAE pre-training is separate phase before dynamics training.
 4. **LPIPS Library**: External dependency, need to handle device placement correctly.
+
+---
+
+## 2024-12-27: Transformer Tokenizer Mode Collapse - Diagnosis & Fix
+
+### The Problem
+After 60k steps of training, the transformer tokenizer exhibited complete **mode collapse**:
+- Model outputs identical reconstruction regardless of input
+- Output difference between 2 different inputs: 1.2e-08 (essentially zero)
+- PSNR ~17.8 dB but all reconstructions look the same (mean image)
+
+### Root Cause: Attention Collapse
+Diagnosed by comparing trained vs fresh (random init) model attention statistics:
+
+| Metric | Fresh (Random) | Trained (60k) |
+|--------|---------------|---------------|
+| Max attention | 0.0051 | 0.0042 |
+| Std attention | 0.000671 | 0.000514 |
+
+**Training made attention MORE uniform, not less.** The model learned to ignore patch content and just average everything.
+
+With uniform attention:
+1. Each latent token computes average of all 512 tokens → same output regardless of input
+2. Bottleneck compresses these identical latents → identical outputs
+3. Decoder just outputs learned "mean image"
+
+### Why It Happened
+MAE training with high mask ratios (up to 90%) can be "solved" by outputting a mean image:
+- If you mask 90% of patches, the "safest" prediction is the average
+- Model found local minimum where ignoring patches minimizes reconstruction loss
+- No architectural constraint forcing attention to be content-dependent
+
+### The Fix: Curriculum Learning for Mask Ratio
+Added `--mask-warmup-steps` parameter to `train_transformer_tokenizer.py`:
+
+```python
+# Curriculum learning: ramp up mask_ratio_max over warmup steps
+if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
+    warmup_progress = global_step / args.mask_warmup_steps
+    current_mask_max = args.mask_ratio_max * warmup_progress
+else:
+    current_mask_max = args.mask_ratio_max
+```
+
+Default: 50,000 warmup steps. Training schedule:
+- Step 0: mask_ratio ~ U(0, 0) - pure reconstruction, must use all patches
+- Step 25k: mask_ratio ~ U(0, 0.45) - moderate masking
+- Step 50k+: mask_ratio ~ U(0, 0.9) - full MAE training
+
+### Why This Should Help
+1. **Phase 1 (no masking)**: Model MUST learn to use patch content for reconstruction
+2. **Attention learns content**: Without masking, uniform attention = blurry output = high loss
+3. **Gradual masking**: Once attention patterns are established, introduce masking
+4. **Prevents shortcut**: Can't immediately collapse to mean image
+
+### Backup Ideas If This Doesn't Work
+1. **Attention diversity loss**: Penalize uniform attention distribution
+2. **Lower learning rate**: 1e-5 instead of 1e-4, slower but more stable
+3. **Contrastive loss**: Add InfoNCE to force different images → different latents
+4. **Skip connections**: Direct encoder→decoder pathway, less reliance on attention
+
+### Decision: Continue with CNN
+Did NOT verify if fix works. Continuing with CNN tokenizer for now because:
+- CNN tokenizer already working well (PSNR ~30 dB)
+- Faster iteration cycle for Phase 2 (agent training)
+- Transformer tokenizer fix can be tested in parallel later
+- Main goal is end-to-end DreamerV4, not perfect tokenizer
+
+### Usage
+```bash
+# With curriculum learning (default, recommended)
+python scripts/train_transformer_tokenizer.py --mask-warmup-steps 50000
+
+# Without curriculum (original behavior, prone to collapse)
+python scripts/train_transformer_tokenizer.py --mask-warmup-steps 0
+```
