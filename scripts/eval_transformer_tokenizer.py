@@ -34,7 +34,7 @@ def load_random_frames(frames_dir: str, num_frames: int, device: str):
     for _ in range(num_frames):
         # Random video
         video_dir = np.random.choice(video_dirs)
-        frame_files = sorted(video_dir.glob("*.png"))
+        frame_files = sorted(list(video_dir.glob("*.png")) + list(video_dir.glob("*.jpg")))
 
         if len(frame_files) == 0:
             continue
