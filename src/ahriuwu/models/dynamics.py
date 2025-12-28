@@ -7,6 +7,7 @@ Architecture follows DreamerV4 with simplifications for MVP:
 - Temporal attention every 4th layer (efficiency optimization)
 - X-prediction objective (predicts clean data directly)
 - RMSNorm, SwiGLU, learned positional embeddings
+- Agent tokens for policy/reward prediction (Phase 2+)
 
 References:
 - DreamerV4: "Training Agents Inside of Scalable World Models" (Hafner et al., 2025)
@@ -261,6 +262,184 @@ class TransformerBlock(nn.Module):
         return x
 
 
+class AgentCrossAttention(nn.Module):
+    """Cross-attention where agent tokens query z tokens.
+
+    Implements the asymmetric attention pattern from DreamerV4:
+    - Agent tokens can attend to all z tokens
+    - Z tokens cannot attend back to agent tokens (handled by keeping them separate)
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        head_dim: int | None = None,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim or dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        inner_dim = self.num_heads * self.head_dim
+
+        # Agent token query projection
+        self.q_proj = nn.Linear(dim, inner_dim, bias=False)
+        # Z token key/value projections
+        self.kv_proj = nn.Linear(dim, inner_dim * 2, bias=False)
+        self.out_proj = nn.Linear(inner_dim, dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(
+        self,
+        agent_tokens: torch.Tensor,
+        z_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """Cross-attention from agent tokens to z tokens.
+
+        Args:
+            agent_tokens: (B, T, D) one agent token per frame
+            z_tokens: (B, T, S, D) spatial tokens per frame
+
+        Returns:
+            (B, T, D) attended agent token features
+        """
+        B, T, D = agent_tokens.shape
+        _, _, S, _ = z_tokens.shape
+
+        # Agent queries: (B, T, heads, 1, head_dim)
+        q = self.q_proj(agent_tokens).view(B, T, self.num_heads, 1, self.head_dim)
+
+        # Z key/values: (B, T, heads, S, head_dim)
+        z_flat = z_tokens.view(B * T, S, D)
+        kv = self.kv_proj(z_flat).view(B, T, S, 2, self.num_heads, self.head_dim)
+        kv = kv.permute(3, 0, 1, 4, 2, 5)  # (2, B, T, heads, S, head_dim)
+        k, v = kv[0], kv[1]
+
+        # Attention: agent attends to all spatial tokens
+        attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, T, heads, 1, S)
+        attn = F.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+
+        # Apply attention
+        out = (attn @ v).squeeze(-2)  # (B, T, heads, head_dim)
+        out = out.view(B, T, -1)
+        out = self.out_proj(out)
+
+        return out
+
+
+class AgentTemporalAttention(nn.Module):
+    """Causal self-attention for agent tokens across time.
+
+    Agent tokens attend to themselves and past agent tokens.
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        head_dim: int | None = None,
+        dropout: float = 0.0,
+        max_seq_len: int = 256,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = head_dim or dim // num_heads
+        self.scale = self.head_dim ** -0.5
+
+        inner_dim = self.num_heads * self.head_dim
+
+        self.qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.out_proj = nn.Linear(inner_dim, dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+        # Causal mask
+        self.register_buffer(
+            "causal_mask",
+            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass.
+
+        Args:
+            x: (B, T, D) agent tokens
+
+        Returns:
+            (B, T, D) attended agent tokens
+        """
+        B, T, D = x.shape
+
+        qkv = self.qkv(x).view(B, T, 3, self.num_heads, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # (3, B, heads, T, head_dim)
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.masked_fill(self.causal_mask[:T, :T], float("-inf"))
+        attn = F.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+
+        out = (attn @ v).transpose(1, 2).reshape(B, T, -1)
+        out = self.out_proj(out)
+
+        return out
+
+
+class AgentTokenBlock(nn.Module):
+    """Processing block for agent tokens.
+
+    1. Cross-attention to z tokens (agent sees everything)
+    2. Self-attention across time (causal)
+    3. FFN
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        head_dim: int | None = None,
+        dropout: float = 0.0,
+        max_seq_len: int = 256,
+    ):
+        super().__init__()
+
+        self.norm1 = RMSNorm(dim)
+        self.cross_attn = AgentCrossAttention(dim, num_heads, head_dim, dropout)
+
+        self.norm2 = RMSNorm(dim)
+        self.self_attn = AgentTemporalAttention(dim, num_heads, head_dim, dropout, max_seq_len)
+
+        self.norm3 = RMSNorm(dim)
+        self.ffn = SwiGLU(dim, dropout=dropout)
+
+    def forward(
+        self,
+        agent_tokens: torch.Tensor,
+        z_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        """Process agent tokens.
+
+        Args:
+            agent_tokens: (B, T, D) agent tokens
+            z_tokens: (B, T, S, D) spatial z tokens
+
+        Returns:
+            (B, T, D) processed agent tokens
+        """
+        # Cross-attention to z tokens
+        agent_tokens = agent_tokens + self.cross_attn(self.norm1(agent_tokens), z_tokens)
+
+        # Self-attention across time
+        agent_tokens = agent_tokens + self.self_attn(self.norm2(agent_tokens))
+
+        # FFN
+        agent_tokens = agent_tokens + self.ffn(self.norm3(agent_tokens))
+
+        return agent_tokens
+
+
 class DynamicsTransformer(nn.Module):
     """Dynamics model for world model training.
 
@@ -286,6 +465,10 @@ class DynamicsTransformer(nn.Module):
         temporal_every: int = 4,  # Temporal attention every N layers
         dropout: float = 0.0,
         max_seq_len: int = 256,  # Max frames in sequence
+        # Agent token settings (Phase 2+)
+        use_agent_tokens: bool = False,
+        num_tasks: int = 1,  # For multi-task conditioning
+        agent_layers: int = 4,  # Number of agent token processing layers
     ):
         """Initialize dynamics transformer.
 
@@ -299,6 +482,9 @@ class DynamicsTransformer(nn.Module):
             temporal_every: Add temporal attention every N layers
             dropout: Dropout probability
             max_seq_len: Maximum sequence length
+            use_agent_tokens: Enable agent tokens for Phase 2+
+            num_tasks: Number of tasks for multi-task conditioning
+            agent_layers: Number of agent token processing layers
         """
         super().__init__()
         self.latent_dim = latent_dim
@@ -307,6 +493,7 @@ class DynamicsTransformer(nn.Module):
         self.model_dim = model_dim
         self.num_layers = num_layers
         self.temporal_every = temporal_every
+        self.use_agent_tokens = use_agent_tokens
 
         # Input projection: (B, T, C, H, W) -> (B, T, S, D)
         self.input_proj = nn.Linear(latent_dim, model_dim)
@@ -346,6 +533,34 @@ class DynamicsTransformer(nn.Module):
         self.norm_out = RMSNorm(model_dim)
         self.output_proj = nn.Linear(model_dim, latent_dim)
 
+        # Agent token components (Phase 2+)
+        if use_agent_tokens:
+            # Learnable agent token (one per frame, initialized from parameters)
+            self.agent_token = nn.Parameter(torch.randn(1, 1, model_dim) * 0.02)
+
+            # Task embedding for multi-task conditioning
+            self.task_embed = nn.Embedding(num_tasks, model_dim)
+
+            # Agent token temporal position embedding
+            self.agent_temporal_pos = nn.Parameter(
+                torch.randn(1, max_seq_len, model_dim) * 0.02
+            )
+
+            # Agent token processing blocks
+            self.agent_blocks = nn.ModuleList([
+                AgentTokenBlock(
+                    dim=model_dim,
+                    num_heads=num_heads,
+                    head_dim=head_dim,
+                    dropout=dropout,
+                    max_seq_len=max_seq_len,
+                )
+                for _ in range(agent_layers)
+            ])
+
+            # Output normalization for agent tokens
+            self.agent_norm_out = RMSNorm(model_dim)
+
         # Initialize weights
         self._init_weights()
 
@@ -366,7 +581,8 @@ class DynamicsTransformer(nn.Module):
         tau: torch.Tensor,
         step_size: torch.Tensor | None = None,
         context: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+        task_id: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Forward pass: predict clean latents from noisy input.
 
         Args:
@@ -375,9 +591,15 @@ class DynamicsTransformer(nn.Module):
             step_size: Optional step size for shortcut forcing, shape (B,)
                        Normalized to [0, 1] where 1.0 = k_max steps
             context: Optional context frames (not used in MVP)
+            task_id: Optional task ID for multi-task conditioning, shape (B,)
 
         Returns:
-            z_0_pred: Predicted clean latents, shape (B, T, C, H, W)
+            If use_agent_tokens=False:
+                z_0_pred: Predicted clean latents, shape (B, T, C, H, W)
+            If use_agent_tokens=True:
+                tuple of:
+                    z_0_pred: Predicted clean latents, shape (B, T, C, H, W)
+                    agent_out: Agent token outputs, shape (B, T, D) for heads
         """
         B, T, C, H, W = z_tau.shape
         assert H == W == self.spatial_size, f"Expected {self.spatial_size}×{self.spatial_size}, got {H}×{W}"
@@ -403,18 +625,41 @@ class DynamicsTransformer(nn.Module):
                 step_emb = step_emb.unsqueeze(1)  # (B, 1, D) for broadcasting
             time_emb = time_emb + step_emb  # additive combination
 
-        # Transformer blocks
+        # Transformer blocks (z tokens only - agent tokens processed separately)
         for block in self.blocks:
             x = block(x, time_emb)
 
-        # Output projection
-        x = self.norm_out(x)
-        x = self.output_proj(x)  # (B, T, S, C)
+        # Output projection for z prediction
+        z_out = self.norm_out(x)
+        z_out = self.output_proj(z_out)  # (B, T, S, C)
 
         # Reshape back to (B, T, C, H, W)
-        x = x.permute(0, 1, 3, 2).view(B, T, C, H, W)
+        z_0_pred = z_out.permute(0, 1, 3, 2).view(B, T, C, H, W)
 
-        return x
+        # Process agent tokens if enabled
+        if self.use_agent_tokens:
+            # Initialize agent tokens: expand to (B, T, D)
+            agent_tokens = self.agent_token.expand(B, T, -1).clone()
+
+            # Add task embedding if provided
+            if task_id is not None:
+                task_emb = self.task_embed(task_id)  # (B, D)
+                agent_tokens = agent_tokens + task_emb.unsqueeze(1)
+
+            # Add temporal position embedding
+            agent_tokens = agent_tokens + self.agent_temporal_pos[:, :T, :]
+
+            # Process through agent blocks
+            # Agent tokens attend to z tokens (x), but z tokens don't see agent tokens
+            for agent_block in self.agent_blocks:
+                agent_tokens = agent_block(agent_tokens, x)
+
+            # Output normalization
+            agent_out = self.agent_norm_out(agent_tokens)
+
+            return z_0_pred, agent_out
+
+        return z_0_pred
 
     def get_num_params(self) -> int:
         """Get total number of trainable parameters."""
@@ -424,12 +669,18 @@ class DynamicsTransformer(nn.Module):
 def create_dynamics(
     size: str = "small",
     latent_dim: int = 256,
+    use_agent_tokens: bool = False,
+    num_tasks: int = 1,
+    agent_layers: int = 4,
 ) -> DynamicsTransformer:
     """Create dynamics model with preset sizes.
 
     Args:
         size: One of "tiny", "small", "medium", "large"
         latent_dim: Dimension of latent tokens (must match tokenizer)
+        use_agent_tokens: Enable agent tokens for Phase 2+
+        num_tasks: Number of tasks for multi-task conditioning
+        agent_layers: Number of agent token processing layers
 
     Returns:
         DynamicsTransformer instance
@@ -462,6 +713,9 @@ def create_dynamics(
 
     return DynamicsTransformer(
         latent_dim=latent_dim,
+        use_agent_tokens=use_agent_tokens,
+        num_tasks=num_tasks,
+        agent_layers=agent_layers,
         **configs[size],
     )
 

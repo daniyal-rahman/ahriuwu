@@ -11,6 +11,18 @@ from .diffusion import (
     ShortcutForcing,
 )
 from .dynamics import DynamicsTransformer, create_dynamics
+from .heads import RewardHead, PolicyHead, ValueHead
+from .returns import (
+    symlog,
+    symexp,
+    twohot_encode,
+    twohot_decode,
+    twohot_loss,
+    compute_lambda_returns,
+    compute_advantages,
+    RunningRMS,
+    normalize_losses,
+)
 
 __all__ = [
     # Tokenizer (CNN)
@@ -35,4 +47,18 @@ __all__ = [
     # Dynamics
     "DynamicsTransformer",
     "create_dynamics",
+    # Heads (Phase 2+)
+    "RewardHead",
+    "PolicyHead",
+    "ValueHead",
+    # Returns and utilities
+    "symlog",
+    "symexp",
+    "twohot_encode",
+    "twohot_decode",
+    "twohot_loss",
+    "compute_lambda_returns",
+    "compute_advantages",
+    "RunningRMS",
+    "normalize_losses",
 ]
