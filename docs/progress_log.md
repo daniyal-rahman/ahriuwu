@@ -538,3 +538,60 @@ python scripts/train_transformer_tokenizer.py --mask-warmup-steps 50000
 # Without curriculum (original behavior, prone to collapse)
 python scripts/train_transformer_tokenizer.py --mask-warmup-steps 0
 ```
+
+---
+
+## 2024-12-28: Dynamics Training Results & Blockers for Phase 3
+
+### Training Run Summary
+- **Steps completed**: 145,500 steps (paused)
+- **Final loss**: 0.005-0.008
+- **Pred std**: ~0.65 (healthy, no mode collapse)
+- **Gradient norm**: ~0.3-0.5 (stable)
+
+### Evaluation Results
+
+**Quick eval (1-step, tau=0.5)**:
+- Latent PSNR: 13.7 dB
+- Model successfully denoises halfway-noisy inputs
+- Frame diff 0.278 (predictions vary with input, no mode collapse)
+
+**Full eval (64-step from pure noise)**:
+| Test | PSNR | Result |
+|------|------|--------|
+| tau=0 context (initial) | 4.82 dB | Cyan blobs, complete failure |
+| tau=0.1 context (fixed) | 9.90 dB | Recognizable game, degrades over 12 frames |
+
+### Key Finding: Train/Test Distribution Mismatch
+Model trained with diffusion forcing where ALL frames have some noise (tau >= tau_base).
+- Training tau range: [tau_base, 1.0] where tau_base ~ U(0, 1)
+- Eval initially used tau=0 for context frames
+
+**Fix**: Added tau=0.1 to context frames during inference to match training distribution.
+
+### Remaining Issues for Phase 3
+
+| Issue | Current State | Required |
+|-------|---------------|----------|
+| Action conditioning | Not implemented | Required for imagination |
+| Error accumulation | 64 steps per frame | Shortcut forcing (K=4) |
+
+**Critical blocker**: Current dynamics signature has no action input:
+```python
+# Current
+def forward(self, z_tau, tau, step_size=None, context=None, task_id=None)
+
+# Needed for Phase 3
+def forward(self, z_tau, tau, action, step_size=None, context=None, task_id=None)
+```
+
+### Decision: Pause Dynamics Training
+Don't continue training current model. Instead:
+1. Add action embedding to dynamics
+2. Ensure shortcut forcing is properly integrated
+3. Retrain from scratch with both features
+4. Then proceed to Phase 3 imagination training
+
+### Files Created
+- `scripts/quick_eval_dynamics.py` - Fast 1-step denoising eval
+- `scripts/full_eval_dynamics.py` - Full 64-step rollout eval
