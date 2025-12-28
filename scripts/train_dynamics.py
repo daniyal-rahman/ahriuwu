@@ -258,6 +258,8 @@ def train_epoch(
     """
     model.train()
     total_loss = 0.0
+    total_grad_norm = 0.0
+    total_pred_std = 0.0
     num_batches = 0
     start_time = time.time()
 
@@ -331,17 +333,28 @@ def train_epoch(
         # Backward with scaling
         scaler.scale(loss).backward()
 
-        # Gradient clipping
+        # Gradient clipping and track grad norm
         scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         scaler.step(optimizer)
         scaler.update()
 
         # Track metrics
         total_loss += loss.item()
+        total_grad_norm += grad_norm.item() if torch.isfinite(grad_norm) else 0.0
         num_batches += 1
         global_step += 1
+
+        # Track prediction stats for mode collapse detection (every 10 batches)
+        if batch_idx % 10 == 0:
+            with torch.no_grad():
+                if shortcut is None:
+                    pred_std = z_pred.std().item()
+                else:
+                    # For shortcut forcing, we need to get prediction from the model
+                    pred_std = 0.0  # Skip for now
+                total_pred_std += pred_std
 
         # Log
         if batch_idx % args.log_interval == 0:
@@ -357,20 +370,38 @@ def train_epoch(
             else:
                 progress = f"Epoch {epoch} [{batch_idx}/{total_batches}]"
 
+            # Compute running averages
+            avg_grad_norm = total_grad_norm / num_batches if num_batches > 0 else 0
+            pred_std_samples = (batch_idx // 10) + 1
+            avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0
+
+            # Warning flags
+            warnings = []
+            if loss.item() > 1.0:
+                warnings.append("HIGH_LOSS")
+            if grad_norm.item() > 0.99:  # Near clip threshold
+                warnings.append("GRAD_CLIP")
+            if not torch.isfinite(torch.tensor(loss.item())):
+                warnings.append("NAN/INF")
+            warning_str = f" ⚠️  {' '.join(warnings)}" if warnings else ""
+
             if shortcut is not None:
                 # Show shortcut forcing info
                 print(
                     f"{progress} "
                     f"Loss: {loss.item():.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
                     f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                    f"({batches_per_sec:.1f} batch/s)"
+                    f"GradN: {grad_norm.item():.3f} "
+                    f"({batches_per_sec:.1f} batch/s){warning_str}"
                 )
             else:
                 print(
                     f"{progress} "
                     f"Loss: {loss.item():.4f} "
                     f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                    f"({batches_per_sec:.1f} batch/s)"
+                    f"GradN: {grad_norm.item():.3f} "
+                    f"PredStd: {pred_std:.4f} "
+                    f"({batches_per_sec:.1f} batch/s){warning_str}"
                 )
 
         # Step-based checkpoint saving
@@ -390,9 +421,14 @@ def train_epoch(
         batch_idx += 1
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+    avg_grad_norm = total_grad_norm / num_batches if num_batches > 0 else 0.0
+    pred_std_samples = (num_batches // 10) + 1
+    avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0.0
 
     return {
         "loss": avg_loss,
+        "grad_norm": avg_grad_norm,
+        "pred_std": avg_pred_std,
         "global_step": global_step,
     }
 
@@ -548,6 +584,12 @@ def main():
 
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Loss: {metrics['loss']:.4f}")
+        print(f"  Grad Norm (avg): {metrics['grad_norm']:.4f}")
+        print(f"  Pred Std (avg): {metrics['pred_std']:.4f}")
+
+        # Mode collapse warning
+        if metrics['pred_std'] < 0.01:
+            print("  ⚠️  WARNING: Low prediction variance - possible mode collapse!")
 
         # Save history
         history.append({
