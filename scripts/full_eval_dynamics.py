@@ -51,7 +51,11 @@ def main():
 
     schedule = DiffusionSchedule(device=device)
 
+    # Context tau - match training distribution (model never sees tau=0)
+    context_tau = 0.1  # Small noise on context, like training
+
     print(f"\nGenerating {predict_frames} frames with {num_denoise_steps}-step denoising...")
+    print(f"Context tau: {context_tau} (matching training distribution)")
 
     z_predicted = []
     z_current = z_context.clone()
@@ -64,11 +68,15 @@ def main():
         for step in range(num_denoise_steps):
             tau_val = 1.0 - step / num_denoise_steps
 
-            # Concatenate context (clean) with noisy prediction
-            z_input = torch.cat([z_current, z_next_noisy], dim=1)  # (1, T+1, 256, 16, 16)
+            # Add small noise to context to match training distribution
+            context_noise = torch.randn_like(z_current)
+            z_context_noisy = (1 - context_tau) * z_current + context_tau * context_noise
 
-            # Tau: context frames are clean (0), prediction frame at current noise level
-            tau = torch.zeros(1, z_input.shape[1], device=device)
+            # Concatenate noisy context with noisy prediction
+            z_input = torch.cat([z_context_noisy, z_next_noisy], dim=1)  # (1, T+1, 256, 16, 16)
+
+            # Tau: context frames at context_tau, prediction frame at current noise level
+            tau = torch.full((1, z_input.shape[1]), context_tau, device=device)
             tau[:, -1] = tau_val
 
             with torch.no_grad():
