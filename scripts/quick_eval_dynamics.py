@@ -66,13 +66,17 @@ def main():
     print("\nDecoding to pixels...")
 
     with torch.no_grad():
+        # Ensure float32 for tokenizer decode
+        z_0_f32 = z_0.float()
+        z_pred_f32 = z_pred.float()
+
         # Decode ground truth
-        recon_0 = tokenizer.decode(z_0[:, 0])
-        recon_16 = tokenizer.decode(z_0[:, 16])
+        recon_0 = tokenizer.decode(z_0_f32[:, 0])
+        recon_16 = tokenizer.decode(z_0_f32[:, 16])
 
         # Decode predictions
-        pred_0 = tokenizer.decode(z_pred[:, 0])
-        pred_16 = tokenizer.decode(z_pred[:, 16])
+        pred_0 = tokenizer.decode(z_pred_f32[:, 0])
+        pred_16 = tokenizer.decode(z_pred_f32[:, 16])
 
     # Save comparison
     print("Saving comparison images...")
