@@ -416,10 +416,10 @@ class TransformerDecoder(nn.Module):
 
 
 class Bottleneck(nn.Module):
-    """Bottleneck: linear → tanh → reshape.
+    """Bottleneck: per-token linear → tanh.
 
-    Compresses 512 latent tokens with D dims to 256 latent tokens with latent_dim dims.
-    Paper: 512×D → linear → tanh → reshape to 256×32
+    Compresses each latent token from embed_dim to latent_dim.
+    Paper: each of 256 tokens projected from D → latent_dim, then tanh.
     """
 
     def __init__(
@@ -434,14 +434,9 @@ class Bottleneck(nn.Module):
         self.num_latents_out = num_latents_out
         self.latent_dim = latent_dim
 
-        # Project each latent token to smaller dim, then reshape
-        # Input: (B, T, num_latents_in, embed_dim)
-        # We project to total of num_latents_out * latent_dim values
-        # Then reshape to (B, T, num_latents_out, latent_dim)
-        total_in = num_latents_in * embed_dim
-        total_out = num_latents_out * latent_dim
-
-        self.proj = nn.Linear(total_in, total_out)
+        # Per-token projection: embed_dim -> latent_dim
+        # Applied to each latent token independently
+        self.proj = nn.Linear(embed_dim, latent_dim)
 
     def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
         """
@@ -454,15 +449,12 @@ class Bottleneck(nn.Module):
         """
         B = x.shape[0]
 
-        # Reshape to (B, T, num_latents_in * embed_dim)
-        x = x.reshape(B, num_frames, -1)
+        # Reshape to (B, T, num_latents_in, embed_dim)
+        x = x.reshape(B, num_frames, self.num_latents_in, -1)
 
-        # Project and apply tanh
-        x = self.proj(x)  # (B, T, num_latents_out * latent_dim)
+        # Per-token projection and tanh
+        x = self.proj(x)  # (B, T, num_latents, latent_dim)
         x = torch.tanh(x)
-
-        # Reshape to (B, T, num_latents_out, latent_dim)
-        x = x.reshape(B, num_frames, self.num_latents_out, self.latent_dim)
 
         # Flatten temporal
         x = x.reshape(B, num_frames * self.num_latents_out, self.latent_dim)
@@ -471,9 +463,9 @@ class Bottleneck(nn.Module):
 
 
 class BottleneckInverse(nn.Module):
-    """Inverse bottleneck: reshape → linear.
+    """Inverse bottleneck: per-token linear.
 
-    Expands 256 latent tokens with latent_dim to encoder's format.
+    Expands each latent token from latent_dim back to embed_dim.
     """
 
     def __init__(
@@ -489,10 +481,8 @@ class BottleneckInverse(nn.Module):
         self.latent_dim = latent_dim
         self.embed_dim = embed_dim
 
-        total_in = num_latents_in * latent_dim
-        total_out = num_latents_out * embed_dim
-
-        self.proj = nn.Linear(total_in, total_out)
+        # Per-token projection: latent_dim -> embed_dim
+        self.proj = nn.Linear(latent_dim, embed_dim)
 
     def forward(self, x: torch.Tensor, num_frames: int) -> torch.Tensor:
         """
@@ -505,14 +495,11 @@ class BottleneckInverse(nn.Module):
         """
         B = x.shape[0]
 
-        # Reshape to (B, T, num_latents_in * latent_dim)
-        x = x.reshape(B, num_frames, -1)
+        # Reshape to (B, T, num_latents_in, latent_dim)
+        x = x.reshape(B, num_frames, self.num_latents_in, self.latent_dim)
 
-        # Project
-        x = self.proj(x)  # (B, T, num_latents_out * embed_dim)
-
-        # Reshape to (B, T, num_latents_out, embed_dim)
-        x = x.reshape(B, num_frames, self.num_latents_out, self.embed_dim)
+        # Per-token projection
+        x = self.proj(x)  # (B, T, num_latents, embed_dim)
 
         # Flatten temporal
         x = x.reshape(B, num_frames * self.num_latents_out, self.embed_dim)
