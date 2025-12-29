@@ -16,6 +16,46 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
+    """Generate 2D sinusoidal position embeddings.
+
+    Args:
+        embed_dim: Embedding dimension (must be divisible by 4)
+        grid_size: Size of the grid (e.g., 16 for 16x16 patches)
+
+    Returns:
+        (grid_size*grid_size, embed_dim) position embeddings
+    """
+    assert embed_dim % 4 == 0, "embed_dim must be divisible by 4 for 2D sin/cos"
+
+    # Create grid
+    grid_h = torch.arange(grid_size, dtype=torch.float32)
+    grid_w = torch.arange(grid_size, dtype=torch.float32)
+    grid = torch.meshgrid(grid_h, grid_w, indexing='ij')
+    grid = torch.stack(grid, dim=0)  # (2, H, W)
+    grid = grid.reshape(2, 1, grid_size, grid_size)
+
+    # Sinusoidal embeddings
+    embed_dim_per_axis = embed_dim // 2
+    omega = torch.arange(embed_dim_per_axis // 2, dtype=torch.float32)
+    omega = 1.0 / (10000 ** (omega / (embed_dim_per_axis // 2)))
+
+    # Height embeddings
+    pos_h = grid[0].reshape(-1)  # (H*W,)
+    out_h = torch.outer(pos_h, omega)  # (H*W, D/4)
+    emb_h = torch.cat([torch.sin(out_h), torch.cos(out_h)], dim=1)  # (H*W, D/2)
+
+    # Width embeddings
+    pos_w = grid[1].reshape(-1)  # (H*W,)
+    out_w = torch.outer(pos_w, omega)  # (H*W, D/4)
+    emb_w = torch.cat([torch.sin(out_w), torch.cos(out_w)], dim=1)  # (H*W, D/2)
+
+    # Concatenate height and width embeddings
+    pos_embed = torch.cat([emb_h, emb_w], dim=1)  # (H*W, D)
+
+    return pos_embed
+
+
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
 
@@ -245,19 +285,30 @@ class TransformerEncoder(nn.Module):
         num_patches: int = 256,
         num_latents: int = 256,
         dropout: float = 0.0,
+        use_sincos_pos: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
         self.num_latents = num_latents
+        self.use_sincos_pos = use_sincos_pos
 
         # Learned latent tokens (one set, repeated per frame)
         self.latent_tokens = nn.Parameter(torch.randn(1, num_latents, embed_dim) * 0.02)
 
-        # Position embeddings for patches and latents
-        self.patch_pos_embed = nn.Parameter(
-            torch.randn(1, num_patches, embed_dim) * 0.02
-        )
+        # Position embeddings for patches
+        if use_sincos_pos:
+            # Sinusoidal (fixed) - better spatial structure
+            grid_size = int(math.sqrt(num_patches))
+            patch_pos = get_2d_sincos_pos_embed(embed_dim, grid_size)
+            self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+        else:
+            # Learned
+            self.patch_pos_embed = nn.Parameter(
+                torch.randn(1, num_patches, embed_dim) * 0.02
+            )
+
+        # Latent position embeddings (always learned - no spatial structure)
         self.latent_pos_embed = nn.Parameter(
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
@@ -346,19 +397,30 @@ class TransformerDecoder(nn.Module):
         num_patches: int = 256,
         num_latents: int = 256,
         dropout: float = 0.0,
+        use_sincos_pos: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
         self.num_latents = num_latents
+        self.use_sincos_pos = use_sincos_pos
 
         # Fresh learned patch queries (NOT from encoder)
         self.patch_queries = nn.Parameter(torch.randn(1, num_patches, embed_dim) * 0.02)
 
-        # Position embeddings
-        self.patch_pos_embed = nn.Parameter(
-            torch.randn(1, num_patches, embed_dim) * 0.02
-        )
+        # Position embeddings for patches
+        if use_sincos_pos:
+            # Sinusoidal (fixed) - better spatial structure
+            grid_size = int(math.sqrt(num_patches))
+            patch_pos = get_2d_sincos_pos_embed(embed_dim, grid_size)
+            self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+        else:
+            # Learned
+            self.patch_pos_embed = nn.Parameter(
+                torch.randn(1, num_patches, embed_dim) * 0.02
+            )
+
+        # Latent position embeddings (always learned)
         self.latent_pos_embed = nn.Parameter(
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
@@ -578,6 +640,7 @@ class TransformerTokenizer(nn.Module):
         num_decoder_layers: int = 6,
         num_latents: int = 256,
         dropout: float = 0.0,
+        use_sincos_pos: bool = True,
     ):
         super().__init__()
         self.img_size = img_size
@@ -594,11 +657,11 @@ class TransformerTokenizer(nn.Module):
         # Encoder and decoder
         self.encoder = TransformerEncoder(
             embed_dim, num_heads, num_encoder_layers,
-            self.num_patches, num_latents, dropout
+            self.num_patches, num_latents, dropout, use_sincos_pos
         )
         self.decoder = TransformerDecoder(
             embed_dim, num_heads, num_decoder_layers,
-            self.num_patches, num_latents, dropout
+            self.num_patches, num_latents, dropout, use_sincos_pos
         )
 
         # Bottleneck (encoder latents → compact form for dynamics)
