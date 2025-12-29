@@ -144,6 +144,11 @@ def parse_args():
         default=1,
         help="Number of gradient accumulation steps",
     )
+    parser.add_argument(
+        "--use-rope",
+        action="store_true",
+        help="Use RoPE (Rotary Position Embeddings) instead of additive position embeddings",
+    )
     return parser.parse_args()
 
 
@@ -350,6 +355,7 @@ def main():
     print("=" * 60)
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
+    print(f"Use RoPE: {args.use_rope}")
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.gradient_accumulation}")
     print(f"Effective batch size: {args.batch_size * args.gradient_accumulation}")
@@ -385,7 +391,7 @@ def main():
     )
 
     # Create model
-    model = create_transformer_tokenizer(args.model_size)
+    model = create_transformer_tokenizer(args.model_size, use_rope=args.use_rope)
     model = model.to(args.device)
     print(f"Model parameters: {model.get_num_params():,}")
 

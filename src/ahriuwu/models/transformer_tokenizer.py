@@ -56,6 +56,88 @@ def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
     return pos_embed
 
 
+class RotaryEmbedding2D(nn.Module):
+    """2D Rotary Position Embedding (RoPE) for image patches.
+
+    Applies separate rotations for x and y coordinates using axial decomposition.
+    RoPE encodes relative position in the attention dot product.
+
+    Head dim is split in half: first half for y-axis, second half for x-axis.
+    Each half is further split for the rotation pairs.
+    """
+
+    def __init__(self, dim: int, grid_size: int, base: float = 10000.0):
+        super().__init__()
+        self.dim = dim
+        self.grid_size = grid_size
+        self.dim_per_axis = dim // 2  # Half for y, half for x
+
+        # Compute frequencies for each axis (half the per-axis dim for pairs)
+        inv_freq = 1.0 / (base ** (torch.arange(0, self.dim_per_axis, 2).float() / self.dim_per_axis))
+        self.register_buffer('inv_freq', inv_freq)
+
+        # Precompute position grid
+        y_pos = torch.arange(grid_size).float()
+        x_pos = torch.arange(grid_size).float()
+
+        # Create meshgrid and flatten
+        grid_y, grid_x = torch.meshgrid(y_pos, x_pos, indexing='ij')
+        positions_y = grid_y.reshape(-1)  # (grid_size^2,)
+        positions_x = grid_x.reshape(-1)  # (grid_size^2,)
+
+        self.register_buffer('positions_y', positions_y)
+        self.register_buffer('positions_x', positions_x)
+
+    def get_rotary_emb(self, seq_len: int, device: torch.device):
+        """Get sin/cos embeddings for rotary application.
+
+        Returns cos, sin each of shape (seq_len, dim) where:
+        - dims 0:dim/2 encode y position
+        - dims dim/2:dim encode x position
+        """
+        # Compute frequencies for each position
+        freqs_y = torch.outer(self.positions_y[:seq_len], self.inv_freq)  # (seq, dim/4)
+        freqs_x = torch.outer(self.positions_x[:seq_len], self.inv_freq)  # (seq, dim/4)
+
+        # For each axis, we need cos and sin interleaved in pairs
+        # RoPE rotation operates on consecutive pairs: [d0,d1], [d2,d3], ...
+        # So we need: [cos(θ_0), cos(θ_0), cos(θ_1), cos(θ_1), ...]
+
+        # Repeat each frequency for the pair
+        freqs_y = freqs_y.repeat_interleave(2, dim=-1)  # (seq, dim/2)
+        freqs_x = freqs_x.repeat_interleave(2, dim=-1)  # (seq, dim/2)
+
+        # Combine y and x: [y_freqs, x_freqs]
+        freqs = torch.cat([freqs_y, freqs_x], dim=-1)  # (seq, dim)
+
+        return freqs.cos(), freqs.sin()
+
+    def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
+        """Rotate pairs of dimensions.
+
+        For input [..., d0, d1, d2, d3, ...], returns [..., -d1, d0, -d3, d2, ...]
+        This implements complex multiplication when combined with cos/sin.
+        """
+        # Split y and x halves to rotate them separately
+        y_part = x[..., :self.dim_per_axis]
+        x_part = x[..., self.dim_per_axis:]
+
+        # Rotate each half's pairs: [a, b] -> [-b, a]
+        def rotate_pairs(t):
+            t = t.reshape(*t.shape[:-1], -1, 2)  # (..., dim/4, 2)
+            t = torch.stack([-t[..., 1], t[..., 0]], dim=-1)  # swap and negate
+            return t.reshape(*t.shape[:-2], -1)  # (..., dim/2)
+
+        y_rotated = rotate_pairs(y_part)
+        x_rotated = rotate_pairs(x_part)
+
+        return torch.cat([y_rotated, x_rotated], dim=-1)
+
+    def apply_rotary(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        """Apply rotary embedding to x."""
+        return (x * cos) + (self.rotate_half(x) * sin)
+
+
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
 
@@ -87,7 +169,7 @@ class SwiGLU(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """Multi-head attention with optional masking."""
+    """Multi-head attention with optional masking and RoPE."""
 
     def __init__(self, dim: int, num_heads: int = 8, dropout: float = 0.0):
         super().__init__()
@@ -106,12 +188,41 @@ class MultiHeadAttention(nn.Module):
         self,
         x: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
+        rope: Optional[RotaryEmbedding2D] = None,
+        rope_indices: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         B, N, D = x.shape
 
         q = self.q_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
+
+        # Apply RoPE if provided (only to tokens with valid indices >= 0)
+        # Latent tokens use index -1 and don't get RoPE rotation
+        if rope is not None and rope_indices is not None:
+            cos, sin = rope.get_rotary_emb(rope.grid_size ** 2, x.device)
+
+            # Create mask for valid positions (patches have indices 0 to grid_size^2-1)
+            valid_mask = rope_indices >= 0  # (N,)
+
+            if valid_mask.any():
+                # Safe indexing: clamp to valid range for indexing, mask handles selection
+                safe_indices = rope_indices.clamp(min=0)
+                cos_sel = cos[safe_indices]  # (N, head_dim)
+                sin_sel = sin[safe_indices]  # (N, head_dim)
+
+                # Expand for broadcasting: (1, 1, N, head_dim)
+                cos_sel = cos_sel.unsqueeze(0).unsqueeze(0)
+                sin_sel = sin_sel.unsqueeze(0).unsqueeze(0)
+
+                # Apply rotation
+                q_rotated = rope.apply_rotary(q, cos_sel, sin_sel)
+                k_rotated = rope.apply_rotary(k, cos_sel, sin_sel)
+
+                # Only update valid tokens (patches), keep latents unchanged
+                valid_mask_exp = valid_mask.view(1, 1, N, 1).expand_as(q)
+                q = torch.where(valid_mask_exp, q_rotated, q)
+                k = torch.where(valid_mask_exp, k_rotated, k)
 
         # Scaled dot-product attention
         attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
@@ -142,8 +253,14 @@ class TransformerBlock(nn.Module):
         self.norm2 = RMSNorm(dim)
         self.ffn = SwiGLU(dim)
 
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), mask)
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        rope: Optional[RotaryEmbedding2D] = None,
+        rope_indices: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        x = x + self.attn(self.norm1(x), mask, rope, rope_indices)
         x = x + self.ffn(self.norm2(x))
         return x
 
@@ -286,27 +403,37 @@ class TransformerEncoder(nn.Module):
         num_latents: int = 256,
         dropout: float = 0.0,
         use_sincos_pos: bool = True,
+        use_rope: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
         self.num_latents = num_latents
         self.use_sincos_pos = use_sincos_pos
+        self.use_rope = use_rope
+        self.grid_size = int(math.sqrt(num_patches))
 
         # Learned latent tokens (one set, repeated per frame)
         self.latent_tokens = nn.Parameter(torch.randn(1, num_latents, embed_dim) * 0.02)
 
-        # Position embeddings for patches
-        if use_sincos_pos:
-            # Sinusoidal (fixed) - better spatial structure
-            grid_size = int(math.sqrt(num_patches))
-            patch_pos = get_2d_sincos_pos_embed(embed_dim, grid_size)
-            self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+        # RoPE for spatial position encoding in attention
+        if use_rope:
+            head_dim = embed_dim // num_heads
+            self.rope = RotaryEmbedding2D(head_dim, self.grid_size)
+            # No additive position embeddings for patches when using RoPE
+            self.patch_pos_embed = None
         else:
-            # Learned
-            self.patch_pos_embed = nn.Parameter(
-                torch.randn(1, num_patches, embed_dim) * 0.02
-            )
+            self.rope = None
+            # Position embeddings for patches (additive)
+            if use_sincos_pos:
+                # Sinusoidal (fixed) - better spatial structure
+                patch_pos = get_2d_sincos_pos_embed(embed_dim, self.grid_size)
+                self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+            else:
+                # Learned
+                self.patch_pos_embed = nn.Parameter(
+                    torch.randn(1, num_patches, embed_dim) * 0.02
+                )
 
         # Latent position embeddings (always learned - no spatial structure)
         self.latent_pos_embed = nn.Parameter(
@@ -349,8 +476,9 @@ class TransformerEncoder(nn.Module):
             patches = patches.clone()
             patches[mask_indices] = mask_embed.to(patches.dtype)
 
-        # Add position embeddings to patches
-        patches = patches + self.patch_pos_embed
+        # Add position embeddings to patches (only if not using RoPE)
+        if self.patch_pos_embed is not None:
+            patches = patches + self.patch_pos_embed
 
         # Create latent tokens for each frame
         latents = self.latent_tokens.expand(B, -1, -1)  # (B, num_latents, D)
@@ -368,9 +496,25 @@ class TransformerEncoder(nn.Module):
             self.num_patches, self.num_latents, num_frames, device
         )
 
+        # Create RoPE indices if using RoPE
+        # Token layout per frame: [patch_0, patch_1, ..., patch_255, latent_0, ..., latent_255]
+        # Patches get their grid position (0-255), latents get -1 (no RoPE)
+        rope_indices = None
+        if self.use_rope:
+            tokens_per_frame = self.num_patches + self.num_latents
+            rope_indices = torch.zeros(num_frames * tokens_per_frame, dtype=torch.long, device=device)
+            for t in range(num_frames):
+                frame_start = t * tokens_per_frame
+                # Patches: indices 0 to num_patches-1 (their grid position)
+                rope_indices[frame_start:frame_start + self.num_patches] = torch.arange(
+                    self.num_patches, device=device
+                )
+                # Latents: index -1 (no RoPE)
+                rope_indices[frame_start + self.num_patches:frame_start + tokens_per_frame] = -1
+
         # Apply transformer blocks
         for block in self.blocks:
-            x = block(x, mask)
+            x = block(x, mask, self.rope, rope_indices)
 
         x = self.norm(x)
 
@@ -398,27 +542,37 @@ class TransformerDecoder(nn.Module):
         num_latents: int = 256,
         dropout: float = 0.0,
         use_sincos_pos: bool = True,
+        use_rope: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
         self.num_latents = num_latents
         self.use_sincos_pos = use_sincos_pos
+        self.use_rope = use_rope
+        self.grid_size = int(math.sqrt(num_patches))
 
         # Fresh learned patch queries (NOT from encoder)
         self.patch_queries = nn.Parameter(torch.randn(1, num_patches, embed_dim) * 0.02)
 
-        # Position embeddings for patches
-        if use_sincos_pos:
-            # Sinusoidal (fixed) - better spatial structure
-            grid_size = int(math.sqrt(num_patches))
-            patch_pos = get_2d_sincos_pos_embed(embed_dim, grid_size)
-            self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+        # RoPE for spatial position encoding in attention
+        if use_rope:
+            head_dim = embed_dim // num_heads
+            self.rope = RotaryEmbedding2D(head_dim, self.grid_size)
+            # No additive position embeddings for patches when using RoPE
+            self.patch_pos_embed = None
         else:
-            # Learned
-            self.patch_pos_embed = nn.Parameter(
-                torch.randn(1, num_patches, embed_dim) * 0.02
-            )
+            self.rope = None
+            # Position embeddings for patches (additive)
+            if use_sincos_pos:
+                # Sinusoidal (fixed) - better spatial structure
+                patch_pos = get_2d_sincos_pos_embed(embed_dim, self.grid_size)
+                self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+            else:
+                # Learned
+                self.patch_pos_embed = nn.Parameter(
+                    torch.randn(1, num_patches, embed_dim) * 0.02
+                )
 
         # Latent position embeddings (always learned)
         self.latent_pos_embed = nn.Parameter(
@@ -452,7 +606,10 @@ class TransformerDecoder(nn.Module):
         patches = self.patch_queries.expand(B, -1, -1)  # (B, num_patches, D)
         patches = patches.unsqueeze(1).expand(-1, num_frames, -1, -1)  # (B, T, num_patches, D)
         patches = patches.contiguous()  # Make contiguous after expand
-        patches = patches + self.patch_pos_embed
+
+        # Add position embeddings to patches (only if not using RoPE)
+        if self.patch_pos_embed is not None:
+            patches = patches + self.patch_pos_embed
 
         # Interleave patches and latents
         x = torch.cat([patches, latents], dim=2)
@@ -463,9 +620,25 @@ class TransformerDecoder(nn.Module):
             self.num_patches, self.num_latents, num_frames, device
         )
 
+        # Create RoPE indices if using RoPE
+        # Token layout per frame: [patch_0, ..., patch_255, latent_0, ..., latent_255]
+        # Patches get their grid position (0-255), latents get -1 (no RoPE)
+        rope_indices = None
+        if self.use_rope:
+            tokens_per_frame = self.num_patches + self.num_latents
+            rope_indices = torch.zeros(num_frames * tokens_per_frame, dtype=torch.long, device=device)
+            for t in range(num_frames):
+                frame_start = t * tokens_per_frame
+                # Patches: indices 0 to num_patches-1 (their grid position)
+                rope_indices[frame_start:frame_start + self.num_patches] = torch.arange(
+                    self.num_patches, device=device
+                )
+                # Latents: index -1 (no RoPE)
+                rope_indices[frame_start + self.num_patches:frame_start + tokens_per_frame] = -1
+
         # Apply transformer blocks
         for block in self.blocks:
-            x = block(x, mask)
+            x = block(x, mask, self.rope, rope_indices)
 
         x = self.norm(x)
 
@@ -641,6 +814,7 @@ class TransformerTokenizer(nn.Module):
         num_latents: int = 256,
         dropout: float = 0.0,
         use_sincos_pos: bool = True,
+        use_rope: bool = False,
     ):
         super().__init__()
         self.img_size = img_size
@@ -657,11 +831,11 @@ class TransformerTokenizer(nn.Module):
         # Encoder and decoder
         self.encoder = TransformerEncoder(
             embed_dim, num_heads, num_encoder_layers,
-            self.num_patches, num_latents, dropout, use_sincos_pos
+            self.num_patches, num_latents, dropout, use_sincos_pos, use_rope
         )
         self.decoder = TransformerDecoder(
             embed_dim, num_heads, num_decoder_layers,
-            self.num_patches, num_latents, dropout, use_sincos_pos
+            self.num_patches, num_latents, dropout, use_sincos_pos, use_rope
         )
 
         # Bottleneck (encoder latents → compact form for dynamics)
@@ -803,11 +977,12 @@ class TransformerTokenizer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-def create_transformer_tokenizer(size: str = "small") -> TransformerTokenizer:
+def create_transformer_tokenizer(size: str = "small", use_rope: bool = False) -> TransformerTokenizer:
     """Create transformer tokenizer with preset sizes.
 
     Args:
         size: One of "tiny", "small", "medium", "large"
+        use_rope: If True, use RoPE for position encoding instead of additive embeddings
 
     Returns:
         TransformerTokenizer instance
@@ -850,7 +1025,7 @@ def create_transformer_tokenizer(size: str = "small") -> TransformerTokenizer:
     if size not in configs:
         raise ValueError(f"Unknown size: {size}. Choose from {list(configs.keys())}")
 
-    return TransformerTokenizer(**configs[size])
+    return TransformerTokenizer(**configs[size], use_rope=use_rope)
 
 
 if __name__ == "__main__":
