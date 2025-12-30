@@ -56,6 +56,12 @@ def generate_gold_tracking_video(
         use_gpu=False,  # CPU for compatibility
     )
 
+    # Load curated templates for stable tracking
+    template_dir = Path(__file__).parent.parent / "data/keylog_extraction/health_bar_templates"
+    if template_dir.exists():
+        gold_detector.load_curated_templates(template_dir)
+        print(f"Loaded {len(gold_detector._curated_templates)} curated templates")
+
     # Seek to start
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 

@@ -446,10 +446,18 @@ class GoldTextDetector:
         self.black_border_lower = np.array([0, 0, 0])
         self.black_border_upper = np.array([180, 50, 30])
 
-        # Cache last known health bar position for sanity checking
+        # Cache last known health bar position
         self._last_health_bar_x = None
         self._last_health_bar_y = None
-        self._health_bar_jump_threshold = int(50 * (frame_width / 1920))  # Max pixels to jump per frame
+
+        # Template matching for stable tracking
+        self._health_bar_template = None  # Will be captured from first successful detection
+        self._template_size = (int(130 * (frame_width / 1920)), int(15 * (frame_height / 1080)))
+        self._use_template_matching = True
+
+        # Multi-template matching with curated templates
+        self._curated_templates: list[np.ndarray] = []
+        self._curated_templates_gray: list[np.ndarray] = []  # Pre-converted grayscale
 
         # HSV thresholds for gold/yellow text
         self.gold_lower = np.array([15, 100, 150])
@@ -477,6 +485,40 @@ class GoldTextDetector:
             import easyocr
             self._reader = easyocr.Reader(['en'], gpu=self._use_gpu)
         return self._reader
+
+    def load_curated_templates(self, template_dir: Path | str):
+        """Load curated health bar templates from a directory.
+
+        Templates are resized to match the current frame resolution.
+
+        Args:
+            template_dir: Directory containing curated template images
+        """
+        template_dir = Path(template_dir)
+        if not template_dir.exists():
+            return
+
+        self._curated_templates = []
+        self._curated_templates_gray = []
+
+        # Reference size at 1080p
+        ref_w, ref_h = 132, 17
+
+        # Target size at current resolution
+        target_w = int(ref_w * (self.frame_width / 1920))
+        target_h = int(ref_h * (self.frame_height / 1080))
+
+        for img_path in sorted(template_dir.glob("*.jpg")):
+            img = cv2.imread(str(img_path))
+            if img is None:
+                continue
+
+            # Resize to match current resolution
+            resized = cv2.resize(img, (target_w, target_h))
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+
+            self._curated_templates.append(resized)
+            self._curated_templates_gray.append(gray)
 
     def _find_teal_health_bars(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Find teal horizontal bars that could be ally health bars.
@@ -531,6 +573,167 @@ class GoldTextDetector:
                 health_bars.append((x + ga_x, y + ga_y, bw, bh))
 
         return health_bars
+
+    def _find_health_bar_by_color_transition(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
+        """Find health bar by detecting unique gray→teal color transition.
+
+        The level box (dark gray, H≈88, S≈109, V≈81) immediately adjacent to
+        teal health bar (H≈80-100, S>80, V>80) is unique on screen.
+
+        Scans for rows where we see: gray pixels → teal pixels in sequence.
+
+        Returns (x, y, w, h) or None if not found.
+        """
+        h, w = frame.shape[:2]
+
+        # Search area
+        ga_x = int(0.20 * w)
+        ga_y = int(0.10 * h)
+        ga_w = int(0.60 * w)
+        ga_h = int(0.63 * h)
+
+        search_area = frame[ga_y:ga_y+ga_h, ga_x:ga_x+ga_w]
+        hsv = cv2.cvtColor(search_area, cv2.COLOR_BGR2HSV)
+
+        # Level box gray: H=75-105, S=50-180, V=40-130 (dark teal-gray)
+        gray_mask = cv2.inRange(hsv, np.array([75, 50, 40]), np.array([105, 180, 130]))
+
+        # Teal health: H=80-100, S>80, V>80
+        teal_mask = cv2.inRange(hsv, np.array([80, 80, 80]), np.array([100, 255, 255]))
+
+        # Find rows that have both gray and teal
+        candidates = []
+        # Very strict - require substantial gray and teal regions
+        min_gray_width = max(3, int(25 * w / 1920))  # Full level box width
+        min_teal_width = max(5, int(80 * w / 1920))  # Most of health bar
+        max_gap = 2  # Fixed small gap
+
+        for row_idx in range(hsv.shape[0]):
+            gray_row = gray_mask[row_idx]
+            teal_row = teal_mask[row_idx]
+
+            # Find gray runs
+            gray_runs = self._find_runs(gray_row)
+            teal_runs = self._find_runs(teal_row)
+
+            # Look for gray run immediately followed by teal run
+            for g_start, g_end in gray_runs:
+                g_width = g_end - g_start
+                if g_width < min_gray_width:
+                    continue
+
+                # Check if teal starts right after gray
+                for t_start, t_end in teal_runs:
+                    t_width = t_end - t_start
+                    if t_width < min_teal_width:
+                        continue
+
+                    gap = t_start - g_end
+                    if 0 <= gap <= max_gap:  # No overlap, small gap only
+                        candidates.append((row_idx, g_start, t_end))
+                        break
+
+        if not candidates:
+            return None
+
+        # Sort by row
+        candidates.sort(key=lambda c: c[0])
+
+        # Require multiple consecutive rows for confidence
+        min_cluster_size = max(3, int(10 * h / 1080))  # ~10 rows at 1080p
+
+        # Find runs of consecutive rows (strict - must be adjacent)
+        best_cluster = []
+        current_cluster = [candidates[0]]
+
+        for i in range(1, len(candidates)):
+            row_diff = candidates[i][0] - candidates[i-1][0]
+            if row_diff <= 1:  # Must be consecutive or adjacent
+                current_cluster.append(candidates[i])
+            else:
+                if len(current_cluster) > len(best_cluster):
+                    best_cluster = current_cluster
+                current_cluster = [candidates[i]]
+
+        if len(current_cluster) > len(best_cluster):
+            best_cluster = current_cluster
+
+        if len(best_cluster) < min_cluster_size:
+            return None
+
+        # Extract bounds from best cluster using median to reduce jitter
+        min_row = min(c[0] for c in best_cluster)
+        max_row = max(c[0] for c in best_cluster)
+
+        # Use median x positions for stability
+        x_starts = sorted(c[1] for c in best_cluster)
+        x_ends = sorted(c[2] for c in best_cluster)
+        median_x_start = x_starts[len(x_starts) // 2]
+        median_x_end = x_ends[len(x_ends) // 2]
+
+        # Convert to full frame coordinates
+        x = median_x_start + ga_x
+        y = min_row + ga_y
+        bar_w = median_x_end - median_x_start
+        bar_h = max_row - min_row + 1
+
+        return (x, y, bar_w, bar_h)
+
+    def _find_runs(self, binary_row: np.ndarray) -> list[tuple[int, int]]:
+        """Find contiguous runs of 255 values in a binary row.
+
+        Returns list of (start, end) indices.
+        """
+        runs = []
+        in_run = False
+        start = 0
+
+        for i, val in enumerate(binary_row):
+            if val == 255 and not in_run:
+                in_run = True
+                start = i
+            elif val == 0 and in_run:
+                in_run = False
+                runs.append((start, i))
+
+        if in_run:
+            runs.append((start, len(binary_row)))
+
+        return runs
+
+    def _capture_template(self, frame: np.ndarray, health_bar: tuple[int, int, int, int]):
+        """Capture a template from a detected health bar for future matching."""
+        hb_x, hb_y, hb_w, hb_h = health_bar
+        h, w = frame.shape[:2]
+
+        # Expand slightly to capture context
+        expand = 5
+        x1 = max(0, hb_x - expand)
+        y1 = max(0, hb_y - expand)
+        x2 = min(w, hb_x + hb_w + expand)
+        y2 = min(h, hb_y + hb_h + expand)
+
+        self._health_bar_template = frame[y1:y2, x1:x2].copy()
+
+    def _expand_health_bar(self, hb_x: int, hb_y: int, hb_w: int, hb_h: int, frame_w: int, frame_h: int) -> tuple[int, int, int, int]:
+        """Expand health bar box by 30% in every direction for stability."""
+        # Use FIXED health bar width
+        level_box_width = int(25 * (frame_w / 1920))
+        full_health_bar_width = int(105 * (frame_w / 1920))
+
+        base_x = hb_x - level_box_width
+        base_w = level_box_width + full_health_bar_width
+
+        # Expand box by 30% in every direction
+        expand_x = int(base_w * 0.30)
+        expand_y = int(hb_h * 0.30)
+
+        full_x = max(0, base_x - expand_x)
+        full_y = max(0, hb_y - expand_y)
+        full_w = base_w + 2 * expand_x
+        full_h = hb_h + 2 * expand_y
+
+        return (full_x, full_y, full_w, full_h)
 
     def _has_teal_health_adjacent(self, frame: np.ndarray, level_box: tuple[int, int, int, int]) -> bool:
         """Check if there's teal (or orange) health immediately to the right of level box.
@@ -632,19 +835,27 @@ class GoldTextDetector:
         return False
 
     def _find_health_bar(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
-        """Find Garen's health bar by detecting teal health bars.
+        """Find Garen's health bar by detecting gray→teal color transition.
 
         Strategy:
-        1. Find teal horizontal bars (health bars are distinctive shapes)
-        2. Filter by size and position
+        1. Use color transition detection (gray level box → teal health)
+        2. This pattern is unique on screen - only health bars have it
         3. If multiple, pick closest to center (Garen with locked camera is centered)
-        4. Return full health bar region including level box to the left
+        4. Return full health bar region including level box
 
         Returns (x, y, w, h) of health bar or None if not found.
         """
         h, w = frame.shape[:2]
 
-        # Find teal health bars
+        # Primary method: gray→teal color transition (most reliable)
+        transition_result = self._find_health_bar_by_color_transition(frame)
+        if transition_result is not None:
+            hb_x, hb_y, hb_w, hb_h = transition_result
+            self._last_health_bar_x = hb_x
+            self._last_health_bar_y = hb_y
+            return self._expand_health_bar(hb_x, hb_y, hb_w, hb_h, w, h)
+
+        # Fall back to teal-only detection if transition fails
         health_bars = self._find_teal_health_bars(frame)
 
         if not health_bars:
@@ -676,28 +887,15 @@ class GoldTextDetector:
 
         hb_x, hb_y, hb_w, hb_h = chosen
 
-        # Cache position (no sanity check - Flash causes legitimate large jumps)
+        # Capture template for future matching (only once)
+        if self._use_template_matching and self._health_bar_template is None:
+            self._capture_template(frame, chosen)
+
+        # Cache position
         self._last_health_bar_x = hb_x
         self._last_health_bar_y = hb_y
 
-        # Use FIXED health bar width (not the detected teal width which varies with damage)
-        # Full health bar = level box (~25px) + health bar (~105px) = ~130px at 1080p
-        level_box_width = int(25 * (w / 1920))
-        full_health_bar_width = int(105 * (w / 1920))  # Fixed width, doesn't shrink with damage
-
-        base_x = hb_x - level_box_width
-        base_w = level_box_width + full_health_bar_width
-
-        # Expand box by 30% in every direction for stability at lower resolutions
-        expand_x = int(base_w * 0.30)
-        expand_y = int(hb_h * 0.30)
-
-        full_x = max(0, base_x - expand_x)
-        full_y = max(0, hb_y - expand_y)
-        full_w = base_w + 2 * expand_x
-        full_h = hb_h + 2 * expand_y
-
-        return (full_x, full_y, full_w, full_h)
+        return self._expand_health_bar(hb_x, hb_y, hb_w, hb_h, w, h)
 
     def _get_roi(self, frame: np.ndarray) -> tuple[np.ndarray, int, int, tuple[int, int, int, int]]:
         """Extract region of interest dynamically tracking Garen's health bar.
