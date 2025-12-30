@@ -385,6 +385,13 @@ class GoldTextDetector:
 
     Gold text appears as yellow "+XX" floating numbers when Garen
     gains gold from kills, assists, or minion/monster last hits.
+
+    Health bar detection strategy:
+    - The health bar Y position is FIXED relative to screen (scales with resolution)
+    - Look for the gray level box (constant feature) on the left side
+    - First health tick next to level box is always teal/orange if alive
+    - Search only within WASD detection area (Garen is always center)
+    - If multiple ally bars, use OCR to find "Garen" text above health
     """
 
     def __init__(
@@ -397,20 +404,52 @@ class GoldTextDetector:
         """Initialize gold text detector.
 
         Args:
-            normalized_regions: Region config (unused for now, for consistency)
+            normalized_regions: Region config for WASD area bounds
             frame_width: Video frame width
             frame_height: Video frame height
             use_gpu: Whether to use GPU for OCR (faster but requires CUDA)
         """
         self.frame_width = frame_width
         self.frame_height = frame_height
+        self.normalized_regions = normalized_regions or HUDRegionsNormalized()
 
-        # Region of interest around Garen (center screen)
-        # Normalized coordinates (0-1)
-        self.roi_center_x = 0.5
-        self.roi_center_y = 0.42  # Slightly above center (gold appears above units)
-        self.roi_width = 0.35  # 35% of screen width
-        self.roi_height = 0.35  # 35% of screen height
+        # WASD detection area bounds (Garen is always within this)
+        ga = self.normalized_regions.game_area
+        self.game_area_x = int(ga[0] * frame_width)
+        self.game_area_y = int(ga[1] * frame_height)
+        self.game_area_w = int(ga[2] * frame_width)
+        self.game_area_h = int(ga[3] * frame_height)
+
+        # ROI height below health bar (normalized) - distance from health bar to feet
+        self.roi_height_below = 0.18
+
+        # === Health bar detection colors ===
+        # Level box (left of health bar) - dark teal/slate background
+        # Actual HSV from analysis: H=88, S=109, V=81
+        # HSV: teal hue, moderate saturation, medium-low value
+        self.level_box_lower = np.array([75, 50, 40])
+        self.level_box_upper = np.array([105, 180, 130])
+
+        # Teal ally health bar (can be partial if damaged)
+        self.teal_health_lower = np.array([80, 80, 80])
+        self.teal_health_upper = np.array([100, 255, 255])
+
+        # Orange health bar (colorblind mode)
+        self.orange_health_lower = np.array([10, 100, 100])
+        self.orange_health_upper = np.array([25, 255, 255])
+
+        # Red enemy health bar (to exclude)
+        self.red_health_lower = np.array([0, 100, 100])
+        self.red_health_upper = np.array([10, 255, 255])
+
+        # Black border below health bar
+        self.black_border_lower = np.array([0, 0, 0])
+        self.black_border_upper = np.array([180, 50, 30])
+
+        # Cache last known health bar position for sanity checking
+        self._last_health_bar_x = None
+        self._last_health_bar_y = None
+        self._health_bar_jump_threshold = int(50 * (frame_width / 1920))  # Max pixels to jump per frame
 
         # HSV thresholds for gold/yellow text
         self.gold_lower = np.array([15, 100, 150])
@@ -439,22 +478,291 @@ class GoldTextDetector:
             self._reader = easyocr.Reader(['en'], gpu=self._use_gpu)
         return self._reader
 
-    def _get_roi(self, frame: np.ndarray) -> tuple[np.ndarray, int, int]:
-        """Extract region of interest around Garen."""
+    def _find_teal_health_bars(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Find teal horizontal bars that could be ally health bars.
+
+        Strategy: Find the health bar first (distinctive long horizontal teal shape),
+        then infer level box position to the left.
+
+        Returns list of (x, y, w, h) in full frame coordinates.
+        """
         h, w = frame.shape[:2]
 
-        # Calculate ROI bounds
-        cx = int(self.roi_center_x * w)
-        cy = int(self.roi_center_y * h)
-        roi_w = int(self.roi_width * w)
-        roi_h = int(self.roi_height * h)
+        # Extended search area (Garen can be anywhere in gameplay area)
+        # Start at 20% from left, 10% from top (allow Garen to be higher on screen)
+        ga_x = int(0.20 * w)
+        ga_y = int(0.10 * h)  # Start higher to catch Garen near top
+        ga_w = int(0.60 * w)
+        ga_h = int(0.63 * h)  # Extended to ~73% of screen height
 
-        x1 = max(0, cx - roi_w // 2)
-        y1 = max(0, cy - roi_h // 2)
-        x2 = min(w, x1 + roi_w)
-        y2 = min(h, y1 + roi_h)
+        roi = frame[ga_y:ga_y+ga_h, ga_x:ga_x+ga_w]
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        return frame[y1:y2, x1:x2], x1, y1
+        # Teal health bar: H=80-110, high saturation, good brightness
+        teal_mask = cv2.inRange(hsv, self.teal_health_lower, self.teal_health_upper)
+
+        # Morphological close to connect health bar segments (ticks)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
+        teal_mask = cv2.morphologyEx(teal_mask, cv2.MORPH_CLOSE, kernel)
+
+        contours, _ = cv2.findContours(teal_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        health_bars = []
+        # Scale thresholds with resolution
+        min_width = int(40 * (w / 1920))
+        max_width = int(150 * (w / 1920))
+        min_height = int(5 * (h / 1080))
+        max_height = int(20 * (h / 1080))
+
+        for cnt in contours:
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            aspect = bw / bh if bh > 0 else 0
+            area = cv2.contourArea(cnt)
+
+            # Health bar criteria:
+            # - Wide (aspect ratio > 4)
+            # - Reasonable width (40-150 pixels at 1080p)
+            # - Thin height (5-20 pixels)
+            if (aspect > 4 and
+                min_width < bw < max_width and
+                min_height < bh < max_height and
+                area > min_width * min_height * 0.5):
+                # Convert to full frame coordinates
+                health_bars.append((x + ga_x, y + ga_y, bw, bh))
+
+        return health_bars
+
+    def _has_teal_health_adjacent(self, frame: np.ndarray, level_box: tuple[int, int, int, int]) -> bool:
+        """Check if there's teal (or orange) health immediately to the right of level box.
+
+        This confirms we found an ally health bar (not some random gray box).
+        The first tick of health next to the level is always colored if alive.
+        """
+        h, w = frame.shape[:2]
+        lx, ly, lw, lh = level_box
+
+        # Check a small region immediately to the right of the level box
+        check_x = lx + lw
+        check_y = ly
+        check_w = min(20, w - check_x)  # Just need to check first few pixels
+        check_h = lh
+
+        if check_x >= w or check_w <= 0:
+            return False
+
+        adjacent = frame[check_y:check_y + check_h, check_x:check_x + check_w]
+        if adjacent.size == 0:
+            return False
+
+        hsv = cv2.cvtColor(adjacent, cv2.COLOR_BGR2HSV)
+
+        # Check for teal health
+        teal_mask = cv2.inRange(hsv, self.teal_health_lower, self.teal_health_upper)
+        teal_pixels = cv2.countNonZero(teal_mask)
+
+        # Check for orange health (colorblind mode)
+        orange_mask = cv2.inRange(hsv, self.orange_health_lower, self.orange_health_upper)
+        orange_pixels = cv2.countNonZero(orange_mask)
+
+        # Need significant colored pixels to confirm health bar
+        total_pixels = adjacent.shape[0] * adjacent.shape[1]
+        health_ratio = (teal_pixels + orange_pixels) / total_pixels if total_pixels > 0 else 0
+
+        return health_ratio > 0.2  # At least 20% should be health color
+
+    def _is_enemy_bar(self, frame: np.ndarray, level_box: tuple[int, int, int, int]) -> bool:
+        """Check if this is an enemy health bar (red) rather than ally (teal)."""
+        h, w = frame.shape[:2]
+        lx, ly, lw, lh = level_box
+
+        # Check region to the right of level box
+        check_x = lx + lw
+        check_y = ly
+        check_w = min(50, w - check_x)
+        check_h = lh
+
+        if check_x >= w or check_w <= 0:
+            return False
+
+        adjacent = frame[check_y:check_y + check_h, check_x:check_x + check_w]
+        if adjacent.size == 0:
+            return False
+
+        hsv = cv2.cvtColor(adjacent, cv2.COLOR_BGR2HSV)
+
+        # Check for red health
+        red_mask = cv2.inRange(hsv, self.red_health_lower, self.red_health_upper)
+        red_pixels = cv2.countNonZero(red_mask)
+
+        total_pixels = adjacent.shape[0] * adjacent.shape[1]
+        red_ratio = red_pixels / total_pixels if total_pixels > 0 else 0
+
+        return red_ratio > 0.15
+
+    def _check_name_is_garen(self, frame: np.ndarray, level_box: tuple[int, int, int, int]) -> bool:
+        """Use OCR to check if the name above the health bar is 'Garen'.
+
+        Only called when multiple ally bars are detected to disambiguate.
+        """
+        h, w = frame.shape[:2]
+        lx, ly, lw, lh = level_box
+
+        # Name text is above the health bar
+        # Approximate region: above level box, wider than level box
+        name_x = max(0, lx - 20)
+        name_y = max(0, ly - 25)
+        name_w = min(120, w - name_x)
+        name_h = min(20, ly - name_y)
+
+        if name_w <= 0 or name_h <= 0:
+            return False
+
+        name_region = frame[name_y:name_y + name_h, name_x:name_x + name_w]
+        if name_region.size == 0:
+            return False
+
+        try:
+            results = self.reader.readtext(name_region)
+            for (bbox, text, conf) in results:
+                if 'garen' in text.lower():
+                    return True
+        except Exception:
+            pass
+
+        return False
+
+    def _find_health_bar(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
+        """Find Garen's health bar by detecting teal health bars.
+
+        Strategy:
+        1. Find teal horizontal bars (health bars are distinctive shapes)
+        2. Filter by size and position
+        3. If multiple, pick closest to center (Garen with locked camera is centered)
+        4. Return full health bar region including level box to the left
+
+        Returns (x, y, w, h) of health bar or None if not found.
+        """
+        h, w = frame.shape[:2]
+
+        # Find teal health bars
+        health_bars = self._find_teal_health_bars(frame)
+
+        if not health_bars:
+            return None
+
+        # Filter out bars that are too wide (like announcement bars)
+        # Champion health bars are typically 60-120 pixels wide
+        max_health_width = int(120 * (w / 1920))
+        valid_bars = [hb for hb in health_bars if hb[2] <= max_health_width]
+
+        if not valid_bars:
+            # Fall back to all bars if none pass filter
+            valid_bars = health_bars
+
+        # If only one valid bar, use it
+        if len(valid_bars) == 1:
+            chosen = valid_bars[0]
+        else:
+            # Multiple bars - pick closest to center (Garen should be centered)
+            center_x = w // 2
+            center_y = int(h * 0.4)  # Garen is usually in upper-middle
+
+            def distance_to_center(hb):
+                hb_cx = hb[0] + hb[2] // 2
+                hb_cy = hb[1] + hb[3] // 2
+                return abs(hb_cx - center_x) + abs(hb_cy - center_y) * 0.5
+
+            chosen = min(valid_bars, key=distance_to_center)
+
+        hb_x, hb_y, hb_w, hb_h = chosen
+
+        # Cache position (no sanity check - Flash causes legitimate large jumps)
+        self._last_health_bar_x = hb_x
+        self._last_health_bar_y = hb_y
+
+        # Use FIXED health bar width (not the detected teal width which varies with damage)
+        # Full health bar = level box (~25px) + health bar (~105px) = ~130px at 1080p
+        level_box_width = int(25 * (w / 1920))
+        full_health_bar_width = int(105 * (w / 1920))  # Fixed width, doesn't shrink with damage
+
+        base_x = hb_x - level_box_width
+        base_w = level_box_width + full_health_bar_width
+
+        # Expand box by 30% in every direction for stability at lower resolutions
+        expand_x = int(base_w * 0.30)
+        expand_y = int(hb_h * 0.30)
+
+        full_x = max(0, base_x - expand_x)
+        full_y = max(0, hb_y - expand_y)
+        full_w = base_w + 2 * expand_x
+        full_h = hb_h + 2 * expand_y
+
+        return (full_x, full_y, full_w, full_h)
+
+    def _get_roi(self, frame: np.ndarray) -> tuple[np.ndarray, int, int, tuple[int, int, int, int]]:
+        """Extract region of interest dynamically tracking Garen's health bar.
+
+        Returns (roi_image, roi_x, roi_y, (hb_x, hb_y, hb_w, hb_h))
+        """
+        h, w = frame.shape[:2]
+
+        # Find health bar using level box detection
+        health_bar = self._find_health_bar(frame)
+
+        if health_bar is not None:
+            hb_x, hb_y, hb_w, hb_h = health_bar
+
+            # ROI: same width as health bar, extends from health bar down to feet
+            roi_w = hb_w
+            roi_h = int(self.roi_height_below * h)
+
+            x1 = hb_x
+            y1 = hb_y
+            x2 = x1 + roi_w
+            y2 = min(h, y1 + roi_h)
+
+        elif self._last_health_bar_x is not None:
+            # Use last known X position with default dimensions
+            # Y position is fixed relative to screen
+            hb_w = int(125 * (w / 1920))  # Level box + health bar width
+            hb_h = int(15 * (h / 1080))
+            hb_x = self._last_health_bar_x
+            hb_y = int(0.34 * h)  # Fixed Y position (normalized)
+
+            health_bar = (hb_x, hb_y, hb_w, hb_h)
+
+            roi_w = hb_w
+            roi_h = int(self.roi_height_below * h)
+
+            x1 = hb_x
+            y1 = hb_y
+            x2 = x1 + roi_w
+            y2 = min(h, y1 + roi_h)
+
+        else:
+            # Fallback to center ROI (Garen should be near center)
+            hb_w = int(125 * (w / 1920))
+            hb_h = int(15 * (h / 1080))
+            hb_x = w // 2 - hb_w // 2
+            hb_y = int(0.34 * h)
+
+            health_bar = (hb_x, hb_y, hb_w, hb_h)
+
+            roi_w = hb_w
+            roi_h = int(self.roi_height_below * h)
+
+            x1 = hb_x
+            y1 = hb_y
+            x2 = x1 + roi_w
+            y2 = y1 + roi_h
+
+        # Clamp to frame bounds
+        x1 = max(0, x1)
+        y1 = max(0, y1)
+        x2 = min(w, x2)
+        y2 = min(h, y2)
+
+        return frame[y1:y2, x1:x2], x1, y1, health_bar
 
     def _filter_gold_color(self, roi: np.ndarray) -> np.ndarray:
         """Filter ROI to isolate gold/yellow text."""
@@ -473,7 +781,7 @@ class GoldTextDetector:
         filtered = cv2.bitwise_and(roi, roi, mask=combined_mask)
         return filtered
 
-    def detect_gold_text(self, frame: np.ndarray, frame_idx: int = 0) -> list[tuple[int, float]]:
+    def detect_gold_text(self, frame: np.ndarray, frame_idx: int = 0) -> tuple[list[tuple[int, float]], tuple[int, int, int, int]]:
         """Detect gold gain text in frame.
 
         Args:
@@ -481,10 +789,12 @@ class GoldTextDetector:
             frame_idx: Frame index for tracking
 
         Returns:
-            List of (gold_amount, confidence) tuples for each detected gold text
+            (gold_gains, health_bar_rect) where:
+            - gold_gains: List of (gold_amount, confidence) tuples
+            - health_bar_rect: (x, y, w, h) of tracked health bar for visualization
         """
-        # Get ROI around Garen
-        roi, roi_x, roi_y = self._get_roi(frame)
+        # Get ROI around Garen (dynamically tracked)
+        roi, roi_x, roi_y, health_bar = self._get_roi(frame)
 
         # Filter for gold color
         filtered = self._filter_gold_color(roi)
@@ -492,13 +802,13 @@ class GoldTextDetector:
         # Check if there's enough content to OCR
         gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
         if cv2.countNonZero(gray) < 50:
-            return []
+            return ([], health_bar)
 
         # Run OCR
         try:
             results = self.reader.readtext(filtered)
         except Exception:
-            return []
+            return ([], health_bar)
 
         # Parse results for gold amounts
         gold_gains = []
@@ -523,7 +833,7 @@ class GoldTextDetector:
                 except ValueError:
                     pass
 
-        return gold_gains
+        return (gold_gains, health_bar)
 
     def get_all_detections(self) -> list[tuple[int, int, float]]:
         """Get all gold detections: (frame_idx, gold_amount, confidence)."""
