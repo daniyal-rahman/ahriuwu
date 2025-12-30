@@ -2,7 +2,8 @@
 
 This module extracts action labels from replay footage where:
 - WASD movement is inferred from camera/terrain shift or Garen HUD tracking
-- Ability usage (QWER + FG) is detected from cooldown state changes in ability bar
+- Ability usage (QWER + DF) is detected from cooldown state changes in ability bar
+- Gold gains are detected via OCR on floating "+XX" text near Garen
 - Mouse position is estimated as 18 slices around Garen's ability range circle
 
 Key insight: In replay footage with locked camera on Garen, the terrain/pixels
@@ -377,6 +378,160 @@ class AbilityBarDetector:
         """Clear the detection buffer."""
         self._detection_buffer = []
         self._current_frame_idx = 0
+
+
+class GoldTextDetector:
+    """Detect gold gain text floating near Garen using OCR.
+
+    Gold text appears as yellow "+XX" floating numbers when Garen
+    gains gold from kills, assists, or minion/monster last hits.
+    """
+
+    def __init__(
+        self,
+        normalized_regions: HUDRegionsNormalized = None,
+        frame_width: int = 1920,
+        frame_height: int = 1080,
+        use_gpu: bool = False,
+    ):
+        """Initialize gold text detector.
+
+        Args:
+            normalized_regions: Region config (unused for now, for consistency)
+            frame_width: Video frame width
+            frame_height: Video frame height
+            use_gpu: Whether to use GPU for OCR (faster but requires CUDA)
+        """
+        self.frame_width = frame_width
+        self.frame_height = frame_height
+
+        # Region of interest around Garen (center screen)
+        # Normalized coordinates (0-1)
+        self.roi_center_x = 0.5
+        self.roi_center_y = 0.42  # Slightly above center (gold appears above units)
+        self.roi_width = 0.35  # 35% of screen width
+        self.roi_height = 0.35  # 35% of screen height
+
+        # HSV thresholds for gold/yellow text
+        self.gold_lower = np.array([15, 100, 150])
+        self.gold_upper = np.array([35, 255, 255])
+
+        # Also detect white/bright text (some gold text can be whitish)
+        self.white_lower = np.array([0, 0, 200])
+        self.white_upper = np.array([180, 30, 255])
+
+        # Initialize EasyOCR reader (lazy load to avoid slow startup)
+        self._reader = None
+        self._use_gpu = use_gpu
+
+        # Detection history
+        self._detections: list[tuple[int, int, float]] = []  # (frame_idx, gold_amount, confidence)
+
+        # Deduplication: track recent detections to avoid counting same gold text multiple times
+        self._recent_detections: dict[int, int] = {}  # gold_amount -> last_frame_seen
+        self._dedup_window_frames = 30  # Same gold text within 30 frames is deduplicated
+
+    @property
+    def reader(self):
+        """Lazy load EasyOCR reader."""
+        if self._reader is None:
+            import easyocr
+            self._reader = easyocr.Reader(['en'], gpu=self._use_gpu)
+        return self._reader
+
+    def _get_roi(self, frame: np.ndarray) -> tuple[np.ndarray, int, int]:
+        """Extract region of interest around Garen."""
+        h, w = frame.shape[:2]
+
+        # Calculate ROI bounds
+        cx = int(self.roi_center_x * w)
+        cy = int(self.roi_center_y * h)
+        roi_w = int(self.roi_width * w)
+        roi_h = int(self.roi_height * h)
+
+        x1 = max(0, cx - roi_w // 2)
+        y1 = max(0, cy - roi_h // 2)
+        x2 = min(w, x1 + roi_w)
+        y2 = min(h, y1 + roi_h)
+
+        return frame[y1:y2, x1:x2], x1, y1
+
+    def _filter_gold_color(self, roi: np.ndarray) -> np.ndarray:
+        """Filter ROI to isolate gold/yellow text."""
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+
+        # Gold mask
+        gold_mask = cv2.inRange(hsv, self.gold_lower, self.gold_upper)
+
+        # White mask
+        white_mask = cv2.inRange(hsv, self.white_lower, self.white_upper)
+
+        # Combine
+        combined_mask = cv2.bitwise_or(gold_mask, white_mask)
+
+        # Apply mask
+        filtered = cv2.bitwise_and(roi, roi, mask=combined_mask)
+        return filtered
+
+    def detect_gold_text(self, frame: np.ndarray, frame_idx: int = 0) -> list[tuple[int, float]]:
+        """Detect gold gain text in frame.
+
+        Args:
+            frame: BGR image
+            frame_idx: Frame index for tracking
+
+        Returns:
+            List of (gold_amount, confidence) tuples for each detected gold text
+        """
+        # Get ROI around Garen
+        roi, roi_x, roi_y = self._get_roi(frame)
+
+        # Filter for gold color
+        filtered = self._filter_gold_color(roi)
+
+        # Check if there's enough content to OCR
+        gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
+        if cv2.countNonZero(gray) < 50:
+            return []
+
+        # Run OCR
+        try:
+            results = self.reader.readtext(filtered)
+        except Exception:
+            return []
+
+        # Parse results for gold amounts
+        gold_gains = []
+        for (bbox, text, conf) in results:
+            # Look for "+XX" pattern
+            text = text.strip()
+            if text.startswith('+'):
+                try:
+                    # Remove '+' and any non-digit characters
+                    amount_str = ''.join(c for c in text[1:] if c.isdigit())
+                    if amount_str:
+                        amount = int(amount_str)
+
+                        # Deduplicate: skip if same amount was seen recently
+                        last_seen = self._recent_detections.get(amount, -999)
+                        if frame_idx - last_seen > self._dedup_window_frames:
+                            gold_gains.append((amount, conf))
+                            self._detections.append((frame_idx, amount, conf))
+
+                        # Update last seen frame for this amount
+                        self._recent_detections[amount] = frame_idx
+                except ValueError:
+                    pass
+
+        return gold_gains
+
+    def get_all_detections(self) -> list[tuple[int, int, float]]:
+        """Get all gold detections: (frame_idx, gold_amount, confidence)."""
+        return list(self._detections)
+
+    def clear_detections(self):
+        """Clear detection history."""
+        self._detections = []
 
 
 class MousePositionEstimator:
