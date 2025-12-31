@@ -380,6 +380,89 @@ class AbilityBarDetector:
         self._current_frame_idx = 0
 
 
+class ItemUsageDetector:
+    """Detect item usage by tracking saturation changes in item slot 1.
+
+    Items turn gray when used (on cooldown), similar to abilities.
+    Tracks first item slot for top laner in the scoreboard.
+    """
+
+    # First item slot position at 1080p (x, y, w, h)
+    BLUE_TOP_ITEM1_1080P = (772, 866, 20, 20)
+    RED_TOP_ITEM1_1080P = (1142, 866, 20, 20)
+
+    def __init__(
+        self,
+        frame_width: int = 1920,
+        frame_height: int = 1080,
+        team_side: str = "blue",  # "blue" or "red" - which side Garen is on
+    ):
+        """Initialize item usage detector.
+
+        Args:
+            frame_width: Video frame width
+            frame_height: Video frame height
+            team_side: Which side Garen is on ("blue" or "red")
+        """
+        self.frame_width = frame_width
+        self.frame_height = frame_height
+        self.team_side = team_side
+
+        # Scale item slot to current resolution
+        scale_x = frame_width / 1920
+        scale_y = frame_height / 1080
+
+        base_slot = self.BLUE_TOP_ITEM1_1080P if team_side == "blue" else self.RED_TOP_ITEM1_1080P
+        x, y, w, h = base_slot
+        self.item_slot = (int(x * scale_x), int(y * scale_y), int(w * scale_x), int(h * scale_y))
+
+        # Saturation thresholds (same as ability detection)
+        self.high_sat_threshold = 50  # Above this = item is colored/ready
+        self.low_sat_threshold = 30   # Below this = item is gray/on cooldown
+        self.sat_drop_threshold = 20  # Minimum drop to detect usage
+
+        # Track previous saturation
+        self.prev_saturation = None
+
+        # Detection history
+        self._detections: list[int] = []  # frame_idx when item was used
+
+    def get_item_saturation(self, frame: np.ndarray) -> float:
+        """Get mean saturation of item slot region."""
+        x, y, w, h = self.item_slot
+        item_img = frame[y:y+h, x:x+w]
+        if item_img.size == 0:
+            return 0.0
+        hsv = cv2.cvtColor(item_img, cv2.COLOR_BGR2HSV)
+        return float(hsv[:, :, 1].mean())
+
+    def detect_item_usage(self, frame: np.ndarray, frame_idx: int = 0) -> bool:
+        """Detect if item was just used this frame.
+
+        Returns True if item was just activated.
+        """
+        curr_sat = self.get_item_saturation(frame)
+        prev_sat = self.prev_saturation
+
+        used = False
+        if prev_sat is not None:
+            sat_drop = prev_sat - curr_sat
+            was_colored = prev_sat > self.high_sat_threshold
+            now_desaturated = curr_sat < self.low_sat_threshold
+
+            # Item used if: was colored AND (now desaturated OR big drop)
+            if was_colored and (now_desaturated or sat_drop > self.sat_drop_threshold):
+                used = True
+                self._detections.append(frame_idx)
+
+        self.prev_saturation = curr_sat
+        return used
+
+    def get_all_detections(self) -> list[int]:
+        """Get all item usage detections as frame indices."""
+        return list(self._detections)
+
+
 class GoldTextDetector:
     """Detect gold gain text floating near Garen using OCR.
 
