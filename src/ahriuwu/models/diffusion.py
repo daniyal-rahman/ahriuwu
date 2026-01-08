@@ -423,6 +423,7 @@ class ShortcutForcing:
         z_0: torch.Tensor,
         tau: torch.Tensor,
         step_size: torch.Tensor,
+        actions: dict[str, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, dict]:
         """Compute shortcut forcing loss (Paper Eq. 7).
 
@@ -441,6 +442,7 @@ class ShortcutForcing:
             z_0: Clean latents, shape (B, T, C, H, W)
             tau: Noise levels, shape (B,) or (B, T)
             step_size: Step sizes (integers), shape (B,)
+            actions: Optional action dict with 'movement', 'target', and ability keys
 
         Returns:
             loss: Combined loss
@@ -462,10 +464,17 @@ class ShortcutForcing:
         n_std = 0
         n_boot = 0
 
+        # Helper to slice actions if provided
+        def slice_actions(actions, idx):
+            if actions is None:
+                return None
+            return {k: v[idx] for k, v in actions.items()}
+
         # Standard loss for d=1 (smallest step)
         if is_base_step.any():
             idx = is_base_step
-            z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx], step_size=d_normalized[idx])
+            z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx],
+                          step_size=d_normalized[idx], actions=slice_actions(actions, idx))
             loss_std = x_prediction_loss(z_pred, z_0[idx], tau[idx] if tau.dim() > 1 else tau[idx])
             n_std = idx.sum().item()
 
@@ -480,7 +489,8 @@ class ShortcutForcing:
                 d_half_norm = d_half.float() / self.k_max
 
                 # First half-step: predict z_0 from z_tau
-                z_mid = model(z_tau[idx], tau_idx, step_size=d_half_norm)
+                z_mid = model(z_tau[idx], tau_idx, step_size=d_half_norm,
+                             actions=slice_actions(actions, idx))
 
                 # First half-step velocity: b' = (z_mid - z_tau) / tau
                 # Expand tau for broadcasting
@@ -506,7 +516,8 @@ class ShortcutForcing:
                 z_tau_mid = (1 - tau_mid_expanded) * z_mid + tau_mid_expanded * noise[idx]
 
                 # Second half-step: predict z_0 from z_tau_mid
-                z_target = model(z_tau_mid, tau_mid, step_size=d_half_norm)
+                z_target = model(z_tau_mid, tau_mid, step_size=d_half_norm,
+                                actions=slice_actions(actions, idx))
 
                 # Second half-step velocity: b'' = (z_target - z_tau_mid) / tau_mid
                 b_double_prime = (z_target - z_tau_mid) / tau_mid_expanded.clamp(min=1e-6)
@@ -515,7 +526,8 @@ class ShortcutForcing:
                 avg_velocity = (b_prime + b_double_prime) / 2
 
             # Student: take 1 full step directly
-            z_pred = model(z_tau[idx], tau_idx, step_size=d_normalized[idx])
+            z_pred = model(z_tau[idx], tau_idx, step_size=d_normalized[idx],
+                          actions=slice_actions(actions, idx))
 
             # Student velocity: (z_pred - z_tau) / tau
             b_student = (z_pred - z_tau[idx]) / tau_safe
@@ -523,14 +535,18 @@ class ShortcutForcing:
             # Bootstrap loss in velocity space with τ² scaling (Paper Eq. 7)
             # L = τ² || b_student - sg(avg_velocity) ||²
             velocity_diff = b_student - avg_velocity.detach()
-            velocity_mse = (velocity_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W
+            velocity_mse = (velocity_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W -> (B, T)
 
-            # Apply τ² scaling
+            # Apply τ² scaling - reduce to scalar loss
+            # velocity_mse: (B_subset, T), tau_idx: (B_subset,) or (B_subset, T)
             if tau_idx.dim() == 1:
-                tau_weight = tau_idx ** 2
+                tau_weight = tau_idx ** 2  # (B_subset,)
+                # Average over T first, then apply per-sample tau weight
+                loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
             else:
-                tau_weight = (tau_idx ** 2).mean(dim=-1)  # Average over T if per-timestep
-            loss_boot = (velocity_mse * tau_weight).mean()
+                # tau_idx is (B_subset, T) - use mean tau per sample for weighting
+                tau_weight = (tau_idx ** 2).mean(dim=-1)  # (B_subset,)
+                loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
             n_boot = idx.sum().item()
 
         # Combine losses (weighted by number of samples)

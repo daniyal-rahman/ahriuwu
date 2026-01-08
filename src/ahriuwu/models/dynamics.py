@@ -22,6 +22,10 @@ import torch.nn.functional as F
 
 from .diffusion import TimestepEmbedding
 
+# Action space constants (must match data/actions.py)
+MOVEMENT_CLASSES = 18  # 0-17 = directions (20° apart)
+ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
+
 
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization."""
@@ -469,6 +473,8 @@ class DynamicsTransformer(nn.Module):
         use_agent_tokens: bool = False,
         num_tasks: int = 1,  # For multi-task conditioning
         agent_layers: int = 4,  # Number of agent token processing layers
+        # Action conditioning
+        use_actions: bool = False,
     ):
         """Initialize dynamics transformer.
 
@@ -485,6 +491,7 @@ class DynamicsTransformer(nn.Module):
             use_agent_tokens: Enable agent tokens for Phase 2+
             num_tasks: Number of tasks for multi-task conditioning
             agent_layers: Number of agent token processing layers
+            use_actions: Enable action conditioning with factorized embeddings
         """
         super().__init__()
         self.latent_dim = latent_dim
@@ -494,6 +501,7 @@ class DynamicsTransformer(nn.Module):
         self.num_layers = num_layers
         self.temporal_every = temporal_every
         self.use_agent_tokens = use_agent_tokens
+        self.use_actions = use_actions
 
         # Input projection: (B, T, C, H, W) -> (B, T, S, D)
         self.input_proj = nn.Linear(latent_dim, model_dim)
@@ -510,6 +518,15 @@ class DynamicsTransformer(nn.Module):
         self.time_embed = TimestepEmbedding(model_dim)
         # Step size embedding for shortcut forcing
         self.step_embed = TimestepEmbedding(model_dim)
+
+        # Factorized action embeddings
+        if use_actions:
+            self.action_embed = nn.ModuleDict({
+                'movement': nn.Embedding(MOVEMENT_CLASSES, model_dim),
+                **{k: nn.Embedding(2, model_dim) for k in ABILITY_KEYS}
+            })
+            # Learned "no action" embedding for unlabeled videos
+            self.no_action_embed = nn.Parameter(torch.randn(1, 1, model_dim) * 0.02)
 
         # Transformer blocks
         self.blocks = nn.ModuleList()
@@ -564,6 +581,25 @@ class DynamicsTransformer(nn.Module):
         # Initialize weights
         self._init_weights()
 
+    def embed_actions(self, actions: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Sum factorized action embeddings.
+
+        Args:
+            actions: Dict with keys 'movement' and ability keys.
+                     Each value is a (B, T) tensor of class indices.
+
+        Returns:
+            (B, T, D) summed action embedding
+        """
+        # Start with movement embedding
+        emb = self.action_embed['movement'](actions['movement'])  # (B, T, D)
+
+        # Add all ability key embeddings
+        for key in ABILITY_KEYS:
+            emb = emb + self.action_embed[key](actions[key])
+
+        return emb
+
     def _init_weights(self):
         """Initialize weights with small values for stable training."""
         for name, p in self.named_parameters():
@@ -582,6 +618,7 @@ class DynamicsTransformer(nn.Module):
         step_size: torch.Tensor | None = None,
         context: torch.Tensor | None = None,
         task_id: torch.Tensor | None = None,
+        actions: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Forward pass: predict clean latents from noisy input.
 
@@ -592,6 +629,8 @@ class DynamicsTransformer(nn.Module):
                        Normalized to [0, 1] where 1.0 = k_max steps
             context: Optional context frames (not used in MVP)
             task_id: Optional task ID for multi-task conditioning, shape (B,)
+            actions: Optional action dict with 'movement', 'target', and ability keys.
+                     Each value is (B, T) tensor of class indices.
 
         Returns:
             If use_agent_tokens=False:
@@ -613,6 +652,14 @@ class DynamicsTransformer(nn.Module):
         # Add positional embeddings
         x = x + self.spatial_pos[:, :, :self.spatial_tokens, :]
         x = x + self.temporal_pos[:, :T, :, :]
+
+        # Add action conditioning (broadcast to all spatial tokens)
+        if self.use_actions:
+            if actions is not None:
+                action_emb = self.embed_actions(actions)  # (B, T, D)
+            else:
+                action_emb = self.no_action_embed.expand(B, T, -1)
+            x = x + action_emb.unsqueeze(2)  # (B, T, 1, D) broadcast to (B, T, S, D)
 
         # Get timestep embedding
         time_emb = self.time_embed(tau)  # (B, D) or (B, T, D)
@@ -672,6 +719,7 @@ def create_dynamics(
     use_agent_tokens: bool = False,
     num_tasks: int = 1,
     agent_layers: int = 4,
+    use_actions: bool = False,
 ) -> DynamicsTransformer:
     """Create dynamics model with preset sizes.
 
@@ -681,6 +729,7 @@ def create_dynamics(
         use_agent_tokens: Enable agent tokens for Phase 2+
         num_tasks: Number of tasks for multi-task conditioning
         agent_layers: Number of agent token processing layers
+        use_actions: Enable action conditioning with factorized embeddings
 
     Returns:
         DynamicsTransformer instance
@@ -716,6 +765,7 @@ def create_dynamics(
         use_agent_tokens=use_agent_tokens,
         num_tasks=num_tasks,
         agent_layers=agent_layers,
+        use_actions=use_actions,
         **configs[size],
     )
 
@@ -725,7 +775,7 @@ if __name__ == "__main__":
     print("Testing dynamics transformer...")
 
     model = create_dynamics("small", latent_dim=256)
-    print(f"Parameters: {model.get_num_params():,}")
+    print(f"Parameters (base): {model.get_num_params():,}")
 
     # Test forward pass
     B, T, C, H, W = 2, 8, 256, 16, 16
@@ -743,4 +793,37 @@ if __name__ == "__main__":
     print(f"Sequence tau shape: {tau_seq.shape}")
     print(f"Output shape: {z_pred_seq.shape}")
 
-    print("All tests passed!")
+    print("\n--- Testing with actions ---")
+    model_actions = create_dynamics("small", latent_dim=256, use_actions=True)
+    print(f"Parameters (with actions): {model_actions.get_num_params():,}")
+
+    # Create mock actions
+    actions = {
+        'movement': torch.randint(0, MOVEMENT_CLASSES, (B, T)),
+        **{k: torch.randint(0, 2, (B, T)) for k in ABILITY_KEYS}
+    }
+
+    z_pred_actions = model_actions(z_tau, tau, actions=actions)
+    print(f"Output shape (with actions): {z_pred_actions.shape}")
+
+    # Test without actions (should use no_action_embed)
+    z_pred_no_actions = model_actions(z_tau, tau, actions=None)
+    print(f"Output shape (no actions): {z_pred_no_actions.shape}")
+
+    print("\n--- Testing with agent tokens ---")
+    model_agent = create_dynamics("small", latent_dim=256, use_agent_tokens=True)
+    print(f"Parameters (with agent tokens): {model_agent.get_num_params():,}")
+
+    z_pred_agent, agent_out = model_agent(z_tau, tau)
+    print(f"Output z shape: {z_pred_agent.shape}")
+    print(f"Agent output shape: {agent_out.shape}")
+
+    print("\n--- Testing with both actions and agent tokens ---")
+    model_both = create_dynamics("small", latent_dim=256, use_actions=True, use_agent_tokens=True)
+    print(f"Parameters (both): {model_both.get_num_params():,}")
+
+    z_pred_both, agent_both = model_both(z_tau, tau, actions=actions)
+    print(f"Output z shape: {z_pred_both.shape}")
+    print(f"Agent output shape: {agent_both.shape}")
+
+    print("\nAll tests passed!")

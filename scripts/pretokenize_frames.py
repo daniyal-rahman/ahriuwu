@@ -24,7 +24,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from ahriuwu.models import create_tokenizer
+from ahriuwu.models import create_transformer_tokenizer
 
 
 class FrameDatasetForEncoding(Dataset):
@@ -56,7 +56,12 @@ class FrameDatasetForEncoding(Dataset):
             video_id = video_dir.name
             output_video_dir = self.output_dir / video_id
 
-            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
+            # Frames are in video_dir/frames/ subdirectory
+            frames_subdir = video_dir / "frames"
+            if not frames_subdir.exists():
+                continue
+
+            frames = sorted(frames_subdir.glob(f"frame_*.{self.file_ext}"))
 
             for frame_path in frames:
                 # Extract frame number
@@ -99,14 +104,19 @@ class FrameDatasetForEncoding(Dataset):
 
 
 def load_tokenizer(checkpoint_path: Path, device: str):
-    """Load trained tokenizer from checkpoint."""
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    """Load trained transformer tokenizer from checkpoint."""
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     # Get model size from checkpoint args
     args = checkpoint.get("args", {})
     model_size = args.get("model_size", "small")
 
-    model = create_tokenizer(model_size)
+    # Auto-detect RoPE from checkpoint weights
+    has_rope = any("rope" in k for k in checkpoint["model_state_dict"].keys())
+    if has_rope:
+        print("Detected RoPE in checkpoint")
+
+    model = create_transformer_tokenizer(model_size, use_rope=has_rope)
     model.load_state_dict(checkpoint["model_state_dict"])
     model = model.to(device)
     model.eval()
@@ -121,7 +131,16 @@ def process_batch(model, batch, device):
 
     with torch.no_grad():
         with torch.amp.autocast(device_type=device.split(":")[0], dtype=torch.float16):
-            latents = model.encode(frames)
+            output = model.encode(frames)
+            # Transformer tokenizer returns dict with 'latent' key
+            # Shape: (B, num_latents, latent_dim) = (B, 256, 32)
+            latents = output["latent"]
+
+    # Reshape to (B, latent_dim, H, W) = (B, 32, 16, 16)
+    # 256 tokens = 16x16 spatial grid
+    B = latents.shape[0]
+    latents = latents.view(B, 16, 16, -1)  # (B, 16, 16, 32)
+    latents = latents.permute(0, 3, 1, 2)   # (B, 32, 16, 16)
 
     # Save each latent as numpy (much smaller files than torch.save)
     latents = latents.cpu().numpy().astype(np.float16)
@@ -142,8 +161,8 @@ def main():
     parser.add_argument(
         "--frames-dir",
         type=str,
-        default="data/processed/frames",
-        help="Directory containing video subdirs with frames",
+        default="data/processed",
+        help="Directory containing video subdirs (each with frames/ subdir)",
     )
     parser.add_argument(
         "--output-dir",

@@ -69,7 +69,7 @@ def parse_args():
         "--stride",
         type=int,
         default=8,
-        help="Stride between sequences (for data augmentation, 8=50% overlap)",
+        help="Stride between sequences (for data augmentation, 8=50%% overlap)",
     )
     parser.add_argument(
         "--batch-size",
@@ -184,6 +184,24 @@ def parse_args():
         default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
         help="Device to train on",
     )
+    # Action conditioning
+    parser.add_argument(
+        "--use-actions",
+        action="store_true",
+        help="Enable action conditioning (requires features.json per video)",
+    )
+    parser.add_argument(
+        "--features-dir",
+        type=str,
+        default="data/processed",
+        help="Directory containing features.json per video",
+    )
+    # Agent tokens (for Phase 2+)
+    parser.add_argument(
+        "--use-agent-tokens",
+        action="store_true",
+        help="Enable agent tokens for policy/reward heads",
+    )
     return parser.parse_args()
 
 
@@ -250,6 +268,7 @@ def train_epoch(
     shortcut: ShortcutForcing | None = None,
     dataloader_short: DataLoader | None = None,
     dataloader_long: DataLoader | None = None,
+    use_actions: bool = False,
 ):
     """Train for one epoch.
 
@@ -309,6 +328,11 @@ def train_epoch(
         z_0 = batch["latents"].to(device)
         B, T, C, H, W = z_0.shape
 
+        # Get actions if available
+        actions = None
+        if use_actions and "actions" in batch and batch["actions"] is not None:
+            actions = {k: v.to(device) for k, v in batch["actions"].items()}
+
         optimizer.zero_grad()
 
         # Sample per-timestep noise levels (diffusion forcing)
@@ -324,10 +348,10 @@ def train_epoch(
             if shortcut is not None:
                 # Shortcut forcing: sample step sizes and use bootstrap loss
                 step_size = shortcut.sample_step_size(B, device=device)
-                loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size)
+                loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
             else:
                 # Standard training: predict clean latents
-                z_pred = model(z_tau, tau)
+                z_pred = model(z_tau, tau, actions=actions)
                 loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
 
         # Backward with scaling
@@ -465,11 +489,15 @@ def main():
             latents_dir=args.latents_dir,
             sequence_length=args.seq_len_short,
             stride=args.stride,
+            load_actions=args.use_actions,
+            features_dir=args.features_dir if args.use_actions else None,
         )
         dataset_long = LatentSequenceDataset(
             latents_dir=args.latents_dir,
             sequence_length=args.seq_len_long,
             stride=args.stride,
+            load_actions=args.use_actions,
+            features_dir=args.features_dir if args.use_actions else None,
         )
 
         if len(dataset_short) == 0 or len(dataset_long) == 0:
@@ -503,6 +531,8 @@ def main():
             latents_dir=args.latents_dir,
             sequence_length=args.sequence_length,
             stride=args.stride,
+            load_actions=args.use_actions,
+            features_dir=args.features_dir if args.use_actions else None,
         )
 
         if len(dataset) == 0:
@@ -524,9 +554,18 @@ def main():
         dataloader_long = None
 
     # Create model
-    model = create_dynamics(args.model_size, latent_dim=args.latent_dim)
+    model = create_dynamics(
+        args.model_size,
+        latent_dim=args.latent_dim,
+        use_actions=args.use_actions,
+        use_agent_tokens=args.use_agent_tokens,
+    )
     model = model.to(args.device)
     print(f"Model parameters: {model.get_num_params():,}")
+    if args.use_actions:
+        print("Action conditioning: ENABLED")
+    if args.use_agent_tokens:
+        print("Agent tokens: ENABLED")
 
     # Enable gradient checkpointing for memory efficiency
     if args.gradient_checkpointing:
@@ -577,7 +616,7 @@ def main():
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, schedule, args.device,
             epoch, global_step, args, checkpoint_dir, shortcut,
-            dataloader_short, dataloader_long
+            dataloader_short, dataloader_long, use_actions=args.use_actions
         )
 
         global_step = metrics["global_step"]

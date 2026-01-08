@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from .actions import ABILITY_KEYS, collate_actions
+
 # Default target resolution for world model
 TARGET_SIZE = (256, 256)
 
@@ -286,6 +288,8 @@ class LatentSequenceDataset(Dataset):
 
     Loads latent vectors from .npy files instead of raw frames.
     Much faster I/O than loading and resizing JPEGs.
+
+    Optionally loads action labels from features.json per video.
     """
 
     def __init__(
@@ -293,6 +297,8 @@ class LatentSequenceDataset(Dataset):
         latents_dir: Path | str,
         sequence_length: int = 64,
         stride: int = 1,
+        load_actions: bool = False,
+        features_dir: Path | str | None = None,
     ):
         """Initialize dataset.
 
@@ -300,13 +306,24 @@ class LatentSequenceDataset(Dataset):
             latents_dir: Directory containing video subdirs with latent .npy files
             sequence_length: Number of frames per sequence
             stride: Step between sequence start indices
+            load_actions: Whether to load action labels from features.json
+            features_dir: Directory containing features.json per video (default: data/processed)
         """
         self.latents_dir = Path(latents_dir)
         self.sequence_length = sequence_length
         self.stride = stride
+        self.load_actions = load_actions
+        self.features_dir = Path(features_dir) if features_dir else self.latents_dir.parent.parent / "data" / "processed"
+
+        # Action labels per video (if load_actions=True)
+        self.action_labels: dict[str, list[dict]] = {}
 
         self.sequences = []
         self._index_latents()
+
+        # Load action labels after indexing
+        if load_actions:
+            self._load_action_labels()
 
     def _index_latents(self):
         """Build index of all valid sequences."""
@@ -367,6 +384,63 @@ class LatentSequenceDataset(Dataset):
 
         print(f"Indexed {len(self.sequences)} latent sequences from {self.latents_dir}")
 
+    def _load_action_labels(self):
+        """Load action labels from features.json for each video."""
+        video_ids = set(seq["video_id"] for seq in self.sequences)
+        loaded_count = 0
+
+        for video_id in video_ids:
+            features_path = self.features_dir / video_id / "features.json"
+            if features_path.exists():
+                with open(features_path) as f:
+                    data = json.load(f)
+                    # features.json has {"frames": [...]} structure
+                    self.action_labels[video_id] = data.get("frames", [])
+                loaded_count += 1
+
+        print(f"Loaded action labels for {loaded_count}/{len(video_ids)} videos")
+
+    def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
+        """Get action tensors for a sequence.
+
+        Args:
+            video_id: Video identifier
+            start_frame: Starting frame index
+
+        Returns:
+            Dict with 'movement' and ability keys as (T,) tensors,
+            or None if no action labels for this video.
+        """
+        if video_id not in self.action_labels:
+            return None
+
+        labels = self.action_labels[video_id]
+        actions = {
+            'movement': [],
+            **{k: [] for k in ABILITY_KEYS}
+        }
+
+        for t in range(start_frame, start_frame + self.sequence_length):
+            if t < len(labels):
+                entry = labels[t]
+                # Map features.json keys to our action space
+                actions['movement'].append(entry.get('movement_slice', 0))
+                actions['Q'].append(int(entry.get('ability_q', False)))
+                actions['W'].append(int(entry.get('ability_w', False)))
+                actions['E'].append(int(entry.get('ability_e', False)))
+                actions['R'].append(int(entry.get('ability_r', False)))
+                actions['D'].append(int(entry.get('summoner_d', False)))
+                actions['F'].append(int(entry.get('summoner_f', False)))
+                actions['item'].append(int(entry.get('item_used', False)))
+                actions['B'].append(int(entry.get('recall_b', False)))
+            else:
+                # Padding with "no action"
+                actions['movement'].append(0)
+                for k in ABILITY_KEYS:
+                    actions[k].append(0)
+
+        return {k: torch.tensor(v, dtype=torch.long) for k, v in actions.items()}
+
     def __len__(self) -> int:
         return len(self.sequences)
 
@@ -374,6 +448,7 @@ class LatentSequenceDataset(Dataset):
         seq_info = self.sequences[idx]
         video_dir = seq_info["video_dir"]
         start_frame = seq_info["start_frame"]
+        video_id = seq_info["video_id"]
 
         latents = []
         for i in range(self.sequence_length):
@@ -382,8 +457,15 @@ class LatentSequenceDataset(Dataset):
             latent = np.load(latent_path)
             latents.append(torch.from_numpy(latent))
 
-        return {
+        result = {
             "latents": torch.stack(latents),  # (T, C, H, W) = (T, 256, 16, 16)
-            "video_id": seq_info["video_id"],
+            "video_id": video_id,
             "start_frame": start_frame,
         }
+
+        # Add actions if loading them
+        if self.load_actions:
+            actions = self._get_actions(video_id, start_frame)
+            result["actions"] = actions  # dict of (T,) tensors or None
+
+        return result
