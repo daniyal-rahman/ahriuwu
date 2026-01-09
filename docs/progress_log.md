@@ -595,3 +595,169 @@ Don't continue training current model. Instead:
 ### Files Created
 - `scripts/quick_eval_dynamics.py` - Fast 1-step denoising eval
 - `scripts/full_eval_dynamics.py` - Full 64-step rollout eval
+
+---
+
+## 2024-12-31: Action Conditioning + Agent Tokens Implementation
+
+### Overview
+Implemented action conditioning and agent tokens as required for Phase 2 (agent finetuning) and Phase 3 (imagination training).
+
+### Action Space (Factorized Embeddings)
+All actions are discrete/categorical with 11 factorized embeddings:
+
+| Component | Classes | Description |
+|-----------|---------|-------------|
+| movement | 19 | 0=none, 1-18=directions (20° apart) |
+| target | 8 | Ring of 8 regions around Garen |
+| Q | 2 | Binary ability |
+| W | 2 | Binary ability |
+| E | 2 | Binary ability |
+| R | 2 | Binary ability |
+| D | 2 | Summoner spell |
+| F | 2 | Summoner spell |
+| 1 | 2 | Potion item |
+| 2 | 2 | Stridebreaker item |
+| B | 2 | Recall |
+
+**Movement encoding**: 18 evenly spaced directions at 20° intervals
+- 1: 0° (East/Right)
+- 2: 20°
+- ...
+- 10: 180° (West/Left)
+- ...
+- 18: 340°
+
+### Implementation Details
+
+**Action embedding (dynamics.py:586-606)**:
+```python
+def embed_actions(self, actions):
+    emb = self.action_embed['movement'](actions['movement'])
+    emb = emb + self.action_embed['target'](actions['target'])
+    for key in ABILITY_KEYS:
+        emb = emb + self.action_embed[key](actions[key])
+    return emb  # (B, T, D)
+```
+
+Embeddings are summed together (per DreamerV4 Section 3.2), then broadcast to all spatial tokens.
+
+**Agent tokens (dynamics.py:692-712)**:
+- One learnable agent token per frame
+- Cross-attention to z tokens (agent reads world state)
+- Temporal self-attention across frames (causal)
+- Z tokens CANNOT attend back to agent tokens (asymmetric attention per Section 3.3)
+- Returns `(z_pred, agent_out)` tuple for policy/reward heads
+
+**No-action fallback**:
+```python
+self.no_action_embed = nn.Parameter(torch.randn(1, 1, model_dim) * 0.02)
+```
+Used when `actions=None` is passed, enabling unlabeled video training.
+
+### Files Changed
+| File | Changes |
+|------|---------|
+| `src/ahriuwu/data/actions.py` | NEW: Action space definition with 11 components |
+| `src/ahriuwu/data/dataset.py` | Added `load_actions` param, `_get_actions()` method |
+| `src/ahriuwu/models/dynamics.py` | Factorized embeddings, `use_actions` param, agent tokens |
+| `src/ahriuwu/models/diffusion.py` | Pass actions through `ShortcutForcing.compute_loss()` |
+| `scripts/train_dynamics.py` | Added `--use-actions`, `--use-agent-tokens` flags |
+
+### Paper Verification
+Reviewed implementation against DreamerV4 paper:
+
+| Paper Section | Implementation | Status |
+|---------------|----------------|--------|
+| 3.2 Action encoding | Summed factorized embeddings | ✓ Correct |
+| 3.3 Agent tokens | Asymmetric cross-attention | ✓ Correct |
+| Eq. 7 Bootstrap loss | Actions passed through all 4 model calls | ✓ Correct |
+
+### Known Issue: DataLoader Collation with Mixed Batches
+**Problem**: `_get_actions()` returns `None` for videos without action labels. If batch contains both labeled and unlabeled videos, default collate fails.
+
+**Current behavior**: Works if ALL videos in batch have actions OR none do.
+
+**Solutions** (not yet implemented):
+1. Custom collate function that handles `None` actions
+2. Filter to only use videos with action labels when `load_actions=True`
+3. Return zeros instead of `None` for unlabeled videos
+
+For now, ensure action-labeled videos are either used exclusively or not at all in a dataset.
+
+### Usage
+```bash
+# Training with actions only
+python scripts/train_dynamics.py --use-actions
+
+# Training with agent tokens only
+python scripts/train_dynamics.py --use-agent-tokens
+
+# Both (required for Phase 2+)
+python scripts/train_dynamics.py --use-actions --use-agent-tokens
+```
+
+### Parameter Counts
+| Config | Parameters |
+|--------|------------|
+| Base (small) | 60.0M |
+| + Actions | 65.6M (+5.6M) |
+| + Agent tokens | 73.7M (+13.7M) |
+| + Both | 79.3M (+19.3M) |
+
+### Next Steps
+1. Label action data for training videos (`actions.json` per video)
+2. Fix DataLoader collation for mixed labeled/unlabeled batches
+3. Train dynamics model with action conditioning
+4. Verify action inputs change rollout behavior (controllability test)
+
+---
+
+## 2025-01-09: Action-Conditioned Dynamics Training
+
+### Data Format Update
+New data downloaded with action annotations in `features.json` format:
+- `movement_slice`: 0-17 (18 directions at 20° intervals)
+- `ability_q/w/e/r`: binary ability usage
+- `summoner_d/f`: binary summoner spell usage
+- `item_used`: binary item usage (combined slots)
+- `recall_b`: binary recall
+
+### Code Changes
+| File | Change |
+|------|--------|
+| `src/ahriuwu/data/actions.py` | New file: 18 movement classes, 8 ability keys |
+| `src/ahriuwu/data/dataset.py` | Load from `features.json`, added `features_dir` param |
+| `src/ahriuwu/models/dynamics.py` | Removed target embedding, match new action keys |
+| `scripts/pretokenize_frames.py` | Updated for transformer tokenizer + RoPE |
+| `scripts/eval_dynamics.py` | Auto-detect transformer tokenizer, handle action model |
+
+### Pretokenization
+- 2.38M frames from 71 videos
+- Output: 46 GB latents (32×16×16 float16 per frame)
+- Speed: 71 frames/sec
+
+### Numerical Stability Fix
+Bootstrap loss had explosions (loss to 10^14+) due to velocity computation dividing by small tau values.
+
+**Problem**: `b = (z_pred - z_tau) / tau` with tau=0.1 amplifies errors 10x, squaring makes 100x.
+
+**Fix**: `velocity_mse = velocity_mse.clamp(max=100.0)` in `diffusion.py`
+
+Before fix: Loss spikes to 10^12-10^15
+After fix: Stable losses ~0.005-0.03
+
+### Training Status
+```
+Dynamics: 62M params
+Data: 296k sequences (T=32), 296k sequences (T=64)
+Actions: 71/71 videos with labels
+Batch: 2 (short) / 1 (long)
+Speed: 5.5 batch/s
+```
+
+Currently training from step 100k with stable losses.
+
+### Early Eval (step 450k, before stability fix)
+PSNR: 13.34 dB - predictions essentially noise due to numerical instability.
+Need to retrain with stable loss to get meaningful predictions.
