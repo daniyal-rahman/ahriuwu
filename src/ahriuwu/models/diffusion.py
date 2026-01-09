@@ -537,17 +537,26 @@ class ShortcutForcing:
             velocity_diff = b_student - avg_velocity.detach()
             velocity_mse = (velocity_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W -> (B, T)
 
-            # Apply τ² scaling - reduce to scalar loss
-            # velocity_mse: (B_subset, T), tau_idx: (B_subset,) or (B_subset, T)
-            if tau_idx.dim() == 1:
-                tau_weight = tau_idx ** 2  # (B_subset,)
-                # Average over T first, then apply per-sample tau weight
-                loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
+            # Clamp velocity_mse to prevent numerical explosion
+            # When tau is small (~0.1), dividing by tau amplifies differences by 10x
+            # Squaring makes this 100x, which can overflow if predictions diverge
+            velocity_mse = velocity_mse.clamp(max=1e6)
+
+            # Skip batch if any NaN/Inf detected
+            if torch.isnan(velocity_mse).any() or torch.isinf(velocity_mse).any():
+                n_boot = 0
             else:
-                # tau_idx is (B_subset, T) - use mean tau per sample for weighting
-                tau_weight = (tau_idx ** 2).mean(dim=-1)  # (B_subset,)
-                loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
-            n_boot = idx.sum().item()
+                # Apply τ² scaling - reduce to scalar loss
+                # velocity_mse: (B_subset, T), tau_idx: (B_subset,) or (B_subset, T)
+                if tau_idx.dim() == 1:
+                    tau_weight = tau_idx ** 2  # (B_subset,)
+                    # Average over T first, then apply per-sample tau weight
+                    loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
+                else:
+                    # tau_idx is (B_subset, T) - use mean tau per sample for weighting
+                    tau_weight = (tau_idx ** 2).mean(dim=-1)  # (B_subset,)
+                    loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
+                n_boot = idx.sum().item()
 
         # Combine losses (weighted by number of samples)
         total = n_std + n_boot
