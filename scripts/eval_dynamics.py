@@ -457,11 +457,13 @@ def latents_to_frames(
             batch = latents_flat[i:i + batch_size].float()
 
             if is_transformer:
-                # Transformer tokenizer expects (B, num_latents, latent_dim) = (B, 256, 32)
+                # Transformer tokenizer expects (B, T*num_latents, latent_dim) = (B, 256, 32) for T=1
                 # Input is (B, 32, 16, 16) -> reshape to (B, 16, 16, 32) -> (B, 256, 32)
                 batch = batch.permute(0, 2, 3, 1)  # (B, 16, 16, 32)
                 batch = batch.reshape(batch.shape[0], 256, -1)  # (B, 256, 32)
-                decoded = tokenizer.decode(batch)
+                decoded = tokenizer.decode(batch, num_frames=1)
+                # Output is (B, 1, C, H, W), squeeze the T dimension
+                decoded = decoded.squeeze(1)
             else:
                 decoded = tokenizer.decode(batch)
 
