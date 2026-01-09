@@ -540,7 +540,8 @@ class ShortcutForcing:
             # Clamp velocity_mse to prevent numerical explosion
             # When tau is small (~0.1), dividing by tau amplifies differences by 10x
             # Squaring makes this 100x, which can overflow if predictions diverge
-            velocity_mse = velocity_mse.clamp(max=1e6)
+            # Normal velocity_mse should be O(1), so clamp at 100 to catch outliers
+            velocity_mse = velocity_mse.clamp(max=100.0)
 
             # Skip batch if any NaN/Inf detected
             if torch.isnan(velocity_mse).any() or torch.isinf(velocity_mse).any():
