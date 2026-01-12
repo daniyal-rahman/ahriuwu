@@ -1,0 +1,10 @@
+{
+  "dynamics_checkpoint": "checkpoints/dynamics_latest.pt",
+  "tokenizer_checkpoint": "checkpoints/transformer_tokenizer_best.pt",
+  "context_frames": 48,
+  "predict_frames": 16,
+  "num_steps": 4,
+  "psnr": 19.722495391964912,
+  "mse": 0.011581443575778394,
+  "num_samples": 128
+}
