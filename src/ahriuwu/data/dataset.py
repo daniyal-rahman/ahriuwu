@@ -18,6 +18,7 @@ class SingleFrameDataset(Dataset):
     """Dataset of individual frames for tokenizer training.
 
     Loads frames from video directories, resizes to target size.
+    Supports optional pre-cached .npy files for faster loading.
     """
 
     def __init__(
@@ -26,6 +27,7 @@ class SingleFrameDataset(Dataset):
         target_size: tuple[int, int] = TARGET_SIZE,
         file_ext: str = "jpg",
         transform=None,
+        cache_dir: Path | str | None = None,
     ):
         """Initialize dataset.
 
@@ -34,11 +36,24 @@ class SingleFrameDataset(Dataset):
             target_size: (width, height) to resize frames to
             file_ext: Frame file extension (jpg or png)
             transform: Optional torchvision transform
+            cache_dir: Optional directory with pre-cached .npy files
+                       (auto-detected as frames_dir/../frames_cache if exists)
         """
         self.frames_dir = Path(frames_dir)
         self.target_size = target_size
         self.file_ext = file_ext
         self.transform = transform
+
+        # Check for cache directory
+        if cache_dir is not None:
+            self.cache_dir = Path(cache_dir)
+        else:
+            # Auto-detect cache directory
+            auto_cache = self.frames_dir.parent / "frames_cache"
+            self.cache_dir = auto_cache if auto_cache.exists() else None
+
+        if self.cache_dir and self.cache_dir.exists():
+            print(f"Using cached frames from {self.cache_dir}")
 
         # Index all frames
         self.frame_paths = []
@@ -55,23 +70,47 @@ class SingleFrameDataset(Dataset):
 
         print(f"Indexed {len(self.frame_paths)} frames from {self.frames_dir}")
 
+    def _get_cache_path(self, frame_path: Path) -> Path | None:
+        """Get the cache file path for a frame."""
+        if self.cache_dir is None:
+            return None
+        # Cache structure mirrors frames structure: cache_dir/video_id/frame_XXXXXX.npy
+        video_id = frame_path.parent.name
+        cache_path = self.cache_dir / video_id / f"{frame_path.stem}.npy"
+        return cache_path if cache_path.exists() else None
+
     def __len__(self) -> int:
         return len(self.frame_paths)
 
     def __getitem__(self, idx: int) -> dict:
         frame_path = self.frame_paths[idx]
 
-        # Load and resize
-        frame = cv2.imread(str(frame_path))
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
+        # Try loading from cache first
+        cache_path = self._get_cache_path(frame_path)
+        loaded_from_cache = False
+        if cache_path is not None:
+            try:
+                # Load pre-cached uint8 numpy array
+                frame = np.load(cache_path)
+                frame = torch.from_numpy(frame).float() / 255.0
+                frame = frame.permute(2, 0, 1)  # HWC -> CHW
+                loaded_from_cache = True
+            except (EOFError, ValueError):
+                # Corrupted cache file, fall back to JPEG
+                pass
 
-        if self.transform:
-            frame = self.transform(frame)
-        else:
-            # Default: normalize to [0, 1] and convert to tensor
-            frame = torch.from_numpy(frame).float() / 255.0
-            frame = frame.permute(2, 0, 1)  # HWC -> CHW
+        if not loaded_from_cache:
+            # Fall back to loading from JPEG
+            frame = cv2.imread(str(frame_path))
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
+
+            if self.transform:
+                frame = self.transform(frame)
+            else:
+                # Default: normalize to [0, 1] and convert to tensor
+                frame = torch.from_numpy(frame).float() / 255.0
+                frame = frame.permute(2, 0, 1)  # HWC -> CHW
 
         return {
             "frame": frame,  # (C, H, W)

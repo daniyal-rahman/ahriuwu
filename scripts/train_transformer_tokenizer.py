@@ -350,9 +350,13 @@ def train_epoch(
 def main():
     args = parse_args()
 
+    # Create run ID with timestamp
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     print("=" * 60)
     print("Transformer Tokenizer Training (MAE)")
     print("=" * 60)
+    print(f"Run ID: {run_id}")
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
     print(f"Use RoPE: {args.use_rope}")
@@ -366,11 +370,13 @@ def main():
     print(f"Step save interval: {args.step_save_interval}")
     print("=" * 60)
 
-    # Create directories
-    checkpoint_dir = Path(args.checkpoint_dir)
+    # Create directories with run_id
+    checkpoint_dir = Path(args.checkpoint_dir) / f"run_{run_id}"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    sample_dir = Path(args.sample_dir)
+    sample_dir = Path(args.sample_dir) / f"run_{run_id}"
     sample_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Checkpoint dir: {checkpoint_dir}")
+    print(f"Sample dir: {sample_dir}")
 
     # Create dataset
     print(f"Loading dataset from {args.frames_dir}...")
@@ -388,6 +394,8 @@ def main():
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
+        prefetch_factor=4 if args.num_workers > 0 else None,
+        persistent_workers=True if args.num_workers > 0 else False,
     )
 
     # Create model
