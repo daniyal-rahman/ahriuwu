@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """Pre-tokenize all frames to latent vectors for faster dynamics training.
 
-Converts 256×256 JPEG frames to 16×16×256 latent tensors using trained tokenizer.
-This reduces I/O from ~115GB JPEGs to ~11GB latents (10x speedup).
+Converts 256×256 JPEG frames to latent tensors using trained tokenizer.
+Supports both CNN and Transformer tokenizers (auto-detected from checkpoint).
 
 Usage:
-    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt
-    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt --batch-size 64
-    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt --resume
+    # CNN tokenizer (outputs 256-dim latents)
+    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_epoch_010.pt --output-dir data/processed/latents_cnn
+
+    # Transformer tokenizer (outputs 32-dim latents)
+    python scripts/pretokenize_frames.py --checkpoint checkpoints/transformer_tokenizer_best.pt
+
+    # Resume interrupted encoding
+    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_epoch_010.pt --resume
 
 Output:
-    data/processed/latents/{video_id}/latent_{frame:06d}.npy
-    Each file contains a (256, 16, 16) float16 numpy array
+    {output_dir}/{video_id}/latent_{frame:06d}.npy
+    CNN: (256, 16, 16) float16 numpy array
+    Transformer: (32, 16, 16) float16 numpy array
 """
 
 import argparse
@@ -24,7 +30,7 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from ahriuwu.models import create_transformer_tokenizer
+from ahriuwu.models import create_tokenizer, create_transformer_tokenizer
 
 
 class FrameDatasetForEncoding(Dataset):
@@ -103,44 +109,72 @@ class FrameDatasetForEncoding(Dataset):
         }
 
 
+def detect_tokenizer_type(checkpoint: dict) -> str:
+    """Detect tokenizer type from checkpoint weights."""
+    keys = list(checkpoint["model_state_dict"].keys())
+
+    # CNN tokenizer has 'encoder.stem' keys
+    if any("encoder.stem" in k for k in keys):
+        return "cnn"
+    # Transformer tokenizer has 'patch_embed' or 'mask_embed' keys
+    elif any("patch_embed" in k or "mask_embed" in k for k in keys):
+        return "transformer"
+    else:
+        raise ValueError(f"Unknown tokenizer type. First keys: {keys[:5]}")
+
+
 def load_tokenizer(checkpoint_path: Path, device: str):
-    """Load trained transformer tokenizer from checkpoint."""
+    """Load trained tokenizer from checkpoint (auto-detects CNN vs Transformer)."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
-    # Get model size from checkpoint args
-    args = checkpoint.get("args", {})
-    model_size = args.get("model_size", "small")
+    tokenizer_type = detect_tokenizer_type(checkpoint)
+    print(f"Detected tokenizer type: {tokenizer_type}")
 
-    # Auto-detect RoPE from checkpoint weights
-    has_rope = any("rope" in k for k in checkpoint["model_state_dict"].keys())
-    if has_rope:
-        print("Detected RoPE in checkpoint")
+    if tokenizer_type == "cnn":
+        model = create_tokenizer()
+        model.load_state_dict(checkpoint["model_state_dict"])
+        latent_dim = model.latent_dim
+    else:
+        # Get model size from checkpoint args
+        args = checkpoint.get("args", {})
+        model_size = args.get("model_size", "small")
 
-    model = create_transformer_tokenizer(model_size, use_rope=has_rope)
-    model.load_state_dict(checkpoint["model_state_dict"])
+        # Auto-detect RoPE from checkpoint weights
+        has_rope = any("rope" in k for k in checkpoint["model_state_dict"].keys())
+        if has_rope:
+            print("Detected RoPE in checkpoint")
+
+        model = create_transformer_tokenizer(model_size, use_rope=has_rope)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        latent_dim = model.latent_dim
+
     model = model.to(device)
     model.eval()
 
-    return model
+    return model, tokenizer_type, latent_dim
 
 
-def process_batch(model, batch, device):
+def process_batch(model, batch, device, tokenizer_type: str):
     """Encode a batch of frames and save latents."""
     frames = batch["frame"].to(device)
     output_paths = batch["output_path"]
 
     with torch.no_grad():
         with torch.amp.autocast(device_type=device.split(":")[0], dtype=torch.float16):
-            output = model.encode(frames)
-            # Transformer tokenizer returns dict with 'latent' key
-            # Shape: (B, num_latents, latent_dim) = (B, 256, 32)
-            latents = output["latent"]
-
-    # Reshape to (B, latent_dim, H, W) = (B, 32, 16, 16)
-    # 256 tokens = 16x16 spatial grid
-    B = latents.shape[0]
-    latents = latents.view(B, 16, 16, -1)  # (B, 16, 16, 32)
-    latents = latents.permute(0, 3, 1, 2)   # (B, 32, 16, 16)
+            if tokenizer_type == "cnn":
+                # CNN tokenizer: encode returns (B, latent_dim, 16, 16) directly
+                latents = model.encode(frames)
+                # Already in correct shape: (B, 256, 16, 16)
+            else:
+                # Transformer tokenizer returns dict with 'latent' key
+                output = model.encode(frames)
+                # Shape: (B, num_latents, latent_dim) = (B, 256, 32)
+                latents = output["latent"]
+                # Reshape to (B, latent_dim, H, W) = (B, 32, 16, 16)
+                # 256 tokens = 16x16 spatial grid
+                B = latents.shape[0]
+                latents = latents.view(B, 16, 16, -1)  # (B, 16, 16, 32)
+                latents = latents.permute(0, 3, 1, 2)   # (B, 32, 16, 16)
 
     # Save each latent as numpy (much smaller files than torch.save)
     latents = latents.cpu().numpy().astype(np.float16)
@@ -212,8 +246,9 @@ def main():
 
     # Load tokenizer
     print("\nLoading tokenizer...")
-    model = load_tokenizer(checkpoint_path, args.device)
-    print(f"Loaded tokenizer with {model.get_num_params():,} parameters")
+    model, tokenizer_type, latent_dim = load_tokenizer(checkpoint_path, args.device)
+    print(f"Loaded {tokenizer_type} tokenizer with {model.get_num_params():,} parameters")
+    print(f"Latent dim: {latent_dim} -> output shape: ({latent_dim}, 16, 16)")
 
     # Create dataset
     print(f"\nIndexing frames from {frames_dir}...")
@@ -241,7 +276,7 @@ def main():
     start_time = time.time()
 
     for batch in tqdm(dataloader, desc="Encoding"):
-        process_batch(model, batch, args.device)
+        process_batch(model, batch, args.device, tokenizer_type)
 
     elapsed = time.time() - start_time
     fps = len(dataset) / elapsed
@@ -259,7 +294,7 @@ def main():
     print(f"Videos processed: {num_videos}")
 
     # Estimate size
-    sample_latent_size = 256 * 16 * 16 * 2  # float16 = 2 bytes
+    sample_latent_size = latent_dim * 16 * 16 * 2  # float16 = 2 bytes
     total_size_mb = len(dataset) * sample_latent_size / (1024 * 1024)
     print(f"Estimated output size: {total_size_mb / 1024:.1f} GB")
     print("=" * 60)
