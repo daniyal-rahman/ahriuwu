@@ -5,14 +5,17 @@ Converts 256×256 JPEG frames to latent tensors using trained tokenizer.
 Supports both CNN and Transformer tokenizers (auto-detected from checkpoint).
 
 Usage:
-    # CNN tokenizer (outputs 256-dim latents)
-    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_epoch_010.pt --output-dir data/processed/latents_cnn
+    # CNN tokenizer (outputs 256-dim latents) - auto-selects batch size for GPU
+    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt --output-dir data/processed/latents_cnn
 
     # Transformer tokenizer (outputs 32-dim latents)
     python scripts/pretokenize_frames.py --checkpoint checkpoints/transformer_tokenizer_best.pt
 
     # Resume interrupted encoding
-    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_epoch_010.pt --resume
+    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt --resume
+
+    # Manual batch size override
+    python scripts/pretokenize_frames.py --checkpoint checkpoints/tokenizer_best.pt --batch-size 16
 
 Output:
     {output_dir}/{video_id}/latent_{frame:06d}.npy
@@ -31,6 +34,49 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from ahriuwu.models import create_tokenizer, create_transformer_tokenizer
+
+
+def get_gpu_memory_gb() -> float:
+    """Get available GPU memory in GB."""
+    if not torch.cuda.is_available():
+        return 0.0
+    try:
+        props = torch.cuda.get_device_properties(0)
+        total_memory = props.total_memory / (1024 ** 3)  # Convert to GB
+        return total_memory
+    except Exception:
+        return 0.0
+
+
+def estimate_batch_size(tokenizer_type: str, gpu_memory_gb: float) -> int:
+    """Estimate safe batch size based on tokenizer type and GPU memory.
+
+    Memory estimates (approximate):
+    - CNN tokenizer: ~200MB per batch item at 256x256 (encoder activations)
+    - Transformer tokenizer: ~400MB per batch item (attention + embeddings)
+
+    We use conservative estimates to avoid OOM.
+    """
+    if gpu_memory_gb <= 0:
+        return 8  # CPU fallback
+
+    # Reserve 2GB for model weights and overhead
+    available_gb = max(gpu_memory_gb - 2.0, 1.0)
+
+    if tokenizer_type == "cnn":
+        # CNN tokenizer: ~200MB per batch item
+        # Conservative: use 250MB to be safe
+        mb_per_item = 250
+    else:
+        # Transformer tokenizer: more memory per item due to attention
+        # Conservative: use 400MB to be safe
+        mb_per_item = 400
+
+    available_mb = available_gb * 1024
+    estimated_batch = int(available_mb / mb_per_item)
+
+    # Clamp to reasonable range
+    return max(4, min(estimated_batch, 128))
 
 
 class FrameDatasetForEncoding(Dataset):
@@ -207,8 +253,8 @@ def main():
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=64,
-        help="Batch size for encoding",
+        default=None,
+        help="Batch size for encoding (auto-detected based on GPU memory if not specified)",
     )
     parser.add_argument(
         "--num-workers",
@@ -239,7 +285,6 @@ def main():
     print(f"Checkpoint: {checkpoint_path}")
     print(f"Frames dir: {frames_dir}")
     print(f"Output dir: {output_dir}")
-    print(f"Batch size: {args.batch_size}")
     print(f"Device: {args.device}")
     print(f"Resume: {args.resume}")
     print("=" * 60)
@@ -249,6 +294,16 @@ def main():
     model, tokenizer_type, latent_dim = load_tokenizer(checkpoint_path, args.device)
     print(f"Loaded {tokenizer_type} tokenizer with {model.get_num_params():,} parameters")
     print(f"Latent dim: {latent_dim} -> output shape: ({latent_dim}, 16, 16)")
+
+    # Auto-detect batch size if not specified
+    if args.batch_size is None:
+        gpu_memory = get_gpu_memory_gb()
+        batch_size = estimate_batch_size(tokenizer_type, gpu_memory)
+        print(f"\nGPU memory: {gpu_memory:.1f} GB")
+        print(f"Auto-selected batch size: {batch_size} (for {tokenizer_type} tokenizer)")
+    else:
+        batch_size = args.batch_size
+        print(f"\nUsing manual batch size: {batch_size}")
 
     # Create dataset
     print(f"\nIndexing frames from {frames_dir}...")
@@ -265,7 +320,7 @@ def main():
     # Create dataloader
     dataloader = DataLoader(
         dataset,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,

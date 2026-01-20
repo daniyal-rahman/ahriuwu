@@ -8,6 +8,15 @@ Usage:
     python scripts/train_dynamics.py --latents-dir data/processed/latents
     python scripts/train_dynamics.py --latents-dir data/processed/latents --model-size small --epochs 10
     python scripts/train_dynamics.py --resume checkpoints/dynamics_latest.pt
+
+    # Training with CNN tokenizer latents (256-dim)
+    python scripts/train_dynamics.py --latents-dir data/processed/latents_cnn --latent-dim 256 --tokenizer-type cnn
+
+    # Training with transformer tokenizer latents (32-dim)
+    python scripts/train_dynamics.py --latents-dir data/processed/latents_transformer --latent-dim 32 --tokenizer-type transformer
+
+Checkpoint directories are automatically organized as:
+    checkpoints/run_YYYYMMDD_HHMMSS_dynamics_{tokenizer_type}{latent_dim}_{model_size}/
 """
 
 import argparse
@@ -30,6 +39,71 @@ from ahriuwu.models import (
     x_prediction_loss,
     ShortcutForcing,
 )
+
+
+def create_run_directory(base_dir: Path, args: argparse.Namespace) -> Path:
+    """Create a timestamped run directory with model info in the name.
+
+    Format: run_YYYYMMDD_HHMMSS_dynamics_{tokenizer_type}{latent_dim}_{model_size}
+
+    Example: run_20260119_143000_dynamics_cnn256_small
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    tokenizer_type = getattr(args, 'tokenizer_type', 'unknown')
+    run_name = f"run_{timestamp}_dynamics_{tokenizer_type}{args.latent_dim}_{args.model_size}"
+
+    run_dir = base_dir / run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
+def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
+    """Save run configuration as a JSON manifest file."""
+    config = {
+        "run_type": "dynamics_training",
+        "timestamp": datetime.now().isoformat(),
+        "model": {
+            "type": "dynamics_transformer",
+            "size": args.model_size,
+            "latent_dim": args.latent_dim,
+            "num_parameters": model_params,
+            "use_actions": args.use_actions,
+            "use_agent_tokens": args.use_agent_tokens,
+        },
+        "tokenizer": {
+            "type": getattr(args, 'tokenizer_type', 'unknown'),
+            "latent_dim": args.latent_dim,
+        },
+        "training": {
+            "epochs": args.epochs,
+            "learning_rate": args.lr,
+            "weight_decay": args.weight_decay,
+            "gradient_checkpointing": args.gradient_checkpointing,
+            "shortcut_forcing": args.shortcut_forcing,
+        },
+        "data": {
+            "latents_dir": str(args.latents_dir),
+            "stride": args.stride,
+        },
+        "device": args.device,
+    }
+
+    # Add batch/sequence config based on mode
+    if args.alternating_lengths:
+        config["training"]["alternating_lengths"] = True
+        config["training"]["seq_len_short"] = args.seq_len_short
+        config["training"]["seq_len_long"] = args.seq_len_long
+        config["training"]["batch_size_short"] = args.batch_size_short
+        config["training"]["batch_size_long"] = args.batch_size_long
+        config["training"]["long_ratio"] = args.long_ratio
+    else:
+        config["training"]["sequence_length"] = args.sequence_length
+        config["training"]["batch_size"] = args.batch_size
+
+    config_path = run_dir / "config.json"
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+    print(f"Saved run config to {config_path}")
 
 
 def parse_args():
@@ -201,6 +275,19 @@ def parse_args():
         "--use-agent-tokens",
         action="store_true",
         help="Enable agent tokens for policy/reward heads",
+    )
+    parser.add_argument(
+        "--tokenizer-type",
+        type=str,
+        default="cnn",
+        choices=["cnn", "transformer"],
+        help="Type of tokenizer used to generate latents (for labeling runs)",
+    )
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Custom run name (overrides auto-generated name)",
     )
     return parser.parse_args()
 
@@ -466,6 +553,7 @@ def main():
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
     print(f"Latent dim: {args.latent_dim}")
+    print(f"Tokenizer type: {args.tokenizer_type}")
     if args.alternating_lengths:
         print(f"Alternating lengths: short={args.seq_len_short} (batch={args.batch_size_short}), "
               f"long={args.seq_len_long} (batch={args.batch_size_long})")
@@ -476,9 +564,27 @@ def main():
     print(f"Learning rate: {args.lr}")
     print("=" * 60)
 
-    # Create directories
-    checkpoint_dir = Path(args.checkpoint_dir)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # Create run directory with descriptive name
+    base_checkpoint_dir = Path(args.checkpoint_dir)
+    base_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        # When resuming, use the same directory as the checkpoint
+        checkpoint_path = Path(args.resume)
+        if checkpoint_path.parent.name.startswith("run_"):
+            checkpoint_dir = checkpoint_path.parent
+        else:
+            # Legacy checkpoint in flat directory - create new run dir
+            checkpoint_dir = create_run_directory(base_checkpoint_dir, args)
+    elif args.run_name:
+        # Custom run name provided
+        checkpoint_dir = base_checkpoint_dir / args.run_name
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        # Auto-generate run directory name
+        checkpoint_dir = create_run_directory(base_checkpoint_dir, args)
+
+    print(f"Checkpoint directory: {checkpoint_dir}")
 
     # Create dataset(s) and dataloader(s)
     print(f"\nLoading latent sequences from {args.latents_dir}...")
@@ -561,11 +667,15 @@ def main():
         use_agent_tokens=args.use_agent_tokens,
     )
     model = model.to(args.device)
-    print(f"Model parameters: {model.get_num_params():,}")
+    num_params = model.get_num_params()
+    print(f"Model parameters: {num_params:,}")
     if args.use_actions:
         print("Action conditioning: ENABLED")
     if args.use_agent_tokens:
         print("Agent tokens: ENABLED")
+
+    # Save run configuration
+    save_run_config(checkpoint_dir, args, num_params)
 
     # Enable gradient checkpointing for memory efficiency
     if args.gradient_checkpointing:
