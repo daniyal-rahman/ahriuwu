@@ -483,6 +483,7 @@ class GoldTextDetector:
         frame_width: int = 1920,
         frame_height: int = 1080,
         use_gpu: bool = False,
+        team_side: str = "blue",
     ):
         """Initialize gold text detector.
 
@@ -491,9 +492,11 @@ class GoldTextDetector:
             frame_width: Video frame width
             frame_height: Video frame height
             use_gpu: Whether to use GPU for OCR (faster but requires CUDA)
+            team_side: Which team Garen is on ("blue" or "red") - determines health bar color
         """
         self.frame_width = frame_width
         self.frame_height = frame_height
+        self.team_side = team_side
         self.normalized_regions = normalized_regions or HUDRegionsNormalized()
 
         # WASD detection area bounds (Garen is always within this)
@@ -513,17 +516,31 @@ class GoldTextDetector:
         self.level_box_lower = np.array([75, 50, 40])
         self.level_box_upper = np.array([105, 180, 130])
 
-        # Teal ally health bar (can be partial if damaged)
+        # Teal health bar (blue team ally)
         self.teal_health_lower = np.array([80, 80, 80])
         self.teal_health_upper = np.array([100, 255, 255])
+
+        # Red health bar (red team ally) - hue wraps around 0/180
+        self.red_health_lower1 = np.array([0, 150, 80])
+        self.red_health_upper1 = np.array([10, 255, 255])
+        self.red_health_lower2 = np.array([170, 150, 80])
+        self.red_health_upper2 = np.array([180, 255, 255])
 
         # Orange health bar (colorblind mode)
         self.orange_health_lower = np.array([10, 100, 100])
         self.orange_health_upper = np.array([25, 255, 255])
 
-        # Red enemy health bar (to exclude)
-        self.red_health_lower = np.array([0, 100, 100])
-        self.red_health_upper = np.array([10, 255, 255])
+        # Set ally health thresholds based on team side
+        if team_side == "red":
+            self.ally_health_lower = self.red_health_lower1
+            self.ally_health_upper = self.red_health_upper1
+            self.ally_health_lower2 = self.red_health_lower2
+            self.ally_health_upper2 = self.red_health_upper2
+            self.has_hue_wraparound = True
+        else:
+            self.ally_health_lower = self.teal_health_lower
+            self.ally_health_upper = self.teal_health_upper
+            self.has_hue_wraparound = False
 
         # Black border below health bar
         self.black_border_lower = np.array([0, 0, 0])
@@ -603,10 +620,10 @@ class GoldTextDetector:
             self._curated_templates.append(resized)
             self._curated_templates_gray.append(gray)
 
-    def _find_teal_health_bars(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
-        """Find teal horizontal bars that could be ally health bars.
+    def _find_ally_health_bars(self, frame: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Find ally health bars based on team side color.
 
-        Strategy: Find the health bar first (distinctive long horizontal teal shape),
+        Strategy: Find the health bar first (distinctive long horizontal shape),
         then infer level box position to the left.
 
         Returns list of (x, y, w, h) in full frame coordinates.
@@ -623,14 +640,18 @@ class GoldTextDetector:
         roi = frame[ga_y:ga_y+ga_h, ga_x:ga_x+ga_w]
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
 
-        # Teal health bar: H=80-110, high saturation, good brightness
-        teal_mask = cv2.inRange(hsv, self.teal_health_lower, self.teal_health_upper)
+        # Create mask based on team side
+        ally_mask = cv2.inRange(hsv, self.ally_health_lower, self.ally_health_upper)
+        if self.has_hue_wraparound:
+            # Red hue wraps around 0/180, need to combine both ranges
+            ally_mask2 = cv2.inRange(hsv, self.ally_health_lower2, self.ally_health_upper2)
+            ally_mask = ally_mask | ally_mask2
 
         # Morphological close to connect health bar segments (ticks)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
-        teal_mask = cv2.morphologyEx(teal_mask, cv2.MORPH_CLOSE, kernel)
+        ally_mask = cv2.morphologyEx(ally_mask, cv2.MORPH_CLOSE, kernel)
 
-        contours, _ = cv2.findContours(teal_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours, _ = cv2.findContours(ally_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         health_bars = []
         # Scale thresholds with resolution
@@ -658,12 +679,12 @@ class GoldTextDetector:
         return health_bars
 
     def _find_health_bar_by_color_transition(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
-        """Find health bar by detecting unique gray→teal color transition.
+        """Find health bar by detecting unique gray→ally-color transition.
 
         The level box (dark gray, H≈88, S≈109, V≈81) immediately adjacent to
-        teal health bar (H≈80-100, S>80, V>80) is unique on screen.
+        ally health bar is unique on screen.
 
-        Scans for rows where we see: gray pixels → teal pixels in sequence.
+        Scans for rows where we see: gray pixels → ally color pixels in sequence.
 
         Returns (x, y, w, h) or None if not found.
         """
@@ -681,34 +702,37 @@ class GoldTextDetector:
         # Level box gray: H=75-105, S=50-180, V=40-130 (dark teal-gray)
         gray_mask = cv2.inRange(hsv, np.array([75, 50, 40]), np.array([105, 180, 130]))
 
-        # Teal health: H=80-100, S>80, V>80
-        teal_mask = cv2.inRange(hsv, np.array([80, 80, 80]), np.array([100, 255, 255]))
+        # Ally health color (teal for blue team, red for red team)
+        ally_mask = cv2.inRange(hsv, self.ally_health_lower, self.ally_health_upper)
+        if self.has_hue_wraparound:
+            ally_mask2 = cv2.inRange(hsv, self.ally_health_lower2, self.ally_health_upper2)
+            ally_mask = ally_mask | ally_mask2
 
-        # Find rows that have both gray and teal
+        # Find rows that have both gray and ally color
         candidates = []
-        # Very strict - require substantial gray and teal regions
+        # Very strict - require substantial gray and ally regions
         min_gray_width = max(3, int(25 * w / 1920))  # Full level box width
-        min_teal_width = max(5, int(80 * w / 1920))  # Most of health bar
+        min_ally_width = max(5, int(80 * w / 1920))  # Most of health bar
         max_gap = 2  # Fixed small gap
 
         for row_idx in range(hsv.shape[0]):
             gray_row = gray_mask[row_idx]
-            teal_row = teal_mask[row_idx]
+            ally_row = ally_mask[row_idx]
 
             # Find gray runs
             gray_runs = self._find_runs(gray_row)
-            teal_runs = self._find_runs(teal_row)
+            ally_runs = self._find_runs(ally_row)
 
-            # Look for gray run immediately followed by teal run
+            # Look for gray run immediately followed by ally color run
             for g_start, g_end in gray_runs:
                 g_width = g_end - g_start
                 if g_width < min_gray_width:
                     continue
 
-                # Check if teal starts right after gray
-                for t_start, t_end in teal_runs:
+                # Check if ally color starts right after gray
+                for t_start, t_end in ally_runs:
                     t_width = t_end - t_start
-                    if t_width < min_teal_width:
+                    if t_width < min_ally_width:
                         continue
 
                     gap = t_start - g_end
@@ -818,8 +842,8 @@ class GoldTextDetector:
 
         return (full_x, full_y, full_w, full_h)
 
-    def _has_teal_health_adjacent(self, frame: np.ndarray, level_box: tuple[int, int, int, int]) -> bool:
-        """Check if there's teal (or orange) health immediately to the right of level box.
+    def _has_ally_health_adjacent(self, frame: np.ndarray, level_box: tuple[int, int, int, int]) -> bool:
+        """Check if there's ally health immediately to the right of level box.
 
         This confirms we found an ally health bar (not some random gray box).
         The first tick of health next to the level is always colored if alive.
@@ -842,9 +866,12 @@ class GoldTextDetector:
 
         hsv = cv2.cvtColor(adjacent, cv2.COLOR_BGR2HSV)
 
-        # Check for teal health
-        teal_mask = cv2.inRange(hsv, self.teal_health_lower, self.teal_health_upper)
-        teal_pixels = cv2.countNonZero(teal_mask)
+        # Check for ally health (teal for blue team, red for red team)
+        ally_mask = cv2.inRange(hsv, self.ally_health_lower, self.ally_health_upper)
+        if self.has_hue_wraparound:
+            ally_mask2 = cv2.inRange(hsv, self.ally_health_lower2, self.ally_health_upper2)
+            ally_mask = ally_mask | ally_mask2
+        ally_pixels = cv2.countNonZero(ally_mask)
 
         # Check for orange health (colorblind mode)
         orange_mask = cv2.inRange(hsv, self.orange_health_lower, self.orange_health_upper)
@@ -852,7 +879,7 @@ class GoldTextDetector:
 
         # Need significant colored pixels to confirm health bar
         total_pixels = adjacent.shape[0] * adjacent.shape[1]
-        health_ratio = (teal_pixels + orange_pixels) / total_pixels if total_pixels > 0 else 0
+        health_ratio = (ally_pixels + orange_pixels) / total_pixels if total_pixels > 0 else 0
 
         return health_ratio > 0.2  # At least 20% should be health color
 
@@ -918,10 +945,10 @@ class GoldTextDetector:
         return False
 
     def _find_health_bar(self, frame: np.ndarray) -> tuple[int, int, int, int] | None:
-        """Find Garen's health bar by detecting gray→teal color transition.
+        """Find Garen's health bar by detecting gray→ally-color transition.
 
         Strategy:
-        1. Use color transition detection (gray level box → teal health)
+        1. Use color transition detection (gray level box → ally health color)
         2. This pattern is unique on screen - only health bars have it
         3. If multiple, pick closest to center (Garen with locked camera is centered)
         4. Return full health bar region including level box
@@ -930,7 +957,7 @@ class GoldTextDetector:
         """
         h, w = frame.shape[:2]
 
-        # Primary method: gray→teal color transition (most reliable)
+        # Primary method: gray→ally color transition (most reliable)
         transition_result = self._find_health_bar_by_color_transition(frame)
         if transition_result is not None:
             hb_x, hb_y, hb_w, hb_h = transition_result
@@ -938,8 +965,8 @@ class GoldTextDetector:
             self._last_health_bar_y = hb_y
             return self._expand_health_bar(hb_x, hb_y, hb_w, hb_h, w, h)
 
-        # Fall back to teal-only detection if transition fails
-        health_bars = self._find_teal_health_bars(frame)
+        # Fall back to ally-color-only detection if transition fails
+        health_bars = self._find_ally_health_bars(frame)
 
         if not health_bars:
             return None

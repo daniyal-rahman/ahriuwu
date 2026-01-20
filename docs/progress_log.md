@@ -761,3 +761,45 @@ Currently training from step 100k with stable losses.
 ### Early Eval (step 450k, before stability fix)
 PSNR: 13.34 dB - predictions essentially noise due to numerical instability.
 Need to retrain with stable loss to get meaningful predictions.
+
+---
+
+## 2025-01-19: Health Bar Detection - Color vs OCR Comparison
+
+### Problem
+Gold detection requires tracking Garen's health bar position. Original color-based detection only worked for blue team (teal health bars), failing on red team videos.
+
+### Fix: Team Side Support
+Added `team_side` parameter to `GoldTextDetector`:
+- Blue team: ally health bars are teal (H=80-100)
+- Red team: ally health bars are red (H=0-10 or H=170-180, wraps around)
+
+Key changes:
+- `_find_teal_health_bars()` → `_find_ally_health_bars()`
+- `_find_health_bar_by_color_transition()` uses ally color instead of hardcoded teal
+- `_has_teal_health_adjacent()` → `_has_ally_health_adjacent()`
+- Red hue requires combining two ranges (0-10 and 170-180) due to HSV wraparound
+
+### Comparison Results (1 minute test, red team video)
+
+| Method | Detection Rate |
+|--------|---------------|
+| Color-based (fixed for red team) | **31.7%** |
+| OCR-based ("Garen" text) | **99.7%** |
+
+### Why Color Detection Fails
+- Red health bars confused with minion/turret health bars
+- Gray level box threshold catches other UI elements
+- Health bar color varies with lighting/shadows
+
+### Why OCR Works
+"Garen" is a unique text string that only appears above Garen's model. No ambiguity.
+
+### Decision
+OCR-based detection is clearly superior for health bar tracking. Color detection improved from 6% to 31.7% with team_side fix, but still unreliable.
+
+### Files Changed
+| File | Change |
+|------|--------|
+| `src/ahriuwu/data/keylog_extractor.py` | Added `team_side` param, ally color detection |
+| `scripts/compare_detection_methods.py` | NEW: Benchmark script comparing both methods |
