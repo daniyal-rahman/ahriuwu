@@ -588,7 +588,7 @@ class GoldTextDetector:
         self._ocr_tracking_enabled = True
         self._garen_ocr_position: tuple[int, int] | None = None  # (x, y) center of "Garen" text
         self._last_ocr_frame = -999  # Last frame when OCR was run
-        self._ocr_interval_frames = 30  # Run OCR every N frames (0.5s at 60fps)
+        self._ocr_interval_frames = 2  # Run OCR every N frames (every other frame)
         self._ocr_search_expand = 150  # Pixels to expand search around last known position
         self._frame_counter = 0  # Internal frame counter for OCR timing
 
