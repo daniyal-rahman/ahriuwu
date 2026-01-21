@@ -9,7 +9,7 @@ class RewardConfig:
 
     gold_scale: float = 0.01  # ~0.2 per CS, ~3.0 per kill
     health_advantage_scale: float = 5.0  # ±0.5 per trade
-    death_penalty: float = -10.0
+    death_penalty: float = -5.0  # ~500 gold equivalent
 
 
 @dataclass

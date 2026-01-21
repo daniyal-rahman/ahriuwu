@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 from torch.utils.checkpoint import checkpoint
 
-from ahriuwu.data import LatentSequenceDataset
+from ahriuwu.data import LatentSequenceDataset, PackedLatentSequenceDataset
 from ahriuwu.models import (
     create_dynamics,
     DiffusionSchedule,
@@ -288,6 +288,11 @@ def parse_args():
         type=str,
         default=None,
         help="Custom run name (overrides auto-generated name)",
+    )
+    parser.add_argument(
+        "--packed",
+        action="store_true",
+        help="Use packed latent format (.npz files) for faster I/O",
     )
     return parser.parse_args()
 
@@ -589,16 +594,23 @@ def main():
     # Create dataset(s) and dataloader(s)
     print(f"\nLoading latent sequences from {args.latents_dir}...")
 
+    # Select dataset class based on --packed flag
+    DatasetClass = PackedLatentSequenceDataset if args.packed else LatentSequenceDataset
+    if args.packed:
+        print("Using PACKED latent format (fast I/O)")
+    else:
+        print("Using per-frame latent format (consider --packed for faster I/O)")
+
     if args.alternating_lengths:
         # Two datasets with different sequence lengths
-        dataset_short = LatentSequenceDataset(
+        dataset_short = DatasetClass(
             latents_dir=args.latents_dir,
             sequence_length=args.seq_len_short,
             stride=args.stride,
             load_actions=args.use_actions,
             features_dir=args.features_dir if args.use_actions else None,
         )
-        dataset_long = LatentSequenceDataset(
+        dataset_long = DatasetClass(
             latents_dir=args.latents_dir,
             sequence_length=args.seq_len_long,
             stride=args.stride,
@@ -608,7 +620,10 @@ def main():
 
         if len(dataset_short) == 0 or len(dataset_long) == 0:
             print("ERROR: No sequences found!")
-            print("Make sure to run pretokenize_frames.py first.")
+            if args.packed:
+                print("Make sure to run pack_latents.py first.")
+            else:
+                print("Make sure to run pretokenize_frames.py first.")
             return
 
         print(f"Short sequences: {len(dataset_short)} (T={args.seq_len_short})")
@@ -633,7 +648,7 @@ def main():
         dataloader = None  # Will use alternating loaders
     else:
         # Single dataset/dataloader
-        dataset = LatentSequenceDataset(
+        dataset = DatasetClass(
             latents_dir=args.latents_dir,
             sequence_length=args.sequence_length,
             stride=args.stride,
@@ -643,7 +658,10 @@ def main():
 
         if len(dataset) == 0:
             print("ERROR: No sequences found!")
-            print("Make sure to run pretokenize_frames.py first.")
+            if args.packed:
+                print("Make sure to run pack_latents.py first.")
+            else:
+                print("Make sure to run pretokenize_frames.py first.")
             return
 
         print(f"Found {len(dataset)} sequences")

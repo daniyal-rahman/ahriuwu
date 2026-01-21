@@ -8,6 +8,7 @@ from .dataset import (
     FrameSequenceDataset,
     FrameWithStateDataset,
     LatentSequenceDataset,
+    PackedLatentSequenceDataset,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "FrameSequenceDataset",
     "FrameWithStateDataset",
     "LatentSequenceDataset",
+    "PackedLatentSequenceDataset",
 ]
