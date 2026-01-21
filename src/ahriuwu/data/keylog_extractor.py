@@ -576,7 +576,21 @@ class GoldTextDetector:
 
         # Deduplication: track recent detections to avoid counting same gold text multiple times
         self._recent_detections: dict[int, int] = {}  # gold_amount -> last_frame_seen
-        self._dedup_window_frames = 30  # Same gold text within 30 frames is deduplicated
+        self._dedup_window_frames = 60  # Same gold text within 60 frames (1s) is deduplicated
+
+        # Consensus-based detection: require multiple frames to confirm a gold amount
+        self._consensus_buffer: dict[int, list[tuple[int, float]]] = {}  # gold_amount -> [(frame_idx, conf), ...]
+        self._consensus_window_frames = 45  # Look at detections within this many frames (0.75s at 60fps)
+        self._consensus_min_hits = 3  # Need at least this many detections to confirm
+        self._confirmed_gold: dict[int, int] = {}  # gold_amount -> frame_idx when confirmed (for dedup)
+
+        # OCR-based Garen tracking (more robust than color-based)
+        self._ocr_tracking_enabled = True
+        self._garen_ocr_position: tuple[int, int] | None = None  # (x, y) center of "Garen" text
+        self._last_ocr_frame = -999  # Last frame when OCR was run
+        self._ocr_interval_frames = 30  # Run OCR every N frames (0.5s at 60fps)
+        self._ocr_search_expand = 150  # Pixels to expand search around last known position
+        self._frame_counter = 0  # Internal frame counter for OCR timing
 
     @property
     def reader(self):
@@ -1007,37 +1021,106 @@ class GoldTextDetector:
 
         return self._expand_health_bar(hb_x, hb_y, hb_w, hb_h, w, h)
 
+    def _find_garen_via_ocr(self, frame: np.ndarray) -> tuple[int, int] | None:
+        """Find 'Garen' text using OCR and return center position.
+
+        Uses caching to avoid running OCR every frame.
+
+        Returns (x, y) center of Garen text, or None if not found.
+        """
+        self._frame_counter += 1
+        h, w = frame.shape[:2]
+
+        # Check if we should run OCR (rate limiting)
+        frames_since_ocr = self._frame_counter - self._last_ocr_frame
+        if self._garen_ocr_position is not None and frames_since_ocr < self._ocr_interval_frames:
+            return self._garen_ocr_position
+
+        # Define search area
+        if self._garen_ocr_position is not None:
+            # Search around last known position
+            last_x, last_y = self._garen_ocr_position
+            expand = self._ocr_search_expand
+            search_x = max(0, last_x - expand)
+            search_y = max(0, last_y - expand)
+            search_w = min(w - search_x, 2 * expand)
+            search_h = min(h - search_y, 2 * expand)
+        else:
+            # Search in game area (center of screen where Garen typically is)
+            search_x = int(0.25 * w)
+            search_y = int(0.15 * h)
+            search_w = int(0.50 * w)
+            search_h = int(0.45 * h)
+
+        roi = frame[search_y:search_y+search_h, search_x:search_x+search_w]
+
+        # Run OCR
+        try:
+            results = self.reader.readtext(roi)
+        except Exception:
+            return self._garen_ocr_position
+
+        self._last_ocr_frame = self._frame_counter
+
+        # Look for 'Garen' text
+        for (bbox, text, conf) in results:
+            if 'garen' in text.lower() and conf > 0.5:
+                # Get center of text bounding box
+                pts = bbox
+                cx = int((pts[0][0] + pts[2][0]) / 2) + search_x
+                cy = int((pts[0][1] + pts[2][1]) / 2) + search_y
+                self._garen_ocr_position = (cx, cy)
+                return self._garen_ocr_position
+
+        # Not found this frame, keep last position
+        return self._garen_ocr_position
+
     def _get_roi(self, frame: np.ndarray) -> tuple[np.ndarray, int, int, tuple[int, int, int, int]]:
-        """Extract region of interest dynamically tracking Garen's health bar.
+        """Extract region of interest dynamically tracking Garen's position.
+
+        Uses OCR-based "Garen" text detection as primary method (more robust).
+        Falls back to color-based health bar detection if OCR is disabled.
 
         Returns (roi_image, roi_x, roi_y, (hb_x, hb_y, hb_w, hb_h))
         """
         h, w = frame.shape[:2]
+        hb_w = int(125 * (w / 1920))  # Default health bar width
+        hb_h = int(15 * (h / 1080))
 
-        # Find health bar using level box detection
+        # Try OCR-based tracking first (most robust)
+        if self._ocr_tracking_enabled:
+            garen_pos = self._find_garen_via_ocr(frame)
+            if garen_pos is not None:
+                garen_x, garen_y = garen_pos
+                # Health bar is centered on "Garen" text, slightly above it
+                # Gold text appears below health bar
+                hb_x = garen_x - hb_w // 2
+                hb_y = garen_y - int(10 * (h / 1080))  # Slightly above text center
+
+                health_bar = (hb_x, hb_y, hb_w, hb_h)
+
+                roi_w = hb_w
+                roi_h = int(self.roi_height_below * h)
+
+                x1 = hb_x
+                y1 = hb_y
+                x2 = x1 + roi_w
+                y2 = min(h, y1 + roi_h)
+
+                # Clamp and return
+                x1 = max(0, x1)
+                y1 = max(0, y1)
+                x2 = min(w, x2)
+                y2 = min(h, y2)
+
+                roi = frame[y1:y2, x1:x2]
+                return (roi, x1, y1, health_bar)
+
+        # Fallback: Try color-based health bar detection
         health_bar = self._find_health_bar(frame)
 
         if health_bar is not None:
             hb_x, hb_y, hb_w, hb_h = health_bar
-
-            # ROI: same width as health bar, extends from health bar down to feet
-            roi_w = hb_w
-            roi_h = int(self.roi_height_below * h)
-
-            x1 = hb_x
-            y1 = hb_y
-            x2 = x1 + roi_w
-            y2 = min(h, y1 + roi_h)
-
-        elif self._last_health_bar_x is not None:
-            # Use last known X position with default dimensions
-            # Y position is fixed relative to screen
-            hb_w = int(125 * (w / 1920))  # Level box + health bar width
-            hb_h = int(15 * (h / 1080))
-            hb_x = self._last_health_bar_x
-            hb_y = int(0.34 * h)  # Fixed Y position (normalized)
-
-            health_bar = (hb_x, hb_y, hb_w, hb_h)
 
             roi_w = hb_w
             roi_h = int(self.roi_height_below * h)
@@ -1048,9 +1131,7 @@ class GoldTextDetector:
             y2 = min(h, y1 + roi_h)
 
         else:
-            # Fallback to center ROI (Garen should be near center)
-            hb_w = int(125 * (w / 1920))
-            hb_h = int(15 * (h / 1080))
+            # Final fallback: center ROI (Garen should be near center with locked camera)
             hb_x = w // 2 - hb_w // 2
             hb_y = int(0.34 * h)
 
@@ -1090,7 +1171,11 @@ class GoldTextDetector:
         return filtered
 
     def detect_gold_text(self, frame: np.ndarray, frame_idx: int = 0) -> tuple[list[tuple[int, float]], tuple[int, int, int, int]]:
-        """Detect gold gain text in frame.
+        """Detect gold gain text in frame using consensus-based filtering.
+
+        Uses multi-frame consensus: a gold amount is only confirmed when it's
+        detected in at least `_consensus_min_hits` frames within `_consensus_window_frames`.
+        This filters OCR noise and misreads.
 
         Args:
             frame: BGR image
@@ -1098,7 +1183,7 @@ class GoldTextDetector:
 
         Returns:
             (gold_gains, health_bar_rect) where:
-            - gold_gains: List of (gold_amount, confidence) tuples
+            - gold_gains: List of (gold_amount, confidence) tuples (consensus-confirmed only)
             - health_bar_rect: (x, y, w, h) of tracked health bar for visualization
         """
         # Get ROI around Garen (dynamically tracked)
@@ -1110,17 +1195,20 @@ class GoldTextDetector:
         # Check if there's enough content to OCR
         gray = cv2.cvtColor(filtered, cv2.COLOR_BGR2GRAY)
         if cv2.countNonZero(gray) < 50:
-            return ([], health_bar)
+            return (self._check_consensus(frame_idx), health_bar)
 
         # Run OCR
         try:
             results = self.reader.readtext(filtered)
         except Exception:
-            return ([], health_bar)
+            return (self._check_consensus(frame_idx), health_bar)
 
-        # Parse results for gold amounts
-        gold_gains = []
+        # Parse results for gold amounts and add to consensus buffer
         for (bbox, text, conf) in results:
+            # Skip low confidence detections (reduces OCR noise)
+            if conf < 0.6:
+                continue
+
             # Look for "+XX" pattern
             text = text.strip()
             if text.startswith('+'):
@@ -1130,18 +1218,64 @@ class GoldTextDetector:
                     if amount_str:
                         amount = int(amount_str)
 
-                        # Deduplicate: skip if same amount was seen recently
-                        last_seen = self._recent_detections.get(amount, -999)
-                        if frame_idx - last_seen > self._dedup_window_frames:
-                            gold_gains.append((amount, conf))
-                            self._detections.append((frame_idx, amount, conf))
+                        # Filter out unlikely gold values (typical: 14-22 for minions, 150-400 for kills)
+                        # Values < 10 are OCR noise (e.g., "+2" misread)
+                        if amount < 10:
+                            continue
+                        # Values like 140, 142 are likely OCR errors for 14
+                        if amount > 100 and amount < 149:
+                            continue
 
-                        # Update last seen frame for this amount
-                        self._recent_detections[amount] = frame_idx
+                        # Add to consensus buffer
+                        if amount not in self._consensus_buffer:
+                            self._consensus_buffer[amount] = []
+                        self._consensus_buffer[amount].append((frame_idx, conf))
                 except ValueError:
                     pass
 
-        return (gold_gains, health_bar)
+        # Check consensus and return confirmed detections
+        return (self._check_consensus(frame_idx), health_bar)
+
+    def _check_consensus(self, current_frame: int) -> list[tuple[int, float]]:
+        """Check consensus buffer and return newly confirmed gold amounts.
+
+        Cleans old entries and checks if any amounts have reached consensus threshold.
+
+        Returns:
+            List of (gold_amount, avg_confidence) for newly confirmed amounts.
+        """
+        confirmed = []
+
+        # Clean old entries and check consensus for each amount
+        amounts_to_remove = []
+        for amount, detections in self._consensus_buffer.items():
+            # Remove detections outside the consensus window
+            detections[:] = [(f, c) for f, c in detections
+                            if current_frame - f <= self._consensus_window_frames]
+
+            if not detections:
+                amounts_to_remove.append(amount)
+                continue
+
+            # Check if we have enough hits for consensus
+            if len(detections) >= self._consensus_min_hits:
+                # Check if already confirmed recently (dedup)
+                last_confirmed = self._confirmed_gold.get(amount, -999)
+                if current_frame - last_confirmed > self._dedup_window_frames:
+                    # Consensus reached! Calculate average confidence
+                    avg_conf = sum(c for _, c in detections) / len(detections)
+                    confirmed.append((amount, avg_conf))
+                    self._detections.append((current_frame, amount, avg_conf))
+                    self._confirmed_gold[amount] = current_frame
+
+                    # Clear buffer for this amount
+                    amounts_to_remove.append(amount)
+
+        # Remove processed/empty amounts
+        for amount in amounts_to_remove:
+            self._consensus_buffer.pop(amount, None)
+
+        return confirmed
 
     def get_all_detections(self) -> list[tuple[int, int, float]]:
         """Get all gold detections: (frame_idx, gold_amount, confidence)."""
