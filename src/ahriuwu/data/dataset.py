@@ -509,7 +509,7 @@ class LatentSequenceDataset(Dataset):
     NOTE: For better performance, use PackedLatentSequenceDataset with packed
     .npz files created by scripts/pack_latents.py.
 
-    Optionally loads action labels from features.json per video.
+    Optionally loads action labels and rewards from features.json per video.
     """
 
     def __init__(
@@ -518,7 +518,10 @@ class LatentSequenceDataset(Dataset):
         sequence_length: int = 64,
         stride: int = 1,
         load_actions: bool = False,
+        load_rewards: bool = False,
         features_dir: Path | str | None = None,
+        gold_scale: float = 0.01,
+        death_penalty: float = -10.0,
     ):
         """Initialize dataset.
 
@@ -527,23 +530,29 @@ class LatentSequenceDataset(Dataset):
             sequence_length: Number of frames per sequence
             stride: Step between sequence start indices
             load_actions: Whether to load action labels from features.json
+            load_rewards: Whether to load rewards from features.json
             features_dir: Directory containing features.json per video (default: data/processed)
+            gold_scale: Multiplier for gold_gained values (default: 0.01)
+            death_penalty: Reward penalty for death (default: -10.0)
         """
         self.latents_dir = Path(latents_dir)
         self.sequence_length = sequence_length
         self.stride = stride
         self.load_actions = load_actions
+        self.load_rewards = load_rewards
         self.features_dir = Path(features_dir) if features_dir else self.latents_dir.parent.parent / "data" / "processed"
+        self.gold_scale = gold_scale
+        self.death_penalty = death_penalty
 
-        # Action labels per video (if load_actions=True)
-        self.action_labels: dict[str, list[dict]] = {}
+        # Feature data per video (if load_actions or load_rewards)
+        self.feature_data: dict[str, list[dict]] = {}
 
         self.sequences = []
         self._index_latents()
 
-        # Load action labels after indexing
-        if load_actions:
-            self._load_action_labels()
+        # Load feature data after indexing
+        if load_actions or load_rewards:
+            self._load_feature_data()
 
     def _index_latents(self):
         """Build index of all valid sequences."""
@@ -604,8 +613,8 @@ class LatentSequenceDataset(Dataset):
 
         print(f"Indexed {len(self.sequences)} latent sequences from {self.latents_dir}")
 
-    def _load_action_labels(self):
-        """Load action labels from features.json for each video."""
+    def _load_feature_data(self):
+        """Load feature data from features.json for each video."""
         video_ids = set(seq["video_id"] for seq in self.sequences)
         loaded_count = 0
 
@@ -615,10 +624,10 @@ class LatentSequenceDataset(Dataset):
                 with open(features_path) as f:
                     data = json.load(f)
                     # features.json has {"frames": [...]} structure
-                    self.action_labels[video_id] = data.get("frames", [])
+                    self.feature_data[video_id] = data.get("frames", [])
                 loaded_count += 1
 
-        print(f"Loaded action labels for {loaded_count}/{len(video_ids)} videos")
+        print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
 
     def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
         """Get action tensors for a sequence.
@@ -631,10 +640,10 @@ class LatentSequenceDataset(Dataset):
             Dict with 'movement' and ability keys as (T,) tensors,
             or None if no action labels for this video.
         """
-        if video_id not in self.action_labels:
+        if video_id not in self.feature_data:
             return None
 
-        labels = self.action_labels[video_id]
+        labels = self.feature_data[video_id]
         actions = {
             'movement': [],
             **{k: [] for k in ABILITY_KEYS}
@@ -660,6 +669,74 @@ class LatentSequenceDataset(Dataset):
                     actions[k].append(0)
 
         return {k: torch.tensor(v, dtype=torch.long) for k, v in actions.items()}
+
+    def _get_rewards(self, video_id: str, start_frame: int) -> torch.Tensor | None:
+        """Get reward tensor for a sequence.
+
+        Rewards are computed as:
+        - gold_gained * gold_scale (e.g., +14 gold → +0.14 reward)
+        - death_penalty if death detected (health bar disappears after being present)
+
+        Death detection: If health_bar_x was present for 3+ consecutive frames,
+        then disappears for 3+ frames, we assume death occurred.
+
+        Args:
+            video_id: Video identifier
+            start_frame: Starting frame index
+
+        Returns:
+            Tensor of shape (T,) with reward values, or None if no feature data.
+        """
+        if video_id not in self.feature_data:
+            return None
+
+        frames = self.feature_data[video_id]
+        rewards = []
+
+        # Track health bar presence for death detection
+        # We need some context before the sequence to detect deaths at the start
+        context_frames = 5  # frames to look back for health bar history
+
+        for t in range(self.sequence_length):
+            frame_idx = start_frame + t
+            reward = 0.0
+
+            if frame_idx < len(frames):
+                entry = frames[frame_idx]
+
+                # Gold reward
+                gold = entry.get('gold_gained', 0) or 0
+                reward += gold * self.gold_scale
+
+                # Death detection: health bar was present, now gone
+                curr_hb = entry.get('health_bar_x') is not None
+
+                # Look at previous frames to see if health bar was present
+                prev_hb_count = 0
+                for lookback in range(1, context_frames + 1):
+                    prev_idx = frame_idx - lookback
+                    if prev_idx >= 0 and prev_idx < len(frames):
+                        prev_entry = frames[prev_idx]
+                        if prev_entry.get('health_bar_x') is not None:
+                            prev_hb_count += 1
+
+                # Death: health bar was present in most previous frames but now gone
+                if prev_hb_count >= 3 and not curr_hb:
+                    # Check if it stays gone for a few frames (not just flickering)
+                    gone_count = 0
+                    for lookahead in range(1, 4):
+                        next_idx = frame_idx + lookahead
+                        if next_idx < len(frames):
+                            next_entry = frames[next_idx]
+                            if next_entry.get('health_bar_x') is None:
+                                gone_count += 1
+
+                    if gone_count >= 2:
+                        reward += self.death_penalty
+
+            rewards.append(reward)
+
+        return torch.tensor(rewards, dtype=torch.float32)
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -687,5 +764,10 @@ class LatentSequenceDataset(Dataset):
         if self.load_actions:
             actions = self._get_actions(video_id, start_frame)
             result["actions"] = actions  # dict of (T,) tensors or None
+
+        # Add rewards if loading them
+        if self.load_rewards:
+            rewards = self._get_rewards(video_id, start_frame)
+            result["rewards"] = rewards  # (T,) tensor or None
 
         return result

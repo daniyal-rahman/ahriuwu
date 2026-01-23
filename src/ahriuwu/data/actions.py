@@ -122,6 +122,68 @@ class ActionSpace:
         }
 
 
+def encode_action(movement: int, abilities: dict[str, bool] | None = None) -> int:
+    """Encode action components into a single discrete action index.
+
+    Encoding scheme (fits in 128 actions):
+    - Movement (0-17): 18 directions
+    - Ability flags: encoded as bits, combined with movement
+
+    Simple encoding: movement + 18 * (ability_bit)
+    where ability_bit is 0-6 representing the most significant ability pressed.
+    This gives 18 * 7 = 126 actions, plus 2 reserved.
+
+    For simplicity, if no abilities, just use movement directly.
+    If any ability, use movement + 18 * (1 + ability_priority).
+
+    Args:
+        movement: Movement direction (0-17)
+        abilities: Dict of ability keys to bool values
+
+    Returns:
+        Single action index in [0, 127]
+    """
+    movement = movement % 18  # Clamp to valid range
+
+    if abilities is None:
+        return movement
+
+    # Priority order for abilities (most important first)
+    priority = ['R', 'Q', 'E', 'W', 'D', 'F', 'item', 'B']
+
+    for i, key in enumerate(priority):
+        if abilities.get(key, False):
+            # Encode as movement + 18 * (1 + priority_index)
+            # This gives 18 + 18*8 = 162 max, but we cap at 127
+            action = movement + 18 * (1 + i)
+            return min(action, 127)
+
+    # No ability pressed, just movement
+    return movement
+
+
+def decode_action(action: int) -> tuple[int, str | None]:
+    """Decode action index back to movement and ability.
+
+    Args:
+        action: Single action index in [0, 127]
+
+    Returns:
+        (movement, ability_key) where ability_key is None if no ability
+    """
+    if action < 18:
+        return action, None
+
+    priority = ['R', 'Q', 'E', 'W', 'D', 'F', 'item', 'B']
+    ability_idx = (action // 18) - 1
+    movement = action % 18
+
+    if ability_idx < len(priority):
+        return movement, priority[ability_idx]
+
+    return movement, None
+
+
 def collate_actions(batch_actions: list[dict[str, torch.Tensor] | None]) -> dict[str, torch.Tensor] | None:
     """Collate action dicts from a batch.
 

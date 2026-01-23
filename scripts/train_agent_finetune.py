@@ -41,6 +41,8 @@ from ahriuwu.models import (
     twohot_loss,
     RunningRMS,
 )
+from ahriuwu.data.dataset import LatentSequenceDataset
+from ahriuwu.data.actions import encode_action
 
 
 def parse_args():
@@ -61,7 +63,19 @@ def parse_args():
         "--data-dir",
         type=str,
         default="data/replays",
-        help="Directory containing replay data with actions and rewards",
+        help="Directory containing replay data with actions and rewards (for raw frames)",
+    )
+    parser.add_argument(
+        "--latents-dir",
+        type=str,
+        default=None,
+        help="Directory containing pre-tokenized latents (if provided, skips tokenization)",
+    )
+    parser.add_argument(
+        "--features-dir",
+        type=str,
+        default=None,
+        help="Directory containing features.json per video (default: data/processed)",
     )
     parser.add_argument(
         "--checkpoint-dir",
@@ -140,55 +154,102 @@ def parse_args():
 
 
 class ReplayDataset(torch.utils.data.Dataset):
-    """Dataset for replay data with frames, actions, and rewards.
+    """Dataset for replay data with latents, actions, and rewards.
 
-    Expected data format per replay:
-    - frames: (T, C, H, W) video frames
+    Wraps LatentSequenceDataset to provide properly formatted data:
+    - latents: (T, C, H, W) pre-tokenized latent vectors
     - actions: (T,) discrete action indices
     - rewards: (T,) reward values
 
-    For now, this is a placeholder - you'll need to implement
-    based on your actual replay data format.
+    When use_latents=True, uses pre-computed latents from LatentSequenceDataset.
+    Otherwise falls back to placeholder for raw frame mode (not yet implemented).
     """
 
-    def __init__(self, data_dir: str, seq_len: int = 32):
+    def __init__(
+        self,
+        data_dir: str,
+        seq_len: int = 32,
+        latents_dir: str | None = None,
+        features_dir: str | None = None,
+    ):
         self.data_dir = Path(data_dir)
         self.seq_len = seq_len
+        self.use_latents = latents_dir is not None
 
-        # TODO: Load your replay data here
-        # This is a placeholder structure
-        self.replays = []
-
-        # Find all replay files
-        replay_files = list(self.data_dir.glob("*.pt")) + list(self.data_dir.glob("*.npz"))
-        print(f"Found {len(replay_files)} replay files")
-
-        # For now, just store file paths
-        self.replay_files = replay_files
+        if self.use_latents:
+            # Use LatentSequenceDataset for pre-tokenized data
+            self.latent_dataset = LatentSequenceDataset(
+                latents_dir=latents_dir,
+                sequence_length=seq_len,
+                stride=seq_len // 2,  # 50% overlap for more sequences
+                load_actions=True,
+                load_rewards=True,
+                features_dir=features_dir,
+            )
+            print(f"Loaded {len(self.latent_dataset)} latent sequences with actions and rewards")
+        else:
+            # Placeholder for raw frame mode
+            self.latent_dataset = None
+            replay_files = list(self.data_dir.glob("*.pt")) + list(self.data_dir.glob("*.npz"))
+            print(f"Found {len(replay_files)} replay files (raw frame mode - not yet implemented)")
+            self.replay_files = replay_files
 
     def __len__(self):
-        # Return number of possible sequences
-        # This is a placeholder - adjust based on your data
-        return len(self.replay_files) * 10  # Assume 10 sequences per replay
+        if self.use_latents:
+            return len(self.latent_dataset)
+        return len(self.replay_files) * 10  # Placeholder
 
     def __getitem__(self, idx):
-        # TODO: Implement actual data loading
-        # This is a placeholder that returns random data
-        # Replace with your actual replay loading logic
+        if self.use_latents:
+            # Get data from LatentSequenceDataset
+            data = self.latent_dataset[idx]
 
-        T = self.seq_len
-        C, H, W = 3, 256, 256  # Assuming 256x256 frames
+            latents = data["latents"]  # (T, C, H, W) = (T, 256, 16, 16)
 
-        # Placeholder: random data
-        frames = torch.rand(T, C, H, W)
-        actions = torch.randint(0, 128, (T,))
-        rewards = torch.randn(T) * 10  # Random rewards
+            # Convert actions dict to single discrete action tensor
+            actions_dict = data.get("actions")
+            if actions_dict is not None:
+                # Encode actions using the action encoding function
+                actions = []
+                for t in range(self.seq_len):
+                    action = encode_action(
+                        movement=actions_dict['movement'][t].item(),
+                        abilities={
+                            'Q': bool(actions_dict['Q'][t].item()),
+                            'W': bool(actions_dict['W'][t].item()),
+                            'E': bool(actions_dict['E'][t].item()),
+                            'R': bool(actions_dict['R'][t].item()),
+                            'D': bool(actions_dict['D'][t].item()),
+                            'F': bool(actions_dict['F'][t].item()),
+                            'item': bool(actions_dict['item'][t].item()),
+                            'B': bool(actions_dict['B'][t].item()),
+                        }
+                    )
+                    actions.append(action)
+                actions = torch.tensor(actions, dtype=torch.long)
+            else:
+                # No actions available - use zeros
+                actions = torch.zeros(self.seq_len, dtype=torch.long)
 
-        return {
-            "frames": frames,
-            "actions": actions,
-            "rewards": rewards,
-        }
+            # Get rewards (or zeros if not available)
+            rewards = data.get("rewards")
+            if rewards is None:
+                rewards = torch.zeros(self.seq_len, dtype=torch.float32)
+
+            return {
+                "latents": latents,  # (T, C, H, W) pre-tokenized
+                "actions": actions,  # (T,)
+                "rewards": rewards,  # (T,)
+            }
+        else:
+            # Placeholder for raw frame mode
+            T = self.seq_len
+            C, H, W = 3, 256, 256
+            return {
+                "frames": torch.rand(T, C, H, W),
+                "actions": torch.randint(0, 128, (T,)),
+                "rewards": torch.randn(T) * 10,
+            }
 
 
 def load_pretrained_dynamics(checkpoint_path: str, model_size: str, device: str):
@@ -268,19 +329,24 @@ def train_epoch(
     dtype = torch.bfloat16 if device_type == "cuda" else torch.float16
 
     for batch_idx, batch in enumerate(dataloader):
-        frames = batch["frames"].to(device)  # (B, T, C, H, W)
+        # Handle both latents (pre-tokenized) and frames (need tokenization)
+        if "latents" in batch:
+            z = batch["latents"].to(device)  # (B, T, C, H, W) already tokenized
+        else:
+            frames = batch["frames"].to(device)  # (B, T, C, H, W)
+            # Encode frames to latents
+            with torch.no_grad():
+                B_frames, T_frames = frames.shape[:2]
+                frames_flat = frames.view(B_frames * T_frames, *frames.shape[2:])
+                z = tokenizer.encode(frames_flat)  # (B*T, C, H, W) latent
+                z = z.view(B_frames, T_frames, *z.shape[1:])  # (B, T, C, H, W)
+
         actions = batch["actions"].to(device)  # (B, T)
         rewards = batch["rewards"].to(device)  # (B, T)
 
         B, T = actions.shape
 
         with autocast(device_type=device_type, dtype=dtype):
-            # Encode frames to latents
-            with torch.no_grad():
-                # Reshape for tokenizer: (B*T, C, H, W)
-                frames_flat = frames.view(B * T, *frames.shape[2:])
-                z = tokenizer.encode(frames_flat)  # (B*T, C, H, W) latent
-                z = z.view(B, T, *z.shape[1:])  # (B, T, C, H, W)
 
             # Dynamics forward with shortcut forcing
             z_noisy, tau, step_size, z_target = shortcut.add_noise(z)
@@ -461,8 +527,16 @@ def main():
     shortcut = ShortcutForcing(k_max=128).to(args.device)
 
     # Create dataset and dataloader
-    print(f"\nLoading data from {args.data_dir}...")
-    dataset = ReplayDataset(args.data_dir, seq_len=args.seq_len)
+    if args.latents_dir:
+        print(f"\nLoading latent sequences from {args.latents_dir}...")
+    else:
+        print(f"\nLoading data from {args.data_dir}...")
+    dataset = ReplayDataset(
+        args.data_dir,
+        seq_len=args.seq_len,
+        latents_dir=args.latents_dir,
+        features_dir=args.features_dir,
+    )
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
