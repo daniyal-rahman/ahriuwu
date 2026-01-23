@@ -1,12 +1,13 @@
 """PyTorch datasets for LoL frame sequences."""
 
 import json
+import random
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 
 from .actions import ABILITY_KEYS, collate_actions
 
@@ -771,3 +772,121 @@ class LatentSequenceDataset(Dataset):
             result["rewards"] = rewards  # (T,) tensor or None
 
         return result
+
+    def has_nonzero_reward(self, idx: int) -> bool:
+        """Check if a sequence has any non-zero reward without full loading.
+
+        This is used by RewardMixtureSampler for efficient pre-scanning.
+
+        Args:
+            idx: Sequence index
+
+        Returns:
+            True if sequence contains any non-zero reward
+        """
+        seq_info = self.sequences[idx]
+        video_id = seq_info["video_id"]
+        start_frame = seq_info["start_frame"]
+
+        if video_id not in self.feature_data:
+            return False
+
+        frames = self.feature_data[video_id]
+        context_frames = 5
+
+        for t in range(self.sequence_length):
+            frame_idx = start_frame + t
+            if frame_idx >= len(frames):
+                continue
+
+            entry = frames[frame_idx]
+
+            # Check gold reward
+            gold = entry.get('gold_gained', 0) or 0
+            if gold != 0:
+                return True
+
+            # Check death (simplified check - just look for health bar disappearance)
+            curr_hb = entry.get('health_bar_x') is not None
+            if not curr_hb:
+                prev_hb_count = 0
+                for lookback in range(1, context_frames + 1):
+                    prev_idx = frame_idx - lookback
+                    if 0 <= prev_idx < len(frames):
+                        if frames[prev_idx].get('health_bar_x') is not None:
+                            prev_hb_count += 1
+                if prev_hb_count >= 3:
+                    # Potential death - check if stays gone
+                    gone_count = 0
+                    for lookahead in range(1, 4):
+                        next_idx = frame_idx + lookahead
+                        if next_idx < len(frames):
+                            if frames[next_idx].get('health_bar_x') is None:
+                                gone_count += 1
+                    if gone_count >= 2:
+                        return True
+
+        return False
+
+
+class RewardMixtureSampler(Sampler):
+    """Sampler implementing 50% uniform / 50% reward-containing mixture.
+
+    Matches DreamerV4's data mixture strategy: "50% uniform sequences
+    and 50% relevant sequences that accomplish one of the tasks."
+
+    Usage:
+        dataset = LatentSequenceDataset(..., load_rewards=True)
+        sampler = RewardMixtureSampler(dataset)
+        loader = DataLoader(dataset, batch_size=32, sampler=sampler)
+    """
+
+    def __init__(
+        self,
+        dataset: LatentSequenceDataset,
+        seed: int | None = None,
+    ):
+        """Initialize sampler.
+
+        Args:
+            dataset: LatentSequenceDataset with load_rewards=True and
+                     feature_data already loaded
+            seed: Random seed for reproducibility
+        """
+        self.dataset = dataset
+        self.rng = random.Random(seed)
+
+        # Pre-scan to find reward-containing indices
+        self.reward_indices = []
+        self.all_indices = list(range(len(dataset)))
+
+        print("Scanning dataset for reward-containing sequences...")
+        for idx in self.all_indices:
+            if dataset.has_nonzero_reward(idx):
+                self.reward_indices.append(idx)
+
+        reward_pct = 100 * len(self.reward_indices) / len(self.all_indices) if self.all_indices else 0
+        print(f"Found {len(self.reward_indices)}/{len(self.all_indices)} "
+              f"({reward_pct:.1f}%) sequences with non-zero reward")
+
+        if not self.reward_indices:
+            print("WARNING: No reward-containing sequences found! "
+                  "Falling back to uniform sampling.")
+
+    def __iter__(self):
+        """Yield indices using 50/50 mixture strategy."""
+        indices = []
+
+        for _ in range(len(self.dataset)):
+            # 50% chance: sample from reward-containing sequences
+            # 50% chance: sample uniformly from all sequences
+            if self.reward_indices and self.rng.random() < 0.5:
+                idx = self.rng.choice(self.reward_indices)
+            else:
+                idx = self.rng.choice(self.all_indices)
+            indices.append(idx)
+
+        return iter(indices)
+
+    def __len__(self) -> int:
+        return len(self.dataset)

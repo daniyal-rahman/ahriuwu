@@ -69,6 +69,10 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
             "num_parameters": model_params,
             "use_actions": args.use_actions,
             "use_agent_tokens": args.use_agent_tokens,
+            "use_qk_norm": not args.no_qk_norm,
+            "soft_cap": args.soft_cap if args.soft_cap > 0 else None,
+            "num_register_tokens": args.num_register_tokens,
+            "num_kv_heads": args.num_kv_heads,
         },
         "tokenizer": {
             "type": getattr(args, 'tokenizer_type', 'unknown'),
@@ -80,6 +84,7 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
             "weight_decay": args.weight_decay,
             "gradient_checkpointing": args.gradient_checkpointing,
             "shortcut_forcing": args.shortcut_forcing,
+            "independent_frame_ratio": args.independent_frame_ratio,
         },
         "data": {
             "latents_dir": str(args.latents_dir),
@@ -294,6 +299,36 @@ def parse_args():
         action="store_true",
         help="Use packed latent format (.npz files) for faster I/O",
     )
+    # DreamerV4 stability features
+    parser.add_argument(
+        "--no-qk-norm",
+        action="store_true",
+        help="Disable QKNorm for attention stability (enabled by default)",
+    )
+    parser.add_argument(
+        "--soft-cap",
+        type=float,
+        default=50.0,
+        help="Attention logit soft cap value (0 to disable, default 50.0)",
+    )
+    parser.add_argument(
+        "--num-register-tokens",
+        type=int,
+        default=8,
+        help="Number of register tokens for information routing (0 to disable)",
+    )
+    parser.add_argument(
+        "--num-kv-heads",
+        type=int,
+        default=None,
+        help="Number of KV heads for GQA (None = same as Q heads, no GQA)",
+    )
+    parser.add_argument(
+        "--independent-frame-ratio",
+        type=float,
+        default=0.3,
+        help="Ratio of batches using independent frame mode (no temporal attention)",
+    )
     return parser.parse_args()
 
 
@@ -361,6 +396,7 @@ def train_epoch(
     dataloader_short: DataLoader | None = None,
     dataloader_long: DataLoader | None = None,
     use_actions: bool = False,
+    independent_frame_ratio: float = 0.3,
 ):
     """Train for one epoch.
 
@@ -434,6 +470,9 @@ def train_epoch(
         # Add noise with per-timestep levels
         z_tau, noise = schedule.add_noise(z_0, tau)
 
+        # Sample whether to use independent frames mode (30% by default)
+        use_independent = random.random() < independent_frame_ratio
+
         # Mixed precision forward
         amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
@@ -443,7 +482,7 @@ def train_epoch(
                 loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
             else:
                 # Standard training: predict clean latents
-                z_pred = model(z_tau, tau, actions=actions)
+                z_pred = model(z_tau, tau, actions=actions, independent_frames=use_independent)
                 loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
 
         # Backward with scaling
@@ -683,6 +722,10 @@ def main():
         latent_dim=args.latent_dim,
         use_actions=args.use_actions,
         use_agent_tokens=args.use_agent_tokens,
+        use_qk_norm=not args.no_qk_norm,
+        soft_cap=args.soft_cap if args.soft_cap > 0 else None,
+        num_register_tokens=args.num_register_tokens,
+        num_kv_heads=args.num_kv_heads,
     )
     model = model.to(args.device)
     num_params = model.get_num_params()
@@ -691,6 +734,12 @@ def main():
         print("Action conditioning: ENABLED")
     if args.use_agent_tokens:
         print("Agent tokens: ENABLED")
+    print(f"QKNorm: {'ENABLED' if not args.no_qk_norm else 'DISABLED'}")
+    print(f"Soft cap: {args.soft_cap if args.soft_cap > 0 else 'DISABLED'}")
+    print(f"Register tokens: {args.num_register_tokens}")
+    if args.num_kv_heads:
+        print(f"GQA: {args.num_kv_heads} KV heads")
+    print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
 
     # Save run configuration
     save_run_config(checkpoint_dir, args, num_params)
@@ -744,7 +793,8 @@ def main():
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, schedule, args.device,
             epoch, global_step, args, checkpoint_dir, shortcut,
-            dataloader_short, dataloader_long, use_actions=args.use_actions
+            dataloader_short, dataloader_long, use_actions=args.use_actions,
+            independent_frame_ratio=args.independent_frame_ratio,
         )
 
         global_step = metrics["global_step"]

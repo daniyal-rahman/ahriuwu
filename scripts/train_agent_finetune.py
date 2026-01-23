@@ -41,7 +41,7 @@ from ahriuwu.models import (
     twohot_loss,
     RunningRMS,
 )
-from ahriuwu.data.dataset import LatentSequenceDataset
+from ahriuwu.data.dataset import LatentSequenceDataset, RewardMixtureSampler
 from ahriuwu.data.actions import encode_action
 
 
@@ -149,6 +149,11 @@ def parse_args():
         type=str,
         default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
         help="Device to train on",
+    )
+    parser.add_argument(
+        "--use-reward-mixture",
+        action="store_true",
+        help="Use 50/50 reward mixture sampling (50% uniform, 50% reward-containing)",
     )
     return parser.parse_args()
 
@@ -483,6 +488,7 @@ def main():
     print(f"Sequence length: {args.seq_len}")
     print(f"MTP length: {args.mtp_length}")
     print(f"Action dim: {args.action_dim}")
+    print(f"Reward mixture: {args.use_reward_mixture}")
     print("=" * 60)
 
     # Create directories
@@ -537,10 +543,20 @@ def main():
         latents_dir=args.latents_dir,
         features_dir=args.features_dir,
     )
+
+    # Create sampler for 50/50 reward mixture (DreamerV4 strategy)
+    sampler = None
+    shuffle = True
+    if args.use_reward_mixture and dataset.use_latents and dataset.latent_dataset is not None:
+        print("\nCreating 50/50 reward mixture sampler...")
+        sampler = RewardMixtureSampler(dataset.latent_dataset)
+        shuffle = False  # Sampler handles shuffling
+
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=shuffle,
+        sampler=sampler,
         num_workers=4,
         pin_memory=True,
     )

@@ -151,6 +151,33 @@ class RMSNorm(nn.Module):
         return x / rms * self.weight
 
 
+class QKNorm(nn.Module):
+    """Query-Key Normalization for attention stability.
+
+    Normalizes Q and K independently before computing attention scores.
+    Reference: Gemma 2, DreamerV4
+    """
+
+    def __init__(self, head_dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.q_norm = RMSNorm(head_dim, eps)
+        self.k_norm = RMSNorm(head_dim, eps)
+
+    def forward(
+        self, q: torch.Tensor, k: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.q_norm(q), self.k_norm(k)
+
+
+def soft_cap_attention(logits: torch.Tensor, cap: float = 50.0) -> torch.Tensor:
+    """Apply soft capping to attention logits.
+
+    Prevents extreme attention scores using tanh squashing.
+    Reference: Gemma 2 uses cap=50.0
+    """
+    return cap * torch.tanh(logits / cap)
+
+
 class SwiGLU(nn.Module):
     """SwiGLU activation function."""
 
@@ -169,20 +196,44 @@ class SwiGLU(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    """Multi-head attention with optional masking and RoPE."""
+    """Multi-head attention with optional masking, RoPE, QKNorm, and soft capping."""
 
-    def __init__(self, dim: int, num_heads: int = 8, dropout: float = 0.0):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
+    ):
+        """Initialize multi-head attention.
+
+        Args:
+            dim: Model dimension
+            num_heads: Number of attention heads
+            dropout: Dropout probability
+            use_qk_norm: Whether to use QK normalization
+            soft_cap: Soft cap value for attention logits (None = no capping)
+        """
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.scale = self.head_dim ** -0.5
+        self.use_qk_norm = use_qk_norm
+        self.soft_cap = soft_cap
 
         self.q_proj = nn.Linear(dim, dim, bias=False)
         self.k_proj = nn.Linear(dim, dim, bias=False)
         self.v_proj = nn.Linear(dim, dim, bias=False)
         self.out_proj = nn.Linear(dim, dim, bias=False)
         self.dropout = nn.Dropout(dropout)
+
+        # QKNorm
+        if use_qk_norm:
+            self.qk_norm = QKNorm(self.head_dim)
+        else:
+            self.qk_norm = None
 
     def forward(
         self,
@@ -224,8 +275,16 @@ class MultiHeadAttention(nn.Module):
                 q = torch.where(valid_mask_exp, q_rotated, q)
                 k = torch.where(valid_mask_exp, k_rotated, k)
 
+        # Apply QKNorm if enabled
+        if self.qk_norm is not None:
+            q, k = self.qk_norm(q, k)
+
         # Scaled dot-product attention
         attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        # Apply soft capping if enabled
+        if self.soft_cap is not None:
+            attn = soft_cap_attention(attn, self.soft_cap)
 
         if mask is not None:
             # mask: (N, N) or (B, N, N), True = attend, False = mask
@@ -244,12 +303,28 @@ class MultiHeadAttention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Transformer block with pre-norm."""
+    """Transformer block with pre-norm, QKNorm, and soft capping."""
 
-    def __init__(self, dim: int, num_heads: int = 8, dropout: float = 0.0):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
+    ):
+        """Initialize transformer block.
+
+        Args:
+            dim: Model dimension
+            num_heads: Number of attention heads
+            dropout: Dropout probability
+            use_qk_norm: Whether to use QK normalization
+            soft_cap: Soft cap value for attention logits
+        """
         super().__init__()
         self.norm1 = RMSNorm(dim)
-        self.attn = MultiHeadAttention(dim, num_heads, dropout)
+        self.attn = MultiHeadAttention(dim, num_heads, dropout, use_qk_norm, soft_cap)
         self.norm2 = RMSNorm(dim)
         self.ffn = SwiGLU(dim)
 
@@ -392,6 +467,7 @@ class TransformerEncoder(nn.Module):
 
     Takes patches, concatenates learned latent tokens, applies block-causal attention.
     Outputs latent tokens only (discards patches).
+    Supports QKNorm and soft capping for stability.
     """
 
     def __init__(
@@ -404,7 +480,23 @@ class TransformerEncoder(nn.Module):
         dropout: float = 0.0,
         use_sincos_pos: bool = True,
         use_rope: bool = False,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
     ):
+        """Initialize transformer encoder.
+
+        Args:
+            embed_dim: Embedding dimension
+            num_heads: Number of attention heads
+            num_layers: Number of transformer layers
+            num_patches: Number of patch tokens per frame
+            num_latents: Number of latent tokens per frame
+            dropout: Dropout probability
+            use_sincos_pos: Use sinusoidal position embeddings
+            use_rope: Use rotary position embeddings
+            use_qk_norm: Whether to use QK normalization
+            soft_cap: Soft cap value for attention logits
+        """
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
@@ -440,9 +532,9 @@ class TransformerEncoder(nn.Module):
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
 
-        # Transformer blocks
+        # Transformer blocks with QKNorm and soft capping
         self.blocks = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, dropout)
+            TransformerBlock(embed_dim, num_heads, dropout, use_qk_norm, soft_cap)
             for _ in range(num_layers)
         ])
         self.norm = RMSNorm(embed_dim)
@@ -531,6 +623,7 @@ class TransformerDecoder(nn.Module):
 
     Takes latent tokens, adds fresh learned patch queries, applies block-causal attention.
     Outputs reconstructed patches.
+    Supports QKNorm and soft capping for stability.
     """
 
     def __init__(
@@ -543,7 +636,23 @@ class TransformerDecoder(nn.Module):
         dropout: float = 0.0,
         use_sincos_pos: bool = True,
         use_rope: bool = False,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
     ):
+        """Initialize transformer decoder.
+
+        Args:
+            embed_dim: Embedding dimension
+            num_heads: Number of attention heads
+            num_layers: Number of transformer layers
+            num_patches: Number of patch tokens per frame
+            num_latents: Number of latent tokens per frame
+            dropout: Dropout probability
+            use_sincos_pos: Use sinusoidal position embeddings
+            use_rope: Use rotary position embeddings
+            use_qk_norm: Whether to use QK normalization
+            soft_cap: Soft cap value for attention logits
+        """
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
@@ -579,9 +688,9 @@ class TransformerDecoder(nn.Module):
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
 
-        # Transformer blocks
+        # Transformer blocks with QKNorm and soft capping
         self.blocks = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, dropout)
+            TransformerBlock(embed_dim, num_heads, dropout, use_qk_norm, soft_cap)
             for _ in range(num_layers)
         ])
         self.norm = RMSNorm(embed_dim)
@@ -797,6 +906,8 @@ class TransformerTokenizer(nn.Module):
     - Decoder: fresh patch queries + latents with block-causal attention
     - Output: reconstructed frames
 
+    Supports QKNorm and soft capping for training stability.
+
     For dynamics model integration:
     - encode() returns bottlenecked latents (256 tokens × 32 dims per frame)
     - These feed directly into dynamics model
@@ -815,7 +926,26 @@ class TransformerTokenizer(nn.Module):
         dropout: float = 0.0,
         use_sincos_pos: bool = True,
         use_rope: bool = False,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
     ):
+        """Initialize transformer tokenizer.
+
+        Args:
+            img_size: Input image size (square)
+            patch_size: Size of each patch
+            embed_dim: Embedding dimension
+            latent_dim: Bottleneck dimension per token
+            num_heads: Number of attention heads
+            num_encoder_layers: Number of encoder layers
+            num_decoder_layers: Number of decoder layers
+            num_latents: Number of latent tokens per frame
+            dropout: Dropout probability
+            use_sincos_pos: Use sinusoidal position embeddings
+            use_rope: Use rotary position embeddings
+            use_qk_norm: Whether to use QK normalization
+            soft_cap: Soft cap value for attention logits
+        """
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
@@ -823,19 +953,23 @@ class TransformerTokenizer(nn.Module):
         self.latent_dim = latent_dim
         self.num_patches = (img_size // patch_size) ** 2
         self.num_latents = num_latents
+        self.use_qk_norm = use_qk_norm
+        self.soft_cap = soft_cap
 
         # Patch embedding and unembedding
         self.patch_embed = PatchEmbed(img_size, patch_size, 3, embed_dim)
         self.patch_unembed = PatchUnembed(img_size, patch_size, 3, embed_dim)
 
-        # Encoder and decoder
+        # Encoder and decoder with QKNorm and soft capping
         self.encoder = TransformerEncoder(
             embed_dim, num_heads, num_encoder_layers,
-            self.num_patches, num_latents, dropout, use_sincos_pos, use_rope
+            self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
+            use_qk_norm, soft_cap
         )
         self.decoder = TransformerDecoder(
             embed_dim, num_heads, num_decoder_layers,
-            self.num_patches, num_latents, dropout, use_sincos_pos, use_rope
+            self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
+            use_qk_norm, soft_cap
         )
 
         # Bottleneck (encoder latents → compact form for dynamics)
@@ -977,12 +1111,19 @@ class TransformerTokenizer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
-def create_transformer_tokenizer(size: str = "small", use_rope: bool = False) -> TransformerTokenizer:
+def create_transformer_tokenizer(
+    size: str = "small",
+    use_rope: bool = False,
+    use_qk_norm: bool = True,
+    soft_cap: float | None = 50.0,
+) -> TransformerTokenizer:
     """Create transformer tokenizer with preset sizes.
 
     Args:
         size: One of "tiny", "small", "medium", "large"
         use_rope: If True, use RoPE for position encoding instead of additive embeddings
+        use_qk_norm: Whether to use QK normalization for attention stability
+        soft_cap: Soft cap value for attention logits (None = no capping)
 
     Returns:
         TransformerTokenizer instance
@@ -1025,7 +1166,12 @@ def create_transformer_tokenizer(size: str = "small", use_rope: bool = False) ->
     if size not in configs:
         raise ValueError(f"Unknown size: {size}. Choose from {list(configs.keys())}")
 
-    return TransformerTokenizer(**configs[size], use_rope=use_rope)
+    return TransformerTokenizer(
+        **configs[size],
+        use_rope=use_rope,
+        use_qk_norm=use_qk_norm,
+        soft_cap=soft_cap,
+    )
 
 
 if __name__ == "__main__":
