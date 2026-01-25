@@ -393,6 +393,9 @@ def train_epoch(
     total_dynamics_loss = 0.0
     total_reward_loss = 0.0
     total_bc_loss = 0.0
+    total_correct_top1 = 0
+    total_correct_top5 = 0
+    total_predictions = 0
     num_batches = 0
     start_time = time.time()
 
@@ -473,6 +476,23 @@ def train_epoch(
 
             bc_loss = bc_loss / L
 
+            # Compute action prediction accuracy (using offset=0, next-step prediction)
+            with torch.no_grad():
+                pred_t0 = action_logits[:, :-1, 0, :]  # (B, T-1, action_dim)
+                target_t0 = actions[:, 1:]  # (B, T-1)
+
+                # Top-1 accuracy
+                pred_top1 = pred_t0.argmax(dim=-1)  # (B, T-1)
+                correct_top1 = (pred_top1 == target_t0).sum().item()
+
+                # Top-5 accuracy
+                _, pred_top5 = pred_t0.topk(5, dim=-1)  # (B, T-1, 5)
+                correct_top5 = (pred_top5 == target_t0.unsqueeze(-1)).any(dim=-1).sum().item()
+
+                total_correct_top1 += correct_top1
+                total_correct_top5 += correct_top5
+                total_predictions += target_t0.numel()
+
             # Normalize losses by running RMS
             dynamics_loss_norm = rms_trackers["dynamics"].update(dynamics_loss)
             reward_loss_norm = rms_trackers["reward"].update(reward_loss)
@@ -502,20 +522,27 @@ def train_epoch(
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
             samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
+            acc_top1 = 100 * total_correct_top1 / total_predictions if total_predictions > 0 else 0
+            acc_top5 = 100 * total_correct_top5 / total_predictions if total_predictions > 0 else 0
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {total_loss_batch.item():.4f} "
                 f"Dyn: {dynamics_loss.item():.4f} "
                 f"Rew: {reward_loss.item():.4f} "
                 f"BC: {bc_loss.item():.4f} "
+                f"Acc@1: {acc_top1:.1f}% Acc@5: {acc_top5:.1f}% "
                 f"({samples_per_sec:.1f} samples/s)"
             )
 
+    final_acc_top1 = 100 * total_correct_top1 / total_predictions if total_predictions > 0 else 0
+    final_acc_top5 = 100 * total_correct_top5 / total_predictions if total_predictions > 0 else 0
     return {
         "loss": total_loss / num_batches,
         "dynamics_loss": total_dynamics_loss / num_batches,
         "reward_loss": total_reward_loss / num_batches,
         "bc_loss": total_bc_loss / num_batches,
+        "acc_top1": final_acc_top1,
+        "acc_top5": final_acc_top5,
     }
 
 
@@ -685,6 +712,7 @@ def main():
         print(f"  Dynamics Loss: {metrics['dynamics_loss']:.4f}")
         print(f"  Reward Loss: {metrics['reward_loss']:.4f}")
         print(f"  BC Loss: {metrics['bc_loss']:.4f}")
+        print(f"  Action Acc@1: {metrics['acc_top1']:.1f}%  Acc@5: {metrics['acc_top5']:.1f}%")
 
         history.append({"epoch": epoch + 1, **metrics})
 
