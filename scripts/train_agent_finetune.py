@@ -154,7 +154,50 @@ def parse_args():
     parser.add_argument(
         "--use-reward-mixture",
         action="store_true",
-        help="Use 50/50 reward mixture sampling (50% uniform, 50% reward-containing)",
+        help="Use 50/50 reward mixture sampling (50%% uniform, 50%% reward-containing)",
+    )
+    # DreamerV4 stability features (should match dynamics training)
+    parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=256,
+        help="Latent dimension (must match tokenizer)",
+    )
+    parser.add_argument(
+        "--no-qk-norm",
+        action="store_true",
+        help="Disable QKNorm (enabled by default)",
+    )
+    parser.add_argument(
+        "--soft-cap",
+        type=float,
+        default=50.0,
+        help="Attention logit soft cap (0 to disable, default 50.0)",
+    )
+    parser.add_argument(
+        "--num-register-tokens",
+        type=int,
+        default=8,
+        help="Number of register tokens (0 to disable)",
+    )
+    parser.add_argument(
+        "--num-kv-heads",
+        type=int,
+        default=None,
+        help="Number of KV heads for GQA (None = no GQA)",
+    )
+    parser.add_argument(
+        "--independent-frame-ratio",
+        type=float,
+        default=0.3,
+        help="Ratio of batches using independent frame mode",
+    )
+    parser.add_argument(
+        "--tokenizer-type",
+        type=str,
+        default="cnn",
+        choices=["cnn", "transformer"],
+        help="Type of tokenizer (cnn or transformer)",
     )
     return parser.parse_args()
 
@@ -302,7 +345,16 @@ class ReplayDataset(torch.utils.data.Dataset):
             }
 
 
-def load_pretrained_dynamics(checkpoint_path: str, model_size: str, device: str):
+def load_pretrained_dynamics(
+    checkpoint_path: str,
+    model_size: str,
+    device: str,
+    latent_dim: int = 256,
+    use_qk_norm: bool = True,
+    soft_cap: float | None = 50.0,
+    num_register_tokens: int = 8,
+    num_kv_heads: int | None = None,
+):
     """Load pretrained dynamics and upgrade to use agent tokens."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
@@ -317,6 +369,10 @@ def load_pretrained_dynamics(checkpoint_path: str, model_size: str, device: str)
         use_agent_tokens=True,
         num_tasks=1,
         agent_layers=4,
+        use_qk_norm=use_qk_norm,
+        soft_cap=soft_cap,
+        num_register_tokens=num_register_tokens,
+        num_kv_heads=num_kv_heads,
     )
 
     # Load pretrained weights (excluding new agent token components)
@@ -581,11 +637,19 @@ def main():
     print("=" * 60)
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
+    print(f"Latent dim: {args.latent_dim}")
+    print(f"Tokenizer type: {args.tokenizer_type}")
     print(f"Batch size: {args.batch_size}")
     print(f"Sequence length: {args.seq_len}")
     print(f"MTP length: {args.mtp_length}")
     print(f"Action dim: {args.action_dim}")
     print(f"Reward mixture: {args.use_reward_mixture}")
+    print(f"QKNorm: {'ENABLED' if not args.no_qk_norm else 'DISABLED'}")
+    print(f"Soft cap: {args.soft_cap if args.soft_cap > 0 else 'DISABLED'}")
+    print(f"Register tokens: {args.num_register_tokens}")
+    if args.num_kv_heads:
+        print(f"GQA: {args.num_kv_heads} KV heads")
+    print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
     print("=" * 60)
 
     # Create directories
@@ -599,7 +663,14 @@ def main():
 
     print("\nLoading pretrained dynamics (upgrading to agent tokens)...")
     dynamics, pretrained_args = load_pretrained_dynamics(
-        args.dynamics_checkpoint, args.model_size, args.device
+        args.dynamics_checkpoint,
+        args.model_size,
+        args.device,
+        latent_dim=args.latent_dim,
+        use_qk_norm=not args.no_qk_norm,
+        soft_cap=args.soft_cap if args.soft_cap > 0 else None,
+        num_register_tokens=args.num_register_tokens,
+        num_kv_heads=args.num_kv_heads,
     )
     print(f"Dynamics loaded from {args.dynamics_checkpoint}")
     print(f"  Total parameters: {dynamics.get_num_params():,}")

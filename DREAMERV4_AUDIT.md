@@ -726,3 +726,89 @@ Warning signs:
 - `GRAD_CLIP`: Gradients frequently hitting clip threshold
 - `NAN/INF`: Training instability - try lower learning rate or check data
 - Very low `Pred Std` (< 0.01): Mode collapse - check learning rate, data diversity
+
+---
+
+## 14. PHASE 2: AGENT FINETUNING (REWARD MODEL + BC)
+
+Phase 2 adds reward prediction and behavioral cloning on top of the pretrained dynamics model.
+
+### 14.1 Phase 2 Training Command (DreamerV4-Aligned)
+
+```bash
+# Full Phase 2 with all stability features
+python scripts/train_agent_finetune.py \
+    --dynamics-checkpoint checkpoints/run_XXXXXX_dynamics_transformer32_small/dynamics_best.pt \
+    --tokenizer-checkpoint checkpoints/transformer_tokenizer_best.pt \
+    --latents-dir data/processed/latents_transformer_packed \
+    --features-dir data/processed \
+    --tokenizer-type transformer \
+    --latent-dim 32 \
+    --model-size small \
+    --epochs 50 \
+    --batch-size 4 \
+    --seq-len 32 \
+    --lr 1e-4 \
+    --mtp-length 8 \
+    --num-buckets 255 \
+    --action-dim 128 \
+    --use-reward-mixture \
+    --soft-cap 50.0 \
+    --num-register-tokens 8 \
+    --independent-frame-ratio 0.3 \
+    --log-interval 50
+```
+
+### 14.2 Key Phase 2 Arguments
+
+| Argument | DreamerV4 Alignment | Default | Notes |
+|----------|---------------------|---------|-------|
+| `--mtp-length 8` | ✅ Required | 8 | Multi-Token Prediction length (paper uses 8) |
+| `--num-buckets 255` | ✅ Required | 255 | Twohot buckets for reward prediction |
+| `--use-reward-mixture` | ✅ Recommended | off | 50/50 uniform + reward-containing sampling |
+| `--action-dim` | Game-specific | 128 | LoL: 18 movement × ~8 abilities |
+| `--soft-cap 50.0` | ✅ Must match Phase 1 | 50.0 | Same as dynamics training |
+| `--num-register-tokens` | ✅ Must match Phase 1 | 8 | Same as dynamics training |
+
+### 14.3 Phase 2 with CNN Tokenizer
+
+```bash
+python scripts/train_agent_finetune.py \
+    --dynamics-checkpoint checkpoints/run_XXXXXX_dynamics_cnn256_small/dynamics_best.pt \
+    --tokenizer-checkpoint checkpoints/tokenizer_best.pt \
+    --latents-dir data/processed/latents_cnn_packed \
+    --features-dir data/processed \
+    --tokenizer-type cnn \
+    --latent-dim 256 \
+    --model-size small \
+    --epochs 50 \
+    --batch-size 4 \
+    --seq-len 32 \
+    --mtp-length 8 \
+    --num-buckets 255 \
+    --use-reward-mixture \
+    --soft-cap 50.0 \
+    --num-register-tokens 8
+```
+
+### 14.4 Phase 2 Losses
+
+Phase 2 trains three losses simultaneously (normalized by running RMS):
+
+| Loss | Description | Head |
+|------|-------------|------|
+| `dynamics_loss` | X-prediction MSE (continues from Phase 1) | Dynamics transformer |
+| `reward_loss` | Symexp twohot cross-entropy | `RewardHead` |
+| `bc_loss` | Behavioral cloning cross-entropy | `PolicyHead` |
+
+### 14.5 Phase 2 Output
+
+Checkpoints saved:
+- `agent_finetune_epoch_XXX.pt` - Per-epoch checkpoint
+- `agent_finetune_latest.pt` - Latest checkpoint
+- `agent_finetune_history.json` - Training metrics
+
+Each checkpoint contains:
+- `dynamics_state_dict` - Updated dynamics model with agent tokens
+- `reward_head_state_dict` - Trained reward prediction head
+- `policy_head_state_dict` - Trained policy (BC) head
