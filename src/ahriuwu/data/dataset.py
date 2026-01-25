@@ -351,24 +351,51 @@ class PackedLatentSequenceDataset(Dataset):
         self.features_dir = Path(features_dir) if features_dir else self.latents_dir.parent.parent / "data" / "processed"
 
         # Cache for loaded video data: video_id -> (latents, frame_indices)
+        # Limited to prevent OOM - keeps ~10 videos in RAM (~5GB)
         self.video_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self.cache_order: list[str] = []  # Track access order for LRU
+        self.max_cache_size = 10  # Max videos to keep in cache
 
         # Action labels per video (if load_actions=True)
         self.action_labels: dict[str, list[dict]] = {}
 
+        # Feature data per video for reward checking
+        self.feature_data: dict[str, list[dict]] = {}
+
         self.sequences = []
         self._index_packed_latents()
 
-        # Load action labels after indexing
+        # Load action labels and feature data after indexing
         if load_actions:
             self._load_action_labels()
+        self._load_feature_data()
+
+        # Pre-compute reward indices for efficient sampling
+        self.reward_indices: list[int] = []
+        self._precompute_reward_indices()
 
     def _load_video(self, video_id: str) -> tuple[np.ndarray, np.ndarray]:
-        """Load packed video data, using cache if available."""
-        if video_id not in self.video_cache:
-            npz_path = self.latents_dir / f"{video_id}.npz"
-            data = np.load(npz_path)
-            self.video_cache[video_id] = (data['latents'], data['frame_indices'])
+        """Load packed video data, using LRU cache."""
+        if video_id in self.video_cache:
+            # Move to end of cache_order (most recently used)
+            self.cache_order.remove(video_id)
+            self.cache_order.append(video_id)
+            return self.video_cache[video_id]
+
+        # Evict oldest video if cache is full
+        while len(self.video_cache) >= self.max_cache_size:
+            oldest = self.cache_order.pop(0)
+            del self.video_cache[oldest]
+
+        # Load new video
+        npz_path = self.latents_dir / f"{video_id}.npz"
+        # Load with mmap_mode=None to eagerly load all data into RAM
+        # This avoids slow random access through memory-mapped files
+        with np.load(npz_path, mmap_mode=None) as data:
+            latents = data['latents'].copy()  # Ensure we own the data
+            frame_indices = data['frame_indices'].copy()
+        self.video_cache[video_id] = (latents, frame_indices)
+        self.cache_order.append(video_id)
         return self.video_cache[video_id]
 
     def _index_packed_latents(self):
@@ -441,6 +468,90 @@ class PackedLatentSequenceDataset(Dataset):
                 loaded_count += 1
 
         print(f"Loaded action labels for {loaded_count}/{len(video_ids)} videos")
+
+    def _load_feature_data(self):
+        """Load feature data from features.json for reward checking."""
+        video_ids = set(seq["video_id"] for seq in self.sequences)
+        loaded_count = 0
+
+        for video_id in video_ids:
+            if video_id in self.feature_data:
+                continue  # Already loaded
+            features_path = self.features_dir / video_id / "features.json"
+            if features_path.exists():
+                with open(features_path) as f:
+                    data = json.load(f)
+                    self.feature_data[video_id] = data.get("frames", [])
+                loaded_count += 1
+
+        print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
+
+    def _precompute_reward_indices(self):
+        """Pre-compute indices of sequences with non-zero rewards.
+
+        Called once at init for efficient RewardMixtureSampler.
+        """
+        for idx in range(len(self.sequences)):
+            if self.has_nonzero_reward(idx):
+                self.reward_indices.append(idx)
+
+        pct = 100 * len(self.reward_indices) / len(self.sequences) if self.sequences else 0
+        print(f"Pre-computed reward indices: {len(self.reward_indices)}/{len(self.sequences)} ({pct:.1f}%) have rewards")
+
+    def has_nonzero_reward(self, idx: int) -> bool:
+        """Check if a sequence has any non-zero reward without full loading.
+
+        This is used by RewardMixtureSampler for efficient pre-scanning.
+
+        Args:
+            idx: Sequence index
+
+        Returns:
+            True if sequence contains any non-zero reward (gold or death)
+        """
+        seq_info = self.sequences[idx]
+        video_id = seq_info["video_id"]
+        start_frame = seq_info["start_frame"]
+
+        if video_id not in self.feature_data:
+            return False
+
+        frames = self.feature_data[video_id]
+        context_frames = 5
+
+        for t in range(self.sequence_length):
+            frame_idx = start_frame + t
+            if frame_idx >= len(frames):
+                continue
+
+            entry = frames[frame_idx]
+
+            # Check gold reward
+            gold = entry.get('gold_gained', 0) or 0
+            if gold != 0:
+                return True
+
+            # Check death (simplified check - look for health bar disappearance)
+            curr_hb = entry.get('health_bar_x') is not None
+            if not curr_hb:
+                prev_hb_count = 0
+                for lookback in range(1, context_frames + 1):
+                    prev_idx = frame_idx - lookback
+                    if 0 <= prev_idx < len(frames):
+                        if frames[prev_idx].get('health_bar_x') is not None:
+                            prev_hb_count += 1
+                if prev_hb_count >= 3:
+                    # Potential death - check if stays gone
+                    gone_count = 0
+                    for lookahead in range(1, 4):
+                        next_idx = frame_idx + lookahead
+                        if next_idx < len(frames):
+                            if frames[next_idx].get('health_bar_x') is None:
+                                gone_count += 1
+                    if gone_count >= 2:
+                        return True
+
+        return False
 
     def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
         """Get action tensors for a sequence."""
@@ -629,6 +740,18 @@ class LatentSequenceDataset(Dataset):
                 loaded_count += 1
 
         print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
+
+    def _precompute_reward_indices(self):
+        """Pre-compute indices of sequences with non-zero rewards.
+
+        This is called once at init time for efficient RewardMixtureSampler.
+        """
+        for idx in range(len(self.sequences)):
+            if self.has_nonzero_reward(idx):
+                self.reward_indices.append(idx)
+
+        pct = 100 * len(self.reward_indices) / len(self.sequences) if self.sequences else 0
+        print(f"Pre-computed reward indices: {len(self.reward_indices)}/{len(self.sequences)} ({pct:.1f}%) have rewards")
 
     def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
         """Get action tensors for a sequence.
@@ -830,63 +953,151 @@ class LatentSequenceDataset(Dataset):
 
 
 class RewardMixtureSampler(Sampler):
-    """Sampler implementing 50% uniform / 50% reward-containing mixture.
+    """Cache-friendly sampler with 50% uniform / 50% reward-containing mixture.
 
-    Matches DreamerV4's data mixture strategy: "50% uniform sequences
-    and 50% relevant sequences that accomplish one of the tasks."
+    Matches DreamerV4's data mixture strategy while maintaining cache locality:
+    - Groups sequences by video for efficient I/O
+    - Within each video, applies 50/50 mixture of reward/uniform sampling
+    - Shuffles video order between epochs
 
     Usage:
-        dataset = LatentSequenceDataset(..., load_rewards=True)
+        dataset = PackedLatentSequenceDataset(..., load_actions=True)
         sampler = RewardMixtureSampler(dataset)
-        loader = DataLoader(dataset, batch_size=32, sampler=sampler)
+        loader = DataLoader(dataset, batch_size=1, sampler=sampler)
     """
 
     def __init__(
         self,
-        dataset: LatentSequenceDataset,
+        dataset,
         seed: int | None = None,
     ):
         """Initialize sampler.
 
         Args:
-            dataset: LatentSequenceDataset with load_rewards=True and
-                     feature_data already loaded
+            dataset: PackedLatentSequenceDataset with pre-computed reward_indices
             seed: Random seed for reproducibility
         """
         self.dataset = dataset
         self.rng = random.Random(seed)
 
-        # Pre-scan to find reward-containing indices
-        self.reward_indices = []
-        self.all_indices = list(range(len(dataset)))
+        # Build per-video index groups
+        self.video_to_all: dict[str, list[int]] = {}
+        self.video_to_reward: dict[str, list[int]] = {}
+        reward_set = set(dataset.reward_indices)
 
-        print("Scanning dataset for reward-containing sequences...")
-        for idx in self.all_indices:
-            if dataset.has_nonzero_reward(idx):
-                self.reward_indices.append(idx)
+        for idx, seq in enumerate(dataset.sequences):
+            video_id = seq['video_id']
+            if video_id not in self.video_to_all:
+                self.video_to_all[video_id] = []
+                self.video_to_reward[video_id] = []
+            self.video_to_all[video_id].append(idx)
+            if idx in reward_set:
+                self.video_to_reward[video_id].append(idx)
 
-        reward_pct = 100 * len(self.reward_indices) / len(self.all_indices) if self.all_indices else 0
-        print(f"Found {len(self.reward_indices)}/{len(self.all_indices)} "
-              f"({reward_pct:.1f}%) sequences with non-zero reward")
+        # Filter out videos with no feature data
+        self.video_ids = [vid for vid in self.video_to_all.keys()
+                         if vid in dataset.feature_data and len(dataset.feature_data[vid]) > 0]
 
-        if not self.reward_indices:
+        total_seqs = sum(len(self.video_to_all[v]) for v in self.video_ids)
+        total_reward = sum(len(self.video_to_reward[v]) for v in self.video_ids)
+        reward_pct = 100 * total_reward / total_seqs if total_seqs else 0
+        print(f"RewardMixtureSampler: {len(self.video_ids)} videos, "
+              f"{total_reward}/{total_seqs} ({reward_pct:.1f}%) sequences with rewards")
+
+        if total_reward == 0:
             print("WARNING: No reward-containing sequences found! "
                   "Falling back to uniform sampling.")
 
     def __iter__(self):
-        """Yield indices using 50/50 mixture strategy."""
-        indices = []
+        """Yield indices grouped by video with 50/50 mixture within each."""
+        # Shuffle video order
+        videos = self.video_ids.copy()
+        self.rng.shuffle(videos)
 
-        for _ in range(len(self.dataset)):
-            # 50% chance: sample from reward-containing sequences
-            # 50% chance: sample uniformly from all sequences
-            if self.reward_indices and self.rng.random() < 0.5:
-                idx = self.rng.choice(self.reward_indices)
-            else:
-                idx = self.rng.choice(self.all_indices)
-            indices.append(idx)
+        for video_id in videos:
+            all_indices = self.video_to_all[video_id]
+            reward_indices = self.video_to_reward[video_id]
 
-        return iter(indices)
+            # For each sequence slot in this video, do 50/50 mixture
+            for _ in range(len(all_indices)):
+                if reward_indices and self.rng.random() < 0.5:
+                    # Sample from reward sequences (with replacement)
+                    yield self.rng.choice(reward_indices)
+                else:
+                    # Sample from all sequences
+                    yield self.rng.choice(all_indices)
 
     def __len__(self) -> int:
-        return len(self.dataset)
+        return sum(len(self.video_to_all[v]) for v in self.video_ids)
+
+
+class VideoShuffleSampler(Sampler):
+    """Sampler that shuffles video order but keeps sequences within videos together.
+
+    This provides randomization while maintaining cache locality - all sequences
+    from one video are processed together before moving to the next video.
+
+    Usage:
+        dataset = PackedLatentSequenceDataset(...)
+        sampler = VideoShuffleSampler(dataset)
+        loader = DataLoader(dataset, batch_size=1, sampler=sampler)
+    """
+
+    def __init__(
+        self,
+        dataset,
+        seed: int | None = None,
+        filter_empty_rewards: bool = True,
+    ):
+        """Initialize sampler.
+
+        Args:
+            dataset: Dataset with sequences attribute containing video_id
+            seed: Random seed for reproducibility
+            filter_empty_rewards: If True, skip videos with no feature data
+        """
+        self.dataset = dataset
+        self.seed = seed
+        self.filter_empty_rewards = filter_empty_rewards
+
+        # Group sequence indices by video
+        self.video_to_indices: dict[str, list[int]] = {}
+        for idx, seq in enumerate(dataset.sequences):
+            video_id = seq['video_id']
+            if video_id not in self.video_to_indices:
+                self.video_to_indices[video_id] = []
+            self.video_to_indices[video_id].append(idx)
+
+        # Filter out videos with no feature data if requested
+        if filter_empty_rewards and hasattr(dataset, 'feature_data'):
+            original_count = len(self.video_to_indices)
+            self.video_to_indices = {
+                vid: indices for vid, indices in self.video_to_indices.items()
+                if vid in dataset.feature_data and len(dataset.feature_data[vid]) > 0
+            }
+            filtered = original_count - len(self.video_to_indices)
+            if filtered > 0:
+                print(f"VideoShuffleSampler: Filtered {filtered} videos with no feature data")
+
+        self.video_ids = list(self.video_to_indices.keys())
+        total_seqs = sum(len(v) for v in self.video_to_indices.values())
+        print(f"VideoShuffleSampler: {len(self.video_ids)} videos, {total_seqs} sequences")
+
+    def __iter__(self):
+        """Yield indices with shuffled video order."""
+        rng = random.Random(self.seed)
+
+        # Shuffle video order
+        videos = self.video_ids.copy()
+        rng.shuffle(videos)
+
+        # Yield all sequences from each video in order
+        for video_id in videos:
+            indices = self.video_to_indices[video_id]
+            # Optionally shuffle within video too
+            indices_copy = indices.copy()
+            rng.shuffle(indices_copy)
+            yield from indices_copy
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self.video_to_indices.values())

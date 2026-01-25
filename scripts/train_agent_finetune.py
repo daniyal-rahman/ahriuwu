@@ -33,15 +33,16 @@ from torch.amp import GradScaler, autocast
 
 from ahriuwu.models import (
     create_tokenizer,
+    create_transformer_tokenizer,
     create_dynamics,
     RewardHead,
     PolicyHead,
-    ShortcutForcing,
+    DiffusionSchedule,
     symlog,
     twohot_loss,
     RunningRMS,
 )
-from ahriuwu.data.dataset import LatentSequenceDataset, RewardMixtureSampler
+from ahriuwu.data.dataset import PackedLatentSequenceDataset, RewardMixtureSampler, VideoShuffleSampler
 from ahriuwu.data.actions import encode_action
 
 
@@ -161,12 +162,12 @@ def parse_args():
 class ReplayDataset(torch.utils.data.Dataset):
     """Dataset for replay data with latents, actions, and rewards.
 
-    Wraps LatentSequenceDataset to provide properly formatted data:
+    Wraps PackedLatentSequenceDataset to provide properly formatted data:
     - latents: (T, C, H, W) pre-tokenized latent vectors
     - actions: (T,) discrete action indices
     - rewards: (T,) reward values
 
-    When use_latents=True, uses pre-computed latents from LatentSequenceDataset.
+    When use_latents=True, uses pre-computed latents from PackedLatentSequenceDataset.
     Otherwise falls back to placeholder for raw frame mode (not yet implemented).
     """
 
@@ -176,28 +177,60 @@ class ReplayDataset(torch.utils.data.Dataset):
         seq_len: int = 32,
         latents_dir: str | None = None,
         features_dir: str | None = None,
+        gold_scale: float = 0.01,
+        death_penalty: float = -10.0,
     ):
         self.data_dir = Path(data_dir)
         self.seq_len = seq_len
         self.use_latents = latents_dir is not None
+        self.features_dir = Path(features_dir) if features_dir else Path("data/processed")
+        self.gold_scale = gold_scale
+        self.death_penalty = death_penalty
+
+        # Reward data per video: video_id -> list of reward values per frame
+        self.reward_data: dict[str, list[float]] = {}
 
         if self.use_latents:
-            # Use LatentSequenceDataset for pre-tokenized data
-            self.latent_dataset = LatentSequenceDataset(
+            # Use PackedLatentSequenceDataset for pre-tokenized data
+            self.latent_dataset = PackedLatentSequenceDataset(
                 latents_dir=latents_dir,
                 sequence_length=seq_len,
                 stride=seq_len // 2,  # 50% overlap for more sequences
                 load_actions=True,
-                load_rewards=True,
                 features_dir=features_dir,
             )
-            print(f"Loaded {len(self.latent_dataset)} latent sequences with actions and rewards")
+            print(f"Loaded {len(self.latent_dataset)} latent sequences with actions")
+
+            # Load rewards from features.json
+            self._load_rewards()
+            print(f"Loaded reward data for {len(self.reward_data)}/{len(set(s['video_id'] for s in self.latent_dataset.sequences))} videos")
         else:
             # Placeholder for raw frame mode
             self.latent_dataset = None
             replay_files = list(self.data_dir.glob("*.pt")) + list(self.data_dir.glob("*.npz"))
             print(f"Found {len(replay_files)} replay files (raw frame mode - not yet implemented)")
             self.replay_files = replay_files
+
+    def _load_rewards(self):
+        """Load reward data from features.json files."""
+        video_ids = set(s['video_id'] for s in self.latent_dataset.sequences)
+
+        for video_id in video_ids:
+            features_path = self.features_dir / video_id / "features.json"
+            if not features_path.exists():
+                continue
+
+            with open(features_path) as f:
+                features = json.load(f)
+
+            frames = features.get("frames", [])
+            rewards = []
+            for frame in frames:
+                gold = frame.get("gold_gained", 0) * self.gold_scale
+                death = self.death_penalty if frame.get("is_dead", False) else 0.0
+                rewards.append(gold + death)
+
+            self.reward_data[video_id] = rewards
 
     def __len__(self):
         if self.use_latents:
@@ -206,10 +239,15 @@ class ReplayDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         if self.use_latents:
-            # Get data from LatentSequenceDataset
+            # Get data from PackedLatentSequenceDataset
             data = self.latent_dataset[idx]
 
-            latents = data["latents"]  # (T, C, H, W) = (T, 256, 16, 16)
+            latents = data["latents"]  # (T, C, H, W) = (T, 32, 16, 16) for transformer tokenizer
+
+            # Get sequence info to look up rewards
+            seq_info = self.latent_dataset.sequences[idx]
+            video_id = seq_info['video_id']
+            start_idx = seq_info['start_idx']
 
             # Convert actions dict to single discrete action tensor
             actions_dict = data.get("actions")
@@ -236,9 +274,16 @@ class ReplayDataset(torch.utils.data.Dataset):
                 # No actions available - use zeros
                 actions = torch.zeros(self.seq_len, dtype=torch.long)
 
-            # Get rewards (or zeros if not available)
-            rewards = data.get("rewards")
-            if rewards is None:
+            # Get rewards from our loaded reward data
+            if video_id in self.reward_data:
+                video_rewards = self.reward_data[video_id]
+                end_idx = min(start_idx + self.seq_len, len(video_rewards))
+                rewards = video_rewards[start_idx:end_idx]
+                # Pad if needed
+                if len(rewards) < self.seq_len:
+                    rewards = rewards + [0.0] * (self.seq_len - len(rewards))
+                rewards = torch.tensor(rewards, dtype=torch.float32)
+            else:
                 rewards = torch.zeros(self.seq_len, dtype=torch.float32)
 
             return {
@@ -261,10 +306,14 @@ def load_pretrained_dynamics(checkpoint_path: str, model_size: str, device: str)
     """Load pretrained dynamics and upgrade to use agent tokens."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
+    # Get latent_dim from checkpoint args (default 32 for transformer tokenizer)
+    pretrained_args = checkpoint.get("args", {})
+    latent_dim = pretrained_args.get("latent_dim", 32)
+
     # Create new dynamics with agent tokens enabled
     dynamics = create_dynamics(
         size=model_size,
-        latent_dim=256,
+        latent_dim=latent_dim,
         use_agent_tokens=True,
         num_tasks=1,
         agent_layers=4,
@@ -289,11 +338,28 @@ def load_pretrained_dynamics(checkpoint_path: str, model_size: str, device: str)
 
 
 def load_tokenizer(checkpoint_path: str, device: str):
-    """Load pretrained tokenizer."""
+    """Load pretrained tokenizer (auto-detects CNN vs transformer)."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
-    tokenizer = create_tokenizer()
-    tokenizer.load_state_dict(checkpoint["model_state_dict"])
+    state_dict = checkpoint["model_state_dict"]
+    args = checkpoint.get("args", {})
+
+    # Detect tokenizer type by checking for transformer-specific keys
+    is_transformer = any("encoder.blocks" in k for k in state_dict.keys())
+
+    if is_transformer:
+        # Transformer tokenizer - get model size and rope setting from checkpoint
+        model_size = args.get("model_size", "small")
+        use_rope = args.get("use_rope", True)
+        print(f"  Detected transformer tokenizer: size={model_size}, use_rope={use_rope}")
+        tokenizer = create_transformer_tokenizer(size=model_size, use_rope=use_rope)
+        tokenizer.load_state_dict(state_dict, strict=False)  # strict=False for qk_norm keys
+    else:
+        # CNN tokenizer
+        print("  Detected CNN tokenizer")
+        tokenizer = create_tokenizer()
+        tokenizer.load_state_dict(state_dict)
+
     tokenizer = tokenizer.to(device)
     tokenizer.eval()
 
@@ -309,7 +375,7 @@ def train_epoch(
     reward_head: nn.Module,
     policy_head: nn.Module,
     tokenizer: nn.Module,
-    shortcut: ShortcutForcing,
+    diffusion: DiffusionSchedule,
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
@@ -353,11 +419,15 @@ def train_epoch(
 
         with autocast(device_type=device_type, dtype=dtype):
 
-            # Dynamics forward with shortcut forcing
-            z_noisy, tau, step_size, z_target = shortcut.add_noise(z)
+            # Sample diffusion timesteps (per-timestep for diffusion forcing)
+            tau = diffusion.sample_diffusion_forcing_timesteps(B, T, device=device)
+
+            # Add noise to clean latents
+            z_noisy, _ = diffusion.add_noise(z, tau)
+            z_target = z  # X-prediction: predict clean from noisy
 
             # Forward through dynamics with agent tokens
-            z_pred, agent_out = dynamics(z_noisy, tau, step_size=step_size)
+            z_pred, agent_out = dynamics(z_noisy, tau)
 
             # Dynamics loss (x-prediction)
             dynamics_loss = F.mse_loss(z_pred, z_target)
@@ -529,8 +599,8 @@ def main():
     print(f"Reward head parameters: {sum(p.numel() for p in reward_head.parameters()):,}")
     print(f"Policy head parameters: {sum(p.numel() for p in policy_head.parameters()):,}")
 
-    # Create shortcut forcing
-    shortcut = ShortcutForcing(k_max=128).to(args.device)
+    # Create diffusion schedule for noise
+    diffusion = DiffusionSchedule(device=args.device)
 
     # Create dataset and dataloader
     if args.latents_dir:
@@ -544,20 +614,25 @@ def main():
         features_dir=args.features_dir,
     )
 
-    # Create sampler for 50/50 reward mixture (DreamerV4 strategy)
+    # Create sampler - reward mixture (default) or video shuffle
     sampler = None
-    shuffle = True
-    if args.use_reward_mixture and dataset.use_latents and dataset.latent_dataset is not None:
-        print("\nCreating 50/50 reward mixture sampler...")
-        sampler = RewardMixtureSampler(dataset.latent_dataset)
-        shuffle = False  # Sampler handles shuffling
+    shuffle = False  # Always use sampler, not shuffle
+    if dataset.use_latents and dataset.latent_dataset is not None:
+        if args.use_reward_mixture:
+            # Use 50/50 reward mixture sampler (DreamerV4 paper default)
+            print("\nCreating 50/50 reward mixture sampler...")
+            sampler = RewardMixtureSampler(dataset.latent_dataset)
+        else:
+            # Use video shuffle sampler for cache efficiency
+            print("\nCreating video shuffle sampler...")
+            sampler = VideoShuffleSampler(dataset.latent_dataset, filter_empty_rewards=True)
 
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
         shuffle=shuffle,
         sampler=sampler,
-        num_workers=4,
+        num_workers=0,  # Reduced from 4 to avoid OOM
         pin_memory=True,
     )
 
@@ -595,7 +670,7 @@ def main():
             reward_head=reward_head,
             policy_head=policy_head,
             tokenizer=tokenizer,
-            shortcut=shortcut,
+            diffusion=diffusion,
             dataloader=dataloader,
             optimizer=optimizer,
             scaler=scaler,

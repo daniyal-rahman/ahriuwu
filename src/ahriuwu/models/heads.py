@@ -58,9 +58,10 @@ class RewardHead(nn.Module):
             nn.Linear(hidden_dim, num_buckets) for _ in range(mtp_length)
         ])
 
-        # Initialize output weights to zero (paper recommendation)
+        # Initialize output weights to small values for stable start
+        # Note: True zero init breaks gradient flow! Use small values instead.
         for head in self.heads:
-            nn.init.zeros_(head.weight)
+            nn.init.normal_(head.weight, std=0.01)
             nn.init.zeros_(head.bias)
 
         # Register bucket centers as buffer
