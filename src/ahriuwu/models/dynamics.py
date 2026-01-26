@@ -19,6 +19,7 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .diffusion import TimestepEmbedding
 
@@ -805,6 +806,8 @@ class DynamicsTransformer(nn.Module):
         agent_layers: int = 4,  # Number of agent token processing layers
         # Action conditioning
         use_actions: bool = False,
+        # Memory efficiency
+        gradient_checkpointing: bool = False,
     ):
         """Initialize dynamics transformer.
 
@@ -826,6 +829,7 @@ class DynamicsTransformer(nn.Module):
             num_tasks: Number of tasks for multi-task conditioning
             agent_layers: Number of agent token processing layers
             use_actions: Enable action conditioning with factorized embeddings
+            gradient_checkpointing: Use gradient checkpointing to save memory (~2x reduction)
         """
         super().__init__()
         self.latent_dim = latent_dim
@@ -839,6 +843,7 @@ class DynamicsTransformer(nn.Module):
         self.num_register_tokens = num_register_tokens
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
+        self.gradient_checkpointing = gradient_checkpointing
 
         # Total spatial tokens including registers
         self.total_spatial_tokens = self.spatial_tokens + num_register_tokens
@@ -1039,7 +1044,16 @@ class DynamicsTransformer(nn.Module):
 
         # Transformer blocks (z tokens + registers - agent tokens processed separately)
         for block in self.blocks:
-            x = block(x, time_emb, independent_frames=independent_frames)
+            if self.gradient_checkpointing and self.training:
+                # Use gradient checkpointing to save memory during training
+                # Need to wrap the forward call in a function for checkpoint
+                x = checkpoint(
+                    block,
+                    x, time_emb, independent_frames,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(x, time_emb, independent_frames=independent_frames)
 
         # Strip register tokens before output projection
         if self.register_tokens is not None:
@@ -1070,7 +1084,14 @@ class DynamicsTransformer(nn.Module):
             # Process through agent blocks
             # Agent tokens attend to z tokens (x includes registers), but z tokens don't see agent tokens
             for agent_block in self.agent_blocks:
-                agent_tokens = agent_block(agent_tokens, x)
+                if self.gradient_checkpointing and self.training:
+                    agent_tokens = checkpoint(
+                        agent_block,
+                        agent_tokens, x,
+                        use_reentrant=False,
+                    )
+                else:
+                    agent_tokens = agent_block(agent_tokens, x)
 
             # Output normalization
             agent_out = self.agent_norm_out(agent_tokens)
@@ -1096,6 +1117,8 @@ def create_dynamics(
     soft_cap: float | None = 50.0,
     num_register_tokens: int = 8,
     num_kv_heads: int | None = None,
+    # Memory efficiency
+    gradient_checkpointing: bool = False,
 ) -> DynamicsTransformer:
     """Create dynamics model with preset sizes.
 
@@ -1110,6 +1133,7 @@ def create_dynamics(
         soft_cap: Soft cap value for attention logits (None = no capping)
         num_register_tokens: Number of register tokens (0 = disabled)
         num_kv_heads: Number of KV heads for GQA (None = MHA, same as num_heads)
+        gradient_checkpointing: Use gradient checkpointing to save memory (~2x reduction)
 
     Returns:
         DynamicsTransformer instance
@@ -1150,6 +1174,7 @@ def create_dynamics(
         soft_cap=soft_cap,
         num_register_tokens=num_register_tokens,
         num_kv_heads=num_kv_heads,
+        gradient_checkpointing=gradient_checkpointing,
         **configs[size],
     )
 

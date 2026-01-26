@@ -726,6 +726,7 @@ def main():
         soft_cap=args.soft_cap if args.soft_cap > 0 else None,
         num_register_tokens=args.num_register_tokens,
         num_kv_heads=args.num_kv_heads,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
     model = model.to(args.device)
     num_params = model.get_num_params()
@@ -739,16 +740,11 @@ def main():
     print(f"Register tokens: {args.num_register_tokens}")
     if args.num_kv_heads:
         print(f"GQA: {args.num_kv_heads} KV heads")
+    print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
     print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
 
     # Save run configuration
     save_run_config(checkpoint_dir, args, num_params)
-
-    # Enable gradient checkpointing for memory efficiency
-    if args.gradient_checkpointing:
-        # Note: Would need to modify model for true gradient checkpointing
-        # For now, just enable torch.utils.checkpoint for attention layers
-        print("Gradient checkpointing enabled")
 
     # Create optimizer
     optimizer = torch.optim.AdamW(

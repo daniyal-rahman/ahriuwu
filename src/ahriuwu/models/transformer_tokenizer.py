@@ -14,6 +14,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
@@ -482,6 +483,7 @@ class TransformerEncoder(nn.Module):
         use_rope: bool = False,
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        gradient_checkpointing: bool = False,
     ):
         """Initialize transformer encoder.
 
@@ -496,6 +498,7 @@ class TransformerEncoder(nn.Module):
             use_rope: Use rotary position embeddings
             use_qk_norm: Whether to use QK normalization
             soft_cap: Soft cap value for attention logits
+            gradient_checkpointing: Use gradient checkpointing to save memory
         """
         super().__init__()
         self.embed_dim = embed_dim
@@ -503,6 +506,7 @@ class TransformerEncoder(nn.Module):
         self.num_latents = num_latents
         self.use_sincos_pos = use_sincos_pos
         self.use_rope = use_rope
+        self.gradient_checkpointing = gradient_checkpointing
         self.grid_size = int(math.sqrt(num_patches))
 
         # Learned latent tokens (one set, repeated per frame)
@@ -606,7 +610,15 @@ class TransformerEncoder(nn.Module):
 
         # Apply transformer blocks
         for block in self.blocks:
-            x = block(x, mask, self.rope, rope_indices)
+            if self.gradient_checkpointing and self.training:
+                # Use gradient checkpointing to save memory during training
+                x = checkpoint(
+                    block,
+                    x, mask, self.rope, rope_indices,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(x, mask, self.rope, rope_indices)
 
         x = self.norm(x)
 
@@ -638,6 +650,7 @@ class TransformerDecoder(nn.Module):
         use_rope: bool = False,
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        gradient_checkpointing: bool = False,
     ):
         """Initialize transformer decoder.
 
@@ -652,6 +665,7 @@ class TransformerDecoder(nn.Module):
             use_rope: Use rotary position embeddings
             use_qk_norm: Whether to use QK normalization
             soft_cap: Soft cap value for attention logits
+            gradient_checkpointing: Use gradient checkpointing to save memory
         """
         super().__init__()
         self.embed_dim = embed_dim
@@ -659,6 +673,7 @@ class TransformerDecoder(nn.Module):
         self.num_latents = num_latents
         self.use_sincos_pos = use_sincos_pos
         self.use_rope = use_rope
+        self.gradient_checkpointing = gradient_checkpointing
         self.grid_size = int(math.sqrt(num_patches))
 
         # Fresh learned patch queries (NOT from encoder)
@@ -747,7 +762,15 @@ class TransformerDecoder(nn.Module):
 
         # Apply transformer blocks
         for block in self.blocks:
-            x = block(x, mask, self.rope, rope_indices)
+            if self.gradient_checkpointing and self.training:
+                # Use gradient checkpointing to save memory during training
+                x = checkpoint(
+                    block,
+                    x, mask, self.rope, rope_indices,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(x, mask, self.rope, rope_indices)
 
         x = self.norm(x)
 
@@ -928,6 +951,7 @@ class TransformerTokenizer(nn.Module):
         use_rope: bool = False,
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        gradient_checkpointing: bool = False,
     ):
         """Initialize transformer tokenizer.
 
@@ -945,6 +969,7 @@ class TransformerTokenizer(nn.Module):
             use_rope: Use rotary position embeddings
             use_qk_norm: Whether to use QK normalization
             soft_cap: Soft cap value for attention logits
+            gradient_checkpointing: Use gradient checkpointing to save memory
         """
         super().__init__()
         self.img_size = img_size
@@ -955,21 +980,22 @@ class TransformerTokenizer(nn.Module):
         self.num_latents = num_latents
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
+        self.gradient_checkpointing = gradient_checkpointing
 
         # Patch embedding and unembedding
         self.patch_embed = PatchEmbed(img_size, patch_size, 3, embed_dim)
         self.patch_unembed = PatchUnembed(img_size, patch_size, 3, embed_dim)
 
-        # Encoder and decoder with QKNorm and soft capping
+        # Encoder and decoder with QKNorm, soft capping, and gradient checkpointing
         self.encoder = TransformerEncoder(
             embed_dim, num_heads, num_encoder_layers,
             self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
-            use_qk_norm, soft_cap
+            use_qk_norm, soft_cap, gradient_checkpointing
         )
         self.decoder = TransformerDecoder(
             embed_dim, num_heads, num_decoder_layers,
             self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
-            use_qk_norm, soft_cap
+            use_qk_norm, soft_cap, gradient_checkpointing
         )
 
         # Bottleneck (encoder latents → compact form for dynamics)
@@ -1116,6 +1142,7 @@ def create_transformer_tokenizer(
     use_rope: bool = False,
     use_qk_norm: bool = True,
     soft_cap: float | None = 50.0,
+    gradient_checkpointing: bool = False,
 ) -> TransformerTokenizer:
     """Create transformer tokenizer with preset sizes.
 
@@ -1124,6 +1151,7 @@ def create_transformer_tokenizer(
         use_rope: If True, use RoPE for position encoding instead of additive embeddings
         use_qk_norm: Whether to use QK normalization for attention stability
         soft_cap: Soft cap value for attention logits (None = no capping)
+        gradient_checkpointing: Use gradient checkpointing to save memory (~2x reduction)
 
     Returns:
         TransformerTokenizer instance
@@ -1171,6 +1199,7 @@ def create_transformer_tokenizer(
         use_rope=use_rope,
         use_qk_norm=use_qk_norm,
         soft_cap=soft_cap,
+        gradient_checkpointing=gradient_checkpointing,
     )
 
 

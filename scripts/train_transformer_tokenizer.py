@@ -149,6 +149,11 @@ def parse_args():
         action="store_true",
         help="Use RoPE (Rotary Position Embeddings) instead of additive position embeddings",
     )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action="store_true",
+        help="Use gradient checkpointing for memory efficiency (recommended for batch>2 or model>100M)",
+    )
     return parser.parse_args()
 
 
@@ -399,9 +404,14 @@ def main():
     )
 
     # Create model
-    model = create_transformer_tokenizer(args.model_size, use_rope=args.use_rope)
+    model = create_transformer_tokenizer(
+        args.model_size,
+        use_rope=args.use_rope,
+        gradient_checkpointing=args.gradient_checkpointing,
+    )
     model = model.to(args.device)
     print(f"Model parameters: {model.get_num_params():,}")
+    print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
 
     # Create loss function
     loss_fn = MAELoss(mse_weight=1.0, lpips_weight=args.lpips_weight)

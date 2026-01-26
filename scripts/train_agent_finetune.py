@@ -199,6 +199,12 @@ def parse_args():
         choices=["cnn", "transformer"],
         help="Type of tokenizer (cnn or transformer)",
     )
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action="store_true",
+        default=True,
+        help="Use gradient checkpointing for memory efficiency (default: enabled)",
+    )
     return parser.parse_args()
 
 
@@ -354,6 +360,7 @@ def load_pretrained_dynamics(
     soft_cap: float | None = 50.0,
     num_register_tokens: int = 8,
     num_kv_heads: int | None = None,
+    gradient_checkpointing: bool = True,
 ):
     """Load pretrained dynamics and upgrade to use agent tokens."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -373,6 +380,7 @@ def load_pretrained_dynamics(
         soft_cap=soft_cap,
         num_register_tokens=num_register_tokens,
         num_kv_heads=num_kv_heads,
+        gradient_checkpointing=gradient_checkpointing,
     )
 
     # Load pretrained weights (excluding new agent token components)
@@ -671,9 +679,11 @@ def main():
         soft_cap=args.soft_cap if args.soft_cap > 0 else None,
         num_register_tokens=args.num_register_tokens,
         num_kv_heads=args.num_kv_heads,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
     print(f"Dynamics loaded from {args.dynamics_checkpoint}")
     print(f"  Total parameters: {dynamics.get_num_params():,}")
+    print(f"  Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
 
     # Get model dimension from dynamics
     model_dim = dynamics.model_dim
