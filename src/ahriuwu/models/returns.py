@@ -239,6 +239,16 @@ class RunningRMS:
 
         return value / (torch.sqrt(self.rms) + 1e-8)
 
+    def state_dict(self) -> dict:
+        """Return serializable state."""
+        return {"rms": self.rms.item() if self.rms is not None else None, "decay": self.decay}
+
+    def load_state_dict(self, state: dict):
+        """Restore from serialized state."""
+        self.decay = state.get("decay", self.decay)
+        rms_val = state.get("rms")
+        self.rms = torch.tensor(rms_val) if rms_val is not None else None
+
 
 def normalize_losses(losses: dict[str, torch.Tensor], rms_dict: dict[str, RunningRMS]) -> torch.Tensor:
     """Normalize and sum multiple losses.

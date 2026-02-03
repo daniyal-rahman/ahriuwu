@@ -239,8 +239,9 @@ class ValueHead(nn.Module):
             nn.Linear(hidden_dim, num_buckets),
         )
 
-        # Initialize output weights to zero (paper recommendation)
-        nn.init.zeros_(self.mlp[-1].weight)
+        # Initialize output weights to small values for stable start
+        # Note: True zero init breaks gradient flow! Use small values instead.
+        nn.init.normal_(self.mlp[-1].weight, std=0.01)
         nn.init.zeros_(self.mlp[-1].bias)
 
         # Register bucket centers as buffer

@@ -21,6 +21,7 @@ Reference: DreamerV4 Section 3.3 "Behavior cloning and reward model"
 
 import argparse
 import json
+import random
 import time
 from datetime import datetime
 from pathlib import Path
@@ -493,8 +494,12 @@ def train_epoch(
             z_noisy, _ = diffusion.add_noise(z, tau)
             z_target = z  # X-prediction: predict clean from noisy
 
+            # Independent frame mode: 30% of batches disable temporal attention
+            # to prevent temporal shortcut learning (DreamerV4 Section 3.2)
+            use_independent = random.random() < args.independent_frame_ratio
+
             # Forward through dynamics with agent tokens
-            z_pred, agent_out = dynamics(z_noisy, tau)
+            z_pred, agent_out = dynamics(z_noisy, tau, independent_frames=use_independent)
 
             # Dynamics loss (x-prediction)
             dynamics_loss = F.mse_loss(z_pred, z_target)
@@ -616,6 +621,7 @@ def save_checkpoint(
     policy_head: nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    rms_trackers: dict,
     epoch: int,
     metrics: dict,
     args: argparse.Namespace,
@@ -628,6 +634,7 @@ def save_checkpoint(
         "policy_head_state_dict": policy_head.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+        "rms_state": {k: v.state_dict() for k, v in rms_trackers.items()},
         "epoch": epoch,
         "metrics": metrics,
         "args": vars(args),
@@ -802,14 +809,14 @@ def main():
             checkpoint_path = checkpoint_dir / f"agent_finetune_epoch_{epoch + 1:03d}.pt"
             save_checkpoint(
                 dynamics, reward_head, policy_head,
-                optimizer, scaler, epoch, metrics, args, checkpoint_path
+                optimizer, scaler, rms_trackers, epoch, metrics, args, checkpoint_path
             )
 
             # Also save as latest
             latest_path = checkpoint_dir / "agent_finetune_latest.pt"
             save_checkpoint(
                 dynamics, reward_head, policy_head,
-                optimizer, scaler, epoch, metrics, args, latest_path
+                optimizer, scaler, rms_trackers, epoch, metrics, args, latest_path
             )
 
     # Save training history

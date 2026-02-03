@@ -191,7 +191,8 @@ def load_tokenizer(checkpoint_path: Path, device: str):
             print("Detected RoPE in checkpoint")
 
         model = create_transformer_tokenizer(model_size, use_rope=has_rope)
-        model.load_state_dict(checkpoint["model_state_dict"])
+        # Use strict=False to handle architecture changes (e.g., qk_norm added later)
+        model.load_state_dict(checkpoint["model_state_dict"], strict=False)
         latent_dim = model.latent_dim
 
     model = model.to(device)
