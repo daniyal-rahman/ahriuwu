@@ -53,7 +53,11 @@ REQUEST_DELAY = 1.3  # seconds between requests (dev key: 100 req / 2 min)
 
 def api_get(url: str, api_key: str, retries: int = 3) -> dict | list:
     """Make a GET request to the Riot API with rate limit handling."""
-    req = Request(url, headers={"X-Riot-Token": api_key})
+    req = Request(url, headers={
+        "X-Riot-Token": api_key,
+        "User-Agent": "ahriuwu-replay-finder/1.0",
+        "Accept": "application/json",
+    })
     for attempt in range(retries):
         try:
             with urlopen(req) as resp:
@@ -63,6 +67,14 @@ def api_get(url: str, api_key: str, retries: int = 3) -> dict | list:
                 retry_after = int(e.headers.get("Retry-After", 10))
                 print(f"  Rate limited, waiting {retry_after}s...")
                 time.sleep(retry_after + 1)
+            elif e.code == 401:
+                print(f"  HTTP 401: API key is invalid or expired.")
+                print(f"  Regenerate at https://developer.riotgames.com/")
+                sys.exit(1)
+            elif e.code == 403:
+                print(f"  HTTP 403: Forbidden. Key may lack permissions or be expired.")
+                print(f"  Regenerate at https://developer.riotgames.com/")
+                sys.exit(1)
             elif e.code == 404:
                 return None
             else:

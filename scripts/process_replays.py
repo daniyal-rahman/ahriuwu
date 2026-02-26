@@ -257,90 +257,69 @@ def _send_key(vk_code: int, ctrl: bool = False):
 # ---------------------------------------------------------------------------
 
 def parse_rofl_metadata(rofl_path: str) -> dict | None:
-    """Parse ROFL file header to extract game metadata (players, champions, etc.).
+    """Parse ROFL file to extract game metadata (players, champions, etc.).
 
-    ROFL2 format:
-    - 6 bytes: magic "ROFL2\\0" or "RIOT\\0\\0"
-    - Variable header with JSON metadata
-    - Compressed game data chunks
+    The metadata JSON (containing gameLength, statsJson with player stats)
+    is located near the END of the .rofl file, not the beginning.
 
     Returns dict with 'players' list (each has 'champion', 'name', 'team', 'slot').
     """
     with open(rofl_path, "rb") as f:
-        magic = f.read(6)
+        data = f.read()
 
-        if magic[:4] == b"RIOT":
-            # ROFL v1 format
-            f.seek(0)
-            header = f.read(4096)
-        elif magic[:5] == b"ROFL2":
-            # ROFL v2 format
-            f.seek(0)
-            header = f.read(8192)
-        else:
-            print(f"  Unknown ROFL magic: {magic!r}")
-            return None
-
-    # Find JSON metadata in the header
-    # Look for the start of a JSON object containing player info
-    raw = header.decode("latin-1")
-    json_start = raw.find('{"')
-    if json_start < 0:
-        # Try finding statsJson or similar embedded JSON
-        json_start = raw.find("[{")
-    if json_start < 0:
-        print(f"  Could not find JSON metadata in ROFL header")
+    # Verify magic
+    if data[:4] != b"RIOT":
+        print(f"  Not a RIOT replay file (magic: {data[:6]!r})")
         return None
 
-    # Extract JSON (find matching bracket)
+    # Find metadata JSON near end of file (starts with {"gameLength)
+    json_start = data.find(b'{"gameLength')
+    if json_start < 0:
+        print(f"  Could not find metadata JSON in ROFL file")
+        return None
+
+    # Find matching closing brace
     depth = 0
     json_end = json_start
-    bracket_char = raw[json_start]
-    close_char = "}" if bracket_char == "{" else "]"
-    for i in range(json_start, len(raw)):
-        if raw[i] == bracket_char:
+    for i in range(json_start, len(data)):
+        if data[i:i + 1] == b"{":
             depth += 1
-        elif raw[i] == close_char:
+        elif data[i:i + 1] == b"}":
             depth -= 1
             if depth == 0:
                 json_end = i + 1
                 break
 
     try:
-        metadata = json.loads(raw[json_start:json_end])
+        meta = json.loads(data[json_start:json_end])
     except json.JSONDecodeError as e:
         print(f"  Failed to parse ROFL JSON metadata: {e}")
         return None
 
-    # Extract player info
-    # The metadata format varies but typically has statsJson with player data
+    # Parse statsJson (embedded JSON string with player stats)
+    stats_raw = meta.get("statsJson", "[]")
+    if isinstance(stats_raw, str):
+        stats = json.loads(stats_raw)
+    else:
+        stats = stats_raw
+
     players = []
-    if isinstance(metadata, list):
-        # statsJson format: list of player stats objects
-        for i, p in enumerate(metadata):
-            players.append({
-                "slot": i,
-                "name": p.get("NAME", p.get("SKIN", "?")),
-                "champion": p.get("SKIN", p.get("NAME", "?")),
-                "team": "blue" if i < 5 else "red",
-            })
-    elif isinstance(metadata, dict):
-        # Top-level metadata format
-        stats = metadata.get("statsJson", metadata.get("players", []))
-        if isinstance(stats, str):
-            stats = json.loads(stats)
-        if isinstance(stats, list):
-            for i, p in enumerate(stats):
-                players.append({
-                    "slot": i,
-                    "name": p.get("NAME", p.get("summonerName", "?")),
-                    "champion": p.get("SKIN", p.get("championName", "?")),
-                    "team": "blue" if i < 5 else "red",
-                })
+    for i, p in enumerate(stats):
+        players.append({
+            "slot": i,
+            "name": p.get("NAME", p.get("SKIN", "?")),
+            "champion": p.get("SKIN", p.get("NAME", "?")),
+            "team": "blue" if p.get("TEAM", str(100 if i < 5 else 200)) == "100"
+                          or (isinstance(p.get("TEAM"), int) and p["TEAM"] == 100)
+                    else "red",
+            "position": p.get("INDIVIDUAL_POSITION", "?"),
+            "win": p.get("WIN", "?"),
+        })
 
     return {
         "players": players,
-        "raw": metadata,
+        "game_length_ms": meta.get("gameLength"),
+        "raw": meta,
     }
 
 
@@ -656,6 +635,8 @@ def generate_action_labels(movements: list[dict], projection_path: str) -> list[
 # ---------------------------------------------------------------------------
 
 def main():
+    global RECORD_FPS, REPLAY_SPEED  # noqa: PLW0603
+
     parser = argparse.ArgumentParser(description="Automated replay processing pipeline")
 
     input_group = parser.add_mutually_exclusive_group(required=True)
@@ -678,8 +659,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Override globals from args
-    global RECORD_FPS, REPLAY_SPEED
+    # Apply CLI overrides to module constants
     RECORD_FPS = args.record_fps
     REPLAY_SPEED = args.replay_speed
 
