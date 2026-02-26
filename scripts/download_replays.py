@@ -47,24 +47,26 @@ PLATFORM_TO_REGION = {
 GAREN_CHAMPION_ID = 86
 GAREN_CHAMPION_NAME = "Garen"
 
-# Rate limiting
-REQUEST_DELAY = 1.3  # seconds between requests (dev key: 100 req / 2 min)
+# Rate limiting — dev key: 20 req/s, 100 req/2min
+REQUEST_DELAY = 1.5  # seconds between requests (conservative for 100/2min)
 
 
-def api_get(url: str, api_key: str, retries: int = 3) -> dict | list:
+def api_get(url: str, api_key: str, retries: int = 5) -> dict | list:
     """Make a GET request to the Riot API with rate limit handling."""
-    req = Request(url, headers={
-        "X-Riot-Token": api_key,
-        "User-Agent": "ahriuwu-replay-finder/1.0",
-        "Accept": "application/json",
-    })
     for attempt in range(retries):
         try:
-            with urlopen(req) as resp:
-                return json.loads(resp.read())
+            req = Request(url, headers={
+                "X-Riot-Token": api_key,
+                "User-Agent": "ahriuwu-replay-finder/1.0",
+                "Accept": "application/json",
+            })
+            with urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read())
+            time.sleep(REQUEST_DELAY)
+            return data
         except HTTPError as e:
             if e.code == 429:
-                retry_after = int(e.headers.get("Retry-After", 10))
+                retry_after = int(e.headers.get("Retry-After", 30))
                 print(f"  Rate limited, waiting {retry_after}s...")
                 time.sleep(retry_after + 1)
             elif e.code == 401:
@@ -83,7 +85,10 @@ def api_get(url: str, api_key: str, retries: int = 3) -> dict | list:
                     time.sleep(2 ** attempt)
                 else:
                     raise
-        time.sleep(REQUEST_DELAY)
+        except (ConnectionResetError, ConnectionError, OSError, TimeoutError) as e:
+            wait = 5 * (attempt + 1)
+            print(f"  Connection error: {e} — retrying in {wait}s (attempt {attempt + 1}/{retries})")
+            time.sleep(wait)
     return None
 
 
@@ -160,18 +165,20 @@ def find_garen_matches(platform: str, api_key: str, max_players: int = 50,
     players_with_garen = 0
 
     for i, player in enumerate(players):
-        summoner_id = player["summonerId"]
-        name = player.get("summonerName", "?")
+        puuid = player.get("puuid")
         tier = player.get("tier", "?")
         lp = player.get("leaguePoints", 0)
 
-        print(f"\n[{i+1}/{len(players)}] {name} ({tier} {lp}LP)")
-
-        # Get PUUID
-        puuid = get_puuid(platform, summoner_id, api_key)
         if not puuid:
-            print(f"  Could not get PUUID, skipping")
-            continue
+            # Fallback: old API format with summonerId
+            summoner_id = player.get("summonerId")
+            if summoner_id:
+                puuid = get_puuid(platform, summoner_id, api_key)
+            if not puuid:
+                print(f"\n[{i+1}/{len(players)}] ??? ({tier} {lp}LP) — no PUUID, skipping")
+                continue
+
+        print(f"\n[{i+1}/{len(players)}] {tier} {lp}LP")
 
         # Get recent matches
         match_ids = get_match_ids(region, puuid, api_key, count=matches_per_player)
