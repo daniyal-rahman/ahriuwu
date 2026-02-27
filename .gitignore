@@ -69,3 +69,9 @@ tests/fixtures/large/
 
 # EasyOCR models (will be downloaded)
 ~/.EasyOCR/
+
+# Claude Code
+CLAUDE.md
+
+# Slurm
+slurm-*.out
