@@ -37,10 +37,8 @@ env/
 .ipynb_checkpoints/
 
 # Data files (large)
-data/raw/
-data/processed/
-data/videos/
-data/frames/
+data/*
+!data/samples/
 *.mp4
 *.mkv
 *.avi
