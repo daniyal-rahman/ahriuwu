@@ -38,6 +38,7 @@ from ahriuwu.models import (
     DiffusionSchedule,
     x_prediction_loss,
     ShortcutForcing,
+    RunningRMS,
 )
 
 
@@ -85,6 +86,7 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
             "gradient_checkpointing": args.gradient_checkpointing,
             "shortcut_forcing": args.shortcut_forcing,
             "independent_frame_ratio": args.independent_frame_ratio,
+            "gradient_accumulation": args.gradient_accumulation,
         },
         "data": {
             "latents_dir": str(args.latents_dir),
@@ -329,6 +331,12 @@ def parse_args():
         default=0.3,
         help="Ratio of batches using independent frame mode (no temporal attention)",
     )
+    parser.add_argument(
+        "--gradient-accumulation",
+        type=int,
+        default=1,
+        help="Number of batches to accumulate gradients over before stepping",
+    )
     return parser.parse_args()
 
 
@@ -341,6 +349,7 @@ def save_checkpoint(
     loss: float,
     args: argparse.Namespace,
     path: Path,
+    rms_dict: dict[str, RunningRMS] | None = None,
 ):
     """Save training checkpoint."""
     checkpoint_data = {
@@ -352,6 +361,8 @@ def save_checkpoint(
         "loss": loss,
         "args": vars(args),
     }
+    if rms_dict is not None:
+        checkpoint_data["rms_state"] = {k: v.state_dict() for k, v in rms_dict.items()}
     torch.save(checkpoint_data, path)
     print(f"Saved checkpoint to {path}")
 
@@ -361,6 +372,7 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    rms_dict: dict[str, RunningRMS] | None = None,
 ):
     """Load training checkpoint."""
     checkpoint_data = torch.load(path, map_location="cpu")
@@ -374,6 +386,14 @@ def load_checkpoint(
 
     optimizer.load_state_dict(checkpoint_data["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint_data["scaler_state_dict"])
+
+    # Restore RMS state if available
+    if rms_dict is not None and "rms_state" in checkpoint_data:
+        for k, v in checkpoint_data["rms_state"].items():
+            if k in rms_dict:
+                rms_dict[k].load_state_dict(v)
+        print(f"Restored RunningRMS state for: {list(checkpoint_data['rms_state'].keys())}")
+
     return (
         checkpoint_data["epoch"],
         checkpoint_data["global_step"],
@@ -397,6 +417,8 @@ def train_epoch(
     dataloader_long: DataLoader | None = None,
     use_actions: bool = False,
     independent_frame_ratio: float = 0.3,
+    rms_dict: dict[str, RunningRMS] | None = None,
+    accumulation_steps: int = 1,
 ):
     """Train for one epoch.
 
@@ -425,6 +447,7 @@ def train_epoch(
         alternating = True
 
     batch_idx = 0
+    optimizer.zero_grad()
     while True:
         # Get next batch
         try:
@@ -461,8 +484,6 @@ def train_epoch(
         if use_actions and "actions" in batch and batch["actions"] is not None:
             actions = {k: v.to(device) for k, v in batch["actions"].items()}
 
-        optimizer.zero_grad()
-
         # Sample per-timestep noise levels (diffusion forcing)
         # This creates temporal causality: clean past → noisy future
         tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
@@ -479,25 +500,55 @@ def train_epoch(
             if shortcut is not None:
                 # Shortcut forcing: sample step sizes and use bootstrap loss
                 step_size = shortcut.sample_step_size(B, device=device)
-                loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
+                raw_loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
+                # Normalize via RunningRMS (loss_info values are floats from .item())
+                # Update component trackers, then normalize the combined loss tensor
+                if rms_dict is not None:
+                    loss_std_t = torch.tensor(loss_info["loss_std"], device=device)
+                    loss_boot_t = torch.tensor(loss_info["loss_boot"], device=device)
+                    rms_dict["std"].update(loss_std_t)
+                    rms_dict["boot"].update(loss_boot_t)
+                    # Weighted RMS scale from component trackers (detached, preserves grad graph)
+                    n_std, n_boot = loss_info["n_std"], loss_info["n_boot"]
+                    total = max(n_std + n_boot, 1)
+                    rms_scale = torch.sqrt(
+                        (n_std * rms_dict["std"].rms + n_boot * rms_dict["boot"].rms) / total
+                    ) + 1e-8
+                    loss = raw_loss / rms_scale
+                else:
+                    loss = raw_loss
+                raw_loss_val = raw_loss.item()
             else:
                 # Standard training: predict clean latents
                 z_pred = model(z_tau, tau, actions=actions, independent_frames=use_independent)
-                loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+                raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+                # Normalize via RunningRMS
+                if rms_dict is not None:
+                    loss = rms_dict["x_pred"].update(raw_loss)
+                else:
+                    loss = raw_loss
+                raw_loss_val = raw_loss.item()
 
-        # Backward with scaling
-        scaler.scale(loss).backward()
+        # Scale loss for gradient accumulation and backward
+        scaled_loss = loss / accumulation_steps
+        scaler.scale(scaled_loss).backward()
 
-        # Gradient clipping and track grad norm
-        scaler.unscale_(optimizer)
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        # Step optimizer every accumulation_steps batches
+        if (batch_idx + 1) % accumulation_steps == 0:
+            scaler.unscale_(optimizer)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+            did_step = True
+        else:
+            grad_norm = torch.tensor(0.0)
+            did_step = False
 
-        scaler.step(optimizer)
-        scaler.update()
-
-        # Track metrics
-        total_loss += loss.item()
-        total_grad_norm += grad_norm.item() if torch.isfinite(grad_norm) else 0.0
+        # Track metrics (use raw unscaled loss)
+        total_loss += raw_loss_val
+        if did_step:
+            total_grad_norm += grad_norm.item() if torch.isfinite(grad_norm) else 0.0
         num_batches += 1
         global_step += 1
 
@@ -526,17 +577,18 @@ def train_epoch(
                 progress = f"Epoch {epoch} [{batch_idx}/{total_batches}]"
 
             # Compute running averages
-            avg_grad_norm = total_grad_norm / num_batches if num_batches > 0 else 0
+            num_steps = max(1, sum(1 for i in range(batch_idx + 1) if (i + 1) % accumulation_steps == 0))
+            avg_grad_norm = total_grad_norm / num_steps
             pred_std_samples = (batch_idx // 10) + 1
             avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0
 
             # Warning flags
             warnings = []
-            if loss.item() > 1.0:
+            if raw_loss_val > 1.0:
                 warnings.append("HIGH_LOSS")
-            if grad_norm.item() > 0.99:  # Near clip threshold
+            if did_step and grad_norm.item() > 0.99:  # Near clip threshold
                 warnings.append("GRAD_CLIP")
-            if not torch.isfinite(torch.tensor(loss.item())):
+            if not torch.isfinite(torch.tensor(raw_loss_val)):
                 warnings.append("NAN/INF")
             warning_str = f" ⚠️  {' '.join(warnings)}" if warnings else ""
 
@@ -544,7 +596,7 @@ def train_epoch(
                 # Show shortcut forcing info
                 print(
                     f"{progress} "
-                    f"Loss: {loss.item():.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
+                    f"Loss: {raw_loss_val:.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
                     f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
                     f"GradN: {grad_norm.item():.3f} "
                     f"({batches_per_sec:.1f} batch/s){warning_str}"
@@ -552,7 +604,7 @@ def train_epoch(
             else:
                 print(
                     f"{progress} "
-                    f"Loss: {loss.item():.4f} "
+                    f"Loss: {raw_loss_val:.4f} "
                     f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
                     f"GradN: {grad_norm.item():.3f} "
                     f"PredStd: {pred_std:.4f} "
@@ -564,19 +616,28 @@ def train_epoch(
             step_path = checkpoint_dir / f"dynamics_step_{global_step:07d}.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                loss.item(), args, step_path
+                raw_loss_val, args, step_path, rms_dict=rms_dict
             )
             # Also update latest
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                loss.item(), args, latest_path
+                raw_loss_val, args, latest_path, rms_dict=rms_dict
             )
 
         batch_idx += 1
 
+    # Flush remaining accumulated gradients at end of epoch
+    if batch_idx % accumulation_steps != 0:
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
+
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    avg_grad_norm = total_grad_norm / num_batches if num_batches > 0 else 0.0
+    num_steps = max(1, (num_batches + accumulation_steps - 1) // accumulation_steps)
+    avg_grad_norm = total_grad_norm / num_steps
     pred_std_samples = (num_batches // 10) + 1
     avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0.0
 
@@ -602,9 +663,16 @@ def main():
         print(f"Alternating lengths: short={args.seq_len_short} (batch={args.batch_size_short}), "
               f"long={args.seq_len_long} (batch={args.batch_size_long})")
         print(f"Long ratio: {args.long_ratio:.0%}")
+        if args.gradient_accumulation > 1:
+            print(f"Gradient accumulation: {args.gradient_accumulation} steps")
+            print(f"Effective batch size: short={args.batch_size_short * args.gradient_accumulation}, "
+                  f"long={args.batch_size_long * args.gradient_accumulation}")
     else:
         print(f"Sequence length: {args.sequence_length}")
         print(f"Batch size: {args.batch_size}")
+        if args.gradient_accumulation > 1:
+            print(f"Gradient accumulation: {args.gradient_accumulation} steps")
+            print(f"Effective batch size: {args.batch_size * args.gradient_accumulation}")
     print(f"Learning rate: {args.lr}")
     print("=" * 60)
 
@@ -766,13 +834,24 @@ def main():
     # Create scaler for mixed precision
     scaler = GradScaler("cuda")
 
+    # RMS trackers for loss normalization
+    if args.shortcut_forcing:
+        rms_dict = {
+            "std": RunningRMS(),
+            "boot": RunningRMS(),
+        }
+    else:
+        rms_dict = {
+            "x_pred": RunningRMS(),
+        }
+
     # Resume if checkpoint provided
     start_epoch = 0
     global_step = 0
     if args.resume:
         print(f"\nResuming from {args.resume}...")
         start_epoch, global_step, _ = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler
+            Path(args.resume), model, optimizer, scaler, rms_dict=rms_dict
         )
         start_epoch += 1
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
@@ -791,6 +870,8 @@ def main():
             epoch, global_step, args, checkpoint_dir, shortcut,
             dataloader_short, dataloader_long, use_actions=args.use_actions,
             independent_frame_ratio=args.independent_frame_ratio,
+            rms_dict=rms_dict,
+            accumulation_steps=args.gradient_accumulation,
         )
 
         global_step = metrics["global_step"]
@@ -815,14 +896,14 @@ def main():
             checkpoint_path = checkpoint_dir / f"dynamics_epoch_{epoch + 1:03d}.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, checkpoint_path
+                metrics["loss"], args, checkpoint_path, rms_dict=rms_dict
             )
 
             # Also save as latest
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, latest_path
+                metrics["loss"], args, latest_path, rms_dict=rms_dict
             )
 
         # Save best model
@@ -831,7 +912,7 @@ def main():
             best_path = checkpoint_dir / "dynamics_best.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, best_path
+                metrics["loss"], args, best_path, rms_dict=rms_dict
             )
             print(f"New best model saved (loss: {best_loss:.4f})")
 

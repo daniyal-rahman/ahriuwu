@@ -24,7 +24,7 @@ from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
 from ahriuwu.data.dataset import SingleFrameDataset
-from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr
+from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
 
 
 def parse_args():
@@ -161,6 +161,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    rms_trackers: dict,
     epoch: int,
     global_step: int,
     loss: float,
@@ -172,6 +173,7 @@ def save_checkpoint(
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+        "rms_state": {k: v.state_dict() for k, v in rms_trackers.items()},
         "epoch": epoch,
         "global_step": global_step,
         "loss": loss,
@@ -182,12 +184,16 @@ def save_checkpoint(
     print(f"Saved checkpoint to {path}")
 
 
-def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, scaler: GradScaler):
+def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, scaler: GradScaler, rms_trackers: dict):
     """Load training checkpoint."""
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint["scaler_state_dict"])
+    if "rms_state" in checkpoint:
+        for k, state in checkpoint["rms_state"].items():
+            if k in rms_trackers:
+                rms_trackers[k].load_state_dict(state)
     return checkpoint["epoch"], checkpoint["global_step"], checkpoint.get("loss", float("inf"))
 
 
@@ -244,6 +250,7 @@ def train_epoch(
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     loss_fn: MAELoss,
+    rms_trackers: dict,
     device: str,
     epoch: int,
     global_step: int,
@@ -283,9 +290,13 @@ def train_epoch(
             recon = output["reconstruction"]
             mask_indices = output.get("mask_indices", None)
 
-            # Compute MAE loss
+            # Compute MAE loss (raw components)
             losses = loss_fn(recon, frames, mask_indices=mask_indices)
-            loss = losses["loss"] / accumulation_steps
+
+            # Normalize MSE and LPIPS separately via RunningRMS
+            mse_norm = rms_trackers["mse"].update(losses["mse"])
+            lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
+            loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
 
         # Backward with scaling
         scaler.scale(loss).backward()
@@ -315,10 +326,10 @@ def train_epoch(
         # Step-based checkpoint saving
         if checkpoint_dir and args.step_save_interval > 0 and global_step % args.step_save_interval == 0:
             step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, step_path)
+            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, losses["loss"].item(), args, step_path)
             # Also save as latest
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, latest_path)
+            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, losses["loss"].item(), args, latest_path)
 
         # Log
         if batch_idx % args.log_interval == 0:
@@ -429,13 +440,19 @@ def main():
     device_type = args.device.split(":")[0]
     scaler = GradScaler(device_type)
 
+    # RMS trackers for loss normalization
+    rms_trackers = {
+        "mse": RunningRMS(),
+        "lpips": RunningRMS(),
+    }
+
     # Resume if checkpoint provided
     start_epoch = 0
     global_step = 0
     if args.resume:
         print(f"Resuming from {args.resume}...")
         start_epoch, global_step, _ = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler
+            Path(args.resume), model, optimizer, scaler, rms_trackers
         )
         start_epoch += 1  # Start from next epoch
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
@@ -450,8 +467,8 @@ def main():
         print("=" * 60)
 
         metrics = train_epoch(
-            model, dataloader, optimizer, scaler, loss_fn, args.device,
-            epoch, global_step, args, checkpoint_dir
+            model, dataloader, optimizer, scaler, loss_fn, rms_trackers,
+            args.device, epoch, global_step, args, checkpoint_dir
         )
 
         global_step = metrics["global_step"]
@@ -471,17 +488,17 @@ def main():
         # Save checkpoint
         if (epoch + 1) % args.save_interval == 0:
             checkpoint_path = checkpoint_dir / f"transformer_tokenizer_epoch_{epoch + 1:03d}.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, metrics["loss"], args, checkpoint_path)
+            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, metrics["loss"], args, checkpoint_path)
 
             # Also save as latest
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, metrics["loss"], args, latest_path)
+            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, metrics["loss"], args, latest_path)
 
         # Save best model
         if metrics["loss"] < best_loss:
             best_loss = metrics["loss"]
             best_path = checkpoint_dir / "transformer_tokenizer_best.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, metrics["loss"], args, best_path)
+            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, metrics["loss"], args, best_path)
             print(f"New best model saved (loss: {best_loss:.4f})")
 
         # Save sample reconstructions
