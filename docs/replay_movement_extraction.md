@@ -1,10 +1,12 @@
 # Replay Movement Data Extraction
 
-## Status: Working decoder built, projection calibration + automation pipeline next
+## Status: 16.4 decoder WORKING (pid=437 confirmed as movement packet)
 
-**Last updated**: 2025-02-20
-**Replay format**: ROFL2 (patch 16.3)
-**Test replay**: NA1-5489605032 (31 min game, cached blocks at `/tmp/rofl_blocks_cache.pkl`)
+**Last updated**: 2026-02-25
+**Replay format**: ROFL2 (patch 16.3 and 16.4)
+**Test replays**:
+- NA1-5489605032 (patch 16.3, 31 min game)
+- NA1-5496350713 (patch 16.4, 15 min game, Garen)
 
 ---
 
@@ -60,6 +62,150 @@ From test replay: **3680 movement updates, 0 errors**
 ### 4. Also found: netid=294 position sync
 ~2.8/s per entity, fields: +0x18=X, +0x1c=Z(?), +0x20=Y. Simpler structure,
 no allocation needed. Can supplement netid=762 for higher-rate position tracking.
+
+### 5. Patch 16.4 reverse engineering (COMPLETE)
+
+Movement netid changed from 762 to **437** between patches (not 872 — that's emote/state data).
+Block format also changed to 9-byte headers.
+
+#### ROFL2 block format (both patches)
+
+Both 16.3 and 16.4 use 9-byte block headers:
+```
+MARKER(1) + CHANNEL(1) + SIZE(1) + PID(2) + PARAM(4) + PAYLOAD(SIZE)
+```
+- Marker bytes: `0x91`, `0xf1`, `0xb1`, `0x31`, `0x11`
+- CHANNEL (byte2): varies — `0x00`, `0x21`, `0x22`, `0x43`, etc.
+- SIZE is 1 byte (max 255)
+- Some frames may use 15-byte headers too (needs investigation for full coverage)
+
+#### netid=437 (0x01B5) — CONFIRMED movement packet
+
+**Identification method**: PID analysis of all hero-entity blocks. pid=437 has:
+- Size profile matching 16.3's pid=762: small=31-34B (position sync), large=127-136B (full movement)
+- Blocks distributed across 7 entities (not all 10 — scanner may miss some)
+- 678 raw pattern hits, 633 after validation
+
+**Constructor** (`0xe2c826`):
+```
+mov word ptr [rcx+8], 0x1B5        ; netid = 437
+lea rax, [rip+...] → 0x193c440    ; sub vtable (overridden)
+mov [rcx], rax
+lea rax, [rip+...] → 0x1a2afe8    ; final vtable
+mov [rcx], rax
+mov qword ptr [rcx+0x10], 0       ; zero struct+0x10
+add rcx, 0x18
+call 0xe2a490                      ; init sub-object at struct+0x18
+```
+
+**Sub-object init** (`0xe2a490`):
+- Sets `struct+0x18 = vtable 0x1a2af90`
+- Zeroes and S-box-encrypts fields at struct+0x20..0x2b (3 floats)
+- Initializes more fields at struct+0x2c, 0x30, 0x34, 0x38
+
+**Top-level deserializer** (`0x1033400`):
+1. Calls SKIP (patched to return 1)
+2. Read bits from payload via bit_reader (`0xee0270`)
+3. First branch:
+   - bit==0: Loop through sub-objects at struct+0x14, struct+0x10, calling `0x1008a90` for each
+     (reads 4 bytes, applies per-byte deobfuscation: ror, xor, bit-shuffle, S-box)
+   - bit==1: Calls memset (`0x18fb880`) for init, then falls through
+4. Second branch:
+   - bit==0: Write default float values to struct+0x20..0x34
+   - bit==1: Call vtable[1] from struct+0x18 → `0x102c9e0` (sub-object deserializer)
+
+**Sub-object deserializer** (`0x102c9e0`):
+- Reads 3 bits from stream (tag per field, same pattern as 16.3)
+- Writes 3 floats to sub-object at struct+0x20, +0x24, +0x28
+- S-box tables at RVA `0x1a2fb40` and `0x1a2fa40`
+- Calls `0x10d6900` for S-box re-encryption
+
+**Decoded structure** (16.4):
+
+| Location | Offset | Type | Field |
+|----------|--------|------|-------|
+| HEAP | +0x10 | f32 | Current X (0-15000) |
+| HEAP | +0x14 | f32 | Current Y (0-15000) |
+| HEAP | +0x20 | f32 | Destination X |
+| HEAP | +0x24 | f32 | Destination Z (height, ~50) |
+| HEAP | +0x28 | f32 | Destination Y |
+| ALLOC[0] | +0x00c | f32 | Current X (copy) |
+| ALLOC[0] | +0x010 | f32 | Current Z (height) |
+| ALLOC[0] | +0x014 | f32 | Current Y (copy) |
+| ALLOC[0] | +0x054 | f32 | Destination X (copy) |
+| ALLOC[0] | +0x058 | f32 | Destination Z (copy) |
+| ALLOC[0] | +0x05c | f32 | Destination Y (copy) |
+| ALLOC[0] | +0x060 | f32 | Movement speed |
+| ALLOC[0] | +0x094 | u32 | Entity ID |
+| ALLOC[0] | +0x098 | f32 | Game timestamp (seconds) |
+| ALLOC[0] | +0x0f0 | u32 | Sequence number |
+| ALLOC[2] | str | str | Champion name (e.g. "MasterYi") |
+
+**Two packet sizes** (same as 16.3):
+- Large (127-136 bytes): Full movement with destination, speed, champion name. 3 mallocs.
+- Small (31-34 bytes): Position sync only (X, Y in HEAP). No malloc.
+
+**Verified output** from 16.4 test replay (NA1-5496350713, 15min Garen game):
+- 633 blocks decoded, 0 errors
+- Coordinates in valid map range (X,Y = 800-14000)
+- Champion names extracted: Garen, MasterYi, Zoe
+
+#### netid=872 — NOT movement (emote/state data)
+
+pid=872 was initially suspected as movement but produces strings like "JOKE", "TAUNT".
+Entity distribution is 81% Garen (2095/2582) — too skewed for movement.
+Constructor at `0xe4e2d7`, deserializer at `0xfb8f40`.
+
+#### Key addresses — patch 16.4
+
+```
+PE image base:      0x140000000
+TEXT_RVA:           0x1000
+RDATA_RVA:          0x1927000
+DATA_RVA:           0x1d4e000
+
+# Shared infrastructure
+skip:               0x11bcec0       (patched to mov rax,1; ret)
+bit_reader:         0xee0270
+malloc:             0x112cb00
+free:               0x112cb30
+
+# netid=437 movement packet (CONFIRMED)
+constructor:        0xe2c826
+main_vtable:        0x1a2afe8
+deserializer:       0x1033400       (main vtable slot[1])
+sub_init:           0xe2a490        (init sub-object at struct+0x18)
+sub_vtable:         0x1a2af90       (sub-object vtable, set by init)
+sub_deserializer:   0x102c9e0       (sub-object vtable slot[1])
+sub_field_deser:    0x1008a90       (per-field byte reader)
+sbox_reencrypt:     0x10d6900       (S-box re-encryption)
+sbox_table_1:       0x1a2fb40
+sbox_table_2:       0x1a2fa40
+
+# netid=872 emote packet (NOT movement)
+constructor_872:    0xe4e2d7
+main_vtable_872:    0x1a28918
+deserializer_872:   0xfb8f40
+```
+
+#### Comparison with 16.3
+
+| Item | 16.3 (netid=762) | 16.4 (netid=437) |
+|------|-------------------|-------------------|
+| Movement netid | 762 (0x02FA) | 437 (0x01B5) |
+| Deserializer | 0x1002930 | 0x1033400 |
+| Main vtable | 0x19eb6c0 | 0x1a2afe8 |
+| Sub-obj init | 0xe03db0 (struct+0x10) | 0xe2a490 (struct+0x18) |
+| Sub vtable | 0x19eb668 | 0x1a2af90 |
+| Malloc | 0x10f98f0 | 0x112cb00 |
+| Free | 0x10f9920 | 0x112cb30 |
+| Skip | 0x1186e30 | 0x11bcec0 |
+| RDATA RVA | 0x18e9000 | 0x1927000 |
+| DATA RVA | 0x1d0c000 | 0x1d4e000 |
+| Alloc buf size | 296 bytes | 304 bytes |
+| Entity ID offset | alloc+0x008 | alloc+0x094 |
+| Game time offset | alloc+0x10c | alloc+0x098 |
+| Champion name | alloc[1] | alloc[2] |
 
 ---
 
@@ -167,9 +313,14 @@ that's ~6 minutes per replay. Acceptable for now but could be optimized by:
 - `/tmp/LeagueOfLegends.exe` — League binary copied from Windows (`scp windows:...`)
 - `/tmp/ghidra_project/league_analysis` — Ghidra project with analyzed binary
 
-### Key addresses (patch 16.3 specific, will change with patches)
+### Key addresses (patch-specific, will change with patches)
+
+**Patch 16.3** (netid=762):
 ```
 PE image base:    0x140000000
+TEXT_RVA:         0x1000
+RDATA_RVA:        0x18e9000
+DATA_RVA:         0x1d0c000
 skip:             0x1186e30
 bit_reader:       0xeb67f0
 malloc:           0x10f98f0
@@ -182,6 +333,27 @@ sub-obj init:     0xe03db0
 sub-obj vtable:   0x19eb668
 main vtable:      0x19eb6c0
 netid=294 deser:  0xf98010
+```
+
+**Patch 16.4** (netid=872):
+```
+PE image base:    0x140000000
+TEXT_RVA:         0x1000
+RDATA_RVA:        0x1927000
+DATA_RVA:         0x1d4e000
+skip:             0x11bcec0
+bit_reader:       0xee0270
+malloc:           0x112cb00
+free:             0x112cb30
+constructor:      0xe4e2d7
+main_vtable:      0x1a28918
+deserializer:     0xfb8f40
+sub_deserializer: 0xfb9070
+sub_vtable:       0x193c440
+sub_obj_vtable:   0x193ca50
+allocator:        0xffcaa0
+cleanup:          0x2042f0
+intermediate_vt:  0x1a262c8
 ```
 
 ### Hero entity IDs (this replay)

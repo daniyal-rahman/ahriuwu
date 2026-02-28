@@ -3,282 +3,435 @@
 
 Runs on Windows desktop. For each .rofl file:
 1. Parse ROFL metadata to find Garen's player slot
-2. Launch replay via League client
-3. Wait for game to load (poll Replay API)
-4. Select Garen via keyboard input, lock camera
-5. Record video via Replay API (built-in recording)
-6. Decode movement data from .rofl file
-7. Generate screen-space action labels using projection matrix
+2. Launch replay via League executable
+3. Wait for game to load (poll Live Client Data API)
+4. Lock camera to Garen via keyboard automation (pynput)
+5. Record video via screen capture (mss + cv2.VideoWriter)
+6. Optionally decode movement data and generate action labels
 
 Usage:
-    # Process all replays in a directory
+    # Process all replays from manifest
     python scripts/process_replays.py \
-        --replay-dir "C:\\Users\\daniz\\Documents\\League of Legends\\Replays" \
-        --output-dir data/processed_replays \
-        --projection data/projection_matrix.json
+        --manifest data/replays/manifest_na1_full.json \
+        --output-dir data/processed_replays
 
     # Process a single replay
     python scripts/process_replays.py \
         --replay path/to/replay.rofl \
+        --output-dir data/processed_replays
+
+    # With movement decoding and action labels
+    python scripts/process_replays.py \
+        --manifest data/replays/manifest_na1_full.json \
         --output-dir data/processed_replays \
         --projection data/projection_matrix.json
 
-    # Just record (skip movement decoding, e.g. if PE dumps not available)
-    python scripts/process_replays.py \
-        --replay-dir "..." --output-dir "..." --record-only
+    # Dry run (show what would be processed)
+    python scripts/process_replays.py --manifest data/replays/manifest.json --dry-run
 
 Requirements:
     - Windows with League of Legends installed
-    - League client running (for replay launch)
-    - Replay API enabled: add EnableReplayApi=1 to game.cfg
-    - PE section dumps in /tmp/pe_dump/ (for movement decoding, unless --record-only)
+    - pip install requests mss opencv-python pynput
 
-Replay API reference (localhost:2999):
-    POST /replay/playback  - {paused, time, speed, seeking}
-    POST /replay/render    - {cameraAttached, interfaceAll, fogOfWar, ...}
-    POST /replay/recording - {recording, path, codec, width, height, framesPerSecond,
-                              enforceFrameRate, replaySpeed}
-    GET  /replay/playback  - current playback state
-    GET  /replay/game      - process info (used to detect when game is loaded)
+Live Client Data API (localhost:2999, HTTPS self-signed cert):
+    GET /liveclientdata/allgamedata  - full game state
+    GET /liveclientdata/gamestats    - game time, map, mode
+    GET /liveclientdata/playerlist   - all 10 players
 """
 
 import argparse
-import ctypes
 import json
+import logging
 import os
-import struct
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-# Replay API settings
-REPLAY_API_BASE = "https://127.0.0.1:2999"
-REPLAY_API_TIMEOUT = 5  # seconds per request
+try:
+    import requests
+except ImportError:
+    print("Error: 'requests' required. Install with: pip install requests")
+    sys.exit(1)
 
-# Game settings
-GAME_EXE = r"C:\Riot Games\League of Legends\Game\League of Legends.exe"
-GAME_LOAD_TIMEOUT = 120  # seconds to wait for game to load
-GAME_LOAD_POLL_INTERVAL = 3  # seconds between load checks
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Recording settings
-RECORD_FPS = 20  # frames per game-second
-REPLAY_SPEED = 8  # playback speed multiplier
-RECORD_CODEC = "webm"  # webm or png-sequence
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
 
-# Garen champion name (used to find player slot in metadata)
+LEAGUE_EXE = r"C:\Riot Games\League of Legends\Game\League of Legends.exe"
+REPLAYS_DIR = r"C:\Users\daniz\Documents\League of Legends\Replays"
+
+# Live Client Data API
+LIVECLIENT_BASE = "https://127.0.0.1:2999"
+API_TIMEOUT = 5
+
+# Recording
+RECORD_FPS = 20
+RECORD_CODEC = "MJPG"  # cv2 fourcc
+
+# Timeouts
+GAME_LOAD_TIMEOUT = 180
+GAME_LOAD_POLL = 3.0
+PLAYBACK_POLL = 5.0
+PROCESS_KILL_WAIT = 3
+
+# Camera setup delays (seconds)
+CAMERA_SETUP_DELAY = 2.0
+KEY_PRESS_DELAY = 0.3
+
 GAREN_CHAMPION = "Garen"
-
+PROGRESS_FILE = "data/replays/processing_progress.json"
 
 # ---------------------------------------------------------------------------
-# Replay API client
+# Logging
 # ---------------------------------------------------------------------------
 
-def replay_api_get(endpoint: str) -> dict | None:
-    """GET request to the Replay API."""
-    import urllib.request
-    import ssl
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("process_replays")
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+# ---------------------------------------------------------------------------
+# Live Client Data API
+# ---------------------------------------------------------------------------
 
-    url = f"{REPLAY_API_BASE}{endpoint}"
+
+def liveclient_get(endpoint: str) -> dict | None:
+    """GET from the Live Client Data API."""
+    url = f"{LIVECLIENT_BASE}/liveclientdata/{endpoint}"
     try:
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, context=ctx, timeout=REPLAY_API_TIMEOUT) as resp:
-            return json.loads(resp.read())
+        resp = requests.get(url, verify=False, timeout=API_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
     except Exception:
         return None
 
 
-def replay_api_post(endpoint: str, data: dict) -> dict | None:
-    """POST request to the Replay API."""
-    import urllib.request
-    import ssl
-
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    url = f"{REPLAY_API_BASE}{endpoint}"
-    body = json.dumps(data).encode()
-    req = urllib.request.Request(url, data=body, method="POST",
-                                headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=REPLAY_API_TIMEOUT) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"  API error on {endpoint}: {e}")
-        return None
+def get_game_time() -> float | None:
+    """Get current game time in seconds."""
+    data = liveclient_get("gamestats")
+    if data:
+        return data.get("gameTime")
+    return None
 
 
 def wait_for_game_load(timeout: int = GAME_LOAD_TIMEOUT) -> bool:
-    """Poll the Replay API until the game is loaded and responsive."""
-    print("  Waiting for game to load...", end="", flush=True)
+    """Poll Live Client Data API until the game is loaded."""
+    log.info(f"Waiting for game to load (timeout {timeout}s)...")
     start = time.time()
     while time.time() - start < timeout:
-        game = replay_api_get("/replay/game")
-        if game and game.get("processID", 0) > 0:
-            # Also check that playback is available
-            playback = replay_api_get("/replay/playback")
-            if playback and playback.get("length", 0) > 0:
-                print(f" loaded! (game length: {playback['length']:.0f}s)")
-                return True
-        print(".", end="", flush=True)
-        time.sleep(GAME_LOAD_POLL_INTERVAL)
-    print(" TIMEOUT")
+        t = get_game_time()
+        if t is not None:
+            log.info(f"Game loaded (time: {t:.1f}s)")
+            return True
+        time.sleep(GAME_LOAD_POLL)
+    log.error(f"Game did not load within {timeout}s")
     return False
 
 
-def wait_for_game_end(poll_interval: float = 5.0) -> bool:
-    """Poll playback position until the game ends."""
-    print("  Waiting for game to end...")
-    last_time = -1
-    stall_count = 0
-
-    while True:
-        playback = replay_api_get("/replay/playback")
-        if not playback:
-            stall_count += 1
-            if stall_count > 10:
-                print("  Lost connection to Replay API")
-                return False
-            time.sleep(poll_interval)
-            continue
-
-        stall_count = 0
-        current = playback.get("time", 0)
-        length = playback.get("length", 0)
-        speed = playback.get("speed", 0)
-
-        if length > 0:
-            pct = 100 * current / length
-            print(f"    {current:.0f}/{length:.0f}s ({pct:.1f}%) speed={speed}x    ",
-                  end="\r", flush=True)
-
-            # Game is done when we're near the end
-            if current >= length - 5:
-                print(f"\n  Game finished at {current:.0f}s")
-                return True
-
-        # Detect if playback stalled (paused or ended)
-        if current == last_time:
-            stall_count += 1
-            if stall_count > 6:
-                print(f"\n  Playback stalled at {current:.0f}s")
-                return True
-        else:
-            stall_count = 0
-        last_time = current
-
-        time.sleep(poll_interval)
-
-
 # ---------------------------------------------------------------------------
-# Player selection via keyboard input
+# Keyboard automation (pynput)
 # ---------------------------------------------------------------------------
 
-def select_player_slot(slot: int):
-    """Select a player in the replay viewer by simulating key press.
 
-    Slot 0-4 = blue team (keys 1-5), slot 5-9 = red team (keys Q,W,E,R,T or Ctrl+1-5).
+def focus_game_window():
+    """Find and focus the League of Legends game window.
 
-    In the League replay viewer, pressing number keys 1-5 selects blue side players
-    in tab-order. For red side, we use Ctrl+1 through Ctrl+5.
-
-    NOTE: The exact keybinds may vary. Test with a replay first.
+    Windows blocks SetForegroundWindow from background processes (SSH).
+    Strategy: disable the foreground lock timeout, then use multiple
+    focus methods, and finally simulate a mouse click as a fallback.
     """
     if sys.platform != "win32":
-        print(f"  WARNING: keyboard input only works on Windows, skipping slot selection")
-        return
+        return False
 
-    # Virtual key codes for 1-5
-    VK_KEYS = {0: 0x31, 1: 0x32, 2: 0x33, 3: 0x34, 4: 0x35}  # 1-5
-    VK_CONTROL = 0x11
+    import ctypes
+    import ctypes.wintypes
 
-    if slot < 5:
-        # Blue team: press 1-5
-        vk = VK_KEYS[slot]
-        _send_key(vk)
-    else:
-        # Red team: press Ctrl + 1-5
-        red_slot = slot - 5
-        vk = VK_KEYS[red_slot]
-        _send_key(vk, ctrl=True)
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    result = []
 
-    print(f"  Selected player slot {slot} (key: {'Ctrl+' if slot >= 5 else ''}{slot % 5 + 1})")
+    def callback(hwnd, _):
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length > 0:
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            if "league of legends" in buf.value.lower():
+                result.append((hwnd, buf.value))
+        return True
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    user32.EnumWindows(WNDENUMPROC(callback), 0)
+
+    if not result:
+        log.warning("  Could not find League window")
+        return False
+
+    hwnd = result[0][0]
+    title = result[0][1]
+    log.info(f"  Found window: {title!r} (hwnd={hwnd})")
+
+    # Disable foreground lock timeout (allows SetForegroundWindow from background)
+    SPI_SETFOREGROUNDLOCKTIMEOUT = 0x2001
+    user32.SystemParametersInfoW(SPI_SETFOREGROUNDLOCKTIMEOUT, 0, None, 0)
+
+    # AttachThreadInput trick
+    fg_hwnd = user32.GetForegroundWindow()
+    fg_thread = user32.GetWindowThreadProcessId(fg_hwnd, None)
+    cur_thread = kernel32.GetCurrentThreadId()
+    user32.AttachThreadInput(cur_thread, fg_thread, True)
+
+    # Alt-key trick
+    user32.keybd_event(0x12, 0, 0, 0)
+    user32.keybd_event(0x12, 0, 2, 0)
+
+    user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    user32.BringWindowToTop(hwnd)
+    user32.SetForegroundWindow(hwnd)
+    user32.AttachThreadInput(cur_thread, fg_thread, False)
+
     time.sleep(0.5)
 
+    # Check if focus worked
+    new_fg = user32.GetForegroundWindow()
+    if new_fg == hwnd:
+        log.info("  Game window focused via SetForegroundWindow")
+        return True
 
-def _send_key(vk_code: int, ctrl: bool = False):
-    """Send a key press using Windows SendInput API."""
-    INPUT_KEYBOARD = 1
-    KEYEVENTF_KEYUP = 0x0002
+    log.info("  SetForegroundWindow failed, clicking game window...")
 
-    class KEYBDINPUT(ctypes.Structure):
-        _fields_ = [
-            ("wVk", ctypes.c_ushort),
-            ("wScan", ctypes.c_ushort),
-            ("dwFlags", ctypes.c_ulong),
-            ("time", ctypes.c_ulong),
-            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
-        ]
+    # Fallback: simulate a mouse click on the game window to force focus
+    from pynput.mouse import Controller as MouseController, Button
+    mouse = MouseController()
 
-    class INPUT(ctypes.Structure):
-        class _INPUT(ctypes.Union):
-            _fields_ = [("ki", KEYBDINPUT)]
-        _fields_ = [
-            ("type", ctypes.c_ulong),
-            ("_input", _INPUT),
-        ]
+    # Get window rect and click its center
+    rect = ctypes.wintypes.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    cx = (rect.left + rect.right) // 2
+    cy = (rect.top + rect.bottom) // 2
+    log.info(f"  Clicking window center ({cx}, {cy})")
 
-    def make_input(vk, flags=0):
-        inp = INPUT()
-        inp.type = INPUT_KEYBOARD
-        inp._input.ki.wVk = vk
-        inp._input.ki.dwFlags = flags
-        return inp
+    mouse.position = (cx, cy)
+    time.sleep(0.1)
+    mouse.click(Button.left)
+    time.sleep(0.5)
 
-    inputs = []
-    if ctrl:
-        inputs.append(make_input(0x11))  # Ctrl down
-    inputs.append(make_input(vk_code))  # Key down
-    inputs.append(make_input(vk_code, KEYEVENTF_KEYUP))  # Key up
-    if ctrl:
-        inputs.append(make_input(0x11, KEYEVENTF_KEYUP))  # Ctrl up
+    new_fg = user32.GetForegroundWindow()
+    if new_fg == hwnd:
+        log.info("  Game window focused via mouse click")
+    else:
+        log.warning(f"  Focus may have failed (foreground={new_fg}, target={hwnd})")
 
-    arr = (INPUT * len(inputs))(*inputs)
-    ctypes.windll.user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+    return True
+
+
+def press_key(keyboard, key_char: str):
+    """Press and release a key."""
+    keyboard.press(key_char)
+    time.sleep(0.05)
+    keyboard.release(key_char)
+    time.sleep(KEY_PRESS_DELAY)
+
+
+def setup_camera(garen_slot: int):
+    """Lock camera to Garen using keyboard shortcuts.
+
+    Args:
+        garen_slot: Garen's player slot (0-9). Slots 0-4 are blue team,
+                    5-9 are red team. Blue: 1-5, Red: Q W E R T.
+    """
+    from pynput.keyboard import Controller as KbController
+
+    _RED_KEYS = {5: 'q', 6: 'w', 7: 'e', 8: 'r', 9: 't'}
+    kb = KbController()
+    time.sleep(CAMERA_SETUP_DELAY)
+
+    # Select Garen's player
+    if garen_slot < 5:
+        key = str(garen_slot + 1)
+        log.info(f"  Selecting Garen (blue slot {garen_slot}) via key '{key}'")
+        press_key(kb, key)
+    else:
+        key = _RED_KEYS[garen_slot]
+        log.info(f"  Selecting Garen (red slot {garen_slot}) via key '{key}'")
+        press_key(kb, key)
+
+    # Center camera
+    press_key(kb, ' ')
+    time.sleep(0.5)
+
+    # Lock camera (Y toggles lock)
+    press_key(kb, 'y')
+
+    # Center again to ensure lock is on the right target
+    press_key(kb, ' ')
+
+    log.info("  Camera lock sent (Y + Space)")
+
+
+def set_replay_speed(speed_presses: int = 3):
+    """Speed up replay playback by pressing '=' multiple times.
+
+    Each press of '=' advances speed tier: 1x -> 2x -> 4x -> 8x.
+    Press '0' first to reset to normal speed, then press '=' to reach target.
+
+    Args:
+        speed_presses: Number of times to press '=' (1=2x, 2=4x, 3=8x).
+    """
+    from pynput.keyboard import Controller as KbController
+
+    kb = KbController()
+
+    # Reset to 1x first
+    press_key(kb, '0')
+    time.sleep(0.3)
+
+    # Speed up
+    for i in range(speed_presses):
+        press_key(kb, '=')
+
+    speeds = {0: "1x", 1: "2x", 2: "4x", 3: "8x"}
+    log.info(f"  Replay speed set to {speeds.get(speed_presses, f'{speed_presses} presses')}")
+
+
+# ---------------------------------------------------------------------------
+# Screen recording (mss + cv2)
+# ---------------------------------------------------------------------------
+
+
+class ScreenRecorder:
+    """Record screen to video file using dxcam (GPU-accelerated) + cv2 writer.
+
+    dxcam uses DXGI Desktop Duplication for fast capture.
+    Frames are downscaled to target resolution before encoding.
+    Call capture_frame() in a loop from the main thread.
+    """
+
+    TARGET_WIDTH = 1920
+    TARGET_HEIGHT = 1080
+
+    def __init__(self, output_path: str, fps: int = RECORD_FPS,
+                 codec: str = RECORD_CODEC):
+        import cv2
+
+        self.output_path = output_path
+        self.fps = fps
+        self._cv2 = cv2
+
+        # Try dxcam first, fall back to mss
+        try:
+            import dxcam
+            # Monkey-patch comtypes to prevent COM __del__ crash (access violation
+            # at 0xFFFFFFFFFFFFFFFF during GC kills the entire process)
+            try:
+                import comtypes._post_coinit.unknwn as _unknwn
+                _unknwn._compointer_base.__del__ = lambda self: None
+            except Exception:
+                pass
+            self._camera = dxcam.create()
+            # Get native resolution from dxcam
+            test_frame = self._camera.grab()
+            if test_frame is not None:
+                self._native_h, self._native_w = test_frame.shape[:2]
+            else:
+                import ctypes
+                user32 = ctypes.windll.user32
+                self._native_w = user32.GetSystemMetrics(0)
+                self._native_h = user32.GetSystemMetrics(1)
+            self._use_dxcam = True
+            log.info(f"  Using dxcam capture ({self._native_w}x{self._native_h})")
+        except Exception as e:
+            log.warning(f"  dxcam unavailable ({e}), falling back to mss")
+            import mss
+            self._sct = mss.mss()
+            self._monitor = self._sct.monitors[1]
+            self._native_w = self._monitor["width"]
+            self._native_h = self._monitor["height"]
+            self._use_dxcam = False
+
+        # Output at target resolution
+        self.width = self.TARGET_WIDTH
+        self.height = self.TARGET_HEIGHT
+        self._need_resize = (self._native_w != self.width
+                             or self._native_h != self.height)
+
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        self.writer = cv2.VideoWriter(
+            output_path, fourcc, fps, (self.width, self.height))
+        if not self.writer.isOpened():
+            raise RuntimeError(f"Failed to open VideoWriter: {output_path}")
+
+        self.frame_times = []
+        self.frame_count = 0
+        self._running = True
+
+        log.info(f"  Recorder: {self._native_w}x{self._native_h} -> "
+                 f"{self.width}x{self.height} @ {fps}fps -> {output_path}")
+
+    def capture_frame(self, game_time: float | None = None):
+        """Capture one frame. Call from main thread."""
+        if self._use_dxcam:
+            frame = self._camera.grab()
+            if frame is None:
+                return  # skip dropped frame
+            # dxcam returns RGB numpy array, cv2 needs BGR
+            frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+        else:
+            import numpy as np
+            img = self._sct.grab(self._monitor)
+            frame = np.array(img)
+            frame = self._cv2.cvtColor(frame, self._cv2.COLOR_BGRA2BGR)
+
+        if self._need_resize:
+            frame = self._cv2.resize(frame, (self.width, self.height),
+                                     interpolation=self._cv2.INTER_AREA)
+
+        self.writer.write(frame)
+        self.frame_times.append((self.frame_count, game_time))
+        self.frame_count += 1
+
+    def stop(self):
+        """Stop recording and release resources."""
+        self._running = False
+        self.writer.release()
+        # Don't call dxcam camera.release() — it triggers a COM access
+        # violation crash. Let garbage collection handle it instead.
+        if self._use_dxcam:
+            self._camera = None
+        log.info(f"  Recording stopped ({self.frame_count} frames)")
+
+    def save_timestamps(self, path: str):
+        """Save frame timestamps to JSON."""
+        with open(path, "w") as f:
+            json.dump(self.frame_times, f)
+        log.info(f"  Saved {len(self.frame_times)} frame timestamps")
 
 
 # ---------------------------------------------------------------------------
 # ROFL metadata parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_rofl_metadata(rofl_path: str) -> dict | None:
-    """Parse ROFL file to extract game metadata (players, champions, etc.).
-
-    The metadata JSON (containing gameLength, statsJson with player stats)
-    is located near the END of the .rofl file, not the beginning.
-
-    Returns dict with 'players' list (each has 'champion', 'name', 'team', 'slot').
-    """
+    """Parse ROFL file to extract game metadata (players, champions, etc.)."""
     with open(rofl_path, "rb") as f:
         data = f.read()
 
-    # Verify magic
     if data[:4] != b"RIOT":
-        print(f"  Not a RIOT replay file (magic: {data[:6]!r})")
+        log.error(f"Not a RIOT replay file (magic: {data[:6]!r})")
         return None
 
-    # Find metadata JSON near end of file (starts with {"gameLength)
     json_start = data.find(b'{"gameLength')
     if json_start < 0:
-        print(f"  Could not find metadata JSON in ROFL file")
+        log.error("Could not find metadata JSON in ROFL file")
         return None
 
-    # Find matching closing brace
     depth = 0
     json_end = json_start
     for i in range(json_start, len(data)):
@@ -293,10 +446,9 @@ def parse_rofl_metadata(rofl_path: str) -> dict | None:
     try:
         meta = json.loads(data[json_start:json_end])
     except json.JSONDecodeError as e:
-        print(f"  Failed to parse ROFL JSON metadata: {e}")
+        log.error(f"Failed to parse ROFL JSON metadata: {e}")
         return None
 
-    # Parse statsJson (embedded JSON string with player stats)
     stats_raw = meta.get("statsJson", "[]")
     if isinstance(stats_raw, str):
         stats = json.loads(stats_raw)
@@ -309,9 +461,7 @@ def parse_rofl_metadata(rofl_path: str) -> dict | None:
             "slot": i,
             "name": p.get("NAME", p.get("SKIN", "?")),
             "champion": p.get("SKIN", p.get("NAME", "?")),
-            "team": "blue" if p.get("TEAM", str(100 if i < 5 else 200)) == "100"
-                          or (isinstance(p.get("TEAM"), int) and p["TEAM"] == 100)
-                    else "red",
+            "team": "blue" if i < 5 else "red",
             "position": p.get("INDIVIDUAL_POSITION", "?"),
             "win": p.get("WIN", "?"),
         })
@@ -326,37 +476,85 @@ def parse_rofl_metadata(rofl_path: str) -> dict | None:
 def find_garen_slot(metadata: dict) -> int | None:
     """Find Garen's player slot (0-9) from ROFL metadata."""
     for p in metadata.get("players", []):
-        champ = p.get("champion", "").lower()
-        if champ == GAREN_CHAMPION.lower() or "garen" in champ:
+        if p.get("champion", "").lower() == GAREN_CHAMPION.lower():
             return p["slot"]
     return None
 
 
 # ---------------------------------------------------------------------------
-# Replay launcher
+# Process management
 # ---------------------------------------------------------------------------
 
-def launch_replay(rofl_path: str) -> subprocess.Popen | None:
-    """Launch a replay file in the League client."""
+
+def launch_replay_lcu(game_id: str) -> bool:
+    """Launch a replay via the LCU API (League client must be running)."""
+    import base64
+    import ssl
+    from urllib.request import Request, urlopen
+    from urllib.error import URLError
+
+    lockfile = r"C:\Riot Games\League of Legends\lockfile"
+    if not os.path.isfile(lockfile):
+        log.error(f"LCU lockfile not found: {lockfile}")
+        return False
+
+    with open(lockfile) as f:
+        _, _, port, token, _ = f.read().split(":")
+
+    auth = base64.b64encode(f"riot:{token}".encode()).decode()
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    url = f"https://127.0.0.1:{port}/lol-replays/v1/rofls/{game_id}/watch"
+    body = json.dumps({"componentType": "replay"}).encode()
+    req = Request(url, method="POST", data=body, headers={
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json",
+    })
+
+    try:
+        urlopen(req, context=ctx)
+        log.info(f"  Launched replay {game_id} via LCU API")
+        return True
+    except URLError as e:
+        log.error(f"  LCU launch failed: {e}")
+        return False
+
+
+def launch_replay(rofl_path: str) -> bool:
+    """Launch a replay. Tries LCU API first, then os.startfile fallback."""
     rofl_path = os.path.abspath(rofl_path)
 
-    if not os.path.exists(rofl_path):
-        print(f"  Replay file not found: {rofl_path}")
-        return None
+    if not os.path.isfile(rofl_path):
+        log.error(f"Replay file not found: {rofl_path}")
+        return False
 
-    print(f"  Launching replay: {os.path.basename(rofl_path)}")
+    basename = os.path.basename(rofl_path)
+    log.info(f"Launching replay: {basename}")
 
+    # Extract game_id from filename (e.g. "NA1-5496610100.rofl" -> "5496610100")
+    stem = Path(rofl_path).stem
+    parts = stem.split("-")
+    game_id = parts[-1] if len(parts) >= 2 else None
+
+    # Try LCU API first
+    if game_id and sys.platform == "win32":
+        if launch_replay_lcu(game_id):
+            return True
+
+    # Fallback: open with default handler
     if sys.platform == "win32":
-        # Use os.startfile to open with default handler (League client)
         try:
             os.startfile(rofl_path)
-            return True  # startfile doesn't return a process handle
+            log.info("  Launched via os.startfile")
+            return True
         except OSError as e:
-            print(f"  Failed to launch: {e}")
-            return None
-    else:
-        print("  ERROR: Replay launching only works on Windows")
-        return None
+            log.error(f"Failed to launch replay: {e}")
+            return False
+
+    log.error("Replay launching only works on Windows")
+    return False
 
 
 def kill_game_process():
@@ -365,166 +563,243 @@ def kill_game_process():
         os.system('taskkill /F /IM "League of Legends.exe" 2>NUL')
     else:
         os.system("pkill -f 'League of Legends' 2>/dev/null")
-    time.sleep(2)
+    time.sleep(PROCESS_KILL_WAIT)
+
+
+# ---------------------------------------------------------------------------
+# Progress tracking
+# ---------------------------------------------------------------------------
+
+
+def load_progress(path: str) -> dict:
+    """Load processing progress from disk."""
+    if os.path.isfile(path):
+        with open(path) as f:
+            return json.load(f)
+    return {"completed": [], "failed": []}
+
+
+def save_progress(progress: dict, path: str):
+    """Save processing progress to disk."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(progress, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
 # Main processing pipeline
 # ---------------------------------------------------------------------------
 
-def process_single_replay(rofl_path: str, output_dir: str, projection_path: str = None,
-                          record_only: bool = False, pe_dump_dir: str = None) -> dict:
-    """Process a single replay file.
 
-    Returns dict with processing stats.
-    """
+def process_single_replay(rofl_path: str, output_dir: str,
+                          projection_path: str = None,
+                          record_only: bool = False,
+                          pe_dump_dir: str = None,
+                          replay_speed: int = 3) -> dict:
+    """Process a single replay: launch, configure camera, record, cleanup."""
     rofl_path = os.path.abspath(rofl_path)
-    basename = Path(rofl_path).stem  # e.g., "NA1-5489605032"
+    basename = Path(rofl_path).stem
     replay_output = Path(output_dir) / basename
     replay_output.mkdir(parents=True, exist_ok=True)
 
     stats = {"replay": basename, "success": False, "video_path": None, "movements": 0}
 
-    print(f"\n{'='*60}")
-    print(f"Processing: {basename}")
-    print(f"{'='*60}")
+    log.info(f"{'='*60}")
+    log.info(f"Processing: {basename}")
+    log.info(f"{'='*60}")
 
     # Step 1: Parse metadata to find Garen
-    print("\n[1/6] Parsing ROFL metadata...")
+    log.info("[1/6] Parsing ROFL metadata...")
     metadata = parse_rofl_metadata(rofl_path)
+    garen_slot = None
     if metadata:
         garen_slot = find_garen_slot(metadata)
         if garen_slot is not None:
             team = "blue" if garen_slot < 5 else "red"
-            print(f"  Garen found at slot {garen_slot} ({team} side)")
+            log.info(f"  Garen at slot {garen_slot} ({team} side)")
         else:
-            print(f"  WARNING: Garen not found in replay metadata")
-            print(f"  Players: {[p.get('champion') for p in metadata.get('players', [])]}")
-            garen_slot = None
-    else:
-        print("  WARNING: Could not parse metadata, will need manual player selection")
-        garen_slot = None
+            log.warning("  Garen not found — skipping replay")
+            champs = [p.get("champion") for p in metadata.get("players", [])]
+            log.warning(f"  Players: {champs}")
+            stats["skipped"] = True
+            return stats
 
-    # Save metadata
-    if metadata:
         meta_path = replay_output / "metadata.json"
         with open(meta_path, "w") as f:
             json.dump(metadata, f, indent=2, default=str)
+    else:
+        log.warning("  Could not parse metadata")
 
     # Step 2: Launch replay
-    print("\n[2/6] Launching replay...")
-    result = launch_replay(rofl_path)
-    if not result:
-        print("  FAILED to launch replay")
+    log.info("[2/6] Launching replay...")
+    if not launch_replay(rofl_path):
+        log.error("Failed to launch replay")
         return stats
 
-    # Step 3: Wait for game to load
-    print("\n[3/6] Waiting for Replay API...")
-    if not wait_for_game_load():
-        print("  FAILED: game did not load in time")
+    recorder = None
+    try:
+        # Step 3: Wait for game to load
+        log.info("[3/6] Waiting for game to load...")
+        if not wait_for_game_load():
+            log.error("Game failed to load — skipping")
+            return stats
+
+        time.sleep(3)  # let it fully initialize
+
+        # Step 4: Focus game window + lock camera to Garen via keyboard
+        log.info("[4/6] Setting up camera...")
+        focus_game_window()
+        if garen_slot is not None:
+            setup_camera(garen_slot)
+        else:
+            log.warning("  No Garen slot — skipping camera lock")
+
+        time.sleep(1)
+
+        # Step 4b: Speed up replay
+        if replay_speed > 0:
+            set_replay_speed(replay_speed)
+            time.sleep(0.5)
+
+        # Step 5: Record screen (main-thread capture loop)
+        log.info("[5/6] Recording replay...")
+        video_path = str(replay_output / "replay.avi")
+        recorder = ScreenRecorder(video_path, fps=RECORD_FPS)
+
+        game_length_ms = metadata.get("game_length_ms", 0) if metadata else 0
+        game_length_s = game_length_ms / 1000.0 if game_length_ms else 0
+
+        api_fail_start = None  # wall-clock when API first failed
+        stall_ref_wall = time.time()  # wall-clock for stall window start
+        stall_ref_game = 0.0  # game time at stall window start
+        last_log_time = 0
+        frame_interval = 1.0 / RECORD_FPS
+        log.info("  Recording started")
+
+        STALL_WALL_TIMEOUT = 15  # real seconds to wait before declaring stall
+        STALL_GAME_THRESHOLD = 5.0  # game must advance >=5 game-sec in 15 real-sec
+        API_FAIL_TIMEOUT = 10  # real seconds of no API response = game ended
+
+        # Camera re-center: spam select key to keep Garen near screen center
+        RECENTER_INTERVAL = 0.1  # real seconds between re-center presses
+        from pynput.keyboard import Controller as KbController
+        kb = KbController()
+        # Blue side: 1-5, Red side: Q W E R T
+        _RED_KEYS = {5: 'q', 6: 'w', 7: 'e', 8: 'r', 9: 't'}
+        if garen_slot is not None:
+            if garen_slot < 5:
+                recenter_key = str(garen_slot + 1)  # blue: 1-5
+            else:
+                recenter_key = _RED_KEYS[garen_slot]  # red: q w e r t
+        else:
+            recenter_key = None
+        last_recenter = 0.0
+
+        while recorder._running:
+            t0 = time.perf_counter()
+
+            # Spam select key to re-center camera on Garen
+            if recenter_key is not None and t0 - last_recenter >= RECENTER_INTERVAL:
+                kb.press(recenter_key)
+                kb.release(recenter_key)
+                last_recenter = t0
+
+            # Capture frame + get game time
+            current = get_game_time()
+            recorder.capture_frame(current)
+
+            # Check for game end via API disconnect
+            if current is None:
+                if api_fail_start is None:
+                    api_fail_start = time.time()
+                elif time.time() - api_fail_start > API_FAIL_TIMEOUT:
+                    log.info("  Game API stopped responding — game likely ended")
+                    stats["success"] = True
+                    break
+            else:
+                api_fail_start = None
+
+                # Game length check: if we've reached/passed known length, done
+                if game_length_s > 0 and current >= game_length_s - 5:
+                    log.info(f"  Reached game length ({current:.0f}s >= {game_length_s:.0f}s)")
+                    stats["success"] = True
+                    break
+
+                # Stall detection: check if game time advances over a window
+                wall_elapsed = time.time() - stall_ref_wall
+                game_elapsed = current - stall_ref_game
+                if wall_elapsed > STALL_WALL_TIMEOUT:
+                    if game_elapsed < STALL_GAME_THRESHOLD:
+                        log.info(f"  Playback stalled at {current:.0f}s "
+                                 f"(advanced {game_elapsed:.1f}s in {wall_elapsed:.0f}s)")
+                        stats["success"] = True
+                        break
+                    # Reset window
+                    stall_ref_wall = time.time()
+                    stall_ref_game = current
+
+                # Progress log every ~60s
+                if current - last_log_time >= 60:
+                    last_log_time = current
+                    if game_length_s > 0:
+                        pct = 100 * current / game_length_s
+                        log.info(f"  Progress: {current:.0f}/{game_length_s:.0f}s "
+                                 f"({pct:.0f}%) [{recorder.frame_count} frames]")
+                    else:
+                        log.info(f"  Game time: {current:.0f}s "
+                                 f"[{recorder.frame_count} frames]")
+
+            # Maintain target FPS
+            elapsed = time.perf_counter() - t0
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+        recorder.stop()
+        timestamps_path = str(replay_output / "frame_timestamps.json")
+        recorder.save_timestamps(timestamps_path)
+        stats["video_path"] = video_path
+
+        # Step 6: Movement decoding (optional)
+        if not record_only:
+            log.info("[6/6] Decoding movement data...")
+            try:
+                movements = _decode_movements(rofl_path, pe_dump_dir)
+                if movements:
+                    mov_path = replay_output / "movements.json"
+                    with open(mov_path, "w") as f:
+                        json.dump(movements, f, default=str)
+                    stats["movements"] = len(movements)
+                    log.info(f"  Decoded {len(movements)} movements")
+
+                    if projection_path and os.path.isfile(projection_path):
+                        labels = _generate_action_labels(
+                            movements, projection_path, recorder.frame_times)
+                        labels_path = replay_output / "action_labels.json"
+                        with open(labels_path, "w") as f:
+                            json.dump(labels, f)
+                        log.info(f"  Generated {len(labels)} action labels")
+            except Exception as e:
+                log.error(f"  Movement decoding failed: {e}")
+        else:
+            log.info("[6/6] Skipped movement decoding (--record-only)")
+
+    finally:
+        if recorder and recorder._running:
+            recorder.stop()
+        log.info("Closing game...")
         kill_game_process()
-        return stats
-
-    # Step 4: Configure camera and select Garen
-    print("\n[4/6] Configuring camera...")
-
-    # Pause first to set up
-    replay_api_post("/replay/playback", {"paused": True})
-    time.sleep(1)
-
-    # Select Garen player
-    if garen_slot is not None:
-        select_player_slot(garen_slot)
-    else:
-        print("  No Garen slot detected — please manually select Garen in the replay viewer")
-        input("  Press Enter when ready...")
-
-    # Lock camera, hide UI, disable fog of war
-    render_settings = {
-        "cameraAttached": True,
-        "fogOfWar": False,
-        "interfaceAll": False,      # hide all UI
-        "interfaceTimeline": False,
-        "interfaceMinimap": False,
-        "interfaceScore": False,
-        "interfaceChat": False,
-        "healthBarChampions": True,
-        "healthBarMinions": True,
-        "healthBarStructures": True,
-    }
-    replay_api_post("/replay/render", render_settings)
-    time.sleep(0.5)
-
-    # Seek to start (skip loading screen)
-    replay_api_post("/replay/playback", {"time": 10.0, "seeking": True})
-    time.sleep(1)
-
-    # Step 5: Start recording
-    print("\n[5/6] Recording replay...")
-    video_dir = str(replay_output / "video")
-    os.makedirs(video_dir, exist_ok=True)
-
-    recording_settings = {
-        "recording": True,
-        "path": video_dir,
-        "codec": RECORD_CODEC,
-        "framesPerSecond": RECORD_FPS,
-        "enforceFrameRate": True,
-        "replaySpeed": REPLAY_SPEED,
-    }
-    replay_api_post("/replay/recording", recording_settings)
-
-    # Unpause to start playback
-    replay_api_post("/replay/playback", {"paused": False, "speed": REPLAY_SPEED})
-
-    # Wait for game to end
-    game_finished = wait_for_game_end()
-
-    # Stop recording
-    print("\n  Stopping recording...")
-    replay_api_post("/replay/recording", {"recording": False})
-    time.sleep(2)
-
-    stats["video_path"] = video_dir
-    stats["success"] = game_finished
-
-    # Kill game process
-    print("  Closing game...")
-    kill_game_process()
-
-    # Step 6: Decode movement data (optional)
-    if not record_only:
-        print("\n[6/6] Decoding movement data...")
-        try:
-            movements = decode_replay_movements(rofl_path, pe_dump_dir)
-            if movements:
-                mov_path = replay_output / "movements.json"
-                with open(mov_path, "w") as f:
-                    json.dump(movements, f, default=str)
-                stats["movements"] = len(movements)
-                print(f"  Decoded {len(movements)} movements")
-
-                # Generate action labels if projection matrix is available
-                if projection_path and os.path.exists(projection_path):
-                    labels = generate_action_labels(movements, projection_path)
-                    labels_path = replay_output / "action_labels.json"
-                    with open(labels_path, "w") as f:
-                        json.dump(labels, f)
-                    print(f"  Generated {len(labels)} action labels")
-        except Exception as e:
-            print(f"  Movement decoding failed: {e}")
-    else:
-        print("\n[6/6] Skipped movement decoding (--record-only)")
 
     return stats
 
 
-def decode_replay_movements(rofl_path: str, pe_dump_dir: str = None) -> list[dict]:
-    """Decode movement data from a .rofl file using the movement decoder.
+# ---------------------------------------------------------------------------
+# Movement decoding (wraps decode_replay_movement.py)
+# ---------------------------------------------------------------------------
 
-    This is a wrapper around decode_replay_movement.py's MovementDecoder.
-    """
-    # Add scripts dir to path
+
+def _decode_movements(rofl_path: str, pe_dump_dir: str = None) -> list[dict]:
+    """Decode movement data from a .rofl file using the movement decoder."""
     scripts_dir = str(Path(__file__).parent)
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
@@ -532,39 +807,36 @@ def decode_replay_movements(rofl_path: str, pe_dump_dir: str = None) -> list[dic
     try:
         from decode_replay_movement import MovementDecoder
     except ImportError:
-        print("  ERROR: Could not import MovementDecoder")
-        print("  Make sure scripts/decode_replay_movement.py exists")
+        log.warning("Could not import MovementDecoder — skipping")
         return []
 
     pe_dir = pe_dump_dir or "/tmp/pe_dump"
-    text_path = os.path.join(pe_dir, "text.bin")
-    rdata_path = os.path.join(pe_dir, "rdata.bin")
-    data_path = os.path.join(pe_dir, "data.bin")
-
-    for p in [text_path, rdata_path, data_path]:
-        if not os.path.exists(p):
-            print(f"  ERROR: PE dump not found: {p}")
+    for name in ["text.bin", "rdata.bin", "data.bin"]:
+        if not os.path.isfile(os.path.join(pe_dir, name)):
+            log.warning(f"PE dump not found: {pe_dir}/{name} — skipping decode")
             return []
 
-    # Parse replay blocks
     import pickle
-    # TODO: implement ROFL block parser here instead of relying on cached pkl
-    # For now, check if a cached blocks file exists
     cache_path = rofl_path + ".blocks.pkl"
-    if os.path.exists(cache_path):
-        with open(cache_path, "rb") as f:
-            blocks = pickle.load(f)
-    else:
-        print(f"  WARNING: No cached blocks at {cache_path}")
-        print(f"  TODO: implement direct ROFL block parsing")
+    if not os.path.isfile(cache_path):
+        log.warning(f"No cached blocks at {cache_path}")
         return []
 
-    # Filter movement blocks
+    with open(cache_path, "rb") as f:
+        blocks = pickle.load(f)
+
     hero_params = set(range(0x400000AE, 0x400000AE + 10))
-    mov_blocks = [b for b in blocks if b["packet_id"] == 762 and b["param"] in hero_params]
+    # Support both 16.3 (pid=762) and 16.4 (pid=437)
+    mov_blocks = [b for b in blocks
+                  if b["packet_id"] in (762, 437) and b["param"] in hero_params]
     mov_blocks.sort(key=lambda b: b["timestamp"])
 
-    decoder = MovementDecoder(text_path, rdata_path, data_path)
+    decoder = MovementDecoder(
+        os.path.join(pe_dir, "text.bin"),
+        os.path.join(pe_dir, "rdata.bin"),
+        os.path.join(pe_dir, "data.bin"),
+    )
+
     movements = []
     for b in mov_blocks:
         try:
@@ -578,11 +850,11 @@ def decode_replay_movements(rofl_path: str, pe_dump_dir: str = None) -> list[dic
     return movements
 
 
-def generate_action_labels(movements: list[dict], projection_path: str) -> list[dict]:
-    """Convert movement world coordinates to screen-space action labels.
+def _generate_action_labels(movements: list[dict], projection_path: str,
+                            frame_times: list = None) -> list[dict]:
+    """Convert world coordinates to screen-space action labels.
 
-    Uses the calibrated projection matrix:
-        screen_pixel = screen_center + M @ (dest_world - garen_world)
+    screen_pixel = screen_center + M @ (dest_world - garen_world)
     """
     import numpy as np
 
@@ -591,6 +863,13 @@ def generate_action_labels(movements: list[dict], projection_path: str) -> list[
 
     M = np.array(proj["matrix"])
     screen_center = np.array(proj["screen_center"])
+
+    # Build game_time -> frame_idx mapping from recorded timestamps
+    time_to_frame = {}
+    if frame_times:
+        for frame_idx, game_t in frame_times:
+            if game_t is not None:
+                time_to_frame[frame_idx] = game_t
 
     labels = []
     for m in movements:
@@ -606,12 +885,17 @@ def generate_action_labels(movements: list[dict], projection_path: str) -> list[
         if None in (garen_x, garen_y, dest_x, dest_y):
             continue
 
-        # Project destination to screen space
         world_offset = np.array([dest_x - garen_x, dest_y - garen_y])
         screen_pos = screen_center + M @ world_offset
 
-        # Compute frame index (at RECORD_FPS)
-        frame_idx = int(game_time * RECORD_FPS)
+        # Find closest recorded frame to this game time
+        frame_idx = None
+        if frame_times:
+            best_dist = float("inf")
+            for fi, gt in frame_times:
+                if gt is not None and abs(gt - game_time) < best_dist:
+                    best_dist = abs(gt - game_time)
+                    frame_idx = fi
 
         labels.append({
             "frame_idx": frame_idx,
@@ -631,95 +915,167 @@ def generate_action_labels(movements: list[dict], projection_path: str) -> list[
 
 
 # ---------------------------------------------------------------------------
+# Replay collection helpers
+# ---------------------------------------------------------------------------
+
+
+def replays_from_manifest(manifest_path: str, replays_dir: str) -> list[tuple[str, str]]:
+    """Get (rofl_path, replay_name) pairs from a manifest file."""
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    result = []
+    for m in manifest.get("matches", []):
+        game_id = m.get("game_id", "")
+        platform = m.get("platform", "").upper()
+        name = f"{platform}-{game_id}"
+        path = os.path.join(replays_dir, f"{name}.rofl")
+        if os.path.isfile(path):
+            result.append((path, name))
+
+    return result
+
+
+def replays_from_dir(replays_dir: str) -> list[tuple[str, str]]:
+    """Get all .rofl files from a directory."""
+    return [(str(f), f.stem) for f in sorted(Path(replays_dir).glob("*.rofl"))]
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
-    global RECORD_FPS, REPLAY_SPEED  # noqa: PLW0603
+    global RECORD_FPS  # noqa: PLW0603
 
-    parser = argparse.ArgumentParser(description="Automated replay processing pipeline")
+    parser = argparse.ArgumentParser(
+        description="Automated replay processing pipeline (keyboard automation)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
 
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument("--replay", help="Single .rofl file to process")
-    input_group.add_argument("--replay-dir", help="Directory of .rofl files to process")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--manifest", help="Manifest JSON from download_replays.py")
+    source.add_argument("--replay-dir", help="Directory containing .rofl files")
+    source.add_argument("--replay", help="Single .rofl file to process")
 
     parser.add_argument("--output-dir", "-o", required=True,
                         help="Output directory for processed data")
-    parser.add_argument("--projection", help="Projection matrix JSON (from calibrate_projection.py)")
-    parser.add_argument("--pe-dump-dir", default=None,
+    parser.add_argument("--replays-dir", default=REPLAYS_DIR,
+                        help=f"Where .rofl files live (default: {REPLAYS_DIR})")
+    parser.add_argument("--projection",
+                        help="Projection matrix JSON (from calibrate_projection.py)")
+    parser.add_argument("--pe-dump-dir",
                         help="PE section dumps directory (default: /tmp/pe_dump)")
     parser.add_argument("--record-only", action="store_true",
                         help="Only record video, skip movement decoding")
-    parser.add_argument("--skip-existing", action="store_true",
-                        help="Skip replays that already have output")
-    parser.add_argument("--record-fps", type=int, default=RECORD_FPS,
+    parser.add_argument("--progress-file", default=PROGRESS_FILE,
+                        help=f"Progress tracking file (default: {PROGRESS_FILE})")
+    parser.add_argument("--skip-progress", action="store_true",
+                        help="Ignore progress file — reprocess everything")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="List replays to process without actually processing")
+    parser.add_argument("--fps", type=int, default=RECORD_FPS,
                         help=f"Recording FPS (default: {RECORD_FPS})")
-    parser.add_argument("--replay-speed", type=float, default=REPLAY_SPEED,
-                        help=f"Replay speed multiplier (default: {REPLAY_SPEED})")
+    parser.add_argument("--speed", type=int, default=3, choices=[0, 1, 2, 3],
+                        help="Replay speed: 0=1x, 1=2x, 2=4x, 3=8x (default: 3)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Verbose logging")
 
     args = parser.parse_args()
 
-    # Apply CLI overrides to module constants
-    RECORD_FPS = args.record_fps
-    REPLAY_SPEED = args.replay_speed
+    if args.verbose:
+        log.setLevel(logging.DEBUG)
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    RECORD_FPS = args.fps
 
-    # Collect replay files
+    # Build replay list
     if args.replay:
-        replays = [args.replay]
+        replays = [(os.path.abspath(args.replay), Path(args.replay).stem)]
+    elif args.replay_dir:
+        replays = replays_from_dir(args.replay_dir)
     else:
-        replay_dir = Path(args.replay_dir)
-        replays = sorted(str(f) for f in replay_dir.glob("*.rofl"))
+        replays = replays_from_manifest(args.manifest, args.replays_dir)
 
     if not replays:
-        print("No .rofl files found")
+        log.error("No replay files found")
         sys.exit(1)
 
-    print(f"Found {len(replays)} replay(s) to process")
-    print(f"Recording at {RECORD_FPS}fps, {REPLAY_SPEED}x speed")
-    print(f"Output: {output_dir}")
+    log.info(f"Found {len(replays)} replay(s)")
 
-    # Process each replay
-    all_stats = []
-    for i, rofl_path in enumerate(replays):
-        basename = Path(rofl_path).stem
-        if args.skip_existing and (output_dir / basename / "video").exists():
-            print(f"\nSkipping {basename} (already processed)")
+    progress = load_progress(args.progress_file) if not args.skip_progress else {
+        "completed": [], "failed": [],
+    }
+    done = set(progress["completed"])
+    to_process = [(p, n) for p, n in replays if n not in done]
+
+    skipped = len(replays) - len(to_process)
+    if skipped:
+        log.info(f"Skipping {skipped} already-processed replay(s)")
+
+    if not to_process:
+        log.info("All replays already processed!")
+        return
+
+    log.info(f"Will process {len(to_process)} replay(s) at {RECORD_FPS}fps")
+
+    if args.dry_run:
+        print("\nReplays to process:")
+        for path, name in to_process:
+            print(f"  {name}: {path}")
+        print(f"\nTotal: {len(to_process)}")
+        return
+
+    output_dir = args.output_dir
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    succeeded = 0
+    failed = 0
+
+    for i, (rofl_path, replay_name) in enumerate(to_process):
+        log.info(f"\n[{i+1}/{len(to_process)}] {replay_name}")
+
+        try:
+            result = process_single_replay(
+                rofl_path, output_dir,
+                projection_path=args.projection,
+                record_only=args.record_only,
+                pe_dump_dir=args.pe_dump_dir,
+                replay_speed=args.speed,
+            )
+        except KeyboardInterrupt:
+            log.info("\nInterrupted — saving progress")
+            save_progress(progress, args.progress_file)
+            sys.exit(1)
+        except Exception as e:
+            log.error(f"Unexpected error: {e}")
+            result = {"success": False}
+
+        if result.get("skipped"):
+            log.info(f"  Skipped (no Garen)")
             continue
+        elif result.get("success"):
+            progress["completed"].append(replay_name)
+            succeeded += 1
+        else:
+            progress["failed"].append(replay_name)
+            failed += 1
 
-        print(f"\n[Replay {i+1}/{len(replays)}]")
-        stats = process_single_replay(
-            rofl_path, str(output_dir),
-            projection_path=args.projection,
-            record_only=args.record_only,
-            pe_dump_dir=args.pe_dump_dir,
-        )
-        all_stats.append(stats)
+        save_progress(progress, args.progress_file)
 
-        # Brief pause between replays
-        if i < len(replays) - 1:
-            print("\n  Pausing 5s before next replay...")
+        if i < len(to_process) - 1:
+            log.info("Waiting 5s before next replay...")
             time.sleep(5)
 
-    # Summary
-    print(f"\n{'='*60}")
-    print(f"Processing complete")
-    print(f"{'='*60}")
-    successes = sum(1 for s in all_stats if s["success"])
-    print(f"Processed: {len(all_stats)}")
-    print(f"Successful: {successes}")
-    print(f"Failed: {len(all_stats) - successes}")
-    total_movements = sum(s.get("movements", 0) for s in all_stats)
-    if total_movements:
-        print(f"Total movements decoded: {total_movements}")
+    log.info(f"\n{'='*60}")
+    log.info(f"DONE — {succeeded + failed}/{len(to_process)} replays processed")
+    log.info(f"  Succeeded: {succeeded}")
+    log.info(f"  Failed:    {failed}")
+    log.info(f"  Output:    {output_dir}")
+    log.info(f"  Progress:  {args.progress_file}")
 
-    # Save summary
-    summary_path = output_dir / "processing_summary.json"
+    summary_path = Path(output_dir) / "processing_summary.json"
     with open(summary_path, "w") as f:
-        json.dump(all_stats, f, indent=2, default=str)
-    print(f"\nSummary saved to {summary_path}")
+        json.dump(progress, f, indent=2)
 
 
 if __name__ == "__main__":

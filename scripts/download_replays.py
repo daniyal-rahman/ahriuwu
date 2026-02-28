@@ -318,15 +318,20 @@ def download_replays(manifest_path: str, output_dir: str):
         print(f"\n[{i+1}/{len(to_download)}] Downloading {match_id} (game {game_id})...")
 
         url = f"https://127.0.0.1:{port}/lol-replays/v1/rofls/{game_id}/download"
-        req = Request(url, method="POST", headers={
+        body = json.dumps({"componentType": "replay"}).encode()
+        req = Request(url, method="POST", data=body, headers={
             "Authorization": f"Basic {auth}",
             "Content-Type": "application/json",
         })
 
         try:
             with urlopen(req, context=ctx) as resp:
-                result = json.loads(resp.read())
-                print(f"  Download initiated: {result}")
+                resp_body = resp.read()
+                if resp_body:
+                    result = json.loads(resp_body)
+                    print(f"  Download initiated: {result}")
+                else:
+                    print(f"  Download initiated (204 No Content)")
                 downloaded += 1
         except HTTPError as e:
             body = e.read().decode() if e.fp else ""

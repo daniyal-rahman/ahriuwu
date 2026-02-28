@@ -102,6 +102,28 @@ def lookup_garen_pos(movement_data_path: str, game_time: float,
     return (x, y)
 
 
+def click_point(frame_path: str, prompt: str) -> tuple[float, float]:
+    """Show a frame and let the user click a single point."""
+    frame = cv2.imread(frame_path)
+    click_pos = [None]
+
+    def on_mouse(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            click_pos[0] = (x, y)
+
+    window_name = prompt
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, min(frame.shape[1], 1600), min(frame.shape[0], 900))
+    cv2.setMouseCallback(window_name, on_mouse)
+
+    print(f"\n{prompt}")
+    while click_pos[0] is None:
+        cv2.imshow(window_name, frame)
+        cv2.waitKey(100)
+    cv2.destroyAllWindows()
+    return click_pos[0]
+
+
 def interactive_calibrate(frame_path: str, garen_world: tuple[float, float],
                           screen_center: tuple[float, float]) -> np.ndarray:
     """Interactive calibration: user clicks on turrets in the frame.
@@ -310,6 +332,8 @@ def main():
 
     parser.add_argument("--verify", metavar="MATRIX_JSON",
                         help="Verify mode: overlay projections using saved matrix")
+    parser.add_argument("--click-garen", action="store_true",
+                        help="Click on Garen's screen position (for directed/unlocked camera)")
 
     args = parser.parse_args()
 
@@ -318,7 +342,6 @@ def main():
         print(f"Error: cannot read frame {args.frame}")
         sys.exit(1)
     h, w = frame.shape[:2]
-    screen_center = (w / 2.0, h / 2.0)
     del frame
 
     # Get Garen's world position
@@ -335,6 +358,12 @@ def main():
     if args.verify:
         verify_calibration(args.verify, args.frame, garen_world)
         return
+
+    if args.click_garen:
+        screen_center = click_point(args.frame, "Click on Garen's feet, then press any key")
+        print(f"Garen screen pos: ({screen_center[0]:.0f}, {screen_center[1]:.0f})")
+    else:
+        screen_center = (w / 2.0, h / 2.0)
 
     M = interactive_calibrate(args.frame, garen_world, screen_center)
 
