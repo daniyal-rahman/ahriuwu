@@ -1,14 +1,5 @@
 {
   "tokenizers": {
-    "cnn_epoch_010": {
-      "path": "checkpoints/tokenizer_epoch_010.pt",
-      "type": "cnn",
-      "params": 12949315,
-      "latent_dim": 256,
-      "psnr": 32.64,
-      "lpips": 0.0216,
-      "date": "2026-01-12"
-    },
     "transformer_best_20260115": {
       "path": "checkpoints/run_20260115_195915/transformer_tokenizer_best.pt",
       "type": "transformer",
@@ -37,15 +28,6 @@
       "status": "complete",
       "date_started": "2026-01-07",
       "notes": "Original transformer dynamics training"
-    },
-    "cnn_dynamics_20260118": {
-      "tokenizer": "cnn_epoch_010",
-      "latents_dir": "data/processed/latents_cnn",
-      "checkpoints_prefix": "checkpoints/cnn_dynamics_20260118_",
-      "latent_dim": 256,
-      "status": "in_progress",
-      "date_started": "2026-01-18",
-      "notes": "CNN tokenizer dynamics experiment - testing if 5dB PSNR gain helps rollouts"
     }
   }
 }
