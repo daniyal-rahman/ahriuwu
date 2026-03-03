@@ -803,3 +803,234 @@ OCR-based detection is clearly superior for health bar tracking. Color detection
 |------|--------|
 | `src/ahriuwu/data/keylog_extractor.py` | Added `team_side` param, ally color detection |
 | `scripts/compare_detection_methods.py` | NEW: Benchmark script comparing both methods |
+
+---
+
+## 2026-03-03: Major Codebase Audit, Refactor & CNN Tokenizer Removal
+
+### Summary
+Comprehensive audit found 12+ bugs. Fixed all of them, removed the CNN tokenizer entirely, deduplicated ~1,600 lines of code into shared modules, and validated with GPU smoke tests on the RTX 5080.
+
+### Critical Bugs Found & Fixed
+
+**1. Spatial dimension confusion (dynamics)**
+The factory `create_dynamics()` was set to `spatial_size=22` (352px/16px = 22 patches). But dynamics operates on **latent** tokens (256 latents = 16x16 grid), NOT patches. Reverted to `spatial_size=16`. The tokenizer bottleneck compresses 484 patches → 256 latents; dynamics never sees the patch grid.
+
+**2. Image size defaults (tokenizer)**
+`create_transformer_tokenizer()` defaulted to `img_size=256` but our frames are 352x352. Fixed to `img_size=352`.
+
+**3. QKNorm after RoPE**
+QKNorm was applied after RoPE rotation, corrupting the normalized magnitudes. Moved normalize BEFORE RoPE.
+
+**4. Shortcut forcing noise reuse**
+Bootstrap loss reused the original noise `epsilon` for the second teacher step instead of sampling fresh noise. Fixed with `torch.randn_like(z_mid)`.
+
+**5. Per-timestep tau in eval**
+Eval was passing scalar tau instead of per-timestep (B,T) tensor, so all frames got the same noise level. Fixed to properly set context frames to tau_ctx and target frame to current tau.
+
+**6. GradScaler hardcoded "cuda"**
+Would crash on MPS or CPU. Fixed to `args.device.split(":")[0]`.
+
+**7. Agent cross-attention KV unnormalized**
+Added `norm_kv = RMSNorm(dim)` for z_tokens before cross-attention.
+
+### Refactoring
+- Extracted shared `RMSNorm`, `QKNorm`, `SwiGLU`, `soft_cap_attention` to `models/layers.py`
+- Extracted shared training utilities to `utils/training.py` (optimizer, scheduler, checkpoint, argparse)
+- Consolidated 3 eval scripts into single `eval_dynamics.py --mode quick|full`
+- Moved 23 debug scripts to `scripts/debug/`
+- Net: -1,632 lines from CNN removal alone
+
+### CNN Tokenizer Removal
+Deleted `tokenizer.py`, `train_tokenizer.py`, `eval_tokenizer.py`, `compare_tokenizers.py`. Updated all 8 referencing scripts. Only transformer tokenizer remains.
+
+### SwiGLU Weight Naming Change
+Deduplication canonicalized SwiGLU weight names (dynamics convention). Old transformer tokenizer checkpoints will NOT load. Must retrain from scratch.
+
+### Hardcoded 256x256 → 352x352
+Fixed frame size references across eval_dynamics.py, eval_trade_prediction.py, pretokenize_frames.py, play_live.py, train_agent_finetune.py.
+
+---
+
+## 2026-03-03: Experiment Plan & Training Roadmap
+
+### Current State
+
+| Item | Status |
+|------|--------|
+| Hardware | RTX 5080 16GB, Linux desktop (`ssh desktop`) |
+| Data | ~71 Garen videos, ~2.38M frames at 20 FPS (~33 hours) |
+| Previous checkpoints | **ALL INVALIDATED** (spatial fix, SwiGLU rename, QKNorm fix) |
+| Codebase | Clean, refactored, all known bugs fixed |
+
+### Why Retrain Everything
+Every existing checkpoint is invalidated by one or more of:
+1. SwiGLU weight naming changed → tokenizer won't load
+2. QKNorm was applied after RoPE → attention was subtly wrong
+3. Shortcut forcing reused noise → bootstrap loss trained on stale targets
+
+### Architecture Summary
+
+**Transformer Tokenizer (small)**
+| Component | Value |
+|-----------|-------|
+| Parameters | ~40M |
+| Input | 352x352 RGB frame |
+| Patches | 16x16 pixels → 22x22 = 484 patch tokens |
+| Latent bottleneck | 484 patches → 256 latent tokens |
+| Latent dim | 32 per token |
+| Output shape | (256, 32) → reshaped to (32, 16, 16) for dynamics |
+| Encoder | 6 layers, embed_dim=512, 8 heads |
+| Decoder | 6 layers, embed_dim=512, 8 heads |
+
+**Dynamics Transformer (small)**
+| Component | Value |
+|-----------|-------|
+| Parameters | ~60M base, ~79M with actions+agent tokens |
+| Input | (B, T, 32, 16, 16) latent sequences |
+| Spatial tokens | 16x16 = 256 per frame |
+| Register tokens | 8 per frame |
+| Layers | 12 (temporal attention every 4th) |
+| Model dim | 512, 8 heads |
+| Stability | QKNorm, soft cap 50.0, gradient checkpointing |
+
+### Training Phases
+
+#### Phase 0: Retrain Transformer Tokenizer
+
+| Variable | Value |
+|----------|-------|
+| Size | small (40M params) |
+| Image | 352x352 → 484 patches |
+| Loss | MSE + 0.2 * LPIPS (VGG) |
+| MAE mask range | U(0.1, 0.9) with 10% zero-mask passes |
+| Mask warmup | 50,000 steps (curriculum, prevents collapse) |
+| Batch size | 8 (test first, may need 4 with 484 patches) |
+| LR | 3e-4, WSD schedule, 2000 warmup |
+| Optimizer | AdamW 8-bit, weight_decay=0.1 |
+| RoPE | enabled |
+| torch.compile | yes |
+| Target PSNR | >27 dB |
+
+**VRAM concern**: 484 patches (up from 256 at old 256x256 default) increases attention memory. May need to reduce batch size or enable gradient checkpointing.
+
+```bash
+python scripts/train_transformer_tokenizer.py \
+  --model-size small --epochs 50 --batch-size 8 \
+  --mask-warmup-steps 50000 --use-rope \
+  --wandb --wandb-project ahriuwu
+```
+
+#### Phase 1: Pretokenize + Train Dynamics
+
+After tokenizer converges, pretokenize all frames:
+```bash
+python scripts/pretokenize_frames.py \
+  --checkpoint checkpoints/transformer_tokenizer_best.pt
+```
+
+Then train dynamics:
+
+| Variable | Value |
+|----------|-------|
+| Size | small (512 dim, 12 layers) |
+| Latent dim | 32 (must match tokenizer) |
+| Spatial grid | 16x16 (256 latent tokens) |
+| Diffusion | x-prediction, flow matching, ramp weight |
+| Per-timestep tau | Yes (diffusion forcing) |
+| Shortcut forcing | Yes, k_max=64 → 4-step inference |
+| Alternating lengths | T_short=32, T_long=64, long_ratio=0.1 |
+| Independent frames | 30% of batches disable temporal attention |
+| Action conditioning | Yes (factorized: 8 abilities + continuous movement) |
+| Gradient checkpointing | Yes |
+| Batch size | 2 (short) / 1 (long) |
+| LR | 3e-4, WSD schedule |
+
+```bash
+python scripts/train_dynamics.py \
+  --latents-dir data/processed/latents --latent-dim 32 \
+  --model-size small --shortcut-forcing --use-actions \
+  --alternating-lengths --gradient-checkpointing \
+  --wandb --wandb-project ahriuwu
+```
+
+**Eval checkpoints**:
+```bash
+# Quick sanity (1-step denoising)
+python scripts/eval_dynamics.py --mode quick \
+  --dynamics-checkpoint checkpoints/dynamics_best.pt \
+  --tokenizer-checkpoint checkpoints/transformer_tokenizer_best.pt
+
+# Full rollout (multi-step)
+python scripts/eval_dynamics.py --mode full \
+  --dynamics-checkpoint checkpoints/dynamics_best.pt \
+  --tokenizer-checkpoint checkpoints/transformer_tokenizer_best.pt
+```
+
+#### Phase 2: Agent Finetuning (BC + Reward)
+
+Load pretrained dynamics, add agent tokens, train reward + policy heads:
+
+| Variable | Value |
+|----------|-------|
+| MTP length | 8 (predict 8 future timesteps) |
+| Action dim | 128 discrete + continuous (x,y) movement |
+| Reward | symlog twohot, 255 buckets |
+| Loss | dynamics + reward + BC (all RMS-normalized) |
+| Reward sampling | 50/50 mixture (uniform + reward-containing) |
+
+```bash
+python scripts/train_agent_finetune.py \
+  --dynamics-checkpoint checkpoints/dynamics_best.pt \
+  --tokenizer-checkpoint checkpoints/transformer_tokenizer_best.pt \
+  --latents-dir data/processed/latents \
+  --use-reward-mixture --wandb --wandb-project ahriuwu
+```
+
+#### Phase 3: Imagination Training (NOT YET IMPLEMENTED)
+
+DreamerV4 Section 3.4 - actor-critic in latent imagination:
+- Freeze tokenizer and dynamics
+- Roll out future trajectories in latent space using dynamics model
+- Train actor (policy) to maximize predicted rewards
+- Train critic (value function) with lambda returns
+- Uses `compute_lambda_returns()` and `compute_advantages()` (already implemented in `models/returns.py`)
+
+**Still needs**:
+- Imagination rollout loop (latent-space, no pixel decode)
+- Actor loss (policy gradient with advantages)
+- Critic loss (value prediction with lambda returns)
+- `ValueHead` already exists but training script needed
+- `train_imagination.py` script
+
+### Ablations to Consider
+
+| Experiment | Baseline | Ablation | Question |
+|------------|----------|----------|----------|
+| Model size | small | tiny | Does tiny fit with longer sequences? |
+| Shortcut forcing | enabled | disabled | Quality vs speed tradeoff |
+| Independent frames | 0.3 | 0.0 | Does it actually help? |
+| Alternating lengths | T=32/64 | T=32 only | Worth the complexity? |
+| Sequence length | T=32 | T=64 | More context = better prediction? |
+| RoPE | enabled | disabled | RoPE vs learned positions |
+| Mask warmup | 50k | 25k or 100k | Optimal curriculum speed |
+
+### Data Pipeline Status
+
+| Step | Status | Notes |
+|------|--------|-------|
+| Replay recording | Done | ~71 videos, dxcam + pynput, 20 FPS |
+| Frame extraction | Done | 2.38M frames, 352x352 |
+| Feature extraction | Done | gold, health via OCR |
+| Action extraction | Done | movement + abilities from keylog |
+| Pretokenization | **NEEDS REDO** | Must retokenize with new tokenizer |
+| Latent packing | **NEEDS REDO** | After retokenization |
+
+### Known TODOs in Code
+
+| File | Issue |
+|------|-------|
+| `train_agent_finetune.py` | Raw frame mode not implemented (latents-only) |
+| `train_agent_finetune.py` | Factorized actions not passed to dynamics (uses no_action_embed fallback) |
+| `extract_features_v2.py` | Ability detection from keylog overlay not implemented |
+| Phase 3 | `train_imagination.py` not written yet |

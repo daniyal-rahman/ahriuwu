@@ -466,7 +466,7 @@ def latents_to_frames(
         batch_size: Decode batch size to avoid OOM
 
     Returns:
-        frames: (B, T, 3, 256, 256) decoded frames
+        frames: (B, T, 3, img_size, img_size) decoded frames
     """
     B, T, C, H, W = latents.shape
 
@@ -483,8 +483,9 @@ def latents_to_frames(
 
     frames_flat = torch.cat(frames_list, dim=0).to(device)
 
-    # Reshape back
-    frames = frames_flat.reshape(B, T, 3, 256, 256)
+    # Reshape back - infer frame size from decoded output
+    _, C_out, H_out, W_out = frames_flat.shape
+    frames = frames_flat.reshape(B, T, C_out, H_out, W_out)
     return frames
 
 
@@ -497,8 +498,8 @@ def create_comparison_video(
     """Create side-by-side comparison image grid.
 
     Args:
-        gt_frames: (T, 3, 256, 256) ground truth
-        pred_frames: (T, 3, 256, 256) predictions
+        gt_frames: (T, 3, H, W) ground truth
+        pred_frames: (T, 3, H, W) predictions
         output_path: Path to save
         context_len: Number of context frames (for labeling)
     """
@@ -508,7 +509,7 @@ def create_comparison_video(
     frame_indices = list(range(0, T, max(1, T // 8)))[:8]
 
     # Create grid
-    frame_h, frame_w = 256, 256
+    frame_h, frame_w = gt_frames.shape[2], gt_frames.shape[3]
     padding = 4
     num_cols = len(frame_indices)
 

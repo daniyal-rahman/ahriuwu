@@ -68,7 +68,7 @@ class FrameDatasetForEncoding(Dataset):
         self,
         frames_dir: Path,
         output_dir: Path,
-        target_size: tuple[int, int] = (256, 256),
+        target_size: tuple[int, int] = (352, 352),
         file_ext: str = "jpg",
         skip_existing: bool = False,
     ):

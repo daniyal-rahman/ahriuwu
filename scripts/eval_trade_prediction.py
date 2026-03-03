@@ -16,7 +16,7 @@ from ahriuwu.models import create_transformer_tokenizer
 from ahriuwu.models.dynamics import create_dynamics
 
 
-def load_frame(frame_path: Path, size: tuple = (256, 256)) -> np.ndarray:
+def load_frame(frame_path: Path, size: tuple = (352, 352)) -> np.ndarray:
     """Load and resize a frame."""
     frame = cv2.imread(str(frame_path))
     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

@@ -1086,7 +1086,7 @@ def create_dynamics(
 
     return DynamicsTransformer(
         latent_dim=latent_dim,
-        spatial_size=22,  # 352px / 16px patch = 22×22 spatial grid
+        spatial_size=16,  # 256 latent tokens = 16×16 spatial grid
         use_agent_tokens=use_agent_tokens,
         num_tasks=num_tasks,
         agent_layers=agent_layers,

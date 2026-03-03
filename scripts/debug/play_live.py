@@ -18,7 +18,7 @@ Usage:
         --policy-checkpoint checkpoints/policy_best.pt
 
 Pipeline:
-    capture(20fps) -> resize(256x256) -> tokenize ->
+    capture(20fps) -> resize(352x352) -> tokenize ->
     dynamics(hidden_state) -> policy_head ->
     decode_action -> send_keys
 """
@@ -354,22 +354,22 @@ class LiveInference:
             frame: BGR image from screen capture
 
         Returns:
-            (1, 3, 256, 256) tensor in [0, 1]
+            (1, 3, 352, 352) tensor in [0, 1]
         """
-        # Resize to 256x256
-        frame = cv2.resize(frame, (256, 256), interpolation=cv2.INTER_AREA)
+        # Resize to 352x352
+        frame = cv2.resize(frame, (352, 352), interpolation=cv2.INTER_AREA)
         # BGR to RGB
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         # To tensor
         tensor = torch.from_numpy(frame).float() / 255.0
-        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # (1, 3, 256, 256)
+        tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # (1, 3, 352, 352)
         return tensor.to(self.device)
 
     def encode_frame(self, frame_tensor: torch.Tensor) -> torch.Tensor:
         """Encode frame to latent.
 
         Args:
-            frame_tensor: (1, 3, 256, 256) tensor
+            frame_tensor: (1, 3, 352, 352) tensor
 
         Returns:
             Latent tensor

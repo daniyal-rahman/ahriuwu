@@ -222,8 +222,7 @@ def parse_args():
     parser.add_argument(
         "--tokenizer-type",
         type=str,
-        default="cnn",
-        choices=["cnn", "transformer"],
+        default="transformer",
         help="Type of tokenizer used to generate latents (for labeling runs)",
     )
     parser.add_argument(

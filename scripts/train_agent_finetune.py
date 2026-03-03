@@ -308,7 +308,7 @@ class ReplayDataset(torch.utils.data.Dataset):
         else:
             # Placeholder for raw frame mode
             T = self.seq_len
-            C, H, W = 3, 256, 256
+            C, H, W = 3, 352, 352
             return {
                 "frames": torch.rand(T, C, H, W),
                 "actions": torch.randint(0, 128, (T,)),
