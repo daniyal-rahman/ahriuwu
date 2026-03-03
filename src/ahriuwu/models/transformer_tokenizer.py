@@ -1140,6 +1140,7 @@ def create_transformer_tokenizer(
         raise ValueError(f"Unknown size: {size}. Choose from {list(configs.keys())}")
 
     return TransformerTokenizer(
+        img_size=352,  # Match dataset TARGET_SIZE=(352, 352)
         **configs[size],
         use_rope=use_rope,
         use_qk_norm=use_qk_norm,
