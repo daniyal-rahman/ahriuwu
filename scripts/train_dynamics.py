@@ -375,10 +375,10 @@ def train_epoch(
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
             if shortcut is not None:
                 # Shortcut forcing: sample step sizes and use bootstrap loss
-                # Temporarily disable gradient checkpointing — shortcut forcing
-                # calls the model 3 times (2 teacher + 1 student) and the metadata
-                # verification in checkpoint(use_reentrant=False) fails due to
-                # autocast context mismatch during recomputation.
+                # Disable gradient checkpointing — autocast inserts hidden cast ops
+                # that change the saved tensor list, so checkpoint recomputation
+                # misaligns tensor indices and raises CheckpointError. ~2.5 GB extra
+                # VRAM for the student forward pass, well within 16 GB headroom.
                 gc_was_enabled = getattr(model, 'gradient_checkpointing', False)
                 if gc_was_enabled:
                     model.gradient_checkpointing = False
