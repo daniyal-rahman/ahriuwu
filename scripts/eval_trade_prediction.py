@@ -12,7 +12,7 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 
-from ahriuwu.models import create_tokenizer
+from ahriuwu.models import create_transformer_tokenizer
 from ahriuwu.models.dynamics import create_dynamics
 
 
@@ -134,9 +134,12 @@ def main():
 
     # Load tokenizer
     print("Loading tokenizer...")
-    tokenizer_ckpt = torch.load(args.tokenizer_checkpoint, map_location="cpu")
-    tokenizer = create_tokenizer(tokenizer_ckpt.get("args", {}).get("model_size", "small"))
-    tokenizer.load_state_dict(tokenizer_ckpt["model_state_dict"])
+    tokenizer_ckpt = torch.load(args.tokenizer_checkpoint, map_location="cpu", weights_only=False)
+    tokenizer_args = tokenizer_ckpt.get("args", {})
+    model_size = tokenizer_args.get("model_size", "small")
+    use_rope = tokenizer_args.get("use_rope", True)
+    tokenizer = create_transformer_tokenizer(model_size, use_rope=use_rope)
+    tokenizer.load_state_dict(tokenizer_ckpt["model_state_dict"], strict=False)
     tokenizer = tokenizer.to(device).eval()
 
     # Load dynamics model
@@ -199,10 +202,13 @@ def main():
         B, T, C, H, W = context_tensors.shape
 
         with torch.no_grad():
-            # Encode each frame
+            # Encode each frame with transformer tokenizer
             context_latents = []
             for t in range(T):
-                latent = tokenizer.encode(context_tensors[:, t])
+                out = tokenizer.encode(context_tensors[:, t])
+                latent = out["latent"]  # (1, 256, latent_dim)
+                # Reshape to (1, latent_dim, 16, 16)
+                latent = latent.view(1, 16, 16, -1).permute(0, 3, 1, 2)
                 context_latents.append(latent)
             context_latents = torch.stack(context_latents, dim=1)  # (1, T, C, H, W)
 
@@ -226,7 +232,9 @@ def main():
             # Decode predictions
             predicted_frames = []
             for latent in predicted_latents:
-                decoded = tokenizer.decode(latent)
+                # latent is (1, C, 16, 16) -> (1, 256, C) for transformer decode
+                lat = latent.permute(0, 2, 3, 1).reshape(1, 256, -1)
+                decoded = tokenizer.decode(lat, num_frames=1).squeeze(1)
                 decoded = decoded.squeeze(0).permute(1, 2, 0).cpu().numpy()
                 decoded = (decoded * 255).clip(0, 255).astype(np.uint8)
                 predicted_frames.append(decoded)

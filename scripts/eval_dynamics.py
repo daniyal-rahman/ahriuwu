@@ -30,7 +30,6 @@ from torch.utils.data import DataLoader, Subset
 from ahriuwu.data import LatentSequenceDataset
 from ahriuwu.models import (
     create_dynamics,
-    create_tokenizer,
     create_transformer_tokenizer,
     DiffusionSchedule,
     psnr,
@@ -316,25 +315,13 @@ def load_dynamics(checkpoint_path: Path, device: str):
 
 
 def load_tokenizer(checkpoint_path: Path, device: str):
-    """Load tokenizer from checkpoint (auto-detects transformer vs CNN)."""
+    """Load transformer tokenizer from checkpoint."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     args = checkpoint.get("args", {})
 
     model_size = args.get("model_size", "small")
-
-    # Auto-detect transformer tokenizer by checking for RoPE or perceiver keys
-    is_transformer = any(
-        "rope" in k or "perceiver" in k or "latent_tokens" in k
-        for k in checkpoint["model_state_dict"].keys()
-    )
-
-    if is_transformer:
-        print("Detected transformer tokenizer")
-        has_rope = any("rope" in k for k in checkpoint["model_state_dict"].keys())
-        model = create_transformer_tokenizer(model_size, use_rope=has_rope)
-    else:
-        print("Detected CNN tokenizer")
-        model = create_tokenizer(model_size)
+    has_rope = any("rope" in k for k in checkpoint["model_state_dict"].keys())
+    model = create_transformer_tokenizer(model_size, use_rope=has_rope)
 
     missing, unexpected = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     if missing:
@@ -344,7 +331,24 @@ def load_tokenizer(checkpoint_path: Path, device: str):
     model = model.to(device)
     model.eval()
 
-    return model, is_transformer
+    return model
+
+
+def decode_latents(tokenizer, latents_flat):
+    """Decode latents using transformer tokenizer.
+
+    Args:
+        tokenizer: Transformer tokenizer
+        latents_flat: (B, C, H, W) latents where C=latent_dim, H=W=16
+
+    Returns:
+        Decoded frames
+    """
+    # Transformer tokenizer expects (B, num_latents, latent_dim) = (B, 256, 32)
+    batch = latents_flat.permute(0, 2, 3, 1)  # (B, 16, 16, C)
+    batch = batch.reshape(batch.shape[0], 256, -1)  # (B, 256, C)
+    decoded = tokenizer.decode(batch, num_frames=1)
+    return decoded.squeeze(1)  # Remove T dimension
 
 
 def rollout_predictions(
@@ -452,16 +456,14 @@ def latents_to_frames(
     latents: torch.Tensor,
     device: str,
     batch_size: int = 8,
-    is_transformer: bool = False,
 ) -> torch.Tensor:
     """Decode latents to pixel frames.
 
     Args:
-        tokenizer: Tokenizer with decode method
-        latents: (B, T, C, H, W) latents - for transformer C=32, H=W=16
+        tokenizer: Transformer tokenizer with decode method
+        latents: (B, T, C, H, W) latents where C=latent_dim, H=W=16
         device: Device
         batch_size: Decode batch size to avoid OOM
-        is_transformer: Whether using transformer tokenizer (needs reshape)
 
     Returns:
         frames: (B, T, 3, 256, 256) decoded frames
@@ -476,19 +478,8 @@ def latents_to_frames(
     with torch.no_grad():
         for i in range(0, B * T, batch_size):
             batch = latents_flat[i:i + batch_size].float()
-
-            if is_transformer:
-                # Transformer tokenizer expects (B, T*num_latents, latent_dim) = (B, 256, 32) for T=1
-                # Input is (B, 32, 16, 16) -> reshape to (B, 16, 16, 32) -> (B, 256, 32)
-                batch = batch.permute(0, 2, 3, 1)  # (B, 16, 16, 32)
-                batch = batch.reshape(batch.shape[0], 256, -1)  # (B, 256, 32)
-                decoded = tokenizer.decode(batch, num_frames=1)
-                # Output is (B, 1, C, H, W), squeeze the T dimension
-                decoded = decoded.squeeze(1)
-            else:
-                decoded = tokenizer.decode(batch)
-
-            frames_list.append(decoded.cpu())  # Move to CPU to free GPU memory
+            decoded = decode_latents(tokenizer, batch)
+            frames_list.append(decoded.cpu())
 
     frames_flat = torch.cat(frames_list, dim=0).to(device)
 
@@ -555,7 +546,6 @@ def compute_rollout_metrics(
     dataloader: DataLoader,
     args,
     device: str,
-    is_transformer: bool = False,
 ):
     """Compute metrics over dataset.
 
@@ -589,8 +579,8 @@ def compute_rollout_metrics(
         )
 
         # Decode to pixels
-        target_frames = latents_to_frames(tokenizer, target, device, is_transformer=is_transformer)
-        pred_frames = latents_to_frames(tokenizer, predicted, device, is_transformer=is_transformer)
+        target_frames = latents_to_frames(tokenizer, target, device)
+        pred_frames = latents_to_frames(tokenizer, predicted, device)
 
         # Compute PSNR
         for b in range(B):
@@ -621,7 +611,6 @@ def generate_sample_rollouts(
     args,
     output_dir: Path,
     device: str,
-    is_transformer: bool = False,
 ):
     """Generate visual sample rollouts."""
     context_frames = args.context_frames
@@ -647,8 +636,8 @@ def generate_sample_rollouts(
         )
 
         # Decode
-        full_gt_frames = latents_to_frames(tokenizer, latents, device, is_transformer=is_transformer)
-        pred_frames = latents_to_frames(tokenizer, predicted, device, is_transformer=is_transformer)
+        full_gt_frames = latents_to_frames(tokenizer, latents, device)
+        pred_frames = latents_to_frames(tokenizer, predicted, device)
 
         for b in range(B):
             if sample_idx >= args.num_samples:
@@ -684,7 +673,7 @@ def run_quick_eval(args):
 
     # Load models
     dynamics, dynamics_ckpt = load_dynamics(dynamics_path, device)
-    tokenizer, is_transformer = load_tokenizer(tokenizer_path, device)
+    tokenizer = load_tokenizer(tokenizer_path, device)
     step = dynamics_ckpt.get("global_step", "unknown")
     print(f"Loaded dynamics step {step}")
 
@@ -729,19 +718,10 @@ def run_quick_eval(args):
         z_0_f32 = z_0.float()
         z_pred_f32 = z_pred.float()
 
-        if is_transformer:
-            def decode_xf(z):
-                z = z.permute(0, 2, 3, 1).reshape(z.shape[0], 256, -1)
-                return tokenizer.decode(z, num_frames=1).squeeze(1)
-            recon_0 = decode_xf(z_0_f32[:, 0])
-            recon_16 = decode_xf(z_0_f32[:, 16])
-            pred_0 = decode_xf(z_pred_f32[:, 0])
-            pred_16 = decode_xf(z_pred_f32[:, 16])
-        else:
-            recon_0 = tokenizer.decode(z_0_f32[:, 0])
-            recon_16 = tokenizer.decode(z_0_f32[:, 16])
-            pred_0 = tokenizer.decode(z_pred_f32[:, 0])
-            pred_16 = tokenizer.decode(z_pred_f32[:, 16])
+        recon_0 = decode_latents(tokenizer, z_0_f32[:, 0])
+        recon_16 = decode_latents(tokenizer, z_0_f32[:, 16])
+        pred_0 = decode_latents(tokenizer, z_pred_f32[:, 0])
+        pred_16 = decode_latents(tokenizer, z_pred_f32[:, 16])
 
     def save_img(tensor, path):
         img = (tensor[0].cpu().permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
@@ -790,14 +770,14 @@ def run_full_eval(args):
     # Load models
     print("\nLoading models...")
     dynamics, dynamics_ckpt = load_dynamics(dynamics_path, args.device)
-    tokenizer, is_transformer = load_tokenizer(tokenizer_path, args.device)
+    tokenizer = load_tokenizer(tokenizer_path, args.device)
 
     epoch = dynamics_ckpt.get("epoch", "?")
     step = dynamics_ckpt.get("global_step", "?")
     print(f"Dynamics: epoch {epoch}, step {step}")
     print(f"Dynamics params: {dynamics.get_num_params():,}")
     print(f"Tokenizer params: {tokenizer.get_num_params():,}")
-    print(f"Tokenizer type: {'transformer' if is_transformer else 'CNN'}")
+    print(f"Tokenizer type: transformer")
 
     # Create diffusion schedule
     schedule = DiffusionSchedule(device=args.device)
@@ -852,7 +832,7 @@ def run_full_eval(args):
     # Compute metrics
     print("\nComputing rollout metrics...")
     metrics = compute_rollout_metrics(
-        dynamics, tokenizer, schedule, dataloader, args, args.device, is_transformer
+        dynamics, tokenizer, schedule, dataloader, args, args.device
     )
 
     print(f"\n{'='*40}")
@@ -890,7 +870,7 @@ def run_full_eval(args):
     # Generate sample rollouts
     print("\nGenerating sample rollouts...")
     generate_sample_rollouts(
-        dynamics, tokenizer, schedule, dataloader, args, output_dir, args.device, is_transformer
+        dynamics, tokenizer, schedule, dataloader, args, output_dir, args.device
     )
 
     print("\n" + "=" * 60)

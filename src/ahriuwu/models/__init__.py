@@ -1,6 +1,5 @@
 """Model implementations for world model training."""
 
-from .tokenizer import VisionTokenizer, create_tokenizer
 from .transformer_tokenizer import TransformerTokenizer, create_transformer_tokenizer
 from .losses import TokenizerLoss, VGGPerceptualLoss, LPIPSLoss, MAELoss, psnr, LPIPS_AVAILABLE
 from .diffusion import (
@@ -25,9 +24,6 @@ from .returns import (
 )
 
 __all__ = [
-    # Tokenizer (CNN)
-    "VisionTokenizer",
-    "create_tokenizer",
     # Tokenizer (Transformer - DreamerV4)
     "TransformerTokenizer",
     "create_transformer_tokenizer",

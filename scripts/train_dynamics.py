@@ -9,14 +9,8 @@ Usage:
     python scripts/train_dynamics.py --latents-dir data/processed/latents --model-size small --epochs 10
     python scripts/train_dynamics.py --resume checkpoints/dynamics_latest.pt
 
-    # Training with CNN tokenizer latents (256-dim)
-    python scripts/train_dynamics.py --latents-dir data/processed/latents_cnn --latent-dim 256 --tokenizer-type cnn
-
-    # Training with transformer tokenizer latents (32-dim)
-    python scripts/train_dynamics.py --latents-dir data/processed/latents_transformer --latent-dim 32 --tokenizer-type transformer
-
 Checkpoint directories are automatically organized as:
-    checkpoints/run_YYYYMMDD_HHMMSS_dynamics_{tokenizer_type}{latent_dim}_{model_size}/
+    checkpoints/run_YYYYMMDD_HHMMSS_dynamics_{model_size}/
 """
 
 import argparse

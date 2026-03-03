@@ -35,7 +35,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from ahriuwu.models import create_tokenizer, create_dynamics, PolicyHead
+from ahriuwu.models import create_dynamics, PolicyHead
 from ahriuwu.models.transformer_tokenizer import create_transformer_tokenizer
 from ahriuwu.data.actions import decode_action, ActionSpace
 
@@ -275,10 +275,7 @@ class LiveInference:
         """Load tokenizer from checkpoint."""
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
-        if tokenizer_type == "cnn":
-            self.tokenizer = create_tokenizer("small")
-        else:
-            self.tokenizer = create_transformer_tokenizer("small")
+        self.tokenizer = create_transformer_tokenizer("small")
 
         self.tokenizer.load_state_dict(checkpoint["model_state_dict"])
         self.tokenizer = self.tokenizer.to(self.device).eval()
@@ -378,12 +375,9 @@ class LiveInference:
             Latent tensor
         """
         with torch.no_grad():
-            if self.tokenizer_type == "cnn":
-                latent = self.tokenizer.encode(frame_tensor)  # (1, 256, 16, 16)
-            else:
-                latent = self.tokenizer.encode(frame_tensor)["latent"]  # (1, 256, 32)
-                # Reshape for dynamics: (1, 256, 32) -> (1, 32, 16, 16)
-                latent = latent.transpose(1, 2).view(1, 32, 16, 16)
+            latent = self.tokenizer.encode(frame_tensor)["latent"]  # (1, 256, 32)
+            # Reshape for dynamics: (1, 256, 32) -> (1, 32, 16, 16)
+            latent = latent.transpose(1, 2).view(1, 32, 16, 16)
 
         return latent
 

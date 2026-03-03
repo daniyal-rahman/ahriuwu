@@ -33,7 +33,6 @@ from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
 from ahriuwu.models import (
-    create_tokenizer,
     create_transformer_tokenizer,
     create_dynamics,
     RewardHead,
@@ -154,13 +153,6 @@ def parse_args():
         type=float,
         default=0.3,
         help="Ratio of batches using independent frame mode",
-    )
-    parser.add_argument(
-        "--tokenizer-type",
-        type=str,
-        default="cnn",
-        choices=["cnn", "transformer"],
-        help="Type of tokenizer (cnn or transformer)",
     )
     parser.add_argument(
         "--gradient-checkpointing",
@@ -380,27 +372,17 @@ def load_pretrained_dynamics(
 
 
 def load_tokenizer(checkpoint_path: str, device: str):
-    """Load pretrained tokenizer (auto-detects CNN vs transformer)."""
+    """Load pretrained transformer tokenizer."""
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
     state_dict = checkpoint["model_state_dict"]
     args = checkpoint.get("args", {})
 
-    # Detect tokenizer type by checking for transformer-specific keys
-    is_transformer = any("encoder.blocks" in k for k in state_dict.keys())
-
-    if is_transformer:
-        # Transformer tokenizer - get model size and rope setting from checkpoint
-        model_size = args.get("model_size", "small")
-        use_rope = args.get("use_rope", True)
-        print(f"  Detected transformer tokenizer: size={model_size}, use_rope={use_rope}")
-        tokenizer = create_transformer_tokenizer(size=model_size, use_rope=use_rope)
-        tokenizer.load_state_dict(state_dict, strict=False)  # strict=False for qk_norm keys
-    else:
-        # CNN tokenizer
-        print("  Detected CNN tokenizer")
-        tokenizer = create_tokenizer()
-        tokenizer.load_state_dict(state_dict)
+    model_size = args.get("model_size", "small")
+    use_rope = args.get("use_rope", True)
+    print(f"  Transformer tokenizer: size={model_size}, use_rope={use_rope}")
+    tokenizer = create_transformer_tokenizer(size=model_size, use_rope=use_rope)
+    tokenizer.load_state_dict(state_dict, strict=False)
 
     tokenizer = tokenizer.to(device)
     tokenizer.eval()
@@ -674,7 +656,6 @@ def main():
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
     print(f"Latent dim: {args.latent_dim}")
-    print(f"Tokenizer type: {args.tokenizer_type}")
     print(f"Batch size: {args.batch_size}")
     print(f"Sequence length: {args.seq_len}")
     print(f"MTP length: {args.mtp_length}")
