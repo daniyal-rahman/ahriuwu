@@ -235,6 +235,9 @@ class RunningRMS:
         if self.rms is None:
             self.rms = value_sq
         else:
+            # Fix device mismatch after checkpoint resume (rms loaded as CPU tensor)
+            if self.rms.device != value_sq.device:
+                self.rms = self.rms.to(value_sq.device)
             self.rms = self.decay * self.rms + (1 - self.decay) * value_sq
 
         return value / (torch.sqrt(self.rms) + 1e-8)

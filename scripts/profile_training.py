@@ -32,7 +32,7 @@ def main():
     model = create_transformer_tokenizer("small", use_rope=True).to(device)
     criterion = MAELoss(lpips_weight=0.2).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
-    scaler = GradScaler("cuda")
+    scaler = GradScaler(device)
 
     dataloader_iter = iter(dataloader)
 

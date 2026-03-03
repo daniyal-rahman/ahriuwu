@@ -1,8 +1,8 @@
 """Action space definition for LoL Garen gameplay.
 
-All actions are discrete/categorical with factorized embeddings.
-
-Movement: 18 classes (0-17 = evenly spaced 20° directions)
+Movement: continuous (x, y) in [0, 1] normalized screen coordinates.
+    (0.5, 0.5) = center of screen (default when no data available).
+    Previously used 18 directional buckets (deprecated, kept for backward compat).
 Abilities: Q, W, E, R, D, F - each binary
 Item: single binary (any item active used)
 Recall: B - binary
@@ -16,7 +16,7 @@ import torch
 
 class ActionDict(TypedDict, total=False):
     """Type hint for action dictionaries."""
-    movement: int  # 0-17
+    movement: list[float]  # [x, y] in [0, 1], or legacy int 0-17
     Q: int         # 0-1
     W: int         # 0-1
     E: int         # 0-1
@@ -27,8 +27,12 @@ class ActionDict(TypedDict, total=False):
     B: int         # 0-1
 
 
-# Constants for action space sizes
-MOVEMENT_CLASSES = 18  # 0-17 = directions (20° apart)
+# Continuous movement dimension (x, y)
+MOVEMENT_DIM = 2
+
+# Legacy: kept for backward compatibility with old slice-based data
+MOVEMENT_CLASSES = 18  # 0-17 = directions (20° apart) — DEPRECATED
+
 ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
@@ -36,15 +40,9 @@ ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 class ActionSpace:
     """LoL action space for Garen gameplay.
 
-    Movement encoding (18 classes):
-        0-17: evenly spaced directions (20° apart, starting from 0°=East)
-            0: 0° (East/Right)
-            1: 20°
-            2: 40°
-            ...
-            9: 180° (West/Left)
-            ...
-            17: 340°
+    Movement: continuous (x, y) coordinates in [0, 1], normalized screen space.
+        (0.5, 0.5) = center of screen (default when no data).
+        Legacy: 18 discrete directions (20 degrees apart) — deprecated.
 
     Ability keys (binary each):
         Q, W, E, R: Champion abilities
@@ -53,29 +51,34 @@ class ActionSpace:
         B: Recall
     """
 
-    MOVEMENT_CLASSES = MOVEMENT_CLASSES
+    MOVEMENT_DIM = MOVEMENT_DIM
+    MOVEMENT_CLASSES = MOVEMENT_CLASSES  # Deprecated
     ABILITY_KEYS = ABILITY_KEYS
 
     @staticmethod
     def angle_to_direction(angle_degrees: float) -> int:
         """Convert angle in degrees to direction class (0-17).
 
+        DEPRECATED: Use continuous (x, y) coordinates instead.
+
         Args:
             angle_degrees: Angle in degrees (0=East, 90=North counter-clockwise)
 
         Returns:
-            Direction class 0-17 (20° buckets)
+            Direction class 0-17 (20 degree buckets)
         """
         # Normalize to [0, 360)
         angle = angle_degrees % 360
-        # Each bucket is 20°, with bucket 0 centered at 0°
-        # So bucket boundaries are at -10°, 10°, 30°, 50°, etc.
+        # Each bucket is 20 degrees, with bucket 0 centered at 0 degrees
+        # So bucket boundaries are at -10, 10, 30, 50, etc.
         bucket = int((angle + 10) / 20) % 18
         return bucket
 
     @staticmethod
     def direction_to_angle(direction: int) -> float:
         """Convert direction class (0-17) to angle in degrees.
+
+        DEPRECATED: Use continuous (x, y) coordinates instead.
 
         Args:
             direction: Direction class 0-17
@@ -91,12 +94,17 @@ class ActionSpace:
 
         Args:
             action_dict: Single action with keys 'movement', 'Q', etc.
+                movement is [x, y] floats in [0, 1].
 
         Returns:
-            Dict with same keys but torch.long tensors
+            Dict with 'movement' as float tensor (2,) and abilities as long tensors
         """
+        mov = action_dict.get('movement', [0.5, 0.5])
+        if isinstance(mov, (int, float)):
+            # Legacy: single int direction class -> default center
+            mov = [0.5, 0.5]
         return {
-            'movement': torch.tensor(action_dict.get('movement', 0), dtype=torch.long),
+            'movement': torch.tensor(mov, dtype=torch.float32),
             **{k: torch.tensor(action_dict.get(k, 0), dtype=torch.long) for k in ABILITY_KEYS}
         }
 
@@ -108,16 +116,16 @@ class ActionSpace:
             tensor_dicts: List of dicts from to_tensor_dict()
 
         Returns:
-            Dict with stacked tensors of shape (T,) for each key
+            Dict with movement as (T, 2) float tensor and abilities as (T,) long tensors
         """
         keys = ['movement'] + ABILITY_KEYS
         return {k: torch.stack([d[k] for d in tensor_dicts]) for k in keys}
 
     @staticmethod
-    def empty_action() -> dict[str, int]:
-        """Return an empty action dict (all zeros)."""
+    def empty_action() -> dict[str, float | int | list]:
+        """Return an empty action dict (center movement, no abilities)."""
         return {
-            'movement': 0,
+            'movement': [0.5, 0.5],
             **{k: 0 for k in ABILITY_KEYS}
         }
 
@@ -188,10 +196,13 @@ def collate_actions(batch_actions: list[dict[str, torch.Tensor] | None]) -> dict
     """Collate action dicts from a batch.
 
     Args:
-        batch_actions: List of action dicts (each with shape (T,) tensors) or None
+        batch_actions: List of action dicts or None.
+            movement: (T, 2) float tensor
+            abilities: (T,) long tensors each
 
     Returns:
-        Batched action dict with shape (B, T) tensors, or None if all None
+        Batched action dict with movement (B, T, 2) float and abilities (B, T) long,
+        or None if all None
     """
     # Filter out None entries
     valid_actions = [a for a in batch_actions if a is not None]

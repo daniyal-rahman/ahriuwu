@@ -207,7 +207,8 @@ def process_batch(model, batch, device, tokenizer_type: str):
     output_paths = batch["output_path"]
 
     with torch.no_grad():
-        with torch.amp.autocast(device_type=device.split(":")[0], dtype=torch.float16):
+        amp_dtype = torch.bfloat16 if device.split(":")[0] == "cuda" else torch.float16
+        with torch.amp.autocast(device_type=device.split(":")[0], dtype=amp_dtype):
             if tokenizer_type == "cnn":
                 # CNN tokenizer: encode returns (B, latent_dim, 16, 16) directly
                 latents = model.encode(frames)

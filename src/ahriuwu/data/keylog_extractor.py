@@ -1462,39 +1462,6 @@ class KeylogExtractor:
         return output_path
 
 
-def visualize_regions(frame: np.ndarray, regions: HUDRegions1080p) -> np.ndarray:
-    """Draw HUD regions on frame for debugging."""
-    vis = frame.copy()
-
-    # Draw regions with different colors for different purposes
-    region_configs = [
-        # Ability icons (green)
-        (regions.ability_q, (0, 255, 0), 'Q'),
-        (regions.ability_w, (0, 255, 0), 'W'),
-        (regions.ability_e, (0, 255, 0), 'E'),
-        (regions.ability_r, (0, 255, 0), 'R'),
-        # Summoner spells (blue)
-        (regions.summoner_d, (255, 0, 0), 'D'),
-        (regions.summoner_f, (255, 0, 0), 'F'),
-        # Full ability bar area (cyan)
-        (regions.ability_bar_full, (255, 255, 0), 'AbilityBar'),
-        # Game area for optical flow (yellow)
-        (regions.game_area, (0, 255, 255), 'Game'),
-        # Garen overhead HUD (red - most important for movement tracking)
-        (regions.garen_level_box, (0, 0, 255), 'Lvl'),
-        (regions.garen_name_area, (0, 0, 255), 'Name'),
-        (regions.garen_health_bar, (0, 100, 255), 'HP'),
-        # Portrait and stats (magenta)
-        (regions.garen_portrait, (255, 0, 255), 'Portrait'),
-        (regions.stats_area, (200, 0, 200), 'Stats'),
-    ]
-
-    for region, color, label in region_configs:
-        x, y, w, h = region
-        cv2.rectangle(vis, (x, y), (x+w, y+h), color, 2)
-        cv2.putText(vis, label, (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-
-    return vis
 
 
 if __name__ == "__main__":

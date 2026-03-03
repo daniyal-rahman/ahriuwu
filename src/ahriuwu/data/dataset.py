@@ -11,8 +11,9 @@ from torch.utils.data import Dataset, Sampler
 
 from .actions import ABILITY_KEYS, collate_actions
 
-# Default target resolution for world model
-TARGET_SIZE = (256, 256)
+# Square target: 352x352. Divisible by 16 (22x22 = 484 patches for patch-based tokenizer).
+# Both tokenizers require square inputs. 352 > 256 gives more detail.
+TARGET_SIZE = (352, 352)
 
 
 class SingleFrameDataset(Dataset):
@@ -554,34 +555,44 @@ class PackedLatentSequenceDataset(Dataset):
         return False
 
     def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
-        """Get action tensors for a sequence."""
+        """Get action tensors for a sequence.
+
+        Movement is returned as (T, 2) float tensor of (x, y) coordinates in [0, 1].
+        Falls back to (0.5, 0.5) center when mouse_x/mouse_y are not available.
+        Abilities are returned as (T,) long tensors.
+        """
         if video_id not in self.action_labels:
             return None
 
         labels = self.action_labels[video_id]
-        actions = {
-            'movement': [],
-            **{k: [] for k in ABILITY_KEYS}
-        }
+        movement_xy = []
+        ability_actions = {k: [] for k in ABILITY_KEYS}
 
         for t in range(start_frame, start_frame + self.sequence_length):
             if t < len(labels):
                 entry = labels[t]
-                actions['movement'].append(entry.get('movement_slice', 0))
-                actions['Q'].append(int(entry.get('ability_q', False)))
-                actions['W'].append(int(entry.get('ability_w', False)))
-                actions['E'].append(int(entry.get('ability_e', False)))
-                actions['R'].append(int(entry.get('ability_r', False)))
-                actions['D'].append(int(entry.get('summoner_d', False)))
-                actions['F'].append(int(entry.get('summoner_f', False)))
-                actions['item'].append(int(entry.get('item_used', False)))
-                actions['B'].append(int(entry.get('recall_b', False)))
+                mouse_x = float(entry.get('mouse_x', 0.5))
+                mouse_y = float(entry.get('mouse_y', 0.5))
+                movement_xy.append([mouse_x, mouse_y])
+                ability_actions['Q'].append(int(entry.get('ability_q', False)))
+                ability_actions['W'].append(int(entry.get('ability_w', False)))
+                ability_actions['E'].append(int(entry.get('ability_e', False)))
+                ability_actions['R'].append(int(entry.get('ability_r', False)))
+                ability_actions['D'].append(int(entry.get('summoner_d', False)))
+                ability_actions['F'].append(int(entry.get('summoner_f', False)))
+                ability_actions['item'].append(int(entry.get('item_used', False)))
+                ability_actions['B'].append(int(entry.get('recall_b', False)))
             else:
-                actions['movement'].append(0)
+                movement_xy.append([0.5, 0.5])
                 for k in ABILITY_KEYS:
-                    actions[k].append(0)
+                    ability_actions[k].append(0)
 
-        return {k: torch.tensor(v, dtype=torch.long) for k, v in actions.items()}
+        result = {
+            'movement': torch.tensor(movement_xy, dtype=torch.float32),  # (T, 2)
+        }
+        for k in ABILITY_KEYS:
+            result[k] = torch.tensor(ability_actions[k], dtype=torch.long)
+        return result
 
     def __len__(self) -> int:
         return len(self.sequences)
@@ -660,11 +671,14 @@ class LatentSequenceDataset(Dataset):
         self.feature_data: dict[str, list[dict]] = {}
 
         self.sequences = []
+        self.reward_indices: list[int] = []
         self._index_latents()
 
         # Load feature data after indexing
         if load_actions or load_rewards:
             self._load_feature_data()
+            if load_rewards:
+                self._precompute_reward_indices()
 
     def _index_latents(self):
         """Build index of all valid sequences."""
@@ -761,38 +775,43 @@ class LatentSequenceDataset(Dataset):
             start_frame: Starting frame index
 
         Returns:
-            Dict with 'movement' and ability keys as (T,) tensors,
-            or None if no action labels for this video.
+            Dict with 'movement' as (T, 2) float tensor of (x, y) in [0, 1],
+            and ability keys as (T,) long tensors.
+            Returns None if no feature data for this video.
         """
         if video_id not in self.feature_data:
             return None
 
         labels = self.feature_data[video_id]
-        actions = {
-            'movement': [],
-            **{k: [] for k in ABILITY_KEYS}
-        }
+        movement_xy = []
+        ability_actions = {k: [] for k in ABILITY_KEYS}
 
         for t in range(start_frame, start_frame + self.sequence_length):
             if t < len(labels):
                 entry = labels[t]
-                # Map features.json keys to our action space
-                actions['movement'].append(entry.get('movement_slice', 0))
-                actions['Q'].append(int(entry.get('ability_q', False)))
-                actions['W'].append(int(entry.get('ability_w', False)))
-                actions['E'].append(int(entry.get('ability_e', False)))
-                actions['R'].append(int(entry.get('ability_r', False)))
-                actions['D'].append(int(entry.get('summoner_d', False)))
-                actions['F'].append(int(entry.get('summoner_f', False)))
-                actions['item'].append(int(entry.get('item_used', False)))
-                actions['B'].append(int(entry.get('recall_b', False)))
+                mouse_x = float(entry.get('mouse_x', 0.5))
+                mouse_y = float(entry.get('mouse_y', 0.5))
+                movement_xy.append([mouse_x, mouse_y])
+                ability_actions['Q'].append(int(entry.get('ability_q', False)))
+                ability_actions['W'].append(int(entry.get('ability_w', False)))
+                ability_actions['E'].append(int(entry.get('ability_e', False)))
+                ability_actions['R'].append(int(entry.get('ability_r', False)))
+                ability_actions['D'].append(int(entry.get('summoner_d', False)))
+                ability_actions['F'].append(int(entry.get('summoner_f', False)))
+                ability_actions['item'].append(int(entry.get('item_used', False)))
+                ability_actions['B'].append(int(entry.get('recall_b', False)))
             else:
                 # Padding with "no action"
-                actions['movement'].append(0)
+                movement_xy.append([0.5, 0.5])
                 for k in ABILITY_KEYS:
-                    actions[k].append(0)
+                    ability_actions[k].append(0)
 
-        return {k: torch.tensor(v, dtype=torch.long) for k, v in actions.items()}
+        result = {
+            'movement': torch.tensor(movement_xy, dtype=torch.float32),  # (T, 2)
+        }
+        for k in ABILITY_KEYS:
+            result[k] = torch.tensor(ability_actions[k], dtype=torch.long)
+        return result
 
     def _get_rewards(self, video_id: str, start_frame: int) -> torch.Tensor | None:
         """Get reward tensor for a sequence.

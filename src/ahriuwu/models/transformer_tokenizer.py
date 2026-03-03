@@ -249,6 +249,10 @@ class MultiHeadAttention(nn.Module):
         k = self.k_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
 
+        # Apply QKNorm before RoPE (normalization must not undo rotations)
+        if self.qk_norm is not None:
+            q, k = self.qk_norm(q, k)
+
         # Apply RoPE if provided (only to tokens with valid indices >= 0)
         # Latent tokens use index -1 and don't get RoPE rotation
         if rope is not None and rope_indices is not None:
@@ -275,10 +279,6 @@ class MultiHeadAttention(nn.Module):
                 valid_mask_exp = valid_mask.view(1, 1, N, 1).expand_as(q)
                 q = torch.where(valid_mask_exp, q_rotated, q)
                 k = torch.where(valid_mask_exp, k_rotated, k)
-
-        # Apply QKNorm if enabled
-        if self.qk_norm is not None:
-            q, k = self.qk_norm(q, k)
 
         # Scaled dot-product attention
         attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
@@ -414,7 +414,7 @@ def create_decoder_mask(
             src_latent_end = src_latent_start + num_latents
             mask[latent_start:latent_end, src_latent_start:src_latent_end] = True
 
-    # Patches see own-frame patches + ALL latents
+    # Patches see own-frame patches + current and past latents (causal)
     for t in range(num_frames):
         patch_start = t * tokens_per_frame
         patch_end = patch_start + num_patches
@@ -422,8 +422,8 @@ def create_decoder_mask(
         # Own-frame patches
         mask[patch_start:patch_end, patch_start:patch_end] = True
 
-        # ALL latents from all frames
-        for t2 in range(num_frames):
+        # Latents from current and past frames only (causal masking)
+        for t2 in range(t + 1):
             src_latent_start = t2 * tokens_per_frame + num_patches
             src_latent_end = src_latent_start + num_latents
             mask[patch_start:patch_end, src_latent_start:src_latent_end] = True

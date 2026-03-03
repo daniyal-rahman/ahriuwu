@@ -87,7 +87,7 @@ class DiffusionSchedule:
         batch_size: int,
         seq_length: int,
         device: torch.device | str | None = None,
-        tau_ctx: float = 0.1,
+        tau_ctx: float = 0.3,
         tau_max: float = 1.0,
     ) -> torch.Tensor:
         """Sample per-timestep noise levels for diffusion forcing.
@@ -100,11 +100,16 @@ class DiffusionSchedule:
         This creates temporal causality: model must use clean past
         to predict noisy future.
 
+        tau_ctx is sampled per batch element from U(0, tau_ctx) to provide
+        variable context noise augmentation, preventing the model from
+        relying on a fixed context noise level.
+
         Args:
             batch_size: Number of sequences
             seq_length: Number of frames per sequence (T)
             device: Device to create tensor on
-            tau_ctx: Noise level for context frames (default 0.1)
+            tau_ctx: Max noise level for context frames (sampled per element
+                     from U(0, tau_ctx), default 0.3)
             tau_max: Maximum noise level for target frames
 
         Returns:
@@ -130,13 +135,17 @@ class DiffusionSchedule:
         max_distance = (seq_length - 1 - horizon).clamp(min=1).float()  # (B, 1)
         normalized_dist = distance / max_distance  # (B, T) in [0, 1]
 
-        # Context frames (before horizon) get tau_ctx
-        # Target frames get tau_ctx + normalized_dist * (tau_max - tau_ctx)
+        # Sample a random tau_ctx per batch element from U(0, tau_ctx)
+        # This prevents the model from relying on a fixed context noise level
+        tau_ctx_per_sample = torch.rand(batch_size, 1, device=device) * tau_ctx  # (B, 1)
+
+        # Context frames (before horizon) get per-sample tau_ctx
+        # Target frames get tau_ctx_per_sample + normalized_dist * (tau_max - tau_ctx_per_sample)
         is_context = positions < horizon  # (B, T)
         tau = torch.where(
             is_context,
-            torch.full_like(normalized_dist, tau_ctx),
-            tau_ctx + normalized_dist * (tau_max - tau_ctx)
+            tau_ctx_per_sample.expand_as(normalized_dist),
+            tau_ctx_per_sample + normalized_dist * (tau_max - tau_ctx_per_sample),
         )
 
         return tau
@@ -164,8 +173,9 @@ class DiffusionSchedule:
         """
         device = device or self.device
 
-        # Start from pure noise
+        # Start from pure noise (save for reuse in Euler steps)
         z_t = torch.randn(shape, device=device)
+        z_noise = z_t.clone()
 
         # Euler integration from τ=1 to τ=0
         step_size = 1.0 / num_steps
@@ -181,7 +191,7 @@ class DiffusionSchedule:
             if i < num_steps - 1:
                 # Interpolate towards predicted clean
                 next_tau = tau - step_size
-                z_t = (1 - next_tau) * z_0_pred + next_tau * torch.randn_like(z_t)
+                z_t = (1 - next_tau) * z_0_pred + next_tau * z_noise
             else:
                 # Final step - just return prediction
                 z_t = z_0_pred
@@ -513,7 +523,9 @@ class ShortcutForcing:
                     tau_mid_expanded = tau_mid.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
                 # Re-noise z_mid to tau_mid level for second half-step
-                z_tau_mid = (1 - tau_mid_expanded) * z_mid + tau_mid_expanded * noise[idx]
+                # Sample fresh noise to avoid correlation with the input noise
+                noise_mid = torch.randn_like(z_mid)
+                z_tau_mid = (1 - tau_mid_expanded) * z_mid + tau_mid_expanded * noise_mid
 
                 # Second half-step: predict z_0 from z_tau_mid
                 z_target = model(z_tau_mid, tau_mid, step_size=d_half_norm,

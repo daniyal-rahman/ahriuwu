@@ -288,7 +288,15 @@ def load_dynamics(checkpoint_path: Path, device: str):
     if use_actions:
         print("Detected action-conditioned dynamics model")
 
-    model = create_dynamics(model_size, latent_dim=latent_dim, use_actions=use_actions)
+    model = create_dynamics(
+        model_size,
+        latent_dim=latent_dim,
+        use_actions=use_actions,
+        use_qk_norm=args.get("use_qk_norm", False),
+        soft_cap=args.get("soft_cap", 0.0),
+        num_register_tokens=args.get("num_register_tokens", 0),
+        num_kv_heads=args.get("num_kv_heads", 0),
+    )
     missing, unexpected = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
     if missing:
         print(f"Warning: Missing keys in checkpoint (using random init): {missing}")
@@ -392,8 +400,9 @@ def rollout_predictions(
                 full_seq = torch.cat([context_latents, pred_context], dim=1)
 
             # Predict next frame using diffusion sampling
-            # Start from noise and denoise
+            # Start from noise and denoise (save initial noise for reuse)
             z_t = torch.randn(B, 1, C, H, W, device=device)
+            z_noise = z_t.clone()
 
             # Stop at tau_ctx (0.1) not 0.0 - model never saw τ < 0.1 during training
             tau_start = 1.0
@@ -402,10 +411,15 @@ def rollout_predictions(
 
             for i in range(num_steps):
                 tau = tau_start - i * step_size
-                tau_tensor = torch.full((B,), tau, device=device)
 
                 # Concatenate context + current noisy frame
                 input_seq = torch.cat([full_seq, z_t], dim=1)
+
+                # Build per-timestep tau: context frames at tau_ctx, denoised frame at current tau
+                # This matches training where each frame position has its own noise level
+                T_input = input_seq.shape[1]
+                tau_tensor = torch.full((B, T_input), tau_ctx, device=device)
+                tau_tensor[:, -1] = tau  # last frame is the one being denoised
 
                 # Predict (model outputs full sequence, we take last frame)
                 if use_shortcut:
@@ -417,7 +431,7 @@ def rollout_predictions(
                 # Euler step
                 if i < num_steps - 1:
                     next_tau = tau - step_size
-                    z_t = (1 - next_tau) * z_0_pred + next_tau * torch.randn_like(z_t)
+                    z_t = (1 - next_tau) * z_0_pred + next_tau * z_noise
                 else:
                     z_t = z_0_pred
 

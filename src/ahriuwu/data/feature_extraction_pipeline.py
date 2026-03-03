@@ -4,7 +4,7 @@ Pipeline:
 1. Download video at 1080p from YouTube
 2. Process video at 1080p to extract features (movement, abilities, items, gold)
 3. Save features as JSON per video
-4. Convert frames to 256x256 for training
+4. Convert frames to 352x352 for training
 5. Delete source 1080p video to save space
 6. Log video metadata to manifest
 
@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from .keylog_extractor import (
+    AbilityBarDetector,
     GarenHUDTracker,
     GoldTextDetector,
     ItemUsageDetector,
@@ -98,22 +99,27 @@ class FrameFeatures:
     # Movement (from optical flow)
     movement_dx: float
     movement_dy: float
-    movement_slice: int  # 0-17, direction of movement
+    movement_slice: int  # 0-17, direction of movement (legacy, kept for backward compat)
     movement_confidence: float
 
+    # Mouse position: normalized (x, y) in [0, 1] screen coordinates.
+    # (0.5, 0.5) = center. Populated from replay mouse data when available.
+    mouse_x: float = 0.5
+    mouse_y: float = 0.5
+
     # Abilities (True if just used this frame)
-    ability_q: bool
-    ability_w: bool
-    ability_e: bool
-    ability_r: bool
-    summoner_d: bool
-    summoner_f: bool
+    ability_q: bool = False
+    ability_w: bool = False
+    ability_e: bool = False
+    ability_r: bool = False
+    summoner_d: bool = False
+    summoner_f: bool = False
 
     # Item usage
-    item_used: bool
+    item_used: bool = False
 
     # Gold (from OCR)
-    gold_gained: int  # Amount of gold gained this frame (0 if none)
+    gold_gained: int = 0  # Amount of gold gained this frame (0 if none)
 
     # Health bar position (for reference)
     health_bar_x: Optional[int] = None
@@ -121,13 +127,13 @@ class FrameFeatures:
 
 
 class FeatureExtractionPipeline:
-    """Extract features from 1080p video and save 256x256 frames."""
+    """Extract features from 1080p video and save 352x352 frames."""
 
     def __init__(
         self,
         output_dir: Path,
         target_fps: int = 20,
-        target_size: tuple[int, int] = (256, 256),
+        target_size: tuple[int, int] = (352, 352),
         team_side: str = "blue",
         use_gpu_ocr: bool = False,
     ):
@@ -136,7 +142,7 @@ class FeatureExtractionPipeline:
         Args:
             output_dir: Directory to save frames and features
             target_fps: Target FPS for extraction (default 20)
-            target_size: Output frame size (default 256x256)
+            target_size: Output frame size (width, height), default 352x352
             team_side: Which side Garen is on ("blue" or "red")
             use_gpu_ocr: Use GPU for OCR (requires CUDA)
         """
@@ -156,7 +162,7 @@ class FeatureExtractionPipeline:
         end_sec: Optional[float] = None,
         delete_source: bool = True,
     ) -> dict:
-        """Process a video: extract features at 1080p, save 256x256 frames.
+        """Process a video: extract features at 1080p, save 352x352 frames.
 
         Args:
             video_path: Path to input video (should be 1080p)
@@ -219,6 +225,12 @@ class FeatureExtractionPipeline:
 
         mouse_estimator = MousePositionEstimator(num_slices=18)
 
+        ability_detector = AbilityBarDetector(
+            normalized_regions=normalized_regions,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+
         # Seek to start
         cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
@@ -245,7 +257,7 @@ class FeatureExtractionPipeline:
                 movement_slice = mouse_estimator.movement_to_slice(dx, dy)
 
                 # Ability detection
-                abilities = movement_tracker.detect_ability_usage(frame, absolute_frame)
+                abilities = ability_detector.detect_ability_usage(frame, absolute_frame)
 
                 # Gold detection
                 gold_gains, health_bar = gold_detector.detect_gold_text(frame, absolute_frame)
@@ -275,10 +287,10 @@ class FeatureExtractionPipeline:
                 )
                 features_list.append(asdict(features))
 
-                # === Save 256x256 frame ===
-                frame_256 = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
+                # === Save downscaled frame ===
+                frame_resized = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
                 frame_path = frames_dir / f"frame_{output_frame_idx:06d}.jpg"
-                cv2.imwrite(str(frame_path), frame_256, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                cv2.imwrite(str(frame_path), frame_resized, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
                 output_frame_idx += 1
 

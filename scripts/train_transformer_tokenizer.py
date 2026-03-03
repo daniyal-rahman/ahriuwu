@@ -23,8 +23,15 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
+try:
+    import bitsandbytes as bnb
+    HAS_BNB = True
+except ImportError:
+    HAS_BNB = False
+
 from ahriuwu.data.dataset import SingleFrameDataset
 from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
+from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 
 
 def parse_args():
@@ -63,14 +70,37 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,
+        default=3e-4,
         help="Learning rate",
     )
     parser.add_argument(
         "--weight-decay",
         type=float,
-        default=0.01,
+        default=0.1,
         help="Weight decay for AdamW",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2000,
+        help="Number of warmup steps for WSD LR schedule",
+    )
+    parser.add_argument(
+        "--decay-steps",
+        type=int,
+        default=0,
+        help="Number of decay steps for WSD LR schedule (0 = no decay, just warmup + hold)",
+    )
+    parser.add_argument(
+        "--use-8bit-adam",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use 8-bit AdamW from bitsandbytes (default: True, --no-use-8bit-adam to disable)",
+    )
+    parser.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile",
     )
     parser.add_argument(
         "--lpips-weight",
@@ -81,14 +111,20 @@ def parse_args():
     parser.add_argument(
         "--mask-ratio-min",
         type=float,
-        default=0.0,
-        help="Minimum mask ratio (paper uses 0)",
+        default=0.1,
+        help="Minimum mask ratio when masking (default 0.1, avoids near-zero-but-nonzero masking)",
     )
     parser.add_argument(
         "--mask-ratio-max",
         type=float,
         default=0.9,
         help="Maximum mask ratio (paper uses 0.9)",
+    )
+    parser.add_argument(
+        "--p-zero-mask",
+        type=float,
+        default=0.1,
+        help="Probability of using mask_ratio=0.0 (full reconstruction, no masking)",
     )
     parser.add_argument(
         "--mask-warmup-steps",
@@ -154,6 +190,7 @@ def parse_args():
         action="store_true",
         help="Use gradient checkpointing for memory efficiency (recommended for batch>2 or model>100M)",
     )
+    add_wandb_args(parser)
     return parser.parse_args()
 
 
@@ -161,6 +198,7 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
     rms_trackers: dict,
     epoch: int,
     global_step: int,
@@ -173,6 +211,7 @@ def save_checkpoint(
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
         "rms_state": {k: v.state_dict() for k, v in rms_trackers.items()},
         "epoch": epoch,
         "global_step": global_step,
@@ -184,13 +223,15 @@ def save_checkpoint(
     print(f"Saved checkpoint to {path}")
 
 
-def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, scaler: GradScaler, rms_trackers: dict):
+def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, scaler: GradScaler, scheduler=None, rms_trackers: dict = None):
     """Load training checkpoint."""
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint["scaler_state_dict"])
-    if "rms_state" in checkpoint:
+    if scheduler is not None and "scheduler_state_dict" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    if rms_trackers is not None and "rms_state" in checkpoint:
         for k, state in checkpoint["rms_state"].items():
             if k in rms_trackers:
                 rms_trackers[k].load_state_dict(state)
@@ -238,8 +279,12 @@ def save_samples(
     save_path = sample_dir / f"epoch_{epoch:03d}.png"
 
     grid_np = (grid.permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
-    Image.fromarray(grid_np).save(save_path)
+    img = Image.fromarray(grid_np)
+    img.save(save_path)
     print(f"Saved samples to {save_path}")
+
+    # Log to wandb
+    log_images({"samples/reconstruction": img}, step=epoch)
 
     model.train()
 
@@ -249,6 +294,7 @@ def train_epoch(
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
     loss_fn: MAELoss,
     rms_trackers: dict,
     device: str,
@@ -281,8 +327,12 @@ def train_epoch(
         else:
             current_mask_max = args.mask_ratio_max
 
-        # Sample mask ratio from U(min, current_max) for each batch
-        mask_ratio = random.uniform(args.mask_ratio_min, current_mask_max)
+        # With p_zero_mask probability, use mask_ratio=0.0 (full reconstruction)
+        # Otherwise sample from U(mask_ratio_min, current_max) avoiding near-zero masking
+        if random.random() < args.p_zero_mask:
+            mask_ratio = 0.0
+        else:
+            mask_ratio = random.uniform(args.mask_ratio_min, current_mask_max)
 
         # Mixed precision forward
         with autocast(device_type=device_type, dtype=dtype):
@@ -309,6 +359,7 @@ def train_epoch(
 
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             optimizer.zero_grad()
 
         # Track metrics (unscaled loss)
@@ -326,10 +377,10 @@ def train_epoch(
         # Step-based checkpoint saving
         if checkpoint_dir and args.step_save_interval > 0 and global_step % args.step_save_interval == 0:
             step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
-            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, losses["loss"].item(), args, step_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, losses["loss"].item(), args, step_path)
             # Also save as latest
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, losses["loss"].item(), args, latest_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, losses["loss"].item(), args, latest_path)
 
         # Log
         if batch_idx % args.log_interval == 0:
@@ -338,12 +389,27 @@ def train_epoch(
             mask_info = f"Mask: {mask_ratio:.2f}"
             if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
                 mask_info += f" (max: {current_mask_max:.2f})"
+            current_lr = scheduler.get_last_lr()[0]
+
+            log_step({
+                "train/loss": losses["loss"].item(),
+                "train/mse": losses["mse"].item(),
+                "train/lpips": losses["lpips"].item(),
+                "train/psnr": batch_psnr,
+                "train/lr": current_lr,
+                "train/mask_ratio": mask_ratio,
+                "train/mask_max": current_mask_max,
+                "train/samples_per_sec": samples_per_sec,
+                "train/epoch": epoch,
+            }, step=global_step)
+
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {losses['loss'].item():.4f} "
                 f"MSE: {losses['mse'].item():.4f} "
                 f"LPIPS: {losses['lpips'].item():.4f} "
                 f"PSNR: {batch_psnr:.2f} dB "
+                f"LR: {current_lr:.2e} "
                 f"{mask_info} "
                 f"({samples_per_sec:.1f} samples/s)"
             )
@@ -381,7 +447,7 @@ def main():
     print(f"Effective batch size: {args.batch_size * args.gradient_accumulation}")
     print(f"Learning rate: {args.lr}")
     print(f"LPIPS weight: {args.lpips_weight}")
-    print(f"Mask ratio: U({args.mask_ratio_min}, {args.mask_ratio_max})")
+    print(f"Mask ratio: {args.p_zero_mask:.0%} p=0, else U({args.mask_ratio_min}, {args.mask_ratio_max})")
     print(f"Mask warmup steps: {args.mask_warmup_steps} (curriculum learning)")
     print(f"Step save interval: {args.step_save_interval}")
     print("=" * 60)
@@ -424,21 +490,58 @@ def main():
     print(f"Model parameters: {model.get_num_params():,}")
     print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
 
-    # Create loss function
+    # torch.compile the model (but NOT the LPIPS/VGG loss model)
+    if not args.no_compile:
+        print("Compiling model with torch.compile...")
+        model = torch.compile(model)
+
+    # Create loss function (NOT compiled - frozen LPIPS/VGG)
     loss_fn = MAELoss(mse_weight=1.0, lpips_weight=args.lpips_weight)
     loss_fn = loss_fn.to(args.device)
 
     # Create optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        betas=(0.9, 0.95),
-    )
+    if args.use_8bit_adam and HAS_BNB:
+        print("Using 8-bit AdamW (bitsandbytes)")
+        optimizer = bnb.optim.AdamW8bit(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+        )
+    else:
+        if args.use_8bit_adam and not HAS_BNB:
+            print("WARNING: bitsandbytes not installed, falling back to standard AdamW")
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+        )
+
+    # WSD Learning Rate Schedule
+    # Estimate total optimizer steps accounting for gradient accumulation
+    steps_per_epoch = len(dataloader) // args.gradient_accumulation
+    total_steps = args.epochs * steps_per_epoch
+
+    def wsd_schedule(step):
+        if step < args.warmup_steps:
+            return step / max(1, args.warmup_steps)
+        if args.decay_steps > 0 and step >= total_steps - args.decay_steps:
+            decay_progress = (total_steps - step) / max(1, args.decay_steps)
+            return max(0.0, decay_progress)
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_schedule)
 
     # Create scaler for mixed precision
     device_type = args.device.split(":")[0]
     scaler = GradScaler(device_type)
+
+    # Initialize wandb
+    wandb_run = init_wandb(args, job_type="transformer_tokenizer", extra_config={
+        "num_params": model.get_num_params() if not hasattr(model, '_orig_mod') else model._orig_mod.get_num_params(),
+        "checkpoint_dir": str(checkpoint_dir),
+    })
 
     # RMS trackers for loss normalization
     rms_trackers = {
@@ -452,7 +555,7 @@ def main():
     if args.resume:
         print(f"Resuming from {args.resume}...")
         start_epoch, global_step, _ = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler, rms_trackers
+            Path(args.resume), model, optimizer, scaler, scheduler, rms_trackers
         )
         start_epoch += 1  # Start from next epoch
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
@@ -467,7 +570,7 @@ def main():
         print("=" * 60)
 
         metrics = train_epoch(
-            model, dataloader, optimizer, scaler, loss_fn, rms_trackers,
+            model, dataloader, optimizer, scaler, scheduler, loss_fn, rms_trackers,
             args.device, epoch, global_step, args, checkpoint_dir
         )
 
@@ -479,6 +582,14 @@ def main():
         print(f"  LPIPS: {metrics['lpips']:.4f}")
         print(f"  PSNR: {metrics['psnr']:.2f} dB")
 
+        log_step({
+            "epoch/loss": metrics["loss"],
+            "epoch/mse": metrics["mse"],
+            "epoch/lpips": metrics["lpips"],
+            "epoch/psnr": metrics["psnr"],
+            "epoch/epoch": epoch + 1,
+        }, step=global_step)
+
         # Save history
         history.append({
             "epoch": epoch + 1,
@@ -488,17 +599,17 @@ def main():
         # Save checkpoint
         if (epoch + 1) % args.save_interval == 0:
             checkpoint_path = checkpoint_dir / f"transformer_tokenizer_epoch_{epoch + 1:03d}.pt"
-            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, metrics["loss"], args, checkpoint_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, metrics["loss"], args, checkpoint_path)
 
             # Also save as latest
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, metrics["loss"], args, latest_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, metrics["loss"], args, latest_path)
 
         # Save best model
         if metrics["loss"] < best_loss:
             best_loss = metrics["loss"]
             best_path = checkpoint_dir / "transformer_tokenizer_best.pt"
-            save_checkpoint(model, optimizer, scaler, rms_trackers, epoch, global_step, metrics["loss"], args, best_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, metrics["loss"], args, best_path)
             print(f"New best model saved (loss: {best_loss:.4f})")
 
         # Save sample reconstructions
@@ -515,6 +626,8 @@ def main():
     print(f"Best loss: {best_loss:.4f}")
     print(f"Best model: {checkpoint_dir / 'transformer_tokenizer_best.pt'}")
     print("=" * 60)
+
+    finish_wandb()
 
 
 if __name__ == "__main__":

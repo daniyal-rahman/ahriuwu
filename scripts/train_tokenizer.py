@@ -17,8 +17,15 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
+try:
+    import bitsandbytes as bnb
+    HAS_BNB = True
+except ImportError:
+    HAS_BNB = False
+
 from ahriuwu.data.dataset import SingleFrameDataset
-from ahriuwu.models import create_tokenizer, TokenizerLoss, psnr
+from ahriuwu.models import create_tokenizer, TokenizerLoss, psnr, RunningRMS
+from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 
 
 def parse_args():
@@ -57,8 +64,37 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,
+        default=3e-4,
         help="Learning rate",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.1,
+        help="Weight decay for AdamW",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2000,
+        help="Number of warmup steps for WSD LR schedule",
+    )
+    parser.add_argument(
+        "--decay-steps",
+        type=int,
+        default=0,
+        help="Number of decay steps for WSD LR schedule (0 = no decay, just warmup + hold)",
+    )
+    parser.add_argument(
+        "--use-8bit-adam",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use 8-bit AdamW from bitsandbytes (default: True, --no-use-8bit-adam to disable)",
+    )
+    parser.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile",
     )
     parser.add_argument(
         "--lpips-weight",
@@ -102,6 +138,7 @@ def parse_args():
         default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
         help="Device to train on",
     )
+    add_wandb_args(parser)
     return parser.parse_args()
 
 
@@ -109,6 +146,8 @@ def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
+    rms_trackers: dict,
     epoch: int,
     global_step: int,
     loss: float,
@@ -120,6 +159,8 @@ def save_checkpoint(
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "rms_state": {k: v.state_dict() for k, v in rms_trackers.items()},
         "epoch": epoch,
         "global_step": global_step,
         "loss": loss,
@@ -129,12 +170,18 @@ def save_checkpoint(
     print(f"Saved checkpoint to {path}")
 
 
-def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, scaler: GradScaler):
+def load_checkpoint(path: Path, model: nn.Module, optimizer: torch.optim.Optimizer, scaler: GradScaler, scheduler=None, rms_trackers: dict = None):
     """Load training checkpoint."""
     checkpoint = torch.load(path, map_location="cpu")
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint["scaler_state_dict"])
+    if scheduler is not None and "scheduler_state_dict" in checkpoint:
+        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    if rms_trackers is not None and "rms_state" in checkpoint:
+        for k, state in checkpoint["rms_state"].items():
+            if k in rms_trackers:
+                rms_trackers[k].load_state_dict(state)
     return checkpoint["epoch"], checkpoint["global_step"], checkpoint.get("loss", float("inf"))
 
 
@@ -166,8 +213,12 @@ def save_samples(model: nn.Module, dataloader: DataLoader, device: str, sample_d
     import numpy as np
 
     grid_np = (grid.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-    Image.fromarray(grid_np).save(save_path)
+    img = Image.fromarray(grid_np)
+    img.save(save_path)
     print(f"Saved samples to {save_path}")
+
+    # Log to wandb
+    log_images({"samples/reconstruction": img}, step=epoch)
 
     model.train()
 
@@ -177,7 +228,9 @@ def train_epoch(
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
     loss_fn: TokenizerLoss,
+    rms_trackers: dict,
     device: str,
     epoch: int,
     global_step: int,
@@ -203,12 +256,22 @@ def train_epoch(
             output = model(frames)
             recon = output["reconstruction"]
             losses = loss_fn(recon, frames)
-            loss = losses["loss"]
+
+            # Normalize MSE and LPIPS separately via RunningRMS
+            mse_norm = rms_trackers["mse"].update(losses["mse"])
+            lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
+            loss = mse_norm + args.lpips_weight * lpips_norm
 
         # Backward with scaling
         scaler.scale(loss).backward()
+
+        # Gradient clipping
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
         scaler.step(optimizer)
         scaler.update()
+        scheduler.step()
 
         # Track metrics
         total_loss += losses["loss"].item()
@@ -226,12 +289,25 @@ def train_epoch(
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
             samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
+            current_lr = scheduler.get_last_lr()[0]
+
+            log_step({
+                "train/loss": losses["loss"].item(),
+                "train/mse": losses["mse"].item(),
+                "train/lpips": losses["lpips"].item(),
+                "train/psnr": batch_psnr,
+                "train/lr": current_lr,
+                "train/samples_per_sec": samples_per_sec,
+                "train/epoch": epoch,
+            }, step=global_step)
+
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {losses['loss'].item():.4f} "
                 f"MSE: {losses['mse'].item():.4f} "
                 f"LPIPS: {losses['lpips'].item():.4f} "
                 f"PSNR: {batch_psnr:.2f} dB "
+                f"LR: {current_lr:.2e} "
                 f"({samples_per_sec:.1f} samples/s)"
             )
 
@@ -292,15 +368,50 @@ def main():
     model = model.to(args.device)
     print(f"Model parameters: {model.get_num_params():,}")
 
-    # Create loss function
+    # torch.compile the model (but NOT the LPIPS/VGG loss model)
+    if not args.no_compile:
+        print("Compiling model with torch.compile...")
+        model = torch.compile(model)
+
+    # Create loss function (NOT compiled - frozen LPIPS/VGG)
     loss_fn = TokenizerLoss(mse_weight=1.0, lpips_weight=args.lpips_weight)
     loss_fn = loss_fn.to(args.device)
 
     # Create optimizer
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    if args.use_8bit_adam and HAS_BNB:
+        print("Using 8-bit AdamW (bitsandbytes)")
+        optimizer = bnb.optim.AdamW8bit(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        if args.use_8bit_adam and not HAS_BNB:
+            print("WARNING: bitsandbytes not installed, falling back to standard AdamW")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # WSD Learning Rate Schedule
+    total_steps = args.epochs * len(dataloader)
+
+    def wsd_schedule(step):
+        if step < args.warmup_steps:
+            return step / max(1, args.warmup_steps)
+        if args.decay_steps > 0 and step >= total_steps - args.decay_steps:
+            decay_progress = (total_steps - step) / max(1, args.decay_steps)
+            return max(0.0, decay_progress)
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_schedule)
 
     # Create scaler for mixed precision
-    scaler = GradScaler("cuda")
+    scaler = GradScaler(args.device.split(":")[0])
+
+    # Initialize wandb
+    wandb_run = init_wandb(args, job_type="tokenizer", extra_config={
+        "num_params": model.get_num_params() if not hasattr(model, '_orig_mod') else model._orig_mod.get_num_params(),
+    })
+
+    # RMS trackers for loss normalization
+    rms_trackers = {
+        "mse": RunningRMS(),
+        "lpips": RunningRMS(),
+    }
 
     # Resume if checkpoint provided
     start_epoch = 0
@@ -308,7 +419,7 @@ def main():
     if args.resume:
         print(f"Resuming from {args.resume}...")
         start_epoch, global_step, _ = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler
+            Path(args.resume), model, optimizer, scaler, scheduler, rms_trackers
         )
         start_epoch += 1  # Start from next epoch
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
@@ -323,8 +434,8 @@ def main():
         print("=" * 60)
 
         metrics = train_epoch(
-            model, dataloader, optimizer, scaler, loss_fn, args.device,
-            epoch, global_step, args
+            model, dataloader, optimizer, scaler, scheduler, loss_fn, rms_trackers,
+            args.device, epoch, global_step, args
         )
 
         global_step = metrics["global_step"]
@@ -335,6 +446,14 @@ def main():
         print(f"  LPIPS: {metrics['lpips']:.4f}")
         print(f"  PSNR: {metrics['psnr']:.2f} dB")
 
+        log_step({
+            "epoch/loss": metrics["loss"],
+            "epoch/mse": metrics["mse"],
+            "epoch/lpips": metrics["lpips"],
+            "epoch/psnr": metrics["psnr"],
+            "epoch/epoch": epoch + 1,
+        }, step=global_step)
+
         # Save history
         history.append({
             "epoch": epoch + 1,
@@ -344,17 +463,17 @@ def main():
         # Save checkpoint
         if (epoch + 1) % args.save_interval == 0:
             checkpoint_path = checkpoint_dir / f"tokenizer_epoch_{epoch + 1:03d}.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, metrics["loss"], args, checkpoint_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, metrics["loss"], args, checkpoint_path)
 
             # Also save as latest
             latest_path = checkpoint_dir / "tokenizer_latest.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, metrics["loss"], args, latest_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, metrics["loss"], args, latest_path)
 
         # Save best model
         if metrics["loss"] < best_loss:
             best_loss = metrics["loss"]
             best_path = checkpoint_dir / "tokenizer_best.pt"
-            save_checkpoint(model, optimizer, scaler, epoch, global_step, metrics["loss"], args, best_path)
+            save_checkpoint(model, optimizer, scaler, scheduler, rms_trackers, epoch, global_step, metrics["loss"], args, best_path)
             print(f"New best model saved (loss: {best_loss:.4f})")
 
         # Save sample reconstructions
@@ -371,6 +490,8 @@ def main():
     print(f"Best loss: {best_loss:.4f}")
     print(f"Best model: {checkpoint_dir / 'tokenizer_best.pt'}")
     print("=" * 60)
+
+    finish_wandb()
 
 
 if __name__ == "__main__":

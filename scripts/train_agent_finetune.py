@@ -32,6 +32,12 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
+try:
+    import bitsandbytes as bnb
+    HAS_BNB = True
+except ImportError:
+    HAS_BNB = False
+
 from ahriuwu.models import (
     create_tokenizer,
     create_transformer_tokenizer,
@@ -39,12 +45,14 @@ from ahriuwu.models import (
     RewardHead,
     PolicyHead,
     DiffusionSchedule,
+    x_prediction_loss,
     symlog,
     twohot_loss,
     RunningRMS,
 )
 from ahriuwu.data.dataset import PackedLatentSequenceDataset, RewardMixtureSampler, VideoShuffleSampler
 from ahriuwu.data.actions import encode_action
+from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 
 
 def parse_args():
@@ -119,8 +127,37 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,
+        default=3e-4,
         help="Learning rate",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.1,
+        help="Weight decay for AdamW",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2000,
+        help="Number of warmup steps for WSD LR schedule",
+    )
+    parser.add_argument(
+        "--decay-steps",
+        type=int,
+        default=0,
+        help="Number of decay steps for WSD LR schedule (0 = no decay, just warmup + hold)",
+    )
+    parser.add_argument(
+        "--use-8bit-adam",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use 8-bit AdamW from bitsandbytes (default: True, --no-use-8bit-adam to disable)",
+    )
+    parser.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile",
     )
     parser.add_argument(
         "--mtp-length",
@@ -206,6 +243,7 @@ def parse_args():
         default=True,
         help="Use gradient checkpointing for memory efficiency (default: enabled)",
     )
+    add_wandb_args(parser)
     return parser.parse_args()
 
 
@@ -297,16 +335,22 @@ class ReplayDataset(torch.utils.data.Dataset):
             # Get sequence info to look up rewards
             seq_info = self.latent_dataset.sequences[idx]
             video_id = seq_info['video_id']
-            start_idx = seq_info['start_idx']
+            # Use start_frame (actual frame number), not start_idx (array position)
+            # to correctly align rewards with frames
+            start_frame = seq_info['start_frame']
 
-            # Convert actions dict to single discrete action tensor
+            # Convert actions dict to single discrete action tensor + movement targets
             actions_dict = data.get("actions")
             if actions_dict is not None:
-                # Encode actions using the action encoding function
+                # Movement is now (T, 2) float tensor of (x, y) coordinates
+                movement_targets = actions_dict['movement']  # (T, 2) float
+
+                # Encode discrete ability actions (movement=0 placeholder since
+                # movement is now continuous and handled separately)
                 actions = []
                 for t in range(self.seq_len):
                     action = encode_action(
-                        movement=actions_dict['movement'][t].item(),
+                        movement=0,  # movement is now continuous, not used here
                         abilities={
                             'Q': bool(actions_dict['Q'][t].item()),
                             'W': bool(actions_dict['W'][t].item()),
@@ -321,14 +365,15 @@ class ReplayDataset(torch.utils.data.Dataset):
                     actions.append(action)
                 actions = torch.tensor(actions, dtype=torch.long)
             else:
-                # No actions available - use zeros
+                # No actions available - use zeros / center
                 actions = torch.zeros(self.seq_len, dtype=torch.long)
+                movement_targets = torch.full((self.seq_len, 2), 0.5, dtype=torch.float32)
 
             # Get rewards from our loaded reward data
             if video_id in self.reward_data:
                 video_rewards = self.reward_data[video_id]
-                end_idx = min(start_idx + self.seq_len, len(video_rewards))
-                rewards = video_rewards[start_idx:end_idx]
+                end_idx = min(start_frame + self.seq_len, len(video_rewards))
+                rewards = video_rewards[start_frame:end_idx]
                 # Pad if needed
                 if len(rewards) < self.seq_len:
                     rewards = rewards + [0.0] * (self.seq_len - len(rewards))
@@ -338,7 +383,8 @@ class ReplayDataset(torch.utils.data.Dataset):
 
             return {
                 "latents": latents,  # (T, C, H, W) pre-tokenized
-                "actions": actions,  # (T,)
+                "actions": actions,  # (T,) discrete ability actions
+                "movement_targets": movement_targets,  # (T, 2) continuous (x, y)
                 "rewards": rewards,  # (T,)
             }
         else:
@@ -348,6 +394,7 @@ class ReplayDataset(torch.utils.data.Dataset):
             return {
                 "frames": torch.rand(T, C, H, W),
                 "actions": torch.randint(0, 128, (T,)),
+                "movement_targets": torch.full((T, 2), 0.5),
                 "rewards": torch.randn(T) * 10,
             }
 
@@ -370,11 +417,18 @@ def load_pretrained_dynamics(
     pretrained_args = checkpoint.get("args", {})
     latent_dim = pretrained_args.get("latent_dim", 32)
 
+    # Auto-detect use_actions from pretrained checkpoint weights
+    pretrained_state = checkpoint["model_state_dict"]
+    use_actions = any("action_embed" in k for k in pretrained_state.keys())
+    if use_actions:
+        print("  Detected action conditioning in pretrained checkpoint")
+
     # Create new dynamics with agent tokens enabled
     dynamics = create_dynamics(
         size=model_size,
         latent_dim=latent_dim,
         use_agent_tokens=True,
+        use_actions=use_actions,
         num_tasks=1,
         agent_layers=4,
         use_qk_norm=use_qk_norm,
@@ -383,9 +437,6 @@ def load_pretrained_dynamics(
         num_kv_heads=num_kv_heads,
         gradient_checkpointing=gradient_checkpointing,
     )
-
-    # Load pretrained weights (excluding new agent token components)
-    pretrained_state = checkpoint["model_state_dict"]
     model_state = dynamics.state_dict()
 
     # Copy matching weights
@@ -444,6 +495,7 @@ def train_epoch(
     dataloader: DataLoader,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
     rms_trackers: dict,
     device: str,
     epoch: int,
@@ -480,7 +532,8 @@ def train_epoch(
                 z = tokenizer.encode(frames_flat)  # (B*T, C, H, W) latent
                 z = z.view(B_frames, T_frames, *z.shape[1:])  # (B, T, C, H, W)
 
-        actions = batch["actions"].to(device)  # (B, T)
+        actions = batch["actions"].to(device)  # (B, T) discrete ability actions
+        movement_targets = batch["movement_targets"].to(device)  # (B, T, 2) continuous (x, y)
         rewards = batch["rewards"].to(device)  # (B, T)
 
         B, T = actions.shape
@@ -498,11 +551,24 @@ def train_epoch(
             # to prevent temporal shortcut learning (DreamerV4 Section 3.2)
             use_independent = random.random() < args.independent_frame_ratio
 
+            # Build factorized action dict for dynamics model if it uses actions
+            actions_dict = None
+            if hasattr(dynamics, '_orig_mod'):
+                has_actions = dynamics._orig_mod.use_actions
+            else:
+                has_actions = getattr(dynamics, 'use_actions', False)
+            if has_actions and "actions" in batch:
+                # The dataset provides encoded single-int actions, but the dynamics
+                # model expects a factorized dict. Use the raw action dict from the
+                # underlying PackedLatentSequenceDataset instead.
+                pass  # actions_dict remains None — model uses no_action_embed fallback
+                # TODO: pass factorized actions once ReplayDataset exposes them
+
             # Forward through dynamics with agent tokens
             z_pred, agent_out = dynamics(z_noisy, tau, independent_frames=use_independent)
 
-            # Dynamics loss (x-prediction)
-            dynamics_loss = F.mse_loss(z_pred, z_target)
+            # Dynamics loss (x-prediction with ramp weighting, matching Phase 1)
+            dynamics_loss = x_prediction_loss(z_pred, z_target, tau, use_ramp_weight=True)
 
             # Reward prediction loss
             reward_logits = reward_head(agent_out)  # (B, T, L, num_buckets)
@@ -527,27 +593,40 @@ def train_epoch(
             reward_loss = reward_loss / L
 
             # Behavioral cloning loss
-            action_logits = policy_head(agent_out)  # (B, T, L, action_dim)
+            ability_logits, movement_pred = policy_head(agent_out)
+            # ability_logits: (B, T, L, action_dim)
+            # movement_pred: (B, T, L, 2)
 
             # MTP BC loss: predict actions at t+1, t+2, ..., t+L
-            bc_loss = 0.0
+            bc_loss_ability = 0.0
+            bc_loss_movement = 0.0
             for offset in range(L):
                 if offset < T - 1:
                     target_idx = min(offset + 1, T - 1)
-                    target = actions[:, target_idx:]  # (B, T - target_idx)
-                    pred = action_logits[:, :T - target_idx, offset, :]  # (B, T - target_idx, action_dim)
 
-                    if pred.shape[1] > 0:
-                        bc_loss = bc_loss + F.cross_entropy(
-                            pred.reshape(-1, pred.shape[-1]),
-                            target.reshape(-1),
+                    # Discrete ability loss (cross-entropy)
+                    ability_target = actions[:, target_idx:]  # (B, T - target_idx)
+                    ability_pred = ability_logits[:, :T - target_idx, offset, :]
+
+                    if ability_pred.shape[1] > 0:
+                        bc_loss_ability = bc_loss_ability + F.cross_entropy(
+                            ability_pred.reshape(-1, ability_pred.shape[-1]),
+                            ability_target.reshape(-1),
                         )
 
-            bc_loss = bc_loss / L
+                    # Continuous movement loss (MSE)
+                    # movement_targets is (B, T, 2) float
+                    move_target = movement_targets[:, target_idx:]  # (B, T - target_idx, 2)
+                    move_pred = movement_pred[:, :T - target_idx, offset, :]  # (B, T - target_idx, 2)
 
-            # Compute action prediction accuracy (using offset=0, next-step prediction)
+                    if move_pred.shape[1] > 0:
+                        bc_loss_movement = bc_loss_movement + F.mse_loss(move_pred, move_target)
+
+            bc_loss = (bc_loss_ability + bc_loss_movement) / L
+
+            # Compute action prediction accuracy (discrete abilities only, offset=0)
             with torch.no_grad():
-                pred_t0 = action_logits[:, :-1, 0, :]  # (B, T-1, action_dim)
+                pred_t0 = ability_logits[:, :-1, 0, :]  # (B, T-1, action_dim)
                 target_t0 = actions[:, 1:]  # (B, T-1)
 
                 # Top-1 accuracy
@@ -578,6 +657,7 @@ def train_epoch(
         )
         scaler.step(optimizer)
         scaler.update()
+        scheduler.step()
         optimizer.zero_grad()
 
         # Track metrics
@@ -593,6 +673,19 @@ def train_epoch(
             samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
             acc_top1 = 100 * total_correct_top1 / total_predictions if total_predictions > 0 else 0
             acc_top5 = 100 * total_correct_top5 / total_predictions if total_predictions > 0 else 0
+
+            log_step({
+                "train/loss": total_loss_batch.item(),
+                "train/dynamics_loss": dynamics_loss.item(),
+                "train/reward_loss": reward_loss.item() if isinstance(reward_loss, torch.Tensor) else reward_loss,
+                "train/bc_loss": bc_loss.item() if isinstance(bc_loss, torch.Tensor) else bc_loss,
+                "train/acc_top1": acc_top1,
+                "train/acc_top5": acc_top5,
+                "train/lr": scheduler.get_last_lr()[0],
+                "train/samples_per_sec": samples_per_sec,
+                "train/epoch": epoch,
+            }, step=batch_idx + epoch * len(dataloader))
+
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {total_loss_batch.item():.4f} "
@@ -621,6 +714,7 @@ def save_checkpoint(
     policy_head: nn.Module,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
     rms_trackers: dict,
     epoch: int,
     metrics: dict,
@@ -634,6 +728,7 @@ def save_checkpoint(
         "policy_head_state_dict": policy_head.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
         "rms_state": {k: v.state_dict() for k, v in rms_trackers.items()},
         "epoch": epoch,
         "metrics": metrics,
@@ -692,8 +787,17 @@ def main():
     print(f"  Total parameters: {dynamics.get_num_params():,}")
     print(f"  Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
 
+    # torch.compile the dynamics model
+    if not args.no_compile:
+        print("Compiling dynamics model with torch.compile...")
+        dynamics = torch.compile(dynamics)
+
     # Get model dimension from dynamics
-    model_dim = dynamics.model_dim
+    # Access model_dim from the underlying module if compiled
+    if hasattr(dynamics, '_orig_mod'):
+        model_dim = dynamics._orig_mod.model_dim
+    else:
+        model_dim = dynamics.model_dim
 
     # Create heads
     print("\nCreating reward and policy heads...")
@@ -757,7 +861,26 @@ def main():
         list(reward_head.parameters()) +
         list(policy_head.parameters())
     )
-    optimizer = torch.optim.AdamW(all_params, lr=args.lr, weight_decay=0.01)
+    if args.use_8bit_adam and HAS_BNB:
+        print("Using 8-bit AdamW (bitsandbytes)")
+        optimizer = bnb.optim.AdamW8bit(all_params, lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        if args.use_8bit_adam and not HAS_BNB:
+            print("WARNING: bitsandbytes not installed, falling back to standard AdamW")
+        optimizer = torch.optim.AdamW(all_params, lr=args.lr, weight_decay=args.weight_decay)
+
+    # WSD Learning Rate Schedule
+    total_steps = args.epochs * len(dataloader)
+
+    def wsd_schedule(step):
+        if step < args.warmup_steps:
+            return step / max(1, args.warmup_steps)
+        if args.decay_steps > 0 and step >= total_steps - args.decay_steps:
+            decay_progress = (total_steps - step) / max(1, args.decay_steps)
+            return max(0.0, decay_progress)
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_schedule)
 
     # Create scaler
     device_type = args.device.split(":")[0]
@@ -769,6 +892,13 @@ def main():
         "reward": RunningRMS(),
         "bc": RunningRMS(),
     }
+
+    # Initialize wandb
+    wandb_run = init_wandb(args, job_type="agent_finetune", extra_config={
+        "dynamics_params": dynamics.get_num_params() if hasattr(dynamics, 'get_num_params') else sum(p.numel() for p in dynamics.parameters()),
+        "reward_head_params": sum(p.numel() for p in reward_head.parameters()),
+        "policy_head_params": sum(p.numel() for p in policy_head.parameters()),
+    })
 
     # Training loop
     print("\n" + "=" * 60)
@@ -789,6 +919,7 @@ def main():
             dataloader=dataloader,
             optimizer=optimizer,
             scaler=scaler,
+            scheduler=scheduler,
             rms_trackers=rms_trackers,
             device=args.device,
             epoch=epoch,
@@ -802,6 +933,16 @@ def main():
         print(f"  BC Loss: {metrics['bc_loss']:.4f}")
         print(f"  Action Acc@1: {metrics['acc_top1']:.1f}%  Acc@5: {metrics['acc_top5']:.1f}%")
 
+        log_step({
+            "epoch/loss": metrics["loss"],
+            "epoch/dynamics_loss": metrics["dynamics_loss"],
+            "epoch/reward_loss": metrics["reward_loss"],
+            "epoch/bc_loss": metrics["bc_loss"],
+            "epoch/acc_top1": metrics["acc_top1"],
+            "epoch/acc_top5": metrics["acc_top5"],
+            "epoch/epoch": epoch + 1,
+        }, step=(epoch + 1) * len(dataloader))
+
         history.append({"epoch": epoch + 1, **metrics})
 
         # Save checkpoint
@@ -809,14 +950,14 @@ def main():
             checkpoint_path = checkpoint_dir / f"agent_finetune_epoch_{epoch + 1:03d}.pt"
             save_checkpoint(
                 dynamics, reward_head, policy_head,
-                optimizer, scaler, rms_trackers, epoch, metrics, args, checkpoint_path
+                optimizer, scaler, scheduler, rms_trackers, epoch, metrics, args, checkpoint_path
             )
 
             # Also save as latest
             latest_path = checkpoint_dir / "agent_finetune_latest.pt"
             save_checkpoint(
                 dynamics, reward_head, policy_head,
-                optimizer, scaler, rms_trackers, epoch, metrics, args, latest_path
+                optimizer, scaler, scheduler, rms_trackers, epoch, metrics, args, latest_path
             )
 
     # Save training history
@@ -828,6 +969,8 @@ def main():
     print("Training complete!")
     print(f"Checkpoints saved to {checkpoint_dir}")
     print("=" * 60)
+
+    finish_wandb()
 
 
 if __name__ == "__main__":

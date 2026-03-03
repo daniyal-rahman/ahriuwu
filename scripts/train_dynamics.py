@@ -32,6 +32,12 @@ from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 from torch.utils.checkpoint import checkpoint
 
+try:
+    import bitsandbytes as bnb
+    HAS_BNB = True
+except ImportError:
+    HAS_BNB = False
+
 from ahriuwu.data import LatentSequenceDataset, PackedLatentSequenceDataset
 from ahriuwu.models import (
     create_dynamics,
@@ -40,6 +46,7 @@ from ahriuwu.models import (
     ShortcutForcing,
     RunningRMS,
 )
+from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 
 
 def create_run_directory(base_dir: Path, args: argparse.Namespace) -> Path:
@@ -203,14 +210,37 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4,
+        default=3e-4,
         help="Learning rate",
     )
     parser.add_argument(
         "--weight-decay",
         type=float,
-        default=0.01,
+        default=0.1,
         help="Weight decay for AdamW",
+    )
+    parser.add_argument(
+        "--warmup-steps",
+        type=int,
+        default=2000,
+        help="Number of warmup steps for WSD LR schedule",
+    )
+    parser.add_argument(
+        "--decay-steps",
+        type=int,
+        default=0,
+        help="Number of decay steps for WSD LR schedule (0 = no decay, just warmup + hold)",
+    )
+    parser.add_argument(
+        "--use-8bit-adam",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use 8-bit AdamW from bitsandbytes (default: True, --no-use-8bit-adam to disable)",
+    )
+    parser.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile",
     )
     parser.add_argument(
         "--num-workers",
@@ -244,9 +274,9 @@ def parse_args():
     )
     parser.add_argument(
         "--gradient-checkpointing",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=True,
-        help="Use gradient checkpointing to save memory",
+        help="Use gradient checkpointing to save memory (--no-gradient-checkpointing to disable)",
     )
     parser.add_argument(
         "--shortcut-forcing",
@@ -337,6 +367,7 @@ def parse_args():
         default=1,
         help="Number of batches to accumulate gradients over before stepping",
     )
+    add_wandb_args(parser)
     return parser.parse_args()
 
 
@@ -350,6 +381,7 @@ def save_checkpoint(
     args: argparse.Namespace,
     path: Path,
     rms_dict: dict[str, RunningRMS] | None = None,
+    scheduler=None,
 ):
     """Save training checkpoint."""
     checkpoint_data = {
@@ -363,6 +395,8 @@ def save_checkpoint(
     }
     if rms_dict is not None:
         checkpoint_data["rms_state"] = {k: v.state_dict() for k, v in rms_dict.items()}
+    if scheduler is not None:
+        checkpoint_data["scheduler_state_dict"] = scheduler.state_dict()
     torch.save(checkpoint_data, path)
     print(f"Saved checkpoint to {path}")
 
@@ -373,6 +407,7 @@ def load_checkpoint(
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
     rms_dict: dict[str, RunningRMS] | None = None,
+    scheduler=None,
 ):
     """Load training checkpoint."""
     checkpoint_data = torch.load(path, map_location="cpu")
@@ -386,6 +421,11 @@ def load_checkpoint(
 
     optimizer.load_state_dict(checkpoint_data["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint_data["scaler_state_dict"])
+
+    # Restore scheduler state if available
+    if scheduler is not None and "scheduler_state_dict" in checkpoint_data:
+        scheduler.load_state_dict(checkpoint_data["scheduler_state_dict"])
+        print("Restored LR scheduler state")
 
     # Restore RMS state if available
     if rms_dict is not None and "rms_state" in checkpoint_data:
@@ -406,6 +446,7 @@ def train_epoch(
     dataloader: DataLoader | None,
     optimizer: torch.optim.Optimizer,
     scaler: GradScaler,
+    scheduler,
     schedule: DiffusionSchedule,
     device: str,
     epoch: int,
@@ -539,6 +580,7 @@ def train_epoch(
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
+            scheduler.step()
             optimizer.zero_grad()
             did_step = True
         else:
@@ -592,6 +634,23 @@ def train_epoch(
                 warnings.append("NAN/INF")
             warning_str = f" ⚠️  {' '.join(warnings)}" if warnings else ""
 
+            # Wandb per-step logging
+            wandb_metrics = {
+                "train/loss": raw_loss_val,
+                "train/grad_norm": grad_norm.item() if did_step else 0.0,
+                "train/tau_min": tau_min,
+                "train/tau_max": tau_max,
+                "train/lr": scheduler.get_last_lr()[0],
+                "train/batches_per_sec": batches_per_sec,
+                "train/epoch": epoch,
+            }
+            if shortcut is not None:
+                wandb_metrics["train/loss_std"] = loss_info["loss_std"]
+                wandb_metrics["train/loss_boot"] = loss_info["loss_boot"]
+            else:
+                wandb_metrics["train/pred_std"] = pred_std
+            log_step(wandb_metrics, step=global_step)
+
             if shortcut is not None:
                 # Show shortcut forcing info
                 print(
@@ -616,13 +675,13 @@ def train_epoch(
             step_path = checkpoint_dir / f"dynamics_step_{global_step:07d}.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, step_path, rms_dict=rms_dict
+                raw_loss_val, args, step_path, rms_dict=rms_dict, scheduler=scheduler
             )
             # Also update latest
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, latest_path, rms_dict=rms_dict
+                raw_loss_val, args, latest_path, rms_dict=rms_dict, scheduler=scheduler
             )
 
         batch_idx += 1
@@ -811,16 +870,56 @@ def main():
     print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
     print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
 
+    # torch.compile the model
+    if not args.no_compile:
+        print("Compiling model with torch.compile...")
+        model = torch.compile(model)
+
     # Save run configuration
     save_run_config(checkpoint_dir, args, num_params)
 
+    # Initialize wandb
+    wandb_run = init_wandb(args, job_type="dynamics", extra_config={
+        "num_params": num_params,
+        "checkpoint_dir": str(checkpoint_dir),
+    })
+
     # Create optimizer
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        betas=(0.9, 0.95),
-    )
+    if args.use_8bit_adam and HAS_BNB:
+        print("Using 8-bit AdamW (bitsandbytes)")
+        optimizer = bnb.optim.AdamW8bit(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+        )
+    else:
+        if args.use_8bit_adam and not HAS_BNB:
+            print("WARNING: bitsandbytes not installed, falling back to standard AdamW")
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.95),
+        )
+
+    # WSD Learning Rate Schedule
+    # Estimate total optimizer steps accounting for gradient accumulation
+    if dataloader is not None:
+        steps_per_epoch = len(dataloader) // args.gradient_accumulation
+    else:
+        steps_per_epoch = len(dataloader_short) // args.gradient_accumulation
+    total_steps = args.epochs * steps_per_epoch
+
+    def wsd_schedule(step):
+        if step < args.warmup_steps:
+            return step / max(1, args.warmup_steps)
+        if args.decay_steps > 0 and step >= total_steps - args.decay_steps:
+            decay_progress = (total_steps - step) / max(1, args.decay_steps)
+            return max(0.0, decay_progress)
+        return 1.0
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_schedule)
 
     # Create diffusion schedule
     schedule = DiffusionSchedule(device=args.device)
@@ -832,7 +931,7 @@ def main():
         print(f"Shortcut forcing enabled (k_max={args.shortcut_k_max})")
 
     # Create scaler for mixed precision
-    scaler = GradScaler("cuda")
+    scaler = GradScaler(args.device.split(":")[0])
 
     # RMS trackers for loss normalization
     if args.shortcut_forcing:
@@ -851,7 +950,7 @@ def main():
     if args.resume:
         print(f"\nResuming from {args.resume}...")
         start_epoch, global_step, _ = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler, rms_dict=rms_dict
+            Path(args.resume), model, optimizer, scaler, rms_dict=rms_dict, scheduler=scheduler
         )
         start_epoch += 1
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
@@ -866,7 +965,7 @@ def main():
         print("=" * 60)
 
         metrics = train_epoch(
-            model, dataloader, optimizer, scaler, schedule, args.device,
+            model, dataloader, optimizer, scaler, scheduler, schedule, args.device,
             epoch, global_step, args, checkpoint_dir, shortcut,
             dataloader_short, dataloader_long, use_actions=args.use_actions,
             independent_frame_ratio=args.independent_frame_ratio,
@@ -880,6 +979,14 @@ def main():
         print(f"  Loss: {metrics['loss']:.4f}")
         print(f"  Grad Norm (avg): {metrics['grad_norm']:.4f}")
         print(f"  Pred Std (avg): {metrics['pred_std']:.4f}")
+
+        # Wandb epoch summary
+        log_step({
+            "epoch/loss": metrics["loss"],
+            "epoch/grad_norm": metrics["grad_norm"],
+            "epoch/pred_std": metrics["pred_std"],
+            "epoch/epoch": epoch + 1,
+        }, step=global_step)
 
         # Mode collapse warning
         if metrics['pred_std'] < 0.01:
@@ -896,14 +1003,14 @@ def main():
             checkpoint_path = checkpoint_dir / f"dynamics_epoch_{epoch + 1:03d}.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, checkpoint_path, rms_dict=rms_dict
+                metrics["loss"], args, checkpoint_path, rms_dict=rms_dict, scheduler=scheduler
             )
 
             # Also save as latest
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, latest_path, rms_dict=rms_dict
+                metrics["loss"], args, latest_path, rms_dict=rms_dict, scheduler=scheduler
             )
 
         # Save best model
@@ -912,7 +1019,7 @@ def main():
             best_path = checkpoint_dir / "dynamics_best.pt"
             save_checkpoint(
                 model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, best_path, rms_dict=rms_dict
+                metrics["loss"], args, best_path, rms_dict=rms_dict, scheduler=scheduler
             )
             print(f"New best model saved (loss: {best_loss:.4f})")
 
@@ -927,6 +1034,8 @@ def main():
     print(f"Best loss: {best_loss:.4f}")
     print(f"Best model: {checkpoint_dir / 'dynamics_best.pt'}")
     print("=" * 60)
+
+    finish_wandb()
 
 
 if __name__ == "__main__":

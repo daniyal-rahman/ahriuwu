@@ -104,8 +104,12 @@ class RewardHead(nn.Module):
 class PolicyHead(nn.Module):
     """Policy head for action prediction.
 
-    Phase 2: Trained with behavioral cloning (cross-entropy with human actions)
+    Phase 2: Trained with behavioral cloning
     Phase 3: Trained with PMPO on imagined trajectories
+
+    Predicts:
+    - Discrete ability actions (cross-entropy with human actions)
+    - Continuous movement (x, y) in [0, 1] via sigmoid + MSE
 
     Uses MTP to predict actions for multiple future timesteps.
 
@@ -118,18 +122,21 @@ class PolicyHead(nn.Module):
         action_dim: int,
         hidden_dim: int = 256,
         mtp_length: int = 8,
+        movement_dim: int = 2,
     ):
         """Initialize policy head.
 
         Args:
             input_dim: Dimension of agent token features
-            action_dim: Number of discrete actions
+            action_dim: Number of discrete actions (for ability predictions)
             hidden_dim: Hidden layer dimension
             mtp_length: Multi-token prediction length (paper uses 8)
+            movement_dim: Continuous movement dimensions (default 2 for x, y)
         """
         super().__init__()
         self.action_dim = action_dim
         self.mtp_length = mtp_length
+        self.movement_dim = movement_dim
 
         # Shared MLP backbone
         self.mlp = nn.Sequential(
@@ -139,27 +146,40 @@ class PolicyHead(nn.Module):
             nn.SiLU(),
         )
 
-        # MTP heads: predict action for t, t+1, ..., t+L-1
+        # MTP heads for discrete ability actions: predict action for t, t+1, ..., t+L-1
         self.heads = nn.ModuleList([
             nn.Linear(hidden_dim, action_dim) for _ in range(mtp_length)
         ])
 
-    def forward(self, agent_tokens: torch.Tensor) -> torch.Tensor:
-        """Predict action logits.
+        # MTP heads for continuous movement (x, y) prediction
+        self.movement_heads = nn.ModuleList([
+            nn.Linear(hidden_dim, movement_dim) for _ in range(mtp_length)
+        ])
+
+    def forward(self, agent_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Predict action logits and movement coordinates.
 
         Args:
             agent_tokens: (B, T, D) agent token features
 
         Returns:
-            (B, T, L, action_dim) logits for each timestep and MTP offset
+            tuple of:
+                ability_logits: (B, T, L, action_dim) logits for discrete actions
+                movement_pred: (B, T, L, 2) predicted (x, y) in [0, 1]
         """
         x = self.mlp(agent_tokens)  # (B, T, hidden_dim)
 
-        # Predict for each MTP offset
-        logits = torch.stack([head(x) for head in self.heads], dim=2)
-        return logits  # (B, T, L, action_dim)
+        # Discrete ability predictions
+        ability_logits = torch.stack([head(x) for head in self.heads], dim=2)
 
-    def sample(self, agent_tokens: torch.Tensor, temperature: float = 1.0) -> torch.Tensor:
+        # Continuous movement predictions with sigmoid to bound in [0, 1]
+        movement_pred = torch.stack(
+            [torch.sigmoid(mhead(x)) for mhead in self.movement_heads], dim=2
+        )
+
+        return ability_logits, movement_pred
+
+    def sample(self, agent_tokens: torch.Tensor, temperature: float = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
         """Sample actions from policy.
 
         Args:
@@ -167,22 +187,23 @@ class PolicyHead(nn.Module):
             temperature: Sampling temperature (1.0 = standard, <1 = greedy)
 
         Returns:
-            (B, T, L) sampled action indices
+            tuple of:
+                (B, T, L) sampled discrete action indices
+                (B, T, L, 2) predicted movement coordinates
         """
-        logits = self.forward(agent_tokens)  # (B, T, L, action_dim)
+        ability_logits, movement_pred = self.forward(agent_tokens)
 
         if temperature == 0:
-            return logits.argmax(dim=-1)
+            return ability_logits.argmax(dim=-1), movement_pred
 
-        probs = F.softmax(logits / temperature, dim=-1)
-        # Sample from categorical
+        probs = F.softmax(ability_logits / temperature, dim=-1)
         B, T, L, A = probs.shape
         probs_flat = probs.view(-1, A)
         actions_flat = torch.multinomial(probs_flat, num_samples=1).squeeze(-1)
-        return actions_flat.view(B, T, L)
+        return actions_flat.view(B, T, L), movement_pred
 
     def log_prob(self, agent_tokens: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Compute log probability of actions.
+        """Compute log probability of discrete actions.
 
         Args:
             agent_tokens: (B, T, D) agent token features
@@ -191,8 +212,8 @@ class PolicyHead(nn.Module):
         Returns:
             (B, T, L) log probabilities
         """
-        logits = self.forward(agent_tokens)  # (B, T, L, action_dim)
-        log_probs = F.log_softmax(logits, dim=-1)
+        ability_logits, _ = self.forward(agent_tokens)
+        log_probs = F.log_softmax(ability_logits, dim=-1)
 
         # Gather log probs for taken actions
         actions_expanded = actions.unsqueeze(-1)  # (B, T, L, 1)

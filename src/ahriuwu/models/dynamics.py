@@ -24,7 +24,8 @@ from torch.utils.checkpoint import checkpoint
 from .diffusion import TimestepEmbedding
 
 # Action space constants (must match data/actions.py)
-MOVEMENT_CLASSES = 18  # 0-17 = directions (20° apart)
+MOVEMENT_DIM = 2  # Continuous (x, y) in [0, 1]
+MOVEMENT_CLASSES = 18  # Legacy, deprecated
 ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
@@ -726,6 +727,7 @@ class AgentTokenBlock(nn.Module):
         super().__init__()
 
         self.norm1 = RMSNorm(dim)
+        self.norm_kv = RMSNorm(dim)
         self.cross_attn = AgentCrossAttention(
             dim, num_heads, num_kv_heads, head_dim, dropout,
             use_qk_norm=use_qk_norm, soft_cap=soft_cap
@@ -755,7 +757,7 @@ class AgentTokenBlock(nn.Module):
             (B, T, D) processed agent tokens
         """
         # Cross-attention to z tokens
-        agent_tokens = agent_tokens + self.cross_attn(self.norm1(agent_tokens), z_tokens)
+        agent_tokens = agent_tokens + self.cross_attn(self.norm1(agent_tokens), self.norm_kv(z_tokens))
 
         # Self-attention across time
         agent_tokens = agent_tokens + self.self_attn(self.norm2(agent_tokens))
@@ -875,7 +877,7 @@ class DynamicsTransformer(nn.Module):
         # Factorized action embeddings
         if use_actions:
             self.action_embed = nn.ModuleDict({
-                'movement': nn.Embedding(MOVEMENT_CLASSES, model_dim),
+                'movement': nn.Linear(MOVEMENT_DIM, model_dim),  # continuous (x, y) -> D
                 **{k: nn.Embedding(2, model_dim) for k in ABILITY_KEYS}
             })
             # Learned "no action" embedding for unlabeled videos
@@ -945,13 +947,14 @@ class DynamicsTransformer(nn.Module):
 
         Args:
             actions: Dict with keys 'movement' and ability keys.
-                     Each value is a (B, T) tensor of class indices.
+                     'movement' is (B, T, 2) float tensor of (x, y) coordinates.
+                     Ability keys are (B, T) long tensors.
 
         Returns:
             (B, T, D) summed action embedding
         """
-        # Start with movement embedding
-        emb = self.action_embed['movement'](actions['movement'])  # (B, T, D)
+        # Movement: linear projection from continuous (x, y)
+        emb = self.action_embed['movement'](actions['movement'])  # (B, T, 2) -> (B, T, D)
 
         # Add all ability key embeddings
         for key in ABILITY_KEYS:
@@ -1221,7 +1224,7 @@ if __name__ == "__main__":
 
     # Create mock actions
     actions = {
-        'movement': torch.randint(0, MOVEMENT_CLASSES, (B, T)),
+        'movement': torch.rand(B, T, MOVEMENT_DIM),  # continuous (x, y) in [0, 1]
         **{k: torch.randint(0, 2, (B, T)) for k in ABILITY_KEYS}
     }
 

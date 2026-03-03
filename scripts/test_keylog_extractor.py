@@ -9,7 +9,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ahriuwu.data.keylog_extractor import (
-    KeylogExtractor, HUDRegions1080p, visualize_regions,
+    KeylogExtractor, HUDRegions1080p,
     GarenHUDTracker, AbilityBarDetector
 )
 
@@ -26,15 +26,8 @@ def analyze_frame(frame_path: Path, output_path: Path = None):
 
     regions = HUDRegions1080p()
 
-    # Visualize regions
-    vis = visualize_regions(frame, regions)
-
-    # Save visualization
     if output_path is None:
         output_path = frame_path.parent / f"{frame_path.stem}_regions.jpg"
-
-    cv2.imwrite(str(output_path), vis)
-    print(f"Saved visualization to: {output_path}")
 
     # Analyze ability bar regions
     print("\nAbility bar analysis:")
