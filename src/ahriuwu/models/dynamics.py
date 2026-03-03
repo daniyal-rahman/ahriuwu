@@ -30,6 +30,11 @@ MOVEMENT_CLASSES = 18  # Legacy, deprecated
 ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
+def _checkpoint_block_forward(block, x, time_emb, independent_frames):
+    """Wrapper for gradient checkpointing that passes independent_frames as keyword arg."""
+    return block(x, time_emb, independent_frames=independent_frames)
+
+
 class SpatialAttention(nn.Module):
     """Self-attention within each frame.
 
@@ -965,11 +970,9 @@ class DynamicsTransformer(nn.Module):
         # Transformer blocks (z tokens + registers - agent tokens processed separately)
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
-                # Use gradient checkpointing to save memory during training
-                # Need to wrap the forward call in a function for checkpoint
                 x = checkpoint(
-                    block,
-                    x, time_emb, independent_frames,
+                    _checkpoint_block_forward,
+                    block, x, time_emb, independent_frames,
                     use_reentrant=False,
                 )
             else:

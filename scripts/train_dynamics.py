@@ -375,8 +375,17 @@ def train_epoch(
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
             if shortcut is not None:
                 # Shortcut forcing: sample step sizes and use bootstrap loss
+                # Temporarily disable gradient checkpointing — shortcut forcing
+                # calls the model 3 times (2 teacher + 1 student) and the metadata
+                # verification in checkpoint(use_reentrant=False) fails due to
+                # autocast context mismatch during recomputation.
+                gc_was_enabled = getattr(model, 'gradient_checkpointing', False)
+                if gc_was_enabled:
+                    model.gradient_checkpointing = False
                 step_size = shortcut.sample_step_size(B, device=device)
                 raw_loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
+                if gc_was_enabled:
+                    model.gradient_checkpointing = True
                 # Normalize via RunningRMS (loss_info values are floats from .item())
                 # Update component trackers, then normalize the combined loss tensor
                 if rms_dict is not None:
