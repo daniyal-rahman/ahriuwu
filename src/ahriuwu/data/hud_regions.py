@@ -51,20 +51,9 @@ REPLAY_HUD_1080P = {
     # Gold comes from scorecard (flashes) or top_scoreboard (team total)
 }
 
-# Live gameplay HUD (GarenChallenger channel)
-# TODO: Get sample frame and map regions
-LIVE_HUD_1080P = {
-    "gold": None,  # TODO
-    "cs": None,  # TODO
-    "game_clock": None,  # TODO
-    "minimap": None,  # TODO
-    "player_health": None,  # TODO
-}
-
 # Map channel names to their HUD config
 CHANNEL_HUD_MAP = {
     "domisumReplay-Garen": REPLAY_HUD_1080P,
-    "GarenChallenger": LIVE_HUD_1080P,
 }
 
 

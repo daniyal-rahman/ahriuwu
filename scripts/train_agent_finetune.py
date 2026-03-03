@@ -32,12 +32,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
-try:
-    import bitsandbytes as bnb
-    HAS_BNB = True
-except ImportError:
-    HAS_BNB = False
-
 from ahriuwu.models import (
     create_tokenizer,
     create_transformer_tokenizer,
@@ -53,10 +47,12 @@ from ahriuwu.models import (
 from ahriuwu.data.dataset import PackedLatentSequenceDataset, RewardMixtureSampler, VideoShuffleSampler
 from ahriuwu.data.actions import encode_action
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
+from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Phase 2: Agent Finetuning")
+    add_training_args(parser)
     parser.add_argument(
         "--dynamics-checkpoint",
         type=str,
@@ -88,12 +84,6 @@ def parse_args():
         help="Directory containing features.json per video (default: data/processed)",
     )
     parser.add_argument(
-        "--checkpoint-dir",
-        type=str,
-        default="checkpoints",
-        help="Directory to save checkpoints",
-    )
-    parser.add_argument(
         "--action-dim",
         type=int,
         default=128,
@@ -107,57 +97,10 @@ def parse_args():
         help="Dynamics model size",
     )
     parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=4,
-        help="Batch size",
-    )
-    parser.add_argument(
         "--seq-len",
         type=int,
         default=32,
         help="Sequence length (frames)",
-    )
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        default=10,
-        help="Number of epochs",
-    )
-    parser.add_argument(
-        "--lr",
-        type=float,
-        default=3e-4,
-        help="Learning rate",
-    )
-    parser.add_argument(
-        "--weight-decay",
-        type=float,
-        default=0.1,
-        help="Weight decay for AdamW",
-    )
-    parser.add_argument(
-        "--warmup-steps",
-        type=int,
-        default=2000,
-        help="Number of warmup steps for WSD LR schedule",
-    )
-    parser.add_argument(
-        "--decay-steps",
-        type=int,
-        default=0,
-        help="Number of decay steps for WSD LR schedule (0 = no decay, just warmup + hold)",
-    )
-    parser.add_argument(
-        "--use-8bit-adam",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use 8-bit AdamW from bitsandbytes (default: True, --no-use-8bit-adam to disable)",
-    )
-    parser.add_argument(
-        "--no-compile",
-        action="store_true",
-        help="Disable torch.compile",
     )
     parser.add_argument(
         "--mtp-length",
@@ -170,24 +113,6 @@ def parse_args():
         type=int,
         default=255,
         help="Number of twohot buckets for reward prediction",
-    )
-    parser.add_argument(
-        "--log-interval",
-        type=int,
-        default=50,
-        help="Log every N batches",
-    )
-    parser.add_argument(
-        "--save-interval",
-        type=int,
-        default=1,
-        help="Save checkpoint every N epochs",
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu",
-        help="Device to train on",
     )
     parser.add_argument(
         "--use-reward-mixture",
@@ -243,6 +168,7 @@ def parse_args():
         default=True,
         help="Use gradient checkpointing for memory efficiency (default: enabled)",
     )
+    parser.set_defaults(num_workers=0)
     add_wandb_args(parser)
     return parser.parse_args()
 
@@ -851,7 +777,7 @@ def main():
         batch_size=args.batch_size,
         shuffle=shuffle,
         sampler=sampler,
-        num_workers=0,  # Reduced from 4 to avoid OOM
+        num_workers=args.num_workers,
         pin_memory=True,
     )
 
@@ -861,26 +787,11 @@ def main():
         list(reward_head.parameters()) +
         list(policy_head.parameters())
     )
-    if args.use_8bit_adam and HAS_BNB:
-        print("Using 8-bit AdamW (bitsandbytes)")
-        optimizer = bnb.optim.AdamW8bit(all_params, lr=args.lr, weight_decay=args.weight_decay)
-    else:
-        if args.use_8bit_adam and not HAS_BNB:
-            print("WARNING: bitsandbytes not installed, falling back to standard AdamW")
-        optimizer = torch.optim.AdamW(all_params, lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = create_optimizer(all_params, args.lr, args.weight_decay, use_8bit=args.use_8bit_adam)
 
     # WSD Learning Rate Schedule
     total_steps = args.epochs * len(dataloader)
-
-    def wsd_schedule(step):
-        if step < args.warmup_steps:
-            return step / max(1, args.warmup_steps)
-        if args.decay_steps > 0 and step >= total_steps - args.decay_steps:
-            decay_progress = (total_steps - step) / max(1, args.decay_steps)
-            return max(0.0, decay_progress)
-        return 1.0
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_schedule)
+    scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
 
     # Create scaler
     device_type = args.device.split(":")[0]

@@ -30,9 +30,6 @@ class ActionDict(TypedDict, total=False):
 # Continuous movement dimension (x, y)
 MOVEMENT_DIM = 2
 
-# Legacy: kept for backward compatibility with old slice-based data
-MOVEMENT_CLASSES = 18  # 0-17 = directions (20° apart) — DEPRECATED
-
 ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
@@ -52,27 +49,7 @@ class ActionSpace:
     """
 
     MOVEMENT_DIM = MOVEMENT_DIM
-    MOVEMENT_CLASSES = MOVEMENT_CLASSES  # Deprecated
     ABILITY_KEYS = ABILITY_KEYS
-
-    @staticmethod
-    def angle_to_direction(angle_degrees: float) -> int:
-        """Convert angle in degrees to direction class (0-17).
-
-        DEPRECATED: Use continuous (x, y) coordinates instead.
-
-        Args:
-            angle_degrees: Angle in degrees (0=East, 90=North counter-clockwise)
-
-        Returns:
-            Direction class 0-17 (20 degree buckets)
-        """
-        # Normalize to [0, 360)
-        angle = angle_degrees % 360
-        # Each bucket is 20 degrees, with bucket 0 centered at 0 degrees
-        # So bucket boundaries are at -10, 10, 30, 50, etc.
-        bucket = int((angle + 10) / 20) % 18
-        return bucket
 
     @staticmethod
     def direction_to_angle(direction: int) -> float:

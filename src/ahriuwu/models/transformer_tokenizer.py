@@ -16,6 +16,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from .layers import RMSNorm, QKNorm, SwiGLU, soft_cap_attention
+
 
 def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
     """Generate 2D sinusoidal position embeddings.
@@ -137,63 +139,6 @@ class RotaryEmbedding2D(nn.Module):
     def apply_rotary(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
         """Apply rotary embedding to x."""
         return (x * cos) + (self.rotate_half(x) * sin)
-
-
-class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization."""
-
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        rms = torch.sqrt(torch.mean(x ** 2, dim=-1, keepdim=True) + self.eps)
-        return x / rms * self.weight
-
-
-class QKNorm(nn.Module):
-    """Query-Key Normalization for attention stability.
-
-    Normalizes Q and K independently before computing attention scores.
-    Reference: Gemma 2, DreamerV4
-    """
-
-    def __init__(self, head_dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.q_norm = RMSNorm(head_dim, eps)
-        self.k_norm = RMSNorm(head_dim, eps)
-
-    def forward(
-        self, q: torch.Tensor, k: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        return self.q_norm(q), self.k_norm(k)
-
-
-def soft_cap_attention(logits: torch.Tensor, cap: float = 50.0) -> torch.Tensor:
-    """Apply soft capping to attention logits.
-
-    Prevents extreme attention scores using tanh squashing.
-    Reference: Gemma 2 uses cap=50.0
-    """
-    return cap * torch.tanh(logits / cap)
-
-
-class SwiGLU(nn.Module):
-    """SwiGLU activation function."""
-
-    def __init__(self, dim: int, hidden_dim: Optional[int] = None):
-        super().__init__()
-        hidden_dim = hidden_dim or int(dim * 8 / 3)
-        # Round to nearest multiple of 64 for efficiency
-        hidden_dim = ((hidden_dim + 63) // 64) * 64
-
-        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
-        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
-        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.w2(F.silu(self.w1(x)) * self.w3(x))
 
 
 class MultiHeadAttention(nn.Module):

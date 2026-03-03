@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Evaluate trained dynamics model on test sequences.
 
-Tests rollout quality:
-1. Given context frames, predict future frames
-2. Decode latents back to pixels using tokenizer
-3. Compare to ground truth
-
-Can filter for "interesting" sequences:
-- Laning phase (2-12 min game time)
-- Post-laning (12+ min)
-- Fight sequences (health decreases) if OCR states available
+Modes:
+  quick: 1-step sanity check. Tests denoising at tau=0.5, checks for mode collapse,
+         saves side-by-side comparison images. Fast, no rollout needed.
+  full:  Full multi-step rollout evaluation. Predicts future frames autoregressively,
+         computes PSNR/MSE metrics, generates comparison grids. Supports filtering
+         by game phase (laning, post-laning, fights).
 
 Usage:
+    # Quick sanity check
+    python scripts/eval_dynamics.py --mode quick --dynamics-checkpoint checkpoints/dynamics_best.pt --tokenizer-checkpoint checkpoints/tokenizer_best.pt
+
+    # Full rollout evaluation (default)
     python scripts/eval_dynamics.py --dynamics-checkpoint checkpoints/dynamics_best.pt --tokenizer-checkpoint checkpoints/tokenizer_best.pt
     python scripts/eval_dynamics.py --dynamics-checkpoint checkpoints/dynamics_best.pt --tokenizer-checkpoint checkpoints/tokenizer_best.pt --filter laning
-    python scripts/eval_dynamics.py --dynamics-checkpoint checkpoints/dynamics_best.pt --tokenizer-checkpoint checkpoints/tokenizer_best.pt --filter fights
 """
 
 import argparse
@@ -182,6 +182,13 @@ def filter_dataset_indices(
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate dynamics model")
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["quick", "full"],
+        default="full",
+        help="Evaluation mode: quick (1-step sanity check) or full (multi-step rollout)",
+    )
     parser.add_argument(
         "--dynamics-checkpoint",
         type=str,
@@ -663,16 +670,110 @@ def generate_sample_rollouts(
             sample_idx += 1
 
 
-def main():
-    args = parse_args()
-
+def run_quick_eval(args):
+    """Quick 1-step sanity check: denoise at tau=0.5 and check for mode collapse."""
+    device = args.device
     dynamics_path = Path(args.dynamics_checkpoint)
     tokenizer_path = Path(args.tokenizer_checkpoint)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print("Dynamics Model Evaluation")
+    print("Quick Dynamics Sanity Check (1-step)")
+    print("=" * 60)
+
+    # Load models
+    dynamics, dynamics_ckpt = load_dynamics(dynamics_path, device)
+    tokenizer, is_transformer = load_tokenizer(tokenizer_path, device)
+    step = dynamics_ckpt.get("global_step", "unknown")
+    print(f"Loaded dynamics step {step}")
+
+    # Load a single test sequence
+    print("\nLoading test sequence...")
+    dataset = LatentSequenceDataset(args.latents_dir, sequence_length=32, stride=100)
+    sample = dataset[0]
+    z_0 = sample["latents"].unsqueeze(0).to(device)  # (1, 32, C, H, W)
+    print(f"Loaded sequence shape: {z_0.shape}")
+
+    # 1-step prediction at tau=0.5
+    print("\nTesting 1-step prediction (tau=0.5)...")
+    schedule = DiffusionSchedule(device=device)
+    tau = torch.full((1, 32), 0.5, device=device)
+    z_noisy, noise = schedule.add_noise(z_0, tau)
+
+    with torch.no_grad():
+        z_pred = dynamics(z_noisy, tau)
+
+    # Check predictions
+    pred_std = z_pred.std().item()
+    input_diff = (z_0[0, 0] - z_0[0, 16]).abs().mean().item()
+    pred_diff = (z_pred[0, 0] - z_pred[0, 16]).abs().mean().item()
+
+    print(f"\nPrediction stats:")
+    print(f"  Pred std: {pred_std:.4f} (should be > 0.1)")
+    print(f"  Input frame diff (0 vs 16): {input_diff:.4f}")
+    print(f"  Pred frame diff (0 vs 16): {pred_diff:.4f} (should be similar)")
+
+    mse = ((z_pred - z_0) ** 2).mean().item()
+    psnr_val = 10 * np.log10(1 / (mse + 1e-8))
+    print(f"  Latent PSNR: {psnr_val:.2f} dB")
+
+    if pred_diff < 0.001:
+        print("\n  WARNING: Predictions may be mode-collapsed (frames look identical)")
+    else:
+        print("\n  Predictions vary between frames (no mode collapse)")
+
+    # Decode to pixels and save comparisons
+    print("\nDecoding to pixels...")
+    with torch.no_grad():
+        z_0_f32 = z_0.float()
+        z_pred_f32 = z_pred.float()
+
+        if is_transformer:
+            def decode_xf(z):
+                z = z.permute(0, 2, 3, 1).reshape(z.shape[0], 256, -1)
+                return tokenizer.decode(z, num_frames=1).squeeze(1)
+            recon_0 = decode_xf(z_0_f32[:, 0])
+            recon_16 = decode_xf(z_0_f32[:, 16])
+            pred_0 = decode_xf(z_pred_f32[:, 0])
+            pred_16 = decode_xf(z_pred_f32[:, 16])
+        else:
+            recon_0 = tokenizer.decode(z_0_f32[:, 0])
+            recon_16 = tokenizer.decode(z_0_f32[:, 16])
+            pred_0 = tokenizer.decode(z_pred_f32[:, 0])
+            pred_16 = tokenizer.decode(z_pred_f32[:, 16])
+
+    def save_img(tensor, path):
+        img = (tensor[0].cpu().permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        Image.fromarray(img).save(path)
+
+    def make_comparison(gt, pred, path):
+        gt_np = (gt[0].cpu().permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        pred_np = (pred[0].cpu().permute(1, 2, 0).numpy() * 255).clip(0, 255).astype(np.uint8)
+        combined = np.concatenate([gt_np, pred_np], axis=1)
+        Image.fromarray(combined).save(path)
+
+    save_img(recon_0, output_dir / "gt_frame0.png")
+    save_img(pred_0, output_dir / "pred_frame0.png")
+    save_img(recon_16, output_dir / "gt_frame16.png")
+    save_img(pred_16, output_dir / "pred_frame16.png")
+    make_comparison(recon_0, pred_0, output_dir / "compare_frame0.png")
+    make_comparison(recon_16, pred_16, output_dir / "compare_frame16.png")
+
+    print(f"\nDone! Images saved to {output_dir}/")
+    print("  compare_frame0.png  - GT (left) vs Pred (right) for frame 0")
+    print("  compare_frame16.png - GT (left) vs Pred (right) for frame 16")
+
+
+def run_full_eval(args):
+    """Full multi-step rollout evaluation with metrics and comparison grids."""
+    dynamics_path = Path(args.dynamics_checkpoint)
+    tokenizer_path = Path(args.tokenizer_checkpoint)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print("=" * 60)
+    print("Dynamics Model Evaluation (Full Rollout)")
     print("=" * 60)
     print(f"Dynamics checkpoint: {dynamics_path}")
     print(f"Tokenizer checkpoint: {tokenizer_path}")
@@ -796,6 +897,14 @@ def main():
     print("Evaluation complete!")
     print(f"Results saved to: {output_dir}")
     print("=" * 60)
+
+
+def main():
+    args = parse_args()
+    if args.mode == "quick":
+        run_quick_eval(args)
+    else:
+        run_full_eval(args)
 
 
 if __name__ == "__main__":
