@@ -321,7 +321,7 @@ def load_pretrained_dynamics(
     checkpoint_path: str,
     model_size: str,
     device: str,
-    latent_dim: int = 256,
+    latent_dim: int = 32,
     use_qk_norm: bool = True,
     soft_cap: float | None = 50.0,
     num_register_tokens: int = 8,

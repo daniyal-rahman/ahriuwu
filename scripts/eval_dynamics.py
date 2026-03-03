@@ -287,7 +287,7 @@ def load_dynamics(checkpoint_path: Path, device: str):
     args = checkpoint.get("args", {})
 
     model_size = args.get("model_size", "small")
-    latent_dim = args.get("latent_dim", 256)
+    latent_dim = args.get("latent_dim", 32)
 
     # Auto-detect if model was trained with actions
     use_actions = any("action_embed" in k for k in checkpoint["model_state_dict"].keys())

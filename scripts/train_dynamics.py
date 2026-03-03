@@ -127,8 +127,8 @@ def parse_args():
     parser.add_argument(
         "--latent-dim",
         type=int,
-        default=256,
-        help="Latent dimension (must match tokenizer)",
+        default=32,
+        help="Latent dimension per token (must match tokenizer: tiny=16, small=32, medium=48, large=64)",
     )
     parser.add_argument(
         "--sequence-length",

@@ -711,7 +711,7 @@ class DynamicsTransformer(nn.Module):
 
     def __init__(
         self,
-        latent_dim: int = 256,
+        latent_dim: int = 32,
         spatial_size: int = 16,  # 16×16 = 256 spatial tokens
         model_dim: int = 512,
         num_layers: int = 12,
@@ -1030,7 +1030,7 @@ class DynamicsTransformer(nn.Module):
 
 def create_dynamics(
     size: str = "small",
-    latent_dim: int = 256,
+    latent_dim: int = 32,
     use_agent_tokens: bool = False,
     num_tasks: int = 1,
     agent_layers: int = 4,
@@ -1107,14 +1107,14 @@ if __name__ == "__main__":
     # Quick test
     print("Testing dynamics transformer...")
 
-    model = create_dynamics("small", latent_dim=256)
+    model = create_dynamics("small", latent_dim=32)
     print(f"Parameters (base): {model.get_num_params():,}")
     print(f"  QKNorm: {model.use_qk_norm}")
     print(f"  Soft cap: {model.soft_cap}")
     print(f"  Register tokens: {model.num_register_tokens}")
 
     # Test forward pass
-    B, T, C, H, W = 2, 8, 256, 16, 16
+    B, T, C, H, W = 2, 8, 32, 16, 16
     z_tau = torch.randn(B, T, C, H, W)
     tau = torch.rand(B)
 
@@ -1134,13 +1134,13 @@ if __name__ == "__main__":
     print(f"Output shape (independent frames): {z_pred_indep.shape}")
 
     print("\n--- Testing with GQA (4 KV heads vs 8 Q heads) ---")
-    model_gqa = create_dynamics("small", latent_dim=256, num_kv_heads=4)
+    model_gqa = create_dynamics("small", latent_dim=32, num_kv_heads=4)
     print(f"Parameters (GQA): {model_gqa.get_num_params():,}")
     z_pred_gqa = model_gqa(z_tau, tau)
     print(f"Output shape (GQA): {z_pred_gqa.shape}")
 
     print("\n--- Testing with actions ---")
-    model_actions = create_dynamics("small", latent_dim=256, use_actions=True)
+    model_actions = create_dynamics("small", latent_dim=32, use_actions=True)
     print(f"Parameters (with actions): {model_actions.get_num_params():,}")
 
     # Create mock actions
@@ -1157,7 +1157,7 @@ if __name__ == "__main__":
     print(f"Output shape (no actions): {z_pred_no_actions.shape}")
 
     print("\n--- Testing with agent tokens ---")
-    model_agent = create_dynamics("small", latent_dim=256, use_agent_tokens=True)
+    model_agent = create_dynamics("small", latent_dim=32, use_agent_tokens=True)
     print(f"Parameters (with agent tokens): {model_agent.get_num_params():,}")
 
     z_pred_agent, agent_out = model_agent(z_tau, tau)
@@ -1165,7 +1165,7 @@ if __name__ == "__main__":
     print(f"Agent output shape: {agent_out.shape}")
 
     print("\n--- Testing with both actions and agent tokens ---")
-    model_both = create_dynamics("small", latent_dim=256, use_actions=True, use_agent_tokens=True)
+    model_both = create_dynamics("small", latent_dim=32, use_actions=True, use_agent_tokens=True)
     print(f"Parameters (both): {model_both.get_num_params():,}")
 
     z_pred_both, agent_both = model_both(z_tau, tau, actions=actions)
@@ -1173,7 +1173,7 @@ if __name__ == "__main__":
     print(f"Agent output shape: {agent_both.shape}")
 
     print("\n--- Testing with no register tokens ---")
-    model_no_reg = create_dynamics("small", latent_dim=256, num_register_tokens=0)
+    model_no_reg = create_dynamics("small", latent_dim=32, num_register_tokens=0)
     print(f"Parameters (no registers): {model_no_reg.get_num_params():,}")
     z_pred_no_reg = model_no_reg(z_tau, tau)
     print(f"Output shape (no registers): {z_pred_no_reg.shape}")

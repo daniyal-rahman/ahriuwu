@@ -235,7 +235,7 @@ class LiveInference:
         policy_path: str | None,
         tokenizer_type: str = "transformer",
         model_size: str = "tiny",
-        latent_dim: int = 256,
+        latent_dim: int = 32,
         context_frames: int = 8,
         device: str = "auto",
     ):
