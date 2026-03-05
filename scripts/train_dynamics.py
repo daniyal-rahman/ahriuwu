@@ -480,6 +480,7 @@ def train_epoch(
             optimizer.zero_grad()
             micro_count = 0
             did_step = True
+            global_step += 1
         else:
             grad_norm = torch.tensor(0.0)
             did_step = False
@@ -490,7 +491,6 @@ def train_epoch(
             total_grad_norm += grad_norm.item() if torch.isfinite(grad_norm) else 0.0
             total_grad_norm_count += 1
         num_batches += 1
-        global_step += 1
 
         # Track prediction stats for mode collapse detection (every 10 batches)
         if batch_idx % 10 == 0:
