@@ -25,7 +25,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
-from ahriuwu.data.dataset import SingleFrameDataset
+from ahriuwu.data.dataset import FrameSequenceDataset
 from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint, should_yield_to_queue
@@ -54,9 +54,9 @@ def parse_args():
     parser.add_argument(
         "--model-size",
         type=str,
-        default="small",
+        default="medium",
         choices=["tiny", "small", "medium", "large"],
-        help="Model size preset",
+        help="Model size preset (medium=~130M: dim=768, 8+8 layers, 12 heads)",
     )
     parser.add_argument(
         "--lpips-weight",
@@ -112,11 +112,17 @@ def parse_args():
         help="Use RoPE (Rotary Position Embeddings) instead of additive position embeddings",
     )
     parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=16,
+        help="Number of consecutive frames per sequence (enables block-causal temporal attention)",
+    )
+    parser.add_argument(
         "--gradient-checkpointing",
         action="store_true",
         help="Use gradient checkpointing for memory efficiency (recommended for batch>2 or model>100M)",
     )
-    parser.set_defaults(batch_size=8, epochs=50, save_interval=5)
+    parser.set_defaults(batch_size=2, epochs=50, save_interval=5)
     add_wandb_args(parser)
     return parser.parse_args()
 
@@ -129,7 +135,10 @@ def save_samples(
     epoch: int,
     num_samples: int = 4,
 ):
-    """Save sample reconstructions showing original, masked, and reconstructed."""
+    """Save sample reconstructions showing original, masked, and reconstructed.
+
+    For sequence inputs (B, T, C, H, W), visualizes the middle frame of each sequence.
+    """
     import torchvision.utils as vutils
     from PIL import Image
     import numpy as np
@@ -139,7 +148,7 @@ def save_samples(
 
     # Get a batch
     batch = next(iter(dataloader))
-    frames = batch["frame"][:num_samples].to(device)
+    sequences = batch["frames"][:num_samples].to(device)  # (B, T, C, H, W)
 
     with torch.no_grad():
         device_type = device.split(":")[0]
@@ -147,15 +156,21 @@ def save_samples(
 
         with autocast(device_type=device_type, dtype=dtype):
             # Get reconstruction without masking for comparison
-            output_no_mask = model(frames, mask_ratio=0.0)
-            recon_no_mask = output_no_mask["reconstruction"]
+            output_no_mask = model(sequences, mask_ratio=0.0)
+            recon_no_mask = output_no_mask["reconstruction"]  # (B, T, C, H, W)
 
             # Get reconstruction with masking (MAE style)
-            output_masked = model(frames, mask_ratio=0.75)
-            recon_masked = output_masked["reconstruction"]
+            output_masked = model(sequences, mask_ratio=0.75)
+            recon_masked = output_masked["reconstruction"]  # (B, T, C, H, W)
+
+    # Visualize the middle frame of each sequence
+    mid = sequences.shape[1] // 2
+    orig_frames = sequences[:, mid]  # (B, C, H, W)
+    recon_no_mask_frames = recon_no_mask[:, mid]
+    recon_masked_frames = recon_masked[:, mid]
 
     # Create side-by-side comparison: original | no-mask recon | masked recon
-    comparison = torch.cat([frames, recon_no_mask, recon_masked], dim=3)
+    comparison = torch.cat([orig_frames, recon_no_mask_frames, recon_masked_frames], dim=3)
 
     # Save grid
     grid = vutils.make_grid(comparison.cpu(), nrow=1, padding=2, normalize=False)
@@ -201,7 +216,7 @@ def train_epoch(
     dtype = torch.bfloat16 if device_type == "cuda" else torch.float16
 
     for batch_idx, batch in enumerate(dataloader):
-        frames = batch["frame"].to(device)
+        frames = batch["frames"].to(device)  # (B, T, C, H, W)
 
         # Curriculum learning: ramp up mask_ratio_max over warmup steps
         if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
@@ -251,7 +266,10 @@ def train_epoch(
         total_lpips += losses["lpips"].item()
 
         with torch.no_grad():
-            batch_psnr = psnr(recon, frames).item()
+            # Flatten (B, T, C, H, W) -> (B*T, C, H, W) for PSNR
+            recon_flat = recon.view(-1, *recon.shape[-3:]) if recon.dim() == 5 else recon
+            frames_flat = frames.view(-1, *frames.shape[-3:]) if frames.dim() == 5 else frames
+            batch_psnr = psnr(recon_flat, frames_flat).item()
             total_psnr += batch_psnr
 
         num_batches += 1
@@ -339,6 +357,7 @@ def main():
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
     print(f"Use RoPE: {args.use_rope}")
+    print(f"Sequence length: {args.sequence_length}")
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.gradient_accumulation}")
     print(f"Effective batch size: {args.batch_size * args.gradient_accumulation}")
@@ -359,11 +378,14 @@ def main():
 
     # Create dataset
     print(f"Loading dataset from {args.frames_dir}...")
-    dataset = SingleFrameDataset(args.frames_dir)
-    print(f"Found {len(dataset)} frames")
+    dataset = FrameSequenceDataset(
+        args.frames_dir,
+        sequence_length=args.sequence_length,
+    )
+    print(f"Found {len(dataset)} sequences (T={args.sequence_length})")
 
     if len(dataset) == 0:
-        print("ERROR: No frames found! Check --frames-dir path.")
+        print("ERROR: No sequences found! Check --frames-dir path and --sequence-length.")
         return
 
     dataloader = DataLoader(
