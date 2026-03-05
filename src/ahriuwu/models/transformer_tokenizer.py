@@ -339,7 +339,7 @@ class TemporalAttentionTok(nn.Module):
         mask = self.causal_mask[:T, :T].unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
         attn = attn.masked_fill(~mask, float('-inf'))
 
-        attn = F.softmax(attn, dim=-1)
+        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(v.dtype)
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)
