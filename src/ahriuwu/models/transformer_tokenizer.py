@@ -1,8 +1,9 @@
-"""Block-Causal Transformer Tokenizer for video frame compression.
+"""Factored Space-Time Transformer Tokenizer for video frame compression.
 
-Implements DreamerV4 Section 3.1 tokenizer architecture:
-- Encoder: patches + latent tokens with block-causal attention
-- Decoder: fresh patch queries + latents with block-causal attention
+Implements DreamerV4 Section 3.1 tokenizer with factored space-time attention:
+- Spatial attention: (B*T, N, D) per-frame, 740×740 mask
+- Temporal attention: (B*N, T, D) causal across frames with 1D RoPE, 16×16
+- Alternating s/t blocks every layer (s, t, s, t, ...)
 - Bottleneck: linear → tanh → reshape (512×D → 256×32)
 - MAE training with p ~ U(0, 0.9)
 - Loss: MSE + 0.2 * LPIPS
@@ -141,6 +142,30 @@ class RotaryEmbedding2D(nn.Module):
         return (x * cos) + (self.rotate_half(x) * sin)
 
 
+class RotaryEmbedding1D(nn.Module):
+    """1D Rotary Position Embedding for temporal positions (0..T-1)."""
+
+    def __init__(self, dim: int, max_seq_len: int = 256, base: float = 10000.0):
+        super().__init__()
+        self.dim = dim
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer('inv_freq', inv_freq)
+
+    def get_rotary_emb(self, seq_len: int, device: torch.device):
+        t = torch.arange(seq_len, device=device).float()
+        freqs = torch.outer(t, self.inv_freq)  # (T, dim/2)
+        freqs = freqs.repeat_interleave(2, dim=-1)  # (T, dim)
+        return freqs.cos(), freqs.sin()
+
+    def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.reshape(*x.shape[:-1], -1, 2)
+        x = torch.stack([-x[..., 1], x[..., 0]], dim=-1)
+        return x.reshape(*x.shape[:-2], -1)
+
+    def apply_rotary(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        return (x * cos) + (self.rotate_half(x) * sin)
+
+
 class MultiHeadAttention(nn.Module):
     """Multi-head attention with optional masking, RoPE, QKNorm, and soft capping."""
 
@@ -248,8 +273,11 @@ class MultiHeadAttention(nn.Module):
         return self.out_proj(out)
 
 
-class TransformerBlock(nn.Module):
-    """Transformer block with pre-norm, QKNorm, and soft capping."""
+class TemporalAttentionTok(nn.Module):
+    """Temporal attention with 1D RoPE and causal masking.
+
+    Operates on (B_eff, T, D) where B_eff = B*N (each spatial token attends across time).
+    """
 
     def __init__(
         self,
@@ -258,122 +286,123 @@ class TransformerBlock(nn.Module):
         dropout: float = 0.0,
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        max_seq_len: int = 256,
     ):
-        """Initialize transformer block.
-
-        Args:
-            dim: Model dimension
-            num_heads: Number of attention heads
-            dropout: Dropout probability
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits
-        """
         super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.scale = self.head_dim ** -0.5
+        self.soft_cap = soft_cap
+
+        self.q_proj = nn.Linear(dim, dim, bias=False)
+        self.k_proj = nn.Linear(dim, dim, bias=False)
+        self.v_proj = nn.Linear(dim, dim, bias=False)
+        self.out_proj = nn.Linear(dim, dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+        if use_qk_norm:
+            self.qk_norm = QKNorm(self.head_dim)
+        else:
+            self.qk_norm = None
+
+        self.rope = RotaryEmbedding1D(self.head_dim, max_seq_len)
+
+        # Precompute causal mask: True = can attend
+        causal = torch.tril(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool))
+        self.register_buffer('causal_mask', causal)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, D = x.shape
+
+        q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+
+        if self.qk_norm is not None:
+            q, k = self.qk_norm(q, k)
+
+        # Apply 1D RoPE
+        cos, sin = self.rope.get_rotary_emb(T, x.device)
+        cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
+        sin = sin.unsqueeze(0).unsqueeze(0)
+        q = self.rope.apply_rotary(q, cos, sin)
+        k = self.rope.apply_rotary(k, cos, sin)
+
+        # Scaled dot-product attention
+        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        if self.soft_cap is not None:
+            attn = soft_cap_attention(attn, self.soft_cap)
+
+        # Apply causal mask
+        mask = self.causal_mask[:T, :T].unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+        attn = attn.masked_fill(~mask, float('-inf'))
+
+        attn = F.softmax(attn, dim=-1)
+        attn = self.dropout(attn)
+
+        out = torch.matmul(attn, v)
+        out = out.transpose(1, 2).contiguous().view(B, T, D)
+        return self.out_proj(out)
+
+
+class SpaceTimeTransformerBlock(nn.Module):
+    """Factored space-time transformer block.
+
+    attn_type="spatial": reshape to (B*T, N, D), apply MultiHeadAttention with space mask + 2D RoPE
+    attn_type="temporal": reshape to (B*N, T, D), apply TemporalAttentionTok with causal + 1D RoPE
+    """
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 8,
+        dropout: float = 0.0,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
+        attn_type: str = "spatial",
+        max_time: int = 256,
+    ):
+        super().__init__()
+        self.attn_type = attn_type
         self.norm1 = RMSNorm(dim)
-        self.attn = MultiHeadAttention(dim, num_heads, dropout, use_qk_norm, soft_cap)
         self.norm2 = RMSNorm(dim)
         self.ffn = SwiGLU(dim)
+
+        if attn_type == "spatial":
+            self.attn = MultiHeadAttention(dim, num_heads, dropout, use_qk_norm, soft_cap)
+        else:
+            self.attn = TemporalAttentionTok(dim, num_heads, dropout, use_qk_norm, soft_cap, max_time)
 
     def forward(
         self,
         x: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
+        T: int,
+        space_mask: Optional[torch.Tensor] = None,
         rope: Optional[RotaryEmbedding2D] = None,
         rope_indices: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), mask, rope, rope_indices)
-        x = x + self.ffn(self.norm2(x))
-        return x
+        """
+        Args:
+            x: (B, T, N, D)
+            T: number of frames
+            space_mask: (N, N) for spatial attention
+            rope: 2D RoPE for spatial attention
+            rope_indices: (N,) patch grid indices for spatial RoPE
+        """
+        B, _, N, D = x.shape
 
-
-def create_encoder_mask(
-    num_patches: int,
-    num_latents: int,
-    num_frames: int,
-    device: torch.device,
-) -> torch.Tensor:
-    """Create block-causal encoder attention mask.
-
-    Encoder attention pattern:
-    - Patches ONLY see same-frame patches (block diagonal for patches)
-    - Latents see ALL tokens causally (patches + latents from current and past frames)
-
-    Token layout per frame: [patches..., latents...]
-    Total tokens: num_frames * (num_patches + num_latents)
-
-    Returns:
-        mask: (N, N) boolean tensor, True = can attend
-    """
-    tokens_per_frame = num_patches + num_latents
-    total_tokens = num_frames * tokens_per_frame
-
-    mask = torch.zeros(total_tokens, total_tokens, dtype=torch.bool, device=device)
-
-    for t in range(num_frames):
-        frame_start = t * tokens_per_frame
-        patch_start = frame_start
-        patch_end = frame_start + num_patches
-        latent_start = frame_start + num_patches
-        latent_end = frame_start + tokens_per_frame
-
-        # Patches only see same-frame patches (block diagonal)
-        mask[patch_start:patch_end, patch_start:patch_end] = True
-
-        # Latents see all tokens from current and previous frames (causal)
-        causal_end = latent_end  # up to and including current frame
-        mask[latent_start:latent_end, :causal_end] = True
-
-    return mask
-
-
-def create_decoder_mask(
-    num_patches: int,
-    num_latents: int,
-    num_frames: int,
-    device: torch.device,
-) -> torch.Tensor:
-    """Create block-causal decoder attention mask.
-
-    Decoder attention pattern:
-    - Patches see own-frame patches + ALL latents (cross-frame via latents)
-    - Latents ONLY see latents (no patches)
-
-    Token layout per frame: [patches..., latents...]
-    Total tokens: num_frames * (num_patches + num_latents)
-
-    Returns:
-        mask: (N, N) boolean tensor, True = can attend
-    """
-    tokens_per_frame = num_patches + num_latents
-    total_tokens = num_frames * tokens_per_frame
-
-    mask = torch.zeros(total_tokens, total_tokens, dtype=torch.bool, device=device)
-
-    # First, let all latents see all latents (causally across frames)
-    for t in range(num_frames):
-        latent_start = t * tokens_per_frame + num_patches
-        latent_end = latent_start + num_latents
-        # Latents see all latents up to and including current frame
-        for t2 in range(t + 1):
-            src_latent_start = t2 * tokens_per_frame + num_patches
-            src_latent_end = src_latent_start + num_latents
-            mask[latent_start:latent_end, src_latent_start:src_latent_end] = True
-
-    # Patches see own-frame patches + current and past latents (causal)
-    for t in range(num_frames):
-        patch_start = t * tokens_per_frame
-        patch_end = patch_start + num_patches
-
-        # Own-frame patches
-        mask[patch_start:patch_end, patch_start:patch_end] = True
-
-        # Latents from current and past frames only (causal masking)
-        for t2 in range(t + 1):
-            src_latent_start = t2 * tokens_per_frame + num_patches
-            src_latent_end = src_latent_start + num_latents
-            mask[patch_start:patch_end, src_latent_start:src_latent_end] = True
-
-    return mask
+        if self.attn_type == "spatial":
+            x_s = x.reshape(B * T, N, D)
+            x_s = x_s + self.attn(self.norm1(x_s), mask=space_mask, rope=rope, rope_indices=rope_indices)
+            x_s = x_s + self.ffn(self.norm2(x_s))
+            return x_s.reshape(B, T, N, D)
+        else:
+            x_t = x.permute(0, 2, 1, 3).reshape(B * N, T, D)
+            x_t = x_t + self.attn(self.norm1(x_t))
+            x_t = x_t + self.ffn(self.norm2(x_t))
+            return x_t.reshape(B, N, T, D).permute(0, 2, 1, 3).contiguous()
 
 
 class PatchEmbed(nn.Module):
@@ -409,11 +438,10 @@ class PatchEmbed(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    """Block-causal transformer encoder.
+    """Factored space-time transformer encoder.
 
-    Takes patches, concatenates learned latent tokens, applies block-causal attention.
-    Outputs latent tokens only (discards patches).
-    Supports QKNorm and soft capping for stability.
+    Takes patches, concatenates learned latent tokens, applies alternating
+    spatial/temporal attention blocks. Outputs latent tokens only.
     """
 
     def __init__(
@@ -429,22 +457,8 @@ class TransformerEncoder(nn.Module):
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
         gradient_checkpointing: bool = False,
+        max_time: int = 256,
     ):
-        """Initialize transformer encoder.
-
-        Args:
-            embed_dim: Embedding dimension
-            num_heads: Number of attention heads
-            num_layers: Number of transformer layers
-            num_patches: Number of patch tokens per frame
-            num_latents: Number of latent tokens per frame
-            dropout: Dropout probability
-            use_sincos_pos: Use sinusoidal position embeddings
-            use_rope: Use rotary position embeddings
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits
-            gradient_checkpointing: Use gradient checkpointing to save memory
-        """
         super().__init__()
         self.embed_dim = embed_dim
         self.num_patches = num_patches
@@ -453,6 +467,7 @@ class TransformerEncoder(nn.Module):
         self.use_rope = use_rope
         self.gradient_checkpointing = gradient_checkpointing
         self.grid_size = int(math.sqrt(num_patches))
+        N = num_patches + num_latents
 
         # Learned latent tokens (one set, repeated per frame)
         self.latent_tokens = nn.Parameter(torch.randn(1, num_latents, embed_dim) * 0.02)
@@ -461,184 +476,13 @@ class TransformerEncoder(nn.Module):
         if use_rope:
             head_dim = embed_dim // num_heads
             self.rope = RotaryEmbedding2D(head_dim, self.grid_size)
-            # No additive position embeddings for patches when using RoPE
             self.patch_pos_embed = None
         else:
             self.rope = None
-            # Position embeddings for patches (additive)
             if use_sincos_pos:
-                # Sinusoidal (fixed) - better spatial structure
                 patch_pos = get_2d_sincos_pos_embed(embed_dim, self.grid_size)
                 self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
             else:
-                # Learned
-                self.patch_pos_embed = nn.Parameter(
-                    torch.randn(1, num_patches, embed_dim) * 0.02
-                )
-
-        # Latent position embeddings (always learned - no spatial structure)
-        self.latent_pos_embed = nn.Parameter(
-            torch.randn(1, num_latents, embed_dim) * 0.02
-        )
-
-        # Transformer blocks with QKNorm and soft capping
-        self.blocks = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, dropout, use_qk_norm, soft_cap)
-            for _ in range(num_layers)
-        ])
-        self.norm = RMSNorm(embed_dim)
-
-    def forward(
-        self,
-        patches: torch.Tensor,
-        num_frames: int,
-        mask_indices: Optional[torch.Tensor] = None,
-        mask_embed: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Args:
-            patches: (B, T*num_patches, D) patch embeddings for all frames
-            num_frames: T, number of frames
-            mask_indices: (B, T*num_patches) boolean, True = masked (for MAE)
-            mask_embed: (D,) learned mask embedding
-
-        Returns:
-            latents: (B, T*num_latents, D) latent tokens
-        """
-        B = patches.shape[0]
-        device = patches.device
-
-        # Reshape patches to per-frame
-        patches = patches.reshape(B, num_frames, self.num_patches, self.embed_dim)
-
-        # Apply MAE masking if provided
-        if mask_indices is not None and mask_embed is not None:
-            mask_indices = mask_indices.reshape(B, num_frames, self.num_patches)
-            patches = patches.clone()
-            patches[mask_indices] = mask_embed.to(patches.dtype)
-
-        # Add position embeddings to patches (only if not using RoPE)
-        if self.patch_pos_embed is not None:
-            patches = patches + self.patch_pos_embed
-
-        # Create latent tokens for each frame
-        latents = self.latent_tokens.expand(B, -1, -1)  # (B, num_latents, D)
-        latents = latents.unsqueeze(1).expand(-1, num_frames, -1, -1)  # (B, T, num_latents, D)
-        latents = latents.contiguous()  # Make contiguous after expand
-        latents = latents + self.latent_pos_embed
-
-        # Interleave patches and latents per frame: [patches_t, latents_t, patches_t+1, ...]
-        # Shape: (B, T, num_patches + num_latents, D)
-        x = torch.cat([patches, latents], dim=2)
-        x = x.reshape(B, num_frames * (self.num_patches + self.num_latents), self.embed_dim)
-
-        # Create encoder mask
-        mask = create_encoder_mask(
-            self.num_patches, self.num_latents, num_frames, device
-        )
-
-        # Create RoPE indices if using RoPE
-        # Token layout per frame: [patch_0, patch_1, ..., patch_255, latent_0, ..., latent_255]
-        # Patches get their grid position (0-255), latents get -1 (no RoPE)
-        rope_indices = None
-        if self.use_rope:
-            tokens_per_frame = self.num_patches + self.num_latents
-            rope_indices = torch.zeros(num_frames * tokens_per_frame, dtype=torch.long, device=device)
-            for t in range(num_frames):
-                frame_start = t * tokens_per_frame
-                # Patches: indices 0 to num_patches-1 (their grid position)
-                rope_indices[frame_start:frame_start + self.num_patches] = torch.arange(
-                    self.num_patches, device=device
-                )
-                # Latents: index -1 (no RoPE)
-                rope_indices[frame_start + self.num_patches:frame_start + tokens_per_frame] = -1
-
-        # Apply transformer blocks
-        for block in self.blocks:
-            if self.gradient_checkpointing and self.training:
-                # Use gradient checkpointing to save memory during training
-                x = checkpoint(
-                    block,
-                    x, mask, self.rope, rope_indices,
-                    use_reentrant=False,
-                )
-            else:
-                x = block(x, mask, self.rope, rope_indices)
-
-        x = self.norm(x)
-
-        # Extract latents only
-        x = x.reshape(B, num_frames, self.num_patches + self.num_latents, self.embed_dim)
-        latents = x[:, :, self.num_patches:, :].contiguous()  # (B, T, num_latents, D)
-        latents = latents.reshape(B, num_frames * self.num_latents, self.embed_dim)
-
-        return latents
-
-
-class TransformerDecoder(nn.Module):
-    """Block-causal transformer decoder.
-
-    Takes latent tokens, adds fresh learned patch queries, applies block-causal attention.
-    Outputs reconstructed patches.
-    Supports QKNorm and soft capping for stability.
-    """
-
-    def __init__(
-        self,
-        embed_dim: int = 512,
-        num_heads: int = 8,
-        num_layers: int = 6,
-        num_patches: int = 256,
-        num_latents: int = 256,
-        dropout: float = 0.0,
-        use_sincos_pos: bool = True,
-        use_rope: bool = False,
-        use_qk_norm: bool = True,
-        soft_cap: float | None = 50.0,
-        gradient_checkpointing: bool = False,
-    ):
-        """Initialize transformer decoder.
-
-        Args:
-            embed_dim: Embedding dimension
-            num_heads: Number of attention heads
-            num_layers: Number of transformer layers
-            num_patches: Number of patch tokens per frame
-            num_latents: Number of latent tokens per frame
-            dropout: Dropout probability
-            use_sincos_pos: Use sinusoidal position embeddings
-            use_rope: Use rotary position embeddings
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits
-            gradient_checkpointing: Use gradient checkpointing to save memory
-        """
-        super().__init__()
-        self.embed_dim = embed_dim
-        self.num_patches = num_patches
-        self.num_latents = num_latents
-        self.use_sincos_pos = use_sincos_pos
-        self.use_rope = use_rope
-        self.gradient_checkpointing = gradient_checkpointing
-        self.grid_size = int(math.sqrt(num_patches))
-
-        # Fresh learned patch queries (NOT from encoder)
-        self.patch_queries = nn.Parameter(torch.randn(1, num_patches, embed_dim) * 0.02)
-
-        # RoPE for spatial position encoding in attention
-        if use_rope:
-            head_dim = embed_dim // num_heads
-            self.rope = RotaryEmbedding2D(head_dim, self.grid_size)
-            # No additive position embeddings for patches when using RoPE
-            self.patch_pos_embed = None
-        else:
-            self.rope = None
-            # Position embeddings for patches (additive)
-            if use_sincos_pos:
-                # Sinusoidal (fixed) - better spatial structure
-                patch_pos = get_2d_sincos_pos_embed(embed_dim, self.grid_size)
-                self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
-            else:
-                # Learned
                 self.patch_pos_embed = nn.Parameter(
                     torch.randn(1, num_patches, embed_dim) * 0.02
                 )
@@ -648,83 +492,200 @@ class TransformerDecoder(nn.Module):
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
 
-        # Transformer blocks with QKNorm and soft capping
+        # Alternating spatial/temporal blocks (every 2nd = temporal)
         self.blocks = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, dropout, use_qk_norm, soft_cap)
-            for _ in range(num_layers)
+            SpaceTimeTransformerBlock(
+                embed_dim, num_heads, dropout, use_qk_norm, soft_cap,
+                attn_type="temporal" if i % 2 == 1 else "spatial",
+                max_time=max_time,
+            )
+            for i in range(num_layers)
         ])
         self.norm = RMSNorm(embed_dim)
 
-    def forward(self, latents: torch.Tensor, num_frames: int) -> torch.Tensor:
-        """
-        Args:
-            latents: (B, T*num_latents, D) latent tokens
-            num_frames: T
+        # Precompute encoder space mask (N, N): patches see patches, latents see all
+        P = num_patches
+        enc_mask = torch.zeros(N, N, dtype=torch.bool)
+        enc_mask[:P, :P] = True    # patches see patches
+        enc_mask[P:, :] = True     # latents see all
+        self.register_buffer('space_mask', enc_mask)
 
-        Returns:
-            patches: (B, T*num_patches, D) reconstructed patch embeddings
-        """
-        B = latents.shape[0]
-        device = latents.device
+        # Precompute RoPE indices for spatial attention: (N,)
+        # patches get grid position 0..P-1, latents get -1
+        if use_rope:
+            rope_idx = torch.zeros(N, dtype=torch.long)
+            rope_idx[:P] = torch.arange(P)
+            rope_idx[P:] = -1
+            self.register_buffer('rope_indices', rope_idx)
+        else:
+            self.rope_indices = None
 
-        # Reshape latents to per-frame
-        latents = latents.reshape(B, num_frames, self.num_latents, self.embed_dim)
-        latents = latents + self.latent_pos_embed
+    def forward(
+        self,
+        patches: torch.Tensor,
+        num_frames: int,
+        mask_indices: Optional[torch.Tensor] = None,
+        mask_embed: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        B = patches.shape[0]
+        T = num_frames
 
-        # Create fresh patch queries for each frame
-        patches = self.patch_queries.expand(B, -1, -1)  # (B, num_patches, D)
-        patches = patches.unsqueeze(1).expand(-1, num_frames, -1, -1)  # (B, T, num_patches, D)
-        patches = patches.contiguous()  # Make contiguous after expand
+        # Reshape patches to per-frame: (B, T, P, D)
+        patches = patches.reshape(B, T, self.num_patches, self.embed_dim)
+
+        # Apply MAE masking if provided
+        if mask_indices is not None and mask_embed is not None:
+            mask_indices = mask_indices.reshape(B, T, self.num_patches)
+            patches = patches.clone()
+            patches[mask_indices] = mask_embed.to(patches.dtype)
 
         # Add position embeddings to patches (only if not using RoPE)
         if self.patch_pos_embed is not None:
             patches = patches + self.patch_pos_embed
 
-        # Interleave patches and latents
+        # Create latent tokens for each frame: (B, T, L, D)
+        latents = self.latent_tokens.expand(B, -1, -1).unsqueeze(1).expand(-1, T, -1, -1).contiguous()
+        latents = latents + self.latent_pos_embed
+
+        # Build (B, T, N, D) from patches + latents
         x = torch.cat([patches, latents], dim=2)
-        x = x.reshape(B, num_frames * (self.num_patches + self.num_latents), self.embed_dim)
 
-        # Create decoder mask
-        mask = create_decoder_mask(
-            self.num_patches, self.num_latents, num_frames, device
-        )
-
-        # Create RoPE indices if using RoPE
-        # Token layout per frame: [patch_0, ..., patch_255, latent_0, ..., latent_255]
-        # Patches get their grid position (0-255), latents get -1 (no RoPE)
-        rope_indices = None
-        if self.use_rope:
-            tokens_per_frame = self.num_patches + self.num_latents
-            rope_indices = torch.zeros(num_frames * tokens_per_frame, dtype=torch.long, device=device)
-            for t in range(num_frames):
-                frame_start = t * tokens_per_frame
-                # Patches: indices 0 to num_patches-1 (their grid position)
-                rope_indices[frame_start:frame_start + self.num_patches] = torch.arange(
-                    self.num_patches, device=device
-                )
-                # Latents: index -1 (no RoPE)
-                rope_indices[frame_start + self.num_patches:frame_start + tokens_per_frame] = -1
-
-        # Apply transformer blocks
+        # Apply transformer blocks — each handles its own reshape
+        gc = self.gradient_checkpointing
         for block in self.blocks:
-            if self.gradient_checkpointing and self.training:
-                # Use gradient checkpointing to save memory during training
+            if gc and self.training:
                 x = checkpoint(
-                    block,
-                    x, mask, self.rope, rope_indices,
+                    block, x, T, self.space_mask, self.rope, self.rope_indices,
                     use_reentrant=False,
                 )
             else:
-                x = block(x, mask, self.rope, rope_indices)
+                x = block(x, T, space_mask=self.space_mask, rope=self.rope, rope_indices=self.rope_indices)
 
-        x = self.norm(x)
+        x = self.norm(x.reshape(B, T * (self.num_patches + self.num_latents), self.embed_dim))
+        x = x.reshape(B, T, self.num_patches + self.num_latents, self.embed_dim)
 
-        # Extract patches only
-        x = x.reshape(B, num_frames, self.num_patches + self.num_latents, self.embed_dim)
-        patches = x[:, :, :self.num_patches, :].contiguous()  # (B, T, num_patches, D)
-        patches = patches.reshape(B, num_frames * self.num_patches, self.embed_dim)
+        # Extract latents: (B, T, L, D) → (B, T*L, D)
+        latents = x[:, :, self.num_patches:, :].contiguous()
+        return latents.reshape(B, T * self.num_latents, self.embed_dim)
 
-        return patches
+
+class TransformerDecoder(nn.Module):
+    """Factored space-time transformer decoder.
+
+    Takes latent tokens, adds fresh learned patch queries, applies alternating
+    spatial/temporal attention blocks. Outputs reconstructed patches.
+    """
+
+    def __init__(
+        self,
+        embed_dim: int = 512,
+        num_heads: int = 8,
+        num_layers: int = 6,
+        num_patches: int = 256,
+        num_latents: int = 256,
+        dropout: float = 0.0,
+        use_sincos_pos: bool = True,
+        use_rope: bool = False,
+        use_qk_norm: bool = True,
+        soft_cap: float | None = 50.0,
+        gradient_checkpointing: bool = False,
+        max_time: int = 256,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_patches = num_patches
+        self.num_latents = num_latents
+        self.use_sincos_pos = use_sincos_pos
+        self.use_rope = use_rope
+        self.gradient_checkpointing = gradient_checkpointing
+        self.grid_size = int(math.sqrt(num_patches))
+        N = num_patches + num_latents
+
+        # Fresh learned patch queries (NOT from encoder)
+        self.patch_queries = nn.Parameter(torch.randn(1, num_patches, embed_dim) * 0.02)
+
+        # RoPE for spatial position encoding in attention
+        if use_rope:
+            head_dim = embed_dim // num_heads
+            self.rope = RotaryEmbedding2D(head_dim, self.grid_size)
+            self.patch_pos_embed = None
+        else:
+            self.rope = None
+            if use_sincos_pos:
+                patch_pos = get_2d_sincos_pos_embed(embed_dim, self.grid_size)
+                self.register_buffer('patch_pos_embed', patch_pos.unsqueeze(0))
+            else:
+                self.patch_pos_embed = nn.Parameter(
+                    torch.randn(1, num_patches, embed_dim) * 0.02
+                )
+
+        # Latent position embeddings (always learned)
+        self.latent_pos_embed = nn.Parameter(
+            torch.randn(1, num_latents, embed_dim) * 0.02
+        )
+
+        # Alternating spatial/temporal blocks (every 2nd = temporal)
+        self.blocks = nn.ModuleList([
+            SpaceTimeTransformerBlock(
+                embed_dim, num_heads, dropout, use_qk_norm, soft_cap,
+                attn_type="temporal" if i % 2 == 1 else "spatial",
+                max_time=max_time,
+            )
+            for i in range(num_layers)
+        ])
+        self.norm = RMSNorm(embed_dim)
+
+        # Precompute decoder space mask (N, N): patches see all, latents see latents only
+        P = num_patches
+        dec_mask = torch.zeros(N, N, dtype=torch.bool)
+        dec_mask[:P, :] = True     # patches see all (patches + latents)
+        dec_mask[P:, P:] = True    # latents see latents only
+        self.register_buffer('space_mask', dec_mask)
+
+        # Precompute RoPE indices for spatial attention: (N,)
+        if use_rope:
+            rope_idx = torch.zeros(N, dtype=torch.long)
+            rope_idx[:P] = torch.arange(P)
+            rope_idx[P:] = -1
+            self.register_buffer('rope_indices', rope_idx)
+        else:
+            self.rope_indices = None
+
+    def forward(self, latents: torch.Tensor, num_frames: int) -> torch.Tensor:
+        B = latents.shape[0]
+        T = num_frames
+
+        # Reshape latents to per-frame: (B, T, L, D)
+        latents = latents.reshape(B, T, self.num_latents, self.embed_dim)
+        latents = latents + self.latent_pos_embed
+
+        # Create fresh patch queries for each frame: (B, T, P, D)
+        patches = self.patch_queries.expand(B, -1, -1).unsqueeze(1).expand(-1, T, -1, -1).contiguous()
+
+        # Add position embeddings to patches (only if not using RoPE)
+        if self.patch_pos_embed is not None:
+            patches = patches + self.patch_pos_embed
+
+        # Build (B, T, N, D) from patches + latents
+        x = torch.cat([patches, latents], dim=2)
+
+        # Apply transformer blocks — each handles its own reshape
+        gc = self.gradient_checkpointing
+        for block in self.blocks:
+            if gc and self.training:
+                x = checkpoint(
+                    block, x, T, self.space_mask, self.rope, self.rope_indices,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(x, T, space_mask=self.space_mask, rope=self.rope, rope_indices=self.rope_indices)
+
+        x = self.norm(x.reshape(B, T * (self.num_patches + self.num_latents), self.embed_dim))
+        x = x.reshape(B, T, self.num_patches + self.num_latents, self.embed_dim)
+
+        # Extract patches: (B, T, P, D) → (B, T*P, D)
+        patches = x[:, :, :self.num_patches, :].contiguous()
+        return patches.reshape(B, T * self.num_patches, self.embed_dim)
 
 
 class Bottleneck(nn.Module):
@@ -897,25 +858,8 @@ class TransformerTokenizer(nn.Module):
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
         gradient_checkpointing: bool = False,
+        max_time: int = 256,
     ):
-        """Initialize transformer tokenizer.
-
-        Args:
-            img_size: Input image size (square)
-            patch_size: Size of each patch
-            embed_dim: Embedding dimension
-            latent_dim: Bottleneck dimension per token
-            num_heads: Number of attention heads
-            num_encoder_layers: Number of encoder layers
-            num_decoder_layers: Number of decoder layers
-            num_latents: Number of latent tokens per frame
-            dropout: Dropout probability
-            use_sincos_pos: Use sinusoidal position embeddings
-            use_rope: Use rotary position embeddings
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits
-            gradient_checkpointing: Use gradient checkpointing to save memory
-        """
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
@@ -931,16 +875,16 @@ class TransformerTokenizer(nn.Module):
         self.patch_embed = PatchEmbed(img_size, patch_size, 3, embed_dim)
         self.patch_unembed = PatchUnembed(img_size, patch_size, 3, embed_dim)
 
-        # Encoder and decoder with QKNorm, soft capping, and gradient checkpointing
+        # Encoder and decoder with factored space-time attention
         self.encoder = TransformerEncoder(
             embed_dim, num_heads, num_encoder_layers,
             self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
-            use_qk_norm, soft_cap, gradient_checkpointing
+            use_qk_norm, soft_cap, gradient_checkpointing, max_time,
         )
         self.decoder = TransformerDecoder(
             embed_dim, num_heads, num_decoder_layers,
             self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
-            use_qk_norm, soft_cap, gradient_checkpointing
+            use_qk_norm, soft_cap, gradient_checkpointing, max_time,
         )
 
         # Bottleneck (encoder latents → compact form for dynamics)
