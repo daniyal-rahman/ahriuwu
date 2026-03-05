@@ -28,7 +28,7 @@ from torch.amp import GradScaler, autocast
 from ahriuwu.data.dataset import SingleFrameDataset
 from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
-from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint
+from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint, should_yield_to_queue
 
 _preempt = threading.Event()
 
@@ -265,9 +265,9 @@ def train_epoch(
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
             save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
-            # Exit after checkpoint if preemption was requested
-            if _preempt.is_set():
-                print(f"Preemption: checkpoint saved at step {global_step}. Exiting.", flush=True)
+            # Yield if SIGTERM received or other jobs are waiting for resources
+            if _preempt.is_set() or should_yield_to_queue():
+                print(f"Yielding at step {global_step} (checkpoint saved). Exiting.", flush=True)
                 return {
                     "loss": total_loss / max(num_batches, 1),
                     "mse": total_mse / max(num_batches, 1),

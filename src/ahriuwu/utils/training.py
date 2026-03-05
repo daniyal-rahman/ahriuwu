@@ -5,9 +5,12 @@ Provides common infrastructure:
 - Optimizer creation with bitsandbytes fallback (create_optimizer)
 - WSD (Warmup-Stable-Decay) learning rate schedule (create_wsd_schedule)
 - Checkpoint save/load (save_checkpoint, load_checkpoint)
+- Slurm cooperative yielding (should_yield_to_queue)
 """
 
 import argparse
+import os
+import subprocess
 from pathlib import Path
 
 import torch
@@ -229,3 +232,32 @@ def load_checkpoint(
         checkpoint["global_step"],
         checkpoint.get("loss", float("inf")),
     )
+
+
+def should_yield_to_queue() -> bool:
+    """Check if other slurm jobs are pending and waiting for resources.
+
+    Returns True if this job should voluntarily yield (requeue itself)
+    to let waiting jobs run. Only applies when running inside a slurm job.
+    """
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if not job_id:
+        return False  # Not running under slurm
+
+    try:
+        result = subprocess.run(
+            ["squeue", "--me", "--states=PENDING", "--noheader",
+             "--format=%i %r"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(None, 1)
+            if len(parts) >= 2:
+                pending_id, reason = parts
+                # Jobs waiting for resources would run if we weren't here
+                if reason.strip() == "(Resources)":
+                    print(f"Slurm job {pending_id} waiting for resources — yielding.", flush=True)
+                    return True
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass  # squeue not available or timed out, don't yield
+    return False

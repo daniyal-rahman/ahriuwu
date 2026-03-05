@@ -36,7 +36,7 @@ from ahriuwu.models import (
     RunningRMS,
 )
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
-from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint
+from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint, should_yield_to_queue
 
 _preempt = threading.Event()
 
@@ -582,9 +582,9 @@ def train_epoch(
                 raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
             )
 
-            # Exit after checkpoint if preemption was requested
-            if _preempt.is_set():
-                print(f"Preemption: checkpoint saved at step {global_step}. Exiting.", flush=True)
+            # Yield if SIGTERM received or other jobs are waiting for resources
+            if _preempt.is_set() or should_yield_to_queue():
+                print(f"Yielding at step {global_step} (checkpoint saved). Exiting.", flush=True)
                 return {
                     "loss": total_loss / max(num_batches, 1),
                     "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
