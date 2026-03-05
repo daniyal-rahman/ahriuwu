@@ -582,22 +582,16 @@ def train_epoch(
                 raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
             )
 
-        # Preemption: save checkpoint immediately and break
-        if _preempt.is_set() and checkpoint_dir is not None:
-            print(f"Preemption: saving checkpoint at step {global_step}...", flush=True)
-            latest_path = checkpoint_dir / "dynamics_latest.pt"
-            save_checkpoint(
-                latest_path, model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
-            )
-            print("Checkpoint saved. Exiting.", flush=True)
-            return {
-                "loss": total_loss / max(num_batches, 1),
-                "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
-                "pred_std": 0.0,
-                "global_step": global_step,
-                "preempted": True,
-            }
+            # Exit after checkpoint if preemption was requested
+            if _preempt.is_set():
+                print(f"Preemption: checkpoint saved at step {global_step}. Exiting.", flush=True)
+                return {
+                    "loss": total_loss / max(num_batches, 1),
+                    "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
+                    "pred_std": 0.0,
+                    "global_step": global_step,
+                    "preempted": True,
+                }
 
         batch_idx += 1
 

@@ -15,7 +15,6 @@ import argparse
 import json
 import random
 import signal
-import sys
 import threading
 import time
 from datetime import datetime
@@ -266,20 +265,17 @@ def train_epoch(
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
             save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
-        # Preemption: save checkpoint immediately and break
-        if _preempt.is_set() and checkpoint_dir:
-            print(f"Preemption: saving checkpoint at step {global_step}...", flush=True)
-            latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-            print("Checkpoint saved. Exiting.", flush=True)
-            return {
-                "loss": total_loss / max(num_batches, 1),
-                "mse": total_mse / max(num_batches, 1),
-                "lpips": total_lpips / max(num_batches, 1),
-                "psnr": total_psnr / max(num_batches, 1),
-                "global_step": global_step,
-                "preempted": True,
-            }
+            # Exit after checkpoint if preemption was requested
+            if _preempt.is_set():
+                print(f"Preemption: checkpoint saved at step {global_step}. Exiting.", flush=True)
+                return {
+                    "loss": total_loss / max(num_batches, 1),
+                    "mse": total_mse / max(num_batches, 1),
+                    "lpips": total_lpips / max(num_batches, 1),
+                    "psnr": total_psnr / max(num_batches, 1),
+                    "global_step": global_step,
+                    "preempted": True,
+                }
 
         # Log
         if batch_idx % args.log_interval == 0:
