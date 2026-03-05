@@ -92,12 +92,16 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
 
     # Add batch/sequence config based on mode
     if args.alternating_lengths:
+        accum_short = args.gradient_accumulation_short or args.gradient_accumulation
+        accum_long = args.gradient_accumulation_long or args.gradient_accumulation
         config["training"]["alternating_lengths"] = True
         config["training"]["seq_len_short"] = args.seq_len_short
         config["training"]["seq_len_long"] = args.seq_len_long
         config["training"]["batch_size_short"] = args.batch_size_short
         config["training"]["batch_size_long"] = args.batch_size_long
         config["training"]["long_ratio"] = args.long_ratio
+        config["training"]["gradient_accumulation_short"] = accum_short
+        config["training"]["gradient_accumulation_long"] = accum_long
     else:
         config["training"]["sequence_length"] = args.sequence_length
         config["training"]["batch_size"] = args.batch_size
@@ -270,7 +274,22 @@ def parse_args():
         "--gradient-accumulation",
         type=int,
         default=1,
-        help="Number of batches to accumulate gradients over before stepping",
+        help="Number of batches to accumulate gradients over before stepping "
+             "(used for non-alternating mode, and as default for alternating)",
+    )
+    parser.add_argument(
+        "--gradient-accumulation-short",
+        type=int,
+        default=None,
+        help="Gradient accumulation for short sequences in alternating mode "
+             "(defaults to --gradient-accumulation)",
+    )
+    parser.add_argument(
+        "--gradient-accumulation-long",
+        type=int,
+        default=None,
+        help="Gradient accumulation for long sequences in alternating mode "
+             "(defaults to --gradient-accumulation)",
     )
     add_wandb_args(parser)
     return parser.parse_args()
@@ -295,15 +314,21 @@ def train_epoch(
     independent_frame_ratio: float = 0.3,
     rms_dict: dict[str, RunningRMS] | None = None,
     accumulation_steps: int = 1,
+    accumulation_steps_long: int | None = None,
 ):
     """Train for one epoch.
 
     If dataloader is provided, uses single dataloader mode.
     If dataloader_short and dataloader_long are provided, uses alternating mode.
+
+    In alternating mode with per-length accumulation, each accumulation window
+    processes batches of a single type (all short or all long) so the loss scaling
+    is consistent within the window.
     """
     model.train()
     total_loss = 0.0
     total_grad_norm = 0.0
+    total_grad_norm_count = 0
     total_pred_std = 0.0
     num_batches = 0
     start_time = time.time()
@@ -322,14 +347,27 @@ def train_epoch(
         total_batches = len(dataloader_short) + int(len(dataloader_short) * args.long_ratio / (1 - args.long_ratio))
         alternating = True
 
+    # Per-length accumulation: in alternating mode, each accumulation window
+    # processes only one batch type (all short or all long) for consistent
+    # loss scaling. At the start of each window (micro_count==0), we pick the
+    # batch type and set current_accum accordingly.
+    accum_short = accumulation_steps
+    accum_long = accumulation_steps_long if accumulation_steps_long is not None else accumulation_steps
+    micro_count = 0
+    current_accum = accumulation_steps  # default for non-alternating
+    use_long = False
+
     batch_idx = 0
     optimizer.zero_grad()
     while True:
+        # At start of accumulation window, decide batch type
+        if micro_count == 0 and alternating:
+            use_long = random.random() < args.long_ratio
+            current_accum = accum_long if use_long else accum_short
+
         # Get next batch
         try:
             if alternating:
-                # Ratio-based selection: long_ratio chance of long batch
-                use_long = random.random() < args.long_ratio
                 if use_long:
                     try:
                         batch = next(iter_long)
@@ -415,17 +453,19 @@ def train_epoch(
                 raw_loss_val = raw_loss.item()
 
         # Scale loss for gradient accumulation and backward
-        scaled_loss = loss / accumulation_steps
+        scaled_loss = loss / current_accum
         scaler.scale(scaled_loss).backward()
+        micro_count += 1
 
-        # Step optimizer every accumulation_steps batches
-        if (batch_idx + 1) % accumulation_steps == 0:
+        # Step optimizer when accumulation window is full
+        if micro_count >= current_accum:
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
             optimizer.zero_grad()
+            micro_count = 0
             did_step = True
         else:
             grad_norm = torch.tensor(0.0)
@@ -435,6 +475,7 @@ def train_epoch(
         total_loss += raw_loss_val
         if did_step:
             total_grad_norm += grad_norm.item() if torch.isfinite(grad_norm) else 0.0
+            total_grad_norm_count += 1
         num_batches += 1
         global_step += 1
 
@@ -462,8 +503,8 @@ def train_epoch(
             else:
                 progress = f"Epoch {epoch} [{batch_idx}/{total_batches}]"
 
-            # Compute running averages
-            num_steps = max(1, sum(1 for i in range(batch_idx + 1) if (i + 1) % accumulation_steps == 0))
+            # Compute running averages (approximate step count)
+            num_steps = max(1, total_grad_norm_count)
             avg_grad_norm = total_grad_norm / num_steps
             pred_std_samples = (batch_idx // 10) + 1
             avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0
@@ -531,7 +572,7 @@ def train_epoch(
         batch_idx += 1
 
     # Flush remaining accumulated gradients at end of epoch
-    if batch_idx % accumulation_steps != 0:
+    if micro_count > 0:
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
@@ -539,7 +580,9 @@ def train_epoch(
         optimizer.zero_grad()
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    num_steps = max(1, (num_batches + accumulation_steps - 1) // accumulation_steps)
+    # Approximate optimizer steps (exact count depends on short/long mix)
+    avg_accum = (accum_short + accum_long) / 2 if alternating and accum_short != accum_long else accumulation_steps
+    num_steps = max(1, int(num_batches / avg_accum))
     avg_grad_norm = total_grad_norm / num_steps
     pred_std_samples = (num_batches // 10) + 1
     avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0.0
@@ -563,13 +606,15 @@ def main():
     print(f"Latent dim: {args.latent_dim}")
     print(f"Tokenizer type: {args.tokenizer_type}")
     if args.alternating_lengths:
+        accum_short = args.gradient_accumulation_short or args.gradient_accumulation
+        accum_long = args.gradient_accumulation_long or args.gradient_accumulation
         print(f"Alternating lengths: short={args.seq_len_short} (batch={args.batch_size_short}), "
               f"long={args.seq_len_long} (batch={args.batch_size_long})")
         print(f"Long ratio: {args.long_ratio:.0%}")
-        if args.gradient_accumulation > 1:
-            print(f"Gradient accumulation: {args.gradient_accumulation} steps")
-            print(f"Effective batch size: short={args.batch_size_short * args.gradient_accumulation}, "
-                  f"long={args.batch_size_long * args.gradient_accumulation}")
+        if accum_short > 1 or accum_long > 1:
+            print(f"Gradient accumulation: short={accum_short}, long={accum_long}")
+            print(f"Effective batch size: short={args.batch_size_short * accum_short}, "
+                  f"long={args.batch_size_long * accum_long}")
     else:
         print(f"Sequence length: {args.sequence_length}")
         print(f"Batch size: {args.batch_size}")
@@ -736,7 +781,12 @@ def main():
     if dataloader is not None:
         steps_per_epoch = len(dataloader) // args.gradient_accumulation
     else:
-        steps_per_epoch = len(dataloader_short) // args.gradient_accumulation
+        accum_s = args.gradient_accumulation_short or args.gradient_accumulation
+        accum_l = args.gradient_accumulation_long or args.gradient_accumulation
+        # Weighted average: (1-long_ratio) of batches use accum_s, long_ratio use accum_l
+        n_short = len(dataloader_short)
+        n_long = int(n_short * args.long_ratio / (1 - args.long_ratio))
+        steps_per_epoch = n_short // accum_s + n_long // accum_l
     total_steps = args.epochs * steps_per_epoch
     scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
 
@@ -783,13 +833,22 @@ def main():
         print(f"Epoch {epoch + 1}/{args.epochs}")
         print("=" * 60)
 
+        # Resolve per-length accumulation
+        if args.alternating_lengths:
+            accum_s = args.gradient_accumulation_short or args.gradient_accumulation
+            accum_l = args.gradient_accumulation_long or args.gradient_accumulation
+        else:
+            accum_s = args.gradient_accumulation
+            accum_l = None
+
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, scheduler, schedule, args.device,
             epoch, global_step, args, checkpoint_dir, shortcut,
             dataloader_short, dataloader_long, use_actions=args.use_actions,
             independent_frame_ratio=args.independent_frame_ratio,
             rms_dict=rms_dict,
-            accumulation_steps=args.gradient_accumulation,
+            accumulation_steps=accum_s,
+            accumulation_steps_long=accum_l,
         )
 
         global_step = metrics["global_step"]

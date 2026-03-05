@@ -939,20 +939,70 @@ Then train dynamics:
 | Diffusion | x-prediction, flow matching, ramp weight |
 | Per-timestep tau | Yes (diffusion forcing) |
 | Shortcut forcing | Yes, k_max=64 → 4-step inference |
-| Alternating lengths | T_short=32, T_long=64, long_ratio=0.1 |
+| Alternating lengths | T_short=32 (B=2), T_long=64 (B=1), long_ratio=0.2 |
 | Independent frames | 30% of batches disable temporal attention |
 | Action conditioning | Yes (factorized: 8 abilities + continuous movement) |
-| Gradient checkpointing | Yes |
-| Batch size | 2 (short) / 1 (long) |
-| LR | 3e-4, WSD schedule |
+| Gradient checkpointing | Yes (auto-disabled during shortcut forcing, see below) |
+| Gradient accumulation | 32 (short) / 64 (long) → effective batch=64 always |
+| LR | 3e-4, WSD schedule (no scaling — effective batch is constant) |
 
 ```bash
 python scripts/train_dynamics.py \
   --latents-dir data/processed/latents --latent-dim 32 \
   --model-size small --shortcut-forcing --use-actions \
   --alternating-lengths --gradient-checkpointing \
+  --seq-len-short 32 --batch-size-short 2 \
+  --seq-len-long 64 --batch-size-long 1 \
+  --long-ratio 0.2 \
+  --gradient-accumulation-short 32 --gradient-accumulation-long 64 \
   --wandb --wandb-project ahriuwu
 ```
+
+**Why T=32/64, not T=16**: T=16 at 20fps = 0.8s. A single Garen Q→walk→auto
+chain spans 40-60 frames (2-3s). At T=16 the model cannot see the beginning and
+end of one ability use in the same context. T=32 (1.6s) covers one ability rotation,
+T=64 (3.2s) covers a full trade/skirmish. The DreamerV4 paper used 192 frames for
+Minecraft for the same reason — delayed consequences need long context.
+
+**Per-length accumulation**: Each accumulation window processes only one batch type
+(all short or all long) so the loss scaling (1/accum) is consistent. This keeps the
+effective batch size at 64 regardless of sequence length:
+- Short: B=2 × accum=32 = 64 effective
+- Long: B=1 × accum=64 = 64 effective
+
+**Gradient checkpointing + shortcut forcing**: Gradient checkpointing is automatically
+disabled during shortcut forcing forward passes. `torch.amp.autocast` inserts hidden
+dtype cast ops that change the saved tensor list, so checkpoint recomputation misaligns
+tensor indices and raises `CheckpointError`. Disabling GC during shortcut forcing costs
+~2.5 GB extra VRAM but is well within the 16 GB budget.
+
+**VRAM profiling** (RTX 5080, 15.5 GB, small model, latent_dim=32):
+
+| Config | Peak VRAM |
+|--------|-----------|
+| Standard training, GC=ON | 1.19 GB |
+| Standard training, GC=OFF | 3.64 GB |
+| Shortcut forcing, GC disabled during SC | 3.66 GB |
+| Shortcut forcing, GC=OFF | 3.65 GB |
+
+GC saves ~2.45 GB for standard training. Shortcut forcing with GC disabled during SC
+uses essentially the same VRAM as no GC at all (~3.66 GB at B=2 T=8).
+
+**Max batch size sweep** (shortcut forcing, GC disabled during SC):
+
+| B | T | Tokens/batch | Peak VRAM | Status |
+|---|---|-------------|-----------|--------|
+| 8 | 8 | 64 | 11.47 GB | OK |
+| 12 | 8 | 96 | — | OOM |
+| 4 | 16 | 64 | 11.51 GB | OK |
+| 8 | 16 | 128 | — | OOM |
+| 2 | 32 | 64 | 8.79 GB | OK |
+| 4 | 32 | 128 | — | OOM |
+
+**Chosen config: alternating T=32 (B=2) / T=64 (B=1)** — 80% of batches use T=32
+(8.79 GB, comfortable headroom), 20% use T=64 (~8-10 GB). Gradient accumulation
+keeps effective batch=64 constant. Long batches are slower but critical for learning
+multi-second cause-effect chains.
 
 **Eval checkpoints**:
 ```bash
@@ -966,6 +1016,15 @@ python scripts/eval_dynamics.py --mode full \
   --dynamics-checkpoint checkpoints/dynamics_best.pt \
   --tokenizer-checkpoint checkpoints/transformer_tokenizer_best.pt
 ```
+
+**Eval gate — proceed to Phase 2 only if**:
+- 1-step denoising PSNR > 15 dB (current 62M model gets 13.7, bigger model should beat it)
+- 32-frame rollout with context hints (τ_ctx=0.1) stays above 8 dB PSNR
+- 32-frame rollout stays recognizable (not cyan blobs)
+- Qualitative: decode a 64-frame rollout and watch it — can you tell it's LoL?
+  Do minions move? Do abilities animate?
+
+If 32-frame rollout with context fails the 8 dB gate, diagnose before continuing.
 
 #### Phase 2: Agent Finetuning (BC + Reward)
 
