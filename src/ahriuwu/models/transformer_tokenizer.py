@@ -1028,7 +1028,7 @@ class TransformerTokenizer(nn.Module):
 
 def create_transformer_tokenizer(
     size: str = "small",
-    use_rope: bool = False,
+    use_rope: bool = True,
     use_qk_norm: bool = True,
     soft_cap: float | None = 50.0,
     gradient_checkpointing: bool = False,
