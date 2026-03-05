@@ -259,6 +259,7 @@ def train_epoch(
             scaler.update()
             scheduler.step()
             optimizer.zero_grad()
+            global_step += 1
 
         # Track metrics (unscaled loss)
         total_loss += losses["loss"].item()
@@ -273,7 +274,6 @@ def train_epoch(
             total_psnr += batch_psnr
 
         num_batches += 1
-        global_step += 1
 
         # Step-based checkpoint saving
         if checkpoint_dir and args.step_save_interval > 0 and global_step % args.step_save_interval == 0:
