@@ -90,12 +90,10 @@ class FrameDatasetForEncoding(Dataset):
             video_id = video_dir.name
             output_video_dir = self.output_dir / video_id
 
-            # Frames are in video_dir/frames/ subdirectory
-            frames_subdir = video_dir / "frames"
-            if not frames_subdir.exists():
+            # Frames are directly in video_dir (no subdirectory)
+            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
+            if not frames:
                 continue
-
-            frames = sorted(frames_subdir.glob(f"frame_*.{self.file_ext}"))
 
             for frame_path in frames:
                 # Extract frame number

@@ -265,7 +265,7 @@ class MultiHeadAttention(nn.Module):
                 mask = mask.unsqueeze(1)  # (B, 1, N, N)
             attn = attn.masked_fill(~mask, float('-inf'))
 
-        attn = F.softmax(attn, dim=-1)
+        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(v.dtype)
         attn = self.dropout(attn)
 
         out = torch.matmul(attn, v)

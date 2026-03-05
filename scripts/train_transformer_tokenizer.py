@@ -91,7 +91,7 @@ def parse_args():
     parser.add_argument(
         "--step-save-interval",
         type=int,
-        default=20000,
+        default=15000,
         help="Save checkpoint every N steps (0 to disable)",
     )
     parser.add_argument(
@@ -200,6 +200,7 @@ def train_epoch(
     global_step: int,
     args: argparse.Namespace,
     checkpoint_dir: Path = None,
+    base_checkpoint_dir: Path = None,
 ):
     """Train for one epoch with MAE training."""
     model.train()
@@ -279,9 +280,12 @@ def train_epoch(
         if checkpoint_dir and args.step_save_interval > 0 and global_step % args.step_save_interval == 0:
             step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
             save_checkpoint(step_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-            # Also save as latest
+            # Also save as latest (both run dir and base dir for sbatch resume)
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
             save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
+                base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
+                save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
             # Yield if SIGTERM received or other jobs are waiting for resources
             if _preempt.is_set() or should_yield_to_queue():
@@ -369,8 +373,22 @@ def main():
     print("=" * 60)
 
     # Create directories with run_id
-    checkpoint_dir = Path(args.checkpoint_dir) / f"run_{run_id}"
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    base_checkpoint_dir = Path(args.checkpoint_dir)
+    base_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.resume:
+        # When resuming, reuse the same directory as the checkpoint
+        checkpoint_path = Path(args.resume)
+        if checkpoint_path.parent.name.startswith("run_"):
+            checkpoint_dir = checkpoint_path.parent
+        else:
+            # Legacy checkpoint in flat directory - create new run dir
+            checkpoint_dir = base_checkpoint_dir / f"run_{run_id}"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        checkpoint_dir = base_checkpoint_dir / f"run_{run_id}"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
     sample_dir = Path(args.sample_dir) / f"run_{run_id}"
     sample_dir.mkdir(parents=True, exist_ok=True)
     print(f"Checkpoint dir: {checkpoint_dir}")
@@ -465,7 +483,7 @@ def main():
 
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, scheduler, loss_fn, rms_trackers,
-            args.device, epoch, global_step, args, checkpoint_dir
+            args.device, epoch, global_step, args, checkpoint_dir, base_checkpoint_dir
         )
 
         global_step = metrics["global_step"]
@@ -495,9 +513,12 @@ def main():
             checkpoint_path = checkpoint_dir / f"transformer_tokenizer_epoch_{epoch + 1:03d}.pt"
             save_checkpoint(checkpoint_path, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
-            # Also save as latest
+            # Also save as latest (both run dir and base dir for sbatch resume)
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
             save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            if base_checkpoint_dir != checkpoint_dir:
+                base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
+                save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
         # Save best model
         if metrics["loss"] < best_loss:

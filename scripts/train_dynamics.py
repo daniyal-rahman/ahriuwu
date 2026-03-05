@@ -320,6 +320,7 @@ def train_epoch(
     global_step: int,
     args: argparse.Namespace,
     checkpoint_dir: Path = None,
+    base_checkpoint_dir: Path = None,
     shortcut: ShortcutForcing | None = None,
     dataloader_short: DataLoader | None = None,
     dataloader_long: DataLoader | None = None,
@@ -575,12 +576,18 @@ def train_epoch(
                 step_path, model, optimizer, scaler, epoch, global_step,
                 raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
             )
-            # Also update latest
+            # Also update latest (both run dir and base dir for sbatch resume)
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 latest_path, model, optimizer, scaler, epoch, global_step,
                 raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
             )
+            if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
+                base_latest = base_checkpoint_dir / "dynamics_latest.pt"
+                save_checkpoint(
+                    base_latest, model, optimizer, scaler, epoch, global_step,
+                    raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+                )
 
             # Yield if SIGTERM received or other jobs are waiting for resources
             if _preempt.is_set() or should_yield_to_queue():
@@ -869,7 +876,7 @@ def main():
 
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, scheduler, schedule, args.device,
-            epoch, global_step, args, checkpoint_dir, shortcut,
+            epoch, global_step, args, checkpoint_dir, base_checkpoint_dir, shortcut,
             dataloader_short, dataloader_long, use_actions=args.use_actions,
             independent_frame_ratio=args.independent_frame_ratio,
             rms_dict=rms_dict,
@@ -910,12 +917,18 @@ def main():
                 metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
             )
 
-            # Also save as latest
+            # Also save as latest (both run dir and base dir for sbatch resume)
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 latest_path, model, optimizer, scaler, epoch, global_step,
                 metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
             )
+            if base_checkpoint_dir != checkpoint_dir:
+                base_latest = base_checkpoint_dir / "dynamics_latest.pt"
+                save_checkpoint(
+                    base_latest, model, optimizer, scaler, epoch, global_step,
+                    metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
+                )
 
         # Save best model
         if metrics["loss"] < best_loss:
