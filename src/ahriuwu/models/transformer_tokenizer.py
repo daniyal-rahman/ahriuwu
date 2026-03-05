@@ -1058,8 +1058,8 @@ def create_transformer_tokenizer(
             "embed_dim": 512,
             "latent_dim": 32,
             "num_heads": 8,
-            "num_encoder_layers": 6,
-            "num_decoder_layers": 6,
+            "num_encoder_layers": 8,
+            "num_decoder_layers": 8,
             "num_latents": 256,
         },
         "medium": {
