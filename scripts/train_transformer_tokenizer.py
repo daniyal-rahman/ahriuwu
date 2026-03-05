@@ -14,6 +14,9 @@ Usage:
 import argparse
 import json
 import random
+import signal
+import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +30,17 @@ from ahriuwu.data.dataset import SingleFrameDataset
 from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint
+
+_preempt = threading.Event()
+
+
+def _install_preemption_handler():
+    """Install SIGTERM handler for graceful slurm preemption."""
+    def _handler(signum, frame):
+        if not _preempt.is_set():
+            print("\nSIGTERM received — will save checkpoint and exit.", flush=True)
+            _preempt.set()
+    signal.signal(signal.SIGTERM, _handler)
 
 
 def parse_args():
@@ -78,7 +92,7 @@ def parse_args():
     parser.add_argument(
         "--step-save-interval",
         type=int,
-        default=30000,
+        default=20000,
         help="Save checkpoint every N steps (0 to disable)",
     )
     parser.add_argument(
@@ -252,6 +266,21 @@ def train_epoch(
             latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
             save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
+        # Preemption: save checkpoint immediately and break
+        if _preempt.is_set() and checkpoint_dir:
+            print(f"Preemption: saving checkpoint at step {global_step}...", flush=True)
+            latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
+            save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            print("Checkpoint saved. Exiting.", flush=True)
+            return {
+                "loss": total_loss / max(num_batches, 1),
+                "mse": total_mse / max(num_batches, 1),
+                "lpips": total_lpips / max(num_batches, 1),
+                "psnr": total_psnr / max(num_batches, 1),
+                "global_step": global_step,
+                "preempted": True,
+            }
+
         # Log
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
@@ -296,11 +325,13 @@ def train_epoch(
         "lpips": avg_lpips,
         "psnr": avg_psnr,
         "global_step": global_step,
+        "preempted": False,
     }
 
 
 def main():
     args = parse_args()
+    _install_preemption_handler()
 
     # Create run ID with timestamp
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -456,6 +487,10 @@ def main():
             best_path = checkpoint_dir / "transformer_tokenizer_best.pt"
             save_checkpoint(best_path, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
             print(f"New best model saved (loss: {best_loss:.4f})")
+
+        if metrics.get("preempted"):
+            print("Preempted during epoch — exiting training loop.", flush=True)
+            break
 
         # Save sample reconstructions
         save_samples(model, dataloader, args.device, sample_dir, epoch + 1)

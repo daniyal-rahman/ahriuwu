@@ -16,6 +16,8 @@ Checkpoint directories are automatically organized as:
 import argparse
 import json
 import random
+import signal
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +37,17 @@ from ahriuwu.models import (
 )
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint
+
+_preempt = threading.Event()
+
+
+def _install_preemption_handler():
+    """Install SIGTERM handler for graceful slurm preemption."""
+    def _handler(signum, frame):
+        if not _preempt.is_set():
+            print("\nSIGTERM received — will save checkpoint and exit.", flush=True)
+            _preempt.set()
+    signal.signal(signal.SIGTERM, _handler)
 
 
 def create_run_directory(base_dir: Path, args: argparse.Namespace) -> Path:
@@ -569,6 +582,23 @@ def train_epoch(
                 raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
             )
 
+        # Preemption: save checkpoint immediately and break
+        if _preempt.is_set() and checkpoint_dir is not None:
+            print(f"Preemption: saving checkpoint at step {global_step}...", flush=True)
+            latest_path = checkpoint_dir / "dynamics_latest.pt"
+            save_checkpoint(
+                latest_path, model, optimizer, scaler, epoch, global_step,
+                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+            )
+            print("Checkpoint saved. Exiting.", flush=True)
+            return {
+                "loss": total_loss / max(num_batches, 1),
+                "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
+                "pred_std": 0.0,
+                "global_step": global_step,
+                "preempted": True,
+            }
+
         batch_idx += 1
 
     # Flush remaining accumulated gradients at end of epoch
@@ -592,11 +622,13 @@ def train_epoch(
         "grad_norm": avg_grad_norm,
         "pred_std": avg_pred_std,
         "global_step": global_step,
+        "preempted": False,
     }
 
 
 def main():
     args = parse_args()
+    _install_preemption_handler()
 
     print("=" * 60)
     print("Dynamics Model Training")
@@ -900,6 +932,10 @@ def main():
                 metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
             )
             print(f"New best model saved (loss: {best_loss:.4f})")
+
+        if metrics.get("preempted"):
+            print("Preempted during epoch — exiting training loop.", flush=True)
+            break
 
     # Save training history
     history_path = checkpoint_dir / "dynamics_history.json"
