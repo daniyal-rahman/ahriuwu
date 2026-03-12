@@ -10,7 +10,17 @@ from .diffusion import (
     ShortcutForcing,
 )
 from .dynamics import DynamicsTransformer, create_dynamics
-from .heads import RewardHead, PolicyHead, ValueHead
+from .heads import (
+    RewardHead,
+    PolicyHead,
+    ValueHead,
+    AgentTokenProvider,
+    create_behavioral_prior,
+    kl_to_prior,
+    kl_to_prior_continuous,
+    freeze_for_imagination,
+    unfreeze_all,
+)
 from .returns import (
     symlog,
     symexp,
@@ -49,6 +59,12 @@ __all__ = [
     "RewardHead",
     "PolicyHead",
     "ValueHead",
+    "AgentTokenProvider",
+    "create_behavioral_prior",
+    "kl_to_prior",
+    "kl_to_prior_continuous",
+    "freeze_for_imagination",
+    "unfreeze_all",
     # Returns and utilities
     "symlog",
     "symexp",
