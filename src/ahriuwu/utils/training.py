@@ -6,11 +6,13 @@ Provides common infrastructure:
 - WSD (Warmup-Stable-Decay) learning rate schedule (create_wsd_schedule)
 - Checkpoint save/load (save_checkpoint, load_checkpoint)
 - Slurm cooperative yielding (should_yield_to_queue)
+- Two-mode preemption system (install_preemption_handlers, PreemptionState)
 """
 
 import argparse
 import os
-import subprocess
+import signal
+import threading
 from pathlib import Path
 
 import torch
@@ -23,6 +25,71 @@ try:
     HAS_BNB = True
 except ImportError:
     HAS_BNB = False
+
+
+class PreemptionState:
+    """Two-mode preemption state for training scripts.
+
+    Immediate mode (SIGUSR1): Save checkpoint after the current/next optimizer
+    step and exit. Used for manual preemption when you want a fast stop.
+
+    Delayed mode (SIGTERM): Save checkpoint at the next scheduled checkpoint
+    boundary and exit. Used by Slurm preemption and voluntary queue yielding.
+    """
+
+    def __init__(self):
+        self.immediate = threading.Event()
+        self.at_checkpoint = threading.Event()
+
+    def is_immediate(self) -> bool:
+        return self.immediate.is_set()
+
+    def is_at_checkpoint(self) -> bool:
+        return self.at_checkpoint.is_set()
+
+    def should_save_now(self) -> bool:
+        """Check if we should save and exit immediately (every optimizer step)."""
+        return self.immediate.is_set()
+
+    def should_save_at_boundary(self) -> bool:
+        """Check if we should exit at a checkpoint boundary."""
+        return self.at_checkpoint.is_set()
+
+
+def install_preemption_handlers(state: PreemptionState) -> None:
+    """Install signal handlers for preemption.
+
+    Both SIGUSR1 and SIGTERM trigger immediate save+exit.
+    SIGTERM: sent by Slurm on preemption or time limit (--signal=B:TERM@120).
+    SIGUSR1: manual trigger (scancel --signal=USR1 <jobid>).
+    """
+    def _handler(signum, frame):
+        name = "SIGTERM" if signum == signal.SIGTERM else "SIGUSR1"
+        if not state.immediate.is_set():
+            print(
+                f"\n{name} received -- will save checkpoint and exit.",
+                flush=True,
+            )
+            state.immediate.set()
+
+    signal.signal(signal.SIGUSR1, _handler)
+    signal.signal(signal.SIGTERM, _handler)
+
+
+def compute_dynamic_save_interval(
+    global_step: int,
+    elapsed_seconds: float,
+    checkpoint_minutes: float,
+) -> int:
+    """Compute step_save_interval to target approximately checkpoint_minutes between saves.
+
+    Returns 0 if not enough data to compute (global_step == 0 or elapsed_seconds == 0).
+    """
+    if global_step <= 0 or elapsed_seconds <= 0:
+        return 0
+    steps_per_second = global_step / elapsed_seconds
+    interval = int(checkpoint_minutes * 60 * steps_per_second)
+    return max(1, interval)
 
 
 def add_training_args(parser: argparse.ArgumentParser) -> None:
@@ -100,6 +167,13 @@ def add_training_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=1,
         help="Save checkpoint every N epochs",
+    )
+    parser.add_argument(
+        "--checkpoint-minutes",
+        type=float,
+        default=60,
+        help="Target minutes between checkpoints when using dynamic interval "
+             "(used when step-save-interval <= 0, default: 60)",
     )
     parser.add_argument(
         "--resume",
@@ -209,11 +283,17 @@ def load_checkpoint(
                 (useful when loading checkpoints with new parameters).
     """
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    # Normalize state dict: strip _orig_mod. prefix if present
+    state_dict = checkpoint["model_state_dict"]
+    if any(k.startswith("_orig_mod.") for k in state_dict):
+        state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+    # Load into unwrapped model if torch.compile'd
+    target = model._orig_mod if hasattr(model, "_orig_mod") else model
     if strict:
-        model.load_state_dict(checkpoint["model_state_dict"])
+        target.load_state_dict(state_dict)
     else:
-        missing, unexpected = model.load_state_dict(
-            checkpoint["model_state_dict"], strict=False
+        missing, unexpected = target.load_state_dict(
+            state_dict, strict=False
         )
         if missing:
             print(f"Note: Initializing new parameters: {missing}")
@@ -234,30 +314,6 @@ def load_checkpoint(
     )
 
 
-def should_yield_to_queue() -> bool:
-    """Check if other slurm jobs are pending and waiting for resources.
-
-    Returns True if this job should voluntarily yield (requeue itself)
-    to let waiting jobs run. Only applies when running inside a slurm job.
-    """
-    job_id = os.environ.get("SLURM_JOB_ID")
-    if not job_id:
-        return False  # Not running under slurm
-
-    try:
-        result = subprocess.run(
-            ["squeue", "--me", "--states=PENDING", "--noheader",
-             "--format=%i %r"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.strip().splitlines():
-            parts = line.split(None, 1)
-            if len(parts) >= 2:
-                pending_id, reason = parts
-                # Jobs waiting for resources would run if we weren't here
-                if reason.strip() == "(Resources)":
-                    print(f"Slurm job {pending_id} waiting for resources — yielding.", flush=True)
-                    return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass  # squeue not available or timed out, don't yield
+def is_queue_yield_enabled(checkpoint_dir: str | Path | None = None) -> bool:
+    """Deprecated: Slurm QOS preemption handles this now. Always returns False."""
     return False

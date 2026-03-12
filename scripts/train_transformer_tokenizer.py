@@ -14,8 +14,6 @@ Usage:
 import argparse
 import json
 import random
-import signal
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,18 +26,13 @@ from torch.amp import GradScaler, autocast
 from ahriuwu.data.dataset import FrameSequenceDataset
 from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
-from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint, should_yield_to_queue
+from ahriuwu.utils.training import (
+    add_training_args, create_optimizer, create_wsd_schedule,
+    save_checkpoint, load_checkpoint,
+    PreemptionState, install_preemption_handlers, compute_dynamic_save_interval,
+)
 
-_preempt = threading.Event()
-
-
-def _install_preemption_handler():
-    """Install SIGTERM handler for graceful slurm preemption."""
-    def _handler(signum, frame):
-        if not _preempt.is_set():
-            print("\nSIGTERM received — will save checkpoint and exit.", flush=True)
-            _preempt.set()
-    signal.signal(signal.SIGTERM, _handler)
+_preempt = PreemptionState()
 
 
 def parse_args():
@@ -207,6 +200,7 @@ def train_epoch(
     total_loss = 0.0
     total_mse = 0.0
     total_lpips = 0.0
+    num_lpips_batches = 0
     total_psnr = 0.0
     num_batches = 0
 
@@ -233,19 +227,29 @@ def train_epoch(
         else:
             mask_ratio = random.uniform(args.mask_ratio_min, current_mask_max)
 
+        # Generate mask outside torch.compile boundary
+        base_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+        mask_indices = base_model.make_mask(
+            frames.shape[0], frames.shape[1], mask_ratio, frames.device
+        )
+
         # Mixed precision forward
         with autocast(device_type=device_type, dtype=dtype):
-            output = model(frames, mask_ratio=mask_ratio)
+            output = model(frames, mask_indices=mask_indices)
             recon = output["reconstruction"]
             mask_indices = output.get("mask_indices", None)
 
-            # Compute MAE loss (raw components)
-            losses = loss_fn(recon, frames, mask_indices=mask_indices)
+            # Compute MAE loss — run LPIPS every 4th optimizer step only
+            use_lpips = (global_step % 4 == 0)
+            losses = loss_fn(recon, frames, mask_indices=mask_indices, skip_lpips=not use_lpips)
 
             # Normalize MSE and LPIPS separately via RunningRMS
             mse_norm = rms_trackers["mse"].update(losses["mse"])
-            lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
-            loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
+            if use_lpips:
+                lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
+                loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
+            else:
+                loss = mse_norm / accumulation_steps
 
         # Backward with scaling
         scaler.scale(loss).backward()
@@ -265,7 +269,9 @@ def train_epoch(
         # Track metrics (unscaled loss)
         total_loss += losses["loss"].item()
         total_mse += losses["mse"].item()
-        total_lpips += losses["lpips"].item()
+        if use_lpips:
+            total_lpips += losses["lpips"].item()
+            num_lpips_batches += 1
 
         with torch.no_grad():
             # Flatten (B, T, C, H, W) -> (B*T, C, H, W) for PSNR
@@ -276,8 +282,22 @@ def train_epoch(
 
         num_batches += 1
 
-        # Step-based checkpoint saving
-        if checkpoint_dir and args.step_save_interval > 0 and global_step % args.step_save_interval == 0:
+        # Compute effective save interval (dynamic or explicit)
+        if args.step_save_interval > 0:
+            effective_save_interval = args.step_save_interval
+        else:
+            effective_save_interval = compute_dynamic_save_interval(
+                global_step, time.time() - start_time, args.checkpoint_minutes
+            )
+
+        # Step-based checkpoint saving (skip step 0 to avoid spam)
+        save_at_boundary = (
+            checkpoint_dir
+            and global_step > 0
+            and effective_save_interval > 0
+            and global_step % effective_save_interval == 0
+        )
+        if save_at_boundary:
             step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
             save_checkpoint(step_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
             # Also save as latest (both run dir and base dir for sbatch resume)
@@ -287,17 +307,23 @@ def train_epoch(
                 base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
                 save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
 
-            # Yield if SIGTERM received or other jobs are waiting for resources
-            if _preempt.is_set() or should_yield_to_queue():
-                print(f"Yielding at step {global_step} (checkpoint saved). Exiting.", flush=True)
-                return {
-                    "loss": total_loss / max(num_batches, 1),
-                    "mse": total_mse / max(num_batches, 1),
-                    "lpips": total_lpips / max(num_batches, 1),
-                    "psnr": total_psnr / max(num_batches, 1),
-                    "global_step": global_step,
-                    "preempted": True,
-                }
+        # Preemption: save and exit on SIGTERM (Slurm preemption/time limit) or SIGUSR1 (manual)
+        if _preempt.should_save_now() and checkpoint_dir and global_step > 0:
+            if not save_at_boundary:
+                latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
+                save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+                if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
+                    base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
+                    save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            print(f"Preempted at step {global_step}. Exiting.", flush=True)
+            return {
+                "loss": total_loss / max(num_batches, 1),
+                "mse": total_mse / max(num_batches, 1),
+                "lpips": total_lpips / max(num_batches, 1),
+                "psnr": total_psnr / max(num_batches, 1),
+                "global_step": global_step,
+                "preempted": True,
+            }
 
         # Log
         if batch_idx % args.log_interval == 0:
@@ -308,23 +334,26 @@ def train_epoch(
                 mask_info += f" (max: {current_mask_max:.2f})"
             current_lr = scheduler.get_last_lr()[0]
 
-            log_step({
+            log_dict = {
                 "train/loss": losses["loss"].item(),
                 "train/mse": losses["mse"].item(),
-                "train/lpips": losses["lpips"].item(),
                 "train/psnr": batch_psnr,
                 "train/lr": current_lr,
                 "train/mask_ratio": mask_ratio,
                 "train/mask_max": current_mask_max,
                 "train/samples_per_sec": samples_per_sec,
                 "train/epoch": epoch,
-            }, step=global_step)
+            }
+            if use_lpips:
+                log_dict["train/lpips"] = losses["lpips"].item()
+            log_step(log_dict, step=global_step)
 
+            lpips_str = f"LPIPS: {losses['lpips'].item():.4f} " if use_lpips else ""
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {losses['loss'].item():.4f} "
                 f"MSE: {losses['mse'].item():.4f} "
-                f"LPIPS: {losses['lpips'].item():.4f} "
+                f"{lpips_str}"
                 f"PSNR: {batch_psnr:.2f} dB "
                 f"LR: {current_lr:.2e} "
                 f"{mask_info} "
@@ -334,7 +363,7 @@ def train_epoch(
     # Epoch averages
     avg_loss = total_loss / num_batches
     avg_mse = total_mse / num_batches
-    avg_lpips = total_lpips / num_batches
+    avg_lpips = total_lpips / max(num_lpips_batches, 1)
     avg_psnr = total_psnr / num_batches
 
     return {
@@ -349,7 +378,7 @@ def train_epoch(
 
 def main():
     args = parse_args()
-    _install_preemption_handler()
+    install_preemption_handlers(_preempt)
 
     # Create run ID with timestamp
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -399,6 +428,7 @@ def main():
     dataset = FrameSequenceDataset(
         args.frames_dir,
         sequence_length=args.sequence_length,
+        stride=8,
     )
     print(f"Found {len(dataset)} sequences (T={args.sequence_length})")
 

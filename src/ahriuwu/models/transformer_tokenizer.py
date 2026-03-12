@@ -17,7 +17,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from .layers import RMSNorm, QKNorm, SwiGLU, soft_cap_attention
+from .layers import (
+    RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
+    RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
+)
 
 
 def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
@@ -58,112 +61,6 @@ def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
     pos_embed = torch.cat([emb_h, emb_w], dim=1)  # (H*W, D)
 
     return pos_embed
-
-
-class RotaryEmbedding2D(nn.Module):
-    """2D Rotary Position Embedding (RoPE) for image patches.
-
-    Applies separate rotations for x and y coordinates using axial decomposition.
-    RoPE encodes relative position in the attention dot product.
-
-    Head dim is split in half: first half for y-axis, second half for x-axis.
-    Each half is further split for the rotation pairs.
-    """
-
-    def __init__(self, dim: int, grid_size: int, base: float = 10000.0):
-        super().__init__()
-        self.dim = dim
-        self.grid_size = grid_size
-        self.dim_per_axis = dim // 2  # Half for y, half for x
-
-        # Compute frequencies for each axis (half the per-axis dim for pairs)
-        inv_freq = 1.0 / (base ** (torch.arange(0, self.dim_per_axis, 2).float() / self.dim_per_axis))
-        self.register_buffer('inv_freq', inv_freq)
-
-        # Precompute position grid
-        y_pos = torch.arange(grid_size).float()
-        x_pos = torch.arange(grid_size).float()
-
-        # Create meshgrid and flatten
-        grid_y, grid_x = torch.meshgrid(y_pos, x_pos, indexing='ij')
-        positions_y = grid_y.reshape(-1)  # (grid_size^2,)
-        positions_x = grid_x.reshape(-1)  # (grid_size^2,)
-
-        self.register_buffer('positions_y', positions_y)
-        self.register_buffer('positions_x', positions_x)
-
-    def get_rotary_emb(self, seq_len: int, device: torch.device):
-        """Get sin/cos embeddings for rotary application.
-
-        Returns cos, sin each of shape (seq_len, dim) where:
-        - dims 0:dim/2 encode y position
-        - dims dim/2:dim encode x position
-        """
-        # Compute frequencies for each position
-        freqs_y = torch.outer(self.positions_y[:seq_len], self.inv_freq)  # (seq, dim/4)
-        freqs_x = torch.outer(self.positions_x[:seq_len], self.inv_freq)  # (seq, dim/4)
-
-        # For each axis, we need cos and sin interleaved in pairs
-        # RoPE rotation operates on consecutive pairs: [d0,d1], [d2,d3], ...
-        # So we need: [cos(θ_0), cos(θ_0), cos(θ_1), cos(θ_1), ...]
-
-        # Repeat each frequency for the pair
-        freqs_y = freqs_y.repeat_interleave(2, dim=-1)  # (seq, dim/2)
-        freqs_x = freqs_x.repeat_interleave(2, dim=-1)  # (seq, dim/2)
-
-        # Combine y and x: [y_freqs, x_freqs]
-        freqs = torch.cat([freqs_y, freqs_x], dim=-1)  # (seq, dim)
-
-        return freqs.cos(), freqs.sin()
-
-    def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
-        """Rotate pairs of dimensions.
-
-        For input [..., d0, d1, d2, d3, ...], returns [..., -d1, d0, -d3, d2, ...]
-        This implements complex multiplication when combined with cos/sin.
-        """
-        # Split y and x halves to rotate them separately
-        y_part = x[..., :self.dim_per_axis]
-        x_part = x[..., self.dim_per_axis:]
-
-        # Rotate each half's pairs: [a, b] -> [-b, a]
-        def rotate_pairs(t):
-            t = t.reshape(*t.shape[:-1], -1, 2)  # (..., dim/4, 2)
-            t = torch.stack([-t[..., 1], t[..., 0]], dim=-1)  # swap and negate
-            return t.reshape(*t.shape[:-2], -1)  # (..., dim/2)
-
-        y_rotated = rotate_pairs(y_part)
-        x_rotated = rotate_pairs(x_part)
-
-        return torch.cat([y_rotated, x_rotated], dim=-1)
-
-    def apply_rotary(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        """Apply rotary embedding to x."""
-        return (x * cos) + (self.rotate_half(x) * sin)
-
-
-class RotaryEmbedding1D(nn.Module):
-    """1D Rotary Position Embedding for temporal positions (0..T-1)."""
-
-    def __init__(self, dim: int, max_seq_len: int = 256, base: float = 10000.0):
-        super().__init__()
-        self.dim = dim
-        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer('inv_freq', inv_freq)
-
-    def get_rotary_emb(self, seq_len: int, device: torch.device):
-        t = torch.arange(seq_len, device=device).float()
-        freqs = torch.outer(t, self.inv_freq)  # (T, dim/2)
-        freqs = freqs.repeat_interleave(2, dim=-1)  # (T, dim)
-        return freqs.cos(), freqs.sin()
-
-    def rotate_half(self, x: torch.Tensor) -> torch.Tensor:
-        x = x.reshape(*x.shape[:-1], -1, 2)
-        x = torch.stack([-x[..., 1], x[..., 0]], dim=-1)
-        return x.reshape(*x.shape[:-2], -1)
-
-    def apply_rotary(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-        return (x * cos) + (self.rotate_half(x) * sin)
 
 
 class MultiHeadAttention(nn.Module):
@@ -242,8 +139,8 @@ class MultiHeadAttention(nn.Module):
                 sin_sel = sin_sel.unsqueeze(0).unsqueeze(0)
 
                 # Apply rotation
-                q_rotated = rope.apply_rotary(q, cos_sel, sin_sel)
-                k_rotated = rope.apply_rotary(k, cos_sel, sin_sel)
+                q_rotated = apply_rotary_emb(q, cos_sel, sin_sel)
+                k_rotated = apply_rotary_emb(k, cos_sel, sin_sel)
 
                 # Only update valid tokens (patches), keep latents unchanged
                 valid_mask_exp = valid_mask.view(1, 1, N, 1).expand_as(q)
@@ -326,8 +223,8 @@ class TemporalAttentionTok(nn.Module):
         cos, sin = self.rope.get_rotary_emb(T, x.device)
         cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
         sin = sin.unsqueeze(0).unsqueeze(0)
-        q = self.rope.apply_rotary(q, cos, sin)
-        k = self.rope.apply_rotary(k, cos, sin)
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
 
         # Scaled dot-product attention
         attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
@@ -901,21 +798,51 @@ class TransformerTokenizer(nn.Module):
         # Output activation
         self.output_act = nn.Sigmoid()
 
+    def make_mask(
+        self,
+        B: int,
+        T: int,
+        mask_ratio: float,
+        device: torch.device,
+    ) -> torch.Tensor | None:
+        """Generate MAE mask outside of torch.compile boundary.
+
+        Args:
+            B: batch size
+            T: sequence length
+            mask_ratio: fraction of patches to mask
+            device: tensor device
+
+        Returns:
+            (B, T*num_patches) boolean mask or None if mask_ratio == 0
+        """
+        num_masked = round(mask_ratio * self.num_patches)
+        if num_masked == 0:
+            return None
+        mask_indices = torch.zeros(
+            B, T, self.num_patches, dtype=torch.bool, device=device
+        )
+        for b in range(B):
+            for t in range(T):
+                perm = torch.randperm(self.num_patches, device=device)
+                mask_indices[b, t, perm[:num_masked]] = True
+        return mask_indices.reshape(B, T * self.num_patches)
+
     def encode(
         self,
         x: torch.Tensor,
-        mask_ratio: float = 0.0,
+        mask_indices: torch.Tensor | None = None,
     ) -> dict:
         """Encode frames to latent tokens.
 
         Args:
             x: (B, T, C, H, W) or (B, C, H, W) input frames in [0, 1]
-            mask_ratio: fraction of patches to mask (for MAE training)
+            mask_indices: (B, T*num_patches) boolean mask from make_mask(), or None
 
         Returns:
             dict with:
                 - latent: (B, T*num_latents, latent_dim) bottlenecked latents
-                - mask_indices: (B, T*num_patches) boolean mask (if mask_ratio > 0)
+                - mask_indices: passed through if provided
         """
         # Handle single frame
         if x.dim() == 4:
@@ -930,16 +857,11 @@ class TransformerTokenizer(nn.Module):
         patches = self.patch_embed(x_flat)  # (B*T, num_patches, D)
         patches = patches.reshape(B, T * self.num_patches, self.embed_dim)
 
-        # MAE masking
-        mask_indices = None
-        if mask_ratio > 0:
-            mask_indices = torch.rand(B, T * self.num_patches, device=x.device) < mask_ratio
-
         # Encode
         latents = self.encoder(
             patches, T,
             mask_indices=mask_indices,
-            mask_embed=self.mask_embed if mask_ratio > 0 else None,
+            mask_embed=self.mask_embed if mask_indices is not None else None,
         )
 
         # Bottleneck
@@ -982,18 +904,20 @@ class TransformerTokenizer(nn.Module):
         self,
         x: torch.Tensor,
         mask_ratio: float = 0.0,
+        mask_indices: torch.Tensor | None = None,
     ) -> dict:
         """Forward pass: encode then decode.
 
         Args:
             x: (B, T, C, H, W) or (B, C, H, W) input frames in [0, 1]
-            mask_ratio: MAE mask ratio (0 = no masking, train mode uses ~0.75)
+            mask_ratio: MAE mask ratio — used only if mask_indices is None
+            mask_indices: pre-computed mask from make_mask() (preferred)
 
         Returns:
             dict with:
                 - reconstruction: (B, T, C, H, W) reconstructed frames
                 - latent: (B, T*num_latents, latent_dim) bottlenecked latents
-                - mask_indices: (B, T*num_patches) if mask_ratio > 0
+                - mask_indices: (B, T*num_patches) if masking was applied
         """
         # Handle single frame
         single_frame = x.dim() == 4
@@ -1002,8 +926,12 @@ class TransformerTokenizer(nn.Module):
 
         B, T = x.shape[:2]
 
+        # Generate mask outside compiled boundary if not provided
+        if mask_indices is None and mask_ratio > 0:
+            mask_indices = self.make_mask(B, T, mask_ratio, x.device)
+
         # Encode
-        enc_out = self.encode(x, mask_ratio)
+        enc_out = self.encode(x, mask_indices)
         latents = enc_out["latent"]
 
         # Decode
