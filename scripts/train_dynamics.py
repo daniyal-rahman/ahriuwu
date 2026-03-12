@@ -16,8 +16,6 @@ Checkpoint directories are automatically organized as:
 import argparse
 import json
 import random
-import signal
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -36,18 +34,13 @@ from ahriuwu.models import (
     RunningRMS,
 )
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
-from ahriuwu.utils.training import add_training_args, create_optimizer, create_wsd_schedule, save_checkpoint, load_checkpoint, should_yield_to_queue
+from ahriuwu.utils.training import (
+    add_training_args, create_optimizer, create_wsd_schedule,
+    save_checkpoint, load_checkpoint, should_yield_to_queue, is_queue_yield_enabled,
+    PreemptionState, install_preemption_handlers, compute_dynamic_save_interval,
+)
 
-_preempt = threading.Event()
-
-
-def _install_preemption_handler():
-    """Install SIGTERM handler for graceful slurm preemption."""
-    def _handler(signum, frame):
-        if not _preempt.is_set():
-            print("\nSIGTERM received — will save checkpoint and exit.", flush=True)
-            _preempt.set()
-    signal.signal(signal.SIGTERM, _handler)
+_preempt = PreemptionState()
 
 
 def create_run_directory(base_dir: Path, args: argparse.Namespace) -> Path:
@@ -569,8 +562,22 @@ def train_epoch(
                     f"({batches_per_sec:.1f} batch/s){warning_str}"
                 )
 
-        # Step-based checkpoint saving
-        if args.save_steps > 0 and global_step % args.save_steps == 0 and checkpoint_dir is not None:
+        # Compute effective save interval (dynamic or explicit)
+        if args.save_steps > 0:
+            effective_save_interval = args.save_steps
+        else:
+            effective_save_interval = compute_dynamic_save_interval(
+                global_step, time.time() - start_time, args.checkpoint_minutes
+            )
+
+        # Step-based checkpoint saving (skip step 0 to avoid spam)
+        save_at_boundary = (
+            checkpoint_dir is not None
+            and global_step > 0
+            and effective_save_interval > 0
+            and global_step % effective_save_interval == 0
+        )
+        if save_at_boundary:
             step_path = checkpoint_dir / f"dynamics_step_{global_step:07d}.pt"
             save_checkpoint(
                 step_path, model, optimizer, scaler, epoch, global_step,
@@ -589,16 +596,45 @@ def train_epoch(
                     raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
                 )
 
-            # Yield if SIGTERM received or other jobs are waiting for resources
-            if _preempt.is_set() or should_yield_to_queue():
-                print(f"Yielding at step {global_step} (checkpoint saved). Exiting.", flush=True)
-                return {
-                    "loss": total_loss / max(num_batches, 1),
-                    "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
-                    "pred_std": 0.0,
-                    "global_step": global_step,
-                    "preempted": True,
-                }
+        # Periodic queue check (~every 60s): if yield_to_queue file exists and a job is waiting
+        if not _preempt.should_save_now() and global_step > 0:
+            elapsed = time.time() - start_time
+            if elapsed > 60 and int(elapsed) % 60 < 2 and is_queue_yield_enabled(base_checkpoint_dir) and should_yield_to_queue():
+                _preempt.immediate.set()
+
+        # Immediate preemption: check every optimizer step (SIGUSR1 or queue yield)
+        if _preempt.should_save_now() and checkpoint_dir is not None and global_step > 0:
+            if not save_at_boundary:
+                latest_path = checkpoint_dir / "dynamics_latest.pt"
+                save_checkpoint(
+                    latest_path, model, optimizer, scaler, epoch, global_step,
+                    raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+                )
+                if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
+                    base_latest = base_checkpoint_dir / "dynamics_latest.pt"
+                    save_checkpoint(
+                        base_latest, model, optimizer, scaler, epoch, global_step,
+                        raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+                    )
+            print(f"Immediate preemption at step {global_step}. Exiting.", flush=True)
+            return {
+                "loss": total_loss / max(num_batches, 1),
+                "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
+                "pred_std": 0.0,
+                "global_step": global_step,
+                "preempted": True,
+            }
+
+        # Delayed preemption: check at checkpoint boundaries (SIGTERM)
+        if save_at_boundary and _preempt.should_save_at_boundary():
+            print(f"Yielding at step {global_step} (checkpoint saved). Exiting.", flush=True)
+            return {
+                "loss": total_loss / max(num_batches, 1),
+                "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
+                "pred_std": 0.0,
+                "global_step": global_step,
+                "preempted": True,
+            }
 
         batch_idx += 1
 
@@ -629,7 +665,7 @@ def train_epoch(
 
 def main():
     args = parse_args()
-    _install_preemption_handler()
+    install_preemption_handlers(_preempt)
 
     print("=" * 60)
     print("Dynamics Model Training")
