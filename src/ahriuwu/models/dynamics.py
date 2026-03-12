@@ -1,12 +1,13 @@
 """Dynamics Transformer for world model.
 
 Predicts future latent frames using diffusion with factorized attention.
-Architecture follows DreamerV4 with simplifications for MVP:
+Architecture follows DreamerV4:
 
 - Factorized attention: spatial within frames, temporal across frames
 - Temporal attention every 4th layer (efficiency optimization)
 - X-prediction objective (predicts clean data directly)
-- RMSNorm, SwiGLU, learned positional embeddings
+- RMSNorm, SwiGLU, RoPE (2D spatial, 1D temporal)
+- Action and conditioning as explicit sequence tokens (not broadcast/AdaLN)
 - Agent tokens for policy/reward prediction (Phase 2+)
 
 References:
@@ -21,8 +22,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
-from .diffusion import TimestepEmbedding
-from .layers import RMSNorm, QKNorm, SwiGLU, soft_cap_attention
+from .layers import (
+    RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
+    RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
+)
 
 # Action space constants (must match data/actions.py)
 MOVEMENT_DIM = 2  # Continuous (x, y) in [0, 1]
@@ -30,15 +33,18 @@ MOVEMENT_CLASSES = 18  # Legacy, deprecated
 ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
-def _checkpoint_block_forward(block, x, time_emb, independent_frames):
+def _checkpoint_block_forward(block, x, independent_frames):
     """Wrapper for gradient checkpointing that passes independent_frames as keyword arg."""
-    return block(x, time_emb, independent_frames=independent_frames)
+    return block(x, independent_frames=independent_frames)
 
 
 class SpatialAttention(nn.Module):
-    """Self-attention within each frame.
+    """Self-attention within each frame with 2D RoPE.
 
-    Attends over 256 spatial tokens (16×16 grid) independently for each frame.
+    Attends over spatial tokens (latent + register + action + condition tokens)
+    independently for each frame. RoPE is applied only to latent tokens that
+    have 2D spatial positions.
+
     Supports GQA (Grouped Query Attention), QKNorm, and soft capping.
 
     Reference: DreamerV4 Section 3.2
@@ -53,6 +59,7 @@ class SpatialAttention(nn.Module):
         dropout: float = 0.0,
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        spatial_size: int = 16,
     ):
         """Initialize spatial attention.
 
@@ -64,6 +71,7 @@ class SpatialAttention(nn.Module):
             dropout: Dropout probability
             use_qk_norm: Whether to use QK normalization
             soft_cap: Soft cap value for attention logits (None = no capping)
+            spatial_size: Grid size for 2D RoPE (e.g. 16 for 16x16)
         """
         super().__init__()
         self.dim = dim
@@ -73,6 +81,7 @@ class SpatialAttention(nn.Module):
         self.scale = self.head_dim ** -0.5
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
+        self.spatial_tokens = spatial_size * spatial_size  # Number of tokens that get RoPE
 
         # GQA: num_heads must be divisible by num_kv_heads
         assert num_heads % self.num_kv_heads == 0, \
@@ -94,11 +103,15 @@ class SpatialAttention(nn.Module):
         else:
             self.qk_norm = None
 
+        # 2D RoPE for spatial positions (only applied to latent tokens)
+        self.rope_2d = RotaryEmbedding2D(self.head_dim, spatial_size)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
 
         Args:
-            x: (B, T, S, D) where S=256 spatial tokens
+            x: (B, T, S, D) where S = latent_tokens + register_tokens + action_token + cond_token
+               The first self.spatial_tokens entries are latent tokens with 2D spatial structure.
 
         Returns:
             (B, T, S, D) attended features
@@ -118,13 +131,28 @@ class SpatialAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        # Apply QKNorm if enabled
+        # Apply QKNorm BEFORE RoPE (paper: QKNorm + RoPE together)
         if self.qk_norm is not None:
             q, k = self.qk_norm(q, k)
 
+        # Apply 2D RoPE to latent tokens only (first spatial_tokens positions)
+        Nz = self.spatial_tokens
+        if Nz > 0 and Nz <= S:
+            cos, sin = self.rope_2d.get_rotary_emb(Nz, x.device)
+            # cos, sin: (Nz, head_dim) -> (1, 1, Nz, head_dim)
+            cos = cos.unsqueeze(0).unsqueeze(0)
+            sin = sin.unsqueeze(0).unsqueeze(0)
+
+            # Apply RoPE only to latent token positions
+            q_latent = apply_rotary_emb(q[:, :, :Nz, :], cos, sin)
+            k_latent = apply_rotary_emb(k[:, :, :Nz, :], cos, sin)
+
+            q = torch.cat([q_latent, q[:, :, Nz:, :]], dim=2)
+            # For GQA, k has num_kv_heads which may differ from num_heads
+            k = torch.cat([k_latent, k[:, :, Nz:, :]], dim=2)
+
         # GQA: repeat KV heads to match Q heads
         if self.num_groups > 1:
-            # (B*T, num_kv_heads, S, head_dim) -> (B*T, num_heads, S, head_dim)
             k = k.repeat_interleave(self.num_groups, dim=1)
             v = v.repeat_interleave(self.num_groups, dim=1)
 
@@ -148,7 +176,7 @@ class SpatialAttention(nn.Module):
 
 
 class TemporalAttention(nn.Module):
-    """Causal self-attention across frames.
+    """Causal self-attention across frames with 1D RoPE.
 
     Attends over T frames at each spatial position independently.
     Uses causal mask so frame t can only attend to frames 0..t.
@@ -210,7 +238,10 @@ class TemporalAttention(nn.Module):
         else:
             self.qk_norm = None
 
-        # Pre-compute causal mask
+        # 1D RoPE for temporal positions
+        self.rope_1d = RotaryEmbedding1D(self.head_dim, max_seq_len)
+
+        # Pre-compute causal mask (True = masked out)
         self.register_buffer(
             "causal_mask",
             torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool(),
@@ -245,9 +276,16 @@ class TemporalAttention(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        # Apply QKNorm if enabled
+        # Apply QKNorm BEFORE RoPE
         if self.qk_norm is not None:
             q, k = self.qk_norm(q, k)
+
+        # Apply 1D RoPE for temporal positions
+        cos, sin = self.rope_1d.get_rotary_emb(T, x.device)
+        cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
+        sin = sin.unsqueeze(0).unsqueeze(0)
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
 
         # GQA: repeat KV heads to match Q heads
         if self.num_groups > 1:
@@ -264,7 +302,6 @@ class TemporalAttention(nn.Module):
         # Apply causal mask (or independent frame mask)
         if independent_frames:
             # Each frame only attends to itself (diagonal mask)
-            # Create identity-like mask: only diagonal elements allowed
             diag_mask = ~torch.eye(T, dtype=torch.bool, device=x.device)
             attn = attn.masked_fill(diag_mask, float("-inf"))
         else:
@@ -285,8 +322,9 @@ class TemporalAttention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Transformer block with either spatial or temporal attention.
+    """Standard pre-norm transformer block with either spatial or temporal attention.
 
+    Uses RoPE instead of AdaLN for position/conditioning information.
     Supports GQA, QKNorm, soft capping, and independent frame mode.
     """
 
@@ -301,6 +339,7 @@ class TransformerBlock(nn.Module):
         max_seq_len: int = 256,
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        spatial_size: int = 16,
     ):
         """Initialize transformer block.
 
@@ -314,6 +353,7 @@ class TransformerBlock(nn.Module):
             max_seq_len: Maximum sequence length
             use_qk_norm: Whether to use QK normalization
             soft_cap: Soft cap value for attention logits
+            spatial_size: Grid size for 2D spatial RoPE
         """
         super().__init__()
         self.attn_type = attn_type
@@ -322,7 +362,8 @@ class TransformerBlock(nn.Module):
         if attn_type == "spatial":
             self.attn = SpatialAttention(
                 dim, num_heads, num_kv_heads, head_dim, dropout,
-                use_qk_norm=use_qk_norm, soft_cap=soft_cap
+                use_qk_norm=use_qk_norm, soft_cap=soft_cap,
+                spatial_size=spatial_size,
             )
         else:
             self.attn = TemporalAttention(
@@ -333,60 +374,26 @@ class TransformerBlock(nn.Module):
         self.norm2 = RMSNorm(dim)
         self.ffn = SwiGLU(dim, dropout=dropout)
 
-        # AdaLN modulation for timestep conditioning
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(dim, dim * 6),
-        )
-
     def forward(
         self,
         x: torch.Tensor,
-        time_emb: torch.Tensor | None = None,
         independent_frames: bool = False,
     ) -> torch.Tensor:
-        """Forward pass.
+        """Forward pass (standard pre-norm transformer).
 
         Args:
             x: (B, T, S, D) features
-            time_emb: (B, D) or (B, T, D) timestep embedding for conditioning
             independent_frames: If True, treat frames as independent (temporal attention only)
 
         Returns:
             (B, T, S, D) transformed features
         """
-        if time_emb is not None:
-            # AdaLN modulation
-            # Expand time_emb to match x shape: (B, D) -> (B, 1, 1, D*6)
-            if time_emb.dim() == 2:
-                modulation = self.adaLN_modulation(time_emb).unsqueeze(1).unsqueeze(1)
-            else:
-                # (B, T, D) -> (B, T, 1, D*6)
-                modulation = self.adaLN_modulation(time_emb).unsqueeze(2)
-
-            shift1, scale1, gate1, shift2, scale2, gate2 = modulation.chunk(6, dim=-1)
-
-            # Attention with modulation
-            h = self.norm1(x)
-            h = h * (1 + scale1) + shift1
-            if self.attn_type == "temporal":
-                h = self.attn(h, independent_frames=independent_frames)
-            else:
-                h = self.attn(h)
-            x = x + gate1 * h
-
-            # FFN with modulation
-            h = self.norm2(x)
-            h = h * (1 + scale2) + shift2
-            h = self.ffn(h)
-            x = x + gate2 * h
+        # Standard pre-norm transformer (no AdaLN)
+        if self.attn_type == "temporal":
+            x = x + self.attn(self.norm1(x), independent_frames=independent_frames)
         else:
-            # Standard pre-norm transformer
-            if self.attn_type == "temporal":
-                x = x + self.attn(self.norm1(x), independent_frames=independent_frames)
-            else:
-                x = x + self.attn(self.norm1(x))
-            x = x + self.ffn(self.norm2(x))
+            x = x + self.attn(self.norm1(x))
+        x = x + self.ffn(self.norm2(x))
 
         return x
 
@@ -701,10 +708,14 @@ class DynamicsTransformer(nn.Module):
     Architecture:
     - Input projection: latent tokens to model dim
     - Register tokens for improved information flow
-    - Spatial + temporal position embeddings
-    - Timestep embedding (diffusion)
+    - 2D RoPE for spatial attention, 1D RoPE for temporal attention
+    - Action and conditioning (tau + step_size) as explicit sequence tokens
     - Transformer blocks with factorized attention (GQA, QKNorm, soft capping)
     - Output projection back to latent dim
+
+    Spatial sequence per time step:
+        [latent_tokens (with 2D RoPE), register_tokens (no RoPE),
+         action_token (no RoPE), condition_token (no RoPE)]
 
     Reference: DreamerV4 Section 3.2
     """
@@ -712,7 +723,7 @@ class DynamicsTransformer(nn.Module):
     def __init__(
         self,
         latent_dim: int = 32,
-        spatial_size: int = 16,  # 16×16 = 256 spatial tokens
+        spatial_size: int = 16,  # 16x16 = 256 spatial tokens
         model_dim: int = 512,
         num_layers: int = 12,
         num_heads: int = 8,
@@ -739,7 +750,7 @@ class DynamicsTransformer(nn.Module):
 
         Args:
             latent_dim: Dimension of input latent tokens (from tokenizer)
-            spatial_size: Size of spatial grid (16 for 16×16)
+            spatial_size: Size of spatial grid (16 for 16x16)
             model_dim: Model hidden dimension
             num_layers: Number of transformer blocks
             num_heads: Number of attention heads (query heads)
@@ -771,8 +782,14 @@ class DynamicsTransformer(nn.Module):
         self.soft_cap = soft_cap
         self.gradient_checkpointing = gradient_checkpointing
 
-        # Total spatial tokens including registers
-        self.total_spatial_tokens = self.spatial_tokens + num_register_tokens
+        # Count extra tokens appended after latent+register tokens
+        # Always have 1 conditioning token (tau + step_size)
+        self.num_extra_tokens = 1  # condition token
+        if use_actions:
+            self.num_extra_tokens += 1  # action token
+
+        # Total spatial tokens per time step: latent + register + action + condition
+        self.total_spatial_tokens = self.spatial_tokens + num_register_tokens + self.num_extra_tokens
 
         # Input projection: (B, T, C, H, W) -> (B, T, S, D)
         self.input_proj = nn.Linear(latent_dim, model_dim)
@@ -785,20 +802,18 @@ class DynamicsTransformer(nn.Module):
         else:
             self.register_tokens = None
 
-        # Positional embeddings (for original spatial tokens only, registers have none)
-        self.spatial_pos = nn.Parameter(
-            torch.randn(1, 1, self.spatial_tokens, model_dim) * 0.02
-        )
-        self.temporal_pos = nn.Parameter(
-            torch.randn(1, max_seq_len, 1, model_dim) * 0.02
-        )
+        # Discrete embeddings for tau and step_size (DreamerV4 uses lookup tables)
+        # tau lives on a grid of k_max levels: {0, 1/k_max, ..., (k_max-1)/k_max}
+        # step_size is power of 2: {1, 2, 4, ..., k_max} -> index by log2(d)
+        self.k_max = 64
+        self.num_tau_levels = self.k_max  # 64 discrete levels
+        self.num_step_sizes = int(math.log2(self.k_max)) + 1  # 7: d=1,2,4,8,16,32,64
+        self.tau_embed = nn.Embedding(self.num_tau_levels, model_dim)
+        self.step_embed = nn.Embedding(self.num_step_sizes, model_dim)
+        # Project concatenated [tau_emb, step_emb] to model_dim
+        self.cond_proj = nn.Linear(model_dim * 2, model_dim)
 
-        # Timestep embedding for diffusion
-        self.time_embed = TimestepEmbedding(model_dim)
-        # Step size embedding for shortcut forcing
-        self.step_embed = TimestepEmbedding(model_dim)
-
-        # Factorized action embeddings
+        # Factorized action embeddings -> produces one action token per time step
         if use_actions:
             self.action_embed = nn.ModuleDict({
                 'movement': nn.Linear(MOVEMENT_DIM, model_dim),  # continuous (x, y) -> D
@@ -807,7 +822,7 @@ class DynamicsTransformer(nn.Module):
             # Learned "no action" embedding for unlabeled videos
             self.no_action_embed = nn.Parameter(torch.randn(1, 1, model_dim) * 0.02)
 
-        # Transformer blocks with GQA, QKNorm, and soft capping
+        # Transformer blocks with GQA, QKNorm, soft capping, and RoPE
         self.blocks = nn.ModuleList()
         for i in range(num_layers):
             # Temporal attention every temporal_every layers (on the last of each group)
@@ -825,6 +840,7 @@ class DynamicsTransformer(nn.Module):
                     max_seq_len=max_seq_len,
                     use_qk_norm=use_qk_norm,
                     soft_cap=soft_cap,
+                    spatial_size=spatial_size,
                 )
             )
 
@@ -886,6 +902,49 @@ class DynamicsTransformer(nn.Module):
 
         return emb
 
+    def _build_condition_token(
+        self,
+        tau: torch.Tensor,
+        step_size: torch.Tensor | None,
+        B: int,
+        T: int,
+    ) -> torch.Tensor:
+        """Build conditioning token from discrete tau and step_size embeddings.
+
+        Args:
+            tau: Diffusion timesteps, shape (B,) or (B, T), values in [0, 1)
+                 Must be grid-aligned: multiples of 1/k_max
+            step_size: Step sizes as integers {1, 2, 4, ..., k_max}, shape (B,) or (B, T).
+                       None defaults to d=1 (finest).
+            B: Batch size
+            T: Sequence length
+
+        Returns:
+            (B, T, D) conditioning token
+        """
+        # Convert continuous tau to discrete index: tau * k_max -> integer in [0, k_max)
+        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
+        tau_emb = self.tau_embed(tau_idx)  # (B, D) or (B, T, D)
+
+        # Convert step_size (integer power of 2) to index via log2
+        if step_size is not None:
+            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
+        else:
+            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)  # d=1 -> log2(1)=0
+        step_emb = self.step_embed(step_idx)  # (B, D) or (B, T, D)
+
+        # Expand to (B, T, D) if needed
+        if tau_emb.dim() == 2:
+            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
+        if step_emb.dim() == 2:
+            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
+
+        # Concatenate and project: [tau_emb, step_emb] -> (B, T, D)
+        cond = torch.cat([tau_emb, step_emb], dim=-1)  # (B, T, 2*D)
+        cond = self.cond_proj(cond)  # (B, T, D)
+
+        return cond
+
     def _init_weights(self):
         """Initialize weights with small values for stable training."""
         for name, p in self.named_parameters():
@@ -911,8 +970,8 @@ class DynamicsTransformer(nn.Module):
         Args:
             z_tau: Noisy latents, shape (B, T, C, H, W)
             tau: Diffusion timesteps, shape (B,) or (B, T)
-            step_size: Optional step size for shortcut forcing, shape (B,)
-                       Normalized to [0, 1] where 1.0 = k_max steps
+            step_size: Optional step size for shortcut forcing, shape (B,) or (B, T).
+                       Integer powers of 2: {1, 2, 4, 8, 16, 32, 64}. None defaults to d=1.
             task_id: Optional task ID for multi-task conditioning, shape (B,)
             actions: Optional action dict with 'movement', 'target', and ability keys.
                      Each value is (B, T) tensor of class indices.
@@ -929,17 +988,13 @@ class DynamicsTransformer(nn.Module):
                     agent_out: Agent token outputs, shape (B, T, D) for heads
         """
         B, T, C, H, W = z_tau.shape
-        assert H == W == self.spatial_size, f"Expected {self.spatial_size}×{self.spatial_size}, got {H}×{W}"
+        assert H == W == self.spatial_size, f"Expected {self.spatial_size}x{self.spatial_size}, got {H}x{W}"
 
         # Reshape to (B, T, S, C) where S = H*W
         x = z_tau.view(B, T, C, -1).permute(0, 1, 3, 2)  # (B, T, S, C)
 
         # Project to model dim
-        x = self.input_proj(x)  # (B, T, S, D)
-
-        # Add positional embeddings to spatial tokens
-        x = x + self.spatial_pos[:, :, :self.spatial_tokens, :]
-        x = x + self.temporal_pos[:, :T, :, :]
+        x = self.input_proj(x)  # (B, T, S, D) where S = spatial_tokens
 
         # Add register tokens if enabled
         if self.register_tokens is not None:
@@ -948,41 +1003,36 @@ class DynamicsTransformer(nn.Module):
             # Concatenate: (B, T, S+R, D)
             x = torch.cat([x, registers], dim=2)
 
-        # Add action conditioning (broadcast to all spatial tokens including registers)
+        # Build action token and append to sequence
         if self.use_actions:
             if actions is not None:
-                action_emb = self.embed_actions(actions)  # (B, T, D)
+                action_token = self.embed_actions(actions)  # (B, T, D)
             else:
-                action_emb = self.no_action_embed.expand(B, T, -1)
-            x = x + action_emb.unsqueeze(2)  # (B, T, 1, D) broadcast to (B, T, S+R, D)
+                action_token = self.no_action_embed.expand(B, T, -1)
+            # (B, T, D) -> (B, T, 1, D) and concatenate
+            x = torch.cat([x, action_token.unsqueeze(2)], dim=2)
 
-        # Get timestep embedding
-        time_emb = self.time_embed(tau)  # (B, D) or (B, T, D)
+        # Build conditioning token (tau + step_size) and append to sequence
+        cond_token = self._build_condition_token(tau, step_size, B, T)  # (B, T, D)
+        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)
 
-        # Add step size embedding for shortcut forcing
-        if step_size is not None:
-            step_emb = self.step_embed(step_size)  # (B, D)
-            # Handle broadcasting when tau is per-timestep (B, T)
-            if time_emb.dim() == 3:  # (B, T, D)
-                step_emb = step_emb.unsqueeze(1)  # (B, 1, D) for broadcasting
-            time_emb = time_emb + step_emb  # additive combination
+        # x is now (B, T, total_spatial_tokens, D)
+        # Layout: [latent_tokens, register_tokens, action_token?, cond_token]
 
-        # Transformer blocks (z tokens + registers - agent tokens processed separately)
+        # Transformer blocks
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
                 x = checkpoint(
                     _checkpoint_block_forward,
-                    block, x, time_emb, independent_frames,
+                    block, x, independent_frames,
                     use_reentrant=False,
                 )
             else:
-                x = block(x, time_emb, independent_frames=independent_frames)
+                x = block(x, independent_frames=independent_frames)
 
-        # Strip register tokens before output projection
-        if self.register_tokens is not None:
-            x_spatial = x[:, :, :self.spatial_tokens, :]  # (B, T, S, D)
-        else:
-            x_spatial = x
+        # Strip extra tokens (register, action, condition) before output projection
+        # Only keep latent tokens
+        x_spatial = x[:, :, :self.spatial_tokens, :]  # (B, T, S, D)
 
         # Output projection for z prediction
         z_out = self.norm_out(x_spatial)
@@ -1005,7 +1055,7 @@ class DynamicsTransformer(nn.Module):
             agent_tokens = agent_tokens + self.agent_temporal_pos[:, :T, :]
 
             # Process through agent blocks
-            # Agent tokens attend to z tokens (x includes registers), but z tokens don't see agent tokens
+            # Agent tokens attend to z tokens (x includes all tokens), but z tokens don't see agent tokens
             for agent_block in self.agent_blocks:
                 if self.gradient_checkpointing and self.training:
                     agent_tokens = checkpoint(
@@ -1089,7 +1139,7 @@ def create_dynamics(
 
     return DynamicsTransformer(
         latent_dim=latent_dim,
-        spatial_size=16,  # 256 latent tokens = 16×16 spatial grid
+        spatial_size=16,  # 256 latent tokens = 16x16 spatial grid
         use_agent_tokens=use_agent_tokens,
         num_tasks=num_tasks,
         agent_layers=agent_layers,

@@ -6,6 +6,8 @@ Phase 3 (Imagination Training): ValueHead (initialized later)
 Reference: DreamerV4 Section 3.3
 """
 
+import copy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -58,10 +60,10 @@ class RewardHead(nn.Module):
             nn.Linear(hidden_dim, num_buckets) for _ in range(mtp_length)
         ])
 
-        # Initialize output weights to small values for stable start
-        # Note: True zero init breaks gradient flow! Use small values instead.
+        # Zero-init output heads: initial predictions are zero/uniform,
+        # which is a good starting point. Hidden layers keep default init.
         for head in self.heads:
-            nn.init.normal_(head.weight, std=0.01)
+            nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
 
         # Register bucket centers as buffer
@@ -155,6 +157,15 @@ class PolicyHead(nn.Module):
         self.movement_heads = nn.ModuleList([
             nn.Linear(hidden_dim, movement_dim) for _ in range(mtp_length)
         ])
+
+        # Zero-init output heads: initial predictions are zero/uniform,
+        # which is a good starting point. Hidden layers keep default init.
+        for head in self.heads:
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
+        for head in self.movement_heads:
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
 
     def forward(self, agent_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Predict action logits and movement coordinates.
@@ -260,9 +271,9 @@ class ValueHead(nn.Module):
             nn.Linear(hidden_dim, num_buckets),
         )
 
-        # Initialize output weights to small values for stable start
-        # Note: True zero init breaks gradient flow! Use small values instead.
-        nn.init.normal_(self.mlp[-1].weight, std=0.01)
+        # Zero-init output layer: initial predictions are zero/uniform,
+        # which is a good starting point. Hidden layers keep default init.
+        nn.init.zeros_(self.mlp[-1].weight)
         nn.init.zeros_(self.mlp[-1].bias)
 
         # Register bucket centers as buffer
@@ -296,3 +307,245 @@ class ValueHead(nn.Module):
         logits = self.forward(agent_tokens)
         symlog_values = twohot_decode(logits, self.bucket_centers)
         return symexp(symlog_values)
+
+
+# ---------------------------------------------------------------------------
+# Frozen behavioral prior (Fix 3)
+# ---------------------------------------------------------------------------
+
+def create_behavioral_prior(policy_head: PolicyHead) -> PolicyHead:
+    """Create a frozen deep copy of a policy head to serve as behavioral prior.
+
+    The prior is used for KL regularization during imagination training (Phase 3)
+    to prevent the policy from diverging too far from the behavior-cloned policy.
+
+    Args:
+        policy_head: Trained policy head (typically after Phase 2)
+
+    Returns:
+        Frozen deep copy of the policy head (all requires_grad=False)
+    """
+    prior = copy.deepcopy(policy_head)
+    prior.requires_grad_(False)
+    return prior
+
+
+def kl_to_prior(
+    policy_logits: torch.Tensor,
+    prior_logits: torch.Tensor,
+) -> torch.Tensor:
+    """Compute KL divergence from current policy to frozen prior (categorical).
+
+    KL(policy || prior) = sum(policy * (log policy - log prior))
+
+    Args:
+        policy_logits: (..., num_actions) logits from current policy
+        prior_logits: (..., num_actions) logits from frozen behavioral prior
+
+    Returns:
+        (...,) KL divergence per state (non-negative)
+    """
+    policy_log_probs = F.log_softmax(policy_logits, dim=-1)
+    prior_log_probs = F.log_softmax(prior_logits, dim=-1)
+    policy_probs = policy_log_probs.exp()
+
+    kl = (policy_probs * (policy_log_probs - prior_log_probs)).sum(dim=-1)
+    return kl
+
+
+def kl_to_prior_continuous(
+    policy_mean: torch.Tensor,
+    policy_std: torch.Tensor,
+    prior_mean: torch.Tensor,
+    prior_std: torch.Tensor,
+) -> torch.Tensor:
+    """Compute KL divergence for continuous (Gaussian) distributions.
+
+    KL(N(mu1,s1) || N(mu2,s2)) = log(s2/s1) + (s1^2 + (mu1-mu2)^2)/(2*s2^2) - 0.5
+
+    Summed over the last dimension (e.g., 2 for x,y movement).
+
+    Args:
+        policy_mean: (..., D) mean of current policy
+        policy_std: (..., D) std of current policy
+        prior_mean: (..., D) mean of frozen prior
+        prior_std: (..., D) std of frozen prior
+
+    Returns:
+        (...,) KL divergence per state
+    """
+    var_ratio = (policy_std / prior_std).pow(2)
+    diff_sq = ((policy_mean - prior_mean) / prior_std).pow(2)
+    kl = 0.5 * (var_ratio + diff_sq - 1 - var_ratio.log())
+    return kl.sum(dim=-1)
+
+
+# ---------------------------------------------------------------------------
+# Freeze/unfreeze utilities for imagination training (Fix 4)
+# ---------------------------------------------------------------------------
+
+def freeze_for_imagination(
+    model: nn.Module,
+    dynamics_attr: str = "dynamics",
+    freeze_reward: bool = False,
+) -> nn.Module:
+    """Freeze the dynamics transformer for imagination training.
+
+    During imagination (Phase 3), gradients flow through the frozen dynamics
+    model to train the policy and value heads. The dynamics weights themselves
+    are not updated.
+
+    Args:
+        model: Agent model containing dynamics, policy, value, reward submodules
+        dynamics_attr: Attribute name for the dynamics transformer
+        freeze_reward: If False (default), reward head stays unfrozen
+            (paper trains reward head during imagination too)
+
+    Returns:
+        The model (modified in-place)
+    """
+    # Freeze dynamics transformer
+    dynamics = getattr(model, dynamics_attr, None)
+    if dynamics is not None:
+        dynamics.requires_grad_(False)
+
+    # Optionally freeze reward head
+    if freeze_reward:
+        reward_head = getattr(model, "reward_head", None)
+        if reward_head is not None:
+            reward_head.requires_grad_(False)
+
+    return model
+
+
+def unfreeze_all(model: nn.Module) -> nn.Module:
+    """Unfreeze all parameters in the model.
+
+    Call this to restore full training after imagination phase, or when
+    switching between training phases.
+
+    Args:
+        model: Agent model
+
+    Returns:
+        The model (modified in-place)
+    """
+    model.requires_grad_(True)
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Agent token interleaving for dynamics sequence (Fix 5)
+# ---------------------------------------------------------------------------
+
+class AgentTokenProvider(nn.Module):
+    """Produces agent tokens for insertion into the dynamics transformer sequence.
+
+    During finetuning (Phase 3), agent tokens are concatenated into the dynamics
+    spatial sequence: [latent_tokens, register_tokens, action_token, condition_token, agent_tokens].
+
+    Agent tokens attend to everything in the sequence, but other tokens do NOT
+    attend to agent tokens (to prevent causal confusion -- future predictions
+    should not be influenced by agent-specific tokens).
+
+    After the transformer processes the full sequence, agent token embeddings are
+    extracted and passed through the policy/reward/value MLP heads.
+
+    Args:
+        embed_dim: Dimension matching the dynamics transformer
+        num_agent_tokens: Number of agent tokens to insert (default 1)
+        task_embed_dim: Dimension of task embedding input (0 = no task input)
+    """
+
+    def __init__(
+        self,
+        embed_dim: int,
+        num_agent_tokens: int = 1,
+        task_embed_dim: int = 0,
+    ):
+        super().__init__()
+        self.embed_dim = embed_dim
+        self.num_agent_tokens = num_agent_tokens
+
+        # Learned agent token embeddings
+        self.agent_tokens = nn.Parameter(
+            torch.randn(1, num_agent_tokens, embed_dim) * 0.02
+        )
+
+        # Optional task embedding projection
+        if task_embed_dim > 0:
+            self.task_proj = nn.Linear(task_embed_dim, embed_dim)
+        else:
+            self.task_proj = None
+
+    def get_agent_tokens(
+        self,
+        batch_size: int,
+        task_embed: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Generate agent tokens for concatenation into dynamics sequence.
+
+        Args:
+            batch_size: Batch size B
+            task_embed: (B, task_embed_dim) optional task embedding
+
+        Returns:
+            (B, num_agent_tokens, embed_dim) agent tokens
+        """
+        tokens = self.agent_tokens.expand(batch_size, -1, -1).clone()
+
+        if task_embed is not None and self.task_proj is not None:
+            # Project task embedding and add to agent tokens
+            task_feat = self.task_proj(task_embed)  # (B, embed_dim)
+            tokens = tokens + task_feat.unsqueeze(1)
+
+        return tokens
+
+    @staticmethod
+    def build_agent_attention_mask(
+        num_non_agent: int,
+        num_agent: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Build attention mask for agent token interleaving.
+
+        Agent tokens can attend to everything (non-agent + agent).
+        Non-agent tokens can attend to non-agent tokens only.
+
+        The full sequence is: [non_agent_tokens..., agent_tokens...]
+
+        Args:
+            num_non_agent: Number of non-agent tokens (latents + registers + action + condition)
+            num_agent: Number of agent tokens
+            device: Device for the mask tensor
+
+        Returns:
+            (N_total, N_total) boolean mask where True = can attend
+        """
+        N = num_non_agent + num_agent
+
+        mask = torch.zeros(N, N, dtype=torch.bool, device=device)
+
+        # Non-agent tokens see only non-agent tokens
+        mask[:num_non_agent, :num_non_agent] = True
+
+        # Agent tokens see everything (non-agent + agent self-attention)
+        mask[num_non_agent:, :] = True
+
+        return mask
+
+    @staticmethod
+    def extract_agent_embeddings(
+        sequence: torch.Tensor,
+        num_agent_tokens: int,
+    ) -> torch.Tensor:
+        """Extract agent token embeddings from the end of the processed sequence.
+
+        Args:
+            sequence: (B, N_total, D) full sequence after transformer processing
+            num_agent_tokens: Number of agent tokens at the end
+
+        Returns:
+            (B, num_agent_tokens, D) agent token embeddings
+        """
+        return sequence[:, -num_agent_tokens:, :]

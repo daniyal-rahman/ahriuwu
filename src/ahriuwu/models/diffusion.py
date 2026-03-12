@@ -87,7 +87,7 @@ class DiffusionSchedule:
         batch_size: int,
         seq_length: int,
         device: torch.device | str | None = None,
-        tau_ctx: float = 0.3,
+        tau_ctx: float = 0.1,
         tau_max: float = 1.0,
     ) -> torch.Tensor:
         """Sample per-timestep noise levels for diffusion forcing.

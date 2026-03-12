@@ -249,6 +249,7 @@ class MAELoss(nn.Module):
         target: torch.Tensor,
         mask_indices: Optional[torch.Tensor] = None,
         patch_size: int = 16,
+        skip_lpips: bool = False,
     ) -> dict:
         """Compute MAE loss.
 
@@ -257,6 +258,7 @@ class MAELoss(nn.Module):
             target: (B, T, C, H, W) targets in [0, 1]
             mask_indices: (B, T*num_patches) boolean, True = was masked
             patch_size: Size of each patch
+            skip_lpips: If True, skip LPIPS computation (MSE only)
 
         Returns:
             Dict with loss components
@@ -278,10 +280,8 @@ class MAELoss(nn.Module):
             pred_flat = pred.view(B * T, C, H, W)
             target_flat = target.view(B * T, C, H, W)
             mse_loss = F.mse_loss(pred_flat, target_flat)
-            lpips_loss = self.lpips(pred_flat, target_flat)
         else:
             # Extract patches and compute loss only on masked ones
-            # Reshape to patches: (B, T, C, H, W) -> (B, T*num_patches, C, P, P)
             pred_patches = pred.view(
                 B, T, C,
                 num_patches_side, patch_size,
@@ -298,27 +298,24 @@ class MAELoss(nn.Module):
             target_patches = target_patches.permute(0, 1, 3, 5, 2, 4, 6)
             target_patches = target_patches.reshape(B, T * num_patches, C, patch_size, patch_size)
 
-            # Select only masked patches
-            masked_pred = pred_patches[mask_indices]  # (num_masked, C, P, P)
+            masked_pred = pred_patches[mask_indices]
             masked_target = target_patches[mask_indices]
 
             if masked_pred.numel() == 0:
-                # Return zero loss with grad_fn by using pred
                 zero = (pred * 0).sum()
-                return {
-                    "loss": zero,
-                    "mse": zero,
-                    "lpips": zero,
-                }
+                return {"loss": zero, "mse": zero, "lpips": zero}
 
             mse_loss = F.mse_loss(masked_pred, masked_target)
 
-            # LPIPS on full images (patches are too small for perceptual loss)
+        # LPIPS on full images (skip on non-LPIPS steps for speed)
+        if skip_lpips:
+            lpips_loss = torch.zeros(1, device=pred.device)
+            total_loss = self.mse_weight * mse_loss
+        else:
             pred_flat = pred.view(B * T, C, H, W)
             target_flat = target.view(B * T, C, H, W)
             lpips_loss = self.lpips(pred_flat, target_flat)
-
-        total_loss = self.mse_weight * mse_loss + self.lpips_weight * lpips_loss
+            total_loss = self.mse_weight * mse_loss + self.lpips_weight * lpips_loss
 
         return {
             "loss": total_loss,

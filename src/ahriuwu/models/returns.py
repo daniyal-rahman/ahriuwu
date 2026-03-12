@@ -206,6 +206,55 @@ def compute_advantages(
     return advantages
 
 
+def pmpo_loss(
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+) -> torch.Tensor:
+    """PMPO (Policy Mirror-Projection with Max-Offset) loss.
+
+    Uses the SIGN of advantages only, ignoring magnitude.
+    Separately averages a simple MLE loss over states with positive vs negative
+    advantages, giving equal weight to both groups regardless of size.
+
+    L = -mean_{A>0}[log pi(a|s)] + mean_{A<=0}[log pi(a|s)]
+
+    Reference: DreamerV4 Section 3.3
+
+    Args:
+        log_probs: (...) log probabilities of taken actions
+        advantages: (...) advantage values A_t = R^lambda_t - v_t (same shape)
+
+    Returns:
+        Scalar PMPO loss
+    """
+    # Flatten for easy indexing
+    log_probs_flat = log_probs.reshape(-1)
+    advantages_flat = advantages.reshape(-1)
+
+    # Split into positive and negative advantage sets
+    pos_mask = advantages_flat > 0
+    neg_mask = ~pos_mask  # A <= 0
+
+    loss = torch.zeros(1, device=log_probs.device, dtype=log_probs.dtype)
+    num_terms = 0
+
+    # Maximize log-prob for positive advantage states
+    if pos_mask.any():
+        loss = loss - log_probs_flat[pos_mask].mean()
+        num_terms += 1
+
+    # Minimize log-prob for negative advantage states
+    if neg_mask.any():
+        loss = loss + log_probs_flat[neg_mask].mean()
+        num_terms += 1
+
+    # If both terms present, average them for equal weight
+    if num_terms == 2:
+        loss = loss / 2
+
+    return loss.squeeze(0)
+
+
 class RunningRMS:
     """Running root mean square for loss normalization.
 
