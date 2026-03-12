@@ -867,12 +867,16 @@ class DynamicsTransformer(nn.Module):
         self._init_weights()
 
     def embed_actions(self, actions: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Sum factorized action embeddings.
+        """Factorized action embedding: encode each component separately, sum results.
+
+        Implements DreamerV4 Section 3.2: each action component is encoded to
+        S_a tokens independently, then summed. This allows the model to learn
+        independent representations for each action type (movement vs abilities).
 
         Args:
             actions: Dict with keys 'movement' and ability keys.
-                     'movement' is (B, T, 2) float tensor of (x, y) coordinates.
-                     Ability keys are (B, T) long tensors.
+                     'movement': (B, T, 2) float tensor of (x, y) coordinates in [0, 1]
+                     Ability keys: (B, T) long tensors (class indices)
 
         Returns:
             (B, T, D) summed action embedding
@@ -880,9 +884,9 @@ class DynamicsTransformer(nn.Module):
         # Movement: linear projection from continuous (x, y)
         emb = self.action_embed['movement'](actions['movement'])  # (B, T, 2) -> (B, T, D)
 
-        # Add all ability key embeddings
+        # Add all ability key embeddings (each encoded separately, summed together)
         for key in ABILITY_KEYS:
-            emb = emb + self.action_embed[key](actions[key])
+            emb = emb + self.action_embed[key](actions[key])  # (B, T) -> (B, T, D), summed
 
         return emb
 
@@ -910,14 +914,20 @@ class DynamicsTransformer(nn.Module):
 
         Args:
             z_tau: Noisy latents, shape (B, T, C, H, W)
-            tau: Diffusion timesteps, shape (B,) or (B, T)
-            step_size: Optional step size for shortcut forcing, shape (B,)
-                       Normalized to [0, 1] where 1.0 = k_max steps
+            tau: Diffusion timesteps, shape (B,) or (B, T) in [0, 1]
+                 (0=clean, 1=noise). Controls temporal conditioning via AdaLN.
+            step_size: Optional step size for shortcut forcing, shape (B,).
+                       Normalized to [0, 1] where 1.0 = k_max steps.
+                       INDEPENDENT from tau: added as feature embedding, not mixed
+                       with temporal conditioning. Used to condition model on
+                       denoising step size (DreamerV4 Section 3.2).
             task_id: Optional task ID for multi-task conditioning, shape (B,)
-            actions: Optional action dict with 'movement', 'target', and ability keys.
-                     Each value is (B, T) tensor of class indices.
+            actions: Optional action dict with 'movement' and ability keys.
+                     'movement': (B, T, 2) continuous coordinates
+                     Ability keys: (B, T) class indices
+                     Actions are factorized and summed into single embedding.
             independent_frames: If True, treat frames as independent (no temporal context).
-                               Use with 30% probability during training to prevent
+                               Use with ~30% probability during training to prevent
                                temporal shortcut learning (DreamerV4 Section 3.2).
 
         Returns:
@@ -926,7 +936,7 @@ class DynamicsTransformer(nn.Module):
             If use_agent_tokens=True:
                 tuple of:
                     z_0_pred: Predicted clean latents, shape (B, T, C, H, W)
-                    agent_out: Agent token outputs, shape (B, T, D) for heads
+                    agent_out: Agent token outputs, shape (B, T, D) for downstream heads
         """
         B, T, C, H, W = z_tau.shape
         assert H == W == self.spatial_size, f"Expected {self.spatial_size}×{self.spatial_size}, got {H}×{W}"
@@ -937,15 +947,17 @@ class DynamicsTransformer(nn.Module):
         # Project to model dim
         x = self.input_proj(x)  # (B, T, S, D)
 
-        # Add positional embeddings to spatial tokens
-        x = x + self.spatial_pos[:, :, :self.spatial_tokens, :]
-        x = x + self.temporal_pos[:, :T, :, :]
+        # Add positional embeddings to SPATIAL TOKENS ONLY
+        # (Register tokens are learned and don't have positional information)
+        x = x + self.spatial_pos[:, :, :self.spatial_tokens, :]  # (B, 1, S, D)
+        x = x + self.temporal_pos[:, :T, :, :]  # (B, T, 1, D) broadcasts to all spatial tokens
 
-        # Add register tokens if enabled
+        # Append register tokens (learned, position-independent)
         if self.register_tokens is not None:
             # Expand register tokens to match batch and time: (1, 1, R, D) -> (B, T, R, D)
             registers = self.register_tokens.expand(B, T, -1, -1)
             # Concatenate: (B, T, S+R, D)
+            # Registers are appended WITHOUT positional embeddings (they're already embedded)
             x = torch.cat([x, registers], dim=2)
 
         # Add action conditioning (broadcast to all spatial tokens including registers)
@@ -956,16 +968,15 @@ class DynamicsTransformer(nn.Module):
                 action_emb = self.no_action_embed.expand(B, T, -1)
             x = x + action_emb.unsqueeze(2)  # (B, T, 1, D) broadcast to (B, T, S+R, D)
 
-        # Get timestep embedding
+        # Get timestep embedding (for AdaLN modulation)
         time_emb = self.time_embed(tau)  # (B, D) or (B, T, D)
 
-        # Add step size embedding for shortcut forcing
+        # Add step size embedding as separate feature (not mixed with temporal conditioning)
+        # This keeps step size and tau independently learnable in transformer blocks
         if step_size is not None:
             step_emb = self.step_embed(step_size)  # (B, D)
-            # Handle broadcasting when tau is per-timestep (B, T)
-            if time_emb.dim() == 3:  # (B, T, D)
-                step_emb = step_emb.unsqueeze(1)  # (B, 1, D) for broadcasting
-            time_emb = time_emb + step_emb  # additive combination
+            # Broadcast step size to all spatial tokens like action embedding
+            x = x + step_emb.unsqueeze(2)  # (B, 1, D) broadcast to (B, T, S+R, D)
 
         # Transformer blocks (z tokens + registers - agent tokens processed separately)
         for block in self.blocks:

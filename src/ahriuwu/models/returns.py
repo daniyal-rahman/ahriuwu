@@ -162,13 +162,10 @@ def compute_lambda_returns(
 
     # Compute returns backwards in time
     for t in range(T - 1, -1, -1):
-        # TD target: r_t + γ * c_t * v_{t+1}
         if t < T - 1:
             next_value = values[:, t + 1]
         else:
             next_value = values[:, t]  # Bootstrap
-
-        td_target = rewards[:, t] + gamma * continues[:, t] * next_value
 
         # λ-return: blend TD target with full return
         next_return = rewards[:, t] + gamma * continues[:, t] * (
@@ -204,6 +201,93 @@ def compute_advantages(
         advantages = (advantages - mean) / std
 
     return advantages
+
+
+def compute_mtp_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    mtp_length: int,
+    criterion,
+    mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Compute MTP (Multi-Token Prediction) loss matching DreamerV4 Eq 9.
+
+    For each MTP offset n=0..L-1, aligns prediction at position t with
+    target at position t+n. This means n=0 predicts the current timestep.
+
+    Args:
+        logits: (B, T, L, ...) predicted logits from head
+        targets: (B, T, ...) target values (actions or symlog rewards)
+        mtp_length: L, number of MTP offsets
+        criterion: Loss function(pred, target) -> scalar loss per element
+        mask: Optional (B,) bool mask. If provided, loss only computed
+              where mask is True.
+
+    Returns:
+        Scalar loss averaged over all valid positions and offsets
+    """
+    B, T = targets.shape[:2]
+    total_loss = torch.tensor(0.0, device=logits.device)
+    num_terms = 0
+
+    for n in range(mtp_length):
+        valid_T = T - n  # positions 0..T-n-1 can predict t+n
+        if valid_T <= 0:
+            continue
+
+        pred = logits[:, :valid_T, n]     # (B, valid_T, ...)
+        target = targets[:, n:n + valid_T]  # (B, valid_T, ...)
+
+        if mask is not None:
+            # Expand mask to match: (B,) -> (B, 1, ...) broadcast
+            pred = pred[mask]
+            target = target[mask]
+
+        if pred.numel() > 0:
+            total_loss = total_loss + criterion(pred, target)
+            num_terms += 1
+
+    return total_loss / max(num_terms, 1)
+
+
+def compute_pmpo_loss(
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    log_probs_prior: torch.Tensor,
+    alpha: float = 0.5,
+    beta: float = 0.3,
+) -> torch.Tensor:
+    """Compute PMPO policy loss (DreamerV4 Eq 11).
+
+    PMPO uses only the SIGN of advantages, splitting states into positive
+    (A >= 0) and negative (A < 0) sets. This balances positive and negative
+    feedback without needing advantage normalization.
+
+    L = (1-α)/|D-| Σ_{D-} ln π - α/|D+| Σ_{D+} ln π + β/N Σ KL[π || π_prior]
+
+    Args:
+        log_probs: (N,) log π_θ(a|s) for all imagined states
+        advantages: (N,) raw advantages A_t = R^λ_t - v_t (NOT normalized)
+        log_probs_prior: (N,) log π_prior(a|s) from frozen BC policy
+        alpha: Weight for positive advantages (0.5 = equal balance)
+        beta: KL regularization weight (0.3 = weak prior)
+
+    Returns:
+        Scalar PMPO loss
+    """
+    pos_mask = advantages >= 0
+    neg_mask = ~pos_mask
+
+    # Maximize log-prob for states with positive advantage
+    loss_pos = -log_probs[pos_mask].mean() if pos_mask.any() else torch.tensor(0.0, device=log_probs.device)
+
+    # Minimize log-prob for states with negative advantage
+    loss_neg = log_probs[neg_mask].mean() if neg_mask.any() else torch.tensor(0.0, device=log_probs.device)
+
+    # Reverse KL to behavioral prior: KL[π_θ || π_prior]
+    kl = (log_probs - log_probs_prior).mean()
+
+    return (1 - alpha) * loss_neg + alpha * loss_pos + beta * kl
 
 
 class RunningRMS:

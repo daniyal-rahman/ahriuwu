@@ -94,22 +94,18 @@ class DiffusionSchedule:
 
         Implements DreamerV4's diffusion forcing where:
         - A random horizon h is sampled for each batch item
-        - Frames before h: low noise (τ_ctx, context frames)
-        - Frames at/after h: increasing noise (prediction targets)
+        - Frames before h: varying low noise (context frames, U(0, tau_ctx))
+        - Frames at/after h: increasing noise (prediction targets, tau_ctx to tau_max)
 
         This creates temporal causality: model must use clean past
-        to predict noisy future.
-
-        tau_ctx is sampled per batch element from U(0, tau_ctx) to provide
-        variable context noise augmentation, preventing the model from
-        relying on a fixed context noise level.
+        to predict noisy future. Per-timestep context noise variation prevents
+        the model from relying on a fixed context noise level.
 
         Args:
             batch_size: Number of sequences
             seq_length: Number of frames per sequence (T)
             device: Device to create tensor on
-            tau_ctx: Max noise level for context frames (sampled per element
-                     from U(0, tau_ctx), default 0.3)
+            tau_ctx: Max noise level for context frames (context varies U(0, tau_ctx))
             tau_max: Maximum noise level for target frames
 
         Returns:
@@ -135,18 +131,24 @@ class DiffusionSchedule:
         max_distance = (seq_length - 1 - horizon).clamp(min=1).float()  # (B, 1)
         normalized_dist = distance / max_distance  # (B, T) in [0, 1]
 
-        # Sample a random tau_ctx per batch element from U(0, tau_ctx)
-        # This prevents the model from relying on a fixed context noise level
-        tau_ctx_per_sample = torch.rand(batch_size, 1, device=device) * tau_ctx  # (B, 1)
+        # Initialize tau: (B, T)
+        tau = torch.zeros(batch_size, seq_length, device=device)
 
-        # Context frames (before horizon) get per-sample tau_ctx
-        # Target frames get tau_ctx_per_sample + normalized_dist * (tau_max - tau_ctx_per_sample)
+        # Context frames (before horizon) get VARYING noise sampled per-frame from U(0, tau_ctx)
+        # Target frames get linearly increasing from tau_ctx to tau_max
         is_context = positions < horizon  # (B, T)
-        tau = torch.where(
-            is_context,
-            tau_ctx_per_sample.expand_as(normalized_dist),
-            tau_ctx_per_sample + normalized_dist * (tau_max - tau_ctx_per_sample),
-        )
+
+        # Sample context noise per-frame: (B, T) from U(0, tau_ctx)
+        context_tau = torch.rand(batch_size, seq_length, device=device) * tau_ctx
+
+        # Target tau: linearly increase from tau_ctx to tau_max
+        # For target frames, we use normalized_dist which ranges [0, 1]
+        # At horizon: tau = tau_ctx (normalized_dist=0)
+        # At end: tau = tau_max (normalized_dist=1)
+        target_tau = tau_ctx + normalized_dist * (tau_max - tau_ctx)
+
+        # Combine: context gets varying low noise, targets get increasing noise
+        tau = torch.where(is_context, context_tau, target_tau)
 
         return tau
 
@@ -200,20 +202,17 @@ class DiffusionSchedule:
 
 
 def ramp_weight(tau: torch.Tensor) -> torch.Tensor:
-    """Compute ramp loss weight from DreamerV4.
+    """Compute ramp loss weight from DreamerV4 (Paper Eq. 8).
 
-    Higher weight at high signal levels (low τ in our convention) focuses
-    learning on regions with more structure.
+    Paper convention (τ=0 noise, τ=1 clean): w(τ) = 0.9τ + 0.1
+    Our convention (τ=0 clean, τ=1 noise): w(τ) = 0.9(1-τ) + 0.1 = 1.0 - 0.9τ
 
-    Paper formula: w(τ) = 0.9τ + 0.1 (where paper τ=0 is noise, τ=1 is clean)
-    Our convention: τ=0 is clean, τ=1 is noise
-    Inverted formula: w(τ) = 1.0 - 0.9τ
-
-    At τ=0 (clean): w = 1.0 (high weight - more informative gradients)
-    At τ=1 (noise): w = 0.1 (low weight - less useful gradients)
+    This weights clean data higher (where signal is strong) and noisy data lower.
+    At τ=0 (clean): w = 1.0 (full weight - most informative gradients)
+    At τ=1 (noise): w = 0.1 (minimal weight - less useful gradients)
 
     Args:
-        tau: Timesteps, shape (B,) or (B, T)
+        tau: Timesteps, shape (B,) or (B, T) in [0, 1] (0=clean, 1=noise)
 
     Returns:
         weights: Loss weights, same shape as tau
@@ -435,28 +434,31 @@ class ShortcutForcing:
         step_size: torch.Tensor,
         actions: dict[str, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, dict]:
-        """Compute shortcut forcing loss (Paper Eq. 7).
+        """Compute shortcut forcing loss (DreamerV4 Paper Section 3.2, Eq. 7).
 
-        For d=1 (base step): standard x-prediction loss
-        For d>1: bootstrap loss in velocity space with τ² scaling
+        Enables few-step inference (K=4) by training student network to predict
+        k-step denoising in single step using bootstrapped teacher targets.
 
-        Paper Eq. 7 (our convention where τ=0 clean, τ=1 noise):
+        For d=d_min (base/smallest step): standard x-prediction loss
+        For d>d_min: bootstrap loss in velocity space with τ² weighting
+
+        Paper Eq. 7 (our convention: τ=0 clean, τ=1 noise):
             L = τ² || (ẑ_0 - z_τ) / τ - sg(b' + b'')/2 ||²
         where:
-            b' = (z_mid - z_τ) / τ         (first half-step velocity)
-            b'' = (z_target - z_τ_mid) / τ_mid  (second half-step velocity)
+            b' = (z_mid - z_τ) / τ            (first half-step velocity)
+            b'' = (z_target - z_τ_mid) / τ_mid (second half-step velocity)
 
         Args:
-            model: Dynamics model with step_size conditioning
+            model: Dynamics model with step_size conditioning (independent from tau)
             schedule: DiffusionSchedule for adding noise
             z_0: Clean latents, shape (B, T, C, H, W)
             tau: Noise levels, shape (B,) or (B, T)
-            step_size: Step sizes (integers), shape (B,)
-            actions: Optional action dict with 'movement', 'target', and ability keys
+            step_size: Step sizes (integers), shape (B,). Will be normalized to [0,1].
+            actions: Optional action dict with 'movement' and ability keys
 
         Returns:
-            loss: Combined loss
-            info: Dict with loss breakdown
+            loss: Combined normalized loss (scalar)
+            info: Dict with 'loss_std', 'loss_boot', 'n_std', 'n_boot' for logging
         """
         B = z_0.shape[0]
 

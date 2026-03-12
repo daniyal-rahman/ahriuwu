@@ -19,6 +19,8 @@ from .returns import (
     twohot_loss,
     compute_lambda_returns,
     compute_advantages,
+    compute_mtp_loss,
+    compute_pmpo_loss,
     RunningRMS,
     normalize_losses,
 )
@@ -55,6 +57,8 @@ __all__ = [
     "twohot_loss",
     "compute_lambda_returns",
     "compute_advantages",
+    "compute_mtp_loss",
+    "compute_pmpo_loss",
     "RunningRMS",
     "normalize_losses",
 ]
