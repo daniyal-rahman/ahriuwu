@@ -571,6 +571,9 @@ class AgentTemporalAttention(nn.Module):
         else:
             self.qk_norm = None
 
+        # 1D RoPE for temporal positions
+        self.rope_1d = RotaryEmbedding1D(self.head_dim, max_seq_len)
+
         # Causal mask
         self.register_buffer(
             "causal_mask",
@@ -600,6 +603,13 @@ class AgentTemporalAttention(nn.Module):
         # Apply QKNorm if enabled
         if self.qk_norm is not None:
             q, k = self.qk_norm(q, k)
+
+        # Apply 1D RoPE for temporal positions
+        cos, sin = self.rope_1d.get_rotary_emb(T, x.device)
+        cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
+        sin = sin.unsqueeze(0).unsqueeze(0)
+        q = apply_rotary_emb(q, cos, sin)
+        k = apply_rotary_emb(k, cos, sin)
 
         # GQA: repeat KV heads
         if self.num_groups > 1:

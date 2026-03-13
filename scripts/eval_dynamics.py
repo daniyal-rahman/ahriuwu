@@ -381,16 +381,18 @@ def rollout_predictions(
     B, T_ctx, C, H, W = context_latents.shape
 
     # Add slight noise to context frames to match training distribution
-    # During training, context frames have tau=0.1, so we do the same at inference
+    # During training, context frames get per-frame tau ~ U(0, tau_ctx)
     # z_tau = (1 - tau) * z_0 + tau * noise  (from flow matching formulation)
     if tau_ctx > 0:
         context_noise = torch.randn_like(context_latents)
-        context_latents = (1 - tau_ctx) * context_latents + tau_ctx * context_noise
+        # Per-frame random noise level, matching diffusion forcing context distribution
+        ctx_tau = torch.rand(B, T_ctx, 1, 1, 1, device=context_latents.device) * tau_ctx
+        context_latents = (1 - ctx_tau) * context_latents + ctx_tau * context_noise
 
     # Compute step size for shortcut forcing
     # If using 4-step sampling with k_max=64: step_size_int = 64/4 = 16
     step_size_int = k_max // num_steps if use_shortcut else None
-    step_size_norm = torch.full((B,), step_size_int / k_max, device=device) if use_shortcut else None
+    step_size_tensor = torch.full((B,), step_size_int, device=device, dtype=torch.long) if use_shortcut else None
 
     # Start with noise for frames to predict
     predicted = torch.randn(B, num_predict, C, H, W, device=device)
@@ -407,7 +409,8 @@ def rollout_predictions(
                 pred_context = predicted[:, :frame_idx]
                 if tau_ctx > 0:
                     pred_noise = torch.randn_like(pred_context)
-                    pred_context = (1 - tau_ctx) * pred_context + tau_ctx * pred_noise
+                    pred_tau = torch.rand(B, frame_idx, 1, 1, 1, device=device) * tau_ctx
+                    pred_context = (1 - pred_tau) * pred_context + pred_tau * pred_noise
                 full_seq = torch.cat([context_latents, pred_context], dim=1)
 
             # Predict next frame using diffusion sampling
@@ -415,9 +418,8 @@ def rollout_predictions(
             z_t = torch.randn(B, 1, C, H, W, device=device)
             z_noise = z_t.clone()
 
-            # Stop at tau_ctx (0.1) not 0.0 - model never saw τ < 0.1 during training
             tau_start = 1.0
-            tau_end = tau_ctx  # match training minimum
+            tau_end = 0.0  # denoise fully
             step_size = (tau_start - tau_end) / num_steps
 
             for i in range(num_steps):
@@ -429,12 +431,12 @@ def rollout_predictions(
                 # Build per-timestep tau: context frames at tau_ctx, denoised frame at current tau
                 # This matches training where each frame position has its own noise level
                 T_input = input_seq.shape[1]
-                tau_tensor = torch.full((B, T_input), tau_ctx, device=device)
+                tau_tensor = torch.rand(B, T_input, device=device) * tau_ctx
                 tau_tensor[:, -1] = tau  # last frame is the one being denoised
 
                 # Predict (model outputs full sequence, we take last frame)
                 if use_shortcut:
-                    z_pred = dynamics(input_seq, tau_tensor, step_size=step_size_norm)
+                    z_pred = dynamics(input_seq, tau_tensor, step_size=step_size_tensor)
                 else:
                     z_pred = dynamics(input_seq, tau_tensor)
                 z_0_pred = z_pred[:, -1:, ...]

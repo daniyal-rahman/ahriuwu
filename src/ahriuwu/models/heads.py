@@ -55,7 +55,7 @@ class RewardHead(nn.Module):
             nn.SiLU(),
         )
 
-        # MTP heads: predict reward for t, t+1, ..., t+L-1
+        # MTP heads: predict reward for t, t+1, ..., t+L (paper Eq 9: n=0..L, L=8, so 9 heads)
         self.heads = nn.ModuleList([
             nn.Linear(hidden_dim, num_buckets) for _ in range(mtp_length)
         ])

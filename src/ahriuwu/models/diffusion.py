@@ -453,7 +453,7 @@ class ShortcutForcing:
             schedule: DiffusionSchedule for adding noise
             z_0: Clean latents, shape (B, T, C, H, W)
             tau: Noise levels, shape (B,) or (B, T)
-            step_size: Step sizes (integers), shape (B,). Will be normalized to [0,1].
+            step_size: Step sizes (integers, powers of 2), shape (B,).
             actions: Optional action dict with 'movement' and ability keys
 
         Returns:
@@ -461,9 +461,6 @@ class ShortcutForcing:
             info: Dict with 'loss_std', 'loss_boot', 'n_std', 'n_boot' for logging
         """
         B = z_0.shape[0]
-
-        # Normalize step sizes to [0, 1] for model conditioning
-        d_normalized = step_size.float() / self.k_max
 
         # Add noise to get z_tau
         z_tau, noise = schedule.add_noise(z_0, tau)
@@ -486,7 +483,7 @@ class ShortcutForcing:
         if is_base_step.any():
             idx = is_base_step
             z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx],
-                          step_size=d_normalized[idx], actions=slice_actions(actions, idx))
+                          step_size=step_size[idx], actions=slice_actions(actions, idx))
             loss_std = x_prediction_loss(z_pred, z_0[idx], tau[idx] if tau.dim() > 1 else tau[idx])
             n_std = idx.sum().item()
 
@@ -498,10 +495,9 @@ class ShortcutForcing:
             with torch.no_grad():
                 # Teacher: take 2 half-steps
                 d_half = step_size[idx] // 2
-                d_half_norm = d_half.float() / self.k_max
 
                 # First half-step: predict z_0 from z_tau
-                z_mid = model(z_tau[idx], tau_idx, step_size=d_half_norm,
+                z_mid = model(z_tau[idx], tau_idx, step_size=d_half,
                              actions=slice_actions(actions, idx))
 
                 # First half-step velocity: b' = (z_mid - z_tau) / tau
@@ -524,23 +520,25 @@ class ShortcutForcing:
                     tau_mid = (tau_idx - half_step_amount.unsqueeze(-1)).clamp(min=1e-6)
                     tau_mid_expanded = tau_mid.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-                # Re-noise z_mid to tau_mid level for second half-step
-                # Sample fresh noise to avoid correlation with the input noise
-                noise_mid = torch.randn_like(z_mid)
-                z_tau_mid = (1 - tau_mid_expanded) * z_mid + tau_mid_expanded * noise_mid
+                # Euler step to intermediate point: z' = z_tau + b' * half_step
+                if tau_idx.dim() == 1:
+                    half_step_expanded = half_step_amount.view(-1, 1, 1, 1, 1)
+                else:
+                    half_step_expanded = half_step_amount.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                z_prime = z_tau[idx] + b_prime * half_step_expanded
 
-                # Second half-step: predict z_0 from z_tau_mid
-                z_target = model(z_tau_mid, tau_mid, step_size=d_half_norm,
+                # Second half-step: predict z_0 from z_prime
+                z_target = model(z_prime, tau_mid, step_size=d_half,
                                 actions=slice_actions(actions, idx))
 
-                # Second half-step velocity: b'' = (z_target - z_tau_mid) / tau_mid
-                b_double_prime = (z_target - z_tau_mid) / tau_mid_expanded.clamp(min=1e-6)
+                # Second half-step velocity: b'' = (z_target - z_prime) / tau_mid
+                b_double_prime = (z_target - z_prime) / tau_mid_expanded.clamp(min=1e-6)
 
                 # Average teacher velocities
                 avg_velocity = (b_prime + b_double_prime) / 2
 
             # Student: take 1 full step directly
-            z_pred = model(z_tau[idx], tau_idx, step_size=d_normalized[idx],
+            z_pred = model(z_tau[idx], tau_idx, step_size=step_size[idx],
                           actions=slice_actions(actions, idx))
 
             # Student velocity: (z_pred - z_tau) / tau

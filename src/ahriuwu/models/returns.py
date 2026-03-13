@@ -212,8 +212,9 @@ def compute_mtp_loss(
 ) -> torch.Tensor:
     """Compute MTP (Multi-Token Prediction) loss matching DreamerV4 Eq 9.
 
-    For each MTP offset n=0..L-1, aligns prediction at position t with
-    target at position t+n. This means n=0 predicts the current timestep.
+    For each MTP offset n=0..mtp_length-1, aligns prediction at position t
+    with target at position t+n. n=0 predicts the current timestep.
+    Paper uses L=8 with sum from n=0 to L inclusive, so mtp_length=9.
 
     Args:
         logits: (B, T, L, ...) predicted logits from head

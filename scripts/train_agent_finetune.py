@@ -104,8 +104,8 @@ def parse_args():
     parser.add_argument(
         "--mtp-length",
         type=int,
-        default=8,
-        help="Multi-token prediction length (paper uses 8)",
+        default=9,
+        help="Multi-token prediction length (paper Eq 9: n=0..L with L=8, so 9 predictions)",
     )
     parser.add_argument(
         "--num-buckets",
@@ -482,15 +482,14 @@ def train_epoch(
             reward_logits = reward_head(agent_out)  # (B, T, L, num_buckets)
             reward_targets = symlog(rewards)  # (B, T)
 
-            # MTP reward loss: predict rewards at t+1, t+2, ..., t+L
+            # MTP reward loss: predict rewards at t+n for n=0..L-1 (Eq. 9)
             reward_loss = 0.0
             L = args.mtp_length
             for offset in range(L):
-                if offset < T - 1:
-                    # Target is reward at t + offset + 1
-                    target_idx = min(offset + 1, T - 1)
-                    target = reward_targets[:, target_idx:]  # (B, T - target_idx)
-                    pred = reward_logits[:, :T - target_idx, offset, :]  # (B, T - target_idx, buckets)
+                if T - offset > 0:
+                    # Target is reward at t + offset (n=0 → current timestep)
+                    target = reward_targets[:, offset:]  # (B, T - offset)
+                    pred = reward_logits[:, :T - offset, offset, :]  # (B, T - offset, buckets)
 
                     if pred.shape[1] > 0:
                         reward_loss = reward_loss + twohot_loss(
@@ -505,16 +504,14 @@ def train_epoch(
             # ability_logits: (B, T, L, action_dim)
             # movement_pred: (B, T, L, 2)
 
-            # MTP BC loss: predict actions at t+1, t+2, ..., t+L
+            # MTP BC loss: predict actions at t+n for n=0..L-1 (Eq. 9)
             bc_loss_ability = 0.0
             bc_loss_movement = 0.0
             for offset in range(L):
-                if offset < T - 1:
-                    target_idx = min(offset + 1, T - 1)
-
+                if T - offset > 0:
                     # Discrete ability loss (cross-entropy)
-                    ability_target = actions[:, target_idx:]  # (B, T - target_idx)
-                    ability_pred = ability_logits[:, :T - target_idx, offset, :]
+                    ability_target = actions[:, offset:]  # (B, T - offset)
+                    ability_pred = ability_logits[:, :T - offset, offset, :]
 
                     if ability_pred.shape[1] > 0:
                         bc_loss_ability = bc_loss_ability + F.cross_entropy(
@@ -524,8 +521,8 @@ def train_epoch(
 
                     # Continuous movement loss (MSE)
                     # movement_targets is (B, T, 2) float
-                    move_target = movement_targets[:, target_idx:]  # (B, T - target_idx, 2)
-                    move_pred = movement_pred[:, :T - target_idx, offset, :]  # (B, T - target_idx, 2)
+                    move_target = movement_targets[:, offset:]  # (B, T - offset, 2)
+                    move_pred = movement_pred[:, :T - offset, offset, :]  # (B, T - offset, 2)
 
                     if move_pred.shape[1] > 0:
                         bc_loss_movement = bc_loss_movement + F.mse_loss(move_pred, move_target)
@@ -533,16 +530,17 @@ def train_epoch(
             bc_loss = (bc_loss_ability + bc_loss_movement) / L
 
             # Compute action prediction accuracy (discrete abilities only, offset=0)
+            # MTP n=0 predicts current timestep: pred at t should match action at t
             with torch.no_grad():
-                pred_t0 = ability_logits[:, :-1, 0, :]  # (B, T-1, action_dim)
-                target_t0 = actions[:, 1:]  # (B, T-1)
+                pred_t0 = ability_logits[:, :, 0, :]  # (B, T, action_dim)
+                target_t0 = actions  # (B, T)
 
                 # Top-1 accuracy
-                pred_top1 = pred_t0.argmax(dim=-1)  # (B, T-1)
+                pred_top1 = pred_t0.argmax(dim=-1)  # (B, T)
                 correct_top1 = (pred_top1 == target_t0).sum().item()
 
                 # Top-5 accuracy
-                _, pred_top5 = pred_t0.topk(5, dim=-1)  # (B, T-1, 5)
+                _, pred_top5 = pred_t0.topk(5, dim=-1)  # (B, T, 5)
                 correct_top5 = (pred_top5 == target_t0.unsqueeze(-1)).any(dim=-1).sum().item()
 
                 total_correct_top1 += correct_top1
