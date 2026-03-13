@@ -15,21 +15,12 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 from torch.utils.checkpoint import checkpoint
 
 from .layers import (
     RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
     RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
 )
-
-
-def _soft_cap_score_mod(score, b, h, q_idx, kv_idx):
-    """Soft cap attention logits at 50.0 (DreamerV4 paper value)."""
-    return 50.0 * torch.tanh(score / 50.0)
-
-def _causal_mask_mod(b, h, q_idx, kv_idx):
-    return q_idx >= kv_idx
 
 
 def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
@@ -235,13 +226,20 @@ class TemporalAttentionTok(nn.Module):
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
 
-        # Fused attention with soft capping + causal masking
-        # Cast to common dtype (RoPE may upcast q/k to float32)
-        q, k, v = q.to(v.dtype), k.to(v.dtype), v
-        block_mask = create_block_mask(_causal_mask_mod, B=None, H=None,
-                                       Q_LEN=T, KV_LEN=T, device=x.device)
-        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
-        out = flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask)
+        # Scaled dot-product attention
+        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        if self.soft_cap is not None:
+            attn = soft_cap_attention(attn, self.soft_cap)
+
+        # Apply causal mask
+        mask = self.causal_mask[:T, :T].unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
+        attn = attn.masked_fill(~mask, float('-inf'))
+
+        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(v.dtype)
+        attn = self.dropout(attn)
+
+        out = torch.matmul(attn, v)
         out = out.transpose(1, 2).contiguous().view(B, T, D)
         return self.out_proj(out)
 
