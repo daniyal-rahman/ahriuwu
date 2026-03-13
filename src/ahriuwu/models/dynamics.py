@@ -20,12 +20,26 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 from torch.utils.checkpoint import checkpoint
 
 from .layers import (
     RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
     RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
 )
+
+
+# --- flex_attention helpers (fused kernels for soft capping + masking) ---
+
+def _soft_cap_score_mod(score, b, h, q_idx, kv_idx):
+    """Soft cap attention logits at 50.0 (DreamerV4 paper value)."""
+    return 50.0 * torch.tanh(score / 50.0)
+
+def _causal_mask_mod(b, h, q_idx, kv_idx):
+    return q_idx >= kv_idx
+
+def _diagonal_mask_mod(b, h, q_idx, kv_idx):
+    return q_idx == kv_idx
 
 # Action space constants (must match data/actions.py)
 MOVEMENT_DIM = 2  # Continuous (x, y) in [0, 1]
@@ -151,23 +165,14 @@ class SpatialAttention(nn.Module):
             # For GQA, k has num_kv_heads which may differ from num_heads
             k = torch.cat([k_latent, k[:, :, Nz:, :]], dim=2)
 
-        # GQA: repeat KV heads to match Q heads
-        if self.num_groups > 1:
-            k = k.repeat_interleave(self.num_groups, dim=1)
-            v = v.repeat_interleave(self.num_groups, dim=1)
-
-        # Scaled dot-product attention
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-
-        # Apply soft capping if enabled
-        if self.soft_cap is not None:
-            attn = soft_cap_attention(attn, self.soft_cap)
-
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
-
-        # Apply attention to values
-        out = (attn @ v).transpose(1, 2).reshape(B * T, S, -1)
+        # Fused attention with soft capping via flex_attention
+        # GQA handled natively (no repeat_interleave needed)
+        # Cast to common dtype (RoPE may upcast q/k to float32)
+        q, k, v = q.to(v.dtype), k.to(v.dtype), v
+        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
+        out = flex_attention(q, k, v, score_mod=score_mod,
+                            enable_gqa=(self.num_groups > 1))
+        out = out.transpose(1, 2).reshape(B * T, S, -1)
         out = self.out_proj(out)
 
         # Reshape back to (B, T, S, D)
@@ -287,33 +292,17 @@ class TemporalAttention(nn.Module):
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
 
-        # GQA: repeat KV heads to match Q heads
-        if self.num_groups > 1:
-            k = k.repeat_interleave(self.num_groups, dim=1)
-            v = v.repeat_interleave(self.num_groups, dim=1)
-
-        # Scaled dot-product attention with causal mask
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-
-        # Apply soft capping if enabled
-        if self.soft_cap is not None:
-            attn = soft_cap_attention(attn, self.soft_cap)
-
-        # Apply causal mask (or independent frame mask)
-        if independent_frames:
-            # Each frame only attends to itself (diagonal mask)
-            diag_mask = ~torch.eye(T, dtype=torch.bool, device=x.device)
-            attn = attn.masked_fill(diag_mask, float("-inf"))
-        else:
-            # Standard causal mask
-            mask = self.causal_mask[:T, :T]
-            attn = attn.masked_fill(mask, float("-inf"))
-
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
-
-        # Apply attention to values
-        out = (attn @ v).transpose(1, 2).reshape(B * S, T, -1)
+        # Fused attention with soft capping + causal/diagonal masking
+        # GQA handled natively (no repeat_interleave needed)
+        # Cast to common dtype (RoPE may upcast q/k to float32)
+        q, k, v = q.to(v.dtype), k.to(v.dtype), v
+        mask_fn = _diagonal_mask_mod if independent_frames else _causal_mask_mod
+        block_mask = create_block_mask(mask_fn, B=None, H=None,
+                                       Q_LEN=T, KV_LEN=T, device=x.device)
+        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
+        out = flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask,
+                            enable_gqa=(self.num_groups > 1))
+        out = out.transpose(1, 2).reshape(B * S, T, -1)
         out = self.out_proj(out)
 
         # Reshape back to (B, T, S, D)
@@ -491,24 +480,22 @@ class AgentCrossAttention(nn.Module):
         if self.qk_norm is not None:
             q, k = self.qk_norm(q, k)
 
-        # GQA: repeat KV heads
-        if self.num_groups > 1:
-            k = k.repeat_interleave(self.num_groups, dim=2)
-            v = v.repeat_interleave(self.num_groups, dim=2)
+        # Reshape for flex_attention: merge B*T into batch dim
+        # q: (B, T, H, 1, D) -> (B*T, H, 1, D)
+        # k: (B, T, H_kv, S, D) -> (B*T, H_kv, S, D)
+        # Cast to common dtype (QKNorm may upcast)
+        dtype = v.dtype
+        q = q.to(dtype).view(B * T, self.num_heads, 1, self.head_dim)
+        k = k.to(dtype).reshape(B * T, self.num_kv_heads, S, self.head_dim)
+        v = v.reshape(B * T, self.num_kv_heads, S, self.head_dim)
 
-        # Attention: agent attends to all spatial tokens
-        attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, T, heads, 1, S)
-
-        # Apply soft capping if enabled
-        if self.soft_cap is not None:
-            attn = soft_cap_attention(attn, self.soft_cap)
-
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
-
-        # Apply attention
-        out = (attn @ v).squeeze(-2)  # (B, T, heads, head_dim)
-        out = out.view(B, T, -1)
+        # Fused cross-attention with soft capping
+        # GQA handled natively (no repeat_interleave needed)
+        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
+        out = flex_attention(q, k, v, score_mod=score_mod,
+                            enable_gqa=(self.num_groups > 1))
+        # out: (B*T, H, 1, D) -> (B, T, H*D)
+        out = out.squeeze(2).view(B, T, -1)
         out = self.out_proj(out)
 
         return out
@@ -611,22 +598,16 @@ class AgentTemporalAttention(nn.Module):
         q = apply_rotary_emb(q, cos, sin)
         k = apply_rotary_emb(k, cos, sin)
 
-        # GQA: repeat KV heads
-        if self.num_groups > 1:
-            k = k.repeat_interleave(self.num_groups, dim=1)
-            v = v.repeat_interleave(self.num_groups, dim=1)
-
-        attn = (q @ k.transpose(-2, -1)) * self.scale
-
-        # Apply soft capping if enabled
-        if self.soft_cap is not None:
-            attn = soft_cap_attention(attn, self.soft_cap)
-
-        attn = attn.masked_fill(self.causal_mask[:T, :T], float("-inf"))
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
-
-        out = (attn @ v).transpose(1, 2).reshape(B, T, -1)
+        # Fused attention with soft capping + causal masking
+        # GQA handled natively (no repeat_interleave needed)
+        # Cast to common dtype (RoPE may upcast q/k to float32)
+        q, k, v = q.to(v.dtype), k.to(v.dtype), v
+        block_mask = create_block_mask(_causal_mask_mod, B=None, H=None,
+                                       Q_LEN=T, KV_LEN=T, device=x.device)
+        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
+        out = flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask,
+                            enable_gqa=(self.num_groups > 1))
+        out = out.transpose(1, 2).reshape(B, T, -1)
         out = self.out_proj(out)
 
         return out
