@@ -62,11 +62,14 @@ def predict_next_frame(
 ) -> torch.Tensor:
     """Predict the next frame using diffusion forcing.
 
+    Convention: z_tau = tau * z_0 + (1 - tau) * noise (tau=1 clean, tau=0 noise).
+    Denoises from tau=0 toward tau=1. Context frames use tau ~ U(1 - tau_ctx, 1.0).
+
     Args:
         model: Dynamics model
         context_latents: Clean context frames (B, T, C, H, W)
         num_denoise_steps: Number of denoising iterations (K=4 in paper)
-        tau_ctx: Small noise level for context frames
+        tau_ctx: Context noise width; context tau ~ U(1 - tau_ctx, 1.0)
 
     Returns:
         Predicted next frame latent (B, 1, C, H, W)
@@ -76,23 +79,26 @@ def predict_next_frame(
 
     # Start with pure noise for the next frame
     z_next = torch.randn(B, 1, C, H, W, device=device)
+    z_noise = z_next.clone()
 
-    # Denoising schedule for the target frame: 1.0 -> 0.0
-    taus = torch.linspace(1.0, 0.0, num_denoise_steps + 1, device=device)
+    # Denoising schedule: tau goes from 0.0 (noise) to 1.0 (clean)
+    taus = torch.linspace(0.0, 1.0, num_denoise_steps + 1, device=device)
 
     with torch.no_grad():
         for i in range(num_denoise_steps):
             tau_target = taus[i]
 
-            # Concatenate context (slightly noised) + current noisy prediction
+            # Concatenate context (slightly noised) + current noisy prediction.
+            # Context tau ~ U(1 - tau_ctx, 1.0) for near-clean frames.
             noise_ctx = torch.randn_like(context_latents)
-            z_ctx_noisy = (1 - tau_ctx) * context_latents + tau_ctx * noise_ctx
+            ctx_tau = (1.0 - tau_ctx) + torch.rand(B, T, 1, 1, 1, device=device) * tau_ctx
+            z_ctx_noisy = ctx_tau * context_latents + (1 - ctx_tau) * noise_ctx
 
             z_full = torch.cat([z_ctx_noisy, z_next], dim=1)  # (B, T+1, C, H, W)
 
-            # Create per-timestep tau: context gets tau_ctx, target gets tau_target
-            tau = torch.full((B, T + 1), tau_ctx, device=device)
-            tau[:, -1] = tau_target
+            # Per-timestep tau: context near 1.0, target at current tau
+            ctx_tau_flat = (1.0 - tau_ctx) + torch.rand(B, T, device=device) * tau_ctx
+            tau = torch.cat([ctx_tau_flat, tau_target.expand(B, 1)], dim=1)
 
             # Predict clean frames
             z_pred = model(z_full, tau)
@@ -101,10 +107,9 @@ def predict_next_frame(
             z_next_pred = z_pred[:, -1:]
 
             if i < num_denoise_steps - 1:
-                # Re-noise for next iteration
-                tau_next = taus[i + 1]
-                noise = torch.randn_like(z_next_pred)
-                z_next = (1 - tau_next) * z_next_pred + tau_next * noise
+                # Interpolate toward clean at next tau level
+                next_tau = taus[i + 1]
+                z_next = next_tau * z_next_pred + (1 - next_tau) * z_noise
             else:
                 z_next = z_next_pred
 

@@ -195,6 +195,8 @@ class ReplayDataset(torch.utils.data.Dataset):
 
         # Reward data per video: video_id -> list of reward values per frame
         self.reward_data: dict[str, list[float]] = {}
+        # Death/terminal data per video: video_id -> list of bool per frame
+        self.death_data: dict[str, list[bool]] = {}
 
         if self.use_latents:
             # Use PackedLatentSequenceDataset for pre-tokenized data
@@ -218,7 +220,12 @@ class ReplayDataset(torch.utils.data.Dataset):
             self.replay_files = replay_files
 
     def _load_rewards(self):
-        """Load reward data from features.json files."""
+        """Load reward and terminal data from features.json files.
+
+        Populates self.reward_data with per-frame reward values, and
+        self.death_data with per-frame boolean death flags used to
+        construct the ``continues`` tensor (1.0 = alive, 0.0 = dead).
+        """
         video_ids = set(s['video_id'] for s in self.latent_dataset.sequences)
 
         for video_id in video_ids:
@@ -231,12 +238,16 @@ class ReplayDataset(torch.utils.data.Dataset):
 
             frames = features.get("frames", [])
             rewards = []
+            deaths = []
             for frame in frames:
                 gold = frame.get("gold_gained", 0) * self.gold_scale
-                death = self.death_penalty if frame.get("is_dead", False) else 0.0
+                is_dead = bool(frame.get("is_dead", False))
+                death = self.death_penalty if is_dead else 0.0
                 rewards.append(gold + death)
+                deaths.append(is_dead)
 
             self.reward_data[video_id] = rewards
+            self.death_data[video_id] = deaths
 
     def __len__(self):
         if self.use_latents:
@@ -257,11 +268,12 @@ class ReplayDataset(torch.utils.data.Dataset):
             # to correctly align rewards with frames
             start_frame = seq_info['start_frame']
 
-            # Convert actions dict to single discrete action tensor + movement targets
-            actions_dict = data.get("actions")
-            if actions_dict is not None:
+            # Extract both the factorized action dict (for dynamics model) and
+            # the encoded discrete action tensor (for BC loss)
+            raw_actions_dict = data.get("actions")
+            if raw_actions_dict is not None:
                 # Movement is now (T, 2) float tensor of (x, y) coordinates
-                movement_targets = actions_dict['movement']  # (T, 2) float
+                movement_targets = raw_actions_dict['movement']  # (T, 2) float
 
                 # Encode discrete ability actions (movement=0 placeholder since
                 # movement is now continuous and handled separately)
@@ -270,40 +282,79 @@ class ReplayDataset(torch.utils.data.Dataset):
                     action = encode_action(
                         movement=0,  # movement is now continuous, not used here
                         abilities={
-                            'Q': bool(actions_dict['Q'][t].item()),
-                            'W': bool(actions_dict['W'][t].item()),
-                            'E': bool(actions_dict['E'][t].item()),
-                            'R': bool(actions_dict['R'][t].item()),
-                            'D': bool(actions_dict['D'][t].item()),
-                            'F': bool(actions_dict['F'][t].item()),
-                            'item': bool(actions_dict['item'][t].item()),
-                            'B': bool(actions_dict['B'][t].item()),
+                            'Q': bool(raw_actions_dict['Q'][t].item()),
+                            'W': bool(raw_actions_dict['W'][t].item()),
+                            'E': bool(raw_actions_dict['E'][t].item()),
+                            'R': bool(raw_actions_dict['R'][t].item()),
+                            'D': bool(raw_actions_dict['D'][t].item()),
+                            'F': bool(raw_actions_dict['F'][t].item()),
+                            'item': bool(raw_actions_dict['item'][t].item()),
+                            'B': bool(raw_actions_dict['B'][t].item()),
                         }
                     )
                     actions.append(action)
                 actions = torch.tensor(actions, dtype=torch.long)
+
+                # Build factorized dict for dynamics model (movement + per-ability tensors)
+                factorized_actions = {
+                    'movement': raw_actions_dict['movement'],  # (T, 2)
+                    'Q': raw_actions_dict['Q'],       # (T,)
+                    'W': raw_actions_dict['W'],
+                    'E': raw_actions_dict['E'],
+                    'R': raw_actions_dict['R'],
+                    'D': raw_actions_dict['D'],
+                    'F': raw_actions_dict['F'],
+                    'item': raw_actions_dict['item'],
+                    'B': raw_actions_dict['B'],
+                }
             else:
                 # No actions available - use zeros / center
                 actions = torch.zeros(self.seq_len, dtype=torch.long)
                 movement_targets = torch.full((self.seq_len, 2), 0.5, dtype=torch.float32)
+                # Default factorized actions: center movement, no abilities
+                factorized_actions = {
+                    'movement': torch.full((self.seq_len, 2), 0.5, dtype=torch.float32),
+                    'Q': torch.zeros(self.seq_len, dtype=torch.long),
+                    'W': torch.zeros(self.seq_len, dtype=torch.long),
+                    'E': torch.zeros(self.seq_len, dtype=torch.long),
+                    'R': torch.zeros(self.seq_len, dtype=torch.long),
+                    'D': torch.zeros(self.seq_len, dtype=torch.long),
+                    'F': torch.zeros(self.seq_len, dtype=torch.long),
+                    'item': torch.zeros(self.seq_len, dtype=torch.long),
+                    'B': torch.zeros(self.seq_len, dtype=torch.long),
+                }
 
-            # Get rewards from our loaded reward data
+            # Get rewards and continues from our loaded reward/death data
             if video_id in self.reward_data:
                 video_rewards = self.reward_data[video_id]
                 end_idx = min(start_frame + self.seq_len, len(video_rewards))
                 rewards = video_rewards[start_frame:end_idx]
-                # Pad if needed
                 if len(rewards) < self.seq_len:
                     rewards = rewards + [0.0] * (self.seq_len - len(rewards))
                 rewards = torch.tensor(rewards, dtype=torch.float32)
             else:
                 rewards = torch.zeros(self.seq_len, dtype=torch.float32)
 
+            # Build continues tensor: 0.0 for terminal (death) frames, 1.0 otherwise
+            if video_id in self.death_data:
+                video_deaths = self.death_data[video_id]
+                end_idx = min(start_frame + self.seq_len, len(video_deaths))
+                deaths = video_deaths[start_frame:end_idx]
+                if len(deaths) < self.seq_len:
+                    deaths = deaths + [False] * (self.seq_len - len(deaths))
+                continues = torch.tensor(
+                    [0.0 if d else 1.0 for d in deaths], dtype=torch.float32
+                )
+            else:
+                continues = torch.ones(self.seq_len, dtype=torch.float32)
+
             return {
                 "latents": latents,  # (T, C, H, W) pre-tokenized
                 "actions": actions,  # (T,) discrete ability actions
                 "movement_targets": movement_targets,  # (T, 2) continuous (x, y)
                 "rewards": rewards,  # (T,)
+                "continues": continues,  # (T,) 1.0=alive, 0.0=dead
+                "factorized_actions": factorized_actions,  # dict for dynamics model
             }
         else:
             # Placeholder for raw frame mode
@@ -314,6 +365,7 @@ class ReplayDataset(torch.utils.data.Dataset):
                 "actions": torch.randint(0, 128, (T,)),
                 "movement_targets": torch.full((T, 2), 0.5),
                 "rewards": torch.randn(T) * 10,
+                "continues": torch.ones(T),
             }
 
 
@@ -443,6 +495,7 @@ def train_epoch(
         actions = batch["actions"].to(device)  # (B, T) discrete ability actions
         movement_targets = batch["movement_targets"].to(device)  # (B, T, 2) continuous (x, y)
         rewards = batch["rewards"].to(device)  # (B, T)
+        continues = batch["continues"].to(device)  # (B, T) 1.0=alive, 0.0=dead
 
         B, T = actions.shape
 
@@ -465,15 +518,18 @@ def train_epoch(
                 has_actions = dynamics._orig_mod.use_actions
             else:
                 has_actions = getattr(dynamics, 'use_actions', False)
-            if has_actions and "actions" in batch:
-                # The dataset provides encoded single-int actions, but the dynamics
-                # model expects a factorized dict. Use the raw action dict from the
-                # underlying PackedLatentSequenceDataset instead.
-                pass  # actions_dict remains None — model uses no_action_embed fallback
-                # TODO: pass factorized actions once ReplayDataset exposes them
+            if has_actions and "factorized_actions" in batch:
+                # Move each tensor in the factorized dict to device
+                actions_dict = {
+                    k: v.to(device) for k, v in batch["factorized_actions"].items()
+                }
 
-            # Forward through dynamics with agent tokens
-            z_pred, agent_out = dynamics(z_noisy, tau, independent_frames=use_independent)
+            # Forward through dynamics with agent tokens and actions
+            z_pred, agent_out = dynamics(
+                z_noisy, tau,
+                actions=actions_dict,
+                independent_frames=use_independent,
+            )
 
             # Dynamics loss (x-prediction with ramp weighting, matching Phase 1)
             dynamics_loss = x_prediction_loss(z_pred, z_target, tau, use_ramp_weight=True)

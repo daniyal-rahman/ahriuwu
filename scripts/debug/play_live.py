@@ -134,8 +134,8 @@ def parse_args():
     parser.add_argument(
         "--latent-dim",
         type=int,
-        default=256,
-        help="Latent dimension (must match tokenizer)",
+        default=48,
+        help="Latent dimension (must match tokenizer, default 48)",
     )
     return parser.parse_args()
 
@@ -418,7 +418,8 @@ class LiveInference:
 
         # Stack: (T, 1, C, H, W) -> (1, T, C, H, W)
         latent_seq = torch.cat(latents, dim=0).unsqueeze(0)
-        tau = torch.zeros(1, self.context_frames, device=self.device)
+        # tau=1.0 for clean input (z_tau = tau * z_0 + (1 - tau) * noise, tau=1 is clean)
+        tau = torch.ones(1, self.context_frames, device=self.device)
         timing["build_seq"] = (time.perf_counter() - t0) * 1000
 
         # Dynamics forward

@@ -2,6 +2,7 @@
 
 import json
 import random
+import warnings
 from pathlib import Path
 
 import cv2
@@ -11,7 +12,7 @@ from torch.utils.data import Dataset, Sampler
 
 from collections import defaultdict
 
-from .actions import ABILITY_KEYS, collate_actions
+from .actions import ABILITY_KEYS
 
 # Square target: 352x352. Divisible by 16 (22x22 = 484 patches for patch-based tokenizer).
 # Both tokenizers require square inputs. 352 > 256 gives more detail.
@@ -98,6 +99,8 @@ class SingleFrameDataset(Dataset):
         if not loaded_from_cache:
             # Fall back to loading from JPEG
             frame = cv2.imread(str(frame_path))
+            if frame is None:
+                raise FileNotFoundError(f"Failed to load frame: {frame_path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
 
@@ -183,6 +186,8 @@ class FrameSequenceDataset(Dataset):
         for i in range(self.sequence_length):
             frame_path = video_dir / f"frame_{start_idx + i:06d}.{self.file_ext}"
             frame = cv2.imread(str(frame_path))
+            if frame is None:
+                raise FileNotFoundError(f"Failed to load frame: {frame_path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
 
@@ -289,6 +294,8 @@ class FrameWithStateDataset(Dataset):
             # Load frame
             frame_path = video_dir / f"frame_{frame_idx:06d}.{self.file_ext}"
             frame = cv2.imread(str(frame_path))
+            if frame is None:
+                raise FileNotFoundError(f"Failed to load frame: {frame_path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
 
@@ -343,7 +350,140 @@ class VideoGroupedSampler(Sampler):
         return self._len
 
 
-class PackedLatentSequenceDataset(Dataset):
+class LatentDatasetMixin:
+    """Shared methods for latent sequence datasets.
+
+    Provides _get_actions, has_nonzero_reward, _load_feature_data,
+    and _precompute_reward_indices used by both PackedLatentSequenceDataset
+    and LatentSequenceDataset.
+    """
+
+    def _load_feature_data(self):
+        """Load feature data from features.json for reward checking."""
+        video_ids = set(seq["video_id"] for seq in self.sequences)
+        loaded_count = 0
+
+        for video_id in video_ids:
+            if video_id in self.feature_data:
+                continue  # Already loaded
+            features_path = self.features_dir / video_id / "features.json"
+            if features_path.exists():
+                with open(features_path) as f:
+                    data = json.load(f)
+                    self.feature_data[video_id] = data.get("frames", [])
+                loaded_count += 1
+
+        print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
+
+    def _precompute_reward_indices(self):
+        """Pre-compute indices of sequences with non-zero rewards.
+
+        Called once at init for efficient RewardMixtureSampler.
+        """
+        for idx in range(len(self.sequences)):
+            if self.has_nonzero_reward(idx):
+                self.reward_indices.append(idx)
+
+        pct = 100 * len(self.reward_indices) / len(self.sequences) if self.sequences else 0
+        print(f"Pre-computed reward indices: {len(self.reward_indices)}/{len(self.sequences)} ({pct:.1f}%) have rewards")
+
+    def has_nonzero_reward(self, idx: int) -> bool:
+        """Check if a sequence has any non-zero reward without full loading.
+
+        This is used by RewardMixtureSampler for efficient pre-scanning.
+
+        Args:
+            idx: Sequence index
+
+        Returns:
+            True if sequence contains any non-zero reward (gold or death)
+        """
+        seq_info = self.sequences[idx]
+        video_id = seq_info["video_id"]
+        start_frame = seq_info["start_frame"]
+
+        if video_id not in self.feature_data:
+            return False
+
+        frames = self.feature_data[video_id]
+        context_frames = 5
+
+        for t in range(self.sequence_length):
+            frame_idx = start_frame + t
+            if frame_idx >= len(frames):
+                continue
+
+            entry = frames[frame_idx]
+
+            # Check gold reward
+            gold = entry.get('gold_gained', 0) or 0
+            if gold != 0:
+                return True
+
+            # Check death (simplified check - look for health bar disappearance)
+            curr_hb = entry.get('health_bar_x') is not None
+            if not curr_hb:
+                prev_hb_count = 0
+                for lookback in range(1, context_frames + 1):
+                    prev_idx = frame_idx - lookback
+                    if 0 <= prev_idx < len(frames):
+                        if frames[prev_idx].get('health_bar_x') is not None:
+                            prev_hb_count += 1
+                if prev_hb_count >= 3:
+                    # Potential death - check if stays gone
+                    gone_count = 0
+                    for lookahead in range(1, 4):
+                        next_idx = frame_idx + lookahead
+                        if next_idx < len(frames):
+                            if frames[next_idx].get('health_bar_x') is None:
+                                gone_count += 1
+                    if gone_count >= 2:
+                        return True
+
+        return False
+
+    def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
+        """Get action tensors for a sequence.
+
+        Movement is returned as (T, 2) float tensor of (x, y) coordinates in [0, 1].
+        Falls back to (0.5, 0.5) center when mouse_x/mouse_y are not available.
+        Abilities are returned as (T,) long tensors.
+        """
+        if video_id not in self.action_labels:
+            return None
+
+        labels = self.action_labels[video_id]
+        movement_xy = []
+        ability_actions = {k: [] for k in ABILITY_KEYS}
+
+        for t in range(start_frame, start_frame + self.sequence_length):
+            if t < len(labels):
+                entry = labels[t]
+                mouse_x = float(entry.get('mouse_x', 0.5))
+                mouse_y = float(entry.get('mouse_y', 0.5))
+                movement_xy.append([mouse_x, mouse_y])
+                ability_actions['Q'].append(int(entry.get('ability_q', False)))
+                ability_actions['W'].append(int(entry.get('ability_w', False)))
+                ability_actions['E'].append(int(entry.get('ability_e', False)))
+                ability_actions['R'].append(int(entry.get('ability_r', False)))
+                ability_actions['D'].append(int(entry.get('summoner_d', False)))
+                ability_actions['F'].append(int(entry.get('summoner_f', False)))
+                ability_actions['item'].append(int(entry.get('item_used', False)))
+                ability_actions['B'].append(int(entry.get('recall_b', False)))
+            else:
+                movement_xy.append([0.5, 0.5])
+                for k in ABILITY_KEYS:
+                    ability_actions[k].append(0)
+
+        result = {
+            'movement': torch.tensor(movement_xy, dtype=torch.float32),  # (T, 2)
+        }
+        for k in ABILITY_KEYS:
+            result[k] = torch.tensor(ability_actions[k], dtype=torch.long)
+        return result
+
+
+class PackedLatentSequenceDataset(LatentDatasetMixin, Dataset):
     """Dataset of packed latent sequences for dynamics model training.
 
     Loads latent vectors from packed .npz/.pt files (one per video) instead of
@@ -376,7 +516,11 @@ class PackedLatentSequenceDataset(Dataset):
         self.sequence_length = sequence_length
         self.stride = stride
         self.load_actions = load_actions
-        self.features_dir = Path(features_dir) if features_dir else self.latents_dir.parent.parent / "data" / "processed"
+        if features_dir:
+            self.features_dir = Path(features_dir)
+        else:
+            self.features_dir = self.latents_dir.parent.parent / "data" / "processed"
+            warnings.warn(f"features_dir not specified, using fallback: {self.features_dir}")
 
         # Cache for loaded video data: video_id -> (latents, frame_indices)
         # With 20GB RAM and ~216MB per video, 50 videos ≈ 10GB
@@ -504,130 +648,6 @@ class PackedLatentSequenceDataset(Dataset):
 
         print(f"Loaded action labels for {loaded_count}/{len(video_ids)} videos")
 
-    def _load_feature_data(self):
-        """Load feature data from features.json for reward checking."""
-        video_ids = set(seq["video_id"] for seq in self.sequences)
-        loaded_count = 0
-
-        for video_id in video_ids:
-            if video_id in self.feature_data:
-                continue  # Already loaded
-            features_path = self.features_dir / video_id / "features.json"
-            if features_path.exists():
-                with open(features_path) as f:
-                    data = json.load(f)
-                    self.feature_data[video_id] = data.get("frames", [])
-                loaded_count += 1
-
-        print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
-
-    def _precompute_reward_indices(self):
-        """Pre-compute indices of sequences with non-zero rewards.
-
-        Called once at init for efficient RewardMixtureSampler.
-        """
-        for idx in range(len(self.sequences)):
-            if self.has_nonzero_reward(idx):
-                self.reward_indices.append(idx)
-
-        pct = 100 * len(self.reward_indices) / len(self.sequences) if self.sequences else 0
-        print(f"Pre-computed reward indices: {len(self.reward_indices)}/{len(self.sequences)} ({pct:.1f}%) have rewards")
-
-    def has_nonzero_reward(self, idx: int) -> bool:
-        """Check if a sequence has any non-zero reward without full loading.
-
-        This is used by RewardMixtureSampler for efficient pre-scanning.
-
-        Args:
-            idx: Sequence index
-
-        Returns:
-            True if sequence contains any non-zero reward (gold or death)
-        """
-        seq_info = self.sequences[idx]
-        video_id = seq_info["video_id"]
-        start_frame = seq_info["start_frame"]
-
-        if video_id not in self.feature_data:
-            return False
-
-        frames = self.feature_data[video_id]
-        context_frames = 5
-
-        for t in range(self.sequence_length):
-            frame_idx = start_frame + t
-            if frame_idx >= len(frames):
-                continue
-
-            entry = frames[frame_idx]
-
-            # Check gold reward
-            gold = entry.get('gold_gained', 0) or 0
-            if gold != 0:
-                return True
-
-            # Check death (simplified check - look for health bar disappearance)
-            curr_hb = entry.get('health_bar_x') is not None
-            if not curr_hb:
-                prev_hb_count = 0
-                for lookback in range(1, context_frames + 1):
-                    prev_idx = frame_idx - lookback
-                    if 0 <= prev_idx < len(frames):
-                        if frames[prev_idx].get('health_bar_x') is not None:
-                            prev_hb_count += 1
-                if prev_hb_count >= 3:
-                    # Potential death - check if stays gone
-                    gone_count = 0
-                    for lookahead in range(1, 4):
-                        next_idx = frame_idx + lookahead
-                        if next_idx < len(frames):
-                            if frames[next_idx].get('health_bar_x') is None:
-                                gone_count += 1
-                    if gone_count >= 2:
-                        return True
-
-        return False
-
-    def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
-        """Get action tensors for a sequence.
-
-        Movement is returned as (T, 2) float tensor of (x, y) coordinates in [0, 1].
-        Falls back to (0.5, 0.5) center when mouse_x/mouse_y are not available.
-        Abilities are returned as (T,) long tensors.
-        """
-        if video_id not in self.action_labels:
-            return None
-
-        labels = self.action_labels[video_id]
-        movement_xy = []
-        ability_actions = {k: [] for k in ABILITY_KEYS}
-
-        for t in range(start_frame, start_frame + self.sequence_length):
-            if t < len(labels):
-                entry = labels[t]
-                mouse_x = float(entry.get('mouse_x', 0.5))
-                mouse_y = float(entry.get('mouse_y', 0.5))
-                movement_xy.append([mouse_x, mouse_y])
-                ability_actions['Q'].append(int(entry.get('ability_q', False)))
-                ability_actions['W'].append(int(entry.get('ability_w', False)))
-                ability_actions['E'].append(int(entry.get('ability_e', False)))
-                ability_actions['R'].append(int(entry.get('ability_r', False)))
-                ability_actions['D'].append(int(entry.get('summoner_d', False)))
-                ability_actions['F'].append(int(entry.get('summoner_f', False)))
-                ability_actions['item'].append(int(entry.get('item_used', False)))
-                ability_actions['B'].append(int(entry.get('recall_b', False)))
-            else:
-                movement_xy.append([0.5, 0.5])
-                for k in ABILITY_KEYS:
-                    ability_actions[k].append(0)
-
-        result = {
-            'movement': torch.tensor(movement_xy, dtype=torch.float32),  # (T, 2)
-        }
-        for k in ABILITY_KEYS:
-            result[k] = torch.tensor(ability_actions[k], dtype=torch.long)
-        return result
-
     def __len__(self) -> int:
         return len(self.sequences)
 
@@ -657,7 +677,7 @@ class PackedLatentSequenceDataset(Dataset):
         return result
 
 
-class LatentSequenceDataset(Dataset):
+class LatentSequenceDataset(LatentDatasetMixin, Dataset):
     """Dataset of pre-tokenized latent sequences for dynamics model training.
 
     Loads latent vectors from .npy files instead of raw frames.
@@ -697,7 +717,11 @@ class LatentSequenceDataset(Dataset):
         self.stride = stride
         self.load_actions = load_actions
         self.load_rewards = load_rewards
-        self.features_dir = Path(features_dir) if features_dir else self.latents_dir.parent.parent / "data" / "processed"
+        if features_dir:
+            self.features_dir = Path(features_dir)
+        else:
+            self.features_dir = self.latents_dir.parent.parent / "data" / "processed"
+            warnings.warn(f"features_dir not specified, using fallback: {self.features_dir}")
         self.gold_scale = gold_scale
         self.death_penalty = death_penalty
 
@@ -773,36 +797,10 @@ class LatentSequenceDataset(Dataset):
 
         print(f"Indexed {len(self.sequences)} latent sequences from {self.latents_dir}")
 
-    def _load_feature_data(self):
-        """Load feature data from features.json for each video."""
-        video_ids = set(seq["video_id"] for seq in self.sequences)
-        loaded_count = 0
-
-        for video_id in video_ids:
-            features_path = self.features_dir / video_id / "features.json"
-            if features_path.exists():
-                with open(features_path) as f:
-                    data = json.load(f)
-                    # features.json has {"frames": [...]} structure
-                    self.feature_data[video_id] = data.get("frames", [])
-                loaded_count += 1
-
-        print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
-
-    def _precompute_reward_indices(self):
-        """Pre-compute indices of sequences with non-zero rewards.
-
-        This is called once at init time for efficient RewardMixtureSampler.
-        """
-        for idx in range(len(self.sequences)):
-            if self.has_nonzero_reward(idx):
-                self.reward_indices.append(idx)
-
-        pct = 100 * len(self.reward_indices) / len(self.sequences) if self.sequences else 0
-        print(f"Pre-computed reward indices: {len(self.reward_indices)}/{len(self.sequences)} ({pct:.1f}%) have rewards")
-
     def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
         """Get action tensors for a sequence.
+
+        Overrides mixin to read from feature_data (not action_labels).
 
         Args:
             video_id: Video identifier
@@ -948,61 +946,6 @@ class LatentSequenceDataset(Dataset):
             result["rewards"] = rewards  # (T,) tensor or None
 
         return result
-
-    def has_nonzero_reward(self, idx: int) -> bool:
-        """Check if a sequence has any non-zero reward without full loading.
-
-        This is used by RewardMixtureSampler for efficient pre-scanning.
-
-        Args:
-            idx: Sequence index
-
-        Returns:
-            True if sequence contains any non-zero reward
-        """
-        seq_info = self.sequences[idx]
-        video_id = seq_info["video_id"]
-        start_frame = seq_info["start_frame"]
-
-        if video_id not in self.feature_data:
-            return False
-
-        frames = self.feature_data[video_id]
-        context_frames = 5
-
-        for t in range(self.sequence_length):
-            frame_idx = start_frame + t
-            if frame_idx >= len(frames):
-                continue
-
-            entry = frames[frame_idx]
-
-            # Check gold reward
-            gold = entry.get('gold_gained', 0) or 0
-            if gold != 0:
-                return True
-
-            # Check death (simplified check - just look for health bar disappearance)
-            curr_hb = entry.get('health_bar_x') is not None
-            if not curr_hb:
-                prev_hb_count = 0
-                for lookback in range(1, context_frames + 1):
-                    prev_idx = frame_idx - lookback
-                    if 0 <= prev_idx < len(frames):
-                        if frames[prev_idx].get('health_bar_x') is not None:
-                            prev_hb_count += 1
-                if prev_hb_count >= 3:
-                    # Potential death - check if stays gone
-                    gone_count = 0
-                    for lookahead in range(1, 4):
-                        next_idx = frame_idx + lookahead
-                        if next_idx < len(frames):
-                            if frames[next_idx].get('health_bar_x') is None:
-                                gone_count += 1
-                    if gone_count >= 2:
-                        return True
-
-        return False
 
 
 class RewardMixtureSampler(Sampler):

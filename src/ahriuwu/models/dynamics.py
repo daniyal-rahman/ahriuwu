@@ -27,6 +27,7 @@ from .layers import (
     RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
     RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
 )
+from ..data.actions import MOVEMENT_DIM, ABILITY_KEYS
 
 
 # --- flex_attention helpers (fused kernels for soft capping + masking) ---
@@ -41,10 +42,7 @@ def _causal_mask_mod(b, h, q_idx, kv_idx):
 def _diagonal_mask_mod(b, h, q_idx, kv_idx):
     return q_idx == kv_idx
 
-# Action space constants (must match data/actions.py)
-MOVEMENT_DIM = 2  # Continuous (x, y) in [0, 1]
 MOVEMENT_CLASSES = 18  # Legacy, deprecated
-ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
 def _checkpoint_block_forward(block, x, independent_frames):
@@ -914,6 +912,9 @@ class DynamicsTransformer(nn.Module):
             (B, T, D) conditioning token
         """
         # Convert continuous tau to discrete index: tau * k_max -> integer in [0, k_max)
+        # NOTE: This quantization to k_max discrete bins is intentional, matching the
+        # DreamerV4 paper's "discrete signal levels" design. Even when tau is sampled
+        # continuously, embedding it via a discrete lookup table is the intended approach.
         tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
         tau_emb = self.tau_embed(tau_idx)  # (B, D) or (B, T, D)
 

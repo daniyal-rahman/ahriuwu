@@ -5,7 +5,6 @@ Provides common infrastructure:
 - Optimizer creation with bitsandbytes fallback (create_optimizer)
 - WSD (Warmup-Stable-Decay) learning rate schedule (create_wsd_schedule)
 - Checkpoint save/load (save_checkpoint, load_checkpoint)
-- Slurm cooperative yielding (should_yield_to_queue)
 - Two-mode preemption system (install_preemption_handlers, PreemptionState)
 """
 
@@ -314,6 +313,3 @@ def load_checkpoint(
     )
 
 
-def is_queue_yield_enabled(checkpoint_dir: str | Path | None = None) -> bool:
-    """Deprecated: Slurm QOS preemption handles this now. Always returns False."""
-    return False

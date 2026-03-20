@@ -151,23 +151,19 @@ def compute_lambda_returns(
         (B, T) λ-returns (original scale)
     """
     B, T = rewards.shape
-    device = rewards.device
-    dtype = rewards.dtype
 
     # Initialize returns tensor
     returns = torch.zeros_like(rewards)
 
-    # Bootstrap from final value
+    # Bootstrap: the return at the horizon is the value estimate at the last step.
+    # The loop iterates from T-2 down to 0 because the return at T-1 IS the
+    # bootstrap value (there is no reward beyond the horizon to incorporate).
     next_return = values[:, -1]
+    returns[:, -1] = next_return
 
-    # Compute returns backwards in time
-    for t in range(T - 1, -1, -1):
-        if t < T - 1:
-            next_value = values[:, t + 1]
-        else:
-            next_value = values[:, t]  # Bootstrap
-
-        # λ-return: blend TD target with full return
+    # Compute returns backwards from T-2 to 0
+    for t in range(T - 2, -1, -1):
+        next_value = values[:, t + 1]
         next_return = rewards[:, t] + gamma * continues[:, t] * (
             (1 - lambda_) * next_value + lambda_ * next_return
         )
@@ -254,7 +250,8 @@ def compute_mtp_loss(
 def compute_pmpo_loss(
     log_probs: torch.Tensor,
     advantages: torch.Tensor,
-    log_probs_prior: torch.Tensor,
+    policy_logits: torch.Tensor,
+    prior_logits: torch.Tensor,
     alpha: float = 0.5,
     beta: float = 0.3,
 ) -> torch.Tensor:
@@ -264,12 +261,16 @@ def compute_pmpo_loss(
     (A >= 0) and negative (A < 0) sets. This balances positive and negative
     feedback without needing advantage normalization.
 
-    L = (1-α)/|D-| Σ_{D-} ln π - α/|D+| Σ_{D+} ln π + β/N Σ KL[π || π_prior]
+    L = (1-a)/|D-| sum_{D-} ln pi - a/|D+| sum_{D+} ln pi + b * KL[pi || pi_prior]
+
+    The KL term is computed as the full categorical KL divergence over the
+    action distribution, not a single-sample log-ratio approximation.
 
     Args:
-        log_probs: (N,) log π_θ(a|s) for all imagined states
-        advantages: (N,) raw advantages A_t = R^λ_t - v_t (NOT normalized)
-        log_probs_prior: (N,) log π_prior(a|s) from frozen BC policy
+        log_probs: (N,) log pi_theta(a|s) for sampled actions
+        advantages: (N,) raw advantages A_t = R^lambda_t - v_t (NOT normalized)
+        policy_logits: (N, A) full logits from current policy (for KL computation)
+        prior_logits: (N, A) full logits from frozen behavioral prior
         alpha: Weight for positive advantages (0.5 = equal balance)
         beta: KL regularization weight (0.3 = weak prior)
 
@@ -285,8 +286,12 @@ def compute_pmpo_loss(
     # Minimize log-prob for states with negative advantage
     loss_neg = log_probs[neg_mask].mean() if neg_mask.any() else torch.tensor(0.0, device=log_probs.device)
 
-    # Reverse KL to behavioral prior: KL[π_θ || π_prior]
-    kl = (log_probs - log_probs_prior).mean()
+    # Full categorical KL divergence: KL[pi_theta || pi_prior]
+    # KL(p||q) = sum_a p(a) * (log p(a) - log q(a))
+    policy_log_probs = F.log_softmax(policy_logits, dim=-1)
+    prior_log_probs = F.log_softmax(prior_logits, dim=-1)
+    policy_probs = policy_log_probs.exp()
+    kl = (policy_probs * (policy_log_probs - prior_log_probs)).sum(dim=-1).mean()
 
     return (1 - alpha) * loss_neg + alpha * loss_pos + beta * kl
 
@@ -296,6 +301,10 @@ class RunningRMS:
 
     DreamerV4 normalizes losses by their running RMS to balance them.
     """
+
+    # Minimum RMS value to prevent division-by-near-zero on early batches
+    # when the EMA has not yet accumulated meaningful statistics.
+    MIN_RMS = 1e-4
 
     def __init__(self, decay: float = 0.99):
         """Initialize running RMS.
@@ -324,6 +333,10 @@ class RunningRMS:
             if self.rms.device != value_sq.device:
                 self.rms = self.rms.to(value_sq.device)
             self.rms = self.decay * self.rms + (1 - self.decay) * value_sq
+
+        # Clamp RMS to avoid instability when the first few loss values are
+        # very small (e.g. zero-init heads producing near-zero losses).
+        self.rms = torch.clamp(self.rms, min=self.MIN_RMS ** 2)
 
         return value / (torch.sqrt(self.rms) + 1e-8)
 

@@ -129,8 +129,9 @@ def validate_reward_model(dynamics, reward_head, dataset, gold_indices, non_gold
             B, T = 1, latents.shape[1]
 
             with torch.no_grad():
-                # Use tau=0 (no noise) for clean predictions
-                tau = torch.zeros(B, T, device=device)
+                # Use tau=1.0 (clean data, no noise) per convention:
+                # z_tau = tau * z_0 + (1 - tau) * noise, so tau=1 means z_tau = z_0
+                tau = torch.ones(B, T, device=device)
 
                 # Forward through dynamics (float32 for inference stability)
                 _, agent_out = dynamics(latents, tau)
@@ -203,7 +204,8 @@ def validate_action_predictions(dynamics, policy_head, dataset, device, n_sample
             gt_actions.append(action)
 
         with torch.no_grad():
-            tau = torch.zeros(1, seq_len, device=device)
+            # tau=1.0 for clean input (z_tau = tau * z_0 + (1 - tau) * noise)
+            tau = torch.ones(1, seq_len, device=device)
             _, agent_out = dynamics(latents, tau)
             action_logits = policy_head(agent_out)  # (1, T, L, action_dim)
 

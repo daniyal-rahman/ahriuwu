@@ -11,6 +11,8 @@ References:
 - DreamerV4: "Training Agents Inside of Scalable World Models" (Hafner et al., 2025)
 """
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -131,7 +133,11 @@ class DiffusionSchedule:
         context_tau = tau_ctx + torch.rand(batch_size, seq_length, device=device) * (1.0 - tau_ctx)
 
         # Target frames: τ decreases from tau_ctx toward tau_min (more noise)
+        # Add small noise to avoid a fully deterministic linear ramp, which would
+        # make the model memorize exact positions rather than generalize over tau.
         target_tau = tau_ctx - normalized_dist * (tau_ctx - tau_min)
+        target_tau = target_tau + torch.randn_like(target_tau) * 0.02
+        target_tau = target_tau.clamp(tau_min, tau_ctx)
 
         tau = torch.where(is_context, context_tau, target_tau)
 
@@ -164,11 +170,14 @@ class DiffusionSchedule:
         z_t = torch.randn(shape, device=device)
         z_noise = z_t.clone()
 
-        # Euler integration from τ=0 (noise) to τ=1 (clean)
-        step_size = 1.0 / num_steps
+        # Euler integration from τ=eps (near-noise) to τ=1 (clean).
+        # Starting exactly at τ=0 means the input is pure noise and the model
+        # prediction is essentially random. Start from a small epsilon instead.
+        eps = 1e-3
+        step_size = (1.0 - eps) / num_steps
 
         for i in range(num_steps):
-            tau = i * step_size
+            tau = eps + i * step_size
             tau_tensor = torch.full((shape[0],), tau, device=device)
 
             # Predict clean data
@@ -244,58 +253,6 @@ def x_prediction_loss(
         return mse
 
 
-class TimestepEmbedding(nn.Module):
-    """Sinusoidal timestep embedding for diffusion models.
-
-    Maps scalar timestep τ ∈ [0, 1] to a vector embedding.
-    """
-
-    def __init__(self, dim: int, max_period: int = 10000):
-        super().__init__()
-        self.dim = dim
-        self.max_period = max_period
-
-        # MLP to project embeddings
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, dim * 4),
-            nn.SiLU(),
-            nn.Linear(dim * 4, dim),
-        )
-
-    def forward(self, tau: torch.Tensor) -> torch.Tensor:
-        """Embed timesteps.
-
-        Args:
-            tau: Timesteps, shape (B,) or (B, T)
-
-        Returns:
-            emb: Embeddings, shape (B, dim) or (B, T, dim)
-        """
-        # Sinusoidal embedding
-        half_dim = self.dim // 2
-        freqs = torch.exp(
-            -torch.log(torch.tensor(self.max_period, device=tau.device))
-            * torch.arange(half_dim, device=tau.device)
-            / half_dim
-        )
-
-        # Expand tau for broadcasting
-        if tau.dim() == 1:
-            # (B,) -> (B, 1) for broadcasting with freqs (half_dim,)
-            args = tau.unsqueeze(-1) * freqs
-        else:
-            # (B, T) -> (B, T, 1) for broadcasting
-            args = tau.unsqueeze(-1) * freqs
-
-        # Concat sin and cos
-        emb = torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
-
-        # MLP projection
-        emb = self.mlp(emb)
-
-        return emb
-
-
 # Shortcut forcing utilities (for Phase 2 - advanced training)
 
 class ShortcutForcing:
@@ -311,7 +268,7 @@ class ShortcutForcing:
         self.k_max = k_max
         self.k_min = k_min
         # Step sizes: 1, 2, 4, 8, ..., k_max
-        self.step_sizes = [2**i for i in range(int(torch.log2(torch.tensor(k_max)).item()) + 1)]
+        self.step_sizes = [2**i for i in range(int(math.log2(k_max)) + 1)]
 
     def sample_step_size(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Sample step sizes with inverse weighting.
@@ -598,13 +555,5 @@ if __name__ == "__main__":
     pred = z_0 + 0.1 * torch.randn_like(z_0)  # Simulated prediction
     loss = x_prediction_loss(pred, z_0, tau_df)
     print(f"Loss with per-timestep tau: {loss.item():.4f}")
-
-    # Test timestep embedding
-    emb = TimestepEmbedding(512)
-    tau_emb = emb(tau)
-    print(f"Timestep embedding shape (B,): {tau_emb.shape}")
-
-    tau_emb_df = emb(tau_df)
-    print(f"Timestep embedding shape (B,T): {tau_emb_df.shape}")
 
     print("\nAll tests passed!")

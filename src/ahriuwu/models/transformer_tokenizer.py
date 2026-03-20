@@ -7,6 +7,14 @@ Implements DreamerV4 Section 3.1 tokenizer with factored space-time attention:
 - Bottleneck: linear → tanh → reshape (512×D → 256×32)
 - MAE training with p ~ U(0, 0.9)
 - Loss: MSE + 0.2 * LPIPS
+
+Weight initialization follows standard transformer practice:
+- nn.Embedding: normal(0, 0.02)
+- nn.Linear: xavier_uniform(gain=1.0)
+- Residual paths (attention out_proj, SwiGLU w3): scaled by 1/sqrt(2*num_layers)
+
+When QKNorm is enabled, the 1/sqrt(d) attention scaling is removed (set to 1.0)
+since QKNorm already normalizes Q and K to unit RMS, following Gemma 2 convention.
 """
 
 import math
@@ -87,9 +95,13 @@ class MultiHeadAttention(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
+
+        # When QKNorm is enabled, Q and K are already normalized to unit RMS,
+        # so the 1/sqrt(d) scaling is redundant and compresses attention logits.
+        # Following Gemma 2 convention, we set scale=1.0 with QKNorm.
+        self.scale = 1.0 if use_qk_norm else self.head_dim ** -0.5
 
         self.q_proj = nn.Linear(dim, dim, bias=False)
         self.k_proj = nn.Linear(dim, dim, bias=False)
@@ -189,8 +201,11 @@ class TemporalAttentionTok(nn.Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
-        self.scale = self.head_dim ** -0.5
         self.soft_cap = soft_cap
+
+        # When QKNorm is enabled, Q and K are already normalized to unit RMS,
+        # so the 1/sqrt(d) scaling is redundant. Set scale=1.0 (Gemma 2 convention).
+        self.scale = 1.0 if use_qk_norm else self.head_dim ** -0.5
 
         self.q_proj = nn.Linear(dim, dim, bias=False)
         self.k_proj = nn.Linear(dim, dim, bias=False)
@@ -797,6 +812,45 @@ class TransformerTokenizer(nn.Module):
 
         # Output activation
         self.output_act = nn.Sigmoid()
+
+        # Initialize weights
+        self._init_weights()
+
+    @staticmethod
+    def _init_module(module: nn.Module):
+        """Type-based weight initialization (standard transformer).
+
+        Dispatches by module type — rename-safe, no string matching.
+        """
+        if isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, std=0.02)
+        elif isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight, gain=1.0)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def _init_weights(self):
+        """Initialize all weights, then apply residual scaling overrides.
+
+        Type-based defaults via apply(), then explicit overrides for:
+        - Residual output paths: scaled by 1/sqrt(2*num_layers) for deep networks
+          where num_layers = total encoder + decoder blocks
+        - Attention out_proj and SwiGLU w3 in each block get residual scaling
+        """
+        # Type-based defaults: embeddings get normal, linears get xavier
+        self.apply(self._init_module)
+
+        # Count total blocks across encoder and decoder for residual scaling
+        num_layers = len(self.encoder.blocks) + len(self.decoder.blocks)
+        residual_scale = 1.0 / math.sqrt(2 * num_layers)
+
+        # Residual scaling: attention out_proj and SwiGLU w3 in each block
+        for block in self.encoder.blocks:
+            nn.init.xavier_uniform_(block.attn.out_proj.weight, gain=residual_scale)
+            nn.init.xavier_uniform_(block.ffn.w3.weight, gain=residual_scale)
+        for block in self.decoder.blocks:
+            nn.init.xavier_uniform_(block.attn.out_proj.weight, gain=residual_scale)
+            nn.init.xavier_uniform_(block.ffn.w3.weight, gain=residual_scale)
 
     def make_mask(
         self,

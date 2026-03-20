@@ -37,7 +37,7 @@ from ahriuwu.data.dataset import VideoGroupedSampler
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import (
     add_training_args, create_optimizer, create_wsd_schedule,
-    save_checkpoint, load_checkpoint, should_yield_to_queue, is_queue_yield_enabled,
+    save_checkpoint, load_checkpoint,
     PreemptionState, install_preemption_handlers, compute_dynamic_save_interval,
 )
 
@@ -480,15 +480,22 @@ def train_epoch(
                 # Shortcut forcing: sample step sizes and grid-aligned tau
                 # Grid alignment is critical — after a half-step, tau must land
                 # on a valid grid point for the teacher's second forward pass.
-                gc_was_enabled = getattr(model, 'gradient_checkpointing', False)
+                #
+                # Gradient checkpointing must be disabled for shortcut forcing
+                # (multiple forward passes through the model). Access _orig_mod
+                # for torch.compile'd models where the wrapper lacks the attr.
+                _inner = getattr(model, '_orig_mod', model)
+                gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
                 if gc_was_enabled:
-                    model.gradient_checkpointing = False
-                step_size = shortcut.sample_step_size(B, device=device)
-                tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
-                z_tau, noise = schedule.add_noise(z_0, tau)
-                raw_loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
-                if gc_was_enabled:
-                    model.gradient_checkpointing = True
+                    _inner.gradient_checkpointing = False
+                try:
+                    step_size = shortcut.sample_step_size(B, device=device)
+                    tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
+                    z_tau, noise = schedule.add_noise(z_0, tau)
+                    raw_loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
+                finally:
+                    if gc_was_enabled:
+                        _inner.gradient_checkpointing = True
                 # No per-component RMS normalization — standard and bootstrap
                 # are already x-space scale by design (Paper Eq. 7 footnote).
                 # RMS normalization is for balancing against other modalities
@@ -654,12 +661,6 @@ def train_epoch(
             log_step(eval_results, step=global_step)
             psnr_strs = " ".join(f"{k.split('/')[-1]}={v:.1f}" for k, v in eval_results.items())
             print(f"  [EVAL step {global_step}] {psnr_strs}")
-
-        # Periodic queue check (~every 60s): if yield_to_queue file exists and a job is waiting
-        if not _preempt.should_save_now() and global_step > 0:
-            elapsed = time.time() - start_time
-            if elapsed > 60 and int(elapsed) % 60 < 2 and is_queue_yield_enabled(base_checkpoint_dir) and should_yield_to_queue():
-                _preempt.immediate.set()
 
         # Immediate preemption: check every optimizer step (SIGUSR1 or queue yield)
         if _preempt.should_save_now() and checkpoint_dir is not None and global_step > 0:
@@ -929,14 +930,15 @@ def main():
         print(f"Shortcut forcing enabled (k_max={args.shortcut_k_max})")
 
     # Create scaler for mixed precision
-    scaler = GradScaler(args.device.split(":")[0])
+    # GradScaler is only useful for float16; with bfloat16 it's a no-op that can
+    # spuriously skip optimizer steps. Only enable for float16 (e.g. MPS).
+    amp_dtype = torch.bfloat16 if args.device != "mps" else torch.float16
+    scaler = GradScaler(args.device.split(":")[0], enabled=(amp_dtype == torch.float16))
 
-    # RMS trackers for loss normalization
+    # RMS trackers for loss normalization (only used in standard training mode;
+    # shortcut forcing already balances std/boot losses internally via Paper Eq. 7)
     if args.shortcut_forcing:
-        rms_dict = {
-            "std": RunningRMS(),
-            "boot": RunningRMS(),
-        }
+        rms_dict = None
     else:
         rms_dict = {
             "x_pred": RunningRMS(),
@@ -962,8 +964,8 @@ def main():
     if val_batch is not None:
         print(f"Validation batch: {val_batch['latents'].shape}")
 
-    # Training loop
-    best_loss = float("inf")
+    # Training loop — use validation PSNR (not training loss) to select best model
+    best_psnr = -float("inf")
     history = []
 
     for epoch in range(start_epoch, args.epochs):
@@ -1036,15 +1038,23 @@ def main():
                     metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
                 )
 
-        # Save best model
-        if metrics["loss"] < best_loss:
-            best_loss = metrics["loss"]
-            best_path = checkpoint_dir / "dynamics_best.pt"
-            save_checkpoint(
-                best_path, model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
+        # Save best model based on validation PSNR (mean across tau levels)
+        if val_batch is not None:
+            eval_results = eval_denoising_psnr(
+                model, schedule, val_batch, args.device, shortcut=shortcut
             )
-            print(f"New best model saved (loss: {best_loss:.4f})")
+            psnr_keys = [k for k in eval_results if k.startswith("eval/psnr_tau")]
+            mean_psnr = sum(eval_results[k] for k in psnr_keys) / max(len(psnr_keys), 1)
+            log_step({"epoch/mean_psnr": mean_psnr}, step=global_step)
+
+            if mean_psnr > best_psnr:
+                best_psnr = mean_psnr
+                best_path = checkpoint_dir / "dynamics_best.pt"
+                save_checkpoint(
+                    best_path, model, optimizer, scaler, epoch, global_step,
+                    metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
+                )
+                print(f"New best model saved (PSNR: {best_psnr:.2f} dB)")
 
         if metrics.get("preempted"):
             print("Preempted during epoch — exiting training loop.", flush=True)
@@ -1058,7 +1068,8 @@ def main():
 
     print("\n" + "=" * 60)
     print("Training complete!")
-    print(f"Best loss: {best_loss:.4f}")
+    if best_psnr > -float("inf"):
+        print(f"Best PSNR: {best_psnr:.2f} dB")
     print(f"Best model: {checkpoint_dir / 'dynamics_best.pt'}")
     print("=" * 60)
 

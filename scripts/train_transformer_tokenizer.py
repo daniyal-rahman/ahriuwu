@@ -195,12 +195,15 @@ def train_epoch(
     checkpoint_dir: Path = None,
     base_checkpoint_dir: Path = None,
 ):
-    """Train for one epoch with MAE training."""
+    """Train for one epoch with MAE training.
+
+    Computes LPIPS every step for consistent loss magnitude. Uses GradScaler
+    only when dtype is float16 (disabled for bfloat16 to avoid spurious step skips).
+    """
     model.train()
     total_loss = 0.0
     total_mse = 0.0
     total_lpips = 0.0
-    num_lpips_batches = 0
     total_psnr = 0.0
     num_batches = 0
 
@@ -217,6 +220,8 @@ def train_epoch(
         if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
             warmup_progress = global_step / args.mask_warmup_steps
             current_mask_max = args.mask_ratio_max * warmup_progress
+            # Ensure current_mask_max >= mask_ratio_min so U(min, max) is valid
+            current_mask_max = max(current_mask_max, args.mask_ratio_min)
         else:
             current_mask_max = args.mask_ratio_max
 
@@ -239,17 +244,13 @@ def train_epoch(
             recon = output["reconstruction"]
             mask_indices = output.get("mask_indices", None)
 
-            # Compute MAE loss — run LPIPS every 4th optimizer step only
-            use_lpips = (global_step % 4 == 0)
-            losses = loss_fn(recon, frames, mask_indices=mask_indices, skip_lpips=not use_lpips)
+            # Compute MAE loss — LPIPS every step for consistent loss magnitude
+            losses = loss_fn(recon, frames, mask_indices=mask_indices, skip_lpips=False)
 
             # Normalize MSE and LPIPS separately via RunningRMS
             mse_norm = rms_trackers["mse"].update(losses["mse"])
-            if use_lpips:
-                lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
-                loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
-            else:
-                loss = mse_norm / accumulation_steps
+            lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
+            loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
 
         # Backward with scaling
         scaler.scale(loss).backward()
@@ -269,9 +270,7 @@ def train_epoch(
         # Track metrics (unscaled loss)
         total_loss += losses["loss"].item()
         total_mse += losses["mse"].item()
-        if use_lpips:
-            total_lpips += losses["lpips"].item()
-            num_lpips_batches += 1
+        total_lpips += losses["lpips"].item()
 
         with torch.no_grad():
             # Flatten (B, T, C, H, W) -> (B*T, C, H, W) for PSNR
@@ -337,6 +336,7 @@ def train_epoch(
             log_dict = {
                 "train/loss": losses["loss"].item(),
                 "train/mse": losses["mse"].item(),
+                "train/lpips": losses["lpips"].item(),
                 "train/psnr": batch_psnr,
                 "train/lr": current_lr,
                 "train/mask_ratio": mask_ratio,
@@ -344,11 +344,9 @@ def train_epoch(
                 "train/samples_per_sec": samples_per_sec,
                 "train/epoch": epoch,
             }
-            if use_lpips:
-                log_dict["train/lpips"] = losses["lpips"].item()
             log_step(log_dict, step=global_step)
 
-            lpips_str = f"LPIPS: {losses['lpips'].item():.4f} " if use_lpips else ""
+            lpips_str = f"LPIPS: {losses['lpips'].item():.4f} "
             print(
                 f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                 f"Loss: {losses['loss'].item():.4f} "
@@ -363,7 +361,7 @@ def train_epoch(
     # Epoch averages
     avg_loss = total_loss / num_batches
     avg_mse = total_mse / num_batches
-    avg_lpips = total_lpips / max(num_lpips_batches, 1)
+    avg_lpips = total_lpips / num_batches
     avg_psnr = total_psnr / num_batches
 
     return {
@@ -476,8 +474,11 @@ def main():
     scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
 
     # Create scaler for mixed precision
+    # GradScaler is a no-op with bfloat16 and can spuriously skip optimizer steps.
+    # Only enable for float16; disable for bfloat16.
     device_type = args.device.split(":")[0]
-    scaler = GradScaler(device_type)
+    use_fp16 = device_type != "cuda"  # bfloat16 on CUDA, float16 on CPU
+    scaler = GradScaler(device_type, enabled=use_fp16)
 
     # Initialize wandb
     wandb_run = init_wandb(args, job_type="transformer_tokenizer", extra_config={
@@ -505,6 +506,9 @@ def main():
     # Training loop
     best_loss = float("inf")
     history = []
+
+    # Zero gradients before training to avoid stale grads on first batch
+    optimizer.zero_grad()
 
     for epoch in range(start_epoch, args.epochs):
         print(f"\n{'='*60}")

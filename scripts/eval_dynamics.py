@@ -253,7 +253,7 @@ def parse_args():
         "--tau-ctx",
         type=float,
         default=0.1,
-        help="Noise level for context frames (matches training, 0.1 recommended)",
+        help="Context noise width: context tau ~ U(1-tau_ctx, 1.0). 0.1 means U(0.9, 1.0)",
     )
     parser.add_argument(
         "--use-shortcut",
@@ -364,6 +364,10 @@ def rollout_predictions(
 ) -> torch.Tensor:
     """Generate rollout predictions given context.
 
+    Denoises from tau=0 (noise) toward tau=1 (clean), using the convention
+    z_tau = tau * z_0 + (1 - tau) * noise. Context frames are near-clean
+    with tau ~ U(1 - tau_ctx, 1.0).
+
     Args:
         dynamics: Dynamics model
         schedule: Diffusion schedule
@@ -371,7 +375,7 @@ def rollout_predictions(
         num_predict: Number of frames to predict
         num_steps: Diffusion sampling steps
         device: Device to run on
-        tau_ctx: Noise level for context frames (matches training, default 0.1)
+        tau_ctx: Context noise width; context tau ~ U(1 - tau_ctx, 1.0)
         use_shortcut: Whether to use shortcut forcing for few-step inference
         k_max: Maximum step size for shortcut forcing (must match training)
 
@@ -380,14 +384,14 @@ def rollout_predictions(
     """
     B, T_ctx, C, H, W = context_latents.shape
 
-    # Add slight noise to context frames to match training distribution
-    # During training, context frames get per-frame tau ~ U(0, tau_ctx)
-    # z_tau = (1 - tau) * z_0 + tau * noise  (from flow matching formulation)
+    # Add slight noise to context frames to match training distribution.
+    # Convention: z_tau = tau * z_0 + (1 - tau) * noise  (tau=1 clean, tau=0 noise)
+    # Context frames are near-clean: tau ~ U(1 - tau_ctx, 1.0), e.g. U(0.9, 1.0)
     if tau_ctx > 0:
         context_noise = torch.randn_like(context_latents)
-        # Per-frame random noise level, matching diffusion forcing context distribution
-        ctx_tau = torch.rand(B, T_ctx, 1, 1, 1, device=context_latents.device) * tau_ctx
-        context_latents = (1 - ctx_tau) * context_latents + ctx_tau * context_noise
+        # Per-frame random tau in [1 - tau_ctx, 1.0] (high tau = near-clean)
+        ctx_tau = (1.0 - tau_ctx) + torch.rand(B, T_ctx, 1, 1, 1, device=context_latents.device) * tau_ctx
+        context_latents = ctx_tau * context_latents + (1 - ctx_tau) * context_noise
 
     # Compute step size for shortcut forcing
     # If using 4-step sampling with k_max=64: step_size_int = 64/4 = 16
@@ -405,46 +409,47 @@ def rollout_predictions(
             if frame_idx == 0:
                 full_seq = context_latents
             else:
-                # Also add slight noise to predicted frames used as context
+                # Also add slight noise to predicted frames used as context.
+                # Convention: tau ~ U(1 - tau_ctx, 1.0) for near-clean context.
                 pred_context = predicted[:, :frame_idx]
                 if tau_ctx > 0:
                     pred_noise = torch.randn_like(pred_context)
-                    pred_tau = torch.rand(B, frame_idx, 1, 1, 1, device=device) * tau_ctx
-                    pred_context = (1 - pred_tau) * pred_context + pred_tau * pred_noise
+                    pred_tau = (1.0 - tau_ctx) + torch.rand(B, frame_idx, 1, 1, 1, device=device) * tau_ctx
+                    pred_context = pred_tau * pred_context + (1 - pred_tau) * pred_noise
                 full_seq = torch.cat([context_latents, pred_context], dim=1)
 
-            # Predict next frame using diffusion sampling
-            # Start from noise and denoise (save initial noise for reuse)
+            # Predict next frame using diffusion sampling.
+            # Convention: tau=0 is noise, tau=1 is clean. Denoise from tau=0 toward tau=1.
             z_t = torch.randn(B, 1, C, H, W, device=device)
             z_noise = z_t.clone()
 
-            tau_start = 1.0
-            tau_end = 0.0  # denoise fully
-            step_size = (tau_start - tau_end) / num_steps
+            tau_start = 0.0   # start from pure noise
+            tau_end = 1.0     # denoise to clean
+            step_size = (tau_end - tau_start) / num_steps
 
             for i in range(num_steps):
-                tau = tau_start - i * step_size
+                tau = tau_start + i * step_size
 
                 # Concatenate context + current noisy frame
                 input_seq = torch.cat([full_seq, z_t], dim=1)
 
-                # Build per-timestep tau: context frames at tau_ctx, denoised frame at current tau
-                # This matches training where each frame position has its own noise level
+                # Build per-timestep tau: context frames near-clean, target frame at current tau.
+                # Context tau ~ U(1 - tau_ctx, 1.0) to match training distribution.
                 T_input = input_seq.shape[1]
-                tau_tensor = torch.rand(B, T_input, device=device) * tau_ctx
-                tau_tensor[:, -1] = tau  # last frame is the one being denoised
+                ctx_tau_rand = (1.0 - tau_ctx) + torch.rand(B, T_input, device=device) * tau_ctx
+                ctx_tau_rand[:, -1] = tau  # last frame is the one being denoised
 
                 # Predict (model outputs full sequence, we take last frame)
                 if use_shortcut:
-                    z_pred = dynamics(input_seq, tau_tensor, step_size=step_size_tensor)
+                    z_pred = dynamics(input_seq, ctx_tau_rand, step_size=step_size_tensor)
                 else:
-                    z_pred = dynamics(input_seq, tau_tensor)
+                    z_pred = dynamics(input_seq, ctx_tau_rand)
                 z_0_pred = z_pred[:, -1:, ...]
 
-                # Euler step
+                # Euler step: interpolate toward clean using next_tau
                 if i < num_steps - 1:
-                    next_tau = tau - step_size
-                    z_t = (1 - next_tau) * z_0_pred + next_tau * z_noise
+                    next_tau = tau + step_size
+                    z_t = next_tau * z_0_pred + (1 - next_tau) * z_noise
                 else:
                     z_t = z_0_pred
 
@@ -707,7 +712,8 @@ def run_quick_eval(args):
     print(f"  Pred frame diff (0 vs 16): {pred_diff:.4f} (should be similar)")
 
     mse = ((z_pred - z_0) ** 2).mean().item()
-    psnr_val = 10 * np.log10(1 / (mse + 1e-8))
+    max_val = z_0.abs().max().item()
+    psnr_val = 10 * np.log10(max_val ** 2 / max(mse, 1e-10))
     print(f"  Latent PSNR: {psnr_val:.2f} dB")
 
     if pred_diff < 0.001:

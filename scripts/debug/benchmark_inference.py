@@ -15,7 +15,7 @@ from pathlib import Path
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ahriuwu.models import create_dynamics, PolicyHead
 from ahriuwu.models.transformer_tokenizer import create_transformer_tokenizer
@@ -115,7 +115,8 @@ def main():
     with torch.no_grad():
         z = latent.transpose(1, 2).view(1, 32, 16, 16)
     latent_seq = z.unsqueeze(1).expand(-1, 8, -1, -1, -1)  # (1, 8, 32, 16, 16)
-    tau = torch.zeros(1, 8, device=device)
+    # tau=1.0 for clean input (z_tau = tau * z_0 + (1 - tau) * noise, tau=1 is clean)
+    tau = torch.ones(1, 8, device=device)
 
     with torch.no_grad():
         dynamics_time = benchmark_fn(
@@ -157,8 +158,8 @@ def main():
         z_new = tokenizer.encode(frame)["latent"]  # (1, 256, 32)
         z_reshaped = z_new.transpose(1, 2).view(1, 32, 16, 16).unsqueeze(1)
         z_seq = z_reshaped.expand(-1, 8, -1, -1, -1)
-        tau_zeros = torch.zeros(1, 8, device=device)
-        z_pred, agent_out = dynamics(z_seq, tau_zeros)
+        tau_ones = torch.ones(1, 8, device=device)
+        z_pred, agent_out = dynamics(z_seq, tau_ones)
         action_logits, _ = policy(agent_out[:, -1:, :])
         return action_logits.argmax(-1)
 

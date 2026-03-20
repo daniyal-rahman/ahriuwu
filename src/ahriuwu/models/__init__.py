@@ -4,7 +4,6 @@ from .transformer_tokenizer import TransformerTokenizer, create_transformer_toke
 from .losses import TokenizerLoss, VGGPerceptualLoss, LPIPSLoss, MAELoss, psnr, LPIPS_AVAILABLE
 from .diffusion import (
     DiffusionSchedule,
-    TimestepEmbedding,
     x_prediction_loss,
     ramp_weight,
     ShortcutForcing,
@@ -48,7 +47,6 @@ __all__ = [
     "LPIPS_AVAILABLE",
     # Diffusion
     "DiffusionSchedule",
-    "TimestepEmbedding",
     "x_prediction_loss",
     "ramp_weight",
     "ShortcutForcing",
