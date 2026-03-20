@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=dyn-train
-#SBATCH --output=/mnt/storage/ahriuwu/repo/logs/slurm_dyn_train_%j.out
+#SBATCH --output=/mnt/storage/ahriuwu-data/logs/slurm_dyn_train_%j.out
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=6
 #SBATCH --mem=20G
@@ -19,9 +19,9 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-cd /mnt/storage/ahriuwu/repo
+cd /mnt/storage/ahriuwu
 
-CHECKPOINT_DIR=/mnt/storage/ahriuwu/repo/checkpoints
+CHECKPOINT_DIR=/mnt/storage/ahriuwu-data/checkpoints
 LATENTS_DIR=/opt/ahriuwu/latents_pt
 
 CMD=(
@@ -53,10 +53,9 @@ CMD=(
   --epochs 50
   --wandb --wandb-project ahriuwu
 )
-# Fresh start with paper convention — old checkpoint used inverted tau
-# if [ -f "$CHECKPOINT_DIR/dynamics_latest.pt" ]; then
-#   CMD+=(--resume "$CHECKPOINT_DIR/dynamics_latest.pt")
-# fi
+if [ -f "$CHECKPOINT_DIR/dynamics_latest.pt" ]; then
+  CMD+=(--resume "$CHECKPOINT_DIR/dynamics_latest.pt")
+fi
 
 PY_PID=""
 trap 'if [ -n "$PY_PID" ]; then kill -TERM "$PY_PID" 2>/dev/null; wait "$PY_PID" 2>/dev/null; fi' TERM

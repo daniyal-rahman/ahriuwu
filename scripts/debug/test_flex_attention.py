@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-sys.path.insert(0, "/mnt/storage/ahriuwu/repo/src")
 
 from ahriuwu.models.dynamics import create_dynamics
 

@@ -14,7 +14,7 @@ from torch.amp import autocast
 def main():
     device = "cuda"
     checkpoint_path = Path("checkpoints/transformer_tokenizer_latest.pt")
-    frames_dir = Path("/mnt/storage/ahriuwu/frames/frames")
+    frames_dir = Path("/mnt/storage/ahriuwu-data/frames")
     out_dir = Path("eval_results/rollout_test")
     out_dir.mkdir(parents=True, exist_ok=True)
 

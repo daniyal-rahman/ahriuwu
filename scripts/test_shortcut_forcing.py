@@ -9,7 +9,6 @@ Tests:
 """
 
 import sys
-sys.path.insert(0, "/mnt/storage/ahriuwu/repo")
 
 import torch
 import torch.nn as nn

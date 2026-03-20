@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=pack-latents
-#SBATCH --output=/mnt/storage/ahriuwu/repo/logs/slurm_pack_latents_%j.out
+#SBATCH --output=/mnt/storage/ahriuwu-data/logs/slurm_pack_latents_%j.out
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
 #SBATCH --time=02:00:00
@@ -15,7 +15,7 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 
-cd /mnt/storage/ahriuwu/repo
+cd /mnt/storage/ahriuwu
 
 INPUT_DIR=/mnt/storage/ahriuwu/latents
 OUTPUT_DIR=/mnt/storage/ahriuwu/latents_packed

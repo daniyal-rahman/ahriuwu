@@ -8,8 +8,8 @@ Pipeline:
 4. Save frames as JPG, delete raw video to save space
 
 Usage:
-    python scripts/download_yt_frames.py --num-videos 2000 --output-dir /mnt/storage/ahriuwu/frames
-    python scripts/download_yt_frames.py --num-videos 10 --output-dir /mnt/storage/ahriuwu/frames --keep-videos
+    python scripts/download_yt_frames.py --num-videos 2000 --output-dir /mnt/storage/ahriuwu-data/frames
+    python scripts/download_yt_frames.py --num-videos 10 --output-dir /mnt/storage/ahriuwu-data/frames --keep-videos
 """
 
 import argparse
@@ -199,7 +199,7 @@ def save_progress(progress_path: Path, progress: dict):
 def main():
     parser = argparse.ArgumentParser(description="Download and extract masked frames")
     parser.add_argument("--num-videos", type=int, default=2000)
-    parser.add_argument("--output-dir", type=str, default="/mnt/storage/ahriuwu/frames")
+    parser.add_argument("--output-dir", type=str, default="/mnt/storage/ahriuwu-data/frames")
     parser.add_argument("--fps", type=float, default=4.0, help="Frame extraction rate")
     parser.add_argument("--keep-videos", action="store_true", help="Don't delete raw videos")
     parser.add_argument("--skip-start", type=float, default=30.0, help="Skip first N seconds")

@@ -4,7 +4,6 @@ Level 2: Does the real model architecture actually use tau conditioning?
 Level 3: Does training actually cause tau-dependent behavior?
 """
 import sys
-sys.path.insert(0, "/mnt/storage/ahriuwu/repo")
 
 import torch
 import torch.nn as nn

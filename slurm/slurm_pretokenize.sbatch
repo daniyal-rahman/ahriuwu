@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=pretokenize
-#SBATCH --output=/mnt/storage/ahriuwu/repo/logs/slurm_pretokenize_%j.out
+#SBATCH --output=/mnt/storage/ahriuwu-data/logs/slurm_pretokenize_%j.out
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
@@ -17,9 +17,9 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 
-cd /mnt/storage/ahriuwu/repo
+cd /mnt/storage/ahriuwu
 
-CHECKPOINT=/mnt/storage/ahriuwu/repo/checkpoints/transformer_tokenizer_latest.pt
+CHECKPOINT=/mnt/storage/ahriuwu-data/checkpoints/transformer_tokenizer_latest.pt
 FRAMES_DIR=/mnt/storage/ahriuwu/frames/frames
 OUTPUT_DIR=/mnt/storage/ahriuwu/latents
 

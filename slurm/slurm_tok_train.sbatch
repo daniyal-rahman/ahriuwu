@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=tok-train
-#SBATCH --output=/mnt/storage/ahriuwu/repo/logs/slurm_tok_train_%j.out
+#SBATCH --output=/mnt/storage/ahriuwu-data/logs/slurm_tok_train_%j.out
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
@@ -18,9 +18,9 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 
-cd /mnt/storage/ahriuwu/repo
+cd /mnt/storage/ahriuwu
 
-CHECKPOINT_DIR=/mnt/storage/ahriuwu/repo/checkpoints
+CHECKPOINT_DIR=/mnt/storage/ahriuwu-data/checkpoints
 FRAMES_DIR=/mnt/storage/ahriuwu/frames/frames
 
 CMD=(
