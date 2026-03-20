@@ -35,6 +35,48 @@ from ahriuwu.utils.training import (
 _preempt = PreemptionState()
 
 
+# ---------------------------------------------------------------------------
+# Checkpoint helper — eliminates 4x duplicated save_checkpoint calls
+# ---------------------------------------------------------------------------
+
+def _save_tokenizer_checkpoints(
+    checkpoint_dir: Path,
+    base_checkpoint_dir: Path,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: GradScaler,
+    epoch: int,
+    global_step: int,
+    loss: float,
+    args: argparse.Namespace,
+    scheduler=None,
+    rms_trackers: dict = None,
+    *,
+    step_path: Path | None = None,
+) -> None:
+    """Save checkpoint to up to 3 locations in one call.
+
+    Always saves ``transformer_tokenizer_latest.pt`` in both the run dir and
+    (if different) the base checkpoint dir. Optionally saves to *step_path*
+    for periodic numbered snapshots.
+    """
+    extra = {"model_type": "transformer_tokenizer"}
+    common = dict(
+        model=model, optimizer=optimizer, scaler=scaler,
+        epoch=epoch, global_step=global_step, loss=loss, args=args,
+        scheduler=scheduler, rms_trackers=rms_trackers, extra=extra,
+    )
+
+    if step_path is not None:
+        save_checkpoint(step_path, **common)
+
+    latest = checkpoint_dir / "transformer_tokenizer_latest.pt"
+    save_checkpoint(latest, **common)
+
+    if base_checkpoint_dir is not None and base_checkpoint_dir != checkpoint_dir:
+        save_checkpoint(base_checkpoint_dir / "transformer_tokenizer_latest.pt", **common)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train transformer tokenizer with MAE")
     add_training_args(parser)
@@ -298,22 +340,31 @@ def train_epoch(
         )
         if save_at_boundary:
             step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
-            save_checkpoint(step_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-            # Also save as latest (both run dir and base dir for sbatch resume)
-            latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-            if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
-                base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
-                save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            _save_tokenizer_checkpoints(
+                checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
+                epoch, global_step, losses["loss"].item(), args,
+                scheduler=scheduler, rms_trackers=rms_trackers, step_path=step_path,
+            )
 
-        # Preemption: save and exit on SIGTERM (Slurm preemption/time limit) or SIGUSR1 (manual)
+        # checkpoint-now file trigger (save but do NOT exit)
+        if _preempt.check_checkpoint_now() and checkpoint_dir and global_step > 0:
+            print(f"checkpoint-now trigger at step {global_step}.", flush=True)
+            if not save_at_boundary:
+                _save_tokenizer_checkpoints(
+                    checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
+                    epoch, global_step, losses["loss"].item(), args,
+                    scheduler=scheduler, rms_trackers=rms_trackers,
+                )
+            _preempt.clear_checkpoint_now()
+
+        # Preemption: save and exit on SIGTERM/SIGUSR1
         if _preempt.should_save_now() and checkpoint_dir and global_step > 0:
             if not save_at_boundary:
-                latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-                save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-                if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
-                    base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
-                    save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, losses["loss"].item(), args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+                _save_tokenizer_checkpoints(
+                    checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
+                    epoch, global_step, losses["loss"].item(), args,
+                    scheduler=scheduler, rms_trackers=rms_trackers,
+                )
             print(f"Preempted at step {global_step}. Exiting.", flush=True)
             return {
                 "loss": total_loss / max(num_batches, 1),
@@ -544,21 +595,22 @@ def main():
 
         # Save checkpoint
         if (epoch + 1) % args.save_interval == 0:
-            checkpoint_path = checkpoint_dir / f"transformer_tokenizer_epoch_{epoch + 1:03d}.pt"
-            save_checkpoint(checkpoint_path, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-
-            # Also save as latest (both run dir and base dir for sbatch resume)
-            latest_path = checkpoint_dir / "transformer_tokenizer_latest.pt"
-            save_checkpoint(latest_path, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
-            if base_checkpoint_dir != checkpoint_dir:
-                base_latest = base_checkpoint_dir / "transformer_tokenizer_latest.pt"
-                save_checkpoint(base_latest, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            epoch_path = checkpoint_dir / f"transformer_tokenizer_epoch_{epoch + 1:03d}.pt"
+            _save_tokenizer_checkpoints(
+                checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
+                epoch, global_step, metrics["loss"], args,
+                scheduler=scheduler, rms_trackers=rms_trackers, step_path=epoch_path,
+            )
 
         # Save best model
         if metrics["loss"] < best_loss:
             best_loss = metrics["loss"]
             best_path = checkpoint_dir / "transformer_tokenizer_best.pt"
-            save_checkpoint(best_path, model, optimizer, scaler, epoch, global_step, metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers, extra={"model_type": "transformer_tokenizer"})
+            save_checkpoint(
+                best_path, model, optimizer, scaler, epoch, global_step,
+                metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers,
+                extra={"model_type": "transformer_tokenizer"},
+            )
             print(f"New best model saved (loss: {best_loss:.4f})")
 
         if metrics.get("preempted"):

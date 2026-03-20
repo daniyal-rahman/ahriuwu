@@ -34,11 +34,17 @@ class PreemptionState:
 
     Delayed mode (SIGTERM): Save checkpoint at the next scheduled checkpoint
     boundary and exit. Used by Slurm preemption and voluntary queue yielding.
+
+    File-based trigger: ``touch checkpoint-now`` in the repo root triggers an
+    immediate checkpoint save (without exiting). The file is deleted after the
+    checkpoint is written so the trigger is one-shot.
     """
 
     def __init__(self):
         self.immediate = threading.Event()
         self.at_checkpoint = threading.Event()
+        # Resolved once by install_preemption_handlers; stays None if not set.
+        self._checkpoint_now_path: Path | None = None
 
     def is_immediate(self) -> bool:
         return self.immediate.is_set()
@@ -54,14 +60,52 @@ class PreemptionState:
         """Check if we should exit at a checkpoint boundary."""
         return self.at_checkpoint.is_set()
 
+    def check_checkpoint_now(self) -> bool:
+        """Check if the ``checkpoint-now`` file exists (file-based trigger).
 
-def install_preemption_handlers(state: PreemptionState) -> None:
-    """Install signal handlers for preemption.
+        Unlike signal-based preemption this does NOT cause an exit -- it only
+        requests an immediate checkpoint save.  The caller is responsible for
+        deleting the file after saving (see :meth:`clear_checkpoint_now`).
+        """
+        if self._checkpoint_now_path is not None and self._checkpoint_now_path.exists():
+            return True
+        return False
+
+    def clear_checkpoint_now(self) -> None:
+        """Remove the ``checkpoint-now`` sentinel file after saving."""
+        if self._checkpoint_now_path is not None and self._checkpoint_now_path.exists():
+            self._checkpoint_now_path.unlink()
+            print("Cleared checkpoint-now sentinel file.", flush=True)
+
+
+def install_preemption_handlers(
+    state: PreemptionState,
+    repo_dir: str | Path | None = None,
+) -> None:
+    """Install signal handlers for preemption and set up file-based trigger.
 
     Both SIGUSR1 and SIGTERM trigger immediate save+exit.
     SIGTERM: sent by Slurm on preemption or time limit (--signal=B:TERM@120).
     SIGUSR1: manual trigger (scancel --signal=USR1 <jobid>).
+
+    If *repo_dir* is given (or auto-detected via git), the ``checkpoint-now``
+    sentinel file is resolved relative to the repo root so that
+    ``touch checkpoint-now`` triggers an immediate checkpoint save.
     """
+    # Resolve repo root for checkpoint-now file
+    if repo_dir is not None:
+        state._checkpoint_now_path = Path(repo_dir) / "checkpoint-now"
+    else:
+        # Auto-detect: walk up from this file to find the repo root
+        _here = Path(__file__).resolve()
+        for parent in _here.parents:
+            if (parent / ".git").exists() or (parent / "pyproject.toml").exists():
+                state._checkpoint_now_path = parent / "checkpoint-now"
+                break
+
+    if state._checkpoint_now_path is not None:
+        print(f"checkpoint-now trigger: touch {state._checkpoint_now_path}", flush=True)
+
     def _handler(signum, frame):
         name = "SIGTERM" if signum == signal.SIGTERM else "SIGUSR1"
         if not state.immediate.is_set():

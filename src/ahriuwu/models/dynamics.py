@@ -20,29 +20,20 @@ from typing import Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.attention.flex_attention import flex_attention, create_block_mask
 from torch.utils.checkpoint import checkpoint
 
 from .layers import (
-    RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
-    RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
+    RMSNorm, QKNorm, SwiGLU, Attention,
+    soft_cap_attention, _soft_cap_score_mod,
 )
-from ..data.actions import MOVEMENT_DIM, ABILITY_KEYS
+from ..constants import MOVEMENT_DIM, ABILITY_KEYS
 
-
-# --- flex_attention helpers (fused kernels for soft capping + masking) ---
-
-def _soft_cap_score_mod(score, b, h, q_idx, kv_idx):
-    """Soft cap attention logits at 50.0 (DreamerV4 paper value)."""
-    return 50.0 * torch.tanh(score / 50.0)
-
-def _causal_mask_mod(b, h, q_idx, kv_idx):
-    return q_idx >= kv_idx
-
-def _diagonal_mask_mod(b, h, q_idx, kv_idx):
-    return q_idx == kv_idx
-
-MOVEMENT_CLASSES = 18  # Legacy, deprecated
+# flex_attention imports (for AgentCrossAttention which remains bespoke)
+try:
+    from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+    _FLEX_AVAILABLE = True
+except ImportError:
+    _FLEX_AVAILABLE = False
 
 
 def _checkpoint_block_forward(block, x, independent_frames):
@@ -50,269 +41,11 @@ def _checkpoint_block_forward(block, x, independent_frames):
     return block(x, independent_frames=independent_frames)
 
 
-class SpatialAttention(nn.Module):
-    """Self-attention within each frame with 2D RoPE.
-
-    Attends over spatial tokens (latent + register + action + condition tokens)
-    independently for each frame. RoPE is applied only to latent tokens that
-    have 2D spatial positions.
-
-    Supports GQA (Grouped Query Attention), QKNorm, and soft capping.
-
-    Reference: DreamerV4 Section 3.2
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        num_kv_heads: int | None = None,
-        head_dim: int | None = None,
-        dropout: float = 0.0,
-        use_qk_norm: bool = True,
-        soft_cap: float | None = 50.0,
-        spatial_size: int = 16,
-    ):
-        """Initialize spatial attention.
-
-        Args:
-            dim: Model dimension
-            num_heads: Number of query heads
-            num_kv_heads: Number of KV heads for GQA (None = same as num_heads)
-            head_dim: Dimension per head (default: dim // num_heads)
-            dropout: Dropout probability
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits (None = no capping)
-            spatial_size: Grid size for 2D RoPE (e.g. 16 for 16x16)
-        """
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads or num_heads
-        self.head_dim = head_dim or dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.use_qk_norm = use_qk_norm
-        self.soft_cap = soft_cap
-        self.spatial_tokens = spatial_size * spatial_size  # Number of tokens that get RoPE
-
-        # GQA: num_heads must be divisible by num_kv_heads
-        assert num_heads % self.num_kv_heads == 0, \
-            f"num_heads ({num_heads}) must be divisible by num_kv_heads ({self.num_kv_heads})"
-        self.num_groups = num_heads // self.num_kv_heads
-
-        q_dim = self.num_heads * self.head_dim
-        kv_dim = self.num_kv_heads * self.head_dim
-
-        self.q_proj = nn.Linear(dim, q_dim, bias=False)
-        self.k_proj = nn.Linear(dim, kv_dim, bias=False)
-        self.v_proj = nn.Linear(dim, kv_dim, bias=False)
-        self.out_proj = nn.Linear(q_dim, dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-        # QKNorm
-        if use_qk_norm:
-            self.qk_norm = QKNorm(self.head_dim)
-        else:
-            self.qk_norm = None
-
-        # 2D RoPE for spatial positions (only applied to latent tokens)
-        self.rope_2d = RotaryEmbedding2D(self.head_dim, spatial_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x: (B, T, S, D) where S = latent_tokens + register_tokens + action_token + cond_token
-               The first self.spatial_tokens entries are latent tokens with 2D spatial structure.
-
-        Returns:
-            (B, T, S, D) attended features
-        """
-        B, T, S, D = x.shape
-
-        # Reshape to (B*T, S, D) for efficient batched attention
-        x = x.view(B * T, S, D)
-
-        # Compute Q, K, V
-        q = self.q_proj(x).view(B * T, S, self.num_heads, self.head_dim)
-        k = self.k_proj(x).view(B * T, S, self.num_kv_heads, self.head_dim)
-        v = self.v_proj(x).view(B * T, S, self.num_kv_heads, self.head_dim)
-
-        # Transpose for attention: (B*T, heads, S, head_dim)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        # Apply QKNorm BEFORE RoPE (paper: QKNorm + RoPE together)
-        if self.qk_norm is not None:
-            q, k = self.qk_norm(q, k)
-
-        # Apply 2D RoPE to latent tokens only (first spatial_tokens positions)
-        Nz = self.spatial_tokens
-        if Nz > 0 and Nz <= S:
-            cos, sin = self.rope_2d.get_rotary_emb(Nz, x.device)
-            # cos, sin: (Nz, head_dim) -> (1, 1, Nz, head_dim)
-            cos = cos.unsqueeze(0).unsqueeze(0)
-            sin = sin.unsqueeze(0).unsqueeze(0)
-
-            # Apply RoPE only to latent token positions
-            q_latent = apply_rotary_emb(q[:, :, :Nz, :], cos, sin)
-            k_latent = apply_rotary_emb(k[:, :, :Nz, :], cos, sin)
-
-            q = torch.cat([q_latent, q[:, :, Nz:, :]], dim=2)
-            # For GQA, k has num_kv_heads which may differ from num_heads
-            k = torch.cat([k_latent, k[:, :, Nz:, :]], dim=2)
-
-        # Fused attention with soft capping via flex_attention
-        # GQA handled natively (no repeat_interleave needed)
-        # Cast to common dtype (RoPE may upcast q/k to float32)
-        q, k, v = q.to(v.dtype), k.to(v.dtype), v
-        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
-        out = flex_attention(q, k, v, score_mod=score_mod,
-                            enable_gqa=(self.num_groups > 1))
-        out = out.transpose(1, 2).reshape(B * T, S, -1)
-        out = self.out_proj(out)
-
-        # Reshape back to (B, T, S, D)
-        out = out.view(B, T, S, D)
-        return out
-
-
-class TemporalAttention(nn.Module):
-    """Causal self-attention across frames with 1D RoPE.
-
-    Attends over T frames at each spatial position independently.
-    Uses causal mask so frame t can only attend to frames 0..t.
-    Supports GQA, QKNorm, and soft capping.
-
-    Reference: DreamerV4 Section 3.2
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        num_kv_heads: int | None = None,
-        head_dim: int | None = None,
-        dropout: float = 0.0,
-        max_seq_len: int = 256,
-        use_qk_norm: bool = True,
-        soft_cap: float | None = 50.0,
-    ):
-        """Initialize temporal attention.
-
-        Args:
-            dim: Model dimension
-            num_heads: Number of query heads
-            num_kv_heads: Number of KV heads for GQA (None = same as num_heads)
-            head_dim: Dimension per head (default: dim // num_heads)
-            dropout: Dropout probability
-            max_seq_len: Maximum sequence length
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits (None = no capping)
-        """
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads or num_heads
-        self.head_dim = head_dim or dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.max_seq_len = max_seq_len
-        self.use_qk_norm = use_qk_norm
-        self.soft_cap = soft_cap
-
-        # GQA: num_heads must be divisible by num_kv_heads
-        assert num_heads % self.num_kv_heads == 0, \
-            f"num_heads ({num_heads}) must be divisible by num_kv_heads ({self.num_kv_heads})"
-        self.num_groups = num_heads // self.num_kv_heads
-
-        q_dim = self.num_heads * self.head_dim
-        kv_dim = self.num_kv_heads * self.head_dim
-
-        self.q_proj = nn.Linear(dim, q_dim, bias=False)
-        self.k_proj = nn.Linear(dim, kv_dim, bias=False)
-        self.v_proj = nn.Linear(dim, kv_dim, bias=False)
-        self.out_proj = nn.Linear(q_dim, dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-        # QKNorm
-        if use_qk_norm:
-            self.qk_norm = QKNorm(self.head_dim)
-        else:
-            self.qk_norm = None
-
-        # 1D RoPE for temporal positions
-        self.rope_1d = RotaryEmbedding1D(self.head_dim, max_seq_len)
-
-        # Pre-compute causal mask (True = masked out)
-        self.register_buffer(
-            "causal_mask",
-            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool(),
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        independent_frames: bool = False,
-    ) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x: (B, T, S, D) where T is sequence length
-            independent_frames: If True, treat frames as independent (no temporal attention)
-
-        Returns:
-            (B, T, S, D) attended features
-        """
-        B, T, S, D = x.shape
-
-        # Reshape to (B*S, T, D) for efficient batched attention over time
-        x = x.permute(0, 2, 1, 3).reshape(B * S, T, D)
-
-        # Compute Q, K, V
-        q = self.q_proj(x).view(B * S, T, self.num_heads, self.head_dim)
-        k = self.k_proj(x).view(B * S, T, self.num_kv_heads, self.head_dim)
-        v = self.v_proj(x).view(B * S, T, self.num_kv_heads, self.head_dim)
-
-        # Transpose for attention: (B*S, heads, T, head_dim)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        # Apply QKNorm BEFORE RoPE
-        if self.qk_norm is not None:
-            q, k = self.qk_norm(q, k)
-
-        # Apply 1D RoPE for temporal positions
-        cos, sin = self.rope_1d.get_rotary_emb(T, x.device)
-        cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
-        sin = sin.unsqueeze(0).unsqueeze(0)
-        q = apply_rotary_emb(q, cos, sin)
-        k = apply_rotary_emb(k, cos, sin)
-
-        # Fused attention with soft capping + causal/diagonal masking
-        # GQA handled natively (no repeat_interleave needed)
-        # Cast to common dtype (RoPE may upcast q/k to float32)
-        q, k, v = q.to(v.dtype), k.to(v.dtype), v
-        mask_fn = _diagonal_mask_mod if independent_frames else _causal_mask_mod
-        block_mask = create_block_mask(mask_fn, B=None, H=None,
-                                       Q_LEN=T, KV_LEN=T, device=x.device)
-        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
-        out = flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask,
-                            enable_gqa=(self.num_groups > 1))
-        out = out.transpose(1, 2).reshape(B * S, T, -1)
-        out = self.out_proj(out)
-
-        # Reshape back to (B, T, S, D)
-        out = out.view(B, S, T, D).permute(0, 2, 1, 3)
-        return out
-
-
 class TransformerBlock(nn.Module):
     """Standard pre-norm transformer block with either spatial or temporal attention.
 
-    Uses RoPE instead of AdaLN for position/conditioning information.
-    Supports GQA, QKNorm, soft capping, and independent frame mode.
+    Uses the unified ``Attention`` layer from layers.py with RoPE, GQA, QKNorm,
+    soft capping, and independent frame mode.
     """
 
     def __init__(
@@ -346,17 +79,19 @@ class TransformerBlock(nn.Module):
         self.attn_type = attn_type
 
         self.norm1 = RMSNorm(dim)
-        if attn_type == "spatial":
-            self.attn = SpatialAttention(
-                dim, num_heads, num_kv_heads, head_dim, dropout,
-                use_qk_norm=use_qk_norm, soft_cap=soft_cap,
-                spatial_size=spatial_size,
-            )
-        else:
-            self.attn = TemporalAttention(
-                dim, num_heads, num_kv_heads, head_dim, dropout, max_seq_len,
-                use_qk_norm=use_qk_norm, soft_cap=soft_cap
-            )
+        self.attn = Attention(
+            dim=dim,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+            mode=attn_type,
+            dropout=dropout,
+            use_qk_norm=use_qk_norm,
+            soft_cap=soft_cap,
+            spatial_size=spatial_size,
+            max_seq_len=max_seq_len,
+            allow_flex=True,  # dynamics can use flex (no GC during shortcut forcing)
+        )
 
         self.norm2 = RMSNorm(dim)
         self.ffn = SwiGLU(dim, dropout=dropout)
@@ -375,13 +110,20 @@ class TransformerBlock(nn.Module):
         Returns:
             (B, T, S, D) transformed features
         """
-        # Standard pre-norm transformer (no AdaLN)
-        if self.attn_type == "temporal":
-            x = x + self.attn(self.norm1(x), independent_frames=independent_frames)
-        else:
-            x = x + self.attn(self.norm1(x))
-        x = x + self.ffn(self.norm2(x))
+        B, T, S, D = x.shape
 
+        if self.attn_type == "spatial":
+            # Reshape to (B*T, S, D) for spatial attention
+            h = self.norm1(x).view(B * T, S, D)
+            h = self.attn(h)
+            x = x + h.view(B, T, S, D)
+        else:
+            # Reshape to (B*S, T, D) for temporal attention
+            h = self.norm1(x).permute(0, 2, 1, 3).reshape(B * S, T, D)
+            h = self.attn(h, independent_frames=independent_frames)
+            x = x + h.view(B, S, T, D).permute(0, 2, 1, 3)
+
+        x = x + self.ffn(self.norm2(x))
         return x
 
 
@@ -392,7 +134,8 @@ class AgentCrossAttention(nn.Module):
     - Agent tokens can attend to all z tokens
     - Z tokens cannot attend back to agent tokens (handled by keeping them separate)
 
-    Supports GQA, QKNorm, and soft capping.
+    Supports GQA, QKNorm, and soft capping.  Uses flex_attention when available,
+    falls back to manual matmul otherwise.
     """
 
     def __init__(
@@ -405,45 +148,29 @@ class AgentCrossAttention(nn.Module):
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
     ):
-        """Initialize agent cross-attention.
-
-        Args:
-            dim: Model dimension
-            num_heads: Number of query heads
-            num_kv_heads: Number of KV heads for GQA (None = same as num_heads)
-            head_dim: Dimension per head
-            dropout: Dropout probability
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits
-        """
         super().__init__()
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads or num_heads
         self.head_dim = head_dim or dim // num_heads
-        self.scale = self.head_dim ** -0.5
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
 
-        # GQA setup
+        # When QKNorm is enabled, set scale=1.0 (Gemma 2 convention).
+        self.scale = 1.0 if use_qk_norm else self.head_dim ** -0.5
+
         assert num_heads % self.num_kv_heads == 0
         self.num_groups = num_heads // self.num_kv_heads
 
         q_dim = self.num_heads * self.head_dim
         kv_dim = self.num_kv_heads * self.head_dim
 
-        # Agent token query projection
         self.q_proj = nn.Linear(dim, q_dim, bias=False)
-        # Z token key/value projections
         self.k_proj = nn.Linear(dim, kv_dim, bias=False)
         self.v_proj = nn.Linear(dim, kv_dim, bias=False)
         self.out_proj = nn.Linear(q_dim, dim, bias=False)
         self.dropout = nn.Dropout(dropout)
 
-        # QKNorm
-        if use_qk_norm:
-            self.qk_norm = QKNorm(self.head_dim)
-        else:
-            self.qk_norm = None
+        self.qk_norm = QKNorm(self.head_dim) if use_qk_norm else None
 
     def forward(
         self,
@@ -462,160 +189,51 @@ class AgentCrossAttention(nn.Module):
         B, T, D = agent_tokens.shape
         _, _, S, _ = z_tokens.shape
 
-        # Agent queries: (B, T, num_heads, 1, head_dim)
         q = self.q_proj(agent_tokens).view(B, T, self.num_heads, 1, self.head_dim)
-
-        # Z key/values: (B, T, num_kv_heads, S, head_dim)
         z_flat = z_tokens.view(B * T, S, D)
         k = self.k_proj(z_flat).view(B, T, S, self.num_kv_heads, self.head_dim)
         v = self.v_proj(z_flat).view(B, T, S, self.num_kv_heads, self.head_dim)
-
-        # Transpose: (B, T, num_kv_heads, S, head_dim)
         k = k.permute(0, 1, 3, 2, 4)
         v = v.permute(0, 1, 3, 2, 4)
 
-        # Apply QKNorm if enabled
         if self.qk_norm is not None:
             q, k = self.qk_norm(q, k)
 
-        # Reshape for flex_attention: merge B*T into batch dim
-        # q: (B, T, H, 1, D) -> (B*T, H, 1, D)
-        # k: (B, T, H_kv, S, D) -> (B*T, H_kv, S, D)
-        # Cast to common dtype (QKNorm may upcast)
         dtype = v.dtype
         q = q.to(dtype).view(B * T, self.num_heads, 1, self.head_dim)
         k = k.to(dtype).reshape(B * T, self.num_kv_heads, S, self.head_dim)
         v = v.reshape(B * T, self.num_kv_heads, S, self.head_dim)
 
-        # Fused cross-attention with soft capping
-        # GQA handled natively (no repeat_interleave needed)
-        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
-        out = flex_attention(q, k, v, score_mod=score_mod,
-                            enable_gqa=(self.num_groups > 1))
-        # out: (B*T, H, 1, D) -> (B, T, H*D)
-        out = out.squeeze(2).view(B, T, -1)
-        out = self.out_proj(out)
-
-        return out
-
-
-class AgentTemporalAttention(nn.Module):
-    """Causal self-attention for agent tokens across time.
-
-    Agent tokens attend to themselves and past agent tokens.
-    Supports GQA, QKNorm, and soft capping.
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        num_kv_heads: int | None = None,
-        head_dim: int | None = None,
-        dropout: float = 0.0,
-        max_seq_len: int = 256,
-        use_qk_norm: bool = True,
-        soft_cap: float | None = 50.0,
-    ):
-        """Initialize agent temporal attention.
-
-        Args:
-            dim: Model dimension
-            num_heads: Number of query heads
-            num_kv_heads: Number of KV heads for GQA (None = same as num_heads)
-            head_dim: Dimension per head
-            dropout: Dropout probability
-            max_seq_len: Maximum sequence length
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits
-        """
-        super().__init__()
-        self.num_heads = num_heads
-        self.num_kv_heads = num_kv_heads or num_heads
-        self.head_dim = head_dim or dim // num_heads
-        self.scale = self.head_dim ** -0.5
-        self.use_qk_norm = use_qk_norm
-        self.soft_cap = soft_cap
-
-        # GQA setup
-        assert num_heads % self.num_kv_heads == 0
-        self.num_groups = num_heads // self.num_kv_heads
-
-        q_dim = self.num_heads * self.head_dim
-        kv_dim = self.num_kv_heads * self.head_dim
-
-        self.q_proj = nn.Linear(dim, q_dim, bias=False)
-        self.k_proj = nn.Linear(dim, kv_dim, bias=False)
-        self.v_proj = nn.Linear(dim, kv_dim, bias=False)
-        self.out_proj = nn.Linear(q_dim, dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-        # QKNorm
-        if use_qk_norm:
-            self.qk_norm = QKNorm(self.head_dim)
+        if _FLEX_AVAILABLE:
+            score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
+            out = flex_attention(
+                q, k, v, score_mod=score_mod,
+                scale=self.scale,
+                enable_gqa=(self.num_groups > 1),
+            )
         else:
-            self.qk_norm = None
+            # Manual fallback with GQA expansion
+            if self.num_groups > 1:
+                k = k.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1)
+                k = k.reshape(k.shape[0], self.num_heads, k.shape[3], k.shape[4])
+                v = v.unsqueeze(2).expand(-1, -1, self.num_groups, -1, -1)
+                v = v.reshape(v.shape[0], self.num_heads, v.shape[3], v.shape[4])
+            attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+            if self.soft_cap is not None:
+                attn = soft_cap_attention(attn, self.soft_cap)
+            attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(dtype)
+            attn = self.dropout(attn)
+            out = torch.matmul(attn, v)
 
-        # 1D RoPE for temporal positions
-        self.rope_1d = RotaryEmbedding1D(self.head_dim, max_seq_len)
-
-        # Causal mask
-        self.register_buffer(
-            "causal_mask",
-            torch.triu(torch.ones(max_seq_len, max_seq_len), diagonal=1).bool(),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
-
-        Args:
-            x: (B, T, D) agent tokens
-
-        Returns:
-            (B, T, D) attended agent tokens
-        """
-        B, T, D = x.shape
-
-        q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim)
-        k = self.k_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
-        v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
-
-        # Transpose: (B, heads, T, head_dim)
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
-
-        # Apply QKNorm if enabled
-        if self.qk_norm is not None:
-            q, k = self.qk_norm(q, k)
-
-        # Apply 1D RoPE for temporal positions
-        cos, sin = self.rope_1d.get_rotary_emb(T, x.device)
-        cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
-        sin = sin.unsqueeze(0).unsqueeze(0)
-        q = apply_rotary_emb(q, cos, sin)
-        k = apply_rotary_emb(k, cos, sin)
-
-        # Fused attention with soft capping + causal masking
-        # GQA handled natively (no repeat_interleave needed)
-        # Cast to common dtype (RoPE may upcast q/k to float32)
-        q, k, v = q.to(v.dtype), k.to(v.dtype), v
-        block_mask = create_block_mask(_causal_mask_mod, B=None, H=None,
-                                       Q_LEN=T, KV_LEN=T, device=x.device)
-        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
-        out = flex_attention(q, k, v, score_mod=score_mod, block_mask=block_mask,
-                            enable_gqa=(self.num_groups > 1))
-        out = out.transpose(1, 2).reshape(B, T, -1)
-        out = self.out_proj(out)
-
-        return out
+        out = out.squeeze(2).view(B, T, -1)
+        return self.out_proj(out)
 
 
 class AgentTokenBlock(nn.Module):
     """Processing block for agent tokens.
 
     1. Cross-attention to z tokens (agent sees everything)
-    2. Self-attention across time (causal)
+    2. Self-attention across time (causal) via unified Attention
     3. FFN
 
     Supports GQA, QKNorm, and soft capping.
@@ -654,9 +272,17 @@ class AgentTokenBlock(nn.Module):
         )
 
         self.norm2 = RMSNorm(dim)
-        self.self_attn = AgentTemporalAttention(
-            dim, num_heads, num_kv_heads, head_dim, dropout, max_seq_len,
-            use_qk_norm=use_qk_norm, soft_cap=soft_cap
+        self.self_attn = Attention(
+            dim=dim,
+            num_heads=num_heads,
+            num_kv_heads=num_kv_heads,
+            head_dim=head_dim,
+            mode="temporal",
+            dropout=dropout,
+            use_qk_norm=use_qk_norm,
+            soft_cap=soft_cap,
+            max_seq_len=max_seq_len,
+            allow_flex=True,
         )
 
         self.norm3 = RMSNorm(dim)
@@ -679,7 +305,7 @@ class AgentTokenBlock(nn.Module):
         # Cross-attention to z tokens
         agent_tokens = agent_tokens + self.cross_attn(self.norm1(agent_tokens), self.norm_kv(z_tokens))
 
-        # Self-attention across time
+        # Self-attention across time (causal)
         agent_tokens = agent_tokens + self.self_attn(self.norm2(agent_tokens))
 
         # FFN

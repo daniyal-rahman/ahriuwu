@@ -17,6 +17,7 @@ import argparse
 import json
 import random
 import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -42,6 +43,124 @@ from ahriuwu.utils.training import (
 )
 
 _preempt = PreemptionState()
+
+
+# ---------------------------------------------------------------------------
+# Dataclasses to reduce train_epoch parameter count
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TrainingState:
+    """Mutable training state passed through the training loop."""
+    model: nn.Module
+    optimizer: torch.optim.Optimizer
+    scaler: GradScaler
+    scheduler: object  # LambdaLR
+    global_step: int
+    rms_dict: dict[str, RunningRMS] | None = None
+    shortcut: ShortcutForcing | None = None
+
+
+@dataclass
+class DataConfig:
+    """Dataloader configuration for single or alternating-length training."""
+    dataloader: DataLoader | None = None
+    dataloader_short: DataLoader | None = None
+    dataloader_long: DataLoader | None = None
+    accumulation_steps: int = 1
+    accumulation_steps_long: int | None = None
+    long_ratio: float = 0.1
+
+
+@dataclass
+class CheckpointConfig:
+    """Paths for checkpoint saving and the model name prefix."""
+    checkpoint_dir: Path | None = None
+    base_checkpoint_dir: Path | None = None
+    name_prefix: str = "dynamics"
+
+
+# ---------------------------------------------------------------------------
+# Helpers: batch acquisition, checkpoint saving
+# ---------------------------------------------------------------------------
+
+def get_next_batch(
+    alternating: bool,
+    use_long: bool,
+    *,
+    batch_iterator=None,
+    iter_short=None,
+    iter_long=None,
+    dataloader_long: DataLoader | None = None,
+):
+    """Fetch the next batch from the appropriate dataloader.
+
+    Returns ``(batch, seq_type, new_iter_long)`` where *new_iter_long* may be
+    a freshly rewound iterator (long loader cycles, short loader ends the
+    epoch).  Raises ``StopIteration`` when the epoch is done.
+    """
+    if alternating:
+        if use_long:
+            try:
+                batch = next(iter_long)
+            except StopIteration:
+                iter_long = iter(dataloader_long)
+                batch = next(iter_long)
+            return batch, "L", iter_long
+        else:
+            # Short loader exhausted = epoch done (raises StopIteration)
+            batch = next(iter_short)
+            return batch, "S", iter_long
+    else:
+        batch = next(batch_iterator)
+        return batch, "", iter_long
+
+
+def save_checkpoints(
+    ckpt_cfg: CheckpointConfig,
+    ts: TrainingState,
+    epoch: int,
+    loss: float,
+    args: argparse.Namespace,
+    *,
+    step_path: Path | None = None,
+    extra: dict | None = None,
+) -> None:
+    """Save checkpoint to up to 3 locations in one call.
+
+    Always saves ``<name_prefix>_latest.pt`` in both the run dir and (if
+    different) the base checkpoint dir.  Optionally saves to *step_path* for
+    periodic numbered snapshots.
+
+    This replaces the 3x duplicated ``save_checkpoint(...)`` blocks that
+    previously appeared at every save site.
+    """
+    cd = ckpt_cfg.checkpoint_dir
+    if cd is None:
+        return
+
+    common = dict(
+        model=ts.model,
+        optimizer=ts.optimizer,
+        scaler=ts.scaler,
+        epoch=epoch,
+        global_step=ts.global_step,
+        loss=loss,
+        args=args,
+        scheduler=ts.scheduler,
+        rms_trackers=ts.rms_dict,
+        extra=extra,
+    )
+
+    if step_path is not None:
+        save_checkpoint(step_path, **common)
+
+    latest = cd / f"{ckpt_cfg.name_prefix}_latest.pt"
+    save_checkpoint(latest, **common)
+
+    bcd = ckpt_cfg.base_checkpoint_dir
+    if bcd is not None and bcd != cd:
+        save_checkpoint(bcd / f"{ckpt_cfg.name_prefix}_latest.pt", **common)
 
 
 def create_run_directory(base_dir: Path, args: argparse.Namespace) -> Path:
@@ -364,74 +483,74 @@ def eval_denoising_psnr(
 
 
 def train_epoch(
-    model: nn.Module,
-    dataloader: DataLoader | None,
-    optimizer: torch.optim.Optimizer,
-    scaler: GradScaler,
-    scheduler,
+    ts: TrainingState,
+    data_cfg: DataConfig,
+    ckpt_cfg: CheckpointConfig,
     schedule: DiffusionSchedule,
     device: str,
     epoch: int,
-    global_step: int,
     args: argparse.Namespace,
-    checkpoint_dir: Path = None,
-    base_checkpoint_dir: Path = None,
-    shortcut: ShortcutForcing | None = None,
-    dataloader_short: DataLoader | None = None,
-    dataloader_long: DataLoader | None = None,
-    use_actions: bool = False,
-    independent_frame_ratio: float = 0.3,
-    rms_dict: dict[str, RunningRMS] | None = None,
-    accumulation_steps: int = 1,
-    accumulation_steps_long: int | None = None,
+    *,
     val_batch: dict | None = None,
     eval_interval: int = 1000,
     skip_batches: int = 0,
 ):
     """Train for one epoch.
 
-    If dataloader is provided, uses single dataloader mode.
-    If dataloader_short and dataloader_long are provided, uses alternating mode.
+    Args:
+        ts: Mutable training state (model, optimizer, scaler, scheduler, etc.).
+        data_cfg: Dataloader configuration (single or alternating mode).
+        ckpt_cfg: Checkpoint directory paths and naming.
+        schedule: Diffusion noise schedule.
+        device: Device string (e.g. "cuda:0").
+        epoch: Current epoch number.
+        args: Full argument namespace (for hyperparams and logging config).
+        val_batch: Optional fixed validation batch for periodic eval.
+        eval_interval: Steps between eval runs.
+        skip_batches: Number of batches to fast-forward on resume.
 
     In alternating mode with per-length accumulation, each accumulation window
-    processes batches of a single type (all short or all long) so the loss scaling
-    is consistent within the window.
+    processes batches of a single type (all short or all long) so the loss
+    scaling is consistent within the window.
     """
+    model = ts.model
     model.train()
     total_loss = 0.0
     total_grad_norm = 0.0
     total_grad_norm_count = 0
     total_pred_std = 0.0
+    pred_std = 0.0  # last sampled prediction std (for logging)
     num_batches = 0
     last_grad_norm = 0.0
     start_time = time.time()
 
     # Determine mode and setup iterators
-    if dataloader is not None:
-        # Single dataloader mode
-        batch_iterator = iter(dataloader)
-        total_batches = len(dataloader)
-        alternating = False
+    alternating = data_cfg.dataloader is None
+    if not alternating:
+        batch_iterator = iter(data_cfg.dataloader)
+        total_batches = len(data_cfg.dataloader)
+        iter_short = iter_long = None
     else:
-        # Alternating dataloader mode
-        iter_short = iter(dataloader_short)
-        iter_long = iter(dataloader_long)
-        # Estimate total batches based on short loader (most batches come from there)
-        total_batches = len(dataloader_short) + int(len(dataloader_short) * args.long_ratio / (1 - args.long_ratio))
-        alternating = True
+        batch_iterator = None
+        iter_short = iter(data_cfg.dataloader_short)
+        iter_long = iter(data_cfg.dataloader_long)
+        total_batches = len(data_cfg.dataloader_short) + int(
+            len(data_cfg.dataloader_short) * data_cfg.long_ratio / (1 - data_cfg.long_ratio)
+        )
 
-    # Per-length accumulation: in alternating mode, each accumulation window
-    # processes only one batch type (all short or all long) for consistent
-    # loss scaling. At the start of each window (micro_count==0), we pick the
-    # batch type and set current_accum accordingly.
-    accum_short = accumulation_steps
-    accum_long = accumulation_steps_long if accumulation_steps_long is not None else accumulation_steps
+    # Per-length accumulation setup
+    accum_short = data_cfg.accumulation_steps
+    accum_long = (
+        data_cfg.accumulation_steps_long
+        if data_cfg.accumulation_steps_long is not None
+        else data_cfg.accumulation_steps
+    )
     micro_count = 0
-    current_accum = accumulation_steps  # default for non-alternating
+    current_accum = data_cfg.accumulation_steps
     use_long = False
 
     batch_idx = 0
-    optimizer.zero_grad()
+    ts.optimizer.zero_grad()
 
     # Skip batches on resume (fast-forward through the dataloader)
     if skip_batches > 0:
@@ -439,7 +558,7 @@ def train_epoch(
         for _ in range(skip_batches):
             try:
                 if alternating:
-                    if random.random() < args.long_ratio:
+                    if random.random() < data_cfg.long_ratio:
                         next(iter_long)
                     else:
                         next(iter_short)
@@ -451,299 +570,273 @@ def train_epoch(
         print(f"Resumed at batch {batch_idx}")
 
     while True:
-        # At start of accumulation window, decide batch type
+        # --- Decide batch type at start of accumulation window ---
         if micro_count == 0 and alternating:
-            use_long = random.random() < args.long_ratio
+            use_long = random.random() < data_cfg.long_ratio
             current_accum = accum_long if use_long else accum_short
 
-        # Get next batch
+        # --- Get next batch ---
         try:
-            if alternating:
-                if use_long:
-                    try:
-                        batch = next(iter_long)
-                        seq_type = "L"
-                    except StopIteration:
-                        iter_long = iter(dataloader_long)
-                        batch = next(iter_long)
-                        seq_type = "L"
-                else:
-                    try:
-                        batch = next(iter_short)
-                        seq_type = "S"
-                    except StopIteration:
-                        # Short loader exhausted = epoch done
-                        break
-            else:
-                batch = next(batch_iterator)
-                seq_type = ""
+            batch, seq_type, iter_long = get_next_batch(
+                alternating, use_long,
+                batch_iterator=batch_iterator,
+                iter_short=iter_short,
+                iter_long=iter_long,
+                dataloader_long=data_cfg.dataloader_long,
+            )
         except StopIteration:
             break
 
-        # Get latent sequences: (B, T, C, H, W)
+        # --- Unpack batch ---
         z_0 = batch["latents"].to(device)
         B, T, C, H, W = z_0.shape
 
-        # Get actions if available
         actions = None
-        if use_actions and "actions" in batch and batch["actions"] is not None:
+        if args.use_actions and "actions" in batch and batch["actions"] is not None:
             actions = {k: v.to(device) for k, v in batch["actions"].items()}
 
-        # Sample whether to use independent frames mode (30% by default)
-        use_independent = random.random() < independent_frame_ratio
+        use_independent = random.random() < args.independent_frame_ratio
 
-        # Mixed precision forward
+        # --- Forward pass (mixed precision) ---
         amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
-            if shortcut is not None:
-                # Shortcut forcing: sample step sizes and grid-aligned tau
-                # Grid alignment is critical — after a half-step, tau must land
-                # on a valid grid point for the teacher's second forward pass.
-                #
-                # Gradient checkpointing must be disabled for shortcut forcing
-                # (multiple forward passes through the model). Access _orig_mod
-                # for torch.compile'd models where the wrapper lacks the attr.
-                _inner = getattr(model, '_orig_mod', model)
-                gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
-                if gc_was_enabled:
-                    _inner.gradient_checkpointing = False
-                try:
-                    step_size = shortcut.sample_step_size(B, device=device)
-                    tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
-                    z_tau, noise = schedule.add_noise(z_0, tau)
-                    raw_loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
-                finally:
-                    if gc_was_enabled:
-                        _inner.gradient_checkpointing = True
-                # No per-component RMS normalization — standard and bootstrap
-                # are already x-space scale by design (Paper Eq. 7 footnote).
-                # RMS normalization is for balancing against other modalities
-                # (reward, BC) during agent finetuning, not within shortcut forcing.
+            if ts.shortcut is not None:
+                raw_loss, loss_info, tau = _forward_shortcut(
+                    model, ts.shortcut, schedule, z_0, B, T, device, actions,
+                )
                 loss = raw_loss
-                raw_loss_val = raw_loss.item()
             else:
-                # Standard training: predict clean latents
-                tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
-                z_tau, noise = schedule.add_noise(z_0, tau)
-                z_pred = model(z_tau, tau, actions=actions, independent_frames=use_independent)
-                raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
-                # Normalize via RunningRMS
-                if rms_dict is not None:
-                    loss = rms_dict["x_pred"].update(raw_loss)
-                else:
-                    loss = raw_loss
-                raw_loss_val = raw_loss.item()
+                raw_loss, loss_info, tau, z_pred = _forward_standard(
+                    model, schedule, z_0, B, T, device, actions,
+                    use_independent, ts.rms_dict,
+                )
+                loss = loss_info["loss_normed"]
 
-        # Scale loss for gradient accumulation and backward
+            raw_loss_val = raw_loss.item()
+
+        # --- Backward + optional optimizer step ---
         scaled_loss = loss / current_accum
-        scaler.scale(scaled_loss).backward()
+        ts.scaler.scale(scaled_loss).backward()
         micro_count += 1
 
-        # Step optimizer when accumulation window is full
         if micro_count >= current_accum:
-            scaler.unscale_(optimizer)
+            ts.scaler.unscale_(ts.optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            optimizer.zero_grad()
+            ts.scaler.step(ts.optimizer)
+            ts.scaler.update()
+            ts.scheduler.step()
+            ts.optimizer.zero_grad()
             micro_count = 0
             did_step = True
-            global_step += 1
+            ts.global_step += 1
             last_grad_norm = grad_norm.item() if torch.isfinite(grad_norm) else 0.0
         else:
             grad_norm = torch.tensor(0.0)
             did_step = False
 
-        # Track metrics (use raw unscaled loss)
+        # --- Track metrics ---
         total_loss += raw_loss_val
         if did_step:
             total_grad_norm += grad_norm.item() if torch.isfinite(grad_norm) else 0.0
             total_grad_norm_count += 1
         num_batches += 1
 
-        # Track prediction stats for mode collapse detection (every 10 batches)
         if batch_idx % 10 == 0:
             with torch.no_grad():
-                if shortcut is None:
-                    pred_std = z_pred.std().item()
-                else:
-                    # For shortcut forcing, we need to get prediction from the model
-                    pred_std = 0.0  # Skip for now
+                pred_std = z_pred.std().item() if ts.shortcut is None else 0.0
                 total_pred_std += pred_std
 
-        # Log
+        # --- Logging ---
         if batch_idx % args.log_interval == 0:
-            elapsed = time.time() - start_time
-            batches_per_sec = (batch_idx + 1) / elapsed if elapsed > 0 else 0
-            # Show tau range: context (low) to target (high)
-            tau_min = tau.min().item()
-            tau_max = tau.max().item()
+            _log_train_step(
+                batch_idx, total_batches, epoch, alternating, seq_type, T,
+                raw_loss_val, loss_info, last_grad_norm, tau, ts, start_time,
+                pred_std, did_step, grad_norm,
+            )
 
-            # Format progress string
-            if alternating:
-                progress = f"Epoch {epoch} [{batch_idx}/{total_batches}] {seq_type} T={T}"
-            else:
-                progress = f"Epoch {epoch} [{batch_idx}/{total_batches}]"
-
-            # Compute running averages (approximate step count)
-            num_steps = max(1, total_grad_norm_count)
-            avg_grad_norm = total_grad_norm / num_steps
-            pred_std_samples = (batch_idx // 10) + 1
-            avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0
-
-            # Warning flags
-            warnings = []
-            if raw_loss_val > 1.0:
-                warnings.append("HIGH_LOSS")
-            if did_step and grad_norm.item() > 0.99:  # Near clip threshold
-                warnings.append("GRAD_CLIP")
-            if not torch.isfinite(torch.tensor(raw_loss_val)):
-                warnings.append("NAN/INF")
-            warning_str = f" ⚠️  {' '.join(warnings)}" if warnings else ""
-
-            # Wandb per-step logging
-            wandb_metrics = {
-                "train/loss": raw_loss_val,
-                "train/grad_norm": last_grad_norm,
-                "train/tau_min": tau_min,
-                "train/tau_max": tau_max,
-                "train/lr": scheduler.get_last_lr()[0],
-                "train/batches_per_sec": batches_per_sec,
-                "train/epoch": epoch,
-            }
-            if shortcut is not None:
-                wandb_metrics["train/loss_std"] = loss_info["loss_std"]
-                wandb_metrics["train/loss_boot"] = loss_info["loss_boot"]
-            else:
-                wandb_metrics["train/pred_std"] = pred_std
-            log_step(wandb_metrics, step=global_step)
-
-            if shortcut is not None:
-                # Show shortcut forcing info
-                print(
-                    f"{progress} "
-                    f"Loss: {raw_loss_val:.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
-                    f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                    f"GradN: {last_grad_norm:.3f} "
-                    f"({batches_per_sec:.1f} batch/s){warning_str}"
-                )
-            else:
-                print(
-                    f"{progress} "
-                    f"Loss: {raw_loss_val:.4f} "
-                    f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                    f"GradN: {last_grad_norm:.3f} "
-                    f"PredStd: {pred_std:.4f} "
-                    f"({batches_per_sec:.1f} batch/s){warning_str}"
-                )
-
-        # Compute effective save interval (dynamic or explicit)
+        # --- Checkpoint saving ---
         if args.save_steps > 0:
             effective_save_interval = args.save_steps
         else:
             effective_save_interval = compute_dynamic_save_interval(
-                global_step, time.time() - start_time, args.checkpoint_minutes
+                ts.global_step, time.time() - start_time, args.checkpoint_minutes
             )
 
-        # Step-based checkpoint saving (skip step 0 to avoid spam)
         save_at_boundary = (
-            checkpoint_dir is not None
-            and global_step > 0
+            ckpt_cfg.checkpoint_dir is not None
+            and ts.global_step > 0
             and effective_save_interval > 0
-            and global_step % effective_save_interval == 0
+            and ts.global_step % effective_save_interval == 0
         )
         if save_at_boundary:
-            ckpt_extra = {"batch_idx": batch_idx}
-            step_path = checkpoint_dir / f"dynamics_step_{global_step:07d}.pt"
-            save_checkpoint(
-                step_path, model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict,
-                extra=ckpt_extra
+            step_path = ckpt_cfg.checkpoint_dir / f"{ckpt_cfg.name_prefix}_step_{ts.global_step:07d}.pt"
+            save_checkpoints(
+                ckpt_cfg, ts, epoch, raw_loss_val, args,
+                step_path=step_path, extra={"batch_idx": batch_idx},
             )
-            # Also update latest (both run dir and base dir for sbatch resume)
-            latest_path = checkpoint_dir / "dynamics_latest.pt"
-            save_checkpoint(
-                latest_path, model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict,
-                extra=ckpt_extra
-            )
-            if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
-                base_latest = base_checkpoint_dir / "dynamics_latest.pt"
-                save_checkpoint(
-                    base_latest, model, optimizer, scaler, epoch, global_step,
-                    raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict,
-                    extra=ckpt_extra
-                )
 
-        # Eval metrics every eval_interval steps
-        if val_batch is not None and did_step and global_step > 0 and global_step % eval_interval == 0:
+        # --- Eval ---
+        if val_batch is not None and did_step and ts.global_step > 0 and ts.global_step % eval_interval == 0:
             eval_results = eval_denoising_psnr(
-                model, schedule, val_batch, device, shortcut=shortcut
+                model, schedule, val_batch, device, shortcut=ts.shortcut,
             )
-            log_step(eval_results, step=global_step)
+            log_step(eval_results, step=ts.global_step)
             psnr_strs = " ".join(f"{k.split('/')[-1]}={v:.1f}" for k, v in eval_results.items())
-            print(f"  [EVAL step {global_step}] {psnr_strs}")
+            print(f"  [EVAL step {ts.global_step}] {psnr_strs}")
 
-        # Immediate preemption: check every optimizer step (SIGUSR1 or queue yield)
-        if _preempt.should_save_now() and checkpoint_dir is not None and global_step > 0:
-            latest_path = checkpoint_dir / "dynamics_latest.pt"
-            save_checkpoint(
-                latest_path, model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
-            )
-            if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
-                base_latest = base_checkpoint_dir / "dynamics_latest.pt"
-                save_checkpoint(
-                    base_latest, model, optimizer, scaler, epoch, global_step,
-                    raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
-                )
-            print(f"Immediate preemption at step {global_step}. Exiting.", flush=True)
-            return {
-                "loss": total_loss / max(num_batches, 1),
-                "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
-                "pred_std": 0.0,
-                "global_step": global_step,
-                "preempted": True,
-            }
+        # --- checkpoint-now file trigger (save but do NOT exit) ---
+        if _preempt.check_checkpoint_now() and ckpt_cfg.checkpoint_dir is not None and ts.global_step > 0:
+            print(f"checkpoint-now trigger at step {ts.global_step}.", flush=True)
+            if not save_at_boundary:
+                save_checkpoints(ckpt_cfg, ts, epoch, raw_loss_val, args)
+            _preempt.clear_checkpoint_now()
 
-        # Delayed preemption: check at checkpoint boundaries (SIGTERM)
+        # --- Preemption: signal-based (save and EXIT) ---
+        if _preempt.should_save_now() and ckpt_cfg.checkpoint_dir is not None and ts.global_step > 0:
+            if not save_at_boundary:
+                save_checkpoints(ckpt_cfg, ts, epoch, raw_loss_val, args)
+            print(f"Immediate preemption at step {ts.global_step}. Exiting.", flush=True)
+            return _make_epoch_result(total_loss, total_grad_norm, total_grad_norm_count, num_batches, ts.global_step, preempted=True)
+
         if save_at_boundary and _preempt.should_save_at_boundary():
-            print(f"Yielding at step {global_step} (checkpoint saved). Exiting.", flush=True)
-            return {
-                "loss": total_loss / max(num_batches, 1),
-                "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
-                "pred_std": 0.0,
-                "global_step": global_step,
-                "preempted": True,
-            }
+            print(f"Yielding at step {ts.global_step} (checkpoint saved). Exiting.", flush=True)
+            return _make_epoch_result(total_loss, total_grad_norm, total_grad_norm_count, num_batches, ts.global_step, preempted=True)
 
         batch_idx += 1
 
     # Flush remaining accumulated gradients at end of epoch
     if micro_count > 0:
-        scaler.unscale_(optimizer)
+        ts.scaler.unscale_(ts.optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        scheduler.step()
-        optimizer.zero_grad()
-        global_step += 1
+        ts.scaler.step(ts.optimizer)
+        ts.scaler.update()
+        ts.scheduler.step()
+        ts.optimizer.zero_grad()
+        ts.global_step += 1
 
-    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-    # Approximate optimizer steps (exact count depends on short/long mix)
-    avg_accum = (accum_short + accum_long) / 2 if alternating and accum_short != accum_long else accumulation_steps
-    num_steps = max(1, int(num_batches / avg_accum))
-    avg_grad_norm = total_grad_norm / num_steps
+    avg_accum = (
+        (accum_short + accum_long) / 2
+        if alternating and accum_short != accum_long
+        else data_cfg.accumulation_steps
+    )
     pred_std_samples = (num_batches // 10) + 1
-    avg_pred_std = total_pred_std / pred_std_samples if pred_std_samples > 0 else 0.0
-
     return {
-        "loss": avg_loss,
-        "grad_norm": avg_grad_norm,
-        "pred_std": avg_pred_std,
-        "global_step": global_step,
+        "loss": total_loss / max(num_batches, 1),
+        "grad_norm": total_grad_norm / max(1, int(num_batches / avg_accum)),
+        "pred_std": total_pred_std / max(pred_std_samples, 1),
+        "global_step": ts.global_step,
         "preempted": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Private helpers for train_epoch (keep the main loop readable)
+# ---------------------------------------------------------------------------
+
+def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions):
+    """Shortcut forcing forward pass. Returns (raw_loss, loss_info, tau)."""
+    _inner = getattr(model, '_orig_mod', model)
+    gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
+    if gc_was_enabled:
+        _inner.gradient_checkpointing = False
+    try:
+        step_size = shortcut.sample_step_size(B, device=device)
+        tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
+        z_tau, noise = schedule.add_noise(z_0, tau)
+        raw_loss, loss_info = shortcut.compute_loss(
+            model, schedule, z_0, tau, step_size, actions=actions,
+        )
+    finally:
+        if gc_was_enabled:
+            _inner.gradient_checkpointing = True
+    return raw_loss, loss_info, tau
+
+
+def _forward_standard(model, schedule, z_0, B, T, device, actions,
+                       use_independent, rms_dict):
+    """Standard x-prediction forward pass. Returns (raw_loss, info, tau, z_pred)."""
+    tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
+    z_tau, noise = schedule.add_noise(z_0, tau)
+    z_pred = model(z_tau, tau, actions=actions, independent_frames=use_independent)
+    raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+    if rms_dict is not None:
+        loss_normed = rms_dict["x_pred"].update(raw_loss)
+    else:
+        loss_normed = raw_loss
+    loss_info = {"loss_normed": loss_normed}
+    return raw_loss, loss_info, tau, z_pred
+
+
+def _log_train_step(
+    batch_idx, total_batches, epoch, alternating, seq_type, T,
+    raw_loss_val, loss_info, last_grad_norm, tau, ts, start_time,
+    pred_std, did_step, grad_norm,
+):
+    """Emit console + wandb logs for the current training step."""
+    elapsed = time.time() - start_time
+    batches_per_sec = (batch_idx + 1) / elapsed if elapsed > 0 else 0
+    tau_min = tau.min().item()
+    tau_max = tau.max().item()
+
+    progress = (
+        f"Epoch {epoch} [{batch_idx}/{total_batches}] {seq_type} T={T}"
+        if alternating
+        else f"Epoch {epoch} [{batch_idx}/{total_batches}]"
+    )
+
+    warnings = []
+    if raw_loss_val > 1.0:
+        warnings.append("HIGH_LOSS")
+    if did_step and grad_norm.item() > 0.99:
+        warnings.append("GRAD_CLIP")
+    if not torch.isfinite(torch.tensor(raw_loss_val)):
+        warnings.append("NAN/INF")
+    warning_str = f" !!  {' '.join(warnings)}" if warnings else ""
+
+    wandb_metrics = {
+        "train/loss": raw_loss_val,
+        "train/grad_norm": last_grad_norm,
+        "train/tau_min": tau_min,
+        "train/tau_max": tau_max,
+        "train/lr": ts.scheduler.get_last_lr()[0],
+        "train/batches_per_sec": batches_per_sec,
+        "train/epoch": epoch,
+    }
+    if ts.shortcut is not None:
+        wandb_metrics["train/loss_std"] = loss_info["loss_std"]
+        wandb_metrics["train/loss_boot"] = loss_info["loss_boot"]
+    else:
+        wandb_metrics["train/pred_std"] = pred_std
+    log_step(wandb_metrics, step=ts.global_step)
+
+    if ts.shortcut is not None:
+        print(
+            f"{progress} "
+            f"Loss: {raw_loss_val:.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
+            f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
+            f"GradN: {last_grad_norm:.3f} "
+            f"({batches_per_sec:.1f} batch/s){warning_str}"
+        )
+    else:
+        print(
+            f"{progress} "
+            f"Loss: {raw_loss_val:.4f} "
+            f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
+            f"GradN: {last_grad_norm:.3f} "
+            f"PredStd: {pred_std:.4f} "
+            f"({batches_per_sec:.1f} batch/s){warning_str}"
+        )
+
+
+def _make_epoch_result(total_loss, total_grad_norm, total_grad_norm_count,
+                        num_batches, global_step, *, preempted=False):
+    """Build the return dict for train_epoch."""
+    return {
+        "loss": total_loss / max(num_batches, 1),
+        "grad_norm": total_grad_norm / max(total_grad_norm_count, 1),
+        "pred_std": 0.0,
+        "global_step": global_step,
+        "preempted": preempted,
     }
 
 
@@ -782,19 +875,15 @@ def main():
     base_checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     if args.resume:
-        # When resuming, use the same directory as the checkpoint
         checkpoint_path = Path(args.resume)
         if checkpoint_path.parent.name.startswith("run_"):
             checkpoint_dir = checkpoint_path.parent
         else:
-            # Legacy checkpoint in flat directory - create new run dir
             checkpoint_dir = create_run_directory(base_checkpoint_dir, args)
     elif args.run_name:
-        # Custom run name provided
         checkpoint_dir = base_checkpoint_dir / args.run_name
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
     else:
-        # Auto-generate run directory name
         checkpoint_dir = create_run_directory(base_checkpoint_dir, args)
 
     print(f"Checkpoint directory: {checkpoint_dir}")
@@ -802,7 +891,6 @@ def main():
     # Create dataset(s) and dataloader(s)
     print(f"\nLoading latent sequences from {args.latents_dir}...")
 
-    # Select dataset class based on --packed flag
     DatasetClass = PackedLatentSequenceDataset if args.packed else LatentSequenceDataset
     if args.packed:
         print("Using PACKED latent format (fast I/O)")
@@ -810,7 +898,6 @@ def main():
         print("Using per-frame latent format (consider --packed for faster I/O)")
 
     if args.alternating_lengths:
-        # Two datasets with different sequence lengths
         dataset_short = DatasetClass(
             latents_dir=args.latents_dir,
             sequence_length=args.seq_len_short,
@@ -853,9 +940,8 @@ def main():
             pin_memory=True,
             drop_last=True,
         )
-        dataloader = None  # Will use alternating loaders
+        dataloader = None
     else:
-        # Single dataset/dataloader
         dataset = DatasetClass(
             latents_dir=args.latents_dir,
             sequence_length=args.sequence_length,
@@ -912,62 +998,47 @@ def main():
     print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
     print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
 
-    # torch.compile the model
     if not args.no_compile:
         print("Compiling model with torch.compile...")
         model = torch.compile(model)
 
-    # Save run configuration
     save_run_config(checkpoint_dir, args, num_params)
 
-    # Initialize wandb
     wandb_run = init_wandb(args, job_type="dynamics", extra_config={
         "num_params": num_params,
         "checkpoint_dir": str(checkpoint_dir),
     })
 
-    # Create optimizer
+    # Create optimizer + scheduler
     optimizer = create_optimizer(model.parameters(), args.lr, args.weight_decay, use_8bit=args.use_8bit_adam, betas=(0.9, 0.95))
 
-    # WSD Learning Rate Schedule
-    # Estimate total optimizer steps accounting for gradient accumulation
     if dataloader is not None:
         steps_per_epoch = len(dataloader) // args.gradient_accumulation
     else:
         accum_s = args.gradient_accumulation_short or args.gradient_accumulation
         accum_l = args.gradient_accumulation_long or args.gradient_accumulation
-        # Weighted average: (1-long_ratio) of batches use accum_s, long_ratio use accum_l
         n_short = len(dataloader_short)
         n_long = int(n_short * args.long_ratio / (1 - args.long_ratio))
         steps_per_epoch = n_short // accum_s + n_long // accum_l
     total_steps = args.epochs * steps_per_epoch
     scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
 
-    # Create diffusion schedule
+    # Diffusion schedule + shortcut forcing
     schedule = DiffusionSchedule(device=args.device)
 
-    # Create shortcut forcing if enabled
     shortcut = None
     if args.shortcut_forcing:
         shortcut = ShortcutForcing(k_max=args.shortcut_k_max)
         print(f"Shortcut forcing enabled (k_max={args.shortcut_k_max})")
 
-    # Create scaler for mixed precision
-    # GradScaler is only useful for float16; with bfloat16 it's a no-op that can
-    # spuriously skip optimizer steps. Only enable for float16 (e.g. MPS).
+    # GradScaler: only useful for float16, no-op for bfloat16
     amp_dtype = torch.bfloat16 if args.device != "mps" else torch.float16
     scaler = GradScaler(args.device.split(":")[0], enabled=(amp_dtype == torch.float16))
 
-    # RMS trackers for loss normalization (only used in standard training mode;
-    # shortcut forcing already balances std/boot losses internally via Paper Eq. 7)
-    if args.shortcut_forcing:
-        rms_dict = None
-    else:
-        rms_dict = {
-            "x_pred": RunningRMS(),
-        }
+    # RMS trackers (only for standard training, not shortcut forcing)
+    rms_dict = None if args.shortcut_forcing else {"x_pred": RunningRMS()}
 
-    # Resume if checkpoint provided
+    # Resume
     start_epoch = 0
     global_step = 0
     resume_skip_batches = 0
@@ -976,13 +1047,11 @@ def main():
         saved_epoch, global_step, _, saved_batch_idx = load_checkpoint(
             Path(args.resume), model, optimizer, scaler, scheduler=scheduler, rms_trackers=rms_dict, strict=False
         )
-        # Resume at the same epoch and skip to the saved batch position.
-        # This avoids the old bug where epoch incremented on every resume.
         start_epoch = saved_epoch
         resume_skip_batches = saved_batch_idx
         print(f"Resuming from epoch {start_epoch}, batch {resume_skip_batches}, global_step {global_step}")
 
-    # Grab a fixed validation batch for eval metrics
+    # Fixed validation batch for eval metrics
     val_batch = None
     if dataloader_short is not None:
         val_batch = next(iter(dataloader_short))
@@ -991,7 +1060,40 @@ def main():
     if val_batch is not None:
         print(f"Validation batch: {val_batch['latents'].shape}")
 
-    # Training loop — use validation PSNR (not training loss) to select best model
+    # --- Build dataclasses for train_epoch ---
+    ts = TrainingState(
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        scheduler=scheduler,
+        global_step=global_step,
+        rms_dict=rms_dict,
+        shortcut=shortcut,
+    )
+
+    if args.alternating_lengths:
+        accum_s = args.gradient_accumulation_short or args.gradient_accumulation
+        accum_l = args.gradient_accumulation_long or args.gradient_accumulation
+    else:
+        accum_s = args.gradient_accumulation
+        accum_l = None
+
+    data_cfg = DataConfig(
+        dataloader=dataloader,
+        dataloader_short=dataloader_short,
+        dataloader_long=dataloader_long,
+        accumulation_steps=accum_s,
+        accumulation_steps_long=accum_l,
+        long_ratio=args.long_ratio,
+    )
+
+    ckpt_cfg = CheckpointConfig(
+        checkpoint_dir=checkpoint_dir,
+        base_checkpoint_dir=base_checkpoint_dir,
+        name_prefix="dynamics",
+    )
+
+    # --- Training loop ---
     best_psnr = -float("inf")
     history = []
 
@@ -1000,94 +1102,55 @@ def main():
         print(f"Epoch {epoch + 1}/{args.epochs}")
         print("=" * 60)
 
-        # Resolve per-length accumulation
-        if args.alternating_lengths:
-            accum_s = args.gradient_accumulation_short or args.gradient_accumulation
-            accum_l = args.gradient_accumulation_long or args.gradient_accumulation
-        else:
-            accum_s = args.gradient_accumulation
-            accum_l = None
-
         metrics = train_epoch(
-            model, dataloader, optimizer, scaler, scheduler, schedule, args.device,
-            epoch, global_step, args, checkpoint_dir, base_checkpoint_dir, shortcut,
-            dataloader_short, dataloader_long, use_actions=args.use_actions,
-            independent_frame_ratio=args.independent_frame_ratio,
-            rms_dict=rms_dict,
-            accumulation_steps=accum_s,
-            accumulation_steps_long=accum_l,
+            ts, data_cfg, ckpt_cfg, schedule, args.device, epoch, args,
             val_batch=val_batch,
             skip_batches=resume_skip_batches,
         )
-        # Only skip on the first epoch after resume
-        resume_skip_batches = 0
-
-        global_step = metrics["global_step"]
+        resume_skip_batches = 0  # only skip on first epoch after resume
 
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Loss: {metrics['loss']:.4f}")
         print(f"  Grad Norm (avg): {metrics['grad_norm']:.4f}")
         print(f"  Pred Std (avg): {metrics['pred_std']:.4f}")
 
-        # Wandb epoch summary
         log_step({
             "epoch/loss": metrics["loss"],
             "epoch/grad_norm": metrics["grad_norm"],
             "epoch/pred_std": metrics["pred_std"],
             "epoch/epoch": epoch + 1,
-        }, step=global_step)
+        }, step=ts.global_step)
 
-        # Mode collapse warning
         if metrics['pred_std'] < 0.01:
-            print("  ⚠️  WARNING: Low prediction variance - possible mode collapse!")
+            print("  WARNING: Low prediction variance - possible mode collapse!")
 
-        # Save history
-        history.append({
-            "epoch": epoch + 1,
-            **metrics,
-        })
+        history.append({"epoch": epoch + 1, **metrics})
 
-        # Save checkpoint
+        # Epoch checkpoint (uses save_checkpoints helper)
         if (epoch + 1) % args.save_interval == 0:
-            checkpoint_path = checkpoint_dir / f"dynamics_epoch_{epoch + 1:03d}.pt"
-            save_checkpoint(
-                checkpoint_path, model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
-            )
+            epoch_path = checkpoint_dir / f"dynamics_epoch_{epoch + 1:03d}.pt"
+            save_checkpoints(ckpt_cfg, ts, epoch, metrics["loss"], args, step_path=epoch_path)
 
-            # Also save as latest (both run dir and base dir for sbatch resume)
-            latest_path = checkpoint_dir / "dynamics_latest.pt"
-            save_checkpoint(
-                latest_path, model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
-            )
-            if base_checkpoint_dir != checkpoint_dir:
-                base_latest = base_checkpoint_dir / "dynamics_latest.pt"
-                save_checkpoint(
-                    base_latest, model, optimizer, scaler, epoch, global_step,
-                    metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
-                )
-
-        # Save best model based on validation PSNR (mean across tau levels)
+        # Save best model based on validation PSNR
         if val_batch is not None:
             eval_results = eval_denoising_psnr(
-                model, schedule, val_batch, args.device, shortcut=shortcut
+                model, schedule, val_batch, args.device, shortcut=shortcut,
             )
             psnr_keys = [k for k in eval_results if k.startswith("eval/psnr_tau")]
             mean_psnr = sum(eval_results[k] for k in psnr_keys) / max(len(psnr_keys), 1)
-            log_step({"epoch/mean_psnr": mean_psnr}, step=global_step)
+            log_step({"epoch/mean_psnr": mean_psnr}, step=ts.global_step)
 
             if mean_psnr > best_psnr:
                 best_psnr = mean_psnr
                 best_path = checkpoint_dir / "dynamics_best.pt"
                 save_checkpoint(
-                    best_path, model, optimizer, scaler, epoch, global_step,
-                    metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict
+                    best_path, model, optimizer, scaler, epoch, ts.global_step,
+                    metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict,
                 )
                 print(f"New best model saved (PSNR: {best_psnr:.2f} dB)")
 
         if metrics.get("preempted"):
-            print("Preempted during epoch — exiting training loop.", flush=True)
+            print("Preempted during epoch -- exiting training loop.", flush=True)
             break
 
     # Save training history

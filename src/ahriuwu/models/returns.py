@@ -199,54 +199,6 @@ def compute_advantages(
     return advantages
 
 
-def compute_mtp_loss(
-    logits: torch.Tensor,
-    targets: torch.Tensor,
-    mtp_length: int,
-    criterion,
-    mask: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """Compute MTP (Multi-Token Prediction) loss matching DreamerV4 Eq 9.
-
-    For each MTP offset n=0..mtp_length-1, aligns prediction at position t
-    with target at position t+n. n=0 predicts the current timestep.
-    Paper uses L=8 with sum from n=0 to L inclusive, so mtp_length=9.
-
-    Args:
-        logits: (B, T, L, ...) predicted logits from head
-        targets: (B, T, ...) target values (actions or symlog rewards)
-        mtp_length: L, number of MTP offsets
-        criterion: Loss function(pred, target) -> scalar loss per element
-        mask: Optional (B,) bool mask. If provided, loss only computed
-              where mask is True.
-
-    Returns:
-        Scalar loss averaged over all valid positions and offsets
-    """
-    B, T = targets.shape[:2]
-    total_loss = torch.tensor(0.0, device=logits.device)
-    num_terms = 0
-
-    for n in range(mtp_length):
-        valid_T = T - n  # positions 0..T-n-1 can predict t+n
-        if valid_T <= 0:
-            continue
-
-        pred = logits[:, :valid_T, n]     # (B, valid_T, ...)
-        target = targets[:, n:n + valid_T]  # (B, valid_T, ...)
-
-        if mask is not None:
-            # Expand mask to match: (B,) -> (B, 1, ...) broadcast
-            pred = pred[mask]
-            target = target[mask]
-
-        if pred.numel() > 0:
-            total_loss = total_loss + criterion(pred, target)
-            num_terms += 1
-
-    return total_loss / max(num_terms, 1)
-
-
 def compute_pmpo_loss(
     log_probs: torch.Tensor,
     advantages: torch.Tensor,

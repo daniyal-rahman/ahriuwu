@@ -13,6 +13,8 @@ from typing import TypedDict
 
 import torch
 
+from ..constants import MOVEMENT_DIM, ABILITY_KEYS
+
 
 class ActionDict(TypedDict, total=False):
     """Type hint for action dictionaries."""
@@ -25,12 +27,6 @@ class ActionDict(TypedDict, total=False):
     F: int         # 0-1
     item: int      # 0-1
     B: int         # 0-1
-
-
-# Continuous movement dimension (x, y)
-MOVEMENT_DIM = 2
-
-ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
 
 
 @dataclass

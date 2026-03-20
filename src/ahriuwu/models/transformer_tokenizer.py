@@ -26,8 +26,8 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
 from .layers import (
-    RMSNorm, QKNorm, SwiGLU, soft_cap_attention,
-    RotaryEmbedding1D, RotaryEmbedding2D, apply_rotary_emb,
+    RMSNorm, SwiGLU, Attention,
+    RotaryEmbedding2D,
 )
 
 
@@ -71,199 +71,17 @@ def get_2d_sincos_pos_embed(embed_dim: int, grid_size: int) -> torch.Tensor:
     return pos_embed
 
 
-class MultiHeadAttention(nn.Module):
-    """Multi-head attention with optional masking, RoPE, QKNorm, and soft capping."""
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        dropout: float = 0.0,
-        use_qk_norm: bool = True,
-        soft_cap: float | None = 50.0,
-    ):
-        """Initialize multi-head attention.
-
-        Args:
-            dim: Model dimension
-            num_heads: Number of attention heads
-            dropout: Dropout probability
-            use_qk_norm: Whether to use QK normalization
-            soft_cap: Soft cap value for attention logits (None = no capping)
-        """
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.use_qk_norm = use_qk_norm
-        self.soft_cap = soft_cap
-
-        # When QKNorm is enabled, Q and K are already normalized to unit RMS,
-        # so the 1/sqrt(d) scaling is redundant and compresses attention logits.
-        # Following Gemma 2 convention, we set scale=1.0 with QKNorm.
-        self.scale = 1.0 if use_qk_norm else self.head_dim ** -0.5
-
-        self.q_proj = nn.Linear(dim, dim, bias=False)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
-        self.out_proj = nn.Linear(dim, dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-        # QKNorm
-        if use_qk_norm:
-            self.qk_norm = QKNorm(self.head_dim)
-        else:
-            self.qk_norm = None
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        mask: Optional[torch.Tensor] = None,
-        rope: Optional[RotaryEmbedding2D] = None,
-        rope_indices: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        B, N, D = x.shape
-
-        q = self.q_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
-
-        # Apply QKNorm before RoPE (normalization must not undo rotations)
-        if self.qk_norm is not None:
-            q, k = self.qk_norm(q, k)
-
-        # Apply RoPE if provided (only to tokens with valid indices >= 0)
-        # Latent tokens use index -1 and don't get RoPE rotation
-        if rope is not None and rope_indices is not None:
-            cos, sin = rope.get_rotary_emb(rope.grid_size ** 2, x.device)
-
-            # Create mask for valid positions (patches have indices 0 to grid_size^2-1)
-            valid_mask = rope_indices >= 0  # (N,)
-
-            if valid_mask.any():
-                # Safe indexing: clamp to valid range for indexing, mask handles selection
-                safe_indices = rope_indices.clamp(min=0)
-                cos_sel = cos[safe_indices]  # (N, head_dim)
-                sin_sel = sin[safe_indices]  # (N, head_dim)
-
-                # Expand for broadcasting: (1, 1, N, head_dim)
-                cos_sel = cos_sel.unsqueeze(0).unsqueeze(0)
-                sin_sel = sin_sel.unsqueeze(0).unsqueeze(0)
-
-                # Apply rotation
-                q_rotated = apply_rotary_emb(q, cos_sel, sin_sel)
-                k_rotated = apply_rotary_emb(k, cos_sel, sin_sel)
-
-                # Only update valid tokens (patches), keep latents unchanged
-                valid_mask_exp = valid_mask.view(1, 1, N, 1).expand_as(q)
-                q = torch.where(valid_mask_exp, q_rotated, q)
-                k = torch.where(valid_mask_exp, k_rotated, k)
-
-        # Scaled dot-product attention
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-
-        # Apply soft capping if enabled
-        if self.soft_cap is not None:
-            attn = soft_cap_attention(attn, self.soft_cap)
-
-        if mask is not None:
-            # mask: (N, N) or (B, N, N), True = attend, False = mask
-            if mask.dim() == 2:
-                mask = mask.unsqueeze(0).unsqueeze(0)  # (1, 1, N, N)
-            elif mask.dim() == 3:
-                mask = mask.unsqueeze(1)  # (B, 1, N, N)
-            attn = attn.masked_fill(~mask, float('-inf'))
-
-        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(v.dtype)
-        attn = self.dropout(attn)
-
-        out = torch.matmul(attn, v)
-        out = out.transpose(1, 2).contiguous().view(B, N, D)
-        return self.out_proj(out)
-
-
-class TemporalAttentionTok(nn.Module):
-    """Temporal attention with 1D RoPE and causal masking.
-
-    Operates on (B_eff, T, D) where B_eff = B*N (each spatial token attends across time).
-    """
-
-    def __init__(
-        self,
-        dim: int,
-        num_heads: int = 8,
-        dropout: float = 0.0,
-        use_qk_norm: bool = True,
-        soft_cap: float | None = 50.0,
-        max_seq_len: int = 256,
-    ):
-        super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.head_dim = dim // num_heads
-        self.soft_cap = soft_cap
-
-        # When QKNorm is enabled, Q and K are already normalized to unit RMS,
-        # so the 1/sqrt(d) scaling is redundant. Set scale=1.0 (Gemma 2 convention).
-        self.scale = 1.0 if use_qk_norm else self.head_dim ** -0.5
-
-        self.q_proj = nn.Linear(dim, dim, bias=False)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
-        self.out_proj = nn.Linear(dim, dim, bias=False)
-        self.dropout = nn.Dropout(dropout)
-
-        if use_qk_norm:
-            self.qk_norm = QKNorm(self.head_dim)
-        else:
-            self.qk_norm = None
-
-        self.rope = RotaryEmbedding1D(self.head_dim, max_seq_len)
-
-        # Precompute causal mask: True = can attend
-        causal = torch.tril(torch.ones(max_seq_len, max_seq_len, dtype=torch.bool))
-        self.register_buffer('causal_mask', causal)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        B, T, D = x.shape
-
-        q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
-
-        if self.qk_norm is not None:
-            q, k = self.qk_norm(q, k)
-
-        # Apply 1D RoPE
-        cos, sin = self.rope.get_rotary_emb(T, x.device)
-        cos = cos.unsqueeze(0).unsqueeze(0)  # (1, 1, T, head_dim)
-        sin = sin.unsqueeze(0).unsqueeze(0)
-        q = apply_rotary_emb(q, cos, sin)
-        k = apply_rotary_emb(k, cos, sin)
-
-        # Scaled dot-product attention
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-
-        if self.soft_cap is not None:
-            attn = soft_cap_attention(attn, self.soft_cap)
-
-        # Apply causal mask
-        mask = self.causal_mask[:T, :T].unsqueeze(0).unsqueeze(0)  # (1, 1, T, T)
-        attn = attn.masked_fill(~mask, float('-inf'))
-
-        attn = F.softmax(attn, dim=-1, dtype=torch.float32).to(v.dtype)
-        attn = self.dropout(attn)
-
-        out = torch.matmul(attn, v)
-        out = out.transpose(1, 2).contiguous().view(B, T, D)
-        return self.out_proj(out)
-
-
 class SpaceTimeTransformerBlock(nn.Module):
     """Factored space-time transformer block.
 
-    attn_type="spatial": reshape to (B*T, N, D), apply MultiHeadAttention with space mask + 2D RoPE
-    attn_type="temporal": reshape to (B*N, T, D), apply TemporalAttentionTok with causal + 1D RoPE
+    Uses the unified ``Attention`` from layers.py:
+    - attn_type="spatial": reshape to (B*T, N, D), apply spatial attention with
+      optional mask + 2D RoPE
+    - attn_type="temporal": reshape to (B*N, T, D), apply causal temporal
+      attention with 1D RoPE
+
+    The tokenizer always uses ``allow_flex=False`` because flex_attention combined
+    with gradient checkpointing causes OOM.
     """
 
     def __init__(
@@ -275,6 +93,7 @@ class SpaceTimeTransformerBlock(nn.Module):
         soft_cap: float | None = 50.0,
         attn_type: str = "spatial",
         max_time: int = 256,
+        spatial_size: int = 16,
     ):
         super().__init__()
         self.attn_type = attn_type
@@ -282,10 +101,18 @@ class SpaceTimeTransformerBlock(nn.Module):
         self.norm2 = RMSNorm(dim)
         self.ffn = SwiGLU(dim)
 
-        if attn_type == "spatial":
-            self.attn = MultiHeadAttention(dim, num_heads, dropout, use_qk_norm, soft_cap)
-        else:
-            self.attn = TemporalAttentionTok(dim, num_heads, dropout, use_qk_norm, soft_cap, max_time)
+        self.attn = Attention(
+            dim=dim,
+            num_heads=num_heads,
+            mode=attn_type,
+            dropout=dropout,
+            use_qk_norm=use_qk_norm,
+            soft_cap=soft_cap,
+            spatial_size=spatial_size,
+            max_seq_len=max_time,
+            # Tokenizer uses gradient checkpointing — flex_attention + GC causes OOM.
+            allow_flex=False,
+        )
 
     def forward(
         self,
@@ -300,14 +127,14 @@ class SpaceTimeTransformerBlock(nn.Module):
             x: (B, T, N, D)
             T: number of frames
             space_mask: (N, N) for spatial attention
-            rope: 2D RoPE for spatial attention
+            rope: 2D RoPE for spatial attention (unused — Attention has its own)
             rope_indices: (N,) patch grid indices for spatial RoPE
         """
         B, _, N, D = x.shape
 
         if self.attn_type == "spatial":
             x_s = x.reshape(B * T, N, D)
-            x_s = x_s + self.attn(self.norm1(x_s), mask=space_mask, rope=rope, rope_indices=rope_indices)
+            x_s = x_s + self.attn(self.norm1(x_s), mask=space_mask, rope_indices=rope_indices)
             x_s = x_s + self.ffn(self.norm2(x_s))
             return x_s.reshape(B, T, N, D)
         else:
@@ -410,6 +237,7 @@ class TransformerEncoder(nn.Module):
                 embed_dim, num_heads, dropout, use_qk_norm, soft_cap,
                 attn_type="temporal" if i % 2 == 1 else "spatial",
                 max_time=max_time,
+                spatial_size=self.grid_size if use_rope else 0,
             )
             for i in range(num_layers)
         ])
@@ -542,6 +370,7 @@ class TransformerDecoder(nn.Module):
                 embed_dim, num_heads, dropout, use_qk_norm, soft_cap,
                 attn_type="temporal" if i % 2 == 1 else "spatial",
                 max_time=max_time,
+                spatial_size=self.grid_size if use_rope else 0,
             )
             for i in range(num_layers)
         ])

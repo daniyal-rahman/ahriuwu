@@ -12,7 +12,7 @@ from torch.utils.data import Dataset, Sampler
 
 from collections import defaultdict
 
-from .actions import ABILITY_KEYS
+from ..constants import ABILITY_KEYS
 
 # Square target: 352x352. Divisible by 16 (22x22 = 484 patches for patch-based tokenizer).
 # Both tokenizers require square inputs. 352 > 256 gives more detail.
