@@ -63,12 +63,22 @@ class TrainingState:
 
 @dataclass
 class DataConfig:
-    """Dataloader configuration for single or alternating-length training."""
+    """Dataloader configuration for single or alternating-length training.
+
+    For dynamic batch sizing, separate dataloaders are used for standard
+    (larger batch) and shortcut (smaller batch, GC disabled) steps.
+    """
     dataloader: DataLoader | None = None
     dataloader_short: DataLoader | None = None
     dataloader_long: DataLoader | None = None
+    # Larger-batch dataloaders for standard steps (fill VRAM)
+    dataloader_short_standard: DataLoader | None = None
+    dataloader_long_standard: DataLoader | None = None
     accumulation_steps: int = 1
     accumulation_steps_long: int | None = None
+    # Per-step-type accumulation for constant effective batch
+    accumulation_short_standard: int | None = None
+    accumulation_long_standard: int | None = None
     long_ratio: float = 0.1
 
 
@@ -293,14 +303,28 @@ def parse_args():
     parser.add_argument(
         "--batch-size-short",
         type=int,
-        default=2,
-        help="Batch size for short sequences",
+        default=1,
+        help="Batch size for short sequences (shortcut forcing steps)",
     )
     parser.add_argument(
         "--batch-size-long",
         type=int,
         default=1,
-        help="Batch size for long sequences",
+        help="Batch size for long sequences (shortcut forcing steps)",
+    )
+    parser.add_argument(
+        "--batch-size-short-standard",
+        type=int,
+        default=None,
+        help="Batch size for short sequences on standard (non-shortcut) steps. "
+             "If None, uses --batch-size-short. Set higher to fill VRAM on standard steps.",
+    )
+    parser.add_argument(
+        "--batch-size-long-standard",
+        type=int,
+        default=None,
+        help="Batch size for long sequences on standard steps. "
+             "If None, uses --batch-size-long.",
     )
     parser.add_argument(
         "--long-ratio",
@@ -534,6 +558,9 @@ def train_epoch(
         batch_iterator = None
         iter_short = iter(data_cfg.dataloader_short)
         iter_long = iter(data_cfg.dataloader_long)
+        # Standard-step iterators (larger batch) — fall back to shortcut iterators if not set
+        iter_short_std = iter(data_cfg.dataloader_short_standard) if data_cfg.dataloader_short_standard else None
+        iter_long_std = iter(data_cfg.dataloader_long_standard) if data_cfg.dataloader_long_standard else None
         total_batches = len(data_cfg.dataloader_short) + int(
             len(data_cfg.dataloader_short) * data_cfg.long_ratio / (1 - data_cfg.long_ratio)
         )
@@ -545,6 +572,8 @@ def train_epoch(
         if data_cfg.accumulation_steps_long is not None
         else data_cfg.accumulation_steps
     )
+    accum_short_std = data_cfg.accumulation_short_standard or accum_short
+    accum_long_std = data_cfg.accumulation_long_standard or accum_long
     micro_count = 0
     current_accum = data_cfg.accumulation_steps
     use_long = False
@@ -570,18 +599,33 @@ def train_epoch(
         print(f"Resumed at batch {batch_idx}")
 
     while True:
-        # --- Decide batch type at start of accumulation window ---
+        # --- Decide batch type + shortcut at start of accumulation window ---
         if micro_count == 0 and alternating:
             use_long = random.random() < data_cfg.long_ratio
-            current_accum = accum_long if use_long else accum_short
+            # Shortcut is skipped on long batches (OOMs without GC).
+            # Use larger-batch standard dataloaders when not doing shortcut.
+            will_shortcut = ts.shortcut is not None and not use_long
+            if will_shortcut:
+                current_accum = accum_long if use_long else accum_short
+            else:
+                current_accum = accum_long_std if use_long else accum_short_std
 
-        # --- Get next batch ---
+        # --- Get next batch (pick standard or shortcut dataloader) ---
+        use_standard_dl = not will_shortcut if alternating else False
         try:
+            if use_standard_dl and not use_long and iter_short_std is not None:
+                active_iter_short = iter_short_std
+            else:
+                active_iter_short = iter_short
+            if use_standard_dl and use_long and iter_long_std is not None:
+                active_iter_long = iter_long_std
+            else:
+                active_iter_long = iter_long
             batch, seq_type, iter_long = get_next_batch(
                 alternating, use_long,
                 batch_iterator=batch_iterator,
-                iter_short=iter_short,
-                iter_long=iter_long,
+                iter_short=active_iter_short,
+                iter_long=active_iter_long,
                 dataloader_long=data_cfg.dataloader_long,
             )
         except StopIteration:
@@ -597,10 +641,16 @@ def train_epoch(
 
         use_independent = random.random() < args.independent_frame_ratio
 
+        # --- Decide whether to use shortcut on this step ---
+        # Skip shortcut on long batches (OOMs without GC, which is
+        # disabled during shortcut). Long batches are ~10% of steps,
+        # shortcut would apply to ~5% — negligible training signal loss.
+        use_shortcut = ts.shortcut is not None and not use_long
+
         # --- Forward pass (mixed precision) ---
         amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
-            if ts.shortcut is not None:
+            if use_shortcut:
                 raw_loss, loss_info, tau = _forward_shortcut(
                     model, ts.shortcut, schedule, z_0, B, T, device, actions,
                 )
@@ -735,9 +785,14 @@ def train_epoch(
 
 def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions):
     """Shortcut forcing forward pass. Returns (raw_loss, loss_info, tau)."""
-    # Keep gradient checkpointing ON during shortcut forcing.
-    # The old code disabled it due to autocast+checkpoint incompatibility with
-    # manual attention, but the unified Attention class handles this correctly.
+    # Disable gradient checkpointing during shortcut forcing.
+    # Manual attention + autocast + GC causes checkpoint metadata mismatch
+    # (saved tensors have different dtype/shape on recompute). Standard steps
+    # keep GC on for memory efficiency.
+    _inner = getattr(model, '_orig_mod', model)
+    gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
+    if gc_was_enabled:
+        _inner.gradient_checkpointing = False
     try:
         step_size = shortcut.sample_step_size(B, device=device)
         tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
@@ -746,7 +801,8 @@ def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions):
             model, schedule, z_0, tau, step_size, actions=actions,
         )
     finally:
-        pass
+        if gc_was_enabled:
+            _inner.gradient_checkpointing = True
     return raw_loss, loss_info, tau
 
 
@@ -922,6 +978,7 @@ def main():
         print(f"Short sequences: {len(dataset_short)} (T={args.seq_len_short})")
         print(f"Long sequences: {len(dataset_long)} (T={args.seq_len_long})")
 
+        # Shortcut-step dataloaders (smaller batch, GC disabled during shortcut)
         dataloader_short = DataLoader(
             dataset_short,
             batch_size=args.batch_size_short,
@@ -938,6 +995,33 @@ def main():
             pin_memory=True,
             drop_last=True,
         )
+        # Standard-step dataloaders (larger batch, GC stays on)
+        bs_short_std = args.batch_size_short_standard or args.batch_size_short
+        bs_long_std = args.batch_size_long_standard or args.batch_size_long
+        if bs_short_std != args.batch_size_short:
+            dataloader_short_standard = DataLoader(
+                dataset_short,
+                batch_size=bs_short_std,
+                sampler=VideoGroupedSampler(dataset_short),
+                num_workers=args.num_workers,
+                pin_memory=True,
+                drop_last=True,
+            )
+            print(f"Standard short batch size: {bs_short_std} (vs shortcut: {args.batch_size_short})")
+        else:
+            dataloader_short_standard = None
+        if bs_long_std != args.batch_size_long:
+            dataloader_long_standard = DataLoader(
+                dataset_long,
+                batch_size=bs_long_std,
+                sampler=VideoGroupedSampler(dataset_long),
+                num_workers=args.num_workers,
+                pin_memory=True,
+                drop_last=True,
+            )
+            print(f"Standard long batch size: {bs_long_std} (vs shortcut: {args.batch_size_long})")
+        else:
+            dataloader_long_standard = None
         dataloader = None
     else:
         dataset = DatasetClass(
@@ -1076,12 +1160,21 @@ def main():
         accum_s = args.gradient_accumulation
         accum_l = None
 
+    # Compute per-step-type accumulation to maintain effective_batch=32
+    effective_batch = args.batch_size_short * accum_s
+    accum_short_std = effective_batch // bs_short_std if bs_short_std > 0 else accum_s
+    accum_long_std = effective_batch // bs_long_std if bs_long_std > 0 else (accum_l or accum_s)
+
     data_cfg = DataConfig(
         dataloader=dataloader,
         dataloader_short=dataloader_short,
         dataloader_long=dataloader_long,
+        dataloader_short_standard=dataloader_short_standard if args.alternating_lengths else None,
+        dataloader_long_standard=dataloader_long_standard if args.alternating_lengths else None,
         accumulation_steps=accum_s,
         accumulation_steps_long=accum_l,
+        accumulation_short_standard=accum_short_std,
+        accumulation_long_standard=accum_long_std,
         long_ratio=args.long_ratio,
     )
 

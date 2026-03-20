@@ -35,11 +35,13 @@ CMD=(
   --alternating-lengths
   --seq-len-short 32
   --seq-len-long 64
-  --batch-size-short 2
+  --batch-size-short 1
   --batch-size-long 1
+  --batch-size-short-standard 8
+  --batch-size-long-standard 4
   --long-ratio 0.1
-  --gradient-accumulation 16
-  --gradient-accumulation-short 16
+  --gradient-accumulation 32
+  --gradient-accumulation-short 32
   --gradient-accumulation-long 32
   --gradient-checkpointing
   --shortcut-forcing
