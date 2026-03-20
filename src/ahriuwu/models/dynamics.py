@@ -659,12 +659,17 @@ class DynamicsTransformer(nn.Module):
             # (B, T, D) -> (B, T, 1, D) and concatenate
             x = torch.cat([x, action_token.unsqueeze(2)], dim=2)
 
-        # Build conditioning token (tau + step_size) and append to sequence
+        # Build conditioning (tau + step_size) and ADD to all spatial tokens.
+        # Additive conditioning ensures every token receives the noise-level signal
+        # directly, rather than relying on attention to a single appended token
+        # (which produces gradients ~158x smaller than the spatial pathway).
+        # We also keep the appended token for the attention pathway.
         cond_token = self._build_condition_token(tau, step_size, B, T)  # (B, T, D)
-        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)
+        x = x + cond_token.unsqueeze(2)  # broadcast (B, T, 1, D) to all spatial tokens
+        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)  # also append for attention
 
-        # x is now (B, T, total_spatial_tokens, D)
-        # Layout: [latent_tokens, register_tokens, action_token?, cond_token]
+        # x is now (B, T, total_spatial_tokens + 1, D)
+        # Layout: [latent_tokens + cond (additive), register_tokens + cond, action_token? + cond, cond_token (appended)]
 
         # Transformer blocks
         for block in self.blocks:
