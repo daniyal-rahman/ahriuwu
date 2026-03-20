@@ -936,16 +936,45 @@ class DynamicsTransformer(nn.Module):
 
         return cond
 
-    def _init_weights(self):
-        """Initialize weights with small values for stable training."""
-        for name, p in self.named_parameters():
-            if "weight" in name and p.dim() >= 2:
-                nn.init.xavier_uniform_(p, gain=0.02)
-            elif "bias" in name:
-                nn.init.zeros_(p)
+    @staticmethod
+    def _init_module(module: nn.Module):
+        """Type-based weight initialization (standard transformer).
 
-        # Zero-init output projection for residual
-        nn.init.zeros_(self.output_proj.weight)
+        Dispatches by module type — rename-safe, no string matching.
+        """
+        if isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, std=0.02)
+        elif isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight, gain=1.0)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+    def _init_weights(self):
+        """Initialize all weights, then apply residual scaling overrides.
+
+        Type-based defaults via apply(), then explicit overrides for:
+        - Residual output paths: scaled by 1/sqrt(2*num_layers) for deep networks
+        - Final output_proj: small init for residual learning (output starts near input)
+        """
+        # Type-based defaults: embeddings get normal, linears get xavier
+        self.apply(self._init_module)
+
+        # Residual scaling: attention out_proj and SwiGLU w3 in each block
+        num_layers = len(self.blocks)
+        residual_scale = 1.0 / math.sqrt(2 * num_layers)
+        for block in self.blocks:
+            nn.init.xavier_uniform_(block.attn.out_proj.weight, gain=residual_scale)
+            nn.init.xavier_uniform_(block.ffn.w3.weight, gain=residual_scale)
+
+        # Agent blocks (if present)
+        if hasattr(self, 'agent_blocks'):
+            for block in self.agent_blocks:
+                nn.init.xavier_uniform_(block.cross_attn.out_proj.weight, gain=residual_scale)
+                nn.init.xavier_uniform_(block.self_attn.out_proj.weight, gain=residual_scale)
+                nn.init.xavier_uniform_(block.ffn.w3.weight, gain=residual_scale)
+
+        # Final output: small but nonzero for residual learning
+        nn.init.xavier_uniform_(self.output_proj.weight, gain=0.02)
 
     def forward(
         self,

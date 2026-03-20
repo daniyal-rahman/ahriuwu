@@ -1,9 +1,11 @@
 """Diffusion utilities for dynamics model training.
 
 Implements x-prediction diffusion following DreamerV4:
-- Linear noise schedule: z_τ = (1-τ)z_0 + τε
+- Linear noise schedule: z_τ = τz_0 + (1-τ)ε
 - X-prediction: model predicts clean data z_0 directly
 - Ramp loss weight: focus learning on high-signal regions
+
+Convention (matches paper): τ=0 → pure noise, τ=1 → clean data.
 
 References:
 - DreamerV4: "Training Agents Inside of Scalable World Models" (Hafner et al., 2025)
@@ -17,12 +19,12 @@ import torch.nn.functional as F
 class DiffusionSchedule:
     """Linear noise schedule for x-prediction diffusion.
 
-    Uses flow-matching style interpolation:
-        z_τ = (1-τ)z_0 + τε
+    Uses flow-matching style interpolation (paper convention):
+        z_τ = τz_0 + (1-τ)ε
 
     where τ ∈ [0, 1], z_0 is clean data, ε is noise.
-    At τ=0: z_τ = z_0 (clean)
-    At τ=1: z_τ = ε (pure noise)
+    At τ=0: z_τ = ε (pure noise)
+    At τ=1: z_τ = z_0 (clean)
     """
 
     def __init__(self, device: str = "cuda"):
@@ -54,8 +56,8 @@ class DiffusionSchedule:
         while tau.dim() < z_0.dim():
             tau = tau.unsqueeze(-1)
 
-        # Linear interpolation: z_τ = (1-τ)z_0 + τε
-        z_tau = (1 - tau) * z_0 + tau * noise
+        # Linear interpolation (paper convention): z_τ = τz_0 + (1-τ)ε
+        z_tau = tau * z_0 + (1 - tau) * noise
 
         return z_tau, noise
 
@@ -87,26 +89,24 @@ class DiffusionSchedule:
         batch_size: int,
         seq_length: int,
         device: torch.device | str | None = None,
-        tau_ctx: float = 0.1,
-        tau_max: float = 1.0,
+        tau_ctx: float = 0.9,
+        tau_min: float = 0.0,
     ) -> torch.Tensor:
         """Sample per-timestep noise levels for diffusion forcing.
 
+        Paper convention: τ=1 clean, τ=0 noise.
+
         Implements DreamerV4's diffusion forcing where:
         - A random horizon h is sampled for each batch item
-        - Frames before h: varying low noise (context frames, U(0, tau_ctx))
-        - Frames at/after h: increasing noise (prediction targets, tau_ctx to tau_max)
-
-        This creates temporal causality: model must use clean past
-        to predict noisy future. Per-timestep context noise variation prevents
-        the model from relying on a fixed context noise level.
+        - Frames before h: high τ (near-clean context, U(tau_ctx, 1.0))
+        - Frames at/after h: decreasing τ (noisier targets, tau_ctx down to tau_min)
 
         Args:
             batch_size: Number of sequences
             seq_length: Number of frames per sequence (T)
             device: Device to create tensor on
-            tau_ctx: Max noise level for context frames (context varies U(0, tau_ctx))
-            tau_max: Maximum noise level for target frames
+            tau_ctx: Min τ for context frames (context varies U(tau_ctx, 1.0))
+            tau_min: Minimum τ for target frames (most noisy)
 
         Returns:
             tau: Per-timestep noise levels, shape (B, T)
@@ -114,40 +114,25 @@ class DiffusionSchedule:
         device = device or self.device
 
         # Sample random horizon for each batch item: where prediction starts
-        # Horizon is uniformly distributed from 1 to T-1
-        # (at least 1 context frame, at least 1 prediction frame)
         horizon = torch.randint(1, seq_length, (batch_size,), device=device)
 
-        # Create position indices: 0, 1, 2, ..., T-1
         positions = torch.arange(seq_length, device=device).unsqueeze(0)  # (1, T)
         horizon = horizon.unsqueeze(1)  # (B, 1)
 
-        # Frames before horizon get low noise (context)
-        # Frames at/after horizon get linearly increasing noise
         # distance = how far past the horizon (0 for context, 1+ for targets)
         distance = (positions - horizon).clamp(min=0).float()  # (B, T)
 
-        # Normalize distance: frames at horizon=0, last frame has max distance
         max_distance = (seq_length - 1 - horizon).clamp(min=1).float()  # (B, 1)
         normalized_dist = distance / max_distance  # (B, T) in [0, 1]
 
-        # Initialize tau: (B, T)
-        tau = torch.zeros(batch_size, seq_length, device=device)
-
-        # Context frames (before horizon) get VARYING noise sampled per-frame from U(0, tau_ctx)
-        # Target frames get linearly increasing from tau_ctx to tau_max
         is_context = positions < horizon  # (B, T)
 
-        # Sample context noise per-frame: (B, T) from U(0, tau_ctx)
-        context_tau = torch.rand(batch_size, seq_length, device=device) * tau_ctx
+        # Context frames: high τ (near-clean), sampled from U(tau_ctx, 1.0)
+        context_tau = tau_ctx + torch.rand(batch_size, seq_length, device=device) * (1.0 - tau_ctx)
 
-        # Target tau: linearly increase from tau_ctx to tau_max
-        # For target frames, we use normalized_dist which ranges [0, 1]
-        # At horizon: tau = tau_ctx (normalized_dist=0)
-        # At end: tau = tau_max (normalized_dist=1)
-        target_tau = tau_ctx + normalized_dist * (tau_max - tau_ctx)
+        # Target frames: τ decreases from tau_ctx toward tau_min (more noise)
+        target_tau = tau_ctx - normalized_dist * (tau_ctx - tau_min)
 
-        # Combine: context gets varying low noise, targets get increasing noise
         tau = torch.where(is_context, context_tau, target_tau)
 
         return tau
@@ -179,11 +164,11 @@ class DiffusionSchedule:
         z_t = torch.randn(shape, device=device)
         z_noise = z_t.clone()
 
-        # Euler integration from τ=1 to τ=0
+        # Euler integration from τ=0 (noise) to τ=1 (clean)
         step_size = 1.0 / num_steps
 
         for i in range(num_steps):
-            tau = 1.0 - i * step_size
+            tau = i * step_size
             tau_tensor = torch.full((shape[0],), tau, device=device)
 
             # Predict clean data
@@ -191,11 +176,10 @@ class DiffusionSchedule:
 
             # Euler step towards prediction
             if i < num_steps - 1:
-                # Interpolate towards predicted clean
-                next_tau = tau - step_size
-                z_t = (1 - next_tau) * z_0_pred + next_tau * z_noise
+                next_tau = tau + step_size
+                # z at next_tau: next_tau * z_0_pred + (1 - next_tau) * noise
+                z_t = next_tau * z_0_pred + (1 - next_tau) * z_noise
             else:
-                # Final step - just return prediction
                 z_t = z_0_pred
 
         return z_t
@@ -204,20 +188,20 @@ class DiffusionSchedule:
 def ramp_weight(tau: torch.Tensor) -> torch.Tensor:
     """Compute ramp loss weight from DreamerV4 (Paper Eq. 8).
 
-    Paper convention (τ=0 noise, τ=1 clean): w(τ) = 0.9τ + 0.1
-    Our convention (τ=0 clean, τ=1 noise): w(τ) = 0.9(1-τ) + 0.1 = 1.0 - 0.9τ
+    Paper convention: τ=0 noise, τ=1 clean.
+    w(τ) = 0.9τ + 0.1
 
-    This weights clean data higher (where signal is strong) and noisy data lower.
-    At τ=0 (clean): w = 1.0 (full weight - most informative gradients)
-    At τ=1 (noise): w = 0.1 (minimal weight - less useful gradients)
+    Weights clean data higher (where signal is strong) and noisy data lower.
+    At τ=1 (clean): w = 1.0 (full weight)
+    At τ=0 (noise): w = 0.1 (minimal weight)
 
     Args:
-        tau: Timesteps, shape (B,) or (B, T) in [0, 1] (0=clean, 1=noise)
+        tau: Timesteps, shape (B,) or (B, T) in [0, 1] (0=noise, 1=clean)
 
     Returns:
         weights: Loss weights, same shape as tau
     """
-    return 1.0 - 0.9 * tau
+    return 0.9 * tau + 0.1
 
 
 def x_prediction_loss(
@@ -356,8 +340,8 @@ class ShortcutForcing:
     ) -> torch.Tensor:
         """Sample tau from grid aligned with step size (Paper Eq. 4).
 
-        For step size d, tau must come from grid {0, d/k_max, 2d/k_max, ..., 1-d/k_max}
-        This ensures after stepping by d, tau lands on valid grid points.
+        Paper convention: τ=0 noise, τ=1 clean.
+        Grid: {0, d/k_max, 2d/k_max, ..., 1-d/k_max}. Avoids τ=1.
 
         Args:
             step_size: Step sizes (integers), shape (B,)
@@ -389,18 +373,17 @@ class ShortcutForcing:
         step_size: torch.Tensor,
         seq_length: int,
         device: torch.device,
-        tau_ctx: float = 0.1,
     ) -> torch.Tensor:
         """Sample per-timestep tau from grid aligned with step size (Paper Eq. 4).
 
-        Extension for diffusion forcing: samples tau for each position in sequence,
-        maintaining grid alignment while having per-timestep variation.
+        Paper convention: τ=0 noise, τ=1 clean.
+        Grid: {0, d/k_max, 2d/k_max, ..., 1-d/k_max}.
+        Max grid point is 1-d/k_max, which naturally avoids τ=1 (the singularity).
 
         Args:
             step_size: Step sizes (integers), shape (B,)
             seq_length: Sequence length T
             device: Device for tensor creation
-            tau_ctx: Minimum tau for context frames
 
         Returns:
             tau: Sampled tau values, shape (B, T)
@@ -412,15 +395,11 @@ class ShortcutForcing:
             mask = (step_size == d)
             if mask.any():
                 n = mask.sum().item()
-                # Grid spacing for this step size
                 grid_spacing = d / self.k_max
-                # Number of valid grid points
+                # Valid grid points: 0, 1, ..., k_max/d - 1
+                # Max tau = (k_max/d - 1) * d/k_max = 1 - d/k_max (avoids τ=1)
                 num_grid_points = self.k_max // d
-                # Minimum grid index to stay above tau_ctx
-                min_grid_idx = int(tau_ctx / grid_spacing) if tau_ctx > 0 else 0
-                # Sample grid indices for all positions
-                grid_idx = torch.randint(min_grid_idx, num_grid_points, (n, seq_length), device=device)
-                # Convert to tau values
+                grid_idx = torch.randint(0, num_grid_points, (n, seq_length), device=device)
                 tau[mask] = grid_idx.float() * grid_spacing
 
         return tau
@@ -440,13 +419,13 @@ class ShortcutForcing:
         k-step denoising in single step using bootstrapped teacher targets.
 
         For d=d_min (base/smallest step): standard x-prediction loss
-        For d>d_min: bootstrap loss in velocity space with τ² weighting
+        For d>d_min: bootstrap loss in velocity space with (1-τ)² weighting
 
-        Paper Eq. 7 (our convention: τ=0 clean, τ=1 noise):
-            L = τ² || (ẑ_0 - z_τ) / τ - sg(b' + b'')/2 ||²
+        Paper Eq. 7 (τ=0 noise, τ=1 clean):
+            L = (1-τ)² || (ẑ_0 - z_τ) / (1-τ) - sg(b' + b'')/2 ||²
         where:
-            b' = (z_mid - z_τ) / τ            (first half-step velocity)
-            b'' = (z_target - z_τ_mid) / τ_mid (second half-step velocity)
+            b' = (z_mid - z_τ) / (1-τ)            (first half-step velocity)
+            b'' = (z_target - z_τ_mid) / (1-τ_mid) (second half-step velocity)
 
         Args:
             model: Dynamics model with step_size conditioning (independent from tau)
@@ -479,15 +458,17 @@ class ShortcutForcing:
                 return None
             return {k: v[idx] for k, v in actions.items()}
 
-        # Standard loss for d=1 (smallest step)
+        # Standard loss for d=1 (smallest step), with ramp weight
         if is_base_step.any():
             idx = is_base_step
-            z_pred = model(z_tau[idx], tau[idx] if tau.dim() > 1 else tau[idx],
+            tau_std = tau[idx] if tau.dim() > 1 else tau[idx]
+            z_pred = model(z_tau[idx], tau_std,
                           step_size=step_size[idx], actions=slice_actions(actions, idx))
-            loss_std = x_prediction_loss(z_pred, z_0[idx], tau[idx] if tau.dim() > 1 else tau[idx])
+            loss_std = x_prediction_loss(z_pred, z_0[idx], tau_std, use_ramp_weight=True)
             n_std = idx.sum().item()
 
-        # Bootstrap loss for d>1 (velocity space with τ² scaling)
+        # Bootstrap loss for d>1 (velocity space with (1-τ)² scaling)
+        # Paper convention: τ=0 noise, τ=1 clean. Velocity denominator is (1-τ).
         if (~is_base_step).any():
             idx = ~is_base_step
             tau_idx = tau[idx] if tau.dim() > 1 else tau[idx]
@@ -500,39 +481,39 @@ class ShortcutForcing:
                 z_mid = model(z_tau[idx], tau_idx, step_size=d_half,
                              actions=slice_actions(actions, idx))
 
-                # First half-step velocity: b' = (z_mid - z_tau) / tau
-                # Expand tau for broadcasting
+                # First half-step velocity: b' = (z_mid - z_tau) / (1-τ)
                 if tau_idx.dim() == 1:
                     tau_expanded = tau_idx.view(-1, 1, 1, 1, 1)
                 else:
                     tau_expanded = tau_idx.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-                # Clamp tau to avoid division by zero
-                tau_safe = tau_expanded.clamp(min=1e-6)
-                b_prime = (z_mid - z_tau[idx]) / tau_safe
+                # (1-τ) is the noise fraction; clamp to avoid div-by-zero near τ=1 (clean)
+                one_minus_tau_safe = (1 - tau_expanded).clamp(min=1e-6)
+                b_prime = (z_mid - z_tau[idx]) / one_minus_tau_safe
 
                 # Compute tau after half-step
-                # Our convention: denoising DECREASES tau toward 0
+                # Paper convention: denoising INCREASES tau toward 1 (clean)
                 half_step_amount = step_size[idx].float() / self.k_max / 2
                 if tau_idx.dim() == 1:
-                    tau_mid = (tau_idx - half_step_amount).clamp(min=1e-6)
+                    tau_mid = (tau_idx + half_step_amount).clamp(max=1 - 1e-6)
                     tau_mid_expanded = tau_mid.view(-1, 1, 1, 1, 1)
                 else:
-                    tau_mid = (tau_idx - half_step_amount.unsqueeze(-1)).clamp(min=1e-6)
+                    tau_mid = (tau_idx + half_step_amount.unsqueeze(-1)).clamp(max=1 - 1e-6)
                     tau_mid_expanded = tau_mid.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
                 # Euler step to intermediate point: z' = z_tau + b' * half_step
                 if tau_idx.dim() == 1:
                     half_step_expanded = half_step_amount.view(-1, 1, 1, 1, 1)
                 else:
-                    half_step_expanded = half_step_amount.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                    half_step_expanded = half_step_amount.view(-1, 1, 1, 1, 1)
                 z_prime = z_tau[idx] + b_prime * half_step_expanded
 
                 # Second half-step: predict z_0 from z_prime
                 z_target = model(z_prime, tau_mid, step_size=d_half,
                                 actions=slice_actions(actions, idx))
 
-                # Second half-step velocity: b'' = (z_target - z_prime) / tau_mid
-                b_double_prime = (z_target - z_prime) / tau_mid_expanded.clamp(min=1e-6)
+                # Second half-step velocity: b'' = (z_target - z_prime) / (1-τ_mid)
+                one_minus_tau_mid_safe = (1 - tau_mid_expanded).clamp(min=1e-6)
+                b_double_prime = (z_target - z_prime) / one_minus_tau_mid_safe
 
                 # Average teacher velocities
                 avg_velocity = (b_prime + b_double_prime) / 2
@@ -541,33 +522,27 @@ class ShortcutForcing:
             z_pred = model(z_tau[idx], tau_idx, step_size=step_size[idx],
                           actions=slice_actions(actions, idx))
 
-            # Student velocity: (z_pred - z_tau) / tau
-            b_student = (z_pred - z_tau[idx]) / tau_safe
+            # Student velocity: (z_pred - z_tau) / (1-τ)
+            b_student = (z_pred - z_tau[idx]) / one_minus_tau_safe
 
-            # Bootstrap loss in velocity space with τ² scaling (Paper Eq. 7)
-            # L = τ² || b_student - sg(avg_velocity) ||²
+            # Bootstrap loss in velocity space with (1-τ)² scaling (Paper Eq. 7)
+            # L = (1-τ)² || b_student - sg(avg_velocity) ||²
             velocity_diff = b_student - avg_velocity.detach()
             velocity_mse = (velocity_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W -> (B, T)
 
-            # Clamp velocity_mse to prevent numerical explosion
-            # When tau is small (~0.1), dividing by tau amplifies differences by 10x
-            # Squaring makes this 100x, which can overflow if predictions diverge
-            # Normal velocity_mse should be O(1), so clamp at 100 to catch outliers
+            # Clamp to prevent numerical explosion
             velocity_mse = velocity_mse.clamp(max=100.0)
 
             # Skip batch if any NaN/Inf detected
             if torch.isnan(velocity_mse).any() or torch.isinf(velocity_mse).any():
                 n_boot = 0
             else:
-                # Apply τ² scaling - reduce to scalar loss
-                # velocity_mse: (B_subset, T), tau_idx: (B_subset,) or (B_subset, T)
+                # Apply (1-τ)² scaling + ramp weight (Paper Eq. 7-8)
                 if tau_idx.dim() == 1:
-                    tau_weight = tau_idx ** 2  # (B_subset,)
-                    # Average over T first, then apply per-sample tau weight
+                    tau_weight = (1 - tau_idx) ** 2 * ramp_weight(tau_idx)
                     loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
                 else:
-                    # tau_idx is (B_subset, T) - use mean tau per sample for weighting
-                    tau_weight = (tau_idx ** 2).mean(dim=-1)  # (B_subset,)
+                    tau_weight = ((1 - tau_idx) ** 2 * ramp_weight(tau_idx)).mean(dim=-1)
                     loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
                 n_boot = idx.sum().item()
 

@@ -10,6 +10,7 @@ from .dataset import (
     LatentSequenceDataset,
     PackedLatentSequenceDataset,
     RewardMixtureSampler,
+    VideoGroupedSampler,
 )
 
 __all__ = [
@@ -27,4 +28,5 @@ __all__ = [
     "LatentSequenceDataset",
     "PackedLatentSequenceDataset",
     "RewardMixtureSampler",
+    "VideoGroupedSampler",
 ]

@@ -9,6 +9,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
+from collections import defaultdict
+
 from .actions import ABILITY_KEYS, collate_actions
 
 # Square target: 352x352. Divisible by 16 (22x22 = 484 patches for patch-based tokenizer).
@@ -316,10 +318,35 @@ class FrameWithStateDataset(Dataset):
         }
 
 
+class VideoGroupedSampler(Sampler):
+    """Sampler that groups sequences by video to maximize cache hits.
+
+    Shuffles video order each epoch, shuffles sequences within each video,
+    but keeps sequences from the same video contiguous in the batch stream.
+    """
+
+    def __init__(self, dataset):
+        self.video_groups = defaultdict(list)
+        for idx, seq in enumerate(dataset.sequences):
+            self.video_groups[seq["video_id"]].append(idx)
+        self.video_groups = list(self.video_groups.values())
+        self._len = sum(len(g) for g in self.video_groups)
+
+    def __iter__(self):
+        video_order = torch.randperm(len(self.video_groups)).tolist()
+        for vid_idx in video_order:
+            group = self.video_groups[vid_idx]
+            perm = torch.randperm(len(group)).tolist()
+            yield from (group[i] for i in perm)
+
+    def __len__(self):
+        return self._len
+
+
 class PackedLatentSequenceDataset(Dataset):
     """Dataset of packed latent sequences for dynamics model training.
 
-    Loads latent vectors from packed .npz files (one per video) instead of
+    Loads latent vectors from packed .npz/.pt files (one per video) instead of
     individual per-frame .npy files. This dramatically reduces I/O overhead
     by eliminating file open/close operations and enabling sequential reads.
 
@@ -352,10 +379,10 @@ class PackedLatentSequenceDataset(Dataset):
         self.features_dir = Path(features_dir) if features_dir else self.latents_dir.parent.parent / "data" / "processed"
 
         # Cache for loaded video data: video_id -> (latents, frame_indices)
-        # Limited to prevent OOM - keeps ~10 videos in RAM (~5GB)
+        # With 20GB RAM and ~216MB per video, 50 videos ≈ 10GB
         self.video_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         self.cache_order: list[str] = []  # Track access order for LRU
-        self.max_cache_size = 10  # Max videos to keep in cache
+        self.max_cache_size = 5  # Max videos to keep in cache (NVMe is fast enough)
 
         # Action labels per video (if load_actions=True)
         self.action_labels: dict[str, list[dict]] = {}
@@ -388,72 +415,79 @@ class PackedLatentSequenceDataset(Dataset):
             oldest = self.cache_order.pop(0)
             del self.video_cache[oldest]
 
-        # Load new video
-        npz_path = self.latents_dir / f"{video_id}.npz"
-        # Load with mmap_mode=None to eagerly load all data into RAM
-        # This avoids slow random access through memory-mapped files
-        with np.load(npz_path, mmap_mode=None) as data:
-            latents = data['latents'].copy()  # Ensure we own the data
-            frame_indices = data['frame_indices'].copy()
+        # Load new video — prefer .pt (raw tensors) over .npz (compressed)
+        pt_path = self.latents_dir / f"{video_id}.pt"
+        if pt_path.exists():
+            data = torch.load(pt_path, weights_only=True)
+            latents = data['latents'].numpy()
+            frame_indices = data['frame_indices'].numpy()
+        else:
+            npz_path = self.latents_dir / f"{video_id}.npz"
+            with np.load(npz_path, mmap_mode=None) as data:
+                latents = data['latents'].copy()
+                frame_indices = data['frame_indices'].copy()
         self.video_cache[video_id] = (latents, frame_indices)
         self.cache_order.append(video_id)
         return self.video_cache[video_id]
 
     def _index_packed_latents(self):
         """Build index of all valid sequences from packed files."""
-        npz_files = sorted(self.latents_dir.glob("*.npz"))
+        # Use prebuilt index if available (instant startup)
+        index_path = self.latents_dir / "index.pt"
+        if index_path.exists():
+            index = torch.load(index_path, weights_only=True)
+            for video_id, frame_indices_t in index.items():
+                frame_indices = frame_indices_t.numpy()
+                self._index_video(video_id, frame_indices)
+            print(f"Indexed {len(self.sequences)} packed latent sequences from {self.latents_dir}")
+            return
 
+        # Fallback: scan individual files
+        npz_files = sorted(self.latents_dir.glob("*.npz"))
         for npz_path in npz_files:
             video_id = npz_path.stem
-
-            # Load metadata (just frame indices, not full latents yet)
             data = np.load(npz_path)
-            frame_indices = data['frame_indices']
-            num_frames = len(frame_indices)
-
-            if num_frames < self.sequence_length:
-                continue
-
-            # Build frame number to array index mapping
-            frame_to_idx = {int(frame_indices[i]): i for i in range(num_frames)}
-
-            # Find contiguous sequences in original frame numbers
-            frame_nums = sorted(frame_to_idx.keys())
-
-            contiguous_start = frame_nums[0]
-            contiguous_count = 1
-
-            for i in range(1, len(frame_nums)):
-                if frame_nums[i] == frame_nums[i - 1] + 1:
-                    contiguous_count += 1
-                else:
-                    # End of contiguous block - add sequences
-                    if contiguous_count >= self.sequence_length:
-                        for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
-                            start_frame = contiguous_start + start_offset
-                            # Store array index for fast access
-                            start_idx = frame_to_idx[start_frame]
-                            self.sequences.append({
-                                "video_id": video_id,
-                                "start_frame": start_frame,
-                                "start_idx": start_idx,  # Index into packed array
-                            })
-                    # Reset for new block
-                    contiguous_start = frame_nums[i]
-                    contiguous_count = 1
-
-            # Handle last contiguous block
-            if contiguous_count >= self.sequence_length:
-                for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
-                    start_frame = contiguous_start + start_offset
-                    start_idx = frame_to_idx[start_frame]
-                    self.sequences.append({
-                        "video_id": video_id,
-                        "start_frame": start_frame,
-                        "start_idx": start_idx,
-                    })
+            self._index_video(video_id, data['frame_indices'])
 
         print(f"Indexed {len(self.sequences)} packed latent sequences from {self.latents_dir}")
+
+    def _index_video(self, video_id: str, frame_indices: np.ndarray):
+        """Index all valid sequences from a single video's frame indices."""
+        num_frames = len(frame_indices)
+        if num_frames < self.sequence_length:
+            return
+
+        frame_to_idx = {int(frame_indices[i]): i for i in range(num_frames)}
+        frame_nums = sorted(frame_to_idx.keys())
+
+        contiguous_start = frame_nums[0]
+        contiguous_count = 1
+
+        for i in range(1, len(frame_nums)):
+            if frame_nums[i] == frame_nums[i - 1] + 1:
+                contiguous_count += 1
+            else:
+                if contiguous_count >= self.sequence_length:
+                    for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
+                        start_frame = contiguous_start + start_offset
+                        start_idx = frame_to_idx[start_frame]
+                        self.sequences.append({
+                            "video_id": video_id,
+                            "start_frame": start_frame,
+                            "start_idx": start_idx,
+                        })
+                contiguous_start = frame_nums[i]
+                contiguous_count = 1
+
+        if contiguous_count >= self.sequence_length:
+            for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
+                start_frame = contiguous_start + start_offset
+                start_idx = frame_to_idx[start_frame]
+                self.sequences.append({
+                    "video_id": video_id,
+                    "start_frame": start_frame,
+                    "start_idx": start_idx,
+                })
 
     def _load_action_labels(self):
         """Load action labels from features.json for each video."""

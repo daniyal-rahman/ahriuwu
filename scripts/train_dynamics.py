@@ -33,6 +33,7 @@ from ahriuwu.models import (
     ShortcutForcing,
     RunningRMS,
 )
+from ahriuwu.data.dataset import VideoGroupedSampler
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import (
     add_training_args, create_optimizer, create_wsd_schedule,
@@ -301,6 +302,67 @@ def parse_args():
     return parser.parse_args()
 
 
+@torch.no_grad()
+def eval_denoising_psnr(
+    model: nn.Module,
+    schedule: "DiffusionSchedule",
+    val_batch: dict,
+    device: str,
+    tau_levels: list[float] = [0.1, 0.3, 0.5, 0.7, 0.9],
+    shortcut: "ShortcutForcing | None" = None,
+) -> dict:
+    """1-step denoising PSNR on a validation batch.
+
+    For each tau level, corrupts clean latents, predicts clean, and measures PSNR.
+    Also tests K=4 shortcut denoising if shortcut is provided.
+    """
+    model.eval()
+    z_0 = val_batch["latents"].to(device)
+    B, T = z_0.shape[:2]
+    results = {}
+
+    for tau_val in tau_levels:
+        tau = torch.full((B, T), tau_val, device=device)
+        z_tau, _ = schedule.add_noise(z_0, tau)
+
+        amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
+        with torch.autocast(device_type=device.split(":")[0], dtype=amp_dtype):
+            z_pred = model(z_tau, tau, step_size=torch.ones(B, dtype=torch.long, device=device))
+
+        # PSNR: 10 * log10(max_val² / MSE)
+        mse = ((z_pred.float() - z_0.float()) ** 2).mean().item()
+        max_val = z_0.abs().max().item()
+        psnr = 10 * torch.log10(torch.tensor(max_val ** 2 / max(mse, 1e-10))).item()
+        results[f"eval/psnr_tau{tau_val:.1f}"] = psnr
+
+    # K=4 shortcut denoising: start from noise, take 4 steps
+    if shortcut is not None:
+        z_t = torch.randn_like(z_0)
+        z_noise = z_t.clone()
+        K = 4
+        step_size_val = 1.0 / K  # d = 0.25
+
+        with torch.autocast(device_type=device.split(":")[0], dtype=amp_dtype):
+            for i in range(K):
+                tau_val_i = i * step_size_val
+                tau_t = torch.full((B, T), tau_val_i, device=device)
+                d_t = torch.full((B,), shortcut.k_max // K, dtype=torch.long, device=device)
+                z_pred_i = model(z_t, tau_t, step_size=d_t)
+                if i < K - 1:
+                    next_tau = tau_val_i + step_size_val
+                    z_t = next_tau * z_pred_i + (1 - next_tau) * z_noise
+                else:
+                    z_t = z_pred_i
+
+        mse = ((z_t.float() - z_0.float()) ** 2).mean().item()
+        max_val = z_0.abs().max().item()
+        psnr_k4 = 10 * torch.log10(torch.tensor(max_val ** 2 / max(mse, 1e-10))).item()
+        results["eval/psnr_K4_shortcut"] = psnr_k4
+
+    model.train()
+    return results
+
+
 def train_epoch(
     model: nn.Module,
     dataloader: DataLoader | None,
@@ -322,6 +384,8 @@ def train_epoch(
     rms_dict: dict[str, RunningRMS] | None = None,
     accumulation_steps: int = 1,
     accumulation_steps_long: int | None = None,
+    val_batch: dict | None = None,
+    eval_interval: int = 1000,
 ):
     """Train for one epoch.
 
@@ -338,6 +402,7 @@ def train_epoch(
     total_grad_norm_count = 0
     total_pred_std = 0.0
     num_batches = 0
+    last_grad_norm = 0.0
     start_time = time.time()
 
     # Determine mode and setup iterators
@@ -405,13 +470,6 @@ def train_epoch(
         if use_actions and "actions" in batch and batch["actions"] is not None:
             actions = {k: v.to(device) for k, v in batch["actions"].items()}
 
-        # Sample per-timestep noise levels (diffusion forcing)
-        # This creates temporal causality: clean past → noisy future
-        tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
-
-        # Add noise with per-timestep levels
-        z_tau, noise = schedule.add_noise(z_0, tau)
-
         # Sample whether to use independent frames mode (30% by default)
         use_independent = random.random() < independent_frame_ratio
 
@@ -419,37 +477,28 @@ def train_epoch(
         amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
         with autocast(device_type=device.split(":")[0], dtype=amp_dtype):
             if shortcut is not None:
-                # Shortcut forcing: sample step sizes and use bootstrap loss
-                # Disable gradient checkpointing — autocast inserts hidden cast ops
-                # that change the saved tensor list, so checkpoint recomputation
-                # misaligns tensor indices and raises CheckpointError. ~2.5 GB extra
-                # VRAM for the student forward pass, well within 16 GB headroom.
+                # Shortcut forcing: sample step sizes and grid-aligned tau
+                # Grid alignment is critical — after a half-step, tau must land
+                # on a valid grid point for the teacher's second forward pass.
                 gc_was_enabled = getattr(model, 'gradient_checkpointing', False)
                 if gc_was_enabled:
                     model.gradient_checkpointing = False
                 step_size = shortcut.sample_step_size(B, device=device)
+                tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
+                z_tau, noise = schedule.add_noise(z_0, tau)
                 raw_loss, loss_info = shortcut.compute_loss(model, schedule, z_0, tau, step_size, actions=actions)
                 if gc_was_enabled:
                     model.gradient_checkpointing = True
-                # Normalize via RunningRMS (loss_info values are floats from .item())
-                # Update component trackers, then normalize the combined loss tensor
-                if rms_dict is not None:
-                    loss_std_t = torch.tensor(loss_info["loss_std"], device=device)
-                    loss_boot_t = torch.tensor(loss_info["loss_boot"], device=device)
-                    rms_dict["std"].update(loss_std_t)
-                    rms_dict["boot"].update(loss_boot_t)
-                    # Weighted RMS scale from component trackers (detached, preserves grad graph)
-                    n_std, n_boot = loss_info["n_std"], loss_info["n_boot"]
-                    total = max(n_std + n_boot, 1)
-                    rms_scale = torch.sqrt(
-                        (n_std * rms_dict["std"].rms + n_boot * rms_dict["boot"].rms) / total
-                    ) + 1e-8
-                    loss = raw_loss / rms_scale
-                else:
-                    loss = raw_loss
+                # No per-component RMS normalization — standard and bootstrap
+                # are already x-space scale by design (Paper Eq. 7 footnote).
+                # RMS normalization is for balancing against other modalities
+                # (reward, BC) during agent finetuning, not within shortcut forcing.
+                loss = raw_loss
                 raw_loss_val = raw_loss.item()
             else:
                 # Standard training: predict clean latents
+                tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
+                z_tau, noise = schedule.add_noise(z_0, tau)
                 z_pred = model(z_tau, tau, actions=actions, independent_frames=use_independent)
                 raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
                 # Normalize via RunningRMS
@@ -475,6 +524,7 @@ def train_epoch(
             micro_count = 0
             did_step = True
             global_step += 1
+            last_grad_norm = grad_norm.item() if torch.isfinite(grad_norm) else 0.0
         else:
             grad_norm = torch.tensor(0.0)
             did_step = False
@@ -529,7 +579,7 @@ def train_epoch(
             # Wandb per-step logging
             wandb_metrics = {
                 "train/loss": raw_loss_val,
-                "train/grad_norm": grad_norm.item() if did_step else 0.0,
+                "train/grad_norm": last_grad_norm,
                 "train/tau_min": tau_min,
                 "train/tau_max": tau_max,
                 "train/lr": scheduler.get_last_lr()[0],
@@ -549,7 +599,7 @@ def train_epoch(
                     f"{progress} "
                     f"Loss: {raw_loss_val:.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "
                     f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                    f"GradN: {grad_norm.item():.3f} "
+                    f"GradN: {last_grad_norm:.3f} "
                     f"({batches_per_sec:.1f} batch/s){warning_str}"
                 )
             else:
@@ -557,7 +607,7 @@ def train_epoch(
                     f"{progress} "
                     f"Loss: {raw_loss_val:.4f} "
                     f"Tau: [{tau_min:.2f}-{tau_max:.2f}] "
-                    f"GradN: {grad_norm.item():.3f} "
+                    f"GradN: {last_grad_norm:.3f} "
                     f"PredStd: {pred_std:.4f} "
                     f"({batches_per_sec:.1f} batch/s){warning_str}"
                 )
@@ -596,6 +646,15 @@ def train_epoch(
                     raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
                 )
 
+        # Eval metrics every eval_interval steps
+        if val_batch is not None and did_step and global_step > 0 and global_step % eval_interval == 0:
+            eval_results = eval_denoising_psnr(
+                model, schedule, val_batch, device, shortcut=shortcut
+            )
+            log_step(eval_results, step=global_step)
+            psnr_strs = " ".join(f"{k.split('/')[-1]}={v:.1f}" for k, v in eval_results.items())
+            print(f"  [EVAL step {global_step}] {psnr_strs}")
+
         # Periodic queue check (~every 60s): if yield_to_queue file exists and a job is waiting
         if not _preempt.should_save_now() and global_step > 0:
             elapsed = time.time() - start_time
@@ -604,18 +663,17 @@ def train_epoch(
 
         # Immediate preemption: check every optimizer step (SIGUSR1 or queue yield)
         if _preempt.should_save_now() and checkpoint_dir is not None and global_step > 0:
-            if not save_at_boundary:
-                latest_path = checkpoint_dir / "dynamics_latest.pt"
+            latest_path = checkpoint_dir / "dynamics_latest.pt"
+            save_checkpoint(
+                latest_path, model, optimizer, scaler, epoch, global_step,
+                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+            )
+            if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
+                base_latest = base_checkpoint_dir / "dynamics_latest.pt"
                 save_checkpoint(
-                    latest_path, model, optimizer, scaler, epoch, global_step,
+                    base_latest, model, optimizer, scaler, epoch, global_step,
                     raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
                 )
-                if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
-                    base_latest = base_checkpoint_dir / "dynamics_latest.pt"
-                    save_checkpoint(
-                        base_latest, model, optimizer, scaler, epoch, global_step,
-                        raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
-                    )
             print(f"Immediate preemption at step {global_step}. Exiting.", flush=True)
             return {
                 "loss": total_loss / max(num_batches, 1),
@@ -644,7 +702,9 @@ def train_epoch(
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
         scaler.update()
+        scheduler.step()
         optimizer.zero_grad()
+        global_step += 1
 
     avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
     # Approximate optimizer steps (exact count depends on short/long mix)
@@ -756,7 +816,7 @@ def main():
         dataloader_short = DataLoader(
             dataset_short,
             batch_size=args.batch_size_short,
-            shuffle=True,
+            sampler=VideoGroupedSampler(dataset_short),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -764,7 +824,7 @@ def main():
         dataloader_long = DataLoader(
             dataset_long,
             batch_size=args.batch_size_long,
-            shuffle=True,
+            sampler=VideoGroupedSampler(dataset_long),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -793,7 +853,7 @@ def main():
         dataloader = DataLoader(
             dataset,
             batch_size=args.batch_size,
-            shuffle=True,
+            sampler=VideoGroupedSampler(dataset),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -893,6 +953,15 @@ def main():
         start_epoch += 1
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
 
+    # Grab a fixed validation batch for eval metrics
+    val_batch = None
+    if dataloader_short is not None:
+        val_batch = next(iter(dataloader_short))
+    elif dataloader is not None:
+        val_batch = next(iter(dataloader))
+    if val_batch is not None:
+        print(f"Validation batch: {val_batch['latents'].shape}")
+
     # Training loop
     best_loss = float("inf")
     history = []
@@ -918,6 +987,7 @@ def main():
             rms_dict=rms_dict,
             accumulation_steps=accum_s,
             accumulation_steps_long=accum_l,
+            val_batch=val_batch,
         )
 
         global_step = metrics["global_step"]
