@@ -386,6 +386,7 @@ def train_epoch(
     accumulation_steps_long: int | None = None,
     val_batch: dict | None = None,
     eval_interval: int = 1000,
+    skip_batches: int = 0,
 ):
     """Train for one epoch.
 
@@ -431,6 +432,24 @@ def train_epoch(
 
     batch_idx = 0
     optimizer.zero_grad()
+
+    # Skip batches on resume (fast-forward through the dataloader)
+    if skip_batches > 0:
+        print(f"Skipping {skip_batches} batches to resume position...")
+        for _ in range(skip_batches):
+            try:
+                if alternating:
+                    if random.random() < args.long_ratio:
+                        next(iter_long)
+                    else:
+                        next(iter_short)
+                else:
+                    next(batch_iterator)
+            except StopIteration:
+                break
+        batch_idx = skip_batches
+        print(f"Resumed at batch {batch_idx}")
+
     while True:
         # At start of accumulation window, decide batch type
         if micro_count == 0 and alternating:
@@ -635,22 +654,26 @@ def train_epoch(
             and global_step % effective_save_interval == 0
         )
         if save_at_boundary:
+            ckpt_extra = {"batch_idx": batch_idx}
             step_path = checkpoint_dir / f"dynamics_step_{global_step:07d}.pt"
             save_checkpoint(
                 step_path, model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict,
+                extra=ckpt_extra
             )
             # Also update latest (both run dir and base dir for sbatch resume)
             latest_path = checkpoint_dir / "dynamics_latest.pt"
             save_checkpoint(
                 latest_path, model, optimizer, scaler, epoch, global_step,
-                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+                raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict,
+                extra=ckpt_extra
             )
             if base_checkpoint_dir and base_checkpoint_dir != checkpoint_dir:
                 base_latest = base_checkpoint_dir / "dynamics_latest.pt"
                 save_checkpoint(
                     base_latest, model, optimizer, scaler, epoch, global_step,
-                    raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict
+                    raw_loss_val, args, scheduler=scheduler, rms_trackers=rms_dict,
+                    extra=ckpt_extra
                 )
 
         # Eval metrics every eval_interval steps
@@ -947,13 +970,17 @@ def main():
     # Resume if checkpoint provided
     start_epoch = 0
     global_step = 0
+    resume_skip_batches = 0
     if args.resume:
         print(f"\nResuming from {args.resume}...")
-        start_epoch, global_step, _ = load_checkpoint(
+        saved_epoch, global_step, _, saved_batch_idx = load_checkpoint(
             Path(args.resume), model, optimizer, scaler, scheduler=scheduler, rms_trackers=rms_dict, strict=False
         )
-        start_epoch += 1
-        print(f"Resuming from epoch {start_epoch}, step {global_step}")
+        # Resume at the same epoch and skip to the saved batch position.
+        # This avoids the old bug where epoch incremented on every resume.
+        start_epoch = saved_epoch
+        resume_skip_batches = saved_batch_idx
+        print(f"Resuming from epoch {start_epoch}, batch {resume_skip_batches}, global_step {global_step}")
 
     # Grab a fixed validation batch for eval metrics
     val_batch = None
@@ -990,7 +1017,10 @@ def main():
             accumulation_steps=accum_s,
             accumulation_steps_long=accum_l,
             val_batch=val_batch,
+            skip_batches=resume_skip_batches,
         )
+        # Only skip on the first epoch after resume
+        resume_skip_batches = 0
 
         global_step = metrics["global_step"]
 

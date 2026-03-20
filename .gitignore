@@ -73,3 +73,11 @@ CLAUDE.md
 
 # Slurm
 slurm-*.out
+
+# Eval outputs
+eval_results/
+samples/
+
+# Binaries that shouldn't be in the repo
+lazygit
+lazygit.tar.gz

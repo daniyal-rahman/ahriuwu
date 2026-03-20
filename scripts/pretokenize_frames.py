@@ -174,7 +174,7 @@ def process_batch(model, batch, device):
             latents = latents.permute(0, 3, 1, 2)   # (B, 32, 16, 16)
 
     # Save each latent as numpy (much smaller files than torch.save)
-    latents = latents.cpu().numpy().astype(np.float16)
+    latents = latents.float().cpu().numpy().astype(np.float16)
     for i, output_path in enumerate(output_paths):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)

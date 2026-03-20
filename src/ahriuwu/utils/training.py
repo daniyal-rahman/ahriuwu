@@ -310,6 +310,7 @@ def load_checkpoint(
         checkpoint["epoch"],
         checkpoint["global_step"],
         checkpoint.get("loss", float("inf")),
+        checkpoint.get("batch_idx", 0),
     )
 
 

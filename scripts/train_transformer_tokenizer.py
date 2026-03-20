@@ -497,10 +497,10 @@ def main():
     global_step = 0
     if args.resume:
         print(f"Resuming from {args.resume}...")
-        start_epoch, global_step, _ = load_checkpoint(
+        start_epoch, global_step, _, _ = load_checkpoint(
             Path(args.resume), model, optimizer, scaler, scheduler=scheduler, rms_trackers=rms_trackers
         )
-        start_epoch += 1  # Start from next epoch
+        # Resume at the same epoch (don't increment — the epoch may not be complete)
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
 
     # Training loop
