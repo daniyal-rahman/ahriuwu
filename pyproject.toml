@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "ahriuwu"
 version = "0.1.0"
 description = "LoL autonomous agent using DreamerV4-style world model"
-readme = "lol_agent_project_spec.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "yt-dlp>=2024.1.0",
