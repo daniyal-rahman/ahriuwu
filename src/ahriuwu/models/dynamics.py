@@ -90,7 +90,7 @@ class TransformerBlock(nn.Module):
             soft_cap=soft_cap,
             spatial_size=spatial_size,
             max_seq_len=max_seq_len,
-            allow_flex=True,  # dynamics can use flex (no GC during shortcut forcing)
+            allow_flex=False,
         )
 
         self.norm2 = RMSNorm(dim)
@@ -282,7 +282,7 @@ class AgentTokenBlock(nn.Module):
             use_qk_norm=use_qk_norm,
             soft_cap=soft_cap,
             max_seq_len=max_seq_len,
-            allow_flex=True,
+            allow_flex=False,
         )
 
         self.norm3 = RMSNorm(dim)
@@ -659,13 +659,16 @@ class DynamicsTransformer(nn.Module):
             # (B, T, D) -> (B, T, 1, D) and concatenate
             x = torch.cat([x, action_token.unsqueeze(2)], dim=2)
 
-        # Build conditioning token (tau + step_size) and append to sequence.
-        # Paper: "a single token for the shortcut signal level and step size"
+        # Build conditioning (tau + step_size).
+        # Paper uses a single appended token, but at our scale (36M vs 1.6B) the
+        # attention-only pathway produces gradients 158x smaller than spatial.
+        # We add the conditioning to all tokens AND append it for attention.
         cond_token = self._build_condition_token(tau, step_size, B, T)  # (B, T, D)
-        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)
+        x = x + cond_token.unsqueeze(2)  # additive: broadcast to all spatial tokens
+        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)  # also append for attention
 
-        # x is now (B, T, total_spatial_tokens, D)
-        # Layout: [latent_tokens, register_tokens, action_token?, cond_token]
+        # x is now (B, T, total_spatial_tokens + 1, D)
+        # Layout: [latent+cond, register+cond, action?+cond, cond_token]
 
         # Transformer blocks
         for block in self.blocks:

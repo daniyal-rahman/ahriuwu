@@ -735,10 +735,9 @@ def train_epoch(
 
 def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions):
     """Shortcut forcing forward pass. Returns (raw_loss, loss_info, tau)."""
-    _inner = getattr(model, '_orig_mod', model)
-    gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
-    if gc_was_enabled:
-        _inner.gradient_checkpointing = False
+    # Keep gradient checkpointing ON during shortcut forcing.
+    # The old code disabled it due to autocast+checkpoint incompatibility with
+    # manual attention, but the unified Attention class handles this correctly.
     try:
         step_size = shortcut.sample_step_size(B, device=device)
         tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
@@ -747,8 +746,7 @@ def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions):
             model, schedule, z_0, tau, step_size, actions=actions,
         )
     finally:
-        if gc_was_enabled:
-            _inner.gradient_checkpointing = True
+        pass
     return raw_loss, loss_info, tau
 
 
@@ -999,8 +997,8 @@ def main():
     print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
 
     if not args.no_compile:
-        print("Compiling model with torch.compile...")
-        model = torch.compile(model)
+        print("Compiling model with torch.compile(dynamic=True)...")
+        model = torch.compile(model, dynamic=True)
 
     save_run_config(checkpoint_dir, args, num_params)
 
