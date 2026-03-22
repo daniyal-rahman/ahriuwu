@@ -478,9 +478,21 @@ def eval_denoising_psnr(
         psnr = 10 * torch.log10(torch.tensor(max_val ** 2 / max(mse, 1e-10))).item()
         results[f"eval/psnr_tau{tau_val:.1f}"] = psnr
 
+        if psnr < 10.0:
+            pred_std = z_pred.float().std().item()
+            pred_mean = z_pred.float().mean().item()
+            print(f"    [EVAL WARN] tau={tau_val:.1f} PSNR={psnr:.1f} dB | "
+                  f"pred mean={pred_mean:.4f} std={pred_std:.4f} | "
+                  f"MSE={mse:.4f} | z_0 range=[{z_0.min():.3f}, {z_0.max():.3f}]")
+
     # K=4 shortcut denoising: start from noise, take 4 steps
+    # Use fixed seed for reproducible eval (different random noise was causing
+    # PSNR to oscillate wildly between eval steps)
     if shortcut is not None:
+        rng_state = torch.cuda.get_rng_state()
+        torch.cuda.manual_seed(42)
         z_t = torch.randn_like(z_0)
+        torch.cuda.set_rng_state(rng_state)
         z_noise = z_t.clone()
         K = 4
         step_size_val = 1.0 / K  # d = 0.25
@@ -856,14 +868,14 @@ def _log_train_step(
         "train/batches_per_sec": batches_per_sec,
         "train/epoch": epoch,
     }
-    if ts.shortcut is not None:
+    if "loss_std" in loss_info:
         wandb_metrics["train/loss_std"] = loss_info["loss_std"]
         wandb_metrics["train/loss_boot"] = loss_info["loss_boot"]
     else:
         wandb_metrics["train/pred_std"] = pred_std
     log_step(wandb_metrics, step=ts.global_step)
 
-    if ts.shortcut is not None:
+    if "loss_std" in loss_info:
         print(
             f"{progress} "
             f"Loss: {raw_loss_val:.4f} (std:{loss_info['loss_std']:.4f} boot:{loss_info['loss_boot']:.4f}) "

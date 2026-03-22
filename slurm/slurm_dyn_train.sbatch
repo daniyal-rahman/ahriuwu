@@ -44,6 +44,7 @@ CMD=(
   --gradient-accumulation-short 32
   --gradient-accumulation-long 32
   --gradient-checkpointing
+  --no-compile
   --shortcut-forcing
   --shortcut-k-max 64
   --num-kv-heads 4
