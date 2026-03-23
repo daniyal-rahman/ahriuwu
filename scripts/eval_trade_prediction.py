@@ -81,8 +81,10 @@ def predict_next_frame(
     z_next = torch.randn(B, 1, C, H, W, device=device)
     z_noise = z_next.clone()
 
-    # Denoising schedule: tau goes from 0.0 (noise) to 1.0 (clean)
-    taus = torch.linspace(0.0, 1.0, num_denoise_steps + 1, device=device)
+    # FIX #2: Start from eps=1e-3, not 0.0, to match DiffusionSchedule.sample().
+    # At tau=0 the input is pure noise and model prediction is random.
+    eps = 1e-3
+    taus = torch.linspace(eps, 1.0, num_denoise_steps + 1, device=device)
 
     with torch.no_grad():
         for i in range(num_denoise_steps):
@@ -101,7 +103,9 @@ def predict_next_frame(
             tau = torch.cat([ctx_tau_flat, tau_target.expand(B, 1)], dim=1)
 
             # Predict clean frames
-            z_pred = model(z_full, tau)
+            # FIX #9: handle dynamics returning (z_pred, agent_out) tuple
+            result = model(z_full, tau)
+            z_pred = result[0] if isinstance(result, tuple) else result
 
             # Extract prediction for next frame
             z_next_pred = z_pred[:, -1:]
@@ -148,10 +152,21 @@ def main():
     tokenizer = tokenizer.to(device).eval()
 
     # Load dynamics model
+    # FIX #7: Read model config from checkpoint args instead of hardcoding "small"
     print("Loading dynamics model...")
-    dynamics_ckpt = torch.load(args.dynamics_checkpoint, map_location="cpu")
-    dynamics = create_dynamics("small")
-    dynamics.load_state_dict(dynamics_ckpt["model_state_dict"])
+    dynamics_ckpt = torch.load(args.dynamics_checkpoint, map_location="cpu", weights_only=False)
+    dyn_args = dynamics_ckpt.get("args", {})
+    dyn_model_size = dyn_args.get("model_size", "small")
+    dyn_latent_dim = dyn_args.get("latent_dim", 32)
+    dynamics = create_dynamics(
+        dyn_model_size,
+        latent_dim=dyn_latent_dim,
+        use_qk_norm=dyn_args.get("use_qk_norm", False),
+        soft_cap=dyn_args.get("soft_cap", 0.0),
+        num_register_tokens=dyn_args.get("num_register_tokens", 0),
+        num_kv_heads=dyn_args.get("num_kv_heads", 0),
+    )
+    dynamics.load_state_dict(dynamics_ckpt["model_state_dict"], strict=False)
     dynamics = dynamics.to(device).eval()
 
     # Load frames in range

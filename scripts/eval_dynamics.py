@@ -419,31 +419,40 @@ def rollout_predictions(
                 full_seq = torch.cat([context_latents, pred_context], dim=1)
 
             # Predict next frame using diffusion sampling.
-            # Convention: tau=0 is noise, tau=1 is clean. Denoise from tau=0 toward tau=1.
+            # Convention: tau=0 is noise, tau=1 is clean. Denoise from tau=eps toward tau=1.
+            # Starting at tau=0 means pure noise input which gives random predictions;
+            # match DiffusionSchedule.sample() by starting from eps=1e-3.
             z_t = torch.randn(B, 1, C, H, W, device=device)
             z_noise = z_t.clone()
 
-            tau_start = 0.0   # start from pure noise
-            tau_end = 1.0     # denoise to clean
-            step_size = (tau_end - tau_start) / num_steps
+            eps = 1e-3  # FIX #1: match DiffusionSchedule.sample() — avoid tau=0
+            step_size = (1.0 - eps) / num_steps
+
+            # FIX #6: Noise context once and store tau values to avoid desync.
+            # Re-sampling context noise each denoising step changes the tau values
+            # reported to the model vs the actual noise level applied.
+            T_input = full_seq.shape[1] + 1  # context + 1 target frame
+            ctx_noise_fixed = torch.randn(B, full_seq.shape[1], C, H, W, device=device)
+            ctx_tau_fixed = (1.0 - tau_ctx) + torch.rand(B, full_seq.shape[1], 1, 1, 1, device=device) * tau_ctx
+            ctx_tau_flat_fixed = ctx_tau_fixed.squeeze(-1).squeeze(-1).squeeze(-1)  # (B, T_ctx) for model tau input
+            full_seq_noised = ctx_tau_fixed * full_seq + (1 - ctx_tau_fixed) * ctx_noise_fixed
 
             for i in range(num_steps):
-                tau = tau_start + i * step_size
+                tau = eps + i * step_size
 
-                # Concatenate context + current noisy frame
-                input_seq = torch.cat([full_seq, z_t], dim=1)
+                # Concatenate pre-noised context + current noisy frame
+                input_seq = torch.cat([full_seq_noised, z_t], dim=1)
 
-                # Build per-timestep tau: context frames near-clean, target frame at current tau.
-                # Context tau ~ U(1 - tau_ctx, 1.0) to match training distribution.
-                T_input = input_seq.shape[1]
-                ctx_tau_rand = (1.0 - tau_ctx) + torch.rand(B, T_input, device=device) * tau_ctx
-                ctx_tau_rand[:, -1] = tau  # last frame is the one being denoised
+                # Build per-timestep tau: use stored context tau values, target at current tau.
+                tau_input = torch.cat([ctx_tau_flat_fixed, torch.full((B, 1), tau, device=device)], dim=1)
 
                 # Predict (model outputs full sequence, we take last frame)
+                # FIX #9: handle dynamics returning (z_pred, agent_out) tuple
                 if use_shortcut:
-                    z_pred = dynamics(input_seq, ctx_tau_rand, step_size=step_size_tensor)
+                    result = dynamics(input_seq, tau_input, step_size=step_size_tensor)
                 else:
-                    z_pred = dynamics(input_seq, ctx_tau_rand)
+                    result = dynamics(input_seq, tau_input)
+                z_pred = result[0] if isinstance(result, tuple) else result
                 z_0_pred = z_pred[:, -1:, ...]
 
                 # Euler step: interpolate toward clean using next_tau
@@ -699,7 +708,9 @@ def run_quick_eval(args):
     z_noisy, noise = schedule.add_noise(z_0, tau)
 
     with torch.no_grad():
-        z_pred = dynamics(z_noisy, tau)
+        # FIX #9: handle dynamics returning (z_pred, agent_out) tuple
+        result = dynamics(z_noisy, tau)
+        z_pred = result[0] if isinstance(result, tuple) else result
 
     # Check predictions
     pred_std = z_pred.std().item()

@@ -27,9 +27,9 @@ class RewardHead(nn.Module):
         input_dim: int,
         hidden_dim: int = 256,
         num_buckets: int = 255,
-        mtp_length: int = 8,
-        bucket_low: float = -20.0,
-        bucket_high: float = 20.0,
+        mtp_length: int = 9,
+        bucket_low: float = -5.0,
+        bucket_high: float = 5.0,
     ):
         """Initialize reward head.
 
@@ -37,9 +37,9 @@ class RewardHead(nn.Module):
             input_dim: Dimension of agent token features
             hidden_dim: Hidden layer dimension
             num_buckets: Number of twohot buckets (paper uses 255)
-            mtp_length: Multi-token prediction length (paper uses 8)
-            bucket_low: Lower bound for symlog buckets
-            bucket_high: Upper bound for symlog buckets
+            mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
+            bucket_low: Lower bound for symlog buckets (symlog(-147) ~ -5)
+            bucket_high: Upper bound for symlog buckets (symlog(147) ~ 5)
         """
         super().__init__()
         self.num_buckets = num_buckets
@@ -123,7 +123,7 @@ class PolicyHead(nn.Module):
         input_dim: int,
         action_dim: int,
         hidden_dim: int = 256,
-        mtp_length: int = 8,
+        mtp_length: int = 9,
         movement_dim: int = 2,
     ):
         """Initialize policy head.
@@ -132,7 +132,7 @@ class PolicyHead(nn.Module):
             input_dim: Dimension of agent token features
             action_dim: Number of discrete actions (for ability predictions)
             hidden_dim: Hidden layer dimension
-            mtp_length: Multi-token prediction length (paper uses 8)
+            mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
             movement_dim: Continuous movement dimensions (default 2 for x, y)
         """
         super().__init__()
@@ -245,8 +245,8 @@ class ValueHead(nn.Module):
         input_dim: int,
         hidden_dim: int = 256,
         num_buckets: int = 255,
-        bucket_low: float = -20.0,
-        bucket_high: float = 20.0,
+        bucket_low: float = -5.0,
+        bucket_high: float = 5.0,
     ):
         """Initialize value head.
 
@@ -254,8 +254,8 @@ class ValueHead(nn.Module):
             input_dim: Dimension of agent token features
             hidden_dim: Hidden layer dimension
             num_buckets: Number of twohot buckets
-            bucket_low: Lower bound for symlog buckets
-            bucket_high: Upper bound for symlog buckets
+            bucket_low: Lower bound for symlog buckets (symlog(-147) ~ -5)
+            bucket_high: Upper bound for symlog buckets (symlog(147) ~ 5)
         """
         super().__init__()
         self.num_buckets = num_buckets

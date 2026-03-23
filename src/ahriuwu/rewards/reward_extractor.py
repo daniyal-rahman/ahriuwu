@@ -1,4 +1,12 @@
-"""Compute reward signals from game state."""
+"""Compute reward signals from game state.
+
+NOTE: This module is NOT used in the current training pipeline.  Reward
+computation during Phase 2 agent finetuning is handled inline by
+``ReplayDataset._load_rewards()`` in ``scripts/train_agent_finetune.py``,
+which reads ``features.json`` directly and applies health-bar-based death
+detection.  This module is kept for reference and potential future use
+(e.g., live reward extraction during rollout or evaluation).
+"""
 
 from dataclasses import dataclass
 

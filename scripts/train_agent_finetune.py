@@ -225,8 +225,19 @@ class ReplayDataset(torch.utils.data.Dataset):
         Populates self.reward_data with per-frame reward values, and
         self.death_data with per-frame boolean death flags used to
         construct the ``continues`` tensor (1.0 = alive, 0.0 = dead).
+
+        Death detection uses health bar presence/absence from the feature
+        extraction pipeline (``health_bar_x`` field).  The ``is_dead`` field
+        is NOT written by the extraction pipeline, so we replicate the
+        lookback/lookahead logic from ``PackedLatentSequenceDataset._get_rewards``:
+
+        1. If the health bar was present in >= 3 of the previous 5 frames
+           but is absent on the current frame, this is a *candidate* death.
+        2. Confirm by checking that the health bar stays absent for >= 2 of
+           the next 3 frames (filters out single-frame flicker/occlusion).
         """
         video_ids = set(s['video_id'] for s in self.latent_dataset.sequences)
+        context_frames = 5  # frames to look back for health bar history
 
         for video_id in video_ids:
             features_path = self.features_dir / video_id / "features.json"
@@ -239,11 +250,38 @@ class ReplayDataset(torch.utils.data.Dataset):
             frames = features.get("frames", [])
             rewards = []
             deaths = []
-            for frame in frames:
-                gold = frame.get("gold_gained", 0) * self.gold_scale
-                is_dead = bool(frame.get("is_dead", False))
-                death = self.death_penalty if is_dead else 0.0
-                rewards.append(gold + death)
+            num_frames = len(frames)
+
+            for frame_idx, frame in enumerate(frames):
+                reward = frame.get("gold_gained", 0) * self.gold_scale
+
+                # Death detection via health bar presence/absence
+                is_dead = False
+                curr_hb = frame.get("health_bar_x") is not None
+
+                if not curr_hb:
+                    # Count how many of the previous frames had a health bar
+                    prev_hb_count = 0
+                    for lookback in range(1, context_frames + 1):
+                        prev_idx = frame_idx - lookback
+                        if 0 <= prev_idx < num_frames:
+                            if frames[prev_idx].get("health_bar_x") is not None:
+                                prev_hb_count += 1
+
+                    # Health bar was present recently but now gone
+                    if prev_hb_count >= 3:
+                        # Confirm it stays gone (not just a flicker)
+                        gone_count = 0
+                        for lookahead in range(1, 4):
+                            next_idx = frame_idx + lookahead
+                            if next_idx < num_frames:
+                                if frames[next_idx].get("health_bar_x") is None:
+                                    gone_count += 1
+                        if gone_count >= 2:
+                            is_dead = True
+                            reward += self.death_penalty
+
+                rewards.append(reward)
                 deaths.append(is_dead)
 
             self.reward_data[video_id] = rewards

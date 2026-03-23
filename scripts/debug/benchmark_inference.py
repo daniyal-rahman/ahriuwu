@@ -91,7 +91,9 @@ def main():
 
     with torch.no_grad():
         latent = tokenizer.encode(frame)["latent"]
-    print(f"  Latent shape: {latent.shape}")  # (1, 256, 32)
+    # FIX #8: Infer latent_dim from tokenizer output instead of hardcoding 32
+    latent_dim = latent.shape[-1]
+    print(f"  Latent shape: {latent.shape} (latent_dim={latent_dim})")
 
     print()
     print("=" * 70)
@@ -101,7 +103,7 @@ def main():
     # Use tiny dynamics for live inference (speed over quality)
     dynamics = create_dynamics(
         size="tiny",
-        latent_dim=32,  # Matches transformer tokenizer
+        latent_dim=latent_dim,  # Matches transformer tokenizer
         use_agent_tokens=True,
         use_qk_norm=True,
         soft_cap=50.0,
@@ -111,10 +113,10 @@ def main():
     dyn_params = dynamics.get_num_params()
     print(f"\nDynamics (tiny): {dyn_params:,} params")
 
-    # Reshape latent for dynamics: (1, 256, 32) -> (1, 32, 16, 16) -> (1, 8, 32, 16, 16)
+    # Reshape latent for dynamics: (1, 256, latent_dim) -> (1, latent_dim, 16, 16) -> (1, 8, latent_dim, 16, 16)
     with torch.no_grad():
-        z = latent.transpose(1, 2).view(1, 32, 16, 16)
-    latent_seq = z.unsqueeze(1).expand(-1, 8, -1, -1, -1)  # (1, 8, 32, 16, 16)
+        z = latent.transpose(1, 2).view(1, latent_dim, 16, 16)
+    latent_seq = z.unsqueeze(1).expand(-1, 8, -1, -1, -1)  # (1, 8, latent_dim, 16, 16)
     # tau=1.0 for clean input (z_tau = tau * z_0 + (1 - tau) * noise, tau=1 is clean)
     tau = torch.ones(1, 8, device=device)
 
@@ -155,8 +157,9 @@ def main():
     print("=" * 70)
 
     def full_pipeline():
-        z_new = tokenizer.encode(frame)["latent"]  # (1, 256, 32)
-        z_reshaped = z_new.transpose(1, 2).view(1, 32, 16, 16).unsqueeze(1)
+        z_new = tokenizer.encode(frame)["latent"]  # (1, 256, latent_dim)
+        # FIX #8: Use latent_dim instead of hardcoded 32
+        z_reshaped = z_new.transpose(1, 2).view(1, latent_dim, 16, 16).unsqueeze(1)
         z_seq = z_reshaped.expand(-1, 8, -1, -1, -1)
         tau_ones = torch.ones(1, 8, device=device)
         z_pred, agent_out = dynamics(z_seq, tau_ones)

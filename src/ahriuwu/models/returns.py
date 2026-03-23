@@ -138,6 +138,13 @@ def compute_lambda_returns(
 
     where c_t indicates non-terminal states (from data, not learned).
 
+    Bootstrap convention: At the horizon (t = T-1), there is no v_{T} in
+    the sequence, so we bootstrap with v_{T-1} as an approximation:
+
+        R^λ_{T-1} = r_{T-1} + γ * c_{T-1} * v_{T-1}
+
+    This ensures the reward at the last timestep is always included.
+
     Reference: DreamerV4 Equation 10
 
     Args:
@@ -155,10 +162,12 @@ def compute_lambda_returns(
     # Initialize returns tensor
     returns = torch.zeros_like(rewards)
 
-    # Bootstrap: the return at the horizon is the value estimate at the last step.
-    # The loop iterates from T-2 down to 0 because the return at T-1 IS the
-    # bootstrap value (there is no reward beyond the horizon to incorporate).
-    next_return = values[:, -1]
+    # Bootstrap at the horizon: the return at the last timestep includes the
+    # reward observed at T-1 plus the discounted bootstrap value.  The
+    # bootstrap value v_{T} is *outside* the sequence; we approximate it with
+    # v_{T-1} (the last available value prediction).  Using only v_{T-1}
+    # (the old code) silently drops the reward at the final timestep.
+    next_return = rewards[:, -1] + gamma * continues[:, -1] * values[:, -1]
     returns[:, -1] = next_return
 
     # Compute returns backwards from T-2 to 0

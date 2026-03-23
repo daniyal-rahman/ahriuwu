@@ -375,9 +375,9 @@ class LiveInference:
             Latent tensor
         """
         with torch.no_grad():
-            latent = self.tokenizer.encode(frame_tensor)["latent"]  # (1, 256, 32)
-            # Reshape for dynamics: (1, 256, 32) -> (1, 32, 16, 16)
-            latent = latent.transpose(1, 2).view(1, 32, 16, 16)
+            latent = self.tokenizer.encode(frame_tensor)["latent"]  # (1, 256, latent_dim)
+            # FIX #5: Use self.latent_dim instead of hardcoded 32
+            latent = latent.transpose(1, 2).view(1, self.latent_dim, 16, 16)
 
         return latent
 
@@ -418,13 +418,63 @@ class LiveInference:
 
         # Stack: (T, 1, C, H, W) -> (1, T, C, H, W)
         latent_seq = torch.cat(latents, dim=0).unsqueeze(0)
-        # tau=1.0 for clean input (z_tau = tau * z_0 + (1 - tau) * noise, tau=1 is clean)
-        tau = torch.ones(1, self.context_frames, device=self.device)
+        B, T, C, H, W = latent_seq.shape
         timing["build_seq"] = (time.perf_counter() - t0) * 1000
 
-        # Dynamics forward
+        # FIX #3: Proper K-step denoising loop instead of single forward pass.
+        # FIX #4: Context tau ~ U(0.9, 1.0) to match training distribution, not tau=1.0.
         t0 = time.perf_counter()
-        z_pred, agent_out = self.dynamics(latent_seq, tau)
+        K = 4  # denoising steps
+        eps = 1e-3
+        step_size = (1.0 - eps) / K
+
+        # (a) Append a noise frame for the next timestep
+        z_next = torch.randn(1, 1, C, H, W, device=self.device)
+        z_noise = z_next.clone()
+
+        # Noise context once to avoid desync (FIX #6 pattern)
+        tau_ctx = 0.1
+        ctx_noise = torch.randn_like(latent_seq)
+        ctx_tau_spatial = (1.0 - tau_ctx) + torch.rand(1, T, 1, 1, 1, device=self.device) * tau_ctx
+        ctx_noised = ctx_tau_spatial * latent_seq + (1 - ctx_tau_spatial) * ctx_noise
+        ctx_tau_flat = ctx_tau_spatial.squeeze(-1).squeeze(-1).squeeze(-1)  # (1, T)
+
+        agent_out = None
+        for k in range(K):
+            tau_val = eps + k * step_size
+
+            # (b) Concatenate noised context + current noisy prediction
+            input_seq = torch.cat([ctx_noised, z_next], dim=1)
+            tau_input = torch.cat([ctx_tau_flat, torch.full((1, 1), tau_val, device=self.device)], dim=1)
+
+            # Forward pass
+            result = self.dynamics(input_seq, tau_input)
+            if isinstance(result, tuple):
+                z_pred, agent_out = result
+            else:
+                z_pred = result
+                agent_out = None
+
+            z_0_pred = z_pred[:, -1:]
+
+            # (c) Euler step toward clean
+            if k < K - 1:
+                next_tau = tau_val + step_size
+                z_next = next_tau * z_0_pred + (1 - next_tau) * z_noise
+            else:
+                z_next = z_0_pred
+
+        # If model doesn't return agent tokens, do a final pass to get them
+        if agent_out is None:
+            # Fallback: run dynamics once more with clean prediction
+            input_seq = torch.cat([ctx_noised, z_next], dim=1)
+            tau_input = torch.cat([ctx_tau_flat, torch.ones(1, 1, device=self.device)], dim=1)
+            result = self.dynamics(input_seq, tau_input)
+            if isinstance(result, tuple):
+                _, agent_out = result
+            else:
+                agent_out = result
+
         timing["dynamics"] = (time.perf_counter() - t0) * 1000
 
         # Policy forward (last frame only)
