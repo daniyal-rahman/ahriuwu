@@ -660,12 +660,28 @@ class DynamicsTransformer(nn.Module):
             x = torch.cat([x, action_token.unsqueeze(2)], dim=2)
 
         # Build conditioning (tau + step_size).
-        # Paper uses a single appended token, but at our scale (36M vs 1.6B) the
-        # attention-only pathway produces gradients 158x smaller than spatial.
-        # We add the conditioning to all tokens AND append it for attention.
-        cond_token = self._build_condition_token(tau, step_size, B, T)  # (B, T, D)
-        x = x + cond_token.unsqueeze(2)  # additive: broadcast to all spatial tokens
-        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)  # also append for attention
+        # At our scale, attention-only conditioning is too weak (158x gradient gap).
+        # We add tau directly to all tokens for strong denoising signal, and add
+        # step_size directly for strong shortcut signal. Both are also projected
+        # together into an appended token for cross-attention.
+        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
+        tau_emb = self.tau_embed(tau_idx)
+        if tau_emb.dim() == 2:
+            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
+        if step_size is not None:
+            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
+        else:
+            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)
+        step_emb = self.step_embed(step_idx)
+        if step_emb.dim() == 2:
+            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
+
+        # Additive: separate paths so step_size gradient isn't suppressed by tau
+        x = x + tau_emb.unsqueeze(2) + step_emb.unsqueeze(2)
+
+        # Also append combined token for attention pathway
+        cond_token = self._build_condition_token(tau, step_size, B, T)
+        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)
 
         # x is now (B, T, total_spatial_tokens + 1, D)
         # Layout: [latent+cond, register+cond, action?+cond, cond_token]
