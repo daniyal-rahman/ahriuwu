@@ -264,29 +264,24 @@ class ShortcutForcing:
     Not implemented in MVP - use standard diffusion first.
     """
 
-    def __init__(self, k_max: int = 64, k_min: int = 1):
+    def __init__(self, k_max: int = 64, k_min: int = 1, bootstrap_weight: float = 10.0):
         self.k_max = k_max
         self.k_min = k_min
+        self.bootstrap_weight = bootstrap_weight
         # Step sizes: 1, 2, 4, 8, ..., k_max
         self.step_sizes = [2**i for i in range(int(math.log2(k_max)) + 1)]
 
     def sample_step_size(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        """Sample step sizes with inverse weighting.
+        """Sample step sizes uniformly.
 
-        Larger step sizes are sampled less frequently:
-        P(d) ∝ 1/d
+        Uniform sampling ensures large step sizes (d=16, 32, 64) get equal
+        training signal as small ones. This is critical for K=4 inference
+        which uses d=16 exclusively.
 
         Returns:
             step_sizes: (B,) tensor of integer step sizes
         """
-        # Compute inverse weights: P(d) ∝ 1/d
-        weights = torch.tensor([1.0 / d for d in self.step_sizes], device=device)
-        weights = weights / weights.sum()
-
-        # Sample indices according to weights
-        idx = torch.multinomial(weights.expand(batch_size, -1), num_samples=1).squeeze(-1)
-
-        # Return step sizes as integers
+        idx = torch.randint(0, len(self.step_sizes), (batch_size,), device=device)
         step_sizes_tensor = torch.tensor(self.step_sizes, device=device)
         return step_sizes_tensor[idx]
 
@@ -503,16 +498,21 @@ class ShortcutForcing:
                     loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
                 n_boot = idx.sum().item()
 
-        # Combine losses (weighted by number of samples)
+        # Combine losses with bootstrap weight boost.
+        # Bootstrap MSE is naturally smaller (deterministic targets) so without
+        # boosting, the optimizer prioritizes standard loss and bootstrap
+        # contributes nothing. The boost ensures the model actually learns
+        # step-size-dependent behavior for shortcut inference.
         total = n_std + n_boot
         if total > 0:
-            loss = (loss_std * n_std + loss_boot * n_boot) / total
+            loss = (loss_std * n_std + self.bootstrap_weight * loss_boot * n_boot) / total
         else:
             loss = loss_std
 
         info = {
             "loss_std": loss_std.item(),
             "loss_boot": loss_boot.item(),
+            "loss_boot_weighted": (self.bootstrap_weight * loss_boot).item(),
             "n_std": n_std,
             "n_boot": n_boot,
         }

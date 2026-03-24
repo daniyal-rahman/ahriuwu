@@ -355,6 +355,19 @@ def parse_args():
         default=64,
         help="Maximum step size for shortcut forcing (default 64)",
     )
+    parser.add_argument(
+        "--bootstrap-weight",
+        type=float,
+        default=10.0,
+        help="Weight multiplier for bootstrap loss (default 10). "
+             "Needed because bootstrap MSE is naturally smaller than standard MSE.",
+    )
+    parser.add_argument(
+        "--eval-interval",
+        type=int,
+        default=200,
+        help="Eval every N optimizer steps (default 200, ~5 min)",
+    )
     # Action conditioning
     parser.add_argument(
         "--use-actions",
@@ -871,6 +884,7 @@ def _log_train_step(
     if "loss_std" in loss_info:
         wandb_metrics["train/loss_std"] = loss_info["loss_std"]
         wandb_metrics["train/loss_boot"] = loss_info["loss_boot"]
+        wandb_metrics["train/loss_boot_weighted"] = loss_info.get("loss_boot_weighted", 0.0)
     else:
         wandb_metrics["train/pred_std"] = pred_std
     log_step(wandb_metrics, step=ts.global_step)
@@ -1122,8 +1136,8 @@ def main():
 
     shortcut = None
     if args.shortcut_forcing:
-        shortcut = ShortcutForcing(k_max=args.shortcut_k_max)
-        print(f"Shortcut forcing enabled (k_max={args.shortcut_k_max})")
+        shortcut = ShortcutForcing(k_max=args.shortcut_k_max, bootstrap_weight=args.bootstrap_weight)
+        print(f"Shortcut forcing enabled (k_max={args.shortcut_k_max}, bootstrap_weight={args.bootstrap_weight})")
 
     # GradScaler: only useful for float16, no-op for bfloat16
     amp_dtype = torch.bfloat16 if args.device != "mps" else torch.float16
@@ -1208,6 +1222,7 @@ def main():
         metrics = train_epoch(
             ts, data_cfg, ckpt_cfg, schedule, args.device, epoch, args,
             val_batch=val_batch,
+            eval_interval=args.eval_interval,
             skip_batches=resume_skip_batches,
         )
         resume_skip_batches = 0  # only skip on first epoch after resume

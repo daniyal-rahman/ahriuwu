@@ -47,11 +47,13 @@ CMD=(
   --no-compile
   --shortcut-forcing
   --shortcut-k-max 64
+  --bootstrap-weight 10.0
   --num-kv-heads 4
   --num-register-tokens 8
   --soft-cap 50.0
   --lr 3e-4
   --warmup-steps 5000
+  --eval-interval 200
   --checkpoint-minutes 60
   --epochs 50
   --wandb --wandb-project ahriuwu
