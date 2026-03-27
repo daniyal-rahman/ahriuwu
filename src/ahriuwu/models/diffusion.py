@@ -271,17 +271,24 @@ class ShortcutForcing:
         # Step sizes: 1, 2, 4, 8, ..., k_max
         self.step_sizes = [2**i for i in range(int(math.log2(k_max)) + 1)]
 
-    def sample_step_size(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        """Sample step sizes uniformly.
+    def sample_step_size(self, batch_size: int, device: torch.device,
+                         max_step_idx: int | None = None) -> torch.Tensor:
+        """Sample step sizes uniformly up to max_step_idx.
 
-        Uniform sampling ensures large step sizes (d=16, 32, 64) get equal
-        training signal as small ones. This is critical for K=4 inference
-        which uses d=16 exclusively.
+        For progressive training: start with small d (where teacher d/2 is
+        well-trained), then gradually increase max_step_idx as training
+        progresses. This breaks the bootstrap trap where teacher ≈ student.
 
+        Args:
+            batch_size: Number of step sizes to sample
+            device: Device
+            max_step_idx: Max index into self.step_sizes to sample from.
+                         None = all step sizes. 0 = d=1 only, 1 = d∈{1,2}, etc.
         Returns:
             step_sizes: (B,) tensor of integer step sizes
         """
-        idx = torch.randint(0, len(self.step_sizes), (batch_size,), device=device)
+        n = len(self.step_sizes) if max_step_idx is None else min(max_step_idx + 1, len(self.step_sizes))
+        idx = torch.randint(0, n, (batch_size,), device=device)
         step_sizes_tensor = torch.tensor(self.step_sizes, device=device)
         return step_sizes_tensor[idx]
 
@@ -474,28 +481,31 @@ class ShortcutForcing:
             z_pred = model(z_tau[idx], tau_idx, step_size=step_size[idx],
                           actions=slice_actions(actions, idx))
 
-            # Student velocity: (z_pred - z_tau) / (1-τ)
-            b_student = (z_pred - z_tau[idx]) / one_minus_tau_safe
-
-            # Bootstrap loss in velocity space with (1-τ)² scaling (Paper Eq. 7)
-            # L = (1-τ)² || b_student - sg(avg_velocity) ||²
-            velocity_diff = b_student - avg_velocity.detach()
-            velocity_mse = (velocity_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W -> (B, T)
+            # Bootstrap loss in X-SPACE (not velocity space).
+            # The paper uses velocity-space with (1-τ)² scaling to convert back,
+            # but this creates a numerical trap: division by (1-τ) then multiplication
+            # by (1-τ)² loses precision in bfloat16, and when teacher ≈ student
+            # (self-consistent model), the velocity diff is zero.
+            #
+            # X-space loss directly: compare student's x-prediction to teacher's
+            # two-step target. The teacher target is z_target (final x-prediction
+            # after two half-steps via Euler integration). Ramp weight applied
+            # to focus learning on high-signal (high τ) regions.
+            x_diff = z_pred - z_target.detach()
+            x_mse = (x_diff ** 2).mean(dim=(-3, -2, -1))  # Reduce C, H, W -> (B, T)
 
             # Clamp to prevent numerical explosion
-            velocity_mse = velocity_mse.clamp(max=100.0)
+            x_mse = x_mse.clamp(max=100.0)
 
             # Skip batch if any NaN/Inf detected
-            if torch.isnan(velocity_mse).any() or torch.isinf(velocity_mse).any():
+            if torch.isnan(x_mse).any() or torch.isinf(x_mse).any():
                 n_boot = 0
             else:
-                # Apply (1-τ)² scaling + ramp weight (Paper Eq. 7-8)
+                # Apply ramp weight (Paper Eq. 8) — per-element, not separated
                 if tau_idx.dim() == 1:
-                    tau_weight = (1 - tau_idx) ** 2 * ramp_weight(tau_idx)
-                    loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
+                    loss_boot = (x_mse.mean(dim=-1) * ramp_weight(tau_idx)).mean()
                 else:
-                    tau_weight = ((1 - tau_idx) ** 2 * ramp_weight(tau_idx)).mean(dim=-1)
-                    loss_boot = (velocity_mse.mean(dim=-1) * tau_weight).mean()
+                    loss_boot = (x_mse * ramp_weight(tau_idx)).mean()
                 n_boot = idx.sum().item()
 
         # Combine losses with bootstrap weight boost.

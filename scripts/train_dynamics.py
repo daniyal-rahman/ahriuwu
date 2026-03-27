@@ -678,6 +678,7 @@ def train_epoch(
             if use_shortcut:
                 raw_loss, loss_info, tau = _forward_shortcut(
                     model, ts.shortcut, schedule, z_0, B, T, device, actions,
+                    global_step=ts.global_step,
                 )
                 loss = raw_loss
             else:
@@ -808,18 +809,26 @@ def train_epoch(
 # Private helpers for train_epoch (keep the main loop readable)
 # ---------------------------------------------------------------------------
 
-def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions):
-    """Shortcut forcing forward pass. Returns (raw_loss, loss_info, tau)."""
-    # Disable gradient checkpointing during shortcut forcing.
-    # Manual attention + autocast + GC causes checkpoint metadata mismatch
-    # (saved tensors have different dtype/shape on recompute). Standard steps
-    # keep GC on for memory efficiency.
+def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions,
+                      global_step: int = 0):
+    """Shortcut forcing forward pass. Returns (raw_loss, loss_info, tau).
+
+    Uses progressive step size curriculum: starts with d∈{1,2} (where teacher
+    d=1 is well-trained), then gradually adds larger d as training progresses.
+    This breaks the bootstrap trap where teacher ≈ student for untrained d.
+
+    Schedule: d∈{1,2} for steps 0-2k, add d=4 at 2k, d=8 at 4k,
+              d=16 at 6k, d=32 at 8k, d=64 at 10k.
+    """
     _inner = getattr(model, '_orig_mod', model)
     gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
     if gc_was_enabled:
         _inner.gradient_checkpointing = False
     try:
-        step_size = shortcut.sample_step_size(B, device=device)
+        # Progressive curriculum: max_step_idx increases every 2k steps
+        # idx 0=d1, 1=d2, 2=d4, 3=d8, 4=d16, 5=d32, 6=d64
+        max_idx = min(1 + global_step // 2000, len(shortcut.step_sizes) - 1)
+        step_size = shortcut.sample_step_size(B, device=device, max_step_idx=max_idx)
         tau = shortcut.sample_tau_for_step_size_2d(step_size, T, device=device)
         z_tau, noise = schedule.add_noise(z_0, tau)
         raw_loss, loss_info = shortcut.compute_loss(

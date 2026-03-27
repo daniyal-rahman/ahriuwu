@@ -2,8 +2,8 @@
 #SBATCH --job-name=dyn-train
 #SBATCH --output=/mnt/storage/ahriuwu-data/logs/slurm_dyn_train_%j.out
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=20G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=18G
 #SBATCH --time=14-00:00:00
 #SBATCH --qos=gpu-long
 #SBATCH --signal=B:TERM@120
