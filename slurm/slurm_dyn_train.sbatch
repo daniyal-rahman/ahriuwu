@@ -29,30 +29,30 @@ CMD=(
   --latents-dir "$LATENTS_DIR"
   --packed
   --checkpoint-dir "$CHECKPOINT_DIR"
-  --model-size medium
+  --model-size small
   --latent-dim 48
   --tokenizer-type transformer
   --alternating-lengths
   --seq-len-short 32
   --seq-len-long 64
-  --batch-size-short 1
+  --batch-size-short 2
   --batch-size-long 1
   --batch-size-short-standard 8
   --batch-size-long-standard 4
   --long-ratio 0.1
-  --gradient-accumulation 32
-  --gradient-accumulation-short 32
+  --gradient-accumulation 16
+  --gradient-accumulation-short 16
   --gradient-accumulation-long 32
   --gradient-checkpointing
   --no-compile
   --shortcut-forcing
   --shortcut-k-max 64
-  --bootstrap-weight 10.0
+  --bootstrap-weight 3.0
   --num-kv-heads 4
   --num-register-tokens 8
   --soft-cap 50.0
   --lr 3e-4
-  --warmup-steps 5000
+  --warmup-steps 3000
   --eval-interval 200
   --checkpoint-minutes 60
   --epochs 50
