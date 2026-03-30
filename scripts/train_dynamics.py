@@ -998,33 +998,6 @@ def main():
             pin_memory=True,
             drop_last=True,
         )
-        # Standard-step dataloaders (larger batch, GC stays on)
-        bs_short_std = args.batch_size_short_standard or args.batch_size_short
-        bs_long_std = args.batch_size_long_standard or args.batch_size_long
-        if bs_short_std != args.batch_size_short:
-            dataloader_short_standard = DataLoader(
-                dataset_short,
-                batch_size=bs_short_std,
-                sampler=VideoGroupedSampler(dataset_short),
-                num_workers=args.num_workers,
-                pin_memory=True,
-                drop_last=True,
-            )
-            print(f"Standard short batch size: {bs_short_std} (vs shortcut: {args.batch_size_short})")
-        else:
-            dataloader_short_standard = None
-        if bs_long_std != args.batch_size_long:
-            dataloader_long_standard = DataLoader(
-                dataset_long,
-                batch_size=bs_long_std,
-                sampler=VideoGroupedSampler(dataset_long),
-                num_workers=args.num_workers,
-                pin_memory=True,
-                drop_last=True,
-            )
-            print(f"Standard long batch size: {bs_long_std} (vs shortcut: {args.batch_size_long})")
-        else:
-            dataloader_long_standard = None
         dataloader = None
     else:
         dataset = DatasetClass(
