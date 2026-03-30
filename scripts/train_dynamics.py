@@ -298,14 +298,27 @@ def parse_args():
     parser.add_argument(
         "--batch-size-short",
         type=int,
-        default=1,
-        help="Batch size for short sequences (shortcut forcing steps)",
+        default=8,
+        help="Batch size for short sequences (max, used for standard steps)",
     )
     parser.add_argument(
         "--batch-size-long",
         type=int,
+        default=4,
+        help="Batch size for long sequences",
+    )
+    parser.add_argument(
+        "--shortcut-batch-short",
+        type=int,
+        default=2,
+        help="Batch size for shortcut steps on short sequences (sliced from full batch). "
+             "Shortcut needs 3 forward passes without GC, so smaller batch.",
+    )
+    parser.add_argument(
+        "--shortcut-batch-long",
+        type=int,
         default=1,
-        help="Batch size for long sequences (shortcut forcing steps)",
+        help="Batch size for shortcut steps on long sequences.",
     )
     parser.add_argument(
         "--long-ratio",
@@ -1136,19 +1149,14 @@ def main():
         accum_s = args.gradient_accumulation
         accum_l = None
 
-    # Compute per-step-type accumulation to maintain effective_batch=32
-    effective_batch = args.batch_size_short * accum_s
-    accum_short_std = effective_batch // bs_short_std if bs_short_std > 0 else accum_s
-    accum_long_std = effective_batch // bs_long_std if bs_long_std > 0 else (accum_l or accum_s)
-
     data_cfg = DataConfig(
         dataloader=dataloader,
         dataloader_short=dataloader_short,
         dataloader_long=dataloader_long,
         accumulation_steps=accum_s,
         accumulation_steps_long=accum_l,
-        shortcut_batch_short=args.batch_size_short,
-        shortcut_batch_long=args.batch_size_long,
+        shortcut_batch_short=args.shortcut_batch_short,
+        shortcut_batch_long=args.shortcut_batch_long,
         long_ratio=args.long_ratio,
     )
 
