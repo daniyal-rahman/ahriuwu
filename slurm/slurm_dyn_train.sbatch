@@ -24,6 +24,9 @@ cd /mnt/storage/ahriuwu
 CHECKPOINT_DIR=/mnt/storage/ahriuwu-data/checkpoints
 LATENTS_DIR=/opt/ahriuwu/latents_pt
 
+# Dataloaders use max batch size (B=8 short, B=4 long).
+# Shortcut steps slice to B=2/B=1 (3 forward passes need less VRAM).
+# Standard steps use full batch. ~2x faster than old dual-dataloader approach.
 CMD=(
   python scripts/train_dynamics.py
   --latents-dir "$LATENTS_DIR"
@@ -35,14 +38,12 @@ CMD=(
   --alternating-lengths
   --seq-len-short 32
   --seq-len-long 64
-  --batch-size-short 2
-  --batch-size-long 1
-  --batch-size-short-standard 8
-  --batch-size-long-standard 4
+  --batch-size-short 8
+  --batch-size-long 4
   --long-ratio 0.1
-  --gradient-accumulation 16
-  --gradient-accumulation-short 16
-  --gradient-accumulation-long 32
+  --gradient-accumulation 4
+  --gradient-accumulation-short 4
+  --gradient-accumulation-long 8
   --gradient-checkpointing
   --no-compile
   --shortcut-forcing

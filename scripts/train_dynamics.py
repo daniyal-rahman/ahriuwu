@@ -65,20 +65,15 @@ class TrainingState:
 class DataConfig:
     """Dataloader configuration for single or alternating-length training.
 
-    For dynamic batch sizing, separate dataloaders are used for standard
-    (larger batch) and shortcut (smaller batch, GC disabled) steps.
+    Always loads max batch size. Shortcut steps slice to smaller batch.
     """
     dataloader: DataLoader | None = None
     dataloader_short: DataLoader | None = None
     dataloader_long: DataLoader | None = None
-    # Larger-batch dataloaders for standard steps (fill VRAM)
-    dataloader_short_standard: DataLoader | None = None
-    dataloader_long_standard: DataLoader | None = None
     accumulation_steps: int = 1
     accumulation_steps_long: int | None = None
-    # Per-step-type accumulation for constant effective batch
-    accumulation_short_standard: int | None = None
-    accumulation_long_standard: int | None = None
+    shortcut_batch_short: int = 2  # Slice to this for shortcut on short batches
+    shortcut_batch_long: int = 1   # Slice to this for shortcut on long batches
     long_ratio: float = 0.1
 
 
@@ -311,20 +306,6 @@ def parse_args():
         type=int,
         default=1,
         help="Batch size for long sequences (shortcut forcing steps)",
-    )
-    parser.add_argument(
-        "--batch-size-short-standard",
-        type=int,
-        default=None,
-        help="Batch size for short sequences on standard (non-shortcut) steps. "
-             "If None, uses --batch-size-short. Set higher to fill VRAM on standard steps.",
-    )
-    parser.add_argument(
-        "--batch-size-long-standard",
-        type=int,
-        default=None,
-        help="Batch size for long sequences on standard steps. "
-             "If None, uses --batch-size-long.",
     )
     parser.add_argument(
         "--long-ratio",
@@ -583,9 +564,6 @@ def train_epoch(
         batch_iterator = None
         iter_short = iter(data_cfg.dataloader_short)
         iter_long = iter(data_cfg.dataloader_long)
-        # Standard-step iterators (larger batch) — fall back to shortcut iterators if not set
-        iter_short_std = iter(data_cfg.dataloader_short_standard) if data_cfg.dataloader_short_standard else None
-        iter_long_std = iter(data_cfg.dataloader_long_standard) if data_cfg.dataloader_long_standard else None
         total_batches = len(data_cfg.dataloader_short) + int(
             len(data_cfg.dataloader_short) * data_cfg.long_ratio / (1 - data_cfg.long_ratio)
         )
@@ -597,8 +575,6 @@ def train_epoch(
         if data_cfg.accumulation_steps_long is not None
         else data_cfg.accumulation_steps
     )
-    accum_short_std = data_cfg.accumulation_short_standard or accum_short
-    accum_long_std = data_cfg.accumulation_long_standard or accum_long
     micro_count = 0
     current_accum = data_cfg.accumulation_steps
     use_long = False
@@ -624,33 +600,18 @@ def train_epoch(
         print(f"Resumed at batch {batch_idx}")
 
     while True:
-        # --- Decide batch type + shortcut at start of accumulation window ---
+        # --- Decide batch type at start of accumulation window ---
         if micro_count == 0 and alternating:
             use_long = random.random() < data_cfg.long_ratio
-            # Shortcut is skipped on long batches (OOMs without GC).
-            # Use larger-batch standard dataloaders when not doing shortcut.
-            will_shortcut = ts.shortcut is not None and not use_long
-            if will_shortcut:
-                current_accum = accum_long if use_long else accum_short
-            else:
-                current_accum = accum_long_std if use_long else accum_short_std
+            current_accum = accum_long if use_long else accum_short
 
-        # --- Get next batch (pick standard or shortcut dataloader) ---
-        use_standard_dl = not will_shortcut if alternating else False
+        # --- Get next batch (always max batch size) ---
         try:
-            if use_standard_dl and not use_long and iter_short_std is not None:
-                active_iter_short = iter_short_std
-            else:
-                active_iter_short = iter_short
-            if use_standard_dl and use_long and iter_long_std is not None:
-                active_iter_long = iter_long_std
-            else:
-                active_iter_long = iter_long
             batch, seq_type, iter_long = get_next_batch(
                 alternating, use_long,
                 batch_iterator=batch_iterator,
-                iter_short=active_iter_short,
-                iter_long=active_iter_long,
+                iter_short=iter_short,
+                iter_long=iter_long,
                 dataloader_long=data_cfg.dataloader_long,
             )
         except StopIteration:
@@ -667,10 +628,17 @@ def train_epoch(
         use_independent = random.random() < args.independent_frame_ratio
 
         # --- Decide whether to use shortcut on this step ---
-        # Skip shortcut on long batches (OOMs without GC, which is
-        # disabled during shortcut). Long batches are ~10% of steps,
-        # shortcut would apply to ~5% — negligible training signal loss.
+        # Skip shortcut on long batches (OOMs without GC).
         use_shortcut = ts.shortcut is not None and not use_long
+
+        # Slice batch for shortcut steps (3 forward passes need less VRAM)
+        if use_shortcut:
+            sc_b = data_cfg.shortcut_batch_short if not use_long else data_cfg.shortcut_batch_long
+            if B > sc_b:
+                z_0 = z_0[:sc_b]
+                if actions is not None:
+                    actions = {k: v[:sc_b] for k, v in actions.items()}
+                B = sc_b
 
         # --- Forward pass (mixed precision) ---
         amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
@@ -1204,12 +1172,10 @@ def main():
         dataloader=dataloader,
         dataloader_short=dataloader_short,
         dataloader_long=dataloader_long,
-        dataloader_short_standard=dataloader_short_standard if args.alternating_lengths else None,
-        dataloader_long_standard=dataloader_long_standard if args.alternating_lengths else None,
         accumulation_steps=accum_s,
         accumulation_steps_long=accum_l,
-        accumulation_short_standard=accum_short_std,
-        accumulation_long_standard=accum_long_std,
+        shortcut_batch_short=args.batch_size_short,
+        shortcut_batch_long=args.batch_size_long,
         long_ratio=args.long_ratio,
     )
 
