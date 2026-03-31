@@ -492,34 +492,31 @@ def eval_denoising_psnr(
                   f"pred mean={pred_mean:.4f} std={pred_std:.4f} | "
                   f"MSE={mse:.4f} | z_0 range=[{z_0.min():.3f}, {z_0.max():.3f}]")
 
-    # K=4 shortcut denoising: start from noise, take 4 steps
-    # Use fixed seed for reproducible eval (different random noise was causing
-    # PSNR to oscillate wildly between eval steps)
+    # Shortcut denoising: test d=16 (K=4 inference step size) as a denoiser.
+    # Compare to d=1 at the same tau to measure shortcut quality gap.
+    # NOTE: The old K4 eval started from pure noise and ran 4 Euler steps,
+    # then compared to z_0 — but that's unconditional generation, not denoising.
+    # The output has no connection to z_0, so PSNR was always ~3 dB (random).
     if shortcut is not None:
-        rng_state = torch.cuda.get_rng_state()
-        torch.cuda.manual_seed(42)
-        z_t = torch.randn_like(z_0)
-        torch.cuda.set_rng_state(rng_state)
-        z_noise = z_t.clone()
         K = 4
-        step_size_val = 1.0 / K  # d = 0.25
+        d_shortcut = shortcut.k_max // K  # d=16 for K=4
 
-        with torch.autocast(device_type=device.split(":")[0], dtype=amp_dtype):
-            for i in range(K):
-                tau_val_i = i * step_size_val
-                tau_t = torch.full((B, T), tau_val_i, device=device)
-                d_t = torch.full((B,), shortcut.k_max // K, dtype=torch.long, device=device)
-                z_pred_i = model(z_t, tau_t, step_size=d_t)
-                if i < K - 1:
-                    next_tau = tau_val_i + step_size_val
-                    z_t = next_tau * z_pred_i + (1 - next_tau) * z_noise
-                else:
-                    z_t = z_pred_i
+        for tau_val in tau_levels:
+            tau = torch.full((B, T), tau_val, device=device)
+            z_tau, _ = schedule.add_noise(z_0, tau)
 
-        mse = ((z_t.float() - z_0.float()) ** 2).mean().item()
-        max_val = z_0.abs().max().item()
-        psnr_k4 = 10 * torch.log10(torch.tensor(max_val ** 2 / max(mse, 1e-10))).item()
-        results["eval/psnr_K4_shortcut"] = psnr_k4
+            with torch.autocast(device_type=device.split(":")[0], dtype=amp_dtype):
+                # d=16 prediction (what K4 inference uses)
+                d_t = torch.full((B,), d_shortcut, dtype=torch.long, device=device)
+                z_pred_d16 = model(z_tau, tau, step_size=d_t)
+
+            mse = ((z_pred_d16.float() - z_0.float()) ** 2).mean().item()
+            psnr = 10 * torch.log10(torch.tensor(max_val ** 2 / max(mse, 1e-10))).item()
+            results[f"eval/psnr_d16_tau{tau_val:.1f}"] = psnr
+
+        # Summary: gap between d=1 and d=16 at tau=0.5
+        gap = results.get("eval/psnr_tau0.5", 0) - results.get("eval/psnr_d16_tau0.5", 0)
+        results["eval/shortcut_gap_db"] = gap
 
     model.train()
     return results
