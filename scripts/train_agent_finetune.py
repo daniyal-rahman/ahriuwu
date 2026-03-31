@@ -160,6 +160,17 @@ def parse_args():
         default=True,
         help="Use gradient checkpointing for memory efficiency (default: enabled)",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to Phase 2 checkpoint to resume from",
+    )
+    parser.add_argument(
+        "--no-compile",
+        action="store_true",
+        help="Disable torch.compile",
+    )
     parser.set_defaults(num_workers=0)
     add_wandb_args(parser)
     return parser.parse_args()
@@ -211,7 +222,24 @@ class ReplayDataset(torch.utils.data.Dataset):
 
             # Load rewards from features.json
             self._load_rewards()
-            print(f"Loaded reward data for {len(self.reward_data)}/{len(set(s['video_id'] for s in self.latent_dataset.sequences))} videos")
+
+            # Summarize missing data
+            all_video_ids = set(s['video_id'] for s in self.latent_dataset.sequences)
+            videos_with_rewards = set(self.reward_data.keys()) & all_video_ids
+            # Check which videos have actions by sampling the first sequence per video
+            videos_with_actions = set()
+            seen_videos = set()
+            for seq_info in self.latent_dataset.sequences:
+                vid = seq_info['video_id']
+                if vid not in seen_videos:
+                    seen_videos.add(vid)
+                    if seq_info.get('has_actions', True):  # assume True if not tracked
+                        videos_with_actions.add(vid)
+            self._n_videos_missing_actions = len(all_video_ids) - len(videos_with_actions)
+            self._n_videos_missing_rewards = len(all_video_ids) - len(videos_with_rewards)
+            print(f"Loaded reward data for {len(videos_with_rewards)}/{len(all_video_ids)} videos")
+            print(f"Missing data summary: {self._n_videos_missing_actions} videos missing actions, "
+                  f"{self._n_videos_missing_rewards} videos missing rewards")
         else:
             # Placeholder for raw frame mode
             self.latent_dataset = None
@@ -393,6 +421,8 @@ class ReplayDataset(torch.utils.data.Dataset):
                 "rewards": rewards,  # (T,)
                 "continues": continues,  # (T,) 1.0=alive, 0.0=dead
                 "factorized_actions": factorized_actions,  # dict for dynamics model
+                "has_actions": raw_actions_dict is not None,
+                "has_rewards": video_id in self.reward_data,
             }
         else:
             # Placeholder for raw frame mode
@@ -500,6 +530,9 @@ def train_epoch(
     args: argparse.Namespace,
 ):
     """Train for one epoch."""
+    from ahriuwu.models.diffusion import ShortcutForcing
+    _shortcut = ShortcutForcing(k_max=64)
+
     dynamics.train()
     reward_head.train()
     policy_head.train()
@@ -512,6 +545,9 @@ def train_epoch(
     total_correct_top5 = 0
     total_predictions = 0
     num_batches = 0
+    total_has_actions = 0
+    total_has_rewards = 0
+    total_samples = 0
     start_time = time.time()
 
     device_type = device.split(":")[0]
@@ -530,9 +566,16 @@ def train_epoch(
                 z = tokenizer.encode(frames_flat)  # (B*T, C, H, W) latent
                 z = z.view(B_frames, T_frames, *z.shape[1:])  # (B, T, C, H, W)
 
+        # Track data completeness
+        if "has_actions" in batch:
+            total_has_actions += batch["has_actions"].sum().item()
+            total_has_rewards += batch["has_rewards"].sum().item()
+            total_samples += batch["has_actions"].numel()
+
         actions = batch["actions"].to(device)  # (B, T) discrete ability actions
         movement_targets = batch["movement_targets"].to(device)  # (B, T, 2) continuous (x, y)
         rewards = batch["rewards"].to(device)  # (B, T)
+        # continues is loaded here for Phase 3 lambda returns (not used in Phase 2 BC training)
         continues = batch["continues"].to(device)  # (B, T) 1.0=alive, 0.0=dead
 
         B, T = actions.shape
@@ -552,21 +595,25 @@ def train_epoch(
 
             # Build factorized action dict for dynamics model if it uses actions
             actions_dict = None
-            if hasattr(dynamics, '_orig_mod'):
-                has_actions = dynamics._orig_mod.use_actions
-            else:
-                has_actions = getattr(dynamics, 'use_actions', False)
+            _inner = getattr(dynamics, '_orig_mod', dynamics)
+            has_actions = _inner.use_actions
             if has_actions and "factorized_actions" in batch:
                 # Move each tensor in the factorized dict to device
                 actions_dict = {
                     k: v.to(device) for k, v in batch["factorized_actions"].items()
                 }
 
-            # Forward through dynamics with agent tokens and actions
+            # Sample step_size to preserve shortcut forcing during Phase 2
+            # (Paper: "continue applying the dynamics loss" — includes multi-scale shortcuts)
+            step_size = _shortcut.sample_step_size(B, device=device)
+
+            # Forward through dynamics with agent tokens, actions, and step_size
             z_pred, agent_out = dynamics(
                 z_noisy, tau,
+                step_size=step_size,
                 actions=actions_dict,
                 independent_frames=use_independent,
+                task_id=None,  # TODO: pass task_ids from batch when multi-task is enabled
             )
 
             # Dynamics loss (x-prediction with ramp weighting, matching Phase 1)
@@ -577,7 +624,7 @@ def train_epoch(
             reward_targets = symlog(rewards)  # (B, T)
 
             # MTP reward loss: predict rewards at t+n for n=0..L-1 (Eq. 9)
-            reward_loss = 0.0
+            reward_loss = torch.tensor(0.0, device=device)
             L = args.mtp_length
             for offset in range(L):
                 if T - offset > 0:
@@ -593,28 +640,33 @@ def train_epoch(
 
             reward_loss = reward_loss / L
 
-            # Behavioral cloning loss
+            # Behavioral cloning loss (vectorized binary abilities + continuous movement)
             ability_logits, movement_pred = policy_head(agent_out)
-            # ability_logits: (B, T, L, action_dim)
+            # ability_logits: (B, T, L, num_abilities) — independent binary logits
             # movement_pred: (B, T, L, 2)
 
+            # Build binary ability targets from factorized_actions: (B, T, 8)
+            from ahriuwu.constants import ABILITY_KEYS
+            ability_binary = torch.stack(
+                [batch["factorized_actions"][k].to(device).float() for k in ABILITY_KEYS],
+                dim=-1,
+            )  # (B, T, 8)
+
             # MTP BC loss: predict actions at t+n for n=0..L-1 (Eq. 9)
-            bc_loss_ability = 0.0
-            bc_loss_movement = 0.0
+            bc_loss_ability = torch.tensor(0.0, device=device)
+            bc_loss_movement = torch.tensor(0.0, device=device)
             for offset in range(L):
                 if T - offset > 0:
-                    # Discrete ability loss (cross-entropy)
-                    ability_target = actions[:, offset:]  # (B, T - offset)
-                    ability_pred = ability_logits[:, :T - offset, offset, :]
+                    # Vectorized binary ability loss (independent BCE per ability)
+                    ability_target = ability_binary[:, offset:]  # (B, T - offset, 8)
+                    ability_pred = ability_logits[:, :T - offset, offset, :]  # (B, T - offset, 8)
 
                     if ability_pred.shape[1] > 0:
-                        bc_loss_ability = bc_loss_ability + F.cross_entropy(
-                            ability_pred.reshape(-1, ability_pred.shape[-1]),
-                            ability_target.reshape(-1),
+                        bc_loss_ability = bc_loss_ability + F.binary_cross_entropy_with_logits(
+                            ability_pred, ability_target,
                         )
 
                     # Continuous movement loss (MSE)
-                    # movement_targets is (B, T, 2) float
                     move_target = movement_targets[:, offset:]  # (B, T - offset, 2)
                     move_pred = movement_pred[:, :T - offset, offset, :]  # (B, T - offset, 2)
 
@@ -623,22 +675,16 @@ def train_epoch(
 
             bc_loss = (bc_loss_ability + bc_loss_movement) / L
 
-            # Compute action prediction accuracy (discrete abilities only, offset=0)
-            # MTP n=0 predicts current timestep: pred at t should match action at t
+            # Compute action prediction accuracy (per-ability, offset=0)
             with torch.no_grad():
-                pred_t0 = ability_logits[:, :, 0, :]  # (B, T, action_dim)
-                target_t0 = actions  # (B, T)
+                pred_t0 = ability_logits[:, :, 0, :]  # (B, T, 8)
+                target_t0 = ability_binary  # (B, T, 8)
 
-                # Top-1 accuracy
-                pred_top1 = pred_t0.argmax(dim=-1)  # (B, T)
-                correct_top1 = (pred_top1 == target_t0).sum().item()
-
-                # Top-5 accuracy
-                _, pred_top5 = pred_t0.topk(5, dim=-1)  # (B, T, 5)
-                correct_top5 = (pred_top5 == target_t0.unsqueeze(-1)).any(dim=-1).sum().item()
-
-                total_correct_top1 += correct_top1
-                total_correct_top5 += correct_top5
+                # Per-ability accuracy: predicted binary matches target
+                pred_binary = (pred_t0 > 0).float()  # threshold logits at 0
+                correct = (pred_binary == target_t0).sum().item()
+                total_correct_top1 += correct
+                total_correct_top5 += correct  # same metric for binary
                 total_predictions += target_t0.numel()
 
             # Normalize losses by running RMS
@@ -648,6 +694,13 @@ def train_epoch(
 
             total_loss_batch = dynamics_loss_norm + reward_loss_norm + bc_loss_norm
 
+        if torch.isnan(total_loss_batch) or torch.isinf(total_loss_batch):
+            print(f"[WARN] NaN/Inf loss at batch {batch_idx}! "
+                  f"dynamics={dynamics_loss.item():.4f} reward={reward_loss.item() if isinstance(reward_loss, torch.Tensor) else reward_loss} "
+                  f"bc={bc_loss.item() if isinstance(bc_loss, torch.Tensor) else bc_loss}")
+            optimizer.zero_grad()
+            continue
+
         # Backward
         scaler.scale(total_loss_batch).backward()
         scaler.unscale_(optimizer)
@@ -655,6 +708,12 @@ def train_epoch(
             list(dynamics.parameters()) + list(reward_head.parameters()) + list(policy_head.parameters()),
             max_norm=1.0
         )
+        # Log gradient norms per component
+        grad_norms = {}
+        for name, mod in [("dynamics", dynamics), ("reward", reward_head), ("policy", policy_head)]:
+            total_norm = sum(p.grad.norm().item()**2 for p in mod.parameters() if p.grad is not None)**0.5
+            grad_norms[name] = total_norm
+
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
@@ -684,6 +743,11 @@ def train_epoch(
                 "train/lr": scheduler.get_last_lr()[0],
                 "train/samples_per_sec": samples_per_sec,
                 "train/epoch": epoch,
+                "train/grad_norm_dynamics": grad_norms["dynamics"],
+                "train/grad_norm_reward": grad_norms["reward"],
+                "train/grad_norm_policy": grad_norms["policy"],
+                "train/frac_has_actions": total_has_actions / total_samples if total_samples > 0 else 0,
+                "train/frac_has_rewards": total_has_rewards / total_samples if total_samples > 0 else 0,
             }, step=batch_idx + epoch * len(dataloader))
 
             print(
@@ -693,6 +757,7 @@ def train_epoch(
                 f"Rew: {reward_loss.item():.4f} "
                 f"BC: {bc_loss.item():.4f} "
                 f"Acc@1: {acc_top1:.1f}% Acc@5: {acc_top5:.1f}% "
+                f"GradNorm[D:{grad_norms['dynamics']:.2f} R:{grad_norms['reward']:.2f} P:{grad_norms['policy']:.2f}] "
                 f"({samples_per_sec:.1f} samples/s)"
             )
 
@@ -786,17 +851,16 @@ def main():
     print(f"  Total parameters: {dynamics.get_num_params():,}")
     print(f"  Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
 
+    # Extract model attributes BEFORE torch.compile (avoids fragile _orig_mod access)
+    model_dim = dynamics.model_dim
+    dynamics_use_actions = dynamics.use_actions
+
     # torch.compile the dynamics model
-    if not args.no_compile:
+    if not getattr(args, 'no_compile', False):
         print("Compiling dynamics model with torch.compile...")
         dynamics = torch.compile(dynamics)
 
-    # Get model dimension from dynamics
-    # Access model_dim from the underlying module if compiled
-    if hasattr(dynamics, '_orig_mod'):
-        model_dim = dynamics._orig_mod.model_dim
-    else:
-        model_dim = dynamics.model_dim
+    # model_dim and dynamics_use_actions already extracted above
 
     # Create heads
     print("\nCreating reward and policy heads...")
@@ -809,7 +873,7 @@ def main():
 
     policy_head = PolicyHead(
         input_dim=model_dim,
-        action_dim=args.action_dim,
+        num_abilities=8,  # Q/W/E/R/D/F/item/B — vectorized binary (DreamerV4 paper)
         hidden_dim=256,
         mtp_length=args.mtp_length,
     ).to(args.device)
@@ -877,6 +941,30 @@ def main():
         "bc": RunningRMS(),
     }
 
+    # Resume from Phase 2 checkpoint if provided
+    start_epoch = 0
+    if args.resume:
+        print(f"\nResuming from {args.resume}...")
+        ckpt = torch.load(args.resume, weights_only=False, map_location=args.device)
+        # Load model states
+        dyn_sd = ckpt["dynamics_state_dict"]
+        if any(k.startswith("_orig_mod.") for k in dyn_sd):
+            dyn_sd = {k.replace("_orig_mod.", ""): v for k, v in dyn_sd.items()}
+        _inner = getattr(dynamics, '_orig_mod', dynamics)
+        _inner.load_state_dict(dyn_sd, strict=False)
+        reward_head.load_state_dict(ckpt["reward_head_state_dict"])
+        policy_head.load_state_dict(ckpt["policy_head_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scaler.load_state_dict(ckpt["scaler_state_dict"])
+        if "scheduler_state_dict" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if "rms_state" in ckpt:
+            for k, state in ckpt["rms_state"].items():
+                if k in rms_trackers:
+                    rms_trackers[k].load_state_dict(state)
+        start_epoch = ckpt.get("epoch", 0)
+        print(f"Resumed from epoch {start_epoch}")
+
     # Initialize wandb
     wandb_run = init_wandb(args, job_type="agent_finetune", extra_config={
         "dynamics_params": dynamics.get_num_params() if hasattr(dynamics, 'get_num_params') else sum(p.numel() for p in dynamics.parameters()),
@@ -890,7 +978,7 @@ def main():
     print("=" * 60)
 
     history = []
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch + 1}/{args.epochs}")
         print("-" * 40)
 

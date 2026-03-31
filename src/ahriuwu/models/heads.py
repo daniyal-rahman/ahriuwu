@@ -104,13 +104,15 @@ class RewardHead(nn.Module):
 
 
 class PolicyHead(nn.Module):
-    """Policy head for action prediction.
+    """Policy head for action prediction (vectorized binary + continuous).
 
     Phase 2: Trained with behavioral cloning
     Phase 3: Trained with PMPO on imagined trajectories
 
     Predicts:
-    - Discrete ability actions (cross-entropy with human actions)
+    - 8 independent binary ability actions (vectorized binary, per DreamerV4 paper)
+      Each ability (Q/W/E/R/D/F/item/B) is an independent Bernoulli distribution.
+      This is exponentially more efficient than a single 128-class categorical.
     - Continuous movement (x, y) in [0, 1] via sigmoid + MSE
 
     Uses MTP to predict actions for multiple future timesteps.
@@ -121,7 +123,7 @@ class PolicyHead(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        action_dim: int,
+        num_abilities: int = 8,
         hidden_dim: int = 256,
         mtp_length: int = 9,
         movement_dim: int = 2,
@@ -130,13 +132,13 @@ class PolicyHead(nn.Module):
 
         Args:
             input_dim: Dimension of agent token features
-            action_dim: Number of discrete actions (for ability predictions)
+            num_abilities: Number of independent binary abilities (default 8: Q/W/E/R/D/F/item/B)
             hidden_dim: Hidden layer dimension
             mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
             movement_dim: Continuous movement dimensions (default 2 for x, y)
         """
         super().__init__()
-        self.action_dim = action_dim
+        self.num_abilities = num_abilities
         self.mtp_length = mtp_length
         self.movement_dim = movement_dim
 
@@ -148,9 +150,10 @@ class PolicyHead(nn.Module):
             nn.SiLU(),
         )
 
-        # MTP heads for discrete ability actions: predict action for t, t+1, ..., t+L-1
+        # MTP heads for vectorized binary abilities: each head predicts
+        # num_abilities independent logits (one per ability key)
         self.heads = nn.ModuleList([
-            nn.Linear(hidden_dim, action_dim) for _ in range(mtp_length)
+            nn.Linear(hidden_dim, num_abilities) for _ in range(mtp_length)
         ])
 
         # MTP heads for continuous movement (x, y) prediction
@@ -158,8 +161,7 @@ class PolicyHead(nn.Module):
             nn.Linear(hidden_dim, movement_dim) for _ in range(mtp_length)
         ])
 
-        # Zero-init output heads: initial predictions are zero/uniform,
-        # which is a good starting point. Hidden layers keep default init.
+        # Zero-init output heads: initial predictions are zero/uniform
         for head in self.heads:
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
@@ -168,19 +170,19 @@ class PolicyHead(nn.Module):
             nn.init.zeros_(head.bias)
 
     def forward(self, agent_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Predict action logits and movement coordinates.
+        """Predict ability logits and movement coordinates.
 
         Args:
             agent_tokens: (B, T, D) agent token features
 
         Returns:
             tuple of:
-                ability_logits: (B, T, L, action_dim) logits for discrete actions
+                ability_logits: (B, T, L, num_abilities) independent binary logits
                 movement_pred: (B, T, L, 2) predicted (x, y) in [0, 1]
         """
         x = self.mlp(agent_tokens)  # (B, T, hidden_dim)
 
-        # Discrete ability predictions
+        # Vectorized binary ability predictions (independent Bernoulli per ability)
         ability_logits = torch.stack([head(x) for head in self.heads], dim=2)
 
         # Continuous movement predictions with sigmoid to bound in [0, 1]
@@ -199,36 +201,34 @@ class PolicyHead(nn.Module):
 
         Returns:
             tuple of:
-                (B, T, L) sampled discrete action indices
-                (B, T, L, 2) predicted movement coordinates
+                abilities: (B, T, L, num_abilities) binary samples {0, 1}
+                movement_pred: (B, T, L, 2) predicted (x, y) in [0, 1]
         """
         ability_logits, movement_pred = self.forward(agent_tokens)
 
         if temperature == 0:
-            return ability_logits.argmax(dim=-1), movement_pred
+            return (ability_logits > 0).float(), movement_pred
 
-        probs = F.softmax(ability_logits / temperature, dim=-1)
-        B, T, L, A = probs.shape
-        probs_flat = probs.view(-1, A)
-        actions_flat = torch.multinomial(probs_flat, num_samples=1).squeeze(-1)
-        return actions_flat.view(B, T, L), movement_pred
+        probs = torch.sigmoid(ability_logits / temperature)
+        abilities = torch.bernoulli(probs)
+        return abilities, movement_pred
 
     def log_prob(self, agent_tokens: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Compute log probability of discrete actions.
+        """Compute log probability of vectorized binary actions.
 
         Args:
             agent_tokens: (B, T, D) agent token features
-            actions: (B, T, L) action indices
+            actions: (B, T, L, num_abilities) binary action targets {0, 1}
 
         Returns:
-            (B, T, L) log probabilities
+            (B, T, L) sum of per-ability log probabilities
         """
         ability_logits, _ = self.forward(agent_tokens)
-        log_probs = F.log_softmax(ability_logits, dim=-1)
-
-        # Gather log probs for taken actions
-        actions_expanded = actions.unsqueeze(-1)  # (B, T, L, 1)
-        return log_probs.gather(-1, actions_expanded).squeeze(-1)
+        # Binary cross-entropy per ability, sum across abilities
+        log_probs = -F.binary_cross_entropy_with_logits(
+            ability_logits, actions, reduction='none'
+        )  # (B, T, L, num_abilities), negative BCE = log prob
+        return log_probs.sum(dim=-1)  # (B, T, L)
 
 
 class ValueHead(nn.Module):
@@ -406,8 +406,9 @@ def freeze_for_imagination(
     """
     # Freeze dynamics transformer
     dynamics = getattr(model, dynamics_attr, None)
-    if dynamics is not None:
-        dynamics.requires_grad_(False)
+    if dynamics is None:
+        raise ValueError(f"Model has no attribute '{dynamics_attr}'. Cannot freeze dynamics.")
+    dynamics.requires_grad_(False)
 
     # Optionally freeze reward head
     if freeze_reward:
