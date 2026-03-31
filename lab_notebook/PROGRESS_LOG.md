@@ -115,23 +115,58 @@ The attention unification refactor (commit a09d2e0) changed the tokenizer's atte
 
 **Impact:** Cannot compute pixel PSNR or LPIPS through the tokenizer. Latent-space PSNR is the only available metric until this is resolved.
 
+### Tokenizer Compat Fix (2026-03-31)
+
+Created `transformer_tokenizer_legacy.py` — the pre-unification tokenizer code. This loads old checkpoints correctly and decodes without NaN. Legacy file is clearly labeled as a vestige — remove once tokenizer is retrained with unified attention.
+
+### Full Pipeline Eval (2026-03-31)
+
+Using legacy tokenizer shim, ran latent→pixel decode with PSNR + LPIPS:
+
+| Metric | τ=0.5 d=1 | τ=0.5 d=16 | Gap |
+|--------|-----------|------------|-----|
+| Latent PSNR | 26.3 dB | 24.8 dB | 1.5 dB |
+| **Pixel PSNR** | **33.7 dB** | **32.7 dB** | **1.0 dB** |
+| **LPIPS** | **0.055** | **0.073** | **+0.017** |
+
+K=4 inference (d=16) costs only 1.0 dB pixel PSNR and 0.017 LPIPS vs d=1. This is a working world model with shortcut forcing.
+
+### Phase 1 Final Checkpoint (2026-03-31)
+
+**`dynamics_small_step34k_phase1_final.pt`** — Small model (36M), 34.4k optimizer steps.
+
+| Metric | d=1 | d=16 | Gap |
+|--------|-----|------|-----|
+| τ=0.1 latent PSNR | 25.8 | 24.4 | 1.4 |
+| τ=0.5 latent PSNR | 30.8 | 30.4 | 0.4 |
+| τ=0.9 latent PSNR | 30.1 | 30.1 | 0.0 |
+| τ=0.5 pixel PSNR | 33.7 | 32.7 | 1.0 |
+| τ=0.5 LPIPS | 0.055 | 0.073 | +0.017 |
+
+Shortcut gap: 0.4 dB at τ=0.5 (latent). All step sizes d=1..64 produce comparable quality.
+
+### Phase 2 Code Fixes (2026-03-31)
+
+Before starting Phase 2 training, fixed 10 issues (commit 30d3557):
+- **P1:** PolicyHead changed to vectorized binary (8 independent Bernoulli, was 128-class categorical)
+- **P2:** Step_size sampled during Phase 2 to preserve shortcut forcing
+- **Q1:** Checkpoint resume support (--resume flag)
+- **Q2:** NaN/Inf detection with per-component logging
+- **Q4:** Per-component gradient norm logging
+- **Q5:** Missing data metrics tracking
+- Plus 4 smaller fixes (Q6, Q8, Q10, P3, P4)
+
 ### Training Status (2026-03-31)
 
-- **Small model (36M):** Step 27k, running on gpu-long QOS
-  - Single-step τ=0.9: 24.5 dB (d=1), 24.7 dB (d=16)
-  - Shortcut gap: -0.2 dB (d16 matches d1)
-  - Bootstrap: 57% of steps nonzero
-  - Throughput: 2.3-3.7 batch/s with dynamic batch slicing
-- **Medium model (114M):** Step 22k, backed up
-  - Single-step τ=0.9: 25.9 dB (identical across all d)
-  - Higher peak quality but τ=0.1 unstable at large d
-- **Tokenizer:** Broken decode (NaN), needs retraining or compat fix
+- **Phase 1 dynamics (small, 36M):** DONE. Step 34.4k. Checkpoint saved as `dynamics_small_step34k_phase1_final.pt`.
+- **Phase 1 dynamics (medium, 114M):** Backed up at step 22k. Available if needed.
+- **Tokenizer (medium, 53M):** Working via legacy shim. Checkpoint: `transformer_tokenizer_latest.pt`.
+- **Phase 2 agent finetuning:** Code reviewed and fixed. Ready to start.
 
 ### Next Steps
-1. Fix tokenizer compat or retrain tokenizer with unified attention
-2. Run pixel PSNR + LPIPS eval once tokenizer decode works
-3. Continue small model to 50k steps (~1.3 days)
-4. Scale findings to medium model
-5. Agent finetuning (Phase 2) once dynamics + tokenizer are both working
+1. Run Phase 2 preflight test
+2. Start Phase 2 agent finetuning (small model)
+3. Validate BC accuracy + reward prediction quality
+4. Phase 3 imagination training once Phase 2 converges
 
 ---
