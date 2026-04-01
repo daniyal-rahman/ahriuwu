@@ -161,12 +161,6 @@ def parse_args():
         help="Use gradient checkpointing for memory efficiency (default: enabled)",
     )
     parser.add_argument(
-        "--resume",
-        type=str,
-        default=None,
-        help="Path to Phase 2 checkpoint to resume from",
-    )
-    parser.add_argument(
         "--no-compile",
         action="store_true",
         help="Disable torch.compile",
