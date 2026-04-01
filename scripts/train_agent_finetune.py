@@ -160,11 +160,6 @@ def parse_args():
         default=True,
         help="Use gradient checkpointing for memory efficiency (default: enabled)",
     )
-    parser.add_argument(
-        "--no-compile",
-        action="store_true",
-        help="Disable torch.compile",
-    )
     parser.set_defaults(num_workers=0)
     add_wandb_args(parser)
     return parser.parse_args()
