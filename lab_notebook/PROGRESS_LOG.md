@@ -163,10 +163,34 @@ Before starting Phase 2 training, fixed 10 issues (commit 30d3557):
 - **Tokenizer (medium, 53M):** Working via legacy shim. Checkpoint: `transformer_tokenizer_latest.pt`.
 - **Phase 2 agent finetuning:** Code reviewed and fixed. Ready to start.
 
+### OCR-Based Action Labels DEPRECATED (2026-04-01)
+
+The Phase 2 training was using OCR-detected action labels from YouTube replay recordings
+(keylog_extractor.py detecting ability cooldowns, health bars, gold popups from the HUD).
+This had severe limitations:
+- Only 67/1581 videos had features (4.2%)
+- Ability activation rate <0.5% of frames
+- Gold events on 1.04% of frames
+- Model learned trivial all-zero prediction (99.9% accuracy = meaningless)
+
+**Decision:** Deprecate OCR-based features. Move forward with replay file (rofl) data instead.
+17 replays have screen recordings (replay.avi) + decoded movement/action packets.
+The rofl pipeline provides ground-truth action data from the game engine, not visual detection.
+
+**Changes:**
+- Renamed `processed/` → `processed_DEPRECATED_ocr_features/`
+- Removed OCR code: keylog_extractor.py, feature_extraction_pipeline.py, ocr/ module
+- Removed dependent scripts: extract_features_v2.py, extract_ocr_states.py, etc.
+- Replay data pipeline (decode_replay_movement.py, process_replays.py) retained
+
+**Data status:**
+- 1581 YouTube videos → latents (for Phase 1 dynamics, unsupervised)
+- 17 replay files → replay.avi + frame_timestamps.json + metadata.json (for Phase 2)
+- Replay action labels need to be extracted and aligned with video frames
+
 ### Next Steps
-1. Run Phase 2 preflight test
-2. Start Phase 2 agent finetuning (small model)
-3. Validate BC accuracy + reward prediction quality
-4. Phase 3 imagination training once Phase 2 converges
+1. Build replay→latent→features pipeline (extract frames from replay.avi, tokenize, align with decoded actions)
+2. Restart Phase 2 with replay-based action labels
+3. Phase 3 imagination training once Phase 2 converges
 
 ---

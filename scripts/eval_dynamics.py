@@ -155,7 +155,7 @@ def filter_dataset_indices(
         elif filter_type == "fights":
             if ocr_states is None or len(ocr_states) == 0:
                 print("WARNING: No OCR states loaded, cannot filter for fights")
-                print("Run: python scripts/extract_ocr_states.py first")
+                print("OCR states deprecated - use replay data instead")
                 return list(range(len(dataset)))
 
             # Check if this sequence overlaps with a known fight
