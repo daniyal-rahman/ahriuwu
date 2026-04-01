@@ -156,9 +156,9 @@ def parse_args():
     )
     parser.add_argument(
         "--gradient-checkpointing",
-        action="store_true",
-        default=True,
-        help="Use gradient checkpointing for memory efficiency (default: enabled)",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Use gradient checkpointing (default: disabled, causes NaN with agent tokens + autocast)",
     )
     parser.set_defaults(num_workers=0)
     add_wandb_args(parser)
