@@ -33,6 +33,11 @@ import socket, struct, subprocess, sys, threading, time, traceback
 import urllib.request, urllib.error, ssl
 from pynput.keyboard import Controller as KbController
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 # ═══════════════════════════════════════════════════════════════
@@ -76,6 +81,14 @@ ALARM_MIN_REC_FPS  = 25    # effective recording fps
 ALARM_MIN_MEM_HZ   = 40    # mem thread Hz
 MAX_MEM_GAP        = 0.1   # 100ms — for label matching
 MAX_CAM_GAP        = 0.1
+
+# ── Core allocation (6-core i5-8600K) ──
+# Pass 1 (scrape at 2x): League uses ~2 cores + Python threads ~0.5 → 3 cores
+# Post workers: parallelized resize, 2 cores
+# Core 5: buffer for overflow
+PASS1_CORES = [0, 1, 2, 5]    # League pinned here during pass1; core 5 is buffer
+POST_CORES  = [3, 4]          # Post workers pinned here (runs during pass 1)
+ALL_CORES   = [0, 1, 2, 3, 4, 5]  # pass 2 recording uses everything
 
 _ctx = ssl.create_default_context()
 _ctx.check_hostname = False; _ctx.verify_mode = ssl.CERT_NONE
@@ -295,6 +308,17 @@ def kill_game():
     os.system('taskkill /F /IM "League of Legends.exe" >nul 2>&1')
     time.sleep(3)
 
+def pin_league(cores):
+    """Set League process CPU affinity. No-op if psutil missing or process not found."""
+    if psutil is None: return
+    pid = find_league_pid()
+    if not pid: return
+    try:
+        psutil.Process(pid).cpu_affinity(cores)
+        print(f"  Pinned League to cores {cores}", flush=True)
+    except Exception as e:
+        print(f"  Could not pin League: {e}", flush=True)
+
 def launch_replay(game_id):
     print(f"  Launching replay {game_id}...", flush=True)
     try:
@@ -426,6 +450,9 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
         m.close(); kill_game(); return [], [], {}
     print(f"  Heroes: {list(hero_ptrs.keys())}", flush=True)
 
+    # Pin League to pass1 cores — leave [3,4] free for concurrent post workers
+    pin_league(PASS1_CORES)
+
     # Lock camera, play at 2x
     replay_post("/replay/render", {"interfaceAll": False, "selectionName": "Garen"})
     time.sleep(0.5)
@@ -516,6 +543,9 @@ def pass2_record(game_id, cam_key, duration, staging_dir):
     time.sleep(1)
     print(f"  Camera locked (key={cam_key})", flush=True)
 
+    # Pass 2 gets all cores — PNG encoder saturates everything
+    pin_league(ALL_CORES)
+
     # Unpause to 2x
     replay_post("/replay/playback", {"speed": 2.0})
     time.sleep(0.5)
@@ -582,11 +612,34 @@ def pass2_record(game_id, cam_key, duration, staging_dir):
 # ═══════════════════════════════════════════════════════════════
 # Post-Processing (runs in worker process)
 # ═══════════════════════════════════════════════════════════════
+def _resize_worker_init():
+    """Pool worker initializer — pin to POST_CORES, cap cv2 at 1 thread each."""
+    import cv2
+    cv2.setNumThreads(1)
+    if psutil is not None:
+        try:
+            psutil.Process().cpu_affinity(POST_CORES)
+        except Exception:
+            pass
+
+def _resize_one(args):
+    """Worker function: read PNG, resize to FRAME_SZ², write to dst. Returns (idx, ok)."""
+    import cv2
+    src, dst = args
+    img = cv2.imread(src)
+    if img is None:
+        try:
+            shutil.copy2(src, dst)
+            return (dst, False)  # fallback copy
+        except Exception:
+            return (dst, False)
+    out = cv2.resize(img, (FRAME_SZ, FRAME_SZ), interpolation=cv2.INTER_AREA)
+    cv2.imwrite(dst, out)
+    return (dst, True)
+
+
 def post_process(match_id, mem_data, cam_data, game_info, staging_dir):
     """Resize frames, build labels, clean up. Returns stats dict."""
-    import cv2
-    cv2.setNumThreads(2)
-
     post_start = time.time()
     game_dir = os.path.join(OUTPUT_BASE, match_id)
     frames_dir = os.path.join(game_dir, "frames")
@@ -598,19 +651,21 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir):
     if n_frames == 0:
         print("  ERROR: no frames", flush=True); return None
 
-    # Resize 720p → 352×352
-    print(f"  Resizing to {FRAME_SZ}x{FRAME_SZ}...", flush=True)
+    # ── Resize 720p → 352×352 (parallel, 2 workers pinned to POST_CORES) ──
+    print(f"  Resizing to {FRAME_SZ}x{FRAME_SZ} with 2 workers on cores {POST_CORES}...", flush=True)
+    jobs = [(p, os.path.join(frames_dir, f"{i:06d}.png")) for i, p in enumerate(pngs)]
     n_resize_fail = 0
-    for i, p in enumerate(pngs):
-        img = cv2.imread(p)
-        if img is None:
-            n_resize_fail += 1
-            shutil.copy2(p, os.path.join(frames_dir, f"{i:06d}.png"))
-            continue
-        out = cv2.resize(img, (FRAME_SZ, FRAME_SZ), interpolation=cv2.INTER_AREA)
-        cv2.imwrite(os.path.join(frames_dir, f"{i:06d}.png"), out)
-        if (i + 1) % 5000 == 0:
-            print(f"    {i+1}/{n_frames}", flush=True)
+    t_resize_start = time.time()
+    with mp.Pool(2, initializer=_resize_worker_init) as pool:
+        done = 0
+        for dst, ok in pool.imap_unordered(_resize_one, jobs, chunksize=50):
+            done += 1
+            if not ok:
+                n_resize_fail += 1
+            if done % 5000 == 0:
+                print(f"    {done}/{n_frames}", flush=True)
+    resize_wall = time.time() - t_resize_start
+    print(f"  Resize complete in {resize_wall:.1f}s ({n_frames/resize_wall:.1f} fps)", flush=True)
     if n_resize_fail > 0:
         print(f"  WARNING: {n_resize_fail} frames failed imread — raw copies used", flush=True)
 
