@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Decode movement/waypoint data from League of Legends replay.
-Supports patch 16.3 (netid=762) and 16.4 (netid=437).
+Supports patch 16.3 (netid=762), 16.4 (netid=437), and 16.7 (netid=487).
 Uses Unicorn Engine to emulate the game's deserializer functions.
 """
 import struct
@@ -55,6 +55,23 @@ PATCH_16_4 = {
     'MOVEMENT_NETID': 437,
 }
 
+PATCH_16_7 = {
+    'TEXT_RVA':    0x1000,
+    'RDATA_RVA':   0x18fd000,
+    'DATA_RVA':    0x1d21000,
+    'SKIP_RVA':    0x118b120,   # validation check called at start of deserializer
+    'MALLOC_RVA':  0x10fa120,
+    'FREE_RVA':    0x10fa150,   # jmp trampoline to 0x10fe1b0
+    'DESER_RVA':   0xf53050,    # pid=487 movement deserializer (vtable entry[1])
+    'SUB_INIT_RVA': None,       # 16.7: no separate sub-init needed
+    'SUB_INIT_OFF': None,
+    'MAIN_VTABLE': 0x19fc1c8,   # pid=487 vtable
+    'MUTEXES':     [],
+    'MOVEMENT_NETID': 487,
+    'CONSTRUCTOR':  0xe050a0,    # movement object constructor
+    'STRUCT_SIZE':  0x28,        # smaller struct in 16.7
+}
+
 def align_down(a, s=0x1000): return a & ~(s-1)
 def align_up(s, p=0x1000): return (s+p-1) & ~(p-1)
 
@@ -67,7 +84,13 @@ class MovementDecoder:
         self.text_raw = open(text_path, 'rb').read()
         self.rdata_raw = open(rdata_path, 'rb').read()
         self.data_raw = open(data_path, 'rb').read()
-        self.addrs = PATCH_16_4 if patch == '16.4' else PATCH_16_3
+        self.patch = patch
+        if patch == '16.7':
+            self.addrs = PATCH_16_7
+        elif patch == '16.4':
+            self.addrs = PATCH_16_4
+        else:
+            self.addrs = PATCH_16_3
         self._setup_emu()
         self._init_struct()  # one-time init, saves sub-object state for reuse
 
@@ -133,9 +156,23 @@ class MovementDecoder:
     def _init_struct(self):
         """Initialize the packet struct before deserialization."""
         a = self.addrs
-        self.mu.mem_write(HEAP_BASE, b'\x00' * 0x400)
+        struct_size = a.get('STRUCT_SIZE', 0x400)
+        self.mu.mem_write(HEAP_BASE, b'\x00' * max(struct_size, 0x400))
 
-        if a['SUB_INIT_RVA'] is not None:
+        if a.get('CONSTRUCTOR') is not None:
+            # 16.7+: run the full constructor
+            self.mu.reg_write(UC_X86_REG_RCX, HEAP_BASE)
+            self.mu.reg_write(UC_X86_REG_RSP, STACK_BASE + STACK_SIZE - 0x200)
+            rsp = self.mu.reg_read(UC_X86_REG_RSP) - 8
+            self.mu.mem_write(rsp, struct.pack('<Q', STOP_ADDR))
+            self.mu.reg_write(UC_X86_REG_RSP, rsp)
+            try:
+                self.mu.emu_start(BASE_ADDR + a['CONSTRUCTOR'], STOP_ADDR, timeout=5000000)
+            except:
+                pass
+            # Save constructor state for reuse
+            self._ctor_data = bytes(self.mu.mem_read(HEAP_BASE, struct_size))
+        elif a['SUB_INIT_RVA'] is not None:
             sub_off = a.get('SUB_INIT_OFF', 0x10)  # 16.3=0x10, 16.4=0x18
             self.mu.reg_write(UC_X86_REG_RCX, HEAP_BASE + sub_off)
             self.mu.reg_write(UC_X86_REG_RSP, STACK_BASE + STACK_SIZE - 0x200)
@@ -170,11 +207,16 @@ class MovementDecoder:
         self._alloc_regions = []
         self.mu.mem_write(ALLOC_BASE, b'\x00' * min(0x8000, ALLOC_SIZE))
 
-        # Reset struct but preserve sub-init state
-        self.mu.mem_write(HEAP_BASE, b'\x00' * 0x100)
-        self.mu.mem_write(HEAP_BASE, struct.pack('<Q', BASE_ADDR + self.addrs['MAIN_VTABLE']))
-        if hasattr(self, '_sub_init_data'):
-            self.mu.mem_write(HEAP_BASE + self._sub_init_off, self._sub_init_data)
+        # Reset struct
+        struct_size = self.addrs.get('STRUCT_SIZE', 0x100)
+        self.mu.mem_write(HEAP_BASE, b'\x00' * max(struct_size, 0x100))
+        if hasattr(self, '_ctor_data'):
+            # 16.7+: restore full constructor state
+            self.mu.mem_write(HEAP_BASE, self._ctor_data)
+        else:
+            self.mu.mem_write(HEAP_BASE, struct.pack('<Q', BASE_ADDR + self.addrs['MAIN_VTABLE']))
+            if hasattr(self, '_sub_init_data'):
+                self.mu.mem_write(HEAP_BASE + self._sub_init_off, self._sub_init_data)
 
         pay_addr = SCRATCH_BASE + 0x100
         self.mu.mem_write(pay_addr, payload + b'\x00' * 128)
@@ -215,6 +257,7 @@ class MovementDecoder:
         """
         result = {}
         patch_16_4 = self.addrs.get('SUB_INIT_OFF') == 0x18
+        patch_16_7 = self.patch == '16.7'
 
         # Helper to get last 4-byte write at an offset from a write dict
         def _get_u32(writes_by_off, offset):
@@ -248,7 +291,89 @@ class MovementDecoder:
                 if 0 <= rel < main_sz + 64:
                     buf_writes[rel].extend(writes)
 
-            if patch_16_4:
+            if patch_16_7:
+                # 16.7: packed binary buffer (52 bytes), byte-by-byte writes.
+                # Reconstruct full buffer from individual byte writes.
+                buf = bytearray(max(main_sz, 64))
+                for rel_off, writes in buf_writes.items():
+                    if 0 <= rel_off < len(buf):
+                        for sz, val in writes:
+                            for byte_i in range(sz):
+                                if rel_off + byte_i < len(buf):
+                                    buf[rel_off + byte_i] = (val >> (byte_i * 8)) & 0xFF
+
+                # 16.7 buffer layout (52 bytes):
+                # +0x00: u16 flags (0x01C8=456 normal, 0x0056=86 spawn)
+                # +0x04: u32 entity_id
+                # +0x08: u32 packed position: x=bits[0:13], y=bits[14:27], flags=bits[28:31]
+                #        map_coord = grid_val * (14914.0 / 16384)
+                #        pos_flags: 0=normal movement, 4=spawn/init position
+                # +0x0C: u32 destination/waypoint data (same 14-bit packing)
+                # +0x10: u32 entity_id (source)
+                # +0x14: u32 entity_id (target)
+                # +0x18: f32 game_time
+                # +0x1C: u32 waypoint/dest data (14-bit packed) or f32 speed (spawn packets)
+                # +0x20: u32 waypoint_count / flags
+                # +0x24: u32 dest entity
+                # +0x28: 4B destination data (variant, same 14-bit packing)
+                # +0x2C: u32 flags (0xFFFFFFFF = sentinel)
+                # +0x30: u32 sequence/type
+                MAP_SIZE = 14914.0
+                GRID_SCALE = MAP_SIZE / 16384.0
+
+                result['entity_id'] = struct.unpack_from('<I', buf, 0x04)[0]
+                result['game_time'] = struct.unpack_from('<f', buf, 0x18)[0]
+                result['flags'] = struct.unpack_from('<H', buf, 0x00)[0]
+
+                # Position data at +0x08: 14-bit packed u32
+                # x = u32 & 0x3FFF, y = (u32 >> 14) & 0x3FFF, flags = (u32 >> 28) & 0xF
+                pos_u32 = struct.unpack_from('<I', buf, 0x08)[0]
+                if pos_u32 != 0:
+                    result['current_x'] = (pos_u32 & 0x3FFF) * GRID_SCALE
+                    result['current_y'] = ((pos_u32 >> 14) & 0x3FFF) * GRID_SCALE
+                    result['pos_flags'] = (pos_u32 >> 28) & 0xF
+                    result['has_destination'] = True
+                else:
+                    result['current_x'] = None
+                    result['current_y'] = None
+                    result['pos_flags'] = None
+                    result['has_destination'] = False
+
+                # Destination at +0x0C (same 14-bit packing)
+                dest_u32 = struct.unpack_from('<I', buf, 0x0C)[0]
+                result['dest_raw'] = dest_u32
+                if dest_u32 != 0 and dest_u32 != 0xFFFFFFFF:
+                    result['dest_x'] = (dest_u32 & 0x3FFF) * GRID_SCALE
+                    result['dest_y'] = ((dest_u32 >> 14) & 0x3FFF) * GRID_SCALE
+                else:
+                    result['dest_x'] = None
+                    result['dest_y'] = None
+
+                # Destination variant at +0x28 (same 14-bit packing)
+                dest2_u32 = struct.unpack_from('<I', buf, 0x28)[0]
+                result['dest2_raw'] = dest2_u32
+
+                # +0x1C: speed (f32) for spawn packets, or waypoint data for normal
+                if result.get('pos_flags') == 4:
+                    result['speed'] = struct.unpack_from('<f', buf, 0x1C)[0]
+                else:
+                    wp_u32 = struct.unpack_from('<I', buf, 0x1C)[0]
+                    if wp_u32 != 0:
+                        result['waypoint_x'] = (wp_u32 & 0x3FFF) * GRID_SCALE
+                        result['waypoint_y'] = ((wp_u32 >> 14) & 0x3FFF) * GRID_SCALE
+                    result['speed'] = None
+
+                result['waypoint_count'] = struct.unpack_from('<I', buf, 0x20)[0]
+                result['sequence'] = struct.unpack_from('<I', buf, 0x30)[0]
+
+                # Raw buffer for further analysis
+                result['raw_buffer'] = buf[:main_sz].hex()
+                result['current_z'] = None
+                result['dest_z'] = None
+                result['champion_name'] = None
+                return result
+
+            elif patch_16_4:
                 # 16.4 layout
                 result['entity_id'] = _get_u32(buf_writes, 0x094)
                 result['current_x'] = _get_f32(heap_writes, 0x10)
@@ -297,7 +422,15 @@ class MovementDecoder:
                 result['champion_name'] = name
         else:
             # Small packet (no alloc) — position only
-            if patch_16_4:
+            if patch_16_7:
+                # 16.7: small packet, HEAP-only data
+                result['has_destination'] = False
+                result['current_x'] = None
+                result['current_y'] = None
+                result['entity_id'] = None
+                result['game_time'] = None
+                return result
+            elif patch_16_4:
                 # 16.4: position in HEAP struct +0x10 (X) and +0x14 (Y)
                 result['current_x'] = _get_f32(heap_writes, 0x10)
                 result['current_y'] = _get_f32(heap_writes, 0x14)
@@ -362,12 +495,194 @@ class MovementDecoder:
                 print(f"    {region} +0x{real_off:04x} [{sz}B] = 0x{val:0{sz*2}x}")
 
 
-BLOCK_MARKERS = {0x91, 0xf1, 0xb1, 0x31, 0x11}
+# --- Block parser v2 (variable-header, self-healing) ---
+# Block format: contiguous blocks with NO marker bytes. ALL byte values are valid
+# block types. Header size is determined by bits 5-6 of byte[0]:
+#   b6b5=00: 9 bytes (TYPE + CH + SIZE + PID(2) + PARAM(4))
+#   b6b5=01: 6 bytes (TYPE + CH + SIZE + PID(2) + FLAG(1))
+#   b6b5=10: 7 bytes (TYPE + CH + SIZE + PID(2) + FLAGS(2))
+#   b6b5=11: 4 bytes (TYPE + CH + SIZE + FLAG(1))
+# Channel byte (byte[1]) determines block category:
+#   0x00: stat/property data (primary channel, well-chained)
+#   0x21: position/movement data (cleartext coordinates in payloads)
+#   0x22: additional game data
+# PID dispatch table has 820 entries, max PID = 1164.
+VALID_CHANNELS = {0x00, 0x21, 0x22}
+MAX_VALID_PID = 1164
+
+def _get_block_header_size(type_byte):
+    """Return block header size based on bits 5-6 of the type byte."""
+    return {0: 9, 1: 6, 2: 7, 3: 4}[(type_byte >> 5) & 3]
+
+
+def _parse_frame_blocks(frame_data, start=15, max_bad_streak=5):
+    """Parse blocks from a decompressed ROFL frame using self-healing resync.
+
+    Walks contiguous variable-header blocks. When a streak of invalid blocks
+    (channel != 0x00 or PID out of range) is hit, scans forward up to 500 bytes
+    looking for a valid resynchronization point (two consecutive blocks with
+    channel=0x00).
+
+    Skips 0xfa padding regions that separate sub-sections in large frames.
+
+    Returns (blocks, resync_count).
+    """
+    fd = frame_data
+    pos = start
+    blocks = []
+    bad_streak = 0
+    resyncs = 0
+
+    while pos + 4 <= len(fd):
+        # Skip 0xfa padding regions
+        if fd[pos] == 0xfa and pos + 1 < len(fd) and fd[pos + 1] == 0xfa:
+            while pos < len(fd) and fd[pos] == 0xfa:
+                pos += 1
+            continue
+
+        tb = fd[pos]
+        b6b5 = (tb >> 5) & 3
+        hdr = _get_block_header_size(tb)
+        ch = fd[pos + 1] if pos + 1 < len(fd) else 0xFF
+
+        if pos + hdr > len(fd):
+            break
+        size = fd[pos + 2]
+        end = pos + hdr + size
+        if end > len(fd):
+            break
+
+        is_valid = (ch == 0x00)
+        if b6b5 in (0, 1, 2) and ch == 0x00:
+            pid = struct.unpack_from('<H', fd, pos + 3)[0]
+            if pid > MAX_VALID_PID:
+                is_valid = False
+
+        if is_valid:
+            bad_streak = 0
+            pid = None
+            if b6b5 in (0, 1, 2):
+                pid = struct.unpack_from('<H', fd, pos + 3)[0]
+            blocks.append({
+                'pos': pos, 'type': tb, 'b6b5': b6b5,
+                'hdr': hdr, 'sz': size, 'pid': pid,
+                'payload': fd[pos + hdr:end],
+            })
+            pos = end
+        else:
+            bad_streak += 1
+            if bad_streak >= max_bad_streak:
+                # Resync: scan forward for two consecutive valid blocks
+                found = False
+                for scan in range(pos + 1, min(pos + 500, len(fd) - 4)):
+                    if fd[scan + 1] == 0x00:
+                        tb2 = fd[scan]
+                        hdr2 = _get_block_header_size(tb2)
+                        if scan + hdr2 <= len(fd):
+                            sz2 = fd[scan + 2]
+                            end2 = scan + hdr2 + sz2
+                            if end2 <= len(fd) and end2 + 1 < len(fd) and fd[end2 + 1] == 0x00:
+                                pos = scan
+                                bad_streak = 0
+                                resyncs += 1
+                                found = True
+                                break
+                if not found:
+                    pos += 1
+                    bad_streak = 0
+            else:
+                pos = end
+
+    return blocks, resyncs
+
+
+def _parse_frame_blocks_multichannel(frame_data, start=15, channels=None):
+    """Parse blocks accepting multiple channel values.
+
+    Two-pass approach:
+    1. Parse ch=0x00 blocks with self-healing (high confidence)
+    2. Scan gaps for blocks with other valid channels (ch=0x21, 0x22)
+
+    Returns (all_blocks, resync_count).
+    """
+    if channels is None:
+        channels = VALID_CHANNELS
+
+    # Pass 1: ch=0x00 blocks (self-healing)
+    ch0_blocks, resyncs = _parse_frame_blocks(frame_data, start)
+
+    if channels == {0x00}:
+        return ch0_blocks, resyncs
+
+    # Build coverage set from ch=0x00 blocks
+    fd = frame_data
+    covered_ends = []
+    for b in ch0_blocks:
+        covered_ends.append((b['pos'], b['pos'] + b['hdr'] + b['sz']))
+
+    # Pass 2: scan gaps for other-channel blocks
+    other_channels = channels - {0x00}
+    gap_blocks = []
+    gap_regions = []
+
+    prev_end = start
+    for bstart, bend in covered_ends:
+        if bstart > prev_end:
+            gap_regions.append((prev_end, bstart))
+        prev_end = bend
+    if prev_end < len(fd):
+        gap_regions.append((prev_end, len(fd)))
+
+    for gap_start, gap_end in gap_regions:
+        pos = gap_start
+        while pos + 4 <= gap_end:
+            if fd[pos] == 0xfa and pos + 1 < len(fd) and fd[pos + 1] == 0xfa:
+                while pos < len(fd) and fd[pos] == 0xfa:
+                    pos += 1
+                continue
+
+            tb = fd[pos]
+            b6b5 = (tb >> 5) & 3
+            hdr = _get_block_header_size(tb)
+            ch = fd[pos + 1] if pos + 1 < len(fd) else 0xFF
+
+            if pos + hdr > len(fd):
+                pos += 1
+                continue
+            size = fd[pos + 2]
+            end = pos + hdr + size
+            if end > len(fd):
+                pos += 1
+                continue
+
+            if ch in other_channels:
+                pid = None
+                if b6b5 in (0, 1, 2) and pos + 5 <= len(fd):
+                    pid = struct.unpack_from('<H', fd, pos + 3)[0]
+                if pid is None or pid <= MAX_VALID_PID:
+                    gap_blocks.append({
+                        'pos': pos, 'type': tb, 'b6b5': b6b5,
+                        'hdr': hdr, 'sz': size, 'pid': pid,
+                        'ch': ch, 'payload': fd[pos + hdr:end],
+                    })
+                    pos = end
+                    continue
+            pos += 1
+
+    # Add channel info to ch=0x00 blocks and merge
+    for b in ch0_blocks:
+        b['ch'] = 0x00
+    all_blocks = ch0_blocks + gap_blocks
+    all_blocks.sort(key=lambda b: b['pos'])
+    return all_blocks, resyncs
+
 
 def parse_rofl_blocks(rofl_path, netid_filter=None, param_filter=None):
     """Parse blocks from a ROFL2 replay file.
-    When netid_filter is provided, uses PID-targeted byte search for complete
-    recall. Otherwise falls back to sequential chain scanning.
+
+    Uses the v2 variable-header self-healing parser. Reads ROFL container
+    framing (per-frame metadata) to correctly locate zstd compressed data.
+    When netid_filter/param_filter are given, filters the parsed blocks.
     """
     with open(rofl_path, 'rb') as f:
         data = f.read()
@@ -391,74 +706,27 @@ def parse_rofl_blocks(rofl_path, netid_filter=None, param_filter=None):
 
     blocks = []
     for frame_data in frames:
-        blocks.extend(_scan_frame_blocks(frame_data, netid_filter, param_filter))
+        frame_blocks, _ = _parse_frame_blocks(frame_data)
+        for blk in frame_blocks:
+            pid = blk['pid']
+            # For b6b5=00 blocks, extract param (4 bytes at offset +5)
+            if blk['b6b5'] == 0 and blk['hdr'] == 9 and blk['pos'] + 9 <= len(frame_data):
+                param = struct.unpack_from('<I', frame_data, blk['pos'] + 5)[0]
+            else:
+                param = None
 
-    return blocks
+            if netid_filter is not None and pid != netid_filter:
+                continue
+            if param_filter is not None and param not in param_filter:
+                continue
 
-
-def _scan_frame_blocks(frame_data, netid_filter=None, param_filter=None):
-    """Scan a decompressed frame for blocks.
-
-    Block format: MARKER(1) + CHANNEL(1) + SIZE(1) + PID(2) + PARAM(4) + PAYLOAD(SIZE)
-    MARKER is in BLOCK_MARKERS. CHANNEL (byte2) can be any value (0x00, 0x21, 0x22, etc.).
-    Validate by checking that MARKER+9+SIZE lands on another MARKER byte or near frame end.
-
-    When netid_filter is provided, uses PID-byte targeted search to avoid missing
-    blocks due to sequential chain derailment from false-positive matches.
-    """
-    blocks = []
-    fd = frame_data
-
-    if netid_filter is not None:
-        # Targeted search: find all occurrences of PID bytes in the frame,
-        # then validate block structure around each occurrence.
-        # PID is at offset +3 in the 9-byte header, so search for PID bytes
-        # and check if 3 bytes earlier is a valid marker.
-        pid_bytes = struct.pack('<H', netid_filter)
-        pos = 3
-        while pos < len(fd) - 5:
-            idx = fd.find(pid_bytes, pos)
-            if idx < 0:
-                break
-            block_start = idx - 3
-            if block_start >= 0 and fd[block_start] in BLOCK_MARKERS:
-                size = fd[block_start + 2]
-                param = struct.unpack_from('<I', fd, block_start + 5)[0]
-                end = block_start + 9 + size
-                if end <= len(fd):
-                    if param_filter is None or param in param_filter:
-                        valid = (end >= len(fd) - 9 or
-                                 (end < len(fd) and fd[end] in BLOCK_MARKERS))
-                        if valid:
-                            blocks.append({
-                                'packet_id': netid_filter, 'param': param,
-                                'payload': fd[block_start + 9:end],
-                                'marker': fd[block_start],
-                                'channel': fd[block_start + 1],
-                            })
-            pos = idx + 1
-    else:
-        # Sequential chain scan for unfiltered queries.
-        pos = 0
-        while pos + 9 <= len(fd):
-            if fd[pos] in BLOCK_MARKERS:
-                size = fd[pos + 2]
-                pid = struct.unpack_from('<H', fd, pos + 3)[0]
-                param = struct.unpack_from('<I', fd, pos + 5)[0]
-                end = pos + 9 + size
-                if end <= len(fd):
-                    valid = (end >= len(fd) - 9 or
-                             (end < len(fd) and fd[end] in BLOCK_MARKERS))
-                    if valid:
-                        if param_filter is None or param in param_filter:
-                            blocks.append({
-                                'packet_id': pid, 'param': param,
-                                'payload': fd[pos + 9:end], 'marker': fd[pos],
-                                'channel': fd[pos + 1],
-                            })
-                        pos = end
-                        continue
-            pos += 1
+            blocks.append({
+                'packet_id': pid,
+                'param': param,
+                'payload': blk['payload'],
+                'marker': blk['type'],  # compat: old code called this 'marker'
+                'channel': 0x00,  # all valid blocks have ch=0x00
+            })
 
     return blocks
 
@@ -522,15 +790,15 @@ def analyze_pids(replay_path):
 def main():
     import sys
 
-    replay_path = sys.argv[1] if len(sys.argv) > 1 else 'data/replays/NA1-5496350713.rofl'
-    patch = sys.argv[2] if len(sys.argv) > 2 else '16.4'
+    replay_path = sys.argv[1] if len(sys.argv) > 1 else 'data/replays/NA1-5528508560.rofl'
+    patch = sys.argv[2] if len(sys.argv) > 2 else '16.7'
 
     # If --analyze flag, just do PID analysis
     if '--analyze' in sys.argv:
         analyze_pids(replay_path)
         return
 
-    addrs = PATCH_16_4 if patch == '16.4' else PATCH_16_3
+    addrs = PATCH_16_7 if patch == '16.7' else (PATCH_16_4 if patch == '16.4' else PATCH_16_3)
     movement_netid = int(sys.argv[3]) if len(sys.argv) > 3 else addrs['MOVEMENT_NETID']
 
     print(f"Replay: {replay_path}")
@@ -555,8 +823,18 @@ def main():
     print(f"Per entity: {' '.join(f'{e & 0xFF:02x}:{c}' for e, c in sorted(ent_counts.items()))}")
 
     # Dump first few blocks raw to understand structure
-    print(f"\nInitializing decoder (patch {patch})...")
-    decoder = MovementDecoder(patch=patch)
+    # Select PE dump directory based on patch
+    pe_dir = f'/tmp/pe_dump_{patch}' if patch >= '16.7' else '/tmp/pe_dump'
+    import os
+    if not os.path.exists(os.path.join(pe_dir, 'text.bin')):
+        pe_dir = '/tmp/pe_dump'  # fallback
+    print(f"\nInitializing decoder (patch {patch}, PE dumps: {pe_dir})...")
+    decoder = MovementDecoder(
+        text_path=os.path.join(pe_dir, 'text.bin'),
+        rdata_path=os.path.join(pe_dir, 'rdata.bin'),
+        data_path=os.path.join(pe_dir, 'data.bin'),
+        patch=patch,
+    )
 
     print("\n--- Raw write dump for first 3 large blocks ---")
     large = [b for b in mov_blocks if len(b['payload']) > 50]

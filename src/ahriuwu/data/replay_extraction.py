@@ -57,16 +57,32 @@ FOV_H = 2 * math.atan(math.tan(FOV_V / 2) * SCREEN_W / SCREEN_H)
 TAN_H, TAN_V = math.tan(FOV_H / 2), math.tan(FOV_V / 2)
 COS_T, SIN_T = math.cos(TILT), math.sin(TILT)
 
-# ── Memory offsets (patch 26.7, module size 0x207C000) ──
-EXPECTED_MOD_SIZE = 0x207C000
+# ── Memory offsets (patch 16.8, module size 0x2097000) ──
+# 16.8 shifts from 16.7: RVAs +0x18240, hero fields 0x2858..0x30E8 +0x38,
+# hero fields 0x4CE8..0x55D8 +0x40. API-verified 2026-04-16.
+EXPECTED_MOD_SIZE = 0x2097000
 OFFSETS = {
-    "hero_array":     0x1DBEEE8,
-    "game_time":      0x1DCD1E0,
-    "position":       0x25C,
-    "champion_name":  0x4328,
-    "active_spell":   0x3120,
+    # base-relative RVAs
+    "hero_array":     0x1DD7128,
+    "game_time":      0x1DE5420,
+
+    # hero struct — inline fields
+    "position":       0x25C,     # unchanged (GameObject base)
+    "hp_current":     0x1080,    # f32 (unchanged)
+    "hp_max":         0x10A8,    # f32 (unchanged)
+    "gold_current":   0x2890,    # f32 (+0x38 from 0x2858)
+    "gold_total":     0x4D28,    # f32 (+0x40 from 0x4CE8)
+    "active_spell":   0x3158,    # ptr (+0x38 from 0x3120)
+    "champion_name":  0x4360,    # ASCII str (+0x38 from 0x4328)
+    "level":          0x4D50,    # u32 (+0x40 from 0x4D10)
+    "kills":          0x5468,    # u32 (+0x40 tentative — NOT in hero struct per stats_offset_research)
+    "assists":        0x54C8,    # u32 (+0x40 tentative — same caveat)
+
+    # ActiveSpellCast struct (unchanged)
     "spell_info":     0x008,
     "cast_target":    0x0DC,
+
+    # SpellInfo struct (unchanged)
     "spell_name_ptr": 0x28,
 }
 
@@ -295,11 +311,20 @@ def project(wx, wz, cx, cy, cz):
     return [px, py] if 0 <= px < SCREEN_W and 0 <= py < SCREEN_H else None
 
 def classify_spell(name):
+    """Classify a spell name into action type.
+    Order matters: BasicAttack must be checked before Q/W/E/R since
+    abilities like 'GarenQAttack' contain 'Attack'."""
     if not name: return "idle"
-    nl = name.lower()
-    if "attack" in nl: return "attack"
-    if "recall" in nl: return "recall"
-    return "ability"
+    if "BasicAttack" in name: return "attack"
+    if "Recall" in name: return "recall"
+    if name.startswith("Summoner"): return "summoner"
+    # Garen abilities: GarenQ, GarenQAttack, GarenW, GarenE, GarenR
+    if name.startswith("Garen"):
+        suffix = name[5:]
+        if suffix[:1] in ("Q", "W", "E", "R"):
+            return "ability"
+    # Generic ability detection for other champions
+    return "other"
 
 # ═══════════════════════════════════════════════════════════════
 # Pipeline Utilities
@@ -360,20 +385,34 @@ def _mem_loop(m, base, hero_ptrs, gt_rva, stop, results):
             hp = hinfo["ptr"]
             pos = m.vec3(hp + o["position"])
             if not pos: continue
-            entry = {"pos": [round(pos[0], 1), round(pos[2], 1)]}
-            if name == "Garen":
-                sp = m.u64(hp + o["active_spell"])
-                if sp and sp > 0x10000:
-                    si = m.u64(sp + o["spell_info"])
-                    if si and si > 0x10000:
-                        np_ = m.u64(si + o["spell_name_ptr"])
-                        if np_ and np_ > 0x10000:
-                            sn = m.string(np_)
-                            if sn and len(sn) > 2:
-                                entry["spell"] = sn
-                                ct = m.vec3(sp + o["cast_target"])
-                                if ct and abs(ct[0]) < 20000:
+            entry = {
+                "pos": [round(pos[0], 1), round(pos[2], 1)],
+                "hp":         round(m.f32(hp + o["hp_current"]) or 0, 1),
+                "hp_max":     round(m.f32(hp + o["hp_max"]) or 0, 1),
+                "gold":       round(m.f32(hp + o["gold_current"]) or 0, 1),
+                "gold_total": round(m.f32(hp + o["gold_total"]) or 0, 1),
+                "level":      m.u32(hp + o["level"]) or 0,
+                "kills":      m.u32(hp + o["kills"]) or 0,
+                "assists":    m.u32(hp + o["assists"]) or 0,
+            }
+            # Spell detection for ALL heroes (not just Garen)
+            sp = m.u64(hp + o["active_spell"])
+            if sp and sp > 0x10000:
+                si = m.u64(sp + o["spell_info"])
+                if si and si > 0x10000:
+                    np_ = m.u64(si + o["spell_name_ptr"])
+                    if np_ and np_ > 0x10000:
+                        sn = m.string(np_)
+                        if sn and len(sn) > 2:
+                            entry["spell"] = sn
+                            ct = m.vec3(sp + o["cast_target"])
+                            if ct:
+                                if abs(ct[0]) < 20000 and abs(ct[2]) < 20000:
                                     entry["cast_target"] = [round(ct[0], 1), round(ct[2], 1)]
+                                else:
+                                    # Self-cast / no valid target → use own position
+                                    entry["cast_target"] = [round(pos[0], 1), round(pos[2], 1)]
+                                    entry["self_cast"] = True
             heroes[name] = entry
         results.append({"wall": time.perf_counter(), "gt": round(gt, 3), "heroes": heroes})
         elapsed = time.perf_counter() - tick
@@ -734,20 +773,81 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir):
             p = hd.get("pos", [0, 0])
             sp = project(p[0], p[1], cx, cy, cz)
             if sp:
-                visible.append({"name": name, "screen": sp})
+                visible.append({
+                    "name": name,
+                    "screen": sp,
+                    "hp": hd.get("hp", 0),
+                    "hp_max": hd.get("hp_max", 0),
+                    "level": hd.get("level", 0),
+                })
 
         spell = garen.get("spell")
         cast_target = garen.get("cast_target")
         action_screen = project(cast_target[0], cast_target[1], cx, cy, cz) if cast_target else None
 
+        # Velocity / heading from position delta (0.5s ahead via future lookup)
+        # We'll patch these post-loop since we need the next frame's garen pos
         frames_out.append({
             "frame": fi, "gt": round(gt, 3),
+            "_garen_world": gp,  # temporary for velocity calc
+            "_cam": (cx, cy, cz),  # temporary for projection
             "label": {
                 "garen_screen": garen_screen,
+                "garen_world": gp,
+                "garen_stats": {
+                    "hp":       garen.get("hp", 0),
+                    "hp_max":   garen.get("hp_max", 0),
+                    "gold":     garen.get("gold", 0),
+                    "gold_total": garen.get("gold_total", 0),
+                    "level":    garen.get("level", 0),
+                    "kills":    garen.get("kills", 0),
+                    "assists":  garen.get("assists", 0),
+                },
                 "visible_heroes": visible,
                 "action": {"type": classify_spell(spell), "spell": spell, "screen": action_screen},
             },
         })
+
+    # ── Post-loop: compute velocity and heading from position deltas ──
+    # Look ahead ~10 frames (0.5s game time) to get a stable movement direction
+    LOOKAHEAD = 10
+    for fi in range(len(frames_out)):
+        fd = frames_out[fi]
+        if fd.get("label") is None:
+            continue
+        gp = fd.get("_garen_world")
+        if gp is None: continue
+        cam = fd.get("_cam")
+        # Find the next labeled frame ~LOOKAHEAD ahead
+        future_gp = None
+        for j in range(fi + 1, min(fi + LOOKAHEAD + 5, len(frames_out))):
+            fj = frames_out[j]
+            if fj.get("label") and fj.get("_garen_world") is not None:
+                if j - fi >= LOOKAHEAD:
+                    future_gp = fj["_garen_world"]
+                    break
+                elif future_gp is None:
+                    future_gp = fj["_garen_world"]
+        if future_gp is None or gp is None:
+            continue
+        dx = future_gp[0] - gp[0]
+        dz = future_gp[1] - gp[1]
+        speed = (dx * dx + dz * dz) ** 0.5
+        if speed > 5 and cam:  # moving
+            # Project the future position to screen
+            heading_screen = project(future_gp[0], future_gp[1], cam[0], cam[1], cam[2])
+            fd["label"]["movement"] = {
+                "heading_world": [round(future_gp[0], 1), round(future_gp[1], 1)],
+                "heading_screen": heading_screen,
+                "speed": round(speed, 1),
+            }
+        else:
+            fd["label"]["movement"] = None
+
+    # Clean up temporary fields
+    for fd in frames_out:
+        fd.pop("_garen_world", None)
+        fd.pop("_cam", None)
 
     # Stats
     n_labeled = sum(1 for f in frames_out if f["label"] is not None)

@@ -316,6 +316,10 @@ class ScreenRecorder:
     TARGET_WIDTH = 1920
     TARGET_HEIGHT = 1080
 
+    # Set to True to buffer frames in RAM for max capture speed
+    # (uses more memory but avoids disk I/O bottleneck during capture)
+    BUFFER_MODE = True
+
     def __init__(self, output_path: str, fps: int = RECORD_FPS,
                  codec: str = RECORD_CODEC):
         import cv2
@@ -370,9 +374,12 @@ class ScreenRecorder:
         self.frame_times = []
         self.frame_count = 0
         self._running = True
+        self._frame_buffer = [] if self.BUFFER_MODE else None
+        self._output_path = output_path
 
+        mode_str = "BUFFER->disk" if self.BUFFER_MODE else "direct"
         log.info(f"  Recorder: {self._native_w}x{self._native_h} -> "
-                 f"{self.width}x{self.height} @ {fps}fps -> {output_path}")
+                 f"{self.width}x{self.height} @ {fps}fps ({mode_str}) -> {output_path}")
 
     def capture_frame(self, game_time: float | None = None):
         """Capture one frame. Call from main thread."""
@@ -381,24 +388,36 @@ class ScreenRecorder:
             if frame is None:
                 return  # skip dropped frame
             # dxcam returns RGB numpy array, cv2 needs BGR
-            frame = self._cv2.cvtColor(frame, self._cv2.COLOR_RGB2BGR)
+            frame = frame[:, :, ::-1].copy()  # RGB->BGR via slice (faster than cvtColor)
         else:
             import numpy as np
             img = self._sct.grab(self._monitor)
-            frame = np.array(img)
-            frame = self._cv2.cvtColor(frame, self._cv2.COLOR_BGRA2BGR)
+            frame = np.array(img)[:, :, :3]  # drop alpha, already BGR
 
         if self._need_resize:
             frame = self._cv2.resize(frame, (self.width, self.height),
                                      interpolation=self._cv2.INTER_AREA)
 
-        self.writer.write(frame)
+        if self._frame_buffer is not None:
+            self._frame_buffer.append(frame)
+        else:
+            self.writer.write(frame)
         self.frame_times.append((self.frame_count, game_time))
         self.frame_count += 1
 
     def stop(self):
         """Stop recording and release resources."""
         self._running = False
+
+        # Flush buffered frames to disk
+        if self._frame_buffer is not None and self._frame_buffer:
+            log.info(f"  Flushing {len(self._frame_buffer)} buffered frames to disk...")
+            for i, frame in enumerate(self._frame_buffer):
+                self.writer.write(frame)
+                if (i + 1) % 1000 == 0:
+                    log.info(f"    Written {i+1}/{len(self._frame_buffer)}")
+            self._frame_buffer = None
+
         self.writer.release()
         # Don't call dxcam camera.release() — it triggers a COM access
         # violation crash. Let garbage collection handle it instead.

@@ -1,0 +1,20 @@
+{
+  "_patch": "16.7 verified (for 16.8 rescan)",
+  "_mod_size": 34062336,
+
+  "hero_array":     31190760,
+  "game_time":      31248864,
+
+  "position":       604,
+  "hp_current":     4224,
+  "hp_max":         4264,
+  "gold_current":   10328,
+  "gold_earned":    19688,
+  "champion_name":  17192,
+  "level":          19728,
+  "vision_score":   21976,
+  "active_spell":   12576,
+  "spellbook":      12520,
+  "slot_array":     2784,
+  "stats_base":     7048
+}

@@ -1,0 +1,39 @@
+{
+  "_patch":          "16.8.764.3737",
+  "_verified_at":    "2026-04-16",
+  "_replay":         "NA1_5541149613",
+  "_mod_size":       34172928,
+
+  "hero_array":      31289640,
+  "game_time":       31347744,
+
+  "position":        604,
+  "hp_current":      4224,
+  "hp_max":          4264,
+  "gold_current":    10384,
+  "gold_total":      19752,
+  "active_spell":    12632,
+  "champion_name":   17248,
+  "level":           19792,
+  "vision_score":    22040,
+  "kills":           21608,
+  "assists":         21704,
+
+  "spellbook":       12576,
+  "slot_array":      2784,
+  "slot_level":      40,
+  "slot_cd_expire":  48,
+  "slot_total_cd":   116,
+  "slot_spell_info": 304,
+
+  "spell_info":      8,
+  "cast_target":     220,
+  "spell_name_ptr":  40,
+
+  "stats_base":      7104,
+  "stat_ad":         840,
+  "stat_armor":      1240,
+  "stat_mr":         1320,
+  "stat_move_speed": 1480,
+  "stat_atk_range":  1560
+}

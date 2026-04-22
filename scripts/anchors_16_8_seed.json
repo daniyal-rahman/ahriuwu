@@ -1,0 +1,20 @@
+{
+  "_patch": "16.8 seed (RVAs + hero-offset shift +0x38 for post-GameObject fields)",
+  "_mod_size": 34172928,
+
+  "hero_array":     31289640,
+  "game_time":      31347744,
+
+  "position":       604,
+  "hp_current":     4280,
+  "hp_max":         4320,
+  "gold_current":   10384,
+  "gold_earned":    19744,
+  "champion_name":  17248,
+  "level":          19784,
+  "vision_score":   22032,
+  "active_spell":   12632,
+  "spellbook":      12576,
+  "slot_array":     2784,
+  "stats_base":     7048
+}

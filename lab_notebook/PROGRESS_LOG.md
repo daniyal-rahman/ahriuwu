@@ -194,3 +194,109 @@ The rofl pipeline provides ground-truth action data from the game engine, not vi
 3. Phase 3 imagination training once Phase 2 converges
 
 ---
+
+## Replay Data Pipeline Overhaul (2026-04-02 to 2026-04-05)
+
+### Patch 16.7 Reverse Engineering
+
+Redid the full ROFL packet reverse engineering for patch 16.7 (previous work was patches 16.3/16.4). The packet encryption changes every patch.
+
+**Process:**
+1. Dumped PE sections (.text, .rdata, .data) from `League of Legends.exe` 16.7 (33MB binary)
+2. Found the main packet factory/deserializer at RVA `0x0e59d10` — 1165-case switch table
+3. Identified movement netid = **487** via `analyze_pids` (all entities, variable 17-105B, high count)
+4. Located movement vtable at `0x19fc1c8`, deserializer at `0xf53050`, constructor at `0xe050a0`
+5. Key RVAs: malloc=`0x10fa120`, free=`0x10fa150`, skip=`0x118b120`
+
+**Movement data (PID 487):**
+- Position encoded as **14-bit packed u32** at buf+0x08: `x = u32 & 0x3FFF, y = (u32 >> 14) & 0x3FFF`
+- Scale: `map_coord = grid_val * (14914.0 / 16384)`
+- Game timestamp at buf+0x18 (f32)
+- Two packet types: flags=0 (normal movement), flags=4 (spawn position with speed at +0x1C)
+- ~10-15 unique positions per entity per game (destination commands, not continuous tracking)
+
+**Ability data (PID 876):**
+- Struct size 0x50 (80 bytes), vtable at `0x19fddd8`, deserializer at `0x100f500`
+- Cast position: f32 X at +0x48, f32 Y at +0x4C (confirmed map coordinates 0-14914)
+- Spell ID at +0x28: `0xBF=Q, 0xED=E, 0x10=W, 0x03=R` (Garen-specific, frequency-based mapping)
+- Small packets (31-34B): ground-targeted casts. Large (125-135B): unit-targeted casts
+- Sub-tick timing offset at +0x38 (f32, -0.12 to 0.0s)
+- Anti-cheat nonces at +0x40/+0x44
+
+**Recall (PID 323):**
+- 1-byte payload (0xFD), entity ID in block header
+- ~3-8 per entity per game
+
+### Action Label Coverage
+
+For a 42-min 12/0/3 Garen game (NA1-5528069928, Taiwan Real CN):
+- Movements (PID 487): 35 blocks, 6 with valid game_time
+- Abilities (PID 876): 358 casts (Q:122, E:105, W:69, R:62)
+- Recalls (PID 323): 10
+
+### Replay API Discovery
+
+The League game client has a **built-in Replay API** on port 2999 (disabled by default):
+- Enable: `EnableReplayApi=1` under `[General]` in `Config/game.cfg` (must be first entry after section header)
+- Endpoints: `/replay/playback` (pause/seek/speed), `/replay/render` (camera position, visual settings), `/replay/recording` (built-in video recorder)
+
+**Key capabilities:**
+- `cameraPosition` gives exact champion position every frame → enables pixel-perfect map-to-screen projection
+- `selectionName` + `cameraAttached` locks camera to any champion
+- `interfaceAll: false` hides all HUD for clean ML training frames
+- Built-in recording with `enforceFrameRate` guarantees every frame is rendered
+
+**Vanguard not required for replays** — confirmed that stopping the `vgc` service (keeping `vgk` kernel driver loaded but inactive) allows replays to run normally. This opens the door to Wine/Linux multi-instance parallelization.
+
+### Recording Pipeline — Final Configuration
+
+**Best config found:** PNG codec via built-in recorder
+```
+POST /replay/recording {
+    "codec": "png",
+    "framesPerSecond": 80,
+    "replaySpeed": 4.0,
+    "enforceFrameRate": true,
+    "startTime": 1,
+    "endTime": <game_length>,
+    "path": "<output_dir>"
+}
+```
+- Produces exactly `framesPerSecond / replaySpeed` = **20 game-fps** (verified: 601 frames for 30 game-sec)
+- PNG avoids webm encoder CPU overhead — all CPU goes to rendering
+- `enforceFrameRate` slows game to match render rate — no dropped frames
+- Camera position polled via `/replay/render` during recording
+
+**Bottleneck analysis:**
+- **CPU single-thread is the only bottleneck** — i5-8600K (3.6GHz, turbo disabled) renders ~160fps max
+- GPU (RTX 5080) sits at 5-12% utilization — completely idle
+- Display/monitor refresh rate irrelevant — built-in recorder renders internally
+- Turbo boost disabled in BIOS → 20-40% performance left on table
+- At 640x480 + PNG + enforce: effective speed ~2x (42-min game in ~21 min)
+- At 1080p + webm + enforce: effective speed ~3x but encoder drops frames
+
+**Resolution:** Game renders at config resolution, ignores recording API width/height params. Must change `game.cfg` Width/Height before launching. Game clamps minimum to 640x480.
+
+### Scripts Created/Updated
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/decode_replay_movement.py` | Updated with PATCH_16_7 config, 14-bit position encoding |
+| `scripts/find_garen_games.py` | NEW: finds Garen games from known OTPs via Riot API + op.gg leaderboard |
+| `scripts/record_replay_api.py` | NEW: recording pipeline using Replay API |
+| `scripts/create_overlay_video.py` | NEW: overlay with key HUD, click markers, frame count |
+| `scripts/test_recording_pipeline.py` | NEW: end-to-end recording test with verification |
+
+### Data Target
+
+- **100 hours** of action-labeled Garen gameplay (~200 games)
+- At 2x recording speed on single machine: ~50 hours wall time
+- Future: Wine/Linux parallelization (4 instances → ~12.5 hours) — Vanguard not required for replays (verified)
+- Longer term: 1000+ hours for world model training
+
+### Next Steps
+1. Record the full 42-min 12/0/3 game with PNG pipeline + camera tracking
+2. Build overlay video with corrected click positions (using camera data from Replay API)
+3. Scale up: batch-record 200 Garen games using `find_garen_games.py` → `record_replay_api.py` pipeline
+4. Investigate turbo boost / BIOS overclock for 20-40% speedup
+5. Test Wine/Linux multi-instance for parallel recording
