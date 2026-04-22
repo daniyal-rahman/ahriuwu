@@ -20,19 +20,13 @@ This guide describes how to validate whether click-destination data exists in Le
 - **League of Legends**: Installed and playable
 - **Disk space**: ~500MB for replay file
 
-## Step 1: Linux → Windows Reboot (with Vanguard)
+## Step 1: Reboot to Windows (with Vanguard Enabled)
 
-Run from Linux:
-```bash
-bash scripts/boot_windows_vanguard.sh
-```
+Reboot the dual-boot system into Windows:
+- Restart the desktop and select Windows in the boot menu
+- Make sure Vanguard services are running (they should be by default)
 
-This will:
-- Prepare the Windows environment
-- Reboot into Windows
-- Ensure Vanguard services are running
-
-Windows will boot automatically.
+**On macOS**: No action needed, stand by for data transfer after the game.
 
 ## Step 2: Windows Setup
 
@@ -88,29 +82,26 @@ Example:
 }
 ```
 
-## Step 5: Back to Linux + Analysis
+## Step 5: Copy Data to macOS + Analysis
 
-1. **Reboot to Linux** (Vanguard disabled):
-   ```bash
-   sudo reboot
-   ```
+From Windows, copy replay and keylog files to macOS:
 
-2. **Copy replay file**:
+1. **Copy replay file**:
    ```bash
    scp windows:"C:\Users\daniz\Documents\League of Legends\Replays\*.rofl" /tmp/
    ```
 
-3. **Copy keylog data** (already copied via scp, but verify):
+2. **Copy keylog data**:
    ```bash
    scp windows:"C:\tmp\*.json" /tmp/
    ```
 
-4. **Extract replay ID** from filename:
+3. **Extract replay ID** from filename:
    ```
    NA1_<REPLAY_ID>.rofl  →  REPLAY_ID = <REPLAY_ID>
    ```
 
-## Step 6: Analysis
+## Step 6: Analysis (on macOS)
 
 ### Trajectory Analysis (Primary)
 
@@ -186,8 +177,7 @@ python scripts/heap_scan_click_intent.py
 | `scripts/keylogger_test.py` | Main keylogger (runs on Windows) |
 | `scripts/test_click_detection.bat` | Menu-driven test orchestration (Windows) |
 | `scripts/setup_windows_test.bat` | Install dependencies (Windows) |
-| `scripts/boot_windows_vanguard.sh` | Reboot to Windows from Linux |
-| `scripts/analyze_trajectory_vs_clicks.py` | Trajectory inflection analysis (Linux) |
+| `scripts/analyze_trajectory_vs_clicks.py` | Trajectory inflection analysis (macOS) |
 | `scripts/heap_scan_click_intent.py` | Broad Vec3 heap search (Windows) |
 
 ## References

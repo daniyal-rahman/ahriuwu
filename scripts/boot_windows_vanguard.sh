@@ -27,6 +27,7 @@ echo "  1. Windows will boot with Vanguard services ENABLED"
 echo "  2. Run: C:\\Repos\\ahriuwu\\scripts\\setup_windows_test.bat"
 echo "  3. Run: C:\\Repos\\ahriuwu\\scripts\\test_click_detection.bat"
 echo "  4. Follow the prompts to play a live game with keylogging"
+echo "  5. After game: SCP replay + keylog to macOS for analysis"
 echo
 
 read -p "Ready to reboot into Windows? (y/n) " -n 1 -r
