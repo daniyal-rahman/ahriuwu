@@ -84,16 +84,16 @@ Example:
 
 ## Step 5: Copy Data to macOS + Analysis
 
-From Windows, copy replay and keylog files to macOS:
+From macOS, copy replay and keylog files from Windows (10.0.0.14):
 
 1. **Copy replay file**:
    ```bash
-   scp windows:"C:\Users\daniz\Documents\League of Legends\Replays\*.rofl" /tmp/
+   scp dani@10.0.0.14:"C:\Users\daniz\Documents\League of Legends\Replays\*.rofl" /tmp/
    ```
 
 2. **Copy keylog data**:
    ```bash
-   scp windows:"C:\tmp\*.json" /tmp/
+   scp dani@10.0.0.14:"C:\tmp\*.json" /tmp/
    ```
 
 3. **Extract replay ID** from filename:
