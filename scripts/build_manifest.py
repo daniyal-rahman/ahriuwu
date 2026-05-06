@@ -212,6 +212,23 @@ def main():
     print(f"\n[3] Walking match histories — looking for {args.champion} {args.role} on {args.patch}.x...")
     seen_matches = set()
     out_matches = []
+
+    def _write(progress_pct=None):
+        """Snapshot current matches to disk. Called every time we extend
+        out_matches so a long run can be killed and the partial result is
+        already saved."""
+        with open(args.out, "w") as f:
+            json.dump({
+                "name": f"{args.champion}_{args.role}_masters_{args.patch.replace('.', '_')}",
+                "champion": args.champion, "role": args.role, "patch": args.patch,
+                "region": args.region,
+                "n_players_walked": len(puuids),
+                "_partial": progress_pct is not None and progress_pct < 100,
+                "_progress_pct": progress_pct,
+                "matches": out_matches,
+            }, f, indent=2)
+
+    _write(progress_pct=0)  # write empty manifest immediately so the file exists
     for i, (puuid, p) in enumerate(puuids, 1):
         if len(out_matches) >= args.max_games: break
         ids = match_ids_by_puuid(routing, puuid, args.api_key, rl, count=args.matches_per_player)
@@ -261,17 +278,11 @@ def main():
             lp = p.get("leaguePoints", 0)
             print(f"  [{i}/{len(puuids)}] {tag} {lp}LP  puuid={puuid[:14]}…  kept {kept}  "
                   f"(running total {len(out_matches)})", flush=True)
+            # Snapshot after each player who contributed at least one match
+            _write(progress_pct=int(100 * len(out_matches) / max(1, args.max_games)))
 
-    print(f"\n[4] Writing {len(out_matches)} matches to {args.out}")
-    with open(args.out, "w") as f:
-        json.dump({
-            "name": f"{args.champion}_{args.role}_masters_{args.patch.replace('.', '_')}",
-            "champion": args.champion, "role": args.role, "patch": args.patch,
-            "region": args.region,
-            "n_players_walked": len(puuids),
-            "matches": out_matches,
-        }, f, indent=2)
-    print("  done.")
+    _write(progress_pct=100)
+    print(f"\n[4] Wrote {len(out_matches)} matches to {args.out}")
 
 
 if __name__ == "__main__":

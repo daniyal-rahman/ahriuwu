@@ -1606,6 +1606,74 @@ def _postprocess_worker(queue, log_path):
 # ═══════════════════════════════════════════════════════════════
 # Main Orchestrator
 # ═══════════════════════════════════════════════════════════════
+def _rofl_path(replays_dir, match_id):
+    """Riot writes replays as NA1-<gameId>.rofl (dash, not underscore)."""
+    region, gid = match_id.split("_", 1)
+    return os.path.join(replays_dir, f"{region}-{gid}.rofl")
+
+
+def trigger_rofl_download(game_id, wait_for_file_path=None, timeout=120):
+    """POST LCU /lol-replays/v1/rofls/{gid}/download. If wait_for_file_path is
+    given, poll until the file appears + reaches stable size (or timeout).
+    Returns True if downloaded (or already present), False on failure."""
+    if wait_for_file_path and os.path.exists(wait_for_file_path):
+        return True
+    try:
+        lcu_post(f"/lol-replays/v1/rofls/{game_id}/download", body={})
+    except Exception as e:
+        print(f"  [download] LCU POST failed for {game_id}: {e}", flush=True)
+        return False
+    if not wait_for_file_path:
+        return True
+    deadline = time.time() + timeout
+    last_sz = -1; stable_for = 0
+    while time.time() < deadline:
+        if os.path.exists(wait_for_file_path):
+            sz = os.path.getsize(wait_for_file_path)
+            if sz > 0 and sz == last_sz:
+                stable_for += 1
+                if stable_for >= 3: return True
+            else:
+                stable_for = 0
+            last_sz = sz
+        time.sleep(2)
+    return False
+
+
+def cleanup_rofl(replays_dir, match_id):
+    """Delete the .rofl for match_id if it exists. Best-effort, no-op on miss."""
+    p = _rofl_path(replays_dir, match_id)
+    if os.path.exists(p):
+        try:
+            os.remove(p)
+            print(f"  [cleanup] removed {p}", flush=True)
+        except OSError as e:
+            print(f"  [cleanup] could not remove {p}: {e}", flush=True)
+
+
+def _per_game_wall_budget(duration_s):
+    """Watchdog ceiling: half-game wall (replay runs at 2x) + setup/lock/post +
+    margin. Trips kill_game() if exceeded — pass1/pass2 then unwind via the
+    existing find_league_pid()-is-None checks."""
+    return (duration_s / 2) + 25 * 60
+
+
+def _start_watchdog(match_id, wall_budget, done_evt):
+    """Spawn a daemon thread that kill_game()'s if the per-game wall budget is
+    exceeded before done_evt is set. Returns the thread object."""
+    def _loop():
+        deadline = time.time() + wall_budget
+        while time.time() < deadline:
+            if done_evt.wait(timeout=15): return
+        if not done_evt.is_set():
+            print(f"\n*** WATCHDOG: {match_id} exceeded {wall_budget:.0f}s wall budget — killing League ***",
+                  flush=True)
+            kill_game()
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    return t
+
+
 def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, rec_end=None, force_rerun=False):
     match_id = game_info["match_id"]
     game_id = game_info["game_id"]
@@ -1637,9 +1705,16 @@ def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, r
     old_stdout = sys.stdout
     sys.stdout = game_log
 
+    # Watchdog: kill_game() if the whole pipeline exceeds the per-game budget.
+    # Triggers pass1/pass2 to unwind via their existing exit conditions.
+    wall_budget = _per_game_wall_budget(duration)
+    wd_done = threading.Event()
+    _start_watchdog(match_id, wall_budget, wd_done)
+
     try:
         print(f"\n{'='*60}", flush=True)
-        print(f"GAME: {match_id}  team={team} slot={slot} key={key} dur={duration}s", flush=True)
+        print(f"GAME: {match_id}  team={team} slot={slot} key={key} dur={duration}s  "
+              f"wall_budget={wall_budget:.0f}s", flush=True)
         print(f"{'='*60}", flush=True)
 
         # Pass 1: Memory + Camera + Clicks + Casts (all in one threaded scrape)
@@ -1694,6 +1769,7 @@ def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, r
         return True
 
     finally:
+        wd_done.set()  # signal watchdog to stand down
         sys.stdout = old_stdout
         game_log.close()
         # Echo result to terminal
@@ -1724,6 +1800,15 @@ def main():
                         help="Overwrite existing output dir instead of skipping.")
     parser.add_argument("--no-overlap", action="store_true",
                         help="Run post-process inline instead of in worker process")
+    parser.add_argument("--prefetch-window", type=int, default=10,
+                        help="Keep N future .rofl files downloaded ahead of the cursor (default 10). "
+                             "Triggers LCU /lol-replays/v1/rofls/{gid}/download fire-and-forget.")
+    parser.add_argument("--rofl-cleanup-behind", type=int, default=2,
+                        help="Delete the .rofl this many manifest slots BEHIND the current game "
+                             "after each game finishes (default 2 — keeps prior 1 as a retry buffer).")
+    parser.add_argument("--replays-dir",
+                        default=r"C:\Users\daniz\Documents\League of Legends\Replays",
+                        help="Where LCU drops .rofl files (used for prefetch + cleanup).")
     args = parser.parse_args()
     global CHAMPION
     CHAMPION = args.champion
@@ -1754,6 +1839,23 @@ def main():
                 for i in range(args.start, len(games_ok)):
                     g = games_ok[i]
                     print(f"\n[{i+1}/{len(games_ok)}] {g['match_id']}", flush=True)
+
+                    # Sliding-window prefetch: ensure THIS game's .rofl exists
+                    # (blocking, since pass1 needs it), then fire-and-forget
+                    # the LCU download for game i + prefetch_window so the
+                    # window stays full as we advance.
+                    rofl_here = _rofl_path(args.replays_dir, g["match_id"])
+                    if not trigger_rofl_download(g["game_id"], wait_for_file_path=rofl_here, timeout=180):
+                        print(f"  *** skip {g['match_id']}: .rofl never appeared ***", flush=True)
+                        fail += 1; consecutive_alarms += 1
+                        if consecutive_alarms >= 3: break
+                        continue
+                    pf_idx = i + args.prefetch_window
+                    if pf_idx < len(games_ok):
+                        future = games_ok[pf_idx]
+                        # fire-and-forget; LCU is async on its own
+                        trigger_rofl_download(future["game_id"], wait_for_file_path=None)
+
                     try:
                         if process_game(g, force_patch=args.force_patch, post_queue=post_queue,
                                         rec_start=args.rec_start, rec_end=args.rec_end, force_rerun=args.force):
@@ -1763,6 +1865,13 @@ def main():
                     except Exception:
                         traceback.print_exc(); fail += 1; consecutive_alarms += 1
                         kill_game()
+
+                    # Cleanup .rofl this many slots behind the cursor (keeps
+                    # the just-prior game on disk in case we need to retry).
+                    cleanup_idx = i - args.rofl_cleanup_behind
+                    if cleanup_idx >= 0:
+                        cleanup_rofl(args.replays_dir, games_ok[cleanup_idx]["match_id"])
+
                     if consecutive_alarms >= 3:
                         print(f"\n*** 3 consecutive failures — stopping batch ***", flush=True)
                         break
