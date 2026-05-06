@@ -235,14 +235,9 @@ def log_event(path, **fields):
     with open(path, "a") as f:
         f.write(json.dumps(fields) + "\n")
 
-def check_alarm(label, value, threshold, op=">="):
-    """Print loud alarm if value crosses threshold. Returns True if alarmed."""
-    if op == ">=" and value >= threshold: return False
-    if op == "<" and value >= threshold: return False
-    if op == "<" and value < threshold:
-        print(f"\n  *** ALARM: {label} = {value:.1f} (threshold {threshold}) ***\n", flush=True)
-        return True
-    if op == ">=" and value < threshold:
+def check_alarm(label, value, threshold):
+    """Print loud alarm when `value` falls below `threshold`. Returns True if alarmed."""
+    if value < threshold:
         print(f"\n  *** ALARM: {label} = {value:.1f} (threshold {threshold}) ***\n", flush=True)
         return True
     return False
@@ -876,21 +871,18 @@ def pin_league(cores):
         print(f"  Could not pin League: {e}", flush=True)
 
 def launch_replay(game_id):
+    """Tell LCU to open the replay. Returns True iff the LCU POST succeeded.
+    Game-readiness (process spawned + game_time advancing) is then verified by
+    pass1_scrape's pid-poll + game_time>0.5 gate — the older 240s
+    /liveclientdata/gamestats poll here was redundant with that."""
     print(f"  Launching replay {game_id}...", flush=True)
     try:
         lcu_post(f"/lol-replays/v1/rofls/{game_id}/watch",
                  {"componentType": "replay"})
+        return True
     except Exception as e:
         print(f"  LCU launch failed: {e}", flush=True)
         return False
-    for i in range(120):
-        try:
-            replay_get("/liveclientdata/gamestats")
-            print(f"  Game loaded ({i*2}s)", flush=True)
-            return True
-        except: time.sleep(2)
-    print("  TIMEOUT: game did not load", flush=True)
-    return False
 
 def _nearest(arr, keys, gt):
     i = bisect.bisect_right(keys, gt)
@@ -992,13 +984,16 @@ def _cam_loop(stop, results):
 _EMPTY_PASS1 = ([], [], {}, {"clicks": [], "casts": [], "watched": []})
 
 
-def _wait_for_gt(m, base, gt_rva, threshold, timeout=30):
-    """Block until m.f32(base+gt_rva) > threshold or timeout (s) elapses.
-    Returns the observed gt (None if never crossed)."""
+def _wait_for_gt(m, base, gt_rva, threshold, timeout=30, upper=10000):
+    """Block until threshold < m.f32(base+gt_rva) < upper, or timeout elapses.
+    The upper bound rejects garbage reads (NaN, denormals, huge values that
+    pre-init memory can return) so this also serves as the patch-validity
+    check — if no sane gt appears in `timeout` seconds, the offset is wrong
+    OR the game is stuck loading."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         cur = m.f32(base + gt_rva)
-        if cur is not None and cur > threshold:
+        if cur is not None and threshold < cur < upper:
             return cur
         time.sleep(0.05)
     return None
@@ -1047,16 +1042,14 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
         print("  RPM verify failed", flush=True); m.close(); kill_game(); return _EMPTY_PASS1
     print(f"  Memory: PID={pid} base=0x{base:X}", flush=True)
 
-    gt_rva = verify_game_time(m, base)
-    if not gt_rva:
-        print(f"  ABORT: GameTime RVA 0x{OFFSETS['game_time']:X} reads garbage", flush=True)
-        m.close(); kill_game(); return _EMPTY_PASS1
-
-    # Gate: wait until game_time crosses 0.5s (skips loading screen). Hero structs
-    # populate around the same time, so this also serves as init_heroes readiness.
-    gt0 = _wait_for_gt(m, base, gt_rva, 0.5, timeout=30)
+    # Wait until game_time at OFFSETS["game_time"] reads a sane value > 0.5s.
+    # This combines patch-validity check + loading-screen skip + init_heroes
+    # readiness in one gate (heroes populate around gt~0.5s too).
+    gt_rva = OFFSETS["game_time"]
+    gt0 = _wait_for_gt(m, base, gt_rva, 0.5, timeout=45)
     if gt0 is None:
-        print(f"  ABORT: gt never crossed 0.5s in 30s", flush=True)
+        print(f"  ABORT: gt at 0x{gt_rva:X} never reached a sane >0.5s value in 45s "
+              f"(patch shift, or game stuck loading)", flush=True)
         m.close(); kill_game(); return _EMPTY_PASS1
     print(f"  GameTime: 0x{gt_rva:X} = {gt0:.2f}s (gate cleared)", flush=True)
 
@@ -1147,8 +1140,8 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
         stats.update(mem_n=len(mem_data), mem_hz=round(mem_hz, 1),
                      mem_max_gap=round(max(mem_gaps), 4), gt_span=round(gt_span, 1),
                      wall_span=round(wall_span, 1), effective_speed=round(effective_speed, 2))
-        check_alarm("effective_speed", effective_speed, ALARM_MIN_SPEED, "<")
-        check_alarm("mem_hz", mem_hz, ALARM_MIN_MEM_HZ, "<")
+        check_alarm("effective_speed", effective_speed, ALARM_MIN_SPEED)
+        check_alarm("mem_hz", mem_hz, ALARM_MIN_MEM_HZ)
     if len(cam_data) >= 2:
         cam_walls = [s["wall"] for s in cam_data]
         cam_span = cam_walls[-1] - cam_walls[0]
@@ -1190,6 +1183,10 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
         return 0, {}
     time.sleep(5)
 
+    # NOTE: this first selectionName POST + speed=2.0 looks redundant with the
+    # pause→select→unpause sequence that follows, but removing it has caused
+    # cam-lock to silently fail in past debugging — leaving it as a safety
+    # primer for the second sequence. If you "clean it up" be ready for ghosts.
     replay_post("/replay/render", {"interfaceAll": True, "selectionName": CHAMPION})
     time.sleep(1)
     replay_post("/replay/playback", {"speed": 2.0})
@@ -1198,7 +1195,7 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
     pid = find_league_pid()
     base, _ = find_module_base(pid) if pid else (None, None)
     m2 = Mem(pid) if pid else None
-    # Original ordering: pause → select → unpause @ 2x → lock → lock again
+    # Cam-lock recipe: pause → select → unpause @ 2x → lock → lock again.
     replay_post("/replay/playback", {"paused": True})
     time.sleep(0.3)
     replay_post("/replay/render", {"interfaceAll": True, "selectionName": CHAMPION})
@@ -1299,7 +1296,7 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
         "expected_frames": expected_frames,
         "rec_start_eff": round(rec_start_eff, 3), "rec_end_eff": round(rec_end, 3),
     }
-    check_alarm("effective_fps", effective_fps, ALARM_MIN_REC_FPS, "<")
+    check_alarm("effective_fps", effective_fps, ALARM_MIN_REC_FPS)
 
     print(f"  Frames: {n_frames} (expected ~{expected_frames}), {effective_fps:.1f} wall-fps, {wall_time:.0f}s wall", flush=True)
     kill_game()
@@ -1701,7 +1698,8 @@ def main():
     parser.add_argument("--slot", type=int)
     parser.add_argument("--duration", type=int, default=1800)
     parser.add_argument("--champion", default="Garen",
-                        help="Internal champion name (e.g. Garen, Belveth, KaiSa — no apostrophes)")
+                        help="Internal champion name (e.g. Garen, Belveth, KaiSa — no apostrophes). "
+                             "Defaults to Garen for legacy back-compat; pass explicitly for any other champ.")
     parser.add_argument("--force-patch", action="store_true")
     parser.add_argument("--rec-start", type=float, default=1.0,
                         help="Game_t (seconds) to start recording. Default 1.0.")
@@ -1714,6 +1712,8 @@ def main():
     args = parser.parse_args()
     global CHAMPION
     CHAMPION = args.champion
+    if CHAMPION == "Garen" and "--champion" not in sys.argv:
+        print(f"[pipeline] WARN: using default --champion=Garen (pass explicitly to silence)", flush=True)
     print(f"[pipeline] champion = {CHAMPION}  session0 = {_is_session0()}", flush=True)
 
     os.makedirs(OUTPUT_BASE, exist_ok=True)
