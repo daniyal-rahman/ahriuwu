@@ -1187,7 +1187,9 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
     # pause→select→unpause sequence that follows, but removing it has caused
     # cam-lock to silently fail in past debugging — leaving it as a safety
     # primer for the second sequence. If you "clean it up" be ready for ghosts.
-    replay_post("/replay/render", {"interfaceAll": True, "selectionName": CHAMPION})
+    # interfaceAll=False kills the in-game HUD/scoreboard/minimap so the
+    # recorded PNGs are clean (training data wants no UI overlay).
+    replay_post("/replay/render", {"interfaceAll": False, "selectionName": CHAMPION})
     time.sleep(1)
     replay_post("/replay/playback", {"speed": 2.0})
     time.sleep(1.0)
@@ -1198,7 +1200,7 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
     # Cam-lock recipe: pause → select → unpause @ 2x → lock → lock again.
     replay_post("/replay/playback", {"paused": True})
     time.sleep(0.3)
-    replay_post("/replay/render", {"interfaceAll": True, "selectionName": CHAMPION})
+    replay_post("/replay/render", {"interfaceAll": False, "selectionName": CHAMPION})
     time.sleep(0.5)
     replay_post("/replay/playback", {"speed": 2.0, "paused": False})
     time.sleep(1.0)
@@ -1208,6 +1210,11 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
     focus_game(); lock_camera(cam_key)
     time.sleep(0.5)
     print(f"  Camera locked (key={cam_key})", flush=True)
+
+    # Final HUD-off nudge right before recording starts (in case prior render
+    # POSTs got clobbered by the cam-lock keypresses).
+    replay_post("/replay/render", {"interfaceAll": False, "selectionName": CHAMPION})
+    time.sleep(0.2)
 
     # Pass 2 gets all cores — PNG encoder saturates everything
     pin_league(ALL_CORES)

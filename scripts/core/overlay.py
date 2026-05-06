@@ -13,8 +13,10 @@ writes overlay.mp4 with:
 
 Camera comes from raw_cam.json. raw_cam samples are wall-time-stamped from
 pass1; we map wall->gt via raw_mem.json (which has both), then per-frame
-look up cam by gt. No synth-from-hero fallback — fail loud if cam coverage
-is short.
+look up cam by gt. Frames whose gt falls outside cam coverage (by more than
+--cam-tolerance-s) draw a red "NO CAM SAMPLE" warning and skip click/cast
+projection — the HUD + hero crosshair still render since those use
+pre-projected screen coords from labels.json.
 
 Projection magic numbers default from labels.json's "projection" block but
 can be overridden via CLI for tuning.
@@ -118,7 +120,7 @@ def build_gt_to_cam(raw_cam, wall_to_gt):
 
 
 # ─────────────────── action extraction ───────────────────
-def extract_actions(frames, champion_name):
+def extract_actions(frames):
     """Walk per-frame action labels, dedupe (type, spell) within 0.3s.
     Returns list of dicts: {gt, type, label, screen}. label is the raw spell
     name from memory — not collapsed — so you can see exactly what was read.
@@ -160,22 +162,23 @@ COLOR = {
 
 def color_for(label):
     """Pick a marker color from a raw or short spell label.
-    Match the QWER suffix (BelvethQ → Q, BelvethQAttack → Q, BelvethBasicAttack
-    → AA, recall → B, etc.).
-    """
+    Match the QWER slot from a champion-spell name like "GarenQ", "GarenQAttack"
+    (Q with an attack-on-cast modifier), "BelvethW", or a cast-log entry like
+    "Q GarenQ" / "D SummonerFlash"."""
     s = (label or "").lower()
     if "basicattack" in s or s == "aa":
         return COLOR["AA"]
     if "recall" in s or s == "b":
         return COLOR["B"]
-    # last alphabetic char often spells the slot — fall back to first too
-    for ch in (s[-1:] if s else "") + (s[:1] if s else ""):
-        if ch in "qwer":
-            return COLOR[ch.upper()]
-    # walk lowercase letters looking for a clean q/w/e/r token
-    for ch in s:
-        if ch in "qwer":
-            return COLOR[ch.upper()]
+    # Strip the "attack" suffix that wraps Q-on-hit modifiers (GarenQAttack → GarenQ).
+    if s.endswith("attack"):
+        s = s[:-6]
+    # Champion-spell name: slot is the last char (GarenQ → q, BelvethW → w).
+    if s and s[-1] in "qwer":
+        return COLOR[s[-1].upper()]
+    # Cast-log "<slot> <spell_name>" form: slot is first char.
+    if s and s[0] in "qwer":
+        return COLOR[s[0].upper()]
     return WHITE
 
 
@@ -268,7 +271,7 @@ def main():
     ap.add_argument("--tilt-deg", type=float, default=None)
     ap.add_argument("--cam-y", type=float, default=None)
     ap.add_argument("--floor-y", type=float, default=52.0)
-    ap.add_argument("--cam-tolerance-s", type=float, default=2.0,
+    ap.add_argument("--cam-tolerance-s", type=float, default=1.0,
                     help="flag a frame as no-cam if its gt is further than this from any cam sample")
     args = ap.parse_args()
 
@@ -298,7 +301,7 @@ def main():
         print(f"  frame coverage: gt {frames[0]['gt']:.1f} .. {frames[-1]['gt']:.1f}s")
 
     # actions snapped to frame index
-    actions = extract_actions(frames, labels.get("champion"))
+    actions = extract_actions(frames)
     print(f"Actions extracted: {len(actions)}")
     actions_by_frame = {}
     if frames:
@@ -406,7 +409,7 @@ def main():
                     "sx": sx_, "sy": sy_,
                     "color": color_for(a["label"]),
                     "label": a["label"],
-                    "frames_left": PERSIST.get(a["type"], 6),
+                    "frames_left": PERSIST.get(a["type"], args.ability_persist_frames),
                 })
 
         if cam_ok:
@@ -447,14 +450,20 @@ def main():
 
         lab = fr.get("label") or {}
         # champion_screen/champion_stats are the focus champion's per-frame
-        # data. Older labels.json may still have it under garen_screen — fall
-        # back through both, then to visible_heroes[0] as a final safety net.
+        # data. Older labels.json may still have it under garen_screen — try
+        # both. If both missing or stats all-zero, look up the focus champion
+        # by name in visible_heroes (gold/gold_total aren't on visible_heroes
+        # entries so HUD will be partial in this fallback).
         gs = lab.get("champion_screen") or lab.get("garen_screen")
         stats = lab.get("champion_stats") or lab.get("garen_stats")
         if (not gs) or (stats and not any(stats.values())):
-            vh = (lab.get("visible_heroes") or [{}])[0]
-            gs = vh.get("screen") or gs
+            focus_name = labels.get("champion")
+            vh_list = lab.get("visible_heroes") or []
+            vh = next((v for v in vh_list if v.get("name") == focus_name), None)
+            if vh is None and vh_list:
+                vh = vh_list[0]  # last-resort: any visible hero (no per-name match)
             if vh:
+                gs = vh.get("screen") or gs
                 stats = {
                     "level": vh.get("level"),
                     "hp": vh.get("hp"),
