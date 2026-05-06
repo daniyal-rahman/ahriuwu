@@ -125,93 +125,180 @@ LO, HI = 0x10000000, 0x7FFFFFFFFFFF
 # Phase 1: Find hero_array RVA and game_time RVA
 # ═══════════════════════════════════════════════════════════════
 def find_hero_array(m, base, mod_size, anchor, name_anchor=0x4328):
-    """Scan module data section for hero array pointer."""
+    """Scan module data section for hero_array RVA.
+
+    Tries TWO layouts:
+      - 'deref' (16.8.766 and earlier): m.u64(base+rva) → arr_ptr → m.u64(arr_ptr+i*8) → hero_ptr (stride 8)
+      - 'inline' (16.9.772+): hero_i = m.u64(base+rva + i*0x108) (in-place table, stride 0x108)
+
+    Validates by reading champion_name at hero+name_anchor and matching CHAMP_NAMES
+    in the live game. Requires ≥8 distinct slot/name pairs.
+
+    Returns (rva, layout, stride) or (None, None, None).
+    """
     print("\n[Phase 1a] Finding hero_array RVA...")
-    # Widened to ±0x200000 — modern patches can shift globals by >64KB
-    # Candidate champion_name offsets: anchor ±0x80 in 8-byte steps
     name_offsets = [name_anchor + d for d in range(-0x80, 0x88, 8)]
+
+    def _score(get_hero_ptr_at_index):
+        """Returns count of distinct (slot, name) pairs (max 10). Names must be in CHAMP_NAMES."""
+        heroes_found = set()
+        for i in range(10):
+            hp = get_hero_ptr_at_index(i)
+            if not hp or not (LO < hp < HI): continue
+            for name_off in name_offsets:
+                name = m.string(hp + name_off, 40)
+                if name and name in CHAMP_NAMES:
+                    heroes_found.add((i, name))
+                    break
+        distinct_names = set(n for _, n in heroes_found)
+        # Reject layouts where the same hero appears in multiple slots (false positives)
+        return len(heroes_found) if len(distinct_names) == len(heroes_found) else 0
+
+    # Score both layouts at every candidate RVA; return the one with the highest hero count.
+    best = (0, None, None, None)  # (score, rva, layout, stride)
     for drift in range(0, 0x200000, 8):
         for rva in [anchor + drift, anchor - drift]:
             if rva < 0 or rva > mod_size: continue
-            ptr = m.u64(base + rva)
-            if not ptr or not (LO < ptr < HI): continue
-            # Check if it points to an array of 10 hero-like structs
-            heroes_found = set()  # distinct names
-            for i in range(10):
-                hp = m.u64(ptr + i*8)
-                if not hp or not (LO < hp < HI): continue
-                for name_off in name_offsets:
-                    name = m.string(hp + name_off, 40)
-                    if name and name in CHAMP_NAMES:
-                        heroes_found.add((i, name))
-                        break
-            # Require ≥8 distinct slots with champion names
-            distinct_names = set(n for _, n in heroes_found)
-            if len(heroes_found) >= 8 and len(distinct_names) == len(heroes_found):
-                print(f"  ✓ hero_array at RVA 0x{rva:X} ({len(heroes_found)}/10 distinct heroes)")
-                return rva
-    print("  ✗ hero_array not found")
-    return None
+
+            # Layout A: pointer-to-array, stride 8 (16.8.766 and earlier)
+            arr_ptr = m.u64(base + rva)
+            if arr_ptr and (LO < arr_ptr < HI):
+                s = _score(lambda i: m.u64(arr_ptr + i*8))
+                if s > best[0]:
+                    best = (s, rva, "deref", 8)
+                    if s == 10: break
+
+            # Layout B: in-place, stride 0x108 (16.9.772+)
+            s = _score(lambda i: m.u64(base + rva + i*0x108))
+            if s > best[0]:
+                best = (s, rva, "inline", 0x108)
+                if s == 10: break
+        if best[0] == 10: break
+
+    if best[0] >= 8:
+        score, rva, layout, stride = best
+        print(f"  ✓ hero_array at RVA 0x{rva:X} ({layout} layout, stride 0x{stride:X}, {score}/10 heroes)")
+        return rva, layout, stride
+    print(f"  ✗ hero_array not found (best score {best[0]}/10)")
+    return None, None, None
 
 def find_game_time(m, base, mod_size, anchor, api_gt):
-    """Scan module data section for game time float."""
-    print("\n[Phase 1b] Finding game_time RVA...")
+    """Scan module for game_time float. Multi-time verified — reject stale snapshots.
+
+    Phase 1: collect ALL f32 candidates near api_gt within drift window.
+    Phase 2: sleep 5s while replay plays; pick the one whose value advanced ~5s.
+    """
+    print("\n[Phase 1b] Finding game_time RVA (multi-time verified)...")
+    cands = []
     for drift in range(0, 0x200000, 4):
         for rva in [anchor + drift, anchor - drift]:
             if rva < 0 or rva > mod_size: continue
             v = m.f32(base + rva)
-            if v and abs(v - api_gt) < 1.0:
-                print(f"  ✓ game_time at RVA 0x{rva:X} (read={v:.1f}, api={api_gt:.1f})")
-                return rva
-    print("  ✗ game_time not found")
-    return None
+            if v is not None and abs(v - api_gt) < 1.0:
+                cands.append((rva, v))
+    print(f"  found {len(cands)} candidates near api_gt={api_gt:.1f}")
+    if not cands:
+        print("  ✗ game_time not found"); return None
+
+    # Wait for replay to advance, then re-read
+    SLEEP = 5.0
+    print(f"  sleeping {SLEEP}s for replay to advance...")
+    time.sleep(SLEEP)
+    api_t1 = rget("/liveclientdata/gamestats").get("gameTime", 0)
+    delta = api_t1 - api_gt
+    print(f"  api advanced by {delta:.2f}s (from {api_gt:.1f} to {api_t1:.1f})")
+    if delta < 1.0:
+        print("  ⚠ replay paused — picking first match without verification")
+        rva, v = cands[0]
+        print(f"  ✓ game_time at RVA 0x{rva:X} (read={v:.1f}, api={api_gt:.1f}, UNVERIFIED)")
+        return rva
+    survivors = []
+    for rva, _ in cands:
+        v2 = m.f32(base + rva)
+        if v2 is None: continue
+        if abs(v2 - api_t1) < 1.0:
+            survivors.append((rva, v2))
+    print(f"  {len(survivors)} survived multi-time check (advanced ~{delta:.1f}s)")
+    if not survivors:
+        print("  ✗ no live game_time — all candidates were stale snapshots")
+        return None
+    survivors.sort(key=lambda x: abs(x[1] - api_t1))
+    rva, v = survivors[0]
+    print(f"  ✓ game_time at RVA 0x{rva:X} (read={v:.2f}, api={api_t1:.2f}, advanced ✓)")
+    return rva
 
 # ═══════════════════════════════════════════════════════════════
 # Phase 2: Find hero struct fields via API cross-check
 # ═══════════════════════════════════════════════════════════════
-def _get_hero_and_api(m, base, hero_array_rva, name_off, target_name="Garen"):
-    """Helper: get hero ptr + API data for target champion."""
-    arr_ptr = m.u64(base + hero_array_rva)
+def _iter_hero_ptrs(m, base, hero_array_rva, layout, stride):
+    """Yield hero pointers for a 10-slot hero array, layout-agnostic."""
+    if layout == "inline":
+        for i in range(10):
+            yield m.u64(base + hero_array_rva + i * stride)
+    else:  # deref
+        arr_ptr = m.u64(base + hero_array_rva)
+        if not arr_ptr: return
+        for i in range(10):
+            yield m.u64(arr_ptr + i * stride)
+
+def _norm_champ(s):
+    """Normalize champion names for matching. API returns display form ('Bel'Veth',
+    'Dr. Mundo', 'Cho'Gath') while the in-memory struct uses the internal form
+    ('Belveth', 'DrMundo', 'Chogath'). Strip apostrophes/dots/spaces, lowercase."""
+    return (s or "").replace("'", "").replace(".", "").replace(" ", "").lower()
+
+def _get_hero_and_api(m, base, hero_array_rva, name_off, layout="deref", stride=8, target_name="Garen"):
+    """Helper: get hero ptr + API data for target champion.
+
+    Returns (None, None) if the champion is not in the hero_array — caller must skip
+    the snapshot rather than read garbage from a different hero.
+    """
+    target_norm = _norm_champ(target_name)
     hp = None
-    for i in range(10):
-        h = m.u64(arr_ptr + i*8)
-        if h and m.string(h + name_off, 40) == target_name:
+    ptrs = list(_iter_hero_ptrs(m, base, hero_array_rva, layout, stride))
+    for h in ptrs:
+        if h and _norm_champ(m.string(h + name_off, 40)) == target_norm:
             hp = h; break
     if not hp:
-        for i in range(10):
-            h = m.u64(arr_ptr + i*8)
-            if h: hp = h; break
+        live_names = [m.string(h + name_off, 40) for h in ptrs if h]
+        print(f"  ⚠ {target_name!r} not in hero_array (live: {[n for n in live_names if n]}); skipping snapshot")
+        return None, None
     pl = rget("/liveclientdata/playerlist")
-    api = next((p for p in pl if p.get("championName") == target_name), pl[0] if pl else None)
+    api = next((p for p in pl if _norm_champ(p.get("championName")) == target_norm), None)
+    if api is None:
+        live_api = [p.get("championName") for p in pl]
+        print(f"  ⚠ {target_name!r} not in /liveclientdata/playerlist (live: {live_api}); skipping snapshot")
+        return None, None
     return hp, api
 
-def find_hero_fields(m, base, hero_array_rva, anchors):
+def find_hero_fields(m, base, hero_array_rva, anchors, layout="deref", stride=8, target_name="Garen"):
     """Find hero struct fields using 2-time-point verification."""
     print("\n[Phase 2] Finding hero struct fields (multi-time verification)...")
-    arr_ptr = m.u64(base + hero_array_rva)
 
-    # Find champion_name offset
+    # Find champion_name offset (±0x80 from anchor, step 4 — patches have shifted by +0x38)
     name_off = None
-    for drift in range(-16, 24, 4):
+    best_found = 0
+    for drift in range(-0x80, 0x84, 4):
         test_off = anchors["champion_name"] + drift
         found = 0
-        for i in range(10):
-            hp = m.u64(arr_ptr + i*8)
+        for hp in _iter_hero_ptrs(m, base, hero_array_rva, layout, stride):
             if hp:
                 name = m.string(hp + test_off, 40)
                 if name and name in CHAMP_NAMES: found += 1
-        if found >= 5:
+        if found > best_found:
+            best_found = found
             name_off = test_off
-            print(f"  ✓ champion_name at hero+0x{name_off:X} ({found}/10 match)")
-            break
-    if not name_off:
-        print("  ✗ champion_name not found"); return {}
+            if found >= 8: break  # very confident
+    if name_off and best_found >= 5:
+        print(f"  ✓ champion_name at hero+0x{name_off:X} ({best_found}/10 match)")
+    else:
+        print(f"  ✗ champion_name not found (best={best_found}/10)"); return {}
 
     results = {"champion_name": name_off}
 
     # Capture at TWO time points — read ALL candidate values IMMEDIATELY
     # (hero pointers go stale after seek, so must read at capture time)
-    SEARCH_RANGE = 96  # ±96 bytes from anchor (widened for non-uniform patch shifts)
+    SEARCH_RANGE = 192  # ±192 bytes from anchor (widened — patches have shifted by up to +0x80)
     candidate_offsets = {}
     for field, anchor_key, dtype in [
         ("position", "position", "vec3"), ("level", "level", "u32"),
@@ -230,7 +317,7 @@ def find_hero_fields(m, base, hero_array_rva, anchors):
         time.sleep(2)
         rpost("/replay/playback", {"speed": 0.0, "paused": True})
         time.sleep(0.3)
-        hp, api = _get_hero_and_api(m, base, hero_array_rva, name_off)
+        hp, api = _get_hero_and_api(m, base, hero_array_rva, name_off, layout=layout, stride=stride, target_name=target_name)
         gt_rva = anchors.get("game_time", 0x1DCD1E0)
         gt = m.f32(base + gt_rva) or 0
         if not hp or not api: continue
@@ -248,17 +335,48 @@ def find_hero_fields(m, base, hero_array_rva, anchors):
                 else:
                     v = m.f32(hp + off)
                 snap["vals"][(field, off)] = v
-        # Also read active spell name chain
+        # Also read active spell name chain. The chain dereferences through:
+        #   active_spell_ptr (hp + active_spell_off)
+        #     +0x008 → spell_info struct (spell_info offset within cast struct)
+        #       +0x028 → spell_name_ptr (spell_name_ptr offset within spell_info)
+        # If the chain produces a valid champion-spell name, both spell_info=0x008
+        # and spell_name_ptr=0x028 are transitively verified for this patch.
+        # Also probe sp + 0..0x300 for a Vec3 (cast_target) matching hero position
+        # (self-cast) or somewhere on the map.
+        SPELL_INFO_HOPS = [0x008, 0x010, 0x018]
         for off in candidate_offsets.get("active_spell", []):
             ptr = m.u64(hp + off)
             if ptr and LO < ptr < HI:
-                si = m.u64(ptr + 0x8)
-                if si and LO < si < HI:
-                    np_ = m.u64(si + 0x28)
-                    if np_ and LO < np_ < HI:
-                        sn = m.string(np_)
-                        if sn and len(sn) > 3:
-                            snap["vals"][("active_spell_name", off)] = sn
+                for si_hop in SPELL_INFO_HOPS:
+                    si = m.u64(ptr + si_hop)
+                    if si and LO < si < HI:
+                        np_ = m.u64(si + 0x28)
+                        if np_ and LO < np_ < HI:
+                            sn = m.string(np_)
+                            if sn and len(sn) > 3:
+                                snap["vals"][("active_spell_name", off)] = sn
+                                snap["vals"][("spell_info_hop", off)] = si_hop
+                                # Probe for cast_target Vec3 within the cast struct
+                                # (sp + 0..0x300, 4-byte aligned). Map bounds = 200..15800.
+                                pos = snap["vals"].get(("position", anchors.get("position", 0x200)))
+                                hx = pos[0] if pos else None
+                                hz = pos[2] if pos else None
+                                for ct_off in range(0x40, 0x300, 4):
+                                    v = m.vec3(ptr + ct_off)
+                                    if not v: continue
+                                    x, _, z = v
+                                    if not (-2 < x < 16000 and -2 < z < 16000): continue
+                                    # Prefer match to hero pos (self-cast) but accept any plausible
+                                    if hx is not None and hz is not None and abs(x - hx) < 10 and abs(z - hz) < 10:
+                                        snap["vals"][("cast_target_off", off)] = ct_off
+                                        snap["vals"][("cast_target_match", off)] = "self"
+                                        break
+                                    # Fallback: any plausible non-zero Vec3 inside map
+                                    if 200 < x < 15800 and 200 < z < 15800:
+                                        if ("cast_target_off", off) not in snap["vals"]:
+                                            snap["vals"][("cast_target_off", off)] = ct_off
+                                            snap["vals"][("cast_target_match", off)] = "map"
+                                break  # found chain via this si_hop, stop trying more hops
         snapshots.append(snap)
         print(f"  snapshot gt={gt:.0f}: level={api.get('level')} ward={sc.get('wardScore',0):.1f}")
 
@@ -302,20 +420,26 @@ def find_hero_fields(m, base, hero_array_rva, anchors):
                     break
             break
 
-    # Gold earned: must increase
+    # Gold earned: increases monotonically, plausible total-gold range (0..200k).
+    # Tighter bounds avoid huge-value garbage candidates (e.g. raw bit pattern of a pointer
+    # interpreted as f32 yields 1e30+).
     for off in candidate_offsets["gold_earned"]:
         v1 = s1["vals"].get(("gold_earned", off))
         v2 = s2["vals"].get(("gold_earned", off))
-        if v1 is not None and v2 is not None and v2 > v1 > 100:
+        if (v1 is not None and v2 is not None
+                and 100 < v1 < 200_000 and 100 < v2 < 200_000
+                and v2 > v1 and (v2 - v1) < 100_000):
             results["gold_earned"] = off
             print(f"  ✓ gold_earned at hero+0x{off:X}: {v1:.0f}→{v2:.0f}")
             break
 
-    # Gold current: plausible range
+    # Gold current: plausible spending-gold range, must be positive at least once.
     for off in candidate_offsets["gold_current"]:
         v1 = s1["vals"].get(("gold_current", off))
         v2 = s2["vals"].get(("gold_current", off))
-        if v1 is not None and v2 is not None and 0 < v1 < 20000 and 0 < v2 < 20000:
+        if (v1 is not None and v2 is not None
+                and 0 <= v1 < 30_000 and 0 <= v2 < 30_000
+                and (v1 > 10 or v2 > 10)):  # at least one snapshot has spendable gold
             results["gold_current"] = off
             print(f"  ✓ gold_current at hero+0x{off:X}: {v1:.0f}→{v2:.0f}")
             break
@@ -345,167 +469,437 @@ def find_hero_fields(m, base, hero_array_rva, anchors):
             if sn:
                 results["active_spell"] = off
                 print(f"  ✓ active_spell at hero+0x{off:X}: {sn}")
+                # Transitively verified: spell_info hop and spell_name_ptr.
+                si_hop = snap["vals"].get(("spell_info_hop", off))
+                if si_hop is not None:
+                    results["spell_info"] = si_hop
+                    print(f"  ✓ spell_info at active_spell+0x{si_hop:X} (transitive via name chain)")
+                results["spell_name_ptr"] = 0x28
+                # cast_target probe (only valid when actually casting)
+                ct = snap["vals"].get(("cast_target_off", off))
+                ctm = snap["vals"].get(("cast_target_match", off))
+                if ct is not None:
+                    results["cast_target"] = ct
+                    print(f"  ✓ cast_target at active_spell+0x{ct:X} (match={ctm})")
+                else:
+                    print(f"  ⚠ cast_target NOT probed (no Vec3 in cast struct matched hero pos / map bounds)")
                 found = True; break
         if found: break
     if "active_spell" not in results:
-        # Fallback: if spellbook anchor is known, active_spell = spellbook + 0x38
-        sb_anchor = anchors.get("spellbook", 0x30E8)
-        fallback = sb_anchor + 0x38
-        results["active_spell"] = fallback
-        print(f"  ~ active_spell at hero+0x{fallback:X} (fallback: spellbook+0x38)")
+        print(f"  ~ active_spell, spell_info, cast_target deferred — Phase 3.6 (live-cast diff probe) is sole source of truth")
 
     return results
 
 # ═══════════════════════════════════════════════════════════════
 # Phase 3: Find SpellBook
 # ═══════════════════════════════════════════════════════════════
-def find_spellbook(m, garen_hp, anchors, offsets=None):
-    """Find inline spellbook by looking for spell name deref chains."""
-    print("\n[Phase 3] Finding SpellBook...")
-    expected = {"GarenQ", "GarenW", "GarenE", "GarenR"}
-    for sb_drift in range(-0x100, 0x100, 8):
+def find_spellbook(m, hero_ptr, anchors, offsets=None, champion="Garen"):
+    """Find inline spellbook by looking for spell name deref chains.
+
+    Champion-adaptive: spell names are <Champion><Q|W|E|R> (e.g. "BelvethQ").
+    Also searches the slot_spell_info hop (slot+?) and spell_name_ptr hop (spell_info+?)
+    rather than only trying a small fixed list, so patches that shift these still resolve.
+    """
+    print(f"\n[Phase 3] Finding SpellBook for {champion}...")
+    expected = {f"{champion}{k}" for k in "QWER"}
+    # Widened search ranges 2026-05-05: spellbook shifted by 0x50 across patches,
+    # slot_array shifted by 0x58 — old ±0x100/±0x60 windows missed champions whose
+    # base SpellBook RVA differs from the anchor.
+    info_offsets = [0x130, 0x128, 0x120, 0x138, 0x140, 0x148, 0x150, 0x158, 0x118, 0x110, 0x108, 0x160]
+    name_offsets = [0x28, 0x20, 0x30, 0x38, 0x18, 0x10, 0x08, 0x40, 0x48, 0x50]
+    for sb_drift in range(-0x200, 0x200, 8):
         sb_off = anchors["spellbook"] + sb_drift
-        for sa_drift in range(-0x60, 0x60, 8):
+        for sa_drift in range(-0x100, 0x100, 8):
             sa_off = anchors["slot_array"] + sa_drift
-            # Check if hero+sb_off+sa_off is an array of spell slot pointers
             found_names = set()
             best_info_off = None
+            best_name_off = None
             for i in range(4):
-                slot_ptr = m.u64(garen_hp + sb_off + sa_off + i*8)
+                slot_ptr = m.u64(hero_ptr + sb_off + sa_off + i*8)
                 if not slot_ptr or not (LO < slot_ptr < HI): continue
-                for info_off in [0x128, 0x130, 0x120, 0x138]:
+                for info_off in info_offsets:
                     si = m.u64(slot_ptr + info_off)
                     if not si or not (LO < si < HI): continue
-                    np = m.u64(si + 0x28)
-                    if not np or not (LO < np < HI): continue
-                    sn = m.string(np)
-                    if sn and sn in expected:
-                        found_names.add(sn)
-                        best_info_off = info_off
-                        break
+                    for name_off in name_offsets:
+                        np = m.u64(si + name_off)
+                        if not np or not (LO < np < HI): continue
+                        sn = m.string(np)
+                        if sn and sn in expected:
+                            found_names.add(sn)
+                            best_info_off = info_off
+                            best_name_off = name_off
+                            break
+                    if best_info_off == info_off: break
             spells_found = len(found_names)
             if spells_found >= 4:
-                # Cross-check: spellbook + 0x38 should == active_spell offset
-                # This disambiguates the base vs slot_array split
-                active_spell_off = offsets.get("active_spell")
-                if active_spell_off and sb_off + 0x38 != active_spell_off:
-                    # Wrong split — recalculate
-                    correct_sb = active_spell_off - 0x38
-                    correct_sa = (sb_off + sa_off) - correct_sb
-                    print(f"  ✓ spellbook at hero+0x{correct_sb:X} (fixed via active_spell), slot_array at +0x{correct_sa:X} ({spells_found}/4 spells)")
-                    sb_off, sa_off = correct_sb, correct_sa
-                else:
-                    print(f"  ✓ spellbook at hero+0x{sb_off:X}, slot_array at +0x{sa_off:X} ({spells_found}/4 spells)")
-                # Find the spell_info offset within slot
-                slot0 = m.u64(garen_hp + sb_off + sa_off)
-                for info_off in [0x128, 0x130, 0x120, 0x138]:
-                    si = m.u64(slot0 + info_off)
-                    if si and LO < si < HI:
-                        np = m.u64(si + 0x28)
-                        if np and LO < np < HI:
-                            sn = m.string(np)
-                            if sn and sn.startswith("Garen"):
-                                print(f"    slot_spell_info at +0x{info_off:X}")
-                                return {"spellbook": sb_off, "slot_array": sa_off, "slot_spell_info": info_off}
-                return {"spellbook": sb_off, "slot_array": sa_off}
-    print("  ✗ SpellBook not found")
+                # Trust the (sb_off, sa_off) that produced 4 valid spell-name derefs.
+                # The old "fixed via active_spell" rewrite path assumed sb_off + 0x38 ==
+                # active_spell — that convention BROKE on 16.9.772. Phase 3.6 verifies
+                # active_spell separately via live-cast diff probe.
+                print(f"  ✓ spellbook at hero+0x{sb_off:X}, slot_array at +0x{sa_off:X} ({spells_found}/4 spells)")
+                print(f"    slot_spell_info at +0x{best_info_off:X}, spell_name_ptr at +0x{best_name_off:X}")
+                return {
+                    "spellbook": sb_off, "slot_array": sa_off,
+                    "slot_spell_info": best_info_off,
+                    "spell_name_ptr": best_name_off,
+                }
+    print(f"  ✗ SpellBook not found (looking for {sorted(expected)})")
     return {}
 
 # ═══════════════════════════════════════════════════════════════
-# Phase 4: Find click destination via global scan
+# Phase 3.6: Live-cast probe to derive spell_info + cast_target
 # ═══════════════════════════════════════════════════════════════
-def find_click_dest(m, base, garen_hp):
-    """Play a known movement, global scan for destination vec3."""
-    print("\n[Phase 4] Finding click destination...")
-    # Play from gt=35, observe where Garen stops
-    rpost("/replay/playback", {"time": 35.0, "speed": 0.0, "paused": True})
-    time.sleep(1.5)
-    rpost("/replay/playback", {"speed": 1.0, "paused": False})
+def probe_live_cast(m, base, hero_array_rva, layout, stride, name_off,
+                    position_off, champion="Garen",
+                    seek_targets=(300.0, 500.0, 700.0, 900.0, 1100.0, 1300.0,
+                                  1500.0, 1700.0, 1900.0, 2100.0),
+                    poll_seconds=15.0,
+                    scan_lo=0x2C00, scan_hi=0x3400):
+    """Snapshot-diff probe to derive active_spell + spell_info + cast_target.
 
-    # Sample position at 2Hz for 15s to find stop point
-    positions = []
-    t0 = time.time()
-    while time.time() - t0 < 15:
-        pos = m.vec3(garen_hp + 0x25C)  # use position we already know
-        if pos and 100 < pos[0] < 16000:
-            positions.append((round(pos[0],1), round(pos[2],1)))
-        time.sleep(0.5)
+    Strategy:
+      1. Pause at seek_gt; snapshot ALL u64 fields at hero+0x3000..0x3300 (paused, baseline).
+      2. Resume; poll those same offsets at 50Hz.
+      3. Any offset that goes non-null AND derefs (via hop 0x008/0x010/0x018) to a
+         heap struct whose +0x028 is a ptr to "<champion>X" (Q/W/E/R) string is our
+         live active_spell offset. Capture spell_info hop + scan for cast_target Vec3.
 
-    # Find where Garen stopped (consecutive same position)
-    dest = None
-    for i in range(len(positions)-2):
-        if positions[i] == positions[i+1] == positions[i+2]:
-            dest = positions[i]
-            break
-    if not dest:
-        dest = positions[-1] if positions else None
+    Re-resolves hero_ptr after each seek (engine reallocs heroes).
+    Returns {active_spell, spell_info, cast_target, spell_name_ptr} on success, {} on miss.
+    """
+    print("\n[Phase 3.6] Live-cast diff probe (active_spell + spell_info + cast_target)...")
+    SPELL_INFO_HOPS = [0x008, 0x010, 0x018, 0x020, 0x028]
+    SCAN_STEP = 8
+    SCAN_OFFSETS = list(range(scan_lo, scan_hi, SCAN_STEP))
 
-    if not dest:
-        print("  ✗ Could not determine stop position")
+    target_norm = _norm_champ(champion)
+
+    def _find_target_hp():
+        for hp in _iter_hero_ptrs(m, base, hero_array_rva, layout, stride):
+            if hp and LO < hp < HI and _norm_champ(m.string(hp + name_off, 40)) == target_norm:
+                return hp
+        return None
+
+    expected_spells = {f"{champion}{k}" for k in "QWER"}
+
+    for seek_gt in seek_targets:
+        rpost("/replay/playback", {"time": float(seek_gt), "speed": 0.0, "paused": True})
+        time.sleep(1.5)
+        hero_ptr = _find_target_hp()
+        if not hero_ptr:
+            print(f"  seek gt={seek_gt:.0f}: ⚠ {champion} not found in hero_array post-seek")
+            continue
+        # Snapshot baseline (paused) — record which offsets were non-null already
+        baseline_nonnull = set()
+        for off in SCAN_OFFSETS:
+            v = m.u64(hero_ptr + off)
+            if v: baseline_nonnull.add(off)
+        rpost("/replay/playback", {"speed": 1.0, "paused": False})
+        t_start = time.time()
+        sn_caught = None
+        cast_struct = None
+        si_hop = None
+        ac_off = None
+        # Track which offsets have toggled to a non-null value during play
+        toggled_offsets = set()
+        while time.time() - t_start < poll_seconds:
+            for off in SCAN_OFFSETS:
+                v = m.u64(hero_ptr + off)
+                if not v or not (LO < v < HI): continue
+                if off in baseline_nonnull and off not in toggled_offsets:
+                    # Was non-null at baseline AND still non-null — could be permanent struct ptr.
+                    # Still try the chain in case it derefs to a spell.
+                    pass
+                # Attempt chain
+                for hop in SPELL_INFO_HOPS:
+                    si = m.u64(v + hop)
+                    if not si or not (LO < si < HI): continue
+                    np_ = m.u64(si + 0x28)
+                    if not np_ or not (LO < np_ < HI): continue
+                    sn = m.string(np_, 32)
+                    if sn and sn in expected_spells:
+                        sn_caught = sn
+                        cast_struct = v
+                        si_hop = hop
+                        ac_off = off
+                        break
+                if sn_caught: break
+                # If this offset wasn't in baseline_nonnull, it just toggled
+                if off not in baseline_nonnull:
+                    toggled_offsets.add(off)
+            if sn_caught: break
+            time.sleep(0.02)
         rpost("/replay/playback", {"speed": 0.0, "paused": True})
-        return {}
+        if not sn_caught:
+            print(f"  seek gt={seek_gt:.0f}: no cast in {poll_seconds:.0f}s "
+                  f"({len(toggled_offsets)} offsets toggled non-null but none derefed to {sorted(expected_spells)[0]}…)")
+            continue
 
-    print(f"  Garen stops at ({dest[0]}, {dest[1]})")
+        print(f"  seek gt={seek_gt:.0f}: caught cast {sn_caught!r} via hero+0x{ac_off:X}")
+        print(f"  ✓ active_spell at hero+0x{ac_off:X} (diff-probe verified)")
+        print(f"  ✓ spell_info at active_spell+0x{si_hop:X} (chain verified)")
+        result = {"active_spell": ac_off, "spell_info": si_hop, "spell_name_ptr": 0x28}
 
-    # Replay the movement, pause mid-way, global scan for dest
-    rpost("/replay/playback", {"time": 36.0, "speed": 0.0, "paused": True})
-    time.sleep(1.5)
-    rpost("/replay/playback", {"speed": 1.0, "paused": False})
-    time.sleep(2)
-    rpost("/replay/playback", {"speed": 0.0, "paused": True})
-    time.sleep(0.3)
+        # Probe cast_target Vec3 within the cast struct
+        hpos = m.vec3(hero_ptr + position_off)
+        hx, hz = (hpos[0], hpos[2]) if hpos else (None, None)
+        ct_self = None
+        ct_map = None
+        for ct_off in range(0x40, 0x300, 4):
+            v = m.vec3(cast_struct + ct_off)
+            if not v: continue
+            x, _, z = v
+            if not (-2 < x < 16000 and -2 < z < 16000): continue
+            if hx is not None and abs(x - hx) < 10 and abs(z - hz) < 10:
+                ct_self = ct_off
+                break
+            if 200 < x < 15800 and 200 < z < 15800 and ct_map is None:
+                ct_map = ct_off
+        if ct_self is not None:
+            result["cast_target"] = ct_self
+            print(f"  ✓ cast_target at active_spell+0x{ct_self:X} (self-cast match)")
+        elif ct_map is not None:
+            result["cast_target"] = ct_map
+            print(f"  ✓ cast_target at active_spell+0x{ct_map:X} (in-map Vec3)")
+        else:
+            print(f"  ⚠ cast_target NOT found in cast struct (no plausible Vec3)")
+        return result
 
-    dest_x, dest_z = dest
-    BUF = 30
-    regions = enum_regions(m.h)
-    print(f"  Scanning {len(regions)} regions for ({dest_x}±{BUF}, ?, {dest_z}±{BUF})...")
+    print(f"  ⚠ no cast captured across {len(seek_targets)} seeks; spell_info/cast_target remain MISSING")
+    return {}
 
-    hits = []
+# ═══════════════════════════════════════════════════════════════
+# Phase 3.5: Find click-dest VTABLE_RVA via runtime triple-mirror scan
+# ═══════════════════════════════════════════════════════════════
+def find_click_vtable(m, base, mod_size, hero_ptrs):
+    """Find click-dest class vptr (16.9.772+) via heap-scan for triple-Vec3-mirror.
+
+    Click-dest object layout (across all known patches):
+      parent+0x00       vptr (the class signature we're after)
+      parent+0x14       Vec3 click destination (xfile)
+      parent+0x14+0x308 Vec3 mirror B
+      parent+0x14+0x374 Vec3 mirror C
+
+    Plus an owner pointer at fixed offset within the parent (parent+0x68 on 16.8.766).
+    Owner offset is also derived dynamically by checking which fixed offset in
+    parent reads back one of the known hero pointers.
+    """
+    print("\n[Phase 3.5] Finding click-dest VTABLE_RVA + owner offset...")
+    regions = [(a, sz) for (a, sz) in enum_regions(m.h)
+               if sz <= 64*1024*1024]  # skip giant regions
+
+    hero_ptr_set = set(hero_ptrs.values()) if isinstance(hero_ptrs, dict) else set(hero_ptrs)
+
+    # Pass 1: find candidate parents via triple-mirror Vec3 pattern
+    parents = []  # list of (parent_addr, vec3)
     for ra, rsz in regions:
         data = m.read(ra, rsz)
-        if not data: continue
-        for i in range(0, len(data)-12, 4):
+        if not data or len(data) < 0x400: continue
+        # Iterate Vec3 candidates (4-byte aligned)
+        for i in range(0, len(data) - 0x380, 4):
             x = struct.unpack_from('<f', data, i)[0]
-            if not (dest_x - BUF < x < dest_x + BUF): continue
+            if not (200 < x < 15800): continue
             z = struct.unpack_from('<f', data, i+8)[0]
-            if not (dest_z - BUF < z < dest_z + BUF): continue
+            if not (200 < z < 15800): continue
             y = struct.unpack_from('<f', data, i+4)[0]
-            hits.append((ra + i, round(x,1), round(y,1), round(z,1)))
+            if not (-10 < y < 250): continue
+            # Triple-mirror check
+            xb, yb, zb = struct.unpack_from('<fff', data, i + 0x308)
+            if xb != x or yb != y or zb != z: continue
+            xc, yc, zc = struct.unpack_from('<fff', data, i + 0x374)
+            if xc != x or zc != z: continue
+            # parent = vec_addr - 0x14 (vec lives at parent+0x14)
+            if i < 0x14: continue
+            parent_addr = ra + i - 0x14
+            parents.append((parent_addr, (x, y, z)))
 
-    print(f"  {len(hits)} global hits for destination")
+    if not parents:
+        print("  ✗ no triple-mirror candidates found")
+        return {}
+    print(f"  found {len(parents)} triple-mirror parent candidates")
 
-    if not hits:
+    # Pass 2: top vptr value among parents → VTABLE_RVA
+    from collections import Counter
+    vptr_counts = Counter()
+    for parent_addr, _ in parents:
+        vp = m.u64(parent_addr)
+        if vp and base <= vp < base + mod_size:
+            vptr_counts[vp - base] += 1
+    if not vptr_counts:
+        print("  ✗ no module-resident vptrs")
+        return {}
+    vtable_rva, n_hits = vptr_counts.most_common(1)[0]
+    print(f"  ✓ click_vtable_rva = 0x{vtable_rva:X}  (n={n_hits})")
+
+    # Pass 3: derive owner offset by checking common candidates against hero_ptrs.
+    # Filter to parents whose vptr matches the chosen VTABLE.
+    matching_parents = [p for (p, _) in parents
+                        if m.u64(p) == base + vtable_rva]
+    print(f"  {len(matching_parents)} parents have VTABLE vptr; testing owner offsets...")
+    owner_offset = None
+    if hero_ptr_set and matching_parents:
+        # Try a range of fixed offsets in parent; pick the offset that points to
+        # a known hero ptr in the most parents.
+        owner_match_counts = Counter()
+        for off in range(0x10, 0x200, 8):
+            n = 0
+            for p in matching_parents:
+                if m.u64(p + off) in hero_ptr_set:
+                    n += 1
+            if n > 0:
+                owner_match_counts[off] = n
+        if owner_match_counts:
+            owner_offset, n = owner_match_counts.most_common(1)[0]
+            print(f"  ✓ click_owner_offset = 0x{owner_offset:X}  (matches {n}/{len(matching_parents)} parents)")
+        else:
+            print(f"  ✗ no owner offset found (parent+0x?? → hero_ptr)")
+    return {
+        "click_vtable_rva": vtable_rva,
+        **({"click_owner_offset": owner_offset} if owner_offset is not None else {}),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Phase 4: Find attack_target_pos on the hero struct (Vec3 of AA target unit)
+# ═══════════════════════════════════════════════════════════════
+def find_attack_target_pos(m, base, hero_array_rva, layout, stride, name_off,
+                           position_off, active_spell_off, spell_info_off,
+                           spell_name_ptr_off, champion="Garen",
+                           seek_targets=(60.0, 120.0, 200.0, 300.0, 420.0),
+                           target_aa_ticks=60, poll_seconds_per_seek=50.0,
+                           scan_lo=0x3F00, scan_hi=0x4900):
+    """Find hero+attack_target_pos: the Vec3 of the unit being auto-attacked.
+
+    On 16.9.x the AA cast struct's `cast_target` field is the cast-origin (= hero
+    pos), not the target unit. The real target's world pos lives on the HERO
+    struct. We find its offset by:
+
+      1) Seeking through laning windows; for each tick, check whether the target
+         champion's `active_spell` resolves to "<Champion>BasicAttack(2)".
+      2) On AA ticks, snapshot u32s in hero[scan_lo..scan_hi].
+      3) Score each offset: count of ticks where (offset, offset+4, offset+8) is
+         a valid Vec3 in map bounds AND distinct from hero pos (>=50u).
+      4) Among offsets passing 70% threshold, prefer the one with MAX median
+         distance (the trajectory buffer also clears the threshold but stays
+         within ~60u of hero — AA target lives further out).
+
+    No cam-lock player-key required: the spell-name-startswith-champion filter
+    rejects spell-pointer mirroring artifacts (Garen's struct momentarily holding
+    XinZhao's cast struct etc.)."""
+    print("\n[Phase 4] Finding attack_target_pos (cam-lock-free AA-filter probe)...")
+    target_norm = _norm_champ(champion)
+
+    def _find_target_hp():
+        for hp in _iter_hero_ptrs(m, base, hero_array_rva, layout, stride):
+            if hp and LO < hp < HI and _norm_champ(m.string(hp + name_off, 40)) == target_norm:
+                return hp
+        return None
+
+    aa_ticks = []  # list of {pos, u32s}
+    for seek_gt in seek_targets:
+        if len(aa_ticks) >= target_aa_ticks: break
+        rpost("/replay/playback", {"time": float(seek_gt), "paused": True})
+        time.sleep(0.6)
+        rpost("/replay/render", {"selectionName": champion})
+        time.sleep(0.3)
+        rpost("/replay/playback", {"speed": 2.0, "paused": False})
+        time.sleep(0.8)
+
+        deadline = time.time() + poll_seconds_per_seek
+        captured_at_seek = 0
+        while len(aa_ticks) < target_aa_ticks and time.time() < deadline:
+            time.sleep(0.04)
+            hp = _find_target_hp()
+            if not hp: continue
+            sp = m.u64(hp + active_spell_off)
+            if not sp or not (LO < sp < HI): continue
+            si = m.u64(sp + spell_info_off)
+            if not si or not (LO < si < HI): continue
+            np_ = m.u64(si + spell_name_ptr_off)
+            if not np_ or not (LO < np_ < HI): continue
+            sn = m.string(np_, 48)
+            if not sn or not sn.startswith(champion) or "asicAttack" not in sn:
+                continue
+            pos = m.vec3(hp + position_off)
+            if not pos: continue
+            d = m.read(hp + scan_lo, scan_hi - scan_lo)
+            if not d: continue
+            u32s = struct.unpack(f"<{len(d)//4}I", d)
+            aa_ticks.append({"pos": pos, "u32s": u32s})
+            captured_at_seek += 1
+        print(f"  seek gt={seek_gt:.0f}: +{captured_at_seek} {champion}-AA ticks "
+              f"(total {len(aa_ticks)}/{target_aa_ticks})")
+
+    rpost("/replay/playback", {"speed": 0.0, "paused": True})
+
+    if not aa_ticks:
+        print(f"  ⚠ no {champion} AAs captured across {len(seek_targets)} seek windows")
         return {}
 
-    # Backref: find what points to these addresses
-    for dest_addr, x, y, z in hits[:10]:
-        for offset_guess in [0x00, 0x10, 0x20, 0x30, 0x34, 0x40]:
-            struct_base = dest_addr - offset_guess
-            needle = struct.pack('<Q', struct_base)
-            # Check module data section
-            mod_data = m.read(base, 0x2000000)  # first 32MB of module
-            if mod_data:
-                idx = mod_data.find(needle)
-                if idx >= 0 and idx % 8 == 0:
-                    print(f"  ✓ click_dest: module+0x{idx:X} → struct+0x{offset_guess:X} = dest ({x},{z})")
-                    return {"click_dest_rva": idx, "click_dest_off": offset_guess}
+    # Score every aligned offset in the scan range as a candidate Vec3 start.
+    n_off = (scan_hi - scan_lo) // 4
+    scored = []
+    for off_idx in range(n_off - 2):
+        off = scan_lo + off_idx * 4
+        valid = 0
+        dists = []
+        for tick in aa_ticks:
+            fx = struct.unpack("<f", struct.pack("<I", tick["u32s"][off_idx]))[0]
+            fy = struct.unpack("<f", struct.pack("<I", tick["u32s"][off_idx + 1]))[0]
+            fz = struct.unpack("<f", struct.pack("<I", tick["u32s"][off_idx + 2]))[0]
+            if not (-2000 < fx < 16500 and -2000 < fz < 16500 and -300 < fy < 600):
+                continue
+            dx = fx - tick["pos"][0]; dz = fz - tick["pos"][2]
+            d2 = dx * dx + dz * dz
+            if d2 < 50 * 50: continue   # too close to hero pos (hero-pos mirror)
+            valid += 1
+            dists.append(d2 ** 0.5)
+        if valid >= len(aa_ticks) * 0.7 and dists:
+            med = sorted(dists)[len(dists) // 2]
+            scored.append((off, valid, med))
 
-    print("  ✗ No stable pointer chain found for click destination")
-    return {}
+    if not scored:
+        print(f"  ⚠ no offset cleared 70% valid-target Vec3 threshold")
+        return {}
+    # Prefer high valid count, then HIGH median distance (trajectory buffers also
+    # clear 70% but cluster near hero — AA target is further).
+    scored.sort(key=lambda s: (-s[1], -s[2]))
+    off, valid, med = scored[0]
+    print(f"  ✓ attack_target_pos at hero+0x{off:X} "
+          f"(valid {valid}/{len(aa_ticks)}, med_dist={med:.0f}u)")
+    return {"attack_target_pos": off}
 
 # ═══════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════
+def _now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+def _load_anchors_file(path):
+    """Load anchors from either the legacy flat format or the tagged format
+    (where each offset is {"value": <int>, ...}). Skips _-prefixed metadata."""
+    with open(path) as f:
+        raw = json.load(f)
+    out = {}
+    for k, v in raw.items():
+        if k.startswith("_"): continue
+        if isinstance(v, int):
+            out[k] = v
+        elif isinstance(v, dict) and isinstance(v.get("value"), int):
+            out[k] = v["value"]
+    return out
+
 def main():
     parser = argparse.ArgumentParser(description="Automated offset scanner")
     parser.add_argument("--anchors", help="Previous offsets JSON for drift-based search")
     parser.add_argument("--output", "-o", default="offsets.json")
+    parser.add_argument("--patch", default=None, help="Patch identifier tag (e.g., 16.9.772)")
+    parser.add_argument("--champion", default="Garen", help="Champion name to lock onto for spellbook + click-dest discovery (e.g., Belveth)")
     args = parser.parse_args()
 
     anchors = DEFAULT_ANCHORS.copy()
     if args.anchors:
-        with open(args.anchors) as f:
-            anchors.update(json.load(f))
+        anchors.update(_load_anchors_file(args.anchors))
 
     print("=== League Offset Scanner ===")
 
@@ -529,25 +923,42 @@ def main():
     gt = rget("/liveclientdata/gamestats").get("gameTime", 0)
     print(f"Stabilized at gt={gt:.1f}")
 
-    offsets = {"_scanner_version": 1, "_patch_mod_size": mod_size}
+    offsets = {"_scanner_version": 2, "_patch_mod_size": mod_size,
+               "_scanned_at": _now_iso()}
+    if args.patch: offsets["_patch"] = args.patch
+    versions = {}  # field -> ISO8601 timestamp of last verification
+
+    def _tag(*fields):
+        ts = _now_iso()
+        for f in fields:
+            if f in offsets: versions[f] = ts
 
     # Phase 1: RVAs
-    hero_rva = find_hero_array(m, base, mod_size, anchors["hero_array"],
-                                name_anchor=anchors.get("champion_name", 0x4328))
-    if hero_rva: offsets["hero_array"] = hero_rva
+    hero_rva, layout, stride = find_hero_array(
+        m, base, mod_size, anchors["hero_array"],
+        name_anchor=anchors.get("champion_name", 0x4328))
+    if hero_rva is not None:
+        offsets["hero_array"] = hero_rva
+        offsets["hero_array_layout"] = layout
+        offsets["hero_array_stride"] = stride
+        _tag("hero_array", "hero_array_layout", "hero_array_stride")
 
     gt_rva = find_game_time(m, base, mod_size, anchors["game_time"], gt)
-    if gt_rva: offsets["game_time"] = gt_rva
+    if gt_rva:
+        offsets["game_time"] = gt_rva
+        _tag("game_time")
 
-    if not hero_rva:
+    if hero_rva is None:
         print("\nFATAL: Cannot find hero array. Aborting.")
         return
 
     # Phase 2: Hero fields (uses 2 time points internally)
-    if gt_rva:
-        anchors["game_time"] = gt_rva  # pass verified RVA for internal use
-    hero_fields = find_hero_fields(m, base, hero_rva, anchors)
+    if gt_rva: anchors["game_time"] = gt_rva
+    hero_fields = find_hero_fields(m, base, hero_rva, anchors,
+                                    layout=layout, stride=stride,
+                                    target_name=args.champion)
     offsets.update(hero_fields)
+    _tag(*hero_fields.keys())
 
     # Phase 3: SpellBook — seek to mid-game where spells are leveled
     rpost("/replay/playback", {"time": 600.0, "speed": 0.0, "paused": True})
@@ -556,28 +967,97 @@ def main():
     time.sleep(2)
     rpost("/replay/playback", {"speed": 0.0, "paused": True})
     time.sleep(0.3)
-    arr_ptr = m.u64(base + hero_rva)
-    garen_hp = None
+
+    # Layout-agnostic hero iteration; champion-match is normalization-tolerant
+    # ("Bel'Veth" display form ↔ "Belveth" struct form).
     name_off = offsets.get("champion_name", 0x4328)
-    for i in range(10):
-        hp = m.u64(arr_ptr + i*8)
-        if hp and m.string(hp + name_off) == "Garen":
-            garen_hp = hp; break
-    if not garen_hp:
-        for i in range(10):
-            hp = m.u64(arr_ptr + i*8)
-            if hp: garen_hp = hp; break
+    target_hp = None
+    hero_ptrs = {}  # slot index → hero_ptr (for click_vtable phase)
+    target_norm = _norm_champ(args.champion)
+    for i, hp in enumerate(_iter_hero_ptrs(m, base, hero_rva, layout, stride)):
+        if hp and (LO < hp < HI):
+            hero_ptrs[i] = hp
+            nm = m.string(hp + name_off)
+            if _norm_champ(nm) == target_norm:
+                target_hp = hp
+    if not target_hp:
+        live = [m.string(hp + name_off) for hp in hero_ptrs.values()]
+        print(f"\n⚠ champion {args.champion!r} not in hero_ptrs (live: {[n for n in live if n]}). "
+              f"Phase 3/3.5/3.6 will be skipped — fields will remain MISSING.")
 
-    if garen_hp:
-        sb = find_spellbook(m, garen_hp, anchors, offsets)
+    if target_hp:
+        sb = find_spellbook(m, target_hp, anchors, offsets, champion=args.champion)
         offsets.update(sb)
+        _tag(*sb.keys())
+        # Note: active_spell used to be set here as spellbook+0x38, but that convention
+        # broke on 16.9.772. active_spell is now solely derived by Phase 3.6 (live-cast
+        # diff probe). If Phase 3.6 fails to capture a cast, active_spell remains MISSING.
 
-    # Phase 4: Click destination
-    if garen_hp and "position" in offsets:
-        click = find_click_dest(m, base, garen_hp)
-        offsets.update(click)
+    # Phase 3.6: live-cast diff probe — sole source of truth for
+    # active_spell + spell_info + cast_target on 16.9.772+.
+    # Snapshots all u64 fields in hero+scan_lo..scan_hi while paused, then plays
+    # at 1x and watches which offset toggles to a deref-able cast struct.
+    if "position" in offsets and "champion_name" in offsets:
+        cast_offs = probe_live_cast(
+            m, base,
+            hero_array_rva=hero_rva, layout=layout, stride=stride,
+            name_off=offsets["champion_name"],
+            position_off=offsets["position"],
+            champion=args.champion,
+        )
+        for k, v in cast_offs.items():
+            offsets[k] = v
+            _tag(k)
+
+    # Phase 3.5: click-dest VTABLE_RVA + owner offset (heap-scan)
+    if hero_ptrs:
+        cvt = find_click_vtable(m, base, mod_size, hero_ptrs)
+        offsets.update(cvt)
+        _tag(*cvt.keys())
+
+    # Phase 4: attack_target_pos on hero struct (Vec3 of AA target unit).
+    # Requires Phase 3.6 outputs (active_spell + spell_info + spell_name_ptr).
+    needed_for_aa = ("position", "champion_name", "active_spell", "spell_info", "spell_name_ptr")
+    if all(k in offsets for k in needed_for_aa):
+        at = find_attack_target_pos(
+            m, base,
+            hero_array_rva=hero_rva, layout=layout, stride=stride,
+            name_off=offsets["champion_name"],
+            position_off=offsets["position"],
+            active_spell_off=offsets["active_spell"],
+            spell_info_off=offsets["spell_info"],
+            spell_name_ptr_off=offsets["spell_name_ptr"],
+            champion=args.champion,
+        )
+        offsets.update(at)
+        _tag(*at.keys())
+    else:
+        missing_for_aa = [k for k in needed_for_aa if k not in offsets]
+        print(f"\n[Phase 4] SKIP — missing prerequisites: {missing_for_aa}")
 
     rpost("/replay/playback", {"speed": 0.0, "paused": True})
+
+    # Loud-fallback policy: list every field the scan failed to derive. Pipeline.py
+    # defaults will fill these in but the user must be aware of every gap.
+    # NOTE: click_dest_rva/click_dest_off are LEGACY AiWaypoints fields not used by
+    # pipeline_merged.py (which uses click_vtable_rva + click_owner_offset directly).
+    EXPECTED = {
+        "hero_array", "hero_array_layout", "hero_array_stride",
+        "game_time",
+        "champion_name", "position", "level",
+        "hp_current", "hp_max",
+        "gold_current", "gold_earned",
+        "vision_score", "active_spell",
+        "spellbook", "slot_array", "slot_spell_info", "spell_name_ptr",
+        "spell_info", "cast_target",
+        "click_vtable_rva", "click_owner_offset",
+        "attack_target_pos",
+    }
+    missing = sorted(f for f in EXPECTED if f not in offsets)
+    if missing:
+        offsets["_missing"] = missing
+
+    offsets["_offset_versions"] = versions
 
     # Save
     out_path = args.output
@@ -585,10 +1065,19 @@ def main():
         json.dump(offsets, f, indent=2)
     print(f"\n=== Done! Saved to {out_path} ===")
     for k, v in offsets.items():
+        if k == "_offset_versions": continue
         if k.startswith("_"):
             print(f"  {k}: {v}")
+            continue
+        tag = versions.get(k, "?")
+        if isinstance(v, int):
+            print(f"  {k}: 0x{v:X}  [{tag}]")
         else:
-            print(f"  {k}: 0x{v:X}" if isinstance(v, int) else f"  {k}: {v}")
+            print(f"  {k}: {v}  [{tag}]")
+    if missing:
+        print(f"\n⚠ MISSING ({len(missing)} fields not derived; pipeline.py will fall back to defaults):")
+        for f in missing:
+            print(f"    ⚠ {f}")
 
 if __name__ == "__main__":
     main()
