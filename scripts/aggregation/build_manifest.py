@@ -13,7 +13,7 @@ Default flow:
      emit a manifest entry.
 
 Usage:
-    python scripts/build_manifest.py \
+    python scripts/aggregation/build_manifest.py \
         --api-key RGAPI-... \
         --champion Garen \
         --role TOP \
@@ -25,7 +25,7 @@ Usage:
         [--matches-per-player 50] \
         [--region na1]
 
-Manifest format (consumed by scripts/core/pipeline.py):
+Manifest format (consumed by scripts/aggregation/pipeline.py):
 
     {
       "name": "...",
@@ -130,6 +130,33 @@ def riot_id_for_puuid(routing, puuid, api_key, rl):
     return f"{name}#{tag}" if name and tag else None
 
 
+def puuid_for_riot_id(routing, game_name, tag_line, api_key, rl):
+    """account-v1 forward lookup: Riot ID → puuid."""
+    url = (f"https://{routing}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/"
+           f"{quote(game_name)}/{quote(tag_line)}")
+    d = http_get(url, api_key, rl)
+    if not d or d.get("_error"): return None
+    return d.get("puuid")
+
+
+def load_seed_riot_ids(path):
+    """Load curated `gameName#tagLine` lines (# starts a comment, blank lines
+    skipped). Returns list of (game_name, tag_line)."""
+    out = []
+    for raw in open(path):
+        # strip trailing comments only — '#' inside a tag is a real character,
+        # but seed files don't include hex-style tags so the simple rule works.
+        line = raw.rstrip("\n")
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if "#" not in line:
+            print(f"  WARN: seed line lacks #tag, skipping: {line!r}")
+            continue
+        name, tag = line.rsplit("#", 1)
+        out.append((name.strip(), tag.strip()))
+    return out
+
+
 def match_ids_by_puuid(routing, puuid, api_key, rl, count=50, queue=420):
     url = (f"https://{routing}.api.riotgames.com/lol/match/v5/matches/by-puuid/"
            f"{puuid}/ids?queue={queue}&count={count}")
@@ -171,7 +198,11 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--region", default=DEFAULT_REGION)
     ap.add_argument("--otp-list", default=None,
-                    help="optional file of summoner names (one per line) to intersect against")
+                    help="optional file of puuids (one per line) to intersect against the leaderboard")
+    ap.add_argument("--seed-riot-ids", default=None,
+                    help="file of curated `gameName#tagLine` Riot IDs (one per line). When provided, "
+                         "SKIPS the leaderboard pull and walks ONLY these players' match histories. "
+                         "Use this for high-signal champion-mains lists from op.gg / u.gg.")
     ap.add_argument("--max-games", type=int, default=300)
     ap.add_argument("--max-players", type=int, default=80,
                     help="cap how many Masters+ players we walk (after OTP filter)")
@@ -184,6 +215,10 @@ def main():
                     help="absolute upper bound on the emitted `duration` in seconds. Default 1900 "
                          "(~32min — covers the vast majority of LoL games; later state is less "
                          "critical for ML training and shorter caps protect against runaway pass1).")
+    ap.add_argument("--min-game-duration", type=int, default=600,
+                    help="drop matches whose actual gameDuration is below this (seconds). Default "
+                         "600s — filters out remakes (early /remake before 4min) and very short "
+                         "early-surrenders that have too little training signal.")
     args = ap.parse_args()
 
     routing = ROUTING_BY_REGION.get(args.region.lower())
@@ -191,28 +226,46 @@ def main():
         print(f"FATAL: unknown region {args.region!r}", file=sys.stderr); sys.exit(1)
 
     rl = RateLimiter(min_interval=0.07)
-    otp_filter = load_otp_filter(args.otp_list)
-    if otp_filter:
-        print(f"loaded {len(otp_filter)} OTP puuids from {args.otp_list}")
 
-    print(f"\n[1] Fetching Masters+ leaderboard ({args.region})...")
-    players = list(fetch_masters_plus(args.region, args.api_key, rl))
-    print(f"  total Masters+ players: {len(players)}")
+    # Two paths into the puuid list:
+    #   A) curated seed Riot IDs (high-signal, skips leaderboard entirely)
+    #   B) full Masters+ leaderboard, optionally puuid-OTP-filtered
+    puuids = []  # list of (puuid, metadata-dict)
+    if args.seed_riot_ids:
+        seeds = load_seed_riot_ids(args.seed_riot_ids)
+        print(f"\n[1] Resolving {len(seeds)} curated Riot IDs from {args.seed_riot_ids}...")
+        for i, (name, tag) in enumerate(seeds, 1):
+            puuid = puuid_for_riot_id(routing, name, tag, args.api_key, rl)
+            if puuid:
+                puuids.append((puuid, {"riot_id": f"{name}#{tag}", "tier": "curated",
+                                       "leaguePoints": 0}))
+                print(f"  [{i}/{len(seeds)}] {name}#{tag}  →  {puuid[:16]}…", flush=True)
+            else:
+                print(f"  [{i}/{len(seeds)}] {name}#{tag}  →  RESOLVE FAILED", flush=True)
+        print(f"\n[2] {len(puuids)}/{len(seeds)} resolved to puuids")
+    else:
+        otp_filter = load_otp_filter(args.otp_list)
+        if otp_filter:
+            print(f"loaded {len(otp_filter)} OTP puuids from {args.otp_list}")
 
-    if otp_filter:
-        before = len(players)
-        players = [p for p in players if p.get("puuid") in otp_filter]
-        print(f"  after OTP puuid intersection: {len(players)} (was {before})")
+        print(f"\n[1] Fetching Masters+ leaderboard ({args.region})...")
+        players = list(fetch_masters_plus(args.region, args.api_key, rl))
+        print(f"  total Masters+ players: {len(players)}")
 
-    # rank by LP descending
-    players.sort(key=lambda p: -(p.get("leaguePoints") or 0))
-    if args.max_players and len(players) > args.max_players:
-        print(f"  capping to top {args.max_players} by LP")
-        players = players[:args.max_players]
+        if otp_filter:
+            before = len(players)
+            players = [p for p in players if p.get("puuid") in otp_filter]
+            print(f"  after OTP puuid intersection: {len(players)} (was {before})")
 
-    # league-v4 already includes puuid — no extra resolution needed.
-    puuids = [(p["puuid"], p) for p in players if p.get("puuid")]
-    print(f"\n[2] {len(puuids)}/{len(players)} players have puuid (rest dropped)")
+        # rank by LP descending
+        players.sort(key=lambda p: -(p.get("leaguePoints") or 0))
+        if args.max_players and len(players) > args.max_players:
+            print(f"  capping to top {args.max_players} by LP")
+            players = players[:args.max_players]
+
+        # league-v4 already includes puuid — no extra resolution needed.
+        puuids = [(p["puuid"], p) for p in players if p.get("puuid")]
+        print(f"\n[2] {len(puuids)}/{len(players)} players have puuid (rest dropped)")
 
     print(f"\n[3] Walking match histories — looking for {args.champion} {args.role} on {args.patch}.x...")
     seen_matches = set()
@@ -268,6 +321,8 @@ def main():
                 # from pass1's actual mem coverage, so this is just a safety net
                 # against runaway scrapes if stall detection ever fails.
                 actual_dur = info.get("gameDuration", 1800)
+                if actual_dur < args.min_game_duration:
+                    break  # drop this match (remake / early ff)
                 duration = min(args.duration_cap, actual_dur + args.duration_buffer)
                 out_matches.append({
                     "match_id": mid,
@@ -286,9 +341,8 @@ def main():
                 kept += 1
                 if len(out_matches) >= args.max_games: break
         if kept:
-            tag = p.get("tier", "?")[:4]
-            lp = p.get("leaguePoints", 0)
-            print(f"  [{i}/{len(puuids)}] {tag} {lp}LP  puuid={puuid[:14]}…  kept {kept}  "
+            label = p.get("riot_id") or f"{p.get('tier','?')[:4]} {p.get('leaguePoints',0)}LP"
+            print(f"  [{i}/{len(puuids)}] {label:30s} puuid={puuid[:14]}…  kept {kept}  "
                   f"(running total {len(out_matches)})", flush=True)
             # Snapshot after each player who contributed at least one match
             _write(progress_pct=int(100 * len(out_matches) / max(1, args.max_games)))

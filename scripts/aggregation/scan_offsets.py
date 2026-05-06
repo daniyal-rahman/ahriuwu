@@ -6,7 +6,7 @@ Input: Running replay + Replay API on port 2999
 Output: offsets.json with verified offsets for current patch
 
 Usage:
-    python scripts/scan_offsets.py [--anchors prev_offsets.json]
+    python scripts/aggregation/scan_offsets.py [--anchors prev_offsets.json]
 """
 import ctypes, ctypes.wintypes as wt, struct, subprocess, sys, time, json
 import ssl, urllib.request, math, os, argparse

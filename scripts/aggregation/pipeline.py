@@ -27,7 +27,7 @@ Output per game:  $REPLAY_OUTPUT\\{match_id}\\
     raw_mem.json + raw_cam.json → raw scrape (overlay.py uses these)
 
 Structured log: $REPLAY_OUTPUT\\pipeline.jsonl
-Memory offsets: loaded from scripts/offsets_<patch>.json (no hardcoded fallbacks).
+Memory offsets: loaded from scripts/aggregation/offsets_<patch>.json (no hardcoded fallbacks).
 """
 import argparse, base64, bisect, ctypes, ctypes.wintypes as wt
 import glob, http.client, json, math, multiprocessing as mp, os, shutil
@@ -61,14 +61,14 @@ TAN_H, TAN_V = math.tan(FOV_H / 2), math.tan(FOV_V / 2)
 COS_T, SIN_T = math.cos(TILT), math.sin(TILT)
 
 # ── Memory offsets ──
-# Sole source of truth: scripts/offsets_<patch>.json emitted by scan_offsets.py.
+# Sole source of truth: scripts/aggregation/offsets_<patch>.json emitted by scan_offsets.py.
 # No hardcoded defaults — if a field is missing from JSON, runtime use raises a
 # loud KeyError (via _StrictOffsets) telling the user to re-scan.
 EXPECTED_MOD_SIZE = 0x20E0000
 
 # Fields the rest of pipeline.py / pipeline_merged.py actively reads. The loader
 # warns about any of these missing from the JSON, but does NOT silently substitute
-# a default. Re-run `python scripts/scan_offsets.py --champion <Champ>` (potentially
+# a default. Re-run `python scripts/aggregation/scan_offsets.py --champion <Champ>` (potentially
 # with --wide) to derive them.
 _REQUIRED_FIELDS = {
     "hero_array", "hero_array_layout", "hero_array_stride",
@@ -93,7 +93,7 @@ class _StrictOffsets(dict):
         )
 
 def _load_offsets():
-    """Load scripts/offsets_<patch>.json (newest mtime, matching EXPECTED_MOD_SIZE).
+    """Load scripts/aggregation/offsets_<patch>.json (newest mtime, matching EXPECTED_MOD_SIZE).
 
     No fallbacks to hardcoded defaults. If JSON is missing fields, WARN (don't
     abort) so the user can re-run the scanner to widen the search. Reading any
@@ -105,8 +105,8 @@ def _load_offsets():
       - missing_from_scan is the scanner-emitted _missing list (for context)
     """
     here = os.path.dirname(os.path.abspath(__file__))
-    # offsets JSONs are emitted by scan_offsets.py into scripts/; this file lives
-    # in scripts/core/. Search both so either layout works.
+    # offsets JSONs are emitted by scan_offsets.py into scripts/aggregation/.
+    # Also search scripts/ as fallback for older layouts.
     search_dirs = [here, os.path.dirname(here)]
     candidates = []
     seen = set()
@@ -149,12 +149,12 @@ def _load_offsets():
             print(f"[offsets] ⚠ {len(missing)} REQUIRED field(s) NOT in JSON — runtime reads will raise:", flush=True)
             for f in missing:
                 print(f"[offsets]     ⚠ {f}", flush=True)
-            print(f"[offsets] To fix: re-run `python scripts/scan_offsets.py --champion <ChampInReplay>` "
+            print(f"[offsets] To fix: re-run `python scripts/aggregation/scan_offsets.py --champion <ChampInReplay>` "
                   f"(scanner has been widened — current ranges should cover most patch shifts)", flush=True)
         if missing_from_scan:
             print(f"[offsets] (context) scanner reported {len(missing_from_scan)} field(s) MISSING: {missing_from_scan}", flush=True)
         return _StrictOffsets(loaded), versions, set(missing), missing_from_scan
-    print("[offsets] ⚠ no scripts/offsets_*.json matched mod_size — runtime reads will all raise.", flush=True)
+    print("[offsets] ⚠ no scripts/aggregation/offsets_*.json matched mod_size — runtime reads will all raise.", flush=True)
     print("[offsets] To fix: open a replay on this patch + run scan_offsets.py to emit a JSON.", flush=True)
     return _StrictOffsets(), {}, set(_REQUIRED_FIELDS), []
 
@@ -1699,6 +1699,11 @@ def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, r
         return True
     if force_rerun and os.path.exists(out_dir):
         print(f"  --force: clearing existing {out_dir}", flush=True)
+        shutil.rmtree(out_dir)
+    elif os.path.exists(out_dir):
+        # Incomplete (no labels.json) — previous run was interrupted. Clear and retry
+        # cleanly rather than overlaying new frames on stale ones.
+        print(f"  resume: clearing incomplete {out_dir} (no labels.json)", flush=True)
         shutil.rmtree(out_dir)
 
     # Per-game log redirect

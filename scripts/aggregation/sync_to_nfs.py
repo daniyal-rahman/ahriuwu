@@ -11,7 +11,7 @@ Designed to run alongside pipeline.py so transfers don't block the next game's
 pass1.
 
 Usage:
-    python scripts/sync_to_nfs.py \
+    python scripts/aggregation/sync_to_nfs.py \
         --src C:\\tmp\\replay_data \
         --dataset lol_replays_16_9_772 \
         --remote danilogin:/mnt/nfs/datasets \
