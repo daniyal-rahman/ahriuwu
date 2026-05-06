@@ -1619,7 +1619,10 @@ def trigger_rofl_download(game_id, wait_for_file_path=None, timeout=120):
     if wait_for_file_path and os.path.exists(wait_for_file_path):
         return True
     try:
-        lcu_post(f"/lol-replays/v1/rofls/{game_id}/download", body={})
+        # LCU rejects an empty {} body — must include componentType to match
+        # the same payload shape /watch uses.
+        lcu_post(f"/lol-replays/v1/rofls/{game_id}/download",
+                 body={"componentType": "replay"})
     except Exception as e:
         print(f"  [download] LCU POST failed for {game_id}: {e}", flush=True)
         return False
