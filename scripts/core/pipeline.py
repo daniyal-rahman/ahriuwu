@@ -1,7 +1,8 @@
 """
-Garen Replay Data Pipeline — 2 Pass + Overlapped Post-Processing
-=================================================================
+Replay Data Pipeline — 2 Pass + Overlapped Post-Processing
+==========================================================
 Pass 1: Memory scrape (50Hz) + camera API poll (93Hz persistent HTTPS), 2x speed
+        + click/cast extraction in a third thread
         → determines real game duration from game time stall
         → cam samples timestamped via wall→gt interpolation from mem thread
 Pass 2: Record video (720p PNG, 40fps enforced at 2x = 20fps game-time)
@@ -15,17 +16,18 @@ Runs on Windows with:
   - game.cfg: Width=1280, Height=720, WindowMode=1, EnableReplayApi=1
 
 Usage:
-    python pipeline.py --manifest E:\\garen_manifest_300.json --index 0
-    python pipeline.py --manifest E:\\garen_manifest_300.json --batch
-    python pipeline.py --game-id 5528069928 --match-id NA1_5528069928 --team red --slot 5
-    python pipeline.py --benchmark   # 3×3 scenario test for overlap contention
+    python pipeline.py --manifest <path> --champion <Champ> --batch
+    python pipeline.py --game-id 5554195441 --match-id NA1_5554195441 \
+                       --team blue --slot 0 --champion Garen
 
-Output per game:  E:\\replay_data\\{match_id}\\
+Output per game:  $REPLAY_OUTPUT\\{match_id}\\
     frames\\  → 352×352 PNGs at 20fps
     labels.json → per-frame labels (720p screen coords, null for unlabeled)
+    clicks.json → click + cast events (game_t, world coords)
+    raw_mem.json + raw_cam.json → raw scrape (overlay.py uses these)
 
-Structured log: E:\\replay_data\\pipeline.jsonl
-Memory offsets: patch 26.7, module size 0x207C000
+Structured log: $REPLAY_OUTPUT\\pipeline.jsonl
+Memory offsets: loaded from scripts/offsets_<patch>.json (no hardcoded fallbacks).
 """
 import argparse, base64, bisect, ctypes, ctypes.wintypes as wt
 import glob, http.client, json, math, multiprocessing as mp, os, shutil
@@ -47,7 +49,8 @@ SCREEN_W, SCREEN_H = 1280, 720
 FRAME_SZ = 352
 FPS = 20
 
-# Camera projection (locked to Garen, empirically measured)
+# Camera projection (cam-locked spectator follow at 1280x720, empirically fit
+# from ground-truth probe; same shape for any focused champion).
 CAM_Y = 1912.0
 CAM_Z_OFFSET = -1292.0
 FLOOR_Y = 52.0
@@ -169,12 +172,12 @@ ALARM_MIN_MEM_HZ   = 40    # mem thread Hz
 MAX_MEM_GAP        = 0.1   # 100ms — for label matching
 MAX_CAM_GAP        = 0.1
 
-# ── Core allocation (6-core i5-8600K) ──
-# Detect core count at runtime — earlier 6-core hardcoding capped pass 2 to ~25fps
-# on the 16-core upgrade. League's PNG encoder scales linearly to ~14 threads.
+# ── CPU core allocation ──
+# Pass 1 leaves the last 2 cores free for the post-process worker; pass 2 takes
+# all cores (PNG encoder scales linearly up to ~14 threads).
 _N_CORES = os.cpu_count() or 6
 PASS1_CORES = list(range(_N_CORES - 2)) if _N_CORES >= 6 else list(range(_N_CORES))
-POST_CORES  = list(range(max(0, _N_CORES - 2), _N_CORES))   # last 2 cores
+POST_CORES  = list(range(max(0, _N_CORES - 2), _N_CORES))
 ALL_CORES   = list(range(_N_CORES))
 
 _ctx = ssl.create_default_context()
@@ -307,11 +310,11 @@ class Mem:
 
 
 # ═══════════════════════════════════════════════════════════════
-# Click extraction (lifted from pipeline_merged.py)
+# Click extraction
 # ═══════════════════════════════════════════════════════════════
-# Heap region enumeration uses VirtualQueryEx — Mem class doesn't expose this.
-# We need to re-walk RW-private regions to find click-dest objects (which sit
-# wherever the engine's allocator dropped them, not at any module-static offset).
+# Click-dest objects live wherever the engine's allocator dropped them — not
+# at any module-static offset. We re-walk RW-private heap regions via
+# VirtualQueryEx (the Mem class doesn't expose this, hence the _raw_* helpers).
 class _MBI(ctypes.Structure):
     _fields_ = [("BaseAddress", ctypes.c_void_p), ("AllocationBase", ctypes.c_void_p),
                 ("AllocationProtect", ctypes.c_ulong), ("__a", ctypes.c_ulong),
@@ -665,9 +668,10 @@ def find_heroes_by_name_scan(m, base, names):
     return found
 
 def init_heroes(m, base):
-    """Iterate hero_array using the layout/stride from offsets JSON
-    ('inline' stride 0x108 on 16.9.772+, 'deref' stride 8 on 16.8.766 and earlier).
-    Falls through to the other layout, then byte-scan, if the primary layout is stale."""
+    """Iterate hero_array using the layout/stride from offsets JSON.
+    Falls through to the other layout, then byte-scan, if the primary layout is
+    stale (patch updates can flip the array between deref-of-pointer and
+    inline-stride layouts; both shapes have appeared on recent patches)."""
     heroes = {}
     layout = OFFSETS.get("hero_array_layout", "inline")
     stride = OFFSETS.get("hero_array_stride", 0x108)
@@ -912,10 +916,6 @@ def _mem_loop(m, base, hero_ptrs, gt_rva, stop, results):
             hp = hinfo["ptr"]
             pos = m.vec3(hp + o["position"])
             if not pos: continue
-            # Read click destination via global AiManager pointer
-            # Only works for CHAMPION (the replay-followed hero) since it's a single cached ptr
-            # waypoint extraction now lives in pipeline_merged.py (heap-scan via click_vtable_rva).
-            # The legacy AiManager/AiWaypoints static pointer (click_dest_rva) is dead on 16.9.772.
             entry = {
                 "pos": [round(pos[0], 1), round(pos[2], 1)],
                 "hp":         round(m.f32(hp + o["hp_current"]) or 0, 1),
@@ -989,21 +989,50 @@ def _cam_loop(stop, results):
     finally:
         conn.close()
 
+_EMPTY_PASS1 = ([], [], {}, {"clicks": [], "casts": [], "watched": []})
+
+
+def _wait_for_gt(m, base, gt_rva, threshold, timeout=30):
+    """Block until m.f32(base+gt_rva) > threshold or timeout (s) elapses.
+    Returns the observed gt (None if never crossed)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        cur = m.f32(base + gt_rva)
+        if cur is not None and cur > threshold:
+            return cur
+        time.sleep(0.05)
+    return None
+
+
 def pass1_scrape(game_id, cam_key, duration, force_patch=False):
-    """Memory scrape (50Hz) + camera poll (93Hz) at 2x speed. Returns (mem_data, cam_data, stats)."""
+    """Memory scrape (50Hz) + camera poll (93Hz) + click/cast extraction at 2x.
+    Returns (mem_data, cam_data, stats, click_results).
+
+    Sync strategy: gate the mem thread on `game_time > 0.5` so it starts at the
+    fountain entry instead of ~14s in (which is when the cam-lock dance finishes
+    at 2x). Cam + click threads still wait for cam-lock to finish (cam needs to
+    track the focus champion; clicks need the heap scan window). Frames in the
+    cam-coverage gap (~gt 0.5..7) fall back to synthetic cam = hero_pos + tilt
+    in post_process — the projection holds because cam IS hero+offset when locked."""
     print("\n--- Pass 1: Memory + Camera Scrape (2x) ---", flush=True)
     scrape_start = time.time()
     kill_game()
     if not launch_replay(game_id):
-        return [], [], {}, {"clicks": [], "casts": [], "watched": []}
-    time.sleep(5)
+        return _EMPTY_PASS1
 
-    pid = find_league_pid()
+    # No more sleep(5) — instead poll until RPM works (PID exists + module mapped)
+    pid = None
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        pid = find_league_pid()
+        if pid is not None:
+            break
+        time.sleep(0.2)
     if not pid:
-        print("  No game PID", flush=True); kill_game(); return [], [], {}, {"clicks": [], "casts": [], "watched": []}
+        print("  No game PID after 30s", flush=True); kill_game(); return _EMPTY_PASS1
     base, mod_size = find_module_base(pid)
     if not base:
-        print("  No module base", flush=True); kill_game(); return [], [], {}, {"clicks": [], "casts": [], "watched": []}
+        print("  No module base", flush=True); kill_game(); return _EMPTY_PASS1
     if mod_size != EXPECTED_MOD_SIZE:
         msg = f"Module size 0x{mod_size:X} != expected 0x{EXPECTED_MOD_SIZE:X} — patch changed?"
         if force_patch:
@@ -1011,32 +1040,46 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
         else:
             print(f"  ABORT: {msg}", flush=True)
             print(f"  Update OFFSETS or pass --force-patch.", flush=True)
-            kill_game(); return [], [], {}, {"clicks": [], "casts": [], "watched": []}
+            kill_game(); return _EMPTY_PASS1
 
     m = Mem(pid)
     if m.read(base, 2) != b'MZ':
-        print("  RPM verify failed", flush=True); m.close(); kill_game(); return [], [], {}, {"clicks": [], "casts": [], "watched": []}
+        print("  RPM verify failed", flush=True); m.close(); kill_game(); return _EMPTY_PASS1
     print(f"  Memory: PID={pid} base=0x{base:X}", flush=True)
 
     gt_rva = verify_game_time(m, base)
     if not gt_rva:
         print(f"  ABORT: GameTime RVA 0x{OFFSETS['game_time']:X} reads garbage", flush=True)
-        m.close(); kill_game(); return [], [], {}, {"clicks": [], "casts": [], "watched": []}
-    print(f"  GameTime: 0x{gt_rva:X} = {m.f32(base + gt_rva):.1f}s", flush=True)
+        m.close(); kill_game(); return _EMPTY_PASS1
+
+    # Gate: wait until game_time crosses 0.5s (skips loading screen). Hero structs
+    # populate around the same time, so this also serves as init_heroes readiness.
+    gt0 = _wait_for_gt(m, base, gt_rva, 0.5, timeout=30)
+    if gt0 is None:
+        print(f"  ABORT: gt never crossed 0.5s in 30s", flush=True)
+        m.close(); kill_game(); return _EMPTY_PASS1
+    print(f"  GameTime: 0x{gt_rva:X} = {gt0:.2f}s (gate cleared)", flush=True)
 
     hero_ptrs = init_heroes(m, base)
     if CHAMPION not in hero_ptrs:
         print(f"  ABORT: champion '{CHAMPION}' not found in this game. "
               f"Heroes detected: {list(hero_ptrs.keys())}. "
               f"Pass --champion <name> matching one of those.", flush=True)
-        m.close(); kill_game(); return [], [], {}, {"clicks": [], "casts": [], "watched": []}
+        m.close(); kill_game(); return _EMPTY_PASS1
     print(f"  Heroes: {list(hero_ptrs.keys())}", flush=True)
 
-    # Pin League to pass1 cores — leave [3,4] free for concurrent post workers
     pin_league(PASS1_CORES)
 
-    # Original ordering: pause → set selection → unpause @ 2x → double-lock cam.
-    # Runs direct pynput — requires this process to be in session 1
+    # Start mem thread BEFORE cam-lock so mem coverage begins at the fountain
+    # entry (~gt 0.5-1s) instead of after the lock dance (~gt 7-14s).
+    stop = threading.Event()
+    mem_data, cam_data = [], []
+    click_results = {"clicks": [], "casts": [], "watched": []}
+    mt = threading.Thread(target=_mem_loop, args=(m, base, hero_ptrs, gt_rva, stop, mem_data), daemon=True)
+    mt.start()
+
+    # Cam-lock recipe (mem thread continues sampling through this).
+    # Direct pynput — requires this process to run in session 1
     # (i.e. launched via `schtasks /IT pipeline.py ...`, not plain SSH).
     print(f"  [setup] pause replay", flush=True)
     replay_post("/replay/playback", {"paused": True})
@@ -1054,14 +1097,9 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
     focus_game(); lock_camera(cam_key)
     print(f"  Camera locked (key={cam_key}), 2x speed", flush=True)
 
-    stop = threading.Event()
-    mem_data, cam_data = [], []
-    click_results = {"clicks": [], "casts": [], "watched": []}
-    mt = threading.Thread(target=_mem_loop, args=(m, base, hero_ptrs, gt_rva, stop, mem_data), daemon=True)
+    # Cam + click threads start AFTER cam-lock (cam tracks focus champ,
+    # click thread's heap-scan window opens here too).
     ct = threading.Thread(target=_cam_loop, args=(stop, cam_data), daemon=True)
-    # Click + cd-jump extractor — captures click destinations (heap vtable scan
-    # → vec3) AND spellbook cooldown_expire jumps (catches Q dash, E channel,
-    # summoners — anything active_spell misses) AND recall.
     target_vptr = base + OFFSETS["click_vtable_rva"]
     hero_ptr = hero_ptrs[CHAMPION]["ptr"]
     kt = threading.Thread(
@@ -1069,7 +1107,7 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
         args=(m.h, hero_ptr, target_vptr, CHAMPION, mem_data, stop, click_results),
         daemon=True,
     )
-    mt.start(); ct.start(); kt.start()
+    ct.start(); kt.start()
 
     last_gt = 0; stall = 0
     while not stop.is_set():
@@ -1132,11 +1170,18 @@ def pass1_scrape(game_id, cam_key, duration, force_patch=False):
 # ═══════════════════════════════════════════════════════════════
 # Pass 2: Video Recording
 # ═══════════════════════════════════════════════════════════════
-def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end=None):
+def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end=None,
+                 mem_first_gt=None, mem_last_gt=None):
     """Record game as PNGs at 2x (40fps enforced = 20fps game-time).
     PNGs are always 20fps game-rate regardless of actual wall-fps.
-    rec_start: game_t to start recording (seconds)
-    rec_end:   game_t to stop (None = duration + 60)
+    rec_start: game_t to start recording (seconds). Floored to mem_first_gt+0.3
+               when supplied so every recorded frame has mem coverage.
+    rec_end:   game_t to stop (None → mem_last_gt-0.3 when supplied, else
+               max(rec_start+1, duration-2)). Caller-provided value wins.
+               Aim before game-end: gameTime freezes on the post-game screen
+               so the recording API can never auto-stop past that point.
+    mem_first_gt / mem_last_gt: pass1's actual mem coverage. Used to clamp
+               rec_start/rec_end into the labeled range so n_unlabeled → 0.
     Writes to staging_dir. Returns (frame_count, stats)."""
     print("\n--- Pass 2: Video Recording (2x, 40fps enforced) ---", flush=True)
     record_start = time.time()
@@ -1176,16 +1221,26 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
     for f in glob.glob(os.path.join(staging_dir, "**", "*.png"), recursive=True):
         os.remove(f)
 
+    # Clamp rec_start / rec_end into pass1's mem coverage so every recorded
+    # frame has a mem sample within MAX_MEM_GAP. The 0.3s buffer absorbs jitter.
+    rec_start_eff = rec_start
+    if mem_first_gt is not None:
+        rec_start_eff = max(rec_start, mem_first_gt + 0.3)
+    if rec_end is None:
+        if mem_last_gt is not None:
+            rec_end = mem_last_gt - 0.3
+        else:
+            rec_end = max(rec_start_eff + 1, duration - 2)
+    print(f"  Recording window: gt {rec_start_eff:.2f}..{rec_end:.2f}s "
+          f"(mem covers {mem_first_gt or 0:.2f}..{mem_last_gt or 0:.2f}s)", flush=True)
+
     rec = replay_post("/replay/recording", {
         "recording": True,
         "path": staging_dir.replace("\\", "/"),
         "codec": "png",
         "framesPerSecond": FPS * 2,
-        "startTime": rec_start,
-        # endTime is in game-time. Once a replay reaches game-end, gameTime
-        # FREEZES (does not advance) — so any endTime > pass1's last gt is
-        # unreachable and the API never auto-stops. Aim just before game-end.
-        "endTime": rec_end if rec_end is not None else max(rec_start + 1, duration - 2),
+        "startTime": rec_start_eff,
+        "endTime": rec_end,
         "enforceFrameRate": True,
     })
     print(f"  Recording started: {rec.get('width')}x{rec.get('height')}", flush=True)
@@ -1242,6 +1297,7 @@ def pass2_record(game_id, cam_key, duration, staging_dir, rec_start=1.0, rec_end
         "frames_recorded": n_frames, "duration_requested": round(duration, 1),
         "wall_time": round(wall_time, 1), "effective_fps": round(effective_fps, 1),
         "expected_frames": expected_frames,
+        "rec_start_eff": round(rec_start_eff, 3), "rec_end_eff": round(rec_end, 3),
     }
     check_alarm("effective_fps", effective_fps, ALARM_MIN_REC_FPS, "<")
 
@@ -1351,28 +1407,10 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
     mem_gt_keys = [s["gt"] for s in mem_sorted]
 
     # ── Per-frame labels ──
-    # Prefer frame_mtimes.json (real wall-clock per PNG) → wall_to_gt() over
-    # synthetic gt = start_gt + fi/FPS. The synthetic version assumes the engine
-    # writes PNG #0 at exactly rec_start, but in practice there's variable
-    # startup lag (more so when the engine is stalling at <1x effective speed).
-    mtime_path = os.path.join(game_dir, "frame_mtimes.json")
-    frame_gts = None
-    if os.path.exists(mtime_path):
-        try:
-            with open(mtime_path) as f: meta = json.load(f)
-            walls = [m["mtime"] for m in meta] if isinstance(meta, list) else None
-            if walls and len(walls) == n_frames:
-                # mem_data["wall"] uses time.perf_counter (monotonic, process-local),
-                # but PNG mtime is Unix epoch from os.stat. Convert epoch→perf domain
-                # using the current offset (stable over the process lifetime).
-                perf_to_epoch = time.time() - time.perf_counter()
-                walls_perf = [w - perf_to_epoch for w in walls]
-                frame_gts = [wall_to_gt(w) for w in walls_perf]
-                n_real = sum(1 for g in frame_gts if g is not None)
-                print(f"  Using frame_mtimes.json for gt (resolved {n_real}/{n_frames})", flush=True)
-        except Exception as e:
-            print(f"  frame_mtimes.json read failed ({e}); falling back to synthetic", flush=True)
-            frame_gts = None
+    # Synthetic gt = start_gt + fi/FPS — assumes the engine writes PNG #0 at
+    # exactly rec_start. Frame-mtime-based gt was tried but is unreliable on
+    # this codepath (pass2 doesn't currently surface PNG mtimes); leaving as
+    # synthetic for now since enforceFrameRate=True keeps the spacing tight.
 
     frames_out = []
     n_unlabeled = 0
@@ -1380,7 +1418,7 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
     mem_gaps_ms = []
 
     for fi in range(n_frames):
-        gt = frame_gts[fi] if (frame_gts and frame_gts[fi] is not None) else (start_gt + fi / FPS)
+        gt = start_gt + fi / FPS
         bm, mem_gap = _nearest(mem_sorted, mem_gt_keys, gt)
         mem_gaps_ms.append(mem_gap * 1000)
 
@@ -1400,7 +1438,7 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
             n_cam_fallback += 1
             cx, cy, cz = gp[0], CAM_Y, gp[1] + CAM_Z_OFFSET
 
-        garen_screen = project(gp[0], gp[1], cx, cy, cz)
+        champ_screen = project(gp[0], gp[1], cx, cy, cz)
         visible = []
         for name, hd in heroes.items():
             p = hd.get("pos", [0, 0])
@@ -1420,16 +1458,15 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
         waypoint = garen.get("waypoint")
         waypoint_screen = project(waypoint[0], waypoint[1], cx, cy, cz) if waypoint else None
 
-        # Velocity / heading from position delta (0.5s ahead via future lookup)
-        # We'll patch these post-loop since we need the next frame's garen pos
+        # Velocity / heading patched after the per-frame loop (needs next frame's pos).
         frames_out.append({
             "frame": fi, "gt": round(gt, 3),
-            "_garen_world": gp,  # temporary for velocity calc
-            "_cam": (cx, cy, cz),  # temporary for projection
+            "_world": gp,           # temporary for velocity calc
+            "_cam": (cx, cy, cz),    # temporary for projection
             "label": {
-                "garen_screen": garen_screen,
-                "garen_world": gp,
-                "garen_stats": {
+                "champion_screen": champ_screen,
+                "champion_world": gp,
+                "champion_stats": {
                     "hp":       garen.get("hp", 0),
                     "hp_max":   garen.get("hp_max", 0),
                     "gold":     garen.get("gold", 0),
@@ -1449,19 +1486,19 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
         fd = frames_out[fi]
         if fd.get("label") is None:
             continue
-        gp = fd.get("_garen_world")
+        gp = fd.get("_world")
         if gp is None: continue
         cam = fd.get("_cam")
         # Find the next labeled frame ~LOOKAHEAD ahead
         future_gp = None
         for j in range(fi + 1, min(fi + LOOKAHEAD + 5, len(frames_out))):
             fj = frames_out[j]
-            if fj.get("label") and fj.get("_garen_world") is not None:
+            if fj.get("label") and fj.get("_world") is not None:
                 if j - fi >= LOOKAHEAD:
-                    future_gp = fj["_garen_world"]
+                    future_gp = fj["_world"]
                     break
                 elif future_gp is None:
-                    future_gp = fj["_garen_world"]
+                    future_gp = fj["_world"]
         if future_gp is None or gp is None:
             continue
         dx = future_gp[0] - gp[0]
@@ -1480,7 +1517,7 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
 
     # Clean up temporary fields
     for fd in frames_out:
-        fd.pop("_garen_world", None)
+        fd.pop("_world", None)
         fd.pop("_cam", None)
 
     # Stats
@@ -1503,8 +1540,8 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
 
     labels = {
         "match_id": match_id, "champion": champion,
-        "garen_team": game_info.get("garen_team"),
-        "garen_slot": game_info.get("garen_slot"),
+        "team": game_info.get("garen_team"),
+        "slot": game_info.get("garen_slot"),
         "fps": FPS, "screen_resolution": [SCREEN_W, SCREEN_H],
         "frame_resolution": [FRAME_SZ, FRAME_SZ],
         "total_frames": len(frames_out),
@@ -1601,23 +1638,32 @@ def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, r
             return False
         log_event(JSONL_PATH, phase="scrape", match_id=match_id, **scrape_stats)
 
-        real_duration = mem_data[-1]["gt"]
-        print(f"  Real game duration: {real_duration:.0f}s ({real_duration/60:.1f}min)", flush=True)
+        mem_first_gt = mem_data[0]["gt"]
+        mem_last_gt = mem_data[-1]["gt"]
+        real_duration = mem_last_gt
+        print(f"  Real game duration: {real_duration:.0f}s ({real_duration/60:.1f}min)  "
+              f"mem covers gt {mem_first_gt:.2f}..{mem_last_gt:.2f}s", flush=True)
 
         # Pass 2: Video recording → per-game staging dir
         staging_dir = os.path.join(TEMP_BASE, match_id)
-        n_frames, record_stats = pass2_record(game_id, key, real_duration, staging_dir,
-                                              rec_start=rec_start, rec_end=rec_end)
+        n_frames, record_stats = pass2_record(
+            game_id, key, real_duration, staging_dir,
+            rec_start=rec_start, rec_end=rec_end,
+            mem_first_gt=mem_first_gt, mem_last_gt=mem_last_gt,
+        )
         if n_frames < 100:
             print(f"FAIL {match_id}: only {n_frames} frames", flush=True)
             return False
         log_event(JSONL_PATH, phase="record", match_id=match_id, **record_stats)
 
         # Post-process: queue to worker or run inline
+        # Pass post_process the EFFECTIVE rec_start (clamped into mem coverage),
+        # not the user-requested one — synthetic frame gt = rec_start_eff + i/FPS
+        # must match the recording's actual startTime.
         job = {
             "match_id": match_id, "mem_data": mem_data, "cam_data": cam_data,
             "game_info": game_info, "staging_dir": staging_dir,
-            "rec_start": rec_start,
+            "rec_start": record_stats.get("rec_start_eff", rec_start),
             "champion": CHAMPION,  # spawn-process workers don't see globals
             "click_results": click_results,
         }
@@ -1644,7 +1690,7 @@ def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, r
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Garen Replay Data Pipeline")
+    parser = argparse.ArgumentParser(description="Replay Data Pipeline (2-pass + post-process)")
     parser.add_argument("--manifest", help="Path to manifest JSON")
     parser.add_argument("--index", type=int, help="Process single game at index")
     parser.add_argument("--batch", action="store_true", help="Process all games")
@@ -1665,8 +1711,6 @@ def main():
                         help="Overwrite existing output dir instead of skipping.")
     parser.add_argument("--no-overlap", action="store_true",
                         help="Run post-process inline instead of in worker process")
-    parser.add_argument("--benchmark", action="store_true",
-                        help="Run 3x3 scenario test for overlap contention")
     args = parser.parse_args()
     global CHAMPION
     CHAMPION = args.champion
@@ -1674,40 +1718,6 @@ def main():
 
     os.makedirs(OUTPUT_BASE, exist_ok=True)
 
-    # ── Benchmark mode ──
-    if args.benchmark:
-        if not args.game_id:
-            parser.error("--benchmark requires --game-id, --team, --slot")
-        gid = args.game_id
-        mid = args.match_id or f"NA1_{gid}"
-        gi = {"match_id": mid, "game_id": gid, "garen_team": args.team,
-              "garen_slot": args.slot, "duration": 120}
-
-        scenarios = [
-            ("serial (no overlap)", True),
-            ("overlap, cv2 unrestricted", False),
-            ("overlap, cv2 capped", False),
-        ]
-        print("=== BENCHMARK: 3 scenarios, 1 game each ===", flush=True)
-        for name, no_overlap in scenarios:
-            # Clean previous
-            out_dir = os.path.join(OUTPUT_BASE, mid)
-            if os.path.exists(out_dir): shutil.rmtree(out_dir)
-
-            print(f"\n--- Scenario: {name} ---", flush=True)
-            if no_overlap:
-                process_game(gi, force_patch=args.force_patch, post_queue=None)
-            else:
-                q = mp.Queue()
-                log_p = JSONL_PATH
-                worker = mp.Process(target=_postprocess_worker, args=(q, log_p))
-                worker.start()
-                process_game(gi, force_patch=args.force_patch, post_queue=q)
-                q.put(None); worker.join()
-        print("\n=== Check pipeline.jsonl for timing comparison ===", flush=True)
-        return
-
-    # ── Normal mode ──
     post_queue = None
     worker = None
     if not args.no_overlap:
@@ -1757,7 +1767,7 @@ def main():
             }, force_patch=args.force_patch, post_queue=post_queue,
                rec_start=args.rec_start, rec_end=args.rec_end, force_rerun=args.force)
         else:
-            parser.error("Provide --manifest, --game-id, or --benchmark")
+            parser.error("Provide --manifest or --game-id/--match-id")
 
     finally:
         if post_queue is not None:

@@ -446,10 +446,11 @@ def main():
         pending_markers = next_pending
 
         lab = fr.get("label") or {}
-        # pipeline's "garen_*" fields are zeroed when the played champion isn't
-        # Garen — fall back to the single visible_heroes entry it logs.
-        gs = lab.get("garen_screen")
-        stats = lab.get("garen_stats")
+        # champion_screen/champion_stats are the focus champion's per-frame
+        # data. Older labels.json may still have it under garen_screen — fall
+        # back through both, then to visible_heroes[0] as a final safety net.
+        gs = lab.get("champion_screen") or lab.get("garen_screen")
+        stats = lab.get("champion_stats") or lab.get("garen_stats")
         if (not gs) or (stats and not any(stats.values())):
             vh = (lab.get("visible_heroes") or [{}])[0]
             gs = vh.get("screen") or gs
