@@ -177,8 +177,12 @@ def main():
                     help="cap how many Masters+ players we walk (after OTP filter)")
     ap.add_argument("--matches-per-player", type=int, default=50,
                     help="recent ranked-solo matches to pull per player")
-    ap.add_argument("--duration", type=int, default=1900,
-                    help="duration value to embed in each manifest entry (passed to pipeline)")
+    ap.add_argument("--duration-buffer", type=int, default=120,
+                    help="seconds added to each match's actual gameDuration when emitting the "
+                         "pipeline `duration` cap. Default 120s of headroom.")
+    ap.add_argument("--duration-cap", type=int, default=3600,
+                    help="absolute upper bound on the emitted `duration` in seconds. Default 3600 "
+                         "(60min — well above any real LoL game).")
     args = ap.parse_args()
 
     routing = ROUTING_BY_REGION.get(args.region.lower())
@@ -257,6 +261,13 @@ def main():
                     f"{part.get('riotIdGameName')}#{part.get('riotIdTagline')}"
                     if part.get('riotIdGameName') else None
                 )
+                # Per-match `duration` cap (in game-seconds) = actual gameDuration
+                # plus a small buffer, capped at --duration-cap. Pipeline.py uses
+                # this as the pass1 hard ceiling; pass2 derives its real endTime
+                # from pass1's actual mem coverage, so this is just a safety net
+                # against runaway scrapes if stall detection ever fails.
+                actual_dur = info.get("gameDuration", 1800)
+                duration = min(args.duration_cap, actual_dur + args.duration_buffer)
                 out_matches.append({
                     "match_id": mid,
                     "game_id":  mid.split("_")[-1],
@@ -264,12 +275,12 @@ def main():
                     "champion": args.champion,
                     "garen_team": team,
                     "garen_slot": slot,
-                    "duration": args.duration,
+                    "duration": duration,
                     "version": ver,
                     "summoner_name": riot_id,
                     "kda": f"{part['kills']}/{part['deaths']}/{part['assists']}",
                     "garen_win": part.get("win", False),
-                    "game_duration": info.get("gameDuration", 0),
+                    "game_duration": actual_dur,
                 })
                 kept += 1
                 if len(out_matches) >= args.max_games: break
