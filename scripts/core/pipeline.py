@@ -1609,10 +1609,18 @@ def _postprocess_worker(queue, log_path):
 def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, rec_end=None, force_rerun=False):
     match_id = game_info["match_id"]
     game_id = game_info["game_id"]
-    team = game_info["garen_team"]
-    slot = game_info["garen_slot"]
+    team = game_info.get("team") or game_info["garen_team"]
+    slot = game_info.get("slot")
+    if slot is None:
+        slot = game_info["garen_slot"]
     duration = game_info.get("duration", 1800)
     key = cam_key_for(team, slot)
+
+    # Per-match champion override — lets a single batch span multiple champs.
+    # Falls back to the global CHAMPION (set from --champion) if absent.
+    global CHAMPION
+    if "champion" in game_info and game_info["champion"]:
+        CHAMPION = game_info["champion"]
 
     out_dir = os.path.join(OUTPUT_BASE, match_id)
     if os.path.exists(os.path.join(out_dir, "labels.json")) and not force_rerun:
