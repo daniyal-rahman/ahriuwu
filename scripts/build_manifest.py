@@ -180,9 +180,10 @@ def main():
     ap.add_argument("--duration-buffer", type=int, default=120,
                     help="seconds added to each match's actual gameDuration when emitting the "
                          "pipeline `duration` cap. Default 120s of headroom.")
-    ap.add_argument("--duration-cap", type=int, default=3600,
-                    help="absolute upper bound on the emitted `duration` in seconds. Default 3600 "
-                         "(60min — well above any real LoL game).")
+    ap.add_argument("--duration-cap", type=int, default=1900,
+                    help="absolute upper bound on the emitted `duration` in seconds. Default 1900 "
+                         "(~32min — covers the vast majority of LoL games; later state is less "
+                         "critical for ML training and shorter caps protect against runaway pass1).")
     args = ap.parse_args()
 
     routing = ROUTING_BY_REGION.get(args.region.lower())
