@@ -202,6 +202,7 @@ def main():
     # rolling history for trend detection
     backlog_hist = deque(maxlen=4)            # last 4 polls of backlog_mb
     nfs_hist = deque(maxlen=120)              # (ts, count) — long enough for 1hr at 30s
+    disk_hist = deque(maxlen=4)               # (ts, gb) — for "is pass2 actually recording?"
     last_active_pipeline_mtime = None
     last_active_pipeline_seen_at = None       # wallclock when mtime last advanced
     backlog_growth_streak = 0                 # consecutive polls of growth
@@ -231,6 +232,8 @@ def main():
         backlog_hist.append(backlog_mb)
         if nfs_n is not None:
             nfs_hist.append((now, nfs_n))
+        if disk is not None:
+            disk_hist.append((now, disk))
 
         if mtime is not None and mtime != last_active_pipeline_mtime:
             last_active_pipeline_mtime = mtime
@@ -271,10 +274,27 @@ def main():
 
         if (alive and last_active_pipeline_seen_at and
                 (now - last_active_pipeline_seen_at) > args.stall_seconds):
+            # Cross-check: pass2's recording loop writes 720p PNGs at ~1-2 GB/min
+            # to the staging dir (which sits on the same C: volume). If disk is
+            # dropping fast, recording is healthy and main log silence is normal
+            # (pass2 prints to per-game log only). Suppress the false positive.
+            disk_drop_gb_per_min = None
+            if len(disk_hist) >= 2:
+                t_old, gb_old = disk_hist[0]
+                t_new, gb_new = disk_hist[-1]
+                dt_min = (t_new - t_old) / 60
+                if dt_min > 0:
+                    disk_drop_gb_per_min = (gb_old - gb_new) / dt_min
             mins = (now - last_active_pipeline_seen_at) / 60
-            f.write(f"  [!] PIPELINE STALLED — pipeline-log mtime hasn't advanced in {mins:.1f} min "
-                    f"(threshold {args.stall_seconds/60:.0f} min). Likely socket-hang on LCU/replay "
-                    f"or a frozen pass2 record.\n")
+            if disk_drop_gb_per_min is not None and disk_drop_gb_per_min > 0.5:
+                # Active recording — don't alarm. Note it once per stall window.
+                pass
+            else:
+                drop_s = (f"disk_drop={disk_drop_gb_per_min:.2f}GB/min"
+                          if disk_drop_gb_per_min is not None else "disk_drop=?")
+                f.write(f"  [!] PIPELINE STALLED — pipeline-log mtime hasn't advanced in {mins:.1f} min "
+                        f"({drop_s}; if pass2 were recording, disk would drop >0.5GB/min). Likely "
+                        f"socket-hang on LCU/replay or a frozen pass2 record.\n")
 
         # backlog trend: 3+ consecutive polls of growth
         if len(backlog_hist) >= 3:
