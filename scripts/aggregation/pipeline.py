@@ -276,6 +276,19 @@ def lcu_post(ep, body=None):
         raw = r.read()
         return json.loads(raw) if raw else None
 
+def lcu_get(ep):
+    port, auth = lcu_auth()
+    req = urllib.request.Request(
+        f"https://127.0.0.1:{port}{ep}", method="GET",
+        headers={"Authorization": auth},
+    )
+    try:
+        with urllib.request.urlopen(req, context=_ctx, timeout=10) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else None
+    except urllib.error.HTTPError:
+        return None
+
 # ═══════════════════════════════════════════════════════════════
 # Memory Reader
 # ═══════════════════════════════════════════════════════════════
@@ -1618,6 +1631,24 @@ def trigger_rofl_download(game_id, wait_for_file_path=None, timeout=120):
     Returns True if downloaded (or already present), False on failure."""
     if wait_for_file_path and os.path.exists(wait_for_file_path):
         return True
+    # LCU stale-state workaround: if metadata says state="watch" but the .rofl
+    # is actually missing from disk (deleted by our cleanup-behind logic),
+    # /download POST silently no-ops because LCU thinks it's already cached.
+    # POST /watch first to reset state to "download", then /download triggers
+    # an actual fetch. Confirmed empirically 2026-05-08.
+    try:
+        meta = lcu_get(f"/lol-replays/v1/metadata/{game_id}")
+        if meta and meta.get("state") == "watch":
+            print(f"  [download] resetting stale 'watch' state for {game_id}", flush=True)
+            try:
+                # /watch requires the same body shape as /download — without it
+                # LCU returns 400. With it, state flips watch→download.
+                lcu_post(f"/lol-replays/v1/rofls/{game_id}/watch",
+                         body={"componentType": "replay"})
+            except Exception as e:
+                print(f"  [download] /watch reset failed (non-fatal): {e}", flush=True)
+    except Exception:
+        pass  # metadata GET failure is non-fatal — proceed with /download
     try:
         # LCU rejects an empty {} body — must include componentType to match
         # the same payload shape /watch uses.

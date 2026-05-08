@@ -3,9 +3,14 @@
 Windows-side watcher that uploads completed pipeline output to NFS via SSH.
 
 Polls --src for match dirs whose labels.json exists (= post-process is done),
-scp's the full match dir to danilogin:/mnt/nfs/datasets/<dataset>/<match_id>/,
-verifies the upload via remote `find -type f | wc -l`, and optionally deletes
-the local copy on success.
+streams the full match dir over a single ssh-tar pipe to
+danilogin:/mnt/nfs/datasets/<dataset>/<match_id>/, verifies the upload via
+remote `find -type f | wc -l`, and optionally deletes the local copy on
+success.
+
+Tar-streaming avoids the per-file overhead of scp/rsync — with ~33k tiny
+PNGs per game, scp spent ~5min on filesystem syscalls per game; tar pipes
+the same bytes in ~1-2min over a single TCP connection.
 
 Designed to run alongside pipeline.py so transfers don't block the next game's
 pass1.
@@ -21,7 +26,7 @@ Usage:
 Prerequisite: `ssh windows ssh danilogin` must work without prompts (key auth
 + host key already accepted). See scripts/README.md "NFS sink" for setup.
 """
-import argparse, json, os, shlex, subprocess, sys, time
+import argparse, json, os, shlex, subprocess, sys, tarfile, time
 
 LABELS_FILE = "labels.json"
 SENTINEL = ".synced"  # written into local match dir after successful upload
@@ -49,17 +54,42 @@ def _local_count(path):
     return n
 
 
-def _scp_dir(local_dir, remote, dataset, match_id):
-    """scp -r local_dir to remote/<dataset>/<match_id>/. Creates parent on remote first."""
+def _tar_stream_dir(local_dir, remote, dataset, match_id):
+    """Stream local_dir to remote/<dataset>/<match_id>/ over a single ssh-tar pipe.
+
+    Uses Python's tarfile module to tar the local dir to ssh stdin, where the
+    remote runs `tar -xf -` to extract. Avoids per-file scp overhead — single
+    TCP stream, no fsync-per-file. Reproduces the original directory tree on
+    the remote (PNGs are not compressed; the tar wrapper has near-zero overhead
+    on PNG bytes since they're already deflate-compressed)."""
     host, root = remote.split(":", 1)
     remote_parent = f"{root}/{dataset}"
-    # mkdir -p on remote (idempotent)
     rc, _, err = _run(["ssh", host, f"mkdir -p {shlex.quote(remote_parent)}"])
     if rc != 0:
         return False, f"remote mkdir failed: {err.strip()}"
-    rc, _, err = _run(["scp", "-rq", local_dir, f"{host}:{remote_parent}/"])
+    # If a previous failed run left a partial dir on the remote, blow it away
+    # so we don't end up with a hybrid (file count would mismatch and we'd
+    # never converge). Then re-extract fresh.
+    rc, _, err = _run(["ssh", host,
+                       f"rm -rf {shlex.quote(remote_parent + '/' + match_id)}"])
     if rc != 0:
-        return False, f"scp failed: {err.strip()}"
+        return False, f"remote pre-clean failed: {err.strip()}"
+    name = os.path.basename(local_dir.rstrip(os.sep))
+    ssh_cmd = ["ssh", host, f"tar -xf - -C {shlex.quote(remote_parent)}"]
+    proc = subprocess.Popen(ssh_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        with tarfile.open(fileobj=proc.stdin, mode="w|") as tar:
+            tar.add(local_dir, arcname=name)
+    except Exception as e:
+        try: proc.stdin.close()
+        except Exception: pass
+        proc.wait()
+        return False, f"tar stream error: {e!r}"
+    proc.stdin.close()
+    rc = proc.wait()
+    if rc != 0:
+        err = proc.stderr.read().decode("utf-8", "replace")
+        return False, f"remote tar failed (rc={rc}): {err.strip()[:200]}"
     return True, None
 
 
@@ -81,9 +111,9 @@ def sync_one(src, match_id, remote, dataset, delete_local=False):
     and optionally delete the local copy. Returns (ok, msg)."""
     local_dir = os.path.join(src, match_id)
     n_local = _local_count(local_dir)
-    print(f"  [{match_id}] uploading ({n_local} files)...", flush=True)
+    print(f"  [{match_id}] streaming ({n_local} files via tar)...", flush=True)
     t0 = time.time()
-    ok, err = _scp_dir(local_dir, remote, dataset, match_id)
+    ok, err = _tar_stream_dir(local_dir, remote, dataset, match_id)
     if not ok:
         return False, err
     elapsed = time.time() - t0
