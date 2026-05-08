@@ -75,6 +75,27 @@ def _ps_size_mb(path):
     )
 
 
+def _ps_unsynced_matches(output_dir):
+    """Count match dirs that have labels.json but no <output_dir>/.synced/<id>.json sentinel.
+    This is the REAL sync queue — distinct from raw bytes (which grows during a single
+    match's post-processing without indicating queue depth)."""
+    return (
+        f'powershell -Command "'
+        f'$src = \'{output_dir}\'; '
+        f'$sentinels = if (Test-Path \\\"$src\\.synced\\\") {{ '
+        f'  (Get-ChildItem \\\"$src\\.synced\\\" -File -ErrorAction SilentlyContinue '
+        f'    | Where-Object {{ $_.Extension -eq \'.json\' }} '
+        f'    | ForEach-Object {{ $_.BaseName }}) '
+        f'}} else {{ @() }}; '
+        f'$queue = Get-ChildItem $src -Directory -ErrorAction SilentlyContinue '
+        f'  | Where-Object {{ $_.Name -ne \'logs\' -and $_.Name -ne \'.synced\' '
+        f'    -and (Test-Path (Join-Path $_.FullName \'labels.json\')) '
+        f'    -and ($sentinels -notcontains $_.Name) }}; '
+        f'($queue | Measure-Object).Count'
+        f'"'
+    )
+
+
 def _ps_mtime_epoch(path):
     """Returns unix timestamp of file's LastWriteTime, or empty on miss."""
     return (
@@ -102,7 +123,8 @@ class Probe:
             "sync_last": None,
             "pipeline_mtime": None,
             "disk_gb": None,
-            "backlog_mb": None,
+            "backlog_mb": None,        # raw size of replay_data (informational)
+            "queue_depth": None,       # # of match dirs labeled-but-unsynced (real sync queue)
             "nfs_count": None,
         }
 
@@ -138,6 +160,10 @@ class Probe:
 
         rc, mb, _ = _ssh(a.recording_host, _ps_size_mb(a.output_dir))
         try: out["backlog_mb"] = int(mb.strip()) if rc == 0 else None
+        except ValueError: pass
+
+        rc, qd, _ = _ssh(a.recording_host, _ps_unsynced_matches(a.output_dir))
+        try: out["queue_depth"] = int(qd.strip()) if rc == 0 else None
         except ValueError: pass
 
         if a.nfs_host and a.nfs_dataset:
@@ -200,7 +226,7 @@ def main():
     seen_alerts = set()
 
     # rolling history for trend detection
-    backlog_hist = deque(maxlen=4)            # last 4 polls of backlog_mb
+    queue_hist = deque(maxlen=4)              # last 4 polls of queue_depth
     nfs_hist = deque(maxlen=120)              # (ts, count) — long enough for 1hr at 30s
     disk_hist = deque(maxlen=4)               # (ts, gb) — for "is pass2 actually recording?"
     last_active_pipeline_mtime = None
@@ -229,7 +255,9 @@ def main():
         league_alive = s["league_alive"]
         mtime = s["pipeline_mtime"]
 
-        backlog_hist.append(backlog_mb)
+        queue_depth = s["queue_depth"]
+        if queue_depth is not None:
+            queue_hist.append(queue_depth)
         if nfs_n is not None:
             nfs_hist.append((now, nfs_n))
         if disk is not None:
@@ -246,8 +274,9 @@ def main():
         nfs_s = str(nfs_n) if nfs_n is not None else ("?" if args.nfs_host else "n/a")
         league_s = "Y" if league_alive else "N"
 
+        queue_s = str(queue_depth) if queue_depth is not None else "?"
         f.write(f"\n[{ts_str}] {flag} py={py_procs} league={league_s}  "
-                f"disk={disk_s}  backlog={backlog_s}  nfs={nfs_s}\n")
+                f"disk={disk_s}  q={queue_s}  backlog={backlog_s}  nfs={nfs_s}\n")
 
         if s["pipeline_last"] and s["pipeline_last"] != last_pipeline_line:
             f.write(f"  PIPELINE: {s['pipeline_last']}\n")
@@ -296,16 +325,21 @@ def main():
                         f"({drop_s}; if pass2 were recording, disk would drop >0.5GB/min). Likely "
                         f"socket-hang on LCU/replay or a frozen pass2 record.\n")
 
-        # backlog trend: 3+ consecutive polls of growth
-        if len(backlog_hist) >= 3:
-            recent = list(backlog_hist)[-3:]
-            if recent[0] < recent[1] < recent[2] and recent[2] - recent[0] > 200:  # +200MB minimum
+        # Queue depth trend: real sync queue = match dirs with labels.json minus
+        # those already in <output_dir>/.synced/. Raw replay_data bytes can grow
+        # during a single match's post-process resize without indicating sync
+        # is falling behind, so we don't alarm on bytes.
+        if len(queue_hist) >= 3:
+            recent = list(queue_hist)[-3:]
+            if recent[0] < recent[1] < recent[2] and recent[2] >= 3:
                 backlog_growth_streak += 1
             else:
                 backlog_growth_streak = 0
             if backlog_growth_streak >= 1:
-                f.write(f"  [!] BACKLOG GROWING — sync falling behind: "
-                        f"{recent[0]/1024:.1f} → {recent[2]/1024:.1f}GB across last 3 polls\n")
+                f.write(f"  [!] QUEUE GROWING — finished matches awaiting sync: "
+                        f"{recent[0]} → {recent[2]} across last 3 polls "
+                        f"(sync is slower than pipeline; expected to drain when "
+                        f"pipeline pauses between games).\n")
 
         # NFS progress: alert if count hasn't advanced in --progress-window-min
         if nfs_hist and args.nfs_host:
