@@ -8,8 +8,18 @@ Output: offsets.json with verified offsets for current patch
 Usage:
     python scripts/aggregation/scan_offsets.py [--anchors prev_offsets.json]
 """
-import ctypes, ctypes.wintypes as wt, struct, subprocess, sys, time, json
-import ssl, urllib.request, math, os, argparse
+import argparse
+import ctypes
+import ctypes.wintypes as wt
+import json
+import os
+import ssl
+import struct
+import subprocess
+import sys
+import time
+import urllib.request
+from collections import Counter
 sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 _ctx = ssl.create_default_context(); _ctx.check_hostname=False; _ctx.verify_mode=ssl.CERT_NONE
@@ -713,7 +723,6 @@ def find_click_vtable(m, base, mod_size, hero_ptrs):
     print(f"  found {len(parents)} triple-mirror parent candidates")
 
     # Pass 2: top vptr value among parents → VTABLE_RVA
-    from collections import Counter
     vptr_counts = Counter()
     for parent_addr, _ in parents:
         vp = m.u64(parent_addr)

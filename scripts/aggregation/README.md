@@ -201,9 +201,13 @@ Renders `overlay.mp4` next to the input — champion world→screen projection,
 HUD, action log, click/cast markers. **Debug only** — training reads
 `frames/` + `labels.json` directly.
 
-## Step 5 — Get data off Windows (your call)
+## Step 5 — Get data off Windows (optional)
 
-The pipeline writes locally to Windows. Two options:
+If your training rig **is** the recording machine, you don't need this step at
+all — the pipeline output sits in `$REPLAY_OUTPUT` and you point your training
+loader at it. Skip ahead.
+
+If recording happens on a separate Windows box, two options:
 
 **Option A — push during pipeline run (`sync_to_nfs.py`):**
 
@@ -211,24 +215,43 @@ The pipeline writes locally to Windows. Two options:
 python scripts/aggregation/sync_to_nfs.py \
     --src C:\tmp\replay_data \
     --dataset lol_replays_16_9_772 \
-    --remote danilogin:/mnt/nfs/datasets \
+    --remote <your-host-alias>:/path/to/nfs/datasets \
     --poll 30 --delete-local
 ```
 
-Polls the output dir, ships each `<match_id>/` to NFS once `labels.json`
-exists, verifies file count matches, deletes the Windows copy. Prereq:
-`ssh danilogin` working from Windows (key auth + host key accepted).
+Watches the output dir, tar-streams each `<match_id>/` to your remote once
+`labels.json` exists, verifies file count, optionally deletes the Windows copy.
+Prereq: `ssh <your-host-alias>` works from Windows without prompts (key auth
++ host key accepted). The script is fully decoupled from `pipeline.py` — if
+you don't run it, pipeline.py just keeps the output local.
 
 **Option B — reboot to Linux and copy from NTFS partition.**
 
-For 300 games (~300 GB): ~10-15 min over LAN to NFS, or seconds to local
-NVMe via reboot. Pick by latency tolerance.
+For 300 games (~300 GB): ~10-15 min over LAN, or seconds to local NVMe via
+reboot. Pick by latency tolerance.
 
-## Step 6 — Resource monitoring (optional)
+## Step 6 — Health monitoring (optional)
 
-`perf_monitor.py` dumps 1Hz per-core CPU, RAM, League/Python RSS, GPU util
-to a CSV. Useful for spotting memory leaks across long batches and
-isolating slow-recording causes.
+`monitor.py` runs anywhere with ssh access to the recording host (and
+optionally the data sink) and writes a single tail-able log of pipeline
+state, sync state, disk free, backlog GB, NFS done count, plus distinct
+alerts for `PIPELINE STALLED` (log mtime frozen), `LEAGUE MISSING`,
+`BACKLOG GROWING`, `NO PROGRESS` (NFS count not advancing), etc.
+
+```bash
+python scripts/aggregation/monitor.py \
+    --recording-host <your-windows-alias> \
+    --nfs-host <your-nfs-alias> \
+    --nfs-dataset /path/to/nfs/datasets/lol_replays_16_9_772 \
+    --out ~/replay_monitor.log
+tail -f ~/replay_monitor.log
+```
+
+Drop `--nfs-host`/`--nfs-dataset` if you don't have an off-host data sink.
+
+`perf_monitor.py` is a separate tool that dumps 1Hz per-core CPU, RAM,
+League/Python RSS, GPU util to a CSV — useful for spotting memory leaks
+across long batches and isolating slow-recording causes.
 
 ## Common failures
 

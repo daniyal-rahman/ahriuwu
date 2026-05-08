@@ -33,6 +33,7 @@ import argparse, base64, bisect, ctypes, ctypes.wintypes as wt
 import glob, http.client, json, math, multiprocessing as mp, os, shutil
 import socket, struct, subprocess, sys, threading, time, traceback
 import urllib.request, urllib.error, ssl
+from collections import defaultdict
 from pynput.keyboard import Controller as KbController
 
 try:
@@ -160,8 +161,11 @@ def _load_offsets():
 
 OFFSETS, OFFSET_VERSIONS, OFFSET_FALLBACKS, OFFSET_SCAN_MISSING = _load_offsets()
 
-OUTPUT_BASE  = os.environ.get("REPLAY_OUTPUT", r"E:\replay_data")
-TEMP_BASE    = os.environ.get("REPLAY_TEMP", r"E:\tmp\_pipeline")
+# Output dirs — env vars are the canonical override; the defaults are
+# user-portable (Documents) so a fresh checkout works without any shell setup.
+# For high-throughput batches, point REPLAY_OUTPUT / REPLAY_TEMP at a fast SSD.
+OUTPUT_BASE  = os.environ.get("REPLAY_OUTPUT") or os.path.expandvars(r"%USERPROFILE%\replay_data")
+TEMP_BASE    = os.environ.get("REPLAY_TEMP")   or os.path.expandvars(r"%USERPROFILE%\replay_tmp_pipeline")
 LOCKFILE     = r"C:\Riot Games\League of Legends\lockfile"
 JSONL_PATH   = os.path.join(OUTPUT_BASE, "pipeline.jsonl")
 
@@ -448,7 +452,6 @@ def click_extract_thread(h, hero_ptr, target_vptr, champion, mem_data, stop, res
 
     Output goes into results['clicks'] and results['casts'] (caller-allocated lists).
     """
-    from collections import defaultdict
     o = OFFSETS  # already loaded module-global
     target_b_ptr = target_vptr
     cand_hist = defaultdict(list)
@@ -640,7 +643,6 @@ def find_heroes_by_name_scan(m, base, names):
     """Byte-scan the process heap for each champion name appearing at hero+0x4360.
     For each hit we compute candidate hero_base = hit - 0x4360 and validate via position.
     Returns {name: {ptr, slot=0, team='blue'}} for all names we found."""
-    import ctypes.wintypes as wt
     class MBI(ctypes.Structure):
         _fields_ = [("BaseAddress", ctypes.c_void_p), ("AllocationBase", ctypes.c_void_p),
                     ("AllocationProtect", ctypes.c_ulong), ("__a", ctypes.c_ulong),
@@ -782,9 +784,10 @@ def click_center():
     time.sleep(0.2)
 
 def lock_camera(key):
-    """Cam-lock via direct pynput. WORKS only when the orchestrator runs in the
-    user's interactive session (session 1). When launched from SSH (session 0)
-    the keypress is silently dropped — use lock_camera_via_schtasks instead."""
+    """Cam-lock via direct pynput. Works only when the orchestrator runs in
+    session 1 (user's interactive desktop). Launched from plain SSH (session
+    0), pynput keypresses are silently dropped — invoke the .bat via
+    `schtasks /Run /TN <task> /IT` so the whole pipeline runs in session 1."""
     click_center()
     _kb.press(key); time.sleep(0.05); _kb.release(key)
     time.sleep(0.15)
@@ -802,32 +805,6 @@ def _cam_is_locked(hero_world, tol=200.0):
         return abs(cx - hero_world[0]) < tol and abs(cz - hero_world[1]) < tol + 1500  # cam offset from tilt
     except Exception:
         return False
-
-def lock_camera_via_schtasks(key, helper_path=r"C:\Users\daniz\lock_cam_once.py",
-                              verify_fn=None, max_attempts=5):
-    """Cross-session cam-lock: spawns a helper script in the interactive user
-    session via `schtasks /IT`. Needed when this pipeline is launched via SSH
-    (session 0 can't send keys to session 1 windows).
-
-    If `verify_fn` is provided (called with no args, returns bool), the lock
-    is retried up to `max_attempts` times until verify_fn returns True."""
-    subprocess.run(['schtasks', '/End', '/TN', 'LockCam'], capture_output=True)
-    subprocess.run(['schtasks', '/Delete', '/TN', 'LockCam', '/F'], capture_output=True)
-    subprocess.run(['schtasks', '/Create', '/TN', 'LockCam',
-                    '/TR', f'cmd.exe /c python {helper_path} {key}',
-                    '/SC', 'ONCE', '/ST', '23:59', '/IT', '/F'], capture_output=True)
-    for attempt in range(1, max_attempts + 1):
-        subprocess.run(['schtasks', '/End', '/TN', 'LockCam'], capture_output=True)
-        subprocess.run(['schtasks', '/Run', '/TN', 'LockCam'], capture_output=True)
-        time.sleep(2.0)
-        if verify_fn is None:
-            return True
-        if verify_fn():
-            print(f"  cam lock verified on attempt {attempt}", flush=True)
-            return True
-        print(f"  cam lock attempt {attempt}/{max_attempts} failed verification, retrying...", flush=True)
-    print(f"  WARN: cam lock failed after {max_attempts} attempts", flush=True)
-    return False
 
 def cam_key_for(team, slot):
     if team == "blue": return str(slot + 1)
@@ -1853,8 +1830,9 @@ def main():
                         help="Delete the .rofl this many manifest slots BEHIND the current game "
                              "after each game finishes (default 2 — keeps prior 1 as a retry buffer).")
     parser.add_argument("--replays-dir",
-                        default=r"C:\Users\daniz\Documents\League of Legends\Replays",
-                        help="Where LCU drops .rofl files (used for prefetch + cleanup).")
+                        default=os.path.expandvars(r"%USERPROFILE%\Documents\League of Legends\Replays"),
+                        help="Where LCU drops .rofl files (used for prefetch + cleanup). "
+                             "Defaults to the per-user Documents\\League of Legends\\Replays.")
     args = parser.parse_args()
     global CHAMPION
     CHAMPION = args.champion
