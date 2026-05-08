@@ -208,10 +208,13 @@ def find_game_time(m, base, mod_size, anchor, api_gt):
     delta = api_t1 - api_gt
     print(f"  api advanced by {delta:.2f}s (from {api_gt:.1f} to {api_t1:.1f})")
     if delta < 1.0:
-        print("  ⚠ replay paused — picking first match without verification")
-        rva, v = cands[0]
-        print(f"  ✓ game_time at RVA 0x{rva:X} (read={v:.1f}, api={api_gt:.1f}, UNVERIFIED)")
-        return rva
+        # HARD FAIL — multiple stale snapshots cluster near api_gt at any moment.
+        # Picking cands[0] unverified is exactly how we got 0x1D8C278 (stale) on
+        # 16.9.772 instead of the live 0x1E294D0. Refuse to derive.
+        print("  ✗ replay did NOT advance during scan — cannot disambiguate live")
+        print("    game_time from stale snapshots. Unpause the replay (1x speed)")
+        print("    and re-run scan_offsets.py. NEVER returning unverified RVA.")
+        return None
     survivors = []
     for rva, _ in cands:
         v2 = m.f32(base + rva)
@@ -461,32 +464,23 @@ def find_hero_fields(m, base, hero_array_rva, anchors, layout="deref", stride=8,
                     print(f"  ✓ vision_score at hero+0x{off:X}: ?→{v2:.1f} (api ?→{ws2:.1f})")
                     break
 
-    # Active spell — check both snapshots (hero might not be casting at one)
+    # Active spell candidates: Phase 2 sees a hero-frozen snapshot, which is
+    # reliable enough to PRINT what it finds, but NOT to write to results.
+    # The +0x38 convention broke on 16.9.772 — only Phase 3.6's live-cast diff
+    # is trusted as the canonical writer. Per the project's never-silent-fallback
+    # rule, if 3.6 fails to capture a cast, these fields remain MISSING (loud).
     for snap in [s2, s1]:
-        found = False
+        found_any = False
         for off in candidate_offsets["active_spell"]:
             sn = snap["vals"].get(("active_spell_name", off))
             if sn:
-                results["active_spell"] = off
-                print(f"  ✓ active_spell at hero+0x{off:X}: {sn}")
-                # Transitively verified: spell_info hop and spell_name_ptr.
-                si_hop = snap["vals"].get(("spell_info_hop", off))
-                if si_hop is not None:
-                    results["spell_info"] = si_hop
-                    print(f"  ✓ spell_info at active_spell+0x{si_hop:X} (transitive via name chain)")
-                results["spell_name_ptr"] = 0x28
-                # cast_target probe (only valid when actually casting)
-                ct = snap["vals"].get(("cast_target_off", off))
-                ctm = snap["vals"].get(("cast_target_match", off))
-                if ct is not None:
-                    results["cast_target"] = ct
-                    print(f"  ✓ cast_target at active_spell+0x{ct:X} (match={ctm})")
-                else:
-                    print(f"  ⚠ cast_target NOT probed (no Vec3 in cast struct matched hero pos / map bounds)")
-                found = True; break
-        if found: break
-    if "active_spell" not in results:
-        print(f"  ~ active_spell, spell_info, cast_target deferred — Phase 3.6 (live-cast diff probe) is sole source of truth")
+                print(f"  · candidate active_spell at hero+0x{off:X}: {sn} "
+                      f"(snapshot read; Phase 3.6 is canonical)")
+                found_any = True
+        if found_any:
+            break
+    print(f"  → active_spell / spell_info / cast_target / spell_name_ptr "
+          f"deferred to Phase 3.6 (live-cast diff probe — sole writer)")
 
     return results
 
@@ -892,16 +886,39 @@ def _load_anchors_file(path):
 def main():
     parser = argparse.ArgumentParser(description="Automated offset scanner")
     parser.add_argument("--anchors", help="Previous offsets JSON for drift-based search")
-    parser.add_argument("--output", "-o", default="offsets.json")
+    parser.add_argument("--output", "-o", default=None,
+                        help="output path (default: scripts/aggregation/offsets_<patch>.json). "
+                             "Refuses to run without --patch unless --output is explicit.")
     parser.add_argument("--patch", default=None, help="Patch identifier tag (e.g., 16.9.772)")
     parser.add_argument("--champion", default="Garen", help="Champion name to lock onto for spellbook + click-dest discovery (e.g., Belveth)")
     args = parser.parse_args()
+
+    if args.output is None and not args.patch:
+        print("FATAL: must provide --patch (used to construct safe default output path) "
+              "OR --output explicitly. Otherwise scan would overwrite a generic offsets.json.",
+              file=sys.stderr)
+        sys.exit(2)
+    out_path = args.output or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           f"offsets_{args.patch.replace('.', '_')}.json")
 
     anchors = DEFAULT_ANCHORS.copy()
     if args.anchors:
         anchors.update(_load_anchors_file(args.anchors))
 
-    print("=== League Offset Scanner ===")
+    t_start = time.time()
+    phase_times = []
+    def _phase_done(name):
+        t = time.time() - t_start
+        phase_times.append((name, t))
+        print(f"  [phase done] {name} @ t={t:.0f}s", flush=True)
+
+    print("=" * 60)
+    print(f"League Offset Scanner")
+    print(f"  patch    : {args.patch or '(unknown — pass --patch)'}")
+    print(f"  champion : {args.champion}")
+    print(f"  anchors  : {args.anchors or '(DEFAULT_ANCHORS — likely stale across patches)'}")
+    print(f"  output   : {out_path}")
+    print("=" * 60)
 
     pid = find_pid()
     if not pid: print("ERROR: League not running"); return
@@ -942,11 +959,13 @@ def main():
         offsets["hero_array_layout"] = layout
         offsets["hero_array_stride"] = stride
         _tag("hero_array", "hero_array_layout", "hero_array_stride")
+    _phase_done("1a hero_array")
 
     gt_rva = find_game_time(m, base, mod_size, anchors["game_time"], gt)
     if gt_rva:
         offsets["game_time"] = gt_rva
         _tag("game_time")
+    _phase_done("1b game_time")
 
     if hero_rva is None:
         print("\nFATAL: Cannot find hero array. Aborting.")
@@ -959,6 +978,7 @@ def main():
                                     target_name=args.champion)
     offsets.update(hero_fields)
     _tag(*hero_fields.keys())
+    _phase_done("2 hero_fields")
 
     # Phase 3: SpellBook — seek to mid-game where spells are leveled
     rpost("/replay/playback", {"time": 600.0, "speed": 0.0, "paused": True})
@@ -989,6 +1009,7 @@ def main():
         sb = find_spellbook(m, target_hp, anchors, offsets, champion=args.champion)
         offsets.update(sb)
         _tag(*sb.keys())
+        _phase_done("3 spellbook")
         # Note: active_spell used to be set here as spellbook+0x38, but that convention
         # broke on 16.9.772. active_spell is now solely derived by Phase 3.6 (live-cast
         # diff probe). If Phase 3.6 fails to capture a cast, active_spell remains MISSING.
@@ -1008,12 +1029,14 @@ def main():
         for k, v in cast_offs.items():
             offsets[k] = v
             _tag(k)
+        _phase_done("3.6 live-cast probe")
 
     # Phase 3.5: click-dest VTABLE_RVA + owner offset (heap-scan)
     if hero_ptrs:
         cvt = find_click_vtable(m, base, mod_size, hero_ptrs)
         offsets.update(cvt)
         _tag(*cvt.keys())
+        _phase_done("3.5 click_vtable")
 
     # Phase 4: attack_target_pos on hero struct (Vec3 of AA target unit).
     # Requires Phase 3.6 outputs (active_spell + spell_info + spell_name_ptr).
@@ -1031,6 +1054,7 @@ def main():
         )
         offsets.update(at)
         _tag(*at.keys())
+        _phase_done("4 attack_target_pos")
     else:
         missing_for_aa = [k for k in needed_for_aa if k not in offsets]
         print(f"\n[Phase 4] SKIP — missing prerequisites: {missing_for_aa}")
@@ -1059,11 +1083,25 @@ def main():
 
     offsets["_offset_versions"] = versions
 
-    # Save
-    out_path = args.output
-    with open(out_path, "w") as f:
+    # Save (atomic — write tmp then rename to avoid corrupt JSON on Ctrl-C)
+    tmp_path = out_path + ".tmp"
+    with open(tmp_path, "w") as f:
         json.dump(offsets, f, indent=2)
-    print(f"\n=== Done! Saved to {out_path} ===")
+    os.replace(tmp_path, out_path)
+
+    total_wall = time.time() - t_start
+    derived_n = len(EXPECTED) - len(missing)
+    print(f"\n{'=' * 60}")
+    print(f"DONE  {derived_n}/{len(EXPECTED)} fields derived in {total_wall:.0f}s "
+          f"(saved to {out_path})")
+    print(f"{'=' * 60}")
+    if phase_times:
+        print("Phase timings:")
+        prev = 0.0
+        for name, t in phase_times:
+            print(f"  {name:24s}  +{t - prev:.1f}s")
+            prev = t
+        print()
     for k, v in offsets.items():
         if k == "_offset_versions": continue
         if k.startswith("_"):

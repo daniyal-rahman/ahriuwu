@@ -1725,8 +1725,15 @@ def process_game(game_info, force_patch=False, post_queue=None, rec_start=1.0, r
         CHAMPION = game_info["champion"]
 
     out_dir = os.path.join(OUTPUT_BASE, match_id)
-    if os.path.exists(os.path.join(out_dir, "labels.json")) and not force_rerun:
-        print(f"SKIP {match_id} (already done — pass --force to overwrite)", flush=True)
+    # Two skip signals:
+    #   1) labels.json present locally (pipeline finished + sync hasn't deleted yet, OR sync wasn't running)
+    #   2) sync_to_nfs sentinel at <OUTPUT_BASE>/.synced/<match_id>.json (survives --delete-local)
+    # Either means "this game is done, don't re-record."
+    sync_sentinel = os.path.join(OUTPUT_BASE, ".synced", f"{match_id}.json")
+    if not force_rerun and (os.path.exists(os.path.join(out_dir, "labels.json"))
+                            or os.path.exists(sync_sentinel)):
+        why = "labels.json" if os.path.exists(os.path.join(out_dir, "labels.json")) else "sync sentinel"
+        print(f"SKIP {match_id} (already done via {why} — pass --force to overwrite)", flush=True)
         return True
     if force_rerun and os.path.exists(out_dir):
         print(f"  --force: clearing existing {out_dir}", flush=True)

@@ -45,7 +45,8 @@ Manifest format (consumed by scripts/aggregation/pipeline.py):
       ]
     }
 """
-import argparse, json, os, sys, time, urllib.request, urllib.error
+import argparse, json, os, socket, sys, time, urllib.request, urllib.error
+from collections import Counter
 from urllib.parse import quote
 
 DEFAULT_REGION = "na1"
@@ -73,6 +74,17 @@ class RateLimiter:
         self.last = time.time()
 
 
+def _parse_retry_after(value):
+    """Riot usually returns Retry-After as a seconds-int; HTTP also allows a
+    date format. Default to 10s on anything unparseable."""
+    if not value:
+        return 10
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 10
+
+
 def http_get(url, api_key, rl, retries=4):
     rl.wait()
     req = urllib.request.Request(url, headers={
@@ -84,14 +96,20 @@ def http_get(url, api_key, rl, retries=4):
                 return json.loads(r.read())
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                wait = int(e.headers.get("Retry-After", "10")) + 1
+                wait = _parse_retry_after(e.headers.get("Retry-After")) + 1
                 print(f"    429 rate-limited, sleeping {wait}s", flush=True)
                 time.sleep(wait); continue
-            if e.code in (502, 503, 504):
+            if e.code >= 500:
                 wait = 2 ** attempt
-                print(f"    {e.code} transient, sleeping {wait}s", flush=True)
+                print(f"    {e.code} transient, sleeping {wait}s (attempt {attempt+1}/{retries})",
+                      flush=True)
                 time.sleep(wait); continue
             return {"_error": f"HTTP {e.code}", "_url": url}
+        except (urllib.error.URLError, socket.timeout, ConnectionError) as e:
+            wait = 2 ** attempt
+            print(f"    network error ({type(e).__name__}: {e}), sleeping {wait}s "
+                  f"(attempt {attempt+1}/{retries})", flush=True)
+            time.sleep(wait); continue
         except Exception as e:
             return {"_error": str(e), "_url": url}
     return {"_error": "max retries", "_url": url}
@@ -121,15 +139,6 @@ def fetch_masters_plus(region, api_key, rl):
                 ("puuid", "leaguePoints", "wins", "losses", "rank")}}
 
 
-def riot_id_for_puuid(routing, puuid, api_key, rl):
-    """account-v1 reverse lookup. Optional — used only for nicer display names."""
-    url = f"https://{routing}.api.riotgames.com/riot/account/v1/accounts/by-puuid/{puuid}"
-    d = http_get(url, api_key, rl)
-    if not d or d.get("_error"): return None
-    name = d.get("gameName"); tag = d.get("tagLine")
-    return f"{name}#{tag}" if name and tag else None
-
-
 def puuid_for_riot_id(routing, game_name, tag_line, api_key, rl):
     """account-v1 forward lookup: Riot ID → puuid."""
     url = (f"https://{routing}.api.riotgames.com/riot/account/v1/accounts/by-riot-id/"
@@ -140,20 +149,19 @@ def puuid_for_riot_id(routing, game_name, tag_line, api_key, rl):
 
 
 def load_seed_riot_ids(path):
-    """Load curated `gameName#tagLine` lines (# starts a comment, blank lines
-    skipped). Returns list of (game_name, tag_line)."""
+    """Load curated `gameName#tagLine` lines (lines starting with # = comment,
+    blank lines skipped). Returns list of (game_name, tag_line)."""
     out = []
-    for raw in open(path):
-        # strip trailing comments only — '#' inside a tag is a real character,
-        # but seed files don't include hex-style tags so the simple rule works.
-        line = raw.rstrip("\n")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if "#" not in line:
-            print(f"  WARN: seed line lacks #tag, skipping: {line!r}")
-            continue
-        name, tag = line.rsplit("#", 1)
-        out.append((name.strip(), tag.strip()))
+    with open(path) as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if "#" not in line:
+                print(f"  WARN: seed line lacks #tag, skipping: {line!r}")
+                continue
+            name, tag = line.rsplit("#", 1)
+            out.append((name.strip(), tag.strip()))
     return out
 
 
@@ -169,10 +177,6 @@ def match_detail(routing, match_id, api_key, rl):
     return http_get(url, api_key, rl)
 
 
-def normalize(name):
-    return (name or "").replace(" ", "").replace("'", "").replace(".", "").lower()
-
-
 def load_otp_filter(path):
     """Load a list of puuids (one per line, # for comments).
 
@@ -182,10 +186,11 @@ def load_otp_filter(path):
     account-by-riot-id endpoint), pass the puuid file here."""
     if not path: return None
     puuids = set()
-    for line in open(path):
-        line = line.split("#", 1)[0].strip()
-        if line:
-            puuids.add(line)
+    with open(path) as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if line:
+                puuids.add(line)
     return puuids
 
 
@@ -270,67 +275,80 @@ def main():
     print(f"\n[3] Walking match histories — looking for {args.champion} {args.role} on {args.patch}.x...")
     seen_matches = set()
     out_matches = []
+    rejects = Counter()  # patch / champion / role / short / detail_err / no_ids
 
     def _write(progress_pct=None):
-        """Snapshot current matches to disk. Called every time we extend
-        out_matches so a long run can be killed and the partial result is
-        already saved."""
-        with open(args.out, "w") as f:
+        """Atomic snapshot — write to .tmp then os.replace. Called incrementally
+        so a killed/crashed run still has a valid partial JSON on disk."""
+        tmp = args.out + ".tmp"
+        with open(tmp, "w") as f:
             json.dump({
                 "name": f"{args.champion}_{args.role}_masters_{args.patch.replace('.', '_')}",
                 "champion": args.champion, "role": args.role, "patch": args.patch,
                 "region": args.region,
-                "n_players_walked": len(puuids),
+                "n_players_targeted": len(puuids),
                 "_partial": progress_pct is not None and progress_pct < 100,
                 "_progress_pct": progress_pct,
                 "matches": out_matches,
             }, f, indent=2)
+        os.replace(tmp, args.out)
 
-    _write(progress_pct=0)  # write empty manifest immediately so the file exists
+    _write(progress_pct=0)
+    print(f"  wrote empty placeholder to {args.out} (will be updated incrementally)", flush=True)
+
     for i, (puuid, p) in enumerate(puuids, 1):
         if len(out_matches) >= args.max_games: break
+        label = p.get("riot_id") or f"{p.get('tier','?')[:4]} {p.get('leaguePoints',0)}LP"
         ids = match_ids_by_puuid(routing, puuid, args.api_key, rl, count=args.matches_per_player)
-        if not ids: continue
+        if not ids:
+            rejects["no_ids_returned"] += 1
+            print(f"  [{i}/{len(puuids)}] {label:30s} puuid={puuid[:14]}…  NO MATCHES "
+                  f"(empty match-id list — dev/network or genuinely 0)", flush=True)
+            continue
         kept = 0
         for mid in ids:
             if mid in seen_matches: continue
             seen_matches.add(mid)
             d = match_detail(routing, mid, args.api_key, rl)
-            if not d or d.get("_error"): continue
+            if not d or d.get("_error"):
+                rejects["detail_error"] += 1
+                continue
             info = d.get("info", {})
             ver = info.get("gameVersion", "")
-            if not ver.startswith(args.patch): continue
+            if not ver.startswith(args.patch):
+                rejects["wrong_patch"] += 1
+                continue
+            matched_part = False
             for part in info.get("participants", []):
-                if part.get("championName") != args.champion: continue
-                if (part.get("teamPosition") or "").upper() != args.role.upper(): continue
+                if part.get("championName") != args.champion:
+                    continue
+                if (part.get("teamPosition") or "").upper() != args.role.upper():
+                    rejects["wrong_role"] += 1
+                    continue
+                matched_part = True
                 team = "blue" if part.get("teamId") == 100 else "red"
-                # slot = participant index within their team (0..4)
                 idx = info["participants"].index(part)
                 slot = sum(1 for q in info["participants"]
                            if q.get("teamId") == part.get("teamId")
                            and info["participants"].index(q) < idx)
-                # Riot ID (gameName#tagLine) is in the per-match participant data
-                # since 2024 — use it instead of the dropped summonerName.
                 riot_id = (
                     f"{part.get('riotIdGameName')}#{part.get('riotIdTagline')}"
                     if part.get('riotIdGameName') else None
                 )
-                # Per-match `duration` cap (in game-seconds) = actual gameDuration
-                # plus a small buffer, capped at --duration-cap. Pipeline.py uses
-                # this as the pass1 hard ceiling; pass2 derives its real endTime
-                # from pass1's actual mem coverage, so this is just a safety net
-                # against runaway scrapes if stall detection ever fails.
                 actual_dur = info.get("gameDuration", 1800)
                 if actual_dur < args.min_game_duration:
+                    rejects["too_short"] += 1
                     break  # drop this match (remake / early ff)
                 duration = min(args.duration_cap, actual_dur + args.duration_buffer)
                 out_matches.append({
                     "match_id": mid,
                     "game_id":  mid.split("_")[-1],
-                    "platform": args.region,  # download_replays.py uses this for filename
+                    "platform": args.region,
                     "champion": args.champion,
-                    "garen_team": team,
-                    "garen_slot": slot,
+                    "garen_team": team,    # legacy key — pipeline.py also reads "team"
+                    "garen_slot": slot,    # legacy key — pipeline.py also reads "slot"
+                    "team": team,
+                    "slot": slot,
                     "duration": duration,
                     "version": ver,
                     "summoner_name": riot_id,
@@ -340,15 +358,23 @@ def main():
                 })
                 kept += 1
                 if len(out_matches) >= args.max_games: break
+            if not matched_part and info.get("participants"):
+                # match included no participant on (champion, anything-role) — not
+                # interesting to count separately; "no_champion" check would be
+                # redundant since we already filter by championName.
+                pass
+
+        print(f"  [{i}/{len(puuids)}] {label:30s} puuid={puuid[:14]}…  kept {kept}  "
+              f"(running total {len(out_matches)})", flush=True)
         if kept:
-            label = p.get("riot_id") or f"{p.get('tier','?')[:4]} {p.get('leaguePoints',0)}LP"
-            print(f"  [{i}/{len(puuids)}] {label:30s} puuid={puuid[:14]}…  kept {kept}  "
-                  f"(running total {len(out_matches)})", flush=True)
-            # Snapshot after each player who contributed at least one match
             _write(progress_pct=int(100 * len(out_matches) / max(1, args.max_games)))
 
     _write(progress_pct=100)
     print(f"\n[4] Wrote {len(out_matches)} matches to {args.out}")
+    if rejects:
+        print(f"\n[5] Rejection summary (matches scanned but not kept):")
+        for reason, n in rejects.most_common():
+            print(f"    {reason:24s}  {n}")
 
 
 if __name__ == "__main__":

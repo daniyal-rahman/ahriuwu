@@ -182,6 +182,11 @@ def color_for(label):
     return WHITE
 
 
+def fmt_clock(gt):
+    m = int(gt // 60)
+    return f"{m}:{gt - 60 * m:05.2f}"
+
+
 def put_text(img, text, xy, scale=0.5, color=WHITE, thickness=1):
     cv2.putText(img, text, xy, cv2.FONT_HERSHEY_SIMPLEX, scale, BLACK, thickness + 2, cv2.LINE_AA)
     cv2.putText(img, text, xy, cv2.FONT_HERSHEY_SIMPLEX, scale, color, thickness, cv2.LINE_AA)
@@ -194,15 +199,11 @@ def draw_log(img, log, w, log_n, scale=0.45):
     x = w - 220
     y = 25
     for i, (gt, label) in enumerate(show):
-        m = int(gt // 60)
-        s = gt - 60 * m
-        put_text(img, f"{m}:{s:05.2f}  {label}", (x, y + i * 20), scale, color_for(label))
+        put_text(img, f"{fmt_clock(gt)}  {label}", (x, y + i * 20), scale, color_for(label))
 
 
 def draw_hud(img, gt, frame_idx, total, stats):
-    m = int(gt // 60)
-    s = gt - 60 * m
-    put_text(img, f"{m}:{s:05.2f}", (12, 28), 0.7, WHITE, 2)
+    put_text(img, fmt_clock(gt), (12, 28), 0.7, WHITE, 2)
     put_text(img, f"F{frame_idx}/{total}", (12, 50), 0.4, (200, 200, 200))
     if not stats:
         return
@@ -279,18 +280,39 @@ def main():
     out_path = args.output or os.path.join(md, "overlay.mp4")
 
     print(f"Loading {md}...")
-    labels = json.load(open(os.path.join(md, "labels.json")))
-    raw_cam = json.load(open(os.path.join(md, "raw_cam.json")))
-    raw_mem = json.load(open(os.path.join(md, "raw_mem.json")))
+
+    def _load_json(name):
+        p = os.path.join(md, name)
+        if not os.path.exists(p):
+            raise SystemExit(f"FATAL: {p} missing — pipeline output incomplete?")
+        with open(p) as f:
+            return json.load(f)
+
+    labels = _load_json("labels.json")
+    raw_cam = _load_json("raw_cam.json")
+    raw_mem = _load_json("raw_mem.json")
+    if "frames" not in labels:
+        raise SystemExit("FATAL: labels.json has no 'frames' key — schema mismatch")
     frames = labels["frames"]
 
     proj_meta = labels.get("projection", {})
-    fov_v = args.fov_v_deg if args.fov_v_deg is not None else proj_meta.get("fov_v_deg", 40.0)
-    tilt = args.tilt_deg if args.tilt_deg is not None else proj_meta.get("tilt_deg", 56.0)
-    cam_y = args.cam_y if args.cam_y is not None else proj_meta.get("cam_y", 1912.0)
+    if not proj_meta:
+        print(f"  WARN: labels.json has no 'projection' block — using defaults / CLI", flush=True)
+
+    def _pick(cli_val, meta_key, default, src_label):
+        if cli_val is not None:
+            return cli_val, f"{src_label}=CLI"
+        if meta_key in proj_meta:
+            return proj_meta[meta_key], f"{src_label}=labels"
+        return default, f"{src_label}=default"
+
+    fov_v, fov_src = _pick(args.fov_v_deg, "fov_v_deg", 40.0, "fov_v")
+    tilt,  tilt_src = _pick(args.tilt_deg, "tilt_deg", 56.0, "tilt")
+    cam_y, camy_src = _pick(args.cam_y, "cam_y", 1912.0, "cam_y")
     print(f"  {len(frames)} frames, {len(raw_cam)} cam samples, {len(raw_mem)} mem samples")
     print(f"  champion (label key): {labels.get('champion')!r}")
-    print(f"  projection: fov_v={fov_v} tilt={tilt} cam_y={cam_y} floor_y={args.floor_y}")
+    print(f"  projection: fov_v={fov_v} tilt={tilt} cam_y={cam_y} floor_y={args.floor_y} "
+          f"({fov_src} {tilt_src} {camy_src})")
     print(f"  output: {args.out_w}x{args.out_h} @ {args.fps}fps -> {out_path}")
 
     print("Building wall->gt (from raw_mem) and gt->cam (from raw_cam)...")
@@ -319,17 +341,23 @@ def main():
         if os.path.exists(auto_path):
             click_path = auto_path
             print(f"  auto-using {auto_path}")
+        else:
+            print(f"  no clicks.json found at {auto_path} — click/cast markers disabled")
     click_by_frame = {}
     cast_by_frame = {}
+    n_dropped_no_t = 0
     if click_path:
-        ce = json.load(open(click_path))
+        with open(click_path) as f:
+            ce = json.load(f)
         clicks = ce.get("clicks", []) + ce.get("events", [])
         casts = ce.get("casts", [])
         gt0 = frames[0]["gt"] if frames else 0.0
         step = 1.0 / args.fps
         for c in clicks:
             t = c.get("game_time", c.get("game_t"))
-            if t is None: continue
+            if t is None:
+                n_dropped_no_t += 1
+                continue
             i = int((t - gt0) / step)
             if 0 <= i < len(frames):
                 click_by_frame.setdefault(i, []).append({
@@ -337,7 +365,9 @@ def main():
                 })
         for c in casts:
             t = c.get("game_time", c.get("game_t"))
-            if t is None: continue
+            if t is None:
+                n_dropped_no_t += 1
+                continue
             i = int((t - gt0) / step)
             if 0 <= i < len(frames):
                 cast_by_frame.setdefault(i, []).append({
@@ -348,16 +378,23 @@ def main():
                     "gt": t,
                 })
         print(f"Click events: {len(clicks)} clicks + {len(casts)} casts from {click_path}")
+        if n_dropped_no_t:
+            print(f"  WARN: {n_dropped_no_t} click/cast event(s) dropped (no game_time field)")
 
     project = make_projector(args.out_w, args.out_h, fov_v, tilt, cam_y, args.floor_y)
+    if "screen_resolution" not in labels:
+        print(f"  WARN: labels.json has no 'screen_resolution' — assuming 1280x720. "
+              f"If pipeline ran at a different resolution, all action markers will be mis-scaled.")
     pipe_w, pipe_h = labels.get("screen_resolution", [1280, 720])
     sx_scale = args.out_w / pipe_w
     sy_scale = args.out_h / pipe_h
 
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     vw = cv2.VideoWriter(out_path, fourcc, args.fps, (args.out_w, args.out_h))
     if not vw.isOpened():
-        print(f"ERROR: cannot open writer at {out_path}")
+        print(f"ERROR: cannot open VideoWriter at {out_path}. "
+              f"Check codec (mp4v expected), parent-dir permissions, and free disk space.")
         return 1
 
     frames_dir = os.path.join(md, "frames")
@@ -379,6 +416,10 @@ def main():
     }
     n_skip_png = 0
     n_no_cam = 0
+    n_dropped_proj = 0       # click/cast world coords behind cam (project returned None)
+    n_cast_no_hero = 0       # cast event missing hero_x/hero_z
+    n_fallback_vh = 0        # frames where champion_screen/_stats fell back to visible_heroes
+    INLINE_LOG_LIMIT = 3
     print(f"\nRendering {n} frames...")
     for i in range(n):
         fr = frames[i]
@@ -387,6 +428,8 @@ def main():
         png = os.path.join(frames_dir, f"{idx:06d}.png")
         img = cv2.imread(png)
         if img is None:
+            if n_skip_png < INLINE_LOG_LIMIT:
+                print(f"  WARN: unreadable PNG at frame {idx} ({png})")
             n_skip_png += 1
             img = np.zeros((args.out_h, args.out_w, 3), dtype=np.uint8)
         elif (img.shape[1], img.shape[0]) != (args.out_w, args.out_h):
@@ -396,6 +439,9 @@ def main():
         if cam_ok:
             cam_x, cam_z = cam_at(gt)
         else:
+            if n_no_cam < INLINE_LOG_LIMIT:
+                print(f"  WARN: no cam sample for frame {idx} gt={gt:.2f} "
+                      f"(cam covers {cam_gt_min:.1f}..{cam_gt_max:.1f}, tolerance={args.cam_tolerance_s}s)")
             cam_x = cam_z = 0.0
             n_no_cam += 1
 
@@ -422,19 +468,25 @@ def main():
                         "color": COLOR["CLICK"], "label": "CLICK",
                         "frames_left": args.ability_persist_frames,
                     })
+                else:
+                    n_dropped_proj += 1
             for c in cast_by_frame.get(i, []):
                 slot = c["slot"]; nm = c["spell_name"]
                 lbl = f"{slot} {nm}" if nm else slot
                 log.append((c["gt"], lbl))
                 hx, hz = c.get("hero_x"), c.get("hero_z")
-                if hx is not None and hz is not None:
-                    pos = project(hx, hz, cam_x, cam_z)
-                    if pos:
-                        pending_markers.append({
-                            "sx": pos[0], "sy": pos[1],
-                            "color": color_for(slot), "label": lbl,
-                            "frames_left": args.ability_persist_frames,
-                        })
+                if hx is None or hz is None:
+                    n_cast_no_hero += 1
+                    continue
+                pos = project(hx, hz, cam_x, cam_z)
+                if pos:
+                    pending_markers.append({
+                        "sx": pos[0], "sy": pos[1],
+                        "color": color_for(slot), "label": lbl,
+                        "frames_left": args.ability_persist_frames,
+                    })
+                else:
+                    n_dropped_proj += 1
 
         # draw + age pending action markers (screen-locked, don't track cam —
         # they fired on a one-off frame and stay where they were drawn)
@@ -461,8 +513,12 @@ def main():
             vh_list = lab.get("visible_heroes") or []
             vh = next((v for v in vh_list if v.get("name") == focus_name), None)
             if vh is None and vh_list:
-                vh = vh_list[0]  # last-resort: any visible hero (no per-name match)
+                vh = vh_list[0]
             if vh:
+                if n_fallback_vh < INLINE_LOG_LIMIT:
+                    print(f"  WARN: frame {idx} fell back to visible_heroes for HUD stats "
+                          f"(focus={focus_name!r}, matched={vh.get('name')!r})")
+                n_fallback_vh += 1
                 gs = vh.get("screen") or gs
                 stats = {
                     "level": vh.get("level"),
@@ -484,7 +540,12 @@ def main():
     vw.release()
     print("\nDone.")
     print(f"  output: {out_path}")
-    print(f"  written: {n}  unreadable_png: {n_skip_png}  no_cam_coverage: {n_no_cam}")
+    print(f"  written: {n}")
+    print(f"  unreadable_png:    {n_skip_png}")
+    print(f"  no_cam_coverage:   {n_no_cam}")
+    print(f"  dropped_projection:{n_dropped_proj}  (click/cast world coord behind cam)")
+    print(f"  cast_no_hero_pos:  {n_cast_no_hero}  (cast event lacked hero_x/hero_z)")
+    print(f"  visible_heroes_fallback: {n_fallback_vh}  (frames using fallback HUD source)")
     print(f"  total actions logged: {len(log)}")
     return 0
 
