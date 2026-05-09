@@ -34,6 +34,7 @@ import glob, http.client, json, math, multiprocessing as mp, os, shutil
 import socket, struct, subprocess, sys, threading, time, traceback
 import urllib.request, urllib.error, ssl
 from collections import defaultdict
+from typing import Optional
 from pynput.keyboard import Controller as KbController
 
 try:
@@ -1494,6 +1495,14 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
     n_cam_fallback = 0
     mem_gaps_ms = []
 
+    # Click-by-gt index for cursor_screen fallback. clicks.json gives us the
+    # most-recent movement-click position at any gt; we use it as the cursor
+    # location when no spell/AA is currently casting (i.e., during plain walk).
+    raw_clicks = sorted(click_results.get("clicks", []) or [],
+                        key=lambda c: c.get("game_t", 0.0))
+    click_gt_keys = [c["game_t"] for c in raw_clicks]
+    last_click_world: Optional[tuple[float, float]] = None  # carried forward
+
     for fi in range(n_frames):
         gt = start_gt + fi / FPS
         bm, mem_gap = _nearest(mem_sorted, mem_gt_keys, gt)
@@ -1543,6 +1552,22 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
         waypoint = garen.get("waypoint")
         waypoint_screen = project(waypoint[0], waypoint[1], cx, cy, cz) if waypoint else None
 
+        # Cursor (mouse) location: where the player most recently issued a
+        # command. Active spell/AA target if any (cast_target above), else the
+        # last movement click from clicks.json. Held forward through idle
+        # frames between commands. Used as the action-label movement target.
+        if cast_target is not None:
+            cursor_world = (cast_target[0], cast_target[1])
+        else:
+            i = bisect.bisect_right(click_gt_keys, gt) - 1
+            if i >= 0:
+                last_click_world = (raw_clicks[i]["x"], raw_clicks[i]["z"])
+            cursor_world = last_click_world  # may still be None pre-first-input
+        cursor_screen = (
+            project(cursor_world[0], cursor_world[1], cx, cy, cz)
+            if cursor_world is not None else None
+        )
+
         # Velocity / heading patched after the per-frame loop (needs next frame's pos).
         frames_out.append({
             "frame": fi, "gt": round(gt, 3),
@@ -1560,6 +1585,8 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
                 },
                 "visible_heroes": visible,
                 "action": {"type": classify_spell(spell, champion), "spell": spell, "screen": action_screen},
+                "cursor": {"world": list(cursor_world) if cursor_world else None,
+                           "screen": cursor_screen},
                 "waypoint": {"world": waypoint, "screen": waypoint_screen} if waypoint else None,
             },
         })

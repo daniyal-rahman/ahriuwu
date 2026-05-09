@@ -266,24 +266,40 @@ class ReplayLatentSequenceDataset(Dataset):
         }
 
     def _parse_movement(self, labels: dict, frames: list[dict]) -> torch.Tensor:
-        """Per-frame (x, y) ∈ [0, 1] from movement.heading_screen, default (0.5, 0.5).
+        """Per-frame cursor (x, y) ∈ [0, 1] from label.cursor.screen.
 
-        Pipeline always writes ``screen_resolution`` and ``movement`` is bounded
-        within the frame, so no defaults / clamps are needed.
+        ``cursor.screen`` is the most-recent issued-command location: ability
+        target if a spell is active this frame, AA target if attacking, else
+        the most-recent movement click from clicks.json — held forward through
+        idle frames. Pipeline emits None before any input or when off-screen;
+        we hold the previous in-frame value, fall back to (0.5, 0.5) only if
+        no cursor info exists yet (e.g., very early-game frames).
+
+        Backwards compat: older labels (pre-cursor) keep ``movement.heading_screen``;
+        we fall back to that when ``cursor`` is absent.
         """
         T = len(frames)
         screen_w, screen_h = labels["screen_resolution"]
         screen_w, screen_h = float(screen_w), float(screen_h)
         movement = torch.full((T, 2), 0.5, dtype=torch.float32)
+        last_xy: Optional[tuple[float, float]] = None
         for i, fr in enumerate(frames):
             lab = fr.get("label")
             if not lab:
+                if last_xy is not None:
+                    movement[i, 0], movement[i, 1] = last_xy
                 continue
-            mv = lab.get("movement") or {}
-            hs = mv.get("heading_screen")
-            if hs and len(hs) == 2:
-                movement[i, 0] = hs[0] / screen_w
-                movement[i, 1] = hs[1] / screen_h
+            cs = (lab.get("cursor") or {}).get("screen")
+            if cs and len(cs) == 2:
+                last_xy = (cs[0] / screen_w, cs[1] / screen_h)
+            else:
+                # Old-schema fallback. Drop once all data is re-recorded /
+                # backfilled to write `cursor`.
+                hs = (lab.get("movement") or {}).get("heading_screen")
+                if hs and len(hs) == 2:
+                    last_xy = (hs[0] / screen_w, hs[1] / screen_h)
+            if last_xy is not None:
+                movement[i, 0], movement[i, 1] = last_xy
         return movement
 
     def _parse_abilities(
@@ -351,7 +367,32 @@ class ReplayLatentSequenceDataset(Dataset):
             )
             self._fill_abilities_from_action_transitions(frames, abilities, labels)
 
+        # 'C' (attack-move-click) — fired on every AA initiation regardless of
+        # which keybind the human used (right-click on enemy, A-click, or our
+        # convention of C-click). Source is per-frame label.action.type
+        # transition into "attack"; clicks.json's cast stream doesn't carry AA
+        # because AAs aren't spellbook slots.
+        self._fill_C_from_attack_transitions(frames, abilities)
+
         return abilities
+
+    @staticmethod
+    def _fill_C_from_attack_transitions(
+        frames: list[dict],
+        abilities: dict[str, torch.Tensor],
+    ) -> None:
+        """Set abilities['C'][i] = 1 on the frame where action.type transitions
+        into 'attack' (covers AAs whether keyed via right-click, A, or C)."""
+        prev_type: Optional[str] = None
+        for i, fr in enumerate(frames):
+            lab = fr.get("label")
+            if not lab:
+                prev_type = None
+                continue
+            atype = (lab.get("action") or {}).get("type")
+            if atype == "attack" and prev_type != "attack":
+                abilities["C"][i] = 1
+            prev_type = atype
 
     @staticmethod
     def _fill_abilities_from_action_transitions(

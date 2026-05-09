@@ -11,8 +11,16 @@ from pathlib import Path
 # Domain constants
 # --------------------------------------------------------------------------- #
 
-MOVEMENT_DIM = 2  # Continuous movement (x, y)
-ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'item', 'B']
+MOVEMENT_DIM = 2  # Continuous (x, y) cursor location in [0, 1] screen coords.
+# Action keys (binary per frame):
+#   Q W E R - champion abilities
+#   D F     - summoner spells
+#   B       - recall
+#   C       - attack-move-click (AA initiation; covers all AAs whether keyed
+#             via attack-move or right-click on enemy)
+# `item` was tracked here previously; dropped because pipeline doesn't capture
+# item activations and the signal is sparse (~20/game).
+ABILITY_KEYS = ['Q', 'W', 'E', 'R', 'D', 'F', 'B', 'C']
 
 # --------------------------------------------------------------------------- #
 # Project paths — override via environment variables
