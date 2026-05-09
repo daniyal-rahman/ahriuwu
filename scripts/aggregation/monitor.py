@@ -208,8 +208,13 @@ def main():
                     help="alert if pipeline-log mtime hasn't advanced this long (default 600 = 10min)")
     ap.add_argument("--progress-window-min", type=int, default=60,
                     help="alert if NFS game count hasn't advanced in this many minutes (default 60)")
-    ap.add_argument("--disk-warn-gb", type=float, default=25.0)
-    ap.add_argument("--disk-crit-gb", type=float, default=10.0)
+    # Defaults sized for a per-match footprint of ~8 GB on Windows (225 KB
+    # per 352x352 PNG × ~36k frames; PNG compresses worse than expected on
+    # game-rendered content). Each unsynced match held locally costs ~8 GB,
+    # so a 4-match buffer = 32 GB. Warn at 80 GB → ~6 matches' headroom;
+    # critical at 40 GB → ~3 matches before pipeline starts failing writes.
+    ap.add_argument("--disk-warn-gb", type=float, default=80.0)
+    ap.add_argument("--disk-crit-gb", type=float, default=40.0)
     args = ap.parse_args()
 
     probe = Probe(args)
