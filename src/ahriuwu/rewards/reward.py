@@ -1,13 +1,11 @@
 """Per-frame reward for Garen TOP RL training.
 
-Reward is the sum of four components, computed once per episode from a
+Reward is the sum of three components, computed once per episode from a
 loaded labels.json plus the win/loss outcome:
 
   Dense   - per-frame Δ(focus.gold_total - lane_opp.gold_total). Primary
             laning signal: positive when Garen out-earns the lane opponent
             this frame, negative when they out-earn Garen.
-  Backup  - per-frame max(0, Δ focus.gold_total). Small weight; only matters
-            when both teams gain together (the relative term gives 0).
   Event   - one-shot penalty the frame Garen's hp transitions to 0.
   Anchor  - one-shot ±lane_anchor at the frame closest to lane_checkpoint_gt
             (default 14:00) based on gold/level diff thresholds.
@@ -15,8 +13,11 @@ loaded labels.json plus the win/loss outcome:
 
 Why this shape: with γ=0.997 and DreamerV4's ~192-frame imagination horizon,
 a purely-terminal reward at frame 36000 has effectively zero gradient at
-early-game frames. The dense components keep the value head training every
-imagination window; the anchors pin it at known points.
+early-game frames. The dense gold-diff term keeps the value head training
+every imagination window; the anchors pin it at known points. The
+"recover from being behind" pattern (e.g., eat a hard-matchup slow push,
+catch up when the wave bounces to tower) is encoded implicitly by
+Δ(gold_diff) on the bounce-back, not by a separate reward term.
 
 Public entry point: ``compute_episode_reward(labels, garen_won, config)``
 returns a (T,) tensor, where T = ``len(labels["frames"])``.
@@ -41,7 +42,6 @@ class RewardConfig:
       Dense gold-diff term telescopes — its sum equals
       gold_diff_scale · (final_gold_diff - initial_gold_diff). At a typical
       ±2k final lane gap that's ≈ ±0.1; a stomp at ±10k integrates to ±0.5.
-      Dense gold-self adds ≈ +0.12 (one-sided, ~12k cumulative gold × β').
       Death events take ~−0.6 cumulative across 3 deaths.
       Lane anchor adds ±0.5 at 14:00.
       Outcome adds ±1.0 at game end.
@@ -49,10 +49,9 @@ class RewardConfig:
     """
 
     gold_diff_scale: float = 5e-5
-    gold_self_scale: float = 1e-5
     death_penalty: float = -0.2
     lane_checkpoint_gt: float = 14 * 60.0
-    lane_gold_threshold: float = 1500.0
+    lane_gold_threshold: float = 1000.0
     lane_level_threshold: int = 2
     lane_anchor_weight: float = 0.5
     outcome_weight: float = 1.0
@@ -94,7 +93,6 @@ def compute_episode_reward(
 
     rewards = torch.zeros(T, dtype=torch.float32)
     rewards += _dense_gold_diff(frames, opp_name, cfg)
-    rewards += _dense_gold_self(frames, cfg)
     rewards += _death_event(frames, cfg)
     if opp_name is not None:
         rewards += _lane_anchor(frames, opp_name, cfg)
@@ -179,28 +177,6 @@ def _dense_gold_diff(
         if prev_diff is not None:
             out[i] = cfg.gold_diff_scale * (diff - prev_diff)
         prev_diff = diff
-    return out
-
-
-def _dense_gold_self(frames: list[dict], cfg: RewardConfig) -> torch.Tensor:
-    """β' · max(0, Δ focus.gold_total) per frame. Positive-only."""
-    T = len(frames)
-    out = torch.zeros(T, dtype=torch.float32)
-    prev_gold: Optional[float] = None
-    for i, fr in enumerate(frames):
-        cs = _focus_stats(fr.get("label"))
-        if cs is None:
-            prev_gold = None
-            continue
-        gold = _safe_float(cs, "gold_total")
-        if gold is None:
-            prev_gold = None
-            continue
-        if prev_gold is not None:
-            delta = gold - prev_gold
-            if delta > 0.0:
-                out[i] = cfg.gold_self_scale * delta
-        prev_gold = gold
     return out
 
 
