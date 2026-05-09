@@ -988,6 +988,13 @@ def main():
                 print("Make sure to run pretokenize_frames.py first.")
             return
 
+        # Verify action loading matches expectation
+        if args.use_actions:
+            sample = dataset_short[0]
+            assert "actions" in sample and sample["actions"] is not None, \
+                "use_actions=True but dataset not loading actions. " \
+                "Check: dataset initialization must have load_actions=True"
+
         print(f"Short sequences: {len(dataset_short)} (T={args.seq_len_short})")
         print(f"Long sequences: {len(dataset_long)} (T={args.seq_len_long})")
 
@@ -1025,6 +1032,13 @@ def main():
             else:
                 print("Make sure to run pretokenize_frames.py first.")
             return
+
+        # Verify action loading matches expectation
+        if args.use_actions:
+            sample = dataset[0]
+            assert "actions" in sample and sample["actions"] is not None, \
+                "use_actions=True but dataset not loading actions. " \
+                "Check: dataset initialization must have load_actions=True"
 
         print(f"Found {len(dataset)} sequences")
 

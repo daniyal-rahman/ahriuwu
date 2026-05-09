@@ -358,6 +358,12 @@ class LatentDatasetMixin:
     and LatentSequenceDataset.
     """
 
+    # Death detection constants (from reward feature detection heuristics)
+    DEATH_DETECTION_LOOKBACK_FRAMES = 5  # Frames to look back for health bar history
+    DEATH_DETECTION_LOOKBACK_THRESHOLD = 3  # Min frames where HB exists to consider "had health"
+    DEATH_DETECTION_LOOKAHEAD_FRAMES = 3  # Frames to check forward if health bar stays gone
+    DEATH_DETECTION_LOOKAHEAD_THRESHOLD = 2  # Min frames missing HB to confirm death
+
     def _load_feature_data(self):
         """Load feature data from features.json for reward checking."""
         video_ids = set(seq["video_id"] for seq in self.sequences)
@@ -406,7 +412,6 @@ class LatentDatasetMixin:
             return False
 
         frames = self.feature_data[video_id]
-        context_frames = 5
 
         for t in range(self.sequence_length):
             frame_idx = start_frame + t
@@ -424,20 +429,20 @@ class LatentDatasetMixin:
             curr_hb = entry.get('health_bar_x') is not None
             if not curr_hb:
                 prev_hb_count = 0
-                for lookback in range(1, context_frames + 1):
+                for lookback in range(1, self.DEATH_DETECTION_LOOKBACK_FRAMES + 1):
                     prev_idx = frame_idx - lookback
                     if 0 <= prev_idx < len(frames):
                         if frames[prev_idx].get('health_bar_x') is not None:
                             prev_hb_count += 1
-                if prev_hb_count >= 3:
+                if prev_hb_count >= self.DEATH_DETECTION_LOOKBACK_THRESHOLD:
                     # Potential death - check if stays gone
                     gone_count = 0
-                    for lookahead in range(1, 4):
+                    for lookahead in range(1, self.DEATH_DETECTION_LOOKAHEAD_FRAMES + 1):
                         next_idx = frame_idx + lookahead
                         if next_idx < len(frames):
                             if frames[next_idx].get('health_bar_x') is None:
                                 gone_count += 1
-                    if gone_count >= 2:
+                    if gone_count >= self.DEATH_DETECTION_LOOKAHEAD_THRESHOLD:
                         return True
 
         return False
