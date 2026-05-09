@@ -1434,17 +1434,25 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
 
         champ_screen = project(gp[0], gp[1], cx, cy, cz)
         visible = []
+        # Include ALL heroes (not just camera-visible). Off-screen heroes get
+        # screen=None but their stats (gold_total, level, hp) are still
+        # captured every frame — required for ML reward signals like
+        # "gold diff vs lane opponent" that must be valid even when the
+        # opponent is back-base or off-cam. Overlay only renders markers
+        # for heroes with screen != None.
         for name, hd in heroes.items():
             p = hd.get("pos", [0, 0])
             sp = project(p[0], p[1], cx, cy, cz)
-            if sp:
-                visible.append({
-                    "name": name,
-                    "screen": sp,
-                    "hp": hd.get("hp", 0),
-                    "hp_max": hd.get("hp_max", 0),
-                    "level": hd.get("level", 0),
-                })
+            visible.append({
+                "name": name,
+                "screen": sp,                              # None when off-screen
+                "world": p,                                # always present
+                "hp": hd.get("hp", 0),
+                "hp_max": hd.get("hp_max", 0),
+                "gold": hd.get("gold", 0),                 # known broken offset on 16.9 — kept for future fix
+                "gold_total": hd.get("gold_total", 0),     # works (= cumulative earned). Use for lane-opponent diff.
+                "level": hd.get("level", 0),
+            })
 
         spell = garen.get("spell")
         cast_target = garen.get("cast_target")
