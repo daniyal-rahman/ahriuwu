@@ -202,7 +202,7 @@ def draw_log(img, log, w, log_n, scale=0.45):
         put_text(img, f"{fmt_clock(gt)}  {label}", (x, y + i * 20), scale, color_for(label))
 
 
-def draw_hud(img, gt, frame_idx, total, stats):
+def draw_hud(img, gt, frame_idx, total, stats, opp_stats=None, opp_name=None):
     put_text(img, fmt_clock(gt), (12, 28), 0.7, WHITE, 2)
     put_text(img, f"F{frame_idx}/{total}", (12, 50), 0.4, (200, 200, 200))
     if not stats:
@@ -211,15 +211,18 @@ def draw_hud(img, gt, frame_idx, total, stats):
     if stats.get("level") is not None:
         put_text(img, f"LVL {stats['level']}", (12, y), 0.5, (100, 255, 255))
         y += 20
+    # gold_current is known-broken on 16.9.772 (garbage floats); fall back to
+    # gold_total alone whenever the current value lies outside a sane range.
     gc = stats.get("gold")          # current / unspent
     gtot = stats.get("gold_total")  # lifetime earned
-    if gc is not None and gtot is not None:
+    gc_ok = gc is not None and 0 <= gc < 1e6
+    if gc_ok and gtot is not None:
         put_text(img, f"GOLD {gc:.0f}/{gtot:.0f}", (12, y), 0.5, (0, 215, 255))
         y += 20
     elif gtot is not None:
         put_text(img, f"GOLD {gtot:.0f}", (12, y), 0.5, (0, 215, 255))
         y += 20
-    elif gc is not None:
+    elif gc_ok:
         put_text(img, f"GOLD {gc:.0f}", (12, y), 0.5, (0, 215, 255))
         y += 20
     hp, hpm = stats.get("hp"), stats.get("hp_max")
@@ -228,6 +231,31 @@ def draw_hud(img, gt, frame_idx, total, stats):
             put_text(img, f"HP {hp:.0f}/{hpm:.0f}", (12, y), 0.5, (0, 255, 0))
         else:
             put_text(img, f"HP {hp:.0f}", (12, y), 0.5, (0, 255, 0))
+        y += 20
+
+    if not opp_stats:
+        return
+    y += 6
+    put_text(img, f"vs {opp_name or 'ENEMY'}", (12, y), 0.45, (180, 180, 180))
+    y += 18
+    if opp_stats.get("level") is not None:
+        put_text(img, f"LVL {opp_stats['level']}", (12, y), 0.5, (100, 220, 255))
+        y += 20
+    o_gtot = opp_stats.get("gold_total")
+    if o_gtot is not None:
+        put_text(img, f"GOLD {o_gtot:.0f}", (12, y), 0.5, (0, 200, 240))
+        y += 20
+        if gtot is not None:
+            diff = gtot - o_gtot
+            color = (120, 255, 120) if diff >= 0 else (120, 120, 255)
+            put_text(img, f"DIFF {diff:+.0f}", (12, y), 0.5, color)
+            y += 20
+    o_hp, o_hpm = opp_stats.get("hp"), opp_stats.get("hp_max")
+    if o_hp is not None:
+        if o_hpm and abs(o_hpm) < 1e7:
+            put_text(img, f"HP {o_hp:.0f}/{o_hpm:.0f}", (12, y), 0.5, (0, 220, 100))
+        else:
+            put_text(img, f"HP {o_hp:.0f}", (12, y), 0.5, (0, 220, 100))
 
 
 def draw_marker(img, sx, sy, color, radius=10):
@@ -247,6 +275,74 @@ def draw_hero(img, sx, sy):
     cv2.circle(img, (sx, sy), 14, (0, 255, 0), 2, cv2.LINE_AA)
     cv2.line(img, (sx - 10, sy), (sx + 10, sy), (0, 255, 0), 1)
     cv2.line(img, (sx, sy - 10), (sx, sy + 10), (0, 255, 0), 1)
+
+
+# ─────────────────── lane-opponent detection ───────────────────
+def identify_teams(frames, max_seconds=30.0):
+    """Map hero name -> 'blue'|'red' via spawn-side heuristic on early frames.
+    Blue fountain ≈ (400, 400), red ≈ (14400, 14400). Each hero's earliest
+    recorded position is at-or-near their fountain before they walk out."""
+    earliest = {}  # name -> (x, z) from earliest sample (lowest sum-of-coords)
+    if not frames:
+        return earliest
+    gt0 = None
+    for fr in frames:
+        lab = fr.get("label")
+        if not lab:
+            continue
+        if gt0 is None:
+            gt0 = fr["gt"]
+        if fr["gt"] - gt0 > max_seconds:
+            break
+        for vh in lab.get("visible_heroes") or []:
+            w = vh.get("world")
+            n = vh.get("name")
+            if not (n and w and len(w) == 2):
+                continue
+            cur = earliest.get(n)
+            score = w[0] + w[1]
+            if cur is None or score < cur[0] + cur[1]:
+                earliest[n] = (w[0], w[1])
+    return {n: ("blue" if (x < 3000 and z < 3000) else "red") for n, (x, z) in earliest.items()}
+
+
+def find_lane_opponent(frames, focus_name, enemy_names, gt_lo=60.0, gt_hi=300.0):
+    """Enemy with min mean distance to focus during laning phase. Returns
+    (name, mean_dist_units) or (None, None) if no usable samples."""
+    sums = {n: 0.0 for n in enemy_names}
+    counts = {n: 0 for n in enemy_names}
+    for fr in frames:
+        gt = fr.get("gt")
+        if gt is None or gt < gt_lo or gt > gt_hi:
+            continue
+        lab = fr.get("label")
+        if not lab:
+            continue
+        focus_w = None
+        enemies = {}
+        for vh in lab.get("visible_heroes") or []:
+            n = vh.get("name")
+            w = vh.get("world")
+            if not (n and w and len(w) == 2):
+                continue
+            if n == focus_name:
+                focus_w = w
+            elif n in enemy_names:
+                enemies[n] = w
+        if focus_w is None:
+            continue
+        for n, w in enemies.items():
+            d = math.hypot(w[0] - focus_w[0], w[1] - focus_w[1])
+            sums[n] += d
+            counts[n] += 1
+    best, best_d = None, float("inf")
+    for n in enemy_names:
+        if counts[n] == 0:
+            continue
+        mean = sums[n] / counts[n]
+        if mean < best_d:
+            best, best_d = n, mean
+    return (best, best_d) if best else (None, None)
 
 
 # ─────────────────── main ───────────────────
@@ -321,6 +417,30 @@ def main():
     print(f"  cam coverage: gt {cam_gt_min:.1f} .. {cam_gt_max:.1f}s")
     if frames:
         print(f"  frame coverage: gt {frames[0]['gt']:.1f} .. {frames[-1]['gt']:.1f}s")
+
+    # Lane-opponent detection (for enemy LVL/GOLD HUD).
+    focus_name = labels.get("champion")
+    focus_team = labels.get("team")
+    teams_map = identify_teams(frames)
+    if focus_name and focus_name not in teams_map and focus_team in ("blue", "red"):
+        teams_map[focus_name] = focus_team
+    # Trust focus_team if labels has it; otherwise fall back to detected.
+    inferred_focus_team = teams_map.get(focus_name) if focus_name else None
+    eff_focus_team = focus_team or inferred_focus_team
+    if focus_team and inferred_focus_team and focus_team != inferred_focus_team:
+        print(f"  WARN: labels.team={focus_team!r} disagrees with spawn heuristic "
+              f"({inferred_focus_team!r}) — trusting labels.team")
+    enemy_team = "red" if eff_focus_team == "blue" else "blue" if eff_focus_team == "red" else None
+    enemy_names = [n for n, t in teams_map.items() if t == enemy_team] if enemy_team else []
+    lane_opp, lane_dist = (None, None)
+    if focus_name and enemy_names:
+        lane_opp, lane_dist = find_lane_opponent(frames, focus_name, enemy_names)
+    if lane_opp:
+        print(f"  lane opponent: {lane_opp} (mean dist {lane_dist:.0f} units, "
+              f"focus={focus_name} team={eff_focus_team}, enemies={enemy_names})")
+    else:
+        print(f"  WARN: lane opponent not detected — enemy HUD disabled "
+              f"(focus={focus_name!r} eff_team={eff_focus_team!r} enemies={enemy_names})")
 
     # actions snapped to frame index
     actions = extract_actions(frames)
@@ -528,7 +648,21 @@ def main():
                 }
         if gs:
             draw_hero(img, gs[0] * sx_scale, gs[1] * sy_scale)
-        draw_hud(img, gt, idx, n, stats)
+
+        # Lane-opponent stats (visible_heroes always carries all 10 heroes)
+        opp_stats = None
+        if lane_opp:
+            for vh in lab.get("visible_heroes") or []:
+                if vh.get("name") == lane_opp:
+                    opp_stats = {
+                        "level": vh.get("level"),
+                        "gold_total": vh.get("gold_total"),
+                        "hp": vh.get("hp"),
+                        "hp_max": vh.get("hp_max"),
+                    }
+                    break
+
+        draw_hud(img, gt, idx, n, stats, opp_stats=opp_stats, opp_name=lane_opp)
         draw_log(img, log, args.out_w, args.log_len)
         if not cam_ok:
             put_text(img, "NO CAM SAMPLE", (args.out_w // 2 - 80, 25), 0.6, (0, 0, 255), 2)
