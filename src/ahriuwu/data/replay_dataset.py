@@ -52,14 +52,28 @@ _DEFAULT_SCREEN = (1280, 720)
 
 
 def load_outcomes(manifest_path: Path | str) -> dict[str, bool]:
-    """Read ``garen_win`` per ``match_id`` from a manifest JSON."""
+    """Read ``garen_win`` per ``match_id`` from a manifest JSON.
+
+    Raises if any match entry is missing ``garen_win`` — silently defaulting
+    a missing outcome to False would flip the sign of the terminal reward.
+    """
     with open(manifest_path) as f:
         manifest = json.load(f)
     out: dict[str, bool] = {}
+    missing: list[str] = []
     for m in manifest.get("matches", []):
         mid = m.get("match_id")
-        if mid is not None:
-            out[mid] = bool(m.get("garen_win", False))
+        if mid is None:
+            continue
+        if "garen_win" not in m:
+            missing.append(mid)
+            continue
+        out[mid] = bool(m["garen_win"])
+    if missing:
+        raise ValueError(
+            f"manifest at {manifest_path} is missing `garen_win` for "
+            f"{len(missing)} match(es): {missing[:5]}{'...' if len(missing) > 5 else ''}"
+        )
     return out
 
 
@@ -114,13 +128,25 @@ class ReplayLatentSequenceDataset(Dataset):
         else:
             match_ids = []
             frame_indices_by_match = {}
+            seen: set[str] = set()
+            # .pt is preferred (raw tensors); .npz only consulted for matches
+            # that don't have a .pt next to them.
             for path in sorted(self.latents_dir.glob("*.pt")):
                 mid = path.stem
-                if mid == "index":
+                if mid == "index" or mid in seen:
                     continue
                 data = torch.load(path, weights_only=True)
                 frame_indices_by_match[mid] = data["frame_indices"].numpy()
                 match_ids.append(mid)
+                seen.add(mid)
+            for path in sorted(self.latents_dir.glob("*.npz")):
+                mid = path.stem
+                if mid in seen:
+                    continue
+                with np.load(path) as data:
+                    frame_indices_by_match[mid] = data["frame_indices"].copy()
+                match_ids.append(mid)
+                seen.add(mid)
 
         skipped: list[tuple[str, str]] = []
         for mid in match_ids:
@@ -136,8 +162,15 @@ class ReplayLatentSequenceDataset(Dataset):
             if md is None:
                 skipped.append((mid, "labels parse returned no frames"))
                 continue
+            n_latent = len(frame_indices_by_match[mid])
+            n_label = md["frame_count"]
+            if n_latent != n_label:
+                warnings.warn(
+                    f"{mid}: latent frame count ({n_latent}) != label frame count "
+                    f"({n_label}); using min({n_latent}, {n_label}) and dropping the rest"
+                )
             self.match_data[mid] = md
-            self._index_match(mid, frame_indices_by_match[mid], md["frame_count"])
+            self._index_match(mid, frame_indices_by_match[mid], n_label)
 
         n_matches = len(self.match_data)
         n_seqs = len(self.sequences)
@@ -200,6 +233,17 @@ class ReplayLatentSequenceDataset(Dataset):
         if T == 0:
             return None
 
+        # Pipeline invariant: labels.frames[i].frame == i for every i. We rely
+        # on this so that start_frame indexes both label-derived tensors and
+        # latent frame numbers consistently. Hard-fail if it's violated.
+        for i in range(min(T, 64)):  # spot-check the first 64 to avoid full O(T) cost
+            f_idx = frames[i].get("frame")
+            if f_idx is not None and f_idx != i:
+                raise ValueError(
+                    f"{match_id}: labels.frames[{i}].frame={f_idx!r} (expected {i}). "
+                    "Pipeline invariant violated; dataset slicing assumes 1:1."
+                )
+
         garen_won = self.outcomes[match_id]
         rewards = compute_episode_reward(labels, garen_won, self.reward_config)
         movement = self._parse_movement(labels, frames)
@@ -215,9 +259,16 @@ class ReplayLatentSequenceDataset(Dataset):
     def _parse_movement(self, labels: dict, frames: list[dict]) -> torch.Tensor:
         """Per-frame (x, y) ∈ [0, 1] from movement.heading_screen, default (0.5, 0.5)."""
         T = len(frames)
-        screen = labels.get("screen_resolution") or list(_DEFAULT_SCREEN)
+        screen = labels.get("screen_resolution")
+        if not screen:
+            warnings.warn(
+                f"{labels.get('match_id')!r}: labels.json has no `screen_resolution`; "
+                f"falling back to {_DEFAULT_SCREEN}. Movement coords may be wrong."
+            )
+            screen = list(_DEFAULT_SCREEN)
         screen_w, screen_h = float(screen[0]), float(screen[1])
         movement = torch.full((T, 2), 0.5, dtype=torch.float32)
+        n_oob = 0
         for i, fr in enumerate(frames):
             lab = fr.get("label")
             if not lab:
@@ -225,8 +276,16 @@ class ReplayLatentSequenceDataset(Dataset):
             mv = lab.get("movement") or {}
             hs = mv.get("heading_screen")
             if hs and len(hs) == 2 and screen_w > 0 and screen_h > 0:
-                movement[i, 0] = max(0.0, min(1.0, hs[0] / screen_w))
-                movement[i, 1] = max(0.0, min(1.0, hs[1] / screen_h))
+                nx, ny = hs[0] / screen_w, hs[1] / screen_h
+                if not (0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0):
+                    n_oob += 1
+                movement[i, 0] = max(0.0, min(1.0, nx))
+                movement[i, 1] = max(0.0, min(1.0, ny))
+        if n_oob:
+            warnings.warn(
+                f"{labels.get('match_id')!r}: clamped {n_oob} out-of-bounds "
+                f"heading_screen samples (sign of bad camera reads or wrong screen_resolution)"
+            )
         return movement
 
     def _parse_abilities(
@@ -236,7 +295,7 @@ class ReplayLatentSequenceDataset(Dataset):
         match_dir: Path,
     ) -> dict[str, torch.Tensor]:
         """Per-frame binary ability flags. Prefers clicks.json cast events; falls
-        back to labels.json action.type for recall when clicks.json is absent.
+        back to label.action transitions when clicks.json is absent.
         """
         T = len(frames)
         abilities: dict[str, torch.Tensor] = {
@@ -245,8 +304,23 @@ class ReplayLatentSequenceDataset(Dataset):
         if T == 0:
             return abilities
 
-        gt0 = frames[0].get("gt") or 0.0
-        fps = float(labels.get("fps") or 20)
+        # gt0 is the timebase reference; explicit None-check avoids treating a
+        # legitimate gt=0.0 as missing.
+        gt0_raw = frames[0].get("gt")
+        if gt0_raw is None:
+            raise ValueError(
+                f"{match_dir.name}: frames[0].gt is missing; can't anchor "
+                "click-event timing without a base game-time"
+            )
+        gt0 = float(gt0_raw)
+        fps_raw = labels.get("fps")
+        if not fps_raw:
+            warnings.warn(
+                f"{match_dir.name}: labels.json has no `fps`; falling back to 20"
+            )
+            fps = 20.0
+        else:
+            fps = float(fps_raw)
         step = 1.0 / fps
 
         clicks_path = match_dir / "clicks.json"
@@ -257,23 +331,39 @@ class ReplayLatentSequenceDataset(Dataset):
             casts = clicks_data.get("casts") or []
 
         if casts:
+            n_unknown_slot = 0
+            n_no_time = 0
+            n_out_of_range = 0
             for c in casts:
+                # Use explicit None-check, not `or` — game_t == 0.0 is valid.
                 gt = c.get("game_t")
                 if gt is None:
                     gt = c.get("game_time")
                 slot = c.get("slot")
-                if gt is None or slot not in ABILITY_KEYS:
+                if gt is None:
+                    n_no_time += 1
                     continue
-                i = int((gt - gt0) / step)
+                if slot not in ABILITY_KEYS:
+                    n_unknown_slot += 1
+                    continue
+                # round, not int-truncate, for symmetric quantization at
+                # frame boundaries (off-by-one risk otherwise)
+                i = int(round((float(gt) - gt0) / step))
                 if 0 <= i < T:
                     abilities[slot][i] = 1
+                else:
+                    n_out_of_range += 1
+            if n_unknown_slot or n_no_time or n_out_of_range:
+                warnings.warn(
+                    f"{match_dir.name}: clicks.json had "
+                    f"{n_unknown_slot} unknown-slot, {n_no_time} no-time, "
+                    f"{n_out_of_range} out-of-range cast events (dropped)"
+                )
         else:
-            # Fallback for matches recorded before clicks.json was emitted: surface
-            # transitions in label.action so at least recalls and ability casts
-            # produce a binary signal (lossy on D vs F — both flagged together).
             warnings.warn(
-                f"No clicks.json at {clicks_path}; falling back to labels.action "
-                "transitions for ability flags (lossy)."
+                f"{match_dir.name}: no clicks.json at {clicks_path}; falling "
+                "back to label.action transitions for ability flags. D and F "
+                "will be flagged together (lossy) since slot info isn't in labels."
             )
             self._fill_abilities_from_action_transitions(frames, abilities, labels)
 

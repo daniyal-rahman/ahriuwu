@@ -1,8 +1,20 @@
-"""PyTorch datasets for LoL frame sequences."""
+"""PyTorch datasets for LoL frame sequences.
 
-import json
+Two label-free datasets used for tokenizer training and YT pretraining:
+
+* :class:`SingleFrameDataset` — flat list of frames.
+* :class:`FrameSequenceDataset` — fixed-length contiguous frame windows.
+
+Plus generic samplers that group sequences by video for cache locality.
+
+Action- and reward-aware loading lives in
+:mod:`ahriuwu.data.replay_dataset` (replay matches with labels.json).
+"""
+
+from __future__ import annotations
+
 import random
-import warnings
+from collections import defaultdict
 from pathlib import Path
 
 import cv2
@@ -10,21 +22,13 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from collections import defaultdict
 
-from ..constants import ABILITY_KEYS
-
-# Square target: 352x352. Divisible by 16 (22x22 = 484 patches for patch-based tokenizer).
-# Both tokenizers require square inputs. 352 > 256 gives more detail.
+# 352x352. Divisible by 16 (22x22 = 484 patches). 352 > 256 keeps more detail.
 TARGET_SIZE = (352, 352)
 
 
 class SingleFrameDataset(Dataset):
-    """Dataset of individual frames for tokenizer training.
-
-    Loads frames from video directories, resizes to target size.
-    Supports optional pre-cached .npy files for faster loading.
-    """
+    """Flat dataset of individual frames for tokenizer training."""
 
     def __init__(
         self,
@@ -32,1073 +36,145 @@ class SingleFrameDataset(Dataset):
         target_size: tuple[int, int] = TARGET_SIZE,
         file_ext: str = "jpg",
         transform=None,
-        cache_dir: Path | str | None = None,
     ):
-        """Initialize dataset.
-
-        Args:
-            frames_dir: Directory containing video subdirs with frames
-            target_size: (width, height) to resize frames to
-            file_ext: Frame file extension (jpg or png)
-            transform: Optional torchvision transform
-            cache_dir: Optional directory with pre-cached .npy files
-                       (auto-detected as frames_dir/../frames_cache if exists)
-        """
         self.frames_dir = Path(frames_dir)
         self.target_size = target_size
         self.file_ext = file_ext
         self.transform = transform
 
-        # Cache disabled for stability - use raw JPEG loading
-        self.cache_dir = None
-
-        # Index all frames
-        self.frame_paths = []
-        self._index_frames()
-
-    def _index_frames(self):
-        """Build index of all frames."""
+        self.frame_paths: list[Path] = []
         for video_dir in self.frames_dir.iterdir():
             if not video_dir.is_dir():
                 continue
-
-            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
-            self.frame_paths.extend(frames)
-
+            self.frame_paths.extend(sorted(video_dir.glob(f"frame_*.{self.file_ext}")))
         print(f"Indexed {len(self.frame_paths)} frames from {self.frames_dir}")
-
-    def _get_cache_path(self, frame_path: Path) -> Path | None:
-        """Get the cache file path for a frame."""
-        if self.cache_dir is None:
-            return None
-        # Cache structure mirrors frames structure: cache_dir/video_id/frame_XXXXXX.npy
-        video_id = frame_path.parent.name
-        cache_path = self.cache_dir / video_id / f"{frame_path.stem}.npy"
-        return cache_path if cache_path.exists() else None
 
     def __len__(self) -> int:
         return len(self.frame_paths)
 
     def __getitem__(self, idx: int) -> dict:
-        frame_path = self.frame_paths[idx]
-
-        # Try loading from cache first
-        cache_path = self._get_cache_path(frame_path)
-        loaded_from_cache = False
-        if cache_path is not None:
-            try:
-                # Load pre-cached uint8 numpy array
-                frame = np.load(cache_path)
-                frame = torch.from_numpy(frame).float() / 255.0
-                frame = frame.permute(2, 0, 1)  # HWC -> CHW
-                loaded_from_cache = True
-            except (EOFError, ValueError):
-                # Corrupted cache file, fall back to JPEG
-                pass
-
-        if not loaded_from_cache:
-            # Fall back to loading from JPEG
-            frame = cv2.imread(str(frame_path))
-            if frame is None:
-                raise FileNotFoundError(f"Failed to load frame: {frame_path}")
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
-
-            if self.transform:
-                frame = self.transform(frame)
-            else:
-                # Default: normalize to [0, 1] and convert to tensor
-                frame = torch.from_numpy(frame).float() / 255.0
-                frame = frame.permute(2, 0, 1)  # HWC -> CHW
-
-        return {
-            "frame": frame,  # (C, H, W)
-            "path": str(frame_path),
-        }
+        path = self.frame_paths[idx]
+        frame = cv2.imread(str(path))
+        if frame is None:
+            raise FileNotFoundError(f"Failed to load frame: {path}")
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
+        if self.transform:
+            frame = self.transform(frame)
+        else:
+            frame = torch.from_numpy(frame).float() / 255.0
+            frame = frame.permute(2, 0, 1)  # HWC -> CHW
+        return {"frame": frame, "path": str(path)}
 
 
 class FrameSequenceDataset(Dataset):
-    """Dataset of frame sequences for world model training.
-
-    Each item is a sequence of consecutive frames.
-    """
+    """Fixed-length contiguous frame windows for world-model pretraining."""
 
     def __init__(
         self,
         frames_dir: Path | str,
-        sequence_length: int = 192,  # 9.6 seconds at 20 FPS
-        stride: int = 1,
-        target_size: tuple[int, int] = TARGET_SIZE,
-        file_ext: str = "jpg",
-        transform=None,
-    ):
-        """Initialize dataset.
-
-        Args:
-            frames_dir: Directory containing video subdirs with frames
-            sequence_length: Number of frames per sequence
-            stride: Step between sequence start indices
-            target_size: (width, height) to resize frames to
-            file_ext: Frame file extension (jpg or png)
-            transform: Optional torchvision transform
-        """
-        self.frames_dir = Path(frames_dir)
-        self.sequence_length = sequence_length
-        self.stride = stride
-        self.target_size = target_size
-        self.file_ext = file_ext
-        self.transform = transform
-
-        # Index all videos and their frames
-        self.sequences = []
-        self._index_frames()
-
-    def _index_frames(self):
-        """Build index of all valid sequences."""
-        for video_dir in self.frames_dir.iterdir():
-            if not video_dir.is_dir():
-                continue
-
-            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
-            if len(frames) < self.sequence_length:
-                continue
-
-            video_id = video_dir.name
-            num_frames = len(frames)
-
-            # Create sequences with stride
-            for start_idx in range(0, num_frames - self.sequence_length + 1, self.stride):
-                self.sequences.append({
-                    "video_id": video_id,
-                    "start_idx": start_idx,
-                    "video_dir": video_dir,
-                })
-
-    def __len__(self) -> int:
-        return len(self.sequences)
-
-    def __getitem__(self, idx: int) -> dict:
-        seq_info = self.sequences[idx]
-        video_dir = seq_info["video_dir"]
-        start_idx = seq_info["start_idx"]
-
-        frames = []
-        for i in range(self.sequence_length):
-            frame_path = video_dir / f"frame_{start_idx + i:06d}.{self.file_ext}"
-            frame = cv2.imread(str(frame_path))
-            if frame is None:
-                raise FileNotFoundError(f"Failed to load frame: {frame_path}")
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
-
-            if self.transform:
-                frame = self.transform(frame)
-            else:
-                # Default: normalize to [0, 1] and convert to tensor
-                frame = torch.from_numpy(frame).float() / 255.0
-                frame = frame.permute(2, 0, 1)  # HWC -> CHW
-
-            frames.append(frame)
-
-        return {
-            "frames": torch.stack(frames),  # (T, C, H, W)
-            "video_id": seq_info["video_id"],
-            "start_idx": start_idx,
-        }
-
-
-class FrameWithStateDataset(Dataset):
-    """Dataset of frames with game state and rewards.
-
-    For behavioral cloning and reward model training.
-    """
-
-    def __init__(
-        self,
-        frames_dir: Path | str,
-        states_dir: Path | str,
         sequence_length: int = 192,
         stride: int = 1,
         target_size: tuple[int, int] = TARGET_SIZE,
         file_ext: str = "jpg",
         transform=None,
     ):
-        """Initialize dataset.
-
-        Args:
-            frames_dir: Directory containing video subdirs with frames
-            states_dir: Directory containing game state JSON files
-            sequence_length: Number of frames per sequence
-            stride: Step between sequence start indices
-            target_size: (width, height) to resize frames to
-            file_ext: Frame file extension (jpg or png)
-            transform: Optional torchvision transform
-        """
         self.frames_dir = Path(frames_dir)
-        self.states_dir = Path(states_dir)
         self.sequence_length = sequence_length
         self.stride = stride
         self.target_size = target_size
         self.file_ext = file_ext
         self.transform = transform
 
-        self.sequences = []
-        self._index_frames()
-
-    def _index_frames(self):
-        """Build index of sequences that have both frames and states."""
+        self.sequences: list[dict] = []
         for video_dir in self.frames_dir.iterdir():
             if not video_dir.is_dir():
                 continue
-
-            video_id = video_dir.name
-            states_file = self.states_dir / f"{video_id}_states.json"
-
-            if not states_file.exists():
-                continue
-
             frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
-            states = json.loads(states_file.read_text())
-
-            # Use minimum of frames and states
-            num_items = min(len(frames), len(states))
-            if num_items < self.sequence_length:
+            if len(frames) < self.sequence_length:
                 continue
-
-            for start_idx in range(0, num_items - self.sequence_length + 1, self.stride):
+            for start_idx in range(0, len(frames) - self.sequence_length + 1, self.stride):
                 self.sequences.append({
-                    "video_id": video_id,
+                    "video_id": video_dir.name,
                     "start_idx": start_idx,
                     "video_dir": video_dir,
-                    "states": states,
                 })
 
     def __len__(self) -> int:
         return len(self.sequences)
 
     def __getitem__(self, idx: int) -> dict:
-        seq_info = self.sequences[idx]
-        video_dir = seq_info["video_dir"]
-        start_idx = seq_info["start_idx"]
-        states = seq_info["states"]
+        seq = self.sequences[idx]
+        video_dir = seq["video_dir"]
+        start_idx = seq["start_idx"]
 
         frames = []
-        gold = []
-        cs = []
-        player_health = []
-        rewards = []
-
         for i in range(self.sequence_length):
-            frame_idx = start_idx + i
-
-            # Load frame
-            frame_path = video_dir / f"frame_{frame_idx:06d}.{self.file_ext}"
-            frame = cv2.imread(str(frame_path))
+            path = video_dir / f"frame_{start_idx + i:06d}.{self.file_ext}"
+            frame = cv2.imread(str(path))
             if frame is None:
-                raise FileNotFoundError(f"Failed to load frame: {frame_path}")
+                raise FileNotFoundError(f"Failed to load frame: {path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame = cv2.resize(frame, self.target_size, interpolation=cv2.INTER_AREA)
-
             if self.transform:
                 frame = self.transform(frame)
             else:
                 frame = torch.from_numpy(frame).float() / 255.0
                 frame = frame.permute(2, 0, 1)
-
             frames.append(frame)
-
-            # Load state
-            state = states[frame_idx] if frame_idx < len(states) else {}
-            gold.append(state.get("gold", 0) or 0)
-            cs.append(state.get("cs", 0) or 0)
-            player_health.append(state.get("player_health", 0.5) or 0.5)
-            rewards.append(state.get("reward", 0.0) or 0.0)
 
         return {
             "frames": torch.stack(frames),
-            "gold": torch.tensor(gold, dtype=torch.float32),
-            "cs": torch.tensor(cs, dtype=torch.float32),
-            "player_health": torch.tensor(player_health, dtype=torch.float32),
-            "rewards": torch.tensor(rewards, dtype=torch.float32),
-            "video_id": seq_info["video_id"],
+            "video_id": seq["video_id"],
             "start_idx": start_idx,
         }
 
 
 class VideoGroupedSampler(Sampler):
-    """Sampler that groups sequences by video to maximize cache hits.
-
-    Shuffles video order each epoch, shuffles sequences within each video,
-    but keeps sequences from the same video contiguous in the batch stream.
+    """Yield sequences grouped by video. Shuffles video order each epoch and
+    sequence order within each video, but keeps a video's sequences contiguous
+    in the batch stream so cache hits dominate.
     """
 
     def __init__(self, dataset):
-        self.video_groups = defaultdict(list)
+        groups: dict = defaultdict(list)
         for idx, seq in enumerate(dataset.sequences):
-            self.video_groups[seq["video_id"]].append(idx)
-        self.video_groups = list(self.video_groups.values())
+            groups[seq["video_id"]].append(idx)
+        self.video_groups = list(groups.values())
         self._len = sum(len(g) for g in self.video_groups)
 
     def __iter__(self):
-        video_order = torch.randperm(len(self.video_groups)).tolist()
-        for vid_idx in video_order:
-            group = self.video_groups[vid_idx]
+        order = torch.randperm(len(self.video_groups)).tolist()
+        for v in order:
+            group = self.video_groups[v]
             perm = torch.randperm(len(group)).tolist()
             yield from (group[i] for i in perm)
 
-    def __len__(self):
+    def __len__(self) -> int:
         return self._len
 
 
-class LatentDatasetMixin:
-    """Shared methods for latent sequence datasets.
-
-    Provides _get_actions, has_nonzero_reward, _load_feature_data,
-    and _precompute_reward_indices used by both PackedLatentSequenceDataset
-    and LatentSequenceDataset.
-    """
-
-    # Death detection constants (from reward feature detection heuristics)
-    DEATH_DETECTION_LOOKBACK_FRAMES = 5  # Frames to look back for health bar history
-    DEATH_DETECTION_LOOKBACK_THRESHOLD = 3  # Min frames where HB exists to consider "had health"
-    DEATH_DETECTION_LOOKAHEAD_FRAMES = 3  # Frames to check forward if health bar stays gone
-    DEATH_DETECTION_LOOKAHEAD_THRESHOLD = 2  # Min frames missing HB to confirm death
-
-    def _load_feature_data(self):
-        """Load feature data from features.json for reward checking."""
-        video_ids = set(seq["video_id"] for seq in self.sequences)
-        loaded_count = 0
-
-        for video_id in video_ids:
-            if video_id in self.feature_data:
-                continue  # Already loaded
-            features_path = self.features_dir / video_id / "features.json"
-            if features_path.exists():
-                with open(features_path) as f:
-                    data = json.load(f)
-                    self.feature_data[video_id] = data.get("frames", [])
-                loaded_count += 1
-
-        print(f"Loaded feature data for {loaded_count}/{len(video_ids)} videos")
-
-    def _precompute_reward_indices(self):
-        """Pre-compute indices of sequences with non-zero rewards.
-
-        Called once at init for efficient RewardMixtureSampler.
-        """
-        for idx in range(len(self.sequences)):
-            if self.has_nonzero_reward(idx):
-                self.reward_indices.append(idx)
-
-        pct = 100 * len(self.reward_indices) / len(self.sequences) if self.sequences else 0
-        print(f"Pre-computed reward indices: {len(self.reward_indices)}/{len(self.sequences)} ({pct:.1f}%) have rewards")
-
-    def has_nonzero_reward(self, idx: int) -> bool:
-        """Check if a sequence has any non-zero reward without full loading.
-
-        This is used by RewardMixtureSampler for efficient pre-scanning.
-
-        Args:
-            idx: Sequence index
-
-        Returns:
-            True if sequence contains any non-zero reward (gold or death)
-        """
-        seq_info = self.sequences[idx]
-        video_id = seq_info["video_id"]
-        start_frame = seq_info["start_frame"]
-
-        if video_id not in self.feature_data:
-            return False
-
-        frames = self.feature_data[video_id]
-
-        for t in range(self.sequence_length):
-            frame_idx = start_frame + t
-            if frame_idx >= len(frames):
-                continue
-
-            entry = frames[frame_idx]
-
-            # Check gold reward
-            gold = entry.get('gold_gained', 0) or 0
-            if gold != 0:
-                return True
-
-            # Check death (simplified check - look for health bar disappearance)
-            curr_hb = entry.get('health_bar_x') is not None
-            if not curr_hb:
-                prev_hb_count = 0
-                for lookback in range(1, self.DEATH_DETECTION_LOOKBACK_FRAMES + 1):
-                    prev_idx = frame_idx - lookback
-                    if 0 <= prev_idx < len(frames):
-                        if frames[prev_idx].get('health_bar_x') is not None:
-                            prev_hb_count += 1
-                if prev_hb_count >= self.DEATH_DETECTION_LOOKBACK_THRESHOLD:
-                    # Potential death - check if stays gone
-                    gone_count = 0
-                    for lookahead in range(1, self.DEATH_DETECTION_LOOKAHEAD_FRAMES + 1):
-                        next_idx = frame_idx + lookahead
-                        if next_idx < len(frames):
-                            if frames[next_idx].get('health_bar_x') is None:
-                                gone_count += 1
-                    if gone_count >= self.DEATH_DETECTION_LOOKAHEAD_THRESHOLD:
-                        return True
-
-        return False
-
-    def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
-        """Get action tensors for a sequence.
-
-        Movement is returned as (T, 2) float tensor of (x, y) coordinates in [0, 1].
-        Falls back to (0.5, 0.5) center when mouse_x/mouse_y are not available.
-        Abilities are returned as (T,) long tensors.
-        """
-        if video_id not in self.action_labels:
-            return None
-
-        labels = self.action_labels[video_id]
-        movement_xy = []
-        ability_actions = {k: [] for k in ABILITY_KEYS}
-
-        for t in range(start_frame, start_frame + self.sequence_length):
-            if t < len(labels):
-                entry = labels[t]
-                mouse_x = float(entry.get('mouse_x', 0.5))
-                mouse_y = float(entry.get('mouse_y', 0.5))
-                movement_xy.append([mouse_x, mouse_y])
-                ability_actions['Q'].append(int(entry.get('ability_q', False)))
-                ability_actions['W'].append(int(entry.get('ability_w', False)))
-                ability_actions['E'].append(int(entry.get('ability_e', False)))
-                ability_actions['R'].append(int(entry.get('ability_r', False)))
-                ability_actions['D'].append(int(entry.get('summoner_d', False)))
-                ability_actions['F'].append(int(entry.get('summoner_f', False)))
-                ability_actions['item'].append(int(entry.get('item_used', False)))
-                ability_actions['B'].append(int(entry.get('recall_b', False)))
-            else:
-                movement_xy.append([0.5, 0.5])
-                for k in ABILITY_KEYS:
-                    ability_actions[k].append(0)
-
-        result = {
-            'movement': torch.tensor(movement_xy, dtype=torch.float32),  # (T, 2)
-        }
-        for k in ABILITY_KEYS:
-            result[k] = torch.tensor(ability_actions[k], dtype=torch.long)
-        return result
-
-
-class PackedLatentSequenceDataset(LatentDatasetMixin, Dataset):
-    """Dataset of packed latent sequences for dynamics model training.
-
-    Loads latent vectors from packed .npz/.pt files (one per video) instead of
-    individual per-frame .npy files. This dramatically reduces I/O overhead
-    by eliminating file open/close operations and enabling sequential reads.
-
-    Expected speedup: 10-50x compared to per-frame loading.
-
-    Optionally loads action labels from features.json per video.
-    """
-
-    def __init__(
-        self,
-        latents_dir: Path | str,
-        sequence_length: int = 64,
-        stride: int = 1,
-        load_actions: bool = False,
-        features_dir: Path | str | None = None,
-    ):
-        """Initialize dataset.
-
-        Args:
-            latents_dir: Directory containing packed .npz files (video_id.npz)
-            sequence_length: Number of frames per sequence
-            stride: Step between sequence start indices
-            load_actions: Whether to load action labels from features.json
-            features_dir: Directory containing features.json per video
-        """
-        self.latents_dir = Path(latents_dir)
-        self.sequence_length = sequence_length
-        self.stride = stride
-        self.load_actions = load_actions
-        if features_dir:
-            self.features_dir = Path(features_dir)
-        else:
-            self.features_dir = self.latents_dir.parent.parent / "data" / "processed"
-            warnings.warn(f"features_dir not specified, using fallback: {self.features_dir}")
-
-        # Cache for loaded video data: video_id -> (latents, frame_indices)
-        # With 20GB RAM and ~216MB per video, 50 videos ≈ 10GB
-        self.video_cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        self.cache_order: list[str] = []  # Track access order for LRU
-        self.max_cache_size = 5  # Max videos to keep in cache (NVMe is fast enough)
-
-        # Action labels per video (if load_actions=True)
-        self.action_labels: dict[str, list[dict]] = {}
-
-        # Feature data per video for reward checking
-        self.feature_data: dict[str, list[dict]] = {}
-
-        self.sequences = []
-        self._index_packed_latents()
-
-        # Load action labels and feature data after indexing
-        if load_actions:
-            self._load_action_labels()
-        self._load_feature_data()
-
-        # Pre-compute reward indices for efficient sampling
-        self.reward_indices: list[int] = []
-        self._precompute_reward_indices()
-
-    def _load_video(self, video_id: str) -> tuple[np.ndarray, np.ndarray]:
-        """Load packed video data, using LRU cache."""
-        if video_id in self.video_cache:
-            # Move to end of cache_order (most recently used)
-            self.cache_order.remove(video_id)
-            self.cache_order.append(video_id)
-            return self.video_cache[video_id]
-
-        # Evict oldest video if cache is full
-        while len(self.video_cache) >= self.max_cache_size:
-            oldest = self.cache_order.pop(0)
-            del self.video_cache[oldest]
-
-        # Load new video — prefer .pt (raw tensors) over .npz (compressed)
-        pt_path = self.latents_dir / f"{video_id}.pt"
-        if pt_path.exists():
-            data = torch.load(pt_path, weights_only=True)
-            latents = data['latents'].numpy()
-            frame_indices = data['frame_indices'].numpy()
-        else:
-            npz_path = self.latents_dir / f"{video_id}.npz"
-            with np.load(npz_path, mmap_mode=None) as data:
-                latents = data['latents'].copy()
-                frame_indices = data['frame_indices'].copy()
-        self.video_cache[video_id] = (latents, frame_indices)
-        self.cache_order.append(video_id)
-        return self.video_cache[video_id]
-
-    def _index_packed_latents(self):
-        """Build index of all valid sequences from packed files."""
-        # Use prebuilt index if available (instant startup)
-        index_path = self.latents_dir / "index.pt"
-        if index_path.exists():
-            index = torch.load(index_path, weights_only=True)
-            for video_id, frame_indices_t in index.items():
-                frame_indices = frame_indices_t.numpy()
-                self._index_video(video_id, frame_indices)
-            print(f"Indexed {len(self.sequences)} packed latent sequences from {self.latents_dir}")
-            return
-
-        # Fallback: scan individual files
-        npz_files = sorted(self.latents_dir.glob("*.npz"))
-        for npz_path in npz_files:
-            video_id = npz_path.stem
-            data = np.load(npz_path)
-            self._index_video(video_id, data['frame_indices'])
-
-        print(f"Indexed {len(self.sequences)} packed latent sequences from {self.latents_dir}")
-
-    def _index_video(self, video_id: str, frame_indices: np.ndarray):
-        """Index all valid sequences from a single video's frame indices."""
-        num_frames = len(frame_indices)
-        if num_frames < self.sequence_length:
-            return
-
-        frame_to_idx = {int(frame_indices[i]): i for i in range(num_frames)}
-        frame_nums = sorted(frame_to_idx.keys())
-
-        contiguous_start = frame_nums[0]
-        contiguous_count = 1
-
-        for i in range(1, len(frame_nums)):
-            if frame_nums[i] == frame_nums[i - 1] + 1:
-                contiguous_count += 1
-            else:
-                if contiguous_count >= self.sequence_length:
-                    for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
-                        start_frame = contiguous_start + start_offset
-                        start_idx = frame_to_idx[start_frame]
-                        self.sequences.append({
-                            "video_id": video_id,
-                            "start_frame": start_frame,
-                            "start_idx": start_idx,
-                        })
-                contiguous_start = frame_nums[i]
-                contiguous_count = 1
-
-        if contiguous_count >= self.sequence_length:
-            for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
-                start_frame = contiguous_start + start_offset
-                start_idx = frame_to_idx[start_frame]
-                self.sequences.append({
-                    "video_id": video_id,
-                    "start_frame": start_frame,
-                    "start_idx": start_idx,
-                })
-
-    def _load_action_labels(self):
-        """Load action labels from features.json for each video."""
-        video_ids = set(seq["video_id"] for seq in self.sequences)
-        loaded_count = 0
-
-        for video_id in video_ids:
-            features_path = self.features_dir / video_id / "features.json"
-            if features_path.exists():
-                with open(features_path) as f:
-                    data = json.load(f)
-                    self.action_labels[video_id] = data.get("frames", [])
-                loaded_count += 1
-
-        print(f"Loaded action labels for {loaded_count}/{len(video_ids)} videos")
-
-    def __len__(self) -> int:
-        return len(self.sequences)
-
-    def __getitem__(self, idx: int) -> dict:
-        seq_info = self.sequences[idx]
-        video_id = seq_info["video_id"]
-        start_frame = seq_info["start_frame"]
-        start_idx = seq_info["start_idx"]
-
-        # Load from packed file (cached)
-        latents_array, _ = self._load_video(video_id)
-
-        # Slice contiguous sequence - very fast!
-        latents = latents_array[start_idx:start_idx + self.sequence_length]
-        latents = torch.from_numpy(latents.copy())  # Copy to avoid numpy mmap issues
-
-        result = {
-            "latents": latents,  # (T, C, H, W)
-            "video_id": video_id,
-            "start_frame": start_frame,
-        }
-
-        if self.load_actions:
-            actions = self._get_actions(video_id, start_frame)
-            result["actions"] = actions
-
-        return result
-
-
-class LatentSequenceDataset(LatentDatasetMixin, Dataset):
-    """Dataset of pre-tokenized latent sequences for dynamics model training.
-
-    Loads latent vectors from .npy files instead of raw frames.
-    Much faster I/O than loading and resizing JPEGs.
-
-    NOTE: For better performance, use PackedLatentSequenceDataset with packed
-    .npz files created by scripts/pack_latents.py.
-
-    Optionally loads action labels and rewards from features.json per video.
-    """
-
-    def __init__(
-        self,
-        latents_dir: Path | str,
-        sequence_length: int = 64,
-        stride: int = 1,
-        load_actions: bool = False,
-        load_rewards: bool = False,
-        features_dir: Path | str | None = None,
-        gold_scale: float = 0.01,
-        death_penalty: float = -10.0,
-    ):
-        """Initialize dataset.
-
-        Args:
-            latents_dir: Directory containing video subdirs with latent .npy files
-            sequence_length: Number of frames per sequence
-            stride: Step between sequence start indices
-            load_actions: Whether to load action labels from features.json
-            load_rewards: Whether to load rewards from features.json
-            features_dir: Directory containing features.json per video (default: data/processed)
-            gold_scale: Multiplier for gold_gained values (default: 0.01)
-            death_penalty: Reward penalty for death (default: -10.0)
-        """
-        self.latents_dir = Path(latents_dir)
-        self.sequence_length = sequence_length
-        self.stride = stride
-        self.load_actions = load_actions
-        self.load_rewards = load_rewards
-        if features_dir:
-            self.features_dir = Path(features_dir)
-        else:
-            self.features_dir = self.latents_dir.parent.parent / "data" / "processed"
-            warnings.warn(f"features_dir not specified, using fallback: {self.features_dir}")
-        self.gold_scale = gold_scale
-        self.death_penalty = death_penalty
-
-        # Feature data per video (if load_actions or load_rewards)
-        self.feature_data: dict[str, list[dict]] = {}
-
-        self.sequences = []
-        self.reward_indices: list[int] = []
-        self._index_latents()
-
-        # Load feature data after indexing
-        if load_actions or load_rewards:
-            self._load_feature_data()
-            if load_rewards:
-                self._precompute_reward_indices()
-
-    def _index_latents(self):
-        """Build index of all valid sequences."""
-        for video_dir in sorted(self.latents_dir.iterdir()):
-            if not video_dir.is_dir():
-                continue
-
-            latent_files = sorted(video_dir.glob("latent_*.npy"))
-            if len(latent_files) < self.sequence_length:
-                continue
-
-            video_id = video_dir.name
-
-            # Extract frame numbers and sort
-            frame_nums = []
-            for f in latent_files:
-                try:
-                    num = int(f.stem.split("_")[1])
-                    frame_nums.append(num)
-                except (ValueError, IndexError):
-                    continue
-
-            frame_nums.sort()
-
-            # Find contiguous sequences
-            # We need sequence_length consecutive frames
-            if not frame_nums:
-                continue
-
-            # Build list of start indices for contiguous sequences
-            contiguous_start = frame_nums[0]
-            contiguous_count = 1
-
-            for i in range(1, len(frame_nums)):
-                if frame_nums[i] == frame_nums[i - 1] + 1:
-                    contiguous_count += 1
-                else:
-                    # End of contiguous block - add sequences
-                    if contiguous_count >= self.sequence_length:
-                        for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
-                            self.sequences.append({
-                                "video_id": video_id,
-                                "start_frame": contiguous_start + start_offset,
-                                "video_dir": video_dir,
-                            })
-                    # Reset for new block
-                    contiguous_start = frame_nums[i]
-                    contiguous_count = 1
-
-            # Handle last contiguous block
-            if contiguous_count >= self.sequence_length:
-                for start_offset in range(0, contiguous_count - self.sequence_length + 1, self.stride):
-                    self.sequences.append({
-                        "video_id": video_id,
-                        "start_frame": contiguous_start + start_offset,
-                        "video_dir": video_dir,
-                    })
-
-        print(f"Indexed {len(self.sequences)} latent sequences from {self.latents_dir}")
-
-    def _get_actions(self, video_id: str, start_frame: int) -> dict[str, torch.Tensor] | None:
-        """Get action tensors for a sequence.
-
-        Overrides mixin to read from feature_data (not action_labels).
-
-        Args:
-            video_id: Video identifier
-            start_frame: Starting frame index
-
-        Returns:
-            Dict with 'movement' as (T, 2) float tensor of (x, y) in [0, 1],
-            and ability keys as (T,) long tensors.
-            Returns None if no feature data for this video.
-        """
-        if video_id not in self.feature_data:
-            return None
-
-        labels = self.feature_data[video_id]
-        movement_xy = []
-        ability_actions = {k: [] for k in ABILITY_KEYS}
-
-        for t in range(start_frame, start_frame + self.sequence_length):
-            if t < len(labels):
-                entry = labels[t]
-                mouse_x = float(entry.get('mouse_x', 0.5))
-                mouse_y = float(entry.get('mouse_y', 0.5))
-                movement_xy.append([mouse_x, mouse_y])
-                ability_actions['Q'].append(int(entry.get('ability_q', False)))
-                ability_actions['W'].append(int(entry.get('ability_w', False)))
-                ability_actions['E'].append(int(entry.get('ability_e', False)))
-                ability_actions['R'].append(int(entry.get('ability_r', False)))
-                ability_actions['D'].append(int(entry.get('summoner_d', False)))
-                ability_actions['F'].append(int(entry.get('summoner_f', False)))
-                ability_actions['item'].append(int(entry.get('item_used', False)))
-                ability_actions['B'].append(int(entry.get('recall_b', False)))
-            else:
-                # Padding with "no action"
-                movement_xy.append([0.5, 0.5])
-                for k in ABILITY_KEYS:
-                    ability_actions[k].append(0)
-
-        result = {
-            'movement': torch.tensor(movement_xy, dtype=torch.float32),  # (T, 2)
-        }
-        for k in ABILITY_KEYS:
-            result[k] = torch.tensor(ability_actions[k], dtype=torch.long)
-        return result
-
-    def _get_rewards(self, video_id: str, start_frame: int) -> torch.Tensor | None:
-        """Get reward tensor for a sequence.
-
-        Rewards are computed as:
-        - gold_gained * gold_scale (e.g., +14 gold → +0.14 reward)
-        - death_penalty if death detected (health bar disappears after being present)
-
-        Death detection: If health_bar_x was present for 3+ consecutive frames,
-        then disappears for 3+ frames, we assume death occurred.
-
-        Args:
-            video_id: Video identifier
-            start_frame: Starting frame index
-
-        Returns:
-            Tensor of shape (T,) with reward values, or None if no feature data.
-        """
-        if video_id not in self.feature_data:
-            return None
-
-        frames = self.feature_data[video_id]
-        rewards = []
-
-        # Track health bar presence for death detection
-        # We need some context before the sequence to detect deaths at the start
-        context_frames = 5  # frames to look back for health bar history
-
-        for t in range(self.sequence_length):
-            frame_idx = start_frame + t
-            reward = 0.0
-
-            if frame_idx < len(frames):
-                entry = frames[frame_idx]
-
-                # Gold reward
-                gold = entry.get('gold_gained', 0) or 0
-                reward += gold * self.gold_scale
-
-                # Death detection: health bar was present, now gone
-                curr_hb = entry.get('health_bar_x') is not None
-
-                # Look at previous frames to see if health bar was present
-                prev_hb_count = 0
-                for lookback in range(1, context_frames + 1):
-                    prev_idx = frame_idx - lookback
-                    if prev_idx >= 0 and prev_idx < len(frames):
-                        prev_entry = frames[prev_idx]
-                        if prev_entry.get('health_bar_x') is not None:
-                            prev_hb_count += 1
-
-                # Death: health bar was present in most previous frames but now gone
-                if prev_hb_count >= 3 and not curr_hb:
-                    # Check if it stays gone for a few frames (not just flickering)
-                    gone_count = 0
-                    for lookahead in range(1, 4):
-                        next_idx = frame_idx + lookahead
-                        if next_idx < len(frames):
-                            next_entry = frames[next_idx]
-                            if next_entry.get('health_bar_x') is None:
-                                gone_count += 1
-
-                    if gone_count >= 2:
-                        reward += self.death_penalty
-
-            rewards.append(reward)
-
-        return torch.tensor(rewards, dtype=torch.float32)
-
-    def __len__(self) -> int:
-        return len(self.sequences)
-
-    def __getitem__(self, idx: int) -> dict:
-        seq_info = self.sequences[idx]
-        video_dir = seq_info["video_dir"]
-        start_frame = seq_info["start_frame"]
-        video_id = seq_info["video_id"]
-
-        latents = []
-        for i in range(self.sequence_length):
-            frame_num = start_frame + i
-            latent_path = video_dir / f"latent_{frame_num:06d}.npy"
-            latent = np.load(latent_path)
-            latents.append(torch.from_numpy(latent))
-
-        result = {
-            "latents": torch.stack(latents),  # (T, C, H, W) = (T, 256, 16, 16)
-            "video_id": video_id,
-            "start_frame": start_frame,
-        }
-
-        # Add actions if loading them
-        if self.load_actions:
-            actions = self._get_actions(video_id, start_frame)
-            result["actions"] = actions  # dict of (T,) tensors or None
-
-        # Add rewards if loading them
-        if self.load_rewards:
-            rewards = self._get_rewards(video_id, start_frame)
-            result["rewards"] = rewards  # (T,) tensor or None
-
-        return result
-
-
-class RewardMixtureSampler(Sampler):
-    """Cache-friendly sampler with 50% uniform / 50% reward-containing mixture.
-
-    Matches DreamerV4's data mixture strategy while maintaining cache locality:
-    - Groups sequences by video for efficient I/O
-    - Within each video, applies 50/50 mixture of reward/uniform sampling
-    - Shuffles video order between epochs
-
-    Usage:
-        dataset = PackedLatentSequenceDataset(..., load_actions=True)
-        sampler = RewardMixtureSampler(dataset)
-        loader = DataLoader(dataset, batch_size=1, sampler=sampler)
-    """
-
-    def __init__(
-        self,
-        dataset,
-        seed: int | None = None,
-    ):
-        """Initialize sampler.
-
-        Args:
-            dataset: PackedLatentSequenceDataset with pre-computed reward_indices
-            seed: Random seed for reproducibility
-        """
-        self.dataset = dataset
-        self.rng = random.Random(seed)
-
-        # Build per-video index groups
-        self.video_to_all: dict[str, list[int]] = {}
-        self.video_to_reward: dict[str, list[int]] = {}
-        reward_set = set(dataset.reward_indices)
-
-        for idx, seq in enumerate(dataset.sequences):
-            video_id = seq['video_id']
-            if video_id not in self.video_to_all:
-                self.video_to_all[video_id] = []
-                self.video_to_reward[video_id] = []
-            self.video_to_all[video_id].append(idx)
-            if idx in reward_set:
-                self.video_to_reward[video_id].append(idx)
-
-        # Filter out videos with no feature data
-        self.video_ids = [vid for vid in self.video_to_all.keys()
-                         if vid in dataset.feature_data and len(dataset.feature_data[vid]) > 0]
-
-        total_seqs = sum(len(self.video_to_all[v]) for v in self.video_ids)
-        total_reward = sum(len(self.video_to_reward[v]) for v in self.video_ids)
-        reward_pct = 100 * total_reward / total_seqs if total_seqs else 0
-        print(f"RewardMixtureSampler: {len(self.video_ids)} videos, "
-              f"{total_reward}/{total_seqs} ({reward_pct:.1f}%) sequences with rewards")
-
-        if total_reward == 0:
-            print("WARNING: No reward-containing sequences found! "
-                  "Falling back to uniform sampling.")
-
-    def __iter__(self):
-        """Yield indices grouped by video with 50/50 mixture within each."""
-        # Shuffle video order
-        videos = self.video_ids.copy()
-        self.rng.shuffle(videos)
-
-        for video_id in videos:
-            all_indices = self.video_to_all[video_id]
-            reward_indices = self.video_to_reward[video_id]
-
-            # For each sequence slot in this video, do 50/50 mixture
-            for _ in range(len(all_indices)):
-                if reward_indices and self.rng.random() < 0.5:
-                    # Sample from reward sequences (with replacement)
-                    yield self.rng.choice(reward_indices)
-                else:
-                    # Sample from all sequences
-                    yield self.rng.choice(all_indices)
-
-    def __len__(self) -> int:
-        return sum(len(self.video_to_all[v]) for v in self.video_ids)
-
-
 class VideoShuffleSampler(Sampler):
-    """Sampler that shuffles video order but keeps sequences within videos together.
+    """Like :class:`VideoGroupedSampler` but seedable for reproducibility."""
 
-    This provides randomization while maintaining cache locality - all sequences
-    from one video are processed together before moving to the next video.
-
-    Usage:
-        dataset = PackedLatentSequenceDataset(...)
-        sampler = VideoShuffleSampler(dataset)
-        loader = DataLoader(dataset, batch_size=1, sampler=sampler)
-    """
-
-    def __init__(
-        self,
-        dataset,
-        seed: int | None = None,
-        filter_empty_rewards: bool = True,
-    ):
-        """Initialize sampler.
-
-        Args:
-            dataset: Dataset with sequences attribute containing video_id
-            seed: Random seed for reproducibility
-            filter_empty_rewards: If True, skip videos with no feature data
-        """
-        self.dataset = dataset
-        self.seed = seed
-        self.filter_empty_rewards = filter_empty_rewards
-
-        # Group sequence indices by video
-        self.video_to_indices: dict[str, list[int]] = {}
+    def __init__(self, dataset, seed: int | None = None):
+        groups: dict = defaultdict(list)
         for idx, seq in enumerate(dataset.sequences):
-            video_id = seq['video_id']
-            if video_id not in self.video_to_indices:
-                self.video_to_indices[video_id] = []
-            self.video_to_indices[video_id].append(idx)
-
-        # Filter out videos with no feature data if requested
-        if filter_empty_rewards and hasattr(dataset, 'feature_data'):
-            original_count = len(self.video_to_indices)
-            self.video_to_indices = {
-                vid: indices for vid, indices in self.video_to_indices.items()
-                if vid in dataset.feature_data and len(dataset.feature_data[vid]) > 0
-            }
-            filtered = original_count - len(self.video_to_indices)
-            if filtered > 0:
-                print(f"VideoShuffleSampler: Filtered {filtered} videos with no feature data")
-
+            groups[seq["video_id"]].append(idx)
+        self.video_to_indices = dict(groups)
         self.video_ids = list(self.video_to_indices.keys())
-        total_seqs = sum(len(v) for v in self.video_to_indices.values())
-        print(f"VideoShuffleSampler: {len(self.video_ids)} videos, {total_seqs} sequences")
+        self.seed = seed
+        total = sum(len(v) for v in self.video_to_indices.values())
+        print(f"VideoShuffleSampler: {len(self.video_ids)} videos, {total} sequences")
 
     def __iter__(self):
-        """Yield indices with shuffled video order."""
         rng = random.Random(self.seed)
-
-        # Shuffle video order
         videos = self.video_ids.copy()
         rng.shuffle(videos)
-
-        # Yield all sequences from each video in order
-        for video_id in videos:
-            indices = self.video_to_indices[video_id]
-            # Optionally shuffle within video too
-            indices_copy = indices.copy()
-            rng.shuffle(indices_copy)
-            yield from indices_copy
+        for v in videos:
+            indices = self.video_to_indices[v].copy()
+            rng.shuffle(indices)
+            yield from indices
 
     def __len__(self) -> int:
         return sum(len(v) for v in self.video_to_indices.values())

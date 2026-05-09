@@ -34,8 +34,8 @@ venv/
 slurm-*.out
 
 # Directories that live outside the repo (in ahriuwu-data/)
-# These should never appear in the repo root
-data/
+# Anchored to repo-root so they don't hide src/ahriuwu/data/ etc.
+/data/
 checkpoints/
 logs/
 wandb/

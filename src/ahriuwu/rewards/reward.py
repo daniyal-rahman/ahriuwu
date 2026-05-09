@@ -24,6 +24,7 @@ returns a (T,) tensor, where T = ``len(labels["frames"])``.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Optional
 
@@ -81,6 +82,12 @@ def compute_episode_reward(
         raise ValueError("labels.champion is required for reward computation")
 
     opp_name = resolve_lane_opponent(labels)
+    if opp_name is None:
+        warnings.warn(
+            f"compute_episode_reward: no lane opponent for "
+            f"match={labels.get('match_id')!r} (focus={focus_name!r}); "
+            "dense gold-diff and lane-anchor terms will be 0 for this episode"
+        )
 
     rewards = torch.zeros(T, dtype=torch.float32)
     rewards += _dense_gold_diff(frames, opp_name, cfg)
@@ -89,6 +96,24 @@ def compute_episode_reward(
     if opp_name is not None:
         rewards += _lane_anchor(frames, opp_name, cfg)
     rewards += _outcome(frames, garen_won, cfg)
+
+    # Loud-fail on numerical pathology — gold_total can return garbage from a
+    # stale memory read, which the dense Δ would amplify into a giant spike.
+    if not torch.isfinite(rewards).all():
+        n_bad = int((~torch.isfinite(rewards)).sum().item())
+        raise ValueError(
+            f"compute_episode_reward produced {n_bad} non-finite values for "
+            f"match={labels.get('match_id')!r} — likely garbage gold_total reads"
+        )
+
+    # No-coverage warning — should only fire if labels has no usable
+    # champion_stats / opponent / outcome plumbing.
+    if (rewards == 0).all():
+        warnings.warn(
+            f"compute_episode_reward returned all-zero rewards for "
+            f"match={labels.get('match_id')!r} (focus={focus_name!r}, "
+            f"opp={opp_name!r}, T={T}). Check labels.json schema."
+        )
     return rewards
 
 
@@ -96,14 +121,10 @@ def compute_episode_reward(
 
 
 def _focus_stats(label: Optional[dict]) -> Optional[dict]:
-    """Pull the focus champion's per-frame stats dict, or None if unlabeled.
-
-    Tolerates both the current schema (``champion_stats``) and the legacy
-    pre-multi-champion schema (``garen_stats``) so old labels still load.
-    """
+    """Pull the focus champion's per-frame stats dict, or None if unlabeled."""
     if not label:
         return None
-    return label.get("champion_stats") or label.get("garen_stats")
+    return label.get("champion_stats")
 
 
 def _hero_stat(label: Optional[dict], hero_name: str, key: str) -> Optional[float]:
@@ -117,6 +138,14 @@ def _hero_stat(label: Optional[dict], hero_name: str, key: str) -> Optional[floa
     return None
 
 
+def _safe_float(d: dict, key: str) -> Optional[float]:
+    """Fetch a numeric stat from a stats dict. Returns None on missing/null —
+    NEVER zero-fills, since a stale-read None silently treated as 0 would
+    create a fictitious gold-delta spike on the next frame."""
+    v = d.get(key)
+    return float(v) if v is not None else None
+
+
 def _dense_gold_diff(
     frames: list[dict],
     opp_name: Optional[str],
@@ -124,8 +153,8 @@ def _dense_gold_diff(
 ) -> torch.Tensor:
     """β · Δ(focus.gold_total - opp.gold_total) per frame.
 
-    Resets across unlabeled gaps (a missing frame breaks the delta chain to
-    avoid charging a fictitious jump when labels resume).
+    Resets across unlabeled gaps and missing-stat frames so we never charge a
+    fictitious jump when valid data resumes.
     """
     T = len(frames)
     out = torch.zeros(T, dtype=torch.float32)
@@ -135,11 +164,14 @@ def _dense_gold_diff(
     prev_diff: Optional[float] = None
     for i, fr in enumerate(frames):
         cs = _focus_stats(fr.get("label"))
-        opp_gold = _hero_stat(fr.get("label"), opp_name, "gold_total")
-        if cs is None or opp_gold is None:
+        if cs is None:
             prev_diff = None
             continue
-        focus_gold = float(cs.get("gold_total", 0.0) or 0.0)
+        focus_gold = _safe_float(cs, "gold_total")
+        opp_gold = _hero_stat(fr.get("label"), opp_name, "gold_total")
+        if focus_gold is None or opp_gold is None:
+            prev_diff = None
+            continue
         diff = focus_gold - opp_gold
         if prev_diff is not None:
             out[i] = cfg.gold_diff_scale * (diff - prev_diff)
@@ -157,7 +189,10 @@ def _dense_gold_self(frames: list[dict], cfg: RewardConfig) -> torch.Tensor:
         if cs is None:
             prev_gold = None
             continue
-        gold = float(cs.get("gold_total", 0.0) or 0.0)
+        gold = _safe_float(cs, "gold_total")
+        if gold is None:
+            prev_gold = None
+            continue
         if prev_gold is not None:
             delta = gold - prev_gold
             if delta > 0.0:
@@ -169,8 +204,8 @@ def _dense_gold_self(frames: list[dict], cfg: RewardConfig) -> torch.Tensor:
 def _death_event(frames: list[dict], cfg: RewardConfig) -> torch.Tensor:
     """Penalty the frame focus.hp transitions from positive to 0.
 
-    Fires on each death (so a game with 3 deaths emits 3 penalties).
-    Resets across unlabeled gaps to avoid spurious transitions.
+    Fires on each death. Resets prev_hp across unlabeled gaps and missing-stat
+    frames so a transient stale-read of None doesn't masquerade as a death.
     """
     T = len(frames)
     out = torch.zeros(T, dtype=torch.float32)
@@ -180,7 +215,10 @@ def _death_event(frames: list[dict], cfg: RewardConfig) -> torch.Tensor:
         if cs is None:
             prev_hp = None
             continue
-        hp = float(cs.get("hp", 0.0) or 0.0)
+        hp = _safe_float(cs, "hp")
+        if hp is None:
+            prev_hp = None
+            continue
         if prev_hp is not None and prev_hp > 0.0 and hp <= 0.0:
             out[i] = cfg.death_penalty
         prev_hp = hp
@@ -214,15 +252,15 @@ def _lane_anchor(
     cs = _focus_stats(label)
     if cs is None:
         return out
-    focus_gold = float(cs.get("gold_total", 0.0) or 0.0)
-    focus_level = int(cs.get("level", 0) or 0)
+    focus_gold = _safe_float(cs, "gold_total")
+    focus_level = _safe_float(cs, "level")
     opp_gold = _hero_stat(label, opp_name, "gold_total")
     opp_level = _hero_stat(label, opp_name, "level")
-    if opp_gold is None or opp_level is None:
+    if focus_gold is None or focus_level is None or opp_gold is None or opp_level is None:
         return out
 
     gold_diff = focus_gold - opp_gold
-    level_diff = focus_level - int(opp_level)
+    level_diff = focus_level - opp_level
 
     ahead = gold_diff > cfg.lane_gold_threshold or level_diff >= cfg.lane_level_threshold
     behind = gold_diff < -cfg.lane_gold_threshold or level_diff <= -cfg.lane_level_threshold

@@ -1328,6 +1328,89 @@ def _resize_one(args):
     return (dst, True)
 
 
+def _resolve_lane_opponent(frames_out, focus_name, focus_team,
+                           team_assign_window_s=30.0,
+                           lane_gt_lo=60.0, lane_gt_hi=300.0,
+                           blue_spawn_max=3000.0):
+    """Identify the lane opponent from per-frame visible_heroes alone.
+
+    Two heuristics:
+      1. Team membership = blue if hero's earliest seen world coord is within
+         the blue-spawn quadrant (x and z below ``blue_spawn_max``), else red.
+      2. Lane opponent = enemy with the smallest mean distance to focus over
+         the laning window [lane_gt_lo, lane_gt_hi] seconds of game time.
+
+    Mirrors :func:`ahriuwu.data.lane_opponent.resolve_lane_opponent` so consumers
+    that read labels.json see the same answer the pipeline computed once.
+    Returns the opponent's hero name or None when the heuristics have no data.
+    """
+    if not frames_out or focus_team not in ("blue", "red"):
+        return None
+
+    earliest = {}
+    gt0 = None
+    for fr in frames_out:
+        lab = fr.get("label")
+        if not lab:
+            continue
+        if gt0 is None:
+            gt0 = fr.get("gt", 0)
+        if fr.get("gt", 0) - gt0 > team_assign_window_s:
+            break
+        for vh in lab.get("visible_heroes") or []:
+            n = vh.get("name")
+            w = vh.get("world")
+            if not (n and w and len(w) == 2):
+                continue
+            cur = earliest.get(n)
+            if cur is None or w[0] + w[1] < cur[0] + cur[1]:
+                earliest[n] = (w[0], w[1])
+
+    enemy_team = "red" if focus_team == "blue" else "blue"
+    enemies = []
+    for n, (x, z) in earliest.items():
+        team = "blue" if (x < blue_spawn_max and z < blue_spawn_max) else "red"
+        if team == enemy_team and n != focus_name:
+            enemies.append(n)
+    if not enemies:
+        return None
+
+    sums = {n: 0.0 for n in enemies}
+    counts = {n: 0 for n in enemies}
+    for fr in frames_out:
+        gt = fr.get("gt")
+        if gt is None or gt < lane_gt_lo or gt > lane_gt_hi:
+            continue
+        lab = fr.get("label")
+        if not lab:
+            continue
+        focus_w = None
+        enemy_w = {}
+        for vh in lab.get("visible_heroes") or []:
+            n = vh.get("name")
+            w = vh.get("world")
+            if not (n and w and len(w) == 2):
+                continue
+            if n == focus_name:
+                focus_w = w
+            elif n in enemies:
+                enemy_w[n] = w
+        if focus_w is None:
+            continue
+        for n, w in enemy_w.items():
+            sums[n] += math.hypot(w[0] - focus_w[0], w[1] - focus_w[1])
+            counts[n] += 1
+
+    best, best_d = None, float("inf")
+    for n in enemies:
+        if counts[n] == 0:
+            continue
+        mean = sums[n] / counts[n]
+        if mean < best_d:
+            best, best_d = n, mean
+    return best
+
+
 def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start=1.0,
                  champion=None, click_results=None):
     """Resize frames, build labels, clean up. Returns stats dict."""
@@ -1540,10 +1623,17 @@ def post_process(match_id, mem_data, cam_data, game_info, staging_dir, rec_start
         pct = n_unlabeled / n_frames * 100
         print(f"  WARNING: {n_unlabeled} frames ({pct:.1f}%) unlabeled", flush=True)
 
+    lane_opp = _resolve_lane_opponent(frames_out, champion, game_info.get("garen_team"))
+    if lane_opp:
+        print(f"  Lane opponent: {lane_opp}", flush=True)
+    else:
+        print(f"  Lane opponent: <none detected>", flush=True)
+
     labels = {
         "match_id": match_id, "champion": champion,
         "team": game_info.get("garen_team"),
         "slot": game_info.get("garen_slot"),
+        "lane_opponent": lane_opp,
         "fps": FPS, "screen_resolution": [SCREEN_W, SCREEN_H],
         "frame_resolution": [FRAME_SZ, FRAME_SZ],
         "total_frames": len(frames_out),

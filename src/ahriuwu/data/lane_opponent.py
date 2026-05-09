@@ -37,11 +37,12 @@ def identify_teams(frames: list[dict], max_seconds: float = 30.0) -> dict[str, s
     gt0: Optional[float] = None
     for fr in frames:
         lab = fr.get("label")
-        if not lab:
+        gt = fr.get("gt")
+        if not lab or gt is None:
             continue
         if gt0 is None:
-            gt0 = fr["gt"]
-        if fr["gt"] - gt0 > max_seconds:
+            gt0 = gt
+        if gt - gt0 > max_seconds:
             break
         for vh in lab.get("visible_heroes") or []:
             name = vh.get("name")
