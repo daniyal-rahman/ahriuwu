@@ -38,11 +38,14 @@ class RewardConfig:
     """Reward weights and thresholds.
 
     Calibration intent (typical 30-min Garen game):
-      Dense gold-diff term integrates to ≈ ±0.5 over the game.
+      Dense gold-diff term telescopes — its sum equals
+      gold_diff_scale · (final_gold_diff - initial_gold_diff). At a typical
+      ±2k final lane gap that's ≈ ±0.1; a stomp at ±10k integrates to ±0.5.
+      Dense gold-self adds ≈ +0.12 (one-sided, ~12k cumulative gold × β').
       Death events take ~−0.6 cumulative across 3 deaths.
       Lane anchor adds ±0.5 at 14:00.
       Outcome adds ±1.0 at game end.
-      Total per-game reward range ≈ [-2.5, +2.5].
+      Total per-game reward magnitude typically lives in roughly [-2, +2].
     """
 
     gold_diff_scale: float = 5e-5
@@ -230,7 +233,11 @@ def _lane_anchor(
     opp_name: str,
     cfg: RewardConfig,
 ) -> torch.Tensor:
-    """One-shot ±lane_anchor_weight at the frame closest to lane_checkpoint_gt."""
+    """One-shot ±lane_anchor_weight at the frame closest to lane_checkpoint_gt.
+
+    Returns 0 when ahead-by-gold and behind-by-level (or vice versa) both
+    fire — those are conflicting signals about lane state, treat as neutral.
+    """
     T = len(frames)
     out = torch.zeros(T, dtype=torch.float32)
 

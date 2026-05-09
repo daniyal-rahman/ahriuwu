@@ -10,6 +10,13 @@ Each match contributes three on-disk artifacts produced by
 * ``clicks.json`` — gt-tagged click and cast events (used for binary
   ability-press flags; one frame per cast).
 
+Contract with the pretokenize step (NOT runtime-checked):
+  ``frame_indices`` MUST be sorted strictly ascending (no duplicates,
+  no permutation). The slice-based latent loading in ``__getitem__``
+  assumes ``frame_to_idx[run_start + k] == frame_to_idx[run_start] + k``.
+  Pretokenize writes in PNG-number order, so this holds for any pack
+  produced by our own tooling.
+
 The dataset emits per sequence:
 
 * ``latents``: (T, C, H, W)
@@ -46,9 +53,6 @@ from torch.utils.data import Dataset
 
 from ..constants import ABILITY_KEYS
 from ..rewards.reward import RewardConfig, compute_episode_reward
-
-
-_DEFAULT_SCREEN = (1280, 720)
 
 
 def load_outcomes(manifest_path: Path | str) -> dict[str, bool]:
@@ -89,8 +93,13 @@ class ReplayLatentSequenceDataset(Dataset):
         sequence_length: int = 64,
         stride: int = 1,
         reward_config: RewardConfig | None = None,
-        max_cache_size: int = 5,
+        max_cache_size: int = 2,
     ):
+        # max_cache_size is per-worker — DataLoader fork-spawns each worker
+        # with its own cache copy. With VideoShuffleSampler the access
+        # pattern is roughly linear within each video, so a 2-deep LRU
+        # gives near-100% hit rate without ballooning RAM at high
+        # num_workers (each .pt file is ~210MB).
         if outcomes is None and manifest_path is None:
             raise ValueError("Provide either `outcomes` dict or `manifest_path`")
         self.latents_dir = Path(latents_dir)
@@ -257,35 +266,24 @@ class ReplayLatentSequenceDataset(Dataset):
         }
 
     def _parse_movement(self, labels: dict, frames: list[dict]) -> torch.Tensor:
-        """Per-frame (x, y) ∈ [0, 1] from movement.heading_screen, default (0.5, 0.5)."""
+        """Per-frame (x, y) ∈ [0, 1] from movement.heading_screen, default (0.5, 0.5).
+
+        Pipeline always writes ``screen_resolution`` and ``movement`` is bounded
+        within the frame, so no defaults / clamps are needed.
+        """
         T = len(frames)
-        screen = labels.get("screen_resolution")
-        if not screen:
-            warnings.warn(
-                f"{labels.get('match_id')!r}: labels.json has no `screen_resolution`; "
-                f"falling back to {_DEFAULT_SCREEN}. Movement coords may be wrong."
-            )
-            screen = list(_DEFAULT_SCREEN)
-        screen_w, screen_h = float(screen[0]), float(screen[1])
+        screen_w, screen_h = labels["screen_resolution"]
+        screen_w, screen_h = float(screen_w), float(screen_h)
         movement = torch.full((T, 2), 0.5, dtype=torch.float32)
-        n_oob = 0
         for i, fr in enumerate(frames):
             lab = fr.get("label")
             if not lab:
                 continue
             mv = lab.get("movement") or {}
             hs = mv.get("heading_screen")
-            if hs and len(hs) == 2 and screen_w > 0 and screen_h > 0:
-                nx, ny = hs[0] / screen_w, hs[1] / screen_h
-                if not (0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0):
-                    n_oob += 1
-                movement[i, 0] = max(0.0, min(1.0, nx))
-                movement[i, 1] = max(0.0, min(1.0, ny))
-        if n_oob:
-            warnings.warn(
-                f"{labels.get('match_id')!r}: clamped {n_oob} out-of-bounds "
-                f"heading_screen samples (sign of bad camera reads or wrong screen_resolution)"
-            )
+            if hs and len(hs) == 2:
+                movement[i, 0] = hs[0] / screen_w
+                movement[i, 1] = hs[1] / screen_h
         return movement
 
     def _parse_abilities(
@@ -304,24 +302,10 @@ class ReplayLatentSequenceDataset(Dataset):
         if T == 0:
             return abilities
 
-        # gt0 is the timebase reference; explicit None-check avoids treating a
-        # legitimate gt=0.0 as missing.
-        gt0_raw = frames[0].get("gt")
-        if gt0_raw is None:
-            raise ValueError(
-                f"{match_dir.name}: frames[0].gt is missing; can't anchor "
-                "click-event timing without a base game-time"
-            )
-        gt0 = float(gt0_raw)
-        fps_raw = labels.get("fps")
-        if not fps_raw:
-            warnings.warn(
-                f"{match_dir.name}: labels.json has no `fps`; falling back to 20"
-            )
-            fps = 20.0
-        else:
-            fps = float(fps_raw)
-        step = 1.0 / fps
+        # gt0 is the timebase reference. Pipeline always writes gt for every
+        # frame; assert here rather than silently anchoring to 0.0.
+        gt0 = float(frames[0]["gt"])
+        step = 1.0 / float(labels["fps"])
 
         clicks_path = match_dir / "clicks.json"
         casts: list[dict] = []
