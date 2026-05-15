@@ -4,7 +4,7 @@
 #SBATCH --partition=gpuhog
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=6
-#SBATCH --mem=32G
+#SBATCH --mem=24G
 #SBATCH --time=3-00:00:00
 #SBATCH --signal=B:TERM@120
 #SBATCH --requeue
@@ -62,7 +62,14 @@ CMD=(
   --log-interval 50
   --wandb-project ahriuwu-tokenizer
 )
-# NOTE: deliberately no --resume. Each launch starts from scratch.
+# Resume-if-exists. On the INITIAL submission this file doesn't exist yet,
+# so the run starts from scratch (intended). On slurm REQUEUE (preemption,
+# node failure, SIGTERM during shutdown), the file exists from a prior
+# step-save-interval=1000 checkpoint and we resume — no progress lost.
+if [ -f "$CHECKPOINT_DIR/transformer_tokenizer_latest.pt" ]; then
+  CMD+=(--resume "$CHECKPOINT_DIR/transformer_tokenizer_latest.pt")
+  echo "Resuming from $CHECKPOINT_DIR/transformer_tokenizer_latest.pt"
+fi
 
 PY_PID=""
 trap 'if [ -n "$PY_PID" ]; then kill -TERM "$PY_PID" 2>/dev/null; wait "$PY_PID" 2>/dev/null; fi' TERM
