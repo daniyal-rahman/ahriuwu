@@ -57,7 +57,8 @@ CMD=(
   --epochs 1
   --mask-ratio-min 0.0
   --mask-warmup-steps 2000
-  --step-save-interval 1000
+  --step-save-interval 0
+  --checkpoint-minutes 30
   --num-workers 6
   --log-interval 50
   --wandb-project ahriuwu-tokenizer
