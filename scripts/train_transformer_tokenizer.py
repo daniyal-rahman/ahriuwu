@@ -27,7 +27,7 @@ from ahriuwu.data.dataset import FrameSequenceDataset
 from ahriuwu.models import create_transformer_tokenizer, MAELoss, psnr, RunningRMS
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import (
-    add_training_args, create_optimizer, create_wsd_schedule,
+    add_training_args, create_optimizer, create_wsd_schedule, create_cosine_schedule,
     save_checkpoint, load_checkpoint,
     PreemptionState, install_preemption_handlers, compute_dynamic_save_interval,
 )
@@ -100,6 +100,26 @@ def parse_args():
         help="Weight for LPIPS perceptual loss (paper uses 0.2)",
     )
     parser.add_argument(
+        "--lpips-frame-subsample",
+        type=int,
+        default=None,
+        help="If set, compute LPIPS on this many random frames of B*T per step "
+             "to cap VRAM. RMS norm absorbs the magnitude shift. "
+             "Recommended K=16 for B=2 T=16 on 16GB GPUs.",
+    )
+    parser.add_argument(
+        "--use-lpips-lib",
+        action="store_true",
+        default=True,
+        help="Use lpips library (Zhang et al. 2018, paper-faithful). Default on.",
+    )
+    parser.add_argument(
+        "--no-lpips-lib",
+        action="store_false",
+        dest="use_lpips_lib",
+        help="Use custom VGGPerceptualLoss instead of lpips library.",
+    )
+    parser.add_argument(
         "--mask-ratio-min",
         type=float,
         default=0.1,
@@ -140,6 +160,19 @@ def parse_args():
         type=int,
         default=1,
         help="Number of gradient accumulation steps",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=0,
+        help="If >0, stop training after this many optimizer steps (sanity runs). 0 = no cap.",
+    )
+    parser.add_argument(
+        "--file-ext",
+        type=str,
+        default="jpg",
+        choices=["jpg", "png"],
+        help="Frame file extension. YT uses jpg, action-labeled replay uses png.",
     )
     parser.add_argument(
         "--use-rope",
@@ -308,6 +341,23 @@ def train_epoch(
             scheduler.step()
             optimizer.zero_grad()
             global_step += 1
+
+            if args.max_steps > 0 and global_step >= args.max_steps:
+                if checkpoint_dir:
+                    _save_tokenizer_checkpoints(
+                        checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
+                        epoch, global_step, losses["loss"].item(), args,
+                        scheduler=scheduler, rms_trackers=rms_trackers,
+                    )
+                print(f"max_steps={args.max_steps} reached. Exiting.", flush=True)
+                return {
+                    "loss": total_loss / max(num_batches, 1),
+                    "mse": total_mse / max(num_batches, 1),
+                    "lpips": total_lpips / max(num_batches, 1),
+                    "psnr": total_psnr / max(num_batches, 1),
+                    "global_step": global_step,
+                    "preempted": True,
+                }
 
         # Track metrics (unscaled loss)
         total_loss += losses["loss"].item()
@@ -478,6 +528,7 @@ def main():
         args.frames_dir,
         sequence_length=args.sequence_length,
         stride=8,
+        file_ext=args.file_ext,
     )
     print(f"Found {len(dataset)} sequences (T={args.sequence_length})")
 
@@ -512,17 +563,29 @@ def main():
         model = torch.compile(model)
 
     # Create loss function (NOT compiled - frozen LPIPS/VGG)
-    loss_fn = MAELoss(mse_weight=1.0, lpips_weight=args.lpips_weight)
+    loss_fn = MAELoss(
+        mse_weight=1.0,
+        lpips_weight=args.lpips_weight,
+        use_lpips_lib=args.use_lpips_lib,
+        lpips_frame_subsample=args.lpips_frame_subsample,
+    )
     loss_fn = loss_fn.to(args.device)
+    print(f"Loss: use_lpips_lib={args.use_lpips_lib}  "
+          f"lpips_frame_subsample={args.lpips_frame_subsample}")
 
     # Create optimizer
-    optimizer = create_optimizer(model.parameters(), args.lr, args.weight_decay, use_8bit=args.use_8bit_adam, betas=(0.9, 0.95))
+    optimizer = create_optimizer(model.parameters(), args.lr, args.weight_decay, use_8bit=args.use_8bit_adam, betas=tuple(args.adam_betas))
 
     # WSD Learning Rate Schedule
     # Estimate total optimizer steps accounting for gradient accumulation
     steps_per_epoch = len(dataloader) // args.gradient_accumulation
     total_steps = args.epochs * steps_per_epoch
-    scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
+    if args.lr_schedule == "cosine":
+        scheduler = create_cosine_schedule(optimizer, total_steps, args.warmup_steps)
+        print(f"LR schedule: cosine  warmup={args.warmup_steps}  total={total_steps}")
+    else:
+        scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
+        print(f"LR schedule: wsd  warmup={args.warmup_steps}  decay={args.decay_steps}  total={total_steps}")
 
     # Create scaler for mixed precision
     # GradScaler is a no-op with bfloat16 and can spuriously skip optimizer steps.
@@ -531,10 +594,15 @@ def main():
     use_fp16 = device_type != "cuda"  # bfloat16 on CUDA, float16 on CPU
     scaler = GradScaler(device_type, enabled=use_fp16)
 
-    # Initialize wandb
+    # Initialize wandb — include the factory-resolved model config so each run
+    # records the exact numeric dimensions (latent_dim, embed_dim, num_layers,
+    # …). Without this, args.model_size='small' is the only identifier and
+    # silently lies if the preset table changes between commits.
+    _inner = model._orig_mod if hasattr(model, "_orig_mod") else model
     wandb_run = init_wandb(args, job_type="transformer_tokenizer", extra_config={
-        "num_params": model.get_num_params() if not hasattr(model, '_orig_mod') else model._orig_mod.get_num_params(),
+        "num_params": _inner.get_num_params(),
         "checkpoint_dir": str(checkpoint_dir),
+        "model_config": getattr(_inner, "config", {}),
     })
 
     # RMS trackers for loss normalization

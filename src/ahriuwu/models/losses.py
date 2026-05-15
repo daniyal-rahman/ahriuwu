@@ -231,10 +231,12 @@ class MAELoss(nn.Module):
         mse_weight: float = 1.0,
         lpips_weight: float = 0.2,
         use_lpips_lib: bool = True,
+        lpips_frame_subsample: Optional[int] = None,
     ):
         super().__init__()
         self.mse_weight = mse_weight
         self.lpips_weight = lpips_weight
+        self.lpips_frame_subsample = lpips_frame_subsample
 
         if use_lpips_lib and LPIPS_AVAILABLE:
             self.lpips = LPIPSLoss(net="vgg")
@@ -314,6 +316,13 @@ class MAELoss(nn.Module):
         else:
             pred_flat = pred.view(B * T, C, H, W)
             target_flat = target.view(B * T, C, H, W)
+            # Optional frame subsampling: run LPIPS on K of B*T frames to cap
+            # activation VRAM. RMS normalization absorbs the scale shift.
+            K = self.lpips_frame_subsample
+            if K is not None and K < B * T:
+                idx = torch.randperm(B * T, device=pred.device)[:K]
+                pred_flat = pred_flat[idx]
+                target_flat = target_flat[idx]
             lpips_loss = self.lpips(pred_flat, target_flat)
             total_loss = self.mse_weight * mse_loss + self.lpips_weight * lpips_loss
 

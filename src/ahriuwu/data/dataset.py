@@ -68,7 +68,13 @@ class SingleFrameDataset(Dataset):
 
 
 class FrameSequenceDataset(Dataset):
-    """Fixed-length contiguous frame windows for world-model pretraining."""
+    """Fixed-length contiguous frame windows for world-model pretraining.
+
+    Globs ``*.{file_ext}`` so both YT layout (``frame_NNNNNN.jpg``) and replay
+    layout (``NNNNNN.png``) work. Stores the sorted per-video frame list and
+    indexes into it at ``__getitem__`` time — no printf-format reconstruction
+    that would assume the ``frame_`` prefix.
+    """
 
     def __init__(
         self,
@@ -90,14 +96,14 @@ class FrameSequenceDataset(Dataset):
         for video_dir in self.frames_dir.iterdir():
             if not video_dir.is_dir():
                 continue
-            frames = sorted(video_dir.glob(f"frame_*.{self.file_ext}"))
+            frames = sorted(video_dir.glob(f"*.{self.file_ext}"))
             if len(frames) < self.sequence_length:
                 continue
             for start_idx in range(0, len(frames) - self.sequence_length + 1, self.stride):
                 self.sequences.append({
                     "video_id": video_dir.name,
                     "start_idx": start_idx,
-                    "video_dir": video_dir,
+                    "frame_paths": frames,
                 })
 
     def __len__(self) -> int:
@@ -105,13 +111,18 @@ class FrameSequenceDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict:
         seq = self.sequences[idx]
-        video_dir = seq["video_dir"]
         start_idx = seq["start_idx"]
+        paths = seq["frame_paths"][start_idx:start_idx + self.sequence_length]
 
         frames = []
-        for i in range(self.sequence_length):
-            path = video_dir / f"frame_{start_idx + i:06d}.{self.file_ext}"
+        for path in paths:
+            # 1-retry-with-backoff: a single transient cv2.imread None return
+            # (NFS attr cache, rsync write contention) shouldn't kill a 40h run.
+            # Observed once in ~130k reads on /scratch under load.
             frame = cv2.imread(str(path))
+            if frame is None:
+                import time as _t; _t.sleep(0.05)
+                frame = cv2.imread(str(path))
             if frame is None:
                 raise FileNotFoundError(f"Failed to load frame: {path}")
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

@@ -358,6 +358,20 @@ class DynamicsTransformer(nn.Module):
         agent_layers: int = 4,  # Number of agent token processing layers
         # Action conditioning
         use_actions: bool = False,
+        # Game-time conditioning (Phase 2+: lets the model condition on
+        # where in the game we are — laning, mid, late). Optional so YT
+        # pre-training without game-time labels still works (falls back
+        # to a learned ``no_game_time`` embedding).
+        use_game_time: bool = False,
+        game_time_bucket_seconds: float = 30.0,
+        game_time_num_buckets: int = 120,  # 30s × 120 = 60min ceiling
+        # Train-time dropout: with this probability replace gt_emb with the
+        # no_gt_embed even when game_time is provided. Prevents the model
+        # from crutching on game_time when fine-tuning on action-labeled
+        # data, so the same checkpoint still works at inference when no
+        # game_time is available (YT-distribution or anonymous rollouts).
+        # 0 disables.
+        gt_dropout: float = 0.1,
         # Memory efficiency
         gradient_checkpointing: bool = False,
     ):
@@ -392,6 +406,10 @@ class DynamicsTransformer(nn.Module):
         self.temporal_every = temporal_every
         self.use_agent_tokens = use_agent_tokens
         self.use_actions = use_actions
+        self.use_game_time = use_game_time
+        self.game_time_bucket_seconds = float(game_time_bucket_seconds)
+        self.game_time_num_buckets = int(game_time_num_buckets)
+        self.gt_dropout = float(gt_dropout)
         self.num_register_tokens = num_register_tokens
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
@@ -436,6 +454,17 @@ class DynamicsTransformer(nn.Module):
             })
             # Learned "no action" embedding for unlabeled videos
             self.no_action_embed = nn.Parameter(torch.randn(1, 1, model_dim) * 0.02)
+
+        # Game-time conditioning: discrete embedding lookup mirroring the
+        # tau/step_size pattern. game_time (seconds) → bucket index → embed →
+        # added to every spatial token of that frame (same path as tau_emb /
+        # step_emb). When game_time is None at forward time (e.g. YT pretrain
+        # where we don't have absolute game time), we substitute a learned
+        # no_gametime embedding so the model still has a stable input there
+        # instead of receiving NaN/zero.
+        if use_game_time:
+            self.gt_embed = nn.Embedding(self.game_time_num_buckets, model_dim)
+            self.no_gt_embed = nn.Parameter(torch.randn(1, 1, model_dim) * 0.02)
 
         # Transformer blocks with GQA, QKNorm, soft capping, and RoPE
         self.blocks = nn.ModuleList()
@@ -501,17 +530,33 @@ class DynamicsTransformer(nn.Module):
         """Sum factorized action embeddings.
 
         Args:
-            actions: Dict with keys 'movement' and ability keys.
-                     'movement' is (B, T, 2) float tensor of (x, y) coordinates.
-                     Ability keys are (B, T) long tensors.
+            actions: Dict with keys 'movement' (B, T, 2) float, ability keys
+                     (B, T) long, and OPTIONAL 'cursor_valid' (B, T) bool. When
+                     cursor_valid is False (frames before any cursor observed),
+                     movement values are NaN — we substitute the learned
+                     ``no_action_embed`` for those frames so NaN doesn't
+                     propagate through the projection.
 
         Returns:
             (B, T, D) summed action embedding
         """
-        # Movement: linear projection from continuous (x, y)
-        emb = self.action_embed['movement'](actions['movement'])  # (B, T, 2) -> (B, T, D)
+        movement = actions['movement']
+        cursor_valid = actions.get('cursor_valid')
+        if cursor_valid is not None:
+            # Replace NaN-valued (invalid) movement with zeros before the
+            # linear projection. The cursor_valid mask then swaps out the
+            # zero-projection for the learned no_action_embed.
+            safe_movement = torch.where(
+                cursor_valid.unsqueeze(-1), movement, torch.zeros_like(movement)
+            )
+            emb = self.action_embed['movement'](safe_movement)  # (B, T, D)
+            no_act = self.no_action_embed.expand_as(emb)
+            emb = torch.where(cursor_valid.unsqueeze(-1), emb, no_act)
+        else:
+            # Legacy / fully-labeled path — assume movement has no NaN.
+            emb = self.action_embed['movement'](movement)
 
-        # Add all ability key embeddings
+        # Add all ability key embeddings (binary, always defined)
         for key in ABILITY_KEYS:
             emb = emb + self.action_embed[key](actions[key])
 
@@ -610,6 +655,7 @@ class DynamicsTransformer(nn.Module):
         step_size: torch.Tensor | None = None,
         task_id: torch.Tensor | None = None,
         actions: dict[str, torch.Tensor] | None = None,
+        game_time: torch.Tensor | None = None,
         independent_frames: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Forward pass: predict clean latents from noisy input.
@@ -622,6 +668,11 @@ class DynamicsTransformer(nn.Module):
             task_id: Optional task ID for multi-task conditioning, shape (B,)
             actions: Optional action dict with 'movement', 'target', and ability keys.
                      Each value is (B, T) tensor of class indices.
+            game_time: Optional per-frame game time in seconds, shape (B, T) or (B,).
+                       Float. Only consumed when the model was built with
+                       use_game_time=True; otherwise ignored. When use_game_time
+                       is True but this is None, the learned ``no_gt_embed`` is
+                       substituted so YT-pretrained checkpoints can still run.
             independent_frames: If True, treat frames as independent (no temporal context).
                                Use with 30% probability during training to prevent
                                temporal shortcut learning (DreamerV4 Section 3.2).
@@ -678,6 +729,35 @@ class DynamicsTransformer(nn.Module):
 
         # Additive: separate paths so step_size gradient isn't suppressed by tau
         x = x + tau_emb.unsqueeze(2) + step_emb.unsqueeze(2)
+
+        # Game-time conditioning. Discretize seconds → bucket index → lookup,
+        # then add to all spatial tokens of each frame. We add along the same
+        # additive path as tau/step so the gradient signal is on equal footing
+        # with the other scalar conditioners (DreamerV4-style). When the
+        # caller didn't supply game_time, fall back to the learned
+        # no_gt_embed so the path is still occupied (avoids relying on the
+        # model to ignore an all-zero contribution it never saw at train).
+        if self.use_game_time:
+            if game_time is not None:
+                # Accept (B,) by broadcasting to (B, T). Common during single-
+                # frame inference where the same game_time applies to all T.
+                gt = game_time
+                if gt.dim() == 1:
+                    gt = gt.unsqueeze(1).expand(-1, T)
+                gt_idx = (gt.float() / self.game_time_bucket_seconds).long().clamp(
+                    0, self.game_time_num_buckets - 1
+                )
+                gt_emb = self.gt_embed(gt_idx)  # (B, T, D)
+                # Train-time dropout. Per-batch coin flip: with probability
+                # gt_dropout, drop the whole batch's game_time signal and
+                # substitute no_gt_embed. Keeps the model from leaning on
+                # game_time so the same weights serve action-labeled (gt
+                # known) and zero-shot (gt unknown) inference.
+                if self.training and self.gt_dropout > 0 and torch.rand(1).item() < self.gt_dropout:
+                    gt_emb = self.no_gt_embed.expand(B, T, -1)
+            else:
+                gt_emb = self.no_gt_embed.expand(B, T, -1)  # (1,1,D) -> (B,T,D)
+            x = x + gt_emb.unsqueeze(2)
 
         # Also append combined token for attention pathway
         cond_token = self._build_condition_token(tau, step_size, B, T)
@@ -752,6 +832,10 @@ def create_dynamics(
     num_tasks: int = 1,
     agent_layers: int = 4,
     use_actions: bool = False,
+    use_game_time: bool = False,
+    game_time_bucket_seconds: float = 30.0,
+    game_time_num_buckets: int = 120,
+    gt_dropout: float = 0.1,
     # New DreamerV4 features
     use_qk_norm: bool = True,
     soft_cap: float | None = 50.0,
@@ -804,20 +888,29 @@ def create_dynamics(
     if size not in configs:
         raise ValueError(f"Unknown size: {size}. Choose from {list(configs.keys())}")
 
-    return DynamicsTransformer(
-        latent_dim=latent_dim,
-        spatial_size=16,  # 256 latent tokens = 16x16 spatial grid
-        use_agent_tokens=use_agent_tokens,
-        num_tasks=num_tasks,
-        agent_layers=agent_layers,
-        use_actions=use_actions,
-        use_qk_norm=use_qk_norm,
-        soft_cap=soft_cap,
-        num_register_tokens=num_register_tokens,
-        num_kv_heads=num_kv_heads,
-        gradient_checkpointing=gradient_checkpointing,
+    resolved = {
+        "latent_dim": latent_dim,
+        "spatial_size": 16,  # 256 latent tokens = 16x16 spatial grid
+        "use_agent_tokens": use_agent_tokens,
+        "num_tasks": num_tasks,
+        "agent_layers": agent_layers,
+        "use_actions": use_actions,
+        "use_game_time": use_game_time,
+        "game_time_bucket_seconds": game_time_bucket_seconds,
+        "game_time_num_buckets": game_time_num_buckets,
+        "gt_dropout": gt_dropout,
+        "use_qk_norm": use_qk_norm,
+        "soft_cap": soft_cap,
+        "num_register_tokens": num_register_tokens,
+        "num_kv_heads": num_kv_heads,
+        "gradient_checkpointing": gradient_checkpointing,
         **configs[size],
-    )
+    }
+    model = DynamicsTransformer(**resolved)
+    # Self-describing checkpoint: save_checkpoint reads model.config so any
+    # downstream loader knows the exact init args without trusting CLI flags.
+    model.config = {"size_preset": size, **resolved}
+    return model
 
 
 if __name__ == "__main__":
@@ -855,6 +948,21 @@ if __name__ == "__main__":
     print(f"Parameters (GQA): {model_gqa.get_num_params():,}")
     z_pred_gqa = model_gqa(z_tau, tau)
     print(f"Output shape (GQA): {z_pred_gqa.shape}")
+
+    print("\n--- Testing with game_time conditioning ---")
+    model_gt = create_dynamics("small", latent_dim=32, use_game_time=True)
+    n_gt = model_gt.get_num_params() - model.get_num_params()
+    print(f"Parameters (with game_time): {model_gt.get_num_params():,} "
+          f"(+{n_gt:,} for gt_embed + no_gt_embed)")
+    game_time = torch.rand(B, T) * 1800.0  # 0..30 minutes
+    z_pred_gt = model_gt(z_tau, tau, game_time=game_time)
+    print(f"With game_time (B, T)={tuple(game_time.shape)} -> {tuple(z_pred_gt.shape)}")
+    # Per-batch scalar game_time (single frame inference cadence)
+    z_pred_gt_b = model_gt(z_tau, tau, game_time=torch.full((B,), 300.0))
+    print(f"With game_time (B,) -> {tuple(z_pred_gt_b.shape)}")
+    # Missing game_time → falls back to no_gt_embed without crashing
+    z_pred_gt_none = model_gt(z_tau, tau, game_time=None)
+    print(f"With game_time=None -> {tuple(z_pred_gt_none.shape)} (no_gt_embed)")
 
     print("\n--- Testing with actions ---")
     model_actions = create_dynamics("small", latent_dim=32, use_actions=True)

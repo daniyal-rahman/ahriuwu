@@ -183,6 +183,21 @@ def add_training_args(parser: argparse.ArgumentParser) -> None:
         help="Number of decay steps for WSD LR schedule (0 = no decay, just warmup + hold)",
     )
     parser.add_argument(
+        "--lr-schedule",
+        type=str,
+        default="wsd",
+        choices=["wsd", "cosine"],
+        help="LR schedule: wsd (warmup→stable→decay) or cosine (warmup→cosine-to-0, paper-faithful)",
+    )
+    parser.add_argument(
+        "--adam-betas",
+        type=float,
+        nargs=2,
+        default=(0.9, 0.999),
+        metavar=("BETA1", "BETA2"),
+        help="AdamW (beta1, beta2). DreamerV4 paper uses defaults (0.9, 0.999).",
+    )
+    parser.add_argument(
         "--use-8bit-adam",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -270,6 +285,19 @@ def create_wsd_schedule(
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=wsd_schedule)
 
 
+def create_cosine_schedule(optimizer, total_steps: int, warmup_steps: int):
+    """Linear warmup + cosine decay to 0 (DreamerV4 §3.4 recipe)."""
+    import math
+
+    def cosine_schedule(step):
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * min(1.0, progress)))
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=cosine_schedule)
+
+
 def save_checkpoint(
     path: Path,
     model: nn.Module,
@@ -289,14 +317,28 @@ def save_checkpoint(
         extra: Additional key-value pairs to include in the checkpoint
                (e.g. {"model_type": "transformer_tokenizer"}).
     """
+    # Unwrap torch.compile so the saved keys are the canonical module names
+    # (no ``_orig_mod.`` prefix). Downstream consumers (eval, ports, hub
+    # uploads) shouldn't have to know about the compile wrapper. The load
+    # side still strips defensively, but new checkpoints are now clean.
+    inner = model._orig_mod if hasattr(model, "_orig_mod") else model
+
+    # Resolved model config (latent_dim, embed_dim, etc.) as set by the
+    # ``create_*`` factory. CLI args alone are not enough — the same
+    # ``--model-size small`` can mean different latent_dim values across
+    # commits. Capturing the factory-resolved config makes the checkpoint
+    # self-describing.
+    model_config = getattr(inner, "config", None)
+
     checkpoint = {
-        "model_state_dict": model.state_dict(),
+        "model_state_dict": inner.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scaler_state_dict": scaler.state_dict(),
         "epoch": epoch,
         "global_step": global_step,
         "loss": loss,
         "args": vars(args),
+        "model_config": model_config,
     }
     if scheduler is not None:
         checkpoint["scheduler_state_dict"] = scheduler.state_dict()
