@@ -23,8 +23,8 @@ export WANDB_MODE=online
 cd /mnt/nfs/projects/ahriuwu
 mkdir -p logs
 
-CHECKPOINT_DIR=/mnt/nfs/projects/ahriuwu/checkpoints/tokenizer_v4
-SAMPLE_DIR=/mnt/nfs/projects/ahriuwu/samples/tokenizer_v4
+CHECKPOINT_DIR=/mnt/nfs/projects/ahriuwu/checkpoints/tokenizer_v5
+SAMPLE_DIR=/mnt/nfs/projects/ahriuwu/samples/tokenizer_v5
 FRAMES_DIR=/scratch/ahriuwu/action_labeled_flat
 
 # Paper-faithful config (DreamerV4 §3.4):
