@@ -54,7 +54,7 @@ CMD=(
   --weight-decay 0.1
   --lr-schedule cosine
   --warmup-steps 500
-  --epochs 1
+  --epochs 3
   --mask-ratio-min 0.0
   --mask-warmup-steps 2000
   --step-save-interval 0
