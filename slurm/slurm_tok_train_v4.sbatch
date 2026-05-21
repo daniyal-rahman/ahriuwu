@@ -23,9 +23,9 @@ export WANDB_MODE=online
 cd /mnt/nfs/projects/ahriuwu
 mkdir -p logs
 
-CHECKPOINT_DIR=/mnt/nfs/projects/ahriuwu/checkpoints/tokenizer_v5
-SAMPLE_DIR=/mnt/nfs/projects/ahriuwu/samples/tokenizer_v5
-FRAMES_DIR=/scratch/ahriuwu/action_labeled_flat
+CHECKPOINT_DIR=/mnt/nfs/projects/ahriuwu/checkpoints/tokenizer_v6
+SAMPLE_DIR=/mnt/nfs/projects/ahriuwu/samples/tokenizer_v6
+FRAMES_DIR=/scratch/ahriuwu/action_labeled_352png_train_flat
 
 # Paper-faithful config (DreamerV4 §3.4):
 #   AdamW (NOT 8-bit), betas=(0.9, 0.999), weight_decay=0.1
@@ -39,6 +39,8 @@ CMD=(
   python -u scripts/train_transformer_tokenizer.py
   --frames-dir "$FRAMES_DIR"
   --file-ext png
+  --skip-resize
+  --augment
   --checkpoint-dir "$CHECKPOINT_DIR"
   --sample-dir "$SAMPLE_DIR"
   --model-size medium
@@ -54,7 +56,7 @@ CMD=(
   --weight-decay 0.1
   --lr-schedule cosine
   --warmup-steps 500
-  --epochs 3
+  --epochs 2
   --mask-ratio-min 0.0
   --mask-warmup-steps 2000
   --step-save-interval 0
