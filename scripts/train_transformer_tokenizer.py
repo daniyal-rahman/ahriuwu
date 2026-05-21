@@ -175,6 +175,20 @@ def parse_args():
         help="Frame file extension. YT uses jpg, action-labeled replay uses png.",
     )
     parser.add_argument(
+        "--skip-resize",
+        action="store_true",
+        help="Skip cv2.resize at load time. Use when frames-dir is pre-resized "
+             "to target res (defensive fallback to resize if any frame mismatches).",
+    )
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        help="Enable color/gamma/noise augmentation on input frames (params "
+             "sampled once per sequence for temporal consistency). Mild "
+             "defaults: ±10%% brightness/contrast/saturation, ±5° hue, ±15%% "
+             "gamma, σ=0.01 noise. Robust to player display calibration drift.",
+    )
+    parser.add_argument(
         "--use-rope",
         action="store_true",
         help="Use RoPE (Rotary Position Embeddings) instead of additive position embeddings",
@@ -529,6 +543,8 @@ def main():
         sequence_length=args.sequence_length,
         stride=8,
         file_ext=args.file_ext,
+        skip_resize=args.skip_resize,
+        augment=args.augment,
     )
     print(f"Found {len(dataset)} sequences (T={args.sequence_length})")
 
