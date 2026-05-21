@@ -65,13 +65,20 @@ CMD=(
   --log-interval 50
   --wandb-project ahriuwu-tokenizer
 )
-# Resume-if-exists. On the INITIAL submission this file doesn't exist yet,
-# so the run starts from scratch (intended). On slurm REQUEUE (preemption,
-# node failure, SIGTERM during shutdown), the file exists from a prior
-# step-save-interval=1000 checkpoint and we resume — no progress lost.
+# Resume strategy:
+# 1. If a v6-own checkpoint exists (from a prior requeue of this same v6 run),
+#    pick up from there.
+# 2. Otherwise on INITIAL v6 submission, warm-start from the v5 step-11216
+#    rollback checkpoint — keeps ~11k optsteps of learned weights instead of
+#    restarting from random init. Data distribution barely shifted (50 extra
+#    matches + mild ±10% augmentation); the model adapts within hundreds of
+#    steps. Net save: ~60h of compute.
 if [ -f "$CHECKPOINT_DIR/transformer_tokenizer_latest.pt" ]; then
   CMD+=(--resume "$CHECKPOINT_DIR/transformer_tokenizer_latest.pt")
-  echo "Resuming from $CHECKPOINT_DIR/transformer_tokenizer_latest.pt"
+  echo "Resuming from v6 ckpt $CHECKPOINT_DIR/transformer_tokenizer_latest.pt"
+elif [ -f "/mnt/nfs/shared/eval_ckpts/tokenizer_v5_step11216_ROLLBACK.pt" ]; then
+  CMD+=(--resume "/mnt/nfs/shared/eval_ckpts/tokenizer_v5_step11216_ROLLBACK.pt")
+  echo "Warm-starting from v5 step 11216 rollback ckpt"
 fi
 
 PY_PID=""
