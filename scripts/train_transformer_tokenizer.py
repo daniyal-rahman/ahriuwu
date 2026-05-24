@@ -29,7 +29,7 @@ from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_imag
 from ahriuwu.utils.training import (
     add_training_args, create_optimizer, create_wsd_schedule, create_cosine_schedule,
     save_checkpoint, load_checkpoint,
-    PreemptionState, install_preemption_handlers, compute_dynamic_save_interval,
+    PreemptionState, install_preemption_handlers,
 )
 
 _preempt = PreemptionState()
@@ -147,7 +147,17 @@ def parse_args():
         "--step-save-interval",
         type=int,
         default=15000,
-        help="Save checkpoint every N steps (0 to disable)",
+        help="Save checkpoint every N optimizer steps (fixed interval; "
+             "0 disables step-based saving). No dynamic/wall-clock interval — "
+             "set this to roughly target_minutes / sec_per_optstep.",
+    )
+    parser.add_argument(
+        "--checkpoint-warn-minutes",
+        type=float,
+        default=60.0,
+        help="Warn once at startup if the measured step rate implies the "
+             "checkpoint cadence (step-save-interval x sec/optstep) exceeds "
+             "this many minutes — flags crash-loss risk at health checks.",
     )
     parser.add_argument(
         "--sample-dir",
@@ -302,6 +312,20 @@ def train_epoch(
     device_type = device.split(":")[0]
     dtype = torch.bfloat16 if device_type == "cuda" else torch.float16
 
+    # Checkpoint-cadence tracking. We use a FIXED step interval (no dynamic
+    # drift). last_saved_step guards against the modulo being true for all
+    # `accumulation_steps` micro-batches at a given global_step. The cadence
+    # warning measures sec/optstep AFTER warmup (torch.compile + cudnn autotune
+    # settle in the first ~15 steps) and flags if the implied wall-time between
+    # checkpoints exceeds the warn threshold — so a health check surfaces a
+    # too-slow save cadence instead of silently risking large progress loss.
+    last_saved_step = -1
+    rate_warmup_steps = 15        # ignore these (compile/autotune slow)
+    rate_t0 = None               # wall-clock at end of warmup
+    rate_step0 = None            # global_step at end of warmup
+    cadence_warned = False
+    warn_seconds = getattr(args, "checkpoint_warn_minutes", 60) * 60
+
     for batch_idx, batch in enumerate(dataloader):
         frames = batch["frames"].to(device)  # (B, T, C, H, W)
 
@@ -387,20 +411,35 @@ def train_epoch(
 
         num_batches += 1
 
-        # Compute effective save interval (dynamic or explicit)
-        if args.step_save_interval > 0:
-            effective_save_interval = args.step_save_interval
-        else:
-            effective_save_interval = compute_dynamic_save_interval(
-                global_step, time.time() - start_time, args.checkpoint_minutes
-            )
+        # Cadence warning: once, after warmup, estimate sec/optstep over a
+        # measurement window and flag if the implied checkpoint wall-time is
+        # too slow. Surfaces a misconfigured --step-save-interval at health
+        # checks instead of silently risking large progress loss.
+        if not cadence_warned and args.step_save_interval > 0:
+            if rate_t0 is None and global_step >= rate_warmup_steps:
+                rate_t0 = time.time()
+                rate_step0 = global_step
+            elif rate_t0 is not None and global_step - rate_step0 >= 20:
+                sec_per_optstep = (time.time() - rate_t0) / max(global_step - rate_step0, 1)
+                cadence_sec = args.step_save_interval * sec_per_optstep
+                msg = (f"checkpoint cadence ~{cadence_sec/60:.0f} min "
+                       f"({sec_per_optstep:.1f}s/optstep x {args.step_save_interval} steps)")
+                if cadence_sec > warn_seconds:
+                    print(f"WARNING: {msg} EXCEEDS {warn_seconds/60:.0f} min threshold — "
+                          f"lower --step-save-interval to reduce crash-loss risk.", flush=True)
+                else:
+                    print(f"checkpoint cadence OK: {msg}", flush=True)
+                cadence_warned = True
 
-        # Step-based checkpoint saving (skip step 0 to avoid spam)
+        # Fixed-interval checkpoint. The last_saved_step guard prevents the
+        # modulo from firing on all `accumulation_steps` micro-batches that
+        # share the same global_step.
         save_at_boundary = (
             checkpoint_dir
+            and args.step_save_interval > 0
             and global_step > 0
-            and effective_save_interval > 0
-            and global_step % effective_save_interval == 0
+            and global_step % args.step_save_interval == 0
+            and global_step != last_saved_step
         )
         if save_at_boundary:
             step_path = checkpoint_dir / f"transformer_tokenizer_step_{global_step:07d}.pt"
@@ -409,6 +448,7 @@ def train_epoch(
                 epoch, global_step, losses["loss"].item(), args,
                 scheduler=scheduler, rms_trackers=rms_trackers, step_path=step_path,
             )
+            last_saved_step = global_step
 
         # checkpoint-now file trigger (save but do NOT exit)
         if _preempt.check_checkpoint_now() and checkpoint_dir and global_step > 0:
