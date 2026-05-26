@@ -602,6 +602,19 @@ class TransformerTokenizer(nn.Module):
         max_time: int = 256,
     ):
         super().__init__()
+        # Authoritative record of EVERY constructor arg — the full architecture
+        # spec. Saved into checkpoints so a load can rebuild the exact model
+        # (no relying on the create_* factory's partial dict). Anything that
+        # changes the forward pass must be a constructor arg captured here.
+        self.config = {
+            "img_size": img_size, "patch_size": patch_size, "embed_dim": embed_dim,
+            "latent_dim": latent_dim, "num_heads": num_heads,
+            "num_encoder_layers": num_encoder_layers,
+            "num_decoder_layers": num_decoder_layers, "num_latents": num_latents,
+            "dropout": dropout, "use_sincos_pos": use_sincos_pos, "use_rope": use_rope,
+            "use_qk_norm": use_qk_norm, "soft_cap": soft_cap,
+            "gradient_checkpointing": gradient_checkpointing, "max_time": max_time,
+        }
         self.img_size = img_size
         self.patch_size = patch_size
         self.embed_dim = embed_dim
@@ -908,11 +921,10 @@ def create_transformer_tokenizer(
         "gradient_checkpointing": gradient_checkpointing,
     }
     model = TransformerTokenizer(**resolved)
-    # Attach the resolved config so save_checkpoint / wandb can capture the
-    # actual numeric dimensions (latent_dim, embed_dim, …), not just the
-    # preset name. Prevents the "args.model_size: 'small' but the weights
-    # are medium" confusion we hit when loading old checkpoints.
-    model.config = {"size_preset": size, **resolved}
+    # TransformerTokenizer.__init__ already recorded the full constructor
+    # spec in model.config (authoritative). Just stamp the preset name on top
+    # so checkpoints record both "which preset" and "exact dims".
+    model.config["size_preset"] = size
     return model
 
 

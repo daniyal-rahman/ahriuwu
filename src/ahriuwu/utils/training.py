@@ -11,6 +11,7 @@ Provides common infrastructure:
 import argparse
 import os
 import signal
+import subprocess
 import threading
 from pathlib import Path
 
@@ -298,6 +299,32 @@ def create_cosine_schedule(optimizer, total_steps: int, warmup_steps: int):
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=cosine_schedule)
 
 
+def _git_info() -> dict:
+    """Capture the code version stamp for reproducible checkpoints.
+
+    Architecture is defined by *code*, not just config — two checkpoints with
+    identical model_config can be mutually incompatible if the code changed
+    (e.g. the RoPE block-application pattern drifted between runs). Stamping
+    the commit + dirty flag means a load can `git checkout <commit>` and get
+    the exact architecture back. Best-effort; never raises.
+    """
+    def _run(args):
+        try:
+            return subprocess.run(args, cwd=os.path.dirname(__file__),
+                                  capture_output=True, text=True,
+                                  timeout=5).stdout.strip()
+        except Exception:
+            return None
+    commit = _run(["git", "rev-parse", "HEAD"])
+    branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    status = _run(["git", "status", "--porcelain"])
+    return {
+        "commit": commit,
+        "branch": branch,
+        "dirty": bool(status) if status is not None else None,
+    }
+
+
 def save_checkpoint(
     path: Path,
     model: nn.Module,
@@ -338,7 +365,8 @@ def save_checkpoint(
         "global_step": global_step,
         "loss": loss,
         "args": vars(args),
-        "model_config": model_config,
+        "model_config": model_config,   # full constructor kwargs (arch dims)
+        "git_info": _git_info(),        # commit/branch/dirty (arch *code* version)
     }
     if scheduler is not None:
         checkpoint["scheduler_state_dict"] = scheduler.state_dict()
