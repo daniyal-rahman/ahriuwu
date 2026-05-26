@@ -54,9 +54,10 @@ CMD=(
   --adam-betas 0.9 0.999
   --lr 1e-4
   --weight-decay 0.1
-  --lr-schedule cosine
+  --lr-schedule wsd
+  --decay-steps 0
   --warmup-steps 500
-  --epochs 2
+  --epochs 6
   --mask-ratio-min 0.0
   --mask-warmup-steps 2000
   --step-save-interval 90
