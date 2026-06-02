@@ -204,6 +204,41 @@ def parse_args():
         help="Use RoPE (Rotary Position Embeddings) instead of additive position embeddings",
     )
     parser.add_argument(
+        "--latent-dim",
+        type=int,
+        default=None,
+        help="Override the preset's bottleneck per-token width (paper-faithful=32). "
+             "Lets you pin a small bottleneck on a non-matching width preset, e.g. "
+             "--model-size medium --latent-dim 32 for 115M params @ paper compression.",
+    )
+    parser.add_argument(
+        "--num-latents",
+        type=int,
+        default=None,
+        help="Override the preset's number of bottleneck tokens (paper-faithful=256).",
+    )
+    parser.add_argument(
+        "--embed-dim", type=int, default=None,
+        help="Override preset width (e.g. 1024). Used for width-vs-depth experiments.",
+    )
+    parser.add_argument(
+        "--num-heads", type=int, default=None,
+        help="Override preset head count (typically embed_dim/64).",
+    )
+    parser.add_argument(
+        "--num-encoder-layers", type=int, default=None,
+        help="Override preset encoder depth. Combine with --num-decoder-layers for depth sweeps.",
+    )
+    parser.add_argument(
+        "--num-decoder-layers", type=int, default=None,
+        help="Override preset decoder depth.",
+    )
+    parser.add_argument(
+        "--temporal-every", type=int, default=None,
+        help="Layer i is temporal iff i %% temporal_every == temporal_every-1. Default 2 "
+             "(every-2 = 50%%, pre-2026-05-28 default). Pass 4 for paper Fig. 2 (~25%%).",
+    )
+    parser.add_argument(
         "--sequence-length",
         type=int,
         default=16,
@@ -608,6 +643,13 @@ def main():
         args.model_size,
         use_rope=args.use_rope,
         gradient_checkpointing=args.gradient_checkpointing,
+        latent_dim=args.latent_dim,
+        num_latents=args.num_latents,
+        embed_dim=args.embed_dim,
+        num_heads=args.num_heads,
+        num_encoder_layers=args.num_encoder_layers,
+        num_decoder_layers=args.num_decoder_layers,
+        temporal_every=args.temporal_every,
     )
     model = model.to(args.device)
     print(f"Model parameters: {model.get_num_params():,}")
@@ -636,6 +678,12 @@ def main():
     # Estimate total optimizer steps accounting for gradient accumulation
     steps_per_epoch = len(dataloader) // args.gradient_accumulation
     total_steps = args.epochs * steps_per_epoch
+    # Honor --max-steps as the true horizon for the LR scheduler so WSD decay
+    # actually fires before the run stops. Otherwise epochs=999 gives a huge
+    # total and the decay branch (which triggers at total - decay_steps) is
+    # never reached. Cosine likewise needs the right horizon to land at 0.
+    if args.max_steps > 0:
+        total_steps = min(total_steps, args.max_steps)
     if args.lr_schedule == "cosine":
         scheduler = create_cosine_schedule(optimizer, total_steps, args.warmup_steps)
         print(f"LR schedule: cosine  warmup={args.warmup_steps}  total={total_steps}")

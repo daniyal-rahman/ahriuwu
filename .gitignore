@@ -57,3 +57,5 @@ lazygit.tar.gz
 # Claude Code
 CLAUDE.md
 .claude/
+_eval_frames_nfs/
+_ahriuwu_patch_pickup/

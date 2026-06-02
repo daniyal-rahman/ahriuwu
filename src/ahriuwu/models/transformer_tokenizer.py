@@ -181,6 +181,11 @@ class TransformerEncoder(nn.Module):
 
     Takes patches, concatenates learned latent tokens, applies alternating
     spatial/temporal attention blocks. Outputs latent tokens only.
+
+    ``temporal_every`` controls the temporal/spatial layer ratio: layer i is
+    temporal iff ``i % temporal_every == temporal_every - 1``. Default 2 means
+    every other layer is temporal (50% — pre-2026-05-28 default). Paper Fig. 2
+    is "Space Layer L 4" i.e. 1 temporal per 4 spatial (~25%); pass 4 to match.
     """
 
     def __init__(
@@ -197,6 +202,7 @@ class TransformerEncoder(nn.Module):
         soft_cap: float | None = 50.0,
         gradient_checkpointing: bool = False,
         max_time: int = 256,
+        temporal_every: int = 2,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -205,6 +211,7 @@ class TransformerEncoder(nn.Module):
         self.use_sincos_pos = use_sincos_pos
         self.use_rope = use_rope
         self.gradient_checkpointing = gradient_checkpointing
+        self.temporal_every = temporal_every
         self.grid_size = int(math.sqrt(num_patches))
         N = num_patches + num_latents
 
@@ -231,11 +238,13 @@ class TransformerEncoder(nn.Module):
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
 
-        # Alternating spatial/temporal blocks (every 2nd = temporal)
+        # Spatial/temporal block pattern: 1 temporal per ``temporal_every`` layers.
+        # temporal_every=2 => s,t,s,t,...  (50%, pre-2026-05-28 default)
+        # temporal_every=4 => s,s,s,t,s,s,s,t  (~25%, paper Fig. 2)
         self.blocks = nn.ModuleList([
             SpaceTimeTransformerBlock(
                 embed_dim, num_heads, dropout, use_qk_norm, soft_cap,
-                attn_type="temporal" if i % 2 == 1 else "spatial",
+                attn_type="temporal" if i % temporal_every == temporal_every - 1 else "spatial",
                 max_time=max_time,
                 spatial_size=self.grid_size if use_rope else 0,
             )
@@ -330,6 +339,7 @@ class TransformerDecoder(nn.Module):
         soft_cap: float | None = 50.0,
         gradient_checkpointing: bool = False,
         max_time: int = 256,
+        temporal_every: int = 2,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -338,6 +348,7 @@ class TransformerDecoder(nn.Module):
         self.use_sincos_pos = use_sincos_pos
         self.use_rope = use_rope
         self.gradient_checkpointing = gradient_checkpointing
+        self.temporal_every = temporal_every
         self.grid_size = int(math.sqrt(num_patches))
         N = num_patches + num_latents
 
@@ -364,11 +375,12 @@ class TransformerDecoder(nn.Module):
             torch.randn(1, num_latents, embed_dim) * 0.02
         )
 
-        # Alternating spatial/temporal blocks (every 2nd = temporal)
+        # Spatial/temporal block pattern: 1 temporal per ``temporal_every`` layers.
+        # See TransformerEncoder docstring for the convention.
         self.blocks = nn.ModuleList([
             SpaceTimeTransformerBlock(
                 embed_dim, num_heads, dropout, use_qk_norm, soft_cap,
-                attn_type="temporal" if i % 2 == 1 else "spatial",
+                attn_type="temporal" if i % temporal_every == temporal_every - 1 else "spatial",
                 max_time=max_time,
                 spatial_size=self.grid_size if use_rope else 0,
             )
@@ -600,6 +612,7 @@ class TransformerTokenizer(nn.Module):
         soft_cap: float | None = 50.0,
         gradient_checkpointing: bool = False,
         max_time: int = 256,
+        temporal_every: int = 2,
     ):
         super().__init__()
         # Authoritative record of EVERY constructor arg — the full architecture
@@ -614,6 +627,7 @@ class TransformerTokenizer(nn.Module):
             "dropout": dropout, "use_sincos_pos": use_sincos_pos, "use_rope": use_rope,
             "use_qk_norm": use_qk_norm, "soft_cap": soft_cap,
             "gradient_checkpointing": gradient_checkpointing, "max_time": max_time,
+            "temporal_every": temporal_every,
         }
         self.img_size = img_size
         self.patch_size = patch_size
@@ -634,11 +648,13 @@ class TransformerTokenizer(nn.Module):
             embed_dim, num_heads, num_encoder_layers,
             self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
             use_qk_norm, soft_cap, gradient_checkpointing, max_time,
+            temporal_every=temporal_every,
         )
         self.decoder = TransformerDecoder(
             embed_dim, num_heads, num_decoder_layers,
             self.num_patches, num_latents, dropout, use_sincos_pos, use_rope,
             use_qk_norm, soft_cap, gradient_checkpointing, max_time,
+            temporal_every=temporal_every,
         )
 
         # Bottleneck (encoder latents → compact form for dynamics)
@@ -861,6 +877,13 @@ def create_transformer_tokenizer(
     use_qk_norm: bool = True,
     soft_cap: float | None = 50.0,
     gradient_checkpointing: bool = False,
+    latent_dim: int | None = None,
+    num_latents: int | None = None,
+    embed_dim: int | None = None,
+    num_heads: int | None = None,
+    num_encoder_layers: int | None = None,
+    num_decoder_layers: int | None = None,
+    temporal_every: int | None = None,
 ) -> TransformerTokenizer:
     """Create transformer tokenizer with preset sizes.
 
@@ -870,6 +893,9 @@ def create_transformer_tokenizer(
         use_qk_norm: Whether to use QK normalization for attention stability
         soft_cap: Soft cap value for attention logits (None = no capping)
         gradient_checkpointing: Use gradient checkpointing to save memory (~2x reduction)
+        latent_dim: If set, overrides the preset's latent_dim (per-token bottleneck width).
+            Use for paper-faithful bottleneck (e.g. 32) at a non-matching preset width.
+        num_latents: If set, overrides the preset's num_latents (number of bottleneck tokens).
 
     Returns:
         TransformerTokenizer instance
@@ -920,6 +946,25 @@ def create_transformer_tokenizer(
         "soft_cap": soft_cap,
         "gradient_checkpointing": gradient_checkpointing,
     }
+    # Optional architecture overrides — let callers pin paper-faithful axes
+    # (e.g. medium width with latent_dim=32, or large-width with 8+8 depth,
+    # or temporal_every=4 to match paper Fig. 2). Anything that changes the
+    # forward pass flows through model.config via TransformerTokenizer.__init__
+    # so checkpoints stay self-describing.
+    if latent_dim is not None:
+        resolved["latent_dim"] = latent_dim
+    if num_latents is not None:
+        resolved["num_latents"] = num_latents
+    if embed_dim is not None:
+        resolved["embed_dim"] = embed_dim
+    if num_heads is not None:
+        resolved["num_heads"] = num_heads
+    if num_encoder_layers is not None:
+        resolved["num_encoder_layers"] = num_encoder_layers
+    if num_decoder_layers is not None:
+        resolved["num_decoder_layers"] = num_decoder_layers
+    if temporal_every is not None:
+        resolved["temporal_every"] = temporal_every
     model = TransformerTokenizer(**resolved)
     # TransformerTokenizer.__init__ already recorded the full constructor
     # spec in model.config (authoritative). Just stamp the preset name on top
