@@ -33,17 +33,17 @@ CMD=(
   --packed
   --checkpoint-dir "$CHECKPOINT_DIR"
   --model-size small
-  --latent-dim 48
+  --latent-dim 32
   --tokenizer-type transformer
   --alternating-lengths
-  --seq-len-short 32
-  --seq-len-long 64
-  --batch-size-short 8
-  --batch-size-long 4
+  --seq-len-short 128
+  --seq-len-long 256
+  --batch-size-short 2
+  --batch-size-long 1
   --long-ratio 0.1
-  --gradient-accumulation 4
-  --gradient-accumulation-short 4
-  --gradient-accumulation-long 8
+  --gradient-accumulation 8
+  --gradient-accumulation-short 8
+  --gradient-accumulation-long 16
   --gradient-checkpointing
   --no-compile
   --shortcut-forcing

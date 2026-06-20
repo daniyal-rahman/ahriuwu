@@ -14,6 +14,7 @@ from .hud_regions import get_hud_regions, crop_region, REPLAY_HUD_1080P
 from .dataset import (
     SingleFrameDataset,
     FrameSequenceDataset,
+    PackedLatentSequenceDataset,
     VideoGroupedSampler,
     VideoShuffleSampler,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "REPLAY_HUD_1080P",
     "SingleFrameDataset",
     "FrameSequenceDataset",
+    "PackedLatentSequenceDataset",
     "VideoGroupedSampler",
     "VideoShuffleSampler",
     "identify_teams",

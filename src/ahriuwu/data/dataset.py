@@ -254,3 +254,136 @@ class VideoShuffleSampler(Sampler):
 
     def __len__(self) -> int:
         return sum(len(v) for v in self.video_to_indices.values())
+
+
+class PackedLatentSequenceDataset(Dataset):
+    """Label-free packed-latent sequences for dynamics training.
+
+    Reads packed per-video files — ``<latents_dir>/<video_id>.pt`` (preferred)
+    or ``<video_id>.npz`` (fallback) — each holding ``latents`` of shape
+    ``(N, C, H, W)`` and ``frame_indices`` of shape ``(N,)``, and emits
+    fixed-length windows over *contiguous* frame runs (no gaps within a window).
+
+    Latents only — no actions/rewards.  The action/reward-conditioned path lives
+    in :class:`ahriuwu.data.replay_dataset.ReplayLatentSequenceDataset`, which
+    consumes the same packed format plus ``labels.json``/``clicks.json``.
+
+    The channel count ``C`` (a.k.a. latent_dim) is whatever the packed files
+    hold — never hardcoded — so the same code serves the dim-48 (old tokenizer)
+    and dim-32 (frozen v7) latents unchanged.  Each item is
+    ``{"latents": (T, C, H, W) float tensor, "video_id": str, "start_frame": int}``.
+    """
+
+    def __init__(
+        self,
+        latents_dir: Path | str,
+        sequence_length: int = 64,
+        stride: int = 1,
+        max_cache_size: int = 5,
+        load_actions: bool = False,
+        features_dir=None,  # accepted for call-site compatibility; unused
+    ):
+        if load_actions:
+            raise ValueError(
+                "PackedLatentSequenceDataset is latents-only. Use "
+                "ahriuwu.data.replay_dataset.ReplayLatentSequenceDataset for "
+                "action/reward conditioning."
+            )
+        self.latents_dir = Path(latents_dir)
+        self.sequence_length = int(sequence_length)
+        self.stride = int(stride)
+        self.max_cache_size = int(max_cache_size)
+
+        # Per-worker LRU cache of packed arrays (heavy: ~200MB/video).
+        self._cache: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        self._cache_order: list[str] = []
+        self.sequences: list[dict] = []
+        self._index()
+
+    # ───────────────────────── indexing ─────────────────────────
+
+    def _index(self) -> None:
+        pt_files = sorted(self.latents_dir.glob("*.pt"))
+        seen = {p.stem for p in pt_files}
+        files = [p for p in pt_files if p.stem != "index"]
+        files += [p for p in sorted(self.latents_dir.glob("*.npz")) if p.stem not in seen]
+        for path in files:
+            self._index_video(path.stem, self._read_frame_indices(path))
+        if not self.sequences:
+            raise RuntimeError(
+                f"No contiguous sequences of length {self.sequence_length} found "
+                f"under {self.latents_dir} ({len(files)} packed files scanned)."
+            )
+        print(
+            f"PackedLatentSequenceDataset: {len(self.sequences)} sequences from "
+            f"{len(files)} videos (T={self.sequence_length}, stride={self.stride})"
+        )
+
+    @staticmethod
+    def _read_frame_indices(path: Path) -> np.ndarray:
+        if path.suffix == ".pt":
+            # mmap=True so indexing reads only the small frame_indices tensor,
+            # not the ~200MB latents tensor in each packed file.
+            return torch.load(path, weights_only=True, mmap=True)["frame_indices"].numpy()
+        with np.load(path) as data:
+            return data["frame_indices"].copy()
+
+    def _index_video(self, video_id: str, frame_indices: np.ndarray) -> None:
+        n = len(frame_indices)
+        if n < self.sequence_length:
+            return
+        frame_to_idx = {int(frame_indices[i]): i for i in range(n)}
+        frame_nums = sorted(frame_to_idx)
+        run_start, run_len = frame_nums[0], 1
+        for i in range(1, len(frame_nums)):
+            if frame_nums[i] == frame_nums[i - 1] + 1:
+                run_len += 1
+            else:
+                self._emit(video_id, run_start, run_len, frame_to_idx)
+                run_start, run_len = frame_nums[i], 1
+        self._emit(video_id, run_start, run_len, frame_to_idx)
+
+    def _emit(self, video_id: str, run_start: int, run_len: int, frame_to_idx: dict) -> None:
+        if run_len < self.sequence_length:
+            return
+        for off in range(0, run_len - self.sequence_length + 1, self.stride):
+            start_frame = run_start + off
+            self.sequences.append({
+                "video_id": video_id,
+                "start_frame": start_frame,
+                "start_idx": frame_to_idx[start_frame],
+            })
+
+    # ───────────────────────── loading ─────────────────────────
+
+    def _load(self, video_id: str) -> tuple[np.ndarray, np.ndarray]:
+        if video_id in self._cache:
+            self._cache_order.remove(video_id)
+            self._cache_order.append(video_id)
+            return self._cache[video_id]
+        while len(self._cache) >= self.max_cache_size:
+            del self._cache[self._cache_order.pop(0)]
+        pt_path = self.latents_dir / f"{video_id}.pt"
+        if pt_path.exists():
+            data = torch.load(pt_path, weights_only=True)
+            arr = (data["latents"].numpy(), data["frame_indices"].numpy())
+        else:
+            with np.load(self.latents_dir / f"{video_id}.npz") as data:
+                arr = (data["latents"].copy(), data["frame_indices"].copy())
+        self._cache[video_id] = arr
+        self._cache_order.append(video_id)
+        return arr
+
+    def __len__(self) -> int:
+        return len(self.sequences)
+
+    def __getitem__(self, idx: int) -> dict:
+        seq = self.sequences[idx]
+        latents_arr, _ = self._load(seq["video_id"])
+        s = seq["start_idx"]
+        latents = torch.from_numpy(latents_arr[s:s + self.sequence_length].copy())
+        return {
+            "latents": latents,            # (T, C, H, W)
+            "video_id": seq["video_id"],
+            "start_frame": seq["start_frame"],
+        }

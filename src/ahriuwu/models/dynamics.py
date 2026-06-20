@@ -100,12 +100,16 @@ class TransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         independent_frames: bool = False,
+        cache: dict | None = None,
+        append: bool = False,
     ) -> torch.Tensor:
         """Forward pass (standard pre-norm transformer).
 
         Args:
             x: (B, T, S, D) features
             independent_frames: If True, treat frames as independent (temporal attention only)
+            cache: Optional KV cache for this temporal block (rollout only).
+            append: When caching, whether to write the new K/V back to the cache.
 
         Returns:
             (B, T, S, D) transformed features
@@ -113,14 +117,17 @@ class TransformerBlock(nn.Module):
         B, T, S, D = x.shape
 
         if self.attn_type == "spatial":
-            # Reshape to (B*T, S, D) for spatial attention
+            # Reshape to (B*T, S, D) for spatial attention (per-frame; cache-free)
             h = self.norm1(x).view(B * T, S, D)
             h = self.attn(h)
             x = x + h.view(B, T, S, D)
         else:
             # Reshape to (B*S, T, D) for temporal attention
             h = self.norm1(x).permute(0, 2, 1, 3).reshape(B * S, T, D)
-            h = self.attn(h, independent_frames=independent_frames)
+            if cache is not None:
+                h = self.attn.forward_temporal_cached(h, cache, append)
+            else:
+                h = self.attn(h, independent_frames=independent_frames)
             x = x + h.view(B, S, T, D).permute(0, 2, 1, 3)
 
         x = x + self.ffn(self.norm2(x))
@@ -688,105 +695,13 @@ class DynamicsTransformer(nn.Module):
         B, T, C, H, W = z_tau.shape
         assert H == W == self.spatial_size, f"Expected {self.spatial_size}x{self.spatial_size}, got {H}x{W}"
 
-        # Reshape to (B, T, S, C) where S = H*W
-        x = z_tau.view(B, T, C, -1).permute(0, 1, 3, 2)  # (B, T, S, C)
-
-        # Project to model dim
-        x = self.input_proj(x)  # (B, T, S, D) where S = spatial_tokens
-
-        # Add register tokens if enabled
-        if self.register_tokens is not None:
-            # Expand register tokens to match batch and time: (1, 1, R, D) -> (B, T, R, D)
-            registers = self.register_tokens.expand(B, T, -1, -1)
-            # Concatenate: (B, T, S+R, D)
-            x = torch.cat([x, registers], dim=2)
-
-        # Build action token and append to sequence
-        if self.use_actions:
-            if actions is not None:
-                action_token = self.embed_actions(actions)  # (B, T, D)
-            else:
-                action_token = self.no_action_embed.expand(B, T, -1)
-            # (B, T, D) -> (B, T, 1, D) and concatenate
-            x = torch.cat([x, action_token.unsqueeze(2)], dim=2)
-
-        # Build conditioning (tau + step_size).
-        # At our scale, attention-only conditioning is too weak (158x gradient gap).
-        # We add tau directly to all tokens for strong denoising signal, and add
-        # step_size directly for strong shortcut signal. Both are also projected
-        # together into an appended token for cross-attention.
-        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
-        tau_emb = self.tau_embed(tau_idx)
-        if tau_emb.dim() == 2:
-            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
-        if step_size is not None:
-            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
-        else:
-            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)
-        step_emb = self.step_embed(step_idx)
-        if step_emb.dim() == 2:
-            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
-
-        # Additive: separate paths so step_size gradient isn't suppressed by tau
-        x = x + tau_emb.unsqueeze(2) + step_emb.unsqueeze(2)
-
-        # Game-time conditioning. Discretize seconds → bucket index → lookup,
-        # then add to all spatial tokens of each frame. We add along the same
-        # additive path as tau/step so the gradient signal is on equal footing
-        # with the other scalar conditioners (DreamerV4-style). When the
-        # caller didn't supply game_time, fall back to the learned
-        # no_gt_embed so the path is still occupied (avoids relying on the
-        # model to ignore an all-zero contribution it never saw at train).
-        if self.use_game_time:
-            if game_time is not None:
-                # Accept (B,) by broadcasting to (B, T). Common during single-
-                # frame inference where the same game_time applies to all T.
-                gt = game_time
-                if gt.dim() == 1:
-                    gt = gt.unsqueeze(1).expand(-1, T)
-                gt_idx = (gt.float() / self.game_time_bucket_seconds).long().clamp(
-                    0, self.game_time_num_buckets - 1
-                )
-                gt_emb = self.gt_embed(gt_idx)  # (B, T, D)
-                # Train-time dropout. Per-batch coin flip: with probability
-                # gt_dropout, drop the whole batch's game_time signal and
-                # substitute no_gt_embed. Keeps the model from leaning on
-                # game_time so the same weights serve action-labeled (gt
-                # known) and zero-shot (gt unknown) inference.
-                if self.training and self.gt_dropout > 0 and torch.rand(1).item() < self.gt_dropout:
-                    gt_emb = self.no_gt_embed.expand(B, T, -1)
-            else:
-                gt_emb = self.no_gt_embed.expand(B, T, -1)  # (1,1,D) -> (B,T,D)
-            x = x + gt_emb.unsqueeze(2)
-
-        # Also append combined token for attention pathway
-        cond_token = self._build_condition_token(tau, step_size, B, T)
-        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)
-
-        # x is now (B, T, total_spatial_tokens + 1, D)
-        # Layout: [latent+cond, register+cond, action?+cond, cond_token]
-
-        # Transformer blocks
-        for block in self.blocks:
-            if self.gradient_checkpointing and self.training:
-                x = checkpoint(
-                    _checkpoint_block_forward,
-                    block, x, independent_frames,
-                    use_reentrant=False,
-                )
-            else:
-                x = block(x, independent_frames=independent_frames)
-
-        # Strip extra tokens (register, action, condition) before output projection
-        # Only keep latent tokens
-        x_spatial = x[:, :, :self.spatial_tokens, :]  # (B, T, S, D)
-
-        # Output projection for z prediction
-        z_out = self.norm_out(x_spatial)
-        z_out = self.output_proj(z_out)  # (B, T, S, C)
-
-        # Reshape back to (B, T, C, H, W)
-        z_0_pred = z_out.permute(0, 1, 3, 2).view(B, T, C, H, W)
+        # Token embedding, the transformer block stack, and the z-prediction
+        # output projection are factored into helpers so the cached rollout
+        # path (self.rollout) reuses byte-identical token-building and output
+        # logic — guaranteeing the KV-cache path matches training.
+        x = self._build_tokens(z_tau, tau, step_size, actions, game_time)
+        x = self._run_blocks(x, independent_frames=independent_frames)
+        z_0_pred = self._project_out(x, B, T, C, H, W)
 
         # Process agent tokens if enabled
         if self.use_agent_tokens:
@@ -819,6 +734,169 @@ class DynamicsTransformer(nn.Module):
             return z_0_pred, agent_out
 
         return z_0_pred
+
+    # ------------------------------------------------------------------
+    # Shared building blocks (used by forward() and the cached rollout)
+    # ------------------------------------------------------------------
+
+    def _build_tokens(self, z_tau, tau, step_size, actions=None, game_time=None):
+        """Embed noisy latents + register/action/cond tokens + additive tau/step/gt.
+
+        Returns x of shape (B, T, total_spatial_tokens, D). Identical conditioning
+        for forward() and the cached rollout (single source of truth).
+        """
+        B, T, C, H, W = z_tau.shape
+        x = z_tau.view(B, T, C, -1).permute(0, 1, 3, 2)  # (B, T, S, C)
+        x = self.input_proj(x)  # (B, T, S, D)
+
+        if self.register_tokens is not None:
+            registers = self.register_tokens.expand(B, T, -1, -1)
+            x = torch.cat([x, registers], dim=2)
+
+        if self.use_actions:
+            if actions is not None:
+                action_token = self.embed_actions(actions)
+            else:
+                action_token = self.no_action_embed.expand(B, T, -1)
+            x = torch.cat([x, action_token.unsqueeze(2)], dim=2)
+
+        # tau + step_size injected additively to all tokens (strong conditioning
+        # signal) and also as an appended token below.
+        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
+        tau_emb = self.tau_embed(tau_idx)
+        if tau_emb.dim() == 2:
+            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
+        if step_size is not None:
+            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
+        else:
+            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)
+        step_emb = self.step_embed(step_idx)
+        if step_emb.dim() == 2:
+            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
+        x = x + tau_emb.unsqueeze(2) + step_emb.unsqueeze(2)
+
+        if self.use_game_time:
+            if game_time is not None:
+                gt = game_time
+                if gt.dim() == 1:
+                    gt = gt.unsqueeze(1).expand(-1, T)
+                gt_idx = (gt.float() / self.game_time_bucket_seconds).long().clamp(
+                    0, self.game_time_num_buckets - 1
+                )
+                gt_emb = self.gt_embed(gt_idx)
+                if self.training and self.gt_dropout > 0 and torch.rand(1).item() < self.gt_dropout:
+                    gt_emb = self.no_gt_embed.expand(B, T, -1)
+            else:
+                gt_emb = self.no_gt_embed.expand(B, T, -1)
+            x = x + gt_emb.unsqueeze(2)
+
+        cond_token = self._build_condition_token(tau, step_size, B, T)
+        x = torch.cat([x, cond_token.unsqueeze(2)], dim=2)
+        return x
+
+    def _run_blocks(self, x, independent_frames=False, caches=None, append=False):
+        """Run the block stack. With ``caches`` (rollout), temporal blocks read/
+        write their KV-cache slot (in block order); spatial blocks run per-frame.
+        Gradient checkpointing applies only on the cache-free training path.
+        """
+        ci = 0
+        for block in self.blocks:
+            if caches is not None and block.attn_type == "temporal":
+                x = block(x, cache=caches[ci], append=append)
+                ci += 1
+            elif self.gradient_checkpointing and self.training and caches is None:
+                x = checkpoint(
+                    _checkpoint_block_forward, block, x, independent_frames,
+                    use_reentrant=False,
+                )
+            else:
+                x = block(x, independent_frames=independent_frames)
+        return x
+
+    def _project_out(self, x, B, T, C, H, W):
+        """Strip non-latent tokens, RMSNorm, project to latent dim, reshape."""
+        x_spatial = x[:, :, :self.spatial_tokens, :]
+        z_out = self.norm_out(x_spatial)
+        z_out = self.output_proj(z_out)
+        return z_out.permute(0, 1, 3, 2).view(B, T, C, H, W)
+
+    @torch.no_grad()
+    def rollout(
+        self,
+        context: torch.Tensor,
+        predict_frames: int,
+        num_steps: int = 4,
+        k_max: int = 64,
+        tau_ctx: float = 0.1,
+        actions_context: dict | None = None,
+        actions_future: dict | None = None,
+        game_time: torch.Tensor | None = None,
+        device=None,
+    ) -> torch.Tensor:
+        """Autoregressive latent rollout with a temporal KV cache.
+
+        Generates ``predict_frames`` future latents one at a time. Each new frame
+        is denoised in ``num_steps`` Euler steps (shortcut step d = k_max //
+        num_steps) while attending to the cached temporal K/V of all prior frames
+        instead of reprocessing them — per-frame cost is ~ K * forward(1 frame)
+        rather than K * forward(full context).
+
+        Args:
+            context: (B, C, Cc, H, W) clean-ish context latents.
+            predict_frames: number of frames to roll out.
+            num_steps: denoising steps per frame (K). K=4 with the shortcut, K=64 full.
+            k_max: shortcut grid size (step size d = k_max // num_steps).
+            tau_ctx: context corruption *width*; context tau ~ U(1-tau_ctx, 1).
+            actions_context: (B, C, ...) action dict for context (or None).
+            actions_future: (B, predict_frames, ...) action dict per generated frame.
+        Returns:
+            (B, predict_frames, Cc, H, W) predicted latents.
+        """
+        was_training = self.training
+        self.eval()
+        device = device or context.device
+        B, Ctx = context.shape[:2]
+        Cc, H, W = context.shape[2], context.shape[3], context.shape[4]
+        n_temporal = sum(1 for blk in self.blocks if blk.attn_type == "temporal")
+        caches = [{"k": None, "v": None, "pos": 0} for _ in range(n_temporal)]
+        d_one = torch.ones(B, dtype=torch.long, device=device)
+
+        # --- prefill: context near-clean (tau ~ U(1-tau_ctx, 1)); fill caches ---
+        ctx_tau = (1.0 - tau_ctx) + torch.rand(B, Ctx, device=device) * tau_ctx
+        x = self._build_tokens(context, ctx_tau, d_one, actions_context, game_time)
+        self._run_blocks(x, caches=caches, append=True)  # output discarded; caches filled
+
+        eps = 1e-3
+        step = (1.0 - eps) / num_steps
+        d = max(1, k_max // num_steps)
+        preds = []
+        for t in range(predict_frames):
+            a_step = None
+            if actions_future is not None:
+                a_step = {kk: vv[:, t:t + 1] for kk, vv in actions_future.items()}
+            noise0 = torch.randn(B, 1, Cc, H, W, device=device)
+            tgt = noise0.clone()
+            for i in range(num_steps):
+                tau_t = eps + i * step
+                tau1 = torch.full((B, 1), tau_t, device=device)
+                dd = torch.full((B,), d, dtype=torch.long, device=device)
+                xt = self._build_tokens(tgt, tau1, dd, a_step, game_time)
+                xt = self._run_blocks(xt, caches=caches, append=False)  # transient
+                z0 = self._project_out(xt, B, 1, Cc, H, W)
+                if i < num_steps - 1:
+                    nt = tau_t + step
+                    tgt = nt * z0 + (1.0 - nt) * noise0
+                else:
+                    tgt = z0
+            preds.append(tgt)
+            # commit the clean frame at tau=1 -> appends its K/V to the caches
+            commit_tau = torch.ones(B, 1, device=device)
+            xc = self._build_tokens(tgt, commit_tau, d_one, a_step, game_time)
+            self._run_blocks(xc, caches=caches, append=True)
+
+        if was_training:
+            self.train()
+        return torch.cat(preds, dim=1)
 
     def get_num_params(self) -> int:
         """Get total number of trainable parameters."""

@@ -150,16 +150,19 @@ class DiffusionSchedule:
         shape: tuple,
         num_steps: int = 64,
         device: torch.device | str | None = None,
-        context: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Sample from the model using Euler integration.
+        """Sample (unconditionally) from the model using Euler integration.
+
+        This is a generic many-step x-prediction sampler (step size d=1). The
+        conditional, context-corrupting autoregressive rollout used at inference
+        lives in ``scripts/eval_rollout_variants.py``; do not add context
+        conditioning here — the dynamics ``forward`` has no ``context`` arg.
 
         Args:
             model: Dynamics model that predicts clean data
             shape: Shape of output (B, T, C, H, W) or (B, C, H, W)
             num_steps: Number of denoising steps
             device: Device to sample on
-            context: Optional context frames (for conditional generation)
 
         Returns:
             z_0: Sampled clean latents
@@ -180,8 +183,10 @@ class DiffusionSchedule:
             tau = eps + i * step_size
             tau_tensor = torch.full((shape[0],), tau, device=device)
 
-            # Predict clean data
-            z_0_pred = model(z_t, tau_tensor, context=context)
+            # Predict clean data (x-prediction; step size d=1)
+            z_0_pred = model(z_t, tau_tensor)
+            if isinstance(z_0_pred, tuple):  # use_agent_tokens path returns (z, agent)
+                z_0_pred = z_0_pred[0]
 
             # Euler step towards prediction
             if i < num_steps - 1:

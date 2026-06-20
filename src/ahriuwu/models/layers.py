@@ -21,7 +21,18 @@ except ImportError:
 
 
 class RMSNorm(nn.Module):
-    """Root Mean Square Layer Normalization."""
+    """Root Mean Square Layer Normalization (Zhang & Sennrich 2019).
+
+    out = x / sqrt(mean(x^2, dim=-1) + eps) * weight   (no mean-centering, unlike LayerNorm).
+
+    eps=1e-6 is the Gemma-2 default (config.rms_norm_eps), which this codebase
+    follows along with scale=1.0-under-QKNorm and soft_cap=50. Deliberately a
+    hardcoded constant, NOT a config knob: it's identical at all 6 RMSNorm/QKNorm
+    sites and there's no evidence eps matters for our case (it's a <0.1 dB knob).
+    NB it is NOT a universal constant — LLaMA-1 used 1e-6 but LLaMA-2 switched to
+    1e-5 and it measurably helped; if ever sweeping eps, change it HERE (one place)
+    rather than threading a config. Verified 2026-06-03 (see tests/verify_qknorm.py).
+    """
 
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
@@ -36,10 +47,16 @@ class RMSNorm(nn.Module):
 class QKNorm(nn.Module):
     """Query-Key Normalization for attention stability.
 
-    Normalizes Q and K independently before computing attention scores.
-    This prevents attention logits from growing too large with scale.
+    Normalizes Q and K independently (separate learned weights) over HEAD_DIM —
+    i.e. per-head, the last axis of the (B, H, seq, head_dim) q/k tensors. This is
+    the Gemma-2 convention exactly: query_norm = RMSNorm(head_dim, eps=rms_norm_eps).
+    Makes q,k scale-invariant (unit RMS) so attention logits can't blow up with
+    activation magnitude; paired with scale=1.0 (the 1/sqrt(d) factor is dropped
+    since q,k are already unit-RMS) and soft_cap=50. eps=1e-6 = Gemma-2 default;
+    see RMSNorm docstring for why it's a hardcoded constant not a config.
 
-    Reference: Gemma 2, DreamerV4
+    Reference: Gemma 2, DreamerV4. Verified 2026-06-03 (tests/verify_qknorm.py):
+    per-head axis, unit-RMS output, scale=1.0 wiring all confirmed.
     """
 
     def __init__(self, head_dim: int, eps: float = 1e-6):
@@ -367,9 +384,17 @@ class Attention(nn.Module):
         block_mask = None
         if mask_mod is not None:
             S = q.shape[2]
-            block_mask = create_block_mask(
-                mask_mod, B=None, H=None, Q_LEN=S, KV_LEN=S, device=q.device,
-            )
+            # Cache the block mask per (S, mask_mod, device). Rebuilding it every
+            # call (the previous behaviour) dominated flex latency at our scale.
+            if not hasattr(self, "_block_mask_cache"):
+                self._block_mask_cache = {}
+            ckey = (S, mask_mod.__name__, str(q.device))
+            block_mask = self._block_mask_cache.get(ckey)
+            if block_mask is None:
+                block_mask = create_block_mask(
+                    mask_mod, B=None, H=None, Q_LEN=S, KV_LEN=S, device=q.device,
+                )
+                self._block_mask_cache[ckey] = block_mask
 
         return flex_attention(
             q, k, v,
@@ -632,6 +657,66 @@ class Attention(nn.Module):
                 # causal_mask buffer stores True = masked *out*, invert for attend mask
                 mask = ~self.causal_mask[:T, :T]
             out = self._forward_manual(q, k, v, mask=mask)
+
+        out = out.transpose(1, 2).contiguous().reshape(B, T, -1)
+        return self.out_proj(out)
+
+    # ------------------------------------------------------------------
+    # Cached temporal forward (autoregressive rollout / KV cache)
+    # ------------------------------------------------------------------
+
+    def _rope_temporal_at(self, q, k, start_pos: int, T: int, device):
+        """1D RoPE for absolute temporal positions ``start_pos .. start_pos+T-1``."""
+        cos, sin = self.rope.get_rotary_emb(start_pos + T, device)
+        cos = cos[start_pos:start_pos + T].unsqueeze(0).unsqueeze(0)  # (1,1,T,D)
+        sin = sin[start_pos:start_pos + T].unsqueeze(0).unsqueeze(0)
+        return apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
+
+    def forward_temporal_cached(self, x: torch.Tensor, cache: dict, append: bool) -> torch.Tensor:
+        """Temporal attention against a KV cache (temporal mode only).
+
+        ``x``: ``(B', T, D)`` where the caller has reshaped ``(B, T, S, D) ->
+        (B*S, T, D)``. ``cache`` is a per-module dict ``{'k','v','pos'}`` holding
+        the post-RoPE K/V of the already-committed frames. The new frames are
+        placed at absolute temporal positions ``pos .. pos+T-1`` (so RoPE and the
+        causal mask are offset correctly), then attended against
+        ``[cached || new]``. When ``append`` is True the new K/V are written back
+        to the cache (commit / prefill); when False they are transient (a
+        diffusion denoising sub-step on the in-progress frame).
+
+        With an empty cache and ``append=True`` this is exactly the standard
+        causal temporal forward, so it is numerically equivalent to
+        :meth:`_forward_temporal` — verified by the rollout equivalence test.
+        """
+        B, T, D = x.shape
+        pos = cache["pos"]
+        q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim).transpose(1, 2)
+
+        if self.qk_norm is not None:
+            q, k = self.qk_norm(q, k)
+        q, k = self._rope_temporal_at(q, k, pos, T, x.device)
+        q, k = q.to(v.dtype), k.to(v.dtype)
+
+        if cache["k"] is not None:
+            full_k = torch.cat([cache["k"], k], dim=2)
+            full_v = torch.cat([cache["v"], v], dim=2)
+        else:
+            full_k, full_v = k, v
+        Lk = full_k.shape[2]  # == pos + T
+
+        # Causal: query at absolute (pos+i) attends key at absolute j iff j <= pos+i.
+        qpos = torch.arange(pos, pos + T, device=x.device).unsqueeze(1)  # (T,1)
+        kpos = torch.arange(Lk, device=x.device).unsqueeze(0)           # (1,Lk)
+        attn_mask = kpos <= qpos  # (T, Lk) True = attend
+
+        out = self._forward_manual(q, full_k, full_v, mask=attn_mask)
+
+        if append:
+            cache["k"] = full_k.detach()
+            cache["v"] = full_v.detach()
+            cache["pos"] = pos + T
 
         out = out.transpose(1, 2).contiguous().reshape(B, T, -1)
         return self.out_proj(out)
