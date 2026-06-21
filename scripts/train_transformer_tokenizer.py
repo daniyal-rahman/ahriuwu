@@ -13,14 +13,19 @@ Usage:
 
 import argparse
 import json
+import os
 import random
+import atexit
 import time
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.amp import GradScaler, autocast
 
 from ahriuwu.data.dataset import FrameSequenceDataset
@@ -33,6 +38,30 @@ from ahriuwu.utils.training import (
 )
 
 _preempt = PreemptionState()
+
+# DDP: True on rank 0 (and always in single-GPU). Side-effecting helpers
+# (checkpoint writes) early-return when False so only rank 0 touches disk.
+_IS_MAIN = True
+
+# Rank-0-gated logging. We shadow print() in THIS module only (NOT the global
+# builtin): library output, warnings, and tracebacks from EVERY rank still
+# surface, so a silently-failing non-main rank can't hide — the failure mode of
+# the previous `builtins.print = lambda: None` monkey-patch.
+_builtin_print = print
+def print(*args, **kwargs):  # noqa: A001 — intentional module-scoped rank gate
+    if _IS_MAIN:
+        _builtin_print(*args, **kwargs)
+
+
+def get_base(m):
+    """Peel torch.compile (._orig_mod) and DDP (.module) wrappers -> raw model."""
+    while True:
+        if hasattr(m, "_orig_mod"):
+            m = m._orig_mod
+        elif hasattr(m, "module"):
+            m = m.module
+        else:
+            return m
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +89,8 @@ def _save_tokenizer_checkpoints(
     (if different) the base checkpoint dir. Optionally saves to *step_path*
     for periodic numbered snapshots.
     """
+    if not _IS_MAIN:
+        return  # under DDP only rank 0 writes checkpoints
     extra = {"model_type": "transformer_tokenizer"}
     common = dict(
         model=model, optimizer=optimizer, scaler=scaler,
@@ -239,6 +270,36 @@ def parse_args():
              "(every-2 = 50%%, pre-2026-05-28 default). Pass 4 for paper Fig. 2 (~25%%).",
     )
     parser.add_argument(
+        "--mse-on-full-frame",
+        action="store_true",
+        help="DENOISING-AE objective: compute MSE on the FULL frame (all patches) while "
+             "still masking the INPUT. Default (off) is MAE-style masked-only MSE, which "
+             "structurally caps m=0 reconstruction fidelity (verified 2026-06-03: masked-only "
+             "20.4 dB vs full-frame 31.2 dB at m=0 on identical arch/clips, +10.8 dB). Since "
+             "this tokenizer DEPLOYS at m=0 (frozen encoder feeds dynamics on full frames), "
+             "full-frame MSE is the correct target; input masking is kept as augmentation.",
+    )
+    parser.add_argument(
+        "--reset-schedule",
+        action="store_true",
+        help="When resuming, load model+optimizer+RMS weights but RESET the LR "
+             "schedule clock to 0 (ignore the saved scheduler). Use to CONTINUE "
+             "a run that already finished its WSD decay (LR~0) for more epochs: "
+             "the fresh schedule re-warms then holds flat, instead of inheriting "
+             "the dead LR tail. Optimizer momentum is kept (true continuation).",
+    )
+    parser.add_argument(
+        "--tube-masking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="TUBE masking (default on): mask the SAME spatial patch locations across all "
+             "frames of a clip. Blocks the temporal-copy shortcut where per-frame-independent "
+             "masking lets the model fill a masked patch by copying the same location from an "
+             "adjacent frame where it's visible (temporal redundancy => no real learning). "
+             "Standard for video MAE. Use --no-tube-masking for the old per-frame-independent "
+             "behavior (ablation only).",
+    )
+    parser.add_argument(
         "--sequence-length",
         type=int,
         default=16,
@@ -328,6 +389,8 @@ def train_epoch(
     args: argparse.Namespace,
     checkpoint_dir: Path = None,
     base_checkpoint_dir: Path = None,
+    is_main: bool = True,
+    ddp_model=None,
 ):
     """Train for one epoch with MAE training.
 
@@ -381,9 +444,10 @@ def train_epoch(
             mask_ratio = random.uniform(args.mask_ratio_min, current_mask_max)
 
         # Generate mask outside torch.compile boundary
-        base_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+        base_model = get_base(model)
         mask_indices = base_model.make_mask(
-            frames.shape[0], frames.shape[1], mask_ratio, frames.device
+            frames.shape[0], frames.shape[1], mask_ratio, frames.device,
+            tube=args.tube_masking,
         )
 
         # Mixed precision forward
@@ -392,19 +456,29 @@ def train_epoch(
             recon = output["reconstruction"]
             mask_indices = output.get("mask_indices", None)
 
+            # MSE loss support: full-frame (denoising-AE) vs masked-only (MAE).
+            # Input is always masked above (representation benefit); this only
+            # controls which pixels the MSE is computed on. None => all patches.
+            loss_mask = None if args.mse_on_full_frame else mask_indices
+
             # Compute MAE loss — LPIPS every step for consistent loss magnitude
-            losses = loss_fn(recon, frames, mask_indices=mask_indices, skip_lpips=False)
+            losses = loss_fn(recon, frames, mask_indices=loss_mask, skip_lpips=False)
 
             # Normalize MSE and LPIPS separately via RunningRMS
             mse_norm = rms_trackers["mse"].update(losses["mse"])
             lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
             loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
 
-        # Backward with scaling
-        scaler.scale(loss).backward()
+        # Backward with scaling. Under DDP, suppress the gradient all-reduce on
+        # non-boundary micro-steps (no_sync) so it fires ONCE per optimizer step
+        # instead of every micro-step — critical for multi-GPU efficiency.
+        is_boundary = (batch_idx + 1) % accumulation_steps == 0
+        sync_ctx = ddp_model.no_sync() if (ddp_model is not None and not is_boundary) else nullcontext()
+        with sync_ctx:
+            scaler.scale(loss).backward()
 
         # Gradient accumulation
-        if (batch_idx + 1) % accumulation_steps == 0:
+        if is_boundary:
             # Gradient clipping
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -566,6 +640,33 @@ def train_epoch(
 
 def main():
     args = parse_args()
+
+    # ---- DDP setup (backward-compatible: single-GPU when not under torchrun) ----
+    global _IS_MAIN
+    ddp = int(os.environ.get("WORLD_SIZE", "1")) > 1
+    if ddp:
+        dist.init_process_group(backend="nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        torch.cuda.set_device(local_rank)
+        args.device = f"cuda:{local_rank}"
+    else:
+        local_rank, rank, world_size = 0, 0, 1
+    is_main = rank == 0
+    _IS_MAIN = is_main  # gates the module-scoped print() above (no builtin override)
+    if ddp:
+        # Tear down the process group on ANY exit (incl. exceptions) so sibling
+        # ranks don't hang and NCCL doesn't warn at shutdown.
+        atexit.register(lambda: dist.is_initialized() and dist.destroy_process_group())
+        # Keep the effective batch invariant: split accumulation across ranks so
+        # eff = world_size * batch_size * grad_accum stays the configured value.
+        if args.gradient_accumulation % world_size != 0:
+            print(f"WARNING: --gradient-accumulation {args.gradient_accumulation} is not "
+                  f"divisible by world_size {world_size}; effective batch will drift from the "
+                  f"configured {args.batch_size * args.gradient_accumulation} (not a clean split).")
+        args.gradient_accumulation = max(1, args.gradient_accumulation // world_size)
+
     install_preemption_handlers(_preempt)
 
     # Create run ID with timestamp
@@ -581,7 +682,8 @@ def main():
     print(f"Sequence length: {args.sequence_length}")
     print(f"Batch size: {args.batch_size}")
     print(f"Gradient accumulation: {args.gradient_accumulation}")
-    print(f"Effective batch size: {args.batch_size * args.gradient_accumulation}")
+    print(f"Effective batch size: {args.batch_size * args.gradient_accumulation * world_size}"
+          f"  (world_size={world_size}, per-rank accum={args.gradient_accumulation})")
     print(f"Learning rate: {args.lr}")
     print(f"LPIPS weight: {args.lpips_weight}")
     print(f"Mask ratio: {args.p_zero_mask:.0%} p=0, else U({args.mask_ratio_min}, {args.mask_ratio_max})")
@@ -627,10 +729,16 @@ def main():
         print("ERROR: No sequences found! Check --frames-dir path and --sequence-length.")
         return
 
+    sampler = (
+        DistributedSampler(dataset, num_replicas=world_size, rank=rank,
+                           shuffle=True, drop_last=True)
+        if ddp else None
+    )
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=(sampler is None),
+        sampler=sampler,
         num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
@@ -654,6 +762,13 @@ def main():
     model = model.to(args.device)
     print(f"Model parameters: {model.get_num_params():,}")
     print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
+
+    # DDP wrap BEFORE compile so torch.compile's DDPOptimizer manages the
+    # bucketed all-reduce. Keep the DDP handle for no_sync() during accumulation.
+    ddp_model = None
+    if ddp:
+        model = DDP(model, device_ids=[local_rank], gradient_as_bucket_view=True)
+        ddp_model = model
 
     # torch.compile the model (but NOT the LPIPS/VGG loss model)
     if not args.no_compile:
@@ -702,12 +817,12 @@ def main():
     # records the exact numeric dimensions (latent_dim, embed_dim, num_layers,
     # …). Without this, args.model_size='small' is the only identifier and
     # silently lies if the preset table changes between commits.
-    _inner = model._orig_mod if hasattr(model, "_orig_mod") else model
+    _inner = get_base(model)
     wandb_run = init_wandb(args, job_type="transformer_tokenizer", extra_config={
         "num_params": _inner.get_num_params(),
         "checkpoint_dir": str(checkpoint_dir),
         "model_config": getattr(_inner, "config", {}),
-    })
+    }) if is_main else None
 
     # RMS trackers for loss normalization
     rms_trackers = {
@@ -719,9 +834,11 @@ def main():
     start_epoch = 0
     global_step = 0
     if args.resume:
-        print(f"Resuming from {args.resume}...")
+        print(f"Resuming from {args.resume}..."
+              + ("  [--reset-schedule: fresh LR schedule from step 0]" if args.reset_schedule else ""))
         start_epoch, global_step, _, _ = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler, scheduler=scheduler, rms_trackers=rms_trackers
+            Path(args.resume), model, optimizer, scaler, scheduler=scheduler,
+            rms_trackers=rms_trackers, reset_schedule=args.reset_schedule,
         )
         # Resume at the same epoch (don't increment — the epoch may not be complete)
         print(f"Resuming from epoch {start_epoch}, step {global_step}")
@@ -734,13 +851,16 @@ def main():
     optimizer.zero_grad()
 
     for epoch in range(start_epoch, args.epochs):
+        if sampler is not None:
+            sampler.set_epoch(epoch)  # reshuffle the per-rank shards each epoch
         print(f"\n{'='*60}")
         print(f"Epoch {epoch + 1}/{args.epochs}")
         print("=" * 60)
 
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, scheduler, loss_fn, rms_trackers,
-            args.device, epoch, global_step, args, checkpoint_dir, base_checkpoint_dir
+            args.device, epoch, global_step, args, checkpoint_dir, base_checkpoint_dir,
+            is_main=is_main, ddp_model=ddp_model,
         )
 
         global_step = metrics["global_step"]
@@ -774,37 +894,43 @@ def main():
                 scheduler=scheduler, rms_trackers=rms_trackers, step_path=epoch_path,
             )
 
-        # Save best model
+        # Save best model (rank 0 only)
         if metrics["loss"] < best_loss:
             best_loss = metrics["loss"]
-            best_path = checkpoint_dir / "transformer_tokenizer_best.pt"
-            save_checkpoint(
-                best_path, model, optimizer, scaler, epoch, global_step,
-                metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers,
-                extra={"model_type": "transformer_tokenizer"},
-            )
-            print(f"New best model saved (loss: {best_loss:.4f})")
+            if is_main:
+                best_path = checkpoint_dir / "transformer_tokenizer_best.pt"
+                save_checkpoint(
+                    best_path, model, optimizer, scaler, epoch, global_step,
+                    metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers,
+                    extra={"model_type": "transformer_tokenizer"},
+                )
+                print(f"New best model saved (loss: {best_loss:.4f})")
 
         if metrics.get("preempted"):
             print("Preempted during epoch — exiting training loop.", flush=True)
             break
 
-        # Save sample reconstructions
-        save_samples(model, dataloader, args.device, sample_dir, epoch + 1)
+        # Save sample reconstructions (rank 0 only)
+        if is_main:
+            save_samples(model, dataloader, args.device, sample_dir, epoch + 1)
 
-    # Save training history
-    history_path = checkpoint_dir / "transformer_tokenizer_history.json"
-    with open(history_path, "w") as f:
-        json.dump(history, f, indent=2)
-    print(f"\nTraining history saved to {history_path}")
+    # Save training history (rank 0 only)
+    if is_main:
+        history_path = checkpoint_dir / "transformer_tokenizer_history.json"
+        with open(history_path, "w") as f:
+            json.dump(history, f, indent=2)
+        print(f"\nTraining history saved to {history_path}")
 
-    print("\n" + "=" * 60)
-    print("Training complete!")
-    print(f"Best loss: {best_loss:.4f}")
-    print(f"Best model: {checkpoint_dir / 'transformer_tokenizer_best.pt'}")
-    print("=" * 60)
+        print("\n" + "=" * 60)
+        print("Training complete!")
+        print(f"Best loss: {best_loss:.4f}")
+        print(f"Best model: {checkpoint_dir / 'transformer_tokenizer_best.pt'}")
+        print("=" * 60)
 
-    finish_wandb()
+    finish_wandb()  # self-no-ops on non-main (wandb.run is None)
+    if ddp:
+        dist.barrier()
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

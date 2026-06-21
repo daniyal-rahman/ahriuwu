@@ -716,20 +716,31 @@ class TransformerTokenizer(nn.Module):
         T: int,
         mask_ratio: float,
         device: torch.device,
+        tube: bool = True,
     ) -> torch.Tensor | None:
         """Generate MAE mask outside of torch.compile boundary.
 
-        Vectorized: a single (B, T, P) uniform-noise tensor + argsort gives
-        an independent random permutation per (b, t). Then the first
-        ``num_masked`` columns are flipped to True via scatter_. One kernel
-        each — no Python for-loop over B*T (~5-10× faster than the naive
-        version for typical batch sizes).
+        Vectorized: a uniform-noise tensor + argsort gives a random permutation,
+        then the first ``num_masked`` columns are flipped to True via scatter_.
+        One kernel each — no Python for-loop over B*T.
+
+        ``tube`` (default True): TUBE masking — the SAME spatial patch locations
+        are masked across ALL T frames of a clip. This blocks the temporal-copy
+        shortcut where, with per-frame-independent masking, the model fills a
+        masked patch by copying the same location from an adjacent frame where
+        it happens to be visible (temporal redundancy lets it avoid learning).
+        Tube masking forces a patch location to be hidden in every frame, so the
+        model must actually infer it. Standard for video MAE (VideoMAE et al.).
+
+        ``tube=False``: per-frame-independent masking (pre-2026-06-03 behavior),
+        which is cheatable via temporal copying — kept only for ablation.
 
         Args:
             B: batch size
             T: sequence length
             mask_ratio: fraction of patches to mask
             device: tensor device
+            tube: if True, mask the same patch locations across all frames
 
         Returns:
             (B, T*num_patches) boolean mask or None if mask_ratio == 0
@@ -737,12 +748,24 @@ class TransformerTokenizer(nn.Module):
         num_masked = round(mask_ratio * self.num_patches)
         if num_masked == 0:
             return None
-        noise = torch.rand(B, T, self.num_patches, device=device)
-        perm = noise.argsort(dim=-1)  # (B, T, P) — independent permutations
-        mask_indices = torch.zeros(
-            B, T, self.num_patches, dtype=torch.bool, device=device
-        )
-        mask_indices.scatter_(-1, perm[..., :num_masked], True)
+        if tube:
+            # One mask per (batch) item, shared across all T frames.
+            noise = torch.rand(B, self.num_patches, device=device)  # (B, P)
+            perm = noise.argsort(dim=-1)                            # (B, P)
+            tube_mask = torch.zeros(
+                B, self.num_patches, dtype=torch.bool, device=device
+            )
+            tube_mask.scatter_(-1, perm[..., :num_masked], True)    # (B, P)
+            # Broadcast the same spatial mask to every frame: (B, T, P)
+            mask_indices = tube_mask.unsqueeze(1).expand(B, T, self.num_patches).contiguous()
+        else:
+            # Per-frame-independent (cheatable via temporal copy) — ablation only.
+            noise = torch.rand(B, T, self.num_patches, device=device)
+            perm = noise.argsort(dim=-1)  # (B, T, P) — independent permutations
+            mask_indices = torch.zeros(
+                B, T, self.num_patches, dtype=torch.bool, device=device
+            )
+            mask_indices.scatter_(-1, perm[..., :num_masked], True)
         return mask_indices.reshape(B, T * self.num_patches)
 
     def encode(
@@ -822,6 +845,7 @@ class TransformerTokenizer(nn.Module):
         x: torch.Tensor,
         mask_ratio: float = 0.0,
         mask_indices: torch.Tensor | None = None,
+        tube: bool = True,
     ) -> dict:
         """Forward pass: encode then decode.
 
@@ -829,6 +853,8 @@ class TransformerTokenizer(nn.Module):
             x: (B, T, C, H, W) or (B, C, H, W) input frames in [0, 1]
             mask_ratio: MAE mask ratio — used only if mask_indices is None
             mask_indices: pre-computed mask from make_mask() (preferred)
+            tube: tube masking (same spatial locations across frames) when this
+                forward generates its own mask. Ignored if mask_indices given.
 
         Returns:
             dict with:
@@ -845,7 +871,7 @@ class TransformerTokenizer(nn.Module):
 
         # Generate mask outside compiled boundary if not provided
         if mask_indices is None and mask_ratio > 0:
-            mask_indices = self.make_mask(B, T, mask_ratio, x.device)
+            mask_indices = self.make_mask(B, T, mask_ratio, x.device, tube=tube)
 
         # Encode
         enc_out = self.encode(x, mask_indices)

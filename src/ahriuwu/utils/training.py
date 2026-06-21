@@ -27,6 +27,19 @@ except ImportError:
     HAS_BNB = False
 
 
+def _unwrap(model: nn.Module) -> nn.Module:
+    """Peel torch.compile (._orig_mod) and DDP (.module) wrappers so checkpoint
+    keys are canonical (no ``_orig_mod.`` / ``module.`` prefixes), regardless of
+    wrap order (DDP-then-compile or compile-then-DDP)."""
+    while True:
+        if hasattr(model, "_orig_mod"):
+            model = model._orig_mod
+        elif hasattr(model, "module"):
+            model = model.module
+        else:
+            return model
+
+
 class PreemptionState:
     """Two-mode preemption state for training scripts.
 
@@ -344,11 +357,12 @@ def save_checkpoint(
         extra: Additional key-value pairs to include in the checkpoint
                (e.g. {"model_type": "transformer_tokenizer"}).
     """
-    # Unwrap torch.compile so the saved keys are the canonical module names
-    # (no ``_orig_mod.`` prefix). Downstream consumers (eval, ports, hub
-    # uploads) shouldn't have to know about the compile wrapper. The load
-    # side still strips defensively, but new checkpoints are now clean.
-    inner = model._orig_mod if hasattr(model, "_orig_mod") else model
+    # Unwrap torch.compile AND DDP so the saved keys are the canonical module
+    # names (no ``_orig_mod.``/``module.`` prefix). Downstream consumers (eval,
+    # ports, hub uploads) shouldn't know about the wrappers. The load side still
+    # strips defensively, but new checkpoints are clean — and DDP runs must save
+    # the raw keys so a single-GPU eval/resume loads them unchanged.
+    inner = _unwrap(model)
 
     # Resolved model config (latent_dim, embed_dim, etc.) as set by the
     # ``create_*`` factory. CLI args alone are not enough — the same
@@ -376,7 +390,16 @@ def save_checkpoint(
         }
     if extra is not None:
         checkpoint.update(extra)
-    torch.save(checkpoint, path)
+    # Atomic write: save to a temp file in the SAME directory, then os.replace
+    # (atomic rename on POSIX). A SIGTERM landing mid-write can only truncate
+    # the temp file, never the real checkpoint — prevents the recurring
+    # "PytorchStreamReader: failed finding central directory" corruption seen
+    # when preemption/cancel killed the process during a direct torch.save to
+    # latest.pt (2026-06-03). On crash, the previous good latest.pt survives.
+    path = Path(path)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    torch.save(checkpoint, tmp)
+    os.replace(tmp, path)
     print(f"Saved checkpoint to {path}")
 
 
@@ -388,20 +411,28 @@ def load_checkpoint(
     scheduler=None,
     rms_trackers: dict = None,
     strict: bool = True,
+    reset_schedule: bool = False,
 ):
     """Load training checkpoint.
 
     Args:
         strict: If False, allows missing/unexpected keys in model state dict
                 (useful when loading checkpoints with new parameters).
+        reset_schedule: If True, load model+optimizer+RMS weights but DO NOT
+                restore the LR scheduler, and return global_step=0. Use to
+                CONTINUE a run that already finished its LR decay (e.g. extend a
+                completed WSD run to more epochs): the caller's fresh schedule
+                then runs warmup->flat->decay from 0 instead of inheriting the
+                old LR~0 tail. Optimizer momentum is kept (continuation, not
+                cold start); only the schedule clock resets.
     """
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     # Normalize state dict: strip _orig_mod. prefix if present
     state_dict = checkpoint["model_state_dict"]
     if any(k.startswith("_orig_mod.") for k in state_dict):
         state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-    # Load into unwrapped model if torch.compile'd
-    target = model._orig_mod if hasattr(model, "_orig_mod") else model
+    # Load into the raw model (peel torch.compile + DDP wrappers)
+    target = _unwrap(model)
     if strict:
         target.load_state_dict(state_dict)
     else:
@@ -414,12 +445,18 @@ def load_checkpoint(
             print(f"Warning: Unexpected keys in checkpoint: {unexpected}")
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     scaler.load_state_dict(checkpoint["scaler_state_dict"])
-    if scheduler is not None and "scheduler_state_dict" in checkpoint:
-        scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+    # Scheduler + step clock: skip when reset_schedule so a fresh warmup->flat->
+    # decay schedule runs from 0 (continuation past a finished decay).
+    if not reset_schedule:
+        if scheduler is not None and "scheduler_state_dict" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
     if rms_trackers is not None and "rms_state" in checkpoint:
         for k, state in checkpoint["rms_state"].items():
             if k in rms_trackers:
                 rms_trackers[k].load_state_dict(state)
+    if reset_schedule:
+        # Keep weights+optimizer+RMS, but reset the schedule clock to 0.
+        return (0, 0, checkpoint.get("loss", float("inf")), 0)
     return (
         checkpoint["epoch"],
         checkpoint["global_step"],
