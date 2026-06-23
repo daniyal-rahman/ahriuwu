@@ -35,8 +35,28 @@ LIMIT_RATE = None    # yt-dlp --limit-rate applied OUTSIDE the fast window (e.g.
                      # human-like so the residential IP stays under YouTube's radar)
 FAST_START_HOUR = 2  # full-speed (unthrottled) window [start, end) in the SERVER's local time
 FAST_END_HOUR = 9
-BLOCK_BACKOFF = 0    # seconds to sleep when a download fails on a bot-block, so a residential
-                     # IP cools instead of getting hammered with failed requests (--block-backoff)
+BLOCK_BACKOFF = 0    # DEPRECATED / no-op: the old "sleep N min on a block then keep trying"
+                     # behavior is replaced by the circuit breaker below (stop cold). The
+                     # --block-backoff CLI arg is still accepted but ignored, for launcher compat.
+# Politeness applied to EVERY yt-dlp call (see ytdlp() below). YouTube's bot-block
+# is velocity/reputation-based on the egress IP, and our IP is SHARED with the
+# user's personal yt-dlp use — so every request that touches YouTube must be paced.
+SLEEP_REQUESTS = 3.0  # sec between data/API requests WITHIN one run (paces metadata --print too)
+SLEEP_MIN = 10        # randomized human-like pause floor before each media download (sec)
+SLEEP_MAX = 30        # ...ceiling (yt-dlp picks a random value in [min,max] per download)
+# ^ Deliberately 2-5x the commonly-cited anti-bot minimums (sleep-requests ~1.5,
+#   interval 3-6). Re-tripping the per-IP block costs ~5 days of cooldown, so we
+#   would much rather be slow than fast. Combined with --workers 1 this is gentle.
+
+# --- bot-block CIRCUIT BREAKER ---------------------------------------------
+# The instant a request smells like a block, STOP the whole run cold and disable
+# the cron watchdog (touch the killswitch) — no retry-into-the-wall, no multi-hour
+# backoff loop. That old "back off 30 min and keep poking" behavior is exactly what
+# deepened the flag last time. Tripped from download()/get_title(); every worker checks it.
+STOP = threading.Event()
+STOP_FILE = os.path.expanduser("~/.yt_dl_off")          # the cron watchdog's killswitch
+BLOCK_SIGNATURES = ("not a bot", "Sign in to confirm", "confirm you're not a bot",
+                    "confirm you’re not a bot", "HTTP Error 429", "Too Many Requests")
 # HUD mask regions in BASE 640x360 (16:9) coords, as (y1,y2,x1,x2) — the
 # domisumReplay spectator-HUD layout. Scaled to the source resolution at
 # runtime so the same mask works for any download res (720p, 1080p, ...).
@@ -63,6 +83,42 @@ def hud_drawbox_filter(src_w, src_h):
 
 def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
+
+def ytdlp(*extra):
+    """SINGLE choke point for every yt-dlp invocation, so request-pacing is never
+    forgotten on any call that touches YouTube. The bot-block is per-IP and
+    velocity-based, and our egress IP is SHARED with the user's own yt-dlp use, so
+    politeness is mandatory on metadata probes too — not just the media pulls.
+    Flags verified against yt-dlp 2026.06.09 docs:
+      --sleep-requests : sec between data-extraction API requests (paces --print probes)
+      --retry-sleep http:exp=2:120     : exponential backoff on HTTP 429s (2,4,8,...,120s cap)
+      --retry-sleep fragment:exp=1:60  : same for fragment fetches
+      --retries / --fragment-retries / --extractor-retries : generous, ride out transient blocks
+    download() additionally passes --sleep-interval/--max-sleep-interval (a randomized
+    human-like pause before each MEDIA download; meaningless on --print-only calls)."""
+    return (["yt-dlp"]
+            + (["--cookies", COOKIES] if COOKIES else [])
+            + ["--sleep-requests", str(SLEEP_REQUESTS),
+               "--retries", "10", "--fragment-retries", "10", "--extractor-retries", "3",
+               "--retry-sleep", "http:exp=2:120",
+               "--retry-sleep", "fragment:exp=1:60"]
+            + list(extra))
+
+def _trip_breaker(where, detail):
+    """Bot-block circuit breaker. The moment YouTube hints at a block, stop the
+    whole run COLD and touch the watchdog killswitch so nothing relaunches — we
+    never deepen a flag by poking a flagged IP. Idempotent across worker threads."""
+    if STOP.is_set():
+        return
+    STOP.set()
+    try:
+        open(STOP_FILE, "a").close()    # touch killswitch -> cron watchdog won't relaunch
+    except OSError:
+        pass
+    bar = "!" * 70
+    print(f"\n{bar}\nBOT-BLOCK DETECTED in {where} — CIRCUIT BREAKER TRIPPED, stopping cold."
+          f"\n  touched {STOP_FILE} (watchdog won't relaunch). yt-dlp said: ...{detail}\n{bar}\n",
+          flush=True)
 
 def parse_matchup(title: str) -> dict:
     """Pull matchup/rank/kda from titles like:
@@ -91,8 +147,11 @@ def parse_matchup(title: str) -> dict:
     return out
 
 def get_title(vid):
-    r = run(["yt-dlp", "--skip-download", "--print", "%(title)s",
-             f"https://www.youtube.com/watch?v={vid}"])
+    if STOP.is_set(): return ""
+    r = run(ytdlp("--skip-download", "--print", "%(title)s",
+                  f"https://www.youtube.com/watch?v={vid}"))
+    if r.returncode != 0 and r.stderr and any(s in r.stderr for s in BLOCK_SIGNATURES):
+        _trip_breaker("get_title", r.stderr.strip()[-200:])
     return r.stdout.strip() if r.returncode == 0 else ""
 
 def _find_dl(dst, vid):
@@ -101,10 +160,11 @@ def _find_dl(dst, vid):
              and not p.name.endswith(".part")]
     return max(cands, key=lambda p: p.stat().st_size) if cands else None
 
-def download(vid, dst, sleep_req=2.0):
+def download(vid, dst):
     """Download 1080p60 VIDEO-ONLY (format 299; H.264, no audio — frames don't
     need it, and skipping audio avoids the mp4->mkv remux). Falls back to 720p60
     (298) then any <=1080p."""
+    if STOP.is_set(): return None
     existing = _find_dl(dst, vid)
     if existing: return existing
     base = dst / vid  # yt-dlp adds the right extension
@@ -112,16 +172,17 @@ def download(vid, dst, sleep_req=2.0):
     hr = datetime.datetime.now().hour
     in_fast = FAST_START_HOUR <= hr < FAST_END_HOUR
     rate = [] if (in_fast or not LIMIT_RATE) else ["--limit-rate", LIMIT_RATE]
-    cmd = ["yt-dlp"] + (["--cookies", COOKIES] if COOKIES else []) + rate + [
-           "-f", "298/136/bestvideo[height<=720]/299",
-           "--sleep-requests", str(sleep_req), "--retries", "5",
-           "--fragment-retries", "10", "-o", f"{base}.%(ext)s",
-           f"https://www.youtube.com/watch?v={vid}"]
+    # ytdlp() supplies --sleep-requests + exponential --retry-sleep; here we add a
+    # randomized human-like pause BEFORE each media pull (--sleep-interval/-max).
+    cmd = ytdlp(*rate,
+                "-f", "298/136/bestvideo[height<=720]/299",
+                "--sleep-interval", str(SLEEP_MIN), "--max-sleep-interval", str(SLEEP_MAX),
+                "-o", f"{base}.%(ext)s",
+                f"https://www.youtube.com/watch?v={vid}")
     r = run(cmd)
     found = _find_dl(dst, vid)
-    if not found and BLOCK_BACKOFF and r.stderr and ("not a bot" in r.stderr or "Sign in to confirm" in r.stderr):
-        print(f"  BOT-BLOCKED — backing off {BLOCK_BACKOFF//60}min to let the IP cool", flush=True)
-        time.sleep(BLOCK_BACKOFF)
+    if not found and r.stderr and any(s in r.stderr for s in BLOCK_SIGNATURES):
+        _trip_breaker("download", r.stderr.strip()[-200:])
     return found
 
 def probe_fps(path):
@@ -227,6 +288,8 @@ def run_batch(items, out_dir, workers, gcs_bucket, cleanup, done_file, work_dir=
 
     def work(item):
         vid, title = item
+        if STOP.is_set():
+            return vid, "skip:breaker"
         try:
             r = process_one(vid, out_dir, keep_video=False, title=title,
                             gcs_bucket=gcs_bucket, cleanup=cleanup, work_dir=work_dir)
@@ -246,7 +309,10 @@ def run_batch(items, out_dir, workers, gcs_bucket, cleanup, done_file, work_dir=
             if status == "ok": ok += 1
             else: fail += 1
             print(f"  [{ok+fail}/{len(todo)}] {vid}: {status}  (ok={ok} fail={fail})", flush=True)
-    print(f"BATCH DONE ok={ok} fail={fail}", flush=True)
+            if STOP.is_set():
+                print("  CIRCUIT BREAKER TRIPPED — draining in-flight work and stopping.", flush=True)
+                break
+    print(f"BATCH DONE ok={ok} fail={fail}{'  [STOPPED BY BREAKER]' if STOP.is_set() else ''}", flush=True)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -292,8 +358,8 @@ def main():
                   cleanup=bool(a.gcs_bucket), done_file=a.done_file, work_dir=a.work_dir,
                   max_games=a.max_games)
     elif a.channel_end:
-        r = run(["yt-dlp", "--flat-playlist", "--playlist-end", str(a.channel_end),
-                 "--print", "%(id)s", CHANNEL])
+        r = run(ytdlp("--flat-playlist", "--playlist-end", str(a.channel_end),
+                      "--print", "%(id)s", CHANNEL))
         ids = [x.strip() for x in r.stdout.strip().split("\n") if x.strip()]
         skip = set()
         if a.skip_ids_file and Path(a.skip_ids_file).exists():
