@@ -469,6 +469,18 @@ def train_epoch(
             lpips_norm = rms_trackers["lpips"].update(losses["lpips"])
             loss = (mse_norm + args.lpips_weight * lpips_norm) / accumulation_steps
 
+        # DDP: mask_embed (the MAE mask token) is UNUSED when mask_ratio==0
+        # (make_mask returns None -> encode passes mask_embed=None), so it
+        # receives no gradient and DDP's reducer raises "Expected to have
+        # finished reduction in the prior iteration...". This is silent on
+        # single-GPU (no grad sync) but fatal under DDP, and mask_ratio==0 is
+        # common here (p_zero_mask + mask warmup + --mse-on-full-frame). Tap it
+        # with a zero-valued term so every parameter participates in EVERY
+        # backward — keeps find_unused_parameters=False (required by
+        # torch.compile's DDPOptimizer) at ~zero cost.
+        if ddp_model is not None and hasattr(base_model, "mask_embed"):
+            loss = loss + 0.0 * base_model.mask_embed.sum()
+
         # Backward with scaling. Under DDP, suppress the gradient all-reduce on
         # non-boundary micro-steps (no_sync) so it fires ONCE per optimizer step
         # instead of every micro-step — critical for multi-GPU efficiency.
