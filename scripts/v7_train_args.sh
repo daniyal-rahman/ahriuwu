@@ -34,7 +34,7 @@ V7_ARGS=(
   --lr 1e-4 --weight-decay 0.1
   --lr-schedule wsd --warmup-steps 500 --decay-steps 1500
   --epochs 999 --max-steps "$MAX_STEPS"
-  --step-save-interval 30 --checkpoint-warn-minutes 90
+  --step-save-interval 200 --checkpoint-warn-minutes 90
   --num-workers "$NUM_WORKERS" --log-interval 50
   --wandb-project ahriuwu-tokenizer --wandb-tags $WANDB_TAGS
 )
@@ -44,5 +44,9 @@ V7_ARGS=(
 # Slurm autoresume requeue cycle does NOT (it must continue the original schedule).
 if [ -n "${RESUME:-}" ] && [ -f "$RESUME" ]; then
   V7_ARGS+=(--resume "$RESUME")
-  [ -n "${RESET_SCHEDULE:-}" ] && V7_ARGS+=(--reset-schedule)
+  # reset-schedule is a STRICT opt-in (=1). Previously `[ -n "$RESET_SCHEDULE" ]` fired even
+  # for "0" (non-empty string), so resumes wrongly reset global_step + LR schedule. Now a
+  # plain resume CONTINUES step/optimizer/scheduler state; pass RESET_SCHEDULE=1 only to
+  # deliberately start a fresh LR cycle on the loaded weights.
+  [ "${RESET_SCHEDULE:-0}" = "1" ] && V7_ARGS+=(--reset-schedule)
 fi

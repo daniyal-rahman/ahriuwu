@@ -14,8 +14,19 @@ cd "$(dirname "$0")/.."                      # repo root
 export PYTHONPATH="$(pwd)/src:${PYTHONPATH:-}"
 export PYTHONNOUSERSITE=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export NCCL_P2P_DISABLE=1                     # consumer cards: no P2P -> host-RAM bounce
-export NCCL_SHM_DISABLE=1                     # more robust on multi-4090/5090 boxes
+# --- NCCL for consumer (GeForce, no NVLink/P2P, no IB) single-node multi-GPU ---
+# GeForce has no real PCIe P2P -> NCCL must host-stage via SHM. Forcing P2P off skips the
+# slow/broken P2P probing that caused multi-minute "hangs". SHM stays ON (the host-RAM path).
+# IB off (no InfiniBand on these boxes). lo for single-node bootstrap (override per-host if
+# needed). ASYNC error handling so a genuine NCCL timeout aborts+crashes (so the supervisor
+# can restart) instead of wedging. Init itself can take MINUTES on no-NVLink boxes — the
+# train script uses a 20-min init timeout; never gate readiness on a short external clock.
+export NCCL_P2P_DISABLE=1
+export NCCL_SHM_DISABLE="${NCCL_SHM_DISABLE:-0}"
+export NCCL_IB_DISABLE=1
+export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-lo}"
+export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
+export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 
 NGPU="${NGPU:-8}"

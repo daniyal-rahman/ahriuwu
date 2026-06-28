@@ -100,6 +100,17 @@ def _save_tokenizer_checkpoints(
 
     if step_path is not None:
         save_checkpoint(step_path, **common)
+        # keep-last-N retention: prune old step checkpoints so disk can't fill (the
+        # disk-full-crash fix). Default 3; override via --keep-last-checkpoints.
+        import glob as _glob
+        keep = getattr(args, "keep_last_checkpoints", 3) or 3
+        steps = sorted(_glob.glob(str(checkpoint_dir / "transformer_tokenizer_step_*.pt")),
+                       key=os.path.getmtime)
+        for old in steps[:-keep]:
+            try:
+                os.remove(old)
+            except OSError:
+                pass
 
     latest = checkpoint_dir / "transformer_tokenizer_latest.pt"
     save_checkpoint(latest, **common)
@@ -657,11 +668,20 @@ def main():
     global _IS_MAIN
     ddp = int(os.environ.get("WORLD_SIZE", "1")) > 1
     if ddp:
-        dist.init_process_group(backend="nccl")
         local_rank = int(os.environ["LOCAL_RANK"])
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         torch.cuda.set_device(local_rank)
+        # Eager NCCL init via device_id: the slow GeForce/no-NVLink topology search (can be
+        # minutes) happens HERE deterministically at startup, not stalling the first collective
+        # mid-step. Generous timeout so a legitimately-slow init isn't aborted. (device_id
+        # requires torch>=2.3; the boxes run 2.7.)
+        from datetime import timedelta
+        dist.init_process_group(
+            backend="nccl",
+            device_id=torch.device(f"cuda:{local_rank}"),
+            timeout=timedelta(minutes=20),
+        )
         args.device = f"cuda:{local_rank}"
     else:
         local_rank, rank, world_size = 0, 0, 1
