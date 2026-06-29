@@ -23,6 +23,11 @@
 # box for the first few steps before trusting an unattended run. batch>=4 OOMs.
 : "${BATCH_SIZE:=1}"
 : "${GRAD_ACCUM:=64}"
+# WSD schedule knobs (overridable). Defaults suit a multi-thousand-step run; for a SHORT
+# probe (e.g. 1000 steps) set WARMUP_STEPS small (~50) + DECAY_STEPS small (~300) so the run
+# spends its steps at flat LR actually learning, not warming up/decaying.
+: "${WARMUP_STEPS:=500}"
+: "${DECAY_STEPS:=1500}"
 : "${WANDB_TAGS:=v7 d1024-8x8 paper-encoder-512x16 temporal-every-4}"
 
 V7_ARGS=(
@@ -38,7 +43,7 @@ V7_ARGS=(
   --gradient-checkpointing --lpips-frame-subsample 16
   --no-use-8bit-adam --adam-betas 0.9 0.999
   --lr 1e-4 --weight-decay 0.1
-  --lr-schedule wsd --warmup-steps 500 --decay-steps 1500
+  --lr-schedule wsd --warmup-steps "$WARMUP_STEPS" --decay-steps "$DECAY_STEPS"
   --epochs 999 --max-steps "$MAX_STEPS"
   --step-save-interval 200 --checkpoint-warn-minutes 90
   --num-workers "$NUM_WORKERS" --log-interval 50

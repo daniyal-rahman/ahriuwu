@@ -31,7 +31,11 @@ sed -n "1,${HOLDOUT_N}p" /tmp/allgames.txt > /tmp/holdout.txt
 START=$(( HOLDOUT_N + (SLICE - 1) * SLICE_SIZE + 1 ))
 END=$(( HOLDOUT_N + SLICE * SLICE_SIZE ))
 sed -n "${START},${END}p" /tmp/allgames.txt > /tmp/train.txt
-echo "corpus=$TOTAL  holdout=$(wc -l </tmp/holdout.txt) (games 1..$HOLDOUT_N)  train SLICE=$SLICE = games $START..$END ($(wc -l </tmp/train.txt))"
+# optional cap: stage only the first NUM_TRAIN games of the slice (e.g. a cheap probe that
+# still trains on UNSEEN games from the correct disjoint block). 0 = whole slice.
+NUM_TRAIN="${NUM_TRAIN:-0}"
+if [ "$NUM_TRAIN" -gt 0 ]; then head -n "$NUM_TRAIN" /tmp/train.txt > /tmp/train.cap && mv /tmp/train.cap /tmp/train.txt; fi
+echo "corpus=$TOTAL  holdout=$(wc -l </tmp/holdout.txt) (games 1..$HOLDOUT_N)  train SLICE=$SLICE (cap=$NUM_TRAIN) = games from $START ($(wc -l </tmp/train.txt) staged)"
 [ -s /tmp/train.txt ] || { echo "ERROR: empty train slice — SLICE=$SLICE too high for corpus of $TOTAL games"; exit 1; }
 
 mkdir -p "$DEST/dl" "$DEST/frames_train" "$DEST/frames_holdout"
