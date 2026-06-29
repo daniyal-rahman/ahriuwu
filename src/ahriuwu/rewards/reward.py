@@ -1,26 +1,20 @@
-"""Per-frame reward for Garen TOP RL training.
+"""Per-frame reward for Garen TOP RL training (agent phase).
 
-Reward is the sum of three components, computed once per episode from a
-loaded labels.json plus the win/loss outcome:
+DEFAULT = solo-gold: dense reward = ``gold_scale · Δ(Garen's own gold_total)``
+per frame, plus a one-shot penalty when Garen's hp hits 0. Needs only the focus
+champion's ``champion_stats`` — no enemy / ``visible_heroes`` data and no
+win/loss manifest — so it works on every labeled match. ``gold_total`` is
+monotonic, so the dense term is ≥0 and telescopes to ``gold_scale ·
+total_gold_earned`` (~O(1) over a full game).
 
-  Dense   - per-frame Δ(focus.gold_total - lane_opp.gold_total). Primary
-            laning signal: positive when Garen out-earns the lane opponent
-            this frame, negative when they out-earn Garen.
-  Event   - one-shot penalty the frame Garen's hp transitions to 0.
-  Anchor  - one-shot ±lane_anchor at the frame closest to lane_checkpoint_gt
-            (default 14:00) based on gold/level diff thresholds.
-  Outcome - one-shot ±outcome_weight at the last labeled frame.
-
-Why this shape: with γ=0.997 and DreamerV4's ~192-frame imagination horizon,
-a purely-terminal reward at frame 36000 has effectively zero gradient at
-early-game frames. The dense gold-diff term keeps the value head training
-every imagination window; the anchors pin it at known points. The
-"recover from being behind" pattern (e.g., eat a hard-matchup slow push,
-catch up when the wave bounces to tower) is encoded implicitly by
-Δ(gold_diff) on the bounce-back, not by a separate reward term.
+Legacy enemy mode (``RewardConfig.use_solo_gold=False``) keeps the old gold-DIFF
+vs the resolved lane opponent + lane anchor + win/loss outcome (needs
+``visible_heroes`` world+gold_total and an outcomes manifest). Off by default
+while we run solo-gold.
 
 Public entry point: ``compute_episode_reward(labels, garen_won, config)``
-returns a (T,) tensor, where T = ``len(labels["frames"])``.
+returns a (T,) tensor, T = ``len(labels["frames"])``. ``garen_won`` is ignored
+unless ``use_outcome``.
 """
 
 from __future__ import annotations
@@ -36,20 +30,26 @@ from ..data.lane_opponent import resolve_lane_opponent
 
 @dataclass
 class RewardConfig:
-    """Reward weights and thresholds.
+    """Reward weights/thresholds. DEFAULT = solo-gold mode (no enemy info).
 
-    Calibration intent (typical 30-min Garen game):
-      Dense gold-diff term telescopes — its sum equals
-      gold_diff_scale · (final_gold_diff - initial_gold_diff). At a typical
-      ±2k final lane gap that's ≈ ±0.1; a stomp at ±10k integrates to ±0.5.
-      Death events take ~−0.6 cumulative across 3 deaths.
-      Lane anchor adds ±0.5 at 14:00.
-      Outcome adds ±1.0 at game end.
-      Total per-game reward magnitude typically lives in roughly [-2, +2].
+    Solo-gold (default): dense = ``gold_scale · Δ(Garen's own gold_total)`` +
+    own-death penalty. ``gold_scale`` is a rough default — TUNE once real return
+    magnitudes are observed; it sets where returns land in the value head's
+    twohot buckets (heads use ±3 symlog, which leaves headroom for this).
+
+    Legacy enemy mode (``use_solo_gold=False``): dense gold-DIFF vs the resolved
+    lane opponent (+ optional lane anchor); needs ``visible_heroes`` world +
+    gold_total. ``use_outcome`` adds the ±win/loss terminal (needs an outcomes
+    manifest); both off by default.
     """
 
-    gold_diff_scale: float = 5e-5
+    use_solo_gold: bool = True
+    gold_scale: float = 1e-3          # solo: Σ telescopes to gold_scale·total_gold
     death_penalty: float = -0.2
+    # --- legacy enemy / outcome terms (off by default) ---
+    use_lane_anchor: bool = False
+    use_outcome: bool = False
+    gold_diff_scale: float = 5e-5
     lane_checkpoint_gt: float = 14 * 60.0
     lane_gold_threshold: float = 1000.0
     lane_level_threshold: int = 2
@@ -83,20 +83,25 @@ def compute_episode_reward(
     if not focus_name:
         raise ValueError("labels.champion is required for reward computation")
 
-    opp_name = resolve_lane_opponent(labels)
-    if opp_name is None:
-        warnings.warn(
-            f"compute_episode_reward: no lane opponent for "
-            f"match={labels.get('match_id')!r} (focus={focus_name!r}); "
-            "dense gold-diff and lane-anchor terms will be 0 for this episode"
-        )
-
     rewards = torch.zeros(T, dtype=torch.float32)
-    rewards += _dense_gold_diff(frames, opp_name, cfg)
+    opp_name = None
+    if cfg.use_solo_gold:
+        # Solo-gold (default): dense Δ(Garen's own gold_total) — no enemy info.
+        rewards += _dense_solo_gold(frames, cfg)
+    else:
+        opp_name = resolve_lane_opponent(labels)
+        if opp_name is None:
+            warnings.warn(
+                f"compute_episode_reward(enemy mode): no lane opponent for "
+                f"match={labels.get('match_id')!r} (focus={focus_name!r}); "
+                "dense gold-diff and lane-anchor terms will be 0 for this episode"
+            )
+        rewards += _dense_gold_diff(frames, opp_name, cfg)
+        if cfg.use_lane_anchor and opp_name is not None:
+            rewards += _lane_anchor(frames, opp_name, cfg)
     rewards += _death_event(frames, cfg)
-    if opp_name is not None:
-        rewards += _lane_anchor(frames, opp_name, cfg)
-    rewards += _outcome(frames, garen_won, cfg)
+    if cfg.use_outcome:
+        rewards += _outcome(frames, garen_won, cfg)
 
     # Loud-fail on numerical pathology — gold_total can return garbage from a
     # stale memory read, which the dense Δ would amplify into a giant spike.
@@ -145,6 +150,31 @@ def _safe_float(d: dict, key: str) -> Optional[float]:
     create a fictitious gold-delta spike on the next frame."""
     v = d.get(key)
     return float(v) if v is not None else None
+
+
+def _dense_solo_gold(frames: list[dict], cfg: RewardConfig) -> torch.Tensor:
+    """gold_scale · Δ(focus.gold_total) per frame — Garen's OWN gold only.
+
+    gold_total is monotonic (cumulative earned), so this is ≥0 and telescopes to
+    gold_scale · (final − initial gold). Resets across unlabeled gaps / missing
+    reads so a stale None can't fabricate a spike.
+    """
+    T = len(frames)
+    out = torch.zeros(T, dtype=torch.float32)
+    prev_gold: Optional[float] = None
+    for i, fr in enumerate(frames):
+        cs = _focus_stats(fr.get("label"))
+        if cs is None:
+            prev_gold = None
+            continue
+        g = _safe_float(cs, "gold_total")
+        if g is None:
+            prev_gold = None
+            continue
+        if prev_gold is not None:
+            out[i] = cfg.gold_scale * (g - prev_gold)
+        prev_gold = g
+    return out
 
 
 def _dense_gold_diff(

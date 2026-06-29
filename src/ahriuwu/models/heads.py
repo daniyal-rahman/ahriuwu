@@ -28,8 +28,8 @@ class RewardHead(nn.Module):
         hidden_dim: int = 256,
         num_buckets: int = 255,
         mtp_length: int = 9,
-        bucket_low: float = -1.5,
-        bucket_high: float = 1.5,
+        bucket_low: float = -3.0,
+        bucket_high: float = 3.0,
     ):
         """Initialize reward head.
 
@@ -38,11 +38,12 @@ class RewardHead(nn.Module):
             hidden_dim: Hidden layer dimension
             num_buckets: Number of twohot buckets (paper uses 255)
             mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
-            bucket_low: Lower bound for symlog value buckets. Default -1.5 =
-                symlog(-3.5), sized to the Garen reward scale (empirical returns
-                ~[-1,1], max possible ~±2). The old ±5 (=±147 real) wasted ~90%
-                of the 255 buckets — our returns only ever touched ~8% of them.
-            bucket_high: Upper bound for symlog value buckets (1.5 = symlog(3.5)).
+            bucket_low: Lower bound for symlog value buckets. Default -3.0 =
+                symlog(~-19). Solo-gold reward (Δ own gold_total) gives tiny
+                per-frame values and O(0.5-1) discounted returns; ±3 symlog
+                leaves headroom for gold_scale tuning + kill/streak spikes
+                without saturating. TUNE once real return magnitudes are seen.
+            bucket_high: Upper bound for symlog value buckets (3.0 = symlog(~19)).
         """
         super().__init__()
         self.num_buckets = num_buckets
@@ -249,8 +250,8 @@ class ValueHead(nn.Module):
         input_dim: int,
         hidden_dim: int = 256,
         num_buckets: int = 255,
-        bucket_low: float = -1.5,
-        bucket_high: float = 1.5,
+        bucket_low: float = -3.0,
+        bucket_high: float = 3.0,
     ):
         """Initialize value head.
 
@@ -258,11 +259,12 @@ class ValueHead(nn.Module):
             input_dim: Dimension of agent token features
             hidden_dim: Hidden layer dimension
             num_buckets: Number of twohot buckets
-            bucket_low: Lower bound for symlog value buckets. Default -1.5 =
-                symlog(-3.5), sized to the Garen reward scale (empirical returns
-                ~[-1,1], max possible ~±2). The old ±5 (=±147 real) wasted ~90%
-                of the 255 buckets — our returns only ever touched ~8% of them.
-            bucket_high: Upper bound for symlog value buckets (1.5 = symlog(3.5)).
+            bucket_low: Lower bound for symlog value buckets. Default -3.0 =
+                symlog(~-19). Solo-gold reward (Δ own gold_total) gives tiny
+                per-frame values and O(0.5-1) discounted returns; ±3 symlog
+                leaves headroom for gold_scale tuning + kill/streak spikes
+                without saturating. TUNE once real return magnitudes are seen.
+            bucket_high: Upper bound for symlog value buckets (3.0 = symlog(~19)).
         """
         super().__init__()
         self.num_buckets = num_buckets
