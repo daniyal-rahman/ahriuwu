@@ -50,6 +50,11 @@ V7_ARGS=(
   --wandb-project ahriuwu-tokenizer --wandb-tags $WANDB_TAGS
 )
 
+# Optional: disable torch.compile (Inductor/Triton). On some new-GPU + torch combos (e.g.
+# Blackwell sm_120 + torch 2.7.1) the compiled kernels hit a CUDA illegal-memory-access;
+# NO_COMPILE=1 falls back to eager. Default keeps compile on.
+[ "${NO_COMPILE:-0}" = "1" ] && V7_ARGS+=(--no-compile)
+
 # Resume from RESUME iff it's a real file. --reset-schedule (fresh LR) is OPT-IN via
 # RESET_SCHEDULE=1 — the DDP continuation wants it (v7 ended decayed at LR~0); the
 # Slurm autoresume requeue cycle does NOT (it must continue the original schedule).

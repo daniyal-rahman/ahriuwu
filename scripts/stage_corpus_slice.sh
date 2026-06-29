@@ -39,11 +39,16 @@ echo "corpus=$TOTAL  holdout=$(wc -l </tmp/holdout.txt) (games 1..$HOLDOUT_N)  t
 [ -s /tmp/train.txt ] || { echo "ERROR: empty train slice — SLICE=$SLICE too high for corpus of $TOTAL games"; exit 1; }
 
 mkdir -p "$DEST/dl" "$DEST/frames_train" "$DEST/frames_holdout"
-pull_untar(){  # $1=listfile  $2=destdir
+pull_untar(){  # $1=listfile  $2=destroot
+  # IMPORTANT: corpus tars are FLAT inside (./000000.jpg at the tar root, no game folder).
+  # Each tar MUST extract into its OWN game subdir, or frames collide by filename across games
+  # and FrameSequenceDataset (which scans per-game dirs) finds nothing.
   while read -r t; do
     [ -z "$t" ] && continue
+    g="${t%.tar}"
     $R copy "$BUCKET/$t" "$DEST/dl" --transfers 12 --multi-thread-streams 4 --s3-no-check-bucket 2>/dev/null
-    tar -xf "$DEST/dl/$t" -C "$2" && rm -f "$DEST/dl/$t"
+    mkdir -p "$2/$g"
+    tar -xf "$DEST/dl/$t" -C "$2/$g" && rm -f "$DEST/dl/$t"
   done < "$1"
 }
 pull_untar /tmp/holdout.txt "$DEST/frames_holdout"
