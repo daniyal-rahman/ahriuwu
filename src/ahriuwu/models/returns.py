@@ -287,6 +287,15 @@ class RunningRMS:
         """
         value_sq = value.detach() ** 2
 
+        # A non-finite loss must never be folded into the running statistic:
+        # one NaN would pin self.rms to NaN forever (torch.clamp preserves NaN)
+        # and silently normalize every future loss to NaN. Skip the update and
+        # normalize by the last good RMS so the run can recover on its own.
+        if not torch.isfinite(value_sq):
+            if self.rms is None:
+                return value
+            return value / (torch.sqrt(self.rms) + 1e-8)
+
         if self.rms is None:
             self.rms = value_sq
         else:

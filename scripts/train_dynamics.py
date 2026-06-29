@@ -243,6 +243,23 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
     print(f"Saved run config to {config_path}")
 
 
+def _pick_holdout(dataset, n):
+    """N whole videos reserved for eval (deterministic: last N by sorted id)."""
+    if n <= 0:
+        return set()
+    vids = sorted({s["video_id"] for s in dataset.sequences})
+    return set(vids[-n:])
+
+
+def _build_holdout_batch(dataset, holdout_vids, batch_size):
+    """Collate up to batch_size sequences drawn from the held-out videos."""
+    from torch.utils.data import default_collate
+    idxs = [i for i, s in enumerate(dataset.sequences) if s["video_id"] in holdout_vids]
+    if not idxs:
+        return None
+    return default_collate([dataset[i] for i in idxs[:batch_size]])
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train dynamics model")
     add_training_args(parser)
@@ -362,17 +379,23 @@ def parse_args():
         default=200,
         help="Eval every N optimizer steps (default 200, ~5 min)",
     )
-    # Action conditioning
+    # Action conditioning (replay actions: movement + Q/W/E/R/Flash/Ignite/AA/Recall/Stride)
     parser.add_argument(
         "--use-actions",
         action="store_true",
-        help="Enable action conditioning (requires features.json per video)",
+        help="Enable action conditioning via ReplayLatentSequenceDataset (needs --labels-root)",
+    )
+    parser.add_argument(
+        "--labels-root",
+        type=str,
+        default=None,
+        help="Dir of <match_id>/labels.json + clicks.json (replay action labels)",
     )
     parser.add_argument(
         "--features-dir",
         type=str,
         default="data/processed",
-        help="Directory containing features.json per video",
+        help="Legacy OCR features dir (unused by the replay action path)",
     )
     # Agent tokens (for Phase 2+)
     parser.add_argument(
@@ -449,6 +472,13 @@ def parse_args():
              "(defaults to --gradient-accumulation)",
     )
     add_wandb_args(parser)
+    parser.add_argument(
+        "--holdout-videos", type=int, default=0,
+        help="Reserve N whole videos (excluded from training) for a clean "
+             "held-out eval batch used by the rollout/denoising eval. 0 (default) "
+             "uses a training-drawn val batch — what job 124 uses, so its data is "
+             "unchanged on requeue.",
+    )
     return parser.parse_args()
 
 
@@ -522,6 +552,72 @@ def eval_denoising_psnr(
     return results
 
 
+@torch.no_grad()
+def eval_rollout_psnr(
+    model: nn.Module,
+    schedule: "DiffusionSchedule",
+    val_batch: dict,
+    device: str,
+    ctx_frames: int = 16,
+    rollout_frames: int = 32,
+    num_steps: int = 16,
+    k_max: int = 16,
+    tau_ctx: float = 0.1,
+    use_actions: bool = False,
+    horizons: tuple = (1, 2, 4, 8, 16, 32),
+) -> dict:
+    """Free-running autoregressive rollout PSNR -- the DEPLOY regime.
+
+    ``eval_denoising_psnr`` is teacher-forced 1-step (corrupt clean -> predict
+    clean), which cannot see error ACCUMULATION across autoregressive steps --
+    exactly the metric/objective/deploy-regime decoupling that hid the tokenizer
+    bug for a week. This prefills ``ctx_frames`` of real context, then generates
+    the next ``rollout_frames`` ONE AT A TIME via the KV-cached shortcut rollout
+    (the real inference path), feeding its own predictions back, and reports PSNR
+    per horizon offset so drift is visible.
+
+    Base flow-matching model (no shortcut): pass ``num_steps == k_max`` (d=1, the
+    standard multi-step ODE). Shortcut-distilled model: pass the deploy config
+    (``num_steps=4, k_max=64`` -> d=16, the real-time path).
+    """
+    net = getattr(model, "_orig_mod", model)  # unwrap torch.compile if present
+    z = val_batch["latents"].to(device)        # (B, T, C, H, W)
+    B, T = z.shape[:2]
+    H = min(rollout_frames, T - ctx_frames)
+    if H < 1:
+        return {}
+    context = z[:, :ctx_frames]
+    gt = z[:, ctx_frames:ctx_frames + H].float()
+
+    actions_context = actions_future = None
+    if use_actions and val_batch.get("actions") is not None:
+        a = {k: v.to(device) for k, v in val_batch["actions"].items()}
+        actions_context = {k: v[:, :ctx_frames] for k, v in a.items()}
+        actions_future = {k: v[:, ctx_frames:ctx_frames + H] for k, v in a.items()}
+
+    amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
+    with torch.autocast(device_type=device.split(":")[0], dtype=amp_dtype):
+        pred = net.rollout(                    # (B, H, C, H, W); manages eval/train itself
+            context, predict_frames=H, num_steps=num_steps, k_max=k_max,
+            tau_ctx=tau_ctx, actions_context=actions_context,
+            actions_future=actions_future, device=device,
+        ).float()
+
+    max_val = z.float().abs().max().item()
+
+    def _psnr(a, b):
+        mse = ((a - b) ** 2).mean().item()
+        return 10 * torch.log10(torch.tensor(max_val ** 2 / max(mse, 1e-10))).item()
+
+    results = {}
+    for off in sorted(set(list(horizons) + [H])):
+        if 1 <= off <= H:
+            results[f"eval_rollout/psnr_h{off}"] = _psnr(pred[:, off - 1], gt[:, off - 1])
+    results["eval_rollout/psnr_mean"] = _psnr(pred, gt)
+    results["eval_rollout/horizon"] = float(H)
+    return results
+
+
 def train_epoch(
     ts: TrainingState,
     data_cfg: DataConfig,
@@ -563,6 +659,13 @@ def train_epoch(
     num_batches = 0
     last_grad_norm = 0.0
     start_time = time.time()
+    # Steps already completed when THIS epoch window began. The dynamic save
+    # interval must be derived from the rate over this window, not from the
+    # cumulative global_step -- dividing the cumulative step count by per-epoch
+    # elapsed inflates the rate ~Nx by epoch N (and explodes it to tens of
+    # millions of steps right after a resume), which silently stops periodic
+    # checkpointing.
+    step_at_epoch_start = ts.global_step
 
     # Determine mode and setup iterators
     alternating = data_cfg.dataloader is None
@@ -676,14 +779,32 @@ def train_epoch(
         if micro_count >= current_accum:
             ts.scaler.unscale_(ts.optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            ts.scaler.step(ts.optimizer)
-            ts.scaler.update()
-            ts.scheduler.step()
-            ts.optimizer.zero_grad()
-            micro_count = 0
-            did_step = True
-            ts.global_step += 1
-            last_grad_norm = grad_norm.item() if torch.isfinite(grad_norm) else 0.0
+            # On the bf16 path GradScaler is a no-op, so scaler.step() does NOT
+            # skip non-finite grads on its own. Gate the step ourselves: a single
+            # NaN/Inf gradient must never be written into the weights -- once it
+            # is, every later step and the RunningRMS are poisoned to NaN
+            # permanently, with no crash, silently wasting the rest of the run.
+            if torch.isfinite(grad_norm):
+                ts.scaler.step(ts.optimizer)
+                ts.scaler.update()
+                ts.scheduler.step()
+                ts.optimizer.zero_grad()
+                micro_count = 0
+                did_step = True
+                ts.global_step += 1
+                last_grad_norm = grad_norm.item()
+            else:
+                ts.scaler.update()
+                ts.optimizer.zero_grad()
+                micro_count = 0
+                did_step = False
+                last_grad_norm = 0.0
+                print(
+                    f"[WARN] non-finite grad_norm ({grad_norm}) at step "
+                    f"{ts.global_step} (batch {batch_idx}); optimizer step "
+                    f"skipped, gradients discarded.",
+                    flush=True,
+                )
         else:
             grad_norm = torch.tensor(0.0)
             did_step = False
@@ -713,7 +834,8 @@ def train_epoch(
             effective_save_interval = args.save_steps
         else:
             effective_save_interval = compute_dynamic_save_interval(
-                ts.global_step, time.time() - start_time, args.checkpoint_minutes
+                ts.global_step - step_at_epoch_start, time.time() - start_time,
+                args.checkpoint_minutes,
             )
 
         save_at_boundary = (
@@ -737,18 +859,32 @@ def train_epoch(
             log_step(eval_results, step=ts.global_step)
             psnr_strs = " ".join(f"{k.split('/')[-1]}={v:.1f}" for k, v in eval_results.items())
             print(f"  [EVAL step {ts.global_step}] {psnr_strs}")
+            # Deploy-regime rollout eval (autoregressive + KV-cached): exposes the
+            # error accumulation the teacher-forced PSNR above is blind to.
+            rs, rk = (4, ts.shortcut.k_max) if ts.shortcut is not None else (16, 16)
+            roll_results = eval_rollout_psnr(
+                model, schedule, val_batch, device,
+                num_steps=rs, k_max=rk, use_actions=args.use_actions,
+            )
+            if roll_results:
+                log_step(roll_results, step=ts.global_step)
+                roll_strs = " ".join(f"{k.split('/')[-1]}={v:.1f}"
+                                     for k, v in roll_results.items() if "psnr" in k)
+                print(f"  [EVAL-ROLLOUT step {ts.global_step}] {roll_strs}")
 
         # --- checkpoint-now file trigger (save but do NOT exit) ---
         if _preempt.check_checkpoint_now() and ckpt_cfg.checkpoint_dir is not None and ts.global_step > 0:
             print(f"checkpoint-now trigger at step {ts.global_step}.", flush=True)
             if not save_at_boundary:
-                save_checkpoints(ckpt_cfg, ts, epoch, raw_loss_val, args)
+                save_checkpoints(ckpt_cfg, ts, epoch, raw_loss_val, args,
+                                 extra={"batch_idx": batch_idx})
             _preempt.clear_checkpoint_now()
 
         # --- Preemption: signal-based (save and EXIT) ---
         if _preempt.should_save_now() and ckpt_cfg.checkpoint_dir is not None and ts.global_step > 0:
             if not save_at_boundary:
-                save_checkpoints(ckpt_cfg, ts, epoch, raw_loss_val, args)
+                save_checkpoints(ckpt_cfg, ts, epoch, raw_loss_val, args,
+                                 extra={"batch_idx": batch_idx})
             print(f"Immediate preemption at step {ts.global_step}. Exiting.", flush=True)
             return _make_epoch_result(total_loss, total_grad_norm, total_grad_norm_count, num_batches, ts.global_step, preempted=True)
 
@@ -761,12 +897,21 @@ def train_epoch(
     # Flush remaining accumulated gradients at end of epoch
     if micro_count > 0:
         ts.scaler.unscale_(ts.optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        ts.scaler.step(ts.optimizer)
-        ts.scaler.update()
-        ts.scheduler.step()
-        ts.optimizer.zero_grad()
-        ts.global_step += 1
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        if torch.isfinite(grad_norm):
+            ts.scaler.step(ts.optimizer)
+            ts.scaler.update()
+            ts.scheduler.step()
+            ts.optimizer.zero_grad()
+            ts.global_step += 1
+        else:
+            ts.scaler.update()
+            ts.optimizer.zero_grad()
+            print(
+                "[WARN] non-finite grad_norm at end-of-epoch flush; "
+                "optimizer step skipped.",
+                flush=True,
+            )
 
     avg_accum = (
         (accum_short + accum_long) / 2
@@ -965,24 +1110,44 @@ def main():
             "train_dynamics requires packed latents (pass --packed). Per-frame "
             "LatentSequenceDataset was removed; run scripts/pack_latents.py first."
         )
-    DatasetClass = PackedLatentSequenceDataset
-    print("Using PACKED latent format (fast I/O)")
+    if args.use_actions:
+        # Action-conditioned: ReplayLatentSequenceDataset pairs packed latents
+        # with labels.json/clicks.json-derived actions. The dynamics x-prediction
+        # loss ignores rewards, and garen_win for these matches isn't in any
+        # manifest, so pass dummy outcomes (all False) — they feed only the unused
+        # reward channel. Imported here to dodge the circular import that keeps
+        # ReplayLatentSequenceDataset out of ahriuwu.data's __init__.
+        import glob as _glob
+        from ahriuwu.data.replay_dataset import ReplayLatentSequenceDataset
+        if not args.labels_root:
+            raise SystemExit("--use-actions requires --labels-root (dir of <match>/labels.json)")
+        _mids = [Path(p).stem for p in _glob.glob(str(Path(args.latents_dir) / "*.pt"))
+                 if Path(p).stem != "index"]
+        _dummy_outcomes = {m: False for m in _mids}
+        print(f"Action-conditioned via ReplayLatentSequenceDataset | labels_root={args.labels_root} "
+              f"| {len(_mids)} latent matches (rewards unused -> dummy outcomes)")
 
+        def make_dataset(seq_len):
+            return ReplayLatentSequenceDataset(
+                latents_dir=args.latents_dir, labels_root=args.labels_root,
+                outcomes=_dummy_outcomes, sequence_length=seq_len, stride=args.stride,
+            )
+    else:
+        print("Using PACKED latent format, actions OFF (PackedLatentSequenceDataset)")
+
+        def make_dataset(seq_len):
+            return PackedLatentSequenceDataset(
+                latents_dir=args.latents_dir, sequence_length=seq_len, stride=args.stride,
+            )
+
+    holdout_val_batch = None
     if args.alternating_lengths:
-        dataset_short = DatasetClass(
-            latents_dir=args.latents_dir,
-            sequence_length=args.seq_len_short,
-            stride=args.stride,
-            load_actions=args.use_actions,
-            features_dir=args.features_dir if args.use_actions else None,
-        )
-        dataset_long = DatasetClass(
-            latents_dir=args.latents_dir,
-            sequence_length=args.seq_len_long,
-            stride=args.stride,
-            load_actions=args.use_actions,
-            features_dir=args.features_dir if args.use_actions else None,
-        )
+        dataset_short = make_dataset(args.seq_len_short)
+        dataset_long = make_dataset(args.seq_len_long)
+        holdout_vids = _pick_holdout(dataset_short, args.holdout_videos)
+        if holdout_vids:
+            print(f"Held-out eval videos ({len(holdout_vids)}): {sorted(holdout_vids)}")
+            holdout_val_batch = _build_holdout_batch(dataset_short, holdout_vids, args.batch_size_short)
 
         if len(dataset_short) == 0 or len(dataset_long) == 0:
             print("ERROR: No sequences found!")
@@ -1006,7 +1171,7 @@ def main():
         dataloader_short = DataLoader(
             dataset_short,
             batch_size=args.batch_size_short,
-            sampler=VideoGroupedSampler(dataset_short),
+            sampler=VideoGroupedSampler(dataset_short, exclude_videos=holdout_vids),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -1014,20 +1179,18 @@ def main():
         dataloader_long = DataLoader(
             dataset_long,
             batch_size=args.batch_size_long,
-            sampler=VideoGroupedSampler(dataset_long),
+            sampler=VideoGroupedSampler(dataset_long, exclude_videos=holdout_vids),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
         )
         dataloader = None
     else:
-        dataset = DatasetClass(
-            latents_dir=args.latents_dir,
-            sequence_length=args.sequence_length,
-            stride=args.stride,
-            load_actions=args.use_actions,
-            features_dir=args.features_dir if args.use_actions else None,
-        )
+        dataset = make_dataset(args.sequence_length)
+        holdout_vids = _pick_holdout(dataset, args.holdout_videos)
+        if holdout_vids:
+            print(f"Held-out eval videos ({len(holdout_vids)}): {sorted(holdout_vids)}")
+            holdout_val_batch = _build_holdout_batch(dataset, holdout_vids, args.batch_size)
 
         if len(dataset) == 0:
             print("ERROR: No sequences found!")
@@ -1049,7 +1212,7 @@ def main():
         dataloader = DataLoader(
             dataset,
             batch_size=args.batch_size,
-            sampler=VideoGroupedSampler(dataset),
+            sampler=VideoGroupedSampler(dataset, exclude_videos=holdout_vids),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -1138,13 +1301,15 @@ def main():
         print(f"Resuming from epoch {start_epoch}, batch {resume_skip_batches}, global_step {global_step}")
 
     # Fixed validation batch for eval metrics
-    val_batch = None
-    if dataloader_short is not None:
+    val_batch = holdout_val_batch
+    if val_batch is not None:
+        print(f"Held-out val batch: {val_batch['latents'].shape}")
+    elif dataloader_short is not None:
         val_batch = next(iter(dataloader_short))
     elif dataloader is not None:
         val_batch = next(iter(dataloader))
-    if val_batch is not None:
-        print(f"Validation batch: {val_batch['latents'].shape}")
+    if val_batch is not None and holdout_val_batch is None:
+        print(f"Validation batch (training-drawn): {val_batch['latents'].shape}")
 
     # --- Build dataclasses for train_epoch ---
     ts = TrainingState(
@@ -1218,7 +1383,10 @@ def main():
         # Epoch checkpoint (uses save_checkpoints helper)
         if (epoch + 1) % args.save_interval == 0:
             epoch_path = checkpoint_dir / f"dynamics_epoch_{epoch + 1:03d}.pt"
-            save_checkpoints(ckpt_cfg, ts, epoch, metrics["loss"], args, step_path=epoch_path)
+            # Store epoch+1 (the next epoch to run), batch_idx defaulting to 0, so
+            # a resume from this boundary checkpoint continues at the next epoch
+            # instead of silently re-training the epoch that just completed.
+            save_checkpoints(ckpt_cfg, ts, epoch + 1, metrics["loss"], args, step_path=epoch_path)
 
         # Save best model based on validation PSNR
         if val_batch is not None:
@@ -1228,6 +1396,16 @@ def main():
             psnr_keys = [k for k in eval_results if k.startswith("eval/psnr_tau")]
             mean_psnr = sum(eval_results[k] for k in psnr_keys) / max(len(psnr_keys), 1)
             log_step({"epoch/mean_psnr": mean_psnr}, step=ts.global_step)
+            # Deploy-regime rollout eval per epoch (logged for the drift curve;
+            # best.pt still tracks the teacher-forced mean for stability).
+            _rs, _rk = (4, shortcut.k_max) if shortcut is not None else (16, 16)
+            _roll = eval_rollout_psnr(
+                model, schedule, val_batch, args.device,
+                num_steps=_rs, k_max=_rk, use_actions=args.use_actions,
+            )
+            if _roll:
+                log_step({"epoch/rollout_psnr_mean": _roll["eval_rollout/psnr_mean"]},
+                         step=ts.global_step)
 
             if mean_psnr > best_psnr:
                 best_psnr = mean_psnr

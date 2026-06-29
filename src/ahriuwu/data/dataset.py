@@ -212,9 +212,12 @@ class VideoGroupedSampler(Sampler):
     in the batch stream so cache hits dominate.
     """
 
-    def __init__(self, dataset):
+    def __init__(self, dataset, exclude_videos=None):
+        exclude = set(exclude_videos or ())
         groups: dict = defaultdict(list)
         for idx, seq in enumerate(dataset.sequences):
+            if seq["video_id"] in exclude:
+                continue
             groups[seq["video_id"]].append(idx)
         self.video_groups = list(groups.values())
         self._len = sum(len(g) for g in self.video_groups)

@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=dyn-train
-#SBATCH --output=/mnt/storage/ahriuwu-data/logs/slurm_dyn_train_%j.out
+#SBATCH --partition=gpup
+#SBATCH --output=/mnt/storage/data/ahriuwu/logs/slurm_dyn_train_%j.out
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=18G
@@ -18,21 +19,23 @@ set -euo pipefail
 
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export PYTHONPATH=/mnt/nfs/projects/ahriuwu/src
 
-cd /mnt/storage/ahriuwu
+cd /mnt/nfs/projects/ahriuwu
 
-CHECKPOINT_DIR=/mnt/storage/ahriuwu-data/checkpoints
-LATENTS_DIR=/opt/ahriuwu/latents_pt
+CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_replay
+LATENTS_DIR=/scratch/ahriuwu/dynamics_replay_latents_v7_dim32
 
-# Dataloaders use max batch size (B=8 short, B=4 long).
-# Shortcut steps slice to B=2/B=1 (3 forward passes need less VRAM).
-# Standard steps use full batch. ~2x faster than old dual-dataloader approach.
+# Base flow-matching pretrain (standard x-prediction diffusion forcing) at
+# 128/256 context, medium model, gradient checkpointing. Shortcut forcing is
+# OMITTED here: its GC-disabled 3-forward-pass steps OOM medium@128 on the 5080.
+# Do shortcut distillation as a separate Phase B (finetune_shortcut.py) after.
 CMD=(
   python scripts/train_dynamics.py
   --latents-dir "$LATENTS_DIR"
   --packed
   --checkpoint-dir "$CHECKPOINT_DIR"
-  --model-size small
+  --model-size medium
   --latent-dim 32
   --tokenizer-type transformer
   --alternating-lengths
@@ -46,12 +49,11 @@ CMD=(
   --gradient-accumulation-long 16
   --gradient-checkpointing
   --no-compile
-  --shortcut-forcing
-  --shortcut-k-max 64
-  --bootstrap-weight 3.0
   --num-kv-heads 4
   --num-register-tokens 8
   --soft-cap 50.0
+  --use-actions
+  --labels-root /mnt/nfs/datasets/lol_replays_16_9_772
   --lr 3e-4
   --warmup-steps 3000
   --eval-interval 200
