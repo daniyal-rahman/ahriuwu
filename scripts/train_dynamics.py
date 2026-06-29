@@ -773,6 +773,17 @@ def train_epoch(
 
         # --- Backward + optional optimizer step ---
         scaled_loss = loss / current_accum
+        # DDP + zero-loss guard: tap every trainable param with a 0.0 coefficient
+        # so (a) conditionally-unused params (no_action_embed — cursor_valid is
+        # never emitted; no_gt_embed; agent-token params) still get a zero grad,
+        # else DDP's reducer (find_unused_parameters=False, forced by compile's
+        # DDPOptimizer) crashes on the first backward on a multi-GPU node; and
+        # (b) a zero-but-non-grad loss (shortcut total==0) becomes grad-carrying
+        # so .backward() doesn't raise. Zero contribution -> gradients unchanged.
+        # Mirrors the tokenizer mask_embed tap (commit 0a553f5).
+        scaled_loss = scaled_loss + 0.0 * sum(
+            p.sum() for p in model.parameters() if p.requires_grad
+        )
         ts.scaler.scale(scaled_loss).backward()
         micro_count += 1
 
