@@ -17,6 +17,12 @@
 : "${FILE_EXT:=png}"
 : "${NUM_WORKERS:=6}"
 : "${MAX_STEPS:=6000}"
+# Effective batch = BATCH_SIZE * GRAD_ACCUM (the DDP script then splits accum across ranks).
+# Default 1*64=64 is the known-safe config. Sweep hint: batch 2 / accum 32 is ~7% faster but
+# was only tested with gradient-checkpointing OFF — verify it fits (checkpointing ON) on the
+# box for the first few steps before trusting an unattended run. batch>=4 OOMs.
+: "${BATCH_SIZE:=1}"
+: "${GRAD_ACCUM:=64}"
 : "${WANDB_TAGS:=v7 d1024-8x8 paper-encoder-512x16 temporal-every-4}"
 
 V7_ARGS=(
@@ -28,7 +34,7 @@ V7_ARGS=(
   # --- objective / masking ---
   --mse-on-full-frame --tube-masking --mask-ratio-min 0.0 --mask-warmup-steps 2000
   # --- training (eff batch 64; under DDP the script splits grad-accum across ranks) ---
-  --use-rope --sequence-length 20 --batch-size 1 --gradient-accumulation 64
+  --use-rope --sequence-length 20 --batch-size "$BATCH_SIZE" --gradient-accumulation "$GRAD_ACCUM"
   --gradient-checkpointing --lpips-frame-subsample 16
   --no-use-8bit-adam --adam-betas 0.9 0.999
   --lr 1e-4 --weight-decay 0.1
