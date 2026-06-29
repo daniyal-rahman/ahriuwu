@@ -108,16 +108,24 @@ class RewardHead(nn.Module):
 
 
 class PolicyHead(nn.Module):
-    """Policy head for action prediction (vectorized binary + continuous).
+    """Policy head for action prediction (vectorized binary + binned movement).
 
     Phase 2: Trained with behavioral cloning
     Phase 3: Trained with PMPO on imagined trajectories
 
-    Predicts:
-    - 8 independent binary ability actions (vectorized binary, per DreamerV4 paper)
-      Each ability (Q/W/E/R/D/F/item/B) is an independent Bernoulli distribution.
-      This is exponentially more efficient than a single 128-class categorical.
-    - Continuous movement (x, y) in [0, 1] via sigmoid + MSE
+    Predicts a FACTORIZED action distribution:
+    - ``num_abilities`` independent binary ability actions (vectorized binary,
+      per DreamerV4 paper). Each ability (Q/W/E/R/Flash/Ignite/AA/Recall/Stride)
+      is an independent Bernoulli. Exponentially cheaper than one big categorical.
+    - Movement (x, y) ∈ [0, 1] as TWO independent per-axis categoricals over
+      ``movement_bins`` bins each (paper-style discretized/foveated mouse). This
+      replaces the old sigmoid+MSE head, which had no ``log_prob`` and therefore
+      received ZERO gradient under the PMPO (likelihood-ratio) objective. With
+      categorical movement, both BC (max-likelihood of the demonstrated bin) and
+      PMPO (advantage-weighted log-prob of the sampled bin) train movement.
+
+    The full action log-prob is the sum of the per-ability Bernoulli log-probs
+    and the two per-axis categorical log-probs (a product of independent factors).
 
     Uses MTP to predict actions for multiple future timesteps.
 
@@ -131,6 +139,7 @@ class PolicyHead(nn.Module):
         hidden_dim: int = 256,
         mtp_length: int = 9,
         movement_dim: int = 2,
+        movement_bins: int = 21,
     ):
         """Initialize policy head.
 
@@ -140,12 +149,17 @@ class PolicyHead(nn.Module):
                 len(ABILITY_KEYS): Q/W/E/R/Flash/Ignite/AA/Recall/Stride)
             hidden_dim: Hidden layer dimension
             mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
-            movement_dim: Continuous movement dimensions (default 2 for x, y)
+            movement_dim: Movement axes (default 2 for x, y)
+            movement_bins: Number of discrete bins PER AXIS for movement. Each
+                axis ∈ [0, 1] is split into this many equal-width bins whose
+                centers tile the interval; bin ``i`` center = i/(bins-1). 21 bins
+                ≈ 5% screen resolution per step, a sane foveated-grid default.
         """
         super().__init__()
         self.num_abilities = num_abilities
         self.mtp_length = mtp_length
         self.movement_dim = movement_dim
+        self.movement_bins = movement_bins
 
         # Shared MLP backbone
         self.mlp = nn.Sequential(
@@ -161,9 +175,10 @@ class PolicyHead(nn.Module):
             nn.Linear(hidden_dim, num_abilities) for _ in range(mtp_length)
         ])
 
-        # MTP heads for continuous movement (x, y) prediction
+        # MTP heads for binned movement: each head predicts
+        # movement_dim * movement_bins logits = one categorical per axis.
         self.movement_heads = nn.ModuleList([
-            nn.Linear(hidden_dim, movement_dim) for _ in range(mtp_length)
+            nn.Linear(hidden_dim, movement_dim * movement_bins) for _ in range(mtp_length)
         ])
 
         # Zero-init output heads: initial predictions are zero/uniform
@@ -174,8 +189,26 @@ class PolicyHead(nn.Module):
             nn.init.zeros_(head.weight)
             nn.init.zeros_(head.bias)
 
+        # Bin centers tile [0, 1]: center[i] = i / (bins - 1). Registered as a
+        # buffer so .to(device)/checkpointing move it with the module.
+        self.register_buffer(
+            "movement_bin_centers",
+            torch.linspace(0.0, 1.0, movement_bins),
+        )
+
+    def discretize_movement(self, movement: torch.Tensor) -> torch.Tensor:
+        """Map continuous movement (..., 2) ∈ [0, 1] to nearest bin indices (..., 2).
+
+        Out-of-range values are clamped into [0, 1] first. Uses round-to-nearest
+        against the (bins-1)-spaced grid so the inverse (bin center) is the
+        closest representable point.
+        """
+        m = movement.clamp(0.0, 1.0)
+        idx = (m * (self.movement_bins - 1)).round().long()
+        return idx.clamp(0, self.movement_bins - 1)
+
     def forward(self, agent_tokens: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Predict ability logits and movement coordinates.
+        """Predict ability logits and per-axis movement logits.
 
         Args:
             agent_tokens: (B, T, D) agent token features
@@ -183,57 +216,103 @@ class PolicyHead(nn.Module):
         Returns:
             tuple of:
                 ability_logits: (B, T, L, num_abilities) independent binary logits
-                movement_pred: (B, T, L, 2) predicted (x, y) in [0, 1]
+                movement_logits: (B, T, L, movement_dim, movement_bins) per-axis
+                    categorical logits over movement bins
         """
         x = self.mlp(agent_tokens)  # (B, T, hidden_dim)
+        B, T = x.shape[0], x.shape[1]
 
         # Vectorized binary ability predictions (independent Bernoulli per ability)
         ability_logits = torch.stack([head(x) for head in self.heads], dim=2)
 
-        # Continuous movement predictions with sigmoid to bound in [0, 1]
-        movement_pred = torch.stack(
-            [torch.sigmoid(mhead(x)) for mhead in self.movement_heads], dim=2
+        # Per-axis movement categorical logits.
+        movement_logits = torch.stack(
+            [mhead(x) for mhead in self.movement_heads], dim=2
+        )  # (B, T, L, movement_dim * movement_bins)
+        movement_logits = movement_logits.view(
+            B, T, self.mtp_length, self.movement_dim, self.movement_bins
         )
 
-        return ability_logits, movement_pred
+        return ability_logits, movement_logits
 
-    def sample(self, agent_tokens: torch.Tensor, temperature: float = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
-        """Sample actions from policy.
+    def sample(
+        self, agent_tokens: torch.Tensor, temperature: float = 1.0
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Sample actions from the factorized policy.
 
         Args:
             agent_tokens: (B, T, D) agent token features
-            temperature: Sampling temperature (1.0 = standard, <1 = greedy)
+            temperature: Sampling temperature (1.0 = standard, 0 = greedy/argmax)
 
         Returns:
             tuple of:
                 abilities: (B, T, L, num_abilities) binary samples {0, 1}
-                movement_pred: (B, T, L, 2) predicted (x, y) in [0, 1]
+                movement: (B, T, L, movement_dim) continuous (x, y) ∈ [0, 1],
+                    decoded from the sampled bin centers (ready to feed back to
+                    the action-conditioned dynamics, which expects continuous xy)
+                movement_idx: (B, T, L, movement_dim) sampled bin indices (long),
+                    kept so log_prob can be computed on the exact sampled bins
         """
-        ability_logits, movement_pred = self.forward(agent_tokens)
+        ability_logits, movement_logits = self.forward(agent_tokens)
 
         if temperature == 0:
-            return (ability_logits > 0).float(), movement_pred
+            abilities = (ability_logits > 0).float()
+            movement_idx = movement_logits.argmax(dim=-1)  # (B, T, L, movement_dim)
+        else:
+            probs = torch.sigmoid(ability_logits / temperature)
+            abilities = torch.bernoulli(probs)
+            mp = F.softmax(movement_logits / temperature, dim=-1)
+            # multinomial needs 2D (N, bins); flatten the leading dims
+            flat = mp.reshape(-1, self.movement_bins)
+            sampled = torch.multinomial(flat, num_samples=1).squeeze(-1)
+            movement_idx = sampled.view(*movement_logits.shape[:-1])  # (B,T,L,move_dim)
 
-        probs = torch.sigmoid(ability_logits / temperature)
-        abilities = torch.bernoulli(probs)
-        return abilities, movement_pred
+        movement = self.movement_bin_centers[movement_idx]  # (B, T, L, movement_dim)
+        return abilities, movement, movement_idx
 
-    def log_prob(self, agent_tokens: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
-        """Compute log probability of vectorized binary actions.
+    def log_prob(
+        self,
+        agent_tokens: torch.Tensor,
+        ability_actions: torch.Tensor,
+        movement_actions: torch.Tensor,
+    ) -> torch.Tensor:
+        """Log probability of factorized actions (abilities + binned movement).
 
         Args:
             agent_tokens: (B, T, D) agent token features
-            actions: (B, T, L, num_abilities) binary action targets {0, 1}
+            ability_actions: (B, T, L, num_abilities) binary targets {0, 1}
+            movement_actions: movement targets, either continuous (B, T, L, 2) in
+                [0, 1] (discretized internally to the nearest bin) OR already-long
+                bin indices (B, T, L, 2). Long dtype is treated as indices.
 
         Returns:
-            (B, T, L) sum of per-ability log probabilities
+            (B, T, L) sum of per-ability Bernoulli log-probs and the two per-axis
+            categorical movement log-probs. ``L`` matches the action tensors'
+            MTP axis: the first ``L`` MTP heads are scored (so L=1 scores offset
+            n=0 only — the on-policy case for PMPO).
         """
-        ability_logits, _ = self.forward(agent_tokens)
-        # Binary cross-entropy per ability, sum across abilities
-        log_probs = -F.binary_cross_entropy_with_logits(
-            ability_logits, actions, reduction='none'
-        )  # (B, T, L, num_abilities), negative BCE = log prob
-        return log_probs.sum(dim=-1)  # (B, T, L)
+        ability_logits, movement_logits = self.forward(agent_tokens)
+        # Score only as many MTP offsets as the caller supplied targets for.
+        L = ability_actions.shape[2]
+        ability_logits = ability_logits[:, :, :L, :]
+        movement_logits = movement_logits[:, :, :L, :, :]
+
+        # Per-ability Bernoulli log-prob, summed over abilities.
+        ability_lp = -F.binary_cross_entropy_with_logits(
+            ability_logits, ability_actions, reduction='none'
+        ).sum(dim=-1)  # (B, T, L)
+
+        # Per-axis categorical movement log-prob, summed over the 2 axes.
+        if movement_actions.dtype in (torch.long, torch.int32, torch.int64):
+            move_idx = movement_actions
+        else:
+            move_idx = self.discretize_movement(movement_actions)
+        move_log_softmax = F.log_softmax(movement_logits, dim=-1)  # (B,T,L,move_dim,bins)
+        move_lp = move_log_softmax.gather(
+            -1, move_idx.unsqueeze(-1)
+        ).squeeze(-1).sum(dim=-1)  # gather selected bin, sum over axes -> (B,T,L)
+
+        return ability_lp + move_lp
 
 
 class ValueHead(nn.Module):

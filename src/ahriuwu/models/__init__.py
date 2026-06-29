@@ -28,6 +28,9 @@ from .returns import (
     compute_lambda_returns,
     compute_advantages,
     compute_pmpo_loss,
+    bernoulli_kl_logits,
+    categorical_kl_logits,
+    factorized_policy_kl,
     RunningRMS,
     normalize_losses,
 )
@@ -69,6 +72,9 @@ __all__ = [
     "compute_lambda_returns",
     "compute_advantages",
     "compute_pmpo_loss",
+    "bernoulli_kl_logits",
+    "categorical_kl_logits",
+    "factorized_policy_kl",
     "RunningRMS",
     "normalize_losses",
 ]

@@ -208,11 +208,91 @@ def compute_advantages(
     return advantages
 
 
+def bernoulli_kl_logits(
+    policy_logits: torch.Tensor,
+    prior_logits: torch.Tensor,
+) -> torch.Tensor:
+    """KL[Bernoulli(policy) || Bernoulli(prior)] per logit, in nats.
+
+    For independent binary factors (one per ability), the joint KL is the SUM of
+    the per-factor KLs. This is the per-factor term; sum over the factor axis to
+    get the joint. NOT a softmax over the abilities (they are independent
+    Bernoullis, not one categorical).
+
+    KL = p*log(p/q) + (1-p)*log((1-p)/(1-q)) with p=sigmoid(policy), q=sigmoid(prior),
+    computed in log-space from logits for numerical stability.
+
+    Args:
+        policy_logits: (...,) Bernoulli logits from the current policy.
+        prior_logits: (...,) Bernoulli logits from the frozen prior.
+
+    Returns:
+        (...,) per-logit KL (same shape as the inputs).
+    """
+    p = torch.sigmoid(policy_logits)
+    # log p(x=1)/log p(x=0) via logsigmoid keeps things finite at large |logit|.
+    log_p1 = F.logsigmoid(policy_logits)
+    log_p0 = F.logsigmoid(-policy_logits)
+    log_q1 = F.logsigmoid(prior_logits)
+    log_q0 = F.logsigmoid(-prior_logits)
+    return p * (log_p1 - log_q1) + (1.0 - p) * (log_p0 - log_q0)
+
+
+def categorical_kl_logits(
+    policy_logits: torch.Tensor,
+    prior_logits: torch.Tensor,
+) -> torch.Tensor:
+    """KL[Categorical(policy) || Categorical(prior)] over the LAST dim, in nats.
+
+    Args:
+        policy_logits: (..., C) categorical logits from the current policy.
+        prior_logits: (..., C) categorical logits from the frozen prior.
+
+    Returns:
+        (...,) KL per distribution (last dim reduced).
+    """
+    policy_log_probs = F.log_softmax(policy_logits, dim=-1)
+    prior_log_probs = F.log_softmax(prior_logits, dim=-1)
+    policy_probs = policy_log_probs.exp()
+    return (policy_probs * (policy_log_probs - prior_log_probs)).sum(dim=-1)
+
+
+def factorized_policy_kl(
+    ability_logits: torch.Tensor,
+    ability_prior_logits: torch.Tensor,
+    movement_logits: torch.Tensor,
+    movement_prior_logits: torch.Tensor,
+) -> torch.Tensor:
+    """KL[pi_theta || pi_prior] for the factorized PolicyHead distribution.
+
+    The policy is a product of independent factors — ``num_abilities`` Bernoullis
+    plus ``movement_dim`` per-axis movement categoricals — so the joint KL is the
+    SUM of the per-factor KLs (KL is additive over independent factors). This is
+    the policy-aware KL that PMPO needs; a single softmax over the ability logits
+    would be wrong (the abilities are not mutually exclusive classes) and would
+    ignore movement entirely.
+
+    Args:
+        ability_logits: (..., num_abilities) current-policy Bernoulli logits.
+        ability_prior_logits: (..., num_abilities) frozen-prior Bernoulli logits.
+        movement_logits: (..., movement_dim, movement_bins) current-policy logits.
+        movement_prior_logits: (..., movement_dim, movement_bins) prior logits.
+
+    Returns:
+        (...,) total KL per state (all factor axes reduced), broadcastable to the
+        leading (e.g. (B, T)) shape shared by the logits.
+    """
+    ability_kl = bernoulli_kl_logits(ability_logits, ability_prior_logits).sum(dim=-1)
+    movement_kl = categorical_kl_logits(
+        movement_logits, movement_prior_logits
+    ).sum(dim=-1)  # sum over the movement_dim axis (per-axis categoricals)
+    return ability_kl + movement_kl
+
+
 def compute_pmpo_loss(
     log_probs: torch.Tensor,
     advantages: torch.Tensor,
-    policy_logits: torch.Tensor,
-    prior_logits: torch.Tensor,
+    kl: torch.Tensor,
     alpha: float = 0.5,
     beta: float = 0.3,
 ) -> torch.Tensor:
@@ -222,16 +302,17 @@ def compute_pmpo_loss(
     (A >= 0) and negative (A < 0) sets. This balances positive and negative
     feedback without needing advantage normalization.
 
-    L = (1-a)/|D-| sum_{D-} ln pi - a/|D+| sum_{D+} ln pi + b * KL[pi || pi_prior]
+    L = (1-a)/|D-| sum_{D-} ln pi - a/|D+| sum_{D+} ln pi + b * mean(KL[pi || pi_prior])
 
-    The KL term is computed as the full categorical KL divergence over the
-    action distribution, not a single-sample log-ratio approximation.
+    The KL term is supplied pre-computed so it can match the POLICY's actual
+    distribution. For the factorized PolicyHead (independent Bernoulli abilities +
+    per-axis movement categoricals) pass ``factorized_policy_kl(...)`` — a single
+    softmax over the ability logits would be the wrong distribution.
 
     Args:
         log_probs: (N,) log pi_theta(a|s) for sampled actions
         advantages: (N,) raw advantages A_t = R^lambda_t - v_t (NOT normalized)
-        policy_logits: (N, A) full logits from current policy (for KL computation)
-        prior_logits: (N, A) full logits from frozen behavioral prior
+        kl: (N,) per-sample KL[pi_theta || pi_prior] (e.g. factorized_policy_kl)
         alpha: Weight for positive advantages (0.5 = equal balance)
         beta: KL regularization weight (0.3 = weak prior)
 
@@ -247,14 +328,7 @@ def compute_pmpo_loss(
     # Minimize log-prob for states with negative advantage
     loss_neg = log_probs[neg_mask].mean() if neg_mask.any() else torch.tensor(0.0, device=log_probs.device)
 
-    # Full categorical KL divergence: KL[pi_theta || pi_prior]
-    # KL(p||q) = sum_a p(a) * (log p(a) - log q(a))
-    policy_log_probs = F.log_softmax(policy_logits, dim=-1)
-    prior_log_probs = F.log_softmax(prior_logits, dim=-1)
-    policy_probs = policy_log_probs.exp()
-    kl = (policy_probs * (policy_log_probs - prior_log_probs)).sum(dim=-1).mean()
-
-    return (1 - alpha) * loss_neg + alpha * loss_pos + beta * kl
+    return (1 - alpha) * loss_neg + alpha * loss_pos + beta * kl.mean()
 
 
 class RunningRMS:
