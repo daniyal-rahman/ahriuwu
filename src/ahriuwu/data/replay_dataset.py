@@ -54,6 +54,18 @@ from torch.utils.data import Dataset
 from ..constants import ABILITY_KEYS
 from ..rewards.reward import RewardConfig, compute_episode_reward
 
+# Garen v1 action mapping: clicks.json cast spell_name (or label.action.spell)
+# -> action key. TP / super-recall / any unmapped spell are intentionally ignored.
+_SPELL_TO_KEY = {
+    "GarenQ": "Q", "GarenW": "W", "GarenR": "R",
+    # GarenE and GarenECancel are inconsistent per-match aliases for "E used"
+    # (verified mutually exclusive across matches) -> both map to E.
+    "GarenE": "E", "GarenECancel": "E",
+    "SummonerFlash": "Flash", "SummonerDot": "Ignite",
+    "recall": "Recall",
+}
+_STRIDE_ITEM_ID = 6631  # Stridebreaker — the one item-active the labels log (sparse).
+
 
 def load_outcomes(manifest_path: Path | str) -> dict[str, bool]:
     """Read ``garen_win`` per ``match_id`` from a manifest JSON.
@@ -308,8 +320,12 @@ class ReplayLatentSequenceDataset(Dataset):
         frames: list[dict],
         match_dir: Path,
     ) -> dict[str, torch.Tensor]:
-        """Per-frame binary ability flags. Prefers clicks.json cast events; falls
-        back to label.action transitions when clicks.json is absent.
+        """Per-frame binary action flags for the Garen v1 action space.
+
+        clicks.json casts map by spell_name -> key (Q/W/E/Ecancel/R/Flash/Ignite/
+        Recall); AA from label.action.type transitions; Stride from inventory
+        `lf` jumps. Falls back to label.action.spell when clicks.json is absent.
+        Unmapped spells (TP, super-recall, ...) are ignored.
         """
         T = len(frames)
         abilities: dict[str, torch.Tensor] = {
@@ -318,8 +334,8 @@ class ReplayLatentSequenceDataset(Dataset):
         if T == 0:
             return abilities
 
-        # gt0 is the timebase reference. Pipeline always writes gt for every
-        # frame; assert here rather than silently anchoring to 0.0.
+        # gt0 is the timebase reference. Pipeline writes gt for every frame;
+        # cast game_t is anchored to it.
         gt0 = float(frames[0]["gt"])
         step = 1.0 / float(labels["fps"])
 
@@ -327,62 +343,53 @@ class ReplayLatentSequenceDataset(Dataset):
         casts: list[dict] = []
         if clicks_path.exists():
             with open(clicks_path) as f:
-                clicks_data = json.load(f)
-            casts = clicks_data.get("casts") or []
+                casts = json.load(f).get("casts") or []
 
         if casts:
-            n_unknown_slot = 0
-            n_no_time = 0
-            n_out_of_range = 0
+            n_no_time = n_unmapped = n_out_of_range = 0
             for c in casts:
-                # Use explicit None-check, not `or` — game_t == 0.0 is valid.
+                # Explicit None-check, not `or` — game_t == 0.0 is valid.
                 gt = c.get("game_t")
                 if gt is None:
                     gt = c.get("game_time")
-                slot = c.get("slot")
                 if gt is None:
                     n_no_time += 1
                     continue
-                if slot not in ABILITY_KEYS:
-                    n_unknown_slot += 1
+                key = _SPELL_TO_KEY.get(c.get("spell_name"))
+                if key is None:
+                    n_unmapped += 1  # TP / super-recall / etc. — intentionally dropped
                     continue
-                # round, not int-truncate, for symmetric quantization at
-                # frame boundaries (off-by-one risk otherwise)
+                # round, not int-truncate, for symmetric frame-boundary quantization
                 i = int(round((float(gt) - gt0) / step))
                 if 0 <= i < T:
-                    abilities[slot][i] = 1
+                    abilities[key][i] = 1
                 else:
                     n_out_of_range += 1
-            if n_unknown_slot or n_no_time or n_out_of_range:
+            if n_no_time or n_out_of_range:
                 warnings.warn(
-                    f"{match_dir.name}: clicks.json had "
-                    f"{n_unknown_slot} unknown-slot, {n_no_time} no-time, "
-                    f"{n_out_of_range} out-of-range cast events (dropped)"
+                    f"{match_dir.name}: {n_no_time} no-time, {n_out_of_range} "
+                    f"out-of-range casts dropped ({n_unmapped} unmapped ignored)"
                 )
         else:
             warnings.warn(
-                f"{match_dir.name}: no clicks.json at {clicks_path}; falling "
-                "back to label.action transitions for ability flags. D and F "
-                "will be flagged together (lossy) since slot info isn't in labels."
+                f"{match_dir.name}: no clicks.json at {clicks_path}; mapping "
+                "QWER/Flash/Ignite/Recall from label.action.spell (lossy)."
             )
-            self._fill_abilities_from_action_transitions(frames, abilities, labels)
+            self._fill_from_action_spell(frames, abilities)
 
-        # 'C' (attack-move-click) — fired on every AA initiation regardless of
-        # which keybind the human used (right-click on enemy, A-click, or our
-        # convention of C-click). Source is per-frame label.action.type
-        # transition into "attack"; clicks.json's cast stream doesn't carry AA
-        # because AAs aren't spellbook slots.
-        self._fill_C_from_attack_transitions(frames, abilities)
-
+        # AA — attack-move / auto-attack initiation isn't in the cast stream;
+        # take it from label.action.type transitions into "attack".
+        self._fill_aa_from_attack(frames, abilities)
+        # Stride active — sparse signal from the item's `lf` (last-fired) jumps.
+        self._fill_stride_from_inventory(frames, abilities)
         return abilities
 
     @staticmethod
-    def _fill_C_from_attack_transitions(
+    def _fill_aa_from_attack(
         frames: list[dict],
         abilities: dict[str, torch.Tensor],
     ) -> None:
-        """Set abilities['C'][i] = 1 on the frame where action.type transitions
-        into 'attack' (covers AAs whether keyed via right-click, A, or C)."""
+        """abilities['AA'][i] = 1 on the frame label.action.type enters 'attack'."""
         prev_type: Optional[str] = None
         for i, fr in enumerate(frames):
             lab = fr.get("label")
@@ -391,38 +398,51 @@ class ReplayLatentSequenceDataset(Dataset):
                 continue
             atype = (lab.get("action") or {}).get("type")
             if atype == "attack" and prev_type != "attack":
-                abilities["C"][i] = 1
+                abilities["AA"][i] = 1
             prev_type = atype
 
     @staticmethod
-    def _fill_abilities_from_action_transitions(
+    def _fill_stride_from_inventory(
         frames: list[dict],
         abilities: dict[str, torch.Tensor],
-        labels: dict,
     ) -> None:
-        focus = labels.get("champion") or ""
+        """abilities['Stride'][i] = 1 when Stridebreaker's `lf` (last-fired
+        game-time) jumps up — i.e. the active was used. Sparse (~2-18/game) but
+        the only item-active the labels reliably log (pots/tiamat/ward have no
+        usable signal). `lf` is held across unlabeled gaps so a gap isn't read
+        as a use.
+        """
+        prev_lf: Optional[float] = None
+        for i, fr in enumerate(frames):
+            lab = fr.get("label")
+            lf = None
+            if lab:
+                for it in (lab.get("inventory") or []):
+                    if it and it.get("id") == _STRIDE_ITEM_ID:
+                        lf = it.get("lf")
+                        break
+            if lf is not None and prev_lf is not None and lf > prev_lf + 1e-6:
+                abilities["Stride"][i] = 1
+            if lf is not None:
+                prev_lf = lf
+
+    @staticmethod
+    def _fill_from_action_spell(
+        frames: list[dict],
+        abilities: dict[str, torch.Tensor],
+    ) -> None:
+        """Fallback (no clicks.json): map label.action.spell -> key on entry."""
         prev_spell: Optional[str] = None
         for i, fr in enumerate(frames):
             lab = fr.get("label")
             if not lab:
                 prev_spell = None
                 continue
-            action = lab.get("action") or {}
-            atype = action.get("type")
-            spell = action.get("spell") or ""
-            if spell == prev_spell:
-                continue
-            if atype == "ability" and focus and spell.startswith(focus):
-                tail = spell[len(focus):]
-                slot = tail[:1] if tail else ""
-                if slot in ("Q", "W", "E", "R"):
-                    abilities[slot][i] = 1
-            elif atype == "summoner":
-                # Ambiguous without summoner_slots metadata — flag both.
-                abilities["D"][i] = 1
-                abilities["F"][i] = 1
-            elif atype == "recall":
-                abilities["B"][i] = 1
+            spell = (lab.get("action") or {}).get("spell")
+            if spell and spell != prev_spell:
+                key = _SPELL_TO_KEY.get(spell)
+                if key:
+                    abilities[key][i] = 1
             prev_spell = spell
 
     # ───────────────────────── latent loading ─────────────────────────

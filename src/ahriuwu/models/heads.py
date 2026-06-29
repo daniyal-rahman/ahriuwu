@@ -28,8 +28,8 @@ class RewardHead(nn.Module):
         hidden_dim: int = 256,
         num_buckets: int = 255,
         mtp_length: int = 9,
-        bucket_low: float = -5.0,
-        bucket_high: float = 5.0,
+        bucket_low: float = -1.5,
+        bucket_high: float = 1.5,
     ):
         """Initialize reward head.
 
@@ -38,8 +38,11 @@ class RewardHead(nn.Module):
             hidden_dim: Hidden layer dimension
             num_buckets: Number of twohot buckets (paper uses 255)
             mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
-            bucket_low: Lower bound for symlog buckets (symlog(-147) ~ -5)
-            bucket_high: Upper bound for symlog buckets (symlog(147) ~ 5)
+            bucket_low: Lower bound for symlog value buckets. Default -1.5 =
+                symlog(-3.5), sized to the Garen reward scale (empirical returns
+                ~[-1,1], max possible ~±2). The old ±5 (=±147 real) wasted ~90%
+                of the 255 buckets — our returns only ever touched ~8% of them.
+            bucket_high: Upper bound for symlog value buckets (1.5 = symlog(3.5)).
         """
         super().__init__()
         self.num_buckets = num_buckets
@@ -123,7 +126,7 @@ class PolicyHead(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        num_abilities: int = 8,
+        num_abilities: int = 9,  # = len(constants.ABILITY_KEYS); pass explicitly to track
         hidden_dim: int = 256,
         mtp_length: int = 9,
         movement_dim: int = 2,
@@ -132,7 +135,8 @@ class PolicyHead(nn.Module):
 
         Args:
             input_dim: Dimension of agent token features
-            num_abilities: Number of independent binary abilities (default 8: Q/W/E/R/D/F/item/B)
+            num_abilities: Number of independent binary abilities (default 9 =
+                len(ABILITY_KEYS): Q/W/E/R/Flash/Ignite/AA/Recall/Stride)
             hidden_dim: Hidden layer dimension
             mtp_length: Multi-token prediction length (paper Eq 9: n=0..L with L=8 = 9 predictions)
             movement_dim: Continuous movement dimensions (default 2 for x, y)
@@ -245,8 +249,8 @@ class ValueHead(nn.Module):
         input_dim: int,
         hidden_dim: int = 256,
         num_buckets: int = 255,
-        bucket_low: float = -5.0,
-        bucket_high: float = 5.0,
+        bucket_low: float = -1.5,
+        bucket_high: float = 1.5,
     ):
         """Initialize value head.
 
@@ -254,8 +258,11 @@ class ValueHead(nn.Module):
             input_dim: Dimension of agent token features
             hidden_dim: Hidden layer dimension
             num_buckets: Number of twohot buckets
-            bucket_low: Lower bound for symlog buckets (symlog(-147) ~ -5)
-            bucket_high: Upper bound for symlog buckets (symlog(147) ~ 5)
+            bucket_low: Lower bound for symlog value buckets. Default -1.5 =
+                symlog(-3.5), sized to the Garen reward scale (empirical returns
+                ~[-1,1], max possible ~±2). The old ±5 (=±147 real) wasted ~90%
+                of the 255 buckets — our returns only ever touched ~8% of them.
+            bucket_high: Upper bound for symlog value buckets (1.5 = symlog(3.5)).
         """
         super().__init__()
         self.num_buckets = num_buckets
