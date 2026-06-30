@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--tokenizer", default="/mnt/storage/data/ahriuwu-checkpoints/tokenizer_v7/transformer_tokenizer_latest.pt")
     ap.add_argument("--out-mp4", default="/mnt/nfs/projects/ahriuwu/dream_check.mp4")
     ap.add_argument("--out-png", default="/mnt/nfs/projects/ahriuwu/dream_check.png")
+    ap.add_argument("--out-plot", default="/mnt/nfs/projects/ahriuwu/dream_psnr.png")
     args = ap.parse_args()
     dev = args.device
     amp = torch.bfloat16 if dev != "mps" else torch.float16
@@ -160,6 +161,31 @@ def main():
     tok_gt = decode(gt[0])     # tokenizer recon of GT future
     dream = decode(pred[0])    # dream
     H, W = gt_png[0].shape[:2]
+
+    # ---- per-frame PIXEL PSNR vs the true frame: tokenizer ceiling vs dynamics dream ----
+    def px_psnr(a, b):
+        mse = np.mean((a.astype(np.float64) - b.astype(np.float64)) ** 2)
+        return 10 * np.log10(255.0 ** 2 / max(mse, 1e-10))
+    tok_curve = [px_psnr(tok_gt[t], gt_png[t]) for t in range(args.horizon)]
+    dyn_curve = [px_psnr(dream[t], gt_png[t]) for t in range(args.horizon)]
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    xs = list(range(1, args.horizon + 1))
+    plt.figure(figsize=(8, 5))
+    plt.plot(xs, tok_curve, "o-", color="#f0a000", label="Tokenizer ceiling (decode of TRUE latent)")
+    plt.plot(xs, dyn_curve, "o-", color="#00b4c8", label="Dynamics dream (decode of rollout)")
+    plt.fill_between(xs, dyn_curve, tok_curve, color="gray", alpha=0.12)
+    plt.xlabel("frames into the future (autoregressive rollout)")
+    plt.ylabel("PSNR vs the true frame (dB, pixels)")
+    plt.title(f"Rollout quality per frame — job 124 @ step {ck.get('global_step')}\nmatch {match}")
+    plt.xticks(xs)
+    plt.grid(True, alpha=0.3)
+    plt.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(args.out_plot, dpi=120)
+    print(f"plot: {args.out_plot} | tok {tok_curve[0]:.1f}->{tok_curve[-1]:.1f}  "
+          f"dyn {dyn_curve[0]:.1f}->{dyn_curve[-1]:.1f}", flush=True)
 
     def lab(im, t, c=(0, 255, 0)):
         im = im.copy(); cv2.putText(im, t, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.8, c, 2); return im
