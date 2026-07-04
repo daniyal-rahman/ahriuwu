@@ -885,7 +885,13 @@ class DynamicsTransformer(nn.Module):
                 z0 = self._project_out(xt, B, 1, Cc, H, W)
                 if i < num_steps - 1:
                     nt = tau_t + step
-                    tgt = nt * z0 + (1.0 - nt) * noise0
+                    # Renoise with the noise IMPLIED by the current state+prediction
+                    # (DDIM/flow-matching Euler), NOT the frozen initial noise0.
+                    # Reusing noise0 injects a constant wrong direction every step, so
+                    # multi-step denoising diverges (1-step is fine, >1 collapses) —
+                    # this is what made the rollout look broken.
+                    eps_hat = (tgt - tau_t * z0) / max(1.0 - tau_t, 1e-3)
+                    tgt = nt * z0 + (1.0 - nt) * eps_hat
                 else:
                     tgt = z0
             preds.append(tgt)

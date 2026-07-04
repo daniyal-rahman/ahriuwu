@@ -191,8 +191,11 @@ class DiffusionSchedule:
             # Euler step towards prediction
             if i < num_steps - 1:
                 next_tau = tau + step_size
-                # z at next_tau: next_tau * z_0_pred + (1 - next_tau) * noise
-                z_t = next_tau * z_0_pred + (1 - next_tau) * z_noise
+                # Renoise with the noise IMPLIED by the current state+prediction, NOT
+                # the frozen initial z_noise — reusing the initial noise makes
+                # multi-step denoising diverge.
+                eps_hat = (z_t - tau * z_0_pred) / max(1.0 - tau, 1e-3)
+                z_t = next_tau * z_0_pred + (1 - next_tau) * eps_hat
             else:
                 z_t = z_0_pred
 
