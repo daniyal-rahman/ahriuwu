@@ -738,8 +738,6 @@ def train_epoch(
         if args.use_actions and "actions" in batch and batch["actions"] is not None:
             actions = {k: v.to(device) for k, v in batch["actions"].items()}
 
-        use_independent = random.random() < args.independent_frame_ratio
-
         # --- Decide whether to use shortcut on this step ---
         # Skip shortcut on long batches (OOMs without GC).
         use_shortcut = ts.shortcut is not None and not use_long
@@ -765,7 +763,7 @@ def train_epoch(
             else:
                 raw_loss, loss_info, tau, z_pred = _forward_standard(
                     model, schedule, z_0, B, T, device, actions,
-                    use_independent, ts.rms_dict,
+                    args.independent_frame_ratio, ts.rms_dict,
                 )
                 loss = loss_info["loss_normed"]
 
@@ -975,11 +973,15 @@ def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions,
 
 
 def _forward_standard(model, schedule, z_0, B, T, device, actions,
-                       use_independent, rms_dict):
+                       independent_frame_ratio, rms_dict):
     """Standard x-prediction forward pass. Returns (raw_loss, info, tau, z_pred)."""
     tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
     z_tau, noise = schedule.add_noise(z_0, tau)
-    z_pred = model(z_tau, tau, actions=actions, independent_frames=use_independent)
+    # Per-example independent-frames mask (paper: 30% of the VIDEOS in the batch
+    # are trained as separate images / start frames; the rest keep full temporal
+    # context). Shape (B,) bool — NOT one coin flip for the whole batch.
+    independent_frames = torch.rand(B, device=device) < independent_frame_ratio
+    z_pred = model(z_tau, tau, actions=actions, independent_frames=independent_frames)
     raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
     if rms_dict is not None:
         loss_normed = rms_dict["x_pred"].update(raw_loss)

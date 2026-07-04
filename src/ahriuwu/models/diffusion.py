@@ -91,60 +91,37 @@ class DiffusionSchedule:
         batch_size: int,
         seq_length: int,
         device: torch.device | str | None = None,
-        tau_ctx: float = 0.9,
         tau_min: float = 0.0,
     ) -> torch.Tensor:
-        """Sample per-timestep noise levels for diffusion forcing.
+        """Per-frame i.i.d. signal levels for diffusion forcing (paper-faithful).
 
         Paper convention: τ=1 clean, τ=0 noise.
 
-        Implements DreamerV4's diffusion forcing where:
-        - A random horizon h is sampled for each batch item
-        - Frames before h: high τ (near-clean context, U(tau_ctx, 1.0))
-        - Frames at/after h: τ ~ U(tau_min, 1.0) sampled INDEPENDENTLY per frame
+        DreamerV4 / Diffusion Forcing sample each frame's signal level τ
+        INDEPENDENTLY. The paper prescribes only a uniform (or logit-normal) law
+        for τ (Sec 2, right after Eq 1) — there is **no** horizon / context-ramp
+        scheme in training. The "clean context, noisy future" pattern is an
+        INFERENCE-time choice: the autoregressive rollout keeps committed context
+        near-clean and denoises each new frame from τ≈0. Training each frame at an
+        i.i.d. τ ~ U(tau_min, 1) is exactly what lets the model denoise a frame at
+        any level given whatever (causal) history it has — the clean-history case
+        the rollout uses is covered as a subset, at every position.
 
-        The target τ is deliberately decoupled from absolute frame position. The
-        autoregressive rollout (``DynamicsModel.rollout``) denoises *every*
-        generated frame from τ≈0 up to τ=1, regardless of where that frame sits
-        in the sequence. If the target τ were a function of position (e.g. a
-        ramp normalized by the remaining window), then a frame at position p
-        would only ever train on a narrow, position-dependent τ band — and the
-        low-τ steps the rollout actually queries at that position would never be
-        seen. Sampling each target frame's τ from the full U(tau_min, 1.0) closes
-        that train/inference gap. The horizon still guarantees a near-clean
-        context prefix on every step, which biases training toward the
-        clean-context regime the rollout always operates in. See
-        tests/test_diffusion_forcing_schedule.py.
+        (The previous repo schedule tied τ to a sampled horizon and to absolute
+        frame position, which starved the (position, low-τ) pairs the rollout
+        actually queries — see tests/test_diffusion_forcing_schedule.py.)
 
         Args:
             batch_size: Number of sequences
             seq_length: Number of frames per sequence (T)
             device: Device to create tensor on
-            tau_ctx: Min τ for context frames (context varies U(tau_ctx, 1.0))
-            tau_min: Minimum τ for target frames (most noisy)
+            tau_min: Minimum τ (0.0 = allow pure noise)
 
         Returns:
-            tau: Per-timestep noise levels, shape (B, T)
+            tau: Per-frame noise levels, shape (B, T), each i.i.d. U(tau_min, 1)
         """
         device = device or self.device
-
-        # Sample random horizon for each batch item: where prediction starts.
-        # randint(1, T) -> h in [1, T-1], so every sequence has >=1 context frame
-        # (frame 0) and >=1 target frame (frame T-1).
-        horizon = torch.randint(1, seq_length, (batch_size,), device=device)
-
-        positions = torch.arange(seq_length, device=device).unsqueeze(0)  # (1, T)
-        is_context = positions < horizon.unsqueeze(1)  # (B, T)
-
-        # Context frames: near-clean, U(tau_ctx, 1.0).
-        context_tau = tau_ctx + torch.rand(batch_size, seq_length, device=device) * (1.0 - tau_ctx)
-
-        # Target frames: U(tau_min, 1.0), independent of position (see docstring).
-        target_tau = tau_min + torch.rand(batch_size, seq_length, device=device) * (1.0 - tau_min)
-
-        tau = torch.where(is_context, context_tau, target_tau)
-
-        return tau
+        return tau_min + (1.0 - tau_min) * torch.rand(batch_size, seq_length, device=device)
 
     @torch.no_grad()
     def sample(

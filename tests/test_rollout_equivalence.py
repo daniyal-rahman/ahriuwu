@@ -79,6 +79,42 @@ def test_euler_renoise_preserves_true_trajectory():
     print("OK: euler_renoise_step preserves the true noise trajectory (old scheme did not).")
 
 
+def test_per_example_independent_frames():
+    """A (B,) independent-frames flag must isolate ONLY the flagged examples.
+
+    Paper setup: 30% of the *videos in the batch* are trained as separate images
+    (each frame attends only to itself); the rest keep full causal temporal
+    context. Verify per-example: for an 'image' row, perturbing an earlier frame
+    must not change a later frame's output (diagonal); for a 'sequence' row it
+    must (causal).
+    """
+    torch.manual_seed(0)
+    Bp, T, D = 4, 6, 32
+    attn = Attention(
+        dim=D, num_heads=4, head_dim=8, mode="temporal",
+        max_seq_len=16, use_qk_norm=True, soft_cap=50.0, allow_flex=False,
+    ).eval()
+
+    x = torch.randn(Bp, T, D)
+    flags = torch.tensor([True, False, True, False])  # rows 0,2 = images; 1,3 = sequences
+
+    with torch.no_grad():
+        base = attn._forward_temporal(x, independent_frames=flags)
+        x2 = x.clone()
+        x2[:, 0] += 5.0                       # perturb frame 0 for every row
+        pert = attn._forward_temporal(x2, independent_frames=flags)
+
+    # Frame T-1 output: unchanged for image rows, changed for sequence rows.
+    delta = (pert[:, -1] - base[:, -1]).abs().amax(dim=-1)   # (Bp,)
+    for b in range(Bp):
+        if flags[b]:
+            assert delta[b] < 1e-6, f"image row {b} leaked frame-0 info (Δ={delta[b]:.2e})"
+        else:
+            assert delta[b] > 1e-3, f"sequence row {b} ignored causal context (Δ={delta[b]:.2e})"
+    print("OK: per-example independent frames isolate only the flagged (image) rows.")
+
+
 if __name__ == "__main__":
     test_kv_cache_matches_full_forward()
     test_euler_renoise_preserves_true_trajectory()
+    test_per_example_independent_frames()

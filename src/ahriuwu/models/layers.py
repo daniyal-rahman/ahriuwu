@@ -644,9 +644,14 @@ class Attention(nn.Module):
     def _forward_temporal(
         self,
         x: torch.Tensor,
-        independent_frames: bool = False,
+        independent_frames: "bool | torch.Tensor" = False,
     ) -> torch.Tensor:
-        """Temporal attention: (B, T, D) -> (B, T, D)."""
+        """Temporal attention: (B, T, D) -> (B, T, D).
+
+        ``independent_frames``: True = diagonal mask for the whole batch; a (B,)
+        bool tensor selects diagonal vs causal per example (per-example forces the
+        manual path).
+        """
         B, T, D = x.shape
 
         q = self.q_proj(x).view(B, T, self.num_heads, self.head_dim).transpose(1, 2)
@@ -663,17 +668,23 @@ class Attention(nn.Module):
         # Cast to common dtype
         q, k = q.to(v.dtype), k.to(v.dtype)
 
-        # Dispatch to backend
-        if self.allow_flex:
+        # Dispatch to backend. A per-example (B',) tensor can only be expressed on
+        # the manual path here, so it forces manual (the dynamics DiT blocks use
+        # allow_flex=False anyway). causal_mask stores True = masked *out*.
+        per_example = isinstance(independent_frames, torch.Tensor)
+        if self.allow_flex and not per_example:
             mask_fn = _diagonal_mask_mod if independent_frames else _causal_mask_mod
             out = self._forward_flex(q, k, v, mask_mod=mask_fn)
         else:
-            # Manual path: build causal or diagonal mask
-            if independent_frames:
+            causal = ~self.causal_mask[:T, :T]                              # (T, T)
+            if per_example:
+                # (B',) bool -> per-row diagonal (image) or causal (sequence) mask
+                diag = torch.eye(T, device=x.device, dtype=torch.bool)     # (T, T)
+                mask = torch.where(independent_frames.view(-1, 1, 1), diag, causal)  # (B',T,T)
+            elif independent_frames:
                 mask = torch.eye(T, device=x.device, dtype=torch.bool)
             else:
-                # causal_mask buffer stores True = masked *out*, invert for attend mask
-                mask = ~self.causal_mask[:T, :T]
+                mask = causal
             out = self._forward_manual(q, k, v, mask=mask)
 
         out = out.transpose(1, 2).contiguous().reshape(B, T, -1)

@@ -100,7 +100,7 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        independent_frames: bool = False,
+        independent_frames: "bool | torch.Tensor" = False,
         cache: dict | None = None,
         append: bool = False,
     ) -> torch.Tensor:
@@ -108,7 +108,9 @@ class TransformerBlock(nn.Module):
 
         Args:
             x: (B, T, S, D) features
-            independent_frames: If True, treat frames as independent (temporal attention only)
+            independent_frames: If True, every frame attends only to itself
+                (diagonal temporal mask). May also be a (B,) bool tensor to make
+                the choice per example (paper's 30%-of-videos-as-images setup).
             cache: Optional KV cache for this temporal block (rollout only).
             append: When caching, whether to write the new K/V back to the cache.
 
@@ -128,7 +130,12 @@ class TransformerBlock(nn.Module):
             if cache is not None:
                 h = self.attn.forward_temporal_cached(h, cache, append)
             else:
-                h = self.attn(h, independent_frames=independent_frames)
+                indep = independent_frames
+                if isinstance(indep, torch.Tensor):
+                    # (B,) per-example flag -> (B*S,) to match the (B*S, T, D) fold:
+                    # the reshaped row index is b*S + s, so repeat each flag S times.
+                    indep = indep.repeat_interleave(S)
+                h = self.attn(h, independent_frames=indep)
             x = x + h.view(B, S, T, D).permute(0, 2, 1, 3)
 
         x = x + self.ffn(self.norm2(x))
