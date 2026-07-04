@@ -23,7 +23,10 @@ export PYTHONPATH=/mnt/nfs/projects/ahriuwu/src
 
 cd /mnt/nfs/projects/ahriuwu
 
-CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_replay
+# Fresh run after the paper-faithfulness fixes (τ schedule, per-example
+# independent frames, betas, sampler dedup — commits 3f69de8..8212365). New dir
+# so it starts from step 0; run 124's artifacts stay at .../dynamics_v7_replay.
+CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_replay_v2
 LATENTS_DIR=/scratch/ahriuwu/dynamics_replay_latents_v7_dim32
 
 # Base flow-matching pretrain (standard x-prediction diffusion forcing) at
