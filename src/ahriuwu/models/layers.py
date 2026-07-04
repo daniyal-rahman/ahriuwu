@@ -222,9 +222,24 @@ class RotaryEmbedding2D(nn.Module):
 # flex_attention score_mod / mask_mod helpers (used only on the flex path)
 # ---------------------------------------------------------------------------
 
-def _soft_cap_score_mod(score, b, h, q_idx, kv_idx):
-    """Soft cap attention logits at 50.0 (DreamerV4 paper value)."""
-    return 50.0 * torch.tanh(score / 50.0)
+def make_soft_cap_score_mod(cap: float | None):
+    """Build a flex_attention ``score_mod`` that soft-caps logits at ``cap``.
+
+    Returns None when ``cap`` is None (soft-cap disabled). The returned closure
+    captures the ACTUAL cap so the fused flex path matches the manual path's
+    ``soft_cap_attention(cap)`` exactly — the previous module-level version
+    hardcoded 50.0 and would silently diverge from a non-default ``self.soft_cap``.
+    Build once per module (stable identity) so flex/torch.compile does not
+    re-trace it every call.
+    """
+    if cap is None:
+        return None
+    cap = float(cap)
+
+    def _score_mod(score, b, h, q_idx, kv_idx):
+        return cap * torch.tanh(score / cap)
+
+    return _score_mod
 
 
 def _causal_mask_mod(b, h, q_idx, kv_idx):
@@ -319,6 +334,9 @@ class Attention(nn.Module):
         self.soft_cap = soft_cap
         self.allow_flex = allow_flex and _FLEX_AVAILABLE
 
+        # flex_attention score_mod that matches the manual soft_cap path exactly.
+        self._score_mod = make_soft_cap_score_mod(soft_cap)
+
         # When QKNorm is enabled, Q and K are already normalized to unit RMS,
         # so the 1/sqrt(d) scaling is redundant and compresses attention logits.
         # Following Gemma 2 convention, we set scale=1.0 with QKNorm.
@@ -379,7 +397,7 @@ class Attention(nn.Module):
         Returns:
             (B, H_q, S, D) attended values.
         """
-        score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
+        score_mod = self._score_mod
 
         block_mask = None
         if mask_mod is not None:
@@ -684,9 +702,9 @@ class Attention(nn.Module):
         to the cache (commit / prefill); when False they are transient (a
         diffusion denoising sub-step on the in-progress frame).
 
-        With an empty cache and ``append=True`` this is exactly the standard
-        causal temporal forward, so it is numerically equivalent to
-        :meth:`_forward_temporal` — verified by the rollout equivalence test.
+        Committing frames one at a time into the cache is numerically equivalent
+        to running the whole sequence through :meth:`_forward_temporal` at once —
+        verified by tests/test_rollout_equivalence.py.
         """
         B, T, D = x.shape
         pos = cache["pos"]

@@ -37,7 +37,7 @@ from ahriuwu.models import (
 from ahriuwu.data.dataset import VideoGroupedSampler
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, log_images, finish_wandb
 from ahriuwu.utils.training import (
-    add_training_args, create_optimizer, create_wsd_schedule,
+    add_training_args, create_optimizer, create_wsd_schedule, create_cosine_schedule,
     save_checkpoint, load_checkpoint,
     PreemptionState, install_preemption_handlers, compute_dynamic_save_interval,
 )
@@ -1241,6 +1241,7 @@ def main():
         soft_cap=args.soft_cap if args.soft_cap > 0 else None,
         num_register_tokens=args.num_register_tokens,
         num_kv_heads=args.num_kv_heads,
+        k_max=args.shortcut_k_max,  # keep model τ/step grid == ShortcutForcing.k_max
         gradient_checkpointing=args.gradient_checkpointing,
     )
     model = model.to(args.device)
@@ -1269,8 +1270,14 @@ def main():
         "checkpoint_dir": str(checkpoint_dir),
     })
 
-    # Create optimizer + scheduler
-    optimizer = create_optimizer(model.parameters(), args.lr, args.weight_decay, use_8bit=args.use_8bit_adam, betas=(0.9, 0.95))
+    # Create optimizer + scheduler.
+    # betas from --adam-betas (default (0.9, 0.999), the DreamerV4 value); the
+    # previous hardcoded (0.9, 0.95) silently ignored the flag AND deviated from
+    # the paper.
+    optimizer = create_optimizer(
+        model.parameters(), args.lr, args.weight_decay,
+        use_8bit=args.use_8bit_adam, betas=tuple(args.adam_betas),
+    )
 
     if dataloader is not None:
         steps_per_epoch = len(dataloader) // args.gradient_accumulation
@@ -1281,7 +1288,12 @@ def main():
         n_long = int(n_short * args.long_ratio / (1 - args.long_ratio))
         steps_per_epoch = n_short // accum_s + n_long // accum_l
     total_steps = args.epochs * steps_per_epoch
-    scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
+    # Honour --lr-schedule (was hardcoded to WSD, ignoring the flag).
+    if args.lr_schedule == "cosine":
+        scheduler = create_cosine_schedule(optimizer, total_steps, args.warmup_steps)
+    else:
+        scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
+    print(f"LR schedule: {args.lr_schedule}  |  AdamW betas: {tuple(args.adam_betas)}")
 
     # Diffusion schedule + shortcut forcing
     schedule = DiffusionSchedule(device=args.device)

@@ -22,7 +22,7 @@ from torch.amp import autocast
 from torch.utils.data import DataLoader
 
 from ahriuwu.models import create_dynamics, DiffusionSchedule
-from ahriuwu.models.diffusion import ShortcutForcing
+from ahriuwu.models.diffusion import ShortcutForcing, euler_renoise_step
 from ahriuwu.data import PackedLatentSequenceDataset, VideoGroupedSampler
 from ahriuwu.utils.training import save_checkpoint, load_checkpoint
 from ahriuwu.utils.logging import init_wandb, log_step
@@ -39,7 +39,6 @@ def eval_k4(model, schedule, shortcut, val_batch, device):
     torch.cuda.manual_seed(42)
     z_t = torch.randn_like(z_0)
     torch.cuda.set_rng_state(rng)
-    z_noise = z_t.clone()
 
     K = 4
     eps = 1e-3
@@ -54,8 +53,7 @@ def eval_k4(model, schedule, shortcut, val_batch, device):
             if isinstance(z_pred, tuple):
                 z_pred = z_pred[0]
             if i < K - 1:
-                next_tau = tau_val + step_size
-                z_t = next_tau * z_pred + (1 - next_tau) * z_noise
+                z_t = euler_renoise_step(z_t, z_pred, tau_val, tau_val + step_size)
             else:
                 z_t = z_pred
 

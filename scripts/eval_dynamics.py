@@ -34,6 +34,7 @@ from ahriuwu.models import (
     DiffusionSchedule,
     psnr,
 )
+from ahriuwu.models.diffusion import euler_renoise_step
 
 # At 20 FPS
 FPS = 20
@@ -423,7 +424,6 @@ def rollout_predictions(
             # Starting at tau=0 means pure noise input which gives random predictions;
             # match DiffusionSchedule.sample() by starting from eps=1e-3.
             z_t = torch.randn(B, 1, C, H, W, device=device)
-            z_noise = z_t.clone()
 
             eps = 1e-3  # FIX #1: match DiffusionSchedule.sample() — avoid tau=0
             step_size = (1.0 - eps) / num_steps
@@ -455,10 +455,9 @@ def rollout_predictions(
                 z_pred = result[0] if isinstance(result, tuple) else result
                 z_0_pred = z_pred[:, -1:, ...]
 
-                # Euler step: interpolate toward clean using next_tau
+                # Implied-noise Euler renoise (shared helper).
                 if i < num_steps - 1:
-                    next_tau = tau + step_size
-                    z_t = next_tau * z_0_pred + (1 - next_tau) * z_noise
+                    z_t = euler_renoise_step(z_t, z_0_pred, tau, tau + step_size)
                 else:
                     z_t = z_0_pred
 

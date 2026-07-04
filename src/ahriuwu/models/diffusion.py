@@ -101,7 +101,20 @@ class DiffusionSchedule:
         Implements DreamerV4's diffusion forcing where:
         - A random horizon h is sampled for each batch item
         - Frames before h: high τ (near-clean context, U(tau_ctx, 1.0))
-        - Frames at/after h: decreasing τ (noisier targets, tau_ctx down to tau_min)
+        - Frames at/after h: τ ~ U(tau_min, 1.0) sampled INDEPENDENTLY per frame
+
+        The target τ is deliberately decoupled from absolute frame position. The
+        autoregressive rollout (``DynamicsModel.rollout``) denoises *every*
+        generated frame from τ≈0 up to τ=1, regardless of where that frame sits
+        in the sequence. If the target τ were a function of position (e.g. a
+        ramp normalized by the remaining window), then a frame at position p
+        would only ever train on a narrow, position-dependent τ band — and the
+        low-τ steps the rollout actually queries at that position would never be
+        seen. Sampling each target frame's τ from the full U(tau_min, 1.0) closes
+        that train/inference gap. The horizon still guarantees a near-clean
+        context prefix on every step, which biases training toward the
+        clean-context regime the rollout always operates in. See
+        tests/test_diffusion_forcing_schedule.py.
 
         Args:
             batch_size: Number of sequences
@@ -115,29 +128,19 @@ class DiffusionSchedule:
         """
         device = device or self.device
 
-        # Sample random horizon for each batch item: where prediction starts
+        # Sample random horizon for each batch item: where prediction starts.
+        # randint(1, T) -> h in [1, T-1], so every sequence has >=1 context frame
+        # (frame 0) and >=1 target frame (frame T-1).
         horizon = torch.randint(1, seq_length, (batch_size,), device=device)
 
         positions = torch.arange(seq_length, device=device).unsqueeze(0)  # (1, T)
-        horizon = horizon.unsqueeze(1)  # (B, 1)
+        is_context = positions < horizon.unsqueeze(1)  # (B, T)
 
-        # distance = how far past the horizon (0 for context, 1+ for targets)
-        distance = (positions - horizon).clamp(min=0).float()  # (B, T)
-
-        max_distance = (seq_length - 1 - horizon).clamp(min=1).float()  # (B, 1)
-        normalized_dist = distance / max_distance  # (B, T) in [0, 1]
-
-        is_context = positions < horizon  # (B, T)
-
-        # Context frames: high τ (near-clean), sampled from U(tau_ctx, 1.0)
+        # Context frames: near-clean, U(tau_ctx, 1.0).
         context_tau = tau_ctx + torch.rand(batch_size, seq_length, device=device) * (1.0 - tau_ctx)
 
-        # Target frames: τ decreases from tau_ctx toward tau_min (more noise)
-        # Add small noise to avoid a fully deterministic linear ramp, which would
-        # make the model memorize exact positions rather than generalize over tau.
-        target_tau = tau_ctx - normalized_dist * (tau_ctx - tau_min)
-        target_tau = target_tau + torch.randn_like(target_tau) * 0.02
-        target_tau = target_tau.clamp(tau_min, tau_ctx)
+        # Target frames: U(tau_min, 1.0), independent of position (see docstring).
+        target_tau = tau_min + torch.rand(batch_size, seq_length, device=device) * (1.0 - tau_min)
 
         tau = torch.where(is_context, context_tau, target_tau)
 
@@ -169,9 +172,8 @@ class DiffusionSchedule:
         """
         device = device or self.device
 
-        # Start from pure noise (save for reuse in Euler steps)
+        # Start from pure noise.
         z_t = torch.randn(shape, device=device)
-        z_noise = z_t.clone()
 
         # Euler integration from τ=eps (near-noise) to τ=1 (clean).
         # Starting exactly at τ=0 means the input is pure noise and the model
@@ -188,18 +190,42 @@ class DiffusionSchedule:
             if isinstance(z_0_pred, tuple):  # use_agent_tokens path returns (z, agent)
                 z_0_pred = z_0_pred[0]
 
-            # Euler step towards prediction
+            # Euler step towards prediction (implied-noise renoise; see helper).
             if i < num_steps - 1:
-                next_tau = tau + step_size
-                # Renoise with the noise IMPLIED by the current state+prediction, NOT
-                # the frozen initial z_noise — reusing the initial noise makes
-                # multi-step denoising diverge.
-                eps_hat = (z_t - tau * z_0_pred) / max(1.0 - tau, 1e-3)
-                z_t = next_tau * z_0_pred + (1 - next_tau) * eps_hat
+                z_t = euler_renoise_step(z_t, z_0_pred, tau, tau + step_size)
             else:
                 z_t = z_0_pred
 
         return z_t
+
+
+def euler_renoise_step(
+    z_t: torch.Tensor,
+    z0_pred: torch.Tensor,
+    tau: float,
+    next_tau: float,
+    eps_floor: float = 1e-3,
+) -> torch.Tensor:
+    """One flow-matching Euler denoising step for the x-prediction sampler.
+
+    Convention (matches :meth:`DiffusionSchedule.add_noise`): τ=1 is clean, τ=0
+    is noise, and the corrupted latent is ``z_τ = τ·z0 + (1-τ)·ε``. Given the
+    current state ``z_t`` at level ``tau`` and the model's clean prediction
+    ``z0_pred``, recover the noise IMPLIED by that (state, prediction) pair and
+    re-noise the prediction up to ``next_tau``::
+
+        ε̂      = (z_t - τ·z0_pred) / (1-τ)
+        z_next  = next_τ·z0_pred + (1-next_τ)·ε̂
+
+    Using the implied ε̂ — rather than the frozen initial noise the sampler
+    started from — is what makes multi-step (K>1) denoising converge instead of
+    diverge. Reusing the initial noise injects a constant wrong direction at every
+    step: 1-step is fine, but each extra step compounds the error. This was a real
+    bug; every sampler (rollout + all eval scripts) must go through this helper so
+    the fix cannot drift back out of sync. ``tau``/``next_tau`` are scalars.
+    """
+    eps_hat = (z_t - tau * z0_pred) / max(1.0 - tau, eps_floor)
+    return next_tau * z0_pred + (1.0 - next_tau) * eps_hat
 
 
 def ramp_weight(tau: torch.Tensor) -> torch.Tensor:
@@ -264,12 +290,13 @@ def x_prediction_loss(
 # Shortcut forcing utilities (for Phase 2 - advanced training)
 
 class ShortcutForcing:
-    """Shortcut forcing objective for few-step sampling.
+    """Shortcut forcing objective for few-step sampling (DreamerV4 §3.2).
 
-    Enables 4-step inference instead of 64 by training the model
-    to "skip" denoising steps using bootstrapped targets.
-
-    Not implemented in MVP - use standard diffusion first.
+    Enables ~4-step inference instead of 64 by training the model to "skip"
+    denoising steps: alongside the standard x-prediction target, a self-
+    consistency (bootstrap) target teaches a step of size ``2d`` to match two
+    chained steps of size ``d``. Used in the shortcut-distillation phase; the
+    base run trains plain diffusion forcing (this objective disabled).
     """
 
     def __init__(self, k_max: int = 64, k_min: int = 1, bootstrap_weight: float = 10.0):

@@ -22,9 +22,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 
+from .diffusion import euler_renoise_step
 from .layers import (
     RMSNorm, QKNorm, SwiGLU, Attention,
-    soft_cap_attention, _soft_cap_score_mod,
+    soft_cap_attention, make_soft_cap_score_mod,
 )
 from ..constants import MOVEMENT_DIM, ABILITY_KEYS
 
@@ -161,6 +162,8 @@ class AgentCrossAttention(nn.Module):
         self.head_dim = head_dim or dim // num_heads
         self.use_qk_norm = use_qk_norm
         self.soft_cap = soft_cap
+        # Flex score_mod matching the manual soft_cap path (no hardcoded 50.0).
+        self._score_mod = make_soft_cap_score_mod(soft_cap)
 
         # When QKNorm is enabled, set scale=1.0 (Gemma 2 convention).
         self.scale = 1.0 if use_qk_norm else self.head_dim ** -0.5
@@ -212,9 +215,8 @@ class AgentCrossAttention(nn.Module):
         v = v.reshape(B * T, self.num_kv_heads, S, self.head_dim)
 
         if _FLEX_AVAILABLE:
-            score_mod = _soft_cap_score_mod if self.soft_cap is not None else None
             out = flex_attention(
-                q, k, v, score_mod=score_mod,
+                q, k, v, score_mod=self._score_mod,
                 scale=self.scale,
                 enable_gqa=(self.num_groups > 1),
             )
@@ -357,6 +359,11 @@ class DynamicsTransformer(nn.Module):
         # Stability and efficiency features
         use_qk_norm: bool = True,
         soft_cap: float | None = 50.0,
+        # Shortcut/diffusion grid size. MUST match ShortcutForcing.k_max: τ is
+        # quantized to k_max levels and step sizes are {1,2,...,k_max}. If the
+        # model and the shortcut sampler disagree, τ indices and step embeddings
+        # silently mismap.
+        k_max: int = 64,
         # Register tokens
         num_register_tokens: int = 8,
         # Agent token settings (Phase 2+)
@@ -445,9 +452,10 @@ class DynamicsTransformer(nn.Module):
         # Discrete embeddings for tau and step_size (DreamerV4 uses lookup tables)
         # tau lives on a grid of k_max levels: {0, 1/k_max, ..., (k_max-1)/k_max}
         # step_size is power of 2: {1, 2, 4, ..., k_max} -> index by log2(d)
-        self.k_max = 64
-        self.num_tau_levels = self.k_max  # 64 discrete levels
-        self.num_step_sizes = int(math.log2(self.k_max)) + 1  # 7: d=1,2,4,8,16,32,64
+        assert k_max & (k_max - 1) == 0, f"k_max must be a power of 2, got {k_max}"
+        self.k_max = k_max
+        self.num_tau_levels = self.k_max  # discrete τ levels
+        self.num_step_sizes = int(math.log2(self.k_max)) + 1  # e.g. 7: d=1,2,...,64
         self.tau_embed = nn.Embedding(self.num_tau_levels, model_dim)
         self.step_embed = nn.Embedding(self.num_step_sizes, model_dim)
         # Project concatenated [tau_emb, step_emb] to model_dim
@@ -569,6 +577,27 @@ class DynamicsTransformer(nn.Module):
 
         return emb
 
+    def _embed_tau_step(self, tau, step_size, B, T):
+        """Discrete τ + step_size embeddings, each broadcast to (B, T, D).
+
+        τ is quantized to ``k_max`` bins (DreamerV4 "discrete signal levels" — an
+        intentional lookup even though τ is sampled continuously); ``step_size``
+        (a power of 2, default d=1) is indexed by log2. Single source of truth
+        for both the conditioning token and the additive-conditioning path.
+        """
+        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
+        tau_emb = self.tau_embed(tau_idx)  # (B, D) or (B, T, D)
+        if step_size is not None:
+            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
+        else:
+            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)  # d=1 -> log2(1)=0
+        step_emb = self.step_embed(step_idx)
+        if tau_emb.dim() == 2:
+            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
+        if step_emb.dim() == 2:
+            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
+        return tau_emb, step_emb
+
     def _build_condition_token(
         self,
         tau: torch.Tensor,
@@ -589,25 +618,7 @@ class DynamicsTransformer(nn.Module):
         Returns:
             (B, T, D) conditioning token
         """
-        # Convert continuous tau to discrete index: tau * k_max -> integer in [0, k_max)
-        # NOTE: This quantization to k_max discrete bins is intentional, matching the
-        # DreamerV4 paper's "discrete signal levels" design. Even when tau is sampled
-        # continuously, embedding it via a discrete lookup table is the intended approach.
-        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
-        tau_emb = self.tau_embed(tau_idx)  # (B, D) or (B, T, D)
-
-        # Convert step_size (integer power of 2) to index via log2
-        if step_size is not None:
-            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
-        else:
-            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)  # d=1 -> log2(1)=0
-        step_emb = self.step_embed(step_idx)  # (B, D) or (B, T, D)
-
-        # Expand to (B, T, D) if needed
-        if tau_emb.dim() == 2:
-            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
-        if step_emb.dim() == 2:
-            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
+        tau_emb, step_emb = self._embed_tau_step(tau, step_size, B, T)
 
         # Concatenate and project: [tau_emb, step_emb] -> (B, T, D)
         cond = torch.cat([tau_emb, step_emb], dim=-1)  # (B, T, 2*D)
@@ -762,17 +773,7 @@ class DynamicsTransformer(nn.Module):
 
         # tau + step_size injected additively to all tokens (strong conditioning
         # signal) and also as an appended token below.
-        tau_idx = (tau * self.k_max).long().clamp(0, self.num_tau_levels - 1)
-        tau_emb = self.tau_embed(tau_idx)
-        if tau_emb.dim() == 2:
-            tau_emb = tau_emb.unsqueeze(1).expand(-1, T, -1)
-        if step_size is not None:
-            step_idx = torch.log2(step_size.float()).long().clamp(0, self.num_step_sizes - 1)
-        else:
-            step_idx = torch.zeros(B, dtype=torch.long, device=tau.device)
-        step_emb = self.step_embed(step_idx)
-        if step_emb.dim() == 2:
-            step_emb = step_emb.unsqueeze(1).expand(-1, T, -1)
+        tau_emb, step_emb = self._embed_tau_step(tau, step_size, B, T)
         x = x + tau_emb.unsqueeze(2) + step_emb.unsqueeze(2)
 
         if self.use_game_time:
@@ -874,8 +875,7 @@ class DynamicsTransformer(nn.Module):
             a_step = None
             if actions_future is not None:
                 a_step = {kk: vv[:, t:t + 1] for kk, vv in actions_future.items()}
-            noise0 = torch.randn(B, 1, Cc, H, W, device=device)
-            tgt = noise0.clone()
+            tgt = torch.randn(B, 1, Cc, H, W, device=device)  # start from pure noise
             for i in range(num_steps):
                 tau_t = eps + i * step
                 tau1 = torch.full((B, 1), tau_t, device=device)
@@ -884,14 +884,9 @@ class DynamicsTransformer(nn.Module):
                 xt = self._run_blocks(xt, caches=caches, append=False)  # transient
                 z0 = self._project_out(xt, B, 1, Cc, H, W)
                 if i < num_steps - 1:
-                    nt = tau_t + step
-                    # Renoise with the noise IMPLIED by the current state+prediction
-                    # (DDIM/flow-matching Euler), NOT the frozen initial noise0.
-                    # Reusing noise0 injects a constant wrong direction every step, so
-                    # multi-step denoising diverges (1-step is fine, >1 collapses) —
-                    # this is what made the rollout look broken.
-                    eps_hat = (tgt - tau_t * z0) / max(1.0 - tau_t, 1e-3)
-                    tgt = nt * z0 + (1.0 - nt) * eps_hat
+                    # Implied-noise Euler renoise (shared helper — see its docstring
+                    # for why the frozen initial noise0 must NOT be reused here).
+                    tgt = euler_renoise_step(tgt, z0, tau_t, tau_t + step)
                 else:
                     tgt = z0
             preds.append(tgt)
@@ -925,6 +920,7 @@ def create_dynamics(
     soft_cap: float | None = 50.0,
     num_register_tokens: int = 8,
     num_kv_heads: int | None = None,
+    k_max: int = 64,
     # Memory efficiency
     gradient_checkpointing: bool = False,
 ) -> DynamicsTransformer:
@@ -987,6 +983,7 @@ def create_dynamics(
         "soft_cap": soft_cap,
         "num_register_tokens": num_register_tokens,
         "num_kv_heads": num_kv_heads,
+        "k_max": k_max,
         "gradient_checkpointing": gradient_checkpointing,
         **configs[size],
     }

@@ -13,6 +13,7 @@ import torch
 import matplotlib.pyplot as plt
 
 from ahriuwu.models import create_transformer_tokenizer
+from ahriuwu.models.diffusion import euler_renoise_step
 from ahriuwu.models.dynamics import create_dynamics
 
 
@@ -79,7 +80,6 @@ def predict_next_frame(
 
     # Start with pure noise for the next frame
     z_next = torch.randn(B, 1, C, H, W, device=device)
-    z_noise = z_next.clone()
 
     # FIX #2: Start from eps=1e-3, not 0.0, to match DiffusionSchedule.sample().
     # At tau=0 the input is pure noise and model prediction is random.
@@ -111,9 +111,10 @@ def predict_next_frame(
             z_next_pred = z_pred[:, -1:]
 
             if i < num_denoise_steps - 1:
-                # Interpolate toward clean at next tau level
-                next_tau = taus[i + 1]
-                z_next = next_tau * z_next_pred + (1 - next_tau) * z_noise
+                # Implied-noise Euler renoise (shared helper).
+                z_next = euler_renoise_step(
+                    z_next, z_next_pred, taus[i].item(), taus[i + 1].item()
+                )
             else:
                 z_next = z_next_pred
 
