@@ -49,7 +49,11 @@ def main():
     ap.add_argument("--out-mp4", default="/mnt/nfs/projects/ahriuwu/dream_check.mp4")
     ap.add_argument("--out-png", default="/mnt/nfs/projects/ahriuwu/dream_check.png")
     ap.add_argument("--out-plot", default="/mnt/nfs/projects/ahriuwu/dream_psnr.png")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="RNG seed for reproducible cross-checkpoint rollout comparison (-1 = random)")
     args = ap.parse_args()
+    if args.seed >= 0:
+        torch.manual_seed(args.seed)
     dev = args.device
     amp = torch.bfloat16 if dev != "mps" else torch.float16
     # Pascal (cap<8) has no native bf16; its emulation compounds error across the
