@@ -172,6 +172,7 @@ def main():
         return 10 * np.log10(255.0 ** 2 / max(mse, 1e-10))
     tok_curve = [px_psnr(tok_gt[t], gt_png[t]) for t in range(args.horizon)]
     dyn_curve = [px_psnr(dream[t], gt_png[t]) for t in range(args.horizon)]
+    persist = [px_psnr(ctx_png[-1], gt_png[t]) for t in range(args.horizon)]  # baseline: hold last real frame
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -179,6 +180,7 @@ def main():
     plt.figure(figsize=(8, 5))
     plt.plot(xs, tok_curve, "o-", color="#f0a000", label="Tokenizer ceiling (decode of TRUE latent)")
     plt.plot(xs, dyn_curve, "o-", color="#00b4c8", label="Dynamics dream (decode of rollout)")
+    plt.plot(xs, persist, "--", color="#888888", label="Persistence (hold last real frame)")
     plt.fill_between(xs, dyn_curve, tok_curve, color="gray", alpha=0.12)
     plt.xlabel("frames into the future (autoregressive rollout)")
     plt.ylabel("PSNR vs the true frame (dB, pixels)")
@@ -189,7 +191,8 @@ def main():
     plt.tight_layout()
     plt.savefig(args.out_plot, dpi=120)
     print(f"plot: {args.out_plot} | tok {tok_curve[0]:.1f}->{tok_curve[-1]:.1f}  "
-          f"dyn {dyn_curve[0]:.1f}->{dyn_curve[-1]:.1f}", flush=True)
+          f"dyn {dyn_curve[0]:.1f}->{dyn_curve[-1]:.1f}  "
+          f"persist {persist[0]:.1f}->{persist[-1]:.1f}", flush=True)
 
     def lab(im, t, c=(0, 255, 0)):
         im = im.copy(); cv2.putText(im, t, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, 0.8, c, 2); return im
