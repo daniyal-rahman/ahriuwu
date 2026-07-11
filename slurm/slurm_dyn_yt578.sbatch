@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=dyn-train
+#SBATCH --job-name=dyn-yt578
 #SBATCH --partition=gpup
-#SBATCH --output=/mnt/storage/data/ahriuwu/logs/slurm_dyn_train_%j.out
+#SBATCH --output=/mnt/storage/data/ahriuwu/logs/slurm_dyn_yt578_%j.out
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=18G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=24G
 #SBATCH --time=14-00:00:00
 #SBATCH --qos=gpu-long
 #SBATCH --signal=B:TERM@120
@@ -12,6 +12,13 @@
 #SBATCH --mail-user=danizainr@gmail.com
 #SBATCH --mail-type=FAIL,END
 
+# Broad-video world-model pretrain (DreamerV4 recipe): 578 games UNLABELED
+# (453 YT + 125 replay, all via PackedLatentSequenceDataset -> no_action_embed),
+# on the fast NVMe scratch. WARM-STARTED from the furthest action-conditioned
+# checkpoint (135, ~step 9k): the shared dynamics weights transfer via strict=False;
+# the action layers drop (relearned in a later action-conditioned fine-tune phase).
+# The seed at $CHECKPOINT_DIR/dynamics_latest.pt has batch_idx/global_step zeroed
+# and no optimizer state -> fresh optimizer + fresh warmup (gentle re-entry).
 set +u
 source /home/dani/miniconda3/etc/profile.d/conda.sh
 conda activate ml
@@ -20,21 +27,11 @@ set -euo pipefail
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONPATH=/mnt/nfs/projects/ahriuwu/src
-
 cd /mnt/nfs/projects/ahriuwu
 
-# Continue from the Vast-accelerated checkpoint (step 8775): seeded this dir with
-# the accel run's final dynamics_latest.pt (batch_idx zeroed). The auto-resume
-# below picks it up. Its optimizer state is standard-AdamW (the box had no
-# bitsandbytes); the load_checkpoint guard falls back to a fresh 8-bit optimizer
-# here (brief re-warm). Run 131's artifacts stay at .../dynamics_v7_replay_v2.
-CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_accel_resume
-LATENTS_DIR=/scratch/ahriuwu/dynamics_replay_latents_v7_dim32
+CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_yt578_hudfix
+LATENTS_DIR=/scratch/ahriuwu/dynamics_all_v7   # 578 combined latents on NVMe
 
-# Base flow-matching pretrain (standard x-prediction diffusion forcing) at
-# 128/256 context, medium model, gradient checkpointing. Shortcut forcing is
-# OMITTED here: its GC-disabled 3-forward-pass steps OOM medium@128 on the 5080.
-# Do shortcut distillation as a separate Phase B (finetune_shortcut.py) after.
 CMD=(
   python scripts/train_dynamics.py
   --latents-dir "$LATENTS_DIR"
@@ -57,13 +54,15 @@ CMD=(
   --num-kv-heads 4
   --num-register-tokens 8
   --soft-cap 50.0
-  --use-actions
-  --labels-root /mnt/nfs/datasets/lol_replays_16_9_772
   --lr 3e-4
   --warmup-steps 3000
   --eval-interval 200
   --checkpoint-minutes 60
   --epochs 50
+  --pixel-hud-loss
+  --pixel-loss-frames 4
+  --tokenizer-ckpt /mnt/storage/data/ahriuwu-checkpoints/tokenizer_v7/transformer_tokenizer_latest.pt
+  --hud-mask /mnt/nfs/projects/ahriuwu/scratchpad/hud_valid_mask_352.pt
   --wandb --wandb-project ahriuwu
 )
 if [ -f "$CHECKPOINT_DIR/dynamics_latest.pt" ]; then
@@ -77,6 +76,4 @@ trap 'if [ -n "$PY_PID" ]; then kill -USR1 "$PY_PID" 2>/dev/null; fi' USR1
 "${CMD[@]}" &
 PY_PID=$!
 wait "$PY_PID"
-EXIT_CODE=$?
-
-exit "$EXIT_CODE"
+exit $?

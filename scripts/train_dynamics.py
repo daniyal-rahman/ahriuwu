@@ -14,15 +14,19 @@ Checkpoint directories are automatically organized as:
 """
 
 import argparse
+import atexit
 import json
+import os
 import random
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
 
@@ -44,6 +48,30 @@ from ahriuwu.utils.training import (
 
 _preempt = PreemptionState()
 
+# DDP: True on rank 0 (and always in single-GPU). Side-effecting helpers
+# (checkpoint writes, wandb, eval logging) early-return / are gated when False so
+# only rank 0 touches disk and the wandb run.
+_IS_MAIN = True
+
+# Rank-0-gated logging: shadow print() in THIS module only (NOT the global
+# builtin), so library output / warnings / tracebacks from EVERY rank still
+# surface (a silently-failing non-main rank can't hide).
+_builtin_print = print
+def print(*args, **kwargs):  # noqa: A001 — intentional module-scoped rank gate
+    if _IS_MAIN:
+        _builtin_print(*args, **kwargs)
+
+
+def get_base(m):
+    """Peel torch.compile (._orig_mod) and DDP (.module) wrappers -> raw model."""
+    while True:
+        if hasattr(m, "_orig_mod"):
+            m = m._orig_mod
+        elif hasattr(m, "module"):
+            m = m.module
+        else:
+            return m
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses to reduce train_epoch parameter count
@@ -59,6 +87,8 @@ class TrainingState:
     global_step: int
     rms_dict: dict[str, RunningRMS] | None = None
     shortcut: ShortcutForcing | None = None
+    tokenizer: nn.Module | None = None    # frozen v7 decoder for the pixel-HUD loss
+    hud_mask: torch.Tensor | None = None  # (H,W) valid=1, HUD=0
 
 
 @dataclass
@@ -140,6 +170,8 @@ def save_checkpoints(
     This replaces the 3x duplicated ``save_checkpoint(...)`` blocks that
     previously appeared at every save site.
     """
+    if not _IS_MAIN:
+        return  # under DDP only rank 0 writes checkpoints
     cd = ckpt_cfg.checkpoint_dir
     if cd is None:
         return
@@ -263,6 +295,19 @@ def _build_holdout_batch(dataset, holdout_vids, batch_size):
 def parse_args():
     parser = argparse.ArgumentParser(description="Train dynamics model")
     add_training_args(parser)
+    parser.add_argument("--seed", type=int, default=0,
+                        help="Base RNG seed (per-rank offset added under DDP)")
+    # FIX #1 — pixel-space masked loss so blacked YT HUD regions don't train the model to reproduce black
+    parser.add_argument("--pixel-hud-loss", action="store_true",
+                        help="For YT (blacked-HUD) clips, use a masked pixel loss (decode through frozen v7, exclude HUD) instead of latent MSE")
+    parser.add_argument("--tokenizer-ckpt", type=str,
+                        default="/mnt/storage/data/ahriuwu-checkpoints/tokenizer_v7/transformer_tokenizer_latest.pt",
+                        help="Frozen v7 tokenizer (decoder) for --pixel-hud-loss")
+    parser.add_argument("--hud-mask", type=str,
+                        default="/mnt/nfs/projects/ahriuwu/scratchpad/hud_valid_mask_352.pt",
+                        help="(H,W) valid-mask: 1=content, 0=HUD (excluded from loss)")
+    parser.add_argument("--pixel-loss-frames", type=int, default=8,
+                        help="Frames/clip to decode for the pixel-HUD loss (subsampled to bound cost)")
     parser.add_argument(
         "--latents-dir",
         type=str,
@@ -496,6 +541,7 @@ def eval_denoising_psnr(
     For each tau level, corrupts clean latents, predicts clean, and measures PSNR.
     Also tests K=4 shortcut denoising if shortcut is provided.
     """
+    model = get_base(model)  # unwrap DDP/compile — eval on the raw module
     model.eval()
     z_0 = val_batch["latents"].to(device)
     B, T = z_0.shape[:2]
@@ -580,7 +626,7 @@ def eval_rollout_psnr(
     standard multi-step ODE). Shortcut-distilled model: pass the deploy config
     (``num_steps=4, k_max=64`` -> d=16, the real-time path).
     """
-    net = getattr(model, "_orig_mod", model)  # unwrap torch.compile if present
+    net = get_base(model)  # unwrap torch.compile + DDP
     z = val_batch["latents"].to(device)        # (B, T, C, H, W)
     B, T = z.shape[:2]
     H = min(rollout_frames, T - ctx_frames)
@@ -691,6 +737,11 @@ def train_epoch(
     micro_count = 0
     current_accum = data_cfg.accumulation_steps
     use_long = False
+    # Short/long alternation MUST be identical across DDP ranks — otherwise ranks
+    # take different accum counts (accum_long vs accum_short) and do a mismatched
+    # number of all-reduces per optimizer step, hanging. Use a rank-INDEPENDENT
+    # RNG (seeded without the per-rank offset) so every rank picks the same lengths.
+    alt_rng = random.Random(args.seed + epoch)
 
     batch_idx = 0
     ts.optimizer.zero_grad()
@@ -701,7 +752,7 @@ def train_epoch(
         for _ in range(skip_batches):
             try:
                 if alternating:
-                    if random.random() < data_cfg.long_ratio:
+                    if alt_rng.random() < data_cfg.long_ratio:
                         next(iter_long)
                     else:
                         next(iter_short)
@@ -715,7 +766,7 @@ def train_epoch(
     while True:
         # --- Decide batch type at start of accumulation window ---
         if micro_count == 0 and alternating:
-            use_long = random.random() < data_cfg.long_ratio
+            use_long = alt_rng.random() < data_cfg.long_ratio  # rank-synced (see alt_rng)
             current_accum = accum_long if use_long else accum_short
 
         # --- Get next batch (always max batch size) ---
@@ -733,6 +784,14 @@ def train_epoch(
         # --- Unpack batch ---
         z_0 = batch["latents"].to(device)
         B, T, C, H, W = z_0.shape
+
+        # Per-corpus routing for the pixel-HUD loss: YT clips (blacked HUD) get the
+        # masked pixel loss; clean replays (video_id "NA1_*") keep the latent loss.
+        # VideoGroupedSampler keeps batches ~homogeneous; a rare mixed boundary
+        # batch falls back to latent (negligible contamination).
+        is_yt = False
+        if ts.tokenizer is not None and "video_id" in batch:
+            is_yt = all(not str(v).startswith("NA1_") for v in batch["video_id"])
 
         actions = None
         if args.use_actions and "actions" in batch and batch["actions"] is not None:
@@ -764,6 +823,8 @@ def train_epoch(
                 raw_loss, loss_info, tau, z_pred = _forward_standard(
                     model, schedule, z_0, B, T, device, actions,
                     args.independent_frame_ratio, ts.rms_dict,
+                    tokenizer=ts.tokenizer, hud_mask=ts.hud_mask,
+                    is_yt=is_yt, pixel_frames=args.pixel_loss_frames,
                 )
                 loss = loss_info["loss_normed"]
 
@@ -860,8 +921,8 @@ def train_epoch(
                 step_path=step_path, extra={"batch_idx": batch_idx},
             )
 
-        # --- Eval ---
-        if val_batch is not None and did_step and ts.global_step > 0 and ts.global_step % eval_interval == 0:
+        # --- Eval (rank 0 only under DDP; other ranks wait at the next collective) ---
+        if _IS_MAIN and val_batch is not None and did_step and ts.global_step > 0 and ts.global_step % eval_interval == 0:
             eval_results = eval_denoising_psnr(
                 model, schedule, val_batch, device, shortcut=ts.shortcut,
             )
@@ -952,7 +1013,7 @@ def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions,
     Schedule: d∈{1,2} for steps 0-2k, add d=4 at 2k, d=8 at 4k,
               d=16 at 6k, d=32 at 8k, d=64 at 10k.
     """
-    _inner = getattr(model, '_orig_mod', model)
+    _inner = get_base(model)
     gc_was_enabled = getattr(_inner, 'gradient_checkpointing', False)
     if gc_was_enabled:
         _inner.gradient_checkpointing = False
@@ -972,9 +1033,45 @@ def _forward_shortcut(model, shortcut, schedule, z_0, B, T, device, actions,
     return raw_loss, loss_info, tau
 
 
+def _dyn_to_tok_latents(z):
+    """(B,T,32,16,16) -> (B, T*512, 16) for tokenizer.decode — inverse of the pretok
+    fold `lat.view(B,16,16,-1).permute(0,3,1,2)`."""
+    B, T = z.shape[:2]
+    return z.permute(0, 1, 3, 4, 2).reshape(B, T * 512, 16)
+
+
+def pixel_hud_masked_loss(tokenizer, z_pred, z_0, hud_mask, tau, n_frames):
+    """FIX #1: decode pred+target through the frozen v7 decoder and take the MSE
+    over NON-HUD pixels only (hud_mask==1). Blacked HUD pixels get zero gradient,
+    so nothing pushes the model to reproduce black. Frame-subsampled to bound cost.
+    Decode is done ONE frame at a time with gradient-checkpointing so peak VRAM is a
+    single frame's decode (not K frames) — fits alongside the T=128 dynamics forward.
+    Grad flows through the frozen decoder into z_pred only."""
+    from ahriuwu.models.diffusion import ramp_weight
+    from torch.utils.checkpoint import checkpoint
+    B, T = z_pred.shape[:2]
+    k = min(n_frames, T)
+    idx = torch.randperm(T, device=z_pred.device)[:k].tolist()
+    vm = hud_mask.view(1, 1, 1, *hud_mask.shape[-2:]).to(z_pred.dtype)  # (1,1,1,H,W)
+    denom = (3.0 * vm.sum()).clamp_min(1.0)                            # 3 channels * valid pixels
+    total = z_pred.new_zeros(())
+    for j in idx:
+        with torch.no_grad():
+            rt = tokenizer.decode(_dyn_to_tok_latents(z_0[:, j:j + 1]), 1)   # (B,1,3,H,W) target
+        rp = checkpoint(tokenizer.decode, _dyn_to_tok_latents(z_pred[:, j:j + 1]), 1,
+                        use_reentrant=False)                                 # (B,1,3,H,W) grad
+        se = (rp.float() - rt.float()) ** 2 * vm                            # (B,1,3,H,W)
+        mse = se.sum(dim=(2, 3, 4)) / denom                                 # (B,1)
+        total = total + (mse * ramp_weight(tau[:, j:j + 1])).mean()
+    return total / max(k, 1)
+
+
 def _forward_standard(model, schedule, z_0, B, T, device, actions,
-                       independent_frame_ratio, rms_dict):
-    """Standard x-prediction forward pass. Returns (raw_loss, info, tau, z_pred)."""
+                       independent_frame_ratio, rms_dict,
+                       tokenizer=None, hud_mask=None, is_yt=False, pixel_frames=8):
+    """Standard x-prediction forward pass. Returns (raw_loss, info, tau, z_pred).
+    For YT (blacked-HUD) batches with a tokenizer supplied, uses the pixel-HUD
+    masked loss; otherwise the plain latent x-prediction loss."""
     tau = schedule.sample_diffusion_forcing_timesteps(B, T, device=device)
     z_tau, noise = schedule.add_noise(z_0, tau)
     # Per-example independent-frames mask (paper: 30% of the VIDEOS in the batch
@@ -982,9 +1079,14 @@ def _forward_standard(model, schedule, z_0, B, T, device, actions,
     # context). Shape (B,) bool — NOT one coin flip for the whole batch.
     independent_frames = torch.rand(B, device=device) < independent_frame_ratio
     z_pred = model(z_tau, tau, actions=actions, independent_frames=independent_frames)
-    raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+    if tokenizer is not None and is_yt:
+        raw_loss = pixel_hud_masked_loss(tokenizer, z_pred, z_0, hud_mask, tau, pixel_frames)
+        rms_key = "pixel"
+    else:
+        raw_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+        rms_key = "x_pred"
     if rms_dict is not None:
-        loss_normed = rms_dict["x_pred"].update(raw_loss)
+        loss_normed = rms_dict[rms_key].update(raw_loss)
     else:
         loss_normed = raw_loss
     loss_info = {"loss_normed": loss_normed}
@@ -1067,10 +1169,53 @@ def _make_epoch_result(total_loss, total_grad_norm, total_grad_norm_count,
 
 def main():
     args = parse_args()
+
+    # ---- DDP setup (backward-compatible: single-process when not under torchrun) ----
+    global _IS_MAIN
+    ddp = int(os.environ.get("WORLD_SIZE", "1")) > 1
+    if ddp:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        rank = int(os.environ["RANK"])
+        world_size = int(os.environ["WORLD_SIZE"])
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+            # Eager NCCL init via device_id so the slow GeForce/no-NVLink topology
+            # search happens HERE at startup (can be minutes), not stalling the
+            # first mid-step collective. Generous timeout per the Vast playbook.
+            dist.init_process_group(
+                backend="nccl", device_id=torch.device(f"cuda:{local_rank}"),
+                timeout=timedelta(minutes=20),
+            )
+            args.device = f"cuda:{local_rank}"
+        else:
+            # CPU/gloo path (used only by the local smoke test; no GPUs to shard).
+            dist.init_process_group(backend="gloo", timeout=timedelta(minutes=20))
+            args.device = "cpu"
+        atexit.register(lambda: dist.is_initialized() and dist.destroy_process_group())
+        # Keep the effective batch invariant: split accumulation across ranks so
+        # eff = world_size * batch * accum stays the configured value.
+        for attr in ("gradient_accumulation", "gradient_accumulation_short", "gradient_accumulation_long"):
+            v = getattr(args, attr, None)
+            if v:
+                setattr(args, attr, max(1, v // world_size))
+    else:
+        local_rank, rank, world_size = 0, 0, 1
+    is_main = rank == 0
+    _IS_MAIN = is_main  # gates the module-scoped print() + checkpoint writes
+
     install_preemption_handlers(_preempt)
+    # Per-rank seed offset: augmentation/step sampling differ across ranks but are
+    # reproducible; the sampler's video-shard partition is deterministic (below).
+    random.seed(args.seed + rank)
+    torch.manual_seed(args.seed + rank)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed + rank)
 
     print("=" * 60)
     print("Dynamics Model Training")
+    if ddp:
+        print(f"DDP: world_size={world_size}  device={args.device}  "
+              f"(per-rank accum split; eff batch preserved)")
     print("=" * 60)
     print(f"Device: {args.device}")
     print(f"Model size: {args.model_size}")
@@ -1184,7 +1329,8 @@ def main():
         dataloader_short = DataLoader(
             dataset_short,
             batch_size=args.batch_size_short,
-            sampler=VideoGroupedSampler(dataset_short, exclude_videos=holdout_vids),
+            sampler=VideoGroupedSampler(dataset_short, exclude_videos=holdout_vids,
+                                        rank=rank, world_size=world_size),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -1192,7 +1338,8 @@ def main():
         dataloader_long = DataLoader(
             dataset_long,
             batch_size=args.batch_size_long,
-            sampler=VideoGroupedSampler(dataset_long, exclude_videos=holdout_vids),
+            sampler=VideoGroupedSampler(dataset_long, exclude_videos=holdout_vids,
+                                        rank=rank, world_size=world_size),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -1225,7 +1372,8 @@ def main():
         dataloader = DataLoader(
             dataset,
             batch_size=args.batch_size,
-            sampler=VideoGroupedSampler(dataset, exclude_videos=holdout_vids),
+            sampler=VideoGroupedSampler(dataset, exclude_videos=holdout_vids,
+                                        rank=rank, world_size=world_size),
             num_workers=args.num_workers,
             pin_memory=True,
             drop_last=True,
@@ -1261,16 +1409,24 @@ def main():
     print(f"Gradient checkpointing: {'ENABLED' if args.gradient_checkpointing else 'DISABLED'}")
     print(f"Independent frame ratio: {args.independent_frame_ratio:.0%}")
 
+    # DDP wrap BEFORE compile so torch.compile's DDPOptimizer manages the
+    # bucketed all-reduce. The zero-grad tap in the training loop keeps
+    # find_unused_parameters=False valid (all params get grad every backward).
+    if ddp:
+        device_ids = [local_rank] if torch.cuda.is_available() else None
+        model = DDP(model, device_ids=device_ids, gradient_as_bucket_view=True)
+
     if not args.no_compile:
         print("Compiling model with torch.compile(dynamic=True)...")
         model = torch.compile(model, dynamic=True)
 
-    save_run_config(checkpoint_dir, args, num_params)
+    if is_main:
+        save_run_config(checkpoint_dir, args, num_params)
 
     wandb_run = init_wandb(args, job_type="dynamics", extra_config={
         "num_params": num_params,
         "checkpoint_dir": str(checkpoint_dir),
-    })
+    }) if is_main else None
 
     # Create optimizer + scheduler.
     # betas from --adam-betas (default (0.9, 0.999), the DreamerV4 value); the
@@ -1310,7 +1466,7 @@ def main():
     scaler = GradScaler(args.device.split(":")[0], enabled=(amp_dtype == torch.float16))
 
     # RMS trackers (only for standard training, not shortcut forcing)
-    rms_dict = None if args.shortcut_forcing else {"x_pred": RunningRMS()}
+    rms_dict = None if args.shortcut_forcing else {"x_pred": RunningRMS(), "pixel": RunningRMS()}
 
     # Resume
     start_epoch = 0
@@ -1337,6 +1493,19 @@ def main():
         print(f"Validation batch (training-drawn): {val_batch['latents'].shape}")
 
     # --- Build dataclasses for train_epoch ---
+    # FIX #1: frozen v7 tokenizer + HUD valid-mask for the pixel-HUD masked loss.
+    _pix_tok, _pix_mask = None, None
+    if getattr(args, "pixel_hud_loss", False):
+        from pretokenize_replay_v7 import load_v7  # scripts/ is on sys.path[0]
+        _pix_tok, _pix_cfg, _pix_step = load_v7(args.tokenizer_ckpt, args.device)
+        for _p in _pix_tok.parameters():
+            _p.requires_grad_(False)
+        _pix_tok.eval()
+        _pix_mask = torch.load(args.hud_mask, map_location=args.device, weights_only=True).float()
+        print(f"PIXEL-HUD-LOSS ON: tokenizer step {_pix_step} + valid-mask {tuple(_pix_mask.shape)} "
+              f"({(_pix_mask == 0).float().mean() * 100:.0f}% HUD excluded), "
+              f"{args.pixel_loss_frames} frames/clip decoded", flush=True)
+
     ts = TrainingState(
         model=model,
         optimizer=optimizer,
@@ -1345,6 +1514,8 @@ def main():
         global_step=global_step,
         rms_dict=rms_dict,
         shortcut=shortcut,
+        tokenizer=_pix_tok,
+        hud_mask=_pix_mask,
     )
 
     if args.alternating_lengths:
@@ -1413,8 +1584,8 @@ def main():
             # instead of silently re-training the epoch that just completed.
             save_checkpoints(ckpt_cfg, ts, epoch + 1, metrics["loss"], args, step_path=epoch_path)
 
-        # Save best model based on validation PSNR
-        if val_batch is not None:
+        # Save best model based on validation PSNR (rank 0 only under DDP)
+        if is_main and val_batch is not None:
             eval_results = eval_denoising_psnr(
                 model, schedule, val_batch, args.device, shortcut=shortcut,
             )

@@ -443,8 +443,21 @@ def load_checkpoint(
             print(f"Note: Initializing new parameters: {missing}")
         if unexpected:
             print(f"Warning: Unexpected keys in checkpoint: {unexpected}")
-    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-    scaler.load_state_dict(checkpoint["scaler_state_dict"])
+    # Optimizer state is best-effort: an 8-bit-Adam (bitsandbytes) state loaded
+    # into standard AdamW — or any cross-optimizer/cross-version mismatch — must
+    # not abort a resume. Fall back to a FRESH optimizer (momentum re-warms in a
+    # few steps); the model WEIGHTS + step clock still continue.
+    try:
+        if "optimizer_state_dict" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+    except (KeyError, ValueError, RuntimeError) as e:
+        print(f"Warning: optimizer state incompatible ({type(e).__name__}: {e}); "
+              f"resuming WEIGHTS ONLY with a fresh optimizer.")
+    if "scaler_state_dict" in checkpoint:
+        try:
+            scaler.load_state_dict(checkpoint["scaler_state_dict"])
+        except Exception:
+            pass
     # Scheduler + step clock: skip when reset_schedule so a fresh warmup->flat->
     # decay schedule runs from 0 (continuation past a finished decay).
     if not reset_schedule:

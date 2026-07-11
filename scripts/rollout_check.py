@@ -45,6 +45,8 @@ def main():
     ap.add_argument("--num-steps", type=int, default=6, help="rollout denoise steps/frame (base model -> d=1)")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--decode", action="store_true")
+    ap.add_argument("--no-actions", action="store_true",
+                    help="unconditioned rollout for use_actions=False models (e.g. the 578-game pretrain 154)")
     ap.add_argument("--tokenizer", default="/mnt/storage/data/ahriuwu-checkpoints/tokenizer_v7/transformer_tokenizer_latest.pt")
     ap.add_argument("--out-mp4", default="/mnt/nfs/projects/ahriuwu/dream_check.mp4")
     ap.add_argument("--out-png", default="/mnt/nfs/projects/ahriuwu/dream_check.png")
@@ -64,7 +66,7 @@ def main():
 
     ck = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     print(f"checkpoint: global_step={ck.get('global_step')} epoch={ck.get('epoch')} loss={ck.get('loss')}", flush=True)
-    model = create_dynamics(args.model_size, latent_dim=32, use_actions=True, num_kv_heads=4,
+    model = create_dynamics(args.model_size, latent_dim=32, use_actions=not args.no_actions, num_kv_heads=4,
                             num_register_tokens=8, soft_cap=50.0, use_qk_norm=True).to(dev).eval()
     sd = ck["model_state_dict"]
     if any(k.startswith("_orig_mod.") for k in sd):
@@ -102,6 +104,8 @@ def main():
     ctx, gt = z[:, :args.ctx], z[:, args.ctx:args.ctx + args.horizon].float()
     ac = {k: v[:, :args.ctx] for k, v in a.items()}
     af = {k: v[:, args.ctx:args.ctx + args.horizon] for k, v in a.items()}
+    if args.no_actions:
+        ac = af = None  # unconditioned rollout (154 was trained use_actions=False)
     with torch.no_grad():
         if amp_ok:
             with torch.autocast(device_type=dev.split(":")[0], dtype=amp):
@@ -184,7 +188,7 @@ def main():
     plt.fill_between(xs, dyn_curve, tok_curve, color="gray", alpha=0.12)
     plt.xlabel("frames into the future (autoregressive rollout)")
     plt.ylabel("PSNR vs the true frame (dB, pixels)")
-    plt.title(f"Rollout quality per frame — job 124 @ step {ck.get('global_step')}\nmatch {match}")
+    plt.title(f"Rollout quality per frame — step {ck.get('global_step')} (epoch {ck.get('epoch')})\nmatch {match}")
     plt.xticks(xs)
     plt.grid(True, alpha=0.3)
     plt.legend(loc="upper right")

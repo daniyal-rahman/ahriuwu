@@ -43,7 +43,7 @@ class SingleFrameDataset(Dataset):
         self.transform = transform
 
         self.frame_paths: list[Path] = []
-        for video_dir in self.frames_dir.iterdir():
+        for video_dir in sorted(self.frames_dir.iterdir()):  # deterministic order across DDP ranks
             if not video_dir.is_dir():
                 continue
             self.frame_paths.extend(sorted(video_dir.glob(f"frame_*.{self.file_ext}")))
@@ -123,7 +123,11 @@ class FrameSequenceDataset(Dataset):
         self.aug_noise_std = aug_noise_std
 
         self.sequences: list[dict] = []
-        for video_dir in self.frames_dir.iterdir():
+        # sorted(): every DDP rank must build an IDENTICAL video ordering. DistributedSampler
+        # shards by index; if iterdir() returned a different order to any rank, ranks would
+        # silently train on different/duplicated clips (no error). Frames within a video are
+        # already sorted below; this fixes the *video* order.
+        for video_dir in sorted(self.frames_dir.iterdir()):
             if not video_dir.is_dir():
                 continue
             frames = sorted(video_dir.glob(f"*.{self.file_ext}"))
@@ -210,27 +214,51 @@ class VideoGroupedSampler(Sampler):
     """Yield sequences grouped by video. Shuffles video order each epoch and
     sequence order within each video, but keeps a video's sequences contiguous
     in the batch stream so cache hits dominate.
+
+    Under DDP (``world_size > 1``) whole videos are sharded across ranks — a
+    video's sequences all stay on ONE rank, preserving the per-video file-cache
+    locality that matters most when streaming latents from R2 (an index-sharding
+    DistributedSampler would scatter each video across ranks and thrash the
+    cache). Every rank yields the SAME count (``total // world_size``) so DDP's
+    all-reduce never hangs on ragged data: ranks with fewer sequences wrap-repeat,
+    ranks with more truncate. ``world_size == 1`` is byte-identical to before.
     """
 
-    def __init__(self, dataset, exclude_videos=None):
+    def __init__(self, dataset, exclude_videos=None, rank=0, world_size=1):
         exclude = set(exclude_videos or ())
         groups: dict = defaultdict(list)
         for idx, seq in enumerate(dataset.sequences):
             if seq["video_id"] in exclude:
                 continue
             groups[seq["video_id"]].append(idx)
-        self.video_groups = list(groups.values())
-        self._len = sum(len(g) for g in self.video_groups)
+        self.world_size = world_size
+        if world_size > 1:
+            # deterministic which-video-goes-to-which-rank (sorted keys, strided)
+            keys = sorted(groups)
+            self.video_groups = [groups[k] for i, k in enumerate(keys) if i % world_size == rank]
+            total = sum(len(g) for g in groups.values())
+            self._target = total // world_size  # equal per rank (drop remainder)
+        else:
+            self.video_groups = list(groups.values())
+            self._target = sum(len(g) for g in self.video_groups)
 
     def __iter__(self):
         order = torch.randperm(len(self.video_groups)).tolist()
+        seq = []
         for v in order:
             group = self.video_groups[v]
             perm = torch.randperm(len(group)).tolist()
-            yield from (group[i] for i in perm)
+            seq.extend(group[i] for i in perm)
+        if self.world_size > 1 and seq:
+            # equalize length across ranks so batch counts match (no DDP hang)
+            if len(seq) < self._target:
+                seq = (seq * (self._target // len(seq) + 1))[:self._target]
+            else:
+                seq = seq[:self._target]
+        return iter(seq)
 
     def __len__(self) -> int:
-        return self._len
+        return self._target
 
 
 class VideoShuffleSampler(Sampler):
