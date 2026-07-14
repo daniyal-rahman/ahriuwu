@@ -22,7 +22,7 @@ exec /home/dani/miniconda3/envs/ml/bin/python -u scripts/train_agent_finetune.py
   --dynamics-checkpoint "$BACKBONE" \
   --model-size medium --num-kv-heads 4 --num-register-tokens 8 --soft-cap 50.0 \
   --latents-dir "$LAT" --labels-root "$LABELS" \
-  --seq-len 32 --stride 8 --batch-size 6 --epochs 10 \
+  --seq-len 16 --stride 8 --batch-size 6 --epochs 10 \
   --lr 3e-4 --warmup-steps 2000 --num-workers 4 \
   --checkpoint-dir "$CKPT" --log-interval 50 \
   --resume auto --checkpoint-minutes 20 --ability-pos-weight 5.0 \

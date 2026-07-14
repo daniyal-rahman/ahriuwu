@@ -42,7 +42,19 @@ output (0 presses, 1 movement cell) means the policy is still ~untrained.
 4. Go live in a **practice tool / custom game** (never a real match): drop `--dry-run`.
    Keybinds assumed: Q/W/E/R, D=Flash, F=Ignite, B=Recall, item slot 3=Stride, right-click=move/AA. Remap in `DEFAULT_KEYS` if yours differ.
 
-## Known gaps / tuning
-- **Speed**: ~7 fps at context=32 uncompiled on the 5080. For 20 fps live: lower `--context` (8–16), and/or enable `torch.compile` (works on the 5080? — test; it worked on Ada 4090). The dynamics forward over the window is the cost.
-- **Policy quality** is capped by how long BC trains (it just restarted on the recovered backbone). Let it bank several epochs; re-copy the checkpoint before the demo.
+## Deployment topology (benchmarked)
+**Inference MUST run on the fast GPU (5080), not the 1060.** Per-frame ML cost:
+
+| GPU / precision | ctx=8 | ctx=16 | ctx=32 |
+|---|---|---|---|
+| 1060 fp32 | 423ms / 2.4fps | 672ms / 1.5fps | 1085ms / 0.9fps |
+| 5080 fp32 | 58ms / 17fps | 92ms / 11fps | 150ms / 6.7fps |
+| **5080 bf16** (auto) | **35ms / 28fps** | **47ms / 21fps** | 81ms / 12fps |
+
+So: put the **5080 on the ML side** (Windows box runs capture→infer→inject *locally* — LoL barely uses the GPU, so it co-hosts inference fine; no need to stream frames to the 1060 and back). bf16 is auto-on for the 5080 (Blackwell); it's the whole difference between 17 and 28 fps. `torch.compile` is broken on the 5080 (sm_120) — don't rely on it.
+
+**BC now trains at `seq_len=16`** so deploy at `--context 16` (train==test) — 47ms/21fps in bf16, leaving ~3ms; if capture+inject overhead pushes it under 20fps, drop to `--context 8` (still fits at 28fps, slightly less history).
+
+## Other gaps
+- **Policy quality** is capped by how long BC trains (restarted on the recovered backbone at seq_len 16). Let it bank several epochs; re-copy the checkpoint before the demo.
 - The world model is an **encoder** here (no dreaming). Phase-3 imagination (a genuinely good policy) needs action-conditioning + the mixed-dataset plumbing — that's post-demo.

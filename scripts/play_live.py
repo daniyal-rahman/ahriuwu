@@ -83,7 +83,7 @@ def main():
     ap.add_argument("--phase2-ckpt", required=True)
     ap.add_argument("--tokenizer-ckpt", required=True)
     ap.add_argument("--capture-region", default=None, help="x,y,w,h (default: primary monitor)")
-    ap.add_argument("--context", type=int, default=32)
+    ap.add_argument("--context", type=int, default=16)
     ap.add_argument("--target-fps", type=int, default=20)
     ap.add_argument("--temperature", type=float, default=0.0, help="0=greedy (steadiest)")
     ap.add_argument("--device", default="cuda")

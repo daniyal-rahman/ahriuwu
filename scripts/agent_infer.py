@@ -46,7 +46,7 @@ def _dyn_from_tok(latent):
 class GarenAgent:
     """Load a Phase-2 checkpoint and turn observed frames/latents into actions."""
 
-    def __init__(self, phase2_ckpt, tokenizer_ckpt=None, context=32, tau_ctx=0.9,
+    def __init__(self, phase2_ckpt, tokenizer_ckpt=None, context=16, tau_ctx=0.9,
                  device="cuda", init_only=False):
         self.device = device
         self.context = context
@@ -185,7 +185,7 @@ def main():
     ap.add_argument("--phase2-ckpt", default="data/phase2_bc_garen/agent_finetune_latest.pt")
     ap.add_argument("--latents", default="/scratch/ahriuwu/dynamics_replay_latents_v7_dim32/NA1_5549995114.pt")
     ap.add_argument("--labels-root", default="/srv/nfs/datasets/lol_replays_16_9_772")
-    ap.add_argument("--context", type=int, default=32)
+    ap.add_argument("--context", type=int, default=16)
     ap.add_argument("--frames", type=int, default=300)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--device", default="cuda")
