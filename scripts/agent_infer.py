@@ -35,10 +35,12 @@ from ahriuwu.constants import ABILITY_KEYS, MOVEMENT_DIM
 from ahriuwu.models import create_dynamics, PolicyHead, RewardHead, DiffusionSchedule
 
 
-def _dyn_from_tok(latent_256):
-    """(B, num_latents=256, latent_dim) -> (B, latent_dim, 16, 16) dynamics grid."""
-    B, N, C = latent_256.shape
-    return latent_256.view(B, 16, 16, C).permute(0, 3, 1, 2).contiguous()
+def _dyn_from_tok(latent):
+    """v7 tokenizer latent (B, num_latents=512, tok_dim=16) -> dynamics grid
+    (B, 32, 16, 16). 512*16 = 16*16*32; folded EXACTLY as pretokenize_replay_v7
+    (`view(B,16,16,-1).permute(0,3,1,2)`), so the dynamics sees its trained layout."""
+    B = latent.shape[0]
+    return latent.reshape(B, 16, 16, -1).permute(0, 3, 1, 2).contiguous()
 
 
 class GarenAgent:
@@ -51,6 +53,12 @@ class GarenAgent:
         self.tau_ctx = tau_ctx
         self.buf = deque(maxlen=context)
         self.sched = DiffusionSchedule(device=device)
+        # bf16 autocast on a bf16-native GPU roughly halves the forward (the 5080
+        # deploy target). Pascal (1060, cap<8) has no native bf16 -> stay fp32.
+        self.amp = (device.startswith("cuda")
+                    and torch.cuda.get_device_capability(0)[0] >= 8)
+        self._ac = (lambda: torch.autocast("cuda", dtype=torch.bfloat16)) if self.amp \
+            else __import__("contextlib").nullcontext
 
         ck = torch.load(phase2_ckpt, map_location="cpu", weights_only=False) if not init_only else {}
         a = ck.get("args", {}) if isinstance(ck.get("args", {}), dict) else vars(ck.get("args"))
@@ -105,8 +113,9 @@ class GarenAgent:
         import cv2
         f = cv2.resize(frame_rgb01, (352, 352), interpolation=cv2.INTER_AREA)
         x = torch.from_numpy(f).float().permute(2, 0, 1).unsqueeze(0).to(self.device)
-        lat = self.tok.encode(x)["latent"]           # (1, 256, latent_dim)
-        return _dyn_from_tok(lat)                     # (1, latent_dim, 16, 16)
+        with self._ac():
+            lat = self.tok.encode(x)["latent"]       # (1, 512, 16)
+        return _dyn_from_tok(lat.float())            # (1, 32, 16, 16)
 
     def reset(self):
         self.buf.clear()
@@ -127,14 +136,15 @@ class GarenAgent:
         tau = self.tau_ctx + torch.rand(B, T, device=self.device) * (1.0 - self.tau_ctx)
         z_tau, _ = self.sched.add_noise(z0, tau)
         d_one = torch.ones(B, dtype=torch.long, device=self.device)
-        _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=None)
-        h = agent_out[:, -1:, :]                      # newest frame's agent token (1,1,D)
-
-        abil, move, _ = self.policy.sample(h, temperature=temperature)  # (1,1,L,A),(1,1,L,2)
+        with self._ac():
+            _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=None)
+            h = agent_out[:, -1:, :]                  # newest frame's agent token (1,1,D)
+            abil, move, _ = self.policy.sample(h, temperature=temperature)  # (1,1,L,A),(1,1,L,2)
+            rew_all = self.reward.predict(h)
         n = 1 if self.mtp > 1 else 0                  # MTP offset 1 = trained "next action"
         abilities = {k: bool(abil[0, 0, n, i].item() > 0.5) for i, k in enumerate(ABILITY_KEYS)}
-        movement = tuple(float(v) for v in move[0, 0, n].tolist())
-        rew = float(self.reward.predict(h)[0, 0, n].item())
+        movement = tuple(float(v) for v in move[0, 0, n].float().tolist())
+        rew = float(rew_all[0, 0, n].item())
         return {"abilities": abilities, "movement": movement, "reward_pred": rew}
 
 
