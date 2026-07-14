@@ -114,6 +114,16 @@ def parse_args():
     parser.add_argument("--agent-layers", type=int, default=4)
     parser.add_argument("--tau-ctx", type=float, default=0.9,
                         help="Near-clean context corruption: per-frame tau ~ U(tau_ctx, 1).")
+    # --resume and --checkpoint-minutes come from add_training_args. Pass --resume
+    # 'auto' to use <checkpoint-dir>/agent_finetune_latest.pt. The main loop wires
+    # checkpoint-minutes into a mid-epoch save (the trainer only saved per-epoch).
+    parser.add_argument("--ability-pos-weight", type=float, default=5.0,
+                        help="Positive-class weight for the ability BCE. Casts are sparse, so "
+                             "unweighted BCE collapses to 'never press'. >1 makes the agent cast.")
+    parser.add_argument("--dataset-cache", type=str, default=None,
+                        help="Cache the (slow) dataset index — label/reward parse + per-.pt "
+                             "frame_indices reads — to this file. Present -> load; absent -> "
+                             "build then save. Delete the file to force a rebuild.")
     # Smoke test
     parser.add_argument("--smoke-test", action="store_true",
                         help="Run a tiny synthetic CPU train step end-to-end + assert "
@@ -144,13 +154,45 @@ def build_dynamics(args, *, use_actions: bool, device: str):
     ).to(device)
 
 
-def load_frozen_dynamics(args, device: str):
-    """Load the Phase 1 dynamics as a FROZEN backbone with agent tokens enabled.
+# Agent-token params are NEW in Phase 2. Phase-1 pretraining never trains them:
+# agent_out is a side readout (dynamics.forward returns it alongside z_0_pred) and
+# is absent from the denoising loss, so the agent blocks only ever get the DDP
+# zero-grad tap in Phase 1 — i.e. they stay at random init. Phase 2 must therefore
+# TRAIN them (along with the heads); only the pretrained diffusion backbone freezes.
+AGENT_PARAM_PREFIXES = ("agent_token", "agent_temporal_pos", "agent_blocks",
+                        "agent_norm_out")
 
-    The Phase 1 checkpoint usually has no agent-token / reward-head weights (those
-    are trained here), so non-matching keys are loaded non-strictly: the agent
-    blocks start from their init and get trained, the diffusion backbone is the
-    pretrained one. Returns (dynamics, use_actions).
+
+def freeze_backbone_train_agent(dyn):
+    """Freeze the pretrained diffusion backbone; keep the agent-token blocks
+    trainable. Returns the list of trainable agent params (for the optimizer).
+
+    The backbone stays in eval() (LayerNorm-only, so eval/train are identical and
+    there's no dropout/BN state). Because every backbone param has requires_grad
+    False and the noised-latent input carries no grad, running the backbone WITHOUT
+    a no_grad wrapper builds no backbone autograd graph — grad flows only into the
+    agent blocks that read the (constant) z-token features. So keep run_step's
+    forward OUT of no_grad and do NOT detach agent_out.
+    """
+    dyn.eval()
+    agent_params = []
+    for name, p in dyn.named_parameters():
+        if name.startswith(AGENT_PARAM_PREFIXES):
+            p.requires_grad_(True)
+            agent_params.append(p)
+        else:
+            p.requires_grad_(False)
+    return agent_params
+
+
+def load_frozen_dynamics(args, device: str):
+    """Load the Phase 1 dynamics: FROZEN diffusion backbone + TRAINABLE agent
+    tokens (see :func:`freeze_backbone_train_agent`).
+
+    The Phase 1 checkpoint has no agent-token / reward-head weights (those are
+    trained here), so non-matching keys are loaded non-strictly: the agent blocks
+    start from their init and get trained, the diffusion backbone is the pretrained
+    one. Returns (dynamics, use_actions, agent_params).
     """
     if args.init_dynamics or args.dynamics_checkpoint is None:
         # Fresh backbone (smoke / wiring). Enable actions so the action path is exercised.
@@ -174,9 +216,11 @@ def load_frozen_dynamics(args, device: str):
         print(f"  [ckpt] use_actions={use_actions}; {len(missing)} missing "
               f"(agent/new) / {len(unexpected)} unexpected keys")
 
-    dyn.eval()
-    dyn.requires_grad_(False)  # FROZEN backbone
-    return dyn, dyn.use_actions
+    agent_params = freeze_backbone_train_agent(dyn)
+    n_agent = sum(p.numel() for p in agent_params)
+    print(f"  [freeze] diffusion backbone FROZEN; {len(agent_params)} agent tensors "
+          f"({n_agent:,} params) TRAINABLE")
+    return dyn, dyn.use_actions, agent_params
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +253,7 @@ def build_dataset(args):
         manifest_path=args.manifest,
         sequence_length=args.seq_len,
         stride=args.stride,
+        cache_path=getattr(args, "dataset_cache", None),
     )
 
 
@@ -249,7 +294,7 @@ def reward_mtp_loss(reward_logits, rewards, bucket_centers, mtp_length):
 
 
 def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_targets,
-                        mtp_length):
+                        mtp_length, ability_pos_weight=None):
     """Behavior-cloning negative log-likelihood of the NEXT actions.
 
     MTP head n (n >= 1) predicts the action at t+n from the token at t; n=0 is
@@ -265,6 +310,9 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
 
     import torch.nn.functional as F
     move_idx_full = policy_head.discretize_movement(movement_targets)  # (B, T, 2)
+    # Up-weight the (rare) positive casts so BCE doesn't collapse to "never press".
+    pos_w = (torch.tensor(ability_pos_weight, device=agent_out.device)
+             if ability_pos_weight and ability_pos_weight != 1.0 else None)
 
     ability_nll = torch.zeros((), device=agent_out.device)
     move_nll = torch.zeros((), device=agent_out.device)
@@ -275,7 +323,8 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
         # token positions 0..T-1-n predict action at +n
         a_logits = ability_logits[:, :T - n, n, :]          # (B, T-n, A)
         a_tgt = ability_targets[:, n:, :]                    # (B, T-n, A)
-        ability_nll = ability_nll + F.binary_cross_entropy_with_logits(a_logits, a_tgt)
+        ability_nll = ability_nll + F.binary_cross_entropy_with_logits(
+            a_logits, a_tgt, pos_weight=pos_w)
 
         m_logits = movement_logits[:, :T - n, n, :, :]       # (B, T-n, move_dim, bins)
         m_idx = move_idx_full[:, n:, :]                      # (B, T-n, move_dim)
@@ -317,9 +366,11 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
     tau = args.tau_ctx + torch.rand(B, T, device=device) * (1.0 - args.tau_ctx)
     with torch.no_grad():
         z_noisy, _ = schedule.add_noise(z0, tau)
-        d_one = torch.ones(B, dtype=torch.long, device=device)
-        _, agent_out = dynamics(z_noisy, tau, step_size=d_one, actions=actions_dict)
-    agent_out = agent_out.detach()  # backbone frozen; heads own all gradients
+    d_one = torch.ones(B, dtype=torch.long, device=device)
+    # NOT under no_grad and NOT detached: the diffusion backbone is frozen
+    # (requires_grad=False) so it builds no graph, but the agent blocks are trained
+    # here — grad must flow from the heads through agent_out into them.
+    _, agent_out = dynamics(z_noisy, tau, step_size=d_one, actions=actions_dict)
 
     with autocast(device_type=device.split(":")[0], dtype=amp_dtype,
                   enabled=(amp_dtype == torch.bfloat16 or amp_dtype == torch.float16) and device != "cpu"):
@@ -328,7 +379,8 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
             reward_logits, rewards, reward_head.bucket_centers, args.mtp_length
         )
         bc_loss, bc_info = bc_next_action_loss(
-            policy_head, agent_out, ability_targets, movement_targets, args.mtp_length
+            policy_head, agent_out, ability_targets, movement_targets, args.mtp_length,
+            ability_pos_weight=getattr(args, "ability_pos_weight", None),
         )
 
         bc_n = rms["bc"].update(bc_loss)
@@ -368,8 +420,7 @@ def smoke_test(args):
 
     B, T, C, S = 2, 6, args.latent_dim, 16
     dynamics = build_dynamics(args, use_actions=True, device=device)
-    dynamics.eval()
-    dynamics.requires_grad_(False)
+    agent_params = freeze_backbone_train_agent(dynamics)
     model_dim = dynamics.model_dim
 
     reward_head = RewardHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
@@ -390,15 +441,26 @@ def smoke_test(args):
 
     schedule = DiffusionSchedule(device=device)
     rms = {"bc": RunningRMS(), "reward": RunningRMS()}
-    params = list(reward_head.parameters()) + list(policy_head.parameters())
+    params = agent_params + list(reward_head.parameters()) + list(policy_head.parameters())
     optimizer = torch.optim.AdamW(params, lr=1e-3)
 
+    def agent_backbone_grads():
+        """(agent_grad_norm, [backbone params that wrongly got grad])."""
+        ag, bad = 0.0, []
+        for name, p in dynamics.named_parameters():
+            if name.startswith(AGENT_PARAM_PREFIXES):
+                if p.grad is not None:
+                    ag += p.grad.norm().item()
+            elif p.grad is not None:
+                bad.append(name)
+        return ag, bad
+
+    # === STEP 1: heads must receive BC/reward gradient (headline fix) ===
     optimizer.zero_grad()
     total, info = run_step(batch, dynamics, reward_head, policy_head, schedule,
                            args, device, torch.float32, rms)
     total.backward()
 
-    # --- GRAD-FLOW PROOF: movement_heads must receive a nonzero BC gradient ---
     move_grads = [h.weight.grad for h in policy_head.movement_heads if h.weight.grad is not None]
     assert move_grads, "movement_heads received NO gradient (grad is None) under BC!"
     move_grad_norm = sum(g.norm().item() for g in move_grads)
@@ -409,12 +471,28 @@ def smoke_test(args):
     reward_grad_norm = sum(
         p.grad.norm().item() for p in reward_head.parameters() if p.grad is not None
     )
-    # Dynamics is frozen: it must have NO grads.
-    dyn_with_grad = [n for n, p in dynamics.named_parameters() if p.grad is not None]
-    assert not dyn_with_grad, f"frozen dynamics got gradients: {dyn_with_grad[:3]}"
+    # Backbone must NEVER get grad. Agent blocks legitimately get ZERO grad on
+    # step 1 — the output heads are zero-init, so d(loss)/d(agent_out) = 0 until
+    # the heads move off zero. We assert agent grad on step 2 instead.
+    _, backbone_bad = agent_backbone_grads()
+    assert not backbone_bad, f"frozen backbone got gradients: {backbone_bad[:3]}"
 
     torch.nn.utils.clip_grad_norm_(params, 1.0)
+    optimizer.step()  # heads move off zero-init
+
+    # === STEP 2: agent blocks must now train (Phase-2 backbone-freeze contract) ===
+    optimizer.zero_grad()
+    total2, _ = run_step(batch, dynamics, reward_head, policy_head, schedule,
+                         args, device, torch.float32, rms)
+    total2.backward()
+    agent_grad_norm, backbone_bad2 = agent_backbone_grads()
+    assert agent_grad_norm > 0, (
+        "agent blocks received NO gradient on step 2 — Phase 2 must TRAIN the "
+        "agent-token machinery, not just the heads!")
+    assert not backbone_bad2, f"frozen backbone got gradients: {backbone_bad2[:3]}"
+    torch.nn.utils.clip_grad_norm_(params, 1.0)
     optimizer.step()
+    backbone_with_grad = backbone_bad2
 
     print(f"  total_loss          = {info['loss'].item():.4f}")
     print(f"  bc_loss             = {info['bc_loss'].item():.4f} "
@@ -423,7 +501,8 @@ def smoke_test(args):
     print(f"  GRAD movement_heads = {move_grad_norm:.6e}  (PROOF: > 0 under BC)")
     print(f"  GRAD ability heads  = {ability_grad_norm:.6e}")
     print(f"  GRAD reward head    = {reward_grad_norm:.6e}")
-    print(f"  frozen dynamics grads: {len(dyn_with_grad)} (must be 0)")
+    print(f"  GRAD agent blocks   = {agent_grad_norm:.6e}  (PROOF: > 0, trained in Phase 2)")
+    print(f"  frozen backbone grads: {len(backbone_with_grad)} (must be 0)")
     print("  optimizer.step() OK")
     print("SMOKE TEST PASSED")
     return True
@@ -450,7 +529,7 @@ def main():
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     print("\nLoading frozen dynamics backbone...")
-    dynamics, use_actions = load_frozen_dynamics(args, device)
+    dynamics, use_actions, agent_params = load_frozen_dynamics(args, device)
     model_dim = dynamics.model_dim
     print(f"  dynamics params: {sum(p.numel() for p in dynamics.parameters()):,} (frozen)")
     print(f"  action conditioning: {use_actions}")
@@ -479,13 +558,34 @@ def main():
 
     schedule = DiffusionSchedule(device=device)
     rms = {"bc": RunningRMS(), "reward": RunningRMS()}
-    params = list(reward_head.parameters()) + list(policy_head.parameters())
+    # Trainable set: agent-token blocks (frozen backbone excluded) + both heads.
+    params = agent_params + list(reward_head.parameters()) + list(policy_head.parameters())
     optimizer = create_optimizer(params, args.lr, args.weight_decay,
                                  use_8bit=args.use_8bit_adam, betas=tuple(args.adam_betas))
     total_steps = args.epochs * max(1, len(dataloader))
     scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
     amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
     scaler = GradScaler(device.split(":")[0], enabled=(amp_dtype == torch.float16))
+
+    # --- Resume (crash recovery): restore agent blocks + heads + optim + step ---
+    start_epoch, global_step = 0, 0
+    resume_path = args.resume
+    if resume_path == "auto":
+        resume_path = str(checkpoint_dir / "agent_finetune_latest.pt")
+    if resume_path and Path(resume_path).exists():
+        rc = torch.load(resume_path, map_location=device, weights_only=False)
+        getattr(dynamics, "_orig_mod", dynamics).load_state_dict(
+            rc["dynamics_state_dict"], strict=False)  # restores trained agent blocks
+        reward_head.load_state_dict(rc["reward_head_state_dict"])
+        policy_head.load_state_dict(rc["policy_head_state_dict"])
+        optimizer.load_state_dict(rc["optimizer_state_dict"])
+        scheduler.load_state_dict(rc["scheduler_state_dict"])
+        for k, st in rc.get("rms_state", {}).items():
+            if k in rms:
+                rms[k].load_state_dict(st)
+        start_epoch = rc.get("epoch", 0)
+        global_step = rc.get("global_step", 0)
+        print(f"  [resume] {resume_path}: epoch {start_epoch}, global_step {global_step}")
 
     init_wandb(args, job_type="agent_finetune", extra_config={
         "reward_head_params": sum(p.numel() for p in reward_head.parameters()),
@@ -495,8 +595,8 @@ def main():
     print("\n" + "=" * 60)
     print("Starting BC + reward training...")
     print("=" * 60)
-    global_step = 0
-    for epoch in range(args.epochs):
+    last_ckpt_t = time.time()
+    for epoch in range(start_epoch, args.epochs):
         reward_head.train()
         policy_head.train()
         t0 = time.time()
@@ -514,6 +614,15 @@ def main():
             scaler.update()
             scheduler.step()
             global_step += 1
+
+            # Time-based checkpoint: a crash loses <= checkpoint-minutes, not a
+            # whole (~19h on the 1060) epoch. Stores the CURRENT epoch so resume
+            # re-enters it with weights/optimizer/step intact.
+            if (time.time() - last_ckpt_t) >= args.checkpoint_minutes * 60:
+                save_phase2_checkpoint(checkpoint_dir / "agent_finetune_latest.pt", dynamics,
+                                       reward_head, policy_head, optimizer, scheduler, rms,
+                                       epoch, global_step, args)
+                last_ckpt_t = time.time()
 
             if batch_idx % args.log_interval == 0:
                 sps = (batch_idx + 1) * args.batch_size / max(time.time() - t0, 1e-6)

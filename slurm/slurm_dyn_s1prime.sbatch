@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=dyn-yt578
+#SBATCH --job-name=dyn-s1prime
 #SBATCH --partition=gpup
 #SBATCH --output=/mnt/storage/data/ahriuwu/logs/slurm_dyn_yt578_%j.out
 #SBATCH --gres=gpu:1
@@ -29,7 +29,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export PYTHONPATH=/mnt/nfs/projects/ahriuwu/src
 cd /mnt/nfs/projects/ahriuwu
 
-CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_yt578_hudfix
+CHECKPOINT_DIR=/mnt/storage/data/ahriuwu/checkpoints/dyn179_s1prime_latentonly
 LATENTS_DIR=/scratch/ahriuwu/dynamics_all_v7   # 578 combined latents on NVMe
 
 CMD=(
@@ -58,14 +58,9 @@ CMD=(
   --soft-cap 50.0
   --lr 3e-4
   --warmup-steps 3000
-  --eval-interval 200
+  --eval-interval 50
   --checkpoint-minutes 60
   --epochs 50
-  --pixel-hud-loss
-  --pixel-loss-frames 4
-  --tokenizer-ckpt /mnt/storage/data/ahriuwu-checkpoints/tokenizer_v7/transformer_tokenizer_latest.pt
-  --hud-mask /mnt/nfs/projects/ahriuwu/scratchpad/hud_valid_mask_352.pt
-  --wandb --wandb-project ahriuwu
 )
 if [ -f "$CHECKPOINT_DIR/dynamics_latest.pt" ]; then
   CMD+=(--resume "$CHECKPOINT_DIR/dynamics_latest.pt")

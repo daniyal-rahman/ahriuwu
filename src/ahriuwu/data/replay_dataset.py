@@ -106,6 +106,7 @@ class ReplayLatentSequenceDataset(Dataset):
         stride: int = 1,
         reward_config: RewardConfig | None = None,
         max_cache_size: int = 2,
+        cache_path: str | Path | None = None,
     ):
         # max_cache_size is per-worker — DataLoader fork-spawns each worker
         # with its own cache copy. With VideoShuffleSampler the access
@@ -135,7 +136,52 @@ class ReplayLatentSequenceDataset(Dataset):
         # Precomputed sequence index built at construction time
         self.sequences: list[dict] = []
 
-        self._index()
+        # Dumb optional cache of the expensive index (label/reward parse + the
+        # per-.pt frame_indices reads, ~tens of GB). Keyed only by
+        # (latents_dir, seq_len, stride, #matches); rebuild if any differ. No
+        # auto-discovery/invalidation by design — delete the file to force rebuild.
+        if not self._load_index_cache(cache_path):
+            self._index()
+            self._save_index_cache(cache_path)
+
+    # ─────────────────────── index cache (dumb) ───────────────────────
+
+    def _cache_meta(self) -> dict:
+        return {"latents_dir": str(self.latents_dir),
+                "seq_len": self.sequence_length, "stride": self.stride}
+
+    def _load_index_cache(self, cache_path) -> bool:
+        """Load match_data + sequences from a prior build. Returns True on a
+        usable hit (skips the whole ~expensive _index)."""
+        if not cache_path or not Path(cache_path).exists():
+            return False
+        try:
+            c = torch.load(cache_path, weights_only=False)
+        except Exception as e:  # corrupt/partial cache -> just rebuild
+            warnings.warn(f"dataset cache read failed ({e}); rebuilding")
+            return False
+        if c.get("meta") != self._cache_meta():
+            print(f"  [dscache] {cache_path}: params differ from request -> rebuild")
+            return False
+        self.match_data = c["match_data"]
+        self.sequences = c["sequences"]
+        print(f"  [dscache] HIT {cache_path}: {len(self.match_data)} matches, "
+              f"{len(self.sequences)} sequences (skipped label/reward parse)")
+        return True
+
+    def _save_index_cache(self, cache_path) -> None:
+        if not cache_path:
+            return
+        try:
+            p = Path(cache_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(p.suffix + ".tmp")
+            torch.save({"meta": self._cache_meta(), "match_data": self.match_data,
+                        "sequences": self.sequences}, tmp)
+            tmp.replace(p)
+            print(f"  [dscache] wrote {cache_path} ({len(self.sequences)} sequences)")
+        except Exception as e:  # cache is best-effort; never fail the run over it
+            warnings.warn(f"dataset cache write failed ({e}); continuing")
 
     # ───────────────────────── indexing ─────────────────────────
 

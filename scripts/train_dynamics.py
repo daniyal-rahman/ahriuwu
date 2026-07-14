@@ -308,6 +308,12 @@ def parse_args():
                         help="(H,W) valid-mask: 1=content, 0=HUD (excluded from loss)")
     parser.add_argument("--pixel-loss-frames", type=int, default=8,
                         help="Frames/clip to decode for the pixel-HUD loss (subsampled to bound cost)")
+    parser.add_argument("--pixel-hud-aux", action="store_true",
+                        help="AUX mode: keep the latent x-pred loss on EVERY batch (z_0 always "
+                             "constrained) and ADD the HUD-masked pixel loss on YT batches, rather "
+                             "than REPLACING latent with pixel on YT. Requires --pixel-hud-loss.")
+    parser.add_argument("--pixel-hud-aux-weight", type=float, default=1.0,
+                        help="Weight on the (RMS-normed) auxiliary pixel-HUD term in --pixel-hud-aux mode.")
     parser.add_argument(
         "--latents-dir",
         type=str,
@@ -825,6 +831,8 @@ def train_epoch(
                     args.independent_frame_ratio, ts.rms_dict,
                     tokenizer=ts.tokenizer, hud_mask=ts.hud_mask,
                     is_yt=is_yt, pixel_frames=args.pixel_loss_frames,
+                    pixel_hud_aux=args.pixel_hud_aux,
+                    pixel_hud_aux_weight=args.pixel_hud_aux_weight,
                 )
                 loss = loss_info["loss_normed"]
 
@@ -1068,7 +1076,8 @@ def pixel_hud_masked_loss(tokenizer, z_pred, z_0, hud_mask, tau, n_frames):
 
 def _forward_standard(model, schedule, z_0, B, T, device, actions,
                        independent_frame_ratio, rms_dict,
-                       tokenizer=None, hud_mask=None, is_yt=False, pixel_frames=8):
+                       tokenizer=None, hud_mask=None, is_yt=False, pixel_frames=8,
+                       pixel_hud_aux=False, pixel_hud_aux_weight=1.0):
     """Standard x-prediction forward pass. Returns (raw_loss, info, tau, z_pred).
     For YT (blacked-HUD) batches with a tokenizer supplied, uses the pixel-HUD
     masked loss; otherwise the plain latent x-prediction loss."""
@@ -1079,6 +1088,19 @@ def _forward_standard(model, schedule, z_0, B, T, device, actions,
     # context). Shape (B,) bool — NOT one coin flip for the whole batch.
     independent_frames = torch.rand(B, device=device) < independent_frame_ratio
     z_pred = model(z_tau, tau, actions=actions, independent_frames=independent_frames)
+    if pixel_hud_aux and tokenizer is not None:
+        # AUX mode: latent x-pred loss on EVERY batch (z_0 always constrained);
+        # YT batches ADD the HUD-masked pixel loss (normed separately) on top.
+        latent_loss = x_prediction_loss(z_pred, z_0, tau, use_ramp_weight=True)
+        latent_n = rms_dict["x_pred"].update(latent_loss) if rms_dict is not None else latent_loss
+        if is_yt:
+            pix = pixel_hud_masked_loss(tokenizer, z_pred, z_0, hud_mask, tau, pixel_frames)
+            pix_n = rms_dict["pixel"].update(pix) if rms_dict is not None else pix
+            loss_normed = latent_n + pixel_hud_aux_weight * pix_n
+        else:
+            loss_normed = latent_n
+        return latent_loss, {"loss_normed": loss_normed}, tau, z_pred
+
     if tokenizer is not None and is_yt:
         raw_loss = pixel_hud_masked_loss(tokenizer, z_pred, z_0, hud_mask, tau, pixel_frames)
         rms_key = "pixel"
