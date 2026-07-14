@@ -9,7 +9,7 @@ export PYTHONPATH=/srv/nfs/projects/ahriuwu/src
 export CUDA_VISIBLE_DEVICES=0            # the 1060 (login node)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-BACKBONE=${BACKBONE:-scratchpad/dyn179_gs6120.pt}   # fresh 179 encoder (gs 6120)
+BACKBONE=${BACKBONE:-scratchpad/dyn_s1prime_gs7550_backbone.pt}   # RECOVERED encoder (Step 1', gs7603, tau0.9 ~26)
 LAT=${LAT:-/srv/nfs/datasets/replay_latents_v7_bc}
 LABELS=${LABELS:-/srv/nfs/datasets/lol_replays_16_9_772}
 # NB: repo 'checkpoints' is a symlink to desktop-local /mnt/storage (dangling on
