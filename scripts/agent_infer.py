@@ -47,10 +47,15 @@ class GarenAgent:
     """Load a Phase-2 checkpoint and turn observed frames/latents into actions."""
 
     def __init__(self, phase2_ckpt, tokenizer_ckpt=None, context=16, tau_ctx=0.9,
-                 device="cuda", init_only=False):
+                 device="cuda", init_only=False, ability_thresh=0.0):
         self.device = device
         self.context = context
         self.tau_ctx = tau_ctx
+        # Greedy cast decision: fire ability k when its LOGIT > ability_thresh.
+        # BC leaves cast logits deeply negative (all ~ -3.5 to -5) so the default
+        # 0.0 never casts even though the logits DO rank cast frames above others
+        # (probe AUC ~0.8). Lower this (e.g. -4.0) to a calibrated operating point.
+        self.ability_thresh = ability_thresh
         self.buf = deque(maxlen=context)
         self.sched = DiffusionSchedule(device=device)
         # bf16 autocast on a bf16-native GPU roughly halves the forward (the 5080
@@ -139,10 +144,15 @@ class GarenAgent:
         with self._ac():
             _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=None)
             h = agent_out[:, -1:, :]                  # newest frame's agent token (1,1,D)
-            abil, move, _ = self.policy.sample(h, temperature=temperature)  # (1,1,L,A),(1,1,L,2)
+            a_logits, _ = self.policy(h)              # (1,1,L,A) raw ability logits
+            abil, move, _ = self.policy.sample(h, temperature=temperature)  # movement (+temp>0 abils)
             rew_all = self.reward.predict(h)
         n = 1 if self.mtp > 1 else 0                  # MTP offset 1 = trained "next action"
-        abilities = {k: bool(abil[0, 0, n, i].item() > 0.5) for i, k in enumerate(ABILITY_KEYS)}
+        if temperature > 0:                           # stochastic: use the sampled abilities
+            abilities = {k: bool(abil[0, 0, n, i].item() > 0.5) for i, k in enumerate(ABILITY_KEYS)}
+        else:                                         # greedy: calibrated logit threshold
+            al = a_logits[0, 0, n, :].float()
+            abilities = {k: bool(al[i].item() > self.ability_thresh) for i, k in enumerate(ABILITY_KEYS)}
         movement = tuple(float(v) for v in move[0, 0, n].float().tolist())
         rew = float(rew_all[0, 0, n].item())
         return {"abilities": abilities, "movement": movement, "reward_pred": rew}

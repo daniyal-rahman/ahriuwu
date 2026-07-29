@@ -40,6 +40,8 @@ def main():
     ap.add_argument("--frames", type=int, default=800)
     ap.add_argument("--context", type=int, default=16)
     ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--ability-thresh", type=float, default=0.0,
+                    help="Greedy cast logit threshold (default 0=never casts; try -4.0 calibrated)")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
     dev = args.device
@@ -56,7 +58,8 @@ def main():
     move_gt = s["actions"]["movement"].float().numpy()           # (N+1, 2)
     abil_gt = torch.stack([s["actions"][k].float() for k in ABILITY_KEYS], -1).numpy().astype(bool)  # (N+1,9)
 
-    ag = GarenAgent(args.phase2_ckpt, tokenizer_ckpt=None, context=args.context, device=dev)
+    ag = GarenAgent(args.phase2_ckpt, tokenizer_ckpt=None, context=args.context, device=dev,
+                    ability_thresh=args.ability_thresh)
     print(f"sim e2e: {args.match}, {N} frames, ctx={args.context}, temp={args.temperature}, bf16={ag.amp}")
     ag.reset()
     pm = np.zeros((N, 2), np.float32)
