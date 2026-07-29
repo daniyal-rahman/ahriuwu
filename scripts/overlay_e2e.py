@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--start", type=int, default=2000)
     ap.add_argument("--frames", type=int, default=400)
     ap.add_argument("--context", type=int, default=16)
+    ap.add_argument("--frames-dir", default=None,
+                    help="Dir of ORIGINAL sharp PNGs (frames/, named <frame>.png). If given, "
+                         "render on those instead of the (blurry) tokenizer decode.")
     ap.add_argument("--out", default="e2e_overlay.mp4")
     ap.add_argument("--fps", type=int, default=15)
     ap.add_argument("--device", default="cuda")
@@ -53,6 +56,9 @@ def main():
     lat = s["latents"].float()
     gm = s["actions"]["movement"].float().numpy()
     ga = torch.stack([s["actions"][k].float() for k in ABILITY_KEYS], -1).numpy().astype(bool)
+    start_idx = ds.sequences[0]["start_idx"]
+    fidx = torch.load(glob.glob(f"{args.latents_dir}/{args.match}.pt")[0],
+                      map_location="cpu", weights_only=True)["frame_indices"].numpy()
 
     ag = GarenAgent(args.phase2_ckpt, tokenizer_ckpt=args.tokenizer_ckpt, context=args.context, device=dev)
     ag.reset()
@@ -63,10 +69,16 @@ def main():
     vw = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (W, H))
     n_written = 0
     for t in range(args.start, args.start + args.frames):
-        with torch.no_grad(), ag._ac():
-            rec = ag.tok.decode(unfold(lat[t:t + 1].to(dev)), 1)
-        img = rec.squeeze().permute(1, 2, 0).clamp(0, 1).float().cpu().numpy()
-        img = cv2.cvtColor(cv2.resize((img * 255).astype(np.uint8), (W, H)), cv2.COLOR_RGB2BGR)
+        img = None
+        if args.frames_dir:
+            fnum = int(fidx[start_idx + t])
+            img = cv2.imread(f"{args.frames_dir}/{fnum:06d}.png")     # sharp original (BGR)
+        if img is None:                                              # decode fallback (soft)
+            with torch.no_grad(), ag._ac():
+                rec = ag.tok.decode(unfold(lat[t:t + 1].to(dev)), 1)
+            img = cv2.cvtColor((rec.squeeze().permute(1, 2, 0).clamp(0, 1).float().cpu().numpy() * 255)
+                               .astype(np.uint8), cv2.COLOR_RGB2BGR)
+        img = cv2.resize(img, (W, H))
 
         ag.buf.append(lat[t:t + 1].to(dev))
         w = list(ag.buf)
