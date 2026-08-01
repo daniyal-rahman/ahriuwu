@@ -1,0 +1,1 @@
+08-01 17:38 | proc:UP | ckpt_age:13min | Epoch 2 [6100/26407] loss=1.6749 bc=0.9054 (abil=0.030 move=0.875) rew=0.0473 (13.7 samp/s)

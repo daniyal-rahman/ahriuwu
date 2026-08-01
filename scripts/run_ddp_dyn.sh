@@ -40,7 +40,7 @@ export LATENTS_DIR CHECKPOINT_DIR LABELS_ROOT RESUME NUM_WORKERS
 python -c "import cv2"   2>/dev/null || pip -q install opencv-python-headless
 python -c "import wandb" 2>/dev/null || pip -q install wandb
 
-source scripts/dyn_train_args.sh             # -> DYN_ARGS (single source of truth)
+source "${DYN_ARGS_FILE:-scripts/dyn_train_args.sh}"   # -> DYN_ARGS (default: action-conditioned; hudfix: dyn_train_args_hudfix.sh)
 
 [ -f "$RESUME" ] && echo "Resuming from $RESUME" \
                  || echo "No checkpoint at $RESUME — COLD START"

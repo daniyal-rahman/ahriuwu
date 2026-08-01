@@ -1,0 +1,109 @@
+[03:36:45] NGPU=4 candidate offers: 45496289 1.1227777777777779;36206420 1.1747222222222222;43666785 1.282314814814815;32131255 1.3347222222222221;33915090 1.3347222222222221;
+[03:36:45] try offer 45496289 @ $1.1227777777777779/hr
+[03:36:47] instance 46252333 @ $1.1227777777777779/hr
+[03:36:48] budget $17 @ $1.1227777777777779/hr -> train window 52707s (~14h)
+[03:36:50] poll 1: status=None host=216.167.70.119 port=-1
+[03:37:07] poll 2: status=loading host=216.167.70.119 port=-1
+[03:37:23] poll 3: status=running host=216.167.70.119 port=-1
+[03:37:40] poll 4: status=running host=216.167.70.119 port=50468
+[03:38:49] sshd stable @ 216.167.70.119:50468
+[03:38:49] shipping working tree (src+scripts) + rclone config...
+Warning: Permanently added '[216.167.70.119]:50468' (ED25519) to the list of known hosts.
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+Warning: Permanently added '[216.167.70.119]:50468' (ED25519) to the list of known hosts.
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+Warning: Permanently added '[216.167.70.119]:50468' (ED25519) to the list of known hosts.
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+[03:39:16] on box: deps + stage (combined latents + tokenizer + mask + seed) + launch pixel-HUD DDP + R2 streamer...
+[04:20:14] training launched; monitoring up to 52707s (auto-stop on plateau)...
+[04:22:47] [1/351] 
+scratchpad/vast_dyn_action.sh: line 111: [: 0
+0: integer expression expected
+[04:25:29] [2/351] 
+scratchpad/vast_dyn_action.sh: line 111: [: 0
+0: integer expression expected
+[04:28:08] [3/351] 
+scratchpad/vast_dyn_action.sh: line 111: [: 0
+0: integer expression expected
+[04:30:48] [4/351] 
+scratchpad/vast_dyn_action.sh: line 111: [: 0
+0: integer expression expected
+[04:33:28] [5/351] 
+scratchpad/vast_dyn_action.sh: line 111: [: 0
+0: integer expression expected
+[04:36:10] [6/351] Epoch 0 [9100/13477] S T=128 Loss: 0.0051 Tau: [0.00-1.00] GradN: 1.773 PredStd: 0.6094 (94.2 batch/s) !!  GRAD_CLIP
+[04:38:55] [7/351] Epoch 0 [9150/13477] S T=128 Loss: 0.0041 Tau: [0.01-1.00] GradN: 1.822 PredStd: 0.6172 (42.2 batch/s) !!  GRAD_CLIP | Epoch 0 [9200/13477] S T=128 Loss: 0.0036 Tau: [0.00-1.00] GradN: 1.809 PredStd: 0.6211 (27.3 batch/s) !!  GRAD_CLIP
+[04:41:37] [8/351] Epoch 0 [9200/13477] S T=128 Loss: 0.0036 Tau: [0.00-1.00] GradN: 1.809 PredStd: 0.6211 (27.3 batch/s) !!  GRAD_CLIP | Epoch 0 [9250/13477] S T=128 Loss: 0.0046 Tau: [0.01-0.99] GradN: 1.940 PredStd: 0.6094 (20.3 batch/s) !!  GRAD_CLIP
+[04:44:18] [9/351] Epoch 0 [9250/13477] S T=128 Loss: 0.0046 Tau: [0.01-0.99] GradN: 1.940 PredStd: 0.6094 (20.3 batch/s) !!  GRAD_CLIP | Epoch 0 [9300/13477] S T=128 Loss: 0.0066 Tau: [0.00-0.99] GradN: 2.278 PredStd: 0.6094 (16.0 batch/s) !!  GRAD_CLIP
+[04:46:58] [10/351]   [EVAL step 9450] psnr_tau0.1=7.3 psnr_tau0.3=12.7 psnr_tau0.5=16.5 psnr_tau0.7=20.4 psnr_tau0.9=26.0 | Epoch 0 [9400/13477] L T=256 Loss: 0.0166 Tau: [0.00-1.00] GradN: 1.670 PredStd: 0.5820 (11.2 batch/s)
+[04:47:13]     eval#1 step=9450 rollout_mean=17.5 tau0.9=26.0 best=17.5 noimp=0/12
+[04:49:47] [11/351] Epoch 0 [9400/13477] L T=256 Loss: 0.0166 Tau: [0.00-1.00] GradN: 1.670 PredStd: 0.5820 (11.2 batch/s) | Epoch 0 [9450/13477] L T=256 Loss: 0.0049 Tau: [0.01-1.00] GradN: 2.657 PredStd: 0.6094 (9.9 batch/s) !!  GRAD_CLIP
+[04:52:27] [12/351] Epoch 0 [9450/13477] L T=256 Loss: 0.0049 Tau: [0.01-1.00] GradN: 2.657 PredStd: 0.6094 (9.9 batch/s) !!  GRAD_CLIP | Epoch 0 [9500/13477] S T=128 Loss: 0.0043 Tau: [0.00-1.00] GradN: 1.970 PredStd: 0.6172 (8.8 batch/s) !!  GRAD_CLIP
+[04:55:08] [13/351] Epoch 0 [9550/13477] S T=128 Loss: 0.0044 Tau: [0.00-1.00] GradN: 2.363 PredStd: 0.6133 (8.0 batch/s) !!  GRAD_CLIP | Epoch 0 [9600/13477] S T=128 Loss: 0.0068 Tau: [0.00-0.99] GradN: 2.529 PredStd: 0.6094 (7.3 batch/s) !!  GRAD_CLIP
+[04:57:49] [14/351] Epoch 0 [9600/13477] S T=128 Loss: 0.0068 Tau: [0.00-0.99] GradN: 2.529 PredStd: 0.6094 (7.3 batch/s) !!  GRAD_CLIP | Epoch 0 [9650/13477] S T=128 Loss: 0.0038 Tau: [0.00-1.00] GradN: 2.256 PredStd: 0.6172 (6.7 batch/s) !!  GRAD_CLIP
+[05:00:31] [15/351]   [EVAL step 9600] psnr_tau0.1=7.4 psnr_tau0.3=11.9 psnr_tau0.5=15.9 psnr_tau0.7=20.3 psnr_tau0.9=25.7 | Epoch 0 [9700/13477] L T=256 Loss: 0.0048 Tau: [0.01-1.00] GradN: 1.479 PredStd: 0.6094 (6.2 batch/s)
+[05:00:47]     eval#2 step=9600 rollout_mean=14.3 tau0.9=25.7 best=17.5 noimp=1/12
+[05:03:21] [16/351] Epoch 0 [9750/13477] L T=256 Loss: 0.0066 Tau: [0.00-0.99] GradN: 2.022 PredStd: 0.6133 (5.7 batch/s) !!  GRAD_CLIP | Epoch 0 [9800/13477] L T=256 Loss: 0.0069 Tau: [0.00-1.00] GradN: 2.045 PredStd: 0.6016 (5.4 batch/s)
+[05:06:01] [17/351] Epoch 0 [9800/13477] L T=256 Loss: 0.0069 Tau: [0.00-1.00] GradN: 2.045 PredStd: 0.6016 (5.4 batch/s) | Epoch 0 [9850/13477] S T=128 Loss: 0.0069 Tau: [0.01-1.00] GradN: 1.873 PredStd: 0.6055 (5.1 batch/s) !!  GRAD_CLIP
+[05:08:43] [18/351] Epoch 0 [9850/13477] S T=128 Loss: 0.0069 Tau: [0.01-1.00] GradN: 1.873 PredStd: 0.6055 (5.1 batch/s) !!  GRAD_CLIP | Epoch 0 [9900/13477] S T=128 Loss: 0.0099 Tau: [0.00-1.00] GradN: 2.666 PredStd: 0.5977 (4.8 batch/s) !!  GRAD_CLIP
+[05:11:24] [19/351] Epoch 0 [9950/13477] L T=256 Loss: 0.0128 Tau: [0.01-1.00] GradN: 1.873 PredStd: 0.5898 (4.6 batch/s) !!  GRAD_CLIP | Epoch 0 [10000/13477] L T=256 Loss: 0.0035 Tau: [0.00-1.00] GradN: 1.826 PredStd: 0.6133 (4.4 batch/s)
+[05:14:09] [20/351]   [EVAL step 9750] psnr_tau0.1=7.5 psnr_tau0.3=12.8 psnr_tau0.5=16.9 psnr_tau0.7=20.6 psnr_tau0.9=26.2 | Epoch 0 [10050/13477] S T=128 Loss: 0.0044 Tau: [0.00-1.00] GradN: 1.981 PredStd: 0.6172 (4.1 batch/s) !!  GRAD_CLIP
+[05:14:27]     eval#3 step=9750 rollout_mean=15.9 tau0.9=26.2 best=17.5 noimp=2/12
+[05:17:00] [21/351] Epoch 0 [10050/13477] S T=128 Loss: 0.0044 Tau: [0.00-1.00] GradN: 1.981 PredStd: 0.6172 (4.1 batch/s) !!  GRAD_CLIP | Epoch 0 [10100/13477] S T=128 Loss: 0.0082 Tau: [0.00-0.99] GradN: 2.477 PredStd: 0.5977 (3.9 batch/s) !!  GRAD_CLIP
+[05:19:41] [22/351] Epoch 0 [10100/13477] S T=128 Loss: 0.0082 Tau: [0.00-0.99] GradN: 2.477 PredStd: 0.5977 (3.9 batch/s) !!  GRAD_CLIP | Epoch 0 [10150/13477] S T=128 Loss: 0.0037 Tau: [0.01-0.99] GradN: 3.726 PredStd: 0.6133 (3.8 batch/s) !!  GRAD_CLIP
+[05:22:22] [23/351] Epoch 0 [10200/13477] S T=128 Loss: 0.0047 Tau: [0.01-1.00] GradN: 2.364 PredStd: 0.6172 (3.6 batch/s) !!  GRAD_CLIP | Epoch 0 [10250/13477] S T=128 Loss: 0.0086 Tau: [0.00-1.00] GradN: 1.788 PredStd: 0.6055 (3.5 batch/s) !!  GRAD_CLIP
+[05:25:02] [24/351] Epoch 0 [10250/13477] S T=128 Loss: 0.0086 Tau: [0.00-1.00] GradN: 1.788 PredStd: 0.6055 (3.5 batch/s) !!  GRAD_CLIP | Epoch 0 [10300/13477] S T=128 Loss: 0.0144 Tau: [0.00-1.00] GradN: 3.002 PredStd: 0.5898 (3.4 batch/s) !!  GRAD_CLIP
+[05:27:43] [25/351] Epoch 0 [10350/13477] S T=128 Loss: 0.0061 Tau: [0.00-1.00] GradN: 2.317 PredStd: 0.6055 (3.3 batch/s) !!  GRAD_CLIP |   [EVAL step 9900] psnr_tau0.1=7.3 psnr_tau0.3=11.5 psnr_tau0.5=15.9 psnr_tau0.7=19.9 psnr_tau0.9=25.9
+[05:27:54]     eval#4 step=9900 rollout_mean=15.8 tau0.9=25.9 best=17.5 noimp=3/12
+[05:30:30] [26/351] Epoch 0 [10400/13477] S T=128 Loss: 0.0106 Tau: [0.00-1.00] GradN: 2.140 PredStd: 0.5898 (3.1 batch/s) !!  GRAD_CLIP | Epoch 0 [10450/13477] S T=128 Loss: 0.0034 Tau: [0.01-1.00] GradN: 1.939 PredStd: 0.6094 (3.0 batch/s) !!  GRAD_CLIP
+[05:33:10] [27/351] Epoch 0 [10450/13477] S T=128 Loss: 0.0034 Tau: [0.01-1.00] GradN: 1.939 PredStd: 0.6094 (3.0 batch/s) !!  GRAD_CLIP | Epoch 0 [10500/13477] S T=128 Loss: 0.0087 Tau: [0.00-0.99] GradN: 1.819 PredStd: 0.5977 (3.0 batch/s) !!  GRAD_CLIP
+[05:35:50] [28/351] Epoch 0 [10500/13477] S T=128 Loss: 0.0087 Tau: [0.00-0.99] GradN: 1.819 PredStd: 0.5977 (3.0 batch/s) !!  GRAD_CLIP | Epoch 0 [10550/13477] S T=128 Loss: 0.0122 Tau: [0.00-1.00] GradN: 1.408 PredStd: 0.5977 (2.9 batch/s) !!  GRAD_CLIP
+[05:38:29] [29/351] Epoch 0 [10600/13477] S T=128 Loss: 0.0066 Tau: [0.01-0.99] GradN: 1.658 PredStd: 0.6094 (2.8 batch/s) !!  GRAD_CLIP | Epoch 0 [10650/13477] S T=128 Loss: 0.0058 Tau: [0.00-1.00] GradN: 2.348 PredStd: 0.6094 (2.7 batch/s) !!  GRAD_CLIP
+[05:41:09] [30/351]   [EVAL step 10050] psnr_tau0.1=7.4 psnr_tau0.3=11.7 psnr_tau0.5=16.2 psnr_tau0.7=20.2 psnr_tau0.9=26.1 | Epoch 0 [10700/13477] S T=128 Loss: 0.0036 Tau: [0.00-1.00] GradN: 2.444 PredStd: 0.6211 (2.6 batch/s) !!  GRAD_CLIP
+[05:41:31]     eval#5 step=10050 rollout_mean=15.8 tau0.9=26.1 best=17.5 noimp=4/12
+[05:44:05] [31/351] Epoch 0 [10700/13477] S T=128 Loss: 0.0036 Tau: [0.00-1.00] GradN: 2.444 PredStd: 0.6211 (2.6 batch/s) !!  GRAD_CLIP | Epoch 0 [10750/13477] S T=128 Loss: 0.0035 Tau: [0.00-1.00] GradN: 2.761 PredStd: 0.6211 (2.6 batch/s) !!  GRAD_CLIP
+[05:46:48] [32/351] Epoch 0 [10800/13477] S T=128 Loss: 0.0032 Tau: [0.00-1.00] GradN: 1.627 PredStd: 0.6172 (2.5 batch/s) !!  GRAD_CLIP | Epoch 0 [10850/13477] L T=256 Loss: 0.0056 Tau: [0.00-1.00] GradN: 2.370 PredStd: 0.6094 (2.5 batch/s) !!  GRAD_CLIP
+[05:49:31] [33/351] Epoch 0 [10850/13477] L T=256 Loss: 0.0056 Tau: [0.00-1.00] GradN: 2.370 PredStd: 0.6094 (2.5 batch/s) !!  GRAD_CLIP | Epoch 0 [10900/13477] S T=128 Loss: 0.0028 Tau: [0.00-1.00] GradN: 2.037 PredStd: 0.6133 (2.4 batch/s) !!  GRAD_CLIP
+[05:52:11] [34/351] Epoch 0 [10900/13477] S T=128 Loss: 0.0028 Tau: [0.00-1.00] GradN: 2.037 PredStd: 0.6133 (2.4 batch/s) !!  GRAD_CLIP | Epoch 0 [10950/13477] L T=256 Loss: 0.0034 Tau: [0.00-0.99] GradN: 2.000 PredStd: 0.6055 (2.4 batch/s)
+[05:54:51] [35/351]   [EVAL step 10200] psnr_tau0.1=7.2 psnr_tau0.3=11.4 psnr_tau0.5=15.6 psnr_tau0.7=19.9 psnr_tau0.9=25.8 | Epoch 0 [11050/13477] S T=128 Loss: 0.0037 Tau: [0.00-1.00] GradN: 1.962 PredStd: 0.6133 (2.2 batch/s) !!  GRAD_CLIP
+[05:55:08]     eval#6 step=10200 rollout_mean=14.8 tau0.9=25.8 best=17.5 noimp=5/12
+[05:57:41] [36/351] Epoch 0 [11050/13477] S T=128 Loss: 0.0037 Tau: [0.00-1.00] GradN: 1.962 PredStd: 0.6133 (2.2 batch/s) !!  GRAD_CLIP | Epoch 0 [11100/13477] S T=128 Loss: 0.0098 Tau: [0.02-1.00] GradN: 1.433 PredStd: 0.6055 (2.2 batch/s) !!  GRAD_CLIP
+[06:00:22] [37/351] Epoch 0 [11100/13477] S T=128 Loss: 0.0098 Tau: [0.02-1.00] GradN: 1.433 PredStd: 0.6055 (2.2 batch/s) !!  GRAD_CLIP | Epoch 0 [11150/13477] S T=128 Loss: 0.0082 Tau: [0.00-1.00] GradN: 2.158 PredStd: 0.6055 (2.2 batch/s) !!  GRAD_CLIP
+[06:03:04] [38/351] Epoch 0 [11200/13477] S T=128 Loss: 0.0072 Tau: [0.01-1.00] GradN: 2.193 PredStd: 0.6055 (2.1 batch/s) !!  GRAD_CLIP | Epoch 0 [11250/13477] S T=128 Loss: 0.0053 Tau: [0.00-0.99] GradN: 1.577 PredStd: 0.6133 (2.1 batch/s) !!  GRAD_CLIP
+[06:05:44] [39/351] Epoch 0 [11250/13477] S T=128 Loss: 0.0053 Tau: [0.00-0.99] GradN: 1.577 PredStd: 0.6133 (2.1 batch/s) !!  GRAD_CLIP | Epoch 0 [11300/13477] S T=128 Loss: 0.0085 Tau: [0.00-1.00] GradN: 2.009 PredStd: 0.6016 (2.0 batch/s) !!  GRAD_CLIP
+[06:08:24] [40/351] Epoch 0 [11350/13477] S T=128 Loss: 0.0111 Tau: [0.01-1.00] GradN: 2.720 PredStd: 0.5898 (2.0 batch/s) !!  GRAD_CLIP |   [EVAL step 10350] psnr_tau0.1=7.2 psnr_tau0.3=12.0 psnr_tau0.5=15.9 psnr_tau0.7=20.4 psnr_tau0.9=26.0
+[06:08:41]     eval#7 step=10350 rollout_mean=13.2 tau0.9=26.0 best=17.5 noimp=6/12
+[06:11:14] [41/351]   [EVAL step 10350] psnr_tau0.1=7.2 psnr_tau0.3=12.0 psnr_tau0.5=15.9 psnr_tau0.7=20.4 psnr_tau0.9=26.0 | Epoch 0 [11400/13477] S T=128 Loss: 0.0089 Tau: [0.00-1.00] GradN: 1.667 PredStd: 0.6016 (2.0 batch/s) !!  GRAD_CLIP
+[06:13:56] [42/351] Epoch 0 [11450/13477] S T=128 Loss: 0.0087 Tau: [0.00-1.00] GradN: 1.665 PredStd: 0.6055 (1.9 batch/s) !!  GRAD_CLIP | Epoch 0 [11500/13477] S T=128 Loss: 0.0137 Tau: [0.01-1.00] GradN: 2.371 PredStd: 0.5898 (1.9 batch/s) !!  GRAD_CLIP
+[06:16:36] [43/351] Epoch 0 [11500/13477] S T=128 Loss: 0.0137 Tau: [0.01-1.00] GradN: 2.371 PredStd: 0.5898 (1.9 batch/s) !!  GRAD_CLIP | Epoch 0 [11550/13477] L T=256 Loss: 0.0043 Tau: [0.01-1.00] GradN: 2.334 PredStd: 0.6172 (1.9 batch/s)
+[06:19:15] [44/351] Epoch 0 [11550/13477] L T=256 Loss: 0.0043 Tau: [0.01-1.00] GradN: 2.334 PredStd: 0.6172 (1.9 batch/s) | Epoch 0 [11600/13477] S T=128 Loss: 0.0095 Tau: [0.01-0.98] GradN: 1.739 PredStd: 0.5977 (1.9 batch/s) !!  GRAD_CLIP
+[06:21:57] [45/351] Epoch 0 [11700/13477] S T=128 Loss: 0.0043 Tau: [0.00-0.99] GradN: 2.167 PredStd: 0.6094 (1.8 batch/s) !!  GRAD_CLIP |   [EVAL step 10500] psnr_tau0.1=7.3 psnr_tau0.3=11.7 psnr_tau0.5=16.1 psnr_tau0.7=20.2 psnr_tau0.9=26.3
+[06:22:14]     eval#8 step=10500 rollout_mean=12.8 tau0.9=26.3 best=17.5 noimp=7/12
+[06:24:48] [46/351]   [EVAL step 10500] psnr_tau0.1=7.3 psnr_tau0.3=11.7 psnr_tau0.5=16.1 psnr_tau0.7=20.2 psnr_tau0.9=26.3 | Epoch 0 [11750/13477] S T=128 Loss: 0.0040 Tau: [0.01-1.00] GradN: 2.613 PredStd: 0.6133 (1.8 batch/s) !!  GRAD_CLIP
+[06:27:27] [47/351] Epoch 0 [11750/13477] S T=128 Loss: 0.0040 Tau: [0.01-1.00] GradN: 2.613 PredStd: 0.6133 (1.8 batch/s) !!  GRAD_CLIP | Epoch 0 [11800/13477] S T=128 Loss: 0.0056 Tau: [0.00-1.00] GradN: 3.638 PredStd: 0.6094 (1.7 batch/s) !!  GRAD_CLIP
+[06:30:08] [48/351] Epoch 0 [11850/13477] S T=128 Loss: 0.0066 Tau: [0.00-1.00] GradN: 1.657 PredStd: 0.6055 (1.7 batch/s) !!  GRAD_CLIP | Epoch 0 [11900/13477] S T=128 Loss: 0.0106 Tau: [0.01-1.00] GradN: 1.676 PredStd: 0.5938 (1.7 batch/s) !!  GRAD_CLIP
+[06:32:51] [49/351] Epoch 0 [11900/13477] S T=128 Loss: 0.0106 Tau: [0.01-1.00] GradN: 1.676 PredStd: 0.5938 (1.7 batch/s) !!  GRAD_CLIP | Epoch 0 [11950/13477] L T=256 Loss: 0.0134 Tau: [0.02-0.99] GradN: 2.576 PredStd: 0.5977 (1.7 batch/s)
+[06:35:34] [50/351] Epoch 0 [12000/13477] S T=128 Loss: 0.0155 Tau: [0.00-1.00] GradN: 2.031 PredStd: 0.5820 (1.7 batch/s) !!  GRAD_CLIP |   [EVAL step 10650] psnr_tau0.1=7.3 psnr_tau0.3=11.4 psnr_tau0.5=15.2 psnr_tau0.7=19.5 psnr_tau0.9=25.8
+[06:35:52]     eval#9 step=10650 rollout_mean=14.6 tau0.9=25.8 best=17.5 noimp=8/12
+[06:38:25] [51/351] Epoch 0 [12050/13477] L T=256 Loss: 0.0057 Tau: [0.00-1.00] GradN: 2.028 PredStd: 0.6133 (1.6 batch/s) !!  GRAD_CLIP | Epoch 0 [12100/13477] S T=128 Loss: 0.0057 Tau: [0.00-1.00] GradN: 2.331 PredStd: 0.6094 (1.6 batch/s) !!  GRAD_CLIP
+[06:41:05] [52/351] Epoch 0 [12100/13477] S T=128 Loss: 0.0057 Tau: [0.00-1.00] GradN: 2.331 PredStd: 0.6094 (1.6 batch/s) !!  GRAD_CLIP | Epoch 0 [12150/13477] S T=128 Loss: 0.0059 Tau: [0.00-1.00] GradN: 1.868 PredStd: 0.6055 (1.6 batch/s) !!  GRAD_CLIP
+[06:43:45] [53/351] Epoch 0 [12150/13477] S T=128 Loss: 0.0059 Tau: [0.00-1.00] GradN: 1.868 PredStd: 0.6055 (1.6 batch/s) !!  GRAD_CLIP | Epoch 0 [12200/13477] S T=128 Loss: 0.0065 Tau: [0.00-1.00] GradN: 2.304 PredStd: 0.6055 (1.6 batch/s) !!  GRAD_CLIP
+[06:46:25] [54/351] Epoch 0 [12250/13477] S T=128 Loss: 0.0089 Tau: [0.00-0.99] GradN: 1.506 PredStd: 0.6016 (1.6 batch/s) !!  GRAD_CLIP | Epoch 0 [12300/13477] S T=128 Loss: 0.0124 Tau: [0.00-1.00] GradN: 1.659 PredStd: 0.5898 (1.5 batch/s) !!  GRAD_CLIP
+[06:49:05] [55/351] Epoch 0 [12350/13477] S T=128 Loss: 0.0084 Tau: [0.00-0.99] GradN: 1.914 PredStd: 0.6016 (1.5 batch/s) !!  GRAD_CLIP |   [EVAL step 10800] psnr_tau0.1=7.7 psnr_tau0.3=12.2 psnr_tau0.5=16.0 psnr_tau0.7=20.2 psnr_tau0.9=26.3
+[06:49:20]     eval#10 step=10800 rollout_mean=15.8 tau0.9=26.3 best=17.5 noimp=9/12
+[06:51:53] [56/351]   [EVAL step 10800] psnr_tau0.1=7.7 psnr_tau0.3=12.2 psnr_tau0.5=16.0 psnr_tau0.7=20.2 psnr_tau0.9=26.3 | Epoch 0 [12400/13477] L T=256 Loss: 0.0047 Tau: [0.00-1.00] GradN: 2.416 PredStd: 0.6172 (1.5 batch/s) !!  GRAD_CLIP
+[06:54:32] [57/351] Epoch 0 [12450/13477] S T=128 Loss: 0.0088 Tau: [0.00-1.00] GradN: 2.895 PredStd: 0.6016 (1.5 batch/s) !!  GRAD_CLIP | Epoch 0 [12500/13477] S T=128 Loss: 0.0068 Tau: [0.00-1.00] GradN: 2.068 PredStd: 0.6133 (1.5 batch/s) !!  GRAD_CLIP
+[06:57:16] [58/351] Epoch 0 [12500/13477] S T=128 Loss: 0.0068 Tau: [0.00-1.00] GradN: 2.068 PredStd: 0.6133 (1.5 batch/s) !!  GRAD_CLIP | Epoch 0 [12550/13477] S T=128 Loss: 0.0033 Tau: [0.00-0.99] GradN: 1.793 PredStd: 0.6133 (1.5 batch/s) !!  GRAD_CLIP
+[06:59:56] [59/351] Epoch 0 [12550/13477] S T=128 Loss: 0.0033 Tau: [0.00-0.99] GradN: 1.793 PredStd: 0.6133 (1.5 batch/s) !!  GRAD_CLIP | Epoch 0 [12600/13477] L T=256 Loss: 0.0050 Tau: [0.00-1.00] GradN: 1.753 PredStd: 0.6172 (1.4 batch/s) !!  GRAD_CLIP
+[07:02:36] [60/351] Epoch 0 [12700/13477] S T=128 Loss: 0.0039 Tau: [0.00-1.00] GradN: 2.440 PredStd: 0.6094 (1.4 batch/s) !!  GRAD_CLIP |   [EVAL step 10950] psnr_tau0.1=7.4 psnr_tau0.3=10.7 psnr_tau0.5=16.0 psnr_tau0.7=20.7 psnr_tau0.9=26.5
+[07:05:21] [61/351]   [EVAL step 10950] psnr_tau0.1=7.4 psnr_tau0.3=10.7 psnr_tau0.5=16.0 psnr_tau0.7=20.7 psnr_tau0.9=26.5 | Epoch 0 [12750/13477] L T=256 Loss: 0.0117 Tau: [0.00-1.00] GradN: 2.374 PredStd: 0.5938 (1.4 batch/s) !!  GRAD_CLIP
+[07:05:33]     eval#11 step=10950 rollout_mean=15.7 tau0.9=26.5 best=17.5 noimp=10/12
+[07:08:05] [62/351] Epoch 0 [12750/13477] L T=256 Loss: 0.0117 Tau: [0.00-1.00] GradN: 2.374 PredStd: 0.5938 (1.4 batch/s) !!  GRAD_CLIP | Epoch 0 [12800/13477] S T=128 Loss: 0.0075 Tau: [0.00-1.00] GradN: 1.667 PredStd: 0.6094 (1.4 batch/s) !!  GRAD_CLIP
+[07:10:45] [63/351] Epoch 0 [12850/13477] S T=128 Loss: 0.0073 Tau: [0.01-0.99] GradN: 1.441 PredStd: 0.6016 (1.4 batch/s) !!  GRAD_CLIP | Epoch 0 [12900/13477] S T=128 Loss: 0.0057 Tau: [0.01-0.99] GradN: 2.042 PredStd: 0.6055 (1.4 batch/s) !!  GRAD_CLIP
+[07:13:31] [64/351] Epoch 0 [12900/13477] S T=128 Loss: 0.0057 Tau: [0.01-0.99] GradN: 2.042 PredStd: 0.6055 (1.4 batch/s) !!  GRAD_CLIP | Epoch 0 [12950/13477] S T=128 Loss: 0.0089 Tau: [0.00-1.00] GradN: 1.796 PredStd: 0.6055 (1.4 batch/s) !!  GRAD_CLIP
+[07:16:14] [65/351] Epoch 0 [13000/13477] S T=128 Loss: 0.0083 Tau: [0.00-1.00] GradN: 1.975 PredStd: 0.6094 (1.3 batch/s) !!  GRAD_CLIP |   [EVAL step 11100] psnr_tau0.1=7.5 psnr_tau0.3=13.2 psnr_tau0.5=17.2 psnr_tau0.7=20.9 psnr_tau0.9=26.4
+[07:16:32]     eval#12 step=11100 rollout_mean=16.7 tau0.9=26.4 best=17.5 noimp=11/12
+[07:17:54] DESTROY 46252333

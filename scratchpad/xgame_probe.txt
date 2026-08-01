@@ -1,0 +1,12 @@
+cross-game probe: 6 games, every 5th frame, sizes [2265, 2238, 6457, 7752, 4688, 7716]
+
+target            linear_R2  mlp_R2   readout (mean over 3 held-out games)
+  champ_hp_frac     -0.05      -0.08    LOST (degraded by tokenizer)
+  gold_total        -22.25      -17.35    LOST (degraded by tokenizer)
+  level             -4.43      -3.95    LOST (degraded by tokenizer)
+  screen_x          +0.12      +0.20    weak
+  screen_y          -0.01      -0.06    LOST (degraded by tokenizer)
+  world_x           -4.30      -1.45    LOST (degraded by tokenizer)
+  world_y           +0.23      +0.15    weak
+
+linear<<mlp => info present but nonlinear (WM can use it). both low => tokenizer lost it.

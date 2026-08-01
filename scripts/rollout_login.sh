@@ -1,22 +1,25 @@
 #!/bin/bash
 # Run a dynamics rollout / dream check on danilogin's GPU (the login GTX 1060),
-# off the training GPU. Stages the latest job-124 checkpoint (+ first-run the
-# tokenizer and one match's latents) from the desktop-local disks to NFS via a
-# brief overlap on the running job, then runs rollout_check.py on the login GPU.
+# off the training GPU. Stages the latest checkpoint (+ first-run the tokenizer
+# and one match's latents) from the desktop-local disks to NFS via a brief
+# overlap on the running training job, then runs rollout_check.py on the login GPU.
 #
 # Pass-through args to rollout_check.py, e.g.:
 #     bash scripts/rollout_login.sh --decode --horizon 20
 #
-# Assumes job 124 is running (the stage copies desktop-local files via --overlap).
+# Override the live job / checkpoint dir if they change:
+#     ROLLOUT_JOBID=131 ROLLOUT_CKPT_DIR=/mnt/storage/.../dynamics_v7_replay_v2 bash scripts/rollout_login.sh ...
 set -euo pipefail
 STAGE=/srv/nfs/projects/ahriuwu/rollout_stage
-JOB=${ROLLOUT_JOBID:-124}
+JOB=${ROLLOUT_JOBID:-131}
+# desktop-local checkpoint dir of the live run (job 131 -> _v2 after the 2026-07-05 fixes)
+export CKPT_DIR=${ROLLOUT_CKPT_DIR:-/mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_replay_v2}
 mkdir -p "$STAGE"
 
-echo "[stage] latest checkpoint (+ first-run tokenizer/latents) desktop -> NFS via job $JOB ..."
+echo "[stage] $CKPT_DIR/dynamics_latest.pt (+ first-run tokenizer/latents) desktop -> NFS via job $JOB ..."
 srun --jobid="$JOB" --overlap --time=8:00 bash -c '
   S=/mnt/nfs/projects/ahriuwu/rollout_stage; mkdir -p "$S"
-  cp -f /mnt/storage/data/ahriuwu/checkpoints/dynamics_v7_replay/dynamics_latest.pt "$S"/
+  cp -f "$CKPT_DIR/dynamics_latest.pt" "$S"/
   [ -f "$S/transformer_tokenizer_latest.pt" ] || cp /mnt/storage/data/ahriuwu-checkpoints/tokenizer_v7/transformer_tokenizer_latest.pt "$S"/
   [ -f "$S/NA1_5549995114.pt" ] || cp /scratch/ahriuwu/dynamics_replay_latents_v7_dim32/NA1_5549995114.pt "$S"/'
 

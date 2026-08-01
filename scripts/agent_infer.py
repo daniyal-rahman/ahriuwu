@@ -57,6 +57,9 @@ class GarenAgent:
         # (probe AUC ~0.8). Lower this (e.g. -4.0) to a calibrated operating point.
         self.ability_thresh = ability_thresh
         self.buf = deque(maxlen=context)
+        # Actions taken at the buffered frames (action-conditioned backbones need
+        # the action history as INPUT — training teacher-forced the real ones).
+        self.act_buf = deque(maxlen=context)
         self.sched = DiffusionSchedule(device=device)
         # bf16 autocast on a bf16-native GPU roughly halves the forward (the 5080
         # deploy target). Pascal (1060, cap<8) has no native bf16 -> stay fp32.
@@ -74,10 +77,19 @@ class GarenAgent:
         num_buckets = a.get("num_buckets", 255)
         size = a.get("model_size", "medium")
 
-        # dynamics backbone with agent tokens (weights incl. trained agent blocks)
+        # dynamics backbone with agent tokens (weights incl. trained agent blocks).
+        # use_actions comes from dynamics_config — it is DERIVED by the trainer,
+        # never an args key, so a.get("use_actions") silently built an action-less
+        # backbone for action-conditioned checkpoints and dropped their trained
+        # action_embed weights (strict=False), leaving the agent blocks reading
+        # out-of-distribution activations.
+        cfg = ck.get("dynamics_config") or {}
+        self.use_actions = bool(cfg.get(
+            "use_actions",
+            any("action_embed." in k for k in ck.get("dynamics_state_dict", {}))))
         self.dyn = create_dynamics(
             size=size, latent_dim=self.latent_dim, use_agent_tokens=True,
-            use_actions=a.get("use_actions", False), num_tasks=1,
+            use_actions=self.use_actions, num_tasks=1,
             agent_layers=a.get("agent_layers", 4), use_qk_norm=not a.get("no_qk_norm", False),
             soft_cap=a.get("soft_cap", 50.0) if a.get("soft_cap", 50.0) > 0 else None,
             num_register_tokens=a.get("num_register_tokens", 8),
@@ -124,12 +136,20 @@ class GarenAgent:
 
     def reset(self):
         self.buf.clear()
+        self.act_buf.clear()
 
     @torch.no_grad()
-    def act_from_latent(self, latent, temperature=0.0):
+    def act_from_latent(self, latent, temperature=0.0, prev_action=None):
         """latent: (1, latent_dim, 16, 16) for the newest observed frame -> action dict.
-        temperature 0 = greedy (deterministic, best for a demo)."""
+        temperature 0 = greedy (deterministic, best for a demo).
+        prev_action: the action ACTUALLY executed at the previous frame (same dict
+        shape as this method's return) — overrides the agent's own last decision in
+        the action history. Pass logged actions for teacher-forced sim evals; leave
+        None live (self-fed history)."""
         self.buf.append(latent)
+        if prev_action is not None and self.act_buf:
+            self.act_buf[-1] = {"movement": tuple(prev_action["movement"]),
+                                "abilities": dict(prev_action["abilities"])}
         window = list(self.buf)
         while len(window) < self.context:            # left-pad with the oldest frame
             window.insert(0, window[0])
@@ -137,12 +157,31 @@ class GarenAgent:
         z0 = z0.to(self.device).float()              # (1, T, C, 16, 16)
         B, T = z0.shape[:2]
 
+        # Action history for action-conditioned backbones. Training teacher-forces
+        # the real a_t at token t; live we don't know a_t yet, so the newest frame
+        # repeats the last known action (actions are sticky at 20fps). Left-pad
+        # mirrors the frame padding.
+        actions = None
+        if self.use_actions:
+            hist = list(self.act_buf)[-(len(self.buf) - 1):] if len(self.buf) > 1 else []
+            stand_in = hist[-1] if hist else {"movement": (0.5, 0.5), "abilities": {}}
+            acts = hist + [stand_in]
+            while len(acts) < self.context:
+                acts.insert(0, acts[0])
+            mv = torch.tensor([list(a_["movement"]) for a_ in acts], dtype=torch.float32,
+                              device=self.device).unsqueeze(0)               # (1, T, 2)
+            actions = {"movement": mv}
+            for i, k in enumerate(ABILITY_KEYS):
+                actions[k] = torch.tensor(
+                    [int(bool(a_["abilities"].get(k, False))) for a_ in acts],
+                    dtype=torch.long, device=self.device).unsqueeze(0)       # (1, T)
+
         # near-clean corruption, one forward, agent tokens on (BC regime)
         tau = self.tau_ctx + torch.rand(B, T, device=self.device) * (1.0 - self.tau_ctx)
         z_tau, _ = self.sched.add_noise(z0, tau)
         d_one = torch.ones(B, dtype=torch.long, device=self.device)
         with self._ac():
-            _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=None)
+            _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=actions)
             h = agent_out[:, -1:, :]                  # newest frame's agent token (1,1,D)
             a_logits, _ = self.policy(h)              # (1,1,L,A) raw ability logits
             abil, move, _ = self.policy.sample(h, temperature=temperature)  # movement (+temp>0 abils)
@@ -155,6 +194,7 @@ class GarenAgent:
             abilities = {k: bool(al[i].item() > self.ability_thresh) for i, k in enumerate(ABILITY_KEYS)}
         movement = tuple(float(v) for v in move[0, 0, n].float().tolist())
         rew = float(rew_all[0, 0, n].item())
+        self.act_buf.append({"movement": movement, "abilities": dict(abilities)})
         return {"abilities": abilities, "movement": movement, "reward_pred": rew}
 
 

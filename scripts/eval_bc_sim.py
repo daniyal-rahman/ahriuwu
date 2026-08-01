@@ -38,10 +38,16 @@ def main():
     ap.add_argument("--latents-dir", default="rollout_stage")
     ap.add_argument("--labels-root", default="/srv/nfs/datasets/lol_replays_16_9_772")
     ap.add_argument("--frames", type=int, default=800)
+    ap.add_argument("--window", type=int, default=0,
+                    help="Which (frames+1)-long window of the match to eval (0=first).")
     ap.add_argument("--context", type=int, default=16)
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--ability-thresh", type=float, default=0.0,
                     help="Greedy cast logit threshold (default 0=never casts; try -4.0 calibrated)")
+    ap.add_argument("--teacher-forced", action="store_true",
+                    help="Feed the LOGGED previous action into the action history "
+                         "(isolates policy quality from action-history exposure bias; "
+                         "only affects action-conditioned backbones)")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
     dev = args.device
@@ -53,7 +59,7 @@ def main():
     N = args.frames
     ds = ReplayLatentSequenceDataset(latents_dir=tmp, labels_root=args.labels_root,
                                      outcomes={args.match: False}, sequence_length=N + 1, stride=N + 1)
-    s = ds[0]
+    s = ds[min(args.window, len(ds) - 1)]
     lat = s["latents"].float()                                   # (N+1, C, 16, 16)
     move_gt = s["actions"]["movement"].float().numpy()           # (N+1, 2)
     abil_gt = torch.stack([s["actions"][k].float() for k in ABILITY_KEYS], -1).numpy().astype(bool)  # (N+1,9)
@@ -67,7 +73,11 @@ def main():
     import time
     t0 = time.perf_counter()
     for t in range(N):
-        a = ag.act_from_latent(lat[t:t + 1].to(dev), temperature=args.temperature)
+        prev = None
+        if args.teacher_forced and t > 0:
+            prev = {"movement": (float(move_gt[t - 1][0]), float(move_gt[t - 1][1])),
+                    "abilities": {k: bool(abil_gt[t - 1, i]) for i, k in enumerate(ABILITY_KEYS)}}
+        a = ag.act_from_latent(lat[t:t + 1].to(dev), temperature=args.temperature, prev_action=prev)
         pm[t] = a["movement"]
         pa[t] = [a["abilities"][k] for k in ABILITY_KEYS]
     if dev == "cuda":
@@ -87,9 +97,27 @@ def main():
     mae_moved = np.abs(pm - gm)[moved].mean() if moved.any() else float("nan")
     uniq = len({tuple(r) for r in np.round(pm, 2)})
 
+    # --- transition analysis: actions are sticky at 20fps, so a repeat-last
+    # baseline dominates raw per-frame accuracy. The decision-relevant signal is
+    # the TRANSITION frames (human's next action != current action) where
+    # repeat-last scores 0 bins by construction. ---
+    prev_a = move_gt[0:N]                                        # human action at input frame t
+    rl_mae = np.abs(prev_a - gm).mean()
+    rl_acc = (np.round(prev_a * 20).astype(int) == bing).all(1).mean()
+    trans = (np.round(prev_a * 20).astype(int) != bing).any(1)   # bin-level change
+    hit = (binp == bing).all(1)
+    acc_t = hit[trans].mean() if trans.any() else float("nan")
+    acc_h = hit[~trans].mean() if (~trans).any() else float("nan")
+    mae_t = np.abs(pm - gm)[trans].mean() if trans.any() else float("nan")
+    rl_mae_t = np.abs(prev_a - gm)[trans].mean() if trans.any() else float("nan")
+
     print(f"\nspeed: {fps:.1f} fps")
     print(f"MOVEMENT  MAE={mae:.3f}  (center-baseline {base_mae:.3f})  bin-acc={bin_acc:.1%}  "
           f"unique-cells={uniq}  MAE|moved={mae_moved:.3f} (moved {moved.mean():.0%} of frames)")
+    print(f"BASELINES repeat-last: bin-acc={rl_acc:.1%} MAE={rl_mae:.3f} (the one to beat on sticky actions)")
+    print(f"TRANSITIONS ({trans.mean():.0%} of frames, human changed movement bin): "
+          f"policy acc={acc_t:.1%} MAE={mae_t:.3f} vs repeat-last acc=0.0% MAE={rl_mae_t:.3f} | "
+          f"hold-frames acc={acc_h:.1%}")
     print("ABILITY   per-key precision / recall / F1  (support = human presses in window):")
     f1s = []
     for i, k in enumerate(ABILITY_KEYS):

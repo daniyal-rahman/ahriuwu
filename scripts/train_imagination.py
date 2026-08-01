@@ -530,7 +530,12 @@ def main():
                                  use_8bit=args.use_8bit_adam, betas=tuple(args.adam_betas))
     total_steps = args.epochs * max(1, len(dataloader))
     scheduler = create_wsd_schedule(optimizer, total_steps, args.warmup_steps, args.decay_steps)
-    amp_dtype = torch.bfloat16 if device != "mps" else torch.float16
+    if device == "mps":
+        amp_dtype = torch.float16
+    elif device.startswith("cuda") and not torch.cuda.is_bf16_supported():
+        amp_dtype = torch.float32  # pre-Ampere (e.g. 1060): autocast off via enabled= check
+    else:
+        amp_dtype = torch.bfloat16
     scaler = GradScaler(device.split(":")[0], enabled=(amp_dtype == torch.float16))
     rms = {"value": RunningRMS(), "policy": RunningRMS()}
 
@@ -547,7 +552,7 @@ def main():
         policy_head.train(); value_head.train()
         t0 = time.time()
         for batch_idx, batch in enumerate(dataloader):
-            z_context = batch["latents"].to(device)
+            z_context = batch["latents"].to(device).float()  # stored fp16; rollout() needs fp32
             # Condition the context window on its real recorded actions so the
             # frozen dynamics sees in-distribution inputs; dreamed frames use the
             # policy's sampled actions.

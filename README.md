@@ -1,119 +1,113 @@
 # ahriuwu: DreamerV4-Style World Model for Autonomous League of Legends Play
 
-**Repository:** `daniyal-rahman/ahriuwu`  
-**Task Domain:** League of Legends (current focus: Garen top lane)  
-**Core Idea:** Learn a compact latent world model from replay frames, then train action and reward heads for agent finetuning.
+**Repository:** `daniyal-rahman/ahriuwu`
+**Task domain:** League of Legends — Garen top lane, laning phase
+**Core idea:** Learn a latent world model from replay/video frames, train a behavior-cloned agent on top of it, then improve the agent with imagination (dream) RL — and run it live at 20 fps.
 
-## Abstract
-This repository implements a DreamerV4-inspired pipeline for offline-to-imagination RL in League of Legends. The current system emphasizes (1) large-scale replay ingestion, (2) latent dynamics modeling, and (3) behavior-cloning and reward learning on top of pretrained world-model components. Recent experiments indicate strong visual tokenization performance with CNN-based tokenizers and stable Phase 2 finetuning metrics, while several high-priority training pipeline correctness items remain open.
+## Pipeline
 
-## Highlights
-- End-to-end data pipeline for replay/video download, frame extraction, OCR-based state parsing, and latent packing.
-- Dynamics and tokenizer model implementations under [`src/ahriuwu/models`](src/ahriuwu/models).
-- Agent finetuning pipeline with BC + reward prediction in [`scripts/train_agent_finetune.py`](scripts/train_agent_finetune.py).
-- Audit and review artifacts in [`docs/audits`](docs/audits) and [`docs/CODE_REVIEW_PHASE2.md`](docs/CODE_REVIEW_PHASE2.md).
-
-## Main Results
-### Phase 2 agent finetuning (Issue #7)
-- Top-1 action accuracy: **48.1%**
-- Top-5 action accuracy: **86.1%**
-- BC loss: **1.81**
-- Reward loss: **0.15**
-- Dynamics loss: **0.0005**
-
-Reference: https://github.com/daniyal-rahman/ahriuwu/issues/7
-
-### Tokenizer comparison (Issue #6)
-| Model | Params | PSNR (dB, higher is better) | LPIPS (lower is better) |
-|---|---:|---:|---:|
-| CNN tokenizer | 13M | **32.64 ± 0.87** | **0.0216** |
-| Transformer tokenizer | 40M | 27.45 ± 1.29 | 0.1032 |
-
-Reference: https://github.com/daniyal-rahman/ahriuwu/issues/6
-
-## Active Run (In Progress)
-### Small tokenizer training
-- **Status:** Running
-- **Preset:** `small` transformer tokenizer
-- **Architecture:** `embed_dim=512`, `num_encoder_layers=8`, `num_decoder_layers=8`, `num_heads=8`
-- **Latent setup:** `num_latents=256`, `latent_dim=32`
-- **Script:** `python scripts/train_transformer_tokenizer.py --model-size small`
-
-## Method Overview
-1. Data acquisition from replay sources and YouTube channels.
-2. Frame-level preprocessing and HUD/OCR feature extraction.
-3. Tokenizer training for image-latent compression.
-4. Latent dynamics modeling for temporal prediction.
-5. Agent finetuning with BC + reward supervision.
-6. (Planned) Policy learning with imagination rollouts.
-
-## Reproducibility
-### Environment setup
-```bash
-git clone https://github.com/daniyal-rahman/ahriuwu.git
-cd ahriuwu
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e .
+```mermaid
+flowchart LR
+    A["Replay + YT frames\n352×352 @ 20fps"] --> B["v7 transformer tokenizer\n(frozen) 512×16 → 16×16×32 latents"]
+    B --> C["Dynamics (medium, ~115M)\ndiffusion forcing, action-conditioned\nclean ckpt gs8775"]
+    C --> D["Phase 2: BC\nfrozen backbone + agent blocks (32M)\n+ policy / reward heads"]
+    D --> E["Phase 3: imagination RL\nPMPO + value, H≈8–10, K=64\n(plumbing validated)"]
+    D --> F["Live agent\nencode → policy, 20 fps, ctx=16"]
+    E --> F
 ```
 
-For CUDA builds of PyTorch, install from the official wheel index matching your CUDA version.
+- **Tokenizer (frozen):** v7 transformer tokenizer, 512 latents × 16 dim, folded `view(16,16,-1)` to a 16×16 grid of 32 channels (the same 512-bottleneck → 256-spatial reshape DreamerV4 uses). Replay recon ≈ 26.8 dB.
+- **Dynamics:** medium (~115M backbone; 146M with agent blocks), plain diffusion forcing, KV-cached rollout. The **clean base checkpoint is `dynamics_accel` gs8775** — replays-only, action-conditioned (`use_actions=True`). Correct sampling regime for this lineage is **K=64** (K=4 shortcut sampling needs a shortcut fine-tune the model hasn't had; `finetune_shortcut.py` exists).
+- **Agent:** Phase-2 BC trains 32M agent-token blocks + policy/reward heads against the frozen backbone; Phase-3 trains policy/value inside dreams (PMPO, λ-returns). Live play never dreams — it encodes real frames and queries the policy (tiny/small/medium clear 20 fps with the KV cache).
 
-### Data processing examples
+## Current status (2026-08-01)
+
+Everything below is measured, with in-training vs held-out flagged explicitly.
+
+### World model: coherent short dreams, clean of HUD artifacts
+
+![GT vs dream at h=8](docs/assets/dream_vs_gt_h8.png)
+*Ground truth vs dream 8 frames in, replays-only gs8775 model at K=64 (2026-07-31). Entity-coherent dreams hold to **h≈10 (~0.5 s at 20 fps)** — visually confirmed — which covers the last-hit / trade / spacing decision timescale. Champions ghost around h8–16; terrain and camera hold much longer.*
+
+Notes that got us here: absolute PSNR-to-realized-future is not the paper's metric and can't saturate in a stochastic game (the "plateau" was substantially metric artifact); a YT-mixed retrain re-introduced black-HUD contamination and was discarded — replays-only is the base going forward; visual inspection of decoded dreams is the primary eval (two automated metrics were caught rating a poisoned model above the clean one).
+
+### Perception: HP/level are NOT reliably in the latents (measured two ways)
+
+![Probe R² chart](docs/assets/probe_r2.png)
+*Cross-game probes (8 games, 3 held-out folds, 2026-07-31): a nonlinear MLP barely beats linear on Garen HP (R² 0.16 vs 0.11) and both lose level entirely — the signature of information missing from the latent, not probe weakness. Champion screen position is partially preserved.*
+
+![GT vs reconstruction montage](docs/assets/hp_recon_montage.png)
+*Decode-side check on a held-out game (rows span HP 1.00 → 0.30; GT | recon | zooms, 2026-07-31). Owner's verdict: HP bars "kinda there but not clearly, not accurate to ±10%, in some of em p mangled." The recon also erases the "+14" gold popup (row 6).*
+
+**Mitigation (chosen over tokenizer surgery):** scalar state doesn't need to travel through pixels. Training uses exact HP/level/gold from replay labels; live play reads Garen's own stats from the League client's local Live Client Data API (port 2999). Enemy state is fully labeled too (`visible_heroes` carries hp/hp_max/level/gold on every entry), enabling an auxiliary supervised head to force enemy-state semantics into the agent representation. Tokenizer retraining re-enters only if aux supervision proves insufficient.
+
+### Reward: GO for Phase-3
+
+![Reward head AUC](docs/assets/reward_head_auc.png)
+*The Phase-2 reward head ranks income events (Δgold ≥ 10, i.e. last hits) above no-income frames from latents alone: **event AUC 0.902 in-training, 0.956 on a fully held-out game** (2026-08-01). Magnitude calibration is rough (corr 0.30, R² 0.06) but PMPO consumes advantage sign/rank, which is what's strong.*
+
+### Policy (Phase-2 BC): two runs, honest held-out numbers
+
+![BC loss curves](docs/assets/bc_loss_curves.png)
+*Loss components for both BC runs (log scale, as of 2026-08-01). Right: the **act8775 run on the action-conditioned clean backbone (RTX 5080, 13.5 samp/s, ~8.7 h/epoch, launched 2026-08-01)** — the Phase-3-compatible Phase-2 — already at lower movement loss (~1.55 in epoch 2) than the old-backbone run reached after ~4 epochs (~1.86). Left: the old no-action-backbone baseline run (GTX 1060, ~2 samp/s). Both run under watchdogs with 20-minute checkpoints and auto-resume.*
+
+![BC eval accuracy](docs/assets/bc_eval_binacc.png)
+*Old-backbone policy, simulated frame-by-frame eval (`eval_bc_sim.py`, 800 frames, 2026-07-31). In-training movement bin-accuracy climbs 59.4 → 68.5% across epochs but sits near the predict-center baseline; on a **held-out** game it drops to 7.5–11.2% (windows where the human moves ~100% of the time). It beats center-baseline MAE (0.054–0.095 vs 0.080–0.116) — directional signal, far from imitation. Read: the policy learned when to stand still, not yet where to go; abilities over-trigger on held-out (AA ~50× human rate at the calibrated threshold). This is the baseline the act8775 run must beat.*
+
+### Imagination (Phase-3): plumbing validated end-to-end
+
+`train_imagination.py` ran on real data (1060, H=4, K=8): on-policy dreaming via the KV-cached rollout, λ-returns, PMPO + factorized KL, value twohot, checkpoint save — all exercised. One real bug found and fixed (dataset fp16 latents fed raw into fp32 `rollout()`). The learning signal was degenerate exactly as predicted for the old **non-action** backbone (dreams can't respond to the policy's actions → all-positive advantages, KL≈0): real Phase-3 waits for the act8775 BC checkpoints, whose backbone is action-conditioned.
+
+## Roadmap
+
+1. **act8775 BC epochs** on the 5080 → evaluate each with the held-out protocol (`eval_bc_sim.py --window`, held-out latents in `replay_latents_v7_heldout`).
+2. **Aux state head:** supervised own+enemy HP/level from labels, forcing game semantics the tokenizer garbles into the agent tokens.
+3. **Phase-3 imagination** at H=8–10, K=64 on the best act8775 checkpoint (reward head already validated).
+4. **Live e2e** on Windows: capture → encode → policy → input injection, with own-stats sidecar from the Live Client Data API.
+5. Later / paid levers: longer entity persistence in dreams (capacity + cloud training), shortcut fine-tune only if fast dreaming is ever needed (the live agent doesn't dream), data-level HUD fix if YT data is ever re-admitted to dynamics training.
+
+## Repository map
+
+- [`src/ahriuwu/models`](src/ahriuwu/models): tokenizer, dynamics (KV-cached rollout), heads, losses, returns
+- [`src/ahriuwu/data`](src/ahriuwu/data): replay/YT ingestion, latent datasets (`ReplayLatentSequenceDataset`, packed latents), action parsing
+- [`src/ahriuwu/rewards`](src/ahriuwu/rewards): solo-gold reward (Δ own `gold_total` + death penalty)
+- [`scripts`](scripts): training / eval / data CLI entry points (see below)
+- [`docs`](docs): progress notes, audits, analyses; README figures in [`docs/assets`](docs/assets)
+
+## Usage (current entry points)
+
 ```bash
-python scripts/download_youtube.py --channel domisumReplay-Garen --limit 5
-python scripts/process_videos.py --frames-only
-python scripts/extract_features_v2.py
+# Pretokenize replay frames with the frozen v7 tokenizer (one packed .pt per match)
+PYTHONPATH=src python scripts/pretokenize_replay_v7.py --checkpoint <v7.pt> \
+  --frames-root <frames> --out <latents_dir>
+
+# Dynamics (world model) training on packed latents
+PYTHONPATH=src python scripts/train_dynamics.py --latents-dir <latents_dir> \
+  --packed --latent-dim 32 [--use-actions --labels-root <labels>]
+
+# Phase 2: BC + reward on the frozen backbone
+PYTHONPATH=src python scripts/train_agent_finetune.py \
+  --dynamics-checkpoint <backbone.pt> --model-size medium --num-kv-heads 4 \
+  --latents-dir <latents_dir> --labels-root <labels> \
+  --resume auto --checkpoint-minutes 20
+
+# Phase 3: imagination (PMPO + value) from a Phase-2 checkpoint
+PYTHONPATH=src python scripts/train_imagination.py \
+  --agent-checkpoint <phase2.pt> --latents-dir <latents> --labels-root <labels> \
+  --model-size medium --num-kv-heads 4 --horizon 8 --gen-steps 64
+
+# Evals
+PYTHONPATH=src python scripts/eval_dream_quality.py --ckpt <dyn.pt> --tokenizer-ckpt <v7.pt>  # dreams + FVD-style + mp4
+PYTHONPATH=src python scripts/eval_bc_sim.py --phase2-ckpt <phase2.pt> --match <id> --window 2  # imitation accuracy
+PYTHONPATH=src python scripts/eval_reward_head.py --phase2-ckpt <phase2.pt> --matches <id>      # reward event-AUC
+PYTHONPATH=src python scripts/probe_hp_mlp.py                                                   # latent legibility
 ```
 
-### Training examples
-```bash
-python scripts/train_dynamics.py
-python scripts/train_transformer_tokenizer.py
-python scripts/train_agent_finetune.py
-```
+## Historical results (superseded)
 
-### Evaluation examples
-```bash
-python scripts/eval_dynamics.py
-python scripts/eval_transformer_tokenizer.py
-python scripts/eval_trade_prediction.py
-```
-
-## Issue-Driven Roadmap (Snapshot: 2026-03-05)
-### Open issues
-- [#8 Phase 2 training pipeline code review findings](https://github.com/daniyal-rahman/ahriuwu/issues/8)
-  - High-priority items include reward indexing correctness and missing death-penalty application path.
-- [#7 Agent Finetuning Phase 2 Complete - BC + Reward Training Results](https://github.com/daniyal-rahman/ahriuwu/issues/7)
-  - Next requested validation: held-out evaluation and prediction-vs-ground-truth analysis.
-- [#6 Tokenizer Comparison: CNN (13M) achieves 30+ PSNR vs Transformer (40M) at 27 PSNR](https://github.com/daniyal-rahman/ahriuwu/issues/6)
-  - Follow-up direction: investigate transformer objective/architecture mismatch and hybrid designs.
-
-### Immediate priorities
-1. Resolve correctness findings in Issue #8 before Phase 3 policy learning.
-2. Run held-out evaluation protocol for Phase 2 checkpoints.
-3. Decide tokenizer path (CNN vs transformer vs hybrid) for future dynamics-policy stack.
-
-## Current Experiment Plans (2026-03-05)
-1. Complete and evaluate the current `small` tokenizer run (`dim=512`, `8+8` layers, `8` heads) against the prior transformer baseline.
-2. Validate tokenizer quality using PSNR/LPIPS plus rollout-facing qualitative checks on HUD-heavy frames.
-3. Continue Tier-0 stabilized training defaults already adopted in code (WSD schedule, variable context noise, compile path, 8-bit optimizer where available).
-4. Start the next high-impact dynamics experiments after tokenizer stabilization, prioritizing:
-   - Hybrid temporal modeling (Mamba+attention) for longer-context efficiency.
-   - MeanFlow vs shortcut forcing as a controlled inference-speed experiment.
-   - Inverse-dynamics pseudo-labeling to expand action supervision coverage.
-
-## Repository Map
-- [`src/ahriuwu/data`](src/ahriuwu/data): data ingestion, replay processing, features, datasets
-- [`src/ahriuwu/ocr`](src/ahriuwu/ocr): OCR and HUD state reading
-- [`src/ahriuwu/models`](src/ahriuwu/models): tokenizer, dynamics, heads, losses
-- [`scripts`](scripts): training/eval/data CLI entry points
-- [`docs`](docs): progress notes, audits, technical analyses
-- [`lab_notebook`](lab_notebook): experiment planning and logs
-- [`eval_results`](eval_results): generated metrics/plots/comparison artifacts
+Early-2026 results kept for provenance, no longer the current picture: the CNN-vs-transformer tokenizer comparison (issue #6; the v7 *transformer* tokenizer is the production choice for the dynamics stack) and the March Phase-2 numbers (issue #7: top-1 48.1% — measured in-training under the old pipeline; the honest held-out protocol above replaces it).
 
 ## Citation
-If you use this codebase in derivative work, cite the repository and include commit hashes used for training/evaluation.
 
 ```bibtex
 @misc{ahriuwu2026,

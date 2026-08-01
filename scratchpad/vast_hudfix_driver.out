@@ -1,0 +1,80 @@
+[14:20:11] NGPU=4 candidate offers: 34527326 1.0693518518518519;27633850 1.3398148148148148;43099357 1.386851851851852;32131246 1.3880555555555556;38370991 1.3880555555555556;
+[14:20:11] try offer 34527326 @ $1.0693518518518519/hr
+[14:20:12] instance 44520109 @ $1.0693518518518519/hr
+[14:20:13] budget $20 @ $1.0693518518518519/hr -> train window 65530s (~18h)
+[14:20:14] poll 1: status=None host=195.224.35.250 port=-1
+[14:20:30] poll 2: status=None host=195.224.35.250 port=-1
+[14:20:45] poll 3: status=running host=195.224.35.250 port=-1
+[14:21:01] poll 4: status=running host=195.224.35.250 port=21581
+[14:22:08] sshd stable @ 195.224.35.250:21581
+[14:22:08] shipping working tree (src+scripts) + rclone config...
+Warning: Permanently added '[195.224.35.250]:21581' (ED25519) to the list of known hosts.
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+Warning: Permanently added '[195.224.35.250]:21581' (ED25519) to the list of known hosts.
+Welcome to vast.ai. If authentication fails, try again after a few seconds, and double check your ssh key.
+Have fun!
+[14:22:13] on box: deps + stage (combined latents + tokenizer + mask + seed) + launch pixel-HUD DDP + R2 streamer...
+[14:48:01] training launched; monitoring up to 65530s (auto-stop on plateau)...
+[14:50:44] [1/436] 
+scratchpad/vast_dyn_hudfix.sh: line 104: [: 0
+0: integer expression expected
+[14:53:25] [2/436] RuntimeError: DataLoader worker (pid 2517) is killed by signal: Terminated.  | Traceback (most recent call last):
+scratchpad/vast_dyn_hudfix.sh: line 104: [: 0
+0: integer expression expected
+[14:56:01] [3/436] RuntimeError: DataLoader worker (pid 2517) is killed by signal: Terminated.  | Traceback (most recent call last):
+scratchpad/vast_dyn_hudfix.sh: line 104: [: 0
+0: integer expression expected
+[14:58:37] [4/436] RuntimeError: DataLoader worker (pid 2517) is killed by signal: Terminated.  | Traceback (most recent call last):
+scratchpad/vast_dyn_hudfix.sh: line 104: [: 0
+0: integer expression expected
+[15:01:13] [5/436] 
+scratchpad/vast_dyn_hudfix.sh: line 104: [: 0
+0: integer expression expected
+[15:03:49] [6/436] [rank0]: Traceback (most recent call last): | Traceback (most recent call last):
+[15:06:25] [7/436] [rank0]: Traceback (most recent call last): | Traceback (most recent call last):
+[15:09:01] [8/436] 
+[15:11:37] [9/436] Epoch 0 [0/108774] S T=128 Loss: 0.0055 Tau: [0.00-1.00] GradN: 0.000 PredStd: 0.6133 (0.2 batch/s) | Epoch 0 [50/108774] S T=128 Loss: 0.0098 Tau: [0.00-1.00] GradN: 1.027 PredStd: 0.5977 (0.4 batch/s)
+[15:14:13] [10/436] Epoch 0 [50/108774] S T=128 Loss: 0.0098 Tau: [0.00-1.00] GradN: 1.027 PredStd: 0.5977 (0.4 batch/s) | Epoch 0 [100/108774] S T=128 Loss: 0.0029 Tau: [0.00-1.00] GradN: 0.570 PredStd: 0.6172 (0.4 batch/s)
+[15:16:49] [11/436] Epoch 0 [100/108774] S T=128 Loss: 0.0029 Tau: [0.00-1.00] GradN: 0.570 PredStd: 0.6172 (0.4 batch/s) | Epoch 0 [150/108774] S T=128 Loss: 0.0071 Tau: [0.00-1.00] GradN: 0.568 PredStd: 0.6055 (0.4 batch/s)
+[15:19:25] [12/436] Epoch 0 [200/108774] S T=128 Loss: 0.0042 Tau: [0.01-1.00] GradN: 0.593 PredStd: 0.6133 (0.4 batch/s) | Epoch 0 [250/108774] S T=128 Loss: 0.0048 Tau: [0.00-1.00] GradN: 1.939 PredStd: 0.6094 (0.4 batch/s)
+[15:22:01] [13/436] Epoch 0 [250/108774] S T=128 Loss: 0.0048 Tau: [0.00-1.00] GradN: 1.939 PredStd: 0.6094 (0.4 batch/s) | Epoch 0 [300/108774] S T=128 Loss: 0.0058 Tau: [0.00-1.00] GradN: 0.451 PredStd: 0.6133 (0.4 batch/s)
+[15:24:37] [14/436] Epoch 0 [300/108774] S T=128 Loss: 0.0058 Tau: [0.00-1.00] GradN: 0.451 PredStd: 0.6133 (0.4 batch/s) | Epoch 0 [350/108774] S T=128 Loss: 0.0072 Tau: [0.00-1.00] GradN: 0.614 PredStd: 0.6055 (0.4 batch/s)
+[15:27:13] [15/436] Epoch 0 [400/108774] L T=256 Loss: 0.0053 Tau: [0.00-1.00] GradN: 0.578 PredStd: 0.6133 (0.4 batch/s) |   [EVAL step 200] psnr_tau0.1=9.0 psnr_tau0.3=11.7 psnr_tau0.5=14.7 psnr_tau0.7=18.0 psnr_tau0.9=23.8
+[15:27:17]     tau0.9=23.8 best=23.8 noimp=0/16
+[15:29:49] [16/436] Epoch 0 [450/108774] S T=128 Loss: 0.0101 Tau: [0.01-0.99] GradN: 0.865 PredStd: 0.6055 (0.4 batch/s) | Epoch 0 [500/108774] S T=128 Loss: 0.0079 Tau: [0.00-1.00] GradN: 0.563 PredStd: 0.5977 (0.4 batch/s)
+[15:29:53]     tau0.9=23.8 best=23.8 noimp=1/16
+[15:32:25] [17/436] Epoch 0 [500/108774] S T=128 Loss: 0.0079 Tau: [0.00-1.00] GradN: 0.563 PredStd: 0.5977 (0.4 batch/s) | Epoch 0 [550/108774] S T=128 Loss: 0.0133 Tau: [0.00-1.00] GradN: 0.537 PredStd: 0.5938 (0.4 batch/s)
+[15:32:29]     tau0.9=23.8 best=23.8 noimp=2/16
+[15:35:01] [18/436] Epoch 0 [550/108774] S T=128 Loss: 0.0133 Tau: [0.00-1.00] GradN: 0.537 PredStd: 0.5938 (0.4 batch/s) | Epoch 0 [600/108774] S T=128 Loss: 0.0070 Tau: [0.00-1.00] GradN: 0.622 PredStd: 0.6016 (0.4 batch/s)
+[15:35:05]     tau0.9=23.8 best=23.8 noimp=3/16
+[15:37:37] [19/436] Epoch 0 [600/108774] S T=128 Loss: 0.0070 Tau: [0.00-1.00] GradN: 0.622 PredStd: 0.6016 (0.4 batch/s) | Epoch 0 [650/108774] S T=128 Loss: 0.0079 Tau: [0.00-1.00] GradN: 0.698 PredStd: 0.6055 (0.4 batch/s)
+[15:37:41]     tau0.9=23.8 best=23.8 noimp=4/16
+[15:40:14] [20/436] Epoch 0 [700/108774] S T=128 Loss: 0.0044 Tau: [0.00-0.99] GradN: 0.672 PredStd: 0.6172 (0.4 batch/s) | Epoch 0 [750/108774] S T=128 Loss: 0.0049 Tau: [0.01-0.98] GradN: 0.631 PredStd: 0.6133 (0.4 batch/s)
+[15:40:18]     tau0.9=23.8 best=23.8 noimp=5/16
+[15:42:50] [21/436] Epoch 0 [750/108774] S T=128 Loss: 0.0049 Tau: [0.01-0.98] GradN: 0.631 PredStd: 0.6133 (0.4 batch/s) | Epoch 0 [800/108774] S T=128 Loss: 0.0038 Tau: [0.02-1.00] GradN: 1.083 PredStd: 0.6133 (0.4 batch/s)
+[15:42:54]     tau0.9=23.8 best=23.8 noimp=6/16
+[15:45:26] [22/436] Epoch 0 [850/108774] S T=128 Loss: 0.0033 Tau: [0.00-1.00] GradN: 0.513 PredStd: 0.6133 (0.4 batch/s) |   [EVAL step 400] psnr_tau0.1=9.4 psnr_tau0.3=12.6 psnr_tau0.5=15.0 psnr_tau0.7=18.0 psnr_tau0.9=23.9
+[15:45:30]     tau0.9=23.9 best=23.8 noimp=7/16
+[15:48:03] [23/436]   [EVAL step 400] psnr_tau0.1=9.4 psnr_tau0.3=12.6 psnr_tau0.5=15.0 psnr_tau0.7=18.0 psnr_tau0.9=23.9 | Epoch 0 [900/108774] S T=128 Loss: 0.0066 Tau: [0.00-1.00] GradN: 0.632 PredStd: 0.6094 (0.4 batch/s)
+[15:48:07]     tau0.9=23.9 best=23.8 noimp=8/16
+[15:50:39] [24/436] Epoch 0 [950/108774] L T=256 Loss: 0.0074 Tau: [0.00-0.99] GradN: 0.789 PredStd: 0.6016 (0.4 batch/s) | Epoch 0 [1000/108774] S T=128 Loss: 0.0084 Tau: [0.00-1.00] GradN: 0.651 PredStd: 0.6094 (0.4 batch/s)
+[15:50:43]     tau0.9=23.9 best=23.8 noimp=9/16
+[15:53:15] [25/436] Epoch 0 [1000/108774] S T=128 Loss: 0.0084 Tau: [0.00-1.00] GradN: 0.651 PredStd: 0.6094 (0.4 batch/s) | Epoch 0 [1050/108774] S T=128 Loss: 0.0047 Tau: [0.00-1.00] GradN: 0.772 PredStd: 0.6172 (0.4 batch/s)
+[15:53:19]     tau0.9=23.9 best=23.8 noimp=10/16
+[15:55:51] [26/436] Epoch 0 [1050/108774] S T=128 Loss: 0.0047 Tau: [0.00-1.00] GradN: 0.772 PredStd: 0.6172 (0.4 batch/s) | Epoch 0 [1100/108774] L T=256 Loss: 0.0089 Tau: [0.00-0.99] GradN: 0.765 PredStd: 0.5977 (0.4 batch/s)
+[15:55:55]     tau0.9=23.9 best=23.8 noimp=11/16
+[15:58:27] [27/436] Epoch 0 [1100/108774] L T=256 Loss: 0.0089 Tau: [0.00-0.99] GradN: 0.765 PredStd: 0.5977 (0.4 batch/s) | Epoch 0 [1150/108774] S T=128 Loss: 0.0097 Tau: [0.00-1.00] GradN: 0.854 PredStd: 0.6016 (0.4 batch/s)
+[15:58:32]     tau0.9=23.9 best=23.8 noimp=12/16
+[16:01:04] [28/436] Epoch 0 [1200/108774] S T=128 Loss: 0.0043 Tau: [0.00-0.99] GradN: 0.744 PredStd: 0.6172 (0.4 batch/s) | Epoch 0 [1250/108774] S T=128 Loss: 0.0058 Tau: [0.00-1.00] GradN: 0.693 PredStd: 0.6133 (0.4 batch/s)
+[16:01:08]     tau0.9=23.9 best=23.8 noimp=13/16
+[16:03:40] [29/436] Epoch 0 [1250/108774] S T=128 Loss: 0.0058 Tau: [0.00-1.00] GradN: 0.693 PredStd: 0.6133 (0.4 batch/s) | Epoch 0 [1300/108774] L T=256 Loss: 0.0045 Tau: [0.01-1.00] GradN: 0.883 PredStd: 0.6094 (0.4 batch/s)
+[16:03:44]     tau0.9=23.9 best=23.8 noimp=14/16
+[16:06:16] [30/436]   [EVAL step 600] psnr_tau0.1=9.6 psnr_tau0.3=12.7 psnr_tau0.5=15.1 psnr_tau0.7=18.1 psnr_tau0.9=24.0 | Epoch 0 [1350/108774] S T=128 Loss: 0.0035 Tau: [0.00-1.00] GradN: 0.746 PredStd: 0.6133 (0.4 batch/s)
+[16:06:20]     tau0.9=24.0 best=23.8 noimp=15/16
+[16:08:52] [31/436] Epoch 0 [1350/108774] S T=128 Loss: 0.0035 Tau: [0.00-1.00] GradN: 0.746 PredStd: 0.6133 (0.4 batch/s) | Epoch 0 [1400/108774] S T=128 Loss: 0.0045 Tau: [0.00-1.00] GradN: 1.244 PredStd: 0.6133 (0.4 batch/s)
+[16:08:56]     tau0.9=24.0 best=23.8 noimp=16/16
+[16:08:56] PLATEAU (no new best tau0.9 in 16 evals) -> stop early
+[16:08:56] stopping: stop supervisor + final stream + destroy
+[16:10:38] DONE. latest -> r2:ahriuwu-yt-pretrain/dynamics_hudfix_accel/dynamics_latest.pt
+[16:10:38] DESTROY 44520109

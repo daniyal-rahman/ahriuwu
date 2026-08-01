@@ -540,6 +540,15 @@ class ReplayLatentSequenceDataset(Dataset):
         actions = {"movement": movement}
         for k in ABILITY_KEYS:
             actions[k] = md["abilities"][k][sl]
+        # cursor_valid gates real-action vs. no_action_embed per frame. Replays
+        # (NA1_*) carry real actions -> valid everywhere (matches legacy behavior).
+        # Unlabeled YT matches carry no actions -> invalid, so embed_actions
+        # substitutes the learned no_action_embed for movement (paper: unlabeled
+        # video is modeled without action conditioning). Abilities default to the
+        # no-press class 0, ~99% correct since casts are <1% of frames.
+        actions["cursor_valid"] = torch.full(
+            (T,), match_id.startswith("NA1_"), dtype=torch.bool
+        )
 
         return {
             "latents": latents,

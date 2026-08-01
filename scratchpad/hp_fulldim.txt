@@ -1,0 +1,9 @@
+full-dim (8192) cross-game probe: 6 games
+
+target            xgame_R2 (full 8192-d, best-of-lambda, mean over 3 held-out games)
+  champ_hp_frac     +0.09   LOST
+  screen_x          +0.00   LOST
+  screen_y          -0.02   LOST
+
+HP-fraction is the acid test: it's the big on-champion HP bar, distribution-matched
+across games. If even full-dim can't read it cross-game, the tokenizer blurs it away.
