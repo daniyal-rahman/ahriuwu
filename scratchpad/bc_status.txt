@@ -1,1 +1,1 @@
-08-01 17:38 | proc:UP | ckpt_age:8min | Epoch 3 [22600/70421] loss=3.7366 bc=2.0086 (abil=0.060 move=1.949) rew=0.1627 (2.0 samp/s)
+08-06 00:38 | proc:UP | ckpt_age:3min | Epoch 5 [4000/70421] loss=1.4293 bc=1.8947 (abil=0.009 move=1.886) rew=0.0228 (1.7 samp/s)

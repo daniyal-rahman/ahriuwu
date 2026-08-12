@@ -13,6 +13,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class StateHead(nn.Module):
+    """Aux game-state regression head (offset n=0 only).
+
+    Predicts label-known scalar state — own HP fraction, own level/18, lane-
+    opponent HP fraction, opponent visibility — from the agent token. The point
+    is the GRADIENT, not the readout: the v7 tokenizer preserves HUD detail too
+    weakly for probes (cross-game HP R2~0.16), so this forces game semantics
+    into the trainable agent blocks straight from replay labels. Targets live
+    in [0,1]; missing labels / unseen opponents are handled by the caller's
+    masked MSE (multiply squared error by the per-target validity mask).
+    """
+
+    def __init__(self, input_dim: int, hidden_dim: int = 256, num_targets: int = 4):
+        super().__init__()
+        self.num_targets = num_targets
+        self.mlp = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+        )
+        self.out = nn.Linear(hidden_dim, num_targets)
+        # Zero-init like the other heads: predictions start at 0, so
+        # d(loss)/d(agent_out) through this head is 0 until step 2.
+        nn.init.zeros_(self.out.weight)
+        nn.init.zeros_(self.out.bias)
+
+    def forward(self, agent_out: torch.Tensor) -> torch.Tensor:
+        """(B, T, D) -> (B, T, num_targets), unbounded (targets are in [0,1])."""
+        return self.out(self.mlp(agent_out))
+
+
 class RewardHead(nn.Module):
     """Reward prediction head with symexp twohot output.
 
@@ -140,6 +172,7 @@ class PolicyHead(nn.Module):
         mtp_length: int = 9,
         movement_dim: int = 2,
         movement_bins: int = 21,
+        movement_gate: bool = False,
     ):
         """Initialize policy head.
 
@@ -180,6 +213,23 @@ class PolicyHead(nn.Module):
         self.movement_heads = nn.ModuleList([
             nn.Linear(hidden_dim, movement_dim * movement_bins) for _ in range(mtp_length)
         ])
+
+        # Optional STICKY-CATEGORICAL movement (the action-model rewrite):
+        # humans issue ~2-5 discrete movement commands/s but the data is 20fps
+        # per-frame held targets, so ~77% of frames are "repeat the previous
+        # action" and a plain categorical mostly learns to copy. With the gate,
+        # movement is a MIXTURE: with prob (1-g) repeat the previous bin, with
+        # prob g draw a fresh bin from the categorical. One gate logit per MTP
+        # offset (the cursor moves as a unit; a per-axis gate would let x jump
+        # while y holds, which humans don't do).
+        self.movement_gate = movement_gate
+        if movement_gate:
+            self.gate_heads = nn.ModuleList([
+                nn.Linear(hidden_dim, 1) for _ in range(mtp_length)
+            ])
+            for head in self.gate_heads:
+                nn.init.zeros_(head.weight)
+                nn.init.zeros_(head.bias)
 
         # Zero-init output heads: initial predictions are zero/uniform
         for head in self.heads:
@@ -235,8 +285,42 @@ class PolicyHead(nn.Module):
 
         return ability_logits, movement_logits
 
+    def gate_logits(self, agent_tokens: torch.Tensor) -> torch.Tensor:
+        """Movement-command gate logits, (B, T, L). Requires ``movement_gate``.
+
+        sigmoid(logit) = P(issue a NEW movement command at this offset) — the
+        mixture weight of the fresh-categorical branch vs repeat-previous-bin.
+        (Recomputes the tiny shared trunk; negligible next to the backbone.)
+        """
+        assert self.movement_gate, "PolicyHead was built without movement_gate"
+        x = self.mlp(agent_tokens)
+        return torch.stack([h(x).squeeze(-1) for h in self.gate_heads], dim=2)
+
+    def gated_movement_log_prob(
+        self,
+        movement_logits: torch.Tensor,   # (B, N, L, movement_dim, bins) — pre-sliced
+        gate_logits: torch.Tensor,       # (B, N, L) — same slicing
+        target_idx: torch.Tensor,        # (B, N, L, movement_dim) long
+        prev_idx: torch.Tensor,          # (B, N, L, movement_dim) long
+    ) -> torch.Tensor:
+        """Mixture log-prob of the sticky categorical, (B, N, L).
+
+        transition (target != prev on any axis): log g + log p_cat(target)
+        hold: log((1-g) + g * p_cat(target))  [the categorical may also land on
+        the previous bin — both branches explain a hold], computed as
+        logaddexp(log(1-g), log g + log p_cat(target)) for stability.
+        """
+        lsm = F.log_softmax(movement_logits, dim=-1)
+        cat_lp = lsm.gather(-1, target_idx.unsqueeze(-1)).squeeze(-1).sum(dim=-1)  # (B,N,L)
+        log_g = F.logsigmoid(gate_logits)
+        log_1mg = F.logsigmoid(-gate_logits)
+        transition = (target_idx != prev_idx).any(dim=-1)                          # (B,N,L)
+        return torch.where(transition, log_g + cat_lp,
+                           torch.logaddexp(log_1mg, log_g + cat_lp))
+
     def sample(
-        self, agent_tokens: torch.Tensor, temperature: float = 1.0
+        self, agent_tokens: torch.Tensor, temperature: float = 1.0,
+        prev_movement_idx: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Sample actions from the factorized policy.
 
@@ -267,6 +351,20 @@ class PolicyHead(nn.Module):
             sampled = torch.multinomial(flat, num_samples=1).squeeze(-1)
             movement_idx = sampled.view(*movement_logits.shape[:-1])  # (B,T,L,move_dim)
 
+        # Sticky-categorical decode: sample the gate; where it says "hold",
+        # repeat the caller-supplied previous bin instead of the fresh sample.
+        # prev_movement_idx broadcasts against (B, T, L, movement_dim) — at
+        # inference the caller passes the last executed action for every offset
+        # (only the decoded offset is consumed).
+        if self.movement_gate and prev_movement_idx is not None:
+            gl = self.gate_logits(agent_tokens)                    # (B, T, L)
+            if temperature == 0:
+                fire = (gl > 0).unsqueeze(-1)
+            else:
+                fire = torch.bernoulli(torch.sigmoid(gl / temperature)).bool().unsqueeze(-1)
+            prev = prev_movement_idx.expand_as(movement_idx)
+            movement_idx = torch.where(fire, movement_idx, prev)
+
         movement = self.movement_bin_centers[movement_idx]  # (B, T, L, movement_dim)
         return abilities, movement, movement_idx
 
@@ -291,6 +389,14 @@ class PolicyHead(nn.Module):
             MTP axis: the first ``L`` MTP heads are scored (so L=1 scores offset
             n=0 only — the on-policy case for PMPO).
         """
+        if self.movement_gate:
+            raise ValueError(
+                "log_prob() is not gate-aware: a movement_gate PolicyHead's "
+                "movement likelihood is the sticky-categorical mixture, which "
+                "needs the previous movement bin (see gated_movement_log_prob). "
+                "BC uses the gated loss in the trainer; wire prev-action plumbing "
+                "into the imagination path before running PMPO on a gated head."
+            )
         ability_logits, movement_logits = self.forward(agent_tokens)
         # Score only as many MTP offsets as the caller supplied targets for.
         L = ability_actions.shape[2]

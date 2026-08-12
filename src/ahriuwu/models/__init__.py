@@ -11,6 +11,7 @@ from .diffusion import (
 from .dynamics import DynamicsTransformer, create_dynamics
 from .heads import (
     RewardHead,
+    StateHead,
     PolicyHead,
     ValueHead,
     create_behavioral_prior,
@@ -56,6 +57,7 @@ __all__ = [
     "create_dynamics",
     # Heads (Phase 2+)
     "RewardHead",
+    "StateHead",
     "PolicyHead",
     "ValueHead",
     "create_behavioral_prior",

@@ -99,7 +99,8 @@ class GarenAgent:
 
         self.policy = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
                                  hidden_dim=hidden, mtp_length=self.mtp,
-                                 movement_dim=MOVEMENT_DIM, movement_bins=self.movement_bins).to(device).eval()
+                                 movement_dim=MOVEMENT_DIM, movement_bins=self.movement_bins,
+                                 movement_gate=a.get("movement_gate", False)).to(device).eval()
         self.reward = RewardHead(input_dim=model_dim, hidden_dim=hidden,
                                  num_buckets=num_buckets, mtp_length=self.mtp).to(device).eval()
 
@@ -129,6 +130,7 @@ class GarenAgent:
         assert self.tok is not None, "no tokenizer loaded; use act_from_latent()"
         import cv2
         f = cv2.resize(frame_rgb01, (352, 352), interpolation=cv2.INTER_AREA)
+        self.last_input352 = f                        # exact model-view frame, for recording
         x = torch.from_numpy(f).float().permute(2, 0, 1).unsqueeze(0).to(self.device)
         with self._ac():
             lat = self.tok.encode(x)["latent"]       # (1, 512, 16)
@@ -139,7 +141,7 @@ class GarenAgent:
         self.act_buf.clear()
 
     @torch.no_grad()
-    def act_from_latent(self, latent, temperature=0.0, prev_action=None):
+    def act_from_latent(self, latent, temperature=0.0, prev_action=None, gate_bias=0.0):
         """latent: (1, latent_dim, 16, 16) for the newest observed frame -> action dict.
         temperature 0 = greedy (deterministic, best for a demo).
         prev_action: the action ACTUALLY executed at the previous frame (same dict
@@ -180,11 +182,21 @@ class GarenAgent:
         tau = self.tau_ctx + torch.rand(B, T, device=self.device) * (1.0 - self.tau_ctx)
         z_tau, _ = self.sched.add_noise(z0, tau)
         d_one = torch.ones(B, dtype=torch.long, device=self.device)
+        has_gate = getattr(self.policy, "movement_gate", False)
         with self._ac():
             _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=actions)
             h = agent_out[:, -1:, :]                  # newest frame's agent token (1,1,D)
             a_logits, _ = self.policy(h)              # (1,1,L,A) raw ability logits
-            abil, move, _ = self.policy.sample(h, temperature=temperature)  # movement (+temp>0 abils)
+            # NOTE: prev_movement_idx=None on purpose. PolicyHead.sample() would
+            # do the sticky decode internally, but it samples the gate privately
+            # and returns only the blended movement — and the gate is precisely
+            # the "issue a NEW move command" event (i.e. the human clicked) that
+            # the caller needs. So take the FRESH categorical sample here and
+            # apply the gate ourselves; the semantics are identical to sample()'s
+            # internal branch, only now `fire` is observable.
+            abil, move_fresh, _ = self.policy.sample(h, temperature=temperature,
+                                                     prev_movement_idx=None)
+            gl_n = self.policy.gate_logits(h) if has_gate else None   # (1,1,L)
             rew_all = self.reward.predict(h)
         n = 1 if self.mtp > 1 else 0                  # MTP offset 1 = trained "next action"
         if temperature > 0:                           # stochastic: use the sampled abilities
@@ -192,10 +204,27 @@ class GarenAgent:
         else:                                         # greedy: calibrated logit threshold
             al = a_logits[0, 0, n, :].float()
             abilities = {k: bool(al[i].item() > self.ability_thresh) for i, k in enumerate(ABILITY_KEYS)}
-        movement = tuple(float(v) for v in move[0, 0, n].float().tolist())
+
+        # Gate: fire => commit the fresh target (a click); hold => repeat the last
+        # EXECUTED movement and send no click. First frame always fires.
+        fresh = tuple(float(v) for v in move_fresh[0, 0, n].float().tolist())
+        gate_logit = float(gl_n[0, 0, n].item()) if has_gate else None
+        if has_gate and self.act_buf:
+            # gate_bias shifts the FIRING RATE without touching the model's
+            # relative preference for *when* to commit a new target. This
+            # checkpoint's gate sits near -5.0 (=0.7%/frame, ~0.2 commands/s)
+            # against the 2-5/s the head was meant to learn, so a positive bias
+            # is a calibration correction, not a timer.
+            gl = gl_n[0, 0, n] + gate_bias
+            gate_fire = bool((gl > 0).item() if temperature == 0
+                             else torch.bernoulli(torch.sigmoid(gl / temperature)).item())
+        else:
+            gate_fire = True
+        movement = fresh if gate_fire else tuple(self.act_buf[-1]["movement"])
         rew = float(rew_all[0, 0, n].item())
         self.act_buf.append({"movement": movement, "abilities": dict(abilities)})
-        return {"abilities": abilities, "movement": movement, "reward_pred": rew}
+        return {"abilities": abilities, "movement": movement, "reward_pred": rew,
+                "gate": gate_fire, "gate_logit": gate_logit, "fresh": fresh}
 
 
 # --------------------------------------------------------------------------- #

@@ -21,6 +21,11 @@ assumed (Q/W/E/R abilities, D=Flash, F=Ignite, B=Recall, item slot for Stride,
 right-click = move / AA). Remap with the flags below.
 """
 import argparse
+import json
+import math
+import os
+import subprocess
+import threading
 import time
 from collections import deque
 
@@ -32,9 +37,21 @@ from ahriuwu.constants import ABILITY_KEYS
 from agent_infer import GarenAgent  # scripts/ on sys.path[0]
 
 
-# LoL default binds; ABILITY_KEYS = [Q,W,E,R,Flash,Ignite,AA,Recall,Stride]
-DEFAULT_KEYS = {"Q": "q", "W": "w", "E": "e", "R": "r", "Flash": "d",
-                "Ignite": "f", "Recall": "b", "Stride": "3"}  # AA handled via right-click
+# LoL default binds; ABILITY_KEYS = [Q,W,E,R,Flash,Ignite,AA,Recall,Stride].
+# Movement is WASD (keyboard-only rig): abilities MUST NOT collide with w/a/s/d,
+# so Flash/Ignite move off d/f and abilities use their standard letters (Q/W/E/R
+# unchanged — LoL binds those to the champion, WASD to movement, no conflict in
+# WASD-movement mode). AA -> attack key (default None = rely on auto-attack /
+# attack-move-on-move; set --attack-key to bind it).
+# Garen W is on 'w' by LoL default -> collides with move-up. Abilities relocated
+# OFF w/a/s/d (must match in-game binds). Q/E/R are free of WASD; only W moves.
+DEFAULT_KEYS = {"Q": "q", "W": "v", "E": "e", "R": "r", "Flash": "g",
+                "Ignite": "f", "Recall": "b", "Stride": "3"}
+# 8-way WASD decode. Screen: +x right, +y down; "up on screen" = W.
+_WASD_DIRS = [
+    (0.0, "d"), (45.0, "wd"), (90.0, "w"), (135.0, "wa"),
+    (180.0, "a"), (225.0, "sa"), (270.0, "s"), (315.0, "sd"),
+]
 
 
 class ScreenCapture:
@@ -47,80 +64,364 @@ class ScreenCapture:
 
     def grab_rgb01(self):
         img = np.array(self.sct.grab(self.mon))                 # BGRA
-        return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB).astype(np.float32) / 255.0
+        # (frame, is_fresh) — mss always grabs live pixels, so always fresh.
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2RGB).astype(np.float32) / 255.0, True
+
+
+class StreamCapture:
+    """Receive the Windows game stream (gdigrab -> x264 zerolatency -> mpegts/UDP)
+    and hand the model the FRESHEST decoded frame.
+
+    An ffmpeg subprocess decodes the UDP stream to raw rgb24; a reader thread
+    drains the pipe continuously and keeps only the newest frame, so the 20fps
+    control loop never acts on a stale/backlogged frame (realtime > completeness).
+    """
+
+    def __init__(self, port=5000, size=(1280, 720), expand_range=False, gamma=1.0):
+        self.w, self.h = size
+        self.frame_bytes = self.w * self.h * 3
+        # NOTE (2026-08-10): range expansion defaults OFF. It was added on a
+        # wrong diagnosis ("the stream is TV-range => dark") and REFUTED by the
+        # offline sim (scripts/sim_replay.py): expansion CRUSHES SHADOWS on this
+        # source (mean 0.136 -> 0.090) and neither brightness nor HUD masking
+        # changed the policy's behavior. The real live failure was STALE FRAMES
+        # (58% of consecutive frames byte-identical) — see the staleness guard
+        # below. Keep the flag only for A/B experiments.
+        vf = "scale=in_range=tv:out_range=pc" if expand_range else "null"
+        self.gamma_lut = None
+        if gamma != 1.0:
+            self.gamma_lut = (np.clip((np.arange(256) / 255) ** gamma, 0, 1) * 255).astype(np.uint8)
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-fflags", "nobuffer", "-flags", "low_delay",
+            "-probesize", "32", "-analyzeduration", "0",
+            "-i", f"udp://@:{port}?fifo_size=1000000&overrun_nonfatal=1",
+            "-vf", vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+        ]
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, bufsize=self.frame_bytes)
+        self.latest = None
+        self.n_recv = 0
+        self._last_served_n = -1
+        self.stale_serves = 0
+        self.lock = threading.Lock()
+        self.run = True
+        print(f"stream: listening udp :{port} for {self.w}x{self.h} — waiting for first frame...")
+        self.thread = threading.Thread(target=self._reader, daemon=True)
+        self.thread.start()
+
+    def _reader(self):
+        buf = b""
+        while self.run:
+            chunk = self.proc.stdout.read(self.frame_bytes - len(buf))
+            if not chunk:
+                break                                            # ffmpeg died / stream ended
+            buf += chunk
+            if len(buf) < self.frame_bytes:
+                continue
+            fr = np.frombuffer(buf, np.uint8).reshape(self.h, self.w, 3)
+            if self.gamma_lut is not None:
+                fr = self.gamma_lut[fr]
+            with self.lock:
+                self.latest = fr
+                self.n_recv += 1
+            buf = b""
+
+    def grab_rgb01(self):
+        """Freshest frame + whether it is NEW since the last call.
+
+        STALENESS GUARD: the first live session silently fed the model a frozen
+        world — 58% of consecutive frames were byte-identical because the Windows
+        stream delivered new content only ~2-3x/s while this loop ran at 17fps,
+        and `latest` simply repeats. A world model shown no change predicts no
+        change, so the agent stood still. Serving stale frames must never be
+        invisible again: `stale_serves` is counted and surfaced in the HUD line.
+        """
+        with self.lock:
+            fr = self.latest
+            n = self.n_recv
+        if fr is None:
+            return None, False
+        fresh = n != self._last_served_n
+        if fresh:
+            self._last_served_n = n
+        else:
+            self.stale_serves += 1
+        return fr.astype(np.float32) / 255.0, fresh
+
+    def wait_first(self, timeout=30.0):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.latest is not None:
+                return True
+            if self.proc.poll() is not None:
+                raise RuntimeError("ffmpeg exited before any frame (no stream? wrong port/size?)")
+            time.sleep(0.1)
+        raise TimeoutError(f"no stream frame within {timeout}s on the UDP port")
+
+    def close(self):
+        self.run = False
+        self.proc.terminate()
 
 
 class InputController:
-    def __init__(self, region, dry_run, keys):
-        self.dry, self.keys = dry_run, keys
+    """action dict -> real inputs. Two backends:
+
+    - ``pynput`` (backend='pynput'): synthetic events from *inside* Windows.
+      Simple, but Vanguard (LoL's kernel anti-cheat) rejects synthetic input in
+      real games — usable only for desktop/notepad plumbing tests.
+    - ``hid`` (backend='hid'): JSON to the external USB-HID gadget's hid_server
+      (scripts/keysender/hid_server.py). Indistinguishable from a real kb+mouse
+      to the host — this is the path for an actual game. Absolute mouse coords
+      are 0..32767 across the FULL desktop, so we map screen fraction -> desktop
+      logical, independent of the capture region's offset.
+    """
+
+    def __init__(self, region, backend, keys, desktop, hid_host="127.0.0.1",
+                 deadzone=0.06, attack_key=None):
+        self.backend, self.keys = backend, keys
         self.left, self.top = region[0], region[1]
         self.w, self.h = region[2], region[3]
-        if not dry_run:
+        self.dw, self.dh = desktop
+        self.deadzone = deadzone           # |target - center| below this = stand still
+        self.attack_key = attack_key       # AA bind in WASD mode (None = no-op)
+        self.held = set()                  # currently-held WASD movement keys
+        if backend == "pynput":
             from pynput.keyboard import Controller as KB
-            from pynput.mouse import Controller as MC, Button
-            self.kb, self.mouse, self.Button = KB(), MC(), Button
+            self.kb = KB()
+        elif backend == "hid":
+            sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "keysender"))
+            from hybrid_sender import HybridKeyboard
+            self.kb = HybridKeyboard(host=hid_host)
+
+    def _set_movement(self, want):
+        if self.backend == "pynput":
+            for k in self.held - want:
+                self.kb.release(k)
+            for k in want - self.held:
+                self.kb.press(k)
+            self.held = want
+        else:                              # hid: reconcile-loop handles timing
+            self.kb.set_movement(want)
+
+    def _tap(self, k):
+        if self.backend == "pynput":
+            self.kb.press(k); self.kb.release(k)
+        else:
+            self.kb.tap(k)
+
+    def _wasd_keys(self, mvx, mvy):
+        """Movement vector (screen fraction, champion assumed screen-center) ->
+        set of WASD keys. Deadzone -> empty set (stand still)."""
+        dx, dy = mvx - 0.5, mvy - 0.5
+        if (dx * dx + dy * dy) ** 0.5 < self.deadzone:
+            return set()
+        ang = math.degrees(math.atan2(-dy, dx)) % 360   # -dy: up-screen = +angle
+        _, combo = min(_WASD_DIRS, key=lambda d: min(abs(ang - d[0]), 360 - abs(ang - d[0])))
+        return set(combo)
 
     def send(self, action):
         mx = self.left + int(action["movement"][0] * self.w)
         my = self.top + int(action["movement"][1] * self.h)
         pressed = [k for k, v in action["abilities"].items() if v]
-        if self.dry:
-            return mx, my, pressed
-        # movement / AA: right-click at the cursor target
-        self.mouse.position = (mx, my)
-        self.mouse.click(self.Button.right)
+        if self.backend == "dry":
+            want = self._wasd_keys(*action["movement"])
+            return mx, my, pressed, sorted(want)
+
+        # --- movement: set held WASD keys (backend handles press/release diff) ---
+        want = self._wasd_keys(*action["movement"])
+        self._set_movement(want)
+
+        # --- abilities: taps (AA -> optional attack key) ---
         for k in pressed:
             if k == "AA":
-                continue  # AA = the right-click above
+                if self.attack_key:
+                    self._tap(self.attack_key)
+                continue
             key = self.keys.get(k)
             if key:
-                self.kb.press(key); self.kb.release(key)
-        return mx, my, pressed
+                self._tap(key)
+        return mx, my, pressed, sorted(want)
+
+    def close(self):
+        if self.backend == "hid":
+            self.kb.close()
+        elif self.backend == "pynput":
+            for k in list(self.held):      # never leave a movement key stuck
+                self.kb.release(k)
+            self.held.clear()
+
+
+class Recorder:
+    """Persist what the MODEL saw (352x352, post-transform) + every action, for
+    later debug/analysis. Not the raw 720p — the transformed frame is what the
+    policy actually conditioned on. One timestamped dir per session:
+      model_view_352.mp4  — the exact frames fed to the tokenizer
+      actions.jsonl       — per-frame {i, t, movement, wasd, casts, reward, ms}
+      meta.json           — ckpts, args, stream size, model config
+    """
+
+    def __init__(self, root, fps, meta):
+        os.makedirs(root, exist_ok=True)
+        self.dir = os.path.join(root, "session_" + time.strftime("%Y%m%d_%H%M%S"))
+        os.makedirs(self.dir, exist_ok=True)
+        self.vw = cv2.VideoWriter(os.path.join(self.dir, "model_view_352.mp4"),
+                                  cv2.VideoWriter_fourcc(*"mp4v"), fps, (352, 352))
+        self.actions = open(os.path.join(self.dir, "actions.jsonl"), "w")
+        with open(os.path.join(self.dir, "meta.json"), "w") as fh:
+            json.dump(meta, fh, indent=2, default=str)
+        self.n = 0
+        print(f"recording -> {self.dir}")
+
+    def write(self, frame352_rgb01, rec):
+        img = (np.clip(frame352_rgb01, 0, 1) * 255).astype(np.uint8)
+        self.vw.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+        self.actions.write(json.dumps(rec) + "\n")
+        self.n += 1
+
+    def close(self):
+        try:
+            self.vw.release()
+            self.actions.close()
+            print(f"recorded {self.n} frames -> {self.dir}")
+        except Exception:
+            pass
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase2-ckpt", required=True)
     ap.add_argument("--tokenizer-ckpt", required=True)
-    ap.add_argument("--capture-region", default=None, help="x,y,w,h (default: primary monitor)")
+    ap.add_argument("--source", choices=["screen", "udp"], default="udp",
+                    help="udp=receive the Windows ffmpeg stream (2-machine rig); "
+                         "screen=local mss grab (single-machine/dev).")
+    ap.add_argument("--udp-port", type=int, default=5000, help="UDP port to listen on (--source udp).")
+    ap.add_argument("--stream-size", default="1280x720", help="WxH the Windows ffmpeg sends.")
+    ap.add_argument("--no-range-expand", dest="expand_range", action="store_false",
+                    help="Disable limited->full color-range expansion on decode (leave ON: "
+                         "the H.264 stream is TV-range and the model wants full-range/bright).")
+    ap.add_argument("--gamma", type=float, default=1.0,
+                    help="Extra gamma on incoming frames (<1 brightens). Only if range-expand "
+                         "isn't enough; verified ~0.6 rescues an uncorrected dark stream.")
+    ap.add_argument("--capture-region", default=None, help="x,y,w,h for --source screen.")
     ap.add_argument("--context", type=int, default=16)
     ap.add_argument("--target-fps", type=int, default=20)
-    ap.add_argument("--temperature", type=float, default=0.0, help="0=greedy (steadiest)")
+    ap.add_argument("--temperature", type=float, default=1.0,
+                    help="1.0=sample (calibrated casts, matches training); 0=greedy.")
     ap.add_argument("--device", default="cuda")
-    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--inject", choices=["dry", "pynput", "hid"], default="dry",
+                    help="dry=print only; pynput=in-Windows synthetic (Vanguard blocks in-game); "
+                         "hid=external Pi keyboard gadget via hybrid_sender (real games).")
+    ap.add_argument("--hid-host", default="192.168.1.144", help="Pi HID server address for --inject hid.")
+    ap.add_argument("--deadzone", type=float, default=0.06,
+                    help="Movement target within this fraction of screen-center = stand still "
+                         "(no WASD key). Champion is assumed camera-locked to center.")
+    ap.add_argument("--attack-key", default=None,
+                    help="Key to tap for AA in WASD mode (e.g. an attack-move bind). "
+                         "Default None: rely on the mode's auto-attack.")
+    ap.add_argument("--record", action="store_true", default=True,
+                    help="Record model-view (352) video + per-frame actions (default on).")
+    ap.add_argument("--no-record", dest="record", action="store_false")
+    ap.add_argument("--record-dir", default="recordings", help="Root for session recordings.")
+    ap.add_argument("--dry-run", action="store_true", help="alias for --inject dry")
     args = ap.parse_args()
+    if args.dry_run:
+        args.inject = "dry"
 
-    region = tuple(map(int, args.capture_region.split(","))) if args.capture_region else None
-    cap = ScreenCapture(region)
-    if region is None:
-        region = (cap.mon["left"], cap.mon["top"], cap.mon["width"], cap.mon["height"])
-    ctrl = InputController(region, args.dry_run, DEFAULT_KEYS)
+    # Movement is WASD -> no ability may be bound to w/a/s/d (they'd fire while
+    # walking). Refuse to run live with a colliding bind; print the required binds.
+    collide = {k: v for k, v in DEFAULT_KEYS.items() if v in ("w", "a", "s", "d")}
+    if collide and args.inject != "dry":
+        raise SystemExit(f"ability keys collide with WASD movement: {collide}. "
+                         "Rebind these abilities (in-game AND in DEFAULT_KEYS) off w/a/s/d.")
+    print("keybinds (set these in-game): movement=WASD  " +
+          "  ".join(f"{a}={k}" for a, k in DEFAULT_KEYS.items()) +
+          f"  AA={'(' + args.attack_key + ')' if args.attack_key else 'auto'}")
+
+    if args.source == "udp":
+        sw, sh = map(int, args.stream_size.split("x"))
+        cap = StreamCapture(port=args.udp_port, size=(sw, sh),
+                            expand_range=args.expand_range, gamma=args.gamma)
+        region = (0, 0, sw, sh)
+    else:
+        region = tuple(map(int, args.capture_region.split(","))) if args.capture_region else None
+        cap = ScreenCapture(region)
+        if region is None:
+            region = (cap.mon["left"], cap.mon["top"], cap.mon["width"], cap.mon["height"])
+    ctrl = InputController(region, args.inject, DEFAULT_KEYS, (region[2], region[3]),
+                           args.hid_host, deadzone=args.deadzone, attack_key=args.attack_key)
     agent = GarenAgent(args.phase2_ckpt, tokenizer_ckpt=args.tokenizer_ckpt,
                        context=args.context, device=args.device)
     agent.reset()
 
+    rec = None
+    if args.record:
+        rec = Recorder(args.record_dir, args.target_fps, {
+            "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "phase2_ckpt": args.phase2_ckpt, "tokenizer_ckpt": args.tokenizer_ckpt,
+            "source": args.source, "stream_size": args.stream_size, "inject": args.inject,
+            "temperature": args.temperature, "deadzone": args.deadzone,
+            "keybinds": DEFAULT_KEYS, "use_actions": agent.use_actions,
+            "movement_gate": getattr(agent.policy, "movement_gate", False),
+        })
+
     dt_target = 1.0 / args.target_fps
-    hist = deque(maxlen=60)
+    cap_ms, enc_ms, act_ms, inj_ms = (deque(maxlen=60) for _ in range(4))
     n = 0
-    print(f"\nRunning ({'DRY-RUN' if args.dry_run else 'LIVE — sending inputs'}). Ctrl+C to stop.\n")
+    n_stale = 0            # frames served that were IDENTICAL to the previous one
+    mode = {"dry": "DRY-RUN (no input)", "pynput": "LIVE pynput", "hid": "LIVE HID gadget"}[args.inject]
+    if args.source == "udp":
+        cap.wait_first()                          # block until the stream is flowing
+    print(f"\nRunning ({mode}, source={args.source}). Ctrl+C to stop.\n")
     try:
         while True:
             t0 = time.perf_counter()
-            frame = cap.grab_rgb01()
+            frame, fresh = cap.grab_rgb01()
+            if frame is None:                     # stream hiccup — hold, don't act on nothing
+                time.sleep(dt_target)
+                continue
+            n_stale += 0 if fresh else 1
+            t1 = time.perf_counter()
             lat = agent.encode_frame(frame)
+            t2 = time.perf_counter()
             action = agent.act_from_latent(lat, temperature=args.temperature)
-            mx, my, pressed = ctrl.send(action)
-            hist.append((time.perf_counter() - t0) * 1000)
+            t3 = time.perf_counter()
+            mx, my, pressed, wasd = ctrl.send(action)
+            t4 = time.perf_counter()
+            cap_ms.append((t1 - t0) * 1e3); enc_ms.append((t2 - t1) * 1e3)
+            act_ms.append((t3 - t2) * 1e3); inj_ms.append((t4 - t3) * 1e3)
             n += 1
+            if rec is not None:
+                casts_r = [k for k in pressed if k != "AA"]
+                rec.write(agent.last_input352, {
+                    "i": n, "t": round(t0, 4),
+                    "movement": [round(float(x), 4) for x in action["movement"]],
+                    "wasd": sorted(wasd), "casts": casts_r,
+                    "aa": "AA" in pressed, "reward_pred": round(float(action["reward_pred"]), 4),
+                    "ms": {"cap": round((t1 - t0) * 1e3, 1), "enc": round((t2 - t1) * 1e3, 1),
+                           "act": round((t3 - t2) * 1e3, 1), "inj": round((t4 - t3) * 1e3, 1)},
+                })
             if n % args.target_fps == 0:
-                fps = 1000 / (sum(hist) / len(hist))
-                print(f"frame {n:6d} | move=({action['movement'][0]:.2f},{action['movement'][1]:.2f})"
-                      f"->({mx},{my}) keys={pressed or '-'} rew={action['reward_pred']:+.2f} | {fps:4.1f} fps")
+                tot = sum(map(lambda d: sum(d) / len(d), (cap_ms, enc_ms, act_ms, inj_ms)))
+                casts = [k for k in pressed if k != "AA"]
+                stale_pct = n_stale / max(n, 1)
+                warn = "  ** STALE STREAM **" if stale_pct > 0.25 else ""
+                print(f"frame {n:6d} | wasd={''.join(wasd).upper() or 'stand':5s} "
+                      f"casts={casts or '-'} rew={action['reward_pred']:+.2f} | "
+                      f"{1000/tot:4.1f}fps [cap{sum(cap_ms)/len(cap_ms):.0f} enc{sum(enc_ms)/len(enc_ms):.0f} "
+                      f"act{sum(act_ms)/len(act_ms):.0f} inj{sum(inj_ms)/len(inj_ms):.0f}ms] "
+                      f"stale={stale_pct:.0%}{warn}")
             slack = dt_target - (time.perf_counter() - t0)
             if slack > 0:
                 time.sleep(slack)
     except KeyboardInterrupt:
         print(f"\nstopped after {n} frames.")
+    finally:
+        ctrl.close()
+        if hasattr(cap, "close"):
+            cap.close()
+        if rec is not None:
+            rec.close()
 
 
 if __name__ == "__main__":

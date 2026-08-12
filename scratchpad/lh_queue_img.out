@@ -1,0 +1,3 @@
++ /home/dani/miniconda3/envs/ml/bin/python scratchpad/lh_run.py --probe cheat --epochs 15 --shuffle-epochs 8 --bs 32
++ /home/dani/miniconda3/envs/ml/bin/python scratchpad/lh_run.py --probe Acrop --epochs 25 --shuffle-epochs 12 --bs 48
++ /home/dani/miniconda3/envs/ml/bin/python scratchpad/lh_run.py --probe A --epochs 20 --shuffle-epochs 10 --bs 32

@@ -21,7 +21,8 @@ launch() {
     --seq-len 16 --stride 8 --batch-size 16 --epochs 10 \
     --lr 3e-4 --warmup-steps 2000 --num-workers 8 \
     --checkpoint-dir "$CKPT" --log-interval 50 \
-    --resume auto --checkpoint-minutes 20 --ability-pos-weight 5.0 \
+    --resume auto --checkpoint-minutes 20 --ability-pos-weight 1.0 \
+    --aux-state-weight 0.5 \
     --dataset-cache "$CKPT/dataset_cache.pt" >> "$LOG" 2>&1 &
 }
 

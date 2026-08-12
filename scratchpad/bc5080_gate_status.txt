@@ -1,0 +1,1 @@
+08-11 19:51 | proc:UP | ckpt:1158min | Epoch 0 [100/26407] loss=2.0240 bc=0.7394 (abil=0.011 move=0.728) rew=0.0413 aux=0.0386 gate[t=0.25 h=0.14 base=0.14] (13.3 samp/s)

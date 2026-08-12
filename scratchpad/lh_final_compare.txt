@@ -1,0 +1,36 @@
+=== paired game-bootstrap of the STRATIFIED-AUC difference, split=ho_seen
+  Acrop_commit_None    - S_commit_mlp         n= 3967 g=25 0.642 vs 0.593  diff=+0.049 [+0.014,+0.081]  P(diff<=0)=0.002
+  A_commit_None        - S_commit_mlp         n= 3967 g=25 0.594 vs 0.593  diff=+0.000 [-0.042,+0.044]  P(diff<=0)=0.478
+  B_commit_gridcnn     - S_commit_mlp         n= 3855 g=25 0.634 vs 0.594  diff=+0.040 [+0.001,+0.077]  P(diff<=0)=0.020
+  C_commit_gridcnn     - S_commit_mlp         n= 3855 g=25 0.635 vs 0.594  diff=+0.041 [-0.002,+0.085]  P(diff<=0)=0.032
+  D_commit_mlp         - S_commit_mlp         n= 1667 g=25 0.622 vs 0.596  diff=+0.026 [-0.033,+0.083]  P(diff<=0)=0.206
+  Acrop_commit_None    - B_commit_gridcnn     n= 3855 g=25 0.641 vs 0.634  diff=+0.007 [-0.012,+0.025]  P(diff<=0)=0.232
+  C_commit_gridcnn     - B_commit_gridcnn     n= 3855 g=25 0.635 vs 0.634  diff=+0.001 [-0.021,+0.022]  P(diff<=0)=0.476
+  D_commit_mlp         - B_commit_gridcnn     n= 1667 g=25 0.622 vs 0.577  diff=+0.044 [+0.003,+0.082]  P(diff<=0)=0.018
+  D_commit_mlp         - C_commit_gridcnn     n= 1667 g=25 0.622 vs 0.590  diff=+0.032 [-0.013,+0.074]  P(diff<=0)=0.086
+  D_commit_mlp         - Acrop_commit_None    n= 1667 g=25 0.622 vs 0.609  diff=+0.013 [-0.042,+0.062]  P(diff<=0)=0.327
+  Acrop_commit_None    - A_commit_None        n= 3967 g=25 0.642 vs 0.594  diff=+0.048 [+0.023,+0.074]  P(diff<=0)=0.001
+  Acrop_gold_None      - S_gold_mlp           n= 2421 g=25 0.678 vs 0.592  diff=+0.087 [+0.041,+0.148]  P(diff<=0)=0.000
+  B_gold_gridcnn       - S_gold_mlp           n= 2992 g=25 0.621 vs 0.582  diff=+0.039 [-0.025,+0.109]  P(diff<=0)=0.118
+  C_gold_gridcnn       - S_gold_mlp           n= 2992 g=25 0.605 vs 0.582  diff=+0.023 [-0.035,+0.088]  P(diff<=0)=0.218
+  Acrop_gold_None      - B_gold_gridcnn       n= 1211 g=25 0.658 vs 0.600  diff=+0.058 [-0.079,+0.154]  P(diff<=0)=0.222
+  C_gold_gridcnn       - B_gold_gridcnn       n= 2992 g=25 0.605 vs 0.621  diff=-0.016 [-0.049,+0.016]  P(diff<=0)=0.845
+
+=== paired game-bootstrap of the STRATIFIED-AUC difference, split=ho_unseen
+  Acrop_commit_None    - S_commit_mlp         n= 3341 g=21 0.605 vs 0.572  diff=+0.033 [-0.006,+0.070]  P(diff<=0)=0.044
+  A_commit_None        - S_commit_mlp         n= 3341 g=21 0.590 vs 0.572  diff=+0.018 [-0.016,+0.048]  P(diff<=0)=0.150
+  B_commit_gridcnn     - S_commit_mlp         n=  693 g= 7 0.554 vs 0.536  diff=+0.018 [-0.086,+0.098]  P(diff<=0)=0.349
+  C_commit_gridcnn     - S_commit_mlp         n=  693 g= 7 0.575 vs 0.536  diff=+0.039 [-0.051,+0.116]  P(diff<=0)=0.192
+  D_commit_mlp         - S_commit_mlp         n=  693 g= 7 0.587 vs 0.536  diff=+0.051 [-0.050,+0.127]  P(diff<=0)=0.144
+  Acrop_commit_None    - B_commit_gridcnn     n=  693 g= 7 0.582 vs 0.554  diff=+0.028 [-0.012,+0.077]  P(diff<=0)=0.078
+  C_commit_gridcnn     - B_commit_gridcnn     n=  693 g= 7 0.575 vs 0.554  diff=+0.022 [-0.012,+0.054]  P(diff<=0)=0.100
+  D_commit_mlp         - B_commit_gridcnn     n=  693 g= 7 0.587 vs 0.554  diff=+0.033 [-0.007,+0.082]  P(diff<=0)=0.057
+  D_commit_mlp         - C_commit_gridcnn     n=  693 g= 7 0.587 vs 0.575  diff=+0.012 [-0.038,+0.077]  P(diff<=0)=0.365
+  D_commit_mlp         - Acrop_commit_None    n=  693 g= 7 0.587 vs 0.582  diff=+0.005 [-0.017,+0.033]  P(diff<=0)=0.370
+  Acrop_commit_None    - A_commit_None        n= 3341 g=21 0.605 vs 0.590  diff=+0.015 [-0.008,+0.039]  P(diff<=0)=0.119
+  Acrop_gold_None      - S_gold_mlp           n= 2067 g=21 0.623 vs 0.584  diff=+0.039 [-0.050,+0.113]  P(diff<=0)=0.184
+  B_gold_gridcnn       - S_gold_mlp           n=  755 g= 7 0.523 vs 0.568  diff=-0.044 [-0.171,+0.068]  P(diff<=0)=0.753
+  C_gold_gridcnn       - S_gold_mlp           n=  755 g= 7 0.547 vs 0.568  diff=-0.020 [-0.077,+0.043]  P(diff<=0)=0.766
+  Acrop_gold_None      - B_gold_gridcnn       n=  499 g= 7 0.607 vs 0.486  diff=+0.121 [+0.050,+0.175]  P(diff<=0)=0.000
+  C_gold_gridcnn       - B_gold_gridcnn       n=  755 g= 7 0.547 vs 0.523  diff=+0.024 [-0.051,+0.118]  P(diff<=0)=0.337
+
