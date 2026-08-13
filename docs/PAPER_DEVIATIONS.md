@@ -4,6 +4,12 @@
 checkpoint args, and the paper text. Revised 2026-08-13** — sections carrying a dated
 `UPDATE`/`verified` note were re-checked then; everything else still dates from the 08-12 pass.
 
+**Companion:** [`DESIGN_DECISIONS.md`](DESIGN_DECISIONS.md) — for every point the paper leaves
+unspecified, the option space we faced, which option we took, and why it is right for *this*
+use case (League/Garen/20 fps/one 5080). Deviations are measured against the paper; decisions
+are measured against the alternatives. Most of what determines whether this agent plays well
+lives in the second document.
+
 **Scope note.** §1–§6 record *deviations from the paper*. **[§3A](#3a-assumptions-ledger--what-each-head-takes-on-faith)
 records something the paper cannot help with: the modelling assumptions each head asserts on its
 own** — no paper counterpart, so they can never show up as "deviations", but they decide whether the
@@ -752,7 +758,7 @@ Status key: **MEASURED** (checked against data) · **UNTESTED** (plausible, neve
 | # | Assumption | Status | If wrong |
 |---|---|---|---|
 | A1 | Abilities are **independent Bernoulli** (multi-hot) | **UNTESTED** | No combo structure representable (Q→AA→E). League play is combo-shaped. |
-| A2 | Abilities are untargeted — one bit each, no aim point | **KNOWN-VIOLATED** | Real casts have positions. We emit "press Q", not "Q at (x,y)". A skillshot champion would be unplayable; Garen hides this because his kit is self/point-blank. |
+| A2 | An aim point is unnecessary because cursor position + keypress already encodes it | **SOUND, but at risk** | Correct as stated: the cursor at the moment of the press *is* the aim point, present every frame — no second head needed. **The risk is that the click-based movement fix may have removed that signal**: the legacy target was per-frame `cursor.screen` (mouse position), the new one is the click destination held between clicks. v2 should feed BOTH (click-target for movement, cursor for aim). Garen masks this — only R is targeted. See DESIGN_DECISIONS.md §5. |
 | A3 | `--ability-pos-weight 1.0` is calibrated | **MEASURED** | At 5.0 the BCE learned the marginal cast rate, not state-conditional casting. Default is still 5.0 — **launchers override it**; a naive re-launch silently changes the objective (§3.6). |
 
 ### 3A.4 StateHead
