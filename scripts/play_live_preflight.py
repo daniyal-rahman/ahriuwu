@@ -284,25 +284,51 @@ def main():
     if ok_agent:
         check("inference speed", latency_check)
 
-    def behaviour_check():
-        """A policy that never moves is the failure mode greedy decode produces.
-        Sample 120 steps on noise and demand it is not degenerate."""
-        ag = holder["ag"]
-        ag.reset()
-        lat = np.random.rand(1, ag.latent_dim, 16, 16).astype(np.float32)
+    def sampling_check():
+        """Prove STOCHASTIC decoding is live — the one thing greedy kills.
+
+        Deliberately NOT a diversity check. Counting distinct movement cells on
+        synthetic latents measures how confused the model is by out-of-
+        distribution input, not whether the policy works: this checkpoint visits
+        ~60 cells on real recorded latents but only 2 on random noise, and one
+        FIXED latent repeated 120 times yields exactly 1 (which is the stale-
+        frame failure in miniature, not a broken policy).
+
+        So test the property that is independent of the input distribution: run
+        the SAME latent sequence twice at temperature 1.0 and require the two
+        action streams to differ. Identical streams mean sampling is effectively
+        off — temperature 0, or a distribution collapsed to a point mass — which
+        is the measured dead policy (0.00 clicks/s, 1 cell, 0 casts).
+        """
         import torch
-        cells, fires = set(), 0
-        for _ in range(120):
-            a = ag.act_from_latent(torch.from_numpy(lat).to(args.device), temperature=1.0)
-            cells.add(tuple(round(v, 2) for v in a["movement"]))
-            fires += int(a.get("gate", True))
-        if len(cells) < 3:
-            raise RuntimeError(f"policy is degenerate: {len(cells)} distinct movement "
-                               f"target(s) over 120 samples. Is --temperature 0 in play?")
-        return (f"{len(cells)} distinct targets, gate fired {fires}/120 "
-                f"(~{fires/120*17:.1f} clicks/s at 17 fps)")
+        ag = holder["ag"]
+        rng = np.random.default_rng(0)
+        # standard-normal is far closer to a real tokenizer latent than U[0,1),
+        # whose DC offset saturates the backbone.
+        lats = [torch.from_numpy(rng.standard_normal((1, ag.latent_dim, 16, 16))
+                                 .astype(np.float32)).to(args.device) for _ in range(60)]
+        runs = []
+        for _ in range(2):
+            ag.reset()
+            seq = []
+            for lt in lats:
+                a = ag.act_from_latent(lt, temperature=1.0)
+                seq.append((tuple(round(v, 3) for v in a["movement"]),
+                            bool(a.get("gate", True)),
+                            tuple(sorted(k for k, v in a["abilities"].items() if v))))
+            runs.append(seq)
+        if runs[0] == runs[1]:
+            raise RuntimeError(
+                "two runs over IDENTICAL inputs produced IDENTICAL actions — stochastic "
+                "decoding is not happening. That is the measured dead policy (0.00 "
+                "clicks/s, 1 movement cell, 0 casts). Check --temperature is 1.0.")
+        diff = sum(1 for x, y in zip(*runs) if x != y)
+        fires = sum(1 for x in runs[0] if x[1])
+        return (f"sampling live ({diff}/60 steps differ between identical-input runs); "
+                f"gate fired {fires}/60 on synthetic input "
+                f"(NOT a quality signal — see §1a of the runbook)")
     if ok_agent:
-        check("policy not degenerate", behaviour_check, critical=False)
+        check("stochastic decoding", sampling_check, critical=True)
 
     print()
     crit_fail = [n for n, ok, c in RESULTS if not ok and c]

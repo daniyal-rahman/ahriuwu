@@ -242,8 +242,8 @@ Healthy:
   [OK]   HID mouse reports: 10 relative reports accepted, socket alive, no click sent
   [OK]   UDP stream: 1280x720, 18.4 new frames/s (221/240 polls fresh), mean brightness 0.14
   [OK]   agent load: use_actions=True movement_mode=axis gate=True bf16=True
-  [OK]   inference speed: full path (resize+tokenizer+dynamics+heads) 17.8 fps
-  [OK]   policy not degenerate: 34 distinct targets, gate fired 19/120 (~2.7 clicks/s at 17 fps)
+  [OK]   inference speed: full path (resize+tokenizer+dynamics+heads) 20.3 fps
+  [OK]   stochastic decoding: sampling live (60/60 steps differ between identical-input runs); gate fired 18/60 on synthetic input
 === ALL CRITICAL CHECKS PASSED ===
 ```
 
@@ -266,7 +266,7 @@ Healthy:
 | `UDP stream: geometry (720,1280,3) != expected` | `-video_size` vs `--stream-size` mismatch | make them equal |
 | `UDP stream: essentially black` | capturing the wrong screen/region | fix `-offset_x/-offset_y` |
 | `inference speed: 6.1 fps < required 10` | something else is on the GPU | `nvidia-smi`; kill it |
-| `policy is degenerate: 1 distinct target` | greedy decode leaked in | ensure `--temperature 1.0` |
+| `two runs over IDENTICAL inputs produced IDENTICAL actions` | greedy decode leaked in — the measured dead policy | ensure `--temperature 1.0` |
 
 ---
 
@@ -356,6 +356,19 @@ commit and checkpoint shas.
 - Calibration file loading, including corrupt and implausible files.
 - The `status` verb round-trips through the real server loop, and a burst of
   mouse/key/garbage lines does not drop the socket.
+
+**Verified on the real desktop (RTX 5080), end to end:**
+- `ops/stage_desktop_standalone.sh` runs clean: rsync, checkpoint copy, VERSION
+  stamp, and a real GPU inference — `VERIFY OK: use_actions=True
+  movement_mode=axis gated=True bf16=True`, checkpoint step 102420.
+- The preflight passes on the staged tree with everything except the stream and
+  the Pi (which do not exist here): checkpoint identity, calibration, agent
+  load, **20.3 fps** full-path inference, stochastic decoding live.
+- Incidentally confirming the §Task-3 thesis: feeding the policy one FIXED
+  latent 120 times yields exactly **1** distinct movement target, and uniform
+  noise yields 2, against ~60 on real recorded latents. A world model shown no
+  change predicts no change — which is precisely why stale frames are now
+  skipped rather than fed.
 
 **NOT verified — no hardware was available:**
 - **Nothing has been tested against the actual Pi or the actual Windows PC.**

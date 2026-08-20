@@ -71,14 +71,29 @@ rsync -a --delete \
   --exclude='.git' --exclude='wandb' --exclude='__pycache__' --exclude='*.pyc' \
   "$SRC/src" "$SRC/scripts" "$SRC/tests" "$SRC/pyproject.toml" "$DEST/"
 
+# Resolve the calibration AFTER the rsync, which supplies the repo's seed file.
+# Checking before it reported "no calibration" on a box that was about to have
+# one, which is exactly the kind of misleading line that gets ignored.
 if [ -n "$SAVED" ]; then
-  cp "$SAVED" "$CAL"
+  cp "$SAVED" "$CAL"                     # box-measured beats the repo seed
   rm -f "$SAVED"
-  echo "[stage] calibration restored -> $CAL"
+  echo "[stage] calibration: kept this box's existing file -> $CAL"
+  grep -q '"provisional": *true' "$CAL" && \
+    echo "[stage]   (still flagged PROVISIONAL — never re-measured on this rig)"
+elif [ -f "$CAL" ]; then
+  if grep -q '"provisional": *true' "$CAL"; then
+    echo "[stage] calibration: PROVISIONAL seed from the repo ($(python3 -c \
+      'import json,sys;d=json.load(open(sys.argv[1]));print(d["span"],"chunk",d["chunk"])' "$CAL" 2>/dev/null))"
+    echo "[stage]   valid only while Windows pointer speed / 'Enhance pointer precision' /"
+    echo "[stage]   resolution are unchanged. To re-measure on this rig, run ONCE:"
+    echo "[stage]     \$PY \$AHRIUWU/scripts/keysender/calibrate_mouse.py --host \$PI"
+  else
+    echo "[stage] calibration: measured file from the repo -> $CAL"
+  fi
 else
-  echo "[stage] NOTE: no mouse calibration on this box. Run ONCE before playing:"
-  echo "[stage]   \$PY \$AHRIUWU/scripts/keysender/calibrate_mouse.py --host \$PI"
-  echo "[stage]   (until then the sender uses the built-in fallback span 649x367)"
+  echo "[stage] WARNING: NO mouse calibration anywhere. Clicks will use the built-in"
+  echo "[stage]   fallback span 649x367. Run before playing:"
+  echo "[stage]     \$PY \$AHRIUWU/scripts/keysender/calibrate_mouse.py --host \$PI"
 fi
 
 echo "[stage] copying checkpoints to local disk..."
