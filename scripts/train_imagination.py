@@ -47,6 +47,18 @@ import torch.nn as nn
 from torch.amp import GradScaler, autocast
 
 from ahriuwu.constants import ABILITY_KEYS, MOVEMENT_DIM
+
+# WHICH MTP HEAD PHASE 3 MAY USE.
+# Phase-2 BC runs `for n in range(1, mtp_length)` -- offset 0 is deliberately
+# dropped because the action token for frame t is an INPUT to frame t's tokens,
+# so predicting a_t from h_t is a label leak. Consequence: head 0 is zero-init
+# and receives no gradient, ever. Verified on a 99,421-step checkpoint:
+#   movement_heads.0.weight norm = 0.0   vs  offsets 1..8 norm ~ 23
+# Phase 3 previously sampled and scored at offset 0, so its "behavior-cloned"
+# policy was Bernoulli(0.5) per ability and uniform over movement, and the
+# behavioral prior (a copy of the same zeros) made the PMPO KL vacuous.
+# Offset 1 is the first TRAINED head and is what inference uses (agent_infer).
+MTP_OFFSET = 1
 from ahriuwu.models import (
     create_dynamics,
     RewardHead,
@@ -64,6 +76,7 @@ from ahriuwu.data.dataset import VideoGroupedSampler
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, finish_wandb
 from ahriuwu.utils.training import (
     add_training_args, create_optimizer, create_wsd_schedule,
+    load_state_dict_guarded,
 )
 
 
@@ -144,12 +157,29 @@ def load_phase2(args, device):
     args.movement_bins = saved.get("movement_bins", args.movement_bins)
     args.hidden_dim = saved.get("hidden_dim", args.hidden_dim)
 
+    # The Phase-2 policy may carry a sticky movement gate. Rebuilding without it
+    # makes the strict load below reject every gate tensor, and rebuilding WITH it
+    # against an ungated checkpoint leaves the gate at random init -- so read the
+    # flag from the checkpoint rather than assuming, exactly as agent_infer does.
+    args.movement_gate = saved.get("movement_gate", False)
+    # Restore EVERY arch flag the checkpoint recorded. Restoring only a subset built
+    # a 512-dim MHA model for a 768-dim GQA checkpoint and failed on register_tokens;
+    # omitting movement_mode built a 42-logit head for a 442-class checkpoint.
+    args.movement_mode = saved.get("movement_mode", "axis")
+    for _k in ("model_size", "num_kv_heads", "agent_layers", "num_register_tokens",
+               "soft_cap", "no_qk_norm"):
+        if _k in saved:
+            setattr(args, _k, saved[_k])
+    _cfg_size = cfg.get("size_preset")
+    if _cfg_size:
+        args.model_size = _cfg_size
+
     dyn_state = ckpt["dynamics_state_dict"]
     if any(k.startswith("_orig_mod.") for k in dyn_state):
         dyn_state = {k.replace("_orig_mod.", ""): v for k, v in dyn_state.items()}
     use_actions = cfg.get("use_actions", any("action_embed" in k for k in dyn_state))
     dynamics = build_dynamics(args, use_actions=use_actions, device=device)
-    dynamics.load_state_dict(dyn_state, strict=False)
+    load_state_dict_guarded(dynamics, dyn_state, what="Phase-3 dynamics backbone")
     dynamics.eval()
     dynamics.requires_grad_(False)
     model_dim = dynamics.model_dim
@@ -162,11 +192,26 @@ def load_phase2(args, device):
 
     policy_head = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
                              hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
-                             movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins).to(device)
+                             movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
+                             movement_gate=args.movement_gate,
+                             movement_mode=args.movement_mode).to(device)
     policy_head.load_state_dict(ckpt["policy_head_state_dict"])
+
+    if args.movement_gate:
+        # PolicyHead.log_prob() hard-raises on a gated head: PMPO needs the
+        # PREVIOUS action to evaluate the mixture NLL, and imagination does not
+        # thread it through yet. Fail here with the reason rather than deep in
+        # the rollout with an opaque error.
+        raise SystemExit(
+            "This Phase-2 checkpoint has a sticky movement gate, which Phase 3 "
+            "cannot train yet: PMPO calls PolicyHead.log_prob(), and the gated "
+            "mixture NLL needs the previous action plumbed through the imagined "
+            "rollout. Train an ungated BC checkpoint (--no-movement-gate) for "
+            "Phase 3, or implement prev-action threading first.")
 
     print(f"Loaded Phase 2 from {args.agent_checkpoint}")
     print(f"  dynamics use_actions={use_actions} (frozen), reward head frozen, policy head trainable")
+    print(f"  movement_gate={args.movement_gate}")
     return dynamics, reward_head, policy_head, model_dim, use_actions
 
 
@@ -263,13 +308,14 @@ def imagine(dynamics, policy_head, reward_head, value_head, z_context, args, dev
         _, agent_out = dynamics(z_noisy, tau, step_size=d_one, actions=actions_win)
         h_t = agent_out[:, -1:, :]  # (B, 1, D) — token for the last/newest frame
 
-        # Sample on-policy action at MTP offset n=0 (no leak: a_t did not exist
-        # when h_t was built). sample() returns continuous movement + bin idx.
+        # Sample on-policy action at the first TRAINED MTP head (see MTP_OFFSET).
         abilities, movement, _ = policy_head.sample(h_t, temperature=args.temperature)
-        a_abil = abilities[:, 0, 0, :]        # (B, num_abilities)
-        a_move = movement[:, 0, 0, :]         # (B, 2)
+        a_abil = abilities[:, 0, MTP_OFFSET, :]        # (B, num_abilities)
+        a_move = movement[:, 0, MTP_OFFSET, :]         # (B, 2)
 
-        r_t = reward_head.predict(h_t)[:, 0, 0]   # (B,) MTP offset 0, original scale
+        # reward head DOES train offset 0 (reward is a target, never an input),
+        # so it keeps 0 -- verified: reward_head.heads.0 norm 2.86e+01.
+        r_t = reward_head.predict(h_t)[:, 0, 0]   # (B,) original scale
         v_t = value_head.predict(h_t)[:, 0]       # (B,) original scale
 
         agent_outs.append(h_t[:, 0, :])
@@ -340,19 +386,21 @@ def run_step(roll, policy_head, policy_prior, value_head, args, device, amp_dtyp
         value_loss = twohot_loss(value_logits, value_targets, value_head.bucket_centers)
 
         # --- Policy loss: PMPO with factorized KL to the frozen prior (Eq 11) ---
-        # Add a singleton MTP axis so log_prob/forward see (B, H, 1, ...). We use
-        # MTP offset n=0: log pi(a_t | h_t) for the on-policy sampled a_t.
-        abil_mtp = ability_acts.unsqueeze(2)      # (B, H, 1, A)
-        move_mtp = movement_acts.unsqueeze(2)     # (B, H, 1, 2)
-        log_probs = policy_head.log_prob(agent_outs, abil_mtp, move_mtp)[:, :, 0]  # (B,H)
+        # log_prob scores the FIRST L heads, so to score offset MTP_OFFSET we pass
+        # MTP_OFFSET+1 targets and read the last one. Padding with the same action
+        # is harmless: only index MTP_OFFSET is read out.
+        _L = MTP_OFFSET + 1
+        abil_mtp = ability_acts.unsqueeze(2).expand(-1, -1, _L, -1)    # (B,H,L,A)
+        move_mtp = movement_acts.unsqueeze(2).expand(-1, -1, _L, -1)   # (B,H,L,2)
+        log_probs = policy_head.log_prob(agent_outs, abil_mtp, move_mtp)[:, :, MTP_OFFSET]
 
-        # Factorized KL needs both heads' logits at offset 0, for policy and prior.
+        # Factorized KL needs both heads' logits at MTP_OFFSET, for policy and prior.
         a_logits, m_logits = policy_head(agent_outs)          # (B,H,L,A), (B,H,L,2,bins)
         with torch.no_grad():
             a_prior, m_prior = policy_prior(agent_outs)
         kl = factorized_policy_kl(
-            a_logits[:, :, 0, :], a_prior[:, :, 0, :],
-            m_logits[:, :, 0, :, :], m_prior[:, :, 0, :, :],
+            a_logits[:, :, MTP_OFFSET, :], a_prior[:, :, 0, :],
+            m_logits[:, :, MTP_OFFSET, :, :], m_prior[:, :, 0, :, :],
         )  # (B, H)
 
         policy_loss = compute_pmpo_loss(

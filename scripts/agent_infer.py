@@ -35,6 +35,27 @@ from ahriuwu.constants import ABILITY_KEYS, MOVEMENT_DIM
 from ahriuwu.models import create_dynamics, PolicyHead, RewardHead, DiffusionSchedule
 
 
+def _load_state_dict_guarded(module, state, *, what: str, allow_missing=()):
+    """``load_state_dict(strict=False)`` that RAISES on anything unexplained.
+
+    This exact call site is one of the two that already detonated: a bare
+    ``strict=False`` here silently dropped the trained ``action_embed`` weights
+    whenever ``use_actions`` was mis-derived, and the agent blocks then read
+    out-of-distribution activations with nothing in the log to say so. At
+    inference there is no loss curve to notice it — the agent just plays badly.
+    """
+    missing, unexpected = module.load_state_dict(state, strict=False)
+    bad_missing = [k for k in missing if not k.startswith(tuple(allow_missing))]
+    if bad_missing or unexpected:
+        raise RuntimeError(
+            f"{what}: state-dict mismatch — this checkpoint does not match the "
+            f"model built from its own args/config, so a non-strict load would "
+            f"run with randomly-initialised tensors.\n"
+            f"  UNEXPECTED in checkpoint ({len(unexpected)}): {unexpected[:10]}\n"
+            f"  MISSING from checkpoint ({len(bad_missing)}): {bad_missing[:10]}")
+    return missing, unexpected
+
+
 def _dyn_from_tok(latent):
     """v7 tokenizer latent (B, num_latents=512, tok_dim=16) -> dynamics grid
     (B, 32, 16, 16). 512*16 = 16*16*32; folded EXACTLY as pretokenize_replay_v7
@@ -100,12 +121,16 @@ class GarenAgent:
         self.policy = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
                                  hidden_dim=hidden, mtp_length=self.mtp,
                                  movement_dim=MOVEMENT_DIM, movement_bins=self.movement_bins,
-                                 movement_gate=a.get("movement_gate", False)).to(device).eval()
+                                 movement_gate=a.get("movement_gate", False),
+                                 movement_mode=a.get("movement_mode", "axis")).to(device).eval()
         self.reward = RewardHead(input_dim=model_dim, hidden_dim=hidden,
                                  num_buckets=num_buckets, mtp_length=self.mtp).to(device).eval()
 
         if not init_only:
-            self.dyn.load_state_dict(ck["dynamics_state_dict"], strict=False)
+            # Phase-2 checkpoints carry the FULL dynamics (backbone + trained
+            # agent blocks), so nothing here may be missing or unexpected.
+            _load_state_dict_guarded(self.dyn, ck["dynamics_state_dict"],
+                                     what=f"dynamics from {phase2_ckpt}")
             self.policy.load_state_dict(ck["policy_head_state_dict"])
             if "reward_head_state_dict" in ck:
                 self.reward.load_state_dict(ck["reward_head_state_dict"])
@@ -141,9 +166,14 @@ class GarenAgent:
         self.act_buf.clear()
 
     @torch.no_grad()
-    def act_from_latent(self, latent, temperature=0.0, prev_action=None, gate_bias=0.0):
+    def act_from_latent(self, latent, temperature=1.0, prev_action=None, gate_bias=0.0):
         """latent: (1, latent_dim, 16, 16) for the newest observed frame -> action dict.
-        temperature 0 = greedy (deterministic, best for a demo).
+
+        temperature DEFAULTS TO 1.0 (sampling). Do NOT default to 0: greedy decode
+        is a measurably dead policy on every checkpoint we have -- 0.00 clicks/s,
+        one movement cell, zero casts -- because the trained cast logits sit near
+        -10 and the movement argmax is pinned to NO_OP / one bin. Greedy is for
+        deliberate A/B only.
         prev_action: the action ACTUALLY executed at the previous frame (same dict
         shape as this method's return) — overrides the agent's own last decision in
         the action history. Pass logged actions for teacher-forced sim evals; leave
@@ -183,6 +213,7 @@ class GarenAgent:
         z_tau, _ = self.sched.add_noise(z0, tau)
         d_one = torch.ones(B, dtype=torch.long, device=self.device)
         has_gate = getattr(self.policy, "movement_gate", False)
+        joint = getattr(self.policy, "movement_mode", "axis") == "joint_noop"
         with self._ac():
             _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=actions)
             h = agent_out[:, -1:, :]                  # newest frame's agent token (1,1,D)
@@ -194,8 +225,8 @@ class GarenAgent:
             # the caller needs. So take the FRESH categorical sample here and
             # apply the gate ourselves; the semantics are identical to sample()'s
             # internal branch, only now `fire` is observable.
-            abil, move_fresh, _ = self.policy.sample(h, temperature=temperature,
-                                                     prev_movement_idx=None)
+            abil, move_fresh, move_idx = self.policy.sample(h, temperature=temperature,
+                                                            prev_movement_idx=None)
             gl_n = self.policy.gate_logits(h) if has_gate else None   # (1,1,L)
             rew_all = self.reward.predict(h)
         n = 1 if self.mtp > 1 else 0                  # MTP offset 1 = trained "next action"
@@ -204,6 +235,34 @@ class GarenAgent:
         else:                                         # greedy: calibrated logit threshold
             al = a_logits[0, 0, n, :].float()
             abilities = {k: bool(al[i].item() > self.ability_thresh) for i, k in enumerate(ABILITY_KEYS)}
+
+        # --- joint_noop: the NO_OP class IS the gate -------------------------
+        # A joint head emits one class over the bins**2 grid plus NO_OP. NO_OP
+        # means "the previous order is still executing", so it maps exactly onto
+        # the gate's hold branch -- no separate gate head, no prev-action needed.
+        if joint:
+            cls = move_idx[0, 0, n]
+            if gate_bias != 0.0:
+                # calibration knob with the same MEANING as the gated path's
+                # gate_bias: shift the firing RATE by penalising NO_OP, without
+                # touching the relative preference among grid cells.
+                lg = self.policy(h)[1][0, 0, n].float().clone()
+                lg[self.policy.NO_OP] -= gate_bias
+                cls = (lg.argmax() if temperature == 0
+                       else torch.multinomial(torch.softmax(lg / temperature, -1), 1)[0])
+            gate_fire = bool((cls != self.policy.NO_OP).item())
+            if gate_fire:
+                xy, _ = self.policy.joint_to_unit(cls.view(1))
+                fresh = tuple(float(v) for v in xy[0].float().tolist())
+            else:
+                fresh = (tuple(self.act_buf[-1]["movement"]) if self.act_buf else (0.5, 0.5))
+            movement = fresh if gate_fire else (
+                tuple(self.act_buf[-1]["movement"]) if self.act_buf else (0.5, 0.5))
+            rew = float(rew_all[0, 0, n].item())
+            self.act_buf.append({"movement": movement, "abilities": dict(abilities)})
+            return {"abilities": abilities, "movement": movement, "reward_pred": rew,
+                    "gate": gate_fire, "gate_logit": None, "fresh": fresh,
+                    "movement_class": int(cls.item())}
 
         # Gate: fire => commit the fresh target (a click); hold => repeat the last
         # EXECUTED movement and send no click. First frame always fires.
@@ -266,7 +325,8 @@ def main():
     ap.add_argument("--labels-root", default="/srv/nfs/datasets/lol_replays_16_9_772")
     ap.add_argument("--context", type=int, default=16)
     ap.add_argument("--frames", type=int, default=300)
-    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--temperature", type=float, default=1.0,
+                    help="1.0 = sample (the deploy rule). 0 = greedy, which is a MEASURABLY DEAD policy here (0.00 clicks/s, 1 cell, 0 casts) -- use only for a deliberate A/B.")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--test-latents", action="store_true")
     ap.add_argument("--init-only", action="store_true",

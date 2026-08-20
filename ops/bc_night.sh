@@ -15,8 +15,12 @@
 # according to the clock).
 set -uo pipefail
 REPO=/mnt/nfs/projects/ahriuwu
-WD="$REPO/ops/bc5080_gate_watchdog.sh"
-STOP="$REPO/ops/bc5080_gate.stop"
+WD="${BC_WATCHDOG:-$REPO/ops/bc5080_clicks_watchdog.sh}"
+STOP="${BC_STOP:-$REPO/ops/bc5080_clicks.stop}"
+# pgrep pattern for THIS watchdog, derived from $WD. The bracket trick stops
+# the pattern from matching the pgrep/pkill command line itself.
+WDBASE=$(basename "$WD" .sh)
+WDPAT="${WDBASE:0:8}[${WDBASE:8:1}]${WDBASE:9}"
 LOG="$REPO/ops/bc_night.log"
 START_H=6      # UTC
 END_H=18       # UTC
@@ -29,7 +33,7 @@ in_window() {
 }
 
 start() {
-  if pgrep -f "bc5080_gate[_]watchdog" >/dev/null; then
+  if pgrep -f "$WDPAT" >/dev/null; then
     log "start: already running"; return 0
   fi
   # NFS must be up (checkpoints + code live there)
@@ -47,7 +51,7 @@ start() {
 stop() {
   touch "$STOP"
   sleep 2
-  pkill -f "bc5080_gate[_]watchdog" 2>/dev/null
+  pkill -f "$WDPAT" 2>/dev/null
   # SIGTERM the trainer; it checkpoints every --checkpoint-minutes, so we lose
   # at most that much progress. Resume is automatic next window.
   pkill -TERM -f "train_agent[_]finetune" 2>/dev/null
@@ -62,7 +66,7 @@ supervise() {
   while true; do
     if in_window; then
       if [ "$was" != "in" ]; then log "window OPEN -> starting"; was=in; fi
-      pgrep -f "bc5080_gate[_]watchdog" >/dev/null || start
+      pgrep -f "$WDPAT" >/dev/null || start
     else
       if [ "$was" != "out" ]; then
         log "window CLOSED -> stopping"; was=out; stop
@@ -80,7 +84,7 @@ case "${1:-}" in
   stop)  stop ;;
   status)
     pgrep -f "train_agent[_]finetune" >/dev/null && echo "trainer UP" || echo "trainer down"
-    pgrep -f "bc5080_gate[_]watchdog" >/dev/null && echo "watchdog UP" || echo "watchdog down"
+    pgrep -f "$WDPAT" >/dev/null && echo "watchdog UP" || echo "watchdog down"
     in_window && echo "inside window (06-18 UTC / 23-11 PT)" || echo "outside window"
     ;;
   *) echo "usage: $0 {start|stop|maybe|status}"; exit 2 ;;

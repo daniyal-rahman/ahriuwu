@@ -25,6 +25,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -178,7 +179,8 @@ class InputController:
     """
 
     def __init__(self, region, backend, keys, desktop, hid_host="127.0.0.1",
-                 deadzone=0.06, attack_key=None):
+                 deadzone=0.06, attack_key=None, movement_mode="wasd",
+                 click_min_interval=0.12):
         self.backend, self.keys = backend, keys
         self.left, self.top = region[0], region[1]
         self.w, self.h = region[2], region[3]
@@ -186,11 +188,26 @@ class InputController:
         self.deadzone = deadzone           # |target - center| below this = stand still
         self.attack_key = attack_key       # AA bind in WASD mode (None = no-op)
         self.held = set()                  # currently-held WASD movement keys
+        # "wasd" = keyboard-only rig; "mouse" = right-click-to-move, the real
+        # League primitive the policy was actually trained on (click targets).
+        self.movement_mode = movement_mode
+        # Floor on time between clicks. The gate normally paces these (~2/s), but
+        # an ungated checkpoint reports gate=True every frame, which at 20 fps
+        # would be 20 clicks/s -- nothing like a human, and it cancels its own
+        # orders before the champion moves.
+        self.click_min_interval = click_min_interval
+        self._last_click_t = 0.0
+        self.clicks_sent = 0
+        self.clicks_suppressed = 0
+        self.mouse = None
         if backend == "pynput":
             from pynput.keyboard import Controller as KB
             self.kb = KB()
+            if movement_mode == "mouse":
+                from pynput.mouse import Controller as MC
+                self.mouse = MC()
         elif backend == "hid":
-            sys.path.insert(0, __import__("os").path.join(__import__("os").path.dirname(__file__), "keysender"))
+            sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "keysender"))
             from hybrid_sender import HybridKeyboard
             self.kb = HybridKeyboard(host=hid_host)
 
@@ -220,17 +237,45 @@ class InputController:
         _, combo = min(_WASD_DIRS, key=lambda d: min(abs(ang - d[0]), 360 - abs(ang - d[0])))
         return set(combo)
 
+    def _click_move(self, mx, my, action):
+        """Right-click-to-move. Fires only when the policy's sticky gate says a
+        NEW command was issued -- holding a command between gate firings is the
+        whole point of the gate, and re-clicking every frame would restart the
+        order 20x/s. Returns True if a click actually went out."""
+        if not action.get("gate", True):
+            return False
+        now = time.time()
+        if now - self._last_click_t < self.click_min_interval:
+            self.clicks_suppressed += 1
+            return False
+        self._last_click_t = now
+        self.clicks_sent += 1
+        if self.backend == "hid":
+            # fractions of the FULL desktop, which is what absolute HID wants
+            self.kb.move_click(mx / self.dw, my / self.dh)
+        elif self.backend == "pynput" and self.mouse is not None:
+            from pynput.mouse import Button
+            self.mouse.position = (mx, my)
+            self.mouse.click(Button.right)
+        return True
+
     def send(self, action):
         mx = self.left + int(action["movement"][0] * self.w)
         my = self.top + int(action["movement"][1] * self.h)
         pressed = [k for k, v in action["abilities"].items() if v]
         if self.backend == "dry":
-            want = self._wasd_keys(*action["movement"])
+            want = (set() if self.movement_mode == "mouse"
+                    else self._wasd_keys(*action["movement"]))
             return mx, my, pressed, sorted(want)
 
-        # --- movement: set held WASD keys (backend handles press/release diff) ---
-        want = self._wasd_keys(*action["movement"])
-        self._set_movement(want)
+        # --- movement ---
+        if self.movement_mode == "mouse":
+            want = set()
+            self._click_move(mx, my, action)
+        else:
+            # set held WASD keys (backend handles press/release diff)
+            want = self._wasd_keys(*action["movement"])
+            self._set_movement(want)
 
         # --- abilities: taps (AA -> optional attack key) ---
         for k in pressed:
@@ -297,9 +342,16 @@ def main():
                          "screen=local mss grab (single-machine/dev).")
     ap.add_argument("--udp-port", type=int, default=5000, help="UDP port to listen on (--source udp).")
     ap.add_argument("--stream-size", default="1280x720", help="WxH the Windows ffmpeg sends.")
+    # DEFAULT OFF. action="store_false" without an explicit default yields True,
+    # which silently kept this ON for every live run even after the offline sim
+    # REFUTED it (mean brightness 0.136 -> 0.090; it crushes shadows). The class
+    # docstring above has said "defaults OFF" since then; it was not true.
+    ap.add_argument("--range-expand", dest="expand_range", action="store_true", default=False,
+                    help="Limited->full colour-range expansion on decode. Default OFF: the "
+                         "offline sim measured this making frames DARKER, not brighter. "
+                         "Kept only for A/B experiments.")
     ap.add_argument("--no-range-expand", dest="expand_range", action="store_false",
-                    help="Disable limited->full color-range expansion on decode (leave ON: "
-                         "the H.264 stream is TV-range and the model wants full-range/bright).")
+                    help="Explicitly disable range expansion (already the default).")
     ap.add_argument("--gamma", type=float, default=1.0,
                     help="Extra gamma on incoming frames (<1 brightens). Only if range-expand "
                          "isn't enough; verified ~0.6 rescues an uncorrected dark stream.")
@@ -319,6 +371,30 @@ def main():
     ap.add_argument("--attack-key", default=None,
                     help="Key to tap for AA in WASD mode (e.g. an attack-move bind). "
                          "Default None: rely on the mode's auto-attack.")
+    ap.add_argument("--desktop", default=None, metavar="WxH",
+                    help="TRUE desktop size for absolute-HID mapping. Distinct from the "
+                         "capture region: HID coords are 0..32767 across the WHOLE desktop, "
+                         "so a region with a non-zero origin needs the desktop size to map "
+                         "correctly. Previously the region SIZE was passed here, which sent "
+                         "every click to the screen edge for any offset region. "
+                         "Default: derived from the region (correct only when origin is 0,0).")
+    ap.add_argument("--gate-bias", type=float, default=0.0,
+                    help="Shift the movement FIRING RATE without changing where it clicks. "
+                         "Every offline eval exposes this; the live entrypoint did not, so a "
+                         "live run was pinned at the checkpoint's raw calibration.")
+    ap.add_argument("--ability-thresh", type=float, default=0.0,
+                    help="Greedy-mode cast threshold on the ability logit. At --temperature 0 "
+                         "the default 0.0 means NEVER cast (trained logits sit at -3.5..-5). "
+                         "Offline evals run -3.6..-4.0.")
+    ap.add_argument("--movement-mode", choices=["wasd", "mouse"], default="mouse",
+                    help="mouse=right-click-to-move, the primitive the policy is "
+                         "trained on (click targets) and the default. wasd=keyboard-only "
+                         "rig (no /dev/hidg1 on the Pi); the 8-way decode throws away "
+                         "the target's distance and off-axis angle.")
+    ap.add_argument("--click-min-interval", type=float, default=0.12,
+                    help="Floor on seconds between right-clicks in mouse mode. The gate "
+                         "normally paces these; this protects against an ungated "
+                         "checkpoint clicking every frame.")
     ap.add_argument("--record", action="store_true", default=True,
                     help="Record model-view (352) video + per-frame actions (default on).")
     ap.add_argument("--no-record", dest="record", action="store_false")
@@ -328,15 +404,22 @@ def main():
     if args.dry_run:
         args.inject = "dry"
 
-    # Movement is WASD -> no ability may be bound to w/a/s/d (they'd fire while
-    # walking). Refuse to run live with a colliding bind; print the required binds.
+    # WASD movement holds w/a/s/d down, so no ability may be bound to them (it
+    # would fire while walking). Irrelevant in mouse mode, where movement uses no
+    # keys at all and League's default Q/W/E/R binds are correct.
     collide = {k: v for k, v in DEFAULT_KEYS.items() if v in ("w", "a", "s", "d")}
-    if collide and args.inject != "dry":
+    if collide and args.inject != "dry" and args.movement_mode == "wasd":
         raise SystemExit(f"ability keys collide with WASD movement: {collide}. "
-                         "Rebind these abilities (in-game AND in DEFAULT_KEYS) off w/a/s/d.")
-    print("keybinds (set these in-game): movement=WASD  " +
+                         "Rebind these abilities (in-game AND in DEFAULT_KEYS) off w/a/s/d, "
+                         "or use --movement-mode mouse.")
+    _mv = ("right-click (mouse)" if args.movement_mode == "mouse" else "WASD")
+    print(f"keybinds (set these in-game): movement={_mv}  " +
           "  ".join(f"{a}={k}" for a, k in DEFAULT_KEYS.items()) +
           f"  AA={'(' + args.attack_key + ')' if args.attack_key else 'auto'}")
+    if args.movement_mode == "mouse" and args.inject == "hid":
+        print("mouse mode needs /dev/hidg1 on the Pi (setup_hid_combo.sh) — "
+              "hid_server prints 'mouse gadget: ...' at startup; if it says "
+              "unavailable, clicks are silently dropped.")
 
     if args.source == "udp":
         sw, sh = map(int, args.stream_size.split("x"))
@@ -348,10 +431,22 @@ def main():
         cap = ScreenCapture(region)
         if region is None:
             region = (cap.mon["left"], cap.mon["top"], cap.mon["width"], cap.mon["height"])
-    ctrl = InputController(region, args.inject, DEFAULT_KEYS, (region[2], region[3]),
-                           args.hid_host, deadzone=args.deadzone, attack_key=args.attack_key)
+    if args.desktop:
+        _dw, _dh = map(int, args.desktop.lower().split("x"))
+    else:
+        _dw, _dh = region[2], region[3]
+        if (region[0] or region[1]):
+            raise SystemExit(
+                f"--capture-region has origin ({region[0]},{region[1]}) but --desktop was not "
+                f"given. Absolute HID coords span the whole desktop, so without the real "
+                f"desktop size every click maps past the edge and clamps. Pass --desktop WxH.")
+    ctrl = InputController(region, args.inject, DEFAULT_KEYS, (_dw, _dh),
+                           args.hid_host, deadzone=args.deadzone, attack_key=args.attack_key,
+                           movement_mode=args.movement_mode,
+                           click_min_interval=args.click_min_interval)
     agent = GarenAgent(args.phase2_ckpt, tokenizer_ckpt=args.tokenizer_ckpt,
-                       context=args.context, device=args.device)
+                       context=args.context, device=args.device,
+                       ability_thresh=args.ability_thresh)
     agent.reset()
 
     rec = None
@@ -373,6 +468,7 @@ def main():
     if args.source == "udp":
         cap.wait_first()                          # block until the stream is flowing
     print(f"\nRunning ({mode}, source={args.source}). Ctrl+C to stop.\n")
+    t_start = time.perf_counter()      # for the clicks/s rate readout
     try:
         while True:
             t0 = time.perf_counter()
@@ -384,7 +480,7 @@ def main():
             t1 = time.perf_counter()
             lat = agent.encode_frame(frame)
             t2 = time.perf_counter()
-            action = agent.act_from_latent(lat, temperature=args.temperature)
+            action = agent.act_from_latent(lat, temperature=args.temperature, gate_bias=args.gate_bias)
             t3 = time.perf_counter()
             mx, my, pressed, wasd = ctrl.send(action)
             t4 = time.perf_counter()
@@ -406,7 +502,14 @@ def main():
                 casts = [k for k in pressed if k != "AA"]
                 stale_pct = n_stale / max(n, 1)
                 warn = "  ** STALE STREAM **" if stale_pct > 0.25 else ""
-                print(f"frame {n:6d} | wasd={''.join(wasd).upper() or 'stand':5s} "
+                if args.movement_mode == "mouse":
+                    # clicks/s is the number to watch: humans issue ~2/s, and the
+                    # trained gate sits near 0.2/s without --gate-bias.
+                    rate = ctrl.clicks_sent / max(time.perf_counter() - t_start, 1e-6)
+                    mv_s = f"clicks={ctrl.clicks_sent:4d}({rate:4.2f}/s)"
+                else:
+                    mv_s = f"wasd={''.join(wasd).upper() or 'stand':5s}"
+                print(f"frame {n:6d} | {mv_s} "
                       f"casts={casts or '-'} rew={action['reward_pred']:+.2f} | "
                       f"{1000/tot:4.1f}fps [cap{sum(cap_ms)/len(cap_ms):.0f} enc{sum(enc_ms)/len(enc_ms):.0f} "
                       f"act{sum(act_ms)/len(act_ms):.0f} inj{sum(inj_ms)/len(inj_ms):.0f}ms] "

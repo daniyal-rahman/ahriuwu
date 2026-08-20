@@ -41,7 +41,8 @@ def main():
     ap.add_argument("--window", type=int, default=0,
                     help="Which (frames+1)-long window of the match to eval (0=first).")
     ap.add_argument("--context", type=int, default=16)
-    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--temperature", type=float, default=1.0,
+                    help="1.0 = sample (the deploy rule). 0 = greedy, which is a MEASURABLY DEAD policy here (0.00 clicks/s, 1 cell, 0 casts) -- use only for a deliberate A/B.")
     ap.add_argument("--ability-thresh", type=float, default=0.0,
                     help="Greedy cast logit threshold (default 0=never casts; try -4.0 calibrated)")
     ap.add_argument("--teacher-forced", action="store_true",

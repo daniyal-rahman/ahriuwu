@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 from ahriuwu.models import create_transformer_tokenizer
 from ahriuwu.models.diffusion import euler_renoise_step
 from ahriuwu.models.dynamics import create_dynamics
+from ahriuwu.utils.training import load_state_dict_guarded
 
 
 def load_frame(frame_path: Path, size: tuple = (352, 352)) -> np.ndarray:
@@ -159,15 +160,21 @@ def main():
     dyn_args = dynamics_ckpt.get("args", {})
     dyn_model_size = dyn_args.get("model_size", "small")
     dyn_latent_dim = dyn_args.get("latent_dim", 32)
+    # Same wrong-by-construction defaults eval_dynamics carried: `args` holds
+    # `no_qk_norm`, never `use_qk_norm`, and 0 register tokens / 0 kv heads /
+    # soft_cap 0 are all wrong against 8 / GQA / 50.0. Read model_config.
+    dyn_cfg = (dynamics_ckpt.get("model_config") or {})
+    dyn_soft_cap = dyn_cfg.get("soft_cap", 50.0)
     dynamics = create_dynamics(
-        dyn_model_size,
-        latent_dim=dyn_latent_dim,
-        use_qk_norm=dyn_args.get("use_qk_norm", False),
-        soft_cap=dyn_args.get("soft_cap", 0.0),
-        num_register_tokens=dyn_args.get("num_register_tokens", 0),
-        num_kv_heads=dyn_args.get("num_kv_heads", 0),
+        dyn_cfg.get("size_preset", dyn_model_size),
+        latent_dim=dyn_cfg.get("latent_dim", dyn_latent_dim),
+        use_qk_norm=dyn_cfg.get("use_qk_norm", not dyn_args.get("no_qk_norm", False)),
+        soft_cap=dyn_soft_cap if (dyn_soft_cap or 0) > 0 else None,
+        num_register_tokens=dyn_cfg.get("num_register_tokens", 8),
+        num_kv_heads=dyn_cfg.get("num_kv_heads", None),
     )
-    dynamics.load_state_dict(dynamics_ckpt["model_state_dict"], strict=False)
+    load_state_dict_guarded(dynamics, dynamics_ckpt["model_state_dict"],
+                            what="eval_trade_prediction dynamics")
     dynamics = dynamics.to(device).eval()
 
     # Load frames in range

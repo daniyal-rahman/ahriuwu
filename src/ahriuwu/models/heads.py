@@ -173,6 +173,7 @@ class PolicyHead(nn.Module):
         movement_dim: int = 2,
         movement_bins: int = 21,
         movement_gate: bool = False,
+        movement_mode: str = "axis",
     ):
         """Initialize policy head.
 
@@ -189,10 +190,31 @@ class PolicyHead(nn.Module):
                 ≈ 5% screen resolution per step, a sane foveated-grid default.
         """
         super().__init__()
+        if movement_mode not in ("axis", "joint_noop"):
+            raise ValueError(f"movement_mode={movement_mode!r} not in ('axis','joint_noop')")
+        if movement_mode == "joint_noop" and movement_gate:
+            raise ValueError(
+                "movement_gate and movement_mode='joint_noop' are alternative "
+                "solutions to the SAME problem (most frames carry no new order) "
+                "and must not be combined: joint_noop already spends a class on "
+                "'no new order', so a gate on top would model it twice.")
         self.num_abilities = num_abilities
         self.mtp_length = mtp_length
         self.movement_dim = movement_dim
         self.movement_bins = movement_bins
+        self.movement_mode = movement_mode
+        # joint_noop: ONE categorical over the flattened bins x bins grid plus a
+        # trailing NO_OP class meaning "the previous order is still executing".
+        # This works because League orders persist -- a no-op frame is a real,
+        # correct action, not a missing label. Two consequences vs 'axis':
+        #   * P(x,y) is joint, so it can express "top-left OR bottom-right";
+        #     the per-axis product cannot (it would also put mass on the other
+        #     two corners).
+        #   * no previous action is needed to score a frame, so PMPO/Phase 3
+        #     works with the plain categorical log_prob.
+        # Cost: 441 classes see ~21x fewer examples each than 21 per-axis bins.
+        self.movement_classes = movement_bins * movement_bins + 1 if movement_mode == "joint_noop" else None
+        self.NO_OP = (self.movement_classes - 1) if self.movement_classes else None
 
         # Shared MLP backbone
         self.mlp = nn.Sequential(
@@ -208,10 +230,13 @@ class PolicyHead(nn.Module):
             nn.Linear(hidden_dim, num_abilities) for _ in range(mtp_length)
         ])
 
-        # MTP heads for binned movement: each head predicts
-        # movement_dim * movement_bins logits = one categorical per axis.
+        # MTP heads for binned movement. 'axis': movement_dim * movement_bins
+        # logits = one categorical per axis. 'joint_noop': one categorical over
+        # bins**2 grid cells + NO_OP.
+        _mv_out = (self.movement_classes if movement_mode == "joint_noop"
+                   else movement_dim * movement_bins)
         self.movement_heads = nn.ModuleList([
-            nn.Linear(hidden_dim, movement_dim * movement_bins) for _ in range(mtp_length)
+            nn.Linear(hidden_dim, _mv_out) for _ in range(mtp_length)
         ])
 
         # Optional STICKY-CATEGORICAL movement (the action-model rewrite):
@@ -275,13 +300,16 @@ class PolicyHead(nn.Module):
         # Vectorized binary ability predictions (independent Bernoulli per ability)
         ability_logits = torch.stack([head(x) for head in self.heads], dim=2)
 
-        # Per-axis movement categorical logits.
+        # Movement logits. Shape depends on movement_mode:
+        #   'axis'       -> (B, T, L, movement_dim, movement_bins)
+        #   'joint_noop' -> (B, T, L, bins**2 + 1)
         movement_logits = torch.stack(
             [mhead(x) for mhead in self.movement_heads], dim=2
-        )  # (B, T, L, movement_dim * movement_bins)
-        movement_logits = movement_logits.view(
-            B, T, self.mtp_length, self.movement_dim, self.movement_bins
         )
+        if self.movement_mode == "axis":
+            movement_logits = movement_logits.view(
+                B, T, self.mtp_length, self.movement_dim, self.movement_bins
+            )
 
         return ability_logits, movement_logits
 
@@ -295,6 +323,25 @@ class PolicyHead(nn.Module):
         assert self.movement_gate, "PolicyHead was built without movement_gate"
         x = self.mlp(agent_tokens)
         return torch.stack([h(x).squeeze(-1) for h in self.gate_heads], dim=2)
+
+    # ---- joint_noop encode/decode. Single source of truth for the class<->grid
+    # mapping so the dataset, trainer and inference decoder cannot disagree.
+    def joint_encode(self, xi: torch.Tensor, yi: torch.Tensor) -> torch.Tensor:
+        """(x_bin, y_bin) long tensors -> flat grid class. Row-major: y*bins+x."""
+        return yi * self.movement_bins + xi
+
+    def joint_decode(self, cls: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """flat class -> (x_bin, y_bin, is_noop). x/y are 0 where is_noop."""
+        noop = cls == self.NO_OP
+        safe = torch.where(noop, torch.zeros_like(cls), cls)
+        return safe % self.movement_bins, safe // self.movement_bins, noop
+
+    def joint_to_unit(self, cls: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """flat class -> (xy in [0,1] shape (...,2), is_noop). Bin i center =
+        i/(bins-1), matching the 'axis' decoding so the two modes agree."""
+        xi, yi, noop = self.joint_decode(cls)
+        d = max(self.movement_bins - 1, 1)
+        return torch.stack([xi.float() / d, yi.float() / d], dim=-1), noop
 
     def gated_movement_log_prob(
         self,
@@ -341,15 +388,32 @@ class PolicyHead(nn.Module):
 
         if temperature == 0:
             abilities = (ability_logits > 0).float()
-            movement_idx = movement_logits.argmax(dim=-1)  # (B, T, L, movement_dim)
+            movement_idx = movement_logits.argmax(dim=-1)
         else:
             probs = torch.sigmoid(ability_logits / temperature)
             abilities = torch.bernoulli(probs)
             mp = F.softmax(movement_logits / temperature, dim=-1)
-            # multinomial needs 2D (N, bins); flatten the leading dims
-            flat = mp.reshape(-1, self.movement_bins)
+            # multinomial needs 2D (N, K); flatten the leading dims
+            flat = mp.reshape(-1, mp.shape[-1])
             sampled = torch.multinomial(flat, num_samples=1).squeeze(-1)
-            movement_idx = sampled.view(*movement_logits.shape[:-1])  # (B,T,L,move_dim)
+            movement_idx = sampled.view(*movement_logits.shape[:-1])
+
+        if self.movement_mode == "joint_noop":
+            # movement_idx is (B,T,L) flat classes. Decode to xy; on NO_OP repeat
+            # the previous action if the caller supplied one (that is what the
+            # game does anyway -- the standing order keeps executing), else hold
+            # screen centre.
+            movement, noop = self.joint_to_unit(movement_idx)      # (B,T,L,2), (B,T,L)
+            if prev_movement_idx is not None:
+                prev = prev_movement_idx
+                if prev.dim() == movement_idx.dim() + 1:           # (B,T,L,1)
+                    prev = prev.squeeze(-1)
+                prev_xy, _ = self.joint_to_unit(prev.expand_as(movement_idx))
+                movement = torch.where(noop.unsqueeze(-1), prev_xy, movement)
+            else:
+                movement = torch.where(noop.unsqueeze(-1),
+                                       torch.full_like(movement, 0.5), movement)
+            return abilities, movement, movement_idx
 
         # Sticky-categorical decode: sample the gate; where it says "hold",
         # repeat the caller-supplied previous bin instead of the fresh sample.
@@ -395,20 +459,39 @@ class PolicyHead(nn.Module):
                 "movement likelihood is the sticky-categorical mixture, which "
                 "needs the previous movement bin (see gated_movement_log_prob). "
                 "BC uses the gated loss in the trainer; wire prev-action plumbing "
-                "into the imagination path before running PMPO on a gated head."
+                "into the imagination path before running PMPO on a gated head, "
+                "or use movement_mode='joint_noop', whose NO_OP class makes the "
+                "previous action unnecessary."
             )
         ability_logits, movement_logits = self.forward(agent_tokens)
         # Score only as many MTP offsets as the caller supplied targets for.
         L = ability_actions.shape[2]
         ability_logits = ability_logits[:, :, :L, :]
-        movement_logits = movement_logits[:, :, :L, :, :]
 
         # Per-ability Bernoulli log-prob, summed over abilities.
         ability_lp = -F.binary_cross_entropy_with_logits(
             ability_logits, ability_actions, reduction='none'
         ).sum(dim=-1)  # (B, T, L)
 
-        # Per-axis categorical movement log-prob, summed over the 2 axes.
+        if self.movement_mode == "joint_noop":
+            # ONE categorical over grid cells + NO_OP. No previous action needed:
+            # "no new order" is an explicit class, not something inferred by
+            # comparing to the last frame. This is what lets PMPO score a
+            # dreamed trajectory.
+            movement_logits = movement_logits[:, :, :L, :]          # (B,T,L,classes)
+            move_idx = movement_actions
+            if move_idx.dtype not in (torch.long, torch.int32, torch.int64):
+                raise TypeError(
+                    "joint_noop movement targets must be LONG class indices "
+                    f"(got {move_idx.dtype}); a continuous (x,y) cannot express NO_OP.")
+            if move_idx.dim() == movement_logits.dim():               # (B,T,L,1)
+                move_idx = move_idx.squeeze(-1)
+            move_lp = F.log_softmax(movement_logits, dim=-1).gather(
+                -1, move_idx.unsqueeze(-1)).squeeze(-1)               # (B,T,L)
+            return ability_lp + move_lp
+
+        # 'axis': per-axis categorical log-prob, summed over the 2 axes.
+        movement_logits = movement_logits[:, :, :L, :, :]
         if movement_actions.dtype in (torch.long, torch.int32, torch.int64):
             move_idx = movement_actions
         else:

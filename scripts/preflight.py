@@ -64,7 +64,7 @@ def run_preflight(args):
         model = create_dynamics(
             args.model_size, latent_dim=args.latent_dim,
             num_kv_heads=args.num_kv_heads, num_register_tokens=args.num_register_tokens,
-            soft_cap=args.soft_cap, gradient_checkpointing=args.gradient_checkpointing,
+            soft_cap=args.soft_cap if args.soft_cap > 0 else None, gradient_checkpointing=args.gradient_checkpointing,
         ).to(device)
     _()
 
@@ -246,7 +246,7 @@ def run_preflight(args):
                 test_model = create_dynamics(
                     args.model_size, latent_dim=args.latent_dim,
                     num_kv_heads=args.num_kv_heads, num_register_tokens=args.num_register_tokens,
-                    soft_cap=args.soft_cap, gradient_checkpointing=args.gradient_checkpointing,
+                    soft_cap=args.soft_cap if args.soft_cap > 0 else None, gradient_checkpointing=args.gradient_checkpointing,
                 ).to(device)
                 opt = torch.optim.AdamW(test_model.parameters(), lr=3e-4)
 

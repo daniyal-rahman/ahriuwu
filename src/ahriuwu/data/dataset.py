@@ -225,6 +225,13 @@ class VideoGroupedSampler(Sampler):
     """
 
     def __init__(self, dataset, exclude_videos=None, rank=0, world_size=1):
+        # Permutation seed. MUST be advanced by the trainer on resume (see
+        # set_epoch): __iter__ used to draw from the global torch RNG, which a
+        # fresh process re-seeds identically, so every restart replayed the SAME
+        # batch order from the top of the epoch. With restarts more frequent than
+        # an epoch that means the tail of the data is never reached -- measured
+        # 2026-08-15 as ~2/3 of epoch 1 unseen across three restarts.
+        self._seed = 0
         exclude = set(exclude_videos or ())
         groups: dict = defaultdict(list)
         for idx, seq in enumerate(dataset.sequences):
@@ -242,12 +249,24 @@ class VideoGroupedSampler(Sampler):
             self.video_groups = list(groups.values())
             self._target = sum(len(g) for g in self.video_groups)
 
+    def set_epoch(self, seed: int) -> None:
+        """Set the permutation seed. Call before each epoch AND after a resume,
+        passing something that advances with training progress (epoch and
+        global_step), so a restarted run does not replay the batches it already
+        trained on. Reproducible: the same checkpoint yields the same order."""
+        self._seed = int(seed)
+
     def __iter__(self):
-        order = torch.randperm(len(self.video_groups)).tolist()
+        # Dedicated generator, NOT the global RNG: a fresh process reseeds the
+        # global RNG identically, which is what made restarts replay batch 0.
+        g = torch.Generator()
+        g.manual_seed(self._seed)
+        self._seed += 1                       # next epoch in-process differs
+        order = torch.randperm(len(self.video_groups), generator=g).tolist()
         seq = []
         for v in order:
             group = self.video_groups[v]
-            perm = torch.randperm(len(group)).tolist()
+            perm = torch.randperm(len(group), generator=g).tolist()
             seq.extend(group[i] for i in perm)
         if self.world_size > 1 and seq:
             # equalize length across ranks so batch counts match (no DDP hang)

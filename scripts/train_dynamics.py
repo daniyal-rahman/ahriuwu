@@ -275,21 +275,55 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
     print(f"Saved run config to {config_path}")
 
 
-def _pick_holdout(dataset, n):
-    """N whole videos reserved for eval (deterministic: last N by sorted id)."""
+def _pick_holdout(dataset, n, explicit=None):
+    """N WHOLE videos reserved for eval — never a frame/window split.
+
+    Whole-video, because adjacent windows in one video overlap (stride < seq_len)
+    and consecutive frames are near-duplicates, so any index-level split leaks.
+
+    Two fixes over the previous ``sorted(vids)[-n:]``:
+      * On the mixed corpus the tail of the sorted id list is the YouTube ids
+        (``V...``), so ``--holdout-videos 2`` used to hold out NO replay game and
+        the action-conditioned eval was still in-sample. Replay (``NA1_*``) ids
+        are preferred whenever any exist.
+      * Evenly-spaced instead of contiguous, so the holdout spans the corpus
+        (ids are roughly chronological) rather than sampling one patch window.
+    """
+    if explicit:
+        vids = {s["video_id"] for s in dataset.sequences}
+        want = set(explicit)
+        missing = want - vids
+        if missing:
+            raise SystemExit(f"--holdout-matches names unknown videos: {sorted(missing)}")
+        return want
     if n <= 0:
         return set()
     vids = sorted({s["video_id"] for s in dataset.sequences})
-    return set(vids[-n:])
+    replays = [v for v in vids if v.startswith("NA1_")]
+    pool = replays or vids
+    if len(pool) <= n:
+        raise SystemExit(
+            f"--holdout-videos {n} but only {len(pool)} eligible videos — that "
+            "would leave no training data.")
+    step = len(pool) / n
+    return {pool[min(int(i * step), len(pool) - 1)] for i in range(n)}
 
 
 def _build_holdout_batch(dataset, holdout_vids, batch_size):
-    """Collate up to batch_size sequences drawn from the held-out videos."""
+    """Collate batch_size sequences SPREAD across the held-out videos.
+
+    Evenly-spaced rather than the first ``batch_size``: the leading windows all
+    come from one video's opening seconds, which is both correlated and
+    unrepresentative (early game, static camera).
+    """
     from torch.utils.data import default_collate
     idxs = [i for i, s in enumerate(dataset.sequences) if s["video_id"] in holdout_vids]
     if not idxs:
         return None
-    return default_collate([dataset[i] for i in idxs[:batch_size]])
+    if len(idxs) > batch_size:
+        step = len(idxs) / batch_size
+        idxs = [idxs[min(int(k * step), len(idxs) - 1)] for k in range(batch_size)]
+    return default_collate([dataset[i] for i in idxs])
 
 
 def parse_args():
@@ -524,11 +558,36 @@ def parse_args():
     )
     add_wandb_args(parser)
     parser.add_argument(
-        "--holdout-videos", type=int, default=0,
-        help="Reserve N whole videos (excluded from training) for a clean "
-             "held-out eval batch used by the rollout/denoising eval. 0 (default) "
-             "uses a training-drawn val batch — what job 124 uses, so its data is "
-             "unchanged on requeue.",
+        "--holdout-videos", type=int, default=4,
+        help="Reserve N whole videos (excluded from training) for the clean "
+             "held-out eval batch the rollout/denoising evals score. Replay "
+             "(NA1_*) ids are preferred and picks are spread across the corpus. "
+             "0 means NO held-out set: every eval/* metric becomes in-sample and "
+             "the run aborts unless --allow-in-sample-eval is also passed.",
+    )
+    parser.add_argument(
+        "--holdout-matches", type=str, default=None,
+        help="Comma-separated video ids to hold out (overrides --holdout-videos).",
+    )
+    parser.add_argument(
+        "--movement-source", type=str, default="clicks", choices=["clicks", "cursor"],
+        help="Movement action-conditioning target (see ReplayLatentSequenceDataset). "
+             "'clicks' (default) = real click events, held between commands. "
+             "'cursor' = the legacy drifting label.cursor.screen — pass it to RESUME "
+             "a checkpoint that was trained on the old signal, since switching "
+             "mid-run changes the action distribution the model is conditioned on.",
+    )
+    parser.add_argument(
+        "--loose-resume", action="store_true",
+        help="Allow --resume to load a checkpoint whose keys do not match the "
+             "model build (missing keys stay at RANDOM INIT). Off by default: "
+             "the silent version of this dropped 36 tensors for five months.",
+    )
+    parser.add_argument(
+        "--allow-in-sample-eval", action="store_true",
+        help="Explicitly permit --holdout-videos 0, i.e. eval on a TRAINING batch. "
+             "Only for reproducing an old run; every eval/* number is then a fit, "
+             "not a generalization measure.",
     )
     return parser.parse_args()
 
@@ -1311,6 +1370,7 @@ def main():
             return ReplayLatentSequenceDataset(
                 latents_dir=args.latents_dir, labels_root=args.labels_root,
                 outcomes=_dummy_outcomes, sequence_length=seq_len, stride=args.stride,
+                movement_source=args.movement_source,
             )
     else:
         print("Using PACKED latent format, actions OFF (PackedLatentSequenceDataset)")
@@ -1321,10 +1381,13 @@ def main():
             )
 
     holdout_val_batch = None
+    dataset = dataset_short = dataset_long = None  # only one pair is built below
+    _holdout_explicit = ([m.strip() for m in args.holdout_matches.split(",") if m.strip()]
+                         if args.holdout_matches else None)
     if args.alternating_lengths:
         dataset_short = make_dataset(args.seq_len_short)
         dataset_long = make_dataset(args.seq_len_long)
-        holdout_vids = _pick_holdout(dataset_short, args.holdout_videos)
+        holdout_vids = _pick_holdout(dataset_short, args.holdout_videos, _holdout_explicit)
         if holdout_vids:
             print(f"Held-out eval videos ({len(holdout_vids)}): {sorted(holdout_vids)}")
             holdout_val_batch = _build_holdout_batch(dataset_short, holdout_vids, args.batch_size_short)
@@ -1369,7 +1432,7 @@ def main():
         dataloader = None
     else:
         dataset = make_dataset(args.sequence_length)
-        holdout_vids = _pick_holdout(dataset, args.holdout_videos)
+        holdout_vids = _pick_holdout(dataset, args.holdout_videos, _holdout_explicit)
         if holdout_vids:
             print(f"Held-out eval videos ({len(holdout_vids)}): {sorted(holdout_vids)}")
             holdout_val_batch = _build_holdout_batch(dataset, holdout_vids, args.batch_size)
@@ -1496,8 +1559,15 @@ def main():
     resume_skip_batches = 0
     if args.resume:
         print(f"\nResuming from {args.resume}...")
+        # strict=True by default. The old strict=False only PRINTED "Note:
+        # Initializing new parameters: [...]" — which is how a resume once
+        # dropped 36 tensors (and flipped the attention scale) unnoticed for
+        # five months. A resume loads a checkpoint written by this same script
+        # from this same model class: any key mismatch means the arch flags
+        # drifted, and continuing would train from partial random init.
         saved_epoch, global_step, _, saved_batch_idx = load_checkpoint(
-            Path(args.resume), model, optimizer, scaler, scheduler=scheduler, rms_trackers=rms_dict, strict=False
+            Path(args.resume), model, optimizer, scaler, scheduler=scheduler,
+            rms_trackers=rms_dict, strict=not args.loose_resume
         )
         start_epoch = saved_epoch
         resume_skip_batches = saved_batch_idx
@@ -1506,13 +1576,54 @@ def main():
     # Fixed validation batch for eval metrics
     val_batch = holdout_val_batch
     if val_batch is not None:
-        print(f"Held-out val batch: {val_batch['latents'].shape}")
-    elif dataloader_short is not None:
-        val_batch = next(iter(dataloader_short))
-    elif dataloader is not None:
-        val_batch = next(iter(dataloader))
-    if val_batch is not None and holdout_val_batch is None:
-        print(f"Validation batch (training-drawn): {val_batch['latents'].shape}")
+        # Prove the split: the eval batch's videos must not be reachable by the
+        # training sampler.
+        eval_vids = set(val_batch.get("video_id", []))
+        for name, ldr, ds in (("short", dataloader_short, dataset_short),
+                              ("long", dataloader_long, dataset_long),
+                              ("main", dataloader, dataset)):
+            if ldr is None or ds is None:
+                continue
+            # Every VideoGroupedSampler group is exactly one video, so one index
+            # per group identifies the full set the trainer can reach.
+            train_vids = {ds.sequences[g[0]]["video_id"]
+                          for g in ldr.sampler.video_groups if g}
+            leak = train_vids & holdout_vids
+            if leak:
+                raise SystemExit(f"train/val LEAK in {name} loader: {sorted(leak)}")
+        if eval_vids and not eval_vids <= holdout_vids:
+            raise SystemExit(
+                f"eval batch contains non-holdout videos: {sorted(eval_vids - holdout_vids)}")
+        print(f"Held-out val batch: {val_batch['latents'].shape} "
+              f"from {len(holdout_vids)} video(s) excluded from training "
+              f"(verified disjoint)")
+    else:
+        # Silently falling back to `next(iter(dataloader))` here is what made
+        # every eval/psnr_tau* and eval_rollout/psnr_h* on this lineage a
+        # TRAINING measurement for months (audit finding 3). Never again by
+        # default: the run stops unless in-sample eval was asked for.
+        why = (f"--holdout-videos={args.holdout_videos} produced no eval batch"
+               if args.holdout_videos > 0 else
+               "--holdout-videos 0 (no videos reserved)")
+        if not args.allow_in_sample_eval:
+            raise SystemExit(
+                f"\nREFUSING TO EVAL ON TRAINING DATA: {why}.\n"
+                "Every eval/* and eval_rollout/* metric would be measured on a\n"
+                "batch the model is also trained on, i.e. a fit, not a ceiling.\n"
+                "Fix: pass --holdout-videos N (default 4) / --holdout-matches,\n"
+                "or --allow-in-sample-eval to accept in-sample numbers on purpose.")
+        print("\n" + "!" * 70)
+        print(f"!!! IN-SAMPLE EVAL: {why}, and --allow-in-sample-eval was passed.")
+        print("!!! val_batch is drawn from the TRAINING loader. Every eval/* and")
+        print("!!! eval_rollout/* metric below is in-sample and must NOT be quoted")
+        print("!!! as a generalization result.")
+        print("!" * 70 + "\n")
+        if dataloader_short is not None:
+            val_batch = next(iter(dataloader_short))
+        elif dataloader is not None:
+            val_batch = next(iter(dataloader))
+        if val_batch is not None:
+            print(f"Validation batch (TRAINING-drawn): {val_batch['latents'].shape}")
 
     # --- Build dataclasses for train_epoch ---
     # FIX #1: frozen v7 tokenizer + HUD valid-mask for the pixel-HUD masked loss.

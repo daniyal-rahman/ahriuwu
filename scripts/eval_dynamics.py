@@ -35,6 +35,7 @@ from ahriuwu.models import (
     psnr,
 )
 from ahriuwu.models.diffusion import euler_renoise_step
+from ahriuwu.utils.training import load_state_dict_guarded
 
 # At 20 FPS
 FPS = 20
@@ -283,32 +284,50 @@ def parse_args():
 
 
 def load_dynamics(checkpoint_path: Path, device: str):
-    """Load dynamics model from checkpoint."""
+    """Load dynamics model from checkpoint.
+
+    Every arch flag comes from the checkpoint's ``model_config`` block, which is
+    what train_dynamics actually writes. Reading them off ``args`` instead was
+    wrong for all four: ``args`` stores ``no_qk_norm`` (never ``use_qk_norm``, so
+    the lookup always fell back to False and dropped 36 qk_norm tensors while
+    flipping the attention scale 1.0 -> 0.125), and the register-token / kv-head /
+    soft-cap fallbacks were 0 against real defaults of 8 / GQA / 50.0. soft_cap=0
+    was the worst: it zeroes every attention logit, giving uniform attention with
+    no tensor mismatch to reveal it.
+    """
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     args = checkpoint.get("args", {})
+    cfg = (checkpoint.get("model_config") or {})
+    if not cfg:
+        raise SystemExit(
+            f"{checkpoint_path}: no 'model_config' block. This checkpoint predates "
+            "config recording, and every arch flag would have to be guessed — which "
+            "is exactly the bug this loader used to have. Re-save it with the config, "
+            "or load it with an explicit build.")
 
-    model_size = args.get("model_size", "small")
-    latent_dim = args.get("latent_dim", 32)
+    model_size = cfg.get("size_preset", args.get("model_size", "small"))
+    latent_dim = cfg.get("latent_dim", args.get("latent_dim", 32))
 
     # Auto-detect if model was trained with actions
     use_actions = any("action_embed" in k for k in checkpoint["model_state_dict"].keys())
     if use_actions:
         print("Detected action-conditioned dynamics model")
 
+    soft_cap = cfg.get("soft_cap", 50.0)
     model = create_dynamics(
         model_size,
         latent_dim=latent_dim,
         use_actions=use_actions,
-        use_qk_norm=args.get("use_qk_norm", False),
-        soft_cap=args.get("soft_cap", 0.0),
-        num_register_tokens=args.get("num_register_tokens", 0),
-        num_kv_heads=args.get("num_kv_heads", 0),
+        use_qk_norm=cfg.get("use_qk_norm", not args.get("no_qk_norm", False)),
+        soft_cap=soft_cap if (soft_cap or 0) > 0 else None,
+        num_register_tokens=cfg.get("num_register_tokens", 8),
+        num_kv_heads=cfg.get("num_kv_heads", None),
     )
-    missing, unexpected = model.load_state_dict(checkpoint["model_state_dict"], strict=False)
-    if missing:
-        print(f"Warning: Missing keys in checkpoint (using random init): {missing}")
-    if unexpected:
-        print(f"Warning: Unexpected keys in checkpoint (ignored): {unexpected}")
+    # Was strict=False + a printed warning. The warning did get printed, for five
+    # months, listing 36 dropped qk_norm tensors, and nothing stopped -- so every
+    # number this script produced came from a partly-random model. Abort instead.
+    load_state_dict_guarded(model, checkpoint["model_state_dict"],
+                            what=f"eval_dynamics {checkpoint_path}")
     model = model.to(device)
     model.eval()
 

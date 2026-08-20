@@ -49,12 +49,15 @@ from ahriuwu.constants import ABILITY_KEYS, MOVEMENT_DIM
 from ahriuwu.models import (
     create_dynamics,
     RewardHead,
+    StateHead,
     PolicyHead,
     DiffusionSchedule,
     symlog,
     twohot_loss,
     RunningRMS,
+    x_prediction_loss,
 )
+from ahriuwu.data.replay_dataset import STATE_TARGETS
 from ahriuwu.data.dataset import VideoGroupedSampler
 from ahriuwu.utils.logging import add_wandb_args, init_wandb, log_step, finish_wandb
 from ahriuwu.utils.training import (
@@ -117,9 +120,73 @@ def parse_args():
     # --resume and --checkpoint-minutes come from add_training_args. Pass --resume
     # 'auto' to use <checkpoint-dir>/agent_finetune_latest.pt. The main loop wires
     # checkpoint-minutes into a mid-epoch save (the trainer only saved per-epoch).
+    parser.add_argument("--grad-accum", type=int, default=1,
+                        help="Accumulate gradients over N micro-batches before stepping. "
+                             "EFFECTIVE batch = --batch-size * N. Needed for paper parity: "
+                             "unfreezing the backbone only fits at batch 2 on a 16GB card "
+                             "(measured 12.84 GiB; batch 4 OOMs), and batch 2 gives very "
+                             "noisy gradients on 148M params. --batch-size 2 --grad-accum 8 "
+                             "reproduces the frozen run's effective batch of 16.")
+    parser.add_argument("--unfreeze-backbone", action="store_true",
+                        help="PAPER PARITY (Algorithm 1 Phase 2: 'finetune world model with "
+                             "task inputs for policy and reward heads using (7) and (9)'). "
+                             "Trains the diffusion backbone too, not just the agent blocks and "
+                             "heads. REQUIRED for --video-loss-weight to do anything: Eq (7) "
+                             "predicts latents from the backbone, so with it frozen the video "
+                             "gradient has nowhere to go. Forces gradient checkpointing (OOMs "
+                             "otherwise: measured 12.16 GiB with, OOM without, on a 16GB card) "
+                             "and costs ~3x per step.")
+    parser.add_argument("--video-loss-weight", type=float, default=0.0,
+                        help="Weight on Eq (7), the x-prediction video loss, added to the BC "
+                             "loss and RMS-normalized like every other term. The paper runs it "
+                             "throughout Phase 2; we dropped it, which is the leading suspect "
+                             "for BC overfitting 119 games (train kept falling while val "
+                             "flattened). 0 = off (legacy).")
+    parser.add_argument("--movement-mode", choices=["axis", "joint_noop"], default="axis",
+                        help="'axis' (legacy): two independent per-axis categoricals, "
+                             "which cannot express x-y correlation and needs --movement-gate "
+                             "to handle frames with no new order. 'joint_noop': ONE "
+                             "categorical over the bins^2 grid plus a NO_OP class meaning "
+                             "'previous order still executing'. joint_noop needs no previous "
+                             "action to score a frame, so PMPO/Phase 3 works with the plain "
+                             "log_prob. Mutually exclusive with --movement-gate.")
+    parser.add_argument("--movement-gate", action="store_true",
+                        help="Sticky-categorical movement: a per-offset gate predicts P(new "
+                             "movement command); the bin categorical only explains transitions. "
+                             "Fixes the copy-shortcut (77%% of frames are held actions).")
+    parser.add_argument("--action-dropout", type=float, default=0.0,
+                        help="Per-frame prob of masking the movement action-history INPUT to "
+                             "no_action_embed (cursor_valid=False) during training. Breaks the "
+                             "learned copy-of-own-history shortcut so self-fed inference doesn't "
+                             "collapse. Targets are unchanged. Ability history is NOT dropped.")
+    parser.add_argument("--aux-state-weight", type=float, default=0.0,
+                        help="Weight of the aux game-state loss (own/enemy HP, level, "
+                             "visibility regressed from agent tokens; targets from replay "
+                             "labels). 0 = head not built. The loss is RMS-normalized like "
+                             "bc/reward, so ~0.5 is a meaningful-but-not-dominant prior.")
     parser.add_argument("--ability-pos-weight", type=float, default=5.0,
                         help="Positive-class weight for the ability BCE. Casts are sparse, so "
                              "unweighted BCE collapses to 'never press'. >1 makes the agent cast.")
+    parser.add_argument("--movement-source", type=str, default="clicks",
+                        choices=["clicks", "cursor"],
+                        help="'clicks' (default): movement target = the screen-space "
+                             "target of each real click event from clicks.json, held "
+                             "forward, with a movement_event flag supervising the gate. "
+                             "'cursor': the legacy label.cursor.screen target, 43%% of "
+                             "whose transitions are camera drift — kept only for A/B.")
+    # --- held-out validation (see FIX 2 / audit finding 3) ---
+    parser.add_argument("--val-matches", type=str, default=None,
+                        help="Comma-separated match ids, or a path to a JSON file "
+                             "(list, or {'val': [...]}), to hold out. Overrides "
+                             "--val-games.")
+    parser.add_argument("--val-games", type=int, default=6,
+                        help="If --val-matches is not given, hold out this many WHOLE "
+                             "games (never frames — adjacent frames leak). 0 disables "
+                             "validation and must be passed explicitly.")
+    parser.add_argument("--val-interval", type=int, default=1000,
+                        help="Run the held-out eval every N optimizer steps.")
+    parser.add_argument("--val-batches", type=int, default=20,
+                        help="Batches per held-out eval pass.")
     parser.add_argument("--dataset-cache", type=str, default=None,
                         help="Cache the (slow) dataset index — label/reward parse + per-.pt "
                              "frame_indices reads — to this file. Present -> load; absent -> "
@@ -137,6 +204,33 @@ def parse_args():
 # Backbone loading
 # ---------------------------------------------------------------------------
 
+def load_state_dict_guarded(module, state, *, what: str, allow_missing=()):
+    """``load_state_dict(strict=False)`` that RAISES on anything unexplained.
+
+    A bare ``strict=False`` has silently detonated twice in this repo: it
+    dropped the trained ``action_embed`` weights in ``agent_infer`` (leaving the
+    agent blocks reading out-of-distribution activations) and dropped 36 tensors
+    while flipping the attention scale in every dynamics eval for five months.
+    Both were invisible because nothing stopped.
+
+    ``allow_missing`` lists the prefixes that are legitimately absent for THIS
+    load (e.g. the Phase-2 agent blocks, which a Phase-1 checkpoint never
+    trained). Everything else — and every unexpected key, always — aborts.
+    """
+    missing, unexpected = module.load_state_dict(state, strict=False)
+    bad_missing = [k for k in missing if not k.startswith(tuple(allow_missing))]
+    if bad_missing or unexpected:
+        raise RuntimeError(
+            f"{what}: state-dict mismatch — the checkpoint does not match this "
+            f"model build, and loading it non-strictly would silently leave "
+            f"tensors at random init.\n"
+            f"  UNEXPECTED in checkpoint ({len(unexpected)}): {unexpected[:10]}\n"
+            f"  MISSING, not explained by {list(allow_missing) or 'anything'} "
+            f"({len(bad_missing)}): {bad_missing[:10]}\n"
+            f"  (expected-missing, ignored: {len(missing) - len(bad_missing)})")
+    return missing, unexpected
+
+
 def build_dynamics(args, *, use_actions: bool, device: str):
     """Create a dynamics backbone (agent tokens ON) matching the CLI arch flags."""
     return create_dynamics(
@@ -150,7 +244,9 @@ def build_dynamics(args, *, use_actions: bool, device: str):
         soft_cap=args.soft_cap if args.soft_cap > 0 else None,
         num_register_tokens=args.num_register_tokens,
         num_kv_heads=args.num_kv_heads,
-        gradient_checkpointing=False,
+        # Unfreezing the backbone OOMs on a 16GB card without this (measured:
+        # 12.16 GiB with checkpointing, OOM without, at batch 16 / seq 16).
+        gradient_checkpointing=getattr(args, "unfreeze_backbone", False),
     ).to(device)
 
 
@@ -162,8 +258,18 @@ def build_dynamics(args, *, use_actions: bool, device: str):
 AGENT_PARAM_PREFIXES = ("agent_token", "agent_temporal_pos", "agent_blocks",
                         "agent_norm_out")
 
+# Keys that may be missing from a PHASE-1 checkpoint. Superset of the trainable
+# agent prefixes because `task_embed` is created alongside the agent-token
+# machinery but is DEAD: nothing in this repo ever passes `task_id`, so
+# dynamics.forward's `if task_id is not None` branch never runs, and num_tasks=1
+# makes multi-task conditioning meaningless anyway. It is therefore correctly
+# absent from Phase 1 and correctly left out of AGENT_PARAM_PREFIXES (adding it
+# would put a never-used tensor in the optimizer). Allowed to be missing, not
+# allowed to be trained.
+AGENT_ABSENT_PREFIXES = AGENT_PARAM_PREFIXES + ("task_embed",)
 
-def freeze_backbone_train_agent(dyn):
+
+def freeze_backbone_train_agent(dyn, unfreeze: bool = False):
     """Freeze the pretrained diffusion backbone; keep the agent-token blocks
     trainable. Returns the list of trainable agent params (for the optimizer).
 
@@ -174,10 +280,16 @@ def freeze_backbone_train_agent(dyn):
     agent blocks that read the (constant) z-token features. So keep run_step's
     forward OUT of no_grad and do NOT detach agent_out.
     """
-    dyn.eval()
+    # .eval() everywhere was hiding a no-op: gradient checkpointing is guarded by
+    # `self.gradient_checkpointing and self.training`, so with the module in eval
+    # mode it NEVER activated. That made --unfreeze-backbone store full fp32-era
+    # activations and produced a fake batch-size ceiling (2 on a 16GB card, 4 on
+    # 31GB). There is no dropout/BN in the backbone, so train() is safe: the only
+    # behavioural difference is that checkpointing now actually runs.
+    dyn.train(unfreeze)
     agent_params = []
     for name, p in dyn.named_parameters():
-        if name.startswith(AGENT_PARAM_PREFIXES):
+        if unfreeze or name.startswith(AGENT_PARAM_PREFIXES):
             p.requires_grad_(True)
             agent_params.append(p)
         else:
@@ -211,15 +323,25 @@ def load_frozen_dynamics(args, device: str):
             args.latent_dim = latent_dim
         use_actions = cfg.get("use_actions", any("action_embed" in k for k in state))
         dyn = build_dynamics(args, use_actions=use_actions, device=device)
-        missing, unexpected = dyn.load_state_dict(state, strict=False)
+        # Phase 1 never trains the agent-token machinery (it is a side readout,
+        # absent from the denoising loss), so those keys are legitimately absent
+        # from a Phase-1 checkpoint. NOTHING ELSE is.
+        missing, unexpected = load_state_dict_guarded(
+            dyn, state, what=f"Phase-1 backbone {args.dynamics_checkpoint}",
+            allow_missing=AGENT_ABSENT_PREFIXES)
         print(f"  [ckpt] loaded {args.dynamics_checkpoint}")
         print(f"  [ckpt] use_actions={use_actions}; {len(missing)} missing "
-              f"(agent/new) / {len(unexpected)} unexpected keys")
+              f"(all agent-token keys, trained here) / 0 unexpected")
 
-    agent_params = freeze_backbone_train_agent(dyn)
+    agent_params = freeze_backbone_train_agent(
+        dyn, unfreeze=getattr(args, 'unfreeze_backbone', False))
     n_agent = sum(p.numel() for p in agent_params)
-    print(f"  [freeze] diffusion backbone FROZEN; {len(agent_params)} agent tensors "
-          f"({n_agent:,} params) TRAINABLE")
+    if getattr(args, "unfreeze_backbone", False):
+        print(f"  [freeze] backbone UNFROZEN (paper parity): {len(agent_params)} tensors "
+              f"({n_agent:,} params) TRAINABLE, gradient checkpointing ON")
+    else:
+        print(f"  [freeze] diffusion backbone FROZEN; {len(agent_params)} agent tensors "
+              f"({n_agent:,} params) TRAINABLE")
     return dyn, dyn.use_actions, agent_params
 
 
@@ -254,7 +376,85 @@ def build_dataset(args):
         sequence_length=args.seq_len,
         stride=args.stride,
         cache_path=getattr(args, "dataset_cache", None),
+        movement_source=args.movement_source,
     )
+
+
+def select_val_matches(dataset, args) -> set[str]:
+    """WHOLE games reserved for validation — never a frame-level split.
+
+    Adjacent frames within a game are near-duplicates (audit finding 17: 11% of
+    consecutive pairs differ by <1/255), so any frame- or window-level split
+    leaks the answer. Selection is deterministic: evenly-spaced picks over the
+    sorted match ids, which spreads the holdout across the corpus (ids are
+    roughly chronological) instead of taking a contiguous tail.
+
+    Prefers matches whose movement target came from real clicks, so val metrics
+    are measured on the same target definition the model is trained for.
+    """
+    vids = sorted({s["video_id"] for s in dataset.sequences})
+    if args.val_matches:
+        p = Path(args.val_matches)
+        if p.exists():
+            doc = json.loads(p.read_text())
+            want = doc.get("val", doc) if isinstance(doc, dict) else doc
+        else:
+            want = [m.strip() for m in args.val_matches.split(",") if m.strip()]
+        want = set(want)
+        missing = want - set(vids)
+        if missing:
+            raise SystemExit(
+                f"--val-matches names {len(missing)} match(es) not in the dataset: "
+                f"{sorted(missing)[:5]}")
+        return want
+
+    n = args.val_games
+    if n <= 0:
+        return set()
+    eligible = [v for v in vids
+                if dataset.match_data.get(v, {}).get("movement_from_clicks", True)]
+    if len(eligible) < n:  # not enough click-backed games; fall back to all
+        eligible = vids
+    if len(eligible) <= n:
+        raise SystemExit(
+            f"--val-games {n} but only {len(eligible)} games available — "
+            "that would leave no training data.")
+    step = len(eligible) / n
+    return {eligible[min(int(i * step), len(eligible) - 1)] for i in range(n)}
+
+
+def build_val_order(dataset, val_vids, batch_size, n_batches):
+    """Fixed val sequence order: an equal, evenly-spaced slice of every val game.
+
+    Two constraints pull against each other. Latent packs are ~210 MB behind a
+    2-deep LRU, so an order that hops between videos thrashes the cache; but a
+    plain sequential walk of ``dataset.sequences`` would spend the whole eval
+    inside the FIRST val game's opening minutes. Resolution: give each val game
+    the same number of batches (ceil(n_batches / n_games)) and keep them
+    contiguous, then always run the loader to the end. Every game is covered,
+    each batch touches exactly one pack, and consecutive batches usually reuse
+    it. Within a game the windows are evenly spaced, so the eval sees the whole
+    match rather than its opening.
+
+    The order is a fixed list, so every eval scores the identical sequences.
+    """
+    by_vid: dict[str, list[int]] = {}
+    for i, s in enumerate(dataset.sequences):
+        if s["video_id"] in val_vids:
+            by_vid.setdefault(s["video_id"], []).append(i)
+    vids = sorted(by_vid)
+    if not vids:
+        return []
+    per_vid = max(1, -(-n_batches // len(vids))) * batch_size  # ceil-div batches
+    order: list[int] = []
+    for v in vids:
+        idxs = by_vid[v]
+        if len(idxs) > per_vid:  # evenly spaced across the game
+            st = len(idxs) / per_vid
+            idxs = [idxs[min(int(k * st), len(idxs) - 1)] for k in range(per_vid)]
+        keep = (len(idxs) // batch_size) * batch_size  # whole batches only
+        order.extend(idxs[:keep])
+    return order
 
 
 def actions_to_device(actions: dict, device: str) -> dict:
@@ -294,7 +494,7 @@ def reward_mtp_loss(reward_logits, rewards, bucket_centers, mtp_length):
 
 
 def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_targets,
-                        mtp_length, ability_pos_weight=None):
+                        mtp_length, ability_pos_weight=None, movement_event=None):
     """Behavior-cloning negative log-likelihood of the NEXT actions.
 
     MTP head n (n >= 1) predicts the action at t+n from the token at t; n=0 is
@@ -302,6 +502,11 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
     the factorized policy (abilities + binned movement) and a (split) breakdown.
 
     ability_targets: (B, T, num_abilities) {0,1}; movement_targets: (B, T, 2) xy.
+    movement_event: (B, T) bool — True on the frames a NEW movement command was
+        issued. This is the gate's supervision. Without it the gate falls back
+        to "did the 21-bin cell change", which on the legacy target is 43%
+        camera drift AND misses the 37.7% of real commands that quantize into
+        the same cell (audit findings 1 and 5).
     """
     ability_logits, movement_logits = policy_head(agent_out)
     # ability_logits:  (B, T, L, A)
@@ -314,8 +519,13 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
     pos_w = (torch.tensor(ability_pos_weight, device=agent_out.device)
              if ability_pos_weight and ability_pos_weight != 1.0 else None)
 
+    gated = getattr(policy_head, "movement_gate", False)
+    joint_noop = getattr(policy_head, "movement_mode", "axis") == "joint_noop"
+    gate_logits_full = policy_head.gate_logits(agent_out) if gated else None
+
     ability_nll = torch.zeros((), device=agent_out.device)
     move_nll = torch.zeros((), device=agent_out.device)
+    gate_fire_t = gate_fire_h = trans_frac = torch.zeros((), device=agent_out.device)
     n_terms = 0
     for n in range(1, mtp_length):  # n >= 1: predict the NEXT actions only
         if T - n <= 0:
@@ -326,37 +536,119 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
         ability_nll = ability_nll + F.binary_cross_entropy_with_logits(
             a_logits, a_tgt, pos_weight=pos_w)
 
+        if joint_noop:
+            # ONE categorical over grid cells + NO_OP. The target is the grid
+            # cell on frames where a command actually fired (movement_event) and
+            # NO_OP otherwise -- read straight off the event stream, so the 18.6%
+            # of commands that land in the PREVIOUS cell stay real commands
+            # instead of being mistaken for holds by a bin comparison.
+            m_logits = movement_logits[:, :T - n, n, :]      # (B, T-n, classes)
+            xy = move_idx_full[:, n:, :]                     # (B, T-n, 2) per-axis bins
+            cls = policy_head.joint_encode(xy[..., 0], xy[..., 1])
+            if movement_event is not None:
+                cls = torch.where(movement_event[:, n:], cls,
+                                  torch.full_like(cls, policy_head.NO_OP))
+            move_nll = move_nll + F.cross_entropy(
+                m_logits.reshape(-1, m_logits.shape[-1]), cls.reshape(-1))
+            if n == 1:                                        # diagnostics
+                with torch.no_grad():
+                    pred = m_logits.argmax(-1)
+                    is_noop = cls == policy_head.NO_OP
+                    trans_frac = (~is_noop).float().mean()
+                    # reuse the gate slots: "fires on a real command" vs "on a hold"
+                    gate_fire_t = (pred != policy_head.NO_OP)[~is_noop].float().mean() \
+                        if (~is_noop).any() else torch.zeros((), device=cls.device)
+                    gate_fire_h = (pred != policy_head.NO_OP)[is_noop].float().mean() \
+                        if is_noop.any() else torch.zeros((), device=cls.device)
+            n_terms += 1
+            continue
+
         m_logits = movement_logits[:, :T - n, n, :, :]       # (B, T-n, move_dim, bins)
         m_idx = move_idx_full[:, n:, :]                      # (B, T-n, move_dim)
-        # cross-entropy per axis (flatten axes into the batch dim of CE)
-        move_nll = move_nll + F.cross_entropy(
-            m_logits.reshape(-1, m_logits.shape[-1]),
-            m_idx.reshape(-1),
-        )
+        if gated:
+            # Sticky-categorical NLL: prev bin for target a_{t+n} is a_{t+n-1}
+            # (n>=1, so the previous target is always in-window).
+            p_idx = move_idx_full[:, n - 1:T - 1, :]         # (B, T-n, move_dim)
+            if movement_event is not None:
+                # gated_movement_log_prob keys the transition branch off
+                # (target_idx != prev_idx). Encode the TRUE event mask through
+                # prev_idx so the gate is supervised by "a command was issued",
+                # not by "the bin happened to change":
+                #   event & same-bin -> force a difference  (transition branch)
+                #   no event         -> force equality      (hold branch)
+                # With the click-event target `movement` is piecewise-constant,
+                # so bin-change ⊆ event already; this only ADDS the commands the
+                # 21-bin grid quantizes away. No change to heads.py needed.
+                ev = movement_event[:, n:].unsqueeze(-1)     # (B, T-n, 1)
+                other = (m_idx + 1) % policy_head.movement_bins
+                p_idx = torch.where(ev, other, m_idx)
+            lp = policy_head.gated_movement_log_prob(
+                m_logits.unsqueeze(2), gate_logits_full[:, :T - n, n].unsqueeze(2),
+                m_idx.unsqueeze(2), p_idx.unsqueeze(2))      # (B, T-n, 1)
+            move_nll = move_nll - lp.mean()
+            if n == 1:  # diagnostics at the primary offset
+                with torch.no_grad():
+                    g = torch.sigmoid(gate_logits_full[:, :T - 1, 1])
+                    trans = (m_idx != p_idx).any(-1)
+                    trans_frac = trans.float().mean()
+                    gate_fire_t = g[trans].mean() if trans.any() else g.mean()
+                    gate_fire_h = g[~trans].mean() if (~trans).any() else g.mean()
+        else:
+            # cross-entropy per axis (flatten axes into the batch dim of CE)
+            move_nll = move_nll + F.cross_entropy(
+                m_logits.reshape(-1, m_logits.shape[-1]),
+                m_idx.reshape(-1),
+            )
         n_terms += 1
 
     n_terms = max(n_terms, 1)
     ability_nll = ability_nll / n_terms
     move_nll = move_nll / n_terms
-    return ability_nll + move_nll, {"bc_ability": ability_nll, "bc_movement": move_nll}
+    return ability_nll + move_nll, {"bc_ability": ability_nll, "bc_movement": move_nll,
+                                    "gate_on_trans": gate_fire_t, "gate_on_hold": gate_fire_h,
+                                    "trans_frac": trans_frac}
 
 
 # ---------------------------------------------------------------------------
 # One training step
 # ---------------------------------------------------------------------------
 
+def _rms_normalize(tracker, value):
+    """RunningRMS division WITHOUT updating the tracker (validation path)."""
+    if tracker.rms is None:
+        return value
+    r = tracker.rms
+    if r.device != value.device:
+        r = r.to(value.device)
+    # Mirrors RunningRMS.update's tail exactly (it clamps rms, not sqrt(rms)).
+    return value / (torch.sqrt(torch.clamp(r, min=tracker.MIN_RMS ** 2)) + 1e-8)
+
+
 def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
-             amp_dtype, rms):
+             amp_dtype, rms, state_head=None, update_rms=True):
     """Forward + loss for one batch. Returns (total_loss, info_dict).
 
     The frozen dynamics runs under no_grad (it's the backbone); gradients flow
-    only into the two heads via ``agent_out``.
+    only into the heads via ``agent_out``. ``state_head`` (optional) adds the
+    masked aux game-state MSE, weighted by ``args.aux_state_weight``.
+
+    ``update_rms=False`` (validation) normalizes with the CURRENT running RMS
+    without folding the val losses into it — otherwise eval batches would
+    perturb the training loss weighting.
     """
     z0 = batch["latents"].to(device)                  # (B, T, C, H, W)
     rewards = batch["rewards"].to(device)             # (B, T)
     actions = actions_to_device(batch["actions"], device)
+    # Action-history dropout: hide the movement input on a random subset of
+    # frames (no_action_embed) so the policy can't lean on copying its own
+    # history. Targets are untouched — only the dynamics INPUT is masked.
+    p_drop = getattr(args, "action_dropout", 0.0)
+    if p_drop > 0 and dynamics.use_actions and "cursor_valid" in actions:
+        keep = torch.rand_like(actions["cursor_valid"], dtype=torch.float32) >= p_drop
+        actions["cursor_valid"] = actions["cursor_valid"] & keep
     ability_targets = stack_ability_targets(batch["actions"], device)  # (B,T,A)
     movement_targets = actions["movement"]            # (B, T, 2)
+    movement_event = actions.get("movement_event")    # (B, T) bool or None
     B, T = rewards.shape
 
     actions_dict = actions if dynamics.use_actions else None
@@ -367,13 +659,22 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
     with torch.no_grad():
         z_noisy, _ = schedule.add_noise(z0, tau)
     d_one = torch.ones(B, dtype=torch.long, device=device)
-    # NOT under no_grad and NOT detached: the diffusion backbone is frozen
-    # (requires_grad=False) so it builds no graph, but the agent blocks are trained
-    # here — grad must flow from the heads through agent_out into them.
-    _, agent_out = dynamics(z_noisy, tau, step_size=d_one, actions=actions_dict)
+    _amp = dict(device_type=device.split(":")[0], dtype=amp_dtype,
+                enabled=(amp_dtype == torch.bfloat16 or amp_dtype == torch.float16)
+                        and device != "cpu")
+    # NOT under no_grad and NOT detached: with a frozen backbone this builds no
+    # backbone graph, but the agent blocks are trained here — grad must flow from
+    # the heads through agent_out into them.
+    #
+    # The backbone forward MUST be inside autocast. It used to sit outside, which
+    # was harmless while the backbone was frozen (no activations retained) but
+    # costs ~5x VRAM the moment --unfreeze-backbone stores 18 layers of fp32
+    # activations for the backward: measured 14.8 GiB (OOM at batch 4) outside
+    # vs 2.8 GiB at batch 2 inside.
+    with autocast(**_amp):
+        z_pred, agent_out = dynamics(z_noisy, tau, step_size=d_one, actions=actions_dict)
 
-    with autocast(device_type=device.split(":")[0], dtype=amp_dtype,
-                  enabled=(amp_dtype == torch.bfloat16 or amp_dtype == torch.float16) and device != "cpu"):
+    with autocast(**_amp):
         reward_logits = reward_head(agent_out)
         reward_loss = reward_mtp_loss(
             reward_logits, rewards, reward_head.bucket_centers, args.mtp_length
@@ -381,11 +682,35 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
         bc_loss, bc_info = bc_next_action_loss(
             policy_head, agent_out, ability_targets, movement_targets, args.mtp_length,
             ability_pos_weight=getattr(args, "ability_pos_weight", None),
+            movement_event=movement_event,
         )
 
-        bc_n = rms["bc"].update(bc_loss)
-        rew_n = rms["reward"].update(reward_loss)
+        aux_loss = torch.zeros((), device=agent_out.device)
+        if state_head is not None:
+            state = batch["state"].to(device)             # (B, T, S) in [0,1]
+            state_mask = batch["state_mask"].to(device)   # (B, T, S) validity
+            state_pred = state_head(agent_out)
+            aux_loss = ((state_pred - state) ** 2 * state_mask).sum() \
+                / state_mask.sum().clamp_min(1.0)
+
+        # Eq (7): the video-prediction loss the paper runs THROUGHOUT Phase 2
+        # ("finetune world model ... using (7) and (9)"). Only meaningful with
+        # --unfreeze-backbone: z_pred comes from the diffusion backbone, so with
+        # it frozen this gradient reaches nothing. Guarded at parse time.
+        video_loss = torch.zeros((), device=agent_out.device)
+        vw = getattr(args, "video_loss_weight", 0.0)
+        if vw > 0:
+            video_loss = x_prediction_loss(z_pred, z0, tau, use_ramp_weight=True)
+
+        norm = (lambda k, v: rms[k].update(v)) if update_rms else \
+               (lambda k, v: _rms_normalize(rms[k], v))
+        bc_n = norm("bc", bc_loss)
+        rew_n = norm("reward", reward_loss)
         total = bc_n + rew_n
+        if vw > 0:
+            total = total + vw * norm("video", video_loss)
+        if state_head is not None:
+            total = total + args.aux_state_weight * norm("aux", aux_loss)
 
     info = {
         "loss": total.detach(),
@@ -393,8 +718,58 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
         "reward_loss": reward_loss.detach(),
         "bc_ability": bc_info["bc_ability"].detach(),
         "bc_movement": bc_info["bc_movement"].detach(),
+        "aux_state": aux_loss.detach(),
+        **{k: bc_info[k].detach() for k in ("gate_on_trans", "gate_on_hold", "trans_frac")
+           if k in bc_info},
     }
     return total, info
+
+
+@torch.no_grad()
+def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, device,
+             amp_dtype, rms, state_head=None, max_batches=20):
+    """Mean losses over held-out GAMES. Never updates the RMS trackers.
+
+    Action-dropout is forced off and the noise RNG is fixed, so successive
+    evals differ only because the model changed.
+    """
+    was_training = reward_head.training
+    reward_head.eval(); policy_head.eval()
+    if state_head is not None:
+        state_head.eval()
+    p_drop, args.action_dropout = getattr(args, "action_dropout", 0.0), 0.0
+    keys = ("loss", "bc_loss", "bc_ability", "bc_movement", "reward_loss",
+            "aux_state", "gate_on_trans", "gate_on_hold", "trans_frac")
+    acc = {k: 0.0 for k in keys}
+    n = 0
+    cpu_rng = torch.get_rng_state()
+    dev_rng = torch.cuda.get_rng_state(device) if device.startswith("cuda") else None
+    try:
+        torch.manual_seed(1234)  # same tau draw every eval -> comparable numbers
+        for batch in val_loader:
+            _, info = run_step(batch, dynamics, reward_head, policy_head, schedule,
+                               args, device, amp_dtype, rms, state_head=state_head,
+                               update_rms=False)
+            if not torch.isfinite(info["loss"]):
+                continue
+            for k in keys:
+                if k in info:
+                    acc[k] += info[k].item()
+            n += 1
+            if n >= max_batches:
+                break
+    finally:
+        torch.set_rng_state(cpu_rng)  # don't perturb the training noise stream
+        if dev_rng is not None:
+            torch.cuda.set_rng_state(dev_rng, device)
+        args.action_dropout = p_drop
+        if was_training:
+            reward_head.train(); policy_head.train()
+            if state_head is not None:
+                state_head.train()
+    if n == 0:
+        return None
+    return {k: v / n for k, v in acc.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -417,31 +792,54 @@ def smoke_test(args):
     args.hidden_dim = 32
     args.num_register_tokens = 2
     args.tau_ctx = 0.9
+    args.aux_state_weight = 0.5
 
     B, T, C, S = 2, 6, args.latent_dim, 16
     dynamics = build_dynamics(args, use_actions=True, device=device)
     agent_params = freeze_backbone_train_agent(dynamics)
     model_dim = dynamics.model_dim
 
+    args.movement_gate = True
+    args.action_dropout = 0.5
     reward_head = RewardHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
                              num_buckets=args.num_buckets, mtp_length=args.mtp_length).to(device)
     policy_head = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
                              hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
-                             movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins).to(device)
+                             movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
+                             movement_gate=True).to(device)
+    state_head = StateHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
+                           num_targets=len(STATE_TARGETS)).to(device)
 
-    # Synthetic batch matching the dataset contract.
+    # Synthetic batch matching the dataset contract (incl. cursor_valid so the
+    # action-dropout path is exercised, and movement_event so the gate is
+    # supervised the way the click-event target supervises it).
+    # movement is piecewise-constant between events, exactly like the real
+    # click-event target — so the "bin change => event" invariant holds here too.
+    move_ev = torch.zeros(B, T, dtype=torch.bool)
+    move_ev[:, ::3] = True
+    mv = torch.rand(B, T, MOVEMENT_DIM)
+    for b in range(B):  # hold forward between events
+        for t in range(1, T):
+            if not move_ev[b, t]:
+                mv[b, t] = mv[b, t - 1]
     batch = {
         "latents": torch.randn(B, T, C, S, S),
         "rewards": torch.randn(B, T) * 0.01,
         "actions": {
-            "movement": torch.rand(B, T, MOVEMENT_DIM),
+            "movement": mv,
+            "movement_event": move_ev,
             **{k: torch.randint(0, 2, (B, T)) for k in ABILITY_KEYS},
+            "cursor_valid": torch.ones(B, T, dtype=torch.bool),
         },
+        "state": torch.rand(B, T, len(STATE_TARGETS)),
+        "state_mask": (torch.rand(B, T, len(STATE_TARGETS)) > 0.3).float(),
     }
 
     schedule = DiffusionSchedule(device=device)
-    rms = {"bc": RunningRMS(), "reward": RunningRMS()}
-    params = agent_params + list(reward_head.parameters()) + list(policy_head.parameters())
+    rms = {"bc": RunningRMS(), "reward": RunningRMS(), "aux": RunningRMS(),
+           "video": RunningRMS()}
+    params = agent_params + list(reward_head.parameters()) \
+        + list(policy_head.parameters()) + list(state_head.parameters())
     optimizer = torch.optim.AdamW(params, lr=1e-3)
 
     def agent_backbone_grads():
@@ -458,7 +856,7 @@ def smoke_test(args):
     # === STEP 1: heads must receive BC/reward gradient (headline fix) ===
     optimizer.zero_grad()
     total, info = run_step(batch, dynamics, reward_head, policy_head, schedule,
-                           args, device, torch.float32, rms)
+                           args, device, torch.float32, rms, state_head=state_head)
     total.backward()
 
     move_grads = [h.weight.grad for h in policy_head.movement_heads if h.weight.grad is not None]
@@ -483,8 +881,34 @@ def smoke_test(args):
     # === STEP 2: agent blocks must now train (Phase-2 backbone-freeze contract) ===
     optimizer.zero_grad()
     total2, _ = run_step(batch, dynamics, reward_head, policy_head, schedule,
-                         args, device, torch.float32, rms)
+                         args, device, torch.float32, rms, state_head=state_head)
     total2.backward()
+    state_grad_norm = sum(p.grad.norm().item() for p in state_head.parameters()
+                          if p.grad is not None)
+    assert state_grad_norm > 0, "state head received NO gradient under the aux loss!"
+    gate_grad_norm = sum(h.weight.grad.norm().item() for h in policy_head.gate_heads
+                         if h.weight.grad is not None)
+    assert gate_grad_norm > 0, "movement gate heads received NO gradient under the sticky-categorical BC loss!"
+
+    # === The gate must be driven by movement_event, NOT by "did the bin change".
+    # Build a target where every event lands in the SAME bin (so the bin-change
+    # signal is empty) and assert the reported transition rate still equals the
+    # event rate — i.e. the gate is supervised by real commands.
+    flat = dict(batch)
+    flat["actions"] = dict(batch["actions"])
+    flat["actions"]["movement"] = torch.full_like(batch["actions"]["movement"], 0.5)
+    _, info_flat = run_step(flat, dynamics, reward_head, policy_head, schedule,
+                            args, device, torch.float32, rms, state_head=state_head)
+    ev_rate = move_ev[:, 1:].float().mean().item()
+    assert abs(info_flat["trans_frac"].item() - ev_rate) < 1e-5, (
+        f"gate transition rate {info_flat['trans_frac'].item():.4f} != movement_event "
+        f"rate {ev_rate:.4f} — the gate is still keyed off bin changes, not commands!")
+    # And with movement_event absent (legacy caches) it must fall back cleanly.
+    legacy = dict(batch)
+    legacy["actions"] = {k: v for k, v in batch["actions"].items() if k != "movement_event"}
+    _, info_legacy = run_step(legacy, dynamics, reward_head, policy_head, schedule,
+                              args, device, torch.float32, rms, state_head=state_head)
+    assert torch.isfinite(info_legacy["loss"]), "legacy (no movement_event) path broke"
     agent_grad_norm, backbone_bad2 = agent_backbone_grads()
     assert agent_grad_norm > 0, (
         "agent blocks received NO gradient on step 2 — Phase 2 must TRAIN the "
@@ -502,6 +926,12 @@ def smoke_test(args):
     print(f"  GRAD ability heads  = {ability_grad_norm:.6e}")
     print(f"  GRAD reward head    = {reward_grad_norm:.6e}")
     print(f"  GRAD agent blocks   = {agent_grad_norm:.6e}  (PROOF: > 0, trained in Phase 2)")
+    print(f"  GRAD state head     = {state_grad_norm:.6e}  (aux state loss "
+          f"{info['aux_state'].item():.4f}, weight {args.aux_state_weight})")
+    print(f"  GRAD gate heads     = {gate_grad_norm:.6e}")
+    print(f"  gate target rate    = {info_flat['trans_frac'].item():.4f} "
+          f"(== movement_event rate {ev_rate:.4f} even with an all-same-bin target: "
+          f"PROOF the gate follows COMMANDS, not bin changes)")
     print(f"  frozen backbone grads: {len(backbone_with_grad)} (must be 0)")
     print("  optimizer.step() OK")
     print("SMOKE TEST PASSED")
@@ -514,6 +944,16 @@ def smoke_test(args):
 
 def main():
     args = parse_args()
+    if args.video_loss_weight > 0 and not args.unfreeze_backbone:
+        raise SystemExit(
+            "--video-loss-weight > 0 with a FROZEN backbone is a silent no-op: Eq (7) "
+            "predicts latents from the diffusion backbone, so with every backbone param "
+            "at requires_grad=False the video gradient reaches nothing and only burns "
+            "compute. Add --unfreeze-backbone (paper parity), or set the weight to 0.")
+    if args.movement_gate and args.movement_mode == "joint_noop":
+        raise SystemExit(
+            "--movement-gate and --movement-mode joint_noop both model 'no new "
+            "order' and must not be combined; pick one.")
     if args.smoke_test:
         smoke_test(args)
         return
@@ -542,24 +982,79 @@ def main():
         input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
         hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
         movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
+        movement_gate=args.movement_gate,
+        movement_mode=args.movement_mode,
     ).to(device)
+    if args.movement_gate:
+        print(f"  movement gate: ON (sticky categorical), action-dropout={args.action_dropout}")
+    if args.movement_mode == "joint_noop":
+        print(f"  movement: JOINT {args.movement_bins}x{args.movement_bins} grid + NO_OP "
+              f"= {policy_head.movement_classes} classes (no gate, PMPO-compatible), "
+              f"action-dropout={args.action_dropout}")
     print(f"  reward head: {sum(p.numel() for p in reward_head.parameters()):,}")
     print(f"  policy head: {sum(p.numel() for p in policy_head.parameters()):,}")
+    state_head = None
+    if args.aux_state_weight > 0:
+        state_head = StateHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
+                               num_targets=len(STATE_TARGETS)).to(device)
+        print(f"  state head:  {sum(p.numel() for p in state_head.parameters()):,} "
+              f"(aux weight {args.aux_state_weight}, targets {STATE_TARGETS})")
 
     print(f"\nLoading replay data from {args.latents_dir}...")
     dataset = build_dataset(args)
     if len(dataset) == 0:
         raise SystemExit("No sequences found. Check --latents-dir / --labels-root / --seq-len.")
+
+    # ── Held-out split (whole games). Before this, BC trained on 125/125 games
+    # and reported only training loss (audit finding 3). ─────────────────────
+    val_vids = select_val_matches(dataset, args)
+    train_vids = {s["video_id"] for s in dataset.sequences} - val_vids
+    # Persist the resolved split into the checkpoint's args blob so a future
+    # eval can prove which games a checkpoint never saw.
+    args.val_matches_resolved = sorted(val_vids)
+    val_idx = [i for i, s in enumerate(dataset.sequences) if s["video_id"] in val_vids]
+    if val_vids:
+        overlap = train_vids & val_vids
+        if overlap:  # structurally impossible; assert anyway
+            raise SystemExit(f"train/val game overlap: {sorted(overlap)}")
+        if not val_idx:
+            raise SystemExit(f"val games {sorted(val_vids)} produced 0 sequences")
+        print(f"  [split] train {len(train_vids)} games / val {len(val_vids)} games "
+              f"({len(dataset) - len(val_idx)} / {len(val_idx)} sequences), disjoint")
+        print(f"  [split] val games: {sorted(val_vids)}")
+    else:
+        print("  [split] !!! NO VALIDATION SET (--val-games 0): every metric this run "
+              "reports is IN-SAMPLE and cannot show generalization.")
+
     dataloader = torch.utils.data.DataLoader(
         dataset, batch_size=args.batch_size,
-        sampler=VideoGroupedSampler(dataset),
+        sampler=VideoGroupedSampler(dataset, exclude_videos=val_vids),
         num_workers=args.num_workers, pin_memory=(device != "cpu"), drop_last=True,
     )
+    val_loader = None
+    if val_idx:
+        order = build_val_order(dataset, val_vids, args.batch_size, args.val_batches)
+        if not order:
+            raise SystemExit(
+                f"val split has {len(val_idx)} sequences but batch_size="
+                f"{args.batch_size} leaves 0 full batches in any val game")
+        assert set(order) <= set(val_idx), "val order leaked a training sequence"
+        val_loader = torch.utils.data.DataLoader(
+            torch.utils.data.Subset(dataset, order),
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.num_workers, pin_memory=(device != "cpu"), drop_last=True,
+        )
+        print(f"  [split] val loader: {len(val_loader)} batches "
+              f"({len(order)} sequences, an equal slice of each of "
+              f"{len(val_vids)} held-out games)")
 
     schedule = DiffusionSchedule(device=device)
-    rms = {"bc": RunningRMS(), "reward": RunningRMS()}
-    # Trainable set: agent-token blocks (frozen backbone excluded) + both heads.
+    rms = {"bc": RunningRMS(), "reward": RunningRMS(), "aux": RunningRMS(),
+           "video": RunningRMS()}
+    # Trainable set: agent-token blocks (frozen backbone excluded) + all heads.
     params = agent_params + list(reward_head.parameters()) + list(policy_head.parameters())
+    if state_head is not None:
+        params = params + list(state_head.parameters())
     optimizer = create_optimizer(params, args.lr, args.weight_decay,
                                  use_8bit=args.use_8bit_adam, betas=tuple(args.adam_betas))
     total_steps = args.epochs * max(1, len(dataloader))
@@ -574,11 +1069,55 @@ def main():
         resume_path = str(checkpoint_dir / "agent_finetune_latest.pt")
     if resume_path and Path(resume_path).exists():
         rc = torch.load(resume_path, map_location=device, weights_only=False)
-        getattr(dynamics, "_orig_mod", dynamics).load_state_dict(
-            rc["dynamics_state_dict"], strict=False)  # restores trained agent blocks
+        # A Phase-2 checkpoint is a FULL dynamics state_dict written by this same
+        # build, so nothing may be missing or unexpected. If it is, the arch
+        # flags drifted since the checkpoint and a loose load would resume with
+        # randomly-initialised tensors.
+        load_state_dict_guarded(
+            getattr(dynamics, "_orig_mod", dynamics), rc["dynamics_state_dict"],
+            what=f"Phase-2 resume {resume_path}")
         reward_head.load_state_dict(rc["reward_head_state_dict"])
-        policy_head.load_state_dict(rc["policy_head_state_dict"])
-        optimizer.load_state_dict(rc["optimizer_state_dict"])
+        # The movement head's OUTPUT LAYER changes shape between movement_modes
+        # (axis: move_dim*bins = 42 logits; joint_noop: bins**2+1 = 442), and
+        # joint_noop has no gate_heads at all. Those specific tensors are
+        # deliberately rebuilt; EVERYTHING else must still match exactly, so we
+        # drop only the known-incompatible keys rather than loosening the load.
+        _ph = dict(rc["policy_head_state_dict"])
+        _cur = policy_head.state_dict()
+        _rebuilt = [k for k, v in _ph.items()
+                    if k not in _cur or _cur[k].shape != v.shape]
+        for k in _rebuilt:
+            _ph.pop(k)
+        _missing, _unexpected = policy_head.load_state_dict(_ph, strict=False)
+        _bad = [k for k in _missing if k not in _rebuilt]
+        if _bad or _unexpected:
+            raise SystemExit(
+                f"policy head resume mismatch beyond the movement/gate rebuild:\n"
+                f"  unexpected: {_unexpected[:8]}\n  missing: {_bad[:8]}")
+        if _rebuilt:
+            print(f"  [resume] policy head: rebuilt {len(_rebuilt)} tensor(s) at fresh "
+                  f"init (movement_mode change): {_rebuilt[:4]}"
+                  f"{' ...' if len(_rebuilt) > 4 else ''}")
+        if state_head is not None and "state_head_state_dict" in rc:
+            saved_targets = rc.get("state_targets")
+            if saved_targets is not None and list(saved_targets) != list(STATE_TARGETS):
+                raise SystemExit(
+                    f"aux-state targets changed since this checkpoint: it was trained on "
+                    f"{list(saved_targets)} but this build uses {list(STATE_TARGETS)}. The "
+                    f"head's output columns are positional, so resuming would keep weights "
+                    f"trained for different quantities. Re-run with --aux-state-weight 0, or "
+                    f"start the head fresh.")
+            if saved_targets is None:
+                print("WARNING: checkpoint predates state-target recording; assuming its "
+                      f"aux head matches {list(STATE_TARGETS)}. If it was trained before "
+                      "2026-08-12 the enemy_visible column means something different.")
+            state_head.load_state_dict(rc["state_head_state_dict"])
+        try:
+            optimizer.load_state_dict(rc["optimizer_state_dict"])
+        except (ValueError, KeyError) as e:
+            # Param set changed since the checkpoint (e.g. aux head newly
+            # enabled) — fresh optimizer; Adam moments re-estimate in ~1k steps.
+            print(f"  [resume] optimizer state incompatible ({e}); starting fresh optimizer")
         scheduler.load_state_dict(rc["scheduler_state_dict"])
         for k, st in rc.get("rms_state", {}).items():
             if k in rms:
@@ -590,6 +1129,9 @@ def main():
     init_wandb(args, job_type="agent_finetune", extra_config={
         "reward_head_params": sum(p.numel() for p in reward_head.parameters()),
         "policy_head_params": sum(p.numel() for p in policy_head.parameters()),
+        "val_matches": sorted(val_vids),
+        "n_train_games": len(train_vids),
+        "movement_source": args.movement_source,
     })
 
     print("\n" + "=" * 60)
@@ -599,15 +1141,34 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         reward_head.train()
         policy_head.train()
+        if state_head is not None:
+            state_head.train()
+        # Advance the sampler seed with TRAINING PROGRESS, not just epoch. A
+        # resume re-enters this loop at batch 0, so seeding by epoch alone would
+        # replay the exact batches already trained on this epoch -- which is what
+        # was happening (measured: ~2/3 of epoch 1 never reached across three
+        # restarts). global_step differs after every resume, so the order does too.
+        _sampler = getattr(dataloader, "sampler", None)
+        if hasattr(_sampler, "set_epoch"):
+            _sampler.set_epoch(epoch * 1_000_003 + global_step)
+            print(f"  [sampler] epoch {epoch} order seeded from global_step {global_step}")
         t0 = time.time()
         for batch_idx, batch in enumerate(dataloader):
-            optimizer.zero_grad()
+            accum = max(getattr(args, "grad_accum", 1), 1)
+            if batch_idx % accum == 0:
+                optimizer.zero_grad()
             total, info = run_step(batch, dynamics, reward_head, policy_head,
-                                   schedule, args, device, amp_dtype, rms)
+                                   schedule, args, device, amp_dtype, rms,
+                                   state_head=state_head)
             if not torch.isfinite(total):
                 print(f"[WARN] non-finite loss at step {global_step}; skipping.")
                 continue
-            scaler.scale(total).backward()
+            # Divide by accum so the accumulated gradient equals the mean over
+            # the effective batch, not its sum (otherwise the effective LR scales
+            # with --grad-accum and the run is not comparable to the baseline).
+            scaler.scale(total / accum).backward()
+            if (batch_idx + 1) % accum != 0:
+                continue                      # keep accumulating; do NOT step
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(params, 1.0)
             scaler.step(optimizer)
@@ -621,44 +1182,80 @@ def main():
             if (time.time() - last_ckpt_t) >= args.checkpoint_minutes * 60:
                 save_phase2_checkpoint(checkpoint_dir / "agent_finetune_latest.pt", dynamics,
                                        reward_head, policy_head, optimizer, scheduler, rms,
-                                       epoch, global_step, args)
+                                       epoch, global_step, args, state_head=state_head)
                 last_ckpt_t = time.time()
 
-            if batch_idx % args.log_interval == 0:
-                sps = (batch_idx + 1) * args.batch_size / max(time.time() - t0, 1e-6)
+            if val_loader is not None and global_step % args.val_interval == 0:
+                v = evaluate(val_loader, dynamics, reward_head, policy_head, schedule,
+                             args, device, amp_dtype, rms, state_head=state_head,
+                             max_batches=len(val_loader))
+                if v is not None:
+                    log_step({f"val/{k}": x for k, x in v.items()}, step=global_step)
+                    print(f"  [VAL @ step {global_step}] loss={v['loss']:.4f} "
+                          f"bc={v['bc_loss']:.4f} (abil={v['bc_ability']:.3f} "
+                          f"move={v['bc_movement']:.3f}) rew={v['reward_loss']:.4f} "
+                          f"aux={v['aux_state']:.4f}  [{len(val_vids)} held-out games]")
+
+            # keyed on OPTIMIZER steps, not micro-batches: with --grad-accum the
+            # non-step micro-batches `continue` before this point, so a batch_idx
+            # condition can land only on step boundaries and may never fire at all
+            # (accum=8 puts every boundary on an odd batch_idx -> log_interval=2 never matched).
+            if global_step % args.log_interval == 0:
+                sps = (batch_idx + 1) * args.batch_size / max(time.time() - t0, 1e-6)  # micro-batches consumed
                 log_step({
                     "train/loss": info["loss"].item(),
                     "train/bc_loss": info["bc_loss"].item(),
                     "train/bc_ability": info["bc_ability"].item(),
                     "train/bc_movement": info["bc_movement"].item(),
                     "train/reward_loss": info["reward_loss"].item(),
+                    "train/aux_state": info["aux_state"].item(),
                     "train/lr": scheduler.get_last_lr()[0],
                     "train/epoch": epoch,
                 }, step=global_step)
+                aux_s = f" aux={info['aux_state'].item():.4f}" if state_head is not None else ""
+                gate_s = ""
+                if args.movement_gate and "gate_on_trans" in info:
+                    gate_s = (f" gate[t={info['gate_on_trans'].item():.2f}"
+                              f" h={info['gate_on_hold'].item():.2f}"
+                              f" base={info['trans_frac'].item():.2f}]")
+                _pk = (f" vram={torch.cuda.max_memory_allocated()/2**30:.2f}G"
+                       if device.startswith("cuda") else "")
                 print(f"Epoch {epoch} [{batch_idx}/{len(dataloader)}] "
                       f"loss={info['loss'].item():.4f} "
                       f"bc={info['bc_loss'].item():.4f} "
                       f"(abil={info['bc_ability'].item():.3f} move={info['bc_movement'].item():.3f}) "
-                      f"rew={info['reward_loss'].item():.4f} ({sps:.1f} samp/s)")
+                      f"rew={info['reward_loss'].item():.4f}{aux_s}{gate_s} ({sps:.1f} samp/s{_pk})")
+
+        if val_loader is not None:  # end-of-epoch held-out eval
+            v = evaluate(val_loader, dynamics, reward_head, policy_head, schedule,
+                         args, device, amp_dtype, rms, state_head=state_head,
+                         max_batches=len(val_loader))
+            if v is not None:
+                log_step({f"val/{k}": x for k, x in v.items()}, step=global_step)
+                print(f"[EPOCH {epoch} VAL] loss={v['loss']:.4f} bc={v['bc_loss']:.4f} "
+                      f"(abil={v['bc_ability']:.3f} move={v['bc_movement']:.3f}) "
+                      f"rew={v['reward_loss']:.4f} aux={v['aux_state']:.4f}")
 
         ckpt_path = checkpoint_dir / f"agent_finetune_epoch_{epoch + 1:03d}.pt"
         save_phase2_checkpoint(ckpt_path, dynamics, reward_head, policy_head,
-                               optimizer, scheduler, rms, epoch + 1, global_step, args)
+                               optimizer, scheduler, rms, epoch + 1, global_step, args,
+                               state_head=state_head)
         save_phase2_checkpoint(checkpoint_dir / "agent_finetune_latest.pt", dynamics,
                                reward_head, policy_head, optimizer, scheduler, rms,
-                               epoch + 1, global_step, args)
+                               epoch + 1, global_step, args, state_head=state_head)
 
     print("\nPhase 2 training complete.")
     finish_wandb()
 
 
 def save_phase2_checkpoint(path, dynamics, reward_head, policy_head, optimizer,
-                           scheduler, rms, epoch, global_step, args):
+                           scheduler, rms, epoch, global_step, args, state_head=None):
     inner = getattr(dynamics, "_orig_mod", dynamics)
     ckpt = {
         "dynamics_state_dict": inner.state_dict(),
         "dynamics_config": getattr(inner, "config", None),
         "reward_head_state_dict": reward_head.state_dict(),
+        "state_head_state_dict": state_head.state_dict() if state_head is not None else None,
         "policy_head_state_dict": policy_head.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
@@ -666,6 +1263,12 @@ def save_phase2_checkpoint(path, dynamics, reward_head, policy_head, optimizer,
         "epoch": epoch,
         "global_step": global_step,
         "args": vars(args),
+        # The aux head's output columns are positional. Shape alone cannot catch
+        # a REDEFINED target (enemy_visible changed meaning on 2026-08-12 when it
+        # stopped counting frustum-membership as visible) or a reordered tuple —
+        # same width, different semantics, loads clean, silently wrong. Record
+        # the names so a resume can refuse.
+        "state_targets": list(STATE_TARGETS),
         "phase": "agent_finetune",
     }
     tmp = Path(str(path) + ".tmp")

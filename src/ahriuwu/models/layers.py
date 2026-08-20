@@ -88,13 +88,22 @@ def soft_cap_attention(logits: torch.Tensor, cap: float = 50.0) -> torch.Tensor:
 
     Reference: Gemma 2 uses cap=50.0
 
+    ``cap`` must be positive. At cap=0 this maps every logit to 0, making the
+    subsequent softmax exactly uniform -- attention silently stops working, with
+    no tensor anywhere to reveal it. Disabling soft capping is spelled
+    ``soft_cap=None`` at the call sites, never 0.
+
     Args:
         logits: Attention logits of any shape
-        cap: Soft cap value (default 50.0 from Gemma 2)
+        cap: Soft cap value (default 50.0 from Gemma 2), must be > 0
 
     Returns:
         Soft-capped logits
     """
+    if cap <= 0.0:
+        raise ValueError(
+            f"soft_cap={cap} would zero every attention logit (uniform attention). "
+            "Use soft_cap=None at the call site to disable capping, or a positive cap.")
     return cap * torch.tanh(logits / cap)
 
 
@@ -235,6 +244,15 @@ def make_soft_cap_score_mod(cap: float | None):
     if cap is None:
         return None
     cap = float(cap)
+    if cap <= 0.0:
+        # cap*tanh(score/cap) at cap=0 sends EVERY logit to 0, so softmax is
+        # exactly uniform -- the layer stops attending at all. It involves no
+        # tensors, so no state-dict or shape check can ever detect it; the only
+        # defence is refusing the value. "Disabled" is spelled None, not 0.
+        raise ValueError(
+            f"soft_cap={cap} would zero every attention logit (uniform attention). "
+            "Pass soft_cap=None to disable soft capping, or a positive cap (Gemma-2 "
+            "uses 50.0).")
 
     def _score_mod(score, b, h, q_idx, kv_idx):
         return cap * torch.tanh(score / cap)

@@ -107,7 +107,7 @@ def main():
     model = create_dynamics(
         args.model_size, latent_dim=args.latent_dim,
         num_kv_heads=args.num_kv_heads, num_register_tokens=args.num_register_tokens,
-        soft_cap=args.soft_cap, gradient_checkpointing=False,
+        soft_cap=args.soft_cap if args.soft_cap > 0 else None, gradient_checkpointing=False,
     ).to(device)
 
     ckpt = torch.load(args.checkpoint, weights_only=False, map_location=device)

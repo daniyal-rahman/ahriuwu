@@ -478,3 +478,30 @@ def load_checkpoint(
     )
 
 
+
+
+def load_state_dict_guarded(module, state, *, what: str, allow_missing=()):
+    """``load_state_dict(strict=False)`` that RAISES on anything unexplained.
+
+    Canonical home for the guard. A bare ``strict=False`` has silently detonated
+    repeatedly in this repo: it dropped trained ``action_embed`` weights in
+    ``agent_infer`` (agent blocks then read out-of-distribution activations) and
+    dropped 36 ``qk_norm`` tensors while flipping the attention scale in every
+    dynamics eval for five months. Both were invisible because nothing stopped.
+
+    ``allow_missing`` lists key prefixes legitimately absent for THIS load (e.g.
+    the Phase-2 agent blocks, which a Phase-1 checkpoint never trained).
+    Everything else -- and every unexpected key, always -- aborts.
+    """
+    missing, unexpected = module.load_state_dict(state, strict=False)
+    bad_missing = [k for k in missing if not k.startswith(tuple(allow_missing))]
+    if bad_missing or unexpected:
+        raise RuntimeError(
+            f"{what}: state-dict mismatch — the checkpoint does not match this "
+            f"model build, and loading it non-strictly would silently leave "
+            f"tensors at random init.\n"
+            f"  UNEXPECTED in checkpoint ({len(unexpected)}): {unexpected[:10]}\n"
+            f"  MISSING, not explained by {list(allow_missing) or 'anything'} "
+            f"({len(bad_missing)}): {bad_missing[:10]}\n"
+            f"  (expected-missing, ignored: {len(missing) - len(bad_missing)})")
+    return missing, unexpected
