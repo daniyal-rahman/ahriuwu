@@ -1,0 +1,9 @@
+{
+  "span": [649.0, 367.0],
+  "chunk": 30,
+  "measured_at": "2026-08-10 (carried over from the live box)",
+  "provisional": true,
+  "note": "Measured on THIS rig by calibrate_mouse.py and previously hardcoded in hybrid_sender.py. Seeded here so a demo is not blocked on re-measuring. It is only valid while the Windows pointer-speed slider, 'Enhance pointer precision', and the display resolution are unchanged. Re-run scripts/keysender/calibrate_mouse.py to replace this file (it will drop the provisional flag).",
+  "host": "192.168.1.144",
+  "stream_size": "1280x720"
+}

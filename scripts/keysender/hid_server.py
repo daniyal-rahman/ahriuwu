@@ -99,6 +99,12 @@ def _parse(line: str) -> dict | None:
         return {"t": "tap", "k": parts[1]}
     if verb == "reset":
         return {"t": "reset"}
+    # "status" -> the server writes one JSON line back. This exists so preflight
+    # can VERIFY the mouse gadget rather than infer it from a successful TCP
+    # connect: the connect succeeds even when /dev/hidg1 is missing, which is how
+    # a preflight once passed on a rig that could not aim at all.
+    if verb == "status":
+        return {"t": "status"}
     # relative move: "mouse <dx> <dy>". The dead-reckoning sender emits this for
     # every chunk of a move; it is the highest-rate command on the wire.
     if verb == "mouse" and len(parts) >= 3:
@@ -244,6 +250,12 @@ def main():
                                       "Use hybrid_sender's corner-relative move_to/move_click.")
                             else:
                                 ms.move(m["x"], m["y"])
+                        elif t == "status":
+                            conn.sendall((json.dumps({
+                                "t": "status", "keyboard": True,
+                                "mouse": (mode if ms else None),
+                                "mouse_dev": (MOUSE_PATH if ms else None),
+                            }) + "\n").encode())
                         elif t == "reset":
                             kb.pressed.clear(); kb.modifiers = 0; kb._send()
                             if ms:

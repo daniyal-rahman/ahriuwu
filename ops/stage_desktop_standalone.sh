@@ -1,39 +1,92 @@
 #!/bin/bash
-# Make the desktop SELF-SUFFICIENT for live inference — no NFS, no login node.
-# Copies the repo code + the two checkpoints inference needs to a desktop-LOCAL
-# drive, writes a launch wrapper that points only at local paths, and verifies a
-# dry inference runs. Run ON the desktop (Linux boot) while NFS is still up.
+# Make the desktop SELF-SUFFICIENT for live inference — no NFS, no login node —
+# AND make it impossible for the deployed tree to silently drift from the repo.
 #
-#   bash /mnt/nfs/projects/ahriuwu/scripts/stage_desktop_standalone.sh
+# The rig at $DEST used to be an unmanaged FORK: 162 diff lines in play_live.py,
+# 71 in agent_infer.py, no joint_noop branch, no --desktop, no --gate-bias, and a
+# checkpoint the repo documents as invalid. Nothing anyone fixed in git was in
+# the thing that actually played. So this script now stamps the exact commit into
+# a VERSION file that play_live.py PRINTS AT STARTUP and records in every
+# session's meta.json. If the banner does not match the commit you think you
+# deployed, you are running something else.
 #
-# After this, /mnt/storage/ahriuwu-live is fully local: it works with danilogin
-# and NFS both down. The conda 'ml' env already lives on the desktop-local /home.
+#   ssh desktop 'bash /mnt/nfs/projects/ahriuwu/ops/stage_desktop_standalone.sh'
+#
+# Run ON the desktop (Linux boot) while NFS is still up. Afterwards $DEST works
+# with danilogin and NFS both down. The conda 'ml' env already lives on the
+# desktop-local /home.
+#
+# Env overrides:
+#   BC_SRC=<path>   Phase-2 checkpoint to deploy (default below)
+#   TOK_SRC=<path>  tokenizer checkpoint
+#   DEST=<path>     deploy root
 set -euo pipefail
 
-SRC=/mnt/nfs/projects/ahriuwu                       # NFS repo (source)
-DEST=/mnt/storage/ahriuwu-live                      # desktop-local durable HDD
-PY=/home/dani/miniconda3/envs/ml/bin/python         # desktop-local env (/home is per-node)
-TOK_SRC=$SRC/rollout_stage/transformer_tokenizer_latest.pt
-# Phase-2 BC checkpoint: prefer the new gated action-model, fall back to act8775.
-BC_SRC=$SRC/data/phase2_bc_gate1060/agent_finetune_latest.pt
-[ -f "$BC_SRC" ] || BC_SRC=$SRC/data/phase2_bc_garen_act8775/agent_finetune_latest.pt
+SRC=${SRC:-/mnt/nfs/projects/ahriuwu}               # NFS repo (source)
+DEST=${DEST:-/mnt/storage/ahriuwu-live}             # desktop-local durable HDD
+PY=${PY:-/home/dani/miniconda3/envs/ml/bin/python}  # desktop-local env
+TOK_SRC=${TOK_SRC:-$SRC/rollout_stage/transformer_tokenizer_latest.pt}
+# Phase-2 BC checkpoint. joint_noop + unfrozen backbone: the frozen lineage's
+# action_embed was fitted to a DIFFERENT movement target and cannot adapt.
+BC_SRC=${BC_SRC:-$SRC/data/phase2_from_vast/vast_step90000.pt}
 
-echo "[stage] dest=$DEST"
+[ -f "$TOK_SRC" ] || { echo "FATAL: tokenizer not found: $TOK_SRC" >&2; exit 1; }
+[ -f "$BC_SRC" ]  || { echo "FATAL: phase2 ckpt not found: $BC_SRC" >&2; exit 1; }
+
+COMMIT=$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo UNKNOWN)
+DIRTY=$(git -C "$SRC" status --porcelain -- src scripts 2>/dev/null | head -20)
+echo "[stage] dest=$DEST  commit=${COMMIT:0:12}"
+[ -n "$DIRTY" ] && echo "[stage] WARNING: src/ or scripts/ is DIRTY at stage time:" && echo "$DIRTY"
+
 mkdir -p "$DEST/checkpoints"
 
-echo "[stage] copying code (src, scripts) — excluding scratchpad/.git/wandb/checkpoints symlink..."
+# PRESERVE the rig's measured mouse calibration across a re-stage. It is the one
+# artefact that only exists on the live box (measured against the real screen)
+# and rsync --delete would take it out.
+CAL="$DEST/scripts/keysender/mouse_calibration.json"
+SAVED=""
+if [ -f "$CAL" ]; then
+  SAVED=$(mktemp)
+  cp "$CAL" "$SAVED"
+  echo "[stage] preserving measured calibration: $(cat "$CAL" | tr -d '\n')"
+fi
+
+echo "[stage] rsync code (src, scripts, tests)..."
 rsync -a --delete \
-  --exclude='.git' --exclude='wandb' --exclude='checkpoints' \
-  --exclude='__pycache__' \
-  "$SRC/src" "$SRC/scripts" "$SRC/pyproject.toml" "$DEST/" 2>/dev/null || \
-  rsync -a --delete --exclude='.git' --exclude='wandb' --exclude='checkpoints' \
-    --exclude='__pycache__' "$SRC/src" "$SRC/scripts" "$DEST/"
+  --exclude='.git' --exclude='wandb' --exclude='__pycache__' --exclude='*.pyc' \
+  "$SRC/src" "$SRC/scripts" "$SRC/tests" "$SRC/pyproject.toml" "$DEST/"
+
+if [ -n "$SAVED" ]; then
+  cp "$SAVED" "$CAL"
+  rm -f "$SAVED"
+  echo "[stage] calibration restored -> $CAL"
+else
+  echo "[stage] NOTE: no mouse calibration on this box. Run ONCE before playing:"
+  echo "[stage]   \$PY \$AHRIUWU/scripts/keysender/calibrate_mouse.py --host \$PI"
+  echo "[stage]   (until then the sender uses the built-in fallback span 649x367)"
+fi
 
 echo "[stage] copying checkpoints to local disk..."
 cp -f "$TOK_SRC" "$DEST/checkpoints/tokenizer_v7.pt"
 cp -f "$BC_SRC"  "$DEST/checkpoints/phase2_bc.pt"
-echo "[stage]   tokenizer <- $TOK_SRC"
-echo "[stage]   phase2 BC <- $BC_SRC"
+TOK_SHA=$(sha256sum "$DEST/checkpoints/tokenizer_v7.pt" | cut -c1-16)
+BC_SHA=$(sha256sum "$DEST/checkpoints/phase2_bc.pt" | cut -c1-16)
+echo "[stage]   tokenizer <- $TOK_SRC  ($TOK_SHA)"
+echo "[stage]   phase2 BC <- $BC_SRC   ($BC_SHA)"
+
+# --- the anti-drift stamp ----------------------------------------------------
+cat > "$DEST/VERSION" <<EOF
+commit=$COMMIT
+staged_at=$(date -Is)
+staged_from=$SRC
+staged_by=$(whoami)@$(hostname)
+dirty=$([ -n "$DIRTY" ] && echo yes || echo no)
+phase2_ckpt=$BC_SRC
+phase2_sha256_16=$BC_SHA
+tokenizer_ckpt=$TOK_SRC
+tokenizer_sha256_16=$TOK_SHA
+EOF
+echo "[stage] VERSION:"; sed 's/^/[stage]   /' "$DEST/VERSION"
 
 echo "[stage] writing launch wrappers..."
 cat > "$DEST/env.sh" <<EOF
@@ -43,30 +96,33 @@ export PYTHONPATH=$DEST/src:$DEST/scripts
 export PY=$PY
 export TOK=$DEST/checkpoints/tokenizer_v7.pt
 export BC=$DEST/checkpoints/phase2_bc.pt
+export PI=\${PI:-192.168.1.144}
 EOF
 
 cat > "$DEST/preflight.sh" <<EOF
 #!/bin/bash
 source $DEST/env.sh
 \$PY \$AHRIUWU/scripts/play_live_preflight.py \\
-  --phase2-ckpt \$BC --tokenizer-ckpt \$TOK "\$@"
+  --phase2-ckpt \$BC --tokenizer-ckpt \$TOK --hid-host \$PI "\$@"
 EOF
 chmod +x "$DEST/preflight.sh"
 
+# temperature 1.0 is NOT a preference: greedy decode is a measured dead policy
+# (0.00 clicks/s, 1 movement cell, 0 casts) on every checkpoint on disk.
 cat > "$DEST/play.sh" <<EOF
 #!/bin/bash
 source $DEST/env.sh
 \$PY \$AHRIUWU/scripts/play_live.py \\
   --phase2-ckpt \$BC --tokenizer-ckpt \$TOK \\
-  --inject \${INJECT:-dry} --hid-host \${PI:-192.168.1.144} \\
-  --target-fps 20 --temperature 1.0 "\$@"
+  --inject \${INJECT:-dry} --hid-host \$PI \\
+  --movement-mode \${MOVE:-mouse} --target-fps \${FPS:-20} --temperature 1.0 "\$@"
 EOF
 chmod +x "$DEST/play.sh"
 
-echo "[stage] VERIFY: load both checkpoints + dry inference on a synthetic frame, LOCAL paths only..."
+echo "[stage] VERIFY: load both checkpoints + one inference on a synthetic frame, LOCAL paths only..."
 source "$DEST/env.sh"
 "$PY" - <<'PYEOF'
-import os, sys, numpy as np, torch
+import os, sys, numpy as np
 sys.path.insert(0, os.environ["AHRIUWU"]+"/scripts")
 sys.path.insert(0, os.environ["AHRIUWU"]+"/src")
 from agent_infer import GarenAgent
@@ -74,11 +130,15 @@ ag = GarenAgent(os.environ["BC"], tokenizer_ckpt=os.environ["TOK"], device="cuda
 ag.reset()
 f = np.random.rand(352,352,3).astype(np.float32)
 a = ag.act_from_latent(ag.encode_frame(f), temperature=1.0)
-gated = getattr(ag.policy,"movement_gate",False)
-print(f"VERIFY OK: use_actions={ag.use_actions} gated={gated} "
+print(f"VERIFY OK: use_actions={ag.use_actions} "
+      f"movement_mode={getattr(ag.policy,'movement_mode','axis')} "
+      f"gated={getattr(ag.policy,'movement_gate',False)} "
       f"move={tuple(round(x,2) for x in a['movement'])} bf16={ag.amp}")
 PYEOF
 
-echo "[stage] DONE. Standalone tree at $DEST (NFS/login can now go down)."
-echo "  dry test : INJECT=dry  $DEST/play.sh --capture-region 0,0,1920,1080"
-echo "  live     : INJECT=hid  $DEST/play.sh --capture-region <x,y,w,h>"
+echo
+echo "[stage] DONE. Standalone tree at $DEST, stamped ${COMMIT:0:12}."
+echo "  calibrate (once): \$PY $DEST/scripts/keysender/calibrate_mouse.py --host \$PI"
+echo "  preflight       : $DEST/preflight.sh --inject hid"
+echo "  dry run         : INJECT=dry $DEST/play.sh"
+echo "  live            : INJECT=hid $DEST/play.sh"

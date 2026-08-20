@@ -55,6 +55,38 @@ _WASD_DIRS = [
 ]
 
 
+def provenance():
+    """Where this code came from -> dict, printed at startup and recorded in
+    every session's meta.json.
+
+    The deployed rig was for ten days an unmanaged FORK of this repo, so every
+    fix made in git was absent from the thing that actually played and nothing
+    in the logs said so. Resolve identity from the VERSION file written by
+    ops/stage_desktop_standalone.sh, or from git when running out of a checkout.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    vf = os.path.join(root, "VERSION")
+    if os.path.exists(vf):
+        d = {}
+        with open(vf) as fh:
+            for line in fh:
+                if "=" in line:
+                    k, v = line.strip().split("=", 1)
+                    d[k] = v
+        d["source"] = "VERSION (staged)"
+        return d
+    try:
+        sha = subprocess.check_output(["git", "-C", root, "rev-parse", "HEAD"],
+                                      stderr=subprocess.DEVNULL, text=True).strip()
+        dirty = subprocess.check_output(["git", "-C", root, "status", "--porcelain",
+                                         "--", "src", "scripts"],
+                                        stderr=subprocess.DEVNULL, text=True).strip()
+        return {"commit": sha, "dirty": "yes" if dirty else "no",
+                "source": "git checkout at " + root}
+    except (subprocess.CalledProcessError, OSError):
+        return {"commit": "UNKNOWN", "source": "UNRESOLVABLE — not staged, not a git checkout"}
+
+
 class ScreenCapture:
     def __init__(self, region):
         import mss
@@ -408,9 +440,28 @@ def main():
     ap.add_argument("--no-record", dest="record", action="store_false")
     ap.add_argument("--record-dir", default="recordings", help="Root for session recordings.")
     ap.add_argument("--dry-run", action="store_true", help="alias for --inject dry")
+    ap.add_argument("--allow-unstamped", action="store_true",
+                    help="Permit --inject hid from a tree whose commit cannot be resolved. "
+                         "Off by default: the deployed rig silently drifted 10 days from "
+                         "the repo once, and an unidentifiable tree is how that happens.")
     args = ap.parse_args()
     if args.dry_run:
         args.inject = "dry"
+
+    prov = provenance()
+    print(f"[version] commit={prov.get('commit', '?')[:12]} dirty={prov.get('dirty', '?')} "
+          f"<- {prov['source']}")
+    if prov.get("staged_at"):
+        print(f"[version] staged {prov['staged_at']} from {prov.get('staged_from')} | "
+              f"ckpt sha {prov.get('phase2_sha256_16')} tok sha {prov.get('tokenizer_sha256_16')}")
+    if prov["commit"] == "UNKNOWN" and args.inject == "hid" and not args.allow_unstamped:
+        raise SystemExit(
+            "REFUSING --inject hid: this tree has no VERSION file and is not a git\n"
+            "checkout, so there is no way to know what code is about to drive real\n"
+            "hardware. Re-deploy with ops/stage_desktop_standalone.sh (which stamps\n"
+            "VERSION), or pass --allow-unstamped if you accept not knowing.")
+    if prov.get("dirty") == "yes":
+        print("[version] WARNING: working tree is DIRTY — the running code is not the commit above.")
 
     # WASD movement holds w/a/s/d down, so no ability may be bound to them (it
     # would fire while walking). Irrelevant in mouse mode, where movement uses no
@@ -466,6 +517,11 @@ def main():
             "temperature": args.temperature, "deadzone": args.deadzone,
             "keybinds": DEFAULT_KEYS, "use_actions": agent.use_actions,
             "movement_gate": getattr(agent.policy, "movement_gate", False),
+            "movement_mode_head": getattr(agent.policy, "movement_mode", "axis"),
+            "movement_mode_input": args.movement_mode,
+            "gate_bias": args.gate_bias, "desktop": [_dw, _dh], "region": list(region),
+            "act_on_stale": args.act_on_stale,
+            "provenance": prov,
         })
 
     dt_target = 1.0 / args.target_fps
