@@ -209,7 +209,10 @@ class InputController:
         elif backend == "hid":
             sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "keysender"))
             from hybrid_sender import HybridKeyboard
-            self.kb = HybridKeyboard(host=hid_host)
+            # mouse=True spawns the corner-relative pointer loop. Without it,
+            # move_click() sets a target that nothing ever consumes -- the exact
+            # silent no-op that let a live session "run" while never aiming.
+            self.kb = HybridKeyboard(host=hid_host, mouse=(movement_mode == "mouse"))
 
     def _set_movement(self, want):
         if self.backend == "pynput":
@@ -395,6 +398,11 @@ def main():
                     help="Floor on seconds between right-clicks in mouse mode. The gate "
                          "normally paces these; this protects against an ungated "
                          "checkpoint clicking every frame.")
+    ap.add_argument("--act-on-stale", action="store_true", default=False,
+                    help="Feed the model repeated frames instead of skipping them. "
+                         "DEFAULT OFF: the first live session filled its 16-frame context "
+                         "with duplicates (58%% byte-identical) and the agent stood still. "
+                         "Skipping means the agent runs at the STREAM's real rate.")
     ap.add_argument("--record", action="store_true", default=True,
                     help="Record model-view (352) video + per-frame actions (default on).")
     ap.add_argument("--no-record", dest="record", action="store_false")
@@ -464,6 +472,10 @@ def main():
     cap_ms, enc_ms, act_ms, inj_ms = (deque(maxlen=60) for _ in range(4))
     n = 0
     n_stale = 0            # frames served that were IDENTICAL to the previous one
+    recent = deque(maxlen=200)   # rolling freshness, so the readout tracks NOW
+    n_iter = 0
+    last_fresh_t = time.perf_counter()
+    action = None
     mode = {"dry": "DRY-RUN (no input)", "pynput": "LIVE pynput", "hid": "LIVE HID gadget"}[args.inject]
     if args.source == "udp":
         cap.wait_first()                          # block until the stream is flowing
@@ -476,7 +488,32 @@ def main():
             if frame is None:                     # stream hiccup — hold, don't act on nothing
                 time.sleep(dt_target)
                 continue
-            n_stale += 0 if fresh else 1
+            n_iter += 1
+            recent.append(1 if fresh else 0)
+            # --- STALENESS GUARD (the first live session died of this) ---------
+            # The Windows stream delivered ~2-3 new frames/s into a 17 fps loop,
+            # so 58% of consecutive frames were byte-identical. Feeding those to
+            # the model fills its 16-frame context with duplicates: a world model
+            # shown no change predicts no change, and the agent stands still.
+            # A repeated frame carries ZERO new information, so the correct
+            # response is to HOLD the previous action -- keyboard holds persist
+            # on their own and the mouse must not re-click -- and simply not
+            # advance the context. The agent then runs at the STREAM's true rate,
+            # which is the rate at which the world actually changes.
+            if not fresh:
+                n_stale += 1
+                if not args.act_on_stale:
+                    dead = time.perf_counter() - last_fresh_t
+                    if dead > 3.0:
+                        print(f"  ** NO NEW FRAME FOR {dead:.1f}s — is the Windows "
+                              f"ffmpeg still streaming? ** (holding last action)")
+                        last_fresh_t = time.perf_counter()
+                    slack = dt_target - (time.perf_counter() - t0)
+                    if slack > 0:
+                        time.sleep(slack)
+                    continue
+            else:
+                last_fresh_t = time.perf_counter()
             t1 = time.perf_counter()
             lat = agent.encode_frame(frame)
             t2 = time.perf_counter()
@@ -500,8 +537,13 @@ def main():
             if n % args.target_fps == 0:
                 tot = sum(map(lambda d: sum(d) / len(d), (cap_ms, enc_ms, act_ms, inj_ms)))
                 casts = [k for k in pressed if k != "AA"]
-                stale_pct = n_stale / max(n, 1)
-                warn = "  ** STALE STREAM **" if stale_pct > 0.25 else ""
+                # ROLLING, not cumulative: what matters is whether the stream is
+                # healthy NOW, and a cumulative average hides a stream that just
+                # died behind ten good minutes.
+                stale_pct = 1.0 - (sum(recent) / max(len(recent), 1))
+                acted_fps = n / max(time.perf_counter() - t_start, 1e-6)
+                warn = ("  ** STALE STREAM: acting at %.1f fps, raise the Windows "
+                        "ffmpeg framerate **" % acted_fps) if stale_pct > 0.25 else ""
                 if args.movement_mode == "mouse":
                     # clicks/s is the number to watch: humans issue ~2/s, and the
                     # trained gate sits near 0.2/s without --gate-bias.
@@ -511,14 +553,21 @@ def main():
                     mv_s = f"wasd={''.join(wasd).upper() or 'stand':5s}"
                 print(f"frame {n:6d} | {mv_s} "
                       f"casts={casts or '-'} rew={action['reward_pred']:+.2f} | "
-                      f"{1000/tot:4.1f}fps [cap{sum(cap_ms)/len(cap_ms):.0f} enc{sum(enc_ms)/len(enc_ms):.0f} "
+                      f"{acted_fps:4.1f}fps acted (model cap {1000/tot:4.1f}) "
+                      f"[cap{sum(cap_ms)/len(cap_ms):.0f} enc{sum(enc_ms)/len(enc_ms):.0f} "
                       f"act{sum(act_ms)/len(act_ms):.0f} inj{sum(inj_ms)/len(inj_ms):.0f}ms] "
                       f"stale={stale_pct:.0%}{warn}")
             slack = dt_target - (time.perf_counter() - t0)
             if slack > 0:
                 time.sleep(slack)
     except KeyboardInterrupt:
-        print(f"\nstopped after {n} frames.")
+        el = time.perf_counter() - t_start
+        print(f"\nstopped after {n} acted frames in {el:.0f}s ({n/max(el,1e-6):.1f} fps acted); "
+              f"{n_stale}/{n_iter} loop iterations saw a repeated frame "
+              f"({n_stale/max(n_iter,1):.0%}).")
+        if args.movement_mode == "mouse" and args.inject == "hid":
+            print(f"mouse: {getattr(ctrl.kb, 'mouse_stats', lambda: {})()}  "
+                  f"clicks sent={ctrl.clicks_sent} suppressed={ctrl.clicks_suppressed}")
     finally:
         ctrl.close()
         if hasattr(cap, "close"):

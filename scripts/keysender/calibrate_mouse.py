@@ -23,7 +23,10 @@ sweep therefore moves one axis at a time, matching what _mouse_loop does live.
 
 Nothing is clicked — the cursor only moves, so this is safe to run mid-game.
 
-    python scripts/calibrate_mouse.py --host 192.168.1.144
+Run it ONCE per rig and it PERSISTS the result to mouse_calibration.json next to
+hybrid_sender.py, which loads it at startup. Do not re-run mid-game.
+
+    python scripts/keysender/calibrate_mouse.py --host 192.168.1.144
 """
 import argparse
 import json
@@ -34,10 +37,11 @@ import time
 import cv2
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "keysender"))
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)                                # hybrid_sender (this dir)
+sys.path.insert(0, os.path.dirname(_HERE))               # play_live (scripts/)
 from play_live import StreamCapture                      # noqa: E402
-from hybrid_sender import HybridKeyboard                 # noqa: E402
+from hybrid_sender import HybridKeyboard, save_calibration, CALIB_PATH   # noqa: E402
 
 TPL_TIP = (3, 3)          # cursor hotspot offset inside cursor_tpl.png
 
@@ -96,6 +100,8 @@ def main():
                          "(encode + network + decode latency).")
     ap.add_argument("--template", default=os.path.join(os.path.dirname(__file__), "cursor_tpl.png"))
     ap.add_argument("--out", default=None, help="Write raw samples here as JSON.")
+    ap.add_argument("--no-save", action="store_true",
+                    help="Measure but do NOT overwrite the persisted calibration.")
     args = ap.parse_args()
 
     w, h = map(int, args.stream_size.split("x"))
@@ -124,10 +130,10 @@ def main():
         step(kb, args.chunk, BASE_X, "x")               # clear of BOTH edges
         step(kb, args.chunk, BASE_Y, "y")
         time.sleep(args.settle)
-        x0, y0, s0 = finder.find(cap.grab_rgb01())
+        x0, y0, s0 = finder.find(cap.grab_rgb01()[0])
         step(kb, args.chunk, d, axis)
         time.sleep(args.settle)
-        x1, y1, s1 = finder.find(cap.grab_rgb01())
+        x1, y1, s1 = finder.find(cap.grab_rgb01()[0])
         units = d * args.chunk
         px = (x1 - x0) if axis == "x" else (y1 - y0)
         note = ""
@@ -163,12 +169,28 @@ def main():
         out[axis] = {"units_per_px": upp, "span": span, "nonlinearity_pct": spread,
                      "n": len(pts)}
     if "x" in out and "y" in out:
-        print(f"\nMOUSE_SPAN = ({out['x']['span']:.1f}, {out['y']['span']:.1f})")
-        print("Put that in scripts/keysender/hybrid_sender.py (or pass --mouse-span).")
-        if max(out["x"]["nonlinearity_pct"], out["y"]["nonlinearity_pct"]) > 8:
+        span = (out["x"]["span"], out["y"]["span"])
+        print(f"\nMOUSE_SPAN = ({span[0]:.1f}, {span[1]:.1f})")
+        nonlin = max(out["x"]["nonlinearity_pct"], out["y"]["nonlinearity_pct"])
+        if nonlin > 8:
             print("\nWARNING: >8% nonlinearity — pointer acceleration is likely ON in\n"
                   "Windows. A single span constant cannot be exact while it is. Turn off\n"
                   "'Enhance pointer precision' and re-run for a clean linear mapping.")
+        # PERSIST IT. Previously this printed a number for a human to paste into
+        # hybrid_sender.py, which meant the deployed rig and the repo could hold
+        # different constants with nothing to reconcile them.
+        if args.no_save:
+            print("\n--no-save: persisted calibration left untouched.")
+        else:
+            p = save_calibration(span, args.chunk,
+                                 nonlinearity_pct=round(nonlin, 2),
+                                 n_samples=len(samples),
+                                 stream_size=args.stream_size, host=args.host)
+            print(f"\nsaved -> {p}   (hybrid_sender loads this at startup)")
+    else:
+        print(f"\nNOT ENOUGH GOOD SAMPLES — calibration NOT written. {CALIB_PATH} unchanged.\n"
+              "The cursor template must be visible in the game world: run this with the\n"
+              "game focused and the stream flowing, and check the 'score' column above.")
 
     if args.out:
         with open(args.out, "w") as fh:
