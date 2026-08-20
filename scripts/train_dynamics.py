@@ -176,6 +176,17 @@ def save_checkpoints(
     if cd is None:
         return
 
+    # The movement TARGET definition is a CHECKPOINT CONTRACT, not a hyperparameter:
+    # ``action_embed['movement']`` is a Linear fitted to whatever (x, y) definition this
+    # run saw, and Phase 2 loads it FROZEN. Record it at the top level under a stable key
+    # so the Phase-2 guard does not depend on the argparse dest surviving a rename — and
+    # so the record exists at all: every checkpoint written before --movement-source was
+    # added (incl. desktop_resume_8775) has none, and those trained the legacy
+    # `cursor.screen` target, which shares a 21-bin cell with the click target on only
+    # 40% of frames (WIRING_AUDIT_2026-08-20 1.1).
+    extra = dict(extra or {})
+    extra.setdefault("movement_source", getattr(args, "movement_source", None))
+
     common = dict(
         model=ts.model,
         optimizer=ts.optimizer,
@@ -249,6 +260,9 @@ def save_run_config(run_dir: Path, args: argparse.Namespace, model_params: int):
         "data": {
             "latents_dir": str(args.latents_dir),
             "stride": args.stride,
+            # Which (x, y) definition `action_embed['movement']` was fitted to. Phase 2
+            # freezes that tensor, so this is part of the checkpoint's contract.
+            "movement_source": getattr(args, "movement_source", None),
         },
         "device": args.device,
     }
@@ -1742,6 +1756,7 @@ def main():
                 save_checkpoint(
                     best_path, model, optimizer, scaler, epoch, ts.global_step,
                     metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_dict,
+                    extra={"movement_source": getattr(args, "movement_source", None)},
                 )
                 print(f"New best model saved (PSNR: {best_psnr:.2f} dB)")
 

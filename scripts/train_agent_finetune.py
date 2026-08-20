@@ -174,6 +174,27 @@ def parse_args():
                              "forward, with a movement_event flag supervising the gate. "
                              "'cursor': the legacy label.cursor.screen target, 43%% of "
                              "whose transitions are camera drift — kept only for A/B.")
+    parser.add_argument("--train-action-embed", action="store_true",
+                        help="Make the Phase-1 action INPUT adapters (action_embed, "
+                             "no_action_embed — ~17k params) trainable in Phase 2. They are "
+                             "fitted in Phase 1 to one specific movement TARGET definition "
+                             "and are otherwise frozen, so a Phase-2 run whose target was "
+                             "redefined since (cursor -> clicks) feeds them out-of-"
+                             "distribution values on every frame with no way to adapt. This "
+                             "re-fits them instead of re-running Phase 1. COSTS: the action "
+                             "token enters at the trunk INPUT, so the backward now traverses "
+                             "the whole frozen backbone (train mode + gradient checkpointing "
+                             "are enabled automatically; expect a real VRAM/step-time "
+                             "increase). RISK: the only gradient reaching them is the BC/"
+                             "reward objective, not Phase 1's video loss, so they are free "
+                             "to drift away from 'what this action does to the next frames' "
+                             "— which is what Phase 3 imagination needs. Pair with "
+                             "--video-loss-weight (needs --unfreeze-backbone) or re-pretrain "
+                             "if dream quality matters.")
+    parser.add_argument("--allow-movement-source-mismatch", action="store_true",
+                        help="Proceed when the Phase-1 checkpoint's movement target differs "
+                             "from this run's, keeping the mismatched embedding FROZEN. "
+                             "Escape hatch for reproducing an old run; not a fix.")
     # --- held-out validation (see FIX 2 / audit finding 3) ---
     parser.add_argument("--val-matches", type=str, default=None,
                         help="Comma-separated match ids, or a path to a JSON file "
@@ -246,7 +267,11 @@ def build_dynamics(args, *, use_actions: bool, device: str):
         num_kv_heads=args.num_kv_heads,
         # Unfreezing the backbone OOMs on a 16GB card without this (measured:
         # 12.16 GiB with checkpointing, OOM without, at batch 16 / seq 16).
-        gradient_checkpointing=getattr(args, "unfreeze_backbone", False),
+        # --train-action-embed needs it for the same reason: the action token is a trunk
+        # INPUT, so making it trainable makes the backward traverse every block and the
+        # activations must be retained.
+        gradient_checkpointing=(getattr(args, "unfreeze_backbone", False)
+                                or getattr(args, "train_action_embed", False)),
     ).to(device)
 
 
@@ -268,10 +293,89 @@ AGENT_PARAM_PREFIXES = ("agent_token", "agent_temporal_pos", "agent_blocks",
 # allowed to be trained.
 AGENT_ABSENT_PREFIXES = AGENT_PARAM_PREFIXES + ("task_embed",)
 
+# The Phase-1 action INPUT adapters. Frozen by default: they belong to the pretrained
+# backbone and were fitted by Phase 1's video loss. --train-action-embed adds them to the
+# trainable set so a Phase-2 run whose movement TARGET was redefined since Phase 1 can
+# re-fit them without redoing Phase 1 (WIRING_AUDIT_2026-08-20 1.1).
+ACTION_EMBED_PREFIXES = ("action_embed", "no_action_embed")
 
-def freeze_backbone_train_agent(dyn, unfreeze: bool = False):
+# Checkpoints written before --movement-source existed carry no record of the movement
+# target, and those runs trained the legacy `label.cursor.screen` target. Absence therefore
+# means 'cursor', not 'unknown'.
+LEGACY_MOVEMENT_SOURCE = "cursor"
+
+
+def checkpoint_movement_source(ckpt: dict) -> tuple[str, str]:
+    """(movement_source, provenance) for a Phase-1 or Phase-2 checkpoint.
+
+    ``action_embed['movement']`` is a Linear FITTED to one specific (x, y) definition and
+    every movement head bin is positional in it, so the target definition is part of a
+    checkpoint's contract — shape alone cannot catch a redefinition.
+    """
+    if ckpt.get("movement_source"):
+        return str(ckpt["movement_source"]), "recorded"
+    saved_args = ckpt.get("args") or {}
+    if not isinstance(saved_args, dict):
+        saved_args = vars(saved_args)
+    if saved_args.get("movement_source"):
+        return str(saved_args["movement_source"]), "run args"
+    return LEGACY_MOVEMENT_SOURCE, "UNRECORDED — predates the flag, assumed legacy"
+
+
+def check_movement_source(ckpt: dict, args, *, what: str) -> str:
+    """REFUSE a checkpoint whose movement target differs from this run's.
+
+    Follows the ``state_targets`` guard: shape matches, semantics do not, load is clean,
+    result is silently wrong. Measured on ``NA1_5549995114`` — the cursor and click
+    targets share a 21-bin cell on only **40.0%** of frames; std 0.197/0.243 (clicks) vs
+    0.093/0.112 (cursor); the click target is clamped to 0.0/1.0 where the cursor target
+    never leaves the interior (WIRING_AUDIT_2026-08-20 1.1). ``action_embed`` is frozen in
+    Phase 2 and so cannot follow the redefinition.
+    """
+    src, prov = checkpoint_movement_source(ckpt)
+    if src == args.movement_source:
+        return src
+    detail = (f"movement-target MISMATCH\n"
+              f"  checkpoint     : {what}\n"
+              f"    movement_source = {src!r}   [{prov}]\n"
+              f"  this run        : movement_source = {args.movement_source!r}\n"
+              f"  action_embed['movement'] was FITTED to the {src!r} target. Measured on "
+              f"NA1_5549995114 the two targets share a 21-bin cell on only 40.0% of "
+              f"frames, and the click target is clamped to 0.0/1.0 where the cursor "
+              f"target never leaves the interior — so the embedding sees out-of-"
+              f"distribution values on every frame.")
+    if getattr(args, "train_action_embed", False):
+        print(f"WARNING: {detail}\n  Proceeding with --train-action-embed: action_embed / "
+              f"no_action_embed are TRAINABLE this run and will re-fit to "
+              f"{args.movement_source!r}. The resulting checkpoint's action conditioning is "
+              f"no longer the Phase-1 one.")
+        return src
+    if getattr(args, "allow_movement_source_mismatch", False):
+        print(f"WARNING: {detail}\n  Proceeding anyway (--allow-movement-source-mismatch): "
+              f"the embedding stays FROZEN and mismatched.")
+        return src
+    raise SystemExit(
+        f"REFUSING to train — {detail}\n"
+        f"Pick one:\n"
+        f"  --movement-source {src}\n"
+        f"        match the checkpoint. Correct but uses the legacy target, 43% of whose\n"
+        f"        transitions are camera drift.\n"
+        f"  --train-action-embed\n"
+        f"        re-fit action_embed/no_action_embed (~17k params) to this run's target\n"
+        f"        instead of re-running Phase 1. Costs a backward through the frozen\n"
+        f"        trunk; see the flag's help for the caveat about dream quality.\n"
+        f"  --unfreeze-backbone\n"
+        f"        paper parity — action_embed trains as part of the backbone.\n"
+        f"  re-run Phase 1 with --movement-source {args.movement_source}\n"
+        f"        the only option that leaves Phase 1 and Phase 2 in agreement.\n"
+        f"  --allow-movement-source-mismatch\n"
+        f"        reproduce the broken behaviour deliberately.")
+
+
+def freeze_backbone_train_agent(dyn, unfreeze: bool = False,
+                                train_action_embed: bool = False):
     """Freeze the pretrained diffusion backbone; keep the agent-token blocks
-    trainable. Returns the list of trainable agent params (for the optimizer).
+    trainable. Returns the list of trainable params (for the optimizer).
 
     The backbone stays in eval() (LayerNorm-only, so eval/train are identical and
     there's no dropout/BN state). Because every backbone param has requires_grad
@@ -279,6 +383,14 @@ def freeze_backbone_train_agent(dyn, unfreeze: bool = False):
     a no_grad wrapper builds no backbone autograd graph — grad flows only into the
     agent blocks that read the (constant) z-token features. So keep run_step's
     forward OUT of no_grad and do NOT detach agent_out.
+
+    ``train_action_embed`` breaks that last property on purpose: the action token is
+    concatenated at the TRUNK INPUT, so a trainable ``action_embed`` makes the backward
+    traverse every block and the activations must be retained. Train mode is therefore
+    enabled so the gradient-checkpointing guard (``self.gradient_checkpointing and
+    self.training``) can actually fire. Train mode is otherwise a no-op here — the one
+    exception is ``gt_dropout``, which only exists when the backbone was built with
+    ``use_game_time`` (off in the production checkpoint).
     """
     # .eval() everywhere was hiding a no-op: gradient checkpointing is guarded by
     # `self.gradient_checkpointing and self.training`, so with the module in eval
@@ -286,10 +398,13 @@ def freeze_backbone_train_agent(dyn, unfreeze: bool = False):
     # activations and produced a fake batch-size ceiling (2 on a 16GB card, 4 on
     # 31GB). There is no dropout/BN in the backbone, so train() is safe: the only
     # behavioural difference is that checkpointing now actually runs.
-    dyn.train(unfreeze)
+    dyn.train(unfreeze or train_action_embed)
+    trainable_prefixes = AGENT_PARAM_PREFIXES
+    if train_action_embed:
+        trainable_prefixes = trainable_prefixes + ACTION_EMBED_PREFIXES
     agent_params = []
     for name, p in dyn.named_parameters():
-        if unfreeze or name.startswith(AGENT_PARAM_PREFIXES):
+        if unfreeze or name.startswith(trainable_prefixes):
             p.requires_grad_(True)
             agent_params.append(p)
         else:
@@ -322,6 +437,8 @@ def load_frozen_dynamics(args, device: str):
             print(f"  [ckpt] overriding --latent-dim {args.latent_dim} -> {latent_dim} (from ckpt config)")
             args.latent_dim = latent_dim
         use_actions = cfg.get("use_actions", any("action_embed" in k for k in state))
+        if use_actions:
+            check_movement_source(ckpt, args, what=str(args.dynamics_checkpoint))
         dyn = build_dynamics(args, use_actions=use_actions, device=device)
         # Phase 1 never trains the agent-token machinery (it is a side readout,
         # absent from the denoising loss), so those keys are legitimately absent
@@ -333,8 +450,10 @@ def load_frozen_dynamics(args, device: str):
         print(f"  [ckpt] use_actions={use_actions}; {len(missing)} missing "
               f"(all agent-token keys, trained here) / 0 unexpected")
 
+    train_ae = getattr(args, "train_action_embed", False) and dyn.use_actions
     agent_params = freeze_backbone_train_agent(
-        dyn, unfreeze=getattr(args, 'unfreeze_backbone', False))
+        dyn, unfreeze=getattr(args, 'unfreeze_backbone', False),
+        train_action_embed=train_ae)
     n_agent = sum(p.numel() for p in agent_params)
     if getattr(args, "unfreeze_backbone", False):
         print(f"  [freeze] backbone UNFROZEN (paper parity): {len(agent_params)} tensors "
@@ -342,6 +461,14 @@ def load_frozen_dynamics(args, device: str):
     else:
         print(f"  [freeze] diffusion backbone FROZEN; {len(agent_params)} agent tensors "
               f"({n_agent:,} params) TRAINABLE")
+    if train_ae:
+        n_ae = sum(p.numel() for n, p in dyn.named_parameters()
+                   if n.startswith(ACTION_EMBED_PREFIXES))
+        print(f"  [freeze] --train-action-embed: action_embed + no_action_embed "
+              f"({n_ae:,} params) ALSO trainable — they re-fit to the "
+              f"'{args.movement_source}' movement target. The backward now traverses the "
+              f"frozen trunk (train mode + gradient checkpointing ON); expect higher VRAM "
+              f"and step time than a normal frozen run.")
     return dyn, dyn.use_actions, agent_params
 
 
@@ -628,9 +755,11 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
              amp_dtype, rms, state_head=None, update_rms=True):
     """Forward + loss for one batch. Returns (total_loss, info_dict).
 
-    The frozen dynamics runs under no_grad (it's the backbone); gradients flow
-    only into the heads via ``agent_out``. ``state_head`` (optional) adds the
-    masked aux game-state MSE, weighted by ``args.aux_state_weight``.
+    The dynamics is NOT wrapped in no_grad (see :func:`freeze_backbone_train_agent`):
+    with every backbone param frozen it simply builds no backbone graph, while gradient
+    still reaches the agent blocks — and reaches ``action_embed`` too when
+    ``--train-action-embed`` is on. ``state_head`` (optional) adds the masked aux
+    game-state MSE, weighted by ``args.aux_state_weight``.
 
     ``update_rms=False`` (validation) normalizes with the CURRENT running RMS
     without folding the val losses into it — otherwise eval batches would
@@ -918,6 +1047,48 @@ def smoke_test(args):
     optimizer.step()
     backbone_with_grad = backbone_bad2
 
+    # === STEP 3: --train-action-embed reaches action_embed and NOTHING else ===
+    # The escape hatch for a movement-target redefinition: action_embed is fitted in
+    # Phase 1 to one target and frozen here, so it cannot follow a change of target.
+    # Prove the flag opens exactly those tensors and no more of the trunk.
+    freeze_backbone_train_agent(dynamics, train_action_embed=True)
+    for p in dynamics.parameters():
+        p.grad = None
+    total3, _ = run_step(batch, dynamics, reward_head, policy_head, schedule,
+                         args, device, torch.float32, rms, state_head=state_head)
+    total3.backward()
+    ae_grad_norm = sum(p.grad.norm().item() for n, p in dynamics.named_parameters()
+                       if n.startswith(ACTION_EMBED_PREFIXES) and p.grad is not None)
+    trunk_leak = [n for n, p in dynamics.named_parameters()
+                  if p.grad is not None
+                  and not n.startswith(AGENT_PARAM_PREFIXES + ACTION_EMBED_PREFIXES)]
+    assert ae_grad_norm > 0, (
+        "--train-action-embed did NOT deliver gradient to action_embed — the flag is a "
+        "no-op and a movement-target mismatch would still be unfixable!")
+    assert not trunk_leak, f"--train-action-embed leaked grad into the trunk: {trunk_leak[:3]}"
+    # Restore the DEFAULT contract so nothing after this point sees the ablation state.
+    freeze_backbone_train_agent(dynamics)
+    for p in dynamics.parameters():
+        p.grad = None
+
+    # The guard itself: a checkpoint recording a different movement target must ABORT
+    # rather than train a frozen embedding against redefined inputs.
+    _saved_src = args.movement_source
+    args.movement_source = "clicks"
+    try:
+        check_movement_source({"args": {"movement_source": "cursor"}}, args, what="<synthetic>")
+    except SystemExit:
+        guard_fired = True
+    else:
+        guard_fired = False
+    # A checkpoint with NO record is legacy `cursor`, not a free pass.
+    legacy_src, legacy_prov = checkpoint_movement_source({"args": {"seq_len": 32}})
+    args.movement_source = _saved_src
+    assert guard_fired, "movement-source guard did NOT fire on a cursor/clicks mismatch!"
+    assert legacy_src == LEGACY_MOVEMENT_SOURCE, (
+        f"an unrecorded movement_source must default to {LEGACY_MOVEMENT_SOURCE!r}, "
+        f"got {legacy_src!r}")
+
     print(f"  total_loss          = {info['loss'].item():.4f}")
     print(f"  bc_loss             = {info['bc_loss'].item():.4f} "
           f"(ability={info['bc_ability'].item():.4f}, movement={info['bc_movement'].item():.4f})")
@@ -929,6 +1100,10 @@ def smoke_test(args):
     print(f"  GRAD state head     = {state_grad_norm:.6e}  (aux state loss "
           f"{info['aux_state'].item():.4f}, weight {args.aux_state_weight})")
     print(f"  GRAD gate heads     = {gate_grad_norm:.6e}")
+    print(f"  GRAD action_embed   = {ae_grad_norm:.6e}  (PROOF: --train-action-embed "
+          f"adapts the Phase-1 action input; {len(trunk_leak)} trunk tensors leaked, must be 0)")
+    print(f"  movement-source guard fired on cursor-vs-clicks: {guard_fired}; "
+          f"unrecorded => {legacy_src!r} [{legacy_prov}]")
     print(f"  gate target rate    = {info_flat['trans_frac'].item():.4f} "
           f"(== movement_event rate {ev_rate:.4f} even with an all-same-bin target: "
           f"PROOF the gate follows COMMANDS, not bin changes)")
@@ -944,12 +1119,15 @@ def smoke_test(args):
 
 def main():
     args = parse_args()
-    if args.video_loss_weight > 0 and not args.unfreeze_backbone:
+    if args.video_loss_weight > 0 and not (args.unfreeze_backbone or args.train_action_embed):
         raise SystemExit(
-            "--video-loss-weight > 0 with a FROZEN backbone is a silent no-op: Eq (7) "
+            "--video-loss-weight > 0 with a FULLY frozen backbone is a silent no-op: Eq (7) "
             "predicts latents from the diffusion backbone, so with every backbone param "
             "at requires_grad=False the video gradient reaches nothing and only burns "
-            "compute. Add --unfreeze-backbone (paper parity), or set the weight to 0.")
+            "compute. Add --unfreeze-backbone (paper parity), or set the weight to 0. "
+            "(--train-action-embed also makes it non-vacuous — the video gradient then "
+            "reaches action_embed, which is the one signal that keeps a re-fitted action "
+            "embedding meaning 'what this action does to the next frames'.)")
     if args.movement_gate and args.movement_mode == "joint_noop":
         raise SystemExit(
             "--movement-gate and --movement-mode joint_noop both model 'no new "
@@ -1069,6 +1247,10 @@ def main():
         resume_path = str(checkpoint_dir / "agent_finetune_latest.pt")
     if resume_path and Path(resume_path).exists():
         rc = torch.load(resume_path, map_location=device, weights_only=False)
+        # Same contract as the Phase-1 load: every movement head bin and the (possibly
+        # adapted) action_embed are positional in one target definition. Resuming across a
+        # redefinition loads cleanly and is silently wrong.
+        check_movement_source(rc, args, what=f"Phase-2 resume {resume_path}")
         # A Phase-2 checkpoint is a FULL dynamics state_dict written by this same
         # build, so nothing may be missing or unexpected. If it is, the arch
         # flags drifted since the checkpoint and a loose load would resume with
@@ -1269,6 +1451,12 @@ def save_phase2_checkpoint(path, dynamics, reward_head, policy_head, optimizer,
         # same width, different semantics, loads clean, silently wrong. Record
         # the names so a resume can refuse.
         "state_targets": list(STATE_TARGETS),
+        # Which (x, y) definition this checkpoint's movement head bins — and its
+        # action_embed, if --train-action-embed adapted it — actually mean. Recorded at the
+        # top level so a resume, a Phase-3 load or agent_infer can refuse a mismatch
+        # instead of loading it clean and being silently wrong.
+        "movement_source": args.movement_source,
+        "action_embed_trained": bool(getattr(args, "train_action_embed", False)),
         "phase": "agent_finetune",
     }
     tmp = Path(str(path) + ".tmp")
