@@ -26,9 +26,24 @@ SRC=${SRC:-/mnt/nfs/projects/ahriuwu}               # NFS repo (source)
 DEST=${DEST:-/mnt/storage/ahriuwu-live}             # desktop-local durable HDD
 PY=${PY:-/home/dani/miniconda3/envs/ml/bin/python}  # desktop-local env
 TOK_SRC=${TOK_SRC:-$SRC/rollout_stage/transformer_tokenizer_latest.pt}
-# Phase-2 BC checkpoint. joint_noop + unfrozen backbone: the frozen lineage's
-# action_embed was fitted to a DIFFERENT movement target and cannot adapt.
-BC_SRC=${BC_SRC:-$SRC/data/phase2_from_vast/vast_step90000.pt}
+# Phase-2 BC checkpoint. Chosen by measured offline liveness on 3600 frames of
+# real recorded latents at temperature 1.0 (3 replays x 600 frames x 2 seeds,
+# identical inputs across candidates):
+#
+#   ckpt                 clicks/s  uniq cells  top-cell  non-AA casts  step
+#   phase2_bc_clicks       2.70       60.0      0.057       1.36%     102420  <- deployed
+#   phase2_from_vast       2.45       49.3      0.060       0.67%     100329  <- fallback
+#   phase2_parity          2.06       45.7      0.071       1.08%      55216
+#
+# All three are alive (no one-cell collapse). bc_clicks wins on every liveness
+# axis at once and its targets are screen-centred (0.498, 0.492) where parity's
+# skew to (0.581, 0.397). CAVEAT: bc_clicks is the FROZEN lineage, whose
+# action_embed was fitted to a different movement target and cannot adapt
+# (WIRING_AUDIT 1.1) -- and liveness metrics cannot tell competence from noise,
+# so a corrupted embedding could score high precisely by being noisier. If it
+# looks erratic on the day, fall back to the unfrozen joint_noop one:
+#   BC_SRC=$SRC/data/phase2_from_vast/vast_step90000.pt bash ops/stage_desktop_standalone.sh
+BC_SRC=${BC_SRC:-$SRC/data/phase2_bc_clicks/agent_finetune_latest.pt}
 
 [ -f "$TOK_SRC" ] || { echo "FATAL: tokenizer not found: $TOK_SRC" >&2; exit 1; }
 [ -f "$BC_SRC" ]  || { echo "FATAL: phase2 ckpt not found: $BC_SRC" >&2; exit 1; }
