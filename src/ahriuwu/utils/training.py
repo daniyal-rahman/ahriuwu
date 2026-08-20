@@ -412,6 +412,7 @@ def load_checkpoint(
     rms_trackers: dict = None,
     strict: bool = True,
     reset_schedule: bool = False,
+    extras_out: dict | None = None,
 ):
     """Load training checkpoint.
 
@@ -425,8 +426,20 @@ def load_checkpoint(
                 then runs warmup->flat->decay from 0 instead of inheriting the
                 old LR~0 tail. Optimizer momentum is kept (continuation, not
                 cold start); only the schedule clock resets.
+        extras_out: If given, receives the checkpoint's non-tensor metadata
+                (``args``, ``epoch``, ``global_step``, ``model_config``,
+                ``git_info`` and anything passed via ``save_checkpoint(extra=)``).
+                Needed because ``reset_schedule=True`` returns ``global_step=0``:
+                a caller that must key some OTHER schedule off lifetime progress
+                (e.g. the tokenizer's mask-ratio curriculum) cannot use the
+                return value and would otherwise have to re-read the file.
     """
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    if extras_out is not None:
+        extras_out.update({
+            k: v for k, v in checkpoint.items()
+            if not k.endswith("_state_dict") and k != "rms_state"
+        })
     # Normalize state dict: strip _orig_mod. prefix if present
     state_dict = checkpoint["model_state_dict"]
     if any(k.startswith("_orig_mod.") for k in state_dict):

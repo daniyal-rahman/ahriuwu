@@ -68,6 +68,25 @@ def get_base(m):
 # Checkpoint helper — eliminates 4x duplicated save_checkpoint calls
 # ---------------------------------------------------------------------------
 
+def _mask_extra(mask_stats: dict | None) -> dict:
+    """Checkpoint fields that let the mask schedule survive a ``--reset-schedule``.
+
+    ``global_step`` cannot carry the mask schedule: ``--reset-schedule`` returns 0
+    for it, which is precisely how v7 re-ran its mask-ratio ramp on every requeue
+    (PAPER_DEVIATIONS 1.2). ``mask_schedule_step`` is a LIFETIME optimizer-step
+    count that no resume mode resets. ``mask_ratio_sum``/``_count`` carry the
+    realised mean mask across requeues so the regime is auditable from the
+    checkpoint alone, not only from logs that may be lost.
+    """
+    if not mask_stats:
+        return {}
+    return {
+        "mask_schedule_step": int(mask_stats["schedule_step"]),
+        "mask_ratio_sum": float(mask_stats["ratio_sum"]),
+        "mask_ratio_count": int(mask_stats["ratio_count"]),
+    }
+
+
 def _save_tokenizer_checkpoints(
     checkpoint_dir: Path,
     base_checkpoint_dir: Path,
@@ -80,6 +99,7 @@ def _save_tokenizer_checkpoints(
     args: argparse.Namespace,
     scheduler=None,
     rms_trackers: dict = None,
+    mask_stats: dict = None,
     *,
     step_path: Path | None = None,
 ) -> None:
@@ -91,7 +111,7 @@ def _save_tokenizer_checkpoints(
     """
     if not _IS_MAIN:
         return  # under DDP only rank 0 writes checkpoints
-    extra = {"model_type": "transformer_tokenizer"}
+    extra = {"model_type": "transformer_tokenizer", **_mask_extra(mask_stats)}
     common = dict(
         model=model, optimizer=optimizer, scaler=scaler,
         epoch=epoch, global_step=global_step, loss=loss, args=args,
@@ -164,8 +184,9 @@ def parse_args():
     parser.add_argument(
         "--mask-ratio-min",
         type=float,
-        default=0.1,
-        help="Minimum mask ratio when masking (default 0.1, avoids near-zero-but-nonzero masking)",
+        default=0.0,
+        help="Lower bound of the mask-ratio distribution. Paper regime is a FLAT "
+             "p ~ U(0, 0.9) (§3.1), so the default is 0.0; a nonzero floor is an ablation.",
     )
     parser.add_argument(
         "--mask-ratio-max",
@@ -182,8 +203,23 @@ def parse_args():
     parser.add_argument(
         "--mask-warmup-steps",
         type=int,
-        default=50000,
-        help="Steps to linearly ramp mask_ratio_max from 0 to target (curriculum learning)",
+        default=0,
+        help="ABLATION ONLY. >0 linearly ramps the mask-ratio ceiling from 0 to "
+             "--mask-ratio-max over N steps. Default 0 = the paper regime: p sampled FLAT "
+             "from U(min, max) at step 0 (§3.1 specifies no curriculum). This defaulted to "
+             "50000 and every v7 launcher passed 2000; combined with resumes that re-zeroed "
+             "the step clock, v7's measured mean INPUT mask stayed at 0.1-0.2 instead of the "
+             "paper's ~0.45, so the stated MAE benefit was never purchased "
+             "(PAPER_DEVIATIONS §1.2). The ramp now reads the LIFETIME mask-schedule step "
+             "stored in the checkpoint, which --reset-schedule does NOT zero.",
+    )
+    parser.add_argument(
+        "--allow-mask-reramp",
+        action="store_true",
+        help="Permit --reset-schedule together with a mask curriculum when resuming a "
+             "checkpoint that predates lifetime mask-step recording. Without it that exact "
+             "combination is REFUSED: it is what silently restarted the ramp on every v7 "
+             "requeue. Only meaningful with --mask-warmup-steps > 0.",
     )
     parser.add_argument(
         "--step-save-interval",
@@ -302,13 +338,19 @@ def parse_args():
     parser.add_argument(
         "--tube-masking",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="TUBE masking (default on): mask the SAME spatial patch locations across all "
-             "frames of a clip. Blocks the temporal-copy shortcut where per-frame-independent "
-             "masking lets the model fill a masked patch by copying the same location from an "
-             "adjacent frame where it's visible (temporal redundancy => no real learning). "
-             "Standard for video MAE. Use --no-tube-masking for the old per-frame-independent "
-             "behavior (ablation only).",
+        default=False,
+        help="ABLATION ONLY (default off = the paper regime). TUBE masking hides the SAME "
+             "spatial patch locations in every frame of a clip; the paper masks PER IMAGE "
+             "(§3.1: 'Patches of each image are replaced...') and the phrase 'tube masking' "
+             "appears nowhere in it. The recorded rationale for turning it on is real and "
+             "kept here: with per-image masking the model can fill a masked patch by copying "
+             "that location from an adjacent frame where it IS visible (temporal redundancy "
+             "=> a cheatable shortcut), and tube masking blocks that; it is standard for "
+             "video MAE (VideoMAE et al.). It was nevertheless defaulted ON without "
+             "measurement, and the measured COST is that a tube-masked region is "
+             "unpredictable from any frame, so the loss-optimal output is a generic mean --- "
+             "the HP-bar hallucination in docs/TOKENIZER_REVIEW_2026-08-02.md. Pass "
+             "--tube-masking to A/B it against the paper default.",
     )
     parser.add_argument(
         "--sequence-length",
@@ -333,6 +375,7 @@ def save_samples(
     sample_dir: Path,
     epoch: int,
     num_samples: int = 4,
+    tube: bool = False,
 ):
     """Save sample reconstructions showing original, masked, and reconstructed.
 
@@ -358,8 +401,10 @@ def save_samples(
             output_no_mask = model(sequences, mask_ratio=0.0)
             recon_no_mask = output_no_mask["reconstruction"]  # (B, T, C, H, W)
 
-            # Get reconstruction with masking (MAE style)
-            output_masked = model(sequences, mask_ratio=0.75)
+            # Get reconstruction with masking (MAE style), in the SAME mask layout this
+            # run trains under. Visualising a per-image-trained tokenizer with tube masking
+            # (or vice versa) shows an artifact the training never produced.
+            output_masked = model(sequences, mask_ratio=0.75, tube=tube)
             recon_masked = output_masked["reconstruction"]  # (B, T, C, H, W)
 
     # Visualize the middle frame of each sequence
@@ -402,6 +447,7 @@ def train_epoch(
     base_checkpoint_dir: Path = None,
     is_main: bool = True,
     ddp_model=None,
+    mask_stats: dict = None,
 ):
     """Train for one epoch with MAE training.
 
@@ -438,9 +484,15 @@ def train_epoch(
     for batch_idx, batch in enumerate(dataloader):
         frames = batch["frames"].to(device)  # (B, T, C, H, W)
 
-        # Curriculum learning: ramp up mask_ratio_max over warmup steps
-        if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
-            warmup_progress = global_step / args.mask_warmup_steps
+        # Mask ratio. DEFAULT is the paper regime: flat p ~ U(min, max) from step 0.
+        # --mask-warmup-steps > 0 re-enables the ablation ramp, and it MUST key off
+        # mask_stats["schedule_step"] (a lifetime optimizer-step count carried in the
+        # checkpoint), never global_step: --reset-schedule zeroes global_step, so the ramp
+        # restarted on every requeue and v7's mean input mask sat at 0.1-0.2 instead of the
+        # paper's ~0.45 (PAPER_DEVIATIONS 1.2).
+        sched_step = mask_stats["schedule_step"]
+        if args.mask_warmup_steps > 0 and sched_step < args.mask_warmup_steps:
+            warmup_progress = sched_step / args.mask_warmup_steps
             current_mask_max = args.mask_ratio_max * warmup_progress
             # Ensure current_mask_max >= mask_ratio_min so U(min, max) is valid
             current_mask_max = max(current_mask_max, args.mask_ratio_min)
@@ -448,7 +500,7 @@ def train_epoch(
             current_mask_max = args.mask_ratio_max
 
         # With p_zero_mask probability, use mask_ratio=0.0 (full reconstruction)
-        # Otherwise sample from U(mask_ratio_min, current_max) avoiding near-zero masking
+        # Otherwise sample from U(mask_ratio_min, current_max)
         if random.random() < args.p_zero_mask:
             mask_ratio = 0.0
         else:
@@ -460,6 +512,15 @@ def train_epoch(
             frames.shape[0], frames.shape[1], mask_ratio, frames.device,
             tube=args.tube_masking,
         )
+
+        # REALISED mask fraction, accumulated over the checkpoint's whole LIFETIME. The
+        # curriculum bug was only ever visible in per-step logs and nothing aggregated
+        # them, so nobody noticed the input mask was ~0.15. make_mask rounds the ratio to
+        # a whole number of patches, so recompute rather than trusting mask_ratio.
+        mask_stats["ratio_sum"] += (
+            round(mask_ratio * base_model.num_patches) / base_model.num_patches
+        )
+        mask_stats["ratio_count"] += 1
 
         # Mixed precision forward
         with autocast(device_type=device_type, dtype=dtype):
@@ -511,6 +572,7 @@ def train_epoch(
             scheduler.step()
             optimizer.zero_grad()
             global_step += 1
+            mask_stats["schedule_step"] += 1
 
             if args.max_steps > 0 and global_step >= args.max_steps:
                 if checkpoint_dir:
@@ -518,6 +580,7 @@ def train_epoch(
                         checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
                         epoch, global_step, losses["loss"].item(), args,
                         scheduler=scheduler, rms_trackers=rms_trackers,
+                        mask_stats=mask_stats,
                     )
                 print(f"max_steps={args.max_steps} reached. Exiting.", flush=True)
                 return {
@@ -579,6 +642,7 @@ def train_epoch(
                 checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
                 epoch, global_step, losses["loss"].item(), args,
                 scheduler=scheduler, rms_trackers=rms_trackers, step_path=step_path,
+                mask_stats=mask_stats,
             )
             last_saved_step = global_step
 
@@ -590,6 +654,7 @@ def train_epoch(
                     checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
                     epoch, global_step, losses["loss"].item(), args,
                     scheduler=scheduler, rms_trackers=rms_trackers,
+                    mask_stats=mask_stats,
                 )
             _preempt.clear_checkpoint_now()
 
@@ -600,6 +665,7 @@ def train_epoch(
                     checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
                     epoch, global_step, losses["loss"].item(), args,
                     scheduler=scheduler, rms_trackers=rms_trackers,
+                    mask_stats=mask_stats,
                 )
             print(f"Preempted at step {global_step}. Exiting.", flush=True)
             return {
@@ -615,9 +681,14 @@ def train_epoch(
         if batch_idx % args.log_interval == 0:
             elapsed = time.time() - start_time
             samples_per_sec = (batch_idx + 1) * args.batch_size / elapsed
-            mask_info = f"Mask: {mask_ratio:.2f}"
-            if args.mask_warmup_steps > 0 and global_step < args.mask_warmup_steps:
-                mask_info += f" (max: {current_mask_max:.2f})"
+            # Realised mean mask over the checkpoint LIFETIME. This is the number that
+            # would have exposed the curriculum bug at a glance -- the paper regime should
+            # settle near (1 - p_zero_mask) * (min + max) / 2, i.e. ~0.40 at the defaults.
+            realised_mean = mask_stats["ratio_sum"] / max(mask_stats["ratio_count"], 1)
+            mask_info = f"Mask: {mask_ratio:.2f} (realised mean {realised_mean:.3f})"
+            if args.mask_warmup_steps > 0 and mask_stats["schedule_step"] < args.mask_warmup_steps:
+                mask_info += (f" [ramp max {current_mask_max:.2f} @ lifetime step "
+                              f"{mask_stats['schedule_step']}/{args.mask_warmup_steps}]")
             current_lr = scheduler.get_last_lr()[0]
 
             log_dict = {
@@ -627,6 +698,8 @@ def train_epoch(
                 "train/psnr": batch_psnr,
                 "train/lr": current_lr,
                 "train/mask_ratio": mask_ratio,
+                "train/mask_ratio_realised_mean": realised_mean,
+                "train/mask_schedule_step": mask_stats["schedule_step"],
                 "train/mask_max": current_mask_max,
                 "train/samples_per_sec": samples_per_sec,
                 "train/epoch": epoch,
@@ -719,7 +792,11 @@ def main():
     print(f"Learning rate: {args.lr}")
     print(f"LPIPS weight: {args.lpips_weight}")
     print(f"Mask ratio: {args.p_zero_mask:.0%} p=0, else U({args.mask_ratio_min}, {args.mask_ratio_max})")
-    print(f"Mask warmup steps: {args.mask_warmup_steps} (curriculum learning)")
+    print("Mask schedule: " + (
+        f"CURRICULUM ABLATION -- ramp to max over {args.mask_warmup_steps} LIFETIME steps"
+        if args.mask_warmup_steps > 0 else "FLAT from step 0 (paper 3.1, no curriculum)"))
+    print("Mask layout:   " + ("TUBE (ablation: same patches in every frame)"
+                               if args.tube_masking else "PER-IMAGE (paper 3.1)"))
     print(f"Step save interval: {args.step_save_interval}")
     print("=" * 60)
 
@@ -865,15 +942,49 @@ def main():
     # Resume if checkpoint provided
     start_epoch = 0
     global_step = 0
+    # Mask-schedule clock, deliberately SEPARATE from global_step: --reset-schedule zeroes
+    # global_step, and while the mask curriculum keyed off it every requeue restarted the
+    # ramp (PAPER_DEVIATIONS 1.2). ratio_sum/count carry the realised mean across requeues.
+    mask_stats = {"schedule_step": 0, "ratio_sum": 0.0, "ratio_count": 0}
     if args.resume:
         print(f"Resuming from {args.resume}..."
               + ("  [--reset-schedule: fresh LR schedule from step 0]" if args.reset_schedule else ""))
+        ckpt_extras: dict = {}
         start_epoch, global_step, _, _ = load_checkpoint(
             Path(args.resume), model, optimizer, scaler, scheduler=scheduler,
             rms_trackers=rms_trackers, reset_schedule=args.reset_schedule,
+            extras_out=ckpt_extras,
         )
+        if "mask_schedule_step" in ckpt_extras:
+            mask_stats["schedule_step"] = int(ckpt_extras["mask_schedule_step"])
+            mask_stats["ratio_sum"] = float(ckpt_extras.get("mask_ratio_sum", 0.0))
+            mask_stats["ratio_count"] = int(ckpt_extras.get("mask_ratio_count", 0))
+        else:
+            # Pre-fix checkpoint: no lifetime counter exists. The recorded global_step is
+            # the best available floor, but it UNDER-counts for any lineage that was ever
+            # resumed with --reset-schedule (which zeroed it) -- the v7 failure mode.
+            mask_stats["schedule_step"] = int(ckpt_extras.get("global_step") or 0)
+            if args.mask_warmup_steps > 0:
+                if args.reset_schedule and not args.allow_mask_reramp:
+                    raise SystemExit(
+                        f"REFUSING --reset-schedule with --mask-warmup-steps "
+                        f"{args.mask_warmup_steps} on {args.resume}: this checkpoint "
+                        f"predates lifetime mask-step recording, so the curriculum cannot "
+                        f"be continued and would silently RE-RAMP from 0 -- the exact bug "
+                        f"that held v7's mean input mask at 0.1-0.2 instead of the paper's "
+                        f"~0.45 (PAPER_DEVIATIONS 1.2). Use --mask-warmup-steps 0 (the "
+                        f"paper regime: flat U(min,max)), or pass --allow-mask-reramp to "
+                        f"accept the re-ramp deliberately.")
+                print(f"WARNING: {args.resume} predates lifetime mask-step recording; "
+                      f"seeding the mask curriculum from its global_step="
+                      f"{mask_stats['schedule_step']}. If this lineage was ever resumed "
+                      f"with --reset-schedule that value under-counts.")
         # Resume at the same epoch (don't increment — the epoch may not be complete)
-        print(f"Resuming from epoch {start_epoch}, step {global_step}")
+        print(f"Resuming from epoch {start_epoch}, step {global_step}; "
+              f"mask schedule step {mask_stats['schedule_step']}"
+              + (f", realised mean mask {mask_stats['ratio_sum'] / mask_stats['ratio_count']:.3f}"
+                 f" over {mask_stats['ratio_count']} micro-steps"
+                 if mask_stats["ratio_count"] else ""))
 
     # Training loop
     best_loss = float("inf")
@@ -892,7 +1003,7 @@ def main():
         metrics = train_epoch(
             model, dataloader, optimizer, scaler, scheduler, loss_fn, rms_trackers,
             args.device, epoch, global_step, args, checkpoint_dir, base_checkpoint_dir,
-            is_main=is_main, ddp_model=ddp_model,
+            is_main=is_main, ddp_model=ddp_model, mask_stats=mask_stats,
         )
 
         global_step = metrics["global_step"]
@@ -909,6 +1020,8 @@ def main():
             "epoch/lpips": metrics["lpips"],
             "epoch/psnr": metrics["psnr"],
             "epoch/epoch": epoch + 1,
+            "epoch/mask_ratio_realised_mean":
+                mask_stats["ratio_sum"] / max(mask_stats["ratio_count"], 1),
         }, step=global_step)
 
         # Save history
@@ -924,6 +1037,7 @@ def main():
                 checkpoint_dir, base_checkpoint_dir, model, optimizer, scaler,
                 epoch, global_step, metrics["loss"], args,
                 scheduler=scheduler, rms_trackers=rms_trackers, step_path=epoch_path,
+                mask_stats=mask_stats,
             )
 
         # Save best model (rank 0 only)
@@ -934,7 +1048,7 @@ def main():
                 save_checkpoint(
                     best_path, model, optimizer, scaler, epoch, global_step,
                     metrics["loss"], args, scheduler=scheduler, rms_trackers=rms_trackers,
-                    extra={"model_type": "transformer_tokenizer"},
+                    extra={"model_type": "transformer_tokenizer", **_mask_extra(mask_stats)},
                 )
                 print(f"New best model saved (loss: {best_loss:.4f})")
 
@@ -944,7 +1058,8 @@ def main():
 
         # Save sample reconstructions (rank 0 only)
         if is_main:
-            save_samples(model, dataloader, args.device, sample_dir, epoch + 1)
+            save_samples(model, dataloader, args.device, sample_dir, epoch + 1,
+                         tube=args.tube_masking)
 
     # Save training history (rank 0 only)
     if is_main:

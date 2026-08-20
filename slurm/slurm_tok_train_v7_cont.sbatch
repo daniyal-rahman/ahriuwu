@@ -57,7 +57,8 @@ CMD=(
   --num-latents 512
   --temporal-every 4
   --mse-on-full-frame
-  --tube-masking
+  # Paper masking regime (paper 3.1): PER-IMAGE masking, flat p~U(0,0.9). --tube-masking
+  # and --mask-warmup-steps are ablation opt-ins now — see PAPER_DEVIATIONS 1.1/1.2.
   # --- training: warmup -> flat -> planned decay at 2-epoch tail ---
   --use-rope
   --sequence-length 20
@@ -75,7 +76,8 @@ CMD=(
   --epochs 999
   --max-steps 15132        # ~2 epochs total (484217/64 = 7566 optsteps/epoch x 2)
   --mask-ratio-min 0.0
-  --mask-warmup-steps 2000
+  --mask-ratio-max 0.9
+  --mask-warmup-steps 0
   --step-save-interval 30
   --checkpoint-warn-minutes 90
   --num-workers 6

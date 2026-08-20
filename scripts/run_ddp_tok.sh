@@ -38,11 +38,16 @@ RESUME="${RESUME:-$CHECKPOINT_DIR/transformer_tokenizer_latest.pt}"
 MAX_STEPS="${MAX_STEPS:-6000}"
 NUM_WORKERS="${NUM_WORKERS:-6}"              # PER RANK (NGPU*NUM_WORKERS total dataloader procs)
 WANDB_TAGS="${WANDB_TAGS:-v7 ddp 8x5090 d1024-8x8 paper-encoder-512x16}"
-RESET_SCHEDULE="${RESET_SCHEDULE:-1}"        # continuation past decay -> fresh LR schedule
+# Default 0 = plain continuation. This defaulted to 1, so EVERY launch of this script --
+# including an unattended crash-restart loop -- reset the step clock: the LR re-warmed and
+# (while the mask curriculum keyed off global_step) the mask ramp restarted from 0. That is
+# the live half of PAPER_DEVIATIONS 1.2. Set RESET_SCHEDULE=1 only for the one case that
+# wants it: seeding a NEW run from a checkpoint whose WSD decay already finished (LR~0).
+RESET_SCHEDULE="${RESET_SCHEDULE:-0}"
 
 source scripts/v7_train_args.sh              # -> V7_ARGS (single source of truth)
 
-[ -f "$RESUME" ] && echo "Resuming from $RESUME (--reset-schedule)" \
+[ -f "$RESUME" ] && echo "Resuming from $RESUME (RESET_SCHEDULE=$RESET_SCHEDULE)" \
                  || echo "No checkpoint at $RESUME — COLD START (set RESUME to the v7 latest.pt)"
 echo "DDP tokenizer: NGPU=$NGPU  frames=$FRAMES_DIR  max_steps=$MAX_STEPS  workers/rank=$NUM_WORKERS"
 

@@ -37,7 +37,13 @@ V7_ARGS=(
   --model-size large --num-encoder-layers 8 --num-decoder-layers 8
   --latent-dim 16 --num-latents 512 --temporal-every 4
   # --- objective / masking ---
-  --mse-on-full-frame --tube-masking --mask-ratio-min 0.0 --mask-warmup-steps 2000
+  # PAPER MASKING REGIME (paper 3.1): per-image masking, flat p~U(0,0.9) from step 0.
+  # v7 ran --tube-masking --mask-warmup-steps 2000; because resumes re-zeroed the step clock
+  # the ramp restarted on every requeue and the measured mean INPUT mask was 0.1-0.2 instead
+  # of ~0.45, so the MAE benefit the paper claims was never purchased (PAPER_DEVIATIONS
+  # 1.1/1.2). Both knobs are now OFF by default in the trainer; add --tube-masking or
+  # --mask-warmup-steps N back only to run that ablation deliberately.
+  --mse-on-full-frame --mask-ratio-min 0.0 --mask-ratio-max 0.9 --mask-warmup-steps 0
   # --- training (eff batch 64; under DDP the script splits grad-accum across ranks) ---
   --use-rope --sequence-length 20 --batch-size "$BATCH_SIZE" --gradient-accumulation "$GRAD_ACCUM"
   --gradient-checkpointing --lpips-frame-subsample 16

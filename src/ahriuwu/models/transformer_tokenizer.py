@@ -716,7 +716,7 @@ class TransformerTokenizer(nn.Module):
         T: int,
         mask_ratio: float,
         device: torch.device,
-        tube: bool = True,
+        tube: bool = False,
     ) -> torch.Tensor | None:
         """Generate MAE mask outside of torch.compile boundary.
 
@@ -724,16 +724,21 @@ class TransformerTokenizer(nn.Module):
         then the first ``num_masked`` columns are flipped to True via scatter_.
         One kernel each — no Python for-loop over B*T.
 
-        ``tube`` (default True): TUBE masking — the SAME spatial patch locations
-        are masked across ALL T frames of a clip. This blocks the temporal-copy
-        shortcut where, with per-frame-independent masking, the model fills a
-        masked patch by copying the same location from an adjacent frame where
-        it happens to be visible (temporal redundancy lets it avoid learning).
-        Tube masking forces a patch location to be hidden in every frame, so the
-        model must actually infer it. Standard for video MAE (VideoMAE et al.).
+        ``tube=False`` (DEFAULT): per-image masking — each frame draws its own
+        patch locations. This is the paper's regime (§3.1: *"Patches of each
+        image are replaced…"*); the phrase "tube masking" appears nowhere in it.
 
-        ``tube=False``: per-frame-independent masking (pre-2026-06-03 behavior),
-        which is cheatable via temporal copying — kept only for ablation.
+        ``tube=True``: TUBE masking — the SAME spatial patch locations are masked
+        across ALL T frames of a clip. The recorded argument for it is real: with
+        per-image masking the model can fill a masked patch by copying that
+        location from an adjacent frame where it happens to be visible (temporal
+        redundancy lets it avoid learning), and tube masking forces the location
+        to be hidden in every frame; it is standard for video MAE (VideoMAE et
+        al.). It was nevertheless the default here without measurement, and the
+        measured cost is that a tube-masked region is unpredictable from ANY
+        frame, so the loss-optimal output is a generic mean — the HP-bar
+        hallucination in docs/TOKENIZER_REVIEW_2026-08-02.md. Kept as an
+        ablation, no longer the default.
 
         Args:
             B: batch size
@@ -759,7 +764,7 @@ class TransformerTokenizer(nn.Module):
             # Broadcast the same spatial mask to every frame: (B, T, P)
             mask_indices = tube_mask.unsqueeze(1).expand(B, T, self.num_patches).contiguous()
         else:
-            # Per-frame-independent (cheatable via temporal copy) — ablation only.
+            # Per-image masking (paper §3.1): each frame draws its own locations.
             noise = torch.rand(B, T, self.num_patches, device=device)
             perm = noise.argsort(dim=-1)  # (B, T, P) — independent permutations
             mask_indices = torch.zeros(
@@ -845,7 +850,7 @@ class TransformerTokenizer(nn.Module):
         x: torch.Tensor,
         mask_ratio: float = 0.0,
         mask_indices: torch.Tensor | None = None,
-        tube: bool = True,
+        tube: bool = False,
     ) -> dict:
         """Forward pass: encode then decode.
 
@@ -854,7 +859,8 @@ class TransformerTokenizer(nn.Module):
             mask_ratio: MAE mask ratio — used only if mask_indices is None
             mask_indices: pre-computed mask from make_mask() (preferred)
             tube: tube masking (same spatial locations across frames) when this
-                forward generates its own mask. Ignored if mask_indices given.
+                forward generates its own mask; default False = the paper's
+                per-image masking. Ignored if mask_indices given.
 
         Returns:
             dict with:
