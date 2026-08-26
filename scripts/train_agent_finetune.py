@@ -154,7 +154,7 @@ def parse_args():
                         help="Sticky-categorical movement: a per-offset gate predicts P(new "
                              "movement command); the bin categorical only explains transitions. "
                              "Fixes the copy-shortcut (77%% of frames are held actions).")
-    parser.add_argument("--movement-action-mode", choices=["held", "event_only"],
+    parser.add_argument("--movement-action-mode", choices=["held", "event_only", "none"],
                         default="held",
                         help="'held' (legacy) carries the click target forward every "
                              "frame, putting the BC target in the model's own input on "
@@ -163,7 +163,18 @@ def parse_args():
                              "supplies the movement action ONLY on click frames -- the "
                              "honest observation, and it makes --action-dropout far "
                              "more effective because the answer stops being replicated "
-                             "across the whole hold run.")
+                             "across the whole hold run. 'none' NEVER supplies the "
+                             "movement action (cursor_valid forced all-False, so "
+                             "no_action_embed is substituted on every frame): the "
+                             "CEILING EXPERIMENT. With zero action access the copy "
+                             "shortcut is structurally impossible, so if the head still "
+                             "cannot beat the blind-table bar printed at startup for "
+                             "this split, the problem is PERCEPTION, not the objective, "
+                             "and no amount of dropout/representation work will help. "
+                             "Ability actions are untouched in all modes. NOTE: "
+                             "agent_infer reads this mode from the checkpoint args and "
+                             "mirrors it at inference, so a run trained here deploys "
+                             "with the same action input.")
     parser.add_argument("--action-dropout", type=float, default=0.0,
                         help="Per-frame prob of masking the movement action-history INPUT to "
                              "no_action_embed (cursor_valid=False) during training. Breaks the "
@@ -313,6 +324,49 @@ ACTION_EMBED_PREFIXES = ("action_embed", "no_action_embed")
 # target, and those runs trained the legacy `label.cursor.screen` target. Absence therefore
 # means 'cursor', not 'unknown'.
 LEGACY_MOVEMENT_SOURCE = "cursor"
+
+# ---------------------------------------------------------------------------
+# Reference constants for `move_event_ce` — the ONLY movement number that can
+# tell us whether the head learned anything from pixels.
+#
+# `bc_movement` (the gated loss) CANNOT: hold frames are algebraically capped at
+# -log(1-g) = 0.116 nats and contribute <=14% of it, so it is dominated by the
+# gate. It fell 0.871 -> 0.727 over 100k steps while the head learned NOTHING
+# from pixels (docs/MOVEMENT_HEAD_BLIND_2026-08-26.md).
+#
+# All four numbers are the SAME quantity: the movement CATEGORICAL cross-entropy
+# in nats, summed over the two axes, at MTP offset n=1, on EVENT frames only
+# (frames where a new movement command was actually issued), held out. No gate.
+# COMPARE LIKE WITH LIKE. The CE level shifts with the game mix, so a bar
+# measured on one split is not a bar on another. The PRIMARY numbers below are
+# the trainer's DEFAULT 6-game val split; the doc's widely-quoted 4.357/4.365 are
+# a 3-game / ~190-event measurement (SE ~0.12) and are kept only as secondary
+# references. Reading a 6-game run against the 3-game bar understates the bar by
+# ~0.24 nats and would let a blind head "clear" it.
+#
+# Better still: `blind_table_bar()` recomputes the table on the ACTUAL split in
+# use at eval time (it is nearly free -- the labels are already in
+# dataset.match_data), and main() prints that next to the constant so a mismatch
+# is visible instead of silent.
+MOVE_CE_CHANCE = 6.089        # uniform over both axes, 2*ln(21). Split-independent.
+
+# --- PRIMARY: the trainer's default 6-game val split -----------------------
+# (scratchpad/label_baselines.json: fitted on 24 train games, 14,564 val events)
+MOVE_CE_MARGINAL = 5.2321     # corpus click-bin marginal — frame-blind, fitted prior
+MOVE_CE_BLIND_TABLE = 4.1214  # <-- THE BAR. 21x21 lookup p(next bin | prev bin), NO PIXELS.
+                              #     At or above this, the head learned nothing from vision.
+MOVE_CE_BLIND_TABLE_N = 14564 # val event frames behind that number
+MOVE_CE_DEPLOYED = 4.1212     # data/phase2_bc_clicks/agent_finetune_latest.pt (step 102,420),
+                              # measured through THIS metric on 946 val event frames:
+                              # it matches the no-pixel table to 0.0002 nats. 146M params,
+                              # zero vision. A run scoring ~4.2 has cleared NOTHING.
+
+# --- SECONDARY: the 3-game measurement quoted in the doc --------------------
+# docs/MOVEMENT_HEAD_BLIND_2026-08-26.md, ~1,800 frames / ~190 events, SE ~0.12.
+# Do NOT judge a 6-game val run against these.
+MOVE_CE_MARGINAL_3G = 5.216
+MOVE_CE_BLIND_TABLE_3G = 4.357
+MOVE_CE_DEPLOYED_3G = 4.365
 
 
 def checkpoint_movement_source(ckpt: dict) -> tuple[str, str]:
@@ -560,6 +614,69 @@ def select_val_matches(dataset, args) -> set[str]:
     return {eligible[min(int(i * step), len(eligible) - 1)] for i in range(n)}
 
 
+def blind_table_bar(dataset, train_vids, val_vids, movement_bins, laplace=0.5):
+    """THE BAR, recomputed on the split actually in use. No pixels, no model.
+
+    The opponent `move_event_ce` has to beat is a 21x21 count table
+    p(next bin | prev bin) per axis, fitted on the TRAIN games' click stream and
+    evaluated on the VAL games' click stream -- the predictor that knows only
+    where the last order pointed. The deployed 146M checkpoint matches it to
+    0.0002 nats.
+
+    A hardcoded bar belongs to the split it was measured on, and the CE level
+    moves with the game mix (4.357 on 3 games vs 4.121 on 6). Since
+    ``dataset.match_data`` already holds every game's parsed movement stream --
+    it is built by _parse_match and restored from the index cache -- recomputing
+    the table here costs a few numpy ops and no I/O at all, so the bar can never
+    silently belong to a different split than the number beside it.
+
+    Returns ``(bar_nats, n_val_events, n_train_events)``; bar is NaN when the
+    split carries no click events (e.g. --movement-source cursor, whose target
+    has no event stream at all -- the metric is undefined there, and so is this).
+    """
+    import numpy as np
+
+    def pairs(vids):
+        """(new_bin, prev_bin) at every real command, over these games."""
+        new, old = [], []
+        for v in sorted(vids):
+            md = dataset.match_data.get(v)
+            if md is None:
+                continue
+            ev = md.get("movement_event")
+            mv = md.get("movement")
+            if ev is None or mv is None:
+                continue
+            ev = np.asarray(ev, dtype=bool).reshape(-1)
+            mv = np.asarray(mv, dtype=np.float64).reshape(len(ev), -1)
+            # Same discretization as PolicyHead.discretize_movement, so the table
+            # and the head are scored on IDENTICAL targets.
+            idx = np.clip(np.rint(np.clip(mv, 0.0, 1.0) * (movement_bins - 1)),
+                          0, movement_bins - 1).astype(np.int64)
+            e = np.flatnonzero(ev)
+            e = e[e > 0]                       # a first-frame event has no prev
+            if len(e) == 0:
+                continue
+            new.append(idx[e])
+            old.append(idx[e - 1])
+        if not new:
+            return None, None
+        return np.concatenate(new), np.concatenate(old)
+
+    tr_new, tr_old = pairs(train_vids)
+    va_new, va_old = pairs(val_vids)
+    if tr_new is None or va_new is None:
+        return float("nan"), 0, 0
+    B = movement_bins
+    ce = 0.0
+    for ax in range(min(tr_new.shape[1], 2)):
+        M = np.full((B, B), laplace)
+        np.add.at(M, (tr_old[:, ax], tr_new[:, ax]), 1.0)
+        M /= M.sum(1, keepdims=True)
+        ce += float(-np.log(M[va_old[:, ax], va_new[:, ax]]).mean())
+    return ce, int(len(va_new)), int(len(tr_new))
+
+
 def build_val_order(dataset, val_vids, batch_size, n_batches):
     """Fixed val sequence order: an equal, evenly-spaced slice of every val game.
 
@@ -663,6 +780,12 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
     ability_nll = torch.zeros((), device=agent_out.device)
     move_nll = torch.zeros((), device=agent_out.device)
     gate_fire_t = gate_fire_h = trans_frac = torch.zeros((), device=agent_out.device)
+    # move_event_* : the acceptance-test metric (see MOVE_CE_BLIND_TABLE above).
+    # NaN, not 0, until it is actually computed — a metric that is undefined must
+    # read as undefined, never as a great score.
+    nan = torch.full((), float("nan"), device=agent_out.device)
+    move_event_ce, move_event_acc = nan, nan
+    move_event_n = torch.zeros((), device=agent_out.device)
     n_terms = 0
     for n in range(1, mtp_length):  # n >= 1: predict the NEXT actions only
         if T - n <= 0:
@@ -692,6 +815,30 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
                     pred = m_logits.argmax(-1)
                     is_noop = cls == policy_head.NO_OP
                     trans_frac = (~is_noop).float().mean()
+                    # --- move_event_ce (joint_noop) --------------------------
+                    # Score ONLY the frames whose target is a real grid cell
+                    # (i.e. movement_event). The NO_OP LOGIT IS DROPPED and the
+                    # remaining bins**2 renormalized: the 'axis' head has no way
+                    # to say "no new order", so leaving NO_OP mass in would add a
+                    # constant -log P(fire) (~2 nats at the measured 10% event
+                    # rate) and put the 4.357 bar out of reach BY CONSTRUCTION,
+                    # not by anything the head did or did not learn. What is
+                    # compared across modes is P(cell | a command fires).
+                    # Without movement_event (legacy caches) nothing is NO_OP, so
+                    # `~is_noop` would silently select HOLD frames too — where the
+                    # target is bit-for-bit the input and the score is meaningless.
+                    # Leave the metric NaN rather than report that number.
+                    ev_m = (~is_noop) if movement_event is not None \
+                        else torch.zeros_like(is_noop)
+                    move_event_n = ev_m.sum().float()
+                    if move_event_n > 0:
+                        grid_lsm = F.log_softmax(
+                            m_logits[..., :policy_head.NO_OP].float(), dim=-1)
+                        lp = grid_lsm.gather(-1, cls.clamp_max(policy_head.NO_OP - 1)
+                                             .unsqueeze(-1)).squeeze(-1)
+                        move_event_ce = -lp[ev_m].mean()
+                        move_event_acc = (grid_lsm.argmax(-1)[ev_m]
+                                          == cls[ev_m]).float().mean()
                     # reuse the gate slots: "fires on a real command" vs "on a hold"
                     gate_fire_t = (pred != policy_head.NO_OP)[~is_noop].float().mean() \
                         if (~is_noop).any() else torch.zeros((), device=cls.device)
@@ -702,6 +849,29 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
 
         m_logits = movement_logits[:, :T - n, n, :, :]       # (B, T-n, move_dim, bins)
         m_idx = move_idx_full[:, n:, :]                      # (B, T-n, move_dim)
+        if n == 1:
+            # --- move_event_ce (axis) -----------------------------------------
+            # The pure CATEGORICAL NLL at the true bin on EVENT frames, summed
+            # over the axes. THE GATE IS EXCLUDED ENTIRELY: `bc_movement` is the
+            # gated mixture and is dominated by the 90% of frames that hold, so
+            # it cannot show whether the head sees anything. This can — compare
+            # it to MOVE_CE_BLIND_TABLE (4.357).
+            with torch.no_grad():
+                if movement_event is None:
+                    # No event stream => we cannot tell a real command from a
+                    # held label, and scoring holds is the trap this metric
+                    # exists to avoid. Undefined, so: NaN.
+                    pass
+                else:
+                    ev_m = movement_event[:, n:].to(torch.bool)   # (B, T-n)
+                    move_event_n = ev_m.sum().float()
+                    if move_event_n > 0:
+                        lsm = F.log_softmax(m_logits.float(), dim=-1)
+                        lp = lsm.gather(-1, m_idx.unsqueeze(-1)).squeeze(-1).sum(-1)
+                        move_event_ce = -lp[ev_m].mean()
+                        # top-1 of the argmax CELL: both axes must be right.
+                        move_event_acc = (lsm.argmax(-1) == m_idx).all(-1)[ev_m] \
+                            .float().mean()
         if gated:
             # Sticky-categorical NLL: prev bin for target a_{t+n} is a_{t+n-1}
             # (n>=1, so the previous target is always in-window).
@@ -743,7 +913,10 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
     move_nll = move_nll / n_terms
     return ability_nll + move_nll, {"bc_ability": ability_nll, "bc_movement": move_nll,
                                     "gate_on_trans": gate_fire_t, "gate_on_hold": gate_fire_h,
-                                    "trans_frac": trans_frac}
+                                    "trans_frac": trans_frac,
+                                    "move_event_ce": move_event_ce,
+                                    "move_event_acc": move_event_acc,
+                                    "move_event_n": move_event_n}
 
 
 # ---------------------------------------------------------------------------
@@ -798,11 +971,24 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
     # event_only ALONE is weak: the previous click is still inside the 16-frame
     # window 93.3% of the time (measured, 5,513 gaps), so the model can attend
     # back to it. Pair it with a real dropout rate.
-    if getattr(args, "movement_action_mode", "held") == "event_only" and \
-            dynamics.use_actions and "cursor_valid" in actions:
-        ev_in = actions.get("movement_event")
-        if ev_in is not None:
-            actions["cursor_valid"] = actions["cursor_valid"] & ev_in.to(torch.bool)
+    # 'none': the movement action NEVER reaches the model -- cursor_valid is
+    # forced all-False so embed_actions substitutes no_action_embed on every
+    # frame. This is the CEILING EXPERIMENT: the copy shortcut is structurally
+    # unavailable (there is nothing to copy), so move_event_ce measures what the
+    # head can read out of PIXELS alone. If that still cannot beat 4.357, the
+    # problem is perception and every dropout/representation variant is wasted
+    # GPU time. cursor_valid gates ONLY the movement embedding in
+    # dynamics.embed_actions -- ability embeddings are added unconditionally --
+    # so the ability action history is untouched in all three modes.
+    _mv_mode = getattr(args, "movement_action_mode", "held")
+    if _mv_mode != "held" and dynamics.use_actions and "cursor_valid" in actions:
+        if _mv_mode == "none":
+            actions["cursor_valid"] = torch.zeros_like(actions["cursor_valid"],
+                                                       dtype=torch.bool)
+        else:  # event_only
+            ev_in = actions.get("movement_event")
+            if ev_in is not None:
+                actions["cursor_valid"] = actions["cursor_valid"] & ev_in.to(torch.bool)
 
     p_drop = getattr(args, "action_dropout", 0.0)
     if p_drop > 0 and dynamics.use_actions and "cursor_valid" in actions:
@@ -881,7 +1067,9 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
         "bc_ability": bc_info["bc_ability"].detach(),
         "bc_movement": bc_info["bc_movement"].detach(),
         "aux_state": aux_loss.detach(),
-        **{k: bc_info[k].detach() for k in ("gate_on_trans", "gate_on_hold", "trans_frac")
+        **{k: bc_info[k].detach() for k in
+           ("gate_on_trans", "gate_on_hold", "trans_frac",
+            "move_event_ce", "move_event_acc", "move_event_n")
            if k in bc_info},
     }
     return total, info
@@ -902,7 +1090,13 @@ def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, dev
     p_drop, args.action_dropout = getattr(args, "action_dropout", 0.0), 0.0
     keys = ("loss", "bc_loss", "bc_ability", "bc_movement", "reward_loss",
             "aux_state", "gate_on_trans", "gate_on_hold", "trans_frac")
+    # move_event_ce/acc are averaged over EVENT FRAMES, not over batches: the
+    # event count varies per batch (median hold run 5 frames), so a mean of
+    # per-batch means would weight a batch with 3 events like one with 300.
+    ev_keys = ("move_event_ce", "move_event_acc")
     acc = {k: 0.0 for k in keys}
+    ev_acc = {k: 0.0 for k in ev_keys}
+    ev_n = 0.0
     n = 0
     cpu_rng = torch.get_rng_state()
     dev_rng = torch.cuda.get_rng_state(device) if device.startswith("cuda") else None
@@ -917,6 +1111,12 @@ def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, dev
             for k in keys:
                 if k in info:
                     acc[k] += info[k].item()
+            m = float(info["move_event_n"].item()) if "move_event_n" in info else 0.0
+            if m > 0 and all(torch.isfinite(info[k]).item() for k in ev_keys if k in info):
+                ev_n += m
+                for k in ev_keys:
+                    if k in info:
+                        ev_acc[k] += info[k].item() * m
             n += 1
             if n >= max_batches:
                 break
@@ -931,7 +1131,12 @@ def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, dev
                 state_head.train()
     if n == 0:
         return None
-    return {k: v / n for k, v in acc.items()}
+    out = {k: v / n for k, v in acc.items()}
+    # n == 0 events => NaN, never 0.0: a metric nobody could measure must not
+    # read as a perfect score.
+    out.update({k: (v / ev_n if ev_n > 0 else float("nan")) for k, v in ev_acc.items()})
+    out["move_event_n"] = ev_n
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1327,147 @@ def smoke_test(args):
         f"an unrecorded movement_source must default to {LEGACY_MOVEMENT_SOURCE!r}, "
         f"got {legacy_src!r}")
 
+    # === STEP 4: move_event_ce is ON SCALE ==================================
+    # A metric read against the wrong baseline is what hid the blind head for
+    # months, so pin the scale with a case whose answer is known exactly: a
+    # ZERO-INIT policy head emits uniform logits, and the CE of the uniform
+    # distribution over both axes is 2*ln(bins) by construction. Any indexing,
+    # axis-summing or (joint_noop) renormalization mistake breaks this equality.
+    import math
+    import types
+    exact_uniform = 2 * math.log(args.movement_bins)
+    ab_t = stack_ability_targets(batch["actions"], device)
+    zero_tok = torch.zeros(B, T, model_dim, device=device)
+    scale_report = []
+    for mode, gate in (("axis", True), ("joint_noop", False)):
+        ph = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
+                        hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
+                        movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
+                        movement_gate=gate, movement_mode=mode).to(device)
+        _, bi = bc_next_action_loss(ph, zero_tok, ab_t, mv, args.mtp_length,
+                                    movement_event=move_ev)
+        got = bi["move_event_ce"].item()
+        n_ev = int(bi["move_event_n"].item())
+        assert abs(got - exact_uniform) < 1e-4, (
+            f"move_event_ce on a UNIFORM {mode} head = {got:.6f}, must be "
+            f"2*ln({args.movement_bins}) = {exact_uniform:.6f} — the metric is "
+            f"mis-scaled and cannot be compared to the {MOVE_CE_BLIND_TABLE} bar!")
+        assert n_ev == int(move_ev[:, 1:].sum()), (
+            f"move_event_n={n_ev} != number of event frames at n=1 "
+            f"({int(move_ev[:, 1:].sum())}) — the metric is scoring the wrong frames")
+        # No event stream => the metric CANNOT be computed (scoring holds would
+        # compare the head against its own input). It must say NaN, not 0.
+        _, bi_none = bc_next_action_loss(ph, zero_tok, ab_t, mv, args.mtp_length,
+                                         movement_event=None)
+        assert math.isnan(bi_none["move_event_ce"].item()), (
+            f"{mode}: without movement_event, move_event_ce must be NaN, got "
+            f"{bi_none['move_event_ce'].item()}")
+        scale_report.append((mode, got, n_ev))
+
+    # === STEP 5: all three --movement-action-mode values run ================
+    # `none` is the ceiling experiment: the movement action never reaches the
+    # model. Prove (a) forward+backward works in every mode, (b) what actually
+    # arrives at embed_actions matches the contract, (c) the ABILITY history is
+    # byte-identical across modes — only MOVEMENT is affected.
+    saved_mode, saved_drop = args.movement_action_mode, args.action_dropout
+    args.action_dropout = 0.0        # so the mask assertions are exact
+    seen = {}
+    _orig_embed = dynamics.embed_actions
+
+    def _spy_embed(acts):
+        seen["cursor_valid"] = acts["cursor_valid"].detach().clone()
+        seen["abilities"] = torch.stack([acts[k] for k in ABILITY_KEYS], -1).clone()
+        return _orig_embed(acts)
+
+    dynamics.embed_actions = _spy_embed
+    mode_report = []
+    try:
+        for mode in ("held", "event_only", "none"):
+            args.movement_action_mode = mode
+            for p in dynamics.parameters():
+                p.grad = None
+            optimizer.zero_grad()
+            tot_m, info_m = run_step(batch, dynamics, reward_head, policy_head, schedule,
+                                     args, device, torch.float32, rms,
+                                     state_head=state_head, update_rms=False)
+            tot_m.backward()
+            assert torch.isfinite(tot_m), f"--movement-action-mode {mode}: loss is not finite"
+            g = sum(h.weight.grad.norm().item() for h in policy_head.movement_heads
+                    if h.weight.grad is not None)
+            assert g > 0, f"--movement-action-mode {mode}: movement heads got NO gradient"
+            cv = seen["cursor_valid"]
+            expect = {"held": torch.ones_like(cv),
+                      "event_only": move_ev.to(cv.device),
+                      "none": torch.zeros_like(cv)}[mode]
+            assert torch.equal(cv, expect), (
+                f"--movement-action-mode {mode}: embed_actions saw cursor_valid="
+                f"{cv.tolist()}, expected {expect.tolist()}")
+            if mode == "held":
+                ab_seen = seen["abilities"].clone()
+            else:
+                assert torch.equal(seen["abilities"], ab_seen), (
+                    f"--movement-action-mode {mode} changed the ABILITY action "
+                    "history — only the MOVEMENT action may be affected!")
+            mode_report.append((mode, float(cv.float().mean()),
+                                info_m["move_event_ce"].item(),
+                                info_m["move_event_acc"].item(),
+                                int(info_m["move_event_n"].item()),
+                                info_m["bc_movement"].item()))
+    finally:
+        del dynamics.embed_actions   # drop the spy; restores the bound method
+        args.movement_action_mode, args.action_dropout = saved_mode, saved_drop
+        optimizer.zero_grad()
+        for p in dynamics.parameters():
+            p.grad = None
+
+    # === STEP 6: the BAR is a real count table, not a constant =============
+    # Every run is judged against blind_table_bar(), so pin it with two answers
+    # known in advance: a target whose next bin is a FIXED function of the
+    # previous bin is fully learnable by a count table (CE -> ~0, only the
+    # Laplace prior left), and an independent uniform target is not learnable at
+    # all (CE -> 2*ln(bins), the same chance level move_event_ce is measured on).
+    # A bar that failed either check would silently mis-judge every future run.
+    def _stream(n, kind, seed=0):
+        g = torch.Generator().manual_seed(seed)
+        if kind == "deterministic":
+            x = torch.zeros(n, dtype=torch.long)
+            y = torch.zeros(n, dtype=torch.long)
+            y[0] = 1
+            for i in range(1, n):                      # bijections mod bins
+                x[i] = (3 * x[i - 1] + 1) % args.movement_bins
+                y[i] = (5 * y[i - 1] + 2) % args.movement_bins
+        else:
+            x = torch.randint(0, args.movement_bins, (n,), generator=g)
+            y = torch.randint(0, args.movement_bins, (n,), generator=g)
+        # bin i sits at center i/(bins-1), so this round-trips through
+        # PolicyHead.discretize_movement / blind_table_bar exactly.
+        mv = torch.stack([x, y], -1).float() / (args.movement_bins - 1)
+        return {"movement": mv, "movement_event": torch.ones(n, dtype=torch.bool)}
+
+    bar_report = []
+    for kind, lo, hi in (("deterministic", 0.0, 0.15),
+                         ("uniform", exact_uniform - 0.5, exact_uniform + 0.5)):
+        shim = types.SimpleNamespace(match_data={
+            "train_g": _stream(8000, kind, seed=1),
+            "val_g": _stream(3000, kind, seed=2)})
+        bar, n_val, n_tr = blind_table_bar(shim, ["train_g"], ["val_g"],
+                                           args.movement_bins)
+        assert lo <= bar <= hi, (
+            f"blind_table_bar on a {kind} stream = {bar:.4f}, expected "
+            f"[{lo:.3f}, {hi:.3f}] — THE BAR IS WRONG, and every run judged "
+            f"against it would be mis-read")
+        assert n_val == 2999 and n_tr == 7999, (
+            f"blind_table_bar counted {n_tr}/{n_val} train/val commands, "
+            f"expected 7999/2999 (every frame an event, minus the first)")
+        bar_report.append((kind, bar, n_tr, n_val))
+    # And it must refuse to invent a bar when the target has no event stream.
+    _no_ev = {"movement": torch.rand(64, 2), "movement_event": torch.zeros(64, dtype=torch.bool)}
+    _nan_bar, _, _ = blind_table_bar(
+        types.SimpleNamespace(match_data={"a": _no_ev, "b": _no_ev}),
+        ["a"], ["b"], args.movement_bins)
+    assert math.isnan(_nan_bar), (
+        f"with no click events the bar is undefined and must be NaN, got {_nan_bar}")
+
     print(f"  total_loss          = {info['loss'].item():.4f}")
     print(f"  bc_loss             = {info['bc_loss'].item():.4f} "
           f"(ability={info['bc_ability'].item():.4f}, movement={info['bc_movement'].item():.4f})")
@@ -1142,6 +1488,26 @@ def smoke_test(args):
           f"PROOF the gate follows COMMANDS, not bin changes)")
     print(f"  frozen backbone grads: {len(backbone_with_grad)} (must be 0)")
     print("  optimizer.step() OK")
+    print(f"  move_event_ce SCALE CHECK (uniform head must == 2*ln({args.movement_bins}) "
+          f"= {exact_uniform:.4f}):")
+    for mode, got, n_ev in scale_report:
+        print(f"      movement_mode={mode:10s} -> {got:.6f}  (n={n_ev} event frames; "
+              f"movement_event=None -> NaN, as required)")
+    print("  --movement-action-mode: forward+backward + the input contract")
+    for mode, frac, ce, acc, n_ev, bcm in mode_report:
+        print(f"      {mode:10s} cursor_valid={frac:.3f} of frames  "
+              f"move_event_ce={ce:.4f} acc={100 * acc:5.1f}% n={n_ev}  "
+              f"bc_movement={bcm:.4f}")
+    print(f"      (synthetic: {args.movement_bins} bins, so chance is "
+          f"{exact_uniform:.3f} nats -- the {MOVE_CE_BLIND_TABLE} bar is a 21-bin "
+          f"number and does NOT apply here)")
+    print("  blind_table_bar KNOWN-ANSWER CHECK (the bar every run is judged against):")
+    for kind, bar, n_tr, n_val in bar_report:
+        want = "~0 (fully learnable)" if kind == "deterministic" \
+            else f"~2*ln({args.movement_bins})={exact_uniform:.3f} (unlearnable)"
+        print(f"      {kind:14s} stream -> bar={bar:.4f}  expected {want}   "
+              f"[fit {n_tr} commands, eval {n_val}]")
+    print("      no-event stream -> NaN (refuses to invent a bar), as required")
     print("SMOKE TEST PASSED")
     return True
 
@@ -1202,6 +1568,12 @@ def main():
         print(f"  movement: JOINT {args.movement_bins}x{args.movement_bins} grid + NO_OP "
               f"= {policy_head.movement_classes} classes (no gate, PMPO-compatible), "
               f"action-dropout={args.action_dropout}")
+    if args.movement_action_mode != "held":
+        print(f"  movement ACTION INPUT: {args.movement_action_mode}"
+              + (" -- cursor_valid forced all-False, no_action_embed on EVERY frame; "
+                 "the movement action never reaches the model (ceiling experiment). "
+                 "Ability history unaffected." if args.movement_action_mode == "none"
+                 else " -- movement action supplied on click frames only."))
     print(f"  reward head: {sum(p.numel() for p in reward_head.parameters()):,}")
     print(f"  policy head: {sum(p.numel() for p in policy_head.parameters()):,}")
     state_head = None
@@ -1233,6 +1605,25 @@ def main():
         print(f"  [split] train {len(train_vids)} games / val {len(val_vids)} games "
               f"({len(dataset) - len(val_idx)} / {len(val_idx)} sequences), disjoint")
         print(f"  [split] val games: {sorted(val_vids)}")
+        # THE BAR, on THIS split. Hardcoding it is how a 6-game run gets read
+        # against a 3-game number and "clears" a bar it never reached, so
+        # recompute it from the split actually in use (free: labels are already
+        # parsed) and print the hardcoded reference next to it. A gap between
+        # the two means the constants belong to a different split than this run.
+        args.move_ce_bar, args.move_ce_bar_n, _n_tr = blind_table_bar(
+            dataset, train_vids, val_vids, args.movement_bins)
+        if args.move_ce_bar == args.move_ce_bar:      # not NaN
+            print(f"  [bar] blind p(next bin | prev bin) table on THIS split: "
+                  f"{args.move_ce_bar:.4f} nats  (no pixels; fit {len(train_vids)} "
+                  f"train games / {_n_tr:,} commands, eval {len(val_vids)} val games "
+                  f"/ {args.move_ce_bar_n:,} commands)")
+            print(f"  [bar] hardcoded refs: 6-game split {MOVE_CE_BLIND_TABLE:.4f} "
+                  f"(n={MOVE_CE_BLIND_TABLE_N:,}), 3-game doc {MOVE_CE_BLIND_TABLE_3G:.3f}. "
+                  f"move_event_ce must fall CLEARLY below the split bar above; at or "
+                  f"near it the head learned nothing from pixels.")
+        else:
+            print("  [bar] blind-table bar UNAVAILABLE on this split (no click "
+                  "events in the movement target) — move_event_ce will be NaN too.")
     else:
         print("  [split] !!! NO VALIDATION SET (--val-games 0): every metric this run "
               "reports is IN-SAMPLE and cannot show generalization.")
@@ -1410,6 +1801,28 @@ def main():
                           f"bc={v['bc_loss']:.4f} (abil={v['bc_ability']:.3f} "
                           f"move={v['bc_movement']:.3f}) rew={v['reward_loss']:.4f} "
                           f"aux={v['aux_state']:.4f}  [{len(val_vids)} held-out games]")
+                    # THE acceptance test. `move` above is the GATED loss and is
+                    # dominated by the gate — it fell 0.871 -> 0.727 while the head
+                    # learned nothing from pixels. This line is the one to read.
+                    # The bar is the one computed for THIS split when available;
+                    # its provenance is printed with it so it can never be read
+                    # against a number measured on different games.
+                    _bar = getattr(args, "move_ce_bar", float("nan"))
+                    if _bar == _bar:
+                        _bar_s = (f"(bar {_bar:.4f}, this split, "
+                                  f"n={int(getattr(args, 'move_ce_bar_n', 0)):,})")
+                    else:
+                        _bar_s = (f"(bar {MOVE_CE_BLIND_TABLE:.4f}, 6-game split, "
+                                  f"n={MOVE_CE_BLIND_TABLE_N:,})")
+                    print(f"      move_event_ce={v['move_event_ce']:.3f} {_bar_s} "
+                          f"acc={100 * v['move_event_acc']:.2f}% "
+                          f"n={int(v['move_event_n'])}   "
+                          f"| refs: chance {MOVE_CE_CHANCE:.3f}, marginal "
+                          f"{MOVE_CE_MARGINAL:.3f}, BLIND TABLE "
+                          f"{MOVE_CE_BLIND_TABLE:.4f} <- 6-game BAR, deployed "
+                          f"{MOVE_CE_DEPLOYED:.4f}  [3-game doc refs: bar "
+                          f"{MOVE_CE_BLIND_TABLE_3G:.3f}, deployed "
+                          f"{MOVE_CE_DEPLOYED_3G:.3f}]")
 
             # keyed on OPTIMIZER steps, not micro-batches: with --grad-accum the
             # non-step micro-batches `continue` before this point, so a batch_idx

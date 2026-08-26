@@ -68,7 +68,7 @@ class GarenAgent:
     """Load a Phase-2 checkpoint and turn observed frames/latents into actions."""
 
     def __init__(self, phase2_ckpt, tokenizer_ckpt=None, context=16, tau_ctx=0.9,
-                 device="cuda", init_only=False, ability_thresh=0.0):
+                 device="cuda", init_only=False, ability_thresh=0.0, read_pos=-1):
         self.device = device
         self.context = context
         self.tau_ctx = tau_ctx
@@ -77,6 +77,7 @@ class GarenAgent:
         # 0.0 never casts even though the logits DO rank cast frames above others
         # (probe AUC ~0.8). Lower this (e.g. -4.0) to a calibrated operating point.
         self.ability_thresh = ability_thresh
+        self.read_pos = read_pos
         self.buf = deque(maxlen=context)
         # Actions taken at the buffered frames (action-conditioned backbones need
         # the action history as INPUT — training teacher-forced the real ones).
@@ -94,6 +95,14 @@ class GarenAgent:
         self.latent_dim = a.get("latent_dim", 32)
         self.mtp = a.get("mtp_length", 9)
         self.movement_bins = a.get("movement_bins", 21)
+        # Which movement action the checkpoint was TRAINED to receive
+        # (train_agent_finetune --movement-action-mode). Absent from every
+        # checkpoint written before that flag existed, and all of those trained on
+        # the held stream -- so the default is 'held' and no existing checkpoint
+        # changes behaviour. Inference MUST mirror it: the whole point of
+        # event_only/none is to train the head without the movement crutch, and
+        # handing it the crutch at play time would silently undo the fix.
+        self.movement_action_mode = a.get("movement_action_mode", "held")
         hidden = a.get("hidden_dim", 256)
         num_buckets = a.get("num_buckets", 255)
         size = a.get("model_size", "medium")
@@ -147,7 +156,8 @@ class GarenAgent:
 
         gs = ck.get("global_step") if not init_only else None
         print(f"[GarenAgent] loaded phase2 (step {gs}) | size={size} latent_dim={self.latent_dim} "
-              f"mtp={self.mtp} bins={self.movement_bins} tokenizer={'yes' if self.tok else 'no'}")
+              f"mtp={self.mtp} bins={self.movement_bins} tokenizer={'yes' if self.tok else 'no'} "
+              f"move_action={self.movement_action_mode}")
 
     @torch.no_grad()
     def encode_frame(self, frame_rgb01):
@@ -180,8 +190,21 @@ class GarenAgent:
         None live (self-fed history)."""
         self.buf.append(latent)
         if prev_action is not None and self.act_buf:
+            # Teacher forcing replaces the PREVIOUS frame's entry with the action
+            # really executed there. Under 'event_only' that entry also carries
+            # "was a NEW command issued at this frame", so recover it: prefer an
+            # explicit flag (this method's own return dict exposes one as "gate"),
+            # otherwise fall back to "did the commanded target change". The human's
+            # click target is piecewise-constant between clicks, so a change IS a
+            # click; that fallback can only miss a re-click on the identical
+            # continuous coordinate.
+            fire = prev_action.get("gate", prev_action.get("movement_event"))
+            if fire is None:
+                older = self.act_buf[-2]["movement"] if len(self.act_buf) > 1 else None
+                fire = older is None or tuple(prev_action["movement"]) != tuple(older)
             self.act_buf[-1] = {"movement": tuple(prev_action["movement"]),
-                                "abilities": dict(prev_action["abilities"])}
+                                "abilities": dict(prev_action["abilities"]),
+                                "fire": bool(fire)}
         window = list(self.buf)
         while len(window) < self.context:            # left-pad with the oldest frame
             window.insert(0, window[0])
@@ -197,9 +220,23 @@ class GarenAgent:
         if self.use_actions:
             hist = list(self.act_buf)[-(len(self.buf) - 1):] if len(self.buf) > 1 else []
             stand_in = hist[-1] if hist else {"movement": (0.5, 0.5), "abilities": {}}
+            # The newest token is the frame we are about to decide FOR, so no new
+            # command has been issued at it yet. Its MOVEMENT repeats the standing
+            # order (orders persist; that is what 'held' means and it is unchanged),
+            # but its "a new command fired here" flag must be False. True would
+            # present the standing target as a FRESH command at t -- and a_{t+1}
+            # equals it on ~90% of frames, so that single slot would hand back the
+            # exact copy shortcut event_only/none exist to remove. False is also
+            # the majority-correct value: ~90% of real frames issue no command.
+            stand_in = dict(stand_in, fire=False)
             acts = hist + [stand_in]
+            # Left-pad by repeating the OLDEST entry (mirrors the frame padding).
+            # A pad slot is not a real observation, so it carries no command:
+            # replicating a fire=True entry across the pad would put one target in
+            # several action tokens -- precisely the replication that makes the
+            # shortcut survive dropout (docs/BC_FIX_PLAN_2026-08-26.md).
             while len(acts) < self.context:
-                acts.insert(0, acts[0])
+                acts.insert(0, dict(acts[0], fire=False))
             mv = torch.tensor([list(a_["movement"]) for a_ in acts], dtype=torch.float32,
                               device=self.device).unsqueeze(0)               # (1, T, 2)
             actions = {"movement": mv}
@@ -207,6 +244,27 @@ class GarenAgent:
                 actions[k] = torch.tensor(
                     [int(bool(a_["abilities"].get(k, False))) for a_ in acts],
                     dtype=torch.long, device=self.device).unsqueeze(0)       # (1, T)
+            # cursor_valid mirrors what this checkpoint TRAINED with (see
+            # train_agent_finetune.run_step). It gates ONLY the movement embedding
+            # in dynamics.embed_actions -- False substitutes the learned
+            # no_action_embed -- so the ability history is untouched in every mode.
+            # Until this existed, cursor_valid was never passed at all: a model
+            # trained without the movement action was handed it at play time.
+            #   held       -> always valid (legacy; identical to passing nothing,
+            #                 since where(True, emb, no_act) == emb)
+            #   event_only -> valid only where the AGENT ITSELF issued a command;
+            #                 its own gate decision is the inference-time analogue
+            #                 of the training flag movement_event
+            #   none       -> never valid; no_action_embed on every frame
+            mode = getattr(self, "movement_action_mode", "held")
+            if mode == "none":
+                cv = torch.zeros(1, len(acts), dtype=torch.bool, device=self.device)
+            elif mode == "event_only":
+                cv = torch.tensor([[bool(a_.get("fire", False)) for a_ in acts]],
+                                  dtype=torch.bool, device=self.device)
+            else:
+                cv = torch.ones(1, len(acts), dtype=torch.bool, device=self.device)
+            actions["cursor_valid"] = cv
 
         # near-clean corruption, one forward, agent tokens on (BC regime)
         tau = self.tau_ctx + torch.rand(B, T, device=self.device) * (1.0 - self.tau_ctx)
@@ -216,7 +274,13 @@ class GarenAgent:
         joint = getattr(self.policy, "movement_mode", "axis") == "joint_noop"
         with self._ac():
             _, agent_out = self.dyn(z_tau, tau, step_size=d_one, actions=actions)
-            h = agent_out[:, -1:, :]                  # newest frame's agent token (1,1,D)
+            # DIAGNOSTIC read position. Default -1 = newest frame, which is what
+            # deployment uses -- but BC slices [:, :T-n, n] with n>=1, so at
+            # seq_len 16 it only ever supervises agent-token positions 0..14.
+            # Position 15 (=-1) receives BC gradient NEVER; agent_temporal_pos[15]
+            # is likewise BC-untrained. read_pos=-2 reads the last TRAINED token.
+            _p = getattr(self, "read_pos", -1)
+            h = agent_out[:, _p:(None if _p == -1 else _p + 1), :]
             a_logits, _ = self.policy(h)              # (1,1,L,A) raw ability logits
             # NOTE: prev_movement_idx=None on purpose. PolicyHead.sample() would
             # do the sticky decode internally, but it samples the gate privately
@@ -259,7 +323,8 @@ class GarenAgent:
             movement = fresh if gate_fire else (
                 tuple(self.act_buf[-1]["movement"]) if self.act_buf else (0.5, 0.5))
             rew = float(rew_all[0, 0, n].item())
-            self.act_buf.append({"movement": movement, "abilities": dict(abilities)})
+            self.act_buf.append({"movement": movement, "abilities": dict(abilities),
+                                 "fire": bool(gate_fire)})
             return {"abilities": abilities, "movement": movement, "reward_pred": rew,
                     "gate": gate_fire, "gate_logit": None, "fresh": fresh,
                     "movement_class": int(cls.item())}
@@ -281,7 +346,8 @@ class GarenAgent:
             gate_fire = True
         movement = fresh if gate_fire else tuple(self.act_buf[-1]["movement"])
         rew = float(rew_all[0, 0, n].item())
-        self.act_buf.append({"movement": movement, "abilities": dict(abilities)})
+        self.act_buf.append({"movement": movement, "abilities": dict(abilities),
+                             "fire": bool(gate_fire)})
         return {"abilities": abilities, "movement": movement, "reward_pred": rew,
                 "gate": gate_fire, "gate_logit": gate_logit, "fresh": fresh}
 
