@@ -154,6 +154,16 @@ def parse_args():
                         help="Sticky-categorical movement: a per-offset gate predicts P(new "
                              "movement command); the bin categorical only explains transitions. "
                              "Fixes the copy-shortcut (77%% of frames are held actions).")
+    parser.add_argument("--movement-action-mode", choices=["held", "event_only"],
+                        default="held",
+                        help="'held' (legacy) carries the click target forward every "
+                             "frame, putting the BC target in the model's own input on "
+                             "~90%% of frames; the head then becomes a no-pixel lookup "
+                             "table (CE 4.365 vs a blind table's 4.357). 'event_only' "
+                             "supplies the movement action ONLY on click frames -- the "
+                             "honest observation, and it makes --action-dropout far "
+                             "more effective because the answer stops being replicated "
+                             "across the whole hold run.")
     parser.add_argument("--action-dropout", type=float, default=0.0,
                         help="Per-frame prob of masking the movement action-history INPUT to "
                              "no_action_embed (cursor_valid=False) during training. Breaks the "
@@ -771,6 +781,29 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
     # Action-history dropout: hide the movement input on a random subset of
     # frames (no_action_embed) so the policy can't lean on copying its own
     # history. Targets are untouched — only the dynamics INPUT is masked.
+    # --- movement action representation --------------------------------
+    # 'held' (legacy): the click target is carried forward on every frame, so
+    # a_{t+1} == a_t on ~90% of frames and the BC target sits in the model's own
+    # input. Measured 2026-08-26: the head becomes a lookup table on that input
+    # -- event-frame CE 4.365 vs a NO-PIXEL table's 4.357.
+    #
+    # 'event_only': the movement action exists ONLY on frames where the human
+    # actually clicked; every other frame gets no_action_embed. That is the
+    # honest observation (the player did not act) and, critically, it is what
+    # makes dropout work: under 'held' the answer is replicated across every
+    # frame of a hold run so it hides only if ALL of them drop
+    # (p^(j+1) = 1.87% at p=0.15); under 'event_only' it lives in exactly ONE
+    # token, so dropping it at rate p hides it with probability p.
+    #
+    # event_only ALONE is weak: the previous click is still inside the 16-frame
+    # window 93.3% of the time (measured, 5,513 gaps), so the model can attend
+    # back to it. Pair it with a real dropout rate.
+    if getattr(args, "movement_action_mode", "held") == "event_only" and \
+            dynamics.use_actions and "cursor_valid" in actions:
+        ev_in = actions.get("movement_event")
+        if ev_in is not None:
+            actions["cursor_valid"] = actions["cursor_valid"] & ev_in.to(torch.bool)
+
     p_drop = getattr(args, "action_dropout", 0.0)
     if p_drop > 0 and dynamics.use_actions and "cursor_valid" in actions:
         keep = torch.rand_like(actions["cursor_valid"], dtype=torch.float32) >= p_drop

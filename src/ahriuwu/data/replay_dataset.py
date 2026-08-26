@@ -627,6 +627,7 @@ class ReplayLatentSequenceDataset(Dataset):
         movement = torch.full((T, 2), 0.5, dtype=torch.float32)
         event = torch.zeros(T, dtype=torch.bool)
         held_x = held_y = 0.5  # pre-first-click: screen centre (no command yet)
+
         for i in range(T):
             e = events.get(i)
             if e is not None:
@@ -639,6 +640,54 @@ class ReplayLatentSequenceDataset(Dataset):
                 held_y = min(max(y, 0.0), 1.0)
                 event[i] = True
             movement[i, 0], movement[i, 1] = held_x, held_y
+
+        # --- the pre-first-click window ------------------------------------
+        # clicks.json never starts before ~60s: the memory recorder needs that
+        # long to lock onto the hero's destination address. So the first ~1,225
+        # frames of EVERY game (159,330 frames = 4.2% of corpus over 130 games)
+        # get held_x/held_y = 0.5. The champion is camera-locked to screen
+        # centre, so (0.5, 0.5) does not mean "unknown" -- it decodes to "your
+        # move order is your own feet". Those are also the ONLY fountain/base
+        # frames in the corpus, so 100% of what the model sees of its own
+        # starting situation says "do not move". Measured 2026-08-26.
+        #
+        # `label.movement.heading_screen` (the champion's position 10 frames
+        # later, already projected) is populated on 36-45% of that window and
+        # tracks the human's real walk to within 11.5deg. The uncovered frames
+        # are genuinely stationary (fountain, shopping), where "no command" is
+        # correct.
+        #
+        # Modes: 'sentinel' keeps the legacy behaviour (the bug, kept as the
+        # default so no existing run's data changes silently); 'heading'
+        # substitutes heading_screen; 'exclude' marks the window invalid so the
+        # caller can drop it. heading_screen is a CONSEQUENCE of the action, not
+        # the click itself -- honest for direction, approximate for timing.
+        pre_mode = getattr(self, "prefirst_mode", "sentinel")
+        first_ev = min(events) if events else T
+        pre_valid = torch.ones(T, dtype=torch.bool)
+        if pre_mode in ("heading", "exclude") and first_ev > 0:
+            lw, lh = labels.get("screen_resolution", (1280, 720))
+            if pre_mode == "exclude":
+                pre_valid[:first_ev] = False
+            else:
+                last_dir = None
+                for i in range(min(first_ev, T)):
+                    mv = ((frames[i].get("label") or {}).get("movement") or {})
+                    hs = mv.get("heading_screen")
+                    if not (isinstance(hs, list) and len(hs) == 2):
+                        continue
+                    hx = min(max(hs[0] / lw, 0.0), 1.0)
+                    hy = min(max(hs[1] / lh, 0.0), 1.0)
+                    movement[i, 0], movement[i, 1] = hx, hy
+                    # Fire an event only when the heading TURNS -- a straight
+                    # walk to lane is one click held, not one per frame. 20deg
+                    # keeps the synthesized rate near the human's real one.
+                    import math
+                    d = math.degrees(math.atan2(-(hy - 0.5), hx - 0.5))
+                    if last_dir is None or abs((d - last_dir + 180) % 360 - 180) > 20.0:
+                        event[i] = True
+                        last_dir = d
+        self._last_pre_valid = pre_valid
         return movement, event
 
     @staticmethod
