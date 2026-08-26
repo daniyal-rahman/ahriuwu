@@ -125,3 +125,73 @@ contributes essentially one direction. The defensible statement is **at chance**
   at |k|=1, **98.8%** of holds are longer.
 - Use frac<90 / frac<45 with a per-game block bootstrap, not a median angle on n<500.
 - Validate every metric on the human's own labels before interpreting a model score.
+
+---
+
+# CORRECTION (same day, 13,627 event rows vs the original 1,800 frames)
+
+An independent probe with ~8x the data corrects two claims above and reverses the
+document's practical conclusion.
+
+## 1. "Matches a no-pixel table to 0.008 nats" does NOT replicate at scale
+
+On 13,627 event rows over 6 held-out games, the head is **0.099 nats BETTER** than a
+properly-fitted blind table (fit on 24 TRAINING games), paired t = -2.31 (5 df),
+negative in 5/6 games:
+
+| predictor | CE |
+|---|---|
+| blind table fit on 5 held-out games | 4.183 |
+| blind table fit on 24 TRAINING games | 4.123 |
+| **deployed head** | **4.050** |
+
+The original tie came from a 1,800-frame subset scored against a 5-game table. The
+head is not literally a lookup table -- it is marginally above one.
+
+## 2. The 4.357 acceptance bar is TOO WEAK — the broken checkpoint already passes it
+
+A 24-game count table scores 4.123 and the SHIPPED checkpoint scores 4.050. The bar as
+written is cleared by the model it was meant to reject. Any future bar must be stated
+against a table fitted on the TRAINING corpus, and on the same val split it will be
+read on (the 6-game split gives blind 4.1214 vs deployed 4.1212 on 14,564 events).
+
+## 3. THE REAL FINDING: the signal is ABSENT from the features
+
+Nested probes, each initialised AT the blind table so the crutch is free and only real
+gain registers (same rows, same folds):
+
+| probe | delta vs table | note |
+|---|---|---|
+| + raw v7 latents, linear | -0.002 | |
+| + game state (hp/level/enemy) | -0.005 | |
+| + raw v7 latents, MLP | -0.016 | |
+| + oracle champion map position | -0.020 | |
+| + raw v7 latents, CNN | -0.024 | |
+| **+ agent token, movement ablated (leak-free)** | **-0.052** | not robust: -0.019 (t=-1.50) at context >=9 |
+| **+ ORACLE future walk (cheats)** | **-1.058** | proves the estimator finds a nat when present |
+
+Everything perceptual recovers 2-5% of what the cheating oracle recovers.
+
+**Leak control verified in BOTH directions:** the held target decodes from the normal
+token at 2.365 nats and at 5.578 (worse than marginal) once ablated -- the ablation is
+complete. Champion map position still decodes at 2.687 from the ablated token -- it is
+not garbage. **The latents encode the state; they do not determine the action.**
+
+## 4. Switching the target to `heading` will not fix perception
+
+At event frames the champion's own actual next-0.5s walk octant scores 1.753/1.859
+against a past-heading table of 1.909 -- the same ~0.04-nat leak-free gain. Heading and
+click carry the same information at the frames that matter, and neither is in the
+features. (The pre-first-click label fix is still correct for COVERAGE -- those frames
+had no supervision at all -- but it will not make the model see.)
+
+## Consequence
+
+**The bottleneck is perception/representation, not the objective.** Action dropout,
+`event_only`, block masking and the structural mask all operate on a head that has
+nothing to read. The planned T1 training program was cancelled before it consumed GPU.
+
+Open question, and the cheap-vs-expensive fork: the probe read the AGENT TOKEN and the
+RAW LATENTS, not the dynamics' INTERNAL SPATIAL TOKENS. If the signal is there but the
+agent token fails to surface it, the fix is architectural (agent-block depth,
+cross-attention) and cheap. If absent there too, it is tokenizer/Phase-1 work.
