@@ -84,6 +84,49 @@ to 11.5deg. **Necessary for the walk-to-lane symptom specifically, but useless a
 
 ---
 
+## MEASURED: representation change ALONE does not remove the crutch
+
+The shortcut only works if the answer is REACHABLE inside the 16-frame context.
+Measured over 5,513 event-to-event gaps (3 held-out games, median gap 5 frames):
+
+| context T | prev click in-window |
+|---|---|
+| 8 | 74.8% |
+| **16 (ours)** | **93.3%** |
+| 32 | 97.3% |
+| 64 | 98.5% |
+
+- **2a (held target)**: answer sits in the CURRENT token -> 100% reachable
+- **2e (NO_OP input)**: answer sits at the last click -> **93.3% reachable**
+
+So switching to NO_OP moves the answer from this token to one a few frames back and
+the model simply attends to it. **2e alone is nearly useless.**
+
+### But 2e is what makes DROPOUT work
+
+Count how many tokens carry the answer:
+
+- **2a**: replicated across EVERY frame of the run -> must drop all of them,
+  `p^(j+1)` = **1.87%** at p=0.15. Dropout is structurally defeated.
+- **2e**: exists in EXACTLY ONE token (the last click) -> dropping it once at rate
+  `p` hides it with probability **p**.
+
+**2e makes per-frame dropout ~30,000x more effective at the same rate.** The
+representation change and the dropout are only worth anything TOGETHER.
+
+### Revised ranking
+
+| option | crutch reachable | verdict |
+|---|---|---|
+| 2a + per-frame dropout 0.15 (current) | 98.1% | hopeless |
+| 2a + run-level dropout (1b) | 1-p | works, needs block machinery |
+| 2e alone | 93.3% | nearly useless |
+| **2e + per-frame dropout p=0.5** | ~50% | **cheap and principled** |
+| **1d structural mask** | 0% | **guaranteed, upper bound** |
+| shorter context T=8 | 74.8% | costs perception, not worth it |
+
+---
+
 ## Test plan (cheapest discriminator first)
 
 | # | test | cost | decides |
