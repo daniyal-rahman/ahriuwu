@@ -1,5 +1,53 @@
 # DEMO_RUNBOOK — running the Garen agent on real hardware
 
+> ## READ THIS FIRST — 2026-08-27
+>
+> **Run with `--movement-action-mode none`.** Everything below predates the most
+> consequential finding about live behaviour.
+>
+> ```bash
+> ./play.sh --movement-action-mode none --gate-bias <raise it, see below>
+> ```
+>
+> **Why.** Every checkpoint trained with the movement action carried forward on
+> EVERY frame, so `a_{t+1} == a_t` on ~90% of frames and the BC target sat in the
+> model's own input. The head learned to copy that input instead of reading the
+> screen — copying is not a shortcut here, it is the Bayes-optimal answer to the
+> objective as written. Self-fed at inference it copies its OWN last output and
+> walks one arbitrary direction forever.
+>
+> Measured over 40 closed-loop games on the walk to lane:
+>
+> | executed command's lane | TOP | MID | BOT |
+> |---|---|---|---|
+> | human | 36 | 3 | 0 |
+> | `held` (as trained) | 17 | 12 | **11** |
+> | `none` (action cut) | **28** | 8 | 4 |
+>
+> Same pixels, different sampling seed: under `held` the lane it picks is at
+> **CHANCE** across seeds (28% agreement vs 34.6% chance); under `none` the
+> preference is **deterministic in the pixels** (R=1.000). Swapping the action
+> history moves the command 150.9°; swapping the PIXELS moves it 41.0° — the
+> action channel beats vision ~3:1.
+>
+> **`none` lowers the fire rate to ~0.37 cmd/s** (humans 2+), so RAISE
+> `--gate-bias` or Garen reaches the right lane slowly. Start ~1.0 and tune up.
+>
+> `MACT=held` reverts. The staged `play.sh` defaults MACT to `none` as of commit
+> 6057853 — if your rig predates that sync, pass the flag explicitly.
+>
+> **Caveat:** this is off-distribution. BC only ever saw the action masked
+> per-frame at p=0.15, never for a whole window. It measurably works; it is a
+> workaround, not the retrain.
+>
+> Detail: `docs/MOVEMENT_HEAD_BLIND_2026-08-26.md`, both CORRECTION sections.
+>
+> **Also known and NOT fixed:** the live HUD shifts latents 2.6–5.2× a normal
+> frame-to-frame step (the corpus is HUD-free), and ~43% of the model's walk-out
+> commands land where a live minimap sits — where a right-click is a move order
+> to a different part of the map. That is the leading explanation for a live game
+> walking somewhere the offline replays do not.
+
 Three machines. Commands are labelled with the one they run on.
 
 ```
