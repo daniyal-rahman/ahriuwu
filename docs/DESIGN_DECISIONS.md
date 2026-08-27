@@ -59,6 +59,49 @@ this swing last-hit" is **0.431 / 0.29 — worse than chance**; probing shows it
 attack-windup detector. Either the signal isn't in the latents (see §7) or B is too sparse at the
 frame level to learn from. **Do not treat the current reward head as a reward model.**
 
+> ### CORRECTION 2026-08-27 — both claims above are measured FALSE
+>
+> Two independent investigations (`docs/REWARD_MODEL_INVESTIGATION.md` ffc9f98,
+> `docs/REWARD_SIGNAL_VIABILITY.md` 7f0e06a) overturn this section's two
+> load-bearing statements. Both had steered real decisions.
+>
+> **1. "C needs the opponent resolved AND VISIBLE" is false.** The lane
+> opponent's `gold_total` is present in the labels on **99.81% of frames** —
+> `visible_heroes` is a full memory read of all ten heroes, not a screen-space
+> observation. He is only ON SCREEN 49.1% of the time, but the data was never
+> the constraint. The stated reason for keeping the reward solo-gold does not
+> hold, and the cost is large: `corr(own gold, lane gold-diff change) = 0.70` at
+> EVERY window from 0.4s to 300s — the arithmetic null for independent streams.
+> **Farming 400g while the enemy farms 0 and while he farms 800 score
+> identically.** Half the lane-advantage variance is invisible at every
+> timescale the policy acts on.
+>
+> **2. The AUC falsifier does not replicate.** "Gold event within the next 0.5s"
+> reads off the FROZEN v7 latents at **held-out AUC 0.778** (MLP) / 0.738
+> (linear), 16 train / 8 held-out games, with validated controls (champion world
+> position R^2 0.91, dead AUC 0.86). Through the TRAINED reward head an
+> independent agent measured **0.886-0.904**, with a game-time confound control
+> at 0.50-0.56 (so it is not reading the clock). The reward head IS a reward
+> model; it is underperforming, not blind.
+>
+> What IS true, and was not the recorded reason: the reward's scalar MAGNITUDE
+> is not readable (R^2 < 0). The head should be trained on the EVENT, not the
+> scalar.
+>
+> Also refuted here: the "reward just measures elapsed time" worry. Passive gold
+> is 28.6% of the magnitude but **0.1% of the variance** of the discounted
+> 8-frame return (lumps 88.4%, deaths 12.0%), and a constant drip cancels out of
+> advantages entirely. The test that appears to support the time hypothesis —
+> cumulative reward vs frame index, R^2 0.976 — is invalid: a running total of
+> ANY non-negative sequence scores that.
+>
+> Credit assignment measured sound: P(attack action) near a minion-sized gold
+> lump goes 4.4% base -> **33.4% at -0.2s** -> 1.7% once the gold lands. A 7.6x
+> spike, inside the H=8 horizon.
+>
+> Episode-level, duration partialled out (n=87): episode reward vs final gold
+> diff **r = +0.899** [0.845-0.936], vs kill-death +0.808, vs level diff +0.745.
+
 ---
 
 ## 2. Twohot bucket range — **MIS-TUNED**
