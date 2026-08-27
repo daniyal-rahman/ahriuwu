@@ -154,6 +154,16 @@ def parse_args():
                         help="Sticky-categorical movement: a per-offset gate predicts P(new "
                              "movement command); the bin categorical only explains transitions. "
                              "Fixes the copy-shortcut (77%% of frames are held actions).")
+    parser.add_argument("--prefirst-mode", choices=["sentinel", "heading", "exclude"],
+                        default="sentinel",
+                        help="Pre-first-click window. Clicks never start before ~60s in "
+                             "ANY game, so 'sentinel' (legacy) labels the first ~1,225 "
+                             "frames (0.5,0.5) -- and the champion is camera-locked to "
+                             "screen centre, so that decodes to 'move to your own feet'. "
+                             "159,330 frames = 4.2%% of corpus, and the ONLY fountain "
+                             "frames there are. 'heading' backfills from "
+                             "label.movement.heading_screen (11.5deg from the human's "
+                             "real walk); 'exclude' drops the window.")
     parser.add_argument("--movement-action-mode", choices=["held", "event_only", "none"],
                         default="held",
                         help="'held' (legacy) carries the click target forward every "
@@ -568,6 +578,7 @@ def build_dataset(args):
         stride=args.stride,
         cache_path=getattr(args, "dataset_cache", None),
         movement_source=args.movement_source,
+        prefirst_mode=getattr(args, "prefirst_mode", "sentinel"),
     )
 
 

@@ -189,7 +189,18 @@ class ReplayLatentSequenceDataset(Dataset):
         max_cache_size: int = 2,
         cache_path: str | Path | None = None,
         movement_source: str = "clicks",
+        prefirst_mode: str = "sentinel",
     ):
+        # Pre-first-click window handling. "sentinel" is the legacy behaviour and
+        # is the BUG: clicks never start before ~60s in any game, so the movement
+        # target defaults to (0.5,0.5) for the first ~1,225 frames -- and since the
+        # champion is camera-locked to screen centre that decodes to "your move
+        # order is your own feet". 159,330 frames, 4.2% of corpus, and the only
+        # fountain/base frames in the dataset. "heading" backfills from
+        # label.movement.heading_screen (measured 11.5deg from the human's real
+        # walk); "exclude" drops the window. Default stays "sentinel" so no
+        # existing run's data changes without asking for it.
+        self.prefirst_mode = prefirst_mode
         # max_cache_size is per-worker — DataLoader fork-spawns each worker
         # with its own cache copy. With VideoShuffleSampler the access
         # pattern is roughly linear within each video, so a 2-deep LRU

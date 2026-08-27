@@ -137,6 +137,18 @@ source $DEST/env.sh
 EOF
 chmod +x "$DEST/preflight.sh"
 
+# --movement-action-mode defaults to 'none', NOT to what the checkpoint trained
+# with. Every checkpoint to date trained with 'held', where the movement action is
+# carried forward every frame -- so the head learned to copy it instead of reading
+# the screen, and self-fed at inference it copies its OWN last output and walks one
+# arbitrary direction. Measured over 40 closed-loop games on the walk to lane:
+#   executed command's lane   TOP MID BOT
+#     human                    36   3   0
+#     held (as trained)        17  12  11
+#     none (action cut)        28   8   4     <- 39/40 prefer TOP
+# Under 'held' the lane it picks is at CHANCE across sampling seeds; under 'none'
+# the preference is deterministic in the pixels. Set MACT=held to get the old
+# behaviour back. 'none' lowers the fire rate to ~0.37 cmd/s, so raise --gate-bias.
 # temperature 1.0 is NOT a preference: greedy decode is a measured dead policy
 # (0.00 clicks/s, 1 movement cell, 0 casts) on every checkpoint on disk.
 cat > "$DEST/play.sh" <<EOF
@@ -145,7 +157,8 @@ source $DEST/env.sh
 \$PY \$AHRIUWU/scripts/play_live.py \\
   --phase2-ckpt \$BC --tokenizer-ckpt \$TOK \\
   --inject \${INJECT:-dry} --hid-host \$PI \\
-  --movement-mode \${MOVE:-mouse} --target-fps \${FPS:-20} --temperature 1.0 "\$@"
+  --movement-mode \${MOVE:-mouse} --target-fps \${FPS:-20} --temperature 1.0 \\
+  --movement-action-mode \${MACT:-none} "\$@"
 EOF
 chmod +x "$DEST/play.sh"
 

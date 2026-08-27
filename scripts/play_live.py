@@ -538,10 +538,18 @@ def main():
     # at p=0.15, never for a whole window -- which is why it is a flag and not
     # the default. The proper fix is retraining with prefirst_mode='heading'
     # plus a real dropout regime.
+    # Capture what the CHECKPOINT trained with BEFORE overwriting it. Reading it
+    # after the assignment (or via a getattr default) makes the banner print the
+    # override back at you, or a hardcoded 'held', either way a status line that
+    # cannot be wrong and therefore tells you nothing.
+    _trained_mode = getattr(agent, "movement_action_mode", "held")
     if args.movement_action_mode:
         agent.movement_action_mode = args.movement_action_mode
         print(f"[agent] movement_action_mode OVERRIDE -> {args.movement_action_mode} "
-              f"(trained as: {getattr(agent, '_ckpt_movement_action_mode', 'held')})")
+              f"(checkpoint trained as: {_trained_mode})")
+    else:
+        print(f"[agent] movement_action_mode = {_trained_mode} (as trained; "
+              f"pass --movement-action-mode none for the measured walk-to-lane fix)")
     agent.reset()
 
     rec = None
