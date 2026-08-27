@@ -398,9 +398,23 @@ def run_step(roll, policy_head, policy_prior, value_head, args, device, amp_dtyp
         a_logits, m_logits = policy_head(agent_outs)          # (B,H,L,A), (B,H,L,2,bins)
         with torch.no_grad():
             a_prior, m_prior = policy_prior(agent_outs)
+        # The prior MUST be sliced at the SAME offset as the policy. It is a
+        # deepcopy of the policy, so at step 0 this KL is exactly 0 by
+        # construction -- that identity is the test, and it failed: sliced at 0
+        # the measured KL was 7.287 nats (ability 5.578 + movement 1.709).
+        #
+        # Offset 0 is never trained by BC (it is dropped as an action-conditioning
+        # leak), so its logits are still at zero-init = exactly uniform. That makes
+        # KL(pi || uniform) = logK - H, i.e. with --pmpo-beta > 0 the term became an
+        # ENTROPY BONUS that actively erases the behaviour-cloned policy, rather
+        # than an anchor holding the policy near it. Phase 3 was not merely
+        # ignoring Phase 2, it was pushing away from it.
+        #
+        # The MTP_OFFSET = 1 fix (4c93083) reached sampling and log_prob and
+        # stopped here.
         kl = factorized_policy_kl(
-            a_logits[:, :, MTP_OFFSET, :], a_prior[:, :, 0, :],
-            m_logits[:, :, MTP_OFFSET, :, :], m_prior[:, :, 0, :, :],
+            a_logits[:, :, MTP_OFFSET, :], a_prior[:, :, MTP_OFFSET, :],
+            m_logits[:, :, MTP_OFFSET, :, :], m_prior[:, :, MTP_OFFSET, :, :],
         )  # (B, H)
 
         policy_loss = compute_pmpo_loss(
