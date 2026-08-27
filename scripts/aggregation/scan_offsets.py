@@ -446,13 +446,39 @@ def find_hero_fields(m, base, hero_array_rva, anchors, layout="deref", stride=8,
             print(f"  ✓ gold_earned at hero+0x{off:X}: {v1:.0f}→{v2:.0f}")
             break
 
-    # Gold current: plausible spending-gold range, must be positive at least once.
+    # Gold current: plausible spending-gold range, must be positive at least once,
+    # AND must MOVE between the two snapshots.
+    #
+    # The movement requirement was missing, and gold_earned above has it. Measured
+    # false-accept rate over random memory reinterpreted as f32:
+    #     random pair -> gold_earned  accepts 0.0221%
+    #     random pair -> gold_current accepts 1.1704%   (53x weaker)
+    #     DEAD offset -> gold_current accepts 2.1842%
+    #     DEAD offset -> with this check      0.0000%
+    #
+    # This does NOT explain the garbage currently on disk -- champion_stats.gold is
+    # a per-hero constant (-3.77e22 own, 1.46e31 Vladimir, 0.0 Fiora) and every one
+    # of those values is REJECTED by the range check, verified. What the weak
+    # predicate lets through is a wrong ADDRESS, not a wrong value: at scan time an
+    # incorrect offset that happens to read a plausible constant in [10, 30000)
+    # passes, gets written to offsets_<patch>.json, and only then reads garbage
+    # during recording. gold_earned's movement check rejects such candidates, which
+    # is why gold_total is correct and gold_current is not, from the same scan of
+    # the same struct.
+    #
+    # Current gold moves in BOTH directions (earn and spend), so unlike gold_earned
+    # the test is inequality, not monotonic increase. Passive income is ~2 g/s, so
+    # any reasonable snapshot gap must show a change.
+    #
+    # UNTESTED against a live client -- scan_offsets needs League running on
+    # Windows. The predicate itself was verified in isolation (numbers above).
     for off in candidate_offsets["gold_current"]:
         v1 = s1["vals"].get(("gold_current", off))
         v2 = s2["vals"].get(("gold_current", off))
         if (v1 is not None and v2 is not None
                 and 0 <= v1 < 30_000 and 0 <= v2 < 30_000
-                and (v1 > 10 or v2 > 10)):  # at least one snapshot has spendable gold
+                and (v1 > 10 or v2 > 10)   # at least one snapshot has spendable gold
+                and v1 != v2):             # and the address is not dead
             results["gold_current"] = off
             print(f"  ✓ gold_current at hero+0x{off:X}: {v1:.0f}→{v2:.0f}")
             break
