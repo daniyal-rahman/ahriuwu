@@ -413,6 +413,15 @@ def main():
                          "correctly. Previously the region SIZE was passed here, which sent "
                          "every click to the screen edge for any offset region. "
                          "Default: derived from the region (correct only when origin is 0,0).")
+    ap.add_argument("--movement-action-mode", choices=["held", "event_only", "none"],
+                    default=None,
+                    help="Override the checkpoint's movement-action input at inference. "
+                         "'none' cuts the movement action entirely so the policy must "
+                         "answer from pixels. Measured on the walk to lane over 40 games: "
+                         "'held' (as trained) sends 27.5%% of games to BOT and its lane "
+                         "choice is at CHANCE across sampling seeds; 'none' gives 39/40 "
+                         "TOP preference and is deterministic in the pixels. Lowers the "
+                         "fire rate to ~0.37 cmd/s, so re-tune --gate-bias with it.")
     ap.add_argument("--gate-bias", type=float, default=0.0,
                     help="Shift the movement FIRING RATE without changing where it clicks. "
                          "Every offline eval exposes this; the live entrypoint did not, so a "
@@ -506,6 +515,33 @@ def main():
     agent = GarenAgent(args.phase2_ckpt, tokenizer_ckpt=args.tokenizer_ckpt,
                        context=args.context, device=args.device,
                        ability_thresh=args.ability_thresh)
+    # OVERRIDE the checkpoint's trained action mode at inference.
+    #
+    # Every checkpoint to date trained with 'held' -- the movement action is
+    # carried forward on every frame, so the head learned to copy it rather
+    # than read the screen. Measured 2026-08-27 over 40 closed-loop games on
+    # the walk to lane:
+    #
+    #   executed command's lane      TOP  MID  BOT
+    #     human                       36    3    0
+    #     'held' (as trained)         17   12   11    <- 27.5% walk to BOT
+    #     'none' (action cut)         28    8    4    <- 39/40 prefer TOP
+    #
+    # Same pixels + a different sampling seed: under 'held' the lane it picks
+    # is at CHANCE across seeds (28% agreement vs 34.6% chance); under 'none'
+    # the underlying preference is deterministic in the pixels (R=1.000). The
+    # direction today is a property of the random draw, not of what it sees.
+    # Cutting the channel also restores side conditioning: 76.3deg blue/red
+    # separation (p<2e-4) against 1.0deg (p=0.85) with the action fed in.
+    #
+    # This is an OOD setting -- BC only ever saw cursor_valid=False per-frame
+    # at p=0.15, never for a whole window -- which is why it is a flag and not
+    # the default. The proper fix is retraining with prefirst_mode='heading'
+    # plus a real dropout regime.
+    if args.movement_action_mode:
+        agent.movement_action_mode = args.movement_action_mode
+        print(f"[agent] movement_action_mode OVERRIDE -> {args.movement_action_mode} "
+              f"(trained as: {getattr(agent, '_ckpt_movement_action_mode', 'held')})")
     agent.reset()
 
     rec = None

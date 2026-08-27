@@ -195,3 +195,92 @@ Open question, and the cheap-vs-expensive fork: the probe read the AGENT TOKEN a
 RAW LATENTS, not the dynamics' INTERNAL SPATIAL TOKENS. If the signal is there but the
 agent token fails to surface it, the fix is architectural (agent-block depth,
 cross-attention) and cheap. If absent there too, it is tokenizer/Phase-1 work.
+
+---
+
+# SECOND CORRECTION (2026-08-27) — the signal is NOT absent. It is drowned.
+
+The CORRECTION section above concluded "the signal is ABSENT from the features" and
+"the bottleneck is perception". **That is wrong**, and the error was in what was
+measured: every probe scored NEXT-CLICK-CELL prediction on post-first-click frames,
+where the copy crutch is available. Nothing measured the WALK-OUT DIRECTION -- the
+behaviour that actually matters -- with the action channel removed.
+
+Cut the movement action at inference (`cursor_valid=False`, no retraining) and a
+side-conditioned, top-lane policy is already there.
+
+## Walk to lane, closed loop, 40 games (20 blue / 20 red), frames 0-600
+
+| executed command's lane | TOP | MID | BOT |
+|---|---|---|---|
+| HUMAN | 36 | 3 | 0 |
+| model `held` (as trained, = what we deploy) | 17 | 12 | **11** |
+| model `none` (movement action cut) | **28** | 8 | 4 |
+
+`none` prefers TOP distributionally in **39/40** games.
+
+## Side conditioning (top lane is a different direction on blue vs red)
+
+| history fed | blue mu | red mu | separation | perm p | median err vs human |
+|---|---|---|---|---|---|
+| HUMAN | +87.6 | -171.7 | 100.8deg | <2e-4 | -- |
+| **`none`** | +82.3 | +158.6 | **76.3deg** | **<2e-4** | **31.4deg** |
+| `sentinel` (what BC teacher-forced) | +58.4 | +59.4 | **1.0deg** | 0.85 | 65.3deg |
+| chance | | | | | 81.3deg |
+
+Side is BALANCED in the corpus (red 75 / blue 71; Garen TOP in 145/146 games), so this
+is a clean two-way conditional with equal support, not an imbalance artifact.
+
+## The smoking gun: same pixels, different sampling seed
+
+| | median |dir change| | same lane | chance | agreement R |
+|---|---|---|---|---|
+| `held`, executed | **66.9deg** | **28%** | 34.6% | 0.299 |
+| `none`, executed | 29.4deg | 55% | 54.0% | 0.709 |
+| `none`, distribution | **0.2deg** | **100%** | -- | **1.000** |
+
+Under `held` the lane is at CHANCE across seeds -- the direction is a property of the
+random draw, not the pixels. Under `none` the preference is deterministic in the pixels.
+
+Intervention, same windows: swapping the HISTORY moves the command **150.9deg** (71%
+pass-through of the injected target); swapping the PIXELS moves it **41.0deg**. The
+action channel beats vision ~3:1.
+
+## H3 (HUD / live domain gap): real shift, not the cause
+
+Re-encoding clean frames reproduces stored latents to 1e-11, so the deltas are the
+ablation. A HUD mask over 19.8% of the frame moves latents **2.6-5.2x a normal
+frame-to-frame step** (cosine 0.89-0.92) -- the model IS off-distribution for a whole
+live game -- but shifts the commanded direction only **8.2deg**, and the lane stays TOP
+in 5-6/6 games. Bot-lane walking reproduces offline on clean replay latents with no HUD
+involved. Cheapest close: mask the HUD to black before `encode_frame` (the mask already
+exists at `scripts/sim_replay.py:96`), then the `matchmean` gamma to 0.203.
+
+## Why it happens
+
+`_parse_movement_clicks` defaults the target to (0.5,0.5) with `movement_event=False`
+until the first click, and clicks never start before ~60s. So for the ENTIRE walk-out --
+the exact segment being demoed -- BC trained the model to issue no command and hold
+"your own feet". That target is only expressible by copying the movement input, which is
+the shortcut the head learned. Remove the input and the visual policy learned from
+post-60s data surfaces.
+
+## Fixes
+
+1. **Free, today:** `play_live.py --movement-action-mode none`. No retraining.
+   42.5% -> 70% TOP executed, 27.5% -> 10% BOT. Re-tune `--gate-bias`: the fire rate
+   drops to ~0.019/frame (0.37 cmd/s). OOD caveat: BC only saw `cursor_valid=False`
+   per-frame at p=0.15, never for a whole window.
+2. **Retrain:** `prefirst_mode='heading'` AND `--movement-action-mode none` (or
+   run-level block dropout). BOTH -- the label fix alone leaves the copy channel
+   dominant; the channel fix alone leaves the walk-out unsupervised.
+3. **The event-frame CE acceptance test cannot see any of this** -- it scores only
+   post-first-click frames where the crutch is available. Add a DIRECTION bar:
+   per-game commanded direction vs the champion's own heading, reported separately for
+   blue and red, on frames 30-1190.
+
+## Caveat that survives
+
+The model does not navigate finely: full-game tracking of the human's heading is only
+r=+0.104 (sd 0.356, n=117) against a shuffled null of -0.015. It holds a per-region
+average direction rather than turning where the lane turns.
