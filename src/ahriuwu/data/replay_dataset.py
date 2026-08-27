@@ -268,11 +268,25 @@ class ReplayLatentSequenceDataset(Dataset):
         #   3 = cursor dead-band denoise in _parse_movement
         #   4 = click-event movement target + movement_event; enemy_visible
         #       gated on screen!=None; GarenQAttack counted as an auto-attack
+        #   5 = the key now covers EVERY option that changes parsed output.
+        #       It previously omitted the reward config, so editing gold_scale
+        #       with a cache on disk was a SILENT NO-OP -- the run would load
+        #       rewards built with the old scale and look like the change did
+        #       nothing. prefirst_mode and movement_interp (added 2026-08-27)
+        #       had the identical bug the moment they were introduced: both
+        #       rewrite the movement target, neither was in the key.
+        #       Anything that alters _parse_match's OUTPUT belongs here.
+        import dataclasses as _dc
+        rc = self.reward_config
         return {"latents_dir": str(self.latents_dir),
                 "seq_len": self.sequence_length, "stride": self.stride,
                 "movement_source": self.movement_source,
+                "prefirst_mode": getattr(self, "prefirst_mode", "sentinel"),
+                "movement_interp": bool(getattr(self, "movement_interp", False)),
+                "reward_config": (_dc.asdict(rc) if _dc.is_dataclass(rc)
+                                  else (None if rc is None else repr(rc))),
                 "matches": self._match_fingerprint(),
-                "schema": 4}
+                "schema": 5}
 
     def _match_fingerprint(self) -> str:
         """Cheap fingerprint of WHICH latent packs are in latents_dir.
