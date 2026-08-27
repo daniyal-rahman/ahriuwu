@@ -65,11 +65,49 @@ frame level to learn from. **Do not treat the current reward head as a reward mo
 > `docs/REWARD_SIGNAL_VIABILITY.md` 7f0e06a) overturn this section's two
 > load-bearing statements. Both had steered real decisions.
 >
-> **1. "C needs the opponent resolved AND VISIBLE" is false.** The lane
-> opponent's `gold_total` is present in the labels on **99.81% of frames** —
-> `visible_heroes` is a full memory read of all ten heroes, not a screen-space
-> observation. He is only ON SCREEN 49.1% of the time, but the data was never
-> the constraint. The stated reason for keeping the reward solo-gold does not
+> **1. "C needs the opponent resolved AND VISIBLE" is false.** Two independent
+> investigations confirmed this with disjoint methods
+> (`docs/ENEMY_GOLD_VALIDATION.md` e7bd225, `docs/ENEMY_GOLD_PROVENANCE.md`
+> a547c39), n=146 matches / 4,176,465 frames.
+>
+> `visible_heroes` carries **exactly 10 entries on 100.000000%** of the
+> 4,171,462 labeled frames — zero frames with nine or fewer. The field name
+> lies; it is a full heap read. Opponent `gold_total` is present on exactly the
+> same frames as Garen's own, to six decimals (coverage 99.880%).
+>
+> **The decisive test.** League's passive drip hits all ten champions on the
+> server clock simultaneously, so locate drip frames by GAREN's gold and ask
+> whether the opponent ticks on the same frame: **0.9819 off-screen / 0.9804 in
+> fog / 0.9765 on-screen** — off-screen is HIGHER. Two heroes never once on
+> camera ticked on 99.0% of drip frames. Independently, the opponent's gold
+> never holds a constant value for more than **2.10 s** corpus-wide — and
+> Garen's own max hold is also 2.10 s.
+>
+> **Why it is legitimate:** these are in-client REPLAYS. The `.rofl` carries
+> full server state, so fog of war never applied to the recorder.
+>
+> Jump quantities match (your test): pooled lumps 23,767 own / 24,229 opp, both
+> peaking at 14 g and 20 g, total variation distance 0.079. Garen's only excess
+> is at 28-35 g — Q/E double-lumping two minions into one 50 ms frame, which is
+> evidence the enemy stream is NOT derived from his.
+>
+> **This section was wrong the day it was written.** The screen-space gate was
+> deleted from the recorder on 2026-05-08 (`ea8a4af`); this doc was authored
+> 2026-08-13 (`1644fd0`), three months later, describing a schema that had not
+> existed for a quarter.
+>
+> Two corrections to the follow-up docs as well: `lane_opponent` is null on
+> **59 of 146** games (a 2026-06-29 backfill rewrote those labels without
+> recomputing it) but `resolve_lane_opponent()`'s fallback recovers all 146 —
+> so "87 games have a resolvable opponent" is a **68% undercount**. And the
+> 49.1% on-screen figure is correct only on the 87 native games; the same
+> backfill hard-codes `screen: None`, so per-hero screen data is silently
+> absent for 40% of the corpus.
+>
+> `use_solo_gold=False` also RUNS: 146/146 matches x 3 configs, 0 exceptions,
+> 0 all-zero episodes. And the diff has 35.5% as many nonzero frames as solo
+> because the synchronised passive drip cancels exactly — zero-summing deletes
+> passive income for free. The stated reason for keeping the reward solo-gold does not
 > hold, and the cost is large: `corr(own gold, lane gold-diff change) = 0.70` at
 > EVERY window from 0.4s to 300s — the arithmetic null for independent streams.
 > **Farming 400g while the enemy farms 0 and while he farms 800 score
