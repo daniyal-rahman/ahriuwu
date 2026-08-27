@@ -190,6 +190,7 @@ class ReplayLatentSequenceDataset(Dataset):
         cache_path: str | Path | None = None,
         movement_source: str = "clicks",
         prefirst_mode: str = "sentinel",
+        movement_interp: bool = False,
     ):
         # Pre-first-click window handling. "sentinel" is the legacy behaviour and
         # is the BUG: clicks never start before ~60s in any game, so the movement
@@ -201,6 +202,20 @@ class ReplayLatentSequenceDataset(Dataset):
         # walk); "exclude" drops the window. Default stays "sentinel" so no
         # existing run's data changes without asking for it.
         self.prefirst_mode = prefirst_mode
+        # Interpolate the movement TARGET between consecutive clicks instead of
+        # holding it. Measured 2026-08-27 over 4 held-out games:
+        #                 P(exact repeat)   median move   copy CE
+        #   held                 91.3%       2.25 cells     0.796
+        #   interp               70.8%       1.00 cells     1.241   (+56% harder)
+        # Copying gets materially worse: the copier can no longer just repeat, it
+        # has to pick WHICH neighbouring cell, and it cannot.
+        #
+        # DANGER: this value depends on the NEXT click, so it carries up to ~3s of
+        # the future. It is sound as a TARGET (it is the player's own trajectory)
+        # and a LEAK as the dynamics' action-conditioning INPUT. Callers must pair
+        # it with --movement-action-mode event_only|none so the interpolated array
+        # never reaches embed_actions. See the guard in train_agent_finetune.
+        self.movement_interp = movement_interp
         # max_cache_size is per-worker — DataLoader fork-spawns each worker
         # with its own cache copy. With VideoShuffleSampler the access
         # pattern is roughly linear within each video, so a 2-deep LRU
@@ -698,6 +713,18 @@ class ReplayLatentSequenceDataset(Dataset):
                     if last_dir is None or abs((d - last_dir + 180) % 360 - 180) > 20.0:
                         event[i] = True
                         last_dir = d
+        if getattr(self, "movement_interp", False):
+            ev_idx = torch.nonzero(event, as_tuple=False).flatten().tolist()
+            for a, b in zip(ev_idx[:-1], ev_idx[1:]):
+                n = b - a
+                if n > 1:
+                    x0, y0 = float(movement[a, 0]), float(movement[a, 1])
+                    x1, y1 = float(movement[b, 0]), float(movement[b, 1])
+                    for k in range(1, n):
+                        f = k / n
+                        movement[a + k, 0] = x0 + (x1 - x0) * f
+                        movement[a + k, 1] = y0 + (y1 - y0) * f
+
         self._last_pre_valid = pre_valid
         return movement, event
 

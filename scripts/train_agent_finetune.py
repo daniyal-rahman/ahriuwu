@@ -154,6 +154,16 @@ def parse_args():
                         help="Sticky-categorical movement: a per-offset gate predicts P(new "
                              "movement command); the bin categorical only explains transitions. "
                              "Fixes the copy-shortcut (77%% of frames are held actions).")
+    parser.add_argument("--movement-interp", action="store_true",
+                        help="Interpolate the movement TARGET between consecutive "
+                             "clicks instead of holding it constant. Measured: exact "
+                             "frame-to-frame repeat drops 91.3%% -> 70.8%% and a blind "
+                             "copy predictor gets 56%% worse (copy CE 0.796 -> 1.241), "
+                             "so the shortcut is materially harder. REQUIRES "
+                             "--movement-action-mode event_only or none: the "
+                             "interpolated value depends on the NEXT click, so feeding "
+                             "it as action conditioning leaks up to ~3s of the future "
+                             "into the world model.")
     parser.add_argument("--prefirst-mode", choices=["sentinel", "heading", "exclude"],
                         default="sentinel",
                         help="Pre-first-click window. Clicks never start before ~60s in "
@@ -579,6 +589,7 @@ def build_dataset(args):
         cache_path=getattr(args, "dataset_cache", None),
         movement_source=args.movement_source,
         prefirst_mode=getattr(args, "prefirst_mode", "sentinel"),
+        movement_interp=getattr(args, "movement_interp", False),
     )
 
 
@@ -1527,8 +1538,25 @@ def smoke_test(args):
 # Main
 # ---------------------------------------------------------------------------
 
+
+def _guard_interp_leak(args):
+    """An interpolated target is built from the NEXT click. As a target that is
+    the player's own trajectory and is fine; as the dynamics' action-conditioning
+    INPUT it hands the model up to ~3s of the future. The two consumers read one
+    array, so the only safe pairing is an action mode that never feeds it."""
+    if getattr(args, "movement_interp", False) and \
+            getattr(args, "movement_action_mode", "held") == "held":
+        raise SystemExit(
+            "--movement-interp with --movement-action-mode held would feed the "
+            "INTERPOLATED movement (which depends on the NEXT click, i.e. up to ~3s "
+            "of the future) into the world model as action conditioning.\n"
+            "Pass --movement-action-mode event_only (action only on click frames) "
+            "or none (no movement action at all)."
+        )
+
 def main():
     args = parse_args()
+    _guard_interp_leak(args)
     if args.video_loss_weight > 0 and not (args.unfreeze_backbone or args.train_action_embed):
         raise SystemExit(
             "--video-loss-weight > 0 with a FULLY frozen backbone is a silent no-op: Eq (7) "
