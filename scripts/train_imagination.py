@@ -44,6 +44,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.amp import GradScaler, autocast
 
 from ahriuwu.constants import ABILITY_KEYS, MOVEMENT_DIM
@@ -70,6 +71,7 @@ from ahriuwu.models import (
     compute_lambda_returns,
     compute_pmpo_loss,
     factorized_policy_kl,
+    bernoulli_kl_logits,
     RunningRMS,
 )
 from ahriuwu.data.dataset import VideoGroupedSampler
@@ -126,6 +128,10 @@ def parse_args():
     parser.add_argument("--agent-layers", type=int, default=4)
     parser.add_argument("--smoke-test", action="store_true",
                         help="Tiny synthetic CPU step + assert movement_heads get PMPO gradient.")
+    parser.add_argument("--max-steps", type=int, default=0,
+                        help="Stop after N optimizer steps (0 = no limit). For a real-checkpoint "
+                             "smoke run: proves a step happens on real weights without "
+                             "starting a training run.")
     parser.set_defaults(num_workers=0, wandb=False)
     add_wandb_args(parser)
     return parser.parse_args()
@@ -197,18 +203,20 @@ def load_phase2(args, device):
                              movement_mode=args.movement_mode).to(device)
     policy_head.load_state_dict(ckpt["policy_head_state_dict"])
 
-    if args.movement_gate:
-        # PolicyHead.log_prob() hard-raises on a gated head: PMPO needs the
-        # PREVIOUS action to evaluate the mixture NLL, and imagination does not
-        # thread it through yet. Fail here with the reason rather than deep in
-        # the rollout with an opaque error.
-        raise SystemExit(
-            "This Phase-2 checkpoint has a sticky movement gate, which Phase 3 "
-            "cannot train yet: PMPO calls PolicyHead.log_prob(), and the gated "
-            "mixture NLL needs the previous action plumbed through the imagined "
-            "rollout. Train an ungated BC checkpoint (--no-movement-gate) for "
-            "Phase 3, or implement prev-action threading first.")
-
+    # NOTE: this used to `raise SystemExit` on a gated checkpoint. The guard was
+    # protecting a REAL incompatibility, not a hypothetical one -- PolicyHead.
+    # log_prob() is mathematically undefined for a sticky-categorical head,
+    # because the movement likelihood is a mixture whose "hold" branch is a point
+    # mass on the PREVIOUS executed bin, and imagination did not carry that bin.
+    # Deleting the guard would only have moved the crash deeper. So the guard is
+    # gone because the incompatibility is gone: imagine() now threads the
+    # previous executed order through the dream (it needs it for joint_noop's
+    # NO_OP anyway), run_step scores movement with the head's own
+    # gated_movement_log_prob -- the same function BC trains against
+    # (train_agent_finetune.py:914) -- and gated_movement_kl below computes the
+    # mixture KL exactly. This matters because the DEPLOYED checkpoint
+    # (phase2_bc_clicks, DEMO_RUNBOOK 1a) is a gated one: the guard was locking
+    # Phase 3 out of the live lineage.
     print(f"Loaded Phase 2 from {args.agent_checkpoint}")
     print(f"  dynamics use_actions={use_actions} (frozen), reward head frozen, policy head trainable")
     print(f"  movement_gate={args.movement_gate}")
@@ -235,6 +243,103 @@ def build_context_dataset(args):
         outcomes=outcomes, manifest_path=args.manifest,
         sequence_length=args.seq_len, stride=args.stride,
     )
+
+
+# ---------------------------------------------------------------------------
+# Movement bookkeeping: the standing order, and mode-aware KL
+# ---------------------------------------------------------------------------
+# Three movement modes reach Phase 3 and they disagree about what "an action" is:
+#   axis (plain) : two independent per-axis categoricals; action = (bx, by).
+#   axis + gate  : a MIXTURE -- hold the previous cell w.p. (1-g), else draw a
+#                  fresh cell. Action = the executed (bx, by); scoring needs the
+#                  previous cell, which is why it used to be rejected outright.
+#   joint_noop   : ONE categorical over bins**2 cells + a NO_OP class. Action =
+#                  the sampled class, NO_OP included -- "no new order" is a real
+#                  action here, not a missing one.
+# Everything below keeps those three straight in one place instead of scattering
+# `if movement_mode ==` through the rollout and the loss.
+
+
+def _seed_prev_movement(policy_head, last_xy, B):
+    """Standing order at the start of the dream, from the last context action.
+
+    Returns (prev_idx, prev_arg): the bookkeeping index and the same value shaped
+    to broadcast into PolicyHead.sample()'s (B, T, L[, movement_dim]) expectation.
+    """
+    axis_idx = policy_head.discretize_movement(last_xy)          # (B, movement_dim)
+    if policy_head.movement_mode == "joint_noop":
+        prev_idx = policy_head.joint_encode(axis_idx[..., 0], axis_idx[..., 1])  # (B,)
+        return prev_idx, prev_idx.view(B, 1, 1)
+    return axis_idx, axis_idx.view(B, 1, 1, policy_head.movement_dim)
+
+
+def _advance_prev_movement(policy_head, prev_idx, sampled_idx, B):
+    """Standing order after one dreamed step."""
+    if policy_head.movement_mode == "joint_noop":
+        # NO_OP issues no new order: the previous one keeps executing.
+        nxt = torch.where(sampled_idx == policy_head.NO_OP, prev_idx, sampled_idx)
+        return nxt, nxt.view(B, 1, 1)
+    # sample() already resolved the gate's hold branch, so this is the executed bin.
+    return sampled_idx, sampled_idx.view(B, 1, 1, policy_head.movement_dim)
+
+
+def movement_kl_factors(policy_head, m_logits, m_prior):
+    """Slice movement logits at MTP_OFFSET into the (..., factors, classes) layout
+    ``factorized_policy_kl`` reduces over.
+
+    This is the whole of blocker 3. ``factorized_policy_kl`` sums a per-axis
+    categorical KL over a ``movement_dim`` axis, which an 'axis' head has and a
+    'joint_noop' head does not -- its logits are (B, T, L, classes), so indexing
+    ``[:, :, off, :, :]`` raised ``IndexError: too many indices for tensor of
+    dimension 4``. A joint head is not a different kind of object, just a
+    distribution with ONE factor instead of two, so give it a singleton factor
+    axis and the shared reducer is exactly right.
+    """
+    if policy_head.movement_mode == "joint_noop":
+        return (m_logits[:, :, MTP_OFFSET, :].unsqueeze(-2),      # (B, H, 1, classes)
+                m_prior[:, :, MTP_OFFSET, :].unsqueeze(-2))
+    return (m_logits[:, :, MTP_OFFSET, :, :],                     # (B, H, move_dim, bins)
+            m_prior[:, :, MTP_OFFSET, :, :])
+
+
+def gated_movement_kl(policy_logits, prior_logits, policy_gate, prior_gate,
+                      prev_idx, bins):
+    """Exact KL between two sticky-categorical movement mixtures, (B, H), in nats.
+
+    The executed action is a CELL, and the head's law over cells is
+        P(cell) = (1 - g) * 1[cell == prev] + g * p_x(bx) * p_y(by)
+    -- a mixture, which has no closed-form KL in general. It does not need one:
+    written out over the bins**2 cells it is a plain categorical on a small
+    discrete support, so enumerating it is EXACT. 441 cells is nothing next to a
+    dynamics forward.
+
+    Both arguments share ``prev_idx`` (same dreamed trajectory), so the point
+    masses land on the same cell and the KL is finite.
+
+    Args:
+        policy_logits/prior_logits: (B, H, movement_dim, bins) per-axis logits.
+        policy_gate/prior_gate: (B, H) gate logits.
+        prev_idx: (B, H, movement_dim) previous executed bins.
+        bins: bins per axis.
+    """
+    def _log_cells(axis_logits, gate_logits):
+        lsm = F.log_softmax(axis_logits.float(), dim=-1)              # (B,H,2,bins)
+        # Independent axes -> log p(bx,by) = log p_x(bx) + log p_y(by). Cell index
+        # is bx * bins + by, matching the unsqueeze order below.
+        log_cells = (lsm[..., 0, :].unsqueeze(-1)
+                     + lsm[..., 1, :].unsqueeze(-2)).flatten(-2)      # (B,H,bins*bins)
+        log_g = F.logsigmoid(gate_logits.float()).unsqueeze(-1)
+        log_1mg = F.logsigmoid(-gate_logits.float()).unsqueeze(-1)
+        mixed = log_g + log_cells
+        # Add the (1-g) point mass on the previous cell, in log space.
+        hold = torch.full_like(mixed, float("-inf"))
+        flat_prev = (prev_idx[..., 0] * bins + prev_idx[..., 1]).unsqueeze(-1)
+        hold.scatter_(-1, flat_prev, log_1mg)
+        return torch.logaddexp(mixed, hold)                           # (B,H,cells)
+
+    log_p = _log_cells(policy_logits, policy_gate)
+    log_q = _log_cells(prior_logits, prior_gate)
+    return (log_p.exp() * (log_p - log_q)).sum(dim=-1)                # (B, H)
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +374,12 @@ def imagine(dynamics, policy_head, reward_head, value_head, z_context, args, dev
     Returns dict of:
       agent_outs:    (B, H, D)
       ability_acts:  (B, H, num_abilities) float {0,1}
-      movement_acts: (B, H, 2) continuous xy (bin centers)
+      movement_acts: (B, H, 2) continuous xy actually EXECUTED (bin centers)
+      movement_idx:  sampled movement index -- (B, H) flat class under
+                     'joint_noop', (B, H, movement_dim) per-axis bins under
+                     'axis'. This, not movement_acts, is what PMPO scores.
+      movement_prev: the standing order each step was sampled under, same shape
+                     as movement_idx (the gated mixture NLL needs it).
       rewards:       (B, H) original scale
       values:        (B, H) original scale
     """
@@ -292,7 +402,17 @@ def imagine(dynamics, policy_head, reward_head, value_head, z_context, args, dev
         move_hist = torch.full((B, Ctx, MOVEMENT_DIM), 0.5, device=device)
         abil_hist = torch.zeros((B, Ctx, len(ABILITY_KEYS)), device=device)
 
-    agent_outs, ability_acts, movement_acts, rewards, values = [], [], [], [], []
+    # The PREVIOUS EXECUTED movement order. Both non-plain movement modes need it:
+    # joint_noop's NO_OP class means "the standing order is still executing", and
+    # the gated axis head's hold branch repeats the previous bin. Seed it from the
+    # last real context action (screen centre when the context is neutral) and
+    # carry it forward across dreamed steps. Without this, sample() decoded every
+    # NO_OP to screen centre -- injecting a fake click-the-middle into ~28% of
+    # dreamed frames instead of letting the standing order run (MTP_INVESTIGATION 4).
+    prev_idx, prev_arg = _seed_prev_movement(policy_head, move_hist[:, -1, :], B)
+
+    agent_outs, ability_acts, movement_acts = [], [], []
+    movement_idx_acts, movement_prevs, rewards, values = [], [], [], []
     schedule = DiffusionSchedule(device=device)
 
     for _ in range(args.horizon):
@@ -309,9 +429,17 @@ def imagine(dynamics, policy_head, reward_head, value_head, z_context, args, dev
         h_t = agent_out[:, -1:, :]  # (B, 1, D) — token for the last/newest frame
 
         # Sample on-policy action at the first TRAINED MTP head (see MTP_OFFSET).
-        abilities, movement, _ = policy_head.sample(h_t, temperature=args.temperature)
+        abilities, movement, move_idx = policy_head.sample(
+            h_t, temperature=args.temperature, prev_movement_idx=prev_arg)
         a_abil = abilities[:, 0, MTP_OFFSET, :]        # (B, num_abilities)
-        a_move = movement[:, 0, MTP_OFFSET, :]         # (B, 2)
+        a_move = movement[:, 0, MTP_OFFSET, :]         # (B, 2) EXECUTED xy
+        # The SAMPLED index -- what PMPO must score. joint_noop: (B,) flat class,
+        # possibly NO_OP. axis: (B, 2) per-axis bins (post-gate, i.e. executed).
+        # The decoded xy above cannot stand in for it: under joint_noop a NO_OP
+        # decodes to the PREVIOUS order's xy, so re-discretizing a_move would
+        # score the wrong class. That lossy round-trip is exactly what
+        # log_prob()'s LONG-dtype check exists to reject.
+        a_move_idx = move_idx[:, 0, MTP_OFFSET]
 
         # reward head DOES train offset 0 (reward is a target, never an input),
         # so it keeps 0 -- verified: reward_head.heads.0 norm 2.86e+01.
@@ -321,8 +449,15 @@ def imagine(dynamics, policy_head, reward_head, value_head, z_context, args, dev
         agent_outs.append(h_t[:, 0, :])
         ability_acts.append(a_abil)
         movement_acts.append(a_move)
+        movement_idx_acts.append(a_move_idx)
+        movement_prevs.append(prev_idx)   # the prev the gated mixture was sampled under
         rewards.append(r_t)
         values.append(v_t)
+
+        # Advance the standing order. Under joint_noop a sampled NO_OP issues no
+        # new order, so the previous one persists; the gated axis head's sample()
+        # already applied its hold branch, so its index IS the executed order.
+        prev_idx, prev_arg = _advance_prev_movement(policy_head, prev_idx, a_move_idx, B)
 
         # Dream the next frame conditioned on the SAMPLED action (fed back).
         roll_future = None
@@ -350,7 +485,12 @@ def imagine(dynamics, policy_head, reward_head, value_head, z_context, args, dev
     return {
         "agent_outs": torch.stack(agent_outs, dim=1),       # (B, H, D)
         "ability_acts": torch.stack(ability_acts, dim=1),   # (B, H, A)
-        "movement_acts": torch.stack(movement_acts, dim=1), # (B, H, 2)
+        "movement_acts": torch.stack(movement_acts, dim=1), # (B, H, 2) executed xy
+        # The sampled movement INDEX and the standing order it was sampled under.
+        # joint_noop -> (B, H); axis -> (B, H, movement_dim). These are what PMPO
+        # scores; movement_acts is what the dynamics was fed.
+        "movement_idx": torch.stack(movement_idx_acts, dim=1),
+        "movement_prev": torch.stack(movement_prevs, dim=1),
         "rewards": torch.stack(rewards, dim=1),             # (B, H)
         "values": torch.stack(values, dim=1),               # (B, H)
     }
@@ -368,7 +508,8 @@ def run_step(roll, policy_head, policy_prior, value_head, args, device, amp_dtyp
     """
     agent_outs = roll["agent_outs"]                 # (B, H, D), no grad
     ability_acts = roll["ability_acts"]             # (B, H, A)
-    movement_acts = roll["movement_acts"]           # (B, H, 2)
+    movement_idx = roll["movement_idx"]             # joint:(B,H)  axis:(B,H,move_dim)
+    movement_prev = roll["movement_prev"]           # same shape
     rewards = roll["rewards"]                        # (B, H)
     values = roll["values"].detach()                # (B, H)
     B, H = rewards.shape
@@ -391,13 +532,34 @@ def run_step(roll, policy_head, policy_prior, value_head, args, device, amp_dtyp
         # is harmless: only index MTP_OFFSET is read out.
         _L = MTP_OFFSET + 1
         abil_mtp = ability_acts.unsqueeze(2).expand(-1, -1, _L, -1)    # (B,H,L,A)
-        move_mtp = movement_acts.unsqueeze(2).expand(-1, -1, _L, -1)   # (B,H,L,2)
-        log_probs = policy_head.log_prob(agent_outs, abil_mtp, move_mtp)[:, :, MTP_OFFSET]
+        # Score the SAMPLED movement INDEX, never the decoded xy: under joint_noop
+        # NO_OP decodes to the previous order's xy, so a float round-trip would
+        # score a real click the policy never chose.
+        if policy_head.movement_mode == "joint_noop":
+            move_mtp = movement_idx.unsqueeze(2).expand(-1, -1, _L)         # (B,H,L)
+        else:
+            move_mtp = movement_idx.unsqueeze(2).expand(-1, -1, _L, -1)     # (B,H,L,2)
 
         # Factorized KL needs both heads' logits at MTP_OFFSET, for policy and prior.
         a_logits, m_logits = policy_head(agent_outs)          # (B,H,L,A), (B,H,L,2,bins)
         with torch.no_grad():
             a_prior, m_prior = policy_prior(agent_outs)
+
+        if policy_head.movement_gate:
+            # PolicyHead.log_prob() is undefined for a gated head (the movement
+            # law is the sticky mixture), so score it the way BC does: ability
+            # BCE + the head's own gated_movement_log_prob, with the standing
+            # order imagine() carried alongside the action.
+            prev_mtp = movement_prev.unsqueeze(2).expand(-1, -1, _L, -1)
+            g_logits = policy_head.gate_logits(agent_outs)                  # (B,H,L)
+            ability_lp = -F.binary_cross_entropy_with_logits(
+                a_logits[:, :, :_L, :], abil_mtp, reduction="none").sum(dim=-1)
+            move_lp = policy_head.gated_movement_log_prob(
+                m_logits[:, :, :_L], g_logits[:, :, :_L], move_mtp, prev_mtp)
+            log_probs = (ability_lp + move_lp)[:, :, MTP_OFFSET]
+        else:
+            log_probs = policy_head.log_prob(
+                agent_outs, abil_mtp, move_mtp)[:, :, MTP_OFFSET]
         # The prior MUST be sliced at the SAME offset as the policy. It is a
         # deepcopy of the policy, so at step 0 this KL is exactly 0 by
         # construction -- that identity is the test, and it failed: sliced at 0
@@ -412,10 +574,25 @@ def run_step(roll, policy_head, policy_prior, value_head, args, device, amp_dtyp
         #
         # The MTP_OFFSET = 1 fix (4c93083) reached sampling and log_prob and
         # stopped here.
-        kl = factorized_policy_kl(
-            a_logits[:, :, MTP_OFFSET, :], a_prior[:, :, MTP_OFFSET, :],
-            m_logits[:, :, MTP_OFFSET, :, :], m_prior[:, :, MTP_OFFSET, :, :],
-        )  # (B, H)
+        if policy_head.movement_gate:
+            # The gated policy's movement law is the mixture, so anchor THAT, not
+            # the bare categorical underneath it -- otherwise the KL would leave
+            # the gate (the "should I issue an order at all" decision) completely
+            # unregularised, free to drift to always-fire while the term reads low.
+            with torch.no_grad():
+                g_prior = policy_prior.gate_logits(agent_outs)
+            kl = (bernoulli_kl_logits(a_logits[:, :, MTP_OFFSET, :],
+                                      a_prior[:, :, MTP_OFFSET, :]).sum(dim=-1)
+                  + gated_movement_kl(
+                      m_logits[:, :, MTP_OFFSET], m_prior[:, :, MTP_OFFSET],
+                      g_logits[:, :, MTP_OFFSET], g_prior[:, :, MTP_OFFSET],
+                      movement_prev, policy_head.movement_bins))
+        else:
+            m_pol_kl, m_pri_kl = movement_kl_factors(policy_head, m_logits, m_prior)
+            kl = factorized_policy_kl(
+                a_logits[:, :, MTP_OFFSET, :], a_prior[:, :, MTP_OFFSET, :],
+                m_pol_kl, m_pri_kl,
+            )  # (B, H)
 
         policy_loss = compute_pmpo_loss(
             log_probs=log_probs.reshape(-1),
@@ -445,16 +622,154 @@ def run_step(roll, policy_head, policy_prior, value_head, args, device, amp_dtyp
 # Smoke test
 # ---------------------------------------------------------------------------
 
+def _smoke_one_mode(args, movement_mode, movement_gate):
+    """One synthetic rollout + train step for a single movement mode.
+
+    Asserts, for this mode:
+      1. the on-policy dream runs via rollout() with sampled actions fed back;
+      2. lambda-returns / PMPO / value losses compute and backprop;
+      3. the step-0 prior KL is EXACTLY 0 (prior is a deepcopy of the policy);
+      4. after moving the policy, the KL is > 0 (the term is live, not hardcoded);
+      5. PMPO's gradient lands on MTP offset MTP_OFFSET and NOWHERE ELSE.
+    """
+    label = f"{movement_mode}{'+gate' if movement_gate else ''}"
+    print(f"\n--- movement_mode={label} ---")
+    torch.manual_seed(0)
+    device = "cpu"
+
+    B, Ctx, C, S = 2, 2, args.latent_dim, 16
+    dynamics = build_dynamics(args, use_actions=True, device=device)
+    dynamics.eval(); dynamics.requires_grad_(False)
+    model_dim = dynamics.model_dim
+
+    reward_head = RewardHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
+                             num_buckets=args.num_buckets, mtp_length=args.mtp_length).to(device)
+    reward_head.eval(); reward_head.requires_grad_(False)
+    policy_head = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
+                             hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
+                             movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
+                             movement_gate=movement_gate,
+                             movement_mode=movement_mode).to(device)
+    # Put the head in the state a REAL Phase-2 checkpoint is in: MTP offset 0 at
+    # exact zero-init (BC runs `for n in range(1, mtp_length)`, so it is never
+    # trained), offsets >= 1 trained.
+    #
+    # DO NOT PERTURB HEAD 0. The previous version of this test did, with the
+    # comment "so the prior KL is non-degenerate" -- and head 0 sitting at exact
+    # zero-init is precisely the condition that makes a mis-sliced prior visible.
+    # Perturbing it manufactured a plausible 1.9e-3 KL and hid a 7.29-nat bug on
+    # real weights. The degeneracy was the signal, not the nuisance.
+    with torch.no_grad():
+        for n in range(1, args.mtp_length):
+            policy_head.heads[n].weight.normal_(0, 0.02)
+            policy_head.movement_heads[n].weight.normal_(0, 0.02)
+            if movement_gate:
+                policy_head.gate_heads[n].weight.normal_(0, 0.02)
+    policy_prior = copy.deepcopy(policy_head)
+    policy_prior.eval(); policy_prior.requires_grad_(False)
+    value_head = ValueHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
+                           num_buckets=args.num_buckets).to(device)
+
+    z_context = torch.randn(B, Ctx, C, S, S)
+    roll = imagine(dynamics, policy_head, reward_head, value_head, z_context, args, device)
+    assert roll["agent_outs"].shape == (B, args.horizon, model_dim)
+    assert roll["movement_acts"].shape == (B, args.horizon, MOVEMENT_DIM)
+    # The sampled movement INDEX must be long class indices, in the mode's own
+    # layout -- this is what PMPO scores, and storing continuous xy here is what
+    # made joint_noop raise "movement targets must be LONG class indices".
+    exp_idx = ((B, args.horizon) if movement_mode == "joint_noop"
+               else (B, args.horizon, MOVEMENT_DIM))
+    assert roll["movement_idx"].shape == exp_idx, \
+        f"movement_idx {tuple(roll['movement_idx'].shape)} != {exp_idx}"
+    assert roll["movement_idx"].dtype == torch.long, \
+        f"movement_idx must be LONG class indices, got {roll['movement_idx'].dtype}"
+    assert roll["movement_prev"].shape == exp_idx
+
+    rms = {"value": RunningRMS(), "policy": RunningRMS()}
+    params = list(policy_head.parameters()) + list(value_head.parameters())
+    optimizer = torch.optim.AdamW(params, lr=1e-3)
+
+    # --- INVARIANT: prior is a deepcopy of the policy, so step-0 KL is EXACTLY 0 ---
+    _, info0 = run_step(roll, policy_head, policy_prior, value_head, args,
+                        device, torch.float32, rms)
+    kl0 = info0["kl"].item()
+    assert kl0 == 0.0, (
+        f"[{label}] the prior is a deepcopy of the policy, so the step-0 KL must "
+        f"be EXACTLY 0.0, got {kl0:.6e}. Nonzero means policy and prior are read "
+        f"at different MTP offsets (that bug measured 7.29 nats on a real "
+        f"checkpoint, where it made --pmpo-beta an entropy bonus that erased the "
+        f"BC policy).")
+    print(f"  step-0 KL           = {kl0:.1f} exactly  (prior IS the policy)")
+
+    # --- Now move the policy off the prior; the KL must become positive. ---
+    # Without this the invariant above would also be satisfied by a KL hardcoded
+    # to zero. Perturb the offset PMPO actually reads.
+    with torch.no_grad():
+        policy_head.movement_heads[MTP_OFFSET].weight.add_(
+            torch.randn_like(policy_head.movement_heads[MTP_OFFSET].weight) * 0.05)
+    rms = {"value": RunningRMS(), "policy": RunningRMS()}
+    optimizer.zero_grad()
+    total, info = run_step(roll, policy_head, policy_prior, value_head, args,
+                           device, torch.float32, rms)
+    assert info["kl"].item() > 0, f"[{label}] KL stayed 0 after the policy moved"
+    total.backward()
+
+    # --- GRAD-FLOW PROOF, PER OFFSET ---
+    # The old assertion was `sum(h.weight.grad.norm() for h in movement_heads) > 0`,
+    # which is true whenever ANY offset trains -- so a dead offset could never show.
+    # PMPO scores exactly one offset, so assert exactly that: MTP_OFFSET gets
+    # gradient and every other offset gets none.
+    per_offset = []
+    for n in range(args.mtp_length):
+        g = policy_head.movement_heads[n].weight.grad
+        per_offset.append(0.0 if g is None else g.norm().item())
+    assert per_offset[MTP_OFFSET] > 0, (
+        f"[{label}] movement_heads[{MTP_OFFSET}] -- the offset PMPO samples and "
+        f"scores -- got ZERO gradient. Per-offset norms: {per_offset}")
+    for n, gn in enumerate(per_offset):
+        if n != MTP_OFFSET:
+            assert gn == 0.0, (
+                f"[{label}] movement_heads[{n}] got gradient {gn:.3e} but PMPO "
+                f"only reads offset {MTP_OFFSET}; the slice is leaking.")
+    ability_grad_norm = sum(h.weight.grad.norm().item() for h in policy_head.heads
+                            if h.weight.grad is not None)
+    value_grad_norm = sum(p.grad.norm().item() for p in value_head.parameters()
+                          if p.grad is not None)
+    # Frozen modules must have no grads.
+    for name, mod in [("dynamics", dynamics), ("reward_head", reward_head),
+                      ("policy_prior", policy_prior)]:
+        with_grad = [n for n, p in mod.named_parameters() if p.grad is not None]
+        assert not with_grad, f"[{label}] frozen {name} got gradients: {with_grad[:3]}"
+
+    torch.nn.utils.clip_grad_norm_(params, 1.0)
+    optimizer.step()
+
+    print(f"  total_loss          = {info['loss'].item():.4f}")
+    print(f"  policy_loss (PMPO)  = {info['policy_loss'].item():.4f}")
+    print(f"  value_loss          = {info['value_loss'].item():.4f}")
+    print(f"  KL after perturb    = {info['kl'].item():.6e}  (> 0: policy != prior)")
+    print(f"  mean_return         = {info['mean_return'].item():.4f}")
+    print(f"  pos_advantage_frac  = {info['pos_frac'].item():.2%}")
+    print(f"  GRAD movement_heads per offset = "
+          f"[{', '.join(f'{g:.2e}' for g in per_offset)}]")
+    print(f"    ^ only offset {MTP_OFFSET} may be nonzero (PMPO scores one offset)")
+    print(f"  GRAD ability heads  = {ability_grad_norm:.6e}")
+    print(f"  GRAD value head     = {value_grad_norm:.6e}")
+    print("  optimizer.step() OK")
+
+
 def smoke_test(args):
-    """Tiny synthetic CPU rollout + train step. Proves: (1) on-policy dream runs
-    via rollout() with sampled actions fed back, (2) lambda-returns/PMPO/value
-    losses compute, (3) forward+backward+optimizer step works, and (4)
-    movement_heads receive a nonzero PMPO gradient (today they would get zero)."""
+    """Tiny synthetic CPU rollout + train step, for EVERY movement mode.
+
+    The previous version built only an 'axis' head, so the two joint_noop crashes
+    (continuous-xy targets, and the movement_dim axis a joint head does not have)
+    were structurally invisible to it, and it perturbed MTP head 0 -- hiding the
+    mis-sliced prior it should have caught. It now covers all three modes that
+    reach Phase 3 and asserts the step-0 KL invariant instead of working around it.
+    """
     print("=" * 60)
     print("PHASE 3 IMAGINATION SMOKE TEST (synthetic, CPU)")
     print("=" * 60)
-    torch.manual_seed(0)
-    device = "cpu"
     args.model_size = "tiny"
     args.latent_dim = 16
     args.mtp_length = 4
@@ -472,76 +787,11 @@ def smoke_test(args):
     args.tau_ctx_forward = 0.9
     args.temperature = 1.0
 
-    B, Ctx, C, S = 2, 2, args.latent_dim, 16
-    dynamics = build_dynamics(args, use_actions=True, device=device)
-    dynamics.eval(); dynamics.requires_grad_(False)
-    model_dim = dynamics.model_dim
+    for movement_mode, movement_gate in (("axis", False), ("axis", True),
+                                         ("joint_noop", False)):
+        _smoke_one_mode(args, movement_mode, movement_gate)
 
-    reward_head = RewardHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
-                             num_buckets=args.num_buckets, mtp_length=args.mtp_length).to(device)
-    reward_head.eval(); reward_head.requires_grad_(False)
-    policy_head = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
-                             hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
-                             movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins).to(device)
-    # Perturb the policy off zero-init so the prior KL and movement logits are
-    # non-degenerate (zero-init would make policy==prior, KL==0 trivially).
-    with torch.no_grad():
-        for h in policy_head.movement_heads:
-            h.weight.normal_(0, 0.02)
-        for h in policy_head.heads:
-            h.weight.normal_(0, 0.02)
-    policy_prior = copy.deepcopy(policy_head)
-    policy_prior.eval(); policy_prior.requires_grad_(False)
-    # Now nudge the trainable policy so policy != prior (nonzero KL).
-    with torch.no_grad():
-        for h in policy_head.movement_heads:
-            h.weight.add_(torch.randn_like(h.weight) * 0.05)
-    value_head = ValueHead(input_dim=model_dim, hidden_dim=args.hidden_dim,
-                           num_buckets=args.num_buckets).to(device)
-
-    z_context = torch.randn(B, Ctx, C, S, S)
-    roll = imagine(dynamics, policy_head, reward_head, value_head, z_context, args, device)
-    assert roll["agent_outs"].shape == (B, args.horizon, model_dim)
-    assert roll["movement_acts"].shape == (B, args.horizon, MOVEMENT_DIM)
-
-    rms = {"value": RunningRMS(), "policy": RunningRMS()}
-    params = list(policy_head.parameters()) + list(value_head.parameters())
-    optimizer = torch.optim.AdamW(params, lr=1e-3)
-    optimizer.zero_grad()
-    total, info = run_step(roll, policy_head, policy_prior, value_head, args,
-                           device, torch.float32, rms)
-    total.backward()
-
-    # --- GRAD-FLOW PROOF: movement_heads get a nonzero PMPO gradient ---
-    move_grads = [h.weight.grad for h in policy_head.movement_heads if h.weight.grad is not None]
-    assert move_grads, "movement_heads received NO gradient (None) under PMPO!"
-    move_grad_norm = sum(g.norm().item() for g in move_grads)
-    assert move_grad_norm > 0, f"movement_heads PMPO gradient is exactly zero ({move_grad_norm})!"
-    ability_grad_norm = sum(h.weight.grad.norm().item() for h in policy_head.heads
-                            if h.weight.grad is not None)
-    value_grad_norm = sum(p.grad.norm().item() for p in value_head.parameters()
-                          if p.grad is not None)
-    # Frozen modules must have no grads.
-    for name, mod in [("dynamics", dynamics), ("reward_head", reward_head),
-                      ("policy_prior", policy_prior)]:
-        with_grad = [n for n, p in mod.named_parameters() if p.grad is not None]
-        assert not with_grad, f"frozen {name} got gradients: {with_grad[:3]}"
-
-    torch.nn.utils.clip_grad_norm_(params, 1.0)
-    optimizer.step()
-
-    print(f"  horizon             = {args.horizon} (rollout via dynamics.rollout, actions fed back)")
-    print(f"  total_loss          = {info['loss'].item():.4f}")
-    print(f"  policy_loss (PMPO)  = {info['policy_loss'].item():.4f}")
-    print(f"  value_loss          = {info['value_loss'].item():.4f}")
-    print(f"  factorized KL       = {info['kl'].item():.6e}  (> 0: policy != prior)")
-    print(f"  mean_return         = {info['mean_return'].item():.4f}")
-    print(f"  pos_advantage_frac  = {info['pos_frac'].item():.2%}")
-    print(f"  GRAD movement_heads = {move_grad_norm:.6e}  (PROOF: > 0 under PMPO)")
-    print(f"  GRAD ability heads  = {ability_grad_norm:.6e}")
-    print(f"  GRAD value head     = {value_grad_norm:.6e}")
-    print("  optimizer.step() OK")
-    print("SMOKE TEST PASSED")
+    print("\nSMOKE TEST PASSED (axis, axis+gate, joint_noop)")
     return True
 
 
@@ -624,6 +874,25 @@ def main():
             optimizer.zero_grad()
             total, info = run_step(roll, policy_head, policy_prior, value_head,
                                    args, device, amp_dtype, rms)
+            if global_step == 0:
+                # PREFLIGHT THAT CAN FAIL, on the real weights. policy_prior is
+                # copy.deepcopy(policy_head) a few lines above, so before the
+                # first optimizer step the two are the same module and the KL is
+                # EXACTLY 0 -- any other value means policy and prior are being
+                # read at different MTP offsets. That bug shipped and measured
+                # 7.29 nats here, turning --pmpo-beta into an entropy bonus
+                # pointed at the BC policy. Checked against real weights because
+                # it only shows when MTP head 0 is at its true zero-init state.
+                _kl0 = info["kl"].item()
+                if _kl0 != 0.0:
+                    raise SystemExit(
+                        f"Phase-3 step-0 prior KL is {_kl0:.6e}, must be EXACTLY 0: "
+                        f"the behavioural prior is a deepcopy of the policy, so "
+                        f"before any update the two distributions are identical. "
+                        f"A nonzero value means the prior is sliced at a different "
+                        f"MTP offset than the policy (MTP_OFFSET={MTP_OFFSET}).")
+                print(f"[preflight] step-0 prior KL = {_kl0:.1f} exactly "
+                      f"(prior is the policy; the KL anchor is wired correctly)")
             if not torch.isfinite(total):
                 print(f"[WARN] non-finite loss at step {global_step}; skipping.")
                 continue
@@ -654,6 +923,14 @@ def main():
                       f"V={info['value_loss'].item():.4f} KL={info['kl'].item():.3e} "
                       f"R={info['mean_reward'].item():.3f} A+={info['pos_frac'].item():.0%} "
                       f"({sps:.1f} samp/s)")
+
+            if args.max_steps and global_step >= args.max_steps:
+                # A smoke run is not a training run: stop without writing a
+                # part-epoch checkpoint that later reads as a real one.
+                print(f"\n[--max-steps {args.max_steps}] reached after "
+                      f"{global_step} optimizer step(s); stopping without saving.")
+                finish_wandb()
+                return
 
         save_phase3_checkpoint(checkpoint_dir / f"imagination_epoch_{epoch + 1:03d}.pt",
                                policy_head, value_head, policy_prior, optimizer,
