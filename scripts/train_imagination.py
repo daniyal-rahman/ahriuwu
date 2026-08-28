@@ -102,6 +102,14 @@ def parse_args():
                         choices=["tiny", "small", "medium", "large"])
     parser.add_argument("--latent-dim", type=int, default=32)
     parser.add_argument("--seq-len", type=int, default=16, help="Context window length (frames).")
+    parser.add_argument("--degenerate-advantage-patience", type=int, default=5,
+                    help="Abort if pos_advantage_frac stays >=99.5%% or <=0.5%% for this "
+                         "many consecutive logged steps. PMPO uses only sign(A), so a "
+                         "one-sided split reduces the loss to likelihood maximisation of "
+                         "the policy's own samples -- mode collapse with the reward "
+                         "contributing nothing. Observed at 100%% on every step of the "
+                         "first real runs (zero-init critic, near-zero imagined rewards). "
+                         "0 disables.")
     parser.add_argument("--horizon", type=int, default=8, help="Imagination rollout length.")
     parser.add_argument("--stride", type=int, default=8)
     parser.add_argument("--mtp-length", type=int, default=9)
@@ -860,6 +868,7 @@ def main():
     print("Starting imagination training...")
     print("=" * 60)
     global_step = 0
+    _degen_steps = 0   # consecutive one-sided-advantage logged steps
     for epoch in range(args.epochs):
         policy_head.train(); value_head.train()
         t0 = time.time()
@@ -923,6 +932,39 @@ def main():
                       f"V={info['value_loss'].item():.4f} KL={info['kl'].item():.3e} "
                       f"R={info['mean_reward'].item():.3f} A+={info['pos_frac'].item():.0%} "
                       f"({sps:.1f} samp/s)")
+
+            # --- degenerate advantage guard -----------------------------
+            # PMPO uses only sign(A). If every sample is positive (or every
+            # sample negative) the D+/D- split carries no information and
+            # compute_pmpo_loss collapses to alpha * (-mean log pi): pure
+            # likelihood maximisation of whatever the policy just sampled, i.e.
+            # self-reinforcing mode collapse with the reward playing no part.
+            #
+            # This is not hypothetical. A fresh zero-init value head against
+            # near-zero imagined rewards gives advantages ~0, and `advantages
+            # >= 0` then makes EVERY sample positive: pos_frac was 100% on every
+            # step of the first two real runs. The run looks healthy -- loss
+            # falls, KL rises off zero -- while learning nothing from reward.
+            #
+            # Warming the critic on real trajectories first is the fix; this
+            # guard exists so the failure is loud instead of silent.
+            _pf = info["pos_frac"].item()
+            _degen_steps = (_degen_steps + 1) if (_pf >= 0.995 or _pf <= 0.005) else 0
+            if args.degenerate_advantage_patience > 0 and \
+                    _degen_steps >= args.degenerate_advantage_patience:
+                raise SystemExit(
+                    f"\nABORT: pos_advantage_frac has been {_pf:.1%} for "
+                    f"{_degen_steps} consecutive logged steps.\n"
+                    "PMPO uses only sign(advantage), so a one-sided split makes the "
+                    "loss pure likelihood maximisation of the policy's own samples "
+                    "-- mode collapse, with the reward contributing nothing.\n"
+                    "Usual cause: the value head is untrained, so advantages are ~0 "
+                    "and every sample lands on one side. Warm the critic on real "
+                    "trajectories before imagination training, or raise --horizon so "
+                    "rollouts actually contain reward events (95% of H=8 rollouts "
+                    "contain none).\n"
+                    "Set --degenerate-advantage-patience 0 to disable this check."
+                )
 
             if args.max_steps and global_step >= args.max_steps:
                 # A smoke run is not a training run: stop without writing a
