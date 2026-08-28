@@ -443,6 +443,17 @@ def check_movement_source(ckpt: dict, args, *, what: str) -> str:
               f"{args.movement_source!r}. The resulting checkpoint's action conditioning is "
               f"no longer the Phase-1 one.")
         return src
+    if getattr(args, "unfreeze_backbone", False):
+        # The message below has always listed --unfreeze-backbone as a remedy and
+        # this branch did not exist, so the guard REFUSED the fix it recommended.
+        # Verified empirically: freeze_backbone_train_agent(unfreeze=True) leaves
+        # 12/12 action_embed tensors with requires_grad, vs 0/12 when frozen. So an
+        # unfrozen run re-fits the embedding as part of the backbone, which is
+        # exactly what the mismatch requires.
+        print(f"WARNING: {detail}\n  Proceeding with --unfreeze-backbone (paper parity): "
+              f"action_embed trains as part of the backbone and will re-fit to "
+              f"{args.movement_source!r}.")
+        return src
     if getattr(args, "allow_movement_source_mismatch", False):
         print(f"WARNING: {detail}\n  Proceeding anyway (--allow-movement-source-mismatch): "
               f"the embedding stays FROZEN and mismatched.")
@@ -1567,8 +1578,9 @@ def main():
     args = parse_args()
     if args.seed is not None:
         import random as _random
+        import numpy as _np
         _random.seed(args.seed)
-        np.random.seed(args.seed)
+        _np.random.seed(args.seed)
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed_all(args.seed)
         print(f"[seed] {args.seed}")
