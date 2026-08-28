@@ -266,8 +266,12 @@ def parse_args():
     parser.add_argument("--smoke-test", action="store_true",
                         help="Run a tiny synthetic CPU train step end-to-end + assert "
                              "movement_heads receive BC gradient. No data/ckpt needed.")
-    parser.set_defaults(num_workers=0, wandb=False)
+    # add_wandb_args must come FIRST: its --wandb default is True, and argparse
+    # lets a later add_argument override an earlier set_defaults. With the old
+    # order the explicit wandb=False here was dead, wandb ran unasked, and a 90s
+    # `Run initialization has timed out` killed two A/B arms outright.
     add_wandb_args(parser)
+    parser.set_defaults(num_workers=0, wandb=False)
     return parser.parse_args()
 
 

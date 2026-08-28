@@ -22,6 +22,7 @@
 set -uo pipefail
 REPO=/mnt/nfs/projects/ahriuwu
 cd "$REPO" || exit 1
+export PYTORCH_ALLOC_CONF=expandable_segments:True
 PY=/home/dani/miniconda3/envs/ml/bin/python
 LOG=$REPO/ops/bronze_ab.log
 STEPS=${STEPS:-5000}
@@ -32,7 +33,7 @@ COMMON="--unfreeze-backbone --dynamics-checkpoint rollout_stage/desktop_resume_8
 --model-size medium --num-kv-heads 4 --num-register-tokens 8 --soft-cap 50.0 \
 --latents-dir /mnt/nfs/datasets/replay_latents_v7_bc \
 --labels-root /mnt/nfs/datasets/lol_replays_16_9_772 \
---seq-len 16 --stride 8 --batch-size 2 --grad-accum 8 --lr 1e-4 \
+--seq-len 16 --stride 8 --batch-size 1 --grad-accum 16 --lr 1e-4 --no-wandb \
 --warmup-steps 200 --num-workers 4 --epochs 1 --seed 1234 \
 --movement-mode axis --movement-gate --movement-source clicks"
 
