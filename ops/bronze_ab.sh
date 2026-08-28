@@ -29,7 +29,7 @@ STEPS=${STEPS:-5000}
 rm -f "$REPO/ops/bronze_ab.stop"
 echo "$(date -u '+%m-%d %H:%M UTC') bronze_ab: start, STEPS=$STEPS" >> "$LOG"
 
-COMMON="--unfreeze-backbone --dynamics-checkpoint rollout_stage/desktop_resume_8775_stripped.pt \
+COMMON="--unfreeze-backbone --video-loss-weight 1 --dynamics-checkpoint rollout_stage/desktop_resume_8775_stripped.pt \
 --model-size medium --num-kv-heads 4 --num-register-tokens 8 --soft-cap 50.0 \
 --latents-dir /mnt/nfs/datasets/replay_latents_v7_bc \
 --labels-root /mnt/nfs/datasets/lol_replays_16_9_772 \

@@ -1598,6 +1598,20 @@ def main():
             "(--train-action-embed also makes it non-vacuous — the video gradient then "
             "reaches action_embed, which is the one signal that keeps a re-fitted action "
             "embedding meaning 'what this action does to the next frames'.)")
+    if args.unfreeze_backbone and args.video_loss_weight <= 0:
+        raise SystemExit(
+            "--unfreeze-backbone with --video-loss-weight 0 diverges to NaN.\n"
+            "Unfreezing puts all 146M backbone params under gradient, but with Eq (7)\n"
+            "switched off NOTHING constrains them to keep modelling the world -- the\n"
+            "only signal is BC/reward through the agent tokens. Measured: 811\n"
+            "non-finite batches within 60 steps at weight 0, and 0 at weight 1, same\n"
+            "seed/data/config otherwise. The parity run trained a full epoch unfrozen\n"
+            "at this LR precisely because it passed --video-loss-weight 1.\n"
+            "Pass --video-loss-weight 1 (paper parity), or drop --unfreeze-backbone.\n"
+            "(The inverse mistake -- video loss with a FROZEN backbone -- is already\n"
+            "guarded above as a silent no-op; this is the dangerous direction.)"
+        )
+
     if args.movement_gate and args.movement_mode == "joint_noop":
         raise SystemExit(
             "--movement-gate and --movement-mode joint_noop both model 'no new "
