@@ -164,6 +164,15 @@ def parse_args():
                              "interpolated value depends on the NEXT click, so feeding "
                              "it as action conditioning leaks up to ~3s of the future "
                              "into the world model.")
+    parser.add_argument("--max-steps", type=int, default=0,
+                        help="Stop after this many optimiser steps (0 = run --epochs). "
+                             "An epoch is ~55,000 steps / ~25h on a 5080, so short A/B "
+                             "runs are impossible without this. A capped run is a SMOKE "
+                             "or A/B run and is written to a checkpoint dir of its own.")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Seed torch/numpy/random. Required for a fair A/B: without "
+                             "it two configs differ by init and data order as well as by "
+                             "the thing under test.")
     parser.add_argument("--prefirst-mode", choices=["sentinel", "heading", "exclude"],
                         default="sentinel",
                         help="Pre-first-click window. Clicks never start before ~60s in "
@@ -1556,6 +1565,13 @@ def _guard_interp_leak(args):
 
 def main():
     args = parse_args()
+    if args.seed is not None:
+        import random as _random
+        _random.seed(args.seed)
+        np.random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+        print(f"[seed] {args.seed}")
     _guard_interp_leak(args)
     if args.video_loss_weight > 0 and not (args.unfreeze_backbone or args.train_action_embed):
         raise SystemExit(
@@ -1820,6 +1836,17 @@ def main():
             scaler.update()
             scheduler.step()
             global_step += 1
+
+            if args.max_steps and global_step >= args.max_steps:
+                # A capped run is an A/B or smoke run, not training. Save under a
+                # name that cannot be mistaken for a finished epoch's checkpoint.
+                save_phase2_checkpoint(checkpoint_dir / "agent_finetune_capped.pt",
+                                       dynamics, reward_head, policy_head, optimizer,
+                                       scheduler, rms, epoch, global_step, args,
+                                       state_head=state_head)
+                print(f"\n[--max-steps {args.max_steps}] reached; wrote "
+                      f"agent_finetune_capped.pt and stopping.", flush=True)
+                return
 
             # Time-based checkpoint: a crash loses <= checkpoint-minutes, not a
             # whole (~19h on the 1060) epoch. Stores the CURRENT epoch so resume
