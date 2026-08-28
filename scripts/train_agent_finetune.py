@@ -1838,7 +1838,18 @@ def main():
                                    schedule, args, device, amp_dtype, rms,
                                    state_head=state_head)
             if not torch.isfinite(total):
-                print(f"[WARN] non-finite loss at step {global_step}; skipping.")
+                # Name the guilty component. "non-finite loss, skipping" alone is
+                # unactionable: an unfrozen axis+gate run emitted it 1,312 times
+                # at step 1 -- every batch skipped, global_step never advanced, and
+                # the log gave no way to tell WHICH term went bad.
+                _bad = [k for k, v in info.items()
+                        if torch.is_tensor(v) and v.numel() == 1
+                        and not torch.isfinite(v)]
+                _vals = {k: float(v) for k, v in info.items()
+                         if torch.is_tensor(v) and v.numel() == 1}
+                print(f"[WARN] non-finite loss at step {global_step}; skipping. "
+                      f"non-finite components: {_bad or 'none (total only)'} | "
+                      f"all: { {k: round(x, 4) for k, x in _vals.items()} }", flush=True)
                 continue
             # Divide by accum so the accumulated gradient equals the mean over
             # the effective batch, not its sum (otherwise the effective LR scales

@@ -35,7 +35,7 @@ COMMON="--unfreeze-backbone --dynamics-checkpoint rollout_stage/desktop_resume_8
 --labels-root /mnt/nfs/datasets/lol_replays_16_9_772 \
 --seq-len 16 --stride 8 --batch-size 2 --grad-accum 8 --lr 1e-4 --no-wandb \
 --warmup-steps 200 --num-workers 4 --epochs 1 --seed 1234 \
---movement-mode axis --movement-gate --movement-source clicks"
+--movement-mode joint_noop --movement-source clicks"
 
 run () {  # name  cache  prefirst  interp_flag  action_mode
   local name=$1 cache=$2 pf=$3 mi=$4 am=$5
