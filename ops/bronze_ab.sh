@@ -23,7 +23,7 @@ set -uo pipefail
 REPO=/mnt/nfs/projects/ahriuwu
 cd "$REPO" || exit 1
 export PYTORCH_ALLOC_CONF=expandable_segments:True
-PY=/home/dani/miniconda3/envs/ml/bin/python
+PY="/home/dani/miniconda3/envs/ml/bin/python -u"   # -u: buffered stdout made a 47-min run indistinguishable from a hung one
 LOG=$REPO/ops/bronze_ab.log
 STEPS=${STEPS:-5000}
 rm -f "$REPO/ops/bronze_ab.stop"
