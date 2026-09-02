@@ -258,6 +258,40 @@ def parse_args():
                         help="Run the held-out eval every N optimizer steps.")
     parser.add_argument("--val-batches", type=int, default=20,
                         help="Batches per held-out eval pass.")
+    # --- the DIRECTION acceptance metric (see DirectionReference) ---
+    parser.add_argument("--no-direction-metric", dest="direction_metric",
+                        action="store_false",
+                        help="Turn OFF the commanded-direction octant metric. It is on "
+                             "by default because move_event_ce -- the other acceptance "
+                             "number -- is a ratio test against a 0.83-bit crutch and "
+                             "STRUCTURALLY cannot judge a run that removes the crutch: "
+                             "taking the movement action out of the input makes "
+                             "move_event_ce worse whether behaviour improved or not. "
+                             "This one asks 'given a command fired, is the direction "
+                             "right', scored against a MEASURED within-game permutation "
+                             "null. It rides on the eval's existing forward passes and "
+                             "reads labels.json for the val games only, so it costs no "
+                             "GPU time and does not touch the dataset cache.")
+    parser.add_argument("--direction-perms", type=int, default=200,
+                        help="Label permutations used to MEASURE the direction null. "
+                             "Not 1/8: human directions are far from uniform (uniform "
+                             "12.5%%, measured null 15.4%%, best per-game constant "
+                             "20.3%%), so an assumed null manufactures significance.")
+    parser.add_argument("--cursor-weight", type=float, default=0.0,
+                        help="Weight of the per-frame CURSOR regression (0 = head not "
+                             "built, nothing changes). The cursor is a SECOND spatial "
+                             "channel, distinct from the click target: 28.9%% exact-"
+                             "repeat and 0.0059 median step vs movement's 91.2%%/0.1075, "
+                             "differing by >0.05 on 43%% of frames. It is a PREDICTION "
+                             "TARGET ONLY -- embed_actions never reads it, so it cannot "
+                             "become action conditioning. Rationale is input realism: a "
+                             "human moves the mouse continuously between clicks while "
+                             "the agent teleports the pointer to each click target. "
+                             "Weighted and RMS-normalized separately from bc_loss. NOTE: "
+                             "with --movement-action-mode held the cursor target sits "
+                             "within 0.05 of the movement action already in the input on "
+                             "65%% of frames, so a good bc_cursor there is not evidence "
+                             "of perception.")
     parser.add_argument("--dataset-cache", type=str, default=None,
                         help="Cache the (slow) dataset index — label/reward parse + per-.pt "
                              "frame_indices reads — to this file. Present -> load; absent -> "
@@ -400,6 +434,19 @@ MOVE_CE_DEPLOYED = 4.1212     # data/phase2_bc_clicks/agent_finetune_latest.pt (
 MOVE_CE_MARGINAL_3G = 5.216
 MOVE_CE_BLIND_TABLE_3G = 4.357
 MOVE_CE_DEPLOYED_3G = 4.365
+
+# --- cursor head -----------------------------------------------------------
+# Huber knee, in screen fractions. The pointer's own motion is far below it
+# (median inter-frame step 0.0050, p90 0.022), so normal motion is in the
+# QUADRATIC regime where precision is what the channel is for. Above it sit the
+# anchor teleports: `label.cursor.world` is sampled sparsely and 1% of steps
+# exceed 0.25, with a measured maximum of 1.41 — the full screen diagonal.
+# Plain MSE would let those unpredictable jumps dominate the gradient and pull
+# the head toward the marginal mean.
+CURSOR_HUBER_BETA = 0.05
+# What a cursor head must beat: predicting the corpus mean every frame.
+# 66k frames, 4 games. RMSE is the 2-D distance, comparable to `cursor_rmse`.
+CURSOR_CONST_MEAN_RMSE = 0.2734
 
 
 def checkpoint_movement_source(ckpt: dict) -> tuple[str, str]:
@@ -723,6 +770,335 @@ def blind_table_bar(dataset, train_vids, val_vids, movement_bins, laplace=0.5):
     return ce, int(len(va_new)), int(len(tr_new))
 
 
+# ---------------------------------------------------------------------------
+# The DIRECTION acceptance metric.
+#
+# WHY move_event_ce CANNOT judge the movement retrain, and this can.
+#
+# move_event_ce is a RATIO TEST against a crutch: it compares the head's
+# likelihood to a blind p(next bin | prev bin) table worth 0.832 bits. That
+# design cannot separate "the representation is empty" from "the
+# representation's signal is smaller than the crutch" — and that is exactly the
+# open question. Removing the movement action from the input necessarily makes
+# move_event_ce WORSE (the crutch leaves the input, so nothing can reach the
+# table's score) whether or not the behaviour improved. Four wrong conclusions
+# have already been drawn from it. Keep it — it is still the sharpest
+# copy-detector we have — but do not let it decide the retrain.
+#
+# This metric asks a different question with no crutch in it: given that a
+# command fired, does the model point the champion in the RIGHT DIRECTION? It is
+# scored against a null MEASURED by within-game label permutation, not an
+# assumed 1/8 — human movement directions are strongly non-uniform (lane is one
+# way), so uniform chance understates the null by ~3 points and would manufacture
+# significance out of nothing.
+#
+# Reference points, all from docs/DECISION0_REPLICATION.md, six held-out games:
+#   ridge on ONE frozen v7 latent frame, no previous click:  37.8%  (null 15.4%)
+#   uniform chance (WRONG null, do not use):                 12.5%
+#   best constant direction per game (oracle):               20.3%
+#   median angular error: best constant 87.9deg, that ridge  43.0deg
+# Those say the signal IS reachable from the frozen latents. A retrained head
+# that lands near the null has not found it.
+DIR_OCTANT_PROBE = 0.3776     # ridge on latent[t] -> click octant, 6 val games
+DIR_OCTANT_NULL = 0.1539      # its measured within-game permutation null
+DIR_OCTANT_UNIFORM = 0.125    # what an ASSUMED null would have been
+DIR_MED_DEG_PROBE = 43.0      # same probe, angular readout
+DIR_MED_DEG_CONST = 87.9      # best constant direction
+# THE BAR, and the reason the permutation null alone is not enough. Copying the
+# previous order is not just a likelihood crutch, it is a DIRECTIONAL one:
+# consecutive clicks are close together, so the direction to the OLD target is
+# already most of the direction to the new one. Blind, no pixels, same rows:
+# NOTE ON ROWSETS -- compare like with like, the same discipline MOVE_CE_BLIND_TABLE
+# needs. These two constants belong to the doc's PRIMARY rowset, which filters to
+# clicks farther than 250 world units (75.4% of events), where direction is
+# behaviourally meaningful. This trainer scores ALL post-first-click events, where
+# near-click direction noise pulls every number down. Reproduced with the shipped
+# DirectionReference on the same 6 val games, n = 14,558 events:
+#       rowset            shipped bar     doc
+#       all events           48.17%        --
+#       dist > 250 units     55.95%      54.79%   <- agrees to ~1 point
+# Camera drift between the two clicks is NOT the difference: re-projecting the
+# previous WORLD point through the CURRENT camera (the doc's own construction)
+# gives 55.46% vs the frozen screen coord's 55.95%. The frozen coord is also the
+# operationally right one -- it is literally what actions['movement'] holds, so it
+# is the score a model copying its own input actually gets.
+# This is why the bar is RECOMPUTED on the rows in use at every eval and printed
+# beside the accuracy: the constant below is a sanity reference, never the bar.
+DIR_OCTANT_PERSIST = 0.5479   # held previous target, re-aimed. DOC'S FAR ROWSET.
+DIR_OCTANT_PREV_TABLE = 0.5634  # previous-click octant lookup table. FAR ROWSET.
+# The deployed checkpoint through THIS metric (agent_finetune_latest.pt, step
+# 102,420; 6 val games, n=1,313 events, all post-first-click rows). Keep the
+# three numbers together -- separating them is how this metric nearly shipped
+# broken. 37.70% at z=+26 looks like the probe's 37.8%, and it is NOT the same
+# thing: the probe had NO access to the previous click and beat its null, while
+# this model has the previous click in its input and scores BELOW what that
+# input alone gives (45.85%). Same accuracy, opposite conclusions.
+DIR_OCTANT_DEPLOYED = 0.3770
+DIR_OCTANT_DEPLOYED_BAR = 0.4585      # persistence on the same 1,313 rows
+DIR_MED_DEG_DEPLOYED = 35.4           # its median angular error (bar: 22.6 deg)
+# The permutation null shuffles labels WITHIN GAME, which destroys temporal
+# order — so a copier sails past it. Measured: the deployed 146M checkpoint,
+# which matches a no-pixel table to 0.0002 nats on move_event_ce, still scores
+# 33.6% here at z=+8.5 against the null. Read against the null alone that looks
+# like vision. Read against 54.8% it is what it is: a DEGRADED copier. Both
+# numbers are reported, and the bar is persistence.
+
+
+class DirectionReference:
+    """Per-game champion screen position, first-click frame, and the ground-plane
+    anisotropy — everything needed to turn a screen-space (x, y) into a direction
+    ABOUT THE CHAMPION that matches the world-space octant the probe used.
+
+    Read straight from labels.json / clicks.json for the VAL games only, once, at
+    startup. Deliberately NOT threaded through the dataset: it is eval-only
+    bookkeeping, and adding it to ``_parse_match``'s output would bump the cache
+    schema and force every existing index cache to be rebuilt (a full re-read of
+    ~26 GB of latent packs) for a number no training step consumes.
+
+    Three things it fixes, each measured on 10,605 real click events (5 games):
+
+    1. THE CHAMPION IS NOT AT SCREEN CENTRE. It is camera-locked but only
+       loosely: median 0.041 of the screen away from (0.5, 0.5), 99th pct 0.132.
+       Taking the centre as the origin flips the octant on 30.1% of all events
+       (16.2% of the far ones). That is pure label noise injected into the very
+       quantity being measured, so the real ``champion_screen`` is used.
+
+    2. SCREEN SPACE IS A SHEARED VIEW OF WORLD SPACE. The ground plane is
+       compressed vertically by the camera tilt and the 16:9 horizontal FOV, so a
+       raw screen angle disagrees with the probe's world octant on 20.1% of
+       events. Undoing it needs one constant, derived from the projection rather
+       than fitted:
+
+           dx_screen ∝ dx_world / tan_h ,  dy_screen ∝ -dz_world · sin(tilt) / tan_v
+           => world angle = atan2(-dy_screen · tan_v/(sin(tilt)·tan_h), dx_screen)
+
+       With the shipped projection (fov_v 40°, tilt 56°, 16:9) that constant is
+       0.679; grid-searching it against the true world angles independently finds
+       0.69. Applied, screen-derived octants match the probe's world octants on
+       93.5% of all events / 96.8% of far ones, median angular disagreement
+       0.48°/0.35° — i.e. this IS the probe's quantity, computed from the batch.
+
+    3. THE PRE-FIRST-CLICK WINDOW. clicks.json never starts before ~60 s, and
+       under ``--prefirst-mode heading`` the trainer SYNTHESIZES movement events
+       in that window from ``heading_screen``. Those are a consequence of the
+       action, not the command, so scoring them would mix two different targets.
+       Every frame before a game's first real click is dropped.
+    """
+
+    def __init__(self, labels_root, match_ids, fps_key="fps"):
+        import json
+        import numpy as np
+        from pathlib import Path
+
+        from ahriuwu.data.replay_dataset import _Projection
+
+        self.games: dict[str, dict] = {}
+        self.skipped: list[tuple[str, str]] = []
+        for mid in sorted(match_ids):
+            lp = Path(labels_root) / mid / "labels.json"
+            if not lp.exists():
+                self.skipped.append((mid, "no labels.json"))
+                continue
+            with open(lp) as f:
+                labels = json.load(f)
+            frames = labels.get("frames") or []
+            T = len(frames)
+            if T == 0:
+                self.skipped.append((mid, "no frames"))
+                continue
+            w, h = labels["screen_resolution"]
+            champ = np.full((T, 2), np.nan, dtype=np.float32)
+            for i, fr in enumerate(frames):
+                cs = (fr.get("label") or {}).get("champion_screen")
+                if isinstance(cs, list) and len(cs) == 2 and cs[0] is not None:
+                    champ[i, 0] = cs[0] / float(w)
+                    champ[i, 1] = cs[1] / float(h)
+
+            # The anisotropy, from THIS game's own projection block.
+            proj = _Projection(labels)
+            sin_t = proj.sin_t
+            y_scale = (proj.tan_v / (sin_t * proj.tan_h)) if sin_t > 1e-6 else 1.0
+
+            # First REAL click frame, mapped with the same rounding
+            # _parse_movement_clicks uses so the two indexings cannot drift.
+            first_click = T
+            cp = lp.parent / "clicks.json"
+            if cp.exists():
+                with open(cp) as f:
+                    clicks = (json.load(f) or {}).get("clicks") or []
+                gt0 = float(frames[0]["gt"])
+                step = 1.0 / float(labels[fps_key])
+                for c in clicks:
+                    gt = c.get("game_t", c.get("game_time"))
+                    if gt is None or c.get("x") is None or c.get("z") is None:
+                        continue
+                    i = int(round((float(gt) - gt0) / step))
+                    if 0 <= i < T:
+                        first_click = min(first_click, i)
+            self.games[mid] = {"champ": champ, "first_click": first_click,
+                               "y_scale": float(y_scale), "T": T}
+
+    @classmethod
+    def from_games(cls, games):
+        """Build from in-memory per-game dicts, bypassing the JSON read.
+
+        For the smoke test's known-answer check: the metric has to be provable
+        on a signal whose answer is known in advance, with no data on disk.
+        """
+        obj = cls.__new__(cls)
+        obj.games = dict(games)
+        obj.skipped = []
+        return obj
+
+    def __len__(self):
+        return len(self.games)
+
+    def angles(self, match_id, frame_idx, xy):
+        """World-aligned direction of screen points ``xy`` about the champion.
+
+        frame_idx: (N,) int array of LABEL frame indices; xy: (N, 2) screen
+        coords. Returns (N,) radians, NaN where the frame is unusable (before
+        the game's first click, no champion_screen, or a zero-length vector
+        whose direction is undefined).
+        """
+        import numpy as np
+        g = self.games.get(match_id)
+        if g is None:
+            return np.full(len(frame_idx), np.nan)
+        fi = np.asarray(frame_idx, dtype=np.int64)
+        ok = (fi >= g["first_click"]) & (fi < g["T"])
+        out = np.full(len(fi), np.nan)
+        if not ok.any():
+            return out
+        ch = g["champ"][fi[ok]]
+        d = np.asarray(xy, dtype=np.float64)[ok] - ch
+        # Screen y grows DOWNWARD; negate so the angle is right-handed like the
+        # world-space atan2(dz, dx) the probe used, and rescale y to undo the
+        # ground plane's vertical compression (see the class docstring).
+        ang = np.arctan2(-d[:, 1] * g["y_scale"], d[:, 0])
+        ang[(d[:, 0] == 0) & (d[:, 1] == 0)] = np.nan   # no direction at all
+        out[ok] = ang
+        return out
+
+
+def _octant(ang):
+    """Radians -> 8-way octant index, boundaries centred on the axes/diagonals."""
+    import numpy as np
+    two_pi = 2.0 * np.pi
+    return np.floor((ang % two_pi) / (two_pi / 8.0) + 0.5).astype(np.int64) % 8
+
+
+def _ang_err_deg(a, b):
+    """Absolute angular difference in degrees, wrapped to [0, 180]."""
+    import numpy as np
+    return np.degrees(np.abs((a - b + np.pi) % (2.0 * np.pi) - np.pi))
+
+
+class DirectionAccumulator:
+    """Collects (game, true direction, predicted direction) across eval batches
+    and scores them ONCE at the end.
+
+    Pooling before scoring is not an optimization, it is required: the null is a
+    WITHIN-GAME label permutation, and a single val batch holds ~26 events from
+    one game — far too few to estimate a null from, and permuting inside a batch
+    would also destroy the game-level direction marginal the null exists to
+    preserve.
+    """
+
+    def __init__(self):
+        self.game: list = []
+        self.true: list = []
+        self.pred: list = []
+        self.prev: list = []
+        # match_id -> dense int. NOT hash(match_id): PYTHONHASHSEED randomizes
+        # string hashes and a collision would silently merge two games' labels
+        # into one permutation group, inflating the null's spread.
+        self._gid: dict[str, int] = {}
+
+    def add(self, match_id, frame_idx, tgt_xy, pred_xy, ref, prev_xy=None):
+        import numpy as np
+        at = ref.angles(match_id, frame_idx, tgt_xy)
+        ap = ref.angles(match_id, frame_idx, pred_xy)
+        # The blind bar: where the PREVIOUS order pointed, re-aimed from where
+        # the champion stands NOW. Scored on the identical rows, so it is a bar
+        # and not a different measurement.
+        aq = (ref.angles(match_id, frame_idx, prev_xy) if prev_xy is not None
+              else np.full(len(at), np.nan))
+        ok = np.isfinite(at) & np.isfinite(ap)
+        if not ok.any():
+            return
+        gid = self._gid.setdefault(match_id, len(self._gid))
+        self.game.append(np.full(int(ok.sum()), gid, dtype=np.int64))
+        self.true.append(at[ok])
+        self.pred.append(ap[ok])
+        self.prev.append(aq[ok])
+
+    def result(self, n_perm=200, seed=0):
+        """dir_{octant_acc, null_mean, null_sd, z, med_deg, med_deg_const,
+        persist_acc, persist_deg, n}.
+
+        TWO opponents, and they answer different questions. The permutation NULL
+        answers "could this accuracy come from the direction marginal alone".
+        PERSISTENCE answers "could it come from repeating the previous order",
+        which the null cannot: shuffling labels within a game destroys temporal
+        order, so a copier clears the null by tens of sigma. Read both; the bar
+        is persistence.
+
+        Everything is NaN when there is nothing to score. A metric nobody could
+        measure must never read as a perfect score — the same rule move_event_ce
+        follows.
+        """
+        import numpy as np
+        nan = float("nan")
+        empty = {"dir_octant_acc": nan, "dir_null_mean": nan, "dir_null_sd": nan,
+                 "dir_z": nan, "dir_med_deg": nan, "dir_med_deg_const": nan,
+                 "dir_persist_acc": nan, "dir_persist_deg": nan, "dir_n": 0.0}
+        if not self.true:
+            return empty
+        g = np.concatenate(self.game)
+        at = np.concatenate(self.true)
+        ap = np.concatenate(self.pred)
+        aq = np.concatenate(self.prev)
+        n = len(at)
+        if n == 0:
+            return empty
+        ot, op = _octant(at), _octant(ap)
+        acc = float((ot == op).mean())
+        med = float(np.median(_ang_err_deg(at, ap)))
+
+        # Best CONSTANT direction on THIS split — the 87.9deg reference,
+        # recomputed where it is used. A bar measured on another split is not a
+        # bar here; blind_table_bar makes the same argument for move_event_ce.
+        cand = np.linspace(-np.pi, np.pi, 360, endpoint=False)
+        med_const = float(np.min(np.median(
+            _ang_err_deg(at[None, :], cand[:, None]), axis=1)))
+
+        # Measured null: permute the LABELS within each game, keeping each
+        # game's own direction marginal and the model's predictions fixed.
+        rng = np.random.default_rng(seed)
+        groups = [np.flatnonzero(g == u) for u in np.unique(g)]
+        draws = np.empty(n_perm, dtype=np.float64)
+        shuf = ot.copy()
+        for k in range(n_perm):
+            for idx in groups:
+                shuf[idx] = ot[rng.permutation(idx)]
+            draws[k] = (shuf == op).mean()
+        null_m = float(draws.mean())
+        null_s = float(draws.std(ddof=1)) if n_perm > 1 else 0.0
+        z = (acc - null_m) / null_s if null_s > 0 else nan
+        # Persistence, on the same rows. NOT folded into the null: the null asks
+        # "could this accuracy come from the direction marginal alone", and the
+        # answer for a copier is no — copying carries real directional
+        # information. So it is a SEPARATE bar, and the one that matters.
+        pk = np.isfinite(aq)
+        p_acc = float((_octant(at[pk]) == _octant(aq[pk])).mean()) if pk.any() else nan
+        p_deg = float(np.median(_ang_err_deg(at[pk], aq[pk]))) if pk.any() else nan
+        return {"dir_octant_acc": acc, "dir_null_mean": null_m, "dir_null_sd": null_s,
+                "dir_z": float(z), "dir_med_deg": med, "dir_med_deg_const": med_const,
+                "dir_persist_acc": p_acc, "dir_persist_deg": p_deg,
+                "dir_n": float(n)}
+
+
 def build_val_order(dataset, val_vids, batch_size, n_batches):
     """Fixed val sequence order: an equal, evenly-spaced slice of every val game.
 
@@ -794,7 +1170,8 @@ def reward_mtp_loss(reward_logits, rewards, bucket_centers, mtp_length):
 
 
 def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_targets,
-                        mtp_length, ability_pos_weight=None, movement_event=None):
+                        mtp_length, ability_pos_weight=None, movement_event=None,
+                        cursor_targets=None, collect_direction=False):
     """Behavior-cloning negative log-likelihood of the NEXT actions.
 
     MTP head n (n >= 1) predicts the action at t+n from the token at t; n=0 is
@@ -807,6 +1184,15 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
         to "did the 21-bin cell change", which on the legacy target is 43%
         camera drift AND misses the 37.7% of real commands that quantize into
         the same cell (audit findings 1 and 5).
+    cursor_targets: (B, T, 2) per-frame pointer position, or None. When given and
+        the head was built with ``cursor_head``, adds ``bc_cursor`` (a Huber
+        regression) to the returned info. It is NOT folded into the returned
+        total: run_step weights and RMS-normalizes it separately, exactly like
+        the aux state loss, so --cursor-weight 0 leaves every other number
+        bit-identical.
+    collect_direction: also return the n=1 predicted/target movement xy and the
+        event mask, per frame, for the direction acceptance metric. Eval only —
+        it is a few argmaxes, but they are pure overhead in training.
     """
     ability_logits, movement_logits = policy_head(agent_out)
     # ability_logits:  (B, T, L, A)
@@ -832,6 +1218,11 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
     nan = torch.full((), float("nan"), device=agent_out.device)
     move_event_ce, move_event_acc = nan, nan
     move_event_n = torch.zeros((), device=agent_out.device)
+    # Per-frame payload for the DIRECTION metric, filled at n=1 only. The
+    # commanded direction is read off the CATEGORICAL argmax with the gate (or
+    # the NO_OP class) excluded — the same readout move_event_ce uses, and the
+    # action the policy would issue at temperature 0 on a frame where it fires.
+    dir_out: dict[str, torch.Tensor] = {}
     n_terms = 0
     for n in range(1, mtp_length):  # n >= 1: predict the NEXT actions only
         if T - n <= 0:
@@ -885,6 +1276,14 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
                         move_event_ce = -lp[ev_m].mean()
                         move_event_acc = (grid_lsm.argmax(-1)[ev_m]
                                           == cls[ev_m]).float().mean()
+                    if collect_direction and movement_event is not None:
+                        _g = F.log_softmax(
+                            m_logits[..., :policy_head.NO_OP].float(), dim=-1)
+                        _xy, _ = policy_head.joint_to_unit(_g.argmax(-1))
+                        dir_out = {"dir_pred_xy": _xy,
+                                   "dir_tgt_xy": movement_targets[:, n:, :],
+                                   "dir_prev_xy": movement_targets[:, n - 1:T - 1, :],
+                                   "dir_ev": movement_event[:, n:].to(torch.bool)}
                     # reuse the gate slots: "fires on a real command" vs "on a hold"
                     gate_fire_t = (pred != policy_head.NO_OP)[~is_noop].float().mean() \
                         if (~is_noop).any() else torch.zeros((), device=cls.device)
@@ -918,6 +1317,18 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
                         # top-1 of the argmax CELL: both axes must be right.
                         move_event_acc = (lsm.argmax(-1) == m_idx).all(-1)[ev_m] \
                             .float().mean()
+                    if collect_direction:
+                        # bin i decodes to i/(bins-1), matching
+                        # discretize_movement's inverse exactly.
+                        _pi = F.log_softmax(m_logits.float(), dim=-1).argmax(-1)
+                        dir_out = {
+                            "dir_pred_xy": _pi.float() / max(policy_head.movement_bins - 1, 1),
+                            "dir_tgt_xy": movement_targets[:, n:, :],
+                            # The HELD previous target: `movement` is piecewise-
+                            # constant and only an event changes it, so row j's
+                            # previous order is simply the frame before.
+                            "dir_prev_xy": movement_targets[:, n - 1:T - 1, :],
+                            "dir_ev": ev_m}
         if gated:
             # Sticky-categorical NLL: prev bin for target a_{t+n} is a_{t+n-1}
             # (n>=1, so the previous target is always in-window).
@@ -954,6 +1365,38 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
             )
         n_terms += 1
 
+    # --- the CURSOR regression ------------------------------------------------
+    # Same MTP window as movement (n >= 1), and for the same reason restated for
+    # a channel that is NOT a label leak. The cursor never enters the model
+    # (embed_actions reads movement/cursor_valid/abilities and nothing else), so
+    # n=0 carries no leak the way an action target would. It carries a CRUTCH:
+    # measured over 66k frames, cursor_t sits within 0.05 of the movement action
+    # ALREADY IN THE INPUT on 65.1% of frames (median distance 0.027). Scoring
+    # n=0 would hand this head the same copy shortcut the movement head fell
+    # into. n>=1 does not remove it either (64.4% at n=1, 55.2% at n=3) — under
+    # --movement-action-mode held the crutch is simply present, and that is worth
+    # knowing before reading a good bc_cursor as perception.
+    cursor_loss = torch.zeros((), device=agent_out.device)
+    cursor_rmse = nan
+    if cursor_targets is not None:
+        if not getattr(policy_head, "cursor_head", False):
+            raise RuntimeError(
+                "cursor_targets were passed but PolicyHead was built without "
+                "cursor_head — the loss would be silently dropped. Build the "
+                "head with cursor_head=True (--cursor-weight > 0).")
+        cur_pred = policy_head.predict_cursor(agent_out)        # (B, T, L, 2)
+        c_terms, sq = 0, torch.zeros((), device=agent_out.device)
+        for n in range(1, mtp_length):
+            if T - n <= 0:
+                break
+            p = cur_pred[:, :T - n, n, :]
+            t = cursor_targets[:, n:, :]
+            cursor_loss = cursor_loss + F.smooth_l1_loss(p, t, beta=CURSOR_HUBER_BETA)
+            sq = sq + ((p - t) ** 2).sum(-1).mean().detach()
+            c_terms += 1
+        cursor_loss = cursor_loss / max(c_terms, 1)
+        cursor_rmse = torch.sqrt(sq / max(c_terms, 1))
+
     n_terms = max(n_terms, 1)
     ability_nll = ability_nll / n_terms
     move_nll = move_nll / n_terms
@@ -962,7 +1405,10 @@ def bc_next_action_loss(policy_head, agent_out, ability_targets, movement_target
                                     "trans_frac": trans_frac,
                                     "move_event_ce": move_event_ce,
                                     "move_event_acc": move_event_acc,
-                                    "move_event_n": move_event_n}
+                                    "move_event_n": move_event_n,
+                                    "bc_cursor": cursor_loss,
+                                    "cursor_rmse": cursor_rmse,
+                                    **dir_out}
 
 
 # ---------------------------------------------------------------------------
@@ -981,7 +1427,8 @@ def _rms_normalize(tracker, value):
 
 
 def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
-             amp_dtype, rms, state_head=None, update_rms=True):
+             amp_dtype, rms, state_head=None, update_rms=True,
+             collect_direction=False):
     """Forward + loss for one batch. Returns (total_loss, info_dict).
 
     The dynamics is NOT wrapped in no_grad (see :func:`freeze_backbone_train_agent`):
@@ -1043,6 +1490,20 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
     ability_targets = stack_ability_targets(batch["actions"], device)  # (B,T,A)
     movement_targets = actions["movement"]            # (B, T, 2)
     movement_event = actions.get("movement_event")    # (B, T) bool or None
+    # The per-frame cursor. Only read when a weight asks for it, and then it must
+    # BE there: a dataset cache written before schema 6 carries no `cursor` key,
+    # and quietly training a head on nothing is precisely the failure that made
+    # gold_scale/prefirst_mode/movement_interp silent no-ops.
+    cw = float(getattr(args, "cursor_weight", 0.0) or 0.0)
+    cursor_targets = None
+    if cw > 0:
+        cursor_targets = actions.get("cursor")
+        if cursor_targets is None:
+            raise SystemExit(
+                "--cursor-weight > 0 but the batch carries no actions['cursor']. "
+                "That field arrived with dataset cache schema 6; a cache written "
+                "before it loads without the key. Delete --dataset-cache to "
+                "rebuild, or drop --cursor-weight.")
     B, T = rewards.shape
 
     actions_dict = actions if dynamics.use_actions else None
@@ -1077,6 +1538,7 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
             policy_head, agent_out, ability_targets, movement_targets, args.mtp_length,
             ability_pos_weight=getattr(args, "ability_pos_weight", None),
             movement_event=movement_event,
+            cursor_targets=cursor_targets, collect_direction=collect_direction,
         )
 
         aux_loss = torch.zeros((), device=agent_out.device)
@@ -1105,6 +1567,12 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
             total = total + vw * norm("video", video_loss)
         if state_head is not None:
             total = total + args.aux_state_weight * norm("aux", aux_loss)
+        # Weighted and RMS-normalized SEPARATELY (like aux state), never folded
+        # into bc_loss: with --cursor-weight 0 the head is not even built, so
+        # `bc_loss` keeps meaning exactly what it meant before this existed and
+        # remains comparable across every run in the log.
+        if cw > 0:
+            total = total + cw * norm("cursor", bc_info["bc_cursor"])
 
     info = {
         "loss": total.detach(),
@@ -1118,16 +1586,72 @@ def run_step(batch, dynamics, reward_head, policy_head, schedule, args, device,
             "move_event_ce", "move_event_acc", "move_event_n")
            if k in bc_info},
     }
+    if cw > 0:
+        info["bc_cursor"] = bc_info["bc_cursor"].detach()
+        info["cursor_rmse"] = bc_info["cursor_rmse"].detach()
+    # Per-frame direction payload (eval only). NOT scalars — evaluate() pairs
+    # them with the batch's video_id/start_frame and pools across batches.
+    for k in ("dir_pred_xy", "dir_tgt_xy", "dir_prev_xy", "dir_ev"):
+        if k in bc_info:
+            info[k] = bc_info[k].detach()
     return total, info
+
+
+def _fmt_direction(v, args):
+    """The direction acceptance line, or '' when the metric did not run."""
+    if v.get("dir_n", 0) <= 0 or v.get("dir_octant_acc") != v.get("dir_octant_acc"):
+        return ""
+    z = v["dir_z"]
+    acc, pers = v["dir_octant_acc"], v["dir_persist_acc"]
+    # TWO tests, and the second is the one that decides. Beating the null only
+    # says the direction is not the marginal; a pure copier does that easily,
+    # because the direction to the previous order is most of the direction to
+    # the next one. Beating PERSISTENCE is what says the pixels were used.
+    if not (z == z) or z < 3.0:
+        verdict = "AT THE NULL - no directional signal at all"
+    elif pers == pers and acc < pers:
+        verdict = (f"above null but BELOW the blind copier ({100 * pers:.1f}%) "
+                   f"- NOT evidence of vision")
+    elif acc < DIR_OCTANT_PROBE - 0.03:
+        verdict = "beats the blind copier"
+    else:
+        verdict = "beats the copier AND matches the frozen-latent probe"
+    return (f"      dir_octant={100 * acc:.2f}%  [BAR: blind copier "
+            f"{100 * pers:.2f}% on these rows]  vs MEASURED null "
+            f"{100 * v['dir_null_mean']:.2f}+-{100 * v['dir_null_sd']:.2f}% "
+            f"(z={z:+.1f})  n={int(v['dir_n'])}\n"
+            f"      -> {verdict}\n"
+            f"      dir_median_angle={v['dir_med_deg']:.1f}deg  "
+            f"(copier {v['dir_persist_deg']:.1f}deg, best constant on THIS split "
+            f"{v['dir_med_deg_const']:.1f}deg; refs: probe {DIR_MED_DEG_PROBE:.1f}deg, "
+            f"doc best-constant {DIR_MED_DEG_CONST:.1f}deg, probe octant "
+            f"{100 * DIR_OCTANT_PROBE:.1f}% / null {100 * DIR_OCTANT_NULL:.1f}% / "
+            f"doc copier {100 * DIR_OCTANT_PERSIST:.1f}% -- the doc's numbers are "
+            f"its >250-unit rowset, THIS bar is recomputed on these rows)")
+
+
+def _fmt_cursor(v, args):
+    """The cursor line, or '' when the head is not built."""
+    if not getattr(args, "cursor_weight", 0.0) or v.get("bc_cursor") != v.get("bc_cursor"):
+        return ""
+    return (f"      cursor huber={v['bc_cursor']:.5f} rmse={v['cursor_rmse']:.4f} "
+            f"(constant-mean baseline {CURSOR_CONST_MEAN_RMSE:.4f}; weight "
+            f"{args.cursor_weight})")
 
 
 @torch.no_grad()
 def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, device,
-             amp_dtype, rms, state_head=None, max_batches=20):
+             amp_dtype, rms, state_head=None, max_batches=20, dir_ref=None):
     """Mean losses over held-out GAMES. Never updates the RMS trackers.
 
     Action-dropout is forced off and the noise RNG is fixed, so successive
     evals differ only because the model changed.
+
+    ``dir_ref`` (a DirectionReference) turns on the direction acceptance metric:
+    the commanded-direction octant accuracy against a measured within-game
+    permutation null, plus the median angular error. It rides on the SAME
+    forward passes -- no extra model time -- and is scored once, pooled over
+    every batch, because the null is a within-GAME permutation.
     """
     was_training = reward_head.training
     reward_head.eval(); policy_head.eval()
@@ -1135,15 +1659,18 @@ def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, dev
         state_head.eval()
     p_drop, args.action_dropout = getattr(args, "action_dropout", 0.0), 0.0
     keys = ("loss", "bc_loss", "bc_ability", "bc_movement", "reward_loss",
-            "aux_state", "gate_on_trans", "gate_on_hold", "trans_frac")
+            "aux_state", "gate_on_trans", "gate_on_hold", "trans_frac",
+            "bc_cursor", "cursor_rmse")
     # move_event_ce/acc are averaged over EVENT FRAMES, not over batches: the
     # event count varies per batch (median hold run 5 frames), so a mean of
     # per-batch means would weight a batch with 3 events like one with 300.
     ev_keys = ("move_event_ce", "move_event_acc")
     acc = {k: 0.0 for k in keys}
+    seen = {k: 0 for k in keys}
     ev_acc = {k: 0.0 for k in ev_keys}
     ev_n = 0.0
     n = 0
+    dir_acc = DirectionAccumulator() if dir_ref is not None else None
     cpu_rng = torch.get_rng_state()
     dev_rng = torch.cuda.get_rng_state(device) if device.startswith("cuda") else None
     try:
@@ -1151,12 +1678,15 @@ def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, dev
         for batch in val_loader:
             _, info = run_step(batch, dynamics, reward_head, policy_head, schedule,
                                args, device, amp_dtype, rms, state_head=state_head,
-                               update_rms=False)
+                               update_rms=False, collect_direction=dir_acc is not None)
             if not torch.isfinite(info["loss"]):
                 continue
             for k in keys:
                 if k in info:
                     acc[k] += info[k].item()
+                    seen[k] += 1
+            if dir_acc is not None and "dir_ev" in info:
+                _collect_direction(dir_acc, dir_ref, batch, info)
             m = float(info["move_event_n"].item()) if "move_event_n" in info else 0.0
             if m > 0 and all(torch.isfinite(info[k]).item() for k in ev_keys if k in info):
                 ev_n += m
@@ -1177,12 +1707,40 @@ def evaluate(val_loader, dynamics, reward_head, policy_head, schedule, args, dev
                 state_head.train()
     if n == 0:
         return None
-    out = {k: v / n for k, v in acc.items()}
+    out = {k: (v / seen[k] if seen[k] else float("nan")) for k, v in acc.items()}
     # n == 0 events => NaN, never 0.0: a metric nobody could measure must not
     # read as a perfect score.
     out.update({k: (v / ev_n if ev_n > 0 else float("nan")) for k, v in ev_acc.items()})
     out["move_event_n"] = ev_n
+    if dir_acc is not None:
+        out.update(dir_acc.result(n_perm=int(getattr(args, "direction_perms", 200))))
     return out
+
+
+def _collect_direction(dir_acc, dir_ref, batch, info):
+    """Feed one eval batch's n=1 movement predictions into the accumulator.
+
+    The MTP contract is that head n predicts the action at t+n, so row j of the
+    n=1 payload is the command at SEQUENCE index j+1 and therefore at LABEL
+    frame ``start_frame + j + 1``. Getting that off by one would look up the
+    champion's position one frame early, which is exactly the kind of silent
+    misalignment this metric exists to avoid, so it is derived here once.
+    """
+    import numpy as np
+    ev = info["dir_ev"].cpu().numpy()                       # (B, T-1) bool
+    pred = info["dir_pred_xy"].float().cpu().numpy()        # (B, T-1, 2)
+    tgt = info["dir_tgt_xy"].float().cpu().numpy()          # (B, T-1, 2)
+    prev = info["dir_prev_xy"].float().cpu().numpy()        # (B, T-1, 2)
+    vids = batch["video_id"]
+    starts = batch["start_frame"]
+    starts = starts.tolist() if torch.is_tensor(starts) else list(starts)
+    for b, mid in enumerate(vids):
+        m = ev[b]
+        if not m.any():
+            continue
+        j = np.flatnonzero(m)
+        dir_acc.add(str(mid), int(starts[b]) + j + 1, tgt[b][j], pred[b][j], dir_ref,
+                    prev_xy=prev[b][j])
 
 
 # ---------------------------------------------------------------------------
@@ -1250,7 +1808,7 @@ def smoke_test(args):
 
     schedule = DiffusionSchedule(device=device)
     rms = {"bc": RunningRMS(), "reward": RunningRMS(), "aux": RunningRMS(),
-           "video": RunningRMS()}
+           "video": RunningRMS(), "cursor": RunningRMS()}
     params = agent_params + list(reward_head.parameters()) \
         + list(policy_head.parameters()) + list(state_head.parameters())
     optimizer = torch.optim.AdamW(params, lr=1e-3)
@@ -1514,6 +2072,167 @@ def smoke_test(args):
     assert math.isnan(_nan_bar), (
         f"with no click events the bar is undefined and must be NaN, got {_nan_bar}")
 
+    # === STEP 7: the DIRECTION metric, on signals whose answer is known ======
+    # This is the number the movement retrain will be judged by, and several
+    # metrics in this file have shipped broken. So pin it from both ends before
+    # any checkpoint is read through it:
+    #   * a head that predicts the target EXACTLY must score 100% and 0deg;
+    #   * a head that predicts uniformly at random must land ON the measured
+    #     null, not above it;
+    #   * the measured null must NOT be 1/8 on a skewed direction marginal --
+    #     if it were, an assumed null would do and the permutation is pointless.
+    # The champion positions and first-click frames are synthetic here, so the
+    # geometry (champion offset, y-scale, pre-first-click cut) is exercised too.
+    import numpy as _np
+    _rng = _np.random.default_rng(7)
+    _n_g, _n_ev, _T_g = 3, 900, 4000
+    _first = 300
+    _dir_games, _ev_rows = {}, []
+    for _gi in range(_n_g):
+        # A champion that WANDERS off screen centre, like the real one.
+        _ch = 0.5 + _rng.normal(0, 0.03, size=(_T_g, 2)).astype(_np.float32)
+        _dir_games[f"g{_gi}"] = {"champ": _ch, "first_click": _first,
+                                 "y_scale": 0.679, "T": _T_g}
+        # Skewed direction marginal (one lane dominates) => the measured null
+        # must sit ABOVE 1/8. Half the events land BEFORE the first click and
+        # must be dropped.
+        _fi = _rng.integers(0, _T_g, size=_n_ev)
+        _w = _np.array([0.34, 0.22, 0.13, 0.08, 0.06, 0.06, 0.05, 0.06])
+        _oc = _rng.choice(8, size=_n_ev, p=_w / _w.sum())
+        _th = _oc * (2 * _np.pi / 8) + _rng.uniform(-0.3, 0.3, size=_n_ev)
+        _r = _rng.uniform(0.05, 0.35, size=_n_ev)
+        # invert the y-scale so the produced screen point HAS this world angle
+        _xy = _ch[_fi] + _np.stack(
+            [_r * _np.cos(_th), -_r * _np.sin(_th) / 0.679], axis=-1)
+        # A PREVIOUS order that is a jittered version of the new one — the real
+        # relationship (consecutive clicks are close), which is what makes a
+        # copier score well above the permutation null.
+        _th_p = _th + _rng.normal(0, 0.45, size=_n_ev)
+        _prev = _ch[_fi] + _np.stack(
+            [_r * _np.cos(_th_p), -_r * _np.sin(_th_p) / 0.679], axis=-1)
+        _ev_rows.append((f"g{_gi}", _fi, _xy, _prev))
+    _ref = DirectionReference.from_games(_dir_games)
+
+    def _dir_score(pred_fn, seed=0):
+        a = DirectionAccumulator()
+        for _mid, _fi, _xy, _pv in _ev_rows:
+            a.add(_mid, _fi, _xy, pred_fn(_mid, _fi, _xy, _pv), _ref, prev_xy=_pv)
+        return a.result(n_perm=200, seed=seed)
+
+    _perfect = _dir_score(lambda m, f, xy, pv: xy)
+    _dropped = _n_g * _n_ev - int(_perfect["dir_n"])
+    assert abs(_perfect["dir_octant_acc"] - 1.0) < 1e-9, (
+        f"a head predicting the target EXACTLY scored "
+        f"{_perfect['dir_octant_acc']:.4f}, must be 1.0 — THE DIRECTION METRIC "
+        f"IS WRONG and every run judged by it would be mis-read")
+    assert _perfect["dir_med_deg"] < 1e-6, (
+        f"exact predictions gave median angular error "
+        f"{_perfect['dir_med_deg']:.4f}deg, must be ~0")
+    assert _dropped > 0 and int(_perfect["dir_n"]) > 0, (
+        f"the pre-first-click cut dropped {_dropped} of {_n_g * _n_ev} events; "
+        f"it must drop the ones before frame {_first} and keep the rest")
+
+    # Uniform head: a direction independent of the label, same champion origin.
+    def _uniform_pred(m, f, xy, pv):
+        g = _dir_games[m]
+        t = _rng.uniform(-_np.pi, _np.pi, size=len(f))
+        r = _rng.uniform(0.05, 0.35, size=len(f))
+        return g["champ"][f] + _np.stack(
+            [r * _np.cos(t), -r * _np.sin(t) / g["y_scale"]], axis=-1)
+
+    def _at_null(r, what, tol=4.0):
+        d = abs(r["dir_octant_acc"] - r["dir_null_mean"]) / max(r["dir_null_sd"], 1e-9)
+        assert d < tol, (
+            f"a {what} head scored {r['dir_octant_acc']:.4f} against a measured "
+            f"null of {r['dir_null_mean']:.4f}+-{r['dir_null_sd']:.4f} ({d:.1f} sd "
+            f"away). It must land ON the null; a metric that rewards a head "
+            f"knowing nothing about the pixels would pass a blind retrain.")
+        return d
+
+    _unif = _dir_score(_uniform_pred, seed=1)
+    _at_null(_unif, "UNIFORM")
+    assert abs(_unif["dir_med_deg"] - 90.0) < 12.0, (
+        f"a uniform head's median angular error is {_unif['dir_med_deg']:.1f}deg, "
+        f"expected ~90deg")
+    # The null for a uniform predictor IS 1/8 (sum_k p_label(k)/8), so a uniform
+    # head cannot show that measuring the null was worth the trouble. This can:
+    # a head that has learned each game's DIRECTION MARGINAL and nothing else —
+    # the "best constant"-flavoured blind baseline the doc measures at 20.3%.
+    # Judged against an ASSUMED 1/8 it looks like a large, real discovery.
+    def _marginal_pred(m, f, xy, pv):
+        g = _dir_games[m]
+        o = _rng.choice(8, size=len(f), p=_w / _w.sum())   # label-INDEPENDENT
+        t = o * (2 * _np.pi / 8)
+        r = _rng.uniform(0.05, 0.35, size=len(f))
+        return g["champ"][f] + _np.stack(
+            [r * _np.cos(t), -r * _np.sin(t) / g["y_scale"]], axis=-1)
+
+    _marg = _dir_score(_marginal_pred, seed=2)
+    _at_null(_marg, "MARGINAL-ONLY")
+    assert _marg["dir_null_mean"] > DIR_OCTANT_UNIFORM + 0.04, (
+        f"a head that reproduces the direction marginal scores "
+        f"{_marg['dir_octant_acc']:.4f}, and its measured null came out at "
+        f"{_marg['dir_null_mean']:.4f} — barely above uniform {DIR_OCTANT_UNIFORM}. "
+        f"The permutation is NOT preserving each game's direction distribution, "
+        f"so the null is fake and every z-score built on it is inflated.")
+    _fake_z = ((_marg["dir_octant_acc"] - DIR_OCTANT_UNIFORM)
+               / max(_marg["dir_null_sd"], 1e-9))
+    assert _fake_z > 8.0, (
+        f"an ASSUMED 1/8 null would only have given this blind head z={_fake_z:.1f}; "
+        f"the check is not exercising the failure it exists to catch")
+    # THE test the deployed checkpoint forced into existence. A head that just
+    # REPEATS the previous order must land exactly on the persistence bar, and
+    # that bar must sit far above the permutation null — otherwise the metric
+    # reports a copier as vision, which is the whole failure being escaped.
+    _copy = _dir_score(lambda m, f, xy, pv: pv, seed=3)
+    assert abs(_copy["dir_octant_acc"] - _copy["dir_persist_acc"]) < 1e-9, (
+        f"a head that repeats the previous order scored "
+        f"{_copy['dir_octant_acc']:.4f} but the persistence BAR computed on the "
+        f"same rows is {_copy['dir_persist_acc']:.4f} — the bar is not measuring "
+        f"the copier it exists to catch")
+    _copy_z = (_copy["dir_octant_acc"] - _copy["dir_null_mean"]) / max(_copy["dir_null_sd"], 1e-9)
+    assert _copy_z > 10.0, (
+        f"a pure copier only reached z={_copy_z:.1f} against the permutation "
+        f"null; the synthetic previous-order correlation is too weak to "
+        f"exercise the trap this bar exists for")
+    dir_report = (_perfect, _unif, _marg, _copy, _copy_z, _fake_z, _dropped)
+
+    # === STEP 8: the cursor head ============================================
+    # Built only on request, regression not bins, and it must actually receive
+    # gradient — a target-only channel that trains nothing is a no-op.
+    _cur_tgt = torch.rand(B, T, MOVEMENT_DIM, device=device)
+    ph_cur = PolicyHead(input_dim=model_dim, num_abilities=len(ABILITY_KEYS),
+                        hidden_dim=args.hidden_dim, mtp_length=args.mtp_length,
+                        movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
+                        movement_gate=True, cursor_head=True).to(device)
+    _tok = torch.zeros(B, T, model_dim, device=device, requires_grad=True)
+    _, _ci = bc_next_action_loss(ph_cur, _tok, ab_t, mv, args.mtp_length,
+                                 movement_event=move_ev, cursor_targets=_cur_tgt)
+    _ci["bc_cursor"].backward()
+    _cur_grad = sum(float(p.grad.norm()) for p in ph_cur.cursor_heads.parameters()
+                    if p.grad is not None)
+    assert _cur_grad > 0, "the cursor head received NO gradient from bc_cursor"
+    # zero-init weights + 0.5 bias => the first prediction is screen centre
+    assert abs(float(ph_cur.predict_cursor(_tok)[0, 0, 1, 0]) - 0.5) < 1e-6, (
+        "the cursor head's initial prediction must be screen centre (0.5), not "
+        "the (0,0) corner")
+    # And it must never be built by accident: the default head has no cursor.
+    assert not getattr(policy_head, "cursor_head", False), (
+        "PolicyHead built a cursor head without being asked — --cursor-weight "
+        "defaults to 0 and must change nothing")
+    _no_cur_keys = [k for k in policy_head.state_dict() if k.startswith("cursor_heads")]
+    assert not _no_cur_keys, (
+        f"cursor tensors {_no_cur_keys} leaked into the default state_dict; "
+        f"every existing checkpoint would fail to load")
+    try:
+        bc_next_action_loss(policy_head, zero_tok, ab_t, mv, args.mtp_length,
+                            movement_event=move_ev, cursor_targets=_cur_tgt)
+        raise AssertionError("passing cursor_targets to a head with no cursor_head "
+                             "must RAISE, not silently drop the loss")
+    except RuntimeError:
+        pass
+    cursor_report = (float(_ci["bc_cursor"]), float(_ci["cursor_rmse"]), _cur_grad)
+
     print(f"  total_loss          = {info['loss'].item():.4f}")
     print(f"  bc_loss             = {info['bc_loss'].item():.4f} "
           f"(ability={info['bc_ability'].item():.4f}, movement={info['bc_movement'].item():.4f})")
@@ -1554,6 +2273,32 @@ def smoke_test(args):
         print(f"      {kind:14s} stream -> bar={bar:.4f}  expected {want}   "
               f"[fit {n_tr} commands, eval {n_val}]")
     print("      no-event stream -> NaN (refuses to invent a bar), as required")
+    _p, _u, _m, _c, _copy_z, _fake_z, _dropped = dir_report
+    print("  DIRECTION metric KNOWN-ANSWER CHECK (the retrain's acceptance test):")
+    print(f"      PERFECT head   -> octant {100 * _p['dir_octant_acc']:6.2f}%  "
+          f"median {_p['dir_med_deg']:.3f}deg   (must be 100% / 0deg)")
+    print(f"      UNIFORM head   -> octant {100 * _u['dir_octant_acc']:6.2f}%  "
+          f"vs MEASURED null {100 * _u['dir_null_mean']:.2f}"
+          f"+-{100 * _u['dir_null_sd']:.2f}%  z={_u['dir_z']:+.2f}  "
+          f"median {_u['dir_med_deg']:.1f}deg (must be ~90)")
+    print(f"      MARGINAL-only  -> octant {100 * _m['dir_octant_acc']:6.2f}%  "
+          f"vs MEASURED null {100 * _m['dir_null_mean']:.2f}"
+          f"+-{100 * _m['dir_null_sd']:.2f}%  z={_m['dir_z']:+.2f} (must be ~0)")
+    print(f"      ^ that head knows only the direction marginal, nothing from "
+          f"pixels. Against an ASSUMED 1/8 null it would have scored "
+          f"z={_fake_z:+.1f} -- PROOF the measured null is load-bearing")
+    print(f"      COPIER head    -> octant {100 * _c['dir_octant_acc']:6.2f}%  "
+          f"== persistence BAR {100 * _c['dir_persist_acc']:.2f}% on the same rows, "
+          f"z={_copy_z:+.1f} vs the null")
+    print(f"      ^ a copier BEATS the permutation null by {_copy_z:.0f} sd. The "
+          f"null cannot catch it (it shuffles away time); the persistence bar can. "
+          f"Judge a run on the BAR.")
+    print(f"      pre-first-click cut dropped {_dropped} events, kept "
+          f"{int(_p['dir_n'])}")
+    _cl, _cr, _cg = cursor_report
+    print(f"  CURSOR head: huber={_cl:.5f} rmse={_cr:.4f} GRAD={_cg:.4e} (>0), "
+          f"init prediction = screen centre, absent from the default state_dict, "
+          f"and raises if targets are passed to a head without one")
     print("SMOKE TEST PASSED")
     return True
 
@@ -1646,7 +2391,13 @@ def main():
         movement_dim=MOVEMENT_DIM, movement_bins=args.movement_bins,
         movement_gate=args.movement_gate,
         movement_mode=args.movement_mode,
+        cursor_head=args.cursor_weight > 0,
     ).to(device)
+    if args.cursor_weight > 0:
+        print(f"  cursor head: ON, weight={args.cursor_weight} "
+              f"(regression, Huber beta={CURSOR_HUBER_BETA}; constant-mean "
+              f"baseline RMSE {CURSOR_CONST_MEAN_RMSE}). Prediction target only "
+              f"-- embed_actions never reads it.")
     if args.movement_gate:
         print(f"  movement gate: ON (sticky categorical), action-dropout={args.action_dropout}")
     if args.movement_mode == "joint_noop":
@@ -1719,6 +2470,7 @@ def main():
         num_workers=args.num_workers, pin_memory=(device != "cpu"), drop_last=True,
     )
     val_loader = None
+    dir_ref = None
     if val_idx:
         order = build_val_order(dataset, val_vids, args.batch_size, args.val_batches)
         if not order:
@@ -1734,10 +2486,30 @@ def main():
         print(f"  [split] val loader: {len(val_loader)} batches "
               f"({len(order)} sequences, an equal slice of each of "
               f"{len(val_vids)} held-out games)")
+        if args.direction_metric:
+            dir_ref = DirectionReference(args.labels_root, val_vids)
+            if len(dir_ref) == 0:
+                print(f"  [dir] direction metric DISABLED: no val game's labels "
+                      f"were readable under {args.labels_root} ({dir_ref.skipped})")
+                dir_ref = None
+            else:
+                _fc = {m: g["first_click"] for m, g in dir_ref.games.items()}
+                _ys = {round(g["y_scale"], 4) for g in dir_ref.games.values()}
+                print(f"  [dir] direction metric ON over {len(dir_ref)} val games; "
+                      f"y-scale {sorted(_ys)} (ground-plane anisotropy, from each "
+                      f"game's own projection); first-click frame "
+                      f"{min(_fc.values())}-{max(_fc.values())} (everything before "
+                      f"is dropped); null MEASURED with {args.direction_perms} "
+                      f"within-game label permutations.")
+                print(f"        refs: probe on frozen latents {100*DIR_OCTANT_PROBE:.1f}% "
+                      f"vs its measured null {100*DIR_OCTANT_NULL:.1f}% "
+                      f"(assumed 1/8 = {100*DIR_OCTANT_UNIFORM:.1f}% would be WRONG); "
+                      f"median angle: best-constant {DIR_MED_DEG_CONST:.1f}deg, "
+                      f"probe {DIR_MED_DEG_PROBE:.1f}deg")
 
     schedule = DiffusionSchedule(device=device)
     rms = {"bc": RunningRMS(), "reward": RunningRMS(), "aux": RunningRMS(),
-           "video": RunningRMS()}
+           "video": RunningRMS(), "cursor": RunningRMS()}
     # Trainable set: agent-token blocks (frozen backbone excluded) + all heads.
     params = agent_params + list(reward_head.parameters()) + list(policy_head.parameters())
     if state_head is not None:
@@ -1780,6 +2552,17 @@ def main():
         for k in _rebuilt:
             _ph.pop(k)
         _missing, _unexpected = policy_head.load_state_dict(_ph, strict=False)
+        # The cursor head is an ADDITION, not a redefinition: every checkpoint
+        # written before --cursor-weight existed lacks its tensors, and starting
+        # them fresh is exactly right — nothing else in the module reads them and
+        # the loss is weighted separately, so the rest of the head resumes
+        # unchanged. Only excused when this run actually asked for the head.
+        _fresh_cursor = [k for k in _missing if k.startswith("cursor_heads.")]
+        if _fresh_cursor and args.cursor_weight > 0:
+            _rebuilt = list(_rebuilt) + _fresh_cursor
+            print(f"  [resume] policy head: cursor head is NEW in this run "
+                  f"({len(_fresh_cursor)} tensors at fresh init); the checkpoint "
+                  f"predates --cursor-weight.")
         _bad = [k for k in _missing if k not in _rebuilt]
         if _bad or _unexpected:
             raise SystemExit(
@@ -1901,7 +2684,7 @@ def main():
             if val_loader is not None and global_step % args.val_interval == 0:
                 v = evaluate(val_loader, dynamics, reward_head, policy_head, schedule,
                              args, device, amp_dtype, rms, state_head=state_head,
-                             max_batches=len(val_loader))
+                             max_batches=len(val_loader), dir_ref=dir_ref)
                 if v is not None:
                     log_step({f"val/{k}": x for k, x in v.items()}, step=global_step)
                     print(f"  [VAL @ step {global_step}] loss={v['loss']:.4f} "
@@ -1930,6 +2713,12 @@ def main():
                           f"{MOVE_CE_DEPLOYED:.4f}  [3-game doc refs: bar "
                           f"{MOVE_CE_BLIND_TABLE_3G:.3f}, deployed "
                           f"{MOVE_CE_DEPLOYED_3G:.3f}]")
+                    # The metric that CAN judge a run with the crutch removed.
+                    # move_event_ce above necessarily gets worse when the
+                    # movement action leaves the input; this one does not.
+                    for _line in (_fmt_direction(v, args), _fmt_cursor(v, args)):
+                        if _line:
+                            print(_line)
 
             # keyed on OPTIMIZER steps, not micro-batches: with --grad-accum the
             # non-step micro-batches `continue` before this point, so a batch_idx
@@ -1964,12 +2753,15 @@ def main():
         if val_loader is not None:  # end-of-epoch held-out eval
             v = evaluate(val_loader, dynamics, reward_head, policy_head, schedule,
                          args, device, amp_dtype, rms, state_head=state_head,
-                         max_batches=len(val_loader))
+                         max_batches=len(val_loader), dir_ref=dir_ref)
             if v is not None:
                 log_step({f"val/{k}": x for k, x in v.items()}, step=global_step)
                 print(f"[EPOCH {epoch} VAL] loss={v['loss']:.4f} bc={v['bc_loss']:.4f} "
                       f"(abil={v['bc_ability']:.3f} move={v['bc_movement']:.3f}) "
                       f"rew={v['reward_loss']:.4f} aux={v['aux_state']:.4f}")
+                for _line in (_fmt_direction(v, args), _fmt_cursor(v, args)):
+                    if _line:
+                        print(_line)
 
         ckpt_path = checkpoint_dir / f"agent_finetune_epoch_{epoch + 1:03d}.pt"
         save_phase2_checkpoint(ckpt_path, dynamics, reward_head, policy_head,

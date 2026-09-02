@@ -174,6 +174,7 @@ class PolicyHead(nn.Module):
         movement_bins: int = 21,
         movement_gate: bool = False,
         movement_mode: str = "axis",
+        cursor_head: bool = False,
     ):
         """Initialize policy head.
 
@@ -188,6 +189,9 @@ class PolicyHead(nn.Module):
                 axis ∈ [0, 1] is split into this many equal-width bins whose
                 centers tile the interval; bin ``i`` center = i/(bins-1). 21 bins
                 ≈ 5% screen resolution per step, a sane foveated-grid default.
+            cursor_head: build the per-frame CURSOR regression head (see
+                ``predict_cursor``). Off by default so the module's state_dict —
+                and therefore every existing checkpoint's — is unchanged.
         """
         super().__init__()
         if movement_mode not in ("axis", "joint_noop"):
@@ -256,6 +260,28 @@ class PolicyHead(nn.Module):
                 nn.init.zeros_(head.weight)
                 nn.init.zeros_(head.bias)
 
+        # Optional per-frame CURSOR head: where the mouse IS, as opposed to
+        # `movement` (where it last CLICKED). REGRESSION, not bins — measured on
+        # 66k frames of 4 games, the cursor's median inter-frame step is 0.0050
+        # of the screen while one movement bin is 1/(21-1) = 0.05 wide. Binning
+        # it at the movement head's resolution would leave a 0.0193 quantization
+        # RMSE (3.9x the median step) and freeze 81.7% of consecutive frames into
+        # the SAME bin — i.e. it would manufacture exactly the ~90%-repeat target
+        # that turned the movement head into a copier. A continuous head is the
+        # only one that can represent the motion this channel exists to capture.
+        #
+        # Bias starts at 0.5 (screen centre) with zero weights, so the initial
+        # prediction is the sane constant rather than the (0,0) corner, and the
+        # first gradient still reaches the weights.
+        self.cursor_head = cursor_head
+        if cursor_head:
+            self.cursor_heads = nn.ModuleList([
+                nn.Linear(hidden_dim, movement_dim) for _ in range(mtp_length)
+            ])
+            for head in self.cursor_heads:
+                nn.init.zeros_(head.weight)
+                nn.init.constant_(head.bias, 0.5)
+
         # Zero-init output heads: initial predictions are zero/uniform
         for head in self.heads:
             nn.init.zeros_(head.weight)
@@ -323,6 +349,23 @@ class PolicyHead(nn.Module):
         assert self.movement_gate, "PolicyHead was built without movement_gate"
         x = self.mlp(agent_tokens)
         return torch.stack([h(x).squeeze(-1) for h in self.gate_heads], dim=2)
+
+    def predict_cursor(self, agent_tokens: torch.Tensor) -> torch.Tensor:
+        """Per-frame cursor position, (B, T, L, 2) in screen coords.
+
+        Requires ``cursor_head``. Output is UNBOUNDED (no sigmoid): the target
+        lives in [0, 1] and a squashing nonlinearity would flatten the gradient
+        exactly at the screen edges, where clamped off-viewport observations
+        pile up. Callers clamp for display, not for the loss.
+
+        This is a PREDICTION TARGET only. ``DynamicsModel.embed_actions`` reads
+        'movement', 'cursor_valid' and the ability keys and nothing else, so the
+        cursor never becomes action conditioning — feeding it would hand the
+        world model a channel the policy has to invent at rollout time.
+        """
+        assert self.cursor_head, "PolicyHead was built without cursor_head"
+        x = self.mlp(agent_tokens)
+        return torch.stack([h(x) for h in self.cursor_heads], dim=2)
 
     # ---- joint_noop encode/decode. Single source of truth for the class<->grid
     # mapping so the dataset, trainer and inference decoder cannot disagree.

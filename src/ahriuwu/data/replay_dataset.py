@@ -268,15 +268,19 @@ class ReplayLatentSequenceDataset(Dataset):
         #   3 = cursor dead-band denoise in _parse_movement
         #   4 = click-event movement target + movement_event; enemy_visible
         #       gated on screen!=None; GarenQAttack counted as an auto-attack
-        #   6 = _parse_match now also returns the per-frame `cursor` channel.
-#   5 = the key now covers EVERY option that changes parsed output.
+        #   5 = the key now covers EVERY option that changes parsed output.
         #       It previously omitted the reward config, so editing gold_scale
         #       with a cache on disk was a SILENT NO-OP -- the run would load
         #       rewards built with the old scale and look like the change did
         #       nothing. prefirst_mode and movement_interp (added 2026-08-27)
         #       had the identical bug the moment they were introduced: both
         #       rewrite the movement target, neither was in the key.
-        #       Anything that alters _parse_match's OUTPUT belongs here.
+        #   6 = _parse_match now also returns the per-frame `cursor` channel.
+        #       (Consumers of that channel do NOT bump the schema: --cursor-weight
+        #       only READS a field this parse already produces unconditionally,
+        #       so it cannot change parsed output. The rule is about what
+        #       _parse_match writes, not about who reads it.)
+        # Anything that alters _parse_match's OUTPUT belongs here.
         import dataclasses as _dc
         rc = self.reward_config
         return {"latents_dir": str(self.latents_dir),
