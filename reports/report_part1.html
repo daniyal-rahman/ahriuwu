@@ -1,0 +1,176 @@
+<div class="title-block">
+<h1>The agent that could not walk to lane</h1>
+<div class="subtitle">A DreamerV4-style League of Legends agent, its perception stack, and the
+month spent discovering that the behaviour-cloning target was sitting in the model&rsquo;s own input</div>
+<div class="byline">ahriuwu &middot; project report &middot; 2 September 2026 &middot; measurements re-run for this document unless marked otherwise</div>
+</div>
+
+<div class="lede">
+<p>The agent could not play. First it failed to walk to top lane &mdash; a behaviour that occurs
+in essentially 100% of the training replays. Once that was fixed it could not last-hit.
+The investigation that followed found that the movement head predicts where to click by
+<b>copying its own previous action</b> rather than by reading the screen, and that this was the
+correct solution to the objective as written: the movement action is a <i>held</i> click target,
+bit-identical on 87.3% of consecutive frames, and it is fed to the model as action conditioning.
+Copying is worth 0.83 bits for free; the pixels are worth 0.31 bits of work. Cutting that channel
+at inference &mdash; no retraining &mdash; fixed walking to lane (wrong-lane games 27.5% &rarr; 10%,
+per-game direction error 72.7&deg; &rarr; 29.9&deg;). A full retrain with the channel removed then
+failed its acceptance test. And the twist this report builds to: our entire evaluation stack
+measures <b>imitation fidelity</b>, not <b>play quality</b> &mdash; and a human can play at
+plat/emerald level from the decoded tokenizer latents, so the information is demonstrably there.
+We were measuring the wrong thing.</p>
+</div>
+
+<h2>Contents</h2>
+<div class="toc">
+<div><span class="n">1</span> What the system is</div>
+<div><span class="n">2</span> The data</div>
+<div><span class="n">3</span> The symptom</div>
+<div><span class="n">4</span> The investigation, and its false starts</div>
+<div><span class="n">5</span> The root cause</div>
+<div><span class="n">6</span> The fix, and what it bought</div>
+<div><span class="n">7</span> What the retrain showed</div>
+<div><span class="n">8</span> The evaluation problem</div>
+<div><span class="n">9</span> The rest of the stack</div>
+<div><span class="n">10</span> How we compare to the field</div>
+<div><span class="n">11</span> What is actually blocking</div>
+<div><span class="n">12</span> Honest limitations</div>
+<div><span class="n">A</span> Which measurements to trust</div>
+<div><span class="n">B</span> Figure provenance</div>
+</div>
+
+<h2>1. What the system is</h2>
+
+<p>The target architecture is Dreamer 4 (arXiv 2509.24527), adapted to League of Legends top lane
+with a single champion (Garen). There is no official release of Dreamer 4 &mdash;
+<code>danijar/dreamer4</code> and <code>danijar/dreamerv4</code> both 404, and the project page
+links only to the paper. Every implementation in the field, ours included, is an independent
+reading of the same 32-page paper. The stack has four stages.</p>
+
+<figure>
+<img src="figures/f12_pipeline.png" alt="pipeline diagram">
+<figcaption><b>Figure 1.</b> The four stages, and the one edge that broke the whole thing.
+The movement action reaches the world model as a token in frame <i>t</i>&rsquo;s token set
+(<code>dynamics.py:776</code>); the agent token cross-attends to exactly that set. Behaviour
+cloning then asks the model to predict <i>a</i><sub>t+n</sub> for <i>n</i>&nbsp;&ge;&nbsp;1 &mdash;
+and on a hold frame <i>a</i><sub>t+1</sub> is bit-for-bit <i>a</i><sub>t</sub>. The target is in
+the input.</figcaption>
+</figure>
+
+<h3>1.1 Phase 1a &mdash; the tokenizer</h3>
+
+<p>A block-causal ViT masked autoencoder, 206 M parameters, trained on 352&times;352 replay frames
+at 20 fps. Patch size 16 gives 484 patch tokens per frame. The bottleneck is a linear projection
+to 512 latents &times; 16 dims followed by a <code>tanh</code> &mdash; exactly the paper&rsquo;s
+Appendix&nbsp;A shape &mdash; reshaped downstream to 32&times;16&times;16 for the dynamics. The
+objective is reconstruction only: <code>MSE + 0.2 &middot; LPIPS</code>, each term normalised by
+its own running RMS. There is no GAN, no KL, no VQ, no latent regulariser; the paper has none
+either, and any claim in this repo to the contrary has been struck.</p>
+
+<p>Two deviations matter. First, masking is <i>tube</i> masking &mdash; one spatial mask reused
+across all 20 frames of a clip &mdash; where the paper masks per image. A tube-masked HP bar is
+unpredictable from any frame&rsquo;s context, so the loss-optimal output is a generic mean bar,
+which is the artifact observed. Second, the mask ratio ran on a linear warm-up curriculum that
+a resume bug re-triggered on every requeue, so the measured mean input mask over training was
+<b>0.1&ndash;0.2</b> rather than the paper&rsquo;s flat <i>p</i>&nbsp;~&nbsp;U(0,&nbsp;0.9). The
+MAE benefit the paper claims for spatial consistency was largely not purchased. Both are fixed
+in code; both are baked into the shipped v7 checkpoint.</p>
+
+<p>The measured plateau is objective- and data-limited, not capacity-limited: a nine-day
+continuation bought <b>+0.28&nbsp;dB</b>, and the effective rank of the bottleneck is
+&asymp;&nbsp;31 of 8,192 dimensions.</p>
+
+<div class="box">
+<h4>The strongest evidence in the whole project</h4>
+<p>Dani can play League at plat/emerald level from the <i>decoded</i> tokenizer latents &mdash;
+i.e. a human, shown only what the tokenizer reconstructs, plays competently. This is the best
+available proof that the representation is sufficient for the task, and it is stronger than any
+probe in this document, because it is an end-to-end behavioural test with a known-competent
+decoder attached. Every result below about &ldquo;the signal is/is not in the features&rdquo;
+should be read against it. If a probe says the information is absent, the probe is more likely
+wrong than the tokenizer is.</p>
+</div>
+
+<h3>1.2 Phase 1b &mdash; the world model</h3>
+
+<p>A latent diffusion-forcing transformer over the frozen tokenizer&rsquo;s latents. Production
+checkpoint <code>rollout_stage/desktop_resume_8775_stripped.pt</code>: 146 M parameters
+(114.9 M in the dynamics config, 146.3 M as loaded in Phase 2), 18 blocks, model dim 768,
+12 query heads / 4 KV heads (GQA), latent dim 32 on a 16&times;16 grid, 8 register tokens,
+soft cap 50, QK-norm, 2D RoPE spatially and 1D temporally, temporal attention at layer indices
+3, 7, 11, 15. Per-frame token set is
+<code>[256 latent | 8 register | 1 action | 1 condition] = 266</code>.</p>
+
+<p>Actions reach the model through <code>embed_actions</code>, which sums per-component
+embeddings and appends the result as a token in that frame&rsquo;s set. Agent tokens live in a
+separate residual stream that cross-attends <i>into</i> the final block&rsquo;s output; no other
+modality can attend back. That firewall is the paper&rsquo;s requirement and we satisfy it
+structurally rather than by an attention mask &mdash; which is stronger, but has a cost the
+survey flags: our agent tokens read <b>only the final layer</b>, whereas every other
+implementation interleaves them in the sequence and so gives them access to intermediate
+features.</p>
+
+<p>Four deviations are load-bearing.</p>
+
+<ul>
+<li><b>Shortcut forcing is off.</b> The production checkpoint is plain diffusion forcing, rolled
+out at K=64 / d=1. VRAM-forced. Paper Table 2 shows the naive diffusion-forcing transformer at
+K=64 is already strong (FVD 306); the collapse to 875 happens only at K=4 without the shortcut.
+The cost is speed and Phase 3, not quality &mdash; but it leaves <code>step_embed</code> rows for
+d&nbsp;&gt;&nbsp;1 permanently untrained.</li>
+<li><b>The 16&times;16 grid is a reshape fiction.</b> The 512 perceiver latents are global
+readers with no spatial locality, so the dynamics&rsquo; 2D spatial RoPE and spatial attention
+are applied over an axis with no spatial meaning. The paper reshapes too, so the <i>shape</i>
+matches; the <i>semantics</i> are an assumption the architecture makes and the data does not
+support.</li>
+<li><b>Context length equals batch length.</b> We train with
+<code>--seq-len-short 128 --seq-len-long 256</code> and <code>max_seq_len = 256</code>, and there
+is no windowing anywhere &mdash; the attention mask is a plain unbounded causal mask. Paper &sect;3.4
+explicitly requires batch lengths <i>longer</i> than the context length, so that the transformer
+does not overfit to always seeing a start frame at the beginning of its context. We violate this,
+and the observed symptom is exactly the predicted one: dreams hold for about 10 frames and then
+ghost. This is marked ACCIDENTAL in the deviations ledger; the codebase comparison argues it
+should be raised from MED to HIGH impact.</li>
+<li><b>Scale and budget.</b> 146 M against the paper&rsquo;s 1.6 B, at
+<code>global_step 8775, epoch 0</code> &mdash; less than one pass over the corpus. Nothing else
+on the deviation list plausibly outweighs this.</li>
+</ul>
+
+<p>And then Phase 2 feeds this model <code>seq_len = 16</code> &mdash; an order of magnitude
+outside the 128/256 regime it was trained in. That is not a considered choice either; it was
+picked so that live inference at context 16 fits a 20 fps budget.</p>
+
+<figure>
+<img src="figures/f11_scale.png" alt="scale versus the paper">
+<figcaption><b>Figure 2.</b> The budget everything in this report sits inside. Each row is a
+within-row comparison on a log axis; units differ per row. The unlabelled-video row is the one
+we chose rather than were forced into: the paper trains on 2,441 hours of unlabelled video
+against 100 hours of actions, a ratio of roughly 25:1. Ours is 0:1 &mdash; roughly 450 hours of
+YouTube Garen games exist on disk and are excluded from dynamics training.</figcaption>
+</figure>
+
+<h3>1.3 Phase 2 &mdash; behaviour cloning and reward</h3>
+
+<p>The backbone is frozen. Only the agent-token blocks and the heads train: 31,668,736 trainable
+parameters against 146,254,368 frozen. The paper finetunes the whole world model and keeps
+applying the video-prediction loss; we do neither, because one RTX 5080 cannot.</p>
+
+<p>The policy head is a per-token MLP producing, for each of 9 multi-token-prediction (MTP)
+offsets, two 21-bin screen-position categoricals plus one gate logit. The gate is the largest
+architectural addition with no paper analogue: humans issue about two movement commands per
+second and we sample at 20 fps, so roughly 90% of frames are &ldquo;the previous order is still
+in effect&rdquo;. The gate models <i>when</i> a command is issued separately from <i>where</i> it
+points, as a mixture &mdash; with probability (1&minus;<i>g</i>) repeat the previous bin, with
+probability <i>g</i> draw a fresh one. It was a direct response to a measured pathology (BC
+collapsing to a 1.8% action-change rate), not a guess.</p>
+
+<p>The BC loss sums <i>n</i> = 1..8 and deliberately drops <i>n</i> = 0, because the agent token
+at <i>t</i> is built from a window whose frame-<i>t</i> action token already contains
+<i>a</i><sub>t</sub>. That is the label-leak fix, and it is necessary. It is also, as &sect;5
+shows, nowhere near sufficient.</p>
+
+<h3>1.4 Phase 3 &mdash; imagination</h3>
+
+<p>PMPO in the dream, horizon 8 frames = 0.4 s, &gamma; = 0.997, &lambda; = 0.95.
+<b>It has never been trained.</b> One 11-batch smoke run on 2026-07-31, degenerate. &sect;9.3
+walks the four independent reasons why.</p>

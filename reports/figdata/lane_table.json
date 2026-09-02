@@ -1,0 +1,27 @@
+{
+ "held_executed": {
+  "TOP": 17,
+  "MID": 12,
+  "BOT": 11
+ },
+ "held_distribution": {
+  "TOP": 15,
+  "MID": 14,
+  "BOT": 11
+ },
+ "HUMAN": {
+  "TOP": 37,
+  "MID": 3,
+  "BOT": 0
+ },
+ "none_executed": {
+  "TOP": 28,
+  "MID": 8,
+  "BOT": 4
+ },
+ "none_distribution": {
+  "TOP": 39,
+  "MID": 1,
+  "BOT": 0
+ }
+}

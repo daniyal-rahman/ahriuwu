@@ -1,0 +1,152 @@
+<h2>7. What the retrain showed</h2>
+
+<p>The obvious next move is to retrain with both fixes: <code>--movement-action-mode none</code>
+so the channel never reaches the model, and <code>--prefirst-mode heading</code> so the walk-out
+carries a real label. That run finished at 15:04 UTC on the day this report was written &mdash;
+one full epoch, 25,283 optimizer steps over 119 training games, 6 held out, on the 5080.</p>
+
+<p>It failed its acceptance test.</p>
+
+<figure>
+<img src="figures/f06_retrain.png" alt="the retrain">
+<figcaption><b>Figure 7.</b> <b>(a)</b> The direction metric over the retrain, against a null
+measured by 200 within-game label permutations at every evaluation. The head learns
+<i>something</i>: it is above the null on 23 of 25 evaluations, typically by 3&ndash;5 sigma, and
+the median angular error falls from ~115&deg; early to 58.1&deg; at the end &mdash; below the
+best-constant-direction baseline of 74.5&deg;. But the bar is not the null. The bar is what a blind
+copier scores on the same rows, which is <b>50.68%</b>, and the run tops out at 30.1%.
+<b>(b)</b> The old event-frame CE metric over the same run, for comparison. It never approaches
+the blind table (4.071 on this split), and it goes the wrong way relative to the deployed copier
+&mdash; which is exactly what &sect;8 predicts a metric built as a ratio test against a crutch will
+do when you remove the crutch. Also plotted: two arms of the four-arm A/B that preceded this run.
+<b>Caveat with teeth:</b> <i>n</i> = 73 scored events per evaluation. The oscillation between
+12% and 30% is what 73 samples look like, not a learning curve.</figcaption>
+</figure>
+
+<p>Two readings are available and the honest position is that this run does not separate them.</p>
+
+<p><b>Reading one: it is the OOD problem, at training time this time.</b> The retrain kept
+<code>--allow-movement-source-mismatch</code>, because that is the only configuration that trains
+without diverging &mdash; and it is the configuration the deployed 102,420-step checkpoint was
+trained with. So the frozen <code>action_embed</code> is still fitted to the legacy cursor target
+(&sect;2.1), the backbone still never sees the video loss, and now the movement action is forced
+to <code>no_action_embed</code> on <i>every</i> frame &mdash; a token value the world model saw at
+15% frequency during Phase 1 and never as a sustained regime. The head is being asked to read a
+backbone that is itself off-distribution.</p>
+
+<p><b>Reading two: 25,283 steps is not enough.</b> The deployed copier had 102,420. The cost
+measured on the 5080 is 24.6 hours per BC epoch, and most of the movement learning in the original
+lineage happened in the first few thousand steps (val move 0.871 &rarr; 0.750 early, then a crawl
+to 0.727 over the remaining ~50k). But that early-fast/late-slow shape was measured on a run that
+had the crutch available, so it may say nothing about a run that does not.</p>
+
+<p>The prior four-arm A/B, at 5,000 steps each, is consistent with the retrain and adds one thing:
+the control arm (labels as shipped, action held) scored best on the old CE metric of all four,
+which is what you would expect if the metric is measuring copying. Rescored at a common operating
+point on 3,614 held-out events:</p>
+
+<table>
+<caption>Four 5,000-step arms plus the full retrain, rescored on identical rows. References on the
+same rows: chance 6.089, corpus marginal 5.232, blind table 4.1214, deployed copier 4.1212.</caption>
+<tr><th>arm</th><th>labels</th><th>movement action</th><th class="n">gated bc_movement</th><th class="n">event-frame CE</th></tr>
+<tr><td>R0 control</td><td>sentinel</td><td>held</td><td class="n">0.7924</td><td class="n">4.8733</td></tr>
+<tr><td>R1 channel</td><td>sentinel</td><td>none</td><td class="n">0.8298</td><td class="n">5.2014</td></tr>
+<tr><td>R2 both-mild</td><td>heading + interp</td><td>event_only</td><td class="n">0.8234</td><td class="n">5.1742</td></tr>
+<tr><td>R3 both-full</td><td>heading + interp</td><td>none</td><td class="n">0.8331</td><td class="n">5.2104</td></tr>
+<tr class="hl"><td>retrain A (25,283 steps)</td><td>heading</td><td>none</td><td class="n">0.7799</td><td class="n">4.6952</td></tr>
+</table>
+
+<p>Every arm is above the blind table, i.e. every arm fails the old bar; and the retrain is the
+best of them, which is at least the right ordering. What the A/B cannot tell us is anything about
+direction, because the direction evaluation crashed on all four arms with an unrecognised CLI flag
+(<code>probe_single.py: error: unrecognized arguments: --movement-action-mode</code>). Four arms of
+GPU time produced no directional number. That is worth recording as a process failure rather than
+a scientific one.</p>
+
+<h2>8. The evaluation problem</h2>
+
+<p>This is the part of the report that changed my mind about what the project is blocked on.</p>
+
+<p>When the CE bar was retired (&sect;4, second retraction), it was replaced with a direction
+metric: the 8-way octant of the commanded direction about the champion, scored on
+<code>movement_event</code> frames after each game&rsquo;s first real click, against a null
+<i>measured</i> by within-game label permutation rather than assumed at 1/8. Building it required
+three geometric corrections, each measured rather than assumed &mdash; the champion is not at
+screen centre (median 0.041 away, and using the centre flips the octant on 30.1% of events);
+screen space is sheared, and a raw screen angle disagrees with the world octant on 20.1% of events
+(the constant that undoes it is derived from the projection, 0.679, and a grid search against true
+world angles independently finds 0.69); and every frame before the first real click has to be
+dropped. Validated against world ground truth on 6 games and 14,589 events, the shipped reference
+agrees on 93.95% of octants at 0.514&deg; median error.</p>
+
+<p>It was a careful metric. And <b>as originally specified it would have passed the deployed
+copier.</b></p>
+
+<figure>
+<img src="figures/f05_eval_trap.png" alt="the evaluation trap">
+<figcaption><b>Figure 8.</b> <b>(a)</b> The deployed head &mdash; the one that matches a no-pixel
+table to 0.0002 nats &mdash; scores 37.70% octant accuracy against a measured null of 13.86%, and
+that is <i>indistinguishable</i> from a ridge probe on frozen latents (37.8%). Both sit well below
+what a blind copier gets for free (45.85%). <b>(b)</b> The same result as z-scores. The null
+cannot catch a copier, and the reason is structural: shuffling labels within a game destroys
+temporal order, and consecutive clicks are spatially autocorrelated, so the direction to the
+<i>old</i> target is already most of the direction to the new one. Known-answer checks on the same
+code path: a perfect head scores 100.00% / 0.000&deg;; a uniform head scores 12.46% on a
+12.48&nbsp;&plusmn;&nbsp;0.69% null; a marginal-only head sits at z = +0.04 against the measured
+null but z = +11.7 against an <i>assumed</i> 1/8, which is why the measured null is load-bearing;
+and a copier head lands exactly on the persistence bar while clearing the null by 53 sd.</figcaption>
+</figure>
+
+<p>So the bar became persistence, recomputed on the rows actually being scored, and the printed
+verdict keys off it. Against that bar the deployed checkpoint reads:</p>
+
+<pre>dir_octant=37.70%  [BAR: blind copier 45.85% on these rows]  z=+26.4  n=1313
+  -&gt; above null but BELOW the blind copier (45.8%) - NOT evidence of vision</pre>
+
+<p>Worse at direction than repeating the order already in its own input: 35.4&deg; against
+22.6&deg;.</p>
+
+<h3>8.1 The deeper problem: every metric here measures imitation, not play</h3>
+
+<p>Fixing the bar fixes the copying question. It does not fix the thing underneath it, which is
+that <i>every number in this document</i> &mdash; cross-entropy against the human&rsquo;s next
+click cell, octant accuracy against the human&rsquo;s next click direction, angular error against
+the human&rsquo;s own heading &mdash; scores whether the model reproduces <b>this particular
+human&rsquo;s exact action</b>. None of them scores whether the resulting play is good.</p>
+
+<p>Three measurements say that gap is not small.</p>
+
+<ul>
+<li><b>A perfect-perception oracle moves the cell metric by 0.043 nats</b> out of a cheating
+oracle&rsquo;s 1.079 (Figure 4b). Ninety-six percent of what is predictable about the next click
+is the human&rsquo;s private intent, not anything on the screen. A metric where perfect vision buys
+4% of the available headroom is not a vision metric.</li>
+<li><b>The independent replication puts a ceiling on it.</b> A ridge on one frozen latent recovers
+0.31 bits of next-click direction; the crutch is worth 0.83 bits; conditional on the crutch the
+pixels add 0.075 bits. So a pixel-only movement head should be <i>expected</i> to land near 38%
+octant accuracy and 43&deg; median error &mdash; not near the 56% that &ldquo;repeat the last
+click&rdquo; gets for free. Under an imitation metric, a correct sighted policy scores worse than
+a blind one. That is not a bug in the model.</li>
+<li><b>The human-in-the-loop test disagrees with all of them.</b> Dani plays at plat/emerald from
+the decoded latents. If the representation supports competent play and our metrics say the
+extractable signal is 0.31 bits, the metrics are measuring something narrower than play.</li>
+</ul>
+
+<p>Two clicks a second apart that lead to the same wave state are the same decision and score as a
+total miss. Walking to the correct lane by a slightly different route is a large angular error.
+Standing in the right place and last-hitting a different minion is a miss. There is no acceptance
+test in this repository that a model could pass by playing well and failing to imitate, and there
+is at least one (the CE bar) that a model passed by imitating badly in the specific way that
+happens to match the human&rsquo;s autocorrelation.</p>
+
+<div class="box">
+<h4>What a play-quality metric would have to look like</h4>
+<p>None of these exist yet; they are the shape of the thing that is missing. <b>(i)</b> Closed-loop
+outcome measures on the simulator or the live client &mdash; did it reach the lane, how long did it
+take, how much gold at 5 minutes, how many deaths &mdash; scored against the human distribution
+rather than the human trajectory. <b>(ii)</b> Reachability/route metrics that are invariant to the
+exact click: distance-to-lane over time, time-in-correct-region, not angular error against one
+sampled command. <b>(iii)</b> A human A/B: show a rater decoded rollouts from two checkpoints and
+ask which is playing better &mdash; expensive, but it is the only metric with the right target, and
+we already know a human can read these latents well enough to do it.</p>
+</div>

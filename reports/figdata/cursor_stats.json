@@ -1,0 +1,17 @@
+{
+ "cursor": {
+  "exact_repeat": 0.2854506064322071,
+  "median_step": 0.0038547480944544077,
+  "p90_step": 0.022576935589313507
+ },
+ "movement": {
+  "exact_repeat": 0.8517454495430343,
+  "median_step": 0.0,
+  "p90_step": 0.015625011175870895
+ },
+ "frac_differ_gt_0.05": 0.34306711436583204,
+ "mean_diff": 0.09427502006292343,
+ "prefirst_median_after_headingfix": 264.0,
+ "prefirst_total_after_headingfix": 41968,
+ "event_frac_after_headingfix": 0.10353610682487488
+}

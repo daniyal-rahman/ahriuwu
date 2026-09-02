@@ -1,0 +1,203 @@
+<h2>2. The data</h2>
+
+<p>The corpus is 146 labelled in-client replays of Masters+ Garen top-lane games
+(<code>/srv/nfs/datasets/lol_replays_16_9_772</code>), of which 125 have v7 latents and are the
+BC training set: 3,554,768 frames = 49.4 game-hours at 20 fps. Frames are rendered HUD-disabled
+at 352&times;352, squished from 1280&times;720 with the aspect destroyed (a 3.64&times; horizontal
+downsample).</p>
+
+<p>Labels come from a memory-scanning recorder that reads the League client&rsquo;s heap at
+50 Hz. What it captures, per frame, for all ten champions: world position, HP, HP max, level,
+<code>gold_total</code>, and (for the focus champion) cursor, camera and click stream. What it
+does <b>not</b> capture, verified: <b>minion positions or HP, turret HP, ward state, XP,
+cooldowns, objective timers</b>. So there is no wave state, no true CS count, no denies. Wave
+management &mdash; the thing that actually separates Emerald from Gold &mdash; is out of reach
+without new extraction. That is a hard constraint on what any reward can express, and it is
+worth stating plainly before any of the modelling discussion.</p>
+
+<figure>
+<img src="figures/f10_labels.png" alt="label coverage">
+<figcaption><b>Figure 3.</b> Three label facts, all re-measured for this report from the 125-game
+BC cache. <b>(a)</b> The click stream never starts before ~58 s in <i>any</i> game &mdash; median
+61.0 s, min 57.8 s, max 69.5 s &mdash; because the memory extractor takes that long to lock on.
+Until then <code>_parse_movement_clicks</code> defaults the movement target to (0.5,&nbsp;0.5) with
+<code>movement_event=False</code>, and the champion is camera-locked to screen centre, so that
+label reads &ldquo;your move order is your own feet&rdquo;. 153,351 frames = 4.31% of the corpus,
+and they are the <i>only</i> fountain and base frames in the dataset. Backfilling from
+<code>heading_screen</code> (already present in <code>labels.json</code>, previously unread)
+recovers the true walk direction to 11.5&deg; and pulls the median unsupervised window down to
+13.2 s. <b>(b)</b> The auxiliary state head has four targets; the third, enemy HP, is valid on
+only 24.7% of frames. <b>(c)</b> Every ability is rarer than 1% of frames; R fires on 0.014%.
+The documented fix for this &mdash; <code>--ability-pos-weight 5.0</code> &mdash; is the parser
+default, and every production launcher passed 1.0.</figcaption>
+</figure>
+
+<h3>2.1 Two domain gaps that were measured rather than assumed</h3>
+
+<p><b>The HUD.</b> The replay corpus is rendered HUD-off; live games have a HUD. Masking a HUD
+over the frame moves the v7 latents by <b>2.6&ndash;5.2&times; a normal frame-to-frame step</b>
+(cosine 0.89&ndash;0.92) across six games &mdash; so the model is genuinely off-distribution for
+an entire live game. Re-encoding clean frames reproduces the stored latents to 1e&minus;11, so
+those deltas are the perturbation and not encoder noise. But the same perturbation shifts the
+commanded direction by only <b>8.2&deg;</b>, and the lane stays TOP in 5&ndash;6 of 6 games. The
+HUD is a real shift and it is not the cause of the walking failure. The cheapest close is to mask
+the HUD to black before <code>encode_frame</code>; the mask already exists at
+<code>sim_replay.py:96</code> and was never wired into the live path.</p>
+
+<p><b>The frozen action embedding was fitted to a different target.</b> The Phase-1 checkpoint
+predates the <code>movement_source</code> flag, so <code>action_embed['movement']</code> was
+trained on the legacy per-frame <i>cursor</i> position. Phase 2 feeds it the <i>click</i> target.
+Measured on one game, the two share a 21-bin cell on only <b>40.0%</b> of frames, and the click
+target is clamped to 0.0/1.0 where the cursor target never leaves the interior. The embedding is
+excluded from the trainable prefixes, so it cannot adapt. Every frozen-backbone run since is
+feeding an embedding out-of-distribution values on every frame.</p>
+
+<h3>2.2 A second spatial channel that should have existed all along</h3>
+
+<p>Late in this work Dani pointed out that the agent teleports the pointer straight to each click
+target, which is not what a human does no matter what the loss says. That is an input-realism
+argument, and it turns out the two quantities are completely different objects:</p>
+
+<table>
+<caption>Measured over the 125-game corpus for this report. <i>movement</i> is where the player
+right-clicked (a destination, held between clicks); <i>cursor</i> is where the mouse actually is
+on each frame, recovered by projecting <code>label.cursor.world</code> through each
+frame&rsquo;s own camera and interpolating between observations.</caption>
+<tr><th>channel</th><th class="n">exact repeat, frame to frame</th><th class="n">median step</th><th class="n">p90 step</th></tr>
+<tr><td>cursor (observation only)</td><td class="n">28.5%</td><td class="n">0.0039</td><td class="n">0.0226</td></tr>
+<tr class="hl"><td>movement (conditioning INPUT)</td><td class="n">85.2%</td><td class="n">0.0000</td><td class="n">0.0156</td></tr>
+</table>
+
+<p>They differ by more than 0.05 screen units on 34.3% of frames, so one channel cannot represent
+both. The cursor channel is now threaded into the dataset (schema 6) and a regression head sits
+behind <code>--cursor-weight</code>, default 0. It is <b>not</b> a substitute for the walk-out
+label fix: measured over three games&rsquo; walk-out windows, two of three have literally zero
+cursor variance, because <code>pipeline.py</code> sets <code>cursor_world = cast_target</code>
+when casting and <code>last_click_world</code> otherwise &mdash; so the cursor inherits the same
+~60 s gap as the click stream. I claimed it might cover the walk-out before measuring it. It does
+not.</p>
+
+<h2>3. The symptom</h2>
+
+<p>&ldquo;Garen doesn&rsquo;t even make it into top lane.&rdquo; In the replay corpus the human
+walks top in essentially 100% of games from 0:15&ndash;0:45. Live, the agent walked into bot lane.</p>
+
+<p>That sentence hides a conjunction of about ten conditions &mdash; form a representation of the
+screen; recover which map region you are in; recover <i>which side you are playing</i>; map that
+to a direction; decide that <i>now</i> is a moment to issue a command; express the direction as a
+screen point; sample it without the noise destroying it; convert to a pointer position;
+right-click; have the game read the click as a move order. Nine of them can be individually
+correct while the agent still walks bot, and each fails with a different observable signature.
+The first document written about this enumerated 100 hypotheses with a distinguishing prediction
+and a falsifying test for each, precisely because the symptom does not localise on its own.</p>
+
+<p>What made it tractable was that the failure had a signature no plumbing bug produces:
+<b>the direction was a property of the random seed, not of the pixels.</b> Across 40 closed-loop
+games, under the deployed configuration, the lane the agent chose was at chance across sampling
+seeds (28% same lane, chance 34.6%, agreement R = 0.299), and each individual game locked onto one
+arbitrary direction and held it (directional concentration R = 0.643 / 0.739). Cut the action
+channel and the preference becomes deterministic in the pixels: 100% same lane across seeds,
+agreement R = 1.000, median direction change 0.2&deg;.</p>
+
+<h2>4. The investigation, and its false starts</h2>
+
+<p>This section is the useful part of the report. Four confident conclusions were published inside
+this project and then retracted after measurement, and one recurring failure mode caused most of
+them. A reader should come away knowing which numbers to trust and why.</p>
+
+<div class="retraction">
+<span class="tag">RETRACTED &mdash; small-sample artifact</span>
+<p><b>&ldquo;The 146M stack matches a no-pixel lookup table to 0.008 nats.&rdquo;</b>
+The original measurement was 1,800 teacher-forced frames over 3 held-out games, scored against a
+count table fitted on 5 games: model 4.365 nats vs table 4.357. On 13,627 event rows over 6
+held-out games, against a table fitted on 24 <i>training</i> games, the head is
+<b>0.099 nats better</b> than the table (4.050 vs 4.123), paired <i>t</i> = &minus;2.31 (5 df),
+negative in 5 of 6 games. The head is not literally a lookup table. It is marginally above one.
+The dramatic version of the sentence was an artifact of scoring a 1,800-frame subset against a
+5-game table.</p>
+</div>
+
+<div class="retraction">
+<span class="tag">RETRACTED &mdash; the acceptance bar was cleared by the model it was written to reject</span>
+<p><b>&ldquo;Event-frame categorical CE must fall clearly below 4.357 nats.&rdquo;</b>
+A 24-game count table scores 4.123 and the shipped checkpoint scores 4.050. The bar as written
+passes the broken model. On the 6-game split the two are 4.1214 (blind) and 4.1212 (deployed) &mdash;
+<i>two ten-thousandths of a nat apart</i>, which is the version of the number that should be
+quoted. Any future bar has to be stated against a table fitted on the training corpus and read on
+the same split it will be judged on.</p>
+</div>
+
+<div class="retraction">
+<span class="tag">RETRACTED &mdash; probe-power artifact</span>
+<p><b>&ldquo;The signal is ABSENT from the features; the bottleneck is perception.&rdquo;</b>
+This one cancelled a planned training program. It came from nested probes that fitted their
+readout on <b>five games</b>. Refitting the identical feature on 30 games more than doubles the
+effect (&minus;0.052 &rarr; &minus;0.126 nats) and takes the ablated feature past the deployed
+head (&minus;0.095). A separate, from-scratch replication sharing no code found 0.31 bits of
+next-click direction in a single frozen latent. &ldquo;A 5-game probe found nothing&rdquo; and
+&ldquo;the information is not there&rdquo; are different statements, and only the first was ever
+measured.</p>
+</div>
+
+<div class="retraction">
+<span class="tag">RETRACTED &mdash; tests too short to see the divergence</span>
+<p><b>&ldquo;<code>--movement-gate</code> causes the NaN.&rdquo;</b> Three commits over two days
+attribute a training divergence to three different flags in turn
+(<code>--movement-gate</code> + <code>--unfreeze-backbone</code>, then unfreezing without the
+video loss, then <code>--train-action-embed</code>). Each attribution was made from a run short
+enough that the divergence had not yet appeared in the other arms. The A/B eventually ran the
+deployed configuration precisely because it was the only one that trained clean, and the
+mechanism is still not isolated.</p>
+</div>
+
+<div class="retraction">
+<span class="tag">RETRACTED &mdash; true on all frames, FALSE on the frames that matter</span>
+<p><b>&ldquo;Interpolating the movement target makes copying harder.&rdquo;</b> Interpolating the
+held target between clicks does make it change every frame, so the naive
+&ldquo;<i>a</i><sub>t+1</sub> == <i>a</i><sub>t</sub>&rdquo; rate collapses. But the interpolated
+value at <i>t</i> is a function of the <i>next</i> click, so the targets become self-predictive:
+the blind-table bar drops from 4.12 to <b>1.73 nats</b>. The A/B arms that used it
+(<code>R2</code>, <code>R3</code>) are therefore not comparable to the arms that did not, and
+that is visible in the logs as two different bars printed on the same page. The same technique
+applied to the <i>cursor</i> channel is safe, because that channel is an observation and never an
+action-conditioning input. Same operation, opposite consequence, decided entirely by what
+consumes the array.</p>
+</div>
+
+<h3>4.1 The recurring failure mode: checks that the bug satisfies</h3>
+
+<p>Five of the defects in this project were guarded by a test, and the test passed. In every case
+the test was satisfied <i>by the very failure it was meant to catch</i>.</p>
+
+<table>
+<tr><th>the check</th><th>why the bug passes it</th></tr>
+<tr><td>The Phase-3 smoke test perturbs the policy head off zero-init &ldquo;so the prior KL and
+movement logits are non-degenerate&rdquo;</td>
+<td>It perturbs the dead head 0 too, so <code>prior@0</code> is no longer uniform and the KL comes
+out at 1.9e&minus;3 instead of 7.29. The test noticed the degeneracy and worked around it in the
+<i>test</i> instead of in the trainer.</td></tr>
+<tr><td>Both preflights assert a positive gradient norm on the <i>sum</i> over all MTP heads</td>
+<td>The sum is positive whenever any offset trains. A per-offset assertion fails on head 0 at
+step 1.</td></tr>
+<tr><td><code>scan_offsets.py</code> accepts a <code>gold_current</code> memory offset if it sits
+in a plausible range</td>
+<td>A field that never moves passes that test. The sibling offset <code>gold_earned</code> is
+required to <i>change</i> between two snapshots and is correct; <code>gold_current</code> is a
+per-hero constant &mdash; Garen &minus;3.77e22, Vladimir 1.46e31, Fiora 0.0 &mdash; on 130 of 130
+hero-games audited.</td></tr>
+<tr><td>The direction acceptance metric scores against a measured permutation null</td>
+<td>A blind copier clears that null by <b>26 sigma</b>. &sect;8.</td></tr>
+<tr><td><code>ab_checkpoints.cell_acc</code>, the checkpoint comparison script</td>
+<td>Scores the <i>n</i>=1 output against frame <i>f</i>&rsquo;s own target, so ~99% of scored
+frames have target NO_OP; and its denominator sits inside <code>if gate</code>, making it
+|agent fired AND human fired| rather than |human fired| &mdash; so checkpoints with different
+firing rates are not comparable, which defeats the script&rsquo;s entire purpose.</td></tr>
+</table>
+
+<p>There is a general shape here. A test that asserts &ldquo;this quantity is non-degenerate&rdquo;
+is weaker than a test that asserts &ldquo;this quantity has the value it must have&rdquo;, and a
+test written after the fact by someone looking at a failing assertion will tend to relax into the
+first form. The one place we got it right is worth naming: the movement-target round-trip tests
+plant distinguishable values and check exact inverses, and that entire area &mdash; bin
+encode/decode, joint encode/decode, twohot, latent folds, RoPE index spaces, KV-cache paths,
+camera projection &mdash; came back clean and has not needed re-auditing.</p>

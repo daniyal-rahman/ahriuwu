@@ -1,0 +1,180 @@
+<h2>5. The root cause</h2>
+
+<p>The movement head predicts where to click by reading the previous click out of the action
+tokens and perturbing it by about 1.5 bins.</p>
+
+<p>The mechanism is three lines of architecture. <code>embed_actions</code> appends the action as
+a token in frame <i>t</i>&rsquo;s token set (<code>dynamics.py:776</code>). The agent token
+cross-attends to exactly that set (<code>dynamics.py:192-245</code>). BC predicts
+<i>a</i><sub>t+n</sub> for <i>n</i>&nbsp;&ge;&nbsp;1, and on a hold frame <i>a</i><sub>t+1</sub>
+is bit-for-bit <i>a</i><sub>t</sub>. So the answer to the question the loss asks is, on the large
+majority of frames, already inside the model&rsquo;s own input.</p>
+
+<figure>
+<img src="figures/f01_core_result.png" alt="model versus a no-pixel lookup table">
+<figcaption><b>Figure 4.</b> The core result, in its original and replicated forms.
+<b>(a)</b> The measurement that started the investigation: 1,800 teacher-forced frames over 3
+held-out games. A blind 21&times;21 count table <i>p</i>(next bin | previous bin), fitted on five
+games and evaluated leave-one-game-out, never seeing a pixel, scores within 0.008 nats of the
+146 M stack. Remove the action input from the model and it scores <i>worse than the corpus
+marginal</i>. <b>(b)</b> The same test at 7.6&times; the data (13,627 event rows, 6 held-out
+games, table fitted on 30 training games). Two things to read off it: a probe on the
+action-ablated features beats the deployed head (4.008 vs 4.050), and &mdash; the reason this
+metric was later retired &mdash; a probe on <i>perfect ground-truth state</i> beats the blind
+table by only <b>0.043 nats</b>. The whole visually available headroom in this metric is about
+0.13 nats; the remaining 0.95 of the cheating oracle&rsquo;s 1.08 is the human&rsquo;s private
+intent. A bar written in this metric cannot tell a blind model from a sighted one.</figcaption>
+</figure>
+
+<p>The direct evidence that it is copying, rather than merely correlated with copying, is a set of
+interventions rather than a fit statistic:</p>
+
+<ul>
+<li>On frames where a new command is actually issued, the head puts <b>0.0611</b> probability on
+the bin it is already holding and <b>0.0335</b> on the true new bin &mdash; twice as much mass on
+the wrong answer, in the direction of its own input.</li>
+<li>Mean |argmax &minus; previous| = <b>1.460</b> bins against |argmax &minus; true| =
+<b>1.548</b>. The output orbits the input.</li>
+<li>Ablating the action input moves argmax direction error from 15.3&deg; to <b>71.6&deg;</b> and
+sampled error from 45.0&deg; to <b>89.5&deg;</b>, which is chance.</li>
+<li><b>Shuffling</b> the action history within the window <i>lowers</i> the loss (0.7208 vs
+0.7565). A permutation can move the <i>t</i>+1 target into a causally visible slot, and the head
+finds it. That is not a correlation; that is a read.</li>
+<li>Measured directly on 9,600 windows: <code>P(prefers the old bin over the true new one)</code>
+is <b>0.766</b> with the action channel present and <b>0.478</b> with it cut. Event-frame
+categorical NLL goes 4.151 &rarr; 5.146 &mdash; i.e. above the 5.181 corpus marginal &mdash; when
+the channel is removed.</li>
+<li>Swapping the <i>history</i> in an otherwise identical window moves the commanded direction
+<b>150.9&deg;</b> (71% pass-through of the injected target). Swapping the <i>pixels</i> moves it
+<b>41.0&deg;</b>. The action channel beats vision roughly 3:1.</li>
+</ul>
+
+<h3>5.1 Why the training loss looked healthy for months</h3>
+
+<p><code>bc_movement 0.737 vs uniform 6.089</code> was the number being watched, and it is not a
+valid comparison: 6.089 is a <i>no-gate</i> reference against a <i>gated</i> loss. Under the gated
+objective as coded:</p>
+
+<table>
+<tr><th>predictor</th><th class="n">bc_movement</th></tr>
+<tr><td>uniform, no gate &mdash; the number that was quoted</td><td class="n">6.089</td></tr>
+<tr><td>best blind stateless predictor (copy-previous + marginal + constant gate)</td><td class="n">0.7716</td></tr>
+<tr class="hl"><td>trained model</td><td class="n">0.7370</td></tr>
+<tr><td>oracle gate + uniform categorical &mdash; knows <i>when</i>, nothing about <i>where</i></td><td class="n">0.6196</td></tr>
+<tr><td>oracle gate + perfect categorical</td><td class="n">0</td></tr>
+</table>
+
+<p>The model is 0.035 nats better than blind and 0.117 nats <i>worse</i> than a predictor that
+knows only when to click. The apparent 8&times; improvement was the gate discovering that 90% of
+frames need no prediction at all. Hold frames contribute at most 14.1% of the loss by an algebraic
+cap (<i>l</i><sub>hold</sub> &le; &minus;log(1&minus;<i>g</i>) = 0.116 at the trained
+<i>g</i> = 0.1095). Watching <code>bc_movement</code> could not have told us whether a fix worked,
+and for months it did not.</p>
+
+<h3>5.2 Why the anti-copy machinery we did ship could not work</h3>
+
+<figure>
+<img src="figures/f03_the_crutch.png" alt="the crutch, quantified">
+<figcaption><b>Figure 5.</b> All three panels re-measured for this report over the full 125-game
+BC cache. <b>(a)</b> The held click target is bit-identical frame to frame on <b>87.3%</b> of the
+3,554,643 consecutive pairs (per-game range 50.5%&ndash;93.6%); the per-frame cursor position, the
+same kind of quantity, repeats on 28.5%. The difference is not the sampling rate &mdash; it is
+that one is a destination held by the game engine and the other is a physical pointer.
+<b>(b)</b> The held value persists for a median of 4 frames, p99 77, max 3,061.
+<b>(c)</b> <code>--action-dropout</code> is applied per frame, but the held value is replicated
+across the whole run and temporal attention over the action slot is causal &mdash; so the answer
+is hidden only if <i>every</i> frame since the last click is dropped, with probability
+<i>p</i><sup>&nbsp;j+1</sup>. At the shipped <i>p</i> = 0.15 the shortcut survives on
+<b>97.8%</b> of frames. No per-frame rate fixes this: even at <i>p</i> = 0.95 it survives on
+47.9%.</figcaption>
+</figure>
+
+<p>Three mechanisms in the codebase were supposed to prevent exactly this, and the reasons they
+fail are worth separating.</p>
+
+<ol>
+<li><b>Per-frame action dropout at <i>p</i> = 0.15.</b> Structurally defeated, per Figure 5(c).
+Worse, <code>no_action_embed</code> is a single learned vector, so a dropped frame is
+<i>identifiable</i> &mdash; the model knows to look at a neighbour rather than being forced to
+guess. And <code>evaluate()</code> sets <code>action_dropout = 0</code>, so every validation
+number ever reported was measured with the shortcut fully open.</li>
+<li><b>Dropping <i>n</i> = 0 from the BC sum.</b> Necessary and correct: at <i>n</i> = 0 the
+target is the action the backbone was <i>fed</i>, and the measured effect is a full nat &mdash; the
+cross-tab of head <i>n</i> against target offset <i>m</i> shows every trained head&rsquo;s row
+minimum at <i>m</i> = 0 by about 1.0 nat, which vanishes when restricted to transition frames.
+Dropping <i>n</i> = 0 removes that. It does nothing about <i>n</i> = 1.</li>
+<li><b>The sticky gate.</b> It correctly separates <i>when</i> from <i>where</i>, and it is why
+<code>bc_movement</code> looked good. It does not touch the input.</li>
+</ol>
+
+<p>There is one further measurement that reorders the fix list. Changing the representation so the
+held value is a NO_OP rather than a repeated coordinate does <i>not</i> remove the shortcut: over
+5,513 event-to-event gaps, the previous click is still inside a 16-frame context on <b>93.3%</b>
+of frames, and the model simply attends a few frames back. But it makes dropout work, because the
+answer then exists in exactly <i>one</i> token rather than being replicated across the run &mdash;
+dropping it once at rate <i>p</i> hides it with probability <i>p</i> rather than
+<i>p</i><sup>&nbsp;j+1</sup>. At <i>p</i> = 0.15 that is roughly a 30,000&times; difference in
+effectiveness. The representation change and the dropout are worth nothing separately and a great
+deal together. The only intervention that is guaranteed is the structural one: remove the movement
+action from the policy path entirely.</p>
+
+<h2>6. The fix, and what it bought</h2>
+
+<p>Cutting the movement action at inference &mdash; <code>cursor_valid=False</code> on every
+frame, no retraining, one flag &mdash; recovers a side-conditioned top-lane policy that was
+already in the shipped weights.</p>
+
+<figure>
+<img src="figures/f02_walk_to_lane.png" alt="walk to lane before and after">
+<figcaption><b>Figure 6.</b> <b>(a)</b> Which lane the executed command points down, 40
+closed-loop games (20 blue / 20 red), frames 0&ndash;600, recomputed for this report from the raw
+per-game rollout record. Wrong-lane (BOT) games go from 11/40 to 4/40; TOP goes from 17 to 28.
+The <i>distributional</i> preference &mdash; before sampling noise &mdash; is even sharper: TOP in
+39 of 40 games. <b>(b)</b> Open-loop, teacher-forced on real replay latents across 112 games, the
+per-game median angular error of the head&rsquo;s commanded direction against the champion&rsquo;s
+own <code>heading_screen</code>. Median 72.7&deg; &rarr; 29.9&deg;; fraction of frames within 90&deg;
+0.641 &rarr; 0.844. The CENTER control matters here: because the champion is camera-locked but not
+pinned, <code>champion_screen</code> drifts opposite the walk while the camera catches up, so
+&ldquo;direction from the champion to a fixed screen point&rdquo; would already carry the walk
+direction for free. It does not &mdash; it sits at 124.4&deg;, at chance and mildly
+anti-correlated. The effect is the head&rsquo;s, not the camera&rsquo;s.</figcaption>
+</figure>
+
+<p>The side conditioning is the part that convinces. Top lane is a different screen direction on
+blue than on red, and the corpus is balanced (75 red / 71 blue, Garen top in 145 of 146 games), so
+this is a clean two-way conditional with equal support rather than an imbalance artifact:</p>
+
+<table>
+<caption>Per-game mean commanded direction by side, walk-out window, 112 games. Permutation
+<i>p</i>-values from within-game label permutation.</caption>
+<tr><th>history fed to the model</th><th class="n">blue &mu;</th><th class="n">red &mu;</th><th class="n">separation</th><th class="n">perm <i>p</i></th><th class="n">median error vs human</th></tr>
+<tr><td>HUMAN</td><td class="n">&minus;87.4&deg;</td><td class="n">+170.9&deg;</td><td class="n">101.6&deg;</td><td class="n">&lt;2e&minus;4</td><td class="n">&mdash;</td></tr>
+<tr class="hl"><td>movement action CUT</td><td class="n">&minus;94.3&deg;</td><td class="n">&minus;173.8&deg;</td><td class="n">79.5&deg;</td><td class="n">&lt;2e&minus;4</td><td class="n">29.9&deg;</td></tr>
+<tr><td>as deployed</td><td class="n">&minus;63.4&deg;</td><td class="n">+42.3&deg;</td><td class="n">105.6&deg; (wrong way)</td><td class="n">&lt;2e&minus;4</td><td class="n">72.7&deg;</td></tr>
+<tr><td>CENTER control</td><td class="n">+74.5&deg;</td><td class="n">+90.0&deg;</td><td class="n">15.5&deg;</td><td class="n">3.5e&minus;4</td><td class="n">124.4&deg;</td></tr>
+</table>
+
+<p>And it tracks the individual game, not just blue-vs-red: within-side correlation with the
+human&rsquo;s own direction is <i>r</i> = +0.386 on blue (<i>p</i> = 0.005, <i>n</i> = 53) and
++0.287 on red (<i>p</i> = 0.016, <i>n</i> = 59) with the action cut, against +0.06 / &minus;0.13
+(both n.s.) as deployed. In the fountain specifically &mdash; frames 0&ndash;200, where the human
+label was the sentinel and the model was therefore never supervised at all &mdash; the cut version
+scores 37.4&deg; against a chance level of 100.6&deg; (<i>p</i> &lt; 2.5e&minus;4), while the
+deployed version scores 111.1&deg; against 114.4&deg; (<i>p</i> = 0.06, i.e. at chance).</p>
+
+<p>Two caveats that survive, and both are load-bearing. First, <code>noact</code> is out of
+distribution for this checkpoint: BC saw <code>cursor_valid=False</code> at <i>p</i> = 0.15
+per-frame, never for a whole window. Every number in this section is measured in that OOD regime.
+It is evidence that the competence exists, not that this checkpoint is deployable as-is. Second,
+the model does not navigate finely: full-game tracking of the human&rsquo;s heading is only
+<i>r</i> = +0.104 (sd 0.356, <i>n</i> = 117) against a shuffled null of &minus;0.015. It holds a
+per-region average direction rather than turning where the lane turns.</p>
+
+<h3>6.1 Why it happens &mdash; the two causes are independent</h3>
+
+<p>Cutting the channel works because of the label bug in Figure 3(a). For the entire walk-out
+&mdash; the exact segment being demoed &mdash; BC trained the model to issue no command and hold
+&ldquo;your own feet&rdquo;. That target is <i>only</i> expressible by copying the movement input.
+Remove the input and the visual policy learned from post-60 s data surfaces. Which means the two
+fixes are not alternatives: the label fix alone leaves the copy channel dominant everywhere else,
+and the channel fix alone leaves the walk-out unsupervised. Both, or neither works.</p>

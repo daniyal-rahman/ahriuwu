@@ -1,0 +1,219 @@
+<h2>10. How we compare to the field</h2>
+
+<p>There is no official Dreamer 4 release. Of nine third-party repositories that implement any of
+it, exactly <b>three implement a policy</b> (behaviour cloning), and three implement Phase 3; two
+of those three are individuals working on toy or small-scale tasks. Nobody outside DeepMind has
+reproduced the Minecraft result.</p>
+
+<p>The finding that matters for this report: <b>not one of them has any anti-copy machinery.</b>
+No action dropout, no null-action conditioning, no classifier-free guidance, no stop-gradient on
+the action stream, no action-free actor branch. A grep across the repositories for
+<code>dropout|mask|detach|stop_grad|cond_drop|classifier.free|null action|no_action</code> turns up
+augmentation-ID dropout, reward-embedding dropout, and flow-matching bootstrap detaches &mdash;
+nothing touching actions. Nor does the paper: the word &ldquo;dropout&rdquo; appears exactly once
+in arXiv 2509.24527, referring to the tokenizer&rsquo;s MAE patch dropout. And no reported baseline
+in the paper is blind &mdash; the strings &ldquo;chance&rdquo;, &ldquo;no-op&rdquo; and
+&ldquo;random policy&rdquo; do not occur.</p>
+
+<p>One reference library ships a test that <i>asserts copying works</i>.
+<code>lucidrains/dreamer4</code>&rsquo;s <code>test_toy_action_bc.py</code> feeds
+<code>latents = zeros(1, 8, 64, 16)</code> &mdash; literally zero observations &mdash; and asserts
+that the policy reproduces the action sequence <code>[1,2,3,0]*2</code> from action history alone.
+It is our experiment run with the opposite sign convention: upstream treats action-history copying
+as a capability to verify, not a pathology to suppress.</p>
+
+<p>And one repository has our bug at 85% instead of 90% and never measures it:
+<code>edwhu/dreamer4-jax</code>&rsquo;s toy behaviour policy is commit-then-switch with
+<code>hold_min=4, hold_max=9</code>, so <code>a_{t+1} == a_t</code> with probability &asymp;&nbsp;85%
+on a 4-way action. A pure copy head scores ~85% BC accuracy there without seeing a pixel. To that
+author&rsquo;s credit, they are the one person in the field who left a written trace of noticing the
+hazard &mdash; a comment explaining why the policy MTP starts at offset 1 while the reward MTP
+starts at 0, which is the same reasoning we used.</p>
+
+<table>
+<caption>Action representations and the copy shortcut each one hands a BC head.</caption>
+<tr><th>codebase</th><th>action representation</th><th class="n">P(a<sub>t+1</sub> = a<sub>t</sub>)</th><th>anti-copy</th></tr>
+<tr><td>Dreamer 4 / IamCreateAI / open-dreamer</td><td>23 binary keys + 121-class camera <i>delta</i></td><td class="n">high for keys, low for the delta</td><td>none</td></tr>
+<tr><td>nicklashansen</td><td>continuous torques, instantaneous</td><td class="n">low</td><td>n/a (no policy)</td></tr>
+<tr><td>vijayabhaskar</td><td>2-D continuous torques, smooth</td><td class="n">high-ish</td><td>none</td></tr>
+<tr><td>edwhu</td><td>5-way categorical, held 4&ndash;9 steps</td><td class="n">&asymp; 85% (never measured)</td><td>none</td></tr>
+<tr class="hl"><td>ahriuwu</td><td>HELD screen coordinate, frozen across the run</td><td class="n">87.3% bit-for-bit (measured)</td><td>dropout (defeated), <code>--movement-action-mode</code></td></tr>
+</table>
+
+<p><b>DreamerV3 cannot have this bug</b>, and the reason is structural rather than lucky. Verified
+in both the current and pre-rewrite JAX trees and in the PyTorch port: (a) the actor&rsquo;s entire
+input is <code>concat[deter, stoch]</code> &mdash; the previous action enters only through the RSSM
+recurrence, never as an actor input; (b) the actor is trained <i>only</i> on imagined rollouts of
+its own samples, with replayed data contributing only the starting state; and (c) there is no
+behaviour-cloning or action-prediction loss anywhere. That third point is airtight because the code
+<i>enforces</i> its complete loss set with an assertion against eight fixed names, and a grep for
+<code>behavio(u)?r.?clon|bc_loss|imitat|action_pred|action_head|supervis</code> across both
+generations returns zero hits. &ldquo;Emit <i>a</i><sub>t&minus;1</sub>&rdquo; lowers no DreamerV3
+loss because there is no dataset action label for the actor to reproduce. Dreamer 4 introduces
+behaviour cloning, and with it this hazard.</p>
+
+<p>The uncomfortable conclusion the survey reaches is that the field is not protected against this;
+it is unmeasured. The three repositories with a policy all use BC as an <i>initialisation</i> for a
+downstream RL phase that can correct for it. Ours is what we deploy. They are unmeasured and
+downstream-corrected; we are measured and terminal.</p>
+
+<p>Two things we are ahead on, for balance. We are the only implementation in the survey that logs
+a blind baseline next to its BC loss at all &mdash; the numbers in Figure 4 exist because someone
+wrote <code>MOVE_CE_BLIND_TABLE = 4.1214</code> into the trainer. And we are the only one with a
+deployment path: HID gadget, preflight, provenance stamped into <code>meta.json</code>, a hard
+refusal to inject without a resolvable commit. No reference repository has a deployment story at
+all.</p>
+
+<h2>11. What is actually blocking</h2>
+
+<p>In descending order of how much I would bet on each.</p>
+
+<ol>
+<li><b>There is no play-quality metric.</b> Everything we can currently measure is imitation
+fidelity, and &sect;8 shows that a correct sighted policy is <i>expected</i> to score worse on those
+metrics than a blind copier. Until an outcome-based evaluation exists, a retrain cannot be graded,
+which means GPU time cannot be spent rationally. This is the top of the list and it needs no GPU.</li>
+<li><b>The evaluation split is too small for the metric that replaced the CE bar.</b> The direction
+metric scores <i>n</i> = 73 events per evaluation. Figure 7(a)&rsquo;s oscillation between 12% and
+30% is sampling noise. This is a one-line fix (score more of the val loader) and it gates every
+subsequent decision.</li>
+<li><b>The frozen action embedding is fitted to the wrong target</b> (&sect;2.1, 40% cell agreement),
+and the only configurations that fix it &mdash; unfreezing the backbone, or training the embedding
+&mdash; both diverge to NaN, for reasons that are still not isolated. Either re-pretrain Phase 1 on
+the click target, or find the divergence. Every frozen-backbone result in this report has this
+underneath it.</li>
+<li><b>Phase 3 has never run</b>, so nothing about the imagination path has ever been measured on
+dreamed latents rather than real ones. The reward head&rsquo;s AUC, the value head&rsquo;s
+calibration, whether the reward is even action-sensitive through the dynamics &mdash; the actual
+precondition for a policy gradient &mdash; are all unmeasured. Four blockers are now fixed and the
+fifth and sixth are known.</li>
+<li><b>The world model dreams for about 10 frames.</b> Two candidate causes: scale/budget
+(146 M at &lt;1 epoch against 1.6 B) and the missing context/batch-length margin (&sect;1.2). The
+second is cheap to test and has never been tested.</li>
+<li><b>The deployed rig is a fork.</b> <code>/mnt/storage/ahriuwu-live/</code> carries its own
+<code>scripts/</code> &mdash; 162 diff lines in <code>play_live.py</code>, 101 in
+<code>hid_server.py</code>, 174 in <code>hybrid_sender.py</code>, plus a
+<code>calibrate_mouse.py</code> that exists only there. Every fix in this repository is absent from
+the thing that plays, and the current best checkpoints cannot run on it at all.</li>
+</ol>
+
+<p>What is <i>not</i> blocking, as far as the measurements go: the tokenizer (a human plays
+competently from its decodes; two independent probes find the signal in its latents); the reward
+buckets (6.7&times; finer than the reference, 4.4&times; more learnable nats); the reward head
+(AUC 0.904 with clean controls); the MTP axis (verified end to end, synthetically and on the real
+checkpoint &mdash; a real off-by-one would be a 1.0-nat effect and every diagonal deviation measured
+is 0.0001&ndash;0.02); and the deployed read position (measured cost ~0).</p>
+
+<h2>12. Honest limitations</h2>
+
+<p>Ordered by how much they should reduce confidence in this document.</p>
+
+<ul>
+<li><b>Six held-out games is 5 degrees of freedom.</b> Most paired <i>t</i>-statistics in &sect;9.1
+are on that split. The powered versions come from <i>k</i>-fold over 112 or 36 games, and those
+games were seen by BC and by the tokenizer, though never by the readout. The two agree throughout,
+which is the reason to believe them, but neither is a clean held-out design.</li>
+<li><b>The action ablation is not complete.</b> The held click target still decodes from the ablated
+features at 4.22 nats against a 5.30 marginal &mdash; better even than from the champion&rsquo;s own
+actual future path (4.50). Some of that is legitimate (the destination is on screen and the champion
+is walking to it), but a residual movement-token signal smeared through 18 layers of spatial
+attention cannot be excluded. Two reasons it does not explain the headline results: the nested
+baseline is the table evaluated at the <i>true</i> previous bin, so recovering the previous bin adds
+nothing; and the entire walk-out result is immune, because the movement input there is a constant
+sentinel. Note also that the earlier claim &ldquo;the ablation is complete in both directions&rdquo;
+was itself a 5-game-probe artifact.</li>
+<li><b>Everything in &sect;6 is measured out of distribution.</b> <code>noact</code> is a regime BC
+never saw for a whole window.</li>
+<li><b>The retrain does not separate its two explanations</b> (&sect;7), and at <i>n</i> = 73 per
+evaluation it could not have.</li>
+<li><b>How much of the recovered signal is route prior versus frame-by-frame navigation.</b>
+Shuffling labels within a game leaves the probes 0.13 nats ahead of the table, because a
+game&rsquo;s direction histogram survives that permutation. Roughly 0.32 of the 0.774 nats the
+walk-out probe extracts is region-level prior and ~0.45 is frame-specific. Consistent with the
+surviving caveat that it knows the route but does not turn where the lane turns.</li>
+<li><b>&ldquo;Raw v7 latents carry nothing&rdquo; is NOT established.</b> The raw arm in the nested
+probe scores &minus;0.019 (<i>t</i> = &minus;0.27), i.e. nothing &mdash; but it reads a
+<i>single</i> frame while the dynamics features carry 16, and no multi-lag raw arm was run. What
+<i>is</i> established: the dynamics is a function of the v7 latent sequence and the ablated actions
+and nothing else, so the information is provably present in the sequence. The from-scratch
+replication then finds 0.31 bits in a single raw latent, which suggests the nested probe&rsquo;s raw
+arm was underpowered rather than informative.</li>
+<li><b>No external oracle for the labels.</b> Neither the dataset nor the repository contains Riot
+match-API participant data, so no hero&rsquo;s final <code>gold_total</code> was ever checked against
+ground truth. Every liveness argument in &sect;9.3 is internal consistency plus physics plus the
+control champion. A systematic offset shared by all ten heroes would be invisible to all of it
+&mdash; though it would also cancel exactly in a gold diff.</li>
+<li><b>The recorder that produced this corpus is not in this repository.</b> Every
+<code>labels.json</code> and <code>raw_mem.json</code> on disk carries a per-hero
+<code>inventory</code> field that the checked-in <code>_mem_loop</code> never writes, in any commit.
+A newer Windows-side working tree wrote this data. The divergence appears to be purely additive
+&mdash; the on-disk key sets are a strict superset of what the repository version emits &mdash; but
+I reasoned from the checked-in code plus the data, not from the code that ran.</li>
+<li><b>One patch, one champion, one lane.</b> Everything here is Garen top on 16.9.772. The
+<code>gold_current</code> offset being wrong on this patch is a standing warning that memory offsets
+are patch-fragile.</li>
+<li><b>Nothing in this report was measured inside imagination</b>, because Phase 3 has never run.
+Distribution shift between real and dreamed agent tokens is entirely unmeasured and is the single
+largest remaining unknown for that phase.</li>
+</ul>
+
+<h2>Appendix A. Which measurements to trust</h2>
+
+<p>A reader should be able to tell, from this document alone, which numbers would survive a
+re-measurement. My own ranking:</p>
+
+<table>
+<tr><th>trust</th><th>what, and why</th></tr>
+<tr><td><b>High</b></td><td>Anything with a validated estimator &mdash; a planted-signal positive
+control <i>and</i> a shuffled-label negative control run on the identical code path before the
+result was read. That is the Decision-0 replication (&sect;9.1), the reward-head AUCs (&sect;9.2,
+controls at 1.000 / 0.506 / 0.501 / 0.485), and the direction metric&rsquo;s known-answer checks
+(&sect;8). Also: anything established by a round-trip or by planting distinguishable values &mdash;
+bin encode/decode, twohot, latent folds, RoPE index spaces, KV-cache paths, camera projection to
+&le;1.24 px over 11,787 points. That whole class came back clean and has not needed
+re-auditing.</td></tr>
+<tr><td><b>High</b></td><td>Corpus statistics re-measured for this report from the 125-game cache:
+the 87.3% repeat rate, the hold-run distribution, the dropout survival curve, the reward
+decomposition, label coverage, ability press rates, MTP head norms. These are counts over 3.55 M
+frames and there is nothing to be clever about.</td></tr>
+<tr><td><b>Medium</b></td><td>Anything with <i>n</i> in the thousands and a per-game breakdown that
+is consistent in sign &mdash; the walk-out probes (negative in 6/6 held-out games, 105/112 in CV),
+the lane table (40 games), the open-loop direction results (112 games). The effect sizes may move;
+the signs will not.</td></tr>
+<tr><td><b>Low</b></td><td>Anything with <i>n</i> &lt; 100 scored units: the retrain&rsquo;s
+direction trajectory (<i>n</i> = 73 per point), the held-out reward AUCs (34 events on one game),
+the per-offset anticipation AUCs (27&ndash;73 events per offset). The direction of these results is
+probably right; the values should not be quoted to three digits, and I have tried not to.</td></tr>
+<tr><td><b>Do not trust</b></td><td>Any probe fitted on five games. Any comparison against a bar
+fitted on a different split than it is read on. Any &ldquo;this configuration causes the
+NaN&rdquo; attribution made from a short run. Any median angle on <i>n</i> &lt; 500 in a metric
+that is bimodal with an effective sample size of about 2 because each game contributes essentially
+one direction.</td></tr>
+</table>
+
+<h2>Appendix B. Figure provenance</h2>
+
+<p>Every figure is generated by <code>reports/figures.py</code> and <code>reports/figures2.py</code>
+from committed data. Nothing is mocked. Where a number appears in a figure but not in any document,
+it was measured for this report and the source is named below.</p>
+
+<table>
+<tr><th>fig</th><th>source</th></tr>
+<tr><td>1, 13</td><td>Schematics. Values annotated on them are cited in the surrounding text.</td></tr>
+<tr><td>2</td><td><code>docs/PAPER_DEVIATIONS.md</code> &sect;1.4&ndash;1.5, &sect;2.6, &sect;6.1&ndash;6.2, plus the shipped checkpoint&rsquo;s own <code>model_config</code>.</td></tr>
+<tr><td>3, 5, 10(a)</td><td><b>Measured for this report</b> from <code>data/cache_baseline.pt</code> and <code>data/cache_retrain_heading.pt</code> by <code>reports/measure_corpus.py</code>; raw arrays in <code>reports/figdata/</code>.</td></tr>
+<tr><td>4</td><td>(a) <code>docs/MOVEMENT_HEAD_BLIND_2026-08-26.md</code>. (b) <code>scratchpad/decision0/ce_lcell.json</code>, re-read here.</td></tr>
+<tr><td>6</td><td>(a) <b>Recomputed for this report</b> from <code>scratchpad/lane/analyze.json</code> using the lane-anchor rule in <code>lane/analyze.py:147</code>. (b) <code>scratchpad/decision0/head_walkout.json</code>, per-game arrays.</td></tr>
+<tr><td>7</td><td><b>Parsed for this report</b> from <code>ops/bronze_retrain_run.log</code> (the run finished 2026-09-02 15:04 UTC) and <code>ops/rescore_*.log</code>.</td></tr>
+<tr><td>8</td><td>Commit <code>805274d</code>&rsquo;s measured values, which are the metric&rsquo;s own known-answer checks.</td></tr>
+<tr><td>9</td><td><code>scratchpad/decision0/ce_wdir8.json</code> and <code>docs/DECISION0_REPLICATION.md</code> &sect;4.</td></tr>
+<tr><td>10(b,c)</td><td><code>docs/REWARD_MODEL_INVESTIGATION.md</code> &sect;5b.</td></tr>
+<tr><td>11</td><td><b>Measured for this report</b> by <code>reports/measure_gold.py</code>, reading <code>labels.json</code> for a 24-game stratified sample directly.</td></tr>
+<tr><td>12</td><td><b>Measured for this report</b> by loading <code>data/phase2_bc_clicks/agent_finetune_latest.pt</code> and <code>data/bronze_retrain_A/agent_finetune_latest.pt</code> and taking per-offset weight norms.</td></tr>
+</table>
+
+<hr class="thin">
+<p class="small muted">Source, figures and measurement scripts are committed under
+<code>reports/</code>. The five retracted claims quoted in &sect;4 are quoted from the documents
+that made them; each of those documents now carries its own correction section, and the corrections
+are the parts worth reading.</p>

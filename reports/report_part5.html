@@ -1,0 +1,213 @@
+<h2>9. The rest of the stack</h2>
+
+<p>The movement head is the loudest failure but not the only one, and two of the others were
+diagnosed wrongly before they were diagnosed rightly. Both corrections went in the direction of
+&ldquo;this component is healthier than we said&rdquo;, which is worth noting because the
+prevailing bias in this project has been toward finding faults.</p>
+
+<h3>9.1 The signal is in the frozen features &mdash; two independent confirmations</h3>
+
+<p>After the &ldquo;the signal is ABSENT&rdquo; retraction (&sect;4), the question was re-opened
+properly with two investigations that share no code. Both return the same verdict: the information
+is present in the frozen representation, and the objective never forced the model to use it.</p>
+
+<figure>
+<img src="figures/f04_decision0.png" alt="decision 0">
+<figcaption><b>Figure 9.</b> <b>(a)</b> Nested probes on the walk-out window, where the setup is
+<i>structurally</i> leak-free &mdash; the movement input there is a single constant sentinel across
+every frame of every game, so there is no held target to copy. Each probe&rsquo;s output layer is
+zero-initialised and added to a blind persistence table&rsquo;s log-probs, so the table is
+candidate #0 and only genuine cross-game generalising gain can select the probe away from it.
+Dots are the six individual held-out games. The frozen, action-ablated features beat the table by
+0.16&ndash;0.22 nats, versus 0.12 for a probe on <i>perfect ground-truth state</i> &mdash; true map
+position, every visible hero&rsquo;s position and HP, own HP and level, side, game time. The
+features carry 0.887 nats about the human&rsquo;s walk direction against the marginal, versus
+0.604 for the persistence table and 0.541 for perfect perception. <b>(b)</b> The from-scratch
+replication, in accuracy space: a ridge on <i>one</i> frozen 8,192-d latent, no previous click in
+any form, 10,982 held-out click events, against a null estimated by 300 within-game permutations.
+37.8% against 15.4%, z = 68, 0.31 bits. All six held-out games individually significant (z
+9.1&ndash;41.7).</figcaption>
+</figure>
+
+<p>The replication is the one to trust, because it validated its estimator in both directions
+<i>before</i> reading the result: a known-good 8-way spatial target (the octant of the hero&rsquo;s
+position about map centre) decodes at 97.0% against a 51.3% null, and the same machinery refit on
+within-game-shuffled labels lands on the null (17.4% vs 15.9%, 0.007 bits). It survives the
+map-position control (a 32&times;32 position table alone gets 27.3%; the latent adds 0.18 nats
+<i>on top of</i> position), the click-leakage control (the latent 0.5 s <i>before</i> the click
+still scores 31.6% at z = 51, so this is not a rendered destination marker), and the crutch
+control (conditional mutual information given the previous octant = 0.075 bits, z = 36).</p>
+
+<p>A third, separate experiment puts a ground-truth ceiling on the whole thing. Over 130 games and
+384,538 events, a probe on hand-built ground-truth state features beats the blind table by
+<b>+0.64 nats</b> [0.44, 0.76] with a per-game block bootstrap, winning in <b>127 of 130 games</b>.
+But its own decomposition is the sobering part: split the &ldquo;self-motion&rdquo; features into
+what a pixel could see (displacement) and what only the memory read knows (heading and speed, i.e.
+the standing order), and the pixel-observable half is worth almost nothing (4.578 vs a 4.121 table)
+while the memory half carries it (3.937). Much of the apparent ceiling is another read of the same
+order, from a different pipe.</p>
+
+<h3>9.2 The reward model &mdash; the audit was wrong, and so was the design doc</h3>
+
+<p>The wiring audit listed the reward twohot buckets as a Phase-3 blocker: 99.79% of 3,554,768
+targets land in one bucket, only 34 of 254 intervals are ever occupied, bucket width 0.0236 against
+a median nonzero reward of 0.001. All four numbers replicate exactly (I re-measured them for this
+report and got the same frame counts). The diagnosis does not survive them.</p>
+
+<ul>
+<li>Our grid is <b>6.7&times; finer</b> than DreamerV3&rsquo;s default on our own data, not
+coarser, and carries <b>4.4&times; more learnable nats</b> (0.0396 vs 0.0091). &ldquo;Sized for
+returns&rdquo; points the wrong way. A minion last-hit moves 59&ndash;88% of the twohot mass to the
+next bin; under DreamerV3&rsquo;s grid it would move 9&ndash;13%.</li>
+<li>35 occupied bins is the <i>correct</i> answer, not a symptom: they span 1,290 gold in one
+frame and the largest reward in the corpus is 1,090 gold.</li>
+<li>The trained head reads income events at held-out AUC <b>0.904</b>, with clean controls &mdash;
+true reward 1.000, noise 0.506, game-time confound 0.501, passive-tick confound 0.485.</li>
+</ul>
+
+<figure>
+<img src="figures/f07_reward.png" alt="the reward">
+<figcaption><b>Figure 10.</b> <b>(a)</b> Re-measured for this report over all 3,554,768 frames:
+89.93% of frames carry exactly zero reward; 9.41% carry the passive gold drip, which is 28.7% of
+all positive reward and is action-independent (a constant-rate term cancels out of PMPO
+advantages); and the 0.63% of frames that carry a real income event carry 71% of the reward.
+<b>(b)</b> Every MTP offset of the reward head carries signal across the full 0.4 s window.
+<b>(c)</b> The offset-0 head is a sharp detector, half-width ~&plusmn;0.1 s, at chance by
+&plusmn;0.25 s &mdash; which is what establishes that (b) is genuine anticipation rather than
+temporal clustering, since offset 4&rsquo;s 0.883 at 0.2 s lead is not available by shifting
+offset 0&rsquo;s output (0.656).</figcaption>
+</figure>
+
+<p>The design document had also recorded a falsifier as <i>already fired</i>: &ldquo;measured AUC
+for &lsquo;will this swing last-hit&rsquo; is 0.431 / 0.29 &mdash; worse than chance. Do not treat
+the current reward head as a reward model.&rdquo; That is overturned. On frozen v7 latents,
+&ldquo;gold event within the next 0.5 s&rdquo; reads out at held-out AUC 0.778 (MLP) / 0.738
+(linear) with validated controls, and through the trained head an independent measurement gets
+0.886&ndash;0.904. What <i>is</i> true, and was not the recorded reason: the reward&rsquo;s scalar
+<b>magnitude</b> is not readable (R&sup2; &lt; 0). The head should be trained on the event, not the
+scalar.</p>
+
+<p>Where the reward is genuinely weak is elsewhere, and none of it is the buckets.</p>
+
+<ol>
+<li><b>It is not zero-sum.</b> <code>corr(own gold gained, lane gold-diff change) = 0.697&ndash;0.708</code>
+at <i>every</i> window from 0.4 s to 300 s &mdash; which is exactly the arithmetic null of 0.707
+for two independent equal-variance streams. Farming 400 g while the opponent farms 0 and farming
+400 g while he farms 800 score identically. Half the lane-advantage variance is invisible at every
+timescale the policy acts on. Under solo gold, 0.1% of 0.4 s windows are negative; under gold-diff,
+13.1%. The only negative feedback in the entire reward is a one-shot &minus;0.2 that fires on 0.01%
+of frames.</li>
+<li><b>The horizon is 0.4 s.</b> &gamma; = 0.997 is an 11.5 s half-life; &lambda; = 0.95 is a 1.0 s
+mixing length; the rollout is 8 frames. Only 3.8% of a &gamma;-consistent discounted return lies
+inside the horizon; the other 96.2% is whatever the (untrained, zero-init) value head guesses. And
+<b>95.0% of imagined rollouts at H=8 contain no reward event at all.</b> PMPO uses only the sign of
+the advantage, so in 95% of samples the positive/negative split is a coin flip. The reward is not
+too small for PMPO &mdash; PMPO is scale-invariant &mdash; it is too <i>rare</i>.</li>
+<li><b>The exchange rates are off in a specific direction.</b> A champion kill is +0.30 against own
+death &minus;0.20, i.e. 1.5:1, a standing instruction to all-in on coin-flip trades. The measured
+opportunity cost of a death is 107 g at 30 s and 192 g at 60 s, and it hands the enemy a ~300 g
+bounty, so the true zero-sum cost is ~480&ndash;500 g against a configured 200. Meanwhile
+<code>continues = ones</code> in imagination, so death is not terminal in the dream, and gold
+accrues while dead (3.15 g/s dead vs 6.99 g/s alive) &mdash; the reward literally pays for being
+dead. The one thing we guessed right: gold-per-death of 0.005 is within 20% of OpenAI Five (0.006)
+and identical to JueWu 5v5 (0.005).</li>
+</ol>
+
+<p>The sequencing argument for keeping it solo-gold survives all of this: you do not need the
+opponent&rsquo;s gold to learn to last-hit, and last-hitting is the Bronze milestone. Zero-sum buys
+trading and denying, which is Emerald-tier. What changed is that the <i>stated data reason</i> for
+keeping it solo is gone.</p>
+
+<h3>9.3 The enemy-gold stream, re-measured</h3>
+
+<p>The design document claimed a gold-diff reward &ldquo;needs the opponent resolved <i>and
+visible</i>, which fails exactly when the opponent leaves screen&rdquo;. That claim was false on
+the day it was written: the screen-space gate was deleted from the recorder on 2026-05-08 and the
+document was authored 2026-08-13, three months later. <code>visible_heroes</code> is a full heap
+read of all ten champion structs; the name lies. It carries exactly ten entries on
+<b>100.000000%</b> of 4,171,462 labelled frames, and opponent <code>gold_total</code> is present on
+exactly the same frames as our own, to six decimals. These are in-client <i>replays</i>: the
+<code>.rofl</code> carries full server state, so fog of war never applied to the recorder.</p>
+
+<figure>
+<img src="figures/f13_enemy_gold.png" alt="enemy gold validation">
+<figcaption><b>Figure 11.</b> Independently re-measured for this report on a 24-game stratified
+sample, reading <code>labels.json</code> directly. <b>(a)</b> The distribution of single-frame gold
+gains &ge; 3 g for Garen (the known-live control) and for the resolved lane opponent. Both peak on
+the same two spikes &mdash; 14 g caster minion and 20 g melee minion &mdash; with a total variation
+distance of <b>0.089</b>, against 0.079 reported over the full 146 games. <b>(b)</b> The specific
+feared failure: a value refreshed only when the opponent is on camera. The opponent&rsquo;s gold
+moves on 10.63% of frames while on screen and 10.47% while off screen, a ratio of 0.984; the longest
+constant hold in the sample is 15 frames (0.75 s) for Garen and 13 frames for the opponent. A
+vision-gated read would show holds of tens of seconds after every recall.</figcaption>
+</figure>
+
+<p>The sharpest test in the original work is one I did not reproduce here but should be recorded:
+League&rsquo;s passive drip hits all ten champions on the same server tick, so you can locate drip
+frames by <i>Garen&rsquo;s</i> gold and ask whether the opponent ticks on the same frame. The answer
+is 0.9819 off-screen, 0.9804 in fog, 0.9765 on-screen &mdash; off-screen is <i>higher</i>. In one
+match, two heroes who were never once on camera ticked on 99.0% of Garen&rsquo;s drip frames. The
+one residual asymmetry in Figure 11(a) &mdash; Garen has about twice the opponent&rsquo;s share of
+28&ndash;35 g lumps &mdash; is a Garen fact, not a data fact: his Q and E hit multiple minions inside
+one 50 ms frame, so two minions land in one delta. It is evidence the enemy stream is <i>not</i>
+derived from his.</p>
+
+<p>And the counterexample in the same schema: <code>champion_stats.gold</code> (current gold, as
+opposed to <code>gold_total</code>) is garbage &mdash; a single per-hero constant for the entire
+game in 130 of 130 hero-games audited, with magnitudes like &minus;3.77e22 for Garen and 1.46e31
+for Vladimir. The root cause is the acceptance-test pattern from &sect;4.1: <code>gold_earned</code>
+had to <i>change between two snapshots</i> to be accepted and is correct; <code>gold_current</code>
+only had to sit in a plausible range, and a field that never moves passes that test. Blast radius
+is nil for training &mdash; nothing under <code>src/</code> reads it &mdash; but 59 matches now
+carry it on disk, one key away from the good field in the same dictionary.</p>
+
+<h3>9.4 MTP offset 0 is dead, in every checkpoint on disk</h3>
+
+<figure>
+<img src="figures/f08_mtp_dead_head.png" alt="MTP dead head">
+<figcaption><b>Figure 12.</b> Measured for this report by loading both checkpoints and taking the
+Frobenius norm of every per-offset output weight. Offset 0 is <b>exactly 0.0</b> for the ability,
+movement and gate heads in both &mdash; including the retrain that finished today &mdash; because
+<code>bc_next_action_loss</code> runs <code>for n in range(1, mtp_length)</code>. The reward head,
+whose loss <i>does</i> cover <i>n</i> = 0, is the control and is nonzero everywhere. The zero is
+not decay: AdamW at lr 3e-4, wd 0.1 over 102,420 steps is a 22&times; shrink, and never exactly
+zero in fp32. The decisive evidence is the optimizer state &mdash; exactly six Adam slots have
+<code>exp_avg_sq</code> identically 0, i.e. the gradient was exactly 0 on all 102,420 steps.</figcaption>
+</figure>
+
+<p>This is mechanically expected and harmless in Phase 2. What is not harmless is what reads it.
+<code>train_imagination.py</code> reads the policy at <code>MTP_OFFSET</code> and the prior at
+literal <code>0</code>. The prior is a deep copy of the policy head, so at Phase-3 step 0 a correct
+KL must be <i>exactly zero</i>. Measured on the real head: <b>7.286874 nats</b> as coded, 0.000000
+correct. And because <code>prior@0</code> is exact uniform,
+KL(&pi; &parallel; uniform) = log K &minus; H(&pi;), so minimising it <i>maximises entropy</i>. At
+the default <code>--pmpo-beta 0.3</code> the term contributes +2.19 to the loss and its gradient
+pushes the offset-1 policy &mdash; the one Phase 3 also samples from &mdash; toward Bernoulli(0.5)
+on nine abilities (4.5 presses per dreamed frame) and uniform over movement. It is not a vacuous
+regulariser; it actively erases the BC policy.</p>
+
+<p>One intuitive concern in this area was <i>refuted</i> by measurement and is worth recording as
+such: BC only applies the policy head to token positions 0..T&minus;2 while inference reads T&minus;1,
+so the deployed read position is never supervised. Teacher-forced on 1,200 val windows it costs
+nothing measurable &mdash; gate fire rate 0.1290 at position 15 against 0.1295 mean over 0..14
+(ratio 0.996), gate BCE 0.2987 vs 0.2999, token norm 5.479 vs 5.475. A prior scratchpad result had
+reported a 60% command-rate difference; those were two independent self-fed rollouts with diverging
+action histories, and teacher-forced on identical inputs the difference is 0.4%.</p>
+
+<h3>9.5 Phase 3 cannot take a step</h3>
+
+<figure>
+<img src="figures/f09_phase3_blockers.png" alt="phase 3 blockers">
+<figcaption><b>Figure 13.</b> Four independent blockers, established by attempting the load and one
+step on both live lineages. They fire in order, so fixing any one reveals the next.</figcaption>
+</figure>
+
+<p>There is a fifth issue that fires only once a step is possible: <code>imagine()</code> calls
+<code>sample()</code> without <code>prev_movement_idx</code>, so a sampled NO_OP decodes to screen
+centre rather than &ldquo;repeat the standing order&rdquo; &mdash; a fake click-the-middle action
+injected into roughly 28% of dreamed frames. And a sixth that fires after that: at Phase-3 step 0
+the value head is zero-init and 98.4% of the reward head&rsquo;s predictions on real frames are
+positive, so A<sub>t</sub> = R<sub>t</sub> &minus; v<sub>t</sub> &gt; 0 almost everywhere, PMPO&rsquo;s
+negative set is nearly empty, and <code>compute_pmpo_loss</code> degenerates into &ldquo;raise the
+log-probability of everything you sampled&rdquo;. The trainer now aborts on a degenerate advantage
+split rather than collapsing quietly.</p>
