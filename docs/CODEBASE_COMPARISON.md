@@ -436,7 +436,7 @@ retrain" — the exact fork that document says it cannot resolve.
 
 ### B. There is no context length. Batch length *is* the context, which the paper explicitly warns against
 
-HARD, paper (`scratchpad/d4.txt`, §3.2):
+HARD, paper (`scratchpad/dreamer4_text.txt`; §3.4 Training Recipe, not §3.2 — verified 2026-09-02, the quote is present and the file `d4.txt` does not exist):
 
 > *"The batch lengths need to be **longer than the context length** of the model to prevent the
 > transformer from overfitting to always seeing a start frame at the beginning of its context,
