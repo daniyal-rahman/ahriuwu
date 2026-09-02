@@ -492,12 +492,14 @@ class ReplayLatentSequenceDataset(Dataset):
             self.click_fallback_matches.append(match_id)
         abilities = self._parse_abilities(labels, frames, match_id, click_doc)
         state, state_mask = self._parse_state(labels, frames)
+        cursor = self._parse_cursor(labels, frames)
 
         return {
             "rewards": rewards,
             "movement": movement,
             "movement_event": movement_event,
             "movement_from_clicks": from_clicks,
+            "cursor": cursor,
             "abilities": abilities,
             "state": state,
             "state_mask": state_mask,
@@ -843,6 +845,65 @@ class ReplayLatentSequenceDataset(Dataset):
                 event[i] = True
             prev = cur
         return event
+
+    def _parse_cursor(self, labels: dict, frames: list[dict]) -> torch.Tensor:
+        """Per-frame CURSOR position in normalized screen coords, (T, 2).
+
+        A SECOND spatial channel, distinct from `movement`:
+          movement = where the player RIGHT-CLICKED (a destination, held)
+          cursor   = where the mouse actually IS on each frame
+
+        They are different quantities. Measured over 5,812 ability frames, the
+        cursor sits a median of 2 world units from the champion during a
+        self-cast Q while the walk target is elsewhere entirely -- so a single
+        channel cannot represent both.
+
+        Why this exists even though Garen's kit barely needs aim: a human moves
+        the mouse CONTINUOUSLY between clicks, and an agent that teleports the
+        pointer straight to each click target does not look or behave like one.
+        `label.cursor.world` is a world anchor sampled sparsely, so we project it
+        through each frame's own camera and INTERPOLATE between observations to
+        recover a plausible continuous trajectory.
+
+        Note the interpolation here is safe in a way it is NOT for `movement`:
+        this is a per-frame observation of where the pointer was, never an
+        action-conditioning input, so smoothing it cannot leak a future command
+        into the world model. (Interpolating the MOVEMENT target does exactly
+        that -- it drops the blind-table bar from 4.12 to 1.73 by making the
+        targets self-predictive. See docs/BC_FIX_PLAN_2026-08-26.md.)
+        """
+        T = len(frames)
+        out = torch.full((T, 2), 0.5, dtype=torch.float32)
+        proj = _Projection(labels)
+        cx, cz = self._recover_cameras(frames, proj)
+        if cx is None:
+            return out
+        obs: list[tuple[int, float, float]] = []
+        for i, f in enumerate(frames):
+            cw = ((f.get("label") or {}).get("cursor") or {}).get("world")
+            if not (isinstance(cw, list) and len(cw) == 2):
+                continue
+            try:
+                x, y = proj.project_norm(cw[0], cw[1], cx[i], cz[i])
+            except (TypeError, IndexError):
+                continue
+            obs.append((i, min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)))
+        if not obs:
+            return out
+        # hold before the first observation and after the last; interpolate between
+        for k in range(len(obs)):
+            i, x, y = obs[k]
+            out[i, 0], out[i, 1] = x, y
+        for (i0, x0, y0), (i1, x1, y1) in zip(obs[:-1], obs[1:]):
+            n = i1 - i0
+            if n > 1:
+                for d in range(1, n):
+                    t = d / n
+                    out[i0 + d, 0] = x0 + (x1 - x0) * t
+                    out[i0 + d, 1] = y0 + (y1 - y0) * t
+        out[: obs[0][0]] = out[obs[0][0]]
+        out[obs[-1][0] :] = out[obs[-1][0]]
+        return out
 
     def _parse_abilities(
         self,
