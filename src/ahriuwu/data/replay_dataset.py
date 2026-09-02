@@ -268,7 +268,8 @@ class ReplayLatentSequenceDataset(Dataset):
         #   3 = cursor dead-band denoise in _parse_movement
         #   4 = click-event movement target + movement_event; enemy_visible
         #       gated on screen!=None; GarenQAttack counted as an auto-attack
-        #   5 = the key now covers EVERY option that changes parsed output.
+        #   6 = _parse_match now also returns the per-frame `cursor` channel.
+#   5 = the key now covers EVERY option that changes parsed output.
         #       It previously omitted the reward config, so editing gold_scale
         #       with a cache on disk was a SILENT NO-OP -- the run would load
         #       rewards built with the old scale and look like the change did
@@ -286,7 +287,7 @@ class ReplayLatentSequenceDataset(Dataset):
                 "reward_config": (_dc.asdict(rc) if _dc.is_dataclass(rc)
                                   else (None if rc is None else repr(rc))),
                 "matches": self._match_fingerprint(),
-                "schema": 5}
+                "schema": 6}
 
     def _match_fingerprint(self) -> str:
         """Cheap fingerprint of WHICH latent packs are in latents_dir.
@@ -1109,6 +1110,14 @@ class ReplayLatentSequenceDataset(Dataset):
         # camera drift with commands and drops every command that quantizes
         # into the same bin.
         actions = {"movement": movement, "movement_event": md["movement_event"][sl]}
+        # The per-frame CURSOR, a SECOND spatial channel (see _parse_cursor).
+        # Distinct from `movement`: 28.9% exact-repeat and 0.0059 median step vs
+        # movement's 91.2% / 0.1075, and they differ by >0.05 on 43% of frames.
+        # Guarded with .get so caches written before this field (schema <6) still
+        # load -- a missing key here would otherwise break every existing cache.
+        _cur = md.get("cursor")
+        if _cur is not None:
+            actions["cursor"] = _cur[sl]
         for k in ABILITY_KEYS:
             actions[k] = md["abilities"][k][sl]
         # cursor_valid gates real-action vs. no_action_embed per frame. Replays
