@@ -125,7 +125,15 @@ def parse_args():
     # Generation (shortcut denoiser) config
     parser.add_argument("--gen-steps", type=int, default=4,
                         help="Denoising steps K per dreamed frame (shortcut). d = k_max // K.")
-    parser.add_argument("--k-max", type=int, default=64, help="Shortcut grid size.")
+    parser.add_argument("--k-max", type=int, default=0,
+                        help="Shortcut grid size; d = k_max // gen_steps. DEFAULT 0 means "
+                             "'match --gen-steps', i.e. d=1. The old default of 64 with "
+                             "--gen-steps 4 gave d=16 -- and step_embed[16] NEVER RECEIVED "
+                             "A GRADIENT, because the dynamics trained with "
+                             "shortcut_forcing=False so only d=1 was ever trained. Every "
+                             "dreamed frame was generated under an untrained step "
+                             "embedding. Measured: matching them cuts rollout NMSE 12-15% "
+                             "for free (docs/DREAM_FIDELITY.md).")
     parser.add_argument("--tau-ctx", type=float, default=0.1,
                         help="Context corruption WIDTH for rollout: context tau ~ U(1-tau_ctx, 1).")
     # Dynamics arch flags (must match the checkpoint)
@@ -809,6 +817,16 @@ def smoke_test(args):
 
 def main():
     args = parse_args()
+    if getattr(args, "k_max", 0) in (0, None):
+        args.k_max = args.gen_steps
+        print(f"[shortcut] --k-max defaulted to --gen-steps ({args.gen_steps}) -> d=1, "
+              f"the only step size the dynamics ever trained.")
+    elif args.k_max // max(args.gen_steps, 1) != 1:
+        print(f"[shortcut] WARNING: k_max={args.k_max} / gen_steps={args.gen_steps} "
+              f"-> d={args.k_max // max(args.gen_steps, 1)}. If the dynamics trained with "
+              f"shortcut_forcing=False, only d=1 has a trained step_embed row and every "
+              f"dreamed frame will be generated under an UNTRAINED embedding "
+              f"(measured cost: 12-15% rollout NMSE).")
     # tau used by the agent-token forward pass inside imagine() (near-clean ctx).
     args.tau_ctx_forward = 1.0 - args.tau_ctx if args.tau_ctx < 0.5 else 0.9
     if args.smoke_test:
