@@ -401,8 +401,10 @@ Ordered by how much I think it matters.
 5. **Real tests.** `lucidrains/dreamer4` has 61 test functions / 202 asserts (REPORTED);
    `edwhu` has the bit-equality firewall test (HARD). We have 5 test files / 629 lines. §1.8.
 6. **Sampling-time tricks for autoregressive drift.** REPORTED, DIAMOND: train at σ_max=20 but
-   *sample* from σ_max=5.0, deliberately, because "starting from a lower variance noise helps to
-   mitigate the autoregressive drift" (author, issue #40); byte-quantise every generated frame before
+   *sample* from σ_max=5.0 (a train/sample config gap); SEPARATELY, the author notes in issue #40
+   that "starting from a lower variance noise helps to mitigate the autoregressive drift" — which is
+   about UNSCALED INITIAL NOISE, not about that config gap. This sentence originally welded the two
+   into one claim; corrected 2026-09-02. Also: byte-quantise every generated frame before
    it re-enters the conditioning buffer (`denoiser.py:83`); and overwrite ground-truth conditioning
    frames with the model's own one-step output during *training* (`denoiser.py:119`). We already do a
    version of the first (`tau_ctx=0.9` context noising), nothing like the third. Given dreams hold to
