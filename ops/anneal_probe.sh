@@ -26,10 +26,15 @@ LOG=$REPO/ops/anneal_probe.log
 export PYTORCH_ALLOC_CONF=expandable_segments:True
 # wait for the node
 until timeout 10 nvidia-smi >/dev/null 2>&1; do sleep 120; done
+# Wait for BOTH a free GPU and an empty Slurm queue. Polling the GPU alone races
+# with the scheduler: when a job ends, Slurm dispatches the next queued job while
+# this loop is also watching for a gap, and both land on the card. Two jobs sharing
+# the 5080 previously produced NaN losses that took hours to attribute correctly.
 idle=0
 while [ "$idle" -lt 3 ]; do
   n=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null | wc -l)
-  [ "$n" -eq 0 ] && idle=$((idle+1)) || idle=0
+  q=$(squeue -u "$USER" -h 2>/dev/null | wc -l)
+  if [ "$n" -eq 0 ] && [ "$q" -eq 0 ]; then idle=$((idle+1)); else idle=0; fi
   sleep 60
 done
 echo "$(date -u '+%m-%d %H:%M UTC') anneal_probe: BASELINE (pre-anneal)" >> "$LOG"
