@@ -1,0 +1,5 @@
+{
+ "bot_blue":   {"LANERL_BOT": "blue"},
+ "donothing":  {"LANERL_BOT": "none"},
+ "noq":        {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/noq.json"}
+}

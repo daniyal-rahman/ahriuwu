@@ -1,0 +1,144 @@
+{
+  "asym_default": {
+    "env": {
+      "LANERL_BOT": "blue"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 20,
+    "cs_median": 17,
+    "cs_min": 16,
+    "cs_max": 27,
+    "cs_stdev": 6.1,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 17,
+        "gold": 879,
+        "lvl": 7,
+        "deaths": 1
+      },
+      {
+        "seed": 1235,
+        "cs": 16,
+        "gold": 839,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 27,
+        "gold": 364,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "decline_on": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_DECLINE": "1"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 24.7,
+    "cs_median": 26,
+    "cs_min": 18,
+    "cs_max": 30,
+    "cs_stdev": 6.1,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 30,
+        "gold": 544,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 18,
+        "gold": 889,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 26,
+        "gold": 364,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "incoming_off": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_INCOMING_W": "0.0"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 38,
+    "cs_median": 40,
+    "cs_min": 33,
+    "cs_max": 41,
+    "cs_stdev": 4.4,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 40,
+        "gold": 534,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 33,
+        "gold": 404,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 41,
+        "gold": 594,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "donothing": {
+    "env": {
+      "LANERL_BOT": "none"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 0,
+    "cs_median": 0,
+    "cs_min": 0,
+    "cs_max": 0,
+    "cs_stdev": 0.0,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 0,
+        "gold": 1414,
+        "lvl": 1,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 0,
+        "gold": 1414,
+        "lvl": 1,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 0,
+        "gold": 1414,
+        "lvl": 1,
+        "deaths": 0
+      }
+    ]
+  }
+}

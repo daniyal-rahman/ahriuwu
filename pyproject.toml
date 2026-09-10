@@ -38,5 +38,7 @@ target-version = "py310"
 select = ["E", "F", "I", "W"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# All three suites: lanerl_bot/ and lanerl_rl/ were NOT collected by a
+# bare `pytest`, so both sat red without anyone noticing.
+testpaths = ["tests", "lanerl_bot/tests", "lanerl_rl/tests", "lanerl_train/tests"]
 pythonpath = ["src"]

@@ -1,0 +1,7 @@
+shipped_default              n=6 crashes=0 cs mean=31.2 median=31.0 range=[18,46] sd=9.3
+anchor_diamond               n=6 crashes=0 cs mean=35.2 median=37.5 range=[25,43] sd=7.1
+anchor_gold                  n=6 crashes=0 cs mean=29.5 median=27.0 range=[21,42] sd=7.4
+anchor_bronze                n=6 crashes=0 cs mean=16.7 median=16.0 range=[10,27] sd=5.8
+
+wrote /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/bench/out/rep_confirm.json
+=== CONFIRM DONE ===

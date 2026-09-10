@@ -1,0 +1,4 @@
+{
+ "_note": "RETIRED SWEEP -- do not treat rep_tune.json as a result. Two of the three arms named bot configs that do not exist anywhere on this filesystem (lanerl_bot/configs/tuned.json for 'tuned_r80', lanerl_bot/configs/tuned_r150.json for 'tuned_r150') and could not be reconstructed. LanerlConfig.Load() ignored the missing file in silence, so both arms ran the DEFAULT bot: rep_tune.json's 36.3-vs-39.7 ranking is seed noise between two runs of the same bot. Those arms are removed here so the sweep cannot be re-run as if it meant something; their exact env dicts survive verbatim in rep_tune.json under report[tag]['env']. Load() now throws on a set-but-unresolvable LANERL_BOT_CONFIG, so this can no longer happen quietly.",
+ "tuned_look400": {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/tuned_look400.json"}
+}

@@ -1,0 +1,100 @@
+[
+  {
+    "i": 0,
+    "env": {},
+    "cs": 30,
+    "gold": 364,
+    "lvl": 7,
+    "deaths": 1,
+    "wall_s": 35.4,
+    "fatal": []
+  },
+  {
+    "i": 1,
+    "env": {
+      "LANERL_BOT_REACTION_MS": "60"
+    },
+    "cs": null,
+    "gold": null,
+    "lvl": null,
+    "deaths": null,
+    "wall_s": 11.3,
+    "fatal": []
+  },
+  {
+    "i": 2,
+    "env": {
+      "LANERL_BOT_CD_LOOKAHEAD_MS": "120"
+    },
+    "cs": 26,
+    "gold": 1269,
+    "lvl": 7,
+    "deaths": 0,
+    "wall_s": 34.6,
+    "fatal": []
+  },
+  {
+    "i": 3,
+    "env": {
+      "LANERL_BOT_CD_LOOKAHEAD_MS": "450"
+    },
+    "cs": 28,
+    "gold": 374,
+    "lvl": 7,
+    "deaths": 0,
+    "wall_s": 31.1,
+    "fatal": []
+  },
+  {
+    "i": 4,
+    "env": {
+      "LANERL_BOT_INCOMING_W": "0.0"
+    },
+    "cs": 36,
+    "gold": 514,
+    "lvl": 8,
+    "deaths": 0,
+    "wall_s": 33.4,
+    "fatal": []
+  },
+  {
+    "i": 5,
+    "env": {
+      "LANERL_BOT_REACTION_MS": "60",
+      "LANERL_BOT_HOLDBACK": "350"
+    },
+    "cs": 35,
+    "gold": 474,
+    "lvl": 8,
+    "deaths": 0,
+    "wall_s": 32.4,
+    "fatal": []
+  },
+  {
+    "i": 6,
+    "env": {
+      "LANERL_BOT_REACTION_MS": "60",
+      "LANERL_BOT_CD_LOOKAHEAD_MS": "120"
+    },
+    "cs": 23,
+    "gold": 304,
+    "lvl": 7,
+    "deaths": 0,
+    "wall_s": 33.8,
+    "fatal": []
+  },
+  {
+    "i": 7,
+    "env": {
+      "LANERL_BOT_REACTION_MS": "60",
+      "LANERL_BOT_APPROACH": "8.0",
+      "LANERL_BOT_HOLDBACK": "250"
+    },
+    "cs": 20,
+    "gold": 869,
+    "lvl": 6,
+    "deaths": 0,
+    "wall_s": 33.3,
+    "fatal": []
+  }
+]

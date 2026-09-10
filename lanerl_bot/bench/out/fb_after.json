@@ -1,0 +1,217 @@
+{
+  "after": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_CS_INTERVAL_MS": "5000"
+    },
+    "n": 8,
+    "crashes": 0,
+    "cs_mean": 31.2,
+    "cs_median": 31.5,
+    "cs_min": 25,
+    "cs_max": 37,
+    "cs_stdev": 4.9,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 27,
+        "gold": 1063,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 26,
+        "gold": 338,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 35,
+        "gold": 518,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 37,
+        "gold": 478,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 37,
+        "gold": 1603,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 33,
+        "gold": 1103,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1240,
+        "cs": 30,
+        "gold": 438,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1241,
+        "cs": 25,
+        "gold": 1033,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "after_noclamp": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_CS_INTERVAL_MS": "5000",
+      "LANERL_BOT_MINION_AVOID": "-10000"
+    },
+    "n": 8,
+    "crashes": 0,
+    "cs_mean": 47.5,
+    "cs_median": 47.5,
+    "cs_min": 26,
+    "cs_max": 66,
+    "cs_stdev": 12.9,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 36,
+        "gold": 1183,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1235,
+        "cs": 59,
+        "gold": 1873,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 43,
+        "gold": 538,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1237,
+        "cs": 51,
+        "gold": 1823,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 26,
+        "gold": 318,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 55,
+        "gold": 788,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1240,
+        "cs": 44,
+        "gold": 1563,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1241,
+        "cs": 66,
+        "gold": 2273,
+        "lvl": 9,
+        "deaths": 0
+      }
+    ]
+  },
+  "after_ftd": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_CS_INTERVAL_MS": "5000",
+      "LANERL_BOT_FIGHT_TO_DEATH": "1"
+    },
+    "n": 8,
+    "crashes": 0,
+    "cs_mean": 33.8,
+    "cs_median": 33.5,
+    "cs_min": 27,
+    "cs_max": 41,
+    "cs_stdev": 4.6,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 27,
+        "gold": 368,
+        "lvl": 7,
+        "deaths": 2
+      },
+      {
+        "seed": 1235,
+        "cs": 35,
+        "gold": 1193,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1236,
+        "cs": 30,
+        "gold": 418,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1237,
+        "cs": 32,
+        "gold": 1113,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1238,
+        "cs": 37,
+        "gold": 1603,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 31,
+        "gold": 1123,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1240,
+        "cs": 41,
+        "gold": 1603,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1241,
+        "cs": 37,
+        "gold": 1573,
+        "lvl": 9,
+        "deaths": 0
+      }
+    ]
+  }
+}

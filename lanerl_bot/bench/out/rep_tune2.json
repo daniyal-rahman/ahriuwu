@@ -1,0 +1,174 @@
+{
+  "look400_r80": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400.json"
+    },
+    "n": 4,
+    "crashes": 0,
+    "cs_mean": 34,
+    "cs_median": 33.5,
+    "cs_min": 25,
+    "cs_max": 44,
+    "cs_stdev": 9.4,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 40,
+        "gold": 1599,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 44,
+        "gold": 1309,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1236,
+        "cs": 27,
+        "gold": 1369,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 25,
+        "gold": 1329,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "look600_r80": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look600.json"
+    },
+    "n": 4,
+    "crashes": 0,
+    "cs_mean": 35,
+    "cs_median": 35.5,
+    "cs_min": 25,
+    "cs_max": 44,
+    "cs_stdev": 8.6,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 40,
+        "gold": 1599,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 44,
+        "gold": 1309,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1236,
+        "cs": 31,
+        "gold": 1439,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 25,
+        "gold": 969,
+        "lvl": 7,
+        "deaths": 2
+      }
+    ]
+  },
+  "look800_r80": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look800.json"
+    },
+    "n": 4,
+    "crashes": 0,
+    "cs_mean": 35.8,
+    "cs_median": 35.5,
+    "cs_min": 32,
+    "cs_max": 40,
+    "cs_stdev": 3.5,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 40,
+        "gold": 1599,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 37,
+        "gold": 1569,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 34,
+        "gold": 1469,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 32,
+        "gold": 1449,
+        "lvl": 7,
+        "deaths": 0
+      }
+    ]
+  },
+  "look400_r150": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400_r150.json"
+    },
+    "n": 4,
+    "crashes": 0,
+    "cs_mean": 34,
+    "cs_median": 35.0,
+    "cs_min": 26,
+    "cs_max": 40,
+    "cs_stdev": 6.3,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 38,
+        "gold": 1539,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 32,
+        "gold": 1479,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 40,
+        "gold": 1579,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 26,
+        "gold": 1369,
+        "lvl": 7,
+        "deaths": 0
+      }
+    ]
+  }
+}

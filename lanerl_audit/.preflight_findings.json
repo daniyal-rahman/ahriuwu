@@ -1,0 +1,996 @@
+[
+  {
+    "severity": "medium",
+    "check": "config-silent-fallback",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_retreat.json:40",
+    "what": "LANERL_BOT_CONFIG target does not resolve: /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/hp25.json (-> /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/hp25.json). This arm cannot run the config it names. This is a recorded result, measured while LanerlConfig.Load() still fell back silently: that arm ran the DEFAULT bot and the number is not reproducible.",
+    "fix": "create the config, or retire the arm (see the _note in bench/out/cfg_tune.json)",
+    "extra": {
+      "path": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/hp25.json"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "config-silent-fallback",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune.json:41",
+    "what": "LANERL_BOT_CONFIG target does not resolve: /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_r150.json (-> /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_r150.json). This arm cannot run the config it names. This is a recorded result, measured while LanerlConfig.Load() still fell back silently: that arm ran the DEFAULT bot and the number is not reproducible.",
+    "fix": "create the config, or retire the arm (see the _note in bench/out/cfg_tune.json)",
+    "extra": {
+      "path": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_r150.json"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "config-silent-fallback",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune.json:5",
+    "what": "LANERL_BOT_CONFIG target does not resolve: /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned.json (-> /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned.json). This arm cannot run the config it names. This is a recorded result, measured while LanerlConfig.Load() still fell back silently: that arm ran the DEFAULT bot and the number is not reproducible.",
+    "fix": "create the config, or retire the arm (see the _note in bench/out/cfg_tune.json)",
+    "extra": {
+      "path": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned.json"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "config-silent-fallback",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:134",
+    "what": "LANERL_BOT_CONFIG target does not resolve: /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400_r150.json (-> /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400_r150.json). This arm cannot run the config it names. This is a recorded result, measured while LanerlConfig.Load() still fell back silently: that arm ran the DEFAULT bot and the number is not reproducible.",
+    "fix": "create the config, or retire the arm (see the _note in bench/out/cfg_tune.json)",
+    "extra": {
+      "path": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400_r150.json"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "config-silent-fallback",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:48",
+    "what": "LANERL_BOT_CONFIG target does not resolve: /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look600.json (-> /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look600.json). This arm cannot run the config it names. This is a recorded result, measured while LanerlConfig.Load() still fell back silently: that arm ran the DEFAULT bot and the number is not reproducible.",
+    "fix": "create the config, or retire the arm (see the _note in bench/out/cfg_tune.json)",
+    "extra": {
+      "path": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look600.json"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "config-silent-fallback",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:91",
+    "what": "LANERL_BOT_CONFIG target does not resolve: /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look800.json (-> /srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look800.json). This arm cannot run the config it names. This is a recorded result, measured while LanerlConfig.Load() still fell back silently: that arm ran the DEFAULT bot and the number is not reproducible.",
+    "fix": "create the config, or retire the arm (see the _note in bench/out/cfg_tune.json)",
+    "extra": {
+      "path": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look800.json"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/diag.sh:7",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_case.sh:7",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_ime.sh:7",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects; OUT=$NFS/ahriuwu-lanerl/lanerl/logs"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads.sh:10",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:14",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:10",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:11",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:11",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads6.sh:11",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/render_ab.sh:10",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/render_cd.sh:8",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/run_WORKING.sh:13",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/run_direct.sh:9",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/run_game.sh:11",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/run_gpu.sh:8",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/run_real_x.sh:8",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/run_video.sh:10",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/test_wined3d.sh:5",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/try_d3dx9.sh:8",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects; OUT=$NFS/ahriuwu-lanerl/lanerl/logs"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl/try_wined3d_dx9.sh:6",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects; OUT=$NFS/ahriuwu-lanerl/lanerl/logs"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/instr.json:6",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_STATS\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/bench/out/instr.jsonl\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/qab4.json:4",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/mnt/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/noq.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/qab4.json:60",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/mnt/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/qon_fixed.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/qab5.json:4",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/mnt/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/noq.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/qab5.json:74",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/mnt/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/qon_fixed.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_confirm.json:118",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/anchor_gold.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_confirm.json:175",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/anchor_bronze.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_confirm.json:61",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/anchor_diamond.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_final.json:145",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/noq.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_retreat.json:40",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/hp25.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune.json:41",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_r150.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune.json:5",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune.json:77",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:134",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400_r150.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:48",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look600.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:5",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/rep_tune2.json:91",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_BOT_CONFIG\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look800.json\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/out/reset_smoke.json:7",
+    "what": "literal /srv/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "\"LANERL_RECORD\": \"/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/bench/out/reset_smoke.jsonl\""
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "hardcoded-mount",
+    "where": "ahriuwu-lanerl/lanerl_rl/tests/test_control_backend.py:23",
+    "what": "literal /mnt/nfs -- resolves on one Slurm node only",
+    "fix": "derive from Path(__file__).resolve().parents[N] (py) or ${BASH_SOURCE[0]} (sh); never write the mount point",
+    "extra": {
+      "line": "sbatch -p cpu -w desktop -c 6 -t 40 --chdir=/mnt/nfs/projects/ahriuwu-lanerl \\\\"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/demo_serve.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/demo_windows.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/diag.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_case.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_ime.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads6.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/record_headless.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/render_ab.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/render_cd.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/run_WORKING.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/run_direct.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/run_game.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/run_gpu.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/run_real_x.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/run_video.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/serve_for_windows.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/setup_client.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/setup_client2.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/start_xorg.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/test_wined3d.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/try_d3dx9.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-errexit",
+    "where": "ahriuwu-lanerl/lanerl/try_wined3d_dx9.sh:1",
+    "what": "no `set -e`: a failing command does not stop the script, so later steps run against whatever the failed step left behind",
+    "fix": "add `set -euo pipefail` (and an explicit `|| true` where a failure really is acceptable)",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-pipefail",
+    "where": "ahriuwu-lanerl/lanerl/demo_serve.sh:1",
+    "what": "no `set -o pipefail`: `cmd | tail` reports tail's status, so a failing cmd is invisible",
+    "fix": "add `set -o pipefail`",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "shell-no-pipefail",
+    "where": "ahriuwu-lanerl/lanerl/demo_windows.sh:1",
+    "what": "no `set -o pipefail`: `cmd | tail` reports tail's status, so a failing cmd is invisible",
+    "fix": "add `set -o pipefail`",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "skip-hides-failure",
+    "where": "ahriuwu-lanerl/lanerl_bot/tests/conftest.py:125",
+    "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
+    "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
+    "extra": {
+      "line": "pytest.skip(\"server unavailable\")"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "skip-hides-failure",
+    "where": "ahriuwu-lanerl/lanerl_bot/tests/conftest.py:137",
+    "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
+    "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
+    "extra": {
+      "line": "pytest.skip(\"server unavailable\")"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "skip-hides-failure",
+    "where": "ahriuwu-lanerl/lanerl_rl/tests/conftest.py:19",
+    "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
+    "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
+    "extra": {
+      "line": "pytest.skip(f\"recording not found at {RECORDING}\")"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "skip-hides-failure",
+    "where": "ahriuwu-lanerl/lanerl_rl/tests/test_control_backend.py:68",
+    "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
+    "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
+    "extra": {
+      "line": "pytest.skip(\"LANERL_SKIP_SERVER_TESTS=1\")"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "skip-hides-failure",
+    "where": "ahriuwu-lanerl/lanerl_rl/tests/test_obs.py:28",
+    "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
+    "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
+    "extra": {
+      "line": "pytest.skip(f\"recording not found at {RECORDING}\")"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "ahriuwu-lanerl/lanerl_rl/env.py:430",
+    "what": "broad except with a silent pass/continue",
+    "fix": "narrow the exception type and log what was swallowed",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "ahriuwu-lanerl/lanerl_rl/env.py:808",
+    "what": "broad except with a silent pass/continue",
+    "fix": "narrow the exception type and log what was swallowed",
+    "extra": {}
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:1059",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:439",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "try { qSpell.Cast(_champ.Position, qKillable.Position, _champ); } catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlControl.cs:222",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "try { pill.Cast(champ.Position, champ.Position, champ); } catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlEpisode.cs:140",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "try { champ.Inventory.RemoveItem(slot, champ); } catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlEpisode.cs:228",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlEpisode.cs:237",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlEpisode.cs:278",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "try { ai.SetTargetUnit(null, true); } catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlEpisode.cs:375",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "try { m.SetTargetUnit(null, true); } catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlHooks.cs:244",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "try { _stats?.Flush(); _stats?.Dispose(); _stats = null; } catch { }"
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/diag.sh:60",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest now: $(grep -c 'not in the manifest' \"$OUT/diag_client.log\" 2>/dev/null)\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads.sh:38",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"    RADS errors: $(grep -c 'RADS' \"$log\" 2>/dev/null)\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:67",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"server: $(grep -c 'Game is ready' \"$OUT/server_c.log\") ready\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:75",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"RADS errors: $(grep -c 'RADS' \"$OUT/rads_C.log\" 2>/dev/null)\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:45",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest errors: $(grep -c 'not in the manifest' \"$OUT/rads_D.log\" 2>/dev/null)\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:55",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest: $(grep -c 'not in the manifest' \"$OUT/rads_D.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:55",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest errors: $(grep -c 'not in the manifest' \"$OUT/rads_E.log\" 2>/dev/null)\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:65",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest: $(grep -c 'not in the manifest' \"$OUT/rads_E.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:60",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest errors: $(grep -c 'not in the manifest' \"$OUT/rads_F.log\" 2>/dev/null)\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:70",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest: $(grep -c 'not in the manifest' \"$OUT/rads_F.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads6.sh:73",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"not-in-manifest: $(grep -c 'not in the manifest' \"$OUT/rads_F.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/run_WORKING.sh:53",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"mp4: $(ls -lh \"$OUT/gameplay_final.mp4\" 2>/dev/null | awk '{print $5}')  crashes: $(grep -c c0000005 \"$OUT/client_w.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/run_gpu.sh:47",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"surface segfaults: $(grep -c c0000005 \"$OUT/client_g.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "ambiguous-grep",
+    "where": "ahriuwu-lanerl/lanerl/run_real_x.sh:50",
+    "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
+    "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
+    "extra": {
+      "line": "echo \"surface segfaults: $(grep -c c0000005 \"$OUT/client_g.log\")\""
+    }
+  },
+  {
+    "severity": "low",
+    "check": "port-literal",
+    "where": "ahriuwu-lanerl/lanerl/scaling_test.sh:28",
+    "what": "hardcoded port 5200: safe alone, collides under any parallel run",
+    "fix": "take the port from an argument with no shared default",
+    "extra": {}
+  },
+  {
+    "severity": "low",
+    "check": "port-literal",
+    "where": "ahriuwu-lanerl/lanerl_bot/bench/measure_all.py:67",
+    "what": "hardcoded port 5410: safe alone, collides under any parallel run",
+    "fix": "take the port from an argument with no shared default",
+    "extra": {}
+  }
+]

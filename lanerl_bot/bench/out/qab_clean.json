@@ -1,0 +1,142 @@
+{
+  "q_OFF_baseline": {
+    "env": {
+      "LANERL_BOT_CONFIG": "lanerl_bot/configs/noq.json"
+    },
+    "n": 8,
+    "crashes": 0,
+    "cs_mean": 31.5,
+    "cs_median": 30.5,
+    "cs_min": 21,
+    "cs_max": 42,
+    "cs_stdev": 6.9,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 27,
+        "gold": 1389,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 42,
+        "gold": 1619,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 40,
+        "gold": 1579,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 28,
+        "gold": 1089,
+        "lvl": 7,
+        "deaths": 1
+      },
+      {
+        "seed": 1238,
+        "cs": 21,
+        "gold": 939,
+        "lvl": 7,
+        "deaths": 1
+      },
+      {
+        "seed": 1239,
+        "cs": 33,
+        "gold": 1479,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1240,
+        "cs": 32,
+        "gold": 1449,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1241,
+        "cs": 29,
+        "gold": 1399,
+        "lvl": 7,
+        "deaths": 0
+      }
+    ]
+  },
+  "q_ON_after_fix": {
+    "env": {
+      "LANERL_BOT_CONFIG": "lanerl_bot/configs/qon_fixed.json"
+    },
+    "n": 8,
+    "crashes": 0,
+    "cs_mean": 14.8,
+    "cs_median": 12.5,
+    "cs_min": 5,
+    "cs_max": 28,
+    "cs_stdev": 8.4,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 10,
+        "gold": 1089,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1235,
+        "cs": 15,
+        "gold": 154,
+        "lvl": 5,
+        "deaths": 1
+      },
+      {
+        "seed": 1236,
+        "cs": 21,
+        "gold": 1279,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 5,
+        "gold": 659,
+        "lvl": 5,
+        "deaths": 1
+      },
+      {
+        "seed": 1238,
+        "cs": 7,
+        "gold": 4,
+        "lvl": 6,
+        "deaths": 1
+      },
+      {
+        "seed": 1239,
+        "cs": 28,
+        "gold": 1409,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1240,
+        "cs": 9,
+        "gold": 54,
+        "lvl": 5,
+        "deaths": 1
+      },
+      {
+        "seed": 1241,
+        "cs": 23,
+        "gold": 1289,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+{
+ "mode0_ignore":    {"LANERL_BOT": "blue", "LANERL_BOT_INCOMING_MODE": "0"},
+ "mode1_committed": {"LANERL_BOT": "blue", "LANERL_BOT_INCOMING_MODE": "1"},
+ "mode2_extrap":    {"LANERL_BOT": "blue", "LANERL_BOT_INCOMING_MODE": "2"},
+ "mode1_holdback300": {"LANERL_BOT": "blue", "LANERL_BOT_INCOMING_MODE": "1", "LANERL_BOT_HOLDBACK": "300"}
+}

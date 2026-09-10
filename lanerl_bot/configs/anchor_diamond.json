@@ -1,0 +1,7 @@
+{
+  "_comment": "Strongest frozen anchor: full-accuracy execution of the same policy.",
+  "reactionDelayMs": 80, "reactionJitterMs": 30,
+  "lastHitAccuracy": 1.0, "damageEstimateErrorFrac": 0.0,
+  "retreatHpFrac": 0.25, "resumeHpFrac": 0.50,
+  "incomingMode": 0, "cooldownLookaheadMs": 400
+}

@@ -1,0 +1,5 @@
+{
+  "retreatHpFrac": 0.25, "resumeHpFrac": 0.50, "incomingMode": 0,
+  "reactionDelayMs": 80, "reactionJitterMs": 40,
+  "cooldownLookaheadMs": 400, "holdbackDistance": 150
+}

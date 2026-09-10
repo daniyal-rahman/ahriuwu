@@ -1,0 +1,7 @@
+{
+  "_comment": "Weakest anchor: the target the first learned policy has to beat.",
+  "reactionDelayMs": 450, "reactionJitterMs": 180,
+  "lastHitAccuracy": 0.60, "damageEstimateErrorFrac": 0.20,
+  "retreatHpFrac": 0.40, "resumeHpFrac": 0.65,
+  "incomingMode": 0, "cooldownLookaheadMs": 400
+}

@@ -1,0 +1,4 @@
+bot_blue                     n=8 crashes=1 cs mean=0 median=0.0 range=[0,0] sd=0.0
+srun: Job step aborted: Waiting up to 32 seconds for job step to finish.
+slurmstepd-danilogin: error: *** STEP 597.0 ON danilogin CANCELLED AT 2026-09-08T21:32:38 ***
+srun: error: danilogin: task 0: Terminated

@@ -1,0 +1,4 @@
+{
+ "_note": "RETIRED SWEEP -- do not treat rep_tune2.json as a result. Three of the four arms named bot configs that do not exist anywhere on this filesystem (lanerl_bot/configs/tuned_look600.json, tuned_look800.json, tuned_look400_r150.json) and could not be reconstructed, so they all ran the DEFAULT bot via the silent fallback in LanerlConfig.Load(). The reported look400/600/800 lookahead trend is seed noise. Removed arms survive verbatim in rep_tune2.json under report[tag]['env'].",
+ "look400_r80": {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/tuned_look400.json"}
+}

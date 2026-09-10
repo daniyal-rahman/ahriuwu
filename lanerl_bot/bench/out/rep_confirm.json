@@ -1,0 +1,229 @@
+{
+  "shipped_default": {
+    "env": {
+      "LANERL_BOT": "blue"
+    },
+    "n": 6,
+    "crashes": 0,
+    "cs_mean": 31.2,
+    "cs_median": 31.0,
+    "cs_min": 18,
+    "cs_max": 46,
+    "cs_stdev": 9.3,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 46,
+        "gold": 1739,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 32,
+        "gold": 1479,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 30,
+        "gold": 1419,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 26,
+        "gold": 1369,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 18,
+        "gold": 1249,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 35,
+        "gold": 1529,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "anchor_diamond": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/anchor_diamond.json"
+    },
+    "n": 6,
+    "crashes": 0,
+    "cs_mean": 35.2,
+    "cs_median": 37.5,
+    "cs_min": 25,
+    "cs_max": 43,
+    "cs_stdev": 7.1,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 38,
+        "gold": 1709,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 43,
+        "gold": 1619,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 37,
+        "gold": 1519,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 40,
+        "gold": 1609,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 28,
+        "gold": 1469,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 25,
+        "gold": 989,
+        "lvl": 7,
+        "deaths": 1
+      }
+    ]
+  },
+  "anchor_gold": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/anchor_gold.json"
+    },
+    "n": 6,
+    "crashes": 0,
+    "cs_mean": 29.5,
+    "cs_median": 27.0,
+    "cs_min": 21,
+    "cs_max": 42,
+    "cs_stdev": 7.4,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 42,
+        "gold": 1639,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 27,
+        "gold": 1379,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 21,
+        "gold": 1289,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 34,
+        "gold": 1459,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 26,
+        "gold": 1349,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 27,
+        "gold": 1389,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "anchor_bronze": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/anchor_bronze.json"
+    },
+    "n": 6,
+    "crashes": 0,
+    "cs_mean": 16.7,
+    "cs_median": 16.0,
+    "cs_min": 10,
+    "cs_max": 27,
+    "cs_stdev": 5.8,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 13,
+        "gold": 1119,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 27,
+        "gold": 1349,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 15,
+        "gold": 799,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1237,
+        "cs": 17,
+        "gold": 1219,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 10,
+        "gold": 1099,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 18,
+        "gold": 1239,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  }
+}

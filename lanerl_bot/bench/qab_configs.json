@@ -1,0 +1,4 @@
+{
+ "q_OFF_baseline": {"LANERL_BOT_CONFIG": "lanerl_bot/configs/noq.json"},
+ "q_ON_after_fix": {"LANERL_BOT_CONFIG": "lanerl_bot/configs/qon_fixed.json"}
+}

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "reset_bench",
+    "wall_s": 38.0,
+    "summary": {
+      "n": 8,
+      "median_ms": 0.23,
+      "mean_ms": 4.27,
+      "min_ms": 0.18,
+      "max_ms": 32.06,
+      "played_ms_per_episode": 120000
+    },
+    "lines": [
+      "LANERL_RESET_BENCH n=1 LANERL_RESET ms=32.06 minions=12 missiles=2 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=4561",
+      "LANERL_RESET_BENCH n=2 LANERL_RESET ms=0.86 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=5703",
+      "LANERL_RESET_BENCH n=3 LANERL_RESET ms=0.21 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=3164",
+      "LANERL_RESET_BENCH n=4 LANERL_RESET ms=0.20 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=2586",
+      "LANERL_RESET_BENCH n=5 LANERL_RESET ms=0.25 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=2734",
+      "LANERL_RESET_BENCH n=6 LANERL_RESET ms=0.23 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=2736",
+      "LANERL_RESET_BENCH n=7 LANERL_RESET ms=0.19 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=2642",
+      "LANERL_RESET_BENCH n=8 LANERL_RESET ms=0.18 minions=12 missiles=0 champs=2 buildings=32 dead_buildings=0 waves=1 t_before=120010 t_after=0 sim_wall_ms=2232",
+      "LANERL_RESET_BENCH_SUMMARY n=8 median_ms=0.23 mean_ms=4.27 min_ms=0.18 max_ms=32.06 played_ms_per_episode=120000"
+    ],
+    "warns": [],
+    "fatal": []
+  }
+]

@@ -1,0 +1,109 @@
+{
+  "retreat_fixed": {
+    "env": {
+      "LANERL_BOT": "blue"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 34,
+    "cs_median": 34,
+    "cs_min": 33,
+    "cs_max": 35,
+    "cs_stdev": 1.0,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 33,
+        "gold": 454,
+        "lvl": 7,
+        "deaths": 1
+      },
+      {
+        "seed": 1235,
+        "cs": 35,
+        "gold": 1519,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 34,
+        "gold": 1539,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "retreat_hp25": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/hp25.json"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 38,
+    "cs_median": 38,
+    "cs_min": 34,
+    "cs_max": 42,
+    "cs_stdev": 4.0,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 42,
+        "gold": 1649,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 34,
+        "gold": 1539,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 38,
+        "gold": 1219,
+        "lvl": 7,
+        "deaths": 1
+      }
+    ]
+  },
+  "holdback300": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_HOLDBACK": "300"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 33.7,
+    "cs_median": 35,
+    "cs_min": 29,
+    "cs_max": 37,
+    "cs_stdev": 4.2,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 37,
+        "gold": 1529,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 29,
+        "gold": 1399,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 35,
+        "gold": 1479,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  }
+}

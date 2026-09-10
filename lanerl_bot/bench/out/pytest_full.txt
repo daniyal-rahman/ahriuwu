@@ -1,0 +1,36 @@
+...F................................                                     [100%]
+=================================== FAILURES ===================================
+____________________ test_bot_levels_up_and_spends_its_gold ____________________
+
+artifacts = PosixPath('/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/bench/out')
+
+    def test_bot_levels_up_and_spends_its_gold(artifacts):
+        """Auto-level and auto-buy are wired to the real server paths, not stubs."""
+        text = run_server(BASE_ENV | {"LANERL_BOT": "blue"},
+                          artifacts / "pytest_bot_progress.log", port=5913, timeout_s=900)
+        rows = telemetry.parse_cs_lines(text)
+        blue = [r for r in rows if r.name == "bluebot"]
+        red = [r for r in rows if r.name == "redbot"]
+        assert blue and red
+    
+        # levelling: XP from farmed minions must have carried it past level 1
+        assert max(r.lvl for r in blue) >= 5
+    
+        # shopping: Doran's Shield is +80 max HP, so max HP must exceed Garen's base
+        # 616 before any level-ups could account for it
+        assert blue[0].mhp >= 690, f"no starting item bought: mhp={blue[0].mhp}"
+        # the idle champion bought nothing and stayed at base HP
+        assert red[0].mhp == 616
+    
+        # and it spent gold rather than hoarding it: the idle champion accrues passive
+        # gold only, the bot earns far more from CS yet should be holding less of it
+>       assert blue[-1].gold < red[-1].gold
+E       AssertionError: assert 1539 < 1414
+E        +  where 1539 = CsRow(t=600280, name='bluebot', team=100, cs=38, gold=1539, lvl=7, hp=610, mhp=1161, deaths=0).gold
+E        +  and   1414 = CsRow(t=600280, name='redbot', team=200, cs=0, gold=1414, lvl=1, hp=616, mhp=616, deaths=0).gold
+
+lanerl_bot/tests/test_cs_baseline.py:86: AssertionError
+=========================== short test summary info ============================
+FAILED lanerl_bot/tests/test_cs_baseline.py::test_bot_levels_up_and_spends_its_gold
+1 failed, 35 passed in 223.75s (0:03:43)
+srun: error: danilogin: task 0: Exited with exit code 1

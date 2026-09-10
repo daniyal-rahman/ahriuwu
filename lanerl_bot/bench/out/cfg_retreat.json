@@ -1,0 +1,5 @@
+{
+ "_note": "The 'retreat_hp25' arm named lanerl_bot/configs/hp25.json, which does not exist anywhere on this filesystem and could not be reconstructed; it ran the DEFAULT bot via the silent fallback in LanerlConfig.Load(), so rep_retreat.json's 38.0 for that arm is a second sample of 'retreat_fixed', not a measurement of a 25% retreat threshold. Arm removed; its env dict survives verbatim in rep_retreat.json. The two arms below are runnable as written.",
+ "retreat_fixed": {"LANERL_BOT": "blue"},
+ "holdback300":   {"LANERL_BOT": "blue", "LANERL_BOT_HOLDBACK": "300"}
+}

@@ -1,0 +1,7 @@
+{
+ "_note": "Paths are repo-relative on purpose: run_server.resolve_bot_config() joins them to the repo root. An absolute path carrying a mount point silently pointed at nothing on the other node (the export is mounted under a different prefix there), so all three anchors collapsed into one identical default bot -- a difficulty ladder with no rungs, reported as numbers.",
+ "shipped_default": {"LANERL_BOT": "blue"},
+ "anchor_diamond":  {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/anchor_diamond.json"},
+ "anchor_gold":     {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/anchor_gold.json"},
+ "anchor_bronze":   {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/anchor_bronze.json"}
+}

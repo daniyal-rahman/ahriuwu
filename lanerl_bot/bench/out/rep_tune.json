@@ -1,0 +1,110 @@
+{
+  "tuned_r80": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned.json"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 36.3,
+    "cs_median": 36,
+    "cs_min": 29,
+    "cs_max": 44,
+    "cs_stdev": 7.5,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 36,
+        "gold": 1479,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 44,
+        "gold": 1309,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1236,
+        "cs": 29,
+        "gold": 1419,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "tuned_r150": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_r150.json"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 39.7,
+    "cs_median": 42,
+    "cs_min": 34,
+    "cs_max": 43,
+    "cs_stdev": 4.9,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 42,
+        "gold": 1679,
+        "lvl": 9,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 34,
+        "gold": 1539,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 43,
+        "gold": 1879,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "tuned_look400": {
+    "env": {
+      "LANERL_BOT": "blue",
+      "LANERL_BOT_CONFIG": "/srv/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/tuned_look400.json"
+    },
+    "n": 3,
+    "crashes": 0,
+    "cs_mean": 43,
+    "cs_median": 44,
+    "cs_min": 40,
+    "cs_max": 45,
+    "cs_stdev": 2.6,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 40,
+        "gold": 1599,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 44,
+        "gold": 1309,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1236,
+        "cs": 45,
+        "gold": 1659,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  }
+}

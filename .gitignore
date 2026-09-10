@@ -64,3 +64,21 @@ data/
 !scratchpad/.gitkeep
 recordings/
 wandb
+
+# --- lanerl (lane-rl/spike) heavy artifacts: NEVER commit -------------------
+# lanerl/ alone is ~4.2 GB of screen captures, frame dumps and state records.
+# Source and configs are tracked; recorded output is reproducible, so it is not.
+lanerl/logs/
+lanerl/frames*/
+lanerl/cam*/
+lanerl/probe*/
+lanerl/winshots/
+lanerl/shots/
+lanerl/diag/
+*.mp4
+*.jsonl
+*.tgz
+*.npz
+lanerl_bot/bench/out/*.log
+lanerl_rl/artifacts/
+lanerl_bot/tests/artifacts/

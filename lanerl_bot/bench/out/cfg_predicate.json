@@ -1,0 +1,6 @@
+{
+ "asym_default":   {"LANERL_BOT": "blue"},
+ "decline_on":     {"LANERL_BOT": "blue", "LANERL_BOT_DECLINE": "1"},
+ "incoming_off":   {"LANERL_BOT": "blue", "LANERL_BOT_INCOMING_W": "0.0"},
+ "donothing":      {"LANERL_BOT": "none"}
+}

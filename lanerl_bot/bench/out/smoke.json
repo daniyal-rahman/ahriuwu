@@ -1,0 +1,154 @@
+{
+  "env": {
+    "LANERL_TOPONLY": "1",
+    "LANERL_BOT": "blue",
+    "LANERL_EXIT_AT": "180000"
+  },
+  "wall_s": 8.664772906922735,
+  "timed_out": false,
+  "tps_median": 3136.0,
+  "attach": [
+    "LANERL_BOT_ATTACH bluebot team=100"
+  ],
+  "reset_lines": [],
+  "episode_lines": [],
+  "n_episodes": 0,
+  "reset_warns": [],
+  "fatal": [],
+  "cs_at_600k": {
+    "bluebot": {
+      "t": 150064,
+      "name": "bluebot",
+      "team": 100,
+      "cs": 3,
+      "gold": 171,
+      "lvl": 1,
+      "hp": 696,
+      "mhp": 696,
+      "deaths": 0
+    },
+    "redbot": {
+      "t": 150064,
+      "name": "redbot",
+      "team": 200,
+      "cs": 0,
+      "gold": 586,
+      "lvl": 1,
+      "hp": 616,
+      "mhp": 616,
+      "deaths": 0
+    }
+  },
+  "cs_rows": [
+    {
+      "t": 30000,
+      "name": "bluebot",
+      "team": 100,
+      "cs": 0,
+      "gold": 0,
+      "lvl": 1,
+      "hp": 696,
+      "mhp": 696,
+      "deaths": 0
+    },
+    {
+      "t": 30000,
+      "name": "redbot",
+      "team": 200,
+      "cs": 0,
+      "gold": 475,
+      "lvl": 1,
+      "hp": 616,
+      "mhp": 616,
+      "deaths": 0
+    },
+    {
+      "t": 60018,
+      "name": "bluebot",
+      "team": 100,
+      "cs": 0,
+      "gold": 0,
+      "lvl": 1,
+      "hp": 696,
+      "mhp": 696,
+      "deaths": 0
+    },
+    {
+      "t": 60018,
+      "name": "redbot",
+      "team": 200,
+      "cs": 0,
+      "gold": 475,
+      "lvl": 1,
+      "hp": 616,
+      "mhp": 616,
+      "deaths": 0
+    },
+    {
+      "t": 90032,
+      "name": "bluebot",
+      "team": 100,
+      "cs": 0,
+      "gold": 1,
+      "lvl": 1,
+      "hp": 696,
+      "mhp": 696,
+      "deaths": 0
+    },
+    {
+      "t": 90032,
+      "name": "redbot",
+      "team": 200,
+      "cs": 0,
+      "gold": 476,
+      "lvl": 1,
+      "hp": 616,
+      "mhp": 616,
+      "deaths": 0
+    },
+    {
+      "t": 120044,
+      "name": "bluebot",
+      "team": 100,
+      "cs": 0,
+      "gold": 56,
+      "lvl": 1,
+      "hp": 696,
+      "mhp": 696,
+      "deaths": 0
+    },
+    {
+      "t": 120044,
+      "name": "redbot",
+      "team": 200,
+      "cs": 0,
+      "gold": 531,
+      "lvl": 1,
+      "hp": 616,
+      "mhp": 616,
+      "deaths": 0
+    },
+    {
+      "t": 150064,
+      "name": "bluebot",
+      "team": 100,
+      "cs": 3,
+      "gold": 171,
+      "lvl": 1,
+      "hp": 696,
+      "mhp": 696,
+      "deaths": 0
+    },
+    {
+      "t": 150064,
+      "name": "redbot",
+      "team": 200,
+      "cs": 0,
+      "gold": 586,
+      "lvl": 1,
+      "hp": 616,
+      "mhp": 616,
+      "deaths": 0
+    }
+  ]
+}

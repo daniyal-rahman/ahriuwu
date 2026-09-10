@@ -1,0 +1,7 @@
+{
+  "_comment": "Mid anchor: slower reactions, occasional missed CS, slight damage misjudgement.",
+  "reactionDelayMs": 250, "reactionJitterMs": 100,
+  "lastHitAccuracy": 0.85, "damageEstimateErrorFrac": 0.08,
+  "retreatHpFrac": 0.30, "resumeHpFrac": 0.55,
+  "incomingMode": 0, "cooldownLookaheadMs": 400
+}

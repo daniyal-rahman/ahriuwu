@@ -1,0 +1,6 @@
+{
+ "_note": "Repo-relative paths; see out/cfg_confirm.json. An absolute path carrying a mount point made all three anchors the same default bot on the other node.",
+ "anchor_diamond": {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/anchor_diamond.json"},
+ "anchor_gold":    {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/anchor_gold.json"},
+ "anchor_bronze":  {"LANERL_BOT": "blue", "LANERL_BOT_CONFIG": "lanerl_bot/configs/anchor_bronze.json"}
+}

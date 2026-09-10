@@ -1,0 +1,114 @@
+{
+  "q_OFF_baseline": {
+    "env": {
+      "LANERL_BOT_CONFIG": "/mnt/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/noq.json"
+    },
+    "n": 6,
+    "crashes": 0,
+    "cs_mean": 27.2,
+    "cs_median": 30.5,
+    "cs_min": 0,
+    "cs_max": 42,
+    "cs_stdev": 14.8,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 31,
+        "gold": 1459,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 42,
+        "gold": 1619,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 30,
+        "gold": 1419,
+        "lvl": 7,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 0,
+        "gold": 56,
+        "lvl": 1,
+        "deaths": 0
+      },
+      {
+        "seed": 1238,
+        "cs": 23,
+        "gold": 294,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1239,
+        "cs": 37,
+        "gold": 1559,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  },
+  "q_ON_after_fix": {
+    "env": {
+      "LANERL_BOT_CONFIG": "/mnt/nfs/projects/ahriuwu-lanerl/lanerl_bot/configs/qon_fixed.json"
+    },
+    "n": 6,
+    "crashes": 0,
+    "cs_mean": 23.3,
+    "cs_median": 23.5,
+    "cs_min": 18,
+    "cs_max": 30,
+    "cs_stdev": 4.2,
+    "rows": [
+      {
+        "seed": 1234,
+        "cs": 23,
+        "gold": 1299,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1235,
+        "cs": 18,
+        "gold": 1479,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1236,
+        "cs": 25,
+        "gold": 1359,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1237,
+        "cs": 30,
+        "gold": 1009,
+        "lvl": 8,
+        "deaths": 1
+      },
+      {
+        "seed": 1238,
+        "cs": 20,
+        "gold": 1239,
+        "lvl": 8,
+        "deaths": 0
+      },
+      {
+        "seed": 1239,
+        "cs": 24,
+        "gold": 1289,
+        "lvl": 8,
+        "deaths": 0
+      }
+    ]
+  }
+}

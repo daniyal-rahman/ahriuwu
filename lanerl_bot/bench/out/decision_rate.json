@@ -1,0 +1,22 @@
+[
+  {
+    "step_ticks": 2,
+    "hz": 30.0,
+    "period_ms": 33.3,
+    "steps": 3000,
+    "wall_s": 0.51,
+    "game_s": 100.0,
+    "speedup_x": 195.9,
+    "ms_per_decision": 0.17
+  },
+  {
+    "step_ticks": 4,
+    "hz": 15.0,
+    "period_ms": 66.7,
+    "steps": 3000,
+    "wall_s": 1.5,
+    "game_s": 200.02,
+    "speedup_x": 133.6,
+    "ms_per_decision": 0.499
+  }
+]
