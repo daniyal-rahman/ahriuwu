@@ -84,12 +84,30 @@ def test_a_none_action_becomes_an_empty_object_so_orders_persist():
     assert insts[0].received[-1] == {}
 
 
-def test_encode_line_refuses_an_action_carrying_the_reset_sentinel():
-    """The server resets on any line containing ``"reset"`` -- a substring test."""
-    with pytest.raises(VecEnvFailure, match="reset sentinel"):
-        _encode_line({"blue": {"t": "move", "reset": 1}})
-    # and the real reset still encodes
+def test_the_reset_action_is_the_line_the_server_actually_parses():
+    """``LanerlWire.Parse`` accepts exactly ``{"cmd":"reset"}``.
+
+    The old ``{"reset": 1}`` dated from when ``OnTick`` did a substring test on
+    the raw line.  Under the real parser it is an unknown top-level key, so the
+    line is Fatal: the episode does not reset, neither champion is ordered, and
+    the trainer sees a perfectly normal step.
+    """
+    assert RESET_ACTION == {"cmd": "reset"}
     assert json.loads(_encode_line(RESET_ACTION)) == RESET_ACTION
+
+
+def test_encode_line_refuses_a_line_the_server_would_drop_whole():
+    """An unknown top-level key costs BOTH champions their orders, silently."""
+    with pytest.raises(VecEnvFailure, match="top-level key"):
+        _encode_line({"blue": {"t": "move"}, "reset": 1})
+    with pytest.raises(VecEnvFailure, match="top-level key"):
+        _encode_line({"green": {"t": "move"}})
+    with pytest.raises(VecEnvFailure, match="not a command"):
+        _encode_line({"cmd": "restart"})
+    # An ordinary order carrying "reset" deeper down is now perfectly fine --
+    # the server reads JSON, not substrings.
+    assert json.loads(_encode_line({"blue": {"t": "move", "x": 1.0, "y": 2.0}}))
+    assert _encode_line({}) == "{}"
 
 
 def test_reset_episodes_resets_only_the_named_instances():

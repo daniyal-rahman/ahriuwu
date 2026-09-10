@@ -37,8 +37,49 @@ __all__ = [
     "CheckpointStore",
 ]
 
-#: One decoded observation line from ``LanerlControl.BuildObservation``:
-#: ``{"t": int_ms, "u": [{"id","k","tm","x","y","hp","mhp","vb","vr", ...}]}``.
+#: One decoded observation line from ``LanerlControl.BuildObservation``.
+#:
+#: ``{"t": <game_ms>, "u": [<unit>, ...]}``, where every unit carries
+#: ``id k tm x y hp mhp vb vr`` and a champion adds
+#: ``gold xp lvl rc tgt atk mo cd0 cd1 cd2 cd3``.
+#:
+#: What each field is allowed to reach is **not** documented here -- prose
+#: drifts, and this comment already had -- it is enforced by
+#: :data:`lanerl_rl.frame.WIRE_FIELDS`, which classifies every key and is
+#: cross-checked against the C# source, against ``decode_frame`` and against a
+#: generated leak probe by ``python -m lanerl_rl.audit``.  The summary, as of
+#: that table:
+#:
+#: ==================  ==============  =========================================
+#: field               disposition     note
+#: ==================  ==============  =========================================
+#: ``t``               actor-visible   the game clock is on the HUD
+#: ``u``               internal        the unit table; the fog gate filters it
+#: ``id``              internal        keys memory and the target head's
+#:                                     slot->netid map, never a feature
+#: ``k`` ``tm``        actor-visible   entity type and ally/enemy relation
+#: ``x`` ``y``         actor-visible   fog-gated
+#: ``hp`` ``mhp``      actor-visible   quantised to a health bar for the actor,
+#:                                     exact for the critic
+#: ``vb`` ``vr``       internal        IS the fog gate; not a feature
+#: ``gold`` ``xp``     own: actor      own HUD; the enemy's goes to the critic
+#: ``lvl`` ``cs``      own: actor      own HUD; the enemy's goes to the critic
+#: ``rc``              own: actor      own recall channel is HUD state; the
+#:                                     enemy's is privileged
+#: ``cd0``..``cd3``    own: actor      own cooldown sweep is on the ability bar;
+#:                                     the enemy's VALUE is privileged and only
+#:                                     a witnessed cast may move the actor obs
+#: ``sl``              own: actor      own ranks are HUD; not emitted today
+#: ``tgt``             UNCONSUMED      enemy TargetUnit netid: server truth about
+#:                                     intent, invisible on a screenshot, and it
+#:                                     survives fog. Nothing decodes it
+#: ``atk``             UNCONSUMED      Champion.IsAttacking, order debugging
+#: ``mo``              UNCONSUMED      Champion.MoveOrder, order debugging
+#: ==================  ==============  =========================================
+#:
+#: ``vis`` (legacy team list) and ``cd`` (legacy seconds list) are still
+#: decoded for old ``LANERL_RECORD`` dumps.  Anything **not** in that table
+#: makes ``decode_frame`` raise ``UnknownWireField``.
 RawObs = Dict[str, Any]
 
 #: One side's order, exactly as ``LanerlControl.Execute`` reads it:

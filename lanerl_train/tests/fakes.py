@@ -65,6 +65,8 @@ class FakeInstance:
         self.t_ms = int(start_t_ms)
         self.outbox: List[str] = []
         self.received: List[Dict[str, Any]] = []
+        #: Lines the server would have marked Fatal and executed nothing from.
+        self.rejected: List[Dict[str, Any]] = []
         self.sends = 0
         self.starts = 0
         self.closed = False
@@ -92,9 +94,17 @@ class FakeInstance:
         if self.die_after_sends is not None and self.sends > self.die_after_sends:
             self.dead = True
             return
-        if "reset" in action:
-            self.resets += 1
-            self.t_ms = 0
+        # Faithful to LanerlWire.Parse: a reset is EXACTLY {"cmd":"reset"}, and
+        # an unknown top-level key makes the whole line Fatal -- no reset and no
+        # orders, with the step still advancing. A fake that accepted the old
+        # {"reset":1} would have hidden that breakage from every test here.
+        if set(action) - {"blue", "red"}:
+            if dict(action) == {"cmd": "reset"}:
+                self.resets += 1
+                self.t_ms = 0
+            else:
+                self.rejected.append(dict(action))
+                self.t_ms += self.step_ms
         else:
             self.t_ms += self.step_ms
         if not self.stall_forever:

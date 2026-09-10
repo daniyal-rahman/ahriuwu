@@ -328,7 +328,7 @@ def test_coordinates_never_reach_the_wire_in_exponent_form():
 
 
 def test_no_ordinary_action_line_can_trigger_a_reset():
-    """``OnTick`` resets on any line *containing* ``"reset"`` -- a substring test."""
+    """Kept for older server builds, whose OnTick tested for the substring."""
     backend = ControlBackend.__new__(ControlBackend)
     line = json.dumps(
         ControlBackend.encode(

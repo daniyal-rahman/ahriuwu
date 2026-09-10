@@ -64,12 +64,20 @@ __all__ = [
 
 log = logging.getLogger("lanerl_train.vec")
 
-#: ``LanerlControl.OnTick`` triggers an in-process reset on any action line
-#: containing the literal ``"reset"`` -- 0.23 ms, against 12.08 s for a process
-#: restart.  Because the check is a substring test, no ordinary action payload
-#: may ever contain that token; :func:`_encode_line` enforces it.
-RESET_ACTION = {"reset": 1}
-_RESET_TOKEN = '"reset"'
+#: The in-process episode reset -- 0.23 ms, against 12.08 s for a process
+#: restart.
+#:
+#: This used to be ``{"reset": 1}``, from the era when ``LanerlControl.OnTick``
+#: tested ``line.Contains("\"reset\"")``.  ``LanerlWire.Parse`` now reads the
+#: line as JSON and a reset is *exactly* ``{"cmd":"reset"}``; under that parser
+#: the old payload is an unknown top-level key, which makes the whole line
+#: Fatal, so the episode did not reset **and** neither champion moved.  Silent
+#: in the logs, visible only as a game clock that never rewinds.
+RESET_ACTION = {"cmd": "reset"}
+
+#: What ``LanerlWire.Parse`` accepts at the top level of an action line.
+#: Anything else makes the line Fatal and drops both champions' orders.
+_TOP_LEVEL_KEYS = frozenset({"blue", "red"})
 
 
 class InstanceDied(RuntimeError):
@@ -387,18 +395,29 @@ class ServerInstance:
 
 
 def _encode_line(action: Mapping[str, Any]) -> str:
-    """Serialise one action line, guarding the reset sentinel.
+    """Serialise one action line, refusing anything the server would reject.
 
-    ``LanerlControl`` resets the episode on *any* line containing ``"reset"``,
-    so an action that happened to carry that token would silently wipe the
-    episode instead of moving the champion.
+    ``LanerlWire.Parse`` marks a line Fatal on an unknown top-level key and
+    then executes *nothing* -- both champions lose their orders for that step,
+    with only a ``LANERL_CONTROL_BADACTION`` line in the server log to say so.
+    From the trainer's side that is invisible: the step still returns an
+    observation, the rollout still fills, and the actions simply had no effect.
+    So the same rule is enforced here, where it is a stack trace.
     """
-    line = json.dumps(action, separators=(",", ":"))
-    if _RESET_TOKEN in line and action != RESET_ACTION:
+    keys = set(action)
+    if keys and keys != {"cmd"} and not keys <= _TOP_LEVEL_KEYS:
         raise VecEnvFailure(
-            f"action line contains the reset sentinel {_RESET_TOKEN} and would silently "
-            f"reset the episode: {line}"
+            f"action line has top-level key(s) {sorted(keys - _TOP_LEVEL_KEYS)}; "
+            f"LanerlWire.Parse accepts only {sorted(_TOP_LEVEL_KEYS)} or a bare "
+            f"{RESET_ACTION!r}, and would drop the WHOLE line -- both champions' "
+            f"orders -- without failing the step"
         )
+    if keys == {"cmd"} and dict(action) != RESET_ACTION:
+        raise VecEnvFailure(
+            f"{dict(action)!r} is not a command the server knows; the only one is "
+            f"{RESET_ACTION!r}"
+        )
+    line = json.dumps(action, separators=(",", ":"))
     if "\n" in line:  # pragma: no cover - json never emits raw newlines
         raise VecEnvFailure("action line contains a newline")
     return line

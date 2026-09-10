@@ -684,7 +684,7 @@
   {
     "severity": "medium",
     "check": "skip-hides-failure",
-    "where": "ahriuwu-lanerl/lanerl_bot/tests/conftest.py:125",
+    "where": "ahriuwu-lanerl/lanerl_bot/tests/conftest.py:137",
     "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
     "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
     "extra": {
@@ -694,7 +694,7 @@
   {
     "severity": "medium",
     "check": "skip-hides-failure",
-    "where": "ahriuwu-lanerl/lanerl_bot/tests/conftest.py:137",
+    "where": "ahriuwu-lanerl/lanerl_bot/tests/conftest.py:151",
     "what": "pytest.skip() inside a fixture/test body: a crashed or unresponsive server is reported as a SKIP and the suite exits 0",
     "fix": "pytest.fail() when the subject was supposed to be available; reserve skip for a genuinely absent prerequisite",
     "extra": {
@@ -742,7 +742,7 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "ahriuwu-lanerl/lanerl_rl/env.py:808",
+    "where": "ahriuwu-lanerl/lanerl_rl/env.py:816",
     "what": "broad except with a silent pass/continue",
     "fix": "narrow the exception type and log what was swallowed",
     "extra": {}
@@ -750,7 +750,7 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:1059",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:1117",
     "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
     "fix": "log the exception, or set a failure flag the caller checks",
     "extra": {
@@ -760,7 +760,7 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:439",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:484",
     "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
     "fix": "log the exception, or set a failure flag the caller checks",
     "extra": {
@@ -770,7 +770,17 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlControl.cs:222",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlControl.cs:228",
+    "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
+    "fix": "log the exception, or set a failure flag the caller checks",
+    "extra": {
+      "line": "catch { }"
+    }
+  },
+  {
+    "severity": "medium",
+    "check": "swallowed-exception",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlControl.cs:334",
     "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
     "fix": "log the exception, or set a failure flag the caller checks",
     "extra": {
@@ -830,7 +840,7 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlHooks.cs:244",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlHooks.cs:338",
     "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
     "fix": "log the exception, or set a failure flag the caller checks",
     "extra": {
@@ -840,7 +850,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/diag.sh:60",
+    "where": "ahriuwu-lanerl/lanerl/diag.sh:63",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -860,7 +870,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:67",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:70",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -870,7 +880,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:75",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads2.sh:78",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -880,7 +890,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:45",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:48",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -890,7 +900,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:55",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads3.sh:58",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -900,7 +910,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:55",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:58",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -910,7 +920,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:65",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads4.sh:68",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -920,7 +930,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:60",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:63",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -930,7 +940,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:70",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads5.sh:73",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -940,7 +950,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/fix_rads6.sh:73",
+    "where": "ahriuwu-lanerl/lanerl/fix_rads6.sh:76",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -950,7 +960,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/run_WORKING.sh:53",
+    "where": "ahriuwu-lanerl/lanerl/run_WORKING.sh:56",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -960,7 +970,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/run_gpu.sh:47",
+    "where": "ahriuwu-lanerl/lanerl/run_gpu.sh:50",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {
@@ -970,7 +980,7 @@
   {
     "severity": "low",
     "check": "ambiguous-grep",
-    "where": "ahriuwu-lanerl/lanerl/run_real_x.sh:50",
+    "where": "ahriuwu-lanerl/lanerl/run_real_x.sh:53",
     "what": "grep used as a check with no branch on its exit status: a pattern that matches neither success nor failure reads as pass",
     "fix": "assert on the positive marker AND on the absence of the negative one, and fail when neither appears",
     "extra": {

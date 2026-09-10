@@ -501,9 +501,16 @@ def _coord(v: Optional[float]) -> float:
     return round(float(v), 2)
 
 
-#: ``LanerlControl.OnTick`` triggers an in-process reset on any action line
-#: *containing* the literal ``"reset"``.  It is a substring test, so no ordinary
-#: order may carry the token; :meth:`ControlBackend._send` asserts that.
+#: The in-process episode reset line.  ``LanerlWire.Parse`` accepts exactly
+#: this object and nothing else: a ``"cmd"`` line may carry no other key, and
+#: an unknown top-level key makes the whole line Fatal -- no reset, and both
+#: champions' orders dropped for that step.
+#:
+#: ``OnTick`` used to decide this with ``line.Contains("\"reset\"")``, so any
+#: order that happened to carry the token restarted the episode.  That is gone,
+#: but :meth:`ControlBackend._send` still refuses the token in an ordinary
+#: order: this package is also run against older server builds, and the failure
+#: it prevented is silent.
 RESET_LINE = '{"cmd":"reset"}'
 _RESET_TOKEN = '"reset"'
 
@@ -698,8 +705,9 @@ class ControlBackend:
         if self.sock is None:
             raise RuntimeError("control channel is closed")
         if line != RESET_LINE and _RESET_TOKEN in line:
-            # OnTick's reset check is a substring test on the whole line, so an
-            # order carrying the token would silently restart the episode.
+            # Belt and braces against an older server build, whose OnTick tested
+            # for this token as a substring of the whole line and would have
+            # restarted the episode instead of moving the champion.
             raise ValueError(f"order line contains the reset token: {line!r}")
         self.sock.sendall((line + "\n").encode("ascii"))
 
