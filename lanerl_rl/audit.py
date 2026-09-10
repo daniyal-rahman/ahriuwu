@@ -6,7 +6,19 @@ shift.  That only holds if *nothing* in the actor observation depends on state
 a screenshot cannot produce: enemy gold, enemy experience, enemy exact HP,
 enemy cooldowns, or anything currently behind fog of war.
 
-This module checks that two ways, and fails loudly:
+This module checks that three ways, and fails loudly:
+
+**Schema completeness.**  The other two checks can only guard against fields
+they know exist.  The original design was reactive -- a closed allowlist of
+attribute names that had already leaked, plus hand-written probes for specific
+fields -- so a server field nobody had thought of was identical in both probe
+frames, ``np.array_equal`` was True, and the audit reported ok *vacuously*.
+:data:`lanerl_rl.frame.WIRE_FIELDS` inverts that: every key
+``LanerlControl.BuildObservation`` can emit must be classified as consumed (and
+audited) or explicitly ignored (with a reason).  Three checks hold the registry
+to three independent sources of truth -- the C# emitter's own source, an
+instrumented run of ``decode_frame``, and a differential probe *generated from
+the registry* -- and an unrecognised key fails all of them.
 
 **Static (AST).**  ``obs.py`` declares which of its functions are on the actor
 path (``ACTOR_PATH_FUNCTIONS``) and which are privileged
@@ -45,21 +57,32 @@ Run as ``python -m lanerl_rl.audit``; exit status 1 on any finding.
 from __future__ import annotations
 
 import ast
+import copy
 import inspect
+import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
 from . import constants as C
 from . import obs as obs_module
-from .frame import Frame
+from .frame import (
+    WIRE_DYNAMIC_FAMILIES,
+    WIRE_FIELDS,
+    Frame,
+    WireField,
+    decode_frame,
+    record_keys,
+    unit_keys,
+)
 from .obs import ACTOR_PATH_FUNCTIONS, PRIVILEGED_PATH_FUNCTIONS, ObservationBuilder
-from .scenarios import make_frame, top_lane_scenario, unit
+from .scenarios import encode_frame, make_frame, top_lane_scenario, unit
 
-__all__ = ["AuditFinding", "run_audit", "main"]
+__all__ = ["AuditFinding", "run_audit", "main", "control_source_path"]
 
 
 # --------------------------------------------------------------------------
@@ -327,6 +350,324 @@ def check_field_name_exemptions_are_used() -> List[AuditFinding]:
 
 
 # --------------------------------------------------------------------------
+# Schema completeness: the wire, the decoder and the registry must agree
+# --------------------------------------------------------------------------
+
+#: Keys we insist the C# parse finds.  If it finds fewer, the *parser* is
+#: broken and every "no new field" conclusion drawn from it is worthless --
+#: which is the one way a completeness check can go vacuous.
+_EMITTER_SENTINEL_KEYS = frozenset({"t", "u", "id", "k", "tm", "x", "y", "hp", "mhp"})
+
+_LITERAL_GAP = "<EXPR>"
+#: Text between two adjacent literals that is *only* method-call plumbing, so
+#: the two literals concatenate rather than sandwiching a value.
+_PLUMBING = re.compile(r"^[\s.)(]*(?:Append|AppendFormat|ToString|CultureInfo\.InvariantCulture|,)*[\s.)(]*$")
+_KEY_RE = re.compile(r'"([A-Za-z0-9_<>]*)":')
+
+
+def control_source_path() -> Optional[Path]:
+    """Where ``LanerlControl.cs`` lives, or ``None`` if it cannot be found.
+
+    ``LANERL_CONTROL_CS`` overrides.  Otherwise it is resolved from
+    ``__file__`` -- never hardcoded -- because the shared export is mounted at
+    a different absolute path on each node.
+    """
+    env = os.environ.get("LANERL_CONTROL_CS")
+    if env:
+        p = Path(env)
+        return p if p.exists() else None
+    repo = Path(__file__).resolve().parents[1]
+    p = repo.parent / "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlControl.cs"
+    return p if p.exists() else None
+
+
+def _method_body(source: str, signature: str) -> Optional[str]:
+    """The brace-matched body of the method whose declaration contains ``signature``."""
+    at = source.find(signature)
+    if at < 0:
+        return None
+    start = source.find("{", at)
+    if start < 0:
+        return None
+    depth = 0
+    for i in range(start, len(source)):
+        ch = source[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : i + 1]
+    return None
+
+
+def _literal_skeleton(body: str) -> str:
+    """C# body -> the JSON text it emits, with ``<EXPR>`` where a value goes.
+
+    Only string and char literals survive; anything between two of them that is
+    not pure ``.Append(`` plumbing becomes a gap.  So
+    ``Append(",\\"cd").Append(sl).Append("\\":")`` collapses to ``,"cd<EXPR>":``
+    and a looped key is still visible as a key.
+
+    Comments are stripped in the same pass, and that is not a nicety: an
+    apostrophe in an English comment ("the observation's feature") opens a char
+    literal that swallows the rest of the method, and the parse then silently
+    reports fewer keys than the server emits.  ``_EMITTER_SENTINEL_KEYS`` is the
+    backstop for exactly this class of parser bug.
+    """
+    pieces: List[Tuple[int, int, str]] = []
+    # A copy with comments blanked out, so the plumbing test between two
+    # literals is not confused by prose.
+    clean = list(body)
+    i, n = 0, len(body)
+    while i < n:
+        two = body[i : i + 2]
+        if two == "//":
+            j = body.find("\n", i)
+            j = n if j < 0 else j
+            clean[i:j] = " " * (j - i)
+            i = j
+            continue
+        if two == "/*":
+            j = body.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            clean[i:j] = " " * (j - i)
+            i = j
+            continue
+        ch = body[i]
+        if ch in "\"'":
+            quote = ch
+            j = i + 1
+            buf: List[str] = []
+            while j < n:
+                if body[j] == "\\" and j + 1 < n:
+                    esc = body[j + 1]
+                    buf.append({"n": "\n", "t": "\t"}.get(esc, esc))
+                    j += 2
+                    continue
+                if body[j] == quote:
+                    break
+                buf.append(body[j])
+                j += 1
+            pieces.append((i, j + 1, "".join(buf)))
+            i = j + 1
+            continue
+        i += 1
+    cleaned = "".join(clean)
+    out: List[str] = []
+    prev_end: Optional[int] = None
+    for start, end, text in pieces:
+        if prev_end is not None and not _PLUMBING.match(cleaned[prev_end:start]):
+            out.append(_LITERAL_GAP)
+        out.append(text)
+        prev_end = end
+    return "".join(out)
+
+
+def emitted_wire_keys(source: Optional[str] = None) -> Tuple[Set[str], Set[str]]:
+    """``(resolved keys, unresolvable dynamic patterns)`` from the C# emitter."""
+    if source is None:
+        path = control_source_path()
+        source = "" if path is None else path.read_text()
+    body = _method_body(source, "string BuildObservation(")
+    if body is None:
+        return set(), set()
+    found = set(_KEY_RE.findall(_literal_skeleton(body)))
+    keys: Set[str] = set()
+    unresolved: Set[str] = set()
+    for name in found:
+        if not name:
+            continue
+        if _LITERAL_GAP in name:
+            family = WIRE_DYNAMIC_FAMILIES.get(name)
+            if family is None:
+                unresolved.add(name)
+            else:
+                keys.update(family)
+        else:
+            keys.add(name)
+    return keys, unresolved
+
+
+def check_wire_schema_covers_the_emitter() -> List[AuditFinding]:
+    """Every key ``BuildObservation`` writes must be classified in ``WIRE_FIELDS``.
+
+    This is the structural replacement for the old reactive allowlist: a new
+    server field fails the audit *because it is new*, not because somebody
+    remembered to add a probe for it.
+    """
+    findings: List[AuditFinding] = []
+    path = control_source_path()
+    if path is None:
+        return [
+            AuditFinding(
+                "schema/emitter",
+                "cannot find LanerlControl.cs, so the claim 'no unclassified server "
+                "field exists' is unproven. Point LANERL_CONTROL_CS at it. Reporting "
+                "this as a finding rather than skipping: a completeness check that "
+                "quietly does nothing is exactly the failure this replaces.",
+            )
+        ]
+    keys, unresolved = emitted_wire_keys(path.read_text())
+    if not keys:
+        return [
+            AuditFinding(
+                "schema/emitter",
+                f"parsed {path} but found no emitted keys at all. BuildObservation was "
+                f"renamed or restructured; the parser, not the server, is what needs "
+                f"fixing.",
+            )
+        ]
+    missing_sentinels = sorted(_EMITTER_SENTINEL_KEYS - keys)
+    if missing_sentinels:
+        findings.append(
+            AuditFinding(
+                "schema/emitter",
+                f"the emitter parse missed keys that are certainly there "
+                f"({missing_sentinels}); it cannot be trusted to have found a NEW one "
+                f"either, so treat this as a broken check rather than a clean bill",
+            )
+        )
+    for pattern in sorted(unresolved):
+        findings.append(
+            AuditFinding(
+                "schema/emitter",
+                f"the emitter builds key {pattern!r} from an expression. Add it to "
+                f"frame.WIRE_DYNAMIC_FAMILIES with the keys it expands to; a key this "
+                f"parser cannot resolve is a key the audit cannot classify.",
+            )
+        )
+    for key in sorted(keys - set(WIRE_FIELDS)):
+        findings.append(
+            AuditFinding(
+                "schema/emitter",
+                f"LanerlControl.BuildObservation emits {key!r}, which is not in "
+                f"frame.WIRE_FIELDS. Classify it (actor / critic / internal / "
+                f"unconsumed) with a reason before anything reads it. If it is "
+                f"server-only state, it must never reach the actor observation.",
+            )
+        )
+    for key in sorted(k for k, f in WIRE_FIELDS.items() if f.emitted and k not in keys):
+        findings.append(
+            AuditFinding(
+                "schema/emitter",
+                f"WIRE_FIELDS says {key!r} is emitted by the current server, but the "
+                f"emitter does not write it. Either the field was removed (mark it "
+                f"emitted=False with a reason, or delete it) or the parse is wrong.",
+            )
+        )
+    for key in sorted(k for k, f in WIRE_FIELDS.items() if not f.emitted and k in keys):
+        findings.append(
+            AuditFinding(
+                "schema/emitter",
+                f"WIRE_FIELDS marks {key!r} as legacy/not-emitted, but the current "
+                f"emitter writes it. A stale 'legacy' flag hides a live field from "
+                f"every reader of this table.",
+            )
+        )
+    return findings
+
+
+class _KeyRecorder(dict):
+    """A dict that remembers which keys were asked for.
+
+    Used to enumerate what ``decode_frame`` *actually* consumes.  An AST scan
+    would have been fooled by ``ru.get(f"cd{i}")``; running the decoder cannot
+    be.
+    """
+
+    def __init__(self, data, seen: Set[str]):
+        super().__init__(data)
+        self._seen = seen
+
+    def __getitem__(self, key):
+        self._seen.add(key)
+        return super().__getitem__(key)
+
+    def get(self, key, default=None):
+        self._seen.add(key)
+        return super().get(key, default)
+
+    def __contains__(self, key):
+        self._seen.add(key)
+        return super().__contains__(key)
+
+
+def _recorded_decode(raw: dict) -> Tuple[Set[str], Set[str]]:
+    """Decode ``raw`` and report ``(record keys read, unit keys read)``."""
+    top_seen: Set[str] = set()
+    unit_seen: Set[str] = set()
+    wrapped = dict(raw)
+    wrapped["u"] = [_KeyRecorder(ru, unit_seen) for ru in raw["u"]]
+    decode_frame(_KeyRecorder(wrapped, top_seen))
+    return top_seen, unit_seen
+
+
+def _schema_record_variants() -> List[dict]:
+    """Wire records that between them exercise every decode branch."""
+    f = top_lane_scenario()
+    return [
+        encode_frame(f),
+        encode_frame(f, legacy_visibility=True, legacy_cooldowns=True),
+        encode_frame(f, with_optional=True),
+    ]
+
+
+def check_wire_schema_matches_the_decoder() -> List[AuditFinding]:
+    """``decoded=True`` must mean what it says, in both directions.
+
+    ``decode_frame`` is run under an instrumented mapping, so this compares the
+    registry against the decoder's real behaviour rather than against a comment.
+    A key the decoder reads but nobody registered is a leak surface with no
+    probe; a key registered as ``unconsumed`` that the decoder in fact reads is
+    a *false* safety claim, which is worse.
+    """
+    findings: List[AuditFinding] = []
+    top_seen: Set[str] = set()
+    unit_seen: Set[str] = set()
+    for raw in _schema_record_variants():
+        a, b = _recorded_decode(raw)
+        top_seen |= a
+        unit_seen |= b
+    if not top_seen or not unit_seen:
+        return [
+            AuditFinding(
+                "schema/decoder",
+                "the key recorder observed no reads at all, so it proves nothing "
+                "about what decode_frame consumes",
+            )
+        ]
+    for seen, known, scope in ((top_seen, record_keys(), "record"), (unit_seen, unit_keys(), "unit")):
+        for key in sorted(seen - known):
+            findings.append(
+                AuditFinding(
+                    "schema/decoder",
+                    f"decode_frame reads unregistered {scope} key {key!r}; it is "
+                    f"consumed by the pipeline and nothing classifies it",
+                )
+            )
+        for key in sorted(k for k in known if WIRE_FIELDS[k].decoded and k not in seen):
+            findings.append(
+                AuditFinding(
+                    "schema/decoder",
+                    f"WIRE_FIELDS claims {scope} key {key!r} is decoded, but "
+                    f"decode_frame never reads it. Mark it unconsumed (which is a "
+                    f"stronger safety statement) or fix the decoder.",
+                )
+            )
+        for key in sorted(k for k in known if not WIRE_FIELDS[k].decoded and k in seen):
+            findings.append(
+                AuditFinding(
+                    "schema/decoder",
+                    f"WIRE_FIELDS claims {scope} key {key!r} is NOT consumed, but "
+                    f"decode_frame reads it. That claim is the whole reason it has no "
+                    f"differential probe.",
+                )
+            )
+    return findings
+
+
+# --------------------------------------------------------------------------
 # Differential checks
 # --------------------------------------------------------------------------
 
@@ -581,11 +922,143 @@ def check_visible_enemy_cooldown_value_leak() -> List[AuditFinding]:
     return findings
 
 
+# -- the registry-driven probe ----------------------------------------------
+#
+# Everything above this line is a probe somebody wrote for a field they had
+# thought of.  This one is generated from `WIRE_FIELDS`, so a new server field
+# gets a differential probe the moment it is classified -- and the audit
+# refuses to run without it being classified.
+
+
+def _poisoned_records(
+    field: WireField, scenario_kwargs: dict, n: int = 4
+) -> Tuple[List[dict], List[dict]]:
+    """``(clean, poisoned)`` wire records, differing only in ``field`` on RED."""
+    kw = dict(legacy_cooldowns=field.key == "cd", with_optional=field.key in ("cs", "sl"))
+    clean = [
+        encode_frame(top_lane_scenario(t_ms=100_000 + 100 * i, **scenario_kwargs), **kw)
+        for i in range(n)
+    ]
+    poisoned = copy.deepcopy(clean)
+    for rec in poisoned:
+        if field.scope == "record":
+            rec[field.key] = field.poison
+            continue
+        for row in rec["u"]:
+            if row["k"] == "Champion" and row["tm"] == C.TEAM_RED:
+                row[field.key] = copy.deepcopy(field.poison)
+    return clean, poisoned
+
+
+def _run_records(records: Sequence[dict], team: int = C.TEAM_BLUE):
+    b = ObservationBuilder(team, fog_model=_quiet_fog())
+    out = None
+    for rec in records:
+        out = b.build(decode_frame(rec))
+    return out
+
+
+def check_wire_fields_do_not_leak_to_the_actor() -> List[AuditFinding]:
+    """Every ``actor_invariant`` wire field, poisoned on RED, generated from the registry.
+
+    Two situations per field, because they fail differently: the enemy in plain
+    sight (where the actor legitimately reads *some* of their record, so a
+    value read is easy to hide) and the enemy fogged (where the actor must read
+    none of it).  Each situation carries its own positive control, so a probe
+    that has stopped being able to fire reports itself instead of passing.
+    """
+    findings: List[AuditFinding] = []
+    situations = {
+        # RED at s=0.37 against BLUE at 0.35: inside the 1100-unit champion
+        # vision radius, and no minions, so nothing else grants vision.
+        "enemy visible": (dict(blue_s=0.35, red_s=0.37, n_minions=0), True),
+        "enemy fogged": (dict(blue_s=0.30, red_s=0.98, n_minions=0), False),
+    }
+
+    for label, (kwargs, want_visible) in situations.items():
+        control = _run_records(
+            [encode_frame(top_lane_scenario(t_ms=100_000, **kwargs))]
+        )
+        got_visible = bool(control.global_vec[C.G_ENEMY_VISIBLE])
+        if got_visible != want_visible:
+            findings.append(
+                AuditFinding(
+                    "dynamic/wire_schema",
+                    f"the '{label}' situation has enemy_visible={got_visible}, not "
+                    f"{want_visible}; every probe run in it proves nothing. Fix the "
+                    f"scenario.",
+                )
+            )
+            continue
+
+        for key, field in sorted(WIRE_FIELDS.items()):
+            if not field.actor_invariant:
+                continue
+            clean, poisoned = _poisoned_records(field, kwargs)
+            a, b = _run_records(clean), _run_records(poisoned)
+            findings += _diff_report(
+                a,
+                b,
+                f"{label}: enemy wire field {key!r} rewritten to {field.poison!r}",
+                "dynamic/wire_schema",
+            )
+            # Positive control, per field and per situation: the poison has to
+            # be *reaching* the pipeline, or "the actor did not move" is a
+            # statement about nothing.  A decoded field must change the decoded
+            # frame; an unconsumed one must not (that IS its safety argument).
+            changed = decode_frame(clean[-1]) != decode_frame(poisoned[-1])
+            if field.decoded and not changed:
+                findings.append(
+                    AuditFinding(
+                        "dynamic/wire_schema",
+                        f"{label}: poisoning {key!r} did not change the decoded frame, "
+                        f"so the leak probe for it is vacuous. Either the poison value "
+                        f"is a no-op or the field is not really decoded.",
+                    )
+                )
+            if not field.decoded and changed:
+                findings.append(
+                    AuditFinding(
+                        "dynamic/wire_schema",
+                        f"{label}: {key!r} is registered as unconsumed, but poisoning "
+                        f"it changed the decoded frame. Its safety argument -- that "
+                        f"nothing can read what nothing decodes -- is now false.",
+                    )
+                )
+    return findings
+
+
+def check_actor_visible_wire_fields_are_declared() -> List[AuditFinding]:
+    """A field that is *not* actor-invariant has to be one the agent may see.
+
+    The inverse of the probe above, and the reason the registry cannot be
+    silenced by flipping a flag: ``actor_invariant=False`` is only legitimate
+    for a field the actor is allowed to read (``disposition="actor"``) or for
+    the fog gate and the identity keys, which change *which* unit a record
+    describes rather than revealing a hidden property of it.
+    """
+    allowed_non_invariant = {"vb", "vr", "vis", "id", "u"}
+    return [
+        AuditFinding(
+            "schema/registry",
+            f"wire field {key!r} is declared disposition={f.disposition!r} but "
+            f"actor_invariant=False, i.e. it is allowed to move the actor "
+            f"observation while not being actor-visible. Either it is actually "
+            f"actor-visible (say so) or the exemption is a hole.",
+        )
+        for key, f in sorted(WIRE_FIELDS.items())
+        if not f.actor_invariant and f.disposition != "actor" and key not in allowed_non_invariant
+    ]
+
+
 # --------------------------------------------------------------------------
 # Entry point
 # --------------------------------------------------------------------------
 
 CHECKS = (
+    ("schema: every emitted server field is classified", check_wire_schema_covers_the_emitter),
+    ("schema: the registry matches what decode_frame reads", check_wire_schema_matches_the_decoder),
+    ("schema: no undeclared actor-visible wire field", check_actor_visible_wire_fields_are_declared),
     ("static: actor path reads no server-only attribute", check_actor_path_attrs),
     ("static: actor path calls no privileged builder", check_actor_does_not_call_privileged),
     ("static: declared field names", check_field_names),
@@ -597,6 +1070,7 @@ CHECKS = (
     ("differential: no fogged aliasing in valid slots", check_all_slots_never_alias_fogged),
     ("differential: fogged enemy cooldowns", check_enemy_cooldown_leak),
     ("differential: visible enemy cooldown values", check_visible_enemy_cooldown_value_leak),
+    ("differential: every wire field, generated from the registry", check_wire_fields_do_not_leak_to_the_actor),
 )
 
 

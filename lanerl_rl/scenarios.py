@@ -11,7 +11,7 @@ import copy
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from . import constants as C
-from .frame import Frame, LaneFrame, Unit, rot180_point
+from .frame import COOLDOWN_KEYS, Frame, LaneFrame, Unit, rot180_point
 
 __all__ = [
     "unit",
@@ -21,6 +21,7 @@ __all__ = [
     "reflect_frame_in_lane",
     "top_lane_scenario",
     "top_lane_sequence",
+    "encode_frame",
 ]
 
 _ETYPE_KIND = {
@@ -245,6 +246,75 @@ def _annotate_visibility(frame: Frame) -> None:
         if uid in red:
             teams.add(C.TEAM_RED)
         u.visible_to = frozenset(teams)
+
+
+def encode_frame(
+    frame: Frame,
+    legacy_visibility: bool = False,
+    legacy_cooldowns: bool = False,
+    with_optional: bool = False,
+) -> Dict[str, object]:
+    """A :class:`Frame` back onto the wire, shaped like the C# emitter writes it.
+
+    The inverse of :func:`~lanerl_rl.frame.decode_frame`, and the reason the
+    leak audit can poison a *wire key* instead of a decoded attribute.  Poking a
+    ``Unit`` field only exercises fields that a scenario already sets; poking
+    the JSON exercises every key the server can send, including the ones
+    nothing decodes yet.
+
+    ``legacy_visibility`` / ``legacy_cooldowns`` emit the pre-``vb``/``vr`` and
+    pre-``cd0`` forms that :func:`decode_frame` still understands, so the audit
+    can watch those decode paths too.  ``with_optional`` adds ``cs`` and ``sl``,
+    which the control channel does not send but recorded dumps may.
+    """
+    from .frame import ApproxFogModel
+
+    fog = ApproxFogModel(warn=False)
+    seen = {
+        C.TEAM_BLUE: fog.visible_ids(frame, C.TEAM_BLUE),
+        C.TEAM_RED: fog.visible_ids(frame, C.TEAM_RED),
+    }
+    rows: List[Dict[str, object]] = []
+    for uid, u in frame.units.items():
+        vis_to = (
+            u.visible_to
+            if u.visible_to is not None
+            else frozenset(t for t in (C.TEAM_BLUE, C.TEAM_RED) if uid in seen[t])
+        )
+        row: Dict[str, object] = {
+            "id": int(uid),
+            "k": u.kind,
+            "tm": int(u.team),
+            "x": int(round(u.x)),
+            "y": int(round(u.y)),
+            "hp": int(round(u.hp)),
+            "mhp": int(round(u.mhp)),
+        }
+        if legacy_visibility:
+            row["vis"] = sorted(int(t) for t in vis_to)
+        else:
+            row["vb"] = 1 if C.TEAM_BLUE in vis_to else 0
+            row["vr"] = 1 if C.TEAM_RED in vis_to else 0
+        if u.is_champion:
+            row["gold"] = int(u.gold or 0)
+            row["xp"] = int(u.xp or 0)
+            row["lvl"] = int(u.lvl or 1)
+            row["rc"] = int(bool(u.recalling))
+            # Emitted by LanerlControl for order debugging; nothing decodes them.
+            row["tgt"] = 0
+            row["atk"] = 0
+            row["mo"] = 0
+            cds = u.cooldowns if u.cooldowns is not None else (0.0, 0.0, 0.0, 0.0)
+            if legacy_cooldowns:
+                row["cd"] = [0.0 if c is None else float(c) for c in cds]
+            else:
+                for key, c in zip(COOLDOWN_KEYS, cds):
+                    row[key] = -1 if c is None else int(round(float(c) * 1000.0))
+            if with_optional:
+                row["cs"] = int(u.cs or 0)
+                row["sl"] = list(u.spell_levels or (1, 1, 1, 1))
+        rows.append(row)
+    return {"t": int(frame.t_ms), "u": rows}
 
 
 def top_lane_sequence(

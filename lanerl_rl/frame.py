@@ -10,10 +10,17 @@ object per ``LANERL_STEP_TICKS`` server ticks (4 -> 15 Hz)::
             "x":<int>, "y":<int>, "hp":<int>, "mhp":<int>,
             "vb":<0|1>, "vr":<0|1>,
             # champions only:
-            "gold":<int>, "xp":<int>, "lvl":<int>,
+            "gold":<int>, "xp":<int>, "lvl":<int>, "rc":<0|1>,
+            "tgt":<netid|0>, "atk":<0|1>, "mo":<(int)OrderType>,
             "cd0":<ms|-1>, "cd1":..., "cd2":..., "cd3":...}, ...]}
 
-``"vb"`` / ``"vr"``  (per unit)
+**This docstring is not the contract -- :data:`WIRE_FIELDS` is.**  Every key
+above is registered there with a *disposition* (actor-visible / critic-only /
+internal / unconsumed) and a reason, and :mod:`lanerl_rl.audit` fails if the
+registry, the C# emitter and :func:`decode_frame` ever disagree.  Prose drifts;
+that check does not.  The per-key notes below are the human-readable half.
+
+``"vb"`` / ``"vr"``  (per unit)  -- *internal (the fog gate itself)*
     ``GameObject.IsVisibleByTeam(TEAM_BLUE / TEAM_PURPLE)`` evaluated
     server-side.  This is the authoritative fog signal and includes the terrain
     line-of-sight test.  The older ``"vis": [<team_id>, ...]`` list form is
@@ -24,38 +31,68 @@ object per ``LANERL_STEP_TICKS`` server ticks (4 -> 15 Hz)::
     only ever reveal a unit the server would have hidden behind terrain, never
     hide one the server showed.  ``fog_source`` reports which path was taken.
 
-``"cd0".."cd3"``  (per champion)
+``"cd0".."cd3"``  (per champion)  -- *own: actor-visible; enemy: critic-only*
     Remaining cooldown in **milliseconds**, ``-1`` when the slot has no spell.
     The legacy ``"cd": [q, w, e, r]`` list form, in **seconds**, is also
     understood.  For the agent's OWN champion this is HUD information and is
     used directly.  For the ENEMY it is privileged: the actor only ever sees
     :class:`EnemyAbilityIntel`'s witnessed-cast estimate.
 
-``"rc": <0|1>``  (per champion)
+``"rc": <0|1>``  (per champion)  -- *own: actor-visible; enemy: critic-only*
     1 while the champion is channelling the blue pill (``SpellSlotType.
     BluePillSlot``).  Recall is a 0.5 s windup plus an 8 s channel -- about 120
     decisions at 15 Hz -- so "am I recalling right now" is a state, not an
     event, and the environment cannot reconstruct it from the order it issued.
     Absent from older recordings, in which case it decodes to ``None``.
 
+``"tgt": <netid|0>``  (per champion)  -- *UNCONSUMED*
+    ``Champion.TargetUnit.NetId``: what the engine thinks this champion is
+    attacking.  For the enemy this is server truth about **intent**, it is
+    invisible on any screenshot, and unlike a position it does not disappear
+    under fog -- the single nastiest field on the wire.  Nothing decodes it.
+    If it is ever wanted it must be gated on ``vb``/``vr`` like everything else,
+    or routed to ``priv_vec`` for the critic only.
+
+``"atk": <0|1>``  (per champion)  -- *UNCONSUMED*
+    ``Champion.IsAttacking``: an auto-attack swing is in flight.  Emitted so
+    that an ``attack`` order which quietly fails to stick is visible from
+    outside.  Nothing decodes it; the actor's own swing timer comes from
+    ``obs.AttackClock``, driven by the orders the environment issued.
+
+``"mo": <(int)OrderType>``  (per champion)  -- *UNCONSUMED*
+    ``Champion.MoveOrder``, the engine's current order enum.  Debug telemetry
+    for the same "did the order stick" question.  Nothing decodes it.
+
 ``"sl": [q, w, e, r]``  (per champion, optional)
     Spell ranks.  Absent from the control channel; the standard availability
     rule (Q at 1, W at 2, E at 3, R at 6) is assumed for the agent's own kit.
+    Own ranks are HUD; the enemy's are privileged.
 
 ``"cs": <int>`` (per champion, optional)
     Creep score.  Absent; estimated by :class:`CreepScoreEstimator` from
-    enemy/neutral minion deaths inside the champion's attack range.
+    enemy/neutral minion deaths inside the champion's attack range.  Own CS is
+    HUD; the enemy's is privileged.
+
+Unknown keys are a hard error
+-----------------------------
+:func:`decode_frame` rejects any key that is not in :data:`WIRE_FIELDS`.  The
+audit that guards the actor observation can only be as complete as its list of
+things to guard against, so a field appearing on the wire that nobody has
+classified must stop the run rather than ride along unnoticed.  Set
+``LANERL_ALLOW_UNKNOWN_WIRE_FIELDS=1`` to downgrade it to a warning -- for
+reading an old recording, never for training.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import os
 import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Deque, Dict, Iterator, List, Optional, Sequence, Tuple
+from typing import Deque, Dict, FrozenSet, Iterator, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
@@ -64,6 +101,13 @@ from . import constants as C
 __all__ = [
     "Unit",
     "Frame",
+    "WireField",
+    "WIRE_FIELDS",
+    "WIRE_DYNAMIC_FAMILIES",
+    "COOLDOWN_KEYS",
+    "UnknownWireField",
+    "record_keys",
+    "unit_keys",
     "decode_frame",
     "iter_jsonl",
     "rot180_point",
@@ -77,6 +121,293 @@ __all__ = [
     "CreepScoreEstimator",
     "visible_ids_for",
 ]
+
+
+# --------------------------------------------------------------------------
+# The wire schema
+# --------------------------------------------------------------------------
+#
+# The leak audit used to be reactive: a closed allowlist of attribute names
+# that had ALREADY leaked, plus hand-written differential probes for specific
+# fields.  A field nobody had thought of was identical in both probe frames, so
+# `np.array_equal` was True and the audit reported ok -- vacuously.  This
+# registry inverts that.  Every key the server can put on the wire has to be
+# classified here, and `lanerl_rl.audit` cross-checks the registry against
+# three independent sources of truth:
+#
+#   * the C# emitter (`LanerlControl.BuildObservation`) -- an emitted key that
+#     is not registered FAILS;
+#   * `decode_frame` itself, instrumented to record exactly which keys it reads
+#     -- a `decoded` claim that is false, in either direction, FAILS;
+#   * a differential probe *generated from this table* -- every field declared
+#     `actor_invariant` is poisoned on the enemy champion and the actor arrays
+#     must not move.
+#
+# So the cost of a new server field is: classify it, or the audit stops.
+
+
+@dataclass(frozen=True)
+class WireField:
+    """One key the server can emit, and what we are allowed to do with it.
+
+    ``disposition`` is the human summary; the two booleans are what the audit
+    actually enforces.
+
+    ``actor``      may reach the actor observation (screenshot-recoverable).
+    ``critic``     decoded, but privileged: ``priv_vec`` / ``priv_entities``
+                   only, never the actor arrays.
+    ``internal``   decoded for bookkeeping (fog gating, memory keys); never a
+                   feature in its own right.
+    ``unconsumed`` :func:`decode_frame` does not read it at all, which is the
+                   strongest possible statement that it cannot leak.
+
+    ``actor_invariant`` is the testable claim: *rewriting this key on the
+    ENEMY's record must leave the actor observation bit-identical*.  It is
+    False only for keys the agent is legitimately allowed to see about an enemy
+    (position, HP, kind) or that change *which* unit a record describes.
+    """
+
+    key: str
+    #: ``"record"`` for a top-level key, ``"unit"`` for a per-unit key.
+    scope: str
+    disposition: str
+    #: Does the *current* C# emitter write it?  False for legacy / recorder-only
+    #: forms that :func:`decode_frame` still understands.
+    emitted: bool
+    #: Does :func:`decode_frame` read it?
+    decoded: bool
+    #: Poisoning it on the enemy must not move the actor observation.
+    actor_invariant: bool
+    reason: str
+    #: Value the audit's differential probe writes.  Only used when
+    #: ``actor_invariant`` and ``decoded``.
+    poison: object = None
+
+    def __post_init__(self) -> None:
+        if self.scope not in ("record", "unit"):
+            raise ValueError(f"{self.key}: scope must be 'record' or 'unit'")
+        if self.disposition not in ("actor", "critic", "internal", "unconsumed"):
+            raise ValueError(f"{self.key}: unknown disposition {self.disposition!r}")
+        if (self.disposition == "unconsumed") == self.decoded:
+            raise ValueError(
+                f"{self.key}: disposition {self.disposition!r} contradicts decoded="
+                f"{self.decoded}"
+            )
+        if not self.reason:
+            raise ValueError(f"{self.key}: every wire field needs a stated reason")
+
+
+#: ``cd0..cd3``, named so the audit's key recorder and a reader can both see
+#: them.  Building them with an f-string hid them from static inspection.
+COOLDOWN_KEYS: Tuple[str, str, str, str] = ("cd0", "cd1", "cd2", "cd3")
+
+
+def _wf(*args, **kwargs) -> Tuple[str, WireField]:
+    f = WireField(*args, **kwargs)
+    return f.key, f
+
+
+#: Every key the server can emit.  Adding one to ``LanerlControl`` without
+#: adding it here fails the audit; see the module docstring.
+WIRE_FIELDS: Dict[str, WireField] = dict(
+    [
+        _wf(
+            "t", "record", "actor", True, True, False,
+            "game clock in ms; drives clock_norm / wave_phase, and a player reads "
+            "the clock off the HUD",
+        ),
+        _wf(
+            "u", "record", "internal", True, True, False,
+            "the unit table itself; the fog gate decides which of its rows the "
+            "actor ever sees",
+        ),
+        _wf(
+            "id", "unit", "internal", True, True, False,
+            "net id: keys per-unit memory and the target head's slot->unit map, "
+            "which env.LaneEnv deliberately keeps OUTSIDE the observation. "
+            "Not actor-invariant because rewriting an id makes it a DIFFERENT "
+            "unit, which legitimately changes what is remembered",
+        ),
+        _wf(
+            "k", "unit", "actor", True, True, False,
+            "GetType().Name -> the entity type one-hot; a screenshot shows a "
+            "minion is a minion",
+        ),
+        _wf(
+            "tm", "unit", "actor", True, True, False,
+            "team id -> the ally/enemy relation; health bars are colour-coded",
+        ),
+        _wf(
+            "x", "unit", "actor", True, True, False,
+            "world x, fog-gated; a visible unit's position is on screen",
+        ),
+        _wf(
+            "y", "unit", "actor", True, True, False,
+            "world y, fog-gated; a visible unit's position is on screen",
+        ),
+        _wf(
+            "hp", "unit", "actor", True, True, False,
+            "current HP; quantised to HP_BAR_STEPS on the actor path (a health "
+            "bar has finite resolution) and exact on the critic path",
+        ),
+        _wf(
+            "mhp", "unit", "actor", True, True, False,
+            "max HP; the denominator of the health bar that is drawn on screen",
+        ),
+        _wf(
+            "vb", "unit", "internal", True, True, False,
+            "IsVisibleByTeam(BLUE): the fog gate. It does not become a feature; "
+            "it decides which rows reach the actor at all, so poisoning it MUST "
+            "move the observation -- that is the gate working",
+        ),
+        _wf(
+            "vr", "unit", "internal", True, True, False,
+            "IsVisibleByTeam(PURPLE): the fog gate for the red agent; see vb",
+        ),
+        _wf(
+            "gold", "unit", "actor", True, True, True,
+            "own wallet is on the agent's own HUD; the ENEMY's is privileged and "
+            "reaches the critic only",
+            poison=999_999,
+        ),
+        _wf(
+            "xp", "unit", "actor", True, True, True,
+            "own XP bar is on the agent's own HUD; the ENEMY's is privileged",
+            poison=999_999,
+        ),
+        _wf(
+            "lvl", "unit", "actor", True, True, True,
+            "own level is on the agent's own HUD; the ENEMY's level is inferred, "
+            "never read",
+            poison=18,
+        ),
+        _wf(
+            "rc", "unit", "actor", True, True, True,
+            "own recall channel is HUD state; seeing that the ENEMY is recalling "
+            "through a wall is exactly the kind of leak this table exists for",
+            poison=1,
+        ),
+        _wf(
+            "tgt", "unit", "unconsumed", True, False, True,
+            "Champion.TargetUnit.NetId -- server truth about enemy INTENT, "
+            "invisible on a screenshot and not hidden by fog. Emitted for order "
+            "debugging only. Nothing decodes it; if it is ever wanted it must be "
+            "vb/vr-gated or routed to priv_vec",
+            poison=424242,
+        ),
+        _wf(
+            "atk", "unit", "unconsumed", True, False, True,
+            "Champion.IsAttacking, emitted so a failed attack order is visible "
+            "from outside. The actor's own swing timer comes from obs.AttackClock "
+            "instead, driven by the orders the env issued",
+            poison=1,
+        ),
+        _wf(
+            "mo", "unit", "unconsumed", True, False, True,
+            "Champion.MoveOrder enum, same order-debugging purpose as atk",
+            poison=7,
+        ),
+        _wf(
+            "cd0", "unit", "actor", True, True, True,
+            "own Q cooldown sweep is drawn on the agent's own ability bar; the "
+            "ENEMY's cooldown VALUE is privileged and only a witnessed cast "
+            "(frame.EnemyAbilityIntel) may move the actor observation",
+            poison=99_000,
+        ),
+        _wf(
+            "cd1", "unit", "actor", True, True, True,
+            "own W cooldown sweep; see cd0", poison=99_000,
+        ),
+        _wf(
+            "cd2", "unit", "actor", True, True, True,
+            "own E cooldown sweep; see cd0", poison=99_000,
+        ),
+        _wf(
+            "cd3", "unit", "actor", True, True, True,
+            "own R cooldown sweep; see cd0", poison=99_000,
+        ),
+        _wf(
+            "cd", "unit", "actor", False, True, True,
+            "LEGACY: the pre-cd0..cd3 cooldown list, in SECONDS. Still decoded so "
+            "old LANERL_RECORD dumps replay; same privilege rules as cd0",
+            poison=[99.0, 99.0, 99.0, 99.0],
+        ),
+        _wf(
+            "vis", "unit", "internal", False, True, False,
+            "LEGACY: the pre-vb/vr visibility team list. Like vb/vr it IS the fog "
+            "gate, so it is not actor-invariant",
+        ),
+        _wf(
+            "cs", "unit", "actor", False, True, True,
+            "own creep score is on the agent's own HUD; the ENEMY's is privileged. "
+            "The control channel does not emit it, so CreepScoreEstimator infers "
+            "it from minion deaths in range",
+            poison=999,
+        ),
+        _wf(
+            "sl", "unit", "actor", False, True, True,
+            "own ability ranks are on the agent's own HUD; the ENEMY's are "
+            "privileged. Not emitted; the standard Q1/W2/E3/R6 rule is assumed",
+            poison=[5, 5, 5, 5],
+        ),
+    ]
+)
+
+#: The emitter builds ``cd0..cd3`` with a loop, so the key is not a single
+#: literal in the C# source.  The audit resolves the pattern it *does* see
+#: through this table rather than guessing.
+WIRE_DYNAMIC_FAMILIES: Dict[str, Tuple[str, ...]] = {
+    "cd<EXPR>": COOLDOWN_KEYS,
+}
+
+
+def record_keys() -> FrozenSet[str]:
+    """Registered top-level keys."""
+    return frozenset(k for k, f in WIRE_FIELDS.items() if f.scope == "record")
+
+
+def unit_keys() -> FrozenSet[str]:
+    """Registered per-unit keys."""
+    return frozenset(k for k, f in WIRE_FIELDS.items() if f.scope == "unit")
+
+
+class UnknownWireField(ValueError):
+    """The server sent a key nobody has classified in :data:`WIRE_FIELDS`.
+
+    Fatal by default.  The observation audit proves the actor cannot see
+    privileged state, but it can only prove it about fields it knows exist, so
+    an unclassified field silently widens the thing the audit is meant to
+    close.
+    """
+
+
+_ALLOW_UNKNOWN_ENV = "LANERL_ALLOW_UNKNOWN_WIRE_FIELDS"
+#: Key sets already validated this process.  Frame shapes are extremely
+#: repetitive (one per unit type), so this makes the check ~free at 15 Hz.
+_VALIDATED_KEYSETS: Set[FrozenSet[str]] = set()
+
+
+def _reject_unknown(keys, known: FrozenSet[str], where: str) -> None:
+    ks = frozenset(keys)
+    if ks in _VALIDATED_KEYSETS:
+        return
+    unknown = sorted(ks - known)
+    if unknown:
+        msg = (
+            f"unclassified server field(s) {unknown} in the {where}. Every key "
+            f"LanerlControl.BuildObservation can emit must be registered in "
+            f"lanerl_rl.frame.WIRE_FIELDS with a disposition and a reason, so the "
+            f"observation audit knows whether it may reach the actor. Add it there "
+            f"(and run `python -m lanerl_rl.audit`) rather than letting it ride."
+        )
+        if os.environ.get(_ALLOW_UNKNOWN_ENV) != "1":
+            raise UnknownWireField(msg)
+        # Warn every time rather than caching: a key set that only got through
+        # because the escape hatch was set must not become permanently blessed
+        # for the rest of the process.
+        warnings.warn(msg, RuntimeWarning, stacklevel=3)
+        return
+    _VALIDATED_KEYSETS.add(ks)
 
 
 # --------------------------------------------------------------------------
@@ -160,11 +491,16 @@ def _as_tuple4(v) -> Optional[Tuple]:
 
 
 def _decode_cooldowns(ru: dict) -> Optional[Tuple[Optional[float], ...]]:
-    """Read ``cd0..cd3`` (ms, -1 = no such spell) or the legacy ``cd`` list (s)."""
-    if "cd0" in ru:
+    """Read ``cd0..cd3`` (ms, -1 = no such spell) or the legacy ``cd`` list (s).
+
+    The slot keys come from :data:`COOLDOWN_KEYS` rather than an f-string so
+    that the audit's key recorder -- and a reader -- can see which keys this
+    function consumes.
+    """
+    if COOLDOWN_KEYS[0] in ru:
         out: List[Optional[float]] = []
-        for i in range(4):
-            raw = ru.get(f"cd{i}")
+        for key in COOLDOWN_KEYS:
+            raw = ru.get(key)
             if raw is None:
                 out.append(None)
                 continue
@@ -191,9 +527,16 @@ def _decode_visibility(ru: dict) -> Optional[frozenset]:
 
 
 def decode_frame(raw: dict) -> Frame:
-    """Decode one JSONL / control-channel record into a :class:`Frame`."""
+    """Decode one JSONL / control-channel record into a :class:`Frame`.
+
+    Raises :class:`UnknownWireField` on any key that is not registered in
+    :data:`WIRE_FIELDS`.  See the module docstring for why that is fatal.
+    """
+    _reject_unknown(raw.keys(), record_keys(), "observation record")
+    known_unit_keys = unit_keys()
     units: Dict[int, Unit] = {}
     for ru in raw["u"]:
+        _reject_unknown(ru.keys(), known_unit_keys, "unit record")
         kind = ru["k"]
         etype = C.KIND_TO_TYPE.get(kind, "other")
         units[ru["id"]] = Unit(
