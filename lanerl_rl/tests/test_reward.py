@@ -384,3 +384,56 @@ def test_absolute_metrics_are_not_the_training_reward():
     src = inspect.getsource(R.ZeroSumLaneReward)
     assert "AbsoluteLaneMetrics" not in src
     assert "WinRateTracker" not in src
+
+
+# --------------------------------------------------------------------------
+# Spending gold
+# --------------------------------------------------------------------------
+
+
+def _purchase_frames(cost=1000.0, t0=200_000, gold0=1200.0):
+    """Wallet full, then an item is bought: the wallet DROPS by `cost`."""
+    return [
+        top_lane_scenario(t_ms=t0, n_minions=0, blue_gold=gold0, red_gold=gold0),
+        top_lane_scenario(t_ms=t0 + 1000, n_minions=0,
+                          blue_gold=gold0 - cost, red_gold=gold0),
+    ]
+
+
+def test_buying_an_item_is_not_punished():
+    """`gold` is the WALLET, so a purchase makes it fall.
+
+    Scoring the raw wallet delta paid `money * -1000` for a 1000g item, i.e. it
+    penalised shopping and rewarded hoarding. Income is what `money` should
+    measure, so a purchase must be neutral on that term.
+    """
+    cfg = LaneRewardConfig(last_hit_shaping=False, subtract_ambient_gold=False)
+    r = ZeroSumLaneReward(cfg=cfg)
+    money = 0.0
+    for f in _purchase_frames():
+        _rew, info = r.step(f)
+        money += info["terms"][C.TEAM_BLUE].get("money", 0.0)
+    assert money >= 0.0, f"buying an item was penalised: money term = {money}"
+
+
+def test_spending_earns_a_small_bonus_worth_a_quarter_of_the_money_weight():
+    cfg = LaneRewardConfig(last_hit_shaping=False, subtract_ambient_gold=False)
+    w = cfg.weights
+    assert 0.2 <= w.spend / w.money <= 0.3, "spend should be 0.2-0.3x money"
+    r = ZeroSumLaneReward(cfg=cfg)
+    spend = 0.0
+    for f in _purchase_frames(cost=1000.0):
+        _rew, info = r.step(f)
+        spend += info["terms"][C.TEAM_BLUE].get("spend", 0.0)
+    assert spend == pytest.approx(w.spend * 1000.0), f"spend term = {spend}"
+
+
+def test_hoarding_earns_nothing_extra():
+    """The bonus is for CONVERTING gold, not for having it."""
+    cfg = LaneRewardConfig(last_hit_shaping=False, subtract_ambient_gold=False)
+    r = ZeroSumLaneReward(cfg=cfg)
+    spend = 0.0
+    for f in _idle_lane_frames(n=30):
+        _rew, info = r.step(f)
+        spend += info["terms"][C.TEAM_BLUE].get("spend", 0.0)
+    assert spend == 0.0, f"a wallet that only grew paid a spend bonus of {spend}"

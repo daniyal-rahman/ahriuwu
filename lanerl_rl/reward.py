@@ -205,6 +205,16 @@ class RewardWeights:
     death: float = -1.0
     kill: float = -0.5
     last_hit: float = 0.5
+    #: Gold converted into items, as a fraction of the `money` weight.
+    #:
+    #: `gold` in the observation is the WALLET, not lifetime earnings, so a
+    #: purchase makes it fall. Scoring `money * delta(wallet)` therefore paid
+    #: -8.0 for buying a 1000g item: the agent was penalised for shopping and
+    #: rewarded for hoarding. The money term is now computed on gold EARNED
+    #: (wallet delta plus whatever was spent this step), which makes a purchase
+    #: reward-neutral, and this weight adds a small bonus on top so that gold in
+    #: items beats gold in the bank.
+    spend: float = 0.002        # 0.25 x money
 
 
 @dataclass
@@ -321,11 +331,21 @@ class _AgentReward:
             (p.enemy_tower_hp - c.enemy_tower_hp) - (p.own_tower_hp - c.own_tower_hp)
         )
 
-        # Gold, minus the ambient trickle the policy cannot influence.
-        d_gold = c.gold - p.gold
+        # Gold. `gold` is the WALLET, so a purchase makes it drop; scoring the
+        # raw wallet delta paid -8.0 for buying a 1000g item, i.e. it punished
+        # shopping and rewarded hoarding. Split it:
+        #   spent  = the wallet falling with no other explanation (a purchase)
+        #   earned = wallet delta + spent, which is income and never negative
+        #            for buying
+        # so a purchase is reward-NEUTRAL on `money`, and `spend` then adds a
+        # small bonus for turning gold into stats.
+        d_wallet = c.gold - p.gold
+        spent = max(0.0, -d_wallet)
+        d_gold = d_wallet + spent          # == max(0, d_wallet): income only
         if self.cfg.subtract_ambient_gold and c.t_s >= C.AMBIENT_GOLD_DELAY_S:
             d_gold -= C.AMBIENT_GOLD_PER_S * dt
         terms["money"] = w.money * d_gold
+        terms["spend"] = w.spend * spent
 
         terms["exp"] = w.exp * max(0.0, c.xp - p.xp)
         # Garen has no mana bar, so the published table's `mana` term has
