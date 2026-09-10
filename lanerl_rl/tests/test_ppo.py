@@ -273,3 +273,115 @@ def test_value_loss_clipping_is_bounded():
     assert torch.isfinite(loss)
     # max(unclipped, clipped) is at least the unclipped term, by construction.
     assert loss >= unclipped - 1e-6
+
+
+# --------------------------------------------------------------------------
+# Architecture / hyperparameter sanity, beyond a single finite gradient step.
+# --------------------------------------------------------------------------
+
+
+def test_gradient_reaches_every_trainable_parameter():
+    """A part of the network disconnected from the loss must fail this test.
+
+    ``test_one_gradient_step_changes_params_and_loss_is_finite`` only checks
+    that *some* actor and *some* critic parameter moved; a silently dead head
+    (e.g. a target head nothing routes gradient through) would still pass it.
+    """
+    torch.manual_seed(7)
+    policy = LanePolicy()
+    trainer = DualClipPPO(policy, PPOConfig(chunk_len=8, burn_in=4, minibatch_chunks=4, epochs=1))
+    buf = _fill_buffer(seed=7)
+    batch = next(iter(buf.iter_minibatches(8, 4, 4)))
+    trainer.update_minibatch(batch)
+
+    dead = [
+        n for n, p in policy.named_parameters()
+        if p.requires_grad and (p.grad is None or torch.all(p.grad == 0))
+    ]
+    assert not dead, f"{len(dead)} parameter(s) got no gradient: {dead}"
+
+
+def test_tiny_batch_overfits():
+    """Basic "can this architecture learn at all" check: repeated updates on
+    one fixed small batch must drive the loss down, not just keep it finite."""
+    torch.manual_seed(8)
+    policy = LanePolicy()
+    trainer = DualClipPPO(
+        policy, PPOConfig(chunk_len=4, burn_in=0, minibatch_chunks=1, epochs=1, lr=3e-3,
+                           target_kl=10.0, normalize_advantage=False)
+    )
+    buf = _fill_buffer(seed=8)
+    batch = next(iter(buf.iter_minibatches(4, 0, 1)))
+
+    losses = []
+    for _ in range(30):
+        stats = trainer.update_minibatch(batch)
+        losses.append(stats["loss"])
+
+    assert all(np.isfinite(l) for l in losses), losses
+    early = float(np.mean(losses[:3]))
+    late = float(np.mean(losses[-3:]))
+    assert late < early, f"loss did not decrease on a fixed batch: {early} -> {late} ({losses})"
+
+
+def test_same_seed_gives_the_same_first_action_and_loss():
+    """Reproducibility: two freshly-seeded policies must agree exactly on the
+    first forward pass and the first gradient step against the same data."""
+
+    def run():
+        torch.manual_seed(42)
+        policy = LanePolicy()
+        trainer = DualClipPPO(policy, PPOConfig(chunk_len=8, burn_in=4, minibatch_chunks=4, epochs=1))
+        buf = _fill_buffer(seed=42)
+        batch = next(iter(buf.iter_minibatches(8, 4, 4)))
+        with torch.no_grad():
+            dist, value = trainer._forward_chunk(batch)
+            action = dist.mode()
+        stats = trainer.update_minibatch(batch)
+        return action, value.clone(), stats["loss"]
+
+    a1, v1, l1 = run()
+    a2, v2, l2 = run()
+
+    for k in a1:
+        assert torch.equal(a1[k], a2[k]), f"action[{k}] differs across identically-seeded runs"
+    assert torch.equal(v1, v2)
+    assert l1 == l2, (l1, l2)
+
+
+def test_policy_and_optimizer_state_round_trip_through_the_learner_payloads():
+    """``DualClipPPO.state_payload``/``load_payload``/``policy_payload`` are
+    what ``TrainingLoop`` resumes from; nothing exercised them before they
+    were added, and ``lanerl_train.tests.test_run``'s resume tests all use
+    ``FakeLearner``, whose own trivial payload methods prove nothing about
+    the real ones.
+    """
+    torch.manual_seed(9)
+    policy = LanePolicy()
+    trainer = DualClipPPO(policy, PPOConfig(chunk_len=8, burn_in=4, minibatch_chunks=4, epochs=1))
+    buf = _fill_buffer(seed=9)
+    batch = next(iter(buf.iter_minibatches(8, 4, 4)))
+    trainer.update_minibatch(batch)  # give the optimizer real (Adam) state to round-trip
+
+    policy_payload = trainer.policy_payload()
+    assert "optimizer" not in policy_payload, "actors must not need optimiser state to act"
+    full_payload = trainer.state_payload()
+    assert "optimizer" in full_payload and "cfg" in full_payload
+
+    fresh_policy = LanePolicy()
+    fresh_trainer = DualClipPPO(fresh_policy, PPOConfig())
+    assert any(
+        not torch.equal(p1, p2)
+        for p1, p2 in zip(policy.parameters(), fresh_policy.parameters())
+    ), "test setup bug: fresh policy already matches the trained one"
+
+    fresh_trainer.load_payload(full_payload)
+
+    for p1, p2 in zip(policy.parameters(), fresh_policy.parameters()):
+        assert torch.equal(p1, p2)
+    for g1, g2 in zip(trainer.optimizer.param_groups[0]["params"], fresh_trainer.optimizer.param_groups[0]["params"]):
+        s1, s2 = trainer.optimizer.state.get(g1, {}), fresh_trainer.optimizer.state.get(g2, {})
+        assert set(s1) == set(s2)
+        for k in s1:
+            if torch.is_tensor(s1[k]):
+                assert torch.equal(s1[k], s2[k]), f"optimizer state {k!r} did not round-trip"
