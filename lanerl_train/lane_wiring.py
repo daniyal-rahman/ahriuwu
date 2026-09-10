@@ -1,0 +1,530 @@
+"""Wires the real vectorized environment (``lanerl_train.vec``), the real
+policy (``lanerl_rl.model.LanePolicy``) and the real learner
+(``lanerl_rl.ppo.DualClipPPO``) into the Protocol seams ``lanerl_train.protocols``
+declares and ``lanerl_train.vec``/``lanerl_train.run`` actually call.
+
+Nobody had done this before: ``TrainingLoop`` was exercised only against
+``FakeInstance`` (``lanerl_train/tests/fakes.py``), and
+``lanerl_train.protocols.BatchPolicy``'s own docstring claims ``LanePolicy``
+already satisfies it ("act is already batched") when in fact ``LanePolicy.act``
+takes one pre-batched tensor dict and owns no external state -- see
+:class:`LanePolicyActor` for the actual adapter. Reward computation
+(``lanerl_rl.reward.ZeroSumLaneReward``) was never wired into the vectorized
+path at all; ``lanerl_train.vec`` computes none.
+
+Nothing in ``lanerl_rl`` or ``lanerl_train.vec`` is modified here; this is glue
+only, and it mirrors ``lanerl_rl.env.LaneEnv``'s reference wiring (one real
+instance) at the vectorized, many-instance layer instead.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from types import SimpleNamespace
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+import numpy as np
+import torch
+
+from lanerl_rl import constants as C
+from lanerl_rl.env import decode_action, order_for_command
+from lanerl_rl.frame import ApproxFogModel, Frame, decode_frame, visible_ids_for
+from lanerl_rl.infer import collate_observations
+from lanerl_rl.model import LanePolicy, RecurrentState
+from lanerl_rl.obs import AgentObservation, ObservationBuilder
+from lanerl_rl.ppo import MASK_KEYS, OBS_KEYS, RecurrentRolloutBuffer
+from lanerl_rl.reward import LaneRewardConfig, ZeroSumLaneReward
+
+from .protocols import BLUE, RED, RawObs, Side
+from .run import EpisodeResult, Rollout
+from .vec import VecDriver
+
+log = logging.getLogger("lanerl_train.lane_wiring")
+
+__all__ = [
+    "TEAM_OF_SIDE",
+    "InstanceRewardContext",
+    "LaneObservationAdapter",
+    "LaneActionEncoder",
+    "LanePolicyActor",
+    "LaneAdapters",
+    "make_lane_adapters",
+    "collect_rollout",
+    "make_collect_fn",
+]
+
+_ACTION_KEYS = ("button", "move_x", "move_z", "target")
+TEAM_OF_SIDE: Dict[Side, int] = {BLUE: C.TEAM_BLUE, RED: C.TEAM_RED}
+
+
+def _slot_netids_for(builder: ObservationBuilder, frame: Frame, team: int) -> List[Optional[int]]:
+    """Mirrors ``lanerl_rl.env.LaneEnv._slot_netids_for`` exactly.
+
+    That method's own comment is the reason this is a free function rather
+    than a cached attribute: the slot->netid map must be recomputed from the
+    current frame every time, never carried across a fog change, and it must
+    live outside the observation so the netid itself never becomes a feature.
+    """
+    me = frame.champion_of_team(team)
+    if me is None:
+        return [None] * C.N_SLOTS
+    visible, _ = visible_ids_for(frame, team, builder.fog_model)
+    ax, ay = builder.transform.point(me.x, me.y)
+    slots = builder._slot_entities(frame.t_ms, ax, ay, me.id, visible)
+    return [None if e is None else e.uid for e in slots]
+
+
+class InstanceRewardContext:
+    """One ``ZeroSumLaneReward`` per server instance, stepped exactly once per
+    tick no matter how many side-adapters ask.
+
+    Reward is scoped to the *instance*, not the side: zero-sum couples the two
+    teams' rewards together (``lanerl_rl.reward.ZeroSumLaneReward``), so it
+    cannot live on a per-(instance, side) adapter without either stepping it
+    twice a tick or silently picking one side to own it.
+
+    ``lanerl_rl.env.LaneEnv`` only ever calls ``reward.step()`` from
+    ``LaneEnv.step()`` -- never from ``reset()`` -- because the very first
+    frame of an episode is not the *result* of an action; there is nothing to
+    attribute a reward to yet, and a potential-based term would otherwise
+    score the jump from the previous episode's final state to this episode's
+    initial one as if it were a real transition. ``VecDriver`` gives no
+    "this frame is a fresh reset" flag to ``ObservationAdapter.build()``
+    directly, but it does call ``adapter.reset()`` at exactly the moments that
+    matter (construction, and every episode boundary via
+    ``_on_new_observations``), so :meth:`mark_reset` -- called from there --
+    is what suppresses the one bogus ``reward.step()`` call that would
+    otherwise happen on the next ``build()``.
+    """
+
+    def __init__(self, reward_cfg: Optional[LaneRewardConfig] = None):
+        self.reward = ZeroSumLaneReward(cfg=reward_cfg)
+        self._last_raw_id: Optional[int] = None
+        self._skip_next = True  # nothing to reward before the first action
+        self.last_values: Dict[int, float] = {}
+        self.last_info: Dict[str, object] = {}
+        self.valid = False  # False on the skipped (reset) frame
+
+    def mark_reset(self) -> None:
+        self.reward.reset()
+        self._last_raw_id = None
+        self._skip_next = True
+        self.last_values = {}
+        self.last_info = {}
+        self.valid = False
+
+    def step_once(self, raw_id: int, frame: Frame, train_step: int) -> None:
+        if raw_id == self._last_raw_id:
+            return
+        self._last_raw_id = raw_id
+        if self._skip_next:
+            self._skip_next = False
+            self.last_values = {}
+            self.last_info = {}
+            self.valid = False
+            return
+        self.last_values, self.last_info = self.reward.step(frame, train_step)
+        self.valid = True
+
+
+class LaneObservationAdapter:
+    """``lanerl_train.protocols.ObservationAdapter`` for one (instance, side).
+
+    Registers itself keyed by ``id(raw)`` so the single shared
+    :class:`LaneActionEncoder` can find the *same* stateful
+    ``ObservationBuilder`` that built the observation: action decoding needs
+    the same slot->netid map the observation was built against, and
+    ``note_cast``/``note_attack`` must land on that same builder or its
+    ability-readiness and attack-clock features drift from what the agent
+    actually did (see ``lanerl_rl.env.LaneEnv.decode``, which this mirrors).
+
+    Safe against ``id()`` reuse: within one ``VecDriver.step()``, ``_forward``
+    (which calls :meth:`build`) always completes before ``_scatter`` (which
+    calls the encoder) touches the same instance's ``raw``, and
+    ``VecLaneEnv.last_obs`` keeps every raw object alive for that whole
+    window -- so the id cannot have been recycled in between.
+    """
+
+    def __init__(
+        self,
+        side: Side,
+        registry: Dict[int, Dict[Side, "LaneObservationAdapter"]],
+        reward_ctx: InstanceRewardContext,
+        train_step_source,
+        fog_model: Optional[ApproxFogModel] = None,
+    ):
+        self.side = side
+        self.team = TEAM_OF_SIDE[side]
+        self.builder = ObservationBuilder(self.team, fog_model=fog_model or ApproxFogModel())
+        self._registry = registry
+        self.reward_ctx = reward_ctx
+        self._train_step_source = train_step_source
+        self.last_frame: Optional[Frame] = None
+        self.last_slot_netids: List[Optional[int]] = [None] * C.N_SLOTS
+
+    def reset(self) -> None:
+        self.builder.reset()
+        self.last_frame = None
+        self.last_slot_netids = [None] * C.N_SLOTS
+        self.reward_ctx.mark_reset()
+
+    def build(self, raw: RawObs, side: Side) -> AgentObservation:
+        assert side == self.side, (side, self.side)
+        frame = decode_frame(raw)
+        me = frame.champion_of_team(self.team)
+        if me is not None and me.recalling is not None:
+            self.builder.set_recalling(bool(me.recalling))
+        obs = self.builder.build(frame)
+        self.last_frame = frame
+        self.last_slot_netids = _slot_netids_for(self.builder, frame, self.team)
+        self.reward_ctx.step_once(id(raw), frame, self._train_step_source())
+        self._registry.setdefault(id(raw), {})[side] = self
+        return obs
+
+
+class LaneActionEncoder:
+    """The single ``ActionEncoder`` shared across every instance and side.
+
+    Looks the calling adapter up by ``id(raw)`` (populated by that adapter's
+    own :meth:`LaneObservationAdapter.build` earlier in the same step) so it
+    can decode against the exact builder state -- and the exact slot->netid
+    map -- the observation was built from, and feed ``note_cast``/
+    ``note_attack`` back to it.
+    """
+
+    def __init__(
+        self,
+        registry: Dict[int, Dict[Side, LaneObservationAdapter]],
+        move_distance: float = 500.0,
+    ):
+        self._registry = registry
+        self.move_distance = float(move_distance)
+
+    def encode(self, action: Any, raw: RawObs, side: Side) -> Dict[str, object]:
+        adapter = self._registry.get(id(raw), {}).get(side)
+        if adapter is None or adapter.last_frame is None:
+            log.error(
+                "no registered observation adapter for id(raw)=%s side=%s; encode() ran "
+                "without a matching build() in the same step, which VecDriver's call "
+                "order should make impossible -- sending noop rather than guessing",
+                id(raw),
+                side,
+            )
+            return {"t": "noop"}
+        frame = adapter.last_frame
+        me = frame.champion_of_team(adapter.team)
+        if me is None:
+            return {"t": "noop"}
+        slot_netids = adapter.last_slot_netids
+        entities = np.zeros((C.N_SLOTS, C.ENTITY_DIM), dtype=np.float32)
+        for idx, netid in enumerate(slot_netids):
+            if netid is not None:
+                entities[idx, C.E_VALID] = 1.0
+        # decode_action only ever reads .entities[:, E_VALID] off the
+        # observation it is given (a validity gate that is redundant with
+        # slot_netids already being None for an empty slot -- see
+        # ObservationBuilder._assign_slots -- kept there as belt-and-braces),
+        # so a bare namespace with that one column stands in for a real
+        # AgentObservation without rebuilding one.
+        fake_obs = SimpleNamespace(entities=entities)
+        cmd = decode_action(
+            action, adapter.builder, fake_obs, me, slot_netids, move_distance=self.move_distance
+        )
+        if cmd.kind == "cast" and cmd.spell_slot is not None:
+            adapter.builder.note_cast(cmd.spell_slot, frame.t_ms)
+        if cmd.kind == "attack_move" and cmd.target_netid is not None:
+            adapter.builder.note_attack(frame.t_ms)
+        if me.recalling is None:
+            adapter.builder.set_recalling(cmd.kind == "recall")
+        return order_for_command(cmd)
+
+
+class LanePolicyActor:
+    """``lanerl_train.protocols.BatchPolicy`` for ``lanerl_rl.model.LanePolicy``.
+
+    ``LanePolicy.act`` takes one already-batched tensor dict and owns no
+    external state; ``lanerl_rl.infer.BatchedActor`` owns its state
+    internally, which is right for a fixed-membership benchmark loop but wrong
+    for ``VecDriver``, which keeps one state array *per named policy key* and
+    must be able to zero exactly the slots that reset without touching the
+    others. This class is the missing middle: state passed in and returned,
+    never held by the policy itself.
+    """
+
+    def __init__(self, policy: LanePolicy, device: str = "cpu", deterministic: bool = False):
+        self.policy = policy
+        self.device = torch.device(device)
+        self.deterministic = bool(deterministic)
+        self._version = 0
+        # Stashed for the rollout collector to read right after each
+        # act_batch() call: BatchPolicy's return type is fixed by the protocol
+        # to (actions, next_state) and cannot carry them directly.
+        self.last_log_probs: Optional[torch.Tensor] = None
+        self.last_values: Optional[torch.Tensor] = None
+        self.last_batch: Optional[Dict[str, Any]] = None
+        self.last_actions: Optional[Dict[str, torch.Tensor]] = None  # (N,) long, per key
+        self.last_state_in: Optional[RecurrentState] = None  # state ENTERING this call
+
+    @property
+    def version(self) -> int:
+        return self._version
+
+    def set_version(self, v: int) -> None:
+        self._version = int(v)
+
+    def initial_state(self, batch: int) -> RecurrentState:
+        return self.policy.initial_state(batch, device=self.device)
+
+    @torch.no_grad()
+    def act_batch(
+        self,
+        observations: Sequence[AgentObservation],
+        state: RecurrentState,
+        resets: Optional[Sequence[bool]] = None,
+        deterministic: bool = False,
+    ) -> Tuple[Sequence[Dict[str, int]], RecurrentState]:
+        n = len(observations)
+        batch = collate_observations(observations, device=self.device)
+        reset_t = None
+        if resets is not None:
+            reset_t = torch.as_tensor(
+                np.asarray(resets, dtype=np.float32), device=self.device
+            ).reshape(n, 1)
+        dist, value, new_state = self.policy.forward(
+            entities=batch["entities"],
+            entity_pad_mask=batch["entity_pad_mask"],
+            self_vec=batch["self_vec"],
+            global_vec=batch["global_vec"],
+            priv_entities=batch["priv_entities"],
+            priv_pad_mask=batch["priv_pad_mask"],
+            priv_vec=batch["priv_vec"],
+            state=state,
+            resets=reset_t,
+            action_masks=batch["action_masks"],
+        )
+        want_det = deterministic or self.deterministic
+        action = dist.mode() if want_det else dist.sample()
+        self.last_log_probs = dist.log_prob(action)[:, 0].detach()
+        self.last_values = value[:, 0].detach()
+        self.last_batch = batch
+        self.last_actions = {k: action[k][:, 0].detach() for k in _ACTION_KEYS}
+        self.last_state_in = state
+        actions = [{k: int(action[k][b, 0]) for k in _ACTION_KEYS} for b in range(n)]
+        return actions, new_state
+
+
+@dataclass
+class LaneAdapters:
+    """Everything one ``VecDriver`` needs beyond the policy itself: the
+    per-slot observation adapter factory, the single shared encoder, and the
+    per-instance reward contexts a rollout collector reads rewards from."""
+
+    adapter_factory: Any
+    encoder: LaneActionEncoder
+    reward_contexts: Dict[int, InstanceRewardContext] = field(default_factory=dict)
+    registry: Dict[int, Dict[Side, LaneObservationAdapter]] = field(default_factory=dict)
+
+
+def make_lane_adapters(
+    train_step_source,
+    reward_cfg: Optional[LaneRewardConfig] = None,
+    move_distance: float = 500.0,
+) -> LaneAdapters:
+    """Build the ``adapter_factory``/``encoder`` pair ``VecLaneEnv``/``VecDriver``
+    want, plus a lookup of the per-instance reward context so a rollout
+    collector can read ``reward_contexts[i].last_values`` after each step.
+    """
+    registry: Dict[int, Dict[Side, LaneObservationAdapter]] = {}
+    fog_model = ApproxFogModel()
+    reward_contexts: Dict[int, InstanceRewardContext] = {}
+
+    def adapter_factory(i: int, side: Side) -> LaneObservationAdapter:
+        ctx = reward_contexts.setdefault(i, InstanceRewardContext(reward_cfg))
+        return LaneObservationAdapter(side, registry, ctx, train_step_source, fog_model=fog_model)
+
+    encoder = LaneActionEncoder(registry, move_distance=move_distance)
+    return LaneAdapters(
+        adapter_factory=adapter_factory,
+        encoder=encoder,
+        reward_contexts=reward_contexts,
+        registry=registry,
+    )
+
+
+# --------------------------------------------------------------------------
+# Rollout collection: the piece that turns a real VecDriver + a real policy
+# into the Rollout ActorLoop/TrainingLoop actually consume.
+# --------------------------------------------------------------------------
+
+
+def collect_rollout(
+    driver: VecDriver,
+    actor: LanePolicyActor,
+    reward_contexts: Dict[int, InstanceRewardContext],
+    policy_key: str,
+    num_steps: int,
+    gamma: float,
+    gae_lambda: float,
+    actor_id: int = 0,
+    param_version: int = 0,
+) -> Rollout:
+    """Drive ``driver`` for ``num_steps`` decisions and return one ``Rollout``.
+
+    ``driver.slots[policy_key]`` fixes the (instance, side) -> buffer-row
+    order for the whole rollout (``VecDriver.set_assignments`` builds it once
+    and never reorders it), so everything :class:`LanePolicyActor` stashes on
+    each ``act_batch`` call lines up with it directly.
+
+    Reward timing, and why this holds one extra iteration of state: at the
+    top of iteration ``t``, ``driver.step()`` first calls every adapter's
+    ``build()`` against the frame already sitting in ``env.last_obs`` -- the
+    *result* of iteration ``t-1``'s action, not of the action iteration ``t``
+    is about to choose. :class:`InstanceRewardContext` computes reward
+    exactly there (see its docstring), so the value available right after
+    ``driver.step()`` returns at iteration ``t`` is ``r_{t-1}``: the reward
+    for the *previous* iteration's transition. So the (obs, action, log_prob,
+    value, state) captured at iteration ``t-1`` is written to the buffer only
+    once iteration ``t`` supplies the reward that belongs with it -- never
+    at the iteration that produced it. ``num_steps`` decisions therefore
+    yield ``num_steps - 1`` buffer rows.
+    """
+    slots = list(driver.slots[policy_key])
+    n = len(slots)
+    if n == 0:
+        raise ValueError(f"policy key {policy_key!r} drives no slots")
+    if num_steps < 2:
+        raise ValueError("num_steps must be >= 2 (one iteration is reward-alignment lag)")
+    buffer = RecurrentRolloutBuffer(num_steps - 1, n, cfg=actor.policy.cfg, device=actor.device)
+    episodes: List[EpisodeResult] = []
+
+    pending: Optional[Dict[str, Any]] = None
+    last_values_now: Optional[torch.Tensor] = None
+
+    for t in range(num_steps):
+        # Snapshot BEFORE step(): _forward() reads _pending_resets to build the
+        # resets tensor act_batch() actually saw, then clears it to False for
+        # every slot at the end of the same call. Reading it after step() would
+        # describe the *next* iteration's resets, not this one's.
+        resets_before = list(driver._pending_resets)
+        result, dones = driver.step()
+        obs_now = actor.last_batch
+        log_probs_now = actor.last_log_probs
+        values_now = actor.last_values
+        actions_now = actor.last_actions
+        state_in_now = actor.last_state_in
+        last_values_now = values_now
+
+        if pending is not None:
+            rewards = torch.zeros(n, dtype=torch.float32, device=actor.device)
+            done_t = torch.zeros(n, dtype=torch.float32, device=actor.device)
+            for row, (i, side) in enumerate(slots):
+                ctx = reward_contexts[i]
+                team = TEAM_OF_SIDE[side]
+                if ctx.valid:
+                    rewards[row] = float(ctx.last_values.get(team, 0.0))
+                if i in dones:
+                    done_t[row] = 1.0
+            buffer.add(
+                obs=pending["obs"],
+                masks=pending["masks"],
+                action=pending["action"],
+                log_prob=pending["log_prob"],
+                value=pending["value"],
+                reward=rewards,
+                done=done_t,
+                reset=pending["reset"],
+                state=pending["state"],
+            )
+            for i, reason in dones.items():
+                episodes.append(
+                    EpisodeResult(
+                        agent=policy_key,
+                        opponent_id=policy_key,
+                        opponent_category="self",
+                        score=0.5,
+                        cs_at_10=None,
+                        length_steps=t,
+                        reason=reason,
+                        instance=i,
+                    )
+                )
+
+        reset_t = torch.tensor(
+            [1.0 if resets_before[i] else 0.0 for i, _ in slots],
+            dtype=torch.float32,
+            device=actor.device,
+        )
+        # collate_observations stacks with an explicit T=1 axis (the model is
+        # written for (B, T, ...)); the buffer stores (T, B, ...) with T being
+        # the rollout step, so that per-call axis must be squeezed out here.
+        pending = {
+            "obs": {k: obs_now[k][:, 0] for k in OBS_KEYS},
+            "masks": {k: obs_now["action_masks"][k][:, 0] for k in MASK_KEYS},
+            "action": actions_now,
+            "log_prob": log_probs_now,
+            "value": values_now,
+            "reset": reset_t,
+            "state": state_in_now,
+        }
+
+    if buffer.step == 0:
+        raise RuntimeError(
+            f"collect_rollout produced zero buffer rows in {num_steps} steps; every "
+            f"episode must have ended on the very first iteration for this to happen"
+        )
+    buffer.finish(last_values_now.to(actor.device), gamma, gae_lambda)
+
+    return Rollout(
+        actor_id=actor_id,
+        param_version=param_version,
+        steps=buffer.step,
+        data=buffer,
+        episodes=episodes,
+        mixture={policy_key: 1.0},
+    )
+
+
+def make_collect_fn(
+    build_driver: Any,
+    policy_key: str,
+    rollout_steps: int,
+    gamma: float,
+    gae_lambda: float,
+):
+    """Build the ``collect(actor_id, payload, version) -> Rollout`` callable
+    :class:`lanerl_train.run.ActorLoop` wants.
+
+    ``build_driver()`` must return ``(driver, actor, reward_contexts)`` for
+    one actor's own real server instances -- called once, lazily, the first
+    time this actor thread calls ``collect`` -- so each actor thread owns an
+    independent set of server processes and ports (see
+    ``lanerl_train.ports.PortAllocator``: two actors sharing a base collide).
+    """
+    state: Dict[str, Any] = {}
+
+    def collect(actor_id: int, payload: Mapping[str, Any], version: int) -> Rollout:
+        if "driver" not in state:
+            driver, actor, reward_contexts = build_driver()
+            state["driver"] = driver
+            state["actor"] = actor
+            state["reward_contexts"] = reward_contexts
+        driver = state["driver"]
+        actor = state["actor"]
+        reward_contexts = state["reward_contexts"]
+        if payload:
+            actor.policy.load_state_dict(payload["policy"])
+        actor.set_version(version)
+        return collect_rollout(
+            driver,
+            actor,
+            reward_contexts,
+            policy_key,
+            rollout_steps,
+            gamma,
+            gae_lambda,
+            actor_id=actor_id,
+            param_version=version,
+        )
+
+    return collect

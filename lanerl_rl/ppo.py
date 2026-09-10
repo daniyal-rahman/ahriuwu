@@ -36,7 +36,7 @@ Discount
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
@@ -309,6 +309,29 @@ class DualClipPPO:
         self.policy = policy
         self.cfg = cfg or PPOConfig()
         self.optimizer = optimizer or torch.optim.Adam(policy.parameters(), lr=self.cfg.lr, eps=1e-5)
+
+    # -- lanerl_train.protocols.Learner -------------------------------------
+    #
+    # TrainingLoop needs these three; nothing here existed until wired in for
+    # the first real run, so a resume that "worked" before this was untested
+    # against anything but FakeInstance's fake learner.
+
+    def policy_payload(self) -> Dict[str, object]:
+        """Just the weights an actor needs to act -- no optimiser state, so an
+        actor process never needs to import ``torch.optim`` to load one."""
+        return {"policy": {k: v.detach().cpu().clone() for k, v in self.policy.state_dict().items()}}
+
+    def state_payload(self) -> Dict[str, object]:
+        """Everything needed to resume: weights, optimiser state, PPO config."""
+        payload = dict(self.policy_payload())
+        payload["optimizer"] = self.optimizer.state_dict()
+        payload["cfg"] = asdict(self.cfg)
+        return payload
+
+    def load_payload(self, payload: Dict[str, object]) -> None:
+        self.policy.load_state_dict(payload["policy"])
+        if "optimizer" in payload:
+            self.optimizer.load_state_dict(payload["optimizer"])
 
     # -- losses ------------------------------------------------------------
 
