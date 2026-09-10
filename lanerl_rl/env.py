@@ -471,10 +471,10 @@ def order_for_command(cmd: Optional[ServerCommand]) -> Dict[str, object]:
     if cmd.kind == "cast":
         if cmd.spell_slot is None:
             raise ValueError("a cast command needs a spell_slot")
-        # `id` is always present: LanerlControl reads it with a hand-rolled
-        # float parser that yields NaN for a missing key, and `(uint)NaN` is an
-        # unchecked conversion in C#. 0 is the documented "no target" value and
-        # FindUnit short-circuits on it.
+        # `id` is always sent, though LanerlWire.ParseOrder treats it as optional
+        # for "cast": an absent key is fine, and 0 is the documented "no target"
+        # value that FindUnit short-circuits on. Sending it explicitly just keeps
+        # every cast order the same shape.
         order: Dict[str, object] = {
             "t": "cast",
             "slot": int(cmd.spell_slot),
