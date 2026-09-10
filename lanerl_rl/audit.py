@@ -82,6 +82,21 @@ SERVER_ONLY_ATTRS: Set[str] = {
     # Own recall channel is HUD; the *enemy's* is privileged -- seeing that they
     # are recalling through a wall is exactly the kind of leak this list catches.
     "recalling",
+    # Added to the C# observation (LanerlControl.BuildObservation) for debugging
+    # an order that would not stick. NOTHING consumes them yet, and they are
+    # listed here BEFORE anything does.
+    #
+    # `tgt` is the nastiest field on the wire: it is the enemy's current target
+    # netid -- server truth about enemy INTENT, invisible on any screenshot, and
+    # it does not disappear under fog. If it is ever wanted, it must be gated on
+    # vb/vr like everything else, or routed to priv_vec for the critic only.
+    "tgt",
+    "target",
+    "target_netid",
+    "atk",
+    "is_attacking",
+    "mo",
+    "move_order",
 }
 
 #: Attributes that are only legal on specific receivers.  ``.units`` is the raw

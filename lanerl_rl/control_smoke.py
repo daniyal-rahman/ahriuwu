@@ -77,7 +77,12 @@ def main() -> int:
         f = sock.makefile("rwb")
 
         def step(action):
-            f.write((json.dumps(action) + "\n").encode())
+            # compact separators, like env.py and vec.py: the server's hand-rolled
+            # parser reads numbers itself, and default json.dumps writes
+            # '"slot": 2' with a space. That parsed as NaN until it was fixed,
+            # and this smoke test was exercising a DIFFERENT parser path from
+            # production -- the same trap that let a broken action path pass.
+            f.write((json.dumps(action, separators=(",", ":")) + "\n").encode())
             f.flush()
             line = f.readline()
             return json.loads(line) if line else None
