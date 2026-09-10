@@ -750,7 +750,7 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:1117",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:1174",
     "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
     "fix": "log the exception, or set a failure flag the caller checks",
     "extra": {
@@ -760,7 +760,7 @@
   {
     "severity": "medium",
     "check": "swallowed-exception",
-    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:484",
+    "where": "lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlBot.cs:529",
     "what": "C# catch {} with an empty, uncommented body -- a throwing engine call degrades to a no-op that the caller records as done",
     "fix": "log the exception, or set a failure flag the caller checks",
     "extra": {

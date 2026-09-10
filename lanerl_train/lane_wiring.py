@@ -486,39 +486,41 @@ def collect_rollout(
 
 
 def make_collect_fn(
-    build_driver: Any,
+    build_driver_for_actor: Any,
     policy_key: str,
     rollout_steps: int,
     gamma: float,
     gae_lambda: float,
 ):
-    """Build the ``collect(actor_id, payload, version) -> Rollout`` callable
-    :class:`lanerl_train.run.ActorLoop` wants.
+    """Build the single ``collect(actor_id, payload, version) -> Rollout``
+    callable :class:`lanerl_train.run.TrainingLoop` shares across every
+    :class:`lanerl_train.run.ActorLoop`, each running on its own thread.
 
-    ``build_driver()`` must return ``(driver, actor, reward_contexts)`` for
-    one actor's own real server instances -- called once, lazily, the first
-    time this actor thread calls ``collect`` -- so each actor thread owns an
-    independent set of server processes and ports (see
-    ``lanerl_train.ports.PortAllocator``: two actors sharing a base collide).
+    ``build_driver_for_actor(actor_id)`` must return ``(driver, actor,
+    reward_contexts)`` for that actor's own real server instances -- called
+    once per ``actor_id``, lazily, on that actor's own thread the first time
+    it calls ``collect``. Each actor must own an independent set of server
+    processes and ports (see ``lanerl_train.ports.PortAllocator``: two actors
+    sharing a base collide); dispatching by ``actor_id`` here, rather than
+    building one driver up front, is what lets ``build_driver_for_actor``
+    give each one a disjoint port block without this function needing to
+    know ``num_actors`` itself. Safe across threads because each actor
+    thread only ever touches its own ``actor_id``'s entry.
     """
-    state: Dict[str, Any] = {}
+    state: Dict[int, Dict[str, Any]] = {}
 
     def collect(actor_id: int, payload: Mapping[str, Any], version: int) -> Rollout:
-        if "driver" not in state:
-            driver, actor, reward_contexts = build_driver()
-            state["driver"] = driver
-            state["actor"] = actor
-            state["reward_contexts"] = reward_contexts
-        driver = state["driver"]
-        actor = state["actor"]
-        reward_contexts = state["reward_contexts"]
+        if actor_id not in state:
+            driver, actor, reward_contexts = build_driver_for_actor(actor_id)
+            state[actor_id] = {"driver": driver, "actor": actor, "reward_contexts": reward_contexts}
+        s = state[actor_id]
         if payload:
-            actor.policy.load_state_dict(payload["policy"])
-        actor.set_version(version)
+            s["actor"].policy.load_state_dict(payload["policy"])
+        s["actor"].set_version(version)
         return collect_rollout(
-            driver,
-            actor,
-            reward_contexts,
+            s["driver"],
+            s["actor"],
+            s["reward_contexts"],
             policy_key,
             rollout_steps,
             gamma,
