@@ -60,6 +60,9 @@ sleep 4
 
 echo "=== start server (so the client has something to join) ==="
 export DOTNET_ROOT=$NFS/lanerl-vendor/dotnet
+export LANERL_BOT=blue   # was the server-side default until 2026-09-10;
+                         # DriveTeams now defaults to "none", so stating it
+                         # here keeps this script doing what it always did
 cd $NFS/lanerl-vendor/LoLServer/GameServerConsole/bin/Release/net6.0
 "$DOTNET_ROOT/dotnet" ./GameServerConsole.dll --config "$NFS/ahriuwu-lanerl/lanerl/cfg/garen1v1.json" \
     >"$OUT/server_c.log" 2>&1 &

@@ -73,8 +73,42 @@ def check_bot_config(env_extra: dict, where: str = "") -> dict:
     return dict(env_extra) | {"LANERL_BOT_CONFIG": str(path)}
 
 
+def check_bot_mode(env_extra: dict, where: str = "") -> None:
+    """Raise unless the caller said, in so many words, who the bot drives.
+
+    LANERL_BOT used to be omissible in both directions and wrong either way.
+    Until 2026-09-10 LanerlBotConfig.DriveTeams defaulted to "blue", so an arm
+    that said nothing got a scripted blue champion it had not asked for; the
+    default is now "none", so the same arm gets an idle champion and reports its
+    zero CS as a measurement.  Neither shows up as an error, which is why this
+    is a hard failure and not a warning -- exactly like check_bot_config above,
+    and for the same reason: a benchmark whose arms are silently not what they
+    say they are produces numbers that look fine and mean nothing.
+
+    "none" is a legitimate and common answer (the do-nothing baseline, the RL
+    trainer, the damage-model self-test).  It just has to be an answer.
+    """
+    value = env_extra.get("LANERL_BOT")
+    if value in (None, ""):
+        raise ValueError(
+            "LANERL_BOT is not set" + (f" [{where}]" if where else "")
+            + " -- say who the scripted bot drives: 'none', 'blue', 'purple' or"
+            " 'both'. It has no safe default: 'blue' silently drove champions"
+            " nobody asked to be driven, and 'none' silently measures an idle"
+            " one. The server prints the mode it resolved as LANERL_BOT_MODE."
+        )
+    allowed = {"none", "blue", "purple", "red", "both"}
+    if str(value).lower() not in allowed:
+        raise ValueError(
+            f"LANERL_BOT={value!r} is not one of {sorted(allowed)}"
+            + (f" [{where}]" if where else "")
+            + " -- the server would fall through to attaching nobody."
+        )
+
+
 def run(env_extra: dict, log: Path, config: Path = DEFAULT_CONFIG,
         port: int = 5119, timeout_s: float = 1800.0) -> dict:
+    check_bot_mode(env_extra, where=str(log.name))
     env_extra = check_bot_config(env_extra, where=str(log.name))
     config = Path(config)
     if not config.is_file():
@@ -128,6 +162,10 @@ def parse_log(log: Path) -> dict:
     episodes = [l for l in text.splitlines() if l.startswith("LANERL_EPISODE")]
     tps = [float(m) for m in re.findall(r"LANERL_TPS ([\d.]+) ticks/s", text)]
     attach = [l for l in text.splitlines() if l.startswith("LANERL_BOT_ATTACH")]
+    # The mode the server actually resolved. Carried into every summary because
+    # an absent LANERL_BOT_ATTACH cannot distinguish "attached nobody" from
+    # "attached nobody on purpose", and that ambiguity is the whole bug.
+    mode = [l for l in text.splitlines() if l.startswith("LANERL_BOT_MODE")]
     warns = [l for l in text.splitlines() if "LANERL_RESET_WARN" in l]
     fatal = [l for l in text.splitlines() if " FATAL " in l or "Unhandled exception" in l]
     return {
@@ -136,6 +174,7 @@ def parse_log(log: Path) -> dict:
         "episode_lines": episodes,
         "tps": tps,
         "attach": attach,
+        "bot_mode": mode,
         "reset_warns": warns,
         "fatal": fatal[:10],
     }
@@ -172,6 +211,7 @@ def main() -> None:
         "timed_out": res["timed_out"],
         "tps_median": sorted(res["tps"])[len(res["tps"]) // 2] if res["tps"] else None,
         "attach": res["attach"],
+        "bot_mode": res["bot_mode"],
         "reset_lines": res["reset_lines"],
         "episode_lines": res["episode_lines"][:5],
         "n_episodes": len(res["episode_lines"]),

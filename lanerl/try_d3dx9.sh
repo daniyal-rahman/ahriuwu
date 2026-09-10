@@ -10,6 +10,9 @@ D=$ROOT/client/extracted/RADS/solutions/lol_game_client_sln/releases/0.0.1.68/de
 export WINEPREFIX=$ROOT/prefix DISPLAY=:1
 export WINEDLLOVERRIDES="mscoree,mshtml=;d3d9=n;d3dx9_39=n"
 export DXVK_STATE_CACHE_PATH=$ROOT/dxvk_cache DOTNET_ROOT=$NFS/lanerl-vendor/dotnet
+export LANERL_BOT=blue   # was the server-side default until 2026-09-10;
+                         # DriveTeams now defaults to "none", so stating it
+                         # here keeps this script doing what it always did
 export PATH="$ROOT/wine/bin:$ROOT/env/bin:$PATH" WINE=$ROOT/wine/bin/wine
 W=$ROOT/wine/bin/wine
 

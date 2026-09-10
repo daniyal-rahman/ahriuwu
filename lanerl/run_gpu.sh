@@ -22,6 +22,9 @@ printf '@echo off\r\n"League of Legends.exe" "8394" "LoLLauncher.exe" "" "127.0.
 
 "$ROOT/env/bin/Xvfb" :99 -screen 0 1920x1080x24 +extension GLX +extension RANDR +render >/dev/null 2>&1 & XP=$!; sleep 4
 export DOTNET_ROOT=$NFS/lanerl-vendor/dotnet
+export LANERL_BOT=blue   # was the server-side default until 2026-09-10;
+                         # DriveTeams now defaults to "none", so stating it
+                         # here keeps this script doing what it always did
 cd $NFS/lanerl-vendor/LoLServer/GameServerConsole/bin/Release/net6.0
 "$DOTNET_ROOT/dotnet" ./GameServerConsole.dll --config "$NFS/ahriuwu-lanerl/lanerl/cfg/garen1v1.json" \
     >"$OUT/server_g.log" 2>&1 & SRVPID=$!

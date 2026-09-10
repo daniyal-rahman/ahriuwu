@@ -45,6 +45,11 @@ def run_once(config: Path, workdir: Path, trial: int, freerun: bool) -> dict:
     env = dict(os.environ)
     env["DOTNET_ROOT"] = str(DOTNET_ROOT)
     env["LANERL_HEADLESS"] = "1"
+    # This benchmark times process spawn, content load and nav-grid load. None
+    # of that involves a champion, so "none" is what it means -- but it has to
+    # say so: LANERL_BOT used to default to "blue" server-side, which meant this
+    # was quietly timing a driven champion as well.
+    env["LANERL_BOT"] = "none"
     env["LANERL_RECORD"] = str(rec)
     if freerun:
         env["LANERL_FREERUN"] = "1"

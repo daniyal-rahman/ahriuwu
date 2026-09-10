@@ -24,6 +24,9 @@ export WINEDEBUG=-all
 export WINEDLLOVERRIDES="mscoree,mshtml=;d3d9=n"
 export DISPLAY=:99
 export DOTNET_ROOT=$NFS/lanerl-vendor/dotnet
+export LANERL_BOT=blue   # was the server-side default until 2026-09-10;
+                         # DriveTeams now defaults to "none", so stating it
+                         # here keeps this script doing what it always did
 WINE="$ROOT/wine/bin/wine"
 
 cleanup() {

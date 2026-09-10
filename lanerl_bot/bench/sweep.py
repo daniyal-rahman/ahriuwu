@@ -30,14 +30,17 @@ def main() -> None:
     # same reason as replicate.py: validate the whole grid up front, so a bad
     # LANERL_BOT_CONFIG costs a second rather than the whole sweep's worth of
     # games silently measuring the default bot
+    base_env = {"LANERL_TOPONLY": "1", "LANERL_EXIT_AT": "601000",
+                "LANERL_BOT": "blue"}
     for i, extra in enumerate(grid):
         run_server.check_bot_config(extra, where=f"{args.grid}[{i}]")
+        # merged, not `extra`: the mode comes from base_env unless overridden
+        run_server.check_bot_mode(base_env | extra, where=f"{args.grid}[{i}]")
 
     OUT.mkdir(parents=True, exist_ok=True)
     rows = []
     for i, extra in enumerate(grid):
-        env = {"LANERL_TOPONLY": "1", "LANERL_EXIT_AT": "601000",
-               "LANERL_BOT": "blue"} | extra
+        env = base_env | extra
         log = OUT / f"{args.tag}_{i}.log"
         res = run_server.run(env, log, port=args.port0 + i, timeout_s=900)
         r = cs10(res)

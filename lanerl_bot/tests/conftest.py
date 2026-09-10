@@ -71,7 +71,19 @@ def run_server(env_extra: dict, log: Path, port: int | None = None,
     startup returns an empty string and the caller asserts against nothing --
     a green-looking vacuous pass. Missing marker is now a loud failure with the
     log tail attached, so the next one is diagnosable from the pytest output.
+
+    LANERL_BOT is mandatory, for the same reason and in the same spirit. It had
+    no safe default in either direction: it used to default to "blue" inside the
+    server, so a test that said nothing silently got a driven champion, and it
+    now defaults to "none", so the same test would silently get an idle one.
+    Both read as a passing test of something other than what it says it tests.
     """
+    if not env_extra.get("LANERL_BOT"):
+        raise ValueError(
+            "run_server() needs an explicit LANERL_BOT ('none', 'blue', "
+            "'purple' or 'both'): the server drives nobody by default, so an "
+            "omission quietly turns a bot test into an idle-champion test."
+        )
     if port is None:
         port = free_port()
     env = dict(os.environ)
@@ -125,8 +137,10 @@ def selftest_output(artifacts) -> str:
         pytest.skip("server unavailable")
     log = artifacts / "pytest_selftest.log"
     # a missing dump used to skip(); a skip on a broken server reads as green
-    text = run_server({"LANERL_SELFTEST": "1"}, log, timeout_s=300,
-                      expect="LANERL_SELFTEST_END")
+    # "none": the self-test dumps the pure damage functions and exits on the
+    # first tick, so no champion is ever driven. Stated rather than omitted.
+    text = run_server({"LANERL_SELFTEST": "1", "LANERL_BOT": "none"},
+                      log, timeout_s=300, expect="LANERL_SELFTEST_END")
     return text
 
 

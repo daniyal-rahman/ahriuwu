@@ -42,8 +42,20 @@ def main() -> None:
     # Validate EVERY arm before the first launch: a sweep whose 3rd arm names a
     # config that does not exist should die in one second, not after an hour of
     # games whose numbers turn out to be the default bot measured three times.
+    # "blue" here is not a new choice, it is the old server-side default made
+    # visible. Every arm in qab_configs.json omits LANERL_BOT and used to get a
+    # blue-driven champion from LanerlBotConfig.DriveTeams; that default is now
+    # "none", so leaving it omitted would have turned each arm into a ten-minute
+    # recording of a champion standing still and reported its 0 CS as the
+    # result. An arm that wants something else still overrides it in `extra`.
+    base_env = {"LANERL_TOPONLY": "1", "LANERL_EXIT_AT": "601000",
+                "LANERL_BOT": "blue"}
+
     for tag, extra in configs.items():
         run_server.check_bot_config(extra, where=f"{args.configs}:{tag}")
+        # Validate the MERGED env, not `extra`: the mode usually comes from
+        # base_env, and checking the arm alone would reject every valid config.
+        run_server.check_bot_mode(base_env | extra, where=f"{args.configs}:{tag}")
 
     OUT.mkdir(parents=True, exist_ok=True)
     port = args.port0
@@ -53,12 +65,11 @@ def main() -> None:
         vals, rows, crashes = [], [], 0
         for s in range(args.seeds):
             for attempt in range(args.retries + 1):
-                env = {"LANERL_TOPONLY": "1", "LANERL_EXIT_AT": "601000",
-                       "LANERL_BOT_SEED": str(1234 + s)} | extra
+                env = base_env | {"LANERL_BOT_SEED": str(1234 + s)} | extra
                 log = OUT / f"rep_{tag}_s{s}_a{attempt}.log"
                 res = run_server.run(env, log, port=port, timeout_s=900)
                 port += 1
-                who = "redbot" if extra.get("LANERL_BOT") == "purple" else "bluebot"
+                who = "redbot" if env.get("LANERL_BOT") == "purple" else "bluebot"
                 r = cs10(res, who)
                 if r is None:
                     crashes += 1

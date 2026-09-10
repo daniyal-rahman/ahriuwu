@@ -6,6 +6,9 @@ set -uo pipefail
 ROOT=/mnt/storage/lanerl; NFS=/mnt/nfs/projects; OUT=$NFS/ahriuwu-lanerl/lanerl/logs
 D=$ROOT/client/extracted/RADS/solutions/lol_game_client_sln/releases/0.0.1.68/deploy
 export WINEPREFIX=$ROOT/prefix DISPLAY=:1 DOTNET_ROOT=$NFS/lanerl-vendor/dotnet
+export LANERL_BOT=blue   # was the server-side default until 2026-09-10;
+                         # DriveTeams now defaults to "none", so stating it
+                         # here keeps this script doing what it always did
 W=$ROOT/wine/bin/wine
 $ROOT/wine/bin/wineserver -k 2>/dev/null; sleep 2
 
