@@ -40,7 +40,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Protocol, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
@@ -840,7 +840,12 @@ class LaneEnv:
     mirroring in :mod:`lanerl_rl.obs`.
     """
 
-    def __init__(self, backend: ServerBackend, cfg: Optional[LaneEnvConfig] = None):
+    def __init__(
+        self,
+        backend: ServerBackend,
+        cfg: Optional[LaneEnvConfig] = None,
+        train_step_source: Optional[Callable[[], int]] = None,
+    ):
         self.backend = backend
         self.cfg = cfg or LaneEnvConfig()
         fog = ApproxFogModel(warn=self.cfg.warn_on_approx_fog)
@@ -848,15 +853,47 @@ class LaneEnv:
             t: ObservationBuilder(t, fog_model=fog) for t in self.cfg.teams
         }
         self.reward = ZeroSumLaneReward(self.cfg.teams, self.cfg.reward)
-        #: Feeds ``LaneRewardConfig.alpha``'s zero-sum anneal.  The trainer owns
-        #: it: the env has no idea how far along the run is.
-        self.train_step = 0
+        #: Live source for :attr:`train_step`.  Pass
+        #: ``lanerl_train.run.TrainingLoop.train_steps`` here and the anneal
+        #: follows the learner without anybody having to push a value in.
+        self._train_step_source = train_step_source
+        self._train_step = 0
         self.frame: Optional[Frame] = None
         self.steps = 0
         self._slot_netids: Dict[int, List[Optional[int]]] = {
             t: [None] * C.N_SLOTS for t in self.cfg.teams
         }
         self._last_obs: Dict[int, AgentObservation] = {}
+
+    # -- the training clock ------------------------------------------------
+
+    @property
+    def train_step(self) -> int:
+        """How far along the run is; feeds ``LaneRewardConfig.alpha``'s anneal.
+
+        The environment has no idea how far along a run is, so the trainer owns
+        this.  Either push it (``env.train_step = n``) or, better, construct the
+        env with ``train_step_source=loop.train_steps`` and it tracks the
+        learner by itself -- a pushed value that somebody forgets to push is how
+        the anneal came to be pinned at its starting alpha for every run so far.
+        """
+        if self._train_step_source is not None:
+            return int(self._train_step_source())
+        return self._train_step
+
+    @train_step.setter
+    def train_step(self, value: int) -> None:
+        if self._train_step_source is not None:
+            raise RuntimeError(
+                "this LaneEnv reads train_step from a source callable; assigning to it "
+                "would be silently ignored on the next step. Drop the assignment or "
+                "drop the source."
+            )
+        self._train_step = int(value)
+
+    def set_train_step_source(self, source: Optional[Callable[[], int]]) -> None:
+        """Attach (or detach) the live training-clock source."""
+        self._train_step_source = source
 
     # -- api ---------------------------------------------------------------
 

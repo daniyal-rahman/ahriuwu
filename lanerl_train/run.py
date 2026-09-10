@@ -63,6 +63,7 @@ __all__ = [
     "MetricsLog",
     "ParameterStore",
     "StalenessTracker",
+    "TrainStepCounter",
     "CheckpointManager",
     "RunConfig",
     "RunState",
@@ -289,6 +290,54 @@ class StalenessTracker:
 
 
 # --------------------------------------------------------------------------
+# The training clock the environments read
+# --------------------------------------------------------------------------
+
+
+class TrainStepCounter:
+    """How far along the run is, published to the environment side.
+
+    ``lanerl_rl.reward.LaneRewardConfig`` anneals the zero-sum coefficient
+    ``alpha`` from 0.5 to 1.0 over ``zero_sum_anneal_steps``, driven by a number
+    the trainer is supposed to hand it.  Nothing handed it one, so alpha was
+    pinned at 0.5 for the whole of every run and the anneal was dead code.  This
+    is the missing hand-off.
+
+    Read from actor threads and written from the learner thread, hence the lock.
+    Monotonic on purpose: a schedule that can go backwards is a schedule that
+    can be replayed, and a resume that forgot to restore it would silently
+    restart the anneal.
+    """
+
+    def __init__(self, value: int = 0):
+        self._lock = threading.Lock()
+        self._value = int(value)
+
+    @property
+    def value(self) -> int:
+        with self._lock:
+            return self._value
+
+    def __call__(self) -> int:
+        """So it can be passed straight in as a ``train_step_source`` callable."""
+        return self.value
+
+    def set(self, value: int) -> int:
+        v = int(value)
+        with self._lock:
+            if v < self._value:
+                log.error(
+                    "train step went backwards (%d -> %d); ignoring. Every env-side "
+                    "schedule reads this, so a rewind would silently re-run an anneal.",
+                    self._value,
+                    v,
+                )
+                return self._value
+            self._value = v
+            return v
+
+
+# --------------------------------------------------------------------------
 # Checkpoints
 # --------------------------------------------------------------------------
 
@@ -384,10 +433,24 @@ class RunConfig:
     #: No completed update within this window means the run is stalled.
     stall_timeout_s: float = 900.0
     seed: int = 0
+    #: Which clock drives the env-side schedules (currently only the reward's
+    #: zero-sum anneal).  ``"env_steps"`` counts decisions collected across all
+    #: instances; ``"updates"`` counts learner steps.  They differ by
+    #: ``rollout_steps * envs_per_actor``, i.e. three orders of magnitude here,
+    #: so which one ``LaneRewardConfig.zero_sum_anneal_steps`` is denominated in
+    #: is not a detail.  Default ``"env_steps"``: the published default of
+    #: 2,000,000 is a sample count in every reference this reward is copied
+    #: from, and 2M *updates* at this batch size is a run nobody will ever
+    #: finish.  Set it deliberately rather than inheriting the guess.
+    anneal_clock: str = "env_steps"
     league: LeagueConfig = field(default_factory=LeagueConfig)
 
     def __post_init__(self) -> None:
         self.run_dir = Path(self.run_dir)
+        if self.anneal_clock not in ("env_steps", "updates"):
+            raise ValueError(
+                f"anneal_clock must be 'env_steps' or 'updates', got {self.anneal_clock!r}"
+            )
         if self.num_actors < 0:
             raise ValueError("num_actors must be >= 0")
         if self.rollout_steps <= 0 or self.queue_capacity <= 0:
@@ -556,10 +619,23 @@ class TrainingLoop:
         )
         self.rng = random.Random(config.seed)
         self.state = RunState(param_version=self.store.version)
+        #: Published to the environment side; see :class:`TrainStepCounter`.
+        #: Hand ``loop.train_steps`` to anything that needs to know how far the
+        #: run has got -- it is callable, so it drops straight into
+        #: ``lanerl_rl.env.LaneEnv(train_step_source=...)``.
+        self.train_steps = TrainStepCounter()
         self.actors: List[ActorLoop] = []
         self._last_update_at = time.monotonic()
 
     # -- helpers -----------------------------------------------------------
+
+    def _anneal_clock_value(self) -> int:
+        if self.cfg.anneal_clock == "updates":
+            return self.state.update
+        return self.state.total_env_steps
+
+    def _publish_train_step(self) -> int:
+        return self.train_steps.set(self._anneal_clock_value())
 
     def _policy_payload(self) -> Mapping[str, Any]:
         fn = getattr(self.learner, "policy_payload", None)
@@ -619,7 +695,15 @@ class TrainingLoop:
         self.store = ParameterStore(self._policy_payload())
         for _ in range(max(0, self.state.param_version - self.store.version)):
             self.store.publish(self._policy_payload())
-        self.metrics.write("resume", update=self.state.update, checkpoint=str(ckpt))
+        # And the training clock must carry the resumed position, or a resume
+        # silently rewinds every env-side anneal to its start.
+        self._publish_train_step()
+        self.metrics.write(
+            "resume",
+            update=self.state.update,
+            checkpoint=str(ckpt),
+            train_step=self.train_steps.value,
+        )
         return True
 
     # -- ingestion ---------------------------------------------------------
@@ -713,6 +797,10 @@ class TrainingLoop:
         self.state.update += 1
         self.state.total_env_steps += int(rollout.steps)
         self.state.param_version = self.store.publish(self._policy_payload())
+        # Publish the training clock with the parameters, not on some other
+        # cadence: an actor that has just pulled version N should be collecting
+        # under the schedule that belongs to version N.
+        train_step = self._publish_train_step()
         self._last_update_at = time.monotonic()
 
         for ep in rollout.episodes:
@@ -726,6 +814,8 @@ class TrainingLoop:
             total_env_steps=self.state.total_env_steps,
             total_episodes=self.state.total_episodes,
             param_version=self.state.param_version,
+            train_step=train_step,
+            anneal_clock=self.cfg.anneal_clock,
             staleness=self.staleness.staleness(
                 rollout.param_version, self.state.param_version - 1
             ),

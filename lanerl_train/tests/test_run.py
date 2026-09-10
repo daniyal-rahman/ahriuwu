@@ -367,3 +367,129 @@ def test_metrics_log_is_thread_safe(tmp_path):
     lines = (tmp_path / "m.jsonl").read_text().splitlines()
     assert len(lines) == 1600
     assert all(json.loads(l)["kind"] == "update" for l in lines)
+
+
+# -- the training clock the environments read ------------------------------
+#
+# `lanerl_rl.reward.LaneRewardConfig.alpha` anneals the zero-sum coefficient
+# over `zero_sum_anneal_steps`, driven by a number the trainer hands the env.
+# Nothing handed it one, so alpha sat at its starting 0.5 for every run.  These
+# cover the learner half of that hand-off; `lanerl_rl/tests/test_env.py` covers
+# the env half, and `test_the_anneal_moves_end_to_end` below joins them.
+
+
+def test_train_step_counter_is_monotonic_and_callable():
+    from lanerl_train.run import TrainStepCounter
+
+    c = TrainStepCounter()
+    assert c.value == 0 and c() == 0
+    assert c.set(100) == 100
+    assert c.set(50) == 100, "a rewind would silently re-run every env-side anneal"
+    assert c() == 100
+
+
+def test_the_loop_publishes_env_steps_as_the_training_clock(run_dir):
+    loop = make_loop(run_dir)
+    assert loop.train_steps.value == 0
+    for i in range(3):
+        loop.submit(Rollout(actor_id=0, param_version=i, steps=128))
+        assert loop.step_once(timeout=2.0)
+    assert loop.state.total_env_steps == 384
+    assert loop.train_steps.value == 384
+
+
+def test_the_loop_can_publish_updates_instead(run_dir):
+    cfg = RunConfig(
+        run_dir=run_dir, num_actors=0, queue_capacity=4, checkpoint_every=0,
+        snapshot_every=0, eval_every=0, stall_timeout_s=5.0,
+        anneal_clock="updates",
+    )
+    loop = TrainingLoop(cfg, FakeLearner(), evaluator=Evaluator(anchors=[]))
+    for i in range(3):
+        loop.submit(Rollout(actor_id=0, param_version=i, steps=128))
+        assert loop.step_once(timeout=2.0)
+    assert loop.train_steps.value == 3
+
+
+def test_an_unknown_anneal_clock_is_refused(run_dir):
+    with pytest.raises(ValueError, match="anneal_clock"):
+        RunConfig(run_dir=run_dir, anneal_clock="wallclock")
+
+
+def test_the_training_clock_is_logged_with_every_update(run_dir):
+    loop = make_loop(run_dir)
+    loop.submit(Rollout(actor_id=0, param_version=0, steps=64))
+    assert loop.step_once(timeout=2.0)
+    recs = [json.loads(l) for l in (run_dir / "metrics.jsonl").read_text().splitlines()]
+    upd = [r for r in recs if r["kind"] == "update"]
+    assert upd and upd[-1]["train_step"] == 64
+    assert upd[-1]["anneal_clock"] == "env_steps"
+
+
+def test_resume_restores_the_training_clock(run_dir):
+    """A resume that rewinds the clock silently restarts the anneal."""
+    loop = make_loop(run_dir, checkpoint_every=1)
+    for i in range(2):
+        loop.submit(Rollout(actor_id=0, param_version=i, steps=500))
+        assert loop.step_once(timeout=2.0)
+    assert loop.train_steps.value == 1000
+    loop.save_state(loop.checkpoints.latest())
+
+    fresh = make_loop(run_dir, checkpoint_every=1)
+    assert fresh.train_steps.value == 0
+    assert fresh.resume()
+    assert fresh.train_steps.value == 1000
+
+
+def test_the_anneal_moves_end_to_end(run_dir):
+    """The whole hand-off: learner update -> counter -> LaneEnv -> reward alpha.
+
+    This is the test the wiring exists for.  Each half is covered on its own;
+    only this one fails if the two halves are never connected, which is exactly
+    the state the code was in.
+    """
+    from lanerl_rl import constants as C
+    from lanerl_rl.env import LaneEnv, LaneEnvConfig
+    from lanerl_rl.reward import LaneRewardConfig
+    from lanerl_rl.scenarios import top_lane_scenario
+
+    class _Backend:
+        ignores_actions = True
+
+        def __init__(self):
+            self.frames = [top_lane_scenario(t_ms=90_000 + 100 * i) for i in range(4)]
+            self.i = 0
+
+        def reset(self):
+            self.i = 0
+            return self.frames[0]
+
+        def step(self, commands):
+            self.i += 1
+            return self.frames[self.i] if self.i < len(self.frames) else None
+
+        def close(self):
+            pass
+
+    loop = make_loop(run_dir)
+    env = LaneEnv(
+        _Backend(),
+        LaneEnvConfig(
+            warn_on_approx_fog=False,
+            reward=LaneRewardConfig(zero_sum_anneal_steps=1000),
+        ),
+        train_step_source=loop.train_steps,
+    )
+    noop = {"button": C.BUTTON_INDEX["noop"], "move_x": 4, "move_z": 4, "target": 0}
+
+    def alpha_now() -> float:
+        env.reset()
+        _, _, _, info = env.step({t: dict(noop) for t in env.cfg.teams})
+        return info["reward_info"]["alpha"]
+
+    assert alpha_now() == pytest.approx(0.5)
+    for i in range(4):
+        loop.submit(Rollout(actor_id=0, param_version=i, steps=250))
+        assert loop.step_once(timeout=2.0)
+    assert loop.train_steps.value == 1000
+    assert alpha_now() == pytest.approx(1.0)

@@ -420,3 +420,89 @@ def test_replay_backend_ignores_actions_as_documented(recording_path):
     assert b1.ignores_actions is True
     b1.close()
     b2.close()
+
+
+# --------------------------------------------------------------------------
+# The zero-sum anneal's training clock
+# --------------------------------------------------------------------------
+#
+# `LaneRewardConfig.alpha` anneals from 0.5 to 1.0 over `zero_sum_anneal_steps`,
+# driven by `LaneEnv.train_step`.  Nothing ever set it, so alpha was pinned at
+# 0.5 for every run this project has done.  These tests are about the hand-off,
+# not about the formula: they assert the number REACHES the reward.
+
+
+class _ScenarioBackend:
+    """A backend that just replays synthetic frames.  Ignores actions."""
+
+    ignores_actions = True
+
+    def __init__(self, n: int = 8):
+        self.frames = [top_lane_scenario(t_ms=90_000 + 100 * i) for i in range(n)]
+        self.i = 0
+
+    def reset(self):
+        self.i = 0
+        return self.frames[0]
+
+    def step(self, commands):
+        self.i += 1
+        return self.frames[self.i] if self.i < len(self.frames) else None
+
+    def close(self):
+        pass
+
+
+def _alpha_after_a_step(env) -> float:
+    env.reset()
+    noop = {"button": C.BUTTON_INDEX["noop"], "move_x": 4, "move_z": 4, "target": 0}
+    _, _, _, info = env.step({t: dict(noop) for t in env.cfg.teams})
+    return info["reward_info"]["alpha"]
+
+
+def test_pushed_train_step_reaches_the_reward_alpha():
+    cfg = LaneEnvConfig(
+        warn_on_approx_fog=False,
+        reward=LaneRewardConfig(zero_sum_anneal_steps=1000),
+    )
+    env = LaneEnv(_ScenarioBackend(), cfg)
+    assert _alpha_after_a_step(env) == pytest.approx(0.5)
+
+    env.train_step = 500
+    assert _alpha_after_a_step(env) == pytest.approx(0.75)
+    env.train_step = 1000
+    assert _alpha_after_a_step(env) == pytest.approx(1.0)
+
+
+def test_a_train_step_source_moves_alpha_without_anybody_pushing():
+    """The wiring that makes the anneal survive somebody forgetting to push."""
+    clock = {"n": 0}
+    cfg = LaneEnvConfig(
+        warn_on_approx_fog=False,
+        reward=LaneRewardConfig(zero_sum_anneal_steps=1000),
+    )
+    env = LaneEnv(_ScenarioBackend(), cfg, train_step_source=lambda: clock["n"])
+
+    seen = []
+    for n in (0, 250, 500, 1000, 5000):
+        clock["n"] = n
+        seen.append(_alpha_after_a_step(env))
+    assert seen == pytest.approx([0.5, 0.625, 0.75, 1.0, 1.0])
+
+
+def test_assigning_train_step_under_a_source_is_refused_not_ignored():
+    env = LaneEnv(_ScenarioBackend(), LaneEnvConfig(warn_on_approx_fog=False),
+                  train_step_source=lambda: 7)
+    assert env.train_step == 7
+    with pytest.raises(RuntimeError, match="source callable"):
+        env.train_step = 99
+    assert env.train_step == 7
+
+
+def test_the_default_env_still_starts_the_anneal_at_its_start():
+    """Guards the regression this fix is about: alpha pinned at 0.5 forever."""
+    env = LaneEnv(_ScenarioBackend(), LaneEnvConfig(warn_on_approx_fog=False))
+    assert env.train_step == 0
+    assert _alpha_after_a_step(env) == pytest.approx(
+        LaneRewardConfig().zero_sum_alpha_start
+    )
