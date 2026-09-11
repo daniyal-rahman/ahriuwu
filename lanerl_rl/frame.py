@@ -255,6 +255,19 @@ WIRE_FIELDS: Dict[str, WireField] = dict(
             "max HP; the denominator of the health bar that is drawn on screen",
         ),
         _wf(
+            "demo", "unit", "unconsumed", True, False, True,
+            "behaviour-cloning label: the order the SCRIPTED BOT chose this tick, "
+            "in the RL action space. It is the TARGET for supervised pretraining, "
+            "never an input -- a policy that can read its teacher's next move at "
+            "test time has learned nothing deployable. Present only while "
+            "LANERL_BOT drives that champion",
+        ),
+        _wf(
+            "slot", "unit", "unconsumed", True, False, True,
+            "ability slot inside the nested 'demo' object (see above); it is not "
+            "a top-level unit field, but the emitter scanner sees the key",
+        ),
+        _wf(
             "vb", "unit", "internal", True, True, False,
             "IsVisibleByTeam(BLUE): the fog gate. It does not become a feature; "
             "it decides which rows reach the actor at all, so poisoning it MUST "
@@ -338,10 +351,11 @@ WIRE_FIELDS: Dict[str, WireField] = dict(
             "gate, so it is not actor-invariant",
         ),
         _wf(
-            "cs", "unit", "actor", False, True, True,
+            "cs", "unit", "actor", True, True, True,
             "own creep score is on the agent's own HUD; the ENEMY's is privileged. "
-            "The control channel does not emit it, so CreepScoreEstimator infers "
-            "it from minion deaths in range",
+            "The control channel DOES emit this now (added 2026-09-11 so cs_at_10 "
+            "could be recorded at all); CreepScoreEstimator's inference from "
+            "minion deaths remains the fallback for recordings that predate it",
             poison=999,
         ),
         _wf(

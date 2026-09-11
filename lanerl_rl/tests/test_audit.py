@@ -252,6 +252,10 @@ def test_the_real_emitter_parses(monkeypatch):
         "t", "u", "id", "k", "tm", "x", "y", "hp", "mhp", "vb", "vr",
         "gold", "xp", "lvl", "rc", "tgt", "atk", "mo",
         "cd0", "cd1", "cd2", "cd3",
+        # added 2026-09-11: cs so cs_at_10 can be recorded at all, and
+        # demo/slot for behaviour-cloning labels. Still an EXACT match --
+        # a new emitted key must fail here until it is classified.
+        "cs", "demo", "slot",
     }, sorted(keys)
 
 
