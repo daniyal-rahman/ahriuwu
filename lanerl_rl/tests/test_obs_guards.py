@@ -317,3 +317,31 @@ def test_a_teleport_does_not_produce_a_velocity_spike():
     m2.observe(0.0, u(12000.0, 12000.0))
     m2.observe(300.0, u(26.0, 280.0))
     assert m2.velocity(300.0) == (0.0, 0.0), "teleport reported a velocity"
+
+
+def test_flash_survives_the_teleport_filter():
+    """The first version of the filter deleted Flash.
+
+    Garen carries Flash (garen1v1.json summoner1): a ~400-unit blink, which
+    over the 200 ms velocity window implies 2000 u/s. A 1500 u/s speed cap
+    zeroed it, destroying a real movement the agent has to see. Only genuine
+    teleports -- recall, respawn -- may be filtered.
+    """
+    from lanerl_rl.frame import UnitMemory, Unit
+    from lanerl_rl import constants as C
+
+    def u(x, y):
+        return Unit(id=1, kind="Champion", etype="champion", team=C.TEAM_BLUE,
+                    x=x, y=y, hp=100.0, mhp=100.0)
+
+    m = UnitMemory(etype="champion", team=C.TEAM_BLUE)
+    m.observe(0.0, u(5000.0, 5000.0))
+    m.observe(C.VEL_WINDOW_MS, u(5400.0, 5000.0))      # a 400-unit Flash
+    vx, _ = m.velocity(C.VEL_WINDOW_MS)
+    assert vx > 0.0, "Flash was filtered out as a teleport"
+
+    # ...while a recall to the fountain still is one
+    m2 = UnitMemory(etype="champion", team=C.TEAM_BLUE)
+    m2.observe(0.0, u(12000.0, 12000.0))
+    m2.observe(C.VEL_WINDOW_MS, u(26.0, 280.0))
+    assert m2.velocity(C.VEL_WINDOW_MS) == (0.0, 0.0), "recall was not filtered"

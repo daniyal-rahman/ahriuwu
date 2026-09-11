@@ -146,12 +146,12 @@ def main() -> int:
             is_move = torch.as_tensor(
                 (heads["button"][idx] == idx_move_g).astype("float32"))
             loss = F.cross_entropy(
-                dist.button.logits.reshape(len(idx), -1),
+                dist.logits["button"].reshape(len(idx), -1),
                 torch.as_tensor(heads["button"][idx]),
             )
             for head in ("move_x", "move_z"):
                 ce = F.cross_entropy(
-                    getattr(dist, head).logits.reshape(len(idx), -1),
+                    dist.logits[head].reshape(len(idx), -1),
                     torch.as_tensor(heads[head][idx]),
                     reduction="none",
                 )
@@ -161,7 +161,7 @@ def main() -> int:
         policy.eval()
         with torch.no_grad():
             dist = batch_logits(val_i)
-            pred = dist.button.logits.reshape(len(val_i), -1).argmax(-1).numpy()
+            pred = dist.logits["button"].reshape(len(val_i), -1).argmax(-1).numpy()
             acc = float((pred == heads["button"][val_i]).mean())
         print(f"  epoch {epoch}: train_loss={tot/max(1,seen):.4f}  val_button_acc={acc:.3f}")
 

@@ -406,12 +406,24 @@ NORM_XY = 3000.0
 NORM_DIST = 3000.0
 NORM_VEL = 600.0  # units/s; Garen base MoveSpeed is 345
 
-#: Above this, a frame-to-frame displacement is a TELEPORT (recall, episode
-#: reset), not motion, and the finite-difference velocity is meaningless.
-#: Garen caps around 345 u/s; even every haste in the game stacked stays far
-#: under this. Set well above any real speed so it only ever catches
-#: discontinuities.
-MAX_PLAUSIBLE_SPEED = 1500.0
+#: Teleport detection for the finite-difference velocity, as a DISPLACEMENT
+#: budget rather than a speed cap.
+#:
+#: A speed cap was the first attempt and it was wrong: Garen carries Flash
+#: (garen1v1.json summoner1), a legitimate ~400-unit blink, which over the
+#: 200 ms velocity window implies 2000 u/s and would have been silently
+#: deleted -- destroying a real movement the agent must see. A speed cap also
+#: depends on the sample window, so it misfires whenever a unit has been
+#: unseen for a while.
+#:
+#: Budget = what walking could cover in dt, with slack, PLUS one blink:
+#:     max_step = MAX_WALK_SPEED * dt * WALK_SLACK + BLINK_ALLOWANCE
+#: Walking 200 ms -> 69 units (budget 704, kept). Flash -> 400 (kept).
+#: Recall/respawn to fountain -> ~12,000 (rejected). Unseen 3 s then seen
+#: walking -> 1035 against a budget of 2152 (kept).
+MAX_WALK_SPEED = 345.0        # Garen base MoveSpeed
+WALK_SLACK = 1.5              # haste, boots, terrain shortcuts
+BLINK_ALLOWANCE = 600.0       # Flash is ~400; longest blink in game ~500
 NORM_GOLD = 3000.0
 NORM_CS = 200.0
 NORM_XP = 10000.0

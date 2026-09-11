@@ -993,12 +993,16 @@ class UnitMemory:
         # A TELEPORT has no finite-difference velocity. Recall yanks the
         # champion ~12,000 units to the fountain and an episode reset does the
         # same, so this difference reported ~20,000 units/s -- normalised to
-        # -34 in an actor field whose healthy range is under 1 (Garen's base
-        # move speed is 345 u/s against NORM_VEL 600). The observation guard
-        # caught it on live demo collection. Report zero rather than a number
-        # that is off by 60x: we genuinely do not know the velocity across a
-        # discontinuity, and 0 is the honest answer.
-        if math.hypot(vx, vy) > C.MAX_PLAUSIBLE_SPEED:
+        # -34 in an actor field whose healthy range is under 1. Found by the
+        # observation guard firing on live demo collection.
+        #
+        # The test is a DISPLACEMENT budget, not a speed cap. A speed cap of
+        # 1500 u/s was the first attempt and it silently deleted Flash (~400
+        # units, which over the 200 ms window implies 2000 u/s) -- a real
+        # movement the agent must perceive. It also scaled wrongly with dt.
+        step = math.hypot(self.last_x - past[1], self.last_y - past[2])
+        budget = C.MAX_WALK_SPEED * dt * C.WALK_SLACK + C.BLINK_ALLOWANCE
+        if step > budget:
             return 0.0, 0.0
         return vx, vy
 
