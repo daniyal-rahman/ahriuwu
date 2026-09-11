@@ -42,8 +42,14 @@ while :; do
     latest=$(ls -1 "$RUNDIR"/checkpoints/update_*.pt 2>/dev/null | tail -1)
     updates=$(grep -c '"kind":"update"' "$RUNDIR/metrics.jsonl" 2>/dev/null || echo 0)
 
-    if [ "$ckpts" -ne "$last_ckpt_count" ]; then
-        last_ckpt_count=$ckpts
+    # Progress is the UPDATE COUNT, not the number of checkpoint FILES.
+    # --keep-last-checkpoints 8 caps that file count at 8, so once the run had
+    # written 8 it never changed again, every poll looked like a stall, and this
+    # watchdog cancelled four perfectly healthy jobs before spending its budget.
+    # A watchdog that kills the thing it is guarding is worse than none.
+    progress=$updates
+    if [ "$progress" -ne "$last_ckpt_count" ]; then
+        last_ckpt_count=$progress
         last_progress=$now
     fi
     stalled=$(( now - last_progress ))
