@@ -397,6 +397,15 @@ def collect_rollout(
         raise ValueError("num_steps must be >= 2 (one iteration is reward-alignment lag)")
     buffer = RecurrentRolloutBuffer(num_steps - 1, n, cfg=actor.policy.cfg, device=actor.device)
     episodes: List[EpisodeResult] = []
+    # Per-instance episode accounting. Both of these used to be placeholders:
+    # length_steps was the ROLLOUT index t (0..num_steps, so it averaged ~half
+    # the rollout regardless of the real episode), and cs_at_10 was hardcoded
+    # None -- so the headline skill metric for a laner was never recorded at
+    # all, across 9126 updates and 1026 episodes.
+    ep_state = getattr(driver, "_lanerl_ep_state", None)
+    if ep_state is None:
+        ep_state = {}
+        setattr(driver, "_lanerl_ep_state", ep_state)
 
     pending: Optional[Dict[str, Any]] = None
     last_values_now: Optional[torch.Tensor] = None
@@ -407,6 +416,9 @@ def collect_rollout(
         # every slot at the end of the same call. Reading it after step() would
         # describe the *next* iteration's resets, not this one's.
         resets_before = list(driver._pending_resets)
+        for _i in range(n):
+            st = ep_state.setdefault(_i, {"steps": 0})
+            st["steps"] += 1
         result, dones = driver.step()
         obs_now = actor.last_batch
         log_probs_now = actor.last_log_probs
@@ -437,14 +449,26 @@ def collect_rollout(
                 state=pending["state"],
             )
             for i, reason in dones.items():
+                raw_i = None
+                try:
+                    raw_i = driver.env.last_obs[i]
+                except Exception:
+                    raw_i = None
+                game_ms, cs_by_team = _episode_readout(raw_i)
+                st = ep_state.pop(i, None)
+                # CS@10 only means something for an episode that REACHED 10
+                # minutes; a death-ended game has not had the chance to farm one.
+                cs10 = None
+                if reason == "time" and cs_by_team:
+                    cs10 = float(max(cs_by_team.values()))
                 episodes.append(
                     EpisodeResult(
                         agent=policy_key,
                         opponent_id=policy_key,
                         opponent_category="self",
                         score=0.5,
-                        cs_at_10=None,
-                        length_steps=t,
+                        cs_at_10=cs10,
+                        length_steps=int(st["steps"]) if st else 0,
                         reason=reason,
                         instance=i,
                     )
@@ -530,3 +554,22 @@ def make_collect_fn(
         )
 
     return collect
+
+
+def _episode_readout(raw) -> Tuple[int, Dict[int, int]]:
+    """Game time (ms) and per-team champion CS from a raw control-channel obs.
+
+    Returns ``(0, {})`` for anything unreadable rather than raising: a metrics
+    readout must never be able to kill a training run.
+    """
+    if not isinstance(raw, dict):
+        return 0, {}
+    try:
+        t = int(raw.get("t", 0))
+        cs: Dict[int, int] = {}
+        for u in raw.get("u", ()):
+            if u.get("k") == "Champion" and u.get("cs") is not None:
+                cs[int(u.get("tm", 0))] = int(u["cs"])
+        return t, cs
+    except Exception:
+        return 0, {}
