@@ -822,7 +822,13 @@ class ApproxFogModel:
     should only ever be taken by offline replays of the old recorder.
     """
 
-    def __init__(self, warn: bool = True):
+    def __init__(self, warn: bool = False):
+        # warn defaults FALSE now. This used to warn on CONSTRUCTION, so the
+        # trainer printed "falling back to ApproxFogModel" at startup merely for
+        # building the fallback object -- while live frames were in fact using
+        # server fog. A warning that cries wolf every run is worse than none:
+        # it trains you to ignore the real one. visible_ids_for warns instead,
+        # at the moment a frame actually lacks vb/vr.
         global _FOG_WARNED
         if warn and not _FOG_WARNED:
             _FOG_WARNED = True
@@ -895,6 +901,15 @@ def visible_ids_for(frame: Frame, team: int, fog: Optional[ApproxFogModel] = Non
     if units and all(u.visible_to is not None for u in units):
         return {u.id for u in units if (team in u.visible_to or not u.affected_by_fow)}, "server"
     model = fog if fog is not None else ApproxFogModel()
+    global _FOG_WARNED
+    if not _FOG_WARNED:
+        _FOG_WARNED = True
+        warnings.warn(
+            "lanerl_rl: a frame lacked per-unit visibility ('vb'/'vr'); using "
+            "ApproxFogModel (radius-only, no terrain line-of-sight). This is the "
+            "REAL fallback -- server fog is not being applied for this frame.",
+            RuntimeWarning, stacklevel=2,
+        )
     return model.visible_ids(frame, team), "approx"
 
 

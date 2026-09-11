@@ -97,7 +97,12 @@ def _state(run_dir):
 
 
 def _latest_checkpoint_update(run_dir):
-    ckpts = sorted((run_dir / "checkpoints").glob("update_*"))
+    # "update_*.pt", NOT "update_*": run.py writes checkpoints atomically as
+    # update_N.pt.tmp then os.replace()s them into place. The looser glob caught
+    # the temp file mid-write, and Path.stem strips only the LAST suffix, so
+    # "update_00000005.pt.tmp" -> stem "update_00000005.pt" -> int("00000005.pt")
+    # -> ValueError. A race in this helper, not in the trainer.
+    ckpts = sorted((run_dir / "checkpoints").glob("update_*.pt"))
     if not ckpts:
         return None
     # update_00000003.pt -> 3
@@ -119,7 +124,7 @@ def test_sigterm_checkpoints_fast_and_resume_continues_forward(run_name):
     try:
         _wait_for(
             lambda: (run_dir / "checkpoints").exists()
-            and any((run_dir / "checkpoints").glob("update_*")),
+            and any((run_dir / "checkpoints").glob("update_*.pt")),
             BOOT_AND_CHECKPOINT_TIMEOUT_S,
             "first checkpoint (real server boot + one rollout + one PPO update)",
         )
