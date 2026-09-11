@@ -405,6 +405,13 @@ KIND_TO_TYPE = {
 NORM_XY = 3000.0
 NORM_DIST = 3000.0
 NORM_VEL = 600.0  # units/s; Garen base MoveSpeed is 345
+
+#: Above this, a frame-to-frame displacement is a TELEPORT (recall, episode
+#: reset), not motion, and the finite-difference velocity is meaningless.
+#: Garen caps around 345 u/s; even every haste in the game stacked stays far
+#: under this. Set well above any real speed so it only ever catches
+#: discontinuities.
+MAX_PLAUSIBLE_SPEED = 1500.0
 NORM_GOLD = 3000.0
 NORM_CS = 200.0
 NORM_XP = 10000.0

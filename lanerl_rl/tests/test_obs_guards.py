@@ -289,3 +289,31 @@ def test_the_disabled_path_costs_one_environment_lookup(monkeypatch, obs):
     for _ in range(50):
         check_observation(obs)
     assert scanned == []
+
+
+def test_a_teleport_does_not_produce_a_velocity_spike():
+    """Recall and episode reset move the champion ~12,000 units instantly.
+
+    The finite difference reported ~20,000 units/s, which normalised to -34 in
+    an actor field whose healthy range is under 1. Caught by the observation
+    guard on live demo collection, not by a test -- hence this one.
+    """
+    from lanerl_rl.frame import UnitMemory, Unit
+    from lanerl_rl import constants as C
+
+    def u(x, y):
+        return Unit(id=1, kind="Champion", etype="champion", team=C.TEAM_BLUE,
+                    x=x, y=y, hp=100.0, mhp=100.0)
+
+    # walking normally: the velocity is real and must survive
+    m = UnitMemory(etype="champion", team=C.TEAM_BLUE)
+    m.observe(0.0, u(1000.0, 1000.0))
+    m.observe(300.0, u(1000.0 + 345.0 * 0.3, 1000.0))
+    vx, _vy = m.velocity(300.0)
+    assert 300.0 < abs(vx) < 400.0, f"normal walking velocity was mangled: {vx}"
+
+    # teleport to fountain: no finite-difference velocity exists
+    m2 = UnitMemory(etype="champion", team=C.TEAM_BLUE)
+    m2.observe(0.0, u(12000.0, 12000.0))
+    m2.observe(300.0, u(26.0, 280.0))
+    assert m2.velocity(300.0) == (0.0, 0.0), "teleport reported a velocity"

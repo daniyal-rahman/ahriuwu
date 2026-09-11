@@ -989,7 +989,18 @@ class UnitMemory:
         dt = (self.last_seen_ms - past[0]) / 1000.0
         if dt <= 1e-6:
             return 0.0, 0.0
-        return (self.last_x - past[1]) / dt, (self.last_y - past[2]) / dt
+        vx, vy = (self.last_x - past[1]) / dt, (self.last_y - past[2]) / dt
+        # A TELEPORT has no finite-difference velocity. Recall yanks the
+        # champion ~12,000 units to the fountain and an episode reset does the
+        # same, so this difference reported ~20,000 units/s -- normalised to
+        # -34 in an actor field whose healthy range is under 1 (Garen's base
+        # move speed is 345 u/s against NORM_VEL 600). The observation guard
+        # caught it on live demo collection. Report zero rather than a number
+        # that is off by 60x: we genuinely do not know the velocity across a
+        # discontinuity, and 0 is the honest answer.
+        if math.hypot(vx, vy) > C.MAX_PLAUSIBLE_SPEED:
+            return 0.0, 0.0
+        return vx, vy
 
     def hp_delta(self, window_ms: float) -> float:
         """``hp_frac(now) - hp_frac(now - window)``; 0.0 without enough history."""
