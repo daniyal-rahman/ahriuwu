@@ -243,6 +243,34 @@ def test_episode_length_counts_decisions_and_survives_a_rollout_boundary():
     )
 
 
+def test_the_adapter_registry_does_not_grow_with_the_rollout():
+    """It grew by ~0.6 entries per decision and nothing ever removed one."""
+    insts = [FakeInstance(i) for i in range(2)]
+    env = build_env_with(insts)
+    policy = small_policy()
+    actor = LanePolicyActor(policy)
+    adapters = make_lane_adapters(train_step_source=lambda: 0)
+    driver = VecDriver(
+        env,
+        policies={SELF: actor},
+        adapter_factory=adapters.adapter_factory,
+        encoder=adapters.encoder,
+        assignments=[SideAssignment(blue=SELF, red=SELF) for _ in insts],
+        episode=EpisodeSpec(max_game_ms=10**9),
+    )
+    driver.start()
+    sizes = []
+    for _ in range(6):
+        collect_rollout(
+            driver, actor, adapters.reward_contexts, SELF,
+            num_steps=16, gamma=0.99, gae_lambda=0.95,
+        )
+        sizes.append(len(adapters.registry))
+    env.close()
+    # One live entry per instance is all the build->encode handoff needs.
+    assert max(sizes) <= len(insts), f"registry grew across rollouts: {sizes}"
+
+
 def test_rollout_reports_rows_and_the_slot_width_they_cover():
     """`steps` is buffer ROWS; decisions are rows x parallel_envs."""
     insts = [FakeInstance(i) for i in range(2)]

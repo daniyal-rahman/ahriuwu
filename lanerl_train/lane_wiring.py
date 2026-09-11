@@ -161,6 +161,14 @@ class LaneObservationAdapter:
     calls the encoder) touches the same instance's ``raw``, and
     ``VecLaneEnv.last_obs`` keeps every raw object alive for that whole
     window -- so the id cannot have been recycled in between.
+
+    Each adapter keeps exactly ONE registration and drops its previous one on
+    every build, which is the only thing that bounds the registry: nothing
+    ever removed an entry, so it grew by ~0.6 entries per decision (measured:
+    1,215 entries after 2,048 decisions, the shortfall being ``id`` reuse).
+    At the first run's 33M decisions that is on the order of 20M live dict
+    entries in the actor thread, for a map whose entries are needed for the
+    few microseconds between ``build`` and ``encode``.
     """
 
     def __init__(
@@ -179,12 +187,24 @@ class LaneObservationAdapter:
         self._train_step_source = train_step_source
         self.last_frame: Optional[Frame] = None
         self.last_slot_netids: List[Optional[int]] = [None] * C.N_SLOTS
+        self._registered_id: Optional[int] = None
 
     def reset(self) -> None:
         self.builder.reset()
         self.last_frame = None
         self.last_slot_netids = [None] * C.N_SLOTS
         self.reward_ctx.mark_reset()
+
+    def _register(self, raw_id: int) -> None:
+        """Take this adapter's single slot in the shared registry."""
+        if self._registered_id is not None and self._registered_id != raw_id:
+            entry = self._registry.get(self._registered_id)
+            if entry is not None:
+                entry.pop(self.side, None)
+                if not entry:
+                    self._registry.pop(self._registered_id, None)
+        self._registered_id = raw_id
+        self._registry.setdefault(raw_id, {})[self.side] = self
 
     def build(self, raw: RawObs, side: Side) -> AgentObservation:
         assert side == self.side, (side, self.side)
@@ -196,7 +216,7 @@ class LaneObservationAdapter:
         self.last_frame = frame
         self.last_slot_netids = _slot_netids_for(self.builder, frame, self.team)
         self.reward_ctx.step_once(id(raw), frame, self._train_step_source())
-        self._registry.setdefault(id(raw), {})[side] = self
+        self._register(id(raw))
         return obs
 
 
