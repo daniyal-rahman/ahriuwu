@@ -18,6 +18,10 @@ REPO=/mnt/nfs/projects/ahriuwu-lanerl          # portable on BOTH nodes
 RUNDIR="$REPO/runs/$RUN"
 LOGDIR="$REPO/lanerl/logs"
 STATUS="$LOGDIR/watchdog-$RUN.log"
+# Anchor evaluation now starts real game servers, so a resubmit must pin its
+# own port base or it collides with the actors. max_staleness dropped 4 -> 2:
+# 4 was chosen to silence rejections, and queue_capacity+num_actors-1 = 4 meant
+# the run sat AT the bound (mean 3.31), which is most of the clip fraction.
 MAX_RESUBMITS=8
 POLL_S=300
 STALL_S=1800          # no new checkpoint for this long => treat as hung
@@ -73,8 +77,8 @@ while :; do
                --run-name $RUN --num-actors 3 --envs-per-actor 4 \
                --rollout-steps 256 --total-updates 20000 \
                --checkpoint-every 25 --snapshot-every 200 --eval-every 400 \
-               --keep-last-checkpoints 8 --max-staleness 4 --queue-capacity 2 \
-               --device cuda --port-base 5700 --resume" >> "$STATUS" 2>&1
+               --keep-last-checkpoints 12 --max-staleness 2 --queue-capacity 2 \
+               --device cuda --port-base 5700 --anchor-port-base 31000 --resume" >> "$STATUS" 2>&1
     elif [ "$stalled" -ge "$STALL_S" ]; then
         # Running but producing nothing: a wedged server or a deadlocked
         # lockstep read looks exactly like this, and would burn the whole night.

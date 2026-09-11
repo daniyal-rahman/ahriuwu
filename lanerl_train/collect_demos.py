@@ -146,13 +146,24 @@ def main() -> int:
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    # Save EVERY field the model consumes, not just the three actor arrays.
+    # LanePolicy.forward also needs priv_entities / priv_vec / the pad masks,
+    # and the action masks; a dataset missing them cannot be fed to the network
+    # at all, and reconstructing them later would mean a second, divergent
+    # observation path -- the exact mismatch this collector exists to avoid.
+    from lanerl_rl.infer import _FLOAT_KEYS, _BOOL_KEYS, _MASK_KEYS
+
+    arrays = {k: np.stack([getattr(o, k) for o in all_obs]) for k in _FLOAT_KEYS}
+    arrays.update({k: np.stack([getattr(o, k) for o in all_obs]) for k in _BOOL_KEYS})
+    arrays.update({
+        f"mask_{k}": np.stack([getattr(o.action_mask, k) for o in all_obs])
+        for k in _MASK_KEYS
+    })
     np.savez_compressed(
         out,
-        entities=np.stack([o.entities for o in all_obs]),
-        self_vec=np.stack([o.self_vec for o in all_obs]),
-        global_vec=np.stack([o.global_vec for o in all_obs]),
         label_json=np.array([json.dumps(d) for d in all_lab]),
         side=np.array(all_side),
+        **arrays,
     )
     hist = Counter(d.get("t") for d in all_lab)
     print(f"\nwrote {out}  n={len(all_lab)}  actions={dict(hist)}")

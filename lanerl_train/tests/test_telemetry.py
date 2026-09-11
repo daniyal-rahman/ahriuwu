@@ -273,3 +273,20 @@ def test_shutdown_record_carries_the_lifetime_throughput(run_dir):
     ][0]
     assert rec["total_wall_s"] == pytest.approx(3.0)
     assert rec["mean_decisions_per_s"] == pytest.approx(60 / 3.0)
+
+
+def test_the_server_rate_and_the_ppo_rate_cannot_disagree():
+    """They did, for the whole first run.
+
+    ServerLaunchSpec.step_ticks was hardcoded 4 (15 Hz) while
+    lanerl_rl.constants.STEP_TICKS said 2 (30 Hz). PPOConfig derives gamma from
+    the constant, so `--horizon-s 30` silently bought a 60 s horizon, and
+    global_vec.dt_norm sat at a constant 2.0. Two sources of truth for one
+    physical quantity is the bug; this test is the single source.
+    """
+    from lanerl_train.vec import ServerLaunchSpec
+    from lanerl_rl import constants as C
+    from lanerl_rl.ppo import PPOConfig
+
+    assert ServerLaunchSpec().step_ticks == C.STEP_TICKS
+    assert PPOConfig().decision_hz == C.SERVER_TICK_HZ / ServerLaunchSpec().step_ticks

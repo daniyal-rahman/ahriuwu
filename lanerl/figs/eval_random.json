@@ -1,0 +1,39 @@
+{
+  "label": "random",
+  "rows": [
+    {
+      "t_s": 600.013,
+      "blue_cs": 10,
+      "red_cs": 44,
+      "blue_gold": 1553,
+      "red_gold": 1303,
+      "blue_lvl": 6,
+      "red_lvl": 9,
+      "blue_hp_lost": 4436,
+      "distance_travelled": 106427,
+      "buttons": {
+        "move": 8155,
+        "cast": 2696,
+        "attack": 5325,
+        "noop": 1825
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 0,
+      "red_cs": 54,
+      "blue_gold": 1413,
+      "red_gold": 2138,
+      "blue_lvl": 1,
+      "red_lvl": 9,
+      "blue_hp_lost": 682,
+      "distance_travelled": 23945,
+      "buttons": {
+        "move": 8164,
+        "noop": 1702,
+        "attack": 5505,
+        "cast": 2630
+      }
+    }
+  ]
+}

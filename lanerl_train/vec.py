@@ -73,6 +73,8 @@ log = logging.getLogger("lanerl_train.vec")
 #: the old payload is an unknown top-level key, which makes the whole line
 #: Fatal, so the episode did not reset **and** neither champion moved.  Silent
 #: in the logs, visible only as a game clock that never rewinds.
+from lanerl_rl import constants as _C
+
 RESET_ACTION = {"cmd": "reset"}
 
 #: What ``LanerlWire.Parse`` accepts at the top level of an action line.
@@ -104,7 +106,13 @@ class ServerLaunchSpec:
     config_path: Optional[Path] = None
     server_dir: Optional[Path] = None
     dotnet_root: Optional[Path] = None
-    step_ticks: int = 4  # 4 ticks at the server's 60 Hz == 15 Hz decisions
+    #: Server ticks per decision. DERIVED, never a second literal: this was
+    #: hardcoded to 4 (15 Hz) while lanerl_rl.constants.STEP_TICKS said 2
+    #: (30 Hz), so PPOConfig computed gamma for 30 Hz while the servers ran at
+    #: 15. `--horizon-s 30` therefore bought a 60 s horizon -- double what was
+    #: asked for -- and global_vec.dt_norm sat at a constant 2.0. Confirmed
+    #: from the run's own logs: 111.6 ticks/s / 27.7 decisions/s = 4.03.
+    step_ticks: int = _C.STEP_TICKS
     toponly: bool = True
     freerun: bool = True
     #: Which champions the *in-server scripted bot* drives: "none" for
