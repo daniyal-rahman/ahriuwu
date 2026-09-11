@@ -1,0 +1,163 @@
+#!/usr/bin/env python
+"""Collect (observation, action) demonstrations from the scripted bot.
+
+Why behaviour cloning at all: PPO from random init provably cannot solve this
+task. Travel per decision is 345 u/s / 30 Hz = 11.5 units, so reaching lane
+(11,866 units) by random walk needs ~1.06M steps -- 9.9 hours of game against a
+10-minute episode. The agent never saw a minion in 13,475 updates.
+
+The observations are built with the TRAINING adapter, so the BC set and the RL
+rollouts come from the same pipeline. A BC set built from a different
+observation path teaches the network to imitate on inputs it will never see.
+
+Labels come from the server's per-champion "demo" field: the order the bot
+actually committed to, in the RL action space. That field is registered
+server-only in the leak audit -- it is the supervised TARGET, never an input.
+
+  python -m lanerl_train.collect_demos --games 4 --out demos/bot.npz
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import socket
+import subprocess
+import sys
+import time
+from collections import Counter
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import numpy as np
+
+_REPO = Path(__file__).resolve().parents[1]
+_PROJECTS = _REPO.parent
+VENDOR = _PROJECTS / "lanerl-vendor"
+BIN = VENDOR / "LoLServer/GameServerConsole/bin/Release/net6.0"
+CFG = _REPO / "lanerl/cfg/garen1v1.json"
+sys.path.insert(0, str(_REPO))
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def collect_game(max_game_ms: int, step_ticks: int, log: Path,
+                 keep_noop_frac: float) -> Dict[str, List]:
+    """One bot-vs-bot game; returns per-side observation/label lists."""
+    from lanerl_train.lane_wiring import make_lane_adapters
+
+    adapters = make_lane_adapters(train_step_source=lambda: 0)
+    builders = {"blue": adapters.adapter_factory(0, "blue"),
+                "red": adapters.adapter_factory(0, "red")}
+    team_of = {"blue": 100, "red": 200}
+
+    cport, gport = free_port(), free_port()
+    env = dict(os.environ)
+    env.update(
+        DOTNET_ROOT=str(VENDOR / "dotnet"),
+        LANERL_HEADLESS="1", LANERL_FREERUN="1",
+        LANERL_BOT="both",                      # both sides demonstrate
+        LANERL_CONTROL_PORT=str(cport),
+        LANERL_STEP_TICKS=str(step_ticks),
+    )
+    proc = subprocess.Popen(
+        [str(BIN / "GameServerConsole"), "--config", str(CFG), "--port", str(gport)],
+        cwd=str(BIN), env=env, stdout=log.open("w"), stderr=subprocess.STDOUT,
+    )
+    out: Dict[str, List] = {"obs": [], "label": [], "side": []}
+    rng = np.random.default_rng(0)
+    try:
+        sock = None
+        for _ in range(120):
+            try:
+                sock = socket.create_connection(("127.0.0.1", cport), timeout=2)
+                break
+            except OSError:
+                time.sleep(1)
+        if sock is None:
+            raise RuntimeError(f"server never opened control port {cport}")
+        f = sock.makefile("rwb")
+        empty = (json.dumps({}, separators=(",", ":")) + "\n").encode()
+
+        raw = json.loads(f.readline())
+        while raw is not None and int(raw.get("t", 0)) < max_game_ms:
+            for side, team in team_of.items():
+                ch = next((u for u in raw.get("u", [])
+                           if u.get("k") == "Champion" and u.get("tm") == team), None)
+                if ch is None:
+                    continue
+                demo = ch.get("demo")
+                if not demo:
+                    continue
+                kind = demo.get("t", "noop")
+                # noop dominates ~80% of frames because the bot decides on a
+                # 150 ms reaction clock while we observe at 30 Hz. Keeping all
+                # of them would train a policy that mostly stands still.
+                if kind == "noop" and rng.random() > keep_noop_frac:
+                    continue
+                try:
+                    obs = builders[side].build(raw, side)
+                except Exception:
+                    continue
+                out["obs"].append(obs)
+                out["label"].append(demo)
+                out["side"].append(side)
+            f.write(empty)
+            f.flush()
+            line = f.readline()
+            raw = json.loads(line) if line else None
+        return out
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--games", type=int, default=2)
+    ap.add_argument("--max-game-ms", type=int, default=600_000)
+    ap.add_argument("--step-ticks", type=int, default=2)
+    ap.add_argument("--keep-noop-frac", type=float, default=0.15,
+                    help="fraction of no-op frames to keep (they are ~80%% of all frames)")
+    ap.add_argument("--out", default="demos/bot_demos.npz")
+    args = ap.parse_args()
+
+    logdir = _REPO / "lanerl/logs"
+    logdir.mkdir(parents=True, exist_ok=True)
+    all_obs, all_lab, all_side = [], [], []
+    for g in range(args.games):
+        got = collect_game(args.max_game_ms, args.step_ticks,
+                           logdir / f"demos_{g}.log", args.keep_noop_frac)
+        all_obs += got["obs"]; all_lab += got["label"]; all_side += got["side"]
+        hist = Counter(d.get("t") for d in got["label"])
+        print(f"  game {g}: {len(got['label'])} samples  {dict(hist)}")
+
+    if not all_lab:
+        print("NO DEMONSTRATIONS COLLECTED -- refusing to write an empty dataset")
+        return 1
+
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        out,
+        entities=np.stack([o.entities for o in all_obs]),
+        self_vec=np.stack([o.self_vec for o in all_obs]),
+        global_vec=np.stack([o.global_vec for o in all_obs]),
+        label_json=np.array([json.dumps(d) for d in all_lab]),
+        side=np.array(all_side),
+    )
+    hist = Counter(d.get("t") for d in all_lab)
+    print(f"\nwrote {out}  n={len(all_lab)}  actions={dict(hist)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
