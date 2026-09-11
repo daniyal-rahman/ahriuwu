@@ -349,6 +349,11 @@ class ThroughputMeter:
         self.updates = 0
         self.total_steps = 0
         self.total_decisions = 0
+        #: What :meth:`seed` carried in from a previous process, so the
+        #: lifetime rates in :meth:`totals` stay rates *of this process* while
+        #: the cumulative counters stay cumulative over the whole run.
+        self._seed_steps = 0
+        self._seed_decisions = 0
         self.total_wait_s = 0.0
         self.total_learner_s = 0.0
         self.total_rejected_s = 0.0
@@ -397,6 +402,23 @@ class ThroughputMeter:
         self._wait_s = 0.0
         self._learner_s = 0.0
 
+    def seed(self, total_steps: int, total_decisions: int) -> None:
+        """Adopt a resumed run's lifetime counters.
+
+        Without this, ``total_decisions`` in the metrics restarts at zero on
+        every resume -- the first run resumed 7 times -- so the log offers no
+        cumulative sample count at all, which is the very confusion the
+        rows-vs-decisions split exists to end.  The window baseline moves with
+        it, or the first update after a resume reports a rate computed against
+        millions of steps in no time at all.
+        """
+        self.total_steps = int(total_steps)
+        self.total_decisions = int(total_decisions)
+        self._seed_steps = self.total_steps
+        self._seed_decisions = self.total_decisions
+        self._marks.clear()
+        self._marks.append((float(self._clock()), self.total_steps, self.total_decisions))
+
     def record(self, steps: int, parallel_envs: int = 1) -> Dict[str, Any]:
         """Close out one update and return the row fields to log."""
         now = float(self._clock())
@@ -436,8 +458,14 @@ class ThroughputMeter:
             "total_learner_s": self.total_learner_s,
             "total_rejected_s": self.total_rejected_s,
             "mean_updates_per_s": (self.updates / span) if span > 0 else None,
-            "mean_env_steps_per_s": (self.total_steps / span) if span > 0 else None,
-            "mean_decisions_per_s": (self.total_decisions / span) if span > 0 else None,
+            # Net of anything `seed` carried in: these are rates of THIS
+            # process, while the cumulative counters span the whole run.
+            "mean_env_steps_per_s": (
+                (self.total_steps - self._seed_steps) / span if span > 0 else None
+            ),
+            "mean_decisions_per_s": (
+                (self.total_decisions - self._seed_decisions) / span if span > 0 else None
+            ),
         }
 
 
@@ -703,7 +731,20 @@ class RunState:
 
     update: int = 0
     param_version: int = 0
+    #: Rollout ROWS, summed over every accepted rollout -- **not** decisions.
+    #: One row covers ``Rollout.parallel_envs`` simultaneous decisions, so the
+    #: first run's 4,131,000 "env steps" were 33,048,000 decisions (8 slots: 2
+    #: sides x 4 instances).  Kept in rows deliberately: the reward's zero-sum
+    #: anneal is denominated in this number (``_anneal_clock_value``), and
+    #: redefining it mid-flight would restart the anneal on every existing run.
+    #: :attr:`total_decisions` is the honest sample count; use that one for
+    #: anything comparing this stack to a published sample budget.
     total_env_steps: int = 0
+    #: Environment decisions, ``sum(rows * parallel_envs)``.  Persisted rather
+    #: than left to :class:`ThroughputMeter`, whose copy starts from zero on
+    #: every resume -- the first run resumed 7 times, so its logged decision
+    #: count restarted 7 times too.
+    total_decisions: int = 0
     total_episodes: int = 0
     rng_state: Optional[list] = None
     league: Dict[str, Any] = field(default_factory=dict)
@@ -959,6 +1000,15 @@ class TrainingLoop:
         # And the training clock must carry the resumed position, or a resume
         # silently rewinds every env-side anneal to its start.
         self._publish_train_step()
+        if self.state.total_decisions == 0 and self.state.total_env_steps > 0:
+            log.warning(
+                "state.json has total_env_steps=%d but no total_decisions: it was written "
+                "before the two clocks were separated. The decision count starts from this "
+                "resume and UNDERSTATES the run; total_env_steps (rows) is unaffected and "
+                "so is the anneal. Multiply by the rollout's parallel_envs to recover it.",
+                self.state.total_env_steps,
+            )
+        self.throughput.seed(self.state.total_env_steps, self.state.total_decisions)
         self.metrics.write(
             "resume",
             update=self.state.update,
@@ -1080,6 +1130,7 @@ class TrainingLoop:
             metrics = dict(self.learner.update(rollout.data))
         self.state.update += 1
         self.state.total_env_steps += int(rollout.steps)
+        self.state.total_decisions += int(rollout.steps) * max(1, int(rollout.parallel_envs))
         self.state.param_version = self.store.publish(self._policy_payload())
         # Publish the training clock with the parameters, not on some other
         # cadence: an actor that has just pulled version N should be collecting
@@ -1098,7 +1149,15 @@ class TrainingLoop:
             actor=rollout.actor_id,
             steps=rollout.steps,
             parallel_envs=rollout.parallel_envs,
+            # Two clocks, both in every row, because one of them is a lie by
+            # any ordinary reading of its name: total_env_steps counts rollout
+            # ROWS (it is what the zero-sum anneal is denominated in and so
+            # cannot be redefined), total_decisions counts environment
+            # decisions -- rows x parallel_envs, 8x larger in the standard
+            # 4-instance mirror configuration.
             total_env_steps=self.state.total_env_steps,
+            total_env_rows=self.state.total_env_steps,
+            total_decisions=self.state.total_decisions,
             total_episodes=self.state.total_episodes,
             param_version=self.state.param_version,
             train_step=train_step,

@@ -251,6 +251,73 @@ def test_metrics_jsonl_alone_answers_compute_bound_or_env_bound(run_dir):
     assert "gpu/mem_allocated_mb" in last
 
 
+def test_every_update_row_states_rows_and_decisions_separately(run_dir):
+    """`total_env_steps` is rows. Nothing in the row used to say so.
+
+    The first run's state.json reads ``total_env_steps: 4131000``, which is a
+    perfectly plausible sample count and is not one: with 2 sides x 4
+    instances those rows are 33,048,000 decisions.  Both numbers are logged
+    now, and ``total_env_steps`` keeps its meaning because the reward's
+    zero-sum anneal is denominated in it.
+    """
+    clock = FakeClock()
+    cfg = RunConfig(run_dir=run_dir, num_actors=0, checkpoint_every=0, eval_every=0)
+    loop = TrainingLoop(
+        cfg,
+        FakeLearner(),
+        metrics=MetricsLog(run_dir / "metrics.jsonl"),
+        throughput=ThroughputMeter(window=4, clock=clock),
+        gpu=GpuProbe(device="cpu"),
+    )
+    for i in range(3):
+        loop.submit(Rollout(actor_id=0, param_version=i, steps=255, parallel_envs=8))
+        clock.advance(1.0)
+        loop.step_once(timeout=1.0)
+    last = read_updates(run_dir / "metrics.jsonl")[-1]
+    assert last["total_env_steps"] == 255 * 3
+    assert last["total_env_rows"] == 255 * 3
+    assert last["total_decisions"] == 255 * 8 * 3
+    assert last["throughput/total_decisions"] == last["total_decisions"]
+    assert loop.state.total_decisions == 255 * 8 * 3
+
+
+def test_the_decision_count_survives_a_resume(run_dir):
+    """It restarted at zero on each of the first run's seven resumes."""
+    clock = FakeClock()
+    cfg = RunConfig(run_dir=run_dir, num_actors=0, checkpoint_every=1, eval_every=0)
+    learner = FakeLearner()
+    loop = TrainingLoop(
+        cfg,
+        learner,
+        metrics=MetricsLog(run_dir / "metrics.jsonl"),
+        throughput=ThroughputMeter(window=4, clock=clock),
+        gpu=GpuProbe(device="cpu"),
+    )
+    for i in range(3):
+        loop.submit(Rollout(actor_id=0, param_version=i, steps=255, parallel_envs=8))
+        clock.advance(1.0)
+        loop.step_once(timeout=1.0)
+    loop.save_state(loop.checkpoints.save(loop.state.update, learner.state_payload()))
+    before = loop.state.total_decisions
+
+    clock2 = FakeClock()
+    resumed = TrainingLoop(
+        cfg,
+        FakeLearner(),
+        metrics=MetricsLog(run_dir / "metrics.jsonl"),
+        throughput=ThroughputMeter(window=4, clock=clock2),
+        gpu=GpuProbe(device="cpu"),
+    )
+    assert resumed.resume() is True
+    assert resumed.state.total_decisions == before
+    resumed.submit(Rollout(actor_id=0, param_version=99, steps=255, parallel_envs=8))
+    clock2.advance(1.0)
+    resumed.step_once(timeout=1.0)
+    last = read_updates(run_dir / "metrics.jsonl")[-1]
+    assert last["total_decisions"] == before + 255 * 8
+    assert last["throughput/total_decisions"] == last["total_decisions"]
+
+
 def test_shutdown_record_carries_the_lifetime_throughput(run_dir):
     clock = FakeClock()
     cfg = RunConfig(run_dir=run_dir, num_actors=0, checkpoint_every=0, eval_every=0)
