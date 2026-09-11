@@ -511,18 +511,35 @@ def test_a_self_play_episode_does_not_crash_the_run():
         MatchRecord(agent_a="self", agent_b="self", score_a=0.5)
 
 
-def test_record_episode_skips_rating_for_a_self_match(tmp_path):
-    """The real regression: record_episode must not build that MatchRecord."""
-    import inspect
-    from lanerl_train import run as run_mod
+@pytest.mark.parametrize("self_id", ["self", LATEST])
+def test_record_episode_skips_rating_for_a_self_match(run_dir, self_id):
+    """The real regression: record_episode must not build that MatchRecord.
 
-    src = inspect.getsource(run_mod.TrainingLoop.record_episode)
-    # both the evaluator call and the metrics "match" row must be guarded on
-    # agent != opponent, not only on the LATEST sentinel
-    assert src.count("ep.opponent_id != ep.agent") >= 2, (
-        "record_episode still rates a self-match; pure self-play will crash at "
-        "the first completed episode"
+    Was a grep over the source for the guard's exact text, which broke the
+    moment the guard was widened to also cover the run's own agent id. Driving
+    record_episode is strictly stronger: it fails if EITHER the evaluator call
+    or the metrics "match" row loses its guard, and it does not care how the
+    condition is spelled.
+    """
+    loop = make_loop(run_dir)
+    loop.record_episode(
+        EpisodeResult(agent=self_id, opponent_id=self_id, opponent_category="self",
+                      score=0.5, cs_at_10=20.0)
     )
+    assert loop.evaluator.table.players == [], "a self-match must not be rated"
+    lines = [json.loads(l) for l in (run_dir / "metrics.jsonl").read_text().splitlines()]
+    assert not [r for r in lines if r["kind"] == "match"]
+    assert [r for r in lines if r["kind"] == "episode"], "but it IS still an episode"
+
+
+def test_record_episode_skips_rating_against_the_runs_own_agent_id(run_dir):
+    """The widened guard: an opponent id equal to the run's own agent id."""
+    loop = make_loop(run_dir)
+    loop.record_episode(
+        EpisodeResult(agent="self", opponent_id=loop.agent_id(),
+                      opponent_category="latest", score=0.5)
+    )
+    assert loop.evaluator.table.players == []
 
 
 def test_milestone_checkpoints_survive_rotation(tmp_path):

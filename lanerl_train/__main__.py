@@ -45,9 +45,11 @@ from lanerl_rl.model import LanePolicy, ModelConfig
 from lanerl_rl.ppo import DualClipPPO, PPOConfig
 
 from . import paths
+from .anchor_eval import AnchorEvalConfig, AnchorEvaluator, make_anchor_driver_factory
+from .eval import DEFAULT_RUN_ANCHORS, Evaluator, anchors_for_run
 from .lane_wiring import LanePolicyActor, collect_rollout, make_collect_fn, make_lane_adapters
 from .ports import PortAllocator
-from .run import RunConfig, StalledRun, TrainingLoop
+from .run import GpuProbe, RunConfig, StalledRun, TrainingLoop
 from .vec import EpisodeSpec, SideAssignment, VecDriver, VecLaneEnv
 
 log = logging.getLogger("lanerl_train.__main__")
@@ -87,6 +89,35 @@ def build_argparser() -> argparse.ArgumentParser:
         "--port-base", type=int, default=21000,
         help="first actor's LANERL_PORT_BASE; later actors offset by "
         f"{PORTS_PER_ACTOR_STRIDE} x envs_per_actor from this",
+    )
+    # -- evaluation against a frozen opponent ----------------------------
+    p.add_argument(
+        "--anchors", default=",".join(DEFAULT_RUN_ANCHORS),
+        help="comma-separated frozen opponents to evaluate against on --eval-every. "
+        "A named anchor whose resource is missing FAILS AT STARTUP; pass an empty "
+        "string only together with --eval-every 0.",
+    )
+    p.add_argument(
+        "--bc-checkpoint", type=Path, default=None,
+        help="checkpoint for the bc_policy anchor; required if it is in --anchors",
+    )
+    p.add_argument(
+        "--anchor-envs", type=int, default=1,
+        help="server instances per anchor. Each anchor keeps its own alive for the "
+        "life of the run (a restart is ~12s against 0.23ms for an episode reset).",
+    )
+    p.add_argument(
+        "--anchor-episodes", type=int, default=1,
+        help="games per anchor per eval cycle; an anchor game is a real 10-minute game",
+    )
+    p.add_argument(
+        "--anchor-all-per-eval", action="store_true",
+        help="evaluate EVERY anchor each cycle instead of one round-robin. Three "
+        "10-minute games per cycle is roughly 40%% of throughput at --eval-every 400.",
+    )
+    p.add_argument(
+        "--anchor-port-base", type=int, default=31000,
+        help="port base for the anchors' own servers; must not overlap --port-base",
     )
     return p
 
@@ -162,7 +193,54 @@ def main(argv=None) -> int:
     (run_dir / "resolved_config.json").write_text(json.dumps(resolved, indent=2, sort_keys=True, default=str))
     log.info("resolved config written to %s", run_dir / "resolved_config.json")
 
-    loop = TrainingLoop(run_cfg, learner)
+    # -- the frozen-opponent ladder --------------------------------------
+    # anchors_for_run RAISES on a missing resource. That is the whole point:
+    # the previous behaviour was a warning ("anchor bc_policy has no resource
+    # configured; it will be skipped") followed by 37 eval reports that said
+    # (None, 0) against every anchor while the policy learned nothing.
+    anchor_names = [n.strip() for n in args.anchors.split(",") if n.strip()]
+    anchors = anchors_for_run(anchor_names, args.bc_checkpoint) if anchor_names else []
+    anchor_evaluator = None
+    if anchors:
+        # Two servers on one control port means the second dies during
+        # start-up, which from the ladder's point of view reads as "the anchor
+        # is unbeatable" rather than as a port collision.
+        actor_hi = args.port_base + args.num_actors * args.envs_per_actor * PORTS_PER_ACTOR_STRIDE
+        anchor_hi = args.anchor_port_base + len(anchors) * args.anchor_envs * PORTS_PER_ACTOR_STRIDE
+        if args.port_base < anchor_hi and args.anchor_port_base < actor_hi:
+            raise SystemExit(
+                f"--port-base range [{args.port_base}, {actor_hi}) overlaps the anchor "
+                f"range [{args.anchor_port_base}, {anchor_hi}). Move one of them."
+            )
+        anchor_evaluator = AnchorEvaluator(
+            anchors=anchors,
+            driver_factory=make_anchor_driver_factory(
+                build_policy_actor=lambda: LanePolicyActor(
+                    LanePolicy(model_cfg).to(args.device), device=args.device
+                ),
+                policy_key=SELF,
+                port_base=args.anchor_port_base,
+                log_dir=run_dir,
+                adapter_factory_for=lambda: make_lane_adapters(train_step_source=lambda: 0),
+                envs=args.anchor_envs,
+                seed=args.seed,
+            ),
+            agent_id_fn=lambda: loop.agent_id(),
+            config=AnchorEvalConfig(
+                episodes_per_anchor=args.anchor_episodes,
+                rotate=not args.anchor_all_per_eval,
+            ),
+        )
+
+    loop = TrainingLoop(
+        run_cfg,
+        learner,
+        evaluator=Evaluator(anchors=anchors),
+        anchor_eval=anchor_evaluator,
+        gpu=GpuProbe(args.device),
+    )
+    # Refuse to start a run whose evaluation would measure nothing.
+    loop.require_anchor_eval()
 
     if args.resume or (loop.state_path.exists()):
         loop.resume()
@@ -221,6 +299,8 @@ def main(argv=None) -> int:
         loop.save_state(ckpt)
         log.info("final checkpoint: %s (update=%d)", ckpt, loop.state.update)
         loop.shutdown()
+        if anchor_evaluator is not None:
+            anchor_evaluator.close()
         for driver in built_drivers:
             try:
                 driver.env.close()

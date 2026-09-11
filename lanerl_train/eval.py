@@ -50,7 +50,11 @@ __all__ = [
     "elo_from_ratings",
     "expected_score",
     "AnchorSpec",
+    "AnchorConfigError",
     "default_anchors",
+    "DEFAULT_RUN_ANCHORS",
+    "anchors_for_run",
+    "validate_anchors",
     "ANCHOR_EPISODE_SHARE",
     "anchor_episode_budget",
     "CsTracker",
@@ -283,6 +287,68 @@ def default_anchors(bc_checkpoint: Optional[Path] = None) -> List[AnchorSpec]:
                 a.resource,
             )
     return anchors
+
+
+class AnchorConfigError(RuntimeError):
+    """An anchor set that cannot actually be played.
+
+    Fatal at startup, deliberately.  ``default_anchors()`` logs and continues
+    because it is a *description* of the four permanent rungs, and a data
+    structure should not raise -- but a RUN that carries an unplayable anchor
+    produces an eval section reading ``(None, 0)`` forever, and 37 of those went
+    by unread in the first real run while the policy learned nothing.  A warning
+    was not enough; it has already been proved not to be.
+    """
+
+
+#: The anchors a run uses unless told otherwise.  ``bc_policy`` is deliberately
+#: NOT here: it has no resource until a BC checkpoint exists, and including an
+#: anchor that cannot be played is the exact failure this module now refuses.
+DEFAULT_RUN_ANCHORS: Tuple[str, ...] = (
+    "scripted_bronze",
+    "scripted_gold",
+    "scripted_diamond",
+)
+
+
+def validate_anchors(anchors: Sequence[AnchorSpec]) -> None:
+    """Raise unless every anchor can actually be played."""
+    if not anchors:
+        raise AnchorConfigError(
+            "the anchor list is empty. In a symmetric mirror every score is 0.5 by "
+            "construction, so with no frozen opponent there is nothing for evaluation "
+            "to measure. Configure at least one anchor, or turn evaluation off "
+            "deliberately."
+        )
+    unconfigured = [a.id for a in anchors if a.resource is None]
+    absent = [(a.id, str(a.resource)) for a in anchors if a.resource is not None and not a.exists()]
+    if unconfigured or absent:
+        parts = []
+        if unconfigured:
+            parts.append(f"no resource configured: {unconfigured}")
+        if absent:
+            parts.append("resource does not exist: " + ", ".join(f"{i} -> {p}" for i, p in absent))
+        raise AnchorConfigError(
+            "; ".join(parts)
+            + ". A missing anchor removes a rung from the ladder silently -- fix the "
+            "path, export the checkpoint, or drop the anchor from --anchors."
+        )
+
+
+def anchors_for_run(
+    names: Sequence[str] = DEFAULT_RUN_ANCHORS,
+    bc_checkpoint: Optional[Path] = None,
+) -> List[AnchorSpec]:
+    """The validated anchor list for one run.  Raises rather than warning."""
+    catalogue = {a.id: a for a in default_anchors(bc_checkpoint)}
+    unknown = [n for n in names if n not in catalogue]
+    if unknown:
+        raise AnchorConfigError(
+            f"unknown anchor(s) {unknown}; known anchors are {sorted(catalogue)}"
+        )
+    chosen = [catalogue[n] for n in names]
+    validate_anchors(chosen)
+    return chosen
 
 
 def anchor_episode_budget(total_episodes: int, share: float = ANCHOR_EPISODE_SHARE) -> int:

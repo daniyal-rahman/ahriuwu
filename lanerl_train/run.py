@@ -822,6 +822,7 @@ class TrainingLoop:
         evaluator: Optional[Evaluator] = None,
         sampler: Optional[OpponentSampler] = None,
         metrics: Optional[MetricsLog] = None,
+        anchor_eval: Optional[Callable[[int, Mapping[str, Any]], List[EpisodeResult]]] = None,
         throughput: Optional["ThroughputMeter"] = None,
         gpu: Optional["GpuProbe"] = None,
     ):
@@ -859,6 +860,12 @@ class TrainingLoop:
         self._last_update_at = time.monotonic()
         self.throughput = throughput or ThroughputMeter()
         self.gpu = gpu or GpuProbe(getattr(config, "device", None))
+        #: Periodic evaluation against a frozen opponent; see
+        #: :mod:`lanerl_train.anchor_eval`.  ``None`` means the run has none, and
+        #: :meth:`require_anchor_eval` is what turns that into a startup failure
+        #: rather than an eval section that quietly reports ``(None, 0)`` for
+        #: every anchor forever, which is what the first run did.
+        self.anchor_eval = anchor_eval
 
     # -- helpers -----------------------------------------------------------
 
@@ -879,7 +886,28 @@ class TrainingLoop:
         return self.run_dir / "state.json"
 
     def agent_id(self) -> str:
-        return f"agent@{self.state.update}"
+        """The run's own identity for rating and CS purposes.
+
+        Bucketed to ``snapshot_every``, not to the update number, and this is
+        load-bearing.  It used to be ``agent@<update>``, i.e. a NEW player on
+        every single update, so:
+
+        * ``Evaluator.report`` asked for ``cs_at_10`` of ``agent@9000`` while
+          episodes had been recorded under whatever the collector called itself
+          (``"self"``).  The first run logged CS@10 for 179 episodes and every
+          one of its 37 eval reports still said ``cs_at_10: null``;
+        * no ``(latest, past)`` pair could ever reach the 10 games
+          ``min_win_rate_vs_past`` needs, so the AlphaStar rot signature was
+          structurally unreachable;
+        * win rate against an anchor would reset after every update.
+
+        A snapshot interval is already this project's unit of "a distinguishable
+        version of the agent" -- it is what enters the opponent pool -- so it is
+        the right granularity for a rating too.
+        """
+        era = int(self.cfg.snapshot_every or 0)
+        bucket = (self.state.update // era) * era if era > 0 else 0
+        return f"agent@{bucket}"
 
     # -- persistence -------------------------------------------------------
 
@@ -944,6 +972,12 @@ class TrainingLoop:
     def record_episode(self, ep: EpisodeResult) -> None:
         """Feed one episode into the league, the evaluator and the metrics log."""
         self.state.total_episodes += 1
+        # Everything downstream is keyed by the RUN's agent id, not by whatever
+        # the collector called itself. ``collect_rollout`` labels its episodes
+        # with the policy key ("self"), so CS recorded under that label was
+        # invisible to a report asking about "agent@N" -- 179 CS@10 readings in
+        # the first run, every eval row still saying null. See agent_id().
+        agent = self.agent_id()
         # Skip rating a self-match as well as the LATEST sentinel. Under a pure
         # self-play mixture BOTH sides carry the same id (mixture {"self": 1.0}),
         # which is not the LATEST sentinel, so it slipped through to MatchRecord
@@ -951,11 +985,12 @@ class TrainingLoop:
         # episode. A self-match carries no rating information either way; it is
         # recorded as an episode below, which is what MatchRecord's own error
         # message tells you to do.
-        if ep.opponent_id != LATEST and ep.opponent_id != ep.agent:
+        is_self_match = ep.opponent_id in (LATEST, ep.agent, agent)
+        if not is_self_match:
             self.sampler.win_rates.record(ep.opponent_id, ep.score)
             self.evaluator.record_match(
                 MatchRecord(
-                    agent_a=ep.agent,
+                    agent_a=agent,
                     agent_b=ep.opponent_id,
                     score_a=ep.score,
                     step=self.state.update,
@@ -963,12 +998,16 @@ class TrainingLoop:
                 )
             )
         if ep.cs_at_10 is not None:
-            self.evaluator.record_cs(ep.agent, ep.cs_at_10)
+            self.evaluator.record_cs(agent, ep.cs_at_10)
         self.metrics.write(
             "episode",
             update=self.state.update,
             ep_return=ep.ep_return,
-            agent=ep.agent,
+            # The id the evaluator used, so Evaluator.load_jsonl replays to the
+            # same table the live run built. The collector's own label is kept
+            # beside it rather than instead of it.
+            agent=agent,
+            collector_agent=ep.agent,
             opponent=ep.opponent_id,
             opponent_category=ep.opponent_category,
             score=ep.score,
@@ -977,10 +1016,10 @@ class TrainingLoop:
             reason=ep.reason,
             instance=ep.instance,
         )
-        if ep.opponent_id != LATEST and ep.opponent_id != ep.agent:
+        if not is_self_match:
             self.metrics.write(
                 "match",
-                agent_a=ep.agent,
+                agent_a=agent,
                 agent_b=ep.opponent_id,
                 score_a=ep.score,
                 step=self.state.update,
@@ -1076,6 +1115,46 @@ class TrainingLoop:
         self._periodic()
         return True
 
+    def require_anchor_eval(self) -> None:
+        """Refuse to start a run whose eval cadence would measure nothing.
+
+        ``eval_every`` fires the report either way, and in a symmetric mirror
+        every number in that report except CS@10 is 0.5 by construction.  The
+        first run logged 37 of those, each one saying ``(None, 0)`` against all
+        four anchors, and nobody read them as "no evaluation is happening".
+        Called from the entrypoint, not the constructor, so a unit test can
+        still build a loop with no anchor machinery at all.
+        """
+        if not self.cfg.eval_every:
+            return
+        if self.anchor_eval is None:
+            raise TrainingError(
+                f"eval_every={self.cfg.eval_every} but this run has no anchor evaluator, so "
+                f"every eval report would be win_rate_vs_anchor=(None, 0) forever -- which "
+                f"is exactly how 13,475 updates of a non-learning policy went unnoticed. "
+                f"Pass anchor_eval=..., or set --eval-every 0 to say deliberately that this "
+                f"run is not evaluated."
+            )
+
+    def _run_anchor_eval(self, update: int) -> None:
+        """Play the frozen anchors and feed the results to the evaluator."""
+        if self.anchor_eval is None:
+            return
+        t0 = time.monotonic()
+        episodes = self.anchor_eval(update, self.store.pull()[1])
+        for ep in episodes:
+            self.record_episode(ep)
+        self.metrics.write(
+            "anchor_eval",
+            update=update,
+            episodes=len(episodes),
+            elapsed_s=time.monotonic() - t0,
+            by_anchor={
+                aid: sum(1 for e in episodes if e.opponent_id == aid)
+                for aid in sorted({e.opponent_id for e in episodes})
+            },
+        )
+
     def _periodic(self) -> None:
         u = self.state.update
         ckpt: Optional[Path] = None
@@ -1096,6 +1175,7 @@ class TrainingLoop:
             )
             ckpt = path
         if self.cfg.eval_every and u % self.cfg.eval_every == 0:
+            self._run_anchor_eval(u)
             report = self.evaluator.report(u, self.agent_id(), self.sampler.pool.ids())
             fields = json.loads(report.to_json())
             fields.pop("kind", None)  # MetricsLog supplies it
