@@ -1,0 +1,109 @@
+{
+  "n": 2,
+  "max_game_ms": 20000,
+  "steps_driven": 1200,
+  "per_instance": [
+    {
+      "obs_count": 1203,
+      "dones": 2,
+      "done_reasons": [
+        "time",
+        "time"
+      ],
+      "done_steps_in_ep": [
+        601,
+        600
+      ],
+      "resets_sent": 2,
+      "server_resets": 2,
+      "server_reset_rows": [
+        {
+          "t_before": 20017,
+          "t_after": 0
+        },
+        {
+          "t_before": 20033,
+          "t_after": 0
+        }
+      ],
+      "post_reset_t": [
+        33,
+        33
+      ],
+      "max_t": 20033,
+      "first_20_t": [
+        16,
+        50,
+        83,
+        116,
+        150,
+        183,
+        216,
+        250,
+        283,
+        316,
+        349,
+        383,
+        416,
+        449,
+        483,
+        516,
+        549,
+        583,
+        616,
+        650
+      ]
+    },
+    {
+      "obs_count": 1203,
+      "dones": 2,
+      "done_reasons": [
+        "time",
+        "time"
+      ],
+      "done_steps_in_ep": [
+        601,
+        600
+      ],
+      "resets_sent": 2,
+      "server_resets": 2,
+      "server_reset_rows": [
+        {
+          "t_before": 20017,
+          "t_after": 0
+        },
+        {
+          "t_before": 20033,
+          "t_after": 0
+        }
+      ],
+      "post_reset_t": [
+        33,
+        33
+      ],
+      "max_t": 20033,
+      "first_20_t": [
+        16,
+        50,
+        83,
+        116,
+        150,
+        183,
+        216,
+        250,
+        283,
+        316,
+        349,
+        383,
+        416,
+        449,
+        483,
+        516,
+        549,
+        583,
+        616,
+        650
+      ]
+    }
+  ]
+}

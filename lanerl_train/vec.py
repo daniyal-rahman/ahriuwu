@@ -573,6 +573,18 @@ class VecLaneEnv:
         Every live instance still needs exactly one action line this step --
         the server is blocked reading one -- so instances not in ``indices``
         receive an empty action and keep their orders.
+
+        Known cost, measured rather than guessed: that empty action IS a
+        decision for every instance not being reset, and no transition is
+        recorded for it, so the reward the collector next attributes to their
+        previous action spans two env steps instead of one.  At the production
+        shape -- 4 instances, ~18,000 decisions an episode at
+        :data:`lanerl_rl.constants.DECISION_HZ` -- that is four extra steps per
+        18,000, i.e. 0.02% of transitions, each one an action-repeat of the
+        action it is charged to.  Removing it means sending the reset as the
+        NEXT step's action line instead of an extra one, which moves the
+        recurrent-state reset and the "never a step behind" contract with it;
+        not worth that for 0.02%, but it should not be discovered twice.
         """
         want = set(int(i) for i in indices)
         bad = want - set(range(self.n))

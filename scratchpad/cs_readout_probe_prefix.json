@@ -1,0 +1,45 @@
+{
+  "max_game_ms": 220000,
+  "episodes": [
+    {
+      "reason": "time",
+      "length_steps": 6599,
+      "cs_at_10": 0.0,
+      "ep_return": -7.508782870369032
+    },
+    {
+      "reason": "time",
+      "length_steps": 6599,
+      "cs_at_10": 0.0,
+      "ep_return": -6.799850487266667
+    }
+  ],
+  "server_resets": 2,
+  "server_cs_near_limit": [
+    {
+      "t": 210116,
+      "name": "brian8544",
+      "team": 100,
+      "cs": 0
+    },
+    {
+      "t": 210116,
+      "name": "prienten",
+      "team": 200,
+      "cs": 9
+    },
+    {
+      "t": 200247,
+      "name": "brian8544",
+      "team": 100,
+      "cs": 0
+    },
+    {
+      "t": 200247,
+      "name": "prienten",
+      "team": 200,
+      "cs": 7
+    }
+  ],
+  "server_cs_max": 9
+}
