@@ -160,9 +160,18 @@ def play_anchor_episodes(
     agent_team = _TEAM_OF_SIDE[cfg.agent_side]
     out: List[EpisodeResult] = []
     steps = 0
+    #: Decisions since each instance's CURRENT episode began.  ``steps`` is the
+    #: loop counter, so using it as ``length_steps`` reported the second game as
+    #: the length of both and the Nth as the length of all N -- lengths came out
+    #: 7, 14, 21, 28 for four identical games.  Same placeholder that made the
+    #: training run's episodes look four seconds long; see
+    #: ``lane_wiring.collect_rollout``.
+    since_reset: Dict[int, int] = {}
     while len(out) < n_episodes and steps < cfg.max_steps:
         _result, dones = driver.step(deterministic=cfg.deterministic)
         steps += 1
+        for i in range(driver.env.n):
+            since_reset[i] = since_reset.get(i, 0) + 1
         for i, reason in sorted(dones.items()):
             # CS@10 only means anything for an episode that REACHED ten
             # minutes. A game that ended on a death has not had the chance to
@@ -180,7 +189,7 @@ def play_anchor_episodes(
                     opponent_category="anchor",
                     score=score_for_reason(reason, agent_team),
                     cs_at_10=cs10,
-                    length_steps=steps,
+                    length_steps=since_reset.pop(i, 0),
                     reason=reason,
                     instance=i,
                 )

@@ -195,6 +195,20 @@ def test_a_finished_game_becomes_a_scored_episode_result():
     assert ep.length_steps > 0
 
 
+def test_each_episode_reports_its_own_length_not_the_loop_counter():
+    """length_steps was the while-loop index, so the Nth game reported all N."""
+    # FakeInstance advances 66 ms a decision; max_game_ms=400 makes that 7.
+    driver, _insts, _pol = build_anchor_driver(n=1, max_game_ms=400)
+    out = play_anchor_episodes(driver, "scripted_gold", "agent@7", n_episodes=4)
+    assert len(out) == 4
+    lengths = [ep.length_steps for ep in out]
+    assert len(set(lengths)) == 1, (
+        f"episode lengths {lengths} grow with the loop counter instead of "
+        f"describing each episode"
+    )
+    assert lengths[0] == 7, lengths
+
+
 def test_cs_at_10_is_absent_rather_than_zero_when_the_log_has_none():
     """Reporting 0 for an unmeasured CS drags the headline metric down silently."""
     driver, _insts, _pol = build_anchor_driver(n=1, max_game_ms=400)
