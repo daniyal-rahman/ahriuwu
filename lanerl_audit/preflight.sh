@@ -226,9 +226,13 @@ step "fast test suites"
 if [ "$SKIP_TESTS" -eq 1 ]; then
     warn "--skip-tests: the suites were NOT run"
 else
-    # NOTE: pyproject testpaths=["tests"], so a bare `pytest` collects NEITHER of
-    # these. They must be named explicitly or their failures are invisible.
-    for suite in lanerl_bot/tests lanerl_rl/tests; do
+    # pyproject.toml's testpaths now covers all four dirs, so a bare `pytest`
+    # does collect these -- but it also collects the @pytest.mark.slow suite
+    # (real server boots), which does not belong in a fast preflight gate.
+    # Named explicitly here so the -m "not slow" filter is guaranteed to
+    # apply per-suite, not left to whatever the default marker expression
+    # happens to be.
+    for suite in lanerl_bot/tests lanerl_rl/tests lanerl_train/tests; do
         [ -d "$REPO/$suite" ] || continue
         echo "       $suite"
         if ( cd "$REPO" && LANERL_SKIP_SERVER_TESTS=1 \
