@@ -111,6 +111,10 @@ class EpisodeResult:
     length_steps: int = 0
     reason: str = ""
     instance: int = -1
+    #: Undiscounted sum of shaped reward over the episode. Absent for the whole
+    #: first run, which is why 13,475 updates produced no way to tell whether
+    #: the agent was receiving any signal at all.
+    ep_return: Optional[float] = None
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.score <= 1.0):
@@ -400,10 +404,23 @@ class CheckpointManager:
         found = self.all_checkpoints()
         return found[-1] if found else None
 
+    #: Never prune a checkpoint whose update number is a multiple of this.
+    #: Rotation deleted EVERY early checkpoint of the first real run, so when
+    #: the policy turned out not to be learning there was nothing left to
+    #: compare against -- no before/after, no regression bisect, nothing. A
+    #: milestone ladder costs a few hundred MB and buys the whole history.
+    MILESTONE_EVERY = 1000
+
+    def _is_milestone(self, p: Path) -> bool:
+        try:
+            return int(p.stem.split("_")[1]) % self.MILESTONE_EVERY == 0
+        except (IndexError, ValueError):
+            return False
+
     def _prune(self) -> None:
         if not self.keep_last:
             return
-        found = self.all_checkpoints()
+        found = [p for p in self.all_checkpoints() if not self._is_milestone(p)]
         for p in found[: max(0, len(found) - self.keep_last)]:
             try:
                 p.unlink()
@@ -734,6 +751,7 @@ class TrainingLoop:
         self.metrics.write(
             "episode",
             update=self.state.update,
+            ep_return=ep.ep_return,
             agent=ep.agent,
             opponent=ep.opponent_id,
             opponent_category=ep.opponent_category,

@@ -417,7 +417,7 @@ def collect_rollout(
         # describe the *next* iteration's resets, not this one's.
         resets_before = list(driver._pending_resets)
         for _i in range(n):
-            st = ep_state.setdefault(_i, {"steps": 0})
+            st = ep_state.setdefault(_i, {"steps": 0, "ret": 0.0})
             st["steps"] += 1
         result, dones = driver.step()
         obs_now = actor.last_batch
@@ -435,6 +435,10 @@ def collect_rollout(
                 team = TEAM_OF_SIDE[side]
                 if ctx.valid:
                     rewards[row] = float(ctx.last_values.get(team, 0.0))
+                    # accumulate the undiscounted episode return, so a run can
+                    # be asked "is the agent getting any reward at all?"
+                    _st = ep_state.setdefault(i, {"steps": 0, "ret": 0.0})
+                    _st["ret"] = _st.get("ret", 0.0) + float(rewards[row])
                 if i in dones:
                     done_t[row] = 1.0
             buffer.add(
@@ -469,6 +473,7 @@ def collect_rollout(
                         score=0.5,
                         cs_at_10=cs10,
                         length_steps=int(st["steps"]) if st else 0,
+                        ep_return=float(st.get("ret", 0.0)) if st else None,
                         reason=reason,
                         instance=i,
                     )

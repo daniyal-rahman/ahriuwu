@@ -523,3 +523,24 @@ def test_record_episode_skips_rating_for_a_self_match(tmp_path):
         "record_episode still rates a self-match; pure self-play will crash at "
         "the first completed episode"
     )
+
+
+def test_milestone_checkpoints_survive_rotation(tmp_path):
+    """Rotation deleted every early checkpoint of the first real run.
+
+    When that run turned out not to be learning, there was no early policy left
+    to compare against -- no before/after, no bisect. Milestones must outlive
+    keep_last.
+    """
+    from lanerl_train.run import CheckpointManager
+
+    m = CheckpointManager(tmp_path, keep_last=3)
+    for u in (500, 1000, 1500, 2000, 2500, 3000, 3500):
+        (tmp_path / f"update_{u:08d}{m.suffix}").write_bytes(b"x")
+        m._prune()
+    kept = sorted(int(p.stem.split("_")[1]) for p in tmp_path.glob(f"update_*{m.suffix}"))
+    for milestone in (1000, 2000, 3000):
+        assert milestone in kept, f"milestone {milestone} was pruned: {kept}"
+    assert 3500 in kept, f"latest checkpoint was pruned: {kept}"
+    # and rotation still actually rotates: the non-milestones are not all kept
+    assert 500 not in kept, f"keep_last is not pruning at all: {kept}"
