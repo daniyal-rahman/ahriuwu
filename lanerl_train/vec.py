@@ -446,6 +446,17 @@ class StepResult:
     #: Instances restarted this step.  Their recurrent state must be reset and
     #: any in-flight trajectory discarded.
     restarted: List[int] = field(default_factory=list)
+    #: ``instance -> the observation that ENDED its episode this step``.
+    #:
+    #: ``VecDriver.step`` resets in the same call it detects the boundary in,
+    #: and the reset step's observation then overwrites ``obs[i]`` (and
+    #: ``VecLaneEnv.last_obs[i]``) so the caller is never a step behind.  That
+    #: made the terminal frame unreachable, and everything that needs it read
+    #: the post-reset frame instead: CS@10 came back 0 for every episode of
+    #: ``runs/rl-overnight-0911-0608``, and the reward of the final transition
+    #: -- the frame the champion dies on, under ``end_on_death`` -- was 0 by
+    #: construction.  Empty on any step with no boundary.
+    terminal_obs: Dict[int, RawObs] = field(default_factory=dict)
 
     @property
     def n_alive(self) -> int:
@@ -872,6 +883,20 @@ class VecDriver:
         self._on_new_observations(result)
         dones = self._episode_boundaries(result)
         if dones:
+            # Keep the frame the episode ended on before the reset step
+            # overwrites it, and show it to the adapters.  Both halves matter:
+            # the dict is how a caller reads the final CS off the episode it
+            # just finished, and the build() is how anything stateful behind
+            # the adapter -- the reward model, above all -- gets to see the
+            # transition that ended the game.  Without it the death that ends
+            # an episode is worth exactly 0 to the learner, because the only
+            # frame it appears on is thrown away here.
+            result.terminal_obs = {i: result.obs[i] for i in dones if result.obs[i] is not None}
+            for i in sorted(result.terminal_obs):
+                for side in SIDES:
+                    ad = self.adapters.get((i, side))
+                    if ad is not None:
+                        ad.build(result.terminal_obs[i], side)
             reset = self.env.reset_episodes(sorted(dones))
             self._on_new_observations(reset)
             for i in dones:

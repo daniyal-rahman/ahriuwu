@@ -105,8 +105,25 @@ class InstanceRewardContext:
         self.last_values: Dict[int, float] = {}
         self.last_info: Dict[str, object] = {}
         self.valid = False  # False on the skipped (reset) frame
+        #: The reward of the transition that ENDED the last episode, kept
+        #: across the reset that immediately follows it.  The collector cannot
+        #: read it any other way: ``VecDriver.step`` steps the reward model on
+        #: the terminal frame and then resets the adapters inside the same
+        #: call, so by the time ``collect_rollout`` gets control the live
+        #: fields are already cleared -- and that row has not been written yet.
+        self.terminal_values: Dict[int, float] = {}
+        self.terminal_valid = False
 
     def mark_reset(self) -> None:
+        # Guarded because ONE context is shared by both side-adapters of an
+        # instance, so a boundary calls this twice. Unguarded, the second call
+        # overwrote the snapshot with the cleared state and the terminal reward
+        # was lost again -- the exact bug this field exists to fix, reappearing
+        # one layer down. `_last_raw_id is None` is precisely "nothing has been
+        # seen since the last reset", so the second call is a no-op.
+        if self._last_raw_id is not None:
+            self.terminal_values = dict(self.last_values)
+            self.terminal_valid = self.valid
         self.reward.reset()
         self._last_raw_id = None
         self._skip_next = True
@@ -388,6 +405,15 @@ def collect_rollout(
     once iteration ``t`` supplies the reward that belongs with it -- never
     at the iteration that produced it. ``num_steps`` decisions therefore
     yield ``num_steps - 1`` buffer rows.
+
+    The ``done`` flag obeys the same lag, and used not to. ``driver.step()``
+    at iteration ``t`` returns the boundaries it found in the observation
+    *reached by iteration ``t``'s action*, so that flag belongs to the row
+    holding iteration ``t``'s (obs, action) -- the row written at iteration
+    ``t+1``, not the one written at ``t``. Writing it a row early made GAE
+    bootstrap straight through the terminal transition and then cut a
+    perfectly ordinary one instead (``compute_gae``: ``dones[t]`` gates
+    ``values[t+1]``). Hence ``prev_dones``.
     """
     slots = list(driver.slots[policy_key])
     n = len(slots)
@@ -397,18 +423,31 @@ def collect_rollout(
         raise ValueError("num_steps must be >= 2 (one iteration is reward-alignment lag)")
     buffer = RecurrentRolloutBuffer(num_steps - 1, n, cfg=actor.policy.cfg, device=actor.device)
     episodes: List[EpisodeResult] = []
-    # Per-instance episode accounting. Both of these used to be placeholders:
-    # length_steps was the ROLLOUT index t (0..num_steps, so it averaged ~half
-    # the rollout regardless of the real episode), and cs_at_10 was hardcoded
-    # None -- so the headline skill metric for a laner was never recorded at
-    # all, across 9126 updates and 1026 episodes.
-    ep_state = getattr(driver, "_lanerl_ep_state", None)
+    # Per-instance episode accounting, keyed by INSTANCE and carried on the
+    # driver so it survives a rollout boundary. Both fields used to be
+    # placeholders: length_steps was the ROLLOUT index t (0..num_steps, so it
+    # averaged ~half the rollout regardless of the real episode -- 1,372 of
+    # 1,670 completed episodes in runs/rl-overnight-0911-0608 look like
+    # four-second games for this reason alone, and none of them were), and
+    # cs_at_10 was hardcoded None.
+    ep_state: Dict[int, Dict[str, Any]] = getattr(driver, "_lanerl_ep_state", None)
     if ep_state is None:
         ep_state = {}
         setattr(driver, "_lanerl_ep_state", ep_state)
+    instances = sorted({i for i, _ in slots})
+
+    def _state_for(i: int) -> Dict[str, Any]:
+        st = ep_state.get(i)
+        if st is None:
+            st = {"steps": 0, "ret": {}}
+            ep_state[i] = st
+        return st
 
     pending: Optional[Dict[str, Any]] = None
     last_values_now: Optional[torch.Tensor] = None
+    # Boundaries found by the PREVIOUS iteration: they belong to the row this
+    # iteration is about to write, not to the one it just found.
+    prev_dones: Dict[int, str] = {}
 
     for t in range(num_steps):
         # Snapshot BEFORE step(): _forward() reads _pending_resets to build the
@@ -416,9 +455,8 @@ def collect_rollout(
         # every slot at the end of the same call. Reading it after step() would
         # describe the *next* iteration's resets, not this one's.
         resets_before = list(driver._pending_resets)
-        for _i in range(n):
-            st = ep_state.setdefault(_i, {"steps": 0, "ret": 0.0})
-            st["steps"] += 1
+        for _i in instances:
+            _state_for(_i)["steps"] += 1
         result, dones = driver.step()
         obs_now = actor.last_batch
         log_probs_now = actor.last_log_probs
@@ -433,14 +471,21 @@ def collect_rollout(
             for row, (i, side) in enumerate(slots):
                 ctx = reward_contexts[i]
                 team = TEAM_OF_SIDE[side]
-                if ctx.valid:
+                if i in prev_dones:
+                    # The row being written IS the terminal transition, so its
+                    # reward is the one computed on the frame the episode ended
+                    # on -- not the live one, which belongs to the fresh episode
+                    # and is invalid by design on its first frame.
+                    done_t[row] = 1.0
+                    if ctx.terminal_valid:
+                        rewards[row] = float(ctx.terminal_values.get(team, 0.0))
+                elif ctx.valid:
                     rewards[row] = float(ctx.last_values.get(team, 0.0))
                     # accumulate the undiscounted episode return, so a run can
                     # be asked "is the agent getting any reward at all?"
-                    _st = ep_state.setdefault(i, {"steps": 0, "ret": 0.0})
-                    _st["ret"] = _st.get("ret", 0.0) + float(rewards[row])
-                if i in dones:
-                    done_t[row] = 1.0
+                    _state_for(i)["ret"][side] = (
+                        _state_for(i)["ret"].get(side, 0.0) + float(rewards[row])
+                    )
             buffer.add(
                 obs=pending["obs"],
                 masks=pending["masks"],
@@ -452,32 +497,50 @@ def collect_rollout(
                 reset=pending["reset"],
                 state=pending["state"],
             )
-            for i, reason in dones.items():
-                raw_i = None
-                try:
-                    raw_i = driver.env.last_obs[i]
-                except Exception:
-                    raw_i = None
-                game_ms, cs_by_team = _episode_readout(raw_i)
-                st = ep_state.pop(i, None)
-                # CS@10 only means something for an episode that REACHED 10
-                # minutes; a death-ended game has not had the chance to farm one.
-                cs10 = None
-                if reason == "time" and cs_by_team:
-                    cs10 = float(max(cs_by_team.values()))
-                episodes.append(
-                    EpisodeResult(
-                        agent=policy_key,
-                        opponent_id=policy_key,
-                        opponent_category="self",
-                        score=0.5,
-                        cs_at_10=cs10,
-                        length_steps=int(st["steps"]) if st else 0,
-                        ep_return=float(st.get("ret", 0.0)) if st else None,
-                        reason=reason,
-                        instance=i,
+
+        # Close out the episodes that ended on THIS iteration. Done here rather
+        # than inside the `pending` block above: an episode that ends on the
+        # first iteration of a rollout has no row to write, and dropping its
+        # record also left its step counter running, so the next episode
+        # reported the sum of the two (17994 = 2 x 8997, in that run).
+        for i, reason in dones.items():
+            ctx = reward_contexts[i]
+            st = ep_state.pop(i, None)
+            ret = dict(st["ret"]) if st else {}
+            own_sides = [s for j, s in slots if j == i]
+            # The terminal transition's reward is already known -- VecDriver
+            # stepped the reward model on the terminal frame before resetting --
+            # and it is added here so ep_return covers the whole episode even
+            # though its buffer row is written on the next iteration.
+            if ctx.terminal_valid:
+                for side in own_sides:
+                    ret[side] = ret.get(side, 0.0) + float(
+                        ctx.terminal_values.get(TEAM_OF_SIDE[side], 0.0)
                     )
+            _, cs_by_team = _episode_readout(result.terminal_obs.get(i))
+            # CS@10 only means something for an episode that REACHED 10
+            # minutes; a death-ended game has not had the chance to farm one.
+            cs10 = None
+            if reason == "time" and cs_by_team:
+                cs10 = float(max(cs_by_team.values()))
+            # One side's return, not the sum: with both sides driven by the
+            # same policy and a zero-sum reward, blue + red is ~0 by
+            # construction, which is a number that can never say anything.
+            own = own_sides[0] if own_sides else None
+            episodes.append(
+                EpisodeResult(
+                    agent=policy_key,
+                    opponent_id=policy_key,
+                    opponent_category="self",
+                    score=0.5,
+                    cs_at_10=cs10,
+                    length_steps=int(st["steps"]) if st else 0,
+                    ep_return=float(ret.get(own, 0.0)) if own is not None else None,
+                    reason=reason,
+                    instance=i,
                 )
+            )
+        prev_dones = dict(dones)
 
         reset_t = torch.tensor(
             [1.0 if resets_before[i] else 0.0 for i, _ in slots],

@@ -21,20 +21,35 @@ BLUE_TEAM = 100
 RED_TEAM = 200
 
 
-def make_obs(t_ms: int, blue_hp: int = 600, red_hp: int = 600) -> Dict[str, Any]:
-    """An observation shaped like ``LanerlControl.BuildObservation``."""
+def make_obs(
+    t_ms: int,
+    blue_hp: int = 600,
+    red_hp: int = 600,
+    blue_cs: int = 0,
+    red_cs: int = 0,
+) -> Dict[str, Any]:
+    """An observation shaped like ``LanerlControl.BuildObservation``.
+
+    ``cs`` is present because the server emits it on every champion, and the
+    headline skill metric (CS@10) is read off exactly this field: a fake that
+    omitted it could not tell a readout taken from the final frame of an
+    episode from one taken from the post-reset frame, which is precisely the
+    bug the boundary tests exist to catch.
+    """
     return {
         "t": int(t_ms),
         "u": [
             {
                 "id": 1, "k": "Champion", "tm": BLUE_TEAM, "x": 1000, "y": 12000,
                 "hp": blue_hp, "mhp": 600, "vb": 1, "vr": 1,
-                "gold": 475, "xp": 0, "lvl": 1, "cd0": -1, "cd1": -1, "cd2": -1, "cd3": -1,
+                "gold": 475, "xp": 0, "lvl": 1, "cs": int(blue_cs),
+                "cd0": -1, "cd1": -1, "cd2": -1, "cd3": -1,
             },
             {
                 "id": 2, "k": "Champion", "tm": RED_TEAM, "x": 3000, "y": 13000,
                 "hp": red_hp, "mhp": 600, "vb": 1, "vr": 1,
-                "gold": 475, "xp": 0, "lvl": 1, "cd0": -1, "cd1": -1, "cd2": -1, "cd3": -1,
+                "gold": 475, "xp": 0, "lvl": 1, "cs": int(red_cs),
+                "cd0": -1, "cd1": -1, "cd2": -1, "cd3": -1,
             },
             {
                 "id": 3, "k": "LaneMinion", "tm": RED_TEAM, "x": 2000, "y": 12500,
@@ -55,6 +70,8 @@ class FakeInstance:
         fail_starts: int = 0,
         stall_forever: bool = False,
         start_t_ms: int = 0,
+        cs_per_step: int = 0,
+        champ_dies_at_ms: Optional[int] = None,
     ):
         self.index = int(index)
         self.step_ms = int(step_ms)
@@ -63,6 +80,13 @@ class FakeInstance:
         self.stall_forever = bool(stall_forever)
         self.start_t_ms = int(start_t_ms)
         self.t_ms = int(start_t_ms)
+        #: CS accrued per decision, cleared by a reset like the real champion's
+        #: ``ChampStats.MinionsKilled`` is (``LanerlEpisode.ResetChampStats``).
+        self.cs_per_step = int(cs_per_step)
+        #: Game time at which the blue champion's hp hits 0, so a test can end
+        #: an episode on a death rather than on the clock.
+        self.champ_dies_at_ms = champ_dies_at_ms
+        self.cs = 0
         self.outbox: List[str] = []
         self.received: List[Dict[str, Any]] = []
         #: Lines the server would have marked Fatal and executed nothing from.
@@ -83,7 +107,17 @@ class FakeInstance:
         self.dead = False
         self.sends = 0
         self.t_ms = self.start_t_ms
-        self.outbox = [] if self.stall_forever else [json.dumps(make_obs(self.t_ms))]
+        self.cs = 0
+        self.outbox = [] if self.stall_forever else [json.dumps(self._obs())]
+
+    def _obs(self) -> Dict[str, Any]:
+        dead = self.champ_dies_at_ms is not None and self.t_ms >= self.champ_dies_at_ms
+        return make_obs(
+            self.t_ms,
+            blue_hp=0 if dead else 600,
+            blue_cs=self.cs,
+            red_cs=self.cs,
+        )
 
     def send_line(self, line: str) -> None:
         if self.dead or self.closed:
@@ -102,13 +136,16 @@ class FakeInstance:
             if dict(action) == {"cmd": "reset"}:
                 self.resets += 1
                 self.t_ms = 0
+                self.cs = 0
             else:
                 self.rejected.append(dict(action))
                 self.t_ms += self.step_ms
+                self.cs += self.cs_per_step
         else:
             self.t_ms += self.step_ms
+            self.cs += self.cs_per_step
         if not self.stall_forever:
-            self.outbox.append(json.dumps(make_obs(self.t_ms)))
+            self.outbox.append(json.dumps(self._obs()))
 
     def read_line(self) -> Optional[str]:
         if self.dead:
