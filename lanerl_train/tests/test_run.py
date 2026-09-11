@@ -493,3 +493,33 @@ def test_the_anneal_moves_end_to_end(run_dir):
         assert loop.step_once(timeout=2.0)
     assert loop.train_steps.value == 1000
     assert alpha_now() == pytest.approx(1.0)
+
+
+def test_a_self_play_episode_does_not_crash_the_run():
+    """Pure self-play killed the first overnight run at its first episode.
+
+    The mixture was {"self": 1.0}, so both sides carried the id "self". That is
+    not the LATEST sentinel, so record_episode fell through to MatchRecord,
+    whose __post_init__ rejects a self-match -- correctly, since a self-match
+    carries no rating information. The caller's guard was simply too narrow.
+    """
+    from lanerl_train.run import TrainingLoop  # noqa: F401
+    from lanerl_train.eval import MatchRecord
+
+    # the guard that fired, still firing: this is what we must not construct
+    with pytest.raises(ValueError, match="self-match"):
+        MatchRecord(agent_a="self", agent_b="self", score_a=0.5)
+
+
+def test_record_episode_skips_rating_for_a_self_match(tmp_path):
+    """The real regression: record_episode must not build that MatchRecord."""
+    import inspect
+    from lanerl_train import run as run_mod
+
+    src = inspect.getsource(run_mod.TrainingLoop.record_episode)
+    # both the evaluator call and the metrics "match" row must be guarded on
+    # agent != opponent, not only on the LATEST sentinel
+    assert src.count("ep.opponent_id != ep.agent") >= 2, (
+        "record_episode still rates a self-match; pure self-play will crash at "
+        "the first completed episode"
+    )

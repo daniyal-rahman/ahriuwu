@@ -711,7 +711,14 @@ class TrainingLoop:
     def record_episode(self, ep: EpisodeResult) -> None:
         """Feed one episode into the league, the evaluator and the metrics log."""
         self.state.total_episodes += 1
-        if ep.opponent_id != LATEST:
+        # Skip rating a self-match as well as the LATEST sentinel. Under a pure
+        # self-play mixture BOTH sides carry the same id (mixture {"self": 1.0}),
+        # which is not the LATEST sentinel, so it slipped through to MatchRecord
+        # and tripped its guard -- killing the run at the first completed
+        # episode. A self-match carries no rating information either way; it is
+        # recorded as an episode below, which is what MatchRecord's own error
+        # message tells you to do.
+        if ep.opponent_id != LATEST and ep.opponent_id != ep.agent:
             self.sampler.win_rates.record(ep.opponent_id, ep.score)
             self.evaluator.record_match(
                 MatchRecord(
@@ -736,7 +743,7 @@ class TrainingLoop:
             reason=ep.reason,
             instance=ep.instance,
         )
-        if ep.opponent_id != LATEST:
+        if ep.opponent_id != LATEST and ep.opponent_id != ep.agent:
             self.metrics.write(
                 "match",
                 agent_a=ep.agent,
