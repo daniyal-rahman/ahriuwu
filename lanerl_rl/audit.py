@@ -120,6 +120,12 @@ SERVER_ONLY_ATTRS: Set[str] = {
     "is_attacking",
     "mo",
     "move_order",
+    # Behaviour-cloning demonstrations: the order the SCRIPTED BOT chose this
+    # tick. It is the label for supervised pretraining and must never be an
+    # actor feature -- a policy that can read its teacher's next move at test
+    # time has learned nothing it can deploy.
+    "demo",
+    "demo_order",
 }
 
 #: Attributes that are only legal on specific receivers.  ``.units`` is the raw
