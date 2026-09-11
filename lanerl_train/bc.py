@@ -57,10 +57,6 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
         kind = d.get("t", "noop")
         if kind == "move":
             out["button"][i] = idx_move
-            # The demo carries an absolute goal; the policy emits a direction
-            # bin. Without the champion's own position we cannot recover the
-            # direction, so movement DIRECTION is not cloned here -- only the
-            # decision to move. See the note in main().
         elif kind == "attack":
             out["button"][i] = idx_attack
         elif kind == "cast":
@@ -70,6 +66,13 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
                 out["button"][i] = buttons.index(name)
         elif kind == "recall" and "recall" in buttons:
             out["button"][i] = buttons.index("recall")
+        # Direction, recovered by the collector by inverting decode_action.
+        # Cloning WHERE the bot walks is the whole point: it is the behaviour
+        # PPO could never discover, since a random walk needs ~9.9 hours of
+        # game time to cross the map.
+        if d.get("mx") is not None:
+            out["move_x"][i] = int(d["mx"])
+            out["move_z"][i] = int(d["mz"])
     return out
 
 
@@ -126,6 +129,7 @@ def main() -> int:
         dist, _value, _state = policy(state=state, action_masks=masks, **kw)
         return dist
 
+    idx_move_g = list(C.BUTTONS).index("move")
     majority = counts.max() / max(1, counts.sum())
     print(f"majority-class baseline (button): {majority:.3f} -- BC must beat this")
 
@@ -136,10 +140,22 @@ def main() -> int:
         for s in range(0, len(tr_i), args.batch):
             idx = tr_i[s : s + args.batch]
             dist = batch_logits(idx)
+            # All heads the demo can label. move_x/move_z only carry signal on
+            # frames where the bot actually issued a move; elsewhere they sit at
+            # the centre bin, so weight them by whether this row is a move.
+            is_move = torch.as_tensor(
+                (heads["button"][idx] == idx_move_g).astype("float32"))
             loss = F.cross_entropy(
                 dist.button.logits.reshape(len(idx), -1),
                 torch.as_tensor(heads["button"][idx]),
             )
+            for head in ("move_x", "move_z"):
+                ce = F.cross_entropy(
+                    getattr(dist, head).logits.reshape(len(idx), -1),
+                    torch.as_tensor(heads[head][idx]),
+                    reduction="none",
+                )
+                loss = loss + (ce * is_move).sum() / is_move.sum().clamp(min=1.0)
             opt.zero_grad(); loss.backward(); opt.step()
             tot += float(loss) * len(idx); seen += len(idx)
         policy.eval()

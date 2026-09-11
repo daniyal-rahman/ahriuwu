@@ -46,8 +46,41 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
+
+def move_bins_for(adapter, raw, team, goal_x, goal_y):
+    """Invert decode_action's move mapping: world goal -> (move_x, move_z) bins.
+
+    Without this, BC clones only the DECISION to move and not the direction --
+    which teaches nothing about walking to lane, the single behaviour the RL
+    agent could never discover on its own.
+
+    decode_action does:  canonical bin -> unit vector -> transform.vector()
+                         -> world direction -> goal = self + dir * move_distance
+    The transform is its own inverse, so applying it to the world direction
+    recovers the canonical one, and the bins are its nearest grid points.
+    """
+    import numpy as _np
+    from lanerl_rl import constants as _C
+
+    ch = next((u for u in raw.get("u", [])
+               if u.get("k") == "Champion" and u.get("tm") == team), None)
+    if ch is None:
+        return None
+    dx, dy = float(goal_x) - float(ch["x"]), float(goal_y) - float(ch["y"])
+    norm = math.hypot(dx, dy)
+    if norm < 1e-6:
+        return None
+    wx, wy = dx / norm, dy / norm
+    try:
+        tx, tz = adapter.builder.transform.vector(wx, wy)
+    except Exception:
+        return None
+    bins = _C.MOVE_BIN_VALUES
+    return int(_np.argmin(_np.abs(bins - tx))), int(_np.argmin(_np.abs(bins - tz)))
+
+
 def collect_game(max_game_ms: int, step_ticks: int, log: Path,
-                 keep_noop_frac: float) -> Dict[str, List]:
+                 keep_noop_frac: float, seed: int = 1234) -> Dict[str, List]:
     """One bot-vs-bot game; returns per-side observation/label lists."""
     from lanerl_train.lane_wiring import make_lane_adapters
 
@@ -64,6 +97,13 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
         LANERL_BOT="both",                      # both sides demonstrate
         LANERL_CONTROL_PORT=str(cport),
         LANERL_STEP_TICKS=str(step_ticks),
+        # Vary the bot's seed per game. The server is fully deterministic given
+        # a seed and our (constant) action stream, so two games at the default
+        # seed came back BYTE-IDENTICAL -- 16,930 samples each with the same
+        # action histogram. That doubles the dataset while adding no
+        # information, and a BC prior trained on one repeated game clones one
+        # trajectory rather than a policy.
+        LANERL_BOT_SEED=str(seed),
     )
     proc = subprocess.Popen(
         [str(BIN / "GameServerConsole"), "--config", str(CFG), "--port", str(gport)],
@@ -104,6 +144,12 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
                     obs = builders[side].build(raw, side)
                 except Exception:
                     continue
+                if demo.get("x") is not None:
+                    mb = move_bins_for(builders[side], raw, team,
+                                       demo["x"], demo["y"])
+                    if mb is not None:
+                        demo = dict(demo)
+                        demo["mx"], demo["mz"] = mb
                 out["obs"].append(obs)
                 out["label"].append(demo)
                 out["side"].append(side)
@@ -135,7 +181,8 @@ def main() -> int:
     all_obs, all_lab, all_side = [], [], []
     for g in range(args.games):
         got = collect_game(args.max_game_ms, args.step_ticks,
-                           logdir / f"demos_{g}.log", args.keep_noop_frac)
+                           logdir / f"demos_{g}.log", args.keep_noop_frac,
+                           seed=1234 + g * 7919)
         all_obs += got["obs"]; all_lab += got["label"]; all_side += got["side"]
         hist = Counter(d.get("t") for d in got["label"])
         print(f"  game {g}: {len(got['label'])} samples  {dict(hist)}")
@@ -143,6 +190,19 @@ def main() -> int:
     if not all_lab:
         print("NO DEMONSTRATIONS COLLECTED -- refusing to write an empty dataset")
         return 1
+    if args.games > 1:
+        # A duplicate-game check, because the first collection silently produced
+        # two identical games and only the matching histograms gave it away.
+        import hashlib
+        sigs = set()
+        per = len(all_obs) // args.games
+        for g in range(args.games):
+            chunk = all_obs[g * per : (g + 1) * per]
+            h = hashlib.md5(np.stack([o.self_vec for o in chunk]).tobytes()).hexdigest()
+            sigs.add(h)
+        if len(sigs) < args.games:
+            print(f"WARNING: only {len(sigs)} distinct games out of {args.games} -- "
+                  f"the bot seed is not varying and the extra games add no information")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
