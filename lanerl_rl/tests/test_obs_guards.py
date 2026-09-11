@@ -8,7 +8,6 @@ error names the array, the slot and the field.
 
 from __future__ import annotations
 
-import statistics
 import time
 
 import numpy as np
@@ -246,32 +245,38 @@ def test_the_guard_stays_inside_its_measured_budget():
     The bound here is deliberately loose (50%) so ordinary machine noise cannot
     fail the build, while a guard that starts copying arrays or goes quadratic
     still does.
+
+    Two things make this non-flaky on a node that is also running 12 game
+    servers. The arms are INTERLEAVED, so a load spike hits both rather than
+    whichever ran second; and each arm is scored by its MINIMUM per-call time,
+    which is the only statistic a descheduled process cannot inflate. A median
+    of one arm against a median of the other failed here at 3x under load
+    while the real overhead was 12%.
     """
-    frames = [decode_frame(raw_frame(t)) for t in range(0, 66 * 120, 66)]
+    import os
 
-    def run(strict: str) -> float:
-        import os
+    frames = [decode_frame(raw_frame(t)) for t in range(0, 66 * 40, 66)]
+    prev = os.environ.get("LANERL_OBS_STRICT")
+    builders = {"0": ObservationBuilder(C.TEAM_BLUE), "1": ObservationBuilder(C.TEAM_BLUE)}
+    best = {"0": float("inf"), "1": float("inf")}
+    try:
+        for rep in range(6):
+            for strict in ("0", "1"):
+                os.environ["LANERL_OBS_STRICT"] = strict
+                b = builders[strict]
+                for f in frames:
+                    t0 = time.perf_counter()
+                    b.build(f)
+                    dt = time.perf_counter() - t0
+                    if rep > 0:  # the first rep is the warm-up
+                        best[strict] = min(best[strict], dt)
+    finally:
+        if prev is None:
+            os.environ.pop("LANERL_OBS_STRICT", None)
+        else:
+            os.environ["LANERL_OBS_STRICT"] = prev
 
-        prev = os.environ.get("LANERL_OBS_STRICT")
-        os.environ["LANERL_OBS_STRICT"] = strict
-        try:
-            b = ObservationBuilder(C.TEAM_BLUE)
-            for f in frames[:20]:  # warm
-                b.build(f)
-            ts = []
-            for f in frames:
-                t0 = time.perf_counter()
-                b.build(f)
-                ts.append(time.perf_counter() - t0)
-            return statistics.median(ts)
-        finally:
-            if prev is None:
-                os.environ.pop("LANERL_OBS_STRICT", None)
-            else:
-                os.environ["LANERL_OBS_STRICT"] = prev
-
-    off = run("0")
-    on = run("1")
+    off, on = best["0"], best["1"]
     assert on < off * 1.5, f"guards cost {100 * (on / off - 1):.0f}% of build(), budget 50%"
 
 
