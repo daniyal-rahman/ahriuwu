@@ -83,6 +83,12 @@ DECISION_HZ = SERVER_TICK_HZ / STEP_TICKS
 DECISION_DT_S = 1.0 / DECISION_HZ
 DECISION_DT_MS = 1000.0 * DECISION_DT_S
 
+#: Ceiling on ``global_vec.dt_norm``.  Past a few missed decisions the exact
+#: gap is not actionable, and an uncapped ratio is the only field in the actor
+#: observation whose healthy range is unbounded -- which makes it the one field
+#: a range guard cannot bound.  8 decisions is a quarter of a second at 30 Hz.
+DT_NORM_CAP = 8.0
+
 #: Measured on ``lanerl/logs/state.jsonl``: the last-hit window in milliseconds.
 LAST_HIT_WINDOW_MEDIAN_MS = 854.0
 LAST_HIT_WINDOW_P90_MS = 2285.0

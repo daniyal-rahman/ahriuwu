@@ -79,7 +79,12 @@ from .frame import (
     record_keys,
     unit_keys,
 )
-from .obs import ACTOR_PATH_FUNCTIONS, PRIVILEGED_PATH_FUNCTIONS, ObservationBuilder
+from .obs import (
+    ACTOR_PATH_FUNCTIONS,
+    PRIVILEGED_PATH_FUNCTIONS,
+    ObservationBuilder,
+    relaxed_obs_range,
+)
 from .scenarios import encode_frame, make_frame, top_lane_scenario, unit
 
 __all__ = ["AuditFinding", "run_audit", "main", "control_source_path"]
@@ -679,9 +684,15 @@ def check_wire_schema_matches_the_decoder() -> List[AuditFinding]:
 
 
 def _build_pair(frame_a: Frame, frame_b: Frame, team: int = C.TEAM_BLUE):
-    ba = ObservationBuilder(team, fog_model=_quiet_fog())
-    bb = ObservationBuilder(team, fog_model=_quiet_fog())
-    return ba.build(frame_a), bb.build(frame_b)
+    # relaxed_obs_range: the poisoned side of a differential probe carries
+    # 999,999 gold on purpose, so that a leak into the actor path is
+    # unmistakable rather than a rounding difference. That is exactly the value
+    # ObservationBuilder's range guard exists to reject in a real run; the
+    # finiteness, shape and mask checks stay on.
+    with relaxed_obs_range():
+        ba = ObservationBuilder(team, fog_model=_quiet_fog())
+        bb = ObservationBuilder(team, fog_model=_quiet_fog())
+        return ba.build(frame_a), bb.build(frame_b)
 
 
 def _quiet_fog():
@@ -801,7 +812,8 @@ def check_all_slots_never_alias_fogged() -> List[AuditFinding]:
     builder = ObservationBuilder(C.TEAM_BLUE, fog_model=ApproxFogModel(warn=False))
     fog = ApproxFogModel(warn=False)
     for f in frames:
-        o = builder.build(f)
+        with relaxed_obs_range():  # see _build_pair
+            o = builder.build(f)
         visible = fog.visible_ids(f, C.TEAM_BLUE)
         ax, ay = builder.transform.point(f.champion_of_team(C.TEAM_BLUE).x, f.champion_of_team(C.TEAM_BLUE).y)
         for uid, u in f.units.items():
@@ -845,8 +857,9 @@ def _cooldown_scenario(t_ms: int, red_s: float, cds) -> Frame:
 def _run_sequence(frames: Sequence[Frame]):
     b = ObservationBuilder(C.TEAM_BLUE, fog_model=_quiet_fog())
     out = None
-    for f in frames:
-        out = b.build(f)
+    with relaxed_obs_range():  # see _build_pair
+        for f in frames:
+            out = b.build(f)
     return out
 
 
@@ -959,8 +972,9 @@ def _poisoned_records(
 def _run_records(records: Sequence[dict], team: int = C.TEAM_BLUE):
     b = ObservationBuilder(team, fog_model=_quiet_fog())
     out = None
-    for rec in records:
-        out = b.build(decode_frame(rec))
+    with relaxed_obs_range():  # see _build_pair
+        for rec in records:
+            out = b.build(decode_frame(rec))
     return out
 
 

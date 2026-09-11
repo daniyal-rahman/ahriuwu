@@ -130,9 +130,12 @@ old delta-hp/delta-gold sum, and ``reward.ZeroSumLaneReward`` -- which is what
 
 from __future__ import annotations
 
+import logging
 import math
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -154,9 +157,16 @@ __all__ = [
     "AbilityBook",
     "AttackClock",
     "ObservationBuilder",
+    "ObservationError",
+    "OBS_VALUE_LIMIT",
+    "obs_checks_enabled",
+    "check_observation",
+    "relaxed_obs_range",
     "ACTOR_PATH_FUNCTIONS",
     "PRIVILEGED_PATH_FUNCTIONS",
 ]
+
+log = logging.getLogger("lanerl_rl.obs")
 
 #: Functions that produce the *actor* observation.  ``audit.py`` static-checks
 #: exactly these for privileged references.
@@ -359,6 +369,215 @@ class AgentObservation:
 
 
 # --------------------------------------------------------------------------
+# Runtime guards on the tensors that reach the policy
+# --------------------------------------------------------------------------
+
+
+class ObservationError(ValueError):
+    """An observation that must not be allowed to reach the policy.
+
+    Fatal on purpose.  A single NaN in ``entities`` propagates through the
+    attention encoder into every head, ``dist.sample()`` then raises somewhere
+    with no reference to the field that caused it, and -- worse -- a NaN that
+    reaches the optimiser turns the whole network to NaN in one step, at which
+    point the run keeps producing updates forever and every metric is quietly
+    meaningless.  That is the shape of 13,475 updates of nothing.
+    """
+
+
+#: Nothing in a normalised observation should exceed this in absolute value.
+#:
+#: The bound is not arbitrary.  Every field is one of: a flag or one-hot (0..1),
+#: a cosine/sine (-1..1), a fraction explicitly clamped at 4.0 (gold, CS, hp_abs,
+#: minion counts), or a geometric quantity divided by ``NORM_XY``/``NORM_DIST``
+#: = 3000 units.  Summoner's Rift is ~15000 units across, so the largest value
+#: geometry alone can produce is ~5.  20 leaves 4x headroom over that and still
+#: catches the failure this is really for: a RAW world coordinate reaching a
+#: field that should have been normalised (12000 / 1 = 12000), which is silent
+#: today -- the policy simply saturates and nobody can tell from a loss curve.
+#:
+#: Measured over 400 decisions of a two-champion, 14-minion lane frame, the
+#: largest absolute value produced by any field is 3.0 (in ``entities``), so the
+#: margin against a false positive is 6.7x.
+OBS_VALUE_LIMIT = 20.0
+
+#: ``LANERL_OBS_STRICT=0`` turns the guards off for a hot rollout loop.
+#:
+#: Measured on danilogin, same 400-decision frame sequence: ``build()`` takes
+#: 535 us with the guards off and 601 us with them on -- 66 us, 12.3%.  The
+#: check itself is 40 us; disabled it is 0.4 us, i.e. one ``os.environ`` lookup.
+#: Default ON: 12% of an observation build is ~0.05% of a decision at this
+#: stack's measured throughput (664 decisions/s against 12 servers, where the
+#: learner is 5% of wall time and the simulator is nearly all of it), and the
+#: failure it prevents costs a whole run.  ``test_obs_guards.py`` keeps the
+#: overhead inside a budget rather than trusting this note.
+_STRICT_ENV = "LANERL_OBS_STRICT"
+
+_FIELD_NAMES = {
+    "entities": C.ENTITY_FIELD_NAMES,
+    "priv_entities": C.ENTITY_FIELD_NAMES,
+    "self_vec": C.SELF_FIELD_NAMES,
+    "global_vec": C.GLOBAL_FIELD_NAMES,
+    "priv_vec": C.PRIV_FIELD_NAMES,
+}
+
+_EXPECTED_SHAPES = {
+    "entities": (C.N_SLOTS, C.ENTITY_DIM),
+    "priv_entities": (C.N_SLOTS, C.ENTITY_DIM),
+    "entity_pad_mask": (C.N_SLOTS,),
+    "priv_pad_mask": (C.N_SLOTS,),
+    "self_vec": (C.SELF_DIM,),
+    "global_vec": (C.GLOBAL_DIM,),
+    "priv_vec": (C.PRIV_DIM,),
+}
+
+
+#: Set by :func:`relaxed_obs_range` only.  Not an env var: relaxing the range
+#: is a property of one call site, not of a process.
+_range_limit_override: Optional[float] = None
+
+
+@contextmanager
+def relaxed_obs_range(limit: float = math.inf) -> Iterator[None]:
+    """Relax the RANGE check (only) for code that builds impossible frames.
+
+    ``lanerl_rl.audit`` poisons privileged fields with 999,999 gold precisely so
+    that a leak into the actor path is unmistakable; that is a value the range
+    guard is right to reject everywhere else.  Finiteness, shape and mask
+    consistency stay on -- those the audit's frames should still satisfy.
+    """
+    global _range_limit_override
+    prev = _range_limit_override
+    _range_limit_override = float(limit)
+    try:
+        yield
+    finally:
+        _range_limit_override = prev
+
+
+def obs_checks_enabled() -> bool:
+    """Whether :func:`check_observation` does anything.  Read per call.
+
+    Read per call rather than cached at import so a test can flip it with
+    ``monkeypatch.setenv`` -- a module-level constant would make the disabled
+    path untestable in the same process, which is how a guard ends up shipped
+    with its off switch never exercised.
+    """
+    return os.environ.get(_STRICT_ENV, "1") != "0"
+
+
+def _describe(array_name: str, flat_index: int) -> str:
+    """``entities[slot 13].hp_frac`` from an array name and a flat index."""
+    names = _FIELD_NAMES.get(array_name)
+    if names is None:
+        return f"{array_name}[{flat_index}]"
+    if array_name in ("entities", "priv_entities"):
+        slot, field = divmod(int(flat_index), C.ENTITY_DIM)
+        return f"{array_name}[slot {slot}].{names[field]} (field {field})"
+    return f"{array_name}.{names[int(flat_index)]} (index {flat_index})"
+
+
+def _check_array(name: str, a: np.ndarray, limit: float) -> None:
+    expected = _EXPECTED_SHAPES[name]
+    if a.shape != expected:
+        raise ObservationError(
+            f"{name} has shape {a.shape}, expected {expected}. A shape change here is a "
+            f"layout change: the policy would read a different field under every index."
+        )
+    if a.dtype == np.bool_:
+        return
+    flat = np.asarray(a).reshape(-1)
+    bad = ~np.isfinite(flat)
+    if bad.any():
+        idx = int(np.flatnonzero(bad)[0])
+        n = int(bad.sum())
+        raise ObservationError(
+            f"{_describe(name, idx)} is {flat[idx]!r} ({n} non-finite value(s) in {name}). "
+            f"A NaN here reaches every head through the attention encoder and, once it "
+            f"reaches the optimiser, makes the whole network NaN in one step while the "
+            f"run carries on producing updates."
+        )
+    over = np.abs(flat) > limit
+    if over.any():
+        idx = int(np.flatnonzero(over)[0])
+        n = int(over.sum())
+        raise ObservationError(
+            f"{_describe(name, idx)} is {float(flat[idx]):.6g}, beyond the normalised "
+            f"range +-{limit:g} ({n} value(s) over). Geometry alone cannot exceed ~5 "
+            f"here, so this is an unnormalised quantity reaching a normalised field."
+        )
+
+
+def check_observation(
+    obs: "AgentObservation", where: str = "", limit: Optional[float] = None
+) -> None:
+    """Validate one observation, loudly and with the offending field named.
+
+    No-op when :func:`obs_checks_enabled` is False.  Raises
+    :class:`ObservationError` naming the array, the slot, the field and the
+    value -- the point is that the failure message is the diagnosis, not the
+    start of one.
+    """
+    if not obs_checks_enabled():
+        return
+    if limit is None:
+        limit = OBS_VALUE_LIMIT if _range_limit_override is None else _range_limit_override
+    try:
+        for name in (
+            "entities",
+            "self_vec",
+            "global_vec",
+            "priv_entities",
+            "priv_vec",
+            "entity_pad_mask",
+            "priv_pad_mask",
+        ):
+            _check_array(name, getattr(obs, name), limit)
+
+        # The pad mask IS the attention key_padding_mask. If it disagrees with
+        # the valid column, either fogged slots get attended to (hallucinated
+        # enemies at ds=dn=0 -- see rule 3 in the module docstring) or real
+        # ones get masked out. Both are silent.
+        for ent_name, mask_name in (
+            ("entities", "entity_pad_mask"),
+            ("priv_entities", "priv_pad_mask"),
+        ):
+            ent = getattr(obs, ent_name)
+            mask = getattr(obs, mask_name)
+            expected = ent[:, C.E_VALID] < 0.5
+            if not np.array_equal(np.asarray(mask, dtype=bool), expected):
+                wrong = int(np.flatnonzero(np.asarray(mask, dtype=bool) != expected)[0])
+                raise ObservationError(
+                    f"{mask_name}[{wrong}] is {bool(mask[wrong])} but "
+                    f"{ent_name}[{wrong}].valid is {float(ent[wrong, C.E_VALID])}. The pad "
+                    f"mask is the attention key_padding_mask; disagreeing with 'valid' "
+                    f"either hides a real entity or attends to a hallucinated one."
+                )
+
+        m = obs.action_mask
+        for field, width in (
+            ("button", C.N_BUTTONS),
+            ("move_x", C.N_MOVE_BINS),
+            ("move_z", C.N_MOVE_BINS),
+            ("target", C.N_SLOTS),
+        ):
+            arr = getattr(m, field)
+            if arr.shape != (width,):
+                raise ObservationError(
+                    f"action_mask.{field} has shape {arr.shape}, expected {(width,)}"
+                )
+            if not bool(np.asarray(arr).any()):
+                raise ObservationError(
+                    f"action_mask.{field} is all False. A fully masked categorical gives "
+                    f"log-softmax over nothing, i.e. NaN log-probs for every action -- "
+                    f"which is why _build_action_mask force-enables target slot 0."
+                )
+    except ObservationError as exc:
+        log.error("OBSERVATION GUARD FAILED%s: %s", f" ({where})" if where else "", exc)
+        raise
+
+
+# --------------------------------------------------------------------------
 # The builder
 # --------------------------------------------------------------------------
 
@@ -528,7 +747,7 @@ class ObservationBuilder:
 
         self._prev_t_ms = frame.t_ms
 
-        return AgentObservation(
+        obs = AgentObservation(
             entities=entities,
             entity_pad_mask=pad,
             self_vec=self_vec,
@@ -540,6 +759,8 @@ class ObservationBuilder:
             t_ms=frame.t_ms,
             fog_source=source,
         )
+        check_observation(obs, where=f"team={self.team} t_ms={frame.t_ms}")
+        return obs
 
     # -- helpers shared by both paths --------------------------------------
 
@@ -902,7 +1123,28 @@ class ObservationBuilder:
         g[C.G_N_ENEMY_MINIONS] = min(n_enemy / 8.0, 2.0)
         g[C.G_IS_DEAD] = 0.0 if self_u.alive else 1.0
         dt = C.DECISION_DT_MS if self._prev_t_ms is None else float(frame.t_ms - self._prev_t_ms)
-        g[C.G_DT_NORM] = dt / C.DECISION_DT_MS
+        if dt < 0.0:
+            # The game clock went backwards, which only happens on an episode
+            # reset the builder was not told about (VecDriver does call
+            # adapter.reset(); a bare LaneEnv reset or a server restart on some
+            # other path may not). The raw value here is arbitrarily large and
+            # negative -- a 2.5 s rewind at 30 Hz is dt_norm = -75 -- and it
+            # would go straight into the policy as a feature. One decision's
+            # worth is the honest stand-in, same as the first frame of an
+            # episode.
+            log.error(
+                "game clock went backwards (%s -> %d ms): an episode reset did not reach "
+                "the observation builder, so its memory, attack clock and ability "
+                "cooldowns are all carrying the previous episode's state. Treating dt as "
+                "one decision.",
+                self._prev_t_ms,
+                frame.t_ms,
+            )
+            dt = C.DECISION_DT_MS
+        # A long stall is worth flagging but its exact size is not actionable,
+        # and an unbounded field here is the one thing in global_vec that can
+        # exceed the guard's normalised range on healthy data.
+        g[C.G_DT_NORM] = min(dt / C.DECISION_DT_MS, C.DT_NORM_CAP)
 
         # Remembered enemy champion whereabouts.
         if enemy_u is not None:
