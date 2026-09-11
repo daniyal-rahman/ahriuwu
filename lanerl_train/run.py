@@ -39,9 +39,11 @@ import random
 import threading
 import time
 import traceback
+from collections import deque
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Deque, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from . import paths
 from .eval import Evaluator, MatchRecord
@@ -63,6 +65,8 @@ __all__ = [
     "MetricsLog",
     "ParameterStore",
     "StalenessTracker",
+    "ThroughputMeter",
+    "GpuProbe",
     "TrainStepCounter",
     "CheckpointManager",
     "RunConfig",
@@ -127,12 +131,22 @@ class Rollout:
 
     actor_id: int
     param_version: int
+    #: Rollout ROWS, not environment decisions.  One row is one timestep across
+    #: every parallel env in this actor's batch, so the decision count is
+    #: ``steps * parallel_envs``.  ``RunState.total_env_steps`` sums this field
+    #: and is therefore also in rows; the first run's 3,852,540 "env steps" were
+    #: 30.8M actual decisions.  Left as-is because the reward's zero-sum anneal
+    #: is already denominated in it, and moving that clock mid-run would restart
+    #: the anneal.
     steps: int
     data: Any = None
     episodes: List[EpisodeResult] = field(default_factory=list)
     #: Realised opponent mixture within this rollout, for drift checking.
     mixture: Mapping[str, float] = field(default_factory=dict)
     collected_at: float = field(default_factory=time.time)
+    #: How many (instance, side) slots one row covers.  Set by the collector;
+    #: 1 means "this rollout counts rows and decisions the same way".
+    parallel_envs: int = 1
 
 
 # --------------------------------------------------------------------------
@@ -291,6 +305,204 @@ class StalenessTracker:
             "max_staleness_trained_on": self.max_accepted,
             "max_staleness_allowed": self.max_staleness,
         }
+
+
+# --------------------------------------------------------------------------
+# Throughput and resource telemetry
+# --------------------------------------------------------------------------
+
+
+class ThroughputMeter:
+    """How fast the run is going, and where each update's wall time went.
+
+    The first real run produced 13,475 updates and ``metrics.jsonl`` could not
+    answer "is this compute-bound, env-bound or stalled?".  The only throughput
+    figure anyone had was anecdotal ("nvidia-smi says about 5%"), which is not a
+    number you can put in a post-mortem or compare against the next run.
+
+    Three quantities settle it from the log alone:
+
+    ``learner_s``     seconds inside ``learner.update()`` for this update;
+    ``wait_s``        seconds blocked on ``queue.get()`` waiting for a rollout;
+    ``learner_frac``  ``learner_s / update_s``.
+
+    ``learner_frac`` near 1 is compute-bound, near 0 is env-bound, and an
+    ``update_s`` that grows while neither of the other two does is a stall
+    somewhere else entirely (metrics I/O, checkpointing, the eval hook).
+
+    The rolling window is counted in **updates, not seconds**: a run whose rate
+    collapses must still report a rate, and a time-based window reports nothing
+    at exactly the moment the number is most wanted.
+
+    ``clock`` is injected so a test can assert exact rates instead of sleeping.
+    """
+
+    def __init__(self, window: int = 50, clock: Callable[[], float] = time.monotonic):
+        if window < 1:
+            raise ValueError(f"window must be >= 1 update, got {window}")
+        self.window = int(window)
+        self._clock = clock
+        self.started_at = float(clock())
+        #: ``(wall, cumulative rows, cumulative decisions)`` marks, oldest first.
+        self._marks: Deque[Tuple[float, int, int]] = deque(maxlen=self.window + 1)
+        self._marks.append((self.started_at, 0, 0))
+        self.updates = 0
+        self.total_steps = 0
+        self.total_decisions = 0
+        self.total_wait_s = 0.0
+        self.total_learner_s = 0.0
+        self.total_rejected_s = 0.0
+        self._wait_s = 0.0
+        self._learner_s = 0.0
+        self._rejected_s = 0.0
+
+    # -- accounting for one update ----------------------------------------
+
+    def note_wait(self, seconds: float) -> None:
+        self._wait_s += float(seconds)
+        self.total_wait_s += float(seconds)
+
+    def note_learner(self, seconds: float) -> None:
+        self._learner_s += float(seconds)
+        self.total_learner_s += float(seconds)
+
+    @contextmanager
+    def waiting(self) -> Iterator[None]:
+        t0 = self._clock()
+        try:
+            yield
+        finally:
+            self.note_wait(self._clock() - t0)
+
+    @contextmanager
+    def learning(self) -> Iterator[None]:
+        t0 = self._clock()
+        try:
+            yield
+        finally:
+            self.note_learner(self._clock() - t0)
+
+    def discard_pending(self) -> None:
+        """Reclassify the pending wait as time spent on a rollout that was thrown away.
+
+        A rollout rejected for staleness never becomes an update, so its wait
+        must not be billed as productive ``wait_s`` on the next one -- but it
+        must not vanish either, or the buckets stop adding up to ``update_s``
+        and the log quietly loses the most expensive thing in the run.
+        ``wait_s + learner_s + rejected_s`` should account for ``update_s``;
+        whatever is left over is overhead in this loop itself.
+        """
+        self._rejected_s += self._wait_s + self._learner_s
+        self.total_rejected_s += self._wait_s + self._learner_s
+        self._wait_s = 0.0
+        self._learner_s = 0.0
+
+    def record(self, steps: int, parallel_envs: int = 1) -> Dict[str, Any]:
+        """Close out one update and return the row fields to log."""
+        now = float(self._clock())
+        prev_wall = self._marks[-1][0]
+        self.updates += 1
+        self.total_steps += int(steps)
+        self.total_decisions += int(steps) * max(1, int(parallel_envs))
+        self._marks.append((now, self.total_steps, self.total_decisions))
+        t0, s0, d0 = self._marks[0]
+        span = now - t0
+        n = len(self._marks) - 1
+        update_s = now - prev_wall
+        out: Dict[str, Any] = {
+            "wall_s": now - self.started_at,
+            "update_s": update_s,
+            "wait_s": self._wait_s,
+            "learner_s": self._learner_s,
+            "rejected_s": self._rejected_s,
+            "learner_frac": (self._learner_s / update_s) if update_s > 0 else None,
+            "window_updates": n,
+            "updates_per_s": (n / span) if span > 0 else None,
+            "env_steps_per_s": ((self.total_steps - s0) / span) if span > 0 else None,
+            "decisions_per_s": ((self.total_decisions - d0) / span) if span > 0 else None,
+            "total_decisions": self.total_decisions,
+        }
+        self._wait_s = 0.0
+        self._learner_s = 0.0
+        self._rejected_s = 0.0
+        return out
+
+    def totals(self) -> Dict[str, Any]:
+        """Lifetime figures, for the shutdown/failure record."""
+        span = float(self._clock()) - self.started_at
+        return {
+            "total_wall_s": span,
+            "total_wait_s": self.total_wait_s,
+            "total_learner_s": self.total_learner_s,
+            "total_rejected_s": self.total_rejected_s,
+            "mean_updates_per_s": (self.updates / span) if span > 0 else None,
+            "mean_env_steps_per_s": (self.total_steps / span) if span > 0 else None,
+            "mean_decisions_per_s": (self.total_decisions / span) if span > 0 else None,
+        }
+
+
+class GpuProbe:
+    """GPU utilisation and memory, or ``None`` everywhere it cannot be had.
+
+    Every field is optional on purpose.  This stack is unit-tested on a CPU-only
+    path, ``torch.cuda.utilization()`` needs ``pynvml`` which is not installed on
+    either node here, and a telemetry call that can raise is a telemetry call
+    that will eventually kill a run.  So each probe is tried once, and a failure
+    disables that probe for the life of the process rather than paying an
+    exception per update.
+
+    ``utilization()`` is an NVML round trip (~1 ms measured elsewhere) against
+    ~2 us for ``memory_allocated()``, so it is sampled every
+    ``utilization_every`` updates and the cached reading is reused in between.
+    """
+
+    def __init__(self, device: Optional[str] = None, utilization_every: int = 25):
+        self.utilization_every = max(1, int(utilization_every))
+        self._calls = 0
+        self._torch = None
+        self._enabled = False
+        self._util_ok = True
+        self._util_cached: Optional[float] = None
+        self.device = device
+        try:  # pragma: no cover - depends on the environment
+            import torch
+
+            self._torch = torch
+            self._enabled = bool(device is None or "cuda" in str(device)) and torch.cuda.is_available()
+        except Exception:
+            self._enabled = False
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def sample(self) -> Dict[str, Any]:
+        if not self._enabled:
+            return {"util_pct": None, "mem_allocated_mb": None, "mem_reserved_mb": None}
+        torch = self._torch
+        out: Dict[str, Any] = {"util_pct": None, "mem_allocated_mb": None, "mem_reserved_mb": None}
+        try:
+            out["mem_allocated_mb"] = torch.cuda.memory_allocated() / (1024.0 * 1024.0)
+            out["mem_reserved_mb"] = torch.cuda.memory_reserved() / (1024.0 * 1024.0)
+        except Exception as exc:  # pragma: no cover - driver-dependent
+            log.error("GPU memory probe failed and is now disabled: %s", exc)
+            self._enabled = False
+            return out
+        if self._util_ok and self._calls % self.utilization_every == 0:
+            try:
+                self._util_cached = float(torch.cuda.utilization())
+            except Exception as exc:
+                self._util_ok = False
+                self._util_cached = None
+                log.warning(
+                    "torch.cuda.utilization() is unavailable (%s); GPU memory is still "
+                    "logged but gpu/util_pct will be null for this run. `pip install "
+                    "pynvml` if the utilisation number is wanted.",
+                    exc,
+                )
+        out["util_pct"] = self._util_cached
+        self._calls += 1
+        return out
 
 
 # --------------------------------------------------------------------------
@@ -610,6 +822,8 @@ class TrainingLoop:
         evaluator: Optional[Evaluator] = None,
         sampler: Optional[OpponentSampler] = None,
         metrics: Optional[MetricsLog] = None,
+        throughput: Optional["ThroughputMeter"] = None,
+        gpu: Optional["GpuProbe"] = None,
     ):
         self.cfg = config
         self.learner = learner
@@ -643,6 +857,8 @@ class TrainingLoop:
         self.train_steps = TrainStepCounter()
         self.actors: List[ActorLoop] = []
         self._last_update_at = time.monotonic()
+        self.throughput = throughput or ThroughputMeter()
+        self.gpu = gpu or GpuProbe(getattr(config, "device", None))
 
     # -- helpers -----------------------------------------------------------
 
@@ -793,8 +1009,10 @@ class TrainingLoop:
         self._check_actors()
         wait = self.cfg.stall_timeout_s if timeout is None else timeout
         try:
-            rollout = self.queue.get(timeout=wait)
+            with self.throughput.waiting():
+                rollout = self.queue.get(timeout=wait)
         except queue.Empty:
+            self.throughput.discard_pending()
             self._check_actors()
             raise StalledRun(
                 f"no rollout in {wait:.0f}s at update {self.state.update}. Actors are alive "
@@ -808,6 +1026,7 @@ class TrainingLoop:
             )
 
         if not self.staleness.admit(rollout.param_version, self.state.param_version):
+            self.throughput.discard_pending()
             self.metrics.write(
                 "rollout_rejected",
                 update=self.state.update,
@@ -818,7 +1037,8 @@ class TrainingLoop:
             )
             return False
 
-        metrics = dict(self.learner.update(rollout.data))
+        with self.throughput.learning():
+            metrics = dict(self.learner.update(rollout.data))
         self.state.update += 1
         self.state.total_env_steps += int(rollout.steps)
         self.state.param_version = self.store.publish(self._policy_payload())
@@ -831,11 +1051,14 @@ class TrainingLoop:
         for ep in rollout.episodes:
             self.record_episode(ep)
 
+        thr = self.throughput.record(rollout.steps, rollout.parallel_envs)
+        gpu = self.gpu.sample()
         self.metrics.write(
             "update",
             update=self.state.update,
             actor=rollout.actor_id,
             steps=rollout.steps,
+            parallel_envs=rollout.parallel_envs,
             total_env_steps=self.state.total_env_steps,
             total_episodes=self.state.total_episodes,
             param_version=self.state.param_version,
@@ -847,6 +1070,8 @@ class TrainingLoop:
             mixture=dict(rollout.mixture),
             mixture_drift=self.sampler.mixture_drift(),
             **{f"loss/{k}": v for k, v in metrics.items()},
+            **{f"throughput/{k}": v for k, v in thr.items()},
+            **{f"gpu/{k}": v for k, v in gpu.items()},
         )
         self._periodic()
         return True
@@ -914,7 +1139,10 @@ class TrainingLoop:
         except BaseException:
             self.stop_event.set()
             self.metrics.write(
-                "run_failed", update=self.state.update, **self.staleness.stats()
+                "run_failed",
+                update=self.state.update,
+                **self.staleness.stats(),
+                **self.throughput.totals(),
             )
             raise
         finally:
@@ -939,7 +1167,12 @@ class TrainingLoop:
                         actor.actor_id,
                         join_timeout_s,
                     )
-        self.metrics.write("shutdown", update=self.state.update, **self.staleness.stats())
+        self.metrics.write(
+            "shutdown",
+            update=self.state.update,
+            **self.staleness.stats(),
+            **self.throughput.totals(),
+        )
         self.metrics.close()
 
 

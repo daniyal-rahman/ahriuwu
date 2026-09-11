@@ -511,6 +511,10 @@ def collect_rollout(
         data=buffer,
         episodes=episodes,
         mixture={policy_key: 1.0},
+        # One buffer row is one decision in EACH of the n slots. Without this,
+        # throughput is reported 2 x envs_per_actor too low, which is how the
+        # first run's 3.85M logged "env steps" were really 30.8M decisions.
+        parallel_envs=n,
     )
 
 
