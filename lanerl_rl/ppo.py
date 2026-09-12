@@ -85,6 +85,14 @@ class PPOConfig:
     dual_clip: float = 3.0
     value_coef: float = 0.5
     entropy_coef: float = 0.01
+    #: Weight on KL(reference || policy) toward a frozen behaviour-cloning
+    #: prior. This is the AlphaStar shape: a supervised prior gets the agent
+    #: into the part of the state space where reward exists, and the KL term
+    #: keeps it there while PPO improves on it. Without an anchor the policy
+    #: drifts straight back to uniform -- measured: entropy returned to 88% of
+    #: maximum over 13,475 updates and the agent never reached lane.
+    #: 0.0 disables it, which is the behaviour when no reference is supplied.
+    kl_ref_coef: float = 0.0
     max_grad_norm: float = 1.0
     target_kl: float = 0.02
     lr: float = 3e-4
@@ -305,7 +313,16 @@ class RecurrentRolloutBuffer:
 class DualClipPPO:
     """PPO with the JueWu dual-clip term, recurrent minibatching and burn-in."""
 
-    def __init__(self, policy: LanePolicy, cfg: Optional[PPOConfig] = None, optimizer=None):
+    def __init__(self, policy: LanePolicy, cfg: Optional[PPOConfig] = None, optimizer=None,
+                 reference: Optional[LanePolicy] = None):
+        #: Frozen behaviour-cloning prior for the KL anchor, or None. Kept in
+        #: eval mode and never optimised -- it is a fixed target, not a second
+        #: learner.
+        self.reference = reference
+        if reference is not None:
+            reference.eval()
+            for prm in reference.parameters():
+                prm.requires_grad_(False)
         self.policy = policy
         self.cfg = cfg or PPOConfig()
         self.optimizer = optimizer or torch.optim.Adam(policy.parameters(), lr=self.cfg.lr, eps=1e-5)
@@ -368,7 +385,9 @@ class DualClipPPO:
 
     # -- one minibatch -----------------------------------------------------
 
-    def _forward_chunk(self, batch: Dict[str, object]) -> Tuple[LaneActionDist, torch.Tensor]:
+    def _forward_chunk(self, batch: Dict[str, object],
+                       policy: Optional[LanePolicy] = None) -> Tuple[LaneActionDist, torch.Tensor]:
+        net = policy if policy is not None else self.policy
         bi = int(batch["burn_in"])
         obs = batch["obs"]
         masks = batch["masks"]
@@ -377,7 +396,7 @@ class DualClipPPO:
 
         if bi > 0:
             with torch.no_grad():
-                _, _, state = self.policy.forward(
+                _, _, state = net.forward(
                     entities=obs["entities"][:, :bi],
                     entity_pad_mask=obs["entity_pad_mask"][:, :bi],
                     self_vec=obs["self_vec"][:, :bi],
@@ -390,7 +409,7 @@ class DualClipPPO:
                 )
             state = state.detach()
 
-        dist, value, _ = self.policy.forward(
+        dist, value, _ = net.forward(
             entities=obs["entities"][:, bi:],
             entity_pad_mask=obs["entity_pad_mask"][:, bi:],
             self_vec=obs["self_vec"][:, bi:],
@@ -403,7 +422,6 @@ class DualClipPPO:
             action_masks={k: masks[k][:, bi:] for k in MASK_KEYS},
         )
         return dist, value
-
     def update_minibatch(self, batch: Dict[str, object]) -> Dict[str, float]:
         cfg = self.cfg
         bi = int(batch["burn_in"])
@@ -424,11 +442,24 @@ class DualClipPPO:
         v_loss = self.value_loss(value, old_value, returns)
         loss = pi_loss + cfg.value_coef * v_loss - cfg.entropy_coef * entropy
 
+        # Anchor to the behaviour-cloning prior, if one was supplied. Computed
+        # against the SAME chunk, so the reference sees exactly the inputs the
+        # policy just saw; a reference evaluated on different inputs would
+        # regularise toward the wrong thing.
+        kl_ref = None
+        if self.reference is not None and cfg.kl_ref_coef > 0.0:
+            with torch.no_grad():
+                ref_dist, _ = self._forward_chunk(batch, policy=self.reference)
+            kl_ref = dist.kl_to(ref_dist.logits).mean()
+            loss = loss + cfg.kl_ref_coef * kl_ref
+
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         grad_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), cfg.max_grad_norm)
         self.optimizer.step()
 
+        if kl_ref is not None:
+            stats["kl_ref"] = float(kl_ref)
         stats.update(
             {
                 "loss": float(loss.detach()),

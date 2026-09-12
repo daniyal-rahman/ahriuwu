@@ -1,7 +1,10 @@
 """Record the TRAINED policy's positions + actions for the map plot."""
 import json, math, os, socket, subprocess, sys, time
-sys.path.insert(0,"/srv/nfs/projects/ahriuwu-lanerl")
-V="/srv/nfs/projects/lanerl-vendor"; BIN=f"{V}/LoLServer/GameServerConsole/bin/Release/net6.0"
+# derive the repo from this file: the export is /srv/nfs on danilogin and
+# /mnt/nfs on desktop, so either literal resolves on exactly one node
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _REPO)
+V=os.path.join(os.path.dirname(_REPO), "lanerl-vendor"); BIN=f"{V}/LoLServer/GameServerConsole/bin/Release/net6.0"
 CK=sys.argv[1]; OUT=sys.argv[2]; HORIZON=int(sys.argv[3])
 def free():
     with socket.socket() as s: s.bind(("127.0.0.1",0)); return s.getsockname()[1]
@@ -13,7 +16,7 @@ cp,gp=free(),free()
 env=dict(os.environ,DOTNET_ROOT=f"{V}/dotnet",LANERL_HEADLESS="1",LANERL_FREERUN="1",
          LANERL_BOT="purple",LANERL_CONTROL_PORT=str(cp),LANERL_STEP_TICKS="2")
 p=subprocess.Popen([f"{BIN}/GameServerConsole","--config",
-  "/srv/nfs/projects/ahriuwu-lanerl/lanerl/cfg/garen1v1.json","--port",str(gp)],
+  os.path.join(_REPO, "lanerl/cfg/garen1v1.json"),"--port",str(gp)],
   cwd=BIN,env=env,stdout=open(OUT+".log","w"),stderr=subprocess.STDOUT)
 rows=[]
 try:
