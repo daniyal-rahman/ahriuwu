@@ -138,48 +138,6 @@ def random_policy(raw):
     return {"blue": {"t": "noop"}}
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--checkpoint", required=True, help="path to update_*.pt, or 'random'")
-    ap.add_argument("--episodes", type=int, default=3)
-    ap.add_argument("--max-game-ms", type=int, default=600_000)
-    ap.add_argument("--step-ticks", type=int, default=2)
-    ap.add_argument("--out", default="")
-    args = ap.parse_args()
-
-    if args.checkpoint == "random":
-        policy, label = random_policy, "random"
-    else:
-        policy, label = trained_policy(args.checkpoint), Path(args.checkpoint).stem
-
-    rows: List[Dict] = []
-    logdir = _REPO / "lanerl/logs"
-    logdir.mkdir(parents=True, exist_ok=True)
-    for i in range(args.episodes):
-        row = play_episode(policy, args.max_game_ms, args.step_ticks,
-                           logdir / f"evalbot_{label}_{i}.log")
-        rows.append(row)
-        print(f"  ep{i}: t={row['t_s']:.0f}s cs={row['blue_cs']} (bot {row['red_cs']}) "
-              f"gold={row['blue_gold']} lvl={row['blue_lvl']} "
-              f"hp_lost={row['blue_hp_lost']} dist={row['distance_travelled']} "
-              f"buttons={row['buttons']}")
-
-    def agg(k):
-        v = [r[k] for r in rows if isinstance(r.get(k), (int, float))]
-        return statistics.mean(v) if v else float("nan")
-
-    print(f"\n{label}: n={len(rows)}  CS={agg('blue_cs'):.1f} vs bot {agg('red_cs'):.1f}  "
-          f"gold={agg('blue_gold'):.0f}  lvl={agg('blue_lvl'):.1f}  "
-          f"hp_lost={agg('blue_hp_lost'):.0f}  dist={agg('distance_travelled'):.0f}")
-    if args.out:
-        Path(args.out).write_text(json.dumps({"label": label, "rows": rows}, indent=2))
-        print("wrote", args.out)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
-
 def trained_policy(ckpt_path: str):
     """A raw-obs -> wire-order callable backed by a trained checkpoint.
 
@@ -225,3 +183,46 @@ def trained_policy(ckpt_path: str):
         return {"blue": encoder.encode(flat, raw, "blue")}
 
     return act
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--checkpoint", required=True, help="path to update_*.pt, or 'random'")
+    ap.add_argument("--episodes", type=int, default=3)
+    ap.add_argument("--max-game-ms", type=int, default=600_000)
+    ap.add_argument("--step-ticks", type=int, default=2)
+    ap.add_argument("--out", default="")
+    args = ap.parse_args()
+
+    if args.checkpoint == "random":
+        policy, label = random_policy, "random"
+    else:
+        policy, label = trained_policy(args.checkpoint), Path(args.checkpoint).stem
+
+    rows: List[Dict] = []
+    logdir = _REPO / "lanerl/logs"
+    logdir.mkdir(parents=True, exist_ok=True)
+    for i in range(args.episodes):
+        row = play_episode(policy, args.max_game_ms, args.step_ticks,
+                           logdir / f"evalbot_{label}_{i}.log")
+        rows.append(row)
+        print(f"  ep{i}: t={row['t_s']:.0f}s cs={row['blue_cs']} (bot {row['red_cs']}) "
+              f"gold={row['blue_gold']} lvl={row['blue_lvl']} "
+              f"hp_lost={row['blue_hp_lost']} dist={row['distance_travelled']} "
+              f"buttons={row['buttons']}")
+
+    def agg(k):
+        v = [r[k] for r in rows if isinstance(r.get(k), (int, float))]
+        return statistics.mean(v) if v else float("nan")
+
+    print(f"\n{label}: n={len(rows)}  CS={agg('blue_cs'):.1f} vs bot {agg('red_cs'):.1f}  "
+          f"gold={agg('blue_gold'):.0f}  lvl={agg('blue_lvl'):.1f}  "
+          f"hp_lost={agg('blue_hp_lost'):.0f}  dist={agg('distance_travelled'):.0f}")
+    if args.out:
+        Path(args.out).write_text(json.dumps({"label": label, "rows": rows}, indent=2))
+        print("wrote", args.out)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
