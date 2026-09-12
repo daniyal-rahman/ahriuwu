@@ -107,6 +107,28 @@ def main() -> int:
     print("button distribution:",
           {b: int(c) for b, c in zip(C.BUTTONS, counts) if c})
 
+    # Drop rows whose label the policy structurally cannot emit. Cross-entropy
+    # against a masked (-1e9) logit is ~1e9, so a handful of them owns the whole
+    # gradient: 787 of 99,655 rows drove a mean loss of 7.7 MILLION while the
+    # real signal was ~2. The collector's off-by-one is fixed, but a residual
+    # here must fail loudly rather than quietly dominate training again.
+    mb = z["mask_button"]
+    ok = mb[np.arange(n), heads["button"]].astype(bool)
+    if not ok.all():
+        frac = 1.0 - ok.mean()
+        print(f"dropping {int((~ok).sum())} rows ({frac:.3%}) whose label is masked out")
+        if frac > 0.05:
+            print("MORE THAN 5% CONTRADICTORY -- the label/observation pairing is wrong, "
+                  "not just noisy. Refusing to train on it.")
+            return 1
+        keep = np.flatnonzero(ok)
+        for k in heads:
+            heads[k] = heads[k][keep]
+        z = {k: (z[k][keep] if getattr(z[k], "ndim", 0) and len(z[k]) == n else z[k])
+             for k in z.files}
+        n = len(keep)
+        counts = np.bincount(heads["button"], minlength=16)
+
     # A held-out split, because training accuracy on an imbalanced set where
     # one class is 80% of the data is not evidence of anything.
     g = np.random.default_rng(args.seed)

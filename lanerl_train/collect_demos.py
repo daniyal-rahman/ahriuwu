@@ -111,6 +111,14 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
     )
     out: Dict[str, List] = {"obs": [], "label": [], "side": []}
     rng = np.random.default_rng(0)
+    # The bot commits its order during tick T; the control channel reports it in
+    # the observation for T+1, by which time a cast it just made is on cooldown
+    # and the action mask correctly forbids it. Pairing label[T+1] with obs[T+1]
+    # therefore produced 787/99,655 rows whose label the policy CANNOT emit --
+    # 100% of W and 100% of E casts -- and those rows dominated the BC gradient
+    # (cross-entropy against a -1e9 masked logit is ~1e9). Hold the previous
+    # observation and attach the label to the state the bot actually saw.
+    prev_obs: Dict[str, object] = {}
     try:
         sock = None
         for _ in range(120):
@@ -150,9 +158,14 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
                     if mb is not None:
                         demo = dict(demo)
                         demo["mx"], demo["mz"] = mb
-                out["obs"].append(obs)
-                out["label"].append(demo)
-                out["side"].append(side)
+                # label THIS frame's order against the PREVIOUS frame's
+                # observation -- the state the bot was looking at when it chose
+                earlier = prev_obs.get(side)
+                if earlier is not None:
+                    out["obs"].append(earlier)
+                    out["label"].append(demo)
+                    out["side"].append(side)
+                prev_obs[side] = obs
             f.write(empty)
             f.flush()
             line = f.readline()
