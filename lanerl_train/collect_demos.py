@@ -72,7 +72,15 @@ def move_bins_for(adapter, raw, team, goal_x, goal_y):
         return None
     wx, wy = dx / norm, dy / norm
     try:
-        tx, tz = adapter.builder.transform.vector(wx, wy)
+        # to_lane_vector, NOT vector. LaneTransform.vector is lane-local ->
+        # WORLD (that is the direction decode_action needs); the inverse is
+        # to_lane_vector, and the class docstring says so explicitly. Using
+        # vector() here treated a general rotation as if it were an involution
+        # -- true of the old MirrorTransform, false of this one. It made every
+        # BLUE move label point the wrong way while red's were right, so BC
+        # averaged the two sides to the centre bin and learned to stand still:
+        # 288 units from spawn over 300 s against a lane 11,866 units away.
+        tx, tz = adapter.builder.transform.to_lane_vector(wx, wy)
     except Exception:
         return None
     bins = _C.MOVE_BIN_VALUES
