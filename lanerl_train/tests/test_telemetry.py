@@ -3,7 +3,7 @@
 The bar every test here is written against: take only ``metrics.jsonl`` from a
 finished run and answer "was this compute-bound, env-bound or stalled?".  The
 first real run could not be asked that question at all, which is why it took
-13,475 updates to notice nothing was happening.
+16,200 updates to notice nothing was happening.
 
 The clock is injected everywhere, so these assert exact rates rather than
 sleeping and hoping.

@@ -68,10 +68,15 @@ class PPOConfig:
     The discount is configured as a **horizon in seconds**, not as a raw gamma.
     A raw gamma means a different amount of game time at every decision rate,
     so copying one across a rate change silently changes the objective.  At the
-    15 Hz decision rate this stack uses::
+    30 Hz decision rate this stack uses (``constants.STEP_TICKS = 2``)::
 
-        horizon_s = 30  ->  gamma = 0.997778
-        horizon_s = 45  ->  gamma = 0.998519
+        horizon_s = 30  ->  gamma = 0.998889
+        horizon_s = 45  ->  gamma = 0.999259
+
+    (At 15 Hz the same horizons are 0.997778 and 0.998519.  This docstring said
+    15 Hz long after the stack moved to 30, so the worked example disagreed with
+    what ``PPOConfig()`` actually produces -- exactly the silent objective change
+    the paragraph above is warning about.)
 
     Set ``gamma`` explicitly only to override; ``horizon_s`` is then ignored and
     :meth:`effective_horizon_s` reports what you actually asked for.
@@ -89,10 +94,24 @@ class PPOConfig:
     #: prior. This is the AlphaStar shape: a supervised prior gets the agent
     #: into the part of the state space where reward exists, and the KL term
     #: keeps it there while PPO improves on it. Without an anchor the policy
-    #: drifts straight back to uniform -- measured: entropy returned to 88% of
-    #: maximum over 13,475 updates and the agent never reached lane.
+    #: drifts straight back to uniform -- measured on runs/rl-overnight-0911-0608:
+    #: factored entropy ended at 8.876 of a 9.940 maximum (89%) after 16,209
+    #: updates, and every one of the 298 recorded cs_at_10 readings was 0.0.  (The
+    #: "88% over 13,475 updates" this used to say matches no point in that run:
+    #: at update 13,475 entropy was 8.365, i.e. 84%.)
     #: 0.0 disables it, which is the behaviour when no reference is supplied.
     kl_ref_coef: float = 0.0
+    #: Decay ``kl_ref_coef`` linearly to ZERO over this many training steps.
+    #: 0 means never decay, which is what it did before and is almost certainly
+    #: wrong for a prior you intend to EXCEED.
+    #:
+    #: A BC prior is a floor, not a target. Measured on run rl-bc4-0912 with a
+    #: flat coefficient: the KL penalty was 0.0062 against a mean |policy_loss|
+    #: of 0.0090 -- 69% of the entire learning signal -- and kl_ref climbed
+    #: 0.098 -> 0.138 over the run, i.e. the policy pushed and the leash held.
+    #: Tethered permanently to a heuristic bot that caps out at 49 CS, the
+    #: agent cannot do better than the thing it was cloned from.
+    kl_ref_anneal_steps: int = 0
     max_grad_norm: float = 1.0
     target_kl: float = 0.02
     lr: float = 3e-4
@@ -123,6 +142,13 @@ class PPOConfig:
 # --------------------------------------------------------------------------
 # GAE
 # --------------------------------------------------------------------------
+
+    def kl_ref_at(self, train_step: int) -> float:
+        """``kl_ref_coef`` decayed toward 0, linearly, over ``kl_ref_anneal_steps``."""
+        if self.kl_ref_anneal_steps <= 0:
+            return self.kl_ref_coef
+        t = min(max(float(train_step) / float(self.kl_ref_anneal_steps), 0.0), 1.0)
+        return self.kl_ref_coef * (1.0 - t)
 
 
 def compute_gae(
@@ -314,11 +340,16 @@ class DualClipPPO:
     """PPO with the JueWu dual-clip term, recurrent minibatching and burn-in."""
 
     def __init__(self, policy: LanePolicy, cfg: Optional[PPOConfig] = None, optimizer=None,
-                 reference: Optional[LanePolicy] = None):
+                 reference: Optional[LanePolicy] = None,
+                 train_step_source=None):
         #: Frozen behaviour-cloning prior for the KL anchor, or None. Kept in
         #: eval mode and never optimised -- it is a fixed target, not a second
         #: learner.
         self.reference = reference
+        #: Where the KL anneal reads 'how far in are we'. Defaults to a
+        #: clock stuck at 0, which makes kl_ref_at return the flat
+        #: coefficient -- the old behaviour, for callers that pass nothing.
+        self._train_step_source = train_step_source or (lambda: 0)
         if reference is not None:
             reference.eval()
             for prm in reference.parameters():
@@ -329,9 +360,14 @@ class DualClipPPO:
 
     # -- lanerl_train.protocols.Learner -------------------------------------
     #
-    # TrainingLoop needs these three; nothing here existed until wired in for
-    # the first real run, so a resume that "worked" before this was untested
-    # against anything but FakeInstance's fake learner.
+    # TrainingLoop needs these three.  No longer untested: the "resume that
+    # 'worked' was only exercised against FakeInstance's fake learner" note here
+    # is stale.  tests/test_ppo.py::
+    # test_policy_and_optimizer_state_round_trip_through_the_learner_payloads
+    # round-trips all three through the real DualClipPPO, Adam state tensors
+    # included, and runs/rl-overnight-0911-0608 resumed from real checkpoints 7
+    # times (kind:"resume" at updates 51, 800, 1275, 1750, 2200, 9075, 13350),
+    # each continuing forward.
 
     def policy_payload(self) -> Dict[str, object]:
         """Just the weights an actor needs to act -- no optimiser state, so an
@@ -447,11 +483,12 @@ class DualClipPPO:
         # policy just saw; a reference evaluated on different inputs would
         # regularise toward the wrong thing.
         kl_ref = None
-        if self.reference is not None and cfg.kl_ref_coef > 0.0:
+        kl_coef = cfg.kl_ref_at(int(self._train_step_source()))
+        if self.reference is not None and kl_coef > 0.0:
             with torch.no_grad():
                 ref_dist, _ = self._forward_chunk(batch, policy=self.reference)
             kl_ref = dist.kl_to(ref_dist.logits).mean()
-            loss = loss + cfg.kl_ref_coef * kl_ref
+            loss = loss + kl_coef * kl_ref
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -460,6 +497,9 @@ class DualClipPPO:
 
         if kl_ref is not None:
             stats["kl_ref"] = float(kl_ref)
+        # Log the LIVE coefficient, not the configured one: with an anneal they
+        # differ, and a run whose KL term has decayed to nothing should say so.
+        stats["kl_ref_coef"] = float(kl_coef)
         stats.update(
             {
                 "loss": float(loss.detach()),

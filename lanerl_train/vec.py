@@ -5,10 +5,24 @@ Why batching is structural, not an optimisation
 Measured on this stack: 1.70 ms per decision when the policy is called once per
 env, 0.058 ms per decision at batch 24.  The simulator runs 16 instances at
 ~688x real time aggregate (43x each; 120x at N=1 -- per-instance throughput
-degrades with instance count because the node is memory/L3 bound).  At 15 Hz
-decisions, the unbatched policy retains 41% of that throughput and the batched
-one retains 96%.  So :class:`VecDriver` performs exactly **one forward pass per
-distinct policy per step**, never one per env.
+degrades with instance count because the node is memory/L3 bound).  Both figures
+reproduce from ``lanerl/logs/scaling/n*_i*.log``: the final ``LANERL_TPS``
+speedup averages 43.0x over the 16 instances, 687.9x summed.
+
+Retention, with the formula written out because the number here used to be
+unreproducible.  43x is 2580 ticks/s, and a decision is ``STEP_TICKS`` ticks, so
+the simulator spends ``2 / 2580 = 0.78 ms`` of wall per decision at the current
+30 Hz.  ``sim / (sim + policy)`` is then **31% unbatched and 93% batched** (it
+was 48% / 96% at 15 Hz, where a decision cost 1.55 ms of sim).  The "41% and
+96%" that stood here for a while was two different formulas in one sentence --
+41% is ``16 x 1.70 / 66.7 ms`` of budget consumed, 96% is per-decision
+retention -- so it could not be checked either way.  The conclusion is
+unchanged and got stronger: :class:`VecDriver` performs exactly **one forward
+pass per distinct policy per step**, never one per env.
+
+Caveat on all of the above: the scaling logs are ``LANERL_FREERUN`` servers with
+no control channel and no policy, so 43x is an upper bound on simulator
+throughput and the retention figures are optimistic.
 
 Why the send/recv split
 -----------------------

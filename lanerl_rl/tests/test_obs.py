@@ -73,24 +73,23 @@ def test_pad_mask_matches_valid_bit(recorded_run):
             assert np.array_equal(o.entity_pad_mask, expected)
 
 
-def test_reserved_fields_are_zero(recorded_run):
-    for obs_list in recorded_run.values():
-        for o in obs_list:
-            assert np.all(o.entities[:, C.E_RESERVED] == 0.0)
-            assert np.all(o.self_vec[C.S_RESERVED] == 0.0)
-            assert np.all(o.global_vec[C.G_RESERVED] == 0.0)
-
-
 def test_empty_slots_are_all_zero(recorded_run):
-    """A slot with valid=0 that holds nothing must be entirely zero."""
+    """A slot with valid=0 must be entirely zero.
+
+    This used to be weaker than its own name: a slot could legitimately hold a
+    remembered-but-fogged entity with ``valid = 0`` and a stale position, so all
+    the check could ask for was ``visible_now == 0``.  Since only VISIBLE units
+    are slotted at all, ``valid = 0`` now means the slot holds NOTHING, and the
+    check can assert the thing it was always about -- no residue of any kind
+    under a masked row, because ``entity_pad_mask`` is the only thing standing
+    between that residue and the attention encoder.
+    """
     for obs_list in recorded_run.values():
         for o in obs_list:
             for s in range(C.N_SLOTS):
                 if o.entities[s, C.E_VALID] > 0.5:
                     continue
-                # Either fully empty, or a remembered entity: remembered rows
-                # must have visible_now == 0 too.
-                assert o.entities[s, C.E_VISIBLE_NOW] == 0.0
+                assert np.all(o.entities[s] == 0.0), f"slot {s} is masked but not empty"
 
 
 def test_slot_blocks_hold_the_right_types(recorded_run):
@@ -104,7 +103,10 @@ def test_slot_blocks_hold_the_right_types(recorded_run):
     for obs_list in recorded_run.values():
         for o in obs_list:
             e = o.entities
-            occupied = (e[:, C.E_VALID] > 0.5) | (e[:, C.E_STALENESS] > 0.0)
+            # "Occupied" used to also mean "remembered but fogged" (staleness
+            # > 0 with valid = 0).  Fogged units get no slot now, so occupancy
+            # is exactly the valid bit.
+            occupied = e[:, C.E_VALID] > 0.5
             types = e[:, C.E_TYPE_ONEHOT]
             teams = e[:, C.E_TEAM_ONEHOT]
             for s in range(*C.SLOT_ENEMY_CHAMP):
@@ -124,39 +126,71 @@ def test_slot_blocks_hold_the_right_types(recorded_run):
                     assert types[s, turret_i] == 1.0
 
 
+def _slot_dist(o, s: int) -> float:
+    """Distance to the entity in slot ``s``, in normalised units.
+
+    ``E_DIST`` was deleted from the layout: it is ``hypot(E_DS, E_DN)``, i.e. a
+    function of two fields already present, and the deleted precomputed
+    quantities are where the bugs lived.  The DISTANCE ORDER it was used to
+    check is still a real property of the slot assignment (``_assign_slots``
+    sorts on it), so the tests recompute it here rather than dropping the
+    checks.
+    """
+    return math.hypot(float(o.entities[s, C.E_DS]), float(o.entities[s, C.E_DN]))
+
+
+def _is_sorted(xs, tol: float = 1e-6) -> bool:
+    """Non-decreasing, with a float32 tolerance.
+
+    ``_assign_slots`` sorts on a float64 distance; the rows are stored as
+    float32 ``ds``/``dn`` and the distance is recomputed from them here, so two
+    genuinely-ordered neighbours can come back out of order by an ulp.  1e-6 is
+    ~10 float32 ulps at these magnitudes and ~3 game units at NORM_XY = 3000,
+    i.e. far below anything a real mis-sort would produce.
+    """
+    return all(a <= b + tol for a, b in zip(xs, xs[1:]))
+
+
 def test_slots_sorted_by_distance_within_block(recorded_run):
     """Distance order holds everywhere except the last-hit head of the enemy block."""
     for obs_list in recorded_run.values():
         for o in obs_list:
             for lo, hi in (C.SLOT_ALLY_MINION, C.SLOT_TURRET):
-                occ = [
-                    s
-                    for s in range(lo, hi)
-                    if o.entities[s, C.E_VALID] > 0.5 or o.entities[s, C.E_STALENESS] > 0.0
-                ]
-                dists = [float(o.entities[s, C.E_DIST]) for s in occ]
-                assert dists == sorted(dists)
+                occ = [s for s in range(lo, hi) if o.entities[s, C.E_VALID] > 0.5]
+                dists = [_slot_dist(o, s) for s in occ]
+                assert _is_sorted(dists), dists
             # The enemy-minion block is distance-ordered from LAST_HIT_SORT_K on.
             lo, hi = C.SLOT_ENEMY_MINION
             tail = [
                 s
                 for s in range(lo + C.LAST_HIT_SORT_K, hi)
-                if o.entities[s, C.E_VALID] > 0.5 or o.entities[s, C.E_STALENESS] > 0.0
+                if o.entities[s, C.E_VALID] > 0.5
             ]
-            dists = [float(o.entities[s, C.E_DIST]) for s in tail]
-            assert dists == sorted(dists)
+            dists = [_slot_dist(o, s) for s in tail]
+            assert _is_sorted(dists), dists
 
 
 def test_one_hots_are_one_hot(recorded_run):
+    """Exactly one bin set per one-hot -- the off-by-one tripwire.
+
+    Three of the five one-hots this used to check no longer exist: the 18-wide
+    self level one-hot (19 inputs for one integer, redundant with
+    ``S_LEVEL_NORM``), the 6 region one-hots (all thresholds on ``lane_s`` /
+    ``lane_n``) and the 6 clock-phase one-hots (a function of the clock).  The
+    same class of bug is still reachable through the scalars that replaced
+    them -- an index or a scale written raw instead of normalised -- so those
+    are range-checked here instead of being dropped.
+    """
     for obs_list in recorded_run.values():
         for o in obs_list:
             e = o.entities
-            occupied = (e[:, C.E_VALID] > 0.5) | (e[:, C.E_STALENESS] > 0.0)
+            occupied = e[:, C.E_VALID] > 0.5
             assert np.all(e[occupied][:, C.E_TYPE_ONEHOT].sum(axis=1) == 1.0)
             assert np.all(e[occupied][:, C.E_TEAM_ONEHOT].sum(axis=1) == 1.0)
-            assert o.self_vec[C.S_LEVEL_ONEHOT].sum() == 1.0
-            assert o.self_vec[C.S_REGION_ONEHOT].sum() == 1.0
-            assert o.global_vec[C.G_CLOCK_PHASE].sum() == 1.0
+            lvl = float(o.self_vec[C.S_LEVEL_NORM]) * C.MAX_LEVEL
+            assert 1 <= round(lvl) <= C.MAX_LEVEL
+            assert lvl == pytest.approx(round(lvl), abs=1e-5), "level_norm is not level/18"
+            assert 0.0 <= float(o.global_vec[C.G_CLOCK_NORM]) <= 2.0
 
 
 def test_hp_is_quantised_to_bar_resolution(recorded_run):
@@ -166,17 +200,6 @@ def test_hp_is_quantised_to_bar_resolution(recorded_run):
             hp = o.entities[:, C.E_HP_FRAC]
             ratio = hp / step
             assert np.allclose(ratio, np.round(ratio), atol=1e-4)
-
-
-def test_hp_only_reported_when_visible_and_on_screen(recorded_run):
-    for obs_list in recorded_run.values():
-        for o in obs_list:
-            e = o.entities
-            no_hp = e[:, C.E_HP_KNOWN] < 0.5
-            assert np.all(e[no_hp][:, C.E_HP_FRAC] == 0.0)
-            known = e[:, C.E_HP_KNOWN] > 0.5
-            assert np.all(e[known][:, C.E_VISIBLE_NOW] == 1.0)
-            assert np.all(e[known][:, C.E_ON_SCREEN] == 1.0)
 
 
 def test_action_mask_always_leaves_something_legal(recorded_run):
@@ -225,16 +248,6 @@ def test_lane_frame_means_the_same_thing_for_both_sides(
     # On the lane axis, the perpendicular offset is ~0 for both.
     assert abs(float(ob.self_vec[C.S_LANE_N])) < 0.01
     assert abs(float(orr.self_vec[C.S_LANE_N])) < 0.01
-
-
-def test_region_one_hot_follows_lane_progress(quiet_fog):
-    blue = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    seen = []
-    for s in (0.02, 0.30, 0.50, 0.70, 0.95):
-        o = blue.build(top_lane_scenario(blue_s=s))
-        seen.append(int(o.self_vec[C.S_REGION_ONEHOT].argmax()))
-    assert seen == sorted(seen)
-    assert seen[0] < seen[-1]
 
 
 def test_lane_handedness_is_consistent_between_the_two_agents(quiet_fog):
@@ -365,56 +378,53 @@ def _minion_cluster(t_ms=100_000, hps=(400, 60, 250, 30, 455), spacing=60.0):
 
 
 def test_enemy_minion_head_is_sorted_by_ascending_hp(quiet_fog):
-    """Slot 0 of the enemy-minion block is the last-hit candidate, for free."""
+    """Slot 0 of the enemy-minion block is the last-hit candidate, for free.
+
+    ``E_HP_ABS`` is gone -- it was the same quantity as ``E_HP_FRAC`` on a
+    second scale (/1000 here, /2000 in ``priv_vec``), which is how one
+    observation ended up carrying one number twice.  Every minion in this
+    cluster has the same ``mhp = 455``, so ascending ``hp_frac`` IS ascending
+    absolute HP and the builder's real sort key (``hp_frac * mhp``) is being
+    checked, not a proxy for it.
+    """
     b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
     o = b.build(_minion_cluster())
     lo, hi = C.SLOT_ENEMY_MINION
     head = list(range(lo, lo + C.LAST_HIT_SORT_K))
-    hp_abs = [float(o.entities[s, C.E_HP_ABS]) * C.NORM_HP_ABS for s in head]
-    assert all(o.entities[s, C.E_HP_KNOWN] > 0.5 for s in head), "probe needs readable health bars"
-    assert hp_abs == sorted(hp_abs), hp_abs
+    hp = [float(o.entities[s, C.E_HP_FRAC]) for s in head]
+    # An unreadable health bar writes hp_frac = 0.0, so a non-zero fraction is
+    # what "the bar was actually read" looks like now that E_HP_KNOWN is gone.
+    assert all(h > 0.0 for h in hp), "probe needs readable health bars"
+    assert hp == sorted(hp), hp
     # The head is NOT in distance order -- that is the whole point.
-    dists = [float(o.entities[s, C.E_DIST]) for s in head]
+    dists = [_slot_dist(o, s) for s in head]
     assert dists != sorted(dists), "the HP sort did nothing; the probe is vacuous"
     # And the tail keeps distance order.
     tail = [s for s in range(lo + C.LAST_HIT_SORT_K, hi) if o.entities[s, C.E_VALID] > 0.5]
-    td = [float(o.entities[s, C.E_DIST]) for s in tail]
-    assert td == sorted(td)
-
-
-def test_one_shot_kill_score_is_highest_on_the_head_slot(quiet_fog):
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    o = b.build(_minion_cluster())
-    lo, _ = C.SLOT_ENEMY_MINION
-    head = o.entities[lo, C.E_AA_KILLABLE]
-    others = o.entities[lo + 1 : lo + C.LAST_HIT_SORT_K, C.E_AA_KILLABLE]
-    assert head >= others.max()
-    # Garen's level-3 AD is ~64, so a 30 hp minion is very much a one-shot.
-    assert head > 0.9
+    td = [_slot_dist(o, s) for s in tail]
+    assert _is_sorted(td), td
 
 
 def test_minions_with_unreadable_health_sort_last_in_the_head(quiet_fog):
-    """A guess is worse than a defer: off-screen minions must not claim slot 0."""
+    """A guess is worse than a defer: off-screen minions must not claim slot 0.
+
+    ``E_HP_KNOWN`` no longer exists, so readability is read off the only thing
+    that distinguishes the two cases in the new layout: an unreadable bar
+    leaves ``hp_frac`` at 0.0 while every minion in this cluster is alive with
+    hp > 1/120 of its maximum, so a zero here can only mean "not read".  The
+    non-vacuity assertion below is new and load-bearing for exactly that
+    reason -- a mix of both kinds is what makes the ordering claim mean
+    anything, and with a sentinel value rather than a flag it has to be
+    checked.
+    """
     b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog, screen_radius=100.0)
     o = b.build(_minion_cluster(hps=(400, 60, 250, 30, 455), spacing=60.0))
     lo, _ = C.SLOT_ENEMY_MINION
     head = list(range(lo, lo + C.LAST_HIT_SORT_K))
-    known = [float(o.entities[s, C.E_HP_KNOWN]) for s in head]
+    known = [1.0 if float(o.entities[s, C.E_HP_FRAC]) > 0.0 else 0.0 for s in head]
+    assert 1.0 in known and 0.0 in known, f"probe has no mix of readable/unreadable: {known}"
     # Whatever the mix, every readable one comes before every unreadable one.
     assert known == sorted(known, reverse=True), known
-
-
-def test_shots_to_kill_is_consistent_with_hp_and_damage(quiet_fog):
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    o = b.build(_minion_cluster())
-    ad = C.garen_attack_damage(3)
-    lo, hi = C.SLOT_ENEMY_MINION
-    for s in range(lo, hi):
-        if o.entities[s, C.E_HP_KNOWN] < 0.5:
-            continue
-        hp = float(o.entities[s, C.E_HP_ABS]) * C.NORM_HP_ABS
-        expected = min(np.ceil(hp / ad) / 8.0, 1.0)
-        assert float(o.entities[s, C.E_AA_SHOTS_TO_KILL]) == pytest.approx(expected, abs=1e-5)
 
 
 # --------------------------------------------------------------------------
@@ -422,103 +432,53 @@ def test_shots_to_kill_is_consistent_with_hp_and_damage(quiet_fog):
 # --------------------------------------------------------------------------
 
 
-def test_reachability_radius_grows_with_the_age_of_the_estimate(quiet_fog):
-    """A remembered dot is a disc, and the policy is told the radius."""
-    from lanerl_rl.scenarios import make_frame, unit
-
-    a = C.TOP_OUTER_TURRET[C.TEAM_BLUE]
-
-    def f(t_ms, enemy_xy):
-        return make_frame(
-            t_ms,
-            [
-                unit(1001, "champion", C.TEAM_BLUE, a[0], a[1], hp=671, mhp=671,
-                     gold=500.0, xp=0.0, lvl=1),
-                unit(1002, "champion", C.TEAM_RED, enemy_xy[0], enemy_xy[1], hp=671, mhp=671,
-                     gold=500.0, xp=0.0, lvl=1),
-                unit(4001, "turret", C.TEAM_BLUE, a[0], a[1], hp=1550, mhp=1550),
-            ],
-        )
-
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    b.build(f(100_000, (a[0] + 300, a[1] + 300)))  # seen
-    lo, _ = C.SLOT_ENEMY_CHAMP
-    radii, ages = [], []
-    for step in range(1, 8):
-        o = b.build(f(100_000 + 500 * step, (12000, 12000)))
-        radii.append(float(o.entities[lo, C.E_REACH_RADIUS]))
-        ages.append(float(o.global_vec[C.G_ENEMY_REACH_RADIUS]))
-    assert radii == sorted(radii) and radii[0] < radii[-1]
-    assert ages == sorted(ages) and ages[0] < ages[-1]
-    # 3.5 s at Garen's 345 move speed is ~1207 units.
-    expected = 3.5 * C.GAREN_MOVE_SPEED / C.NORM_DIST
-    assert radii[-1] == pytest.approx(expected, rel=1e-4)
-
-
-def test_last_seen_heading_is_recorded_and_is_a_unit_vector(quiet_fog):
-    blue = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    o = None
-    for i in range(6):
-        o = blue.build(top_lane_scenario(t_ms=100_000 + 100 * i, blue_s=0.35, red_s=0.45 - 0.01 * i))
-    lo, _ = C.SLOT_ENEMY_CHAMP
-    assert o.entities[lo, C.E_HEADING_KNOWN] == 1.0
-    cos = float(o.entities[lo, C.E_LAST_HEADING_COS])
-    sin = float(o.entities[lo, C.E_LAST_HEADING_SIN])
-    assert math.hypot(cos, sin) == pytest.approx(1.0, abs=1e-5)
-    # The enemy is walking DOWN-lane towards us: s decreasing in our frame.
-    assert cos < 0.0
-    assert o.global_vec[C.G_ENEMY_MEM_HEADING_KNOWN] == 1.0
-
-
-def test_never_seen_enemy_ability_is_flagged_unknown_not_ready(quiet_fog):
-    """'Never seen it cast' and 'off cooldown' must not be the same number."""
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    o = b.build(top_lane_scenario())
-    assert np.all(o.global_vec[C.G_ENEMY_ABILITY_UNKNOWN] == 1.0)
-    assert np.all(o.global_vec[C.G_ENEMY_ABILITY_CD_EST] == 0.0)
-
-
-def test_a_witnessed_cast_starts_a_cooldown_estimate_that_decays(quiet_fog):
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    est = []
-    for i in range(40):
-        f = top_lane_scenario(t_ms=100_000 + 100 * i, blue_s=0.45, red_s=0.55, n_minions=0)
-        for u in f.units.values():
-            if u.etype == "champion" and u.team == C.TEAM_RED:
-                u.cooldowns = (0.0, 0.0, 0.0, 0.0) if i < 5 else (8.0, 24.0, 9.0, 160.0)
-        o = b.build(f)
-        est.append(float(o.global_vec[C.G_ENEMY_ABILITY_CD_EST][0]))
-    assert est[4] == 0.0 and o.global_vec[C.G_ENEMY_ABILITY_UNKNOWN][0] == 0.0
-    assert est[5] == pytest.approx(1.0, abs=1e-6), "the cast should be seen the tick it happens"
-    assert est[-1] < est[6] < est[5], "the estimate must tick down"
-    # Garen Q is 8 s; 3.4 s later the estimate is (8 - 3.4) / 8.
-    assert est[39] == pytest.approx((8.0 - 3.4) / 8.0, abs=1e-4)
-
-
-def test_a_cast_across_a_vision_gap_is_not_witnessed(quiet_fog):
-    """You cannot read an enemy's cooldown; you can only see them press it."""
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    # Seen up close, then gone for 2 s, then back -- with the spell now on cd.
+def _cd_sequence(builder, gap: bool):
+    """Enemy seen at 0 cd, then goes on cd; ``gap`` hides them while it happens."""
+    hidden_s = 0.99 if gap else 0.55
     for i in range(4):
         f = top_lane_scenario(t_ms=100_000 + 100 * i, blue_s=0.45, red_s=0.55, n_minions=0)
         for u in f.units.values():
             if u.etype == "champion" and u.team == C.TEAM_RED:
                 u.cooldowns = (0.0, 0.0, 0.0, 0.0)
-        b.build(f)
+        builder.build(f)
     for i in range(4, 24):
-        f = top_lane_scenario(t_ms=100_000 + 100 * i, blue_s=0.45, red_s=0.99, n_minions=0)
+        f = top_lane_scenario(t_ms=100_000 + 100 * i, blue_s=0.45, red_s=hidden_s, n_minions=0)
         for u in f.units.values():
             if u.etype == "champion" and u.team == C.TEAM_RED:
                 u.cooldowns = (6.0, 6.0, 6.0, 6.0)
-        b.build(f)
+        builder.build(f)
     f = top_lane_scenario(t_ms=100_000 + 2400, blue_s=0.45, red_s=0.55, n_minions=0)
     for u in f.units.values():
         if u.etype == "champion" and u.team == C.TEAM_RED:
             u.cooldowns = (6.0, 6.0, 6.0, 6.0)
-    o = b.build(f)
-    assert np.all(o.global_vec[C.G_ENEMY_ABILITY_UNKNOWN] == 1.0), (
+    return builder.build(f)
+
+
+def test_a_cast_across_a_vision_gap_is_not_witnessed(quiet_fog):
+    """You cannot read an enemy's cooldown; you can only see them press it.
+
+    The separate ``never_observed`` flag is gone from the layout -- the 8
+    enemy-cooldown ESTIMATE fields it belonged to were built on
+    ``ENEMY_COOLDOWN_ASSUMED``, whose documented safety direction was the
+    opposite of what the code did.  What survives is
+    ``time_since_observed_cast``, which is 1.0 both for "never seen him cast
+    it" and for "saw it long enough ago that it is certainly back up".  That
+    conflation is why this needs the positive control below: on its own,
+    ``since == 1.0`` after the gap would also be satisfied by a dead feature.
+    """
+    hidden = _cd_sequence(ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog), gap=True)
+    assert np.all(hidden.global_vec[C.G_ENEMY_ABILITY_SINCE_CAST] == 1.0), (
         "a cooldown that appeared while the enemy was out of sight was treated as a "
         "witnessed cast -- that is reading the server's cooldown, not watching a cast"
+    )
+
+    # Positive control: the identical cooldown history, watched the whole way
+    # through, IS a witnessed cast, so the same field drops well below 1.0.
+    # Without this the assertion above passes on a feature that never moves.
+    watched = _cd_sequence(ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog), gap=False)
+    assert np.all(watched.global_vec[C.G_ENEMY_ABILITY_SINCE_CAST] < 1.0), (
+        "the witnessed-cast feature never fires at all, so the vision-gap check "
+        "above proves nothing"
     )
 
 
@@ -527,48 +487,9 @@ def test_a_cast_across_a_vision_gap_is_not_witnessed(quiet_fog):
 # --------------------------------------------------------------------------
 
 
-def test_attack_cycle_is_unknown_until_a_swing_is_noted(quiet_fog):
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    o = b.build(top_lane_scenario())
-    assert o.self_vec[C.S_ATTACK_TIMING_KNOWN] == 0.0
-    assert o.self_vec[C.S_ATTACK_CYCLE_PHASE] == 0.0
-    assert o.self_vec[C.S_WINDUP_REMAINING] == 0.0
-
-
-def test_attack_cycle_phase_and_windup_match_the_server_content(quiet_fog):
-    """1.6 s period and 0.333 s windup at level 1, from gcd_AttackDelay etc."""
-    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
-    b.build(top_lane_scenario(t_ms=100_000, blue_lvl=1))
-    b.note_attack(100_000)
-    period = C.garen_attack_period(1)
-    windup = C.garen_attack_windup(1)
-    assert period == pytest.approx(1.6, abs=1e-9)
-    assert windup == pytest.approx(0.3333333, abs=1e-5)
-
-    o = b.build(top_lane_scenario(t_ms=100_200, blue_lvl=1))
-    assert float(o.self_vec[C.S_ATTACK_TIMING_KNOWN]) == 1.0
-    assert float(o.self_vec[C.S_ATTACK_CYCLE_PHASE]) == pytest.approx(0.2 / period, abs=1e-5)
-    assert float(o.self_vec[C.S_WINDUP_REMAINING]) == pytest.approx(
-        (windup - 0.2) / windup, abs=1e-5
-    )
-    o = b.build(top_lane_scenario(t_ms=100_500, blue_lvl=1))
-    assert float(o.self_vec[C.S_WINDUP_REMAINING]) == 0.0, "windup is over after 0.333 s"
-    o = b.build(top_lane_scenario(t_ms=101_700, blue_lvl=1))
-    assert float(o.self_vec[C.S_ATTACK_CYCLE_PHASE]) == 1.0
-    assert float(o.self_vec[C.S_TIME_UNTIL_NEXT_ATTACK]) == 0.0
-
-
 def test_attack_speed_growth_shortens_the_period(quiet_fog):
     """AttackSpeedPerLevel = 2.9%, applied through Stats.GetLevelUpStatValue."""
     periods = [C.garen_attack_period(lv) for lv in range(1, 19)]
     assert periods == sorted(periods, reverse=True)
     assert periods[0] == pytest.approx(1.6, abs=1e-9)
     assert periods[-1] < 1.2
-
-
-def test_own_attack_damage_matches_the_server_growth_curve():
-    """``value * (0.65 + 0.035 * Level)`` per level up, cumulative."""
-    assert C.garen_attack_damage(1) == pytest.approx(57.88, abs=1e-6)
-    assert C.garen_attack_damage(2) == pytest.approx(57.88 + 3.5 * (0.65 + 0.035 * 2), abs=1e-6)
-    ads = [C.garen_attack_damage(lv) for lv in range(1, 19)]
-    assert ads == sorted(ads)

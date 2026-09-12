@@ -31,13 +31,25 @@ def test_audit_main_returns_zero(capsys):
 # --------------------------------------------------------------------------
 
 
+#: Where a leak probe writes its poison, now that there is no reserved padding.
+#:
+#: ``G_RESERVED`` -- eight permanently-zero globals -- was deleted along with
+#: the other 206 dead inputs, and it was the obvious place to smuggle a value
+#: into the actor observation without disturbing anything else. There is no
+#: such place any more, which is the point of the layout, so a probe has to
+#: overwrite a REAL field. Which one is irrelevant: every differential check
+#: compares the whole actor array between a clean and a poisoned frame, so any
+#: index that moves with enemy-private state is a finding.
+_LEAK_SLOT = C.G_CLOCK_NORM
+
+
 class _LeakyBuilder(ObservationBuilder):
-    """Deliberately leaks the enemy's gold into a reserved global slot."""
+    """Deliberately leaks the enemy's gold into an actor global."""
 
     def _build_global_vec(self, frame, self_u, enemy_u, visible, ax, ay):
         g = super()._build_global_vec(frame, self_u, enemy_u, visible, ax, ay)
         if enemy_u is not None:
-            g[C.G_RESERVED.start] = float(enemy_u.gold or 0.0) / C.NORM_GOLD
+            g[_LEAK_SLOT] = float(enemy_u.gold or 0.0) / C.NORM_GOLD
         return g
 
 
@@ -100,8 +112,15 @@ class _CooldownLeakyBuilder(ObservationBuilder):
     def _build_global_vec(self, frame, self_u, enemy_u, visible, ax, ay):
         g = super()._build_global_vec(frame, self_u, enemy_u, visible, ax, ay)
         if enemy_u is not None and enemy_u.cooldowns is not None:
+            # Straight into the witnessed-cast block. The estimate block this
+            # used to poison (G_ENEMY_ABILITY_CD_EST) was deleted, and writing
+            # the raw value here is the SAME bug in the field that remains:
+            # "how long since I watched him cast it" replaced by "how many
+            # seconds the server says are left on it".
             for i, cd in enumerate(enemy_u.cooldowns[:4]):
-                g[C.G_ENEMY_ABILITY_CD_EST.start + i] = 0.0 if cd is None else float(cd) / 160.0
+                g[C.G_ENEMY_ABILITY_SINCE_CAST.start + i] = (
+                    0.0 if cd is None else float(cd) / 160.0
+                )
         return g
 
 
@@ -111,8 +130,6 @@ class _DeadIntelBuilder(ObservationBuilder):
     def _build_global_vec(self, frame, self_u, enemy_u, visible, ax, ay):
         g = super()._build_global_vec(frame, self_u, enemy_u, visible, ax, ay)
         g[C.G_ENEMY_ABILITY_SINCE_CAST] = 0.0
-        g[C.G_ENEMY_ABILITY_CD_EST] = 0.0
-        g[C.G_ENEMY_ABILITY_UNKNOWN] = 0.0
         return g
 
 
@@ -256,6 +273,13 @@ def test_the_real_emitter_parses(monkeypatch):
         # demo/slot for behaviour-cloning labels. Still an EXACT match --
         # a new emitted key must fail here until it is classified.
         "cs", "demo", "slot",
+        # added 2026-09-12: the champion's REAL combat stats. Python used to
+        # re-derive attack damage from a hand-copied base and level curve; that
+        # copy read 57.88 at level 1, then 73.14 once someone modelled the rune
+        # page, against the server's true 78.14 -- the rest being a mastery
+        # page nobody had modelled. A re-derived server quantity is wrong by
+        # however much of the server you forgot, so these are emitted instead.
+        "ad", "ap", "ar", "mr", "as", "rng",
     }, sorted(keys)
 
 
@@ -370,7 +394,7 @@ class _LevelLeakyBuilder(ObservationBuilder):
     def _build_global_vec(self, frame, self_u, enemy_u, visible, ax, ay):
         g = super()._build_global_vec(frame, self_u, enemy_u, visible, ax, ay)
         if enemy_u is not None:
-            g[C.G_RESERVED.start] = float(enemy_u.lvl or 0) / 18.0
+            g[_LEAK_SLOT] = float(enemy_u.lvl or 0) / 18.0
         return g
 
 

@@ -165,9 +165,9 @@ ATTR_EXEMPTIONS: Dict[str, Dict[str, str]] = {
 #: *differential* check, which is the thing that actually proves the property.
 FIELD_NAME_EXEMPTIONS: Dict[str, str] = {
     **{
-        f"enemy_ability_{s.lower()}_cd_estimate": (
-            "estimated from a WITNESSED cast (frame.EnemyAbilityIntel) using the "
-            "rank-1 base cooldown table; the server's cooldown value is never "
+        f"enemy_{s.lower()}_time_since_observed_cast": (
+            "the elapsed time since a cast this agent WATCHED "
+            "(frame.EnemyAbilityIntel); no server cooldown value is ever "
             "stored, and check_enemy_cooldown_leak proves it cannot move the "
             "actor observation"
         )

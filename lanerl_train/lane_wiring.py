@@ -174,7 +174,7 @@ class LaneObservationAdapter:
     def __init__(
         self,
         side: Side,
-        registry: Dict[int, Dict[Side, "LaneObservationAdapter"]],
+        registry: Dict[int, dict],
         reward_ctx: InstanceRewardContext,
         train_step_source,
         fog_model: Optional[ApproxFogModel] = None,
@@ -187,24 +187,76 @@ class LaneObservationAdapter:
         self._train_step_source = train_step_source
         self.last_frame: Optional[Frame] = None
         self.last_slot_netids: List[Optional[int]] = [None] * C.N_SLOTS
+        self.last_slot_valid = np.zeros(C.N_SLOTS, dtype=bool)
         self._registered_id: Optional[int] = None
+        self._awaiting_first_build = True
+
+    def _unregister(self) -> None:
+        """Drop this adapter's registry slot.
+
+        reset() used to leave it behind. The last thing built before a reset is
+        the TERMINAL observation, and VecDriver then overwrites result.obs[i]
+        with the reset frame, so that dict is freed while the registry still
+        keys on its address -- a dangling entry that a later frame can be
+        allocated on top of.
+        """
+        if self._registered_id is None:
+            return
+        entry = self._registry.get(self._registered_id)
+        if entry is not None:
+            entry["sides"].pop(self.side, None)
+            if not entry["sides"]:
+                self._registry.pop(self._registered_id, None)
+        self._registered_id = None
 
     def reset(self) -> None:
+        self._unregister()
         self.builder.reset()
+        #: True from reset() until the next build(). VecDriver sends one action
+        #: line on the reset step itself, so encode() legitimately runs with no
+        #: frame exactly once per boundary -- that is a noop by design, not the
+        #: "impossible" case the error below is for.
+        self._awaiting_first_build = True
         self.last_frame = None
         self.last_slot_netids = [None] * C.N_SLOTS
+        self.last_slot_valid = np.zeros(C.N_SLOTS, dtype=bool)
         self.reward_ctx.mark_reset()
 
-    def _register(self, raw_id: int) -> None:
-        """Take this adapter's single slot in the shared registry."""
+    def _register(self, raw: RawObs) -> None:
+        """Take this adapter's single slot in the shared registry.
+
+        Keyed on ``id(raw)``, which is only safe if the object is kept ALIVE
+        for as long as the key is in the map. CPython recycles the id of a
+        freed object immediately, and these frames are short-lived dicts
+        allocated once per decision, so without a strong reference two
+        different instances' frames collide on the same key routinely. The
+        visible half of that is a miss -- 48 in the first 174,000 decisions of
+        run rl-bc3-0912. The invisible half is worse: the lookup SUCCEEDS and
+        hands back another instance's adapter, so one game's action is encoded
+        against another game's frame, with no error anywhere.
+
+        Storing the frame alongside the adapters pins the id for the lifetime
+        of the entry, so a collision cannot happen, and ``encode`` additionally
+        verifies identity rather than trusting the key.
+        """
+        raw_id = id(raw)
         if self._registered_id is not None and self._registered_id != raw_id:
             entry = self._registry.get(self._registered_id)
             if entry is not None:
-                entry.pop(self.side, None)
-                if not entry:
+                entry["sides"].pop(self.side, None)
+                if not entry["sides"]:
                     self._registry.pop(self._registered_id, None)
         self._registered_id = raw_id
-        self._registry.setdefault(raw_id, {})[self.side] = self
+        self._registry.setdefault(raw_id, {"raw": raw, "sides": {}})
+        # Re-pin: the surviving entry may have been created by the other side
+        # for this same frame, which is fine, but it must reference THIS object.
+        self._registry[raw_id]["raw"] = raw
+        self._registry[raw_id]["sides"][self.side] = self
+
+    @staticmethod
+    def builder_entities_valid(obs: AgentObservation):
+        """The E_VALID column of the observation, as booleans."""
+        return obs.entities[:, C.E_VALID] > 0.5
 
     def build(self, raw: RawObs, side: Side) -> AgentObservation:
         assert side == self.side, (side, self.side)
@@ -213,10 +265,16 @@ class LaneObservationAdapter:
         if me is not None and me.recalling is not None:
             self.builder.set_recalling(bool(me.recalling))
         obs = self.builder.build(frame)
+        self._awaiting_first_build = False
         self.last_frame = frame
         self.last_slot_netids = _slot_netids_for(self.builder, frame, self.team)
+        # The validity column decode_action actually reads, taken from the real
+        # observation rather than re-derived. A slot can hold a netid and still
+        # be INVALID: _slot_entities also slots remembered-but-fogged entities,
+        # which carry a uid but E_VALID = 0.
+        self.last_slot_valid = self.builder_entities_valid(obs)
         self.reward_ctx.step_once(id(raw), frame, self._train_step_source())
-        self._register(id(raw))
+        self._register(raw)
         return obs
 
 
@@ -232,22 +290,58 @@ class LaneActionEncoder:
 
     def __init__(
         self,
-        registry: Dict[int, Dict[Side, LaneObservationAdapter]],
+        registry: Dict[int, dict],
         move_distance: float = 500.0,
     ):
         self._registry = registry
         self.move_distance = float(move_distance)
 
     def encode(self, action: Any, raw: RawObs, side: Side) -> Dict[str, object]:
-        adapter = self._registry.get(id(raw), {}).get(side)
-        if adapter is None or adapter.last_frame is None:
+        entry = self._registry.get(id(raw))
+        if entry is not None and entry["raw"] is not raw:
+            # An id collision that the strong reference should have made
+            # impossible. Treat it as a miss rather than encoding this action
+            # against a different instance's frame.
             log.error(
-                "no registered observation adapter for id(raw)=%s side=%s; encode() ran "
-                "without a matching build() in the same step, which VecDriver's call "
-                "order should make impossible -- sending noop rather than guessing",
-                id(raw),
-                side,
+                "registry id collision on %s: the entry holds a DIFFERENT frame "
+                "object. Discarding the action rather than applying it to the "
+                "wrong game.", id(raw),
             )
+            entry = None
+        adapter = (entry or {}).get("sides", {}).get(side)
+        if adapter is None or adapter.last_frame is None:
+            # Two different situations, and conflating them made the log useless.
+            #
+            # Expected: VecDriver sends one action line on the reset step, before
+            # any build() for the new episode, so there is nothing to encode
+            # against. One noop per boundary out of ~18,000 decisions.
+            #
+            # Impossible: a missing adapter at any OTHER time means encode() and
+            # build() disagree about which frame this step is, and the action the
+            # policy chose is being thrown away silently.
+            #
+            # Run 694 logged this 192 times in a 429-line log -- every one of them
+            # the expected kind, because end_on_death made an episode end every
+            # ~103 s. At ERROR level that buried anything real, and it read like
+            # the policy's actions were being dropped wholesale. They were not.
+            if adapter is not None and adapter._awaiting_first_build:
+                log.debug("encode() on the reset step for side=%s: noop by design", side)
+            else:
+                # Carry enough to tell the cases apart without another run:
+                #   registered_id set and != id(raw) -> the adapter moved on
+                #     (build() for a later frame evicted this one): ordering.
+                #   registered_id None                -> build() never completed
+                #     for this frame (it threw after the builder call).
+                #   entry present but side missing    -> another instance owns
+                #     this key: an id collision.
+                others = self._registry.get(id(raw), {}).get("sides", {})
+                log.error(
+                    "no registered observation adapter for id(raw)=%s side=%s, and it is "
+                    "NOT the reset step -- the chosen action is being DISCARDED. "
+                    "entry_present=%s sides_in_entry=%s t_of_raw=%s",
+                    id(raw), side, self._registry.get(id(raw)) is not None,
+                    sorted(others), raw.get("t"),
+                )
             return {"t": "noop"}
         frame = adapter.last_frame
         me = frame.champion_of_team(adapter.team)
@@ -255,15 +349,22 @@ class LaneActionEncoder:
             return {"t": "noop"}
         slot_netids = adapter.last_slot_netids
         entities = np.zeros((C.N_SLOTS, C.ENTITY_DIM), dtype=np.float32)
-        for idx, netid in enumerate(slot_netids):
-            if netid is not None:
-                entities[idx, C.E_VALID] = 1.0
+        entities[:, C.E_VALID] = adapter.last_slot_valid.astype(np.float32)
         # decode_action only ever reads .entities[:, E_VALID] off the
-        # observation it is given (a validity gate that is redundant with
-        # slot_netids already being None for an empty slot -- see
-        # ObservationBuilder._assign_slots -- kept there as belt-and-braces),
-        # so a bare namespace with that one column stands in for a real
-        # AgentObservation without rebuilding one.
+        # observation it is given, so a bare namespace with that one column
+        # stands in for a real AgentObservation without rebuilding one -- but
+        # the column has to be the REAL one.
+        #
+        # This used to set E_VALID = 1 for every slot holding a netid, on the
+        # stated grounds that the gate is "redundant with slot_netids already
+        # being None for an empty slot". That is false: _slot_entities also
+        # slots remembered-but-fogged entities, which have a uid and E_VALID = 0.
+        # Measured, 25 of 30 frames disagreed on 7 slots. It was inert only
+        # because the target action mask enforces the same thing -- except on
+        # _build_action_mask's target[0] = True fallback, where this path would
+        # have put an attack on a FOGGED enemy champion onto the wire while
+        # LaneEnv sent a plain move for the same action. lanerl_rl.audit covers
+        # the observation, not the action, so nothing would have caught it.
         fake_obs = SimpleNamespace(entities=entities)
         cmd = decode_action(
             action, adapter.builder, fake_obs, me, slot_netids, move_distance=self.move_distance
@@ -360,7 +461,7 @@ class LaneAdapters:
     adapter_factory: Any
     encoder: LaneActionEncoder
     reward_contexts: Dict[int, InstanceRewardContext] = field(default_factory=dict)
-    registry: Dict[int, Dict[Side, LaneObservationAdapter]] = field(default_factory=dict)
+    registry: Dict[int, dict] = field(default_factory=dict)
 
 
 def make_lane_adapters(
@@ -372,7 +473,7 @@ def make_lane_adapters(
     want, plus a lookup of the per-instance reward context so a rollout
     collector can read ``reward_contexts[i].last_values`` after each step.
     """
-    registry: Dict[int, Dict[Side, LaneObservationAdapter]] = {}
+    registry: Dict[int, dict] = {}
     fog_model = ApproxFogModel()
     reward_contexts: Dict[int, InstanceRewardContext] = {}
 
@@ -542,7 +643,15 @@ def collect_rollout(
             # minutes; a death-ended game has not had the chance to farm one.
             cs10 = None
             if reason == "time" and cs_by_team:
-                cs10 = float(max(cs_by_team.values()))
+                # MEAN of the two sides, not max. In self-play both champions
+                # are driven by the SAME policy, so max() reports the better of
+                # two draws from one distribution -- an upward-biased estimator
+                # of that policy's CS, by about 0.56 sigma for a normal pair
+                # (~+3.6 CS at the observed sigma of 6.4). It also shrinks as
+                # the spread changes, so it distorts trends as well as levels:
+                # a run whose variance grew would look like it was improving.
+                # Averaging is unbiased and uses both samples.
+                cs10 = float(sum(cs_by_team.values()) / len(cs_by_team))
             # One side's return, not the sum: with both sides driven by the
             # same policy and a zero-sum reward, blue + red is ~0 by
             # construction, which is a number that can never say anything.

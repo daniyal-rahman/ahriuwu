@@ -128,11 +128,35 @@ def test_the_three_difficulties_really_are_different_bots():
     assert configs["scripted_bronze"]["reactionDelayMs"] > configs["scripted_diamond"]["reactionDelayMs"]
 
 
-def test_a_policy_anchor_cannot_be_played_by_the_in_server_bot(tmp_path):
+def test_a_policy_anchor_turns_the_in_server_bot_OFF(tmp_path):
+    """A policy anchor is driven by a frozen network on red, not by the bot.
+
+    This used to raise: only scripted anchors could be played, which made
+    ``--bc-checkpoint`` a flag whose only reachable effect was to kill the run
+    at the first evaluation. It is now supported, and the load-bearing detail
+    is ``bot_teams="none"`` -- leave the in-server bot on and it would fight
+    the network for the same champion, which is the LANERL_BOT default-to-blue
+    bug wearing a different hat.
+
+    The rung matters: scripted anchors measure the agent against a heuristic,
+    and only a policy anchor can answer "is the agent better than the BC prior
+    it was initialised from".
+    """
     ckpt = tmp_path / "bc.pt"
     ckpt.write_bytes(b"w")
-    with pytest.raises(AnchorEvalError, match="only 'scripted' anchors"):
-        anchor_launch_spec(AnchorSpec("bc_policy", "policy", ckpt))
+    spec = anchor_launch_spec(AnchorSpec("bc_policy", "policy", ckpt))
+    assert spec.bot_teams == "none"
+    assert spec.bot_config is None
+
+
+def test_a_policy_anchor_still_needs_its_checkpoint(tmp_path):
+    with pytest.raises(AnchorEvalError, match="no usable checkpoint"):
+        anchor_launch_spec(AnchorSpec("bc_policy", "policy", tmp_path / "missing.pt"))
+
+
+def test_an_unknown_anchor_kind_is_refused(tmp_path):
+    with pytest.raises(AnchorEvalError, match="expected 'scripted' or 'policy'"):
+        anchor_launch_spec(AnchorSpec("weird", "handwritten", tmp_path))
 
 
 # -- scoring ---------------------------------------------------------------
@@ -311,12 +335,29 @@ def test_without_rotation_every_anchor_is_played_each_cycle():
     assert sorted(e.opponent_id for e in out) == ["scripted_bronze", "scripted_gold"]
 
 
-def test_the_eval_acts_deterministically_by_default():
-    """Sampling measures the exploration distribution, not the policy's quality."""
+def test_the_eval_SAMPLES_by_default():
+    """Inverted on 2026-09-12. It used to assert deterministic is True, on the
+    reasoning that "sampling measures the exploration distribution, not the
+    policy's quality". That reasoning is wrong for this action space.
+
+    The server pathfinds, so one move order carries the champion thousands of
+    units and the bot spends most frames idle: a real 90 s demo game is
+    {'noop': 836, 'move': 11}. BC clones that, so the argmax button is noop in
+    essentially every early-game state -- 7,199 of 7,199 argmax actions were
+    noop on the BC checkpoint. The mode of this policy is not a summary of it,
+    it is a strictly worse policy that never moves.
+
+    Measured, same weights, same server, 240 s:
+        deterministic=False  ->  10,975 units travelled, 6 CS, level 3
+        deterministic=True   ->       0 units travelled, 0 CS, level 1
+
+    Every anchor game before this reported the agent standing in the fountain
+    at level 1 with 0 CS, scored 0.50, and the ladder treated it as real.
+    """
     ev, made = make_evaluator(("scripted_bronze",))
     ev(100, {"policy": {"w": 1}})
     _driver, actor = made["scripted_bronze"]
-    assert actor.last_deterministic is True
+    assert actor.last_deterministic is False
 
 
 def test_servers_are_started_once_per_anchor_not_once_per_cycle():
@@ -399,7 +440,7 @@ def test_the_agent_id_is_stable_between_snapshots_so_games_accumulate(run_dir):
 
 
 def test_cs_at_10_recorded_by_the_collector_reaches_the_eval_report(run_dir):
-    """179 CS@10 readings in the first run; all 37 eval rows said null."""
+    """298 CS@10 readings in the first run; all 40 eval rows said null."""
     cfg = RunConfig(run_dir=run_dir, num_actors=0, checkpoint_every=0, snapshot_every=0,
                     eval_every=1)
     loop = TrainingLoop(
@@ -430,3 +471,22 @@ def test_the_report_still_says_no_games_when_the_anchor_has_not_been_played_yet(
     report = ev.report(0, "agent@0", [])
     assert report.win_rate_vs_anchor["scripted_gold"] == (None, 0)
     assert any("no games against anchor" in n for n in report.notes)
+
+
+def test_anchor_eval_samples_rather_than_taking_the_mode():
+    """The anchor ladder must not evaluate the argmax policy.
+
+    With server-side pathfinding the bot issues ONE move order and then idles
+    while it walks, so a real 90-second demo game is {'noop': 836, 'move': 11}
+    and BC clones ~99% noop in the early game. The argmax of that is noop in
+    every state: measured on the BC checkpoint, deterministic=True travelled 0
+    units and scored 0 CS while the same weights sampled travelled 10,975 units
+    and scored 6 CS in 240 s, and 37.3 CS over a full game.
+
+    Anchor games consequently reported the agent at level 1, full HP, 0 CS --
+    standing in the fountain for ten minutes -- which the ladder read as a
+    legitimate score of 0.50 against every anchor.
+    """
+    from lanerl_train.anchor_eval import AnchorEvalConfig
+
+    assert AnchorEvalConfig().deterministic is False

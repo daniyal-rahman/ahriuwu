@@ -374,8 +374,14 @@ def test_metrics_log_is_thread_safe(tmp_path):
 # `lanerl_rl.reward.LaneRewardConfig.alpha` anneals the zero-sum coefficient
 # over `zero_sum_anneal_steps`, driven by a number the trainer hands the env.
 # Nothing handed it one, so alpha sat at its starting 0.5 for every run.  These
-# cover the learner half of that hand-off; `lanerl_rl/tests/test_env.py` covers
-# the env half, and `test_the_anneal_moves_end_to_end` below joins them.
+# cover the learner half of that hand-off; `lanerl_train/tests/test_lane_wiring.py`
+# covers the env half, and `test_the_anneal_moves_end_to_end` below joins them.
+#
+# The consumer used to be `lanerl_rl.env.LaneEnv`, which was deleted on
+# 2026-09-12: it was a second implementation of the obs/action/reward wiring
+# with no production caller, and it owned the unit tests while
+# `lanerl_train.lane_wiring` owned the runtime.  The join below therefore drives
+# the wiring that actually runs.
 
 
 def test_train_step_counter_is_monotonic_and_callable():
@@ -442,50 +448,41 @@ def test_resume_restores_the_training_clock(run_dir):
 
 
 def test_the_anneal_moves_end_to_end(run_dir):
-    """The whole hand-off: learner update -> counter -> LaneEnv -> reward alpha.
+    """The whole hand-off: learner update -> counter -> lane wiring -> reward alpha.
 
     This is the test the wiring exists for.  Each half is covered on its own;
     only this one fails if the two halves are never connected, which is exactly
     the state the code was in.
+
+    Driven through ``lane_wiring`` rather than ``LaneEnv``, which was deleted as
+    a duplicate implementation with no production caller.  The hand-off itself
+    is unchanged and is still the thing under test: ``TrainingLoop.train_steps``
+    is passed as ``train_step_source``, ``LaneObservationAdapter.build`` calls it
+    once per tick, and ``InstanceRewardContext`` feeds the result to
+    ``ZeroSumLaneReward.step``, which is where alpha is computed.
     """
-    from lanerl_rl import constants as C
-    from lanerl_rl.env import LaneEnv, LaneEnvConfig
     from lanerl_rl.reward import LaneRewardConfig
-    from lanerl_rl.scenarios import top_lane_scenario
-
-    class _Backend:
-        ignores_actions = True
-
-        def __init__(self):
-            self.frames = [top_lane_scenario(t_ms=90_000 + 100 * i) for i in range(4)]
-            self.i = 0
-
-        def reset(self):
-            self.i = 0
-            return self.frames[0]
-
-        def step(self, commands):
-            self.i += 1
-            return self.frames[self.i] if self.i < len(self.frames) else None
-
-        def close(self):
-            pass
+    from lanerl_rl.scenarios import encode_frame, top_lane_scenario
+    from lanerl_train.lane_wiring import make_lane_adapters
+    from lanerl_train.protocols import BLUE
 
     loop = make_loop(run_dir)
-    env = LaneEnv(
-        _Backend(),
-        LaneEnvConfig(
-            warn_on_approx_fog=False,
-            reward=LaneRewardConfig(zero_sum_anneal_steps=1000),
-        ),
-        train_step_source=loop.train_steps,
+    adapters = make_lane_adapters(
+        loop.train_steps,
+        reward_cfg=LaneRewardConfig(zero_sum_anneal_steps=1000),
     )
-    noop = {"button": C.BUTTON_INDEX["noop"], "move_x": 4, "move_z": 4, "target": 0}
+    adapter = adapters.adapter_factory(0, BLUE)
+    # Distinct dicts, kept alive: the reward context de-duplicates on id(raw),
+    # and it deliberately skips the first frame after a reset (there is no
+    # action to attribute a reward to yet), so a probe needs at least two.
+    raws = [encode_frame(top_lane_scenario(t_ms=90_000 + 100 * i)) for i in range(3)]
 
     def alpha_now() -> float:
-        env.reset()
-        _, _, _, info = env.step({t: dict(noop) for t in env.cfg.teams})
-        return info["reward_info"]["alpha"]
+        adapter.reset()
+        for raw in raws:
+            adapter.build(raw, BLUE)
+        assert adapter.reward_ctx.valid, "the reward never stepped; the probe proves nothing"
+        return float(adapter.reward_ctx.last_info["alpha"])
 
     assert alpha_now() == pytest.approx(0.5)
     for i in range(4):

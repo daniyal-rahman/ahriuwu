@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# DEAD LINE OF WORK (marked 2026-09-12). Every hypothesis in this file is about
+# getting the real 4.20 rendering client to draw. That approach was abandoned:
+# the headless LeagueSandbox sim is the verified RL environment. None of the
+# hypotheses below was ever confirmed or refuted -- they are orphaned, not open.
+# Do not spend time chasing them; read them as a record of what was tried.
 # The client is probably NOT incomplete: a private-server 4.20 install launches from
 # solutions/.../deploy and does not ship RADS/projects/lol_game_client. The documented
 # cause of "connects but never renders" is a missing d3dx9_39.dll -- consistent with

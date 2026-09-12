@@ -5,15 +5,17 @@ Why this module exists
 ``lanerl_train.eval`` has had the anchor machinery -- ``AnchorSpec``,
 ``default_anchors()``, ``win_rate_vs_anchor``, a Bradley-Terry fit pinned to
 ``scripted_gold`` -- since before the first real run.  Nothing ever gave it a
-game to score.  So every one of the first run's 37 eval reports read::
+game to score.  So every one of the first run's 40 eval reports read::
 
     win_rate_vs_anchor {bronze: (None, 0), gold: (None, 0), diamond: (None, 0)}
 
 and the only other number in the report, ``score``, is **0.5 by construction**
 in a symmetric mirror: both sides are the same weights, so the win rate is 50%
 at initialisation, at convergence, and while the policy rots.  That is why
-13,475 updates of a policy that farmed 0 CS in ten minutes looked, from the
-metrics, exactly like a run that was working.
+16,200 updates of a policy that farmed 0 CS in ten minutes looked, from the
+metrics, exactly like a run that was working.  (The 0 CS is not an artefact of
+the broken readout: all 13,520 ``LANERL_CS`` lines in that run's own instance
+logs read ``cs=0``, and ``lvl=1`` as late as ``t=574214``.)
 
 The fix is not a better metric.  It is playing a game against something that
 does not move: the in-server scripted Garen, frozen at three difficulties with
@@ -31,11 +33,16 @@ the evaluator can score.
 
 Cost, stated up front
 ---------------------
-An anchor game is a real ten-minute game.  At this stack's measured ~3.7x
-real time that is around 160 s of wall clock, during which the learner is idle.
-At ``--eval-every 400`` and 0.33 updates/s an eval cycle comes round about every
-20 minutes, so ONE anchor game per cycle costs ~13% of throughput and three
-would cost 40%.  Hence :attr:`AnchorEvalConfig.rotate`: one anchor per cycle,
+An anchor game is a real ten-minute game.  The 3.7x real time this used to
+quote is ``bench/out/process_restart.json`` (``sim10min_s`` median 163.5 s),
+which is a FREERUN server with no control channel and no policy attached, and
+it predates the 15 -> 30 Hz change that doubled the decisions an anchor game
+costs -- so treat ~160 s of idle learner as a floor, not a measurement.  The
+downstream 13% checks out against the recorded run's real 0.302 updates/s
+(160 / (400 / 0.302) = 12%), so at ``--eval-every 400`` ONE anchor game per
+cycle costs on the order of 13% of throughput and three would cost 40%.
+UNSETTLED: nothing has yet timed a real ``play_anchor_episodes`` cycle; the
+``anchor_eval`` metrics row records ``elapsed_s`` and no run dir has one.  Hence :attr:`AnchorEvalConfig.rotate`: one anchor per cycle,
 round-robin, so the ladder fills in over three cycles instead of paying for all
 of it every time.
 """
@@ -43,6 +50,8 @@ of it every time.
 from __future__ import annotations
 
 import logging
+
+import torch
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -85,11 +94,42 @@ class AnchorEvalConfig:
     #: Hard bound on decisions per cycle.  A server whose clock stops would
     #: otherwise hold the learner forever, and an eval that hangs a run is worse
     #: than an eval that does not happen.
-    max_steps: int = 12_000
-    #: Act greedily during evaluation.  Sampling measures the exploration
-    #: distribution; the question an anchor answers is "how good is the policy",
-    #: which is the mode.
-    deterministic: bool = True
+    #:
+    #: DERIVED, never a literal -- it was 12_000, and that was a 15 Hz number.
+    #: A ten-minute game (``AnchorEvaluator.max_game_ms``, 600 s) is 18,000
+    #: decisions at the current 30 Hz, so the loop below gave up at 400 game
+    #: seconds: ``reason == "time"`` was unreachable, every anchor game scored
+    #: ``cs_at_10 = None``, and a game in which nobody died produced no episode
+    #: at all and raised :class:`AnchorEvalError` -- which propagates out of
+    #: ``TrainingLoop.step_once`` and ends the run.  ``EpisodeSpec.max_steps``
+    #: (vec.py, 20_000) was sized for 30 Hz; this one was not, and two bounds on
+    #: the same quantity is the bug.  The 20% slack is for the reset step and
+    #: for instances that finish at slightly different ticks.
+    max_steps: int = int(round(1.2 * 600_000.0 / C.DECISION_DT_MS))
+    #: Sample actions; do NOT take the argmax.
+    #:
+    #: This was True, and it made every anchor number this project has ever
+    #: produced meaningless. Measured on the BC checkpoint, same weights, same
+    #: server, 240 s:
+    #:
+    #:     deterministic=False   dist_from_spawn 10,975   cs 6   lvl 3
+    #:     deterministic=True    dist_from_spawn      0   cs 0   lvl 1
+    #:
+    #: 7,199 of 7,199 argmax actions were noop. That is not a degenerate
+    #: policy -- it is the correct mode of an honest distribution. Because the
+    #: server pathfinds, the bot issues ONE move order and then idles for many
+    #: frames while it walks: a real 90 s demo game is {'noop': 836, 'move':
+    #: 11}. BC clones that faithfully, so ~99% of the early-game button mass is
+    #: noop and the argmax is noop in every state. Sampling issues the rare
+    #: move orders that actually carry the champion, and each one paths
+    #: thousands of units.
+    #:
+    #: So for THIS action space the mode is not a summary of the policy, it is
+    #: a different and much worse policy. Anchor games reported the agent at
+    #: level 1, full HP, 0 CS, 0 deaths -- standing in the fountain for ten
+    #: minutes -- while the same weights farm 36 CS in self-play and 37.3
+    #: against the same bot under sampling.
+    deterministic: bool = False
     #: The side the agent plays.  Fixed, not alternated: ``LANERL_BOT=purple``
     #: hands RED to the bot, and the observation builder's lane frame is already
     #: side-symmetric (see ``lanerl_rl.obs``), so there is nothing to balance.
@@ -115,12 +155,36 @@ def score_for_reason(reason: str, agent_team: int) -> float:
 
 def anchor_launch_spec(anchor: AnchorSpec, base: Optional[ServerLaunchSpec] = None,
                        seed: Optional[int] = None) -> ServerLaunchSpec:
-    """A launch spec whose RED champion is this anchor's frozen scripted bot."""
-    if anchor.kind != "scripted":
+    """A launch spec for this anchor.
+
+    ``scripted``: RED is the in-server bot, configured from the anchor's JSON.
+    ``policy``: NO in-server bot at all -- RED is driven over the control
+    channel by a second, frozen network, so the server must be told
+    ``LANERL_BOT=none`` or the bot would fight the network for the same
+    champion (the ``LANERL_BOT`` default-to-"blue" bug, in a new costume).
+    """
+    if anchor.kind not in ("scripted", "policy"):
         raise AnchorEvalError(
-            f"anchor {anchor.id!r} is kind={anchor.kind!r}; only 'scripted' anchors can be "
-            f"played by the in-server bot. A 'policy' anchor needs a second network on "
-            f"RED, which this runner does not build."
+            f"anchor {anchor.id!r} is kind={anchor.kind!r}; expected 'scripted' or 'policy'"
+        )
+    if anchor.kind == "policy":
+        src = base or ServerLaunchSpec()
+        if anchor.resource is None or not Path(anchor.resource).exists():
+            raise AnchorEvalError(
+                f"policy anchor {anchor.id!r} has no usable checkpoint ({anchor.resource})"
+            )
+        return ServerLaunchSpec(
+            config_path=src.config_path,
+            server_dir=src.server_dir,
+            dotnet_root=src.dotnet_root,
+            step_ticks=src.step_ticks,
+            toponly=src.toponly,
+            freerun=src.freerun,
+            bot_teams="none",
+            bot_seed=seed,
+            extra_env=dict(src.extra_env),
+            connect_timeout_s=src.connect_timeout_s,
+            shutdown_timeout_s=src.shutdown_timeout_s,
         )
     if anchor.resource is None or not Path(anchor.resource).exists():
         raise AnchorEvalError(
@@ -178,10 +242,17 @@ def play_anchor_episodes(
             # farm one, and recording 0 there would drag the headline metric
             # down with no warning -- the same mistake vec.cs_at_10 documents.
             cs10: Optional[float] = None
+            opp_cs10: Optional[float] = None
             if reason == "time":
                 by_team = driver.cs_at_10(i)
                 if agent_team in by_team:
                     cs10 = float(by_team[agent_team])
+                # The anchor's OWN CS from this same game -- the honest
+                # yardstick, replacing a hardcoded reference measured on a
+                # different champion (see EpisodeResult.opponent_cs_at_10).
+                for t, v in by_team.items():
+                    if t != agent_team:
+                        opp_cs10 = float(v)
             out.append(
                 EpisodeResult(
                     agent=agent_id,
@@ -192,6 +263,7 @@ def play_anchor_episodes(
                     length_steps=since_reset.pop(i, 0),
                     reason=reason,
                     instance=i,
+                    opponent_cs_at_10=opp_cs10,
                 )
             )
             if len(out) >= n_episodes:
@@ -253,7 +325,7 @@ class AnchorEvaluator:
             results.extend(episodes)
             log.info(
                 "ANCHOR EVAL update=%d %s vs %s: %d game(s) in %.0fs, score %.2f, CS@10 %s "
-                "(anchor reference %s)",
+                "(anchor scored %s in the same games)",
                 update,
                 agent_id,
                 anchor.id,
@@ -261,7 +333,9 @@ class AnchorEvaluator:
                 time.monotonic() - t0,
                 sum(e.score for e in episodes) / len(episodes),
                 [e.cs_at_10 for e in episodes],
-                anchor.reference_cs_at_10,
+                # measured in the SAME games, not a constant from a config
+                # that no longer exists
+                [e.opponent_cs_at_10 for e in episodes],
             )
         return results
 
@@ -340,14 +414,33 @@ def make_anchor_driver_factory(
             ports=ports,
             log_dir=Path(log_dir) / f"anchor_{anchor.id}",
         )
-        driver = VecDriver(
-            env=env,
-            policies={policy_key: actor},
-            adapter_factory=adapters.adapter_factory,
-            encoder=adapters.encoder,
+        policies = {policy_key: actor}
+        if anchor.kind == "policy":
+            # A frozen NETWORK on red. This is the rung that answers "is the
+            # agent better than the prior it started from" -- the scripted
+            # anchors cannot, because they are a different kind of opponent
+            # entirely. It stays frozen: built once here, never handed the
+            # current weights by AnchorEvaluator._load (which only touches
+            # `actor`).
+            frozen = build_policy_actor()
+            blob = torch.load(anchor.resource, map_location="cpu", weights_only=False)
+            state = blob.get("policy", blob)
+            frozen.policy.load_state_dict(state)
+            frozen.policy.eval()
+            policies[_ANCHOR_KEY] = frozen
+            assignments = [SideAssignment(blue=policy_key, red=_ANCHOR_KEY)
+                           for _ in range(envs)]
+        else:
             # RED is left to the in-server bot: omitting the key is how a frozen
             # scripted anchor is played without a second network.
-            assignments=[SideAssignment(blue=policy_key, red=None) for _ in range(envs)],
+            assignments = [SideAssignment(blue=policy_key, red=None)
+                           for _ in range(envs)]
+        driver = VecDriver(
+            env=env,
+            policies=policies,
+            adapter_factory=adapters.adapter_factory,
+            encoder=adapters.encoder,
+            assignments=assignments,
             episode=EpisodeSpec(max_game_ms=max_game_ms),
         )
         log.info(

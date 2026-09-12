@@ -51,6 +51,17 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
         "move_x": np.full(n, C.N_MOVE_BINS // 2, dtype=np.int64),
         "move_z": np.full(n, C.N_MOVE_BINS // 2, dtype=np.int64),
         "target": np.zeros(n, dtype=np.int64),
+        # Which heads this row actually SUPERVISES. A head with no label is not
+        # the same as a head labelled "centre bin" / "slot 0": move_x/move_z sit
+        # at N_MOVE_BINS // 2, whose value is MOVE_BIN_VALUES[4] = 0.0, i.e. a
+        # positive "stand still" instruction. 21.3% of move rows carry no
+        # direction (the tail of an order republished across ~4 frames at 30 Hz
+        # against the bot's 150 ms reaction clock), and training them as
+        # stand-still inflated the centre bin in the walk-to-lane zone from 2.4%
+        # to 19.6% -- the same learned-to-stand-still end state as the
+        # transform-inversion bug, by a different route.
+        "has_dir": np.zeros(n, dtype=bool),
+        "has_target": np.zeros(n, dtype=bool),
     }
     for i, raw in enumerate(label_json):
         d = json.loads(str(raw))
@@ -73,6 +84,13 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
         if d.get("mx") is not None:
             out["move_x"][i] = int(d["mx"])
             out["move_z"][i] = int(d["mz"])
+            out["has_dir"][i] = True
+        # The attack referent -- the whole content of a last hit. Without it BC
+        # clones the DECISION to attack and leaves the target head at random
+        # init, which put ~35% of the policy's attack mass on its own minions.
+        if d.get("slot_idx") is not None:
+            out["target"][i] = int(d["slot_idx"])
+            out["has_target"][i] = True
     return out
 
 
@@ -106,6 +124,14 @@ def main() -> int:
     from lanerl_rl import constants as C
     print("button distribution:",
           {b: int(c) for b, c in zip(C.BUTTONS, counts) if c})
+    print(f"supervised heads: direction {int(heads['has_dir'].sum())} rows, "
+          f"target {int(heads['has_target'].sum())} rows")
+    n_atk = int((heads["button"] == list(C.BUTTONS).index("attack_move")).sum())
+    if n_atk and heads["has_target"].sum() == 0:
+        print("NO ATTACK ROW CARRIES A TARGET SLOT -- the target head would train "
+              "on all-zeros and the policy would attack an arbitrary unit. "
+              "Refusing: re-collect demos with the slot_idx label.")
+        return 1
 
     # Drop rows whose label the policy structurally cannot emit. Cross-entropy
     # against a masked (-1e9) logit is ~1e9, so a handful of them owns the whole
@@ -128,6 +154,35 @@ def main() -> int:
              for k in z.files}
         n = len(keep)
         counts = np.bincount(heads["button"], minlength=16)
+
+    # Gate EVERY supervised head by its OWN mask, not just the button.
+    #
+    # The first version of this guard checked only mask_button, and the run it
+    # gated still reported train_loss = 49,946,203 falling to 57,408 -- the same
+    # masked-logit catastrophe as before (cross-entropy against a -1e9 logit is
+    # ~1e9), just relocated to the target head. It showed up as val_target
+    # DEGRADING across epochs (0.922 -> 0.817) while val_button sat at 0.547
+    # against a 0.544 majority baseline and val_move_x never moved off 0.230:
+    # a handful of impossible rows owned the whole gradient.
+    #
+    # The cause is the same off-by-one the label pairing has to live with. The
+    # bot commits an attack at frame T; we pair it with frame T-1's observation
+    # and T-1's slot map. A minion that was out of range at T-1 is a legal
+    # target at T and a masked one at T-1. That row is not noise to be trained
+    # through -- it is unlabelable for that head, and only for that head, so
+    # clear the head's gate and keep the row's button label.
+    for head, gate in (("target", "has_target"),
+                       ("move_x", "has_dir"), ("move_z", "has_dir")):
+        m = z[f"mask_{head}"]
+        allowed = m[np.arange(n), heads[head]].astype(bool)
+        killed = int((heads[gate] & ~allowed).sum())
+        if killed:
+            print(f"  un-supervising {killed} rows on {head} "
+                  f"({killed / max(1, int(heads[gate].sum())):.2%} of that head's "
+                  f"labels) -- the label is masked in the paired observation")
+        heads[gate] = heads[gate] & allowed
+    print(f"after gating: direction {int(heads['has_dir'].sum())} rows, "
+          f"target {int(heads['has_target'].sum())} rows")
 
     # A held-out split, because training accuracy on an imbalanced set where
     # one class is 80% of the data is not evidence of anything.
@@ -162,22 +217,27 @@ def main() -> int:
         for s in range(0, len(tr_i), args.batch):
             idx = tr_i[s : s + args.batch]
             dist = batch_logits(idx)
-            # All heads the demo can label. move_x/move_z only carry signal on
-            # frames where the bot actually issued a move; elsewhere they sit at
-            # the centre bin, so weight them by whether this row is a move.
-            is_move = torch.as_tensor(
-                (heads["button"][idx] == idx_move_g).astype("float32"))
+            # Weight each head by whether THIS row supervises it. Previously
+            # move_x/move_z were weighted by (button == move), which is not the
+            # same question: a move order whose direction the collector could
+            # not recover still counted, at full strength, as a label saying
+            # "centre bin" = stand still.
             loss = F.cross_entropy(
                 dist.logits["button"].reshape(len(idx), -1),
                 torch.as_tensor(heads["button"][idx]),
             )
-            for head in ("move_x", "move_z"):
+            per_head = {"move_x": "has_dir", "move_z": "has_dir",
+                        "target": "has_target"}
+            for head, gate in per_head.items():
+                w = torch.as_tensor(heads[gate][idx].astype("float32"))
+                if float(w.sum()) == 0.0:
+                    continue
                 ce = F.cross_entropy(
                     dist.logits[head].reshape(len(idx), -1),
                     torch.as_tensor(heads[head][idx]),
                     reduction="none",
                 )
-                loss = loss + (ce * is_move).sum() / is_move.sum().clamp(min=1.0)
+                loss = loss + (ce * w).sum() / w.sum().clamp(min=1.0)
             opt.zero_grad(); loss.backward(); opt.step()
             tot += float(loss) * len(idx); seen += len(idx)
         policy.eval()
@@ -185,7 +245,29 @@ def main() -> int:
             dist = batch_logits(val_i)
             pred = dist.logits["button"].reshape(len(val_i), -1).argmax(-1).numpy()
             acc = float((pred == heads["button"][val_i]).mean())
-        print(f"  epoch {epoch}: train_loss={tot/max(1,seen):.4f}  val_button_acc={acc:.3f}")
+            # The target head is the one that decides a last hit, so report it
+            # separately -- button accuracy stayed high while target was pure
+            # noise, which is how CS 0 survived a "converged" BC run.
+            tsel = val_i[heads["has_target"][val_i]]
+            tacc = float("nan")
+            if len(tsel):
+                tp = dist.logits["target"].reshape(len(val_i), -1).argmax(-1).numpy()
+                tacc = float((tp[heads["has_target"][val_i]] == heads["target"][tsel]).mean())
+            dsel = val_i[heads["has_dir"][val_i]]
+            dacc = float("nan")
+            if len(dsel):
+                dp = dist.logits["move_x"].reshape(len(val_i), -1).argmax(-1).numpy()
+                dacc = float((dp[heads["has_dir"][val_i]] == heads["move_x"][dsel]).mean())
+        mean_loss = tot / max(1, seen)
+        if epoch == 0 and mean_loss > 1e3:
+            print(f"EPOCH-0 LOSS IS {mean_loss:.0f}. A correctly gated BC loss here "
+                  f"is single digits; a value this size means cross-entropy is "
+                  f"being taken against a masked (-1e9) logit, so a few "
+                  f"impossible rows own the entire gradient. Refusing to write a "
+                  f"checkpoint that would look trained and be noise.")
+            return 1
+        print(f"  epoch {epoch}: train_loss={tot/max(1,seen):.4f}  "
+              f"val_button={acc:.3f}  val_target={tacc:.3f}  val_move_x={dacc:.3f}")
 
     outp = Path(args.out); outp.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"policy": policy.state_dict(), "kind": "bc"}, outp)

@@ -9,11 +9,20 @@
 # not resubmit more than MAX_RESUBMITS times, and every wait is a sleep with a
 # fixed bound rather than a blocking wait on a condition that may never come.
 #
-#   usage: rl_watchdog.sh <run-name> <hard-deadline-epoch-seconds>
+#   usage: rl_watchdog.sh <run-name> <hard-deadline-epoch-seconds> [extra args...]
+#
+# Extra args are passed through to every resubmit VERBATIM. They have to be:
+# the resubmit line used to hardcode its own flag list, so any flag the first
+# launch used and this list omitted was silently dropped the moment the job
+# bounced. With --kl-ref-coef that is invisible and fatal -- the KL term to the
+# BC prior would just stop applying partway through the night, and the loss
+# curve would not obviously say so.
 set -uo pipefail
 
 RUN="${1:?run name required}"
 HARD_DEADLINE="${2:?deadline epoch seconds required}"
+shift 2
+EXTRA=("$@")
 REPO=/mnt/nfs/projects/ahriuwu-lanerl          # portable on BOTH nodes
 RUNDIR="$REPO/runs/$RUN"
 LOGDIR="$REPO/lanerl/logs"
@@ -32,7 +41,7 @@ resubmits=0
 last_ckpt_count=-1
 last_progress=$(date +%s)
 
-say "watchdog up: run=$RUN deadline=$(date -d "@$HARD_DEADLINE" '+%F %T') max_resubmits=$MAX_RESUBMITS"
+say "watchdog up: run=$RUN deadline=$(date -d "@$HARD_DEADLINE" '+%F %T') max_resubmits=$MAX_RESUBMITS extra=${EXTRA[*]-none}"
 
 while :; do
     now=$(date +%s)
@@ -78,7 +87,8 @@ while :; do
                --rollout-steps 256 --total-updates 20000 \
                --checkpoint-every 25 --snapshot-every 200 --eval-every 400 \
                --keep-last-checkpoints 12 --max-staleness 2 --queue-capacity 2 \
-               --device cuda --port-base 5700 --anchor-port-base 31000 --resume" >> "$STATUS" 2>&1
+               --device cuda --port-base 5700 --anchor-port-base 31000 --resume \
+               ${EXTRA[*]+${EXTRA[*]}}" >> "$STATUS" 2>&1
     elif [ "$stalled" -ge "$STALL_S" ]; then
         # Running but producing nothing: a wedged server or a deadlocked
         # lockstep read looks exactly like this, and would burn the whole night.

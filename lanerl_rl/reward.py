@@ -10,8 +10,8 @@ env and call :meth:`ZeroSumLaneReward.step` once per tick instead of calling
 
 The shape
 ---------
-Weights follow the 1v1 solo-lane configuration used by the JueWu line of work
-(Ye et al. 2020, "Mastering Complex Control in MOBA Games with Deep
+The weights START from the 1v1 solo-lane configuration used by the JueWu line
+of work (Ye et al. 2020, "Mastering Complex Control in MOBA Games with Deep
 Reinforcement Learning"; the same table ships as the default reward config of
 the Honor of Kings 1v1 gym environment)::
 
@@ -24,11 +24,142 @@ the Honor of Kings 1v1 gym environment)::
     kill       -0.5
     last_hit    0.5
 
+``tower_hp``, ``money``, ``death`` and ``kill`` are used as published.  Four
+are not, and every deviation is argued with arithmetic in the next section.
+Nothing here is a taste judgement: each number was picked against a measured
+600 s episode and each has a test that fails if it is silently moved.
+
 The negative ``kill`` weight is not a typo and is not a bug: it is what makes
 the kill/death pair antisymmetric once the zero-sum subtraction is applied.
 Killing the enemy fires *their* ``death`` (-1.0) and *my* ``kill`` (-0.5), so
 ``r = r_self - r_opp = -0.5 - (-1.0) = +0.5``; dying gives exactly ``-0.5``.
-Take the weights apart and the pair stops balancing.
+Take the weights apart and the pair stops balancing -- so when dying needed to
+hurt more (below), ``hp_point`` was raised and this pair was left alone.
+
+Deviations from the published table
+-----------------------------------
+::
+
+    weight      published   here    why, in one line
+    mana          0.8       0.0     Garen.json BaseMP = 0: nothing to measure
+    exp           0.008     0.001   it pays for proximity, not for skill
+    last_hit      0.5       1.0     the one term the agent fully controls
+    hp_point      2.0       4.0     trading must beat its opportunity cost
+    spend        (none)     0.0     the purchase is scripted, and paying for
+                                    it would pay the agent for dying
+
+**exp pays for proximity, not for skill.**  ``AttackableUnit.Die`` hands
+``ExpGivenOnDeath`` to every enemy champion within ``ai_ExpRadius2 = 1600``
+units of the corpse, split among them, *regardless of who landed the kill*;
+gold goes through ``Champion.OnKill`` and reaches the killer only.  Garen's
+last-hit reach is ``AA_RANGE_GAREN + TARGET_RADIUS["minion"] + AA_RANGE_EPS``
+= 190 units.  The XP radius is therefore 8.4x the reach and 71x the area: XP is
+what the lane pays for standing in it, gold is what it pays for hitting the
+minion.  Per melee minion (``Blue_Minion_Basic``: 77 XP, 20 gold), at the
+published weights::
+
+    just being there     0.008 * 77          = 0.616
+    landing the hit      0.5 + 0.008 * 20    = 0.660
+
+-- 48% of a dying minion's payout required no skill at all.  Measured over a
+real 600 s episode (46 CS), ``exp`` totalled **+34.82** against ``last_hit``
++23.00 and ``money`` +5.27, and carried 14.27 of the ~29 total ``|r|`` the
+episode moved: the largest term in the table, and the one the policy least
+controls.  At ``exp = 0.001`` with ``last_hit = 1.0``::
+
+    just being there     0.001 * 77          = 0.077
+    landing the hit      1.0 + 0.008 * 20    = 1.160
+
+-- 6.2%.  As a rate: a 3-melee/3-caster wave is ``3*77 + 3*51 = 384`` XP every
+30 s, i.e. 12.8 XP/s of standing next to a wave that dies on its own, so one
+melee last hit is worth::
+
+    before   0.660 / (0.008 * 12.8)  =   6.4 seconds of standing there
+    after    1.160 / (0.001 * 12.8)  =  90.6 seconds of standing there
+
+``exp`` is kept rather than deleted because it is the only DENSE term that
+notices the agent leaving lane, being zoned off the wave, or lying dead, and --
+under the zero-sum subtraction -- the only one that scores denying the enemy
+their half of it.  It simply must not be the biggest number in the table.
+
+**last_hit 0.5 -> 1.0.**  This is the objective.  It is now computed from the
+server's own ``ChampStats.MinionsKilled`` (``CreepScoreEstimator`` prefers the
+wire's ``cs``), so unlike the old proximity estimate it cannot be collected by
+standing in a wave somebody else is killing.  Doubling it, together with the
+8x cut to ``exp``, moves farming from 36% to ~81% of the episode's positive
+return while leaving the return's *scale* alone (the measured episode goes from
++64.1 to +56.7), so no PPO coefficient has to move with it.  ``money`` stays at
+0.008 on top, and is what makes a cannon (35g) worth more than a caster (10g):
+``last_hit`` alone is flat per minion.
+
+**hp_point 2.0 -> 4.0, so that trading can pay for itself.**  The term is
+``w * (phi(h_t) - phi(h_{t-1}))`` on both champions, and the zero-sum
+subtraction turns a trade into ``w * (dphi_them - dphi_me)``.  A clean level-6
+trade -- 25% off them, 15% off me, both from full::
+
+    phi(1.00) - phi(0.75) = 0.12695     (them)
+    phi(1.00) - phi(0.85) = 0.07525     (me)
+    r = w * (0.12695 - 0.07525)         = 0.0517 * w
+
+At the published ``w = 2.0`` that is +0.103, **9%** of one melee last hit
+(1.16): any trade costing even a single CS was a loss, which is what the
+measured episode shows -- ``hp_point`` moved 1.14 of total magnitude in 300 s,
+the signature of an agent that never trades.  At ``w = 4.0`` it is +0.207, 18%
+of a CS: poke that is free (they step into range, Q is up) pays for itself,
+poke that costs a wave still does not, which is the correct ordering.
+
+The quartic is what makes this more than a linear rescale, and it is why 18%
+is the right answer for *that* trade: chipping a full-health enemy to 75% is
+genuinely worth very little (``phi'(1) = 0.5``), while the same 25% taken off a
+champion already at 40% -- the chunk that sets up a kill -- is worth five times
+as much (``phi'(0) = 2.5``)::
+
+    phi(0.40) - phi(0.15) = 0.3212  ->  4.0 * 0.3212 = +1.285   (1.1 CS)
+
+and a whole health bar, which is what killing someone from full is worth on
+this term, is ``w = 4.0`` (3.4 CS) before the kill/death pair adds its +0.5.
+Not raised further: at ``w = 8`` the kill-setup chunk is 2.2 CS and a health
+bar is 6.9, so trading outbids farming outright and the agent learns to poke
+instead of last-hit -- the opposite failure.
+
+Dying gets more expensive from this too, and that is the point -- but only
+after the respawn refund below was closed.  Raising ``death`` would have been
+the obvious way to make dying hurt, and is precisely what must not happen: see
+the kill/death pairing above.
+
+A respawn is not a heal
+-----------------------
+Raising ``hp_point`` surfaced a bug that was already there at the published
+2.0.  ``phi`` is a potential on the hp LEVEL, so the jump from 0 back to full
+on respawn pays ``w * phi(1) = w`` -- while the death itself only charged
+``w * phi(h_at_death)``.  The difference is a refund, and for any death below
+full hp it is a *profit*::
+
+    w = 2.0, die at 30% hp
+        hp_point  -1.060 (the death)  +2.000 (the respawn)
+        death     -1.000
+        raw       -0.060  ->  zero-sum vs the killer's -0.5  =  +0.44
+
+    w = 4.0, die at 30% hp                                   =  +1.38
+    w = 2.0, die at  5% hp                                   =  +1.27
+
+i.e. under the published table the agent was **paid to feed**, and paid more
+the lower it was when it died.  ``_AgentReward.raw`` now suppresses the
+``hp_point`` delta across the dead->alive transition, so a death costs exactly
+``w * phi(h_at_death)`` and nothing comes back.  That is the right number: the
+potential has already charged for every point of hp lost on the way down, so
+the total cost of going from full to dead is ``w`` however the path ran, and
+dying at 1 hp is cheap only because it was already paid for.  At ``w = 4.0``:
+
+    die at full hp   -4.0 - 1.0 + 0.5  =  -4.5
+    die at 30% hp    -2.12 - 1.0 + 0.5 =  -2.62
+    die at  5% hp    -0.47 - 1.0 + 0.5 =  -0.97
+
+against +1.16 for a melee last hit: three deaths cost roughly six CS.  This is
+not potential-based shaping and carries no gamma, so there is no Ng-et-al.
+invariance to break, and the suppression applies identically to both agents, so
+the antisymmetry at ``alpha = 1`` is untouched.
+``test_dying_is_never_profitable`` and ``test_a_respawn_is_not_a_heal`` pin it.
 
 The HP term is a potential difference -- the bug this file exists to avoid
 -------------------------------------------------------------------------
@@ -49,10 +180,13 @@ this bug.  The damage is measurable: on a 2%-amplitude HP oscillation
 (1.00 -> 0.98 -> 1.00, which lane trading produces constantly), the correct
 form sums to exactly 0 while the wrong form sums to
 
-    2.0 * (phi(-0.02) + phi(+0.02)) = 2.0 * (-0.05122 + 0.04882) = -0.0048
+    w * (phi(-0.02) + phi(+0.02)) = w * (-0.05122 + 0.04882) = -0.0024 * w
 
-per cycle -- a persistent negative drift that teaches the agent to avoid
-trading at all.  :func:`hp_potential_delta` is the correct form and
+per cycle -- ``-0.0096`` at the ``hp_point = 4.0`` used here -- a persistent
+negative drift that teaches the agent to avoid trading at all.  Note that the
+drift scales with the weight, so raising ``hp_point`` to make trading worth
+doing would have made this bug *worse* had it still been present.
+:func:`hp_potential_delta` is the correct form and
 :func:`_wrong_hp_potential_of_delta` exists only so the test suite can assert
 the difference.
 
@@ -66,18 +200,71 @@ against roughly 1200 from a competent 60-CS ten minutes.  Rewarding
 time.  ``subtract_ambient_gold`` removes the trickle at its known rate.
 Experience needs no such correction: ``ai_AmbientXPAmount`` is 0.0 on Map1.
 
-Two details on that subtraction.  First, the server pays in 9.5 lumps every 5 s
-while we subtract 1.9/s continuously, so a single tick every 5 s carries a
-+0.076 residual.  That is deliberate: the sum over any window is unbiased, and
+Two details on that subtraction.  First, the lump is NOT 9.5 every 5 s, and this
+paragraph claimed it was.  ``GlobalData.cs:96-97`` rescales the content values
+before anything uses them -- ``AmbientGoldAmount = 9.5 / (10 / 5) / 5 = 0.95``
+and ``AmbientGoldInterval = 5.0 * 100 = 500`` ms -- and ``Champion.Update``
+(``Champion.cs:236-237``) pays 0.95 on a 500 ms timer.  The net 1.9 gold/s is
+right; the granularity is ten times finer.  So the residual on a paying decision
+is ``0.008 * (0.95 - 1.9 * dt)`` = **+0.0071 every 15 decisions** at 30 Hz, not
++0.076 every 150.  That is deliberate: the sum over any window is unbiased, and
 the residual is a pure function of the game clock, which is in the observation
-(``clock_norm``, ``wave_phase_*``) -- so the value function absorbs it and it
-cancels out of the advantage rather than biasing the gradient.  Subtracting on a
-guessed lump schedule instead would replace a predictable +0.076 with an
-unpredictable +/-0.076 pair whenever the phase was off by a tick, which is
-strictly worse.  Second, this server has no first-blood shortcut:
+(``clock_norm``, ``wave_phase_*`` -- the latter is a 30 s sawtooth, so it pins
+the 500 ms phase only through its own 6-cycle structure) -- so the value function
+absorbs it and it cancels out of the advantage rather than biasing the gradient.
+Subtracting on a guessed lump schedule instead would replace a predictable
++0.0071 with an unpredictable +/-0.0071 pair whenever the phase was off by a
+tick, which is strictly worse.  The argument only got stronger when the number
+was corrected: 0.0071 against 0.5 for a last hit.  Second, this server has no
+first-blood shortcut:
 ``Champion.Update`` only ever tests ``AmbientGoldDelay``, so the
 ``ai_AmbientGoldDelayFirstBlood = 30`` in the content file is dead and the
 delay is always 90 s.
+
+``spend``, and why it is a named zero
+-------------------------------------
+``gold`` on the wire is ``ch.Stats.Gold``, the WALLET, so a purchase makes it
+*fall*.  Scoring ``money * delta(wallet)`` therefore paid -8.0 for buying a
+1000g item: the agent was penalised for shopping and rewarded for hoarding.
+That half of the fix stands and is load-bearing -- ``money`` is computed on
+gold EARNED (``max(0, delta wallet)``, i.e. the wallet delta with any
+purchase added back), so a purchase is reward-NEUTRAL.
+``test_buying_an_item_is_not_punished`` guards it.
+
+The other half -- a ``spend`` bonus of ``0.25 * money`` "so that gold in items
+beats gold in the bank" -- measured exactly +0.00 over a 600 s episode.  It is
+now 0.0, for two independent reasons.
+
+1.  **It cannot fire.**  It is a wallet-drop detector and the drop is not on
+    the wire.  ``LanerlHooks.OnTick`` runs ``_control.OnTick`` (which emits the
+    observation and consumes the ``{"cmd":"reset"}`` line) BEFORE
+    ``AutoBuyUndriven``, and ``AutoBuyUndriven`` is fountain-gated -- so the
+    single shopping trip of a deathless episode happens in the same server
+    tick as the reset, between the last observation of the old episode and the
+    first observation of the new one.  Verified on the recordings: the first
+    frame of ``lanerl_rl/tests/data/frames_v2.jsonl`` (t = 16 ms) already reads
+    ``gold = 0``, the 475 starting gold having gone on ``BuildPath[0]`` (item
+    1054, Doran's Shield, 475g) before Python saw a frame, and neither that
+    recording nor ``lanerl/logs/state.jsonl`` (4846 frames, 525 s) contains a
+    single *decreasing* wallet sample.  Nothing in this module can recover a
+    transition that was never emitted.  Putting it on the wire means a
+    cumulative-spend counter emitted by ``LanerlControl.BuildObservation``, a
+    ``WIRE_FIELDS`` entry and a ``Unit`` field -- all outside this file.
+
+2.  **It should not fire.**  Buying is not an action the policy has.
+    ``LanerlHooks.AutoBuyUndriven`` walks a fixed ``BuildPath`` greedily
+    whenever the champion is inside ``FountainRadius``; the agent chooses
+    neither the items nor the moment, so ``spend`` is one more term paid for
+    the passage of time -- the exact thing ``subtract_ambient_gold`` exists to
+    delete.  Worse, its largest payouts would land on the WRONG event.
+    ``ShopState.BuyOutOnRespawn`` fires on the walk back from a death and buys
+    out everything affordable, so at the old 0.002 a respawn that cleared a
+    1500g bank paid ``+3.00`` against the ``-0.50`` the kill/death pair charges
+    for dying: the reward would have been strictly positive for getting
+    killed.  ``test_dying_is_never_profitable`` pins that shut.
+
+    If purchasing ever becomes a real action, restore the weight -- but put the
+    counter on the wire first, or it will keep reading zero.
 
 Last-hit shaping
 ----------------
@@ -166,7 +353,7 @@ def last_hit_potential(
     champ: Optional[Unit],
     enemy_team: int,
     attack_damage: float,
-    c: float = 0.05,
+    c: float = C.SHAPING_C,
     kappa: float = C.AA_KILL_KAPPA_HP,
     aa_range: float = C.AA_RANGE_GAREN,
     eps: float = C.AA_RANGE_EPS,
@@ -192,29 +379,51 @@ def last_hit_potential(
 
 @dataclass
 class RewardWeights:
-    """JueWu 1v1 solo-lane weights.  See the module docstring for provenance."""
+    """JueWu 1v1 solo-lane weights, retuned for this lane.
 
-    hp_point: float = 2.0
+    See the module docstring for the provenance of the published table and for
+    the arithmetic behind every deviation from it.  Four weights differ, and
+    each one has a test that fails if it moves: ``test_a_minion_pays_mostly_for
+    _the_last_hit_not_for_standing_there``, ``test_last_hit_dominates_the_
+    measured_episode``, ``test_a_winning_trade_is_worth_a_fraction_of_a_cs``
+    and ``test_dying_is_never_profitable``.
+    """
+
+    #: 2.0 published.  4.0 here: at 2.0 a clean trade was worth 14% of a last
+    #: hit and the agent never traded (1.14 of total |r| over 300 s).  Doubling
+    #: it is also what makes dying expensive without touching kill/death.
+    hp_point: float = 4.0
     tower_hp: float = 10.0
     money: float = 0.008
     #: Garen.json ``BaseMP = 0`` and ``PARType = None``: there is no mana bar to
     #: reward.  Kept as a named zero so the deviation from the published table
     #: is visible rather than silently missing.
     mana: float = 0.0
-    exp: float = 0.008
+    #: 0.008 published.  0.001 here: XP is granted to every champion within
+    #: ``ai_ExpRadius2 = 1600`` of a dying minion whoever killed it, against a
+    #: 190-unit last-hit reach, so at 0.008 fully 48% of a minion's payout was
+    #: for proximity.  Kept non-zero because it is the only dense term that
+    #: notices the agent leaving lane, being zoned, or lying dead.
+    exp: float = 0.001
     death: float = -1.0
     kill: float = -0.5
-    last_hit: float = 0.5
-    #: Gold converted into items, as a fraction of the `money` weight.
+    #: 0.5 published.  1.0 here: this is the objective, and it is the only term
+    #: the policy fully controls.  Read off the server's own
+    #: ``ChampStats.MinionsKilled``, so it cannot be farmed by proximity.
+    last_hit: float = 1.0
+    #: Gold converted into items.  ZERO, deliberately -- see the module
+    #: docstring's "``spend``, and why it is a named zero".  Two reasons: the
+    #: wallet drop is never on the wire (the scripted buy happens between the
+    #: reset and the first observation of the episode), and buying is not an
+    #: action the policy has, so paying for it would pay for the passage of
+    #: time -- and, because ``AutoBuyUndriven`` buys out the bank on the trip
+    #: back from a death, would have paid +3.00 for getting killed against the
+    #: -0.50 the kill/death pair charges.
     #:
-    #: `gold` in the observation is the WALLET, not lifetime earnings, so a
-    #: purchase makes it fall. Scoring `money * delta(wallet)` therefore paid
-    #: -8.0 for buying a 1000g item: the agent was penalised for shopping and
-    #: rewarded for hoarding. The money term is now computed on gold EARNED
-    #: (wallet delta plus whatever was spent this step), which makes a purchase
-    #: reward-neutral, and this weight adds a small bonus on top so that gold in
-    #: items beats gold in the bank.
-    spend: float = 0.002        # 0.25 x money
+    #: The half of that fix which DOES stand is in ``_AgentReward.raw``:
+    #: ``money`` is scored on gold EARNED, so a purchase is reward-neutral
+    #: rather than an 8.0 penalty for shopping.  Do not remove that with this.
+    spend: float = 0.0
 
 
 @dataclass
@@ -231,7 +440,7 @@ class LaneRewardConfig:
     subtract_ambient_gold: bool = True
     #: Potential-based last-hit shaping (Ng et al. 1999).  Policy-invariant.
     last_hit_shaping: bool = True
-    shaping_c: float = 0.05
+    shaping_c: float = C.SHAPING_C
     shaping_kappa: float = C.AA_KILL_KAPPA_HP
     shaping_eps: float = C.AA_RANGE_EPS
     #: The gamma used in ``F = gamma * Phi(s') - Phi(s)``.  Must match the
@@ -273,12 +482,16 @@ class _AgentReward:
         self.prev: Optional[AgentRewardState] = None
         self.prev_potential: float = 0.0
         self.terms: Dict[str, float] = {}
+        #: Gold observed leaving the wallet this episode, UNWEIGHTED and not
+        #: part of the reward.  Diagnostic only; see the `spend` weight.
+        self.spent_gold_total: float = 0.0
 
     def reset(self) -> None:
         self.cs.reset()
         self.prev = None
         self.prev_potential = 0.0
         self.terms = {}
+        self.spent_gold_total = 0.0
 
     # -- snapshot ----------------------------------------------------------
 
@@ -324,7 +537,31 @@ class _AgentReward:
         terms: Dict[str, float] = {}
 
         # HP as a POTENTIAL DIFFERENCE.  See the module docstring.
-        terms["hp_point"] = w.hp_point * hp_potential_delta(c.hp_frac, p.hp_frac)
+        #
+        # A RESPAWN IS NOT A HEAL. `phi` is a potential on the hp LEVEL, so the
+        # jump from 0 back to full pays `w * phi(1) = w` -- refunding the whole
+        # cost of the death, and then some, because the death only charged
+        # `w * phi(h_at_death)`. Measured at the published w = 2.0, dying below
+        # ~55% hp was already NET POSITIVE once the zero-sum subtraction added
+        # the killer's -0.5 back:
+        #
+        #     die at 30% hp:  -1.060 (hp) + 2.000 (respawn) - 1.0 (death)
+        #                      = -0.060 raw  ->  +0.44 after -(-0.5)
+        #
+        # and at w = 4.0 it would have been +1.38. The agent was being paid to
+        # feed. Suppressing the delta across the dead->alive transition makes
+        # the cost of a death exactly `w * phi(h_at_death)` with no rebate,
+        # which is the right number: the potential already charged for every
+        # point of hp lost on the way down, so the path no longer matters and
+        # dying from full always costs the full `w`.
+        #
+        # This is not a shaping term and carries no gamma, so there is no
+        # Ng-et-al. invariance to break here; and the suppression is applied
+        # identically to both agents, so the zero-sum antisymmetry is untouched.
+        respawned = p.alive < 0.5 <= c.alive
+        terms["hp_point"] = (
+            0.0 if respawned else w.hp_point * hp_potential_delta(c.hp_frac, p.hp_frac)
+        )
 
         # Towers: mine lost is negative, theirs lost is positive.
         terms["tower_hp"] = w.tower_hp * (
@@ -337,8 +574,16 @@ class _AgentReward:
         #   spent  = the wallet falling with no other explanation (a purchase)
         #   earned = wallet delta + spent, which is income and never negative
         #            for buying
-        # so a purchase is reward-NEUTRAL on `money`, and `spend` then adds a
-        # small bonus for turning gold into stats.
+        # so a purchase is reward-NEUTRAL on `money`. That split is the part
+        # that matters and it stays.
+        #
+        # `spend` itself is weighted 0.0 -- see the module docstring. The
+        # UNWEIGHTED gold is still accumulated into `spent_gold_total` and
+        # reported in the step info, so a future run can tell "the wallet never
+        # visibly dropped" (the detector's problem, which is what is happening
+        # today) from "it dropped and we chose not to pay for it" (the
+        # weight's). A term that reads 0.00 for two different reasons is how
+        # this went unnoticed in the first place.
         d_wallet = c.gold - p.gold
         spent = max(0.0, -d_wallet)
         d_gold = d_wallet + spent          # == max(0, d_wallet): income only
@@ -346,6 +591,7 @@ class _AgentReward:
             d_gold -= C.AMBIENT_GOLD_PER_S * dt
         terms["money"] = w.money * d_gold
         terms["spend"] = w.spend * spent
+        self.spent_gold_total += spent
 
         terms["exp"] = w.exp * max(0.0, c.xp - p.xp)
         # Garen has no mana bar, so the published table's `mana` term has
@@ -444,7 +690,13 @@ class ZeroSumLaneReward:
         if self.cfg.last_hit_shaping:
             for t in self.teams:
                 ch = frame.champion_of_team(t)
-                ad = C.garen_attack_damage(int((ch.lvl if ch is not None else 1) or 1))
+                # Wire AD, not a re-derivation -- see obs.ObservationBuilder.
+                # The derivation is 5.0 low at level 1 even after the rune page
+                # was modelled, because the mastery page adds Martial Mastery
+                # (+5) and Brute Force (+0.55/level) on top.
+                # The server's number or nothing -- see constants.py on why
+                # there is no longer a Python attack-damage derivation.
+                ad = float(ch.ad) if (ch is not None and ch.ad is not None) else 0.0
                 agent = self.agents[t]
                 phi_next = agent.potential(frame, ad)
                 shaping[t] = self.cfg.gamma * phi_next - agent.prev_potential
@@ -457,6 +709,10 @@ class ZeroSumLaneReward:
             "shaping": shaping,
             "terms": {t: dict(self.agents[t].terms) for t in self.teams},
             "died": died,
+            # Diagnostic, not reward: gold seen leaving the wallet this
+            # episode. `spend` is weighted 0.0 and this is how a run tells a
+            # zero weight apart from a detector that never fired.
+            "spent_gold": {t: self.agents[t].spent_gold_total for t in self.teams},
         }
         return rewards, info
 

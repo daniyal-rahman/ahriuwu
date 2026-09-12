@@ -91,8 +91,26 @@ def cs_at(rows: List[CsRow], t_ms: int, tolerance_ms: int = 1000) -> Dict[int, C
     crashed episode would drag the headline metric down without any warning,
     which is precisely the class of bug this project keeps paying for.
     """
+    # Only the CURRENT episode's rows. LanerlEpisode.Reset calls
+    # LanerlSetGameTime(0f), so the game clock restarts at 0 every episode,
+    # while cs_rows only clears on a PROCESS restart (LogTail.rewind) -- and
+    # AnchorEvaluator deliberately keeps its servers alive for the whole run.
+    #
+    # Scanning every row therefore returned the highest t_ms ever seen, which
+    # after the first episode is always an OLD episode's row. Observed in
+    # anchor_scripted_bronze/instance000.log: episode 1 ran to t=570226 with
+    # cs=0, episode 2 restarted at t=267 and reached cs=10 by t=420434, and
+    # cs_at kept reporting the t=570226 row. Every episode after the first was
+    # masked by the longest earlier one.
+    #
+    # A clock that goes backwards is the episode boundary, so take only the
+    # last monotonically-increasing run.
+    start = 0
+    for i in range(1, len(rows)):
+        if rows[i].t_ms < rows[i - 1].t_ms:
+            start = i
     out: Dict[int, CsRow] = {}
-    for r in rows:
+    for r in rows[start:]:
         if r.t_ms <= t_ms + tolerance_ms:
             prev = out.get(r.team)
             if prev is None or r.t_ms >= prev.t_ms:

@@ -5,24 +5,38 @@ The measurement this module exists for
 The reference measurement on the dev machine: **1.70 ms/decision** unbatched
 against **0.058 ms/decision** at batch 24 -- 29x, almost all of it fixed
 per-call overhead (kernel launches, the transformer's small matmuls, python).
-It shows up directly as wall-clock simulator throughput: at 15 Hz a decision
-has a 66.7 ms budget, and 1.70 ms of policy per agent against 24 parallel envs
-is 40.8 ms of serialised inference -- 41% of the budget spent before the
-simulator does anything.  Batched, the same 24 agents cost 1.4 ms, so 96% of the
-budget is left for the game.
+It shows up directly as wall-clock simulator throughput.  **The budget is
+33.3 ms**: ``constants.DECISION_HZ`` is 30 (``STEP_TICKS = 2``).  Every
+percentage below used to be quoted against 66.7 ms, i.e. against a 15 Hz rate
+this stack left behind, so they were all a factor of two too flattering.
+
+1.70 ms of policy per agent against 24 parallel envs is 40.8 ms of serialised
+inference -- **122% of a 33.3 ms budget**, spent before the simulator does
+anything.  Batched, the same 24 agents cost 1.4 ms: 4% of the budget, 96% left
+for the game, and that one holds at either rate.
+
+The "41% of the budget spent" that stood here for a while was arithmetic from
+a different env count: 16 x 1.70 = 27.2 ms is 41% of 66.7 ms.  40.8 ms of
+66.7 ms is 61%.  One sentence, two env counts and a superseded decision rate.
 
 Reproduced here on a loaded 6-core login node, with the larger post-review
-observation (32 slots x 40 fields, up from 20 x 32), single threaded::
+observation (32 slots x 40 fields, up from 20 x 32), single threaded.  Budget
+column recomputed at 30 Hz; the 15 Hz figure this table used to print is in
+brackets::
 
-    batch  1:  11.11 ms/decision   ->  266.7 ms per 24-agent tick  (400% of budget)
-    batch  8:   2.39 ms/decision   ->   57.5 ms                    ( 86%)
-    batch 24:   1.51 ms/decision   ->   36.3 ms                    ( 54%)
-    batch 48:   1.36 ms/decision   ->   32.7 ms                    ( 49%)
+    batch  1:  11.11 ms/decision   ->  266.7 ms per 24-agent tick   800% [400%]
+    batch  8:   2.39 ms/decision   ->   57.5 ms                     173% [ 86%]
+    batch 24:   1.51 ms/decision   ->   36.3 ms                     109% [ 54%]
+    batch 48:   1.36 ms/decision   ->   32.7 ms                      98% [ 49%]
 
 The absolute numbers are ~6x worse than the reference because the box is busy
-and the model grew; the ratio is 7.3x rather than 29x for the same reason.  The
-conclusion does not move: unbatched inference alone blows the decision budget
-by 4x, and batching brings it back under half.
+and the model grew; the ratio is 7.3x rather than 29x for the same reason.
+
+The conclusion DOES move, and this is the part the old 15 Hz arithmetic hid: on
+this box at 30 Hz, batch 24 is still *over* budget (109%) and only batch 48
+gets under it, where the old table read a comfortable 54%.  Batching is still
+worth 7-8x and is still mandatory; what is no longer true is that it "brings it
+back under half".  A GPU actor, or 15 Hz, is what buys the headroom back.
 
 So the rollout loop must hand the policy a BATCH of observations, not make one
 round trip per agent per tick.  ``LanePolicy.act`` is still there for a single

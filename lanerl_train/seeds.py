@@ -76,13 +76,19 @@ T95: Dict[int, float] = {
 }
 
 #: Beyond the table, the normal quantile.  At df=31 the true value is 2.040, so
-#: this understates the half-width by 4%; past df=60 the error is under 1%.
+#: this understates the half-width by 3.9%.  The error is still 2.0% at df=60
+#: and only falls under 1% past df=120 (t(.975, 120) = 1.980) -- this comment
+#: used to claim "under 1% past df=60", which is off by a factor of two.  In
+#: practice a seed sweep never has df=30, so the substitution is decorative.
 T95_LARGE = 1.960
 
-#: Below this many seeds the interval is reported but flagged as unusable.  At
-#: n=2 the t multiplier is 12.7, so the interval is wide enough to contain
-#: essentially any hypothesis -- printing it without the flag invites someone
-#: to read a 3-seed result as a measurement.
+#: Below this many seeds the interval is reported but flagged as unusable.  The
+#: test is ``n < MIN_SEEDS_FOR_A_USABLE_CI``, so the flag fires at n=1 and n=2
+#: and NOT at n=3.  At n=2 the t multiplier is 12.7 (``T95[1]``), so the
+#: interval is wide enough to contain essentially any hypothesis -- printing it
+#: without the flag invites someone to read a 2-seed result as a measurement.
+#: n=3 is the smallest n this tooling is willing to call an interval at all; it
+#: is not endorsed, it is merely not flagged.
 MIN_SEEDS_FOR_A_USABLE_CI = 3
 
 #: Stride between consecutive seeds' port bases.  ``__main__`` already strides

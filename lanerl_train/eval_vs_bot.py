@@ -50,6 +50,14 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
     env.update(
         DOTNET_ROOT=str(VENDOR / "dotnet"),
         LANERL_HEADLESS="1", LANERL_FREERUN="1",
+        # Match TRAINING exactly: vec.ServerLaunchSpec.toponly defaults True,
+        # and LANERL_TOPONLY=1 disables jungle camps (LevelScript.cs:165) and
+        # every non-top minion wave (:292). Omitting it here meant the BC
+        # prior was cloned on a full three-lane map WITH jungle and then
+        # fine-tuned on a top-only one -- a train/deploy observation shift in
+        # the very module whose docstring promises the BC set and the RL
+        # rollouts come from the same pipeline.
+        LANERL_TOPONLY="1",
         LANERL_BOT="purple",            # red = frozen scripted bot
         LANERL_CONTROL_PORT=str(cport),
         LANERL_STEP_TICKS=str(step_ticks),
@@ -168,6 +176,22 @@ def trained_policy(ckpt_path: str):
 
     from lanerl_rl.infer import collate_observations
 
+    def reset():
+        """Drop all cross-episode state between games.
+
+        Neither the adapter nor the GRU was reset, so episodes 2..N carried the
+        previous game's unit memory and recurrent state. The builder's own
+        detector caught it -- "game clock went backwards (599979 -> 16 ms)" in
+        lanerl/logs/bceval-682.out, once per boundary. With net ids reused (what
+        a fresh server actually hands out) the first frame of episode 2 reported
+        the enemy last seen 80% down the lane at age 0 -- a position from the
+        game before. At the default --episodes 3, 2 of 3 reported games were
+        contaminated, so every CS number was measured on a polluted observation.
+        """
+        nonlocal state, adapter
+        adapter = adapters.adapter_factory(0, "blue")
+        state = None
+
     def act(raw):
         nonlocal state
         with torch.no_grad():
@@ -182,6 +206,7 @@ def trained_policy(ckpt_path: str):
             flat = {k: int(v.reshape(-1)[0]) for k, v in action.items()}
         return {"blue": encoder.encode(flat, raw, "blue")}
 
+    act.reset = reset
     return act
 
 
@@ -203,6 +228,10 @@ def main() -> int:
     logdir = _REPO / "lanerl/logs"
     logdir.mkdir(parents=True, exist_ok=True)
     for i in range(args.episodes):
+        # Each episode is a fresh server process, so the policy's own carried
+        # state must be dropped to match.
+        if hasattr(policy, "reset"):
+            policy.reset()
         row = play_episode(policy, args.max_game_ms, args.step_ticks,
                            logdir / f"evalbot_{label}_{i}.log")
         rows.append(row)

@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=lanerl-train
 #SBATCH --partition=gpup
-#SBATCH --output=/mnt/nfs/shared/%x-%j.out
+#SBATCH --chdir=/mnt/nfs/projects/ahriuwu-lanerl
+#SBATCH --output=/mnt/nfs/projects/ahriuwu-lanerl/lanerl/logs/%x-%j.out
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
@@ -29,12 +30,21 @@ source /home/dani/miniconda3/etc/profile.d/conda.sh
 conda activate ml
 set -euo pipefail
 
-# Resolve the repo from this script's own location, never from a literal
-# mount point: /mnt/nfs on danilogin is a symlink to /srv/nfs, and desktop
-# has only /mnt/nfs -- a path hardcoded for one silently resolves or
-# silently fails to resolve on the other (lanerl_audit/FINDINGS.md #7, #18).
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
-REPO="$(dirname "$HERE")"
+# Resolve the repo from the ONE portable literal, /mnt/nfs.
+#
+# This used to derive REPO from BASH_SOURCE, to avoid hardcoding a mount point
+# (lanerl_audit/FINDINGS.md #7, #18: danilogin has /mnt/nfs as a symlink to
+# /srv/nfs, desktop has only /mnt/nfs). But sbatch COPIES the batch script to
+# the node's spool, so on a compute node BASH_SOURCE is
+# /var/spool/slurmd/jobNNNNN/slurm_script and REPO resolved to
+# /var/spool/slurmd. Measured on job 692. The avoidance was worse than the
+# thing it avoided, and this launcher had never worked -- every real run went
+# through lanerl/rl_watchdog.sh, which uses --wrap with an explicit cd.
+REPO=/mnt/nfs/projects/ahriuwu-lanerl
+test -d "$REPO/lanerl_train" || {
+  echo "REPO $REPO is not visible from $(hostname) -- refusing to run from the wrong tree"
+  exit 1
+}
 cd "$REPO"
 
 export PYTHONUNBUFFERED=1
@@ -56,8 +66,10 @@ python -m lanerl_train \
   --checkpoint-every 100 \
   --eval-every 200 \
   --total-updates 200000 \
-  "$@"
+  "$@" && rc=0 || rc=$?
 
-echo "finished=$(date -Is) rc=$?"
+# $? after the echo's own $(date) is DATE's status, not python's -- the old
+# line reported rc=0 for every outcome it was capable of reaching.
+echo "finished=$(date -Is) rc=$rc"
 echo "REMINDER: a --time-limit or pre-emption exit checkpoints but does NOT resubmit."
 echo "Re-run: sbatch $0 $RUN_NAME --resume [same extra args]"

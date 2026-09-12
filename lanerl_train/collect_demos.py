@@ -102,6 +102,14 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
     env.update(
         DOTNET_ROOT=str(VENDOR / "dotnet"),
         LANERL_HEADLESS="1", LANERL_FREERUN="1",
+        # Match TRAINING exactly: vec.ServerLaunchSpec.toponly defaults True,
+        # and LANERL_TOPONLY=1 disables jungle camps (LevelScript.cs:165) and
+        # every non-top minion wave (:292). Omitting it here meant the BC
+        # prior was cloned on a full three-lane map WITH jungle and then
+        # fine-tuned on a top-only one -- a train/deploy observation shift in
+        # the very module whose docstring promises the BC set and the RL
+        # rollouts come from the same pipeline.
+        LANERL_TOPONLY="1",
         LANERL_BOT="both",                      # both sides demonstrate
         LANERL_CONTROL_PORT=str(cport),
         LANERL_STEP_TICKS=str(step_ticks),
@@ -127,6 +135,7 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
     # (cross-entropy against a -1e9 masked logit is ~1e9). Hold the previous
     # observation and attach the label to the state the bot actually saw.
     prev_obs: Dict[str, object] = {}
+    prev_netids: Dict[str, list] = {}
     try:
         sock = None
         for _ in range(120):
@@ -151,29 +160,86 @@ def collect_game(max_game_ms: int, step_ticks: int, log: Path,
                 if not demo:
                     continue
                 kind = demo.get("t", "noop")
-                # noop dominates ~80% of frames because the bot decides on a
-                # 150 ms reaction clock while we observe at 30 Hz. Keeping all
-                # of them would train a policy that mostly stands still.
-                if kind == "noop" and rng.random() > keep_noop_frac:
-                    continue
+                # build() EVERY frame, and subsample only which frames become
+                # training rows. The builder is stateful -- dt, unit memory,
+                # ability intel and the attack clock are all computed from the
+                # frame stream it is shown -- so skipping build() on ~65% of
+                # frames at irregular gaps handed BC a different observation
+                # distribution than VecDriver produces at RL time, which builds
+                # every frame. It showed up as global_vec.dt_norm mean 1.91 /
+                # p90 5.0 / 5.6% saturated at DT_NORM_CAP against ~1.0 by
+                # construction at RL time, and as enemy_ability_*_never_observed
+                # stuck at 1.0 for all 99,654 rows (the intel model needs two
+                # sightings <= 300 ms apart and never saw consecutive frames).
+                # This is the exact mismatch this module's docstring promises to
+                # prevent.
                 try:
                     obs = builders[side].build(raw, side)
                 except Exception:
                     continue
-                if demo.get("x") is not None:
+                slot_netids = list(builders[side].last_slot_netids)
+                # Tell the builder about the swing, exactly as LaneEnv.decode
+                # does at RL time. The attack clock has no server source: it
+                # must be *told*, and the collector never told it -- so all four
+                # attack-cycle features were identically 0 across every BC row
+                # while being live at RL time. The prior was trained with them
+                # dead and would meet them alive, the same train/test mismatch
+                # as the dt_norm one.
+                #
+                # This matches RL's convention rather than fixing it: the clock
+                # is driven by orders ISSUED, so an attack the engine refuses
+                # (target out of range) still starts it. The real fix is the
+                # server's own `atk` (Champion.IsAttacking) rising edge, which
+                # is already on the wire and HUD-legal for our own champion --
+                # but that changes RL's features too, so it belongs in its own
+                # change, not folded in behind a running chain.
+                if kind == "attack":
+                    builders[side].builder.note_attack(float(raw.get("t", 0)))
+                # noop dominates ~80% of frames because the bot decides on a
+                # 150 ms reaction clock while we observe at 30 Hz. Keeping all
+                # of them would train a policy that mostly stands still.
+                drop_row = kind == "noop" and rng.random() > keep_noop_frac
+                demo = dict(demo)
+                # Direction, but ONLY for orders that actually carry one.
+                # LanerlBot.Decide sets LastOrderX/Y in the move branch and
+                # never clears them, so demo.x/y are present (and stale) on
+                # attack and noop rows too -- gate on the order kind, not on
+                # whether the field exists.
+                if kind == "move" and demo.get("x") is not None:
                     mb = move_bins_for(builders[side], raw, team,
                                        demo["x"], demo["y"])
                     if mb is not None:
-                        demo = dict(demo)
                         demo["mx"], demo["mz"] = mb
                 # label THIS frame's order against the PREVIOUS frame's
                 # observation -- the state the bot was looking at when it chose
                 earlier = prev_obs.get(side)
-                if earlier is not None:
+                earlier_netids = prev_netids.get(side)
+                # The attack REFERENT. Cloning "press attack" without which unit
+                # to attack teaches nothing about a last hit: the target head
+                # was left at zeros and unsupervised, so the trained policy's
+                # target distribution was indistinguishable from random init and
+                # put ~35% of its attack mass on its OWN minions -- a legal
+                # order the server never complains about. 1,091-1,965 attack
+                # orders per game, CS 0.
+                #
+                # Resolve against the slot map of the observation we PAIR with
+                # (frame T-1), not the current frame's: the slot index only
+                # means anything relative to the entity block the policy is
+                # looking at.
+                if kind == "attack" and demo.get("id") is not None \
+                        and earlier_netids is not None:
+                    try:
+                        demo["slot_idx"] = earlier_netids.index(int(demo["id"]))
+                    except ValueError:
+                        # the bot's target is not in the paired observation's
+                        # entity block (fogged, or aged out) -- unlabelable
+                        demo.pop("slot_idx", None)
+                if earlier is not None and not drop_row:
                     out["obs"].append(earlier)
                     out["label"].append(demo)
                     out["side"].append(side)
                 prev_obs[side] = obs
+                prev_netids[side] = slot_netids
             f.write(empty)
             f.flush()
             line = f.readline()

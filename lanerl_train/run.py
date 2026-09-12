@@ -116,9 +116,20 @@ class EpisodeResult:
     reason: str = ""
     instance: int = -1
     #: Undiscounted sum of shaped reward over the episode. Absent for the whole
-    #: first run, which is why 13,475 updates produced no way to tell whether
+    #: first run, which is why 16,200 updates produced no way to tell whether
     #: the agent was receiving any signal at all.
     ep_return: Optional[float] = None
+    #: The OPPONENT's CS at ten minutes, from the same game.
+    #:
+    #: Replaces the hardcoded ``AnchorSpec.reference_cs_at_10`` (16.7 / 29.5 /
+    #: 35.2) that the eval line used to print beside the agent's number. Those
+    #: three constants were measured on a bot config with no rune or mastery
+    #: page -- 57.88 attack damage against the 78.14 the agent actually faces
+    #: -- so by the time they were being quoted the "diamond" reference of
+    #: 35.2 sat BELOW what the bronze bot really farms. Measuring the opponent
+    #: in the same episode cannot go stale, and it is free: the server already
+    #: reports CS for both teams.
+    opponent_cs_at_10: Optional[float] = None
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.score <= 1.0):
@@ -134,8 +145,10 @@ class Rollout:
     #: Rollout ROWS, not environment decisions.  One row is one timestep across
     #: every parallel env in this actor's batch, so the decision count is
     #: ``steps * parallel_envs``.  ``RunState.total_env_steps`` sums this field
-    #: and is therefore also in rows; the first run's 3,852,540 "env steps" were
-    #: 30.8M actual decisions.  Left as-is because the reward's zero-sum anneal
+    #: and is therefore also in rows; the first run's 4,131,000 "env steps"
+    #: (``state.json``, final) were 33,048,000 actual decisions at 8 envs.  The
+    #: 3,852,540 / 30.8M that stood here was a mid-run snapshot, not the total.
+    #: Left as-is because the reward's zero-sum anneal
     #: is already denominated in it, and moving that clock mid-run would restart
     #: the anneal.
     steps: int
@@ -315,7 +328,7 @@ class StalenessTracker:
 class ThroughputMeter:
     """How fast the run is going, and where each update's wall time went.
 
-    The first real run produced 13,475 updates and ``metrics.jsonl`` could not
+    The first real run produced 16,200 updates and ``metrics.jsonl`` could not
     answer "is this compute-bound, env-bound or stalled?".  The only throughput
     figure anyone had was anecdotal ("nvidia-smi says about 5%"), which is not a
     number you can put in a post-mortem or compare against the next run.
@@ -926,7 +939,7 @@ class TrainingLoop:
     def state_path(self) -> Path:
         return self.run_dir / "state.json"
 
-    def agent_id(self) -> str:
+    def agent_id(self, update: Optional[int] = None) -> str:
         """The run's own identity for rating and CS purposes.
 
         Bucketed to ``snapshot_every``, not to the update number, and this is
@@ -936,7 +949,7 @@ class TrainingLoop:
         * ``Evaluator.report`` asked for ``cs_at_10`` of ``agent@9000`` while
           episodes had been recorded under whatever the collector called itself
           (``"self"``).  The first run logged CS@10 for 179 episodes and every
-          one of its 37 eval reports still said ``cs_at_10: null``;
+          one of its 40 eval reports still said ``cs_at_10: null``;
         * no ``(latest, past)`` pair could ever reach the 10 games
           ``min_win_rate_vs_past`` needs, so the AlphaStar rot signature was
           structurally unreachable;
@@ -947,7 +960,11 @@ class TrainingLoop:
         the right granularity for a rating too.
         """
         era = int(self.cfg.snapshot_every or 0)
-        bucket = (self.state.update // era) * era if era > 0 else 0
+        # `update` lets a caller ask for the id of an EARLIER bucket. The eval
+        # report needs it: it fires on the first update of a fresh bucket, so
+        # the bucket holding the episodes is the previous one.
+        at = self.state.update if update is None else int(update)
+        bucket = (at // era) * era if era > 0 else 0
         return f"agent@{bucket}"
 
     # -- persistence -------------------------------------------------------
@@ -1025,7 +1042,7 @@ class TrainingLoop:
         # Everything downstream is keyed by the RUN's agent id, not by whatever
         # the collector called itself. ``collect_rollout`` labels its episodes
         # with the policy key ("self"), so CS recorded under that label was
-        # invisible to a report asking about "agent@N" -- 179 CS@10 readings in
+        # invisible to a report asking about "agent@N" -- 298 CS@10 readings in
         # the first run, every eval row still saying null. See agent_id().
         agent = self.agent_id()
         # Skip rating a self-match as well as the LATEST sentinel. Under a pure
@@ -1190,7 +1207,7 @@ class TrainingLoop:
             raise TrainingError(
                 f"eval_every={self.cfg.eval_every} but this run has no anchor evaluator, so "
                 f"every eval report would be win_rate_vs_anchor=(None, 0) forever -- which "
-                f"is exactly how 13,475 updates of a non-learning policy went unnoticed. "
+                f"is exactly how 16,200 updates of a non-learning policy went unnoticed. "
                 f"Pass anchor_eval=..., or set --eval-every 0 to say deliberately that this "
                 f"run is not evaluated."
             )
@@ -1235,7 +1252,26 @@ class TrainingLoop:
             ckpt = path
         if self.cfg.eval_every and u % self.cfg.eval_every == 0:
             self._run_anchor_eval(u)
-            report = self.evaluator.report(u, self.agent_id(), self.sampler.pool.ids())
+            # Report against the agent id that HAS the episodes.
+            #
+            # agent_id() buckets by snapshot_every, and eval_every is a
+            # multiple of it in both real launchers (--eval-every 400
+            # --snapshot-every 200), so this line always fired on the FIRST
+            # update of a brand-new bucket. The only episode in that bucket was
+            # the anchor game _run_anchor_eval had recorded seconds earlier, so
+            # every eval row read `cs_at_10: [0.0, 0.0, 1]` -- n=1 -- while the
+            # 12-13 self-play episodes of the bucket that had just closed
+            # averaged 34-38 and were never aggregated. The run's headline
+            # absolute metric read 0.0 for its whole life.
+            eval_id = self.agent_id()
+            def _n(aid):
+                st = self.evaluator.cs.stats(aid)
+                return 0 if st is None else st[2]
+            if _n(eval_id) <= 1 and self.cfg.snapshot_every:
+                prev = self.agent_id(max(0, u - self.cfg.snapshot_every))
+                if _n(prev) > _n(eval_id):
+                    eval_id = prev
+            report = self.evaluator.report(u, eval_id, self.sampler.pool.ids())
             fields = json.loads(report.to_json())
             fields.pop("kind", None)  # MetricsLog supplies it
             self.metrics.write("eval", **fields)

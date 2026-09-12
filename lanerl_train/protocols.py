@@ -116,9 +116,11 @@ class BatchPolicy(Protocol):
     """A policy that is called **once per batch**, never once per env.
 
     Measured on this stack: 1.70 ms/decision unbatched against 0.058 ms at batch
-    24.  At 15 Hz over 16 instances that is the difference between retaining 41%
-    and 96% of simulator throughput, so ``act_batch`` is the only entry point
-    the vec runner uses.
+    24.  Over 16 instances (0.78 ms of simulator wall per decision at 30 Hz and
+    43x real time) that is the difference between retaining 31% and 93% of
+    simulator throughput, so ``act_batch`` is the only entry point the vec runner
+    uses.  See ``vec.py``'s module docstring for the derivation; the "41% and
+    96%" this used to quote was a 15 Hz figure computed two different ways.
     """
 
     @property

@@ -3,7 +3,7 @@
 Wire format
 -----------
 ``GameServerLib/Lanerl/LanerlControl.cs::BuildObservation`` writes one JSON
-object per ``LANERL_STEP_TICKS`` server ticks (4 -> 15 Hz)::
+object per ``LANERL_STEP_TICKS`` server ticks (2 -> 30 Hz)::
 
     {"t": <game_time_ms:int>,
      "u": [{"id":<netid>, "k":<GetType().Name>, "tm":<(int)Team>,
@@ -351,6 +351,42 @@ WIRE_FIELDS: Dict[str, WireField] = dict(
             "gate, so it is not actor-invariant",
         ),
         _wf(
+            "ad", "unit", "actor", True, True, True,
+            "own attack damage is on the agent's own HUD; the ENEMY's is privileged. "
+            "Emitted so Python never re-derives a stat the server already knows",
+            poison=999,
+        ),
+        _wf(
+            "ap", "unit", "actor", True, True, True,
+            "own ability power is on the agent's own HUD; the ENEMY's is privileged. "
+            "Emitted so Python never re-derives a stat the server already knows",
+            poison=999,
+        ),
+        _wf(
+            "ar", "unit", "actor", True, True, True,
+            "own armor is on the agent's own HUD; the ENEMY's is privileged. "
+            "Emitted so Python never re-derives a stat the server already knows",
+            poison=999,
+        ),
+        _wf(
+            "mr", "unit", "actor", True, True, True,
+            "own magic resist is on the agent's own HUD; the ENEMY's is privileged. "
+            "Emitted so Python never re-derives a stat the server already knows",
+            poison=999,
+        ),
+        _wf(
+            "as", "unit", "actor", True, True, True,
+            "own attack speed multiplier is on the agent's own HUD; the ENEMY's is privileged. "
+            "Emitted so Python never re-derives a stat the server already knows",
+            poison=999,
+        ),
+        _wf(
+            "rng", "unit", "actor", True, True, True,
+            "own attack range is on the agent's own HUD; the ENEMY's is privileged. "
+            "Emitted so Python never re-derives a stat the server already knows",
+            poison=999,
+        ),
+        _wf(
             "cs", "unit", "actor", True, True, True,
             "own creep score is on the agent's own HUD; the ENEMY's is privileged. "
             "The control channel DOES emit this now (added 2026-09-11 so cs_at_10 "
@@ -359,7 +395,7 @@ WIRE_FIELDS: Dict[str, WireField] = dict(
             poison=999,
         ),
         _wf(
-            "sl", "unit", "actor", False, True, True,
+            "sl", "unit", "actor", True, True, True,
             "own ability ranks are on the agent's own HUD; the ENEMY's are "
             "privileged. Not emitted; the standard Q1/W2/E3/R6 rule is assumed",
             poison=[5, 5, 5, 5],
@@ -445,6 +481,18 @@ class Unit:
     xp: Optional[float] = None
     lvl: Optional[int] = None
     cs: Optional[int] = None
+    #: REAL combat stats off the server's own Stats object. These exist so
+    #: nothing has to RE-DERIVE them in Python: the old
+    #: ``constants.garen_attack_damage`` hand-copy read 57.88 at level 1, then
+    #: 73.14 once the rune page was modelled, against a true 78.14 -- the
+    #: remainder being a mastery page nobody had modelled either. A re-derived
+    #: server quantity is wrong by however much of the server you forgot.
+    ad: Optional[float] = None
+    ap: Optional[float] = None
+    armor: Optional[float] = None
+    mr: Optional[float] = None
+    attack_speed: Optional[float] = None
+    attack_range: Optional[float] = None
     #: Remaining cooldown per spell slot, in SECONDS.  ``None`` for a slot the
     #: champion does not have, ``None`` for the whole tuple when unreported.
     cooldowns: Optional[Tuple[Optional[float], ...]] = None
@@ -566,6 +614,12 @@ def decode_frame(raw: dict) -> Frame:
             xp=None if ru.get("xp") is None else float(ru["xp"]),
             lvl=None if ru.get("lvl") is None else int(ru["lvl"]),
             cs=None if ru.get("cs") is None else int(ru["cs"]),
+            ad=None if ru.get("ad") is None else float(ru["ad"]),
+            ap=None if ru.get("ap") is None else float(ru["ap"]),
+            armor=None if ru.get("ar") is None else float(ru["ar"]),
+            mr=None if ru.get("mr") is None else float(ru["mr"]),
+            attack_speed=None if ru.get("as") is None else float(ru["as"]),
+            attack_range=None if ru.get("rng") is None else float(ru["rng"]),
             cooldowns=_decode_cooldowns(ru),
             spell_levels=_as_tuple4(ru.get("sl")),
             visible_to=_decode_visibility(ru),
@@ -1181,10 +1235,12 @@ class AgentMemory:
 class CreepScoreEstimator:
     """Estimates a champion's CS when the recorder does not report it.
 
-    A last hit is credited when an enemy or neutral minion that was alive on
-    the previous tick is gone/dead on this one *and* it was inside the
-    champion's attack range at its last known position.  This is an estimate;
-    prefer a server-side ``cs`` field.
+    When the champion carries a server-side ``cs`` it is used directly and this
+    class is a pass-through.  Only when it is absent does the proximity
+    estimate run: an enemy or neutral minion alive on the previous tick, gone
+    on this one, inside the champion's attack range at its last known position.
+    That estimate cannot tell WHO killed the minion, so it pays out for the
+    whole wave dying next to us -- fine as a fallback, wrong as a reward.
 
     ``last_hits_this_step`` is the per-tick count, which the reward's
     ``last_hit`` term consumes.
@@ -1195,14 +1251,41 @@ class CreepScoreEstimator:
         self.reach = aa_range + C.TARGET_RADIUS["minion"] + 25.0
         self.cs = 0
         self.last_hits_this_step = 0
+        self._used_server_cs = False
         self._prev: Dict[int, Tuple[float, float, int]] = {}
 
     def reset(self) -> None:
         self.cs = 0
         self.last_hits_this_step = 0
+        self._used_server_cs = False
         self._prev = {}
 
     def update(self, frame: Frame, champ: Optional[Unit]) -> int:
+        # Prefer the server's real CS. The proximity estimate below credits a
+        # last hit for ANY enemy minion that vanishes within reach, whoever
+        # killed it -- so standing in the enemy wave while our own minions kill
+        # it pays out 0.5 per minion. That is a reward hack the agent would
+        # find long before it learned to actually last hit, and it is exactly
+        # the behaviour we are trying to teach against.
+        #
+        # The server has emitted a real per-champion `cs` since 2026-09-11;
+        # before that this estimator was the only source, which is why it
+        # exists. Now it is the FALLBACK, and the observation (obs._build_self_vec)
+        # and the reward finally read the same number instead of two
+        # disagreeing sources of truth.
+        if champ is not None and champ.cs is not None:
+            got = max(0, int(champ.cs) - self.cs)
+            self.cs = int(champ.cs)
+            self.last_hits_this_step = got
+            self._prev = {}
+            self._used_server_cs = True
+            return self.cs
+        if getattr(self, "_used_server_cs", False):
+            # The field went away mid-episode. Falling back silently would make
+            # the proximity estimate resume from a stale _prev and double-count.
+            self.last_hits_this_step = 0
+            self._used_server_cs = False
+
         current: Dict[int, Tuple[float, float, int]] = {}
         for u in frame.units.values():
             if u.etype != "minion" or u.team == self.team:

@@ -43,6 +43,7 @@ import torch
 
 from lanerl_rl.model import LanePolicy, ModelConfig
 from lanerl_rl.ppo import DualClipPPO, PPOConfig
+from lanerl_rl.reward import LaneRewardConfig
 
 from . import paths
 from .anchor_eval import AnchorEvalConfig, AnchorEvaluator, make_anchor_driver_factory
@@ -102,6 +103,47 @@ def build_argparser() -> argparse.ArgumentParser:
         help="checkpoint for the bc_policy anchor; required if it is in --anchors",
     )
     p.add_argument(
+        "--init-from", type=Path, default=None,
+        help="behaviour-cloning checkpoint to INITIALISE the policy from, and to "
+        "freeze as the KL reference. Without this the policy starts random, and "
+        "a random policy provably cannot reach lane: 345 u/s / 30 Hz = 11.5 "
+        "units per decision, so a random walk needs ~1.06M steps (9.9 h of game) "
+        "to cross 11,866 units against a 10-minute episode.",
+    )
+    p.add_argument(
+        "--entropy-coef", type=float, default=None,
+        help="override PPOConfig.entropy_coef (default 0.01). When fine-tuning "
+        "from a BC prior this must come DOWN: the prior is confident (entropy "
+        "1.64 of a 9.94 maximum), so an entropy bonus sized for a random init "
+        "pays the policy to throw the prior away -- measured, entropy ROSE "
+        "1.64 -> 3.96 over 140 updates while CS went nowhere.",
+    )
+    p.add_argument(
+        "--end-on-death", dest="end_on_death", action="store_true", default=None,
+        help="terminate an episode at the first champion death (the old default)",
+    )
+    p.add_argument(
+        "--no-end-on-death", dest="end_on_death", action="store_false",
+        help="play the full 10 minutes through deaths, as a real lane does. "
+        "Required for cs_at_10 to exist at all: it is an ABSOLUTE 10-minute "
+        "metric, so an episode that ends at the first death (mean 3,094 steps = "
+        "103 s in the first BC-init run) can never contribute one, and all 43 "
+        "episodes reported cs_at_10 = None. Death stays punished by the reward's "
+        "death term, which fires on the transition either way.",
+    )
+    p.add_argument(
+        "--kl-ref-anneal-steps", type=int, default=0,
+        help="decay --kl-ref-coef linearly to ZERO over this many steps of the "
+        "--anneal-clock. 0 keeps it flat forever, which tethers the agent to a "
+        "prior it is supposed to beat: measured at 69%% of the policy-gradient "
+        "magnitude, with kl_ref still climbing at the end of a 2,700-update run.",
+    )
+    p.add_argument(
+        "--kl-ref-coef", type=float, default=0.0,
+        help="weight on KL(reference || policy) toward the --init-from prior. "
+        "Only has any effect together with --init-from; 0 disables it.",
+    )
+    p.add_argument(
         "--anchor-envs", type=int, default=1,
         help="server instances per anchor. Each anchor keeps its own alive for the "
         "life of the run (a restart is ~12s against 0.23ms for an episode reset).",
@@ -130,11 +172,18 @@ def _build_driver_for_actor(
     run_dir: Path,
     device: str,
     train_step_source,
+    gamma: float,
+    end_on_death: bool,
 ) -> Tuple[VecDriver, LanePolicyActor, dict]:
     actor_base = port_base + actor_idx * envs_per_actor * PORTS_PER_ACTOR_STRIDE
     allocator = PortAllocator(base=actor_base)
     ports = allocator.allocate(envs_per_actor)
-    adapters = make_lane_adapters(train_step_source=train_step_source)
+    # ONE discount. LaneRewardConfig.gamma defaults to gamma_for_horizon(30),
+    # independently of PPOConfig, so --horizon-s moved the trainer's gamma and
+    # left the shaping gamma behind -- and potential-based shaping is only
+    # policy-invariant when the two agree (its own docstring says so).
+    adapters = make_lane_adapters(train_step_source=train_step_source,
+                                  reward_cfg=LaneRewardConfig(gamma=gamma))
     policy = LanePolicy(model_cfg).to(device)
     actor = LanePolicyActor(policy, device=device)
     env = VecLaneEnv(n=envs_per_actor, ports=ports, log_dir=run_dir / f"actor{actor_idx}_logs")
@@ -144,7 +193,7 @@ def _build_driver_for_actor(
         adapter_factory=adapters.adapter_factory,
         encoder=adapters.encoder,
         assignments=[SideAssignment(blue=SELF, red=SELF) for _ in range(envs_per_actor)],
-        episode=EpisodeSpec(),
+        episode=EpisodeSpec(end_on_death=end_on_death),
     )
     log.info("actor %d: starting %d real server instance(s) on ports base=%d", actor_idx, envs_per_actor, actor_base)
     driver.start()
@@ -161,9 +210,44 @@ def main(argv=None) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
 
     model_cfg = ModelConfig()
-    ppo_cfg = PPOConfig(lr=args.lr, horizon_s=args.horizon_s)
+    ppo_kw = dict(lr=args.lr, horizon_s=args.horizon_s,
+                  kl_ref_coef=args.kl_ref_coef,
+                  kl_ref_anneal_steps=args.kl_ref_anneal_steps)
+    if args.entropy_coef is not None:
+        ppo_kw["entropy_coef"] = args.entropy_coef
+    ppo_cfg = PPOConfig(**ppo_kw)
     policy = LanePolicy(model_cfg).to(args.device)
-    learner = DualClipPPO(policy, ppo_cfg)
+
+    # Load the BC prior INTO the policy, and freeze a copy as the KL reference.
+    # Until now there was no reachable consumer for a BC checkpoint from this
+    # entrypoint at all: the policy was built random, DualClipPPO was handed no
+    # reference= so kl_ref_coef was dead code, and --bc-checkpoint only fed the
+    # bc_policy ANCHOR (which anchor_launch_spec then rejects, because only
+    # 'scripted' anchors can be played by the in-server bot). So every BC run so
+    # far trained a prior that RL never saw.
+    reference = None
+    if args.init_from is not None:
+        blob = torch.load(args.init_from, map_location=args.device)
+        state = blob.get("policy", blob)
+        missing, unexpected = policy.load_state_dict(state, strict=False)
+        if missing or unexpected:
+            # Silently ignoring these is how a "BC-initialised" run ends up
+            # random in exactly the heads that matter.
+            raise SystemExit(
+                f"--init-from {args.init_from} does not match the policy:\n"
+                f"  missing={list(missing)}\n  unexpected={list(unexpected)}"
+            )
+        print(f"initialised policy from {args.init_from}")
+        if args.kl_ref_coef > 0.0:
+            reference = LanePolicy(model_cfg).to(args.device)
+            reference.load_state_dict(state, strict=True)
+            reference.eval()
+            print(f"KL reference frozen, coef={args.kl_ref_coef}")
+    elif args.kl_ref_coef > 0.0:
+        raise SystemExit("--kl-ref-coef needs --init-from: there is no prior to "
+                         "pull toward, and the term would silently do nothing.")
+    learner = DualClipPPO(policy, ppo_cfg, reference=reference,
+                          train_step_source=lambda: loop.train_steps.value)
 
     run_cfg = RunConfig(
         run_dir=run_dir,
@@ -196,7 +280,7 @@ def main(argv=None) -> int:
     # -- the frozen-opponent ladder --------------------------------------
     # anchors_for_run RAISES on a missing resource. That is the whole point:
     # the previous behaviour was a warning ("anchor bc_policy has no resource
-    # configured; it will be skipped") followed by 37 eval reports that said
+    # configured; it will be skipped") followed by 40 eval reports that said
     # (None, 0) against every anchor while the policy learned nothing.
     anchor_names = [n.strip() for n in args.anchors.split(",") if n.strip()]
     anchors = anchors_for_run(anchor_names, args.bc_checkpoint) if anchor_names else []
@@ -221,7 +305,9 @@ def main(argv=None) -> int:
                 policy_key=SELF,
                 port_base=args.anchor_port_base,
                 log_dir=run_dir,
-                adapter_factory_for=lambda: make_lane_adapters(train_step_source=lambda: 0),
+                adapter_factory_for=lambda: make_lane_adapters(
+                        train_step_source=lambda: 0,
+                        reward_cfg=LaneRewardConfig(gamma=ppo_cfg.gamma)),
                 envs=args.anchor_envs,
                 seed=args.seed,
             ),
@@ -256,7 +342,9 @@ def main(argv=None) -> int:
 
     def build_driver_for_actor(actor_idx: int):
         driver, actor, reward_contexts = _build_driver_for_actor(
-            actor_idx, args.envs_per_actor, args.port_base, model_cfg, run_dir, args.device, loop.train_steps
+            actor_idx, args.envs_per_actor, args.port_base, model_cfg, run_dir,
+            args.device, loop.train_steps, ppo_cfg.gamma,
+            True if args.end_on_death is None else args.end_on_death,
         )
         built_drivers.append(driver)
         return driver, actor, reward_contexts

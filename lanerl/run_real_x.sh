@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# DEAD LINE OF WORK (marked 2026-09-12). Every hypothesis in this file is about
+# getting the real 4.20 rendering client to draw. That approach was abandoned:
+# the headless LeagueSandbox sim is the verified RL environment. None of the
+# hypotheses below was ever confirmed or refuted -- they are orphaned, not open.
+# Do not spend time chasing them; read them as a record of what was tried.
 # Retry the whole pipeline WITH GPU device access (nested sg for video+render).
 # Hypothesis: the vkGetPhysicalDeviceSurfaceCapabilitiesKHR segfault was caused by
 # the /dev/dri permission denial that appeared alongside it, not by Xvfb per se.

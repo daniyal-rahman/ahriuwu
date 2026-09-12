@@ -234,10 +234,36 @@ class LaneActionDist:
         return sum(d.entropy() for d in self.dists.values())
 
     def kl_to(self, other_logits: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """``KL(other || self)``, summed over heads, computed in log space.
+
+        This used to call ``torch.distributions.kl_divergence``, which is
+        defined for Categorical as::
+
+            t = p.probs * (p.logits - q.logits)
+            t[q.probs == 0] = inf          # <-- here
+            t[p.probs == 0] = 0
+
+        ``q`` is *this* distribution, the policy. As the policy sharpens, a
+        softmax entry underflows to exactly 0 while the reference still has
+        support there, and the whole term becomes ``inf``. Measured on run
+        rl-bc2-0912: 7 of 56 updates reported an infinite total loss. The
+        gradients happened to stay finite, so it did not blow the run up -- it
+        just silently removed the KL anchor on 12.5% of updates and poisoned
+        the logged loss.
+
+        In log space there is no such cliff. ``log_softmax`` is
+        ``logit - logsumexp``, which stays finite even where ``softmax``
+        underflows: a masked logit of -1e9 gives a log-prob of about -1e9, and
+        the reference's probability there is exactly 0, so the product is 0
+        rather than ``0 * -inf = nan``. This relies on masked logits being a
+        large finite negative (-1e9), never ``-inf``.
+        """
         total = 0.0
         for k in self.HEADS:
-            p = torch.distributions.Categorical(logits=other_logits[k])
-            total = total + torch.distributions.kl_divergence(p, self.dists[k])
+            q_logp = torch.log_softmax(self.dists[k].logits, dim=-1)
+            p_logp = torch.log_softmax(other_logits[k], dim=-1)
+            p_prob = p_logp.exp()
+            total = total + (p_prob * (p_logp - q_logp)).sum(dim=-1)
         return total
 
 

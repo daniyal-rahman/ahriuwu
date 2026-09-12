@@ -391,7 +391,7 @@ def test_kl_anchor_pulls_the_policy_toward_the_reference():
     """Without an anchor the policy drifts back to uniform.
 
     Measured on the first real run: entropy returned to 88% of its theoretical
-    maximum over 13,475 updates. The BC prior only helps if something keeps the
+    maximum over 16,200 updates. The BC prior only helps if something keeps the
     policy near it while PPO improves on it -- that is what kl_ref_coef is.
     """
     import copy
@@ -422,3 +422,123 @@ def test_no_reference_means_no_kl_term():
     learner = DualClipPPO(LanePolicy(ModelConfig()), PPOConfig(kl_ref_coef=1.0))
     assert learner.reference is None
     assert PPOConfig().kl_ref_coef == 0.0
+
+
+def test_kl_to_is_finite_when_the_policy_underflows_a_masked_slot():
+    """KL to the frozen prior must never be inf.
+
+    torch.distributions.kl_divergence for Categorical writes inf wherever the
+    SECOND argument's probability is exactly 0. As the policy sharpens, a
+    softmax entry underflows to 0 while the reference still has mass there, and
+    the whole KL term -- the only thing anchoring the run to its BC prior --
+    becomes inf. On run rl-bc2-0912 that happened on 7 of 56 updates.
+
+    It is worse than a logging artefact: the updates where the policy has run
+    furthest from the prior are exactly the ones where the anchor is silently
+    dropped.
+    """
+    import torch
+    from lanerl_rl.model import LaneActionDist
+
+    class _One:
+        HEADS = ("a",)
+
+        def __init__(self, logits):
+            self.dists = {"a": torch.distributions.Categorical(logits=logits)}
+
+        kl_to = LaneActionDist.kl_to
+
+    policy = torch.tensor([[80.0, -80.0, -1e9]])   # entry 1 underflows to 0.0
+    reference = torch.tensor([[1.0, 0.5, -1e9]])   # reference still has mass there
+    assert torch.softmax(policy, -1)[0, 1].item() == 0.0
+
+    torch_kl = torch.distributions.kl_divergence(
+        torch.distributions.Categorical(logits=reference),
+        torch.distributions.Categorical(logits=policy),
+    )
+    assert torch.isinf(torch_kl).any(), "the failure this guards is gone; revisit"
+
+    ours = _One(policy).kl_to({"a": reference})
+    assert torch.isfinite(ours).all()
+    assert ours.item() > 1.0, "a policy this far from the prior must be penalised"
+
+    grad_src = policy.clone().requires_grad_(True)
+    _One(grad_src).kl_to({"a": reference}).sum().backward()
+    assert torch.isfinite(grad_src.grad).all()
+
+
+def test_kl_to_agrees_with_torch_on_well_conditioned_logits():
+    """The log-space rewrite must not change the ordinary case."""
+    import torch
+    from lanerl_rl.model import LaneActionDist
+
+    class _One:
+        HEADS = ("a",)
+
+        def __init__(self, logits):
+            self.dists = {"a": torch.distributions.Categorical(logits=logits)}
+
+        kl_to = LaneActionDist.kl_to
+
+    torch.manual_seed(0)
+    a, b = torch.randn(8, 11), torch.randn(8, 11)
+    expected = torch.distributions.kl_divergence(
+        torch.distributions.Categorical(logits=b),
+        torch.distributions.Categorical(logits=a),
+    )
+    assert torch.allclose(expected, _One(a).kl_to({"a": b}), atol=1e-5)
+
+
+def test_kl_ref_coefficient_anneals_to_zero():
+    """A BC prior is a floor to leave behind, not a target to sit on.
+
+    With a flat coefficient the KL penalty was 69% of the mean |policy_loss|
+    on run rl-bc4-0912, and kl_ref was still climbing (0.098 -> 0.138) at the
+    end -- the policy pushing against a leash that never releases, tied to a
+    heuristic that caps out at 49 CS.
+    """
+    from lanerl_rl.ppo import PPOConfig
+
+    cfg = PPOConfig(kl_ref_coef=0.05, kl_ref_anneal_steps=1000)
+    assert cfg.kl_ref_at(0) == pytest.approx(0.05)
+    assert cfg.kl_ref_at(500) == pytest.approx(0.025)
+    assert cfg.kl_ref_at(1000) == pytest.approx(0.0)
+    assert cfg.kl_ref_at(10_000) == pytest.approx(0.0), "must not go negative"
+
+    flat = PPOConfig(kl_ref_coef=0.05)
+    assert flat.kl_ref_at(10**9) == pytest.approx(0.05), "0 steps means no anneal"
+
+
+def test_the_annealed_coefficient_is_what_actually_gets_applied():
+    """Config alone proves nothing -- the learner must READ the clock.
+
+    kl_ref_coef spent weeks as a config field no caller consulted; an anneal
+    that the update step ignores would be the same bug with extra arithmetic.
+    """
+    import torch
+    from lanerl_rl.model import LanePolicy, ModelConfig
+    from lanerl_rl.ppo import DualClipPPO, PPOConfig
+
+    clock = {"t": 0}
+    policy = LanePolicy(ModelConfig())
+    reference = LanePolicy(ModelConfig())
+    learner = DualClipPPO(
+        policy,
+        PPOConfig(kl_ref_coef=0.05, kl_ref_anneal_steps=100),
+        reference=reference,
+        train_step_source=lambda: clock["t"],
+    )
+    assert learner.cfg.kl_ref_at(learner._train_step_source()) == pytest.approx(0.05)
+    clock["t"] = 50
+    assert learner.cfg.kl_ref_at(learner._train_step_source()) == pytest.approx(0.025)
+    clock["t"] = 100
+    assert learner.cfg.kl_ref_at(learner._train_step_source()) == pytest.approx(0.0)
+
+
+def test_a_learner_built_without_a_clock_keeps_the_flat_coefficient():
+    from lanerl_rl.model import LanePolicy, ModelConfig
+    from lanerl_rl.ppo import DualClipPPO, PPOConfig
+
+    learner = DualClipPPO(LanePolicy(ModelConfig()), PPOConfig(kl_ref_coef=0.05))
+    assert learner._train_step_source() == 0
+    assert learner.cfg.kl_ref_at(0) == pytest.approx(0.05)

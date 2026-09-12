@@ -666,8 +666,9 @@ class ObservationBuilder:
         self.memory = AgentMemory()
         self.cs_estimator = CreepScoreEstimator(self.team, aa_range=self.aa_range)
         self.fog_source = "unknown"
-        self._aa_damage = C.garen_attack_damage(1)
+        self._aa_damage = 0.0
         self._prev_t_ms: Optional[int] = None
+        self._warned_no_ad = False
         self._recalling = False
 
     # -- lifecycle ---------------------------------------------------------
@@ -678,7 +679,7 @@ class ObservationBuilder:
         self.memory.reset()
         self.cs_estimator.reset()
         self.fog_source = "unknown"
-        self._aa_damage = C.garen_attack_damage(1)
+        self._aa_damage = 0.0
         self._prev_t_ms = None
         self._recalling = False
 
@@ -726,7 +727,28 @@ class ObservationBuilder:
 
         level = int(self_u.lvl or 1)
         self.abilities.sync(self_u, level)
-        self._aa_damage = C.garen_attack_damage(level)
+        # The SERVER's attack damage, not a re-derivation of it. Every attempt
+        # to recompute this has been wrong by whatever part of the server was
+        # forgotten: 57.88 with no runes, 73.14 once the rune page was
+        # modelled, against a true 78.14 -- the remainder being Martial Mastery
+        # (+5 flat) and Brute Force (+0.55/level) from the mastery page. The
+        # wire has carried it since 2026-09-12; use it, and fall back to the
+        # derivation only for recordings that predate the field.
+        if self_u.ad is None:
+            # No guess. The derivation that used to live here was wrong three
+            # times running; an unknown AD makes the last-hit potential
+            # unavailable, which is honest, and only affects recordings made
+            # before the wire carried `ad`.
+            if not self._warned_no_ad:
+                self._warned_no_ad = True
+                log.error(
+                    "frame carries no 'ad' for the agent's champion; the "
+                    "last-hit shaping potential is unavailable for this "
+                    "stream (pre-2026-09-12 recording?)"
+                )
+            self._aa_damage = 0.0
+        else:
+            self._aa_damage = float(self_u.ad)
 
         ax, ay = self.lane.point(self_u.x, self_u.y)
 
@@ -745,6 +767,21 @@ class ObservationBuilder:
         priv_entities, priv_pad = self._render_slots(priv_slots, ax, ay, enemy_turrets)
         priv_vec = self._build_priv_vec(frame, self_u, enemy_u, visible, ax, ay, priv_slots)
 
+        # The clock-rewind canary. dt is no longer a FEATURE -- at a lockstep
+        # 30 Hz it is ~1.0 by construction, and the network has no use for
+        # "how long since my last decision" -- but the DETECTION is worth
+        # keeping on its own: this is the check that caught an episode reset
+        # failing to reach the builder (t 599,979 -> 16 ms), which had been
+        # silently contaminating 2 of every 3 evaluation games with the
+        # previous game's unit memory.
+        if self._prev_t_ms is not None and frame.t_ms < self._prev_t_ms:
+            log.error(
+                "game clock went backwards (%d -> %d ms): an episode reset did "
+                "not reach the observation builder, so this observation still "
+                "carries the previous episode's memory",
+                self._prev_t_ms, frame.t_ms,
+            )
+            self.reset()
         self._prev_t_ms = frame.t_ms
 
         obs = AgentObservation(
@@ -808,10 +845,16 @@ class ObservationBuilder:
         """Fill the 32 slots from the agent's memory.
 
         Candidates are exclusively memory entries -- i.e. things the agent has
-        actually seen.  Currently-fogged entries are kept (with ``visible``
-        False) so that their last-known position, age, heading and reachability
-        radius are available, but they are emitted with ``valid = 0`` and masked
-        out of attention.
+        VISIBLE UNITS ONLY, as of 2026-09-12.
+
+        This used to also slot currently-fogged units, carrying their
+        last-known position plus age/heading/reachability so the network could
+        reason about where they might be now. Those memory fields are gone --
+        the GRU is the memory -- and with them the only thing that made a
+        fogged slot safe. A remembered unit emitted with ``valid = 1`` and a
+        stale position reads to the network as a live sighting, which is worse
+        than not emitting it: it is a confident wrong answer rather than a
+        missing one.
         """
         candidates: List[_SlotEntity] = []
         for uid, mem in self.memory.units.items():
@@ -833,7 +876,9 @@ class ObservationBuilder:
                 if mag > 1e-9:
                     heading = (hs / mag, hn / mag)
             dist = math.hypot(cs_ - ax, cn_ - ay)
-            vis = uid in visible
+            if uid not in visible:
+                continue          # fogged: the GRU remembers, the slot does not
+            vis = True
             on_screen = dist <= self.screen_radius
             candidates.append(
                 _SlotEntity(
@@ -923,51 +968,30 @@ class ObservationBuilder:
         ay: float,
         enemy_turrets: np.ndarray,
     ) -> None:
-        """Write one 40-field entity row.  Actor path: no server-only fields."""
-        ds = e.s - ax
-        dn = e.n - ay
-        dist = e.dist
+        """Write one entity row: where it is, how hurt it is, what it is.
 
-        row[C.E_VALID] = 1.0 if e.visible else 0.0
-        row[C.E_VISIBLE_NOW] = 1.0 if e.visible else 0.0
-        row[C.E_STALENESS] = e.staleness
-        row[C.E_TYPE_ONEHOT][C.ENTITY_TYPE_INDEX.get(e.etype, C.ENTITY_TYPE_INDEX["other"])] = 1.0
-        row[C.E_TEAM_ONEHOT][C.ENTITY_TEAMS.index(e.team_rel)] = 1.0
-        row[C.E_DS] = ds / C.NORM_XY
-        row[C.E_DN] = dn / C.NORM_XY
-        row[C.E_DIST] = dist / C.NORM_DIST
-        if dist > 1e-9:
-            row[C.E_COS_BEARING] = ds / dist
-            row[C.E_SIN_BEARING] = dn / dist
+        Deliberately minimal. Everything this used to also write was either a
+        function of ds/dn (dist, bearing, in_my_aa_range), a time derivative
+        the GRU exists to compute (hp deltas, velocity), fog bookkeeping that
+        is now moot because only VISIBLE units are slotted, or an ANSWER
+        computed on the network's behalf -- and the answers were where the bugs
+        were: ``one_shot_kill_score`` and ``shots_to_kill`` both used a Python
+        re-derivation of attack damage that read 57.88 against the server's
+        true 78.14, so the agent was told that killable minions were not
+        killable.
+
+        ``enemy_turrets`` is retained in the signature because the caller still
+        computes it for the reward path; it is intentionally unused here.
+        """
+        row[C.E_VALID] = 1.0
+        row[C.E_DS] = (e.s - ax) / C.NORM_XY
+        row[C.E_DN] = (e.n - ay) / C.NORM_XY
         if e.hp_known:
-            q = _quantize_hp(e.hp_frac)
-            row[C.E_HP_FRAC] = q
-            row[C.E_HP_DELTA_SHORT] = q - _quantize_hp(e.hp_frac - e.hp_d_short)
-            row[C.E_HP_DELTA_LONG] = q - _quantize_hp(e.hp_frac - e.hp_d_long)
-            hp_abs = q * e.mhp
-            row[C.E_HP_ABS] = min(hp_abs / C.NORM_HP_ABS, 4.0)
-            # "Does one auto-attack kill it?"  Both terms are on screen: the
-            # health bar gives hp_abs, and the agent's own AD is on its HUD.
-            row[C.E_AA_KILLABLE] = _sigmoid((self._aa_damage - hp_abs) / C.AA_KILL_KAPPA_HP)
-            shots = math.ceil(hp_abs / max(self._aa_damage, 1e-6))
-            row[C.E_AA_SHOTS_TO_KILL] = min(shots / 8.0, 1.0)
-        reach = self.aa_range + C.TARGET_RADIUS.get(e.etype, C.TARGET_RADIUS["other"])
-        row[C.E_IN_MY_AA_RANGE] = 1.0 if dist <= reach else 0.0
-        row[C.E_IN_ENEMY_TURRET_RANGE] = (
-            1.0 if self._min_dist(e.s, e.n, enemy_turrets) <= C.TURRET_ATTACK_RANGE else 0.0
-        )
-        row[C.E_VEL_DS] = e.vs / C.NORM_VEL
-        row[C.E_VEL_DN] = e.vn / C.NORM_VEL
-        row[C.E_ON_SCREEN] = 1.0 if e.on_screen else 0.0
-        row[C.E_HP_KNOWN] = 1.0 if e.hp_known else 0.0
-        # Derived memory: how old the estimate is, which way they were going,
-        # and how big the disc of possible current positions has grown.
-        row[C.E_AGE_S] = min(e.age_s / C.FORGET_S, 1.0)
-        if e.heading is not None:
-            row[C.E_LAST_HEADING_COS] = e.heading[0]
-            row[C.E_LAST_HEADING_SIN] = e.heading[1]
-            row[C.E_HEADING_KNOWN] = 1.0
-        row[C.E_REACH_RADIUS] = min(e.reach_radius / C.NORM_DIST, 2.0)
+            row[C.E_HP_FRAC] = _quantize_hp(e.hp_frac)
+        row[C.E_TYPE_ONEHOT][
+            C.ENTITY_TYPE_INDEX.get(e.etype, C.ENTITY_TYPE_INDEX["other"])
+        ] = 1.0
+        row[C.E_TEAM_ONEHOT][C.ENTITY_TEAMS.index(e.team_rel)] = 1.0
 
     def _render_slots(
         self,
@@ -993,81 +1017,58 @@ class ObservationBuilder:
         own_turrets: np.ndarray,
         enemy_turrets: np.ndarray,
     ) -> np.ndarray:
-        """Own state.  Everything here is on the agent's own HUD."""
+        """Own state.  Everything here is on the agent's own HUD.
+
+        Minimal by design. The level one-hot (18 floats for one integer), the
+        second gold/cs encodings, the six region one-hots and the turret-range
+        booleans were all either redundant or functions of (lane_s, lane_n);
+        the velocity and hp-delta fields are time derivatives the GRU exists to
+        compute; the four attack-cycle fields were driven by a Python clock fed
+        by orders ISSUED rather than swings landed, and were identically zero
+        across all 99,654 behaviour-cloning rows while being live at RL time.
+
+        ``ad/ap/armor/mr`` come off the WIRE. They used to be recomputed here
+        via ``constants.garen_attack_damage``, which read 57.88 at level 1
+        against the server's true 78.14 -- once for a missing rune page, and
+        again for a mastery page nobody had modelled either.
+        """
         v = np.zeros(C.SELF_DIM, dtype=np.float32)
-        mem = self.memory.units.get(self_u.id)
         hp_frac = 0.0 if self_u.mhp <= 0 else max(0.0, min(1.0, self_u.hp / self_u.mhp))
-        v[C.S_HP_FRAC] = hp_frac
-        if mem is not None:
-            v[C.S_HP_DELTA_SHORT] = mem.hp_delta(C.HP_DELTA_SHORT_MS)
-            v[C.S_HP_DELTA_LONG] = mem.hp_delta(C.HP_DELTA_LONG_MS)
-
-        level = int(self_u.lvl or 1)
-        level = max(1, min(C.MAX_LEVEL, level))
-        v[C.S_LEVEL_NORM] = level / C.MAX_LEVEL
-        v[C.S_LEVEL_ONEHOT][level - 1] = 1.0
-
-        gold = float(self_u.gold or 0.0)
-        v[C.S_GOLD_NORM] = min(gold / C.NORM_GOLD, 4.0)
-        v[C.S_GOLD_LOG] = math.log1p(max(gold, 0.0)) / math.log1p(20000.0)
-
-        cs = self_u.cs if self_u.cs is not None else self.cs_estimator.cs
-        v[C.S_CS_NORM] = min(cs / C.NORM_CS, 4.0)
-        v[C.S_CS_LOG] = math.log1p(max(cs, 0)) / math.log1p(500.0)
-
-        ready = self.abilities.readiness(float(frame.t_ms))
-        learned = self.abilities.learned()
-        v[C.S_Q_READY], v[C.S_W_READY], v[C.S_E_READY], v[C.S_R_READY] = ready
-        v[C.S_Q_LEARNED], v[C.S_W_LEARNED], v[C.S_E_LEARNED], v[C.S_R_LEARNED] = learned
 
         v[C.S_LANE_S] = ax / self.lane.length
         v[C.S_LANE_N] = ay / C.LANE_HALF_WIDTH
+        v[C.S_HP_FRAC] = hp_frac
 
-        vs = vn = 0.0
-        if mem is not None:
-            rvx, rvy = mem.velocity(float(frame.t_ms))
-            vs, vn = self.lane.vector(rvx, rvy)
-        v[C.S_LANE_S_VEL] = vs / C.NORM_VEL
-        v[C.S_LANE_N_VEL] = vn / C.NORM_VEL
-        speed = math.hypot(vs, vn)
-        if speed > 1e-6:
-            v[C.S_MOVE_COS] = vs / speed
-            v[C.S_MOVE_SIN] = vn / speed
-        v[C.S_SPEED_NORM] = min(speed / C.NORM_VEL, 2.0)
+        level = max(1, min(C.MAX_LEVEL, int(self_u.lvl or 1)))
+        v[C.S_LEVEL_NORM] = level / C.MAX_LEVEL
+        v[C.S_GOLD_NORM] = min(float(self_u.gold or 0.0) / C.NORM_GOLD, 4.0)
+        cs = self_u.cs if self_u.cs is not None else self.cs_estimator.cs
+        v[C.S_CS_NORM] = min(cs / C.NORM_CS, 4.0)
+
+        # Remaining cooldown as a fraction of the full one: 0 = ready.
+        # `readiness` returns 1 when ready, so invert to keep "0 means nothing
+        # to think about" consistent across the vector.
+        #
+        # DELIBERATE CONFLATION, flagged because this project keeps getting
+        # bitten by merged states: an UNLEARNED spell also lands on 1.0 here,
+        # identical to "just cast". They differ in what resolves them -- a
+        # cooldown ticks down, an unlearned spell needs a level -- but they are
+        # the same to the only decision that consumes this (can I cast it now),
+        # the action mask already forbids casting an unlearned spell, and
+        # S_LEVEL_NORM carries "when does R come online". The four *_learned
+        # flags the old layout spent on this are not worth four inputs.
+        q, w, e, r = self.abilities.readiness(float(frame.t_ms))
+        v[C.S_CD_Q], v[C.S_CD_W] = 1.0 - q, 1.0 - w
+        v[C.S_CD_E], v[C.S_CD_R] = 1.0 - e, 1.0 - r
+
+        v[C.S_AD] = float(self_u.ad or 0.0) / C.NORM_AD
+        v[C.S_AP] = float(self_u.ap or 0.0) / C.NORM_AD
+        v[C.S_ARMOR] = float(self_u.armor or 0.0) / C.NORM_AD
+        v[C.S_MR] = float(self_u.mr or 0.0) / C.NORM_AD
+
         v[C.S_IS_DEAD] = 0.0 if self_u.alive else 1.0
-
-        v[C.S_REGION_ONEHOT][self._region_index(ax / self.lane.length)] = 1.0
-        v[C.S_IN_OWN_TURRET_RANGE] = (
-            1.0 if self._min_dist(ax, ay, own_turrets) <= C.TURRET_ATTACK_RANGE else 0.0
-        )
-        v[C.S_IN_ENEMY_TURRET_RANGE] = (
-            1.0 if self._min_dist(ax, ay, enemy_turrets) <= C.TURRET_ATTACK_RANGE else 0.0
-        )
         v[C.S_RECALLING] = 1.0 if self._recalling else 0.0
-        v[C.S_OFF_LANE] = 1.0 if abs(ay) > C.LANE_HALF_WIDTH else 0.0
-
-        phase, until, wind, known = self.attack_clock.features(float(frame.t_ms), level)
-        v[C.S_ATTACK_CYCLE_PHASE] = phase
-        v[C.S_TIME_UNTIL_NEXT_ATTACK] = until
-        v[C.S_WINDUP_REMAINING] = wind
-        v[C.S_ATTACK_TIMING_KNOWN] = known
-        v[C.S_AA_DAMAGE_NORM] = C.garen_attack_damage(level) / C.NORM_AD
-        v[C.S_AA_RANGE_NORM] = self.aa_range / C.NORM_DIST
         return v
-
-    @staticmethod
-    def _region_index(s: float) -> int:
-        if s < -0.15:
-            return 0  # own_fountain (behind own turret, towards own base)
-        if s < 0.15:
-            return 1  # own_turret_zone
-        if s < 0.42:
-            return 2  # own_side_lane
-        if s < 0.58:
-            return 3  # lane_mid
-        if s < 0.85:
-            return 4  # enemy_side_lane
-        return 5  # enemy_turret_zone
 
     def _build_global_vec(
         self,
@@ -1078,101 +1079,30 @@ class ObservationBuilder:
         ax: float,
         ay: float,
     ) -> np.ndarray:
-        """Match-level context, plus the two pieces of long-horizon memory.
+        """Match-level context.  Six numbers.
 
-        Note what is here and what is not: the enemy's *last known* position,
-        how long ago we saw them, which way they were heading, and how far they
-        could have got since -- a player carries all four.  The enemy's current
-        position while fogged is not here and cannot be; nothing in this
-        function can reach an invisible unit's live state.  Likewise the enemy
-        ability block is built from witnessed casts only.
+        What used to be here and is not any more: six clock-phase one-hots and
+        a wave sin/cos (all functions of the clock), kills/deaths/assists
+        (~always zero in a 1v1 lane, and death is already a reward term), a
+        ten-field model of where the fogged enemy might be, and eight fields of
+        enemy-cooldown ESTIMATE.
+
+        The cooldown estimates were built on ``ENEMY_COOLDOWN_ASSUMED``, whose
+        own docstring described a safety direction opposite to what the code
+        did, on top of a Garen-E cooldown that was wrong at every rank. What is
+        genuinely observable is how long ago we watched him cast something, so
+        that is what is kept; the network can learn what it implies.
+
+        The fogged enemy's position is not here and cannot be -- nothing in
+        this function can reach an invisible unit's live state.
         """
         g = np.zeros(C.GLOBAL_DIM, dtype=np.float32)
-        t_s = frame.t_s
-        g[C.G_CLOCK_NORM] = min(t_s / C.GAME_LENGTH_S, 2.0)
-        phase = 0
-        for b in C.CLOCK_PHASE_BOUNDS_S:
-            if t_s >= b:
-                phase += 1
-        g[C.G_CLOCK_PHASE][phase] = 1.0
-
-        wave_theta = 2.0 * math.pi * ((t_s % C.MINION_WAVE_PERIOD_S) / C.MINION_WAVE_PERIOD_S)
-        g[C.G_WAVE_SIN] = math.sin(wave_theta)
-        g[C.G_WAVE_COS] = math.cos(wave_theta)
-
-        g[C.G_MY_KILLS] = self.memory.kills / 5.0
-        g[C.G_MY_DEATHS] = self.memory.deaths / 5.0
-        g[C.G_MY_ASSISTS] = self.memory.assists / 5.0
-
-        enemy_visible = enemy_u is not None and enemy_u.id in visible
-        g[C.G_ENEMY_VISIBLE] = 1.0 if enemy_visible else 0.0
-        unseen_s = max(0.0, (frame.t_ms - self.memory.enemy_last_seen_ms) / 1000.0)
-        g[C.G_ENEMY_UNSEEN_TIME] = min(unseen_s / 30.0, 1.0)
-
-        n_ally = sum(
-            1
-            for uid, m in self.memory.units.items()
-            if m.etype == "minion" and m.team == self.team and uid in visible
+        g[C.G_CLOCK_NORM] = min(frame.t_s / C.GAME_LENGTH_S, 2.0)
+        g[C.G_ENEMY_VISIBLE] = (
+            1.0 if (enemy_u is not None and enemy_u.id in visible) else 0.0
         )
-        n_enemy = sum(
-            1
-            for uid, m in self.memory.units.items()
-            if m.etype == "minion" and m.team != self.team and uid in visible
-        )
-        g[C.G_N_ALLY_MINIONS] = min(n_ally / 8.0, 2.0)
-        g[C.G_N_ENEMY_MINIONS] = min(n_enemy / 8.0, 2.0)
-        g[C.G_IS_DEAD] = 0.0 if self_u.alive else 1.0
-        dt = C.DECISION_DT_MS if self._prev_t_ms is None else float(frame.t_ms - self._prev_t_ms)
-        if dt < 0.0:
-            # The game clock went backwards, which only happens on an episode
-            # reset the builder was not told about (VecDriver does call
-            # adapter.reset(); a bare LaneEnv reset or a server restart on some
-            # other path may not). The raw value here is arbitrarily large and
-            # negative -- a 2.5 s rewind at 30 Hz is dt_norm = -75 -- and it
-            # would go straight into the policy as a feature. One decision's
-            # worth is the honest stand-in, same as the first frame of an
-            # episode.
-            log.error(
-                "game clock went backwards (%s -> %d ms): an episode reset did not reach "
-                "the observation builder, so its memory, attack clock and ability "
-                "cooldowns are all carrying the previous episode's state. Treating dt as "
-                "one decision.",
-                self._prev_t_ms,
-                frame.t_ms,
-            )
-            dt = C.DECISION_DT_MS
-        # A long stall is worth flagging but its exact size is not actionable,
-        # and an unbounded field here is the one thing in global_vec that can
-        # exceed the guard's normalised range on healthy data.
-        g[C.G_DT_NORM] = min(dt / C.DECISION_DT_MS, C.DT_NORM_CAP)
-
-        # Remembered enemy champion whereabouts.
-        if enemy_u is not None:
-            emem = self.memory.units.get(enemy_u.id)
-            if emem is not None and emem.ever_seen:
-                es_, en_ = self.lane.point(emem.last_x, emem.last_y)
-                g[C.G_ENEMY_MEM_LANE_S] = es_ / self.lane.length
-                g[C.G_ENEMY_MEM_LANE_N] = en_ / C.LANE_HALF_WIDTH
-                g[C.G_ENEMY_MEM_DS] = (es_ - ax) / C.NORM_XY
-                g[C.G_ENEMY_MEM_DN] = (en_ - ay) / C.NORM_XY
-                g[C.G_ENEMY_MEM_VALID] = 1.0
-                age = emem.age_s(float(frame.t_ms))
-                g[C.G_ENEMY_MEM_AGE] = min(age / C.ENEMY_MEMORY_HORIZON_S, 1.0)
-                if emem.last_heading is not None:
-                    hs, hn = self.lane.vector(*emem.last_heading)
-                    mag = math.hypot(hs, hn)
-                    if mag > 1e-9:
-                        g[C.G_ENEMY_MEM_HEADING_COS] = hs / mag
-                        g[C.G_ENEMY_MEM_HEADING_SIN] = hn / mag
-                        g[C.G_ENEMY_MEM_HEADING_KNOWN] = 1.0
-                g[C.G_ENEMY_REACH_RADIUS] = min(
-                    emem.reachability_radius(float(frame.t_ms), self.move_speed) / C.NORM_DIST, 4.0
-                )
-
-        since, est, unknown = self.memory.enemy_intel.features(float(frame.t_ms))
+        since, _est, _unknown = self.memory.enemy_intel.features(float(frame.t_ms))
         g[C.G_ENEMY_ABILITY_SINCE_CAST] = since
-        g[C.G_ENEMY_ABILITY_CD_EST] = est
-        g[C.G_ENEMY_ABILITY_UNKNOWN] = unknown
         return g
 
     def _build_action_mask(self, frame: Frame, self_u: Unit, entities: np.ndarray) -> ActionMask:
@@ -1346,5 +1276,9 @@ class ObservationBuilder:
                 if e is None or e.team_rel == "ally" or e.dist > reach:
                     continue
                 pot += _sigmoid((self._aa_damage - e.hp_frac * e.mhp) / C.AA_KILL_KAPPA_HP)
-            p[C.P_LAST_HIT_POTENTIAL] = pot
+            # Scale by SHAPING_C, so this really is Phi and not 20x it.
+            # reward.last_hit_potential multiplies its sigmoid sum by c = 0.05;
+            # this omitted it, so the critic's "value of the shaping potential"
+            # was twenty times the quantity the reward actually adds.
+            p[C.P_LAST_HIT_POTENTIAL] = C.SHAPING_C * pot
         return p

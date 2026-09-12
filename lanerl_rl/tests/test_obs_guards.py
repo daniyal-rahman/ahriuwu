@@ -110,7 +110,7 @@ def test_a_nan_in_the_critic_only_arrays_is_caught_too(obs):
 def test_the_count_of_bad_values_is_reported_not_just_the_first(obs):
     obs.entities[0, C.E_DS] = np.nan
     obs.entities[5, C.E_DN] = np.nan
-    obs.entities[7, C.E_DIST] = np.nan
+    obs.entities[7, C.E_HP_FRAC] = np.nan
     with pytest.raises(ObservationError, match="3 non-finite"):
         check_observation(obs)
 
@@ -216,28 +216,36 @@ def test_build_raises_when_the_builder_would_emit_a_nan():
         b.build(decode_frame(bad))
 
 
-def test_a_clock_that_rewinds_does_not_put_a_huge_negative_dt_in_the_policy(caplog):
-    """A reset that never reached the builder used to emit dt_norm = -75."""
+def test_a_clock_that_rewinds_is_detected_and_clears_the_stale_memory(caplog):
+    """The canary, kept after dt stopped being a feature.
+
+    dt_norm used to be fed to the network and this asserted it did not go to
+    -75 on a rewind. At a lockstep 30 Hz dt is ~1.0 by construction, so it was
+    removed from the observation -- but the DETECTION is independently
+    valuable: it is what caught an episode reset failing to reach the builder
+    (t 599,979 -> 16 ms), which had been contaminating 2 of every 3 evaluation
+    games with the previous game's unit memory.
+    """
     b = ObservationBuilder(C.TEAM_BLUE)
     for t in range(0, 66 * 40, 66):
         b.build(decode_frame(raw_frame(t)))
     with caplog.at_level("ERROR"):
         o = b.build(decode_frame(raw_frame(0)))  # the clock rewinds
-    assert o.global_vec[C.G_DT_NORM] == pytest.approx(1.0)
     assert any("clock went backwards" in r.message for r in caplog.records)
     check_observation(o)
 
 
-def test_a_long_stall_is_capped_rather_than_left_unbounded():
+def test_a_long_stall_still_produces_a_valid_observation():
+    """dt is no longer clamped into a feature, so the property is just validity.
+
+    The old version asserted global_vec[G_DT_NORM] == DT_NORM_CAP. There is no
+    dt feature any more; what still matters is that a long gap between frames
+    does not put a NaN or an out-of-range value anywhere in the tensors.
+    """
     b = ObservationBuilder(C.TEAM_BLUE)
     b.build(decode_frame(raw_frame(0)))
-    o = b.build(decode_frame(raw_frame(60_000)))  # a minute-long gap
-    assert o.global_vec[C.G_DT_NORM] == pytest.approx(C.DT_NORM_CAP)
+    o = b.build(decode_frame(raw_frame(60_000)))
     check_observation(o)
-
-
-# -- cost ------------------------------------------------------------------
-
 
 def test_the_guard_stays_inside_its_measured_budget():
     """Measured on danilogin: 535 us off, 601 us on -- 12.3%.

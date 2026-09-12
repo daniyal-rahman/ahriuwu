@@ -19,7 +19,6 @@ Modules
 ``eval``        CS@10, win rate vs frozen bots, Bradley-Terry Elo, the rot signature
 ``anchor_eval`` actually PLAYS the frozen bot on the eval cadence and scores it
 ``run``         async actors -> central learner, bounded staleness, resumable
-``selfplay``    the seam: instance planning, opponent slots, episode accounting
 ``slurm``       submission with ``-o`` paths valid on the node that opens them
 ``runstats``    one run directory -> the handful of numbers worth comparing
 ``compare``     ``python -m lanerl_train.compare runs/a runs/b`` -- what differed?
@@ -67,7 +66,6 @@ __all__ = [
     "eval",
     "anchor_eval",
     "run",
-    "selfplay",
     "slurm",
     "runstats",
     "compare",

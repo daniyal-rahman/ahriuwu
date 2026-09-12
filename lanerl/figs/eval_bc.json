@@ -1,0 +1,57 @@
+{
+  "label": "bc_policy",
+  "rows": [
+    {
+      "t_s": 600.013,
+      "blue_cs": 34,
+      "red_cs": 41,
+      "blue_gold": 1943,
+      "red_gold": 1613,
+      "blue_lvl": 9,
+      "red_lvl": 9,
+      "blue_hp_lost": 1082,
+      "distance_travelled": 158306,
+      "buttons": {
+        "noop": 5631,
+        "move": 11209,
+        "attack": 1157,
+        "cast": 4
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 34,
+      "red_cs": 43,
+      "blue_gold": 1973,
+      "red_gold": 1298,
+      "blue_lvl": 9,
+      "red_lvl": 8,
+      "blue_hp_lost": 1425,
+      "distance_travelled": 161781,
+      "buttons": {
+        "noop": 5452,
+        "move": 11116,
+        "attack": 1430,
+        "cast": 3
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 44,
+      "red_cs": 43,
+      "blue_gold": 2123,
+      "red_gold": 1663,
+      "blue_lvl": 9,
+      "red_lvl": 9,
+      "blue_hp_lost": 1227,
+      "distance_travelled": 152356,
+      "buttons": {
+        "noop": 5433,
+        "move": 11303,
+        "recall": 1,
+        "attack": 1262,
+        "cast": 2
+      }
+    }
+  ]
+}

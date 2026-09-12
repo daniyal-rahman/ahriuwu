@@ -266,6 +266,13 @@ def default_anchors(bc_checkpoint: Optional[Path] = None) -> List[AnchorSpec]:
     """
     cfg = paths.bot_config_dir()
     anchors = [
+        # The three reference CS numbers below are STALE and no longer used by the
+        # eval line, which now reports the anchor's CS measured in the same
+        # game (EpisodeResult.opponent_cs_at_10). They were measured on a bot
+        # config with no rune or mastery page -- 57.88 AD against the 78.14 the
+        # agent actually faces -- so "diamond" 35.2 sits BELOW what the bronze
+        # bot really farms (~48 seeded). Kept only as a historical marker;
+        # do not cite them.
         AnchorSpec("scripted_bronze", "scripted", cfg / "anchor_bronze.json", 16.7),
         AnchorSpec("scripted_gold", "scripted", cfg / "anchor_gold.json", 29.5),
         AnchorSpec("scripted_diamond", "scripted", cfg / "anchor_diamond.json", 35.2),
@@ -332,6 +339,25 @@ def validate_anchors(anchors: Sequence[AnchorSpec]) -> None:
             "; ".join(parts)
             + ". A missing anchor removes a rung from the ladder silently -- fix the "
             "path, export the checkpoint, or drop the anchor from --anchors."
+        )
+
+    # Reject here what anchor_launch_spec would reject LATER. Only a 'scripted'
+    # anchor can be played by the in-server bot, and anchor_launch_spec raises
+    # AnchorEvalError for anything else -- but that raise happens inside
+    # _run_anchor_eval, which propagates through _periodic -> step_once and
+    # KILLS THE RUN, hundreds of updates and an hour of GPU time after start.
+    # `--bc-checkpoint` was the only way to reach it: it attaches a resource to
+    # the bc_policy anchor, whose kind is "policy", so the checks above pass and
+    # the run dies at the first eval. Fail at argument-parse time instead.
+    unplayable = [(a.id, a.kind) for a in anchors
+                  if a.kind not in ("scripted", "policy")]
+    if unplayable:
+        raise AnchorConfigError(
+            "these anchors cannot be played by the in-server bot: "
+            + ", ".join(f"{i} (kind={k!r})" for i, k in unplayable)
+            + ". Only 'scripted' (in-server bot) and 'policy' (a frozen network "
+            "on red) can be played; anchor_launch_spec would raise on anything "
+            "else at the first evaluation and end the run. Drop them from --anchors."
         )
 
 
