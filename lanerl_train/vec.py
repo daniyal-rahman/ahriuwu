@@ -492,11 +492,41 @@ class VecLaneEnv:
         max_restarts_per_instance: int = 5,
         max_total_restarts: int = 50,
         logger: Optional[logging.Logger] = None,
+        specs: Optional[Sequence[ServerLaunchSpec]] = None,
     ):
+        """``specs`` gives each instance its OWN launch spec, instead of ``spec``.
+
+        Needed because everything that distinguishes one scripted opponent
+        from another -- ``LANERL_BOT_SEED`` and ``LANERL_BOT_CONFIG`` -- is a
+        process environment variable, read once by ``LanerlConfig.FromEnv`` at
+        start-up.  With a single shared spec every instance of a run launches
+        the *same* bot from the *same* seed (the server's default, 1234:
+        ``LanerlConfig.cs:57``), so N parallel envs draw the same reaction
+        jitters, the same last-hit coin flips and the same ability rolls, and
+        N-fold parallelism buys N copies of one game rather than N samples.
+        """
         if n <= 0:
             raise ValueError(f"n must be positive, got {n}")
         self.n = int(n)
-        self.spec = spec or ServerLaunchSpec()
+        if specs is not None:
+            if spec is not None:
+                raise ValueError(
+                    "pass spec= or specs=, not both: silently preferring one of them is "
+                    "how half the instances end up launched from a config nobody chose"
+                )
+            if len(specs) != self.n:
+                raise ValueError(f"got {len(specs)} launch specs for {self.n} instances")
+            self.specs: List[ServerLaunchSpec] = list(specs)
+        else:
+            # Deliberately N references to ONE spec, which is exactly what
+            # every instance shared before this: a spec is read-only after
+            # construction, and copying it would invite two instances to be
+            # "the same" while differing.
+            self.specs = [spec or ServerLaunchSpec()] * self.n
+        #: The FIRST instance's spec.  Kept because it was the public attribute
+        #: before instances could differ; read ``specs[i]`` for anything that
+        #: can vary per instance.
+        self.spec = self.specs[0]
         self.log = logger or log
         self.log_dir = Path(log_dir) if log_dir else paths.runs_root() / "vec_logs"
         if ports is None:
@@ -522,7 +552,7 @@ class VecLaneEnv:
         self._started = False
 
     def _default_factory(self, index: int, ports: InstancePorts) -> InstanceHandle:
-        return ServerInstance(index, ports, self.spec, self.log_dir, self.log)
+        return ServerInstance(index, ports, self.specs[index], self.log_dir, self.log)
 
     # -- lifecycle ---------------------------------------------------------
 

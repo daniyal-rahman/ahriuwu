@@ -9,6 +9,20 @@ here, the frozen scripted Garen.
 Setup: the control channel drives BLUE only (we send no "red" key, so
 ApplyActions leaves red alone), and LANERL_BOT=purple hands red to the bot.
 
+ONE SERVER PROCESS PER EPISODE, and that is a measurement decision, not an
+implementation detail.  The server's IN-PROCESS episode reset strips the
+champion's rune and mastery page: max hp 672 -> 616, attack damage 78.14 ->
+57.88.  So a run of N episodes inside one process is one game played by a runed
+champion and N-1 played by a weaker one, and averaging them produced this
+script's headline "BC = 37.3 CS" out of three games that were not the same
+game.  A process restart costs ~12 s against a ~650 s episode -- 2% -- which is
+a trivial price for a homogeneous sample.  :func:`play_episode` therefore
+launches, connects to, and tears down its own server, and :func:`check_homogeneous`
+refuses to print a mean over episodes whose starting stats disagree, so that if
+the restart ever stops happening the script fails instead of quietly blending
+two populations again.  (Once the server-side reset is fixed, the restart
+becomes an optimisation to revisit -- the homogeneity check is what must stay.)
+
 Reports CS@10, gold, level, deaths, damage taken, and how much of the map the
 champion actually used -- a policy that never leaves the fountain and one that
 farms both score 0 deaths, and only the movement stats tell them apart.
@@ -37,6 +51,53 @@ CFG = _REPO / "lanerl/cfg/garen1v1.json"
 sys.path.insert(0, str(_REPO))
 
 
+#: Champion fields that a rune/mastery page changes and that the server sends
+#: on every frame.  ``ad`` is the one that moved most (78.14 with the page,
+#: 57.88 without) and ``mhp`` the one that is always present.
+_START_STAT_KEYS = ("mhp", "ad", "ap", "ar", "mr", "lvl")
+
+
+class HeterogeneousEpisodes(RuntimeError):
+    """Episodes that must not be averaged, because they were not the same game."""
+
+
+def start_stats(raw: Optional[dict]) -> Dict[str, float]:
+    """The blue champion's stats on the FIRST frame of an episode.
+
+    The fingerprint of the rune and mastery page, and therefore of whether this
+    episode was played in a freshly launched server or after an in-process
+    reset that stripped it (mhp 672 -> 616, ad 78.14 -> 57.88).  Absent keys are
+    omitted rather than defaulted: a guessed stat is how this project ended up
+    with three different wrong attack-damage constants.
+    """
+    champs = {u["tm"]: u for u in (raw or {}).get("u", []) if u.get("k") == "Champion"}
+    b = champs.get(100, {})
+    return {k: float(b[k]) for k in _START_STAT_KEYS if b.get(k) is not None}
+
+
+def check_homogeneous(rows: List[Dict]) -> None:
+    """Refuse to average episodes whose champion did not start the same.
+
+    The point of this script is a single headline number, so a blended sample
+    is not a caveat, it is a wrong answer.  Loud, with the offending stats, and
+    fatal.
+    """
+    seen: Dict[str, List[int]] = {}
+    for i, r in enumerate(rows):
+        key = json.dumps(r.get("start_stats") or {}, sort_keys=True)
+        seen.setdefault(key, []).append(i)
+    if len(seen) > 1:
+        detail = "; ".join(f"episodes {v}: {k}" for k, v in sorted(seen.items()))
+        raise HeterogeneousEpisodes(
+            "these episodes did not start from the same champion stats, so their mean "
+            "is not a measurement of anything: " + detail + ". The known cause is the "
+            "server's in-process episode reset stripping the rune/mastery page (mhp "
+            "672 -> 616, ad 78.14 -> 57.88); every episode here is supposed to get its "
+            "own server process, so either that stopped happening or the page is being "
+            "applied inconsistently at launch."
+        )
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -44,7 +105,13 @@ def free_port() -> int:
 
 
 def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> Dict:
-    """One game: policy drives blue, scripted bot drives red."""
+    """One game in its OWN server process: policy drives blue, scripted bot red.
+
+    The process is launched here and torn down in the ``finally`` below, once
+    per call, deliberately -- see the module docstring.  Do not hoist it out to
+    amortise the ~12 s start-up across episodes: that is exactly the change
+    that made episodes 2..N of every previous measurement base-stats games.
+    """
     cport, gport = free_port(), free_port()
     env = dict(os.environ)
     env.update(
@@ -85,6 +152,7 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
             return json.loads(line) if line else None
 
         raw = json.loads(f.readline())
+        first = start_stats(raw)
         track = {"path": 0.0, "prev": None, "hp_lost": 0.0, "prev_hp": None,
                  "buttons": {}, "min_along_enemy": 1e9}
         while raw is not None and int(raw.get("t", 0)) < max_game_ms:
@@ -115,6 +183,10 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
             "blue_hp_lost": round(track["hp_lost"]),
             "distance_travelled": round(track["path"]),
             "buttons": track["buttons"],
+            # Checked across episodes by check_homogeneous() before anything is
+            # averaged. Carried in the row so --out records it too: a saved
+            # result nobody can re-check is the same problem one step later.
+            "start_stats": first,
         }
     finally:
         proc.terminate()
@@ -240,9 +312,23 @@ def main() -> int:
               f"hp_lost={row['blue_hp_lost']} dist={row['distance_travelled']} "
               f"buttons={row['buttons']}")
 
+    # Before the mean, not after: the whole output of this script is one
+    # number, and a number averaged over two populations is worse than none.
+    check_homogeneous(rows)
+
     def agg(k):
         v = [r[k] for r in rows if isinstance(r.get(k), (int, float))]
         return statistics.mean(v) if v else float("nan")
+
+    # CS@10 has sd ~7.3 (144 self-play episodes, runs/rl-bc4-0912), so the
+    # default --episodes 3 carries a 95% CI of about +-18 CS. Print the spread
+    # beside the mean: "BC = 37.3" was quoted as a fact off three games.
+    cs = [r["blue_cs"] for r in rows if isinstance(r.get("blue_cs"), (int, float))]
+    if len(cs) >= 2:
+        sd = statistics.stdev(cs)
+        print(f"\n  CS@10 spread: sd={sd:.1f} over n={len(cs)}; "
+              f"se={sd / math.sqrt(len(cs)):.1f}. See "
+              f"AnchorEvalConfig.episodes_per_anchor for what n games can resolve.")
 
     print(f"\n{label}: n={len(rows)}  CS={agg('blue_cs'):.1f} vs bot {agg('red_cs'):.1f}  "
           f"gold={agg('blue_gold'):.0f}  lvl={agg('blue_lvl'):.1f}  "

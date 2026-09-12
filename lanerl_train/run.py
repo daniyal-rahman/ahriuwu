@@ -130,6 +130,36 @@ class EpisodeResult:
     #: in the same episode cannot go stale, and it is free: the server already
     #: reports CS for both teams.
     opponent_cs_at_10: Optional[float] = None
+    #: Undiscounted per-episode sum of every RAW reward term, by name
+    #: (``lanerl_rl.reward._AgentReward.terms`` plus ``shaping``).
+    #:
+    #: Computed on every tick since the reward was written, and thrown away on
+    #: every tick since the reward was written. Nobody could ask "which term is
+    #: the policy chasing?", which is how the respawn refund -- dying was
+    #: NET POSITIVE, by +0.44 at the published weights -- survived weeks of
+    #: runs whose every other metric looked ordinary. These are the raw,
+    #: pre-zero-sum terms, so they do not add up to :attr:`ep_return`: the gap
+    #: between the two IS the opponent's contribution, i.e. what ``alpha``
+    #: scales.
+    reward_terms: Optional[Mapping[str, float]] = None
+    #: Kills and deaths in this episode, counted off the same champion-death
+    #: transitions the reward's kill/death pair is charged on. The server
+    #: prints ``deaths=`` on its ``LANERL_CS`` rows and nothing ever read it;
+    #: with ``--no-end-on-death`` an episode can now contain several, and
+    #: "is the agent feeding?" was unanswerable from the metrics.
+    kills: int = 0
+    deaths: int = 0
+    #: The agent champion's attack damage and max HP on the FIRST frame of the
+    #: episode.
+    #:
+    #: A canary for one specific regression: an in-process reset that strips
+    #: the rune page takes ``mhp`` 672 -> 616 and the AD with it, so every
+    #: episode after the first is a quietly different game from the one being
+    #: measured -- and nothing in the observation, the reward or the CS readout
+    #: looks wrong while it happens. ``None`` when the wire did not carry the
+    #: field (older recordings); never substitute 0.
+    first_frame_ad: Optional[float] = None
+    first_frame_mhp: Optional[float] = None
 
     def __post_init__(self) -> None:
         if not (0.0 <= self.score <= 1.0):
@@ -160,6 +190,13 @@ class Rollout:
     #: How many (instance, side) slots one row covers.  Set by the collector;
     #: 1 means "this rollout counts rows and decisions the same way".
     parallel_envs: int = 1
+    #: Fraction of this rollout's decisions spent on each button
+    #: (``lane_wiring.button_marginals``).  Logged per update, because it is
+    #: the one curve that shows a behaviour-cloning prior eroding: entropy
+    #: rose 1.64 -> 3.96 over 140 updates of the first BC-initialised run
+    #: while CS went nowhere, and nothing recorded WHAT the policy had started
+    #: doing instead.
+    action_marginals: Mapping[str, float] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------
@@ -1065,7 +1102,19 @@ class TrainingLoop:
                 )
             )
         if ep.cs_at_10 is not None:
-            self.evaluator.record_cs(agent, ep.cs_at_10)
+            # WITH the category. Pooling a mirror match, a scripted-bot
+            # training game and an anchor game into one mean produces a
+            # headline CS whose value depends on the eval cadence -- and
+            # ``load_jsonl`` passes the category, so a replay of this run's own
+            # metrics reached a conclusion the live report could not.
+            self.evaluator.record_cs(agent, ep.cs_at_10, category=ep.opponent_category)
+        # The same call ``Evaluator.load_jsonl`` makes when it replays the
+        # episode row written below. Only the replay path had it, so a live
+        # run's report and a report rebuilt from that run's own metrics.jsonl
+        # disagreed about the opponent's CS -- and the live one is the one
+        # anybody watches.
+        if ep.opponent_cs_at_10 is not None and ep.opponent_id:
+            self.evaluator.record_opponent_cs(ep.opponent_id, ep.opponent_cs_at_10)
         self.metrics.write(
             "episode",
             update=self.state.update,
@@ -1079,9 +1128,24 @@ class TrainingLoop:
             opponent_category=ep.opponent_category,
             score=ep.score,
             cs_at_10=ep.cs_at_10,
+            # The opponent's CS from the SAME game. It was computed, logged to
+            # INFO by AnchorEvaluator, and then dropped on the floor -- so the
+            # only durable record of how the agent did RELATIVE to the thing it
+            # played was a hardcoded constant measured on a different bot.
+            opponent_cs_at_10=ep.opponent_cs_at_10,
             length_steps=ep.length_steps,
             reason=ep.reason,
             instance=ep.instance,
+            kills=ep.kills,
+            deaths=ep.deaths,
+            # The rune-page canary; see EpisodeResult.first_frame_ad.
+            first_frame_ad=ep.first_frame_ad,
+            first_frame_mhp=ep.first_frame_mhp,
+            # One flat object of ~12 floats, per EPISODE (~1 per 18,000
+            # decisions), not per step: this is what makes the log able to
+            # answer "which term is the policy chasing?" without becoming the
+            # dominant cost of the run.
+            reward_terms=dict(ep.reward_terms) if ep.reward_terms else None,
         )
         if not is_self_match:
             self.metrics.write(
@@ -1184,6 +1248,11 @@ class TrainingLoop:
             ),
             mixture=dict(rollout.mixture),
             mixture_drift=self.sampler.mixture_drift(),
+            # Per-button action marginals, per update. See
+            # Rollout.action_marginals: this is the curve that shows a BC prior
+            # eroding, and it is only meaningful as a time series, so it goes
+            # on every update row rather than into the eval section.
+            **{f"actions/{k}": v for k, v in dict(rollout.action_marginals).items()},
             **{f"loss/{k}": v for k, v in metrics.items()},
             **{f"throughput/{k}": v for k, v in thr.items()},
             **{f"gpu/{k}": v for k, v in gpu.items()},

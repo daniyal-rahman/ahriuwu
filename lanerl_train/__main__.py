@@ -10,6 +10,10 @@ Usage::
 
     python -m lanerl_train --run-name my-run --num-actors 2 --envs-per-actor 2
 
+Phase 1 -- against the frozen scripted bot rather than against itself::
+
+    python -m lanerl_train --run-name phase1 --opponent scripted:bronze
+
 Resuming an existing run::
 
     python -m lanerl_train --run-name my-run --resume
@@ -37,7 +41,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, List, Tuple
 
 import torch
 
@@ -51,7 +55,7 @@ from .eval import DEFAULT_RUN_ANCHORS, Evaluator, anchors_for_run
 from .lane_wiring import LanePolicyActor, collect_rollout, make_collect_fn, make_lane_adapters
 from .ports import PortAllocator
 from .run import GpuProbe, RunConfig, StalledRun, TrainingLoop
-from .vec import EpisodeSpec, SideAssignment, VecDriver, VecLaneEnv
+from .vec import EpisodeSpec, ServerLaunchSpec, SideAssignment, VecDriver, VecLaneEnv
 
 log = logging.getLogger("lanerl_train.__main__")
 
@@ -62,6 +66,25 @@ SELF = "self"
 # apart makes a leaked/lingering instance from a previous run obvious in the
 # logs instead of eating into the next actor's range.
 PORTS_PER_ACTOR_STRIDE = 64
+
+#: The scripted difficulties ``--opponent scripted:<name>`` knows by name.
+#: The same three JSONs the anchor ladder is built from (``eval.default_anchors``),
+#: so "the opponent I train against" and "the opponent I am measured against"
+#: can be made the same thing deliberately rather than by coincidence.
+SCRIPTED_CONFIGS: Dict[str, str] = {
+    "bronze": "anchor_bronze.json",
+    "gold": "anchor_gold.json",
+    "diamond": "anchor_diamond.json",
+}
+
+#: ``LanerlConfig.Seed`` -- the server's default, and therefore the seed every
+#: training instance has silently used so far, all of them the same one.
+SERVER_DEFAULT_BOT_SEED = 1234
+
+#: Room for 10,000 envs under one ``--seed`` before two runs' bot streams can
+#: overlap.  ``--seed 0`` env 0 lands back on exactly 1234, so a single-env
+#: run still reproduces the historical bot.
+BOT_SEED_RUN_STRIDE = 10_000
 
 
 def build_argparser() -> argparse.ArgumentParser:
@@ -85,6 +108,43 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--horizon-s", type=float, default=30.0, help="PPOConfig's discount horizon in seconds")
     p.add_argument("--anneal-clock", choices=("env_steps", "updates"), default="env_steps")
     p.add_argument("--device", default="cpu")
+    # -- the reward's zero-sum coefficient -------------------------------
+    p.add_argument(
+        "--alpha", type=float, default=0.5,
+        help="zero-sum coefficient in r = r_self - alpha * r_opponent. HELD "
+        "CONSTANT unless --alpha-anneal-steps says otherwise. There was no flag "
+        "at all, so every run inherited LaneRewardConfig's 0.5 -> 1.0 anneal "
+        "over 2,000,000 rows of the anneal clock: at ~255 rows/update that is "
+        "~7,800 updates, so a six-hour run spent its ENTIRE life on a moving "
+        "reward scale. Measured in runs/rl-bc4-0912, ep_return by 500-update "
+        "bucket went 30.0 -> 26.6 -> 24.4 -> 34.9 -> 18.7 -> 6.5 while CS@10 "
+        "stayed flat at ~36 -- the curve was the reward definition changing, "
+        "not the policy. The default is the value every measured run actually "
+        "spent its first bucket at, so the only thing that changes is that it "
+        "no longer MOVES. 1.0 makes the lane exactly zero-sum; against a frozen "
+        "scripted opponent (--opponent scripted:...) a lower alpha is arguable, "
+        "since the subtracted stream is then one the agent cannot influence.",
+    )
+    p.add_argument(
+        "--alpha-anneal-steps", type=int, default=0,
+        help="anneal alpha from LaneRewardConfig's 0.5 up to --alpha over this "
+        "many steps of --anneal-clock. 0 (the default) holds it constant, which "
+        "is the only setting under which a return curve measures the policy.",
+    )
+    # -- who the agent plays ---------------------------------------------
+    p.add_argument(
+        "--opponent", default=SELF,
+        help="'self' (the default: both champions driven by the live policy) or "
+        "'scripted:<name-or-path>[,<name-or-path>...]'. Phase 1 is scripted: in a "
+        "mirror the opponent's farming stream is uncontrollable noise in every "
+        "advantage, and the training opponent is not comparable with the "
+        "evaluation one, so CS arrives as ~1 sample per 400 updates from the "
+        "anchor ladder instead of ~35 per 200 from training itself. Names are "
+        f"{sorted(SCRIPTED_CONFIGS)} (or the 'scripted_' anchor ids); anything "
+        "else is a path to a bot config JSON. More than one is OPT-IN "
+        "population play -- see build_training_specs for what varies and what "
+        "cannot.",
+    )
     p.add_argument("--resume", action="store_true")
     p.add_argument(
         "--port-base", type=int, default=21000,
@@ -109,6 +169,20 @@ def build_argparser() -> argparse.ArgumentParser:
         "a random policy provably cannot reach lane: 345 u/s / 30 Hz = 11.5 "
         "units per decision, so a random walk needs ~1.06M steps (9.9 h of game) "
         "to cross 11,866 units against a 10-minute episode.",
+    )
+    p.add_argument(
+        "--critic-lr", type=float, default=None,
+        help="Adam lr for the VALUE head only (default: PPOConfig's 3e-4). The "
+        "critic starts from random weights -- behaviour cloning has no returns "
+        "to fit it against -- so it must not inherit the actor's fine-tuning "
+        "rate. One shared 1e-5 is why value_loss climbed 0.047 -> 0.55 over a "
+        "2,690-update run while the critic never caught its moving target.",
+    )
+    p.add_argument(
+        "--critic-warmup-updates", type=int, default=None,
+        help="train ONLY the value head for this many updates first (default 0). "
+        "The actor is frozen, so a random critic cannot feed garbage advantages "
+        "into a BC prior that is already good.",
     )
     p.add_argument(
         "--entropy-coef", type=float, default=None,
@@ -144,13 +218,19 @@ def build_argparser() -> argparse.ArgumentParser:
         "Only has any effect together with --init-from; 0 disables it.",
     )
     p.add_argument(
-        "--anchor-envs", type=int, default=1,
+        "--anchor-envs", type=int, default=4,
         help="server instances per anchor. Each anchor keeps its own alive for the "
-        "life of the run (a restart is ~12s against 0.23ms for an episode reset).",
+        "life of the run (a restart is ~12s against 0.23ms for an episode reset). "
+        "This is a WALL-CLOCK knob: anchor games run in waves of this many, so at "
+        "the default 35 episodes 1 env is ~35 sequential 10-minute games and 4 is "
+        "~9 waves.",
     )
     p.add_argument(
-        "--anchor-episodes", type=int, default=1,
-        help="games per anchor per eval cycle; an anchor game is a real 10-minute game",
+        "--anchor-episodes", type=int, default=None,
+        help="games per anchor per eval cycle (default: AnchorEvalConfig's, which is "
+        "sized for statistical power). One game CANNOT resolve anything: self-play "
+        "CS@10 has sd 7.3, so n=1 has a minimum detectable difference of ~29 CS -- "
+        "it could not tell 36 CS from 7. n=35 resolves ~5 CS.",
     )
     p.add_argument(
         "--anchor-all-per-eval", action="store_true",
@@ -164,6 +244,133 @@ def build_argparser() -> argparse.ArgumentParser:
     return p
 
 
+def reward_config(gamma: float, alpha: float, alpha_anneal_steps: int) -> LaneRewardConfig:
+    """The ONE place a training ``LaneRewardConfig`` is built.
+
+    Both fields have to be set together or the flag does nothing:
+    ``LaneRewardConfig.alpha`` returns ``zero_sum_alpha_end`` when
+    ``zero_sum_anneal_steps <= 0`` and interpolates from ``_start`` otherwise,
+    so "constant at x" is ``end=x, steps=0`` and "anneal to x" is
+    ``start=0.5, end=x, steps=N``. Setting ``end`` alone would have looked
+    exactly like a working ``--alpha`` while the 2,000,000-step anneal from 0.5
+    carried on underneath it.
+    """
+    if not 0.0 <= alpha <= 1.0:
+        raise SystemExit(
+            f"--alpha {alpha} is outside [0, 1]. Above 1 the opponent's reward "
+            f"outweighs the agent's own; below 0 the agent is paid for the "
+            f"opponent's farm."
+        )
+    if alpha_anneal_steps > 0:
+        return LaneRewardConfig(
+            gamma=gamma,
+            zero_sum_alpha_start=LaneRewardConfig().zero_sum_alpha_start,
+            zero_sum_alpha_end=alpha,
+            zero_sum_anneal_steps=int(alpha_anneal_steps),
+        )
+    return LaneRewardConfig(
+        gamma=gamma,
+        zero_sum_alpha_start=alpha,
+        zero_sum_alpha_end=alpha,
+        zero_sum_anneal_steps=0,
+    )
+
+
+def resolve_bot_configs(text: str) -> List[Tuple[str, Path]]:
+    """``--opponent scripted:<text>`` -> ``[(label, bot config path), ...]``.
+
+    A name that does not resolve is fatal here rather than at the first server
+    launch: ``LANERL_BOT_CONFIG`` pointing at a file that does not exist leaves
+    ``LanerlConfig`` on its defaults, which is a DIFFERENT and much weaker bot,
+    and nothing downstream can tell that apart from a difficulty that was
+    chosen.
+    """
+    out: List[Tuple[str, Path]] = []
+    for item in text.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        name = item[len("scripted_"):] if item.startswith("scripted_") else item
+        if name in SCRIPTED_CONFIGS:
+            path, label = paths.bot_config_dir() / SCRIPTED_CONFIGS[name], name
+        else:
+            path = Path(item).expanduser()
+            label = path.stem
+        if not path.exists():
+            raise SystemExit(
+                f"--opponent names {item!r}, which is neither one of "
+                f"{sorted(SCRIPTED_CONFIGS)} nor an existing file ({path})."
+            )
+        out.append((label, path))
+    if not out:
+        raise SystemExit("--opponent scripted: needs at least one config name or path")
+    return out
+
+
+def build_training_specs(
+    opponent: str,
+    seed: int,
+    actor_idx: int,
+    envs_per_actor: int,
+) -> Tuple[List[ServerLaunchSpec], Dict[int, str], bool]:
+    """``(launch spec per instance, instance -> opponent label, red is ours)``.
+
+    Self-play leaves every instance on the default spec (``bot_teams="none"``)
+    and hands RED to the same policy.
+
+    Scripted play sets ``bot_teams="purple"`` and points ``LANERL_BOT_CONFIG``
+    at the difficulty JSON, and RED is then assigned to NO policy -- the action
+    line omits the key, ``LanerlControl.ApplyActions`` finds no object for it,
+    and the bot's own orders stand (see ``anchor_eval.anchor_launch_spec``,
+    which does the same thing for the ladder).
+
+    **The bot seed varies per instance, and that is the most it can vary.**
+    ``LANERL_BOT_SEED`` is read once by ``LanerlConfig.FromEnv`` at process
+    start; ``LanerlBot._rng`` is built from it once in the constructor, and
+    ``LanerlBot.OnEpisodeReset`` (which the in-process reset calls) clears
+    every other piece of bot state but deliberately does NOT re-seed that RNG.
+    So within one process the stream carries on across episodes and successive
+    episodes DO see different jitters, coin flips and ability rolls -- but two
+    processes launched on the same seed replay each other exactly, which until
+    now every training instance did, from the server's own default of 1234.
+    Per-episode *reseeding* would need a server change (a seed on the reset
+    line, or a reseed in ``OnEpisodeReset``); it is not reachable from here.
+
+    **Difficulty is drawn per instance, not per episode, for the same reason:**
+    ``LANERL_BOT_CONFIG`` is process-scoped and nothing reloads it on reset.
+    Opt-in, by naming more than one config: a deterministic round-robin over
+    the population rather than a random draw, so the mixture is exactly
+    balanced across a handful of envs (a draw leaves difficulties unsampled at
+    N=4) and a resume faces the same population it left.
+    """
+    if opponent == SELF:
+        return [ServerLaunchSpec() for _ in range(envs_per_actor)], {}, True
+    if not opponent.startswith("scripted:"):
+        raise SystemExit(
+            f"--opponent {opponent!r} is neither 'self' nor 'scripted:<name-or-path>'"
+        )
+    configs = resolve_bot_configs(opponent[len("scripted:"):])
+    specs: List[ServerLaunchSpec] = []
+    labels: Dict[int, str] = {}
+    for env_idx in range(envs_per_actor):
+        global_idx = actor_idx * envs_per_actor + env_idx
+        label, path = configs[global_idx % len(configs)]
+        specs.append(
+            ServerLaunchSpec(
+                bot_teams="purple",
+                bot_config=path,
+                # Distinct per env AND distinct from the anchor evaluator's
+                # (which passes --seed straight through, deliberately frozen),
+                # so an eval game is never a replay of a game just trained on.
+                bot_seed=SERVER_DEFAULT_BOT_SEED + seed * BOT_SEED_RUN_STRIDE + global_idx,
+            )
+        )
+        # Namespaced so training games never pool into the anchor ladder's
+        # win rate; see lane_wiring._opponent_of.
+        labels[env_idx] = f"train:scripted_{label}"
+    return specs, labels, False
+
+
 def _build_driver_for_actor(
     actor_idx: int,
     envs_per_actor: int,
@@ -172,37 +379,60 @@ def _build_driver_for_actor(
     run_dir: Path,
     device: str,
     train_step_source,
-    gamma: float,
+    reward_cfg: LaneRewardConfig,
     end_on_death: bool,
-) -> Tuple[VecDriver, LanePolicyActor, dict]:
+    opponent: str,
+    seed: int,
+) -> Tuple[VecDriver, LanePolicyActor, dict, Dict[int, str]]:
     actor_base = port_base + actor_idx * envs_per_actor * PORTS_PER_ACTOR_STRIDE
     allocator = PortAllocator(base=actor_base)
     ports = allocator.allocate(envs_per_actor)
-    # ONE discount. LaneRewardConfig.gamma defaults to gamma_for_horizon(30),
-    # independently of PPOConfig, so --horizon-s moved the trainer's gamma and
-    # left the shaping gamma behind -- and potential-based shaping is only
-    # policy-invariant when the two agree (its own docstring says so).
-    adapters = make_lane_adapters(train_step_source=train_step_source,
-                                  reward_cfg=LaneRewardConfig(gamma=gamma))
+    # ONE discount, and ONE alpha schedule. LaneRewardConfig.gamma defaults to
+    # gamma_for_horizon(30), independently of PPOConfig, so --horizon-s moved
+    # the trainer's gamma and left the shaping gamma behind -- and
+    # potential-based shaping is only policy-invariant when the two agree (its
+    # own docstring says so). The config is built once, in main(), and passed
+    # in, so the anchor evaluator and the actors cannot drift apart either.
+    adapters = make_lane_adapters(train_step_source=train_step_source, reward_cfg=reward_cfg)
     policy = LanePolicy(model_cfg).to(device)
     actor = LanePolicyActor(policy, device=device)
-    env = VecLaneEnv(n=envs_per_actor, ports=ports, log_dir=run_dir / f"actor{actor_idx}_logs")
+    specs, labels, red_is_ours = build_training_specs(
+        opponent, seed, actor_idx, envs_per_actor
+    )
+    env = VecLaneEnv(
+        n=envs_per_actor, specs=specs, ports=ports,
+        log_dir=run_dir / f"actor{actor_idx}_logs",
+    )
     driver = VecDriver(
         env=env,
         policies={SELF: actor},
         adapter_factory=adapters.adapter_factory,
         encoder=adapters.encoder,
-        assignments=[SideAssignment(blue=SELF, red=SELF) for _ in range(envs_per_actor)],
+        assignments=[
+            SideAssignment(blue=SELF, red=SELF if red_is_ours else None)
+            for _ in range(envs_per_actor)
+        ],
         episode=EpisodeSpec(end_on_death=end_on_death),
     )
-    log.info("actor %d: starting %d real server instance(s) on ports base=%d", actor_idx, envs_per_actor, actor_base)
+    log.info(
+        "actor %d: starting %d real server instance(s) on ports base=%d against %s",
+        actor_idx, envs_per_actor, actor_base,
+        "itself" if red_is_ours else f"{sorted(set(labels.values()))} "
+        f"seeds={[s.bot_seed for s in specs]}",
+    )
     driver.start()
-    return driver, actor, adapters.reward_contexts
+    return driver, actor, adapters.reward_contexts, labels
 
 
 def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = build_argparser().parse_args(argv)
+
+    # Resolve --opponent HERE, not on the actor thread that first needs it.
+    # build_driver_for_actor is called lazily inside ActorLoop, so a typo in a
+    # difficulty name would otherwise surface as an actor dying several minutes
+    # into a run that has already booted its servers.
+    build_training_specs(args.opponent, args.seed, 0, max(1, args.envs_per_actor))
 
     torch.manual_seed(args.seed)
 
@@ -215,7 +445,20 @@ def main(argv=None) -> int:
                   kl_ref_anneal_steps=args.kl_ref_anneal_steps)
     if args.entropy_coef is not None:
         ppo_kw["entropy_coef"] = args.entropy_coef
+    if args.critic_lr is not None:
+        ppo_kw["critic_lr"] = args.critic_lr
+    if args.critic_warmup_updates is not None:
+        ppo_kw["critic_warmup_updates"] = args.critic_warmup_updates
     ppo_cfg = PPOConfig(**ppo_kw)
+    # Built ONCE and shared by the actors and the anchor evaluator, so the two
+    # cannot end up measuring under different reward definitions.
+    reward_cfg = reward_config(ppo_cfg.gamma, args.alpha, args.alpha_anneal_steps)
+    log.info(
+        "reward: alpha %s (%s)", args.alpha,
+        f"annealed from {reward_cfg.zero_sum_alpha_start} over "
+        f"{reward_cfg.zero_sum_anneal_steps} {args.anneal_clock}"
+        if reward_cfg.zero_sum_anneal_steps > 0 else "constant",
+    )
     policy = LanePolicy(model_cfg).to(args.device)
 
     # Load the BC prior INTO the policy, and freeze a copy as the KL reference.
@@ -273,6 +516,11 @@ def main(argv=None) -> int:
         "run_config": {k: (str(v) if isinstance(v, Path) else v) for k, v in dataclasses.asdict(run_cfg).items()},
         "model_config": dataclasses.asdict(model_cfg),
         "ppo_config": dataclasses.asdict(ppo_cfg),
+        # The RESOLVED reward, not just the flags that produced it: "alpha was
+        # held at 0.5" and "alpha was annealed 0.5 -> 1.0" differ by two fields
+        # of this object, and a run dir that does not carry them cannot say
+        # afterwards which reward its numbers were measured under.
+        "reward_config": dataclasses.asdict(reward_cfg),
     }
     (run_dir / "resolved_config.json").write_text(json.dumps(resolved, indent=2, sort_keys=True, default=str))
     log.info("resolved config written to %s", run_dir / "resolved_config.json")
@@ -307,14 +555,19 @@ def main(argv=None) -> int:
                 log_dir=run_dir,
                 adapter_factory_for=lambda: make_lane_adapters(
                         train_step_source=lambda: 0,
-                        reward_cfg=LaneRewardConfig(gamma=ppo_cfg.gamma)),
+                        reward_cfg=reward_cfg),
                 envs=args.anchor_envs,
                 seed=args.seed,
             ),
             agent_id_fn=lambda: loop.agent_id(),
+            # None means "use the config's own default", which is sized for
+            # statistical power. Passing args.anchor_episodes unconditionally
+            # is how a CLI default of 1 silently overrode that and left the
+            # evaluator unable to resolve anything under ~29 CS.
             config=AnchorEvalConfig(
-                episodes_per_anchor=args.anchor_episodes,
                 rotate=not args.anchor_all_per_eval,
+                **({} if args.anchor_episodes is None
+                   else {"episodes_per_anchor": args.anchor_episodes}),
             ),
         )
 
@@ -341,13 +594,14 @@ def main(argv=None) -> int:
     built_drivers: list = []
 
     def build_driver_for_actor(actor_idx: int):
-        driver, actor, reward_contexts = _build_driver_for_actor(
+        driver, actor, reward_contexts, labels = _build_driver_for_actor(
             actor_idx, args.envs_per_actor, args.port_base, model_cfg, run_dir,
-            args.device, loop.train_steps, ppo_cfg.gamma,
+            args.device, loop.train_steps, reward_cfg,
             True if args.end_on_death is None else args.end_on_death,
+            args.opponent, args.seed,
         )
         built_drivers.append(driver)
-        return driver, actor, reward_contexts
+        return driver, actor, reward_contexts, labels
 
     loop.collect = make_collect_fn(build_driver_for_actor, SELF, args.rollout_steps, ppo_cfg.gamma, ppo_cfg.gae_lambda)
 

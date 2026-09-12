@@ -390,11 +390,15 @@ def anchor_episode_budget(total_episodes: int, share: float = ANCHOR_EPISODE_SHA
 
 
 class CsTracker:
-    """Rolling CS@10 per agent.
+    """Rolling CS@10 per key.
 
     A window, not a lifetime mean: the point of this number is to answer "is the
     policy better than it was an hour ago", and a lifetime mean takes longer to
     move than the training run takes to rot.
+
+    The key is whatever the caller files under -- an agent id for the headline
+    metric, a ``(agent, category)`` pair for the split ones, an opponent id for
+    the anchor's own CS.  It does not interpret it.
     """
 
     def __init__(self, window: int = 200):
@@ -442,6 +446,22 @@ class EvalReport:
     past_skipped_low_n: int
     rot_warning: bool
     notes: List[str] = field(default_factory=list)
+    #: ``cs_at_10`` split by ``opponent_category``: ``{"self": (mean, sd, n),
+    #: "anchor": (...)}``.
+    #:
+    #: The headline ``cs_at_10`` above is every episode of the era pooled, and
+    #: those episodes are NOT from one population.  ``runs/rl-bc4-0912`` filed
+    #: 144 self-play games averaging 36.4 CS and 6 anchor games averaging 0.0
+    #: under the same ``agent@N``, so the pooled mean is a weighted blend of a
+    #: mirror match and a scripted-bot match that moves whenever the eval
+    #: cadence changes.  Anchor CS is the one that means something absolute --
+    #: the opponent does not move -- and pooling hides it.
+    cs_at_10_by_category: Dict[str, Tuple[float, float, int]] = field(default_factory=dict)
+    #: The OPPONENT's CS@10, per opponent, measured in the same games.  This is
+    #: what replaces the stale hardcoded curriculum references (16.7 / 29.5 /
+    #: 35.2, all measured on a bot with no rune page); empty until something
+    #: calls :meth:`Evaluator.record_opponent_cs`.
+    opponent_cs_at_10: Dict[str, Tuple[float, float, int]] = field(default_factory=dict)
 
     def to_json(self) -> str:
         return json.dumps({"kind": "eval", **asdict(self)}, separators=(",", ":"), default=str)
@@ -457,10 +477,26 @@ class EvalReport:
             f"{k}={'n/a' if v[0] is None else format(v[0], '.2f')}({v[1]})"
             for k, v in sorted(self.win_rate_vs_anchor.items())
         )
-        return (
-            f"step={self.step} elo={self.elo.get(self.latest, float('nan')):.0f} "
-            f"cs@10={cs} min_wr_past={mw} {anchors}"
-            + ("  ROT WARNING" if self.rot_warning else "")
+        # Show the split whenever there is one: a single pooled CS number is
+        # the thing that read 0.0 for a whole run while self-play averaged 36.
+        split = " ".join(
+            f"cs@10[{k}]={v[0]:.1f}+-{v[1]:.1f}(n={v[2]})"
+            for k, v in sorted(self.cs_at_10_by_category.items())
+        )
+        opp = " ".join(
+            f"cs@10[{k} itself]={v[0]:.1f}(n={v[2]})"
+            for k, v in sorted(self.opponent_cs_at_10.items())
+        )
+        return " ".join(
+            p
+            for p in (
+                f"step={self.step} elo={self.elo.get(self.latest, float('nan')):.0f} "
+                f"cs@10={cs} min_wr_past={mw} {anchors}",
+                split,
+                opp,
+                "ROT WARNING" if self.rot_warning else "",
+            )
+            if p
         )
 
 
@@ -477,6 +513,17 @@ class Evaluator:
     ):
         self.table = PairTable()
         self.cs = CsTracker(cs_window)
+        #: The same CS readings, split by ``opponent_category``.  Kept BESIDE
+        #: ``self.cs`` rather than replacing it: ``TrainingLoop._periodic``
+        #: reads ``evaluator.cs.stats(...)`` to pick which era to report on,
+        #: and a metrics file written before categories existed replays into
+        #: the pooled tracker only.
+        self.cs_by_category: Dict[str, CsTracker] = defaultdict(
+            lambda: CsTracker(cs_window)
+        )
+        #: The OPPONENT's CS@10 in the same games, keyed by opponent id.
+        self.opponent_cs = CsTracker(cs_window)
+        self._cs_window = int(cs_window)
         self.anchors = list(anchors) if anchors is not None else default_anchors()
         self.anchor_ids = [a.id for a in self.anchors]
         self.min_games_for_min_winrate = int(min_games_for_min_winrate)
@@ -490,8 +537,30 @@ class Evaluator:
         self.table.add(rec)
         self.records.append(rec)
 
-    def record_cs(self, agent: str, cs: float) -> None:
+    def record_cs(self, agent: str, cs: float, category: Optional[str] = None) -> None:
+        """Record one CS@10 reading, optionally saying WHICH opponent it came from.
+
+        ``category`` is ``EpisodeResult.opponent_category`` -- "self", "anchor",
+        "league".  It is optional because the pooled number has to keep working
+        for callers and metrics files that predate the split, but passing it is
+        the difference between a headline CS that means something and one that
+        does not: pooling a mirror match with a scripted-bot match produces a
+        mean whose value depends on the eval cadence.
+        """
         self.cs.add(agent, cs)
+        if category:
+            self.cs_by_category[str(category)].add(agent, cs)
+
+    def record_opponent_cs(self, opponent_id: str, cs: float) -> None:
+        """Record the OPPONENT's CS@10 from the same game.
+
+        The absolute yardstick.  It used to be three constants on
+        :class:`AnchorSpec` measured against a bot with no rune or mastery page
+        (57.88 AD against the 78.14 the agent really faces), which is how the
+        "diamond" reference of 35.2 ended up below what the BRONZE bot farms.
+        Measured in the same episode it cannot go stale.
+        """
+        self.opponent_cs.add(opponent_id, cs)
 
     def load_jsonl(self, path: Path) -> int:
         """Replay a metrics log.  Returns how many matches were ingested.
@@ -520,8 +589,19 @@ class Evaluator:
                         )
                     )
                     n += 1
-                elif obj.get("kind") == "episode" and obj.get("cs_at_10") is not None:
-                    self.record_cs(obj["agent"], float(obj["cs_at_10"]))
+                elif obj.get("kind") == "episode":
+                    if obj.get("cs_at_10") is not None:
+                        self.record_cs(
+                            obj["agent"],
+                            float(obj["cs_at_10"]),
+                            category=obj.get("opponent_category"),
+                        )
+                    # Present only once run.py writes it; see
+                    # EpisodeResult.opponent_cs_at_10.
+                    if obj.get("opponent_cs_at_10") is not None and obj.get("opponent"):
+                        self.record_opponent_cs(
+                            obj["opponent"], float(obj["opponent_cs_at_10"])
+                        )
         return n
 
     # -- the four numbers --------------------------------------------------
@@ -589,10 +669,38 @@ class Evaluator:
                 f"min win rate vs past is undefined: all {skipped} past checkpoints have "
                 f"fewer than {self.min_games_for_min_winrate} games"
             )
+
+        by_category = {
+            cat: st
+            for cat, tracker in sorted(self.cs_by_category.items())
+            if (st := tracker.stats(latest)) is not None
+        }
+        pooled = self.cs.stats(latest)
+        if len(by_category) > 1:
+            # Say it in the report, not just in a docstring: a reader who sees
+            # one CS number has no way to know it is a blend.
+            notes.append(
+                "cs_at_10 pools "
+                + ", ".join(f"{c} (n={v[2]}, mean {v[0]:.1f})" for c, v in by_category.items())
+                + "; these are different opponents, so the pooled mean moves with the "
+                "eval cadence. Read cs_at_10_by_category."
+            )
+        elif pooled is not None and not by_category:
+            notes.append(
+                "cs_at_10 has no opponent_category breakdown: whoever recorded it did "
+                "not pass one, so a self-play reading and an anchor reading are "
+                "indistinguishable in this report (see Evaluator.record_cs)"
+            )
+        opp_cs = {
+            aid: st
+            for aid in self.opponent_cs.agents()
+            if (st := self.opponent_cs.stats(aid)) is not None
+        }
+
         return EvalReport(
             step=step,
             latest=latest,
-            cs_at_10=self.cs.stats(latest),
+            cs_at_10=pooled,
             win_rate_vs_anchor=anchor_wr,
             elo=elo,
             min_win_rate_vs_past=worst,
@@ -600,4 +708,6 @@ class Evaluator:
             past_skipped_low_n=skipped,
             rot_warning=rot,
             notes=notes,
+            cs_at_10_by_category=by_category,
+            opponent_cs_at_10=opp_cs,
         )

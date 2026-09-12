@@ -36,7 +36,8 @@ from lanerl_rl.obs import AgentObservation, ObservationBuilder
 from lanerl_rl.ppo import MASK_KEYS, OBS_KEYS, RecurrentRolloutBuffer
 from lanerl_rl.reward import LaneRewardConfig, ZeroSumLaneReward
 
-from .protocols import BLUE, RED, RawObs, Side
+from .anchor_eval import score_for_deaths, score_for_reason
+from .protocols import BLUE, RED, SIDES, RawObs, Side
 from .run import EpisodeResult, Rollout
 from .vec import VecDriver
 
@@ -50,6 +51,7 @@ __all__ = [
     "LanePolicyActor",
     "LaneAdapters",
     "make_lane_adapters",
+    "button_marginals",
     "collect_rollout",
     "make_collect_fn",
 ]
@@ -113,6 +115,14 @@ class InstanceRewardContext:
         #: fields are already cleared -- and that row has not been written yet.
         self.terminal_values: Dict[int, float] = {}
         self.terminal_valid = False
+        #: The ``info`` of that same terminal transition, kept for the same
+        #: reason and by the same mechanism as :attr:`terminal_values`.  It is
+        #: what carries the terminal frame's per-term breakdown and its
+        #: ``died`` flags; without it the single most expensive transition of
+        #: the episode -- the death, under ``end_on_death`` -- is missing from
+        #: the term sums and from the death count, which is precisely the
+        #: transition anyone reading those numbers is looking for.
+        self.terminal_info: Dict[str, object] = {}
 
     def mark_reset(self) -> None:
         # Guarded because ONE context is shared by both side-adapters of an
@@ -123,6 +133,7 @@ class InstanceRewardContext:
         # seen since the last reset", so the second call is a no-op.
         if self._last_raw_id is not None:
             self.terminal_values = dict(self.last_values)
+            self.terminal_info = dict(self.last_info)
             self.terminal_valid = self.valid
         self.reward.reset()
         self._last_raw_id = None
@@ -496,6 +507,163 @@ def make_lane_adapters(
 # --------------------------------------------------------------------------
 
 
+def button_marginals(actions: torch.Tensor) -> Dict[str, float]:
+    """Fraction of this rollout's decisions spent on each button.
+
+    The single curve that shows a BC prior eroding, and it did not exist.
+    Measured on the first BC-initialised run, entropy rose 1.64 -> 3.96 over
+    140 updates while CS went nowhere: the only way to see what the policy was
+    spending those decisions ON is the marginal, and the only place it could be
+    read from afterwards was the checkpoints.  A real 90 s demo game is
+    ``{'noop': 836, 'move': 11}`` (``AnchorEvalConfig.deterministic``), so
+    ``noop`` drifting off ~0.99 is the prior dissolving, and ``recall`` or
+    ``r`` climbing off ~0 is it dissolving into something specific.
+
+    Only the BUTTON head.  The other three heads (``move_x``, ``move_z``,
+    ``target``) are read by ``decode_action`` *conditionally* on the button --
+    a target index is meaningless on a ``noop`` -- so their unconditional
+    marginals would average a real distribution together with whatever the
+    masked-out heads happened to sample, and mean nothing.
+    """
+    flat = actions.reshape(-1)
+    n = int(flat.numel())
+    if n == 0:
+        return {}
+    counts = torch.bincount(flat.to(torch.long), minlength=C.N_BUTTONS)
+    return {name: float(counts[i]) / n for i, name in enumerate(C.BUTTONS)}
+
+
+def _champion_stats(raw, team: int) -> Tuple[Optional[float], Optional[float]]:
+    """``(ad, mhp)`` of ``team``'s champion in one raw control-channel frame.
+
+    ``(None, None)`` for anything unreadable: a canary must never be able to
+    kill a training run.
+    """
+    if not isinstance(raw, dict):
+        return None, None
+    try:
+        for u in raw.get("u", ()):
+            if u.get("k") != "Champion" or int(u.get("tm", -1)) != int(team):
+                continue
+            ad = u.get("ad")
+            mhp = u.get("mhp")
+            return (None if ad is None else float(ad),
+                    None if mhp is None else float(mhp))
+    except Exception:
+        return None, None
+    return None, None
+
+
+def _fresh_episode_state() -> Dict[str, Any]:
+    """Per-instance accounting for ONE episode, carried across rollouts."""
+    return {
+        "steps": 0,
+        #: side -> undiscounted sum of the shaped, zero-summed reward
+        "ret": {},
+        #: side -> {raw reward term name -> sum over the episode}
+        "terms": {},
+        "kills": {},
+        "deaths": {},
+        #: team -> (ad, mhp) on the FIRST frame of the episode; None until
+        #: that frame has been looked at.  See where it is filled in.
+        "first": None,
+    }
+
+
+def _opponent_of(
+    driver: VecDriver,
+    instance: int,
+    own_sides: Sequence[Side],
+    policy_key: str,
+    opponent_labels: Optional[Mapping[int, str]],
+    reason: str,
+    own_team: Optional[int],
+    deaths: Optional[Mapping[str, int]] = None,
+    own_side: Optional[Side] = None,
+) -> Tuple[str, str, float]:
+    """``(opponent_id, category, score)`` for one finished episode.
+
+    A side this policy does not drive and that is assigned to no policy at all
+    is the in-server scripted bot (``SideAssignment``: omitting the key leaves
+    the bot's own orders standing).  That is a REAL opponent, so the episode
+    gets a real result instead of the 0.5 a mirror is worth by construction --
+    scored by ``anchor_eval.score_for_reason`` rather than by a second copy of
+    the same rule, because two copies of a scoring convention is how the two
+    halves of a ladder end up disagreeing.
+
+    The id is deliberately NOT the anchor's (``scripted_bronze``): anchor
+    evaluation is a measurement with a chosen sample size, and pooling
+    thousands of training games into it would turn ``win_rate_vs_anchor`` into
+    a training statistic that no longer answers the question it exists for.
+    ``train:`` keeps them apart in one glance.
+    """
+    assignment = driver.assignments[instance]
+    bot_sides = [
+        s for s in SIDES if s not in own_sides and assignment.key_for(s) is None
+    ]
+    if not bot_sides:
+        return policy_key, "self", 0.5
+    label = (opponent_labels or {}).get(instance) or "scripted_bot"
+    # Score a PLAYED-OUT game on the death differential, not on the reason it
+    # ended. This is the twin of the bug anchor_eval just fixed: with
+    # --no-end-on-death every training-vs-bot episode ends reason == "time",
+    # and score_for_reason returns exactly 0.5 for that -- so every game
+    # against the bot would read as a draw no matter what happened in it.
+    # The counts are already here; use them.
+    if own_team is None:
+        return label, "scripted", 0.5
+    if deaths is not None and own_side is not None and reason == "time":
+        mine = int(deaths.get(own_side, 0))
+        theirs = sum(int(v) for k, v in deaths.items() if k != own_side)
+        return label, "scripted", score_for_deaths(mine, theirs)
+    return label, "scripted", score_for_reason(reason, own_team)
+
+
+def _accumulate_episode(
+    st: Dict[str, Any], side: Side, team: int, reward: float, info: Mapping[str, Any]
+) -> None:
+    """Fold one transition into one instance's per-episode diagnostics.
+
+    ``_AgentReward.terms`` was computed on every single tick and thrown away.
+    Nobody could answer "which term is the policy actually chasing?", which is
+    why "dying is net-positive" (the respawn refund, see
+    ``lanerl_rl.reward``'s "A respawn is not a heal") went unnoticed for weeks
+    while every visible metric looked ordinary.
+
+    What is summed here are the RAW, per-agent terms -- what
+    ``_AgentReward.raw`` charged this side before ``ZeroSumLaneReward``
+    subtracts ``alpha`` times the opponent's.  They therefore do NOT add up to
+    ``ep_return``; that is the point.  ``ep_return`` says how much signal
+    arrived, the terms say where it came from, and the gap between them is
+    exactly the opponent's contribution -- the thing ``--alpha`` controls.
+    ``shaping`` is carried alongside because it IS added to the reward
+    (``r += gamma * Phi(s') - Phi(s)``) even though it is not one of the
+    weights' terms.
+    """
+    st["ret"][side] = st["ret"].get(side, 0.0) + reward
+    if not info:
+        return
+    terms = st["terms"].setdefault(side, {})
+    for name, value in (info.get("terms") or {}).get(team, {}).items():
+        terms[name] = terms.get(name, 0.0) + float(value)
+    shaping = (info.get("shaping") or {}).get(team)
+    if shaping is not None:
+        terms["shaping"] = terms.get("shaping", 0.0) + float(shaping)
+    # Deaths and kills, from the transitions ZeroSumLaneReward already resolves
+    # once per tick for the kill/death pair. The server prints `deaths=` on its
+    # LANERL_CS rows too, but that is a ten-minute snapshot read off a log tail,
+    # while this is the same event the reward was charged for -- so a death that
+    # shows here and not in the reward terms is a real disagreement worth
+    # seeing, rather than two readouts of two different things.
+    for t, d in (info.get("died") or {}).items():
+        if not d:
+            continue
+        if int(t) == int(team):
+            st["deaths"][side] = st["deaths"].get(side, 0) + 1
+        else:
+            st["kills"][side] = st["kills"].get(side, 0) + 1
+
+
 def collect_rollout(
     driver: VecDriver,
     actor: LanePolicyActor,
@@ -506,6 +674,7 @@ def collect_rollout(
     gae_lambda: float,
     actor_id: int = 0,
     param_version: int = 0,
+    opponent_labels: Optional[Mapping[int, str]] = None,
 ) -> Rollout:
     """Drive ``driver`` for ``num_steps`` decisions and return one ``Rollout``.
 
@@ -535,6 +704,11 @@ def collect_rollout(
     bootstrap straight through the terminal transition and then cut a
     perfectly ordinary one instead (``compute_gae``: ``dones[t]`` gates
     ``values[t+1]``). Hence ``prev_dones``.
+
+    ``opponent_labels`` names the in-server scripted bot per instance, for the
+    runs where red is a bot rather than this same policy (``--opponent
+    scripted:...``).  Absent, an instance whose other side is bot-driven is
+    still reported as a scripted match, under a generic id.
     """
     slots = list(driver.slots[policy_key])
     n = len(slots)
@@ -556,11 +730,22 @@ def collect_rollout(
         ep_state = {}
         setattr(driver, "_lanerl_ep_state", ep_state)
     instances = sorted({i for i, _ in slots})
+    #: Which sides THIS policy drives in each instance.  Everything that used
+    #: to assume "both teams are the agent" is derived from this instead, which
+    #: is the only thing that makes the readouts correct in BOTH configurations:
+    #: a self-play instance has both sides here, an instance whose red is the
+    #: in-server bot has only blue.
+    sides_of_instance: Dict[int, List[Side]] = {}
+    for _i, _side in slots:
+        sides_of_instance.setdefault(_i, []).append(_side)
+    teams_of_instance: Dict[int, set] = {
+        i: {TEAM_OF_SIDE[s] for s in ss} for i, ss in sides_of_instance.items()
+    }
 
     def _state_for(i: int) -> Dict[str, Any]:
         st = ep_state.get(i)
         if st is None:
-            st = {"steps": 0, "ret": {}}
+            st = _fresh_episode_state()
             ep_state[i] = st
         return st
 
@@ -577,7 +762,27 @@ def collect_rollout(
         # describe the *next* iteration's resets, not this one's.
         resets_before = list(driver._pending_resets)
         for _i in instances:
-            _state_for(_i)["steps"] += 1
+            _st = _state_for(_i)
+            _st["steps"] += 1
+            if _st["first"] is None:
+                # ``env.last_obs[i]`` at the TOP of an iteration is the frame
+                # the previous iteration produced -- and at an episode boundary
+                # VecDriver.step already overwrote it with the post-reset
+                # observation, so this is exactly the first frame of the
+                # current episode.  The state was popped when that episode
+                # ended, so `first is None` happens once per episode.
+                #
+                # The canary: an in-process reset used to strip the rune page,
+                # taking the champion from mhp 672 to 616 and its AD with it
+                # (LanerlHooks.OnEpisodeReset's own comment records 754 -> 616
+                # with the shop table left uncleared). Every episode after the
+                # first was then a DIFFERENT game to the one being measured,
+                # invisibly. If it ever regresses, this number says so on the
+                # next episode instead of after the next post-mortem.
+                _st["first"] = {
+                    t: _champion_stats(driver.env.last_obs[_i], t)
+                    for t in teams_of_instance.get(_i, ())
+                }
         result, dones = driver.step()
         obs_now = actor.last_batch
         log_probs_now = actor.last_log_probs
@@ -603,9 +808,10 @@ def collect_rollout(
                 elif ctx.valid:
                     rewards[row] = float(ctx.last_values.get(team, 0.0))
                     # accumulate the undiscounted episode return, so a run can
-                    # be asked "is the agent getting any reward at all?"
-                    _state_for(i)["ret"][side] = (
-                        _state_for(i)["ret"].get(side, 0.0) + float(rewards[row])
+                    # be asked "is the agent getting any reward at all?", and
+                    # the per-term breakdown that says WHERE it came from.
+                    _accumulate_episode(
+                        _state_for(i), side, team, float(rewards[row]), ctx.last_info
                     )
             buffer.add(
                 obs=pending["obs"],
@@ -626,47 +832,75 @@ def collect_rollout(
         # reported the sum of the two (17994 = 2 x 8997, in that run).
         for i, reason in dones.items():
             ctx = reward_contexts[i]
-            st = ep_state.pop(i, None)
-            ret = dict(st["ret"]) if st else {}
-            own_sides = [s for j, s in slots if j == i]
+            st = ep_state.pop(i, None) or _fresh_episode_state()
+            own_sides = sides_of_instance.get(i, [])
             # The terminal transition's reward is already known -- VecDriver
             # stepped the reward model on the terminal frame before resetting --
-            # and it is added here so ep_return covers the whole episode even
-            # though its buffer row is written on the next iteration.
+            # and it is added here so ep_return (and every per-term sum beside
+            # it) covers the whole episode even though its buffer row is
+            # written on the next iteration.
             if ctx.terminal_valid:
                 for side in own_sides:
-                    ret[side] = ret.get(side, 0.0) + float(
-                        ctx.terminal_values.get(TEAM_OF_SIDE[side], 0.0)
+                    team = TEAM_OF_SIDE[side]
+                    _accumulate_episode(
+                        st, side, team,
+                        float(ctx.terminal_values.get(team, 0.0)),
+                        ctx.terminal_info,
                     )
+            ret = st["ret"]
             _, cs_by_team = _episode_readout(result.terminal_obs.get(i))
+            # WHOSE CS. This used to be the mean over every team in the frame,
+            # which is correct for self-play and WRONG the moment red is a
+            # scripted bot: it averaged the agent's CS with its opponent's, so
+            # a strong bot read as a strong agent and the headline metric could
+            # not fall below roughly half the bot's farm however badly the
+            # policy played. Derived from the assignment now, so both
+            # configurations are right.
+            #
+            # Within the agent's own teams it is still a MEAN, not a max. In
+            # self-play both champions are driven by the SAME policy, so max()
+            # reports the better of two draws from one distribution -- an
+            # upward-biased estimator, by about 0.56 sigma for a normal pair
+            # (~+3.6 CS at the observed sigma of 6.4). It also shrinks as the
+            # spread changes, so it distorts trends as well as levels: a run
+            # whose variance grew would look like it was improving. Averaging
+            # is unbiased and uses both samples.
+            agent_teams = teams_of_instance.get(i, set())
+            mine = [v for t, v in cs_by_team.items() if t in agent_teams]
+            theirs = [v for t, v in cs_by_team.items() if t not in agent_teams]
             # CS@10 only means something for an episode that REACHED 10
             # minutes; a death-ended game has not had the chance to farm one.
-            cs10 = None
-            if reason == "time" and cs_by_team:
-                # MEAN of the two sides, not max. In self-play both champions
-                # are driven by the SAME policy, so max() reports the better of
-                # two draws from one distribution -- an upward-biased estimator
-                # of that policy's CS, by about 0.56 sigma for a normal pair
-                # (~+3.6 CS at the observed sigma of 6.4). It also shrinks as
-                # the spread changes, so it distorts trends as well as levels:
-                # a run whose variance grew would look like it was improving.
-                # Averaging is unbiased and uses both samples.
-                cs10 = float(sum(cs_by_team.values()) / len(cs_by_team))
+            cs10 = float(sum(mine) / len(mine)) if (reason == "time" and mine) else None
+            opp_cs10 = (
+                float(sum(theirs) / len(theirs)) if (reason == "time" and theirs) else None
+            )
             # One side's return, not the sum: with both sides driven by the
             # same policy and a zero-sum reward, blue + red is ~0 by
             # construction, which is a number that can never say anything.
             own = own_sides[0] if own_sides else None
+            own_team = TEAM_OF_SIDE[own] if own is not None else None
+            opponent_id, category, score = _opponent_of(
+                driver, i, own_sides, policy_key, opponent_labels, reason, own_team,
+                deaths=st.get("deaths"), own_side=own,
+            )
+            ad, mhp = (st["first"] or {}).get(own_team, (None, None))
             episodes.append(
                 EpisodeResult(
                     agent=policy_key,
-                    opponent_id=policy_key,
-                    opponent_category="self",
-                    score=0.5,
+                    opponent_id=opponent_id,
+                    opponent_category=category,
+                    score=score,
                     cs_at_10=cs10,
-                    length_steps=int(st["steps"]) if st else 0,
+                    length_steps=int(st["steps"]),
                     ep_return=float(ret.get(own, 0.0)) if own is not None else None,
                     reason=reason,
                     instance=i,
+                    opponent_cs_at_10=opp_cs10,
+                    reward_terms=dict(st["terms"].get(own, {})) if own is not None else None,
+                    kills=int(st["kills"].get(own, 0)) if own is not None else 0,
+                    deaths=int(st["deaths"].get(own, 0)) if own is not None else 0,
+                    first_frame_ad=ad,
+                    first_frame_mhp=mhp,
                 )
             )
         prev_dones = dict(dones)
@@ -707,6 +941,7 @@ def collect_rollout(
         # throughput is reported 2 x envs_per_actor too low, which is how the
         # first run's 3.85M logged "env steps" were really 30.8M decisions.
         parallel_envs=n,
+        action_marginals=button_marginals(buffer.actions["button"][: buffer.step]),
     )
 
 
@@ -731,13 +966,25 @@ def make_collect_fn(
     give each one a disjoint port block without this function needing to
     know ``num_actors`` itself. Safe across threads because each actor
     thread only ever touches its own ``actor_id``'s entry.
+
+    It may return a FOURTH element, ``{instance index: opponent label}``, for
+    a run whose opponent is the in-server scripted bot: which difficulty an
+    instance was launched against is decided where the launch spec is built
+    and is not recoverable from the driver, and an episode recorded against an
+    unnamed opponent cannot be compared with anything later. Optional so the
+    self-play callers -- and every existing test -- keep working unchanged.
     """
     state: Dict[int, Dict[str, Any]] = {}
 
     def collect(actor_id: int, payload: Mapping[str, Any], version: int) -> Rollout:
         if actor_id not in state:
-            driver, actor, reward_contexts = build_driver_for_actor(actor_id)
-            state[actor_id] = {"driver": driver, "actor": actor, "reward_contexts": reward_contexts}
+            built = tuple(build_driver_for_actor(actor_id))
+            state[actor_id] = {
+                "driver": built[0],
+                "actor": built[1],
+                "reward_contexts": built[2],
+                "opponent_labels": built[3] if len(built) > 3 else None,
+            }
         s = state[actor_id]
         if payload:
             s["actor"].policy.load_state_dict(payload["policy"])
@@ -752,6 +999,7 @@ def make_collect_fn(
             gae_lambda,
             actor_id=actor_id,
             param_version=version,
+            opponent_labels=s["opponent_labels"],
         )
 
     return collect

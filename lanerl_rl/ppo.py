@@ -39,7 +39,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterator, List, Optional, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -111,14 +110,63 @@ class PPOConfig:
     #: 0.098 -> 0.138 over the run, i.e. the policy pushed and the leash held.
     #: Tethered permanently to a heuristic bot that caps out at 49 CS, the
     #: agent cannot do better than the thing it was cloned from.
+    #:
+    #: UNITS: whatever ``DualClipPPO``'s ``train_step_source`` counts, which is
+    #: NOT training steps.  ``lanerl_train.__main__`` hands it
+    #: ``TrainingLoop.train_steps``, whose clock is chosen by ``--anneal-clock``
+    #: and defaults to ``env_steps`` -- environment ROWS (rollout_steps x envs
+    #: per update, e.g. 2,040 per update on rl-bc4-0912).  So 100,000 here is
+    #: about 49 updates at that shape, not 100,000 updates.  ``--anneal-clock
+    #: updates`` is what makes the number mean updates.  (The docstring said
+    #: "training steps" for as long as the field existed, a factor of ~2,000.)
     kl_ref_anneal_steps: int = 0
     max_grad_norm: float = 1.0
+    #: Stop after an epoch whose mean approx_kl exceeds EPOCH 0's by this much.
+    #: Not the absolute KL: an off-policy rollout already carries staleness
+    #: drift before a single gradient has been taken, and stopping on the
+    #: absolute value stops on that.  See :meth:`DualClipPPO.update`.
     target_kl: float = 0.02
+    #: Learning rate for the ACTOR (and the default for anything not in a
+    #: named group).  Fine-tuning a behaviour-cloned actor wants this small.
     lr: float = 3e-4
+    #: Learning rate for the CRITIC, which is a DIFFERENT problem: the BC
+    #: checkpoint carries no value function (``lanerl_train.bc`` discards the
+    #: value output and saves a randomly-initialised critic -- 2.6M of the
+    #: model's 4.6M parameters), so the critic trains from scratch while the
+    #: actor fine-tunes.  One shared Adam at the actor's rate starves it:
+    #: measured on rl-bc4-0912 at lr 1e-5, ``loss/value_loss`` went 0.047 ->
+    #: 0.55 (max 34.3) over 2,690 updates, i.e. the advantages PPO was
+    #: learning from came from a value function that never caught up.
+    #: None means "use ``lr``".
+    critic_lr: Optional[float] = 3e-4
+    #: Train ONLY the critic for this many updates before unfreezing the
+    #: actor, so the first policy gradients are taken against a value function
+    #: that has seen the state distribution at least once.
+    critic_warmup_updates: int = 0
     epochs: int = 4
     chunk_len: int = 16
     burn_in: int = 8
-    minibatch_chunks: int = 8
+    #: Chunks per minibatch.  Mostly a THROUGHPUT knob: the model is small
+    #: enough that a learner step is bound by kernel-launch latency, not by
+    #: arithmetic, so quartering the number of minibatches is close to
+    #: quartering the update time.  Measured on a 5080 over a 255x8 rollout,
+    #: 4 epochs, with a KL reference, before the rest of this file's speed
+    #: work: 8 chunks 0.630 s, 16 -> 0.350 s, 32 -> 0.244 s, 64 -> 0.182 s.
+    #:
+    #: It is NOT free, though: it also divides the number of Adam steps taken
+    #: per rollout (at 255x8 and 4 epochs, 60 steps at 8 chunks against 20 at
+    #: 32), so a run that was learning at the edge of its learning rate may
+    #: need a larger one to keep the same progress per rollout.  The KL
+    #: early-stop fix pushes the other way -- rl-bc4-0912 ran a mean of 2.91
+    #: epochs of its 4 because staleness tripped the stop, and it no longer
+    #: does.
+    minibatch_chunks: int = 32
+    #: Normalise advantages over the WHOLE ROLLOUT once, in
+    #: :meth:`DualClipPPO.update`, not per minibatch.  Per-minibatch
+    #: normalisation over 128 samples estimates the mean and the standard
+    #: deviation from the minibatch itself, which both adds noise and
+    #: re-centres every minibatch on its own mean -- a chunk that happens to
+    #: contain only good steps has its best step pushed DOWN.
     normalize_advantage: bool = True
     clip_value_loss: bool = True
     value_clip_eps: float = 0.2
@@ -138,13 +186,21 @@ class PPOConfig:
         """``1 / ((1 - gamma) * decision_hz)`` -- the horizon actually in force."""
         return C.horizon_for_gamma(self.gamma, self.decision_hz)
 
+    def critic_learning_rate(self) -> float:
+        return self.lr if self.critic_lr is None else self.critic_lr
+
 
 # --------------------------------------------------------------------------
 # GAE
 # --------------------------------------------------------------------------
 
     def kl_ref_at(self, train_step: int) -> float:
-        """``kl_ref_coef`` decayed toward 0, linearly, over ``kl_ref_anneal_steps``."""
+        """``kl_ref_coef`` decayed toward 0, linearly, over ``kl_ref_anneal_steps``.
+
+        ``train_step`` is read from ``DualClipPPO``'s ``train_step_source``, so
+        both are in units of the ``--anneal-clock`` -- environment ROWS by
+        default, not updates.  See ``kl_ref_anneal_steps``.
+        """
         if self.kl_ref_anneal_steps <= 0:
             return self.kl_ref_coef
         t = min(max(float(train_step) / float(self.kl_ref_anneal_steps), 0.0), 1.0)
@@ -228,6 +284,10 @@ class RecurrentRolloutBuffer:
         self.h_critic = f(T, B, c.critic_state_dim)
         self.advantages = f(T, B)
         self.returns = f(T, B)
+        #: Frozen-reference logits for the whole rollout, filled once per
+        #: update by :meth:`DualClipPPO.update` and sliced by :meth:`gather`
+        #: exactly like an observation.  Empty when there is no KL anchor.
+        self.ref_logits: Dict[str, torch.Tensor] = {}
         self.step = 0
 
     def reset(self) -> None:
@@ -280,6 +340,39 @@ class RecurrentRolloutBuffer:
         self.advantages[: self.step] = adv
         self.returns[: self.step] = ret
 
+    def normalize_advantages(self, eps: float = 1e-8) -> None:
+        """Whiten the advantages over the WHOLE rollout, in place.
+
+        PPO normalises advantages to keep the policy-gradient scale
+        independent of the reward scale.  Doing it per minibatch -- 8 chunks x
+        16 steps = 128 samples -- estimates both moments from 128 correlated
+        samples of one rollout, and re-centres each minibatch on its own mean,
+        so a minibatch whose steps were all good has its best step pushed
+        negative.  The rollout is 2,040 samples at the shape rl-bc4-0912 ran,
+        which is a far better estimator of the same two numbers.
+        """
+        a = self.advantages[: self.step]
+        if a.numel() > 1:
+            self.advantages[: self.step] = (a - a.mean()) / (a.std(unbiased=False) + eps)
+
+    def explained_variance(self) -> torch.Tensor:
+        """``1 - Var(returns - values) / Var(returns)`` over the rollout.
+
+        The single number that says whether the critic is doing anything: 1 is
+        a perfect value function, 0 is "no better than predicting the mean",
+        and negative is worse than that.  Nobody logged it, which is how
+        rl-bc4-0912 ran 2,690 updates with a critic that was never trained at
+        a usable learning rate (``loss/value_loss`` 0.047 -> 0.55) without
+        anyone seeing it.  Computed against the values the BEHAVIOUR policy
+        produced during the rollout, which is the standard definition.
+        """
+        v = self.values[: self.step]
+        r = self.returns[: self.step]
+        var_r = r.var(unbiased=False)
+        return torch.where(
+            var_r > 0, 1.0 - (r - v).var(unbiased=False) / var_r, torch.full_like(var_r, float("nan"))
+        )
+
     # -- minibatching ------------------------------------------------------
 
     def chunk_starts(self, chunk_len: int, burn_in: int) -> Dict[int, List[Tuple[int, int]]]:
@@ -310,6 +403,7 @@ class RecurrentRolloutBuffer:
             "advantages": self.advantages[tidx, eidx],
             "returns": self.returns[tidx, eidx],
             "resets": self.resets[tidx, eidx],
+            "ref_logits": {k: v[tidx, eidx] for k, v in self.ref_logits.items()},
             "burn_in": bi,
             "chunk_len": chunk_len,
         }
@@ -356,7 +450,69 @@ class DualClipPPO:
                 prm.requires_grad_(False)
         self.policy = policy
         self.cfg = cfg or PPOConfig()
-        self.optimizer = optimizer or torch.optim.Adam(policy.parameters(), lr=self.cfg.lr, eps=1e-5)
+        #: Completed calls to :meth:`update`.  Drives ``critic_warmup_updates``
+        #: and survives a resume through :meth:`state_payload`.
+        self._updates_done = 0
+        self.optimizer = optimizer or self._build_optimizer()
+
+    # -- optimiser ---------------------------------------------------------
+
+    def _split_parameters(self) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
+        """``(actor_params, critic_params)``, in ``policy.parameters()`` order.
+
+        The order is load-bearing: it is what lets a one-group Adam state from
+        an older checkpoint be split across the two groups in
+        :meth:`_load_optimizer_state`.  ``LanePolicy`` registers ``self.critic``
+        last, so actor-then-critic IS the flat order -- asserted rather than
+        assumed, because a reordering of ``__init__`` would silently hand
+        every parameter the wrong Adam moments on the next resume.
+        """
+        critic_names = self.policy.critic_parameter_names()
+        actor, critic = [], []
+        for n, p in self.policy.named_parameters():
+            (critic if n in critic_names else actor).append(p)
+        flat = list(self.policy.parameters())
+        if [id(p) for p in actor + critic] != [id(p) for p in flat]:
+            raise AssertionError(
+                "LanePolicy no longer yields every actor parameter before every "
+                "critic parameter; two-group optimiser state would be mis-assigned"
+            )
+        return actor, critic
+
+    def _build_optimizer(self) -> torch.optim.Optimizer:
+        """One Adam, two param groups: the actor and the critic learn at
+        DIFFERENT rates.
+
+        They are different problems.  ``--init-from`` fine-tunes a
+        behaviour-cloned actor, which wants a small step; the critic inside
+        that same checkpoint is random initialisation (``lanerl_train.bc``
+        never trains it) and has to learn a value function from scratch, which
+        does not.  One Adam at the actor's rate is the slower of the two.
+        """
+        actor, critic = self._split_parameters()
+        return torch.optim.Adam(
+            [
+                {"params": actor, "lr": self.cfg.lr, "name": "actor"},
+                {"params": critic, "lr": self.cfg.critic_learning_rate(), "name": "critic"},
+            ],
+            lr=self.cfg.lr,
+            eps=1e-5,
+        )
+
+    def _apply_configured_lrs(self) -> None:
+        """The CONFIG is the authority on learning rate, not the checkpoint.
+
+        ``Adam.load_state_dict`` copies the saved ``param_groups`` hyper-
+        parameters over the live ones, so without this a resume would silently
+        restore the learning rates the run was launched with the first time and
+        ignore the ones it was relaunched with -- including the whole point of
+        ``critic_lr``.
+        """
+        for g in self.optimizer.param_groups:
+            if g.get("name") == "critic":
+                g["lr"] = self.cfg.critic_learning_rate()
+            elif g.get("name") == "actor":
+                g["lr"] = self.cfg.lr
 
     # -- lanerl_train.protocols.Learner -------------------------------------
     #
@@ -379,18 +535,48 @@ class DualClipPPO:
         payload = dict(self.policy_payload())
         payload["optimizer"] = self.optimizer.state_dict()
         payload["cfg"] = asdict(self.cfg)
+        payload["updates_done"] = int(self._updates_done)
         return payload
 
     def load_payload(self, payload: Dict[str, object]) -> None:
         self.policy.load_state_dict(payload["policy"])
         if "optimizer" in payload:
-            self.optimizer.load_state_dict(payload["optimizer"])
+            self._load_optimizer_state(payload["optimizer"])
+        self._updates_done = int(payload.get("updates_done", 0))
+
+    def _load_optimizer_state(self, saved: Dict[str, object]) -> None:
+        """Load Adam state, adapting a pre-two-group checkpoint if necessary.
+
+        Every checkpoint written before the actor/critic split has ONE param
+        group.  ``Adam.load_state_dict`` refuses a group-count mismatch
+        outright, which would turn "resume rl-bc4-0912" into a crash; the
+        per-parameter moments are keyed by position in the flat parameter
+        list, and :meth:`_split_parameters` guarantees the two groups
+        concatenate back to exactly that list, so splitting the saved group's
+        index list at the actor/critic boundary recovers them intact.
+        """
+        groups = list(saved.get("param_groups", []))
+        mine = self.optimizer.param_groups
+        if len(groups) == 1 and len(mine) == 2:
+            n_actor = len(mine[0]["params"])
+            idx = list(groups[0]["params"])
+            saved = dict(saved)
+            a, c = dict(groups[0]), dict(groups[0])
+            a["params"], c["params"] = idx[:n_actor], idx[n_actor:]
+            a["name"], c["name"] = "actor", "critic"
+            saved["param_groups"] = [a, c]
+        self.optimizer.load_state_dict(saved)
+        self._apply_configured_lrs()
 
     # -- losses ------------------------------------------------------------
 
     def policy_loss(
         self, log_prob: torch.Tensor, old_log_prob: torch.Tensor, adv: torch.Tensor
-    ) -> Tuple[torch.Tensor, Dict[str, float]]:
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """``(loss, diagnostics)``.  The diagnostics are 0-dim tensors ON THE
+        DEVICE, not floats: a ``.item()`` is a synchronisation, and there were
+        eight of them per minibatch (times up to 60 minibatches per update) in
+        service of numbers nothing reads until the end of the update."""
         cfg = self.cfg
         ratio = torch.exp(log_prob - old_log_prob)
         surr1 = ratio * adv
@@ -403,9 +589,9 @@ class DualClipPPO:
 
         with torch.no_grad():
             logr = log_prob - old_log_prob
-            approx_kl = ((torch.exp(logr) - 1.0) - logr).mean().item()
-            clip_frac = ((ratio - 1.0).abs() > cfg.clip_eps).float().mean().item()
-            dual_frac = ((adv < 0.0) & (cfg.dual_clip * adv > inner)).float().mean().item()
+            approx_kl = ((torch.exp(logr) - 1.0) - logr).mean()
+            clip_frac = ((ratio - 1.0).abs() > cfg.clip_eps).float().mean()
+            dual_frac = ((adv < 0.0) & (cfg.dual_clip * adv > inner)).float().mean()
         return loss, {"approx_kl": approx_kl, "clip_frac": clip_frac, "dual_clip_frac": dual_frac}
 
     def value_loss(
@@ -431,19 +617,21 @@ class DualClipPPO:
         state: RecurrentState = batch["state"]
 
         if bi > 0:
-            with torch.no_grad():
-                _, _, state = net.forward(
-                    entities=obs["entities"][:, :bi],
-                    entity_pad_mask=obs["entity_pad_mask"][:, :bi],
-                    self_vec=obs["self_vec"][:, :bi],
-                    global_vec=obs["global_vec"][:, :bi],
-                    priv_entities=obs["priv_entities"][:, :bi],
-                    priv_pad_mask=obs["priv_pad_mask"][:, :bi],
-                    priv_vec=obs["priv_vec"][:, :bi],
-                    state=state,
-                    resets=resets[:, :bi],
-                )
-            state = state.detach()
+            # carry_state, not forward: the burn-in wants the re-warmed core
+            # state and nothing else, and forward would build four action
+            # heads (32-slot attention included) and a value head per burn-in
+            # step only to discard them.
+            state = net.carry_state(
+                entities=obs["entities"][:, :bi],
+                entity_pad_mask=obs["entity_pad_mask"][:, :bi],
+                self_vec=obs["self_vec"][:, :bi],
+                global_vec=obs["global_vec"][:, :bi],
+                priv_entities=obs["priv_entities"][:, :bi],
+                priv_pad_mask=obs["priv_pad_mask"][:, :bi],
+                priv_vec=obs["priv_vec"][:, :bi],
+                state=state,
+                resets=resets[:, :bi],
+            ).detach()
 
         dist, value, _ = net.forward(
             entities=obs["entities"][:, bi:],
@@ -458,9 +646,90 @@ class DualClipPPO:
             action_masks={k: masks[k][:, bi:] for k in MASK_KEYS},
         )
         return dist, value
-    def update_minibatch(self, batch: Dict[str, object]) -> Dict[str, float]:
+
+    def _actor_logits_for_chunk(
+        self, batch: Dict[str, object], net: LanePolicy
+    ) -> Dict[str, torch.Tensor]:
+        """Chunk logits from ``net``'s ACTOR ONLY -- no critic anywhere.
+
+        The KL reference is consumed through ``dist.kl_to(ref.logits)``; its
+        value output was computed and discarded, and the critic is 2.6M of the
+        model's 4.6M parameters.  Only used when :meth:`update_minibatch` is
+        called outside :meth:`update` (which precomputes the whole rollout's
+        reference logits in one pass instead -- see
+        :meth:`_reference_logits_for_rollout`).
+        """
+        bi = int(batch["burn_in"])
+        obs, masks, resets = batch["obs"], batch["masks"], batch["resets"]
+        h = batch["state"].actor
+        if bi > 0:
+            _d, _t, h = net.actor_forward(
+                obs["entities"][:, :bi], obs["entity_pad_mask"][:, :bi],
+                obs["self_vec"][:, :bi], obs["global_vec"][:, :bi], h, resets[:, :bi],
+            )
+        dist, _t, _h = net.actor_forward(
+            obs["entities"][:, bi:], obs["entity_pad_mask"][:, bi:],
+            obs["self_vec"][:, bi:], obs["global_vec"][:, bi:], h, resets[:, bi:],
+            action_masks={k: masks[k][:, bi:] for k in MASK_KEYS},
+        )
+        return dist.logits
+
+    @torch.no_grad()
+    def _reference_logits_for_rollout(
+        self, buffer: RecurrentRolloutBuffer, time_chunk: int = 64
+    ) -> Dict[str, torch.Tensor]:
+        """Every reference logit in the rollout, in one sweep, once per update.
+
+        The reference is FROZEN and the rollout is fixed, so its logits are
+        the same on every epoch and in every minibatch that happens to contain
+        a given step.  Recomputing them per minibatch per epoch was 4x60 full
+        forward passes (critic included) per update for a tensor that fits in
+        half a megabyte.
+
+        It is also more faithful.  Per-chunk, the reference was burned in from
+        ``buffer.h_actor``, which is the state the BEHAVIOUR POLICY was in --
+        another network's hidden vector, injected into the reference every
+        ``chunk_len`` steps and only partly washed out by ``burn_in`` steps of
+        replay.  The KL anchor wants ``KL(pi_ref(.|h_ref) || pi_theta(.|h))``,
+        and ``h_ref`` is whatever the REFERENCE would have carried through this
+        history -- which is what rolling it forward produces.  The first chunk
+        is bit-identical to the old behaviour (it started from
+        ``h_actor[0]`` there too); after that this is the better number.  The
+        reference's memory still restarts from the stored policy state once per
+        ROLLOUT rather than being carried across rollouts, which is the one
+        approximation left.
+        """
+        net = self.reference
+        T = buffer.step
+        state = buffer.h_actor[0].unsqueeze(0).contiguous()
+        out: Dict[str, List[torch.Tensor]] = {k: [] for k in MASK_KEYS}
+        for t0 in range(0, T, time_chunk):
+            t1 = min(t0 + time_chunk, T)
+            sl = lambda x: x[t0:t1].transpose(0, 1)  # noqa: E731  (T,B,..) -> (B,T,..)
+            dist, _tokens, state = net.actor_forward(
+                sl(buffer.obs["entities"]),
+                sl(buffer.obs["entity_pad_mask"]),
+                sl(buffer.obs["self_vec"]),
+                sl(buffer.obs["global_vec"]),
+                state,
+                sl(buffer.resets),
+                action_masks={k: sl(buffer.masks[k]) for k in MASK_KEYS},
+            )
+            for k, v in dist.logits.items():
+                out[k].append(v.transpose(0, 1))
+        return {k: torch.cat(v, dim=0) for k, v in out.items()}
+
+    def update_minibatch(self, batch: Dict[str, object]) -> Dict[str, torch.Tensor]:
+        """One gradient step.  Returns 0-dim tensors ON THE DEVICE.
+
+        :meth:`update` reduces them with a single host synchronisation at the
+        end; a caller wanting python floats should say ``float(...)``.
+        """
         cfg = self.cfg
         bi = int(batch["burn_in"])
+        # Critic-only warm-up: the actor is frozen by omitting its terms from
+        # the loss entirely, so no actor gradient exists to be stepped.
+        actor_frozen = self._updates_done < cfg.critic_warmup_updates
         dist, value = self._forward_chunk(batch)
 
         actions = {k: batch["actions"][k][:, bi:] for k in ACTION_KEYS}
@@ -469,9 +738,6 @@ class DualClipPPO:
         adv = batch["advantages"][:, bi:]
         returns = batch["returns"][:, bi:]
 
-        if cfg.normalize_advantage and adv.numel() > 1:
-            adv = (adv - adv.mean()) / (adv.std(unbiased=False) + 1e-8)
-
         log_prob = dist.log_prob(actions)
         entropy = dist.entropy().mean()
         pi_loss, stats = self.policy_loss(log_prob, old_log_prob, adv)
@@ -479,34 +745,36 @@ class DualClipPPO:
         loss = pi_loss + cfg.value_coef * v_loss - cfg.entropy_coef * entropy
 
         # Anchor to the behaviour-cloning prior, if one was supplied. Computed
-        # against the SAME chunk, so the reference sees exactly the inputs the
+        # against the SAME steps, so the reference sees exactly the inputs the
         # policy just saw; a reference evaluated on different inputs would
         # regularise toward the wrong thing.
         kl_ref = None
         kl_coef = cfg.kl_ref_at(int(self._train_step_source()))
         if self.reference is not None and kl_coef > 0.0:
-            with torch.no_grad():
-                ref_dist, _ = self._forward_chunk(batch, policy=self.reference)
-            kl_ref = dist.kl_to(ref_dist.logits).mean()
+            cached = batch.get("ref_logits") or {}
+            if cached:
+                ref_logits = {k: v[:, bi:] for k, v in cached.items()}
+            else:
+                with torch.no_grad():
+                    ref_logits = self._actor_logits_for_chunk(batch, self.reference)
+            kl_ref = dist.kl_to(ref_logits).mean()
             loss = loss + kl_coef * kl_ref
 
+        total = cfg.value_coef * v_loss if actor_frozen else loss
         self.optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        total.backward()
         grad_norm = nn.utils.clip_grad_norm_(self.policy.parameters(), cfg.max_grad_norm)
         self.optimizer.step()
 
         if kl_ref is not None:
-            stats["kl_ref"] = float(kl_ref)
-        # Log the LIVE coefficient, not the configured one: with an anneal they
-        # differ, and a run whose KL term has decayed to nothing should say so.
-        stats["kl_ref_coef"] = float(kl_coef)
+            stats["kl_ref"] = kl_ref.detach()
         stats.update(
             {
-                "loss": float(loss.detach()),
-                "policy_loss": float(pi_loss.detach()),
-                "value_loss": float(v_loss.detach()),
-                "entropy": float(entropy.detach()),
-                "grad_norm": float(grad_norm),
+                "loss": loss.detach(),
+                "policy_loss": pi_loss.detach(),
+                "value_loss": v_loss.detach(),
+                "entropy": entropy.detach(),
+                "grad_norm": grad_norm.detach(),
             }
         )
         return stats
@@ -514,26 +782,89 @@ class DualClipPPO:
     # -- one full update ---------------------------------------------------
 
     def update(self, buffer: RecurrentRolloutBuffer, generator=None) -> Dict[str, float]:
-        """Run ``cfg.epochs`` passes, stopping early on KL divergence."""
+        """Run ``cfg.epochs`` passes, stopping early on KL divergence.
+
+        The early stop is on the KL this UPDATE has ADDED, not on the absolute
+        approx_kl.  A rollout arrives up to ``max_staleness`` parameter
+        versions old, so the importance ratio is already off 1 before a single
+        gradient is taken, and the absolute test was mostly measuring that:
+        on rl-bc4-0912, ``loss/epochs_run`` was bimodal -- 4 epochs 1,684
+        times and ONE epoch 948 times (35%), almost never 2 or 3 -- because
+        the staleness drift tripped the 0.02 target inside the first epoch and
+        threw three epochs of work away.
+
+        The baseline is EPOCH 0's mean, not the first minibatch's KL.  The
+        first minibatch is the only measurement taken before any gradient
+        step, so it is the cleanest estimate of the drift and is logged as
+        ``approx_kl_staleness`` -- but it is one minibatch out of ~15, and its
+        distance from the epoch mean is composition noise of the same order as
+        ``target_kl`` itself, which is how you get spurious stops back.  An
+        epoch mean over every chunk in the rollout does not have that problem,
+        at the cost of folding epoch 0's own learning into the baseline (which
+        only ever makes the stop harder to trip).  A consequence worth stating:
+        epoch 0 can no longer be cut short, so every rollout now gets at least
+        one full pass -- which is the standard arrangement (CleanRL, SB3 both
+        test at epoch boundaries).
+        """
         cfg = self.cfg
-        agg: Dict[str, List[float]] = {}
+        if cfg.normalize_advantage:
+            buffer.normalize_advantages()
+        if self.reference is not None and cfg.kl_ref_at(int(self._train_step_source())) > 0.0:
+            buffer.ref_logits = self._reference_logits_for_rollout(buffer)
+
+        agg: Dict[str, List[torch.Tensor]] = {}
         n_batches = 0
         stopped = False
+        epoch = -1
+        first_kl: Optional[torch.Tensor] = None
+        baseline: Optional[torch.Tensor] = None
+        excess = None
         for epoch in range(cfg.epochs):
-            epoch_kls = []
+            epoch_kls: List[torch.Tensor] = []
             for batch in buffer.iter_minibatches(
                 cfg.chunk_len, cfg.burn_in, cfg.minibatch_chunks, generator=generator
             ):
                 stats = self.update_minibatch(batch)
                 for k, v in stats.items():
                     agg.setdefault(k, []).append(v)
+                if first_kl is None:
+                    first_kl = stats["approx_kl"]
                 epoch_kls.append(stats["approx_kl"])
                 n_batches += 1
-            if epoch_kls and float(np.mean(epoch_kls)) > cfg.target_kl:
+            if not epoch_kls:
+                continue
+            epoch_mean = torch.stack(epoch_kls).mean()
+            if baseline is None:
+                baseline = epoch_mean
+                continue
+            excess = epoch_mean - baseline
+            if float(excess) > cfg.target_kl:  # one sync per epoch, at most
                 stopped = True
                 break
-        out = {k: float(np.mean(v)) for k, v in agg.items()}
+
+        keys = list(agg)
+        nan = torch.tensor(float("nan"))
+        extra = {
+            "approx_kl_staleness": first_kl if first_kl is not None else nan,
+            "approx_kl_baseline": baseline if baseline is not None else nan,
+            "approx_kl_excess": excess if excess is not None else nan,
+            "explained_variance": buffer.explained_variance(),
+        }
+        # ONE host synchronisation for every scalar the update produced.
+        parts = [torch.stack(agg[k]).mean() for k in keys] + list(extra.values())
+        dev = parts[0].device
+        flat = torch.stack([p.to(device=dev, dtype=torch.float32).reshape(()) for p in parts]).cpu()
+        out = {k: float(v) for k, v in zip(keys + list(extra), flat)}
         out["n_minibatches"] = float(n_batches)
         out["epochs_run"] = float(epoch + 1)
         out["kl_early_stop"] = float(stopped)
+        # Log the LIVE KL coefficient, not the configured one: with an anneal
+        # they differ, and a run whose KL term has decayed to nothing should
+        # say so.
+        out["kl_ref_coef"] = float(cfg.kl_ref_at(int(self._train_step_source())))
+        out["actor_frozen"] = float(self._updates_done < cfg.critic_warmup_updates)
+        out["lr_actor"] = float(cfg.lr)
+        out["lr_critic"] = float(cfg.critic_learning_rate())
+        self._updates_done += 1
+        buffer.ref_logits = {}
         return out

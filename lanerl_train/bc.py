@@ -203,6 +203,11 @@ def main() -> int:
         masks = {k: torch.as_tensor(z[f"mask_{k}"][idx]).unsqueeze(1)
                  for k in ("button", "move_x", "move_z", "target")}
         state = policy.initial_state(len(idx), device="cpu")
+        # The value output is DISCARDED, and has to be: a demonstration set is
+        # (observation, action) pairs with no reward and no returns, so there
+        # is no target to regress a value function against. The consequence --
+        # 2.6M of the checkpoint's 4.6M parameters are random initialisation --
+        # is recorded in the checkpoint itself; see the end of main().
         dist, _value, _state = policy(state=state, action_masks=masks, **kw)
         return dist
 
@@ -269,9 +274,35 @@ def main() -> int:
         print(f"  epoch {epoch}: train_loss={tot/max(1,seen):.4f}  "
               f"val_button={acc:.3f}  val_target={tacc:.3f}  val_move_x={dacc:.3f}")
 
+    # HALF OF THIS CHECKPOINT IS UNTRAINED, and it does not look it.
+    #
+    # The whole state_dict is saved, critic included, because
+    # `lanerl_train.__main__ --init-from` loads it with strict=False and then
+    # REFUSES any missing key -- dropping the critic tensors would turn a BC
+    # checkpoint into a startup error. But nothing in this module ever put a
+    # gradient through the critic, so what gets written for it is exactly what
+    # LanePolicy.__init__ produced: random.
+    #
+    # That is the state PPO then has to fix, at whatever learning rate it was
+    # given for FINE-TUNING the actor. On rl-bc4-0912 that was 1e-5 for both,
+    # and the critic never caught up (loss/value_loss 0.047 -> 0.55, max 34.3
+    # over 2,690 updates). PPOConfig.critic_lr and .critic_warmup_updates
+    # exist for this; the flag below is so nothing downstream has to guess.
+    n_crit = sum(p.numel() for n, p in policy.named_parameters() if n.startswith("critic."))
+    n_all = sum(p.numel() for p in policy.parameters())
     outp = Path(args.out); outp.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"policy": policy.state_dict(), "kind": "bc"}, outp)
+    torch.save(
+        {"policy": policy.state_dict(), "kind": "bc", "critic_trained": False,
+         "untrained_params": int(n_crit)},
+        outp,
+    )
     print(f"wrote {outp}")
+    print(f"NOTE: the critic in this checkpoint is UNTRAINED -- {n_crit:,} of "
+          f"{n_all:,} parameters ({n_crit / n_all:.0%}) are random init. "
+          f"A demonstration set has no returns to regress a value function "
+          f"against, so PPO has to learn it from scratch: give the critic its "
+          f"own learning rate (PPOConfig.critic_lr, default 3e-4) rather than "
+          f"the actor's fine-tuning rate, and watch loss/explained_variance.")
     return 0
 
 

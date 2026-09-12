@@ -288,3 +288,93 @@ def test_a_corrupt_metrics_line_raises_instead_of_half_reading(tmp_path):
     path.write_text('{"kind":"match","agent_a":"a","agent_b":"b","score_a":1.0}\nnot json\n')
     with pytest.raises(ValueError, match="is not JSON"):
         Evaluator(anchors=[]).load_jsonl(path)
+
+
+# -- CS@10: which opponent was it against? ---------------------------------
+#
+# ``TrainingLoop.record_episode`` files every episode's CS under the run's own
+# ``agent@N``, whatever it was played against, so ``runs/rl-bc4-0912`` put 144
+# self-play games (mean 36.4) and 6 anchor games (mean 0.0) in the same bucket.
+# The pooled mean is then a blend of a mirror match and a scripted-bot match
+# whose weights move with the eval cadence -- and the absolute number, the one
+# against an opponent that does not move, is the one that gets hidden.
+
+
+def test_anchor_cs_and_self_play_cs_do_not_pool_into_one_number():
+    ev = Evaluator(anchors=[], elo_anchor=None)
+    for _ in range(10):
+        ev.record_cs("agent@0", 36.0, category="self")
+    for _ in range(2):
+        ev.record_cs("agent@0", 0.0, category="anchor")
+    r = ev.report(0, "agent@0", [])
+    assert r.cs_at_10_by_category["self"][0] == pytest.approx(36.0)
+    assert r.cs_at_10_by_category["self"][2] == 10
+    assert r.cs_at_10_by_category["anchor"][0] == pytest.approx(0.0)
+    assert r.cs_at_10_by_category["anchor"][2] == 2
+    # the pooled number still exists, and is exactly the misleading blend
+    assert r.cs_at_10[0] == pytest.approx(30.0)
+
+
+def test_a_pooled_cs_number_admits_in_the_notes_that_it_is_a_blend():
+    """A reader who sees one CS number has no way to know it is two populations."""
+    ev = Evaluator(anchors=[], elo_anchor=None)
+    ev.record_cs("agent@0", 36.0, category="self")
+    ev.record_cs("agent@0", 0.0, category="anchor")
+    notes = " ".join(ev.report(0, "agent@0", []).notes)
+    assert "cs_at_10 pools" in notes
+    assert "self" in notes and "anchor" in notes
+
+
+def test_a_cs_reading_filed_without_a_category_says_so():
+    """Silence here is what made the conflation invisible for a whole run."""
+    ev = Evaluator(anchors=[], elo_anchor=None)
+    ev.record_cs("agent@0", 36.0)
+    r = ev.report(0, "agent@0", [])
+    assert r.cs_at_10[0] == pytest.approx(36.0)  # back-compatible
+    assert r.cs_at_10_by_category == {}
+    assert any("no opponent_category breakdown" in n for n in r.notes)
+
+
+def test_the_opponents_own_cs_from_the_same_game_reaches_the_report():
+    """Replaces the stale hardcoded 16.7 / 29.5 / 35.2, measured with no rune page."""
+    ev = Evaluator(anchors=default_anchors(), elo_anchor=None)
+    for cs in (46.0, 50.0):
+        ev.record_opponent_cs("scripted_bronze", cs)
+    r = ev.report(0, "agent@0", [])
+    assert r.opponent_cs_at_10["scripted_bronze"][0] == pytest.approx(48.0)
+    assert r.opponent_cs_at_10["scripted_bronze"][2] == 2
+    # and the point of measuring it: the bronze bot really farms ABOVE the
+    # number the curriculum calls diamond
+    stale = {a.id: a.reference_cs_at_10 for a in default_anchors()}
+    assert r.opponent_cs_at_10["scripted_bronze"][0] > stale["scripted_diamond"]
+
+
+def test_the_split_and_the_opponent_cs_are_visible_in_the_one_line_summary():
+    ev = Evaluator(anchors=[], elo_anchor=None)
+    ev.record_cs("agent@0", 36.0, category="self")
+    ev.record_cs("agent@0", 12.0, category="anchor")
+    ev.record_opponent_cs("scripted_bronze", 48.0)
+    s = ev.report(0, "agent@0", []).summary()
+    assert "cs@10[self]=36.0" in s
+    assert "cs@10[anchor]=12.0" in s
+    assert "cs@10[scripted_bronze itself]=48.0" in s
+
+
+def test_a_metrics_log_replays_the_category_and_the_opponents_cs(tmp_path):
+    """An offline replay must reach the same conclusion as the live run."""
+    lines = [
+        json.dumps({"kind": "episode", "agent": "agent@0", "cs_at_10": 36.0,
+                    "opponent": "self", "opponent_category": "self"}),
+        json.dumps({"kind": "episode", "agent": "agent@0", "cs_at_10": 12.0,
+                    "opponent": "scripted_bronze", "opponent_category": "anchor",
+                    "opponent_cs_at_10": 48.0}),
+    ]
+    path = tmp_path / "metrics.jsonl"
+    path.write_text("\n".join(lines) + "\n")
+    ev = Evaluator(anchors=[], elo_anchor=None)
+    ev.load_jsonl(path)
+    r = ev.report(0, "agent@0", [])
+    assert r.cs_at_10_by_category["self"][0] == pytest.approx(36.0)
+    assert r.cs_at_10_by_category["anchor"][0] == pytest.approx(12.0)
+    assert r.opponent_cs_at_10["scripted_bronze"][0] == pytest.approx(48.0)
+    assert json.loads(r.to_json())["cs_at_10_by_category"]["anchor"][2] == 1

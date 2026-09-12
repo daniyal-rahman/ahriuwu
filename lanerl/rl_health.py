@@ -86,10 +86,23 @@ def main() -> int:
                   f"{head:.3f} (at init) -> {tail:.3f}",
                   "the policy is becoming MORE random: lower --entropy-coef")
 
-        akl = _mean([r["loss/approx_kl"] for r in loss])
-        check("approx_kl near target", akl is not None and akl < 0.05,
-              f"mean {akl:.4f} (target_kl 0.02)",
-              "each update moves the policy far too far: lower --lr")
+        # Prefer the EXCESS over the staleness baseline. Raw approx_kl now
+        # includes the drift an off-policy rollout already carries before any
+        # gradient step, so judging the absolute value flags a healthy run.
+        exc = _mean([r.get("loss/approx_kl_excess") for r in loss])
+        if exc is not None:
+            check("approx_kl excess small", exc < 0.05,
+                  f"mean {exc:.4f} over the staleness baseline (target_kl 0.02)",
+                  "each update moves the policy far too far: lower --lr")
+            stale = _mean([r.get("loss/approx_kl_staleness") for r in loss])
+            if stale is not None:
+                print(f"  [info] staleness drift        {stale:.4f} "
+                      f"(present before any gradient step)")
+        else:
+            akl = _mean([r["loss/approx_kl"] for r in loss])
+            check("approx_kl near target", akl is not None and akl < 0.05,
+                  f"mean {akl:.4f} (target_kl 0.02)",
+                  "each update moves the policy far too far: lower --lr")
 
         cf = _mean([r["loss/clip_frac"] for r in loss])
         check("clip_frac sane", cf is not None and cf < 0.35,
@@ -108,9 +121,21 @@ def main() -> int:
             check("epochs actually run", ep_run > 1.5, f"mean {ep_run:.2f}",
                   "the run is throwing away most of each batch's epochs")
 
-        vl = _mean([r["loss/value_loss"] for r in loss[-max(2, len(loss) // 5):]])
-        check("critic alive", vl is not None and vl > 1e-6, f"value_loss {vl:.2e}",
-              "the critic has collapsed to a constant; it is predicting nothing")
+        # EXPLAINED VARIANCE, not value_loss. A critic that predicts a
+        # constant still has non-zero value_loss, so the old check passed on
+        # exactly the failure it was meant to catch: rl-bc4-0912's critic went
+        # 0.047 -> 0.55 while never tracking its target, and nothing said so.
+        ev = _mean([r.get("loss/explained_variance")
+                    for r in loss[-max(2, len(loss) // 5):]])
+        if ev is not None:
+            check("critic explains the returns", ev > 0.1,
+                  f"explained_variance {ev:+.3f}",
+                  "the value function is not tracking the returns; advantages "
+                  "are mostly noise. Raise --critic-lr or --critic-warmup-updates")
+        else:
+            vl = _mean([r["loss/value_loss"] for r in loss[-max(2, len(loss) // 5):]])
+            check("critic alive", vl is not None and vl > 1e-6, f"value_loss {vl:.2e}",
+                  "no explained_variance logged; falling back to a weak check")
 
     if stale:
         rr = _mean([r["reject_rate"] for r in stale])

@@ -280,6 +280,11 @@ def test_the_real_emitter_parses(monkeypatch):
         # page nobody had modelled. A re-derived server quantity is wrong by
         # however much of the server you forgot, so these are emitted instead.
         "ad", "ap", "ar", "mr", "as", "rng",
+        # and the champion's SPELL RANKS. Python used to model these from an
+        # assumed skill order (Q@1,W@2,E@3,R@6) while the server levels
+        # Q,E,E,W,E,R -- so at champion level 2-3 the action mask forbade the
+        # one ability the champion had and offered one it did not own.
+        "sl",
     }, sorted(keys)
 
 

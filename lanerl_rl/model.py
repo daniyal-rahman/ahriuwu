@@ -92,6 +92,10 @@ __all__ = [
     "masked_pool",
     "gru_with_resets",
     "frame_stack_with_resets",
+    "categorical_kl",
+    "head_usage_tables",
+    "USES_MOVE_HEAD",
+    "USES_TARGET_HEAD",
 ]
 
 
@@ -203,23 +207,183 @@ def apply_action_mask(logits: torch.Tensor, mask: Optional[torch.Tensor]) -> tor
     return logits.masked_fill(~mask, _NEG)
 
 
+def _head_usage() -> Tuple[np.ndarray, np.ndarray]:
+    """Which of the auxiliary heads each button actually puts on the wire.
+
+    Read off :func:`lanerl_rl.env.decode_action` + ``env.order_for_command``,
+    which is the only thing that decides it::
+
+        noop         -> {"t":"noop"}                     nothing
+        recall       -> {"t":"recall"}                   nothing
+        move         -> {"t":"move", x, y}               move heads
+        attack_move  -> {"t":"attack", id}               target head
+                        or {"t":"move", x, y} when the slot is invalid
+        q/w/e/r      -> {"t":"cast", slot, id, x, y}     both
+
+    A cast always carries BOTH: ``order_for_command`` sends ``id`` (0 when no
+    slot was selected) and ``x``/``y``, and the server's ``LanerlControl``
+    ``Cast`` branch passes both into ``sp.Cast(champ.Position, pos, target)``.
+    ``attack_move`` is marked as using the move heads because it falls back to
+    a plain move whenever the chosen slot is empty, which is a function of the
+    observation and not of the button alone -- so the conservative answer is
+    "it may reach the wire".
+
+    NOTE: ``constants.TARGETED_BUTTONS`` ({attack_move, e, q}) and
+    ``constants.MOVE_BUTTONS`` ({move, attack_move}) both DISAGREE with this
+    table, and with ``decode_action``.  They are referenced by nothing but
+    prose, so nothing has ever been wrong because of them -- but they must not
+    be used as the mask, because masking a head that does reach the wire is
+    exactly the bias the masked construction is supposed to avoid.  Fixing
+    them is a change to ``constants.py``.
+    """
+    uses_move = np.zeros(C.N_BUTTONS, dtype=bool)
+    uses_target = np.zeros(C.N_BUTTONS, dtype=bool)
+    for i, name in enumerate(C.BUTTONS):
+        if name in ("noop", "recall"):
+            continue
+        uses_move[i] = True
+        uses_target[i] = name != "move"
+    return uses_move, uses_target
+
+
+#: (N_BUTTONS,) bool.  ``USES_MOVE_HEAD[b]`` is True when button ``b`` puts the
+#: move heads on the wire; likewise ``USES_TARGET_HEAD``.  See :func:`_head_usage`.
+USES_MOVE_HEAD, USES_TARGET_HEAD = _head_usage()
+
+_USAGE_CACHE: Dict[Tuple[object, object], Tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def head_usage_tables(device, dtype=torch.float32) -> Tuple[torch.Tensor, torch.Tensor]:
+    """``(uses_move, uses_target)`` as (N_BUTTONS,) tensors, cached per device."""
+    key = (str(device), dtype)
+    hit = _USAGE_CACHE.get(key)
+    if hit is None:
+        hit = (
+            torch.as_tensor(USES_MOVE_HEAD, device=device).to(dtype),
+            torch.as_tensor(USES_TARGET_HEAD, device=device).to(dtype),
+        )
+        _USAGE_CACHE[key] = hit
+    return hit
+
+
+def categorical_kl(p_logits: torch.Tensor, q_logits: torch.Tensor) -> torch.Tensor:
+    """``KL(p || q)`` for one categorical head, computed in log space.
+
+    This used to be ``torch.distributions.kl_divergence``, which is defined for
+    Categorical as::
+
+        t = p.probs * (p.logits - q.logits)
+        t[q.probs == 0] = inf          # <-- here
+        t[p.probs == 0] = 0
+
+    ``q`` is the policy.  As the policy sharpens, a softmax entry underflows to
+    exactly 0 while the reference still has support there, and the whole term
+    becomes ``inf``.  Measured on run rl-bc2-0912: 7 of 56 updates reported an
+    infinite total loss.  The gradients happened to stay finite, so it did not
+    blow the run up -- it just silently removed the KL anchor on 12.5% of
+    updates and poisoned the logged loss.
+
+    In log space there is no such cliff.  ``log_softmax`` is
+    ``logit - logsumexp``, which stays finite even where ``softmax``
+    underflows: a masked logit of -1e9 gives a log-prob of about -1e9, and the
+    reference's probability there is exactly 0, so the product is 0 rather than
+    ``0 * -inf = nan``.  This relies on masked logits being a large finite
+    negative (-1e9), never ``-inf``.
+    """
+    q_logp = torch.log_softmax(q_logits, dim=-1)
+    p_logp = torch.log_softmax(p_logits, dim=-1)
+    return (p_logp.exp() * (p_logp - q_logp)).sum(dim=-1)
+
+
 class LaneActionDist:
-    """Factored action: (button, move_x, move_z, target).
+    """Factored action: (button, move_x, move_z, target), with MASKED heads.
 
     ``move_x`` / ``move_z`` are the LANE-LOCAL (s, n) components; see
-    ``constants.MOVE_AXIS_NAMES``.  They and ``target`` are always sampled --
-    the environment decides which of them a given button actually consumes (see
-    ``constants.MOVE_BUTTONS`` / ``constants.TARGETED_BUTTONS``).  Sampling all
-    four unconditionally keeps the log-probability well defined and the gradient
-    dense; the alternative (conditional heads) makes the PPO ratio depend on the
-    sampled button, which is a well known source of silent bias.
+    ``constants.MOVE_AXIS_NAMES``.  All four heads are always *sampled* -- the
+    rollout has to put something on the wire for each of them -- but only the
+    ones the chosen button actually consumes (:func:`_head_usage`) count
+    toward the log-probability, the entropy and the KL.
+
+    Why masking is not "a well known source of silent bias"
+    -------------------------------------------------------
+    This docstring used to claim the opposite, and used it to justify scoring
+    all four heads unconditionally.  The claim was wrong.
+
+    The mask is a deterministic function of the sampled button, and the button
+    is itself part of the action, so the masked product::
+
+        pi(a|s) = pi(button|s) * prod_{h consumed by button} pi(a_h|s)
+
+    is a normalised distribution over the space of *effective* actions -- the
+    thing the environment can actually tell apart.  Two draws that differ only
+    in a head the button discards produce byte-identical orders, so they are
+    one action, not two, and integrating the discarded head out is exact, not
+    an approximation.  This is the OpenAI Five / AlphaStar construction.
+    ``tests/test_model.py`` enumerates the whole effective action space and
+    checks that ``sum_a exp(log_prob(a)) == 1``, which is the statement that
+    the importance ratio ``pi_new/pi_old`` is unbiased.
+
+    What the unconditional version cost
+    -----------------------------------
+    From the demonstration set: ~53% of steps are ``move``, ~20% ``noop``, and
+    only ~26% carry a target.  The target head is 32-way (ln 32 = 3.47 nats),
+    so on roughly three quarters of all steps the entropy bonus was paying the
+    policy to keep a head uniform that the environment never read, the KL
+    anchor was regularising it, and its sampling noise was going straight into
+    the PPO ratio as variance.
+
+    Consequences of the fix, for anyone comparing runs
+    --------------------------------------------------
+    ``loss/entropy`` is no longer the plain sum over the four heads and is NOT
+    comparable to a pre-change run.  There are 13,043 effective actions, not
+    8*9*9*32 = 20,736, so the ceiling is ln 13,043 = 9.48 nats rather than
+    9.94 -- and a uniform policy no longer sits AT the ceiling: with uniform
+    logits on every head this reads 7.54 nats
+    (ln 8 + 0.75 * 2 ln 9 + 0.625 * ln 32), because 2 of the 8 buttons consume
+    no auxiliary head at all and 1 more consumes only the move pair.  The 9.48
+    maximum needs the button head to concentrate on the buttons that DO use
+    their auxiliary heads.  ``loss/kl_ref`` moves for the same reason.
     """
 
     HEADS = ("button", "move_x", "move_z", "target")
 
     def __init__(self, logits: Dict[str, torch.Tensor]):
         self.logits = logits
-        self.dists = {k: torch.distributions.Categorical(logits=v) for k, v in logits.items()}
+        # validate_args=False is not cosmetic: torch's Distribution validation
+        # runs `if not valid.all()` on the logits at construction and on the
+        # sample inside log_prob, and `bool(cuda_tensor)` is a device
+        # synchronisation.  That is 8 syncs per minibatch for a check that
+        # cannot fire here (the logits come from a Linear, the actions from
+        # this distribution's own sample()).
+        self.dists = {
+            k: torch.distributions.Categorical(logits=v, validate_args=False)
+            for k, v in logits.items()
+        }
+
+    # -- head masking ------------------------------------------------------
+
+    def _usage(self, ref: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return head_usage_tables(ref.device, ref.dtype)
+
+    def head_mask(self, button: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """``(uses_move, uses_target)`` 0/1 floats for each sampled button."""
+        uses_move, uses_target = self._usage(self.logits["button"])
+        return uses_move[button], uses_target[button]
+
+    def head_weights(self, logits: Optional[Dict[str, torch.Tensor]] = None):
+        """Probability that the sampled button consumes each auxiliary head.
+
+        Used to weight the entropy and the KL, which are expectations over the
+        button rather than functions of one sampled button.  ``logits=None``
+        means this distribution's own button logits; the KL passes the
+        *reference's*, because ``KL(p||q)`` weights by ``p``.
+        """
+        b_logits = self.logits["button"] if logits is None else logits["button"]
+        uses_move, uses_target = self._usage(b_logits)
+        p_button = torch.softmax(b_logits, dim=-1)
+        return (p_button * uses_move).sum(dim=-1), (p_button * uses_target).sum(dim=-1)
+
+    # -- the distribution --------------------------------------------------
 
     def sample(self) -> Dict[str, torch.Tensor]:
         return {k: d.sample() for k, d in self.dists.items()}
@@ -228,43 +392,49 @@ class LaneActionDist:
         return {k: v.argmax(dim=-1) for k, v in self.logits.items()}
 
     def log_prob(self, action: Dict[str, torch.Tensor]) -> torch.Tensor:
-        return sum(self.dists[k].log_prob(action[k]) for k in self.HEADS)
+        """log pi(a|s) over the EFFECTIVE action -- unused heads are dropped."""
+        uses_move, uses_target = self.head_mask(action["button"])
+        move = self.dists["move_x"].log_prob(action["move_x"]) + self.dists[
+            "move_z"
+        ].log_prob(action["move_z"])
+        return (
+            self.dists["button"].log_prob(action["button"])
+            + uses_move * move
+            + uses_target * self.dists["target"].log_prob(action["target"])
+        )
 
     def entropy(self) -> torch.Tensor:
-        return sum(d.entropy() for d in self.dists.values())
+        """Entropy of the masked joint, ``H(b) + sum_h P(b consumes h) H(h)``.
+
+        Exact, because the auxiliary heads are conditionally independent of the
+        button given the state: the chain rule gives
+        ``H = H(button) + E_b[sum over the heads b consumes of H(head)]`` and
+        the inner term does not depend on ``b`` beyond which heads it selects.
+        """
+        w_move, w_target = self.head_weights()
+        return (
+            self.dists["button"].entropy()
+            + w_move * (self.dists["move_x"].entropy() + self.dists["move_z"].entropy())
+            + w_target * self.dists["target"].entropy()
+        )
 
     def kl_to(self, other_logits: Dict[str, torch.Tensor]) -> torch.Tensor:
-        """``KL(other || self)``, summed over heads, computed in log space.
+        """``KL(other || self)`` over the masked joint, computed in log space.
 
-        This used to call ``torch.distributions.kl_divergence``, which is
-        defined for Categorical as::
-
-            t = p.probs * (p.logits - q.logits)
-            t[q.probs == 0] = inf          # <-- here
-            t[p.probs == 0] = 0
-
-        ``q`` is *this* distribution, the policy. As the policy sharpens, a
-        softmax entry underflows to exactly 0 while the reference still has
-        support there, and the whole term becomes ``inf``. Measured on run
-        rl-bc2-0912: 7 of 56 updates reported an infinite total loss. The
-        gradients happened to stay finite, so it did not blow the run up -- it
-        just silently removed the KL anchor on 12.5% of updates and poisoned
-        the logged loss.
-
-        In log space there is no such cliff. ``log_softmax`` is
-        ``logit - logsumexp``, which stays finite even where ``softmax``
-        underflows: a masked logit of -1e9 gives a log-prob of about -1e9, and
-        the reference's probability there is exactly 0, so the product is 0
-        rather than ``0 * -inf = nan``. This relies on masked logits being a
-        large finite negative (-1e9), never ``-inf``.
+        Same decomposition as :meth:`entropy`, and weighted by ``other``'s
+        button probabilities because ``KL(p||q) = E_p[...]``.  See
+        :func:`categorical_kl` for why this is not
+        ``torch.distributions.kl_divergence``.
         """
-        total = 0.0
-        for k in self.HEADS:
-            q_logp = torch.log_softmax(self.dists[k].logits, dim=-1)
-            p_logp = torch.log_softmax(other_logits[k], dim=-1)
-            p_prob = p_logp.exp()
-            total = total + (p_prob * (p_logp - q_logp)).sum(dim=-1)
-        return total
+        per_head = {
+            k: categorical_kl(other_logits[k], self.dists[k].logits) for k in self.HEADS
+        }
+        w_move, w_target = self.head_weights(other_logits)
+        return (
+            per_head["button"]
+            + w_move * (per_head["move_x"] + per_head["move_z"])
+            + w_target * per_head["target"]
+        )
 
 
 # --------------------------------------------------------------------------
@@ -464,7 +634,7 @@ class _PrivilegedCritic(nn.Module):
         self.core = _make_core(cfg, cfg.critic_core_input_dim)
         self.value = nn.Sequential(nn.Linear(cfg.core_dim, cfg.ctx_dim), nn.GELU(), nn.Linear(cfg.ctx_dim, 1))
 
-    def forward(
+    def trunk(
         self,
         priv_entities: torch.Tensor,
         priv_pad_mask: torch.Tensor,
@@ -475,6 +645,11 @@ class _PrivilegedCritic(nn.Module):
         resets: Optional[torch.Tensor],
         actor_core: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Everything up to (and not including) the value head.
+
+        Split out so a burn-in, which wants only the carried state, does not
+        have to run the value head to get it.
+        """
         B, T, S, _ = priv_entities.shape
         flat = priv_entities.reshape(B * T, S, -1)
         valid = (~priv_pad_mask.reshape(B * T, S)).to(torch.bool)
@@ -492,7 +667,23 @@ class _PrivilegedCritic(nn.Module):
             parts.append(
                 actor_core.detach() if self.cfg.detach_actor_core_for_critic else actor_core
             )
-        out, hn = self.core(torch.cat(parts, dim=-1), h, resets)
+        return self.core(torch.cat(parts, dim=-1), h, resets)
+
+    def forward(
+        self,
+        priv_entities: torch.Tensor,
+        priv_pad_mask: torch.Tensor,
+        priv_vec: torch.Tensor,
+        self_vec: torch.Tensor,
+        global_vec: torch.Tensor,
+        h: torch.Tensor,
+        resets: Optional[torch.Tensor],
+        actor_core: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        out, hn = self.trunk(
+            priv_entities, priv_pad_mask, priv_vec, self_vec, global_vec, h, resets,
+            actor_core=actor_core,
+        )
         return self.value(out).squeeze(-1), hn
 
 
@@ -643,6 +834,35 @@ class LanePolicy(nn.Module):
             actor_core=core_out,
         )
         return dist, value, RecurrentState(actor=h_actor, critic=h_critic)
+
+    @torch.no_grad()
+    def carry_state(
+        self,
+        *,
+        entities: torch.Tensor,
+        entity_pad_mask: torch.Tensor,
+        self_vec: torch.Tensor,
+        global_vec: torch.Tensor,
+        priv_entities: torch.Tensor,
+        priv_pad_mask: torch.Tensor,
+        priv_vec: torch.Tensor,
+        state: RecurrentState,
+        resets: Optional[torch.Tensor] = None,
+    ) -> RecurrentState:
+        """Advance both cores over a prefix, building no head output at all.
+
+        This is what an R2D2 burn-in actually wants.  :meth:`forward` would
+        also compute four action heads (including the 32-slot attention
+        ``bmm``) and the value head, and then throw every one of them away.
+        """
+        core_out, _tokens, _valid, h_actor = self._actor_trunk(
+            entities, entity_pad_mask, self_vec, global_vec, state.actor, resets
+        )
+        _critic_out, h_critic = self.critic.trunk(
+            priv_entities, priv_pad_mask, priv_vec, self_vec, global_vec,
+            state.critic, resets, actor_core=core_out,
+        )
+        return RecurrentState(actor=h_actor, critic=h_critic)
 
     # -- convenience -------------------------------------------------------
 

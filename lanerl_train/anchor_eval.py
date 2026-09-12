@@ -45,11 +45,19 @@ UNSETTLED: nothing has yet timed a real ``play_anchor_episodes`` cycle; the
 ``anchor_eval`` metrics row records ``elapsed_s`` and no run dir has one.  Hence :attr:`AnchorEvalConfig.rotate`: one anchor per cycle,
 round-robin, so the ladder fills in over three cycles instead of paying for all
 of it every time.
+
+That arithmetic was written for ONE game per anchor per cycle, and one game
+cannot resolve anything: see :attr:`AnchorEvalConfig.episodes_per_anchor` for
+the measured power table.  A cycle now costs ``episodes_per_anchor`` games,
+divided by ``--anchor-envs`` servers running them in lockstep, so the knob that
+pays for statistical power without stalling the learner is ``--anchor-envs``,
+and the knob that pays for it less often is ``--eval-every``.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 
 import torch
 import time
@@ -67,7 +75,9 @@ from .vec import EpisodeSpec, ServerLaunchSpec, SideAssignment, VecDriver, VecLa
 __all__ = [
     "AnchorEvalConfig",
     "AnchorEvalError",
+    "GAME_DECISIONS",
     "score_for_reason",
+    "score_for_deaths",
     "anchor_launch_spec",
     "play_anchor_episodes",
     "AnchorEvaluator",
@@ -76,6 +86,29 @@ __all__ = [
 log = logging.getLogger("lanerl_train.anchor_eval")
 
 _TEAM_OF_SIDE: Dict[Side, int] = {BLUE: C.TEAM_BLUE, RED: C.TEAM_RED}
+
+#: The policy map key a FROZEN network anchor is filed under.
+#:
+#: This constant was referenced by ``make_anchor_driver_factory`` and never
+#: defined, so the ``kind == "policy"`` branch was a ``NameError`` waiting for
+#: its first caller.  The factory is invoked lazily -- once, on the first eval
+#: cycle that rotates to that anchor -- so ``--anchors ...,bc_policy`` did not
+#: fail at startup or at update 1; it failed at update 800, an hour into a GPU
+#: run, from inside ``TrainingLoop.step_once``, which ends the run.  Nothing
+#: caught it because the tests only ever exercised ``anchor_launch_spec`` and
+#: ``anchors_for_run``, never the factory that builds the driver.
+_ANCHOR_KEY = "anchor"
+
+#: Decision rounds in one full ten-minute game at the current decision rate.
+#:
+#: DERIVED, never a literal.  The bound below it feeds was once 12_000, which
+#: was a 15 Hz number; the 15 -> 30 Hz change silently halved the game that
+#: bound allowed and made ``reason == "time"`` unreachable.
+GAME_DECISIONS: int = int(round(600_000.0 / C.DECISION_DT_MS))
+
+#: Slack on the derived step bound: the reset step between in-process episodes,
+#: plus instances that finish at slightly different ticks.
+_STEP_BUDGET_SLACK = 1.2
 
 
 class AnchorEvalError(RuntimeError):
@@ -87,13 +120,61 @@ class AnchorEvalConfig:
     """How much game time one eval cycle is allowed to spend."""
 
     #: Games per anchor evaluated in one cycle.
-    episodes_per_anchor: int = 1
+    #:
+    #: WHY 35 AND NOT 1
+    #: ----------------
+    #: CS@10 is the headline metric and it is NOISY.  Measured on the 144
+    #: self-play episodes of ``runs/rl-bc4-0912/metrics.jsonl`` (every one
+    #: ``reason == "time"``, so every one carries a real CS@10):
+    #:
+    #:     n = 144   mean 36.44   sd 7.31 (95% CI 6.55 - 8.26)
+    #:     median 36   min 11   max 53
+    #:
+    #: That sd is the whole problem.  Power to detect a difference of ``d`` CS
+    #: between two groups of ``n`` games each (two-sided t, alpha = 0.05,
+    #: power = 0.80, sd = 7.31, exact noncentral t):
+    #:
+    #:     d (CS)   |  2    3    5    7   10   12   15   20
+    #:     n/group  | 211   95   35   19   10    7    5    4
+    #:
+    #: Read the other way -- the smallest difference ``n`` games per group can
+    #: detect at 80% power, and the 95% CI on a single cycle's mean:
+    #:
+    #:     n/group  |   1     2     4     8    16    24    35    48
+    #:     MDE (CS) |  29*  41.3  17.4  11.1   7.5   6.0   5.0   4.2
+    #:     CI +-    |  n/a  65.7  11.6   6.1   3.9   3.1   2.5   2.1
+    #:
+    #:     (*) n=1 has no within-group df, so the exact-t MDE is undefined;
+    #:         29.0 is the normal approximation, 2.80 * 7.31 * sqrt(2/n).
+    #:
+    #: At the old default of ONE game per anchor per 400 updates the evaluator
+    #: could not distinguish the 36 CS this run actually farmed from 7 CS.  It
+    #: is not a weak measurement, it is not a measurement: every anchor number
+    #: this project has ever produced was a single draw from a distribution
+    #: three times wider than the effects being argued about.
+    #:
+    #: 35 is the cell that buys ~5 CS.  It is EXPENSIVE -- 35 real ten-minute
+    #: games, and the module docstring's floor for one is ~160 s of wall clock,
+    #: so ~93 minutes per anchor per cycle at ``--anchor-envs 1`` and ~13
+    #: minutes at ``--anchor-envs 8``, which run in lockstep.  Lower it
+    #: deliberately if you must, and then quote the MDE row you actually
+    #: bought, not the number you wanted.
+    #:
+    #: Caveats, stated so they are not quoted away:  the sd is measured in
+    #: SELF-PLAY, because every anchor game in that run reported ``cs_at_10 =
+    #: 0.0`` (the argmax-is-noop bug); anchor CS may well be more variable, and
+    #: 7.31 is then an under-estimate.  The table is also for the UNPAIRED
+    #: comparison -- two eval cycles, or two checkpoints.  Comparing the agent
+    #: with the anchor IN THE SAME GAME (``EpisodeResult.opponent_cs_at_10``)
+    #: is paired and therefore cheaper, but the sd of that difference has never
+    #: been measured, so there is no honest table for it yet.
+    episodes_per_anchor: int = 35
     #: Evaluate ONE anchor per cycle, round-robin, rather than all of them.
     #: See the module docstring for the arithmetic this is protecting.
     rotate: bool = True
-    #: Hard bound on decisions per cycle.  A server whose clock stops would
-    #: otherwise hold the learner forever, and an eval that hangs a run is worse
-    #: than an eval that does not happen.
+    #: Hard bound on decision ROUNDS per cycle, or ``None`` to derive one.  A
+    #: server whose clock stops would otherwise hold the learner forever, and
+    #: an eval that hangs a run is worse than an eval that does not happen.
     #:
     #: DERIVED, never a literal -- it was 12_000, and that was a 15 Hz number.
     #: A ten-minute game (``AnchorEvaluator.max_game_ms``, 600 s) is 18,000
@@ -103,9 +184,16 @@ class AnchorEvalConfig:
     #: at all and raised :class:`AnchorEvalError` -- which propagates out of
     #: ``TrainingLoop.step_once`` and ends the run.  ``EpisodeSpec.max_steps``
     #: (vec.py, 20_000) was sized for 30 Hz; this one was not, and two bounds on
-    #: the same quantity is the bug.  The 20% slack is for the reset step and
-    #: for instances that finish at slightly different ticks.
-    max_steps: int = int(round(1.2 * 600_000.0 / C.DECISION_DT_MS))
+    #: the same quantity is the bug.
+    #:
+    #: It was ALSO a one-game bound while ``episodes_per_anchor`` was a free
+    #: parameter, so asking for n>1 games would have quietly returned one game
+    #: and no error (``play_anchor_episodes`` only raises when it collects
+    #: NOTHING) -- an underpowered result wearing the label of a powered one.
+    #: ``None`` now means :meth:`steps_budget`: one full game per WAVE of
+    #: instances, times the number of waves, plus 20% slack.  Pass an int to
+    #: override, which is the only thing a test or a hang-hunt should do.
+    max_steps: Optional[int] = None
     #: Sample actions; do NOT take the argmax.
     #:
     #: This was True, and it made every anchor number this project has ever
@@ -135,6 +223,20 @@ class AnchorEvalConfig:
     #: side-symmetric (see ``lanerl_rl.obs``), so there is nothing to balance.
     agent_side: Side = BLUE
 
+    def steps_budget(self, n_episodes: int, n_envs: int = 1) -> int:
+        """Decision rounds one cycle may spend collecting ``n_episodes`` games.
+
+        A "round" is one :meth:`VecDriver.step`, which advances EVERY instance,
+        so ``n_envs`` games are played per ``GAME_DECISIONS`` rounds and the
+        budget scales with the number of WAVES, not with the number of games.
+        An explicit :attr:`max_steps` wins: a test that wants the clock-stopped
+        failure needs to be able to ask for a tiny bound.
+        """
+        if self.max_steps is not None:
+            return int(self.max_steps)
+        waves = math.ceil(max(1, int(n_episodes)) / max(1, int(n_envs)))
+        return int(round(_STEP_BUDGET_SLACK * waves * GAME_DECISIONS))
+
 
 def score_for_reason(reason: str, agent_team: int) -> float:
     """The agent's result, in the 1.0 / 0.5 / 0.0 convention ``MatchRecord`` wants.
@@ -150,6 +252,57 @@ def score_for_reason(reason: str, agent_team: int) -> float:
             return 0.0
         return 1.0
     # "time" (reached max_game_ms) and "max_steps" are both draws.
+    return 0.5
+
+
+def _champion_of_team(raw: Mapping[str, Any], team: int) -> Optional[Mapping[str, Any]]:
+    for u in raw.get("u", ()):
+        if u.get("k") == "Champion" and int(u.get("tm", -1)) == int(team):
+            return u
+    return None
+
+
+def _page_canary(raw: Optional[Mapping[str, Any]], team: int) -> Tuple[
+    Optional[float], Optional[float]
+]:
+    """``(ad, mhp)`` for one team's champion, or ``(None, None)``.
+
+    Feeds ``EpisodeResult.first_frame_ad`` / ``first_frame_mhp``: the canary for
+    a reset that strips the rune page (mhp 672 -> 616, ad 78.14 -> 57.88).  An
+    absent field stays None -- three wrong attack-damage constants in a row came
+    out of defaulting one.
+    """
+    if raw is None:
+        return None, None
+    u = _champion_of_team(raw, team)
+    if u is None:
+        return None, None
+    ad = u.get("ad")
+    mhp = u.get("mhp")
+    return (None if ad is None else float(ad), None if mhp is None else float(mhp))
+
+
+def score_for_deaths(agent_deaths: int, opponent_deaths: int) -> float:
+    """The agent's result in a game that was PLAYED OUT rather than stopped.
+
+    ``score_for_reason`` can only read the reason an episode ended, so once
+    anchor games stopped ending at the first death (see
+    ``make_anchor_driver_factory(end_on_death=...)``) every one of them ended
+    with ``reason == "time"`` and scored exactly 0.5.  That is the disease this
+    whole module exists to cure -- ``score`` was already 0.5 by construction in
+    a symmetric mirror, and a ladder whose every rung reads 0.50 tells you
+    nothing -- so it must not be re-introduced through the back door by a fix
+    to a different bug.
+
+    The death DIFFERENTIAL over the full ten minutes is the replacement: it
+    agrees with ``score_for_reason`` on a game that ended at the first death
+    (1-0 one way or the other), and it keeps a deathless lane a genuine draw,
+    which is the common case and what CS@10 is there to separate.
+    """
+    if agent_deaths < opponent_deaths:
+        return 1.0
+    if agent_deaths > opponent_deaths:
+        return 0.0
     return 0.5
 
 
@@ -219,9 +372,15 @@ def play_anchor_episodes(
 
     ``driver`` must already be started and assigned with the agent on
     ``config.agent_side`` and the other side left to the in-server bot.
+
+    Deaths are counted here rather than read off the episode's end reason,
+    because an anchor game now plays through them
+    (``make_anchor_driver_factory(end_on_death=False)``) and would otherwise
+    score 0.5 every time.  See :func:`score_for_deaths`.
     """
     cfg = config or AnchorEvalConfig()
     agent_team = _TEAM_OF_SIDE[cfg.agent_side]
+    budget = cfg.steps_budget(n_episodes, driver.env.n)
     out: List[EpisodeResult] = []
     steps = 0
     #: Decisions since each instance's CURRENT episode began.  ``steps`` is the
@@ -231,11 +390,40 @@ def play_anchor_episodes(
     #: training run's episodes look four seconds long; see
     #: ``lane_wiring.collect_rollout``.
     since_reset: Dict[int, int] = {}
-    while len(out) < n_episodes and steps < cfg.max_steps:
-        _result, dones = driver.step(deterministic=cfg.deterministic)
+    #: ``instance -> team -> deaths in the CURRENT episode``, edge-triggered on
+    #: hp crossing zero.  A corpse reports hp <= 0 for every frame until it
+    #: respawns, so a level-triggered count would score one death as sixty.
+    deaths: Dict[int, Dict[int, int]] = {}
+    alive: Dict[Tuple[int, int], bool] = {}
+    #: ``instance -> (ad, mhp)`` for the agent, from the earliest frame of the
+    #: current episode this call has seen.  The drivers are cached for the life
+    #: of the run, so for the FIRST episode of a cycle that frame is mid-game --
+    #: which is fine for a canary whose whole point is that these values must
+    #: not change within an episode.
+    page: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
+    while len(out) < n_episodes and steps < budget:
+        result, dones = driver.step(deterministic=cfg.deterministic)
         steps += 1
         for i in range(driver.env.n):
             since_reset[i] = since_reset.get(i, 0) + 1
+            # On a boundary step ``obs[i]`` is already the POST-RESET frame --
+            # full hp, new episode -- and ``terminal_obs[i]`` is the frame that
+            # ended the game. Reading obs[i] there would miss a death on the
+            # last frame and attribute a fresh champion to the finished game.
+            raw = result.terminal_obs.get(i) or result.obs[i]
+            if raw is None:
+                continue
+            if i not in page:
+                page[i] = _page_canary(raw, agent_team)
+            for u in raw.get("u", ()):
+                if u.get("k") != "Champion":
+                    continue
+                team = int(u.get("tm", -1))
+                standing = int(u.get("hp", 1)) > 0
+                if alive.get((i, team), True) and not standing:
+                    per_team = deaths.setdefault(i, {})
+                    per_team[team] = per_team.get(team, 0) + 1
+                alive[(i, team)] = standing
         for i, reason in sorted(dones.items()):
             # CS@10 only means anything for an episode that REACHED ten
             # minutes. A game that ended on a death has not had the chance to
@@ -253,27 +441,71 @@ def play_anchor_episodes(
                 for t, v in by_team.items():
                     if t != agent_team:
                         opp_cs10 = float(v)
+            # Clear the per-episode death bookkeeping BEFORE scoring the next
+            # game on this instance; a champion is alive again after a reset.
+            by_deaths = deaths.pop(i, {})
+            for key in [k for k in alive if k[0] == i]:
+                alive[key] = True
+            agent_deaths = int(by_deaths.get(agent_team, 0))
+            opp_deaths = sum(int(v) for t, v in by_deaths.items() if t != agent_team)
+            score = (
+                score_for_reason(reason, agent_team)
+                if reason.startswith("death_team_")
+                else score_for_deaths(agent_deaths, opp_deaths)
+            )
+            length = since_reset.pop(i, 0)
+            ad, mhp = page.pop(i, (None, None))
             out.append(
                 EpisodeResult(
                     agent=agent_id,
                     opponent_id=anchor_id,
                     opponent_category="anchor",
-                    score=score_for_reason(reason, agent_team),
+                    score=score,
                     cs_at_10=cs10,
-                    length_steps=since_reset.pop(i, 0),
+                    length_steps=length,
                     reason=reason,
                     instance=i,
                     opponent_cs_at_10=opp_cs10,
+                    # Same convention as lane_wiring._accumulate_episode: a
+                    # champion death on the other team is a kill for this one.
+                    # In a 1v1 lane the wave can also do it, so treat kills as
+                    # "the opponent died", not "the agent killed it".
+                    deaths=agent_deaths,
+                    kills=opp_deaths,
+                    first_frame_ad=ad,
+                    first_frame_mhp=mhp,
                 )
+            )
+            # Per GAME, not just per cycle: "41 CS with 0 deaths" and "41 CS
+            # with 5 deaths" are different games, and the cycle-level line
+            # averages them away.
+            log.info(
+                "anchor %s game %d/%d on instance %d: %s in %d decisions, score %.1f, "
+                "deaths %d-%d, CS@10 %s (anchor %s)",
+                anchor_id, len(out), n_episodes, i, reason, length, score,
+                agent_deaths, opp_deaths, cs10, opp_cs10,
             )
             if len(out) >= n_episodes:
                 break
     if not out:
         raise AnchorEvalError(
-            f"no episode against {anchor_id} finished in {cfg.max_steps} decisions "
-            f"({cfg.max_steps / C.DECISION_HZ / 60.0:.0f} minutes of game time). The "
+            f"no episode against {anchor_id} finished in {budget} decisions "
+            f"({budget / C.DECISION_HZ / 60.0:.0f} minutes of game time). The "
             f"server's clock is not advancing; an eval that silently returns nothing "
             f"is how the last run's ladder stayed empty."
+        )
+    if len(out) < n_episodes:
+        # A SHORT cycle is the underpowered-result failure wearing the label of
+        # a powered one: the caller asked for enough games to resolve ~5 CS and
+        # got fewer, with a mean whose CI is wider than it thinks. Loud, and
+        # with the arithmetic, because the usual cause is a max_steps override
+        # or an n_episodes that does not divide into the instances available.
+        log.error(
+            "anchor %s: asked for %d game(s), collected %d in %d decision rounds "
+            "(budget %d, %d instance(s)). The reported mean is more uncertain than "
+            "episodes_per_anchor promises -- see AnchorEvalConfig.episodes_per_anchor "
+            "for what %d games can actually resolve.",
+            anchor_id, n_episodes, len(out), steps, budget, driver.env.n, len(out),
         )
     return out
 
@@ -390,6 +622,7 @@ def make_anchor_driver_factory(
     base_spec: Optional[ServerLaunchSpec] = None,
     seed: int = 0,
     port_stride: int = 64,
+    end_on_death: bool = False,
 ) -> Callable[[AnchorSpec], Tuple[VecDriver, Any]]:
     """A ``driver_factory`` that launches real servers with the anchor's bot config.
 
@@ -397,8 +630,35 @@ def make_anchor_driver_factory(
     the life of the run (see :class:`AnchorEvaluator`) and two of them sharing a
     base collide on the first instance -- the second server then dies during
     start-up, which reads as "the anchor is unbeatable".
+
+    ``end_on_death`` DEFAULTS TO FALSE, which is the opposite of
+    ``EpisodeSpec``'s own default and deliberate.  This line used to build
+    ``EpisodeSpec(max_game_ms=max_game_ms)`` and inherit ``end_on_death=True``,
+    while the training drivers were launched with ``--no-end-on-death``: the
+    eval and the thing it was evaluating did not agree on what an episode IS.
+    Two consequences, both invisible:
+
+    * ``play_anchor_episodes`` only records CS@10 for ``reason == "time"``, so
+      anchor CS@10 was measured on DEATHLESS GAMES ONLY -- pure survivorship
+      bias.  A policy that learns to trade, and therefore sometimes dies, is
+      scored as though it stopped farming.  ``runs/rl-bc4-0912`` has the shape
+      of it: 5 of its 6 anchor games ended on the clock, the 6th ended
+      ``death_team_100`` at 12,721 steps and contributed ``cs_at_10 = None``,
+      while all 144 self-play episodes of the same run ran the full 18,001.
+    * a ten-minute game is the unit CS@10 is DEFINED on.  An episode cut short
+      at 103 s (the first BC-init run's mean) cannot produce one at all.
+
+    Pass ``True`` only to reproduce the old behaviour deliberately.
     """
     from .ports import PortAllocator
+
+    if policy_key == _ANCHOR_KEY:
+        raise AnchorEvalError(
+            f"the live policy and the frozen policy anchor would both be filed under "
+            f"{_ANCHOR_KEY!r} in the driver's policy map, so the anchor would be handed "
+            f"the current weights on every cycle and the rung would move with the agent. "
+            f"Choose a different policy_key."
+        )
 
     assigned: Dict[str, int] = {}
 
@@ -441,7 +701,7 @@ def make_anchor_driver_factory(
             adapter_factory=adapters.adapter_factory,
             encoder=adapters.encoder,
             assignments=assignments,
-            episode=EpisodeSpec(max_game_ms=max_game_ms),
+            episode=EpisodeSpec(max_game_ms=max_game_ms, end_on_death=end_on_death),
         )
         log.info(
             "anchor %s: starting %d server(s) at port base %d with bot config %s",

@@ -126,7 +126,7 @@ def test_dual_clip_bounds_a_negative_advantage():
     loss, stats = trainer.policy_loss(lp, old_lp, adv)
     # Without the dual clip the loss would be ~22026; with c=3 it is exactly 3.
     assert loss.item() == pytest.approx(3.0, rel=1e-5)
-    assert stats["dual_clip_frac"] == pytest.approx(1.0)
+    assert float(stats["dual_clip_frac"]) == pytest.approx(1.0)
 
 
 def test_dual_clip_is_inactive_for_positive_advantage():
@@ -136,7 +136,7 @@ def test_dual_clip_is_inactive_for_positive_advantage():
     loss, stats = trainer.policy_loss(torch.tensor([10.0]), torch.tensor([0.0]), adv)
     # Standard PPO: min(rA, clip(r)A) = 1.2 * 1.0
     assert loss.item() == pytest.approx(-1.2, rel=1e-5)
-    assert stats["dual_clip_frac"] == pytest.approx(0.0)
+    assert float(stats["dual_clip_frac"]) == pytest.approx(0.0)
 
 
 def test_dual_clip_agrees_with_standard_ppo_near_ratio_one():
@@ -201,12 +201,9 @@ def test_one_gradient_step_changes_params_and_loss_is_finite():
     batch = next(iter(buf.iter_minibatches(8, 4, 4)))
     stats = trainer.update_minibatch(batch)
 
-    assert np.isfinite(stats["loss"]), stats
-    assert np.isfinite(stats["policy_loss"])
-    assert np.isfinite(stats["value_loss"])
-    assert np.isfinite(stats["entropy"])
-    assert np.isfinite(stats["grad_norm"])
-    assert stats["grad_norm"] > 0.0
+    for k in ("loss", "policy_loss", "value_loss", "entropy", "grad_norm"):
+        assert np.isfinite(float(stats[k])), (k, stats)
+    assert float(stats["grad_norm"]) > 0.0
 
     after = policy.state_dict()
     changed = [k for k, v in after.items() if v.dtype.is_floating_point and not torch.equal(v, before[k])]
@@ -316,7 +313,7 @@ def test_tiny_batch_overfits():
     losses = []
     for _ in range(30):
         stats = trainer.update_minibatch(batch)
-        losses.append(stats["loss"])
+        losses.append(float(stats["loss"]))
 
     assert all(np.isfinite(l) for l in losses), losses
     early = float(np.mean(losses[:3]))
@@ -338,7 +335,7 @@ def test_same_seed_gives_the_same_first_action_and_loss():
             dist, value = trainer._forward_chunk(batch)
             action = dist.mode()
         stats = trainer.update_minibatch(batch)
-        return action, value.clone(), stats["loss"]
+        return action, value.clone(), float(stats["loss"])
 
     a1, v1, l1 = run()
     a2, v2, l2 = run()
@@ -379,12 +376,15 @@ def test_policy_and_optimizer_state_round_trip_through_the_learner_payloads():
 
     for p1, p2 in zip(policy.parameters(), fresh_policy.parameters()):
         assert torch.equal(p1, p2)
-    for g1, g2 in zip(trainer.optimizer.param_groups[0]["params"], fresh_trainer.optimizer.param_groups[0]["params"]):
+    flat = lambda o: [p for g in o.param_groups for p in g["params"]]  # noqa: E731
+    assert len(trainer.optimizer.param_groups) == 2, "actor and critic are separate groups"
+    for g1, g2 in zip(flat(trainer.optimizer), flat(fresh_trainer.optimizer)):
         s1, s2 = trainer.optimizer.state.get(g1, {}), fresh_trainer.optimizer.state.get(g2, {})
         assert set(s1) == set(s2)
         for k in s1:
             if torch.is_tensor(s1[k]):
                 assert torch.equal(s1[k], s2[k]), f"optimizer state {k!r} did not round-trip"
+    assert fresh_trainer._updates_done == trainer._updates_done
 
 
 def test_kl_anchor_pulls_the_policy_toward_the_reference():
@@ -424,69 +424,10 @@ def test_no_reference_means_no_kl_term():
     assert PPOConfig().kl_ref_coef == 0.0
 
 
-def test_kl_to_is_finite_when_the_policy_underflows_a_masked_slot():
-    """KL to the frozen prior must never be inf.
-
-    torch.distributions.kl_divergence for Categorical writes inf wherever the
-    SECOND argument's probability is exactly 0. As the policy sharpens, a
-    softmax entry underflows to 0 while the reference still has mass there, and
-    the whole KL term -- the only thing anchoring the run to its BC prior --
-    becomes inf. On run rl-bc2-0912 that happened on 7 of 56 updates.
-
-    It is worse than a logging artefact: the updates where the policy has run
-    furthest from the prior are exactly the ones where the anchor is silently
-    dropped.
-    """
-    import torch
-    from lanerl_rl.model import LaneActionDist
-
-    class _One:
-        HEADS = ("a",)
-
-        def __init__(self, logits):
-            self.dists = {"a": torch.distributions.Categorical(logits=logits)}
-
-        kl_to = LaneActionDist.kl_to
-
-    policy = torch.tensor([[80.0, -80.0, -1e9]])   # entry 1 underflows to 0.0
-    reference = torch.tensor([[1.0, 0.5, -1e9]])   # reference still has mass there
-    assert torch.softmax(policy, -1)[0, 1].item() == 0.0
-
-    torch_kl = torch.distributions.kl_divergence(
-        torch.distributions.Categorical(logits=reference),
-        torch.distributions.Categorical(logits=policy),
-    )
-    assert torch.isinf(torch_kl).any(), "the failure this guards is gone; revisit"
-
-    ours = _One(policy).kl_to({"a": reference})
-    assert torch.isfinite(ours).all()
-    assert ours.item() > 1.0, "a policy this far from the prior must be penalised"
-
-    grad_src = policy.clone().requires_grad_(True)
-    _One(grad_src).kl_to({"a": reference}).sum().backward()
-    assert torch.isfinite(grad_src.grad).all()
-
-
-def test_kl_to_agrees_with_torch_on_well_conditioned_logits():
-    """The log-space rewrite must not change the ordinary case."""
-    import torch
-    from lanerl_rl.model import LaneActionDist
-
-    class _One:
-        HEADS = ("a",)
-
-        def __init__(self, logits):
-            self.dists = {"a": torch.distributions.Categorical(logits=logits)}
-
-        kl_to = LaneActionDist.kl_to
-
-    torch.manual_seed(0)
-    a, b = torch.randn(8, 11), torch.randn(8, 11)
-    expected = torch.distributions.kl_divergence(
-        torch.distributions.Categorical(logits=b),
-        torch.distributions.Categorical(logits=a),
-    )
-    assert torch.allclose(expected, _One(a).kl_to({"a": b}), atol=1e-5)
+# The log-space / underflow properties of the KL now live on the head-level
+# function that implements them: tests/test_model.py::
+# test_categorical_kl_is_finite_when_the_policy_underflows_a_masked_slot and
+# ::test_categorical_kl_agrees_with_torch_on_well_conditioned_logits.
 
 
 def test_kl_ref_coefficient_anneals_to_zero():
@@ -542,3 +483,282 @@ def test_a_learner_built_without_a_clock_keeps_the_flat_coefficient():
     learner = DualClipPPO(LanePolicy(ModelConfig()), PPOConfig(kl_ref_coef=0.05))
     assert learner._train_step_source() == 0
     assert learner.cfg.kl_ref_at(0) == pytest.approx(0.05)
+
+
+# --------------------------------------------------------------------------
+# The critic is a DIFFERENT problem from the actor   (two param groups)
+# --------------------------------------------------------------------------
+#
+# lanerl_train.bc trains only the action heads and then saves the WHOLE
+# state_dict, so a BC checkpoint carries a randomly-initialised critic -- 2.6M
+# of the model's 4.6M parameters. __main__ loads it and, until now, PPO trained
+# both halves with one Adam at one learning rate, chosen for fine-tuning the
+# actor (1e-5 on rl-bc4-0912). The critic never caught up: loss/value_loss went
+# 0.047 -> 0.55 over 2,690 updates, with a maximum of 34.3.
+
+
+def _small_cfg(**kw):
+    base = dict(chunk_len=8, burn_in=4, minibatch_chunks=4, epochs=1)
+    base.update(kw)
+    return PPOConfig(**base)
+
+
+def test_the_actor_and_the_critic_get_separate_learning_rates():
+    policy = LanePolicy()
+    learner = DualClipPPO(policy, _small_cfg(lr=1e-5, critic_lr=3e-4))
+    groups = {g["name"]: g for g in learner.optimizer.param_groups}
+    assert set(groups) == {"actor", "critic"}
+    assert groups["actor"]["lr"] == 1e-5
+    assert groups["critic"]["lr"] == 3e-4
+    n_actor = len(groups["actor"]["params"])
+    n_critic = len(groups["critic"]["params"])
+    assert n_actor == len(policy.actor_parameter_names())
+    assert n_critic == len(policy.critic_parameter_names())
+    assert n_actor + n_critic == len(list(policy.parameters()))
+    # critic_lr=None means "whatever the actor uses" -- the old behaviour.
+    shared = DualClipPPO(LanePolicy(), _small_cfg(lr=7e-5, critic_lr=None))
+    assert [g["lr"] for g in shared.optimizer.param_groups] == [7e-5, 7e-5]
+
+
+def test_the_critic_learns_while_the_actor_is_held_still():
+    """The behavioural statement of the split: lr 0 on the actor group must
+    stop the actor and leave the critic training at its own rate."""
+    torch.manual_seed(11)
+    policy = LanePolicy()
+    before = {k: v.detach().clone() for k, v in policy.state_dict().items()}
+    trainer = DualClipPPO(policy, _small_cfg(lr=0.0, critic_lr=1e-2, target_kl=1e9))
+    trainer.update(_fill_buffer(seed=11))
+    moved = {
+        k for k, v in policy.state_dict().items()
+        if v.dtype.is_floating_point and not torch.equal(v, before[k])
+    }
+    assert moved, "nothing trained at all"
+    assert all(k.startswith("critic.") for k in moved), sorted(moved)[:5]
+
+
+def test_critic_warmup_freezes_the_actor_for_exactly_n_updates():
+    torch.manual_seed(12)
+    policy = LanePolicy()
+    trainer = DualClipPPO(
+        policy, _small_cfg(lr=1e-2, critic_lr=1e-2, critic_warmup_updates=1, target_kl=1e9)
+    )
+    buf = _fill_buffer(seed=12)
+
+    before = {k: v.detach().clone() for k, v in policy.state_dict().items()}
+    stats = trainer.update(buf)
+    assert stats["actor_frozen"] == 1.0
+    moved = {k for k, v in policy.state_dict().items()
+             if v.dtype.is_floating_point and not torch.equal(v, before[k])}
+    assert moved and all(k.startswith("critic.") for k in moved), sorted(moved)[:5]
+
+    before = {k: v.detach().clone() for k, v in policy.state_dict().items()}
+    stats = trainer.update(buf)
+    assert stats["actor_frozen"] == 0.0
+    moved = {k for k, v in policy.state_dict().items()
+             if v.dtype.is_floating_point and not torch.equal(v, before[k])}
+    assert any(not k.startswith("critic.") for k in moved), "the actor never thawed"
+
+
+def test_a_one_group_checkpoint_still_resumes_into_the_two_group_optimizer():
+    """Every checkpoint written before the split has one param group, and
+    Adam.load_state_dict refuses a group-count mismatch outright -- which
+    would turn "resume rl-bc4-0912" into a crash."""
+    torch.manual_seed(13)
+    policy = LanePolicy()
+    legacy = torch.optim.Adam(policy.parameters(), lr=1e-4, eps=1e-5)
+    batch = next(iter(_fill_buffer(seed=13).iter_minibatches(8, 4, 4)))
+    ref = DualClipPPO(policy, _small_cfg(), optimizer=legacy)
+    ref.update_minibatch(batch)  # real Adam moments to carry over
+    payload = {"policy": policy.state_dict(), "optimizer": legacy.state_dict()}
+
+    fresh = DualClipPPO(LanePolicy(), _small_cfg(lr=1e-5, critic_lr=3e-4))
+    fresh.load_payload(payload)
+    assert [g["lr"] for g in fresh.optimizer.param_groups] == [1e-5, 3e-4], (
+        "the CONFIG, not the checkpoint, decides the learning rate"
+    )
+    old_params = list(policy.parameters())
+    new_params = [p for g in fresh.optimizer.param_groups for p in g["params"]]
+    assert len(old_params) == len(new_params)
+    checked = 0
+    for p_old, p_new in zip(old_params, new_params):
+        s_old = legacy.state.get(p_old, {})
+        s_new = fresh.optimizer.state.get(p_new, {})
+        assert set(s_old) == set(s_new)
+        for k, v in s_old.items():
+            if torch.is_tensor(v) and v.numel() > 1:
+                assert torch.equal(v, s_new[k]), f"moments landed on the wrong parameter ({k})"
+                checked += 1
+    assert checked > 0, "test setup bug: no Adam moments to compare"
+
+
+# --------------------------------------------------------------------------
+# Explained variance: the number whose absence hid all of the above
+# --------------------------------------------------------------------------
+
+
+def test_explained_variance_means_what_it_says():
+    buf = _fill_buffer(seed=14)
+    n = buf.step
+    buf.values[:n] = buf.returns[:n]
+    assert buf.explained_variance().item() == pytest.approx(1.0, abs=1e-5)
+    buf.values[:n] = buf.returns[:n].mean()
+    assert buf.explained_variance().item() == pytest.approx(0.0, abs=1e-4)
+    buf.values[:n] = -buf.returns[:n]
+    assert buf.explained_variance().item() < 0.0, "worse than the mean must read negative"
+
+
+def test_update_reports_explained_variance():
+    torch.manual_seed(15)
+    trainer = DualClipPPO(LanePolicy(), _small_cfg(target_kl=1e9))
+    buf = _fill_buffer(seed=15)
+    buf.values[: buf.step] = buf.returns[: buf.step]
+    stats = trainer.update(buf)
+    assert "explained_variance" in stats
+    assert stats["explained_variance"] == pytest.approx(1.0, abs=1e-4)
+
+
+# --------------------------------------------------------------------------
+# The KL early stop fires on LEARNING, not on staleness
+# --------------------------------------------------------------------------
+
+
+def test_the_early_stop_ignores_staleness_the_update_did_not_cause():
+    """rl-bc4-0912's loss/epochs_run was bimodal: 4 epochs 1,684 times and ONE
+    epoch 948 times (35%), almost never 2 or 3.  A rollout arrives up to
+    max_staleness parameter versions old, so approx_kl is already above 0.02
+    before a single gradient is taken, and the absolute test stopped on that
+    and threw three epochs of work away.
+
+    Here the stored log-probs are deliberately far from the policy's (approx_kl
+    in the ones, not the hundredths) and the learning rate is ZERO, so the
+    update adds nothing.  The run must NOT stop.
+    """
+    torch.manual_seed(16)
+    trainer = DualClipPPO(
+        LanePolicy(), _small_cfg(epochs=4, lr=0.0, critic_lr=0.0, target_kl=0.02)
+    )
+    stats = trainer.update(_fill_buffer(seed=16))
+    assert stats["approx_kl"] > 0.02, "test setup bug: no staleness to ignore"
+    assert stats["approx_kl_staleness"] > 0.02, "the drift must be visible on its own"
+    assert stats["approx_kl_excess"] == pytest.approx(0.0, abs=1e-6)
+    assert stats["kl_early_stop"] == 0.0
+    assert stats["epochs_run"] == 4.0
+
+
+def test_epoch_zero_is_never_cut_short():
+    """The baseline IS epoch 0, so a rollout always gets one full pass -- which
+    is what the 948 one-epoch updates were being denied."""
+    torch.manual_seed(23)
+    trainer = DualClipPPO(
+        LanePolicy(), _small_cfg(epochs=4, burn_in=0, lr=1e-2, target_kl=1e-12)
+    )
+    stats = trainer.update(_fill_buffer(seed=23))
+    assert stats["epochs_run"] == 2.0, "epoch 0 sets the baseline; epoch 1 must trip"
+    assert stats["kl_early_stop"] == 1.0
+
+
+# --------------------------------------------------------------------------
+# Advantage normalisation, the KL reference, and the stats path
+# --------------------------------------------------------------------------
+
+
+def test_advantages_are_whitened_over_the_whole_rollout():
+    buf = _fill_buffer(seed=17)
+    buf.normalize_advantages()
+    a = buf.advantages[: buf.step]
+    assert a.mean().abs().item() < 1e-5
+    assert a.std(unbiased=False).item() == pytest.approx(1.0, abs=1e-4)
+    # A single minibatch is NOT itself zero-mean, and that is the point: its
+    # mean says whether those steps were better than the rollout, which
+    # per-minibatch normalisation threw away.
+    means = [
+        float(mb["advantages"].mean())
+        for mb in buf.iter_minibatches(8, 4, 4)
+    ]
+    assert max(abs(m) for m in means) > 1e-3, means
+
+
+def test_update_normalises_advantages_once_not_per_minibatch():
+    torch.manual_seed(18)
+    trainer = DualClipPPO(LanePolicy(), _small_cfg(lr=0.0, critic_lr=0.0, target_kl=1e9))
+    buf = _fill_buffer(seed=18)
+    raw = buf.advantages[: buf.step].clone()
+    trainer.update(buf)
+    assert not torch.equal(raw, buf.advantages[: buf.step])
+    assert buf.advantages[: buf.step].mean().abs().item() < 1e-5
+
+
+def test_the_precomputed_reference_logits_match_one_direct_forward():
+    """The reference is frozen and the rollout is fixed, so its logits are the
+    same in every epoch and every minibatch: computed once, for the whole
+    rollout, instead of 4 x 60 forward passes with a critic attached."""
+    torch.manual_seed(19)
+    reference = LanePolicy()
+    trainer = DualClipPPO(LanePolicy(), _small_cfg(kl_ref_coef=1.0), reference=reference)
+    buf = _fill_buffer(seed=19)
+    # an awkward slice size, to catch a bookkeeping error in the chunking
+    cached = trainer._reference_logits_for_rollout(buf, time_chunk=7)
+
+    T = buf.step
+    with torch.no_grad():
+        dist, _tokens, _h = reference.actor_forward(
+            buf.obs["entities"][:T].transpose(0, 1),
+            buf.obs["entity_pad_mask"][:T].transpose(0, 1),
+            buf.obs["self_vec"][:T].transpose(0, 1),
+            buf.obs["global_vec"][:T].transpose(0, 1),
+            buf.h_actor[0].unsqueeze(0).contiguous(),
+            buf.resets[:T].transpose(0, 1),
+            action_masks={k: buf.masks[k][:T].transpose(0, 1) for k in MASK_KEYS},
+        )
+    for k, v in dist.logits.items():
+        assert torch.allclose(cached[k], v.transpose(0, 1), atol=1e-5), k
+
+
+def test_the_kl_anchor_is_still_applied_through_the_cached_logits():
+    torch.manual_seed(20)
+    policy = LanePolicy()
+    same = copy.deepcopy(policy)
+    far = LanePolicy()  # a different random init
+    buf = _fill_buffer(seed=20)
+
+    def kl_ref_of(reference):
+        p = copy.deepcopy(policy)
+        tr = DualClipPPO(p, _small_cfg(lr=0.0, critic_lr=0.0, kl_ref_coef=1.0, target_kl=1e9),
+                         reference=reference)
+        return tr.update(_fill_buffer(seed=20))["kl_ref"]
+
+    identical, different = kl_ref_of(same), kl_ref_of(far)
+    # Identical weights do NOT give exactly zero, and that is the documented
+    # consequence of precomputing: the policy's state for a chunk is the stored
+    # hidden vector plus a burn_in-step replay, while the reference carries its
+    # own state across the whole rollout, so the two condition on slightly
+    # different histories. Measured, that residual is ~1e-4 -- three orders
+    # below the KL to a differently-initialised prior.
+    assert identical < 1e-3, identical
+    assert different > 100 * max(identical, 1e-9), (identical, different)
+
+
+def test_update_minibatch_returns_device_tensors_not_host_floats():
+    """Eight .item() calls per minibatch, up to 60 minibatches per update, is
+    up to 480 device synchronisations for numbers nothing reads until the
+    update ends."""
+    torch.manual_seed(21)
+    trainer = DualClipPPO(LanePolicy(), _small_cfg(kl_ref_coef=1.0), reference=LanePolicy())
+    batch = next(iter(_fill_buffer(seed=21).iter_minibatches(8, 4, 4)))
+    stats = trainer.update_minibatch(batch)
+    assert stats, "no diagnostics at all"
+    for k, v in stats.items():
+        assert torch.is_tensor(v), f"{k} is a host float: that is a sync per minibatch"
+        assert v.ndim == 0 and not v.requires_grad, k
+
+
+def test_update_returns_plain_floats():
+    """...but the update itself must hand TrainingLoop numbers it can log."""
+    torch.manual_seed(22)
+    trainer = DualClipPPO(LanePolicy(), _small_cfg(target_kl=1e9))
+    stats = trainer.update(_fill_buffer(seed=22))
+    for k, v in stats.items():
+        assert isinstance(v, float), (k, type(v))
+    for k in ("explained_variance", "approx_kl_staleness", "approx_kl_baseline",
+              "approx_kl_excess", "lr_actor", "lr_critic", "actor_frozen"):
+        assert k in stats, k
