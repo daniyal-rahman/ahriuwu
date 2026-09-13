@@ -73,33 +73,41 @@ log = logging.getLogger("lanerl_train.procactor")
 
 
 def _use_robust_sharing() -> None:
-    """Send CPU tensors through /dev/shm files rather than bare file descriptors.
+    """Leave torch's sharing strategy alone unless explicitly overridden.
 
-    Torch's default ``file_descriptor`` strategy passes an fd and unlinks the
-    backing shared-memory file immediately. Under load that races, and the
-    failure is silent where it matters: it is raised inside the CHILD's
-    multiprocessing feeder THREAD, which logs and carries on, so the actor
-    stays alive, the run stays healthy, and one rollout simply never arrives.
+    This used to force ``file_system``, to fix a rare loss: torch's default
+    ``file_descriptor`` strategy unlinks the backing /dev/shm file right after
+    passing the fd, and under load that races, throwing inside the child's
+    multiprocessing feeder THREAD where it is logged and swallowed. One
+    rollout then never arrives and nothing counts it. Measured rate on run
+    rl-0913d: 1 in 1,281.
 
-    Observed on run rl-0913d at ~1,000 updates::
+    ``file_system`` traded that for something far worse. With several spawned
+    processes, one process's ``resource_tracker`` unlinks a segment another
+    still has mapped, ``MapAllocator::close`` throws a c10::Error, and the
+    actor dies on SIGABRT::
 
-        RuntimeError: could not unlink the shared memory file
-        /torch_59042_2736413697_56927 : No such file or directory (2)
-          ... in multiprocessing/queues.py line 244, in _feed
+        terminate called after throwing an instance of 'c10::Error'
+          Exception raised from close at ATen/MapAllocator.cpp:545
+        actor process lanerl-actor-3 exited with code -6
 
-    Nothing counts a rollout lost that way -- not the staleness rejection
-    stats, not throughput, not the actor error queue. It is exactly the class
-    of silent loss this stack keeps being bitten by, so it is worth the
-    ``file_system`` strategy's slightly higher per-transfer cost.
+    Run rl-league-0913 died that way inside five minutes. A rare, non-fatal,
+    now-instrumented loss beats a frequent fatal one, so the default is back.
 
-    The tradeoff being accepted: ``file_system`` leaks files in /dev/shm if a
-    process is SIGKILLed. That is bounded (a run's worth of rollouts) and
-    visible, which beats losing data with no trace.
+    ``LANERL_SHARING_STRATEGY`` overrides it for anyone who wants to
+    experiment, deliberately and with this note in front of them.
     """
+    want = os.environ.get("LANERL_SHARING_STRATEGY")
+    if not want:
+        return
     try:
-        mp.set_sharing_strategy("file_system")
-    except Exception:  # pragma: no cover - platform dependent
-        log.warning("could not set the file_system sharing strategy", exc_info=True)
+        mp.set_sharing_strategy(want)
+        log.warning("sharing strategy forced to %r via LANERL_SHARING_STRATEGY; "
+                    "'file_system' has been observed to abort actors with a "
+                    "c10::Error from MapAllocator::close", want)
+    except Exception:
+        log.warning("could not set sharing strategy %r", want, exc_info=True)
+
 
 #: How long a child waits for its first parameters before deciding the parent is
 #: gone.  Generous: the parent may still be booting its own servers.
@@ -239,6 +247,7 @@ def _actor_main(
 ) -> None:
     """Child entry point.  Module-level so ``spawn`` can import it by name."""
     built_drivers: List[Any] = []
+    sent = {"n": 0}
     try:
         logging.basicConfig(
             level=spec.log_level,
@@ -326,6 +335,14 @@ def _actor_main(
                 continue
             rollout.actor_id = spec.actor_id
             rollout.param_version = version
+            # A per-actor sequence number, so the PARENT can tell a rollout
+            # that was never sent from one that was sent and vanished. The
+            # shared-memory send can fail inside the feeder thread, which logs
+            # and swallows it -- observed once in 1,281 on run rl-0913d, with
+            # nothing anywhere counting the loss. A gap in this sequence is the
+            # only way to see it.
+            sent["n"] += 1
+            rollout.actor_seq = sent["n"]
             # To CPU before it crosses: the parent has its own CUDA context and
             # cannot receive a tensor living in this one.
             if rollout.data is not None and hasattr(rollout.data, "to"):

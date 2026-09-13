@@ -184,6 +184,12 @@ class Rollout:
     steps: int
     data: Any = None
     episodes: List[EpisodeResult] = field(default_factory=list)
+    #: Per-actor monotonic send counter, set by process actors. A GAP in it
+    #: means a rollout was produced and lost in transit -- the shared-memory
+    #: handover can throw inside the child's feeder thread, which logs and
+    #: carries on, so nothing else notices. None for thread actors, which hand
+    #: the object over directly and cannot lose one this way.
+    actor_seq: Optional[int] = None
     #: Realised opponent mixture within this rollout, for drift checking.
     mixture: Mapping[str, float] = field(default_factory=dict)
     collected_at: float = field(default_factory=time.time)
@@ -839,6 +845,12 @@ class RunState:
 
     update: int = 0
     param_version: int = 0
+    #: Rollouts a process actor sent that never arrived -- detected by a gap in
+    #: the per-actor send sequence, because the shared-memory handover can fail
+    #: inside the child's feeder thread where it is logged and swallowed.
+    #: Persisted so the count survives a resume; it is collected simulator work
+    #: the learner never saw.
+    rollouts_lost: int = 0
     #: Rollout ROWS, summed over every accepted rollout -- **not** decisions.
     #: One row covers ``Rollout.parallel_envs`` simultaneous decisions, so the
     #: first run's 4,131,000 "env steps" were 33,048,000 decisions (8 slots: 2
@@ -995,6 +1007,8 @@ class TrainingLoop:
         self.actor_pool = actor_pool
         #: Realised league draw counts by category, for _log_league_health.
         self._league_draws: Dict[str, int] = {}
+        #: Last seen send-sequence per actor, for lost-rollout detection.
+        self._actor_seq: Dict[int, int] = {}
         self.queue: "queue.Queue[Rollout]" = (
             actor_pool.out_queue if actor_pool is not None
             else queue.Queue(maxsize=config.queue_capacity)
@@ -1362,6 +1376,26 @@ class TrainingLoop:
                 **self.staleness.stats(),
             )
             return False
+
+        if rollout.actor_seq is not None:
+            # Gap detection. The child numbers every rollout it sends; a jump
+            # here means one was produced, cost a full 8.5 game-seconds across
+            # 24 slots to collect, and was lost in the shared-memory handover
+            # -- which fails inside the child's feeder thread where it is
+            # logged and swallowed. Nothing else in the stack can see it: not
+            # the staleness stats, not throughput, not the actor error queue.
+            prev = self._actor_seq.get(rollout.actor_id)
+            if prev is not None and rollout.actor_seq > prev + 1:
+                lost = rollout.actor_seq - prev - 1
+                self.state.rollouts_lost += lost
+                log.error(
+                    "LOST %d rollout(s) from actor %d in transit (seq %d -> %d). "
+                    "The shared-memory handover dropped them; %d lost so far. "
+                    "That is collected simulator work the learner never saw.",
+                    lost, rollout.actor_id, prev, rollout.actor_seq,
+                    self.state.rollouts_lost,
+                )
+            self._actor_seq[rollout.actor_id] = rollout.actor_seq
 
         if self.actor_pool is not None and rollout.data is not None:
             # It was collected in another process, on that process's CUDA
