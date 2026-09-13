@@ -387,6 +387,16 @@ WIRE_FIELDS: Dict[str, WireField] = dict(
             poison=999,
         ),
         _wf(
+            "mt", "unit", "actor", True, True, True,
+            "which kind of lane minion this is (melee/caster/cannon). Visible to "
+            "any player -- they have different models and different health bars "
+            "-- and NOT derivable from anything else the actor sees: every lane "
+            "minion arrives as kind 'LaneMinion', so without this the policy "
+            "cannot tell a 290-hp caster from a 700-hp cannon and has one "
+            "last-hit threshold for three targets that differ by 2.3x",
+            poison=999,
+        ),
+        _wf(
             "cs", "unit", "actor", True, True, True,
             "own creep score is on the agent's own HUD; the ENEMY's is privileged. "
             "The control channel DOES emit this now (added 2026-09-11 so cs_at_10 "
@@ -412,12 +422,20 @@ WIRE_DYNAMIC_FAMILIES: Dict[str, Tuple[str, ...]] = {
 
 
 def record_keys() -> FrozenSet[str]:
-    """Registered top-level keys."""
+    """Registered top-level keys.
+
+    Deliberately NOT cached. ``WIRE_FIELDS`` is monkeypatched by the audit
+    tests -- that is how "an unclassified field must FAIL" is proved at all --
+    and an ``lru_cache`` here pins the original registry, so the patch silently
+    does nothing and the test that guards the whole schema-completeness story
+    passes against the wrong data. It is ~0.8% of an observation build; the
+    caller hoists it out of the per-unit loop, which is where it mattered.
+    """
     return frozenset(k for k, f in WIRE_FIELDS.items() if f.scope == "record")
 
 
 def unit_keys() -> FrozenSet[str]:
-    """Registered per-unit keys."""
+    """Registered per-unit keys.  Uncached for the reason in :func:`record_keys`."""
     return frozenset(k for k, f in WIRE_FIELDS.items() if f.scope == "unit")
 
 
@@ -436,10 +454,27 @@ _ALLOW_UNKNOWN_ENV = "LANERL_ALLOW_UNKNOWN_WIRE_FIELDS"
 #: repetitive (one per unit type), so this makes the check ~free at 15 Hz.
 _VALIDATED_KEYSETS: Set[FrozenSet[str]] = set()
 
+#: The same cache keyed by the key TUPLE, in the emitter's own order.
+#:
+#: The fast path here runs once per unit per decision per side -- at 12
+#: instances and ~40 units that is ~1,000 calls per decision -- and building a
+#: ``frozenset`` to look one up costs more than every other line in
+#: ``decode_frame`` put together (measured: it was the single hottest call in
+#: the observation build). A ``tuple`` of the same keys hashes far more cheaply
+#: and, because a JSON emitter writes its keys in a fixed order, there are only
+#: a handful of distinct tuples in practice. Correctness is unchanged: a tuple
+#: that has NOT been seen falls through to the full frozenset check below, so an
+#: unregistered field is still fatal the first time it appears in any ordering.
+_VALIDATED_KEY_TUPLES: Set[tuple] = set()
+
 
 def _reject_unknown(keys, known: FrozenSet[str], where: str) -> None:
-    ks = frozenset(keys)
+    kt = tuple(keys)
+    if kt in _VALIDATED_KEY_TUPLES:
+        return
+    ks = frozenset(kt)
     if ks in _VALIDATED_KEYSETS:
+        _VALIDATED_KEY_TUPLES.add(kt)
         return
     unknown = sorted(ks - known)
     if unknown:
@@ -458,6 +493,7 @@ def _reject_unknown(keys, known: FrozenSet[str], where: str) -> None:
         warnings.warn(msg, RuntimeWarning, stacklevel=3)
         return
     _VALIDATED_KEYSETS.add(ks)
+    _VALIDATED_KEY_TUPLES.add(kt)
 
 
 # --------------------------------------------------------------------------
@@ -493,6 +529,9 @@ class Unit:
     mr: Optional[float] = None
     attack_speed: Optional[float] = None
     attack_range: Optional[float] = None
+    #: Lane-minion subtype off the wire (GameServerCore MinionSpawnType):
+    #: 0 melee, 1 super, 2 cannon, 3 caster.  None for anything else.
+    minion_type: Optional[int] = None
     #: Remaining cooldown per spell slot, in SECONDS.  ``None`` for a slot the
     #: champion does not have, ``None`` for the whole tuple when unreported.
     cooldowns: Optional[Tuple[Optional[float], ...]] = None
@@ -620,6 +659,7 @@ def decode_frame(raw: dict) -> Frame:
             mr=None if ru.get("mr") is None else float(ru["mr"]),
             attack_speed=None if ru.get("as") is None else float(ru["as"]),
             attack_range=None if ru.get("rng") is None else float(ru["rng"]),
+            minion_type=None if ru.get("mt") is None else int(ru["mt"]),
             cooldowns=_decode_cooldowns(ru),
             spell_levels=_as_tuple4(ru.get("sl")),
             visible_to=_decode_visibility(ru),
@@ -1003,9 +1043,8 @@ class UnitMemory:
     last_y: float = 0.0
     last_hp_frac: float = 0.0
     last_mhp: float = 1.0
-    #: Unit-length world heading at the moment of the last sighting, or ``None``
-    #: if the unit was stationary / only ever seen once.
-    last_heading: Optional[Tuple[float, float]] = None
+    #: Lane-minion subtype (MinionSpawnType), None for anything else.
+    minion_type: Optional[int] = None
     ever_seen: bool = False
 
     def observe(self, t_ms: float, u: Unit) -> None:
@@ -1019,19 +1058,25 @@ class UnitMemory:
         self.etype = u.etype
         self.team = u.team
         self.ever_seen = True
-        vx, vy = self.velocity(t_ms)
-        speed = math.hypot(vx, vy)
-        if speed > 1e-6:
-            self.last_heading = (vx / speed, vy / speed)
+        # `last_heading` used to be maintained here, at the cost of a full
+        # velocity() -- i.e. a history scan -- for EVERY unit on EVERY tick.
+        # Nothing has read it since the observation was cut to 534 floats;
+        # constants.py's own layout note already lists it as dead.
 
     def _sample_at_or_before(self, t_ms: float) -> Optional[Tuple[float, float, float, float]]:
-        best = None
-        for sample in self.history:
+        """Newest sample at or before ``t_ms``; ``None`` if the history is all newer.
+
+        Scans NEWEST-FIRST. Walking oldest-first was the same answer for the
+        same cost in principle and a disaster in practice: the history holds 64
+        samples, the caller always wants one ~6 back (a 200 ms window at 30 Hz),
+        so the forward walk touched ~58 dead entries before reaching it and then
+        broke. This was the hottest function in the entire stack -- 8.87M calls
+        and 25% of a profiled observation build.
+        """
+        for sample in reversed(self.history):
             if sample[0] <= t_ms:
-                best = sample
-            else:
-                break
-        return best
+                return sample
+        return None
 
     def velocity(self, t_ms: float) -> Tuple[float, float]:
         """Finite-difference velocity in world units/second."""
@@ -1194,7 +1239,8 @@ class AgentMemory:
                 continue
             mem = self.units.get(uid)
             if mem is None:
-                mem = UnitMemory(etype=u.etype, team=u.team)
+                mem = UnitMemory(etype=u.etype, team=u.team,
+                                minion_type=u.minion_type)
                 self.units[uid] = mem
             mem.observe(t, u)
 

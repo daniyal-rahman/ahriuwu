@@ -80,19 +80,10 @@ class _FogLeakyBuilder(ObservationBuilder):
                     s=cs_,
                     n=cn_,
                     dist=math.hypot(cs_ - ax, cn_ - ay),
-                    visible=True,
-                    on_screen=True,
                     hp_known=True,
-                    staleness=0.0,
-                    age_s=0.0,
+                    minion_type=None,
                     hp_frac=u.hp / u.mhp,
                     mhp=u.mhp,
-                    hp_d_short=0.0,
-                    hp_d_long=0.0,
-                    vs=0.0,
-                    vn=0.0,
-                    heading=None,
-                    reach_radius=0.0,
                 )
         return slots
 
@@ -285,6 +276,11 @@ def test_the_real_emitter_parses(monkeypatch):
         # Q,E,E,W,E,R -- so at champion level 2-3 the action mask forbade the
         # one ability the champion had and offered one it did not own.
         "sl",
+        # added 2026-09-12: which lane minion this is (MinionSpawnType --
+        # melee / caster / cannon). They differ in hp, armour and gold, so
+        # "can I last-hit it" is not a function of the hp bar alone; the
+        # network was being shown three different units as one.
+        "mt",
     }, sorted(keys)
 
 

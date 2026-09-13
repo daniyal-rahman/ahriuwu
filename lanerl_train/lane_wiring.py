@@ -123,6 +123,33 @@ class InstanceRewardContext:
         #: the term sums and from the death count, which is precisely the
         #: transition anyone reading those numbers is looking for.
         self.terminal_info: Dict[str, object] = {}
+        #: The decoded frame for the raw observation both side-adapters of this
+        #: instance are currently acting on, so it is decoded ONCE per tick
+        #: instead of once per side.
+        #:
+        #: ``VecDriver._forward`` loops sides on the outside and instances on
+        #: the inside, reading ``self.env.last_obs[i]`` -- the SAME dict object
+        #: -- for both sides, so ``decode_frame`` ran twice over identical
+        #: input every tick. It was 2.76 s of a 42.7 s profiled build, and half
+        #: of that was pure duplicate.
+        #:
+        #: Scoping the cache to the instance context is what makes it safe: one
+        #: entry, one live raw, replaced when the instance advances, so nothing
+        #: grows and there is no ``id()`` reuse hazard -- the guard below
+        #: compares the raw OBJECT, not its address. ``Frame`` and ``Unit`` are
+        #: read-only to every consumer (the builders copy what they keep into
+        #: ``UnitMemory``), so sharing one across both sides is sound.
+        self._frame_raw: Optional[RawObs] = None
+        self._frame: Optional[Frame] = None
+
+    def frame_for(self, raw: RawObs) -> Frame:
+        """``decode_frame(raw)``, computed once per instance per tick."""
+        if self._frame_raw is raw and self._frame is not None:
+            return self._frame
+        frame = decode_frame(raw)
+        self._frame_raw = raw
+        self._frame = frame
+        return frame
 
     def mark_reset(self) -> None:
         # Guarded because ONE context is shared by both side-adapters of an
@@ -271,7 +298,7 @@ class LaneObservationAdapter:
 
     def build(self, raw: RawObs, side: Side) -> AgentObservation:
         assert side == self.side, (side, self.side)
-        frame = decode_frame(raw)
+        frame = self.reward_ctx.frame_for(raw)
         me = frame.champion_of_team(self.team)
         if me is not None and me.recalling is not None:
             self.builder.set_recalling(bool(me.recalling))

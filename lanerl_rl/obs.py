@@ -584,7 +584,26 @@ def check_observation(
 
 @dataclass(slots=True)
 class _SlotEntity:
-    """A candidate for one entity slot, already in lane-local coordinates."""
+    """A candidate for one entity slot, already in lane-local coordinates.
+
+    **Exactly the fields something downstream reads.** This carried ten more --
+    ``visible``, ``on_screen``, ``staleness``, ``age_s``, ``hp_d_short``,
+    ``hp_d_long``, ``vs``, ``vn``, ``heading``, ``reach_radius`` -- left behind
+    when the observation was cut from 1,392 floats to 534. The fields left the
+    tensor layout; the code computing them did not, so every one was still
+    being computed per candidate per decision and then discarded.
+
+    That was not free. ``velocity`` and ``hp_delta`` each walk a per-unit
+    history ring (``UnitMemory._sample_at_or_before``), and filling these ten
+    fields cost SIX ring scans per candidate per decision per side. Profiled
+    over 27,648 builds: ``_sample_at_or_before`` alone took 8.87M calls and
+    10.6 s of a 42.7 s observation build -- 321 scans per single ``build()``,
+    the hottest function in the stack by a factor of two, entirely for numbers
+    no tensor ever received.
+
+    If a field is added back here, it must be written into ``ENTITY_FIELD_NAMES``
+    in the same change, or it is dead weight on the hot path again.
+    """
 
     uid: int
     etype: str
@@ -592,19 +611,10 @@ class _SlotEntity:
     s: float
     n: float
     dist: float
-    visible: bool
-    on_screen: bool
     hp_known: bool
-    staleness: float
-    age_s: float
+    minion_type: Optional[int]
     hp_frac: float
     mhp: float
-    hp_d_short: float
-    hp_d_long: float
-    vs: float
-    vn: float
-    heading: Optional[Tuple[float, float]]
-    reach_radius: float
 
 
 class ObservationBuilder:
@@ -863,23 +873,16 @@ class ObservationBuilder:
             if mem.last_hp_frac <= 0.0:
                 # We watched it die; a player knows it is gone.
                 continue
-            age = mem.age_s(float(t_ms))
-            if age > C.FORGET_S:
-                continue
-            cs_, cn_ = self.lane.point(mem.last_x, mem.last_y)
-            vx, vy = mem.velocity(float(t_ms))
-            cvs, cvn = self.lane.vector(vx, vy)
-            heading = None
-            if mem.last_heading is not None:
-                hs, hn = self.lane.vector(*mem.last_heading)
-                mag = math.hypot(hs, hn)
-                if mag > 1e-9:
-                    heading = (hs / mag, hn / mag)
-            dist = math.hypot(cs_ - ax, cn_ - ay)
+            # Fog gate FIRST. This used to run last, after the position,
+            # velocity, heading and both hp deltas had already been computed --
+            # so every fogged unit paid the full cost of a slot it was then
+            # dropped from.
             if uid not in visible:
                 continue          # fogged: the GRU remembers, the slot does not
-            vis = True
-            on_screen = dist <= self.screen_radius
+            if mem.age_s(float(t_ms)) > C.FORGET_S:
+                continue
+            cs_, cn_ = self.lane.point(mem.last_x, mem.last_y)
+            dist = math.hypot(cs_ - ax, cn_ - ay)
             candidates.append(
                 _SlotEntity(
                     uid=uid,
@@ -888,19 +891,12 @@ class ObservationBuilder:
                     s=cs_,
                     n=cn_,
                     dist=dist,
-                    visible=vis,
-                    on_screen=on_screen,
-                    hp_known=vis and on_screen,
-                    staleness=min(age / C.STALE_HORIZON_S, 1.0),
-                    age_s=age,
+                    # Visible by construction (fogged units returned above), so
+                    # readable hp is exactly "on screen".
+                    hp_known=dist <= self.screen_radius,
+                    minion_type=mem.minion_type,
                     hp_frac=mem.last_hp_frac,
                     mhp=mem.last_mhp,
-                    hp_d_short=mem.hp_delta(C.HP_DELTA_SHORT_MS),
-                    hp_d_long=mem.hp_delta(C.HP_DELTA_LONG_MS),
-                    vs=cvs,
-                    vn=cvn,
-                    heading=heading,
-                    reach_radius=mem.reachability_radius(float(t_ms), self.move_speed),
                 )
             )
         return self._assign_slots(candidates)
@@ -992,6 +988,11 @@ class ObservationBuilder:
             C.ENTITY_TYPE_INDEX.get(e.etype, C.ENTITY_TYPE_INDEX["other"])
         ] = 1.0
         row[C.E_TEAM_ONEHOT][C.ENTITY_TEAMS.index(e.team_rel)] = 1.0
+        # WHICH lane minion. All-zero for anything that is not one, and for a
+        # SUPER minion, which cannot appear inside ten minutes.
+        idx = C.MINION_TYPE_INDEX.get(e.minion_type)
+        if idx is not None:
+            row[C.E_MINION_SUBTYPE][idx] = 1.0
 
     def _render_slots(
         self,
@@ -1140,19 +1141,6 @@ class ObservationBuilder:
             if uid == self_id or not u.alive:
                 continue
             cs_, cn_ = self.lane.point(u.x, u.y)
-            mem = self.memory.units.get(uid)
-            if mem is not None:
-                rvx, rvy = mem.velocity(float(frame.t_ms))
-            else:
-                rvx = rvy = 0.0
-            cvs, cvn = self.lane.vector(rvx, rvy)
-            hp_frac = 0.0 if u.mhp <= 0 else max(0.0, min(1.0, u.hp / u.mhp))
-            heading = None
-            if mem is not None and mem.last_heading is not None:
-                hs, hn = self.lane.vector(*mem.last_heading)
-                mag = math.hypot(hs, hn)
-                if mag > 1e-9:
-                    heading = (hs / mag, hn / mag)
             candidates.append(
                 _SlotEntity(
                     uid=uid,
@@ -1161,19 +1149,10 @@ class ObservationBuilder:
                     s=cs_,
                     n=cn_,
                     dist=math.hypot(cs_ - ax, cn_ - ay),
-                    visible=True,
-                    on_screen=True,
-                    hp_known=True,
-                    staleness=0.0,
-                    age_s=0.0,
-                    hp_frac=hp_frac,
+                    hp_known=True,  # fog is off on this path
+                    minion_type=u.minion_type,
+                    hp_frac=0.0 if u.mhp <= 0 else max(0.0, min(1.0, u.hp / u.mhp)),
                     mhp=u.mhp,
-                    hp_d_short=0.0 if mem is None else mem.hp_delta(C.HP_DELTA_SHORT_MS),
-                    hp_d_long=0.0 if mem is None else mem.hp_delta(C.HP_DELTA_LONG_MS),
-                    vs=cvs,
-                    vn=cvn,
-                    heading=heading,
-                    reach_radius=0.0,
                 )
             )
         return self._assign_slots(candidates)

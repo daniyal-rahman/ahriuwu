@@ -606,8 +606,14 @@ class VecLaneEnv:
             raise VecEnvFailure("step() before start()")
         if len(actions) != self.n:
             raise ValueError(f"got {len(actions)} actions for {self.n} instances")
+        _t0 = time.perf_counter()
         pending = self._send_all(actions)
+        _t1 = time.perf_counter()
         result = self._collect(pending)
+        _t2 = time.perf_counter()
+        if _PhaseTimer.ENABLED:
+            _ENV_TIMER.add("env_send", _t1 - _t0)
+            _ENV_TIMER.add("env_wait_recv", _t2 - _t1)
         self._restart_dead(result)
         return result
 
@@ -854,6 +860,60 @@ def episode_done(raw: RawObs, spec: EpisodeSpec, steps: int) -> Tuple[bool, str]
     return False, ""
 
 
+class _PhaseTimer:
+    """Per-phase wall clock for one decision, on LANERL_TIME_PHASES=1.
+
+    Three different AGGREGATES have each implied a different bottleneck --
+    learner_frac 0.98 said "the learner", 4% GPU and load 1.25/16 said "nothing
+    is saturated", and throughput falling as instances rose said "stragglers".
+    None of them timed a phase. This does, and it costs a perf_counter call per
+    phase when enabled and nothing when not.
+    """
+
+    ENABLED = os.environ.get("LANERL_TIME_PHASES") == "1"
+    EVERY = int(os.environ.get("LANERL_TIME_PHASES_EVERY", "200"))
+
+    def __init__(self) -> None:
+        self.acc: Dict[str, float] = {}
+        self.n = 0
+
+    def add(self, name: str, dt: float) -> None:
+        self.acc[name] = self.acc.get(name, 0.0) + dt
+
+    def tick(self, n_instances: int) -> None:
+        self.n += 1
+        if not self.ENABLED or self.n % self.EVERY:
+            return
+        tot = sum(self.acc.values()) or 1e-9
+        parts = "  ".join(
+            f"{k}={1000*v/self.n:6.2f}ms({100*v/tot:4.1f}%)"
+            for k, v in sorted(self.acc.items(), key=lambda kv: -kv[1])
+        )
+        log.info("PHASE n=%d instances=%d per-decision %.2fms | %s",
+                 self.n, n_instances, 1000 * tot / self.n, parts)
+
+
+_ENV_TIMER = _PhaseTimer()
+
+_OBS_PROF = None
+if os.environ.get("LANERL_PROFILE_OBS") == "1":
+    import atexit as _atexit
+    import cProfile as _cProfile
+    import pstats as _pstats
+
+    _OBS_PROF = _cProfile.Profile()
+
+    def _dump_obs_profile():
+        import io as _io
+        buf = _io.StringIO()
+        st = _pstats.Stats(_OBS_PROF, stream=buf).sort_stats("tottime")
+        st.print_stats(30)
+        for line in buf.getvalue().splitlines():
+            log.info("OBSPROF %s", line)
+
+    _atexit.register(_dump_obs_profile)
+
+
 class VecDriver:
     """Owns the batched forward and the scatter.
 
@@ -933,10 +993,24 @@ class VecDriver:
         Exactly ``len(self.slots)`` policy forwards happen here -- one per
         distinct policy, not one per env.
         """
+        # _forward times its own two halves (obs_build / policy_forward), so
+        # there is nothing to measure around it from out here.
         actions_per_slot = self._forward(deterministic)
+        _t1 = time.perf_counter()
         lines = self._scatter(actions_per_slot)
+        _t2 = time.perf_counter()
         result = self.env.step(lines)
+        _t3 = time.perf_counter()
         self._on_new_observations(result)
+        _t4 = time.perf_counter()
+        if _PhaseTimer.ENABLED:
+            # _forward is observation-build + policy forward; _scatter is action
+            # encode; env.step is already split into send and wait-for-reply.
+            # build+forward is now split into obs_build / policy_forward
+            # by the instrumentation inside _forward itself.
+            _ENV_TIMER.add("encode", _t2 - _t1)
+            _ENV_TIMER.add("on_new_obs", _t4 - _t3)
+            _ENV_TIMER.tick(self.env.n)
         dones = self._episode_boundaries(result)
         if dones:
             # Keep the frame the episode ended on before the reset step
@@ -985,11 +1059,21 @@ class VecDriver:
                         f"instance {i} has no observation to act on; start() must have "
                         f"produced one for every live instance"
                     )
+                _b0 = time.perf_counter()
+                if _OBS_PROF is not None:
+                    _OBS_PROF.enable()
                 batch.append(self.adapters[(i, side)].build(raw, side))
+                if _OBS_PROF is not None:
+                    _OBS_PROF.disable()
+                if _PhaseTimer.ENABLED:
+                    _ENV_TIMER.add("obs_build", time.perf_counter() - _b0)
                 resets.append(self._pending_resets[i])
+            _f0 = time.perf_counter()
             actions, self.states[key] = self.policies[key].act_batch(
                 batch, self.states[key], resets=resets, deterministic=deterministic
             )
+            if _PhaseTimer.ENABLED:
+                _ENV_TIMER.add("policy_forward", time.perf_counter() - _f0)
             if len(actions) != len(slot_list):
                 raise VecEnvFailure(
                     f"policy {key!r} returned {len(actions)} actions for {len(slot_list)} "
