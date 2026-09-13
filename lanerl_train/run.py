@@ -782,6 +782,11 @@ class RunConfig:
     #: process actors carry an extra in-flight rollout each, in the child's
     #: feeder thread and pipe.
     actor_mode: str = "thread"
+    #: "self" | "scripted" | "league".  Only "league" makes _sample_opponents
+    #: draw from the pool; the other two keep the pre-existing behaviour
+    #: exactly, rather than routing a mirror through a sampler that can only
+    #: answer "latest".
+    opponent_mode: str = "self"
     league: LeagueConfig = field(default_factory=LeagueConfig)
 
     def __post_init__(self) -> None:
@@ -1227,6 +1232,41 @@ class TrainingLoop:
 
     # -- the update --------------------------------------------------------
 
+    def _sample_opponents(self) -> Optional[List[Optional[dict]]]:
+        """One league draw per actor, as a picklable descriptor.
+
+        **This is the only caller of ``OpponentSampler.sample()`` in the
+        product.** Until 2026-09-13 there was none at all: the sampler kept a
+        pool, computed PFSP weights, recorded win rates and reported mixture
+        drift, while every training game was the live policy against an
+        identical copy of itself. Measured on run rl-0913d -- 372 of 377
+        episodes vs "self", 0 past checkpoints ever played, so every
+        ``min_win_rate_vs_past`` was ``None`` and the Elo table was fitted on
+        one or two anchor games.
+
+        Returns ``None`` when the run is not a league, which keeps the mirror
+        path exactly as it was rather than routing it through a sampler that
+        would only ever answer "latest".
+
+        A draw with no snapshot (``latest``) becomes ``None``, which the child
+        reads as "use the live weights".
+        """
+        if getattr(self.cfg, "opponent_mode", None) != "league":
+            return None
+        out: List[Optional[dict]] = []
+        for _ in range(max(1, self.cfg.num_actors)):
+            try:
+                spec = self.sampler.sample()
+            except Exception:
+                log.error("league sample failed; falling back to the live mirror",
+                          exc_info=True)
+                out.append(None)
+                continue
+            snap = getattr(spec, "snapshot", None)
+            out.append(None if snap is None or not snap.path
+                       else {"id": spec.id, "path": str(snap.path)})
+        return out
+
     def _check_actors(self) -> None:
         if self.actor_pool is not None:
             # A process can also die WITHOUT reporting -- SIGKILL, OOM, a
@@ -1310,7 +1350,8 @@ class TrainingLoop:
             # they share no memory with this process -- so the same two values
             # are pushed down their queues, together, for the same reason.
             self.actor_pool.publish(
-                self.state.param_version, self._policy_payload(), train_step
+                self.state.param_version, self._policy_payload(), train_step,
+                opponents=self._sample_opponents(),
             )
         self._last_update_at = time.monotonic()
 

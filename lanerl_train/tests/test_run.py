@@ -17,6 +17,7 @@ import threading
 import time
 from pathlib import Path
 
+from types import SimpleNamespace
 import pytest
 
 from lanerl_train.eval import Evaluator
@@ -583,3 +584,62 @@ def test_milestone_checkpoints_survive_rotation(tmp_path):
     assert 3500 in kept, f"latest checkpoint was pruned: {kept}"
     # and rotation still actually rotates: the non-milestones are not all kept
     assert 500 not in kept, f"keep_last is not pruning at all: {kept}"
+
+
+# -- the league is actually consulted --------------------------------------
+
+
+def test_league_mode_draws_an_opponent_per_actor(tmp_path):
+    """The regression test for a league that was built and never called.
+
+    `OpponentSampler.sample()` was implemented, unit-tested, and had ZERO
+    non-test callers. The pool filled, PFSP weights were computed, win rates
+    were recorded and mixture drift was reported -- while every training game
+    was the live policy against an identical copy of itself. Measured on run
+    rl-0913d: 372 of 377 episodes vs "self", 0 past checkpoints ever played,
+    so `min_win_rate_vs_past` was `None` on every eval.
+
+    Every existing league test exercised the sampler directly, which is
+    exactly why none of them noticed. This one asserts the TRAINING LOOP
+    reaches it.
+    """
+    loop = make_loop(tmp_path, num_actors=3)
+    loop.cfg.opponent_mode = "league"
+    calls = {"n": 0}
+    real = loop.sampler.sample
+
+    def counting():
+        calls["n"] += 1
+        return real()
+
+    loop.sampler.sample = counting
+    out = loop._sample_opponents()
+    assert calls["n"] == 3, "one draw PER ACTOR, so the mixture is realised across actors"
+    assert out is not None and len(out) == 3
+
+
+def test_non_league_modes_do_not_touch_the_sampler(tmp_path):
+    """A mirror must stay a mirror, bit for bit.
+
+    Routing self-play through the sampler would be a behaviour change for
+    every existing run, and the sampler can only answer "latest" there anyway.
+    """
+    for mode in ("self", "scripted"):
+        loop = make_loop(tmp_path, num_actors=3)
+        loop.cfg.opponent_mode = mode
+        loop.sampler.sample = lambda: pytest.fail(f"sampler used in {mode!r} mode")
+        assert loop._sample_opponents() is None
+
+
+def test_a_latest_draw_means_live_weights_not_a_stale_checkpoint(tmp_path):
+    """A draw with no snapshot must come back as None.
+
+    The child reads None as "load the live payload into red", which is what
+    makes the latest branch byte-identical to the old mirror. Returning a
+    descriptor with an empty path instead would send it down the torch.load
+    path and fall back through an error handler on every single update.
+    """
+    loop = make_loop(tmp_path, num_actors=1)
+    loop.cfg.opponent_mode = "league"
+    loop.sampler.sample = lambda: SimpleNamespace(id="latest", snapshot=None)
+    assert loop._sample_opponents() == [None]

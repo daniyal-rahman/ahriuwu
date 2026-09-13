@@ -60,6 +60,10 @@ from .vec import EpisodeSpec, ServerLaunchSpec, SideAssignment, VecDriver, VecLa
 log = logging.getLogger("lanerl_train.__main__")
 
 SELF = "self"
+#: Policy key for the red side when it is a sampled LEAGUE opponent.
+OPPONENT = "opponent"
+#: ``--opponent league`` -- red is a checkpoint drawn from the PFSP pool.
+LEAGUE = "league"
 
 # Generous headroom per actor's port block: PortAllocator already verifies
 # freeness and raises rather than colliding, but starting each actor far
@@ -150,7 +154,10 @@ def build_argparser() -> argparse.ArgumentParser:
     # -- who the agent plays ---------------------------------------------
     p.add_argument(
         "--opponent", default=SELF,
-        help="'self' (the default: both champions driven by the live policy) or "
+        help="'self' (both champions driven by the live policy), 'league' "
+        "(red is a checkpoint drawn from the PFSP pool -- the sampler exists "
+        "and until 2026-09-13 had ZERO callers, so every game was a live "
+        "mirror and no past checkpoint was ever played), or "
         "'scripted:<name-or-path>[,<name-or-path>...]'. Phase 1 is scripted: in a "
         "mirror the opponent's farming stream is uncontrollable noise in every "
         "advantage, and the training opponent is not comparable with the "
@@ -359,11 +366,18 @@ def build_training_specs(
     balanced across a handful of envs (a draw leaves difficulties unsampled at
     N=4) and a resume faces the same population it left.
     """
-    if opponent == SELF:
+    if opponent in (SELF, LEAGUE):
+        # LEAGUE launches exactly like self-play: both champions are driven by
+        # our control channel, so the SERVER spec is identical and only the
+        # weights behind red differ. Handled here rather than mapped at each
+        # call site because main() pre-flights this function with the raw
+        # --opponent string, and mapping at one site only left that check
+        # rejecting a mode the rest of the stack supports.
         return [ServerLaunchSpec() for _ in range(envs_per_actor)], {}, True
     if not opponent.startswith("scripted:"):
         raise SystemExit(
-            f"--opponent {opponent!r} is neither 'self' nor 'scripted:<name-or-path>'"
+            f"--opponent {opponent!r} is not 'self', 'league', or "
+            f"'scripted:<name-or-path>'"
         )
     configs = resolve_bot_configs(opponent[len("scripted:"):])
     specs: List[ServerLaunchSpec] = []
@@ -399,6 +413,7 @@ def _build_driver_for_actor(
     end_on_death: bool,
     opponent: str,
     seed: int,
+    league: bool = False,
 ) -> Tuple[VecDriver, LanePolicyActor, dict, Dict[int, str]]:
     actor_base = port_base + actor_idx * envs_per_actor * PORTS_PER_ACTOR_STRIDE
     allocator = PortAllocator(base=actor_base)
@@ -412,20 +427,38 @@ def _build_driver_for_actor(
     adapters = make_lane_adapters(train_step_source=train_step_source, reward_cfg=reward_cfg)
     policy = LanePolicy(model_cfg).to(device)
     actor = LanePolicyActor(policy, device=device)
+    # A SECOND policy for the red side, so the opponent can be a past
+    # checkpoint rather than a live mirror. The weights are swapped in on every
+    # parameter push; when the league samples "latest" the live payload goes
+    # into both and the behaviour is byte-identical to the old mirror.
+    #
+    # Two policies, not two assignments: the driver's SideAssignment is fixed
+    # when the driver is built, but the OPPONENT has to change per sample --
+    # so the identity that varies is the weights, not the wiring.
+    opp_actor = None
+    if league:
+        opp_actor = LanePolicyActor(LanePolicy(model_cfg).to(device), device=device)
     specs, labels, red_is_ours = build_training_specs(
-        opponent, seed, actor_idx, envs_per_actor
+        # A league game is a self-play game as far as the SERVER is concerned:
+        # both champions are driven by our control channel, so the launch spec
+        # is identical. Only which weights drive red differs.
+        "self" if league else opponent, seed, actor_idx, envs_per_actor
     )
     env = VecLaneEnv(
         n=envs_per_actor, specs=specs, ports=ports,
         log_dir=run_dir / f"actor{actor_idx}_logs",
     )
+    red_key = OPPONENT if (league and red_is_ours) else (SELF if red_is_ours else None)
+    policies = {SELF: actor}
+    if opp_actor is not None:
+        policies[OPPONENT] = opp_actor
     driver = VecDriver(
         env=env,
-        policies={SELF: actor},
+        policies=policies,
         adapter_factory=adapters.adapter_factory,
         encoder=adapters.encoder,
         assignments=[
-            SideAssignment(blue=SELF, red=SELF if red_is_ours else None)
+            SideAssignment(blue=SELF, red=red_key)
             for _ in range(envs_per_actor)
         ],
         episode=EpisodeSpec(end_on_death=end_on_death),
@@ -437,7 +470,7 @@ def _build_driver_for_actor(
         f"seeds={[s.bot_seed for s in specs]}",
     )
     driver.start()
-    return driver, actor, adapters.reward_contexts, labels
+    return driver, actor, adapters.reward_contexts, labels, opp_actor
 
 
 def main(argv=None) -> int:
@@ -523,6 +556,7 @@ def main(argv=None) -> int:
         seed=args.seed,
         anneal_clock=args.anneal_clock,
         actor_mode=args.actor_mode,
+        opponent_mode=(LEAGUE if args.opponent == LEAGUE else ('scripted' if str(args.opponent).startswith('scripted') else SELF)),
     )
 
     # Resolved config + seed, written for reproducibility BEFORE anything can
@@ -609,6 +643,7 @@ def main(argv=None) -> int:
                     gamma=ppo_cfg.gamma,
                     gae_lambda=ppo_cfg.gae_lambda,
                     policy_key=SELF,
+                    league=(args.opponent == LEAGUE),
                 )
                 for i in range(args.num_actors)
             ],
@@ -639,11 +674,11 @@ def main(argv=None) -> int:
     built_drivers: list = []
 
     def build_driver_for_actor(actor_idx: int):
-        driver, actor, reward_contexts, labels = _build_driver_for_actor(
+        driver, actor, reward_contexts, labels, _opp = _build_driver_for_actor(
             actor_idx, args.envs_per_actor, args.port_base, model_cfg, run_dir,
             args.device, loop.train_steps, reward_cfg,
             True if args.end_on_death is None else args.end_on_death,
-            args.opponent, args.seed,
+            args.opponent, args.seed, league=(args.opponent == LEAGUE),
         )
         built_drivers.append(driver)
         return driver, actor, reward_contexts, labels

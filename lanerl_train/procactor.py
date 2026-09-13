@@ -130,6 +130,7 @@ class ActorSpec:
     gamma: float
     gae_lambda: float
     policy_key: str
+    league: bool = False
     log_level: int = logging.INFO
 
 
@@ -175,6 +176,50 @@ def _drain_latest(q: "mp.Queue", block_timeout: Optional[float]) -> Optional[tup
             return item
 
 
+def _load_opponent(holder: Dict[str, Any], opp: Optional[dict],
+                   live_payload: Mapping[str, Any], device: str) -> None:
+    """Put the sampled opponent's weights on the red-side policy.
+
+    ``opp`` is ``None`` or ``{"id":..., "path":...}``. A ``None`` path means
+    the league drew "latest", so red gets the LIVE weights and the game is an
+    exact mirror -- which is what every game was before the league was wired,
+    so that path has to stay byte-identical.
+
+    Checkpoints are loaded from disk rather than shipped down the queue: a
+    snapshot is ~55 MB and the pool holds up to 30 of them, while the child
+    runs on the same node as the file. Cached by id so a repeated draw is free
+    -- PFSP deliberately draws the same hard opponent often, so without the
+    cache this would reload tens of MB on most updates.
+    """
+    actor = holder.get("actor")
+    if actor is None:
+        return
+    want = (opp or {}).get("id") or "__latest__"
+    path = (opp or {}).get("path")
+    if holder.get("loaded_id") == want:
+        return
+    if not path:
+        if live_payload:
+            actor.policy.load_state_dict(live_payload["policy"])
+        holder["loaded_id"] = want
+        return
+    try:
+        blob = torch.load(path, map_location=device, weights_only=False)
+        sd = blob.get("policy", blob) if isinstance(blob, dict) else blob
+        actor.policy.load_state_dict(sd)
+        holder["loaded_id"] = want
+        log.info("red side is now league opponent %s", want)
+    except Exception:
+        # Fall back to the live mirror rather than silently keeping whatever
+        # weights red happened to have -- an opponent nobody can name is worse
+        # than a known one, and it would poison the win-rate table.
+        log.error("could not load league opponent %s from %s; using live weights",
+                  want, path, exc_info=True)
+        if live_payload:
+            actor.policy.load_state_dict(live_payload["policy"])
+        holder["loaded_id"] = "__latest__"
+
+
 def _actor_main(
     spec: ActorSpec,
     param_q: "mp.Queue",
@@ -214,6 +259,8 @@ def _actor_main(
 
         train_step = _TrainStepBox()
 
+        opp_holder: Dict[str, Any] = {"actor": None, "loaded_id": None}
+
         def build(actor_idx: int):
             built = _build_driver_for_actor(
                 actor_idx,
@@ -227,7 +274,14 @@ def _actor_main(
                 spec.end_on_death,
                 spec.opponent,
                 spec.seed,
+                league=spec.league,
             )
+            # built[4] is the red-side policy when running a league. Held here
+            # because make_collect_fn only threads through the first four
+            # elements, and the weights have to be swapped from the parameter
+            # loop below rather than at build time.
+            if len(built) > 4:
+                opp_holder["actor"] = built[4]
             # The child OWNS these servers, and nothing else can reach them:
             # in the threaded path `__main__` keeps a `built_drivers` list and
             # closes them in its finally, but that list lives in the parent and
@@ -251,9 +305,10 @@ def _actor_main(
                     f"first parameters and got none; the parent never published or died"
                 )
             if got is not None:
-                version, payload, step = got
+                version, payload, step, opp = got
                 train_step.set(step)
                 first = False
+                _load_opponent(opp_holder, opp, payload, spec.device)
             if first:
                 continue
             rollout = collect(spec.actor_id, payload, version)
@@ -340,7 +395,8 @@ class ProcessActorPool:
         log.info("started %d actor PROCESSES (pids %s)",
                  len(self.procs), [p.pid for p in self.procs])
 
-    def publish(self, version: int, payload: Mapping[str, Any], train_step: int) -> None:
+    def publish(self, version: int, payload: Mapping[str, Any], train_step: int,
+                opponents: Optional[List[Optional[dict]]] = None) -> None:
         """Push parameters to every actor, newest-wins, never blocking.
 
         A full queue means that actor has not picked up the last few versions;
@@ -348,10 +404,13 @@ class ProcessActorPool:
         produce a rollout the learner then rejects.
         """
         cpu = {k: _to_cpu(v) for k, v in dict(payload).items()}
-        for pq in self.param_queues:
+        for i, pq in enumerate(self.param_queues):
+            # One opponent PER ACTOR, so the league mixture is realised across
+            # actors rather than every actor playing the same draw.
+            opp = opponents[i] if opponents and i < len(opponents) else None
             while True:
                 try:
-                    pq.put_nowait((version, cpu, int(train_step)))
+                    pq.put_nowait((version, cpu, int(train_step), opp))
                     break
                 except _queue.Full:
                     try:

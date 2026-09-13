@@ -32,6 +32,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
+from lanerl_rl import constants as C
+
 _REPO = Path(__file__).resolve().parents[1]
 _PROJECTS = _REPO.parent
 VENDOR = _PROJECTS / "lanerl-vendor"
@@ -270,9 +272,27 @@ def main() -> int:
         got = collect_game(args.max_game_ms, args.step_ticks,
                            logdir / f"demos_{g}.log", args.keep_noop_frac,
                            seed=1234 + g * 7919)
-        all_obs += got["obs"]; all_lab += got["label"]; all_side += got["side"]
         hist = Counter(d.get("t") for d in got["label"])
         print(f"  game {g}: {len(got['label'])} samples  {dict(hist)}")
+        # REFUSE a game the server died in.
+        #
+        # The per-frame `except Exception: continue` below turns a dead server
+        # into a silently SHORT game rather than an error. On 2026-09-13 game 2
+        # of 6 crashed three seconds in (a NullReferenceException in
+        # ObjectManager.UnitHasVisionOn killed the process) and contributed 93
+        # samples instead of ~16,800. The set was written, 17% smaller, and the
+        # only reason anyone noticed was comparing a total against a previous
+        # run. A partially-collected game is worse than a failed one: it looks
+        # like data.
+        expected = (args.max_game_ms / C.DECISION_DT_MS) * 2 * args.keep_noop_frac
+        if len(got["label"]) < 0.5 * expected:
+            raise RuntimeError(
+                f"game {g} produced {len(got['label'])} samples, far below the "
+                f"~{expected:.0f} a full game yields -- the server almost "
+                f"certainly died. Check {logdir / f'demos_{g}.log'} for a "
+                f"stack trace. Refusing to write a truncated demo set."
+            )
+        all_obs += got["obs"]; all_lab += got["label"]; all_side += got["side"]
 
     if not all_lab:
         print("NO DEMONSTRATIONS COLLECTED -- refusing to write an empty dataset")
