@@ -96,7 +96,14 @@ def build_argparser() -> argparse.ArgumentParser:
         "--rollout-steps", type=int, default=129,
         help="decisions collected per actor rollout; buffer rows = this - 1 (see collect_rollout)",
     )
-    p.add_argument("--max-staleness", type=int, default=1)
+    p.add_argument(
+        "--max-staleness", type=int, default=None,
+        help="versions of lag a rollout may carry and still be trained on. "
+             "Default: derived as queue_capacity + num_actors - 1, the worst "
+             "case the pipeline can produce. Setting it lower discards work "
+             "that has ALREADY been collected -- the old default of 1 binned "
+             "45-80%% of every rollout, all of them stale by exactly 2.",
+    )
     p.add_argument("--queue-capacity", type=int, default=2)
     p.add_argument("--total-updates", type=int, default=1_000_000)
     p.add_argument("--checkpoint-every", type=int, default=200)

@@ -729,8 +729,35 @@ class RunConfig:
     num_actors: int = 2
     envs_per_actor: int = 8
     rollout_steps: int = 128
-    #: OpenAI Five: >8 versions of lag costs real throughput.  0-1 is the target.
-    max_staleness: int = 1
+    #: How many learner versions old a rollout may be and still be trained on.
+    #:
+    #: ``None`` (the default) derives it from the architecture:
+    #: ``queue_capacity + num_actors - 1``, which is exactly the worst case
+    #: ``__post_init__`` computes below. Anything stricter rejects work the
+    #: pipeline is GUARANTEED to produce.
+    #:
+    #: This was a hard ``1``, with the note "OpenAI Five: >8 versions of lag
+    #: costs real throughput. 0-1 is the target." That misreads the result.
+    #: Five ENGINEERED staleness down to 1-2 and measured that >8 hurt sample
+    #: efficiency; they did not set a reject threshold at 1. Rejecting is not a
+    #: way to achieve low staleness -- the rollout has already been collected,
+    #: so the only thing a rejection saves is the learner step, and the only
+    #: thing it costs is every CPU-second the servers and actors spent.
+    #:
+    #: Measured, on the 2026-09-13 scaling probe: EVERY rejection across all
+    #: five configs was staleness exactly 2, against this bound of 1. That
+    #: discarded 45% of collected rollouts at 8 instances, rising to 80% at 96
+    #: -- four of every five games simulated, built and then binned. Correcting
+    #: for it, collection throughput was FLAT at ~900 decisions/s across a 12x
+    #: range of instances; the "throughput falls as you add instances" curve
+    #: that sent three separate investigations after CPU and stragglers was
+    #: mostly this, because `decisions_per_s` only counts rollouts the learner
+    #: accepts.
+    #:
+    #: ``__post_init__`` still warns when an EXPLICIT value is below the
+    #: architectural worst case -- that warning existed and fired all along,
+    #: which is the other lesson here.
+    max_staleness: Optional[int] = None
     queue_capacity: int = 2
     total_updates: int = 1_000_000
     checkpoint_every: int = 200
@@ -763,7 +790,15 @@ class RunConfig:
         if self.rollout_steps <= 0 or self.queue_capacity <= 0:
             raise ValueError("rollout_steps and queue_capacity must be positive")
         worst = self.queue_capacity + max(self.num_actors, 1) - 1
-        if worst > self.max_staleness:
+        if self.max_staleness is None:
+            self.max_staleness = worst
+            log.info(
+                "max_staleness not set; deriving %d from queue_capacity=%d and "
+                "num_actors=%d so the learner does not reject rollouts this "
+                "configuration is guaranteed to produce",
+                worst, self.queue_capacity, self.num_actors,
+            )
+        elif worst > self.max_staleness:
             log.warning(
                 "with queue_capacity=%d and num_actors=%d the learner can publish up to %d "
                 "versions between an actor's pull and its push, above max_staleness=%d. "

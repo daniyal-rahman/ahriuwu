@@ -142,6 +142,31 @@ def test_run_config_is_quiet_when_the_bound_is_achievable(caplog, tmp_path):
     assert "above max_staleness" not in caplog.text
 
 
+def test_the_default_staleness_bound_cannot_reject_what_the_pipeline_produces(tmp_path):
+    """The default must cover the worst case, or the run bins its own work.
+
+    It used to be a hard 1 while ``queue_capacity + num_actors - 1`` was 3, so
+    the learner threw away every rollout that arrived 2 versions old -- which
+    was 45% of them at 8 instances and 80% at 96, EVERY ONE stale by exactly 2.
+    The config validator computed that same worst case and warned about it on
+    every startup; a warning is not a fix.
+    """
+    for actors, cap in ((1, 1), (2, 2), (4, 2), (8, 16)):
+        cfg = RunConfig(run_dir=tmp_path, num_actors=actors, queue_capacity=cap)
+        worst = cap + max(actors, 1) - 1
+        assert cfg.max_staleness >= worst, (
+            f"num_actors={actors} queue_capacity={cap} can produce staleness "
+            f"{worst} but the default bound is {cfg.max_staleness}"
+        )
+
+
+def test_an_explicit_staleness_bound_is_still_honoured(tmp_path):
+    """Deriving the default must not take the knob away from someone who wants
+    a strict bound on purpose -- it only stops SILENTLY inheriting one."""
+    cfg = RunConfig(run_dir=tmp_path, num_actors=8, queue_capacity=16, max_staleness=1)
+    assert cfg.max_staleness == 1
+
+
 # -- actors ----------------------------------------------------------------
 
 
