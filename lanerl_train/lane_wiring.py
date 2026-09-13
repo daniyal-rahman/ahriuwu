@@ -441,6 +441,14 @@ class LanePolicyActor:
         self.last_batch: Optional[Dict[str, Any]] = None
         self.last_actions: Optional[Dict[str, torch.Tensor]] = None  # (N,) long, per key
         self.last_state_in: Optional[RecurrentState] = None  # state ENTERING this call
+        #: The action distribution this call produced, for visualisation only
+        #: (``lanerl/viz_capture.py``). Kept because it is the ONE place where
+        #: the distribution, the value and the sampled action exist together;
+        #: re-running the forward afterwards would describe a decision that was
+        #: not the one taken, since the heads are sampled. Nothing in training
+        #: reads it, and under no_grad the stored logits are a few hundred
+        #: floats per slot.
+        self.last_dist: Optional[Any] = None
 
     @property
     def version(self) -> int:
@@ -486,6 +494,7 @@ class LanePolicyActor:
         self.last_batch = batch
         self.last_actions = {k: action[k][:, 0].detach() for k in _ACTION_KEYS}
         self.last_state_in = state
+        self.last_dist = dist
         actions = [{k: int(action[k][b, 0]) for k in _ACTION_KEYS} for b in range(n)]
         return actions, new_state
 
