@@ -243,6 +243,54 @@ def _load_opponent(holder: Dict[str, Any], opp: Optional[dict],
         actor.opponent_id = None
 
 
+def _apply_pending(holder: Dict[str, Any], pending: Dict[str, Any],
+                   drivers: List[Any], spec: "ActorSpec") -> None:
+    """Load the latched opponent and re-point red's side assignment.
+
+    The throughput half of this: when the draw is "latest", both policies
+    would hold identical weights, and red's transitions are then perfectly
+    good on-policy data for the learner. Pointing red's assignment back at the
+    SELF key makes the driver batch both sides under one policy, so the
+    rollout carries 24 slots instead of 12 -- the same as a pure mirror run.
+
+    Without it a league run collects HALF the training data per wall-second no
+    matter what it draws, which at the realised 54% latest is most of the
+    games paying a cost for nothing. Measured: parallel_envs 24 -> 12 and
+    ~3,100 -> ~1,600 decisions/s between the mirror run and the league run,
+    with updates/hour unchanged.
+
+    Only ever called at a synchronised episode boundary -- see the call site
+    for why set_assignments is unsafe anywhere else.
+    """
+    if not drivers:
+        return
+    opp, payload = pending.get("opp"), pending.get("payload")
+    if payload is None:
+        return
+    _load_opponent(holder, opp, payload, spec.device)
+    # Set BEFORE the early return below. Marking it only when the assignment
+    # actually changes means a draw that keeps red on the same key never
+    # counts as applied, so the "first application" branch fires on every
+    # parameter push and the whole episode latch is defeated.
+    holder["applied"] = True
+    is_latest = getattr(holder.get("actor"), "opponent_id", None) is None
+
+    from .__main__ import OPPONENT, SELF
+    from .vec import SideAssignment
+
+    want = SELF if is_latest else OPPONENT
+    driver = drivers[0]
+    current = driver.assignments[0].red if driver.assignments else None
+    if current == want:
+        return
+    driver.set_assignments(
+        [SideAssignment(blue=SELF, red=want) for _ in range(spec.envs_per_actor)]
+    )
+    log.info("red side -> policy %r (%s); collecting %d slots",
+             want, holder.get("loaded_id") or "live weights",
+             spec.envs_per_actor * (2 if want == SELF else 1))
+
+
 def _actor_main(
     spec: ActorSpec,
     param_q: "mp.Queue",
@@ -253,7 +301,7 @@ def _actor_main(
     """Child entry point.  Module-level so ``spawn`` can import it by name."""
     built_drivers: List[Any] = []
     sent = {"n": 0}
-    rollouts_since_swap = 0
+    pending_opp: Dict[str, Any] = {"opp": None, "payload": None}
     try:
         logging.basicConfig(
             level=spec.log_level,
@@ -333,38 +381,42 @@ def _actor_main(
                 version, payload, step, opp = got
                 train_step.set(step)
                 first = False
-                # The opponent is LATCHED for roughly one episode.
+                # The opponent is only LATCHED here; it is applied at an
+                # episode BOUNDARY below.
                 #
                 # Parameters arrive about every 8.5 game-seconds while an
                 # episode is 10 game-minutes, so applying each draw
                 # immediately meant a game could begin against snap@200 and
-                # end against snap@600. _opponent_of reads the id when the
-                # episode ENDS, so the whole game -- and its win/loss -- was
-                # attributed to whichever checkpoint happened to be loaded
-                # last. With one snapshot in the pool that is invisible;
-                # with a full pool it corrupts every entry in the win-rate
-                # table, which is the thing PFSP then samples on.
-                #
-                # An exact fix needs a per-instance opponent, which one red
-                # policy per actor cannot express, so this bounds the error
-                # instead: at most one swap per episode-length of rollouts,
-                # which makes each game almost entirely one opponent. The
-                # residual is the single rollout that straddles a boundary --
-                # 255 of ~18,000 decisions, about 1.4% of an episode.
-                rollouts_since_swap += 1
-                if rollouts_since_swap >= ROLLOUTS_PER_EPISODE or opp_holder["actor"] is None:
-                    rollouts_since_swap = 0
-                    _load_opponent(opp_holder, opp, payload, spec.device)
-                elif opp_holder.get("loaded_id") in (None, "__latest__"):
-                    # Never latched anything yet: take the first draw at once
-                    # rather than spending a whole episode as a mirror.
-                    _load_opponent(opp_holder, opp, payload, spec.device)
-                    rollouts_since_swap = 0
+                # end against snap@600 -- and _opponent_of reads the id when
+                # the episode ENDS, so the whole game and its win/loss were
+                # attributed to whichever checkpoint was loaded last. With one
+                # snapshot in the pool that is invisible; with a full pool it
+                # corrupts every entry in the win-rate table, which is exactly
+                # what PFSP then samples on.
+                pending_opp["opp"] = opp
+                pending_opp["payload"] = payload
+                if opp_holder.get("actor") is not None and not opp_holder.get("applied"):
+                    # First application: do it at once rather than spending a
+                    # whole episode as a mirror before the league starts.
+                    _apply_pending(opp_holder, pending_opp, built_drivers, spec)
             if first:
                 continue
             rollout = collect(spec.actor_id, payload, version)
             if rollout is None:
                 continue
+            if spec.league and len(rollout.episodes) >= spec.envs_per_actor:
+                # A SYNCHRONISED boundary: every instance finished a game in
+                # this rollout. Episodes are fixed length (--no-end-on-death,
+                # 18,000 decisions) and all instances start together, so they
+                # land on the same rollout -- the logs show exactly
+                # envs_per_actor episodes at each boundary.
+                #
+                # This is the only moment set_assignments is safe: it resets
+                # every GRU state and raises _pending_resets on every
+                # instance, which mid-episode would wipe recurrent memory and
+                # signal a boundary that did not happen. At a real boundary
+                # both are correct.
+                _apply_pending(opp_holder, pending_opp, built_drivers, spec)
             rollout.actor_id = spec.actor_id
             rollout.param_version = version
             # A per-actor sequence number, so the PARENT can tell a rollout
