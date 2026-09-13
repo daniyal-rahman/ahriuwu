@@ -71,6 +71,36 @@ import torch.multiprocessing as mp
 
 log = logging.getLogger("lanerl_train.procactor")
 
+
+def _use_robust_sharing() -> None:
+    """Send CPU tensors through /dev/shm files rather than bare file descriptors.
+
+    Torch's default ``file_descriptor`` strategy passes an fd and unlinks the
+    backing shared-memory file immediately. Under load that races, and the
+    failure is silent where it matters: it is raised inside the CHILD's
+    multiprocessing feeder THREAD, which logs and carries on, so the actor
+    stays alive, the run stays healthy, and one rollout simply never arrives.
+
+    Observed on run rl-0913d at ~1,000 updates::
+
+        RuntimeError: could not unlink the shared memory file
+        /torch_59042_2736413697_56927 : No such file or directory (2)
+          ... in multiprocessing/queues.py line 244, in _feed
+
+    Nothing counts a rollout lost that way -- not the staleness rejection
+    stats, not throughput, not the actor error queue. It is exactly the class
+    of silent loss this stack keeps being bitten by, so it is worth the
+    ``file_system`` strategy's slightly higher per-transfer cost.
+
+    The tradeoff being accepted: ``file_system`` leaks files in /dev/shm if a
+    process is SIGKILLed. That is bounded (a run's worth of rollouts) and
+    visible, which beats losing data with no trace.
+    """
+    try:
+        mp.set_sharing_strategy("file_system")
+    except Exception:  # pragma: no cover - platform dependent
+        log.warning("could not set the file_system sharing strategy", exc_info=True)
+
 #: How long a child waits for its first parameters before deciding the parent is
 #: gone.  Generous: the parent may still be booting its own servers.
 FIRST_PARAM_TIMEOUT_S = 600.0
@@ -164,6 +194,7 @@ def _actor_main(
         # and the forward here is tiny -- the whole point is to spend cores on
         # DIFFERENT actors, not on more threads inside one.
         torch.set_num_threads(1)
+        _use_robust_sharing()
 
         # Turn SIGTERM into an exception so the `finally` below actually runs.
         # ProcessActorPool.shutdown escalates to Process.terminate() for a
@@ -287,6 +318,7 @@ class ProcessActorPool:
     ) -> None:
         # spawn: see the module docstring -- the parent's CUDA context does not
         # survive fork.
+        _use_robust_sharing()
         self.ctx = ctx or mp.get_context("spawn")
         self.specs = list(specs)
         self.out_queue: "mp.Queue" = self.ctx.Queue(maxsize=max(1, queue_capacity))

@@ -777,6 +777,11 @@ class RunConfig:
     #: from, and 2M *updates* at this batch size is a run nobody will ever
     #: finish.  Set it deliberately rather than inheriting the guess.
     anneal_clock: str = "env_steps"
+    #: "thread" or "process".  Recorded here, rather than only on the CLI,
+    #: because the staleness bound derived in __post_init__ depends on it:
+    #: process actors carry an extra in-flight rollout each, in the child's
+    #: feeder thread and pipe.
+    actor_mode: str = "thread"
     league: LeagueConfig = field(default_factory=LeagueConfig)
 
     def __post_init__(self) -> None:
@@ -789,7 +794,20 @@ class RunConfig:
             raise ValueError("num_actors must be >= 0")
         if self.rollout_steps <= 0 or self.queue_capacity <= 0:
             raise ValueError("rollout_steps and queue_capacity must be positive")
-        worst = self.queue_capacity + max(self.num_actors, 1) - 1
+        # Process actors buffer MORE than thread actors, and the original
+        # formula only counted the parent's queue. Each child also has a
+        # multiprocessing feeder thread and an OS pipe, either of which can be
+        # holding a finished rollout that the parent has not dequeued yet, so
+        # one extra rollout per actor can be in flight beyond queue_capacity.
+        #
+        # Measured on run rl-0913d (4 actors, queue_capacity 2): the old bound
+        # derived 5 and the run logged "REJECTED a rollout at staleness 7",
+        # still binning 5.4%. queue_capacity + 2*num_actors - 1 = 9 covers it.
+        #
+        # The thread path keeps the tighter bound: it has no feeder threads, so
+        # inflating it there would loosen the staleness guarantee for no reason.
+        per_actor = 2 if getattr(self, "actor_mode", "thread") == "process" else 1
+        worst = self.queue_capacity + per_actor * max(self.num_actors, 1) - 1
         if self.max_staleness is None:
             self.max_staleness = worst
             log.info(

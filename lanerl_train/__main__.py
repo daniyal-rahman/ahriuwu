@@ -522,6 +522,7 @@ def main(argv=None) -> int:
         keep_last_checkpoints=args.keep_last_checkpoints,
         seed=args.seed,
         anneal_clock=args.anneal_clock,
+        actor_mode=args.actor_mode,
     )
 
     # Resolved config + seed, written for reproducibility BEFORE anything can
