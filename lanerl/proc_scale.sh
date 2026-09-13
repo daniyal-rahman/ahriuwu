@@ -5,6 +5,20 @@
 # 3,409 dec/s at 4 actors x 12 envs, so the box still had 60% spare. This walks
 # it up until something else binds -- most likely the servers (0.07 cores each)
 # or the learner, which is still one process consuming every rollout.
+#
+# RESULT (2026-09-13, desktop: 16 cores / 30 GB / RTX 5080):
+#
+#     4 actors x 12 =  48 instances    6.43 cores    3,634 dec/s
+#     8 actors x 12 =  96 instances   10.13 cores    4,829 dec/s   <- use this
+#    12 actors x 12 = 144 instances   11.62 cores    OOM KILLED
+#
+# The ceiling is RAM, not CPU. 144 instances took 10 oom_kill events while
+# still BOOTING, at 11.6 of 16 cores -- so there are cores left that this box
+# cannot feed. ~200 MB per game server against 30 GB total.
+#
+# At the working ceiling the CPU finally splits sensibly: python 5.83 cores,
+# .NET game servers 4.19. Under threads it was 1.8 cores total, all of it
+# contending.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 PY=/home/dani/miniconda3/envs/ml/bin/python
