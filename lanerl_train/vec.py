@@ -215,6 +215,47 @@ class InstanceHandle(Protocol):
     def close(self) -> None: ...
 
 
+def _die_with_parent() -> None:
+    """Ask the kernel to SIGKILL this child when its parent dies.
+
+    Runs in the forked child between fork and exec.
+
+    Why this is not paranoia: a game server outlives EVERY external kill of the
+    trainer -- `scancel`, an OOM, a plain `kill` on the parent python. The
+    trainer's own shutdown path closes them, but that path does not run when
+    the trainer is killed rather than asked to stop. The orphans keep their
+    ports, and because `PORTS_PER_ACTOR_STRIDE` is 64 an actor's block spans
+    768 ports, so a single survivor anywhere in that band kills a LATER run
+    with `SocketException (98): Address already in use` at a completely
+    unrelated instance index.
+
+    Exactly that happened on 2026-09-13: job 743 was stopped with `kill -TERM`
+    on its parent, left a server holding 37067, and job 745 -- a different
+    port base entirely -- died at actor1/instance8 because 37067 fell inside
+    actor1's 768-port block. This is the likeliest explanation for the
+    long-standing "the server just would not start" failures, which never
+    reproduced because reproducing them needed a PREVIOUS run to have been
+    killed the wrong way.
+
+    `start_new_session=True` above is what makes this necessary as well as
+    sufficient: it detaches the child into its own process group so close() can
+    signal the whole group, which also means it is no longer killed by signals
+    sent to the trainer's group.
+
+    Linux-only, and best-effort: on any other platform, or if ctypes cannot
+    reach prctl, the child simply starts as before.
+    """
+    try:
+        import ctypes
+        import signal as _signal
+
+        PR_SET_PDEATHSIG = 1
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(PR_SET_PDEATHSIG, _signal.SIGKILL, 0, 0, 0)
+    except Exception:
+        pass
+
+
 class ServerInstance:
     """One headless server process plus its TCP control channel."""
 
@@ -259,6 +300,7 @@ class ServerInstance:
             stdout=self._log_fh,
             stderr=subprocess.STDOUT,
             start_new_session=True,  # so close() can kill the whole group
+            preexec_fn=_die_with_parent,
         )
         self.log.info(
             "instance %d: spawned pid=%d control=%d game=%d log=%s",
