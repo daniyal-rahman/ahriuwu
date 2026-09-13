@@ -106,12 +106,13 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument("--queue-capacity", type=int, default=2)
     p.add_argument(
-        "--actor-mode", choices=("thread", "process"), default="thread",
-        help="'thread' (default) runs actors as threads in this process, where "
-             "they share one GIL: the observation build is pure Python and "
-             "holds it, so the whole run caps at ~1.8 of 16 cores no matter "
-             "how many actors you ask for (measured). 'process' gives each "
-             "actor its own interpreter and its own CUDA context.",
+        "--actor-mode", choices=("thread", "process"), default="process",
+        help="'process' (default) gives each actor its own interpreter and its "
+             "own CUDA context. 'thread' runs them in this process, sharing one "
+             "GIL that the observation build holds for ~55%% of every decision, "
+             "which caps the whole run at ~1.8 of 16 cores however many actors "
+             "you ask for. Measured at 12 instances / 4 actors: thread 1.85 "
+             "cores and 1,191 decisions/s, process 4.85 cores and 1,949.",
     )
     p.add_argument("--total-updates", type=int, default=1_000_000)
     p.add_argument("--checkpoint-every", type=int, default=200)
