@@ -638,6 +638,30 @@ def _opponent_of(
         s for s in SIDES if s not in own_sides and assignment.key_for(s) is None
     ]
     if not bot_sides:
+        # A side driven by a DIFFERENT policy key is a league opponent, not a
+        # mirror. Returning ("self", 0.5) here -- which is what this did for
+        # every case -- is what would have silently defeated the league even
+        # after the sampler was wired: run.py treats opponent_id == LATEST or
+        # == agent as a self-match and never records the win rate, so the game
+        # would be played against a real past checkpoint and the result thrown
+        # away as a draw against ourselves. PFSP weights and
+        # win_rate_vs_past would have stayed empty exactly as before.
+        league_sides = [
+            s for s in SIDES
+            if s not in own_sides and assignment.key_for(s) not in (None, policy_key)
+        ]
+        if league_sides:
+            other = driver.policies.get(assignment.key_for(league_sides[0]))
+            opp_id = getattr(other, "opponent_id", None)
+            # No id means the red policy is carrying the LIVE weights (the
+            # league drew "latest"), which is a genuine mirror and genuinely
+            # worth 0.5.
+            if opp_id:
+                if deaths is not None and own_side is not None and reason == "time":
+                    mine = int(deaths.get(own_side, 0))
+                    theirs = sum(int(v) for k, v in deaths.items() if k != own_side)
+                    return opp_id, "league", score_for_deaths(mine, theirs)
+                return opp_id, "league", score_for_reason(reason, own_team)
         return policy_key, "self", 0.5
     label = (opponent_labels or {}).get(instance) or "scripted_bot"
     # Score a PLAYED-OUT game on the death differential, not on the reason it

@@ -202,12 +202,21 @@ def _load_opponent(holder: Dict[str, Any], opp: Optional[dict],
         if live_payload:
             actor.policy.load_state_dict(live_payload["policy"])
         holder["loaded_id"] = want
+        # CLEARED, not left: red now carries the live weights, so this really
+        # is a mirror. A stale id here would attribute a genuine self-match to
+        # whichever checkpoint happened to be loaded last, and feed a 0.5 into
+        # that opponent's win rate forever.
+        actor.opponent_id = None
         return
     try:
         blob = torch.load(path, map_location=device, weights_only=False)
         sd = blob.get("policy", blob) if isinstance(blob, dict) else blob
         actor.policy.load_state_dict(sd)
         holder["loaded_id"] = want
+        # Stamped on the ACTOR because that is what _opponent_of can reach
+        # from the driver; without it every league game is attributed to
+        # "self" and its result is discarded as a mirror draw.
+        actor.opponent_id = want
         log.info("red side is now league opponent %s", want)
     except Exception:
         # Fall back to the live mirror rather than silently keeping whatever
@@ -218,6 +227,7 @@ def _load_opponent(holder: Dict[str, Any], opp: Optional[dict],
         if live_payload:
             actor.policy.load_state_dict(live_payload["policy"])
         holder["loaded_id"] = "__latest__"
+        actor.opponent_id = None
 
 
 def _actor_main(

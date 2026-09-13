@@ -993,6 +993,8 @@ class TrainingLoop:
         #: measurement. ``multiprocessing.Queue.get`` raises the same
         #: ``queue.Empty``, so :meth:`step_once` needs no branch.
         self.actor_pool = actor_pool
+        #: Realised league draw counts by category, for _log_league_health.
+        self._league_draws: Dict[str, int] = {}
         self.queue: "queue.Queue[Rollout]" = (
             actor_pool.out_queue if actor_pool is not None
             else queue.Queue(maxsize=config.queue_capacity)
@@ -1260,12 +1262,54 @@ class TrainingLoop:
             except Exception:
                 log.error("league sample failed; falling back to the live mirror",
                           exc_info=True)
+                self._league_draws["error"] = self._league_draws.get("error", 0) + 1
                 out.append(None)
                 continue
             snap = getattr(spec, "snapshot", None)
+            cat = getattr(spec, "category", "?")
+            self._league_draws[cat] = self._league_draws.get(cat, 0) + 1
             out.append(None if snap is None or not snap.path
                        else {"id": spec.id, "path": str(snap.path)})
+        self._log_league_health()
         return out
+
+    #: How often to report the realised league mixture, in updates.
+    LEAGUE_REPORT_EVERY = 200
+
+    def _log_league_health(self) -> None:
+        """Report the REALISED draw mixture, and shout if the pool is unused.
+
+        The league's whole failure mode is silence. It was built, tested and
+        never called for weeks: the pool filled, the weights were computed, the
+        drift was reported, and every game was a live mirror. Nothing in any
+        log said so -- you had to count `opponent` values in metrics.jsonl to
+        find out, which is how it survived.
+
+        So: the realised mixture goes in the log periodically, and a league
+        that is drawing NOTHING but "latest" after the pool should have filled
+        is an error, not a silent reversion to self-play.
+        """
+        total = sum(self._league_draws.values())
+        if total == 0 or self.state.update % self.LEAGUE_REPORT_EVERY:
+            return
+        mix = "  ".join(f"{k}={100 * v / total:.0f}%"
+                        for k, v in sorted(self._league_draws.items(),
+                                           key=lambda kv: -kv[1]))
+        pool_n = len(self.sampler.pool)
+        log.info("LEAGUE draws over %d samples: %s  (pool=%d snapshots)",
+                 total, mix, pool_n)
+        latest = self._league_draws.get("latest", 0)
+        if pool_n >= self.cfg.league.pool_min and latest == total:
+            log.error(
+                "LEAGUE IS DRAWING ONLY 'latest' -- %d snapshots are in the pool "
+                "and not one has been played. Every game is a live mirror, which "
+                "is the exact state the league was wired to end. Check "
+                "p_pfsp/p_uniform and CheckpointPool.add.",
+                pool_n,
+            )
+        if self._league_draws.get("error"):
+            log.error("LEAGUE: %d sample() calls raised and fell back to the mirror",
+                      self._league_draws["error"])
 
     def _check_actors(self) -> None:
         if self.actor_pool is not None:
@@ -1355,6 +1399,11 @@ class TrainingLoop:
             )
         self._last_update_at = time.monotonic()
 
+        league_eps = [e for e in rollout.episodes if e.opponent_category == "league"]
+        if league_eps:
+            log.info("LEAGUE: %d episode(s) vs past checkpoints this rollout: %s",
+                     len(league_eps),
+                     {e.opponent_id: round(e.score, 2) for e in league_eps})
         for ep in rollout.episodes:
             self.record_episode(ep)
 
