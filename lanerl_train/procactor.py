@@ -60,6 +60,7 @@ from __future__ import annotations
 import logging
 import os
 import queue as _queue
+import signal
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
@@ -152,6 +153,7 @@ def _actor_main(
     stop_ev: Any,
 ) -> None:
     """Child entry point.  Module-level so ``spawn`` can import it by name."""
+    built_drivers: List[Any] = []
     try:
         logging.basicConfig(
             level=spec.log_level,
@@ -163,6 +165,16 @@ def _actor_main(
         # DIFFERENT actors, not on more threads inside one.
         torch.set_num_threads(1)
 
+        # Turn SIGTERM into an exception so the `finally` below actually runs.
+        # ProcessActorPool.shutdown escalates to Process.terminate() for a
+        # child still busy inside collect(), and SIGTERM's DEFAULT disposition
+        # kills the interpreter outright -- no finally, no env.close(), and the
+        # actor's game servers survive it holding their ports.
+        def _on_sigterm(signum, frame):
+            raise SystemExit(f"actor {spec.actor_id} received SIGTERM")
+
+        signal.signal(signal.SIGTERM, _on_sigterm)
+
         # Imported inside the child: under spawn these pull in torch, CUDA and
         # the whole training stack, and doing it at module scope would pay that
         # cost in the parent and in every unrelated importer of this module.
@@ -172,7 +184,7 @@ def _actor_main(
         train_step = _TrainStepBox()
 
         def build(actor_idx: int):
-            return _build_driver_for_actor(
+            built = _build_driver_for_actor(
                 actor_idx,
                 spec.envs_per_actor,
                 spec.port_base,
@@ -185,6 +197,15 @@ def _actor_main(
                 spec.opponent,
                 spec.seed,
             )
+            # The child OWNS these servers, and nothing else can reach them:
+            # in the threaded path `__main__` keeps a `built_drivers` list and
+            # closes them in its finally, but that list lives in the parent and
+            # stays empty here. Without this the game-server subprocesses are
+            # orphaned when the actor exits -- still running, still holding
+            # their ports, so the NEXT run fails to bind and looks like a
+            # server that would not start.
+            built_drivers.append(built[0])
+            return built
 
         collect = make_collect_fn(
             build, spec.policy_key, spec.rollout_steps, spec.gamma, spec.gae_lambda
@@ -215,18 +236,39 @@ def _actor_main(
                 rollout.data.to("cpu")
             out_q.put(rollout)
     except BaseException as exc:  # noqa: BLE001 - deliberately everything
-        # As a STRING. A pickled exception can drag a socket or a CUDA tensor
-        # along with it and fail to cross, turning a reportable death into a
-        # silent one.
-        try:
-            err_q.put((spec.actor_id, f"{type(exc).__name__}: {exc}", traceback.format_exc()))
-        except Exception:
-            pass
-        log.error("actor %d died: %s", spec.actor_id, exc, exc_info=True)
-        try:
-            out_q.put(None)  # wake a learner blocked on get()
-        except Exception:
-            pass
+        # An ORDERLY stop is not a death. shutdown() sets stop_event and then
+        # escalates to SIGTERM for a child parked in a blocking put() or socket
+        # read; reporting that on the error queue would make every clean
+        # shutdown raise ActorFailure in the parent and turn a finished run
+        # into a failed one.
+        orderly = isinstance(exc, SystemExit) and stop_ev.is_set()
+        if orderly:
+            log.info("actor %d stopping: %s", spec.actor_id, exc)
+        else:
+            # As a STRING. A pickled exception can drag a socket or a CUDA
+            # tensor along with it and fail to cross, turning a reportable
+            # death into a silent one.
+            try:
+                err_q.put(
+                    (spec.actor_id, f"{type(exc).__name__}: {exc}", traceback.format_exc())
+                )
+            except Exception:
+                pass
+            log.error("actor %d died: %s", spec.actor_id, exc, exc_info=True)
+            try:
+                out_q.put_nowait(None)  # wake a learner blocked on get()
+            except Exception:
+                pass
+    finally:
+        # On EVERY exit path, including the stop_event one. A terminated actor
+        # that leaves its servers running holds its whole port block, and the
+        # next run's failure to bind shows up as "the server would not start".
+        for driver in built_drivers:
+            try:
+                driver.env.close()
+            except Exception:
+                log.error("actor %d: error closing its server instances",
+                          spec.actor_id, exc_info=True)
 
 
 class ProcessActorPool:
@@ -285,7 +327,23 @@ class ProcessActorPool:
                     except _queue.Empty:
                         break
 
+    def stop(self) -> None:
+        """Ask the actors to stop, without waiting.
+
+        Separate from :meth:`shutdown` so the parent can signal first and drain
+        the rollout queue second: an actor parked in a blocking ``put()`` on a
+        full queue cannot see the stop flag until something makes room, and
+        draining before signalling just lets it refill and block again. Setting
+        the flag first turns a 30-second join timeout into an immediate exit.
+        """
+        self.stop_event.set()
+
     def raise_if_any_died(self) -> None:
+        if self.stop_event.is_set():
+            # We asked them to stop. A child that exits from SIGTERM leaves a
+            # non-zero exit code behind, and reporting that as a death would
+            # turn every clean shutdown into a failed run.
+            return
         try:
             actor_id, msg, tb = self.error_queue.get_nowait()
         except _queue.Empty:

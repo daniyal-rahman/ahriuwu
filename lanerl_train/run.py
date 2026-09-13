@@ -1499,6 +1499,10 @@ class TrainingLoop:
     def shutdown(self, join_timeout_s: float = 30.0) -> None:
         self.stop_event.set()
         if self.actor_pool is not None:
+            # Signal first, THEN drain: an actor blocked in put() on a full
+            # queue cannot see the stop flag until there is room, and draining
+            # first only lets it refill and block again.
+            self.actor_pool.stop()
             # Drain BEFORE the children go away. A queued rollout's tensors live
             # in shared memory owned by the child that sent them, passed as a
             # file descriptor; once the child is gone the fd cannot be reopened

@@ -49,6 +49,34 @@ from typing import Dict, Optional
 CLK_TCK = os.sysconf("SC_CLK_TCK")
 
 
+def _descendants(pid: int) -> list:
+    """``pid`` and every process under it, from /proc/<p>/task/<t>/children.
+
+    Required once actors became PROCESSES: sampling only the launched pid's
+    threads counts the parent and nothing else, so an actor's CPU vanishes from
+    "process" and reappears in the machine-minus-process residual labelled
+    "servers". The first process-mode reading said 0.19 cores for a run that
+    was using well over one, which is exactly backwards from the point.
+    """
+    out, seen, stack = [], set(), [int(pid)]
+    while stack:
+        p = stack.pop()
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+        try:
+            for tdir in Path(f"/proc/{p}/task").iterdir():
+                try:
+                    kids = (tdir / "children").read_text().split()
+                except OSError:
+                    continue
+                stack.extend(int(k) for k in kids)
+        except OSError:
+            continue  # exited while we walked
+    return out
+
+
 def _thread_cpu(pid: int) -> Dict[str, float]:
     """Per-thread CPU seconds so far, keyed by ``name/tid``.
 
@@ -58,11 +86,12 @@ def _thread_cpu(pid: int) -> Dict[str, float]:
     into a later thread that reused the tid.
     """
     out: Dict[str, float] = {}
-    task = Path(f"/proc/{pid}/task")
-    try:
-        tids = list(task.iterdir())
-    except OSError:
-        return out
+    tids = []
+    for p in _descendants(pid):
+        try:
+            tids.extend(Path(f"/proc/{p}/task").iterdir())
+        except OSError:
+            continue
     for tdir in tids:
         try:
             stat = (tdir / "stat").read_text()
