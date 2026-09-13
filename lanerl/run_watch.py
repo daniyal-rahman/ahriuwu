@@ -201,6 +201,18 @@ def check_learner(rows: List[dict], rep: Report) -> None:
                 "each update moves the policy too far: lower --lr")
 
 
+#: Updates before the action marginals mean anything.
+#:
+#: An episode opens with both champions in the fountain waiting for minions,
+#: and the BC prior correctly emits ~92% noop there. A run that has not yet
+#: played past that reads as a total collapse while being perfectly healthy:
+#: runs/scale-96 graded BAD at noop=0.99 after 17 updates, while runs/scale-8 --
+#: same config, same prior, 60 updates -- had moved to move=0.72,
+#: attack_move=0.16, noop=0.12. The difference was entirely how far into a game
+#: each had got.
+COLLAPSE_MIN_UPDATES = 40
+
+
 def check_policy(rows: List[dict], rep: Report) -> None:
     """A collapsed policy puts all its mass on one button."""
     acts = [r for r in rows if any(k.startswith("actions/") for k in r)]
@@ -212,9 +224,16 @@ def check_policy(rows: List[dict], rep: Report) -> None:
     if not marg:
         return
     top, share = max(marg.items(), key=lambda kv: kv[1])
+    shown = "  ".join(f"{k}={v:.2f}" for k, v in sorted(marg.items()))
+    updates = max((r.get("update", 0) for r in acts), default=0)
+    if updates < COLLAPSE_MIN_UPDATES:
+        rep.add(WARN, "policy not collapsed",
+                f"{shown}  (only {updates} updates -- not graded)",
+                f"too early to tell: the opening is legitimately ~92% noop, so "
+                f"this is not gradeable until ~{COLLAPSE_MIN_UPDATES} updates")
+        return
     level = OK if share < 0.9 else BAD
-    rep.add(level, "policy not collapsed",
-            "  ".join(f"{k}={v:.2f}" for k, v in sorted(marg.items())),
+    rep.add(level, "policy not collapsed", shown,
             f"'{top}' holds {share:.0%} of the mass: the prior is gone")
 
 
