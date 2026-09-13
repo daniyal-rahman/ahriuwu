@@ -340,6 +340,31 @@ class RecurrentRolloutBuffer:
         self.advantages[: self.step] = adv
         self.returns[: self.step] = ret
 
+    def to(self, device: torch.device | str) -> "RecurrentRolloutBuffer":
+        """Move every tensor onto ``device``, in place, and return self.
+
+        Needed because a rollout now crosses a PROCESS boundary: the actor
+        collects on its own CUDA context and the learner updates on the
+        parent's, and a CUDA tensor cannot simply be pickled between the two.
+        The actor calls ``.to("cpu")`` before queueing -- ~15 MB at T=128,
+        B=24, so a couple of milliseconds over PCIe -- and the learner calls
+        ``.to(its device)`` on receipt.
+
+        Truncated to ``self.step`` nowhere: the shapes stay fixed so ``gather``
+        and ``chunk_starts`` keep indexing the same way on both sides.
+        """
+        dev = torch.device(device)
+        for d in (self.obs, self.masks, self.actions, self.ref_logits):
+            for k, v in d.items():
+                d[k] = v.to(dev)
+        for name in (
+            "log_probs", "values", "rewards", "dones", "resets",
+            "h_actor", "h_critic", "advantages", "returns",
+        ):
+            setattr(self, name, getattr(self, name).to(dev))
+        self.device = dev
+        return self
+
     def normalize_advantages(self, eps: float = 1e-8) -> None:
         """Whiten the advantages over the WHOLE rollout, in place.
 
@@ -453,9 +478,31 @@ class DualClipPPO:
         #: Completed calls to :meth:`update`.  Drives ``critic_warmup_updates``
         #: and survives a resume through :meth:`state_payload`.
         self._updates_done = 0
+        # Where this learner's parameters live. Read by the training loop to
+        # put a rollout collected in ANOTHER PROCESS (and therefore handed over
+        # on CPU) back on the right device before the update. Derived from the
+        # policy rather than stored, so it cannot drift from where the weights
+        # actually are after a .to() somewhere else.
+        self._device_probe = policy
         self.optimizer = optimizer or self._build_optimizer()
 
     # -- optimiser ---------------------------------------------------------
+
+    @property
+    def device(self) -> torch.device:
+        """Where this learner's weights are.
+
+        Raises rather than guessing ``cpu`` for a parameterless policy: the one
+        caller that needs this is moving a rollout collected in another process
+        onto the learner's device, and a wrong answer there is a silent
+        CPU-speed run or a device-mismatch traceback pointing at the PPO step
+        instead of at the handover.
+        """
+        for prm in self._device_probe.parameters():
+            return prm.device
+        raise RuntimeError(
+            "the policy has no parameters, so its device cannot be determined"
+        )
 
     def _split_parameters(self) -> Tuple[List[torch.Tensor], List[torch.Tensor]]:
         """``(actor_params, critic_params)``, in ``policy.parameters()`` order.

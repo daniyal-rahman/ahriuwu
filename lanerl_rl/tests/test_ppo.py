@@ -762,3 +762,40 @@ def test_update_returns_plain_floats():
     for k in ("explained_variance", "approx_kl_staleness", "approx_kl_baseline",
               "approx_kl_excess", "lr_actor", "lr_critic", "actor_frozen"):
         assert k in stats, k
+
+
+def test_buffer_to_moves_every_tensor_it_owns():
+    """A rollout now crosses a process boundary, so nothing may be left behind.
+
+    The actor collects on its own CUDA context and hands the buffer over on
+    CPU; the learner moves it back. A tensor this misses does not fail here --
+    it fails deep inside the PPO step as a device mismatch that names neither
+    the field nor the handover, or worse, quietly drags the update onto CPU.
+    """
+    buf = _fill_buffer()
+    buf.ref_logits["button"] = torch.zeros(buf.T, buf.B, 4)
+
+    def every_tensor(b):
+        for d in (b.obs, b.masks, b.actions, b.ref_logits):
+            for k, v in d.items():
+                yield f"{k}", v
+        for name in ("log_probs", "values", "rewards", "dones", "resets",
+                     "h_actor", "h_critic", "advantages", "returns"):
+            yield name, getattr(b, name)
+
+    assert buf.to("cpu") is buf, ".to() must return self so it can be chained"
+    for name, t in every_tensor(buf):
+        assert t.device.type == "cpu", f"{name} stayed on {t.device}"
+    assert buf.device.type == "cpu"
+
+    if torch.cuda.is_available():
+        buf.to("cuda")
+        for name, t in every_tensor(buf):
+            assert t.device.type == "cuda", f"{name} did not move to cuda"
+
+
+def test_the_learner_knows_where_its_weights_are():
+    """`device` is what puts a rollout from another process back on the GPU."""
+    policy = LanePolicy(ModelConfig())
+    learner = DualClipPPO(policy, PPOConfig())
+    assert learner.device == next(policy.parameters()).device

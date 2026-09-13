@@ -105,6 +105,14 @@ def build_argparser() -> argparse.ArgumentParser:
              "45-80%% of every rollout, all of them stale by exactly 2.",
     )
     p.add_argument("--queue-capacity", type=int, default=2)
+    p.add_argument(
+        "--actor-mode", choices=("thread", "process"), default="thread",
+        help="'thread' (default) runs actors as threads in this process, where "
+             "they share one GIL: the observation build is pure Python and "
+             "holds it, so the whole run caps at ~1.8 of 16 cores no matter "
+             "how many actors you ask for (measured). 'process' gives each "
+             "actor its own interpreter and its own CUDA context.",
+    )
     p.add_argument("--total-updates", type=int, default=1_000_000)
     p.add_argument("--checkpoint-every", type=int, default=200)
     p.add_argument("--snapshot-every", type=int, default=400)
@@ -578,12 +586,40 @@ def main(argv=None) -> int:
             ),
         )
 
+    actor_pool = None
+    if args.actor_mode == "process":
+        from .procactor import ActorSpec, ProcessActorPool
+
+        actor_pool = ProcessActorPool(
+            [
+                ActorSpec(
+                    actor_id=i,
+                    envs_per_actor=args.envs_per_actor,
+                    port_base=args.port_base,
+                    model_cfg=model_cfg,
+                    run_dir=run_dir,
+                    device=args.device,
+                    reward_cfg=reward_cfg,
+                    end_on_death=True if args.end_on_death is None else args.end_on_death,
+                    opponent=args.opponent,
+                    seed=args.seed,
+                    rollout_steps=args.rollout_steps,
+                    gamma=ppo_cfg.gamma,
+                    gae_lambda=ppo_cfg.gae_lambda,
+                    policy_key=SELF,
+                )
+                for i in range(args.num_actors)
+            ],
+            queue_capacity=args.queue_capacity,
+        )
+
     loop = TrainingLoop(
         run_cfg,
         learner,
         evaluator=Evaluator(anchors=anchors),
         anchor_eval=anchor_evaluator,
         gpu=GpuProbe(args.device),
+        actor_pool=actor_pool,
     )
     # Refuse to start a run whose evaluation would measure nothing.
     loop.require_anchor_eval()

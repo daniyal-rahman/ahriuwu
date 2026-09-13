@@ -951,6 +951,7 @@ class TrainingLoop:
         anchor_eval: Optional[Callable[[int, Mapping[str, Any]], List[EpisodeResult]]] = None,
         throughput: Optional["ThroughputMeter"] = None,
         gpu: Optional["GpuProbe"] = None,
+        actor_pool: Optional[Any] = None,
     ):
         self.cfg = config
         self.learner = learner
@@ -962,7 +963,17 @@ class TrainingLoop:
             self.run_dir / "checkpoints", config.keep_last_checkpoints
         )
         self.store = ParameterStore(self._policy_payload())
-        self.queue: "queue.Queue[Rollout]" = queue.Queue(maxsize=config.queue_capacity)
+        #: When set, actors are PROCESSES (``procactor.ProcessActorPool``) and
+        #: rollouts arrive on its multiprocessing queue instead of a thread
+        #: queue. Threaded actors cap at ~1.8 of 16 cores because the
+        #: observation build holds the GIL; see the procactor docstring for the
+        #: measurement. ``multiprocessing.Queue.get`` raises the same
+        #: ``queue.Empty``, so :meth:`step_once` needs no branch.
+        self.actor_pool = actor_pool
+        self.queue: "queue.Queue[Rollout]" = (
+            actor_pool.out_queue if actor_pool is not None
+            else queue.Queue(maxsize=config.queue_capacity)
+        )
         self.errors: "queue.Queue[tuple]" = queue.Queue()
         self.stop_event = threading.Event()
         self.staleness = StalenessTracker(config.max_staleness)
@@ -1199,6 +1210,14 @@ class TrainingLoop:
     # -- the update --------------------------------------------------------
 
     def _check_actors(self) -> None:
+        if self.actor_pool is not None:
+            # A process can also die WITHOUT reporting -- SIGKILL, OOM, a
+            # native crash in the CUDA driver -- so the pool checks exit codes
+            # too, not just its error queue.
+            try:
+                self.actor_pool.raise_if_any_died()
+            except RuntimeError as exc:
+                raise ActorFailure(str(exc)) from exc
         try:
             actor_id, exc, tb = self.errors.get_nowait()
         except queue.Empty:
@@ -1242,6 +1261,22 @@ class TrainingLoop:
             )
             return False
 
+        if self.actor_pool is not None and rollout.data is not None:
+            # It was collected in another process, on that process's CUDA
+            # context, and moved to CPU to cross. Bring it to the learner's
+            # device before the update rather than letting torch raise deep
+            # inside the PPO step with no mention of why the tensor is on CPU.
+            mover = getattr(rollout.data, "to", None)
+            if not callable(mover):
+                raise TrainingError(
+                    f"actor_pool is set, so this rollout arrived from another process "
+                    f"with its tensors on CPU, but its data ({type(rollout.data).__name__}) "
+                    f"has no .to(device). It cannot be moved to the learner, and running "
+                    f"the update anyway would either raise inside PPO with no mention of "
+                    f"the handover or silently train on CPU."
+                )
+            rollout.data.to(self.learner.device)
+
         with self.throughput.learning():
             metrics = dict(self.learner.update(rollout.data))
         self.state.update += 1
@@ -1252,6 +1287,13 @@ class TrainingLoop:
         # cadence: an actor that has just pulled version N should be collecting
         # under the schedule that belongs to version N.
         train_step = self._publish_train_step()
+        if self.actor_pool is not None:
+            # Process actors cannot read ParameterStore or TrainStepCounter --
+            # they share no memory with this process -- so the same two values
+            # are pushed down their queues, together, for the same reason.
+            self.actor_pool.publish(
+                self.state.param_version, self._policy_payload(), train_step
+            )
         self._last_update_at = time.monotonic()
 
         for ep in rollout.episodes:
@@ -1386,6 +1428,16 @@ class TrainingLoop:
     # -- driving -----------------------------------------------------------
 
     def start_actors(self) -> None:
+        if self.actor_pool is not None:
+            self.actor_pool.start()
+            # The first push, before any update: a child blocks on its parameter
+            # queue and cannot act until it has weights and a train step. Without
+            # this the run deadlocks -- actors waiting for parameters the learner
+            # only publishes after consuming a rollout none of them can produce.
+            self.actor_pool.publish(
+                self.state.param_version, self._policy_payload(), self.train_steps.value
+            )
+            return
         if self.collect is None:
             raise TrainingError(
                 "start_actors() needs a collect callable; construct TrainingLoop with "
@@ -1428,14 +1480,37 @@ class TrainingLoop:
             self.save_state()
         return self.state
 
-    def shutdown(self, join_timeout_s: float = 30.0) -> None:
-        self.stop_event.set()
-        # Drain so a blocked put() can return and the thread can see the stop flag.
-        for _ in range(self.queue.qsize()):
+    def _drain_queue(self) -> None:
+        """Empty the rollout queue, tolerating items that can no longer load.
+
+        Only ever called on the way out, where an unreadable leftover is
+        nothing to report: the run is over and the rollout was going to be
+        discarded regardless.
+        """
+        for _ in range(max(0, self.queue.qsize())):
             try:
                 self.queue.get_nowait()
             except queue.Empty:
                 break
+            except Exception as exc:  # noqa: BLE001
+                log.debug("discarding an unreadable queued rollout at shutdown: %s", exc)
+                break
+
+    def shutdown(self, join_timeout_s: float = 30.0) -> None:
+        self.stop_event.set()
+        if self.actor_pool is not None:
+            # Drain BEFORE the children go away. A queued rollout's tensors live
+            # in shared memory owned by the child that sent them, passed as a
+            # file descriptor; once the child is gone the fd cannot be reopened
+            # and unpickling the leftover item dies with a bare
+            # FileNotFoundError from multiprocessing.resource_sharer, during
+            # shutdown, after a clean run.
+            self._drain_queue()
+            self.actor_pool.shutdown(timeout=join_timeout_s)
+        else:
+            # Drain so a blocked put() can return and the thread can see the
+            # stop flag.
+            self._drain_queue()
         for actor in self.actors:
             if actor.thread is not None:
                 actor.thread.join(timeout=join_timeout_s)
