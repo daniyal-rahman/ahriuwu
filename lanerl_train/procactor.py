@@ -113,6 +113,11 @@ def _use_robust_sharing() -> None:
 #: gone.  Generous: the parent may still be booting its own servers.
 FIRST_PARAM_TIMEOUT_S = 600.0
 
+#: Rollouts in one episode, at 18,000 decisions and ~255 per rollout. Used to
+#: latch the league opponent for about a game, so a single episode is not
+#: played against three different checkpoints and then attributed to one.
+ROLLOUTS_PER_EPISODE = 70
+
 
 @dataclass
 class ActorSpec:
@@ -248,6 +253,7 @@ def _actor_main(
     """Child entry point.  Module-level so ``spawn`` can import it by name."""
     built_drivers: List[Any] = []
     sent = {"n": 0}
+    rollouts_since_swap = 0
     try:
         logging.basicConfig(
             level=spec.log_level,
@@ -327,7 +333,33 @@ def _actor_main(
                 version, payload, step, opp = got
                 train_step.set(step)
                 first = False
-                _load_opponent(opp_holder, opp, payload, spec.device)
+                # The opponent is LATCHED for roughly one episode.
+                #
+                # Parameters arrive about every 8.5 game-seconds while an
+                # episode is 10 game-minutes, so applying each draw
+                # immediately meant a game could begin against snap@200 and
+                # end against snap@600. _opponent_of reads the id when the
+                # episode ENDS, so the whole game -- and its win/loss -- was
+                # attributed to whichever checkpoint happened to be loaded
+                # last. With one snapshot in the pool that is invisible;
+                # with a full pool it corrupts every entry in the win-rate
+                # table, which is the thing PFSP then samples on.
+                #
+                # An exact fix needs a per-instance opponent, which one red
+                # policy per actor cannot express, so this bounds the error
+                # instead: at most one swap per episode-length of rollouts,
+                # which makes each game almost entirely one opponent. The
+                # residual is the single rollout that straddles a boundary --
+                # 255 of ~18,000 decisions, about 1.4% of an episode.
+                rollouts_since_swap += 1
+                if rollouts_since_swap >= ROLLOUTS_PER_EPISODE or opp_holder["actor"] is None:
+                    rollouts_since_swap = 0
+                    _load_opponent(opp_holder, opp, payload, spec.device)
+                elif opp_holder.get("loaded_id") in (None, "__latest__"):
+                    # Never latched anything yet: take the first draw at once
+                    # rather than spending a whole episode as a mirror.
+                    _load_opponent(opp_holder, opp, payload, spec.device)
+                    rollouts_since_swap = 0
             if first:
                 continue
             rollout = collect(spec.actor_id, payload, version)
