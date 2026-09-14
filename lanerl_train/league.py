@@ -75,9 +75,27 @@ class Snapshot:
 
 @dataclass
 class LeagueConfig:
-    p_latest: float = 0.40
-    p_pfsp: float = 0.40
-    p_uniform: float = 0.15
+    # OpenAI Five's mixture (Berner et al. 2019): 80% against the latest
+    # policy, 20% against past versions sampled by a quality score (PFSP here).
+    #
+    # This was AlphaStar's main-agent mixture (35/50/15), which is the right
+    # shape for StarCraft and the wrong one here. AlphaStar needs a heavy
+    # league because StarCraft is strongly NON-TRANSITIVE -- rush beats eco,
+    # eco beats tech, tech beats rush -- so a main agent must stay robust to
+    # strategies its own history never produced. A 1v1 mirror lane is mostly
+    # last-hitting, trading and wave state, which is largely transitive: being
+    # better is just being better.
+    #
+    # It is also much cheaper. A "latest" draw is a true mirror, so BOTH sides'
+    # transitions are on-policy and the rollout carries 24 slots instead of 12
+    # (see procactor._apply_pending). At 40% latest that is 1.40x the data rate
+    # of a pure league; at 80% it is 1.80x, against 2.00x for a pure mirror.
+    p_latest: float = 0.80
+    p_pfsp: float = 0.15
+    #: Zero deliberately: OpenAI Five sampled past opponents by quality alone.
+    #: PFSP already covers the pool, and the uniform slice mostly bought
+    #: coverage that matters when the pool is large and diverse.
+    p_uniform: float = 0.00
     p_anchor: float = 0.05
     #: Pool bounds.  Below ``pool_min`` the pool is not thinned at all; above
     #: ``pool_max`` the oldest middle entries go first (see :meth:`CheckpointPool.add`).

@@ -643,3 +643,53 @@ def test_a_latest_draw_means_live_weights_not_a_stale_checkpoint(tmp_path):
     loop.cfg.opponent_mode = "league"
     loop.sampler.sample = lambda: SimpleNamespace(id="latest", snapshot=None)
     assert loop._sample_opponents() == [None]
+
+
+# -- lost-rollout detection ------------------------------------------------
+
+
+def test_a_gap_in_the_actor_sequence_is_reported_and_counted(run_dir, caplog):
+    """A rollout lost in the shared-memory handover must not be silent.
+
+    The send can throw inside the CHILD's multiprocessing feeder thread, which
+    logs and carries on -- so the actor survives, the run looks healthy, and
+    one rollout never arrives. Nothing else in the stack can see it: not the
+    staleness stats, not throughput, not the actor error queue. Observed once
+    in 1,281 rollouts on rl-0913d and again on rl-league-0913c.
+    """
+    loop = make_loop(run_dir, max_staleness=100)
+    v = loop.state.param_version
+    loop.submit(Rollout(actor_id=1, param_version=v, steps=4, data="a", actor_seq=1))
+    assert loop.step_once(timeout=1.0) is True
+    assert loop.state.rollouts_lost == 0
+
+    with caplog.at_level(logging.ERROR, logger="lanerl_train.run"):
+        loop.submit(Rollout(actor_id=1, param_version=loop.state.param_version,
+                            steps=4, data="c", actor_seq=3))
+        assert loop.step_once(timeout=1.0) is True
+    assert loop.state.rollouts_lost == 1, "seq 1 -> 3 is one lost rollout"
+    assert "LOST 1 rollout" in caplog.text
+
+
+def test_the_first_rollout_from_an_actor_cannot_report_a_loss(run_dir):
+    """There is no previous sequence to compare against.
+
+    Worth pinning: it is the one case where a real loss is genuinely
+    undetectable, so a zero count early in a run is not evidence of health.
+    """
+    loop = make_loop(run_dir, max_staleness=100)
+    loop.submit(Rollout(actor_id=0, param_version=loop.state.param_version,
+                        steps=4, data="x", actor_seq=7))
+    assert loop.step_once(timeout=1.0) is True
+    assert loop.state.rollouts_lost == 0
+
+
+def test_thread_actors_are_not_gap_checked(run_dir):
+    """actor_seq is None for thread actors, which hand the object over
+    directly and cannot lose one this way."""
+    loop = make_loop(run_dir, max_staleness=100)
+    for _ in range(3):
+        loop.submit(Rollout(actor_id=0, param_version=loop.state.param_version,
+                            steps=4, data="x"))
+        loop.step_once(timeout=1.0)
+    assert loop.state.rollouts_lost == 0

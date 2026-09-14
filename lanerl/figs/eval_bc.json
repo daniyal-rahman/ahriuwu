@@ -3,54 +3,402 @@
   "rows": [
     {
       "t_s": 600.013,
-      "blue_cs": 34,
-      "red_cs": 41,
-      "blue_gold": 1943,
-      "red_gold": 1613,
+      "blue_cs": 19,
+      "red_cs": 43,
+      "blue_gold": 1208,
+      "red_gold": 1628,
       "blue_lvl": 9,
       "red_lvl": 9,
-      "blue_hp_lost": 1082,
-      "distance_travelled": 158306,
+      "blue_hp_lost": 1445,
+      "distance_travelled": 149336,
       "buttons": {
-        "noop": 5631,
-        "move": 11209,
-        "attack": 1157,
-        "cast": 4
-      }
-    },
-    {
-      "t_s": 600.013,
-      "blue_cs": 34,
-      "red_cs": 43,
-      "blue_gold": 1973,
-      "red_gold": 1298,
-      "blue_lvl": 9,
-      "red_lvl": 8,
-      "blue_hp_lost": 1425,
-      "distance_travelled": 161781,
-      "buttons": {
-        "noop": 5452,
-        "move": 11116,
-        "attack": 1430,
+        "noop": 6093,
+        "move": 9378,
+        "attack": 2527,
         "cast": 3
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
       }
     },
     {
       "t_s": 600.013,
-      "blue_cs": 44,
-      "red_cs": 43,
-      "blue_gold": 2123,
-      "red_gold": 1663,
+      "blue_cs": 22,
+      "red_cs": 32,
+      "blue_gold": 233,
+      "red_gold": 1498,
+      "blue_lvl": 7,
+      "red_lvl": 9,
+      "blue_hp_lost": 2997,
+      "distance_travelled": 168483,
+      "buttons": {
+        "noop": 7113,
+        "move": 8621,
+        "attack": 2263,
+        "cast": 4
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 21,
+      "red_cs": 52,
+      "blue_gold": 1233,
+      "red_gold": 1818,
+      "blue_lvl": 8,
+      "red_lvl": 9,
+      "blue_hp_lost": 2211,
+      "distance_travelled": 155994,
+      "buttons": {
+        "noop": 6609,
+        "move": 8651,
+        "attack": 2737,
+        "cast": 4
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 20,
+      "red_cs": 40,
+      "blue_gold": 1203,
+      "red_gold": 1808,
+      "blue_lvl": 8,
+      "red_lvl": 9,
+      "blue_hp_lost": 1891,
+      "distance_travelled": 155821,
+      "buttons": {
+        "noop": 6366,
+        "move": 9333,
+        "attack": 2298,
+        "cast": 4
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 10,
+      "red_cs": 23,
+      "blue_gold": 728,
+      "red_gold": 973,
+      "blue_lvl": 7,
+      "red_lvl": 9,
+      "blue_hp_lost": 4043,
+      "distance_travelled": 206021,
+      "buttons": {
+        "move": 7897,
+        "noop": 9023,
+        "attack": 1079,
+        "cast": 2
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 15,
+      "red_cs": 47,
+      "blue_gold": 798,
+      "red_gold": 1723,
+      "blue_lvl": 8,
+      "red_lvl": 9,
+      "blue_hp_lost": 1436,
+      "distance_travelled": 158139,
+      "buttons": {
+        "move": 9402,
+        "noop": 5998,
+        "attack": 2599,
+        "cast": 1,
+        "recall": 1
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 25,
+      "red_cs": 49,
+      "blue_gold": 1358,
+      "red_gold": 1718,
       "blue_lvl": 9,
       "red_lvl": 9,
-      "blue_hp_lost": 1227,
-      "distance_travelled": 152356,
+      "blue_hp_lost": 785,
+      "distance_travelled": 138459,
       "buttons": {
-        "noop": 5433,
-        "move": 11303,
-        "recall": 1,
-        "attack": 1262,
+        "noop": 5999,
+        "move": 9378,
+        "attack": 2618,
+        "cast": 6
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 16,
+      "red_cs": 35,
+      "blue_gold": 818,
+      "red_gold": 1213,
+      "blue_lvl": 8,
+      "red_lvl": 9,
+      "blue_hp_lost": 2026,
+      "distance_travelled": 164587,
+      "buttons": {
+        "noop": 6185,
+        "move": 9498,
+        "attack": 2318
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 19,
+      "red_cs": 49,
+      "blue_gold": 1218,
+      "red_gold": 1778,
+      "blue_lvl": 9,
+      "red_lvl": 9,
+      "blue_hp_lost": 924,
+      "distance_travelled": 144978,
+      "buttons": {
+        "noop": 5715,
+        "move": 9557,
+        "attack": 2724,
+        "cast": 5
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 28,
+      "red_cs": 54,
+      "blue_gold": 1368,
+      "red_gold": 1858,
+      "blue_lvl": 9,
+      "red_lvl": 9,
+      "blue_hp_lost": 691,
+      "distance_travelled": 133094,
+      "buttons": {
+        "noop": 5709,
+        "move": 9445,
+        "attack": 2845,
         "cast": 2
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 20,
+      "red_cs": 55,
+      "blue_gold": 1228,
+      "red_gold": 1898,
+      "blue_lvl": 9,
+      "red_lvl": 9,
+      "blue_hp_lost": 1344,
+      "distance_travelled": 141041,
+      "buttons": {
+        "noop": 5719,
+        "move": 9570,
+        "attack": 2710,
+        "cast": 2
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 22,
+      "red_cs": 32,
+      "blue_gold": 1243,
+      "red_gold": 488,
+      "blue_lvl": 8,
+      "red_lvl": 9,
+      "blue_hp_lost": 3786,
+      "distance_travelled": 157334,
+      "buttons": {
+        "noop": 7190,
+        "move": 8602,
+        "attack": 2207,
+        "cast": 2
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 14,
+      "red_cs": 44,
+      "blue_gold": 1168,
+      "red_gold": 1698,
+      "blue_lvl": 9,
+      "red_lvl": 9,
+      "blue_hp_lost": 1081,
+      "distance_travelled": 147034,
+      "buttons": {
+        "noop": 5782,
+        "move": 10164,
+        "attack": 2052,
+        "cast": 3
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 14,
+      "red_cs": 30,
+      "blue_gold": 1133,
+      "red_gold": 428,
+      "blue_lvl": 8,
+      "red_lvl": 8,
+      "blue_hp_lost": 2148,
+      "distance_travelled": 172547,
+      "buttons": {
+        "noop": 6255,
+        "move": 9683,
+        "attack": 2062,
+        "cast": 1
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 20,
+      "red_cs": 33,
+      "blue_gold": 1213,
+      "red_gold": 1543,
+      "blue_lvl": 8,
+      "red_lvl": 11,
+      "blue_hp_lost": 3477,
+      "distance_travelled": 172433,
+      "buttons": {
+        "move": 8595,
+        "noop": 7509,
+        "attack": 1894,
+        "cast": 3
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
+      }
+    },
+    {
+      "t_s": 600.013,
+      "blue_cs": 13,
+      "red_cs": 36,
+      "blue_gold": 788,
+      "red_gold": 1228,
+      "blue_lvl": 7,
+      "red_lvl": 8,
+      "blue_hp_lost": 2905,
+      "distance_travelled": 161076,
+      "buttons": {
+        "noop": 6607,
+        "move": 9406,
+        "attack": 1985,
+        "cast": 3
+      },
+      "start_stats": {
+        "mhp": 754.0,
+        "ad": 78.14,
+        "ap": 0.0,
+        "ar": 36.54,
+        "mr": 44.16,
+        "lvl": 1.0
       }
     }
   ]

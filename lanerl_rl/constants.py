@@ -105,7 +105,28 @@ LAST_HIT_WINDOW_P90_MS = 2285.0
 #: Default discount horizon, in SECONDS.  gamma is derived from this and the
 #: decision rate, never configured raw -- a raw gamma silently means a
 #: different amount of time whenever the decision rate changes.
-DEFAULT_HORIZON_S = 30.0
+#:
+#: 60, not 30, because the lane's actual dynamics are slower than 30 s and at
+#: 30 they were invisible to the objective.  A shove-and-bounce wave cycle is
+#: 1-3 minutes, and gold and experience are lagging indicators of lane control
+#: on the order of minutes.  What the discount does to that, at 30 Hz::
+#:
+#:     horizon_s   reward 120 s away   reward 180 s away
+#:            30              1.83%               0.25%
+#:            60             13.53%               4.97%
+#:           120             36.78%              22.31%
+#:
+#: At 30 s a payoff two minutes out is worth under 2% of face value, so no
+#: amount of training can teach wave management: the credit never arrives.
+#: 60 s is the conservative step -- raising the horizon also raises value
+#: variance and makes credit assignment harder, so this is not free, and 120
+#: is available if 60 proves too short.
+#:
+#: NOT the only horizon in the stack, and the smaller one is now the binding
+#: constraint: ``PPOConfig.chunk_len = 16`` means BPTT reaches back 0.53 s, so
+#: the GRU is only ever TRAINED to use half a second of memory however far the
+#: discount sees.
+DEFAULT_HORIZON_S = 60.0
 
 
 def legal_step_ticks(decision_hz: float, tol: float = 1e-6) -> int:
@@ -574,13 +595,36 @@ E_DN = 2                 # (target - me) perpendicular / NORM_DIST
 E_HP_FRAC = 3            # quantised to health-bar resolution
 E_TYPE_ONEHOT = slice(4, 4 + N_ENTITY_TYPES)
 E_TEAM_ONEHOT = slice(4 + N_ENTITY_TYPES, 4 + N_ENTITY_TYPES + N_ENTITY_TEAMS)
-ENTITY_DIM = 4 + N_ENTITY_TYPES + N_ENTITY_TEAMS
+#: WHICH KIND of lane minion, one-hot, all-zero for anything that is not one.
+#:
+#: Every lane minion reaches the wire as kind "LaneMinion", so melee, caster
+#: and cannon were a single category to the policy -- while their max health is
+#: 455 / 290 / 700 and the hp_frac at which one auto-attack kills them is
+#: 0.172 / 0.263 / 0.112, a 2.3x spread. The agent was being asked to learn one
+#: last-hit threshold correct for none of the three, from an hp_frac it could
+#: not scale.
+#:
+#: Categorical on purpose: this says WHAT the thing is, and leaves working out
+#: what that implies about damage to the network. Max health is deliberately
+#: NOT fed -- a bar's length is what a player reads as "how hurt", and the
+#: identity of the unit is what tells them how much that is worth.
+_MT = 4 + N_ENTITY_TYPES + N_ENTITY_TEAMS
+E_MINION_MELEE = _MT
+E_MINION_CASTER = _MT + 1
+E_MINION_CANNON = _MT + 2
+E_MINION_SUBTYPE = slice(_MT, _MT + 3)
+#: MinionSpawnType -> index above. SUPER (1) is absent on purpose: it only
+#: spawns after an inhibitor falls, which cannot happen in a 10-minute lane,
+#: and a one-hot bit that is never set is the padding this layout removed.
+MINION_TYPE_INDEX = {0: 0, 3: 1, 2: 2}
+ENTITY_DIM = _MT + 3
 
 #: Human-readable names, index-aligned, used by ``audit.py``.
 ENTITY_FIELD_NAMES = tuple(
     ["valid", "lane_ds", "lane_dn", "hp_frac"]
     + [f"type_{t}" for t in ENTITY_TYPES]
     + [f"team_{t}" for t in ENTITY_TEAMS]
+    + ["minion_melee", "minion_caster", "minion_cannon"]
 )
 assert len(ENTITY_FIELD_NAMES) == ENTITY_DIM, len(ENTITY_FIELD_NAMES)
 

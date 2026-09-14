@@ -54,8 +54,16 @@ def test_mixture_must_sum_to_one():
 
 
 def test_default_mixture_is_the_documented_one():
+    """OpenAI Five's 80/20, not AlphaStar's 35/50/15.
+
+    Changed 2026-09-14. AlphaStar needs a heavy league because StarCraft is
+    strongly non-transitive; a 1v1 mirror lane is largely transitive, so the
+    league buys less. It is also cheaper: a "latest" draw is a true mirror, so
+    both sides' transitions are on-policy and the rollout carries 24 slots
+    instead of 12.
+    """
     cfg = LeagueConfig()
-    assert cfg.weights() == {"latest": 0.40, "pfsp": 0.40, "uniform": 0.15, "anchor": 0.05}
+    assert cfg.weights() == {"latest": 0.80, "pfsp": 0.15, "uniform": 0.00, "anchor": 0.05}
 
 
 def test_zero_prior_is_rejected():
@@ -94,7 +102,12 @@ def test_latest_means_the_live_weights_on_both_sides():
 
 
 def test_pfsp_draws_follow_one_minus_p_squared():
-    cfg = LeagueConfig(halflife_games=None)  # no decay: exact arithmetic
+    # Explicit mixture: this checks the PFSP weighting itself, and its
+    # statistical power depends on how many draws land in the pfsp slice. The
+    # default is now 0.15 pfsp (OpenAI Five), which left too few draws for the
+    # 5-sigma bound below to mean anything.
+    cfg = LeagueConfig(halflife_games=None,  # no decay: exact arithmetic
+                       p_latest=0.40, p_pfsp=0.40, p_uniform=0.15, p_anchor=0.05)
     pool = make_pool(8, cfg)
     rates = WinRateTracker(cfg)
     # A spread of win rates, including one the agent is losing to badly.
@@ -125,7 +138,11 @@ def test_pfsp_draws_follow_one_minus_p_squared():
 
 
 def test_uniform_slice_is_actually_uniform():
-    cfg = LeagueConfig(halflife_games=None)
+    # Explicit mixture: this tests the uniform SLICE, so it must not depend on
+    # the default having one. The default is now 0.00 uniform (OpenAI Five),
+    # which silently turned this into a test of an empty sample.
+    cfg = LeagueConfig(halflife_games=None, p_latest=0.40, p_pfsp=0.40,
+                       p_uniform=0.15, p_anchor=0.05)
     pool = make_pool(6, cfg)
     rates = WinRateTracker(cfg)
     for s in pool.snapshots[:3]:
@@ -159,7 +176,14 @@ def test_pfsp_falls_back_to_uniform_when_every_weight_is_zero(caplog):
 
 
 def test_an_empty_pool_renormalises_onto_latest_and_anchors(caplog):
-    cfg = LeagueConfig()
+    """The pfsp and uniform mass has nowhere to go, so it redistributes.
+
+    Mixture stated explicitly rather than inherited: this tests the
+    RENORMALISATION arithmetic, and the expected share is a function of the
+    mixture, so a default change should not be able to silently make the
+    assertion trivially true.
+    """
+    cfg = LeagueConfig(p_latest=0.40, p_pfsp=0.40, p_uniform=0.15, p_anchor=0.05)
     sampler = OpponentSampler(CheckpointPool(cfg), WinRateTracker(cfg), anchors(2), cfg,
                               random.Random(5))
     specs = sampler.sample_many(20_000)
@@ -168,6 +192,17 @@ def test_an_empty_pool_renormalises_onto_latest_and_anchors(caplog):
     share_latest = sum(s.category == "latest" for s in specs) / len(specs)
     assert share_latest == pytest.approx(0.40 / 0.45, abs=0.02)
     assert "checkpoint pool is empty" in caplog.text
+
+
+def test_the_default_mixture_renormalises_the_same_way(caplog):
+    """The same arithmetic under the shipped 80/20, since that is what runs."""
+    cfg = LeagueConfig()
+    sampler = OpponentSampler(CheckpointPool(cfg), WinRateTracker(cfg), anchors(2), cfg,
+                              random.Random(5))
+    specs = sampler.sample_many(20_000)
+    assert {s.category for s in specs} == {"latest", "anchor"}
+    share_latest = sum(s.category == "latest" for s in specs) / len(specs)
+    assert share_latest == pytest.approx(0.80 / 0.85, abs=0.02)
 
 
 def test_no_opponent_at_all_is_fatal_not_silent():
