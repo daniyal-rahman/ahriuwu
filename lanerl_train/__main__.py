@@ -145,7 +145,7 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument("--keep-last-checkpoints", type=int, default=10)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--lr", type=float, default=3e-4)
-    p.add_argument("--horizon-s", type=float, default=C_DEFAULT_HORIZON_S, help="PPOConfig discount horizon in seconds (default 60: at 30 a payoff 2 min out is worth 1.8% of face value, so wave management is invisible)")
+    p.add_argument("--horizon-s", type=float, default=C_DEFAULT_HORIZON_S, help="PPOConfig discount horizon in seconds (default 60: at 30 a payoff 2 min out is worth 1.8%% of face value, so wave management is invisible)")
     p.add_argument("--anneal-clock", choices=("env_steps", "updates"), default="env_steps")
     p.add_argument("--device", default="cpu")
     # -- the reward's zero-sum coefficient -------------------------------

@@ -81,11 +81,27 @@ def test_the_same_horizon_gives_different_gammas_at_different_rates():
     assert C.horizon_for_gamma(g15, 60.0) == pytest.approx(7.5)
 
 
-def test_default_ppo_horizon_is_in_the_30_to_45_second_band():
+def test_the_default_horizon_covers_a_wave_cycle():
+    """60 s, raised from 30 on 2026-09-14.
+
+    The band in this test's old name (30-45 s) was chosen before anyone had
+    worked out what the lane's own timescale is. A shove-and-bounce wave cycle
+    is 1-3 minutes, and at 30 s a payoff two minutes out is discounted to 1.8%
+    of face value -- so wave management could not be learned at any amount of
+    training, because the credit never arrived. At 60 s it is 13.5%.
+
+    Pinned to constants.DEFAULT_HORIZON_S rather than to a literal, so the
+    horizon has exactly one definition.
+    """
     cfg = PPOConfig()
-    assert 30.0 == pytest.approx(cfg.effective_horizon_s(), rel=1e-9)
-    # gamma follows the rate: 1 - 1/(H*f). At 30 Hz that is 0.998889.
-    assert cfg.gamma == pytest.approx(1.0 - 1.0 / (30.0 * C.DECISION_HZ), abs=1e-9)
+    assert cfg.effective_horizon_s() == pytest.approx(C.DEFAULT_HORIZON_S, rel=1e-9)
+    assert C.DEFAULT_HORIZON_S >= 60.0, (
+        "a horizon under 60 s discounts a two-minute wave cycle below 14% of "
+        "face value; see the table in constants.DEFAULT_HORIZON_S"
+    )
+    # gamma follows the rate: 1 - 1/(H*f). At 60 s and 30 Hz that is 0.999444.
+    assert cfg.gamma == pytest.approx(
+        1.0 - 1.0 / (C.DEFAULT_HORIZON_S * C.DECISION_HZ), abs=1e-9)
     assert cfg.step_ticks == C.STEP_TICKS
 
 
