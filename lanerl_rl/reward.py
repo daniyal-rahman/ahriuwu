@@ -474,20 +474,38 @@ class RewardWeights:
     #: Reward per 1000 game units of distance CLOSED toward the lane corridor,
     #: paid as a potential (see ``lane_approach_potential``), not as a rate.
     #:
-    #: This exists because ``lane_presence`` above cannot bootstrap anything:
-    #: it is an indicator that pays only once the agent is ALREADY in lane, so
-    #: from the fountain its gradient is exactly zero. Every run that has ever
-    #: farmed here was initialised from the BC policy, which supplied the walk
-    #: to lane as a prior. Run ``rl-screen-0914`` was the first from scratch,
-    #: and over 164 episodes it scored 0.00 CS at level 1.00 flat through
-    #: 210 s -- a champion that reaches lane is level 2 off the first wave at
-    #: ~90 s, so it simply never left its own base.
+    #: This addresses a gap ``lane_presence`` structurally cannot: that weight
+    #: is an indicator paying only once the agent is ALREADY in the corridor,
+    #: so from the fountain its gradient is exactly zero in every direction.
+    #: The fountain is 6,835 units out, a decision lasts 33 ms (~11 units of
+    #: travel), and re-drawing a direction at 30 Hz is a random walk covering
+    #: ~11*sqrt(9000) ~ 1.1k units over a 300 s episode, so a policy with no
+    #: prior has no route to its first minion.
     #:
-    #: The arithmetic says it never could: the fountain is 6,835 units from
-    #: the corridor, a decision lasts 33 ms (~11 units of travel), and
-    #: re-drawing a direction at 30 Hz is a random walk covering
-    #: ~11*sqrt(9000) ~ 1.1k units over a 300 s episode. It never arrives, so
-    #: it never sees a minion, so there is nothing to learn from.
+    #: HOW MUCH THAT MATTERS IN PRACTICE IS UNMEASURED, and the honest record
+    #: of the run that prompted this weight says it was NOT the binding
+    #: constraint there. ``rl-screen-0914`` (first from-scratch run in this
+    #: project; every earlier run that farmed was BC-initialised) looked from
+    #: the instance logs like a champion that never left base -- 0.00 CS at
+    #: level 1.00 flat through 210 s. Its own episode records say otherwise:
+    #:
+    #:     median 29% of each episode INSIDE the corridor (max 72%)
+    #:     50 of 62 episodes ended in death
+    #:     5.00 total last-hit reward across all 62 episodes
+    #:     corridor share over training: 18/17/26/20/23% -> 0/0/0/0/0%
+    #:
+    #: It found lane, could not farm once there, died four times in five, and
+    #: training correctly taught it to leave: episode return ~-4.5, with lane
+    #: presence paying +0.25 against ~-4.8 for dying. That is rational
+    #: avoidance, not failed exploration, and 0.478 for the walk cannot
+    #: outweigh -4.8 -- this weight would not have rescued that run. The fix
+    #: there was a BC prior, which supplies last-hitting and makes the lane
+    #: worth standing in.
+    #:
+    #: It is kept, defaulted on and ablatable via ``--lane-approach 0``,
+    #: because it is a genuine potential and so CANNOT change which policy is
+    #: optimal -- only which ones are reachable -- and the exploration gap it
+    #: closes is real even though it was not what broke that run.
     #:
     #: 0.07/1000 pays 0.478 over that walk -- about half a last hit, and
     #: deliberately under the 1.0 death weight, because the potential is also

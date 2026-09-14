@@ -10,8 +10,8 @@ entropy never fell and value_loss collapsed to a constant.
 This is the AlphaStar shape: a supervised prior from demonstrations, then RL
 with a KL penalty toward it. This module is the prior.
 
-The head structure mirrors the policy's action space exactly (button / move_x /
-move_z / target), so the trained weights load straight into LanePolicy and RL
+The head structure mirrors the policy's action space exactly (button /
+screen_x / screen_y / target), so the trained weights load straight into LanePolicy and RL
 can continue from them.
 
   python -m lanerl_train.bc --demos demos/bot_demos.npz --out demos/bc_policy.pt
@@ -52,8 +52,8 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
         "screen_y": np.full(n, C.N_SCREEN_Y // 2, dtype=np.int64),
         "target": np.zeros(n, dtype=np.int64),
         # Which heads this row actually SUPERVISES. A head with no label is not
-        # the same as a head labelled "centre bin" / "slot 0": move_x/move_z sit
-        # at N_MOVE_BINS // 2, whose value is MOVE_BIN_VALUES[4] = 0.0, i.e. a
+        # the same as a head labelled "centre bin" / "slot 0": screen_x/screen_y
+        # sit at N_SCREEN_{X,Y} // 2, which is the screen centre -- i.e. a
         # positive "stand still" instruction. 21.3% of move rows carry no
         # direction (the tail of an order republished across ~4 frames at 30 Hz
         # against the bot's 150 ms reaction clock), and training them as
@@ -162,7 +162,7 @@ def main() -> int:
     # masked-logit catastrophe as before (cross-entropy against a -1e9 logit is
     # ~1e9), just relocated to the target head. It showed up as val_target
     # DEGRADING across epochs (0.922 -> 0.817) while val_button sat at 0.547
-    # against a 0.544 majority baseline and val_move_x never moved off 0.230:
+    # against a 0.544 majority baseline and val_screen_x never moved off 0.230:
     # a handful of impossible rows owned the whole gradient.
     #
     # The cause is the same off-by-one the label pairing has to live with. The
@@ -172,7 +172,7 @@ def main() -> int:
     # through -- it is unlabelable for that head, and only for that head, so
     # clear the head's gate and keep the row's button label.
     for head, gate in (("target", "has_target"),
-                       ("move_x", "has_dir"), ("move_z", "has_dir")):
+                       ("screen_x", "has_dir"), ("screen_y", "has_dir")):
         m = z[f"mask_{head}"]
         allowed = m[np.arange(n), heads[head]].astype(bool)
         killed = int((heads[gate] & ~allowed).sum())
@@ -201,7 +201,7 @@ def main() -> int:
         for k in ("entity_pad_mask", "priv_pad_mask"):
             kw[k] = torch.as_tensor(z[k][idx]).unsqueeze(1)
         masks = {k: torch.as_tensor(z[f"mask_{k}"][idx]).unsqueeze(1)
-                 for k in ("button", "move_x", "move_z", "target")}
+                 for k in ("button", "screen_x", "screen_y", "target")}
         state = policy.initial_state(len(idx), device="cpu")
         # The value output is DISCARDED, and has to be: a demonstration set is
         # (observation, action) pairs with no reward and no returns, so there
@@ -223,7 +223,7 @@ def main() -> int:
             idx = tr_i[s : s + args.batch]
             dist = batch_logits(idx)
             # Weight each head by whether THIS row supervises it. Previously
-            # move_x/move_z were weighted by (button == move), which is not the
+            # screen_x/screen_y were weighted by (button == move), which is not the
             # same question: a move order whose direction the collector could
             # not recover still counted, at full strength, as a label saying
             # "centre bin" = stand still.
@@ -231,7 +231,7 @@ def main() -> int:
                 dist.logits["button"].reshape(len(idx), -1),
                 torch.as_tensor(heads["button"][idx]),
             )
-            per_head = {"move_x": "has_dir", "move_z": "has_dir",
+            per_head = {"screen_x": "has_dir", "screen_y": "has_dir",
                         "target": "has_target"}
             for head, gate in per_head.items():
                 w = torch.as_tensor(heads[gate][idx].astype("float32"))
@@ -261,8 +261,8 @@ def main() -> int:
             dsel = val_i[heads["has_dir"][val_i]]
             dacc = float("nan")
             if len(dsel):
-                dp = dist.logits["move_x"].reshape(len(val_i), -1).argmax(-1).numpy()
-                dacc = float((dp[heads["has_dir"][val_i]] == heads["move_x"][dsel]).mean())
+                dp = dist.logits["screen_x"].reshape(len(val_i), -1).argmax(-1).numpy()
+                dacc = float((dp[heads["has_dir"][val_i]] == heads["screen_x"][dsel]).mean())
         mean_loss = tot / max(1, seen)
         if epoch == 0 and mean_loss > 1e3:
             print(f"EPOCH-0 LOSS IS {mean_loss:.0f}. A correctly gated BC loss here "
@@ -272,7 +272,7 @@ def main() -> int:
                   f"checkpoint that would look trained and be noise.")
             return 1
         print(f"  epoch {epoch}: train_loss={tot/max(1,seen):.4f}  "
-              f"val_button={acc:.3f}  val_target={tacc:.3f}  val_move_x={dacc:.3f}")
+              f"val_button={acc:.3f}  val_target={tacc:.3f}  val_screen_x={dacc:.3f}")
 
     # HALF OF THIS CHECKPOINT IS UNTRAINED, and it does not look it.
     #

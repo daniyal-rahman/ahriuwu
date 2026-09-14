@@ -122,11 +122,24 @@ def build_argparser() -> argparse.ArgumentParser:
     p.add_argument(
         "--lane-presence", type=float, default=None,
         help="per-decision reward for being inside the top-lane corridor. "
-             "Default: RewardWeights.lane_presence (0.0005, ~9.0 an episode "
+             "Default: RewardWeights.lane_presence (0.0001, ~1.8 an episode "
              "against ~40 for a 40-CS game). Set 0 to disable -- it is a "
              "DENSE reward for occupying a state, which is the shape of "
              "shaping term most likely to be gamed, so it needs to be "
              "switchable without a code edit to be testable at all.",
+    )
+    p.add_argument(
+        "--lane-approach", type=float, default=None,
+        help="reward per 1000 game units of distance CLOSED toward the lane "
+             "corridor, paid as a potential. Default: "
+             "RewardWeights.lane_approach (0.07, so 0.478 for the whole 6,835 "
+             "unit walk from the fountain). Set 0 to ablate. Unlike "
+             "--lane-presence this is a Ng-et-al. potential and so cannot "
+             "change which policy is optimal, only which ones are found -- "
+             "but it is switchable because it did NOT turn out to be the fix "
+             "for rl-screen-0914 (that agent reached lane in 29%% of its "
+             "steps and died there; see RewardWeights.lane_approach), so its "
+             "value is still unmeasured.",
     )
     p.add_argument(
         "--agent-type", choices=("main", "main_exploiter", "league_exploiter"),
@@ -554,6 +567,10 @@ def main(argv=None) -> int:
     # Built ONCE and shared by the actors and the anchor evaluator, so the two
     # cannot end up measuring under different reward definitions.
     reward_cfg = reward_config(ppo_cfg.gamma, args.alpha, args.alpha_anneal_steps)
+    if args.lane_approach is not None:
+        reward_cfg.weights.lane_approach = float(args.lane_approach)
+        log.info("lane_approach weight overridden to %g (%.3f for the full walk)",
+                 args.lane_approach, args.lane_approach * 6.835)
     if args.lane_presence is not None:
         reward_cfg.weights.lane_presence = float(args.lane_presence)
         log.info("lane_presence weight overridden to %g (~%.1f per episode)",

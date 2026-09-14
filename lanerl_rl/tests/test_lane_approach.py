@@ -1,30 +1,37 @@
 """The potential that pays for WALKING TO LANE.
 
-Why this term exists at all is a measurement, not a theory. Run
-``rl-screen-0914`` was the first from-scratch run in this project's history --
-every earlier run that farmed was initialised from the BC policy, which
-supplied the walk to lane as a prior. Across 164 episodes it produced:
+``lane_presence`` cannot bootstrap a walk to lane: it is an indicator that
+pays only once the agent is ALREADY inside the corridor, so from the fountain
+its gradient is exactly zero in every direction. The corridor is 6,835 units
+from the fountain (measured, not assumed -- an earlier note in this repo
+carried 11,866, which is the distance to a different anchor) and a decision
+lasts 33 ms (~11 units of travel), so re-drawing a direction at 30 Hz is a
+random walk covering ~11*sqrt(9000) ~ 1.1k units over a 300 s episode: a
+policy with no prior has no route to its first minion. The two terms are
+complementary, not redundant -- the potential carries the agent to the
+corridor, the indicator holds it there.
 
-    gametime    mean CS    mean level
-      0-210 s     0.00        1.00
-        300 s     0.00        1.50
-        570 s     0.00        1.41
+WHAT THIS TERM DID NOT FIX, recorded because the first version of this
+docstring claimed the opposite and the claim was wrong. ``rl-screen-0914``
+-- the first from-scratch run here, every earlier farming run having been
+BC-initialised -- read from the instance logs as a champion that never left
+base: 0.00 CS at level 1.00 flat through 210 s. Its own episode records say
+otherwise:
 
-A champion that reaches lane is level 2 off the first wave at ~90 s. Level
-1.00 flat through 210 s is a champion that never left its own base, and 0.00
-CS across every bucket is what "no reward gradient anywhere" looks like from
-the outside.
+    median 29% of each episode INSIDE the corridor (max 72%)
+    50 of 62 episodes ended in death
+    5.00 total last-hit reward across all 62 episodes
+    corridor share over training: 18/17/26/20/23% -> 0/0/0/0/0%
 
-``lane_presence`` was supposed to cover this and cannot: it is an indicator
-that pays only once the agent is ALREADY inside the corridor, so from the
-fountain its gradient is exactly zero in every direction. The corridor is
-6,835 units from the fountain (measured, not assumed -- an earlier note in
-this repo carried 11,866, which is the distance to a different anchor) and a
-decision lasts 33 ms (~11 units of travel), so re-drawing a direction at
-30 Hz is a random walk covering ~11*sqrt(9000) ~ 1.1k units over a 300 s
-episode. It never arrives, so it never sees a minion, so there is
-nothing to learn from. The two terms are complementary, not redundant: the
-potential carries the agent to the corridor, the indicator holds it there.
+It found lane, could not farm once there, died four times in five, and
+training correctly taught it to leave -- episode return ~-4.5, lane presence
+paying +0.25 against ~-4.8 for dying. Rational avoidance, not failed
+exploration, and 0.478 for the walk cannot outweigh -4.8. The fix there was a
+BC prior, which supplies last-hitting and makes the lane worth standing in.
+
+This term is kept, on by default and ablatable with ``--lane-approach 0``,
+because it is a genuine potential and so cannot change which policy is
+OPTIMAL, only which ones are reachable. Its value remains unmeasured.
 
 The tests below are the ones that would catch a plausible mistake:
 
