@@ -372,6 +372,37 @@ def last_hit_potential(
     return c * total
 
 
+def lane_approach_potential(
+    lane: "LaneFrame",
+    champ: Optional[Unit],
+    per_1000: float,
+    corridor: float,
+) -> float:
+    r"""``-per_1000/1000 * distance(champ, lane corridor)``; 0 once inside.
+
+    A potential, in the sense of Ng, Harada & Russell (1999), so the shaping
+    ``gamma*Phi(s') - Phi(s)`` it generates is policy-invariant: it changes
+    which policies are FOUND, never which policy is optimal.  That is the
+    whole reason the walk to lane is paid this way rather than as a per-step
+    "closer than last tick" bonus, which is not a potential and would pay an
+    agent to oscillate toward and away from the lane forever.
+
+    The corridor is the same rectangle ``lane_presence`` scores -- ``|n| <=
+    corridor`` and ``-corridor <= s <= length + corridor`` -- so the potential
+    saturates exactly where the indicator starts paying, and the two terms
+    hand off instead of double-counting.  Distance is to the RECTANGLE, not to
+    the axis: a champion at the correct ``s`` but 3k units off-axis and one at
+    ``n = 0`` but sitting in the base are both far, and both get a gradient
+    pointing at the nearest piece of lane.
+    """
+    if champ is None:
+        return 0.0
+    s, n = lane.point(champ.x, champ.y)
+    off_n = max(0.0, abs(n) - corridor)
+    off_s = max(0.0, -corridor - s, s - (lane.length + corridor))
+    return -(per_1000 / 1000.0) * math.hypot(off_n, off_s)
+
+
 # --------------------------------------------------------------------------
 # Config
 # --------------------------------------------------------------------------
@@ -440,6 +471,33 @@ class RewardWeights:
     #: LANE_HALF_WIDTH (1400) is the corridor the observation already uses, so
     #: the reward and the observation agree on where the lane is.
     lane_corridor: float = C.LANE_HALF_WIDTH
+    #: Reward per 1000 game units of distance CLOSED toward the lane corridor,
+    #: paid as a potential (see ``lane_approach_potential``), not as a rate.
+    #:
+    #: This exists because ``lane_presence`` above cannot bootstrap anything:
+    #: it is an indicator that pays only once the agent is ALREADY in lane, so
+    #: from the fountain its gradient is exactly zero. Every run that has ever
+    #: farmed here was initialised from the BC policy, which supplied the walk
+    #: to lane as a prior. Run ``rl-screen-0914`` was the first from scratch,
+    #: and over 164 episodes it scored 0.00 CS at level 1.00 flat through
+    #: 210 s -- a champion that reaches lane is level 2 off the first wave at
+    #: ~90 s, so it simply never left its own base.
+    #:
+    #: The arithmetic says it never could: the fountain is 6,835 units from
+    #: the corridor, a decision lasts 33 ms (~11 units of travel), and
+    #: re-drawing a direction at 30 Hz is a random walk covering
+    #: ~11*sqrt(9000) ~ 1.1k units over a 300 s episode. It never arrives, so
+    #: it never sees a minion, so there is nothing to learn from.
+    #:
+    #: 0.07/1000 pays 0.478 over that walk -- about half a last hit, and
+    #: deliberately under the 1.0 death weight, because the potential is also
+    #: what makes a death sting twice: dying teleports the champion to the
+    #: fountain, a real -0.478 step down in Phi. That is recovered by walking
+    #: back, so the SUM is unchanged and dying stays strictly unprofitable
+    #: (``test_dying_is_never_profitable`` and
+    #: ``test_a_death_costs_the_walk_back_and_no_more`` cover it) -- but it is
+    #: the reason this is 0.07 and not the 0.29 that would pay a full 2.0.
+    lane_approach: float = 0.07
     #: Gold converted into items.  ZERO, deliberately -- see the module
     #: docstring's "``spend``, and why it is a named zero".  Two reasons: the
     #: wallet drop is never on the wire (the scripted buy happens between the
@@ -661,16 +719,26 @@ class _AgentReward:
     # -- shaping -----------------------------------------------------------
 
     def potential(self, frame: Frame, attack_damage: float) -> float:
-        return last_hit_potential(
-            frame,
-            frame.champion_of_team(self.team),
-            self.enemy_team,
-            attack_damage,
-            c=self.cfg.shaping_c,
-            kappa=self.cfg.shaping_kappa,
-            aa_range=self.cfg.aa_range,
-            eps=self.cfg.shaping_eps,
+        me = frame.champion_of_team(self.team)
+        phi = 0.0
+        if self.cfg.last_hit_shaping:
+            phi += last_hit_potential(
+                frame,
+                me,
+                self.enemy_team,
+                attack_damage,
+                c=self.cfg.shaping_c,
+                kappa=self.cfg.shaping_kappa,
+                aa_range=self.cfg.aa_range,
+                eps=self.cfg.shaping_eps,
+            )
+        # Two potentials sum to one potential, so the invariance survives.
+        phi += lane_approach_potential(
+            self._lane, me,
+            per_1000=self.cfg.weights.lane_approach,
+            corridor=self.cfg.weights.lane_corridor,
         )
+        return phi
 
 
 # --------------------------------------------------------------------------
@@ -734,7 +802,11 @@ class ZeroSumLaneReward:
         }
 
         shaping: Dict[int, float] = {t: 0.0 for t in self.teams}
-        if self.cfg.last_hit_shaping:
+        # Either potential switched on runs the block. `last_hit_shaping` used
+        # to be the only one and so gated the loop; leaving it that way would
+        # have made `lane_approach` silently dead whenever last-hit shaping was
+        # turned off, which is exactly the ablation someone would run first.
+        if self.cfg.last_hit_shaping or self.cfg.weights.lane_approach:
             for t in self.teams:
                 ch = frame.champion_of_team(t)
                 # Wire AD, not a re-derivation -- see obs.ObservationBuilder.
