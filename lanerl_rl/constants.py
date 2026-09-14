@@ -386,6 +386,24 @@ GAREN_COOLDOWNS = {
     # own 120/120 filler. Harmless -- Champion.LevelUpSpell caps R at rank 3.
     "R": (160.0, 120.0, 80.0, 80.0, 80.0),
 }
+#: Garen's skill order, one entry per champion level. 0=Q 1=W 2=E 3=R.
+#:
+#: THE canonical copy. It existed in three places that disagreed:
+#: LanerlConfig.SkillOrder (the one that actually runs),
+#: lanerl_bot.build.GAREN_SKILL_ORDER, and obs.AbilityBook.MIN_LEVEL, which
+#: encoded a fourth order again (Q@1 W@2 E@3). A skill order that differs
+#: between the server and the observation is not a cosmetic bug: the action
+#: mask then forbids a spell the champion HAS and offers one it does not, and
+#: casting an unlearned spell is not a no-op -- nothing in Spell.Cast checks
+#: the level, so it grants the effect anyway.
+#:
+#: E first: it is the farming and trading spell. Then Q, then W, then max E,
+#: then Q, then W. R at 6/11/16.
+#:
+#: tests/test_skill_order_matches_the_server.py parses LanerlConfig.cs and
+#: fails if this and the server ever drift apart again.
+GAREN_SKILL_ORDER = (2, 0, 1, 2, 2, 3, 2, 2, 0, 0, 3, 0, 0, 1, 1, 3, 1, 1)
+
 SPELL_SLOTS = ("Q", "W", "E", "R")
 
 #: Rank-1 cooldowns, used as the *estimate* denominator for an ENEMY ability.

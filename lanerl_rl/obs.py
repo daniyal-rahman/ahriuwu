@@ -216,7 +216,15 @@ class AbilityBook:
     """
 
     SLOTS = C.SPELL_SLOTS
-    MIN_LEVEL = (1, 2, 3, 6)
+    #: First champion level at which each slot has a point, DERIVED from
+    #: C.GAREN_SKILL_ORDER rather than restated. This was a hardcoded
+    #: (1, 2, 3, 6) -- Q@1 W@2 E@3 -- which matched neither the server's order
+    #: then nor now. Only reached when the wire carries no 'sl'.
+    MIN_LEVEL = tuple(
+        next((lv + 1 for lv, sl in enumerate(C.GAREN_SKILL_ORDER) if sl == slot),
+             C.MAX_LEVEL + 1)
+        for slot in range(4)
+    )
 
     def __init__(self) -> None:
         self.ranks = [0, 0, 0, 0]

@@ -66,10 +66,17 @@ def is_last_hit(
 
       lower half -- "will it die without me?" -- uses *current* HP by default.
         Declining a swing because the wave is predicted to finish the minion trades a
-        guaranteed 20 gold for an auto attack that costs almost nothing. Measured over
-        full 10-minute games on this server, declining cost roughly a quarter of
-        CS@10, so it is off unless an anchor is specifically meant to play for wave
-        control.
+        guaranteed 20 gold for an auto attack that costs almost nothing.
+
+        It is off because that trade is unfavourable on its face, NOT because it was
+        measured to be worse. This docstring used to say declining "cost roughly a
+        quarter of CS@10"; the only A/B of it on this server says the opposite.
+        ``bench/out/rep_predicate.json``: ``decline_on`` 24.7 CS mean against
+        ``asym_default`` 20.0, i.e. declining looked ~24% BETTER. n=3 per arm with
+        sd 6.1, so neither direction is significant, and both arms ran at
+        ``incomingMode=2`` while every shipped anchor config uses 0 (which alone
+        moves the same measurement 20 -> 38). There is no measurement here worth
+        quoting in either direction.
     """
     hp_at_landing = target_hp - incoming_damage + regen_per_second * time_to_land
     floor_hp = hp_at_landing if decline_when_wave_kills else target_hp

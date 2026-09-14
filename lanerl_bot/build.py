@@ -28,8 +28,12 @@ Q, W, E, R = 0, 1, 2, 3
 #       per rank: about +65 flat and +0.3 AD per target, times however many
 #               targets are in the wave
 #
-#   W is a shield with no damage; R is 175/350/525 (+1.0 AD) execute damage on a
-#       160/120/80s cooldown and is gated to levels 6/11/16 by the content data.
+#   W is a shield with no damage; R (Content/.../Characters/Garen/R.cs:28-33) is
+#       175*rank flat -- 175/350/525 -- PLUS 28.57/33.33/40% of the target's
+#       MISSING health, dealt as DAMAGE_TYPE_MAGICAL, on a 160/120/80s cooldown,
+#       gated to levels 6/11/16 by the content data. There is no AD ratio: this
+#       comment said "(+1.0 AD) execute damage" and the script has neither an AD
+#       term nor a physical damage type.
 #
 # So E's marginal rank is worth several times Q's for anything involving a wave,
 # which matches the Season-4 consensus of maxing Judgment first. R is taken on
@@ -40,26 +44,11 @@ Q, W, E, R = 0, 1, 2, 3
 # therefore *suppresses auto attacks*, which is exactly how this bot gets CS. The
 # skill order still maxes E (it is the right order for a real game, and E is the
 # right tool once the bot is asked to fight), but useEWaveclear defaults to off.
-GAREN_SKILL_ORDER = [
-    Q,  # 1  -- Q first: it is an empowered auto, so it doubles as a cannon execute
-    E,  # 2
-    E,  # 3
-    W,  # 4
-    E,  # 5
-    R,  # 6
-    E,  # 7
-    E,  # 8  -- E maxed
-    Q,  # 9
-    Q,  # 10
-    R,  # 11
-    Q,  # 12
-    Q,  # 13 -- Q maxed
-    W,  # 14
-    W,  # 15
-    R,  # 16
-    W,  # 17
-    W,  # 18
-]
+# Imported, not restated. This held its own copy (Q first) and drifted from
+# the server's LanerlConfig.SkillOrder the moment that changed.
+from lanerl_rl.constants import GAREN_SKILL_ORDER as _CANONICAL
+
+GAREN_SKILL_ORDER = list(_CANONICAL)
 
 # Season-4 Garen, by item id. Verified present in
 # Content/LeagueSandbox-Default/Items/ with these prices.
