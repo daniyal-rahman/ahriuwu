@@ -104,7 +104,8 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> Dict:
+def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path,
+                 red: str = "bot", bot_config: Optional[str] = None) -> Dict:
     """One game in its OWN server process: policy drives blue, scripted bot red.
 
     The process is launched here and torn down in the ``finally`` below, once
@@ -125,10 +126,20 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
         # the very module whose docstring promises the BC set and the RL
         # rollouts come from the same pipeline.
         LANERL_TOPONLY="1",
-        LANERL_BOT="purple",            # red = frozen scripted bot
+        # red = the frozen scripted bot, or NOBODY.
+        #
+        # "idle" leaves red undriven: no bot, and the control channel sends no
+        # red key, so the enemy champion never leaves the fountain. That is the
+        # CEILING measurement -- it separates "cannot last-hit" from "is being
+        # contested", which no contested game can distinguish. Without it
+        # "plateau" has no denominator: we know the agent scores ~46 and not
+        # whether the reachable maximum is 50 or 90.
+        LANERL_BOT=("purple" if red == "bot" else "none"),
         LANERL_CONTROL_PORT=str(cport),
         LANERL_STEP_TICKS=str(step_ticks),
     )
+    if bot_config:
+        env["LANERL_BOT_CONFIG"] = str(bot_config)
     proc = subprocess.Popen(
         [str(BIN / "GameServerConsole"), "--config", str(CFG), "--port", str(gport)],
         cwd=str(BIN), env=env, stdout=log_path.open("w"), stderr=subprocess.STDOUT,
@@ -155,6 +166,17 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
         first = start_stats(raw)
         track = {"path": 0.0, "prev": None, "hp_lost": 0.0, "prev_hp": None,
                  "buttons": {}, "min_along_enemy": 1e9}
+        # THE DENOMINATOR. CS alone cannot say whether 45 is good: the number
+        # of enemy minions that die in a game is not fixed, and it moves with
+        # how the wave is being played. Measured directly -- removing the
+        # opponent made CS go DOWN (37.5 uncontested against 45.4 vs the bot),
+        # because with nobody killing your minions your wave overruns theirs
+        # and your own minions take the kills you wanted. So "uncontested CS"
+        # is not an upper bound, and conversion share is what "plateau" has to
+        # be measured against.
+        seen_enemy_minions: set = set()
+        alive_prev: set = set()
+        died_enemy_minions: set = set()
         while raw is not None and int(raw.get("t", 0)) < max_game_ms:
             act = policy(raw)
             btn = act.get("blue", {}).get("t", "noop")
@@ -163,6 +185,17 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
             if raw is None:
                 break
             champs = {u["tm"]: u for u in raw.get("u", []) if u.get("k") == "Champion"}
+            # Enemy minions currently alive; anything that was alive last
+            # frame and is gone now, died. Keyed by netid, so a minion that
+            # merely leaves the observation is NOT counted -- this eval sees
+            # the whole map, so a disappearance is a death.
+            alive_now = {
+                u["id"] for u in raw.get("u", [])
+                if u.get("k") in ("Minion", "LaneMinion") and u.get("tm") != 100
+            }
+            seen_enemy_minions |= alive_now
+            died_enemy_minions |= (alive_prev - alive_now)
+            alive_prev = alive_now
             b = champs.get(100)
             if b is None:
                 break
@@ -178,6 +211,8 @@ def play_episode(policy, max_game_ms: int, step_ticks: int, log_path: Path) -> D
         return {
             "t_s": int((raw or {}).get("t", 0)) / 1000.0,
             "blue_cs": b.get("cs"), "red_cs": r.get("cs"),
+            "enemy_minions_seen": len(seen_enemy_minions),
+            "enemy_minions_died": len(died_enemy_minions),
             "blue_gold": b.get("gold"), "red_gold": r.get("gold"),
             "blue_lvl": b.get("lvl"), "red_lvl": r.get("lvl"),
             "blue_hp_lost": round(track["hp_lost"]),
@@ -289,6 +324,21 @@ def main() -> int:
     ap.add_argument("--max-game-ms", type=int, default=600_000)
     ap.add_argument("--step-ticks", type=int, default=2)
     ap.add_argument("--out", default="")
+    ap.add_argument(
+        "--red", choices=("bot", "idle"), default="bot",
+        help="'bot' (default) is the frozen scripted opponent. 'idle' leaves "
+             "red undriven in the fountain -- an UNCONTESTED lane, which is "
+             "the only way to separate 'cannot last-hit' from 'is being "
+             "contested'. Uncontested CS is the denominator that makes the "
+             "word 'plateau' mean anything.",
+    )
+    ap.add_argument(
+        "--bot-config", default=None,
+        help="LANERL_BOT_CONFIG for the scripted side. anchor_diamond.json is "
+             "lastHitAccuracy 1.0 with an 80ms reaction and no damage error, "
+             "i.e. very close to a perfect last-hitter -- run it with "
+             "--red idle to measure what this map can yield at all.",
+    )
     args = ap.parse_args()
 
     if args.checkpoint == "random":
@@ -305,9 +355,13 @@ def main() -> int:
         if hasattr(policy, "reset"):
             policy.reset()
         row = play_episode(policy, args.max_game_ms, args.step_ticks,
-                           logdir / f"evalbot_{label}_{i}.log")
+                           logdir / f"evalbot_{label}_{i}.log",
+                           red=args.red, bot_config=args.bot_config)
         rows.append(row)
+        died = row.get("enemy_minions_died") or 0
+        conv = (100.0 * (row.get("blue_cs") or 0) / died) if died else float("nan")
         print(f"  ep{i}: t={row['t_s']:.0f}s cs={row['blue_cs']} (bot {row['red_cs']}) "
+              f"died={died} conv={conv:.0f}% "
               f"gold={row['blue_gold']} lvl={row['blue_lvl']} "
               f"hp_lost={row['blue_hp_lost']} dist={row['distance_travelled']} "
               f"buttons={row['buttons']}")
