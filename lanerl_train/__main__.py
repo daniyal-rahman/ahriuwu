@@ -65,6 +65,15 @@ SELF = "self"
 OPPONENT = "opponent"
 #: ``--opponent league`` -- red is a checkpoint drawn from the PFSP pool.
 LEAGUE = "league"
+#: ``--opponent none`` -- red is left IDLE in its fountain. A no-enemy
+#: curriculum phase: the agent learns to farm without also being harassed.
+#:
+#: Worth having because the policy has never seen a game without an enemy, so
+#: the solo setting is out of distribution -- observed live, a top-lane policy
+#: with no opponent wandered to MID and died to a turret. That also means the
+#: uncontested eval number (37.5 CS against 45.4 contested) says as much about
+#: distribution shift as it does about farming skill.
+NO_ENEMY = "none"
 
 # Generous headroom per actor's port block: PortAllocator already verifies
 # freeness and raises rather than colliding, but starting each actor far
@@ -386,17 +395,19 @@ def build_training_specs(
     balanced across a handful of envs (a draw leaves difficulties unsampled at
     N=4) and a resume faces the same population it left.
     """
-    if opponent in (SELF, LEAGUE):
-        # LEAGUE launches exactly like self-play: both champions are driven by
-        # our control channel, so the SERVER spec is identical and only the
-        # weights behind red differ. Handled here rather than mapped at each
+    if opponent in (SELF, LEAGUE, NO_ENEMY):
+        # LEAGUE and NO_ENEMY launch exactly like self-play as far as the
+        # SERVER is concerned: LANERL_BOT stays "none" either way, so no
+        # scripted bot is attached. What differs is purely who drives red --
+        # the live policy (self), a pool checkpoint (league), or nobody at all
+        # (none, which leaves the champion standing in its fountain). Handled here rather than mapped at each
         # call site because main() pre-flights this function with the raw
         # --opponent string, and mapping at one site only left that check
         # rejecting a mode the rest of the stack supports.
         return [ServerLaunchSpec() for _ in range(envs_per_actor)], {}, True
     if not opponent.startswith("scripted:"):
         raise SystemExit(
-            f"--opponent {opponent!r} is not 'self', 'league', or "
+            f"--opponent {opponent!r} is not 'self', 'league', 'none', or "
             f"'scripted:<name-or-path>'"
         )
     configs = resolve_bot_configs(opponent[len("scripted:"):])
@@ -468,7 +479,14 @@ def _build_driver_for_actor(
         n=envs_per_actor, specs=specs, ports=ports,
         log_dir=run_dir / f"actor{actor_idx}_logs",
     )
-    red_key = OPPONENT if (league and red_is_ours) else (SELF if red_is_ours else None)
+    if opponent == NO_ENEMY:
+        red_key = None          # nobody drives red; it never leaves the fountain
+    elif league and red_is_ours:
+        red_key = OPPONENT
+    elif red_is_ours:
+        red_key = SELF
+    else:
+        red_key = None          # the in-server scripted bot has it
     policies = {SELF: actor}
     if opp_actor is not None:
         policies[OPPONENT] = opp_actor
@@ -643,6 +661,15 @@ def main(argv=None) -> int:
                    else {"episodes_per_anchor": args.anchor_episodes}),
             ),
         )
+
+    if args.opponent == NO_ENEMY and args.alpha != 0.0:
+        log.warning(
+            "--opponent none with --alpha %.2f: the zero-sum term subtracts "
+            "%.2f x an IDLE champion's reward. That champion does nothing, so "
+            "the subtraction is near-constant -- it shifts the return without "
+            "expressing any competition, and its variance is pure noise in "
+            "every advantage. --alpha 0 is the honest setting for a no-enemy "
+            "phase.", args.alpha, args.alpha)
 
     actor_pool = None
     if args.actor_mode == "process":
