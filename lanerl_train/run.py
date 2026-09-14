@@ -793,6 +793,23 @@ class RunConfig:
     #: exactly, rather than routing a mirror through a sampler that can only
     #: answer "latest".
     opponent_mode: str = "self"
+    #: "main" | "main_exploiter" | "league_exploiter" -- the paper's three
+    #: league roles. Only "main" uses the plain p_latest/p_pfsp mixture; the
+    #: exploiters target the current main agent or PFSP the whole league.
+    agent_type: str = "main"
+    #: Directory shared by every lineage in the league. Each publishes its
+    #: snapshots there and reads the others back; without it, concurrently
+    #: training agents cannot see each other at all and the "league" is N
+    #: independent self-play runs.
+    league_dir: Optional[str] = None
+    #: Below this win rate against the current main agent, a main exploiter
+    #: gives up on it and PFSPs over past main snapshots instead. AlphaStar
+    #: used 20%: an exploiter that cannot touch the current agent learns
+    #: nothing from being crushed by it.
+    exploiter_fallback_win_rate: float = 0.20
+    #: Games required before that fallback can trigger, so one unlucky early
+    #: result does not redirect the whole lineage.
+    exploiter_min_games: int = 20
     league: LeagueConfig = field(default_factory=LeagueConfig)
 
     def __post_init__(self) -> None:
@@ -1009,6 +1026,14 @@ class TrainingLoop:
         self._league_draws: Dict[str, int] = {}
         #: Last seen send-sequence per actor, for lost-rollout detection.
         self._actor_seq: Dict[int, int] = {}
+        #: The league's cross-process pool. Disabled (a no-op) unless
+        #: league_dir is set, so single-agent runs are completely unaffected.
+        from .shared_pool import SharedSnapshotDir
+        self.shared_pool = SharedSnapshotDir(
+            Path(config.league_dir) if config.league_dir else None,
+            agent_id=self.run_dir.name,
+            agent_type=config.agent_type,
+        )
         self.queue: "queue.Queue[Rollout]" = (
             actor_pool.out_queue if actor_pool is not None
             else queue.Queue(maxsize=config.queue_capacity)
@@ -1269,6 +1294,18 @@ class TrainingLoop:
         """
         if getattr(self.cfg, "opponent_mode", None) != "league":
             return None
+
+        # Refresh the pool from the shared directory before drawing, so this
+        # agent can see snapshots the OTHER lineages have published since the
+        # last sample. Without this each process only ever plays its own past
+        # selves and the league is three parallel self-play runs wearing a
+        # league's clothes.
+        self._refresh_shared_pool()
+
+        exploit = self._exploiter_targets()
+        if exploit is not None:
+            return exploit
+
         out: List[Optional[dict]] = []
         for _ in range(max(1, self.cfg.num_actors)):
             try:
@@ -1286,6 +1323,73 @@ class TrainingLoop:
                        else {"id": spec.id, "path": str(snap.path)})
         self._log_league_health()
         return out
+
+    def _refresh_shared_pool(self) -> None:
+        """Pull in snapshots the other lineages have published."""
+        sd = getattr(self, "shared_pool", None)
+        if sd is None or not sd.enabled:
+            return
+        known = set(self.sampler.pool.ids())
+        for snap in sd.scan(exclude_self=True):
+            if snap.id not in known:
+                self.sampler.pool.add(snap)
+
+    def _exploiter_targets(self) -> Optional[List[Optional[dict]]]:
+        """Opponent draws for the two EXPLOITER roles, or None for a main agent.
+
+        The paper's rules, which are what distinguishes an exploiter from a
+        main agent playing PFSP:
+
+        ``main_exploiter``  plays the CURRENT main agent, to find weaknesses in
+            the thing that actually ships. It is not trying to be good; it is
+            trying to beat one specific opponent. When it is losing badly
+            (win rate below ``exploiter_fallback_win_rate``) it falls back to
+            PFSP over PAST main snapshots instead, because an exploiter that
+            cannot touch the current agent learns nothing from being crushed
+            by it.
+        ``league_exploiter`` plays PFSP over ALL past players, looking for
+            weaknesses in the league as a whole rather than in one agent.
+
+        Returns ``None`` for a main agent, which keeps the ordinary mixture.
+        """
+        t = getattr(self.cfg, "agent_type", "main")
+        if t == "main":
+            return None
+        sd = getattr(self, "shared_pool", None)
+        n = max(1, self.cfg.num_actors)
+
+        if t == "main_exploiter":
+            wr = self.sampler.win_rates
+            target = sd.latest_of_type("main") if sd is not None and sd.enabled else None
+            if target is not None:
+                # p() is a beta posterior mean, so with no games it reads 0.5
+                # -- comfortably above the threshold, which is the behaviour
+                # we want: target the current main until there is evidence we
+                # cannot touch it. The n() guard stops one unlucky early game
+                # from triggering the fallback.
+                played = wr.n(target.id)
+                rate = wr.p(target.id)
+                losing = (played >= self.cfg.exploiter_min_games
+                          and rate < self.cfg.exploiter_fallback_win_rate)
+                if not losing:
+                    return [{"id": target.id, "path": str(target.path)}] * n
+                log.info("main_exploiter is under %.0f%% vs %s; falling back to PFSP "
+                         "over past main snapshots",
+                         100 * self.cfg.exploiter_fallback_win_rate, target.id)
+            past = sd.by_type("main")[:-1] if sd is not None and sd.enabled else []
+            if past:
+                return [{"id": s.id, "path": str(s.path)}
+                        for s in self.rng.choices(past, k=n)]
+            # No main agent has published yet. Say so rather than silently
+            # training an "exploiter" against a live mirror of itself, which
+            # is not an exploiter at all.
+            log.warning("main_exploiter has no main-agent snapshot to target yet; "
+                        "playing the live mirror until one appears")
+            return [None] * n
+
+        # league_exploiter: PFSP over everything, which is the ordinary
+        # sampler minus the self-play slice.
+        return None
 
     #: How often to report the realised league mixture, in updates.
     LEAGUE_REPORT_EVERY = 200
@@ -1529,6 +1633,10 @@ class TrainingLoop:
             path = ckpt or self.checkpoints.save(u, self.learner.state_payload())
             snap = Snapshot(id=f"snap@{u}", step=u, path=str(path), created_s=time.time())
             evicted = self.sampler.pool.add(snap)
+            # Announce it to the other lineages. A main exploiter targets the
+            # MAIN agent's latest snapshot, so a main agent that never
+            # publishes leaves its exploiter with nothing to exploit.
+            self.shared_pool.publish(snap)
             self.metrics.write(
                 "snapshot",
                 update=u,
@@ -1536,6 +1644,7 @@ class TrainingLoop:
                 path=snap.path,
                 pool_size=len(self.sampler.pool),
                 evicted=[s.id for s in evicted],
+                league_counts=self.shared_pool.counts() or None,
             )
             ckpt = path
         if self.cfg.eval_every and u % self.cfg.eval_every == 0:

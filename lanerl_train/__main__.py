@@ -110,6 +110,25 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument("--queue-capacity", type=int, default=2)
     p.add_argument(
+        "--agent-type", choices=("main", "main_exploiter", "league_exploiter"),
+        default="main",
+        help="this lineage's role in the league (AlphaStar, Nature 2019). "
+             "'main' trains on the ordinary mixture and never resets. "
+             "'main_exploiter' targets the CURRENT main agent to find its "
+             "weaknesses. 'league_exploiter' PFSPs the whole league. The "
+             "exploiters are what make a league more than self-play -- a main "
+             "agent playing only its own history can cycle, and faces no "
+             "pressure to be robust to a strategy nobody in that history "
+             "happened to try. Needs --league-dir to see the other lineages.",
+    )
+    p.add_argument(
+        "--league-dir", default=None,
+        help="directory shared by every lineage. Each publishes its snapshots "
+             "there and reads the others back. WITHOUT IT concurrently "
+             "training agents cannot see each other and the 'league' is N "
+             "independent self-play runs.",
+    )
+    p.add_argument(
         "--actor-mode", choices=("thread", "process"), default="process",
         help="'process' (default) gives each actor its own interpreter and its "
              "own CUDA context. 'thread' runs them in this process, sharing one "
@@ -556,6 +575,8 @@ def main(argv=None) -> int:
         seed=args.seed,
         anneal_clock=args.anneal_clock,
         actor_mode=args.actor_mode,
+        agent_type=args.agent_type,
+        league_dir=args.league_dir,
         opponent_mode=(LEAGUE if args.opponent == LEAGUE else ('scripted' if str(args.opponent).startswith('scripted') else SELF)),
     )
 
