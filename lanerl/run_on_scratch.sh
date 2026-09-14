@@ -19,6 +19,20 @@ REPO=/mnt/nfs/projects/ahriuwu-lanerl
 SCRATCH=/scratch/lanerl
 PY=/home/dani/miniconda3/envs/ml/bin/python
 
+# torch's default sharing strategy passes every shared tensor as a FILE
+# DESCRIPTOR over a unix socket, so the parent holds descriptors roughly in
+# proportion to (actors x envs x tensors in flight). The login shell's soft
+# limit here is 1024 against a 1048576 hard limit, and at 4 actors x 6 envs
+# that ran out 16 minutes in: rl-screen-bc-0914 died at update 206 with
+# "RuntimeError: received 0 items of ancdata", which is recvfds() finding no
+# descriptor in the message.
+#
+# Raising the soft limit is the fix. The file_system strategy is the other
+# way out and was tried: it produced c10::Error from MapAllocator::close and
+# SIGABRTed the actors five minutes in, which is worse than what it fixed.
+ulimit -n 65536 2>/dev/null || ulimit -n "$(ulimit -Hn)" 2>/dev/null || true
+echo "[scratch] fd soft limit: $(ulimit -n)"
+
 mkdir -p "$SCRATCH/runs"
 # Inputs are COPIED, not linked: a symlink into NFS would put the checkpoint
 # read back on the network, and a symlink out of scratch would dangle when

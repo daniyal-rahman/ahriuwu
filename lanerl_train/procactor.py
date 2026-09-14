@@ -492,6 +492,10 @@ class ProcessActorPool:
         self.stop_event = self.ctx.Event()
         self.param_queues: List["mp.Queue"] = [self.ctx.Queue(maxsize=4) for _ in specs]
         self.procs: List[Any] = []
+        #: Times :meth:`publish` could not drain a stale parameter version.
+        #: Nonzero is survivable but is the leading indicator of descriptor
+        #: pressure; see the handler in ``publish``.
+        self.publish_drain_errors = 0
 
     def start(self) -> None:
         for spec, pq in zip(self.specs, self.param_queues):
@@ -527,6 +531,30 @@ class ProcessActorPool:
                     try:
                         pq.get_nowait()
                     except _queue.Empty:
+                        break
+                    except (RuntimeError, OSError, EOFError) as exc:
+                        # Unpickling a queued payload passes file descriptors
+                        # over a unix socket, and that can fail for reasons
+                        # that have nothing to do with this parameter version
+                        # -- classically "received 0 items of ancdata", which
+                        # is the process being out of descriptors.
+                        #
+                        # Killing a run here is the wrong trade. The item
+                        # being dropped is the STALEST parameter version for
+                        # an actor that is already behind; losing it costs one
+                        # rollout's freshness, while raising costs the run.
+                        # rl-screen-bc-0914 died exactly this way at update
+                        # 206, 16 minutes in, with a checkpoint on disk and
+                        # nothing wrong with the training itself.
+                        self.publish_drain_errors += 1
+                        log.warning(
+                            "actor %d: could not drain a stale parameter "
+                            "version (%s: %s); skipping this publish. %d so "
+                            "far -- a rising count means descriptor pressure, "
+                            "check ulimit -n (1024 is not enough here).",
+                            i, type(exc).__name__, exc,
+                            self.publish_drain_errors,
+                        )
                         break
 
     def stop(self) -> None:
