@@ -170,6 +170,28 @@ def build_argparser() -> argparse.ArgumentParser:
              "cores and 1,191 decisions/s, process 4.85 cores and 1,949.",
     )
     p.add_argument("--total-updates", type=int, default=1_000_000)
+    p.add_argument(
+        "--chunk-len", type=int, default=None,
+        help="decisions per BPTT chunk -- the GRADIENT-CARRYING context, at "
+             "30 Hz. Default: PPOConfig.chunk_len (16, i.e. 0.53 s). Note "
+             "this is NOT the observation horizon: the core is a GRU, so the "
+             "hidden state carries arbitrarily far at inference; this bounds "
+             "only how far back a gradient can assign credit.",
+    )
+    p.add_argument(
+        "--burn-in", type=int, default=None,
+        help="decisions replayed before each chunk to warm the recurrent "
+             "state, WITHOUT gradient (R2D2). Default: PPOConfig.burn_in (8). "
+             "Guards against a chunk starting from a stale or zero hidden "
+             "state, which is why it grows with --chunk-len.",
+    )
+    p.add_argument(
+        "--minibatch-chunks", type=int, default=None,
+        help="chunks per minibatch. Default: PPOConfig.minibatch_chunks (32). "
+             "Activation memory scales as this * (burn_in + chunk_len), so "
+             "raising --chunk-len without lowering this is how a long-context "
+             "run OOMs.",
+    )
     p.add_argument("--checkpoint-every", type=int, default=200)
     p.add_argument("--snapshot-every", type=int, default=400)
     p.add_argument("--eval-every", type=int, default=100)
@@ -567,6 +589,23 @@ def main(argv=None) -> int:
     # Built ONCE and shared by the actors and the anchor evaluator, so the two
     # cannot end up measuring under different reward definitions.
     reward_cfg = reward_config(ppo_cfg.gamma, args.alpha, args.alpha_anneal_steps)
+    for _name in ("chunk_len", "burn_in", "minibatch_chunks"):
+        _v = getattr(args, _name)
+        if _v is not None:
+            setattr(ppo_cfg, _name, int(_v))
+    if (ppo_cfg.burn_in + ppo_cfg.chunk_len) > (args.rollout_steps - 1):
+        raise SystemExit(
+            f"--burn-in {ppo_cfg.burn_in} + --chunk-len {ppo_cfg.chunk_len} = "
+            f"{ppo_cfg.burn_in + ppo_cfg.chunk_len} does not fit in a rollout "
+            f"of {args.rollout_steps - 1} buffer rows. RecurrentRolloutBuffer."
+            f"chunk_starts drops any chunk that overruns the buffer, so this "
+            f"would train on NOTHING while logging a normal-looking update."
+        )
+    log.info("recurrent context: %d burn-in + %d gradient-carrying = %.2f s "
+             "at %.0f Hz (%d chunks/minibatch)",
+             ppo_cfg.burn_in, ppo_cfg.chunk_len,
+             ppo_cfg.chunk_len / ppo_cfg.decision_hz, ppo_cfg.decision_hz,
+             ppo_cfg.minibatch_chunks)
     if args.lane_approach is not None:
         reward_cfg.weights.lane_approach = float(args.lane_approach)
         log.info("lane_approach weight overridden to %g (%.3f for the full walk)",
