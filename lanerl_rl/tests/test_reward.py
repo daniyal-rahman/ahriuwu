@@ -201,7 +201,12 @@ def test_kill_and_death_weights_balance_to_plus_or_minus_half():
         last_hit_shaping=False,
         zero_sum_alpha_start=1.0,
         zero_sum_alpha_end=1.0,
-        weights=RewardWeights(hp_point=0.0, tower_hp=0.0, money=0.0, exp=0.0, last_hit=0.0),
+        # lane_presence zeroed with the rest: this test is about the kill/death
+        # PAIR being antisymmetric, and it asserts on the total reward, so any
+        # other live term leaks in. It does not cancel under zero-sum either --
+        # the dead champion is not in lane, so only the killer collects it.
+        weights=RewardWeights(hp_point=0.0, tower_hp=0.0, money=0.0, exp=0.0,
+                              last_hit=0.0, lane_presence=0.0),
     )
     r = ZeroSumLaneReward(cfg=cfg)
     rew = None

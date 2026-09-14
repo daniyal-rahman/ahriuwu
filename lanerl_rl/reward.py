@@ -296,7 +296,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Sequence, Tuple
 
 from . import constants as C
-from .frame import CreepScoreEstimator, Frame, Unit
+from .frame import CreepScoreEstimator, Frame, LaneFrame, Unit
 
 __all__ = [
     "RewardWeights",
@@ -411,6 +411,27 @@ class RewardWeights:
     #: the policy fully controls.  Read off the server's own
     #: ``ChampStats.MinionsKilled``, so it cannot be farmed by proximity.
     last_hit: float = 1.0
+    #: Dense reward for BEING IN THE TOP LANE, per decision.
+    #:
+    #: Watching a rendered game is what forced this: one Garen walked to mid
+    #: and left the lane entirely, and the other drifted off the lane axis and
+    #: stood doing nothing. Nothing in the reward noticed. `exp` was the only
+    #: term that did -- its own comment says so -- and at 0.001 it is far too
+    #: weak to be a lane-discipline signal.
+    #:
+    #: Scaled off the objective rather than guessed: at 18,000 decisions an
+    #: episode, 0.0005 is worth 9.0 for perfect lane presence against roughly
+    #: 40 for a 40-CS game, so about 20% of the take. Enough to make leaving
+    #: lane cost something real, not enough to pay the agent to stand still --
+    #: which matters, because standing still IS what it currently does.
+    #:
+    #: This also gives "top-lane experience is worth more than other experience"
+    #: for free: XP off-lane is now collected while forgoing this term.
+    lane_presence: float = 0.0005
+    #: How far off the lane axis still counts as "in lane", in game units.
+    #: LANE_HALF_WIDTH (1400) is the corridor the observation already uses, so
+    #: the reward and the observation agree on where the lane is.
+    lane_corridor: float = C.LANE_HALF_WIDTH
     #: Gold converted into items.  ZERO, deliberately -- see the module
     #: docstring's "``spend``, and why it is a named zero".  Two reasons: the
     #: wallet drop is never on the wire (the scripted buy happens between the
@@ -479,6 +500,13 @@ class _AgentReward:
         self.enemy_team = C.TEAM_RED if self.team == C.TEAM_BLUE else C.TEAM_BLUE
         self.cfg = cfg
         self.cs = CreepScoreEstimator(self.team, aa_range=cfg.aa_range)
+        # Same anchors and the same handedness rule the observation builder
+        # uses, so "in lane" means one thing in this codebase rather than two.
+        self._lane = LaneFrame(
+            C.TOP_OUTER_TURRET[self.team],
+            C.TOP_OUTER_TURRET[self.enemy_team],
+            C.NEXUS_POSITION[self.team],
+        )
         self.prev: Optional[AgentRewardState] = None
         self.prev_potential: float = 0.0
         self.terms: Dict[str, float] = {}
@@ -606,6 +634,17 @@ class _AgentReward:
         terms["kill"] = 0.0
 
         terms["last_hit"] = w.last_hit * self.cs.last_hits_this_step
+
+        # In lane, or not. `n` is the perpendicular offset from the lane axis;
+        # `s` is progress along it, so a champion in its own base or past the
+        # enemy turret is out of lane even when n is small.
+        terms["lane_presence"] = 0.0
+        me = frame.champion_of_team(self.team)
+        if me is not None and c.alive > 0.5:
+            ls, ln = self._lane.point(me.x, me.y)
+            in_corridor = abs(ln) <= w.lane_corridor
+            on_lane_span = -w.lane_corridor <= ls <= self._lane.length + w.lane_corridor
+            terms["lane_presence"] = w.lane_presence if (in_corridor and on_lane_span) else 0.0
 
         self.terms = terms
         self.prev = cur
