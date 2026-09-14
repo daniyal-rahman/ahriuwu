@@ -545,6 +545,13 @@ def play_anchor_episodes(
                     getattr(driver, "steps_in_episode", ["?"] * (i + 1))[i],
                     getattr(driver, "episode_index", ["?"] * (i + 1))[i],
                 )
+                log.error(
+                    "  instance %d order kinds sent so far: %s  <- a champion "
+                    "that only ever recalls sits in its fountain at level 1 on "
+                    "full hp with 0 deaths, which is the SAME row in the log as "
+                    "a champion nobody ordered at all.",
+                    i, getattr(driver, "order_kinds", [{}] * (i + 1))[i],
+                )
                 if not _UNDRIVEN_DUMPED:
                     _mark_undriven_dumped()
                     import faulthandler, io as _io

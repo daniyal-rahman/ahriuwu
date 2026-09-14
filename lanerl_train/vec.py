@@ -999,6 +999,8 @@ class VecDriver:
         #: Orders actually written, per instance. The denominator: "0 sent"
         #: and "sent but ignored" are different bugs and used to look alike.
         self.orders_sent: List[int] = [0] * env.n
+        #: instance -> {wire order kind -> count}, e.g. noop/move/attack/recall.
+        self.order_kinds: List[Dict[str, int]] = [dict() for _ in range(env.n)]
         self.set_assignments(assignments)
 
     # -- assignment --------------------------------------------------------
@@ -1157,6 +1159,16 @@ class VecDriver:
                 lines[i] = slot
             slot[side] = encoded
             self.orders_sent[i] += 1
+            # WHAT we sent, not just that we sent something. An idle champion
+            # at level 1 on full hp in its own fountain is produced just as
+            # well by a policy that recalls and stays as by a harness that
+            # sends nothing, and the two were indistinguishable in the logs.
+            try:
+                kind = encoded.get("t") if isinstance(encoded, dict) else None
+            except Exception:
+                kind = None
+            if kind:
+                self.order_kinds[i][kind] = self.order_kinds[i].get(kind, 0) + 1
         return lines
 
     def _on_new_observations(self, result: StepResult) -> None:
