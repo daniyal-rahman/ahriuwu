@@ -987,6 +987,18 @@ class VecDriver:
         self.steps_in_episode: List[int] = [0] * env.n
         self.episode_index: List[int] = [0] * env.n
         self._pending_resets: List[bool] = [True] * env.n
+        #: Per-instance counts of the two ways _scatter drops an order on the
+        #: floor WITHOUT SENDING ANYTHING. A dropped line is not a no-op on
+        #: the server: LanerlControl.ApplyActions skips a null side entirely,
+        #: so the champion keeps whatever order it last had -- and if it never
+        #: had one, it stands in the fountain for the whole game at level 1,
+        #: full hp, which is exactly what three of four anchor instances did
+        #: in rl-screen-bc-0914c while nothing logged a thing.
+        self.skipped_no_obs: List[int] = [0] * env.n
+        self.skipped_not_alive: List[int] = [0] * env.n
+        #: Orders actually written, per instance. The denominator: "0 sent"
+        #: and "sent but ignored" are different bugs and used to look alike.
+        self.orders_sent: List[int] = [0] * env.n
         self.set_assignments(assignments)
 
     # -- assignment --------------------------------------------------------
@@ -1132,9 +1144,11 @@ class VecDriver:
         lines: List[Optional[Dict[str, ControlAction]]] = [None] * self.env.n
         for (i, side), action in actions_per_slot.items():
             if not self.env.alive[i]:
+                self.skipped_not_alive[i] += 1
                 continue  # dead slots keep their column but their action is dropped
             raw = self.env.last_obs[i]
             if raw is None:  # pragma: no cover - guarded in _forward
+                self.skipped_no_obs[i] += 1
                 continue
             encoded = self.encoder.encode(action, raw, side)
             slot = lines[i]
@@ -1142,6 +1156,7 @@ class VecDriver:
                 slot = {}
                 lines[i] = slot
             slot[side] = encoded
+            self.orders_sent[i] += 1
         return lines
 
     def _on_new_observations(self, result: StepResult) -> None:

@@ -114,6 +114,16 @@ UNDRIVEN_MOVE_EPS = 500.0
 #: bug wearing the other hat: it would silently DROP real games.
 UNDRIVEN_MIN_DECISIONS = 1000
 
+#: Dump every thread's stack the FIRST time a game is discarded, once per
+#: process. Once, because the fault repeats every game on a wedged instance
+#: and a stack dump per game would bury the run log in its own diagnostics.
+_UNDRIVEN_DUMPED = False
+
+
+def _mark_undriven_dumped() -> None:
+    global _UNDRIVEN_DUMPED
+    _UNDRIVEN_DUMPED = True
+
 #: Decision rounds in one full ten-minute game at the current decision rate.
 #:
 #: DERIVED, never a literal.  The bound below it feeds was once 12_000, which
@@ -520,6 +530,30 @@ def play_anchor_episodes(
                     "harness fault gets read as the policy getting worse.",
                     anchor_id, i, " and ".join(undriven),
                 )
+                # WHY, not just THAT. These three separate "we sent nothing"
+                # from "we sent orders and the server ignored them", which are
+                # different bugs that produce an identical idle champion.
+                log.error(
+                    "  instance %d wire counters: orders_sent=%s "
+                    "skipped_no_obs=%s skipped_not_alive=%s  alive=%s "
+                    "steps_in_episode=%s episode_index=%s",
+                    i,
+                    getattr(driver, "orders_sent", ["?"] * (i + 1))[i],
+                    getattr(driver, "skipped_no_obs", ["?"] * (i + 1))[i],
+                    getattr(driver, "skipped_not_alive", ["?"] * (i + 1))[i],
+                    getattr(driver.env, "alive", ["?"] * (i + 1))[i],
+                    getattr(driver, "steps_in_episode", ["?"] * (i + 1))[i],
+                    getattr(driver, "episode_index", ["?"] * (i + 1))[i],
+                )
+                if not _UNDRIVEN_DUMPED:
+                    _mark_undriven_dumped()
+                    import faulthandler, io as _io
+                    buf = _io.StringIO()
+                    faulthandler.dump_traceback(file=buf, all_threads=True)
+                    log.error(
+                        "  ALL THREAD STACKS at the first undriven game "
+                        "(dumped once per process):\n%s", buf.getvalue()
+                    )
                 cs10 = None
                 opp_cs10 = None
             undriven_note = ", ".join(undriven) if undriven else None
