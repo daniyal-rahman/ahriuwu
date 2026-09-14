@@ -411,23 +411,31 @@ class RewardWeights:
     #: the policy fully controls.  Read off the server's own
     #: ``ChampStats.MinionsKilled``, so it cannot be farmed by proximity.
     last_hit: float = 1.0
-    #: Dense reward for BEING IN THE TOP LANE, per decision.
+    #: Dense reward for BEING IN THE TOP LANE, per decision. Deliberately
+    #: TINY: a tie-breaker, not an incentive.
     #:
-    #: Watching a rendered game is what forced this: one Garen walked to mid
-    #: and left the lane entirely, and the other drifted off the lane axis and
-    #: stood doing nothing. Nothing in the reward noticed. `exp` was the only
-    #: term that did -- its own comment says so -- and at 0.001 it is far too
-    #: weak to be a lane-discipline signal.
+    #: 0.0001 is ~1.8 over an 18,000-decision episode, against ~40 for a
+    #: 40-CS game -- about 4%, or two CS worth of pull across ten minutes.
+    #: Enough to prefer the lane when nothing else distinguishes two states,
+    #: far too little to pay for standing in it.
     #:
-    #: Scaled off the objective rather than guessed: at 18,000 decisions an
-    #: episode, 0.0005 is worth 9.0 for perfect lane presence against roughly
-    #: 40 for a 40-CS game, so about 20% of the take. Enough to make leaving
-    #: lane cost something real, not enough to pay the agent to stand still --
-    #: which matters, because standing still IS what it currently does.
+    #: It was 0.0005 (~9.0, ~18-20%), which is not a tie-breaker, it is a
+    #: second objective. The comment then claimed it was "not enough to pay
+    #: the agent to stand still" -- an assertion, never measured.
     #:
-    #: This also gives "top-lane experience is worth more than other experience"
-    #: for free: XP off-lane is now collected while forgoing this term.
-    lane_presence: float = 0.0005
+    #: What the A/B actually showed (runs rl-curric-0914 vs -0914b, no-enemy,
+    #: identical but for this weight):
+    #:
+    #:     upd    with 0.0005     with 0.0
+    #:     300    29.4 CS         33.3 CS
+    #:     600    29.5            30.1
+    #:     900    23.9            21.6
+    #:
+    #: So at 0.0005 it cost ~4 CS early and did NOT cause the late collapse --
+    #: both runs collapse. It is a real cost at that size and an exonerated
+    #: suspect for the decline, which is why this is now small rather than
+    #: removed.
+    lane_presence: float = 0.0001
     #: How far off the lane axis still counts as "in lane", in game units.
     #: LANE_HALF_WIDTH (1400) is the corridor the observation already uses, so
     #: the reward and the observation agree on where the lane is.
