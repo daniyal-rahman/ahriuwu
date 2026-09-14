@@ -149,6 +149,11 @@ class EpisodeResult:
     #: "is the agent feeding?" was unanswerable from the metrics.
     kills: int = 0
     deaths: int = 0
+    #: [(t_ms, x, y)] for each of this episode's deaths. Three floats per
+    #: death, so it can stay on for every run -- a full position trace is
+    #: 18,000 rows and had to be a side script, which meant the map only
+    #: existed for games someone thought to re-run.
+    death_positions: Optional[List[List[float]]] = None
     #: The agent champion's attack damage and max HP on the FIRST frame of the
     #: episode.
     #:
@@ -1256,6 +1261,7 @@ class TrainingLoop:
             # answer "which term is the policy chasing?" without becoming the
             # dominant cost of the run.
             reward_terms=dict(ep.reward_terms) if ep.reward_terms else None,
+            death_positions=list(ep.death_positions) if ep.death_positions else None,
         )
         if not is_self_match:
             self.metrics.write(

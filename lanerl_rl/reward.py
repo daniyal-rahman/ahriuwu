@@ -795,11 +795,20 @@ class ZeroSumLaneReward:
         # Deaths this tick, resolved once for both sides so the kill term can be
         # credited to the killer without double counting.
         died: Dict[int, bool] = {}
+        #: WHERE each death happened, on the tick the corpse first appears.
+        #: Three floats per death is nothing next to a position trace, and it
+        #: answers the question a trace was being run to answer: a champion
+        #: dying repeatedly under the enemy turret and one dying to the wave
+        #: in its own half produce identical `deaths=` counts and completely
+        #: different maps.
+        death_pos: Dict[int, Tuple[float, float, float]] = {}
         for t in self.teams:
             ch = frame.champion_of_team(t)
             alive = None if ch is None else ch.alive
             was = self._prev_alive[t]
             died[t] = bool(was is True and alive is False)
+            if died[t] and ch is not None:
+                death_pos[t] = (float(frame.t_ms), float(ch.x), float(ch.y))
             self._prev_alive[t] = alive
 
         raw: Dict[int, float] = {}
@@ -846,6 +855,7 @@ class ZeroSumLaneReward:
             "shaping": shaping,
             "terms": {t: dict(self.agents[t].terms) for t in self.teams},
             "died": died,
+            "death_pos": death_pos,
             # Diagnostic, not reward: gold seen leaving the wallet this
             # episode. `spend` is weighted 0.0 and this is how a run tells a
             # zero weight apart from a detector that never fired.

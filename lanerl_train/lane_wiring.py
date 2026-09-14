@@ -597,6 +597,11 @@ def _fresh_episode_state() -> Dict[str, Any]:
         "terms": {},
         "kills": {},
         "deaths": {},
+        #: side -> [(t_ms, x, y)] for every death. Cheap enough to keep always
+        #: on: a handful of triples per episode against 18,000 positions for a
+        #: full trace, and it distinguishes "dies under the enemy turret" from
+        #: "dies to the wave at home", which identical deaths= counts do not.
+        "death_pos": {},
         #: team -> (ad, mhp) on the FIRST frame of the episode; None until
         #: that frame has been looked at.  See where it is filled in.
         "first": None,
@@ -717,6 +722,11 @@ def _accumulate_episode(
             continue
         if int(t) == int(team):
             st["deaths"][side] = st["deaths"].get(side, 0) + 1
+            where = (info.get("death_pos") or {}).get(int(t))
+            if where is not None:
+                st["death_pos"].setdefault(side, []).append(
+                    [round(float(v), 1) for v in where]
+                )
         else:
             st["kills"][side] = st["kills"].get(side, 0) + 1
 
@@ -956,6 +966,8 @@ def collect_rollout(
                     reward_terms=dict(st["terms"].get(own, {})) if own is not None else None,
                     kills=int(st["kills"].get(own, 0)) if own is not None else 0,
                     deaths=int(st["deaths"].get(own, 0)) if own is not None else 0,
+                    death_positions=(st["death_pos"].get(own) or None)
+                    if own is not None else None,
                     first_frame_ad=ad,
                     first_frame_mhp=mhp,
                 )
