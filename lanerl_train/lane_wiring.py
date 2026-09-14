@@ -56,7 +56,7 @@ __all__ = [
     "make_collect_fn",
 ]
 
-_ACTION_KEYS = ("button", "move_x", "move_z", "target")
+_ACTION_KEYS = ("button", "screen_x", "screen_y", "target")
 TEAM_OF_SIDE: Dict[Side, int] = {BLUE: C.TEAM_BLUE, RED: C.TEAM_RED}
 
 
@@ -329,10 +329,8 @@ class LaneActionEncoder:
     def __init__(
         self,
         registry: Dict[int, dict],
-        move_distance: float = 500.0,
     ):
         self._registry = registry
-        self.move_distance = float(move_distance)
 
     def encode(self, action: Any, raw: RawObs, side: Side) -> Dict[str, object]:
         entry = self._registry.get(id(raw))
@@ -405,7 +403,7 @@ class LaneActionEncoder:
         # the observation, not the action, so nothing would have caught it.
         fake_obs = SimpleNamespace(entities=entities)
         cmd = decode_action(
-            action, adapter.builder, fake_obs, me, slot_netids, move_distance=self.move_distance
+            action, adapter.builder, fake_obs, me, slot_netids
         )
         if cmd.kind == "cast" and cmd.spell_slot is not None:
             adapter.builder.note_cast(cmd.spell_slot, frame.t_ms)
@@ -514,7 +512,6 @@ class LaneAdapters:
 def make_lane_adapters(
     train_step_source,
     reward_cfg: Optional[LaneRewardConfig] = None,
-    move_distance: float = 500.0,
 ) -> LaneAdapters:
     """Build the ``adapter_factory``/``encoder`` pair ``VecLaneEnv``/``VecDriver``
     want, plus a lookup of the per-instance reward context so a rollout
@@ -528,7 +525,7 @@ def make_lane_adapters(
         ctx = reward_contexts.setdefault(i, InstanceRewardContext(reward_cfg))
         return LaneObservationAdapter(side, registry, ctx, train_step_source, fog_model=fog_model)
 
-    encoder = LaneActionEncoder(registry, move_distance=move_distance)
+    encoder = LaneActionEncoder(registry)
     return LaneAdapters(
         adapter_factory=adapter_factory,
         encoder=encoder,

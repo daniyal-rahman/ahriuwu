@@ -76,8 +76,8 @@ __all__ = ["collate_observations", "BatchedActor", "benchmark"]
 
 _FLOAT_KEYS = ("entities", "self_vec", "global_vec", "priv_entities", "priv_vec")
 _BOOL_KEYS = ("entity_pad_mask", "priv_pad_mask")
-_MASK_KEYS = ("button", "move_x", "move_z", "target")
-_ACTION_KEYS = ("button", "move_x", "move_z", "target")
+_MASK_KEYS = ("button", "screen_x", "screen_y", "target")
+_ACTION_KEYS = ("button", "screen_x", "screen_y", "target")
 
 
 def collate_observations(
@@ -237,8 +237,8 @@ def _synthetic_observations(n: int, seed: int = 0) -> List[AgentObservation]:
                 priv_vec=rng.standard_normal(C.PRIV_DIM).astype(np.float32),
                 action_mask=ActionMask(
                     button=np.ones(C.N_BUTTONS, dtype=bool),
-                    move_x=np.ones(C.N_MOVE_BINS, dtype=bool),
-                    move_z=np.ones(C.N_MOVE_BINS, dtype=bool),
+                    screen_x=np.ones(C.N_SCREEN_X, dtype=bool),
+                    screen_y=np.ones(C.N_SCREEN_Y, dtype=bool),
                     target=~pad,
                 ),
                 t_ms=0,

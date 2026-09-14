@@ -50,43 +50,50 @@ def free_port() -> int:
 
 
 def move_bins_for(adapter, raw, team, goal_x, goal_y):
-    """Invert decode_action's move mapping: world goal -> (move_x, move_z) bins.
+    """Invert decode_action's mapping: world goal -> (screen_x, screen_y) bins.
 
-    Without this, BC clones only the DECISION to move and not the direction --
-    which teaches nothing about walking to lane, the single behaviour the RL
-    agent could never discover on its own.
+    Without this, BC clones only the DECISION to move and not WHERE -- which
+    teaches nothing about walking to lane, the single behaviour the RL agent
+    could never discover on its own.
 
-    decode_action does:  canonical bin -> unit vector -> transform.vector()
-                         -> world direction -> goal = self + dir * move_distance
-    The transform is its own inverse, so applying it to the world direction
-    recovers the canonical one, and the bins are its nearest grid points.
+    decode_action now does::
+
+        screen bin -> screen_to_world_centred(0,0,...) -> lane-local (ds,dn)
+                   -> transform.vector() -> world offset -> goal = self + off
+
+    so the inverse is: world offset -> to_lane_vector -> world_to_screen about
+    the origin -> nearest bin. The DISTANCE is carried now, not just the
+    heading, because a screen position names a point rather than a direction.
+
+    to_lane_vector, NOT vector. LaneTransform.vector is lane-local -> WORLD;
+    the inverse is to_lane_vector. Using vector() here treated a general
+    rotation as an involution -- true of the old MirrorTransform, false of
+    this one -- and made every BLUE label point the wrong way while red's were
+    right, so BC averaged the sides to the centre and learned to stand still.
     """
     import numpy as _np
     from lanerl_rl import constants as _C
+    from lanerl_rl import projection as _proj
 
     ch = next((u for u in raw.get("u", [])
                if u.get("k") == "Champion" and u.get("tm") == team), None)
     if ch is None:
         return None
     dx, dy = float(goal_x) - float(ch["x"]), float(goal_y) - float(ch["y"])
-    norm = math.hypot(dx, dy)
-    if norm < 1e-6:
+    if math.hypot(dx, dy) < 1e-6:
         return None
-    wx, wy = dx / norm, dy / norm
     try:
-        # to_lane_vector, NOT vector. LaneTransform.vector is lane-local ->
-        # WORLD (that is the direction decode_action needs); the inverse is
-        # to_lane_vector, and the class docstring says so explicitly. Using
-        # vector() here treated a general rotation as if it were an involution
-        # -- true of the old MirrorTransform, false of this one. It made every
-        # BLUE move label point the wrong way while red's were right, so BC
-        # averaged the two sides to the centre bin and learned to stand still:
-        # 288 units from spawn over 300 s against a lane 11,866 units away.
-        tx, tz = adapter.builder.transform.to_lane_vector(wx, wy)
+        ds, dn = adapter.builder.transform.to_lane_vector(dx, dy)
+        cam = _proj.centred_on(0.0, 0.0)
+        sx, sy = _proj.world_to_screen(cam, ds, dn)
     except Exception:
         return None
-    bins = _C.MOVE_BIN_VALUES
-    return int(_np.argmin(_np.abs(bins - tx))), int(_np.argmin(_np.abs(bins - tz)))
+    # Off-screen goals have real signed coordinates (the projection is
+    # deliberately unclamped); the nearest EDGE bin is the closest the action
+    # space can express, which is what a human clicking the screen edge does.
+    bx = int(_np.argmin(_np.abs(_C.SCREEN_X_VALUES - sx)))
+    by = int(_np.argmin(_np.abs(_C.SCREEN_Y_VALUES - sy)))
+    return bx, by
 
 
 def collect_game(max_game_ms: int, step_ticks: int, log: Path,

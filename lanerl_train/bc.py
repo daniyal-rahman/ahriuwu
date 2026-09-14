@@ -48,8 +48,8 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
     n = len(label_json)
     out = {
         "button": np.full(n, idx_noop, dtype=np.int64),
-        "move_x": np.full(n, C.N_MOVE_BINS // 2, dtype=np.int64),
-        "move_z": np.full(n, C.N_MOVE_BINS // 2, dtype=np.int64),
+        "screen_x": np.full(n, C.N_SCREEN_X // 2, dtype=np.int64),
+        "screen_y": np.full(n, C.N_SCREEN_Y // 2, dtype=np.int64),
         "target": np.zeros(n, dtype=np.int64),
         # Which heads this row actually SUPERVISES. A head with no label is not
         # the same as a head labelled "centre bin" / "slot 0": move_x/move_z sit
@@ -82,8 +82,8 @@ def labels_to_indices(label_json: np.ndarray, obs_n: int) -> Dict[str, np.ndarra
         # PPO could never discover, since a random walk needs ~9.9 hours of
         # game time to cross the map.
         if d.get("mx") is not None:
-            out["move_x"][i] = int(d["mx"])
-            out["move_z"][i] = int(d["mz"])
+            out["screen_x"][i] = int(d["mx"])
+            out["screen_y"][i] = int(d["mz"])
             out["has_dir"][i] = True
         # The attack referent -- the whole content of a last hit. Without it BC
         # clones the DECISION to attack and leaves the target head at random

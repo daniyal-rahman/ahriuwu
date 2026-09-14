@@ -343,8 +343,8 @@ class AttackClock:
 @dataclass(slots=True)
 class ActionMask:
     button: np.ndarray  # (N_BUTTONS,) bool, True = legal
-    move_x: np.ndarray  # (N_MOVE_BINS,) bool -- lane-parallel (s) component
-    move_z: np.ndarray  # (N_MOVE_BINS,) bool -- lane-perpendicular (n) component
+    screen_x: np.ndarray  # (N_SCREEN_X,) bool -- horizontal screen bin
+    screen_y: np.ndarray  # (N_SCREEN_Y,) bool -- vertical screen bin
     target: np.ndarray  # (N_SLOTS,) bool
 
 
@@ -565,8 +565,8 @@ def check_observation(
         m = obs.action_mask
         for field, width in (
             ("button", C.N_BUTTONS),
-            ("move_x", C.N_MOVE_BINS),
-            ("move_z", C.N_MOVE_BINS),
+            ("screen_x", C.N_SCREEN_X),
+            ("screen_y", C.N_SCREEN_Y),
             ("target", C.N_SLOTS),
         ):
             arr = getattr(m, field)
@@ -1127,14 +1127,14 @@ class ObservationBuilder:
             for i, name in enumerate(("q", "w", "e", "r")):
                 button[C.BUTTON_INDEX[name]] = bool(learned[i] > 0.0 and ready[i] >= 1.0)
 
-        move_x = np.ones(C.N_MOVE_BINS, dtype=bool)
-        move_z = np.ones(C.N_MOVE_BINS, dtype=bool)
+        screen_x = np.ones(C.N_SCREEN_X, dtype=bool)
+        screen_y = np.ones(C.N_SCREEN_Y, dtype=bool)
         target = entities[:, C.E_VALID] > 0.5
         if not target.any():
             # Never hand the policy an all-masked categorical.
             target = target.copy()
             target[0] = True
-        return ActionMask(button=button, move_x=move_x, move_z=move_z, target=target)
+        return ActionMask(button=button, screen_x=screen_x, screen_y=screen_y, target=target)
 
     # -- PRIVILEGED PATH (critic only) -------------------------------------
     # These may read the raw frame.  Their output must never be routed into

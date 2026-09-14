@@ -56,8 +56,8 @@ OBS_KEYS = (
     "priv_pad_mask",
     "priv_vec",
 )
-MASK_KEYS = ("button", "move_x", "move_z", "target")
-ACTION_KEYS = ("button", "move_x", "move_z", "target")
+MASK_KEYS = ("button", "screen_x", "screen_y", "target")
+ACTION_KEYS = ("button", "screen_x", "screen_y", "target")
 
 
 @dataclass
@@ -268,8 +268,8 @@ class RecurrentRolloutBuffer:
         }
         self.masks: Dict[str, torch.Tensor] = {
             "button": b(T, B, c.n_buttons),
-            "move_x": b(T, B, c.n_move_bins),
-            "move_z": b(T, B, c.n_move_bins),
+            "screen_x": b(T, B, c.n_screen_x),
+            "screen_y": b(T, B, c.n_screen_y),
             "target": b(T, B, c.n_slots),
         }
         self.actions: Dict[str, torch.Tensor] = {k: i(T, B) for k in ACTION_KEYS}

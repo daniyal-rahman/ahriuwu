@@ -301,7 +301,7 @@ def test_move_label_round_trips_and_both_sides_agree():
         bx, bz = move_bins_for(a, raw, team, ch["x"] + ux, ch["y"] + uy)
         seen[side] = (bx, bz)
         # decode exactly as env.decode_action does
-        tx, tz = float(C.MOVE_BIN_VALUES[bx]), float(C.MOVE_BIN_VALUES[bz])
+        tx, tz = float(C.SCREEN_X_VALUES[bx]), float(C.SCREEN_X_VALUES[bz])
         nn = math.hypot(tx, tz) or 1.0
         wx, wy = a.builder.transform.vector(tx / nn, tz / nn)
         d = math.hypot(ux, uy)

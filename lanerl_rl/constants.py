@@ -118,15 +118,18 @@ LAST_HIT_WINDOW_P90_MS = 2285.0
 #:
 #: At 30 s a payoff two minutes out is worth under 2% of face value, so no
 #: amount of training can teach wave management: the credit never arrives.
-#: 60 s is the conservative step -- raising the horizon also raises value
-#: variance and makes credit assignment harder, so this is not free, and 120
-#: is available if 60 proves too short.
+#: 120 s. 60 was the conservative step; a shove-and-bounce cycle is 1-3
+#: minutes and at 60 s a three-minute payoff is still only 5% of face value.
+#: At 120 it is 22%. This is NOT free -- a longer horizon raises value
+#: variance and makes credit assignment harder -- and it has not been
+#: isolated by an A/B: the decline seen in runs rl-curric-0914/b happened
+#: with horizon 60 and was never attributed to it.
 #:
 #: NOT the only horizon in the stack, and the smaller one is now the binding
 #: constraint: ``PPOConfig.chunk_len = 16`` means BPTT reaches back 0.53 s, so
 #: the GRU is only ever TRAINED to use half a second of memory however far the
 #: discount sees.
-DEFAULT_HORIZON_S = 60.0
+DEFAULT_HORIZON_S = 120.0
 
 
 def legal_step_ticks(decision_hz: float, tol: float = 1e-6) -> int:
@@ -575,9 +578,35 @@ MOVE_BUTTONS = frozenset({"move", "attack_move"})
 #: LANE-LOCAL axes: ``move_x`` is the s (down-lane) component and ``move_z`` is
 #: the n (across-lane) component.  ``frame.LaneTransform.vector`` maps that pair
 #: into a world direction.
-N_MOVE_BINS = 9
-MOVE_BIN_VALUES = np.linspace(-1.0, 1.0, N_MOVE_BINS).astype(np.float32)
-MOVE_AXIS_NAMES = {"move_x": "lane_s", "move_z": "lane_n"}
+#: SCREEN-SPACE mouse position: the action is WHERE ON SCREEN to click.
+#:
+#: This replaces a 9x9 grid of lane-local DIRECTIONS with the distance
+#: hardcoded at ``env.decode_action(move_distance=500)``. That action space
+#: could not express the one thing melee farming requires. Garen's attack
+#: range is 125 (+40 minion radius, so ~165 effective), minion aggro is
+#: several hundred, and the human solution is to hover outside aggro and step
+#: in ~150 units for the killing blow. Every move command being a 500-unit
+#: lunge makes step-in/step-out unrepresentable: the agent can only overshoot
+#: through the wave or retreat out of it. Measured on the old space: in attack
+#: range of any enemy minion 5.5% of the time, median speed 0.
+#:
+#: A screen click is also what a human actually issues, and what a deployed
+#: vision+mouse shim would emit -- so one 2-D action covers move,
+#: attack-move, every ground-targeted cast and every skillshot, for every
+#: champion, with no per-ability special-casing.
+#:
+#: 96x54 keeps the 16:9 aspect and gives >= 2 bins across a minion everywhere
+#: on screen: at 1280x720 a bin is 13.3 x 13.3 px, and a minion's 40-unit
+#: selectable radius subtends ~29 px at screen centre
+#: (projection.units_per_pixel_at_centre).
+N_SCREEN_X = 96
+N_SCREEN_Y = 54
+
+#: Bin CENTRES in normalised screen coordinates, so bin 0 is not the very edge.
+SCREEN_X_VALUES = ((np.arange(N_SCREEN_X, dtype=np.float32) + 0.5) / N_SCREEN_X)
+SCREEN_Y_VALUES = ((np.arange(N_SCREEN_Y, dtype=np.float32) + 0.5) / N_SCREEN_Y)
+
+SCREEN_AXIS_NAMES = {"screen_x": "screen_u", "screen_y": "screen_v"}
 
 # --------------------------------------------------------------------------
 # Entity feature layout

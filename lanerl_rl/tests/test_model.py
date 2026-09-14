@@ -61,8 +61,8 @@ def test_forward_shapes(policy):
     state = policy.initial_state(B)
     dist, value, new_state = policy(state=state, **batch)
     assert dist.logits["button"].shape == (B, T, C.N_BUTTONS)
-    assert dist.logits["move_x"].shape == (B, T, C.N_MOVE_BINS)
-    assert dist.logits["move_z"].shape == (B, T, C.N_MOVE_BINS)
+    assert dist.logits["screen_x"].shape == (B, T, C.N_SCREEN_X)
+    assert dist.logits["screen_y"].shape == (B, T, C.N_SCREEN_Y)
     assert dist.logits["target"].shape == (B, T, C.N_SLOTS)
     assert value.shape == (B, T)
     assert new_state.actor.shape == (1, B, policy.cfg.gru_dim)
@@ -112,7 +112,7 @@ def test_target_head_is_permutation_equivariant(policy):
     t0 = d0.logits["target"][0, 0]
     t1 = d1.logits["target"][0, 0]
     assert torch.allclose(t0[perm], t1, atol=1e-5), "target logits are not permutation equivariant"
-    for head in ("button", "move_x", "move_z"):
+    for head in ("button", "screen_x", "screen_y"):
         assert torch.allclose(d0.logits[head], d1.logits[head], atol=1e-5), (
             f"{head} logits changed under a slot permutation"
         )
@@ -123,8 +123,8 @@ def test_action_masking_zeroes_illegal_choices(policy):
     state = policy.initial_state(B)
     masks = {
         "button": torch.zeros(B, T, C.N_BUTTONS, dtype=torch.bool),
-        "move_x": torch.ones(B, T, C.N_MOVE_BINS, dtype=torch.bool),
-        "move_z": torch.ones(B, T, C.N_MOVE_BINS, dtype=torch.bool),
+        "screen_x": torch.ones(B, T, C.N_SCREEN_X, dtype=torch.bool),
+        "screen_y": torch.ones(B, T, C.N_SCREEN_Y, dtype=torch.bool),
         "target": ~batch["entity_pad_mask"],
     }
     masks["button"][..., 0] = True
@@ -445,7 +445,7 @@ def test_bad_core_name_is_rejected():
 # Head masking: the action the ENVIRONMENT sees is not all four heads
 # --------------------------------------------------------------------------
 #
-# The old LaneActionDist scored button + move_x + move_z + target on every
+# The old LaneActionDist scored button + screen_x + screen_y + target on every
 # step, with a docstring claiming that conditioning on the button "makes the
 # PPO ratio depend on the sampled button, which is a well known source of
 # silent bias".  That is backwards: the mask is a deterministic function of the
@@ -456,12 +456,12 @@ def test_bad_core_name_is_rejected():
 N_M, N_T = 3, 4  # small enough to enumerate exhaustively
 
 
-def _effective_actions(n_move=N_M, n_target=N_T):
+def _effective_actions(n_x=N_M, n_target=N_T, n_y=None):
     """Every action the environment can distinguish, as (b, mx, mz, t)."""
     out = []
     for b in range(C.N_BUTTONS):
         moves = (
-            [(x, z) for x in range(n_move) for z in range(n_move)]
+            [(x, z) for x in range(n_x) for z in range(n_y if n_y is not None else n_x)]
             if USES_MOVE_HEAD[b]
             else [(0, 0)]
         )
@@ -470,12 +470,12 @@ def _effective_actions(n_move=N_M, n_target=N_T):
     return out
 
 
-def _logits(seed, n_move=N_M, n_target=N_T):
+def _logits(seed, n_x=N_M, n_target=N_T, n_y=None):
     g = torch.Generator().manual_seed(seed)
     return {
         "button": torch.randn(C.N_BUTTONS, generator=g),
-        "move_x": torch.randn(n_move, generator=g),
-        "move_z": torch.randn(n_move, generator=g),
+        "screen_x": torch.randn(n_x, generator=g),
+        "screen_y": torch.randn(n_y if n_y is not None else n_x, generator=g),
         "target": torch.randn(n_target, generator=g),
     }
 
@@ -488,7 +488,7 @@ def _action_tensors(actions):
     cols = list(zip(*actions))
     return {
         k: torch.tensor(c, dtype=torch.long)
-        for k, c in zip(("button", "move_x", "move_z", "target"), cols)
+        for k, c in zip(("button", "screen_x", "screen_y", "target"), cols)
     }
 
 
@@ -522,8 +522,8 @@ def test_two_draws_differing_only_in_an_unused_head_are_ONE_action():
     noop, move = C.BUTTONS.index("noop"), C.BUTTONS.index("move")
     a = {
         "button": torch.tensor([noop, noop]),
-        "move_x": torch.tensor([0, 2]),
-        "move_z": torch.tensor([1, 0]),
+        "screen_x": torch.tensor([0, 2]),
+        "screen_y": torch.tensor([1, 0]),
         "target": torch.tensor([0, 3]),
     }
     lp = dist.log_prob(a)
@@ -533,7 +533,7 @@ def test_two_draws_differing_only_in_an_unused_head_are_ONE_action():
     lp2 = dist.log_prob(a2)
     assert lp2[0].item() != pytest.approx(lp2[1].item(), abs=1e-6)
     # ...but its target head is still ignored
-    a3 = dict(a2, move_x=torch.tensor([0, 0]), move_z=torch.tensor([0, 0]))
+    a3 = dict(a2, screen_x=torch.tensor([0, 0]), screen_y=torch.tensor([0, 0]))
     lp3 = dist.log_prob(a3)
     assert lp3[0].item() == pytest.approx(lp3[1].item(), abs=1e-6)
 
@@ -566,19 +566,19 @@ def test_the_entropy_numbers_in_the_docstring_are_the_real_ones():
 
     zeros = {
         "button": torch.zeros(1, C.N_BUTTONS),
-        "move_x": torch.zeros(1, C.N_MOVE_BINS),
-        "move_z": torch.zeros(1, C.N_MOVE_BINS),
+        "screen_x": torch.zeros(1, C.N_SCREEN_X),
+        "screen_y": torch.zeros(1, C.N_SCREEN_Y),
         "target": torch.zeros(1, C.N_SLOTS),
     }
     uniform = LaneActionDist(zeros).entropy().item()
-    assert uniform == pytest.approx(7.541, abs=1e-3)
+    assert uniform == pytest.approx(10.661, abs=1e-3)
 
-    n_eff = len(_effective_actions(C.N_MOVE_BINS, C.N_SLOTS))
-    assert n_eff == 13_043
-    assert math.log(n_eff) == pytest.approx(9.476, abs=1e-3)
+    n_eff = len(_effective_actions(C.N_SCREEN_X, C.N_SLOTS, C.N_SCREEN_Y))
+    assert n_eff == 834_626
+    assert math.log(n_eff) == pytest.approx(13.635, abs=1e-3)
     assert uniform < math.log(n_eff), "uniform is no longer the maximum-entropy policy"
     # what the unconditional sum over four heads had instead
-    assert math.log(C.N_BUTTONS * C.N_MOVE_BINS ** 2 * C.N_SLOTS) == pytest.approx(9.940, abs=1e-3)
+    assert math.log(C.N_BUTTONS * C.N_SCREEN_X * C.N_SCREEN_Y * C.N_SLOTS) == pytest.approx(14.099, abs=1e-3)
 
 
 def test_head_usage_matches_what_decode_action_puts_on_the_wire(quiet_fog):
@@ -605,12 +605,12 @@ def test_head_usage_matches_what_decode_action_puts_on_the_wire(quiet_fog):
     def order(b, mx, mz, t):
         return order_for_command(
             decode_action(
-                {"button": b, "move_x": mx, "move_z": mz, "target": t},
+                {"button": b, "screen_x": mx, "screen_y": mz, "target": t},
                 builder, ob, me, netids,
             )
         )
 
-    mid, hi = C.N_MOVE_BINS // 2, C.N_MOVE_BINS - 1
+    mid, hi = C.N_SCREEN_Y // 2, C.N_SCREEN_Y - 1
     for b, name in enumerate(C.BUTTONS):
         # attack_move only falls back to a positional move when the chosen
         # slot is empty, so "does the move head matter" is asked of both.
@@ -629,7 +629,7 @@ def test_masked_logits_do_not_poison_an_unused_head():
     logits["target"] = torch.tensor([0.0, -1e9, -1e9, -1e9])
     dist = _batched(logits, 1)
     a = {k: torch.tensor([v]) for k, v in
-         zip(("button", "move_x", "move_z", "target"), (C.BUTTONS.index("move"), 1, 1, 2))}
+         zip(("button", "screen_x", "screen_y", "target"), (C.BUTTONS.index("move"), 1, 1, 2))}
     lp = dist.log_prob(a)
     assert torch.isfinite(lp).all() and lp.item() > -20.0
 
@@ -677,7 +677,7 @@ def test_categorical_kl_agrees_with_torch_on_well_conditioned_logits():
 
 def test_the_whole_policy_still_produces_a_normalised_masked_log_prob(policy):
     """The enumeration tests above build logits by hand; this one runs the
-    real network at the real head sizes and integrates over the 13,043
+    real network at the real head sizes and integrates over the 834,626
     effective actions it can emit."""
     batch = _random_batch(b=1, t=1, seed=77, all_valid=True)
     state = policy.initial_state(1)
@@ -687,7 +687,7 @@ def test_the_whole_policy_still_produces_a_normalised_masked_log_prob(policy):
             batch["global_vec"], state.actor,
         )
     flat = {k: v.reshape(1, -1) for k, v in dist.logits.items()}
-    actions = _effective_actions(C.N_MOVE_BINS, C.N_SLOTS)
+    actions = _effective_actions(C.N_SCREEN_X, C.N_SLOTS, C.N_SCREEN_Y)
     n = len(actions)
     d = LaneActionDist({k: v.expand(n, -1) for k, v in flat.items()})
     total = d.log_prob(_action_tensors(actions)).exp().sum()
@@ -705,8 +705,8 @@ def test_end_to_end_from_real_observations(policy, quiet_fog):
 
     masks = {
         "button": torch.from_numpy(np.stack([o.action_mask.button for o in obs])).unsqueeze(0),
-        "move_x": torch.from_numpy(np.stack([o.action_mask.move_x for o in obs])).unsqueeze(0),
-        "move_z": torch.from_numpy(np.stack([o.action_mask.move_z for o in obs])).unsqueeze(0),
+        "screen_x": torch.from_numpy(np.stack([o.action_mask.screen_x for o in obs])).unsqueeze(0),
+        "screen_y": torch.from_numpy(np.stack([o.action_mask.screen_y for o in obs])).unsqueeze(0),
         "target": torch.from_numpy(np.stack([o.action_mask.target for o in obs])).unsqueeze(0),
     }
     state = policy.initial_state(1)

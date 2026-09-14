@@ -113,7 +113,8 @@ class ModelConfig:
     ctx_dim: int = 256
     core_dim: int = 512
     n_buttons: int = C.N_BUTTONS
-    n_move_bins: int = C.N_MOVE_BINS
+    n_screen_x: int = C.N_SCREEN_X
+    n_screen_y: int = C.N_SCREEN_Y
     n_entity_types: int = C.N_ENTITY_TYPES
     #: ``"gru"`` or ``"mlp"``.
     core: str = "gru"
@@ -335,9 +336,10 @@ class LaneActionDist:
     Consequences of the fix, for anyone comparing runs
     --------------------------------------------------
     ``loss/entropy`` is no longer the plain sum over the four heads and is NOT
-    comparable to a pre-change run.  There are 13,043 effective actions, not
-    8*9*9*32 = 20,736, so the ceiling is ln 13,043 = 9.48 nats rather than
-    9.94 -- and a uniform policy no longer sits AT the ceiling: with uniform
+    comparable to a pre-change run.  At the SCREEN action space (2026-09-14,
+    96x54) there are 834,626 effective actions, not 8*96*54*32 = 1,327,104, so
+    the ceiling is ln 834,626 = 13.64 nats rather than 14.10.  (On the old 9x9
+    direction space those figures were 13,043 / 20,736 and 9.48 / 9.94.) -- and a uniform policy no longer sits AT the ceiling: with uniform
     logits on every head this reads 7.54 nats
     (ln 8 + 0.75 * 2 ln 9 + 0.625 * ln 32), because 2 of the 8 buttons consume
     no auxiliary head at all and 1 more consumes only the move pair.  The 9.48
@@ -345,7 +347,7 @@ class LaneActionDist:
     their auxiliary heads.  ``loss/kl_ref`` moves for the same reason.
     """
 
-    HEADS = ("button", "move_x", "move_z", "target")
+    HEADS = ("button", "screen_x", "screen_y", "target")
 
     def __init__(self, logits: Dict[str, torch.Tensor]):
         self.logits = logits
@@ -394,9 +396,9 @@ class LaneActionDist:
     def log_prob(self, action: Dict[str, torch.Tensor]) -> torch.Tensor:
         """log pi(a|s) over the EFFECTIVE action -- unused heads are dropped."""
         uses_move, uses_target = self.head_mask(action["button"])
-        move = self.dists["move_x"].log_prob(action["move_x"]) + self.dists[
-            "move_z"
-        ].log_prob(action["move_z"])
+        move = self.dists["screen_x"].log_prob(action["screen_x"]) + self.dists[
+            "screen_y"
+        ].log_prob(action["screen_y"])
         return (
             self.dists["button"].log_prob(action["button"])
             + uses_move * move
@@ -414,7 +416,7 @@ class LaneActionDist:
         w_move, w_target = self.head_weights()
         return (
             self.dists["button"].entropy()
-            + w_move * (self.dists["move_x"].entropy() + self.dists["move_z"].entropy())
+            + w_move * (self.dists["screen_x"].entropy() + self.dists["screen_y"].entropy())
             + w_target * self.dists["target"].entropy()
         )
 
@@ -432,7 +434,7 @@ class LaneActionDist:
         w_move, w_target = self.head_weights(other_logits)
         return (
             per_head["button"]
-            + w_move * (per_head["move_x"] + per_head["move_z"])
+            + w_move * (per_head["screen_x"] + per_head["screen_y"])
             + w_target * per_head["target"]
         )
 
@@ -709,14 +711,14 @@ class LanePolicy(nn.Module):
         )
         self.core = _make_core(c, c.actor_core_input_dim)
         self.head_button = nn.Linear(c.core_dim, c.n_buttons)
-        self.head_move_x = nn.Linear(c.core_dim, c.n_move_bins)
-        self.head_move_z = nn.Linear(c.core_dim, c.n_move_bins)
+        self.head_screen_x = nn.Linear(c.core_dim, c.n_screen_x)
+        self.head_screen_y = nn.Linear(c.core_dim, c.n_screen_y)
         self.head_target_q = nn.Linear(c.core_dim, c.d_model)
         self.critic = _PrivilegedCritic(c)
         self._init_heads()
 
     def _init_heads(self) -> None:
-        for head in (self.head_button, self.head_move_x, self.head_move_z):
+        for head in (self.head_button, self.head_screen_x, self.head_screen_y):
             nn.init.orthogonal_(head.weight, gain=0.01)
             nn.init.zeros_(head.bias)
 
@@ -767,8 +769,8 @@ class LanePolicy(nn.Module):
 
         logits = {
             "button": self.head_button(core_out),
-            "move_x": self.head_move_x(core_out),
-            "move_z": self.head_move_z(core_out),
+            "screen_x": self.head_screen_x(core_out),
+            "screen_y": self.head_screen_y(core_out),
             "target": target_logits,
         }
         if action_masks is not None:

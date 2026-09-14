@@ -572,15 +572,42 @@ def main(argv=None) -> int:
     if args.init_from is not None:
         blob = torch.load(args.init_from, map_location=args.device)
         state = blob.get("policy", blob)
-        missing, unexpected = policy.load_state_dict(state, strict=False)
-        if missing or unexpected:
+        # The SCREEN heads legitimately will not match a checkpoint trained on
+        # the old 9x9 direction space: they went from 9 outputs to 96 and 54.
+        # Everything else -- the entity encoder, the core, the button and
+        # target heads, the critic -- is unchanged and is most of the prior, so
+        # dropping those on the floor and starting from random would throw away
+        # the part that works. Shape-mismatched entries are skipped LOUDLY.
+        model_sd = policy.state_dict()
+        reshaped = [k for k, v in state.items()
+                    if k in model_sd and tuple(model_sd[k].shape) != tuple(v.shape)]
+        loadable = {k: v for k, v in state.items() if k not in reshaped}
+        missing, unexpected = policy.load_state_dict(loadable, strict=False)
+        unexplained_missing = [k for k in missing if k not in reshaped]
+        if unexplained_missing or unexpected:
             # Silently ignoring these is how a "BC-initialised" run ends up
             # random in exactly the heads that matter.
             raise SystemExit(
                 f"--init-from {args.init_from} does not match the policy:\n"
-                f"  missing={list(missing)}\n  unexpected={list(unexpected)}"
+                f"  missing={unexplained_missing}\n  unexpected={list(unexpected)}"
             )
-        print(f"initialised policy from {args.init_from}")
+        if reshaped:
+            print(f"initialised policy from {args.init_from}; "
+                  f"{len(reshaped)} tensor(s) LEFT RANDOM because their shape "
+                  f"changed: {reshaped}")
+        else:
+            print(f"initialised policy from {args.init_from}")
+        if args.kl_ref_coef > 0.0 and reshaped:
+            # A KL anchor to a prior whose action heads are random noise would
+            # pull the new heads TOWARD noise. Refuse rather than quietly
+            # anchoring to nothing.
+            raise SystemExit(
+                "--kl-ref-coef > 0 with a checkpoint whose action heads do not "
+                f"match ({reshaped}). The reference's screen heads would be "
+                "randomly initialised, so the KL term would drag the policy "
+                "toward noise. Use --kl-ref-coef 0 for the first run on a new "
+                "action space."
+            )
         if args.kl_ref_coef > 0.0:
             reference = LanePolicy(model_cfg).to(args.device)
             reference.load_state_dict(state, strict=True)

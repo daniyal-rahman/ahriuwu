@@ -228,7 +228,7 @@ def test_the_decoded_ORDER_is_equivariant_under_the_reflection():
     the action the shared weights then emit means the same thing on both sides.
     Here the SAME action dict is decoded against both agents and the two world
     goals are required to be related by the same lane reflection that relates
-    the frames -- for every button and every one of the 81 move-bin pairs.
+    the frames -- for every button, sampled across the 96x54 screen grid.
     """
     from lanerl_rl.env import decode_action
 
@@ -246,9 +246,11 @@ def test_the_decoded_ORDER_is_equivariant_under_the_reflection():
 
     me_b, me_r = f.champion_of_team(C.TEAM_BLUE), f2.champion_of_team(C.TEAM_RED)
     for button in range(C.N_BUTTONS):
-        for mx in range(C.N_MOVE_BINS):
-            for mz in range(C.N_MOVE_BINS):
-                a = {"button": button, "move_x": mx, "move_z": mz, "target": 13}
+        # every 7th bin: 96x54 is 5,184 pairs per button and the point is
+        # equivariance, which does not need an exhaustive sweep.
+        for mx in range(0, C.N_SCREEN_X, 7):
+            for mz in range(0, C.N_SCREEN_Y, 7):
+                a = {"button": button, "screen_x": mx, "screen_y": mz, "target": 13}
                 cb = decode_action(a, blue, ob, me_b, nb)
                 cr = decode_action(a, red, orr, me_r, nr)
                 assert cb.kind == cr.kind

@@ -45,6 +45,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Protocol, Sequence,
 import numpy as np
 
 from . import constants as C
+from . import projection
 from .frame import ApproxFogModel, Frame, MirrorTransform, Unit, decode_frame
 from .obs import AgentObservation, ObservationBuilder
 from .reward import LaneRewardConfig, ZeroSumLaneReward
@@ -93,7 +94,6 @@ def decode_action(
     observation: AgentObservation,
     self_unit: Unit,
     slot_netids: Sequence[Optional[int]],
-    move_distance: float = 500.0,
 ) -> ServerCommand:
     """Turn the four categorical heads into one server order.
 
@@ -108,15 +108,41 @@ def decode_action(
     if button == "recall":
         return ServerCommand(kind="recall")
 
-    tx = float(C.MOVE_BIN_VALUES[int(action["move_x"])])
-    tz = float(C.MOVE_BIN_VALUES[int(action["move_z"])])
-    norm = math.hypot(tx, tz)
-    if norm > 1e-6:
-        tx, tz = tx / norm, tz / norm
-    # Canonical direction -> world direction (a reflection, so it IS its own inverse -- but LaneTransform.vector is lane->world and to_lane_vector is the inverse; do not swap them).
-    wx, wy = builder.transform.vector(tx, tz)
-    px = self_unit.x + wx * move_distance
-    py = self_unit.y + wy * move_distance
+    # WHERE ON SCREEN the mouse is. No move_distance: the click names a
+    # POINT, the way a human's does, so "step 150 units back" is expressible.
+    # The old space picked a 9x9 lane-local DIRECTION and travelled a
+    # hardcoded 500 units, which cannot express any small adjustment -- and a
+    # small adjustment is exactly what melee last-hitting is (attack range
+    # 125, minion aggro several hundred).
+    sx = float(C.SCREEN_X_VALUES[int(action["screen_x"])])
+    sy = float(C.SCREEN_Y_VALUES[int(action["screen_y"])])
+    try:
+        # The screen offset from the champion, in a CANONICAL champion-centred
+        # view. Taken about the origin so it is a pure offset, then mapped
+        # through the lane frame.
+        #
+        # Why not straight to world: the observation is lane-canonical -- blue
+        # and red see the same picture via the (s,n) -> (L-s,n) reflection --
+        # but a world-aligned camera makes one screen position mean OPPOSITE
+        # lane directions for the two sides. The policy would read a canonical
+        # frame and act in a non-canonical one, which is the same class of bug
+        # as the rot180 canonicalisation that mapped blue's top lane onto red's
+        # bot. test_the_decoded_ORDER_is_equivariant_under_the_reflection
+        # catches it.
+        #
+        # So the screen axes ARE the lane axes: +x is down-lane towards the
+        # enemy, +y is across it. A deployed vision+mouse shim would rotate
+        # this back into true screen space, which is a display concern, not a
+        # policy one.
+        ds, dn = projection.screen_to_world_centred(0.0, 0.0, sx, sy)
+    except ValueError:
+        # The horizon: that screen row has no ground point at all. Standing
+        # still is the honest response -- inventing a destination would send
+        # the champion somewhere the action never named.
+        return ServerCommand(kind="noop")
+    wx, wy = builder.transform.vector(ds, dn)
+    px = self_unit.x + wx
+    py = self_unit.y + wy
 
     slot_idx = int(action["target"])
     target_netid = slot_netids[slot_idx] if slot_idx < len(slot_netids) else None

@@ -109,7 +109,7 @@ def test_synthetic_tournament_recovers_the_true_ratings():
     assert abs(got - pred) < 0.03
 
 
-def test_anchoring_pins_the_scale_so_a_growing_pool_does_not_move_zero():
+def test_anchoring_pins_the_scale_so_a_growing_pool_does_not_screen_yero():
     recs = []
     for _ in range(40):
         recs += [MatchRecord("agent", "scripted_gold", 1.0), MatchRecord("agent", "x", 0.5)]

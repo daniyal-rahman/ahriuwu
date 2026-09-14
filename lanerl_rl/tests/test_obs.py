@@ -48,8 +48,8 @@ def test_shapes_and_dtypes(recorded_run):
             assert o.priv_entities.shape == (C.N_SLOTS, C.ENTITY_DIM)
             assert o.priv_vec.shape == (C.PRIV_DIM,)
             assert o.action_mask.button.shape == (C.N_BUTTONS,)
-            assert o.action_mask.move_x.shape == (C.N_MOVE_BINS,)
-            assert o.action_mask.move_z.shape == (C.N_MOVE_BINS,)
+            assert o.action_mask.screen_x.shape == (C.N_SCREEN_X,)
+            assert o.action_mask.screen_y.shape == (C.N_SCREEN_Y,)
             assert o.action_mask.target.shape == (C.N_SLOTS,)
 
 
@@ -207,7 +207,7 @@ def test_action_mask_always_leaves_something_legal(recorded_run):
         for o in obs_list:
             assert o.action_mask.button.any()
             assert o.action_mask.target.any()
-            assert o.action_mask.move_x.all()
+            assert o.action_mask.screen_x.all()
 
 
 def test_builder_is_deterministic(quiet_fog):

@@ -45,14 +45,14 @@ def _fill_buffer(seed=0) -> RecurrentRolloutBuffer:
         }
         masks = {
             "button": torch.ones(N_ENVS, cfg.n_buttons, dtype=torch.bool),
-            "move_x": torch.ones(N_ENVS, cfg.n_move_bins, dtype=torch.bool),
-            "move_z": torch.ones(N_ENVS, cfg.n_move_bins, dtype=torch.bool),
+            "screen_x": torch.ones(N_ENVS, cfg.n_screen_x, dtype=torch.bool),
+            "screen_y": torch.ones(N_ENVS, cfg.n_screen_y, dtype=torch.bool),
             "target": ~pad,
         }
         action = {
             "button": torch.randint(0, cfg.n_buttons, (N_ENVS,)),
-            "move_x": torch.randint(0, cfg.n_move_bins, (N_ENVS,)),
-            "move_z": torch.randint(0, cfg.n_move_bins, (N_ENVS,)),
+            "screen_x": torch.randint(0, cfg.n_screen_x, (N_ENVS,)),
+            "screen_y": torch.randint(0, cfg.n_screen_y, (N_ENVS,)),
             "target": torch.zeros(N_ENVS, dtype=torch.long),
         }
         done = (torch.rand(N_ENVS) < 0.03).float()

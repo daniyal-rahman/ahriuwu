@@ -84,7 +84,7 @@ def test_actor_returns_one_action_dict_per_agent(observations):
     out = actor.act(obs)
     assert len(out.actions) == len(obs)
     for a in out.actions:
-        assert set(a) == {"button", "move_x", "move_z", "target"}
+        assert set(a) == {"button", "screen_x", "screen_y", "target"}
         assert 0 <= a["button"] < C.N_BUTTONS
         assert 0 <= a["target"] < C.N_SLOTS
     assert out.log_probs.shape == (len(obs),)
