@@ -120,6 +120,15 @@ def build_argparser() -> argparse.ArgumentParser:
     )
     p.add_argument("--queue-capacity", type=int, default=2)
     p.add_argument(
+        "--lane-presence", type=float, default=None,
+        help="per-decision reward for being inside the top-lane corridor. "
+             "Default: RewardWeights.lane_presence (0.0005, ~9.0 an episode "
+             "against ~40 for a 40-CS game). Set 0 to disable -- it is a "
+             "DENSE reward for occupying a state, which is the shape of "
+             "shaping term most likely to be gamed, so it needs to be "
+             "switchable without a code edit to be testable at all.",
+    )
+    p.add_argument(
         "--agent-type", choices=("main", "main_exploiter", "league_exploiter"),
         default="main",
         help="this lineage's role in the league (AlphaStar, Nature 2019). "
@@ -540,6 +549,10 @@ def main(argv=None) -> int:
     # Built ONCE and shared by the actors and the anchor evaluator, so the two
     # cannot end up measuring under different reward definitions.
     reward_cfg = reward_config(ppo_cfg.gamma, args.alpha, args.alpha_anneal_steps)
+    if args.lane_presence is not None:
+        reward_cfg.weights.lane_presence = float(args.lane_presence)
+        log.info("lane_presence weight overridden to %g (~%.1f per episode)",
+                 args.lane_presence, args.lane_presence * 18000)
     log.info(
         "reward: alpha %s (%s)", args.alpha,
         f"annealed from {reward_cfg.zero_sum_alpha_start} over "
