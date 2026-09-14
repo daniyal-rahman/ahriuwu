@@ -439,6 +439,10 @@ def play_anchor_episodes(
     #: zeros went into the mean as though they were play.
     first_pos: Dict[Tuple[int, int], Tuple[float, float]] = {}
     moved: Dict[Tuple[int, int], float] = {}
+    #: Same data, kept for the error message only, so the log can show the
+    #: actual coordinates rather than asking the reader to trust "0u".
+    _dbg_first: Dict[Tuple[int, int], Tuple[float, float]] = {}
+    _dbg_last: Dict[Tuple[int, int], Tuple[float, float]] = {}
     while len(out) < n_episodes and steps < budget:
         result, dones = driver.step(deterministic=cfg.deterministic)
         steps += 1
@@ -464,6 +468,8 @@ def play_anchor_episodes(
                     ux = uy = 0.0
                 if key not in first_pos:
                     first_pos[key] = (ux, uy)
+                    _dbg_first[key] = (round(ux, 1), round(uy, 1))
+                _dbg_last[key] = (round(ux, 1), round(uy, 1))
                 fx, fy = first_pos[key]
                 d = math.hypot(ux - fx, uy - fy)
                 if d > moved.get(key, 0.0):
@@ -523,43 +529,80 @@ def play_anchor_episodes(
                 undriven.append(f"opponent (moved {opp_moved:.0f}u)")
             if undriven:
                 undriven_games.append((i, ", ".join(undriven)))
-                log.error(
-                    "anchor %s instance %d: NOT A MEASUREMENT -- %s never left "
-                    "the spawn area over a whole game. CS@10 for this game is "
-                    "DISCARDED rather than counted as 0; counting it is how a "
-                    "harness fault gets read as the policy getting worse.",
-                    anchor_id, i, " and ".join(undriven),
-                )
-                # WHY, not just THAT. These three separate "we sent nothing"
-                # from "we sent orders and the server ignored them", which are
-                # different bugs that produce an identical idle champion.
-                log.error(
-                    "  instance %d wire counters: orders_sent=%s "
-                    "skipped_no_obs=%s skipped_not_alive=%s  alive=%s "
-                    "steps_in_episode=%s episode_index=%s",
-                    i,
-                    getattr(driver, "orders_sent", ["?"] * (i + 1))[i],
-                    getattr(driver, "skipped_no_obs", ["?"] * (i + 1))[i],
-                    getattr(driver, "skipped_not_alive", ["?"] * (i + 1))[i],
-                    getattr(driver.env, "alive", ["?"] * (i + 1))[i],
-                    getattr(driver, "steps_in_episode", ["?"] * (i + 1))[i],
-                    getattr(driver, "episode_index", ["?"] * (i + 1))[i],
-                )
-                log.error(
-                    "  instance %d order kinds sent so far: %s  <- a champion "
-                    "that only ever recalls sits in its fountain at level 1 on "
-                    "full hp with 0 deaths, which is the SAME row in the log as "
-                    "a champion nobody ordered at all.",
-                    i, getattr(driver, "order_kinds", [{}] * (i + 1))[i],
-                )
-                if not _UNDRIVEN_DUMPED:
-                    _mark_undriven_dumped()
-                    import faulthandler, io as _io
-                    buf = _io.StringIO()
-                    faulthandler.dump_traceback(file=buf, all_threads=True)
+                # A DIAGNOSTIC MUST NOT BE ABLE TO KILL THE RUN. The first
+                # version of this block called faulthandler.dump_traceback on a
+                # StringIO, which raises io.UnsupportedOperation: fileno, and
+                # it took down run 773 from inside the code written to explain
+                # a different failure. Everything that only produces log output
+                # is now best-effort.
+                try:
                     log.error(
-                        "  ALL THREAD STACKS at the first undriven game "
-                        "(dumped once per process):\n%s", buf.getvalue()
+                        "anchor %s instance %d: NOT A MEASUREMENT -- %s never left "
+                        "the spawn area over a whole game. CS@10 for this game is "
+                        "DISCARDED rather than counted as 0; counting it is how a "
+                        "harness fault gets read as the policy getting worse.",
+                        anchor_id, i, " and ".join(undriven),
+                    )
+                    # WHY, not just THAT. These three separate "we sent nothing"
+                    # from "we sent orders and the server ignored them", which are
+                    # different bugs that produce an identical idle champion.
+                    log.error(
+                        "  instance %d wire counters: orders_sent=%s "
+                        "skipped_no_obs=%s skipped_not_alive=%s  alive=%s "
+                        "steps_in_episode=%s episode_index=%s",
+                        i,
+                        getattr(driver, "orders_sent", ["?"] * (i + 1))[i],
+                        getattr(driver, "skipped_no_obs", ["?"] * (i + 1))[i],
+                        getattr(driver, "skipped_not_alive", ["?"] * (i + 1))[i],
+                        getattr(driver.env, "alive", ["?"] * (i + 1))[i],
+                        getattr(driver, "steps_in_episode", ["?"] * (i + 1))[i],
+                        getattr(driver, "episode_index", ["?"] * (i + 1))[i],
+                    )
+                    log.error(
+                        "  instance %d positions: agent first=%s last=%s | "
+                        "opponent first=%s last=%s | game length=%d decisions. "
+                        "If first==last for BOTH sides the observation is frozen, "
+                        "not the champions -- a different bug from an idle agent.",
+                        i,
+                        _dbg_first.get((i, agent_team)), _dbg_last.get((i, agent_team)),
+                        [v for (inst, t), v in _dbg_first.items()
+                         if inst == i and t != agent_team][:1],
+                        [v for (inst, t), v in _dbg_last.items()
+                         if inst == i and t != agent_team][:1],
+                        length,
+                    )
+                    log.error(
+                        "  instance %d order kinds sent so far: %s  <- a champion "
+                        "that only ever recalls sits in its fountain at level 1 on "
+                        "full hp with 0 deaths, which is the SAME row in the log as "
+                        "a champion nobody ordered at all.",
+                        i, getattr(driver, "order_kinds", [{}] * (i + 1))[i],
+                    )
+                    if not _UNDRIVEN_DUMPED:
+                        _mark_undriven_dumped()
+                        # traceback + sys._current_frames, NOT faulthandler:
+                        # faulthandler.dump_traceback writes via a file
+                        # DESCRIPTOR, so handing it a StringIO raises
+                        # io.UnsupportedOperation: fileno -- which killed run 773
+                        # from inside the diagnostic that was meant to explain a
+                        # different failure.
+                        import sys as _sys, threading as _th, traceback as _tb
+                        names = {t.ident: t.name for t in _th.enumerate()}
+                        parts = []
+                        for tid, frame in _sys._current_frames().items():
+                            parts.append(f"--- thread {names.get(tid, tid)} ({tid}) ---")
+                            parts.append("".join(_tb.format_stack(frame)))
+                        log.error(
+                            "  ALL THREAD STACKS at the first discarded game "
+                            "(once per process):\n%s", "\n".join(parts)
+                        )
+    
+                except Exception as diag_exc:   # pragma: no cover - defensive
+                    log.error(
+                        "anchor %s instance %d: game discarded as not-a-"
+                        "measurement, and the diagnostic itself failed (%s: %s). "
+                        "The discard still stands.",
+                        anchor_id, i, type(diag_exc).__name__, diag_exc,
                     )
                 cs10 = None
                 opp_cs10 = None
