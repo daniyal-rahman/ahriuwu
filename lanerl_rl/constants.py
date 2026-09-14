@@ -498,7 +498,35 @@ SLOT_SPARE = (27, 32)
 #: How many of the nearest enemy minions get re-sorted by ascending HP so that
 #: the head of the enemy-minion block is always the last-hit candidate.  See
 #: ``obs.ObservationBuilder._assign_slots``.
-LAST_HIT_SORT_K = 4
+#: How many of the nearest enemy-minion slots get re-sorted by ascending HP
+#: so the last-hit candidate lands at a FIXED index. **0 disables it.**
+#:
+#: DEFAULT 0. This is a crutch and it was removed deliberately.
+#:
+#: Every other block in the entity table is ordered by distance. Sorting these
+#: by HP does not add information -- `hp_frac` is already a per-slot feature
+#: the actor can read for every candidate -- it only removes the COMPARISON
+#: from the network's job, so the target head learns "click slot 13" instead
+#: of "find the minion that is about to die".
+#:
+#: The old docstring defended it with an exploration number (0.126 vs 0.0042
+#: hit probability under a random policy) and then conceded in its own caveat
+#: that the figure was computed for an 8-slot head and is ~4x diluted here.
+#: Faster early learning is not the test. The test is whether the policy ends
+#: up able to do the thing, and "compare candidates and pick the weakest" is
+#: exactly the skill needed the moment the decision stops being trivial: two
+#: near-dead minions, a contested deny, a minion target weighed against the
+#: champion. Nothing ever forced that skill to exist.
+#:
+#: This repo has already been burned by precisely this shape once -- the
+#: movement head was blind for weeks because a free crutch meant the signal
+#: was never learned.
+#:
+#: NOTE: changing this changes the OBSERVATION, so a BC policy trained under
+#: one value cannot be reused under another -- its target head learned slot
+#: positions that no longer mean the same thing. Re-collect demos and retrain
+#: BC when this moves.
+LAST_HIT_SORT_K = 0
 
 #: Entity type one-hot ordering.
 ENTITY_TYPES = ("champion", "minion", "turret", "inhibitor", "nexus", "other")

@@ -942,7 +942,8 @@ class ObservationBuilder:
             [e for e in candidates if e.etype == "minion" and e.team_rel in ("enemy", "neutral")], key=key
         )
         k = C.LAST_HIT_SORT_K
-        enemy_minions = sorted(enemy_minions[:k], key=hp_key) + enemy_minions[k:]
+        if k:
+            enemy_minions = sorted(enemy_minions[:k], key=hp_key) + enemy_minions[k:]
         turrets = sorted([e for e in candidates if e.etype == "turret"], key=key)
 
         slots: List[Optional[_SlotEntity]] = [None] * C.N_SLOTS

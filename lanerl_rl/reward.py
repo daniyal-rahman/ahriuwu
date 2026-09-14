@@ -466,7 +466,22 @@ class RewardWeights:
     #: both runs collapse. It is a real cost at that size and an exonerated
     #: suspect for the decline, which is why this is now small rather than
     #: removed.
-    lane_presence: float = 0.0001
+    #: DEFAULT 0.0. Removed: this repo's own A/B already argued for it and
+    #: the weight was merely shrunk instead of dropped. From the table above,
+    #: 0.0 was equal or better at every checkpoint measured.
+    #:
+    #: It is also the only positional term here that is NOT potential-based --
+    #: `w * 1[in corridor]` per tick, not `gamma*phi(s') - phi(s)` -- so
+    #: unlike lane_approach it carries no policy-invariance guarantee. It is a
+    #: standing payment for occupying a rectangle, which biases toward
+    #: loitering in lane over doing anything worth more elsewhere, and it pays
+    #: whether or not the agent is doing anything while it stands there. The
+    #: 0-CS traces collected 1.05/1.07/0.97 of it per episode while converting
+    #: 0 of ~82 minions.
+    #:
+    #: "Be in lane" is implied by the objective: minions die in lane, and
+    #: last_hit and money only pay there. It does not need its own line item.
+    lane_presence: float = 0.0
     #: How far off the lane axis still counts as "in lane", in game units.
     #: LANE_HALF_WIDTH (1400) is the corridor the observation already uses, so
     #: the reward and the observation agree on where the lane is.

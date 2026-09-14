@@ -377,35 +377,59 @@ def _minion_cluster(t_ms=100_000, hps=(400, 60, 250, 30, 455), spacing=60.0):
     return make_frame(t_ms, units)
 
 
-def test_enemy_minion_head_is_sorted_by_ascending_hp(quiet_fog):
-    """Slot 0 of the enemy-minion block is the last-hit candidate, for free.
+def test_enemy_minions_are_in_plain_distance_order_by_default(quiet_fog):
+    """The last-hit pre-sort is OFF, and this test used to assert the opposite.
 
-    ``E_HP_ABS`` is gone -- it was the same quantity as ``E_HP_FRAC`` on a
-    second scale (/1000 here, /2000 in ``priv_vec``), which is how one
-    observation ended up carrying one number twice.  Every minion in this
-    cluster has the same ``mhp = 455``, so ascending ``hp_frac`` IS ascending
-    absolute HP and the builder's real sort key (``hp_frac * mhp``) is being
-    checked, not a proxy for it.
+    ``LAST_HIT_SORT_K`` used to be 4: the nearest four enemy-minion slots were
+    re-sorted by ascending HP so the last-hit candidate always sat at a fixed
+    index. That is a crutch. ``hp_frac`` is already a per-slot feature for
+    every candidate, so sorting adds no information -- it only removes the
+    COMPARISON from the network's job, and the target head learns "click slot
+    13" instead of "find the minion that is about to die".
+
+    The skill it skipped is the one that matters as soon as the decision stops
+    being trivial: two near-dead minions, a contested deny, a minion weighed
+    against the champion. This repo has been burned by exactly this shape
+    before -- the movement head was blind for weeks because a free crutch
+    meant the signal was never learned.
+
+    Set ``LAST_HIT_SORT_K`` above 0 to put it back; the behaviour is still
+    covered by the test below.
     """
+    assert C.LAST_HIT_SORT_K == 0, (
+        "the pre-sort is back on; if that is deliberate, re-collect demos and "
+        "retrain BC -- a BC target head trained under one value reads slot "
+        "positions that mean something else under the other"
+    )
     b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
     o = b.build(_minion_cluster())
     lo, hi = C.SLOT_ENEMY_MINION
-    head = list(range(lo, lo + C.LAST_HIT_SORT_K))
+    live = [s for s in range(lo, hi) if o.entities[s, C.E_VALID] > 0.5]
+    dists = [_slot_dist(o, s) for s in live]
+    assert _is_sorted(dists), (
+        f"enemy minions are not in distance order: {dists}. Every other block "
+        f"in the table is distance-ordered; this one must be too."
+    )
+
+
+def test_the_last_hit_pre_sort_still_works_when_switched_back_on(quiet_fog, monkeypatch):
+    """Kept so the ablation is a real switch rather than dead code.
+
+    If someone turns it back on to A/B it, it must actually do the thing.
+    """
+    monkeypatch.setattr(C, "LAST_HIT_SORT_K", 4)
+    b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
+    o = b.build(_minion_cluster())
+    lo, hi = C.SLOT_ENEMY_MINION
+    head = list(range(lo, lo + 4))
     hp = [float(o.entities[s, C.E_HP_FRAC]) for s in head]
-    # An unreadable health bar writes hp_frac = 0.0, so a non-zero fraction is
-    # what "the bar was actually read" looks like now that E_HP_KNOWN is gone.
     assert all(h > 0.0 for h in hp), "probe needs readable health bars"
     assert hp == sorted(hp), hp
-    # The head is NOT in distance order -- that is the whole point.
     dists = [_slot_dist(o, s) for s in head]
     assert dists != sorted(dists), "the HP sort did nothing; the probe is vacuous"
-    # And the tail keeps distance order.
-    tail = [s for s in range(lo + C.LAST_HIT_SORT_K, hi) if o.entities[s, C.E_VALID] > 0.5]
-    td = [_slot_dist(o, s) for s in tail]
-    assert _is_sorted(td), td
 
 
-def test_minions_with_unreadable_health_sort_last_in_the_head(quiet_fog):
+def test_minions_with_unreadable_health_sort_last_in_the_head(quiet_fog, monkeypatch):
     """A guess is worse than a defer: off-screen minions must not claim slot 0.
 
     ``E_HP_KNOWN`` no longer exists, so readability is read off the only thing
@@ -417,10 +441,14 @@ def test_minions_with_unreadable_health_sort_last_in_the_head(quiet_fog):
     anything, and with a sentinel value rather than a flag it has to be
     checked.
     """
+    # A property OF THE SORT, so it only means anything with the sort on --
+    # it is off by default now (see
+    # test_enemy_minions_are_in_plain_distance_order_by_default).
+    monkeypatch.setattr(C, "LAST_HIT_SORT_K", 4)
     b = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog, screen_radius=100.0)
     o = b.build(_minion_cluster(hps=(400, 60, 250, 30, 455), spacing=60.0))
     lo, _ = C.SLOT_ENEMY_MINION
-    head = list(range(lo, lo + C.LAST_HIT_SORT_K))
+    head = list(range(lo, lo + 4))
     known = [1.0 if float(o.entities[s, C.E_HP_FRAC]) > 0.0 else 0.0 for s in head]
     assert 1.0 in known and 0.0 in known, f"probe has no mix of readable/unreadable: {known}"
     # Whatever the mix, every readable one comes before every unreadable one.
