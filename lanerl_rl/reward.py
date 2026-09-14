@@ -593,6 +593,27 @@ class _AgentReward:
         )
         self.prev: Optional[AgentRewardState] = None
         self.prev_potential: float = 0.0
+        #: Has ``prev_potential`` been set from a real frame yet?
+        #:
+        #: It must not start at 0.0 and be used. ``_AgentReward.raw`` already
+        #: guards its own first tick (``if self.prev is None: return 0.0``);
+        #: the shaping block had no equivalent, so the first transition of
+        #: every episode was charged ``gamma*Phi(s1) - 0`` instead of
+        #: ``gamma*Phi(s1) - Phi(s0)``.
+        #:
+        #: That was harmless until lane_approach existed, because the only
+        #: potential was last-hit shaping and Phi(fountain) genuinely IS 0
+        #: there -- no minion is within attack range of a fountain. The
+        #: approach potential made Phi(fountain) = -0.478, so the unprimed
+        #: zero started injecting a phantom -0.478 into the first shaped step
+        #: of every episode: measured -0.493506 against a true -0.015072.
+        #:
+        #: Policy-invariant (a per-episode additive constant cannot change the
+        #: argmax) but it is a lie in the reward budget this module accounts
+        #: for term by term, it repeats once per episode, and it lands on the
+        #: value estimate at episode start -- the state exploration depends on
+        #: most.
+        self._potential_primed: bool = False
         self.terms: Dict[str, float] = {}
         #: Gold observed leaving the wallet this episode, UNWEIGHTED and not
         #: part of the reward.  Diagnostic only; see the `spend` weight.
@@ -602,6 +623,7 @@ class _AgentReward:
         self.cs.reset()
         self.prev = None
         self.prev_potential = 0.0
+        self._potential_primed = False
         self.terms = {}
         self.spent_gold_total = 0.0
 
@@ -845,8 +867,16 @@ class ZeroSumLaneReward:
                 ad = float(ch.ad) if (ch is not None and ch.ad is not None) else 0.0
                 agent = self.agents[t]
                 phi_next = agent.potential(frame, ad)
-                shaping[t] = self.cfg.gamma * phi_next - agent.prev_potential
-                agent.prev_potential = phi_next
+                if not agent._potential_primed:
+                    # First frame this episode: there is no previous state, so
+                    # there is no transition to shape. Prime and pay nothing,
+                    # exactly as `raw` does on its own first tick.
+                    agent._potential_primed = True
+                    agent.prev_potential = phi_next
+                    shaping[t] = 0.0
+                else:
+                    shaping[t] = self.cfg.gamma * phi_next - agent.prev_potential
+                    agent.prev_potential = phi_next
                 rewards[t] += shaping[t]
 
         info = {

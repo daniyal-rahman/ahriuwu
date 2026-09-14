@@ -601,6 +601,17 @@ def main(argv=None) -> int:
             f"chunk_starts drops any chunk that overruns the buffer, so this "
             f"would train on NOTHING while logging a normal-looking update."
         )
+    _rows = args.rollout_steps - 1
+    if _rows % ppo_cfg.chunk_len:
+        raise SystemExit(
+            f"--rollout-steps {args.rollout_steps} gives {_rows} buffer rows, "
+            f"which is not a multiple of --chunk-len {ppo_cfg.chunk_len} "
+            f"({_rows % ppo_cfg.chunk_len} left over per env). "
+            f"RecurrentRolloutBuffer.chunk_starts DROPS a tail that does not "
+            f"fill a whole chunk, silently and every epoch, so those rows are "
+            f"collected at full cost and never trained on. Use "
+            f"--rollout-steps {(_rows // ppo_cfg.chunk_len + 1) * ppo_cfg.chunk_len + 1}."
+        )
     log.info("recurrent context: %d burn-in + %d gradient-carrying = %.2f s "
              "at %.0f Hz (%d chunks/minibatch)",
              ppo_cfg.burn_in, ppo_cfg.chunk_len,

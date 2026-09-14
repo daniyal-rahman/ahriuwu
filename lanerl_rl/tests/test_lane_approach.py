@@ -181,3 +181,50 @@ def test_a_missing_champion_is_not_an_error(lane):
 def test_zero_weight_disables_it_completely(lane):
     """The ablation has to actually ablate."""
     assert _phi(lane, _at(lane, -6000.0, 0.0), per_1000=0.0) == 0.0
+
+
+# -- the first transition of an episode ------------------------------------
+
+
+def test_the_first_shaped_step_of_an_episode_pays_nothing(lane):
+    """No previous state means no transition, so no shaping.
+
+    ``prev_potential`` starts at 0.0, and until lane_approach existed that
+    was harmless: the only potential was last-hit shaping, and Phi(fountain)
+    genuinely IS 0 there because no minion is within attack range of a
+    fountain. The approach potential made Phi(fountain) = -0.478, so the
+    unprimed zero began charging a phantom -0.478 to the first shaped step of
+    every episode -- measured -0.493506 where the honest number was -0.015072.
+
+    Policy-invariant, since a constant added once per episode cannot move the
+    argmax. But it is a lie in a reward budget this module accounts for term
+    by term, it recurs every episode, and it lands on the value estimate at
+    episode start, which is the state exploration depends on most.
+    """
+    from lanerl_rl.reward import LaneRewardConfig, ZeroSumLaneReward
+    from lanerl_rl.scenarios import make_frame, unit
+
+    fountain = C.NEXUS_POSITION[TEAM]
+    enemy_fountain = C.NEXUS_POSITION[ENEMY]
+
+    def frame(t_ms, x, y):
+        return make_frame(t_ms, [
+            unit(1, "champion", TEAM, x, y, hp=600.0, mhp=600.0),
+            unit(2, "champion", ENEMY, enemy_fountain[0], enemy_fountain[1],
+                 hp=600.0, mhp=600.0),
+        ])
+
+    r = ZeroSumLaneReward(cfg=LaneRewardConfig())
+    _, info0 = r.step(frame(0, fountain[0], fountain[1]))
+    assert info0["shaping"][TEAM] == 0.0, (
+        "the first frame of an episode has no predecessor, so it cannot have "
+        "a transition to shape; anything else is Phi(s0) charged as if the "
+        "agent had just walked there from nowhere"
+    )
+
+    # ...and the NEXT step is a genuine transition, priced off the real Phi(s0)
+    _, info1 = r.step(frame(1000, fountain[0], fountain[1]))
+    assert abs(info1["shaping"][TEAM]) < 0.05, (
+        f"standing still near the fountain should be worth ~0, got "
+        f"{info1['shaping'][TEAM]:.4f} -- the old bug made this -0.49"
+    )
