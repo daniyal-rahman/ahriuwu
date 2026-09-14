@@ -24,8 +24,13 @@ mkdir -p "$SCRATCH/runs"
 # read back on the network, and a symlink out of scratch would dangle when
 # scratch is cleared.
 mkdir -p "$SCRATCH/demos"
-cp -f "$REPO"/demos/bc_policy.pt "$SCRATCH/demos/" 2>/dev/null || true
-cp -f "$REPO"/demos/bot_demos.npz "$SCRATCH/demos/" 2>/dev/null || true
+# Every checkpoint and dataset, not two hardcoded names. The screen-space
+# action change meant a second BC policy (bc_policy_screen.pt) and a second
+# demo set, and a name-by-name list silently leaves the new one on NFS --
+# where it still works, so nothing complains, and the reason to copy at all
+# is lost without a symptom.
+cp -f "$REPO"/demos/*.pt "$SCRATCH/demos/" 2>/dev/null || true
+cp -f "$REPO"/demos/*.npz "$SCRATCH/demos/" 2>/dev/null || true
 
 sync_back() {
   local dest="$REPO/runs/$RUN"
