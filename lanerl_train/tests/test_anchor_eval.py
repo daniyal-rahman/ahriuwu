@@ -862,13 +862,19 @@ def test_anchor_eval_samples_rather_than_taking_the_mode():
 
 def _champ_frame(t_ms: int, mhp: float = 672.0, ad: float = 78.14, cs: int = 0) -> dict:
     """An observation shaped like ``LanerlControl.BuildObservation``."""
+    # Both champions WALK. A fixture whose champions stand on one spot for a
+    # whole game is indistinguishable from the harness fault that
+    # anchor_eval.UNDRIVEN_MOVE_EPS exists to catch -- an undriven champion --
+    # so a stationary fixture would either defeat that check or be rejected by
+    # it. 5 units/s puts them ~3,000 units along over a ten-minute game.
+    walk = int(t_ms) / 1000.0 * 5.0
     return {
         "t": int(t_ms),
         "u": [
-            {"id": 1, "k": "Champion", "tm": 100, "x": 1000, "y": 12000, "hp": 600,
-             "mhp": mhp, "ad": ad, "lvl": 1, "gold": 500, "cs": int(cs)},
-            {"id": 2, "k": "Champion", "tm": 200, "x": 3000, "y": 13000, "hp": 600,
-             "mhp": mhp, "ad": ad, "lvl": 1, "gold": 500, "cs": int(cs)},
+            {"id": 1, "k": "Champion", "tm": 100, "x": 1000 + walk, "y": 12000,
+             "hp": 600, "mhp": mhp, "ad": ad, "lvl": 1, "gold": 500, "cs": int(cs)},
+            {"id": 2, "k": "Champion", "tm": 200, "x": 3000, "y": 13000 - walk,
+             "hp": 600, "mhp": mhp, "ad": ad, "lvl": 1, "gold": 500, "cs": int(cs)},
         ],
     }
 

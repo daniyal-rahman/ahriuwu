@@ -154,6 +154,11 @@ class EpisodeResult:
     #: 18,000 rows and had to be a side script, which meant the map only
     #: existed for games someone thought to re-run.
     death_positions: Optional[List[List[float]]] = None
+    #: Set when a champion in this game never left the spawn area, i.e. it was
+    #: not being driven. Such a game is NOT A MEASUREMENT: its CS@10 is None
+    #: rather than 0, and this names who was idle so the count cannot be read
+    #: as the policy declining. See anchor_eval.UNDRIVEN_MOVE_EPS.
+    undriven: Optional[str] = None
     #: The agent champion's attack damage and max HP on the FIRST frame of the
     #: episode.
     #:

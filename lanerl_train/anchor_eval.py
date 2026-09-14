@@ -99,6 +99,21 @@ _TEAM_OF_SIDE: Dict[Side, int] = {BLUE: C.TEAM_BLUE, RED: C.TEAM_RED}
 #: ``anchors_for_run``, never the factory that builds the driver.
 _ANCHOR_KEY = "anchor"
 
+#: A champion that never got this far from where it started, over a whole
+#: game, was not being driven. Real play moves thousands of units in the first
+#: thirty seconds -- the walk to lane alone is 6,835 -- so this threshold does
+#: not need to be delicate; it needs to separate "played badly" from "was
+#: never given an order at all".
+UNDRIVEN_MOVE_EPS = 500.0
+
+#: Only judge a champion idle if the game ran long enough for moving to have
+#: been possible. At 30 Hz this is ~33 s, against the ~20 s it takes to walk
+#: the 6,835 units from the fountain to the lane. Without the gate the check
+#: fires on any short game -- one that ended on an early death, or a 7-step
+#: unit-test fixture -- and a false "not a measurement" is just the original
+#: bug wearing the other hat: it would silently DROP real games.
+UNDRIVEN_MIN_DECISIONS = 1000
+
 #: Decision rounds in one full ten-minute game at the current decision rate.
 #:
 #: DERIVED, never a literal.  The bound below it feeds was once 12_000, which
@@ -401,6 +416,19 @@ def play_anchor_episodes(
     #: which is fine for a canary whose whole point is that these values must
     #: not change within an episode.
     page: Dict[int, Tuple[Optional[float], Optional[float]]] = {}
+    #: ``(instance, reason)`` for every game discarded as not-a-measurement.
+    undriven_games: List[Tuple[int, str]] = []
+    #: ``(instance, team) -> first position seen this episode`` and the largest
+    #: displacement from it. This exists because rl-screen-bc-0914c reported a
+    #: clean CS@10 curve (22.6 -> 12.3 -> 11.6 -> 9.0 -> 3.2) that was almost
+    #: entirely instances quietly ceasing to drive a champion: by update 2000
+    #: three of four anchor instances had a side sitting at level 1, full hp,
+    #: zero deaths and 603 gold at ten minutes -- a champion that never left
+    #: the fountain. Nothing errored. The servers were alive at 6.65x, all
+    #: 18,001 decisions were sent, no NetId was ever complained about, and the
+    #: zeros went into the mean as though they were play.
+    first_pos: Dict[Tuple[int, int], Tuple[float, float]] = {}
+    moved: Dict[Tuple[int, int], float] = {}
     while len(out) < n_episodes and steps < budget:
         result, dones = driver.step(deterministic=cfg.deterministic)
         steps += 1
@@ -419,6 +447,17 @@ def play_anchor_episodes(
                 if u.get("k") != "Champion":
                     continue
                 team = int(u.get("tm", -1))
+                key = (i, team)
+                try:
+                    ux, uy = float(u.get("x", 0.0)), float(u.get("y", 0.0))
+                except (TypeError, ValueError):
+                    ux = uy = 0.0
+                if key not in first_pos:
+                    first_pos[key] = (ux, uy)
+                fx, fy = first_pos[key]
+                d = math.hypot(ux - fx, uy - fy)
+                if d > moved.get(key, 0.0):
+                    moved[key] = d
                 standing = int(u.get("hp", 1)) > 0
                 if alive.get((i, team), True) and not standing:
                     per_team = deaths.setdefault(i, {})
@@ -455,6 +494,35 @@ def play_anchor_episodes(
             )
             length = since_reset.pop(i, 0)
             ad, mhp = page.pop(i, (None, None))
+
+            # -- was anybody actually playing? --------------------------------
+            agent_moved = moved.get((i, agent_team), 0.0)
+            opp_moved = max(
+                [v for (inst, t), v in moved.items() if inst == i and t != agent_team]
+                or [0.0]
+            )
+            for k in [k for k in list(moved) if k[0] == i]:
+                moved.pop(k, None)
+                first_pos.pop(k, None)
+            undriven = []
+            if length < UNDRIVEN_MIN_DECISIONS:
+                agent_moved = opp_moved = float("inf")   # too short to judge
+            if agent_moved < UNDRIVEN_MOVE_EPS:
+                undriven.append(f"AGENT (moved {agent_moved:.0f}u)")
+            if opp_moved < UNDRIVEN_MOVE_EPS:
+                undriven.append(f"opponent (moved {opp_moved:.0f}u)")
+            if undriven:
+                undriven_games.append((i, ", ".join(undriven)))
+                log.error(
+                    "anchor %s instance %d: NOT A MEASUREMENT -- %s never left "
+                    "the spawn area over a whole game. CS@10 for this game is "
+                    "DISCARDED rather than counted as 0; counting it is how a "
+                    "harness fault gets read as the policy getting worse.",
+                    anchor_id, i, " and ".join(undriven),
+                )
+                cs10 = None
+                opp_cs10 = None
+            undriven_note = ", ".join(undriven) if undriven else None
             out.append(
                 EpisodeResult(
                     agent=agent_id,
@@ -466,6 +534,7 @@ def play_anchor_episodes(
                     reason=reason,
                     instance=i,
                     opponent_cs_at_10=opp_cs10,
+                    undriven=undriven_note,
                     # Same convention as lane_wiring._accumulate_episode: a
                     # champion death on the other team is a kill for this one.
                     # In a 1v1 lane the wave can also do it, so treat kills as
@@ -569,6 +638,17 @@ class AnchorEvaluator:
                 # that no longer exists
                 [e.opponent_cs_at_10 for e in episodes],
             )
+            bad = [e for e in episodes if getattr(e, "undriven", None)]
+            if bad:
+                log.error(
+                    "ANCHOR EVAL update=%d %s vs %s: %d of %d games DISCARDED -- "
+                    "a champion was never driven (%s). The CS@10 above is the mean "
+                    "of the %d games that were actually played; treat the headline "
+                    "as measured on that many games, not %d.",
+                    update, agent_id, anchor.id, len(bad), len(episodes),
+                    "; ".join(sorted({str(e.undriven) for e in bad})),
+                    len(episodes) - len(bad), len(episodes),
+                )
         return results
 
     # -- internals ---------------------------------------------------------
