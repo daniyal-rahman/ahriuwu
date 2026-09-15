@@ -31,6 +31,25 @@ LOGS="$REPO_NODE/lanerl/logs"
 CPUS="${LANERL_CPUS:-14}"
 TIME="${LANERL_TIME:-48:00:00}"
 
+# 4. WAIT FOR THE PREVIOUS RUN'S PORTS TO ACTUALLY GO AWAY.
+#
+# A server whose process is still exiting keeps its control port bound, and
+# SO_REUSEADDR does not help against a LIVE listener -- it only covers
+# TIME_WAIT. Job 787 died two minutes in because it was launched seconds
+# after 786's servers began shutting down: instance 2 got
+# "SocketException: Address already in use" on 38388, exited 97, and the run
+# failed with "produced no first observation". The port was free by the time
+# anyone looked, which is what made it confusing twice.
+#
+# Bounded, and it says what it is waiting for rather than sleeping blindly.
+"$(dirname "$0")/kill_orphan_servers.sh" || true
+for _ in $(seq 1 60); do
+  busy=$(ss -tan 2>/dev/null     | awk '$4 ~ /^127\.0\.0\.1:(3[89][0-9][0-9][0-9]|40[0-4][0-9][0-9]|62[0-9][0-9][0-9])$/'     | wc -l)
+  [ "$busy" -eq 0 ] && break
+  echo "[ports] $busy socket(s) still held in the lanerl range; waiting"
+  sleep 2
+done
+
 script=$(mktemp /tmp/launch_rl.XXXXXX.sbatch)
 cat > "$script" <<EOF
 #!/usr/bin/env bash
