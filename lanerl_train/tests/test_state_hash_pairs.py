@@ -134,33 +134,21 @@ def _first_divergence(a: List[str], b: List[str]) -> str:
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason=(
-        "KNOWN OPEN BUG, diagnosed and not yet fixed: champion script "
-        "initialisation races the game loop, so two servers given the same "
-        "seed and the same actions diverge on the FIRST simulated tick.\n"
-        "\n"
-        "Measured at t=17 with LANERL_STATE_DUMP_FULL=1, everything else "
-        "identical -- same position, hp, stats, move order:\n"
-        "  instance000 buffs: GarenE+GarenPassive+GarenPassiveHeal (+2 Particle)\n"
-        "  instance001 buffs: GarenE\n"
-        "\n"
-        "Garen's passive has attached on one server and not the other. The "
-        "Content scripts are Roslyn-compiled at boot, so whether the passive "
-        "is live on the first tick depends on how fast compilation finished "
-        "-- i.e. on machine load. The game clock is NOT the problem: t "
-        "matches exactly, so the fixed timestep is sound.\n"
-        "\n"
-        "Consequence while this stands: no A/B in this project is exact, and "
-        "every episode starts in one of at least two slightly different "
-        "states. The likely fix is to refuse to advance the simulation until "
-        "script initialisation has completed, rather than letting the loop "
-        "start underneath it."
-    ),
-    strict=False,
-)
 def test_two_identical_instances_produce_identical_state_hashes(tmp_path):
-    """Nondeterminism. Same seed, same actions, two servers, one machine."""
+    """Nondeterminism. Same seed, same actions, two servers, one machine.
+
+    This FAILED when written, and the cause is worth keeping: Garen's
+    passive was applied from the only ``Task.Run`` in the entire Content
+    script tree -- a background thread polling ``Thread.Sleep(1000)`` until
+    the game clock started, then calling AddBuff. Two servers diverged on
+    the FIRST simulated tick, one holding GarenPassive+GarenPassiveHeal at
+    t=17 and the other neither.
+
+    It is now applied from ``ICharScript.OnUpdate``, which the game loop
+    calls (``ObjAIBase.cs:1070``), so the buff lands on the first tick past
+    the threshold every time. Deterministic by construction, not by luck --
+    which is the point: there is no longer a race to lose.
+    """
     env = _boot(tmp_path, 2, base_port=47300, tag="determinism")
     try:
         assert all(env.alive), f"an instance failed to boot: {env.alive}"
