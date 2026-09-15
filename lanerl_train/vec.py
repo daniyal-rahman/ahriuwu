@@ -995,6 +995,8 @@ class VecDriver:
         #: full hp, which is exactly what three of four anchor instances did
         #: in rl-screen-bc-0914c while nothing logged a thing.
         self.skipped_no_obs: List[int] = [0] * env.n
+        #: Frames where the champion for a driven side did not exist yet.
+        self.frames_without_champion: List[int] = [0] * env.n
         self.skipped_not_alive: List[int] = [0] * env.n
         #: Orders actually written, per instance. The denominator: "0 sent"
         #: and "sent but ignored" are different bugs and used to look alike.
@@ -1103,11 +1105,32 @@ class VecDriver:
             result.restarted.extend(reset.restarted)
         return result, dones
 
+    @staticmethod
+    def _has_champion(raw: Mapping[str, Any], side: Side) -> bool:
+        """Is there a champion for ``side`` to act as, on this frame?
+
+        A frame from the first few milliseconds of a game can arrive before
+        the champions are spawned. ObservationBuilder.build raises on it --
+        "no champion for team 100 in frame t=66" -- and that killed a
+        13-hour run at update 16,400 when one instance restarted mid-run.
+        There is nothing to decide on such a frame, so the right answer is
+        to let it pass, not to invent an observation for it.
+        """
+        # Defined here rather than imported: lane_wiring.TEAM_OF_SIDE is the
+        # canonical mapping but lane_wiring imports FROM this module, so
+        # taking it would be circular.
+        team = _C.TEAM_BLUE if side == BLUE else _C.TEAM_RED
+        for u in raw.get("u", ()):
+            if u.get("k") == "Champion" and int(u.get("tm", -1)) == int(team):
+                return True
+        return False
+
     def _forward(self, deterministic: bool) -> Dict[Tuple[int, Side], Any]:
         out: Dict[Tuple[int, Side], Any] = {}
         for key, slot_list in self.slots.items():
             batch = []
             resets = []
+            ready: List[Tuple[int, Side]] = []
             for i, side in slot_list:
                 raw = self.env.last_obs[i]
                 if raw is None:
@@ -1115,6 +1138,21 @@ class VecDriver:
                         f"instance {i} has no observation to act on; start() must have "
                         f"produced one for every live instance"
                     )
+                if not self._has_champion(raw, side):
+                    # Pre-spawn frame: no decision exists. Counted, because a
+                    # champion that is missing for more than the first tick or
+                    # two is a real fault and must not hide behind this.
+                    self.frames_without_champion[i] += 1
+                    if self.frames_without_champion[i] in (1, 10, 100, 1000):
+                        self.log.warning(
+                            "instance %d side %s: frame t=%s has no champion "
+                            "(%d so far this run). Skipping the decision. A "
+                            "handful at episode start is spawn latency; a "
+                            "growing count is a fault.",
+                            i, side, raw.get("t"), self.frames_without_champion[i],
+                        )
+                    continue
+                ready.append((i, side))
                 _b0 = time.perf_counter()
                 if _OBS_PROF is not None:
                     _OBS_PROF.enable()
@@ -1124,18 +1162,20 @@ class VecDriver:
                 if _PhaseTimer.ENABLED:
                     _ENV_TIMER.add("obs_build", time.perf_counter() - _b0)
                 resets.append(self._pending_resets[i])
+            if not ready:
+                continue      # nothing on this policy is actionable this step
             _f0 = time.perf_counter()
             actions, self.states[key] = self.policies[key].act_batch(
                 batch, self.states[key], resets=resets, deterministic=deterministic
             )
             if _PhaseTimer.ENABLED:
                 _ENV_TIMER.add("policy_forward", time.perf_counter() - _f0)
-            if len(actions) != len(slot_list):
+            if len(actions) != len(ready):
                 raise VecEnvFailure(
-                    f"policy {key!r} returned {len(actions)} actions for {len(slot_list)} "
+                    f"policy {key!r} returned {len(actions)} actions for {len(ready)} "
                     f"slots; the scatter would silently misroute"
                 )
-            for (i, side), action in zip(slot_list, actions):
+            for (i, side), action in zip(ready, actions):
                 out[(i, side)] = action
         self._pending_resets = [False] * self.env.n
         return out
