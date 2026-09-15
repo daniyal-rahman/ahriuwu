@@ -78,3 +78,32 @@ def test_the_server_agrees():
         f"The server wins at runtime, so the observation's spell ranks -- and the "
         f"action mask built from them -- are wrong until these agree."
     )
+
+
+def test_the_server_agrees_on_the_build_path():
+    """The same parity check, for the item build -- the untested sibling.
+
+    ``GAREN_SKILL_ORDER`` got this test because it had drifted across four
+    places. ``GAREN_BUILD_PATH`` is duplicated exactly the same way --
+    ``lanerl_bot/build.py`` in Python and ``LanerlConfig.BuildPath`` in C# --
+    and nothing checked it. The values happen to agree today; nothing was
+    keeping them that way.
+
+    It matters for the same reason the skill order does: the C# copy is the
+    one that runs, so a Python-side change to the build would silently
+    describe a champion the server never builds, and every gold/stat number
+    derived from it would be wrong in a way no test would catch.
+    """
+    cs = _config_cs()
+    if cs is None:
+        pytest.skip(f"vendored server not present (set {VENDOR_ENV} to check)")
+    from lanerl_bot.build import GAREN_BUILD_PATH
+
+    m = re.search(r"BuildPath\s*=\s*\{([^}]*)\}", cs.read_text())
+    assert m, "could not find BuildPath in LanerlConfig.cs -- the parser needs updating"
+    server = [int(x) for x in re.findall(r"\d+", m.group(1))]
+    assert server == list(GAREN_BUILD_PATH), (
+        f"the server builds {server} and Python believes {list(GAREN_BUILD_PATH)}. "
+        f"The server wins at runtime, so every gold and stat figure derived "
+        f"from the Python copy is describing a champion that does not exist."
+    )
