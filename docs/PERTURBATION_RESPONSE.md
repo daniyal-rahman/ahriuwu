@@ -296,3 +296,52 @@ JAX_PLATFORMS=cpu PYTHONPATH=/srv/nfs/projects/ahriuwu-lanerl-jax \
   --engine server --perturbation stand_in_wave --perturbed \
   --seed 0 --minutes 10 --sample-every-s 2 --out out.json
 ```
+
+---
+
+# Isolation run: fog of war is what improved the response
+
+Same harness (the corrected variant axis), same server baseline, only the sim
+code differing — pre-fog `c60275a` against post-fog `42f3066`. Error against
+the server's response, RMS, averaged over five perturbation variants:
+
+```
+metric            pre-fog   post-fog    server    |err| pre  |err| post
+lane_frac_all       0.144      0.041     0.021        0.123      0.020
+lane_frac_blue      0.208      0.066     0.041        0.167      0.025
+lane_frac_red       0.203      0.070     0.042        0.161      0.028
+n_minions_blue     11.982      5.152     1.906       10.076      3.246
+n_minions_red       8.438      3.945     2.023        6.415      1.922
+turret_hp_blue    761.715    163.532   332.096      429.619    168.564
+turret_hp_red     709.908    288.174   231.487      478.421     56.687
+```
+
+Better on **all seven**, by 3x to 8x. Fog is the cause, not the sweep-axis fix
+— which is exactly what the isolation run existed to separate, and what was
+predicted before the result came back.
+
+The mechanism is unsurprising in hindsight: without vision gating every minion
+and turret in the lane could react to the champion's presence, so a positioning
+perturbation propagated far more widely than the server permits.
+
+**One wrinkle worth watching.** `turret_hp_blue` went from over-responding
+(762 against 332) to **under**-responding (164). The error halved, but it
+crossed the target rather than converging on it, which is not the same thing.
+
+## Why this matters beyond fog
+
+Fog made the idle-lane aggregate slightly *worse* — one turret lost where none
+was before, mean |blue − red| 3.3 → 3.6 — and it was kept anyway because both
+underlying fixes were verified against source. This is the evidence that the
+judgement was right.
+
+It is also the mirror of the call-for-help decision, where the aggregate said no
+and the response test said yes, and the change was declined. The distinction
+that reconciles the two:
+
+* **fog** is correct **and** reduces response error 3–8x on every metric;
+* **call-for-help** is correct **and** breaks the idle baseline outright —
+  three turrets destroyed, imbalance 3.3 → 9.3.
+
+Magnitude and direction both matter, and the aggregate alone cannot tell them
+apart: it nearly passed a regression at 26 against a 26.25 bound.
