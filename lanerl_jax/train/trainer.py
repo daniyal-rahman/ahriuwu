@@ -130,6 +130,10 @@ class Transition(NamedTuple):
     value: jax.Array
     reward: jax.Array
     done: jax.Array
+    #: Diagnostics. Not consumed by the loss -- see `_update`'s metrics block
+    #: for why CS alone is not a readable training signal.
+    cs: jax.Array
+    lane_dist: jax.Array
 
 
 def _sample(logits, key):
@@ -195,15 +199,28 @@ def make_train(cfg: TrainConfig = TrainConfig()):
             # discount the advantage estimator uses.
             reward, rstate = lane_reward(nxt, rstate, dt_s, cfg.reward,
                                          runner.step, gamma=cfg.ppo.gamma)
+            # Phi is read BEFORE the reset masks it back to the fountain value.
+            phi = rstate.phi
             done = nxt.t_ms >= cfg.episode_s * 1000.0
+            # CS is read BEFORE the reset zeroes it. episode_s is 600 s, so
+            # this is literally cs@10min -- the headline absolute metric.
+            cs_at_done = jnp.where(done, nxt.cs[:2].astype(jnp.float32), 0.0)
             # reset is a WHERE against a constant pytree -- see the module docstring
             nxt = jax.tree.map(lambda a, b: jnp.where(done, b, a), nxt, fresh)
             rstate = jax.tree.map(lambda a, b: jnp.where(done, b, a),
                                   rstate, fresh_reward)
+            # Distance from the lane corridor, in game units, recovered from
+            # the potential. This is the diagnostic that actually moves: CS
+            # cannot change until a champion has walked 13,532 units AND the
+            # first wave has spawned at 90 s, so it says nothing for the first
+            # ~140 updates. Lane distance responds inside a single update.
+            per_1000 = cfg.reward.weights.lane_approach
+            lane_dist = -phi * (1000.0 / per_1000)
             t = Transition(
                 obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
                 action, log_prob, logits.value, reward,
-                jnp.broadcast_to(done, reward.shape))
+                jnp.broadcast_to(done, reward.shape),
+                cs=cs_at_done, lane_dist=lane_dist)
             return nxt, rstate, t
 
         keys = jax.random.split(sk, cfg.n_envs)
@@ -275,7 +292,17 @@ def make_train(cfg: TrainConfig = TrainConfig()):
 
         metrics = jax.tree.map(lambda x: x.mean(), info)
         metrics["reward"] = tr.reward.mean()
-        metrics["cs"] = runner.env_state.cs[:, :2].mean()
+        # cs@10min, averaged over the episodes that actually ENDED in this
+        # rollout. Sampling `env_state.cs` at the end of the rollout instead
+        # gives a sawtooth: every env resets on the same step (done is a pure
+        # function of t_ms), so that number climbs through an episode and
+        # drops to zero together, and its value depends on where the rollout
+        # boundary happens to fall rather than on how well the agent plays.
+        n_done = tr.done.sum()
+        metrics["cs_at_10min"] = jnp.where(n_done > 0, tr.cs.sum() / jnp.maximum(n_done, 1), jnp.nan)
+        # How far from the lane corridor the champions sat, in game units.
+        # ~7,981 at spawn, 0 anywhere in lane. This is the leading indicator.
+        metrics["lane_dist"] = tr.lane_dist.mean()
         runner = runner._replace(params=params, opt_state=opt_state, rng=rng,
                                  step=runner.step + n_batch)
         return runner, metrics

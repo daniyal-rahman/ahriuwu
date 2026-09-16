@@ -63,10 +63,11 @@ def main() -> None:
 
     _, m = out
     print()
-    cols = ("reward", "entropy", "approx_kl", "clip_frac", "value_loss", "cs")
-    print(f"{'upd':>5}" + "".join(f"{c:>11}" for c in cols))
+    cols = ("reward", "entropy", "approx_kl", "clip_frac", "value_loss",
+            "lane_dist", "cs_at_10min")
+    print(f"{'upd':>5}" + "".join(f"{c:>12}" for c in cols))
     for i in range(0, cfg.n_updates, a.every):
-        row = "".join(f"{float(np.asarray(m[c])[i]):>11.5f}" for c in cols)
+        row = "".join(f"{float(np.asarray(m[c])[i]):>12.4f}" for c in cols)
         print(f"{i:>5}{row}")
     print()
     e0 = float(np.asarray(m["entropy"])[0])

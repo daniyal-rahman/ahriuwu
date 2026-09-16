@@ -40,10 +40,42 @@ def trained():
 def test_the_loop_runs_and_produces_the_expected_metrics(trained):
     _, m = trained
     for k in ("policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac",
-              "dual_clip_frac", "reward", "cs"):
+              "dual_clip_frac", "reward", "lane_dist"):
         assert k in m, k
         assert np.isfinite(np.asarray(m[k])).all(), f"{k} went non-finite"
     assert np.asarray(m["policy_loss"]).shape[0] == SMALL.n_updates
+
+
+def test_cs_at_10min_is_nan_until_an_episode_actually_ends(trained):
+    """An unfinished episode must report NOTHING, not zero.
+
+    This is the metric that cost a 400-update run. The old `cs` metric sampled
+    `env_state.cs` at the rollout boundary, which reports 0.0 both when the
+    agent has farmed nothing and when no episode has finished yet -- and those
+    demand opposite responses. NaN is unmistakable; 0.0 is a lie that looks
+    like data.
+
+    Every env resets on the same step (`done` is a pure function of `t_ms`),
+    so the old metric was also a sawtooth whose value depended on where the
+    rollout boundary fell rather than on how well the agent played.
+    """
+    _, m = trained
+    assert "cs_at_10min" in m
+    # 4 envs x 8 steps is 32 decisions against an 18,000-decision episode
+    assert np.isnan(np.asarray(m["cs_at_10min"])).all(), (
+        "cs_at_10min reported a number when no episode had ended")
+
+
+def test_lane_distance_starts_at_the_fountain(trained):
+    """The leading indicator, and a check that the potential is wired live.
+
+    ~8,000 units is where both champions spawn relative to the lane corridor.
+    If this read 0 the potential would be silently inactive and the walk would
+    again pay nothing.
+    """
+    _, m = trained
+    d = float(np.asarray(m["lane_dist"])[0])
+    assert 7_000 < d < 9_000, f"lane_dist started at {d:.0f}, expected ~8,000"
 
 
 def test_the_actor_and_the_learner_agree_on_log_probs():
