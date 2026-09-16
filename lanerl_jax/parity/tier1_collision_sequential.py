@@ -330,10 +330,30 @@ def main() -> None:
         # ghosted mask as (b)/(c) above, but with its own two-radius split
         # (CollisionRadius trigger, now the server's real 40/30 hard-code;
         # PathfindingRadius resolution) and turret obstacle/affected split.
+        #
+        # `spawn_seq` must be an INTEGER rank, but `creation_rank` is float
+        # and `estimate_creation_order` deliberately encodes the blue/red
+        # same-wave tie-break as a FRACTIONAL +0.0/+0.5 (module docstring:
+        # `team_bit`) on top of an integer-valued per-team ordinal. A naive
+        # `.astype(np.int32)` TRUNCATES that 0.5 away, so a blue and a red
+        # minion sharing a per-team ordinal (extremely common -- both
+        # barracks spawn in lockstep, so this happens on nearly every tick
+        # this corpus was sampled against) collide onto the SAME integer and
+        # lose their intended relative order entirely -- confirmed directly:
+        # of 1,320 sampled ticks, 1,320 had at least one such collision among
+        # currently-alive minions (e.g. ranks 2.0 and 2.5 both -> 2). This is
+        # a bug in how THIS SCRIPT feeds the reconstruction into the real
+        # API, not in `resolve_collisions` -- the live sim's own `spawn_seq`
+        # is always already a unique integer (see `sim/init.py`), so this
+        # loss cannot occur outside this specific offline measurement.
+        # `argsort(argsort(...))` gives each element its RANK -- a lossless
+        # integer encoding of the exact same order `order_creation` above
+        # was built from, with no truncation anywhere in the pipeline.
+        creation_rank_int = np.argsort(np.argsort(creation_rank)).astype(np.int32)
         cr_radius = np.asarray(params["collision_radius"])[model0]
         cx_d, cy_d = resolve_collisions(
             jnp.asarray(x0), jnp.asarray(y0), jnp.asarray(kind0),
-            jnp.asarray(alive0), jnp.asarray(creation_rank.astype(np.int32)),
+            jnp.asarray(alive0), jnp.asarray(creation_rank_int),
             jnp.asarray(cr_radius), jnp.asarray(pf_radius[model0]),
             ghosted=jnp.asarray(ghosted0))
         cx_d, cy_d = np.asarray(cx_d), np.asarray(cy_d)
