@@ -94,10 +94,10 @@ __all__ = [
     "GAREN_PATHFINDING_RADIUS",
 ]
 
-DEFAULT_NGRID = Path(
-    "/srv/nfs/projects/lanerl-vendor/LoLServer/Content/"
-    "LeagueSandbox-Default/AIMesh/Map1/AIPath.aimesh_ngrid"
-)
+from .paths import ngrid_path
+
+#: Resolved from this file, not typed -- see ``paths.py``.
+DEFAULT_NGRID = ngrid_path(1)
 
 #: ``Garen.json`` -> ``PathfindingCollisionRadius``.
 GAREN_PATHFINDING_RADIUS = 35.0

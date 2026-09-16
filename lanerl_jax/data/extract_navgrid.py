@@ -86,14 +86,15 @@ def main() -> None:
     ap.add_argument(
         "--ngrid",
         type=Path,
-        default=Path(
-            "/srv/nfs/projects/lanerl-vendor/LoLServer/Content/"
-            "LeagueSandbox-Default/AIMesh/Map1/AIPath.aimesh_ngrid"
-        ),
+        default=None,
     )
     ap.add_argument("--out", type=Path, default=Path("sr_walk.npy"))
     ap.add_argument("--show", action="store_true", help="print an ASCII map to eyeball it")
     args = ap.parse_args()
+    if args.ngrid is None:
+        from .paths import ngrid_path
+
+        args.ngrid = ngrid_path(1)
 
     flags, cell_size, mn, mx = load(args.ngrid)
     cy, cx = flags.shape

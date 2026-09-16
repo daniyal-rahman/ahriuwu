@@ -96,6 +96,14 @@ lanerl_bot/bench/out/*.log
 lanerl_rl/artifacts/
 lanerl_bot/tests/artifacts/
 
-# JAX work: a venv layered over the shared `ml` conda env (see
-# lanerl_jax/sim/tests/conftest.py). Local tooling, never committed.
+# JAX work. Local tooling, never committed.
+#
+# .venv-jax  layered over the shared `ml` conda env (--system-site-packages),
+#            so it sees torch and the server-side packages. CPU-only in
+#            practice: the ml env carries torch's CUDA 12.1 libraries, which
+#            shadow the CUDA 12.8+ that jax 0.10.2's plugin needs.
+# .venv-gpu  clean, no system site-packages, for the GPU. Cannot import
+#            lanerl_train/lanerl_rl, which is fine -- the sim, the observation
+#            and the policy are pure jax/numpy.
 .venv-jax/
+.venv-gpu/

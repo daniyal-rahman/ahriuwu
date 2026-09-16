@@ -9,6 +9,8 @@ sees torch and the server-side packages without duplicating them).
 Consequence: ``pytest`` under ``ml`` collects this directory and must skip it
 rather than error. Run the sim suite with ``.venv-jax/bin/python -m pytest``.
 """
+import os
+
 import pytest
 
 _jax = pytest.importorskip(
@@ -31,3 +33,9 @@ _jax = pytest.importorskip(
 # (`empty_state(dtype=jnp.float32)`). It only lets the movement reference
 # compare in double precision, which is the one place that needs it.
 _jax.config.update("jax_enable_x64", True)
+
+# Never preallocate the GPU. `.venv-jax` is CUDA-enabled, and on the dev box the
+# only card has ~1.6 GB free (another python and a llama-server hold the rest),
+# so the default 75% preallocation fails outright. This makes the suite run
+# wherever it lands instead of depending on which machine picked it up.
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")

@@ -57,9 +57,11 @@ __all__ = [
     "load_patch",
 ]
 
-CONTENT_ROOT = Path(
-    "/srv/nfs/projects/lanerl-vendor/LoLServer/Content/LeagueSandbox-Default"
-)
+from .paths import content_root
+
+#: Resolved from this file, not typed: the two cluster nodes disagree about
+#: whether the share is ``/srv/nfs`` or ``/mnt/nfs``. See ``paths.py``.
+CONTENT_ROOT = content_root()
 
 
 def num(values: Mapping[str, Any], key: str, default: Optional[float] = None) -> float:
