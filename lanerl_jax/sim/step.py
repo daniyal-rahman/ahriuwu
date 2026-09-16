@@ -46,6 +46,7 @@ from .combat import (
     TURRET_AD_PER_RAMP,
     TURRET_ARMOR_PER_RAMP,
     TURRET_DAMAGE_VS_MINION,
+    growth_sum,
     other_turret_ramps,
     outer_turret_ramps,
 )
@@ -434,8 +435,27 @@ def tick(state: LaneState, params: UnitParams,
                    wp.at[:, :2].set(two)[:, :, :], wp)
     wp_key = jnp.where(chase, jnp.int8(1), wp_key)
     n_wp = jnp.where(chase, jnp.int8(2), state.n_waypoints)
+    # Champion attack damage is NOT static. `Stats.LevelUp`
+    # (`GameServerLib/GameObjects/Stats/Stats.cs:270-271`) grows
+    # `AttackDamage` every level-up through the same non-linear curve as
+    # every other per-level stat (`profiles.py`'s `ad_per_level` column,
+    # `combat.growth_sum`). `P("attack_damage")` alone is the level-1(+rune)
+    # baseline that was the WHOLE of a champion's attack damage for the
+    # entire episode before this -- confirmed against the wire's own
+    # ``ad`` field (`LanerlControl.cs`'s ``BuildObservation``, whose own
+    # comment records the old Python stack making exactly this mistake:
+    # "read 57.88 against a real 73.14, a 21% under-report"). `state.level`
+    # here is the level as of the START of this tick, matching the server:
+    # a level gained mid-tick updates `Stats.AttackDamage.Total` synchronously
+    # at the XP-crossing event (`Champion.AddExperience` -> `Stats.LevelUp`),
+    # so by the NEXT tick's `Update` the new value is already live -- exactly
+    # what reading the incoming `state.level` (not the value recomputed later
+    # in this same tick) reproduces. `ad_per_level` is 0 for every non-champion
+    # row, so this is a no-op for minions and turrets regardless of their
+    # (always 1, see `state.py`) `level` field.
+    ad_now = P("attack_damage") + P("ad_per_level") * growth_sum(state.level, jnp)
     raw_ad = _attack_damage_against(
-        P("attack_damage"), state.kind, state.kind[tgt], state.model, state.t_ms)
+        ad_now, state.kind, state.kind[tgt], state.model, state.t_ms)
     aa = step_autoattack(
         state.aa_cooldown, state.aa_windup, state.is_attacking,
         state.has_auto_attacked,
