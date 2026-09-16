@@ -23,12 +23,17 @@ import numpy as np
 from ..data.patch import PatchTable, UnitStats, load_patch
 from .combat import (attack_period, attack_speed_flat,
                       attack_windup, stat_at_level)
-from .state import Kind, Team
+from .state import Kind, Team, TurretTier
 from .targeting import MinionType
 
-__all__ = ["PROFILES", "N_PROFILES", "profile_id", "build_profile_tables"]
+__all__ = ["PROFILES", "N_PROFILES", "TURRET_MODEL_NAME", "profile_id",
+          "build_profile_tables"]
 
-#: ``(kind, minion_type, team)`` -> row. ``minion_type`` is -1 for non-minions.
+#: ``(kind, subtype, team)`` -> row. ``subtype`` is `MinionType` for a lane
+#: minion, `TurretTier` for a turret, and -1 for a champion (there is only one
+#: model). A turret's subtype used to be forced to -1 too -- one row per team,
+#: shared by outer/inner/inhibitor/nexus/fountain alike -- which is the bug
+#: `TurretTier` exists to fix; see its docstring in `sim.state`.
 PROFILES: Tuple[Tuple[int, int, int], ...] = (
     (Kind.CHAMPION, -1, Team.BLUE),
     (Kind.CHAMPION, -1, Team.RED),
@@ -40,8 +45,16 @@ PROFILES: Tuple[Tuple[int, int, int], ...] = (
     (Kind.LANE_MINION, MinionType.CANNON, Team.RED),
     (Kind.LANE_MINION, MinionType.SUPER, Team.BLUE),
     (Kind.LANE_MINION, MinionType.SUPER, Team.RED),
-    (Kind.TURRET, -1, Team.BLUE),
-    (Kind.TURRET, -1, Team.RED),
+    (Kind.TURRET, TurretTier.OUTER, Team.BLUE),
+    (Kind.TURRET, TurretTier.OUTER, Team.RED),
+    (Kind.TURRET, TurretTier.INNER, Team.BLUE),
+    (Kind.TURRET, TurretTier.INNER, Team.RED),
+    (Kind.TURRET, TurretTier.INHIBITOR, Team.BLUE),
+    (Kind.TURRET, TurretTier.INHIBITOR, Team.RED),
+    (Kind.TURRET, TurretTier.NEXUS, Team.BLUE),
+    (Kind.TURRET, TurretTier.NEXUS, Team.RED),
+    (Kind.TURRET, TurretTier.FOUNTAIN, Team.BLUE),
+    (Kind.TURRET, TurretTier.FOUNTAIN, Team.RED),
 )
 N_PROFILES = len(PROFILES)
 
@@ -50,14 +63,35 @@ _MINION_KEY = {
     MinionType.MELEE: "melee", MinionType.CASTER: "caster",
     MinionType.CANNON: "cannon", MinionType.SUPER: "super",
 }
+#: ``(team, tier)`` -> the Content model name that tier actually spawns on
+#: Map1, per `TowerModels` (`Maps/Map1/LevelScriptObjects.cs:77-89`). Blue is
+#: "Order", red is "Chaos", and red's names do NOT mirror blue's tier-for-tier
+#: -- `ChaosTurretNormal` is red's NEXUS, not its outer, see
+#: `data.patch.TURRET_MODELS`.
+TURRET_MODEL_NAME: Dict[Tuple[int, int], str] = {
+    (Team.BLUE, TurretTier.OUTER): "OrderTurretNormal",
+    (Team.RED, TurretTier.OUTER): "ChaosTurretWorm",
+    (Team.BLUE, TurretTier.INNER): "OrderTurretNormal2",
+    (Team.RED, TurretTier.INNER): "ChaosTurretWorm2",
+    (Team.BLUE, TurretTier.INHIBITOR): "OrderTurretDragon",
+    (Team.RED, TurretTier.INHIBITOR): "ChaosTurretGiant",
+    (Team.BLUE, TurretTier.NEXUS): "OrderTurretAngel",
+    (Team.RED, TurretTier.NEXUS): "ChaosTurretNormal",
+    (Team.BLUE, TurretTier.FOUNTAIN): "OrderTurretShrine",
+    (Team.RED, TurretTier.FOUNTAIN): "ChaosTurretShrine",
+}
 
 
-def profile_id(kind: int, minion_type: int, team: int) -> int:
+def profile_id(kind: int, subtype: int, team: int) -> int:
     """Host-side lookup, for spawning. Raises on an unknown combination rather
-    than defaulting -- a unit with the wrong stat row is a silent mechanic bug."""
-    key = (kind, minion_type if kind == Kind.LANE_MINION else -1, team)
+    than defaulting -- a unit with the wrong stat row is a silent mechanic bug.
+
+    ``subtype`` is a `MinionType` for a lane minion, a `TurretTier` for a
+    turret, and ignored (forced to -1) for anything else.
+    """
+    key = (kind, subtype if kind in (Kind.LANE_MINION, Kind.TURRET) else -1, team)
     if key not in _KEY_TO_ROW:
-        raise KeyError(f"no stat profile for kind={kind} type={minion_type} team={team}")
+        raise KeyError(f"no stat profile for kind={kind} type={subtype} team={team}")
     return _KEY_TO_ROW[key]
 
 
@@ -65,7 +99,7 @@ def _stats_for(patch: PatchTable, kind: int, mtype: int, team: int) -> UnitStats
     if kind == Kind.CHAMPION:
         return patch.champion
     if kind == Kind.TURRET:
-        return next(iter(patch.turrets.values()))
+        return patch.turrets[TURRET_MODEL_NAME[(team, mtype)]]
     side = "blue" if team == Team.BLUE else "red"
     return patch.minions[f"{_MINION_KEY[mtype]}_{side}"]
 
@@ -116,23 +150,37 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         # 500 ms accumulator, so this is HP per SECOND -- not per five seconds,
         # whatever League's display convention says. Champions scale it per
         # level through the same growth curve as every other per-level stat.
-        # On this map minions and turrets are both 0.0; Garen is 1.568 + 0.1
-        # per level. Omitting it entirely is why our champion died 7 times in
-        # an oracle-driven 600 s episode where the server's died 0 times.
+        # Minions are 0.0 on this map; Garen is 1.568 + 0.1 per level.
+        # Turrets are NOT uniformly 0 -- that was only ever true of the outer
+        # tier (`data.patch.TURRET_MODELS`'s regen measurement). INHIBITOR is
+        # 3.0 and NEXUS is 6.0 in Content; neither could show up while every
+        # turret shared the outer profile. Omitting champion regen entirely is
+        # why our champion died 7 times in an oracle-driven 600 s episode where
+        # the server's died 0 times.
         cols["hp_regen"][row] = (
             float(stat_at_level(u.base_hp_regen, u.hp_regen_per_level, 1))
             if kind == Kind.CHAMPION else float(u.base_hp_regen))
 
     # Measured deltas that Content does not carry; see sim/init.py.
     from .init import (
-        RUNE_AD_BONUS, RUNE_ARMOR_BONUS, RUNE_HP_BONUS, TURRET_HP_BONUS)
-    for row, (kind, _, _) in enumerate(PROFILES):
+        RUNE_AD_BONUS, RUNE_ARMOR_BONUS, RUNE_HP_BONUS, TURRET_HP_BONUS,
+        TURRET_HP_BONUS_NEXUS)
+    for row, (kind, tier, _) in enumerate(PROFILES):
         if kind == Kind.CHAMPION:
             cols["max_hp"][row] += RUNE_HP_BONUS
             cols["attack_damage"][row] += RUNE_AD_BONUS
             cols["armor"][row] += RUNE_ARMOR_BONUS
         elif kind == Kind.TURRET:
-            cols["max_hp"][row] += TURRET_HP_BONUS
+            # `OnMatchStart` (`:121-153`): every turret except the fountain
+            # gets `HealthPoints.BaseBonus = 250 * enemyCount` (1v1: 250);
+            # the NEXUS pair gets `125 * enemyCount` (1v1: 125) instead; the
+            # FOUNTAIN is skipped by an explicit `continue` and gets neither.
+            if tier == TurretTier.FOUNTAIN:
+                pass
+            elif tier == TurretTier.NEXUS:
+                cols["max_hp"][row] += TURRET_HP_BONUS_NEXUS
+            else:
+                cols["max_hp"][row] += TURRET_HP_BONUS
 
     # `LevelScript.Init`'s MinionModifiers are **NOT APPLIED** by the server.
     #

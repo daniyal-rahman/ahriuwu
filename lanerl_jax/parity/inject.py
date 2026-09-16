@@ -186,6 +186,44 @@ class InjectionReport:
         return len(self.notes)
 
 
+def infer_turret_model(x: float, y: float, team: int) -> Tuple[Optional[int], str]:
+    """``(kind=TURRET, team, x, y)`` -> profile row, via nearest known position.
+
+    Unlike a minion, a turret's TIER cannot be inferred from anything in the
+    injected snapshot itself -- HP is a poor signal (a damaged inner turret and
+    a fresh outer turret can read the same fraction, and the raw HP depends on
+    which schedule has fired) and AD/armour are exactly what this is trying to
+    recover in the first place, not something to read back out. What IS fixed
+    and known in advance is WHERE each of the 24 turrets sits, at the same
+    resolution `sim.init.ALL_TURRETS` was measured at -- see that table's
+    docstring for how each entry's tier was cross-referenced against
+    `LevelScriptObjects.GetTurretType`. So this matches on position instead,
+    the same table `init_lane` places turrets from, and refuses (returns
+    ``None``) rather than guessing a tier when nothing is close enough to
+    trust -- consistent with `infer_minion_model`'s refusal contract.
+    """
+    from ..sim.init import ALL_TURRETS
+    from ..sim.profiles import profile_id
+
+    best_j, best_d2 = None, float("inf")
+    for j, (t, tx, ty, _thp, _tier) in enumerate(ALL_TURRETS):
+        if t != team:
+            continue
+        d2 = (tx - x) ** 2 + (ty - y) ** 2
+        if d2 < best_d2:
+            best_j, best_d2 = j, d2
+    if best_j is None:
+        return None, "no turret on this team in ALL_TURRETS"
+    dist = best_d2 ** 0.5
+    if dist > 2.0:
+        return None, (
+            f"nearest known turret is {dist:.2f} units away -- too far to "
+            "trust, refusing rather than guessing a tier")
+    tier = ALL_TURRETS[best_j][4]
+    return (profile_id(Kind.TURRET, tier, team),
+            f"matched ALL_TURRETS[{best_j}] (tier {tier}), {dist:.2f} units off")
+
+
 def infer_minion_model(max_hp: float, team: int, params: dict,
                        profiles) -> Tuple[Optional[int], str]:
     """``(kind=LANE_MINION, team, max_hp)`` -> profile row, or ``None``.
@@ -384,16 +422,15 @@ def inject_snapshot(
                              if k == Kind.CHAMPION and t == et)
             model_reason = "champion team -> profile (one champion per team)"
         elif ek == Kind.TURRET:
-            model_row = next(r for r, (k, _, t) in enumerate(profiles)
-                             if k == Kind.TURRET and t == et)
-            model_reason = "all 24 turrets share the outer profile (sim/init.py)"
+            model_row, model_reason = infer_turret_model(
+                float(x[i]), float(y[i]), et)
         else:
             model_row, model_reason = infer_minion_model(
                 float(max_hp[i]), et, params, profiles)
         model[i] = model_row if model_row is not None else 0
         if model_row is None:
-            report.dropped_capacity["unmodelled_minion"] = (
-                report.dropped_capacity.get("unmodelled_minion", 0) + 1)
+            key = "unmodelled_turret" if ek == Kind.TURRET else "unmodelled_minion"
+            report.dropped_capacity[key] = report.dropped_capacity.get(key, 0) + 1
 
         # ---- champion-only fields -----------------------------------------
         if ek == Kind.CHAMPION and ent.champ is not None:

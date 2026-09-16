@@ -77,7 +77,7 @@ __all__ = [
     "N_CHAMPIONS", "N_MINIONS", "N_TURRETS", "N_UNITS",
     "MAX_WAYPOINTS", "MAX_BUFFS", "N_MISSILES",
     "CH_SLICE", "MI_SLICE", "TU_SLICE",
-    "Kind", "Team", "MoveOrder",
+    "Kind", "Team", "MoveOrder", "TurretTier",
     "LaneState", "empty_state",
 ]
 
@@ -101,6 +101,33 @@ class Kind:
     CHAMPION = 1
     LANE_MINION = 2
     TURRET = 3
+
+
+class TurretTier:
+    """Which of Map1's five turret models a `Kind.TURRET` unit is.
+
+    Mirrors `MinionType` for turrets: it is the "subtype" half of a profile key
+    `(kind, subtype, team)` in `sim.profiles.PROFILES`, the same slot a lane
+    minion's `MinionType` occupies. Before this existed every placed turret --
+    outer, inner, inhibitor and nexus alike -- was built from the OUTER model's
+    Content stats, because `profile_id(Kind.TURRET, ...)` only ever had one row
+    per team. That is wrong on two schedules that both fire inside a 10-minute
+    episode: `LevelScriptObjects.GetTurretType`
+    (`Maps/Map1/LevelScriptObjects.cs:364-393`) assigns a different Content
+    model per tier (AD/armour/regen all differ -- see `data.patch.TURRET_MODELS`),
+    and `LevelScriptObjects.OnUpdate` ramps the non-outer tiers on a schedule
+    that starts at 480 s (`:159-266`) -- INSIDE the episode -- while the outer
+    tier's own ramp (already modelled, `combat.outer_turret_ramps`) stops
+    mattering by 390 s.
+
+    Order is arbitrary; values are never compared for magnitude, only equality
+    and array-indexed lookup, exactly like `MinionType`.
+    """
+    OUTER = 0
+    INNER = 1
+    INHIBITOR = 2
+    NEXUS = 3
+    FOUNTAIN = 4
 
 
 class Team:

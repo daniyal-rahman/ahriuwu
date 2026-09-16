@@ -69,14 +69,22 @@ def test_every_unit_model_is_one_this_map_actually_spawns():
     assert MINION_MODELS["caster"] == ("Blue_Minion_Wizard", "Red_Minion_Wizard")
     assert MINION_MODELS["cannon"] == ("Blue_Minion_MechCannon",
                                        "Red_Minion_MechCannon")
-    # Map1 OUTER_TURRET, per team. Red's is ChaosTurretWorm -- NOT
+    # All five tiers, both teams. Red's OUTER is ChaosTurretWorm -- NOT
     # ChaosTurretNormal, which is chaos's *nexus* turret (AD 180, armour 65,
     # regen 6). Pairing the teams by matching names picks the wrong unit.
-    assert TURRET_MODELS == ("OrderTurretNormal", "ChaosTurretWorm")
+    assert TURRET_MODELS == (
+        "OrderTurretNormal", "ChaosTurretWorm",
+        "OrderTurretNormal2", "ChaosTurretWorm2",
+        "OrderTurretDragon", "ChaosTurretGiant",
+        "OrderTurretAngel", "ChaosTurretNormal",
+        "OrderTurretShrine", "ChaosTurretShrine",
+    )
 
 
 def test_the_turret_stats_are_the_ones_measured_off_the_server():
-    """AD 152 / armour 60 / regen 0, each confirmed against a 600 s recording.
+    """The OUTER tier is AD 152 / armour 60 / regen 0, confirmed against a
+    600 s recording -- and every OTHER tier is confirmed to be genuinely
+    DIFFERENT, per `data.patch.TURRET_MODELS`'s Content table.
 
     * armour 60: single-step turret HP drops land on exactly 7.500 (melee,
       93x), 14.375 (caster, 68x) and 25.000 (cannon, 4x) -- minion AD times
@@ -85,14 +93,54 @@ def test_the_turret_stats_are_the_ones_measured_off_the_server():
     * regen 0: turret HP was monotone over all 36,001 snapshots. `Stats.Update`
       has no combat gate, so a damaged turret with regen 3 would have healed
       continuously.
+
+    Both measurements were made back when every placed turret ran off the
+    OUTER model, so they say nothing about the other four tiers -- pinning
+    those to Content is what this test adds. All five tiers still agree on
+    BaseHP 1300 (except the fountain's 9999), which is why the naive
+    `250 * enemy_count` HP bonus alone could never have told them apart; see
+    `sim.init.TURRET_HP_BONUS_NEXUS`.
     """
     from lanerl_jax.data.patch import load_patch
 
-    for name, u in load_patch().turrets.items():
+    turrets = load_patch().turrets
+    # OUTER: the tier every turret used to be built from.
+    for name in ("OrderTurretNormal", "ChaosTurretWorm"):
+        u = turrets[name]
         assert u.base_ad == pytest.approx(152.0), name
         assert u.armor == pytest.approx(60.0), name
         assert u.base_hp_regen == pytest.approx(0.0), name
-        assert u.base_hp == pytest.approx(1300.0), name
+    # INNER: same armour as outer, but NOT the same AD -- the one field the
+    # outer-profile approximation got wrong even before any ramp is applied.
+    for name in ("OrderTurretNormal2", "ChaosTurretWorm2"):
+        u = turrets[name]
+        assert u.base_ad == pytest.approx(170.0), name
+        assert u.armor == pytest.approx(60.0), name
+        assert u.base_hp_regen == pytest.approx(0.0), name
+    # INHIBITOR: matches the Map11-turret numbers this project once mistook
+    # for Map1's outer tier -- genuinely correct here, for a different tier.
+    for name in ("OrderTurretDragon", "ChaosTurretGiant"):
+        u = turrets[name]
+        assert u.base_ad == pytest.approx(190.0), name
+        assert u.armor == pytest.approx(67.0), name
+        assert u.base_hp_regen == pytest.approx(3.0), name
+    # NEXUS.
+    for name in ("OrderTurretAngel", "ChaosTurretNormal"):
+        u = turrets[name]
+        assert u.base_ad == pytest.approx(180.0), name
+        assert u.armor == pytest.approx(65.0), name
+        assert u.base_hp_regen == pytest.approx(6.0), name
+    # FOUNTAIN: enormous HP, harmless AD (nothing survives to be hit by it in
+    # this slice), zero armour and zero regen.
+    for name in ("OrderTurretShrine", "ChaosTurretShrine"):
+        u = turrets[name]
+        assert u.base_hp == pytest.approx(9999.0), name
+        assert u.armor == pytest.approx(0.0), name
+        assert u.base_hp_regen == pytest.approx(0.0), name
+    # Every non-fountain tier shares this BaseHP -- see the docstring above.
+    for name, u in turrets.items():
+        if name not in ("OrderTurretShrine", "ChaosTurretShrine"):
+            assert u.base_hp == pytest.approx(1300.0), name
 
 
 @pytest.mark.parametrize("t_s,expect_ad", [
@@ -130,24 +178,140 @@ def test_the_ramp_stops_after_seven_applications():
     assert float(outer_turret_ramps(np.float64(0.0))) == 0.0
 
 
+@pytest.mark.parametrize("t_s,expect_ad,expect_armor", [
+    (0, 190, 67), (479, 190, 67), (480, 194, 68), (539, 194, 68),
+    (540, 198, 69), (599, 198, 69), (600, 202, 70),
+])
+def test_the_other_tiers_ramp_ad_and_armor_from_480s(t_s, expect_ad, expect_armor):
+    """The schedule `data.patch.TURRET_MODELS`'s "STILL APPROXIMATE" note used
+    to warn about: `LevelScriptObjects.OnUpdate` (`:159-266`) ramps every
+    non-outer, non-fountain turret on a SEPARATE timer from the outer one --
+    starting at 480 s, not 30 s, and adding Armor as well as AD.
+
+    480 s is INSIDE a 600 s episode, so unlike the outer ramp (done by 390 s)
+    this schedule is still actively changing an inhibitor or nexus turret's
+    stats for the entire second half of the episode. Before per-tier profiles
+    existed this could not be modelled at all, because every turret ran the
+    OUTER schedule (or none), and the outer schedule caps out at t=390s with
+    no further change -- so a turret that should be getting stronger for the
+    last two minutes of the episode was frozen instead.
+
+    Values here use an INHIBITOR turret's Content base (AD 190, armour 67);
+    NEXUS (180/65) and INNER (170/60) shift by the same per-application deltas
+    from their own base -- unlike OUTER, all three of these DO get the armour
+    bonus (`combat.py`'s module docstring: "note: no Armor" is called out
+    specifically for the outer schedule because every other tier has one).
+    """
+    from lanerl_jax.sim.combat import other_turret_armor, other_turret_attack_damage
+
+    ad = float(other_turret_attack_damage(np.float64(190.0), np.float64(t_s * 1000.0)))
+    armor = float(other_turret_armor(np.float64(67.0), np.float64(t_s * 1000.0)))
+    assert ad == pytest.approx(expect_ad), f"AD at t={t_s}s"
+    assert armor == pytest.approx(expect_armor), f"armour at t={t_s}s"
+
+
+def test_the_other_ramp_stops_after_thirty_applications():
+    """`timesApplied < 30` (`:172`) -- INHIBITOR and NEXUS stop climbing after
+    30 applications (at `480 + 29*60 = 2220` s), which no episode this project
+    runs reaches, so this pins the cap exists rather than that it matters yet.
+    """
+    from lanerl_jax.sim.combat import other_turret_ramps
+
+    assert float(other_turret_ramps(np.float64(480_000.0))) == 1.0
+    assert float(other_turret_ramps(np.float64(2_220_000.0))) == 30.0
+    assert float(other_turret_ramps(np.float64(100_000_000.0))) == 30.0
+    assert float(other_turret_ramps(np.float64(0.0))) == 0.0
+
+
+def test_the_fountain_turret_is_on_neither_ramp_schedule():
+    """`UpdateTowerStats` excludes `FOUNTAIN_TURRET` by name (`:234`) and
+    `UpdateOuterTurretStats` only ever looks up each lane's OUTER_TURRET
+    (`:255`) -- so unlike the other four tiers, a fountain's AD and armour are
+    flat for the whole game. Checked through `step._attack_damage_against`
+    directly (dispatch by `model`, i.e. by tier), not just through the two
+    ramp functions in isolation, because the dispatch is the part a per-tier
+    rewrite could get wrong even with both ramp functions individually
+    correct -- e.g. by defaulting an unrecognised tier to the OUTER schedule
+    instead of to "no ramp".
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, Team, TurretTier
+    from lanerl_jax.sim.step import _attack_damage_against
+
+    model = jnp.asarray([profile_id(Kind.TURRET, TurretTier.FOUNTAIN, Team.BLUE)])
+    ad = jnp.asarray([999.0])
+    attacker = jnp.asarray([Kind.TURRET], jnp.int8)
+    target = jnp.asarray([Kind.CHAMPION], jnp.int8)
+    for t_s in (0, 30, 480, 540, 10_000):
+        got = _attack_damage_against(ad, attacker, target, model,
+                                     np.float64(t_s * 1000.0))
+        assert float(got[0]) == pytest.approx(999.0), f"at t={t_s}s"
+
+
+def test_the_ad_ramp_dispatches_by_tier_not_by_kind():
+    """The bug this whole change fixes, pinned at the dispatch site: before
+    `TurretTier` existed, `_attack_damage_against` applied the OUTER schedule
+    to `attacker_kind == Kind.TURRET` -- true of all five tiers -- which is
+    why an inhibitor turret used to ramp on the wrong clock (done by 390 s
+    instead of still climbing at 600 s) using the wrong per-application step
+    (armour never moved at all). This drives OUTER, INNER, INHIBITOR, NEXUS
+    and FOUNTAIN through the same call at the same ``t_ms`` and checks each
+    one lands on its own schedule.
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, Team, TurretTier
+    from lanerl_jax.sim.step import _attack_damage_against
+
+    tiers = [TurretTier.OUTER, TurretTier.INNER, TurretTier.INHIBITOR,
+            TurretTier.NEXUS, TurretTier.FOUNTAIN]
+    model = jnp.asarray([profile_id(Kind.TURRET, t, Team.BLUE) for t in tiers])
+    base_ad = jnp.asarray([152.0, 170.0, 190.0, 180.0, 999.0])
+    attacker = jnp.full((5,), Kind.TURRET, jnp.int8)
+    target = jnp.full((5,), Kind.CHAMPION, jnp.int8)
+
+    # t = 500 s: the outer ramp is long done (capped at 390 s); the other
+    # schedule has fired once (at 480 s) and not twice (next is 540 s).
+    got = _attack_damage_against(base_ad, attacker, target, model,
+                                 np.float64(500_000.0))
+    assert float(got[0]) == pytest.approx(180.0)   # OUTER: capped, +28 total
+    assert float(got[1]) == pytest.approx(174.0)   # INNER: one application, +4
+    assert float(got[2]) == pytest.approx(194.0)   # INHIBITOR: one application
+    assert float(got[3]) == pytest.approx(184.0)   # NEXUS: one application
+    assert float(got[4]) == pytest.approx(999.0)   # FOUNTAIN: never ramps
+
+
 def test_hp_regen_rates_come_from_content_and_are_per_second():
     """`Stats.Update` adds `rate * diff * 0.001` with diff in ms, on a 500 ms
     accumulator -- so the stored number is HP per SECOND, not per five seconds.
 
-    On this map minions and turrets are both 0, so the only unit that
-    regenerates is the champion.
+    Minions are 0 on this map. Turrets are NOT uniformly 0 -- that was only
+    ever true of the OUTER tier every turret used to be built from. INHIBITOR
+    is 3.0 and NEXUS is 6.0 HP/s in Content (`data.patch.TURRET_MODELS`), which
+    is 1,800 / 3,600 HP over a ten-minute game against a 1,550 HP pool and
+    could never show up while every placed turret shared the outer row.
     """
     from lanerl_jax.data.patch import load_patch
     from lanerl_jax.sim.init import lane_params
     from lanerl_jax.sim.profiles import profile_id
-    from lanerl_jax.sim.state import Kind, Team
+    from lanerl_jax.sim.state import Kind, Team, TurretTier
     from lanerl_jax.sim.targeting import MinionType
 
     p = lane_params(load_patch())
     reg = np.asarray(p["hp_regen"])
     assert reg[profile_id(Kind.CHAMPION, -1, Team.BLUE)] == pytest.approx(1.568)
     assert reg[profile_id(Kind.LANE_MINION, MinionType.MELEE, Team.BLUE)] == 0.0
-    assert reg[profile_id(Kind.TURRET, -1, Team.BLUE)] == 0.0
+    for team in (Team.BLUE, Team.RED):
+        assert reg[profile_id(Kind.TURRET, TurretTier.OUTER, team)] == 0.0
+        assert reg[profile_id(Kind.TURRET, TurretTier.INNER, team)] == 0.0
+        assert reg[profile_id(Kind.TURRET, TurretTier.INHIBITOR, team)] == \
+            pytest.approx(3.0)
+        assert reg[profile_id(Kind.TURRET, TurretTier.NEXUS, team)] == \
+            pytest.approx(6.0)
+        assert reg[profile_id(Kind.TURRET, TurretTier.FOUNTAIN, team)] == 0.0
 
 
 def test_garens_passive_heals_more_at_higher_level_brackets():

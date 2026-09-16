@@ -128,17 +128,141 @@ def test_every_turret_the_server_places_is_placed(patch):
     assert int((np.asarray(s.team)[ts] == Team.BLUE).sum()) == 12
     assert int((np.asarray(s.team)[ts] == Team.RED).sum()) == 12
     # positions are exact at the dump's own 1/16-unit resolution
-    for j, (team, tx, ty, thp) in enumerate(ALL_TURRETS):
+    for j, (team, tx, ty, thp, tier) in enumerate(ALL_TURRETS):
         i = TU_SLICE.start + j
         assert int(s.team[i]) == team
         assert float(s.x[i]) == pytest.approx(tx, abs=1 / 32)
         assert float(s.y[i]) == pytest.approx(ty, abs=1 / 32)
         assert float(s.hp[i]) == pytest.approx(thp, abs=1e-3)
+        assert int(s.model[i]) == profile_id(Kind.TURRET, tier, team)
     # the top outer pair is still where the independent extraction put it
     blue_outer = [j for j, t in enumerate(ALL_TURRETS)
                   if abs(t[1] - TOP_OUTER_TURRET[Team.BLUE][0]) < 1
                   and abs(t[2] - TOP_OUTER_TURRET[Team.BLUE][1]) < 1]
     assert len(blue_outer) == 1
+
+
+def test_turret_tiers_are_re_derived_from_the_vendored_scene_files():
+    """`ALL_TURRETS`'s 5th field, checked against an INDEPENDENT re-derivation
+    from the vendored map files -- not against itself.
+
+    Before this existed, all 24 placed turrets ran off one outer-turret
+    profile, which was flagged (`data.patch.TURRET_MODELS`'s "STILL
+    APPROXIMATE" note, now resolved) but never fixed, because doing so needs
+    each turret's TIER, and that is not recoverable from position or HP alone
+    -- outer, inner and inhibitor all share BaseHP 1300 (measured HP 1550).
+
+    `LevelScriptObjects.GetTurretType` (`Maps/Map1/LevelScriptObjects.cs:
+    364-393`) computes a turret's type from its object name's lane and index,
+    BEFORE a same-named `switch` (`:348-357`) relabels two of team 1's
+    turrets onto a different LANE (never a different TYPE -- that switch runs
+    after `GetTurretType` has already returned). Re-implemented here,
+    verbatim, from the object names and `CentralPoint.X`/`CentralPoint.Z` in
+    `Maps/Map1/Scene/Turret_T{1,2}_{C,L,R}_NN.sco.json` -- exactly the
+    `new Vector2(turretObj.CentralPoint.X, turretObj.CentralPoint.Z)`
+    `CreateBuildings` itself constructs -- matched to `ALL_TURRETS` by
+    position. A copy-paste error in the hand-built table shows up here as a
+    mismatch against this second, independent source, not as agreement with
+    itself.
+    """
+    import json
+    import re
+
+    from lanerl_jax.sim.state import Team, TurretTier
+
+    def get_turret_type(true_index: int, lane: str) -> int:
+        """`GetTurretType`, verbatim (`:364-393`)."""
+        if lane == "C":
+            if true_index < 3:
+                return TurretTier.NEXUS
+            true_index -= 2
+        return {1: TurretTier.INHIBITOR, 4: TurretTier.INHIBITOR,
+                5: TurretTier.INHIBITOR, 2: TurretTier.INNER,
+                3: TurretTier.OUTER}[true_index]
+
+    scene = CONTENT_ROOT / "Maps/Map1/Scene"
+    found = []
+    for team, prefix in ((Team.BLUE, "T1"), (Team.RED, "T2")):
+        for f in sorted(scene.glob(f"Turret_{prefix}_*.sco.json")):
+            # `Path.stem` only strips ONE suffix, so a `.sco.json` file's stem
+            # is still `...sco` -- match the full name instead.
+            m = re.match(rf"Turret_{prefix}_([CLR])_(\d+)\.sco\.json$", f.name)
+            assert m, f.name
+            lane, idx = m.group(1), int(m.group(2))
+            d = json.loads(f.read_text())
+            tier = get_turret_type(idx, lane)
+            found.append((team, d["CentralPoint"]["X"], d["CentralPoint"]["Z"], tier))
+        shrine = "OrderTurretShrine" if team == Team.BLUE else "ChaosTurretShrine"
+        d = json.loads((scene / f"Turret_{shrine}.sco.json").read_text())
+        found.append((team, d["CentralPoint"]["X"], d["CentralPoint"]["Z"],
+                     TurretTier.FOUNTAIN))
+
+    assert len(found) == 24, "expected 11 named turrets + 1 fountain, per team"
+    for team, x, y, tier in found:
+        same_team = [j for j, t in enumerate(ALL_TURRETS) if t[0] == team]
+        best = min(same_team, key=lambda j: (ALL_TURRETS[j][1] - x) ** 2
+                  + (ALL_TURRETS[j][2] - y) ** 2)
+        dist = ((ALL_TURRETS[best][1] - x) ** 2
+                + (ALL_TURRETS[best][2] - y) ** 2) ** 0.5
+        assert dist < 1.0, (
+            f"no ALL_TURRETS entry within 1 unit of team={team} ({x:.1f},{y:.1f})")
+        assert ALL_TURRETS[best][4] == tier, (
+            f"team={team} pos=({x:.1f},{y:.1f}): GetTurretType says {tier}, "
+            f"ALL_TURRETS has {ALL_TURRETS[best][4]}")
+
+
+def test_the_placed_turrets_carry_their_own_tiers_stats(patch):
+    """End to end: the turret a pushed wave actually reaches gets ITS tier's
+    numbers, not the outer tier's.
+
+    Picks out blue's TOP lane inhibitor turret (`ALL_TURRETS` index 2 --
+    `TurretTier.INHIBITOR`, the one behind blue's outer turret) and blue's
+    NEXUS turret, and checks their initial AD/armour/HP-regen against
+    `OrderTurretDragon`/`OrderTurretAngel` in Content, not against
+    `OrderTurretNormal` (the outer tier every turret used to be built from).
+    """
+    from lanerl_jax.sim.profiles import build_profile_tables
+
+    s = init_lane(patch)
+    tables = build_profile_tables(patch)
+
+    inhib_i = TU_SLICE.start + 2       # (802.8125, 4052.375, ..., INHIBITOR)
+    assert int(s.team[inhib_i]) == Team.BLUE
+    row = int(s.model[inhib_i])
+    assert float(tables["attack_damage"][row]) == pytest.approx(190.0)
+    assert float(tables["armor"][row]) == pytest.approx(67.0)
+    assert float(tables["hp_regen"][row]) == pytest.approx(3.0)
+
+    nexus_i = TU_SLICE.start + 4        # (1341.625, 2030.0, ..., NEXUS)
+    assert int(s.team[nexus_i]) == Team.BLUE
+    row = int(s.model[nexus_i])
+    assert float(tables["attack_damage"][row]) == pytest.approx(180.0)
+    assert float(tables["armor"][row]) == pytest.approx(65.0)
+    assert float(tables["hp_regen"][row]) == pytest.approx(6.0)
+
+
+def test_turret_hp_bonus_is_125_for_nexus_and_0_for_fountain(tables):
+    """`OnMatchStart` gives every turret `250 * enemyCount` -- EXCEPT the nexus
+    pair, which gets `125 * enemyCount` (`:149`), and the fountain, which is
+    skipped by an explicit `continue` before either bonus is applied (`:134`).
+    `ALL_TURRETS` already carries the measured totals (1550/1425/9999); this
+    checks the DECOMPOSITION in `sim.profiles.build_profile_tables` agrees,
+    which matters the day something other than the hand-measured snapshot
+    needs a turret's max HP (e.g. a respawn, or a different champion count).
+    """
+    from lanerl_jax.sim.state import TurretTier
+
+    for team in (Team.BLUE, Team.RED):
+        outer = profile_id(Kind.TURRET, TurretTier.OUTER, team)
+        inner = profile_id(Kind.TURRET, TurretTier.INNER, team)
+        inhib = profile_id(Kind.TURRET, TurretTier.INHIBITOR, team)
+        nexus = profile_id(Kind.TURRET, TurretTier.NEXUS, team)
+        fountain = profile_id(Kind.TURRET, TurretTier.FOUNTAIN, team)
+        assert float(tables["max_hp"][outer]) == pytest.approx(1550.0)
+        assert float(tables["max_hp"][inner]) == pytest.approx(1550.0)
+        assert float(tables["max_hp"][inhib]) == pytest.approx(1550.0)
+        assert float(tables["max_hp"][nexus]) == pytest.approx(1425.0)
+        assert float(tables["max_hp"][fountain]) == pytest.approx(9999.0)
 
 
 def test_the_isolated_arena_still_exists_for_tests(patch):

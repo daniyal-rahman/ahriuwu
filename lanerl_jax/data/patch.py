@@ -323,11 +323,45 @@ MINION_MODELS = {
 #: that name is chaos's *nexus* turret (AD 180, armour 65, regen 6). Pairing
 #: the two teams by matching names picks the wrong unit.
 #:
-#: STILL APPROXIMATE: all 24 placed turrets use this one outer-turret profile,
-#: so the inner, inhibitor and nexus tiers currently shoot like an outer
-#: turret. Blue's inner turret is the one a pushed wave actually reaches, so
-#: this is worth revisiting.
-TURRET_MODELS = ("OrderTurretNormal", "ChaosTurretWorm")
+#: RESOLVED 2026-09-16: all 10 models are loaded (5 tiers x 2 teams), and
+#: `sim.profiles.PROFILES` carries one row per `(Kind.TURRET, TurretTier,
+#: Team)` instead of one row per team. Every placed turret's tier is looked up
+#: from `sim.init.ALL_TURRETS`, whose 5th field was filled in by cross-
+#: referencing the vendored Map1 scene files (`Maps/Map1/Scene/Turret_T*.sco.
+#: json`, `CentralPoint.X/Z`) against `LevelScriptObjects.GetTurretType`
+#: (`:364-393`) -- not guessed from HP or position alone. Content gives each
+#: model's base stats::
+#:
+#:     ===================  ====  ======  =====  =======
+#:     model                  AD  armour  regen  BaseHP
+#:     ===================  ====  ======  =====  =======
+#:     OrderTurretNormal     152      60      0     1300   OUTER (blue)
+#:     ChaosTurretWorm       152      60      0     1300   OUTER (red)
+#:     OrderTurretNormal2    170      60      0     1300   INNER (blue)
+#:     ChaosTurretWorm2      170      60      0     1300   INNER (red)
+#:     OrderTurretDragon     190      67      3     1300   INHIBITOR (blue)
+#:     ChaosTurretGiant      190      67      3     1300   INHIBITOR (red)
+#:     OrderTurretAngel      180      65      6     1300   NEXUS (blue)
+#:     ChaosTurretNormal     180      65      6     1300   NEXUS (red)
+#:     OrderTurretShrine     999       0      0     9999   FOUNTAIN (blue)
+#:     ChaosTurretShrine     999       0      0     9999   FOUNTAIN (red)
+#:     ===================  ====  ======  =====  =======
+#:
+#: (all `Stats/<name>/<name>.json`). Every non-fountain tier shares BaseHP
+#: 1300, which is exactly why `ALL_TURRETS`'s measured 1550 (non-nexus) and
+#: 1425 (nexus) values were indistinguishable from a single outer profile
+#: before this: `OnMatchStart` (`:121-153`) adds `250 * enemy_champion_count`
+#: to every non-nexus, non-fountain turret and `125 * enemy_champion_count` to
+#: the nexus pair, and 1v1 makes both bonuses look like round numbers either
+#: way (1300+250=1550, 1300+125=1425). See `sim.init.TURRET_HP_BONUS` /
+#: `TURRET_HP_BONUS_NEXUS`.
+TURRET_MODELS = (
+    "OrderTurretNormal", "ChaosTurretWorm",       # OUTER
+    "OrderTurretNormal2", "ChaosTurretWorm2",     # INNER
+    "OrderTurretDragon", "ChaosTurretGiant",      # INHIBITOR
+    "OrderTurretAngel", "ChaosTurretNormal",      # NEXUS
+    "OrderTurretShrine", "ChaosTurretShrine",     # FOUNTAIN
+)
 
 
 def load_patch(champion: str = "Garen", map_id: int = 1,

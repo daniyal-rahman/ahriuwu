@@ -66,6 +66,9 @@ __all__ = [
     "TURRET_DAMAGE_VS_MINION",
     "outer_turret_ramps",
     "outer_turret_attack_damage",
+    "other_turret_ramps",
+    "other_turret_attack_damage",
+    "other_turret_armor",
 ]
 
 
@@ -133,11 +136,38 @@ TURRET_DAMAGE_VS_MINION = 1.0
 OUTER_TURRET_RAMP_START_MS = 30_000.0
 OUTER_TURRET_RAMP_PERIOD_MS = 60_000.0
 OUTER_TURRET_RAMP_MAX = 7
-#: `AttackDamage.FlatBonus` per application.
+#: `AttackDamage.FlatBonus` per application, both schedules.
 TURRET_AD_PER_RAMP = 4.0
-#: The other tiers start at 480 s and also gain +1 Armor and +1 MagicResist.
-INNER_TURRET_RAMP_START_MS = 480_000.0
-INNER_TURRET_RAMP_MAX = 30
+#: `Armor.FlatBonus` / `MagicResist.FlatBonus` per application on the OTHER
+#: schedule. The outer schedule grants MagicResist too (`OuterTurretStats
+#: Modifier.MagicResist.FlatBonus = 1`, `:164`) but never Armor -- and nothing
+#: in this sim currently resolves magic damage against a turret, so that half
+#: of the outer modifier has no observable effect and is intentionally not
+#: wired into `outer_turret_attack_damage`'s caller.
+TURRET_ARMOR_PER_RAMP = 1.0
+
+#: The other four tiers -- INNER, INHIBITOR, NEXUS (FOUNTAIN is excluded by the
+#: server itself, see below) -- start at **480 s**, not 30 s, and each
+#: application adds Armor and MagicResist as well as AD. 480 s is INSIDE a
+#: 600 s episode (two applications land, at 480 s and 540 s), so this schedule
+#: is live and was previously unmodelled entirely -- every non-outer turret
+#: stayed at its Content armour/AD for the whole game.
+OTHER_TURRET_RAMP_START_MS = 480_000.0
+OTHER_TURRET_RAMP_PERIOD_MS = 60_000.0
+#: `UpdateTowerStats` runs while `timesApplied < 30` (`:172`), so 30 is the
+#: cap that matters for INHIBITOR and NEXUS. INNER is special-cased out once
+#: `timesApplied >= 20` (`:234`) -- i.e. from its 21st application, at
+#: `480_000 + 20 * 60_000 = 1_680_000` ms -- which is **not reachable inside a
+#: 600 s episode** (at most 2 applications land here). Modelling one ramp
+#: function for all three tiers is therefore exact for every episode length
+#: this project runs today; the day episodes exceed ~28 minutes, INNER needs
+#: its own capped variant.
+OTHER_TURRET_RAMP_MAX = 30
+#: FOUNTAIN_TURRET is excluded from `UpdateTowerStats` explicitly (`:234`,
+#: `OUTER_TURRET || FOUNTAIN_TURRET || ...`) and was never a candidate for
+#: `UpdateOuterTurretStats` either (`:255`, which only ever looks up the
+#: OUTER_TURRET of each lane). So a fountain gets neither ramp, ever -- it is
+#: not "the other schedule with a 0 rate", it is not on any schedule.
 
 
 def outer_turret_ramps(t_ms: Any, xp: Any = np) -> Any:
@@ -151,6 +181,32 @@ def outer_turret_ramps(t_ms: Any, xp: Any = np) -> Any:
 def outer_turret_attack_damage(base_ad: Any, t_ms: Any, xp: Any = np) -> Any:
     """An outer turret's attack damage at game time ``t_ms``. 152 -> 180."""
     return base_ad + TURRET_AD_PER_RAMP * outer_turret_ramps(t_ms, xp)
+
+
+def other_turret_ramps(t_ms: Any, xp: Any = np) -> Any:
+    """How many times `UpdateTowerStats` has fired by ``t_ms``, for an
+    INNER/INHIBITOR/NEXUS turret. 0..30, first at 480 s. See
+    `OTHER_TURRET_RAMP_MAX` for why INNER's own 20-application cutoff does not
+    need a separate function at this project's episode lengths."""
+    n = xp.floor((t_ms - OTHER_TURRET_RAMP_START_MS)
+                 / OTHER_TURRET_RAMP_PERIOD_MS) + 1.0
+    return xp.clip(xp.where(t_ms >= OTHER_TURRET_RAMP_START_MS, n, 0.0),
+                   0.0, float(OTHER_TURRET_RAMP_MAX))
+
+
+def other_turret_attack_damage(base_ad: Any, t_ms: Any, xp: Any = np) -> Any:
+    """An INNER/INHIBITOR/NEXUS turret's attack damage at game time ``t_ms``."""
+    return base_ad + TURRET_AD_PER_RAMP * other_turret_ramps(t_ms, xp)
+
+
+def other_turret_armor(base_armor: Any, t_ms: Any, xp: Any = np) -> Any:
+    """An INNER/INHIBITOR/NEXUS turret's armour at game time ``t_ms``.
+
+    The outer tier has no equivalent -- `OuterTurretStatsModifier` never sets
+    an Armor bonus (`:164-165`), which is also what the constant-armour-60
+    measurement in `data.patch.TURRET_MODELS` depends on.
+    """
+    return base_armor + TURRET_ARMOR_PER_RAMP * other_turret_ramps(t_ms, xp)
 
 
 def post_mitigation_damage(damage: Any, resist: Any, xp: Any = np) -> Any:
@@ -196,9 +252,25 @@ def stat_total(base_value: Any, base_bonus: Any = 0.0, percent_base_bonus: Any =
 
 
 def attack_speed_flat(global_attack_delay: float,
-                      attack_delay_offset_percent: Any) -> Any:
-    """``Stats.cs:130``. ``global_attack_delay`` is ``gcd_AttackDelay`` (1.6 s)."""
-    return 1.0 / global_attack_delay / (1.0 + attack_delay_offset_percent)
+                      attack_delay_offset_percent: Any, xp: Any = np) -> Any:
+    """``Stats.cs:130``. ``global_attack_delay`` is ``gcd_AttackDelay`` (1.6 s).
+
+    ``1 + attack_delay_offset_percent`` is exactly 0 for one real unit: the
+    FOUNTAIN turret's Content ``AttackDelayOffsetPercent`` is **-1**
+    (``Stats/OrderTurretShrine/OrderTurretShrine.json``, matched by
+    ``ChaosTurretShrine``). C# float division by zero is `+Infinity`, not an
+    exception -- the fountain's `AttackSpeedFlat` is meant to come out
+    unboundedly fast. Divided through ``xp`` rather than Python's bare ``/``
+    so that is what this returns too, instead of a `ZeroDivisionError` the
+    moment the fountain's profile row is built. (Downstream, `attack_period`
+    then reads `1/inf = 0` and `attack_windup` reads `0 * k = 0`, both of
+    which are ordinary float arithmetic with no further zero denominators.)
+    The fountain never actually fires in this slice regardless -- it is
+    outside every unit's reach in a top-lane 1v1, see `sim.init.ALL_TURRETS`
+    -- but building its stat row must not crash on the way there.
+    """
+    with np.errstate(divide="ignore"):
+        return 1.0 / global_attack_delay / xp.asarray(1.0 + attack_delay_offset_percent)
 
 
 def total_attack_speed(flat: Any, multiplier: Any = 1.0) -> Any:

@@ -53,6 +53,7 @@ from .state import (
     LaneState,
     MoveOrder,
     Team,
+    TurretTier,
     empty_state,
 )
 from .targeting import MinionType
@@ -60,7 +61,7 @@ from .waves import FIRST_WAVE_MS
 
 __all__ = [
     "CHAMPION_SPAWN", "TOP_OUTER_TURRET", "ALL_TURRETS", "MINION_SPAWN",
-    "TOP_LANE_PATH", "RUNE_HP_BONUS", "TURRET_HP_BONUS",
+    "TOP_LANE_PATH", "RUNE_HP_BONUS", "TURRET_HP_BONUS", "TURRET_HP_BONUS_NEXUS",
     "lane_params", "init_lane", "spawn_minion",
 ]
 
@@ -98,36 +99,72 @@ TOP_OUTER_TURRET: Dict[int, Tuple[float, float]] = {
 #: minions against 28 red by ten minutes; the server, which has a turret at
 #: 0.217 waiting, stays near 21 live minions with a p95 of 27.
 #:
-#: Positions and max HP are exact. Per-turret *combat* stats are not yet
-#: distinguished -- every turret uses the lane-turret profile, so the nexus
-#: (1425 HP) and fountain (9999 HP) turrets shoot like an outer turret. That is
-#: a booked approximation and it cannot matter in a top-lane 1v1, where no
-#: minion ever reaches a nexus.
-ALL_TURRETS: Tuple[Tuple[int, float, float, float], ...] = (
-    (Team.BLUE, -236.0625, -53.3125, 9999.0),
-    (Team.BLUE, 574.625, 10220.5, 1550.0),
-    (Team.BLUE, 802.8125, 4052.375, 1550.0),
-    (Team.BLUE, 1106.25, 6465.25, 1550.0),
-    (Team.BLUE, 1341.625, 2030.0, 1425.0),
-    (Team.BLUE, 1768.1875, 1589.4375, 1425.0),
-    (Team.BLUE, 3234.0, 3447.25, 1550.0),
-    (Team.BLUE, 3747.25, 1041.0625, 1550.0),
-    (Team.BLUE, 4657.0, 4591.9375, 1550.0),
-    (Team.BLUE, 5448.375, 6169.125, 1550.0),
-    (Team.BLUE, 6512.5, 1262.625, 1550.0),
-    (Team.BLUE, 10097.625, 808.75, 1550.0),
-    (Team.RED, 3911.6875, 13654.8125, 1550.0),
-    (Team.RED, 7536.5, 13190.8125, 1550.0),
-    (Team.RED, 8548.8125, 8289.5, 1550.0),
-    (Team.RED, 9361.0625, 9892.625, 1550.0),
-    (Team.RED, 10261.875, 13465.9375, 1550.0),
-    (Team.RED, 10743.5625, 11010.0625, 1550.0),
-    (Team.RED, 12118.125, 12876.625, 1425.0),
-    (Team.RED, 12662.5, 12442.6875, 1425.0),
-    (Team.RED, 12920.8125, 8005.3125, 1550.0),
-    (Team.RED, 13205.8125, 10474.625, 1550.0),
-    (Team.RED, 13459.625, 4284.25, 1550.0),
-    (Team.RED, 14157.0, 14456.375, 9999.0),
+#: Positions and max HP are exact. Per-turret *combat* stats used to not be
+#: distinguished -- every turret used the outer-lane profile, so the nexus
+#: (1425 HP) and fountain (9999 HP) turrets shot like an outer turret. That
+#: was a booked approximation for HP alone (max HP here is always the measured
+#: value, never derived from a profile); it was NOT harmless for AD/armour,
+#: because `LevelScriptObjects.OnUpdate` ramps non-outer tiers starting at
+#: 480 s -- inside a 600 s episode -- and that schedule was simply not run.
+#: See `sim.state.TurretTier`.
+#:
+#: RESOLVED 2026-09-16: a 5th field carries each placed turret's tier, so
+#: `profile_id(Kind.TURRET, tier, team)` gives it that model's own AD/armour/
+#: regen and its own ramp (`sim.combat.other_turret_ramps`). Tiers below are
+#: NOT inferred from HP or position -- outer/inner/inhibitor/nexus/fountain
+#: all disagree on HP (outer=inner=inhibitor=1550, nexus=1425, fountain=9999)
+#: but nothing here distinguishes outer from inner from inhibitor by HP alone.
+#: They come from cross-referencing this measured geometry against
+#: `LevelScriptObjects.CreateBuildings`/`GetTurretType`
+#: (`Maps/Map1/LevelScriptObjects.cs:294-393`) and the vendored map scene
+#: files (`Maps/Map1/Scene/Turret_T{1,2}_{C,L,R}_NN.sco.json`,
+#: ``CentralPoint.X``/``CentralPoint.Z``, which is exactly ``(x, y)`` here --
+#: see `CreateBuildings`'s `new Vector2(turretObj.CentralPoint.X,
+#: turretObj.CentralPoint.Z)`), matched to this table's positions at better
+#: than 1 unit. Two things fall out of that cross-reference that are easy to
+#: get wrong by inspection alone:
+#:
+#: * Team 1 (order/blue) has NO ``Turret_T1_L_01``/``Turret_T1_R_01`` --
+#:   its top and bottom lane inhibitor turrets are ``Turret_T1_C_06`` and
+#:   ``Turret_T1_C_07``, whose *type* is computed from `lane == LANE_C` (so
+#:   `GetTurretType` resolves them as it would a THIRD "mid" inhibitor) and
+#:   only afterwards re-labelled `LANE_L`/`LANE_R` by a `switch` on the raw
+#:   object name (`:348-357`) -- type and lane are decided from two different
+#:   pieces of state, computed in that order. Team 2 (chaos/red) has no such
+#:   split: it carries its own ``Turret_T2_L_01``/``Turret_T2_R_01`` directly.
+#: * Only 10 of these 24 (5 per side) sit within 900 units of
+#:   `TOP_LANE_PATH` -- the top lane's own outer/inner/inhibitor plus both
+#:   nexus turrets, at path fractions blue ``0.000 0.016 0.109 0.217 0.388``
+#:   / red ``0.605 0.770 0.894 0.981 1.000`` (nexus x2, inhib, inner, outer,
+#:   each team read towards its own base). The remaining 14 are mid- and
+#:   bot-lane turrets that this top-lane-only sim can never bring a unit
+#:   near; their tiers are exact (same cross-reference), not guessed, but
+#:   are also provably inert here.
+ALL_TURRETS: Tuple[Tuple[int, float, float, float, int], ...] = (
+    (Team.BLUE, -236.0625, -53.3125, 9999.0, TurretTier.FOUNTAIN),
+    (Team.BLUE, 574.625, 10220.5, 1550.0, TurretTier.OUTER),        # top
+    (Team.BLUE, 802.8125, 4052.375, 1550.0, TurretTier.INHIBITOR),  # top (T1_C_06)
+    (Team.BLUE, 1106.25, 6465.25, 1550.0, TurretTier.INNER),        # top
+    (Team.BLUE, 1341.625, 2030.0, 1425.0, TurretTier.NEXUS),
+    (Team.BLUE, 1768.1875, 1589.4375, 1425.0, TurretTier.NEXUS),
+    (Team.BLUE, 3234.0, 3447.25, 1550.0, TurretTier.INHIBITOR),     # mid
+    (Team.BLUE, 3747.25, 1041.0625, 1550.0, TurretTier.INHIBITOR),  # bot (T1_C_07)
+    (Team.BLUE, 4657.0, 4591.9375, 1550.0, TurretTier.INNER),       # mid
+    (Team.BLUE, 5448.375, 6169.125, 1550.0, TurretTier.OUTER),      # mid
+    (Team.BLUE, 6512.5, 1262.625, 1550.0, TurretTier.INNER),        # bot
+    (Team.BLUE, 10097.625, 808.75, 1550.0, TurretTier.OUTER),       # bot
+    (Team.RED, 3911.6875, 13654.8125, 1550.0, TurretTier.OUTER),    # top
+    (Team.RED, 7536.5, 13190.8125, 1550.0, TurretTier.INNER),       # top
+    (Team.RED, 8548.8125, 8289.5, 1550.0, TurretTier.OUTER),        # mid
+    (Team.RED, 9361.0625, 9892.625, 1550.0, TurretTier.INNER),      # mid
+    (Team.RED, 10261.875, 13465.9375, 1550.0, TurretTier.INHIBITOR),  # top
+    (Team.RED, 10743.5625, 11010.0625, 1550.0, TurretTier.INHIBITOR),  # mid
+    (Team.RED, 12118.125, 12876.625, 1425.0, TurretTier.NEXUS),
+    (Team.RED, 12662.5, 12442.6875, 1425.0, TurretTier.NEXUS),
+    (Team.RED, 12920.8125, 8005.3125, 1550.0, TurretTier.INNER),    # bot
+    (Team.RED, 13205.8125, 10474.625, 1550.0, TurretTier.INHIBITOR),  # bot
+    (Team.RED, 13459.625, 4284.25, 1550.0, TurretTier.OUTER),       # bot
+    (Team.RED, 14157.0, 14456.375, 9999.0, TurretTier.FOUNTAIN),
 )
 
 #: Lane-minion barracks (first full-health sighting of a new minion).
@@ -151,14 +188,29 @@ TOP_LANE_PATH: Tuple[Tuple[float, float], ...] = (
 #: which is a good argument for reading the oracle at its own resolution rather
 #: than at display precision.
 RUNE_HP_BONUS = 754.248046875 - 616.28
-#: Outer turret max HP above Content. 1550 observed vs 1300 in
-#: ``OrderTurretNormal``/``ChaosTurretWorm``, Map1's outer turrets.
+#: Non-nexus, non-fountain turret max HP above Content. 1550 observed vs 1300
+#: BaseHP -- true of the outer, inner AND inhibitor tiers alike, since all
+#: three share BaseHP 1300 (see `data/patch.TURRET_MODELS`).
+#:
+#: `LevelScriptObjects.OnMatchStart` (`:121-153`... `:145`) sets
+#: `HealthPoints.BaseBonus = 250.0f * Players[enemyTeam].Count` for every
+#: turret except the nexus pair (`TURRET_HP_BONUS_NEXUS`) and the fountain,
+#: which is skipped by an explicit `continue` and gets no HP bonus at all
+#: (`ALL_TURRETS`'s fountain entries are the bare Content 9999). In this
+#: project's 1v1, `enemyTeam.Count == 1`, so the multiplier drops out and 250
+#: is the bonus outright -- it would need to change if the slice ever grows
+#: past a 1v1.
 #:
 #: The bonus is unchanged by the Map11-vs-Map1 turret correction only because
 #: both candidates happen to carry BaseHP 1300 -- which is exactly why that
 #: mix-up survived every cross-check the turret had. See
 #: `data/patch.TURRET_MODELS`.
 TURRET_HP_BONUS = 250.0
+#: The nexus pair's own bonus (`OnMatchStart:149`):
+#: `HealthPoints.BaseBonus = 125.0f * Players[enemyTeam].Count`, again with
+#: the multiplier at 1 in a 1v1. 1300 + 125 = 1425, `ALL_TURRETS`'s measured
+#: nexus HP.
+TURRET_HP_BONUS_NEXUS = 125.0
 
 #: The rest of the rune page, measured the same way -- from the dump's own
 #: quantised values in a 600 s idle run, against the Content base.
@@ -275,17 +327,25 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
 
     t0 = TU_SLICE.start
     if include_all_turrets:
-        placed = [(t, tx, ty, thp) for t, tx, ty, thp in ALL_TURRETS]
+        placed = list(ALL_TURRETS)
     else:
-        base = next(iter(patch.turrets.values())).base_hp + TURRET_HP_BONUS
-        placed = [(t, *TOP_OUTER_TURRET[t], base) for t in (Team.BLUE, Team.RED)]
+        # The isolated arena's one turret per side is an OUTER turret -- it is
+        # the one `TOP_OUTER_TURRET` names, so it gets `TurretTier.OUTER`
+        # rather than the placeholder -1 the pre-tier code used. -1 is no
+        # longer a turret subtype `profile_id` accepts at all (every turret
+        # row now needs a real tier), so this is not optional.
+        from .profiles import TURRET_MODEL_NAME
+        base = ({t: patch.turrets[TURRET_MODEL_NAME[(t, TurretTier.OUTER)]].base_hp
+                + TURRET_HP_BONUS for t in (Team.BLUE, Team.RED)})
+        placed = [(t, *TOP_OUTER_TURRET[t], base[t], TurretTier.OUTER)
+                 for t in (Team.BLUE, Team.RED)]
     assert len(placed) <= TU_SLICE.stop - t0, (
         f"{len(placed)} turrets into {TU_SLICE.stop - t0} slots")
-    for j, (t, tx, ty, thp) in enumerate(placed):
+    for j, (t, tx, ty, thp, tier) in enumerate(placed):
         i = t0 + j
         kind[i] = Kind.TURRET
         team[i] = t
-        model[i] = profile_id(Kind.TURRET, -1, t)
+        model[i] = profile_id(Kind.TURRET, tier, t)
         x[i], y[i] = tx, ty
         hp[i] = thp
         alive[i] = True

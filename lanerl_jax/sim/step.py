@@ -44,7 +44,9 @@ import jax.numpy as jnp
 from .autoattack import step_autoattack
 from .combat import (
     TURRET_AD_PER_RAMP,
+    TURRET_ARMOR_PER_RAMP,
     TURRET_DAMAGE_VS_MINION,
+    other_turret_ramps,
     outer_turret_ramps,
 )
 from .collision import resolve_collisions
@@ -58,7 +60,7 @@ from .minion_ai import step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
 from .regen import step_regen
 from .rewards import ambient_gold, death_rewards, level_for_xp
-from .state import Kind, LaneState, MoveOrder, Team
+from .state import Kind, LaneState, MoveOrder, Team, TurretTier
 from .targeting import (MinionType, base_priority, call_for_help_map,
                         nearest_enemy, turret_acquire)
 
@@ -66,32 +68,35 @@ __all__ = ["UnitParams", "tick", "step_decision"]
 
 
 def _attack_damage_against(attack_damage, attacker_kind, target_kind,
-                           t_ms=None):
+                           model=None, t_ms=None):
     """Raw attack damage, with the attacker/target modifiers the scripts apply.
 
-    Only one exists in this slice: every lane turret's basic-attack script
-    multiplies by 0.7 when the target is a Minion, before mitigation. It is a
-    property of the *pair*, not of either unit's stats -- a turret shooting a
-    champion does full damage -- so it cannot live in the profile table.
+    Two exist in this slice. One is a property of the *pair*: every lane
+    turret's basic-attack script multiplies by 0.7 when the target is a
+    Minion, before mitigation -- a turret shooting a champion does full damage,
+    so it cannot live in the profile table. The other is a property of the
+    attacker's own tier and the game clock: the per-tier AD ramp below.
     """
     vs_minion = target_kind == Kind.LANE_MINION
     from_turret = attacker_kind == Kind.TURRET
     ad = jnp.where(from_turret & vs_minion,
                    attack_damage * TURRET_DAMAGE_VS_MINION, attack_damage)
     if t_ms is not None:
-        # The map script ramps an outer turret +4 AD every 60 s from t=30 s,
-        # capped at 7 applications: 152 at the start, 180 from 390 s on. It is
-        # a StatsModifier added on a timer and appears in no stat table, so a
-        # turret built from Content alone stays at its level-1 damage all game.
-        #
-        # Applied to every turret because all 24 currently share the outer
-        # profile. The other tiers really run a different schedule (from 480 s,
-        # and also +1 Armor / +1 MagicResist), so this is right for the two
-        # that matter in a top-lane 1v1 and an over-estimate for the rest --
-        # booked in `combat.INNER_TURRET_RAMP_START_MS`.
-        ad = jnp.where(from_turret,
-                       ad + TURRET_AD_PER_RAMP * outer_turret_ramps(t_ms, jnp),
-                       ad)
+        # `LevelScriptObjects.OnUpdate` runs TWO independent ramps
+        # (`combat.py`'s module docstring), selected by TIER, not by "is this a
+        # turret": the outer tier ramps +4 AD every 60 s from t=30 s (152 at
+        # the start, 180 from 390 s on, capped at 7 applications); every other
+        # non-fountain tier ramps the same +4 AD (plus armour, applied
+        # separately below) every 60 s from t=480 s, capped at 30. Dispatching
+        # on `model` rather than `kind` is what makes this a per-tier lookup
+        # instead of the old "every turret gets the outer schedule".
+        is_outer = _OUTER_TURRET_ROW[model]
+        is_other = _OTHER_TURRET_ROW[model]
+        ramp = jnp.where(
+            is_outer, TURRET_AD_PER_RAMP * outer_turret_ramps(t_ms, jnp),
+            jnp.where(is_other, TURRET_AD_PER_RAMP * other_turret_ramps(t_ms, jnp),
+                     jnp.zeros_like(ad)))
+        ad = ad + ramp
     return ad
 
 
@@ -118,10 +123,28 @@ _WAVE_ROW_BLUE = jnp.asarray(
     [PROFILES.index((Kind.LANE_MINION, m, Team.BLUE)) for m in range(4)], jnp.int8)
 _WAVE_ROW_RED = jnp.asarray(
     [PROFILES.index((Kind.LANE_MINION, m, Team.RED)) for m in range(4)], jnp.int8)
+#: Which PROFILES row is which turret tier, so the AD/armour ramp can be
+#: selected by `state.model` alone rather than by re-deriving the tier from
+#: geometry. FOUNTAIN rows are true in neither -- `UpdateTowerStats` excludes
+#: it by name and `UpdateOuterTurretStats` never looks it up either
+#: (`combat.py`'s `OTHER_TURRET_RAMP_MAX` docstring) -- so a fountain's ramp
+#: bonus is 0 from both `jnp.where` branches below, which is the correct
+#: "never ramps", not an approximation of it.
+_OUTER_TURRET_ROW = jnp.asarray(
+    [k == Kind.TURRET and sub == TurretTier.OUTER for k, sub, _ in PROFILES], bool)
+_OTHER_TURRET_ROW = jnp.asarray(
+    [k == Kind.TURRET and sub in (TurretTier.INNER, TurretTier.INHIBITOR,
+                                  TurretTier.NEXUS)
+     for k, sub, _ in PROFILES], bool)
 
 
-#: profile row -> MinionType, for `ClassifyTarget`. Non-minion rows map to -1,
-#: which `base_priority` never consults because it dispatches on `kind` first.
+#: profile row -> MinionType for a lane minion, or TurretTier for a turret
+#: (see `sim.state.TurretTier`) -- `_minion_type_of` is reused for both
+#: because every consumer (`base_priority`, `turret_acquire`) dispatches on
+#: `kind` FIRST and only trusts this value where `kind == LANE_MINION`, so a
+#: turret's tier passing through here as if it were a `MinionType` is inert:
+#: it is masked away before it can be read as one. Kept as one lookup rather
+#: than two so a turret's tier does not need its own gather in the tick.
 def _minion_type_of(state: LaneState) -> jax.Array:
     return _MINION_TYPE_TABLE[state.model]
 
@@ -164,6 +187,16 @@ def tick(state: LaneState, params: UnitParams,
     # Every stat is a gather through the unit's profile row: a minion slot is
     # reused by whatever spawns into it, so stats cannot be baked per slot.
     P = lambda k: params[k][state.model]          # noqa: E731
+    # An INNER/INHIBITOR/NEXUS turret's armour is not its Content value for
+    # most of a game either -- see `_attack_damage_against` for the AD half of
+    # the same pair of schedules. Computed once, up front, because armour is
+    # read in three places below (buffs, the autoattack mitigation target, and
+    # missile mitigation) and all three must see the same ramped value.
+    base_armor = P("armor")
+    armor_now = base_armor + jnp.where(
+        _OTHER_TURRET_ROW[state.model],
+        TURRET_ARMOR_PER_RAMP * other_turret_ramps(state.t_ms, jnp),
+        jnp.zeros_like(base_armor))
 
     # ---- 0. collision push-apart (Map.Update, FIRST thing in the tick) ----
     # `Game.Update` runs `Map.Update` (Game.cs:481) before `ObjectManager.
@@ -225,7 +258,7 @@ def tick(state: LaneState, params: UnitParams,
         buff_duration=state.buff_duration, buff_power=state.buff_power,
         spell_cooldown=state.spell_cooldown, spell_level=state.spell_level,
         x=state.x, y=state.y, kind=state.kind, team=state.team,
-        alive=state.alive, armor=P("armor"),
+        alive=state.alive, armor=armor_now,
         magic_resist=P("magic_resist"), delta_ms=delta_ms)
 
     # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
@@ -237,7 +270,13 @@ def tick(state: LaneState, params: UnitParams,
     #
     # Both are identity when Garen has never levelled or cast W, so this
     # changes nothing in a lane where W is unused.
-    armor_eff = P("armor") * (1.0 + bs.armor_pct_bonus)
+    #
+    # The base is `armor_now`, NOT `P("armor")`: a non-outer turret's armour
+    # already grows +1 every 60 s from 480 s (`other_turret_ramps`), and W's
+    # bonus is a PERCENTAGE of the current total, so it has to compose with the
+    # ramp rather than replace it. Getting this backwards would have silently
+    # frozen turret armour at its level-1 value for anyone carrying the buff.
+    armor_eff = armor_now * (1.0 + bs.armor_pct_bonus)
     magic_resist_eff = P("magic_resist") * (1.0 + bs.mr_pct_bonus)
 
     # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
@@ -396,7 +435,7 @@ def tick(state: LaneState, params: UnitParams,
     wp_key = jnp.where(chase, jnp.int8(1), wp_key)
     n_wp = jnp.where(chase, jnp.int8(2), state.n_waypoints)
     raw_ad = _attack_damage_against(
-        P("attack_damage"), state.kind, state.kind[tgt], state.t_ms)
+        P("attack_damage"), state.kind, state.kind[tgt], state.model, state.t_ms)
     aa = step_autoattack(
         state.aa_cooldown, state.aa_windup, state.is_attacking,
         state.has_auto_attacked,
@@ -439,7 +478,7 @@ def tick(state: LaneState, params: UnitParams,
         m_damage=state.missile_damage, m_speed=state.missile_speed,
         launches=launches, raw_damage=raw_ad, launch_speed=P("missile_speed"),
         x=x, y=y, alive=state.alive,
-        targetable=state.alive, armor=P("armor"), target=target,
+        targetable=state.alive, armor=armor_eff, target=target,
         delta_ms=delta_ms)
 
     dmg_ij = jnp.where(landed[:, None] & (jnp.arange(n)[None, :] == tgt[:, None]),

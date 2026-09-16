@@ -25,7 +25,8 @@ import jax.numpy as jnp
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
 from lanerl_jax.sim.init import ALL_TURRETS, TOP_LANE_PATH, init_lane, lane_params
 from lanerl_jax.sim.profiles import build_profile_tables, profile_id
-from lanerl_jax.sim.state import Kind, MoveOrder, N_MISSILES, TU_SLICE, Team
+from lanerl_jax.sim.state import (Kind, MoveOrder, N_MISSILES, TU_SLICE, Team,
+                                  TurretTier)
 from lanerl_jax.sim.step import step_decision, tick
 from lanerl_jax.sim.movement_jax import TICK_MS
 from lanerl_jax.sim.targeting import MinionType
@@ -287,7 +288,7 @@ def test_a_lane_turrets_damage_also_lands_after_flight():
     mhp = np.asarray(s.max_hp).copy()
     model = np.asarray(s.model).copy()
 
-    turret_team, tx, ty, _ = ALL_TURRETS[1]        # blue's top outer turret
+    turret_team, tx, ty, _, _ = ALL_TURRETS[1]     # blue's top outer turret
     assert turret_team == Team.BLUE
     turret_idx = TU_SLICE.start + 1
     dist = 100.0
@@ -314,7 +315,7 @@ def test_a_lane_turrets_damage_also_lands_after_flight():
         "damage must not land on the same tick the turret fires"
 
     tables = build_profile_tables(patch)
-    r = profile_id(Kind.TURRET, -1, Team.BLUE)
+    r = profile_id(Kind.TURRET, TurretTier.OUTER, Team.BLUE)
     speed = float(tables["missile_speed"][r])
     assert speed == pytest.approx(1200.0)
     flight_ticks = round((dist / speed) / (TICK_MS / 1000.0))
