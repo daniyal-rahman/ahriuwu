@@ -42,6 +42,7 @@ import jax
 import jax.numpy as jnp
 
 from .autoattack import step_autoattack
+from .combat import TURRET_DAMAGE_VS_MINION
 from .collision import resolve_collisions
 from .init import spawn_minion
 from .profiles import PROFILES
@@ -54,6 +55,20 @@ from .state import Kind, LaneState, MoveOrder, Team
 from .targeting import base_priority, nearest_enemy, turret_acquire
 
 __all__ = ["UnitParams", "tick", "step_decision"]
+
+
+def _attack_damage_against(attack_damage, attacker_kind, target_kind):
+    """Raw attack damage, with the attacker/target modifiers the scripts apply.
+
+    Only one exists in this slice: every lane turret's basic-attack script
+    multiplies by 0.7 when the target is a Minion, before mitigation. It is a
+    property of the *pair*, not of either unit's stats -- a turret shooting a
+    champion does full damage -- so it cannot live in the profile table.
+    """
+    vs_minion = target_kind == Kind.LANE_MINION
+    from_turret = attacker_kind == Kind.TURRET
+    return jnp.where(from_turret & vs_minion,
+                     attack_damage * TURRET_DAMAGE_VS_MINION, attack_damage)
 
 
 class UnitParams(dict):
@@ -251,7 +266,8 @@ def tick(state: LaneState, params: UnitParams,
         has_target=has_tgt,
         attack_period=P("attack_period"),
         windup_time=P("attack_windup"),
-        attack_damage=P("attack_damage"),
+        attack_damage=_attack_damage_against(
+            P("attack_damage"), state.kind, state.kind[tgt]),
         target_resist=P("armor")[tgt],
         delta_ms=delta_ms, xp=jnp)
 

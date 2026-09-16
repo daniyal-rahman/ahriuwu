@@ -63,7 +63,29 @@ __all__ = [
     "total_attack_speed",
     "attack_period",
     "attack_windup",
+    "TURRET_DAMAGE_VS_MINION",
 ]
+
+
+#: Turrets deal **70% damage to minions**, and it is applied to the raw attack
+#: damage *before* mitigation.
+#:
+#: Straight out of every lane turret's basic-attack script
+#: (``SRUAP_Turret_Order3/BasicAttack.cs``, and identically Chaos3, Order4 and
+#: Chaos4)::
+#:
+#:     var dmg = owner.Stats.AttackDamage.Total;
+#:     if (target is Minion)
+#:     {
+#:         dmg *= 0.7f;
+#:     }
+#:     owner.TargetUnit.TakeDamage(owner, dmg, DAMAGE_TYPE_PHYSICAL, ...);
+#:
+#: Missing it made the sim's turrets 43% stronger against a wave than the
+#: server's: 190 raw instead of 133, which is a caster dead in 2 shots rather
+#: than 3 and a cannon in 4 rather than 6. Turret damage against *champions* is
+#: unmodified, so this cannot be folded into the turret's attack-damage stat.
+TURRET_DAMAGE_VS_MINION = 0.7
 
 
 def post_mitigation_damage(damage: Any, resist: Any, xp: Any = np) -> Any:
