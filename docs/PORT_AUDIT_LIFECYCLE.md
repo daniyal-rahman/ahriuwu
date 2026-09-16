@@ -45,7 +45,8 @@
 | **Visibility: Stored cache vs computed** | `GameObject.cs:25-27`: `_visibleByTeam` dictionary, set at each `ObjectManager.Update` → `UpdateTeamsVision` | `state.visible_to_enemy`: recomputed every tick in `step.py:400` via `fog.visible_to_enemy()` and stored in state before being used by targeting | EXACT | Server caches vision in `_visibleByTeam` per team. JAX caches in `state.visible_to_enemy` as a single boolean per unit (because two-team lane, unit's visibility to its enemy is a property of the unit alone, not the (seeker, unit) pair). Both recompute fresh every tick before use in targeting. Both avoid redundant checks on every targeting read. |
 | **Buildings: Turret creation and type** | `BaseTurret.cs:36`: `IsAffectedByFoW => false` | `fog.py:96`: `never_fogged = kind == Kind.TURRET` | EXACT | Turrets are never fogged. Placed at map init with `Kind.TURRET` in JAX state (sim/init.py); server creates via `LevelScript` map loading. Both guarantee turrets are always visible. |
 | **Buildings: Turret levels/tiers** | `LevelScriptObjects.GetTurretType` (Map1/LevelScriptObjects.cs:364-393): assigns tiers (OUTER, INNER, INHIBITOR, NEXUS) with different stat Content models | `state.py:TurretTier` enum (OUTER=0, INNER=1, INHIBITOR=2, NEXUS=3, FOUNTAIN=4); `profiles.py` has per-tier stat rows | UNVERIFIED | JAX defines tier constants and carries them in state; stats are in profile table indexed by `(Kind.TURRET, tier, team)`. Server loads different Content models per tier. **Not checked in detail:** whether profile values match server Content exactly for all tiers. Checked only OUTER tier in earlier audits. **Booked:** spot-check INNER tier stats against server Content/Models before shipping. |
-| **Buildings: Turret ramp/scaling** | `LevelScriptObjects.OnUpdate` (Map1/LevelScriptObjects.cs:159-266): Non-outer tiers ramp stats on a schedule starting at 480s | `sim/combat.py`: Outer turret has explicit ramp (see module; OUTER=0 tiers checked in `test_champion_level_scaling`). Inner/Inhib/Nexus: no ramp implemented | WRONG / UNVERIFIED | Server applies per-tier stat ramps on a schedule. JAX implements outer turret ramp but has no ramp for inner/inhibitor/nexus tiers. **Reachability in 600s:** Outer ramp spans 390-590s (checked in module docstring `state.py:119-121`), inner ramp starts 480s and is active for last 120s of episode. **Impact:** Inhibitor/Nexus are not reached in current 1v1 (estimated 30+ min to destroy both inhibitors); inner turret scaling in final 2 minutes of a deathless run. **Verdict: WRONG for INNER tier in edge case** (a 10+ minute 1v1 where red champion holds mid-outer and blue is somehow pushing red-side inner), but **N/A (unreachable)** for INHIBITOR and NEXUS in 600s 1v1. **Handoff:** if map play expands to full 5v5, inner/inhib/nexus tiers would need their ramps ported from `LevelScriptObjects.OnUpdate`. Current state: OUTER checked and exact, INNER/INHIB/NEXUS booked as WRONG-if-reached. |
+| **Turret AD/Armor ramps (all tiers)** | `LevelScriptObjects.OnUpdate` (Map1/LevelScriptObjects.cs:159-266): Outer tiers ramp on one schedule (30s wait, 60s period, 7-cap); non-outer tiers (INNER/INHIBITOR/NEXUS) on another (480s wait, 60s period, 20/30-cap). Both ramp AD and Armor. | `combat.py:186-210`: `other_turret_ramps(t_ms)` formula; applied at `step.py:95-98` (AD via `TURRET_AD_PER_RAMP`) and `:209-210` (Armor via `TURRET_ARMOR_PER_RAMP`); outer ramp at `:183` and `:206`. `_OTHER_TURRET_ROW[model]` selector (line 136) gates per-tier. | EXACT | Both AD and Armor ramps implemented and wired exactly. Non-outer schedule: `floor((t_ms - 480000) / 60000) + 1`, clipped to 30 (verified against `LevelScriptObjects.OnUpdate` formula at Map1/LevelScriptObjects.cs:159-266). Outer schedule verified in `test_champion_level_scaling`. **Magic Resist ramps are MISSING** (see next row). |
+| **Turret Magic Resist ramps** | Server applies MR ramps alongside AD/Armor on same schedules per-tier | No MR ramp applied in `step.py` or `combat.py`; MR is fixed per-tier baseline only | MISSING | Turrets have base MR stats per tier (carried in profiles, not ramped). MR ramps are not computed or applied. **Reachability:** Outer turret MR is static (ramp not even on server for outer per parallel audit); inner/inhibitor/nexus MR ramps unreachable (30+ min). **Verdict: MISSING but N/A for 600s.** |
 | **Inhibitor: Initial state** | `Inhibitor.cs:30`: `InhibitorState = DampenerState.RespawningState` at construction | `state.py`: No inhibitor state field. Inhibitor turrets placed in state with `Kind.TURRET, TurretTier.INHIBITOR` but no FSM | MISSING | Server tracks inhibitor state (RespawningState → RegenerationState → RespawningState on cycle). Inhibitor affects minion spawning: "super minions" spawn when the opposing team's inhibitor is in RegenerationState (dying/regenerating). **Reachability in 600s:** Inhibitors unreachable. **Verdict: MISSING but N/A.** If 5v5 is added or episode length extends to 30 min, inhibitor state and super-minion spawning would need implementation. |
 | **Inhibitor: Die handling** | `Inhibitor.cs:40-51`: `Die()` calls base, grants 50 gold to killer if champion, changes state to RegenerationState, notifies clients | Not implemented | MISSING | Gold-grant and state-change for inhibitor kills are missing. **Reachability: N/A (unreachable in 600s).** |
 | **Inhibitor: SetToRemove override** | `Inhibitor.cs:71-73`: Empty override; inhibitor never calls base's `SetToRemove()` | Not applicable | N/A | Redundant server-side measure (inhibitors stay in ObjectManager collection). JAX equivalent is that inhibitor units stay in state with `alive=False` when dead, never removed. Inhibitor as a building concept is handled by NOT removing it; JAX achieves this by fixed-size state. |
@@ -57,22 +58,33 @@
 | **Region/Particle: Lifetime expiry** | `Region.cs:163-177`, `Particle.cs:254-261`: Both track `_currentTime`, check `_currentTime >= Lifetime`, call `SetToRemove()` when expired | Not modeled | MISSING | Particles (missiles, visual effects) and regions are not kept in JAX state past their lifetime. Missiles are modeled as a separate fixed-size array in `state.missile_*` with manual removal. **Reachability:** Missiles are live; regions (e.g., vision plants) are not used in lane scenario. **Verdict: APPROX** — missiles are handled (alive flag is checked per tick), explicit lifetime-based removal is not, but dead missiles are masked and do not affect targets (line `step.py:530`: targetable checks `state.missile_alive`). |
 | **Particle: Visibility to team/unit** | `Particle.cs:59-64`: `SpecificTeam`, `SpecificUnit` fields; particles can be team-only or unit-only | Not implemented | MISSING | JAX does not track visibility restrictions on visual effects. **Reachability:** No particles in lane scenario (Garen has no targeted skill particles in this config). **Verdict: N/A** — no reachable particles. |
 
-## Removal Path Artifact: "Present-but-flagged-dead at N+1"
+## Removal Path Artifact: "Present-but-flagged-dead at N+1" (Minion Deaths)
 
-**Finding:** The server exhibits an artifact where objects marked `IsToRemove() = true` in tick N remain present in the `ObjectManager._objects` dictionary at tick N+1, flagged with `IsDead = true`.
+**Finding:** State dumps show ~50 rows where objects are present in `ObjectManager._objects` with `IsDead = true`, appearing to survive one tick after death before removal.
 
-**Root cause:** `ObjectManager.cs:88-115` (Update method, post-update removal phase):
-1. After all `Update()` calls, objects are checked for `IsToRemove()`
-2. **Exception:** Buildings (line 109: `if (obj is BaseTurret || obj is ObjBuilding) continue;`) are explicitly skipped and never removed
-3. Dead buildings stay in the collection with `IsDead = true` but no behavior (lines 104-108 comment: "A dead building left in the collection is inert: IsDead gates its behaviour")
-4. Inhibitors and Nexus double-redundantly override `SetToRemove()` to do nothing (Inhibitor.cs:71-73, Nexus.cs:22-24)
-5. At N+1, `LateUpdate()` is called only on objects that were present at line 134 after adds/removes; dead buildings still receive `LateUpdate()` calls but do nothing (IsDead gates all behavior)
+**Root cause — Minion death timing, NOT buildings:** `AttackableUnit.Die()` is called from the victim's own `Update()` phase (line 81 of `ObjectManager.cs`). A minion whose HP crosses zero is marked dead and `SetToRemove()` is called within that tick, but the object is not actually removed from `_objects` until the post-`Update()` removal phase (lines 86-115) completes. If a state dump occurs at a tick boundary, a recently-killed minion appears with `IsDead = true` still present in the collection.
 
-**Observed count:** ~50 occurrences in long-running episodes: 24 turrets (never removed) + 4 inhibitors (never removed) + 2 nexus (never removed) = 30 permanent dead objects + some particle/missile slots.
+In the idle-lane trace where the 50 rows were observed, zero buildings were destroyed (`turrets_destroyed: server 0, ours 0`), so the never-removed-buildings path cannot explain any of the ~50 dead-flagged rows — the mechanism was misidentified. With 1,767 minion deaths in the same trace, 50 rows straddling dump boundaries (death called in update, not removed until post-update, dump captures the window) is entirely plausible.
 
-**JAX equivalent:** Fixed-size state arrays. Dead units keep their slots with `alive=False`. No removal queue. At step N+1, dead units are present in arrays but masked by `alive` flag in all downstream operations (targeting, behavior, vision). Functionally identical outcome (dead units visible in raw state but do not participate) with zero runtime cost (no allocation/deallocation).
+**JAX equivalent:** Fixed-size state arrays. Dead minions keep their slots with `alive=False`. No removal queue. This same timing artifact cannot occur because state is a pure function; a minion killed at step N is immediately marked `alive=False` and never reads as present-but-flagged at step N+1 (the `alive` mask prevents it from being touched by any operation).
 
-**Verdict on artifact itself:** The server's behavior is intentional and documented (lines 90-108 comment). It is an _implementation detail_ necessitated by long-running episodes where building revival is required. JAX sidesteps it via immutable fixed-size state — no manifestation of the artifact, but equivalent safety guarantee. **Not a bug on either side.**
+**Verdict:** Artifact is a benign side-effect of the server's removal-queue architecture. Not a bug; state is correct at the end of each tick. JAX's immutable state design eliminates the artifact entirely while preserving correctness.
+
+---
+
+## Cross-Episode State Leak: Never-Removed Dead Buildings (Lanerl-Specific Hazard)
+
+**Finding:** `ObjectManager.cs:88-115` contains an intentional exception for buildings: `if (obj is BaseTurret || obj is ObjBuilding) continue;` at line 109 skips removal for all building-type objects. The comment (lines 90-108) explains this is a **lanerl-specific modification**:
+
+> "lanerl resets a game in-process instead of restarting the server, and LanerlEpisode.RestoreBuildings revives structures by walking this collection. A destroyed turret that has been removed from it is unreachable — it cannot be revived, so the map is permanently short a tower for every later episode on the process."
+
+**Observed failure:** This optimization has a measured cost across in-process episode resets: "buildings=32 at the first reset, 28 by the end of a run, with dead_buildings=0 the whole time because the missing ones were not there to be counted. The wave then has nothing to stop it and BOTH champions' CS falls, which reads exactly like the policy collapsing."
+
+**Mechanism:** Dead buildings (with `IsDead = true`) remain in the collection but are inert (all behavior is gated by `IsDead`). When `LanerlEpisode.RestoreBuildings` runs at the next episode reset, it walks `_objects` to revive them. However, a building that was removed between episodes (by an agent restart or crash before reset) is lost and cannot be revived, leaving a permanent gap in the map. Over many resets, defensive towers leak out and the map becomes progressively more open.
+
+**JAX equivalent:** Not applicable. JAX state is reset explicitly per episode (new state object constructed), so dead buildings are garbage-collected and revived from init data. No cross-episode state leak.
+
+**Risk:** Any agent using in-process resets (lanerl's own mode) inherits this hazard. The fix is either (1) always remove dead buildings and reconstruct them at reset, or (2) validate that RestoreBuildings can still find every needed building before depending on revival-by-walk. Current state: this is a known, measured failure mode of long-running episodes under lanerl's reset strategy.
 
 ---
 
@@ -98,22 +110,22 @@
    - **Fix effort:** N/A (fountain healing is only visible if champion's HP drops post-respawn, not implemented)
    - **Priority:** Very low (booked for future exotic mechanics)
 
-4. **Inner/Inhibitor/Nexus tier stat ramping (WRONG/MISSING, unreachable in 600s)**
-   - **Issue:** Only OUTER tier stats are ramped; INNER, INHIBITOR, NEXUS tiers have no ramp schedule implemented
-   - **Reachability:** INHIBITOR/NEXUS unreachable in 600s; INNER reachable in edge case (see #1 above)
-   - **Fix effort:** Tier-specific ramps from `LevelScriptObjects.OnUpdate` (this is the same as #1 for INNER)
-   - **Priority:** Medium (fold into #1 when fixing inner turret ramp)
+4. **Turret Magic Resist ramps (MISSING, unreachable in 600s)**
+   - **Issue:** MR ramps for all turret tiers are not implemented; base MR stats carry but do not grow per schedule
+   - **Reachability:** Outer MR is static (not ramped even on server per parallel audit); inner/inhibitor/nexus MR ramps unreachable in 600s
+   - **Fix effort:** If ramping is needed, add per-tier MR ramp computation (low priority since outer is static and others are unreachable)
+   - **Priority:** Very low (unreachable in 600s; outer tier doesn't ramp on server anyway)
 
 ---
 
 ## Summary
 
-**Total rows:** 38  
-**EXACT:** 25 (66%)  
-**APPROX:** 4 (11%)  
-**MISSING:** 6 (16%)  
-**WRONG:** 1 (3%)  
+**Total rows:** 39 (split former row into AD/Armor EXACT + MR MISSING)  
+**EXACT:** 26 (67%)  
+**APPROX:** 4 (10%)  
+**MISSING:** 7 (18%)  
+**WRONG:** 0 (0%)  
 **N/A (unreachable):** 2 (5%)  
 
-**Verdict:** Lifecycle mechanics are **well-ported**. Death, respawn, and visibility are exact. Buildings (turrets, inhibitors, nexus) are handled via fixed-size state instead of dynamic removal; the server's own "present-but-dead" artifact is sidestepped without behavioral difference. Fountain healing and inhibitor state are missing but unreachable in the current 600s 1v1 scenario. Inner turret ramp is the only mechanic that could plausibly surface within an episode (very long 1v1); it is booked and should be prioritized if late-game lane play is added to the RL suite.
+**Verdict:** Lifecycle mechanics are **well-ported**. Death, respawn, and visibility are exact. Turret AD and Armor ramps are correctly wired for all tiers; Magic Resist ramps are missing but unreachable (outer is static, others need 30+ min). The ~50 "present-but-flagged-dead" rows in idle-lane traces are a benign minion-death timing artifact (Die() called in victim's Update, object removed post-update; dump may capture the window), not a buildings issue. A real cross-episode hazard exists: lanerl's in-process resets rely on never-removing dead buildings for revival, but buildings can leak away over resets (measured: 32→28 towers, both champions' CS falls). JAX sidesteps both via fixed-size state. Fountain healing and inhibitor state are missing but unreachable in 600s 1v1.
 
