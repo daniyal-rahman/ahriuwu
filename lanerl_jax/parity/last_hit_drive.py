@@ -193,14 +193,24 @@ ARRIVE_RADIUS = 100.0
 _ARRIVE_RADIUS_SQ = ARRIVE_RADIUS * ARRIVE_RADIUS
 
 
-def _advance_approach(x: float, y: float, idx: int) -> int:
+def _advance_approach(x: float, y: float, idx: int,
+                      respawned: bool = False) -> int:
     """Bump ``idx`` into :data:`APPROACH_WAYPOINTS` once arrived at it.
 
     Closed-loop on each engine's OWN reported position rather than a
     fixed decision-count schedule, so the two drivers do not need identical
     movement speeds or tick timing to stay in step -- each one advances
     exactly when IT decides it has arrived.
+
+    ``respawned`` restarts the walk, and without it one death ended the
+    experiment. The index is monotonic, so a champion that died went back to
+    the fountain with the approach already exhausted and simply stood there --
+    measured: dead at ~120 s, then parked at (26, 280) for the remaining 440
+    seconds of a 600 s episode. The sim was being scored on 120 s of farming
+    against the server's 600, which is not a comparison of last-hitting.
     """
+    if respawned:
+        return 0
     if idx >= len(APPROACH_WAYPOINTS):
         return idx
     tx, ty = APPROACH_WAYPOINTS[idx]
@@ -289,8 +299,9 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
         champ_alive = bool(state.alive[0])
         if prev_alive and not champ_alive:
             deaths += 1
+        respawned = champ_alive and not prev_alive
         prev_alive = champ_alive
-        wp_idx = _advance_approach(x0, y0, wp_idx)
+        wp_idx = _advance_approach(x0, y0, wp_idx, respawned)
 
         if wp_idx < len(APPROACH_WAYPOINTS):
             approach_decisions += 1
@@ -427,8 +438,9 @@ def run_oracle_on_server(
             champ_alive = float(blue.get("hp", 1)) > 0
             if prev_alive and not champ_alive:
                 deaths += 1
+            respawned = champ_alive and not prev_alive
             prev_alive = champ_alive
-            wp_idx = _advance_approach(bx, by, wp_idx)
+            wp_idx = _advance_approach(bx, by, wp_idx, respawned)
 
             if wp_idx < len(APPROACH_WAYPOINTS):
                 approach_decisions += 1
