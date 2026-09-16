@@ -293,6 +293,14 @@ def test_hp_regen_rates_come_from_content_and_are_per_second():
     is 3.0 and NEXUS is 6.0 HP/s in Content (`data.patch.TURRET_MODELS`), which
     is 1,800 / 3,600 HP over a ten-minute game against a 1,550 HP pool and
     could never show up while every placed turret shared the outer row.
+
+    The CHAMPION is the one row that is no longer pure Content. The server
+    auto-buys Doran's Shield at boot and `ItemPassives/DoransShield.cs` does
+    `HealthRegeneration.BaseBonus += 1.2f`, so its champion regenerates at
+    Garen's Content 1.568 PLUS 1.2. The dump does not expose regen, which is
+    why this stat was taken from Content in the first place and why the item
+    was missed; max HP, AD and armour are all measured against the dump
+    instead. See `sim.init.DORANS_SHIELD_HP_REGEN`.
     """
     from lanerl_jax.data.patch import load_patch
     from lanerl_jax.sim.init import lane_params
@@ -302,7 +310,9 @@ def test_hp_regen_rates_come_from_content_and_are_per_second():
 
     p = lane_params(load_patch())
     reg = np.asarray(p["hp_regen"])
-    assert reg[profile_id(Kind.CHAMPION, -1, Team.BLUE)] == pytest.approx(1.568)
+    from lanerl_jax.sim.init import DORANS_SHIELD_HP_REGEN
+    assert reg[profile_id(Kind.CHAMPION, -1, Team.BLUE)] == \
+        pytest.approx(1.568 + DORANS_SHIELD_HP_REGEN)
     assert reg[profile_id(Kind.LANE_MINION, MinionType.MELEE, Team.BLUE)] == 0.0
     for team in (Team.BLUE, Team.RED):
         assert reg[profile_id(Kind.TURRET, TurretTier.OUTER, team)] == 0.0
