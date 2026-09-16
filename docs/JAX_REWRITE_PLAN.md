@@ -387,6 +387,37 @@ design the update is part of the same XLA program and its cost adds, which is
 why J3 re-measures end to end rather than trusting this.
 
 
+### 1.13 MEASURED: reset cost, gate 6 (D11)
+
+Never done until 2026-09-16, and done on CPU rather than the 5080 §1.12 used
+(this measurement ran in a worktree pinned to `JAX_PLATFORMS=cpu`) -- so the
+absolute numbers below are not comparable to §1.12's, but the thing gate 6
+actually asks for is a *ratio*, and a ratio between two operations measured on
+the same device in the same run is exactly what a device change cannot distort
+in the direction that would matter (a GPU speeds up the compute-bound `tick`
+far more than the memory-bound `where`-select, so if anything the ratio should
+be smaller, not larger, on the hardware §1.12 used).
+
+`lanerl_jax/train/benchmark.run_reset_benchmark` reproduces `trainer.py`'s
+actual reset exactly -- `jax.tree.map(lambda a, b: jnp.where(done, b, a),
+state, fresh)`, `vmap`ped over the env axis the same way `_env_step`'s `one` is
+-- and times it against one `step_decision` at the same `n_envs`:
+
+| envs | reset | step | reset / step |
+|---|---|---|---|
+| 64 | 1,603.7 us | 21,699.0 us | 7.39% |
+| **512** | **5,254.5 us** | **241,923.5 us** | **2.17%** |
+| 2048 | 14,846.0 us | 854,181.6 us | 1.74% |
+
+512 is `TrainConfig.n_envs`'s default, i.e. the realistic size. **Gate 6 is
+MET**: reset costs ~2% of a step, not the "documented cost sink" D11 warns an
+unguarded auto-reset becomes, and the ratio *falls* as the env count grows
+(7.39% at 64 envs to 1.74% at 2048) because `tick` is the far more expensive
+operation and gets relatively more expensive still as the vectorised batch
+gives the compiler more to fuse -- the opposite of a result that would need
+watching.
+
+
 ### 1.9 What the prior work says, and what it says we must not do
 
 The reference architecture is **Anakin** (Hessel et al., 2021, *Podracer
@@ -706,8 +737,9 @@ large factor that SMAX never had available. Second, our baseline runs 24 envs;
 filling the device is where the env-vectorisation factor lives.
 
 **Gate 4 and gate 5 are MET** — 164× and 12.8 s, measured on the 5080; see
-§1.12. The contingency below is kept for the record of what the decision would
-have been.
+§1.12. **Gate 6 is MET** — reset costs 2.17% of a step at 512 envs (falling to
+1.74% at 2048), measured on CPU; see §1.13. The contingency below is kept for
+the record of what the decision would have been.
 
 *If gate 4 had failed after three weeks of honest effort: stop and reconsider —
 a C/PufferLib-style CPU rewrite, or going back to optimising the existing stack,

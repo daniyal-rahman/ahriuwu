@@ -153,6 +153,94 @@ def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
     )
 
 
+class ResetBenchResult(NamedTuple):
+    """J1 gate 6 (D11): reset cost, measured against one `step_decision`.
+
+    Both timings are taken at the SAME `n_envs`, on the same array shapes, so
+    the ratio is not an apples-to-oranges comparison between two different
+    benchmark runs.
+    """
+    n_envs: int
+    reset_s: float
+    step_s: float
+    device: str
+
+    @property
+    def ratio(self) -> float:
+        return self.reset_s / self.step_s
+
+    def report(self) -> str:
+        verdict = "PASSES" if self.ratio < 0.1 else "FAILS"
+        return (
+            f"{self.n_envs:>6} envs | reset {self.reset_s * 1e6:8.1f} us | "
+            f"step {self.step_s * 1e6:8.1f} us | "
+            f"reset/step {self.ratio:6.2%} | gate 6 {verdict}"
+        )
+
+
+def run_reset_benchmark(n_envs: int, steps: int = 200, warmup: int = 5,
+                        seed: int = 0) -> ResetBenchResult:
+    """Time the trainer's actual reset op against one `step_decision`.
+
+    D11 says reset must stay "pure array initialisation from static
+    constants" -- a `jax.tree.map` `jnp.where` against a constant pytree,
+    exactly `trainer.py`'s ``nxt = jax.tree.map(lambda a, b: jnp.where(done, b,
+    a), nxt, fresh)`` -- and gate 6 asks that this be measured separately and
+    confirmed small relative to a step. It never was; this is that
+    measurement.
+
+    Reproduces the trainer's shapes exactly rather than approximating them:
+    `fresh` is the SAME unbatched constant pytree `init_lane()` produces
+    (closed over, not broadcast -- broadcasting it would time allocating 512
+    copies of a constant, not the where-select itself), `done` is one bool
+    per env exactly as `nxt.t_ms >= episode_s * 1000.0` produces one bool per
+    env, and the whole thing is `vmap`ped over `n_envs` the same way
+    `_env_step`'s `one` is.
+    """
+    patch_params = lane_params()
+    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+    # `trainer.py` broadcasts this SAME constant for both the initial batch
+    # and the reset target (`env_state = jax.tree.map(..., fresh)`); mirrored
+    # here rather than building the starting batch from a second call.
+    fresh = init_lane()
+    states = jax.tree.map(lambda a: jnp.broadcast_to(a, (n_envs,) + a.shape), fresh)
+
+    def reset_one(state, done):
+        return jax.tree.map(lambda a, b: jnp.where(done, b, a), state, fresh)
+
+    @jax.jit
+    def reset_batch(states, dones):
+        return jax.vmap(reset_one)(states, dones)
+
+    @jax.jit
+    def sim_step(states):
+        return jax.vmap(lambda s: step_decision(s, patch_params, lane_path=path))(states)
+
+    # Alternating true/false rather than all-true: `jnp.where`'s cost does not
+    # depend on the predicate's VALUE (XLA does not branch per-element), so
+    # this is only to avoid a benchmark that happens to look identical to
+    # "always reset" or "never reset" and to keep the compiled program honest
+    # about handling both.
+    dones = (jnp.arange(n_envs) % 2 == 0)
+
+    def timeit(fn, *args):
+        st = fn(*args)
+        for _ in range(warmup - 1):
+            st = fn(*args)
+        jax.block_until_ready(st)
+        t0 = time.perf_counter()
+        for _ in range(steps):
+            st = fn(*args)
+        jax.block_until_ready(st)
+        return (time.perf_counter() - t0) / steps
+
+    reset_s = timeit(reset_batch, states, dones)
+    step_s = timeit(sim_step, states)
+
+    return ResetBenchResult(n_envs=n_envs, reset_s=reset_s, step_s=step_s,
+                            device=str(jax.devices()[0]))
+
+
 if __name__ == "__main__":
     import sys
 
@@ -163,4 +251,11 @@ if __name__ == "__main__":
         try:
             print(run_benchmark(n).report())
         except Exception as exc:                     # OOM is a real answer
+            print(f"{n:>6} envs | FAILED: {type(exc).__name__}: {str(exc)[:120]}")
+
+    print("\nJ1 gate 6 (D11): reset cost vs. one step_decision\n")
+    for n in sizes:
+        try:
+            print(run_reset_benchmark(n).report())
+        except Exception as exc:
             print(f"{n:>6} envs | FAILED: {type(exc).__name__}: {str(exc)[:120]}")
