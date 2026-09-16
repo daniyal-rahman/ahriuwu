@@ -72,6 +72,58 @@ Run via slurm, not the login node (records its own trace, O(N^2) python per
 tick, N<=66):
 
     sbatch slurm/parity_g1.sbatch python -m lanerl_jax.parity.tier1_collision_sequential
+
+Why PRODUCTION scores slightly worse than the "creation order" reference
+above at neighbours>=2, 2026-09-16 follow-up (root-caused, not left open)
+-----------------------------------------------------------------------------
+The PRODUCTION row (the real `sim.collision.resolve_collisions`, added
+below) beats the pre-parity-pass Jacobi row at every crowding bucket, but
+came in slightly BELOW this file's own "reconstructed creation order" NumPy
+reference at neighbours=2 (70.8% vs 72.7%) and 3+ (53.7% vs 58.2%), despite
+carrying strictly more fixes (the radius split, the turret split, and the
+real `spawn_seq` instead of a reconstruction). Two candidate explanations
+were checked directly against the recorded trace, not assumed:
+
+1. **Ordering.** This file originally fed `estimate_creation_order`'s float
+   rank into `resolve_collisions` via a truncating `.astype(np.int32)`,
+   which collapses the deliberate blue/red `team_bit` tie-break (see
+   `estimate_creation_order`'s own docstring) whenever a blue and red minion
+   share a per-team ordinal -- confirmed to happen on 1,320/1,320 sampled
+   ticks. Fixed with a lossless `argsort(argsort(...))` rank encoding.
+   Measured impact of that fix, over 1,100 sampled ticks against the SAME
+   trace: 1,084 (98.5%) had a genuinely different overall ordering
+   permutation, but **0 of those 1,084 changed any `resolve_collisions`
+   output position by more than 1e-4** (max observed difference: exactly
+   0.0). So the ordering bug was real and worth fixing, but it is NOT what
+   separates PRODUCTION from the reference on this corpus.
+2. **The radius split itself.** Holding order fixed (the same lossless
+   rank for both) and varying only whether the trigger uses
+   `pathfinding_radius` (reference-style) or `collision_radius`
+   (production, correct per `Minion.cs:57`), 785/1,100 sampled ticks (71%)
+   had at least one minion resolve to a different position -- and NONE of
+   those involved a champion within 120 units (ruling out the
+   Champion-specific 30-vs-35 radius gap as the cause). The real driver is
+   PER-MINION-TYPE: `data.patch` loads melee/caster `PathfindingRadius` at
+   ~35.74 and cannon/super at ~55.74-55.52 (genuine Content values, nothing
+   to do with this project's fixes), while every lane minion's
+   `CollisionRadius` is hard-coded to a uniform 40 by the server regardless
+   of type. So relative to the reference (which used `PathfindingRadius`
+   for the trigger, like the old Jacobi code):
+   - melee/caster pairs trigger MORE readily under production (40+40=80 vs
+     35.74+35.74=71.5 -- their hard-coded CollisionRadius is BIGGER than
+     their own PathfindingRadius),
+   - cannon/super pairs trigger LESS readily under production
+     (40+40=80 vs 55.74+55.74=111.5 -- the opposite direction).
+   Both are correct per source; the reference never modelled this split at
+   all, so it was never going to agree with a fully-correct implementation
+   in a crowd containing a cannon/super minion. This is the reference being
+   a cruder approximation, not evidence against PRODUCTION.
+
+Net: PRODUCTION's small shortfall against this file's own NumPy reference
+at high crowding is explained, source-grounded, and does not indicate a bug
+in `sim.collision.resolve_collisions`. The ordering fix is retained anyway
+because it is a real correction, evaluated on a different criterion than
+"does it change this corpus's outcome."
 """
 from __future__ import annotations
 
