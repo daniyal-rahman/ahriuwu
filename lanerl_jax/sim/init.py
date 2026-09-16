@@ -152,7 +152,12 @@ TOP_LANE_PATH: Tuple[Tuple[float, float], ...] = (
 #: than at display precision.
 RUNE_HP_BONUS = 754.248046875 - 616.28
 #: Outer turret max HP above Content. 1550 observed vs 1300 in
-#: ``SRUAP_Turret_Order3``.
+#: ``OrderTurretNormal``/``ChaosTurretWorm``, Map1's outer turrets.
+#:
+#: The bonus is unchanged by the Map11-vs-Map1 turret correction only because
+#: both candidates happen to carry BaseHP 1300 -- which is exactly why that
+#: mix-up survived every cross-check the turret had. See
+#: `data/patch.TURRET_MODELS`.
 TURRET_HP_BONUS = 250.0
 
 #: The rest of the rune page, measured the same way -- from the dump's own

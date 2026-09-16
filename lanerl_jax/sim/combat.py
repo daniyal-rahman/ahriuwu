@@ -67,25 +67,29 @@ __all__ = [
 ]
 
 
-#: Turrets deal **70% damage to minions**, and it is applied to the raw attack
-#: damage *before* mitigation.
+#: Turret damage to minions is **NOT** discounted on this map. Kept as a named
+#: 1.0 rather than deleted, because the 0.7 is real on a different map and the
+#: next person to read `SRUAP_Turret_Order3/BasicAttack.cs` will find it again.
 #:
-#: Straight out of every lane turret's basic-attack script
-#: (``SRUAP_Turret_Order3/BasicAttack.cs``, and identically Chaos3, Order4 and
-#: Chaos4)::
+#: That script does::
 #:
 #:     var dmg = owner.Stats.AttackDamage.Total;
-#:     if (target is Minion)
-#:     {
-#:         dmg *= 0.7f;
-#:     }
-#:     owner.TargetUnit.TakeDamage(owner, dmg, DAMAGE_TYPE_PHYSICAL, ...);
+#:     if (target is Minion) { dmg *= 0.7f; }
 #:
-#: Missing it made the sim's turrets 43% stronger against a wave than the
-#: server's: 190 raw instead of 133, which is a caster dead in 2 shots rather
-#: than 3 and a cannon in 4 rather than 6. Turret damage against *champions* is
-#: unmodified, so this cannot be folded into the turret's attack-damage stat.
-TURRET_DAMAGE_VS_MINION = 0.7
+#: and I applied it to every turret. It does not apply here. Scripts are
+#: resolved by CHARACTER NAME, and `lanerl/cfg/garen1v1.json` pins `"map": 1`,
+#: whose turrets are `OrderTurretNormal`/`ChaosTurretWorm` -- names with no
+#: `Characters/` folder, so the spell falls back to `SpellScriptEmpty` and the
+#: damage goes through the native `ObjAIBase.AutoAttackHit` at full AD.
+#: `SRUAP_Turret_*` are Map11 units and are never spawned on this map.
+#:
+#: The lesson is the one this project keeps relearning: a Content script only
+#: applies if the unit it is named for is the unit actually on the field. I
+#: verified the script existed and never verified it was *reached*.
+#:
+#: Settled against a 600 s recording -- see `data/patch.TURRET_MODELS` for the
+#: regen and armour measurements that identify the model.
+TURRET_DAMAGE_VS_MINION = 1.0
 
 
 def post_mitigation_damage(damage: Any, resist: Any, xp: Any = np) -> Any:

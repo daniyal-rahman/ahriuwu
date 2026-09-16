@@ -273,10 +273,50 @@ MINION_MODELS = {
     "super": ("Blue_Minion_MechMelee", "Red_Minion_MechMelee"),
 }
 
-#: Outer-lane turrets. `LevelScriptObjects.LoadBuildings` maps map-object names
-#: to these models; only the top outer pair ever acts in a TOPONLY 1v1, but all
-#: 24 exist as objects (measured), so the roster carries the models it needs.
-TURRET_MODELS = ("SRUAP_Turret_Order3", "SRUAP_Turret_Chaos3")
+#: The **outer** lane turrets of the map this project actually runs.
+#:
+#: `lanerl/cfg/garen1v1.json` pins `"map": 1` -- "Old SR" -- and Map1's
+#: `LevelScriptObjects.cs:77-89` names its turrets per tier and per team::
+#:
+#:     OUTER      OrderTurretNormal   /  ChaosTurretWorm
+#:     INNER      OrderTurretNormal2  /  ChaosTurretWorm2
+#:     INHIBITOR  OrderTurretDragon   /  ChaosTurretGiant
+#:     NEXUS      OrderTurretAngel    /  ChaosTurretNormal
+#:     FOUNTAIN   OrderTurretShrine   /  ChaosTurretShrine
+#:
+#: These were `SRUAP_Turret_Order3`/`Chaos3`, which are **Map11** ("New SR")
+#: turrets and are not on this map at all. The stats are not interchangeable:
+#:
+#:     ===================  ====  ======  =====
+#:     model                  AD  armour  regen
+#:     ===================  ====  ======  =====
+#:     OrderTurretNormal     152      60      0
+#:     ChaosTurretWorm       152      60      0
+#:     SRUAP_Turret_Order3   190      67      3
+#:     ===================  ====  ======  =====
+#:
+#: Settled by measurement against a 600 s idle recording, three ways, because
+#: the two candidates share a BaseHP of 1300 and a range of 750 and so cannot
+#: be told apart from the numbers the sim already matched:
+#:
+#: * **Regen.** Turret HP was monotone over all 36,001 snapshots -- zero
+#:   increases on either turret. `Stats.Update` has no combat gate, so a
+#:   damaged turret with regen 3 would have healed continuously.
+#: * **Armour.** Single-step HP drops land on exactly 7.500 (melee, 93x),
+#:   14.375 (caster, 68x) and 25.000 (cannon, 4x). Those are AD x 100/160,
+#:   i.e. armour **60**. Armour 67 would give 7.186 / 13.772 / 23.952, and not
+#:   one drop matched.
+#: * **The config** pins map 1.
+#:
+#: Note red's outer turret is `ChaosTurretWorm`, NOT `ChaosTurretNormal` --
+#: that name is chaos's *nexus* turret (AD 180, armour 65, regen 6). Pairing
+#: the two teams by matching names picks the wrong unit.
+#:
+#: STILL APPROXIMATE: all 24 placed turrets use this one outer-turret profile,
+#: so the inner, inhibitor and nexus tiers currently shoot like an outer
+#: turret. Blue's inner turret is the one a pushed wave actually reaches, so
+#: this is worth revisiting.
+TURRET_MODELS = ("OrderTurretNormal", "ChaosTurretWorm")
 
 
 def load_patch(champion: str = "Garen", map_id: int = 1,
