@@ -112,7 +112,25 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         "attack_period", "attack_windup", "attack_damage", "armor",
         "magic_resist", "max_hp", "gold_on_death", "xp_on_death",
         "pathfinding_radius", "fires_missile", "missile_speed",
-        "hp_regen", "ad_per_level")}
+        "hp_regen", "ad_per_level",
+        # `LaneTurret.Die` (`GameServerLib/GameObjects/AttackableUnits/AI/
+        # LaneTurret.cs:37-88`) reads THESE fields, not the plain
+        # `GoldGivenOnDeath`/`ExpGivenOnDeath` pair above -- zero for every
+        # non-turret model. See `sim/rewards.turret_kill_rewards`.
+        "local_gold_on_death", "global_gold_on_death", "global_xp_on_death",
+        # `Stat.Armor.FlatBonus`'s share of the "armor" column above, kept
+        # separate because Garen's W passive (`GarenWPassive.cs:34-37`)
+        # composes `PercentBaseBonus`/`PercentBonus` around
+        # `(BaseValue+BaseBonus)` and `FlatBonus` DIFFERENTLY -- see
+        # `step.py`'s W-passive block. Confirmed this is really where a rune
+        # lands: `Champion.OnAdded` applies each rune page entry as an ITEM
+        # (`ItemData : StatsModifier`, `ItemData.cs:70`:
+        # `Armor.FlatBonus = file.GetFloat("Data", "FlatArmorMod")`), not as
+        # `BaseValue`/`BaseBonus`. Nonzero only for the champion rows
+        # (`RUNE_ARMOR_BONUS`); zero for minions/turrets, whose armour has no
+        # rune/item source in this project and for whom this column is never
+        # read for anything (W passive is Garen-only).
+        "armor_flat_bonus")}
 
     for row, (kind, mtype, team) in enumerate(PROFILES):
         u = _stats_for(patch, kind, mtype, team)
@@ -149,6 +167,9 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         cols["max_hp"][row] = u.base_hp
         cols["gold_on_death"][row] = u.gold_given_on_death
         cols["xp_on_death"][row] = u.exp_given_on_death
+        cols["local_gold_on_death"][row] = u.local_gold_given_on_death
+        cols["global_gold_on_death"][row] = u.global_gold_given_on_death
+        cols["global_xp_on_death"][row] = u.global_exp_given_on_death
         # `Spell.FinishCasting`: a basic attack becomes a missile when the
         # attacker is ranged AND its BasicAttack script is empty. In this
         # slice the second half is never false -- see `sim/missiles.py` for
@@ -187,6 +208,9 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
             # added -- RUNE_HP_BONUS already carries it, being measured from
             # the dump's in-play value rather than from Content.
             cols["hp_regen"][row] += DORANS_SHIELD_HP_REGEN
+            # W's passive reads `Stat.Total`, which needs FlatBonus separated
+            # from the base term -- the rune's armour lands in FlatBonus.
+            cols["armor_flat_bonus"][row] = RUNE_ARMOR_BONUS
         elif kind == Kind.TURRET:
             # `OnMatchStart` (`:121-153`): every turret except the fountain
             # gets `HealthPoints.BaseBonus = 250 * enemyCount` (1v1: 250);
@@ -230,4 +254,17 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
     dt_tbl = load_map_table("DeathTimes")["TimeDeadPerLevel"]
     out["death_times"] = jnp.asarray(
         [float(dt_tbl[f"Level{i:02d}"]) for i in range(1, 19)], dtype)
+    # `Champion.Die` (`Champion.cs:444`): `EXP = mapData.ExpCurve[Stats.Level-1]
+    # * mapData.BaseExpMultiple`. `mapData.ExpCurve` is a C# List<float> built
+    # by `Package.cs:124-130` iterating `Level2..Level30` in order, so its
+    # index `Level-1` is JSON key `Level(Level+1)` -- e.g. a level-1 victim
+    # reads `ExpCurve[0]` = `Level2` = 280, a level-18 victim reads
+    # `ExpCurve[17]` = `Level19` = 19060. `patch.exp_curve` is keyed directly
+    # by the JSON level number (unlike `xp_curve` above, which is truncated to
+    # the level-up-threshold table), so this is `patch.xp_for_level(L+1)`, not
+    # `xp_for_level(L)`. Indexed 1..18 (index 0 unused -- level 0 never
+    # occurs); `BaseExpMultiple=0.55` from Map1's `ExpCurve.json`
+    # `Values.ExpGrantedOnDeath` block. See `sim/rewards.champion_kill_rewards`.
+    out["champion_kill_exp"] = jnp.asarray(
+        [0.0] + [patch.xp_for_level(L + 1) * 0.55 for L in range(1, 19)], dtype)
     return out

@@ -46,9 +46,11 @@ from .combat import (
     TURRET_AD_PER_RAMP,
     TURRET_ARMOR_PER_RAMP,
     TURRET_DAMAGE_VS_MINION,
+    garen_passive_exempt,
     growth_sum,
     other_turret_ramps,
     outer_turret_ramps,
+    stat_total,
 )
 from .collision import resolve_collisions
 from ..obs.fog import visible_to_enemy as _visible_to_enemy
@@ -60,7 +62,9 @@ from .waves_jax import step_waves_jax
 from .minion_ai import step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
 from .regen import step_regen
-from .rewards import ambient_gold, death_rewards, level_for_xp
+from .rewards import (ambient_gold, champion_kill_rewards, death_rewards,
+                      level_for_xp, minion_gold_deathspree_decay,
+                      turret_kill_rewards, update_hit_flag)
 from .state import Kind, LaneState, MoveOrder, Team, TurretTier
 from .targeting import (MinionType, base_priority, call_for_help_map,
                         nearest_enemy, turret_acquire)
@@ -72,11 +76,22 @@ def _attack_damage_against(attack_damage, attacker_kind, target_kind,
                            model=None, t_ms=None):
     """Raw attack damage, with the attacker/target modifiers the scripts apply.
 
-    Two exist in this slice. One is a property of the *pair*: every lane
-    turret's basic-attack script multiplies by 0.7 when the target is a
-    Minion, before mitigation -- a turret shooting a champion does full damage,
-    so it cannot live in the profile table. The other is a property of the
-    attacker's own tier and the game clock: the per-tier AD ramp below.
+    ``TURRET_DAMAGE_VS_MINION`` (`combat.py`) is **1.0** on this map -- a
+    no-op -- and this function's `vs_minion`/`from_turret` branch exists only
+    so that stops being true the day it should: the 0.7x-vs-minion discount is
+    real, but it belongs to `SRUAP_Turret_*`'s `BasicAttack.cs`, a Map11-only
+    script. Map1's turrets (`OrderTurret*`/`ChaosTurret*`) have no
+    `Characters/<model>/` script folder at all, so `CSharpScriptEngine
+    .CreateObjectStatic<ICharScript>("CharScripts", $"CharScript{Model}")`
+    falls back to `SpellScriptEmpty` and their basic attack resolves through
+    the native `ObjAIBase.AutoAttackHit` at full, undiscounted AD -- confirmed
+    directly from the script-resolution code, not merely from the constant
+    already being 1.0. See `combat.TURRET_DAMAGE_VS_MINION`'s own docstring
+    for the full citation; this docstring previously described the discount as
+    live, which it never was on this map.
+
+    What IS real here: a property of the attacker's own tier and the game
+    clock, the per-tier AD ramp below.
     """
     vs_minion = target_kind == Kind.LANE_MINION
     from_turret = attacker_kind == Kind.TURRET
@@ -293,22 +308,44 @@ def tick(state: LaneState, params: UnitParams,
         magic_resist=P("magic_resist"), delta_ms=delta_ms)
 
     # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
-    # W's PASSIVE is a permanent +20% Armor and +20% MagicResist, granted once
-    # on first rank-up of W (`W.cs:26-46` registers an OnLevelUpSpell listener
-    # at spell construction, so it does not require ever pressing W). W's
-    # ACTIVE multiplies all incoming post-mitigation damage by 0.7 while the
-    # window is open (`GarenW.cs:47-55`).
+    # W's PASSIVE is granted once on first rank-up of W (`W.cs:26-46` registers
+    # an OnLevelUpSpell listener at spell construction, so it does not require
+    # ever pressing W) and is NOT a clean +20% to either stat -- see
+    # `spells.py`'s W section for the full derivation. W's ACTIVE is meant to
+    # multiply all incoming post-mitigation damage by 0.7 while the window is
+    # open (`GarenW.cs:47-55`), but a verified server bug means it never
+    # actually reaches real HP loss -- `bs.damage_multiplier` is
+    # unconditionally 1.0 (see `spells.py`), so the multiply below is inert by
+    # construction, not a mistake.
     #
-    # Both are identity when Garen has never levelled or cast W, so this
-    # changes nothing in a lane where W is unused.
+    # Both are identity when Garen has never levelled W, so this changes
+    # nothing in a lane where W is never ranked.
     #
-    # The base is `armor_now`, NOT `P("armor")`: a non-outer turret's armour
-    # already grows +1 every 60 s from 480 s (`other_turret_ramps`), and W's
-    # bonus is a PERCENTAGE of the current total, so it has to compose with the
-    # ramp rather than replace it. Getting this backwards would have silently
-    # frozen turret armour at its level-1 value for anyone carrying the buff.
-    armor_eff = armor_now * (1.0 + bs.armor_pct_bonus)
-    magic_resist_eff = P("magic_resist") * (1.0 + bs.mr_pct_bonus)
+    # `Stat.Total = ((BaseValue+BaseBonus)*(1+PercentBaseBonus) + FlatBonus)
+    # * (1+PercentBonus)` (`combat.stat_total`) -- NOT a flat
+    # `base * (1 + pct)`, which is the bug this replaces (a clean +20% only
+    # by coincidence when `FlatBonus == 0` AND `PercentBaseBonus == 0`,
+    # neither of which holds once the passive itself sets
+    # `PercentBaseBonus = -0.2`). The base is `armor_now`, NOT `P("armor")`:
+    # a non-outer turret's armour already grows +1 every 60 s from 480 s
+    # (`other_turret_ramps`), which has to compose with the passive rather
+    # than be replaced by it -- inert here regardless, since only a champion
+    # (Garen) ever carries this buff, but kept for the same reason the
+    # ramp-vs-passive ordering mattered before this fix. `P("armor_flat_bonus")`
+    # is `Armor.FlatBonus` (the rune page, applied as an item -- see
+    # `spells.py`'s W-passive citation): 0 for every non-champion row and for
+    # MagicResist entirely (no MR rune/item source is modelled), so
+    # subtracting it back out of `armor_now` to recover `BaseValue+BaseBonus`
+    # is a no-op wherever the passive itself is also 0.
+    armor_flat = P("armor_flat_bonus")
+    armor_eff = stat_total(
+        armor_now - armor_flat, base_bonus=0.0,
+        percent_base_bonus=bs.armor_percent_base_bonus,
+        flat_bonus=armor_flat, percent_bonus=bs.armor_percent_bonus)
+    magic_resist_eff = stat_total(
+        P("magic_resist"), base_bonus=0.0,
+        percent_base_bonus=bs.mr_percent_base_bonus, flat_bonus=0.0,
+        percent_bonus=bs.mr_percent_bonus)
 
     # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
     # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.
@@ -537,6 +574,20 @@ def tick(state: LaneState, params: UnitParams,
     # that unit's own attacker row, so the lowest-index-crosses-zero rule below
     # sees melee hits and missile hits in one ordering rather than two.
     dmg_ij = dmg_ij + ms.damage_ij
+
+    # ---- Champion._championHitFlagTimer / _playerHitId --------------------
+    # `Champion.TakeDamage` (`Champion.cs:569-575`) resets these on EVERY hit
+    # this champion takes, from any source -- no melee/caster-minion exemption
+    # like the passive's combat clock below. Read here, off the real (not yet
+    # Judgment-prepended) `dmg_ij`, because `champion_kill_rewards` needs it
+    # for THIS tick's own death resolution (`Champion.Die` reads whatever the
+    # flag holds as of when it runs, which is after every `TakeDamage` call
+    # that landed this tick, including the killing one itself).
+    hit_flag_ms, hit_flag_by = update_hit_flag(
+        kind=state.kind, damage_ij=dmg_ij, buff_damage=bs.damage_dealt,
+        buff_dealt_by=bs.dealt_by, hit_flag_ms=state.hit_flag_ms,
+        hit_flag_by=state.hit_flag_by, delta_ms=delta_ms)
+
     # W's active scales the victim's TOTAL incoming damage for the tick, so it
     # is applied here rather than per attacker -- one multiply on the sum, not
     # one per source, which is what `TakeDamage`'s post-mitigation hook does.
@@ -544,32 +595,57 @@ def tick(state: LaneState, params: UnitParams,
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
 
     # ---- out-of-combat clock, for Garen's passive -------------------------
-    # `CharScriptGaren.ShouldPassiveTurnOff` returns FALSE -- the passive keeps
-    # running -- when the attacker's UnitTags is one of Minion, Minion_Lane,
-    # Minion_Lane_Siege, Minion_Lane_Super or Minion_Summon. So ordinary minion
-    # damage does NOT put Garen in combat, which is what lets the server's
-    # Garen heal continuously while farming.
+    # `CharScriptGaren.ShouldPassiveTurnOff(unit, damageData)` (`unit` = the
+    # DEFENDER this passive belongs to, i.e. Garen; `damageData.Attacker` =
+    # whoever hit him) returns FALSE -- the passive keeps running, the hit
+    # does NOT count as combat -- when EITHER:
+    #  (a) `MINION_UNIT_TAG_PASSIVE_EXCEPTIONS.Contains(Attacker.UnitTags)`,
+    #      an EXACT-VALUE check against the attacker's raw, already-OR'd
+    #      `UnitTags` int; or
+    #  (b) `unit.Stats.Level >= 11 && UnitTag.Monster.Equals(Attacker.UnitTags)`
+    #      -- the DEFENDER's own level, re-exempting at 11+.
     #
-    # Cannon minions are the exception, and only by accident. `UnitTag` is a
-    # [Flags] enum with NO explicit values, so C# numbers it 0,1,2,...:
-    # Minion=2, Minion_Lane=3, Minion_Lane_Siege=4, Monster=7. A melee or
-    # caster minion is tagged "Minion | Minion_Lane" = 2|3 = 3 = Minion_Lane,
-    # which IS in the exception list. A cannon is
-    # "Minion | Minion_Lane | Minion_Lane_Siege" = 2|3|4 = **7 = Monster**,
-    # which is not -- so a cannon's autoattack DOES break the passive below
-    # level 11 (at 11+ a separate Monster check exempts it again).
+    # `UnitTag` is `[Flags]` with NO explicit values (confirmed directly from
+    # `GameServerCore/Enums/UnitTag.cs`), so C# numbers it sequentially:
+    # Champion=0, Champion_Clone=1, Minion=2, Minion_Lane=3,
+    # Minion_Lane_Siege=4, Minion_Lane_Super=5, Minion_Summon=6, Monster=7.
+    # `MINION_UNIT_TAG_PASSIVE_EXCEPTIONS` (`CharScriptGaren.cs:21-28`) lists
+    # `{Minion, Minion_Lane, Minion_Lane_Siege, Minion_Lane_Super,
+    # Minion_Summon}` BY NAME -- i.e. the raw values `{2,3,4,5,6}` -- but a
+    # real minion's `UnitTags` field is the bitwise OR of ALL its tags, not a
+    # single one: melee/caster (`Blue_Minion_Basic.json`) is
+    # `"Minion | Minion_Lane"` = `2|3` = **3** (in the set, so always exempt,
+    # matching `Minion_Lane`'s own raw value by coincidence). Cannon
+    # (`Blue_Minion_MechCannon.json`) is
+    # `"Minion | Minion_Lane | Minion_Lane_Siege"` = `2|3|4` = **7**, and
+    # super (`Blue_Minion_MechMelee.json`) is
+    # `"Minion | Minion_Lane | Minion_Lane_Super"` = `2|3|5` = **7** too --
+    # BOTH collide with `Monster`'s raw value, and 7 is not in `{2,3,4,5,6}`,
+    # so despite `Minion_Lane_Siege`/`Minion_Lane_Super` being named right
+    # there in the exceptions list, NEITHER cannon NOR super minions are ever
+    # exempted by check (a). Only check (b) -- the Monster-value collision,
+    # gated on Garen's OWN level -- can exempt them, and only from level 11.
     #
-    # Reproduced deliberately. It is a bug in the server and parity means
-    # matching the server, not the mechanic's evident intention.
-    _cannon = (state.kind == Kind.LANE_MINION) & \
-        (_minion_type_of(state) == MinionType.CANNON)
-    breaks_combat = ~((state.kind == Kind.LANE_MINION) & ~_cannon)
+    # Reproduced deliberately, including the level-11 re-exemption this port
+    # previously omitted and the super-minion case this port previously
+    # mis-grouped with melee/caster (never breaking combat, at any level) --
+    # `docs/PORT_AUDIT_COMBAT.md`'s UnitTag row. It is a bug in the server and
+    # parity means matching the server, not the mechanic's evident intention.
+    # `combat.garen_passive_exempt` is the (attacker, victim) pair; the
+    # exemption is gated on the VICTIM's (defender's) own level, not the
+    # attacker's, which is why this can't be a per-attacker vector.
+    _minion_type = _minion_type_of(state)
+    _is_lane_minion = state.kind == Kind.LANE_MINION
+    _is_cannon_or_super = (
+        (_minion_type == MinionType.CANNON) | (_minion_type == MinionType.SUPER))
+    breaks_combat_pair = ~garen_passive_exempt(
+        _is_lane_minion, _is_cannon_or_super, state.level, jnp)
     # `dmg_ij` here is (attacker, victim) and NOT yet the concatenated form
     # that prepends the buff-damage row further down. Judgment's damage is
     # carried separately in `bs.damage_dealt` and comes from a champion, so it
     # always counts as combat.
     hit_by_combat = (
-        jnp.where(breaks_combat[:, None], dmg_ij, 0.0).sum(axis=0)
+        jnp.where(breaks_combat_pair, dmg_ij, 0.0).sum(axis=0)
         + bs.damage_dealt) > 0
     ms_since_damaged = jnp.where(
         hit_by_combat, jnp.zeros_like(state.ms_since_damaged),
@@ -634,11 +710,46 @@ def tick(state: LaneState, params: UnitParams,
         died=died, killer=killer, x=x, y=y, team=state.team, kind=state.kind,
         alive=alive, gold_on_death=P("gold_on_death"),
         xp_on_death=P("xp_on_death"))
+
+    # ---- champion-kill gold/XP (`Champion.Die`, `Champion.cs:392-461`) -----
+    # `death_rewards` above is `AttackableUnit.Die`'s path -- minions (and,
+    # numerically inertly, turrets) only. `Champion` overrides `Die` entirely
+    # and never calls `base.Die`, so THIS is the only thing that ever pays
+    # gold or XP for a champion kill. See `rewards.champion_kill_rewards`'s
+    # docstring for the full formula and its citations.
+    ckr = champion_kill_rewards(
+        died=died, kind=state.kind, level=state.level, killer=killer,
+        hit_flag_ms=hit_flag_ms, hit_flag_by=hit_flag_by,
+        kill_spree=state.kill_spree, death_spree=state.death_spree,
+        gold_from_minions=state.gold_from_minions,
+        first_blood_done=state.first_blood_done,
+        kill_exp_table=params["champion_kill_exp"])
+
+    # ---- turret-destruction gold/XP (`LaneTurret.Die`, `LaneTurret.cs:37-88`) ---
+    tk_gold, tk_xp = turret_kill_rewards(
+        died=died, kind=state.kind, team=state.team, alive=alive, x=x, y=y,
+        local_gold=P("local_gold_on_death"), global_gold=P("global_gold_on_death"),
+        global_xp=P("global_xp_on_death"), attack_range=P("attack_range"))
+
+    # `Champion.OnKill`'s minion-kill branch (`Champion.cs:379-388`) is the
+    # OTHER place `DeathSpree`/`GoldFromMinions` change; `death_rewards.gold`
+    # IS exactly this tick's minion-kill gold (its only source), so it feeds
+    # straight in. Applied on top of `ckr`'s own spree/GoldFromMinions output
+    # so a champion who lands BOTH a champion kill and a minion kill in the
+    # exact same tick sees the champion-kill reset (`GoldFromMinions=0`)
+    # first, then this tick's minion gold accumulate from zero -- one
+    # deterministic order for an astronomically rare simultaneous case, not a
+    # server-verified one.
+    gold_from_minions, death_spree = minion_gold_deathspree_decay(
+        minion_gold=rw.gold, death_spree=ckr.death_spree,
+        gold_from_minions=ckr.gold_from_minions)
+
     amb, gold_timer = ambient_gold(t_now, state.gold_timer,
                                    state.kind == Kind.CHAMPION)
-    gold = state.gold + rw.gold + amb
-    xp = state.xp + rw.xp
+    gold = state.gold + rw.gold + amb + ckr.gold + tk_gold
+    xp = state.xp + rw.xp + ckr.xp + tk_xp
     cs = state.cs + rw.cs.astype(state.cs.dtype)
+    kills = state.kills + ckr.kills
     level = jnp.where(state.kind == Kind.CHAMPION,
                       level_for_xp(xp, params["xp_curve"]), state.level)
     # Spell ranks are a pure function of champion level under a fixed skill
@@ -699,7 +810,11 @@ def tick(state: LaneState, params: UnitParams,
         # observation builder) get exactly what they'd get from calling
         # `fog.visible_to_enemy` themselves on the returned state.
         visible_to_enemy=visible & alive,
-        gold=gold, xp=xp, cs=cs, level=level,
+        gold=gold, xp=xp, cs=cs, level=level, kills=kills,
+        kill_spree=ckr.kill_spree, death_spree=death_spree,
+        gold_from_minions=gold_from_minions,
+        hit_flag_ms=hit_flag_ms, hit_flag_by=hit_flag_by,
+        first_blood_done=ckr.first_blood_done,
         gold_timer=gold_timer, ms_since_damaged=ms_since_damaged,
         spell_level=spell_level, buff_id=bs.buff_id,
         buff_elapsed=bs.buff_elapsed, spell_cooldown=bs.spell_cooldown,

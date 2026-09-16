@@ -177,6 +177,17 @@ class UnitStats:
     hp_regen_per_level: float = 0.0
     gold_given_on_death: float = 0.0
     exp_given_on_death: float = 0.0
+    #: ``CharData.LocalGoldGivenOnDeath``/``GlobalGoldGivenOnDeath``/
+    #: ``GlobalExpGivenOnDeath`` -- distinct from the plain fields above, and
+    #: read only by ``LaneTurret.Die`` (``Inhibitor.Die`` hardcodes its own
+    #: flat 50 gold instead, per ``Inhibitor.cs:15,46``, and Inhibitor is a
+    #: separate, unmodelled game object -- see ``sim/rewards.py``). Zero for
+    #: every non-turret model in this project (Garen and every minion model
+    #: omit these keys entirely), so parsing them unconditionally here is
+    #: harmless for everything but turrets.
+    local_gold_given_on_death: float = 0.0
+    global_gold_given_on_death: float = 0.0
+    global_exp_given_on_death: float = 0.0
     #: ``SpellData.MissileSpeed`` for this unit's own basic attack, i.e.
     #: ``Spells/<name>BasicAttack/<name>BasicAttack.json``'s ``SpellData``
     #: block -- NOT a single engine-wide constant. Every basic attack in this
@@ -232,6 +243,9 @@ class UnitStats:
             hp_regen_per_level=num(d, "HPRegenPerLevel", 0.0),
             gold_given_on_death=num(d, "GoldGivenOnDeath", 0.0),
             exp_given_on_death=num(d, "ExpGivenOnDeath", 0.0),
+            local_gold_given_on_death=num(d, "LocalGoldGivenOnDeath", 0.0),
+            global_gold_given_on_death=num(d, "GlobalGoldGivenOnDeath", 0.0),
+            global_exp_given_on_death=num(d, "GlobalExpGivenOnDeath", 0.0),
             missile_speed=num(basic_attack, "MissileSpeed", DEFAULT_MISSILE_SPEED),
         )
 

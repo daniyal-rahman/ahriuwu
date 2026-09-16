@@ -363,3 +363,167 @@ def test_regen_never_touches_a_unit_that_regenerates_nothing():
         delta_ms=1000.0 / 60.0)
     assert float(out.hp[0]) == pytest.approx(1.0), "untouched, not clamped to 0"
     assert float(out.hp[1]) == pytest.approx(100.0)
+
+
+def test_a_swing_that_leaves_range_mid_windup_is_cancelled_and_refunds_the_cooldown():
+    """`ObjAIBase.cs:1193-1199`: `CancelAutoAttack(!HasAutoAttacked, true)`
+    fires the instant a still-casting swing's target leaves `idealRange` --
+    `HasAutoAttacked` is false throughout the windup, so this is always a
+    `reset=true` cancel: cooldown AND windup both zero, not merely a whiffed
+    swing that still pays its cooldown. Before this fix `step_autoattack` ran
+    the windup to completion regardless of `in_range` (`docs/PORT_AUDIT_AI.md`
+    row 10.4).
+    """
+    import jax.numpy as jnp
+    from lanerl_jax.sim.autoattack import step_autoattack
+
+    out = step_autoattack(
+        aa_cooldown=jnp.asarray([0.9]),
+        aa_windup=jnp.asarray([0.2]),          # still winding, not due to land
+        is_attacking=jnp.asarray([True]),
+        has_auto_attacked=jnp.asarray([False]),
+        in_range=jnp.asarray([False]),          # target just left range
+        can_attack=jnp.asarray([True]),
+        has_target=jnp.asarray([True]),
+        attack_period=jnp.asarray([1.6]),
+        windup_time=jnp.asarray([0.5]),
+        attack_damage=jnp.asarray([70.0]),
+        target_resist=jnp.asarray([30.0]),
+        delta_ms=1000.0 / 60.0)
+    assert bool(out.is_attacking[0]) is False, "swing aborted"
+    assert float(out.aa_windup[0]) == 0.0, "windup reset, not merely paused"
+    assert float(out.aa_cooldown[0]) == 0.0, "reset=true -- immediate re-engage"
+    assert bool(out.hit[0]) is False
+    assert float(out.damage[0]) == 0.0
+
+
+def test_a_swing_that_completes_this_tick_is_not_retroactively_cancelled():
+    """Server tick order: `Spell.Update` (which resolves a completing swing)
+    runs BEFORE `UpdateTarget` (which would cancel it), so a swing whose
+    windup reaches zero this exact tick already lands even if the caller's
+    `in_range` for THIS tick reads false (e.g. the target stepped out of
+    range at the same instant the hit connects). Only a swing that is still
+    winding up AFTER this tick's decrement is a cancellation candidate.
+    """
+    import jax.numpy as jnp
+    from lanerl_jax.sim.autoattack import step_autoattack
+
+    dt = 1000.0 / 60.0
+    out = step_autoattack(
+        aa_cooldown=jnp.asarray([0.9]),
+        aa_windup=jnp.asarray([dt / 1000.0]),   # completes THIS tick
+        is_attacking=jnp.asarray([True]),
+        has_auto_attacked=jnp.asarray([False]),
+        in_range=jnp.asarray([False]),
+        can_attack=jnp.asarray([True]),
+        has_target=jnp.asarray([True]),
+        attack_period=jnp.asarray([1.6]),
+        windup_time=jnp.asarray([0.5]),
+        attack_damage=jnp.asarray([70.0]),
+        target_resist=jnp.asarray([30.0]),
+        delta_ms=dt)
+    assert bool(out.hit[0]) is True, "the hit still lands"
+    assert float(out.damage[0]) > 0.0
+
+
+def _minion_breaks_garens_combat(minion_type, level):
+    """Run champion 0 (Garen, at ``level``) against one enemy minion of
+    ``minion_type`` until the minion's autoattack lands, and report whether
+    that hit reset ``ms_since_damaged`` (i.e. counted as combat).
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import init_lane, lane_params
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, Team
+    from lanerl_jax.sim.step import tick
+    from lanerl_jax.sim.targeting import MinionType  # noqa: F401 (re-exported name below)
+
+    patch = load_patch()
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    kind = np.asarray(s.kind).copy()
+    team = np.asarray(s.team).copy()
+    alive = np.asarray(s.alive).copy()
+    x = np.asarray(s.x).copy()
+    y = np.asarray(s.y).copy()
+    model = np.asarray(s.model).copy()
+    kind[1] = Kind.LANE_MINION
+    team[1] = Team.RED
+    alive[1] = True
+    model[1] = profile_id(Kind.LANE_MINION, minion_type, Team.RED)
+    x[0], y[0] = 6000.0, 6000.0
+    x[1], y[1] = 6000.0 + 50.0, 6000.0     # well within any minion's range
+    s = s.replace(kind=jnp.asarray(kind), team=jnp.asarray(team),
+                  alive=jnp.asarray(alive), x=jnp.asarray(x), y=jnp.asarray(y),
+                  model=jnp.asarray(model),
+                  xp=s.xp.at[0].set(float(patch.xp_for_level(level)) + 1.0)
+                  if level > 1 else s.xp)
+    for _ in range(200):
+        hp_before = float(s.hp[0])
+        s = tick(s, params)
+        if float(s.hp[0]) < hp_before:
+            return float(s.ms_since_damaged[0]) < 1.0
+    raise AssertionError("the minion never landed a hit in 200 ticks")
+
+
+def test_cannon_minions_break_garens_passive_below_level_11_through_a_real_tick():
+    """`CharScriptGaren.cs:21-28,101-111`: cannon's OR-ed `UnitTags` collides
+    with `UnitTag.Monster` (raw value 7) and is NOT in the exceptions list
+    despite `Minion_Lane_Siege` being named in it -- see
+    `combat.garen_passive_exempt`'s docstring for the full derivation.
+    Exercised through a real auto-attack landing (not just the pure
+    function below), since cannon minions are melee-basic-attack-compatible
+    enough for that to actually resolve in under 200 ticks -- unlike super
+    minions, see the note on the direct-function tests below.
+    """
+    from lanerl_jax.sim.targeting import MinionType
+
+    assert _minion_breaks_garens_combat(MinionType.CANNON, level=1) is True
+    assert _minion_breaks_garens_combat(MinionType.CANNON, level=11) is False, \
+        "the Monster-value collision is double-edged: it also re-exempts " \
+        "from level 11 onward, gated on GAREN'S OWN level -- previously " \
+        "missing entirely from this port"
+
+
+def test_melee_and_caster_minions_never_break_the_passive_through_a_real_tick():
+    from lanerl_jax.sim.targeting import MinionType
+
+    assert _minion_breaks_garens_combat(MinionType.MELEE, level=1) is False
+    assert _minion_breaks_garens_combat(MinionType.MELEE, level=11) is False
+    assert _minion_breaks_garens_combat(MinionType.CASTER, level=1) is False
+
+
+# `garen_passive_exempt` directly, covering the full attacker/level matrix
+# (including SUPER) without needing a live auto-attack to land. Super
+# minions turned out to be untestable through a real tick with the harness
+# above: `Blue_Minion_MechMeleeBasicAttack.json` has Content `MissileSpeed:
+# 0`, and `sim/missiles.py`'s travel-time model (`step = m_speed * dt_s`)
+# has no floor on that -- the missile launches (confirmed: `missile_alive`
+# goes to 1 right on schedule) and then never arrives, in 200 ticks or ever.
+# This is a real, separate, pre-existing gap (missiles.py is not owned by
+# this task and the fix -- some minimum/instant-arrival speed -- was not
+# chased further here), NOT a reason to leave the super-minion case
+# unverified: hence testing the pure exemption rule directly instead.
+def test_garen_passive_exempt_matrix():
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.combat import garen_passive_exempt
+    from lanerl_jax.sim.state import Kind
+    from lanerl_jax.sim.targeting import MinionType
+
+    kinds = [Kind.LANE_MINION] * 4 + [Kind.CHAMPION, Kind.TURRET]
+    mtypes = [MinionType.MELEE, MinionType.CASTER, MinionType.CANNON,
+             MinionType.SUPER, -1, -1]
+    is_lane_minion = jnp.asarray([k == Kind.LANE_MINION for k in kinds])
+    is_cannon_or_super = jnp.asarray(
+        [m in (MinionType.CANNON, MinionType.SUPER) for m in mtypes])
+
+    for level, want in ((1, [True, True, False, False, False, False]),
+                       (10, [True, True, False, False, False, False]),
+                       (11, [True, True, True, True, False, False]),
+                       (18, [True, True, True, True, False, False])):
+        got = garen_passive_exempt(is_lane_minion, is_cannon_or_super,
+                                   jnp.asarray([level]), jnp)[:, 0]
+        assert list(np.asarray(got)) == want, f"level {level}"
