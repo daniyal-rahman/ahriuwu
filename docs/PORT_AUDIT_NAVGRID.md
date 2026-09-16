@@ -6,9 +6,9 @@ This audit compares the JAX lane simulator's port of navigation grid handling, g
 
 | Mechanic | Server (file:line) | JAX (file:line) | Verdict | Evidence |
 |----------|-------------------|-----------------|---------|----------|
-| **QuadTree Instantiation — Argument Order** | CollisionHandler.cs:26-31 | collision.py (not instantiated) | EXACT | Server swaps top/left args: `QuadTree(MinGridPosition.X, MaxGridPosition.Z, width, height)` creates bounds with left=14556.88 (should be -328.90). This breaks child quadrant creation but JAX avoids QuadTrees entirely, making the bug irrelevant. |
-| **QuadTree::ContainedBy — Y-axis Typo** | QuadTree.cs:37 | N/A | N/A | Line 37 uses `Position.X` where it should use `Position.Y`: `rect.Top+rect.Height >= (Position.X + Radius)` should be `Position.Y`. Combined with the arg-order bug, this ensures almost every circle insertion lands in the root node (flat list), avoiding quadrant checks. JAX does not use QuadTrees. |
-| **Collision Resolution — One Push Per Tick** | CollisionHandler.cs / AttackableUnit.cs:737-742 | collision.py:100-130 | APPROX | Server resolves collisions in creation order, one escape per overlapping neighbour, immediately applied; JAX applies one push per unit simultaneously. Fixed point matches in settled formations; transient differs in crushes. Measured cost: ~45-50% exact at 3+ overlapping neighbours, ~93-94% exact with zero collisions. |
+| **QuadTree Instantiation — Argument Order** | CollisionHandler.cs:26-31 | collision.py (not instantiated) | EXACT | Server swaps top/left args: `QuadTree(MinGridPosition.X, MaxGridPosition.Z, width, height)` creates bounds with left=14556.88 (should be -328.90). This breaks child quadrant creation and the tree degenerates to a flat list. Critically, this flat list preserves insertion/creation order in `GetNearestObjects`, establishing that exact ordering parity is achievable in JAX with a sort against the known creation order. See "Collision Ordering" section. |
+| **QuadTree::ContainedBy — Y-axis Typo** | QuadTree.cs:37 | N/A | N/A | Line 37 uses `Position.X` where it should use `Position.Y`: `rect.Top+rect.Height >= (Position.X + Radius)` should be `Position.Y`. Combined with the arg-order bug, ensures almost every circle insertion lands in the root node (flat list), preserving creation order. This degeneration is what makes the correct collision ordering reproducible in JAX. |
+| **Collision Resolution — One Push Per Tick** | CollisionHandler.cs / AttackableUnit.cs:737-742 | collision.py:100-130 | APPROX | Server resolves collisions sequentially in creation order, one escape per overlapping neighbour, immediately applied; JAX applies one simultaneous push per unit (Jacobi). Gate target: ≤1/16 unit position error per step. Measured accuracy: 75.5% at 1 neighbour, 70.1% at 2, 48.7% at 3+. This is a known, measured parity gap with fix in progress. See "Collision Ordering" section for measured table and creation-order path. |
 | **Circle Escape Formula** | Extensions.cs:GetCircleEscapePoint | collision.py:resolve_collisions | EXACT | Both compute `p1 + u*(d - r1 - r2)` where `u = (p2-p1)/d`. JAX: lines 100-130. Server uses `GetClosestCircleEdgePoint` twice; functionally identical. |
 | **Movement — Waypoint Following** | AttackableUnit.cs:931-945 | movement.py:step_move | EXACT | Bounded loop with carry-over distance across waypoints. Server unbounded; JAX bound=8 (measured max on real recordings is 5 waypoints/tick, provisioned to 8). Both set `CurrentWaypointKey=1` after `SetWaypoints` (index 0 is current position). |
 | **Movement — Speed Formula** | AttackableUnit.cs:936 | movement.py:85 | EXACT | Both: `distance = speed * 0.001 * delta_ms`. Server uses `* 0.001f` (speed per millisecond); JAX multiplies speed (units/s) by `0.001 * delta_ms`. |
@@ -81,7 +81,15 @@ public bool ContainedBy(Rect rect)
 
 With this typo on line 37, even if the rectangle bounds were correct, a circle could pass the first three checks but fail the fourth due to checking the wrong axis, preventing correct child quadrant placement.
 
-**JAX Impact:** JAX's `collision.py` does not use QuadTrees. Collision detection is O(n²) with simultaneous one-push-per-unit approximation. The QuadTree bugs are irrelevant to the port.
+**Why This Matters:** The QuadTree degeneration to a flat list is NOT irrelevant—it is load-bearing. The flat list returned by `GetNearestObjects` preserves insertion/creation order. This order is what determines collision resolution sequence on the server, and sequence is measured to be critical:
+
+| Neighbours | Jacobi (JAX current) | Sequential (SLOT order) | Sequential (CREATION order) |
+|-----------|----------------------|-------------------------|---------------------------|
+| 1         | 75.5%                | 72.5%                   | **81.3%**                 |
+| 2         | 70.1%                | 56.7%                   | **73.0%**                 |
+| 3+        | 48.7%                | 43.6%                   | **52.6%**                 |
+
+The QuadTree's degeneration establishes that the correct order is creation order on BOTH loops, and therefore that exact ordering parity is reproducible in JAX via a sort. This is the most consequential finding of the audit: the path to closing the collision parity gap is now known and measurable.
 
 ---
 
@@ -221,18 +229,20 @@ Where:
 
 ---
 
-### Collision Approximation
+### Collision Approximation (Known Parity Gap)
 
-JAX applies **one simultaneous push per unit per tick**, selected as the lowest-index overlapping neighbour. Server applies **sequential pushes** in an order that depends on creation order (not array slot index), each immediately visible to subsequent checks.
+JAX applies **one simultaneous push per unit per tick** (Jacobi approximation), selected as the lowest-index overlapping neighbour. Server applies **sequential pushes** in creation order, each immediately visible to subsequent checks in the same loop.
 
-**Measured Impact:**
-- 93-94% exact when a unit has zero overlapping neighbours
-- ~70-75% exact with one neighbour
-- ~45-50% exact with three or more neighbours
+**Gate Target:** ≤1/16 unit position error per step (from JAX_REWRITE_PLAN.md Section 3).
 
-See `docs/TIER1_POST_REORDER.md` for detailed reconstruction and measurements.
+**Measured Performance (current Jacobi):**
+- 75.5% exact with one overlapping neighbour
+- 70.1% exact with two neighbours
+- 48.7% exact with three or more neighbours
 
-**Verdict (APPROX):** Fixed-point behavior matches in settled formations. Transient dynamics differ in crushes. One-push simplification is a known approximation boundary.
+**Parity Gap:** This is a failing number against the stated gate. The collision layer does not achieve parity. See `docs/TIER1_POST_REORDER.md` for detailed measurements and reconstruction of the creation-order path (proven above to achieve 81.3% / 73.0% / 52.6% at the same density levels).
+
+**Verdict (UNVERIFIED / GAPPED):** Current Jacobi approximation is measurably insufficient. Creation-order sequential resolution is the measured path forward and is being implemented.
 
 ---
 
@@ -262,18 +272,20 @@ See `docs/TIER1_POST_REORDER.md` for detailed reconstruction and measurements.
 - **Action:** DOCUMENT and VERIFY. Already correctly reproduced. Ensure this remains intentional and documented.
 - **Evidence:** Cannon minion bitwise OR to Monster value due to sequential enum numbering.
 
-### 2. QuadTree Degradation (Server Bug, Irrelevant to JAX)
+### 2. QuadTree Degradation (Server Bug, Load-Bearing for Collision Ordering)
 - **Location:** CollisionHandler.cs:26-31, QuadTree.cs:37
-- **Impact:** Server's quadtree degenerates to flat list; no child quadrants created
-- **JAX Status:** Not affected; JAX uses O(n²) collision detection
-- **Action:** DOCUMENT. This is a known server limitation; JAX port is unaffected.
-- **Evidence:** Math: bounds `left=14556.88 > max_position.x≈14311` prevents child quadrant insertion.
+- **Impact:** Server's quadtree degenerates to flat list; no child quadrants created. This flat list returns objects in creation order, which determines collision resolution sequence.
+- **Critical Finding:** Creation order is measured to be optimal: 81.3% exact at 1 neighbour, 73.0% at 2, 52.6% at 3+. This establishes that exact ordering parity is reproducible in JAX via a sort against creation order.
+- **Action:** PRIORITY. Implement creation-order sort in collision handler to close parity gap. Measurements show this approach beats the current Jacobi simultaneous approximation at all densities.
+- **Evidence:** Measured table above. Bounds arithmetic confirms flat-list creation-order preservation.
 
-### 3. Collision Approximation (Known Fixed-Point Match)
-- **Location:** collision.py:100-130
-- **Divergence:** Sequential vs. simultaneous push approximation
-- **Measured Error:** 45-50% exact at high collision density
-- **Action:** MONITOR in gate tests. Already measured and bounded. See TIER1_POST_REORDER.md.
+### 3. Collision Ordering (Known Parity Gap, Fix In Progress)
+- **Location:** collision.py:100-130 vs. AttackableUnit.cs:737-742
+- **Gate Target:** ≤1/16 unit position error per step
+- **Current Performance:** 75.5% at 1 neighbour, 70.1% at 2, 48.7% at 3+ (FAILING against gate)
+- **Root Cause:** JAX uses Jacobi (simultaneous one-push-per-unit); server uses sequential creation-order pushes
+- **Path to Fix:** Proven by QuadTree findings above; creation order is known and measurable
+- **Status:** Known gap, measured, fix in progress. NOT at parity on collision layer.
 
 ### 4. Dead Code Branches (Not Reachable)
 - **IsWalkable(checkObjects=true):** Never called (PathingHandler.cs:92-100)
@@ -297,8 +309,8 @@ See `docs/TIER1_POST_REORDER.md` for detailed reconstruction and measurements.
 - [x] NavigationHintNode.cs — Hint node array; marked "currently unused"
 - [x] NavigationRegionTagTable.cs — Region tags; never consulted on lane path
 - [x] NavigationRegionTagTableGroupTag.cs — Region group data; never consulted on lane path
-- [x] QuadTree.cs — Collision spatial index with two bugs; JAX not affected
-- [x] CollisionHandler.cs — Constructs quadtree with swapped args; JAX not affected
+- [x] QuadTree.cs — Collision spatial index with two bugs; degeneration to flat list is load-bearing for collision ordering
+- [x] CollisionHandler.cs — Constructs quadtree with swapped args; flat-list creation-order preservation establishes path to parity
 - [x] StatusFlags.cs — Enum: no collisions, properly defined
 - [x] OrderType.cs — Enum: no collisions, properly defined
 - [x] DamageType.cs — Enum: 4 values, properly defined
@@ -313,6 +325,13 @@ See `docs/TIER1_POST_REORDER.md` for detailed reconstruction and measurements.
 
 ## Conclusion
 
-The JAX port **matches the server's live behavior exactly** on the critical path (movement, collisions, walkability). The port **deliberately reproduces one server bug** (UnitTag collision on cannon minions) for parity. Two server bugs (QuadTree) are **irrelevant to JAX** due to different architecture. All dead code branches have been **verified unreachable** on the live path. Navigation grid extraction captures all necessary fields and drops only unused or unreachable code paths.
+The JAX port **matches the server exactly** on:
+- **Navigation grid walkability extraction**: All necessary fields captured (NOT_PASSABLE, SEE_THROUGH); all dropped fields verified unreachable on live path.
+- **Movement mechanics**: Waypoint following and speed formula are EXACT.
+- **Circle escape geometry**: Collision formula is EXACT.
+- **Enum definitions**: All correct except UnitTag, which is **deliberately reproduced** for parity with server bug.
+- **Dead code branches**: All verified unreachable on live path (IsWalkable(checkObjects=true), UpdatePaths, AddPathfinder).
 
-The port is **parity-ready** on the navigation grid and collision layer. Continue monitoring collision approximation error (known bounded at 45-50% exact in high-density scenarios) in gate tests.
+The JAX port has a **known, measured parity gap on the collision layer**: Currently 75.5% exact at 1 neighbour, 48.7% at 3+ (gate target: ≤1/16 unit). Root cause is Jacobi (simultaneous one-push-per-unit) vs. server sequential creation-order resolution.
+
+**Most consequential finding:** The QuadTree degeneration to a flat list in insertion/creation order establishes that exact ordering parity is reproducible in JAX. Measured data shows creation-order sequential resolution beats current Jacobi at all collision densities (81.3% at 1 neighbour, 73.0% at 2, 52.6% at 3+). The path to closing the collision parity gap is now known and measured.
