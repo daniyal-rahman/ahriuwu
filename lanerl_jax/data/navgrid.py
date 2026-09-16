@@ -234,7 +234,31 @@ class NavGrid:
 
     def cells_in_line(self, x0: float, y0: float, x1: float, y1: float
                       ) -> Iterator[Tuple[int, int]]:
-        """``GetAllCellsInLine`` -- the server's integer-error line walk."""
+        """``GetAllCellsInLine`` -- the server's integer-error line walk.
+
+        Two things this got wrong before, found by rereading the C# source
+        (``NavigationGrid.cs``) rather than the obvious Bresenham sketch:
+
+        * **``error == 0`` is a third branch, not folded into the ``else``.**
+          The server's loop is ``if (error > 0) ... else if (error < 0) ...
+          else { yield BOTH (x+x_inc, y) and (x, y+y_inc); step x AND y;
+          n-- an extra time }``. Landing exactly on a lattice corner is not a
+          rare event here: ``CastCircle`` always calls this on a pair of
+          parallel offset lines, and the offset itself is often small and
+          fraction-of-a-cell in size, so the walk revisits corner geometry a
+          lot. Collapsing the tie into "advance x only" silently drops the
+          diagonal neighbour the server also checks, which can turn a real
+          obstruction into a false "clear" (or vice versa).
+        * **Cells are not bounds-filtered here.** ``GetAllCellsInLine`` calls
+          ``GetCell`` with no null check and ``CastCircle`` immediately tests
+          ``IsWalkable(cell)``, which is ``false`` for a null cell -- so
+          stepping off the edge of the grid *blocks* the cast. Filtering
+          out-of-bounds cells here (matching ``GetAllCellsInRange``, which
+          DOES null-check) silently turns that into "nothing in the way".
+          ``is_walkable_cell`` already returns ``False`` off-grid, so not
+          filtering reproduces the null-blocks behaviour for free -- see
+          ``cast_circle``, which is the only caller.
+        """
         dx, dy = abs(x1 - x0), abs(y1 - y0)
         ix, iy = int(math.floor(x0)), int(math.floor(y0))
         n = 1
@@ -259,14 +283,20 @@ class NavGrid:
             n += iy - int(math.floor(y1))
             error -= (y0 - math.floor(y0)) * dx
         while n > 0:
-            if self.in_bounds(ix, iy):
-                yield ix, iy
+            yield ix, iy
             if error > 0:
                 iy += y_inc
                 error -= dx
-            else:
+            elif error < 0:
                 ix += x_inc
                 error += dy
+            else:
+                yield ix + x_inc, iy
+                yield ix, iy + y_inc
+                ix += x_inc
+                iy += y_inc
+                error += dy - dx
+                n -= 1
             n -= 1
 
     # ------------------------------------------------------------ casting ---
