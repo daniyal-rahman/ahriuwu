@@ -89,7 +89,7 @@ __all__ = [
     "UnitRecord", "UnitView", "SceneView", "ActionSpec",
     "sim_units", "server_units", "compute_metrics",
     "CAMP_POINT", "ENGAGE_POINT",
-    "Perturbation", "NullControl", "StandInWave", "KillMinions",
+    "Perturbation", "NullControl", "IdleLane", "StandInWave", "KillMinions",
     "ResponseCurve", "run_sim_episode", "run_server_episode",
     "response", "curve_to_dict", "curve_from_dict",
     "summarize_response",
@@ -403,6 +403,47 @@ class NullControl(Perturbation):
 
 
 @dataclass
+class IdleLane(Perturbation):
+    """No champion action at all, ever -- zero orders, full stop.
+
+    Not a perturbation in the response-diff sense: baseline and perturbed
+    issue the byte-identical script (like :class:`NullControl`), so
+    ``response()`` against it is trivially the null floor and is not the
+    point of this class. What it buys is sharing THIS module's own
+    instrumentation -- :func:`compute_metrics`, :func:`sim_units` /
+    :func:`server_units`, :func:`run_sim_episode` / :func:`run_server_episode`
+    -- with the fully-idle scenario
+    ``lanerl_jax.sim.tests.test_lane.test_minion_population_is_close_to_the_server``
+    and ``docs/TICK_DIVERGENCE_TRACE.md`` measure by their own, separate,
+    ad-hoc code paths.
+
+    Why that sharing matters: ``docs/CALL_FOR_HELP_SWITCH_RATE.md`` found
+    call-for-help closer to the server on a champion-in-lane response
+    (:class:`StandInWave`) and further on a fully idle one -- but those two
+    findings came from TWO DIFFERENT INSTRUMENTS (this module's sampled
+    response curves vs. the population test's own median-of-counts), so
+    "closer on one, worse on the other" was never a like-for-like comparison
+    until both scenarios run through the same sampling cadence, the same
+    metric set and the same two engines. This class is what makes that
+    comparison possible without inventing a third instrument.
+
+    Unlike :class:`NullControl`, this does not even camp at
+    :data:`CAMP_POINT` -- the champion is left exactly where it spawns, for
+    the whole episode, matching ``bot_teams="none"`` plus "champions never
+    ordered" precisely (`lanerl_train`'s own idle-lane recordings, and
+    `test_minion_population_is_close_to_the_server`'s docstring, both note
+    that camping the champion IN the lane -- as ``NullControl`` does --
+    already changes the minion population by soaking up lane-clash melee a
+    stationary champion would not otherwise contest).
+    """
+
+    name: str = "idle_lane"
+
+    def decide(self, scene: SceneView, perturbed: bool, script: dict) -> ActionSpec:
+        return ActionSpec("noop")
+
+
+@dataclass
 class StandInWave(Perturbation):
     """Garen stands in the enemy wave for ``hold_s`` seconds, then leaves.
 
@@ -575,13 +616,19 @@ class ResponseCurve:
 
 
 def run_sim_episode(perturbation: Perturbation, perturbed: bool, seed: int,
-                     decisions: int, sample_every: int = 60) -> ResponseCurve:
+                     decisions: int, sample_every: int = 60,
+                     enable_call_for_help: bool = False) -> ResponseCurve:
     """Drive ``perturbation`` against the JAX sim for ``decisions`` decisions
     (30 Hz, i.e. ``step_ticks=2``, matching every other driver in this tree).
 
     Only blue (slot 0) is ever ordered; red (slot 1) always gets a NOOP,
     matching `docs/TICK_DIVERGENCE_TRACE.md`'s and `last_hit_drive.py`'s
     setup.
+
+    ``enable_call_for_help`` defaults to ``False``, matching every other sim
+    driver in this tree and `lanerl_jax.sim.step.tick`'s own default -- see
+    `docs/CALL_FOR_HELP_SWITCH_RATE.md` for why this stays a toggle a caller
+    opts into rather than the sim's permanent default.
     """
     import jax
     import jax.numpy as jnp
@@ -599,7 +646,8 @@ def run_sim_episode(perturbation: Perturbation, perturbed: bool, seed: int,
             y=jnp.array([y, 0.0], dtype=state.y.dtype),
             target=jnp.array([target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders), params_tbl, lane_path=path)
+        return step_decision(apply_orders(state, orders), params_tbl, lane_path=path,
+                             enable_call_for_help=enable_call_for_help)
 
     script = perturbation.new_script()
     samples: List[Dict[str, float]] = []
@@ -786,18 +834,23 @@ def _run_cli(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Run one perturbation-response episode.")
     parser.add_argument("--engine", choices=["sim", "server"], required=True)
     parser.add_argument("--perturbation",
-                        choices=["null_control", "stand_in_wave", "kill_minions"], required=True)
+                        choices=["null_control", "idle_lane", "stand_in_wave", "kill_minions"],
+                        required=True)
     parser.add_argument("--perturbed", action="store_true")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--minutes", type=float, default=10.0)
     parser.add_argument("--sample-every-s", type=float, default=2.0)
     parser.add_argument("--bot-seed", type=int, default=4242)
     parser.add_argument("--port-base", type=int, default=None)
+    parser.add_argument("--call-for-help", action="store_true",
+                        help="sim only: enable_call_for_help=True (default off, "
+                             "matching lanerl_jax.sim.step.tick's own default)")
     parser.add_argument("--out", type=str, required=True)
     args = parser.parse_args(argv)
 
     perturbation: Perturbation = {
         "null_control": NullControl(),
+        "idle_lane": IdleLane(),
         "stand_in_wave": StandInWave(),
         "kill_minions": KillMinions(),
     }[args.perturbation]
@@ -806,7 +859,8 @@ def _run_cli(argv: Optional[Sequence[str]] = None) -> None:
     sample_every = max(1, int(round(args.sample_every_s * 30.0)))
 
     if args.engine == "sim":
-        curve = run_sim_episode(perturbation, args.perturbed, args.seed, decisions, sample_every)
+        curve = run_sim_episode(perturbation, args.perturbed, args.seed, decisions, sample_every,
+                                enable_call_for_help=args.call_for_help)
     else:
         curve = run_server_episode(perturbation, args.perturbed, args.seed, decisions,
                                     sample_every, bot_seed=args.bot_seed,

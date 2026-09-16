@@ -123,6 +123,17 @@ class MinionAIOut(NamedTuple):
     ignore_until: Any
     had_target: Any
     reevaluated: Any        # True where the controller ran this tick
+    #: True where `FoundNewTarget(true)` (the call-for-help scan) itself pulled
+    #: a unit off a STILL-VALID incumbent this tick -- i.e. server `cfh=1` in
+    #: `LANERL_AGGRO_TRACE`'s `MRT` line, not "any switch that happened to
+    #: involve a boosted priority". Diagnostic only: nothing in `step.py`
+    #: reads this field, and adding it changes no behaviour (`MinionAIOut` is
+    #: consumed by attribute, so a new trailing field is inert to every
+    #: existing caller). See `docs/TARGET_ACQUISITION_DIFF.md` and
+    #: `docs/CALL_FOR_HELP_SWITCH_RATE.md` for why `cfh=1` and "toprio in the
+    #: call-for-help range" are NOT the same set -- the ordinary unrestricted
+    #: scan can also land on a boosted-priority candidate.
+    cfh_switch: Any
 
 
 def step_minion_ai(
@@ -279,4 +290,5 @@ def step_minion_ai(
         ignore_until=new_ignore,
         had_target=jnp.where(me, new_target >= 0, had_target),
         reevaluated=run,
+        cfh_switch=cfh_switch,
     )

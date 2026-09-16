@@ -144,13 +144,20 @@ def _can_move(move_order: jax.Array, alive: jax.Array) -> jax.Array:
 
 def tick(state: LaneState, params: UnitParams,
          delta_ms: float = TICK_MS, lane_path=None,
-         minion_hp=None) -> LaneState:
+         minion_hp=None, enable_call_for_help: bool = False) -> LaneState:
     """Advance one 16.667 ms server tick.
 
     ``lane_path`` is ``(W, 2)`` -- ``MinionPaths[LANE_L]``, walked forward by
     blue and reversed by red, exactly as ``SetUpLaneMinion`` does
     (``waypoint.Reverse()`` for ``TEAM_PURPLE``). Pass ``None`` to run without
     wave spawning, which is what the unit tests want.
+
+    ``enable_call_for_help`` defaults to ``False``, matching every test and
+    every measurement in this tree before ``docs/CALL_FOR_HELP_SWITCH_RATE.md``
+    -- flipping it does not change existing behaviour unless a caller opts in.
+    See section 5b below and that doc for the measured switch-rate comparison
+    and why this stays a toggle rather than either a permanent no-op or a
+    permanent wire.
     """
     n = state.kind.shape[-1]
     dtype = state.x.dtype
@@ -482,30 +489,42 @@ def tick(state: LaneState, params: UnitParams,
     alive = state.alive & (hp > 0)
     died = state.alive & ~alive
 
-    # ---- 5b. call for help: NOT WIRED IN, deliberately -------------------
+    # ---- 5b. call for help: a TOGGLE, not a permanent wire ----------------
     # `targeting.call_for_help_map` implements the broadcast faithfully and is
-    # tested, but feeding it into `help_priority` here made measured parity
-    # WORSE on every aggregate:
+    # tested. `enable_call_for_help=False` (the default) reproduces every
+    # test and every measurement in this tree from before this toggle existed,
+    # bit for bit: `help_priority` is simply carried forward unchanged.
     #
-    #     median live minions   server 21      22 -> 26
-    #     mean |blue - red|     server 2.6    3.3 -> 9.3
-    #     blue turrets lost     server 0        0 -> 3
-    #     mean lane fraction    server .475-.533   .439-.540 -> .215-.505
-    #
-    # The mechanism is real and its absence IS a genuine gap: the server
-    # releases minions from the champion in 28 of 28 observed departures,
-    # median hold 2.5 s, and ours releases never, which is why lock-ons pile up
-    # (sim mean 4.14, max 12 simultaneous attackers) and the champion dies where
-    # the server's does not.
-    #
-    # But a change that moves every aggregate away from the server is not
-    # closer to the server, and I could not show the switch RATE was faithful.
-    # The server's MRT trace records 47 call-for-help switches in 600 s; I have
-    # no comparable sim-side count that isolates cfh switches from ordinary
-    # retargets, so "25x too many" was not a claim I could actually support.
-    #
-    # Left disconnected rather than shipped half-right. Enabling it is one line
-    # once the rate is validated against the MRT trace.
+    # Why a toggle and not a permanent wire: `docs/CALL_FOR_HELP_SWITCH_RATE.md`
+    # retires the switch-RATE objection that blocked this before (idle lane,
+    # 600 s: sim 582 isolated cfh switches vs the server's 368, 1.58x -- not
+    # the "25x too many" that could not be ruled out previously; the "47" in
+    # the earlier commit/task background was itself a mis-citation of
+    # `to=Champion` acquisitions, not of `cfh=1` switches, which total 453 in
+    # that same server log). What's left is a mechanism-level finding, not a
+    # rate one: it helps a champion-in-lane scenario (StandInWave response
+    # moves 6/7 metrics toward the server) and hurts a fully idle one (median
+    # live minions 22 -> 26, blue outer turret survives -> destroyed, and the
+    # final population flips from blue dominant 17-5 to red dominant 1-28,
+    # deterministically) because it is a reinforcement mechanic that amplifies
+    # this lane's own already-documented unstable equilibrium
+    # (`lanerl_jax/sim/tests/test_lane.py`'s own docstring) rather than a rate
+    # calibration problem more tuning would fix. Left a toggle, default off.
+    if enable_call_for_help:
+        # `ObjAIBase.TakeDamage`'s broadcast reacts to every landed hit --
+        # melee autoattacks and missiles are both folded into `dmg_ij` above
+        # (`:377`). NOT folded in: Judgment's damage (`bs.damage_dealt`), which
+        # is a per-VICTIM scalar (one caster, tracked via `bs.dealt_by`
+        # separately) rather than an attacker/victim matrix, and reproducing it
+        # here would need a one-hot scatter this investigation did not need to
+        # build to answer the switch-rate question. Booked, not silently
+        # dropped: undercounts calls for help raised by a champion's Judgment
+        # specifically, nothing else.
+        help_priority = call_for_help_map(
+            damage_ij=dmg_ij, x=x, y=y, alive=alive, kind=state.kind,
+            team=state.team, acquisition_range=P("acquisition_range"))
+    else:
+        help_priority = state.help_priority
 
 
     # Judgment's damage is applied inside the buff's own update, which runs
@@ -599,19 +618,24 @@ def tick(state: LaneState, params: UnitParams,
         missile_tx=ms.target.astype(state.missile_tx.dtype),
         missile_source=ms.source.astype(state.missile_source.dtype),
         missile_damage=ms.damage, missile_speed=ms.speed,
+        help_priority=help_priority,
     )
 
 
 def step_decision(state: LaneState, params: UnitParams,
                   step_ticks: int = 2, delta_ms: float = TICK_MS,
-                  lane_path=None, minion_hp=None) -> LaneState:
+                  lane_path=None, minion_hp=None,
+                  enable_call_for_help: bool = False) -> LaneState:
     """One agent decision = ``LANERL_STEP_TICKS`` server ticks.
 
     ``step_ticks`` is 2 in this stack (30 Hz decisions off a 60 Hz sim), set by
     ``lanerl_rl.constants.STEP_TICKS`` and passed to the server as
     ``LANERL_STEP_TICKS``; the two must not drift apart.
+
+    ``enable_call_for_help`` defaults to ``False`` -- see ``tick``'s docstring.
     """
     def one(s, _):
-        return tick(s, params, delta_ms, lane_path, minion_hp), None
+        return tick(s, params, delta_ms, lane_path, minion_hp,
+                    enable_call_for_help), None
     out, _ = jax.lax.scan(one, state, None, length=step_ticks)
     return out
