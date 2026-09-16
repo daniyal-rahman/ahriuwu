@@ -70,18 +70,45 @@ SCREEN_RADIUS = 1800.0
 
 
 class TrainConfig(NamedTuple):
+    """Episode length and discount horizon are DIFFERENT NUMBERS.
+
+    Conflating them is a bug I shipped, and it made the task impossible rather
+    than merely hard. ``PPOConfig.horizon_s`` (120 s) is the **discount**
+    horizon: it sets ``gamma = 1 - 1/(horizon_s * decision_hz)`` and says how
+    far ahead the agent is asked to care. ``episode_s`` is how long an episode
+    actually runs before reset.
+
+    With both at 120 s the arithmetic is fatal:
+
+        blue spawn -> wave meeting point   13,532 units = 39 s of walking
+        first wave spawns                  90 s
+        minions reach the middle           ~120 s
+        episode ends                       120 s
+        farming possible for               ~0 s
+
+    CS was exactly 0.00000 across 400 updates and 26 million champion-decisions,
+    and it could not have been anything else: the last-hit reward term can never
+    fire, so the agent was being asked to learn from a signal the environment
+    could not produce. That reads identically to a policy that has not learned.
+
+    600 s matches the evaluation protocol the existing stack reports against
+    (`cs_at_10min`), and `lanerl_train`'s own `EpisodeSpec` uses step limits of
+    6,000-20,000 at 30 Hz, i.e. 200-667 s -- never 120.
+    """
+
     n_envs: int = 512
     rollout_steps: int = 128
     n_updates: int = 10
     n_minibatches: int = 4
-    horizon_s: float = 120.0
+    #: how long an episode runs. NOT the discount horizon.
+    episode_s: float = 600.0
     decision_hz: float = 30.0
     ppo: PPOConfig = PPOConfig()
     reward: RewardConfig = RewardConfig()
 
     @property
     def episode_steps(self) -> int:
-        return int(self.horizon_s * self.decision_hz)
+        return int(self.episode_s * self.decision_hz)
 
 
 class RunnerState(NamedTuple):
@@ -140,7 +167,7 @@ def make_train(cfg: TrainConfig = TrainConfig()):
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
     policy = LanePolicy(PolicyConfig())
     fresh = init_lane()                    # the constant pytree reset writes
-    fresh_reward = reward_init(fresh)
+    fresh_reward = reward_init(fresh, cfg.reward)
     dt_s = 1.0 / cfg.decision_hz
     n_batch = cfg.rollout_steps * cfg.n_envs * 2      # two champions per env
 
@@ -163,9 +190,12 @@ def make_train(cfg: TrainConfig = TrainConfig()):
             action, log_prob = _sample(logits, key)
             nxt = step_decision(apply_orders(state, _orders_from(action, state)),
                                 params_tbl, lane_path=path)
+            # gamma is the TRAINER's gamma, threaded through deliberately:
+            # the shaping potential is policy-invariant only under the same
+            # discount the advantage estimator uses.
             reward, rstate = lane_reward(nxt, rstate, dt_s, cfg.reward,
-                                         runner.step)
-            done = nxt.t_ms >= cfg.horizon_s * 1000.0
+                                         runner.step, gamma=cfg.ppo.gamma)
+            done = nxt.t_ms >= cfg.episode_s * 1000.0
             # reset is a WHERE against a constant pytree -- see the module docstring
             nxt = jax.tree.map(lambda a, b: jnp.where(done, b, a), nxt, fresh)
             rstate = jax.tree.map(lambda a, b: jnp.where(done, b, a),

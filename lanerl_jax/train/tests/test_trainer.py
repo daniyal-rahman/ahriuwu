@@ -134,3 +134,24 @@ def test_training_changes_the_parameters(trained):
              for a, b in zip(jax.tree.leaves(runner.params),
                              jax.tree.leaves(fresh))]
     assert any(moved), "no parameter moved across two updates"
+
+
+def test_episode_length_is_not_the_discount_horizon():
+    """They are different numbers, and conflating them made the task impossible.
+
+    With the episode clamped to PPO's 120 s discount horizon, the arithmetic is
+    fatal: the champion spawns 13,532 units from the wave meeting point (39 s of
+    walking), the first wave spawns at 90 s and reaches the middle around 120 s,
+    and the episode ends at 120 s. Farming is possible for ~0 seconds.
+
+    CS was exactly 0.00000 across 400 updates and 26 million champion-decisions
+    and could not have been anything else -- the last-hit term can never fire.
+    That looks exactly like a policy that has not learned.
+    """
+    cfg = TrainConfig()
+    assert cfg.episode_s == 600.0
+    assert cfg.ppo.horizon_s == 120.0
+    assert cfg.episode_s > cfg.ppo.horizon_s
+    # long enough for the first wave (90 s) plus the walk to lane (~39 s)
+    assert cfg.episode_s > 90.0 + 39.0 + 60.0
+    assert cfg.episode_steps == 18_000
