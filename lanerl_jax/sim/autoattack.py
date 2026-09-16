@@ -53,12 +53,34 @@ with a condition attached**: it stops being correct the moment a crit source
 enters the kit, and `crit_chance` is threaded through so the assumption is
 visible rather than buried.
 
-Cancellation is not modelled here
----------------------------------
-``CancelAutoAttack`` fires when the target dies, leaves range mid-wind-up, or
-becomes invisible, and whether the cooldown resets depends on
-``HasAutoAttacked``. That belongs to the target-update path, which owns the
-conditions; this module owns only the clock.
+Windup cancellation (`ObjAIBase.cs:1183-1199`)
+-----------------------------------------------
+A swing already in progress is aborted -- and the cooldown reset to 0, since
+``HasAutoAttacked`` is false for the whole windup -- the instant its target
+dies, goes untargetable, leaves vision (`:1183-1191`, unconditional), or
+leaves ``idealRange`` while the spell is still ``STATE_CASTING`` and the
+attack allows it (`:1193-1199`, gated on ``!CantCancelWhileWindingUp`` --
+confirmed ``"0"`` for Garen's, every Map1 lane-minion model's, and the outer
+turret's basic attack, so unconditional in every reachable case here).
+``CancelAutoAttack(reset=!HasAutoAttacked, fullCancel=true)`` zeroes both the
+cooldown and the windup and drops ``IsAttacking`` -- a free, immediate
+re-engage opportunity, not merely "the swing whiffs".
+
+Per the tick order (`step.py`'s module docstring): the naturally-completing
+tick is not retroactively cancelled, because ``Spell.Update`` (which resolves
+a completing swing via ``FinishCasting``) runs before ``UpdateTarget`` in the
+same tick -- by the time the cancellation check would run, the spell is
+already back to ``STATE_READY``, not ``STATE_CASTING``. So only a swing that
+is **still** winding up after this tick's decrement is a cancellation
+candidate; :func:`step_autoattack` reproduces exactly that ordering, not a
+same-tick race between "completes" and "cancels".
+
+Only ``in_range``/``has_target`` are read for this, both already computed by
+the caller from this tick's post-movement, post-acquisition state -- the
+exact values ``ObjAIBase.UpdateTarget`` itself would see. This module owns the
+clock; ``step.py`` (the target-update path) owns those two conditions, per
+the split this docstring used to describe as "not modelled here" before this
+was implemented -- see `docs/PORT_AUDIT_AI.md` row 10.4.
 """
 from __future__ import annotations
 
@@ -136,14 +158,26 @@ def step_autoattack(
     windup = xp.where(winding, aa_windup - xp.asarray(dt_s, aa_windup.dtype), aa_windup)
     hit = winding & (windup <= 0)
 
+    # `ObjAIBase.cs:1183-1199`: a swing still winding up after this tick's
+    # decrement (i.e. it did NOT complete this tick -- see the module
+    # docstring for why a completing tick is never retroactively cancelled)
+    # is aborted the instant its target is gone or out of range.
+    # `CancelAutoAttack(!HasAutoAttacked, true)`: `HasAutoAttacked` is false
+    # for the whole windup, so this is always a `reset=true` cancel -- cooldown
+    # and windup both zero, immediately re-engageable.
+    still_casting = winding & (windup > 0)
+    cancel = still_casting & (~has_target | ~in_range)
+
     raw = attack_damage * xp.where(
         xp.asarray(crit_chance) > 0, crit_damage, xp.ones_like(attack_damage))
     dmg = xp.where(hit, post_mitigation_damage(raw, target_resist, xp),
                    xp.zeros_like(attack_damage))
 
-    attacking = xp.where(hit, xp.zeros_like(is_attacking, dtype=bool), is_attacking)
+    attacking = xp.where(hit | cancel, xp.zeros_like(is_attacking, dtype=bool),
+                         is_attacking)
     hit_done = has_auto_attacked | hit
-    windup = xp.where(hit, xp.zeros_like(windup), windup)
+    windup = xp.where(hit | cancel, xp.zeros_like(windup), windup)
+    cd = xp.where(cancel, xp.zeros_like(cd), cd)
 
     # 3. the swing gate. `AutoAttackSpell.State == STATE_READY` is "not already
     #    winding up", which is `~attacking` here.

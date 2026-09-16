@@ -15,14 +15,59 @@ server is not entangled with a discretisation choice.
 So this module accepts what the wire accepts::
 
     noop            League orders persist, so this is action-repeat, not a stop
-    move  (x, y)    path to a point
+    move  (x, y)    path to a point -- does NOT drop a held target, see below
     attack (unit)   SetTargetUnit alone -- the engine only swings at targets
                     already in range, so closing the distance is the policy's job
-    stop            clear the order
+    stop            a wire kind of ours with no server receiver -- see below
 
 ``attack`` is ``SetTargetUnit`` **alone**, and that is deliberate on the server
 side too: ``LanerlControl`` notes that adding ``UpdateMoveOrder(AttackTo)``
 there *"clobbers the target and the champion never swings"*.
+
+Sticky targets: a Move order does not clear the target
+--------------------------------------------------------
+``LanerlControl.cs:349-371`` (``case LanerlOrderKind.Move``) paths and calls
+``champ.UpdateMoveOrder(OrderType.MoveTo, publish: false)`` -- it never touches
+``TargetUnit`` at all. ``UpdateMoveOrder`` itself only clears the target for
+``OrderNone``/``Stop``/``PetHardStop`` (``ObjAIBase.cs:1353-1360``); ``MoveTo``
+is not in that set. So on the real training/eval/parity server, issuing a Move
+order while holding a target does **not** disengage: ``ObjAIBase.
+RefreshWaypoints`` (``ObjAIBase.cs:602-604``) flips ``MoveOrder`` back to
+``AttackTo`` and re-paths onto the target the very next tick, for as long as
+the target stays alive and visible (``step.py``'s "3b. RefreshWaypoints" block
+already reproduces exactly this once a target survives here to be held).
+Corroborated by ``LanerlBot.cs:1242-1251``'s dedicated ``ClearTarget()``
+helper ("drop the target so the engine stops swinging"), which would be
+pointless if ``MoveTo`` already cleared it, and which ``MoveTo()`` never
+calls.
+
+This was previously implemented backwards here (a Move order zeroed
+``target`` unconditionally) -- fixed per ``docs/PORT_AUDIT_AI.md`` row 3.2, on
+an explicit user decision to match the server's sticky-target behaviour rather
+than the friendlier "Move disengages" reading. **This changes what a policy
+can express**: our sim used to let a champion holding a target cleanly
+disengage with a single Move action; the real server never allowed that at
+all (a target is dropped only by dying, going untargetable, leaving vision, or
+being replaced by a new Attack order) -- see :func:`lanerl_jax.sim.autoattack.
+step_autoattack` for the one genuine disengage tool that *does* exist
+(a swing cancelled by the target leaving range mid-windup, ``ObjAIBase.cs:
+1193-1199``/``:1183-1191``).
+
+No wire-level Stop order
+-------------------------
+``LanerlWire.cs:11-19``'s ``LanerlOrderKind`` enum is exactly ``{Noop, Move,
+Attack, Cast, Level, Recall}`` -- there is no ``Stop`` kind on the wire at
+all, and ``LanerlControl.Execute``'s switch has no default case either, so an
+order kind it does not recognise is simply never acted on. ``OrderKind.STOP``
+below is this sim's own addition with no receiver on the real control plane;
+keeping it as a "clear everything" button would train a policy against an
+action the deployed server cannot execute (``docs/PORT_AUDIT_AI.md`` row 3.4).
+It is therefore a true no-op here -- ``move_order``/``target`` are left
+untouched, exactly matching what happens when an order this switch does not
+handle is ever sent. Not reachable today regardless:
+``train/trainer.py``/``train/benchmark.py``'s action decode never emits it
+(only NOOP/MOVE/ATTACK/CAST_E), so this changes no existing training or eval
+behaviour.
 
 Pathing, and the one place this differs from the wire
 -----------------------------------------------------
@@ -51,6 +96,10 @@ class OrderKind:
     NOOP = 0
     MOVE = 1
     ATTACK = 2
+    #: No receiver on the real wire (``LanerlWire.LanerlOrderKind`` has no
+    #: ``Stop`` member) -- a true no-op in :func:`apply_orders`, kept only so
+    #: an action-space index does not need to be renumbered. See the module
+    #: docstring's "No wire-level Stop order" section.
     STOP = 3
     #: ``{"t":"cast","slot":..}``. E was the first implemented; Q/W/R below
     #: follow the same one-kind-per-spell shape rather than a single generic
@@ -129,7 +178,10 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
     casting_r = champ & (kind == OrderKind.CAST_R) & r_target_ok & r_in_range
     moving = champ & (kind == OrderKind.MOVE)
     attacking = champ & (kind == OrderKind.ATTACK) & (otgt >= 0)
-    stopping = champ & (kind == OrderKind.STOP)
+    # `OrderKind.STOP` has no server receiver at all (module docstring) -- not
+    # read anywhere below; kept only as a named no-op rather than removed, so
+    # this enum's numbering (and any action-space index built against it)
+    # does not shift.
 
     # `path[0] = champ.Position` -- SetWaypoints requires the path to start on us
     two = jnp.stack([jnp.stack([state.x, state.y], -1),
@@ -157,11 +209,14 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
         waypoints=waypoints,
         n_waypoints=jnp.where(moving, jnp.int8(2), state.n_waypoints),
         waypoint_key=jnp.where(moving, jnp.int8(1), state.waypoint_key),
-        # A move order CLEARS the target: the server's MoveTo replaces AttackTo,
-        # and a champion that keeps a stale target keeps trying to swing at it.
-        target=jnp.where(moving, jnp.int8(-1),
-                         jnp.where(attacking, otgt, state.target)),
-        move_order=jnp.where(
-            moving, jnp.int8(MoveOrder.MOVE_TO),
-            jnp.where(stopping, jnp.int8(MoveOrder.STOP), state.move_order)),
+        # A Move order does NOT clear the target -- `LanerlControl.cs:349-371`
+        # never calls `SetTargetUnit`, and `UpdateMoveOrder(MoveTo, ...)`
+        # itself only clears the target for OrderNone/Stop/PetHardStop
+        # (`ObjAIBase.cs:1353-1360`). A held target survives a Move order and
+        # is re-engaged the next tick by `step.py`'s "3b. RefreshWaypoints"
+        # block (`ObjAIBase.RefreshWaypoints`, `:602-604`) for as long as it
+        # stays alive and visible -- see the module docstring's "Sticky
+        # targets" section.
+        target=jnp.where(attacking, otgt, state.target),
+        move_order=jnp.where(moving, jnp.int8(MoveOrder.MOVE_TO), state.move_order),
     )
