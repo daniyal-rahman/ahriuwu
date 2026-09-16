@@ -120,6 +120,41 @@ def resolve_collisions_sequential(
     return x, y
 
 
+def _old_jacobi_resolve_collisions(x, y, kind, alive, pathfinding_radius, ghosted=None):
+    """``sim.collision.resolve_collisions`` as it stood before the 2026-09-16
+    collision-parity pass (one push, Jacobi/simultaneous, lowest ARRAY index,
+    one shared radius) -- reproduced verbatim (not imported: the production
+    function's signature changed) so this script can still report the
+    PRE-PASS row for an apples-to-apples "before vs after" comparison
+    against `docs/TIER1_POST_REORDER.md`'s numbers. See
+    `sim/collision.py`'s git history for the original, annotated version.
+    """
+    import jax.numpy as jnp
+    from lanerl_jax.sim.state import Kind
+
+    n = x.shape[0]
+    collides = alive & (kind != Kind.TURRET) & (kind != Kind.NONE)
+    if ghosted is not None:
+        collides = collides & ~ghosted
+    r1 = pathfinding_radius + 1.0
+    r2 = pathfinding_radius
+    dx = x[None, :] - x[:, None]
+    dy = y[None, :] - y[:, None]
+    d = jnp.sqrt(dx * dx + dy * dy)
+    touching = r1[:, None] + r2[None, :]
+    overlap = (collides[:, None] & collides[None, :] & ~jnp.eye(n, dtype=bool)
+              & (d < touching) & (d > 0))
+    first = jnp.argmax(overlap, axis=1)
+    has = jnp.any(overlap, axis=1)
+    j = jnp.clip(first, 0, n - 1)
+    dj = d[jnp.arange(n), j]
+    safe = jnp.where(dj > 0, dj, 1.0)
+    ux = dx[jnp.arange(n), j] / safe
+    uy = dy[jnp.arange(n), j] / safe
+    push = dj - r1 - r2[j]
+    return (jnp.where(has, x + ux * push, x), jnp.where(has, y + uy * push, y))
+
+
 def _corridor_progress(x: np.ndarray, y: np.ndarray, path: np.ndarray) -> np.ndarray:
     """Cumulative arc length from ``path[0]`` to each ``(x[i], y[i])``'s
     nearest projection onto the polyline ``path`` -- a proxy for "how far
@@ -239,6 +274,7 @@ def main() -> None:
     by_crowd_current = {}
     by_crowd_seq = {}
     by_crowd_creation = {}
+    by_crowd_production = {}
 
     def bucket_lists(d, k):
         return d.setdefault(min(k, 3), [])
@@ -266,8 +302,12 @@ def main() -> None:
         move_order0 = np.asarray(state_n.move_order)
         ghosted0 = (np.asarray(state_n.buff_id)[:, Slot.E] == BuffId.GAREN_E) & alive0
 
-        # current (JAX) collision, on the SAME pre-tick snapshot
-        cx_a, cy_a = resolve_collisions(
+        # current (JAX) collision, on the SAME pre-tick snapshot -- the
+        # PRE-PARITY-PASS module: single push, Jacobi, one shared radius.
+        # Reproduced here from the git history rather than imported, since
+        # `sim.collision.resolve_collisions` no longer has this signature --
+        # it IS the production function measured as "PRODUCTION" below.
+        cx_a, cy_a = _old_jacobi_resolve_collisions(
             state_n.x, state_n.y, state_n.kind, state_n.alive,
             np.asarray(params["pathfinding_radius"])[model0], ghosted=jnp.asarray(ghosted0))
         cx_a, cy_a = np.asarray(cx_a), np.asarray(cy_a)
@@ -285,6 +325,19 @@ def main() -> None:
         cx_c, cy_c = resolve_collisions_sequential(
             x0, y0, kind0, alive0, pf_radius[model0], ghosted0, order_creation)
 
+        # PRODUCTION: the actual `sim.collision.resolve_collisions`, fed the
+        # SAME reconstructed creation order (as `spawn_seq`) and the SAME
+        # ghosted mask as (b)/(c) above, but with its own two-radius split
+        # (CollisionRadius trigger, now the server's real 40/30 hard-code;
+        # PathfindingRadius resolution) and turret obstacle/affected split.
+        cr_radius = np.asarray(params["collision_radius"])[model0]
+        cx_d, cy_d = resolve_collisions(
+            jnp.asarray(x0), jnp.asarray(y0), jnp.asarray(kind0),
+            jnp.asarray(alive0), jnp.asarray(creation_rank.astype(np.int32)),
+            jnp.asarray(cr_radius), jnp.asarray(pf_radius[model0]),
+            ghosted=jnp.asarray(ghosted0))
+        cx_d, cy_d = np.asarray(cx_d), np.asarray(cy_d)
+
         can_move = can_move_of(move_order0, alive0)
         ms = move_speed_arr[model0]
 
@@ -300,9 +353,14 @@ def main() -> None:
             jnp.asarray(cx_c), jnp.asarray(cy_c), state_n.waypoints,
             state_n.waypoint_key, state_n.n_waypoints, jnp.asarray(ms),
             jnp.asarray(can_move), TICK_MS)
+        xd_out, yd_out, _, _ = step_move_units(
+            jnp.asarray(cx_d), jnp.asarray(cy_d), state_n.waypoints,
+            state_n.waypoint_key, state_n.n_waypoints, jnp.asarray(ms),
+            jnp.asarray(can_move), TICK_MS)
         xa_out, ya_out = np.asarray(xa_out), np.asarray(ya_out)
         xb_out, yb_out = np.asarray(xb_out), np.asarray(yb_out)
         xc_out, yc_out = np.asarray(xc_out), np.asarray(yc_out)
+        xd_out, yd_out = np.asarray(xd_out), np.asarray(yd_out)
 
         note_by_slot = {nt.slot: nt for nt in report.notes}
         for m in tr.matched:
@@ -322,9 +380,11 @@ def main() -> None:
             err_a = math.hypot(xa_out[slot] - real_x, ya_out[slot] - real_y)
             err_b = math.hypot(xb_out[slot] - real_x, yb_out[slot] - real_y)
             err_c = math.hypot(xc_out[slot] - real_x, yc_out[slot] - real_y)
+            err_d = math.hypot(xd_out[slot] - real_x, yd_out[slot] - real_y)
             bucket_lists(by_crowd_current, n_overlap).append(err_a)
             bucket_lists(by_crowd_seq, n_overlap).append(err_b)
             bucket_lists(by_crowd_creation, n_overlap).append(err_c)
+            bucket_lists(by_crowd_production, n_overlap).append(err_d)
 
     def report(name, d):
         print(f"\n{name} -> movement, vs the REAL server position "
@@ -336,10 +396,13 @@ def main() -> None:
                   f"frac<=1/16={100*np.mean(v<=POS_Q_UNIT+1e-2):.1f}% "
                   f"median={np.median(v):.4f} p95={np.percentile(v,95):.4f}")
 
-    report("current (Jacobi, single-push) collision", by_crowd_current)
+    report("current (Jacobi, single-push) collision -- PRE-PARITY-PASS", by_crowd_current)
     report("SEQUENTIAL (Gauss-Seidel, multi-push, SLOT order)", by_crowd_seq)
     report("SEQUENTIAL (Gauss-Seidel, multi-push, RECONSTRUCTED CREATION order)",
           by_crowd_creation)
+    report("PRODUCTION (sim.collision.resolve_collisions, lax.scan, "
+          "CollisionRadius/PathfindingRadius split, turret obstacle fix)",
+          by_crowd_production)
 
 
 if __name__ == "__main__":

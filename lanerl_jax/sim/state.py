@@ -174,6 +174,26 @@ class LaneState:
     #: slot is reused by whatever spawns into it, and per-team because blue and
     #: red minions genuinely differ (cannon range 300 vs 280, gold 35 vs 30).
     model: jax.Array           # (N,) int8
+    #: A monotonic creation rank, assigned once at spawn and never reused or
+    #: rewritten -- the JAX-side stand-in for `CollisionHandler._objects`'
+    #: iteration order, which `GameObject.OnAdded`/`AddObject` fixes once, for
+    #: good, at construction (`List<T>.Remove` shifts survivors down but never
+    #: reorders them, `GameObject.cs:150-155`). Per-unit rather than per-slot
+    #: for exactly the reason `model` is: a minion slot is recycled on death,
+    #: so slot index tracks "whoever spawned into this slot most recently",
+    #: not creation order, and turrets (created at map load, before ANY
+    #: minion, and before the two champions -- `Game.Initialize` runs
+    #: `Map.Init()`, which is what actually instantiates them via
+    #: `LevelScriptObjects.CreateBuildings`, before its own
+    #: `PlayerManager.AddPlayer` loop) sit in the LAST slice of our own
+    #: `[champions | minions | turrets]` layout while the server creates them
+    #: FIRST. `sim.collision.resolve_collisions` sorts on this field to
+    #: reproduce the server's Gauss-Seidel collision order; see its module
+    #: docstring for why that order -- and not a separate "quadtree" order --
+    #: is the whole story. Assigned by `sim.init.init_lane` (turrets, then the
+    #: two champions) and incremented by `sim.init.spawn_minion` via
+    #: `next_spawn_seq` below; never touched anywhere else.
+    spawn_seq: jax.Array       # (N,) int32
     #: ``GameObject.IsVisibleByTeam`` from the perspective of the team that is
     #: NOT this unit's own -- i.e. can this unit currently be seen (and hence
     #: targeted) by its enemies. Recomputed every tick in ``step.tick`` from
@@ -294,6 +314,11 @@ class LaneState:
     next_spawn_ms: jax.Array
     minion_number: jax.Array
     cannon_count: jax.Array
+    #: The next value `sim.init.spawn_minion` will assign to a newly created
+    #: minion's `spawn_seq`. `init_lane` seeds the first `N_TURRETS +
+    #: N_CHAMPIONS` ranks itself (map load, then the two players -- see
+    #: `spawn_seq`'s own docstring), so this starts there, not at 0.
+    next_spawn_seq: jax.Array
 
     # ---- rng -------------------------------------------------------------
     key: jax.Array
@@ -328,6 +353,11 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         team=jnp.full((n_units,), Team.NEUTRAL, dtype=jnp.int8),
         alive=jnp.zeros((n_units,), dtype=bool),
         model=zi(n_units),
+        # 0 is a harmless placeholder here: every slot with `spawn_seq == 0`
+        # also has `kind == Kind.NONE` / `alive == False` until `init_lane`
+        # and `spawn_minion` give it a real one, and collision only ever reads
+        # this field through the `alive`/`kind` obstacle mask.
+        spawn_seq=jnp.zeros((n_units,), dtype=jnp.int32),
         # An empty world has nothing to see; `tick` recomputes this fresh from
         # real positions before it is ever read this same first tick, so the
         # initial value only matters for a state that is inspected without
@@ -371,5 +401,6 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         next_spawn_ms=jnp.asarray(0.0, dtype=dtype),
         minion_number=jnp.asarray(0, dtype=jnp.int32),
         cannon_count=jnp.asarray(0, dtype=jnp.int32),
+        next_spawn_seq=jnp.asarray(0, dtype=jnp.int32),
         key=jax.random.key(seed),
     )

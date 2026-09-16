@@ -167,6 +167,30 @@ ALL_TURRETS: Tuple[Tuple[int, float, float, float, int], ...] = (
     (Team.RED, 14157.0, 14456.375, 9999.0, TurretTier.FOUNTAIN),
 )
 
+#: Best-effort creation-order PRIORITY per turret tier, used only to seed
+#: `LaneState.spawn_seq` (see its docstring in `sim.state`). Reconstructed
+#: from `LevelScriptObjects.CreateBuildings`
+#: (`Maps/Map1/LevelScriptObjects.cs:294-361`), which runs three separate
+#: loops, in this order: every nexus, then every inhibitor, then a single
+#: loop over `_mapObjects[GameObjectTypes.ObjAIBase_Turret]` that creates the
+#: outer/inner/fountain turrets together, in whatever order the map's own
+#: scene file lists them -- a file this project has not parsed, so the
+#: relative order WITHIN that third loop (outer vs. inner vs. fountain, and
+#: between two turrets of the same tier) is an unverified guess, flagged
+#: rather than hidden, exactly like the wave-spawn blue/red tie-break
+#: `parity.tier1_collision_sequential.estimate_creation_order` already
+#: names. It is also low-stakes here: `ALL_TURRETS`' own docstring measures
+#: that only the two top-lane OUTER turrets ever sit within collision range
+#: of a live unit in this slice, so two turrets contesting the same third
+#: object at once essentially never happens.
+_TURRET_CREATION_PRIORITY: Dict[int, int] = {
+    TurretTier.NEXUS: 0,
+    TurretTier.INHIBITOR: 1,
+    TurretTier.OUTER: 2,
+    TurretTier.INNER: 2,
+    TurretTier.FOUNTAIN: 2,
+}
+
 #: Lane-minion barracks (first full-health sighting of a new minion).
 MINION_SPAWN: Dict[int, Tuple[float, float]] = {
     Team.BLUE: (918.0, 1720.0),
@@ -325,6 +349,17 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
         hp[i] = champ_hp
         alive[i] = True
 
+    # `spawn_seq`: the map's own objects (nexuses, inhibitors, turrets) are
+    # created by `Map.Init()`, which `Game.Initialize` runs BEFORE its
+    # `PlayerManager.AddPlayer` loop constructs either champion
+    # (`GameServerLib/Game.cs:142-178`; `AddPlayer` itself calls
+    # `ObjectManager.AddObject` on the new `Champion` immediately,
+    # `Players/PlayerManager.cs:27-66`) -- so turrets rank before BOTH
+    # champions, unconditionally, not just "both before any minion". Filled
+    # in below once each unit's slot is known; every minion born later gets a
+    # higher rank still, from `next_spawn_seq` (see `spawn_minion`).
+    spawn_seq = np.zeros(n, np.int32)
+
     t0 = TU_SLICE.start
     if include_all_turrets:
         placed = list(ALL_TURRETS)
@@ -350,6 +385,21 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
         hp[i] = thp
         alive[i] = True
 
+    # Turrets first (see `_TURRET_CREATION_PRIORITY`), by (tier priority,
+    # team, list position) -- the last two are a stable, deterministic
+    # tie-break where the true sub-order is unverified, not a claim that
+    # blue-before-red or `ALL_TURRETS`' own ordering is the server's.
+    turret_rank = sorted(
+        range(len(placed)),
+        key=lambda j: (_TURRET_CREATION_PRIORITY[placed[j][4]], placed[j][0], j))
+    for rank, j in enumerate(turret_rank):
+        spawn_seq[t0 + j] = rank
+    n_turrets_placed = len(placed)
+    # Then the two champions, in `Config.Players` order -- (blue, red)
+    # throughout this project, see `CHAMPION_SPAWN`.
+    spawn_seq[0] = n_turrets_placed
+    spawn_seq[1] = n_turrets_placed + 1
+
     return s.replace(
         model=jnp.asarray(model),
         spawn_x=jnp.asarray(x, dtype), spawn_y=jnp.asarray(y, dtype),
@@ -358,6 +408,8 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
         hp=jnp.asarray(hp, dtype), max_hp=jnp.asarray(hp, dtype),
         next_spawn_ms=jnp.asarray(FIRST_WAVE_MS, dtype),
         move_order=jnp.full((n,), MoveOrder.NONE, jnp.int8),
+        spawn_seq=jnp.asarray(spawn_seq),
+        next_spawn_seq=jnp.asarray(n_turrets_placed + 2, dtype=jnp.int32),
     )
 
 
@@ -413,11 +465,18 @@ def spawn_minion(state: LaneState, team, profile, hp,
     def setv(arr, v):
         return jnp.where(ok, arr.at[i].set(v), arr)
 
+    # `spawn_seq`: the server creates a genuinely new `Minion` GameObject per
+    # wave spawn (the old occupant of a recycled slot was a DIFFERENT object,
+    # already `RemoveObject`d on death) -- so this slot's creation rank is
+    # "whatever the running counter is now", not anything derived from the
+    # slot index. `next_spawn_seq` only advances when a minion is actually
+    # written (`ok`), exactly like every other masked write here.
     return state.replace(
         kind=setv(state.kind, jnp.int8(Kind.LANE_MINION)),
         team=setv(state.team, jnp.asarray(team, jnp.int8)),
         alive=setv(state.alive, True),
         model=setv(state.model, jnp.asarray(profile, jnp.int8)),
+        spawn_seq=setv(state.spawn_seq, state.next_spawn_seq.astype(jnp.int32)),
         x=setv(state.x, sx), y=setv(state.y, sy),
         hp=setv(state.hp, jnp.asarray(hp, state.hp.dtype)),
         max_hp=setv(state.max_hp, jnp.asarray(hp, state.hp.dtype)),
@@ -427,4 +486,6 @@ def spawn_minion(state: LaneState, team, profile, hp,
         move_order=setv(state.move_order, jnp.int8(MoveOrder.MOVE_TO)),
         target=setv(state.target, jnp.int8(-1)),
         ai_timer=setv(state.ai_timer, jnp.asarray(250.0, state.x.dtype)),
+        next_spawn_seq=jnp.where(ok, state.next_spawn_seq + 1,
+                                 state.next_spawn_seq),
     )
