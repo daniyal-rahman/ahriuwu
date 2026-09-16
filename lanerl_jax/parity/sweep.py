@@ -37,7 +37,7 @@ import argparse
 import json
 from dataclasses import asdict
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -54,11 +54,38 @@ from .perturbation import (
 
 PERTURBATIONS = {"null": NullControl, "stand": StandInWave, "kill": KillMinions}
 
+#: Distinct EXPERIMENTS, not distinct random seeds.
+#:
+#: The first version of this swept `seed=0,1,2,3` and every cell came back
+#: bit-identical on both engines -- 14.3267 four times over. Neither engine has
+#: any RNG on this path: the sim's tick is deterministic and `init_lane(seed=)`
+#: never reaches anything that varies, and the server's determinism comes from
+#: `bot_seed` and the fixed config, not from this argument (its own docstring
+#: says so). So a "4-seed sweep" was n=1 replicated four times, which looks
+#: like evidence and is not.
+#:
+#: What actually varies the experiment is the perturbation itself -- WHEN the
+#: champion steps into the wave and for HOW LONG. Different trigger times land
+#: on different phases of the wave cycle (waves spawn every 30 s and clash
+#: around 120 s), so these are genuinely different lane states, which is the
+#: robustness the seed axis was supposed to provide and could not.
+VARIANTS = {
+    "stand": [
+        {"trigger_ms": 150_000.0, "hold_s": 5.0},
+        {"trigger_ms": 180_000.0, "hold_s": 5.0},
+        {"trigger_ms": 210_000.0, "hold_s": 5.0},
+        {"trigger_ms": 180_000.0, "hold_s": 2.0},
+        {"trigger_ms": 180_000.0, "hold_s": 10.0},
+    ],
+    "null": [{}],
+    "kill": [{}],
+}
+
 
 def run_cell(engine: str, name: str, seed: int, decisions: int,
-             port_base: int) -> Dict:
-    """One cell: baseline and perturbed, same engine and seed, differenced."""
-    pert = PERTURBATIONS[name]()
+             port_base: int, variant: Optional[Dict] = None) -> Dict:
+    """One cell: baseline and perturbed, same engine and variant, differenced."""
+    pert = PERTURBATIONS[name](**(variant or {}))
     if engine == "sim":
         base = run_sim_episode(pert, perturbed=False, seed=seed,
                                decisions=decisions)
@@ -72,6 +99,7 @@ def run_cell(engine: str, name: str, seed: int, decisions: int,
                                       port_base=port_base + 200)
     return {
         "engine": engine, "perturbation": name, "seed": seed,
+        "variant": variant or {},
         "summary": summarize_response(response(base, pert_run)),
     }
 
@@ -96,9 +124,11 @@ def main(argv=None) -> None:
     port = a.port_base
     for engine in engines:
         for name in names:
-            for seed in seeds:
-                print(f"[{engine}] {name} seed={seed} ...", flush=True)
-                rows.append(run_cell(engine, name, seed, decisions, port))
+            for variant in VARIANTS.get(name, [{}]):
+                tag = ",".join(f"{k}={v}" for k, v in variant.items()) or "default"
+                print(f"[{engine}] {name} {tag} ...", flush=True)
+                rows.append(run_cell(engine, name, seeds[0], decisions, port,
+                                     variant))
                 port += 400
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -111,7 +141,7 @@ def main(argv=None) -> None:
             continue
         worst = max((v["rms"] for v in r["summary"].values()
                      if not np.isnan(v["rms"])), default=float("nan"))
-        print(f"  {r['engine']:<7} seed {r['seed']}  worst rms {worst:.4f}")
+        print(f"  {r['engine']:<7} worst rms {worst:.4f}")
 
     print("\n=== RESPONSES, mean over seeds ===")
     keys = sorted({k for r in rows for k in r["summary"]})
@@ -126,8 +156,16 @@ def main(argv=None) -> None:
                 vals = [r["summary"][k]["rms"] for r in rows
                         if r["engine"] == e and r["perturbation"] == name
                         and not np.isnan(r["summary"][k]["rms"])]
-                cells.append(float(np.mean(vals)) if vals else float("nan"))
-            print(f"    {k:<22}" + "".join(f"{c:>12.3f}" for c in cells))
+                cells.append(vals)
+            # mean and spread across VARIANTS, so a number that is identical
+            # in every cell is visibly identical rather than hidden by a mean
+            txt = ""
+            for vals in cells:
+                if not vals:
+                    txt += f"{'nan':>20}"
+                else:
+                    txt += f"{np.mean(vals):>11.3f}+-{np.std(vals):<8.3f}"
+            print(f"    {k:<22}{txt}")
     print(f"\nwrote {out}")
 
 
