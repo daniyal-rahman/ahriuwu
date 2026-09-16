@@ -185,6 +185,16 @@ class LaneState:
     #: ``Champion._goldTimer``, ms. Counts down; on expiry a champion receives
     #: one ambient gold tick. See :mod:`lanerl_jax.sim.rewards`.
     gold_timer: jax.Array      # (N,)
+    #: `AttackableUnit._statUpdateTimer` -- the 500 ms accumulator base regen
+    #: is applied on. Per unit, because it is per unit on the server.
+    stat_timer: jax.Array      # (N,)
+    #: `GarenPassiveHeal.healingTimer` -- the passive's own ~1 s accumulator,
+    #: independent of the stat clock above.
+    heal_timer: jax.Array      # (N,)
+    #: ms since this unit last took damage that COUNTS as combat. Ordinary
+    #: minion autoattacks deliberately do not reset it -- see `sim/regen.py`.
+    #: Starts high so a fresh champion is already out of combat.
+    ms_since_damaged: jax.Array  # (N,)
     cs: jax.Array              # (N,) int16
     deaths: jax.Array          # (N,) int16
 
@@ -288,6 +298,8 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         spawn_x=z(n_units), spawn_y=z(n_units),
         level=jnp.ones((n_units,), dtype=jnp.int8),
         xp=z(n_units), gold=z(n_units), gold_timer=z(n_units),
+        stat_timer=z(n_units), heal_timer=z(n_units),
+        ms_since_damaged=jnp.full((n_units,), 1e6, dtype),
         cs=zi(n_units, t=jnp.int16), deaths=zi(n_units, t=jnp.int16),
         buff_id=zi(n_units, MAX_BUFFS),
         buff_elapsed=z(n_units, MAX_BUFFS),

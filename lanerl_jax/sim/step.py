@@ -55,9 +55,10 @@ from .spells import RANKS_BY_LEVEL, BuffId, Slot, step_buffs
 from .waves_jax import step_waves_jax
 from .minion_ai import step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
+from .regen import step_regen
 from .rewards import ambient_gold, death_rewards, level_for_xp
 from .state import Kind, LaneState, MoveOrder, Team
-from .targeting import base_priority, nearest_enemy, turret_acquire
+from .targeting import MinionType, base_priority, nearest_enemy, turret_acquire
 
 __all__ = ["UnitParams", "tick", "step_decision"]
 
@@ -217,6 +218,18 @@ def tick(state: LaneState, params: UnitParams,
         x=state.x, y=state.y, kind=state.kind, team=state.team,
         alive=state.alive, armor=P("armor"), delta_ms=delta_ms)
 
+    # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
+    # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.
+    # Not modelling this is why our champion died 7 times in an oracle-driven
+    # 600 s episode where the server's died 0 -- see `sim/regen.py`.
+    rg = step_regen(
+        hp=state.hp, max_hp=state.max_hp, alive=state.alive, kind=state.kind,
+        level=state.level, hp_regen=P("hp_regen"),
+        stat_timer=state.stat_timer, heal_timer=state.heal_timer,
+        ms_since_damaged=state.ms_since_damaged, delta_ms=delta_ms)
+    state = state.replace(hp=rg.hp, stat_timer=rg.stat_timer,
+                          heal_timer=rg.heal_timer)
+
     # ---- 2b. movement (AttackableUnit.Move, after UpdateBuffs) -------------
     x, y, wp_key, _ = step_move_units(
         state.x, state.y, state.waypoints, state.waypoint_key,
@@ -363,6 +376,38 @@ def tick(state: LaneState, params: UnitParams,
     dmg_ij = dmg_ij + ms.damage_ij
     dealt = dmg_ij.sum(axis=0) + bs.damage_dealt
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
+
+    # ---- out-of-combat clock, for Garen's passive -------------------------
+    # `CharScriptGaren.ShouldPassiveTurnOff` returns FALSE -- the passive keeps
+    # running -- when the attacker's UnitTags is one of Minion, Minion_Lane,
+    # Minion_Lane_Siege, Minion_Lane_Super or Minion_Summon. So ordinary minion
+    # damage does NOT put Garen in combat, which is what lets the server's
+    # Garen heal continuously while farming.
+    #
+    # Cannon minions are the exception, and only by accident. `UnitTag` is a
+    # [Flags] enum with NO explicit values, so C# numbers it 0,1,2,...:
+    # Minion=2, Minion_Lane=3, Minion_Lane_Siege=4, Monster=7. A melee or
+    # caster minion is tagged "Minion | Minion_Lane" = 2|3 = 3 = Minion_Lane,
+    # which IS in the exception list. A cannon is
+    # "Minion | Minion_Lane | Minion_Lane_Siege" = 2|3|4 = **7 = Monster**,
+    # which is not -- so a cannon's autoattack DOES break the passive below
+    # level 11 (at 11+ a separate Monster check exempts it again).
+    #
+    # Reproduced deliberately. It is a bug in the server and parity means
+    # matching the server, not the mechanic's evident intention.
+    _cannon = (state.kind == Kind.LANE_MINION) & \
+        (_minion_type_of(state) == MinionType.CANNON)
+    breaks_combat = ~((state.kind == Kind.LANE_MINION) & ~_cannon)
+    # `dmg_ij` here is (attacker, victim) and NOT yet the concatenated form
+    # that prepends the buff-damage row further down. Judgment's damage is
+    # carried separately in `bs.damage_dealt` and comes from a champion, so it
+    # always counts as combat.
+    hit_by_combat = (
+        jnp.where(breaks_combat[:, None], dmg_ij, 0.0).sum(axis=0)
+        + bs.damage_dealt) > 0
+    ms_since_damaged = jnp.where(
+        hit_by_combat, jnp.zeros_like(state.ms_since_damaged),
+        state.ms_since_damaged + delta_ms)
     alive = state.alive & (hp > 0)
     died = state.alive & ~alive
 
@@ -438,7 +483,8 @@ def tick(state: LaneState, params: UnitParams,
         aa_cooldown=aa.aa_cooldown, aa_windup=aa.aa_windup,
         is_attacking=aa.is_attacking, has_auto_attacked=aa.has_auto_attacked,
         hp=hp, alive=alive, gold=gold, xp=xp, cs=cs, level=level,
-        gold_timer=gold_timer, spell_level=spell_level, buff_id=bs.buff_id,
+        gold_timer=gold_timer, ms_since_damaged=ms_since_damaged,
+        spell_level=spell_level, buff_id=bs.buff_id,
         buff_elapsed=bs.buff_elapsed, spell_cooldown=bs.spell_cooldown,
         missile_alive=ms.alive, missile_x=ms.x, missile_y=ms.y,
         missile_tx=ms.target.astype(state.missile_tx.dtype),

@@ -21,7 +21,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..data.patch import PatchTable, UnitStats, load_patch
-from .combat import attack_period, attack_speed_flat, attack_windup
+from .combat import (attack_period, attack_speed_flat,
+                      attack_windup, stat_at_level)
 from .state import Kind, Team
 from .targeting import MinionType
 
@@ -76,7 +77,8 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         "move_speed", "acquisition_range", "attack_range", "collision_radius",
         "attack_period", "attack_windup", "attack_damage", "armor",
         "magic_resist", "max_hp", "gold_on_death", "xp_on_death",
-        "pathfinding_radius", "fires_missile", "missile_speed")}
+        "pathfinding_radius", "fires_missile", "missile_speed",
+        "hp_regen")}
 
     for row, (kind, mtype, team) in enumerate(PROFILES):
         u = _stats_for(patch, kind, mtype, team)
@@ -110,6 +112,16 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         # shared constant. Meaningless (and unread, since `fires_missile` is 0)
         # for melee units.
         cols["missile_speed"][row] = u.missile_speed
+        # `Stats.Update` adds `HealthRegeneration.Total * diff * 0.001f` on a
+        # 500 ms accumulator, so this is HP per SECOND -- not per five seconds,
+        # whatever League's display convention says. Champions scale it per
+        # level through the same growth curve as every other per-level stat.
+        # On this map minions and turrets are both 0.0; Garen is 1.568 + 0.1
+        # per level. Omitting it entirely is why our champion died 7 times in
+        # an oracle-driven 600 s episode where the server's died 0 times.
+        cols["hp_regen"][row] = (
+            float(stat_at_level(u.base_hp_regen, u.hp_regen_per_level, 1))
+            if kind == Kind.CHAMPION else float(u.base_hp_regen))
 
     # Measured deltas that Content does not carry; see sim/init.py.
     from .init import (

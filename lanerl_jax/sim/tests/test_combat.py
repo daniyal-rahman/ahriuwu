@@ -128,3 +128,64 @@ def test_the_ramp_stops_after_seven_applications():
     assert float(outer_turret_ramps(np.float64(390_000.0))) == 7.0
     assert float(outer_turret_ramps(np.float64(10_000_000.0))) == 7.0
     assert float(outer_turret_ramps(np.float64(0.0))) == 0.0
+
+
+def test_hp_regen_rates_come_from_content_and_are_per_second():
+    """`Stats.Update` adds `rate * diff * 0.001` with diff in ms, on a 500 ms
+    accumulator -- so the stored number is HP per SECOND, not per five seconds.
+
+    On this map minions and turrets are both 0, so the only unit that
+    regenerates is the champion.
+    """
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import lane_params
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, Team
+    from lanerl_jax.sim.targeting import MinionType
+
+    p = lane_params(load_patch())
+    reg = np.asarray(p["hp_regen"])
+    assert reg[profile_id(Kind.CHAMPION, -1, Team.BLUE)] == pytest.approx(1.568)
+    assert reg[profile_id(Kind.LANE_MINION, MinionType.MELEE, Team.BLUE)] == 0.0
+    assert reg[profile_id(Kind.TURRET, -1, Team.BLUE)] == 0.0
+
+
+def test_garens_passive_heals_more_at_higher_level_brackets():
+    """`HEALTH_PERCENTAGES = {0.004, 0.008, 0.02}`, brackets at 11 and 16."""
+    import jax.numpy as jnp
+    from lanerl_jax.sim.regen import GAREN_HEAL_PCT, garen_heal_bracket
+
+    assert GAREN_HEAL_PCT == (0.004, 0.008, 0.02)
+    lv = jnp.asarray([1, 10, 11, 15, 16, 18], jnp.int32)
+    assert list(np.asarray(garen_heal_bracket(lv))) == [0, 0, 1, 1, 2, 2]
+
+
+def test_regen_never_touches_a_unit_that_regenerates_nothing():
+    """The clamp lives INSIDE the server's guard, and getting that wrong is
+    not a rounding error -- it is a kill.
+
+    `Stats.Update` only assigns `CurrentHealth` inside
+    `if (regen > 0 && CurrentHealth < HealthPoints.Total && CurrentHealth > 0)`.
+    Clamping every living unit to max_hp instead zeroed a fixture minion that
+    carried hp 1.0 with max_hp 0 -- `min(1.0, 0.0)` -- so it died with no
+    attacker and no champion was credited the kill.
+    """
+    import jax.numpy as jnp
+    from lanerl_jax.sim.regen import step_regen
+    from lanerl_jax.sim.state import Kind
+
+    n = 3
+    out = step_regen(
+        hp=jnp.asarray([1.0, 100.0, 50.0]),
+        max_hp=jnp.asarray([0.0, 200.0, 50.0]),        # slot 0: hp > max_hp
+        alive=jnp.asarray([True, True, True]),
+        kind=jnp.asarray([Kind.LANE_MINION, Kind.LANE_MINION, Kind.CHAMPION],
+                         jnp.int8),
+        level=jnp.ones((n,), jnp.int32),
+        hp_regen=jnp.zeros((n,)),                       # minions regen nothing
+        stat_timer=jnp.full((n,), 499.0),
+        heal_timer=jnp.zeros((n,)),
+        ms_since_damaged=jnp.zeros((n,)),               # in combat: no passive
+        delta_ms=1000.0 / 60.0)
+    assert float(out.hp[0]) == pytest.approx(1.0), "untouched, not clamped to 0"
+    assert float(out.hp[1]) == pytest.approx(100.0)

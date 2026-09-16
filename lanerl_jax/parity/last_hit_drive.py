@@ -209,6 +209,14 @@ class SimRun:
     attacks: int
     moves: int
     holds: int
+    #: champion deaths. Each one costs a respawn plus the walk back, so a
+    #: difference here is worth more CS than any per-swing effect.
+    deaths: int = 0
+    #: mean red minions the oracle could SEE per engaged decision. The sim
+    #: filters through `obs/fog.visible_to`, an approximation; the server
+    #: filters on the wire's own `vb` flag, which is the real thing. A gap
+    #: here is a fog-model gap, not a last-hitting gap.
+    vis_mean: float = 0.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -221,6 +229,8 @@ class ServerRun:
     attacks: int
     moves: int
     holds: int
+    deaths: int = 0
+    vis_mean: float = 0.0
     log_path: Optional[Path] = None
 
 
@@ -254,10 +264,16 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
         return step_decision(apply_orders(state, orders), params_tbl, lane_path=path)
 
     wp_idx = 0
-    approach_decisions = attacks = moves = holds = 0
+    approach_decisions = attacks = moves = holds = deaths = 0
+    vis_counts: list = []
+    prev_alive = True
     for _ in range(decisions):
         x0 = float(state.x[0])
         y0 = float(state.y[0])
+        champ_alive = bool(state.alive[0])
+        if prev_alive and not champ_alive:
+            deaths += 1
+        prev_alive = champ_alive
         wp_idx = _advance_approach(x0, y0, wp_idx)
 
         if wp_idx < len(APPROACH_WAYPOINTS):
@@ -305,6 +321,7 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
             )
             for i in enemy
         ]
+        vis_counts.append(len(minions))
         d = decide(champ, minions, lethal_epsilon=0.0)
         if d.attack is not None:
             attacks += 1
@@ -319,7 +336,8 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
 
     cs = int(np.asarray(state.cs)[0])
     return SimRun(cs=cs, decisions=decisions, approach_decisions=approach_decisions,
-                 attacks=attacks, moves=moves, holds=holds)
+                  attacks=attacks, moves=moves, holds=holds, deaths=deaths,
+                  vis_mean=float(np.mean(vis_counts)) if vis_counts else 0.0)
 
 
 def run_oracle_on_server(
@@ -374,7 +392,9 @@ def run_oracle_on_server(
     )
     env.start()
     wp_idx = 0
-    approach_decisions = attacks = moves = holds = 0
+    approach_decisions = attacks = moves = holds = deaths = 0
+    vis_counts: list = []
+    prev_alive = True
     log_path: Optional[Path] = None
     try:
         if not all(env.alive):
@@ -388,6 +408,10 @@ def run_oracle_on_server(
             blue = next(
                 u for u in units if u.get("k") == "Champion" and u.get("tm") == 100)
             bx, by = float(blue["x"]), float(blue["y"])
+            champ_alive = float(blue.get("hp", 1)) > 0
+            if prev_alive and not champ_alive:
+                deaths += 1
+            prev_alive = champ_alive
             wp_idx = _advance_approach(bx, by, wp_idx)
 
             if wp_idx < len(APPROACH_WAYPOINTS):
@@ -412,6 +436,7 @@ def run_oracle_on_server(
                     hp=float(u["hp"]), armor=float(stat.armor),
                     collision_radius=float(stat.collision_radius)))
 
+            vis_counts.append(len(minions))
             d = decide(champ, minions, lethal_epsilon=0.0)
             if d.attack is not None:
                 attacks += 1
