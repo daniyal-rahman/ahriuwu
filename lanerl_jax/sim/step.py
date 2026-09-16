@@ -46,9 +46,11 @@ from .combat import (
     TURRET_AD_PER_RAMP,
     TURRET_ARMOR_PER_RAMP,
     TURRET_DAMAGE_VS_MINION,
+    garen_passive_exempt,
     growth_sum,
     other_turret_ramps,
     outer_turret_ramps,
+    stat_total,
 )
 from .collision import resolve_collisions
 from ..obs.fog import visible_to_enemy as _visible_to_enemy
@@ -74,11 +76,22 @@ def _attack_damage_against(attack_damage, attacker_kind, target_kind,
                            model=None, t_ms=None):
     """Raw attack damage, with the attacker/target modifiers the scripts apply.
 
-    Two exist in this slice. One is a property of the *pair*: every lane
-    turret's basic-attack script multiplies by 0.7 when the target is a
-    Minion, before mitigation -- a turret shooting a champion does full damage,
-    so it cannot live in the profile table. The other is a property of the
-    attacker's own tier and the game clock: the per-tier AD ramp below.
+    ``TURRET_DAMAGE_VS_MINION`` (`combat.py`) is **1.0** on this map -- a
+    no-op -- and this function's `vs_minion`/`from_turret` branch exists only
+    so that stops being true the day it should: the 0.7x-vs-minion discount is
+    real, but it belongs to `SRUAP_Turret_*`'s `BasicAttack.cs`, a Map11-only
+    script. Map1's turrets (`OrderTurret*`/`ChaosTurret*`) have no
+    `Characters/<model>/` script folder at all, so `CSharpScriptEngine
+    .CreateObjectStatic<ICharScript>("CharScripts", $"CharScript{Model}")`
+    falls back to `SpellScriptEmpty` and their basic attack resolves through
+    the native `ObjAIBase.AutoAttackHit` at full, undiscounted AD -- confirmed
+    directly from the script-resolution code, not merely from the constant
+    already being 1.0. See `combat.TURRET_DAMAGE_VS_MINION`'s own docstring
+    for the full citation; this docstring previously described the discount as
+    live, which it never was on this map.
+
+    What IS real here: a property of the attacker's own tier and the game
+    clock, the per-tier AD ramp below.
     """
     vs_minion = target_kind == Kind.LANE_MINION
     from_turret = attacker_kind == Kind.TURRET
@@ -560,32 +573,57 @@ def tick(state: LaneState, params: UnitParams,
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
 
     # ---- out-of-combat clock, for Garen's passive -------------------------
-    # `CharScriptGaren.ShouldPassiveTurnOff` returns FALSE -- the passive keeps
-    # running -- when the attacker's UnitTags is one of Minion, Minion_Lane,
-    # Minion_Lane_Siege, Minion_Lane_Super or Minion_Summon. So ordinary minion
-    # damage does NOT put Garen in combat, which is what lets the server's
-    # Garen heal continuously while farming.
+    # `CharScriptGaren.ShouldPassiveTurnOff(unit, damageData)` (`unit` = the
+    # DEFENDER this passive belongs to, i.e. Garen; `damageData.Attacker` =
+    # whoever hit him) returns FALSE -- the passive keeps running, the hit
+    # does NOT count as combat -- when EITHER:
+    #  (a) `MINION_UNIT_TAG_PASSIVE_EXCEPTIONS.Contains(Attacker.UnitTags)`,
+    #      an EXACT-VALUE check against the attacker's raw, already-OR'd
+    #      `UnitTags` int; or
+    #  (b) `unit.Stats.Level >= 11 && UnitTag.Monster.Equals(Attacker.UnitTags)`
+    #      -- the DEFENDER's own level, re-exempting at 11+.
     #
-    # Cannon minions are the exception, and only by accident. `UnitTag` is a
-    # [Flags] enum with NO explicit values, so C# numbers it 0,1,2,...:
-    # Minion=2, Minion_Lane=3, Minion_Lane_Siege=4, Monster=7. A melee or
-    # caster minion is tagged "Minion | Minion_Lane" = 2|3 = 3 = Minion_Lane,
-    # which IS in the exception list. A cannon is
-    # "Minion | Minion_Lane | Minion_Lane_Siege" = 2|3|4 = **7 = Monster**,
-    # which is not -- so a cannon's autoattack DOES break the passive below
-    # level 11 (at 11+ a separate Monster check exempts it again).
+    # `UnitTag` is `[Flags]` with NO explicit values (confirmed directly from
+    # `GameServerCore/Enums/UnitTag.cs`), so C# numbers it sequentially:
+    # Champion=0, Champion_Clone=1, Minion=2, Minion_Lane=3,
+    # Minion_Lane_Siege=4, Minion_Lane_Super=5, Minion_Summon=6, Monster=7.
+    # `MINION_UNIT_TAG_PASSIVE_EXCEPTIONS` (`CharScriptGaren.cs:21-28`) lists
+    # `{Minion, Minion_Lane, Minion_Lane_Siege, Minion_Lane_Super,
+    # Minion_Summon}` BY NAME -- i.e. the raw values `{2,3,4,5,6}` -- but a
+    # real minion's `UnitTags` field is the bitwise OR of ALL its tags, not a
+    # single one: melee/caster (`Blue_Minion_Basic.json`) is
+    # `"Minion | Minion_Lane"` = `2|3` = **3** (in the set, so always exempt,
+    # matching `Minion_Lane`'s own raw value by coincidence). Cannon
+    # (`Blue_Minion_MechCannon.json`) is
+    # `"Minion | Minion_Lane | Minion_Lane_Siege"` = `2|3|4` = **7**, and
+    # super (`Blue_Minion_MechMelee.json`) is
+    # `"Minion | Minion_Lane | Minion_Lane_Super"` = `2|3|5` = **7** too --
+    # BOTH collide with `Monster`'s raw value, and 7 is not in `{2,3,4,5,6}`,
+    # so despite `Minion_Lane_Siege`/`Minion_Lane_Super` being named right
+    # there in the exceptions list, NEITHER cannon NOR super minions are ever
+    # exempted by check (a). Only check (b) -- the Monster-value collision,
+    # gated on Garen's OWN level -- can exempt them, and only from level 11.
     #
-    # Reproduced deliberately. It is a bug in the server and parity means
-    # matching the server, not the mechanic's evident intention.
-    _cannon = (state.kind == Kind.LANE_MINION) & \
-        (_minion_type_of(state) == MinionType.CANNON)
-    breaks_combat = ~((state.kind == Kind.LANE_MINION) & ~_cannon)
+    # Reproduced deliberately, including the level-11 re-exemption this port
+    # previously omitted and the super-minion case this port previously
+    # mis-grouped with melee/caster (never breaking combat, at any level) --
+    # `docs/PORT_AUDIT_COMBAT.md`'s UnitTag row. It is a bug in the server and
+    # parity means matching the server, not the mechanic's evident intention.
+    # `combat.garen_passive_exempt` is the (attacker, victim) pair; the
+    # exemption is gated on the VICTIM's (defender's) own level, not the
+    # attacker's, which is why this can't be a per-attacker vector.
+    _minion_type = _minion_type_of(state)
+    _is_lane_minion = state.kind == Kind.LANE_MINION
+    _is_cannon_or_super = (
+        (_minion_type == MinionType.CANNON) | (_minion_type == MinionType.SUPER))
+    breaks_combat_pair = ~garen_passive_exempt(
+        _is_lane_minion, _is_cannon_or_super, state.level, jnp)
     # `dmg_ij` here is (attacker, victim) and NOT yet the concatenated form
     # that prepends the buff-damage row further down. Judgment's damage is
     # carried separately in `bs.damage_dealt` and comes from a champion, so it
     # always counts as combat.
     hit_by_combat = (
-        jnp.where(breaks_combat[:, None], dmg_ij, 0.0).sum(axis=0)
+        jnp.where(breaks_combat_pair, dmg_ij, 0.0).sum(axis=0)
         + bs.damage_dealt) > 0
     ms_since_damaged = jnp.where(
         hit_by_combat, jnp.zeros_like(state.ms_since_damaged),

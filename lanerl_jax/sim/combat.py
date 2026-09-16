@@ -69,6 +69,7 @@ __all__ = [
     "other_turret_ramps",
     "other_turret_attack_damage",
     "other_turret_armor",
+    "garen_passive_exempt",
 ]
 
 
@@ -220,6 +221,49 @@ def post_mitigation_damage(damage: Any, resist: Any, xp: Any = np) -> Any:
     pct = 100.0 / (100.0 + resist)
     pct = xp.where(resist < 0, 2.0 - pct, pct)
     return xp.where(damage <= 0.0, xp.zeros_like(damage * pct), damage * pct)
+
+
+def garen_passive_exempt(attacker_is_lane_minion: Any, attacker_is_cannon_or_super: Any,
+                         victim_level: Any, xp: Any = np) -> Any:
+    """``CharScriptGaren.ShouldPassiveTurnOff``'s UnitTag/level gate.
+
+    ``(attacker, victim)`` pair: ``True`` where a hit from that attacker does
+    NOT count as combat against that victim's Garen passive (the
+    ``PostMitigationDamage<=0`` half of the real check is not reproduced here
+    -- callers already gate on ``damage>0`` before this matters, e.g.
+    ``step.py``'s ``hit_by_combat`` sums only positive `dmg_ij` entries).
+
+    ``UnitTag`` is ``[Flags]` with NO explicit values
+    (`GameServerCore/Enums/UnitTag.cs`), so C# numbers it sequentially:
+    Champion=0, Champion_Clone=1, Minion=2, Minion_Lane=3,
+    Minion_Lane_Siege=4, Minion_Lane_Super=5, Minion_Summon=6, Monster=7.
+    ``MINION_UNIT_TAG_PASSIVE_EXCEPTIONS`` (`CharScriptGaren.cs:21-28`) lists
+    ``{Minion, Minion_Lane, Minion_Lane_Siege, Minion_Lane_Super,
+    Minion_Summon}`` BY NAME -- i.e. the raw values ``{2,3,4,5,6}`` -- but a
+    real minion's ``UnitTags`` field is the bitwise OR of ALL its tags:
+    melee/caster (``Blue_Minion_Basic.json``, ``"Minion | Minion_Lane"``) is
+    ``2|3`` = **3** (in the set, exempt unconditionally); cannon
+    (``"Minion | Minion_Lane | Minion_Lane_Siege"``) is ``2|3|4`` = **7**, and
+    super (``"Minion | Minion_Lane | Minion_Lane_Super"``) is ``2|3|5`` =
+    **7** too -- BOTH collide with ``Monster``'s raw value and neither is in
+    ``{2,3,4,5,6}``, so despite ``Minion_Lane_Siege``/``Minion_Lane_Super``
+    being named right there in the exceptions list, NEITHER is ever exempted
+    by that check. The only other exemption (`CharScriptGaren.cs:108-111`) is
+    ``unit.Stats.Level>=11 && UnitTag.Monster.Equals(Attacker.UnitTags)`` --
+    the SAME Monster-value collision, gated on the DEFENDER's (victim's) own
+    level, not the attacker's.
+
+    Extracted as a small pure function (rather than left inline in
+    ``step.py``) specifically so it is directly unit-testable without
+    needing a live auto-attack to land -- a super minion's basic attack has
+    Content ``MissileSpeed: 0`` (`Blue_Minion_MechMeleeBasicAttack.json`),
+    which stalls `sim/missiles.py`'s travel-time model indefinitely and is a
+    separate, pre-existing gap this function's tests must not depend on.
+    """
+    minion = xp.asarray(attacker_is_lane_minion)[:, None]
+    cannon_or_super = xp.asarray(attacker_is_cannon_or_super)[:, None]
+    level_ok = (xp.asarray(victim_level) >= 11)[None, :]
+    return minion & (~cannon_or_super | level_ok)
 
 
 def level_up_factor(level: Any) -> Any:

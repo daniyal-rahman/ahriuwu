@@ -50,13 +50,20 @@ In a lane that is the difference between healing continuously while farming and
 never healing at all, and it is why the server's Garen survives 600 s of minion
 chip damage without dying once.
 
-Note this exception list is also where the server has a real bug, documented in
-`docs/CONTENT_SCRIPT_MECHANICS.md`: ``UnitTag`` declares no explicit flag
-values, so a cannon minion's OR-ed tag collides with ``Monster`` and is NOT in
-the list. Cannon autoattacks therefore DO break the passive below level 11
-while melee and caster autoattacks never do. That is reproduced here, because
-parity means reproducing the server rather than what the mechanic obviously
-intended.
+Note this exception list is also where the server has a real bug (see
+``docs/PORT_AUDIT_COMBAT.md``'s UnitTag row, and ``sim/step.py``'s
+``breaks_combat_pair``, which is what actually computes this -- this module
+only consumes the resulting ``ms_since_damaged``): ``UnitTag`` declares no
+explicit flag values, so BOTH cannon's and SUPER minions' OR-ed tag collide
+with ``Monster`` and are NOT in the exceptions list, despite
+``Minion_Lane_Siege``/``Minion_Lane_Super`` being named in it -- the list
+checks an exact raw-integer value, and a real minion's tag is the OR of
+several. Cannon and super autoattacks therefore DO break the passive below
+Garen's own level 11, and stop doing so from level 11 onward (a second check,
+keyed on the SAME Monster-value collision, gated on the DEFENDER's level) --
+while melee and caster autoattacks never do, at any level. That is reproduced
+here, because parity means reproducing the server rather than what the
+mechanic obviously intended.
 """
 from __future__ import annotations
 
