@@ -716,6 +716,40 @@ have been a failure of the idea either: PureJaxRL's apples-to-apples
 end-to-end-JIT number is ~10×, and the rest of its headline comes from parallel
 envs and parallel seeds, which we get regardless.*
 
+#### J1 status, 2026-09-16
+
+**Green.** Terrain and pathing (exact, from the 86 KB bitmap — no
+approximation); wave spawn timing (178 spawn events in 600 s, event for event);
+movement parity at the oracle's own resolution; the auto-attack clock; target
+acquisition, including call-for-help; damage, kill attribution and the
+gold/XP asymmetry; gate 4 (164×) and gate 5 (12.8 s).
+
+**Open, with the cause known.**
+
+*Minion population +17%* (median 24 against the server's 21, p95 31 against 27).
+Was +24% this morning. The cause of the larger part was that the sim placed
+**2 turrets and the server places 24** — `include_all_turrets` was documented,
+accepted as a parameter and never implemented. Five turrets per side sit on the
+top lane, and the four behind each outer turret are what stops a winning wave:
+without them the lane did not merely drift, it ran away to 2 blue minions
+against 28 red by ten minutes. With them it oscillates, which is what a lane is
+supposed to do. The residual +17% is the oscillation being too violent — the
+sim destroys blue's outer turret inside 600 s, which the server is being asked
+about now.
+
+*2 of 24 pathfinder routes disagree.* Heap tie-break, tick lag and float32 have
+each been falsified as the cause.
+
+**Not built.** Garen Q/W/R (E is in), caster missiles, buffs beyond E, the
+next-hop pathing table, the 50-seed corpus, and the N-seeds-per-experiment vmap
+(J3 gate 5).
+
+**Gate 3 has no implementation yet** and is the one that most deserves one: an
+oracle last-hitter scoring the same CS@10 in the sim as on the server is the
+only *behavioural* known-answer in the list, and the population comparison is a
+weaker instrument than it looks — it agreed to within its tolerance while the
+lane underneath it was collapsing to one side.
+
 ### Stage J2 — The observation builder in JAX (weeks 2–5, parallel to J1)
 
 Independent of J1 and with a much better oracle, so it runs concurrently.
