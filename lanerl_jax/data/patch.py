@@ -221,7 +221,14 @@ class UnitStats:
             attack_delay_cast_offset_percent=num(
                 d, "AttackDelayCastOffsetPercent", 0.0),
             is_melee=flag(d, "IsMelee", False),
-            base_hp_regen=num(d, "BaseStaticHPRegen", 0.0),
+            # `CharData.cs:37`: `BaseStaticHpRegen { get; private set; } =
+            # 0.30000001f;` -- NOT 0.0. Every unit this project currently loads
+            # (Garen, all 8 Map1 lane-minion models, all 10 Map1 turret models)
+            # specifies this key explicitly, so the wrong default was inert in
+            # practice (verified against every `Stats/*/*.json` this table
+            # reads); fixed to the server's real default so it stays correct
+            # if a future model omits the key.
+            base_hp_regen=num(d, "BaseStaticHPRegen", 0.30000001),
             hp_regen_per_level=num(d, "HPRegenPerLevel", 0.0),
             gold_given_on_death=num(d, "GoldGivenOnDeath", 0.0),
             exp_given_on_death=num(d, "ExpGivenOnDeath", 0.0),

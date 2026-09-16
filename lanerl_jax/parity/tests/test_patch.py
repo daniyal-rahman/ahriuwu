@@ -138,3 +138,29 @@ def test_exp_curve_is_the_servers(patch):
     assert patch.xp_for_level(2) == 280.0
     assert patch.xp_for_level(6) == 2400.0
     assert patch.xp_for_level(18) == 18360.0
+
+
+def test_missing_hp_regen_defaults_to_the_servers_030_not_zero():
+    """``CharData.cs:37``: ``BaseStaticHpRegen`` defaults to ``0.30000001f``
+    when a Content file omits the key, not ``0.0``.
+
+    Currently inert -- Garen and every Map1 minion/turret model this project
+    loads specifies the key explicitly (checked below), so this only guards
+    against a *future* model silently regressing to the wrong default. Still
+    a real content-table constant, per `docs/PORT_AUDIT_WAVES.md`.
+    """
+    assert num({}, "BaseStaticHPRegen", 0.30000001) == pytest.approx(0.30000001)
+
+
+def test_every_loaded_model_specifies_hp_regen_explicitly(patch):
+    """The 0.0-vs-0.3 default only matters for a model that omits the key.
+    None currently does -- this pins that so the "currently inert" claim
+    above stays true rather than going stale."""
+    d = load_character("Garen")
+    assert "BaseStaticHPRegen" in d
+    for name in ("Blue_Minion_Basic", "Red_Minion_Basic", "Blue_Minion_Wizard",
+                "Red_Minion_Wizard", "Blue_Minion_MechCannon", "Red_Minion_MechCannon",
+                "Blue_Minion_MechMelee", "Red_Minion_MechMelee"):
+        assert "BaseStaticHPRegen" in load_character(name), name
+    for name in patch.turrets:
+        assert "BaseStaticHPRegen" in load_character(name), name
