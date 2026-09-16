@@ -789,7 +789,7 @@ clock; target acquisition including call-for-help; damage, kill attribution and
 the gold/XP asymmetry; ranged basic-attack missiles with per-unit speeds; turret
 identity, stats and time ramp; minion spawn positions; tick phase order; the
 minion population and lane balance. Gate 4 (164x) and gate 5 (12.8 s).
-**213 tests pass.**
+**260 pass; 1 fails by design, the gate-3 oracle test, until gate 3 closes.**
 
 **Gate 2 is MET.** `docs/TIER2_DIVERGENCE.md`: four full 600 s episodes
 (idle, and three genuinely different champion-driven scenarios -- neither

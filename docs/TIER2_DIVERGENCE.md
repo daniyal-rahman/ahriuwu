@@ -502,23 +502,27 @@ consistent with this gate's instructions, not worked around.
 ## 8. Test suite
 
 `PYTHONPATH=$PWD ./.venv-jax/bin/python -m pytest lanerl_jax -q`:
-**260 passed, 1 failed, 3 warnings, 1294 s.** No sim/core code was changed
-for this gate — only new, additive files (`lanerl_jax/parity/tier2.py`,
+**260 passed, 1 failed, 3 warnings.** The bar, confirmed directly against
+this branch's own base commit (`c8cb332`, measured by the coordinator: `1
+failed, 260 passed`, same test) rather than assumed: **260 pass; 1 fails by
+design, the gate-3 oracle test, until gate 3 closes.** No sim/core code was
+changed for this gate — only new, additive files (`lanerl_jax/parity/tier2.py`,
 `lanerl_jax/parity/tier2_batch.py`, `slurm/parity_g2.sbatch`, this document,
-and the `JAX_REWRITE_PLAN.md` status update) — so this is not a regression
-introduced here. The one failure is
+and the `JAX_REWRITE_PLAN.md` status update) — so this run meets that bar
+exactly and is not a regression. The one failure is
 `lanerl_jax/parity/tests/test_last_hit_gate.py::
-test_oracle_scores_the_same_cs_in_sim_and_server`, and it is a **known,
-pre-existing, documented failure**: the test's own docstring says outright
-"so as of 2026-09-16 it FAILS, and that failure is the deliverable" — it is
-J1 gate 3 (`docs/JAX_REWRITE_PLAN.md`'s own "Open" list: "Gate 3 fails
-narrowly"), not gate 2, and not introduced by this work. Notably, this run's
-own numbers (`sim cs=9, server cs=4, sim deaths=5, server deaths=0`) land in
-the same direction as this report's own §4/§6 finding — the sim's champion
-dying to wave damage the server's does not — under the heavy, multi-agent
-CPU contention this login node was under while this suite ran (see §7);
-gate 3's exact CS gap is evidently sensitive to real-time contention and is
-tracked separately from gate 2, not re-litigated here.
+test_oracle_scores_the_same_cs_in_sim_and_server`; its own docstring says
+outright "so as of 2026-09-16 it FAILS, and that failure is the
+deliverable" — it is J1 gate 3, owned by a sibling agent, not gate 2, and
+red on the base commit before this work touched anything. This run's own
+numbers (`sim cs=9, server cs=4, sim deaths=5, server deaths=0`) happen to
+land in the same direction as this report's own §4/§6 finding — the sim's
+champion dying to wave damage the server's does not — which is a
+coincidence worth noting, not evidence of anything: the failure itself is
+deterministic and by design (confirmed against the clean base-commit run
+above), though the exact CS/death numbers a real-server-booting test like
+this one reports can plausibly vary run to run with subprocess timing. Not
+re-litigated further here; it belongs to gate 3.
 
 ---
 
