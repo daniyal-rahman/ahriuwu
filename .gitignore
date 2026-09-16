@@ -60,7 +60,20 @@ CLAUDE.md
 _eval_frames_nfs/
 _ahriuwu_patch_pickup/
 node_modules/
+# CONFLICT, deliberately left in place rather than resolved here.
+#
+# This unanchored `data/` undoes the anchored `/data/` above, whose comment
+# says it was anchored "so they don't hide src/ahriuwu/data/ etc." -- and it
+# does hide them: `src/ahriuwu/data/` has 9 tracked files that survive only
+# because they were added before this line existed. Any NEW file under any
+# `data/` directory anywhere in the tree is silently untracked, which is how
+# `lanerl_jax/data/` went missing from a commit.
+#
+# Not deleted here because this file is shared with every other worktree and
+# the fix belongs to whoever owns it. Negating the paths that need it instead.
 data/
+!lanerl_jax/data/
+!src/ahriuwu/data/
 !scratchpad/.gitkeep
 recordings/
 wandb
