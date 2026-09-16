@@ -48,6 +48,7 @@ __all__ = [
     "MinionType",
     "base_priority",
     "help_priority_for",
+    "call_for_help_map",
     "nearest_enemy",
     "turret_acquire",
     "minion_acquire",
@@ -128,6 +129,70 @@ def help_priority_for(attacker_kind: jax.Array, victim_kind: jax.Array) -> jax.A
          jnp.int8(ClassifyUnit.TURRET_ATTACKING_MINION)],
         default=jnp.int8(ClassifyUnit.DEFAULT),
     )
+
+
+def call_for_help_map(*, damage_ij, x, y, alive, kind, team,
+                      acquisition_range) -> jax.Array:
+    """``(N, N)`` ``[listener, attacker]`` call-for-help priorities.
+
+    This is the signal that was MISSING. ``help_priority`` was declared, was
+    initialised to all-DEFAULT, was read by ``step_minion_ai`` -- and was never
+    written anywhere in the simulation loop, only in unit tests. So the
+    machinery was verified in isolation and fed nothing in production.
+
+    It is not a cosmetic gap. Per ``LaneMinionAI``, a call for help is the ONLY
+    channel besides the target dying or leaving range that can pull a minion
+    off a target it already holds: ``ReevaluateBehavior`` short-circuits to
+    ``AttackTo`` before it ever re-scans. Without it, a minion that once
+    acquired the champion attacks the champion until one of them dies.
+
+    Measured against the server, with a champion standing still in lane:
+    acquisition rates were close (sim 61 per 600 s, server 47), but the server
+    RELEASED -- 28 of 28 observed departures from the champion went straight
+    back to a minion, median hold 2.5 s -- while the sim released never. Lock-ons
+    piled up instead of recycling: sim mean 4.14 and max 12 simultaneous
+    attackers against the server's bounded exposure, turning a 1.3x acquisition
+    gap into a 4x death gap.
+
+    ``ObjAIBase.TakeDamage`` broadcasts the call::
+
+        u != this && !u.IsDead && u.Team == Team
+          && u.AIScript.AIScriptMetaData.HandlesCallsForHelp
+          && DistanceSquared(u.Position, Position)          <= acqRange^2
+          && DistanceSquared(u.Position, attacker.Position) <= acqRange^2
+
+    Three things there are easy to get wrong and are reproduced exactly:
+    ``acqRange`` is the **victim's** acquisition range, not the listener's; the
+    listener must be in range of BOTH the victim and the attacker; and only
+    scripts with ``HandlesCallsForHelp`` listen, which among these units is
+    lane minions alone.
+
+    ``LaneMinionAI.OnCallForHelp`` then keeps the BEST priority seen::
+
+        priority = Math.Min(existing, ClassifyTarget(attacker, victim))
+
+    The map is one-shot: ``FoundNewTarget`` sets ``callsForHelpMayBeCleared``
+    and the map is wiped at the end of that same update, so a call raised by
+    this tick's damage is consumed by the next AI pass and discarded. Hence
+    this returns a fresh map each tick rather than accumulating into one.
+    """
+    n = x.shape[0]
+    d2 = (x[:, None] - x[None, :]) ** 2 + (y[:, None] - y[None, :]) ** 2
+    hit = damage_ij > 0                                   # [attacker, victim]
+    r2 = acquisition_range * acquisition_range            # per VICTIM
+
+    listens = alive & (kind == Kind.LANE_MINION)          # HandlesCallsForHelp
+    # [listener, victim]: ally, not self, and inside the victim's range
+    uv = (listens[:, None] & (team[:, None] == team[None, :])
+          & ~jnp.eye(n, dtype=bool) & (d2 <= r2[None, :]))
+    # [listener, attacker, victim]: also inside that same range of the attacker
+    ua_v = d2[:, :, None] <= r2[None, None, :]
+
+    valid = hit[None, :, :] & uv[:, None, :] & ua_v
+    cls = help_priority_for(kind[:, None], kind[None, :])  # [attacker, victim]
+    prio = jnp.where(valid, cls[None, :, :],
+                     jnp.int8(ClassifyUnit.DEFAULT))
+    return jnp.min(prio, axis=2).astype(jnp.int8)          # min over victims
 
 
 def _first_argmin(value: jax.Array, valid: jax.Array, axis: int = -1) -> jax.Array:

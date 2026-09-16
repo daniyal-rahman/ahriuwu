@@ -58,7 +58,8 @@ from .movement_jax import TICK_MS, step_move_units
 from .regen import step_regen
 from .rewards import ambient_gold, death_rewards, level_for_xp
 from .state import Kind, LaneState, MoveOrder, Team
-from .targeting import MinionType, base_priority, nearest_enemy, turret_acquire
+from .targeting import (MinionType, base_priority, call_for_help_map,
+                        nearest_enemy, turret_acquire)
 
 __all__ = ["UnitParams", "tick", "step_decision"]
 
@@ -408,8 +409,35 @@ def tick(state: LaneState, params: UnitParams,
     ms_since_damaged = jnp.where(
         hit_by_combat, jnp.zeros_like(state.ms_since_damaged),
         state.ms_since_damaged + delta_ms)
+
     alive = state.alive & (hp > 0)
     died = state.alive & ~alive
+
+    # ---- 5b. call for help: NOT WIRED IN, deliberately -------------------
+    # `targeting.call_for_help_map` implements the broadcast faithfully and is
+    # tested, but feeding it into `help_priority` here made measured parity
+    # WORSE on every aggregate:
+    #
+    #     median live minions   server 21      22 -> 26
+    #     mean |blue - red|     server 2.6    3.3 -> 9.3
+    #     blue turrets lost     server 0        0 -> 3
+    #     mean lane fraction    server .475-.533   .439-.540 -> .215-.505
+    #
+    # The mechanism is real and its absence IS a genuine gap: the server
+    # releases minions from the champion in 28 of 28 observed departures,
+    # median hold 2.5 s, and ours releases never, which is why lock-ons pile up
+    # (sim mean 4.14, max 12 simultaneous attackers) and the champion dies where
+    # the server's does not.
+    #
+    # But a change that moves every aggregate away from the server is not
+    # closer to the server, and I could not show the switch RATE was faithful.
+    # The server's MRT trace records 47 call-for-help switches in 600 s; I have
+    # no comparable sim-side count that isolates cfh switches from ordinary
+    # retargets, so "25x too many" was not a claim I could actually support.
+    #
+    # Left disconnected rather than shipped half-right. Enabling it is one line
+    # once the rate is validated against the MRT trace.
+
 
     # Judgment's damage is applied inside the buff's own update, which runs
     # BEFORE the auto-attack gate, so it is prepended to the attribution order.

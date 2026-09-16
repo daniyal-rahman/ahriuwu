@@ -203,7 +203,22 @@ def step_minion_ai(
         # consult the call-for-help map -- see minion_acquire's docstring.
         incumbent_valid=cur_ok,
     )
-    cfh_switch = me & cfh_any & (cfh_pick >= 0) & (cfh_pick != target)
+    # `FoundNewTarget` refuses outright while the minion is already on a
+    # turret::
+    #
+    #     if (targetIsStillValid && LaneMinion.TargetUnit is BaseTurret)
+    #         return false;
+    #
+    # Structures are not in the published priority list at all, so nothing
+    # outranks a turret a minion has committed to -- it leaves only by the
+    # normal exits (the turret dies, it falls out of range or vision, or the
+    # 4 s failed-to-attack ignore fires). Without this a call for help drags a
+    # sieging wave off the turret it is hitting, which is precisely when a
+    # wave is most crowded and calls are loudest.
+    on_turret = cur_ok & (kind[cur] == Kind.TURRET)
+
+    cfh_switch = (me & cfh_any & (cfh_pick >= 0) & (cfh_pick != target)
+                  & ~on_turret)
     target = jnp.where(cfh_switch, cfh_pick, target)
     target_priority = jnp.where(
         cfh_switch,
