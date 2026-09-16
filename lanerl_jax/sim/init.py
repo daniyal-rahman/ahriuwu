@@ -302,7 +302,7 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
 
 
 def spawn_minion(state: LaneState, team, profile, hp,
-                 path: jax.Array, enabled=True) -> LaneState:
+                 path: jax.Array, enabled=True, spawn_xy=None) -> LaneState:
     """Write one minion into the lowest free minion slot.
 
     Lowest free slot, not a random or round-robin one: the server's target
@@ -324,7 +324,30 @@ def spawn_minion(state: LaneState, team, profile, hp,
     # same cost and keeps the cost visible.
     ok = jnp.any(free) & jnp.asarray(enabled)
 
-    sx, sy = path[0, 0], path[0, 1]
+    # WHERE a minion appears is NOT the first vertex of its path.
+    #
+    # It was, and for blue that is nearly true -- `TOP_LANE_PATH[0]` is
+    # (917, 1725) against a measured barracks of (918, 1720), 5.1 units out.
+    # For RED it is not true at all. Red walks the path reversed, so `path[0]`
+    # is `TOP_LANE_PATH[-1]` = (12511, 12776), and the measured red barracks is
+    # (12451, 13218) -- **446 units away**.
+    #
+    # That asymmetry is a persistent head start. Red minions began their march
+    # ~446 units further down the lane than the server puts them (growing to
+    # ~700 as they converge onto the polyline), arriving about 2.15 s early,
+    # every wave, forever. Waves therefore met on blue's side of where the
+    # server has them meet, blue fought at a standing disadvantage, and the
+    # lane ran away to red: by ten minutes the sim held ~2 blue minions against
+    # ~28 red, where the server oscillates around the middle all game with a
+    # mean imbalance of 2.6.
+    #
+    # It hid because the sim was self-consistent. Both sides spawned at their
+    # own path end, so the sim's own first-wave clash landed at lane fraction
+    # 0.500 -- perfectly symmetric, and measured as such -- while being the
+    # wrong geometry. Checking a simulation against itself cannot find this;
+    # only the dump can.
+    sx = path[0, 0] if spawn_xy is None else jnp.asarray(spawn_xy[0], state.x.dtype)
+    sy = path[0, 1] if spawn_xy is None else jnp.asarray(spawn_xy[1], state.y.dtype)
     wp = jnp.zeros((MAX_WAYPOINTS, 2), state.x.dtype).at[:path.shape[0]].set(path)
 
     def setv(arr, v):

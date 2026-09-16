@@ -48,7 +48,7 @@ from .combat import (
     outer_turret_ramps,
 )
 from .collision import resolve_collisions
-from .init import spawn_minion
+from .init import MINION_SPAWN, spawn_minion
 from .missiles import step_missiles
 from .profiles import PROFILES
 from .spells import RANKS_BY_LEVEL, step_buffs
@@ -163,10 +163,14 @@ def tick(state: LaneState, params: UnitParams,
         mi = jnp.clip(mtype, 0, 3)
         hp_b = params["max_hp"][_WAVE_ROW_BLUE[mi]]
         hp_r = params["max_hp"][_WAVE_ROW_RED[mi]]
+        # Spawn at the MEASURED barracks, not at the path's end vertex --
+        # they differ by 446 units on the red side. See `spawn_minion`.
         state = spawn_minion(state, Team.BLUE, _WAVE_ROW_BLUE[mi], hp_b,
-                             lane_path, enabled=mtype >= 0)
+                             lane_path, enabled=mtype >= 0,
+                             spawn_xy=MINION_SPAWN[Team.BLUE])
         state = spawn_minion(state, Team.RED, _WAVE_ROW_RED[mi], hp_r,
-                             lane_path[::-1], enabled=mtype >= 0)
+                             lane_path[::-1], enabled=mtype >= 0,
+                             spawn_xy=MINION_SPAWN[Team.RED])
         state = state.replace(next_spawn_ms=next_spawn, minion_number=m_no,
                               cannon_count=c_no)
 
