@@ -126,19 +126,62 @@ Implementation: nested ``lax.scan``, not a host callback
 -----------------------------------------------------------
 A per-tick Python loop over units is off the table by explicit decision (it
 would break out of JIT and out of ``vmap``-ability over environments). The
-outer scan (over units, in creation order) is inherently sequential --
-that IS the Gauss-Seidel property being reproduced -- and carries the whole
+outer scan (over units, in creation order) is inherently sequential -- that
+IS the Gauss-Seidel property being reproduced -- and carries the whole
 ``(x, y)`` array so each unit's turn sees every earlier unit's already-moved
-position. The inner scan (over candidate obstacles, same creation order)
-threads only that one unit's own ``(x, y)`` scalar pair through up to
-``n`` escapes. Both loop bounds are the static unit count, so this compiles
-to one fixed-trip-count XLA program regardless of how many units are alive
-this tick -- masking, not a variable-length loop, is what makes dead slots
-and non-participants free of behavioural effect. See
-``docs/JAX_REWRITE_PLAN.md`` §1.12 (throughput) and §1.13-adjacent gate 5
-(compile time) for why that property matters and
-``lanerl_jax/sim/tests/test_collision.py`` / the tier-1 re-measurement for
-what this costs and buys.
+position.
+
+Why the inner loop is BOUNDED rounds, not a length-``n`` scan
+---------------------------------------------------------------
+A first version made the inner loop a second `lax.scan` over all ``n``
+candidates, in creation order, one at a time -- a direct transcription of
+`UpdateCollision`'s `foreach`. It is correct (this is how it was verified),
+and it is far too slow: nested at ``n = 66``, that is 4,356 genuinely
+SEQUENTIAL scan steps per tick, and a sequential scan's step count does not
+shrink under `vmap` the way elementwise work does -- every environment in
+the batch pays for all 4,356 steps every tick. Measured (RTX 5080, real
+policy in the loop, `lanerl_jax/train/benchmark.py`): throughput fell from
+the previously-measured 164x baseline to 30x at best (2,048 envs), well under
+gate 4's 50x floor.
+
+The fix exploits a fact the crowding-bucket measurements already established:
+almost every unit has zero or one colliding neighbour, and the "3+" bucket is
+rare. So instead of visiting all ``n`` candidates one index at a time, each
+round of a MUCH shorter, bounded scan does the whole candidate scan
+VECTORISED (one O(n) elementwise computation, not n sequential steps) and
+extracts just "the earliest-created still-open candidate that currently
+overlaps, if any" via `argmin` over a masked key. That candidate's escape is
+applied (if there is one), and every candidate at-or-before it in creation
+order is marked settled -- correct because the server's own single,
+fixed-order pass would have visited those exact candidates first, with this
+exact pre-escape position, and (by construction, since none of them was the
+argmin) found none of them overlapping either. A round where nothing
+overlaps settles every remaining candidate in that same step, so once a
+unit's true collisions are exhausted, further rounds are free no-ops rather
+than continued sequential cost. This is mathematically the SAME single pass
+`UpdateCollision` performs -- not a different, faster-but-approximate
+algorithm -- re-expressed so its genuinely sequential part is bounded by how
+many escapes a unit actually needs (``MAX_ESCAPES_PER_UNIT``), not by how
+many candidates exist to check.
+
+``MAX_ESCAPES_PER_UNIT`` is a **correctness** bound in exactly the sense
+``movement_jax.MAX_STEPS_PER_TICK`` is: too small silently truncates a unit's
+escapes mid-tick, and that reads as a position bug, not a performance
+symptom. 8 is provisional, chosen from precedent (the same number
+``sim/movement.py``/``sim/movement_jax.py`` already use for an analogous
+"bound an unbounded per-tick loop" problem) rather than a corpus measurement
+of the true maximum simultaneous-overlap count this lane ever produces;
+:func:`max_escapes_used` exists to make that measurement possible, the same
+way ``movement_jax.max_steps_used`` does for waypoints.
+
+Both loop bounds (the outer unit count and the inner round count) are static,
+so this still compiles to one fixed-trip-count XLA program regardless of how
+many units are alive or how crowded this tick is -- masking, not a variable-
+length loop, is what makes dead slots and non-participants free of
+behavioural effect. See ``docs/JAX_REWRITE_PLAN.md`` §1.12 (throughput) and
+gate 5 (compile time) for why that property matters, and
+``lanerl_jax/sim/tests/test_collision.py`` for both the hand-derived
+correctness cases and the bounded-vs-exhaustive equivalence check.
 """
 from __future__ import annotations
 
@@ -149,7 +192,79 @@ import jax.numpy as jnp
 
 from .state import Kind
 
-__all__ = ["resolve_collisions"]
+__all__ = ["resolve_collisions", "MAX_ESCAPES_PER_UNIT", "max_escapes_used"]
+
+#: Bound on how many escapes one unit may apply in a single tick's collision
+#: pass. See the module docstring's "why the inner loop is BOUNDED rounds"
+#: section -- this is a correctness bound (silent truncation risk), not a
+#: performance knob, and 8 is provisional pending a corpus measurement via
+#: :func:`max_escapes_used`.
+MAX_ESCAPES_PER_UNIT = 8
+
+
+def _masks(kind, alive, ghosted):
+    """``(obstacle, affected)`` -- see the module docstring's "who collides"
+    section. Shared by :func:`resolve_collisions` and :func:`max_escapes_used`
+    so the two can never quietly disagree about who participates.
+    """
+    obstacle = alive & (kind != Kind.NONE)
+    affected = obstacle & (kind != Kind.TURRET)
+    if ghosted is not None:
+        obstacle = obstacle & ~ghosted
+        affected = affected & ~ghosted
+    return obstacle, affected
+
+
+def _escape_rounds(i, x, y, affected, obstacle, seq_key,
+                   collision_radius, pathfinding_radius, rounds: int):
+    """Resolve unit ``i``'s own escapes against the CURRENT ``(x, y)``
+    (everyone else's positions are read-only here -- only ``i``'s own scalar
+    position advances). Returns ``(xi, yi, n_escapes)``.
+
+    One round = one escape, vectorised: see :func:`resolve_collisions`'s
+    module docstring for why this is the same single pass
+    `UpdateCollision`/`OnCollision` performs, not a different approximation
+    of it, and why ``rounds`` is a correctness bound.
+    """
+    n = x.shape[0]
+    idx = jnp.arange(n)
+    BIG = jnp.iinfo(jnp.int32).max
+    xi0, yi0 = x[i], y[i]
+    i_affected = affected[i]
+    ri1 = pathfinding_radius[i] + 1.0            # `PathfindingRadius + 1`
+    ci = collision_radius[i]
+    # Candidates this unit could ever need to escape from this tick --
+    # everyone else that is a valid obstacle -- start "not yet settled";
+    # everything else (dead slots, itself) is trivially already settled, so a
+    # round's vectorised argmin only ever considers real candidates.
+    done0 = ~(obstacle & (idx != i))
+
+    def round_body(carry, _):
+        xi, yi, done, count = carry
+        dx = x - xi
+        dy = y - yi
+        d = jnp.sqrt(dx * dx + dy * dy)
+        trigger = i_affected & ~done & (d > 0) & (d < ci + collision_radius)
+        key = jnp.where(trigger, seq_key, BIG)
+        m = jnp.argmin(key)
+        has = trigger[m]
+        # Everyone at or before `m` in creation order is settled this round:
+        # those strictly before `m` were just checked (same `d`, this SAME
+        # pre-escape position) and did NOT trigger -- exactly what the
+        # server's single, fixed left-to-right pass would also find, so they
+        # are correctly never revisited. `m` itself is settled by applying
+        # its escape.
+        cutoff = jnp.where(has, seq_key[m], BIG)
+        done = done | (~done & (seq_key <= cutoff))
+        safe = jnp.where(d[m] > 0, d[m], jnp.ones_like(d[m]))
+        push = d[m] - ri1 - pathfinding_radius[m]    # negative: overlapping
+        xi_next = jnp.where(has, xi + dx[m] / safe * push, xi)
+        yi_next = jnp.where(has, yi + dy[m] / safe * push, yi)
+        return (xi_next, yi_next, done, count + has.astype(jnp.int32)), None
+
+    (xi_f, yi_f, _, n_escapes), _ = jax.lax.scan(
+        round_body, (xi0, yi0, done0, jnp.int32(0)), None, length=rounds)
+    return xi_f, yi_f, n_escapes
 
 
 def resolve_collisions(x: jax.Array, y: jax.Array, kind: jax.Array,
@@ -169,44 +284,60 @@ def resolve_collisions(x: jax.Array, y: jax.Array, kind: jax.Array,
       ghosted: (N,) bool, optional. A ghosted unit is dropped from both being
         pushed and being an obstacle -- see the module docstring.
     """
-    # `IsCollisionObject`: can be collided WITH. Turrets count; a never-
-    # spawned or dead slot does not.
-    obstacle = alive & (kind != Kind.NONE)
-    # `IsCollisionAffected`: can BE PUSHED. The one place this differs from
-    # `obstacle` -- turrets are obstacles but are never affected.
-    affected = obstacle & (kind != Kind.TURRET)
-    if ghosted is not None:
-        obstacle = obstacle & ~ghosted
-        affected = affected & ~ghosted
+    obstacle, affected = _masks(kind, alive, ghosted)
 
     # True creation order, both loops -- see the module docstring for why
     # there is no separate "inner" order to also reconstruct.
     order = jnp.argsort(spawn_seq)
 
+    n = x.shape[0]
+    idx = jnp.arange(n)
+    # A combined, TIE-PROOF sort key: `spawn_seq` first, array index as an
+    # arbitrary but deterministic tie-break (real units never legitimately
+    # share a `spawn_seq`, but nothing here should silently misbehave if two
+    # ever do -- e.g. two never-spawned slots, both already excluded via
+    # `obstacle`, or a hand-built test state). `n` comfortably bounds the
+    # tie-break term below `spawn_seq`'s own stride.
+    seq_key = spawn_seq.astype(jnp.int32) * jnp.int32(n + 1) + idx.astype(jnp.int32)
+
     def outer_body(carry, i):
         cx, cy = carry
-        xi0, yi0 = cx[i], cy[i]
-        i_affected = affected[i]
-        ri1 = pathfinding_radius[i] + 1.0        # `PathfindingRadius + 1`
-        ci = collision_radius[i]
-
-        def inner_body(carry2, j):
-            xi, yi = carry2
-            dx = cx[j] - xi
-            dy = cy[j] - yi
-            d = jnp.sqrt(dx * dx + dy * dy)
-            trigger = (i_affected & obstacle[j] & (j != i) & (d > 0)
-                      & (d < ci + collision_radius[j]))
-            safe = jnp.where(d > 0, d, jnp.ones_like(d))
-            push = d - ri1 - pathfinding_radius[j]     # negative: overlapping
-            xi_next = jnp.where(trigger, xi + dx / safe * push, xi)
-            yi_next = jnp.where(trigger, yi + dy / safe * push, yi)
-            return (xi_next, yi_next), None
-
-        (xi_f, yi_f), _ = jax.lax.scan(inner_body, (xi0, yi0), order)
+        xi_f, yi_f, _ = _escape_rounds(
+            i, cx, cy, affected, obstacle, seq_key,
+            collision_radius, pathfinding_radius, MAX_ESCAPES_PER_UNIT)
         cx = cx.at[i].set(xi_f)
         cy = cy.at[i].set(yi_f)
         return (cx, cy), None
 
     (x, y), _ = jax.lax.scan(outer_body, (x, y), order)
     return x, y
+
+
+def max_escapes_used(x: jax.Array, y: jax.Array, kind: jax.Array,
+                     alive: jax.Array, spawn_seq: jax.Array,
+                     collision_radius: jax.Array, pathfinding_radius: jax.Array,
+                     ghosted: Optional[jax.Array] = None, probe: int = 32
+                     ) -> jax.Array:
+    """How many escapes a tick would actually apply to each unit, on the
+    SAME pre-tick snapshot :func:`resolve_collisions` would use (not a
+    multi-tick simulation). Mirrors ``movement_jax.max_steps_used``: use this
+    over a real corpus to set :data:`MAX_ESCAPES_PER_UNIT` from data instead
+    of precedent. Returns ``(n,)`` counts; if any equals ``probe`` the probe
+    itself was too small and the answer is a lower bound.
+
+    Deliberately does not just call :func:`resolve_collisions` with a larger
+    bound and diff a position: two DIFFERENT unresolved overlaps can produce
+    the same net displacement by coincidence, which would undercount.
+    """
+    obstacle, affected = _masks(kind, alive, ghosted)
+    n = x.shape[0]
+    idx = jnp.arange(n)
+    seq_key = spawn_seq.astype(jnp.int32) * jnp.int32(n + 1) + idx.astype(jnp.int32)
+
+    def one(i):
+        _, _, count = _escape_rounds(
+            i, x, y, affected, obstacle, seq_key,
+            collision_radius, pathfinding_radius, probe)
+        return count
+
+    return jax.vmap(one)(idx)

@@ -294,3 +294,99 @@ def test_spawn_minion_never_reuses_a_recycled_slots_old_rank():
     s = spawn_minion(s, Team.BLUE, 0, 100.0, path)
     second_seq = int(s.spawn_seq[MI_SLICE.start])
     assert second_seq > first_seq
+
+
+# --------------------------------------------------------------------------
+# 6. The bounded-rounds inner loop equals the exhaustive single pass.
+# --------------------------------------------------------------------------
+
+def _python_reference(x, y, kind, alive, spawn_seq, collision_radius,
+                      pathfinding_radius, ghosted):
+    """A slow, unvectorised, unbounded transcription of
+    ``CollisionHandler.Update``/``UpdateCollision``/``AttackableUnit.
+    OnCollision``, independent of ``resolve_collisions``'s own
+    implementation -- the standard this project holds a JAX port to (see
+    ``sim/movement_jax.py``'s own docstring for the same pattern). Used only
+    to check the bounded-rounds vectorisation is a re-expression of the same
+    algorithm, not a different, faster one.
+    """
+    import math
+    n = len(x)
+    x = list(x)
+    y = list(y)
+    obstacle = [alive[i] and kind[i] != Kind.NONE and not ghosted[i] for i in range(n)]
+    affected = [obstacle[i] and kind[i] != Kind.TURRET for i in range(n)]
+    order = sorted(range(n), key=lambda i: spawn_seq[i])
+    for i in order:
+        if not affected[i]:
+            continue
+        for j in order:
+            if j == i or not obstacle[j]:
+                continue
+            dx, dy = x[j] - x[i], y[j] - y[i]
+            d = math.hypot(dx, dy)
+            touch = collision_radius[i] + collision_radius[j]
+            if 0 < d < touch:
+                ux, uy = dx / d, dy / d
+                push = d - (pathfinding_radius[i] + 1.0) - pathfinding_radius[j]
+                x[i] += ux * push
+                y[i] += uy * push
+    return x, y
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_bounded_rounds_matches_the_unbounded_python_reference(seed):
+    """Random crowded scenes -- several units sharing a small patch of map,
+    so many-way, multi-escape overlaps are common -- checked against the
+    slow reference above rather than against ``resolve_collisions``'s own
+    prior implementation. This is the equivalence check the bounded-rounds
+    rewrite (module docstring: "why the inner loop is BOUNDED rounds") needs:
+    proof that vectorising "which candidate is next" did not change the
+    answer, only how many sequential steps it costs.
+    """
+    rng = np.random.default_rng(seed)
+    n = 10
+    x = rng.uniform(-60.0, 60.0, n).astype(np.float32)
+    y = rng.uniform(-60.0, 60.0, n).astype(np.float32)
+    kind = np.full(n, Kind.LANE_MINION, np.int8)
+    kind[rng.choice(n, 2, replace=False)] = Kind.TURRET
+    alive = np.ones(n, bool)
+    spawn_seq = rng.permutation(n).astype(np.int32)
+    collision_radius = rng.uniform(30.0, 45.0, n).astype(np.float32)
+    pathfinding_radius = rng.uniform(30.0, 45.0, n).astype(np.float32)
+    ghosted = np.zeros(n, bool)
+
+    ref_x, ref_y = _python_reference(
+        x, y, kind, alive, spawn_seq, collision_radius, pathfinding_radius, ghosted)
+
+    got_x, got_y = resolve_collisions(
+        jnp.asarray(x), jnp.asarray(y), jnp.asarray(kind), jnp.asarray(alive),
+        jnp.asarray(spawn_seq), jnp.asarray(collision_radius),
+        jnp.asarray(pathfinding_radius), ghosted=jnp.asarray(ghosted))
+
+    np.testing.assert_allclose(np.asarray(got_x), np.asarray(ref_x), atol=1e-3)
+    np.testing.assert_allclose(np.asarray(got_y), np.asarray(ref_y), atol=1e-3)
+
+
+def test_max_escapes_used_is_within_the_provisional_bound_on_a_worst_case_scene():
+    """A deliberately adversarial scene -- one minion (`spawn_seq=0`, so it
+    goes first and sees everyone else unmoved) packed against five others
+    all within its collision radius -- to sanity-check
+    ``MAX_ESCAPES_PER_UNIT``'s provisional value of 8 isn't obviously too
+    small. Not a substitute for the real corpus measurement the module
+    docstring says is still owed.
+    """
+    from lanerl_jax.sim.collision import MAX_ESCAPES_PER_UNIT, max_escapes_used
+
+    n = 6
+    x = jnp.array([0.0, 10.0, -10.0, 0.0, 0.0, 20.0], jnp.float32)
+    y = jnp.array([0.0, 0.0, 0.0, 10.0, -10.0, 0.0], jnp.float32)
+    kind = jnp.full(n, Kind.LANE_MINION, jnp.int8)
+    alive = jnp.ones(n, bool)
+    spawn_seq = jnp.arange(n, dtype=jnp.int32)
+    cr = jnp.full(n, 40.0, jnp.float32)
+    pr = jnp.full(n, 40.0, jnp.float32)
+
+    counts = max_escapes_used(x, y, kind, alive, spawn_seq, cr, pr)
+    assert int(counts[0]) < MAX_ESCAPES_PER_UNIT
+    assert int(counts.max()) < 32, "hit the probe length -- probe was too small"
