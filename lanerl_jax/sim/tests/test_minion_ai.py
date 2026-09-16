@@ -147,6 +147,55 @@ def test_a_better_priority_does_NOT_displace_a_valid_incumbent():
     assert int(out.target_priority[0]) == ClassifyUnit.MELEE_MINION
 
 
+def test_a_minion_holding_the_idle_champion_is_NOT_displaced_by_a_fresh_minion():
+    """Direct test of the exact mechanism behind J1 gate 3's excess sim deaths
+    (5 vs the server's 0-1, ``lanerl_jax/parity/tests/test_last_hit_gate.py``):
+    a minion that has validly acquired the IDLE champion (``ClassifyUnit.
+    CHAMPION`` = 11, worse priority than any minion's own 6-9) does NOT
+    release him just because a minion later wanders into its acquisition
+    range -- even though 6-9 < 11 would make that minion a strictly better
+    candidate if it were ever compared.
+
+    Read directly off ``LaneMinionAI.cs``, not assumed:
+    ``ReevaluateBehavior`` (``:239-250``)::
+
+        if (targetIsStillValid) {
+            if (timeSinceLastAttack >= 4000f) { Ignore(...); targetIsStillValid = false; }
+            else return OrderType.AttackTo;
+        }
+        if (FoundNewTarget()) { return OrderType.AttackTo; }
+
+    returns ``AttackTo`` and never reaches the unrestricted ``FoundNewTarget()``
+    call at all while ``targetIsStillValid`` -- so the "only a strictly better
+    priority displaces the incumbent" comparison inside ``FoundNewTarget``
+    (``:157-274``) never even runs against a live target. The ONLY path that
+    can pull a minion off a live incumbent is ``FoundNewTarget(true)`` -- the
+    call-for-help-restricted scan, called every tick as part of ``OnUpdate``'s
+    own trigger condition, not this one -- and that needs an actual
+    call-for-help event (some ally taking damage nearby), not merely "a
+    minion is now in range". This is the SAME rule
+    ``test_a_better_priority_does_NOT_displace_a_valid_incumbent`` already
+    pins for a minion-vs-minion incumbent; checked again here with a
+    CHAMPION incumbent specifically, because that is gate 3's scenario, and
+    because it settles (in the sim's favour) the question of whether this is
+    a targeting bug: it is not -- the sim already matches the server here.
+    """
+    kw = _world([0.0, 60.0, 400.0], [M, C, M], [B, R, R],
+                [MinionType.MELEE, 0, MinionType.MELEE],
+                target=jnp.asarray([1, -1, -1], jnp.int8),
+                target_priority=jnp.asarray(
+                    [ClassifyUnit.CHAMPION, ClassifyUnit.DEFAULT,
+                     ClassifyUnit.DEFAULT], jnp.int8),
+                had_target=jnp.asarray([True, False, False]))
+    out = step_minion_ai(**kw)
+    assert int(out.target[0]) == 1, (
+        "a minion that already validly holds the champion must not switch "
+        "to a fresh minion just because one entered range -- that requires "
+        "a call for help, not mere proximity"
+    )
+    assert int(out.target_priority[0]) == ClassifyUnit.CHAMPION
+
+
 def test_a_call_for_help_DOES_displace_a_valid_incumbent():
     """The one path that re-targets a live incumbent, and it needs a strictly
     better priority. This is why attacking beside the enemy wave is punished."""
