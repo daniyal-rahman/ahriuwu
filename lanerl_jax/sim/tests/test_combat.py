@@ -7,6 +7,7 @@ stat JSON -- and missing one is worth 43% of a turret's output against a wave.
 """
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 
@@ -92,3 +93,38 @@ def test_the_turret_stats_are_the_ones_measured_off_the_server():
         assert u.armor == pytest.approx(60.0), name
         assert u.base_hp_regen == pytest.approx(0.0), name
         assert u.base_hp == pytest.approx(1300.0), name
+
+
+@pytest.mark.parametrize("t_s,expect_ad", [
+    (0, 152), (29, 152), (30, 156), (89, 156), (90, 160), (150, 164),
+    (210, 168), (270, 172), (330, 176), (390, 180), (600, 180), (1800, 180),
+])
+def test_the_outer_turret_ramps_from_152_to_180(t_s, expect_ad):
+    """Turret AD is not its Content value for most of a game.
+
+    `Maps/Map1/LevelScriptObjects` adds `AttackDamage.FlatBonus = 4` to outer
+    turrets starting at 30 s, every 60 s, at most 7 times. None of it is in any
+    stat JSON -- it is a `StatsModifier` the MAP script adds on a timer, so a
+    port built from the stat tables misses it entirely and the turret stays
+    weak for the whole game.
+
+    The schedule is confirmed against a 600 s idle recording: turret hits on
+    zero-armour minions came in at exactly 168 in 210-270 s (n=7), 172 in
+    270-330 s (n=1) and 180 after 390 s (n=16), and the cannon minions' 15
+    armour turns those same numbers into 146.09 / 149.57 / 153.04, which
+    accounts for every remaining value in the trace.
+    """
+    from lanerl_jax.sim.combat import outer_turret_attack_damage
+
+    got = float(outer_turret_attack_damage(np.float64(152.0),
+                                           np.float64(t_s * 1000.0)))
+    assert got == pytest.approx(expect_ad), f"at t={t_s}s"
+
+
+def test_the_ramp_stops_after_seven_applications():
+    """`outerTurretTimesApplied < 7` -- it is capped, not unbounded."""
+    from lanerl_jax.sim.combat import outer_turret_ramps
+
+    assert float(outer_turret_ramps(np.float64(390_000.0))) == 7.0
+    assert float(outer_turret_ramps(np.float64(10_000_000.0))) == 7.0
+    assert float(outer_turret_ramps(np.float64(0.0))) == 0.0

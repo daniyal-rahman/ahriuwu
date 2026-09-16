@@ -64,6 +64,8 @@ __all__ = [
     "attack_period",
     "attack_windup",
     "TURRET_DAMAGE_VS_MINION",
+    "outer_turret_ramps",
+    "outer_turret_attack_damage",
 ]
 
 
@@ -90,6 +92,65 @@ __all__ = [
 #: Settled against a 600 s recording -- see `data/patch.TURRET_MODELS` for the
 #: regen and armour measurements that identify the model.
 TURRET_DAMAGE_VS_MINION = 1.0
+
+
+# --- turret stat growth, from the MAP script rather than the stat table -----
+#
+# `Maps/Map1/LevelScriptObjects.OnUpdate` ramps turret stats on two schedules,
+# and neither is in any Content stat JSON -- they are `StatsModifier`s the map
+# script adds on a timer::
+#
+#     OuterTurretStatsModifier.MagicResist.FlatBonus  = 1     # OUTER tier
+#     OuterTurretStatsModifier.AttackDamage.FlatBonus = 4     # note: no Armor
+#
+#     TurretStatsModifier.Armor.FlatBonus       = 1           # every other tier
+#     TurretStatsModifier.MagicResist.FlatBonus = 1
+#     TurretStatsModifier.AttackDamage.FlatBonus = 4
+#
+# fired from::
+#
+#     if (gameTime >= timeCheck && timesApplied < 30)                UpdateTowerStats();
+#     if (gameTime >= outerTurretTimeCheck && outerTurretTimesApplied < 7)
+#                                                                   UpdateOuterTurretStats();
+#
+# with `outerTurretTimeCheck` starting at **30 s** and `timeCheck` at **480 s**,
+# each advancing 60 s per application.
+#
+# So an outer turret's attack damage is NOT its Content value for most of a
+# game: it is 152 for the first 30 seconds and 180 from 390 s onward.
+#
+# VERIFIED against a 600 s idle recording, which is also where the absence of an
+# Armor bonus on the outer tier shows up: all 165 measured minion-on-turret hits
+# sat at a constant armour 60, and the turret's own hits stepped exactly as this
+# predicts --
+#
+#     210-270 s  predicted 168  observed 168.00 (n=7)
+#     270-330 s  predicted 172  observed 172.00 (n=1)
+#     390+   s   predicted 180  observed 180.00 (n=16)
+#
+# including the cannon minions, whose 15 armour turns those into 146.09 /
+# 149.57 / 153.04 -- every observed value in the trace is accounted for.
+OUTER_TURRET_RAMP_START_MS = 30_000.0
+OUTER_TURRET_RAMP_PERIOD_MS = 60_000.0
+OUTER_TURRET_RAMP_MAX = 7
+#: `AttackDamage.FlatBonus` per application.
+TURRET_AD_PER_RAMP = 4.0
+#: The other tiers start at 480 s and also gain +1 Armor and +1 MagicResist.
+INNER_TURRET_RAMP_START_MS = 480_000.0
+INNER_TURRET_RAMP_MAX = 30
+
+
+def outer_turret_ramps(t_ms: Any, xp: Any = np) -> Any:
+    """How many times `UpdateOuterTurretStats` has fired by ``t_ms``. 0..7."""
+    n = xp.floor((t_ms - OUTER_TURRET_RAMP_START_MS)
+                 / OUTER_TURRET_RAMP_PERIOD_MS) + 1.0
+    return xp.clip(xp.where(t_ms >= OUTER_TURRET_RAMP_START_MS, n, 0.0),
+                   0.0, float(OUTER_TURRET_RAMP_MAX))
+
+
+def outer_turret_attack_damage(base_ad: Any, t_ms: Any, xp: Any = np) -> Any:
+    """An outer turret's attack damage at game time ``t_ms``. 152 -> 180."""
+    return base_ad + TURRET_AD_PER_RAMP * outer_turret_ramps(t_ms, xp)
 
 
 def post_mitigation_damage(damage: Any, resist: Any, xp: Any = np) -> Any:
