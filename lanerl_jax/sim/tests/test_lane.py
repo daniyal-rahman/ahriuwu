@@ -180,11 +180,6 @@ def test_the_jax_spawner_matches_the_python_reference():
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    reason="KNOWN GAP: the sim's lane is an unstable equilibrium, the server's "
-           "is stable. Median 27 live minions against 21. Not a tolerance to "
-           "widen -- see the note in the docstring.",
-    strict=False)
 def test_minion_population_is_close_to_the_server(patch):
     """**Tier 3: distributional, and the baseline has to match.**
 
@@ -206,7 +201,7 @@ def test_minion_population_is_close_to_the_server(patch):
     **+10%** and moved the melee/caster mix toward the server's
     (caster 60.9% -> 59.9% against the server's 53.6%).
 
-    XFAIL, 2026-09-16, and the reason matters more than the number.
+    RESOLVED 2026-09-16 by putting collision at the FRONT of the tick.
 
     Collision is now in, and it was not the answer. Neither were the four
     things found since, each verified against the server and each of which
@@ -225,21 +220,38 @@ def test_minion_population_is_close_to_the_server(patch):
     and red then won HARDER. Three separate corrections have now tipped this
     lane in unpredictable directions.
 
-    That is the signature of an **unstable equilibrium**, and it is the actual
-    gap. The sim runs exactly balanced for three minutes -- 2.8/2.8, 9.6/9.6,
-    10.1/10.1 -- then tips and never recovers, ending near 1 blue minion
-    against 34 red with three blue turrets destroyed. The server is never
-    exactly balanced (10.1/9.7, then 12.4/8.5) and oscillates around the middle
-    for the whole game, flipping which side leads every minute or two, with
-    mean |blue - red| of 2.6, max 9, and no turret ever destroyed.
+    Three corrections tipping a lane in three unpredictable directions is the
+    signature of an **unstable equilibrium**, and that was the real gap. The
+    sim ran exactly balanced for three minutes and then tipped and never
+    recovered, ending near 1 blue minion against 34 red with three blue turrets
+    destroyed. The server is never exactly balanced and oscillates around the
+    middle all game.
 
-    So the question is no longer "which asymmetry favours red". It is **what
-    restoring force the server has that the sim does not**. Perturbations are
-    not the disease; the sim amplifies them where the server damps them.
+    So the question was never "which asymmetry favours red" -- it was **what
+    restoring force the server has that the sim lacks**. The answer was the
+    tick order. `CollisionHandler.Update()` is the first call in `Map.Update`,
+    which runs before `ObjectManager.Update` moves anything, so the server
+    separates the positions units came to rest at last tick and only then moves
+    them. We moved first and pushed apart afterwards, which let a winning wave
+    keep compressing into the losing one instead of being spread out before it
+    advanced -- positive feedback exactly where the server has negative.
 
-    Marked xfail rather than having its tolerance widened, because the number
-    is honest and the gap is real. It stays in the suite so that a fix shows up
-    as an unexpected pass.
+    Moving collision to the front of the tick:
+
+        median live minions   server 21        27 -> 22
+        p95 / max             server 27 / 30   39/40 -> 28/31
+        mean |blue - red|     server 2.6       11.3 -> 3.3
+        mean lane fraction    server .475-.533 .162-.499 -> .439-.540
+        turrets destroyed     server 0         3 -> 0
+
+    and the lane now oscillates the way the server's does: red leads at minutes
+    4 and 6, blue takes it back at 8 and 9.
+
+    The one-step differential is what identified it, over 14,401 injected
+    predictions: minion position was exact on 83.1% of ticks and the
+    disagreements were **98.6% one-sided**, with the sim always further along
+    its own heading. Position is fully injectable ground truth, so that bias
+    could not be blamed on the harness.
     """
     from lanerl_jax.sim.profiles import PROFILES
 

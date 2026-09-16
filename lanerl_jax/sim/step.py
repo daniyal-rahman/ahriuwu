@@ -51,7 +51,7 @@ from .collision import resolve_collisions
 from .init import MINION_SPAWN, spawn_minion
 from .missiles import step_missiles
 from .profiles import PROFILES
-from .spells import RANKS_BY_LEVEL, step_buffs
+from .spells import RANKS_BY_LEVEL, BuffId, Slot, step_buffs
 from .waves_jax import step_waves_jax
 from .minion_ai import step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
@@ -155,7 +155,37 @@ def tick(state: LaneState, params: UnitParams,
     # reused by whatever spawns into it, so stats cannot be baked per slot.
     P = lambda k: params[k][state.model]          # noqa: E731
 
-    # ---- 0. wave spawning (Map.Update, before ObjectManager.Update) --------
+    # ---- 0. collision push-apart (Map.Update, FIRST thing in the tick) ----
+    # `Game.Update` runs `Map.Update` (Game.cs:481) before `ObjectManager.
+    # Update` (:483), and `CollisionHandler.Update()` is the first call inside
+    # it (MapScriptHandler.cs:96-100) -- ahead of pathing, ahead of wave
+    # spawning, ahead of every unit's own Update. It is the real push-apart: it
+    # calls `obj.OnCollision(obj2)` directly (CollisionHandler.cs:121-155), not
+    # a quadtree rebuild.
+    #
+    # So the server separates the positions units came to REST at last tick and
+    # only then moves them. This ran after movement here, which meant every
+    # phase downstream saw a position with this tick's push already folded in
+    # while the server's is still a tick behind on collision.
+    #
+    # Measured, before this was fixed: over 14,401 one-step injected
+    # predictions, minion position was exact on 83.1% of ticks and the
+    # disagreements were **98.6% one-sided** -- the sim consistently ended up
+    # further along its own heading than the server. Position is fully
+    # injectable ground truth, so that bias is not an artifact of the harness.
+    #
+    # `ghosted` is read from the INCOMING buff state, not from this tick's
+    # `step_buffs`, and that is deliberate: `UpdateBuffs` is the first thing
+    # inside a unit's own `Update`, which happens after `Map.Update` has
+    # already run. Collision therefore sees the Ghosted flag as it stood at the
+    # end of last tick. Garen's E sets `StatusFlags.Ghosted`, so a spinning
+    # Garen passes through units instead of being shoved out of the wave.
+    pre_ghosted = (state.buff_id[:, Slot.E] == BuffId.GAREN_E) & state.alive
+    cx, cy = resolve_collisions(state.x, state.y, state.kind, state.alive,
+                                P("pathfinding_radius"), ghosted=pre_ghosted)
+    state = state.replace(x=cx, y=cy)
+
+    # ---- 1. wave spawning (MapScript.Update, still inside Map.Update) ------
     if lane_path is not None:
         mtype, next_spawn, m_no, c_no = step_waves_jax(
             state.t_ms, state.next_spawn_ms, state.minion_number,
@@ -174,13 +204,12 @@ def tick(state: LaneState, params: UnitParams,
         state = state.replace(next_spawn_ms=next_spawn, minion_number=m_no,
                               cannon_count=c_no)
 
-    # ---- 1. movement (AttackableUnit.Update, before anything else) ---------
-    x, y, wp_key, _ = step_move_units(
-        state.x, state.y, state.waypoints, state.waypoint_key,
-        state.n_waypoints, P("move_speed"),
-        _can_move(state.move_order, state.alive), delta_ms)
-
-    # ---- 1a. buffs (AttackableUnit.Update runs UpdateBuffs first) ---------
+    # ---- 2a. buffs (ObjectManager.Update -> AttackableUnit.UpdateBuffs) ----
+    # First thing inside the unit's own Update, and therefore AFTER the
+    # collision pass above and BEFORE movement below. It reads post-collision,
+    # pre-move positions. That distinction only became real once collision
+    # moved to the front of the tick: while collision ran last, pre-move and
+    # post-collision were the same positions and this was harmless.
     bs = step_buffs(
         buff_id=state.buff_id, buff_elapsed=state.buff_elapsed,
         buff_duration=state.buff_duration, buff_power=state.buff_power,
@@ -188,14 +217,11 @@ def tick(state: LaneState, params: UnitParams,
         x=state.x, y=state.y, kind=state.kind, team=state.team,
         alive=state.alive, armor=P("armor"), delta_ms=delta_ms)
 
-    # ---- 1b. collision push-apart -----------------------------------------
-    # `CollisionHandler.Update` runs from `Map.Update`, i.e. after the objects
-    # have moved. Without it casters are never pushed into melee reach, which
-    # is exactly the type that over-survived in the population comparison.
-    # Judgment sets `StatusFlags.Ghosted`, so a spinning Garen passes through
-    # units instead of being pushed out of the wave he is standing in.
-    x, y = resolve_collisions(x, y, state.kind, state.alive,
-                              P("pathfinding_radius"), ghosted=bs.ghosted)
+    # ---- 2b. movement (AttackableUnit.Move, after UpdateBuffs) -------------
+    x, y, wp_key, _ = step_move_units(
+        state.x, state.y, state.waypoints, state.waypoint_key,
+        state.n_waypoints, P("move_speed"),
+        _can_move(state.move_order, state.alive), delta_ms)
 
     # ---- 2. the minion controller (AIScript.OnUpdate) ----------------------
     prio = base_priority(state.kind, _minion_type_of(state))
