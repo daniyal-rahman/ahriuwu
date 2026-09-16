@@ -124,20 +124,57 @@ What was checked and ruled OUT as the cause of the remaining gap:
   for help that recruits fresh aggressors onto the champion. Reverted; see
   ``last_hit_drive.run_oracle_in_sim``'s inline comment for the citation.
 
-What was NOT ruled out, and is the leading open suspect: the sim's champion
-dies 5 times to the server's 1, and each death costs a full fountain-to-lane
-walk (``approach_decisions`` 6998 vs 3197) that the champion cannot farm
-during. A direct state-level test (not checked in, see the session that
-produced this comment) found six red minions simultaneously locked onto the
-idle champion moments before one sim death, consistent with the ALREADY
-DOCUMENTED, ALREADY MEASURED pile-up-without-release behaviour recorded in
-``lanerl_jax.sim.targeting.call_for_help_map``'s own docstring ("the server
-RELEASED... while the sim released never... sim mean 4.14 and max 12
-simultaneous attackers"). Enabling call-for-help is the documented fix for
-exactly that pile-up and was just shown, above, to make an ACTIVE oracle
-worse rather than better -- so this remains open. Per the instructions this
-gate was built under: report the disagreement, do not loosen the tolerance to
-make it pass.
+What was NOT ruled out, and is the leading open item: the sim's champion
+dies 5 times to the server's 0-1, and each death costs a full
+fountain-to-lane walk (``approach_decisions`` 6998 vs 3197) that the
+champion cannot farm during.
+
+**The release rule itself is not the cause -- checked against the C# source
+directly, not inferred.** ``lanerl_jax.sim.minion_ai``'s
+``test_a_minion_holding_the_idle_champion_is_NOT_displaced_by_a_fresh_minion``
+is a direct, source-derived test (``LaneMinionAI.cs``'s ``ReevaluateBehavior``
+returns ``AttackTo`` the instant ``targetIsStillValid``, never reaching the
+priority-comparing ``FoundNewTarget()`` while a valid incumbent holds) proving
+the sim already matches the server: a minion that has validly acquired the
+champion is not released by a fresh candidate merely entering range, on
+either side. A minion sitting on the champion is therefore not, by itself,
+a targeting bug -- it is what the rule produces once that minion has nothing
+else nearby worth switching to.
+
+**That reframes the question as WHERE the champion ends up relative to its
+own wave**, which ``lanerl_jax/parity/isolation.py`` measures directly, in
+both engines, over this same scripted scenario (both drivers walk to the
+identical ``APPROACH_WAYPOINTS`` coordinate, so the destination itself is
+not in question)::
+
+                                sim      server    ratio
+    0 allies within 1500 u    32.3%     19.4%      1.7x
+    nearest-ally > 3000 u     13.1%      7.0%      1.9x
+    mean nearest-ally dist     1263       874      +45%
+    median nearest-ally dist    280       306      ~equal
+
+The medians agreeing while the tails diverge is the real finding: the
+champion's TYPICAL position relative to its own wave is right in both
+engines, but the sim shows a measurably heavier tail of decisions where he
+has no ally nearby at all. That is consistent with -- not proof of -- the
+excess deaths: more isolated decisions is more opportunity for an
+unrecoverable, individually-correct lock-on to accumulate, but this
+instrument does not trace any specific death back to a specific isolated
+stretch, and no other contributor has been ruled out. Read the causal step
+as an inference resting on a real, measured tail effect, not as closed.
+
+**Handoff.** The mechanism behind a wider equilibrium is very likely
+lane-equilibrium/collision separation -- ``sim/collision.py`` applies one
+push-apart per unit per tick from a pre-tick snapshot where the server
+resolves collisions sequentially and can push a unit several times in one
+tick, each visible to the next (that module's own booked-approximation
+note). That is J1 gate 1's territory (the sequential-collision port is in
+flight there as of 2026-09-16); this gate's job stops at making the tail
+effect measurable and reproducible for whoever picks it up next, not at
+diagnosing its root cause -- noted here so gate 1 and gate 2 (whose own
+lane-equilibrium work this bears on just as much) can find it. Per the
+instructions this gate was built under: report the disagreement, do not
+loosen the tolerance to make it pass.
 """
 from __future__ import annotations
 
