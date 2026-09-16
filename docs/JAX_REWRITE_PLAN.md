@@ -793,11 +793,40 @@ minion population and lane balance. Gate 4 (164x) and gate 5 (12.8 s).
 
 **Open.**
 
-*Gate 3 fails narrowly: 7 CS against the server's 10.* The tick reorder moved
-attack opportunities 109 -> 163 without moving CS. The server gets 535. So the
-remaining gap is how often a killable minion appears in reach, not what happens
-once one does -- i.e. minion HP trajectories, not last-hitting. Next step is to
-compare the distribution of minion HP in the band the oracle can one-shot.
+*Gate 3 still fails, direction reversed from the figure below -- that figure
+was stale.* **Correction, 2026-09-16 (traced by commit timestamp): the "7 CS
+against the server's 10 / 163 vs 535 attack opportunities" figures below were
+measured 37 minutes before `d463533` ("the gate stops standing under the
+enemy turret"), which moved the oracle's approach endpoint from inside the
+enemy outer turret's attack range to just outside it. Nobody re-measured the
+server baseline after that fix landed, so the "535" was never comparable to
+anything built afterward (the fog fix, the AD level-scaling fix, this same
+turret-tier work). Re-measured against the corrected position, three times,
+on both a contended login node and a clean `desktop` slurm allocation, all
+agreeing: sim cs=9, attacks=473, deaths=5, approach_decisions=6998; server
+cs=4, attacks=86, deaths=0-1 (right at a boundary, see
+`lanerl_jax/parity/tests/test_last_hit_gate.py`), approach_decisions=3197 --
+the SIM now gets more CS and more opportunity, not less. Champion AD not
+level-scaling with `Stats.LevelUp` was real and is now fixed
+(`sim/step.py`/`sim/profiles.py`, test:
+`lanerl_jax/sim/tests/test_champion_level_scaling.py`) but moved this
+scenario's numbers by under 1%. `LANERL_AUTOBUY` (a free server-side item) and
+`enable_call_for_help=True` were both tried as explanations for the sim's
+excess deaths (5 vs 0-1) and both come back negative -- the latter makes an
+actively-attacking oracle much WORSE, not better, unlike the passive
+scenario `docs/CALL_FOR_HELP_SWITCH_RATE.md` measured it helping. A
+collision-under-separation hypothesis (`sim/collision.py`'s one-push-per-tick
+approximation vs the server's sequential multi-push) was checked via mean
+nearest-neighbour distance among live minions (sim 191.4, server 224.0) and
+is real but modest -- not the scale needed to explain a 5x death gap on its
+own. The dominant, still-open factor is deaths costing fountain-walk time
+(`lanerl_jax/parity/hp_band.py` has the full instrument and report). Original
+paragraph, kept for the record of what was believed before this correction:
+"The tick reorder moved attack opportunities 109 -> 163 without moving CS.
+The server gets 535. So the remaining gap is how often a killable minion
+appears in reach, not what happens once one does -- i.e. minion HP
+trajectories, not last-hitting." That framing does not hold up against the
+corrected baseline.*
 
 *The one-step differential's own blind spot.* Missiles and minion target state
 are not in the server's dump at all, so the injector cannot see them: minion
@@ -813,9 +842,17 @@ gain armour and MR.
 inode). Deviation 0.558 units, server corners on our cells; looks like waypoint
 emission, and `waypoints` is already NOT_MODELLED. Parked.
 
-**Not built.** Garen Q/W/R, HP regen (turrets are 0 on this map; Garen is
-1.568 + 0.1/level plus a separate passive heal), fog of war in `LaneState`, the
-next-hop pathing table, the 50-seed corpus, the N-seeds vmap (J3 gate 5).
+**Not built.** Fog of war in `LaneState` itself (a driver-side radius
+substitute exists for gate 3's oracle and is now also wired into
+`step_minion_ai`'s targeting via `obs/fog.py`, but `LaneState` carries no
+visibility field of its own); the next-hop pathing table; the 50-seed corpus;
+the N-seeds vmap (J3 gate 5); an item system (the server's free
+`LANERL_AUTOBUY` starting item is a real, measured parity gap for any
+scenario with deaths -- see gate 3's status above -- and has no sim-side
+counterpart). Garen Q/W/R and champion HP regen (1.568 + 0.1/level plus a
+passive heal) shipped in `sim/spells.py`/`sim/regen.py`; champion attack
+damage now also level-scales (`sim/step.py`) -- this list previously listed
+all three as not built, which stopped being true first.
 
 ### Stage J2 — The observation builder in JAX (weeks 2–5, parallel to J1)
 
