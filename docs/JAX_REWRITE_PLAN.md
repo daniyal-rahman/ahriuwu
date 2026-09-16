@@ -799,17 +799,21 @@ what stands in for it here), sim vs. the real server, seed 0. Nothing
 diverges mechanically before the first wave clash (~120-130 s) in any of the
 four. After it: population, minion position and turret HP diverge by
 amounts that are large (turret HP errors up to 100% of max, population gaps
-up to half the live count, one scenario's champion dies on the sim and takes
-zero damage on the server for the identical script) -- the gate explicitly
-allows "not small," and this is not. A smallest-representable-perturbation
-chaos floor (one float32 ULP on a marching minion, full 600 s) sits at
-~10⁻⁴ world units with no growth; every reported divergence is orders of
-magnitude above it, so none of it is chaos wearing a bug's costume. Newly
-quantified along the way: a champion standing in the enemy wave loses HP at
-roughly 2.6x the server's rate, severe enough to kill it outright in 2 of 4
-scenarios while the server's champion never dies in any -- consistent with,
-and a sharper number than, the already-known missing call-for-help channel
-(`docs/CALL_FOR_HELP_SWITCH_RATE.md`), not a new root cause.
+up to half the live count; a champion standing in the wave loses HP at
+roughly 2.6x the server's rate and dies outright in 2 of 4 scenarios while
+the server's champion never dies in any) -- the gate explicitly allows "not
+small," and this is not. A one-probe smallest-representable-perturbation
+check (one float32 ULP on a marching minion, full 600 s) found no
+amplification of a continuous position perturbation, evidence against
+smooth chaos at ULP scale but not against a discrete targeting decision
+flipping -- see `docs/TIER2_DIVERGENCE.md` §2 for the qualification. Cause
+is explicitly undetermined by this instrument: call-for-help was checked
+against `ClassifyUnit.cs`/`LaneMinionAI.cs` and ruled out (a standing
+champion is priority 11 on both engines regardless, and call-for-help is
+keyed on the attacker, which a standing champion never is), so do not flip
+`enable_call_for_help` to chase this -- the real candidate is minion target
+acquisition (priority/range/visibility/incumbency), untested here and
+properly a Tier-1 job.
 
 **Open.**
 

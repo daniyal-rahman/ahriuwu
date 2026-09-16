@@ -1,20 +1,42 @@
 # Tier 2: free-running divergence, characterised
 
-**Gate 2 verdict: MET.** Tier 2 divergence is now measured, quantified against
-an honest chaos floor, and written down. It is **not small** — the gate's own
-parenthesis says that is allowed. Four scenarios, full 600 s episodes, sim vs.
-the real server, seed 0: nothing meaningful diverges before the first wave
-clash (~120–130 s); after it, minion position/HP/population and turret HP
-diverge by amounts that are large relative to the game (turret HP errors of
-up to 100% of max HP; population gaps of up to half the live count; in one
-scenario the sim's champion dies from wave damage the server's champion takes
-zero of) and these are many orders of magnitude above the measured chaos
-floor, so they are real disagreement, not float32 chaos wearing a costume.
-The dominant, well-evidenced cause is the already-known, deliberately-toggled
-missing call-for-help channel (`docs/TARGET_ACQUISITION_DIFF.md`,
-`docs/CALL_FOR_HELP_SWITCH_RATE.md`) — this document adds a new, sharper
-quantification of its consequence (a ~2.6x champion damage-absorption rate,
-and outright death in 2 of 4 scenarios) but does not re-litigate its cause.
+**Gate 2 verdict: MET.** Tier 2 divergence is now measured and written down.
+It is **not small** — the gate's own parenthesis says that is allowed. Four
+scenarios, full 600 s episodes, sim vs. the real server, seed 0: nothing
+meaningful diverges before the first wave clash (~120–130 s); after it,
+minion position/HP/population and turret HP diverge by amounts that are
+large relative to the game (turret HP errors of up to 100% of max HP;
+population gaps of up to half the live count; in one scenario the sim's
+champion dies from wave damage the server's champion takes zero of) and a
+one-probe chaos-floor check found no amplification of a continuous,
+infinitesimal position perturbation over a full episode (§2 — read that
+section's own limits before over-reading it).
+
+**On cause: undetermined by this instrument, and one candidate explicitly
+ruled out.** An earlier draft of this document attributed the champion
+overdamage to the sim's disabled call-for-help channel. That attribution is
+**wrong**, checked directly against `GameServerCore/Enums/ClassifyUnit.cs`
+and `LaneMinionAI.cs`: an idle, non-attacking champion classifies as plain
+`CHAMPION` (priority 11, the lowest priority any live unit gets), so a
+standing champion is out-prioritized by every minion type on **both**
+engines regardless of call-for-help; and call-for-help itself is keyed on
+the *attacker* and only ever improves an already-known attacker's priority
+(`unitsAttackingAllies[attacker] = Math.Min(existing, ClassifyTarget(...))`)
+— a standing, non-attacking champion never populates that map on either
+engine, so enabling it could not have changed this scenario's outcome
+either way. `lanerl_jax/sim/targeting.py` already ports the full
+`ClassifyUnit` priority table, the acquisition-range/visibility gate, and
+the strictly-better-priority incumbency rule, so this is not a
+missing-mechanic story. **The real candidate — untested by Tier 2, which
+cannot attribute a free-running divergence to one mechanic — is minion
+target acquisition**: priority classification, acquisition range,
+visibility, and the incumbency tie-break, any of which could differ subtly
+enough to change which minions a given champion position draws fire from.
+Testing it properly needs a Tier-1 injected one-step at the exact moment a
+sim minion acquires the champion as a target, not a free-running comparison
+400 s (`stand_late`) or tens of seconds (`stand_early`) into an already-
+diverged run. See §4/§6 for what is measured and what is (and is not)
+concluded from it.
 
 Code: `lanerl_jax/parity/tier2.py` (raw capture + comparison),
 `lanerl_jax/parity/tier2_batch.py` (batch driver). Data:
@@ -137,10 +159,28 @@ minion_hp_err:   0.0 everywhere
 
 **The floor is ~1.2×10⁻⁴ world units, and it does not grow over 510 s of
 subsequent game time** — a fixed, float32-rounding-scale residual, not
-amplification. This is the single most important number in this report for
-interpreting §3–4: **every sim-vs-server divergence reported below is
-hundreds to tens of thousands of times larger than this floor.** None of it
-can be dismissed as ordinary chaos.
+amplification.
+
+**What this one probe does and does not license.** It is one injection
+point, one unit, one continuous quantity (position), perturbed by the
+smallest possible amount. That rules out *smooth* amplification of a
+continuous state variable through ordinary movement and collision
+arithmetic at the ULP scale, in this one instance — evidence the system is
+not *uniformly* chaotic at that scale, not proof it is chaos-free
+everywhere. It is specifically weak evidence against the mechanism this
+project's own plan actually predicts as the dangerous one: a **discrete
+branch flip** (which minion a unit targets, tipped by a priority or
+distance comparison). A 6.1×10⁻⁵-unit nudge only reveals that mechanism if
+some live comparison happens to sit within 6.1×10⁻⁵ units of its decision
+boundary at the moment of injection — vanishingly unlikely for one
+untargeted probe, and this probe's own window (a lone marching minion
+before any cross-team contact, §3) was not chosen to be near any such
+boundary. So: this floor supports "ordinary movement/collision arithmetic
+is not chaotically sensitive at ULP scale," and it does **not** support
+"none of the divergence in §4 can be chaos" — that would need many
+injection points and units, ideally some deliberately placed near a live
+targeting tie, which this report does not attempt. Read §4's numbers
+against this qualified floor, not an absolute one.
 
 **Probe B — the champion, `kill` scenario (a null result, explained rather
 than hidden).** Same idea, nudging the blue champion's x by one ULP
@@ -160,13 +200,18 @@ measurement; Probe B is reported because a null result from a flawed probe
 is still worth knowing (it says something about order-reissuance semantics,
 not about chaos), not because it proves the champion path is chaos-free.
 
-**Floor verdict:** one clean measurement (Probe A), zero amplification over
-a full 600 s episode. This is evidence the system is not exhibiting strong
-sensitive-dependence-on-initial-conditions at the ULP scale in ordinary
-pre-contact movement — it is not proof no chaotic regime exists anywhere
-(e.g. near an exact simultaneous HP-zero tie, which Probe B could not test
-for the reason above). Given the floor is this far below every measured
-divergence, that gap does not change any conclusion in this report.
+**Floor verdict, stated at the strength the evidence actually supports:**
+one clean measurement (Probe A) found zero amplification of a continuous
+position perturbation over a full 600 s episode, before any cross-team
+contact. That is real evidence against smooth chaotic blow-up of ordinary
+movement/collision arithmetic at ULP scale. It is a single n=1 probe, it
+was not run near a live decision boundary, and Probe B's null result is
+uninterpretable (order-reissuance masked it, see above) — so this floor
+cannot be used to wave away the much larger divergences in §4 as "just
+chaos," and this report does not do that. What §4's divergences are
+attributed to instead is stated plainly there and in the header: mostly
+undetermined, with one ruled-out candidate (call-for-help) and one
+untested candidate (target acquisition) named.
 
 ---
 
@@ -322,10 +367,19 @@ Champion HP, engagement window:
 **The sim's champion dies here; the server's takes zero damage across the
 identical 10 s hold at the identical location.** Not a rate difference this
 time — a binary, saturating divergence (§6). This is the sharpest single
-data point in this report for "the missing call-for-help channel changes an
-outcome category, not just a number": standing in the wave is lethal on one
-engine and a non-event on the other, from the same script, same seed, same
-starting state.
+data point in this report for "standing in the wave is lethal on one engine
+and a non-event on the other, from the same script, same seed, same
+starting state" — but **not** a clean measurement of *why*, and that has to
+be said plainly rather than glossed: by t=400 s the two free-running
+episodes have already diverged enormously (`minion_pos_err` median 684,
+`champion_pos_err` p95 5868 over the whole episode, §4 above), so "the same
+location" is doing less work than it sounds like — the sim's champion may
+be arriving at a lane segment with a materially different local minion
+population than the server's champion is, at that same wall-clock time.
+Attributing the death to a specific mechanic from this data point is
+exactly the contamination a 400-second-deep free-running comparison is
+prone to and Tier 1 exists to avoid (module docstring, `sim_vs_server.py`).
+The observation (dies vs. untouched) stands; the mechanism does not.
 
 ### kill (camp at ENGAGE_POINT from t=0, focus-fire trigger at t=150s)
 
@@ -396,23 +450,48 @@ population gaps reach roughly half the smaller side's own count; minion
 position "shape" errors reach roughly half the lane's total length; one
 scenario's outcome (turret alive/dead, champion alive/dead) flips entirely.
 The gate says this is allowed. What makes it a *characterisation* rather
-than an alarm is: it is bounded, it is consistent in *where* it starts
-(first wave contact, §3) across four independently-scripted scenarios, its
-magnitude is traceable to a specific, previously-identified mechanism
-(§6), and it sits many orders of magnitude above the measured chaos floor
-(§2) — so it is attributable disagreement, not noise dressed up as a
-finding.
+than an alarm is: it is bounded, and it is consistent in *where* it starts
+(first wave contact, §3) across four independently-scripted scenarios. Its
+*mechanism* is explicitly not settled by this instrument (§6) — a
+free-running comparison this deep into a run cannot cleanly attribute cause,
+only observe effect — and the one-probe chaos floor (§2) is real but
+narrower evidence than "rules out chaos": it speaks against smooth
+amplification of continuous state, not against a discrete targeting
+decision flipping. So: attributable to the game having genuinely diverged
+by first contact, not (yet) attributable to one named mechanic.
 
 ---
 
 ## 6. Parity bugs and gaps found (separate from the characterisation itself)
 
-None of these are new root causes — all trace to mechanisms this project has
-already identified and deliberately deferred (`enable_call_for_help=False`
-is a toggle, not an oversight; see `docs/CALL_FOR_HELP_SWITCH_RATE.md`'s
-"stays a toggle, default False" verdict). What is new here is the
-**quantified, absolute consequence**, which previous instruments (response
-differencing, switch-rate counting) could not show directly:
+**One candidate mechanism was checked and ruled out.** An earlier draft of
+this document attributed the champion-overdamage findings below to the
+sim's disabled call-for-help channel (`enable_call_for_help=False`). Checked
+directly against `GameServerCore/Enums/ClassifyUnit.cs` and
+`LaneMinionAI.cs`: a standing, non-attacking champion classifies as plain
+`CHAMPION` (priority 11, below every minion type, on both engines,
+call-for-help or not), and call-for-help itself only ever improves a known
+*attacker's* priority, keyed on the attacker — a champion that is not
+attacking anyone never enters that map on either engine. Enabling it could
+not have changed the outcome of `stand_early` or `stand_late` either way.
+`lanerl_jax/sim/targeting.py` already ports the full priority table and the
+incumbency rule, so this is not a missing-mechanic story. **Do not flip
+`enable_call_for_help` to `True` to chase this finding** —
+`docs/CALL_FOR_HELP_SWITCH_RATE.md` already found that doing so breaks the
+idle-lane baseline for an unrelated, already-documented reason.
+
+The real candidate, untested here: **minion target acquisition** — priority
+classification, acquisition range, visibility, and the strictly-better-
+priority incumbency tie-break (`lanerl_jax/sim/targeting.py`'s own docstring
+already flags tie-break/slot-order as "a parity surface"). Any of these
+could differ enough to change which minions a given champion position draws
+fire from. The clean test is a Tier-1 injected one-step at the exact moment
+a sim minion acquires the champion as a target — not attempted here, and
+explicitly the next step this document recommends rather than a re-run of
+Tier 2 with a friendlier trigger time.
+
+What follows is measurement, not attribution — effects observed, not a
+named cause:
 
 1. **A champion standing in the enemy wave loses HP at roughly 2.6x the
    server's rate** (`stand_early`: 47.0 HP/s sim vs. 18.2 HP/s server over
@@ -535,13 +614,20 @@ re-litigated further here; it belongs to gate 3.
   population and lane-balance tracking, time-to-first-divergence identified
   and localised to the first wave clash, saturation behaviour described with
   its three distinct shapes (§5).
-- **Against a floor**: yes — a smallest-representable-perturbation
-  self-divergence probe puts the chaos floor at ~10⁻⁴ world units with no
-  growth over a full episode; every reported sim-vs-server number is orders
-  of magnitude above it.
+- **Against a floor, honestly qualified**: one smallest-representable-
+  perturbation probe found no amplification of a continuous position
+  nudge (~10⁻⁴ world units, no growth over a full episode) — real evidence
+  against smooth chaos in ordinary movement/collision at ULP scale, and
+  explicitly *not* evidence against a discrete targeting decision flipping,
+  which needs a different, multi-point probe this report does not attempt
+  (§2). The floor is not used to wave away §4's divergences as "just chaos."
 - **Not small**: correctly so, and said plainly — turret HP errors up to
   100% of max, population gaps up to half the count, one scenario's
   champion life/death outcome flipped entirely.
+- **Cause honestly stated as undetermined**: one candidate (call-for-help)
+  was checked against source and ruled out; the untested candidate (minion
+  target acquisition) is named along with the Tier-1 test that could
+  actually attribute it (§6).
 - **Written down**: this document, with every quoted number reproducible via
   the raw and comparison JSON under `lanerl_jax/runs/tier2/` (gitignored,
   regenerated by the two-command recipe near the top of this document).
