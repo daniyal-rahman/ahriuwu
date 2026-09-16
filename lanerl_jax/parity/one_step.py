@@ -75,6 +75,17 @@ MATCH_RADIUS_Q = 16 * 8
 #: "float-rounding-sized" vs "a real disagreement".
 HP_Q_UNIT = 1.0 / StatQ
 POS_Q_UNIT = 1.0 / PosQ
+#: J1 gate 1's own position target (`docs/JAX_REWRITE_PLAN.md` §3): "unit
+#: position <= 1/16 unit (the dump's own quantisation) after one step" -- NOT
+#: bit-exact. Bit-exact (`q_x == q_x and q_y == q_y`, tracked as the "position"
+#: / "position_untrustworthy_injection" fields below) is a strictly stronger
+#: criterion that the gate never asked for: the dump itself cannot represent a
+#: difference finer than one quantum, so a one-quantum miss is not evidence of
+#: anything the sim got wrong. `POS_GATE_SLACK` absorbs float32 rounding at
+#: this coordinate magnitude (~1e4 units, float32 ULP there is ~1e-3) without
+#: loosening the criterion by anything that would matter to a real miss.
+POS_GATE_TOL = POS_Q_UNIT
+POS_GATE_SLACK = 1e-2
 
 #: `tick()` has fixed shapes throughout (LaneState's whole point, per D2 in
 #: the rewrite plan), so it JIT-compiles once and every subsequent call in
@@ -390,6 +401,25 @@ class OneStepResult:
         for key in sorted(self.fields):
             lines.append("  " + self.fields[key].summary())
         lines.append("")
+        lines.append("-- position: trustworthy vs untrustworthy injection, "
+                     "bit-exact vs the gate's own <=1/16 criterion --")
+        lines.append("   (docs/JAX_REWRITE_PLAN.md Sec3: position target is "
+                     "<=1/16 unit, NOT bit-exact)")
+        kinds = sorted({k for k, name in self.fields if name == "position"})
+        for kind in kinds:
+            t_exact = self.fields.get((kind, "position"))
+            u_exact = self.fields.get((kind, "position_untrustworthy_injection"))
+            t_tol = self.fields.get((kind, "position_le1_16"))
+            u_tol = self.fields.get((kind, "position_le1_16_untrustworthy_injection"))
+            def pct(fs):
+                return f"{100*fs.frac_exact:.2f}% ({fs.n_exact}/{fs.n_total})" \
+                    if fs and fs.n_total else "n/a"
+            lines.append(f"  {kind}:")
+            lines.append(f"    bit-exact   trustworthy={pct(t_exact)}  "
+                         f"untrustworthy={pct(u_exact)}")
+            lines.append(f"    <=1/16      trustworthy={pct(t_tol)}  "
+                         f"untrustworthy={pct(u_tol)}")
+        lines.append("")
         lines.append("-- death agreement (pre-tick position match) --")
         for kind, d in sorted(self.death_confusion.items()):
             total = sum(d.values())
@@ -470,6 +500,15 @@ def run_one_step_differential(
         if tr.n_untrustworthy_movement:
             result.n_untrustworthy_movement_ticks += 1
 
+        # Missile confound, computed up front (not just at the bottom of the
+        # loop where the HP-change bookkeeping already wants it): a
+        # `SpellMissile` row in the INJECTED (pre-tick) snapshot means a
+        # missile launched on an earlier tick is still in flight, invisible to
+        # the injector -- see OneStepResult's docstring. Used below to keep
+        # the one-sided-bias analysis (Sec3 task) restricted to ticks that
+        # cannot be contaminated by that blind spot.
+        has_missile = any(e.kind == "SpellMissile" for e in snap_n.entities)
+
         worst_pos = 0.0
         for m in tr.matched:
             dx = m.pred.x - m.real.x
@@ -486,6 +525,19 @@ def run_one_step_differential(
             if not exact_pos:
                 fs.errors.append(euclid)
 
+            # The gate's own criterion (<= 1/16 unit), tracked SEPARATELY from
+            # bit-exactness above -- see POS_GATE_TOL's docstring. Same
+            # trustworthy/untrustworthy split, so the two criteria can be
+            # compared side by side in the report.
+            within_gate_tol = euclid <= POS_GATE_TOL + POS_GATE_SLACK
+            field_name_tol = "position_le1_16" if m.movement_trustworthy else \
+                "position_le1_16_untrustworthy_injection"
+            fs_tol = result.get(m.kind, field_name_tol)
+            fs_tol.n_total += 1
+            fs_tol.n_exact += int(within_gate_tol)
+            if not within_gate_tol:
+                fs_tol.errors.append(euclid)
+
             if m.movement_trustworthy:
                 mvx, mvy = m.pred.x - m.pre_x, m.pred.y - m.pre_y
                 mag = math.hypot(mvx, mvy)
@@ -500,6 +552,18 @@ def run_one_step_differential(
                     fsl.n_exact += int(abs(signed_along) < POS_Q_UNIT)
                     if abs(signed_along) >= POS_Q_UNIT:
                         fsl.errors.append(signed_along)
+
+                    # Same signal, restricted to ticks with NO in-flight
+                    # missile at all -- the known blind spot (missiles are
+                    # invisible to the injector, docs/TIER1_POST_REORDER.md
+                    # task 3) cannot be what is producing this one, if it is
+                    # still there.
+                    if not has_missile:
+                        fslm = result.get(m.kind, "position_along_heading_missile_free")
+                        fslm.n_total += 1
+                        fslm.n_exact += int(abs(signed_along) < POS_Q_UNIT)
+                        if abs(signed_along) >= POS_Q_UNIT:
+                            fslm.errors.append(signed_along)
 
             fs_hp = result.get(m.kind, "hp")
             fs_hp.n_total += 1
@@ -542,7 +606,8 @@ def run_one_step_differential(
         # Missile confound: a `SpellMissile` row in the INJECTED snapshot
         # means a missile launched on an earlier tick is still in flight,
         # invisible to the injector (see OneStepResult's docstring comment).
-        has_missile = any(e.kind == "SpellMissile" for e in snap_n.entities)
+        # `has_missile` was already computed above, before the field-accuracy
+        # loop, so the bias analysis could use it too.
         if has_missile:
             result.n_ticks_with_inflight_missile += 1
             if any_hp_diff_this_tick:
