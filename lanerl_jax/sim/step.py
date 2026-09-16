@@ -252,6 +252,7 @@ def tick(state: LaneState, params: UnitParams,
     # Garen passes through units instead of being shoved out of the wave.
     pre_ghosted = (state.buff_id[:, Slot.E] == BuffId.GAREN_E) & state.alive
     cx, cy = resolve_collisions(state.x, state.y, state.kind, state.alive,
+                                state.spawn_seq, P("collision_radius"),
                                 P("pathfinding_radius"), ghosted=pre_ghosted)
     state = state.replace(x=cx, y=cy)
 

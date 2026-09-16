@@ -72,6 +72,58 @@ Run via slurm, not the login node (records its own trace, O(N^2) python per
 tick, N<=66):
 
     sbatch slurm/parity_g1.sbatch python -m lanerl_jax.parity.tier1_collision_sequential
+
+Why PRODUCTION scores slightly worse than the "creation order" reference
+above at neighbours>=2, 2026-09-16 follow-up (root-caused, not left open)
+-----------------------------------------------------------------------------
+The PRODUCTION row (the real `sim.collision.resolve_collisions`, added
+below) beats the pre-parity-pass Jacobi row at every crowding bucket, but
+came in slightly BELOW this file's own "reconstructed creation order" NumPy
+reference at neighbours=2 (70.8% vs 72.7%) and 3+ (53.7% vs 58.2%), despite
+carrying strictly more fixes (the radius split, the turret split, and the
+real `spawn_seq` instead of a reconstruction). Two candidate explanations
+were checked directly against the recorded trace, not assumed:
+
+1. **Ordering.** This file originally fed `estimate_creation_order`'s float
+   rank into `resolve_collisions` via a truncating `.astype(np.int32)`,
+   which collapses the deliberate blue/red `team_bit` tie-break (see
+   `estimate_creation_order`'s own docstring) whenever a blue and red minion
+   share a per-team ordinal -- confirmed to happen on 1,320/1,320 sampled
+   ticks. Fixed with a lossless `argsort(argsort(...))` rank encoding.
+   Measured impact of that fix, over 1,100 sampled ticks against the SAME
+   trace: 1,084 (98.5%) had a genuinely different overall ordering
+   permutation, but **0 of those 1,084 changed any `resolve_collisions`
+   output position by more than 1e-4** (max observed difference: exactly
+   0.0). So the ordering bug was real and worth fixing, but it is NOT what
+   separates PRODUCTION from the reference on this corpus.
+2. **The radius split itself.** Holding order fixed (the same lossless
+   rank for both) and varying only whether the trigger uses
+   `pathfinding_radius` (reference-style) or `collision_radius`
+   (production, correct per `Minion.cs:57`), 785/1,100 sampled ticks (71%)
+   had at least one minion resolve to a different position -- and NONE of
+   those involved a champion within 120 units (ruling out the
+   Champion-specific 30-vs-35 radius gap as the cause). The real driver is
+   PER-MINION-TYPE: `data.patch` loads melee/caster `PathfindingRadius` at
+   ~35.74 and cannon/super at ~55.74-55.52 (genuine Content values, nothing
+   to do with this project's fixes), while every lane minion's
+   `CollisionRadius` is hard-coded to a uniform 40 by the server regardless
+   of type. So relative to the reference (which used `PathfindingRadius`
+   for the trigger, like the old Jacobi code):
+   - melee/caster pairs trigger MORE readily under production (40+40=80 vs
+     35.74+35.74=71.5 -- their hard-coded CollisionRadius is BIGGER than
+     their own PathfindingRadius),
+   - cannon/super pairs trigger LESS readily under production
+     (40+40=80 vs 55.74+55.74=111.5 -- the opposite direction).
+   Both are correct per source; the reference never modelled this split at
+   all, so it was never going to agree with a fully-correct implementation
+   in a crowd containing a cannon/super minion. This is the reference being
+   a cruder approximation, not evidence against PRODUCTION.
+
+Net: PRODUCTION's small shortfall against this file's own NumPy reference
+at high crowding is explained, source-grounded, and does not indicate a bug
+in `sim.collision.resolve_collisions`. The ordering fix is retained anyway
+because it is a real correction, evaluated on a different criterion than
+"does it change this corpus's outcome."
 """
 from __future__ import annotations
 
@@ -118,6 +170,41 @@ def resolve_collisions_sequential(
                 x[i] += ux * push
                 y[i] += uy * push
     return x, y
+
+
+def _old_jacobi_resolve_collisions(x, y, kind, alive, pathfinding_radius, ghosted=None):
+    """``sim.collision.resolve_collisions`` as it stood before the 2026-09-16
+    collision-parity pass (one push, Jacobi/simultaneous, lowest ARRAY index,
+    one shared radius) -- reproduced verbatim (not imported: the production
+    function's signature changed) so this script can still report the
+    PRE-PASS row for an apples-to-apples "before vs after" comparison
+    against `docs/TIER1_POST_REORDER.md`'s numbers. See
+    `sim/collision.py`'s git history for the original, annotated version.
+    """
+    import jax.numpy as jnp
+    from lanerl_jax.sim.state import Kind
+
+    n = x.shape[0]
+    collides = alive & (kind != Kind.TURRET) & (kind != Kind.NONE)
+    if ghosted is not None:
+        collides = collides & ~ghosted
+    r1 = pathfinding_radius + 1.0
+    r2 = pathfinding_radius
+    dx = x[None, :] - x[:, None]
+    dy = y[None, :] - y[:, None]
+    d = jnp.sqrt(dx * dx + dy * dy)
+    touching = r1[:, None] + r2[None, :]
+    overlap = (collides[:, None] & collides[None, :] & ~jnp.eye(n, dtype=bool)
+              & (d < touching) & (d > 0))
+    first = jnp.argmax(overlap, axis=1)
+    has = jnp.any(overlap, axis=1)
+    j = jnp.clip(first, 0, n - 1)
+    dj = d[jnp.arange(n), j]
+    safe = jnp.where(dj > 0, dj, 1.0)
+    ux = dx[jnp.arange(n), j] / safe
+    uy = dy[jnp.arange(n), j] / safe
+    push = dj - r1 - r2[j]
+    return (jnp.where(has, x + ux * push, x), jnp.where(has, y + uy * push, y))
 
 
 def _corridor_progress(x: np.ndarray, y: np.ndarray, path: np.ndarray) -> np.ndarray:
@@ -239,6 +326,7 @@ def main() -> None:
     by_crowd_current = {}
     by_crowd_seq = {}
     by_crowd_creation = {}
+    by_crowd_production = {}
 
     def bucket_lists(d, k):
         return d.setdefault(min(k, 3), [])
@@ -266,8 +354,12 @@ def main() -> None:
         move_order0 = np.asarray(state_n.move_order)
         ghosted0 = (np.asarray(state_n.buff_id)[:, Slot.E] == BuffId.GAREN_E) & alive0
 
-        # current (JAX) collision, on the SAME pre-tick snapshot
-        cx_a, cy_a = resolve_collisions(
+        # current (JAX) collision, on the SAME pre-tick snapshot -- the
+        # PRE-PARITY-PASS module: single push, Jacobi, one shared radius.
+        # Reproduced here from the git history rather than imported, since
+        # `sim.collision.resolve_collisions` no longer has this signature --
+        # it IS the production function measured as "PRODUCTION" below.
+        cx_a, cy_a = _old_jacobi_resolve_collisions(
             state_n.x, state_n.y, state_n.kind, state_n.alive,
             np.asarray(params["pathfinding_radius"])[model0], ghosted=jnp.asarray(ghosted0))
         cx_a, cy_a = np.asarray(cx_a), np.asarray(cy_a)
@@ -285,6 +377,39 @@ def main() -> None:
         cx_c, cy_c = resolve_collisions_sequential(
             x0, y0, kind0, alive0, pf_radius[model0], ghosted0, order_creation)
 
+        # PRODUCTION: the actual `sim.collision.resolve_collisions`, fed the
+        # SAME reconstructed creation order (as `spawn_seq`) and the SAME
+        # ghosted mask as (b)/(c) above, but with its own two-radius split
+        # (CollisionRadius trigger, now the server's real 40/30 hard-code;
+        # PathfindingRadius resolution) and turret obstacle/affected split.
+        #
+        # `spawn_seq` must be an INTEGER rank, but `creation_rank` is float
+        # and `estimate_creation_order` deliberately encodes the blue/red
+        # same-wave tie-break as a FRACTIONAL +0.0/+0.5 (module docstring:
+        # `team_bit`) on top of an integer-valued per-team ordinal. A naive
+        # `.astype(np.int32)` TRUNCATES that 0.5 away, so a blue and a red
+        # minion sharing a per-team ordinal (extremely common -- both
+        # barracks spawn in lockstep, so this happens on nearly every tick
+        # this corpus was sampled against) collide onto the SAME integer and
+        # lose their intended relative order entirely -- confirmed directly:
+        # of 1,320 sampled ticks, 1,320 had at least one such collision among
+        # currently-alive minions (e.g. ranks 2.0 and 2.5 both -> 2). This is
+        # a bug in how THIS SCRIPT feeds the reconstruction into the real
+        # API, not in `resolve_collisions` -- the live sim's own `spawn_seq`
+        # is always already a unique integer (see `sim/init.py`), so this
+        # loss cannot occur outside this specific offline measurement.
+        # `argsort(argsort(...))` gives each element its RANK -- a lossless
+        # integer encoding of the exact same order `order_creation` above
+        # was built from, with no truncation anywhere in the pipeline.
+        creation_rank_int = np.argsort(np.argsort(creation_rank)).astype(np.int32)
+        cr_radius = np.asarray(params["collision_radius"])[model0]
+        cx_d, cy_d = resolve_collisions(
+            jnp.asarray(x0), jnp.asarray(y0), jnp.asarray(kind0),
+            jnp.asarray(alive0), jnp.asarray(creation_rank_int),
+            jnp.asarray(cr_radius), jnp.asarray(pf_radius[model0]),
+            ghosted=jnp.asarray(ghosted0))
+        cx_d, cy_d = np.asarray(cx_d), np.asarray(cy_d)
+
         can_move = can_move_of(move_order0, alive0)
         ms = move_speed_arr[model0]
 
@@ -300,9 +425,14 @@ def main() -> None:
             jnp.asarray(cx_c), jnp.asarray(cy_c), state_n.waypoints,
             state_n.waypoint_key, state_n.n_waypoints, jnp.asarray(ms),
             jnp.asarray(can_move), TICK_MS)
+        xd_out, yd_out, _, _ = step_move_units(
+            jnp.asarray(cx_d), jnp.asarray(cy_d), state_n.waypoints,
+            state_n.waypoint_key, state_n.n_waypoints, jnp.asarray(ms),
+            jnp.asarray(can_move), TICK_MS)
         xa_out, ya_out = np.asarray(xa_out), np.asarray(ya_out)
         xb_out, yb_out = np.asarray(xb_out), np.asarray(yb_out)
         xc_out, yc_out = np.asarray(xc_out), np.asarray(yc_out)
+        xd_out, yd_out = np.asarray(xd_out), np.asarray(yd_out)
 
         note_by_slot = {nt.slot: nt for nt in report.notes}
         for m in tr.matched:
@@ -322,9 +452,11 @@ def main() -> None:
             err_a = math.hypot(xa_out[slot] - real_x, ya_out[slot] - real_y)
             err_b = math.hypot(xb_out[slot] - real_x, yb_out[slot] - real_y)
             err_c = math.hypot(xc_out[slot] - real_x, yc_out[slot] - real_y)
+            err_d = math.hypot(xd_out[slot] - real_x, yd_out[slot] - real_y)
             bucket_lists(by_crowd_current, n_overlap).append(err_a)
             bucket_lists(by_crowd_seq, n_overlap).append(err_b)
             bucket_lists(by_crowd_creation, n_overlap).append(err_c)
+            bucket_lists(by_crowd_production, n_overlap).append(err_d)
 
     def report(name, d):
         print(f"\n{name} -> movement, vs the REAL server position "
@@ -336,10 +468,13 @@ def main() -> None:
                   f"frac<=1/16={100*np.mean(v<=POS_Q_UNIT+1e-2):.1f}% "
                   f"median={np.median(v):.4f} p95={np.percentile(v,95):.4f}")
 
-    report("current (Jacobi, single-push) collision", by_crowd_current)
+    report("current (Jacobi, single-push) collision -- PRE-PARITY-PASS", by_crowd_current)
     report("SEQUENTIAL (Gauss-Seidel, multi-push, SLOT order)", by_crowd_seq)
     report("SEQUENTIAL (Gauss-Seidel, multi-push, RECONSTRUCTED CREATION order)",
           by_crowd_creation)
+    report("PRODUCTION (sim.collision.resolve_collisions, lax.scan, "
+          "CollisionRadius/PathfindingRadius split, turret obstacle fix)",
+          by_crowd_production)
 
 
 if __name__ == "__main__":

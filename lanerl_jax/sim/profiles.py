@@ -143,7 +143,27 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         # CharData.cs:98 -- server default is 475, not 600
         cols["acquisition_range"][row] = u.acquisition_range or 475.0
         cols["attack_range"][row] = u.attack_range
-        cols["collision_radius"][row] = u.collision_radius
+        # `GameObject.CollisionRadius` -- the TRIGGER radius `IsCollidingWith`
+        # sums (`GameObject.cs:226-229`), NOT the same field as
+        # `PathfindingRadius` below (that one is the RESOLUTION radius
+        # `GetCircleEscapePoint` uses). `ObjAIBase`'s ctor
+        # (`ObjAIBase.cs:105-116`) only falls back to
+        # `CharData.GameplayCollisionRadius` (`u.collision_radius`, as loaded
+        # by `data.patch`) when the caller passes a non-positive
+        # `collisionRadius` argument -- true of `BaseTurret`, which passes
+        # none at all, so turrets genuinely get their tier's CharData value.
+        # It is NOT true of `Minion`/`Champion`: `Minion.cs:57` and
+        # `Champion.cs:52` hard-code `40` and `30` into that same argument,
+        # unconditionally, so Content's `GameplayCollisionRadius` is never
+        # even read for them. Reading it anyway is how a cannon/super minion
+        # (`GameplayCollisionRadius` 65 in Content) got a 65-unit trigger
+        # radius instead of 40, and how Garen (`GameplayCollisionRadius` -1,
+        # so `u.collision_radius` falls back to CharData's OWN 40 default)
+        # got 40 instead of his real 30.
+        cols["collision_radius"][row] = (
+            40.0 if kind == Kind.LANE_MINION else
+            30.0 if kind == Kind.CHAMPION else
+            u.collision_radius)
         cols["pathfinding_radius"][row] = u.pathfinding_radius
         cols["attack_period"][row] = period
         cols["attack_windup"][row] = attack_windup(
