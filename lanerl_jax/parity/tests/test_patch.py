@@ -164,3 +164,32 @@ def test_every_loaded_model_specifies_hp_regen_explicitly(patch):
         assert "BaseStaticHPRegen" in load_character(name), name
     for name in patch.turrets:
         assert "BaseStaticHPRegen" in load_character(name), name
+
+
+def test_minion_acquisition_range_defaults_to_server_475_not_600(patch):
+    """Minions that omit AcquisitionRange in Content fall back to
+    ``CharData.cs:98`` -- a compiled default of **475**, not 600.
+
+    ``lanerl_jax/sim/profiles.py:125`` and ``sim/init.py:261,267`` use this
+    default when a minion model omits the key. The old value (600) was
+    inferred from ``lanerl_rl/constants.py``'s ``MINION_ACQRANGE``, which was
+    a guess; the correct value comes from reading CharData's source directly.
+
+    Map1 minions split: melee and cannon omit the key (use 475 default),
+    while wizard and super specify it (700 and 600 respectively).
+    """
+    # Minions that omit AcquisitionRange use the CharData default
+    for name in ("Blue_Minion_Basic", "Red_Minion_Basic",
+                "Blue_Minion_MechCannon", "Red_Minion_MechCannon"):
+        d = load_character(name)
+        assert d.get("AcquisitionRange") is None, f"{name} should omit AcquisitionRange"
+
+    # Wizard and super minions specify it explicitly (values are stringly-typed)
+    blue_wiz = load_character("Blue_Minion_Wizard")
+    assert float(blue_wiz.get("AcquisitionRange")) == 700.0
+    red_wiz = load_character("Red_Minion_Wizard")
+    assert float(red_wiz.get("AcquisitionRange")) == 700.0
+    blue_super = load_character("Blue_Minion_MechMelee")
+    assert float(blue_super.get("AcquisitionRange")) == 600.0
+    red_super = load_character("Red_Minion_MechMelee")
+    assert float(red_super.get("AcquisitionRange")) == 600.0

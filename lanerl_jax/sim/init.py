@@ -258,13 +258,13 @@ def _legacy_lane_params(patch: PatchTable | None = None, dtype=jnp.float32) -> d
     mp, mw = period_windup(melee)
     tp, tw = period_windup(turret)
 
-    move = z(melee.move_speed); acq = z(melee.acquisition_range or 600.0)
+    move = z(melee.move_speed); acq = z(melee.acquisition_range or 475.0)
     rng = z(melee.attack_range); col = z(melee.collision_radius or 48.0)
     per = z(mp); win = z(mw); ad = z(melee.base_ad); ar = z(melee.armor)
 
     for sl, u, (p_, w_) in ((CH_SLICE, g, (gp, gw)), (TU_SLICE, turret, (tp, tw))):
         move[sl] = u.move_speed
-        acq[sl] = u.acquisition_range or 600.0
+        acq[sl] = u.acquisition_range or 475.0
         rng[sl] = u.attack_range
         col[sl] = u.collision_radius or 48.0
         per[sl] = p_

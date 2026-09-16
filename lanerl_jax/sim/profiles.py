@@ -122,7 +122,8 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         cols["move_speed"][row] = 0.0 if kind == Kind.TURRET else u.move_speed
         # Minions carry no AcquisitionRange in Content; the server falls back to
         # its own default rather than treating them as blind.
-        cols["acquisition_range"][row] = u.acquisition_range or 600.0
+        # CharData.cs:98 -- server default is 475, not 600
+        cols["acquisition_range"][row] = u.acquisition_range or 475.0
         cols["attack_range"][row] = u.attack_range
         cols["collision_radius"][row] = u.collision_radius
         cols["pathfinding_radius"][row] = u.pathfinding_radius
