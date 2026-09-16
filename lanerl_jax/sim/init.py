@@ -59,8 +59,8 @@ from .targeting import MinionType
 from .waves import FIRST_WAVE_MS
 
 __all__ = [
-    "CHAMPION_SPAWN", "TOP_OUTER_TURRET", "MINION_SPAWN", "TOP_LANE_PATH",
-    "RUNE_HP_BONUS", "TURRET_HP_BONUS",
+    "CHAMPION_SPAWN", "TOP_OUTER_TURRET", "ALL_TURRETS", "MINION_SPAWN",
+    "TOP_LANE_PATH", "RUNE_HP_BONUS", "TURRET_HP_BONUS",
     "lane_params", "init_lane", "spawn_minion",
 ]
 
@@ -77,6 +77,59 @@ TOP_OUTER_TURRET: Dict[int, Tuple[float, float]] = {
     Team.BLUE: (574.6, 10220.5),
     Team.RED: (3911.7, 13654.8),
 }
+#: **Every turret the server places**, measured from the same ``t = 0``
+#: ``LANERL_STATEROW`` snapshot as the champion spawns, at its own 1/16-unit
+#: resolution. 12 per team: 9 lane turrets (3 lanes x outer/inner/inhibitor),
+#: 2 nexus turrets and 1 fountain turret.
+#:
+#: WHY ALL OF THEM, AND NOT JUST THE TOP OUTER PAIR
+#: ------------------------------------------------
+#: This was booked as "only the top outer pair can ever act in a TOPONLY 1v1",
+#: and that is **false the moment a wave pushes**. Ten of these sit within 900
+#: units of the top-lane polyline, five per side, and they are what bounds the
+#: lane::
+#:
+#:     blue   0.000  0.016  0.109  0.217  0.388      (nexus x2, inhib, inner, outer)
+#:     red    0.605  0.770  0.894  0.981  1.000
+#:
+#: as a fraction of the lane path. With only the outer pair modelled, a wave
+#: that wins the midlane fight walks past the enemy outer turret at 0.388 and
+#: meets **nothing at all** for the rest of the map. The sim ran away to 2 blue
+#: minions against 28 red by ten minutes; the server, which has a turret at
+#: 0.217 waiting, stays near 21 live minions with a p95 of 27.
+#:
+#: Positions and max HP are exact. Per-turret *combat* stats are not yet
+#: distinguished -- every turret uses the lane-turret profile, so the nexus
+#: (1425 HP) and fountain (9999 HP) turrets shoot like an outer turret. That is
+#: a booked approximation and it cannot matter in a top-lane 1v1, where no
+#: minion ever reaches a nexus.
+ALL_TURRETS: Tuple[Tuple[int, float, float, float], ...] = (
+    (Team.BLUE, -236.0625, -53.3125, 9999.0),
+    (Team.BLUE, 574.625, 10220.5, 1550.0),
+    (Team.BLUE, 802.8125, 4052.375, 1550.0),
+    (Team.BLUE, 1106.25, 6465.25, 1550.0),
+    (Team.BLUE, 1341.625, 2030.0, 1425.0),
+    (Team.BLUE, 1768.1875, 1589.4375, 1425.0),
+    (Team.BLUE, 3234.0, 3447.25, 1550.0),
+    (Team.BLUE, 3747.25, 1041.0625, 1550.0),
+    (Team.BLUE, 4657.0, 4591.9375, 1550.0),
+    (Team.BLUE, 5448.375, 6169.125, 1550.0),
+    (Team.BLUE, 6512.5, 1262.625, 1550.0),
+    (Team.BLUE, 10097.625, 808.75, 1550.0),
+    (Team.RED, 3911.6875, 13654.8125, 1550.0),
+    (Team.RED, 7536.5, 13190.8125, 1550.0),
+    (Team.RED, 8548.8125, 8289.5, 1550.0),
+    (Team.RED, 9361.0625, 9892.625, 1550.0),
+    (Team.RED, 10261.875, 13465.9375, 1550.0),
+    (Team.RED, 10743.5625, 11010.0625, 1550.0),
+    (Team.RED, 12118.125, 12876.625, 1425.0),
+    (Team.RED, 12662.5, 12442.6875, 1425.0),
+    (Team.RED, 12920.8125, 8005.3125, 1550.0),
+    (Team.RED, 13205.8125, 10474.625, 1550.0),
+    (Team.RED, 13459.625, 4284.25, 1550.0),
+    (Team.RED, 14157.0, 14456.375, 9999.0),
+)
+
 #: Lane-minion barracks (first full-health sighting of a new minion).
 MINION_SPAWN: Dict[int, Tuple[float, float]] = {
     Team.BLUE: (918.0, 1720.0),
@@ -178,14 +231,19 @@ def _legacy_lane_params(patch: PatchTable | None = None, dtype=jnp.float32) -> d
 
 
 def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
-              seed: int = 0, include_all_turrets: bool = False) -> LaneState:
-    """A fresh top-lane 1v1 at ``t = 0``: two champions, two turrets, no minions.
+              seed: int = 0, include_all_turrets: bool = True) -> LaneState:
+    """A fresh top-lane 1v1 at ``t = 0``: two champions, the turrets, no minions.
 
-    ``include_all_turrets`` is off by default. All 24 map turrets exist on the
-    server even under ``TOPONLY`` (measured), and carrying them costs nothing in
-    a masked array -- but only the top outer pair can ever act in this scenario,
-    so the default keeps the state legible. Turn it on when diffing against a
-    dump without scoping.
+    ``include_all_turrets`` defaults **on**, and used to default off with the
+    reasoning that "only the top outer pair can ever act in this scenario".
+    That reasoning was wrong, and wrong in a way that cost 21% of the minion
+    population -- see :data:`ALL_TURRETS`. Five turrets per side sit on the top
+    lane, and the ones behind the outer turret are what stops a winning wave
+    from marching into the enemy base unopposed.
+
+    Pass ``False`` for an isolated arena when a test wants to place units
+    without a turret shooting at them. It is a test convenience, not a model of
+    the server: the server always has all 24.
     """
     patch = patch or load_patch()
     s = empty_state(dtype=dtype, seed=seed)
@@ -210,15 +268,21 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
         hp[i] = champ_hp
         alive[i] = True
 
-    turret_base = next(iter(patch.turrets.values())).base_hp + TURRET_HP_BONUS
     t0 = TU_SLICE.start
-    for j, t in enumerate((Team.BLUE, Team.RED)):
+    if include_all_turrets:
+        placed = [(t, tx, ty, thp) for t, tx, ty, thp in ALL_TURRETS]
+    else:
+        base = next(iter(patch.turrets.values())).base_hp + TURRET_HP_BONUS
+        placed = [(t, *TOP_OUTER_TURRET[t], base) for t in (Team.BLUE, Team.RED)]
+    assert len(placed) <= TU_SLICE.stop - t0, (
+        f"{len(placed)} turrets into {TU_SLICE.stop - t0} slots")
+    for j, (t, tx, ty, thp) in enumerate(placed):
         i = t0 + j
         kind[i] = Kind.TURRET
         team[i] = t
         model[i] = profile_id(Kind.TURRET, -1, t)
-        x[i], y[i] = TOP_OUTER_TURRET[t]
-        hp[i] = turret_base
+        x[i], y[i] = tx, ty
+        hp[i] = thp
         alive[i] = True
 
     return s.replace(

@@ -59,9 +59,16 @@ def _run(s, n):
 
 
 def _lane_with_minions(n_minions=4, dist=200.0, hp=455.0, e_rank=1):
-    """Blue Garen well away from any turret, with red minions at ``dist``."""
+    """Blue Garen well away from any turret, with red minions at ``dist``.
+
+    ``include_all_turrets=False`` for a genuinely empty arena. With the full
+    map placed, "well away from any turret" stops being true anywhere useful:
+    blue's mid-lane turret sits at (5448, 6169), 673 units from where this
+    puts the relocated turret, and it opened fire on it -- which read as the
+    spin damaging a turret.
+    """
     patch = load_patch()
-    s = init_lane(patch)
+    s = init_lane(patch, include_all_turrets=False)
     kind = np.asarray(s.kind).copy()
     team = np.asarray(s.team).copy()
     alive = np.asarray(s.alive).copy()

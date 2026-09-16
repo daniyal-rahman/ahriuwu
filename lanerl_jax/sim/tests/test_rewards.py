@@ -107,7 +107,10 @@ def test_the_lowest_index_attacker_to_cross_zero_takes_the_kill():
     """
     patch = load_patch()
     params = lane_params(patch)
-    s = init_lane(patch)
+    # An empty arena. This test already learned once that a turret will happily
+    # steal the kill it is trying to attribute (see the note below); with all 24
+    # placed there is no open ground left to stand on.
+    s = init_lane(patch, include_all_turrets=False)
     n = s.kind.shape[0]
     # put both champions on top of a nearly-dead red minion
     kind = np.asarray(s.kind).copy()

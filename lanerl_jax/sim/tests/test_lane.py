@@ -14,6 +14,7 @@ import jax.numpy as jnp
 
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch  # noqa: E402
 from lanerl_jax.sim.init import (  # noqa: E402
+    ALL_TURRETS,
     MINION_SPAWN,
     RUNE_HP_BONUS,
     TOP_LANE_PATH,
@@ -105,12 +106,47 @@ def test_an_unknown_profile_raises_rather_than_defaulting():
 
 def test_init_places_the_measured_geometry(patch):
     s = init_lane(patch)
-    assert int(s.alive.sum()) == 4          # two champions, two top turrets
+    assert int(s.alive.sum()) == 26         # two champions, all 24 turrets
     assert float(s.x[0]) == pytest.approx(26.0)
     assert float(s.hp[0]) == pytest.approx(
         patch.champion.hp_at_level(1) + RUNE_HP_BONUS)
-    assert float(s.x[TU_SLICE.start]) == pytest.approx(TOP_OUTER_TURRET[Team.BLUE][0])
     assert float(s.next_spawn_ms) == 90_000.0
+
+
+def test_every_turret_the_server_places_is_placed(patch):
+    """All 24, because the five behind each outer turret are what bounds the lane.
+
+    Modelling only the top outer pair was booked as harmless -- "only they can
+    ever act in a TOPONLY 1v1" -- and it is false the moment a wave pushes. A
+    wave that wins the middle walks past the enemy outer turret and then meets
+    nothing at all: the sim ran away to 2 blue minions against 28 red by ten
+    minutes, against a server that holds near 21.
+    """
+    s = init_lane(patch)
+    ts = np.asarray(s.kind) == Kind.TURRET
+    assert int(ts.sum()) == 24 == len(ALL_TURRETS)
+    assert int((np.asarray(s.team)[ts] == Team.BLUE).sum()) == 12
+    assert int((np.asarray(s.team)[ts] == Team.RED).sum()) == 12
+    # positions are exact at the dump's own 1/16-unit resolution
+    for j, (team, tx, ty, thp) in enumerate(ALL_TURRETS):
+        i = TU_SLICE.start + j
+        assert int(s.team[i]) == team
+        assert float(s.x[i]) == pytest.approx(tx, abs=1 / 32)
+        assert float(s.y[i]) == pytest.approx(ty, abs=1 / 32)
+        assert float(s.hp[i]) == pytest.approx(thp, abs=1e-3)
+    # the top outer pair is still where the independent extraction put it
+    blue_outer = [j for j, t in enumerate(ALL_TURRETS)
+                  if abs(t[1] - TOP_OUTER_TURRET[Team.BLUE][0]) < 1
+                  and abs(t[2] - TOP_OUTER_TURRET[Team.BLUE][1]) < 1]
+    assert len(blue_outer) == 1
+
+
+def test_the_isolated_arena_still_exists_for_tests(patch):
+    """``include_all_turrets=False`` is a test convenience, not a server mode."""
+    s = init_lane(patch, include_all_turrets=False)
+    assert int((np.asarray(s.kind) == Kind.TURRET).sum()) == 2
+    assert float(s.x[TU_SLICE.start]) == pytest.approx(
+        TOP_OUTER_TURRET[Team.BLUE][0])
 
 
 def test_the_lane_path_starts_at_the_measured_barracks():
