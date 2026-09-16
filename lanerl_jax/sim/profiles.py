@@ -76,7 +76,7 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         "move_speed", "acquisition_range", "attack_range", "collision_radius",
         "attack_period", "attack_windup", "attack_damage", "armor",
         "magic_resist", "max_hp", "gold_on_death", "xp_on_death",
-        "pathfinding_radius")}
+        "pathfinding_radius", "fires_missile", "missile_speed")}
 
     for row, (kind, mtype, team) in enumerate(PROFILES):
         u = _stats_for(patch, kind, mtype, team)
@@ -100,6 +100,16 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         cols["max_hp"][row] = u.base_hp
         cols["gold_on_death"][row] = u.gold_given_on_death
         cols["xp_on_death"][row] = u.exp_given_on_death
+        # `Spell.FinishCasting`: a basic attack becomes a missile when the
+        # attacker is ranged AND its BasicAttack script is empty. In this
+        # slice the second half is never false -- see `sim/missiles.py` for
+        # why a lane turret does NOT get the exemption its own AD/armour once
+        # (wrongly) implied -- so the rule collapses to `not IsMelee`.
+        cols["fires_missile"][row] = float(not u.is_melee)
+        # `SpellData.MissileSpeed` for THIS unit's own basic attack -- not a
+        # shared constant. Meaningless (and unread, since `fires_missile` is 0)
+        # for melee units.
+        cols["missile_speed"][row] = u.missile_speed
 
     # Measured deltas that Content does not carry; see sim/init.py.
     from .init import (

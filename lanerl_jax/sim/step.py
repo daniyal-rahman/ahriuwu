@@ -42,9 +42,14 @@ import jax
 import jax.numpy as jnp
 
 from .autoattack import step_autoattack
-from .combat import TURRET_DAMAGE_VS_MINION
+from .combat import (
+    TURRET_AD_PER_RAMP,
+    TURRET_DAMAGE_VS_MINION,
+    outer_turret_ramps,
+)
 from .collision import resolve_collisions
 from .init import spawn_minion
+from .missiles import step_missiles
 from .profiles import PROFILES
 from .spells import RANKS_BY_LEVEL, step_buffs
 from .waves_jax import step_waves_jax
@@ -57,7 +62,8 @@ from .targeting import base_priority, nearest_enemy, turret_acquire
 __all__ = ["UnitParams", "tick", "step_decision"]
 
 
-def _attack_damage_against(attack_damage, attacker_kind, target_kind):
+def _attack_damage_against(attack_damage, attacker_kind, target_kind,
+                           t_ms=None):
     """Raw attack damage, with the attacker/target modifiers the scripts apply.
 
     Only one exists in this slice: every lane turret's basic-attack script
@@ -67,8 +73,23 @@ def _attack_damage_against(attack_damage, attacker_kind, target_kind):
     """
     vs_minion = target_kind == Kind.LANE_MINION
     from_turret = attacker_kind == Kind.TURRET
-    return jnp.where(from_turret & vs_minion,
-                     attack_damage * TURRET_DAMAGE_VS_MINION, attack_damage)
+    ad = jnp.where(from_turret & vs_minion,
+                   attack_damage * TURRET_DAMAGE_VS_MINION, attack_damage)
+    if t_ms is not None:
+        # The map script ramps an outer turret +4 AD every 60 s from t=30 s,
+        # capped at 7 applications: 152 at the start, 180 from 390 s on. It is
+        # a StatsModifier added on a timer and appears in no stat table, so a
+        # turret built from Content alone stays at its level-1 damage all game.
+        #
+        # Applied to every turret because all 24 currently share the outer
+        # profile. The other tiers really run a different schedule (from 480 s,
+        # and also +1 Armor / +1 MagicResist), so this is right for the two
+        # that matter in a top-lane 1v1 and an over-estimate for the rest --
+        # booked in `combat.INNER_TURRET_RAMP_START_MS`.
+        ad = jnp.where(from_turret,
+                       ad + TURRET_AD_PER_RAMP * outer_turret_ramps(t_ms, jnp),
+                       ad)
+    return ad
 
 
 class UnitParams(dict):
@@ -257,6 +278,8 @@ def tick(state: LaneState, params: UnitParams,
                    wp.at[:, :2].set(two)[:, :, :], wp)
     wp_key = jnp.where(chase, jnp.int8(1), wp_key)
     n_wp = jnp.where(chase, jnp.int8(2), state.n_waypoints)
+    raw_ad = _attack_damage_against(
+        P("attack_damage"), state.kind, state.kind[tgt], state.t_ms)
     aa = step_autoattack(
         state.aa_cooldown, state.aa_windup, state.is_attacking,
         state.has_auto_attacked,
@@ -266,8 +289,7 @@ def tick(state: LaneState, params: UnitParams,
         has_target=has_tgt,
         attack_period=P("attack_period"),
         windup_time=P("attack_windup"),
-        attack_damage=_attack_damage_against(
-            P("attack_damage"), state.kind, state.kind[tgt]),
+        attack_damage=raw_ad,
         target_resist=P("armor")[tgt],
         delta_ms=delta_ms, xp=jnp)
 
@@ -284,9 +306,31 @@ def tick(state: LaneState, params: UnitParams,
     # zero -- later hits still land but cannot re-claim the kill. Reproduced
     # here with a cumulative sum along the attacker axis rather than a
     # scatter-add, which would lose the ordering.
-    landed = aa.hit & state.alive & (target >= 0)
+    # A ranged attacker (which in this slice means every non-melee one --
+    # casters, cannons AND both outer turrets, see `sim/missiles.py`) launches
+    # a MISSILE instead of dealing damage now, at ITS OWN `missile_speed`, and
+    # that damage is lost entirely if the target dies before the missile
+    # lands. Melee attackers (minions and Garen) are unchanged.
+    swings = aa.hit & state.alive & (target >= 0)
+    ranged = P("fires_missile") > 0
+    launches = swings & ranged
+    landed = swings & ~ranged
+
+    ms = step_missiles(
+        m_alive=state.missile_alive, m_x=state.missile_x, m_y=state.missile_y,
+        m_target=state.missile_tx, m_source=state.missile_source,
+        m_damage=state.missile_damage, m_speed=state.missile_speed,
+        launches=launches, raw_damage=raw_ad, launch_speed=P("missile_speed"),
+        x=x, y=y, alive=state.alive,
+        targetable=state.alive, armor=P("armor"), target=target,
+        delta_ms=delta_ms)
+
     dmg_ij = jnp.where(landed[:, None] & (jnp.arange(n)[None, :] == tgt[:, None]),
                        aa.damage[:, None], jnp.zeros((n, n), dtype))
+    # A missile that lands this tick is credited to the unit that FIRED it, in
+    # that unit's own attacker row, so the lowest-index-crosses-zero rule below
+    # sees melee hits and missile hits in one ordering rather than two.
+    dmg_ij = dmg_ij + ms.damage_ij
     dealt = dmg_ij.sum(axis=0) + bs.damage_dealt
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
     alive = state.alive & (hp > 0)
@@ -366,6 +410,10 @@ def tick(state: LaneState, params: UnitParams,
         hp=hp, alive=alive, gold=gold, xp=xp, cs=cs, level=level,
         gold_timer=gold_timer, spell_level=spell_level, buff_id=bs.buff_id,
         buff_elapsed=bs.buff_elapsed, spell_cooldown=bs.spell_cooldown,
+        missile_alive=ms.alive, missile_x=ms.x, missile_y=ms.y,
+        missile_tx=ms.target.astype(state.missile_tx.dtype),
+        missile_source=ms.source.astype(state.missile_source.dtype),
+        missile_damage=ms.damage, missile_speed=ms.speed,
     )
 
 

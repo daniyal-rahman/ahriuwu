@@ -177,10 +177,20 @@ class UnitStats:
     hp_regen_per_level: float = 0.0
     gold_given_on_death: float = 0.0
     exp_given_on_death: float = 0.0
+    #: ``SpellData.MissileSpeed`` for this unit's own basic attack, i.e.
+    #: ``Spells/<name>BasicAttack/<name>BasicAttack.json``'s ``SpellData``
+    #: block -- NOT a single engine-wide constant. Every basic attack in this
+    #: slice overrides the 500 default (caster minion 650, cannon minion and
+    #: both outer turrets 1200, melee minion 0 since it never fires one), so
+    #: reading a shared ``MISSILE_SPEED`` for all of them was wrong the moment
+    #: a second ranged unit type existed. See ``sim/missiles.py``.
+    missile_speed: float = 0.0
 
     @classmethod
     def from_content(cls, name: str, root: Path = CONTENT_ROOT) -> "UnitStats":
         d = load_character(name, root)
+        from ..sim.missiles import DEFAULT_MISSILE_SPEED
+        basic_attack = load_spell(f"{name}BasicAttack", root)["SpellData"]
         return cls(
             name=name,
             base_hp=num(d, "BaseHP"),
@@ -215,6 +225,7 @@ class UnitStats:
             hp_regen_per_level=num(d, "HPRegenPerLevel", 0.0),
             gold_given_on_death=num(d, "GoldGivenOnDeath", 0.0),
             exp_given_on_death=num(d, "ExpGivenOnDeath", 0.0),
+            missile_speed=num(basic_attack, "MissileSpeed", DEFAULT_MISSILE_SPEED),
         )
 
     # NOTE: growth is NOT linear. ``Stats.LevelUp`` scales every per-level

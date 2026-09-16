@@ -27,7 +27,19 @@ constant           measured   note
                                 click distance -- NOT from the state dump, whose
                                 "max 5" was bot-driven short hops
 ``MAX_BUFFS`` 8       max 5
-``N_MISSILES`` 16     max 7   (``Particle`` count; caster and turret shots)
+``N_MISSILES`` 24     max 16  from a 600 s **idle** top lane (``init_lane`` +
+                                ``step_decision``, no orders, no wave-spawn
+                                variance beyond the schedule itself) -- NOT the
+                                300 s recording above, because missiles did not
+                                exist when that one was taken and it carries no
+                                missile counts. Every non-melee attacker fires
+                                one in this slice -- caster and cannon minions
+                                AND both outer turrets, not just the minions
+                                (see ``sim/missiles.py``); measured again by
+                                ``test_missile_overflow_stays_zero_over_a_long_run``
+                                in ``sim/tests/test_missiles.py``, which checks
+                                the cap is never actually reached rather than
+                                trusting this number to stay true.
 =================  =========  =======================================================
 
 Why float32 and not float64
@@ -76,7 +88,7 @@ N_UNITS = N_CHAMPIONS + N_MINIONS + N_TURRETS      # 66
 
 MAX_WAYPOINTS = 24
 MAX_BUFFS = 8
-N_MISSILES = 16
+N_MISSILES = 24
 
 CH_SLICE = slice(0, N_CHAMPIONS)
 MI_SLICE = slice(N_CHAMPIONS, N_CHAMPIONS + N_MINIONS)
