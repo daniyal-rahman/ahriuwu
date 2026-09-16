@@ -101,31 +101,51 @@ Two independent effects share the slot:
   engine's default cooldown-at-cast, so ``GarenW.json``'s ``Cooldown1``-
   ``Cooldown5`` (24/23/22/21/20 s) are the real, unmodified cooldown, and it
   starts **at cast**, not at some later deactivation -- the opposite of E and Q.
-* ``GarenWPassive`` (``Buffs/Garen/GarenWPassive.cs:34-37``): +20% Armor, +20%
-  Magic Resist, ``infiniteduration`` (i.e. permanent). Read ``W.cs:26-46``
-  carefully: the listener that grants it is registered once when the *spell
-  object itself* is constructed (``OnActivate(ObjAIBase, Spell)``, the
-  ``ISpellScript`` lifecycle hook -- not the buff's ``OnActivate``), and it
-  fires on ``OnLevelUpSpell`` the moment W's rank first becomes 1. **This is
-  not tied to ever casting W.** A Garen who puts a point in W at level 3 and
-  never presses W again still has the permanent mitigation from that level
-  onward. Modelled here the same way: :func:`step_buffs` grants it the tick
+* ``GarenWPassive`` (``Buffs/Garen/GarenWPassive.cs:34-37``): NOT a clean +20%
+  to either stat -- ``StatsModifier.Armor.PercentBonus += 0.2f;
+  Armor.PercentBaseBonus -= 0.2f;`` (mirrored for ``MagicResist``). Against
+  ``Stat.cs:68``'s ``Total = ((BaseValue+BaseBonus)*(1+PercentBaseBonus) +
+  FlatBonus)*(1+PercentBonus)``, writing ``B = BaseValue+BaseBonus`` and
+  ``F = FlatBonus``, this composes to ``0.96*B + 1.2*F`` -- a **4% DECREASE**
+  when ``F=0`` (Garen's MagicResist: no item/rune MR source in this project),
+  and for Armor (``F = RUNE_ARMOR_BONUS = 9.0``, the only nonzero flat
+  component either stat has here -- confirmed a rune lands in ``FlatBonus``,
+  not ``BaseValue``/``BaseBonus``: ``Champion.OnAdded`` applies a rune page
+  entry as an item, and ``ItemData : StatsModifier`` with
+  ``Armor.FlatBonus = file.GetFloat("Data", "FlatArmorMod")``,
+  ``ItemData.cs:70``) a small, net-POSITIVE-only-while ``F > 0.2*B`` result
+  that inverts to net-negative around level 11 as base Armor outgrows the
+  fixed rune term. Read ``W.cs:26-46`` carefully: the listener that grants it
+  is registered once when the *spell object itself* is constructed
+  (``OnActivate(ObjAIBase, Spell)``, the ``ISpellScript`` lifecycle hook --
+  not the buff's ``OnActivate``), and it fires on ``OnLevelUpSpell`` the
+  moment W's rank first becomes 1. **This is not tied to ever casting W.** A
+  Garen who puts a point in W at level 3 and never presses W again still has
+  this (real, not-flat-+20%) mitigation change from that level onward.
+  Modelled here the same way: :func:`step_buffs` grants it the tick
   ``spell_level[..., Slot.W]`` first becomes >= 1, independent of
-  :func:`cast_w`.
+  :func:`cast_w`, and reports the RAW ``PercentBaseBonus``/``PercentBonus``
+  pair (``-0.2``/``+0.2`` while granted, ``0``/``0`` otherwise) rather than a
+  single pre-composed multiplier, so the caller can run the real
+  ``combat.stat_total`` formula instead of a flat ``*1.2``.
 
 What this module does: the buff bookkeeping for both (duration, expiry,
 cooldown-at-cast for the active window, permanent-and-granted-once for the
 passive), plus the pure constants (``W_DAMAGE_MULT``, ``W_PASSIVE_ARMOR_PCT``,
-``W_PASSIVE_MR_PCT``) and, from :func:`step_buffs`, the *per-unit multiplier
-and percent-bonus values* a caller needs to actually apply these. What it
-cannot do alone: multiply W's 0.7 into damage that lands via auto-attacks and
-missiles (computed in ``step.py``/``autoattack.py``/``missiles.py``, not here),
-or fold the passive's Armor/MR percent bonus into the ``armor``/``magic_resist``
-arrays those same modules gather from ``params`` (a static per-profile-row
-table with no notion of a per-unit buff). See :class:`BuffStep`'s
-``damage_multiplier``, ``armor_pct_bonus`` and ``mr_pct_bonus`` fields for the
-exact values to wire in, and the module-level "INTEGRATION NEEDED" note below
-for where.
+``W_PASSIVE_MR_PCT``) and, from :func:`step_buffs`, the *per-unit* values a
+caller needs to actually apply these -- ``BuffStep.damage_multiplier``
+(unconditionally 1.0, per the active-window bug-compat note above) and the
+``armor_percent_base_bonus``/``armor_percent_bonus``/``mr_percent_base_bonus``/
+``mr_percent_bonus`` quartet (the passive). Wired into ``step.py``: it passes
+``magic_resist=P("magic_resist")`` into :func:`step_buffs`, then computes
+``armor_eff``/``magic_resist_eff`` via ``combat.stat_total`` (not a flat
+``* (1 + pct)``, which is exactly the bug this section replaced) and uses
+those wherever mitigation is computed downstream that tick
+(``step_autoattack``'s ``target_resist``, ``step_missiles``'s ``armor``).
+``damage_multiplier`` is still multiplied into the final per-unit damage
+total in ``step.py``, unconditionally a no-op now that it is always 1.0 --
+left in place rather than removed so a future, different W fix does not need
+to re-thread the multiply site.
 
 R -- Demacian Justice, from ``Characters/Garen/R.cs``
 ------------------------------------------------------
@@ -165,21 +185,12 @@ added, :func:`step_buffs` falls back to reusing ``armor`` (documented in
 place, wrong whenever Armor != Magic Resist, and dead code for every existing
 test because none of them cast R).
 
-INTEGRATION NEEDED in ``step.py`` (not made here -- reported instead per the
-brief): three precise, additive hooks, none of which change existing
-behaviour when Garen's W/R are never cast:
-
-1. Add ``magic_resist=P("magic_resist")`` to the existing
-   ``step_buffs(...)`` call.
-2. Right after that call, compute
-   ``armor_eff = P("armor") * (1.0 + bs.armor_pct_bonus)`` and
-   ``magic_resist_eff = P("magic_resist") * (1.0 + bs.mr_pct_bonus)``, and use
-   them in place of ``P("armor")``/``P("magic_resist")`` wherever mitigation is
-   computed downstream in that tick (``step_autoattack``'s ``target_resist``,
-   ``step_missiles``'s ``armor``) -- this is Garen's W passive.
-3. Multiply the final per-unit damage total by ``bs.damage_multiplier`` before
-   ``hp = jnp.maximum(state.hp - dealt, ...)`` -- this is Garen's W active
-   window.
+All three hooks this section used to ask ``step.py`` to add are now wired
+there (``magic_resist=P("magic_resist")`` into :func:`step_buffs`;
+``armor_eff``/``magic_resist_eff`` via ``combat.stat_total`` right after; the
+``damage_multiplier`` multiply before ``hp = jnp.maximum(state.hp - dealt,
+...)``) -- left named here rather than deleted so the next person can find
+where each one lives without re-reading ``step.py`` end to end.
 
 Q's auto-attack-empowerment hook (damage + silence delivered on the next
 landed swing while ``GarenQ`` is active, then the buff deactivates early) is
@@ -564,16 +575,27 @@ class BuffStep(NamedTuple):
     suppress_attack: jax.Array  # (N,) bool: CanAttack cleared
     ghosted: jax.Array          # (N,) bool
     #: Multiply a unit's total incoming damage by this before subtracting HP.
-    #: 1.0 normally, :data:`W_DAMAGE_MULT` while Garen's W window is open.
-    #: NOT applied anywhere yet -- see the module docstring's INTEGRATION
-    #: NEEDED note, hook 3.
+    #: Unconditionally **1.0** -- see :func:`step_buffs`'s W-active section for
+    #: why: on this server build, ``GarenW``'s 0.7x never reaches real HP loss
+    #: (a stale-local-vs-mutated-field bug in ``AttackableUnit.TakeDamage``),
+    #: so bug-compatibility means this field does nothing, not that it holds
+    #: :data:`W_DAMAGE_MULT`. Kept as a field (rather than deleted) so a
+    #: caller does not need special-casing, and so the window's own
+    #: (unaffected) duration/cooldown tracking has an obvious place to grow a
+    #: real consumer later (e.g. an observation) without re-plumbing.
     damage_multiplier: jax.Array
-    #: Additive fraction to fold into ``Armor.Total`` before mitigation
-    #: (``armor * (1 + this)``). 0.0 normally, :data:`W_PASSIVE_ARMOR_PCT`
-    #: once ``GarenWPassive`` is granted. Hook 2.
-    armor_pct_bonus: jax.Array
-    #: Same, for ``MagicResist.Total``. Hook 2.
-    mr_pct_bonus: jax.Array
+    #: ``Stat.Armor.PercentBaseBonus`` contribution from ``GarenWPassive``:
+    #: ``-0.2`` once granted, ``0`` otherwise (``GarenWPassive.cs:34``). See
+    #: :func:`step_buffs`'s W-passive section for why this is reported
+    #: separately from ``armor_percent_bonus`` rather than pre-composed into
+    #: one multiplier -- they compose around ``FlatBonus`` differently.
+    armor_percent_base_bonus: jax.Array
+    #: ``Stat.Armor.PercentBonus`` contribution: ``+0.2`` once granted, ``0``
+    #: otherwise (``GarenWPassive.cs:34``).
+    armor_percent_bonus: jax.Array
+    #: Same pair, for ``MagicResist`` (``GarenWPassive.cs:36``).
+    mr_percent_base_bonus: jax.Array
+    mr_percent_bonus: jax.Array
 
 
 def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
@@ -631,14 +653,27 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
                       len(E_COOLDOWNS)) - 1
     e_cd_table = jnp.asarray(E_COOLDOWNS, spell_cooldown.dtype)
 
-    # ---- W: the 0.7x window ------------------------------------------------
+    # ---- W active: the 0.7x window (real buff, but a no-op on this server) --
+    # `GarenW.cs:47-55`'s `PreTakeDamage` listener does
+    # `dmg.PostMitigationDamage *= 0.7f`, but `AttackableUnit.TakeDamage`
+    # (`AttackableUnit.cs:551,558,585,606,612-616`) already copied
+    # `PostMitigationDamage` into a stale LOCAL float BEFORE publishing
+    # `OnPreTakeDamage` -- both the real HP subtraction (`:585`) and lifesteal
+    # (`:612-616`) read that stale local, never the mutated `damageData`
+    # field. Only the cosmetic floating-damage-number packet (`:606`) ever
+    # sees the 0.7x. Verified directly from both files, not inferred from the
+    # bug's plausibility. So on THIS server build, W's active window changes
+    # NOTHING about real damage taken -- reproduced as bug-compatibility, not
+    # "fixed" to the intended mechanic our sim used to implement. The window
+    # itself (duration, cooldown-at-cast) is still real and tracked
+    # (`w_active_now`) since the buff genuinely exists and genuinely expires
+    # on schedule; only `damage_multiplier` is unconditionally 1.0.
     w_active = (buff_id[:, w_slot] == BuffId.GAREN_W) & alive
     w_elapsed = jnp.where(w_active, buff_elapsed[:, w_slot] + dt_s,
                           buff_elapsed[:, w_slot])
     w_expired = w_active & (w_elapsed >= buff_duration[:, w_slot])
     w_active_now = w_active & ~w_expired
-    damage_multiplier = jnp.where(
-        w_active_now, jnp.asarray(W_DAMAGE_MULT, x.dtype), jnp.ones_like(x))
+    damage_multiplier = jnp.ones_like(x)
 
     # ---- GarenWPassive: granted on RANK-UP, not on cast --------------------
     # See the module docstring's W section: `OnLevelUpSpell` is registered from
@@ -646,15 +681,30 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
     # once when SpellLevel first becomes 1. Reproduced the same way: as soon
     # as `spell_level[..., Slot.W] >= 1` and the passive isn't already marked,
     # grant it; once granted (`infiniteduration`) nothing here ever clears it.
+    #
+    # Reports the RAW `PercentBaseBonus`/`PercentBonus` pair the server writes
+    # (`-0.2`/`+0.2`, `GarenWPassive.cs:34-37`) rather than a single combined
+    # multiplier: `Stat.Total`'s `FlatBonus` term sits BETWEEN these two
+    # percent terms (`combat.stat_total`), so a caller with a nonzero
+    # `FlatBonus` (Garen's Armor, via the rune page) needs both terms
+    # separately to compose the formula correctly -- collapsing them into one
+    # multiplier here would silently re-introduce the flat `*1.2` bug this
+    # replaces.
     has_wp = buff_id[:, wp_slot] == BuffId.GAREN_W_PASSIVE
     grant_wp = alive & (spell_level[:, Slot.W] >= 1) & ~has_wp
     buff_id_wp = jnp.where(grant_wp, jnp.int8(BuffId.GAREN_W_PASSIVE),
                            buff_id[:, wp_slot])
     wp_active_now = alive & (buff_id_wp == BuffId.GAREN_W_PASSIVE)
-    armor_pct_bonus = jnp.where(
+    armor_percent_base_bonus = jnp.where(
+        wp_active_now, jnp.asarray(-W_PASSIVE_ARMOR_PCT, x.dtype),
+        jnp.zeros_like(x))
+    armor_percent_bonus = jnp.where(
         wp_active_now, jnp.asarray(W_PASSIVE_ARMOR_PCT, x.dtype),
         jnp.zeros_like(x))
-    mr_pct_bonus = jnp.where(
+    mr_percent_base_bonus = jnp.where(
+        wp_active_now, jnp.asarray(-W_PASSIVE_MR_PCT, x.dtype),
+        jnp.zeros_like(x))
+    mr_percent_bonus = jnp.where(
         wp_active_now, jnp.asarray(W_PASSIVE_MR_PCT, x.dtype),
         jnp.zeros_like(x))
 
@@ -748,6 +798,8 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
         suppress_attack=e_active & ~e_expired,
         ghosted=e_active & ~e_expired,
         damage_multiplier=damage_multiplier,
-        armor_pct_bonus=armor_pct_bonus,
-        mr_pct_bonus=mr_pct_bonus,
+        armor_percent_base_bonus=armor_percent_base_bonus,
+        armor_percent_bonus=armor_percent_bonus,
+        mr_percent_base_bonus=mr_percent_base_bonus,
+        mr_percent_bonus=mr_percent_bonus,
     )

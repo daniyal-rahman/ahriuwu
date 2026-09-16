@@ -308,22 +308,44 @@ def tick(state: LaneState, params: UnitParams,
         magic_resist=P("magic_resist"), delta_ms=delta_ms)
 
     # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
-    # W's PASSIVE is a permanent +20% Armor and +20% MagicResist, granted once
-    # on first rank-up of W (`W.cs:26-46` registers an OnLevelUpSpell listener
-    # at spell construction, so it does not require ever pressing W). W's
-    # ACTIVE multiplies all incoming post-mitigation damage by 0.7 while the
-    # window is open (`GarenW.cs:47-55`).
+    # W's PASSIVE is granted once on first rank-up of W (`W.cs:26-46` registers
+    # an OnLevelUpSpell listener at spell construction, so it does not require
+    # ever pressing W) and is NOT a clean +20% to either stat -- see
+    # `spells.py`'s W section for the full derivation. W's ACTIVE is meant to
+    # multiply all incoming post-mitigation damage by 0.7 while the window is
+    # open (`GarenW.cs:47-55`), but a verified server bug means it never
+    # actually reaches real HP loss -- `bs.damage_multiplier` is
+    # unconditionally 1.0 (see `spells.py`), so the multiply below is inert by
+    # construction, not a mistake.
     #
-    # Both are identity when Garen has never levelled or cast W, so this
-    # changes nothing in a lane where W is unused.
+    # Both are identity when Garen has never levelled W, so this changes
+    # nothing in a lane where W is never ranked.
     #
-    # The base is `armor_now`, NOT `P("armor")`: a non-outer turret's armour
-    # already grows +1 every 60 s from 480 s (`other_turret_ramps`), and W's
-    # bonus is a PERCENTAGE of the current total, so it has to compose with the
-    # ramp rather than replace it. Getting this backwards would have silently
-    # frozen turret armour at its level-1 value for anyone carrying the buff.
-    armor_eff = armor_now * (1.0 + bs.armor_pct_bonus)
-    magic_resist_eff = P("magic_resist") * (1.0 + bs.mr_pct_bonus)
+    # `Stat.Total = ((BaseValue+BaseBonus)*(1+PercentBaseBonus) + FlatBonus)
+    # * (1+PercentBonus)` (`combat.stat_total`) -- NOT a flat
+    # `base * (1 + pct)`, which is the bug this replaces (a clean +20% only
+    # by coincidence when `FlatBonus == 0` AND `PercentBaseBonus == 0`,
+    # neither of which holds once the passive itself sets
+    # `PercentBaseBonus = -0.2`). The base is `armor_now`, NOT `P("armor")`:
+    # a non-outer turret's armour already grows +1 every 60 s from 480 s
+    # (`other_turret_ramps`), which has to compose with the passive rather
+    # than be replaced by it -- inert here regardless, since only a champion
+    # (Garen) ever carries this buff, but kept for the same reason the
+    # ramp-vs-passive ordering mattered before this fix. `P("armor_flat_bonus")`
+    # is `Armor.FlatBonus` (the rune page, applied as an item -- see
+    # `spells.py`'s W-passive citation): 0 for every non-champion row and for
+    # MagicResist entirely (no MR rune/item source is modelled), so
+    # subtracting it back out of `armor_now` to recover `BaseValue+BaseBonus`
+    # is a no-op wherever the passive itself is also 0.
+    armor_flat = P("armor_flat_bonus")
+    armor_eff = stat_total(
+        armor_now - armor_flat, base_bonus=0.0,
+        percent_base_bonus=bs.armor_percent_base_bonus,
+        flat_bonus=armor_flat, percent_bonus=bs.armor_percent_bonus)
+    magic_resist_eff = stat_total(
+        P("magic_resist"), base_bonus=0.0,
+        percent_base_bonus=bs.mr_percent_base_bonus, flat_bonus=0.0,
+        percent_bonus=bs.mr_percent_bonus)
 
     # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
     # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.

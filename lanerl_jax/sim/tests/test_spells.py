@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
-from lanerl_jax.sim.init import init_lane, lane_params
+from lanerl_jax.sim.init import RUNE_ARMOR_BONUS, init_lane, lane_params
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
 from lanerl_jax.sim.profiles import profile_id
 from lanerl_jax.sim.spells import (
@@ -59,7 +59,7 @@ from lanerl_jax.sim.spells import (
     w_duration_at_rank,
 )
 from lanerl_jax.sim.state import TU_SLICE, Kind, Team
-from lanerl_jax.sim.step import step_decision
+from lanerl_jax.sim.step import step_decision, tick
 from lanerl_jax.sim.targeting import MinionType
 
 pytestmark = pytest.mark.skipif(
@@ -546,17 +546,18 @@ def test_an_unlearned_w_does_nothing():
     assert float(out.spell_cooldown[0, Slot.W]) == pytest.approx(0.0)
 
 
-def test_ws_multiplier_applies_regardless_of_damage_source_and_expires_on_time():
-    """Exercises ``step_buffs``'s ``damage_multiplier`` output directly, since
-    nothing in ``step.py`` multiplies it into a unit's damage total yet (see
-    this file's and ``spells.py``'s module docstrings) -- this pins the
-    CONTRACT value ``step.py`` must consume. ``GarenW.cs:54``'s
-    ``PreTakeDamage`` has no attacker-type or damage-type filter at all, which
-    is exactly why a single per-unit scalar (rather than one multiplier per
-    damage source) is the right shape: wiring it once in ``step.py`` covers
-    auto-attacks, missiles and turret shots alike, with no separate hook per
-    source needed. Also checks it turns back off the tick the window expires,
-    the same boundary E's and Q's cooldown tests check.
+def test_ws_active_damage_reduction_never_reaches_hp_bug_compat():
+    """``AttackableUnit.cs:551,558,585,606,612-616``: ``PostMitigationDamage``
+    is copied into a stale local BEFORE ``GarenW.cs:54``'s ``PreTakeDamage``
+    listener mutates the ``DamageData`` field it reads from -- the real HP
+    subtraction (and lifesteal) never see the 0.7x, only a cosmetic
+    damage-number packet does. So ``damage_multiplier`` must be
+    unconditionally 1.0, **including while the window is genuinely open**
+    (checked via ``buff_id`` below, independent of the multiplier) --
+    reproducing the server's bug rather than the intended mechanic this sim
+    used to implement. Also checks the window still genuinely opens and
+    expires on schedule (``buff_id``/``buff_elapsed``, unaffected by this
+    fix), the same boundary E's and Q's cooldown tests check.
     """
     patch = load_patch()
     params = lane_params(patch)
@@ -564,9 +565,11 @@ def test_ws_multiplier_applies_regardless_of_damage_source_and_expires_on_time()
     s = s.replace(spell_level=s.spell_level.at[0, Slot.W].set(1))  # 2s window
     s = _cast_w(s)
     bs = _step_buffs_from(s, params)
-    assert float(bs.damage_multiplier[0]) == pytest.approx(W_DAMAGE_MULT)
-    assert float(bs.damage_multiplier[1]) == pytest.approx(1.0), \
-        "a unit without the buff must not be discounted"
+    assert int(s.buff_id[0, W_BUFF_SLOT]) == BuffId.GAREN_W, \
+        "the window is genuinely open"
+    assert float(bs.damage_multiplier[0]) == pytest.approx(1.0), \
+        "no real damage reduction even while W is active -- see the docstring"
+    assert float(bs.damage_multiplier[1]) == pytest.approx(1.0)
 
     s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed,
                  spell_cooldown=bs.spell_cooldown)
@@ -574,6 +577,8 @@ def test_ws_multiplier_applies_regardless_of_damage_source_and_expires_on_time()
         bs = _step_buffs_from(s, params)
         s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed,
                       spell_cooldown=bs.spell_cooldown)
+    assert int(s.buff_id[0, W_BUFF_SLOT]) == BuffId.NONE, \
+        "the window still genuinely expires"
     assert float(bs.damage_multiplier[0]) == pytest.approx(1.0)
 
 
@@ -605,15 +610,76 @@ def test_garenwpassive_is_granted_once_on_rank_up_and_is_permanent():
     s = s.replace(spell_level=s.spell_level.at[0, Slot.W].set(1))  # rank-up, no cast
     bs = _step_buffs_from(s, params)
     assert int(bs.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
-    assert float(bs.armor_pct_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
-    assert float(bs.mr_pct_bonus[0]) == pytest.approx(W_PASSIVE_MR_PCT)
+    # The raw `PercentBaseBonus`/`PercentBonus` pair the server writes
+    # (`GarenWPassive.cs:34-37`) -- NOT a single +20% multiplier, see
+    # `spells.py`'s W-passive citation for why these compose around
+    # `FlatBonus` differently and must stay separate.
+    assert float(bs.armor_percent_base_bonus[0]) == pytest.approx(-W_PASSIVE_ARMOR_PCT)
+    assert float(bs.armor_percent_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
+    assert float(bs.mr_percent_base_bonus[0]) == pytest.approx(-W_PASSIVE_MR_PCT)
+    assert float(bs.mr_percent_bonus[0]) == pytest.approx(W_PASSIVE_MR_PCT)
     s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed)
 
     for _ in range(600):    # permanent: survives an arbitrarily long stretch
         bs = _step_buffs_from(s, params)
         s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed)
     assert int(s.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
-    assert float(bs.armor_pct_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
+    assert float(bs.armor_percent_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
+
+
+def test_w_passive_composes_via_stat_total_through_a_real_autoattack():
+    """``GarenWPassive.cs:34-37``: ``Armor.PercentBonus += 0.2;
+    Armor.PercentBaseBonus -= 0.2`` composes to
+    ``(0.8*(BaseValue+BaseBonus) + FlatBonus) * 1.2`` (``combat.stat_total``),
+    NOT ``Total_before * 1.2``. Champion 0's Armor has a nonzero ``FlatBonus``
+    here (the rune page, ``RUNE_ARMOR_BONUS = 9.0`` -- see
+    ``spells.py``'s W-passive citation for why a rune lands there and not in
+    ``BaseValue``/``BaseBonus``), so at level 1 the correct composition is a
+    small NET INCREASE (~+1.9%), clearly distinct from both "no passive" and
+    from the flat ``*1.2`` bug this replaces (a bigger increase). Verified
+    through a REAL auto-attack landing (``step.tick``'s own damage pipeline,
+    not an independently re-derived formula), so this exercises exactly the
+    code path ``step.py`` changed and fails against the pre-fix flat-percent
+    formula.
+    """
+    from lanerl_jax.sim.combat import post_mitigation_damage, stat_total
+
+    patch = load_patch()
+    params = lane_params(patch)
+    s = _lane_with_minions(n_minions=0, e_rank=0)
+    # champion 1 in melee range of champion 0
+    s = s.replace(x=s.x.at[1].set(s.x[0] + 100.0), y=s.y.at[1].set(s.y[0]))
+    # grant champion 0's W passive by ranking W -- no cast, matching the real
+    # OnLevelUpSpell trigger (see the "granted once on rank-up" test above).
+    s = s.replace(spell_level=s.spell_level.at[0, Slot.W].set(1))
+    # champion 1 attacks champion 0.
+    s = apply_orders(s, Orders(
+        kind=jnp.asarray([OrderKind.NOOP, OrderKind.ATTACK], jnp.int8),
+        x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([-1, 0], jnp.int8)))
+
+    hp0 = float(s.hp[0])
+    dealt = None
+    for i in range(29):        # well under the 30-tick (500ms) regen boundary
+        s = tick(s, params)
+        hp1 = float(s.hp[0])
+        if hp1 < hp0:
+            dealt = hp0 - hp1
+            break
+        hp0 = hp1
+    assert dealt is not None, "champion 1's auto-attack should have landed by now"
+
+    raw_ad = GAREN_AD_L1
+    armor_before_flat = GAREN_ARMOR_L1                       # BaseValue+BaseBonus
+    armor_eff = stat_total(armor_before_flat, 0.0, -W_PASSIVE_ARMOR_PCT,
+                           RUNE_ARMOR_BONUS, W_PASSIVE_ARMOR_PCT)
+    expect = float(post_mitigation_damage(raw_ad, armor_eff, np))
+    old_buggy = float(post_mitigation_damage(
+        raw_ad, (armor_before_flat + RUNE_ARMOR_BONUS) * (1.0 + W_PASSIVE_ARMOR_PCT), np))
+    assert armor_eff > armor_before_flat + RUNE_ARMOR_BONUS, \
+        "at level 1 the real formula is still a net INCREASE, ~+1.9%"
+    assert dealt == pytest.approx(expect, abs=0.05)
+    assert dealt != pytest.approx(old_buggy, abs=0.05), \
+        "must not match the flat *1.2 formula this replaces"
 
 
 # ------------------------------------------------------------------ R ------
