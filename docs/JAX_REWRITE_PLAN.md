@@ -718,66 +718,70 @@ envs and parallel seeds, which we get regardless.*
 
 #### J1 status, end of 2026-09-16
 
-**Green.** Terrain and pathing (exact, from the 86 KB bitmap); wave spawn timing
-(178 events in 600 s, event for event); movement parity at the oracle's
-resolution; the auto-attack clock; target acquisition including call-for-help;
-damage, kill attribution and the gold/XP asymmetry; ranged basic-attack missiles
-with per-unit speeds; turret stats and their time ramp; gate 4 (164x) and gate 5
-(12.8 s). 215 tests pass.
+**Lane stability: RESOLVED.** The sim's lane used to run away to one side and
+end with three blue turrets destroyed. The cause was the tick order --
+`CollisionHandler.Update()` is the first call in `Map.Update`, which runs before
+`ObjectManager.Update` moves anything, so the server separates the positions
+units came to rest at last tick and only then moves them. We moved first and
+pushed apart afterwards, letting a winning wave keep compressing into the losing
+one instead of being spread out before it advanced.
 
-**The day's theme: the sim was built from the stat tables and the engine, and
-three whole classes of truth live elsewhere.**
+    median live minions   server 21          27 -> 22
+    p95 / max             server 27 / 30     39/40 -> 28/31
+    mean |blue - red|     server 2.6         11.3 -> 3.3
+    mean lane fraction    server .475-.533   .162-.499 -> .439-.540
+    turrets destroyed     server 0           3 -> 0
 
-*The map decides which unit you are.* `TURRET_MODELS` pointed at
-`SRUAP_Turret_Order3`/`Chaos3` -- Map11 units -- while the config pins map 1,
-whose outer turrets are `OrderTurretNormal`/`ChaosTurretWorm`. Every turret
-number was wrong (AD 152 not 190, armour 60 not 67, regen 0 not 3), and it
-survived every cross-check because the two candidates agree on exactly the
-values already checked: BaseHP 1300 and range 750. Minions were checked the
-same way and are correct.
+and the lane now oscillates as the server's does, the lead flipping every minute
+or two, rather than tipping once and never recovering.
 
-*Content scripts are a third source of truth, and only apply if the character
-name is the unit actually spawned.* A turret's 0.7x-vs-minion discount was read,
-verified across four files, tested, committed -- and belongs to a unit that is
-not on this map. Verifying a script exists is not verifying it runs.
+**How it was found, which is the transferable part.** Three individually
+verified corrections had each tipped the lane in an unpredictable direction
+(missiles worse, turret ramp better, minion-spawn fix worse). That is the
+signature of an unstable equilibrium and the sign that hunting asymmetries
+one at a time cannot settle it.
 
-*Map scripts carry stats that no stat table contains.* An outer turret gains
-+4 AD every 60 s from t=30 s, capped at 7 -- 152 at the start, 180 from 390 s.
-And `TURRET_HP_BONUS = 250` is not an unexplained delta but
-`250 * enemy champion count` from the same script.
+What settled it was **Tier 1, the one-step injected differential** -- called for
+in this plan since J0 and never built until now (`parity/inject.py`,
+`parity/one_step.py`). Take the server's state at tick N, load it into the sim,
+step exactly one tick, diff against the server's tick N+1. No accumulation, so
+each disagreement is attributable to that tick alone. Over 14,401 predictions,
+minion position was exact on 83.1% of ticks and the disagreements were **98.6%
+one-sided**. One-sidedness is what separates a missing mechanic from noise, and
+free-running comparison structurally cannot produce it -- after the first tiny
+difference everything downstream is contaminated. **Build the Tier-1 instrument
+before chasing a distributional gap, not after.**
 
-**Open, with the cause characterised.**
+**Green.** Terrain and pathing; wave spawn timing; movement; the auto-attack
+clock; target acquisition including call-for-help; damage, kill attribution and
+the gold/XP asymmetry; ranged basic-attack missiles with per-unit speeds; turret
+identity, stats and time ramp; minion spawn positions; tick phase order; the
+minion population and lane balance. Gate 4 (164x) and gate 5 (12.8 s).
+**213 tests pass.**
 
-*Lane stability.* The server's lead flips sign every minute or two and the fight
-never leaves lane fraction 0.475-0.533; |blue - red| has mean 2.6, max 9. The
-sim is exactly balanced for three minutes (2.8/2.8, 9.6/9.6, 10.1/10.1) and then
-runs away, ending with blue's outer turret destroyed, which the server's never
-is. Median live minions 25 against 21.
+**Open.**
 
-Missiles were the leading hypothesis -- wasted ranged damage as the missing
-negative feedback -- and the measurement **did not confirm it**: adding them
-moved mean imbalance from 7.2 to 12.5, and the turret ramp pulled it back to
-8.5. The mechanics are individually verified; the stability question is
-separate. Leading candidate now: the verified collision-before-movement ordering
-difference (`docs/TICK_PARITY_AUDIT.md` gap 2) -- the server pushes apart last
-tick's resting positions and then moves, we move and then push apart.
+*Gate 3 fails narrowly: 7 CS against the server's 10.* The tick reorder moved
+attack opportunities 109 -> 163 without moving CS. The server gets 535. So the
+remaining gap is how often a killable minion appears in reach, not what happens
+once one does -- i.e. minion HP trajectories, not last-hitting. Next step is to
+compare the distribution of minion HP in the band the oracle can one-shot.
 
-*Gate 3 fails at 7 CS against 10*, honestly and narrowly, after two rounds of
-it measuring the wrong thing (no A* on move orders, then no fog of war). Left
-failing rather than widened.
+*The one-step differential's own blind spot.* Missiles and minion target state
+are not in the server's dump at all, so the injector cannot see them: minion
+deaths were predicted late 18/18, but 13 had an in-flight missile the harness
+is structurally blind to. Closing that needs a dump extension on the server
+side, which means touching the vendored tree -- a decision, not a task.
 
-*Turret tiers.* All 24 placed turrets share the outer profile. The other tiers
-run a different growth schedule that starts at 480 s -- inside a 600 s episode --
-and also gain armour and MR. Blue's inner turret is the one a pushed wave
-reaches.
+*Turret tiers.* All 24 placed turrets share the outer profile. Other tiers run a
+different growth schedule starting at 480 s, inside a 600 s episode, and also
+gain armour and MR.
 
-*2 of 24 pathfinder routes disagree.* Map/navgrid identity is now ruled out
-(same inode). Route deviation is 0.558 units and the server's corners land on
-our cells, so this looks like waypoint emission, not routing -- and `waypoints`
-is already in the diff's NOT_MODELLED list. Parked; settling it needs the
-server's raw pre-smooth path, which the dump does not expose.
+*2 of 24 pathfinder routes disagree.* Map/navgrid identity ruled out (same
+inode). Deviation 0.558 units, server corners on our cells; looks like waypoint
+emission, and `waypoints` is already NOT_MODELLED. Parked.
 
-**Not built.** Garen Q/W/R, HP regen (turrets are 0 on this map, but Garen is
+**Not built.** Garen Q/W/R, HP regen (turrets are 0 on this map; Garen is
 1.568 + 0.1/level plus a separate passive heal), fog of war in `LaneState`, the
 next-hop pathing table, the 50-seed corpus, the N-seeds vmap (J3 gate 5).
 
