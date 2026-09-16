@@ -176,13 +176,17 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
 
     # Measured deltas that Content does not carry; see sim/init.py.
     from .init import (
-        RUNE_AD_BONUS, RUNE_ARMOR_BONUS, RUNE_HP_BONUS, TURRET_HP_BONUS,
-        TURRET_HP_BONUS_NEXUS)
+        DORANS_SHIELD_HP_REGEN, RUNE_AD_BONUS, RUNE_ARMOR_BONUS, RUNE_HP_BONUS,
+        TURRET_HP_BONUS, TURRET_HP_BONUS_NEXUS)
     for row, (kind, tier, _) in enumerate(PROFILES):
         if kind == Kind.CHAMPION:
             cols["max_hp"][row] += RUNE_HP_BONUS
             cols["attack_damage"][row] += RUNE_AD_BONUS
             cols["armor"][row] += RUNE_ARMOR_BONUS
+            # The auto-bought Doran's Shield's regen. Its +80 max HP is NOT
+            # added -- RUNE_HP_BONUS already carries it, being measured from
+            # the dump's in-play value rather than from Content.
+            cols["hp_regen"][row] += DORANS_SHIELD_HP_REGEN
         elif kind == Kind.TURRET:
             # `OnMatchStart` (`:121-153`): every turret except the fountain
             # gets `HealthPoints.BaseBonus = 250 * enemyCount` (1v1: 250);

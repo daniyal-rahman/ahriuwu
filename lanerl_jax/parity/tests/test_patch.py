@@ -193,3 +193,49 @@ def test_minion_acquisition_range_defaults_to_server_475_not_600(patch):
     assert float(blue_super.get("AcquisitionRange")) == 600.0
     red_super = load_character("Red_Minion_MechMelee")
     assert float(red_super.get("AcquisitionRange")) == 600.0
+
+
+def test_the_shield_gives_regen_but_its_hp_is_already_in_the_rune_delta():
+    """Doran's Shield: +1.2 HP/s modelled, +80 max HP deliberately NOT.
+
+    The server buys item 1054 at boot (`LanerlHooks`, `BuildPath[0]`, unless
+    `LANERL_AUTOBUY=0`). Two stats come with it and they must be handled
+    differently, which is the whole point of this test:
+
+    * **Regen** -- `ItemPassives/DoransShield.cs` does
+      `HealthRegeneration.BaseBonus += 1.2f`. `BaseBonus` adds to the base term
+      of `Stat.Total` (`Stat.cs:68`) and nothing scales regen by percentage
+      here, so it is exactly +1.2 HP/s. The state dump does NOT expose regen, so
+      our Content-derived value was never checked against the oracle and really
+      was missing this.
+
+    * **Max HP** -- `ItemData.cs:81` reads `FlatHPPoolMod` (80) into
+      `HealthPoints.FlatBonus`. We must NOT add it, because
+      `init.RUNE_HP_BONUS` is defined as ``754.248046875 - 616.28``: the gap
+      between Content's base and the value the DUMP reports *during play*,
+      which already includes everything the server bought. An audit pass
+      proposed adding the 80 on the assumption that our 754 was a pre-item
+      figure; doing so would have given the champion 834 HP against the
+      server's 754 and silently inverted the comparison.
+
+    Note `FlatHPRegenMod` in `1054.json` is read by nothing in the C# -- only
+    the passive script grants regen. Same total, different provenance.
+    """
+    from lanerl_jax.sim.init import DORANS_SHIELD_HP_REGEN
+    from lanerl_jax.sim.profiles import PROFILES, build_profile_tables
+    from lanerl_jax.sim.state import Kind
+
+    tables = build_profile_tables()
+    champ_rows = [r for r, (k, _, _) in enumerate(PROFILES) if k == Kind.CHAMPION]
+    assert champ_rows, "no champion profile rows"
+
+    for row in champ_rows:
+        # exactly the dump's quantised in-play value, 772348/1024
+        assert abs(float(tables["max_hp"][row]) - 754.248046875) < 1e-3, (
+            "champion max HP drifted from the dump's observed value -- if this "
+            "rose by ~80, someone added Doran's Shield's FlatHPPoolMod on top "
+            "of RUNE_HP_BONUS, which already contains it")
+        # Garen's Content BaseStaticHPRegen 1.568, plus the item's 1.2
+        assert abs(float(tables["hp_regen"][row]) - (1.568 + 1.2)) < 1e-4
+
+    assert DORANS_SHIELD_HP_REGEN == 1.2

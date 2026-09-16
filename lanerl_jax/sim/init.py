@@ -188,6 +188,27 @@ TOP_LANE_PATH: Tuple[Tuple[float, float], ...] = (
 #: which is a good argument for reading the oracle at its own resolution rather
 #: than at display precision.
 RUNE_HP_BONUS = 754.248046875 - 616.28
+#: HP regen the server's champion has and Content does not: the auto-bought
+#: Doran's Shield. `LanerlHooks` buys `BuildPath[0]` = item 1054 at boot unless
+#: `LANERL_AUTOBUY=0`, and `ItemPassives/DoransShield.cs` (`ItemID_1054`) does
+#: `StatsModifier.HealthRegeneration.BaseBonus += 1.2f`.
+#:
+#: `BaseBonus` adds to the base term of `Stat.Total`
+#: (`((BaseValue + BaseBonus) * (1 + PercentBaseBonus) + FlatBonus) * (1 + PercentBonus)`,
+#: `Stat.cs:68`), and nothing modifies regen by percentage here, so the effect
+#: is exactly +1.2 HP/s on top of Garen's Content 1.568.
+#:
+#: NOT the item's +80 max HP. That is already accounted for: `RUNE_HP_BONUS`
+#: above is derived by subtracting the Content base from the value the DUMP
+#: reports during play (754.248046875), which is the server's max HP with
+#: everything it has bought. Adding the item's HP here would double-count it --
+#: an audit pass proposed exactly that, on the assumption our 754 was a
+#: pre-item number.
+#:
+#: Regen is different only because the dump does not expose it, so it was taken
+#: from Content and never checked against the oracle. Unmodelled, this is up to
+#: 1.2 * 600 = 720 HP of healing missing over a full episode.
+DORANS_SHIELD_HP_REGEN = 1.2
 #: Non-nexus, non-fountain turret max HP above Content. 1550 observed vs 1300
 #: BaseHP -- true of the outer, inner AND inhibitor tiers alike, since all
 #: three share BaseHP 1300 (see `data/patch.TURRET_MODELS`).
