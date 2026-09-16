@@ -161,6 +161,20 @@ class UnitStats:
     attack_delay_offset_percent: float
     attack_delay_cast_offset_percent: float
     is_melee: bool
+    #: ``CharData.BaseStaticHpRegen``, in HP per **second**.
+    #:
+    #: Per second, not per five seconds, whatever League's display convention
+    #: says. ``AttackableUnit.Update`` accumulates the frame time and calls
+    #: ``Stats.Update(_statUpdateTimer)`` once the accumulator passes 500 ms
+    #: (`AttackableUnit.cs:242-249`), and ``Stats.Update`` does
+    #: ``CurrentHealth += HealthRegeneration.Total * diff * 0.001f``
+    #: (`Stats.cs:242-249`) with ``diff`` in milliseconds -- so each call adds
+    #: ``Total * 0.5`` and the rate is ``Total`` HP/s.
+    #:
+    #: Turrets are 3.0, which is 1,800 HP over a ten-minute game against a
+    #: 1,550 HP pool. Minions are 0.0.
+    base_hp_regen: float = 0.0
+    hp_regen_per_level: float = 0.0
     gold_given_on_death: float = 0.0
     exp_given_on_death: float = 0.0
 
@@ -197,6 +211,8 @@ class UnitStats:
             attack_delay_cast_offset_percent=num(
                 d, "AttackDelayCastOffsetPercent", 0.0),
             is_melee=flag(d, "IsMelee", False),
+            base_hp_regen=num(d, "BaseStaticHPRegen", 0.0),
+            hp_regen_per_level=num(d, "HPRegenPerLevel", 0.0),
             gold_given_on_death=num(d, "GoldGivenOnDeath", 0.0),
             exp_given_on_death=num(d, "ExpGivenOnDeath", 0.0),
         )
