@@ -17,60 +17,45 @@ the mechanic under test. Concretely:
 
 * The **sim** driver reads ``attack_damage`` through the same
   ``params[key][state.model]`` gather :func:`lanerl_jax.sim.step.tick` uses to
-  compute real damage -- see the caveat below, this value does NOT currently
-  grow with champion level.
+  compute real damage, PLUS the same level-scaling term ``tick`` now adds
+  (``params["ad_per_level"][model] * growth_sum(state.level)`` -- see below).
 * The **server** driver reads ``ad``/``rng`` straight off the wire's own
-  ``Stats.AttackDamage.Total`` / ``Stats.Range.Total``, which DOES grow with
-  level. Re-deriving either side's attack damage from a formula instead of
-  reading each engine's own number is exactly the mistake
-  ``lanerl_rl/constants.py`` documented paying for once already (see
-  ``sim/init.py``'s RUNE_AD_BONUS note).
+  ``Stats.AttackDamage.Total`` / ``Stats.Range.Total``. Re-deriving either
+  side's attack damage from a formula instead of reading each engine's own
+  number is exactly the mistake ``lanerl_rl/constants.py`` documented paying
+  for once already (see ``sim/init.py``'s RUNE_AD_BONUS note) -- the sim side
+  above is not that mistake, because it reads the SAME per-profile table and
+  the SAME per-level column ``tick`` itself reads, not an independent copy.
 
-KNOWN ASYMMETRY: the JAX sim does not level-scale champion combat stats
-------------------------------------------------------------------------
-``lanerl_jax.sim.combat.stat_at_level`` implements the server's non-linear
-per-level growth curve, but nothing in :func:`lanerl_jax.sim.step.tick` calls
-it for the champion's attack damage -- ``P("attack_damage")`` is the flat,
-level-1 profile value for the whole episode, even though ``state.level`` itself
-does climb as CS/XP accumulate (``lanerl_jax/sim/step.py:341``). The server's
-wire ``"ad"`` field is the champion's REAL, currently-levelled attack damage.
-So over a 600 s lane, in which Garen can reach level 6-9, the two drivers feed
-the oracle two increasingly different attack-damage numbers for reasons that
-have nothing to do with last-hitting: the sim's Garen swings at level-1 power
-all episode. This is a pre-existing gap in the sim (not introduced here, and
-not this module's to fix -- see ``docs/JAX_REWRITE_PLAN.md``'s J1 "Not built"
-list), and it is exactly the kind of thing gate 3 exists to surface: watch for
-it in the CS gap and the attack counts before blaming anything else.
+RESOLVED: the JAX sim did not level-scale champion combat stats
+------------------------------------------------------------------
+Was a real gap: ``lanerl_jax.sim.combat.stat_at_level`` implemented the
+server's non-linear per-level growth curve, but nothing in
+:func:`lanerl_jax.sim.step.tick` called it for the champion's attack
+damage -- ``P("attack_damage")`` was the flat, level-1 profile value for the
+whole episode, even though ``state.level`` itself does climb as XP
+accumulates. Fixed in ``sim/step.py``'s ``tick`` and ``sim/profiles.py``'s
+``ad_per_level`` column (test: ``lanerl_jax/sim/tests/
+test_champion_level_scaling.py``, fails before this fix and passes after).
+Measured effect on THIS gate: small (see ``lanerl_jax/parity/hp_band.py``'s
+before/after report, 468 -> 473 in-band samples out of 8218) -- the sim's
+champion barely levels here (1..5, against the server's 1..8) because it
+keeps dying and losing its proximity-XP window, a separate, NOT resolved
+issue (see below and ``docs/JAX_REWRITE_PLAN.md``'s J1 status).
 
-KNOWN ASYMMETRY: the JAX sim has no fog of war
------------------------------------------------
-:class:`~lanerl_jax.sim.state.LaneState` carries no visibility field, so the
-sim driver's enemy-minion list is every LIVE red minion on the map, full
-information. The server driver gates on the wire's ``"vb"`` flag (visible to
-blue), which is the server's real, terrain-and-range-aware fog. Concretely
-this means the sim's oracle can see -- and walk its `Decision.move` centroid
-toward -- red minions still marching near their own spawn, while the server's
-oracle only ever reacts to whatever is locally visible near blue's own units.
-Not a bug in either driver: the sim state simply has nothing to gate on, and
-adding fog to `LaneState` is out of scope here.
-
-This is not a theoretical risk -- it is the LEADING SUSPECT for the gap that
-remains after the approach fix below. With the scripted approach in place
-(2026-09-16 measurement, same 600 s, same seed): sim CS=2, 39 attack
-decisions; server CS=10, 535 attack decisions. Both champions now finish the
-walk-in in the same ~43 s (``approach_decisions`` 1285 sim / 1286 server --
-strong evidence the two engines cover the SAME route at the SAME rate, so the
-approach itself is no longer the story). What differs is everything after
-handover: the server's champion, gated by real local fog, gets an order of
-magnitude more attack opportunities than the sim's, which is exactly what
-"the centroid pulls toward whatever the sim can see, unfiltered by distance"
-predicts. Last-hitting itself may still be fine in both; this asymmetry could
-easily be manufacturing most of the remaining CS gap by starving the sim's
-oracle of chances before last-hitting is ever tested. Confirming that needs
-either fog in ``LaneState`` or a driver-side substitute (e.g. clamp the sim's
-candidate list to minions within some radius of the champion) -- both out of
-scope for this pass; flagging it precisely so the next one does not re-derive
-it from scratch.
+RESOLVED (partially): the JAX sim had no fog of war
+----------------------------------------------------
+:class:`~lanerl_jax.sim.state.LaneState` still carries no visibility field,
+but this driver now gates its enemy-minion candidate list through
+``obs.fog.visible_to`` (a radius-based approximation of the server's real,
+terrain-aware ``"vb"`` flag the server driver reads directly) rather than
+every live red minion on the map. This closed most, but not all, of a large
+gap: before it, the sim scored CS=2/39 attacks against the server's CS=10/535
+attacks over the same 600 s. See ``docs/JAX_REWRITE_PLAN.md``'s J1 status and
+this module's own gate test (``lanerl_jax/parity/tests/
+test_last_hit_gate.py``) for what the CURRENT gap is and why that "535" server
+figure is now known to be stale (measured before an unrelated position fix,
+never refreshed) rather than a live target to close.
 
 THE FIRST VERSION OF THIS GATE MEASURED PATHING, NOT LAST-HITTING
 --------------------------------------------------------------------
@@ -140,6 +125,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..obs.fog import visible_to
+from ..sim.combat import growth_sum
 from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
 from ..sim.orders import OrderKind, Orders, apply_orders
 from ..sim.state import Kind, Team
@@ -287,7 +273,27 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
             y=jnp.array([order_y, 0.0], dtype=state.y.dtype),
             target=jnp.array([order_target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders), params_tbl, lane_path=path)
+        # TRIED `enable_call_for_help=True` here on the strength of
+        # `docs/CALL_FOR_HELP_SWITCH_RATE.md` part 6, which measured a
+        # champion-in-lane scenario (`StandInWave`) and found call-for-help
+        # a bounded, self-limiting RELEASE mechanism there -- minions pulled
+        # back OFF the champion onto fresh targets, 6 of 7 metrics moving
+        # toward the server. It made this gate dramatically WORSE instead
+        # (cs 9->0, deaths 5->8, measured 2026-09-16), and the reason is the
+        # difference between the two scenarios: `StandInWave` never orders an
+        # attack, so it only ever exercises cfh's release side. This oracle
+        # attacks routinely (that is the whole point of it), and every swing
+        # that lands is itself a call-for-help broadcast
+        # (`ObjAIBase.TakeDamage`, `CHAMPION_ATTACKING_MINION` = priority 5,
+        # BETTER than any minion's own 6-9) -- so an active last-hitter
+        # recruits fresh aggressors onto itself every time it attacks, a
+        # positive-feedback loop the passive scenario never triggers. Left
+        # here, and left OFF (the `step_decision` default), as a recorded
+        # negative result rather than silently discarded -- the next person
+        # tempted to flip this toggle for an ACTIVE champion scenario should
+        # find this instead of re-deriving it.
+        return step_decision(apply_orders(state, orders), params_tbl,
+                             lane_path=path)
 
     wp_idx = 0
     approach_decisions = attacks = moves = holds = deaths = 0
@@ -317,9 +323,17 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
         hp = np.asarray(state.hp)
         model = np.asarray(state.model)
 
+        # Champion AD is level-scaled in the sim now (`sim/step.py`'s `tick`,
+        # `profiles.py`'s `ad_per_level` column) -- read it the same way here,
+        # or the oracle would judge "would this kill" against a damage number
+        # lower than what `tick()` actually deals, and pass up kills it could
+        # really take.
+        champ_ad = float(params_np["attack_damage"][model[0]]
+                         + params_np["ad_per_level"][model[0]]
+                         * growth_sum(int(np.asarray(state.level)[0])))
         champ = ChampView(
             x=x0, y=y0,
-            attack_damage=float(params_np["attack_damage"][model[0]]),
+            attack_damage=champ_ad,
             attack_range=float(params_np["attack_range"][model[0]]),
         )
         # FOG. The server hands the driver a wire observation that has already
@@ -373,6 +387,7 @@ def run_oracle_on_server(
     bot_seed: int = 4242,
     tag: str = "last_hit_oracle",
     log_dir: Optional[Path] = None,
+    autobuy: bool = True,
 ) -> ServerRun:
     """Run the oracle against blue on a real server; red is never sent an order.
 
@@ -398,6 +413,26 @@ def run_oracle_on_server(
       ``IsVisibleByTeam``), so the champion never swings and the order looks
       accepted. Only ``"vb"``-visible red minions are ever offered to the
       oracle as candidates.
+
+    ``autobuy`` controls ``LANERL_AUTOBUY`` (default server behaviour is ON --
+    ``LanerlHooks.cs:366``'s gate is
+    ``GetEnvironmentVariable("LANERL_AUTOBUY") != "0"``, so simply not setting
+    the variable, which every earlier version of this function did, leaves it
+    on). ``LanerlHooks.AutoBuyUndriven`` is fountain-gated and fires for free,
+    with NO action from either driver: once at boot, on the champion's
+    starting gold, before the very first observation frame is even returned
+    (``lanerl_rl/reward.py``'s own note: Doran's Shield, item 1054, 475g,
+    bought before Python ever sees a frame), and again on every walk back from
+    a death (``ShopState.BuyOutOnRespawn``, buying out everything affordable).
+    Item 1054's Content data (`Items/1054/1054.json`) grants
+    ``FlatHPPoolMod=80`` and its script (`ItemPassives/ItemID_1054.cs`) adds
+    ``HealthRegeneration.BaseBonus += 1.2`` -- +80 max HP and +1.2 HP/s regen
+    the server's champion has from the FIRST tick, that the sim has nowhere
+    (there is no item system in `LaneState` at all, and building one is well
+    outside J1's scope). Left ``True`` by default so this function's behaviour
+    is unchanged for any other caller; the last-hit GATE passes ``False``,
+    because a gate built to isolate last-hitting should not also be silently
+    scoring a defensive item the sim cannot have.
     """
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
@@ -411,7 +446,8 @@ def run_oracle_on_server(
     env = VecLaneEnv(
         1,
         spec=ServerLaunchSpec(
-            toponly=True, bot_teams="none", bot_seed=bot_seed, step_ticks=2),
+            toponly=True, bot_teams="none", bot_seed=bot_seed, step_ticks=2,
+            extra_env={"LANERL_AUTOBUY": "1" if autobuy else "0"}),
         log_dir=log_dir,
         ports=PortAllocator(base=port_base).allocate(1),
         step_timeout_s=180.0,

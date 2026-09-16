@@ -112,7 +112,7 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         "attack_period", "attack_windup", "attack_damage", "armor",
         "magic_resist", "max_hp", "gold_on_death", "xp_on_death",
         "pathfinding_radius", "fires_missile", "missile_speed",
-        "hp_regen")}
+        "hp_regen", "ad_per_level")}
 
     for row, (kind, mtype, team) in enumerate(PROFILES):
         u = _stats_for(patch, kind, mtype, team)
@@ -131,6 +131,18 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
             period, patch.global_attack_delay_cast_percent,
             u.attack_delay_cast_offset_percent)
         cols["attack_damage"][row] = u.base_ad
+        # `Stats.LevelUp` (`GameServerLib/GameObjects/Stats/Stats.cs:270-271`)
+        # grows `AttackDamage` on every level-up through the SAME non-linear
+        # curve as every other per-level stat -- `combat.stat_at_level`, via
+        # `AttackDamagePerLevel.BaseValue`/`.FlatBonus` both fed through
+        # `GetLevelUpStatValue`. Only a champion has a level that moves inside
+        # an episode (`rewards.level_for_xp`, applied in `step.py` only where
+        # `kind == Kind.CHAMPION`); left 0 for minions/turrets/anything else so
+        # `state.level` there -- always 1, see `state.py`'s init -- is inert
+        # even if it were ever misread. See `step.py`'s `tick()` for where
+        # this is added back on top of the level-1(+rune) baseline above.
+        cols["ad_per_level"][row] = (
+            u.ad_per_level if kind == Kind.CHAMPION else 0.0)
         cols["armor"][row] = u.armor
         cols["magic_resist"][row] = u.magic_resist
         cols["max_hp"][row] = u.base_hp
