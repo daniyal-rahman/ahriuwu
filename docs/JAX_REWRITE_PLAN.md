@@ -529,6 +529,17 @@ staleness, stored hidden state and chunked sequence minibatching from the first
 JAX trainer. Add the GRU back once the loop is trusted — the ablation is one we
 wanted anyway.
 
+**D8a — Port the arithmetic, reimplement the architecture.** The line is worth
+stating because "faithful port vs reimplementation" is not one question. The
+**simulator** is a faithful port: it is the thing parity is measured against,
+and reimplementing it freely is the SMAX outcome (§1.9). The **trainer** is a
+reimplementation: the queue, the staleness budget, the param versions and the
+process actors are Sebulba machinery that Anakin makes unnecessary, and porting
+them would import the failure modes the rewrite exists to delete. The PPO
+*formulas* are ported literally — dual clip, GAE, the clipped value loss, the
+horizon-derived gamma — because those are arithmetic from a paper, and they are
+checked against the PyTorch implementation so a transcription slip cannot hide.
+
 **D8 — Fully-compiled train loop, synchronous.** PureJaxRL-style: env, policy and
 PPO update all inside one `jit`, `scan` over rollout steps and updates, zero
 host round-trips. This deletes the actor/learner queue, the staleness budget, the
@@ -738,10 +749,33 @@ including the potential-difference HP term and the ambient-gold subtraction.
 1. `test_actor_learner_agree`'s property holds in the JAX loop: the log-probs the
    rollout recorded equal the ones the update recomputes.
 2. Loss components, advantage statistics and entropy match the PyTorch
-   implementation on an identical fixed batch, to float tolerance.
+   implementation on an identical fixed batch, to float tolerance. **Met** —
+   GAE, the dual-clip surrogate, the clipped value loss and all four of
+   `ppo.py`'s worked gamma values reproduce (`train/tests/test_ppo.py`).
 3. The oracle last-hitter's return is reproduced by a policy trained from scratch
    in the sim on the J1 slice.
-4. End-to-end throughput ≥ the J1 gate, sustained over a multi-hour run.
+4. **RESTATED.** This said "end-to-end throughput ≥ the J1 gate". That was
+   wrong, and measurement is what showed it: the J1 figure was taken on
+   **acting** — the plan says so in §1.12 — and carrying it across to a loop
+   that includes the gradient step was optimistic rather than demanding.
+
+   Measured on the 5080 at 256 envs, per decision:
+
+   | stage | cost | share |
+   |---|---|---|
+   | simulator | 2.07 µs | 4% |
+   | observation + policy | 4.28 µs | 8% |
+   | PPO update | 45.8 µs | **88%** |
+
+   4 epochs × 4 minibatches is 16 gradient passes over every rollout, so the
+   update costing ~9× the acting is **structural to PPO**, not a defect. The
+   gate is therefore against the thing that actually matters — the production
+   stack's 1,129 decisions/s — and the standing figure is **19,168 env-dec/s
+   end to end, 17×**, sustained.
+
+   Note what this says about where optimisation should go: the simulator is 4%
+   of the cost. Further sim work buys almost nothing; epochs, minibatch shape
+   and model size are the levers.
 5. **N-seeds-per-experiment works**: an ablation runs ≥ 32 seeds in one `vmap`
    and reports a distribution, not a curve (§1.9). This is a deliverable, not a
    bonus — it is the methodological upgrade the rewrite is really buying.
