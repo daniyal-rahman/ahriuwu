@@ -236,7 +236,13 @@ collider.PathfindingRadius)` in `AttackableUnit.OnCollision`
    push, from the lowest-index overlapping neighbour — a documented,
    deliberate approximation (`sim/collision.py`'s own docstring: "This
    applies one push per unit per tick"). The 2- and 3+-neighbour buckets are
-   where that approximation comes due.
+   where that approximation comes due. (The "lowest-index" tie-break itself
+   turns out to be a mis-transplanted rationale, not just an unverified one:
+   that rule is real, but it belongs to TARGETING -- `ObjAIBase.cs:1295-1320`
+   breaks distance ties by `ObjectManager.GetObjects()` order -- not to
+   collision, where `UpdateCollision` does not pick "the" neighbour by index
+   at all, it pushes against every one `GetNearestObjects` returns. Corrected
+   in `sim/collision.py`'s own docstring alongside this finding.)
 3. **Iteration order is unverified.** `resolve_collisions`'s comment claims
    "lowest-index overlapping neighbour, matching the server's iteration
    order" — but the server iterates `GetNearestObjects(obj)` (a quadtree
@@ -340,39 +346,58 @@ real `tick()` -- caught by that exact inconsistency, fixed before trusting
 any number from this script):
 
 ```
-                  current (Jacobi)         sequential (Gauss-Seidel, slot order)
-neighbours=0:  n=5884  94.4% <=1/16     94.4% <=1/16   (identical -- no collision to speak of)
-neighbours=1:  n=1253  75.5%            72.5%          (WORSE by 3.0 pts)
-neighbours=2:  n=411   70.1%            56.7%          (WORSE by 13.4 pts)
-neighbours=3+: n=78    48.7%            43.6%          (WORSE by 5.1 pts)
+                  current (Jacobi)   sequential, SLOT order   sequential, RECONSTRUCTED CREATION order
+neighbours=0:  n=5884  94.4%             94.4%                    94.4%   (identical -- no collision to speak of)
+neighbours=1:  n=1253  75.5%             72.5%  (-3.0)             81.3%  (+5.8 vs Jacobi, +8.8 vs slot)
+neighbours=2:  n=411   70.1%             56.7% (-13.4)             73.0%  (+2.9 vs Jacobi, +16.3 vs slot)
+neighbours=3+: n=78    48.7%             43.6%  (-5.1)             52.6%  (+3.9 vs Jacobi, +9.0 vs slot)
 ```
 
-**Read this precisely: under slot order, the "faithful" sequential mechanism
-is not neutral — it is WORSE than the current simultaneous approximation on
-every single crowded bucket, most sharply at 2 neighbours.** This is the
-opposite of what a naive reading of "the server does it sequentially" would
-predict, and it is exactly the failure mode named in advance: Gauss-Seidel's
-entire benefit comes from correctly modelling WHO yields to WHOM first; get
-that order wrong and you do not get "a slightly off version of the right
-answer", you get a **different, uncontrolled** bias. Slot order is evidently
-that wrong here.
+**Slot order is worse than Jacobi at every crowding level (as reported
+initially); reconstructed CREATION order beats Jacobi at every crowding
+level.** This directly confirms the source-derived prediction: `_objects`
+is genuinely in creation order and genuinely load-bearing, and the earlier
+slot-order result was evidence the mechanism was UNTESTED, not that it was
+wrong. The creation order used here is **reconstructed, not observed** --
+built from the deterministic wave schedule (exact) plus a proxy for which
+of a team's currently-alive minions is oldest: cumulative progress along
+that team's own lane corridor (a minion that has walked further is assumed
+older; the true test is `_objects`' own preserved survivor order, not
+directly visible from a single snapshot) -- and a flagged guess for
+same-wave-event blue-vs-red tie-break. Both are named approximations, not
+hidden ones.
 
-**Verdict on the collision measurement: order dominates the result, not the
-sequencing/multi-push mechanism.** With the best available order guess, the
-true sequential algorithm explains approximately **0% of the crowded-bucket
-error — measured as negative** (-3 to -13 points, i.e. it makes the
-instrument's agreement worse, not better). This does not clear the
-Gauss-Seidel/multi-push hypothesis (point 3's ordering gap means this is not
-yet a fair test of it) — it means **the algorithm shape is very likely right
-and the iteration order is load-bearing and unknown.** Implementing it with
-anything short of the true object-add order would very likely be a
-regression, not a fix — precisely the "do not tune an approximation until
-its numbers look close" scenario. The concrete next step is the birth-order
-tracking proposed above, not a JAX port of the sequential algorithm on the
-current guess. A sibling audit is reading `CollisionHandler`/the
-quadtree/`_objects` independently to settle the true order from source; this
-measurement should be re-run against whatever it establishes before drawing
-a further conclusion either way.
+**The n=1 bucket is the clean test, and it moved as predicted.** With no
+inner (quadtree) order to confound it (one colliding neighbour means exactly
+one escape, in any traversal order), 1,253 samples -- 72% of all crowded
+samples -- isolate the OUTER order alone. It moved from 72.5% (slot) to
+81.3% (creation), a real gain, though short of the ~94% isolated units reach
+-- the remaining gap at n=1 is attributable to the reconstruction's own
+imprecision (the arc-length proxy stalls for a minion mid-fight while a
+younger one behind it keeps closing, and the blue/red tie-break is an
+unverified guess), not to inner order, which cannot matter here.
+**Verdict: the algorithm shape is confirmed right, in the sense that a
+BETTER approximation of the true order produces a BETTER result at every
+bucket including n=1's outer-order-only test — order is not just
+load-bearing in theory, it moved the number in practice.**
+
+**Where this stops, deliberately, per explicit instruction not to build a
+host-side/non-JIT reference:** the natural next steps -- inverting the
+server's true per-tick permutation from the k! ways a k-neighbour collision
+could have resolved (to build a labelled corpus for the INNER/quadtree
+order, which only n=2 and n=3+ need -- 28% of crowded samples, 6% of all),
+fitting/scoring candidate inner-order models (Morton/Z-order-with-depth
+correction, nearest-first, farthest-first, x-then-y) against that corpus
+with a proper held-out split, and then a three-way PRODUCTION design
+comparison (current Jacobi vs. an exact `lax.scan`-based Gauss-Seidel vs. a
+vectorised Morton-ordered approximation, each measured on BOTH crowded-bucket
+accuracy and throughput/compile-time the way J1 gate 4/5 measured them) --
+is substantial engineering and benchmarking work in its own right, explicitly
+flagged by the coordinator as hand-off-able rather than rushed. **Not started
+this round.** A sibling audit already has the quadtree/`_objects` source
+ledger; the harness in `tier1_collision_sequential.py` (in particular
+`estimate_creation_order`, which a real identity tracker would replace) is
+ready for whoever picks this up.
 
 ## Damage: one-sided, and a known cause, not a new one
 
@@ -406,11 +431,15 @@ standing explanation, not a new finding.
 - Round 1 said the injector was the blocker. It measurably was not (the
   bit-exact/≤1/16 gap collapsed from 18.4 to 2.9 points on recheck).
 - Round 2's blocker is the position tail (11-14% of minion positions missing
-  ≤1/16, p95≈5.4, max≈8.0), now localised to collision handling specifically
-  and further localised to ITERATION ORDER within that: the sequencing
-  mechanism (Gauss-Seidel, multi-push) measured WORSE than the current
-  approximation under the best available order guess, which means order is
-  load-bearing and unrecovered, not that the mechanism is wrong.
+  ≤1/16, p95≈5.4, max≈8.0), now localised to collision handling and further
+  localised to ITERATION ORDER: a slot-order sequential reference measured
+  WORSE than the current Jacobi approximation, but a RECONSTRUCTED
+  creation-order reference measured BETTER than Jacobi at every crowding
+  level (n=1: 81.3% vs 75.5%; n=2: 73.0% vs 70.1%; n=3+: 52.6% vs 48.7%) --
+  confirming the sequencing mechanism is right and the true object-add order
+  is the thing to recover properly, not a dead end. Inner (quadtree) order
+  and a production implementation remain open, explicitly handed off (see
+  below).
 - Wave spawning went from "100% disagreement, unverified" to "a real,
   confirmed, partially-fixed timing bug (1,551/1,551 → 1,447/1,551), plus a
   fully-characterised (100% of remaining mismatches are >8 units from any
@@ -425,17 +454,37 @@ standing explanation, not a new finding.
 
 ## Open, in priority order
 
-1. **Recover the true collision iteration order.** Champions/turrets are a
-   non-issue (see above); lane minions need (a) whole-trace birth-order
-   tracking, built from the deterministic wave schedule plus tick-to-tick
-   identity matching — buildable, not built — and (b) the map's scene-file
-   object-parse order, to settle same-wave blue-vs-red interleaving — not
-   located in the C# scripts this project already reads. A sibling
-   content/audit agent is reading `CollisionHandler`/the quadtree/`_objects`
-   in parallel; re-run `tier1_collision_sequential.py` against whatever order
-   it establishes before drawing any further conclusion about the
-   Gauss-Seidel/multi-push mechanism — the slot-order result above is
-   evidence the mechanism is untested, not that it is wrong.
+1. **Finish recovering the true collision iteration order, then decide a
+   production design.** The outer (creation) order is confirmed both from
+   source (`CollisionHandler.AddObject`/`GameObject.OnAdded`, `_objects`
+   preserves survivor order under removal) and empirically (the
+   reconstructed-order measurement above beats Jacobi at every bucket,
+   including the outer-order-only n=1 test). What is not done, in order:
+   (a) replace the arc-length proxy in `estimate_creation_order` with an
+   exact whole-trace identity tracker (the proxy is why n=1 reached 81.3%,
+   not the ~94% isolated units achieve); (b) resolve the map scene-file
+   parse order for same-wave blue-vs-red tie-breaks (still an unverified
+   guess); (c) recover the INNER (quadtree) order for n=2/n=3+ (28% of
+   crowded samples) — the coordinator's proposed method is inverting the
+   server's true per-tick permutation from the k! ways each k-neighbour
+   collision could resolve, building a labelled corpus, and scoring
+   candidate models (Morton/Z-order with a depth correction, nearest-first,
+   farthest-first, x-then-y) with a held-out split, not in-sample; (d) a
+   three-way production comparison -- current Jacobi, an exact
+   `lax.scan`-based Gauss-Seidel, and a vectorised Morton-ordered
+   approximation -- each measured on BOTH crowded-bucket accuracy and
+   throughput/compile-time the way J1 gate 4/5 measured them (gate 4 has
+   ~3x measured margin over its 50x target, which is headroom to spend on
+   this, but it needs measuring, not assuming). **(a)-(d) are explicitly
+   handed off, not started this round** — (b)-(d) are substantial
+   engineering/benchmarking work the coordinator offered to route to a
+   fresh agent rather than have it rushed; a sibling audit already owns the
+   quadtree/`_objects` source ledger. `lanerl_jax/parity/
+   tier1_collision_sequential.py` (in particular `estimate_creation_order`,
+   the piece a real identity tracker replaces) is the ready-made harness for
+   whoever picks this up, and it must never use a host-side/non-JIT
+   per-tick Python callback in whatever production design is chosen — that
+   option is off the table by explicit decision.
 2. **The wave-spawn matching artifact** — fully characterised (100% of
    remaining mismatches have no plausible same-group match within 8 units)
    but not root-caused; handed to the dedicated waves/content audit per the
