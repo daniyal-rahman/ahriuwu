@@ -30,7 +30,11 @@ From `Content/LeagueSandbox-Scripts/Items/Passives/DoransShield.cs` (ItemID_1054
 **Is the ItemPassive script live on Map1?**
 YES. ItemPassives are loaded for ALL champions, regardless of map, whenever an item is added to inventory (Inventory.cs:80-91). The script loading does not check map.
 
-**CRITICAL ASYMMETRY AND MEASUREMENT CONFOUND**: Our JAX sim models ZERO items, so the server champion has +80 HP (+10.6% at level 1: 616.28 base + 137.72 runes = 754 live) and +1.2 HP/sec regen, while our sim champion has neither. This is a **+80 effective HP defensive item advantage** stacked on top of all rune/mastery baselines. **This 10.6% HP deficit with zero regen is the exact shape of asymmetry that would explain gate-3's observed death ratio (our champion dies ~5x where server's dies 0-1 under identical policy) — every server-side measurement this project has taken is confounded by this item that our sim does not model.**
+**CORRECTED — there is NO HP deficit.** An earlier revision of this document claimed the server's champion runs at 834 effective HP against our 754, a 10.6% deficit confounding every server-side measurement. That is **wrong**. `sim/init.RUNE_HP_BONUS` is defined as `754.248046875 - 616.28`: the gap between Content's base HP and the value the state dump reports *during play*, which already includes everything the server has bought, Doran's Shield included. Verified against the built profile table: our champion's `max_hp` is 754.248047, matching the dump to its own 1/1024 quantisation. The original claim was arrived at by adding the item's +80 to a number that already contained it; acting on it would have given us 834 against the server's 754 and inverted the comparison while appearing to fix it.
+
+**What WAS missing is the regen**, and it is now fixed (`44ddfa9`). `ItemPassives/DoransShield.cs` does `HealthRegeneration.BaseBonus += 1.2f`; our champion's `hp_regen` was Garen's Content 1.568 and is now 2.768. Regen was missed precisely because the state dump does NOT expose it, so unlike max HP, AD and armour it was taken from Content and never checked against the oracle. Unmodelled this was up to 1.2 * 600 = 720 HP of healing per episode. Note also that `FlatHPRegenMod` in `1054.json` is read by no C# at all (`ItemData.cs:81` reads only `FlatHPPoolMod`) — the regen comes solely from the passive script.
+
+**Do not attribute gate-3's death gap to this.** With max HP already matching, the gap is unexplained; the regen fix pushes our champion toward MORE survivability, not less, so if the gap persists that is a finding in its own right.
 
 ---
 
@@ -134,7 +138,7 @@ Example instantiations:
 ## Prioritized Impact List
 
 ### CRITICAL ASYMMETRY (parity-blocking)
-1. **Doran's Shield**: Server grants +80 HP (+10.6% at spawn), +1.2 HP/sec. Sim grants 0. This 10.6% HP deficit with zero regen is the exact shape of asymmetry that explains gate-3's observed death ratio differential (our champion ~5x deaths vs server 0-1 under identical policy). **Every server-side measurement in this project is confounded by this single item.**
+1. **Doran's Shield**: server grants +80 max HP and +1.2 HP/s. The **HP is already accounted for** in our port — `RUNE_HP_BONUS` is measured from the dump's in-play value, which includes it; our champion's max HP already equals the server's. The **regen was genuinely missing and is now fixed** (`44ddfa9`, champion `hp_regen` 1.568 -> 2.768). The earlier "10.6% deficit confounds every measurement" claim in this document was wrong and has been retracted above. Gate-3's death gap remains unexplained.
 
 ### HIGH (likely measured in test results)
 2. **Garen passive mechanics**: OnUpdateStats event listener (for scaling regen) and OnTakeDamage listeners (for cooldown reset). Sim does not model event-driven mechanics.
