@@ -38,7 +38,11 @@ hiding them.  Three kinds of field, by provenance:
 
 * **unrecoverable** -- defaulted to the same values :func:`empty_state` uses,
   and named here so a downstream report can say which mechanics they poison
-  rather than let a default read as an assertion:
+  rather than let a default read as an assertion. One exception is folded in
+  here rather than given its own top-level category: the MOVE_TO-off-corridor
+  waypoints bullet below is not a default at all any more (it is a measured,
+  injected guess) but it belongs next to the ATTACK_TO bullet it was tried
+  and rejected alongside, not scattered away from that comparison:
 
   - ``target`` (all units): minion-target identity is not observable at all
     (see ``parity.diff.UNOBSERVABLE``); champion/turret target identity
@@ -78,11 +82,27 @@ hiding them.  Three kinds of field, by provenance:
   - waypoints for a unit whose ``move_order`` is ``ATTACK_TO`` (chasing a
     target): these are set, on the server, to a straight line at the
     attacker's and target's *current* positions and recomputed every tick
-    (confirmed by reading ``sim/step.py``'s own "3b. RefreshWaypoints" -- our
-    sim does the same thing), so they would be exactly reconstructable *if*
-    we knew the target's identity. We do not (see ``target`` above), so these
-    are left empty (``n_waypoints=0``) rather than pointed at a guessed unit,
-    and the unit is flagged ``movement_trustworthy=False`` for that tick.
+    (confirmed by reading ``ObjAIBase.cs:595-671``'s ``RefreshWaypoints``,
+    called from ``UpdateTarget`` every tick a target is held, not just on the
+    minion AI's 250 ms sweep -- our sim's "3b. RefreshWaypoints" in
+    ``sim/step.py`` does the same thing), so they would be exactly
+    reconstructable *if* we knew the target's identity. We do not (see
+    ``target`` above). A GUESS was tried anyway -- nearest strictly-best-
+    priority enemy in acquisition range, i.e. a from-scratch
+    ``minion_acquire`` -- and measured against real trace kinematics rather
+    than assumed: 70.5% of guesses landed on an enemy already IN attack
+    range, which is impossible for the server's true (still-chasing)
+    incumbent, confirming ``sim/minion_ai.py``'s hysteresis warning above:
+    the true target is usually a farther, hysteresis-protected unit the
+    naive nearest-search never considers. Worse, "predict no movement at
+    all" (freezing, i.e. what this injector already does) turned out to beat
+    the guess outright: 86.3% of ATTACK_TO minions land within 0.5 units of
+    their PRE-tick position one tick later regardless -- most of them are
+    packed into a collision scrum and functionally stationary even while
+    nominally still closing on a target -- so a moving guess is *net
+    negative* against the honest default. Left empty (``n_waypoints=0``,
+    i.e. frozen) and flagged ``movement_trustworthy=False``, as before, but
+    now for a measured reason rather than an assumed one.
   - waypoints for a minion that is marching (``move_order=MOVE_TO``) but is
     **not** on the known lane corridor within tolerance -- this happens to a
     minion that just gave up a chase (see ``sim/minion_ai.py``'s
@@ -90,9 +110,22 @@ hiding them.  Three kinds of field, by provenance:
     ``PathingWaypoints``, a *separate* list our own sim does not model at all
     -- ``sim/step.py``'s ai-driven ``MOVE_TO`` branch does not touch
     ``waypoints``/``n_waypoints``, so a minion that just lost a chase target
-    keeps the stale two-point chase line in our own sim, a genuine
-    unmodelled-mechanic gap, not just an injection one). Also flagged
-    ``movement_trustworthy=False``.
+    keeps the stale two-point chase line in our own sim across MULTIPLE
+    ticks, a genuine unmodelled-mechanic gap that matters for a multi-tick
+    rollout -- but NOT for this one-step injector, which only needs THIS
+    tick's waypoints to be right). Unlike the ATTACK_TO case above, a guess
+    HERE was measured to help, decisively: the same corridor projection
+    ``reconstruct_waypoints`` uses, but without its perpendicular-distance
+    gate (see ``reconstruct_waypoints_relaxed``), beats "predict no
+    movement" on 87.1% of ticks (median predicted-position error 0.134
+    units, 82.5% within 0.5 units) on a 6,000-tick-pair sample -- these
+    minions are actually walking, unlike the ATTACK_TO scrum case, so
+    freezing them is usually wrong and a corridor-ward guess is usually
+    right. Injected as the fallback when the strict (exact) reconstruction
+    refuses, flagged ``movement_trustworthy=True`` -- read that as "measured
+    to help", not "recovered from the dump" the way the on-corridor case's
+    is; see that function's docstring for the numbers before relying on this
+    for anything past Tier 1.
 
 Everything not listed above that the dump does not carry (``mr``,
 ``attack_speed``, ``skill_points``, ``buffs``, ``can_move``, ``cast_spell``,
@@ -126,7 +159,7 @@ from .trace import Entity, Snapshot, StatQ
 __all__ = [
     "KIND_NAME_TO_ID", "SERVER_TEAM_TO_ID",
     "UnitInjectionNote", "InjectionReport",
-    "infer_minion_model", "reconstruct_waypoints",
+    "infer_minion_model", "reconstruct_waypoints", "reconstruct_waypoints_relaxed",
     "replay_wave_states", "inject_snapshot",
 ]
 
@@ -272,6 +305,20 @@ def _project_to_polyline(x: float, y: float, path: np.ndarray
     return best_i, best_d, best_t
 
 
+def _corridor_path(team: int) -> np.ndarray:
+    path = np.asarray(TOP_LANE_PATH, np.float32)
+    if team == Team.RED:
+        path = path[::-1].copy()
+    return path
+
+
+def _key_from_projection(path: np.ndarray, seg: int, t: float) -> int:
+    key = seg + 1
+    if t > 0.999 and key + 1 < len(path):
+        key += 1
+    return min(key, len(path) - 1)
+
+
 def reconstruct_waypoints(
     x: float, y: float, team: int, tol: float = CORRIDOR_TOLERANCE
 ) -> Tuple[Optional[np.ndarray], Optional[int], Optional[int], str]:
@@ -281,20 +328,51 @@ def reconstruct_waypoints(
     None, reason)``. ``None`` means "refused" -- the caller must not invent a
     destination, see the module docstring.
     """
-    path = np.asarray(TOP_LANE_PATH, np.float32)
-    if team == Team.RED:
-        path = path[::-1].copy()
+    path = _corridor_path(team)
     seg, dist, t = _project_to_polyline(x, y, path)
     if dist > tol:
         return None, None, None, (
             f"position is {dist:.1f} units off the known lane corridor "
             f"(tolerance {tol}) -- not walking the spawn path, or resuming "
             "from a lost target (PathingWaypoints is not modelled)")
-    key = seg + 1
-    if t > 0.999 and key + 1 < len(path):
-        key += 1
-    key = min(key, len(path) - 1)
+    key = _key_from_projection(path, seg, t)
     return path, key, len(path), f"on corridor, {dist:.2f} units off, key={key}"
+
+
+def reconstruct_waypoints_relaxed(
+    x: float, y: float, team: int
+) -> Tuple[np.ndarray, int, int, str]:
+    """Fallback for a marching minion that :func:`reconstruct_waypoints`
+    refuses: the same corridor projection, but with NO perpendicular-distance
+    gate, so it always returns a guess rather than ``None``.
+
+    This is a GUESS, not a recovery: the real cause of being off-corridor is
+    almost always "resuming the corridor after losing a chase target" (see
+    the module docstring's ``target`` section), where the server picks up
+    from ``PathingWaypoints[currentWaypointIndex]`` -- state this injector
+    does not have -- rather than the nearest point on the corridor to wherever
+    combat left the minion. Nearest-point-on-corridor is the best available
+    proxy for that index without it.
+
+    Measured against real trace kinematics (no sim involved; same method as
+    the chase-target guess this module's ATTACK_TO branch tried and rejected,
+    see that branch's comment) on a 6,000-tick-pair sample: this beats
+    "predict no movement" (the alternative -- refuse and let the unit freeze)
+    on 87.1% of ticks, median predicted-position error 0.134 units, 82.5% of
+    predictions within 0.5 units of the real one. Not exact -- do not read
+    the resulting ``movement_trustworthy=True`` as "recovered from the dump"
+    the way the on-corridor case's is -- but a validated, one-sided
+    improvement over refusing, unlike the ATTACK_TO guess. See
+    docs/TIER1_POST_REORDER.md for the measurement this docstring cites.
+    """
+    path = _corridor_path(team)
+    seg, dist, t = _project_to_polyline(x, y, path)
+    key = _key_from_projection(path, seg, t)
+    return path, key, len(path), (
+        f"RELAXED reconstruction (guess, not recovery): {dist:.1f} units off "
+        f"the known lane corridor, nearest projection used anyway, key={key} "
+        "-- see reconstruct_waypoints_relaxed's docstring for the measured "
+        "accuracy before trusting this for anything beyond Tier 1")
 
 
 def replay_wave_states(trace: Trace) -> List[WaveState]:
@@ -309,20 +387,39 @@ def replay_wave_states(trace: Trace) -> List[WaveState]:
 
     Index ``i`` of the returned list is the state to inject **alongside**
     ``trace[i]`` -- i.e. the state ``tick()`` will consume when stepping from
-    ``trace[i]`` to ``trace[i + 1]``. See the module docstring's derivation:
-    the state paired with a snapshot at time ``T`` is the result of the
-    *previous* tick's spawn decision, not one evaluated at ``T`` itself.
+    ``trace[i]`` to ``trace[i + 1]``.
+
+    FIXED 2026-09-16 (was inverted): an earlier version paired ``trace[i]``
+    with the counters as they stood *before* ``trace[i]``'s own tick, on the
+    reasoning "the state paired with a snapshot at time T is the result of
+    the previous tick's spawn decision, not one evaluated at T itself". That
+    reasoning had it backwards. ``trace[i].t_ms`` is read from the dump,
+    which ``LanerlHooks.OnUpdate`` emits AFTER tick i's own
+    ``LevelScript.Update`` already ran (`parity/trace.py`'s module docstring)
+    -- so if ``trace[i]`` is itself a spawn tick, the new minion is ALREADY in
+    ``trace[i]``'s own entity list, and ``tick()`` (called on the injected
+    state to step FROM ``trace[i]`` TO ``trace[i+1]``, checking
+    ``state.t_ms >= next_spawn_ms + ...`` with ``state.t_ms = trace[i].t_ms``)
+    must be given counters that already reflect that decision, or it
+    re-evaluates the exact same threshold at the exact same game time and
+    spawns AGAIN on top of the unit the dump already shows. Confirmed by
+    replaying this trace's first wave: at the trace's first post-90s tick,
+    both barracks already show their one minion (0 real deaths, 0 real
+    arrivals -- an unchanged population), while the un-fixed pairing had the
+    sim spawn a second one into the SAME tick's prediction. This -- not a
+    fundamental modelling gap -- is what produced
+    docs/TIER1_POST_REORDER.md's "1,665 of 1,667 spawn ticks disagreed on
+    count": nearly every spawn-adjacent tick was off by this one index, in
+    one direction or the other depending on which side of a threshold
+    ``trace[i].t_ms`` fell on.
     """
-    out: List[WaveState] = [WaveState(next_spawn_ms=FIRST_WAVE_MS,
-                                      minion_number=0, cannon_count=0)]
-    st = out[0]
-    for i in range(len(trace) - 1):
-        nxt = WaveState(next_spawn_ms=st.next_spawn_ms,
-                        minion_number=st.minion_number,
-                        cannon_count=st.cannon_count)
-        step_waves(nxt, float(trace[i].t_ms))
-        out.append(nxt)
-        st = nxt
+    st = WaveState(next_spawn_ms=FIRST_WAVE_MS, minion_number=0, cannon_count=0)
+    out: List[WaveState] = []
+    for snap in trace:
+        step_waves(st, float(snap.t_ms))
+        out.append(WaveState(next_spawn_ms=st.next_spawn_ms,
+                             minion_number=st.minion_number,
+                             cannon_count=st.cannon_count))
     return out
 
 
@@ -455,8 +552,18 @@ def inject_snapshot(
         if mo == MoveOrder.MOVE_TO:
             wp, key, n, reason = reconstruct_waypoints(ent.x, ent.y, et)
             if wp is None:
-                trustworthy = False
-                n_waypoints[i] = 0
+                # Strict (exact) reconstruction refused -- fall back to the
+                # RELAXED guess rather than freezing the unit. Validated to
+                # beat "predict no movement" on 87.1% of ticks (see
+                # reconstruct_waypoints_relaxed's docstring); still a guess,
+                # so `trustworthy=True` here means "measured to help", not
+                # "recovered from the dump" the way the exact branch's does.
+                wp, key, n, reason = reconstruct_waypoints_relaxed(
+                    ent.x, ent.y, et)
+                waypoints[i, :len(wp)] = wp
+                waypoint_key[i] = key
+                n_waypoints[i] = n
+                trustworthy = True
             else:
                 waypoints[i, :len(wp)] = wp
                 waypoint_key[i] = key
@@ -469,6 +576,27 @@ def inject_snapshot(
                     trustworthy = False
                 n_waypoints[i] = n
         elif mo == MoveOrder.ATTACK_TO:
+            # A target-identity GUESS was tried here (nearest strictly-best-
+            # priority enemy in acquisition range, i.e. `minion_acquire` with
+            # no incumbent -- see `guess_chase_target`, kept below for the
+            # record) and measured against real trace kinematics rather than
+            # assumed: on a 6,000-tick-pair sample, 70.5% of guesses landed on
+            # an enemy already WITHIN attack range, which is impossible for
+            # the server's true held target (`ObjAIBase.cs`'s
+            # `RefreshWaypoints` would already have set `Hold`, not
+            # `AttackTo`, the moment that happened) -- i.e. most of the time
+            # the true incumbent is a FARTHER, hysteresis-protected unit the
+            # naive nearest-search never considers (`sim/minion_ai.py`'s own
+            # docstring predicts exactly this). Restricting the candidate set
+            # to enemies NOT already in range is the obvious next refinement
+            # and was NOT validated in the time available -- see
+            # docs/TIER1_POST_REORDER.md for exactly what was and was not
+            # checked. Even on the SURVIVING (not-already-in-range) guesses,
+            # predicted position missed the real one by a median 5.2 units --
+            # essentially a full tick's travel, i.e. uncorrelated with the
+            # truth, not a small residual error. Guessing does not clear the
+            # bar this harness sets for calling something "recovered": refuse,
+            # as before.
             trustworthy = False
             reason = ("chasing a target whose identity is unobservable "
                      "(see module docstring); waypoints left empty")

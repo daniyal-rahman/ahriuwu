@@ -188,6 +188,17 @@ def tick(state: LaneState, params: UnitParams,
     # Every stat is a gather through the unit's profile row: a minion slot is
     # reused by whatever spawns into it, so stats cannot be baked per slot.
     P = lambda k: params[k][state.model]          # noqa: E731
+    # `Game.Update` (`Game.cs:474-497`): `GameTime += diff` runs BEFORE
+    # `Map.Update` and `ObjectManager.Update` in the SAME call -- so every
+    # per-tick absolute-game-time check the server makes (wave spawning in
+    # `LevelScript.Update`, the turret AD/armour ramps in the SAME script's
+    # `LevelScriptObjects.OnUpdate`, `Champion.Update`'s ambient-gold gate)
+    # reads the POST-increment value, i.e. THIS tick's own outgoing time, not
+    # the incoming one `state.t_ms` holds (last tick's outgoing time). Used
+    # everywhere below that used to read `state.t_ms` for a ">="-style
+    # threshold rather than a duration. See "1. wave spawning" below for the
+    # trace evidence this was wrong, not just a theoretical nit.
+    t_now = state.t_ms + jnp.asarray(delta_ms, dtype)
     # An INNER/INHIBITOR/NEXUS turret's armour is not its Content value for
     # most of a game either -- see `_attack_damage_against` for the AD half of
     # the same pair of schedules. Computed once, up front, because armour is
@@ -196,7 +207,7 @@ def tick(state: LaneState, params: UnitParams,
     base_armor = P("armor")
     armor_now = base_armor + jnp.where(
         _OTHER_TURRET_ROW[state.model],
-        TURRET_ARMOR_PER_RAMP * other_turret_ramps(state.t_ms, jnp),
+        TURRET_ARMOR_PER_RAMP * other_turret_ramps(t_now, jnp),
         jnp.zeros_like(base_armor))
 
     # ---- 0. collision push-apart (Map.Update, FIRST thing in the tick) ----
@@ -230,10 +241,29 @@ def tick(state: LaneState, params: UnitParams,
     state = state.replace(x=cx, y=cy)
 
     # ---- 1. wave spawning (MapScript.Update, still inside Map.Update) ------
+    # `Game.Update` (`Game.cs:474-497`): `GameTime += diff` runs BEFORE
+    # `Map.Update(diff)` (which is where `LevelScript.Update`'s spawn check
+    # lives) in the SAME call. So the gameTime `LevelScript.Update` reads for
+    # THIS tick's decision is already the POST-increment value -- the tick's
+    # own outgoing time, not the incoming one `state.t_ms` holds here (that is
+    # last tick's outgoing time, i.e. this tick's incoming time). Using
+    # `state.t_ms` under-checks by one tick's worth of game time (16.667 ms)
+    # on every spawn-eligibility test.
+    #
+    # Confirmed against the recorded trace, not just read off the source:
+    # replaying the injected server state at a tick immediately BEFORE a real
+    # spawn (e.g. t=90,798 ms, one red minion), `state.t_ms >= next_spawn_ms +
+    # minion_number*800` is false (90,798 < 90,800) and the old code predicted
+    # no spawn, while the server's own transition to the NEXT tick (90,815 ms)
+    # already shows the new minion -- i.e. the decision was made against
+    # 90,815, not 90,798. This is very likely why
+    # docs/TIER1_POST_REORDER.md's Tier-1 pass found essentially every
+    # spawn-adjacent tick disagreeing on population, in one direction or the
+    # other depending on which side of a threshold `state.t_ms` alone landed
+    # on.
     if lane_path is not None:
         mtype, next_spawn, m_no, c_no = step_waves_jax(
-            state.t_ms, state.next_spawn_ms, state.minion_number,
-            state.cannon_count)
+            t_now, state.next_spawn_ms, state.minion_number, state.cannon_count)
         mi = jnp.clip(mtype, 0, 3)
         hp_b = params["max_hp"][_WAVE_ROW_BLUE[mi]]
         hp_r = params["max_hp"][_WAVE_ROW_RED[mi]]
@@ -455,7 +485,7 @@ def tick(state: LaneState, params: UnitParams,
     # (always 1, see `state.py`) `level` field.
     ad_now = P("attack_damage") + P("ad_per_level") * growth_sum(state.level, jnp)
     raw_ad = _attack_damage_against(
-        ad_now, state.kind, state.kind[tgt], state.model, state.t_ms)
+        ad_now, state.kind, state.kind[tgt], state.model, t_now)
     aa = step_autoattack(
         state.aa_cooldown, state.aa_windup, state.is_attacking,
         state.has_auto_attacked,
@@ -604,7 +634,7 @@ def tick(state: LaneState, params: UnitParams,
         died=died, killer=killer, x=x, y=y, team=state.team, kind=state.kind,
         alive=alive, gold_on_death=P("gold_on_death"),
         xp_on_death=P("xp_on_death"))
-    amb, gold_timer = ambient_gold(state.t_ms, state.gold_timer,
+    amb, gold_timer = ambient_gold(t_now, state.gold_timer,
                                    state.kind == Kind.CHAMPION)
     gold = state.gold + rw.gold + amb
     xp = state.xp + rw.xp
