@@ -791,6 +791,26 @@ identity, stats and time ramp; minion spawn positions; tick phase order; the
 minion population and lane balance. Gate 4 (164x) and gate 5 (12.8 s).
 **213 tests pass.**
 
+**Gate 2 is MET.** `docs/TIER2_DIVERGENCE.md`: four full 600 s episodes
+(idle, and three genuinely different champion-driven scenarios -- neither
+engine has RNG on this path, so "several seeds" would have silently been
+n=1, per `sweep.py`'s own already-documented lesson; scenario diversity is
+what stands in for it here), sim vs. the real server, seed 0. Nothing
+diverges mechanically before the first wave clash (~120-130 s) in any of the
+four. After it: population, minion position and turret HP diverge by
+amounts that are large (turret HP errors up to 100% of max, population gaps
+up to half the live count, one scenario's champion dies on the sim and takes
+zero damage on the server for the identical script) -- the gate explicitly
+allows "not small," and this is not. A smallest-representable-perturbation
+chaos floor (one float32 ULP on a marching minion, full 600 s) sits at
+~10⁻⁴ world units with no growth; every reported divergence is orders of
+magnitude above it, so none of it is chaos wearing a bug's costume. Newly
+quantified along the way: a champion standing in the enemy wave loses HP at
+roughly 2.6x the server's rate, severe enough to kill it outright in 2 of 4
+scenarios while the server's champion never dies in any -- consistent with,
+and a sharper number than, the already-known missing call-for-help channel
+(`docs/CALL_FOR_HELP_SWITCH_RATE.md`), not a new root cause.
+
 **Open.**
 
 *Gate 3 fails narrowly: 7 CS against the server's 10.* The tick reorder moved
