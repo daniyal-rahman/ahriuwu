@@ -82,3 +82,7 @@ lanerl/diag/
 lanerl_bot/bench/out/*.log
 lanerl_rl/artifacts/
 lanerl_bot/tests/artifacts/
+
+# JAX work: a venv layered over the shared `ml` conda env (see
+# lanerl_jax/sim/tests/conftest.py). Local tooling, never committed.
+.venv-jax/

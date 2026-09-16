@@ -38,7 +38,23 @@ target-version = "py310"
 select = ["E", "F", "I", "W"]
 
 [tool.pytest.ini_options]
-# All three suites: lanerl_bot/ and lanerl_rl/ were NOT collected by a
-# bare `pytest`, so both sat red without anyone noticing.
-testpaths = ["tests", "lanerl_bot/tests", "lanerl_rl/tests", "lanerl_train/tests"]
+# All suites: lanerl_bot/ and lanerl_rl/ were NOT collected by a
+# bare `pytest`, so both sat red without anyone noticing. lanerl_jax/ is on
+# this list from its first test for the same reason -- an uncollected suite is
+# a suite that rots silently.
+testpaths = [
+    "tests",
+    "lanerl_bot/tests",
+    "lanerl_rl/tests",
+    "lanerl_train/tests",
+    "lanerl_jax/parity/tests",
+    "lanerl_jax/sim/tests",
+    "lanerl_jax/obs/tests",
+]
 pythonpath = ["src"]
+# `slow` was already used by lanerl_train/tests/test_state_hash_pairs.py while
+# unregistered, so every run printed PytestUnknownMarkWarning and `-m "not slow"`
+# silently selected nothing. Registered here so the deselect actually works.
+markers = [
+    "slow: boots a real game server; minutes, not milliseconds",
+]
