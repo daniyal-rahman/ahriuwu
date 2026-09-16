@@ -341,6 +341,52 @@ priority-queue tie-break was **not** either (porting the exact 4-ary heap change
 nothing measurable, though it was kept since it removes a known deviation).
 
 
+### 1.12 MEASURED: the J1 throughput gate, on the RTX 5080
+
+Run 2026-09-16 on `desktop` (RTX 5080, 16 GB, sm_120, driver 580.173.02),
+`jax[cuda12]==0.10.2`. The full loop is observation → policy forward → action
+decode → two simulator ticks, both champions acting, with the real policy
+(`lanerl_jax/train/policy.py`, production dimensions) — which is how gate 4 is
+worded, because a sim-only number is the flattering one.
+
+| envs | compile | full loop | vs baseline | sim only |
+|---|---|---|---|---|
+| 64 | 10.6 s | 113,958 dec/s | 101× | 171,668 |
+| 512 | 12.1 s | 181,984 | 161× | 668,481 |
+| **1024** | **12.8 s** | **184,783** | **164×** | **779,814** |
+| 2048 | 13.0 s | 150,737 | 134× | 728,040 |
+| 4096 | 12.6 s | 143,483 | 127× | 604,030 |
+| 8192 | 13.3 s | 146,525 | 130× | 543,423 |
+
+Baseline is the production stack's own logged **1,129 decisions/s**
+(`runs/rl-league-0915c`, 48,203 s wall, 16,800 updates).
+
+**Gate 4 (≥50×, single run): passed at 164×.** **Gate 5 (compile < 2 min):
+passed at 12.8 s.**
+
+Three things the numbers say that the plan could only guess at:
+
+**Risk R8 was the right thing to worry about.** The policy costs roughly 4× the
+simulator: 779,814 sim-only against 184,783 with the policy in the loop at the
+same batch. Had this been measured sim-only it would have read 690× and been
+wrong about where every future optimisation should go.
+
+**The peak is at 512–1024 envs, not at the largest batch.** Throughput falls
+~20% by 2048 and stays there. So "fill the device" is not the tuning rule here;
+512–1024 is, and the remaining capacity is better spent on parallel *seeds*
+(§1.9) than on a wider env axis.
+
+**We are in the regime the problem needs.** A 13.4-hour run at the production
+rate bought ~54M decisions. At 184,783/s the same wall clock is **~8.9 billion**
+— the difference between the plan's arithmetic and OpenAI-Five-scale experience
+budgets.
+
+Caveat, stated because it is the same mistake in a different coat: this measures
+the **acting** half only. There is no gradient step in it. Under an Anakin
+design the update is part of the same XLA program and its cost adds, which is
+why J3 re-measures end to end rather than trusting this.
+
+
 ### 1.9 What the prior work says, and what it says we must not do
 
 The reference architecture is **Anakin** (Hessel et al., 2021, *Podracer
@@ -648,12 +694,16 @@ builder** (§1.1), not by a fast C++ engine as SMAC's was, so J2 alone recovers 
 large factor that SMAX never had available. Second, our baseline runs 24 envs;
 filling the device is where the env-vectorisation factor lives.
 
-**If gate 4 fails after three weeks of honest effort, stop and reconsider** —
+**Gate 4 and gate 5 are MET** — 164× and 12.8 s, measured on the 5080; see
+§1.12. The contingency below is kept for the record of what the decision would
+have been.
+
+*If gate 4 had failed after three weeks of honest effort: stop and reconsider —
 a C/PufferLib-style CPU rewrite, or going back to optimising the existing stack,
-are both live options and both are cheaper than a JAX sim that is only 5× faster.
-Note that a 10–20× result is *not* a failure of the idea: PureJaxRL's
-apples-to-apples end-to-end-JIT number is ~10×, and the rest of its headline
-comes from parallel envs and parallel seeds, which we get regardless.
+both cheaper than a JAX sim that is only 5× faster. A 10–20× result would not
+have been a failure of the idea either: PureJaxRL's apples-to-apples
+end-to-end-JIT number is ~10×, and the rest of its headline comes from parallel
+envs and parallel seeds, which we get regardless.*
 
 ### Stage J2 — The observation builder in JAX (weeks 2–5, parallel to J1)
 

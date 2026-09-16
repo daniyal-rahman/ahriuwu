@@ -41,6 +41,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
+from .spells import cast_e
 from .state import Kind, LaneState, MoveOrder
 
 __all__ = ["OrderKind", "Orders", "apply_orders"]
@@ -108,8 +109,6 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
                      jnp.stack([ox, oy], -1)], 1)
     waypoints = jnp.where(moving[:, None, None],
                           state.waypoints.at[:, :2].set(two), state.waypoints)
-
-    from .spells import cast_e
 
     bid, bel, bdur, bpow, _ = cast_e(
         state.buff_id, state.buff_elapsed, state.buff_duration,

@@ -43,7 +43,10 @@ import jax.numpy as jnp
 
 from .autoattack import step_autoattack
 from .collision import resolve_collisions
+from .init import spawn_minion
+from .profiles import PROFILES
 from .spells import RANKS_BY_LEVEL, step_buffs
+from .waves_jax import step_waves_jax
 from .minion_ai import step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
 from .rewards import ambient_gold, death_rewards, level_for_xp
@@ -51,10 +54,6 @@ from .state import Kind, LaneState, MoveOrder, Team
 from .targeting import base_priority, nearest_enemy, turret_acquire
 
 __all__ = ["UnitParams", "tick", "step_decision"]
-
-
-def _row(profiles, kind, mtype, team) -> int:
-    return profiles.index((kind, mtype, team))
 
 
 class UnitParams(dict):
@@ -66,13 +65,26 @@ class UnitParams(dict):
     """
 
 
+#: Module-level constants, NOT built inside `tick`.
+#:
+#: Every import in this module is top-level, deliberately. A module whose first
+#: import happens **during tracing** has its module-level `jnp` arrays created
+#: as *tracers* bound to that trace; they are then cached at module level and
+#: reused by the next one, which raises UnexpectedTracerError far from the
+#: cause. That is exactly what a lazy `from .waves_jax import ...` inside this
+#: function did -- `waves_jax.REGULAR` leaked out of a scan as `int8[9]`.
+_MINION_TYPE_TABLE = jnp.asarray([p[1] for p in PROFILES], jnp.int8)
+_RANK_TABLE = jnp.asarray(RANKS_BY_LEVEL, jnp.int8)
+_WAVE_ROW_BLUE = jnp.asarray(
+    [PROFILES.index((Kind.LANE_MINION, m, Team.BLUE)) for m in range(4)], jnp.int8)
+_WAVE_ROW_RED = jnp.asarray(
+    [PROFILES.index((Kind.LANE_MINION, m, Team.RED)) for m in range(4)], jnp.int8)
+
+
 #: profile row -> MinionType, for `ClassifyTarget`. Non-minion rows map to -1,
 #: which `base_priority` never consults because it dispatches on `kind` first.
 def _minion_type_of(state: LaneState) -> jax.Array:
-    from .profiles import PROFILES
-
-    table = jnp.asarray([p[1] for p in PROFILES], jnp.int8)
-    return table[state.model]
+    return _MINION_TYPE_TABLE[state.model]
 
 
 def _can_move(move_order: jax.Array, alive: jax.Array) -> jax.Array:
@@ -109,25 +121,16 @@ def tick(state: LaneState, params: UnitParams,
 
     # ---- 0. wave spawning (Map.Update, before ObjectManager.Update) --------
     if lane_path is not None:
-        from .init import spawn_minion
-        from .waves_jax import step_waves_jax
         mtype, next_spawn, m_no, c_no = step_waves_jax(
             state.t_ms, state.next_spawn_ms, state.minion_number,
             state.cannon_count)
-        from .profiles import PROFILES
-        blue_row = jnp.asarray(
-            [_row(PROFILES, Kind.LANE_MINION, m, Team.BLUE) for m in range(4)],
-            jnp.int8)
-        red_row = jnp.asarray(
-            [_row(PROFILES, Kind.LANE_MINION, m, Team.RED) for m in range(4)],
-            jnp.int8)
         mi = jnp.clip(mtype, 0, 3)
-        hp_b = params["max_hp"][blue_row[mi]]
-        hp_r = params["max_hp"][red_row[mi]]
-        state = spawn_minion(state, Team.BLUE, blue_row[mi], hp_b, lane_path,
-                             enabled=mtype >= 0)
-        state = spawn_minion(state, Team.RED, red_row[mi], hp_r, lane_path[::-1],
-                             enabled=mtype >= 0)
+        hp_b = params["max_hp"][_WAVE_ROW_BLUE[mi]]
+        hp_r = params["max_hp"][_WAVE_ROW_RED[mi]]
+        state = spawn_minion(state, Team.BLUE, _WAVE_ROW_BLUE[mi], hp_b,
+                             lane_path, enabled=mtype >= 0)
+        state = spawn_minion(state, Team.RED, _WAVE_ROW_RED[mi], hp_r,
+                             lane_path[::-1], enabled=mtype >= 0)
         state = state.replace(next_spawn_ms=next_spawn, minion_number=m_no,
                               cannon_count=c_no)
 
@@ -302,10 +305,9 @@ def tick(state: LaneState, params: UnitParams,
     # order, so they need no state of their own. The server spends the points
     # through `AutoLevelUndriven` / `Champion.LevelUpSpell`; the order is the
     # one in `constants.GAREN_SKILL_ORDER`.
-    rank_table = jnp.asarray(RANKS_BY_LEVEL, jnp.int8)
     spell_level = jnp.where(
         (state.kind == Kind.CHAMPION)[:, None],
-        rank_table[jnp.clip(level.astype(jnp.int32), 0, 18)],
+        _RANK_TABLE[jnp.clip(level.astype(jnp.int32), 0, 18)],
         state.spell_level)
 
     move_order_out = jnp.where(
