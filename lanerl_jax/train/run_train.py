@@ -78,6 +78,33 @@ def main() -> None:
           f"{float(np.asarray(m['reward'])[0]):+.5f} -> "
           f"{float(np.asarray(m['reward'])[-1]):+.5f}")
 
+    # --- the two numbers the sampled table above cannot show ---------------
+    #
+    # cs_at_10min is NaN except in the one update whose rollout happens to
+    # contain an episode boundary -- 18,000 decisions per episode against 128
+    # per rollout, so roughly 1 update in 141. Printing every `--every`th row
+    # samples past all of them: an 800-update run reports NaN in every printed
+    # row while the number exists. Print the episodes themselves instead.
+    cs = np.asarray(m["cs_at_10min"])
+    done_at = np.flatnonzero(~np.isnan(cs))
+    if len(done_at):
+        print(f"\nCS@10min, per episode that ENDED ({len(done_at)} of them):")
+        for i in done_at:
+            print(f"  update {int(i):>5}   {float(cs[i]):.3f} CS per champion")
+    else:
+        print(f"\nNo episode finished: {cfg.n_updates} updates x "
+              f"{cfg.rollout_steps} steps = "
+              f"{cfg.n_updates * cfg.rollout_steps:,} decisions against an "
+              f"{cfg.episode_steps:,}-decision episode. Run at least "
+              f"{cfg.episode_steps // cfg.rollout_steps + 1} updates.")
+
+    # lane_dist is dominated by WHERE in the episode each rollout falls: a
+    # rollout just after a reset has both champions back at the fountain at
+    # ~8,000. The minimum over the run is what says whether they ever arrive.
+    ld = np.asarray(m["lane_dist"])
+    print(f"\nlane distance: start {ld[0]:,.0f} -> min {ld.min():,.0f} "
+          f"(0 = inside the lane corridor, ~8,000 = the fountain)")
+
 
 if __name__ == "__main__":
     main()
