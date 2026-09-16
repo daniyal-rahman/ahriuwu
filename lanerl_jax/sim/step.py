@@ -60,7 +60,9 @@ from .waves_jax import step_waves_jax
 from .minion_ai import step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
 from .regen import step_regen
-from .rewards import ambient_gold, death_rewards, level_for_xp
+from .rewards import (ambient_gold, champion_kill_rewards, death_rewards,
+                      level_for_xp, minion_gold_deathspree_decay,
+                      turret_kill_rewards, update_hit_flag)
 from .state import Kind, LaneState, MoveOrder, Team, TurretTier
 from .targeting import (MinionType, base_priority, call_for_help_map,
                         nearest_enemy, turret_acquire)
@@ -537,6 +539,20 @@ def tick(state: LaneState, params: UnitParams,
     # that unit's own attacker row, so the lowest-index-crosses-zero rule below
     # sees melee hits and missile hits in one ordering rather than two.
     dmg_ij = dmg_ij + ms.damage_ij
+
+    # ---- Champion._championHitFlagTimer / _playerHitId --------------------
+    # `Champion.TakeDamage` (`Champion.cs:569-575`) resets these on EVERY hit
+    # this champion takes, from any source -- no melee/caster-minion exemption
+    # like the passive's combat clock below. Read here, off the real (not yet
+    # Judgment-prepended) `dmg_ij`, because `champion_kill_rewards` needs it
+    # for THIS tick's own death resolution (`Champion.Die` reads whatever the
+    # flag holds as of when it runs, which is after every `TakeDamage` call
+    # that landed this tick, including the killing one itself).
+    hit_flag_ms, hit_flag_by = update_hit_flag(
+        kind=state.kind, damage_ij=dmg_ij, buff_damage=bs.damage_dealt,
+        buff_dealt_by=bs.dealt_by, hit_flag_ms=state.hit_flag_ms,
+        hit_flag_by=state.hit_flag_by, delta_ms=delta_ms)
+
     # W's active scales the victim's TOTAL incoming damage for the tick, so it
     # is applied here rather than per attacker -- one multiply on the sum, not
     # one per source, which is what `TakeDamage`'s post-mitigation hook does.
@@ -634,11 +650,46 @@ def tick(state: LaneState, params: UnitParams,
         died=died, killer=killer, x=x, y=y, team=state.team, kind=state.kind,
         alive=alive, gold_on_death=P("gold_on_death"),
         xp_on_death=P("xp_on_death"))
+
+    # ---- champion-kill gold/XP (`Champion.Die`, `Champion.cs:392-461`) -----
+    # `death_rewards` above is `AttackableUnit.Die`'s path -- minions (and,
+    # numerically inertly, turrets) only. `Champion` overrides `Die` entirely
+    # and never calls `base.Die`, so THIS is the only thing that ever pays
+    # gold or XP for a champion kill. See `rewards.champion_kill_rewards`'s
+    # docstring for the full formula and its citations.
+    ckr = champion_kill_rewards(
+        died=died, kind=state.kind, level=state.level, killer=killer,
+        hit_flag_ms=hit_flag_ms, hit_flag_by=hit_flag_by,
+        kill_spree=state.kill_spree, death_spree=state.death_spree,
+        gold_from_minions=state.gold_from_minions,
+        first_blood_done=state.first_blood_done,
+        kill_exp_table=params["champion_kill_exp"])
+
+    # ---- turret-destruction gold/XP (`LaneTurret.Die`, `LaneTurret.cs:37-88`) ---
+    tk_gold, tk_xp = turret_kill_rewards(
+        died=died, kind=state.kind, team=state.team, alive=alive, x=x, y=y,
+        local_gold=P("local_gold_on_death"), global_gold=P("global_gold_on_death"),
+        global_xp=P("global_xp_on_death"), attack_range=P("attack_range"))
+
+    # `Champion.OnKill`'s minion-kill branch (`Champion.cs:379-388`) is the
+    # OTHER place `DeathSpree`/`GoldFromMinions` change; `death_rewards.gold`
+    # IS exactly this tick's minion-kill gold (its only source), so it feeds
+    # straight in. Applied on top of `ckr`'s own spree/GoldFromMinions output
+    # so a champion who lands BOTH a champion kill and a minion kill in the
+    # exact same tick sees the champion-kill reset (`GoldFromMinions=0`)
+    # first, then this tick's minion gold accumulate from zero -- one
+    # deterministic order for an astronomically rare simultaneous case, not a
+    # server-verified one.
+    gold_from_minions, death_spree = minion_gold_deathspree_decay(
+        minion_gold=rw.gold, death_spree=ckr.death_spree,
+        gold_from_minions=ckr.gold_from_minions)
+
     amb, gold_timer = ambient_gold(t_now, state.gold_timer,
                                    state.kind == Kind.CHAMPION)
-    gold = state.gold + rw.gold + amb
-    xp = state.xp + rw.xp
+    gold = state.gold + rw.gold + amb + ckr.gold + tk_gold
+    xp = state.xp + rw.xp + ckr.xp + tk_xp
     cs = state.cs + rw.cs.astype(state.cs.dtype)
+    kills = state.kills + ckr.kills
     level = jnp.where(state.kind == Kind.CHAMPION,
                       level_for_xp(xp, params["xp_curve"]), state.level)
     # Spell ranks are a pure function of champion level under a fixed skill
@@ -699,7 +750,11 @@ def tick(state: LaneState, params: UnitParams,
         # observation builder) get exactly what they'd get from calling
         # `fog.visible_to_enemy` themselves on the returned state.
         visible_to_enemy=visible & alive,
-        gold=gold, xp=xp, cs=cs, level=level,
+        gold=gold, xp=xp, cs=cs, level=level, kills=kills,
+        kill_spree=ckr.kill_spree, death_spree=death_spree,
+        gold_from_minions=gold_from_minions,
+        hit_flag_ms=hit_flag_ms, hit_flag_by=hit_flag_by,
+        first_blood_done=ckr.first_blood_done,
         gold_timer=gold_timer, ms_since_damaged=ms_since_damaged,
         spell_level=spell_level, buff_id=bs.buff_id,
         buff_elapsed=bs.buff_elapsed, spell_cooldown=bs.spell_cooldown,

@@ -241,6 +241,40 @@ class LaneState:
     ms_since_damaged: jax.Array  # (N,)
     cs: jax.Array              # (N,) int16
     deaths: jax.Array          # (N,) int16
+    #: ``Champion.KillSpree``/``DeathSpree`` (``Champion.cs:31-32``) -- a
+    #: champion's OWN consecutive-kills/-deaths counters, read as the VICTIM's
+    #: (not the killer's) state inside `Champion.Die`'s gold formula: a fed
+    #: victim (high `kill_spree`) is worth a "shutdown" bonus, a feeding one
+    #: (`death_spree>=1` with `kill_spree==0`) is worth less. See
+    #: `sim.rewards.champion_kill_rewards`. Zero for non-champions, always.
+    kill_spree: jax.Array      # (N,) int32
+    death_spree: jax.Array     # (N,) int32
+    #: ``Champion.GoldFromMinions`` (`Champion.cs:29`) -- gold earned from
+    #: minions while on a death spree; crossing 1000 knocks one stack off
+    #: `death_spree` (`Champion.OnKill`, `Champion.cs:379-388`). Reset to 0
+    #: the instant its owner lands a champion kill (`Champion.cs:490`).
+    gold_from_minions: jax.Array  # (N,)
+    #: ``ChampionStats.Kills`` -- not read by any gold/XP formula (unlike
+    #: `kill_spree`/`death_spree` above), carried only for observability,
+    #: symmetric with `deaths` above.
+    kills: jax.Array           # (N,) int16
+    #: ``Champion._championHitFlagTimer`` (`Champion.cs:21,267-273`) -- ms
+    #: remaining since this champion was last hit by ANY source (reset to
+    #: 15000 on every `TakeDamage`, decremented every tick, floored at 0; NOT
+    #: the same gate as `ms_since_damaged`, which exempts ordinary
+    #: melee/caster minion damage for Garen's passive -- this one has no such
+    #: exemption, matching `Champion.TakeDamage`'s override applying
+    #: unconditionally). Zero for non-champions, always.
+    hit_flag_ms: jax.Array     # (N,)
+    #: ``Champion._playerHitId`` (`Champion.cs:27,573-574`), translated from a
+    #: NetId to this state's own unit index -- whoever last hit this champion,
+    #: of any kind (champion/minion/turret). -1 for none yet. See
+    #: `sim.rewards.champion_kill_rewards`'s `cKiller` fallback
+    #: (`Champion.cs:404-408`).
+    hit_flag_by: jax.Array     # (N,) int8
+    #: ``IMapScript.HasFirstBloodHappened`` (`Map1/LevelScript.cs:19`) -- a
+    #: MAP-level flag, not per-unit, exactly like `next_spawn_ms` below.
+    first_blood_done: jax.Array   # () bool
 
     # ---- buffs -----------------------------------------------------------
     buff_id: jax.Array         # (N, MAX_BUFFS) int8, 0 = empty
@@ -350,6 +384,11 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         stat_timer=z(n_units), heal_timer=z(n_units),
         ms_since_damaged=jnp.full((n_units,), 1e6, dtype),
         cs=zi(n_units, t=jnp.int16), deaths=zi(n_units, t=jnp.int16),
+        kill_spree=zi(n_units, t=jnp.int32), death_spree=zi(n_units, t=jnp.int32),
+        gold_from_minions=z(n_units), kills=zi(n_units, t=jnp.int16),
+        hit_flag_ms=z(n_units),
+        hit_flag_by=jnp.full((n_units,), -1, dtype=jnp.int8),
+        first_blood_done=jnp.asarray(False),
         buff_id=zi(n_units, MAX_BUFFS),
         buff_elapsed=z(n_units, MAX_BUFFS),
         buff_duration=z(n_units, MAX_BUFFS),
