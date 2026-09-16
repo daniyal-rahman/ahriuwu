@@ -716,39 +716,70 @@ have been a failure of the idea either: PureJaxRL's apples-to-apples
 end-to-end-JIT number is ~10×, and the rest of its headline comes from parallel
 envs and parallel seeds, which we get regardless.*
 
-#### J1 status, 2026-09-16
+#### J1 status, end of 2026-09-16
 
-**Green.** Terrain and pathing (exact, from the 86 KB bitmap — no
-approximation); wave spawn timing (178 spawn events in 600 s, event for event);
-movement parity at the oracle's own resolution; the auto-attack clock; target
-acquisition, including call-for-help; damage, kill attribution and the
-gold/XP asymmetry; gate 4 (164×) and gate 5 (12.8 s).
+**Green.** Terrain and pathing (exact, from the 86 KB bitmap); wave spawn timing
+(178 events in 600 s, event for event); movement parity at the oracle's
+resolution; the auto-attack clock; target acquisition including call-for-help;
+damage, kill attribution and the gold/XP asymmetry; ranged basic-attack missiles
+with per-unit speeds; turret stats and their time ramp; gate 4 (164x) and gate 5
+(12.8 s). 215 tests pass.
 
-**Open, with the cause known.**
+**The day's theme: the sim was built from the stat tables and the engine, and
+three whole classes of truth live elsewhere.**
 
-*Minion population +17%* (median 24 against the server's 21, p95 31 against 27).
-Was +24% this morning. The cause of the larger part was that the sim placed
-**2 turrets and the server places 24** — `include_all_turrets` was documented,
-accepted as a parameter and never implemented. Five turrets per side sit on the
-top lane, and the four behind each outer turret are what stops a winning wave:
-without them the lane did not merely drift, it ran away to 2 blue minions
-against 28 red by ten minutes. With them it oscillates, which is what a lane is
-supposed to do. The residual +17% is the oscillation being too violent — the
-sim destroys blue's outer turret inside 600 s, which the server is being asked
-about now.
+*The map decides which unit you are.* `TURRET_MODELS` pointed at
+`SRUAP_Turret_Order3`/`Chaos3` -- Map11 units -- while the config pins map 1,
+whose outer turrets are `OrderTurretNormal`/`ChaosTurretWorm`. Every turret
+number was wrong (AD 152 not 190, armour 60 not 67, regen 0 not 3), and it
+survived every cross-check because the two candidates agree on exactly the
+values already checked: BaseHP 1300 and range 750. Minions were checked the
+same way and are correct.
 
-*2 of 24 pathfinder routes disagree.* Heap tie-break, tick lag and float32 have
-each been falsified as the cause.
+*Content scripts are a third source of truth, and only apply if the character
+name is the unit actually spawned.* A turret's 0.7x-vs-minion discount was read,
+verified across four files, tested, committed -- and belongs to a unit that is
+not on this map. Verifying a script exists is not verifying it runs.
 
-**Not built.** Garen Q/W/R (E is in), caster missiles, buffs beyond E, the
-next-hop pathing table, the 50-seed corpus, and the N-seeds-per-experiment vmap
-(J3 gate 5).
+*Map scripts carry stats that no stat table contains.* An outer turret gains
++4 AD every 60 s from t=30 s, capped at 7 -- 152 at the start, 180 from 390 s.
+And `TURRET_HP_BONUS = 250` is not an unexplained delta but
+`250 * enemy champion count` from the same script.
 
-**Gate 3 has no implementation yet** and is the one that most deserves one: an
-oracle last-hitter scoring the same CS@10 in the sim as on the server is the
-only *behavioural* known-answer in the list, and the population comparison is a
-weaker instrument than it looks — it agreed to within its tolerance while the
-lane underneath it was collapsing to one side.
+**Open, with the cause characterised.**
+
+*Lane stability.* The server's lead flips sign every minute or two and the fight
+never leaves lane fraction 0.475-0.533; |blue - red| has mean 2.6, max 9. The
+sim is exactly balanced for three minutes (2.8/2.8, 9.6/9.6, 10.1/10.1) and then
+runs away, ending with blue's outer turret destroyed, which the server's never
+is. Median live minions 25 against 21.
+
+Missiles were the leading hypothesis -- wasted ranged damage as the missing
+negative feedback -- and the measurement **did not confirm it**: adding them
+moved mean imbalance from 7.2 to 12.5, and the turret ramp pulled it back to
+8.5. The mechanics are individually verified; the stability question is
+separate. Leading candidate now: the verified collision-before-movement ordering
+difference (`docs/TICK_PARITY_AUDIT.md` gap 2) -- the server pushes apart last
+tick's resting positions and then moves, we move and then push apart.
+
+*Gate 3 fails at 7 CS against 10*, honestly and narrowly, after two rounds of
+it measuring the wrong thing (no A* on move orders, then no fog of war). Left
+failing rather than widened.
+
+*Turret tiers.* All 24 placed turrets share the outer profile. The other tiers
+run a different growth schedule that starts at 480 s -- inside a 600 s episode --
+and also gain armour and MR. Blue's inner turret is the one a pushed wave
+reaches.
+
+*2 of 24 pathfinder routes disagree.* Map/navgrid identity is now ruled out
+(same inode). Route deviation is 0.558 units and the server's corners land on
+our cells, so this looks like waypoint emission, not routing -- and `waypoints`
+is already in the diff's NOT_MODELLED list. Parked; settling it needs the
+server's raw pre-smooth path, which the dump does not expose.
+
+**Not built.** Garen Q/W/R, HP regen (turrets are 0 on this map, but Garen is
+1.568 + 0.1/level plus a separate passive heal), fog of war in `LaneState`, the
+next-hop pathing table, the 50-seed corpus, the N-seeds vmap (J3 gate 5).
 
 ### Stage J2 — The observation builder in JAX (weeks 2–5, parallel to J1)
 
