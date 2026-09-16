@@ -26,6 +26,15 @@ about.
 screen_x, screen_y, target), so log-probs and entropies **sum**. Maximum
 factored entropy is ``ln 8 + ln 96 + ln 54 + ln 32`` = **14.099 nats**.
 
+**14.099 is a ceiling, not an achievable value.** The target head is masked to
+the *visible* entity slots, so its share of the budget is ``ln(n_visible)``, not
+``ln 32``. At episode start only four units exist, so that head contributes
+**zero** entropy -- there is nothing to be uncertain about -- and the whole
+policy reads 10.63 even when the other three heads are exactly uniform
+(2.079 + 4.564 + 3.989 + 0.000). Read "entropy as a fraction of maximum"
+against the *achievable* maximum for the observation, or it will report
+collapse where there is only an empty lane.
+
 Do not reuse the 9.940 that appears in `lanerl_rl/ppo.py`'s notes. That figure
 is correct for the run it cites (`rl-overnight-0911-0608`, 2026-09-11) under the
 action space of the time -- 8 buttons, a **9x9** move grid, 32 targets, which is

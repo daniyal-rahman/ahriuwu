@@ -117,3 +117,67 @@ def test_parameter_count_is_in_the_right_ballpark(built):
     _, v, _, _ = built
     n = sum(x.size for x in jax.tree.leaves(v))
     assert 1e6 < n < 2e7, f"{n:,} parameters"
+
+
+def test_each_head_starts_uniform_over_its_OWN_support(built):
+    """Exploration should start unbiased -- per head, against what that head
+    can actually reach.
+
+    Two versions of this test were wrong before this one:
+
+    1. fed all-zero observations, where the trunk output is small and even a
+       badly-scaled head looks uniform. It passed while the policy was starting
+       25% peaked on real inputs.
+    2. compared the total against `MAX_FACTORED_ENTROPY` (14.099). That is a
+       ceiling, not an achievable value: the target head is masked to the
+       *visible* slots, and at episode start only four units exist, so it
+       contributes **zero** entropy while the other three heads are exactly
+       uniform. 10.63 was the right answer, not a failure.
+
+    So: check each head against `ln(support)`.
+    """
+    import numpy as _np
+
+    from lanerl_jax.obs.builder import build_observation
+    from lanerl_jax.obs.frame import make_lane_frame
+    from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane
+    from lanerl_jax.sim.state import Team
+    from lanerl_jax.train.ppo import factored_entropy
+
+    p, v, _, _ = built
+    frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
+                            TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
+    ob = build_observation(init_lane(), 0, frame)
+    out = p.apply(v, ob.entities[None], ob.entity_pad_mask[None],
+                  ob.self_vec[None], ob.global_vec[None])
+
+    for name, logits, support in (
+        ("button", out.button, 8),
+        ("screen_x", out.screen_x, 96),
+        ("screen_y", out.screen_y, 54),
+    ):
+        h = float(factored_entropy([logits])[0])
+        assert h == pytest.approx(float(_np.log(support)), abs=0.01), (
+            f"{name}: {h:.4f} vs uniform {_np.log(support):.4f}")
+
+    n_visible = int((~_np.asarray(ob.entity_pad_mask)).sum())
+    h_target = float(factored_entropy([out.target])[0])
+    assert h_target == pytest.approx(float(_np.log(max(n_visible, 1))), abs=0.01)
+
+
+def test_masked_target_logits_do_not_overflow_float32(built):
+    """The mask sentinel is -1e9, not -1e30.
+
+    The softmax is insensitive to the magnitude -- it subtracts the max -- but
+    -1e30 squared is 1e60, which overflows float32, so any variance or norm
+    taken over these logits becomes inf. That is the kind of thing that shows
+    up as a NaN gradient three modules away.
+    """
+    import numpy as _np
+
+    p, v, (ent, _, sv, gv), cfg = built
+    mask = _np.zeros((3, cfg.n_slots), bool)
+    mask[:, 4:] = True
+    out = p.apply(v, ent, jnp.asarray(mask), sv, gv)
+    t = _np.asarray(out.target, dtype=_np.float32)
+    assert _np.isfinite((t.astype(_np.float64) ** 2).sum())
