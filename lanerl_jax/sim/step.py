@@ -48,6 +48,7 @@ from .combat import (
     outer_turret_ramps,
 )
 from .collision import resolve_collisions
+from ..obs.fog import visible_to_enemy as _visible_to_enemy
 from .init import MINION_SPAWN, spawn_minion
 from .missiles import step_missiles
 from .profiles import PROFILES
@@ -217,7 +218,20 @@ def tick(state: LaneState, params: UnitParams,
         buff_duration=state.buff_duration, buff_power=state.buff_power,
         spell_cooldown=state.spell_cooldown, spell_level=state.spell_level,
         x=state.x, y=state.y, kind=state.kind, team=state.team,
-        alive=state.alive, armor=P("armor"), delta_ms=delta_ms)
+        alive=state.alive, armor=P("armor"),
+        magic_resist=P("magic_resist"), delta_ms=delta_ms)
+
+    # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
+    # W's PASSIVE is a permanent +20% Armor and +20% MagicResist, granted once
+    # on first rank-up of W (`W.cs:26-46` registers an OnLevelUpSpell listener
+    # at spell construction, so it does not require ever pressing W). W's
+    # ACTIVE multiplies all incoming post-mitigation damage by 0.7 while the
+    # window is open (`GarenW.cs:47-55`).
+    #
+    # Both are identity when Garen has never levelled or cast W, so this
+    # changes nothing in a lane where W is unused.
+    armor_eff = P("armor") * (1.0 + bs.armor_pct_bonus)
+    magic_resist_eff = P("magic_resist") * (1.0 + bs.mr_pct_bonus)
 
     # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
     # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.
@@ -237,11 +251,26 @@ def tick(state: LaneState, params: UnitParams,
         state.n_waypoints, P("move_speed"),
         _can_move(state.move_order, state.alive), delta_ms)
 
+    # ---- 2p. fog of war (ObjectManager.Update's vision pass) ---------------
+    # The server recomputes `IsVisibleByTeam` once per tick, from that tick's
+    # positions, and everything downstream just reads the cached flag
+    # (`GameServerLib/Lanerl/LanerlFow.cs`'s "AT THE CACHE" comment; the write
+    # side is `ObjectManager.UpdateTeamsVision`, `ObjectManager.cs:196`). Done
+    # here, once, on the POST-MOVEMENT `x, y` for the same reason target
+    # acquisition below uses them and not `state.x/state.y`: a unit that walks
+    # into sight range this tick is seen this tick, matching "targeting sees
+    # post-movement positions" in this module's own docstring. Recomputed
+    # rather than threaded through unchanged from last tick because it is a
+    # pure function of (position, kind, team, alive), all already updated
+    # above -- there is no cross-tick memory to preserve, unlike e.g.
+    # `ignore_until`.
+    visible = _visible_to_enemy(x, y, state.kind, state.team, state.alive)
+
     # ---- 2. the minion controller (AIScript.OnUpdate) ----------------------
     prio = base_priority(state.kind, _minion_type_of(state))
     ai = step_minion_ai(
         kind=state.kind, alive=state.alive, x=x, y=y, team=state.team,
-        targetable=state.alive, visible=state.alive,
+        targetable=state.alive, visible=visible,
         is_attacking=state.is_attacking,
         acquisition_range=P("acquisition_range"),
         base_prio=prio, help_priority=state.help_priority,
@@ -262,26 +291,63 @@ def tick(state: LaneState, params: UnitParams,
     # the whole of last-hitting.
     is_champ = state.kind == Kind.CHAMPION
     attack_moving = is_champ & (state.move_order == MoveOrder.ATTACK_MOVE)
+    # The fresh-acquisition scan itself does NOT gate on vision. It is the
+    # `MoveOrder == OrderType.AttackMove` branch of `ObjAIBase.UpdateTarget`
+    # (ObjAIBase.cs:1288-1320 -- "Acquires the closest target"), and its loop
+    # only rejects on `IsDead`, `Team`, `DistanceSquared > range*range` and
+    # `!Targetable`; no `IsVisibleByTeam` call appears in it at all. Nor need
+    # one: `range` there is `Stats.AcquisitionRange.Total` (400 for Garen,
+    # `profiles.py`), smaller than a champion's own `VisionRadius` (1200,
+    # `fog.VISION_RADIUS`), so anything the scan can find is already seen by
+    # the champion doing the looking regardless of any other teammate --
+    # filtering candidates here would be a no-op on this patch's numbers, and
+    # skipping it matches the server line-for-line instead of only in effect.
     champ_pick = jnp.where(
         attack_moving,
         nearest_enemy(x, y, state.team, state.alive, state.alive,
                       P("acquisition_range")),
         jnp.int8(-1))
-    keep_champ = is_champ & (state.target >= 0)
+    # What DOES gate on vision -- and matters, because this branch carries no
+    # distance cap at all, unlike the minion and turret rules below, so a held
+    # target can wander arbitrarily far before this is the only thing that
+    # drops it. `ObjAIBase.UpdateTarget` (ObjAIBase.cs:1183):
+    #     else if (TargetUnit.IsDead || (...) || !TargetUnit.IsVisibleByTeam(Team))
+    #     { ...; SetTargetUnit(null, true); return; }
+    # `visible` already ANDs with `alive` (fog.visible_to), so this one gather
+    # reproduces both halves of that condition that apply here -- IsDead and
+    # !IsVisibleByTeam -- rather than needing a separate alive check.
+    cur_champ = jnp.clip(state.target, 0, n - 1)
+    keep_champ = is_champ & (state.target >= 0) & visible[cur_champ]
 
     # Turrets have their own rule entirely: priority first, distance never,
-    # plus the dive override. `TurretAI.OnUpdate` also drops a target that has
-    # left range, which is the only way a turret ever releases one.
+    # plus the dive override. `BaseTurret : ObjAIBase` (BaseTurret.cs:17), so
+    # it runs the SAME generic `UpdateTarget` as the champion above: `TurretAI.
+    # OnUpdate` (its own AIScript) only handles dropping a target that has
+    # left ATTACK range (reproduced below as `left_range`); dropping one that
+    # died or went invisible is `ObjAIBase.cs:1183` again, not anything
+    # `TurretAI` itself does. `target_gone` reproduces that second path --
+    # without it a turret that lands a killing blow keeps "holding" the
+    # corpse's now-dead slot (`turret_acquire`'s own holding branch has no
+    # aliveness check) until something repositions that exact slot index back
+    # out of attack range, going idle in the meantime despite live targets
+    # sitting in range. A turret's own sight (800) already covers its own
+    # attack range (750, `profiles.py`), so -- as with the champion above --
+    # candidate visibility filtering changes nothing here on this patch's
+    # numbers; it is passed through `targetable` anyway for a live target that
+    # somehow sits in attack range but out of every ally's sight (unreached
+    # today, but a real gap in the rule otherwise).
     is_turret = state.kind == Kind.TURRET
     turret_pick = turret_acquire(
-        x, y, state.team, state.alive, state.alive, state.kind,
+        x, y, state.team, state.alive, state.alive & visible, state.kind,
         _minion_type_of(state), P("attack_range"), state.target,
         state.target, P("attack_range"))
     cur = jnp.clip(state.target, 0, n - 1)
     left_range = (state.target >= 0) & (
         ((x[cur] - x) ** 2 + (y[cur] - y) ** 2)
         > P("attack_range") ** 2)
-    turret_target = jnp.where(left_range, jnp.int8(-1), turret_pick)
+    target_gone = (state.target >= 0) & ~visible[cur]
+    turret_target = jnp.where(left_range | target_gone, jnp.int8(-1),
+                              turret_pick)
 
     target = jnp.where(
         is_champ, jnp.where(keep_champ, state.target, champ_pick),
@@ -334,7 +400,7 @@ def tick(state: LaneState, params: UnitParams,
         attack_period=P("attack_period"),
         windup_time=P("attack_windup"),
         attack_damage=raw_ad,
-        target_resist=P("armor")[tgt],
+        target_resist=armor_eff[tgt],
         delta_ms=delta_ms, xp=jnp)
 
     # ---- 5. apply damage, and attribute the kill --------------------------
@@ -375,7 +441,10 @@ def tick(state: LaneState, params: UnitParams,
     # that unit's own attacker row, so the lowest-index-crosses-zero rule below
     # sees melee hits and missile hits in one ordering rather than two.
     dmg_ij = dmg_ij + ms.damage_ij
-    dealt = dmg_ij.sum(axis=0) + bs.damage_dealt
+    # W's active scales the victim's TOTAL incoming damage for the tick, so it
+    # is applied here rather than per attacker -- one multiply on the sum, not
+    # one per source, which is what `TakeDamage`'s post-mitigation hook does.
+    dealt = (dmg_ij.sum(axis=0) + bs.damage_dealt) * bs.damage_multiplier
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
 
     # ---- out-of-combat clock, for Garen's passive -------------------------
@@ -510,7 +579,19 @@ def tick(state: LaneState, params: UnitParams,
         time_since_attack=ai.time_since_attack, ignore_until=ai.ignore_until,
         aa_cooldown=aa.aa_cooldown, aa_windup=aa.aa_windup,
         is_attacking=aa.is_attacking, has_auto_attacked=aa.has_auto_attacked,
-        hp=hp, alive=alive, gold=gold, xp=xp, cs=cs, level=level,
+        hp=hp, alive=alive,
+        # `visible` was computed from this tick's post-movement, PRE-death
+        # positions/alive (see the fog-of-war block above) -- exactly what
+        # this tick's own targeting needed. ANDed with the tick's final
+        # `alive` here before it is stored, so a unit that died or respawned
+        # (moved to `spawn_x/y`) THIS tick is never read back next tick as a
+        # visible target through the stored field: `visible_to_enemy` implies
+        # `alive`, the same invariant `fog.visible_to`/`visible_to_enemy`
+        # already hold internally, and downstream readers (e.g. an
+        # observation builder) get exactly what they'd get from calling
+        # `fog.visible_to_enemy` themselves on the returned state.
+        visible_to_enemy=visible & alive,
+        gold=gold, xp=xp, cs=cs, level=level,
         gold_timer=gold_timer, ms_since_damaged=ms_since_damaged,
         spell_level=spell_level, buff_id=bs.buff_id,
         buff_elapsed=bs.buff_elapsed, spell_cooldown=bs.spell_cooldown,

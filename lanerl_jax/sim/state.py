@@ -147,6 +147,23 @@ class LaneState:
     #: slot is reused by whatever spawns into it, and per-team because blue and
     #: red minions genuinely differ (cannon range 300 vs 280, gold 35 vs 30).
     model: jax.Array           # (N,) int8
+    #: ``GameObject.IsVisibleByTeam`` from the perspective of the team that is
+    #: NOT this unit's own -- i.e. can this unit currently be seen (and hence
+    #: targeted) by its enemies. Recomputed every tick in ``step.tick`` from
+    #: :func:`lanerl_jax.obs.fog.visible_to_enemy` and stored here rather than
+    #: recomputed by each consumer, mirroring the server's own cache: `Object
+    #: Manager.Update` writes `IsVisibleByTeam` once per tick and everything
+    #: downstream -- `ObjAIBase.UpdateTarget`, `LaneMinionAI`, `Spell` -- just
+    #: reads the flag (`GameServerLib/Lanerl/LanerlFow.cs`'s "AT THE CACHE"
+    #: comment). A single ``(N,)`` field suffices rather than a per-team pair
+    #: or an ``(N, N)`` who-sees-whom matrix: a lane has exactly two live
+    #: teams, an ally is unconditionally visible to itself, so "visible to
+    #: unit u's opponent" already says everything any seeker on either side
+    #: needs -- see the function's own docstring for the full argument. That
+    #: also keeps the memory cost at 1x an ``(N,)`` leaf rather than 66x (this
+    #: state is replicated across thousands of parallel envs, per the module
+    #: docstring's caps table).
+    visible_to_enemy: jax.Array  # (N,) bool
 
     # ---- position and movement ------------------------------------------
     x: jax.Array               # (N,)
@@ -284,6 +301,11 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         team=jnp.full((n_units,), Team.NEUTRAL, dtype=jnp.int8),
         alive=jnp.zeros((n_units,), dtype=bool),
         model=zi(n_units),
+        # An empty world has nothing to see; `tick` recomputes this fresh from
+        # real positions before it is ever read this same first tick, so the
+        # initial value only matters for a state that is inspected without
+        # ever being stepped.
+        visible_to_enemy=jnp.zeros((n_units,), dtype=bool),
         x=z(n_units), y=z(n_units),
         waypoints=z(n_units, MAX_WAYPOINTS, 2),
         waypoint_key=jnp.ones((n_units,), dtype=jnp.int8),

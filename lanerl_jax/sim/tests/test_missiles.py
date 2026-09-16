@@ -225,14 +225,23 @@ def test_garens_damage_is_instant_not_a_missile():
 
     garen, victim = 0, 2
     x[1], y[1] = 0.0, 20000.0        # the other champion, out of the way
+    alive = np.asarray(s.alive).copy()
     kind[victim] = Kind.LANE_MINION
     team[victim] = Team.RED
+    # `alive` was missing here, and the omission was invisible for as long as
+    # the champion's target code never checked whether its target was alive.
+    # Once fog-of-war wiring made a held target require visibility -- and
+    # visibility implies alive -- Garen correctly refused to attack a corpse
+    # and this test failed with "Garen never landed a hit". The fixture was
+    # always wrong; a correct change is what surfaced it.
+    alive[victim] = True
     x[victim], y[victim] = 5100.0, 5000.0
     hp[victim] = mhp[victim] = 1000.0
     x[garen], y[garen] = 5000.0, 5000.0
     target[garen] = victim
 
     s = s.replace(kind=jnp.asarray(kind), team=jnp.asarray(team),
+                 alive=jnp.asarray(alive),
                  x=jnp.asarray(x), y=jnp.asarray(y), hp=jnp.asarray(hp),
                  max_hp=jnp.asarray(mhp), target=jnp.asarray(target))
     step, _ = _ticker()

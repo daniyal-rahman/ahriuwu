@@ -17,7 +17,7 @@ from lanerl_jax.obs.builder import (
     SLOT_ENEMY_MINION,
     build_observation,
 )
-from lanerl_jax.obs.fog import visible_to
+from lanerl_jax.obs.fog import visible_to, visible_to_enemy
 from lanerl_jax.obs.frame import make_lane_frame, to_lane
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane
 from lanerl_jax.sim.state import Kind, Team
@@ -99,6 +99,85 @@ def test_own_units_are_always_visible_and_distance_gates_the_rest():
     # VIEWER, so a minion (1100) grants vision a champion (1200) would not.
     x2 = x.at[1].set(8500.0)          # 500 from the far enemy, inside 1100
     assert bool(visible_to(Team.BLUE, x2, y, kind, team, jnp.ones(n, bool))[3])
+
+
+def test_a_turret_is_visible_even_with_no_ally_anywhere_near_it():
+    """``BaseTurret.IsAffectedByFoW => false`` (``AI/BaseTurret.cs:36``): a
+    turret is exempt from fog outright, not merely "seen by a big radius".
+
+    ``GameObject.IsVisibleByTeam`` is ``!IsAffectedByFoW || _visibleByTeam[team]``
+    (``GameObjects/GameObject.cs:328-330``), so for a turret the right-hand side
+    never even gets evaluated -- it is visible regardless of who is nearby.
+    ``Champion``/``Minion`` inherit ``AttackableUnit.IsAffectedByFoW => true``
+    (``AttackableUnits/AttackableUnit.cs:117``) and get no such exemption.
+
+    The bug this catches: folding the turret's 800-unit *viewer* radius (how
+    far ITS vision reaches) into the same radius test used for whether the
+    turret itself can be SEEN would hide an enemy turret the instant no ally
+    stood within 800 units of it -- true for most of a 13,000-unit lane. A
+    turret is a permanent, known objective on the server; it must never
+    disappear from either team's observation or from ``turret_acquire``.
+    """
+    #  0: my champion, far away   1: enemy turret, alone on the map
+    x = jnp.asarray([0.0, 9000.0])
+    y = jnp.asarray([0.0, 9000.0])
+    kind = jnp.asarray([Kind.CHAMPION, Kind.TURRET], jnp.int8)
+    team = jnp.asarray([Team.BLUE, Team.RED], jnp.int8)
+    alive = jnp.ones(2, bool)
+
+    assert bool(visible_to(Team.BLUE, x, y, kind, team, alive)[1]), (
+        "an enemy turret is visible even 9000 units from the nearest ally"
+    )
+    # visible_to_enemy is framed the other way round (per-target, not
+    # per-viewing-team) but must agree: the turret's own team is RED, so its
+    # "enemy" is BLUE, and BLUE has nothing anywhere near it.
+    assert bool(visible_to_enemy(x, y, kind, team, alive)[1])
+    # A dead turret is a destroyed turret, and a destroyed turret is not on
+    # the map to observe -- the exemption must not defeat the `alive` gate.
+    assert not bool(visible_to(Team.BLUE, x, y, kind, team,
+                                alive.at[1].set(False))[1])
+
+
+def test_vision_is_a_team_union_a_minion_can_see_what_its_turret_sees():
+    """Vision belongs to the TEAM, not to the individual unit asking.
+
+    A blue minion sitting far from an enemy still "sees" it (i.e. it counts as
+    visible to blue, the minion's team) once a friendly TURRET's 800-unit
+    bubble reaches that enemy -- the same union rule
+    ``test_own_units_are_always_visible_and_distance_gates_the_rest`` exercises
+    with a second minion, but the point of a SEPARATE case here is that a
+    turret is a different viewer KIND with a different radius
+    (``fog.VISION_RADIUS[Kind.TURRET] == 800``), so this cannot be satisfied by
+    accidentally reusing one unit's own bubble twice, and it is exactly the
+    scenario ``minion_acquire``'s candidate filter and ``turret_acquire``'s own
+    (now vision-gated) scan both rely on being a TEAM property.
+
+    The bug this catches: computing "is X visible to blue" from a single
+    blue unit's own kind/position (per-unit) rather than as a union over every
+    living blue unit would make an enemy standing next to a friendly turret,
+    but far from every other blue unit, wrongly stay invisible to blue's
+    targeting and observation.
+    """
+    #  0: enemy minion (the candidate being asked about)
+    #  1: blue turret, 700 from the candidate (inside the turret's 800)
+    #  2: blue minion, far from the candidate on its own (outside its own 1100)
+    x = jnp.asarray([5700.0, 5000.0, 0.0])
+    y = jnp.asarray([5000.0, 5000.0, 0.0])
+    kind = jnp.asarray([Kind.LANE_MINION, Kind.TURRET, Kind.LANE_MINION], jnp.int8)
+    team = jnp.asarray([Team.RED, Team.BLUE, Team.BLUE], jnp.int8)
+    alive = jnp.ones(3, bool)
+
+    vis_blue = visible_to(Team.BLUE, x, y, kind, team, alive)
+    assert bool(vis_blue[0]), (
+        "the enemy minion is inside the blue turret's 800-unit bubble, so "
+        "blue (and therefore blue's own minion, via the team union) sees it, "
+        "even though blue's minion is nowhere near it"
+    )
+    # Take the turret out of the picture entirely: no more team union, no
+    # more blue vision on the candidate from 5700 units away.
+    vis_without_turret = visible_to(
+        Team.BLUE, x, y, kind, team, alive.at[1].set(False))
+    assert not bool(vis_without_turret[0])
 
 
 def test_a_fogged_enemy_champion_is_absent_not_at_the_origin(frames):

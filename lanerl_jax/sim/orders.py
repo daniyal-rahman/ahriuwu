@@ -41,7 +41,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from .spells import cast_e
+from .spells import R_CAST_RANGE, Slot, cast_e, cast_q, cast_r, cast_w, enemy_champion_index
 from .state import Kind, LaneState, MoveOrder
 
 __all__ = ["OrderKind", "Orders", "apply_orders"]
@@ -52,11 +52,24 @@ class OrderKind:
     MOVE = 1
     ATTACK = 2
     STOP = 3
-    #: ``{"t":"cast","slot":..}``. Only E is implemented; the slot travels in
-    #: ``Orders.target`` reinterpreted as a slot index, which keeps the tuple
-    #: fixed-width. A cast does NOT clear the move order -- Garen spins while
-    #: walking.
+    #: ``{"t":"cast","slot":..}``. E was the first implemented; Q/W/R below
+    #: follow the same one-kind-per-spell shape rather than a single generic
+    #: CAST kind decoding ``Orders.target`` as a slot index, because
+    #: ``lanerl_rl.constants``/``train/trainer.py`` already hardcode
+    #: ``OrderKind.CAST_E`` for button 5 of the action space, and repurposing
+    #: ``target``'s meaning for E would have been a silent breaking change to
+    #: a file this task does not own. A cast does NOT clear the move order --
+    #: Garen spins/empowers/braces while walking.
     CAST_E = 4
+    #: Self-cast, no target. See ``spells.cast_q``.
+    CAST_Q = 5
+    #: Self-cast, no target. See ``spells.cast_w``.
+    CAST_W = 6
+    #: Single-target. ``Orders.target`` is reinterpreted as the unit to hit,
+    #: exactly like ``ATTACK``'s -- but only the enemy champion is a legal R
+    #: target (``GarenR.json`` ``TextFlags``: ``AffectEnemies | AffectHeroes``,
+    #: no minions/turrets/buildings/neutral/friends), enforced below.
+    CAST_R = 7
 
 
 class Orders(NamedTuple):
@@ -100,6 +113,20 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
     otgt = per_unit(orders.target.astype(jnp.int8), -1)
 
     casting_e = champ & (kind == OrderKind.CAST_E)
+    casting_q = champ & (kind == OrderKind.CAST_Q)
+    casting_w = champ & (kind == OrderKind.CAST_W)
+    # R's only legal target is the enemy champion (`GarenR.json` TextFlags --
+    # see spells.cast_r's docstring), within CastRange. A minion/turret index,
+    # an ally index, or an out-of-range enemy champion all fail this and the
+    # order becomes a no-op, the same "fail closed" contract as `cast_r`'s own
+    # internal re-check.
+    enemy_champ = enemy_champion_index(n)
+    r_target_ok = (otgt == enemy_champ) & (enemy_champ >= 0)
+    r_mirror = jnp.clip(enemy_champ, 0, n - 1)
+    r_d2 = ((state.x - state.x[r_mirror]) ** 2
+            + (state.y - state.y[r_mirror]) ** 2)
+    r_in_range = r_d2 <= (R_CAST_RANGE * R_CAST_RANGE)
+    casting_r = champ & (kind == OrderKind.CAST_R) & r_target_ok & r_in_range
     moving = champ & (kind == OrderKind.MOVE)
     attacking = champ & (kind == OrderKind.ATTACK) & (otgt >= 0)
     stopping = champ & (kind == OrderKind.STOP)
@@ -113,10 +140,20 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
     bid, bel, bdur, bpow, _ = cast_e(
         state.buff_id, state.buff_elapsed, state.buff_duration,
         state.buff_power, state.spell_cooldown, casting_e,
-        state.spell_level[:, 2], state.hp * 0 + _ad_placeholder(state))
+        state.spell_level[:, Slot.E], state.hp * 0 + _ad_placeholder(state))
+    cd = state.spell_cooldown       # cast_e never touches cooldown; step_buffs does.
+
+    bid, bel, bdur, bpow, cd, _ = cast_q(
+        bid, bel, bdur, bpow, cd, casting_q, state.spell_level[:, Slot.Q])
+    bid, bel, bdur, bpow, cd, _ = cast_w(
+        bid, bel, bdur, bpow, cd, casting_w, state.spell_level[:, Slot.W])
+    bid, bel, bdur, bpow, cd, _ = cast_r(
+        bid, bel, bdur, bpow, cd, casting_r, state.spell_level[:, Slot.R],
+        state.hp, state.max_hp, otgt)
 
     return state.replace(
         buff_id=bid, buff_elapsed=bel, buff_duration=bdur, buff_power=bpow,
+        spell_cooldown=cd,
         waypoints=waypoints,
         n_waypoints=jnp.where(moving, jnp.int8(2), state.n_waypoints),
         waypoint_key=jnp.where(moving, jnp.int8(1), state.waypoint_key),
