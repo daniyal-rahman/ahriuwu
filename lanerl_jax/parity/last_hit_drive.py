@@ -159,7 +159,23 @@ DECISIONS_600S = 18_000
 #: docstring for why this is not the identity map.
 WIRE_MINION_TYPE = {0: "melee", 1: "super", 2: "cannon", 3: "caster"}
 
-#: Blue's forward-order waypoints from ``TOP_LANE_PATH``, up to and including
+#: Blue's forward-order waypoints from ``TOP_LANE_PATH``, stopping BEFORE the
+#: enemy outer turret.
+#:
+#: This was ``[:7]``, which ends at index 6 = (3907, 13243). That is lane
+#: fraction **0.604** -- past the 0.500 where the two waves actually meet, and
+#: **412 units** from red's outer turret, comfortably inside its 750 range. The
+#: harness was parking the champion under the enemy tower and then measuring
+#: how well it farms. Index 5 = (2806, 13075) is lane 0.553 and 1,248 units
+#: from that turret, outside its range.
+#:
+#: The gate is supposed to isolate last-hitting. Standing somewhere a champion
+#: would never voluntarily stand is a property of the harness, not of the
+#: simulation, and it is the third distinct way this gate has measured
+#: something other than what it is for -- after the missing A* on move orders
+#: and the missing fog of war.
+#:
+#: Old note, still true of the remaining waypoints:
 #: index 6 -- ``(3907.0, 13243.0)``, the vertex where the two lanes' minion
 #: waves' paths cross (bit-for-bit ``lanerl_jax.parity.record.MEETING_POINT``).
 #: Walked in order before either driver ever calls ``decide()``; see the
@@ -167,7 +183,7 @@ WIRE_MINION_TYPE = {0: "melee", 1: "super", 2: "cannon", 3: "caster"}
 #: -- about 40-44 s at Garen's move speed, well inside the pre-wave window
 #: (the first wave spawns at 90 s), so the champion always finishes the
 #: approach before there is anything to fight.
-APPROACH_WAYPOINTS = TOP_LANE_PATH[:7]
+APPROACH_WAYPOINTS = TOP_LANE_PATH[:6]
 
 #: How close counts as "arrived" at an approach waypoint before advancing to
 #: the next one. Generous relative to one decision's travel (~20-25 game units

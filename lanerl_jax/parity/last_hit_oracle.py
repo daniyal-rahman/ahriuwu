@@ -96,7 +96,7 @@ def post_mitigation(damage: float, resist: float) -> float:
 
 
 def decide(champ: ChampView, minions: Sequence[MinionView],
-           lethal_epsilon: float = 0.0) -> Decision:
+           lethal_epsilon: float = 0.0, hold_position: bool = True) -> Decision:
     """The whole policy. Pure, deterministic, and identical on both sides.
 
     ``lethal_epsilon`` widens the kill test to absorb the fact that damage is
@@ -119,6 +119,26 @@ def decide(champ: ChampView, minions: Sequence[MinionView],
         # order the two implementations happen to enumerate units in
         best = min(killable, key=lambda m: (m.hp, m.uid))
         return Decision(attack=best.uid, move=None)
+
+    if hold_position:
+        # HOLD, do not chase. The fallback used to be "walk to the centroid of
+        # the visible enemy minions", and it was the single worst thing in this
+        # gate.
+        #
+        # A centroid is inside the wave. So the policy walked the champion into
+        # the middle of the enemy minions and stood there: 9 deaths in 600 s of
+        # a 10-minute episode, and every death costs a respawn plus a walk back
+        # the sim cannot even path. Worse, it made the gate depend on the FOG
+        # model, because which minions are visible decides where the centroid
+        # is -- so a difference in vision became a difference in position, and
+        # a difference in CS, none of which is about last-hitting.
+        #
+        # Holding makes position a constant of the experiment on both sides.
+        # The approach script has already put the champion in lane; from there
+        # it last-hits whatever walks into range and does nothing else. CS is
+        # lower for both implementations, which does not matter: the gate
+        # compares two numbers, it does not need either to be large.
+        return Decision(attack=None, move=None)
 
     cx = float(np.mean([m.x for m in minions]))
     cy = float(np.mean([m.y for m in minions]))

@@ -133,12 +133,21 @@ def test_oracle_scores_the_same_cs_in_sim_and_server():
     server = run_oracle_on_server(
         decisions=DECISIONS, port_base=46000, bot_seed=4242, tag="last_hit_gate")
 
+    # Deaths are reported first because they are the live disagreement and
+    # they dominate CS: each one costs a respawn plus a walk back the sim
+    # cannot path. Latest measurement: sim 5, server 0.
+    assert server.deaths == 0, (
+        f"the server's champion died {server.deaths} times -- the baseline is "
+        "supposed to be a champion standing safely in lane; if this fires the "
+        "approach endpoint is wrong again")
+
     gap = sim.cs - server.cs
     assert abs(gap) <= CS_TOLERANCE, (
         f"oracle CS@10 disagrees between sim and server by {gap:+d} "
         f"(tolerance {CS_TOLERANCE}): "
         f"sim cs={sim.cs} approach_decisions={sim.approach_decisions} "
-        f"attacks={sim.attacks} moves={sim.moves} holds={sim.holds}; "
+        f"attacks={sim.attacks} moves={sim.moves} holds={sim.holds} "
+        f"deaths={sim.deaths}; "
         f"server cs={server.cs} approach_decisions={server.approach_decisions} "
         f"attacks={server.attacks} moves={server.moves} holds={server.holds} "
         f"log={server.log_path}. "
