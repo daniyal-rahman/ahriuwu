@@ -291,7 +291,16 @@ def test_a_lane_turrets_damage_also_lands_after_flight():
     turret_team, tx, ty, _, _ = ALL_TURRETS[1]     # blue's top outer turret
     assert turret_team == Team.BLUE
     turret_idx = TU_SLICE.start + 1
-    dist = 100.0
+    # 200, not 100: since the collision-parity pass turrets are OBSTACLES
+    # (`IsCollisionObject` excludes only LevelProp/Particle/SpellMissile/Region;
+    # only `IsCollisionAffected` excludes BaseTurret), so anything inside
+    # minion PathfindingRadius + 1 + turret PathfindingRadius = 35.74 + 1 +
+    # 88.40 = 125.14 units of a turret's centre is pushed out on the first
+    # tick. At 100 the victim was standing inside the turret and got displaced
+    # mid-flight, so the precomputed `flight_ticks` no longer matched. 200 is
+    # clear of the footprint and still well inside the turret's 750 range, so
+    # this stays a test of missile flight rather than of collision.
+    dist = 200.0
     hp0 = 1000.0
 
     victim = 2
@@ -319,7 +328,7 @@ def test_a_lane_turrets_damage_also_lands_after_flight():
     speed = float(tables["missile_speed"][r])
     assert speed == pytest.approx(1200.0)
     flight_ticks = round((dist / speed) / (TICK_MS / 1000.0))
-    assert flight_ticks == 5
+    assert flight_ticks == 10
 
     for _ in range(flight_ticks - 1):
         s = step(s)
