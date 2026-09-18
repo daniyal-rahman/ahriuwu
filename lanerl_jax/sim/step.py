@@ -656,12 +656,32 @@ def tick(state: LaneState, params: UnitParams,
     turret_pick = turret_acquire(
         x, y, state.team, state.alive, state.alive & visible, state.kind,
         _minion_type_of(state), P("attack_range"), state.target,
-        state.target, P("attack_range"), state.spawn_seq)
-    cur = jnp.clip(state.target, 0, n - 1)
-    left_range = (state.target >= 0) & (
+        state.target, P("attack_range"), state.spawn_seq,
+        collision_radius=P("collision_radius"))
+    # `TURRET-001`. The retention test is applied to the target the turret
+    # holds AFTER `CheckForTargets`, not to the one it entered the tick with,
+    # because that is the order inside a single `TurretAI.OnUpdate`
+    # (`TurretAI.cs:22-32`):
+    #
+    #     if (!baseTurret.IsAttacking) { CheckForTargets(); }      // may SET one
+    #     if (TargetUnit != null && DistanceSquared(...) > Range*Range)
+    #         baseTurret.SetTargetUnit(null, true);                // may DROP it
+    #
+    # Acquisition is a quadtree circle-vs-circle query and so reaches
+    # `Range + candidate CollisionRadius` (790 for a lane minion); retention is
+    # a flat centre-to-centre `Range` (750); selection never consults distance.
+    # A best-priority minion in that annulus is therefore picked and dropped in
+    # the same update, every tick, and the turret stands idle at cooldown 0
+    # with closer minions in range -- 664 consecutive ticks of it, measured.
+    # Scoring `left_range` against the INCOMING target (as this did) makes the
+    # trap unreachable no matter how wide acquisition is: the sim would simply
+    # keep the annulus minion. Both halves are needed, and neither alone is a
+    # partial fix -- widening acquisition alone makes turret targeting worse.
+    cur = jnp.clip(turret_pick, 0, n - 1)
+    left_range = (turret_pick >= 0) & (
         ((x[cur] - x) ** 2 + (y[cur] - y) ** 2)
         > P("attack_range") ** 2)
-    target_gone = (state.target >= 0) & ~visible[cur]
+    target_gone = (turret_pick >= 0) & ~visible[cur]
     turret_target = jnp.where(left_range | target_gone, jnp.int8(-1),
                               turret_pick)
 
@@ -696,8 +716,41 @@ def tick(state: LaneState, params: UnitParams,
     in_rng = d2 <= ideal * ideal
     has_tgt = target >= 0
 
-    hold = has_tgt & in_rng
-    chase = has_tgt & ~in_rng
+    # `UpdateTarget` DOES NOT REACH `RefreshWaypoints` DURING A WINDUP.
+    # `ObjAIBase.cs:1192-1205` is an early return that fires on the
+    # `IsAttacking` the unit carried INTO this tick:
+    #
+    #     else if (IsAttacking)
+    #     {
+    #         if (dist > Range + tgt.CollisionRadius && State == STATE_CASTING
+    #             && !CantCancelWhileWindingUp) CancelAutoAttack(...);
+    #         if (AutoAttackSpell.State == STATE_READY) IsAttacking = false;
+    #         return;                       // <-- never reaches :1239-1242
+    #     }
+    #
+    # so neither the in-range `UpdateMoveOrder(Hold)` (`:651-655`) nor the
+    # out-of-range re-path (`:657-669`) happens while a swing is in flight.
+    # The order the unit is left with is whatever its AI script wrote earlier
+    # in the SAME tick -- and `LaneMinionAI`'s 250 ms timer writes `AttackTo`.
+    # That is the whole of the largest gate-1 residual: 5,390 of 5,423 drilled
+    # move-order mismatches were `sim=HOLD, server=ATTACK_TO`, and the dumped
+    # order for minion 1073743551 flips to AttackTo on exactly the tick
+    # `aitimer` resets and stays there for as long as `aastate=1`.
+    #
+    # `state.is_attacking` is the right value to read: `IsAttacking` is
+    # written only inside `UpdateTarget` itself (and by `CancelAutoAttack`,
+    # whose callers all null the target first), so the flag this branch tests
+    # is the one the tick began with, not the one `step_autoattack` returns
+    # below. Reading the post-swing flag instead would re-admit exactly the
+    # firing tick, which is the one tick the server DOES write Hold on.
+    #
+    # Turrets are excluded because `BaseTurret.RefreshWaypoints`
+    # (`BaseTurret.cs:108-110`) is an empty override -- "Overridden function
+    # unused by turrets" -- so a turret's move order is never touched by this
+    # path at all and simply persists.
+    refresh = has_tgt & ~state.is_attacking & (state.kind != Kind.TURRET)
+    hold = refresh & in_rng
+    chase = refresh & ~in_rng
     wp = wp_after_lane
     two = jnp.stack([jnp.stack([x, y], -1), jnp.stack([x[tgt], y[tgt]], -1)], 1)
     wp = jnp.where(chase[:, None, None],

@@ -259,7 +259,8 @@ def turret_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array
                    targetable: jax.Array, kind: jax.Array, minion_type: jax.Array,
                    turret_range: jax.Array, current_target: jax.Array,
                    target_of: jax.Array, attack_range: jax.Array,
-                   spawn_seq: jax.Array | None = None) -> jax.Array:
+                   spawn_seq: jax.Array | None = None, *,
+                   collision_radius: jax.Array) -> jax.Array:
     """``TurretAI.CheckForTargets``.
 
     Two regimes, and the server really does branch on whether it already holds
@@ -272,13 +273,51 @@ def turret_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array
       where both the attacker's target is in the attacker's own attack range and
       that victim is inside turret range. First such champion wins outright
       (the C# ``break``s), no priority involved.
+
+    Acquisition is WIDER than retention, and that is not a rounding detail
+    -- it is `TURRET-001`
+    ------------------------------------------------------------------------
+    The candidate list comes from ``GetUnitsInRange(Position, Range.Total,
+    true)``, which is a **circle-vs-circle** quadtree query, not a
+    centre-to-centre distance test.  ``ApiFunctionManager.cs:601-604`` builds
+    a ``Circle(pos, range)``; ``CollisionHandler.GetNearestObjects`` hands it
+    to ``QuadTree.GetNodesInside``; and every stored node is itself a
+    ``Circle(obj.Position, Math.Max(0.5f, obj.CollisionRadius))``
+    (``CollisionHandler.cs:69-72``).  The leaf test is
+    ``QuadTree.cs:61-64``::
+
+        public bool IntersectsWith(Circle circle)
+            => Vector2.DistanceSquared(Position, circle.Position)
+               < (Radius + circle.Radius) * (Radius + circle.Radius);
+
+    So a unit is a **candidate** at ``dist < Range + its own CollisionRadius``
+    -- 790 for a 40-radius lane minion against a 750-range turret -- and the
+    inequality is strict.  Retention four lines later in the same
+    ``TurretAI.OnUpdate`` is a flat centre-to-centre ``Range`` (see
+    ``step.py``'s turret block), and selection is priority-only with distance
+    never consulted (``:43-62``).
+
+    The three together are a trap, not a tolerance: a best-priority minion
+    standing in that 40-unit annulus is **picked** by ``CheckForTargets`` and
+    **dropped** by the retention test in the same update, every tick, while
+    better-placed lower-priority minions sit unattacked.  One blue turret was
+    measured idle at cooldown 0 for 664 consecutive ticks (11 s) with melee
+    minions at 196 units, because a caster sat at 764.  Using one radius for
+    both -- which this function did until `TURRET-001` -- makes that
+    unreachable, so the sim acquires and fires where the server stands still.
+
+    ``collision_radius`` is therefore required rather than defaulted: a
+    silently-zero radius is exactly the old behaviour, and it is wrong in a
+    direction no test would notice.
     """
     n = x.shape[0]
     d2 = _pairwise_dist2(x, y)
     rng2 = (turret_range * turret_range)[:, None]
+    # `Math.Max(0.5f, obj.CollisionRadius)` -- `CollisionHandler.GetBounds`.
+    cand_r = turret_range[:, None] + jnp.maximum(collision_radius, 0.5)[None, :]
     in_range = (
         alive[None, :] & targetable[None, :]
-        & (team[None, :] != team[:, None]) & (d2 <= rng2)
+        & (team[None, :] != team[:, None]) & (d2 < cand_r * cand_r)
         & ~jnp.eye(n, dtype=bool)
     )
 

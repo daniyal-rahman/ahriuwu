@@ -35,7 +35,8 @@ def test_turret_priority_tie_uses_creation_order_not_slot():
         x, y, team, alive, alive, kind,
         jnp.asarray([MinionType.MELEE] * 3, dtype=jnp.int8),
         jnp.full(3, 500.0), jnp.full(3, -1, dtype=jnp.int8),
-        jnp.full(3, -1, dtype=jnp.int8), jnp.full(3, 500.0), seq)
+        jnp.full(3, -1, dtype=jnp.int8), jnp.full(3, 500.0), seq,
+        collision_radius=jnp.zeros(3))
     assert int(got[0]) == 2
 
 
