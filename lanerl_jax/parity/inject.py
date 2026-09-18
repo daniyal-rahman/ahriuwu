@@ -150,7 +150,9 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from ..sim.combat import growth_sum
 from ..sim.init import CHAMPION_SPAWN, TOP_LANE_PATH
+from ..sim.movement_jax import TICK_MS
 from ..sim.spells import (
     BuffId, E_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT, W_BUFF_SLOT,
     W_PASSIVE_BUFF_SLOT,
@@ -355,6 +357,87 @@ def infer_minion_model(max_hp: float, team: int, params: dict,
             f"nearest match off by {best_err:.3f} HP -- suspicious, "
             f"minion types should match max_hp exactly")
     return best_row, "exact max_hp match"
+
+
+#: Any value in ``(0, dt]`` completes the swing on the very next tick, which is
+#: what ``aa_state == STATE_CASTING`` plus a non-positive grid remainder means.
+#: Kept far below the dump's own quantum so it can never be mistaken for a
+#: recovered measurement.
+_MIN_CASTING_WINDUP = 1.0 / 1_048_576.0
+
+
+def snap_windup_to_tick_grid(q_windup: float, model_row: int, unit_level: float,
+                             params: dict) -> Tuple[float, str]:
+    """``AA-002``: recover the exact remaining wind-up from the rounded dump.
+
+    The server's cast clock is **not** a free-running float. ``Spell.Update``
+    (`GameServerLib/GameObjects/Spell/Spell.cs:1643-1647`) advances an
+    auto-attack by accumulating *upwards*::
+
+        CurrentDelayTime += diff / 1000.0f;
+        if (CurrentDelayTime >= CastInfo.DesignerCastTime / CastInfo.AttackSpeedModifier)
+        {
+            FinishCasting();
+        }
+
+    and ``CurrentDelayTime`` is zeroed at the swing's start
+    (``AutoAttackSpell.ResetSpellCast()``, `ObjAIBase.cs:1250`). So the elapsed
+    cast time is always an exact integer multiple of the tick and the remaining
+    wind-up always lies on the grid ``W - k*dt`` for the unit's fixed threshold
+    ``W``. ``LanerlStateDump`` publishes that remainder rounded to 1/1024 s,
+    which loses the grid -- and losing it is the whole of the `AA-002`
+    residual, because the sim's hit test is ``remaining <= dt`` and the
+    rounding error (<= 1/2048 s) lands on the wrong side of ``dt`` whenever a
+    profile's ``W/dt`` sits near an integer.
+
+    That is not a uniform jitter, which is why `AA-002` measured an 18x
+    melee/ranged asymmetry rather than noise: it is a property of each
+    profile's ``W/dt``. The blue melee lane minion's is **20.0016**, so its
+    final wind-up tick has 2.67e-5 s left -- 18x *below* the dump's 1/2048
+    rounding threshold, hence dumped as a flat ``aawindup=0``.
+
+    ``k`` itself is never ambiguous: the rounding error is 17x smaller than the
+    tick stride, so ``round((W - q_windup) / dt)`` is exact. This recovers it
+    and returns the true remainder. The recovery is rejected -- leaving the
+    dump's own value untouched -- when the re-derived remainder disagrees with
+    the dump by more than the dump could have rounded, because that means our
+    ``W`` is not the server's threshold and snapping would be inventing phase
+    rather than recovering it.
+    """
+    dt = TICK_MS / 1000.0
+    asm = 1.0 + (float(params["attack_speed_per_level"][model_row]) / 100.0) * float(
+        growth_sum(np.float32(unit_level), np))
+    full = float(params["attack_windup"][model_row]) / asm
+    if not full > 0.0:
+        return q_windup, "no wind-up in this profile"
+    k = round((full - q_windup) / dt)
+    if k < 0:
+        return q_windup, "dumped wind-up exceeds the profile threshold"
+    exact = full - k * dt
+    if abs(exact - q_windup) > 1.0 / (2.0 * StatQ) + 1e-6:
+        return q_windup, (
+            f"profile wind-up {full:.6f}s puts tick {k} at {exact:.6f}s, "
+            f"{abs(exact - q_windup) * 1000:.3f} ms from the dumped "
+            f"{q_windup:.6f}s -- more than rounding, so not snapped")
+    if exact <= 0.0:
+        return _MIN_CASTING_WINDUP, "snapped onto the server's cast-clock grid"
+    # The sim's hit test is `windup - dt <= 0` in **float32**, and for a
+    # profile whose `W/dt` is an integer the true remainder differs from `dt`
+    # by less than a float32 ulp -- the recovery would survive the injector and
+    # then be lost again one line later. So state the server's own comparison,
+    # `(k+1)*dt >= W`, in a value float32 cannot round across. The magnitude is
+    # preserved wherever it is representable; only a remainder that float32
+    # cannot separate from `dt` is nudged, by one ulp.
+    dt32 = np.float32(dt)
+    out = np.float32(exact)
+    if exact <= dt and not np.float32(0.0) < out <= dt32:
+        out = np.float32(dt * 0.5)
+    elif exact > dt and out <= dt32:
+        out = np.nextafter(dt32, np.float32(np.inf))
+    # Deliberately NOT `f"... tick {k} ..."`: the provenance census in
+    # `one_step.py` groups by this string, and a per-tick label turns one line
+    # into a 34-line histogram of the cast clock in every run's report.
+    return float(out), "snapped onto the server's cast-clock grid"
 
 
 def _project_to_polyline(x: float, y: float, path: np.ndarray
@@ -819,10 +902,23 @@ def inject_snapshot(
         aa_cooldown[slot] = internal.q_aa_cooldown / StatQ
         is_attacking[slot] = internal.is_attacking
         has_auto_attacked[slot] = internal.has_auto_attacked
-        aa_windup[slot] = (internal.q_aa_windup / StatQ
-                           if internal.aa_state == 1 and internal.is_attacking else 0.0)
         note.target_recovery = "exact NetId from diagnostic internal stream"
-        note.attack_recovery = "exact cooldown/windup/attack flags from diagnostic stream"
+        # `aa_state == 1` is `SpellState.STATE_CASTING`: the server saying this
+        # unit's wind-up has NOT completed. `AA-002`: the dumped remainder is
+        # rounded to 1/1024 s, so snap it back onto the server's own tick grid
+        # before the sim's `remaining <= dt` hit test reads it.
+        if internal.aa_state == 1 and internal.is_attacking:
+            snapped, why = snap_windup_to_tick_grid(
+                internal.q_aa_windup / StatQ, int(model[slot]),
+                float(level[slot]), params)
+            aa_windup[slot] = snapped
+            note.attack_recovery = (
+                "exact cooldown/attack flags from diagnostic stream; "
+                f"wind-up {why}")
+        else:
+            aa_windup[slot] = 0.0
+            note.attack_recovery = (
+                "exact cooldown/windup/attack flags from diagnostic stream")
         if internal.waypoints:
             width = min(len(internal.waypoints), waypoints.shape[1])
             waypoints[slot] = 0.0

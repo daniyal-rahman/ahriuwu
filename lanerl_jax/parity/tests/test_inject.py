@@ -364,3 +364,72 @@ def test_an_injected_champion_in_lane_is_not_standing_in_its_own_fountain():
     assert d > _FOUNTAIN_RADIUS, (
         f"an injected lane champion is {d:.0f} u from its recorded spawn, "
         f"inside the {_FOUNTAIN_RADIUS:.0f} u fountain-heal radius")
+
+
+def test_the_dumped_windup_is_snapped_back_onto_the_server_cast_grid():
+    """`AA-002`. The rounded `aawindup` alone gets the hit tick wrong.
+
+    `Spell.Update` (`Spell.cs:1643-1647`) accumulates `CurrentDelayTime` by a
+    whole tick and compares `>=` against a fixed threshold, so the remaining
+    wind-up only ever takes the values `W - k*dt`. The dump rounds that to
+    1/1024 s. For the blue melee lane minion `W/dt` is **20.0016**, so the last
+    wind-up tick has 2.67e-5 s left -- 18x below the dump's 1/2048 rounding
+    threshold, published as a flat `aawindup=0`.
+
+    Read literally that says "no wind-up left", and the sim's `winding` gate is
+    `is_attacking & (aa_windup > 0)`: the hit is dropped on the tick the server
+    lands it, and fired one tick early on the tick before, where the rounded
+    17/1024 s sits just under `dt`. Two mismatched unit-ticks per swing, in
+    opposite directions -- which is why `AA-002` measured a symmetric sign
+    split and an 18x melee/ranged asymmetry at the same time.
+
+    The guard walks every profile's whole cast clock and asserts the injected
+    value reproduces the server's own `(k+1)*dt >= W` decision **after** the
+    float32 round-trip the sim actually performs.
+    """
+    import numpy as np
+
+    from lanerl_jax.parity.inject import snap_windup_to_tick_grid
+    from lanerl_jax.sim.movement_jax import TICK_MS
+
+    params = lane_params()
+    dt = TICK_MS / 1000.0
+    dt32 = np.float32(dt)
+    checked = 0
+    for row in range(len(PROFILES)):
+        full = float(params["attack_windup"][row])
+        if full <= 0.0:
+            continue
+        # every tick the server can still be STATE_CASTING on
+        for k in range(int(np.ceil(full / dt))):
+            remaining = full - k * dt
+            dumped = float(np.round(remaining * 1024.0) / 1024.0)
+            snapped, _why = snap_windup_to_tick_grid(dumped, row, 1.0, params)
+            s32 = np.float32(snapped)
+            sim_hits = bool(s32 > 0) and bool(s32 - dt32 <= 0)
+            server_hits = remaining <= dt
+            assert sim_hits == server_hits, (
+                f"profile {PROFILES[row]} (W={full:.6f}s, W/dt={full / dt:.4f}) "
+                f"tick {k}: server {'hits' if server_hits else 'waits'} but the "
+                f"injected wind-up {snapped:.8f}s makes the sim "
+                f"{'hit' if sim_hits else 'wait'}")
+            checked += 1
+    assert checked > 100, "the profile table stopped carrying wind-ups"
+
+
+def test_a_windup_the_profile_table_cannot_explain_is_left_alone():
+    """The snap is a recovery, not an override.
+
+    If the port's threshold is not the server's, `W - k*dt` lands further from
+    the dumped value than the dump could have rounded. Inventing phase there
+    would silently paper over a wrong `attack_windup` constant -- the exact
+    failure mode `STAT-001` was, one field over -- so the dump wins and the
+    reason says why.
+    """
+    from lanerl_jax.parity.inject import snap_windup_to_tick_grid
+
+    params = lane_params()
+    row = profile_id(Kind.LANE_MINION, 0, Team.BLUE)
+    value, why = snap_windup_to_tick_grid(0.0083, row, 1.0, params)
+    assert value == 0.0083
+    assert "not snapped" in why
