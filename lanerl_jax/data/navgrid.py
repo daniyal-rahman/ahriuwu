@@ -275,7 +275,14 @@ class NavGrid:
           filtering reproduces the null-blocks behaviour for free -- see
           ``cast_circle``, which is the only caller.
         """
-        dx, dy = abs(x1 - x0), abs(y1 - y0)
+        # `double dx = Math.Abs(v1.X - v0.X)`: the subtraction happens in
+        # float32 because `v0`/`v1` are `Vector2`, and only the result is
+        # widened. Every later term is `double`. Make both halves explicit so
+        # neither can drift: a float64 subtraction here, or a float32 error
+        # accumulator below, is a different line walk.
+        dx = float(abs(_f32(x1) - _f32(x0)))
+        dy = float(abs(_f32(y1) - _f32(y0)))
+        x0, y0, x1, y1 = float(x0), float(y0), float(x1), float(y1)
         ix, iy = int(math.floor(x0)), int(math.floor(y0))
         n = 1
         if dx == 0:
@@ -323,20 +330,30 @@ class NavGrid:
         Note the polarity: the server uses this as "is something in the way",
         so ``GetPath`` closes a neighbour when it returns *true*.
         """
-        tradius = radius / self.cell_size
-        vx, vy = dx_ - ox, dy_ - oy
-        L = math.hypot(vx, vy)
+        # `float tradius` and `Vector2 p` in the source: the offset endpoints
+        # are built in float32, then GetAllCellsInLine promotes them to double.
+        # Doing this arithmetic in float64 lands the offset line on the far
+        # side of a cell boundary just often enough to matter -- not on random
+        # segments (0 in 40,000), but SmoothPath's greedy pushes each cast
+        # until it fails, so it probes the clear/blocked boundary on purpose,
+        # and there it showed up twice in ~4,000 segments. Both disagreements
+        # resolved to the float32 answer.
+        tradius = _f32(radius / self.cell_size)
+        vx, vy = _f32(dx_ - ox), _f32(dy_ - oy)
+        L = _f32(math.sqrt(float(_f32(vx * vx) + _f32(vy * vy))))
         if L == 0.0:
             px = py = 0.0
         else:
             # Normalized().Perpendicular() * tradius
-            px, py = -(vy / L) * tradius, (vx / L) * tradius
+            px, py = _f32(-_f32(vy / L) * tradius), _f32(_f32(vx / L) * tradius)
 
         cells: List[Tuple[int, int]] = []
         cells += list(self.cells_in_range(ox, oy, radius))
         cells += list(self.cells_in_range(dx_, dy_, radius))
-        cells += list(self.cells_in_line(ox + px, oy + py, dx_ + px, dy_ + py))
-        cells += list(self.cells_in_line(ox - px, oy - py, dx_ - px, dy_ - py))
+        cells += list(self.cells_in_line(
+            _f32(ox + px), _f32(oy + py), _f32(dx_ + px), _f32(dy_ + py)))
+        cells += list(self.cells_in_line(
+            _f32(ox - px), _f32(oy - py), _f32(dx_ - px), _f32(dy_ - py)))
 
         min_y = int(min(oy, dy_) - tradius) - 1
         max_y = int(max(oy, dy_) + tradius) + 1

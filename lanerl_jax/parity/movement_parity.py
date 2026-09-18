@@ -37,6 +37,23 @@ number of waypoints the server holds (``Waypoints.Count``, in the dump) against
 the path this port computed.  When counts agree and the trajectory still
 diverges, the bug is in the follower or in which cells the path went through;
 when counts differ, it is the pathfinder.
+
+Two ports, scored on the same fixture
+-------------------------------------
+There are two things called "our path" and conflating them has already cost a
+round of work, so this harness scores both against the same orders:
+
+``my_*``
+    :meth:`NavGrid.get_path` -- the literal host port of the server's A* plus
+    ``SmoothPath``.  This is the reference implementation, not what training
+    runs.
+``local_*``
+    :func:`lanerl_jax.sim.local_pathing.build_local_waypoints` against the
+    production route artifact -- what training actually runs, and therefore
+    what Gate 1's waypoint claim is about.  Pass ``local_artifact=None`` to
+    skip it.
+
+A number quoted for one of these is not evidence about the other.
 """
 from __future__ import annotations
 
@@ -50,6 +67,7 @@ import numpy as np
 
 from ..data.navgrid import GAREN_PATHFINDING_RADIUS, NavGrid
 from ..sim.movement import follow
+from ..train.benchmark import DEFAULT_ROUTE_ARTIFACT
 from .recover_waypoints import compare_paths, recover_waypoints
 from .trace import load_trace
 
@@ -83,10 +101,20 @@ class MoveTrial:
     #: best whole-tick shift of the reconstruction, and the error it leaves.
     best_shift: int = 0
     best_shift_error: float = 0.0
+    #: the PRODUCTION device router on the same order: waypoint count, its
+    #: ``LocalRouteStatus``, and how far its polyline strays from the host
+    #: port's.  ``-1`` means the local router was not scored.
+    local_waypoints: int = -1
+    local_status: int = -1
+    local_deviation: float = -1.0
 
     @property
     def waypoint_count_agrees(self) -> bool:
         return self.server_waypoints == self.my_waypoints
+
+    @property
+    def local_count_agrees(self) -> bool:
+        return self.local_waypoints == self.server_waypoints
 
 
 @dataclass(slots=True)
@@ -120,7 +148,56 @@ class MovementParityResult:
                      f"max {rd.max():.3f} median {np.median(rd):.3f}")
         lines.append(f"  routes matching within 1 unit: "
                      f"{int((rd <= 1.0).sum())}/{len(rd)}")
+        scored = [t for t in self.trials if t.local_waypoints >= 0]
+        if scored:
+            ok = sum(t.local_count_agrees for t in scored)
+            ready = sum(t.local_status == 0 for t in scored)
+            dv = np.array([t.local_deviation for t in scored])
+            lines += [
+                "  -- production device router (build_local_waypoints) --",
+                f"  local waypoint count agrees: {ok}/{len(scored)}",
+                f"  local route READY          : {ready}/{len(scored)}",
+                f"  local mean waypoints {np.mean([t.local_waypoints for t in scored]):.2f}"
+                f"  vs server {np.mean([t.server_waypoints for t in scored]):.2f}"
+                f"  vs host port {np.mean([t.my_waypoints for t in scored]):.2f}",
+                f"  local deviation from host port: max {dv.max():.1f} "
+                f"median {np.median(dv):.1f} units",
+            ]
         return "\n".join(lines)
+
+
+def _point_to_polyline(px: float, py: float,
+                       poly: List[Tuple[float, float]]) -> float:
+    """Shortest distance from a point to a polyline, in world units."""
+    best = float("inf")
+    for (ax, ay), (bx, by) in zip(poly, poly[1:]):
+        dx, dy = bx - ax, by - ay
+        den = dx * dx + dy * dy
+        t = 0.0 if den == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / den))
+        best = min(best, math.dist((px, py), (ax + t * dx, ay + t * dy)))
+    return best
+
+
+def _local_router(artifact: Path, radius: float):
+    """Load the production route artifact and return one jitted click router."""
+    import jax
+    import jax.numpy as jnp
+
+    from ..data.local_route_artifact import load_local_route_artifact
+    from ..sim.local_pathing import build_local_waypoints
+    from ..sim.terrain_jax import map1_terrain
+
+    table = load_local_route_artifact(artifact, pathfinding_radius=radius).as_jax()
+    terrain = map1_terrain()
+    fn = jax.jit(lambda sx, sy, gx, gy: build_local_waypoints(
+        sx, sy, gx, gy, radius, table, terrain))
+
+    def route(start, goal):
+        r = fn(*(jnp.float32(v) for v in (start[0], start[1], goal[0], goal[1])))
+        n = int(r.n_waypoints)
+        return [tuple(map(float, xy)) for xy in np.asarray(r.waypoints)[:n]], int(r.status)
+
+    return route
 
 
 def run_movement_parity(
@@ -133,6 +210,7 @@ def run_movement_parity(
     max_dist: float = 1200.0,
     require_reachable_goal: bool = True,
     tag: str = "movement_parity",
+    local_artifact: Path | str | None = DEFAULT_ROUTE_ARTIFACT,
 ) -> MovementParityResult:
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
@@ -208,6 +286,8 @@ def run_movement_parity(
     times = sorted(by_t)
     grid = NavGrid.load()
 
+    router = (None if local_artifact is None
+              else _local_router(Path(local_artifact), GAREN_PATHFINDING_RADIUS))
     out: List[MoveTrial] = []
     for i, (t0, goal) in enumerate(issued):
         t1 = issued[i + 1][0] if i + 1 < len(issued) else times[-1] + 1
@@ -236,7 +316,14 @@ def run_movement_parity(
                 best_shift, best_err = k, float(e.max())
         rec = recover_waypoints([by_t[t][:2] for t in seg])
         cmp = compare_paths(path, rec)
+        local_n, local_status, local_dev = -1, -1, -1.0
+        if router is not None:
+            local, local_status = router(start, goal)
+            local_n = len(local)
+            local_dev = max(_point_to_polyline(x, y, path) for x, y in local)
         out.append(MoveTrial(
+            local_waypoints=local_n, local_status=local_status,
+            local_deviation=local_dev,
             error_curve=err, best_shift=best_shift, best_shift_error=best_err,
             route_deviation=cmp["route_deviation"],
             recovered_vertices=cmp["recovered_vertices"],
@@ -247,3 +334,26 @@ def run_movement_parity(
             max_error=float(err.max()), mean_error=float(err.mean()), ticks=len(seg),
         ))
     return MovementParityResult(trials=out)
+
+
+def _main() -> None:
+    """Canonical command for Gate 1's waypoint claim.  See the ledger."""
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", type=Path, default=Path("runs/movement_parity"))
+    ap.add_argument("--trials", type=int, default=20)
+    ap.add_argument("--seed", type=int, default=11)
+    ap.add_argument("--port-base", type=int, default=47000)
+    ap.add_argument("--route-artifact", type=Path, default=DEFAULT_ROUTE_ARTIFACT)
+    ap.add_argument("--no-route-table", action="store_true",
+                    help="score only the host A*+SmoothPath port")
+    args = ap.parse_args()
+    result = run_movement_parity(
+        args.out, trials=args.trials, seed=args.seed, port_base=args.port_base,
+        local_artifact=None if args.no_route_table else args.route_artifact)
+    print(result.report())
+
+
+if __name__ == "__main__":
+    _main()

@@ -14,10 +14,20 @@ non-ready status, but that trajectory is an approximation and is recorded in
 ``docs/JAX_FIDELITY_LEDGER.md``.
 
 The table stores adjacent raw grid hops.  Runtime removes collinear interior
-cells, which preserves the raw polyline while fitting ordinary routes into the
-state's waypoint slots.  This is *not* the server's more aggressive
-``SmoothPath`` line-of-sight pass; PATH-003/PATH-005 track that remaining
-fidelity gap.
+cells and then runs :func:`smooth_cell_path`, a literal port of the server's
+``SmoothPath``: it drops any cell the last kept one can see through a swept
+circle of the pathfinding radius.
+
+Smoothing the *collinear-reduced* list rather than all raw cells is a
+deliberate, measured approximation.  Both forms keep only LOS-clear segments,
+so both emit a walkable polyline; on a 400-route host corpus over the
+production artifact they agree with each other 53.8% of the time and are
+indistinguishable against the server (both 55.0% on waypoint count, mean
+polyline length 1.049x vs 1.022x the server's).  What smoothing does *not* fix
+is that the baked table is a reverse BFS, not the server's closed-on-enqueue
+A*: only 17/400 baked itineraries are the server's own cell path, which caps
+exact waypoint agreement near 40% however the list is smoothed.  PATH-001 and
+PATH-003 track that; it is a bake-algorithm gap, not a smoothing gap.
 """
 from __future__ import annotations
 
@@ -28,11 +38,13 @@ import jax.numpy as jnp
 
 from ..data.route_artifact import DIRECTION_OFFSETS, NO_ROUTE, STAY
 from .state import MAX_WAYPOINTS
-from .terrain_jax import TerrainGrid, closest_terrain_exit
+from .terrain_jax import (TerrainGrid, cast_circle_blocked,
+                          closest_terrain_exit)
 
 __all__ = [
     "MAX_RAW_ROUTE_HOPS", "LocalRouteStatus", "LocalRouteTable",
     "LocalRouteResult", "lookup_local_hop", "build_local_waypoints",
+    "smooth_cell_path",
 ]
 
 
@@ -86,6 +98,10 @@ class LocalRouteResult(NamedTuple):
     status: jax.Array          # int8 LocalRouteStatus
     projected_goal_x: jax.Array
     projected_goal_y: jax.Array
+    # True when a SmoothPath CastCircle hit its fixed bound and the segment was
+    # therefore kept unexamined.  Fail-closed, so the route stays walkable --
+    # but it is a bound violation and must not be averaged away.
+    smooth_exhausted: jax.Array = jnp.asarray(False)
 
 
 def lookup_local_hop(source_cell, goal_cell, table: LocalRouteTable,
@@ -196,10 +212,81 @@ def _nearest_covered_cell(x, y, ix, iy, table: LocalRouteTable,
     return chosen, anchored
 
 
+def smooth_cell_path(cells, n_cells, pathfinding_radius,
+                     terrain: TerrainGrid, max_cells: int = MAX_WAYPOINTS):
+    """``NavigationGrid.SmoothPath``, fixed shape, over a list of cell ids.
+
+    The source construction, from ``LoLServer``::
+
+        if (path.Count < 3) return;
+        int j = 0;
+        for (int i = 2; i < path.Count; i++)
+            if (CastCircle(path[j].GetCenter(), path[i].GetCenter(), d, false))
+                path[++j] = path[i - 1];
+        path[++j] = path[path.Count - 1];
+        path.RemoveRange(j + 1, path.Count - (j + 1));
+
+    It is a single greedy pass: hold an anchor ``j``, walk ``i`` forward, and
+    the moment the anchor can no longer see ``path[i]``, commit ``path[i-1]``
+    as the new anchor.  Every committed segment is therefore LOS-clear.
+
+    ``path.Count < 3`` needs no special case here: the loop starts at ``i = 2``
+    so it simply never runs, and the epilogue rewrites ``cells[1]`` with the
+    already-final cell.
+
+    ``cast_circle_blocked`` folds its own bound exhaustion into ``blocked``, so
+    an uninspected segment keeps its waypoint instead of being declared
+    visible.  That is the fail-closed direction: the result stays walkable and
+    merely less smoothed.  The exhaustion flag is returned so a caller can see
+    it happened rather than inferring parity from a quietly clamped run.
+    """
+    cells = jnp.asarray(cells, jnp.int32)
+    n_cells = jnp.asarray(n_cells, jnp.int32)
+    radius = jnp.asarray(pathfinding_radius, jnp.float32)
+    width = jnp.int32(terrain.walkable.shape[1])
+    hi = jnp.int32(max_cells - 1)
+
+    def centre(cell):
+        """Cell id to ``GetCenter()`` in CastCircle's cell coordinates."""
+        return ((cell % width).astype(jnp.float32) + 0.5,
+                (cell // width).astype(jnp.float32) + 0.5)
+
+    def cond(carry):
+        _cells, _j, i, _exhausted = carry
+        # ``jnp.any`` for the same reason the route loop uses it: under the
+        # caller's vmap this reduces the mapped lanes to one while predicate
+        # while the body keeps masking the lanes that have already finished.
+        return jnp.any(i < n_cells)
+
+    def body(carry):
+        cells, j, i, exhausted = carry
+        active = i < n_cells
+        ax, ay = centre(cells[jnp.clip(j, 0, hi)])
+        bx, by = centre(cells[jnp.clip(i, 0, hi)])
+        blocked, ex = cast_circle_blocked(ax, ay, bx, by, radius, terrain)
+        commit = active & blocked
+        previous = cells[jnp.clip(i - 1, 0, hi)]
+        slot = jnp.clip(j + 1, 0, hi)
+        cells = cells.at[slot].set(jnp.where(commit, previous, cells[slot]))
+        return (cells, j + commit.astype(j.dtype), i + active.astype(i.dtype),
+                exhausted | (active & ex))
+
+    cells, j, _i, exhausted = jax.lax.while_loop(
+        cond, body, (cells, jnp.int32(0), jnp.int32(2), jnp.asarray(False)))
+
+    # "Add last", then everything past it is dropped -- here by reporting a
+    # shorter count, since the array itself is fixed shape.
+    j = j + 1
+    final = cells[jnp.clip(n_cells - 1, 0, hi)]
+    cells = cells.at[jnp.clip(j, 0, hi)].set(final)
+    return cells, jnp.minimum(j + 1, jnp.int32(max_cells)), exhausted
+
+
 def build_local_waypoints(source_x, source_y, goal_x, goal_y,
                           pathfinding_radius, table: LocalRouteTable,
                           terrain: TerrainGrid,
-                          max_raw_hops: int = MAX_RAW_ROUTE_HOPS
+                          max_raw_hops: int = MAX_RAW_ROUTE_HOPS,
+                          smooth: bool = True
                           ) -> LocalRouteResult:
     """Reconstruct one bounded route as fixed-shape JAX waypoints.
 
@@ -207,6 +294,10 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
     ``GetClosestTerrainExit`` port. On any non-ready status the returned
     waypoint array is the explicit raw two-point fallback and ``status`` tells
     the caller why it is approximate.
+
+    ``smooth=False`` keeps the pre-2026-09-18 collinear-only polyline. It is
+    the named control for measuring what the ``SmoothPath`` pass costs and
+    buys, not a supported production mode.
     """
     dtype = jnp.result_type(source_x, source_y, goal_x, goal_y, jnp.float32)
     source_x, source_y = jnp.asarray(source_x, dtype), jnp.asarray(source_y, dtype)
@@ -344,6 +435,29 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
         (status == LocalRouteStatus.READY) & ~reached,
         LocalRouteStatus.RAW_HOP_OVERFLOW, status).astype(jnp.int8)
 
+    # The reconstruction loop produced the collinear-reduced cell itinerary
+    # [source_cell, turns..., goal_cell].  Hand that whole list to the port of
+    # the server's SmoothPath and take back the interior it keeps.  Only the
+    # interior can move: a greedy pass anchored at index 0 never drops the
+    # first cell, and its epilogue always re-appends the last, so the endpoint
+    # and re-anchoring logic below is untouched by design.
+    if smooth:
+        n_turns = count - initial_count
+        cell_list = jnp.concatenate([
+            jnp.reshape(source_cell.astype(jnp.int32), (1,)),
+            turns.astype(jnp.int32),
+            jnp.zeros((1,), jnp.int32)])          # room for the goal cell
+        cell_list = cell_list.at[
+            jnp.clip(n_turns + 1, 0, MAX_WAYPOINTS - 1)].set(goal_cell)
+        cell_list, n_cells, smooth_exhausted = smooth_cell_path(
+            cell_list, n_turns + 2, pathfinding_radius, terrain)
+        # Smoothing can only ever remove interior cells, so `count` moves down
+        # and every room/overflow check already made above stays valid.
+        turns = cell_list[1:MAX_WAYPOINTS - 1]
+        count = initial_count + (n_cells - 2)
+    else:
+        smooth_exhausted = jnp.asarray(False)
+
     # Materialise the exactly ordered source/turn waypoints after the compact
     # reconstruction loop.  Slot one intentionally receives the source anchor
     # even when it is unused, matching the former fixed-shape output byte for
@@ -399,4 +513,5 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
     fallback = fallback.at[1].set(jnp.stack([goal_x, goal_y]))
     points = jnp.where(success, points, fallback)
     n_points = jnp.where(success, success_count, 2).astype(jnp.int8)
-    return LocalRouteResult(points, n_points, status, pgx, pgy)
+    return LocalRouteResult(points, n_points, status, pgx, pgy,
+                            smooth_exhausted & success)

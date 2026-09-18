@@ -2,16 +2,19 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import pytest
+
 from lanerl_jax.data.route_artifact import DIRECTION_OFFSETS, NO_ROUTE, STAY
 from lanerl_jax.sim.local_pathing import (
     LocalRouteStatus,
     LocalRouteTable,
     build_local_waypoints,
     lookup_local_hop,
+    smooth_cell_path,
 )
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
-from lanerl_jax.sim.state import Kind, empty_state
-from lanerl_jax.sim.terrain_jax import TerrainGrid
+from lanerl_jax.sim.state import Kind, MAX_WAYPOINTS, empty_state
+from lanerl_jax.sim.terrain_jax import TerrainGrid, map1_terrain
 
 
 def _table(width=7, height=7, radius=4, *, covered=None):
@@ -80,15 +83,118 @@ def test_packed_uint4_lookup_matches_unpacked_fixture():
 
 def test_route_reconstruction_compresses_collinear_cells_and_keeps_float_goal():
     # Cell (1,1) -> (4,3): x-then-y has one turn at cell centre (4.5,1.5).
+    # `smooth=False` is the pre-SmoothPath control: collinear compression only.
     result = build_local_waypoints(
         jnp.float32(1.25), jnp.float32(1.75),
         jnp.float32(4.2), jnp.float32(3.8), jnp.float32(0.0),
-        _table(), _terrain(), max_raw_hops=16)
+        _table(), _terrain(), max_raw_hops=16, smooth=False)
     assert int(result.status) == LocalRouteStatus.READY
     assert int(result.n_waypoints) == 3
     np.testing.assert_allclose(
         np.asarray(result.waypoints[:3]),
         [[1.25, 1.75], [4.5, 1.5], [4.2, 3.8]], rtol=0, atol=1e-6)
+
+
+def test_smoothpath_drops_the_corner_the_line_of_sight_can_skip():
+    """The same route, with the server's SmoothPath pass on (the default).
+
+    The L-shaped x-then-y itinerary has one turn, and on open terrain the
+    source cell can see the goal cell, so the server's greedy pass deletes it.
+    This is the whole point of the pass: it is why the server emits 3 waypoints
+    for a click where the raw cell path has tens.
+    """
+    result = build_local_waypoints(
+        jnp.float32(1.25), jnp.float32(1.75),
+        jnp.float32(4.2), jnp.float32(3.8), jnp.float32(0.0),
+        _table(), _terrain(), max_raw_hops=16)
+    assert int(result.status) == LocalRouteStatus.READY
+    assert int(result.n_waypoints) == 2
+    # Endpoints are untouched: smoothing can only ever remove interior cells.
+    np.testing.assert_allclose(
+        np.asarray(result.waypoints[:2]),
+        [[1.25, 1.75], [4.2, 3.8]], rtol=0, atol=1e-6)
+    assert not bool(result.smooth_exhausted)
+
+
+def test_smoothpath_keeps_the_corner_when_terrain_blocks_the_shortcut():
+    """The negative case, which is what makes the test above mean anything.
+
+    Block cell (3,2), which the straight line from cell (1,1) to cell (4,3)
+    crosses but neither leg of the L does. The corner must survive.
+    """
+    walkable = np.ones((7, 7), bool)
+    walkable[2, 3] = False                      # (row, col) == (y, x)
+    terrain = TerrainGrid(jnp.asarray(walkable), 1.0, 0.0, 0.0)
+    result = build_local_waypoints(
+        jnp.float32(1.25), jnp.float32(1.75),
+        jnp.float32(4.2), jnp.float32(3.8), jnp.float32(0.0),
+        _table(), terrain, max_raw_hops=16)
+    assert int(result.status) == LocalRouteStatus.READY
+    assert int(result.n_waypoints) == 3
+    np.testing.assert_allclose(
+        np.asarray(result.waypoints[:3]),
+        [[1.25, 1.75], [4.5, 1.5], [4.2, 3.8]], rtol=0, atol=1e-6)
+
+
+def test_smooth_cell_path_is_a_noop_below_three_cells():
+    """``if (path.Count < 3) return;`` -- reproduced without a special case.
+
+    The loop starts at i = 2 so it never runs, and the epilogue rewrites
+    cells[1] with the cell that is already there.
+    """
+    cells = jnp.asarray([11, 22] + [0] * (MAX_WAYPOINTS - 2), jnp.int32)
+    out, n, exhausted = smooth_cell_path(cells, jnp.int32(2), jnp.float32(0.0),
+                                         _terrain())
+    assert int(n) == 2
+    assert [int(v) for v in out[:2]] == [11, 22]
+    assert not bool(exhausted)
+
+
+def test_smooth_cell_path_matches_the_host_port_on_real_map1_routes():
+    """Device SmoothPath against the literal host port, on real terrain.
+
+    Map geometry, not a fixture: the fixture grids are too small and too open
+    to exercise the greedy's commit branch. Needs the vendored navgrid but not
+    the 231 MiB route artifact, so it runs in an ordinary checkout.
+    """
+    navgrid = pytest.importorskip(
+        "lanerl_jax.data.navgrid",
+        reason="vendored Map1 navgrid content is not available here")
+    grid = navgrid.NavGrid.load()
+    terrain = map1_terrain()
+    radius = navgrid.GAREN_PATHFINDING_RADIUS
+    width = grid.cell_count_x
+    rng = np.random.default_rng(0)
+
+    checked = 0
+    for _ in range(400):
+        if checked >= 12:
+            break
+        a = grid.cell_center_world(*(int(v) for v in rng.integers(
+            (40, 40), (width - 40, grid.cell_count_y - 40))))
+        b = (a[0] + float(rng.integers(-1200, 1200)),
+             a[1] + float(rng.integers(-1200, 1200)))
+        if not (grid.is_walkable_world(*a, radius)
+                and grid.is_walkable_world(*b, radius)):
+            continue
+        route = grid.get_cell_path(a, b, radius)
+        if route is None or len(route.cells) < 6:
+            continue
+        cells = [int(y) * width + int(x) for x, y in route.cells]
+        expect = [(c % width, c // width) for c in cells]
+        grid._smooth(expect, radius)
+
+        padded = np.zeros(MAX_WAYPOINTS, np.int32)
+        padded[:len(cells)] = cells[:MAX_WAYPOINTS]
+        out, n, exhausted = smooth_cell_path(
+            jnp.asarray(padded), jnp.int32(min(len(cells), MAX_WAYPOINTS)),
+            jnp.float32(radius), terrain)
+        assert not bool(exhausted), "SmoothPath CastCircle hit its fixed bound"
+        got = [(int(c) % width, int(c) // width) for c in out[:int(n)]]
+        assert got == expect, f"{a} -> {b}"
+        checked += 1
+
+    assert checked >= 6, "corpus generated too few multi-turn routes to be a test"
 
 
 def test_failed_route_returns_two_point_fallback_and_nonready_status():
@@ -126,7 +232,9 @@ def test_route_reconstruction_jits():
     result = fn(jnp.float32(1.25), jnp.float32(1.75),
                 jnp.float32(4.2), jnp.float32(3.8))
     assert int(result.status) == LocalRouteStatus.READY
-    assert int(result.n_waypoints) == 3
+    # 2, not 3: SmoothPath runs inside the jit too, and on open terrain the
+    # source cell sees the goal cell, so the L's corner goes.
+    assert int(result.n_waypoints) == 2
 
 
 def test_same_direction_run_sidecar_matches_one_hop_route_and_overflow():
@@ -174,6 +282,8 @@ def test_apply_orders_installs_route_and_persists_diagnostic_status():
     routed = apply_orders(state, orders, params,
                           route_table=_table(), terrain=_terrain())
     assert int(routed.route_status[0]) == LocalRouteStatus.READY
-    assert int(routed.n_waypoints[0]) == 3
+    # Smoothed: the open-terrain corner is gone. See
+    # test_smoothpath_drops_the_corner_the_line_of_sight_can_skip.
+    assert int(routed.n_waypoints[0]) == 2
     # A non-Move action does not overwrite the last route diagnostic.
     assert int(routed.route_status[1]) == LocalRouteStatus.READY
