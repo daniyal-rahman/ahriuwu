@@ -433,3 +433,118 @@ def test_a_windup_the_profile_table_cannot_explain_is_left_alone():
     value, why = snap_windup_to_tick_grid(0.0083, row, 1.0, params)
     assert value == 0.0083
     assert "not snapped" in why
+
+
+def test_the_dumped_action_timer_is_snapped_back_onto_the_server_tick_grid():
+    """`INJ-003`. The 250 ms sweep cannot fire from a rounded timer.
+
+    ``LaneMinionAI.minionActionTimer`` is zeroed at every sweep and otherwise
+    only ``+= delta``, and the server's free-run ``deltaTime`` is
+    ``(float)REFRESH_RATE`` (`Game.cs:333`), so it is an exact float32
+    accumulation of ``1000f/60f``. The fifteenth accumulation is
+    **250.0000305**, so the trigger ``minionActionTimer >= 250.0f``
+    (`LaneMinionAI.cs:90`) is crossed by 0.0000305 ms. `LanerlStateDump`
+    rounds the field to 1/1024 ms, and the fourteenth accumulation
+    (233.3333588) rounds **down** to 233.3330078 -- 0.00035 ms low, 11.5x the
+    crossing margin -- so an injected minion is one rounding short of its own
+    sweep and never takes it.
+
+    That is not a rare miss: over the whole gate-1 corpus the sim's rule fired
+    on **0 of 395,366** minion tick-pairs against the server's 26,537 sweeps.
+    Every Tier-1 minion-controller figure taken before this was measured with
+    the regular sweep switched off.
+
+    This walks the server's own accumulation and asserts that, at every point
+    on it, the *snapped* value reproduces the server's trigger decision and the
+    *dumped* value does not always do so.
+    """
+    import numpy as np
+
+    from lanerl_jax.parity.inject import snap_action_timer_to_tick_grid
+    from lanerl_jax.sim.minion_ai import ACTION_TIMER_MS
+
+    f32 = np.float32
+    dt = f32(f32(1000.0) / f32(60.0))
+    t = f32(0.0)
+    raw_wrong = 0
+    for _k in range(1, 17):
+        t = f32(t + dt)
+        dumped = round(float(t) * 1024) / 1024.0        # the dump's own value
+        snapped, why = snap_action_timer_to_tick_grid(dumped)
+        server_fires = bool(f32(t + dt) >= f32(ACTION_TIMER_MS))
+        snapped_fires = bool(f32(f32(snapped) + dt) >= f32(ACTION_TIMER_MS))
+        raw_fires = bool(f32(f32(dumped) + dt) >= f32(ACTION_TIMER_MS))
+        assert snapped_fires == server_fires, (
+            f"tick {_k}: snapped timer disagrees with the server's own "
+            f"trigger ({why})")
+        raw_wrong += raw_fires != server_fires
+    assert raw_wrong > 0, (
+        "the dumped value now reproduces the trigger on its own -- either the "
+        "dump gained precision or this test stopped exercising the boundary")
+
+
+def test_an_injected_minion_one_tick_from_its_sweep_actually_takes_it():
+    """The WIRING, which the arithmetic test above cannot see.
+
+    A guard that calls ``snap_action_timer_to_tick_grid`` directly still passes
+    with the snap present in the module and absent from ``inject_snapshot`` --
+    which is the shape of half the silent failures this project has logged. So
+    this one goes end to end: dump a minion whose ``aitimer`` is the server's
+    own fourteenth accumulation, inject it, step one tick, and check that the
+    controller actually re-evaluated.
+
+    ``ai_timer == 0`` after the tick is ``minionActionTimer = 0`` at
+    `LaneMinionAI.cs:97`, which only runs on the branch that also calls
+    ``UpdateMoveOrder(ReevaluateBehavior(delta))`` -- so it is the observable
+    for "the sweep ran", and the sweep running is what 2,381 of the 4,791
+    whole-corpus move-order misses were waiting for.
+    """
+    import numpy as np
+
+    from lanerl_jax.sim.step import tick
+
+    f32 = np.float32
+    dt = f32(f32(1000.0) / f32(60.0))
+    t = f32(0.0)
+    for _ in range(14):
+        t = f32(t + dt)
+    q_dumped = round(float(t) * 1024)          # exactly what the dump writes
+    assert q_dumped == 238933, q_dumped
+
+    rows = [
+        "LANERL_STATEHASH t=1000 n=2 h=0000000000000001",
+        "LANERL_STATEROW t=1000 LaneMinion|100|0,0|296960/296960|A|1|2|-|-|1|",
+        "LANERL_STATEROW t=1000 LaneMinion|200|1920,0|296960/296960|A|1|2|-|-|1|",
+        "LANERL_INTERNAL t=1000 ai id=77 kind=LaneMinion team=100 x=0 y=0 "
+        "xbits=0 ybits=0 target=0,-,0,0,0 wpkey=1 wps=0,0 "
+        "coll=none collbits=none aacd=0 aastate=0 aacast=0 aadelay=0 "
+        f"aawindup=0 attacking=0 hasaa=0 aitimer={q_dumped} ailocal=92160000 "
+        "aitsa=0 aiprio=14 aiwp=2 aihad=0 aiignore=none aihelp=none",
+        "LANERL_INTERNAL t=1000 ai id=88 kind=LaneMinion team=200 x=1920 y=0 "
+        "xbits=1123024896 ybits=0 target=0,-,0,0,0 wpkey=1 wps=1920,0 "
+        "coll=none collbits=none aacd=0 aastate=0 aacast=0 aadelay=0 "
+        "aawindup=0 attacking=0 hasaa=0 aitimer=0 ailocal=92160000 "
+        "aitsa=0 aiprio=14 aiwp=2 aihad=0 aiignore=none aihelp=none",
+    ]
+    snapshot = parse_stream(rows)[0]
+    state, report = _state_for(snapshot)
+    slot = report.notes[0].slot
+    assert "exact tick grid" in report.notes[0].ai_timer_recovery
+
+    out = tick(state, lane_params())
+    assert float(out.ai_timer[slot]) == 0.0, (
+        "the injected minion did not take its 250 ms sweep: the dump's "
+        f"{q_dumped}/1024 ms is one rounding short of the trigger and nothing "
+        "put it back on the server's tick grid (INJ-003)")
+
+
+def test_an_action_timer_that_is_not_on_the_tick_grid_is_left_alone():
+    """The snap is a recovery, not an override -- same contract as the
+    wind-up's. A value the grid cannot explain means the assumed tick stride
+    is wrong, and snapping there would hide that rather than fix it.
+    """
+    from lanerl_jax.parity.inject import snap_action_timer_to_tick_grid
+
+    value, why = snap_action_timer_to_tick_grid(123.456)
+    assert value == 123.456
+    assert "not snapped" in why

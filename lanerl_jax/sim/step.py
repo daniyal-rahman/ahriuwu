@@ -1105,6 +1105,40 @@ def tick(state: LaneState, params: UnitParams,
         jnp.where(chase, jnp.int8(MoveOrder.ATTACK_TO),
                   jnp.where(is_champ, state.move_order, minion_order)))
 
+    # `ORDER-005`. **`Spell.FinishCasting` writes the caster's move order, and
+    # an auto-attack is a cast.**  The tail of `FinishCasting`
+    # (`Spell.cs:1051-1065`) is not spell-specific::
+    #
+    #     if (SpellData.Flags.HasFlag(SpellDataFlags.InstantCast)) { ...MoveTo/AttackTo... }
+    #     else { CastInfo.Owner.UpdateMoveOrder(OrderType.Hold, true); }
+    #
+    # and it runs for **every** completed cast, after the `IsAutoAttack` branch
+    # above it has already set `HasAutoAttacked`, applied the hit (melee) or
+    # created the missile (ranged), and put the spell back in `STATE_READY`.
+    # `SRU_OrderMinionMeleeBasicAttack` carries `Flags = 232448`; bit 2
+    # (`InstantCast`, `SpellDataFlags.cs:13`) is **clear**, so a lane minion
+    # takes the `else` -- its move order goes to `Hold` on the tick its wind-up
+    # runs out, and `UpdateMoveOrder(Hold)` is `StopMovement()`, i.e.
+    # `ResetWaypoints` (`HOLD-001`), so the route is destroyed with it.
+    #
+    # This tick can never collide with `RefreshWaypoints` above: `aa.hit`
+    # implies the unit entered the tick `IsAttacking`, which is exactly the
+    # condition `ORDER-002`'s early return fires on, so `hold`/`chase` are
+    # already False here.  It *does* override `minion_order`, and must:
+    # `AIScript.OnUpdate` runs BEFORE `Spells.Update` in `ObjAIBase.Update`,
+    # so a 250 ms sweep that wrote `AttackTo` earlier in this same tick is
+    # overwritten by this.
+    #
+    # The sim already ported this exact tail for Garen's R (`r_cast_finished`
+    # below, which is the same three lines of `FinishCasting`) and simply
+    # never routed the auto-attack through it.  Measured cost of that:
+    # **2,074 of the 4,791 whole-corpus LaneMinion move-order misses** are the
+    # single shape `pre=AttackTo, sim=AttackTo, server=Hold` on a tick whose
+    # wind-up completes, and 2,050 of them are in the "wind-up COMPLETES this
+    # tick" bucket.  The direction is absolute: server-wrote-sim-held 4,769
+    # against sim-wrote-server-held 22.
+    finish_casting = r_cast_finished | aa.hit
+
     # ---- 6. champion death and respawn -----------------------------------
     # `Champion.Die` sets RespawnTimer = DeathTimes[Level] * 1000; the timer is
     # decremented in `Champion.Update` and `Respawn()` restores FULL health at
@@ -1156,15 +1190,15 @@ def tick(state: LaneState, params: UnitParams,
         t_ms=state.t_ms + jnp.asarray(delta_ms, dtype),
         tick=state.tick + 1,
         x=x, y=y,
-        waypoint_key=jnp.where(r_cast_finished, jnp.int8(1), wp_key),
+        waypoint_key=jnp.where(finish_casting, jnp.int8(1), wp_key),
         lane_waypoint_key=lane_key,
         waypoints=jnp.where(
-            r_cast_finished[:, None, None],
+            finish_casting[:, None, None],
             wp.at[:, 0].set(jnp.stack([x, y], -1)), wp),
-        n_waypoints=jnp.where(r_cast_finished, jnp.int8(1), n_wp),
+        n_waypoints=jnp.where(finish_casting, jnp.int8(1), n_wp),
         target=target.astype(state.target.dtype),
         target_priority=ai.target_priority,
-        move_order=jnp.where(r_cast_finished, jnp.int8(MoveOrder.HOLD),
+        move_order=jnp.where(finish_casting, jnp.int8(MoveOrder.HOLD),
                              move_order_out),
         ai_timer=ai.ai_timer, ai_local_time=ai.ai_local_time,
         time_since_attack=ai.time_since_attack, ignore_until=ai.ignore_until,

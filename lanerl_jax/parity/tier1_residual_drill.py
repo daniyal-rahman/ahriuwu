@@ -38,6 +38,169 @@ ORDER_NAMES = {0: "NONE", 1: "HOLD", 2: "MOVE_TO", 3: "ATTACK_TO",
                4: "ATTACK_MOVE", 5: "STOP", 6: "CAST_SPELL"}
 
 
+def _drill_move_order(rows, denom) -> None:
+    """Is the LaneMinion move-order residual a mechanism or a floor?
+
+    Called from :func:`main` with one row per disagreeing minion-tick.  Every
+    print here answers one of the four questions that separate the two:
+    symmetry, concentration, containment, and observability.
+    """
+    print("\n-- move_order: the FULL LaneMinion confusion matrix --")
+    labels = sorted({r["sim"] for r in rows} | {r["srv"] for r in rows})
+    if not rows:
+        print("   (no LaneMinion move-order disagreements in this window)")
+        return
+    print("   rows = sim, cols = server; the transpose pair of every cell is")
+    print("   printed beside it, because a SKEW is a missing gate and a")
+    print("   balanced pair is one-tick jitter")
+    cell = collections.Counter((r["sim"], r["srv"]) for r in rows)
+    width = max(len(s) for s in labels) + 1
+    print("        " + "".join(f"{s:>{width + 6}}" for s in labels))
+    for a in labels:
+        print(f"   {a:>{width}} "
+              + "".join(f"{cell[(a, b)]:>{width + 6}d}" for b in labels))
+    print("   off-diagonal pairs (sim=A/server=B against sim=B/server=A):")
+    seen = set()
+    for a in labels:
+        for b in labels:
+            if a == b or (b, a) in seen:
+                continue
+            seen.add((a, b))
+            n_ab, n_ba = cell[(a, b)], cell[(b, a)]
+            if not (n_ab or n_ba):
+                continue
+            tot = n_ab + n_ba
+            print(f"     {a:>12} <-> {b:<12} {n_ab:6d} vs {n_ba:6d}  "
+                  f"(skew {100 * abs(n_ab - n_ba) / tot:5.1f}% of {tot})")
+
+    print("\n-- move_order against the SHARED pre-tick order --")
+    print("   The injected order is the server's own value (`inject.py` writes")
+    print("   `ent.ai.move_order` every tick), so each side can be compared to")
+    print("   the SAME baseline.  That is what separates 'the server wrote an")
+    print("   order this tick and we did not' from the mirror -- exactly the")
+    print("   one-sidedness test that made `ORDER-003` a floor (253 vs 0).")
+    verdicts = collections.Counter()
+    for r in rows:
+        if r["sim"] == r["pre"]:
+            verdicts[f"server WROTE {r['pre']}->{r['srv']}, sim held"] += 1
+        elif r["srv"] == r["pre"]:
+            verdicts[f"sim WROTE {r['pre']}->{r['sim']}, server held"] += 1
+        else:
+            verdicts[f"both wrote, differently ({r['pre']}: "
+                     f"sim {r['sim']} / server {r['srv']})"] += 1
+    for v, n in verdicts.most_common(12):
+        print(f"     {n:6d}  {v}")
+    held = sum(n for v, n in verdicts.items() if v.startswith("server WROTE"))
+    wrote = sum(n for v, n in verdicts.items() if v.startswith("sim WROTE"))
+    print(f"   server-first {held}  vs  sim-first {wrote}  "
+          f"(a one-sided split is a phase floor, a balanced one is jitter)")
+    # The decisive table. A lane minion has exactly TWO move-order writers
+    # (`LaneMinionAI.cs:96` and `RefreshWaypoints`' `:604/:655`), and on a tick
+    # the unit entered `IsAttacking` the second one is unreachable
+    # (`ORDER-002`). So on those ticks the order is the 250 ms controller's
+    # output or nothing at all, and (pre -> sim/server) x (did each side
+    # sweep) says which of the two it was without any further inference.
+    print("   (pre -> sim / server) x (sim's timer rule, server's own reset):")
+    print("   `sweep_pred` is the 250 ms TIMER only; the sim also re-evaluates")
+    print("   on `TargetJustDied()`/call-for-help, which the timer cannot see,")
+    print("   so pred=False with a sim write is an EVENT-triggered sweep")
+    big = collections.Counter(
+        (r["pre"], r["sim"], r["srv"], r["sweep_predicted"],
+         r["sweep_observed"]) for r in rows)
+    for (pre, si, sv, p, o), n in big.most_common(14):
+        who = ("sim wrote" if si != pre and sv == pre else
+               "server wrote" if sv != pre and si == pre else
+               "both wrote" if si != pre and sv != pre else
+               "NEITHER wrote (impossible: injected orders are equal)")
+        print(f"     {n:6d}  pre={pre:<10} sim={si:<10} server={sv:<10} "
+              f"sweep_pred={str(p):<5} server_swept={str(o):<5}  {who}")
+
+    print("\n-- move_order: is it CONCENTRATED? --")
+    print("   by minion class, against that class's own scored denominator:")
+    for cls in sorted({r["cls"] for r in rows}):
+        sub = [r for r in rows if r["cls"] == cls]
+        d = denom[cls]
+        c2 = collections.Counter((r["sim"], r["srv"]) for r in sub)
+        top = c2.most_common(2)
+        shape = "; ".join(f"sim={a}/server={b} {n}" for (a, b), n in top)
+        print(f"     {cls:>8}: {len(sub):6d} / {d:7d} scored "
+              f"({100 * len(sub) / max(1, d):.3f}%)   {shape}")
+    print("   by game phase (60 s buckets), against the same denominator:")
+    bucket_n = collections.Counter(r["t_ms"] // 60_000 for r in rows)
+    for b in sorted(bucket_n):
+        sub = [r for r in rows if r["t_ms"] // 60_000 == b]
+        c2 = collections.Counter((r["sim"], r["srv"]) for r in sub)
+        a1 = sum(n for (x, y), n in c2.items() if x == "HOLD")
+        a2 = sum(n for (x, y), n in c2.items() if y == "HOLD")
+        print(f"     t={b * 60:4d}-{b * 60 + 60:4d}s: {bucket_n[b]:6d}  "
+              f"sim-said-HOLD {a1}  server-said-HOLD {a2}")
+    print("   by swing phase (from the server's own aastate/windup/cooldown):")
+    for ph, n in collections.Counter(r["phase"] for r in rows).most_common():
+        sub = [r for r in rows if r["phase"] == ph]
+        c2 = collections.Counter((r["sim"], r["srv"]) for r in sub)
+        top = "; ".join(f"{a}->{b} {k}" for (a, b), k in c2.most_common(2))
+        print(f"     {n:6d}  {ph}: {top}")
+    print("   pre-tick (is_attacking, AutoAttackSpell.State) on the disagreeing")
+    print("   tick -- `State == STATE_READY` is the server's own extra gate on")
+    print("   the in-range RefreshWaypoints (`ObjAIBase.cs:1233-1242`):")
+    for (at, st), n in collections.Counter(
+            (r["pre_attacking"], r["pre_aa_state"]) for r in rows).most_common(6):
+        print(f"     {n:6d}  is_attacking={at} aastate={st}")
+    print("   did the 250 ms sweep run on this tick?  (predicted from the")
+    print("   dump's own aitimer, observed from its reset at N+1):")
+    for (p, o), n in collections.Counter(
+            (r["sweep_predicted"], r["sweep_observed"])
+            for r in rows).most_common():
+        print(f"     {n:6d}  sim-rule predicted={p}  server observed={o}")
+
+    print("\n-- move_order: the in-range MARGIN, `d - idealRange` --")
+    print("   `RefreshWaypoints` picks Hold over AttackTo on the sign of this")
+    print("   number.  The server evaluates it MID-tick; the dump can only")
+    print("   show it at N and at N+1.  A residual whose margin straddles zero")
+    print("   between those two instants is the evaluation INSTANT, not the")
+    print("   rule -- i.e. `ORDER-003`'s floor showing up in this field.")
+    both = [r for r in rows
+            if r["margin_pre"] is not None and r["margin_post"] is not None]
+    print(f"   {len(both)} of {len(rows)} rows have a mappable target at both "
+          f"instants")
+    if both:
+        pre = np.asarray([r["margin_pre"] for r in both])
+        post = np.asarray([r["margin_post"] for r in both])
+        straddle = (np.sign(pre) != np.sign(post))
+        print(f"     |margin| at N:   median {np.median(np.abs(pre)):8.3f} u  "
+              f"p25 {np.percentile(np.abs(pre), 25):8.3f}  "
+              f"p75 {np.percentile(np.abs(pre), 75):8.3f}")
+        print(f"     |margin| at N+1: median {np.median(np.abs(post)):8.3f} u  "
+              f"p25 {np.percentile(np.abs(post), 25):8.3f}  "
+              f"p75 {np.percentile(np.abs(post), 75):8.3f}")
+        print(f"     the in-range verdict FLIPS between N and N+1 on "
+              f"{int(straddle.sum())}/{len(both)} "
+              f"({100 * straddle.mean():.1f}%)")
+        # A minion's per-tick budget is 325 u/s * 1024/60 ms = 5.417 u, so a
+        # margin inside one step is reachable by a one-tick phase difference
+        # and one outside it is not.  That is the line between "jitter" and
+        # "wrong rule", and it is a measured quantity, not a judgement.
+        step = 325.0 * (1024.0 / 60.0) / 1000.0
+        for lab, v in (("N", pre), ("N+1", post)):
+            print(f"     at {lab}: {100 * np.mean(np.abs(v) <= step):5.1f}% "
+                  f"within ONE minion movement step ({step:.3f} u) of the "
+                  f"in-range boundary")
+
+    print("\n-- move_order: is it a SHADOW of another residual? --")
+    print("   containment on the SAME (net_id, tick), the join that collapsed")
+    print("   `has_auto_attacked` into `AA-002`:")
+    for key in ("target_x", "fire_x", "hit_x", "attacking_x", "wp_x", "pos_x"):
+        n = sum(1 for r in rows if r.get(key))
+        print(f"     {n:6d} / {len(rows)}  ({100 * n / len(rows):5.1f}%) also "
+              f"disagreed on {key[:-2]}")
+    any_other = sum(1 for r in rows
+                    if any(r.get(k) for k in ("target_x", "fire_x", "hit_x",
+                                              "attacking_x", "wp_x", "pos_x")))
+    print(f"     {any_other} / {len(rows)} ({100 * any_other / len(rows):.1f}%) "
+          f"share a tick with ANY other scored disagreement; "
+          f"{len(rows) - any_other} are move-order ONLY")
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--existing-log", required=True)
@@ -56,8 +219,20 @@ def main(argv=None) -> None:
     from .inject import inject_snapshot, replay_wave_states
     from .one_step import compare_one_tick
     from ..sim.minion_ai import ACTION_TIMER_MS
+    from ..sim.profiles import PROFILES as PROFILE_SPECS
+    from ..sim.state import Kind
+    from ..sim.targeting import MinionType
     from .tier1_full import FIRST_WAVE_MS
     from .trace import PosQ, StatQ, load_trace
+
+    _SUBTYPE_NAME = {MinionType.MELEE: "melee", MinionType.CASTER: "caster",
+                     MinionType.CANNON: "cannon", MinionType.SUPER: "super"}
+
+    def _class_of(model_row: int) -> str:
+        kind, subtype, _team = PROFILE_SPECS[int(model_row)]
+        if kind != Kind.LANE_MINION:
+            return "non-minion"
+        return _SUBTYPE_NAME.get(subtype, f"subtype{subtype}")
 
     trace = load_trace(Path(a.existing_log))
     snaps = [s for s in trace.snapshots if s.t_ms >= FIRST_WAVE_MS]
@@ -71,6 +246,8 @@ def main(argv=None) -> None:
     pathfinding_radius = np.asarray(params["pathfinding_radius"])
 
     order_confusion = collections.Counter()
+    order_rows = []
+    order_denom = collections.Counter()
     wp_confusion = collections.Counter()
     fire_rows = []
     target_rows = []
@@ -167,21 +344,119 @@ def main(argv=None) -> None:
             if mi.net_id not in mis_n1_ids:
                 missile_census["landed_or_expired_this_tick"] += 1
 
+        ctrl_by_slot = {c.slot: c for c in tr.controller}
+
         for m in tr.matched:
             if m.pred.ai is None or m.real.ai is None:
                 continue
             n_scored[f"{m.kind}.move_order"] += 1
+            net = net_of_slot.get(m.slot)
+            iv = pre_internal.get(net) if net is not None else None
+            wp_x = bool(m.movement_trustworthy
+                        and m.pred.ai.waypoints != m.real.ai.waypoints)
             if m.pred.ai.move_order != m.real.ai.move_order:
                 order_confusion[(m.kind,
                                  ORDER_NAMES.get(m.pred.ai.move_order,
                                                  m.pred.ai.move_order),
                                  ORDER_NAMES.get(m.real.ai.move_order,
                                                  m.real.ai.move_order))] += 1
-            if m.movement_trustworthy and m.pred.ai.waypoints != m.real.ai.waypoints:
+            if wp_x:
                 wp_confusion[(m.kind, m.pred.ai.waypoints,
                               m.real.ai.waypoints)] += 1
-            net = net_of_slot.get(m.slot)
-            iv = pre_internal.get(net) if net is not None else None
+
+            # ------------- move_order residual (the 4,791) ----------------
+            # `ORDER-002` took this row from 34,295 to 4,807 and `HOLD-001`
+            # to 4,791, and the belief carried in the ledger since is that
+            # what is left is one-tick jitter at the swing boundary -- a
+            # belief formed on ONE drill window (120 cases against 116 of the
+            # mirror shape). This block is what tests it at corpus scale.
+            # Three things separate the three candidate explanations:
+            #   * the SYMMETRY of the confusion, per class and per phase (a
+            #     skewed cell is a missing gate, a balanced one is jitter);
+            #   * the MARGIN `d - idealRange` evaluated both at tick N and at
+            #     tick N+1, because the in-range predicate is exactly what
+            #     chooses Hold over AttackTo and the server evaluates it
+            #     mid-tick, between those two observable instants.  A miss
+            #     whose margin STRADDLES zero across the tick is not a wrong
+            #     rule, it is a rule read at a different instant -- the same
+            #     serial-vs-fixed-phase floor `ORDER-003` books for target;
+            #   * CONTAINMENT in the other residual rows on the same
+            #     unit-tick, which is what collapsed `has_auto_attacked` and
+            #     `is_attacking` into `AA-002`.
+            if m.kind == "LaneMinion":
+                cls = _class_of(model0[m.slot])
+                order_denom[cls] += 1
+                order_denom["all"] += 1
+            if (m.kind == "LaneMinion"
+                    and m.pred.ai.move_order != m.real.ai.move_order):
+                c = ctrl_by_slot.get(m.slot)
+                jv = nxt_internal.get(net)
+                # The in-range predicate, at the two instants the dump can
+                # see. `idealRange = Stats.Range.Total + TargetUnit
+                # .CollisionRadius` -- the same expression `RefreshWaypoints`
+                # is handed by `UpdateTarget`.
+                def _margin(sx, sy, tnet, tq):
+                    tslot = slot_of.get(tnet) if tnet else None
+                    if tslot is None or tq is None:
+                        return None
+                    ideal = float(attack_range[model0[m.slot]]
+                                  + collision_radius[model0[tslot]])
+                    return math.hypot(tq[0] / PosQ - sx,
+                                      tq[1] / PosQ - sy) - ideal
+                mar_pre = mar_post = None
+                if iv is not None and iv.target_net_id:
+                    mar_pre = _margin(m.pre_x, m.pre_y, iv.target_net_id,
+                                      (iv.target_q_x, iv.target_q_y))
+                if jv is not None and jv.target_net_id:
+                    mar_post = _margin(m.real.x, m.real.y, jv.target_net_id,
+                                       (jv.target_q_x, jv.target_q_y))
+                # Where in the swing is this tick?  The dump carries the
+                # server's own `AutoAttackSpell.State` (`aastate`), its
+                # remaining windup and its cooldown, so "one tick either side
+                # of the swing boundary" is a measured bucket, not a guess.
+                # `aawindup`/`aacd` are dumped in SECONDS (`Q(x, StatQ)`),
+                # `dt` is the tick in MILLISECONDS -- the two must be brought
+                # to the same unit or every bucket collapses onto
+                # `is_attacking`.
+                dt_s = dt / 1000.0
+                if iv is None:
+                    phase = "?"
+                elif iv.is_attacking and iv.q_aa_windup is not None and \
+                        iv.q_aa_windup / StatQ <= dt_s:
+                    phase = "mid-swing, windup COMPLETES this tick"
+                elif iv.is_attacking:
+                    phase = "mid-swing, windup continues"
+                elif iv.q_aa_cooldown / StatQ <= dt_s:
+                    phase = "idle, cooldown ready (may fire this tick)"
+                else:
+                    phase = "idle, in cooldown"
+                order_rows.append(dict(
+                    t_ms=sn.t_ms, net=net, cls=cls,
+                    sim=ORDER_NAMES.get(m.pred.ai.move_order, "?"),
+                    srv=ORDER_NAMES.get(m.real.ai.move_order, "?"),
+                    pre=ORDER_NAMES.get(int(order0[m.slot]), "?"),
+                    phase=phase,
+                    pre_attacking=None if iv is None else iv.is_attacking,
+                    pre_aa_state=None if iv is None else iv.aa_state,
+                    sweep_predicted=(
+                        None if iv is None or iv.q_ai_timer is None
+                        else (iv.q_ai_timer / StatQ + dt) >= ACTION_TIMER_MS),
+                    sweep_observed=(
+                        None if iv is None or jv is None
+                        or iv.q_ai_timer is None or jv.q_ai_timer is None
+                        else jv.q_ai_timer < iv.q_ai_timer),
+                    margin_pre=mar_pre, margin_post=mar_post,
+                    target_x=(None if c is None
+                              else c.sim_target_net_id != c.server_target_net_id),
+                    fire_x=None if c is None else c.sim_fire != c.server_fire,
+                    hit_x=None if c is None else c.sim_hit != c.server_hit,
+                    attacking_x=(None if c is None
+                                 else c.sim_attacking != c.server_attacking),
+                    wp_x=wp_x,
+                    pos_x=(m.movement_trustworthy
+                           and max(abs(m.pred.q_x - m.real.q_x),
+                                   abs(m.pred.q_y - m.real.q_y)) > 1),
+                ))
 
             # ---------------- position residual (the 1,742) ---------------
             # Scored on the SAME gate tier1_full uses -- componentwise
@@ -461,6 +736,8 @@ def main(argv=None) -> None:
     print("\n-- move_order confusion (sim -> server) --")
     for (kind, sim_v, srv_v), n in order_confusion.most_common(20):
         print(f"  {n:6d}  {kind}: sim={sim_v} server={srv_v}")
+
+    _drill_move_order(order_rows, order_denom)
 
     print("\n-- waypoint-count confusion (sim -> server) --")
     for (kind, sim_v, srv_v), n in wp_confusion.most_common(20):

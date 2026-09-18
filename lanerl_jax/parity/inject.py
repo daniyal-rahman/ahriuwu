@@ -256,6 +256,12 @@ class UnitInjectionNote:
     #: the team-relative immutable corridor; the label distinguishes an
     #: on-corridor recovery from the off-corridor nearest/upcoming guess.
     lane_waypoint_recovery: str = "not applicable"
+    #: ``INJ-003``: whether ``minionActionTimer`` was recovered onto the
+    #: server's own float32 tick grid or left at the dump's rounded value.
+    #: A rounded value cannot cross the ``>= 250f`` trigger -- see the call
+    #: site -- so this is the difference between the 250 ms sweep running and
+    #: not running at all.
+    ai_timer_recovery: str = "not applicable"
     #: ``(inclusive lower, exclusive upper)``; ``upper=None`` at level cap.
     xp_bounds: Optional[Tuple[float, Optional[float]]] = None
 
@@ -438,6 +444,72 @@ def snap_windup_to_tick_grid(q_windup: float, model_row: int, unit_level: float,
     # `one_step.py` groups by this string, and a per-tick label turns one line
     # into a 34-line histogram of the cast clock in every run's report.
     return float(out), "snapped onto the server's cast-clock grid"
+
+
+#: ``LaneMinionAI.minionActionTimer`` is only ever ``= 0`` (at a sweep),
+#: ``= 250f`` (at construction) or ``+= delta``, and the server's free-run
+#: ``deltaTime`` is ``(float)REFRESH_RATE`` (`Game.cs:333`). So the timer is
+#: always one of a short, exactly enumerable list of float32 accumulations.
+_ACTION_TIMER_DT32 = np.float32(np.float32(1000.0) / np.float32(60.0))
+
+
+def _action_timer_grid() -> np.ndarray:
+    """Every value ``minionActionTimer`` can hold, in the server's float32.
+
+    Two ladders, because there are two starting points: ``0`` after a sweep and
+    the ``250f`` a freshly constructed ``LaneMinionAI`` carries (`:22`, which
+    is what makes a new minion sweep on its very first update). The trigger
+    fires at ``>= 250`` so nothing survives far past it, but the ladders are
+    run out to 32 ticks so an unswept minion is covered too.
+    """
+    out = []
+    for start in (np.float32(0.0), np.float32(250.0)):
+        t = start
+        out.append(float(t))
+        for _ in range(32):
+            t = np.float32(t + _ACTION_TIMER_DT32)
+            out.append(float(t))
+    return np.asarray(sorted(set(out)), dtype=np.float64)
+
+
+_ACTION_TIMER_GRID = _action_timer_grid()
+
+
+def snap_action_timer_to_tick_grid(q_timer: float) -> Tuple[float, str]:
+    """``INJ-003``: recover ``minionActionTimer`` from its rounded dump.
+
+    The trigger this value feeds is ``minionActionTimer >= 250.0f``
+    (`LaneMinionAI.cs:90`) and the server crosses it by **0.0000305 ms**: the
+    fifteenth float32 accumulation of ``1000f/60f`` is ``250.0000305``, not
+    ``250``. `LanerlStateDump` publishes the timer rounded to 1/1024 ms, and
+    the fourteenth accumulation -- ``233.3333588`` -- rounds to
+    ``238933/1024 = 233.3330078``, i.e. **0.00035 ms low**, 11.5x the whole
+    crossing margin. Adding one tick to the rounded value gives
+    ``249.9996796``, which is below the threshold, so an injected minion
+    **never** sweeps.
+
+    That is not a near miss that shows up sometimes. Measured over the whole
+    gate-1 corpus, the sim's own rule fires on **0 of 395,366** minion
+    tick-pairs while the server's dumped ``aitimer`` resets on **26,537** of
+    them. Every Tier-1 minion-controller number taken before this was measured
+    with the regular sweep switched off; only ``TargetJustDied()`` and the
+    call-for-help branch ever re-evaluated anything.
+
+    The grid is unambiguous: neighbouring grid points are 16.67 ms apart and
+    the dump's error is 0.0005 ms, so the nearest point is the server's value
+    by a factor of 3.4e4. Anything further than the dump could have rounded is
+    left alone rather than snapped, because that would mean the value is not
+    on this grid at all and snapping would be inventing phase.
+    """
+    i = int(np.abs(_ACTION_TIMER_GRID - q_timer).argmin())
+    exact = float(_ACTION_TIMER_GRID[i])
+    err = abs(exact - q_timer)
+    if err > 1.0 / (2.0 * StatQ) + 1e-9:
+        return q_timer, (
+            f"dumped {q_timer:.6f} ms is {err * 1000:.3f} us from the nearest "
+            f"tick-grid value {exact:.6f} -- more than the dump could have "
+            f"rounded, so not snapped")
+    return exact, f"exact tick grid ({exact:.7f} ms, dumped {q_timer:.7f})"
 
 
 def _project_to_polyline(x: float, y: float, path: np.ndarray
@@ -951,7 +1023,28 @@ def inject_snapshot(
                 if note.movement_trustworthy else
                 "diagnostic waypoint list exceeded fixed LaneState capacity")
         if internal.q_ai_timer is not None:
-            ai_timer[slot] = internal.q_ai_timer / StatQ
+            # `INJ-003`. Same species as the wind-up above, and it costs more.
+            # `minionActionTimer` is zeroed at every sweep and then only ever
+            # `+= delta` (`LaneMinionAI.cs:78,96`), so it is an exact
+            # float32 accumulation of `(float)REFRESH_RATE` (`Game.cs:333`,
+            # `deltaTime = (float)REFRESH_RATE` in the free-run path this
+            # corpus was recorded with) and lies on a known grid.  The dump
+            # rounds it to 1/1024 ms, and the trigger it feeds is a bare
+            # `>= 250.0f` whose crossing margin is **0.0000305 ms** -- the
+            # 15th accumulation is 250.0000305, not 250.  The rounding error
+            # at the 14th (233.3333588 -> 238933/1024 = 233.3330078) is
+            # 0.00035 ms, **11.5x larger** than that margin and in the wrong
+            # direction, so the injected value misses the threshold every
+            # single time.  Measured on the whole corpus before this: the
+            # sim's rule `q/1024 + float32(1000/60) >= 250` fires on
+            # **0 of 395,366** minion tick-pairs against the server's own
+            # 26,537 sweeps.  The regular 250 ms sweep was switched off for
+            # every Tier-1 minion number ever taken; only the event branches
+            # (`TargetJustDied` / call-for-help) ever ran.
+            snapped, why = snap_action_timer_to_tick_grid(
+                internal.q_ai_timer / StatQ)
+            ai_timer[slot] = snapped
+            note.ai_timer_recovery = why
         if internal.q_ai_local is not None:
             ai_local_time[slot] = internal.q_ai_local / StatQ
         if internal.q_time_since_attack is not None:

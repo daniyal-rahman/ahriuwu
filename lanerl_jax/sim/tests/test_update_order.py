@@ -28,8 +28,9 @@ from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
 from lanerl_jax.sim.autoattack import step_autoattack
 from lanerl_jax.sim.init import (TOP_OUTER_TURRET, init_lane, lane_params,
                                  spawn_minion)
+from lanerl_jax.sim.minion_ai import ACTION_TIMER_MS
 from lanerl_jax.sim.profiles import profile_id
-from lanerl_jax.sim.state import Kind, MoveOrder, TU_SLICE, Team
+from lanerl_jax.sim.state import Kind, MI_SLICE, MoveOrder, TU_SLICE, Team
 from lanerl_jax.sim.step import tick
 from lanerl_jax.sim.targeting import MinionType, turret_acquire
 
@@ -387,3 +388,180 @@ def test_the_out_of_range_repath_still_produces_a_two_point_route():
     assert int(out.move_order[0]) == MoveOrder.ATTACK_TO
     assert int(out.n_waypoints[0]) == 2, "the chase route was reset too"
     assert float(out.x[0]) > 1000.0, "it should have walked toward the target"
+
+
+# --------------------------------------------------------------------------
+# ORDER-004: on a tick a minion enters mid-swing, the 250 ms controller is the
+# only move-order writer there is
+# --------------------------------------------------------------------------
+#
+# `ORDER-002` established that `UpdateTarget` early-returns on the
+# `IsAttacking` a unit carried into the tick, so `RefreshWaypoints` -- and
+# with it both `UpdateMoveOrder(OrderType.Hold)` (`ObjAIBase.cs:655`) and the
+# forced `UpdateMoveOrder(OrderType.AttackTo)` (`:604`) -- is unreachable.
+# A lane minion has exactly two move-order writers in the whole server
+# (`LaneMinionAI.cs:96` and those two lines), so on such a tick the order is
+# whatever `LaneMinionAI.OnUpdate` wrote earlier in the SAME tick, or the
+# order the unit already had.
+#
+# That is not a detail: it is 91.8% of the whole-corpus move-order residual.
+# Drilled over 19,800 tick-pairs, 4,396 of the 4,791 LaneMinion move-order
+# disagreements sit on ticks where the server's own dump has `attacking=1`,
+# i.e. on ticks where NEITHER engine can reach `RefreshWaypoints` and the only
+# thing that can differ is whether each side's controller swept. The three
+# tests below pin all three arms of that: the sweep writes during a windup,
+# nothing writes without a sweep, and an event trigger counts as a sweep.
+
+
+def _minion_pair(*, gap, is_attacking=False, windup=0.0, ai_timer=0.0,
+                 order=MoveOrder.HOLD, target_alive=True):
+    """Two enemy lane minions ``gap`` apart, blue targeting red.
+
+    Deliberately built with ``lane_path=None`` (the default ``tick`` takes):
+    the lane-walk tail of ``ReevaluateBehavior`` is a separate mechanism with
+    its own tests, and leaving it out keeps these assertions about the order
+    writer and nothing else.
+    """
+    patch = load_patch()
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    blue, red = MI_SLICE.start, MI_SLICE.start + 1
+    for team, key, px in ((Team.BLUE, "melee_blue", 1000.0),
+                          (Team.RED, "melee_red", 1000.0 + gap)):
+        s = spawn_minion(
+            s, team, profile_id(Kind.LANE_MINION, MinionType.MELEE, team),
+            patch.minions[key].hp_at_level(1),
+            jnp.asarray(np.asarray([[px, 1000.0]], np.float32)),
+            spawn_xy=(px, 1000.0))
+    s = s.replace(
+        alive=s.alive.at[red].set(target_alive),
+        target=s.target.at[blue].set(red),
+        move_order=s.move_order.at[blue].set(order),
+        is_attacking=s.is_attacking.at[blue].set(is_attacking),
+        aa_windup=s.aa_windup.at[blue].set(windup),
+        aa_cooldown=s.aa_cooldown.at[blue].set(1.0),
+        ai_timer=s.ai_timer.at[blue].set(ai_timer),
+    )
+    return s, params, blue
+
+
+def test_the_250ms_sweep_writes_attack_to_during_a_windup():
+    """`LaneMinionAI.cs:59-100`. ``AIScript.OnUpdate`` runs *before*
+    ``UpdateTarget`` inside ``ObjAIBase.Update`` and is not gated on
+    ``IsAttacking`` at all, so a minion whose swing is in flight still sweeps
+    on schedule and ``ReevaluateBehavior`` still returns ``AttackTo`` for its
+    still-valid target (`:321-331`).
+
+    The pairing with ``test_hold_is_not_written_while_a_swing_is_winding_up``
+    is the point. That test proves ``RefreshWaypoints`` does *not* run here;
+    this one proves something else still writes. Without both, "the order
+    during a windup" is pinned in one direction only, and the residual this
+    guards is symmetric -- 2,392 corpus ticks of `sim=HOLD, server=ATTACK_TO`
+    against 2,085 of the exact mirror.
+    """
+    s, params, blue = _minion_pair(gap=100.0, is_attacking=True, windup=0.3,
+                                   ai_timer=ACTION_TIMER_MS,
+                                   order=MoveOrder.HOLD)
+    out = tick(s, params)
+    assert bool(out.is_attacking[blue]), "the swing is still in flight"
+    assert int(out.move_order[blue]) == MoveOrder.ATTACK_TO, (
+        "the 250 ms sweep was suppressed during a windup; only "
+        "RefreshWaypoints is, and the AI script runs before it")
+
+
+def test_a_mid_swing_minion_whose_timer_is_not_due_keeps_the_order_it_had():
+    """The control, and the reason this residual is a *phase* residual.
+
+    Same state, timer nowhere near due. Now neither writer runs -- the
+    controller because 250 ms has not elapsed, ``RefreshWaypoints`` because of
+    `ORDER-002`'s early return -- so the order is simply carried. A move order
+    that is carried rather than recomputed is what turns a one-tick difference
+    in *when* each side sweeps into a visible label disagreement, which is
+    what the whole-corpus drill measures: 2,021 of the 4,791 disagreements sit
+    on ticks where the server's own ``aitimer`` shows it did not sweep at all.
+    """
+    s, params, blue = _minion_pair(gap=100.0, is_attacking=True, windup=0.3,
+                                   ai_timer=0.0, order=MoveOrder.HOLD)
+    out = tick(s, params)
+    assert int(out.move_order[blue]) == MoveOrder.HOLD, (
+        "something wrote the order on a tick with no sweep and no "
+        "RefreshWaypoints")
+
+
+def test_a_target_dying_re_evaluates_the_move_order_with_the_timer_not_due():
+    """``TargetJustDied()`` is the first term of the trigger
+    (`LaneMinionAI.cs:83-93`), so a minion re-evaluates the moment its target
+    stops being a valid one -- 250 ms timer or no 250 ms timer.
+
+    Measured on the corpus dump alone: the server makes **9,277** sweeps whose
+    ``minionActionTimer`` was not due (34.96% of all 26,537 minion sweeps),
+    against **zero** timer-due ticks on which it did not sweep. Those event
+    sweeps are the only remaining source of move-order phase difference
+    between the two engines, so a regression that dropped ``just_died`` from
+    the trigger would not fail any target test here -- the target ends up
+    ``-1`` either way once the sweep does run -- but it would move this row.
+    """
+    s, params, blue = _minion_pair(gap=100.0, is_attacking=False,
+                                   ai_timer=0.0, order=MoveOrder.HOLD,
+                                   target_alive=False)
+    out = tick(s, params)
+    assert int(out.target[blue]) == -1, "the dead target is dropped"
+    assert int(out.move_order[blue]) == MoveOrder.MOVE_TO, (
+        "the death did not trigger a re-evaluation: the order is still the "
+        "one the minion was holding, so only the 250 ms timer can be firing")
+
+
+def test_finishing_an_auto_attack_holds_and_destroys_the_route():
+    """`ORDER-005`. ``Spell.FinishCasting`` (`Spell.cs:1051-1065`) ends with
+
+        if (SpellData.Flags.HasFlag(SpellDataFlags.InstantCast)) { ... }
+        else { CastInfo.Owner.UpdateMoveOrder(OrderType.Hold, true); }
+
+    for **every** completed cast, and an auto-attack is one. The lane minion's
+    ``SRU_OrderMinionMeleeBasicAttack`` has ``Flags = 232448``, whose bit 2
+    (``InstantCast``) is clear, so the ``else`` is what a minion takes.
+
+    Both halves are asserted because `HOLD-001` is the precedent for exactly
+    this being half-ported: ``UpdateMoveOrder(Hold, true)`` is ``StopMovement``
+    is ``ResetWaypoints``, so the route dies with the order. Asserting only the
+    label passes on a tree that leaves a live chase route behind, and that is
+    the shape that took eight ticks to separate two otherwise bit-identical
+    engines in Tier 1.5.
+    """
+    s, params, blue = _minion_pair(gap=100.0, is_attacking=True,
+                                   windup=DT_MS / 2000.0,
+                                   ai_timer=0.0, order=MoveOrder.ATTACK_TO)
+    # a live two-point chase route, so "the route was destroyed" is observable
+    route = np.zeros((s.waypoints.shape[1], 2), np.float32)
+    route[0] = (1000.0, 1000.0)
+    route[1] = (1100.0, 1000.0)
+    s = s.replace(waypoints=s.waypoints.at[blue].set(jnp.asarray(route)),
+                  waypoint_key=s.waypoint_key.at[blue].set(1),
+                  n_waypoints=s.n_waypoints.at[blue].set(2))
+    out = tick(s, params)
+    assert not bool(out.is_attacking[blue]), "the wind-up ran out this tick"
+    assert bool(out.has_auto_attacked[blue]), "FinishCasting ran"
+    assert int(out.move_order[blue]) == MoveOrder.HOLD, (
+        "FinishCasting's UpdateMoveOrder(Hold) is not ported: the order is "
+        "still whatever the unit was carrying")
+    assert int(out.n_waypoints[blue]) == 1, (
+        "the order was written but StopMovement/ResetWaypoints was not")
+    assert int(out.waypoint_key[blue]) == 1
+
+
+def test_a_swing_still_winding_up_does_not_get_finish_castings_hold():
+    """The control against over-fixing `ORDER-005` into "mid-swing = Hold".
+
+    ``FinishCasting`` runs on exactly one tick of a swing -- the one where
+    ``CurrentDelayTime`` reaches ``DesignerCastTime`` -- and on every other
+    mid-swing tick the order is the 250 ms controller's, per `ORDER-002`. The
+    corpus split is 2,050 completion ticks against 2,345 mid-wind-up ticks, so
+    a fix that fired on both would trade one half of the residual for the
+    other and look like progress.
+    """
+    s, params, blue = _minion_pair(gap=100.0, is_attacking=True, windup=0.3,
+                                   ai_timer=0.0, order=MoveOrder.ATTACK_TO)
+    out = tick(s, params)
+    assert bool(out.is_attacking[blue]), "still winding up"
+    assert int(out.move_order[blue]) == MoveOrder.ATTACK_TO, (
+        "Hold was written on a tick FinishCasting does not run")
