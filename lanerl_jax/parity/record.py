@@ -211,6 +211,7 @@ def record_trace(
     port_base: int = 41000,
     step_ticks: int = 2,
     tag: str = "fixture",
+    extra_env: Optional[Mapping[str, str]] = None,
 ) -> Path:
     """Boot one server, drive it, and return the path to its log.
 
@@ -232,7 +233,7 @@ def record_trace(
             step_ticks=step_ticks,
             extra_env={"LANERL_STATE_DUMP": "1", "LANERL_STATE_DUMP_FULL": "1",
                        "LANERL_STATE_DUMP_INTERNALS": "1",
-                       **TRACE_ENV},
+                       **TRACE_ENV, **(dict(extra_env) if extra_env else {})},
         ),
         log_dir=out_dir / tag,
         ports=PortAllocator(base=port_base).allocate(1),
@@ -293,9 +294,11 @@ class Fixture:
 
 
 def record_fixture(out_dir: Path, decisions: int = 600, port_base: int = 41000,
-                   tag: str = "fixture") -> Fixture:
+                   tag: str = "fixture",
+                   extra_env: Optional[Mapping[str, str]] = None) -> Fixture:
     """Record one episode and return the paths to all three streams."""
-    log = record_trace(out_dir, decisions=decisions, port_base=port_base, tag=tag)
+    log = record_trace(out_dir, decisions=decisions, port_base=port_base, tag=tag,
+                       extra_env=extra_env)
     out_dir = Path(out_dir)
     return Fixture(log=log,
                    actions=out_dir / f"{tag}_actions.json",

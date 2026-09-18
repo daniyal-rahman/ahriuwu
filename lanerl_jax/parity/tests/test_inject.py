@@ -335,3 +335,32 @@ def test_internal_stream_restores_identity_attack_ai_maps_and_missile():
     assert source.position_recovery == "exact float32 bits from diagnostic stream"
     assert "exact NetId" in source.target_recovery
     assert "exact cooldown" in source.attack_recovery
+
+
+def test_an_injected_champion_in_lane_is_not_standing_in_its_own_fountain():
+    """`spawn_x/spawn_y` is the fountain, and `step.tick` reads it as one.
+
+    This field used to be set to the champion's CURRENT position, on the
+    reasoning that its only consumer was respawn. `step.tick`'s fountain-heal
+    block tests `(x - spawn_x)^2 + (y - spawn_y)^2 <= 1000^2` against the same
+    field, so every injected champion sat in its own fountain and was healed
+    15% of max HP per second of simulated time. Tier 1 could not see it (one
+    16.667 ms tick never reaches the 1,000 ms pulse period) and every
+    free-running differential was dominated by it.
+    """
+    from lanerl_jax.sim.init import CHAMPION_SPAWN
+    from lanerl_jax.sim.step import _FOUNTAIN_RADIUS
+
+    # a champion standing in the top lane, nowhere near a base
+    champ = parse_row(
+        "Champion|100|52923,204346|400000/772096|A|2|2|-|-|1|GarenPassive"
+        "|59269,28197,45219,353280,1024|1|486400|0|0|1"
+        "|1:0|0:-1|1:5120|-1:-1")
+    state, report = _state_for(Snapshot(t_ms=120_000, entities=[champ]))
+    slot = report.notes[0].slot
+    sx, sy = float(state.spawn_x[slot]), float(state.spawn_y[slot])
+    assert (sx, sy) == pytest.approx(CHAMPION_SPAWN[Team.BLUE])
+    d = ((float(state.x[slot]) - sx) ** 2 + (float(state.y[slot]) - sy) ** 2) ** 0.5
+    assert d > _FOUNTAIN_RADIUS, (
+        f"an injected lane champion is {d:.0f} u from its recorded spawn, "
+        f"inside the {_FOUNTAIN_RADIUS:.0f} u fountain-heal radius")

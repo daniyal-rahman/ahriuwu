@@ -150,7 +150,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..sim.init import TOP_LANE_PATH
+from ..sim.init import CHAMPION_SPAWN, TOP_LANE_PATH
 from ..sim.spells import (
     BuffId, E_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT, W_BUFF_SLOT,
     W_PASSIVE_BUFF_SLOT,
@@ -643,12 +643,23 @@ def inject_snapshot(
                 lv, cd = ent.champ.spells[slot]
                 spell_level[i, slot] = max(lv, 0)
                 spell_cooldown[i, slot] = max(cd, 0) / StatQ
-            # Champions never move in this fixture (no orders are issued),
-            # so `spawn_x/spawn_y` (only consulted on respawn) are set to the
-            # current position; this is a real gap for a driven fixture,
-            # harmless for this one.
-            spawn_x[i] = ent.x
-            spawn_y[i] = ent.y
+            # `spawn_x/spawn_y` is the champion's FOUNTAIN, not wherever it
+            # happens to be standing.
+            #
+            # This used to be `ent.x, ent.y`, with a comment saying that was a
+            # "real gap for a driven fixture, harmless for this one" because
+            # the only consumer was respawn. That was wrong: `step.tick`'s
+            # fountain-heal block (`0b`) tests
+            # `d_spawn2 <= _FOUNTAIN_RADIUS ** 2` against the SAME field, so an
+            # injected champion was always standing in its own fountain and
+            # took a **15% of max HP** pulse every second of simulated time.
+            # Invisible in Tier 1 -- `fountain_heal_ms` starts at 0 and one
+            # 16.667 ms tick can never reach the 1,000 ms period -- and
+            # decisive in any free run: measured on `parity/tier15.py`, an
+            # injected champion under six attacking minions LOST 11.6 HP over
+            # 7.6 s where the server's lost 587.4, because it was being healed
+            # ~100 HP/s by a fountain it was 12,000 units away from.
+            spawn_x[i], spawn_y[i] = CHAMPION_SPAWN[et]
 
         # ---- movement / waypoints -------------------------------------
         trustworthy, reason = True, "movement blocked this tick (order not MOVE_TO/ATTACK_TO)"
