@@ -29,9 +29,9 @@ the canonical rows below.
 
 | gate | status | canonical evidence | remaining work |
 |---|---|---|---|
-| 1. whole-corpus one-step parity | **OPEN** | Stable NetIds eliminate false identity events. Correcting fractional barracks spawn coordinates makes the 300-pair raw-float pre-clash corpus 2,170/2,170 for position, HP, move order, waypoints, deaths, and spawns. The last trustworthy full exact-cache run before that fix still had minion HP 99.91%, move-order 97.40%, and waypoint-count 99.95%, so those exact gates are not silently treated as green. On a fresh fixture whose Moves are actual legal 96x54 non-minimap bin centres, all 20 lookups are READY, but waypoint count agrees 0/20 (server 3; local 6–9); the host server-algorithm port agrees 20/20. The injector restores diagnostic target/AA state, but the aggregate one-step report does not yet score post-step target identity or AA fire tick explicitly. | Re-run the full exact-cache corpus after the spawn fix and resolve its remaining HP/move/waypoint disagreements; add explicit exact target/AA-fire comparisons; make local routing reproduce server A* + `SmoothPath` waypoint emission. |
+| 1. whole-corpus one-step parity | **OPEN** | Stable NetIds eliminate false identity events. Correcting fractional barracks spawn coordinates makes the 300-pair raw-float pre-clash corpus 2,170/2,170 for position, HP, move order, waypoints, deaths, and spawns. The last trustworthy full exact-cache run before that fix still had minion HP 99.91%, move-order 97.40%, and waypoint-count 99.95%, so those exact gates are not silently treated as green. On a fresh fixture whose Moves are actual legal 96x54 non-minimap bin centres, all 20 lookups are READY; the host server-algorithm port agrees 20/20. The local router agreed **0/20** on waypoint count (server 3; local 6-9); `SmoothPath` is now ported (`de5cc2b`) and on a 400-route corpus that goes from 6.0% to **55.0%**. The residual is not smoothing: only **17/400** baked itineraries are the server's own A* cell path, so the reverse-BFS bake caps exact agreement near 40%. The injector restores diagnostic target/AA state, but the aggregate one-step report does not yet score post-step target identity or AA fire tick explicitly. | Re-run the full exact-cache corpus after the spawn fix and resolve its remaining HP/move/waypoint disagreements; add explicit exact target/AA-fire comparisons. ~~`SmoothPath` waypoint emission~~ **done 2026-09-18**. Re-run the 20-Move fixture through the now-committed `movement_parity` CLI to replace the 0/20 with a current number. What is left on waypoints is the **bake algorithm**, not the emission: decide whether Gate 1 requires A*-identical cell paths (484M searches to bake) or is re-scoped to a bounded geometric difference. That is a scope decision, not a bug. |
 | 2. free-running divergence characterized | **PASS** | Four 600 s scenarios are recorded in `TIER2_DIVERGENCE.md`; divergence begins around wave interaction and is explicitly large. | None for Phase 1; retain as a regression corpus. |
-| 3. oracle last-hitter CS@10 | **OPEN** | First **routed** measurement, 2026-09-18, 18,000 decisions: sim CS=3 / attacks=54 / approach=6,400 / deaths=2 against server CS=4 / attacks=86 / approach=3,197 / deaths=1. The gap is **-1**, down from +3 on the raw path and from the obsolete 13-vs-4. **Do not read the smaller number as convergence.** The sim spent 6,400 of its 18,000 decisions walking in against the server's 3,197, so it farmed roughly 21% less of the episode, and it died twice to the server's once. The CS figures moved closer while the thing being compared got further apart. The raw-path 7-vs-4 run is not canonical and the raw figures must not be quoted as gate evidence. | Decompose the 6,400 with the new per-walk `walks` field: "walks slower", "walks more often" and "dies mid-walk and restarts" have different fixes and the total cannot tell them apart. ~~Re-run `isolation.py` routed~~ **done 2026-09-18**: tails halved to 1.23x/1.40x, wave survival ruled out (11.4% vs 10.2%), but the medians separated (+29%) and the dominant term is lane TIME, not position. Attribute the first free-running target/AA/HP split. Explain the death gap (2 vs 1) and the level gap (sim reaches 5, server 8) -- both currently unattributed and both cost CS directly. |
+| 3. oracle last-hitter CS@10 | **OPEN** | First **routed** measurement, 2026-09-18, 18,000 decisions: sim CS=3 / attacks=54 / approach=6,400 / deaths=2 against server CS=4 / attacks=86 / approach=3,197 / deaths=1. The gap is **-1**, down from +3 on the raw path and from the obsolete 13-vs-4. **Do not read the smaller number as convergence.** The sim spent 6,400 of its 18,000 decisions walking in against the server's 3,197, so it farmed roughly 21% less of the episode, and it died twice to the server's once. The CS figures moved closer while the thing being compared got further apart. The raw-path 7-vs-4 run is not canonical and the raw figures must not be quoted as gate evidence. | **Pathing is now bounded out as the dominant cause**: with `SmoothPath` the sim's polyline is 1.049x the server's on average (1.41x worst case, 400-route corpus), which cannot produce a 2.0x decision gap. Look at movement speed / the `MOVE-001` 8-transition per-tick cap, orders re-issued mid-walk, and the `route_status` histogram over the approach legs before looking at the router again. Decompose the 6,400 with the per-walk `walks` field: "walks slower", "walks more often" and "dies mid-walk and restarts" have different fixes and the total cannot tell them apart. ~~Re-run `isolation.py` routed~~ **done 2026-09-18**: tails halved to 1.23x/1.40x, wave survival ruled out (11.4% vs 10.2%), but the medians separated (+29%) and the dominant term is lane TIME, not position. Attribute the first free-running target/AA/HP split. Explain the death gap (2 vs 1) and the level gap (sim reaches 5, server 8) -- both currently unattributed and both cost CS directly. |
 | 4. full-loop throughput >=56k decisions/s | **OPEN** | RTX 5080, canonical command (see above): 4,096 envs, 150 s warm-up, **44 live entities**, 60 timed + 5 warmup. Three runs of the identical configuration on 2026-09-18: **55,054 / 55,565 / 55,049 dec/s**; sim-only 109,024-109,047. Target 56,450. Short by **1.6-2.5%**, against a run-to-run spread of about 1%. The previously recorded 53,228 / 53,605 figures are **stale** -- the gap roughly halved with the committed routing work. No-route control 57,378 (not gate evidence). | The remaining cost is not loop control: sweeping `ROUTE_LOOP_UNROLL` over 8/16/24/4 moved nothing outside noise, so chaining more masked hop bodies is not the lever. That points at the table gathers themselves (a 231 MiB hop table) rather than XLA loop overhead. Next: measure where the ~5.5 ms routed delta goes before optimising anything, and state a repeat count and statistic for the gate, since one run cannot resolve a 2% gap at 1% noise. |
 | 5. compile under two minutes | **PASS** | Routed compile 20.9-21.4 s across the three 2026-09-18 runs (earlier record: 12.9-13.6 s; it has grown with the routing work but remains far inside the 120 s gate). | None. Watch it: it moved 60% without anyone noticing, which a gate with this much headroom will not catch. |
 | 6. reset cost small | **PASS** | 2.17% of a step at 512 envs and 1.74% at 2,048. | None. |
@@ -54,6 +54,7 @@ mechanical guard against that rotting again; it runs in 0.15 s.
 | gate | command | where |
 |---|---|---|
 | 1 | `sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_full` | `desktop`, CPU |
+| 1 (waypoints) | `python -m lanerl_jax.parity.movement_parity` — scores the host A*+SmoothPath port **and** the production device router on the same 20 Moves; boots a real server | `desktop`, CPU |
 | 2 | `sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier2_batch --engine server` then `--engine sim`, then `python -m lanerl_jax.parity.tier2 compare --a ... --b ... --out ...` | `desktop`, CPU |
 | 3 | `pytest lanerl_jax/parity/tests/test_last_hit_gate.py::test_oracle_scores_the_same_cs_in_sim_and_server` | boots a real server; several minutes |
 | 4, 5 | `srun -p gpup --gres=gpu:1 --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax bash -lc '.venv-gpu/bin/python -m lanerl_jax.train.benchmark --envs 4096'` | **`desktop` only** — the 5080 is the gate hardware |
@@ -78,7 +79,7 @@ Gate-4 rules that are part of the measurement, not preferences:
 
 | ID | status | subsystem | server behavior | JAX behavior / deviation | likely symptom | evidence and resolution trigger |
 |---|---|---|---|---|---|---|
-| PATH-001 | `APPROX` | champion move routing | `NavigationGrid.GetPath` runs radius-aware, closed-on-enqueue A* from the champion's exact float position to the exact float click, then `SmoothPath`. | Production `run_train` loads the radius-aware local table and reconstructs a static-terrain route. Its deterministic reverse BFS and collinear compression are robust but not the server's A* tie-break and `SmoothPath`. A caller omitting the table still gets `[position, destination]`, explicitly exposed as `--no-route-table`. On the fresh 20-Move fixture generated from actual legal 96x54 non-minimap bin centres, every lookup is READY but local waypoint counts agree 0/20: server always 3, local 6–9. The host server-algorithm port agrees with the server 20/20. | A different safe side/curve around terrain changes arrival and trade timing; disabled routing causes wall entry/ejection. | `data/local_route_artifact.py`, `sim/local_pathing.py`, exact host reference in `data/navgrid.py`. A bounded device `CastCircle` now agrees with the host on the 20-click corpus (10 clear, 10 blocked, zero bound exhaustion); it still needs `SmoothPath` integration. Earlier route decomposition independently showed both missing LOS smoothing and BFS/A* path choice. |
+| PATH-001 | `APPROX` | champion move routing | `NavigationGrid.GetPath` runs radius-aware, closed-on-enqueue A* from the champion's exact float position to the exact float click, then `SmoothPath`. | Production `run_train` loads the radius-aware local table and reconstructs a static-terrain route. `SmoothPath` is ported as of `de5cc2b` and agrees with the host port 400/400; what remains is the **A* tie-break**. Its deterministic reverse BFS reproduces the server's own cell path only 17/400 times. A caller omitting the table still gets `[position, destination]`, explicitly exposed as `--no-route-table`. On the fresh 20-Move fixture generated from actual legal 96x54 non-minimap bin centres, every lookup is READY; the host server-algorithm port agrees with the server 20/20. Local waypoint counts agreed 0/20 before smoothing (server always 3, local 6-9); on the 400-route artifact corpus smoothing takes count agreement from 6.0% to 55.0% and mean polyline length from 1.177x the server's to 1.049x. | A different safe side/curve around terrain changes arrival and trade timing; disabled routing causes wall entry/ejection. | `data/local_route_artifact.py`, `sim/local_pathing.py`, exact host reference in `data/navgrid.py`. The bounded device `CastCircle` agrees with the host on the 20-click corpus (10 clear, 10 blocked) and, checked for the first time at *smoothing* length rather than A*-neighbour length, 4,000/4,000 on segments up to 60 cells with zero bound exhaustion. Integrating `SmoothPath` exposed two float-precision port bugs on the host side; see the SmoothPath section below. Earlier route decomposition independently showed both missing LOS smoothing and BFS/A* path choice. |
 | PATH-002 | `APPROX` | policy click geometry / HUD | The wire accepts a world destination, but the intended control surface is the locked follow-camera viewport with minimap clicks forbidden. | The 96x54 bin centres now use the same calibrated perspective equations and side-canonical lane reflection as `lanerl_rl.projection` / the real environment. Bins in the measured 352px minimap rectangle (`x>=275`, `y>=240`) decode semantic Move to NOOP, preventing a live global minimap order. The parity recorder also selects the nearest point from this exact legal grid instead of using an artificial radius clamp. Because x/y heads are factored, the joint rectangle cannot be removed from both marginal distributions; invalid pairs can still be sampled and wasted as NOOP. Other HUD regions are not yet jointly masked. | Correct local geometry, but some sampled actions are wasted; an inaccurate HUD rectangle could suppress valid floor clicks or permit HUD clicks. | `train/actions.py`, `parity/record.py`, their focused tests, and `INFERENCE_FAILURE_ANALYSIS.md` M11/H100. Resolve the remaining approximation with a joint/autoregressive spatial head or a full conditional 2-D action mask calibrated to the deployed client. |
 | PATH-003 | `APPROX` | local route endpoint quantization | A* priorities and the first/final swept-circle edges use exact fractional source and goal coordinates. | The local artifact selects raw hops by source/goal cells; runtime preserves the exact terrain-projected float destination but the first branch is cell-centre-derived. Two positions in the same 50-unit cell can therefore choose the same branch when the server would not. | Rare different side around a corner, then large accumulated position divergence. | `data/local_route_artifact.py`, `data/route_artifact.py`; resolve with a server waypoint corpus and endpoint bins or an exact bounded runtime search. |
 | PATH-004 | `BOUNDED` | waypoint storage | Server waypoint lists are dynamic and its `SmoothPath` corpus measured a maximum of 19 for 1800-unit clicks. | State stores at most 64 waypoints and reconstruction at most 128 raw hops. The local reverse-BFS router only removes collinear cells: among 110,890 random valid bounded Map1 routes, p99 was 24 and the maxima were 45 waypoints / 101 raw hops. Both overflows remain explicit statuses. | An exceeded bound uses the labelled two-point fallback rather than silently stopping early. | `sim/state.py`, `sim/local_pathing.py`; retain adversarial/random bound tests and raise the cap if either overflow status occurs in rollout diagnostics. |
@@ -99,46 +100,71 @@ Gate-4 rules that are part of the measurement, not preferences:
 | PERF-001 | `APPROX` | routed-training throughput gate | The JAX rewrite must retain accelerator throughput high enough for RL. | Canonical command, RTX 5080, 4,096 envs, 150 s warm-up (44 live entities), 60 timed + 5 warmup: **55,054 / 55,565 / 55,049 dec/s** over three identical runs on 2026-09-18, sim-only ~109,030, compile 20.9-21.4 s. Target 56,450; short by 1.6-2.5% against ~1% run-to-run spread. The earlier 53,228/53,605 records are stale. The no-route control is 57,378, so routing is still the whole gap. **Measured negative result:** `ROUTE_LOOP_UNROLL` swept on 2026-09-18 (`--route-unroll`, canonical workload otherwise): 4 -> 55,040; 8 -> 55,565 and 55,054; 16 -> 55,049; 24 -> 55,014 dec/s. Total spread 551 dec/s (1.0%), no monotonic trend, and the two same-setting runs at unroll 8 are 511 apart -- i.e. the whole range is inside the repeat noise. Chaining more masked hop bodies is not the lever and the routed delta is not XLA loop-control overhead. (Compile does respond: 20.5 s at 4 rising to 22.1 s at 24, so a larger unroll costs compile time for nothing.) A production action-lattice audit found max 59 raw hops, but a broader reachable-cell sample found 107, so the global 128 bound cannot safely be lowered to 64 -- and the `while_loop` already exits early on the batch, so the bound is not what costs anyway. | Gate 4 remains open. Deferred terrain repair is also a separately labelled semantic approximation. | Reproduce only with the canonical command; a routed number from anything else is not gate evidence. Profile where the ~5.5 ms routed delta actually goes -- the unroll result points at the 231 MiB table's gathers, not control flow -- before optimizing. Fix the gate's repeat count and statistic: at ~1% noise, one run cannot resolve a 2% gap in either direction. |
 | OPS-001 | `BOUNDED` | route asset distribution | A training checkout needs the exact artifact matching navgrid bytes, radius, and ABI. | Heavy route data live under ignored `data/jax_routes/`; production remains pinned to `map1_garen_r35_o50_v2` (231 MiB packed hops). The loader also accepts the measured `v3` same-direction-run sidecar experiment (693 MiB total), but its memory/compile cost has not yet produced a gate result, so it is not required. Unknown versions, hashes, shapes, or v3 sidecar semantics fail closed. | A fresh machine cannot start routed training until the pinned artifact is generated or distributed. **Generating and loading need different environments**, measured 2026-09-18: the baker is numba-parallel and raises rather than guessing, and `.venv-gpu` is a real venv with `include-system-site-packages = false`, so it cannot see the conda env's numba. Artifacts are therefore generated in `.venv-jax` (login) and only *loaded* in `.venv-gpu` (desktop/GPU). Loading is pure numpy, so routed training and gate 4 are unaffected -- the gate-4 run loads the 231 MiB v2 table in `.venv-gpu` without numba. Left that way on purpose: numba pins numpy, and `.venv-gpu` is the environment every gate-4 number is measured in. | `data/local_route_artifact.py`, `train/run_train.py`; publish the pinned artifact to the project artifact store before remote training. |
 
-## The one chain that links three open gates (2026-09-18)
+## SmoothPath: what it fixed, and what it turned out not to explain (2026-09-18)
 
-`SmoothPath` is missing, and that single gap shows up as three separately-filed
-problems. Worth stating in one place, because each has been worked on as though
-it were independent.
+`SmoothPath` was missing and is now ported (`sim/local_pathing.smooth_cell_path`,
+commit `de5cc2b`). It was filed as the single gap behind three open gates. One
+third of that is right; the rest was an inference that the measurement does not
+support, and it is worth writing down which is which.
 
-1. **Gate 1, PATH-001.** On the 20-Move fixture of legal 96x54 bin centres,
-   every lookup is READY but local waypoint counts agree with the server
-   **0/20**: the server always emits 3, the local router 6-9. The host port of
-   the server algorithm agrees 20/20, so this is not a misreading of the
-   server -- the device-side reconstruction really does emit a different path.
-   The reverse-BFS router only removes *collinear* cells; the server runs
-   `SmoothPath`, which removes any cell the line of sight can skip.
-2. **A path with 6-9 waypoints instead of 3 is a longer path.** It tracks cell
-   centres instead of cutting corners. That is distance, and distance is
-   decisions.
-3. **Gate 3.** The first routed run has the sim spending **6,400** of its
-   18,000 decisions walking in, against the server's **3,197** — while walking
-   the identical scripted `APPROACH_WAYPOINTS`. It therefore farms about 21%
-   less of the episode, and its champion reaches level 5 where the server's
-   reaches 8. Some of that total is the extra death (2 vs 1) rather than speed;
-   the new per-walk `walks` field is what separates the two, and it has not been
-   run yet.
+**What it is.** The server runs A*, then a single greedy pass that deletes any
+cell the last kept one can see through a swept circle of the pathfinding
+radius. Our reverse-BFS router removed only *collinear* cells. Hence 6-9
+waypoints where the server emits 3.
 
-The predicate this needs already exists and is verified: the bounded device
-`CastCircle` agrees with the host on the 20-click corpus (10 clear, 10 blocked,
-zero bound exhaustion). What is missing is emitting waypoints through it.
+**What it fixed.** 400 routes through the production `map1_garen_r35_o50_v2`
+artifact, scored against the server's own `get_path` (host self-check 400/400):
 
-**This is the highest-value single fix available.** It closes a gate-1 item
-outright, and it is the leading candidate for the gate-3 lane-time deficit,
-which is currently the largest unexplained term in that gate. It is *not*
-expected to help gate 4 — fewer waypoints would mean less work per route, but
-the measured routed delta is in the table gathers, and the `while_loop` already
-exits early, so do not justify this work on throughput.
+| | raw cells | before | after | server |
+|---|---|---|---|---|
+| mean waypoints | 37.48 | 8.97 | 4.62 | 4.49 |
+| count agrees with server | - | 24/400 (6.0%) | 220/400 (55.0%) | - |
+| polyline length vs server (mean / median / p90) | - | 1.177 / 1.155 / 1.337 | 1.049 / 1.004 / 1.162 | 1.000 |
 
-**Do not read gate 3's -1 as nearly closed.** The raw path gave +3, routing
-gave -1, and the sign flipped because the sim lost farming time, not because
-last-hitting converged. Fix the walk, then re-measure; a gate that agrees
-because both sides are wrong in opposite directions is the failure mode this
-ledger exists to prevent.
+**What it does not explain: Gate 3.** The argument was "more waypoints means a
+longer path, and distance is decisions". The first half is true and is now
+measured: **+17.7% mean, +15.5% median, 1.41x worst case**. The second half
+does not carry the weight it was given. Gate 3's sim spends **6,400** approach
+decisions against the server's **3,197** -- a factor of **2.0**. Path geometry
+can account for at most about a fifth of that, and the worst single route in
+the corpus is still only 1.41x. **Something other than pathing dominates the
+approach gap**, and looking for it inside the router is looking in the wrong
+place. Candidates now promoted ahead of geometry: effective movement speed /
+per-tick waypoint budget (`MOVE-001` caps transitions at 8), orders re-issued
+mid-walk, the `route_status` histogram over the approach legs, and walks
+truncated by death.
+
+**What it does not fix: Gate 1.** Smoothing cannot close waypoint parity by
+itself, because the input path is wrong before it is smoothed. Only **17/400**
+baked itineraries are the server's own A* cell path -- the local artifact is a
+reverse BFS over a CastCircle-valid neighbour graph, chosen so the bake is
+tractable. That caps exact waypoint agreement near 40% however the list is
+smoothed, and it is what the remaining 45% of count disagreement is. This is a
+bake-algorithm gap (PATH-001, PATH-003), not a smoothing gap, and it cannot be
+closed by re-baking with A*: the server's search is closed-on-enqueue, so
+matching it needs its exact frontier order per (source, goal) pair, which is
+484M searches for this artifact.
+
+**What it does not touch: Gate 4.** Unchanged and independent. Smoothing adds
+CastCircle work per route; its cost has not yet been measured.
+
+**Two port bugs it exposed.** Both surfaced because the device and host
+disagreed on 2 of 400 routes -- not from rereading the source.
+
+1. `navgrid.cast_circle` built the offset endpoints in float64; the server
+   builds them in `Vector2`, i.e. float32. Both disagreements resolved to the
+   float32 answer. The rate is below 0.05% on random segments (0 in 40,000,
+   including 20,000 bake-shaped adjacent-neighbour queries, so the 231 MiB
+   artifact is not implicated) -- but SmoothPath's greedy pushes every cast
+   until it fails, so it probes the clear/blocked boundary *on purpose*. A
+   predicate can be right everywhere that does not matter.
+2. `cells_in_line` then walked with a float32 error accumulator inherited from
+   those endpoints, where the source declares `double`.
+
+Device and host SmoothPath now agree 400/400. The device `CastCircle` was
+already exact -- 4,000/4,000 against the host on segments up to 60 cells, zero
+bound exhaustion -- which is the first time it had been checked at smoothing
+length rather than A*-neighbour length.
 
 ## Local-click routing design record
 
