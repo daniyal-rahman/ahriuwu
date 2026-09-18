@@ -2,7 +2,7 @@
 """Drive BOTH champions from a trained checkpoint, on a server we did not spawn.
 
 For rendered inference: the server and the League client run on the Windows
-side of the dual-boot desktop (see docs/WINDOWS_RENDERED_INFERENCE.md), and the
+side of the dual-boot desktop (see docs/archive/WINDOWS_RENDERED_INFERENCE.md), and the
 policy runs wherever torch is -- reaching the control port through an SSH
 tunnel, because ``LanerlControl`` binds ``IPAddress.Loopback`` and nothing off
 that box can connect to it directly.

@@ -129,7 +129,7 @@ Fresh noise is sampled at every step instead of re-using the initial noise or us
 
 **Files:** `scripts/train_tokenizer.py`, lines 414-416, 436, 399-401
 
-**Evidence:** The tier0 changes (documented in `docs/audits/tier0_training_changes.md`) already fixed this. The current code has correct argument order at all call sites:
+**Evidence:** The tier0 changes (documented in `docs/archive/audits_legacy/tier0_training_changes.md`) already fixed this. The current code has correct argument order at all call sites:
 - `train_epoch()` call (line 414): passes `scheduler, loss_fn, rms_trackers` in correct order
 - `save_checkpoint()` calls (line 436): passes `scheduler, rms_trackers` correctly
 - `load_checkpoint()` call (line 399): passes `scheduler, rms_trackers` correctly

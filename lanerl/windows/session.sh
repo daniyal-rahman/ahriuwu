@@ -25,7 +25,7 @@
 #     full three-lane map walks off the lane axis and collects nothing --
 #     observed: level 1 and 0 CS at three minutes.
 #
-# See docs/WINDOWS_RENDERED_INFERENCE.md for why each of those is true.
+# See docs/archive/WINDOWS_RENDERED_INFERENCE.md for why each of those is true.
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 REPO=$(pwd)

@@ -589,7 +589,7 @@ class ReplayLatentSequenceDataset(Dataset):
             warnings.warn(
                 f"{match_id}: movement_source='clicks' but no usable clicks.json; "
                 "falling back to the legacy cursor.screen target (43% of whose "
-                "transitions are camera drift — see docs/DATA_AUDIT_2026-08-12.md)."
+                "transitions are camera drift — see docs/archive/DATA_AUDIT_2026-08-12.md)."
             )
         movement = self._parse_movement_cursor(labels, frames)
         event = self._movement_events_from_cursor_world(frames)
@@ -875,7 +875,7 @@ class ReplayLatentSequenceDataset(Dataset):
         action-conditioning input, so smoothing it cannot leak a future command
         into the world model. (Interpolating the MOVEMENT target does exactly
         that -- it drops the blind-table bar from 4.12 to 1.73 by making the
-        targets self-predictive. See docs/BC_FIX_PLAN_2026-08-26.md.)
+        targets self-predictive. See docs/archive/BC_FIX_PLAN_2026-08-26.md.)
         """
         T = len(frames)
         out = torch.full((T, 2), 0.5, dtype=torch.float32)

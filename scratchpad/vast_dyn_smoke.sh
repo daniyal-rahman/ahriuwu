@@ -1,6 +1,6 @@
 #!/bin/bash
 # One-shot Vast smoke for the dynamics DDP port, mirroring the tokenizer workflow
-# (docs/VAST.md §3): provision cheapest 2x4090 -> ship code -> stage latents from
+# (docs/archive/VAST.md §3): provision cheapest 2x4090 -> ship code -> stage latents from
 # R2 -> run real 2-GPU NCCL DDP training -> validate -> ALWAYS destroy.
 set -uo pipefail
 export PATH=/home/dani/.vastcli/bin:/home/dani/bin:$PATH

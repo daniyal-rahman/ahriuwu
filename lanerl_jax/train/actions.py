@@ -31,7 +31,7 @@ __all__ = ["orders_from"]
 # x/y head cannot represent a joint rectangular action mask without becoming
 # autoregressive, so decode those sampled pairs as NOOP. This prevents the
 # live client from reinterpreting a supposed local ground click as a global
-# minimap order. See docs/INFERENCE_FAILURE_ANALYSIS.md M11/H100.
+# minimap order. See docs/archive/INFERENCE_FAILURE_ANALYSIS.md M11/H100.
 MINIMAP_X_MIN = 275.0 / 352.0
 MINIMAP_Y_MIN = 240.0 / 352.0
 

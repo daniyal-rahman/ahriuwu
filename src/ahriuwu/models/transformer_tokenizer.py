@@ -737,7 +737,7 @@ class TransformerTokenizer(nn.Module):
         al.). It was nevertheless the default here without measurement, and the
         measured cost is that a tube-masked region is unpredictable from ANY
         frame, so the loss-optimal output is a generic mean — the HP-bar
-        hallucination in docs/TOKENIZER_REVIEW_2026-08-02.md. Kept as an
+        hallucination in docs/archive/TOKENIZER_REVIEW_2026-08-02.md. Kept as an
         ablation, no longer the default.
 
         Args:
