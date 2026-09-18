@@ -99,6 +99,47 @@ Gate-4 rules that are part of the measurement, not preferences:
 | PERF-001 | `APPROX` | routed-training throughput gate | The JAX rewrite must retain accelerator throughput high enough for RL. | Canonical command, RTX 5080, 4,096 envs, 150 s warm-up (44 live entities), 60 timed + 5 warmup: **55,054 / 55,565 / 55,049 dec/s** over three identical runs on 2026-09-18, sim-only ~109,030, compile 20.9-21.4 s. Target 56,450; short by 1.6-2.5% against ~1% run-to-run spread. The earlier 53,228/53,605 records are stale. The no-route control is 57,378, so routing is still the whole gap. **Measured negative result:** `ROUTE_LOOP_UNROLL` swept over 8/16/24/4 produced no change outside noise, so the routed delta is not XLA loop-control overhead and chaining more masked hop bodies is not the lever. A production action-lattice audit found max 59 raw hops, but a broader reachable-cell sample found 107, so the global 128 bound cannot safely be lowered to 64 -- and the `while_loop` already exits early on the batch, so the bound is not what costs anyway. | Gate 4 remains open. Deferred terrain repair is also a separately labelled semantic approximation. | Reproduce only with the canonical command; a routed number from anything else is not gate evidence. Profile where the ~5.5 ms routed delta actually goes -- the unroll result points at the 231 MiB table's gathers, not control flow -- before optimizing. Fix the gate's repeat count and statistic: at ~1% noise, one run cannot resolve a 2% gap in either direction. |
 | OPS-001 | `BOUNDED` | route asset distribution | A training checkout needs the exact artifact matching navgrid bytes, radius, and ABI. | Heavy route data live under ignored `data/jax_routes/`; production remains pinned to `map1_garen_r35_o50_v2` (231 MiB packed hops). The loader also accepts the measured `v3` same-direction-run sidecar experiment (693 MiB total), but its memory/compile cost has not yet produced a gate result, so it is not required. Unknown versions, hashes, shapes, or v3 sidecar semantics fail closed. | A fresh machine cannot start routed training until the pinned artifact is generated or distributed. | `data/local_route_artifact.py`, `train/run_train.py`; publish the pinned artifact to the project artifact store before remote training. |
 
+## The one chain that links three open gates (2026-09-18)
+
+`SmoothPath` is missing, and that single gap shows up as three separately-filed
+problems. Worth stating in one place, because each has been worked on as though
+it were independent.
+
+1. **Gate 1, PATH-001.** On the 20-Move fixture of legal 96x54 bin centres,
+   every lookup is READY but local waypoint counts agree with the server
+   **0/20**: the server always emits 3, the local router 6-9. The host port of
+   the server algorithm agrees 20/20, so this is not a misreading of the
+   server -- the device-side reconstruction really does emit a different path.
+   The reverse-BFS router only removes *collinear* cells; the server runs
+   `SmoothPath`, which removes any cell the line of sight can skip.
+2. **A path with 6-9 waypoints instead of 3 is a longer path.** It tracks cell
+   centres instead of cutting corners. That is distance, and distance is
+   decisions.
+3. **Gate 3.** The first routed run has the sim spending **6,400** of its
+   18,000 decisions walking in, against the server's **3,197** — while walking
+   the identical scripted `APPROACH_WAYPOINTS`. It therefore farms about 21%
+   less of the episode, and its champion reaches level 5 where the server's
+   reaches 8. Some of that total is the extra death (2 vs 1) rather than speed;
+   the new per-walk `walks` field is what separates the two, and it has not been
+   run yet.
+
+The predicate this needs already exists and is verified: the bounded device
+`CastCircle` agrees with the host on the 20-click corpus (10 clear, 10 blocked,
+zero bound exhaustion). What is missing is emitting waypoints through it.
+
+**This is the highest-value single fix available.** It closes a gate-1 item
+outright, and it is the leading candidate for the gate-3 lane-time deficit,
+which is currently the largest unexplained term in that gate. It is *not*
+expected to help gate 4 — fewer waypoints would mean less work per route, but
+the measured routed delta is in the table gathers, and the `while_loop` already
+exits early, so do not justify this work on throughput.
+
+**Do not read gate 3's -1 as nearly closed.** The raw path gave +3, routing
+gave -1, and the sign flipped because the sim lost farming time, not because
+last-hitting converged. Fix the walk, then re-measure; a gate that agrees
+because both sides are wrong in opposite directions is the failure mode this
+ledger exists to prevent.
+
 ## Local-click routing design record
 
 The routing target is intentionally local even though the map data is global:
