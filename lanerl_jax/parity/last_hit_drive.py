@@ -469,7 +469,7 @@ def run_oracle_on_server(
     bot_seed: int = 4242,
     tag: str = "last_hit_oracle",
     log_dir: Optional[Path] = None,
-    autobuy: bool = True,
+    autobuy: bool = False,
     on_decision: Optional[Callable[[dict], None]] = None,
     extra_env: Optional[dict] = None,
 ) -> ServerRun:
@@ -497,6 +497,23 @@ def run_oracle_on_server(
       ``IsVisibleByTeam``), so the champion never swings and the order looks
       accepted. Only ``"vb"``-visible red minions are ever offered to the
       oracle as candidates.
+
+    ``autobuy`` defaults to **False here, deliberately inverting the server's
+    own default**, because the sim has no item model at all (``ITEM-001``) and
+    a comparison against a server champion carrying items is not a parity
+    measurement -- it is two different champions. Measured bias from leaving it
+    on: **+82.4 max HP** from t=0 (``80 x 1.03``, i.e. +12.3% at level 1),
+    **+1.2 HP/s regen** on a base of 1.568 (**+77%**, up to +720 HP of healing
+    over a 600 s episode), and **+25 move speed** from t=81.1 s (345 -> 370,
+    +7.25%). Every existing caller already passes ``False``; the old ``True``
+    default was a trap waiting for the next one, and it is also how
+    ``RUNE_HP_BONUS`` came to be measured off a shop-ON dump and to silently
+    carry Doran's Shield's +80 for weeks (``STAT-001``).
+
+    Note what this does *not* mean: production RL runs DO use the auto-shop, so
+    gate 3 validates the sim against a server configured the way the sim can
+    represent, not against the production configuration. Closing that gap needs
+    an item model, not a flag.
 
     ``autobuy`` controls ``LANERL_AUTOBUY`` (default server behaviour is ON --
     ``LanerlHooks.cs:366``'s gate is
