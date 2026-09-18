@@ -118,7 +118,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -306,6 +306,7 @@ def run_oracle_in_sim(
     route_table=None,
     terrain=None,
     table_disabled: bool = False,
+    on_decision: Optional[Callable[[dict], None]] = None,
 ) -> SimRun:
     """Run the oracle against blue in the JAX sim; red never receives an order.
 
@@ -319,6 +320,14 @@ def run_oracle_in_sim(
     target every decision does not interrupt an in-progress swing, because the
     swing gate is the auto-attack cooldown, not "is this a new order"
     (``sim/autoattack.py``'s docstring).
+
+    ``on_decision``, if given, is called once per decision with the PRE-step
+    state and the loop's own bookkeeping (``walk_index``, ``approaching``,
+    ``respawned``). It exists so a diagnostic can trace the gate's own run
+    rather than re-implementing this loop and silently drifting from it (the
+    PATH-006 failure mode: ``isolation.py`` drove the raw path for weeks while
+    the gate ran routed). Default ``None`` costs nothing; a callback that pulls
+    device arrays pays for those syncs itself.
     """
     route_table, terrain = gate3_route_inputs(
         route_table=route_table, terrain=terrain, table_disabled=table_disabled)
@@ -352,7 +361,7 @@ def run_oracle_in_sim(
     cur_walk = 0
     vis_counts: list = []
     prev_alive = True
-    for _ in range(decisions):
+    for _i in range(decisions):
         x0 = float(state.x[0])
         y0 = float(state.y[0])
         champ_alive = bool(state.alive[0])
@@ -367,6 +376,15 @@ def run_oracle_in_sim(
             walks.append(cur_walk)
             cur_walk = 0
         wp_idx = _advance_approach(x0, y0, wp_idx, respawned)
+
+        if on_decision is not None:
+            on_decision({
+                "i": _i, "engine": "sim", "state": state,
+                "walk_index": len(walks),
+                "approaching": wp_idx < len(APPROACH_WAYPOINTS),
+                "wp_idx": wp_idx, "respawned": respawned,
+                "alive": champ_alive, "x": x0, "y": y0,
+            })
 
         if wp_idx < len(APPROACH_WAYPOINTS):
             approach_decisions += 1
@@ -452,6 +470,8 @@ def run_oracle_on_server(
     tag: str = "last_hit_oracle",
     log_dir: Optional[Path] = None,
     autobuy: bool = True,
+    on_decision: Optional[Callable[[dict], None]] = None,
+    extra_env: Optional[dict] = None,
 ) -> ServerRun:
     """Run the oracle against blue on a real server; red is never sent an order.
 
@@ -497,7 +517,26 @@ def run_oracle_on_server(
     is unchanged for any other caller; the last-hit GATE passes ``False``,
     because a gate built to isolate last-hitting should not also be silently
     scoring a defensive item the sim cannot have.
+
+    ``on_decision`` mirrors :func:`run_oracle_in_sim`'s: called once per
+    decision with the raw wire observation for that decision, so a diagnostic
+    traces the gate's own run instead of re-implementing this loop.
+
+    ``extra_env`` adds environment variables to the launched server on top of
+    ``LANERL_AUTOBUY``. It exists for the env-gated, behaviour-neutral traces
+    in :mod:`lanerl_jax.parity.targets` (``TRACE_ENV``): the wire carries no
+    per-minion ``TargetUnit``, so ``LANERL_AGGRO_TRACE=1`` is the only way to
+    observe when a server minion acquires the champion. Both switches are read
+    once into a ``static readonly`` and guard only a ``Console.WriteLine``, and
+    the canonical gate-3 server totals (cs 4 / attacks 86) reproduce exactly
+    with them on -- see ``docs/TARGET_ACQUISITION_DIFF.md``. ``LANERL_AUTOBUY``
+    cannot be overridden through here: it is a behaviour switch this function
+    already owns through ``autobuy``, and letting a "trace" dict silently flip
+    it is how a diagnostic ends up measuring a different run.
     """
+    extra_env = dict(extra_env or {})
+    if "LANERL_AUTOBUY" in extra_env:
+        raise ValueError("set LANERL_AUTOBUY through autobuy=, not extra_env")
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
 
@@ -511,7 +550,8 @@ def run_oracle_on_server(
         1,
         spec=ServerLaunchSpec(
             toponly=True, bot_teams="none", bot_seed=bot_seed, step_ticks=2,
-            extra_env={"LANERL_AUTOBUY": "1" if autobuy else "0"}),
+            extra_env={**extra_env,
+                       "LANERL_AUTOBUY": "1" if autobuy else "0"}),
         log_dir=log_dir,
         ports=PortAllocator(base=port_base).allocate(1),
         step_timeout_s=180.0,
@@ -549,6 +589,15 @@ def run_oracle_on_server(
                 walks.append(cur_walk)
                 cur_walk = 0
             wp_idx = _advance_approach(bx, by, wp_idx, respawned)
+
+            if on_decision is not None:
+                on_decision({
+                    "i": i, "engine": "server", "obs": obs, "blue": blue,
+                    "walk_index": len(walks),
+                    "approaching": wp_idx < len(APPROACH_WAYPOINTS),
+                    "wp_idx": wp_idx, "respawned": respawned,
+                    "alive": champ_alive, "x": bx, "y": by,
+                })
 
             if wp_idx < len(APPROACH_WAYPOINTS):
                 approach_decisions += 1
