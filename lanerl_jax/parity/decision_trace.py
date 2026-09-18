@@ -92,6 +92,36 @@ anywhere else boots and then dies in `ContentManager.GetDependenciesFromPackage`
 solution.
 
 Point a run at it with `ServerLaunchSpec(server_dir=...)`.
+
+THE ISOLATION IS NOT AS COMPLETE AS IT LOOKS
+---------------------------------------------
+Building to a private output directory isolates the *assemblies* and nothing
+else. `Content/` is resolved relative to the executable and BOTH builds resolve
+to the same `LoLServer/Content`, and `Content/LeagueSandbox-Scripts` is
+compiled by Roslyn at boot. So an edit to a script -- `LaneMinionAI.cs`,
+`GarenQ.cs`, any of them -- is live for the canonical `bin/Release` binary
+IMMEDIATELY, with no rebuild, while other people's parity runs are using it.
+
+Learned by doing it: a `LaneMinionAI` edit referencing `LanerlDecisionTrace`
+was live for a few minutes against a canonical `GameServerLib.dll` that
+predates that class. Script compilation would have failed and every server boot
+with it. Reverted, and the canonical binary re-verified by booting and ticking
+300 decisions.
+
+So instrumenting the SCRIPT package needs real isolation first -- give the
+trace build its own `Content` (symlink the bulk, copy `LeagueSandbox-Scripts`),
+or land the trace class in the canonical assembly before referencing it from a
+script. Do not do it opportunistically while other runs are in flight.
+
+That is a shame, because the most valuable single branch in the server for
+minion parity is in there: `LaneMinionAI.OnUpdate`'s trigger, whose three arms
+(`TargetJustDied()`, `FoundNewTarget(true)`, `minionActionTimer >= 250f`) all
+produce the same observable -- a re-evaluated move order -- so which one fired
+is unrecoverable from state. `INJ-003` is exactly that blind spot: the third
+arm fired on 0 of 395,366 injected minion tick-pairs against the server's own
+26,537, and no field-level rate could say so. Instrumenting it also has to
+preserve the short-circuit `A && (B || C || D)` evaluation order exactly, since
+`FoundNewTarget` takes a flag and is not known to be pure.
 """
 from __future__ import annotations
 
