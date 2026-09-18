@@ -10,7 +10,7 @@ resource) or as a fresh subprocess for `--engine server` (so a server
 crash mid-scenario is isolated and does not corrupt the JAX process for the
 next one).
 
-Meant to be the single command handed to `sbatch slurm/parity_g2.sbatch`, so
+Meant to be the single command handed to `sbatch slurm/parity.sbatch`, so
 one job runs the whole scenario list under slurm's serialisation rather than
 one job per scenario (cheaper for both this job and the sibling agents also
 queued on `desktop`).

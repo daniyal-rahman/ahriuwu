@@ -60,7 +60,8 @@ PYTHONPATH=$PWD ./.venv-jax/bin/python -m lanerl_jax.parity.tier2 compare \
   --out lanerl_jax/runs/tier2/cmp_idle.json
 ```
 
-Server episodes ran on `desktop` via `slurm/parity_g2.sbatch` (job 814, all
+Server episodes ran on `desktop` via a per-worktree `slurm/parity_g2.sbatch`
+(job 814, all
 four scenarios in one job, ~50 s total wall time); sim episodes ran locally
 (cheap, CPU-only, no shared-resource contention). See "Where this ran" below
 for one slurm/venv wrinkle found and fixed along the way.

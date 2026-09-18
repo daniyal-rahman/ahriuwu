@@ -7,7 +7,7 @@ via slurm, never on the login node (a full-trace one-step differential was
 OOM-killed there before, and it is CPU-bound work this repo already has a
 node for):
 
-    sbatch slurm/parity_g1.sbatch python -m lanerl_jax.parity.tier1_full
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_full
 
 ``python -m`` is required (not a bare path) so the ``lanerl_jax`` package
 resolves the same way it does under pytest.

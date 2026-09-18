@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=lanerl-train
 #SBATCH --partition=gpup
-#SBATCH --chdir=/mnt/nfs/projects/ahriuwu-lanerl
-#SBATCH --output=/mnt/nfs/projects/ahriuwu-lanerl/lanerl/logs/%x-%j.out
+#SBATCH --chdir=/mnt/nfs/projects/_deprecated/ahriuwu-lanerl
+#SBATCH --output=/mnt/nfs/projects/_deprecated/ahriuwu-lanerl/lanerl/logs/%x-%j.out
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=24G
@@ -40,7 +40,7 @@ set -euo pipefail
 # /var/spool/slurmd. Measured on job 692. The avoidance was worse than the
 # thing it avoided, and this launcher had never worked -- every real run went
 # through lanerl/rl_watchdog.sh, which uses --wrap with an explicit cd.
-REPO=/mnt/nfs/projects/ahriuwu-lanerl
+REPO=/mnt/nfs/projects/_deprecated/ahriuwu-lanerl
 test -d "$REPO/lanerl_train" || {
   echo "REPO $REPO is not visible from $(hostname) -- refusing to run from the wrong tree"
   exit 1

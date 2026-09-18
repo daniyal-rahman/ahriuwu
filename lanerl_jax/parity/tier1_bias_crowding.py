@@ -10,7 +10,7 @@ Restricted to missile-free, trustworthy-movement ticks, per
 docs/TIER1_POST_REORDER.md task 3. Records its own short trace (does not
 depend on any other job's output) -- run via slurm, not the login node:
 
-    sbatch slurm/parity_g1.sbatch python -m lanerl_jax.parity.tier1_bias_crowding
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_bias_crowding
 """
 from __future__ import annotations
 
