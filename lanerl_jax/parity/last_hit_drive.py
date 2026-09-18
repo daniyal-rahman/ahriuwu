@@ -264,6 +264,15 @@ class SimRun:
     #: filters on the wire's own `vb` flag, which is the real thing. A gap
     #: here is a fog-model gap, not a last-hitting gap.
     vis_mean: float = 0.0
+    #: decisions spent on each SEPARATE walk-in, in order: index 0 is the
+    #: opening walk from the fountain, each later entry one respawn walk.
+    #: `approach_decisions` is their sum, and the sum on its own is not
+    #: attributable -- a side that dies more walks more times, so a larger
+    #: total can mean "walks slower", "walks more often", or "dies during a
+    #: walk and restarts it", and those have different fixes. Measured
+    #: because the routed gate-3 run split 6,400 sim against 3,197 server and
+    #: the total alone could not say which of the three it was.
+    walks: tuple = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -278,6 +287,15 @@ class ServerRun:
     holds: int
     deaths: int = 0
     vis_mean: float = 0.0
+    #: decisions spent on each SEPARATE walk-in, in order: index 0 is the
+    #: opening walk from the fountain, each later entry one respawn walk.
+    #: `approach_decisions` is their sum, and the sum on its own is not
+    #: attributable -- a side that dies more walks more times, so a larger
+    #: total can mean "walks slower", "walks more often", or "dies during a
+    #: walk and restarts it", and those have different fixes. Measured
+    #: because the routed gate-3 run split 6,400 sim against 3,197 server and
+    #: the total alone could not say which of the three it was.
+    walks: tuple = ()
     log_path: Optional[Path] = None
 
 
@@ -330,6 +348,8 @@ def run_oracle_in_sim(
 
     wp_idx = 0
     approach_decisions = attacks = moves = holds = deaths = 0
+    walks: list = []
+    cur_walk = 0
     vis_counts: list = []
     prev_alive = True
     for _ in range(decisions):
@@ -340,13 +360,23 @@ def run_oracle_in_sim(
             deaths += 1
         respawned = champ_alive and not prev_alive
         prev_alive = champ_alive
+        # A death DURING a walk-in restarts it; those decisions were still
+        # spent walking, so the segment is closed and recorded rather than
+        # folded into the next one.
+        if respawned and cur_walk:
+            walks.append(cur_walk)
+            cur_walk = 0
         wp_idx = _advance_approach(x0, y0, wp_idx, respawned)
 
         if wp_idx < len(APPROACH_WAYPOINTS):
             approach_decisions += 1
+            cur_walk += 1
             tx, ty = APPROACH_WAYPOINTS[wp_idx]
             state = _step(state, OrderKind.MOVE, tx, ty, -1)
             continue
+        if cur_walk:
+            walks.append(cur_walk)
+            cur_walk = 0
 
         kind = np.asarray(state.kind)
         team = np.asarray(state.team)
@@ -411,7 +441,8 @@ def run_oracle_in_sim(
     cs = int(np.asarray(state.cs)[0])
     return SimRun(cs=cs, decisions=decisions, approach_decisions=approach_decisions,
                   attacks=attacks, moves=moves, holds=holds, deaths=deaths,
-                  vis_mean=float(np.mean(vis_counts)) if vis_counts else 0.0)
+                  vis_mean=float(np.mean(vis_counts)) if vis_counts else 0.0,
+                  walks=tuple(walks + ([cur_walk] if cur_walk else [])))
 
 
 def run_oracle_on_server(
@@ -489,6 +520,8 @@ def run_oracle_on_server(
     env.start()
     wp_idx = 0
     approach_decisions = attacks = moves = holds = deaths = 0
+    walks: list = []
+    cur_walk = 0
     vis_counts: list = []
     prev_alive = True
     log_path: Optional[Path] = None
@@ -509,13 +542,23 @@ def run_oracle_on_server(
                 deaths += 1
             respawned = champ_alive and not prev_alive
             prev_alive = champ_alive
+            # A death DURING a walk-in restarts it; those decisions were still
+            # spent walking, so the segment is closed and recorded rather than
+            # folded into the next one.
+            if respawned and cur_walk:
+                walks.append(cur_walk)
+                cur_walk = 0
             wp_idx = _advance_approach(bx, by, wp_idx, respawned)
 
             if wp_idx < len(APPROACH_WAYPOINTS):
                 approach_decisions += 1
+                cur_walk += 1
                 tx, ty = APPROACH_WAYPOINTS[wp_idx]
                 env.step([{"blue": {"t": "move", "x": tx, "y": ty}}])
                 continue
+            if cur_walk:
+                walks.append(cur_walk)
+                cur_walk = 0
 
             champ = ChampView(x=bx, y=by,
                               attack_damage=float(blue["ad"]), attack_range=float(blue["rng"]))
@@ -556,4 +599,5 @@ def run_oracle_on_server(
     return ServerRun(cs=cs, decisions=decisions, approach_decisions=approach_decisions,
                      attacks=attacks, moves=moves, holds=holds, deaths=deaths,
                      vis_mean=float(np.mean(vis_counts)) if vis_counts else 0.0,
+                     walks=tuple(walks + ([cur_walk] if cur_walk else [])),
                      log_path=log_path)

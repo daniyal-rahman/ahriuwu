@@ -74,7 +74,8 @@ from typing import List, Optional
 
 import numpy as np
 
-from .last_hit_drive import DECISIONS_600S, APPROACH_WAYPOINTS, WIRE_MINION_TYPE, _advance_approach
+from .last_hit_drive import (DECISIONS_600S, APPROACH_WAYPOINTS, WIRE_MINION_TYPE,
+                             _advance_approach, gate3_route_inputs)
 from .last_hit_oracle import ChampView, MinionView, decide
 
 __all__ = ["IsolationRun", "run_sim_isolation", "run_server_isolation", "summarize"]
@@ -102,11 +103,23 @@ class IsolationRun:
     enemies_nearby: List[int]
 
 
-def run_sim_isolation(decisions: int = DECISIONS_600S, seed: int = 0) -> IsolationRun:
+def run_sim_isolation(decisions: int = DECISIONS_600S, seed: int = 0, *,
+                      route_table=None, terrain=None,
+                      table_disabled: bool = False) -> IsolationRun:
     """Drive the same approach + oracle policy as
     :func:`lanerl_jax.parity.last_hit_drive.run_oracle_in_sim`, recording the
     champion's distance to its own (blue) wave each post-handover decision
     instead of counting attacks. Does not change the policy's behaviour.
+
+    Routing defaults to production v2 through the SAME
+    :func:`~lanerl_jax.parity.last_hit_drive.gate3_route_inputs` the gate uses.
+    That matters more here than anywhere else: this module exists to explain
+    the gate's death gap, and until now it ran the two-point raw path while
+    the gate itself ran routed, so it was explaining a run that no longer
+    happened.  Where the champion ends up relative to its own wave is
+    downstream of how it walks, so a raw-path isolation figure is not evidence
+    about a routed gate -- it is the booked PATH-006 mismatch.  Pass
+    ``table_disabled=True`` for the named raw ablation.
     """
     import jax
     import jax.numpy as jnp
@@ -117,6 +130,8 @@ def run_sim_isolation(decisions: int = DECISIONS_600S, seed: int = 0) -> Isolati
     from ..sim.state import Kind, Team
     from ..sim.step import step_decision
 
+    route_table, terrain = gate3_route_inputs(
+        route_table=route_table, terrain=terrain, table_disabled=table_disabled)
     params_tbl = lane_params()
     params_np = {k: np.asarray(v) for k, v in params_tbl.items()}
     path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
@@ -130,7 +145,10 @@ def run_sim_isolation(decisions: int = DECISIONS_600S, seed: int = 0) -> Isolati
             y=jnp.array([order_y, 0.0], dtype=state.y.dtype),
             target=jnp.array([order_target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders, params_tbl), params_tbl, lane_path=path)
+        return step_decision(apply_orders(state, orders, params_tbl,
+                                         route_table=route_table,
+                                         terrain=terrain),
+                             params_tbl, lane_path=path)
 
     wp_idx = 0
     prev_alive = True
@@ -343,10 +361,15 @@ def _main() -> None:
     ap.add_argument("--skip-server", action="store_true")
     ap.add_argument("--autobuy", action="store_true")
     ap.add_argument("--log-dir", type=str, default=None)
+    ap.add_argument("--table-disabled", action="store_true",
+                    help="run the sim side on the PATH-001 two-point raw path. "
+                         "An ablation, not a baseline: the gate runs routed, so "
+                         "a raw figure here does not explain the gate.")
     args = ap.parse_args()
 
-    print("Running sim...")
-    sim = run_sim_isolation(decisions=args.decisions, seed=args.seed)
+    print(f"Running sim ({'RAW two-point ablation' if args.table_disabled else 'routed v2, same as the gate'})...")
+    sim = run_sim_isolation(decisions=args.decisions, seed=args.seed,
+                            table_disabled=args.table_disabled)
     print(summarize("sim", sim))
 
     if not args.skip_server:

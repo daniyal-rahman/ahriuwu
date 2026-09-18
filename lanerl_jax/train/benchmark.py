@@ -24,11 +24,14 @@ the observer-side lane reflection, the same mapping as the real environment.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+
+from lanerl_rl.constants import DECISION_HZ
 
 from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
@@ -39,10 +42,85 @@ from ..sim.step import step_decision
 from .policy import LanePolicy, PolicyConfig, apply_flattened_batch
 from .actions import orders_from
 
-__all__ = ["BenchResult", "run_benchmark"]
+__all__ = ["BenchResult", "run_benchmark", "warm_state", "gate4_route_inputs",
+           "GATE4_ENVS", "GATE4_WARM_S", "GATE4_STEPS", "GATE4_WARMUP"]
+
+#: The canonical J1 gate-4 workload, frozen so the number is reproducible by
+#: one command rather than by an ad-hoc script.  Every field here was chosen
+#: by a measurement recorded in `docs/JAX_REWRITE_PLAN.md` §1.12, not by
+#: taste: 4096 envs is the stable realistic batch, 150 s of warm-up is what
+#: produces the live ~44-entity minion-bearing state (a cold `init_lane` has
+#: no minions and flatters the number), and 60 timed steps after 5 warmups is
+#: the shortest run that stopped moving between repeats -- 20/30-step samples
+#: above 56k were discarded as unstable.  Routing is ON because the gate is
+#: the routed number; `--no-route-table` is a labelled control, not a result.
+GATE4_ENVS = 4096
+GATE4_WARM_S = 150.0
+GATE4_STEPS = 60
+GATE4_WARMUP = 5
 
 BLUE_NEXUS = (1131.8, 1426.3)
 RED_NEXUS = (12760.9, 13026.1)
+
+
+DEFAULT_ROUTE_ARTIFACT = (Path(__file__).resolve().parents[2] / "data" /
+                          "jax_routes" / "map1_garen_r35_o50_v2")
+
+
+def gate4_route_inputs(artifact_path: Path | None = None, *,
+                       table_disabled: bool = False):
+    """Return the routed gate-4 inputs, or the explicitly named raw control.
+
+    Mirrors :func:`lanerl_jax.parity.last_hit_drive.gate3_route_inputs` on
+    purpose: gate 3 and gate 4 must not silently measure two different
+    movement semantics.  Routing is the default because the gate is the routed
+    number; the two-point control is reachable only by asking for it by name.
+    """
+    if table_disabled:
+        return None, None
+    path = DEFAULT_ROUTE_ARTIFACT if artifact_path is None else Path(artifact_path)
+    if not path.exists():
+        raise FileNotFoundError(
+            f"route artifact not found: {path}. Build it with: "
+            "python -m lanerl_jax.data.local_route_artifact "
+            f"--out {path} --radius 35 --offset-radius 50")
+    from ..data.local_route_artifact import load_local_route_artifact
+    from ..sim.terrain_jax import map1_terrain
+
+    artifact = load_local_route_artifact(path, pathfinding_radius=35.0)
+    return artifact.as_jax(), map1_terrain()
+
+
+def warm_state(warm_s: float = GATE4_WARM_S, *, seed: int = 0):
+    """Step one env forward `warm_s` seconds so the benchmark has real minions.
+
+    A cold `init_lane()` has no minions on the map.  Benchmarking it measures
+    a mostly-empty entity table and reports a number the training loop will
+    never see -- §1.12 records a 59,153 dec/s result that was discarded for
+    exactly this reason.  So the canonical workload warms one environment and
+    broadcasts it, which is also why the run prints its live entity count:
+    a silently-cold state should be visible in the output, not inferred.
+
+    Unrouted on purpose.  This only has to produce a realistic *population*;
+    routing it would make the benchmark's setup depend on the artifact it is
+    trying to time, and the champion is not under orders here anyway.
+    """
+    params = lane_params()
+    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+
+    @jax.jit
+    def one(state):
+        return step_decision(state, params, lane_path=path)
+
+    state = init_lane(seed=seed)
+    for _ in range(int(round(warm_s * DECISION_HZ))):
+        state = one(state)
+    return jax.block_until_ready(state)
+
+
+def live_entities(state) -> int:
+    """How many units are actually alive in `state` -- printed, not assumed."""
+    return int(np.asarray(state.alive).sum())
 
 
 class BenchResult(NamedTuple):
@@ -250,21 +328,90 @@ def run_reset_benchmark(n_envs: int, steps: int = 200, warmup: int = 5,
                             device=str(jax.devices()[0]))
 
 
-if __name__ == "__main__":
-    import sys
+def _main() -> None:
+    import argparse
 
-    sizes = [int(a) for a in sys.argv[1:]] or [64, 256, 1024, 4096]
+    ap = argparse.ArgumentParser(
+        description="J1 gate 4: full-loop throughput, the way the gate is worded.")
+    ap.add_argument("--envs", type=int, nargs="+", default=[GATE4_ENVS],
+                    help="batch size(s) (default: the canonical %(default)s)")
+    ap.add_argument("--steps", type=int, default=GATE4_STEPS,
+                    help="timed steps (default: %(default)s; shorter runs were "
+                         "measured to be unstable and must not be quoted)")
+    ap.add_argument("--warmup", type=int, default=GATE4_WARMUP)
+    ap.add_argument("--warm-s", type=float, default=GATE4_WARM_S,
+                    help="seconds of simulation used to build the live "
+                         "minion-bearing initial state (default: %(default)s). "
+                         "0 uses a cold init_lane, which has no minions and is "
+                         "NOT a gate result.")
+    ap.add_argument("--route-artifact", type=Path, default=None)
+    ap.add_argument("--no-route-table", action="store_true",
+                    help="the PATH-001 two-point control. Faster, and NOT gate "
+                         "evidence -- the gate is the routed number.")
+    ap.add_argument("--route-unroll", type=int, default=None,
+                    help="override sim.local_pathing.ROUTE_LOOP_UNROLL, the "
+                         "number of identical masked hop bodies chained per "
+                         "while-loop iteration. Semantics-free: the route, the "
+                         "status and the raw-hop boundary are unchanged, only "
+                         "how much XLA loop control each hop pays. Printed in "
+                         "the header so a swept number is never quoted as the "
+                         "canonical one by accident.")
+    ap.add_argument("--reset-bench", action="store_true",
+                    help="also run gate 6 (reset cost vs one step)")
+    ap.add_argument("--baseline", type=float, default=1129.0,
+                    help="production stack's own logged decisions/s")
+    a = ap.parse_args()
+
+    if a.route_unroll is not None:
+        from ..sim import local_pathing
+        local_pathing.ROUTE_LOOP_UNROLL = a.route_unroll
+
+    target = a.baseline * 50.0
+    routed = not a.no_route_table
     print(f"device: {jax.devices()[0]}")
-    print(f"baseline: the production stack's own logged 1,129 decisions/s\n")
-    for n in sizes:
+    print(f"baseline: {a.baseline:,.0f} decisions/s (production stack, logged) "
+          f"-> gate 4 target >= {target:,.0f}")
+    print(f"mode: {'ROUTED (gate evidence)' if routed else 'NO-ROUTE CONTROL (not gate evidence)'}")
+    if routed:
+        from ..sim.local_pathing import ROUTE_LOOP_UNROLL
+        print(f"route loop unroll: {ROUTE_LOOP_UNROLL}"
+              + ("  <-- SWEPT, not the canonical setting" if a.route_unroll is not None else ""))
+
+    route_table, terrain = gate4_route_inputs(a.route_artifact,
+                                              table_disabled=a.no_route_table)
+    if a.warm_s > 0:
+        t0 = time.perf_counter()
+        base = warm_state(a.warm_s)
+        print(f"initial state: {a.warm_s:.0f}s warmed, {live_entities(base)} live "
+              f"entities ({time.perf_counter() - t0:.1f}s to build)")
+    else:
+        base = None
+        print("initial state: COLD init_lane -- no minions, NOT a gate result")
+    print(f"protocol: {a.steps} timed steps after {a.warmup} warmups\n")
+
+    for n in a.envs:
         try:
-            print(run_benchmark(n).report())
+            r = run_benchmark(n, steps=a.steps, warmup=a.warmup,
+                              route_table=route_table, terrain=terrain,
+                              initial_state=base)
         except Exception as exc:                     # OOM is a real answer
             print(f"{n:>6} envs | FAILED: {type(exc).__name__}: {str(exc)[:120]}")
+            continue
+        shortfall = (target - r.decisions_per_s) / target
+        verdict = ("PASS" if r.decisions_per_s >= target
+                   else f"fails by {shortfall:.2%}")
+        if not routed:
+            verdict += " (control)"
+        print(f"{r.report(a.baseline)} | gate 4 {verdict}")
 
-    print("\nJ1 gate 6 (D11): reset cost vs. one step_decision\n")
-    for n in sizes:
-        try:
-            print(run_reset_benchmark(n).report())
-        except Exception as exc:
-            print(f"{n:>6} envs | FAILED: {type(exc).__name__}: {str(exc)[:120]}")
+    if a.reset_bench:
+        print("\nJ1 gate 6 (D11): reset cost vs. one step_decision\n")
+        for n in a.envs:
+            try:
+                print(run_reset_benchmark(n).report())
+            except Exception as exc:
+                print(f"{n:>6} envs | FAILED: {type(exc).__name__}: {str(exc)[:120]}")
+
+
+if __name__ == "__main__":
+    _main()
