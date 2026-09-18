@@ -17,15 +17,36 @@ episode with the wrong numbers:
 =====================  ==========  ============  =============================
 quantity               Content     observed      gap
 =====================  ==========  ============  =============================
-Garen max HP @ L1         616.28    754.248047    +137.968  rune/mastery page
-Garen attack damage        57.88     78.134766    +20.2548  "
-Garen armor                27.536     36.536133    +9.0      "
+Garen max HP @ L1         616.28    671.848       +55.568  masteries (see below)
+Garen attack damage        57.88     78.134766    +20.2548  runes + a mastery
+Garen armor                27.536     36.536133    +9.0     runes
+Garen magic resist         32.1      44.16        +12.06   runes -- NOT MODELLED
 turret max HP            1300.0    1550.0        +250.0    outer-turret bonus
 =====================  ==========  ============  =============================
 
+Every one of those was checked back to its source rather than left as a
+measured delta, and the exercise moved two of them (see `STAT-001`):
+
+* **Max HP** is not a rune bonus and not a flat one. The page's runes carry no
+  health at all; the +55.568 is ``Veteran's Scars`` (+36 flat) composed with
+  ``Juggernaut`` (+3% of the whole stat), and the percentage applies to every
+  per-level increment too. The old figure here was 754.248, which also carried
+  an auto-bought Doran's Shield -- see :data:`DORANS_SHIELD_HP`.
+* **Attack damage** decomposes as 9x0.945 + 3x2.25 = 15.2548 from the marks and
+  quintessences, plus a flat 5.0 from ``Martial Mastery`` (talent 4132).
+  ``Brute Force`` (talent 4122 rank 3) additionally adds 0.55 to
+  ``AttackDamagePerLevel.FlatBonus``, which is a *slope*, not a constant, and
+  lives in ``profiles.py``'s ``ad_per_level`` column.
+* **Magic resist** is 9x1.34 from the glyphs and is **not modelled**: it lands
+  in ``MagicResist.FlatBonus``, which ``step.py`` has no column for (its
+  ``armor_flat_bonus`` twin exists only for armour), and Garen's W passive
+  composes flat and base terms differently. Low impact in an all-physical
+  mirror -- only Garen's R deals magic damage -- so it is recorded in the
+  ledger rather than half-fixed here.
+
 There is also a *staging* effect worth knowing: the champion's max HP reads
-**672.0** in the ``t=0`` snapshot and 754.0 once play starts, because
-``LanerlEpisode`` applies the page over the first ticks rather than at
+its pre-page value in the ``t=0`` snapshot and the full value once play starts,
+because ``LanerlEpisode`` applies the page over the first ticks rather than at
 construction. So "the value at t=0" and "the value during play" are different
 questions, and this module targets the second.
 
@@ -61,7 +82,8 @@ from .waves import FIRST_WAVE_MS
 
 __all__ = [
     "CHAMPION_SPAWN", "TOP_OUTER_TURRET", "ALL_TURRETS", "MINION_SPAWN",
-    "TOP_LANE_PATH", "RUNE_HP_BONUS", "TURRET_HP_BONUS", "TURRET_HP_BONUS_NEXUS",
+    "TOP_LANE_PATH", "MASTERY_HP_FLAT_BONUS", "MASTERY_HP_PERCENT_BONUS",
+    "TURRET_HP_BONUS", "TURRET_HP_BONUS_NEXUS",
     "lane_params", "init_lane", "spawn_minion",
 ]
 
@@ -208,34 +230,63 @@ TOP_LANE_PATH: Tuple[Tuple[float, float], ...] = (
     (10244.0, 13238.0), (10947.0, 13135.0), (12511.0, 12776.0),
 )
 
-#: Champion max HP above the Content base curve, from the rune/mastery page.
+#: Champion max HP above the Content base curve. **Not runes** -- the rune page
+#: in ``lanerl/cfg/garen1v1.json`` grants exactly zero health. Read the four
+#: rune items it actually lists (``Content/LeagueSandbox-Default/Items/<id>``):
+#: 9x ``5245`` Greater Mark of Attack Damage (``FlatPhysicalDamageMod`` 0.945),
+#: 9x ``5317`` Greater Seal of Armor (``FlatArmorMod`` 1), 9x ``5289`` Greater
+#: Glyph of Magic Resist (``FlatSpellBlockMod`` 1.34), 3x ``5335`` Greater
+#: Quintessence of Attack Damage (``FlatPhysicalDamageMod`` 2.25). No HP
+#: anywhere. Every point of the champion's extra health is a **mastery**, and
+#: there are two of them -- which matters, because they enter ``Stat.Total``
+#: (``Stat.cs:68``) at different places::
 #:
-#: Taken from the dump's exact quantised value, **772348/1024 = 754.248046875**,
-#: not from the 754.0 a rounded readout shows. The difference is 0.248 HP and it
-#: was the only champion field still disagreeing in a 580-second side-by-side --
-#: which is a good argument for reading the oracle at its own resolution rather
-#: than at display precision.
-RUNE_HP_BONUS = 754.248046875 - 616.28
-#: HP regen the server's champion has and Content does not: the auto-bought
-#: Doran's Shield. `LanerlHooks` buys `BuildPath[0]` = item 1054 at boot unless
-#: `LANERL_AUTOBUY=0`, and `ItemPassives/DoransShield.cs` (`ItemID_1054`) does
-#: `StatsModifier.HealthRegeneration.BaseBonus += 1.2f`.
+#:     Total = ((BaseValue + BaseBonus) * (1 + PercentBaseBonus)
+#:              + FlatBonus) * (1 + PercentBonus)
 #:
-#: `BaseBonus` adds to the base term of `Stat.Total`
-#: (`((BaseValue + BaseBonus) * (1 + PercentBaseBonus) + FlatBonus) * (1 + PercentBonus)`,
-#: `Stat.cs:68`), and nothing modifies regen by percentage here, so the effect
-#: is exactly +1.2 HP/s on top of Garen's Content 1.568.
+#: ``Veteran's Scars`` (talent ``4222``, rank 3 in the config) is
+#: ``HealthPoints.FlatBonus = 12.0f * rank`` and ``Juggernaut`` (talent
+#: ``4232``) is ``HealthPoints.PercentBonus = 0.03f``
+#: (``Content/LeagueSandbox-Scripts/Talents/Defense/``). Of the sixteen talents
+#: the config lists only four have scripts at all; the rest resolve to
+#: ``EmptyTalentScript`` and do nothing.
 #:
-#: NOT the item's +80 max HP. That is already accounted for: `RUNE_HP_BONUS`
-#: above is derived by subtracting the Content base from the value the DUMP
-#: reports during play (754.248046875), which is the server's max HP with
-#: everything it has bought. Adding the item's HP here would double-count it --
-#: an audit pass proposed exactly that, on the assumption our 754 was a
-#: pre-item number.
+#: The percentage is the whole reason this is two constants rather than one
+#: measured delta. ``Stats.LevelUp`` adds its increment to
+#: ``HealthPoints.BaseValue``, so ``PercentBonus`` scales **every per-level
+#: increment too** -- which is where the old single ``RUNE_HP_BONUS`` went
+#: wrong in a way no level-1 check could catch. See ``profiles.py``, which
+#: folds it into the ``hp_per_level`` column for exactly this reason, and
+#: `STAT-001` in the fidelity ledger for the measurement.
+MASTERY_HP_FLAT_BONUS = 36.0        # Veteran's Scars, talent 4222 rank 3
+MASTERY_HP_PERCENT_BONUS = 0.03     # Juggernaut, talent 4232
+#: Doran's Shield (item ``1054``, ``BuildPath[0]``), for reference only:
+#: **neither of these is applied.** The sim has no item model at all
+#: (`ITEM-001`, `SCOPE-001`), and every server-side parity instrument now runs
+#: the shop off -- the gate-3 driver (``parity/tests/test_last_hit_gate.py``
+#: passes ``autobuy=False``), the Tier-1.5 fixture (``--no-autobuy``),
+#: ``hp_band.run_server_band`` and ``isolation`` all default it off. So the
+#: reference the sim must match is the **item-free** champion, and carrying
+#: one item's two stats while modelling none of the other seven build-path
+#: items is worse than carrying none.
 #:
-#: Regen is different only because the dump does not expose it, so it was taken
-#: from Content and never checked against the oracle. Unmodelled, this is up to
-#: 1.2 * 600 = 720 HP of healing missing over a full episode.
+#: This is a correction, not a preference. ``RUNE_HP_BONUS`` used to be
+#: ``754.248046875 - 616.28``, read from a dump taken with the shop ON, and
+#: 754.248046875 is exactly ``(616.28 + 36) * 1.03 + 80 * 1.03`` -- i.e. it
+#: silently carried this item's ``FlatHPPoolMod``. Measured both ways in the
+#: same fixture pair: ``runs/tier15/drive_obs.jsonl`` (shop on) reports the
+#: champion at 754 max HP in its very first frame, and
+#: ``runs/tier15_noshop/`` reports 671, as does the gate-3 server trace
+#: ``runs/g3_server.npz`` for all 600 s.
+#:
+#: If the shop is ever turned back on for a parity or training run, both go
+#: back: ``+ DORANS_SHIELD_HP * (1 + MASTERY_HP_PERCENT_BONUS)`` on the
+#: ``max_hp`` column (``FlatHPPoolMod`` lands in ``HealthPoints.FlatBonus``,
+#: ``ItemData.cs:81``, *inside* Juggernaut's multiplier) and
+#: ``+ DORANS_SHIELD_HP_REGEN`` on ``hp_regen``
+#: (``ItemPassives/DoransShield.cs``: ``HealthRegeneration.BaseBonus +=
+#: 1.2f``, and nothing scales regen by percentage here).
+DORANS_SHIELD_HP = 80.0
 DORANS_SHIELD_HP_REGEN = 1.2
 #: Non-nexus, non-fountain turret max HP above Content. 1550 observed vs 1300
 #: BaseHP -- true of the outer, inner AND inhibitor tiers alike, since all
@@ -269,6 +320,12 @@ TURRET_HP_BONUS_NEXUS = 125.0
 #: once the rune page was modelled, against a true 78.14 -- a re-derived server
 #: quantity is wrong by however much of the server you forgot."* So these are
 #: **measured deltas**, not a reconstruction of which runes the page contains.
+#:
+#: Both have since been traced back to source and agree exactly, which is why
+#: they are left as measured deltas: AD is 9 x 0.945 (marks ``5245``) + 3 x 2.25
+#: (quints ``5335``) = 15.2548 of rune, plus ``Martial Mastery``'s flat 5.0
+#: (talent ``4132``), = 20.2548; armour is 9 x 1.0 from the seals (``5317``),
+#: = 9.0, with no armour talent scripted at all.
 RUNE_AD_BONUS = 78.134765625 - 57.88            # +20.2548
 RUNE_ARMOR_BONUS = 36.5361328125 - 27.5361328125  # +9.0
 
@@ -365,7 +422,8 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
     from .profiles import profile_id
     model = np.zeros(n, np.int8)
 
-    champ_hp = patch.champion.hp_at_level(1) + RUNE_HP_BONUS
+    champ_hp = ((patch.champion.hp_at_level(1) + MASTERY_HP_FLAT_BONUS)
+                * (1.0 + MASTERY_HP_PERCENT_BONUS))
     for i, t in enumerate((Team.BLUE, Team.RED)):
         kind[i] = Kind.CHAMPION
         team[i] = t

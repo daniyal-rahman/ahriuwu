@@ -15,8 +15,9 @@ import jax.numpy as jnp
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch  # noqa: E402
 from lanerl_jax.sim.init import (  # noqa: E402
     ALL_TURRETS,
+    MASTERY_HP_FLAT_BONUS,
+    MASTERY_HP_PERCENT_BONUS,
     MINION_SPAWN,
-    RUNE_HP_BONUS,
     TOP_LANE_PATH,
     TOP_OUTER_TURRET,
     init_lane,
@@ -109,7 +110,8 @@ def test_init_places_the_measured_geometry(patch):
     assert int(s.alive.sum()) == 26         # two champions, all 24 turrets
     assert float(s.x[0]) == pytest.approx(26.0)
     assert float(s.hp[0]) == pytest.approx(
-        patch.champion.hp_at_level(1) + RUNE_HP_BONUS)
+        (patch.champion.hp_at_level(1) + MASTERY_HP_FLAT_BONUS)
+        * (1.0 + MASTERY_HP_PERCENT_BONUS))
     assert float(s.next_spawn_ms) == 90_000.0
 
 
@@ -120,10 +122,51 @@ def test_level_up_increases_current_and_max_hp_by_the_growth_increment(patch):
     before_max = float(s.max_hp[0])
     s = s.replace(xp=s.xp.at[0].set(params["xp_curve"][1]))
     s = tick(s, params)
-    expected_gain = patch.champion.hp_at_level(2) - patch.champion.hp_at_level(1)
+    # `Juggernaut`'s +3% is the OUTER `PercentBonus` of `Stat.Total`, and
+    # `Stats.LevelUp` adds its increment to `HealthPoints.BaseValue` -- inside
+    # it. So the per-level increment the dump shows is the Content curve's
+    # 69.12 scaled by 1.03, not 69.12. See `STAT-001`.
+    expected_gain = ((patch.champion.hp_at_level(2)
+                      - patch.champion.hp_at_level(1))
+                     * (1.0 + MASTERY_HP_PERCENT_BONUS))
     assert int(s.level[0]) == 2
     assert float(s.max_hp[0]) == pytest.approx(before_max + expected_gain, abs=1e-4)
     assert float(s.hp[0]) == pytest.approx(before_hp + expected_gain, abs=1e-4)
+
+
+#: The server's own dumped champion max HP at levels 1..8, with the shop off.
+#: Two independent 600 s / 400 s traces, both integers because `LanerlWire`
+#: quantises `Stats.HealthPoints.Total` on the way out (it truncates, so each
+#: entry is `floor` of the real value):
+#:
+#: * `lanerl_jax/runs/g3_server.npz` -- the gate-3 oracle run, `clevel`/`cmhp`
+#: * `lanerl_jax/runs/tier15_noshop/drive_obs.jsonl` -- the Tier-1.5 fixture
+#:
+#: The shop-ON fixture (`runs/tier15/drive_obs.jsonl`) reads 754/825/900/978/
+#: 1059 instead, which is this ladder plus Doran's Shield's 80 * 1.03; that is
+#: the number the old `RUNE_HP_BONUS` was built from. See `init.DORANS_SHIELD_HP`.
+SERVER_MAX_HP_BY_LEVEL = (671, 743, 817, 895, 977, 1062, 1150, 1242)
+
+
+def test_champion_max_hp_matches_the_servers_dumped_ladder(patch):
+    """`STAT-001`. The level-1 value and the slope are separate claims and this
+    pins both: getting the constant right while the slope is wrong is exactly
+    the state this test was written to end.
+    """
+    from lanerl_jax.sim.combat import growth_sum
+
+    params = lane_params(patch)
+    row = profile_id(Kind.CHAMPION, -1, Team.BLUE)
+    base = float(np.asarray(params["max_hp"])[row])
+    per_level = float(np.asarray(params["hp_per_level"])[row])
+
+    for level, observed in enumerate(SERVER_MAX_HP_BY_LEVEL, start=1):
+        ours = base + per_level * float(growth_sum(level))
+        assert int(ours) == observed, (
+            f"level {level}: sim {ours:.3f} truncates to {int(ours)}, "
+            f"server dumped {observed}")
+        # ...and not merely inside the truncation window by luck.
+        assert ours - observed < 1.0
 
 
 def test_every_turret_the_server_places_is_placed(patch):

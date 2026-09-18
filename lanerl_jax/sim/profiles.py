@@ -236,17 +236,48 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
 
     # Measured deltas that Content does not carry; see sim/init.py.
     from .init import (
-        DORANS_SHIELD_HP_REGEN, RUNE_AD_BONUS, RUNE_ARMOR_BONUS, RUNE_HP_BONUS,
-        TURRET_HP_BONUS, TURRET_HP_BONUS_NEXUS)
+        MASTERY_HP_FLAT_BONUS, MASTERY_HP_PERCENT_BONUS, RUNE_AD_BONUS,
+        RUNE_ARMOR_BONUS, TURRET_HP_BONUS, TURRET_HP_BONUS_NEXUS)
     for row, (kind, tier, _) in enumerate(PROFILES):
         if kind == Kind.CHAMPION:
-            cols["max_hp"][row] += RUNE_HP_BONUS
+            # `Stat.Total = ((BaseValue + BaseBonus) * (1 + PercentBaseBonus)
+            #                + FlatBonus) * (1 + PercentBonus)` (`Stat.cs:68`).
+            # `Veteran's Scars` is the FlatBonus term and `Juggernaut` is the
+            # outer PercentBonus, so the order here is the server's order and
+            # not interchangeable with adding one measured number.
+            cols["max_hp"][row] = (
+                (cols["max_hp"][row] + MASTERY_HP_FLAT_BONUS)
+                * (1.0 + MASTERY_HP_PERCENT_BONUS))
+            # ...and the SAME multiplier applies to every level-up increment,
+            # because `Stats.LevelUp` (`Stats.cs:267-268`) adds
+            # `GetLevelUpStatValue(HealthPerLevel)` to `HealthPoints.BaseValue`
+            # -- inside the percentage, not outside it. `step.py` grows max HP
+            # as `hp_per_level * d(growth_sum)`, so the only place the factor
+            # can live is folded into this column.
+            #
+            # This is the half of `STAT-001` that no level-1 check could ever
+            # have caught, and it ran the other way from the level-1 error: the
+            # sim gained 465.12 HP from level 1 to 7 where the server gains
+            # 479.07. With the fold, the sim reproduces the server's dumped
+            # ladder exactly at every level -- 671/743/817/895/977/1062/1150/
+            # 1242 at levels 1..8, measured in `runs/g3_server.npz` and
+            # `runs/tier15_noshop/drive_obs.jsonl`.
+            #
+            # One residual this cannot reach from here, stated rather than
+            # hidden: `Stats.LevelUp` raises CURRENT health by the *unscaled*
+            # `statsLevelUp.HealthPoints.BaseValue` (`Stats.cs:279`) while max
+            # health rises by that times 1.03, so the server's champion drops
+            # ~2.07 HP short of its new maximum on each level-up. `step.py`
+            # adds one `hp_growth` to both, so the sim now over-credits current
+            # HP by that much per level (12.4 HP by level 7, ~1% of the pool,
+            # and refilled by regen within a couple of seconds). Fixing it
+            # properly needs a second column read only by the current-HP term.
+            cols["hp_per_level"][row] *= (1.0 + MASTERY_HP_PERCENT_BONUS)
             cols["attack_damage"][row] += RUNE_AD_BONUS
             cols["armor"][row] += RUNE_ARMOR_BONUS
-            # The auto-bought Doran's Shield's regen. Its +80 max HP is NOT
-            # added -- RUNE_HP_BONUS already carries it, being measured from
-            # the dump's in-play value rather than from Content.
-            cols["hp_regen"][row] += DORANS_SHIELD_HP_REGEN
+            # Doran's Shield's +80 max HP and +1.2 HP/s regen are deliberately
+            # NOT here. See `init.DORANS_SHIELD_HP` for why, and for the one
+            # line each that puts them back if the shop is ever turned on.
             # W's passive reads `Stat.Total`, which needs FlatBonus separated
             # from the base term -- the rune's armour lands in FlatBonus.
             cols["armor_flat_bonus"][row] = RUNE_ARMOR_BONUS
