@@ -417,6 +417,55 @@ class SideTick:
 
 
 @dataclass(slots=True)
+class MinionDetail:
+    """One matched minion on one tick, with both sides' controller state.
+
+    WHY THIS EXISTS.  The first revision of this module reported
+    ``minion_pos_err_max`` and nothing else, so a run could say "the minions
+    were at the dump's quantisation through tick 33 and at 5 u by tick 34" and
+    could not say *which* minion or *which* branch.  That is a magnitude
+    without a unit, and attributing it meant re-deriving the whole window by
+    hand.  This row carries the NetId and the four inputs that decide a
+    minion's next step on both engines -- move order, waypoint count, current
+    target, and the auto-attack clock -- so the onset tick names a branch.
+
+    ``srv_*`` comes from the diagnostic internals stream (``AIInternal``), not
+    from the hashed state rows, so it is the server's *own* controller state
+    rather than an inference from position.  ``sim_target_net`` uses the
+    server's own spelling -- **0 means no target**, matching
+    ``AIInternal.target_net_id`` -- and -2 means "a target slot that no NetId
+    maps to" (a unit the server had already removed).  Those last two are
+    different findings and must not collapse; using the sim's internal -1 for
+    "none" would have made every targetless minion read as a disagreement.
+    """
+
+    net_id: int
+    slot: int
+    pos_err: float
+    sim_x: float
+    sim_y: float
+    srv_x: float
+    srv_y: float
+    sim_hp: float
+    srv_hp: float
+    sim_move_order: int
+    srv_move_order: int
+    sim_n_waypoints: int
+    srv_n_waypoints: int
+    sim_target_net: int
+    srv_target_net: int
+    sim_is_attacking: bool
+    srv_is_attacking: bool
+    sim_aa_cooldown: float
+    srv_aa_cooldown: float
+    sim_aa_windup: float
+    srv_aa_windup: float
+    srv_aa_state: int
+    #: names of the scoped fields that disagreed on this pair this tick
+    fields: Tuple[str, ...]
+
+
+@dataclass(slots=True)
 class Tick15Row:
     """One tick of the differential."""
 
@@ -433,6 +482,12 @@ class Tick15Row:
     unmatched_sim: int
     unmatched_srv: int
     field_diffs: Tuple[str, ...]
+    #: NetId of the minion carrying ``minion_pos_err_max``; -1 when none matched
+    worst_minion_net: int = -1
+    #: only the minions that disagreed on something this tick.  Emitting all 38
+    #: every tick would be 16k rows of mostly zeros; emitting none is what made
+    #: the last revision unattributable.
+    minions: Tuple[MinionDetail, ...] = ()
 
 
 @dataclass(slots=True)
@@ -474,6 +529,50 @@ class Tier15Result:
             for name in r.field_diffs:
                 out.setdefault(name, r.k)
         return out
+
+    def minion_onsets(self) -> Dict[str, Dict[str, int]]:
+        """First tick at which each *named* minion disagreed on each field.
+
+        Keyed by NetId as a string so the JSON round-trips.  This is the
+        instrument Task 1 needed: the whole-corpus residuals are per-field
+        counts, and joining them to a compounding run requires the unit.
+        """
+        out: Dict[str, Dict[str, int]] = {}
+        for r in self.rows:
+            for m in r.minions:
+                per = out.setdefault(str(m.net_id), {})
+                for name in m.fields:
+                    per.setdefault(name, r.k)
+        return out
+
+    def minion_divergence_order(self) -> List[Dict[str, object]]:
+        """Minions ordered by the tick they *first* left the quantisation floor.
+
+        Position only, and deliberately so: a target or cooldown disagreement
+        is often unobservable at injection (see ``RESET-002``/``RESET-004``),
+        while a position disagreement after a shared start is a statement
+        about movement and nothing else.
+        """
+        first: Dict[int, Dict[str, object]] = {}
+        for r in self.rows:
+            for m in r.minions:
+                if m.pos_err <= QUANT_FLOOR * 1.5:
+                    continue
+                if m.net_id in first:
+                    continue
+                first[m.net_id] = {
+                    "net_id": m.net_id, "slot": m.slot, "tick": r.k,
+                    "decision": r.decision, "t_ms": r.t_ms,
+                    "pos_err": m.pos_err,
+                    "sim_move_order": m.sim_move_order,
+                    "srv_move_order": m.srv_move_order,
+                    "sim_target_net": m.sim_target_net,
+                    "srv_target_net": m.srv_target_net,
+                    "sim_is_attacking": m.sim_is_attacking,
+                    "srv_is_attacking": m.srv_is_attacking,
+                    "fields": list(m.fields),
+                }
+        return sorted(first.values(), key=lambda d: d["tick"])
 
     # -- Q1: per-tick champion displacement --------------------------------
     def displacement_stats(self) -> Dict[str, Dict[str, float]]:
@@ -586,12 +685,16 @@ class Tier15Result:
             "holds": self.hold_stats(),
             "hp": self.hp_stats(),
             "field_onsets": self.field_onsets(),
+            "minion_onsets": self.minion_onsets(),
+            "minion_divergence_order": self.minion_divergence_order(),
             "rows": [
                 {"k": r.k, "decision": r.decision, "t_ms": r.t_ms,
                  "champ_pos_err": r.champ_pos_err,
                  "champ_hp_err": r.champ_hp_err,
                  "minion_pos_err_max": r.minion_pos_err_max,
                  "matched_minions": r.matched_minions,
+                 "worst_minion_net": r.worst_minion_net,
+                 "minions": [asdict(m) for m in r.minions],
                  "sim": asdict(r.sim), "srv": asdict(r.srv)}
                 for r in self.rows
             ],
@@ -679,6 +782,26 @@ class Tier15Result:
             L.append(f"   {name:<28} first at tick {k} "
                      f"(decision {k / STEP_TICKS:.1f})")
         L.append(f"   fields excluded as not modelled: {', '.join(NOT_MODELLED)}")
+
+        L.append("")
+        L.append("-- named minions, in the order they left the quantisation floor --")
+        L.append("   (position only; the branch inputs at that exact tick)")
+        div = self.minion_divergence_order()
+        if not div:
+            L.append("   no matched minion ever exceeded "
+                     f"{QUANT_FLOOR * 1.5:.4f} u")
+        L.append(f"   {'net_id':>10} {'tick':>5} {'dec':>7} {'pos_err':>9}  "
+                 f"{'order s/v':>11} {'target s/v':>21} {'atk s/v':>9}  fields")
+        for d in div[:12]:
+            L.append(
+                f"   {d['net_id']:>10} {d['tick']:>5} {d['decision']:>7.1f} "
+                f"{d['pos_err']:>9.3f}  "
+                f"{d['sim_move_order']:>5}/{d['srv_move_order']:<5} "
+                f"{d['sim_target_net']:>10}/{d['srv_target_net']:<10} "
+                f"{int(d['sim_is_attacking']):>4}/{int(d['srv_is_attacking']):<4}  "
+                f"{','.join(d['fields'])}")
+        if len(div) > 12:
+            L.append(f"   ... {len(div) - 12} more (full list in the JSON)")
 
         L.append("")
         L.append("-- Q1  champion displacement (the COLL-003 question) --")
@@ -952,6 +1075,7 @@ def run_tier15(
     tol = replace(DEFAULT_TOLERANCE, kinds=LANE_KINDS,
                   ignore_fields=NOT_MODELLED)
     slot_of_net = dict(net_id_slots)
+    net_of_slot = {slot: net for net, slot in slot_of_net.items()}
 
     rows: List[Tick15Row] = []
     truncated: Optional[str] = None
@@ -1026,10 +1150,22 @@ def run_tier15(
         for slot, ent in zip(live_slots, sim_snap.entities):
             sim_by_slot[int(slot)] = ent
         srv_by_id = net_id_to_entity(snap)
+        srv_int_by_id = {ai.net_id: ai for ai in snap.ai_internals}
+        # Read the sim's controller arrays once per tick rather than per unit:
+        # `state.target` etc. are device arrays and a per-unit `int(...)` on
+        # each would transfer 38 times a tick for 428 ticks.
+        s_target = np.asarray(state.target)
+        s_move_order = np.asarray(state.move_order)
+        s_nwp = np.asarray(state.n_waypoints)
+        s_attacking = np.asarray(state.is_attacking)
+        s_aacd = np.asarray(state.aa_cooldown)
+        s_aawindup = np.asarray(state.aa_windup)
         errs: List[float] = []
         names: set = set()
+        details: List[MinionDetail] = []
         matched = 0
         unmatched_srv = 0
+        worst_err, worst_net = -1.0, -1
         for net_id, slot in slot_of_net.items():
             b = srv_by_id.get(net_id)
             a = sim_by_slot.get(slot)
@@ -1043,9 +1179,55 @@ def run_tier15(
             if b.kind not in LANE_KINDS or a.kind != b.kind:
                 continue
             matched += 1
-            errs.append(math.hypot(a.x - b.x, a.y - b.y))
-            for fd in _compare(a, b, tol):
-                names.add(fd.name)
+            err = math.hypot(a.x - b.x, a.y - b.y)
+            errs.append(err)
+            pair_fields = tuple(fd.name for fd in _compare(a, b, tol))
+            names.update(pair_fields)
+            if err > worst_err:
+                worst_err, worst_net = err, net_id
+            if b.kind != "LaneMinion":
+                continue
+            bi = srv_int_by_id.get(net_id)
+            sim_tgt_slot = int(s_target[slot])
+            sim_tgt_net = (0 if sim_tgt_slot < 0
+                           else net_of_slot.get(sim_tgt_slot, -2))
+            srv_move_order = -1 if b.ai is None else b.ai.move_order
+            srv_nwp = -1 if b.ai is None else b.ai.waypoints
+            # move_order and waypoints are in NOT_MODELLED, so `_compare`
+            # never sees them; they are the branch inputs, so they are named
+            # here explicitly rather than silently skipped.
+            extra = []
+            if int(s_move_order[slot]) != srv_move_order:
+                extra.append("move_order")
+            if bi is not None and sim_tgt_net != bi.target_net_id:
+                extra.append("target")
+            if bi is not None and bool(s_attacking[slot]) != bi.is_attacking:
+                extra.append("is_attacking")
+            all_fields = tuple(sorted(set(pair_fields) | set(extra)))
+            if not all_fields and err <= QUANT_FLOOR * 1.5:
+                continue
+            details.append(MinionDetail(
+                net_id=net_id, slot=slot, pos_err=err,
+                sim_x=a.x, sim_y=a.y, srv_x=b.x, srv_y=b.y,
+                sim_hp=float(a.hp or 0.0), srv_hp=float(b.hp or 0.0),
+                sim_move_order=int(s_move_order[slot]),
+                srv_move_order=srv_move_order,
+                sim_n_waypoints=int(s_nwp[slot]), srv_n_waypoints=srv_nwp,
+                sim_target_net=sim_tgt_net,
+                # -3, not 0: "the diagnostic line is missing" is not
+                # "the server held no target".
+                srv_target_net=-3 if bi is None else bi.target_net_id,
+                sim_is_attacking=bool(s_attacking[slot]),
+                srv_is_attacking=False if bi is None else bi.is_attacking,
+                sim_aa_cooldown=float(s_aacd[slot]),
+                srv_aa_cooldown=(-1.0 if bi is None
+                                 else bi.q_aa_cooldown / 1024.0),
+                sim_aa_windup=float(s_aawindup[slot]),
+                srv_aa_windup=(-1.0 if bi is None
+                               else bi.q_aa_windup / 1024.0),
+                srv_aa_state=-1 if bi is None else bi.aa_state,
+                fields=all_fields,
+            ))
         sim_minion_slots = int(np.count_nonzero(
             (kind_a == Kind.LANE_MINION) & alive_a))
         unmatched_sim = max(0, sim_minion_slots - matched)
@@ -1061,6 +1243,8 @@ def run_tier15(
             minion_pos_err_mean=float(np.mean(errs)) if errs else 0.0,
             unmatched_sim=unmatched_sim, unmatched_srv=unmatched_srv,
             field_diffs=tuple(sorted(names)),
+            worst_minion_net=worst_net,
+            minions=tuple(details),
         ))
         sim_prev, srv_prev = sim_t, srv_t
 

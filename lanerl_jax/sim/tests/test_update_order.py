@@ -301,3 +301,89 @@ def test_a_turrets_move_order_is_never_touched_by_refresh_waypoints():
     assert int(out.target[turret]) > 0, "it did acquire the minion"
     assert int(out.move_order[turret]) == MoveOrder.MOVE_TO, (
         "a turret's move order was rewritten by RefreshWaypoints")
+
+
+def _champ_with_route(*, is_attacking=False, windup=0.0,
+                      order=MoveOrder.ATTACK_TO, gap=100.0):
+    """Champion 0 chasing champion 1 with a LIVE two-point route in hand.
+
+    ``gap`` is the centre-to-centre distance, so the caller chooses whether
+    ``RefreshWaypoints`` takes its in-range branch or its re-path branch.
+    """
+    patch = load_patch()
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    route = np.zeros((s.waypoints.shape[1], 2), np.float32)
+    route[0] = (1000.0, 1000.0)
+    route[1] = (1000.0 + gap, 1000.0)
+    s = s.replace(
+        x=s.x.at[0].set(1000.0).at[1].set(1000.0 + gap),
+        y=s.y.at[0].set(1000.0).at[1].set(1000.0),
+        target=s.target.at[0].set(1).at[1].set(-1),
+        move_order=s.move_order.at[0].set(order).at[1].set(MoveOrder.NONE),
+        is_attacking=s.is_attacking.at[0].set(is_attacking),
+        aa_windup=s.aa_windup.at[0].set(windup),
+        aa_cooldown=s.aa_cooldown.at[0].set(0.0),
+        waypoints=s.waypoints.at[0].set(jnp.asarray(route)),
+        waypoint_key=s.waypoint_key.at[0].set(1),
+        n_waypoints=s.n_waypoints.at[0].set(2),
+    )
+    return s, params
+
+
+def test_hold_destroys_the_route_and_does_not_merely_block_it():
+    """`HOLD-001`. ``UpdateMoveOrder(OrderType.Hold, true)`` is not an order
+    write: `ObjAIBase.cs:1362-1366` calls ``StopMovement()``, i.e.
+    ``AttackableUnit.ResetWaypoints`` (`AttackableUnit.cs:996-1002`), which
+    replaces the whole list with ``[Position]`` and sets
+    ``CurrentWaypointKey = 1``.
+
+    Asserting only ``move_order == HOLD`` -- which the test above this one
+    does -- passes with the route left intact, because ``_can_move`` blocks
+    Hold anyway. That is exactly how this survived: the outcome is identical
+    for as long as the order stays Hold.
+    """
+    s, params = _champ_with_route(gap=100.0)
+    out = tick(s, params)
+    assert int(out.move_order[0]) == MoveOrder.HOLD, "in range: it holds"
+    assert int(out.n_waypoints[0]) == 1, (
+        "Hold left the route in place; StopMovement/ResetWaypoints is missing")
+    assert int(out.waypoint_key[0]) == 1
+    assert float(out.waypoints[0, 0, 0]) == pytest.approx(float(out.x[0]))
+    assert float(out.waypoints[0, 0, 1]) == pytest.approx(float(out.y[0]))
+
+
+def test_a_unit_stopped_by_hold_stays_stopped_when_the_order_flips_back():
+    """The consequence, and the reason the field that caught this was
+    *position* rather than any controller-state field.
+
+    ``LaneMinionAI.ReevaluateBehavior`` (`LaneMinionAI.cs:321-331`) returns
+    ``AttackTo`` for a still-valid target on its next 250 ms sweep, and
+    ``UpdateMoveOrder(AttackTo)`` touches no waypoints. With the route
+    destroyed the unit stays where it stopped; with the route intact it walks
+    on, agreeing on order, target, ``is_attacking`` and the auto-attack clock
+    the whole way. Tier 1.5 measured exactly that: minion 1073744061 separated
+    5.427 u at tick 34 and 48.8 u by tick 42 with no other field disagreeing.
+    """
+    s, params = _champ_with_route(gap=100.0)
+    held = tick(s, params)
+    x_held, y_held = float(held.x[0]), float(held.y[0])
+    # the AI script writes the order back; it does NOT re-path.
+    resumed = held.replace(
+        move_order=held.move_order.at[0].set(MoveOrder.ATTACK_TO))
+    after = tick(resumed, params)
+    assert float(after.x[0]) == pytest.approx(x_held), (
+        "the unit resumed a route the server had already destroyed")
+    assert float(after.y[0]) == pytest.approx(y_held)
+
+
+def test_the_out_of_range_repath_still_produces_a_two_point_route():
+    """The control. `HOLD-001`'s reset must not leak into the branch next to
+    it: `:657-669` re-paths a unit whose target is out of range, and that
+    branch still has to hand back a route the unit can walk.
+    """
+    s, params = _champ_with_route(gap=600.0)
+    out = tick(s, params)
+    assert int(out.move_order[0]) == MoveOrder.ATTACK_TO
+    assert int(out.n_waypoints[0]) == 2, "the chase route was reset too"
+    assert float(out.x[0]) > 1000.0, "it should have walked toward the target"

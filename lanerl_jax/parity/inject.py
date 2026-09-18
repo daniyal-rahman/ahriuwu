@@ -828,7 +828,26 @@ def inject_snapshot(
             waypoints[slot] = 0.0
             waypoints[slot, :width] = np.asarray(
                 internal.waypoints[:width], dtype=np.float32) / 16.0
-            waypoint_key[slot] = min(internal.waypoint_key, max(0, width - 1))
+            # `INJ-002`. The cap is `width`, NOT `width - 1`.
+            # `CurrentWaypointKey == Waypoints.Count` is a legal, common and
+            # load-bearing server state: it is exactly `IsPathEnded()`
+            # (`AttackableUnit.cs:1008-1011`), and `ResetWaypoints`
+            # (`:996-1002`) produces it on purpose -- `Waypoints =
+            # [Position]`, `CurrentWaypointKey = 1` -- every time
+            # `StopMovement()` runs. Clamping that to `width - 1 = 0` turned
+            # "this unit is stopped" into "this unit has one waypoint left,
+            # at the place it is already standing", and
+            # `movement_jax.step_move_units`' `k < n` gate then let it walk
+            # back to that waypoint. A minion's per-tick budget (325 u/s ->
+            # 5.417 u) is just larger than a collision escape, so the walk
+            # back landed exactly on the pre-collision position and CANCELLED
+            # that tick's push-apart. Measured: that is the whole of the
+            # 1,742-miss `LaneMinion.position_linf` gate-1 residual -- on
+            # three drilled cases the error goes 5.398/5.380/5.410 u ->
+            # 0.007/0.037/0.038 u, inside the dump's own 1/16 u quantisation,
+            # from this one character. `step_move_units` already clamps the
+            # gather index, so a key equal to the count is safe to inject.
+            waypoint_key[slot] = min(internal.waypoint_key, width)
             n_waypoints[slot] = width
             note.movement_trustworthy = len(internal.waypoints) <= waypoints.shape[1]
             note.movement_reason = (

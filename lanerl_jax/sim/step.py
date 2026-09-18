@@ -757,6 +757,39 @@ def tick(state: LaneState, params: UnitParams,
                    wp.at[:, :2].set(two)[:, :, :], wp)
     wp_key = jnp.where(chase, jnp.int8(1), wp_key_after_lane)
     n_wp = jnp.where(chase, jnp.int8(2), n_wp_after_lane)
+    # `HOLD-001`. The in-range branch does not only write an order.
+    # `UpdateMoveOrder(OrderType.Hold, true)` (`ObjAIBase.cs:1362-1366`) calls
+    # `StopMovement()`, which for a non-dashing unit is
+    # `AttackableUnit.ResetWaypoints` (`AttackableUnit.cs:996-1002`):
+    #
+    #     Waypoints = new List<Vector2> { Position };
+    #     CurrentWaypointKey = 1;
+    #
+    # so the route is DESTROYED, not merely ignored while the order holds.
+    # That distinction is invisible for exactly as long as the order stays
+    # Hold -- `_can_move` blocks Hold, so the unit does not move either way --
+    # and it stops being invisible the moment something writes the order back.
+    # Something does, every 250 ms: `LaneMinionAI.ReevaluateBehavior`
+    # (`LaneMinionAI.cs:321-331`) returns `AttackTo` for a still-valid target
+    # and `UpdateMoveOrder(AttackTo)` touches no waypoints at all. On the
+    # server the minion stays where it stopped, because its list is
+    # `[Position]`. Without this reset the sim resumed walking down the stale
+    # two-point chase path the instant the order flipped back, and kept
+    # walking for the whole windup and cooldown, because `UpdateTarget`'s
+    # `IsAttacking` early return above never re-paths either.
+    #
+    # Measured (`parity/tier15.py`, q2 `engaged`, minion 1073744061): from an
+    # identical injected state the two sides were bit-identical for 33 ticks;
+    # at tick 34 the server stopped for good at (3831.250, 13191.562) with
+    # `wps=1` while the sim, agreeing on move order, target, `is_attacking`
+    # and the auto-attack clock to four decimals, kept stepping 5.427 u/tick
+    # with `wps=2` and was 48.8 u away eight ticks later. Position was the
+    # ONLY field that disagreed, which is why no controller-state row ever
+    # caught it.
+    hold_here = jnp.stack([x, y], -1)
+    wp = jnp.where(hold[:, None, None], wp.at[:, 0].set(hold_here), wp)
+    wp_key = jnp.where(hold, jnp.int8(1), wp_key)
+    n_wp = jnp.where(hold, jnp.int8(1), n_wp)
     # Champion attack damage is NOT static. `Stats.LevelUp`
     # (`GameServerLib/GameObjects/Stats/Stats.cs:270-271`) grows
     # `AttackDamage` every level-up through the same non-linear curve as
