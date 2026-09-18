@@ -108,10 +108,32 @@ predates that class. Script compilation would have failed and every server boot
 with it. Reverted, and the canonical binary re-verified by booting and ticking
 300 decisions.
 
-So instrumenting the SCRIPT package needs real isolation first -- give the
-trace build its own `Content` (symlink the bulk, copy `LeagueSandbox-Scripts`),
-or land the trace class in the canonical assembly before referencing it from a
-script. Do not do it opportunistically while other runs are in flight.
+So instrumenting the SCRIPT package needs real isolation first. The recipe
+that works, and the two traps in it:
+
+1. `/srv/nfs/projects/lanerl-vendor/Content-trace/` -- a RELATIVE symlink to
+   `../LoLServer/Content/LeagueSandbox-Default` (113 MB, unchanged, and
+   relative so it resolves under both `/srv/nfs` and `/mnt/nfs`) beside a real
+   copy of `LeagueSandbox-Scripts` (8.8 MB, the part being edited).
+2. `lanerl/cfg/garen1v1_trace.json` -- the game config with
+   `gameInfo.CONTENT_PATH` set to that tree, **as an ABSOLUTE path**.
+   `Config.cs:69-74` reads `CONTENT_PATH` and, when `Directory.Exists` is
+   false, falls back SILENTLY to executable-relative `GetContentPath()`. A
+   relative value resolves against the server process's CWD -- not the config
+   file and not `server_dir` -- so it misses and the fallback hides the miss.
+   The path is absolute `/mnt/nfs/...` because the compute node is the only
+   place servers run.
+3. Select both: `ServerLaunchSpec(server_dir=<bin/Trace/net6.0>,
+   config_path=<garen1v1_trace.json>)`.
+
+**Verify isolation by making the isolated copy FATAL, not by reading config.**
+The first version of this was tested by putting a syntax error in the isolated
+script and asserting the boot failed. It did not fail, and the conclusion drawn
+-- "not isolated" -- was wrong in both directions: the tree WAS isolated (the
+log names the isolated path), and a broken script does not stop a boot at all.
+See `parity/script_health.py`: a partially-loaded script package produces a
+complete, well-formed, entirely invalid trace, and the only tell is
+``Loaded some`` instead of ``Loaded all``. Check for that marker instead.
 
 That is a shame, because the most valuable single branch in the server for
 minion parity is in there: `LaneMinionAI.OnUpdate`'s trigger, whose three arms
