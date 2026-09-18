@@ -8,6 +8,33 @@ Audited 2026-09-09 on `danilogin`. Nothing outside `lanerl_audit/` was modified.
 Ranked by likelihood x damage. Everything below is a real mechanism with a
 file:line, not a category of risk.
 
+---
+
+## STATUS as of 2026-09-12 — read this before acting on anything below
+
+Re-checked every P0/P1 against the current tree. **A fixed finding left standing
+is as misleading as a stale comment**, so the table says which are dead.
+
+| # | title | status |
+|---|---|---|
+| 1 | `LANERL_BOT_CONFIG` silently ignored | **FIXED twice.** `LanerlConfig.cs:373-390` throws `FileNotFoundException`; `run_server.check_bot_config()` raises before launch. The *consequence* stands: the six `rep_tune*.json` / `rep_retreat.json` arms remain unfounded. |
+| 2 | build checks printed success while failing | **HISTORICAL.** The evidence is still in `lanerl/logs/`; no current build script greps for success. |
+| 3 | `run_server.run()` never checks rc | **STILL TRUE.** No `rc` / `died` in the returned dict. Cited lines drifted: `run_all.txt:19,21` -> `:23,25`. |
+| 4 | broken Content script invisible | **STILL TRUE** (`Package.cs:327-332` logs at Debug and returns true; `Spell.cs:149` `?? new SpellScriptEmpty()`). But the inference that this explains `smoke2/3`'s `455 -> 455` is **NOT supported** — the bot farms 31 CS with those same WARNs. |
+| 5 | `control_smoke.py` vacuous PASS | **FIXED.** |
+| 6 | suites invisible to bare `pytest`; both red | **FIXED.** `testpaths` covers all four; `lanerl_train/tests` = 230 passed / 12 skipped. |
+| 7 | `setup_server.sh` builds a different tree | **HALF FIXED.** The `/srv/nfs` literal is gone; it still builds `$VENDOR/GameServer`, and the trailing `find … | head` still exits 0 on nothing. |
+| 8 | `LanerlBot.cs` records a Q cast that threw | **STILL TRUE** — `LanerlBot.cs:584-586`. |
+| 9 | `bench_process_restart.py` has never run | **FIXED.** `bench/out/process_restart.json` holds real data. |
+| 10 | 8 hardcoded ports, one overlap | **MOSTLY FIXED.** 2 `port-literal` left; the 5810/5911 overlap is gone. |
+| 11 | server tests report a crash as SKIP | **MOSTLY FIXED.** 5 `skip-hides-failure` remain. |
+| 12 | no `set -e` in 31 of 34 shells | **PARTLY.** The six named scripts are fixed; 28 `shell-no-errexit` + 3 `shell-no-pipefail` remain elsewhere. |
+| 14 | "39 byte-identical PNGs" | **STALE.** `lanerl/logs/shots/` now has 94 PNGs, 10 distinct md5s. |
+| 16 | `LanerlControl` swallows every action | **MOSTLY FIXED** — `LanerlWire` is a real JSON parser, `Complain()` counts and reports. **Still true:** `_listener.Start()` + `AcceptTcpClient()` in the constructor with no bind handling or accept timeout. |
+
+Also drifted in the text below: `lanerl/logs` is now **1.8 GB** (not 430 MB),
+`rads_D.log` is 139 MB (not 145), `/` has 100 GiB free (not 107).
+
 Two facts that make several of these worse than they look:
 
 * `/mnt/nfs` is a **symlink to `/srv/nfs` on `danilogin` only**. On `desktop`,

@@ -8,8 +8,11 @@
 #   4. the Roslyn-compiled Content scripts all compile -- they are NOT part of
 #      any build, so a broken one degrades to SpellScriptEmpty and the ability
 #      silently does nothing
-#   5. every LANERL_BOT_CONFIG referenced by the bench configs resolves; a
-#      missing one is ignored by LanerlConfig.cs:161 and the arm runs defaults
+#   5. every LANERL_BOT_CONFIG referenced by the bench configs resolves. This
+#      used to say "a missing one is ignored by LanerlConfig.cs:161 and the arm
+#      runs defaults" -- LanerlConfig.Load() now THROWS on a set-but-unresolvable
+#      path (LanerlConfig.cs:373-390), so the step exists to fail here in a
+#      second instead of after the first game of an hour-long sweep
 #   6. the mechanical checker (check_silent_failures.py) finds no HIGH finding
 #   7. the fast test suites are green
 #
@@ -126,9 +129,13 @@ ok "no .cs newer than the dll"
 
 # ---------------------------------------------------------------------------
 step "LANERL_BOT_CONFIG targets all resolve"
-# LanerlConfig.cs:161 -- `if (!IsNullOrEmpty(path) && File.Exists(path))`. A path
-# that does not resolve is IGNORED, with no warning, and the bot runs its
-# built-in defaults. An A/B then compares the default bot against itself.
+# HISTORY, kept because six recorded bench arms are still unfounded because of it:
+# LanerlConfig.Load() was `if (!IsNullOrEmpty(path) && File.Exists(path))` with no
+# else, so a path that did not resolve was ignored in silence and the arm ran the
+# built-in defaults -- an A/B comparing the default bot against itself.
+# FIXED: LanerlConfig.cs:373-390 now throws FileNotFoundException, and
+# run_server.check_bot_config() raises before the first launch. This step is the
+# cheap gate in front of both.
 MISSING_CFG=0
 while IFS= read -r cfg; do
     # bench configs now name their targets repo-relative (they must not carry a
@@ -152,8 +159,9 @@ done < <(grep -rhoE '"LANERL_BOT_CONFIG"[[:space:]]*:[[:space:]]*"[^"]+"' \
 # Live experiment inputs live in bench/*.json and bench/configs/, which are scanned.
 if [ "$MISSING_CFG" -gt 0 ]; then
     MSG="$MISSING_CFG bot-config path(s) do not resolve on this node.
-     Those arms will run the DEFAULT bot and the sweep will report seed noise as
-     a tuning result. Create the files, or fix LanerlConfig.Load() to throw."
+     The server will now throw on these rather than silently running the default
+     bot, so the sweep dies on its first game instead of reporting seed noise as a
+     tuning result. Create the files, or drop the arms that name them."
     [ "$ALLOW_MISSING_CFG" -eq 1 ] && warn "$MSG" || die "$MSG"
 fi
 
@@ -239,8 +247,10 @@ else
              "$PY" -m pytest "$suite" -q -m "not slow" -p no:cacheprovider ) ; then
             ok "$suite green"
         else
-            die "$suite is RED. A bare \`pytest\` at the repo root does not collect it
-     (pyproject.toml testpaths=[\"tests\"]), which is why nobody noticed."
+            die "$suite is RED. pyproject.toml's testpaths now covers all four dirs,
+     so a bare \`pytest\` does collect it -- but a bare \`pytest\` also pulls in the
+     @pytest.mark.slow server boots, so this loop is the only place the fast
+     subset is gated."
         fi
     done
 fi
