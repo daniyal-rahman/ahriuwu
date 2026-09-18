@@ -19,46 +19,74 @@ scenario :mod:`lanerl_jax.parity.last_hit_drive` already drives.
 
 WHAT IT FOUND
 --------------
-Measured 2026-09-16, 18,000 decisions, same seed/config as the gate::
+Re-measured 2026-09-18, 18,000 decisions, same seed/config as the gate, with
+BOTH sides re-run the same day. This supersedes the 2026-09-16 table, which was
+stale on two counts: it drove the sim on the raw two-point path while the gate
+ran routed, and it predates the sequential-collision port::
 
-                                sim      server    ratio
-    0 allies within 1500 u    32.3%     19.4%      1.7x
-    nearest-ally > 3000 u     13.1%      7.0%      1.9x
-    mean nearest-ally dist     1263       874      +45%
-    median nearest-ally dist    280       306      ~equal
+                                    sim      server     ratio
+    post-handover decisions       11,600    14,803      sim has 21.6% less
+    no ally alive ANYWHERE         11.4%     10.2%      1.12x
+    0 allies within 1500 u         23.8%     19.4%      1.23x  (was 1.7x)
+    nearest-ally > 3000 u           9.8%      7.0%      1.40x  (was 1.9x)
+    nearest-ally > 1500 u          14.0%     10.2%      1.37x
+    mean nearest-ally dist         1143.5     874.4     +31%   (was +45%)
+    median nearest-ally dist        395.6     305.9     +29%   (was ~equal)
+    mean allies within 1500          3.93      4.28     -8%
+    mean enemies within 1500         4.12      4.35     -5%
 
-**The medians agreeing while the tails diverge is the informative part.**
-The champion's TYPICAL position relative to its own wave is right in both
-engines -- when he has an ally nearby at all, it is about as close in the
-sim as on the server. What differs is the TAIL: a meaningfully larger share
-of sim decisions find him with no ally within 1500 units, or none within
-3000. That reads as this port's lane equilibrium swinging wider than the
-server's (waves separating further, more often) rather than as the
-champion being parked in a structurally different spot -- both drivers
-walk him to the identical ``APPROACH_WAYPOINTS`` coordinate, so the
-DESTINATION is not in question, only how often the wave has moved away
-from it by the time he needs it.
+**Three things changed, and one of them reverses this module's own reading.**
+
+1. *The tail effect is real but roughly half as large.* 1.7x -> 1.23x and
+   1.9x -> 1.40x. Routing plus sequential collision closed a lot of it. It did
+   not close all of it: the sim's champion is still measurably more isolated.
+
+2. *The medians no longer agree, so "typical position is right, only the tail
+   is wrong" is no longer true.* The old headline rested on sim 280 against
+   server 306. Under the configuration the gate actually runs, it is 395.6
+   against 305.9 -- the whole distribution is shifted, not just its tail. Note
+   which direction that is: the RAW path's median was the one that agreed.
+   A two-point order cuts straight through terrain, so the old agreement may
+   well have been a wrong path landing on a right-looking number, which is
+   why a diagnostic must run the same mode as the gate it explains.
+
+3. *The wave is NOT dying more often in the sim.* 11.4% of the sim's in-lane
+   decisions have no allied minion alive anywhere on the map, against the
+   server's 10.2%. That is close enough to rule out wave survival as the
+   story, and it is worth stating as a negative because the sim's raw 11.4%
+   looks alarming until the baseline is put next to it.
+
+**The larger effect is not in this table at all.** The sim gets 11,600
+post-handover decisions to the server's 14,803 because it spends 6,400 of
+18,000 walking in against the server's 3,197 (and dies twice to the server's
+once). Roughly 22% less time in lane dwarfs a 1.2x isolation ratio as an
+explanation for missing CS, and it points at PATH-001's waypoint emission --
+local routes carry 6-9 waypoints where the server carries 3. See the
+cross-gate chain in ``docs/JAX_FIDELITY_LEDGER.md``.
 
 **What this does and does not establish.** That the sim's champion is
 measurably more often isolated from its own wave, while the (separately,
 directly, source-verified) release rule cannot free a minion locked onto
 him without a nearby ally to switch to, is *consistent with* isolation
-driving the excess deaths -- more isolated decisions is more opportunity
-for an unrecoverable lock-on to accumulate. It does not, by itself, prove
-causation: this module does not trace any specific death back to a specific
-isolated stretch, and does not rule out other contributors. Read it as a
-real, measured tail effect with a plausible causal story attached, not as
-a closed case.
+contributing to the excess deaths. It does not, by itself, prove causation:
+this module does not trace any specific death back to a specific isolated
+stretch, and does not rule out other contributors.
 
-**Handoff, not a next step for this module.** The mechanism behind a wider
-equilibrium is very likely lane-equilibrium/collision separation --
-``sim/collision.py`` applies one push-apart per unit per tick from a
-pre-tick snapshot where the server resolves collisions sequentially,
-several pushes per unit per tick, each visible to the next (see that
-module's own booked-approximation note). That is gate 1's territory (the
-sequential-collision port is in flight there); this module's job stops at
-making the tail effect measurable and reproducible, not at diagnosing its
-root cause.
+**The 2026-09-16 handoff was taken up, and it was about half right.** That
+note predicted the wider equilibrium came from collision separation --
+``sim/collision.py`` then applied one push-apart per unit per tick from a
+pre-tick snapshot, where the server resolves sequentially, several pushes per
+unit per tick each visible to the next -- and handed it to gate 1, where the
+sequential port was in flight. It has since landed. The tail ratios roughly
+halved (1.7x -> 1.23x, 1.9x -> 1.40x), which is consistent with that having
+been a real contributor, though this re-measurement changed routing at the
+same time and so cannot apportion the improvement between the two.
+
+What remains is no longer mainly an equilibrium question. The residual
+isolation is modest, the medians have separated, and the dominant term is
+lane TIME rather than lane POSITION: the sim simply gets 22% fewer
+post-handover decisions. That belongs to PATH-001's waypoint emission, not
+here.
 
 HOW TO READ THE OUTPUT
 -----------------------
