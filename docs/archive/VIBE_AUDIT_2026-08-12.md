@@ -370,8 +370,8 @@ Of the launch scripts, only `scripts/dyn_train_args_action.sh:30`
 **None of the `slurm/*.sbatch` dynamics jobs pass it** — so those runs reported
 train-set metrics under a `val/` label.
 
-This is corroborated by the repo's own prior notes (`WM_UPDATE_2026-07-13.md:36`,
-`WORLD_MODEL_BRIEFING.md:133`) — though both refer to the flag as `--num-eval-videos`,
+This is corroborated by the repo's own prior notes (`docs/archive/WM_UPDATE_2026-07-13.md:36`,
+`docs/archive/WORLD_MODEL_BRIEFING.md:133`) — though both refer to the flag as `--num-eval-videos`,
 which **does not exist**; the flag was renamed and the docs weren't. A reader following
 those docs cannot fix the problem.
 

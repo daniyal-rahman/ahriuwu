@@ -4,7 +4,7 @@
 
 **Why this document exists.** Our Phase-2 BC movement head learned to copy its own
 fed-in action history instead of reading pixels
-(`docs/MOVEMENT_HEAD_BLIND_2026-08-26.md`). Swapping the fed-in action history moves the
+(`docs/archive/MOVEMENT_HEAD_BLIND_2026-08-26.md`). Swapping the fed-in action history moves the
 model's command **150.9deg**; swapping the **pixels** moves it **41.0deg** — the action
 channel beats vision ~3:1. Dreamer 4's architecture *also* lets the policy attend to
 past actions, and the paper reports no defence against copying. So: **why does that hurt
@@ -572,7 +572,7 @@ the current task*"); it does nothing to protect the **policy** from reading acti
 
 with L = 8.
 
-Our working assumption — recorded in `docs/BC_FIX_PLAN_2026-08-26.md` option A, *"their
+Our working assumption — recorded in `docs/archive/BC_FIX_PLAN_2026-08-26.md` option A, *"their
 Eq 9 sums from n=0, which is vacuous unless h_t excludes a_t"* — **is wrong about their
 architecture.** Given §4.1, `p_θ(a_t | h_t)` is a copy read-off. `edwhu` reached the same
 conclusion independently and wrote it down (§2.3). This is a correction to our own notes,
@@ -741,7 +741,7 @@ measured with the shortcut fully open.**
 
 **Nothing else exists** — no stop-gradient on the action channel, no second action-free
 forward pass, no structural mask removing the action token from the agent cross-attention
-only. That last one (option A of `docs/BC_FIX_PLAN_2026-08-26.md`) is not implemented.
+only. That last one (option A of `docs/archive/BC_FIX_PLAN_2026-08-26.md`) is not implemented.
 
 **Field context:** *no Dreamer 4 implementation has any of these either* (§2.0). Even our
 defeated per-frame dropout is more than any of them ship. **There is no prior art to
@@ -797,7 +797,7 @@ nearly invisible in pixels, and (c) BC is our final policy (§5.4).
 three V4 repos with a policy, *all three* implement Phase 3; we are the only Dreamer-4-
 shaped codebase surveyed that deploys BC as the terminal policy.
 
-`docs/PAPER_DEVIATIONS.md` §4.5 also records that `task_id` is **never passed** by any
+`docs/archive/PAPER_DEVIATIONS.md` §4.5 also records that `task_id` is **never passed** by any
 trainer or by `agent_infer.py`, so `dynamics.task_embed` sits at random init. Dreamer 4's
 agent token carries a task embedding; **ours carries nothing but a constant, a temporal
 position, and whatever it cross-attends to — where the action token sits.**
@@ -842,7 +842,7 @@ only comparable artifacts are:
    frames in the corpus, so **100% of what the model ever sees of the walk-out is a label
    only copying can express.**
 3. **BC loss coverage.** The paper applies BC only to the "relevant fraction" of a 50/50
-   mixture (§4.4). `docs/PAPER_DEVIATIONS.md` §4.6 records that we have no such mixture
+   mixture (§4.4). `docs/archive/PAPER_DEVIATIONS.md` §4.6 records that we have no such mixture
    and train BC uniformly on every window — including the sentinel window and every hold
    run.
 
@@ -881,7 +881,7 @@ half the action is a camera delta whose effect *is* the image transform. Vision 
 strong competitor there. In our game the champion is camera-locked to screen centre, so
 a standing move order has almost no pixel signature, and our probes found ≤5% of an
 oracle's recoverable signal in the latents
-(`docs/MOVEMENT_HEAD_BLIND_2026-08-26.md`, CORRECTION §3).
+(`docs/archive/MOVEMENT_HEAD_BLIND_2026-08-26.md`, CORRECTION §3).
 
 **But this cannot be the whole story, and our own SECOND CORRECTION disproves the strong
 form of it.** Cutting the movement action at inference with **no retraining** recovers a

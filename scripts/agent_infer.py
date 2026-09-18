@@ -234,7 +234,7 @@ class GarenAgent:
             # A pad slot is not a real observation, so it carries no command:
             # replicating a fire=True entry across the pad would put one target in
             # several action tokens -- precisely the replication that makes the
-            # shortcut survive dropout (docs/BC_FIX_PLAN_2026-08-26.md).
+            # shortcut survive dropout (docs/archive/BC_FIX_PLAN_2026-08-26.md).
             while len(acts) < self.context:
                 acts.insert(0, dict(acts[0], fire=False))
             mv = torch.tensor([list(a_["movement"]) for a_ in acts], dtype=torch.float32,

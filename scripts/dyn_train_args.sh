@@ -44,7 +44,7 @@ DYN_ARGS=(
 )
 
 # torch.compile: default OFF — safe on Blackwell sm_120 + torch 2.7 (compiled
-# kernels hit a CUDA illegal-memory-access there; see docs/VAST.md §4). COMPILE=1
+# kernels hit a CUDA illegal-memory-access there; see docs/archive/VAST.md §4). COMPILE=1
 # to try it once you've verified the box is stable.
 [ "${COMPILE:-0}" = "1" ] || DYN_ARGS+=(--no-compile)
 

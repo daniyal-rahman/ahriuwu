@@ -147,7 +147,7 @@ identically across all T=20 frames. The paper masks **per image** (§3.1: *"Patc
 image** are replaced…"*). No paper support for tube masking exists — the phrase does not appear
 in the paper.
 
-**Why it matters.** `docs/TOKENIZER_REVIEW_2026-08-02.md:33` measured the consequence: a tube-masked
+**Why it matters.** `docs/archive/TOKENIZER_REVIEW_2026-08-02.md:33` measured the consequence: a tube-masked
 HP bar is unpredictable from *any* frame's context, so the loss-optimal output is a generic mean
 bar — the observed artifact. Per-image masking would leave the same region visible in ~most frames
 of a clip, making the reconstruction an interpolation rather than a hallucination.
@@ -211,9 +211,9 @@ batch size is 1, but it does not survive a batch-size increase.
 
 #### 1.4 Resolution — FORCED, impact **HIGH**
 
-352×352 → 484 patch tokens vs the paper's 384×640 → 960. `docs/DATA_AUDIT_2026-08-12.md:611`
+352×352 → 484 patch tokens vs the paper's 384×640 → 960. `docs/archive/DATA_AUDIT_2026-08-12.md:611`
 measures the real cost as **total resolution**, not aspect: 1280→352 is a 3.64× horizontal
-downsample. `docs/EXPERT_REVIEW_2026-08-02.md:1b` argues this is why HP bars are illegible; the
+downsample. `docs/archive/EXPERT_REVIEW_2026-08-02.md:1b` argues this is why HP bars are illegible; the
 tokenizer review counters that at 352² the bars are still human-legible in GT and the binding
 constraint is the objective's area weighting (`TOKENIZER_REVIEW:35`). Both agree the tokenizer
 cannot see minion HP; they disagree on the mechanism.
@@ -251,7 +251,7 @@ Covered by the table above and listed only so they stop being re-raised:
 Ran as `slurm/slurm_v7_trial.sbatch` (3 000-optstep health check, `--latent-dim 32 --num-latents
 256`). `slurm/slurm_tok_train_v7.sbatch:35` records *"user chose 512×16 despite Step-5 overfit
 showing 256×32 was ~7 dB better at matched params"*. **Both halves of that note are now retracted**
-by `docs/TOKENIZER_REVIEW_2026-08-02.md:114-122`:
+by `docs/archive/TOKENIZER_REVIEW_2026-08-02.md:114-122`:
 
 1. 512×16 **is** the paper shape (Appendix A) — the "faithfulness override" framing was backwards.
 2. The "+7 dB" was an overfit-regime artifact; matched-sample re-analysis gives ~**+1 dB** early
@@ -342,7 +342,7 @@ long (T=256) batches — `use_shortcut = ts.shortcut is not None and not use_lon
 requirement. It does **not** match Eq 4's shortcut grid — but Eq 4 only applies when the shortcut
 bootstrap is active, which it is not.
 
-Caveat noted in `DYNAMICS_VS_PAPER.md` §1.8 and still live: the ramp weight down-weights low-τ to
+Caveat noted in `docs/archive/DYNAMICS_VS_PAPER.md` §1.8 and still live: the ramp weight down-weights low-τ to
 0.1, and in the paper that region is carried by the **bootstrap term** (which lives at low τ).
 With shortcut off, low-τ x-prediction is down-weighted with nothing filling the gap.
 
@@ -430,7 +430,7 @@ production checkpoint** (`use_game_time: False`), so currently inert.
 #### 2.9 The 16×16 grid is a reshape fiction — caveat, impact MED
 
 Paper Appendix A also reshapes (512×16 → 256×32), so the *shape* matches exactly. But
-`docs/TOKENIZER_REVIEW_2026-08-02.md:23` measured that our 512 latents are **global perceiver
+`docs/archive/TOKENIZER_REVIEW_2026-08-02.md:23` measured that our 512 latents are **global perceiver
 readers with no spatial locality** — *"the 16×16×32 grid is a reshape fiction — no latent-space
 region masking possible."* Consequence: the dynamics' **2D spatial RoPE and spatial attention are
 applied over an axis with no spatial meaning.** The paper never claims its bottleneck latents are
@@ -439,7 +439,7 @@ assumption the repo's architecture makes and the data does not support.
 
 #### 2.10 No held-out eval — ACCIDENTAL, impact MED
 
-`holdout_videos: 0`. `docs/DATA_AUDIT_2026-08-12.md` finding 3: *"No held-out set during training;
+`holdout_videos: 0`. `docs/archive/DATA_AUDIT_2026-08-12.md` finding 3: *"No held-out set during training;
 dynamics 'eval' is a training batch."*
 
 #### 2.11 Continuous τ, quantized τ conditioning — DELIBERATE, impact LOW
@@ -526,7 +526,7 @@ reading either as "the paper's τ_ctx" without checking which file you're in is 
 
 #### 2.16 / 2.17 REVERTED (both fixed in `8212365`)
 
-Two deviations catalogued at length in `DYNAMICS_VS_PAPER.md` §1.5 and §1.9 have since been fixed;
+Two deviations catalogued at length in `docs/archive/DYNAMICS_VS_PAPER.md` §1.5 and §1.9 have since been fixed;
 **that document is stale on these two points.**
 
 - **Independent frames.** Was: one boolean per micro-batch, applying a whole-sequence diagonal
@@ -573,7 +573,7 @@ Two structural differences beyond the count:
   absolute screen *target*. Domain-correct (LoL is click-to-move) but it means our action is not
   translation-invariant and inherits the camera's frame of reference.
 - **Linear bins, not foveated.** Paper: μ-law/foveated so small deltas get fine bins. Ours: uniform
-  `linspace(0,1,21)`. `docs/DATA_AUDIT_2026-08-12.md` findings 5 and 13 measure the cost:
+  `linspace(0,1,21)`. `docs/archive/DATA_AUDIT_2026-08-12.md` findings 5 and 13 measure the cost:
   **37.7% of genuine commands are quantized away** by the 21-bin grid (190 168 / 504 008), and the
   bins are **anisotropic** (64 px in x, 36 px in y) because the grid is square but the source frame
   is not.
@@ -594,7 +594,7 @@ One gate logit per MTP offset. Log-prob is the mixture (`gated_movement_log_prob
 `transition → log g + log p_cat`; `hold → logaddexp(log(1−g), log g + log p_cat)`.
 
 **Nothing in Dreamer 4 resembles this.** The paper models per-frame actions directly. The gate is
-this repo's response to `docs/EXPERT_REVIEW_2026-08-02.md` §2(b) — *"restructure as gate + location"* —
+this repo's response to `docs/archive/EXPERT_REVIEW_2026-08-02.md` §2(b) — *"restructure as gate + location"* —
 and is the correct response to a real measured pathology (77% held frames, self-fed BC collapse to
 1.8%).
 
@@ -604,7 +604,7 @@ and is the correct response to a real measured pathology (77% held frames, self-
   design and is *not* answered by the 2026-08-13 run (which is gated-only).
 - It **blocks Phase 3** (see 5.7).
 - Its supervision (`movement_event`) came from a target measured as **47.5% camera drift, not
-  commands** on the legacy `cursor` source (`docs/DATA_AUDIT_2026-08-12.md` finding 1 says 43.2%;
+  commands** on the legacy `cursor` source (`docs/archive/DATA_AUDIT_2026-08-12.md` finding 1 says 43.2%;
   the direct full-corpus count on 2026-08-12 was 47.5% — use the latter). `--movement-source clicks`
   fixes this; **verify which source each checkpoint used before comparing runs.**
 
@@ -658,7 +658,7 @@ Lineage: `7013f3a` set ±1.5 → `25bed26` set ±3.0.
 Dreamer 3's ±20 is a **Dreamer 3** fact, not a Dreamer 4 one. Any doc that says "paper uses −20..+20"
 is wrong on the paper (see §7).
 
-**Where it actually hurts:** `docs/DATA_AUDIT_2026-08-12.md` finding 12 measures **39 of 255 buckets
+**Where it actually hurts:** `docs/archive/DATA_AUDIT_2026-08-12.md` finding 12 measures **39 of 255 buckets
 used** — 85% of the head's capacity is wasted. The range is too *wide* for the realized reward
 distribution, not too narrow. The docstring's own "TUNE once real return magnitudes are seen" is now
 actionable.
@@ -674,12 +674,12 @@ HUD detail too weakly for probes (cross-game HP R²~0.16), so this forces game s
 trainable agent blocks straight from replay labels."*
 
 **Two independent reviews rate this a diagnostic, not a fix:**
-- `docs/TOKENIZER_REVIEW_2026-08-02.md` §3(G): *"Cannot exceed what frozen latents contain… do not
+- `docs/archive/TOKENIZER_REVIEW_2026-08-02.md` §3(G): *"Cannot exceed what frozen latents contain… do not
   read it as 'state recovered.'"*
-- `docs/EXPERT_REVIEW_2026-08-02.md` §2(c): *"Right instinct, wrong layer… scalar state as a direct
+- `docs/archive/EXPERT_REVIEW_2026-08-02.md` §2(c): *"Right instinct, wrong layer… scalar state as a direct
   input."*
 
-**Additionally, its targets are partly wrong.** `docs/DATA_AUDIT_2026-08-12.md` finding 4:
+**Additionally, its targets are partly wrong.** `docs/archive/DATA_AUDIT_2026-08-12.md` finding 4:
 `enemy_visible` is wrong on **29.6%** of frames (54.5% of positives wrong) and `enemy_hp_frac` is
 supervised off-screen; finding 11: `level` reads 19–20 → the level target exceeds 1.0 on 59 412
 frames. Treat aux numbers from any pre-2026-08-13 checkpoint as unreliable.
@@ -701,7 +701,7 @@ width is silent** — which is exactly what `enemy_visible` just did. Checkpoint
 The CLI **default is still 5.0** (`train_agent_finetune.py:136-138`) but **every production launcher
 passes `--ability-pos-weight 1.0`** (`scratchpad/launch_bc_gate_1060.sh:19`,
 `ops/bc5080_gate_watchdog.sh:28`). The 5.0 era is recorded in
-`E2E_STATUS_AND_PLAN_2026-07-22.md:19`: *"Even with pos_weight=5, BCE learns the marginal cast rate,
+`docs/archive/E2E_STATUS_AND_PLAN_2026-07-22.md:19`: *"Even with pos_weight=5, BCE learns the marginal cast rate,
 not the state-conditional 'cast now.'"*
 
 **Action item:** flip the default to 1.0 so the default and the practice agree. Right now a naive
@@ -709,7 +709,7 @@ re-launch silently changes the objective.
 
 ### 3.7 MTP length — NOT-A-DEVIATION
 
-`--mtp-length 9` = 9 heads = `n ∈ {0..8}` = paper's `L=8`. Correct. (`docs/DREAMERV4_AUDIT.md`'s
+`--mtp-length 9` = 9 heads = `n ∈ {0..8}` = paper's `L=8`. Correct. (`docs/archive/DREAMERV4_AUDIT.md`'s
 claim of `mtp_length=8 default` is stale.)
 
 ### 3.8 Threshold cast decoding — REVERTED / superseded
@@ -718,7 +718,7 @@ Added in `0b9d2a6` ("casting: probe proves it's a calibration bug + add threshol
 only on the `temperature == 0` greedy branch of `agent_infer.py:229-230` with `ability_thresh=0.0`
 (= sigmoid 0.5). **The live entrypoint defaults to `--temperature 1.0`**
 (`scripts/play_live.py:309`), i.e. Bernoulli sampling — which is what
-`docs/EXPERT_REVIEW_2026-08-02.md` §2(a) recommended. The threshold path is a demo/debug artifact.
+`docs/archive/EXPERT_REVIEW_2026-08-02.md` §2(a) recommended. The threshold path is a demo/debug artifact.
 
 ---
 
@@ -862,7 +862,7 @@ Sensible for a frozen backbone and matches the live-inference regime — but the
 
 Reason recorded: *"Breaks the learned copy-of-own-history shortcut so self-fed inference doesn't
 collapse"* — the fix for the measured 1.8% self-fed collapse
-(`docs/EXPERT_REVIEW_2026-08-02.md` §1c). Not in the paper.
+(`docs/archive/EXPERT_REVIEW_2026-08-02.md` §1c). Not in the paper.
 
 ### 4.5 No task conditioning — FORCED, impact LOW
 
@@ -877,7 +877,7 @@ needs steering.
 One `ReplayLatentSequenceDataset`, fixed-stride windows, `VideoGroupedSampler` shuffling only for
 cache locality. No relevance weighting, no episode filtering. Paper §4.1's mixture exists precisely
 to *"amplify the signal in the dataset during behavior cloning, reward modeling, and reinforcement
-learning"* — and our rewards are sparse (last-hits). `docs/DREAMERV4_AUDIT.md` has flagged this as
+learning"* — and our rewards are sparse (last-hits). `docs/archive/DREAMERV4_AUDIT.md` has flagged this as
 missing since January; it is still missing.
 
 Held-out split *is* present and correct: whole-game, deterministic, `--val-games 6` default.
@@ -923,7 +923,7 @@ backbone never got the shortcut finetune (README:20, 97). Paper §3.2 dreams at 
 `imagine()` (`train_imagination.py:199-310`) additionally re-runs a **full forward over the whole
 window** *and* a fresh `rollout()` prefill at every step, i.e. **O(H²)** in the horizon.
 
-`docs/EXPERT_REVIEW_2026-08-02.md` §1d states the consequence bluntly: *"at K=64, H=8–10, O(H²) on
+`docs/archive/EXPERT_REVIEW_2026-08-02.md` §1d states the consequence bluntly: *"at K=64, H=8–10, O(H²) on
 one 5080 you get a few thousand gradient steps of RL against a 0.5s-coherent simulator. That is noise
 injection, not policy improvement."* **The shortcut finetune is a prerequisite for Phase 3, not an
 optimization.**
@@ -939,7 +939,7 @@ optimization.**
 The interaction is the problem: at H=8 with γ=0.997, ≈97% of the λ-return is the **bootstrapped
 value**, trained inside the same 0.5 s dreams, from a reward head whose magnitude calibration is
 R²≈0.06. Sparse events (deaths) essentially never materialize inside an 8-frame dream. Flagged in
-`docs/EXPERT_REVIEW_2026-08-02.md` §2(d).
+`docs/archive/EXPERT_REVIEW_2026-08-02.md` §2(d).
 
 ### 5.4–5.6 Smaller deviations
 
@@ -1003,7 +1003,7 @@ update the policy and value heads"* (§3.3). The **trainer** freezes the reward 
 
 | Item | ahriuwu | Verdict |
 |---|---|---|
-| Action-labeled | **49.4 h** / 125 matches with both frames and latents (3 554 768 label frames; `docs/DATA_AUDIT_2026-08-12.md` scope line). Full replay corpus is 147 games / ~58 h | 6.1 |
+| Action-labeled | **49.4 h** / 125 matches with both frames and latents (3 554 768 label frames; `docs/archive/DATA_AUDIT_2026-08-12.md` scope line). Full replay corpus is 147 games / ~58 h | 6.1 |
 | Unlabeled | **~450 h YouTube available, 0 h used** in dynamics training. Tokenizer v7 is also replays-only (~54 h) | 6.2 |
 | Ratio | unlabeled : labeled = **0 : 1** vs the paper's ≈ **25 : 1** | 6.2 |
 | Resolution | 352×352 squished from 1280×720, 20 FPS | 6.4 |
@@ -1024,10 +1024,10 @@ needs only a sliver of actions. We run at 0:1.
 Recorded reason: a YT-mixed retrain re-introduced black-HUD contamination and was discarded
 (README:32). Two independent reviews call the *permanence* of that decision wrong:
 
-- `docs/EXPERT_REVIEW_2026-08-02.md` §1e: *"Wrong as a permanent decision, accidentally right this
+- `docs/archive/EXPERT_REVIEW_2026-08-02.md` §1e: *"Wrong as a permanent decision, accidentally right this
   quarter. Contamination is preprocessing-fixable (HUD masking/cropping)… stop citing the mixed-retrain
   eval as evidence."*
-- `docs/TOKENIZER_REVIEW_2026-08-02.md:131-135`: DATA is one of only two evidence-backed levers left
+- `docs/archive/TOKENIZER_REVIEW_2026-08-02.md:131-135`: DATA is one of only two evidence-backed levers left
   (the other is the objective); *"the 450h YT never entered tokenizer training (needs the HUD masking
   fix)."*
 
@@ -1038,7 +1038,7 @@ principled exclusion** — and the doc record should say so.
 
 #### 6.3 HUD-off replays vs HUD-on live capture — ACCIDENTAL, impact **HIGH**
 
-`docs/DATA_AUDIT_2026-08-12.md` finding 14: *"Train/deploy gap: training frames have **no HUD**, live
+`docs/archive/DATA_AUDIT_2026-08-12.md` finding 14: *"Train/deploy gap: training frames have **no HUD**, live
 capture does"* — 0 static pixels in training frames. The tokenizer has never seen the HUD it will be
 handed at inference, and the HUD occupies 34.09% of the frame per `scratchpad/hud_valid_mask_352.pt`.
 Nothing about this is a paper deviation *per se* (the paper's train and eval distributions match) —
@@ -1046,7 +1046,7 @@ it is a domain-transfer defect that the paper's setup simply doesn't have.
 
 #### 6.4 352×352 squish — FORCED, impact MED
 
-Aspect-destroying resize from 1280×720. `docs/DATA_AUDIT_2026-08-12.md` **refutes** the theory that
+Aspect-destroying resize from 1280×720. `docs/archive/DATA_AUDIT_2026-08-12.md` **refutes** the theory that
 the squish is what kills minion HP bars (squish-352: 9/10 bars detected vs letterbox-352: 4/10); the
 real cost is total resolution (3.64× horizontal downsample), which is 1.4 above.
 
@@ -1062,14 +1062,14 @@ A python-regex sweep of `scratchpad/dreamer4_text.txt` was used for each.
 | *"Linear warmup + cosine decay to 0 (**DreamerV4 §3.4 recipe**)"* | `src/ahriuwu/utils/training.py:303` | **UNVERIFIED.** §3.4 is "Efficient Transformer" and contains no LR schedule. The words `cosine`, `learning rate`, `warmup`, `schedule` (as an LR schedule) do not appear in the paper at all. |
 | *"cosine (warmup→cosine-to-0, **paper-faithful**)"* | `src/ahriuwu/utils/training.py:204` | **UNVERIFIED.** Same. |
 | *"AdamW (beta1, beta2). **DreamerV4 paper uses defaults (0.9, 0.999)**."* | `src/ahriuwu/utils/training.py:212` | **UNVERIFIED.** The paper never names an optimizer. The only `Adam` matches in the text are bibliography author names. |
-| *"Bucket range −20 to +20 (255 buckets) ✅ **Matches**"* | `docs/DREAMERV4_AUDIT.md:268` | **UNVERIFIED as a paper claim** (±20 is Dreamer **3**) **and factually wrong about the code** (we use ±3). |
-| *"λ-returns with γ=0.997, **λ=0.95**" listed under "Matches Paper"* | `docs/DREAMERV4_AUDIT.md:431` | **UNVERIFIED.** The paper never states λ. (The same doc correctly lists λ under "Paper Unknowns" at `:287` — it contradicts itself.) |
+| *"Bucket range −20 to +20 (255 buckets) ✅ **Matches**"* | `docs/archive/DREAMERV4_AUDIT.md:268` | **UNVERIFIED as a paper claim** (±20 is Dreamer **3**) **and factually wrong about the code** (we use ±3). |
+| *"λ-returns with γ=0.997, **λ=0.95**" listed under "Matches Paper"* | `docs/archive/DREAMERV4_AUDIT.md:431` | **UNVERIFIED.** The paper never states λ. (The same doc correctly lists λ under "Paper Unknowns" at `:287` — it contradicts itself.) |
 | *"lambda_: TD(λ) parameter (**paper uses 0.95**)"* | `src/ahriuwu/models/returns.py:155` | **UNVERIFIED.** Same. |
 | *"freeze_reward: If False (default), reward head stays unfrozen (**paper trains reward head during imagination too**)"* | `src/ahriuwu/models/heads.py:596-597` | **CONTRADICTED.** §3.3: *"We **only** update the policy and value heads and keep the transformer frozen."* The trainer does the right thing; only the docstring is wrong. |
 | *"tokenizer regularized for predictability"* | historical claim, per the task brief | **CONTRADICTED.** Eq 5 is reconstruction only: MSE + 0.2·LPIPS. No latent regularizer of any kind exists in the paper or in `losses.py`. |
-| *"3 space layers per 1 time layer"* attributed to the paper | `docs/DREAMERV4_AUDIT.md:164` | **PARAPHRASE, not a quote.** The paper says *"only use temporal attention once every 4 layers"* (§3.4) — same ratio, different framing. Harmless but don't quote it as paper text. |
-| *"Ramp weight… `ramp_weight(tau) = 1.0 − 0.9 * tau` (inverted convention) ✅ Matches"* | `docs/DREAMERV4_AUDIT.md:212` | **STALE + WRONG.** Current code is `0.9 * tau + 0.1` (`diffusion.py:218`) — literally Eq 8. |
-| *"τ² scaling \| `tau_weight = tau_idx ** 2` \| ✅ Matches"* | `docs/DREAMERV4_AUDIT.md:228` | **STALE + WRONG.** Paper Eq 7 uses `(1−τ)²`, not `τ²`, and the current code uses neither (x-space, see 2.3). |
+| *"3 space layers per 1 time layer"* attributed to the paper | `docs/archive/DREAMERV4_AUDIT.md:164` | **PARAPHRASE, not a quote.** The paper says *"only use temporal attention once every 4 layers"* (§3.4) — same ratio, different framing. Harmless but don't quote it as paper text. |
+| *"Ramp weight… `ramp_weight(tau) = 1.0 − 0.9 * tau` (inverted convention) ✅ Matches"* | `docs/archive/DREAMERV4_AUDIT.md:212` | **STALE + WRONG.** Current code is `0.9 * tau + 0.1` (`diffusion.py:218`) — literally Eq 8. |
+| *"τ² scaling \| `tau_weight = tau_idx ** 2` \| ✅ Matches"* | `docs/archive/DREAMERV4_AUDIT.md:228` | **STALE + WRONG.** Paper Eq 7 uses `(1−τ)²`, not `τ²`, and the current code uses neither (x-space, see 2.3). |
 
 ### Paper facts that are genuinely unspecified (don't invent them)
 
@@ -1084,7 +1084,7 @@ fine — just never label them "paper-faithful."
 
 | Thing | Verdict | Where |
 |---|---|---|
-| **256×32 bottleneck** and its "+7 dB" evidence | Retracted. Paper shape **is** 512×16 (Appendix A); the +7 dB was an overfit artifact, real gap ~+1 dB early-training | `docs/TOKENIZER_REVIEW_2026-08-02.md:114-122`; `slurm/slurm_v7_trial.sbatch` |
+| **256×32 bottleneck** and its "+7 dB" evidence | Retracted. Paper shape **is** 512×16 (Appendix A); the +7 dB was an overfit artifact, real gap ~+1 dB early-training | `docs/archive/TOKENIZER_REVIEW_2026-08-02.md:114-122`; `slurm/slurm_v7_trial.sbatch` |
 | **`--ability-pos-weight 5.0`** | Superseded by 1.0 in every launcher; 5.0 is still the CLI default (fix this) | §3.6 |
 | **Threshold-based greedy cast decoding** | Superseded by Bernoulli sampling (`--temperature 1.0` is the live default) | §3.8 |
 | **Horizon-ramped context-heavy τ schedule** | Fixed in `8212365`; now iid U(0,1) per frame | §2.17 |
@@ -1092,7 +1092,7 @@ fine — just never label them "paper-faithful."
 | **Cosine LR schedule** | Dropped for WSD constant in `08fc474`; the "paper-faithful" label on the cosine path is wrong either way | §7 |
 | **Twohot range ±1.5** | Widened to ±3.0 in `25bed26`; measured usage is 39/255 buckets, so ±3 is now too wide | §3.4 |
 | **Additive τ/step conditioning** | Added `3eba0e1`, **reverted `eb38863`**, re-added `48541ba`, split per-signal `7ae518d`. Currently ON, deliberately | §2.4 |
-| **CNN tokenizer baseline** | Deleted in `737444b`; transformer won | `docs/TOKENIZER_REVIEW_2026-08-02.md:11` |
+| **CNN tokenizer baseline** | Deleted in `737444b`; transformer won | `docs/archive/TOKENIZER_REVIEW_2026-08-02.md:11` |
 | **YT-mixed dynamics retrain** | Discarded over black-HUD contamination; the `--exclude-blacked-regions` fix now exists and the exclusion should be revisited, not treated as settled | §6.2 |
 
 ---
@@ -1102,12 +1102,12 @@ fine — just never label them "paper-faithful."
 | Doc | Status |
 |---|---|
 | **This file** | Current. Verified 2026-08-12 against code, checkpoint args, and the paper text. |
-| `DYNAMICS_VS_PAPER.md` | **Best-cited paper transcription in the repo** — use it for verbatim paper quotes. **Stale on two points**: its §1.5 (τ schedule) and §1.9 (independent frames) describe pre-`8212365` behaviour, both since fixed. Its "job 124" config also predates the shipped `gs8775` checkpoint (which uses betas 0.9/0.999 and 8-bit Adam, not 0.9/0.95). |
-| `docs/TOKENIZER_REVIEW_2026-08-02.md` | Current and measurement-backed. Read the 2026-08-05 correction addendum — it retracts §1's "faithfulness override" framing and Option D. |
-| `docs/EXPERT_REVIEW_2026-08-02.md` | Current opinion piece; its measured claims (77% held frames, R² 0.16, 49h/450h) all check out. |
-| `docs/DATA_AUDIT_2026-08-12.md` | Current, the most rigorously measured doc here. Supersedes older claims about the movement target, aux targets, bucket usage, and aspect ratio. |
-| `docs/DREAMERV4_AUDIT.md` | **STALE — do not cite.** Written 2026-01-28. Wrong on: action space (says 18 directions / 8 abilities; actual 21×21 bins / 9 abilities), resolution (256×256 vs 352×352), bucket range (−20..+20 vs ±3), `mtp_length` default (8 vs 9), ramp-weight sign, bootstrap τ² scaling, and "PMPO / behavioral prior / rollouts not implemented" (all implemented in `d63bcbe`). Its §7 fabrications are catalogued above. |
-| `DYNAMICS_REVIEW.md` | Mostly current on architecture; its §6.7 "context-heavy τ schedule" is stale (fixed), and §4.3's betas (0.9, 0.95) disagree with the shipped checkpoint (0.9, 0.999). |
+| `docs/archive/DYNAMICS_VS_PAPER.md` | **Best-cited paper transcription in the repo** — use it for verbatim paper quotes. **Stale on two points**: its §1.5 (τ schedule) and §1.9 (independent frames) describe pre-`8212365` behaviour, both since fixed. Its "job 124" config also predates the shipped `gs8775` checkpoint (which uses betas 0.9/0.999 and 8-bit Adam, not 0.9/0.95). |
+| `docs/archive/TOKENIZER_REVIEW_2026-08-02.md` | Current and measurement-backed. Read the 2026-08-05 correction addendum — it retracts §1's "faithfulness override" framing and Option D. |
+| `docs/archive/EXPERT_REVIEW_2026-08-02.md` | Current opinion piece; its measured claims (77% held frames, R² 0.16, 49h/450h) all check out. |
+| `docs/archive/DATA_AUDIT_2026-08-12.md` | Current, the most rigorously measured doc here. Supersedes older claims about the movement target, aux targets, bucket usage, and aspect ratio. |
+| `docs/archive/DREAMERV4_AUDIT.md` | **STALE — do not cite.** Written 2026-01-28. Wrong on: action space (says 18 directions / 8 abilities; actual 21×21 bins / 9 abilities), resolution (256×256 vs 352×352), bucket range (−20..+20 vs ±3), `mtp_length` default (8 vs 9), ramp-weight sign, bootstrap τ² scaling, and "PMPO / behavioral prior / rollouts not implemented" (all implemented in `d63bcbe`). Its §7 fabrications are catalogued above. |
+| `docs/archive/DYNAMICS_REVIEW.md` | Mostly current on architecture; its §6.7 "context-heavy τ schedule" is stale (fixed), and §4.3's betas (0.9, 0.95) disagree with the shipped checkpoint (0.9, 0.999). |
 | `README.md` | Current as of 2026-08-01 and honest about measurement quality. |
 
 ---

@@ -1,7 +1,7 @@
 # Is the solo-gold reward worth doing RL against?
 
 **Date:** 2026-08-27. **Scope:** the reward *signal*, not its twohot representation
-(the bucketing defect in `docs/WIRING_AUDIT_2026-08-20.md` §1.6 is a separate item and
+(the bucketing defect in `docs/archive/WIRING_AUDIT_2026-08-20.md` §1.6 is a separate item and
 is assumed fixed throughout). **Question:** if Phase 3 ran perfectly tomorrow against
 this reward, would it learn to play Garen better?
 

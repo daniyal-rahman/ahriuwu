@@ -53,7 +53,7 @@ bump** (see §6).
 
 ### 2.1 Geometry: three traps, each measured
 
-The probe in `docs/DECISION0_REPLICATION.md` works in **world** space
+The probe in `docs/archive/DECISION0_REPLICATION.md` works in **world** space
 (`atan2(z − hero_z, x − hero_x)`). The trainer only has **screen**-space targets.
 Three corrections turn one into the other, each verified on real click events.
 

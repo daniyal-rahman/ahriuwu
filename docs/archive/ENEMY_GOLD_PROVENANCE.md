@@ -19,7 +19,7 @@ LIKELY (I read the code), or SPECULATIVE.
 updated every frame regardless of camera or fog. It is not a held value.**
 CONFIRMED.
 
-`docs/DESIGN_DECISIONS.md` §1's original claim — that a gold-diff reward "needs
+`docs/archive/DESIGN_DECISIONS.md` §1's original claim — that a gold-diff reward "needs
 the opponent resolved **and visible**, which fails exactly when the opponent
 leaves screen" — is **false for the schema that produced this corpus**. It was
 already false on the day it was written: the screen-space gate was deleted from
@@ -457,7 +457,7 @@ a data-integrity problem.
 
 ## 8. What this changes
 
-1. **`docs/DESIGN_DECISIONS.md` §1's visibility objection is dead.** It was
+1. **`docs/archive/DESIGN_DECISIONS.md` §1's visibility objection is dead.** It was
    describing a schema deleted three months before the doc was written. The
    correction already in that file stands; the coverage figure should read
    **99.880%**, and the sharper statement is that opponent coverage *equals own

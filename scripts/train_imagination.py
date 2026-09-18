@@ -133,7 +133,7 @@ def parse_args():
                              "shortcut_forcing=False so only d=1 was ever trained. Every "
                              "dreamed frame was generated under an untrained step "
                              "embedding. Measured: matching them cuts rollout NMSE 12-15% "
-                             "for free (docs/DREAM_FIDELITY.md).")
+                             "for free (docs/archive/DREAM_FIDELITY.md).")
     parser.add_argument("--tau-ctx", type=float, default=0.1,
                         help="Context corruption WIDTH for rollout: context tau ~ U(1-tau_ctx, 1).")
     # Dynamics arch flags (must match the checkpoint)

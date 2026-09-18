@@ -210,7 +210,7 @@ discipline.**
 dated working notes, several superseded by the (excellent, measured) README. docs/ meanwhile mixes
 current (`VAST.md`, `DATASETS.md`, `PREEMPTION.md`) with OCR-era (`click_detection_test_guide.md`,
 `QUICK_START_CLICK_TEST.md`, `replay_movement_extraction.md`) with no index.
-**Fix sketch:** root keeps `README.md`, `CLAUDE.md`, `INFERENCE_RUNBOOK.md`, `pyproject.toml`;
+**Fix sketch:** root keeps `README.md`, `CLAUDE.md`, `docs/archive/INFERENCE_RUNBOOK.md`, `pyproject.toml`;
 everything dated moves to `docs/notes/` (they're history — the verify/ report and audits_legacy
 pattern shows you already know how to do this); add a 15-line index to `docs/` separating
 "current ops" from "historical". Also: `pyproject.toml` still depends on `easyocr` (OCR era) —

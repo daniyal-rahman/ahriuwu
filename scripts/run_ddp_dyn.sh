@@ -6,7 +6,7 @@
 #
 # Consumer Blackwell/Ada cards have NO working GPU P2P -> NCCL host-stages via
 # host RAM. Init on a no-NVLink box can take MINUTES; the trainer uses a 20-min
-# init timeout — never gate readiness on a short external clock (docs/VAST.md §4).
+# init timeout — never gate readiness on a short external clock (docs/archive/VAST.md §4).
 #
 # Override via env: NGPU, LATENTS_DIR, CHECKPOINT_DIR, LABELS_ROOT, RESUME,
 #                   NUM_WORKERS, NCCL_SHM_DISABLE, COMPILE, WANDB_MODE

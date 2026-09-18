@@ -3,8 +3,8 @@
 **Date:** 2026-08-27. **Scope:** the *content* of the lane opponent's
 `visible_heroes[opp].gold_total` in `labels.json` — not whether the field is
 populated (that was already checked) but whether the numbers in it are a live
-per-event read. **Trigger:** `docs/REWARD_SIGNAL_VIABILITY.md` (7f0e06a) and the
-2026-08-27 CORRECTION in `docs/DESIGN_DECISIONS.md` §1 recommend flipping the
+per-event read. **Trigger:** `docs/archive/REWARD_SIGNAL_VIABILITY.md` (7f0e06a) and the
+2026-08-27 CORRECTION in `docs/archive/DESIGN_DECISIONS.md` §1 recommend flipping the
 reward to zero-sum gold-diff (`use_solo_gold=False`) on the strength of
 "present on 99.81% of frames". *Present* and *correct* are different claims.
 Only the first had been tested.

@@ -3,7 +3,7 @@
 
 Fits a probe for champion world position on REAL v7 latents (train games only),
 then reads that probe on the IMAGINED latents at each horizon step. The metric is
-the one docs/DECISION0_SIGNAL_PRESENT.md uses so the numbers are comparable:
+the one docs/archive/DECISION0_SIGNAL_PRESENT.md uses so the numbers are comparable:
 two independent 21-way softmax heads over (x, z) world position mapped
 [-120, 15120] -> [0,1] -> 21 bins; cross-entropy summed over both heads, in nats.
 Uniform = 2*ln(21) = 6.089.

@@ -40,7 +40,7 @@
 > per-frame at p=0.15, never for a whole window. It measurably works; it is a
 > workaround, not the retrain.
 >
-> Detail: `docs/MOVEMENT_HEAD_BLIND_2026-08-26.md`, both CORRECTION sections.
+> Detail: `docs/archive/MOVEMENT_HEAD_BLIND_2026-08-26.md`, both CORRECTION sections.
 >
 > **Also known and NOT fixed:** the live HUD shifts latents 2.6–5.2× a normal
 > frame-to-frame step (the corpus is HUD-free), and ~43% of the model's walk-out

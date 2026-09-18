@@ -370,7 +370,7 @@ HARD, `train_agent_finetune.py:294` now enables it conditionally on `--unfreeze-
 | **`use_game_time`** — bucketed game-clock embedding with dropout | `dynamics.py:487-489` | Harmless; OFF in the production checkpoint, so currently inert. |
 | **`pixel_hud_loss`** — HUD-masked pixel loss through the decoder | dynamics lineage | Domain-specific, not in the production checkpoint. |
 | **8-bit AdamW** | `utils/training.py:277-280` | Forced by VRAM. Unvalidated axis (§1.3). |
-| **Live deployment path** (HID gadget, preflight, provenance stamping) | `scripts/play_live.py`, `docs/DEMO_RUNBOOK.md` | **Genuinely ahead of the field.** No reference repo has a deployment story at all. See §1.8. |
+| **Live deployment path** (HID gadget, preflight, provenance stamping) | `scripts/play_live.py`, `docs/archive/DEMO_RUNBOOK.md` | **Genuinely ahead of the field.** No reference repo has a deployment story at all. See §1.8. |
 
 The first two exist because League's action space is *event-driven at 20 fps* — a structural property
 of the domain that Minecraft, Atari and DMC do not have. INFERENCE: these are the right kind of
@@ -552,7 +552,7 @@ Applying the same criteria used in Part 2 to ourselves, honestly.
 
 HARD on the ahriuwu column throughout: `utils/training.py:341-404` (checkpoint contents, `_git_info`,
 atomic tmp+`os.replace` at `:399-402` with the 2026-06-03 corruption it was written for);
-`pyproject.toml` (lower bounds only); `docs/DEMO_RUNBOOK.md:111, 238, 254` (provenance gates);
+`pyproject.toml` (lower bounds only); `docs/archive/DEMO_RUNBOOK.md:111, 238, 254` (provenance gates);
 and a repo-wide scan of every `add_argument` dest against its readers, which found exactly one
 never-read knob, `train_dynamics.py:494-497`, whose own help string says *"Legacy OCR features dir
 (unused by the replay action path)"*.
@@ -590,7 +590,7 @@ never-read knob, `train_dynamics.py:494-497`, whose own help string says *"Legac
   cost minutes to run on push.
 - **No dependency pinning.** `pyproject.toml` has lower bounds and no lockfile, on a project that has
   already been bitten by version-specific behaviour (`torch.compile` on Blackwell sm_120,
-  `docs/VAST.md` §4). danijar's issue #175 is the cautionary tale: an `ale-py` minor-version bump
+  `docs/archive/VAST.md` §4). danijar's issue #175 is the cautionary tale: an `ale-py` minor-version bump
   silently broke reproduction across 26 games and took an external contributor a full sweep to find.
 - **Test-in-`scripts/`.** `scripts/test_agent_infer.py` and `scripts/test_kv_cache.py` are tests
   living outside `tests/`, so `pytest` never collects them.

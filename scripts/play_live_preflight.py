@@ -242,7 +242,7 @@ def main():
                 raise RuntimeError(
                     f"only {fps:.1f} NEW frames/s ({n_new}/{n_iter} polls fresh). The model's "
                     f"16-frame context would fill with duplicates and the agent would stand "
-                    f"still. Raise the Windows ffmpeg -framerate (see docs/DEMO_RUNBOOK.md).")
+                    f"still. Raise the Windows ffmpeg -framerate (see docs/archive/DEMO_RUNBOOK.md).")
             if mean < 0.04:
                 raise RuntimeError(f"stream is essentially black (mean {mean:.3f}) — "
                                    f"is the game actually on the captured screen?")
@@ -337,7 +337,7 @@ def main():
         print(f"WARNINGS (non-blocking): {', '.join(warn)}")
     if crit_fail:
         print(f"=== PREFLIGHT FAILED: {', '.join(crit_fail)} ===")
-        print("Do NOT start a live session until these pass. See docs/DEMO_RUNBOOK.md.")
+        print("Do NOT start a live session until these pass. See docs/archive/DEMO_RUNBOOK.md.")
         sys.exit(1)
     print("=== ALL CRITICAL CHECKS PASSED ===")
     sys.exit(0)

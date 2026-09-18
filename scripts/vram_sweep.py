@@ -4,7 +4,7 @@
 shapes, not values) + the real frozen v7 tokenizer for the pixel-HUD decode path.
 Emits a markdown table (--out) for the experiment doc.
 
-Run: PYTHONPATH=src python scripts/vram_sweep.py --tokenizer <v7.pt> --hud-mask <mask.pt> --out VRAM_SWEEP.md
+Run: PYTHONPATH=src python scripts/vram_sweep.py --tokenizer <v7.pt> --hud-mask <mask.pt> --out docs/archive/VRAM_SWEEP.md
 """
 import argparse, sys, time, traceback
 import torch
@@ -37,7 +37,7 @@ def main():
     ap.add_argument("--tokenizer", default="rollout_stage/transformer_tokenizer_latest.pt")
     ap.add_argument("--hud-mask", default="scratchpad/hud_valid_mask_352.pt")
     ap.add_argument("--pixel-frames", type=int, default=4)
-    ap.add_argument("--out", default="VRAM_SWEEP.md")
+    ap.add_argument("--out", default="docs/archive/VRAM_SWEEP.md")
     args = ap.parse_args()
     dev = "cuda"
     name = torch.cuda.get_device_name(0)

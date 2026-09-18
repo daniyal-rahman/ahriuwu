@@ -61,13 +61,13 @@ frame level to learn from. **Do not treat the current reward head as a reward mo
 
 > ### CORRECTION 2026-08-27 — both claims above are measured FALSE
 >
-> Two independent investigations (`docs/REWARD_MODEL_INVESTIGATION.md` ffc9f98,
-> `docs/REWARD_SIGNAL_VIABILITY.md` 7f0e06a) overturn this section's two
+> Two independent investigations (`docs/archive/REWARD_MODEL_INVESTIGATION.md` ffc9f98,
+> `docs/archive/REWARD_SIGNAL_VIABILITY.md` 7f0e06a) overturn this section's two
 > load-bearing statements. Both had steered real decisions.
 >
 > **1. "C needs the opponent resolved AND VISIBLE" is false.** Two independent
 > investigations confirmed this with disjoint methods
-> (`docs/ENEMY_GOLD_VALIDATION.md` e7bd225, `docs/ENEMY_GOLD_PROVENANCE.md`
+> (`docs/archive/ENEMY_GOLD_VALIDATION.md` e7bd225, `docs/archive/ENEMY_GOLD_PROVENANCE.md`
 > a547c39), n=146 matches / 4,176,465 frames.
 >
 > `visible_heroes` carries **exactly 10 entries on 100.000000%** of the

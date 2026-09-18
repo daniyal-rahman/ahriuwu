@@ -102,9 +102,9 @@ re-admission, 256×32 reshape) — at which point B+C are free and mandatory.
   hp_frac **R² ≥ 0.6** on the new latents + human montage check. Only then re-encode → dynamics
   retrain → BC restart.
 
-Evidence base: `GROUNDING_2026-07-29.md`, `docs/EXPERT_REVIEW_2026-08-02.md`,
+Evidence base: `docs/archive/GROUNDING_2026-07-29.md`, `docs/archive/EXPERT_REVIEW_2026-08-02.md`,
 `slurm/slurm_tok_train_v7.sbatch` (Step-5 note), `scratchpad/probe_mlp.log`,
-`scratchpad/hp_fulldim.txt`, `scratchpad/mask_spatial_test.py`, `docs/rofl_hp_decoder_v1.md`,
+`scratchpad/hp_fulldim.txt`, `scratchpad/mask_spatial_test.py`, `docs/archive/rofl_hp_decoder_v1.md`,
 uncommitted diffs in the parallel tokenizer session.
 
 ---

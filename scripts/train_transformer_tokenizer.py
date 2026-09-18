@@ -349,7 +349,7 @@ def parse_args():
              "video MAE (VideoMAE et al.). It was nevertheless defaulted ON without "
              "measurement, and the measured COST is that a tube-masked region is "
              "unpredictable from any frame, so the loss-optimal output is a generic mean --- "
-             "the HP-bar hallucination in docs/TOKENIZER_REVIEW_2026-08-02.md. Pass "
+             "the HP-bar hallucination in docs/archive/TOKENIZER_REVIEW_2026-08-02.md. Pass "
              "--tube-masking to A/B it against the paper default.",
     )
     parser.add_argument(

@@ -399,7 +399,7 @@ LEGACY_MOVEMENT_SOURCE = "cursor"
 # `bc_movement` (the gated loss) CANNOT: hold frames are algebraically capped at
 # -log(1-g) = 0.116 nats and contribute <=14% of it, so it is dominated by the
 # gate. It fell 0.871 -> 0.727 over 100k steps while the head learned NOTHING
-# from pixels (docs/MOVEMENT_HEAD_BLIND_2026-08-26.md).
+# from pixels (docs/archive/MOVEMENT_HEAD_BLIND_2026-08-26.md).
 #
 # All four numbers are the SAME quantity: the movement CATEGORICAL cross-entropy
 # in nats, summed over the two axes, at MTP offset n=1, on EVENT frames only
@@ -429,7 +429,7 @@ MOVE_CE_DEPLOYED = 4.1212     # data/phase2_bc_clicks/agent_finetune_latest.pt (
                               # zero vision. A run scoring ~4.2 has cleared NOTHING.
 
 # --- SECONDARY: the 3-game measurement quoted in the doc --------------------
-# docs/MOVEMENT_HEAD_BLIND_2026-08-26.md, ~1,800 frames / ~190 events, SE ~0.12.
+# docs/archive/MOVEMENT_HEAD_BLIND_2026-08-26.md, ~1,800 frames / ~190 events, SE ~0.12.
 # Do NOT judge a 6-game val run against these.
 MOVE_CE_MARGINAL_3G = 5.216
 MOVE_CE_BLIND_TABLE_3G = 4.357
@@ -792,7 +792,7 @@ def blind_table_bar(dataset, train_vids, val_vids, movement_bins, laplace=0.5):
 # way), so uniform chance understates the null by ~3 points and would manufacture
 # significance out of nothing.
 #
-# Reference points, all from docs/DECISION0_REPLICATION.md, six held-out games:
+# Reference points, all from docs/archive/DECISION0_REPLICATION.md, six held-out games:
 #   ridge on ONE frozen v7 latent frame, no previous click:  37.8%  (null 15.4%)
 #   uniform chance (WRONG null, do not use):                 12.5%
 #   best constant direction per game (oracle):               20.3%
