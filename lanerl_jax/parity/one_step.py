@@ -874,6 +874,22 @@ def run_one_step_differential(
 
     patch = patch or load_patch()
     params = lane_params(patch)
+    if max_pairs is not None and pair_start == 0:
+        # `max_pairs` bounded the WORK but not the MEMORY: both
+        # `replay_wave_states` and `align_action_log` below walk the whole
+        # trace, and they ran before the cap was applied to the loop bound.
+        # That is survivable on the 115 MB idle fixture gate 1 has always used
+        # and is not on a 537 MB driven one -- which OOM-killed a 28 GB job
+        # with `--max-pairs 6000` set, i.e. the flag that exists to make a
+        # trace affordable could not.
+        #
+        # Truncating here is exactly equivalent for a shard starting at pair 0,
+        # because pairs beyond the cap are never evaluated. It is deliberately
+        # NOT done for a non-zero `pair_start`: this function's contract is
+        # that a shard still sees the real preceding snapshots, so that
+        # hidden-state recovery and wave replay start from episode zero and
+        # independently evaluated shards equal one serial pass.
+        trace = list(trace)[:max_pairs + 1]
     wave_states = replay_wave_states(trace)
     lane_path = jnp.asarray(np.asarray(TOP_LANE_PATH, np.float32))
     action_at_snapshot = {}
