@@ -30,6 +30,7 @@ __all__ = [
     "MAX_CAST_CIRCLE_LINE_STEPS",
     "MAX_CAST_CIRCLE_SPAN_CELLS",
     "map1_terrain",
+    "row_prefix",
     "is_walkable",
     "cast_circle_blocked",
     "closest_terrain_exit",
@@ -52,6 +53,11 @@ class TerrainGrid(NamedTuple):
     cell_size: float
     min_x: float
     min_y: float
+    #: ``(height, width + 1)`` exclusive prefix sum of ``walkable`` along x.
+    #: Purely derived -- see :func:`row_prefix` -- and carried on the grid so
+    #: it is built once instead of per call.  ``None`` is valid; small
+    #: fixtures let it be recomputed.
+    walkable_prefix: jax.Array | None = None
 
 
 # Map1 has 50-unit cells and the largest currently loaded pathfinding radius
@@ -64,11 +70,13 @@ MAX_TERRAIN_RADIUS_CELLS = 2
 # mistaking a non-exit for a valid result.
 MAX_TERRAIN_EXIT_STEPS = 4096
 
-# ``LocalRouteTable`` bounds a goal to +/-50 cells and endpoint anchoring adds
+# # ``LocalRouteTable`` bounds a goal to +/-50 cells and endpoint anchoring adds
 # at most three.  A source ``CastCircle`` line therefore has <256 iterator
-# turns and its whole swept bounding box fits in 128 cells on either axis.
-# These are correctness bounds: callers receive ``exhausted`` and must fail
-# closed rather than declaring an uninspected segment visible.
+# turns and spans <128 cells on the y axis.  These are correctness bounds:
+# callers receive ``exhausted`` and must fail closed rather than declaring an
+# uninspected segment visible.  There is deliberately no x bound: the interior
+# test reads whole rows out of the prefix table, so a wide row costs nothing
+# and needs no window.
 MAX_CAST_CIRCLE_LINE_STEPS = 256
 MAX_CAST_CIRCLE_SPAN_CELLS = 128
 
@@ -83,12 +91,32 @@ def map1_terrain() -> TerrainGrid:
     from lanerl_jax.data.navgrid import NavGrid
 
     grid = NavGrid.load()
+    walkable = jnp.asarray(grid.walkable_mask())
     return TerrainGrid(
-        walkable=jnp.asarray(grid.walkable_mask()),
+        walkable=walkable,
         cell_size=float(grid.cell_size),
         min_x=float(grid.min_grid[0]),
         min_y=float(grid.min_grid[2]),
+        walkable_prefix=row_prefix(walkable),
     )
+
+
+def row_prefix(walkable: jax.Array) -> jax.Array:
+    """Exclusive prefix sum of ``walkable`` along x, one extra column.
+
+    ``CastCircle``'s last step asks, for each row of the swept band, whether
+    every cell strictly between that row's leftmost and rightmost enumerated
+    cell is walkable.  Done directly that is one grid read per candidate cell,
+    and the fixed-shape device form has to size the window for the worst case
+    -- a 128x128 square of gathers per call, nearly all of it masked off.
+
+    With a prefix sum the same question is two reads: the run [a, b) is fully
+    walkable exactly when ``P[y, b] - P[y, a] == b - a``.  Same answer, and it
+    removes the square.  Map1's table is 294 x 294 int32, about 345 KiB.
+    """
+    height, width = walkable.shape
+    out = jnp.zeros((height, width + 1), jnp.int32)
+    return out.at[:, 1:].set(jnp.cumsum(walkable.astype(jnp.int32), axis=1))
 
 
 def _trunc_to_i32(v):
@@ -180,7 +208,6 @@ def cast_circle_blocked(x0: jax.Array, y0: jax.Array,
     rad = radius / jnp.asarray(terrain.cell_size, dtype)
     span = int(span_cells)
     big = jnp.int32(1 << 29)
-    xbase = jnp.floor(jnp.minimum(x0, x1) - rad).astype(jnp.int32) - 1
     ybase = jnp.floor(jnp.minimum(y0, y1) - rad).astype(jnp.int32) - 1
 
     def walkable_cell(ix, iy):
@@ -257,14 +284,30 @@ def cast_circle_blocked(x0: jax.Array, y0: jax.Array,
     a, ex_a = consume_line(initial, x0+px, y0+py, x1+px, y1+py)
     b, ex_b = consume_line(a, x0-px, y0-py, x1-px, y1-py)
     _ix, _iy, _err, _left, lo, hi, bad = b
-    xs = xbase + jnp.arange(span, dtype=jnp.int32)[None, :]
-    ys = ybase + jnp.arange(span, dtype=jnp.int32)[:, None]
-    interior = (xs > lo[:, None]) & (xs < hi[:, None])
-    cells_ok = jax.vmap(jax.vmap(walkable_cell))(jnp.broadcast_to(xs, (span, span)),
-                                                 jnp.broadcast_to(ys, (span, span)))
-    extent_x = jnp.max(hi - lo + 1)
-    exhausted = ex_a | ex_b | (extent_x > span)
-    blocked = bad | jnp.any(interior & ~cells_ok)
+    # ``for (int x = xRanges[y,0] + 1; x < xRanges[y,1]; x++)``: the strict
+    # interior of each row's enumerated span.  Two prefix reads per row answer
+    # it exactly; see :func:`row_prefix` for why that matters here.
+    ys = ybase + jnp.arange(span, dtype=jnp.int32)
+    prefix = terrain.walkable_prefix
+    if prefix is None:
+        prefix = row_prefix(terrain.walkable)
+    first = lo + 1
+    run = jnp.maximum(hi - first, 0)          # untouched rows: lo=big, hi=-big
+    live = (run > 0) & (ys >= 0) & (ys < height)
+    # Off-grid cells are NOT walkable on the server (``GetCell`` returns null
+    # and ``IsWalkable(null)`` is false), so an interior run that leaves the
+    # grid blocks rather than being skipped.
+    off_grid = live & ((first < 0) | (hi > width))
+    safe_y = jnp.clip(ys, 0, height - 1)
+    walkable_run = (prefix[safe_y, jnp.clip(hi, 0, width)]
+                    - prefix[safe_y, jnp.clip(first, 0, width)])
+    row_blocked = live & (off_grid | (walkable_run != run))
+    # The x extent used to need its own bound, because the interior scan was a
+    # fixed span x span window and a wider row would have gone unexamined.  The
+    # prefix form reads the whole row, so that bound is gone -- not relaxed,
+    # unnecessary.  The y span still bounds how many rows can be recorded.
+    exhausted = ex_a | ex_b
+    blocked = bad | jnp.any(row_blocked)
     return blocked | exhausted, exhausted
 
 
