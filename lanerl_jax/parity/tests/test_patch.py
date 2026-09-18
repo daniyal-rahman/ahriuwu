@@ -121,17 +121,25 @@ def test_minion_attack_windup_differs_by_side_on_three_of_four_types():
 
 
 def test_champion_spawn_hp_exceeds_the_content_base_curve(patch):
-    """Content is not the whole story: runes are applied at spawn.
+    """Content is not the whole story: two MASTERIES are applied at spawn.
 
-    ``Garen.json`` gives ``BaseHP`` 616.28; the state dump reports 754.0 max HP
-    at level 1. The 137.72 gap is the rune page
-    (``LanerlEpisode.RestoreBaseline``, pinned by ``lanerl_rl/tests/test_runes.py``).
-    So :meth:`UnitStats.hp_at_level` predicts the **base** curve only, and a sim
-    that seeds champion HP from it alone starts every episode 137 HP light.
+    ``Garen.json`` gives ``BaseHP`` 616.28; a shop-off state dump reports 671
+    max HP at level 1 (the wire floors to an integer). The 55.568 gap is
+    ``Veteran's Scars`` (talent 4222 rank 3, ``HealthPoints.FlatBonus = 36``)
+    composed with ``Juggernaut`` (talent 4232, ``HealthPoints.PercentBonus =
+    0.03``): ``(616.28 + 36) * 1.03``.
+
+    It is **not** the rune page, which carries zero health
+    (``lanerl/cfg/garen1v1.json`` is 9x5245 / 9x5317 / 9x5289 / 3x5335 -- AD,
+    armour, MR, AD), and it is **not** Doran's Shield. This test previously
+    asserted 137.72, which was ``(616.28 + 36 + 80) * 1.03 - 616.28`` measured
+    off a dump taken with the auto-shop ON -- the shield's +80 was inside the
+    number and mislabelled as a rune. See ``STAT-001``.
     """
     assert patch.champion.hp_at_level(1) == pytest.approx(616.28)
-    observed_spawn_hp = 754.0        # from LANERL_STATEROW, 2026-09-16
-    assert observed_spawn_hp - patch.champion.hp_at_level(1) == pytest.approx(137.72, abs=0.01)
+    observed_spawn_hp = 671.0        # shop-OFF dump; the wire floors to int
+    assert observed_spawn_hp - patch.champion.hp_at_level(1) == pytest.approx(
+        55.568, abs=1.0)             # abs=1 absorbs the wire's floor
 
 
 def test_exp_curve_is_the_servers(patch):
@@ -195,33 +203,27 @@ def test_minion_acquisition_range_defaults_to_server_475_not_600(patch):
     assert float(red_super.get("AcquisitionRange")) == 600.0
 
 
-def test_the_shield_gives_regen_but_its_hp_is_already_in_the_rune_delta():
-    """Doran's Shield: +1.2 HP/s modelled, +80 max HP deliberately NOT.
+def test_dorans_shield_is_not_applied_at_all(patch):
+    """The champion profile must carry the masteries and NOT the shield.
 
-    The server buys item 1054 at boot (`LanerlHooks`, `BuildPath[0]`, unless
-    `LANERL_AUTOBUY=0`). Two stats come with it and they must be handled
-    differently, which is the whole point of this test:
+    History, because both directions of this have now been wrong once:
 
-    * **Regen** -- `ItemPassives/DoransShield.cs` does
-      `HealthRegeneration.BaseBonus += 1.2f`. `BaseBonus` adds to the base term
-      of `Stat.Total` (`Stat.cs:68`) and nothing scales regen by percentage
-      here, so it is exactly +1.2 HP/s. The state dump does NOT expose regen, so
-      our Content-derived value was never checked against the oracle and really
-      was missing this.
+    * An audit once proposed adding Doran's ``FlatHPPoolMod`` (80) on top of
+      the then-``RUNE_HP_BONUS``, which would have given 834 against an
+      observed 754.
+    * The constant it would have double-counted was itself measured from a
+      dump taken with the auto-shop **ON**, so it silently contained the very
+      80 it was warning about -- and 754 is not a baseline at all. Purchases
+      are fountain-gated (``BuyRequiresFountain``, radius 1800) and
+      ``StartingGold`` is 475, so with the shop on Doran's (440) plus a potion
+      are bought on the **boot tick**, before the first dumped frame exists.
 
-    * **Max HP** -- `ItemData.cs:81` reads `FlatHPPoolMod` (80) into
-      `HealthPoints.FlatBonus`. We must NOT add it, because
-      `init.RUNE_HP_BONUS` is defined as ``754.248046875 - 616.28``: the gap
-      between Content's base and the value the DUMP reports *during play*,
-      which already includes everything the server bought. An audit pass
-      proposed adding the 80 on the assumption that our 754 was a pre-item
-      figure; doing so would have given the champion 834 HP against the
-      server's 754 and silently inverted the comparison.
-
-    Note `FlatHPRegenMod` in `1054.json` is read by nothing in the C# -- only
-    the passive script grants regen. Same total, different provenance.
+    The parity runs that matter use ``autobuy=False``, so the champion has no
+    items and the correct baseline is ``(616.28 + 36) * 1.03 = 671.848``.
+    ``DORANS_SHIELD_HP``/``DORANS_SHIELD_HP_REGEN`` survive documented and
+    deliberately unapplied, for whenever an item model exists (``ITEM-001``).
     """
-    from lanerl_jax.sim.init import DORANS_SHIELD_HP_REGEN
+    from lanerl_jax.sim.init import DORANS_SHIELD_HP, DORANS_SHIELD_HP_REGEN
     from lanerl_jax.sim.profiles import PROFILES, build_profile_tables
     from lanerl_jax.sim.state import Kind
 
@@ -230,12 +232,13 @@ def test_the_shield_gives_regen_but_its_hp_is_already_in_the_rune_delta():
     assert champ_rows, "no champion profile rows"
 
     for row in champ_rows:
-        # exactly the dump's quantised in-play value, 772348/1024
-        assert abs(float(tables["max_hp"][row]) - 754.248046875) < 1e-3, (
-            "champion max HP drifted from the dump's observed value -- if this "
-            "rose by ~80, someone added Doran's Shield's FlatHPPoolMod on top "
-            "of RUNE_HP_BONUS, which already contains it")
-        # Garen's Content BaseStaticHPRegen 1.568, plus the item's 1.2
-        assert abs(float(tables["hp_regen"][row]) - (1.568 + 1.2)) < 1e-4
+        assert abs(float(tables["max_hp"][row]) - 671.848) < 1e-2, (
+            "champion max HP drifted. ~+82 means someone re-applied Doran's "
+            "Shield (80 x 1.03); ~-55 means the masteries were dropped")
+        # Garen's Content BaseStaticHPRegen, with NO item regen on top.
+        assert abs(float(tables["hp_regen"][row]) - 1.568) < 1e-4
 
+    # Kept as constants so the item model has them, but they must stay unused.
+    assert DORANS_SHIELD_HP == 80.0
     assert DORANS_SHIELD_HP_REGEN == 1.2
+
