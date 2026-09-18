@@ -236,8 +236,9 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
 
     # Measured deltas that Content does not carry; see sim/init.py.
     from .init import (
-        MASTERY_HP_FLAT_BONUS, MASTERY_HP_PERCENT_BONUS, RUNE_AD_BONUS,
-        RUNE_ARMOR_BONUS, TURRET_HP_BONUS, TURRET_HP_BONUS_NEXUS)
+        MASTERY_AD_PER_LEVEL_BONUS, MASTERY_HP_FLAT_BONUS,
+        MASTERY_HP_PERCENT_BONUS, RUNE_AD_BONUS, RUNE_ARMOR_BONUS,
+        TURRET_HP_BONUS, TURRET_HP_BONUS_NEXUS)
     for row, (kind, tier, _) in enumerate(PROFILES):
         if kind == Kind.CHAMPION:
             # `Stat.Total = ((BaseValue + BaseBonus) * (1 + PercentBaseBonus)
@@ -274,6 +275,15 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
             # properly needs a second column read only by the current-HP term.
             cols["hp_per_level"][row] *= (1.0 + MASTERY_HP_PERCENT_BONUS)
             cols["attack_damage"][row] += RUNE_AD_BONUS
+            # `Brute Force` raises the per-level SLOPE, not the level-1 value
+            # -- `AttackDamagePerLevel` is a `Stat` and `Stats.LevelUp` runs
+            # its `.BaseValue` and `.FlatBonus` through `GetLevelUpStatValue`
+            # separately (`Stats.cs:270-271`). Both land in `AttackDamage`,
+            # and `step.py` grows AD as `ad_per_level * d(growth_sum)`, so a
+            # single summed slope column reproduces the server exactly. It
+            # must NOT go in `attack_damage`: that would add 0.55 at level 1,
+            # where the server adds nothing. See `STAT-002`.
+            cols["ad_per_level"][row] += MASTERY_AD_PER_LEVEL_BONUS
             cols["armor"][row] += RUNE_ARMOR_BONUS
             # Doran's Shield's +80 max HP and +1.2 HP/s regen are deliberately
             # NOT here. See `init.DORANS_SHIELD_HP` for why, and for the one

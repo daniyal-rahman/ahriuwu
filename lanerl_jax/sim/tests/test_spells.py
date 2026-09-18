@@ -19,7 +19,8 @@ import pytest
 
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
 from lanerl_jax.sim.combat import growth_sum
-from lanerl_jax.sim.init import RUNE_AD_BONUS, RUNE_ARMOR_BONUS, init_lane, lane_params
+from lanerl_jax.sim.init import (MASTERY_AD_PER_LEVEL_BONUS, RUNE_AD_BONUS,
+                                 RUNE_ARMOR_BONUS, init_lane, lane_params)
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
 from lanerl_jax.sim.profiles import profile_id
 from lanerl_jax.sim.spells import (
@@ -552,8 +553,8 @@ def test_qs_cooldown_starts_when_the_window_closes_not_at_cast():
 def test_q_skips_once_then_lands_the_replacement_auto_damage():
     """`GarenQ.OnActivate` cancels then skips one swing; `GarenQAttack`, not
     native `AutoAttackHit`, deals the following swing's complete damage and
-    ends the window early. A normal attack here would be only 78.13 damage;
-    Q rank 1 is `30 + 1.4 * AD`.
+    ends the window early. A normal attack at this level would be 81.05
+    damage; Q rank 1 is `30 + 1.4 * AD`.
     """
     step, _ = _stepper()
     patch = load_patch()
@@ -571,8 +572,13 @@ def test_q_skips_once_then_lands_the_replacement_auto_damage():
             hit = before - float(s.hp[2])
             break
     assert hit is not None, "Q's post-skip empowered swing never landed"
+    # `STAT-002`: the server's slope is `DamagePerLevel + Brute Force`, not
+    # Content's `DamagePerLevel` alone. Q scales `1.4 * AD`, so reconstructing
+    # the expectation from the Content value alone understates it by
+    # `1.4 * 0.55 * growth_sum(2)` -- eleven times this assertion's tolerance.
     ad_l2 = (patch.champion.base_ad + RUNE_AD_BONUS
-             + patch.champion.ad_per_level * float(growth_sum(2)))
+             + (patch.champion.ad_per_level + MASTERY_AD_PER_LEVEL_BONUS)
+             * float(growth_sum(2)))
     expected = float(q_damage_at_rank(jnp.int32(1), jnp.float32(ad_l2)))
     assert hit == pytest.approx(expected, abs=0.05)
     assert float(s.silenced_ms[2]) == pytest.approx(1500.0, abs=40.0)

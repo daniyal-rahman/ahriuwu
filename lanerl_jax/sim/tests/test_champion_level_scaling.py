@@ -39,7 +39,8 @@ import pytest
 
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
 from lanerl_jax.sim.combat import growth_sum
-from lanerl_jax.sim.init import RUNE_AD_BONUS, init_lane, lane_params
+from lanerl_jax.sim.init import (MASTERY_AD_PER_LEVEL_BONUS, RUNE_AD_BONUS,
+                                 init_lane, lane_params)
 from lanerl_jax.sim.movement_jax import TICK_MS
 from lanerl_jax.sim.profiles import profile_id
 from lanerl_jax.sim.state import Kind, Team
@@ -140,7 +141,14 @@ def test_champion_ad_grows_with_level_the_way_stats_levelup_does():
     """
     patch = load_patch()
     ad = patch.champion.base_ad
-    per_level = patch.champion.ad_per_level
+    # `STAT-002`: the server's slope is NOT Content's `DamagePerLevel` alone.
+    # `Brute Force` writes `AttackDamagePerLevel.FlatBonus = 0.55`, and
+    # `Stats.LevelUp` grows `AttackDamage` through that term as well as
+    # `.BaseValue` (`Stats.cs:270-271`). This test used Content's 3.5 and
+    # passed anyway while the sim ran 2.67 AD light at level 7, because it
+    # rebuilt the expectation from the same wrong number the sim used --
+    # the dumped ladder in `test_lane.py` is what actually pins this.
+    per_level = patch.champion.ad_per_level + MASTERY_AD_PER_LEVEL_BONUS
     assert per_level > 0, "the test is meaningless if Garen's AD curve is flat"
 
     dmg_1 = _damage_dealt_at_level(1)

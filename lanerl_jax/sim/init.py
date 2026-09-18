@@ -83,6 +83,7 @@ from .waves import FIRST_WAVE_MS
 __all__ = [
     "CHAMPION_SPAWN", "TOP_OUTER_TURRET", "ALL_TURRETS", "MINION_SPAWN",
     "TOP_LANE_PATH", "MASTERY_HP_FLAT_BONUS", "MASTERY_HP_PERCENT_BONUS",
+    "MASTERY_AD_PER_LEVEL_BONUS",
     "TURRET_HP_BONUS", "TURRET_HP_BONUS_NEXUS",
     "lane_params", "init_lane", "spawn_minion",
 ]
@@ -328,6 +329,25 @@ TURRET_HP_BONUS_NEXUS = 125.0
 #: = 9.0, with no armour talent scripted at all.
 RUNE_AD_BONUS = 78.134765625 - 57.88            # +20.2548
 RUNE_ARMOR_BONUS = 36.5361328125 - 27.5361328125  # +9.0
+
+#: `Brute Force` (talent `4122`, rank 3 in `lanerl/cfg/garen1v1.json`) does
+#: NOT add flat AD -- it adds to the champion's AD *slope*.
+#: `Talents/Offense/Brute Force.cs` writes
+#: `StatsModifier.AttackDamagePerLevel.FlatBonus = statPerRank[rank-1]`
+#: (`{0.22, 0.39, 0.55}`), and `AttackDamagePerLevel` is itself a full `Stat`,
+#: so `Stats.LevelUp` grows AD through *both* of its terms
+#: (`Stats.cs:270-271`): `AttackDamage.BaseValue` from
+#: `GetLevelUpStatValue(AttackDamagePerLevel.BaseValue)` and
+#: `AttackDamage.FlatBonus` from `GetLevelUpStatValue(...FlatBonus)`. The
+#: server's Garen therefore gains `(3.5 + 0.55) * growth(L)` per level.
+#:
+#: This is why level 1 looked exact while every later level did not: the
+#: talent contributes nothing at level 1 and `+0.55 * growth_sum(L)`
+#: thereafter -- +0.40 AD at level 2 rising to +2.66 (3.4%) at level 7.
+#: `PORT_AUDIT_COMBAT` checked `AttackDamagePerLevel` for item modifiers,
+#: found none in scope and concluded only `.BaseValue` was nonzero; true of
+#: items, false of masteries. See `STAT-002`.
+MASTERY_AD_PER_LEVEL_BONUS = 0.55   # Brute Force, talent 4122 rank 3
 
 
 def lane_params(patch: PatchTable | None = None, dtype=jnp.float32) -> dict:

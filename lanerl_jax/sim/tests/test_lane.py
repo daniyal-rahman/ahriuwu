@@ -169,6 +169,49 @@ def test_champion_max_hp_matches_the_servers_dumped_ladder(patch):
         assert ours - observed < 1.0
 
 
+#: `Stats.AttackDamage.Total` from the same shop-OFF Tier-1.5 fixture, at the
+#: seven levels that run reaches. Two decimals because `LanerlWire` rounds on
+#: the way out, which is why the tolerance below is 0.01 and not tighter.
+SERVER_AD_BY_LEVEL = {1: 78.14, 2: 81.05, 3: 84.11, 4: 87.31,
+                     5: 90.65, 6: 94.13, 7: 97.76}
+
+
+def test_champion_ad_matches_the_servers_dumped_ladder(patch):
+    """`STAT-002`. The slope is `3.5 + 0.55`, and level 1 cannot see it.
+
+    `Brute Force` writes `AttackDamagePerLevel.FlatBonus`, and
+    `AttackDamagePerLevel` is a full `Stat` whose `.BaseValue` and `.FlatBonus`
+    are grown *separately* by `Stats.LevelUp` (`Stats.cs:270-271`) and both
+    land in `AttackDamage`. So the talent contributes exactly nothing at
+    level 1 and compounds thereafter.
+
+    That shape is the whole reason this went unnoticed: level-1 AD was already
+    exact to the bit (78.134765625), so every check that stopped there passed
+    while the sim ran 2.67 AD (3.4%) light by level 7. A slope bug is invisible
+    at the origin -- pin the ladder, not the intercept.
+    """
+    from lanerl_jax.sim.combat import growth_sum
+
+    params = lane_params(patch)
+    row = profile_id(Kind.CHAMPION, -1, Team.BLUE)
+    base = float(np.asarray(params["attack_damage"])[row])
+    per_level = float(np.asarray(params["ad_per_level"])[row])
+
+    for level, observed in SERVER_AD_BY_LEVEL.items():
+        ours = base + per_level * float(growth_sum(level))
+        assert abs(ours - observed) < 0.01, (
+            f"level {level}: sim {ours:.4f}, server dumped {observed}")
+
+    # And state the failure mode directly, so a regression names itself: the
+    # pre-fix slope is right at level 1 and wrong everywhere after it.
+    assert abs(base - 78.134765625) < 1e-6, "level-1 AD is not the slope's job"
+    stale = [lv for lv, o in SERVER_AD_BY_LEVEL.items()
+            if abs(base + 3.5 * float(growth_sum(lv)) - o) < 0.01]
+    assert stale == [1], (
+        "Content's DamagePerLevel=3.5 alone should reproduce ONLY level 1; "
+        f"it reproduced {stale}, so the fixture or the growth curve moved")
+
+
 def test_every_turret_the_server_places_is_placed(patch):
     """All 24, because the five behind each outer turret are what bounds the lane.
 
