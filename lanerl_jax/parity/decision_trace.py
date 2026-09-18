@@ -33,6 +33,16 @@ THE SERVER SIDE
   veto, so the trace records orders that actually took effect.
 * `Spell.FinishCasting` -- with `auto=` and `instant=`, the flag that decides
   whether the move-order tail above runs at all.
+* `ObjAIBase.SetTargetUnit` -- both endpoints of every REAL transition
+  (guarded by `!ReferenceEquals`, so re-asserting the same target is not
+  noise). Minion `target` is an open gate-1 residual whose "serial-vs-fixed-
+  phase floor" argument rests on a one-sidedness measurement taken while
+  `INJ-003` had the 250 ms sweep disabled, so only the event branches ever
+  ran. Note a sim-side target transition is derivable from state already --
+  what this adds is the exact tick and the *ordering within* it, which state
+  after the fact cannot give. It does not carry the REASON: the caller knows
+  that, and `LaneMinionAI` lives in the runtime-compiled script package rather
+  than this assembly. A reason emitted there joins to this on `(t, id)`.
 
 Deliberately NOT a poller. Its sibling `LanerlHooks.TurretTrace` samples every
 250 ms and reports a turret target that differs from the last sample, so it
@@ -51,7 +61,8 @@ that form:
   rows, reproduced with the trace OFF **and** with it ON.
 * 200 s idle (a window that actually contains combat): OFF and ON both
   `ce6f118002541655e528` / 1,159,704 rows, with 54,253 branch events emitted
-  alongside -- 53,725 `UpdateMoveOrder` and 528 `FinishCasting`.
+  alongside -- 53,725 `UpdateMoveOrder` and 528 `FinishCasting`. Re-verified
+  after adding `SetTargetUnit`: same digest, same row count, 247 transitions.
 
 The 120 s check alone would have been misleading and nearly was: minions spawn
 at t=90 s at opposite ends of the lane and cannot meet before 120 s, so that
