@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 
 import jax
 import numpy as np
 
 from .trainer import TrainConfig, make_train
+
+
+DEFAULT_ROUTE_ARTIFACT = (Path(__file__).resolve().parents[2] / "data" /
+                          "jax_routes" / "map1_garen_r35_o50_v2")
 
 
 def main() -> None:
@@ -21,6 +26,12 @@ def main() -> None:
                     help="episode length in seconds. NOT the discount horizon "
                          "(PPOConfig.horizon_s); see TrainConfig.")
     ap.add_argument("--every", type=int, default=3)
+    ap.add_argument("--route-artifact", type=Path, default=DEFAULT_ROUTE_ARTIFACT,
+                    help="Map1 local-route artifact (default: %(default)s)")
+    ap.add_argument(
+        "--no-route-table", action="store_true",
+        help="explicitly run the PATH-001 two-point approximation; intended "
+             "only for comparison/debugging")
     ap.add_argument(
         "--time-steady", action="store_true",
         help="run the whole job TWICE to separate compile from steady state. "
@@ -43,7 +54,27 @@ def main() -> None:
           f"{cfg.n_updates * cfg.rollout_steps / cfg.episode_steps:.1f} "
           f"episodes per env")
 
-    train = jax.jit(make_train(cfg))
+    route_table = terrain = None
+    if not a.no_route_table:
+        if not a.route_artifact.exists():
+            ap.error(
+                f"route artifact not found: {a.route_artifact}. Build it with: "
+                "python -m lanerl_jax.data.local_route_artifact "
+                f"--out {a.route_artifact} --radius 35 --offset-radius 50")
+        from ..data.local_route_artifact import load_local_route_artifact
+        from ..sim.terrain_jax import map1_terrain
+
+        artifact = load_local_route_artifact(
+            a.route_artifact, pathfinding_radius=35.0)
+        route_table = artifact.as_jax()
+        terrain = map1_terrain()
+        print(f"local routes {artifact.manifest.source_count:,} source cells x "
+              f"{artifact.manifest.table_shape[1]}² offsets "
+              f"({artifact.next_hop.nbytes / 2**20:.1f} MiB)")
+    else:
+        print("WARNING: local routing disabled; Move uses the PATH-001 raw segment")
+
+    train = jax.jit(make_train(cfg, route_table=route_table, terrain=terrain))
     t0 = time.perf_counter()
     out = train(jax.random.key(a.seed))
     jax.block_until_ready(out)
@@ -64,7 +95,7 @@ def main() -> None:
     _, m = out
     print()
     cols = ("reward", "entropy", "approx_kl", "clip_frac", "value_loss",
-            "lane_dist", "cs_at_10min")
+            "lane_dist", "route_nonready", "cs_at_10min")
     print(f"{'upd':>5}" + "".join(f"{c:>12}" for c in cols))
     for i in range(0, cfg.n_updates, a.every):
         row = "".join(f"{float(np.asarray(m[c])[i]):>12.4f}" for c in cols)

@@ -88,12 +88,15 @@ buff *names*, and the cast/channel flags. Positions are quantised to 1/16 unit
 and stats to 1/1024. Entities are sorted by **content**, not NetId, so the
 ordering is stable across processes and across episode resets.
 
-That is a complete, canonical, quantised dump of the whole simulation, emitted
-at *finer* than the rate the JAX sim will step — which is the better granularity
-to diff at, since a one-tick differential is the tightest available isolation of
-a logic error from accumulated float drift. It was built to catch reset leakage;
-it happens to be precisely the fixture a second implementation needs. **We do not
-have to build a parity harness — we have to write a parser and a differ.**
+That is a canonical, quantised view of the simulation, emitted at *finer* than
+the rate the JAX sim will step — but it is not a complete reset image. Target
+identity, AA phase, minion-AI maps, live missiles, exact waypoint vertices, and
+the collision-cache position live in the opt-in diagnostic-internals stream,
+which is deliberately outside the canonical hash. With
+`LANERL_STATE_DUMP_INTERNALS=1`, the parser/injector can restore those fields
+for a one-step diagnostic; canonical-only recovery remains explicitly bounded
+or inferred. This distinction preserves the hash's reset/determinism contract
+while making the tightest differential practical.
 
 ### 1.4 The tick is fixed under training conditions
 
@@ -136,8 +139,22 @@ top-lane corridor, within 1400u of the lane polyline (LanerlLane.TopLaneDefault)
   laning region (mid 50%)   6,344 walkable cells -> all-pairs next-hop   40.2 MB (uint8)
 ```
 
-**40 MB of static uint8 buys pathing as a table lookup, O(1) per step, with no
-search on device.** Precompute once on the host, ship as a device constant.
+A raw uint8 matrix is exactly `K²` bytes, before the small inverse-cell map and
+manifest:
+
+| coverage | K | matrix bytes | decimal MB | MiB |
+|---|---:|---:|---:|---:|
+| whole Map1 | 53,135 | 2,823,328,225 | 2,823.3 | 2,692.5 |
+| top corridor | 16,339 | 266,962,921 | 267.0 | 254.6 |
+| mid-50% laning region | 6,344 | 40,246,336 | 40.2 | 38.4 |
+
+That arithmetic is useful, but it is **not by itself a claim of server-exact
+player-click routing**. `GetPath` begins and ends at arbitrary float world
+coordinates, while a simple next-hop matrix is indexed by cells. Its first edge
+and priority can differ for different sub-cell source/goal positions. A
+cell-centre table is therefore an acceleration candidate, not something to
+silently substitute for all float-valued `Move` orders. It must earn that
+generalisation against the waypoint corpus.
 
 Two corrections to that plan, both found by porting the server's pathfinder
 (`lanerl_jax/data/navgrid.py`) rather than by reading it once:
@@ -162,11 +179,112 @@ measured how not-good-enough:
 | ≤ 1800u | 81.0% |
 
 A screen-space click can name a point up to `SCREEN_RADIUS = 1800` away, so a
-straight-line approximation would path wrongly roughly one click in five. Use the
-table. (Caveat to check in Stage 1: the table gives the *shortest* grid path;
-the server's A* plus its path smoothing may pick a different equal-or-near-equal
-path, and its tie-breaking is an implementation detail. That is a parity
-measurement, not an assumption — see §5, R4.)
+straight-line approximation would path wrongly roughly one click in five.
+
+#### Route artifact contract and integration stages (2026-09-17)
+
+**Update:** the original `K x K` prototype below remains useful as a strict
+server-A* reference artifact, but it is not the production topology. Follow-
+camera actions are bounded local offsets. `data/local_route_artifact.py` now
+bakes a source-cell x local-goal-offset table, and `sim/local_pathing.py`
+reconstructs fixed-shape routes on device. The current Map1/Garen artifact has
+47,477 radius-walkable source cells and a 101x101 (+/-50 cell) offset window.
+The v3 ABI retains the 231.0 MiB packed 4-bit direction table and adds a
+462.0 MiB uint8 same-direction run length per logical entry (693 MiB total).
+Runtime jumps only across collinear raw hops, preserving the same turn cells,
+hop accounting, and overflow status. The loader supports v2 and v3, but
+production training remains pinned to the smaller v2 artifact; v3 is an
+optional measured experiment because its memory/compile cost has not yet paid
+back in throughput. Unknown versions, hashes, shapes, or run-length semantics
+fail closed. `--no-route-table` remains explicitly the old approximation.
+
+This production artifact is radius-aware and route-closed inside each goal-
+centred window, but its deterministic reverse BFS and collinear compression are
+not the server's closed-on-enqueue A* and line-of-sight `SmoothPath`. Those
+departures, endpoint quantization, coverage/fallback behavior, and measured
+fixed-shape bounds are tracked centrally in `JAX_FIDELITY_LEDGER.md`. Runtime
+persists the last result in `LaneState.route_status`, and trainer metrics expose
+`route_nonready`.
+
+The action boundary was also corrected during integration: it now uses the
+same calibrated `screen_to_world_centred` perspective equations and canonical
+side reflection as the real environment, rather than the temporary +/-1800
+world square. Semantic Move actions in the measured bottom-right minimap
+rectangle decode to NOOP so a local ground action cannot become a global live-
+client minimap order. Across all 96x54 bins from both spawns and both side
+orientations at the 11 lane reference vertices (124,416 cases), 8,568 were
+masked minimap cells. Of the 115,848 unmasked cases with the +/-44 bake, 98,433
+(85.0%) routed successfully; maximums were 59 raw hops and 27 waypoints. Nearly
+all remaining cases were Map1 boundary/null-path behavior caused by the
+server's own truncation/range quirks; only 37 exceeded the +/-44 window. A
+follow-up endpoint-only sweep found a maximum anchored source-goal delta of 49
+cells, which is why the production bake was widened to +/-50. Re-run this exact lattice
+measurement if projection, HUD mask, radius, or camera constants change.
+
+**Bound re-audit (2026-09-17).** Replaying that same 24 source/orientation
+groups against the production ``r35_o50_v3`` artifact (the two champion spawns
+plus all 11 lane vertices for each side, all 96x54 screen bins, with the real
+projection, minimap mask, terrain exit, and endpoint anchor) found 98,470
+READY routes among 115,848 unmasked clicks: maximum **59** raw hops and p99
+**41** (none reached 60). This confirms that ordinary action-lattice routes do
+not need the 128-hop safety bound. It does **not** justify reducing the global
+bound: a separate 200k covered-source sample within local offsets found READY
+paths up to 107 hops (1,414 above 64). A rollout can reach source cells beyond
+the fixed lattice references, so ``MAX_RAW_ROUTE_HOPS=128`` remains required
+unless a source-reachability invariant is introduced and verified. Overflows
+remain explicit rather than silently truncating a route.
+
+`data/route_artifact.py` now supplies the *offline* contract without generating
+or committing an asset. Its builder calls `NavGrid.get_cell_path`, the same
+closed-on-enqueue, float32-priority server port used by `get_path`, before
+`SmoothPath` collapses any cells. It writes a deterministic three-file artifact:
+`manifest.json`, sorted `cells.npy`, and a `K×K uint8` adjacent raw-hop matrix.
+The manifest includes the SHA-256 of the exact `AIPath.aimesh_ngrid` content,
+grid shape/cell-size float32 bits, pathfinding-radius float32 bits, coverage and
+matrix hashes/shapes, and an explicit endpoint policy. The loader fails closed
+on any of those mismatches. A coverage region is also rejected at build time
+unless every successful source-goal itinerary stays in coverage; otherwise a
+table could succeed at hop one and become undefined at hop two.
+Because the server's closed-on-enqueue A* does not guarantee optimal
+substructure, builder and loader also validate every goal column as a functional
+graph: every `READY` entry's repeated gathers must reach that goal, never a
+cycle or an intermediate cell's `NO_ROUTE` terminal. Only an entry that is
+itself `NO_ROUTE` may terminate without a route.
+
+The **reference K x K prototype's** endpoint policy is deliberately restrictive:
+`cell-centre-only; arbitrary-world-endpoints-unsupported`. This makes the
+prototype useful for deterministic bake and gather validation without pretending
+that a player currently standing at a fractional position has the cell-centre
+route. The shipped JAX API accepts flattened source/goal cells and returns
+`(hop, status)`, where status is one of ready, source uncovered, goal uncovered,
+or no server route. That prototype does not alter `apply_orders`; the local
+production artifact described in the update above is the implementation that
+does.
+
+The original prototype integration sequence was:
+
+1. Bake a deliberately chosen, route-closed coverage mask for each supported
+   radius, with the exact navgrid hash in its manifest; measure build time,
+   coverage and byte size. Never default the builder to the 2.82 GB whole-map
+   matrix.
+2. In a fixed `lax.scan`, gather at most the measured raw-cell path bound from
+   `(current_cell, goal_cell)`, then port `SmoothPath` against the static
+   terrain and write the resulting bounded world-waypoint route. This preserves
+   the server's *raw A* itinerary* rather than replacing it with a generic
+   shortest path.
+3. Measure cell-centre/quantised-route divergence against server waypoints. If
+   fractional endpoints change routes materially, add a measured endpoint-bin
+   design or keep those orders on a separately labelled approximation; do not
+   label the cell table exact by optimism.
+4. Only after that gate may `apply_orders` consume the table. An uncovered or
+   off-corridor goal must surface the non-ready `RouteStatus` to the caller's
+   diagnostics. If the simulator retains the server-compatible raw two-point
+   fallback for it, the result is explicitly **APPROX**, not an exact routed
+   order; it may not be counted as table coverage or parity success.
+
+The unsmoothed-hop artifact is not sufficient by itself: it still needs the
+fixed-shape JAX `SmoothPath` port and the endpoint corpus gate. This is why no
+partial table is wired into `orders.apply_orders` in this pass.
 
 ### 1.6 JAX runs on the hardware we have
 
@@ -286,13 +404,13 @@ resolved, zero unresolvable NetIds; 153 minion retargets with priorities
 matching the `ClassifyUnit` enum (`14→9` = `DEFAULT`→`MELEE_MINION`), hold time
 median 1.5 s.
 
-What genuinely remains unobservable, and is named in
-`lanerl_jax.parity.diff.UNOBSERVABLE` so it appears in every report rather than
-passing as agreement: **minion target identity** (which minion, as opposed to
-which kind), `_autoAttackCurrentCooldown`, `HasAutoAttacked`, waypoint positions
-and buff time remaining. If minion-target identity becomes the binding
-constraint in J1, infer it from damage attribution before requesting a server
-change.
+With `LANERL_STATE_DUMP_INTERNALS=1`, target NetIds, `_autoAttackCurrentCooldown`,
+`HasAutoAttacked`, minion AI clocks/maps, exact waypoint lists/current key,
+modelled missiles, and exact collision-cache positions are diagnostic facts,
+not inference. They are intentionally excluded from the canonical hash. What
+still remains unobservable from either stream includes finite-buff phase/power,
+generic script-private cast/channel state, and fractional XP; the injector
+reports a within-level XP interval rather than inventing a precise value.
 
 
 ### 1.11 Measured: movement and pathfinding parity
@@ -341,7 +459,7 @@ priority-queue tie-break was **not** either (porting the exact 4-ary heap change
 nothing measurable, though it was kept since it removes a known deviation).
 
 
-### 1.12 MEASURED: the J1 throughput gate, on the RTX 5080
+### 1.12 MEASURED: the routed J1 throughput gate, on the RTX 5080
 
 Run 2026-09-16 on `desktop` (RTX 5080, 16 GB, sm_120, driver 580.173.02),
 `jax[cuda12]==0.10.2`. The full loop is observation → policy forward → action
@@ -349,37 +467,51 @@ decode → two simulator ticks, both champions acting, with the real policy
 (`lanerl_jax/train/policy.py`, production dimensions) — which is how gate 4 is
 worded, because a sim-only number is the flattering one.
 
-| envs | compile | full loop | vs baseline | sim only |
-|---|---|---|---|---|
-| 64 | 10.6 s | 113,958 dec/s | 101× | 171,668 |
-| 512 | 12.1 s | 181,984 | 161× | 668,481 |
-| **1024** | **12.8 s** | **184,783** | **164×** | **779,814** |
-| 2048 | 13.0 s | 150,737 | 134× | 728,040 |
-| 4096 | 12.6 s | 143,483 | 127× | 604,030 |
-| 8192 | 13.3 s | 146,525 | 130× | 543,423 |
+| configuration | envs | compile | full loop | sim only | gate result |
+|---|---:|---:|---:|---:|---|
+| **stable realistic minion-bearing routed run** | **4096** | **12.9 s** | **53,228 dec/s** | **109,828 dec/s** | **gate 4 fails by 4.95%** |
+| stable nearby batch | 3072 | 13.3 s | 53,311 dec/s | 113,992 dec/s | fails |
+| stable nearby batch | 4608 | 13.0 s | 53,756 dec/s | 110,492 dec/s | fails |
+| v3 same-direction-run artifact diagnostic | 4096 | 21.7 s | 53,752 dec/s | 109,940 dec/s | fails; one 60-step/5-warmup run, not gate certification |
+| `--no-route-table` control | 4096 | 12.8 s | 57,338 dec/s | — | passes, but is not routed evidence |
 
 Baseline is the production stack's own logged **1,129 decisions/s**
 (`runs/rl-league-0915c`, 48,203 s wall, 16,800 updates).
 
-**Gate 4 (≥50×, single run): passed at 164×.** **Gate 5 (compile < 2 min):
-passed at 12.8 s.**
+**Gate 4 (≥50×, about 56k decisions/s, single run): open.** The stable
+realistic routed result is 53,228 decisions/s at 4096 environments (47x),
+4.95% short. Stable 3072/4608 runs also fail. Short 20/30-step samples above
+56k were discarded as unstable, and a 59,153 result omitted the live
+`initial_state`. **Gate 5 (compile < 2 min): passed at 12.9 s.**
+
+The v3 sidecar's run jumps are byte-for-byte route-equivalent to one-hop
+reconstruction on a 1,024-route real-terrain sample and fit the RTX 5080
+(13.3/16.3 GiB observed), but its one full-protocol diagnostic reaches only
+53,752 decisions/s. It is therefore a semantic/memory feasibility result, not
+new Gate 4 evidence or a pass; repeated stable runs would be required before
+using it to change the gate record.
+
+An exact direct-clear shortcut was also rejected before integration. The
+source-equivalent device ``CastCircle`` predicate alone took **4.427 ms** per
+call for 4,096 live-44 environments (both champions; 60 timed calls after five
+warmups), finding 1,685 clear lanes and no bound exhaustion. That is already
+most of the routed full-loop delta before selecting a two-waypoint result, so
+it cannot be a throughput optimization without a cheaper exact predicate.
 
 Three things the numbers say that the plan could only guess at:
 
-**Risk R8 was the right thing to worry about.** The policy costs roughly 4× the
-simulator: 779,814 sim-only against 184,783 with the policy in the loop at the
-same batch. Had this been measured sim-only it would have read 690× and been
-wrong about where every future optimisation should go.
+**Risk R8 remains worth measuring.** The 53,228 stable realistic routed result
+is the current gate evidence. Sim-only throughput and controls without the same
+live initial state are diagnostics, not gate results.
 
-**The peak is at 512–1024 envs, not at the largest batch.** Throughput falls
-~20% by 2048 and stays there. So "fill the device" is not the tuning rule here;
-512–1024 is, and the remaining capacity is better spent on parallel *seeds*
-(§1.9) than on a wider env axis.
+**The routed gate remains below threshold across nearby batch sizes.** The
+relevant result uses minions, terrain routing, and the live initial state; it
+cannot be replaced by a short sweep, sim-only, or no-route proxy. Route
+equivalence and training transfer remain separate gates.
 
-**We are in the regime the problem needs.** A 13.4-hour run at the production
-rate bought ~54M decisions. At 184,783/s the same wall clock is **~8.9 billion**
-— the difference between the plan's arithmetic and OpenAI-Five-scale experience
-budgets.
+**This is close, not complete.** Static-terrain repair remains a deliberately
+labelled training approximation pending route equivalence and waypoint
+differentials, and routed gate 4 remains open by 4.95%.
 
 Caveat, stated because it is the same mistake in a different coat: this measures
 the **acting** half only. There is no gradient step in it. Under an Anakin
@@ -617,11 +749,15 @@ the resulting states field by field.
 - Does not require the server to reproduce itself across runs, only to have been
   recorded once.
 - Runs offline against stored traces — no server process, fast, CI-able.
-- Runs in **float64** on CPU, so a disagreement is a logic disagreement.
+- Runs against the simulator's float32 execution path (JIT-compiled for the
+  fixed shapes), so tolerances retain the server dump's 1/16-position and
+  1/1024-stat quantisation rather than claiming float64 exactness.
 
-Fixture: `LANERL_STATE_DUMP=1 LANERL_STATE_DUMP_FULL=1` plus the action stream
-already logged by the control channel. Parser and differ are the first thing
-built (§4.1).
+Fixture: `LANERL_STATE_DUMP=1 LANERL_STATE_DUMP_FULL=1
+LANERL_STATE_DUMP_INTERNALS=1` plus the action stream already logged by the
+control channel. The internals are diagnostic-only and excluded from the
+canonical hash; a canonical-only trace remains a separately labelled mode.
+Parser and differ are the first thing built (§4.1).
 
 Per-mechanic targets, set by what actually changes a laning decision:
 
@@ -736,8 +872,9 @@ builder** (§1.1), not by a fast C++ engine as SMAC's was, so J2 alone recovers 
 large factor that SMAX never had available. Second, our baseline runs 24 envs;
 filling the device is where the env-vectorisation factor lives.
 
-**Gate 4 and gate 5 are MET** — 164× and 12.8 s, measured on the 5080; see
-§1.12. **Gate 6 is MET** — reset costs 2.17% of a step at 512 envs (falling to
+**Gate 4 remains open for the realistic routed benchmark** — 53,228
+decisions/s at 4096 minion-bearing environments is 4.95% short, and stable
+nearby batches also fail. **Gate 5 is MET** — 12.9 s; see §1.12. **Gate 6 is MET** — reset costs 2.17% of a step at 512 envs (falling to
 1.74% at 2048), measured on CPU; see §1.13. The contingency below is kept for
 the record of what the decision would have been.
 
@@ -784,11 +921,17 @@ free-running comparison structurally cannot produce it -- after the first tiny
 difference everything downstream is contaminated. **Build the Tier-1 instrument
 before chasing a distributional gap, not after.**
 
-**Green.** Terrain and pathing; wave spawn timing; movement; the auto-attack
-clock; target acquisition including call-for-help; damage, kill attribution and
-the gold/XP asymmetry; ranged basic-attack missiles with per-unit speeds; turret
+**Not complete; green only for the explicitly diagnosed mechanics.** Terrain collision/reprojection;
+wave spawn timing; movement along an installed route; the auto-attack clock;
+target acquisition including call-for-help; damage, kill attribution and the
+gold/XP asymmetry; ranged basic-attack missiles with per-unit speeds; turret
 identity, stats and time ramp; minion spawn positions; tick phase order; the
-minion population and lane balance. Gate 4 (164x) and gate 5 (12.8 s).
+minion population and lane balance. **Champion Move/AttackTo terrain routing is
+still APPROX**: terrain repair remains a deliberately labelled training
+approximation pending route equivalence and waypoint differential work. The
+validated stable realistic minion-bearing routed result is 53,228 decisions/s
+at 4096 environments (47x, 4.95% below gate 4); gate 5 passes at 12.9 s. This
+does not complete J1 because gates 1, 3, and 4 remain open.
 **260 pass; 1 fails by design, the gate-3 oracle test, until gate 3 closes.**
 
 **Gate 2 is MET.** `docs/TIER2_DIVERGENCE.md`: four full 600 s episodes
@@ -843,20 +986,59 @@ collision-under-separation hypothesis (`sim/collision.py`'s one-push-per-tick
 approximation vs the server's sequential multi-push) was checked via mean
 nearest-neighbour distance among live minions (sim 191.4, server 224.0) and
 is real but modest -- not the scale needed to explain a 5x death gap on its
-own. The dominant, still-open factor is deaths costing fountain-walk time
-(`lanerl_jax/parity/hp_band.py` has the full instrument and report). Original
-paragraph, kept for the record of what was believed before this correction:
+own. This was the then-leading historical explanation; the canonical
+remeasurement immediately below supersedes it.
+
+**Canonical remeasurement, 2026-09-17.** The `cs=13 / attacks=200` result is
+not the current source-faithful baseline: it predates the current canonical
+`step_decision(enable_call_for_help=True)` default.  The real server has no
+call-for-help-off mode, so the earlier OFF ablation was never valid gate
+evidence. A fresh complete 18,000-decision run with the mechanism enabled on
+the sim is sim `cs=7`, `attacks=72`, `approach_decisions=1768`, `holds=16160`,
+`deaths=1`; server `cs=4`, `attacks=86`, `approach_decisions=3197`,
+`holds=14717`, `deaths=1`.  Thus the current sim does **not** see twice as
+many attack-decision frames. `hp_band.py` confirms its 72 lethal frames form
+**7** distinct windows (mean 10.29 decisions, max 11), while the server's 86
+frames form only **4** windows (mean 21.50, max 56). The sim currently converts
+one short window into one CS (7), whereas the server has four long windows and
+four CS. The live discrepancy is therefore the cadence/number of minion HP
+one-shot crossovers, not duplicated ATTACK orders, visibility, pathing
+exposure, or excess deaths. No behavioral fix is justified until Tier 1 can
+attribute these distinct crossover events to minion attacks/missiles.
+
+Original paragraph, kept for the record of what was believed before this correction:
 "The tick reorder moved attack opportunities 109 -> 163 without moving CS.
 The server gets 535. So the remaining gap is how often a killable minion
 appears in reach, not what happens once one does -- i.e. minion HP
 trajectories, not last-hitting." That framing does not hold up against the
 corrected baseline.*
 
-*The one-step differential's own blind spot.* Missiles and minion target state
-are not in the server's dump at all, so the injector cannot see them: minion
-deaths were predicted late 18/18, but 13 had an in-flight missile the harness
-is structurally blind to. Closing that needs a dump extension on the server
-side, which means touching the vendored tree -- a decision, not a task.
+**Routing correction (2026-09-17).** The preceding 7-vs-4 result was also
+recorded with the JAX driver's `TABLE_DISABLED` raw two-point Move behavior.
+That is not a valid canonical path: the server sends every scripted Move to
+`GetPath`, and production JAX training loads `map1_garen_r35_o50_v2`. The
+Gate-3 drivers (`last_hit_drive` and `hp_band`) now load that v2 artifact by
+default; `table_disabled=True` / `--table-disabled` is retained only as a
+labelled PATH-006 isolation. This is not a cosmetic distinction: over the
+first 2,100 decisions of the identical scripted approach, raw reached handoff
+after 1,190 decisions while the routed artifact took 1,378 (+188 decisions,
+6.27 s). Therefore none of the raw-path HP-window/CS figures above may be
+used to close or tune the routed gate. A full 18,000-decision routed
+remeasurement is required before naming the new canonical score.
+
+*Historical one-step blind spot, now a diagnostic control.* The canonical dump
+still omits missiles and minion target state, but opt-in diagnostic internals
+now carry modelled missile state, target NetIds, AA clocks, minion-AI maps,
+exact waypoints, and exact collision-cache positions outside the canonical
+hash. The idle exact-waypoint prior was 93.15% within 1/16 under the historical
+Euclidean test; the fresh 2,400-pair exact-collision-cache run measured 93.17%,
+ruling out the old cache proxy as the main residual. Stable-NetId matching is
+now 2,400/2,400 with no fake deaths or spawns, and the appropriate
+componentwise/L-infinity test reaches 28,526/28,570 minion samples (99.85%). A
+300-pair raw-float pre-clash sample reaches 2,160/2,170 (99.54%); its ten
+remaining misses are small perpendicular, collision-associated offsets under
+investigation. These diagnostics sharpen Tier 1; they do not make
+canonical-only reset recovery exact or close J1.
 
 *Turret tiers.* All 24 placed turrets share the outer profile. Other tiers run a
 different growth schedule starting at 480 s, inside a 600 s episode, and also
@@ -869,8 +1051,10 @@ emission, and `waypoints` is already NOT_MODELLED. Parked.
 **Not built.** Fog of war in `LaneState` itself (a driver-side radius
 substitute exists for gate 3's oracle and is now also wired into
 `step_minion_ai`'s targeting via `obs/fog.py`, but `LaneState` carries no
-visibility field of its own); the next-hop pathing table; the 50-seed corpus;
-the N-seeds vmap (J3 gate 5); an item system (the server's free
+visibility field of its own); a generated next-hop table plus JAX route
+reconstruction/smoothing and endpoint corpus gate (the deterministic offline
+artifact builder/strict loader exists, §1.5); the 50-seed corpus; the N-seeds
+vmap (J3 gate 5); an item system (the server's free
 `LANERL_AUTOBUY` starting item is a real, measured parity gap for any
 scenario with deaths -- see gate 3's status above -- and has no sim-side
 counterpart). Garen Q/W/R and champion HP regen (1.568 + 0.1/level plus a
@@ -973,8 +1157,9 @@ and slow at the end of J1, the answer is a C rewrite, not more JAX tuning.
 **R2 — The minion AI is the hardest piece and last-hitting depends on it.**
 *Fix, with budget.* Its 250 ms re-evaluation timer, lexicographic
 (attackers, priority, dist²) argmin, call-for-help priority map and 500 ms
-temporary-ignore map are all stateful and all observable in the state dump. Give
-it its own Tier-1 sub-suite. `LANERL_AGGRO_TRACE=1` already emits per-minion
+temporary-ignore map are all stateful and observable in the diagnostic-internals
+stream, not in the canonical hash/dump. Give it its own Tier-1 sub-suite.
+`LANERL_AGGRO_TRACE=1` already emits per-minion
 retarget events (`LaneMinionAI.cs:31-37`) — use it as a second, finer oracle.
 Note the deliberate server deviations already documented in that file (the
 first-wave exception is not implemented; `CountUnitsAttackingUnit` is disabled) —
@@ -982,8 +1167,9 @@ first-wave exception is not implemented; `CountUnitsAttackingUnit` is disabled) 
 Parity is against the vendored server, not against the wiki.
 
 **R3 — Float drift between .NET float32 and XLA float32.** *Accept, and measure.*
-Tier 1 in float64 on CPU to judge logic; Tier 2 to quantify drift; never treat a
-long-horizon divergence as a bug until Tier 1 is checked.
+Tier 1 exercises the simulator's float32 JIT path against quantised dump
+tolerances; Tier 2 quantifies drift. Never treat a long-horizon divergence as a
+bug until Tier 1 is checked.
 
 **R4 — The next-hop table's path ≠ the server's A* path.** *Measure first, then
 decide.* The table gives a shortest grid path; the server's A* plus smoothing may
@@ -1013,8 +1199,9 @@ in the sim. Levers, in order: shrink the model, drop to 15 Hz decisions
 
 **R9 — GPU availability.** *Accept and plan around it.* One GPU per node; the
 5080 is busy with the live RL run and the 1060 has ~1.6 GB free. J0, J2 and most
-of J1's Tier-1 work are **CPU-only and float64 by design**, so the critical path
-does not need the GPU. Only the throughput gates (J1 gate 4, J3 gate 4) do.
+of J1's Tier-1 work can run on CPU, but Tier 1 uses the simulator's float32
+execution path rather than a float64 substitute. Only the throughput gates (J1
+gate 4, J3 gate 4) require the production GPU.
 
 **R11 — Reset-under-`vmap` eats the step budget.** *Avoid by construction, then
 measure.* See D11. Known failure mode in this literature for long-episode,

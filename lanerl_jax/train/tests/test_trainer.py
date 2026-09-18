@@ -22,13 +22,46 @@ import pytest
 
 from lanerl_jax.obs.builder import build_observation
 from lanerl_jax.obs.frame import make_lane_frame
-from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane
+from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
+from lanerl_jax.sim.orders import OrderKind
 from lanerl_jax.sim.state import Team
 from lanerl_jax.train.policy import LanePolicy, PolicyConfig
 from lanerl_jax.train.ppo import factored_log_prob
-from lanerl_jax.train.trainer import TrainConfig, make_train
+from lanerl_jax.train.trainer import TrainConfig, _orders_from, make_train
 
 SMALL = TrainConfig(n_envs=4, rollout_steps=8, n_updates=2, n_minibatches=2)
+
+
+def test_policy_targets_are_observation_slots_not_simulator_unit_indices():
+    """Slot 13 is an enemy-minion slot; it need not be unit 13."""
+    state = init_lane()
+    slots = jnp.full((2, 32), -1, jnp.int32)
+    slots = slots.at[0, 13].set(41).at[1, 19].set(57)
+
+    attack_r = _orders_from(
+        (jnp.asarray([2, 6]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
+         jnp.asarray([13, 19])), state, slots)
+    np.testing.assert_array_equal(np.asarray(attack_r.target), [41, 57])
+    np.testing.assert_array_equal(np.asarray(attack_r.kind),
+                                  [OrderKind.ATTACK, OrderKind.CAST_R])
+
+    q_w = _orders_from(
+        (jnp.asarray([3, 4]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
+         jnp.asarray([13, 19])), state, slots)
+    np.testing.assert_array_equal(np.asarray(q_w.kind),
+                                  [OrderKind.CAST_Q, OrderKind.CAST_W])
+    e_recall = _orders_from(
+        (jnp.asarray([5, 7]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
+         jnp.asarray([13, 19])), state, slots)
+    np.testing.assert_array_equal(np.asarray(e_recall.kind),
+                                  [OrderKind.CAST_E, OrderKind.RECALL])
+
+    no_target = _orders_from(
+        (jnp.asarray([2, 1]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
+         jnp.asarray([0, 0])), state, slots)
+    np.testing.assert_array_equal(np.asarray(no_target.kind),
+                                  [OrderKind.MOVE, OrderKind.MOVE])
+    np.testing.assert_array_equal(np.asarray(no_target.target), [-1, -1])
 
 
 @pytest.fixture(scope="module")
@@ -40,7 +73,7 @@ def trained():
 def test_the_loop_runs_and_produces_the_expected_metrics(trained):
     _, m = trained
     for k in ("policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac",
-              "dual_clip_frac", "reward", "lane_dist"):
+              "dual_clip_frac", "reward", "lane_dist", "route_nonready"):
         assert k in m, k
         assert np.isfinite(np.asarray(m[k])).all(), f"{k} went non-finite"
     assert np.asarray(m["policy_loss"]).shape[0] == SMALL.n_updates
@@ -90,7 +123,10 @@ def test_the_actor_and_the_learner_agree_on_log_probs():
                             TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
     policy = LanePolicy(PolicyConfig())
     state = init_lane()
-    obs = jax.vmap(lambda i: build_observation(state, i, frame))(jnp.arange(2))
+    params_tbl = lane_params()
+    obs = jax.vmap(
+        lambda i: build_observation(state, i, frame, params=params_tbl)
+    )(jnp.arange(2))
     params = policy.init(jax.random.key(0), obs.entities, obs.entity_pad_mask,
                          obs.self_vec, obs.global_vec)
 
@@ -122,7 +158,10 @@ def test_a_sampled_action_never_lands_on_a_masked_slot():
                             TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
     policy = LanePolicy(PolicyConfig())
     state = init_lane()
-    obs = jax.vmap(lambda i: build_observation(state, i, frame))(jnp.arange(2))
+    params_tbl = lane_params()
+    obs = jax.vmap(
+        lambda i: build_observation(state, i, frame, params=params_tbl)
+    )(jnp.arange(2))
     params = policy.init(jax.random.key(0), obs.entities, obs.entity_pad_mask,
                          obs.self_vec, obs.global_vec)
     logits = policy.apply(params, obs.entities, obs.entity_pad_mask,

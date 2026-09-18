@@ -19,7 +19,9 @@ from lanerl_jax.obs.builder import (
 )
 from lanerl_jax.obs.fog import visible_to, visible_to_enemy
 from lanerl_jax.obs.frame import make_lane_frame, to_lane
-from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane
+from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
+from lanerl_jax.sim.combat import growth_sum
+from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, Q_BUFF_SLOT
 from lanerl_jax.sim.state import Kind, Team
 
 pytestmark = pytest.mark.skipif(
@@ -190,7 +192,7 @@ def test_a_fogged_enemy_champion_is_absent_not_at_the_origin(frames):
     """
     fb, _ = frames
     s = init_lane(load_patch())
-    ob = build_observation(s, 0, fb)
+    ob = build_observation(s, 0, fb, params=lane_params())
     assert int(ob.slot_unit[0]) == -1
     assert bool(ob.entity_pad_mask[0])
     assert float(ob.entities[0].sum()) == 0.0
@@ -198,7 +200,7 @@ def test_a_fogged_enemy_champion_is_absent_not_at_the_origin(frames):
 
 def test_empty_slots_are_zero_and_masked(frames):
     fb, _ = frames
-    ob = build_observation(init_lane(load_patch()), 0, fb)
+    ob = build_observation(init_lane(load_patch()), 0, fb, params=lane_params())
     empty = np.asarray(ob.slot_unit) < 0
     assert np.asarray(ob.entity_pad_mask)[empty].all()
     assert float(np.abs(np.asarray(ob.entities)[empty]).sum()) == 0.0
@@ -213,16 +215,80 @@ def test_hp_frac_is_quantised_to_bar_resolution(frames):
     # put the enemy champion in vision
     s = s.replace(x=s.x.at[1].set(float(s.x[0]) + 200.0),
                   y=s.y.at[1].set(float(s.y[0])))
-    ob = build_observation(s, 0, fb)
+    ob = build_observation(s, 0, fb, params=lane_params())
     assert int(ob.slot_unit[0]) == 1
     v = float(ob.entities[0, 3])
     assert v == pytest.approx(round(0.5137 * HP_BAR_STEPS) / HP_BAR_STEPS, abs=1e-5)
 
 
+def test_self_stats_and_cooldowns_come_from_live_state_and_profiles(frames):
+    """The four former zero cooldown/stat fields are policy inputs, not pads."""
+    fb, _ = frames
+    p = load_patch()
+    params = lane_params(p)
+    s = init_lane(p).replace(
+        level=jnp.asarray([9] + [1] * 65, jnp.int8),
+        spell_level=jnp.asarray([[2, 1, 5, 2]] + [[0] * 4] * 65, jnp.int8),
+        spell_cooldown=jnp.asarray([[4.0, 12.0, 4.5, 60.0]] + [[0.0] * 4] * 65),
+    )
+    ob = build_observation(s, 0, fb, params=params)
+    # Q (8 s), W rank 1 (24 s), E rank 5 (9 s), R rank 2 (120 s).
+    np.testing.assert_allclose(np.asarray(ob.self_vec[6:10]), 0.5, atol=1e-6)
+
+    model = int(s.model[0])
+    growth = float(growth_sum(9))
+    expected_ad = (float(params["attack_damage"][model])
+                   + float(params["ad_per_level"][model]) * growth) / 200.0
+    expected_armor = (float(params["armor"][model])
+                      + float(params["armor_per_level"][model]) * growth) / 200.0
+    expected_mr = (float(params["magic_resist"][model])
+                   + float(params["mr_per_level"][model]) * growth) / 200.0
+    assert float(ob.self_vec[10]) == pytest.approx(expected_ad, abs=1e-6)
+    assert float(ob.self_vec[11]) == 0.0, "AP has no state/profile source"
+    assert float(ob.self_vec[12]) == pytest.approx(expected_armor, abs=1e-6)
+    assert float(ob.self_vec[13]) == pytest.approx(expected_mr, abs=1e-6)
+
+
+def test_q_and_e_windows_report_unavailable_even_before_cooldown_starts(frames):
+    fb, _ = frames
+    p = load_patch()
+    s = init_lane(p).replace(
+        spell_level=jnp.asarray([[1, 0, 1, 0]] + [[0] * 4] * 65, jnp.int8),
+        buff_id=init_lane(p).buff_id.at[0, Q_BUFF_SLOT].set(BuffId.GAREN_Q)
+        .at[0, E_BUFF_SLOT].set(BuffId.GAREN_E),
+    )
+    ob = build_observation(s, 0, fb, params=lane_params(p))
+    assert float(ob.self_vec[6]) == 1.0
+    assert float(ob.self_vec[8]) == 1.0
+
+
+def test_global_cast_memory_uses_rank_one_bases_and_never_seen_sentinel(frames):
+    """The actor gets witnessed event age, never an enemy cooldown/rank."""
+    fb, _ = frames
+    p = load_patch()
+    s = init_lane(p).replace(observed_enemy_cast_ms=jnp.asarray([
+        [0.0, 12_000.0, 20_000.0, 160_000.0],
+        [-1.0, -1.0, -1.0, -1.0],
+    ]))
+    blue = build_observation(s, 0, fb, params=lane_params(p))
+    # Q/W/E/R rank-one bases are 8/24/13/160 seconds.  E is clipped and a
+    # never-witnessed spell saturates rather than exposing a special actor bit.
+    np.testing.assert_allclose(np.asarray(blue.global_vec[2:]),
+                               [0.0, 0.5, 1.0, 1.0], atol=1e-6)
+
+    # Memory belongs to the observing champion, not the currently visible
+    # enemy. Red has never witnessed a blue cast even though raw blue state is
+    # present in this simulator state.
+    _, fr = frames
+    red = build_observation(s, 1, fr, params=lane_params(p))
+    np.testing.assert_allclose(np.asarray(red.global_vec[2:]), 1.0, atol=1e-6)
+
+
 def test_it_jits_and_vmaps(frames):
     fb, _ = frames
     s = init_lane(load_patch())
-    f = jax.jit(lambda st: build_observation(st, 0, fb))
+    params = lane_params()
+    f = jax.jit(lambda st: build_observation(st, 0, fb, params=params))
     ob = f(s)
     assert ob.entities.shape == (N_SLOTS, ENTITY_DIM)
     batched = jax.vmap(f)(jax.tree.map(lambda a: jnp.broadcast_to(a, (8,) + a.shape), s))

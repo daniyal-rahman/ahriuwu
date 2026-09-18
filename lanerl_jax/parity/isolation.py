@@ -130,7 +130,7 @@ def run_sim_isolation(decisions: int = DECISIONS_600S, seed: int = 0) -> Isolati
             y=jnp.array([order_y, 0.0], dtype=state.y.dtype),
             target=jnp.array([order_target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders), params_tbl, lane_path=path)
+        return step_decision(apply_orders(state, orders, params_tbl), params_tbl, lane_path=path)
 
     wp_idx = 0
     prev_alive = True

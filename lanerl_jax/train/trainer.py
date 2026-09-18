@@ -49,10 +49,12 @@ import optax
 from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
 from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane, lane_params
-from ..sim.orders import OrderKind, Orders, apply_orders
+from ..sim.orders import apply_orders
+from ..sim.orders import OrderKind
 from ..sim.state import Team
 from ..sim.step import step_decision
 from .policy import LanePolicy, PolicyConfig
+from .actions import orders_from
 from .ppo import (
     PPOConfig,
     factored_entropy,
@@ -66,7 +68,7 @@ from .reward import RewardConfig, lane_reward, reward_init
 __all__ = ["TrainConfig", "RunnerState", "make_train"]
 
 BLUE_NEXUS = (1131.8, 1426.3)
-SCREEN_RADIUS = 1800.0
+RED_NEXUS = (12760.9, 13026.1)
 
 
 class TrainConfig(NamedTuple):
@@ -134,6 +136,9 @@ class Transition(NamedTuple):
     #: for why CS alone is not a readable training signal.
     cs: jax.Array
     lane_dist: jax.Array
+    #: Fractional diagnostic input to the rollout aggregate: one for a
+    #: semantic Move whose local route table returned a non-ready status.
+    route_nonready: jax.Array
 
 
 def _sample(logits, key):
@@ -146,29 +151,22 @@ def _sample(logits, key):
     return a, factored_log_prob(lg, a)
 
 
-def _orders_from(action, state, cfg_x=96, cfg_y=54):
-    button, sx, sy, tgt = action
-    nx = (sx + 0.5) / cfg_x * 2.0 - 1.0
-    ny = (sy + 0.5) / cfg_y * 2.0 - 1.0
-    # BUTTONS = (noop, move, attack_move, q, w, e, r, recall). Only the three
-    # the sim implements are decoded; the rest fall through to noop, which is
-    # action-repeat and therefore a real choice rather than a dropped one.
-    kind = jnp.where(button == 1, OrderKind.MOVE,
-                     jnp.where(button == 2, OrderKind.ATTACK,
-                               jnp.where(button == 5, OrderKind.CAST_E,
-                                         OrderKind.NOOP)))
-    return Orders(kind=kind.astype(jnp.int8),
-                  x=state.x[:2] + nx * SCREEN_RADIUS,
-                  y=state.y[:2] + ny * SCREEN_RADIUS,
-                  target=tgt.astype(jnp.int8))
+# Kept as the local name for callers/tests that used the rollout helper before
+# decoding was shared with the benchmark path.
+_orders_from = orders_from
 
 
-def make_train(cfg: TrainConfig = TrainConfig()):
+def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
+               terrain=None):
     """Build the jittable training function. Returns ``train(rng) -> (state, metrics)``."""
+    if route_table is not None and terrain is None:
+        raise ValueError("route_table requires a TerrainGrid")
     params_tbl = lane_params()
     path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
     frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
+    red_frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
+                                TOP_OUTER_TURRET[Team.BLUE], RED_NEXUS)
     policy = LanePolicy(PolicyConfig())
     fresh = init_lane()                    # the constant pytree reset writes
     fresh_reward = reward_init(fresh, cfg.reward)
@@ -181,7 +179,9 @@ def make_train(cfg: TrainConfig = TrainConfig()):
     )
 
     def _obs(state):
-        return jax.vmap(lambda i: build_observation(state, i, frame))(jnp.arange(2))
+        blue = build_observation(state, 0, frame, params=params_tbl)
+        red = build_observation(state, 1, red_frame, params=params_tbl)
+        return jax.tree.map(lambda a, b: jnp.stack([a, b]), blue, red)
 
     def _env_step(runner: RunnerState, _):
         rng, sk = jax.random.split(runner.rng)
@@ -192,8 +192,19 @@ def make_train(cfg: TrainConfig = TrainConfig()):
                                   obs.entity_pad_mask, obs.self_vec,
                                   obs.global_vec)
             action, log_prob = _sample(logits, key)
-            nxt = step_decision(apply_orders(state, _orders_from(action, state)),
-                                params_tbl, lane_path=path)
+            orders = _orders_from(action, state, obs.slot_unit, frame)
+            ordered = apply_orders(
+                state, orders, params_tbl,
+                route_table=route_table, terrain=terrain)
+            route_nonready = ((orders.kind == OrderKind.MOVE)
+                              & (ordered.route_status[:2] != 0))
+            # Exact per-neighbour terrain repair lowers through nested dynamic
+            # control flow and misses J1's throughput gate by two orders of
+            # magnitude. Training uses the documented deferred repair: every
+            # individual terrain query is preserved, after the dynamic sweep.
+            nxt = step_decision(
+                ordered, params_tbl, lane_path=path,
+                collision_terrain=False, defer_collision_terrain=True)
             # gamma is the TRAINER's gamma, threaded through deliberately:
             # the shaping potential is policy-invariant only under the same
             # discount the advantage estimator uses.
@@ -220,7 +231,8 @@ def make_train(cfg: TrainConfig = TrainConfig()):
                 obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
                 action, log_prob, logits.value, reward,
                 jnp.broadcast_to(done, reward.shape),
-                cs=cs_at_done, lane_dist=lane_dist)
+                cs=cs_at_done, lane_dist=lane_dist,
+                route_nonready=route_nonready.astype(jnp.float32))
             return nxt, rstate, t
 
         keys = jax.random.split(sk, cfg.n_envs)
@@ -303,6 +315,7 @@ def make_train(cfg: TrainConfig = TrainConfig()):
         # How far from the lane corridor the champions sat, in game units.
         # ~7,981 at spawn, 0 anywhere in lane. This is the leading indicator.
         metrics["lane_dist"] = tr.lane_dist.mean()
+        metrics["route_nonready"] = tr.route_nonready.mean()
         runner = runner._replace(params=params, opt_state=opt_state, rng=rng,
                                  step=runner.step + n_batch)
         return runner, metrics

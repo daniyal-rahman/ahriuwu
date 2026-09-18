@@ -72,19 +72,9 @@ failed to attack for 4 seconds -- which is what happened here before it was
 fixed: `time_since_attack` read 10,017 ms after ten seconds of a fight in which
 minions were visibly killing each other.
 
-Booked approximations
----------------------
-Per the project's rule that an approximation is only allowed when it is written
-down with its cost, this port currently simplifies two things:
-
-1. **``WaypointReached`` collision expansion.** The server grows the
-   arrival radius by the collision radii of minions it is overlapping, so a
-   packed wave advances its lane waypoint earlier than a lone minion would.
-   Modelled here as a plain radius test plus the server's 25-unit margin.
-   *Cost:* lane-waypoint advance timing in a crowded wave; affects where a wave
-   sits, not who it hits. **Unmeasured** -- needs a trajectory diff against a
-   recording before it is trusted.
-2. **``attackers`` in the target sort** is absent, because
+One server omission remains
+---------------------------
+``attackers`` in the target sort is absent, because
    ``CountUnitsAttackingUnit`` is commented out in the server itself ("First
    Wave Behaviour is unfinished"). That is parity, not a simplification.
 """
@@ -100,7 +90,7 @@ from .targeting import ClassifyUnit, minion_acquire
 
 __all__ = [
     "ACTION_TIMER_MS", "GIVE_UP_MS", "IGNORE_MS", "WAYPOINT_MARGIN",
-    "MinionAIOut", "step_minion_ai",
+    "MinionAIOut", "LaneWaypointOut", "step_minion_ai", "advance_lane_waypoints",
 ]
 
 #: ``minionActionTimer >= 250.0f`` -- the regular sweep of the priority list.
@@ -136,6 +126,136 @@ class MinionAIOut(NamedTuple):
     cfh_switch: Any
 
 
+class LaneWaypointOut(NamedTuple):
+    """Result of the lane-only tail of ``ReevaluateBehavior``.
+
+    ``reset_path`` means the server's current movement destination differed
+    from the newly selected immutable lane waypoint, so the caller must issue
+    ``SetWaypoints([Position, destination])``. ``stop`` is the exhausted
+    ``PathingWaypoints`` branch.
+    """
+
+    key: Any
+    destination: Any              # (N, 2), gathered with a safe key
+    reset_path: Any               # (N,) bool
+    stop: Any                     # (N,) bool
+
+
+def advance_lane_waypoints(
+    *,
+    kind: jax.Array,
+    alive: jax.Array,
+    x: jax.Array,
+    y: jax.Array,
+    collision_x: jax.Array,
+    collision_y: jax.Array,
+    collision_present: jax.Array,
+    spawn_seq: jax.Array,
+    collision_radius: jax.Array,
+    acquisition_range: jax.Array,
+    lane_waypoints: jax.Array,
+    lane_waypoint_key: jax.Array,
+    waypoints: jax.Array,
+    n_waypoints: jax.Array,
+    reevaluated: jax.Array,
+    has_target: jax.Array,
+) -> LaneWaypointOut:
+    """Port ``LaneMinionAI.WaypointReached`` and its enclosing while-loop.
+
+    ``collision_x/y/present`` are the frozen CollisionHandler nodes rebuilt
+    before movement.  ``EnumerateUnitsInRange`` queries those nodes with this
+    minion's *live* post-movement centre, then the LINQ sort and the expanding
+    collision-cluster geometry use live positions. This split is observable in
+    the server and is why both coordinate pairs are explicit inputs.
+
+    The function only acts on ``ReevaluateBehavior`` calls that reached the
+    no-target lane-walk tail. A minion with a live/new target never evaluates
+    a lane waypoint, exactly as the early returns in the C# method require.
+    """
+    n = x.shape[0]
+    width = lane_waypoints.shape[1]
+    idx = jnp.arange(n)
+    is_minion = (kind == Kind.LANE_MINION) & alive
+    active = is_minion & reevaluated & ~has_target
+
+    # `EnumerateUnitsInRange` asks CollisionHandler's (pre-move) tree whether
+    # its node circle intersects a query circle of AcquisitionRange.  LINQ's
+    # `OfType<LaneMinion>()` occurs before OrderBy, so champions/turrets never
+    # participate in, or terminate, the cluster walk.
+    sx = collision_x[None, :] - x[:, None]
+    sy = collision_y[None, :] - y[:, None]
+    membership = collision_present[None, :] & (
+        sx * sx + sy * sy
+        < (acquisition_range[:, None] + collision_radius[None, :]) ** 2)
+    candidates = membership & is_minion[None, :]
+
+    # OrderBy is stable. CollisionHandler's flat root-list has creation order,
+    # so `spawn_seq` supplies the tie break for equal float sort keys.
+    live_d2 = (x[None, :] - x[:, None]) ** 2 + (y[None, :] - y[:, None]) ** 2
+    score = live_d2 - collision_radius[None, :]
+    score = jnp.where(candidates, score, jnp.inf)
+    order = jnp.lexsort(
+        (jnp.broadcast_to(spawn_seq[None, :], (n, n)), score), axis=-1)
+
+    def ordered(a, rank):
+        return jnp.take_along_axis(
+            jnp.broadcast_to(a[None, :], (n, n)), order[:, rank, None],
+            axis=1)[:, 0]
+
+    # The C# loop turns a chain of overlapping minions into one progressively
+    # shifted circle, stopping at the FIRST sorted non-collider. A scan keeps
+    # its fixed JIT shape while `open_cluster` reproduces that `break`.
+    def cluster_body(carry, rank):
+        cx, cy, radius, open_cluster = carry
+        j = ordered(idx, rank)
+        valid = jnp.take_along_axis(
+            candidates, order[:, rank, None], axis=1)[:, 0]
+        ox, oy = ordered(x, rank), ordered(y, rank)
+        oradius = ordered(collision_radius, rank)
+        other = j != idx
+        test = open_cluster & valid & other
+        dx, dy = ox - cx, oy - cy
+        dist = jnp.sqrt(dx * dx + dy * dy)
+        collides = dist <= radius + oradius
+        safe = jnp.where(dist > 0, dist, jnp.ones_like(dist))
+        grow = test & collides
+        cx = jnp.where(grow, cx + dx / safe * oradius, cx)
+        cy = jnp.where(grow, cy + dy / safe * oradius, cy)
+        radius = jnp.where(grow, radius + oradius, radius)
+        # Self is explicitly skipped by C# and cannot break the loop. Invalid
+        # entries are not in the IEnumerable and likewise cannot break it.
+        open_cluster = open_cluster & (~test | collides)
+        return (cx, cy, radius, open_cluster), None
+
+    (center_x, center_y, final_radius, _), _ = jax.lax.scan(
+        cluster_body, (x, y, collision_radius, jnp.ones((n,), dtype=bool)),
+        jnp.arange(n))
+
+    def waypoint_body(key, _):
+        safe_key = jnp.clip(key.astype(jnp.int32), 0, width - 1)
+        wx = jnp.take_along_axis(lane_waypoints[..., 0], safe_key[:, None], 1)[:, 0]
+        wy = jnp.take_along_axis(lane_waypoints[..., 1], safe_key[:, None], 1)[:, 0]
+        in_path = key.astype(jnp.int32) < width
+        reached = active & in_path & (
+            (wx - center_x) ** 2 + (wy - center_y) ** 2
+            <= (final_radius + WAYPOINT_MARGIN) ** 2)
+        return jnp.where(reached, key + jnp.int8(1), key), None
+
+    key, _ = jax.lax.scan(waypoint_body, lane_waypoint_key, None, length=width)
+    safe_key = jnp.clip(key.astype(jnp.int32), 0, width - 1)
+    destination = jnp.take_along_axis(
+        lane_waypoints, safe_key[:, None, None], axis=1)[:, 0, :]
+    walking = active & (key.astype(jnp.int32) < width)
+    stop = active & ~walking
+    last_idx = jnp.clip(n_waypoints.astype(jnp.int32) - 1, 0, waypoints.shape[1] - 1)
+    current_destination = jnp.take_along_axis(
+        waypoints, last_idx[:, None, None], axis=1)[:, 0, :]
+    reset_path = walking & jnp.any(current_destination != destination, axis=-1)
+    return LaneWaypointOut(key=key.astype(lane_waypoint_key.dtype),
+                           destination=destination, reset_path=reset_path,
+                           stop=stop)
+
+
 def step_minion_ai(
     *,
     kind: jax.Array,
@@ -157,6 +277,7 @@ def step_minion_ai(
     ignore_until: jax.Array,
     had_target: jax.Array,
     move_order: jax.Array,
+    spawn_seq: jax.Array | None = None,
     delta_ms: float = 1000.0 / 60.0,
 ) -> MinionAIOut:
     """One tick of ``LaneMinionAI.OnUpdate`` for every unit at once.
@@ -213,6 +334,7 @@ def step_minion_ai(
         # The incumbent's protection comes from IsValidTarget, which does NOT
         # consult the call-for-help map -- see minion_acquire's docstring.
         incumbent_valid=cur_ok,
+        spawn_seq=spawn_seq,
     )
     # `FoundNewTarget` refuses outright while the minion is already on a
     # turret::
@@ -228,7 +350,13 @@ def step_minion_ai(
     # wave is most crowded and calls are loudest.
     on_turret = cur_ok & (kind[cur] == Kind.TURRET)
 
-    cfh_switch = (me & cfh_any & (cfh_pick >= 0) & (cfh_pick != target)
+    # The server spells the trigger as a short-circuiting ``A || B || C``:
+    # ``TargetJustDied() || FoundNewTarget(true) || timer >= 250``.  When the
+    # incumbent died, ``FoundNewTarget(true)`` is therefore not called at all;
+    # ReevaluateBehavior performs the unrestricted scan below instead.  This
+    # matters when a call-for-help candidate and an unrelated, better ordinary
+    # candidate are both present on the death tick.
+    cfh_switch = (me & ~just_died & cfh_any & (cfh_pick >= 0) & (cfh_pick != target)
                   & ~on_turret)
     target = jnp.where(cfh_switch, cfh_pick, target)
     target_priority = jnp.where(
@@ -257,6 +385,7 @@ def step_minion_ai(
         jnp.where(valid_after, target, jnp.int8(-1)),
         target_priority,
         ignored | (jnp.arange(n)[None, :] == cur[:, None]) & give_up[:, None],
+        spawn_seq=spawn_seq,
     )
     took_new = run & ~keep & (picked >= 0)
 

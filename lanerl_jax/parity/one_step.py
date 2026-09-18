@@ -3,10 +3,13 @@
 For every recorded server tick N: inject the server's state at N into a
 :class:`~lanerl_jax.sim.state.LaneState` (:mod:`lanerl_jax.parity.inject`),
 step the sim exactly one tick, and diff the result against the server's own
-state at N+1. No accumulation -- every comparison starts from ground truth,
-so a disagreement is attributable to that tick's mechanics alone (see
-``docs/ONE_STEP_DIFFERENTIAL.md`` for the full write-up and the honesty
-caveats ``lanerl_jax.parity.inject`` documents in detail).
+state at N+1. No accumulation -- every comparison starts from ground truth, so
+a disagreement is attributable to that tick's mechanics when the required reset
+fields are present (see ``docs/ONE_STEP_DIFFERENTIAL.md`` for the full write-up
+and the honesty caveats ``lanerl_jax.parity.inject`` documents in detail).
+Canonical-only traces retain labelled recovery gaps; `LANERL_STATE_DUMP_INTERNALS=1`
+adds diagnostic target/AA/AI/missile/waypoint/collision-cache fields outside the
+canonical hash.
 
 Recording
 ---------
@@ -44,12 +47,13 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import jax
 import numpy as np
 
 from ..sim.init import TOP_LANE_PATH
+from ..sim.orders import Orders, apply_orders
 from ..sim.profiles import PROFILES
 from ..sim.state import Kind, LaneState
 from ..sim.step import tick
@@ -61,7 +65,7 @@ from .trace import Entity, PosQ, Snapshot, StatQ
 __all__ = [
     "SEED", "GAME_SECONDS", "record_idle_trace",
     "MatchedPair", "DeathEvent", "SpawnEvent", "FieldStats",
-    "OneStepResult", "run_one_step_differential",
+    "OneStepResult", "merge_one_step_results", "run_one_step_differential",
 ]
 
 SEED = 4242
@@ -113,7 +117,8 @@ def record_idle_trace(out_dir: Path, game_seconds: float = GAME_SECONDS,
         1,
         spec=ServerLaunchSpec(
             toponly=True, bot_teams="none", bot_seed=seed, step_ticks=2,
-            extra_env={"LANERL_STATE_DUMP": "1", "LANERL_STATE_DUMP_FULL": "1"},
+            extra_env={"LANERL_STATE_DUMP": "1", "LANERL_STATE_DUMP_FULL": "1",
+                       "LANERL_STATE_DUMP_INTERNALS": "1"},
         ),
         log_dir=out_dir / "server",
         ports=PortAllocator(base=port_base).allocate(1),
@@ -188,6 +193,7 @@ class TickResult:
     spawns: List[SpawnEvent] = field(default_factory=list)
     n_units_injected: int = 0
     n_untrustworthy_movement: int = 0
+    identity_mode: str = "legacy proximity"
 
 
 def _by_group(entities, key_fn) -> Dict[Tuple[str, int], List]:
@@ -201,14 +207,26 @@ def _by_group(entities, key_fn) -> Dict[Tuple[str, int], List]:
 
 
 def compare_one_tick(state_n: LaneState, notes: List[UnitInjectionNote],
-                     snap_n1: Snapshot, params: dict, lane_path) -> TickResult:
-    """Step ``state_n`` (already injected from tick N) once and diff vs N+1."""
+                     snap_n1: Snapshot, params: dict, lane_path,
+                     endpoint_orders: Optional[Orders] = None,
+                     pre_net_id_to_slot: Optional[Dict[int, int]] = None, *,
+                     route_table=None, terrain=None) -> TickResult:
+    """Step injected N once, apply an endpoint action, and diff vs N+1.
+
+    The endpoint placement is not arbitrary: ``LanerlControl`` executes an
+    action immediately before the state dump at that control boundary, after
+    the preceding object's tick.  See :mod:`lanerl_jax.parity.action_replay`.
+    """
     out = TickResult(t_ms=int(state_n.t_ms))
     out.n_units_injected = len(notes)
     out.n_untrustworthy_movement = sum(1 for n in notes if not n.movement_trustworthy)
     note_by_slot = {n.slot: n for n in notes}
 
     pred_state = _tick_jit(state_n, params, lane_path=lane_path)
+    if endpoint_orders is not None:
+        pred_state = apply_orders(
+            pred_state, endpoint_orders, params,
+            route_table=route_table, terrain=terrain)
     pred_snapshot = state_to_snapshot(pred_state, t_ms=float(pred_state.t_ms),
                                       params=params)
     pred_kind = np.asarray(pred_state.kind)
@@ -216,37 +234,67 @@ def compare_one_tick(state_n: LaneState, notes: List[UnitInjectionNote],
     pred_slots = np.flatnonzero((pred_kind != Kind.NONE) & pred_alive)
     assert len(pred_slots) == len(pred_snapshot.entities)
 
-    # ---- pass 1: death / spawn, matched by PRE-tick position ---------------
+    # ---- pass 1: death / spawn ---------------------------------------------
     real_all = _by_group(snap_n1.entities,
                          lambda e: (e.kind, e.team) if e.kind in LANE_KINDS
                          and e.team is not None else None)
     pre_by_group = _by_group(notes, lambda n: (n.kind, n.team))
-    for key in set(pre_by_group) | set(real_all):
-        pre_list = pre_by_group.get(key, [])
-        real_list = real_all.get(key, [])
-        left = [n.entity for n in pre_list]
-        matched, only_l, only_r = _match_group(left, real_list, MATCH_RADIUS_Q)
-        note_by_entity_id = {id(n.entity): n for n in pre_list}
-        for a, b, _d in matched:
-            n = note_by_entity_id[id(a)]
-            server_alive = not b.dead
+    from .diagnostic_identity import net_id_to_entity
+    real_by_net_id = net_id_to_entity(snap_n1)
+    pre_net_id_to_slot = pre_net_id_to_slot or {}
+    identity_complete = (
+        bool(notes) and len(pre_net_id_to_slot) == len(notes)
+        and bool(snap_n1.ai_internals))
+    if identity_complete:
+        out.identity_mode = "diagnostic NetId"
+        pre_ids = set(pre_net_id_to_slot)
+        for net_id, slot in pre_net_id_to_slot.items():
+            n = note_by_slot[slot]
+            b = real_by_net_id.get(net_id)
             out.deaths.append(DeathEvent(
-                kind=key[0], team=key[1], slot=n.slot,
-                sim_alive_after=bool(pred_alive[n.slot]),
-                server_alive_after=server_alive,
-                server_row_present_but_dead=b.dead,
+                kind=n.kind, team=n.team, slot=slot,
+                sim_alive_after=bool(pred_alive[slot]),
+                server_alive_after=b is not None and not b.dead,
+                server_row_present_but_dead=b is not None and bool(b.dead),
             ))
-        for a in only_l:
-            n = note_by_entity_id[id(a)]
-            out.deaths.append(DeathEvent(
-                kind=key[0], team=key[1], slot=n.slot,
-                sim_alive_after=bool(pred_alive[n.slot]),
-                server_alive_after=False,
+        new_real_by_group = _by_group(
+            [entity for net_id, entity in real_by_net_id.items()
+             if net_id not in pre_ids],
+            lambda e: (e.kind, e.team) if e.kind in LANE_KINDS
+            and e.team is not None else None)
+        for key in set(pre_by_group) | set(real_all):
+            out.spawns.append(SpawnEvent(
+                kind=key[0], team=key[1],
+                n_real_new=len(new_real_by_group.get(key, [])), n_sim_new=0,
             ))
-        out.spawns.append(SpawnEvent(
-            kind=key[0], team=key[1], n_real_new=len(only_r),
-            n_sim_new=0,   # filled in after pred_by_group is built, see below
-        ))
+    else:
+        # Legacy canonical dumps omit NetId.  Retain the historical bounded
+        # proximity recovery, explicitly labelled; collision can legitimately
+        # push a unit beyond this radius, so it is never used when IDs exist.
+        for key in set(pre_by_group) | set(real_all):
+            pre_list = pre_by_group.get(key, [])
+            real_list = real_all.get(key, [])
+            left = [n.entity for n in pre_list]
+            matched, only_l, only_r = _match_group(left, real_list, MATCH_RADIUS_Q)
+            note_by_entity_id = {id(n.entity): n for n in pre_list}
+            for a, b, _d in matched:
+                n = note_by_entity_id[id(a)]
+                out.deaths.append(DeathEvent(
+                    kind=key[0], team=key[1], slot=n.slot,
+                    sim_alive_after=bool(pred_alive[n.slot]),
+                    server_alive_after=not b.dead,
+                    server_row_present_but_dead=b.dead,
+                ))
+            for a in only_l:
+                n = note_by_entity_id[id(a)]
+                out.deaths.append(DeathEvent(
+                    kind=key[0], team=key[1], slot=n.slot,
+                    sim_alive_after=bool(pred_alive[n.slot]),
+                    server_alive_after=False,
+                ))
+            out.spawns.append(SpawnEvent(
+                kind=key[0], team=key[1], n_real_new=len(only_r), n_sim_new=0,
+            ))
 
     # sim's new-unit count per group: predicted alive count minus how many
     # pre-tick slots of that group survived (from the death pass above).
@@ -276,24 +324,66 @@ def compare_one_tick(state_n: LaneState, notes: List[UnitInjectionNote],
     pred_by_group: Dict[Tuple[str, int], List[Tuple[int, Entity]]] = {}
     for slot, e in zip(pred_slots, pred_snapshot.entities):
         pred_by_group.setdefault((e.kind, e.team), []).append((int(slot), e))
-    for key in set(pred_by_group) | set(real_alive_all):
-        plist = pred_by_group.get(key, [])
-        rlist = real_alive_all.get(key, [])
-        left = [e for _, e in plist]
-        matched, _only_l, _only_r = _match_group(left, rlist, MATCH_RADIUS_Q)
-        slot_by_id = {id(e): slot for slot, e in plist}
-        for a, b, d in matched:
-            slot = slot_by_id[id(a)]
+    if identity_complete:
+        slot_to_pred = {int(slot): entity
+                        for slot, entity in zip(pred_slots, pred_snapshot.entities)}
+        pre_ids = set(pre_net_id_to_slot)
+        for net_id, slot in pre_net_id_to_slot.items():
+            a, b = slot_to_pred.get(slot), real_by_net_id.get(net_id)
+            if a is None or b is None or b.dead:
+                continue
+            key = (a.kind, a.team)
+            # Diagnostic identity is allowed to cross the old 8-unit match
+            # radius; retain distance only as a diagnostic value.
+            d = math.hypot(a.q_x - b.q_x, a.q_y - b.q_y)
             note = note_by_slot.get(slot)
             trust = True if note is None else note.movement_trustworthy
-            reason = "freshly spawned this tick" if note is None else note.movement_reason
-            pre_x = note.x if note is not None else float("nan")
-            pre_y = note.y if note is not None else float("nan")
             out.matched.append(MatchedPair(
                 kind=key[0], team=key[1], slot=slot, match_distance_q=d,
                 pred=a, real=b, movement_trustworthy=trust,
-                movement_reason=reason, pre_x=pre_x, pre_y=pre_y,
+                movement_reason=("freshly spawned this tick" if note is None
+                                 else note.movement_reason),
+                pre_x=(float("nan") if note is None else note.x),
+                pre_y=(float("nan") if note is None else note.y),
             ))
+        # Newly spawned entities do not have a predecessor identity.  Match
+        # only this new/new remainder by proximity.
+        new_pred = [(slot, entity) for slot, entity in zip(pred_slots, pred_snapshot.entities)
+                    if int(slot) not in note_by_slot]
+        new_real = [entity for net_id, entity in real_by_net_id.items()
+                    if net_id not in pre_ids and not entity.dead]
+        for key in set(_by_group(new_pred, lambda p: (p[1].kind, p[1].team))) | set(
+                _by_group(new_real, lambda e: (e.kind, e.team))):
+            plist = [p for p in new_pred if (p[1].kind, p[1].team) == key]
+            rlist = [e for e in new_real if (e.kind, e.team) == key]
+            matched, _, _ = _match_group([e for _, e in plist], rlist, MATCH_RADIUS_Q)
+            slot_by_entity = {id(e): int(slot) for slot, e in plist}
+            for a, b, d in matched:
+                slot = slot_by_entity[id(a)]
+                out.matched.append(MatchedPair(
+                    kind=key[0], team=key[1], slot=slot, match_distance_q=d,
+                    pred=a, real=b, movement_trustworthy=True,
+                    movement_reason="freshly spawned this tick",
+                    pre_x=float("nan"), pre_y=float("nan")))
+    else:
+        for key in set(pred_by_group) | set(real_alive_all):
+            plist = pred_by_group.get(key, [])
+            rlist = real_alive_all.get(key, [])
+            left = [e for _, e in plist]
+            matched, _only_l, _only_r = _match_group(left, rlist, MATCH_RADIUS_Q)
+            slot_by_id = {id(e): slot for slot, e in plist}
+            for a, b, d in matched:
+                slot = slot_by_id[id(a)]
+                note = note_by_slot.get(slot)
+                trust = True if note is None else note.movement_trustworthy
+                reason = "freshly spawned this tick" if note is None else note.movement_reason
+                pre_x = note.x if note is not None else float("nan")
+                pre_y = note.y if note is not None else float("nan")
+                out.matched.append(MatchedPair(
+                    kind=key[0], team=key[1], slot=slot, match_distance_q=d,
+                    pred=a, real=b, movement_trustworthy=trust,
+                    movement_reason=reason, pre_x=pre_x, pre_y=pre_y,
+                ))
     return out
 
 
@@ -361,6 +451,15 @@ class OneStepResult:
     n_ticks_with_inflight_missile: int = 0
     n_ticks_with_inflight_missile_and_hp_diff: int = 0
     n_ticks_without_missile_and_hp_diff: int = 0
+    #: Injection provenance, accumulated rather than discarded.  The one-step
+    #: scores below are only interpretable alongside this ledger: a green score
+    #: must not be read as confirmation of a hidden field we defaulted.
+    recovery_counts: Dict[str, int] = field(default_factory=dict)
+    #: Driven fixtures only: one boundary contains two semantic side orders.
+    n_action_boundaries: int = 0
+    action_kinds: Dict[str, int] = field(default_factory=dict)
+    n_diagnostic_identity_ticks: int = 0
+    n_legacy_proximity_identity_ticks: int = 0
 
     def get(self, kind: str, name: str) -> FieldStats:
         key = (kind, name)
@@ -402,15 +501,19 @@ class OneStepResult:
             lines.append("  " + self.fields[key].summary())
         lines.append("")
         lines.append("-- position: trustworthy vs untrustworthy injection, "
-                     "bit-exact vs the gate's own <=1/16 criterion --")
-        lines.append("   (docs/JAX_REWRITE_PLAN.md Sec3: position target is "
-                     "<=1/16 unit, NOT bit-exact)")
+                     "bit-exact vs Euclidean and componentwise <=1/16 --")
+        lines.append("   x/y are quantised independently; componentwise/L-inf "
+                     "is the identifiable dump-resolution gate. Euclidean is "
+                     "retained as a stricter historical diagnostic.")
         kinds = sorted({k for k, name in self.fields if name == "position"})
         for kind in kinds:
             t_exact = self.fields.get((kind, "position"))
             u_exact = self.fields.get((kind, "position_untrustworthy_injection"))
             t_tol = self.fields.get((kind, "position_le1_16"))
             u_tol = self.fields.get((kind, "position_le1_16_untrustworthy_injection"))
+            t_linf = self.fields.get((kind, "position_linf_le1_16"))
+            u_linf = self.fields.get(
+                (kind, "position_linf_le1_16_untrustworthy_injection"))
             def pct(fs):
                 return f"{100*fs.frac_exact:.2f}% ({fs.n_exact}/{fs.n_total})" \
                     if fs and fs.n_total else "n/a"
@@ -419,6 +522,8 @@ class OneStepResult:
                          f"untrustworthy={pct(u_exact)}")
             lines.append(f"    <=1/16      trustworthy={pct(t_tol)}  "
                          f"untrustworthy={pct(u_tol)}")
+            lines.append(f"    L-inf<=1/16 trustworthy={pct(t_linf)}  "
+                         f"untrustworthy={pct(u_linf)}")
         lines.append("")
         lines.append("-- death agreement (pre-tick position match) --")
         for kind, d in sorted(self.death_confusion.items()):
@@ -445,8 +550,8 @@ class OneStepResult:
                 f"sim-only {d['sim_only_alive']}, server-only "
                 f"{d['server_only_alive']}  (n={total})")
         lines.append("")
-        lines.append("-- missile confound (a SpellMissile row present at the "
-                     "injected tick means a launch the injector cannot see) --")
+        lines.append("-- missile confound (legacy traces without diagnostic "
+                     "internals cannot inject a live missile) --")
         with_m = self.n_ticks_with_inflight_missile
         without_m = self.n_ticks - with_m
         rate_with = (self.n_ticks_with_inflight_missile_and_hp_diff / with_m
@@ -464,13 +569,106 @@ class OneStepResult:
             f"  HP-disagreement rate on missile-free ticks: "
             f"{self.n_ticks_without_missile_and_hp_diff}/{without_m} "
             f"({100 * rate_without:.1f}%)")
+        lines.append("")
+        lines.append("-- hidden-state injection provenance (not agreement) --")
+        if self.recovery_counts:
+            for label, count in sorted(self.recovery_counts.items()):
+                lines.append(f"  {count}: {label}")
+        else:
+            lines.append("  no injections")
+        if self.n_action_boundaries:
+            lines.append("")
+            lines.append("-- recorded endpoint actions replayed --")
+            lines.append(f"  boundaries: {self.n_action_boundaries}")
+            for kind, count in sorted(self.action_kinds.items()):
+                lines.append(f"  {kind}: {count}")
+        lines.append("")
+        lines.append("-- entity correspondence provenance --")
+        lines.append(f"  diagnostic NetId: {self.n_diagnostic_identity_ticks} ticks")
+        lines.append(
+            f"  legacy proximity fallback: "
+            f"{self.n_legacy_proximity_identity_ticks} ticks")
         return "\n".join(lines)
 
 
+def merge_one_step_results(parts: Iterable[OneStepResult]) -> OneStepResult:
+    """Combine disjoint one-step shards without changing serial semantics.
+
+    Callers must provide shards in increasing tick-range order.  Scalar counts
+    are additive, field error samples retain serial tick order, and the final
+    worst-position series is sorted defensively by timestamp.  The latter
+    makes the result deterministic even when callers collect futures in
+    completion order.
+    """
+    out = OneStepResult()
+    for part in parts:
+        out.n_ticks += part.n_ticks
+        out.n_ticks_skipped += part.n_ticks_skipped
+        out.n_untrustworthy_movement_ticks += part.n_untrustworthy_movement_ticks
+        out.n_units_seen += part.n_units_seen
+        out.gap4_candidates += part.gap4_candidates
+        out.n_ticks_with_inflight_missile += part.n_ticks_with_inflight_missile
+        out.n_ticks_with_inflight_missile_and_hp_diff += (
+            part.n_ticks_with_inflight_missile_and_hp_diff)
+        out.n_ticks_without_missile_and_hp_diff += (
+            part.n_ticks_without_missile_and_hp_diff)
+        out.n_action_boundaries += part.n_action_boundaries
+        out.n_diagnostic_identity_ticks += part.n_diagnostic_identity_ticks
+        out.n_legacy_proximity_identity_ticks += (
+            part.n_legacy_proximity_identity_ticks)
+
+        for key, src in part.fields.items():
+            dst = out.fields.get(key)
+            if dst is None:
+                dst = FieldStats(name=src.name, kind=src.kind)
+                out.fields[key] = dst
+            dst.n_total += src.n_total
+            dst.n_exact += src.n_exact
+            dst.errors.extend(src.errors)
+
+        for attr in (
+            "death_confusion", "hp_change_confusion",
+        ):
+            dst_groups = getattr(out, attr)
+            for kind, src_counts in getattr(part, attr).items():
+                dst_counts = _confusion_key(dst_groups, kind)
+                for key, value in src_counts.items():
+                    dst_counts[key] += value
+
+        for attr in (
+            "spawn_mismatches", "n_spawn_ticks", "recovery_counts", "action_kinds",
+        ):
+            dst_counts = getattr(out, attr)
+            for key, value in getattr(part, attr).items():
+                dst_counts[key] = dst_counts.get(key, 0) + value
+
+        out.per_tick_worst_pos_error.extend(part.per_tick_worst_pos_error)
+
+    out.per_tick_worst_pos_error.sort(key=lambda row: row[0])
+    return out
+
+
 def run_one_step_differential(
-    trace, patch=None, max_pairs: Optional[int] = None,
+    trace, patch=None, max_pairs: Optional[int] = None, *,
+    pair_start: int = 0, pair_stop: Optional[int] = None,
+    progress_every: Optional[int] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    action_log=None,
+    route_table=None,
+    terrain=None,
 ) -> OneStepResult:
-    """The whole Tier-1 pass over a recorded trace."""
+    """Run Tier 1 over a whole trace or a contiguous pair-index shard.
+
+    ``pair_start`` is inclusive and ``pair_stop`` exclusive.  They index tick
+    *pairs* in the original trace, so hidden-state recovery can still inspect
+    the real preceding snapshot and wave replay still starts at episode zero.
+    This property is what makes independently evaluated shards equivalent to
+    one serial pass.
+
+    ``progress_callback(done, total)`` runs after each ``progress_every``
+    attempted pairs (and once at the end).  It is observational only and does
+    not receive mutable result state.
+    """
     import jax.numpy as jnp
 
     from ..data.patch import load_patch
@@ -480,21 +678,60 @@ def run_one_step_differential(
     params = lane_params(patch)
     wave_states = replay_wave_states(trace)
     lane_path = jnp.asarray(np.asarray(TOP_LANE_PATH, np.float32))
+    action_at_snapshot = {}
+    if action_log is not None:
+        from .action_replay import align_action_log
+        action_at_snapshot = align_action_log(trace, action_log)
 
     result = OneStepResult()
     n = len(trace)
     if max_pairs is not None:
         n = min(n, max_pairs + 1)
+    available_pairs = max(0, n - 1)
+    start = min(max(0, pair_start), available_pairs)
+    stop = available_pairs if pair_stop is None else min(
+        max(start, pair_stop), available_pairs)
+    total_attempted = stop - start
+    progress_every = progress_every if progress_every and progress_every > 0 else None
 
-    for i in range(n - 1):
+    for attempted, i in enumerate(range(start, stop), 1):
         snap_n, snap_n1 = trace[i], trace[i + 1]
         dt = snap_n1.t_ms - snap_n.t_ms
         if dt <= 0 or dt > 34:      # more than ~2 ticks: a gap in the log
             result.n_ticks_skipped += 1
+            if progress_callback is not None and (
+                    attempted == total_attempted or
+                    (progress_every is not None and attempted % progress_every == 0)):
+                progress_callback(attempted, total_attempted)
             continue
 
-        state_n, report = inject_snapshot(snap_n, wave_states[i], params, PROFILES)
-        tr = compare_one_tick(state_n, report.notes, snap_n1, params, lane_path)
+        previous = trace[i - 1] if i else None
+        if previous is not None and not (0 < snap_n.t_ms - previous.t_ms <= 34):
+            previous = None
+        state_n, report = inject_snapshot(
+            snap_n, wave_states[i], params, PROFILES, previous_snapshot=previous)
+        for label, count in report.provenance_counts().items():
+            result.recovery_counts[label] = result.recovery_counts.get(label, 0) + count
+        endpoint_orders = None
+        from .diagnostic_identity import net_id_to_injected_slot
+        net_id_slots = net_id_to_injected_slot(snap_n, report.notes)
+        decision = action_at_snapshot.get(i + 1)
+        if decision is not None:
+            from .action_replay import decision_to_orders
+            endpoint_orders = decision_to_orders(
+                decision, net_id_slots)
+            result.n_action_boundaries += 1
+            for wire in (decision.blue, decision.red):
+                kind = str(wire.get("t", "noop"))
+                result.action_kinds[kind] = result.action_kinds.get(kind, 0) + 1
+        tr = compare_one_tick(
+            state_n, report.notes, snap_n1, params, lane_path,
+            endpoint_orders=endpoint_orders, pre_net_id_to_slot=net_id_slots,
+            route_table=route_table, terrain=terrain)
+        if tr.identity_mode == "diagnostic NetId":
+            result.n_diagnostic_identity_ticks += 1
+        else:
+            result.n_legacy_proximity_identity_ticks += 1
         result.n_ticks += 1
         result.n_units_seen += tr.n_units_injected
         if tr.n_untrustworthy_movement:
@@ -537,6 +774,19 @@ def run_one_step_differential(
             fs_tol.n_exact += int(within_gate_tol)
             if not within_gate_tol:
                 fs_tol.errors.append(euclid)
+
+            # The wire rounds x and y independently. A one-bin miss on both
+            # axes has Euclidean length sqrt(2)/16, but neither component is
+            # distinguishable beyond the dump's own 1/16 resolution.
+            linf = max(abs(dx), abs(dy))
+            within_linf_tol = linf <= POS_GATE_TOL + POS_GATE_SLACK
+            linf_name = ("position_linf_le1_16" if m.movement_trustworthy else
+                         "position_linf_le1_16_untrustworthy_injection")
+            fs_linf = result.get(m.kind, linf_name)
+            fs_linf.n_total += 1
+            fs_linf.n_exact += int(within_linf_tol)
+            if not within_linf_tol:
+                fs_linf.errors.append(linf)
 
             if m.movement_trustworthy:
                 mvx, mvy = m.pred.x - m.pre_x, m.pred.y - m.pre_y
@@ -637,5 +887,10 @@ def run_one_step_differential(
                     result.spawn_mismatches.get(sp.kind, 0) + 1)
 
         result.per_tick_worst_pos_error.append((snap_n.t_ms, worst_pos))
+
+        if progress_callback is not None and (
+                attempted == total_attempted or
+                (progress_every is not None and attempted % progress_every == 0)):
+            progress_callback(attempted, total_attempted)
 
     return result

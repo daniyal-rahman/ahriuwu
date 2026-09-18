@@ -100,6 +100,7 @@ class AutoAttackOut(NamedTuple):
     has_auto_attacked: Any
     hit: Any             # True on the tick the damage lands
     damage: Any          # post-mitigation damage on that tick, else 0
+    consumed_skip: Any   # True where a pending SkipNextAutoAttack was consumed
 
 
 def ideal_attack_range(attack_range: Any, target_collision_radius: Any) -> Any:
@@ -129,6 +130,9 @@ def step_autoattack(
     delta_ms: float = 1000.0 / 60.0,
     crit_chance: Any = 0.0,
     crit_damage: Any = 2.0,
+    empowered_attack: Any = False,
+    empowered_damage: Any = None,
+    skip_next_autoattack: Any = False,
     xp: Any = np,
 ) -> AutoAttackOut:
     """One tick of the auto-attack clock for a batch of units.
@@ -168,12 +172,24 @@ def step_autoattack(
     still_casting = winding & (windup > 0)
     cancel = still_casting & (~has_target | ~in_range)
 
-    raw = attack_damage * xp.where(
+    # A skipped auto sets `IsAttacking` but never calls `Spell.Cast` or starts
+    # its cooldown. On the following server update `UpdateTarget` observes the
+    # ready spell, clears `IsAttacking`, and returns; it cannot begin another
+    # swing until the *next* update. This otherwise odd one-tick state is how
+    # Garen Q's `SkipNextAutoAttack()` hands the following swing to
+    # `GarenQAttack`.
+    skipped_ready = is_attacking & (aa_windup <= 0) & ~has_auto_attacked
+
+    raw_normal = attack_damage * xp.where(
         xp.asarray(crit_chance) > 0, crit_damage, xp.ones_like(attack_damage))
+    if empowered_damage is None:
+        empowered_damage = attack_damage
+    raw = xp.where(empowered_attack, empowered_damage, raw_normal)
     dmg = xp.where(hit, post_mitigation_damage(raw, target_resist, xp),
                    xp.zeros_like(attack_damage))
 
-    attacking = xp.where(hit | cancel, xp.zeros_like(is_attacking, dtype=bool),
+    attacking = xp.where(hit | cancel | skipped_ready,
+                         xp.zeros_like(is_attacking, dtype=bool),
                          is_attacking)
     hit_done = has_auto_attacked | hit
     windup = xp.where(hit | cancel, xp.zeros_like(windup), windup)
@@ -181,11 +197,15 @@ def step_autoattack(
 
     # 3. the swing gate. `AutoAttackSpell.State == STATE_READY` is "not already
     #    winding up", which is `~attacking` here.
-    start = has_target & in_range & can_attack & (~attacking) & (cd <= 0)
-    cd = xp.where(start, attack_period, cd)
-    windup = xp.where(start, windup_time, windup)
+    start = (has_target & in_range & can_attack & (~attacking) & (cd <= 0)
+             & ~skipped_ready)
+    consumed_skip = start & skip_next_autoattack
+    cd = xp.where(start, xp.where(consumed_skip, xp.zeros_like(cd), attack_period), cd)
+    windup = xp.where(start,
+                      xp.where(consumed_skip, xp.zeros_like(windup), windup_time),
+                      windup)
     attacking = attacking | start
     # `HasAutoAttacked = false;` on every swing start
     hit_done = xp.where(start, xp.zeros_like(hit_done, dtype=bool), hit_done)
 
-    return AutoAttackOut(cd, windup, attacking, hit_done, hit, dmg)
+    return AutoAttackOut(cd, windup, attacking, hit_done, hit, dmg, consumed_skip)

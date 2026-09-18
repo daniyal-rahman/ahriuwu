@@ -15,15 +15,15 @@ disagree with each other in ways that matter:
     made unbeatable on distance so only a **strictly better priority** can
     displace it.
 
-Ties, and why slot order is a parity surface
---------------------------------------------
+Ties, and why creation order is a parity surface
+------------------------------------------------
 All three iterate and keep the first strictly-better candidate, so ties go to
-whichever unit the server's object collection yields first.  ``TurretAI`` says
-so in its own comment: *"the player to have been added to the game first will
-always be targeted before the others"*.  ``argmin`` takes the lowest index, so
-the sim's slot order has to be the server's insertion order -- which is why
-``LaneState`` lays units out ``[champions | minions | turrets]`` and why that
-is documented as load-bearing.
+the first candidate in the server collection.  On Map1 the collision quadtree
+degenerates to its root list (see :mod:`sim.collision`), whose traversal is
+object-add order.  Array slots are *not* that order: turrets are created before
+champions, and dead minion slots are recycled.  Callers therefore pass
+``LaneState.spawn_seq`` as the explicit tie key.  Slot order remains only as a
+standalone-test fallback.
 
 Lexicographic without a packed key
 ----------------------------------
@@ -195,17 +195,31 @@ def call_for_help_map(*, damage_ij, x, y, alive, kind, team,
     return jnp.min(prio, axis=2).astype(jnp.int8)          # min over victims
 
 
-def _first_argmin(value: jax.Array, valid: jax.Array, axis: int = -1) -> jax.Array:
-    """Index of the minimum, ties going to the LOWEST index; -1 if none valid.
+def _first_argmin(value: jax.Array, valid: jax.Array, axis: int = -1,
+                  tie_key: jax.Array | None = None) -> jax.Array:
+    """Index of the minimum, ties going to the lowest ``tie_key``.
 
-    ``jnp.argmin`` already breaks ties toward the low index, so the only work
-    here is masking invalid entries to ``+inf`` and reporting emptiness rather
-    than returning index 0 for a row with no candidates.
+    ``tie_key`` is a one-dimensional candidate creation-rank vector.  When it
+    is omitted, array index is used for compact standalone tests.  Production
+    passes ``spawn_seq`` so recycled slots cannot silently change target ties.
     """
     big = jnp.asarray(jnp.inf, value.dtype) if jnp.issubdtype(value.dtype, jnp.floating) \
         else jnp.asarray(jnp.iinfo(value.dtype).max, value.dtype)
     masked = jnp.where(valid, value, big)
-    idx = jnp.argmin(masked, axis=axis)
+    best = jnp.min(masked, axis=axis, keepdims=True)
+    tied = valid & (value == best)
+    if tie_key is None:
+        keys = jnp.arange(value.shape[axis], dtype=jnp.int32)
+    else:
+        keys = tie_key.astype(jnp.int32)
+    shape = [1] * value.ndim
+    shape[axis] = value.shape[axis]
+    keys = jnp.broadcast_to(keys.reshape(shape), value.shape)
+    key_max = jnp.iinfo(jnp.int32).max
+    chosen_key = jnp.min(jnp.where(tied, keys, key_max), axis=axis,
+                         keepdims=True)
+    chosen = tied & (keys == chosen_key)
+    idx = jnp.argmax(chosen.astype(jnp.int8), axis=axis)
     any_valid = jnp.any(valid, axis=axis)
     return jnp.where(any_valid, idx, -1).astype(jnp.int8)
 
@@ -217,7 +231,8 @@ def _pairwise_dist2(x: jax.Array, y: jax.Array) -> jax.Array:
 
 
 def nearest_enemy(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array,
-                  targetable: jax.Array, acquisition_range: jax.Array) -> jax.Array:
+                  targetable: jax.Array, acquisition_range: jax.Array,
+                  spawn_seq: jax.Array | None = None) -> jax.Array:
     """``ObjAIBase.UpdateTarget``'s attack-move scan: closest enemy, no priority.
 
     The server's loop rejects on ``u.IsDead``, ``u.Team == Team``,
@@ -237,13 +252,14 @@ def nearest_enemy(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array,
         & (d2 <= r * r)
         & ~jnp.eye(x.shape[0], dtype=bool)
     )
-    return _first_argmin(d2, valid)
+    return _first_argmin(d2, valid, tie_key=spawn_seq)
 
 
 def turret_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array,
                    targetable: jax.Array, kind: jax.Array, minion_type: jax.Array,
                    turret_range: jax.Array, current_target: jax.Array,
-                   target_of: jax.Array, attack_range: jax.Array) -> jax.Array:
+                   target_of: jax.Array, attack_range: jax.Array,
+                   spawn_seq: jax.Array | None = None) -> jax.Array:
     """``TurretAI.CheckForTargets``.
 
     Two regimes, and the server really does branch on whether it already holds
@@ -268,7 +284,7 @@ def turret_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array
 
     # regime 1: priority only
     prio = jnp.broadcast_to(base_priority(kind, minion_type)[None, :], (n, n))
-    by_priority = _first_argmin(prio, in_range)
+    by_priority = _first_argmin(prio, in_range, tie_key=spawn_seq)
 
     # regime 2: an enemy champion diving an allied champion
     tgt = target_of                                   # (N,) each unit's target
@@ -286,8 +302,8 @@ def turret_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array
     ) <= rng2
     diving = in_range & attacker_ok[None, :] & victim_in_turret_range
     # "no priority required ... break" -> the first qualifying index
-    by_dive = _first_argmin(jnp.broadcast_to(jnp.arange(n, dtype=jnp.int32)[None, :],
-                                             (n, n)), diving)
+    by_dive = _first_argmin(jnp.zeros((n, n), dtype=jnp.int8), diving,
+                            tie_key=spawn_seq)
 
     holding = current_target >= 0
     holding_champ = holding & (kind[jnp.clip(current_target, 0, n - 1)] == Kind.CHAMPION)
@@ -301,7 +317,8 @@ def minion_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array
                    priority: jax.Array, acquisition_range: jax.Array,
                    current_target: jax.Array, current_priority: jax.Array,
                    ignored: jax.Array,
-                   incumbent_valid: jax.Array | None = None) -> jax.Array:
+                   incumbent_valid: jax.Array | None = None,
+                   spawn_seq: jax.Array | None = None) -> jax.Array:
     """``LaneMinionAI.FoundNewTarget``, lexicographic on ``(priority, dist^2)``.
 
     ``priority`` is ``(N, N)``: row *i* is what unit *i* thinks each candidate is
@@ -360,7 +377,7 @@ def minion_acquire(x: jax.Array, y: jax.Array, team: jax.Array, alive: jax.Array
                      axis=-1, keepdims=True)
     # level 2: nearest among those, ties to the lowest index
     at_best = cand & (priority == best_p)
-    pick = _first_argmin(d2, at_best)
+    pick = _first_argmin(d2, at_best, tie_key=spawn_seq)
 
     keep = cur_valid & (pick < 0)
     return jnp.where(keep, current_target, pick).astype(jnp.int8)

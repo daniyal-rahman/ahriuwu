@@ -28,7 +28,7 @@ from lanerl_jax.sim.profiles import (  # noqa: E402
     profile_id,
 )
 from lanerl_jax.sim.state import Kind, TU_SLICE, Team  # noqa: E402
-from lanerl_jax.sim.step import step_decision  # noqa: E402
+from lanerl_jax.sim.step import step_decision, tick  # noqa: E402
 from lanerl_jax.sim.targeting import MinionType  # noqa: E402
 from lanerl_jax.sim.waves import spawn_schedule  # noqa: E402
 from lanerl_jax.sim.waves_jax import step_waves_jax  # noqa: E402
@@ -111,6 +111,19 @@ def test_init_places_the_measured_geometry(patch):
     assert float(s.hp[0]) == pytest.approx(
         patch.champion.hp_at_level(1) + RUNE_HP_BONUS)
     assert float(s.next_spawn_ms) == 90_000.0
+
+
+def test_level_up_increases_current_and_max_hp_by_the_growth_increment(patch):
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    before_hp = float(s.hp[0])
+    before_max = float(s.max_hp[0])
+    s = s.replace(xp=s.xp.at[0].set(params["xp_curve"][1]))
+    s = tick(s, params)
+    expected_gain = patch.champion.hp_at_level(2) - patch.champion.hp_at_level(1)
+    assert int(s.level[0]) == 2
+    assert float(s.max_hp[0]) == pytest.approx(before_max + expected_gain, abs=1e-4)
+    assert float(s.hp[0]) == pytest.approx(before_hp + expected_gain, abs=1e-4)
 
 
 def test_every_turret_the_server_places_is_placed(patch):
@@ -282,6 +295,16 @@ def test_the_lane_path_starts_at_the_measured_barracks():
     assert abs(px - bx) < 10 and abs(py - by) < 10
 
 
+def test_minion_barracks_keep_map_source_fractional_coordinates():
+    """`CreateLaneMinion` receives Map1's ``CentralPoint`` floats, rather
+    than the 1/16-unit rounded values shown in a canonical state dump.  The
+    difference is directly observable on every fresh spawn, before collision
+    or minion AI can have changed its position.
+    """
+    assert MINION_SPAWN[Team.BLUE] == pytest.approx((917.7302, 1720.3623))
+    assert MINION_SPAWN[Team.RED] == pytest.approx((12451.0508, 13217.5420))
+
+
 def test_the_jax_spawner_matches_the_python_reference():
     """Same loop, one traceable and one readable; the readable one is what was
     validated against the recording, so they must not drift."""
@@ -448,3 +471,23 @@ def test_a_lane_runs_and_waves_arrive_on_schedule(patch):
             seen_after = max(seen_after, n)
     assert seen_before == 0, "minions before the 90 s first wave"
     assert seen_after >= 10, f"only {seen_after} minions by 100 s"
+
+
+def test_map1_top_wave_creates_red_before_blue_for_collision_order(patch):
+    """The Map1 package loads the top Chaos barracks before the top Order
+    barracks.  `LevelScript.SetUpLaneMinion` iterates that insertion-ordered
+    dictionary, and `CreateLaneMinion` immediately adds each object to the
+    collision handler.  Therefore same-wave red minions must receive the
+    earlier creation rank, irrespective of our blue-first slot layout.
+    """
+    s = init_lane(patch)
+    params = lane_params(patch)
+    path = jnp.asarray(np.asarray(TOP_LANE_PATH, np.float32))
+    # The regular first wave is triggered by the tick ending at 90,000 ms.
+    s = s.replace(t_ms=jnp.asarray(90_000.0 - 1000.0 / 60.0, jnp.float32))
+    s = tick(s, params, lane_path=path)
+    minions = (np.asarray(s.kind) == Kind.LANE_MINION) & np.asarray(s.alive)
+    blue = np.flatnonzero(minions & (np.asarray(s.team) == Team.BLUE))
+    red = np.flatnonzero(minions & (np.asarray(s.team) == Team.RED))
+    assert len(blue) == len(red) == 1
+    assert int(s.spawn_seq[red[0]]) < int(s.spawn_seq[blue[0]])

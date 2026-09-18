@@ -14,52 +14,30 @@ enemy minion's HP while it sits within Garen's reach, and how much of that
 time is inside the one-shot band
 ``hp <= post_mitigation(garen_ad, minion_armor)``.
 
-WHAT IT FOUND (read before trusting "minion HP trajectories")
-----------------------------------------------------------------
-Three things, in the order they were checked -- and the headline result is
-that the ORIGINAL FRAMING WAS WRONG, not merely incomplete. The "163 vs 535
-attack opportunities" comparison this module was built to explain does not
-reproduce on the current codebase at all: traced by commit timestamp, that
-535 figure was measured 37 minutes before a fix (``d463533``) that stopped
-the champion from being scripted to stand inside the enemy turret's attack
-range, and nobody re-measured the server baseline afterward. Freshly
-measured, on the corrected position, three times, on both a contended and an
-uncontended node: **sim gets MORE attacks and MORE CS than the server**, the
-opposite direction (sim cs=9/attacks=473, server cs=4/attacks=86 -- see
-``lanerl_jax/parity/tests/test_last_hit_gate.py`` for the full numbers and
-the commit-timestamp evidence). ``docs/JAX_REWRITE_PLAN.md``'s J1 status
-needs correcting to match.
+WHAT IT FOUND (current canonical fixture, 2026-09-17)
+--------------------------------------------------------
+The old 13-CS/200-attack result is not the source-faithful baseline: it
+predates canonical call-for-help. The server broadcasts aggro on every landed
+hit, so the gate now takes ``step_decision``'s default
+``enable_call_for_help=True``; the historical OFF ablation is not parity
+evidence.
 
-**Champion AD not level-scaling was real, but small here.** ``post_mitigation``
-takes Garen's *current* attack damage, and it is supposed to grow with level
-(``Stats.LevelUp``, ``Stats.cs:270-271``). The sim baked it into a static
-per-profile value instead, ignoring ``state.level`` entirely -- fixed in
-``sim/step.py``/``sim/profiles.py`` (test:
-``lanerl_jax/sim/tests/test_champion_level_scaling.py``). Effect on THIS
-scenario: the sim's in-band count moved from 468 to 473 out of 8218 samples --
-under 1%, because the sim's champion barely levels here (reaching only 1..5,
-against the server's 1..8) since it keeps dying and losing its proximity-XP
-window. A real, cited, fixed bug; not the story.
+On a fresh 18,000-decision comparison with that mechanism enabled, the sim
+has **72** lethal decision frames in **7** windows (mean 10.29 frames, max
+11), while the server has **86** frames in only **4** windows (mean 21.50,
+max 56). The sim scores CS=7 to the server's CS=4, with one death each. Thus
+the counter is not duplicating orders or representing excess pathing exposure:
+it reports exact decision-frame eligibility. The sim has fewer total eligible
+frames but more independent HP crossings, and currently converts each short
+crossing into a last hit. The open mechanism is minion HP crossover cadence
+(including minion attack/missile timing), which needs Tier-1 attribution;
+there is no source-supported behavioural tweak to make here yet.
 
-**The dominant, still-open factor is deaths, not the band.** The sim's
-champion dies 5 times to the server's ~0-1 (see the module docstring of
-``lanerl_jax/parity/tests/test_last_hit_gate.py`` for why the server's own
-count sits right at a 0/1 boundary and should not be trusted to one decimal).
-Each death costs a full fountain-to-lane walk the champion cannot farm during
-(``approach_decisions`` 6998 vs 3197 out of 18,000). ``LANERL_AUTOBUY`` (the
-server's free +80 HP / +1.2 HP/s regen item, bought before the first
-observation frame) and ``enable_call_for_help=True`` (the sim's documented
-minion-pile-up-without-release behaviour,
-``lanerl_jax.sim.targeting.call_for_help_map``'s own docstring) were both
-tried as explanations and both come back negative or backwards -- see
-``last_hit_drive.run_oracle_in_sim``'s inline comments for the citations and
-numbers. A collision-under-separation hypothesis (the sim applies one
-push-apart per unit per tick where the server applies several, sequentially --
-``sim/collision.py``'s own booked approximation) was also checked by
-comparing mean nearest-neighbour distance among live minions: sim 191.4,
-server 224.0 (``frac<100`` units apart: 0.405 vs 0.399) -- real but modest,
-not the scale of difference (2.4x in-reach rate, 5x death rate) it would need
-to fully explain this.
+Champion AD level scaling remains source-required and is correctly modelled.
+On this current sim trajectory, the offline old-flat-AD control produces 42
+in-band frames versus 72 with live level-scaled AD (levels 1..8). That is an
+important calibration control, not a reason to disable scaling: the server
+wire likewise reports level 1..8 and AD 78.1..101.5 during its windows.
 
 This module measures BOTH: the band-occupancy fraction each engine actually
 sees (which conflates threshold and trajectory), and, in the sim only, what
@@ -75,6 +53,7 @@ for a test or a follow-up analysis. ``python -m lanerl_jax.parity.hp_band``.
 """
 from __future__ import annotations
 
+import json
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,16 +67,33 @@ from ..obs.fog import visible_to
 from ..sim.combat import growth_sum, post_mitigation_damage
 from ..sim.init import RUNE_AD_BONUS, TOP_LANE_PATH, init_lane, lane_params
 from ..sim.orders import OrderKind, Orders, apply_orders
+from ..sim.profiles import PROFILES
 from ..sim.state import Kind, Team
 from ..sim.step import step_decision
+from ..sim.targeting import MinionType
 from .last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
-                             WIRE_MINION_TYPE, _advance_approach)
+                             WIRE_MINION_TYPE, _advance_approach,
+                             gate3_route_inputs)
 from .last_hit_oracle import ChampView, MinionView, decide, post_mitigation
 
 __all__ = [
-    "BandSample", "SimBandRun", "ServerBandRun",
-    "run_sim_band", "run_server_band", "summarize", "leveled_ad_of",
+    "BandSample", "BandWindows", "SimBandRun", "ServerBandRun",
+    "band_windows", "run_sim_band", "run_server_band", "summarize",
+    "leveled_ad_of",
 ]
+
+
+# This is a diagnostic label, not an extra simulation classification.  The
+# profile id is already the authoritative per-slot type after a spawn; keeping
+# the label beside the sample lets a causal report distinguish a melee hit from
+# a caster/cannon missile without pretending a recycled JAX slot is a server
+# NetId.
+_SIM_MINION_TYPE_NAME = {
+    MinionType.MELEE: "melee",
+    MinionType.CASTER: "caster",
+    MinionType.CANNON: "cannon",
+    MinionType.SUPER: "super",
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -113,6 +109,65 @@ class BandSample:
     in_band: bool
     champ_ad: float
     champ_level: int
+    champ_x: float
+    champ_y: float
+    minion_x: float
+    minion_y: float
+    #: Engine-local identity, used only to connect adjacent samples in one
+    #: run.  It is a recycled sim slot on JAX and a NetId on the server, so it
+    #: must never be compared across engines.
+    minion_id: int = -1
+    #: Patch minion key (``melee``, ``caster``, ``cannon`` or ``super``).
+    minion_type: str = ""
+
+
+@dataclass(slots=True, frozen=True)
+class BandWindows:
+    """Decision-level occupancy of the one-shot band.
+
+    ``BandSample`` is deliberately one row per *in-reach minion*, whereas an
+    oracle ATTACK decision is one row per *decision* whenever any such minion
+    is lethal.  This summary makes that distinction explicit.  A window ends
+    whenever a decision time is missing from the in-band set, so two unrelated
+    lethal minions separated by even one non-lethal decision do not look like
+    one long opportunity.
+    """
+
+    #: Unique decision frames with at least one in-range, one-shot minion.
+    in_band_decisions: int
+    #: Contiguous runs of such decision frames at the 30 Hz driver cadence.
+    windows: int
+    #: Mean/max length of a contiguous run, in decision frames.
+    mean_frames: float
+    max_frames: int
+
+
+def band_windows(samples: List[BandSample], *, max_step_ms: float = 34.0) -> BandWindows:
+    """Summarize the decision-frame lethal windows represented by ``samples``.
+
+    The server clock serializes 30 Hz decision times as alternating 33/34 ms
+    integer timestamps.  ``34`` is therefore the inclusive continuity bound;
+    a 66/67 ms gap proves that an intervening decision was not in the band.
+    This routine intentionally does not infer target identity from sim slots
+    or server NetIds -- neither is common across engines and identity is not
+    needed to answer whether the oracle had an ATTACK choice on a frame.
+    """
+    in_band_times = sorted({s.t_ms for s in samples if s.in_band})
+    if not in_band_times:
+        return BandWindows(0, 0, 0.0, 0)
+    lengths: List[int] = []
+    run = 1
+    previous = in_band_times[0]
+    for t_ms in in_band_times[1:]:
+        if t_ms - previous <= max_step_ms:
+            run += 1
+        else:
+            lengths.append(run)
+            run = 1
+        previous = t_ms
+    lengths.append(run)
+    return BandWindows(len(in_band_times), len(lengths),
+                       float(np.mean(lengths)), max(lengths))
 
 
 @dataclass(slots=True, frozen=True)
@@ -136,6 +191,9 @@ class SimBandRun:
     moves: int = 0
     holds: int = 0
     deaths: int = 0
+    #: Optional pre-action state stream used only to align free-running minion
+    #: target/AA histories with a diagnostic server run.
+    state_capture_path: Optional[Path] = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -149,6 +207,8 @@ class ServerBandRun:
     moves: int = 0
     holds: int = 0
     deaths: int = 0
+    #: Optional pre-action wire observations captured for causal window work.
+    observation_path: Optional[Path] = None
 
 
 def leveled_ad_of(base_ad: float, ad_per_level: float, level: int) -> float:
@@ -162,7 +222,15 @@ def leveled_ad_of(base_ad: float, ad_per_level: float, level: int) -> float:
     return float(base_ad + ad_per_level * growth_sum(level) + RUNE_AD_BONUS)
 
 
-def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
+def run_sim_band(
+    decisions: int = DECISIONS_600S,
+    seed: int = 0,
+    state_capture_path: Optional[Path] = None,
+    *,
+    route_table=None,
+    terrain=None,
+    table_disabled: bool = False,
+) -> SimBandRun:
     """Drive the same approach + oracle policy as
     :func:`lanerl_jax.parity.last_hit_drive.run_oracle_in_sim`, instrumenting
     every enemy minion within Garen's reach post-handover instead of only
@@ -176,6 +244,8 @@ def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
     base_ad = patch.champion.base_ad
     ad_per_level = patch.champion.ad_per_level
 
+    route_table, terrain = gate3_route_inputs(
+        route_table=route_table, terrain=terrain, table_disabled=table_disabled)
     params_tbl = lane_params()
     params_np = {k: np.asarray(v) for k, v in params_tbl.items()}
     path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
@@ -189,15 +259,14 @@ def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
             y=jnp.array([order_y, 0.0], dtype=state.y.dtype),
             target=jnp.array([order_target, -1], dtype=jnp.int8),
         )
-        # See last_hit_drive.run_oracle_in_sim's matching comment: enabling
-        # call-for-help here was tried and made this gate dramatically worse
-        # (an active, attacking champion recruits fresh aggressors onto
-        # itself every time it lands a hit -- CHAMPION_ATTACKING_MINION,
-        # priority 5, beats any minion's own 6-9), unlike the passive
-        # StandInWave scenario docs/CALL_FOR_HELP_SWITCH_RATE.md part 6
-        # measured it helping. Left off, matching the `step_decision`
-        # default and last_hit_drive.py's own instrumented decision.
-        return step_decision(apply_orders(state, orders), params_tbl,
+        # Omit `enable_call_for_help` deliberately: the source broadcasts
+        # aggro on every landed hit and `step_decision`'s canonical default
+        # reproduces it. An earlier OFF ablation reduced some active-oracle
+        # deaths, but the server cannot disable this mechanism, so it is not
+        # valid gate evidence.
+        return step_decision(apply_orders(state, orders, params_tbl,
+                                          route_table=route_table,
+                                          terrain=terrain), params_tbl,
                              lane_path=path)
 
     wp_idx = 0
@@ -206,6 +275,11 @@ def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
     leveled_band: List[bool] = []
     leveled_ad_list: List[float] = []
     approach_decisions = attacks = moves = holds = deaths = 0
+    state_fh = None
+    if state_capture_path is not None:
+        state_capture_path = Path(state_capture_path)
+        state_capture_path.parent.mkdir(parents=True, exist_ok=True)
+        state_fh = state_capture_path.open("w")
 
     for _ in range(decisions):
         x0 = float(state.x[0])
@@ -230,8 +304,47 @@ def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
         y = np.asarray(state.y)
         hp = np.asarray(state.hp)
         model = np.asarray(state.model)
+        target = np.asarray(state.target)
+        spawn_seq = np.asarray(state.spawn_seq)
+        aa_cooldown = np.asarray(state.aa_cooldown)
+        aa_windup = np.asarray(state.aa_windup)
+        is_attacking = np.asarray(state.is_attacking)
+        ai_timer = np.asarray(state.ai_timer)
+        target_priority = np.asarray(state.target_priority)
         level0 = int(np.asarray(state.level)[0])
         t_ms = float(np.asarray(state.t_ms))
+
+        if state_fh is not None:
+            # Capture the engine's actual pre-action state.  ``slot`` is
+            # recycled, whereas ``spawn_seq`` identifies a concrete spawned
+            # minion within this run; ``target_spawn_seq`` makes target
+            # transitions comparable without leaking slot allocation order.
+            rows = []
+            for i in np.flatnonzero((kind == Kind.LANE_MINION) & alive):
+                target_slot = int(target[i])
+                rows.append({
+                    "slot": int(i), "spawn_seq": int(spawn_seq[i]),
+                    "team": int(team[i]),
+                    "type": _SIM_MINION_TYPE_NAME[PROFILES[int(model[i])][1]],
+                    "hp": float(hp[i]), "x": float(x[i]), "y": float(y[i]),
+                    "target_slot": target_slot,
+                    "target_spawn_seq": (
+                        int(spawn_seq[target_slot]) if target_slot >= 0 else -1),
+                    "aa_cooldown": float(aa_cooldown[i]),
+                    "aa_windup": float(aa_windup[i]),
+                    "is_attacking": bool(is_attacking[i]),
+                    "ai_timer": float(ai_timer[i]),
+                    "target_priority": int(target_priority[i]),
+                })
+            state_fh.write(json.dumps({
+                "t": t_ms,
+                "champion": {
+                    "x": x0, "y": y0, "target_slot": int(target[0]),
+                    "target_spawn_seq": (
+                        int(spawn_seq[int(target[0])]) if int(target[0]) >= 0 else -1),
+                },
+                "minions": rows,
+            }, separators=(",", ":")) + "\n")
 
         # POST-FIX: `sim/step.py`'s `tick()` now level-scales champion AD the
         # same way `Stats.LevelUp` does (see that module and `profiles.py`'s
@@ -262,7 +375,9 @@ def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
             samples.append(BandSample(
                 t_ms=t_ms, hp=m_hp, armor=m_armor,
                 in_band=m_hp <= dmg_leveled, champ_ad=champ_ad_leveled,
-                champ_level=level0))
+                champ_level=level0, champ_x=x0, champ_y=y0,
+                minion_x=mx, minion_y=my, minion_id=int(i),
+                minion_type=_SIM_MINION_TYPE_NAME[PROFILES[int(model[i])][1]]))
             leveled_band.append(m_hp <= dmg_flat)
             leveled_ad_list.append(champ_ad_flat)
 
@@ -286,11 +401,14 @@ def run_sim_band(decisions: int = DECISIONS_600S, seed: int = 0) -> SimBandRun:
             holds += 1
             state = _step(state, OrderKind.NOOP, 0.0, 0.0, -1)
 
+    if state_fh is not None:
+        state_fh.close()
     cs = int(np.asarray(state.cs)[0])
     return SimBandRun(samples=samples, leveled_in_band=leveled_band,
                       leveled_ad=leveled_ad_list, cs=cs, decisions=decisions,
                       approach_decisions=approach_decisions, attacks=attacks,
-                      moves=moves, holds=holds, deaths=deaths)
+                      moves=moves, holds=holds, deaths=deaths,
+                      state_capture_path=state_capture_path)
 
 
 def run_server_band(
@@ -300,6 +418,8 @@ def run_server_band(
     tag: str = "hp_band",
     log_dir: Optional[Path] = None,
     autobuy: bool = False,
+    diagnostic_internals: bool = False,
+    observation_path: Optional[Path] = None,
 ) -> ServerBandRun:
     """Same approach + oracle policy as
     :func:`lanerl_jax.parity.last_hit_drive.run_oracle_on_server`,
@@ -327,11 +447,18 @@ def run_server_band(
     log_dir = Path(log_dir) if log_dir is not None else Path(
         tempfile.mkdtemp(prefix=f"{tag}_"))
 
+    extra_env = {"LANERL_AUTOBUY": "1" if autobuy else "0"}
+    if diagnostic_internals:
+        # The canonical state hash stays untouched; this opt-in stream exposes
+        # the target/AA/AI/missile facts needed to attribute a lethal crossing.
+        extra_env.update({"LANERL_STATE_DUMP": "1",
+                          "LANERL_STATE_DUMP_FULL": "1",
+                          "LANERL_STATE_DUMP_INTERNALS": "1"})
     env = VecLaneEnv(
         1,
         spec=ServerLaunchSpec(
             toponly=True, bot_teams="none", bot_seed=bot_seed, step_ticks=2,
-            extra_env={"LANERL_AUTOBUY": "1" if autobuy else "0"}),
+            extra_env=extra_env),
         log_dir=log_dir,
         ports=PortAllocator(base=port_base).allocate(1),
         step_timeout_s=180.0,
@@ -343,14 +470,22 @@ def run_server_band(
     samples: List[BandSample] = []
     log_path: Optional[Path] = None
     approach_decisions = attacks = moves = holds = deaths = 0
+    obs_fh = None
     try:
         if not all(env.alive):
             raise RuntimeError(f"server failed to boot: {env.alive}")
         log_path = Path(env.handles[0].log_path)
+        if observation_path is not None:
+            observation_path = Path(observation_path)
+            observation_path.parent.mkdir(parents=True, exist_ok=True)
+            obs_fh = observation_path.open("w")
         for i in range(decisions):
             obs = env.last_obs[0]
             if obs is None:
                 raise RuntimeError(f"no observation at decision {i}")
+            if obs_fh is not None:
+                # Pre-action, matching the window the oracle itself evaluates.
+                obs_fh.write(json.dumps(obs, separators=(",", ":")) + "\n")
             units = obs.get("u", [])
             blue = next(
                 u for u in units if u.get("k") == "Champion" and u.get("tm") == 100)
@@ -389,7 +524,9 @@ def run_server_band(
                     samples.append(BandSample(
                         t_ms=t_ms, hp=m_hp, armor=float(stat.armor),
                         in_band=m_hp <= dmg, champ_ad=champ_ad,
-                        champ_level=champ_level))
+                        champ_level=champ_level, champ_x=bx, champ_y=by,
+                        minion_x=mx, minion_y=my, minion_id=int(u["id"]),
+                        minion_type=key))
                 minions.append(MinionView(
                     uid=int(u["id"]), x=mx, y=my, hp=m_hp,
                     armor=float(stat.armor),
@@ -414,11 +551,14 @@ def run_server_band(
         blue = next(u for u in obs["u"] if u.get("k") == "Champion" and u.get("tm") == 100)
         cs = int(blue.get("cs", 0))
     finally:
+        if obs_fh is not None:
+            obs_fh.close()
         env.close()
 
     return ServerBandRun(samples=samples, log_path=log_path, cs=cs,
                          decisions=decisions, approach_decisions=approach_decisions,
-                         attacks=attacks, moves=moves, holds=holds, deaths=deaths)
+                         attacks=attacks, moves=moves, holds=holds, deaths=deaths,
+                         observation_path=observation_path)
 
 
 def summarize(name: str, samples: List[BandSample],
@@ -430,6 +570,7 @@ def summarize(name: str, samples: List[BandSample],
     band = np.array([s.in_band for s in samples])
     ad = np.array([s.champ_ad for s in samples])
     lvl = np.array([s.champ_level for s in samples])
+    windows = band_windows(samples)
     lines = [
         f"{name}: {n} in-reach decision-minion samples, "
         f"{int(band.sum())} in-band ({100 * band.mean():.1f}%)",
@@ -437,6 +578,9 @@ def summarize(name: str, samples: List[BandSample],
         f"p10={np.percentile(hp, 10):.1f} p90={np.percentile(hp, 90):.1f}",
         f"  champ ad while in reach: min={ad.min():.1f} max={ad.max():.1f} "
         f"(level {lvl.min()}..{lvl.max()})",
+        f"  one-shot windows: {windows.in_band_decisions} decision frames in "
+        f"{windows.windows} runs (mean={windows.mean_frames:.2f}, "
+        f"max={windows.max_frames})",
     ]
     if leveled_in_band is not None:
         lb = np.array(leveled_in_band)
@@ -454,6 +598,9 @@ def _main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--bot-seed", type=int, default=4242)
     ap.add_argument("--skip-server", action="store_true")
+    ap.add_argument("--table-disabled", action="store_true",
+                    help="run the PATH-006 raw two-point Move ablation; the "
+                    "default loads the production routed Gate-3 artifact")
     ap.add_argument("--autobuy", action="store_true",
                     help="leave LANERL_AUTOBUY on for the server boot "
                          "(default: off, see run_server_band)")
@@ -466,7 +613,8 @@ def _main() -> None:
     args = ap.parse_args()
 
     print("Running sim...")
-    sim = run_sim_band(decisions=args.decisions, seed=args.seed)
+    sim = run_sim_band(decisions=args.decisions, seed=args.seed,
+                       table_disabled=args.table_disabled)
     print(f"sim gate numbers: cs={sim.cs} approach_decisions={sim.approach_decisions} "
           f"attacks={sim.attacks} moves={sim.moves} holds={sim.holds} "
           f"deaths={sim.deaths}")

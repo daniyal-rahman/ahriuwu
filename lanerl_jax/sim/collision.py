@@ -18,8 +18,12 @@ and ``GetCircleEscapePoint(p1, r1, p2, r2)`` unwinds to a clean formula::
 So when the two overlap (``d < r1 + r2``) the term is negative and the unit
 slides *away* from the collider by exactly the overlap. Not a spring, not a
 velocity change -- a teleport to touching. Terrain re-projection
-(``GetClosestTerrainExit``) is not modelled here; nothing in this lane's
-corpus has put a unit inside terrain via a collision push.
+(``GetClosestTerrainExit``) is supplied by :mod:`sim.terrain_jax` when the
+optional ``terrain`` argument is present. It runs in the source order: once
+before an affected unit's object sweep if its centre is blocked, and after
+each object escape whose raw destination fails the radius-aware walkability
+check. The live Map1 tick supplies that grid; standalone collision tests may
+omit it to isolate circle geometry.
 
 Two different radii, two different jobs
 ----------------------------------------
@@ -74,15 +78,17 @@ valid obstacle and never being affected.
 Gauss-Seidel, creation order, multiple pushes per unit per tick
 -----------------------------------------------------------------
 ``CollisionHandler.Update`` (`:121-134`) loops ``_objects`` calling
-``UpdateCollision(obj)`` on each; that in turn loops **every** object
-``GetNearestObjects(obj)`` returns, calling ``obj.OnCollision(obj2)`` -- which
-ends in an immediate ``SetPosition`` -- for each one that currently overlaps
-(`:133-153`). Two consequences neither approximated here:
+``UpdateCollision(obj)`` on each; that takes a fixed candidate list from
+``GetNearestObjects(obj)`` before its ``OnCollision`` loop. The quadtree was
+rebuilt after the preceding collision pass, so membership uses its frozen
+circle bounds while ``OnCollision`` tests LIVE positions. An escape can make
+a listed candidate cease to overlap, but cannot admit an unlisted object.
+Two further consequences follow:
 
 1. **Gauss-Seidel, not Jacobi.** A later unit in `_objects`' order escapes
    from an EARLIER unit's already-moved position, because `SetPosition` is
    immediate, not buffered to end-of-tick.
-2. **One escape per overlapping neighbour, not one per unit.** A unit
+2. **One escape per overlapping listed neighbour, not one per unit.** A unit
    wedged between two others gets pushed off BOTH, in sequence, in the same
    tick; each push can change whether the NEXT neighbour still overlaps.
 
@@ -104,9 +110,9 @@ No child quadrant is ever created (verified by reading `Quadrant.Insert`:
 `child` stays null every time, so every node lands in the root's own
 circularly-linked list), and that list's own construction+traversal
 (`QuadTree.cs`'s `QuadNode`/`GetIntersectingNodes`) yields insertion order,
-not "random" order as its own comment claims. So ``GetNearestObjects``
-returns creation order too, and one ``spawn_seq``-sorted traversal, reused
-for both loops, is not an approximation -- it is what the source does.
+not "random" order as its own comment claims. Thus ``GetNearestObjects``
+returns its frozen, geometrically selected candidates in creation order.
+``spawn_seq`` is exact for the traversal, after that selection.
 
 Measured (before this fix; ``docs/TIER1_POST_REORDER.md`` gate-1 task 3):
 this module's prior one-push Jacobi approximation localises essentially all
@@ -191,6 +197,7 @@ import jax
 import jax.numpy as jnp
 
 from .state import Kind
+from .terrain_jax import TerrainGrid, exit_blocked_escape, exit_terrain_collision
 
 __all__ = ["resolve_collisions", "MAX_ESCAPES_PER_UNIT", "max_escapes_used"]
 
@@ -215,8 +222,45 @@ def _masks(kind, alive, ghosted):
     return obstacle, affected
 
 
-def _escape_rounds(i, x, y, affected, obstacle, seq_key,
-                   collision_radius, pathfinding_radius, rounds: int):
+def _frozen_candidates(x, y, collision_radius,
+                       candidate_x, candidate_y, candidate_present):
+    """Return the fixed, directed ``GetNearestObjects`` membership matrix.
+
+    The query circle is made from the *live* querying object's position at
+    the start of its outer-loop turn.  The nodes it searches retain their
+    last-``UpdateQuadTree`` positions.  Earlier outer-loop turns never move a
+    later query object, so the incoming ``x``/``y`` correctly supplies every
+    query centre here; using ``candidate_x[i]`` on both sides would make the
+    query itself one tick stale as well, unlike the server.
+    """
+    dx = candidate_x[None, :] - x[:, None]
+    dy = candidate_y[None, :] - y[:, None]
+    d2 = dx * dx + dy * dy
+    radii = collision_radius[:, None] + collision_radius[None, :]
+    # Circle.IntersectsWith is strict. Equality is immaterial to the eventual
+    # strict IsCollidingWith check, but preserving it matters to the frozen
+    # candidate-list semantics and source parity.
+    return candidate_present[None, :] & (d2 < radii * radii)
+
+
+def _frozen_candidate_row(x, y, query_collision_radius,
+                          candidate_collision_radius,
+                          candidate_x, candidate_y, candidate_present):
+    """One live-query/frozen-node row of :func:`_frozen_candidates`.
+
+    Keeping this row-shaped matters in the outer ``lax.scan``: indexing a
+    Python slice with the traced unit index is illegal, while recomputing the
+    whole N×N matrix every turn would turn terrain support into O(N³) work.
+    """
+    dx = candidate_x - x
+    dy = candidate_y - y
+    radii = query_collision_radius + candidate_collision_radius
+    return candidate_present & (dx * dx + dy * dy < radii * radii)
+
+
+def _escape_rounds(i, x, y, affected, obstacle, candidates, seq_key,
+                   collision_radius, pathfinding_radius, rounds: int,
+                   terrain: Optional[TerrainGrid] = None):
     """Resolve unit ``i``'s own escapes against the CURRENT ``(x, y)``
     (everyone else's positions are read-only here -- only ``i``'s own scalar
     position advances). Returns ``(xi, yi, n_escapes)``.
@@ -233,37 +277,67 @@ def _escape_rounds(i, x, y, affected, obstacle, seq_key,
     i_affected = affected[i]
     ri1 = pathfinding_radius[i] + 1.0            # `PathfindingRadius + 1`
     ci = collision_radius[i]
-    # Candidates this unit could ever need to escape from this tick --
-    # everyone else that is a valid obstacle -- start "not yet settled";
-    # everything else (dead slots, itself) is trivially already settled, so a
-    # round's vectorised argmin only ever considers real candidates.
-    done0 = ~(obstacle & (idx != i))
+    # ``GetNearestObjects`` materialises this list before it calls
+    # ``OnCollision``. `candidates[i]` comes from the last quadtree rebuild,
+    # not from the changing `xi` below. A unit made nearer by an earlier
+    # escape must not be admitted to this pass.
+    #
+    # The current obstacle mask remains live: a dead/ghosted object cannot be
+    # resolved against even if it appeared in the previous rebuild.
+    done0 = ~(candidates & obstacle & (idx != i))
 
     def round_body(carry, _):
         xi, yi, done, count = carry
         dx = x - xi
         dy = y - yi
         d = jnp.sqrt(dx * dx + dy * dy)
-        trigger = i_affected & ~done & (d > 0) & (d < ci + collision_radius)
+        trigger = i_affected & ~done & (d < ci + collision_radius)
         key = jnp.where(trigger, seq_key, BIG)
         m = jnp.argmin(key)
         has = trigger[m]
-        # Everyone at or before `m` in creation order is settled this round:
-        # those strictly before `m` were just checked (same `d`, this SAME
-        # pre-escape position) and did NOT trigger -- exactly what the
-        # server's single, fixed left-to-right pass would also find, so they
-        # are correctly never revisited. `m` itself is settled by applying
-        # its escape.
         cutoff = jnp.where(has, seq_key[m], BIG)
         done = done | (~done & (seq_key <= cutoff))
         safe = jnp.where(d[m] > 0, d[m], jnp.ones_like(d[m]))
         push = d[m] - ri1 - pathfinding_radius[m]    # negative: overlapping
-        xi_next = jnp.where(has, xi + dx[m] / safe * push, xi)
-        yi_next = jnp.where(has, yi + dy[m] / safe * push, yi)
+        # `GetClosestCircleEdgePoint` uses Atan2/Cos/Sin. Atan2(0, 0) = 0,
+        # so coincident centres take the source's discontinuous escape
+        # (+collider_radius - mover_radius, 0), not a normalized-vector push.
+        zero = d[m] == 0
+        escape_x = jnp.where(zero, pathfinding_radius[m] - ri1,
+                             dx[m] / safe * push)
+        escape_y = jnp.where(zero, jnp.zeros_like(d[m]),
+                             dy[m] / safe * push)
+        raw_x = jnp.where(has, xi + escape_x, xi)
+        raw_y = jnp.where(has, yi + escape_y, yi)
+        # `OnCollision(obj2)` teleports to the geometric circle exit first,
+        # then repairs that exit only when PathingHandler's radius-aware query
+        # says it is inside terrain (`AttackableUnit.cs:312-316`).  This is
+        # deliberately inside the per-neighbour loop: a later neighbour sees
+        # the terrain-corrected position, just as it does on the server.
+        if terrain is None:
+            exit_x, exit_y = raw_x, raw_y
+        else:
+            # Do not even query terrain on a masked scan round. Besides being
+            # source-faithful (there was no OnCollision call), this avoids
+            # making every inactive round inspect the grid.
+            safe_x, safe_y = jax.lax.cond(
+                has,
+                lambda _: exit_blocked_escape(
+                    raw_x, raw_y, pathfinding_radius[i], terrain)[:2],
+                lambda _: (xi, yi),
+                operand=None)
+            exit_x, exit_y = safe_x, safe_y
+        xi_next = exit_x
+        yi_next = exit_y
         return (xi_next, yi_next, done, count + has.astype(jnp.int32)), None
 
+    # Fully unroll the small correctness bound.  On GPU a rolled scan became
+    # one kernel launch per round inside the already sequential outer sweep;
+    # unrolling preserves the exact operations while allowing XLA to fuse the
+    # round searches into the surrounding collision program.
     (xi_f, yi_f, _, n_escapes), _ = jax.lax.scan(
-        round_body, (xi0, yi0, done0, jnp.int32(0)), None, length=rounds)
+        round_body, (xi0, yi0, done0, jnp.int32(0)), None,
+        length=rounds, unroll=rounds)
     return xi_f, yi_f, n_escapes
 
 
@@ -271,7 +345,12 @@ def resolve_collisions(x: jax.Array, y: jax.Array, kind: jax.Array,
                        alive: jax.Array, spawn_seq: jax.Array,
                        collision_radius: jax.Array,
                        pathfinding_radius: jax.Array,
-                       ghosted: Optional[jax.Array] = None
+                       ghosted: Optional[jax.Array] = None,
+                       candidate_x: Optional[jax.Array] = None,
+                       candidate_y: Optional[jax.Array] = None,
+                       candidate_present: Optional[jax.Array] = None,
+                       terrain: Optional[TerrainGrid] = None,
+                       mover_indices: Optional[jax.Array] = None,
                        ) -> Tuple[jax.Array, jax.Array]:
     """The server's collision pass for one tick. Returns new ``(x, y)``.
 
@@ -283,13 +362,39 @@ def resolve_collisions(x: jax.Array, y: jax.Array, kind: jax.Array,
       pathfinding_radius: (N,) the ``GetCircleEscapePoint`` RESOLUTION radius.
       ghosted: (N,) bool, optional. A ghosted unit is dropped from both being
         pushed and being an obstacle -- see the module docstring.
+      candidate_x, candidate_y: positions at the last quadtree rebuild.
+        They select the fixed ``GetNearestObjects`` list. They default to
+        ``x``/``y`` for standalone callers; server-timing parity requires the
+        caller to retain and pass the previous-rebuild positions.
+      candidate_present: whether each object had a node at that rebuild.
+        This distinguishes an empty/recycled array slot from a node in the
+        index (``AddObject`` inserts newly spawned objects immediately).
+        Defaults to the current obstacle mask for standalone callers.
+      terrain: optional static navigation-grid metadata. When supplied, ports
+        both terrain branches of ``UpdateCollision``/``OnCollision``: each
+        affected unit exits terrain before its object sweep, and each
+        object-collision escape is reprojected when its raw destination is not
+        walkable. ``None`` retains the old terrain-free fast path for callers
+        without Map1 content.
+      mover_indices: optional fixed list containing every slot that can be
+        collision-affected. Obstacles outside the list remain fully visible to
+        the inner query. The production lane passes its champion+minion slice,
+        excluding 24 turret slots that the server never moves; standalone
+        arbitrary-layout tests omit it.
     """
     obstacle, affected = _masks(kind, alive, ghosted)
+    # `IsCollisionAffected` itself does not look at Ghosted.  Ghosted objects
+    # skip the non-terrain OnCollision branch, but still receive the terrain
+    # branch.  (Dashes share this distinction, but are not modelled here.)
+    terrain_affected = alive & (kind != Kind.NONE) & (kind != Kind.TURRET)
 
-    # True creation order, both loops -- see the module docstring for why
-    # there is no separate "inner" order to also reconstruct.
-    order = jnp.argsort(spawn_seq)
-
+    # A dynamic quadtree node is a collision circle. `GetNodesInside` searches
+    # those rebuild-time nodes using a live query circle. This membership is
+    # deliberately frozen for the complete outer sweep; only the later
+    # `IsCollidingWith` test in `_escape_rounds` is live.
+    snapshot_x = x if candidate_x is None else candidate_x
+    snapshot_y = y if candidate_y is None else candidate_y
+    snapshot_present = obstacle if candidate_present is None else candidate_present
     n = x.shape[0]
     idx = jnp.arange(n)
     # A combined, TIE-PROOF sort key: `spawn_seq` first, array index as an
@@ -299,24 +404,74 @@ def resolve_collisions(x: jax.Array, y: jax.Array, kind: jax.Array,
     # `obstacle`, or a hand-built test state). `n` comfortably bounds the
     # tie-break term below `spawn_seq`'s own stride.
     seq_key = spawn_seq.astype(jnp.int32) * jnp.int32(n + 1) + idx.astype(jnp.int32)
+    # True creation order for every possible MOVER. Objects omitted here are
+    # still obstacles in `_escape_rounds`; this only elides outer-loop turns
+    # whose type can never be affected (lane turrets in production).
+    movers = idx if mover_indices is None else jnp.asarray(mover_indices, jnp.int32)
+    if terrain is not None:
+        eligible = terrain_affected
+    else:
+        # A mover with no object in its frozen GetNearestObjects list has no
+        # possible side effect in the dynamic-only pass. Compact those no-op
+        # outer turns before entering the sequential loop; candidates remain
+        # selected from all obstacle slots, including turrets.
+        frozen = _frozen_candidates(
+            x, y, collision_radius,
+            snapshot_x, snapshot_y, snapshot_present)
+        not_self = ~jnp.eye(n, dtype=bool)
+        has_candidate = jnp.any(
+            frozen & obstacle[None, :] & not_self, axis=1)
+        eligible = affected & has_candidate
+    BIG = jnp.iinfo(jnp.int32).max
+    mover_key = jnp.where(eligible[movers], seq_key[movers], BIG)
+    order = movers[jnp.argsort(mover_key)]
+    n_movers = jnp.sum(eligible[movers]).astype(jnp.int32)
 
     def outer_body(carry, i):
         cx, cy = carry
+        # Source ordering is terrain first, then GetNearestObjects.  Normally
+        # an object's live query centre is unchanged before its own turn, but
+        # a terrain exit changes it, so the candidate row is constructed here
+        # rather than once from the pre-sweep positions. The quadtree nodes
+        # themselves remain the frozen snapshot.
+        if terrain is not None:
+            tx, ty = jax.lax.cond(
+                terrain_affected[i],
+                lambda _: exit_terrain_collision(
+                    cx[i], cy[i], pathfinding_radius[i], terrain)[:2],
+                lambda _: (cx[i], cy[i]),
+                operand=None)
+            cx = cx.at[i].set(tx)
+            cy = cy.at[i].set(ty)
+        candidates_i = _frozen_candidate_row(
+            cx[i], cy[i], collision_radius[i], collision_radius,
+            snapshot_x, snapshot_y, snapshot_present)
         xi_f, yi_f, _ = _escape_rounds(
-            i, cx, cy, affected, obstacle, seq_key,
-            collision_radius, pathfinding_radius, MAX_ESCAPES_PER_UNIT)
+            i, cx, cy, affected, obstacle, candidates_i, seq_key,
+            collision_radius, pathfinding_radius, MAX_ESCAPES_PER_UNIT, terrain)
         cx = cx.at[i].set(xi_f)
         cy = cy.at[i].set(yi_f)
         return (cx, cy), None
 
-    (x, y), _ = jax.lax.scan(outer_body, (x, y), order)
+    def outer_loop(carry):
+        k, cx, cy = carry
+        (cx, cy), _ = outer_body((cx, cy), order[k])
+        return k + jnp.int32(1), cx, cy
+
+    _, x, y = jax.lax.while_loop(
+        lambda c: c[0] < n_movers,
+        outer_loop,
+        (jnp.int32(0), x, y))
     return x, y
 
 
 def max_escapes_used(x: jax.Array, y: jax.Array, kind: jax.Array,
                      alive: jax.Array, spawn_seq: jax.Array,
                      collision_radius: jax.Array, pathfinding_radius: jax.Array,
-                     ghosted: Optional[jax.Array] = None, probe: int = 32
+                     ghosted: Optional[jax.Array] = None, probe: int = 32,
+                     candidate_x: Optional[jax.Array] = None,
+                     candidate_y: Optional[jax.Array] = None,
+                     candidate_present: Optional[jax.Array] = None,
                      ) -> jax.Array:
     """How many escapes a tick would actually apply to each unit, on the
     SAME pre-tick snapshot :func:`resolve_collisions` would use (not a
@@ -333,10 +488,16 @@ def max_escapes_used(x: jax.Array, y: jax.Array, kind: jax.Array,
     n = x.shape[0]
     idx = jnp.arange(n)
     seq_key = spawn_seq.astype(jnp.int32) * jnp.int32(n + 1) + idx.astype(jnp.int32)
+    snapshot_x = x if candidate_x is None else candidate_x
+    snapshot_y = y if candidate_y is None else candidate_y
+    snapshot_present = obstacle if candidate_present is None else candidate_present
+    candidates = _frozen_candidates(
+        x, y, collision_radius,
+        snapshot_x, snapshot_y, snapshot_present)
 
     def one(i):
         _, _, count = _escape_rounds(
-            i, x, y, affected, obstacle, seq_key,
+            i, x, y, affected, obstacle, candidates[i], seq_key,
             collision_radius, pathfinding_radius, probe)
         return count
 

@@ -17,6 +17,7 @@ from lanerl_jax.sim.minion_ai import (  # noqa: E402
     ACTION_TIMER_MS,
     GIVE_UP_MS,
     IGNORE_MS,
+    advance_lane_waypoints,
     step_minion_ai,
 )
 from lanerl_jax.sim.state import Kind, MoveOrder, Team  # noqa: E402
@@ -57,6 +58,85 @@ def _world(xs, kinds, teams, minion_types=None, **over):
 
 M, C = Kind.LANE_MINION, Kind.CHAMPION
 B, R = Team.BLUE, Team.RED
+
+
+def _lane_waypoint_world(xs, *, snapshot_x=None, radius=None,
+                         lane_key=None, route_end=None):
+    """Small source-shaped fixture for ``LaneMinionAI.WaypointReached``."""
+    n = len(xs)
+    radius = np.asarray(radius if radius is not None else [40.0] * n, np.float32)
+    snapshot_x = np.asarray(snapshot_x if snapshot_x is not None else xs, np.float32)
+    lane_key = np.asarray(lane_key if lane_key is not None else [0] * n, np.int8)
+    route_end = np.asarray(route_end if route_end is not None else [999.0] * n, np.float32)
+    # all units share a short artificial immutable lane; this makes the test
+    # geometry legible while exercising the production batched gather/scan.
+    lane = np.broadcast_to(np.asarray([[210.0, 0.0], [500.0, 0.0]], np.float32),
+                           (n, 2, 2)).copy()
+    routes = np.zeros((n, 3, 2), np.float32)
+    routes[:, 0, 0] = xs
+    routes[:, 1, 0] = route_end
+    return dict(
+        kind=jnp.full(n, Kind.LANE_MINION, jnp.int8),
+        alive=jnp.ones(n, bool),
+        x=jnp.asarray(xs, jnp.float32), y=jnp.zeros(n, jnp.float32),
+        collision_x=jnp.asarray(snapshot_x), collision_y=jnp.zeros(n, jnp.float32),
+        collision_present=jnp.ones(n, bool),
+        spawn_seq=jnp.arange(n, dtype=jnp.int32),
+        collision_radius=jnp.asarray(radius),
+        acquisition_range=jnp.full(n, 800.0, jnp.float32),
+        lane_waypoints=jnp.asarray(lane), lane_waypoint_key=jnp.asarray(lane_key),
+        waypoints=jnp.asarray(routes), n_waypoints=jnp.full(n, 2, jnp.int8),
+        reevaluated=jnp.ones(n, bool), has_target=jnp.zeros(n, bool),
+    )
+
+
+def test_waypoint_reached_merges_a_collision_chain_before_applying_margin():
+    """Literal `WaypointReached` geometry from LaneMinionAI.cs:276-313.
+
+    The lone minion at 0 is 210 units from waypoint 0, well outside its
+    40+25 radius. Two packed 40-radius minions at 70 and 140 are processed in
+    the source OrderBy order, progressively shifting the virtual centre to 80
+    and growing its radius to 120. The final 130-unit waypoint distance is
+    then inside 120+25 and advances the AI's *persistent* lane cursor.
+    """
+    out = advance_lane_waypoints(**_lane_waypoint_world([0.0, 70.0, 140.0]))
+    assert int(out.key[0]) == 1
+    assert bool(out.reset_path[0])
+    np.testing.assert_allclose(np.asarray(out.destination[0]), [500.0, 0.0])
+
+
+def test_waypoint_cluster_uses_frozen_collision_tree_for_membership():
+    """EnumerateUnitsInRange sees CollisionHandler's pre-move node positions.
+
+    The live neighbour at 70 would make the same collision chain as above,
+    but its rebuilt node was at 2,000 -- outside 0's acquisition query circle.
+    It is absent from the IEnumerable entirely and cannot expand arrival.
+    """
+    out = advance_lane_waypoints(**_lane_waypoint_world(
+        [0.0, 70.0], snapshot_x=[0.0, 2000.0]))
+    assert int(out.key[0]) == 0
+    np.testing.assert_allclose(np.asarray(out.destination[0]), [210.0, 0.0])
+
+
+def test_lane_cursor_survives_chase_and_resets_a_route_to_the_resume_waypoint():
+    """A combat route must not overwrite `currentWaypointIndex`.
+
+    The old transient route ends at 999 (a former target). Once the target is
+    gone and ReevaluateBehavior reaches its lane tail, the stored lane index
+    is advanced and `SetWaypoints([Position, PathingWaypoints[index]])` is
+    requested. This is the state distinction the previous single waypoint key
+    could not represent.
+    """
+    kw = _lane_waypoint_world([150.0], lane_key=[0], route_end=[999.0])
+    # Make immutable lane waypoint 0 be the one reached while coming back from
+    # combat; its successor is 500, the route that must replace target=999.
+    lane = np.asarray(kw["lane_waypoints"]).copy()
+    lane[0] = np.asarray([[200.0, 0.0], [500.0, 0.0]], np.float32)
+    kw["lane_waypoints"] = jnp.asarray(lane)
+    out = advance_lane_waypoints(**kw)
+    assert int(out.key[0]) == 1
+    assert bool(out.reset_path[0])
+    np.testing.assert_allclose(np.asarray(out.destination[0]), [500.0, 0.0])
 
 
 def test_priority_beats_distance():
@@ -228,6 +308,31 @@ def test_a_call_for_help_at_worse_priority_does_not_displace():
     help_p[0, 2] = ClassifyUnit.CHAMPION_ATTACKING_MINION       # 5 > 3, worse
     kw["help_priority"] = jnp.asarray(help_p)
     assert int(step_minion_ai(**kw).target[0]) == 1
+
+
+def test_target_death_short_circuits_the_restricted_call_for_help_scan():
+    """C# evaluates ``TargetJustDied() || FoundNewTarget(true)`` left-to-right.
+
+    A pending help call may still win the unrestricted scan that follows, but
+    it must not be reported or handled as the restricted incumbent-displacing
+    path on the same tick the incumbent dies.
+    """
+    kw = _world([0.0, 100.0, 300.0], [M, M, C], [B, R, R],
+                [MinionType.MELEE, MinionType.MELEE, 0],
+                alive=jnp.asarray([True, False, True]),
+                target=jnp.asarray([1, -1, -1], jnp.int8),
+                target_priority=jnp.asarray(
+                    [ClassifyUnit.MELEE_MINION, ClassifyUnit.DEFAULT,
+                     ClassifyUnit.DEFAULT], jnp.int8),
+                had_target=jnp.asarray([True, False, False]),
+                ai_timer=jnp.zeros(3))
+    help_p = np.full((3, 3), ClassifyUnit.DEFAULT, np.int8)
+    help_p[0, 2] = ClassifyUnit.CHAMPION_ATTACKING_MINION
+    kw["help_priority"] = jnp.asarray(help_p)
+
+    out = step_minion_ai(**kw)
+    assert int(out.target[0]) == 2, "unrestricted scan may still select the caller"
+    assert not bool(out.cfh_switch[0]), "restricted scan was short-circuited"
 
 
 def test_four_seconds_without_landing_a_hit_gives_up_and_ignores():

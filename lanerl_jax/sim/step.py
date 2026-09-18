@@ -57,19 +57,28 @@ from ..obs.fog import visible_to_enemy as _visible_to_enemy
 from .init import MINION_SPAWN, spawn_minion
 from .missiles import step_missiles
 from .profiles import PROFILES
-from .spells import RANKS_BY_LEVEL, BuffId, Slot, step_buffs
+from .spells import (Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER,
+                     R_PENDING_BUFF_SLOT, W_PASSIVE_BUFF_SLOT,
+                     RANKS_BY_LEVEL, BuffId, Slot,
+                     consume_q_on_hit, q_damage_at_rank,
+                     q_silence_duration_at_rank, step_buffs)
+from .terrain_jax import map1_terrain, repair_collision_terrain_batch
 from .waves_jax import step_waves_jax
-from .minion_ai import step_minion_ai
+from .minion_ai import LaneWaypointOut, advance_lane_waypoints, step_minion_ai
 from .movement_jax import TICK_MS, step_move_units
 from .regen import step_regen
 from .rewards import (ambient_gold, champion_kill_rewards, death_rewards,
                       level_for_xp, minion_gold_deathspree_decay,
                       turret_kill_rewards, update_hit_flag)
-from .state import Kind, LaneState, MoveOrder, Team, TurretTier
+from .state import Kind, LaneState, MoveOrder, Team, TurretTier, TU_SLICE
 from .targeting import (MinionType, base_priority, call_for_help_map,
                         nearest_enemy, turret_acquire)
 
 __all__ = ["UnitParams", "tick", "step_decision"]
+
+# One static 293x294 boolean device constant, not per-environment state.
+# `CollisionHandler.Update` needs it before the first object update every tick.
+_MAP1_TERRAIN = map1_terrain()
 
 
 def _attack_damage_against(attack_damage, attacker_kind, target_kind,
@@ -151,7 +160,16 @@ _OUTER_TURRET_ROW = jnp.asarray(
 _OTHER_TURRET_ROW = jnp.asarray(
     [k == Kind.TURRET and sub in (TurretTier.INNER, TurretTier.INHIBITOR,
                                   TurretTier.NEXUS)
-     for k, sub, _ in PROFILES], bool)
+    for k, sub, _ in PROFILES], bool)
+
+_RECALL_WINDUP_MS = 500.0
+_RECALL_CHANNEL_MS = 8_000.0
+# ``Characters/Global/Recall.OnSpellChannel`` gives its damage-listener buff
+# 7.9 seconds, whereas the Spell channel itself lasts 8.0 seconds.
+_RECALL_DAMAGE_BUFF_MS = 7_900.0
+_FOUNTAIN_HEAL_PERIOD_MS = 1_000.0
+_FOUNTAIN_HEAL_FRAC = 0.15
+_FOUNTAIN_RADIUS = 1_000.0
 
 
 #: profile row -> MinionType for a lane minion, or TurretTier for a turret
@@ -183,7 +201,10 @@ def _can_move(move_order: jax.Array, alive: jax.Array) -> jax.Array:
 
 def tick(state: LaneState, params: UnitParams,
          delta_ms: float = TICK_MS, lane_path=None,
-         minion_hp=None, enable_call_for_help: bool = False) -> LaneState:
+         minion_hp=None, enable_call_for_help: bool = True,
+         enable_collision: bool = True,
+         collision_terrain: bool = True,
+         defer_collision_terrain: bool = False) -> LaneState:
     """Advance one 16.667 ms server tick.
 
     ``lane_path`` is ``(W, 2)`` -- ``MinionPaths[LANE_L]``, walked forward by
@@ -191,12 +212,10 @@ def tick(state: LaneState, params: UnitParams,
     (``waypoint.Reverse()`` for ``TEAM_PURPLE``). Pass ``None`` to run without
     wave spawning, which is what the unit tests want.
 
-    ``enable_call_for_help`` defaults to ``False``, matching every test and
-    every measurement in this tree before ``docs/CALL_FOR_HELP_SWITCH_RATE.md``
-    -- flipping it does not change existing behaviour unless a caller opts in.
-    See section 5b below and that doc for the measured switch-rate comparison
-    and why this stays a toggle rather than either a permanent no-op or a
-    permanent wire.
+    ``enable_call_for_help`` defaults to ``True`` because the reference server
+    broadcasts it unconditionally.  The switch remains available for ablation
+    and historical parity measurements, but production callers reproduce the
+    server unless they explicitly opt out.
     """
     n = state.kind.shape[-1]
     dtype = state.x.dtype
@@ -219,7 +238,10 @@ def tick(state: LaneState, params: UnitParams,
     # the same pair of schedules. Computed once, up front, because armour is
     # read in three places below (buffs, the autoattack mitigation target, and
     # missile mitigation) and all three must see the same ramped value.
-    base_armor = P("armor")
+    level_growth = growth_sum(state.level, jnp)
+    base_armor = P("armor") + P("armor_per_level") * level_growth
+    magic_resist_now = (
+        P("magic_resist") + P("mr_per_level") * level_growth)
     armor_now = base_armor + jnp.where(
         _OTHER_TURRET_ROW[state.model],
         TURRET_ARMOR_PER_RAMP * other_turret_ramps(t_now, jnp),
@@ -251,10 +273,55 @@ def tick(state: LaneState, params: UnitParams,
     # end of last tick. Garen's E sets `StatusFlags.Ghosted`, so a spinning
     # Garen passes through units instead of being shoved out of the wave.
     pre_ghosted = (state.buff_id[:, Slot.E] == BuffId.GAREN_E) & state.alive
-    cx, cy = resolve_collisions(state.x, state.y, state.kind, state.alive,
-                                state.spawn_seq, P("collision_radius"),
-                                P("pathfinding_radius"), ghosted=pre_ghosted)
-    state = state.replace(x=cx, y=cy)
+    if enable_collision:
+        cx, cy = resolve_collisions(state.x, state.y, state.kind, state.alive,
+                                    state.spawn_seq, P("collision_radius"),
+                                    P("pathfinding_radius"), ghosted=pre_ghosted,
+                                    candidate_x=state.collision_x,
+                                    candidate_y=state.collision_y,
+                                    candidate_present=state.collision_present,
+                                    terrain=(_MAP1_TERRAIN if collision_terrain
+                                             else None),
+                                    mover_indices=jnp.arange(
+                                        TU_SLICE.start, dtype=jnp.int32))
+    else:
+        cx, cy = state.x, state.y
+    if enable_collision and defer_collision_terrain:
+        moved_by_unit = (cx != state.x) | (cy != state.y)
+        cx, cy, _terrain_exhausted = repair_collision_terrain_batch(
+            cx, cy, P("pathfinding_radius"), moved_by_unit, _MAP1_TERRAIN)
+    # UpdateQuadTree runs now, before wave spawns and unit movement. A later
+    # spawn is inserted into the same tree immediately by OnAdded; spawn_minion
+    # mirrors that insertion in its masked slot write.
+    collision_present = state.alive & (state.kind != Kind.NONE)
+    state = state.replace(
+        x=cx, y=cy, collision_x=cx, collision_y=cy,
+        collision_present=collision_present)
+
+    # ---- 0b. fountain healing (LevelScriptObjects.OnUpdate -> Fountain) ---
+    # Map1 updates its two Fountain objects before ObjectManager. Their timers
+    # start together at zero and are reset (not remainder-preserved) together,
+    # so one scalar is exact. A recall which completes later in this tick does
+    # not receive this already-passed fountain pulse.
+    fountain_timer = state.fountain_heal_ms + jnp.asarray(delta_ms, dtype)
+    fountain_pulse = fountain_timer >= jnp.asarray(_FOUNTAIN_HEAL_PERIOD_MS, dtype)
+    fountain_timer = jnp.where(fountain_pulse, jnp.asarray(0.0, dtype), fountain_timer)
+    is_champion = (state.kind == Kind.CHAMPION) & state.alive
+    d_spawn2 = ((state.x - state.spawn_x) ** 2
+                + (state.y - state.spawn_y) ** 2)
+    in_own_fountain = is_champion & (d_spawn2 <= _FOUNTAIN_RADIUS ** 2)
+    fountain_heal = jnp.where(
+        fountain_pulse & in_own_fountain,
+        state.max_hp * jnp.asarray(_FOUNTAIN_HEAL_FRAC, dtype), 0.0)
+    state = state.replace(
+        # Fountain.Update only calls TakeHeal for its eligible champion
+        # targets.  Do not clamp every other unit on a pulse: constructed
+        # states may legitimately use hp without filling max_hp, and a
+        # zero-heal `min(hp, max_hp)` would manufacture an uncredited death.
+        hp=jnp.where(fountain_heal > 0,
+                     jnp.minimum(state.hp + fountain_heal, state.max_hp),
+                     state.hp),
+        fountain_heal_ms=fountain_timer)
 
     # ---- 1. wave spawning (MapScript.Update, still inside Map.Update) ------
     # `Game.Update` (`Game.cs:474-497`): `GameTime += diff` runs BEFORE
@@ -285,12 +352,19 @@ def tick(state: LaneState, params: UnitParams,
         hp_r = params["max_hp"][_WAVE_ROW_RED[mi]]
         # Spawn at the MEASURED barracks, not at the path's end vertex --
         # they differ by 446 units on the red side. See `spawn_minion`.
-        state = spawn_minion(state, Team.BLUE, _WAVE_ROW_BLUE[mi], hp_b,
-                             lane_path, enabled=mtype >= 0,
-                             spawn_xy=MINION_SPAWN[Team.BLUE])
+        # Map1's `SpawnBarracks` is populated from the package's enumeration
+        # order.  In TOPONLY that order reaches ``__P_Chaos...L01`` (red) just
+        # before ``__P_Order...L01`` (blue), so the red minion's
+        # `GameObject.OnAdded` / CollisionHandler insertion happens first.
+        # This is observable once the waves meet: collision sweeps creation
+        # order, not side or our minion-slot order.  Keep these writes in the
+        # server order even though their slots are disjoint.
         state = spawn_minion(state, Team.RED, _WAVE_ROW_RED[mi], hp_r,
                              lane_path[::-1], enabled=mtype >= 0,
                              spawn_xy=MINION_SPAWN[Team.RED])
+        state = spawn_minion(state, Team.BLUE, _WAVE_ROW_BLUE[mi], hp_b,
+                             lane_path, enabled=mtype >= 0,
+                             spawn_xy=MINION_SPAWN[Team.BLUE])
         state = state.replace(next_spawn_ms=next_spawn, minion_number=m_no,
                               cannon_count=c_no)
 
@@ -306,7 +380,8 @@ def tick(state: LaneState, params: UnitParams,
         spell_cooldown=state.spell_cooldown, spell_level=state.spell_level,
         x=state.x, y=state.y, kind=state.kind, team=state.team,
         alive=state.alive, armor=armor_now,
-        magic_resist=P("magic_resist"), delta_ms=delta_ms)
+        magic_resist=magic_resist_now, hp=state.hp, max_hp=state.max_hp,
+        delta_ms=delta_ms)
 
     # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
     # W's PASSIVE is granted once on first rank-up of W (`W.cs:26-46` registers
@@ -344,7 +419,7 @@ def tick(state: LaneState, params: UnitParams,
         percent_base_bonus=bs.armor_percent_base_bonus,
         flat_bonus=armor_flat, percent_bonus=bs.armor_percent_bonus)
     magic_resist_eff = stat_total(
-        P("magic_resist"), base_bonus=0.0,
+        magic_resist_now, base_bonus=0.0,
         percent_base_bonus=bs.mr_percent_base_bonus, flat_bonus=0.0,
         percent_bonus=bs.mr_percent_bonus)
 
@@ -354,17 +429,86 @@ def tick(state: LaneState, params: UnitParams,
     # 600 s episode where the server's died 0 -- see `sim/regen.py`.
     rg = step_regen(
         hp=state.hp, max_hp=state.max_hp, alive=state.alive, kind=state.kind,
-        level=state.level, hp_regen=P("hp_regen"),
+        level=state.level,
+        hp_regen=P("hp_regen") + P("hp_regen_per_level") * level_growth,
         stat_timer=state.stat_timer, heal_timer=state.heal_timer,
         ms_since_damaged=state.ms_since_damaged, delta_ms=delta_ms)
     state = state.replace(hp=rg.hp, stat_timer=rg.stat_timer,
                           heal_timer=rg.heal_timer)
 
+    # ---- 2a3. Recall damage-buff / cast-windup state ---------------------
+    # Recall's buff observes non-periodic damage and cancels itself on ITS
+    # NEXT OnUpdate. This phase is before movement and Spell.Update, matching
+    # `AttackableUnit.UpdateBuffs`; it therefore prevents a pending channel
+    # from consuming another frame. The 0.5 s windup is a regular cast and is
+    # intentionally not affected by the buff (which is added only on channel).
+    recall_from_damage = (state.recall_channel_ms > 0) & state.recall_damage_pending
+    recall_channel_start = jnp.where(recall_from_damage, 0.0,
+                                     state.recall_channel_ms)
+    recall_windup_start = state.recall_windup_ms
+    r_cast_start = state.r_cast_ms
+    state = state.replace(
+        recall_channel_ms=recall_channel_start,
+        recall_damage_pending=jnp.zeros_like(state.recall_damage_pending),
+        move_order=jnp.where(recall_from_damage, jnp.int8(MoveOrder.HOLD),
+                             state.move_order))
+
     # ---- 2b. movement (AttackableUnit.Move, after UpdateBuffs) -------------
+    # GarenQHaste writes `MoveSpeed.PercentBonus += .35` on activation. Read
+    # the post-UpdateBuffs table so its expiry frame uses the unbuffed speed.
+    q_hasted = bs.buff_id[:, Q_HASTE_BUFF_SLOT] == BuffId.GAREN_Q_HASTE
+    move_speed = P("move_speed") * jnp.where(
+        q_hasted, jnp.asarray(Q_HASTE_MULTIPLIER, dtype), 1.0)
     x, y, wp_key, _ = step_move_units(
         state.x, state.y, state.waypoints, state.waypoint_key,
-        state.n_waypoints, P("move_speed"),
-        _can_move(state.move_order, state.alive), delta_ms)
+        state.n_waypoints, move_speed,
+        (_can_move(state.move_order, state.alive)
+         & (recall_windup_start <= 0) & (recall_channel_start <= 0)
+         & (r_cast_start <= 0)), delta_ms)
+
+    # ---- 2c. Recall Spell.Update (after Move, before targeting) ----------
+    # The BluePill has the engine's ordinary 0.5 s cast time, then the
+    # script's 8 s channel. `Spell.Update` decrements a live channel before
+    # ChannelCancelCheck; a MoveTo/Attack* order consequently consumes this
+    # frame but then stops the channel. Finishing is checked after that call
+    # in the source, so an exact-final-frame Move still completes (the source
+    # does not re-check Spell.State before FinishChanneling).
+    dt = jnp.asarray(delta_ms, dtype)
+    windup_live = (recall_windup_start > 0) & state.alive
+    recall_windup = jnp.where(
+        windup_live, jnp.maximum(recall_windup_start - dt, 0.0),
+        recall_windup_start)
+    begin_channel = windup_live & (recall_windup <= 0)
+    channel_live = (recall_channel_start > 0) & state.alive
+    channel_counted = jnp.where(
+        channel_live, jnp.maximum(recall_channel_start - dt, 0.0),
+        recall_channel_start)
+    channel_complete = channel_live & (channel_counted <= 0)
+    channel_break_order = (
+        (state.move_order == MoveOrder.MOVE_TO)
+        | (state.move_order == MoveOrder.ATTACK_MOVE)
+        | (state.move_order == MoveOrder.ATTACK_TO))
+    channel_cancel_move = channel_live & channel_break_order & ~channel_complete
+    recall_channel = jnp.where(
+        begin_channel, jnp.asarray(_RECALL_CHANNEL_MS, dtype),
+        jnp.where(channel_cancel_move, 0.0, channel_counted))
+    recall_move_order = jnp.where(
+        channel_cancel_move | channel_complete, jnp.int8(MoveOrder.HOLD),
+        state.move_order)
+    # `Recall.OnSpellPostChannel -> Champion.Recall -> TeleportTo`; unlike a
+    # respawn this does NOT restore health. Fountain's next map-phase pulse is
+    # the only healing it receives.
+    x = jnp.where(channel_complete, state.spawn_x, x)
+    y = jnp.where(channel_complete, state.spawn_y, y)
+    state = state.replace(move_order=recall_move_order)
+
+    # R's damage mailbox is held on its victim, but Spell.Update's cast lock
+    # belongs to the caster. The lock is uncancellable by ordinary orders
+    # (`CantCancelWhileWindingUp=1`) and only clears at FinishCasting or death.
+    r_cast_live = (r_cast_start > 0) & state.alive
+    r_cast_ms = jnp.where(r_cast_live, jnp.maximum(r_cast_start - dt, 0.0),
+                          r_cast_start)
+    r_cast_finished = r_cast_live & (r_cast_ms <= 0)
 
     # ---- 2p. fog of war (ObjectManager.Update's vision pass) ---------------
     # The server recomputes `IsVisibleByTeam` once per tick, from that tick's
@@ -394,7 +538,64 @@ def tick(state: LaneState, params: UnitParams,
         time_since_attack=state.time_since_attack,
         ignore_until=state.ignore_until,
         had_target=state.target >= 0, move_order=state.move_order,
+        spawn_seq=state.spawn_seq,
         delta_ms=delta_ms)
+
+    # ---- 2c. LaneMinionAI.WaypointReached ---------------------------------
+    # A lane minion owns TWO waypoint cursors on the server: the transient
+    # AttackableUnit movement route, and LaneMinionAI's persistent index into
+    # PathingWaypoints. Combat overwrites the first while chasing a target, so
+    # `lane_waypoint_key` is deliberately independent and lets it resume the
+    # correct lane waypoint once the target is gone.
+    lane_key = state.lane_waypoint_key
+    lane_stop = jnp.zeros_like(state.alive)
+    wp_after_lane = state.waypoints
+    wp_key_after_lane = wp_key
+    n_wp_after_lane = state.n_waypoints
+    if lane_path is not None:
+        base_lane = jnp.asarray(lane_path, dtype)
+        per_unit_lane = jnp.broadcast_to(base_lane, (n,) + base_lane.shape)
+        per_unit_lane = jnp.where(
+            (state.team == Team.RED)[:, None, None],
+            jnp.broadcast_to(base_lane[::-1], (n,) + base_lane.shape),
+            per_unit_lane)
+        lane_active = ((state.kind == Kind.LANE_MINION) & state.alive
+                       & ai.reevaluated & (ai.target < 0))
+
+        def advance(_):
+            return advance_lane_waypoints(
+                kind=state.kind, alive=state.alive, x=x, y=y,
+                collision_x=state.collision_x, collision_y=state.collision_y,
+                collision_present=state.collision_present,
+                spawn_seq=state.spawn_seq,
+                collision_radius=P("collision_radius"),
+                acquisition_range=P("acquisition_range"),
+                lane_waypoints=per_unit_lane, lane_waypoint_key=lane_key,
+                waypoints=state.waypoints, n_waypoints=state.n_waypoints,
+                reevaluated=ai.reevaluated, has_target=ai.target >= 0)
+
+        def no_advance(_):
+            return LaneWaypointOut(
+                key=lane_key,
+                destination=jnp.zeros((n, 2), dtype),
+                reset_path=jnp.zeros((n,), dtype=bool),
+                stop=jnp.zeros((n,), dtype=bool))
+
+        # The source only enters WaypointReached from a 250-ms controller
+        # sweep (or its immediate event branches). Avoid the N² sort/cluster
+        # scan on ordinary movement ticks where no lane minion can inspect it.
+        lane = jax.lax.cond(jnp.any(lane_active), advance, no_advance,
+                            operand=None)
+        lane_key = lane.key
+        lane_stop = lane.stop
+        lane_two = jnp.stack([jnp.stack([x, y], -1), lane.destination], axis=1)
+        wp_after_lane = jnp.where(
+            lane.reset_path[:, None, None],
+            state.waypoints.at[:, :2].set(lane_two), state.waypoints)
+        wp_key_after_lane = jnp.where(
+            lane.reset_path, jnp.int8(1), wp_key)
+        n_wp_after_lane = jnp.where(
+            lane.reset_path, jnp.int8(2), state.n_waypoints)
 
     # ---- 3. target acquisition for non-minions (ObjAIBase.UpdateTarget) ----
     # Champions on attack-move take the nearest enemy, no priority. Turrets have
@@ -420,7 +621,7 @@ def tick(state: LaneState, params: UnitParams,
     champ_pick = jnp.where(
         attack_moving,
         nearest_enemy(x, y, state.team, state.alive, state.alive,
-                      P("acquisition_range")),
+                      P("acquisition_range"), state.spawn_seq),
         jnp.int8(-1))
     # What DOES gate on vision -- and matters, because this branch carries no
     # distance cap at all, unlike the minion and turret rules below, so a held
@@ -455,7 +656,7 @@ def tick(state: LaneState, params: UnitParams,
     turret_pick = turret_acquire(
         x, y, state.team, state.alive, state.alive & visible, state.kind,
         _minion_type_of(state), P("attack_range"), state.target,
-        state.target, P("attack_range"))
+        state.target, P("attack_range"), state.spawn_seq)
     cur = jnp.clip(state.target, 0, n - 1)
     left_range = (state.target >= 0) & (
         ((x[cur] - x) ** 2 + (y[cur] - y) ** 2)
@@ -497,12 +698,12 @@ def tick(state: LaneState, params: UnitParams,
 
     hold = has_tgt & in_rng
     chase = has_tgt & ~in_rng
-    wp = state.waypoints
+    wp = wp_after_lane
     two = jnp.stack([jnp.stack([x, y], -1), jnp.stack([x[tgt], y[tgt]], -1)], 1)
     wp = jnp.where(chase[:, None, None],
                    wp.at[:, :2].set(two)[:, :, :], wp)
-    wp_key = jnp.where(chase, jnp.int8(1), wp_key)
-    n_wp = jnp.where(chase, jnp.int8(2), state.n_waypoints)
+    wp_key = jnp.where(chase, jnp.int8(1), wp_key_after_lane)
+    n_wp = jnp.where(chase, jnp.int8(2), n_wp_after_lane)
     # Champion attack damage is NOT static. `Stats.LevelUp`
     # (`GameServerLib/GameObjects/Stats/Stats.cs:270-271`) grows
     # `AttackDamage` every level-up through the same non-linear curve as
@@ -521,7 +722,16 @@ def tick(state: LaneState, params: UnitParams,
     # in this same tick) reproduces. `ad_per_level` is 0 for every non-champion
     # row, so this is a no-op for minions and turrets regardless of their
     # (always 1, see `state.py`) `level` field.
-    ad_now = P("attack_damage") + P("ad_per_level") * growth_sum(state.level, jnp)
+    ad_now = P("attack_damage") + P("ad_per_level") * level_growth
+    # `Stats.LevelUp` adds `GrowthAttackSpeed / 100` to
+    # `AttackSpeedMultiplier.PercentBaseBonus` through the same non-linear
+    # curve. With no reachable items/buffs that alter AS, `Stat.Total` is this
+    # multiplier exactly; both period and normal-attack windup scale by it.
+    attack_speed_multiplier = (
+        1.0 + (P("attack_speed_per_level") / 100.0)
+        * level_growth)
+    attack_period_now = P("attack_period") / attack_speed_multiplier
+    attack_windup_now = P("attack_windup") / attack_speed_multiplier
     raw_ad = _attack_damage_against(
         ad_now, state.kind, state.kind[tgt], state.model, t_now)
     aa = step_autoattack(
@@ -529,13 +739,40 @@ def tick(state: LaneState, params: UnitParams,
         state.has_auto_attacked,
         in_range=in_rng,
         # `SetStatus(CanAttack, false)` for Judgment's duration
-        can_attack=state.alive & ~bs.suppress_attack,
+        can_attack=(state.alive & ~bs.suppress_attack
+                    & (recall_windup <= 0)
+                    & (recall_channel <= 0) & (r_cast_ms <= 0)),
         has_target=has_tgt,
-        attack_period=P("attack_period"),
-        windup_time=P("attack_windup"),
+        attack_period=attack_period_now,
+        windup_time=attack_windup_now,
         attack_damage=raw_ad,
         target_resist=armor_eff[tgt],
+        # Q's first post-cast gate is intentionally skipped; the following
+        # swing uses GarenQAttack's complete replacement damage, not normal AD
+        # plus an extra component.
+        empowered_attack=bs.q_empowered,
+        empowered_damage=q_damage_at_rank(state.spell_level[:, Slot.Q], ad_now),
+        skip_next_autoattack=bs.q_skip_next,
         delta_ms=delta_ms, xp=jnp)
+
+    q_landed = aa.hit & bs.q_empowered
+    buff_id_out, spell_cooldown_out = consume_q_on_hit(
+        bs.buff_id, bs.spell_cooldown, q_landed)
+    # `SkipNextAutoAttack` is consumed at the swing gate, before the real
+    # GarenQAttack swing begins. `buff_power` is otherwise Q's private bit.
+    buff_power_out = bs.buff_power.at[:, Q_BUFF_SLOT].set(
+        jnp.where(aa.consumed_skip, 0.0, bs.buff_power[:, Q_BUFF_SLOT]))
+    # GarenQAttack applies silence to the unit hit. Status duration is carried
+    # explicitly so subsequent semantic cast orders fail exactly while the
+    # server's CanCast flag is suppressed. Multiple simultaneous Q hits use
+    # the longest duration, matching independent status applications.
+    silence_left = jnp.maximum(
+        state.silenced_ms - jnp.asarray(delta_ms, dtype), 0.0)
+    silence_by_attacker = (
+        q_silence_duration_at_rank(state.spell_level[:, Slot.Q]) * 1000.0)
+    silence_added = jnp.zeros_like(silence_left).at[tgt].max(
+        jnp.where(q_landed, silence_by_attacker, 0.0))
+    silenced_ms = jnp.maximum(silence_left, silence_added)
 
     # ---- 5. apply damage, and attribute the kill --------------------------
     # Who gets the gold is the whole of last-hitting, so attribution is not a
@@ -594,6 +831,18 @@ def tick(state: LaneState, params: UnitParams,
     # one per source, which is what `TakeDamage`'s post-mitigation hook does.
     dealt = (dmg_ij.sum(axis=0) + bs.damage_dealt) * bs.damage_multiplier
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
+
+    # `Buffs/Global/Recall` listens only while its 7.9 s buff exists. Auto
+    # attacks/missiles are non-periodic; E is periodic and must NOT interrupt
+    # a base. R's pending hit is a regular spell hit and does. The listener
+    # sets a latch now which its OnUpdate consumes at the top of the next tick.
+    r_hit = ((state.buff_id[:, R_PENDING_BUFF_SLOT] == BuffId.GAREN_R_PENDING)
+             & (bs.damage_dealt > 0))
+    nonperiodic_hit = (dmg_ij.sum(axis=0) > 0) | r_hit
+    recall_listener_live = recall_channel > (_RECALL_CHANNEL_MS - _RECALL_DAMAGE_BUFF_MS)
+    recall_damage_pending = (
+        state.recall_damage_pending
+        | (recall_listener_live & nonperiodic_hit))
 
     # ---- out-of-combat clock, for Garen's passive -------------------------
     # `CharScriptGaren.ShouldPassiveTurnOff(unit, damageData)` (`unit` = the
@@ -655,39 +904,23 @@ def tick(state: LaneState, params: UnitParams,
     alive = state.alive & (hp > 0)
     died = state.alive & ~alive
 
-    # ---- 5b. call for help: a TOGGLE, not a permanent wire ----------------
+    # ---- 5b. call for help -------------------------------------------------
     # `targeting.call_for_help_map` implements the broadcast faithfully and is
-    # tested. `enable_call_for_help=False` (the default) reproduces every
-    # test and every measurement in this tree from before this toggle existed,
-    # bit for bit: `help_priority` is simply carried forward unchanged.
-    #
-    # Why a toggle and not a permanent wire: `docs/CALL_FOR_HELP_SWITCH_RATE.md`
-    # retires the switch-RATE objection that blocked this before (idle lane,
-    # 600 s: sim 582 isolated cfh switches vs the server's 368, 1.58x -- not
-    # the "25x too many" that could not be ruled out previously; the "47" in
-    # the earlier commit/task background was itself a mis-citation of
-    # `to=Champion` acquisitions, not of `cfh=1` switches, which total 453 in
-    # that same server log). What's left is a mechanism-level finding, not a
-    # rate one: it helps a champion-in-lane scenario (StandInWave response
-    # moves 6/7 metrics toward the server) and hurts a fully idle one (median
-    # live minions 22 -> 26, blue outer turret survives -> destroyed, and the
-    # final population flips from blue dominant 17-5 to red dominant 1-28,
-    # deterministically) because it is a reinforcement mechanic that amplifies
-    # this lane's own already-documented unstable equilibrium
-    # (`lanerl_jax/sim/tests/test_lane.py`'s own docstring) rather than a rate
-    # calibration problem more tuning would fix. Left a toggle, default off.
+    # The toggle is retained for ablations.  Production defaults ON: the server
+    # has no corresponding switch, so using an aggregate rollout regression to
+    # suppress this source-verified mechanic only hid another parity defect.
     if enable_call_for_help:
         # `ObjAIBase.TakeDamage`'s broadcast reacts to every landed hit --
-        # melee autoattacks and missiles are both folded into `dmg_ij` above
-        # (`:377`). NOT folded in: Judgment's damage (`bs.damage_dealt`), which
-        # is a per-VICTIM scalar (one caster, tracked via `bs.dealt_by`
-        # separately) rather than an attacker/victim matrix, and reproducing it
-        # here would need a one-hot scatter this investigation did not need to
-        # build to answer the switch-rate question. Booked, not silently
-        # dropped: undercounts calls for help raised by a champion's Judgment
-        # specifically, nothing else.
+        # melee autoattacks and missiles are both folded into `dmg_ij` above.
+        # Buff damage is carried victim-wise, so scatter it into its caster's
+        # row before broadcasting.  This covers Judgment as well as the E tick.
+        buff_src = jnp.clip(bs.dealt_by, 0, n - 1)
+        buff_damage_ij = jnp.zeros_like(dmg_ij).at[
+            buff_src, jnp.arange(n)
+        ].add(jnp.where(bs.dealt_by >= 0, bs.damage_dealt, 0.0))
         help_priority = call_for_help_map(
-            damage_ij=dmg_ij, x=x, y=y, alive=alive, kind=state.kind,
+            damage_ij=dmg_ij + buff_damage_ij,
+            x=x, y=y, alive=alive, kind=state.kind,
             team=state.team, acquisition_range=P("acquisition_range"))
     else:
         help_priority = state.help_priority
@@ -753,6 +986,13 @@ def tick(state: LaneState, params: UnitParams,
     kills = state.kills + ckr.kills
     level = jnp.where(state.kind == Kind.CHAMPION,
                       level_for_xp(xp, params["xp_curve"]), state.level)
+    # Stats.LevelUp raises both maximum and current HP by the same nonlinear
+    # growth increment. The cumulative-curve difference also handles a rare
+    # multi-level XP jump without a Python loop.
+    hp_growth = P("hp_per_level") * (
+        growth_sum(level, jnp) - level_growth)
+    max_hp = state.max_hp + hp_growth
+    hp = hp + hp_growth
     # Spell ranks are a pure function of champion level under a fixed skill
     # order, so they need no state of their own. The server spends the points
     # through `AutoLevelUndriven` / `Champion.LevelUpSpell`; the order is the
@@ -761,11 +1001,23 @@ def tick(state: LaneState, params: UnitParams,
         (state.kind == Kind.CHAMPION)[:, None],
         _RANK_TABLE[jnp.clip(level.astype(jnp.int32), 0, 18)],
         state.spell_level)
+    # `W.OnLevelUpSpell` installs its permanent passive synchronously when W
+    # first receives a rank.  ``step_buffs`` correctly applies the passive to
+    # incoming ranks, but level-up happens later in this tick after XP is
+    # awarded.  Commit the marker with the newly derived ranks so the returned
+    # state (and therefore the next policy observation) does not spend one
+    # frame reporting level-three W with level-two armor/MR.
+    gained_w_passive = ((state.kind == Kind.CHAMPION)
+                        & (spell_level[:, Slot.W] >= 1))
+    buff_id_out = buff_id_out.at[:, W_PASSIVE_BUFF_SLOT].set(
+        jnp.where(gained_w_passive, jnp.int8(BuffId.GAREN_W_PASSIVE),
+                  buff_id_out[:, W_PASSIVE_BUFF_SLOT]))
 
+    minion_order = jnp.where(lane_stop, jnp.int8(MoveOrder.STOP), ai.move_order)
     move_order_out = jnp.where(
         hold, jnp.int8(MoveOrder.HOLD),
         jnp.where(chase, jnp.int8(MoveOrder.ATTACK_TO),
-                  jnp.where(is_champ, state.move_order, ai.move_order)))
+                  jnp.where(is_champ, state.move_order, minion_order)))
 
     # ---- 6. champion death and respawn -----------------------------------
     # `Champion.Die` sets RespawnTimer = DeathTimes[Level] * 1000; the timer is
@@ -781,25 +1033,64 @@ def tick(state: LaneState, params: UnitParams,
     rt = jnp.where(rt > 0, rt - jnp.asarray(delta_ms, dtype), rt)
     reborn = is_ch & (state.respawn_ms > 0) & (rt <= 0)
     alive = alive | reborn
-    hp = jnp.where(reborn, params["max_hp"][state.model], hp)
+    hp = jnp.where(reborn, max_hp, hp)
     x = jnp.where(reborn, state.spawn_x, x)
     y = jnp.where(reborn, state.spawn_y, y)
     rt = jnp.where(reborn, jnp.asarray(-1.0, dtype), rt)
     deaths = state.deaths + died_ch.astype(state.deaths.dtype)
+    silenced_ms = jnp.where(died | reborn, 0.0, silenced_ms)
+    r_cast_ms = jnp.where(died | reborn, 0.0, r_cast_ms)
+    recall_windup = jnp.where(died | reborn, 0.0, recall_windup)
+    recall_channel = jnp.where(died | reborn, 0.0, recall_channel)
+    recall_damage_pending = jnp.where(died | reborn, False, recall_damage_pending)
+    # Death removes the owner's ordinary buff state.  Keep the R lane out of
+    # this cleanup: it is our target-side mailbox rather than a real target
+    # buff, and GarenR intentionally completes/cools down if its *victim*
+    # dies during the already-live windup.  A dead caster cancels it through
+    # `step_buffs`'s mirror-owner check on the following update.
+    owner_buff_slots = jnp.arange(state.buff_id.shape[1]) < R_PENDING_BUFF_SLOT
+    clear_owner_buffs = (died | reborn)[:, None] & owner_buff_slots[None, :]
+    buff_id_final = jnp.where(clear_owner_buffs, jnp.int8(BuffId.NONE),
+                              buff_id_out)
+    buff_elapsed_final = jnp.where(clear_owner_buffs, 0.0, bs.buff_elapsed)
+    buff_power_final = jnp.where(clear_owner_buffs, 0.0, buff_power_out)
+    buff_duration_final = jnp.where(clear_owner_buffs, 0.0,
+                                    state.buff_duration)
+    # Observation memory records a witnessed cast at ingress (0 ms) and then
+    # ages once for every server tick.  The -1 sentinel means "never seen",
+    # not a negative elapsed duration, and must survive resets/normal ticking.
+    observed_enemy_cast_ms = jnp.where(
+        state.observed_enemy_cast_ms >= 0,
+        state.observed_enemy_cast_ms + jnp.asarray(delta_ms, dtype),
+        state.observed_enemy_cast_ms,
+    )
 
     return state.replace(
         respawn_ms=rt, deaths=deaths,
         t_ms=state.t_ms + jnp.asarray(delta_ms, dtype),
         tick=state.tick + 1,
-        x=x, y=y, waypoint_key=wp_key, waypoints=wp, n_waypoints=n_wp,
+        x=x, y=y,
+        waypoint_key=jnp.where(r_cast_finished, jnp.int8(1), wp_key),
+        lane_waypoint_key=lane_key,
+        waypoints=jnp.where(
+            r_cast_finished[:, None, None],
+            wp.at[:, 0].set(jnp.stack([x, y], -1)), wp),
+        n_waypoints=jnp.where(r_cast_finished, jnp.int8(1), n_wp),
         target=target.astype(state.target.dtype),
         target_priority=ai.target_priority,
-        move_order=move_order_out,
+        move_order=jnp.where(r_cast_finished, jnp.int8(MoveOrder.HOLD),
+                             move_order_out),
         ai_timer=ai.ai_timer, ai_local_time=ai.ai_local_time,
         time_since_attack=ai.time_since_attack, ignore_until=ai.ignore_until,
         aa_cooldown=aa.aa_cooldown, aa_windup=aa.aa_windup,
         is_attacking=aa.is_attacking, has_auto_attacked=aa.has_auto_attacked,
-        hp=hp, alive=alive,
+        silenced_ms=silenced_ms,
+        r_cast_ms=r_cast_ms,
+        recall_windup_ms=recall_windup,
+        recall_channel_ms=recall_channel,
+        recall_damage_pending=recall_damage_pending,
+        observed_enemy_cast_ms=observed_enemy_cast_ms,
+        hp=hp, max_hp=max_hp, alive=alive,
         # `visible` was computed from this tick's post-movement, PRE-death
         # positions/alive (see the fog-of-war block above) -- exactly what
         # this tick's own targeting needed. ANDed with the tick's final
@@ -817,8 +1108,10 @@ def tick(state: LaneState, params: UnitParams,
         hit_flag_ms=hit_flag_ms, hit_flag_by=hit_flag_by,
         first_blood_done=ckr.first_blood_done,
         gold_timer=gold_timer, ms_since_damaged=ms_since_damaged,
-        spell_level=spell_level, buff_id=bs.buff_id,
-        buff_elapsed=bs.buff_elapsed, spell_cooldown=bs.spell_cooldown,
+        spell_level=spell_level, buff_id=buff_id_final,
+        buff_elapsed=buff_elapsed_final, buff_duration=buff_duration_final,
+        buff_power=buff_power_final,
+        spell_cooldown=spell_cooldown_out,
         missile_alive=ms.alive, missile_x=ms.x, missile_y=ms.y,
         missile_tx=ms.target.astype(state.missile_tx.dtype),
         missile_source=ms.source.astype(state.missile_source.dtype),
@@ -830,17 +1123,21 @@ def tick(state: LaneState, params: UnitParams,
 def step_decision(state: LaneState, params: UnitParams,
                   step_ticks: int = 2, delta_ms: float = TICK_MS,
                   lane_path=None, minion_hp=None,
-                  enable_call_for_help: bool = False) -> LaneState:
+                  enable_call_for_help: bool = True,
+                  enable_collision: bool = True,
+                  collision_terrain: bool = True,
+                  defer_collision_terrain: bool = False) -> LaneState:
     """One agent decision = ``LANERL_STEP_TICKS`` server ticks.
 
     ``step_ticks`` is 2 in this stack (30 Hz decisions off a 60 Hz sim), set by
     ``lanerl_rl.constants.STEP_TICKS`` and passed to the server as
     ``LANERL_STEP_TICKS``; the two must not drift apart.
 
-    ``enable_call_for_help`` defaults to ``False`` -- see ``tick``'s docstring.
+    ``enable_call_for_help`` defaults to ``True`` -- see ``tick``'s docstring.
     """
     def one(s, _):
         return tick(s, params, delta_ms, lane_path, minion_hp,
-                    enable_call_for_help), None
+                    enable_call_for_help, enable_collision,
+                    collision_terrain, defer_collision_terrain), None
     out, _ = jax.lax.scan(one, state, None, length=step_ticks)
     return out

@@ -191,10 +191,14 @@ _TURRET_CREATION_PRIORITY: Dict[int, int] = {
     TurretTier.FOUNTAIN: 2,
 }
 
-#: Lane-minion barracks (first full-health sighting of a new minion).
+#: Lane-minion barracks: ``CentralPoint.X/Z`` from Map1's
+#: ``__P_{Order,Chaos}_Spawn_Barracks__L01.sco.json``.  Do not round these to
+#: the canonical dump's 1/16-unit wire grid: `CreateLaneMinion` receives the
+#: source ``float`` coordinates directly, and the sub-unit component is
+#: visible on every freshly spawned minion before any collision can occur.
 MINION_SPAWN: Dict[int, Tuple[float, float]] = {
-    Team.BLUE: (918.0, 1720.0),
-    Team.RED: (12451.0, 13218.0),
+    Team.BLUE: (917.7302, 1720.3623),
+    Team.RED: (12451.0508, 13217.5420),
 }
 #: ``LanerlLane.TopLaneDefault`` -- taken verbatim from the map script's
 #: ``MinionPaths`` so minions walk the same line the server walks them along.
@@ -426,6 +430,8 @@ def init_lane(patch: PatchTable | None = None, dtype=jnp.float32,
         spawn_x=jnp.asarray(x, dtype), spawn_y=jnp.asarray(y, dtype),
         kind=jnp.asarray(kind), team=jnp.asarray(team), alive=jnp.asarray(alive),
         x=jnp.asarray(x, dtype), y=jnp.asarray(y, dtype),
+        collision_x=jnp.asarray(x, dtype), collision_y=jnp.asarray(y, dtype),
+        collision_present=jnp.asarray(alive & (kind != Kind.NONE)),
         hp=jnp.asarray(hp, dtype), max_hp=jnp.asarray(hp, dtype),
         next_spawn_ms=jnp.asarray(FIRST_WAVE_MS, dtype),
         move_order=jnp.full((n,), MoveOrder.NONE, jnp.int8),
@@ -481,7 +487,12 @@ def spawn_minion(state: LaneState, team, profile, hp,
     # only the dump can.
     sx = path[0, 0] if spawn_xy is None else jnp.asarray(spawn_xy[0], state.x.dtype)
     sy = path[0, 1] if spawn_xy is None else jnp.asarray(spawn_xy[1], state.y.dtype)
-    wp = jnp.zeros((MAX_WAYPOINTS, 2), state.x.dtype).at[:path.shape[0]].set(path)
+    # `StopMovement()` leaves a one-point route at the actual spawn position.
+    # The immutable `path` belongs to LaneMinionAI, not this transient route;
+    # its first reevaluation notices the destination differs from
+    # PathingWaypoints[0] and installs the two-point movement path.
+    wp = jnp.zeros((MAX_WAYPOINTS, 2), state.x.dtype).at[0].set(
+        jnp.stack([sx, sy]))
 
     def setv(arr, v):
         return jnp.where(ok, arr.at[i].set(v), arr)
@@ -499,12 +510,20 @@ def spawn_minion(state: LaneState, team, profile, hp,
         model=setv(state.model, jnp.asarray(profile, jnp.int8)),
         spawn_seq=setv(state.spawn_seq, state.next_spawn_seq.astype(jnp.int32)),
         x=setv(state.x, sx), y=setv(state.y, sy),
+        collision_x=setv(state.collision_x, sx),
+        collision_y=setv(state.collision_y, sy),
+        collision_present=setv(state.collision_present, True),
         hp=setv(state.hp, jnp.asarray(hp, state.hp.dtype)),
         max_hp=setv(state.max_hp, jnp.asarray(hp, state.hp.dtype)),
+        # LaneMinion's constructor calls StopMovement()/sets Hold. Its AI's
+        # first 250-ms-immediate reevaluation installs the route to
+        # PathingWaypoints[0]; it does NOT begin by following the complete
+        # immutable lane list as one movement path.
         waypoints=jnp.where(ok, state.waypoints.at[i].set(wp), state.waypoints),
-        n_waypoints=setv(state.n_waypoints, jnp.int8(path.shape[0])),
+        n_waypoints=setv(state.n_waypoints, jnp.int8(1)),
         waypoint_key=setv(state.waypoint_key, jnp.int8(1)),
-        move_order=setv(state.move_order, jnp.int8(MoveOrder.MOVE_TO)),
+        lane_waypoint_key=setv(state.lane_waypoint_key, jnp.int8(0)),
+        move_order=setv(state.move_order, jnp.int8(MoveOrder.HOLD)),
         target=setv(state.target, jnp.int8(-1)),
         ai_timer=setv(state.ai_timer, jnp.asarray(250.0, state.x.dtype)),
         next_spawn_seq=jnp.where(ok, state.next_spawn_seq + 1,

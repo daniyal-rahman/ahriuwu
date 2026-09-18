@@ -67,6 +67,55 @@ def test_every_row_shape_in_Describe_parses():
     assert prop.kind == "LevelProp" and prop.team is None and prop.ai is None
 
 
+def test_optional_internal_state_parses_without_changing_canonical_count():
+    lines = _log(1000, [MINION]).splitlines()
+    lines += [
+        "LANERL_INTERNAL t=1000 ai id=77 kind=LaneMinion team=200 "
+        "x=18000 y=170000 xbits=1150042112 ybits=1170513920 "
+        "target=88,LaneMinion,100,17900,169900 wpkey=1 "
+        "wps=18000,170000;17900,169900 coll=17998,169998 "
+        "collbits=1150041088,1170513792 "
+        "aacd=512 aastate=1 aacast=0 aadelay=100 aawindup=245 "
+        "attacking=1 hasaa=0 aitimer=128000 ailocal=92160000 aitsa=0 "
+        "aiprio=4 aiwp=3 aihad=1 aiignore=88:92672000 aihelp=88:2",
+        "LANERL_INTERNAL t=1000 missile id=99 kind=SpellMissile x=18001 y=170001 "
+        "owner=77 target=88 speed=665600 damage=24576",
+    ]
+    trace = parse_stream(lines)
+    assert len(trace[0].entities) == 1
+    ai = trace[0].ai_internals[0]
+    assert ai.net_id == 77 and ai.target_net_id == 88
+    assert ai.ignored == ((88, 92672000),) and ai.help == ((88, 2),)
+    assert ai.q_aa_windup == 245 and ai.is_attacking
+    assert ai.collision_observed
+    assert (ai.collision_q_x, ai.collision_q_y) == (17998, 169998)
+    assert ai.x_bits == 1150042112 and ai.collision_x_bits == 1150041088
+    missile = trace[0].missile_internals[0]
+    assert missile.owner_net_id == 77 and missile.q_damage == 24576
+
+
+def test_legacy_internal_distinguishes_unobserved_collision_from_explicit_none():
+    base = (
+        "id=77 kind=LaneMinion team=200 x=18000 y=170000 "
+        "target=0,-,0,0,0 aacd=0 aastate=0 aacast=0 aadelay=0 "
+        "aawindup=0 attacking=0 hasaa=0 aitimer=- ailocal=- aitsa=- "
+        "aiprio=- aiwp=- aihad=- aiignore=- aihelp=-"
+    )
+    legacy = parse_stream(
+        _log(1000, [MINION]).splitlines()
+        + [f"LANERL_INTERNAL t=1000 ai {base}"])[0].ai_internals[0]
+    explicit = parse_stream(
+        _log(1000, [MINION]).splitlines()
+        + [f"LANERL_INTERNAL t=1000 ai {base} wpkey=0 wps=none coll=none"]
+    )[0].ai_internals[0]
+
+    assert not legacy.collision_observed
+    assert legacy.collision_q_x is None and legacy.collision_q_y is None
+    assert legacy.waypoints == () and legacy.waypoint_key == 0
+    assert explicit.collision_observed
+    assert explicit.collision_q_x is None and explicit.collision_q_y is None
+
+
 def test_an_unknown_field_count_raises_rather_than_guessing():
     with pytest.raises(TraceFormatError, match="dump format changed"):
         parse_row("Champion|100|1,2|3/4|A|extra")

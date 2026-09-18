@@ -4,15 +4,9 @@
 reason stated in the source: *"E first: it is the farming and trading spell."*
 E's tests came first for that reason and are the model for everything below.
 
-Q, W and R each hit a real wall described in ``spells.py``'s module docstring:
-Q's damage/silence only land when the caster's *next auto-attack* connects (an
-``autoattack.py``/``step.py`` event this module cannot see), and W's 0.7x
-damage multiplier and permanent Armor/MR passive only take effect once
-``step.py`` folds the values ``step_buffs`` now computes into its own damage
-and mitigation math. Tests below that depend on either are written against
-the level this project actually implements them at -- the pure formulas, the
-buff/cooldown bookkeeping, and (for W) the *values* step.py must consume --
-not against a full in-game hit that cannot happen yet. Each says so.
+The kit is exercised both as pure spell/buff formulas and through ``tick``.
+In particular, Q's damage and silence are integration behavior: they land
+only when the post-skip empowered autoattack connects.
 """
 from __future__ import annotations
 
@@ -24,7 +18,8 @@ import numpy as np
 import pytest
 
 from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
-from lanerl_jax.sim.init import RUNE_ARMOR_BONUS, init_lane, lane_params
+from lanerl_jax.sim.combat import growth_sum
+from lanerl_jax.sim.init import RUNE_AD_BONUS, RUNE_ARMOR_BONUS, init_lane, lane_params
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
 from lanerl_jax.sim.profiles import profile_id
 from lanerl_jax.sim.spells import (
@@ -38,6 +33,7 @@ from lanerl_jax.sim.spells import (
     Q_COOLDOWN,
     Q_HASTE_BUFF_SLOT,
     R_BASE_PER_RANK,
+    R_CAST_TIME_S,
     R_CAST_RANGE,
     R_COOLDOWNS,
     R_MISSING_HP_FRAC,
@@ -58,7 +54,7 @@ from lanerl_jax.sim.spells import (
     step_buffs,
     w_duration_at_rank,
 )
-from lanerl_jax.sim.state import TU_SLICE, Kind, Team
+from lanerl_jax.sim.state import TU_SLICE, Kind, MoveOrder, Team
 from lanerl_jax.sim.step import step_decision, tick
 from lanerl_jax.sim.targeting import MinionType
 
@@ -134,11 +130,11 @@ def _lane_with_minions(n_minions=4, dist=200.0, hp=455.0, e_rank=1):
                      spell_level=jnp.asarray(lvl))
 
 
-def _cast_e(s):
+def _cast_e(s, params=None):
     return apply_orders(s, Orders(
         kind=jnp.asarray([OrderKind.CAST_E, OrderKind.NOOP], jnp.int8),
         x=jnp.zeros(2), y=jnp.zeros(2),
-        target=jnp.asarray([-1, -1], jnp.int8)))
+        target=jnp.asarray([-1, -1], jnp.int8)), params)
 
 
 def _cast_q(s, caster=0):
@@ -195,6 +191,7 @@ def _step_buffs_from(s, params, **overrides):
         x=s.x, y=s.y, kind=s.kind, team=s.team, alive=s.alive,
         armor=params["armor"][s.model],
         magic_resist=params["magic_resist"][s.model],
+        hp=s.hp, max_hp=s.max_hp,
     )
     kwargs.update(overrides)
     return step_buffs(**kwargs)
@@ -448,6 +445,58 @@ def test_casting_q_opens_the_empowerment_and_haste_windows():
     assert float(s.spell_cooldown[0, Slot.Q]) == pytest.approx(0.0)
 
 
+def test_q_haste_multiplies_the_real_movement_budget():
+    """`GarenQHaste.OnActivate` writes +35% MoveSpeed.PercentBonus."""
+    params = lane_params(load_patch())
+    s = _lane_with_minions(n_minions=0, e_rank=0)
+    s = s.replace(
+        spell_level=s.spell_level.at[0, Slot.Q].set(1),
+        move_order=s.move_order.at[0].set(MoveOrder.MOVE_TO),
+        n_waypoints=s.n_waypoints.at[0].set(2),
+        waypoint_key=s.waypoint_key.at[0].set(1),
+        waypoints=s.waypoints.at[0, 0].set(
+            jnp.asarray([6000.0, 6000.0], dtype=s.waypoints.dtype))
+                           .at[0, 1].set(
+            jnp.asarray([9000.0, 6000.0], dtype=s.waypoints.dtype)),
+    )
+    s = _cast_q(s)
+    before = float(s.x[0])
+    s = tick(s, params)
+    want = float(params["move_speed"][s.model[0]]) * 1.35 * (1000.0 / 60.0) / 1000.0
+    # The movement integrator/state are float32, while this host-side expected
+    # value is built in Python float64.
+    assert float(s.x[0] - before) == pytest.approx(want, abs=3e-4)
+
+
+def test_e_snapshots_level_scaled_ad_when_params_are_supplied():
+    """Orders are before tick, so E must calculate the same live AD itself."""
+    params = lane_params(load_patch())
+    s = _lane_with_minions(n_minions=0, e_rank=1)
+    s = s.replace(level=s.level.at[0].set(6))
+    s = _cast_e(s, params)
+    expected_ad = (
+        params["attack_damage"][s.model[0]]
+        + params["ad_per_level"][s.model[0]] * growth_sum(jnp.int8(6), jnp))
+    expected = 10.0 + expected_ad * 0.35
+    assert float(s.buff_power[0, 0]) == pytest.approx(float(expected), abs=1e-4)
+
+
+def test_e_first_buff_update_hits_immediately():
+    """`GarenE.TimeSinceLastTick` starts at 500 ms, so the first positive
+    `OnUpdate(diff)` deals a tick rather than waiting another half second.
+    """
+    params = lane_params(load_patch())
+    s = _lane_with_minions(n_minions=1, dist=100.0, e_rank=1)
+    s = _cast_e(s, params)
+    before = float(s.hp[2])
+    bs = _step_buffs_from(s, params)
+    want = float(e_damage_at_rank(jnp.int32(1), jnp.float32(GAREN_AD_L1)))
+    assert float(bs.damage_dealt[2]) == pytest.approx(
+        want * E_MINION_MULTIPLIER, abs=1e-3)
+    assert float(bs.damage_dealt[2]) > 0
+    assert before == pytest.approx(float(s.hp[2]))  # direct buff step is pure
+
+
 def test_q_cannot_be_recast_while_the_window_is_open():
     """``SealSpellSlot`` (Q.cs:84, unsealed only at ``GarenQ.cs:97``) locks the
     real spell slot for as long as the empowerment window is open, regardless
@@ -474,12 +523,9 @@ def test_qs_cooldown_starts_when_the_window_closes_not_at_cast():
     """Mirrors E's ``test_the_cooldown_starts_when_the_spin_ENDS``: the
     engine's default cast-time cooldown is overwritten to 0 by Q's own script
     (see the two tests above), and the real 8s is set only once the 4.5s
-    empowerment window naturally expires (``GarenQ.cs:98``). Since this sim
-    cannot yet see an early-landing empowered swing (the module docstring's Q
-    section explains why), a full window is also the ONLY way it closes here
-    -- so the lockout measured below (``Q_BUFF_DURATION + Q_COOLDOWN``) is an
-    upper bound on the real server's, not the number the server would also
-    produce if the swing connects early.
+    empowerment window naturally expires (``GarenQ.cs:98``). This fixture
+    deliberately has no held target, so it exercises that natural-expiry path;
+    the empowered-hit test below covers the earlier close.
     """
     step, _ = _stepper()
     patch = load_patch()
@@ -501,6 +547,37 @@ def test_qs_cooldown_starts_when_the_window_closes_not_at_cast():
     assert mid == pytest.approx(0.0, abs=1e-3), "cooldown ran during the window"
     assert float(s.spell_cooldown[0, Slot.Q]) == pytest.approx(
         Q_COOLDOWN, rel=0.1)
+
+
+def test_q_skips_once_then_lands_the_replacement_auto_damage():
+    """`GarenQ.OnActivate` cancels then skips one swing; `GarenQAttack`, not
+    native `AutoAttackHit`, deals the following swing's complete damage and
+    ends the window early. A normal attack here would be only 78.13 damage;
+    Q rank 1 is `30 + 1.4 * AD`.
+    """
+    step, _ = _stepper()
+    patch = load_patch()
+    s = _lane_with_minions(n_minions=1, dist=60.0, hp=10_000.0, e_rank=0)
+    s = _at_level(s, patch, 2)  # Q rank 1 under the fixed skill order
+    s = step(s)
+    assert int(s.spell_level[0, Slot.Q]) == 1
+    s = s.replace(target=s.target.at[0].set(2))
+    s = _cast_q(s)
+    before = float(s.hp[2])
+    hit = None
+    for _ in range(90):
+        s = step(s)
+        if float(s.hp[2]) < before:
+            hit = before - float(s.hp[2])
+            break
+    assert hit is not None, "Q's post-skip empowered swing never landed"
+    ad_l2 = (patch.champion.base_ad + RUNE_AD_BONUS
+             + patch.champion.ad_per_level * float(growth_sum(2)))
+    expected = float(q_damage_at_rank(jnp.int32(1), jnp.float32(ad_l2)))
+    assert hit == pytest.approx(expected, abs=0.05)
+    assert float(s.silenced_ms[2]) == pytest.approx(1500.0, abs=40.0)
+    assert int(s.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+    assert float(s.spell_cooldown[0, Slot.Q]) > Q_COOLDOWN - 1.0
 
 
 # ------------------------------------------------------------------ W ------
@@ -627,6 +704,25 @@ def test_garenwpassive_is_granted_once_on_rank_up_and_is_permanent():
     assert float(bs.armor_percent_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
 
 
+def test_w_passive_is_committed_on_the_same_tick_as_xp_rank_up():
+    """A post-tick observation must not expose rank-one W without its passive.
+
+    XP is the authoritative progression input, so this drives the real
+    level/rank derivation rather than manufacturing a W rank directly.  The
+    passive is installed by W's level-up listener, not deferred until the
+    next ``UpdateBuffs`` call.
+    """
+    step, _ = _stepper()
+    patch = load_patch()
+    s = _at_level(_lane_with_minions(e_rank=0), patch, 3)
+    assert int(s.spell_level[0, Slot.W]) == 0
+
+    s = step(s)
+
+    assert int(s.spell_level[0, Slot.W]) == 1
+    assert int(s.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
+
+
 def test_w_passive_composes_via_stat_total_through_a_real_autoattack():
     """``GarenWPassive.cs:34-37``: ``Armor.PercentBonus += 0.2;
     Armor.PercentBaseBonus -= 0.2`` composes to
@@ -731,6 +827,18 @@ def test_r_can_only_target_the_enemy_champion():
         == BuffId.GAREN_R_PENDING
 
 
+def test_r_rejects_an_already_dead_enemy_before_starting_its_cast():
+    """Spell target validation happens at cast ingress.  This differs from a
+    target dying *during* GarenR's uncancellable 0.435-second windup, which
+    still lets the caster finish and starts its cooldown.
+    """
+    s = _lane_for_r()
+    s = s.replace(alive=s.alive.at[1].set(False))
+    out = _cast_r(s, caster=0, target=1)
+    assert int(out.buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.NONE
+    assert float(out.r_cast_ms[0]) == pytest.approx(0.0)
+
+
 def test_r_respects_cast_range():
     """``Spells/GarenR/GarenR.json`` ``"CastRange": "400.0000"`` -- an
     engine-level ``SpellData`` targeting rule rather than a content-script
@@ -768,9 +876,16 @@ def test_rs_damage_is_magical_not_physical():
     magic_resist = params["magic_resist"][s.model]
     assert float(magic_resist[1]) != float(armor[1]), \
         "fixture must actually distinguish the two stats to test this"
+    # R is non-instant: no damage on its first buff update, then snapshot the
+    # target's health when the engine's 0.435-second cast timer completes.
+    bs = _step_buffs_from(s, params, armor=armor, magic_resist=magic_resist)
+    assert float(bs.damage_dealt[1]) == pytest.approx(0.0)
+    s = s.replace(buff_elapsed=bs.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(
+        R_CAST_TIME_S))
     bs = _step_buffs_from(s, params, armor=armor, magic_resist=magic_resist)
 
-    raw = float(s.buff_power[1, R_PENDING_BUFF_SLOT])
+    missing = float(s.max_hp[1] - s.hp[1])
+    raw = float(r_damage_at_rank(jnp.int32(1), jnp.float32(missing)))
     want = raw * (100.0 / (100.0 + float(magic_resist[1])))
     wrong = raw * (100.0 / (100.0 + float(armor[1])))
     assert float(bs.damage_dealt[1]) == pytest.approx(want, rel=1e-4)
@@ -779,34 +894,124 @@ def test_rs_damage_is_magical_not_physical():
 
 
 def test_r_falls_back_to_armor_only_when_magic_resist_is_not_supplied():
-    """Pins the documented stopgap in ``step_buffs``: today's ``step.py``
-    call site does not pass ``magic_resist`` (see ``spells.py``'s module
-    docstring), so until it does, R's mitigation silently reuses ``armor``.
-    This is the one test allowed to rely on that fallback -- every other test
-    above passes ``magic_resist`` explicitly so a bug in the real path is not
-    masked by it.
+    """The direct helper's optional fallback remains useful to make an
+    omitted magic-resist input explicit; production ``step.py`` passes MR.
     """
     patch = load_patch()
     params = lane_params(patch)
     s = _lane_for_r()
     s = _cast_r(s, caster=0, target=1)
     armor = params["armor"][s.model]
+    s = s.replace(buff_elapsed=s.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(
+        R_CAST_TIME_S))
     bs = _step_buffs_from(s, params, magic_resist=None)
-    raw = float(s.buff_power[1, R_PENDING_BUFF_SLOT])
+    raw = float(r_damage_at_rank(
+        jnp.int32(1), jnp.float32(float(s.max_hp[1] - s.hp[1]))))
     want = raw * (100.0 / (100.0 + float(armor[1])))
     assert float(bs.damage_dealt[1]) == pytest.approx(want, rel=1e-4)
 
 
-def test_rs_cooldown_starts_at_cast_like_w_not_like_q_or_e():
-    """No ``SetCooldown`` call anywhere in ``R.cs``: like W, this is the
-    engine's unmodified default (``Spell.cs:1017-1021``), starting the
-    instant R is cast -- there is no window to wait for, since R has none.
+def test_rs_cooldown_starts_when_its_noninstant_cast_finishes():
+    """R lacks ``InstantCast``, so `Spell.FinishCasting` -- which transitions
+    to cooldown -- runs after `(1 - .13) * .5 = .435` seconds, not at order
+    ingress. This also pins that a second R order during the windup is denied
+    by the simulated casting state.
     """
-    step, _ = _stepper()
+    params = lane_params(load_patch())
     patch = load_patch()
     s = _lane_for_r()
     s = _at_level(s, patch, 6)      # ranks_for_level(6) == (1, 1, 3, 1): R=1
-    s = step(s)
+    s = tick(s, params)
     assert int(s.spell_level[0, Slot.R]) == 1
     s = _cast_r(s, caster=0, target=1)
+    assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(0.0)
+    assert int(_cast_r(s, caster=0, target=1).buff_id[1, R_PENDING_BUFF_SLOT]) \
+        == BuffId.GAREN_R_PENDING
+
+    # Place the pending R just before its final cast-timer decrement, then
+    # execute exactly one buff update. At finish the normal cooldown begins.
+    s = s.replace(buff_elapsed=s.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(
+        R_CAST_TIME_S))
+    bs = _step_buffs_from(s, params)
+    assert float(bs.spell_cooldown[0, Slot.R]) == pytest.approx(R_COOLDOWNS[0])
+
+
+def test_r_windup_locks_orders_then_finishes_hold_and_delayed_hit():
+    """R is the only non-instant Garen combat spell here. Its engine casting
+    state refuses Move/Attack/Q while live, then `FinishCasting` both lands R
+    and leaves the owner in Hold with a reset one-point path.
+    """
+    params = lane_params(load_patch())
+    s = _lane_for_r()
+    s = s.replace(
+        spell_level=s.spell_level.at[0, Slot.Q].set(1),
+        aa_cooldown=s.aa_cooldown.at[0].set(0.8),
+        aa_windup=s.aa_windup.at[0].set(0.1),
+        is_attacking=s.is_attacking.at[0].set(True),
+        move_order=s.move_order.at[0].set(MoveOrder.MOVE_TO),
+        n_waypoints=s.n_waypoints.at[0].set(2),
+        waypoint_key=s.waypoint_key.at[0].set(1),
+        waypoints=s.waypoints.at[0, 0].set(
+            jnp.asarray([6000.0, 6000.0], dtype=s.waypoints.dtype))
+                           .at[0, 1].set(
+            jnp.asarray([6500.0, 6000.0], dtype=s.waypoints.dtype)),
+    )
+    s = _cast_r(s)
+    assert float(s.r_cast_ms[0]) == pytest.approx(R_CAST_TIME_S * 1000.0)
+    assert float(s.aa_cooldown[0]) == pytest.approx(0.0)
+    assert float(s.aa_windup[0]) == pytest.approx(0.0)
+    assert not bool(s.is_attacking[0])
+
+    blocked_move = apply_orders(s, Orders(
+        kind=jnp.asarray([OrderKind.MOVE, OrderKind.NOOP], jnp.int8),
+        x=jnp.asarray([9000.0, 0.0]), y=jnp.zeros(2),
+        target=jnp.asarray([-1, -1], jnp.int8)))
+    assert int(blocked_move.n_waypoints[0]) == 2
+    blocked_attack = apply_orders(s, Orders(
+        kind=jnp.asarray([OrderKind.ATTACK, OrderKind.NOOP], jnp.int8),
+        x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([1, -1], jnp.int8)))
+    assert int(blocked_attack.target[0]) == -1
+    blocked_q = _cast_q(s)
+    assert int(blocked_q.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+
+    # Complete both fixed-shape timer representations on one simulation tick.
+    s = s.replace(
+        r_cast_ms=s.r_cast_ms.at[0].set(1.0),
+        buff_elapsed=s.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(R_CAST_TIME_S),
+    )
+    hp_before = float(s.hp[1])
+    s = tick(s, params)
+    assert float(s.r_cast_ms[0]) == pytest.approx(0.0)
+    assert int(s.move_order[0]) == MoveOrder.HOLD
+    assert int(s.n_waypoints[0]) == 1 and int(s.waypoint_key[0]) == 1
+    assert float(s.hp[1]) < hp_before
     assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(R_COOLDOWNS[0])
+
+
+def test_r_cast_cancels_on_caster_death_without_starting_cooldown():
+    """Generic `CastCancelCheck` resets an R whose owner dies mid-windup.
+    The target-side pending mailbox is purged on the following buff update.
+    """
+    params = lane_params(load_patch())
+    s = _cast_r(_lane_for_r())
+    s = s.replace(hp=s.hp.at[0].set(0.0))
+    s = tick(s, params)       # establishes caster death and clears cast lock
+    assert not bool(s.alive[0])
+    assert float(s.r_cast_ms[0]) == pytest.approx(0.0)
+    s = tick(s, params)       # target mailbox observes dead caster and cancels
+    assert int(s.buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.NONE
+    assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(0.0)
+
+
+def test_death_clears_owner_q_empowerment_and_haste():
+    """A dead Garen must not resume Q/haste after respawn."""
+    params = lane_params(load_patch())
+    s = _lane_with_minions(n_minions=0, e_rank=0)
+    s = s.replace(spell_level=s.spell_level.at[0, Slot.Q].set(1))
+    s = _cast_q(s)
+    assert int(s.buff_id[0, Q_BUFF_SLOT]) == BuffId.GAREN_Q
+    s = s.replace(hp=s.hp.at[0].set(0.0))
+    out = tick(s, params)
+    assert not bool(out.alive[0])
+    assert int(out.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+    assert int(out.buff_id[0, Q_HASTE_BUFF_SLOT]) == BuffId.NONE

@@ -1,4 +1,31 @@
-# Tier 1: the one-step differential, finally run
+# Tier 1: the one-step differential, initial passive run
+
+## Status update — stable identity and raw-float recovery measured
+
+The results below are the historical **canonical-dump-only idle trace** result;
+they are not the current limit of the injector. Opt-in diagnostic internals,
+kept outside the canonical state hash, now expose target NetIds, AA clocks and
+flags, minion-AI clocks/ignore/help maps, live modelled missiles, exact waypoint
+lists/current keys, and exact collision-cache positions. The injector restores
+those facts when present and labels legacy/canonical-only fallbacks.
+
+The idle exact-waypoint prior was **93.15% within 1/16 unit**. The fresh
+2,400-pair exact-collision-cache rerun measured **93.17%** under the historical
+Euclidean test, so the former previous-position proxy was not the material
+residual. That metric was misleading for independently rounded wire axes:
+under the componentwise/L-infinity gate, **28,526/28,570 minion samples
+(99.85%)** are within 1/16. Diagnostic NetIds match all 2,400 pairs without a
+fake death or spawn; minion HP is 99.91% exact, move order 97.40%, and waypoint
+state 99.95%.
+
+The server diagnostic now also emits the raw float32 bits for positions while
+leaving the canonical hash unchanged. In the first 300 pre-clash raw-float
+pairs, minion HP, move order, and waypoints are 100% exact and componentwise
+position is **2,160/2,170 (99.54%)**. The ten residuals are roughly 0.4 world
+units perpendicular to travel and are under active same-wave collision
+investigation. Therefore this is very close, but does not yet close Tier 1 or
+J1. Buff phase/power, generic script-private cast/channel state, and fractional
+XP remain outside diagnostic recovery; XP is reported as a within-level bound.
 
 **TL;DR.** Built the injector the plan's §3 has called for since J0 and never had:
 server snapshot at tick N → `LaneState` → one `tick()` → diff against the
@@ -10,13 +37,15 @@ than the server — consistent with the collision-ordering gap already named in
 `docs/TICK_PARITY_AUDIT.md` Gap 2). Minion **HP** disagrees on 0.43% of
 one-step predictions, but where it does, the sim is one-sidedly *short*
 (mean +19.9 HP, i.e. the sim under-damages), and an HP disagreement is **46×
-more likely** on a tick where a missile the injector cannot see is in flight
+more likely** on a tick where the historical injector could not see a missile
+in flight
 (11.1% vs. 0.24% baseline). On a hand-verified
 sample of all 18 minion deaths in the trace, **the sim predicted the correct
 death tick 0/18 times** — always late. The dominant cause is not a logic bug
-in the free-running sim; it is that the state dump does not carry missile
-state or target identity, so **this specific finding says the oracle is
-blind to these mechanics, not that the free-running sim mishandles them**.
+in the free-running sim; it is that this historical trace lacked diagnostic
+missile state and target identity, so **this specific finding says the then-used
+oracle was blind to these mechanics, not that the free-running sim mishandles
+them**.
 See "What this instrument cannot see" below before drawing the opposite
 conclusion. One position-matching artifact in this harness itself (a
 too-tight correspondence radius) was found and is called out rather than
@@ -68,7 +97,8 @@ is worth keeping on record as evidence the instrument works: see §5.
 `LanerlStateDump.Describe` (`lanerl-vendor/LoLServer/GameServerLib/Lanerl/LanerlStateDump.cs`)
 is exhaustively parsed by `parity/trace.py`; nothing it emits is left
 unparsed, and everything parsed that `LaneState` has a slot for is injected.
-But `Describe` was written to catch state leaking across a reset,
+The following accounting describes the original canonical-only trace. `Describe`
+was written to catch state leaking across a reset,
 not to support a second implementation, and several fields `LaneState` needs
 to step correctly simply are not there. Full accounting, field by field, is
 in `inject.py`'s module docstring; the load-bearing summary:
@@ -126,6 +156,20 @@ for every finding below that traces back to one of these two defaults, and
 it is flagged at each one.
 
 ## 3. A methodology artifact found in this harness itself: match-radius censoring
+
+**Current resolution.** This section describes the historical canonical-only
+instrument. Diagnostic traces now carry stable NetIds. The current one-step
+harness uses them for existing-unit death/survival and field correspondence,
+even when collision moves a unit more than 8 world units; only genuinely new
+units within the tick use proximity matching. Old traces without IDs retain
+the old method and the final report labels every such tick. A focused test
+pins a 48-unit displacement as one surviving unit, not a death plus spawn.
+
+Because state-dump x and y are rounded independently to 1/16 unit, the current
+report also treats `max(|dx|, |dy|) <= 1/16` as the identifiable quantisation
+gate. It retains Euclidean `hypot(dx,dy) <= 1/16` under its historical field
+name for continuity; that stricter diagnostic rejects a diagonal one-bin
+residual (`sqrt(2)/16`) even though neither coordinate exceeds wire precision.
 
 Entity correspondence has to be recovered by nearest position (the dump
 strips NetId; `parity/diff.py`'s existing method, reused here). The default
@@ -305,7 +349,7 @@ Follow-up, per death, on *why*: the nearest in-flight missile to the victim's
 pre-death position was checked. In 13 of 18 cases the nearest missile was
 within 20 units (0.0–0.9 units away in three of them, under 10 units in
 ten) — strong
-circumstantial evidence the missile the injector cannot see is what actually
+circumstantial evidence the missile the historical injector could not see is what actually
 lands the kill. In the remaining 5 cases the nearest missile was 52.5–343.9
 units away (clearly unrelated), so those killing blows are more likely melee
 hits that the *target-hysteresis* gap (§2) mishandled instead: with
@@ -424,9 +468,10 @@ result itself.
   this one.
 - No tolerance was loosened to make any number pass. No sim code was changed
   to make an injected assumption more convenient.
-- No second, larger-match-radius rerun was done to un-censor §3/§4's tail —
-  named as the most valuable immediate follow-up, not attempted here given
-  the ~21-minute cost of a single full pass at the existing radius.
+- The historical body below has not been rewritten as though it were the new
+  run. The current results and remaining raw-float collision residual are
+  recorded in the status block above; the 93.17% Euclidean result alone is not
+  a completion criterion.
 - The server was recorded once, run singly (never more than one boot at a
   time), and reused across both differential runs in §0 without re-recording
   — the server side of a Tier-1 comparison does not go stale when the sim

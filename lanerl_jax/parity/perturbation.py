@@ -646,7 +646,7 @@ def run_sim_episode(perturbation: Perturbation, perturbed: bool, seed: int,
             y=jnp.array([y, 0.0], dtype=state.y.dtype),
             target=jnp.array([target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders), params_tbl, lane_path=path,
+        return step_decision(apply_orders(state, orders, params_tbl), params_tbl, lane_path=path,
                              enable_call_for_help=enable_call_for_help)
 
     script = perturbation.new_script()

@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.train.policy import LanePolicy, PolicyConfig
+from lanerl_jax.train.policy import LanePolicy, PolicyConfig, apply_flattened_batch
 
 
 @pytest.fixture(scope="module")
@@ -111,6 +111,25 @@ def test_it_jits_and_vmaps(built):
     assert batched.button.shape == (4, 3, cfg.n_buttons)
 
 
+def test_flattened_batch_preserves_policy_distribution(built):
+    """A layout-only batch flatten may differ only by GPU roundoff."""
+    p, v, args, _ = built
+    nested = tuple(jnp.broadcast_to(a, (4, 2) + a.shape) for a in args)
+    ordinary = p.apply(v, *nested)
+    flat = apply_flattened_batch(p, v, *nested)
+    for a, b in zip(ordinary, flat):
+        delta = np.abs(np.asarray(a) - np.asarray(b))
+        assert float(delta.max()) < 2e-5
+    # Action heads are the behavioural surface.  Check their distributions,
+    # including the masked target pointer, rather than only raw logit scale.
+    for a, b in zip(ordinary[:4], flat[:4]):
+        pa = np.asarray(jax.nn.softmax(a, axis=-1))
+        pb = np.asarray(jax.nn.softmax(b, axis=-1))
+        kl = np.sum(pa * (np.log(np.maximum(pa, 1e-30))
+                          - np.log(np.maximum(pb, 1e-30))), axis=-1)
+        assert float(kl.max()) < 1e-7
+
+
 def test_parameter_count_is_in_the_right_ballpark(built):
     """The production model is ~32M agent-block params against a frozen
     backbone; this is the standalone lane policy and should be far smaller."""
@@ -140,14 +159,14 @@ def test_each_head_starts_uniform_over_its_OWN_support(built):
 
     from lanerl_jax.obs.builder import build_observation
     from lanerl_jax.obs.frame import make_lane_frame
-    from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane
+    from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
     from lanerl_jax.sim.state import Team
     from lanerl_jax.train.ppo import factored_entropy
 
     p, v, _, _ = built
     frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                             TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
-    ob = build_observation(init_lane(), 0, frame)
+    ob = build_observation(init_lane(), 0, frame, params=lane_params())
     out = p.apply(v, ob.entities[None], ob.entity_pad_mask[None],
                   ob.self_vec[None], ob.global_vec[None])
 

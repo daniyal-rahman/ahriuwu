@@ -112,7 +112,8 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         "attack_period", "attack_windup", "attack_damage", "armor",
         "magic_resist", "max_hp", "gold_on_death", "xp_on_death",
         "pathfinding_radius", "fires_missile", "missile_speed",
-        "hp_regen", "ad_per_level",
+        "hp_regen", "hp_regen_per_level", "hp_per_level", "ad_per_level",
+        "armor_per_level", "mr_per_level", "attack_speed_per_level",
         # `LaneTurret.Die` (`GameServerLib/GameObjects/AttackableUnits/AI/
         # LaneTurret.cs:37-88`) reads THESE fields, not the plain
         # `GoldGivenOnDeath`/`ExpGivenOnDeath` pair above -- zero for every
@@ -182,6 +183,24 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
         # this is added back on top of the level-1(+rune) baseline above.
         cols["ad_per_level"][row] = (
             u.ad_per_level if kind == Kind.CHAMPION else 0.0)
+        # The observation exposes the server's live self stats.  Preserve the
+        # per-level source values next to AD so it does not reconstruct armor
+        # or MR through a second, drifting path.
+        cols["armor_per_level"][row] = (
+            u.armor_per_level if kind == Kind.CHAMPION else 0.0)
+        cols["mr_per_level"][row] = (
+            u.mr_per_level if kind == Kind.CHAMPION else 0.0)
+        # `Stats.LevelUp` applies `GrowthAttackSpeed / 100` as an
+        # `AttackSpeedMultiplier.PercentBaseBonus` on every champion level-up.
+        # Keep the raw percentage here; `step.tick` applies the same non-linear
+        # growth sum that it uses for AD, rather than freezing the level-one
+        # period/windup baked above for an entire episode.
+        cols["attack_speed_per_level"][row] = (
+            u.attack_speed_per_level if kind == Kind.CHAMPION else 0.0)
+        cols["hp_per_level"][row] = (
+            u.hp_per_level if kind == Kind.CHAMPION else 0.0)
+        cols["hp_regen_per_level"][row] = (
+            u.hp_regen_per_level if kind == Kind.CHAMPION else 0.0)
         cols["armor"][row] = u.armor
         cols["magic_resist"][row] = u.magic_resist
         cols["max_hp"][row] = u.base_hp

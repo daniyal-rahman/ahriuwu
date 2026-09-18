@@ -15,10 +15,11 @@ own docstring: "three separate corrections tipping this lane in three
 unpredictable directions... the signature of an unstable equilibrium"). Adding
 a faithful, correctly-rated new feedback channel to an already-fragile
 equilibrium can make it LESS like the server even though the channel itself is
-right. That is a real, structural finding, not a calibration gap -- so
-`enable_call_for_help` stays a toggle, default `False`. See part 6 for the
-full verdict and part 7 for what would need to change before this could be
-default-on.
+right. That is a real, structural finding, not a calibration gap. The simulator
+now defaults `enable_call_for_help=True` to match the reference server; the
+toggle remains available only for controlled comparison. The historical
+default-off conclusion below is retained as an experiment result, not current
+runtime configuration.
 
 Everything below was measured on this checkout. Every run's exact command is
 given so it can be reproduced. `LANERL_VENDOR_ROOT=/srv/nfs/projects/lanerl-vendor`
@@ -36,13 +37,14 @@ set; unrelated to anything below.
 * `lanerl_jax/sim/minion_ai.py` -- `MinionAIOut` gained a `cfh_switch` field
   (the mask `step_minion_ai` already computed internally, now exposed).
   Diagnostic only: nothing reads it, so no behaviour changes.
-* `lanerl_jax/sim/step.py` -- `tick()` and `step_decision()` gained
-  `enable_call_for_help: bool = False`. When `True`, `call_for_help_map` is
+* `lanerl_jax/sim/step.py` -- `tick()` and `step_decision()` expose
+  `enable_call_for_help: bool = True`. When enabled (the source-faithful
+  default), `call_for_help_map` is
   computed from the tick's own damage matrix and written to
   `state.help_priority` for the NEXT tick's minion AI pass (matching the
   server's one-shot, `callsForHelpMayBeCleared`-then-wiped lifetime). When
-  `False` (every existing caller, every existing test), `help_priority` is
-  carried forward unchanged -- bit-for-bit the old behaviour. Judgment's
+  explicitly `False`, `help_priority` is carried forward unchanged -- the old
+  isolation behaviour. Judgment's
   damage (`bs.damage_dealt`, a per-victim scalar) is NOT folded into the
   broadcast -- booked, not silently dropped, and confirmed inert for both
   scenarios measured here (neither ever casts Judgment: the idle lane issues
@@ -325,26 +327,27 @@ call-for-help concern, exactly where this port puts it.
 
 ## 8. Verdict
 
-* **Ship**: `enable_call_for_help` as a toggle on `tick()`/`step_decision()`/
-  `run_sim_episode()`, default `False`. Existing behaviour is unchanged for
-  every current caller and every existing test (169 pass).
-* **Do not** flip the default on. The port is faithful -- broadcast rule,
+* **Current configuration**: `enable_call_for_help` remains an isolation toggle
+  on `tick()`/`step_decision()`/`run_sim_episode()`, but defaults **on** to
+  match the server. The following default-off recommendation is historical.
+* **Historical caution**: the port is faithful -- broadcast rule,
   radius semantics, one-shot lifetime, turret gate, and now the switch RATE
   (part 2) all check out against file:line citations. What blocks it is a
   genuine, mechanism-level finding (part 5): on this lane's specific,
   independently-documented unstable equilibrium, a correctly-implemented
   reinforcement channel amplifies a pre-existing asymmetry into a rout
   instead of the server's own bounded oscillation. That is not fixed by
-  tuning call-for-help itself -- the fix, if there is one short of leaving it
-  off, is finding and closing whatever residual asymmetry (position, timing,
+  tuning call-for-help itself -- the remaining work is finding and closing
+  whatever residual asymmetry (position, timing,
   collision) currently lets one side's advantage compound instead of
   self-correcting, which `test_lane.py`'s own docstring already says has not
   been fully run to ground ("three separate corrections... not claim the
   list is closed"). Turning call-for-help on is genuinely closer to the
   server for a champion-in-lane scenario and genuinely further for an idle
   one; per the project's own rule, a change that helps one measured scenario
-  and clearly hurts another measured scenario is not a net improvement to
-  ship, so it stays off.
+  and clearly hurts another measured scenario is not a complete fidelity
+  verdict. The source-faithful default stays on while that wider discrepancy is
+  investigated.
 * A real, separate, orthogonal bug was found along the way (part 4): a
   completing auto-attack swing attributes damage to whatever `target` is at
   RESOLUTION time rather than the target it was cast against, unlike the

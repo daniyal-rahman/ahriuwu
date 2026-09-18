@@ -347,8 +347,8 @@ def test_a_missile_homes_on_a_moving_target():
 
     The victim is a champion with no target of its own (a champion only
     re-paths onto a target it holds; with none, its hand-set waypoints are
-    never overwritten by that logic) sent walking 3000 units down a straight
-    line right after the missile launches. The missile still lands, and it
+    never overwritten by that logic) sent along a walkable top-lane segment
+    right after the missile launches. The missile still lands, and it
     lands more than 500 units from where the victim stood at launch -- proof
     it tracked the move rather than flying at a fixed point and getting lucky.
     """
@@ -370,15 +370,31 @@ def test_a_missile_homes_on_a_moving_target():
     hp = np.asarray(s.hp).copy()
     mhp = np.asarray(s.max_hp).copy()
     hp[caster] = mhp[caster] = 1000.0     # a freshly-used minion slot starts at hp 0
-    x[caster], y[caster] = 5000.0, 5000.0
-    x[victim], y[victim] = 5500.0, 5000.0
+    # This is a straight segment from the MapScript's lane path, so its whole
+    # 35-unit-radius corridor is walkable.  The old fixture headed from
+    # (5500, 5000) to (8500, 5000), whose latter portion is terrain; with
+    # server-semantic terrain collision the victim correctly got reprojected
+    # before it had covered the >500 units needed to distinguish homing.
+    lane_start = np.asarray(TOP_LANE_PATH[2], dtype=np.float32)
+    lane_end = np.asarray(TOP_LANE_PATH[3], dtype=np.float32)
+    lane_dir = lane_end - lane_start
+    lane_dir /= np.linalg.norm(lane_dir)
+    caster_xy = lane_start + 300.0 * lane_dir
+    victim_xy = lane_start + 800.0 * lane_dir
+    x[caster], y[caster] = caster_xy
+    x[victim], y[victim] = victim_xy
     target[victim] = -1
     x[0], y[0] = 0.0, 0.0
     target[0] = -1
 
+    # `Map.Update` consults its last quadtree snapshot for collision.  A test
+    # that teleports units must update that snapshot too; a real spawn/move has
+    # already been inserted into it by this point.
     s = s.replace(kind=jnp.asarray(kind), team=jnp.asarray(team), model=jnp.asarray(model),
                  alive=jnp.asarray(alive), x=jnp.asarray(x), y=jnp.asarray(y),
-                 hp=jnp.asarray(hp), max_hp=jnp.asarray(mhp), target=jnp.asarray(target))
+                 hp=jnp.asarray(hp), max_hp=jnp.asarray(mhp), target=jnp.asarray(target),
+                 collision_x=jnp.asarray(x), collision_y=jnp.asarray(y),
+                 collision_present=jnp.asarray(alive & (kind != Kind.NONE)))
     step, _ = _ticker()
     s, _ = _run_until_missile(s, step)
     launch_x, launch_y = float(s.x[victim]), float(s.y[victim])
@@ -392,7 +408,7 @@ def test_a_missile_homes_on_a_moving_target():
     move_order = np.asarray(s.move_order).copy()
     target = np.asarray(s.target).copy()
     wp[victim, 0] = [x[victim], y[victim]]
-    wp[victim, 1] = [x[victim] + 3000.0, y[victim]]
+    wp[victim, 1] = lane_end
     n_wp[victim] = 2
     wp_key[victim] = 1
     move_order[victim] = MoveOrder.MOVE_TO

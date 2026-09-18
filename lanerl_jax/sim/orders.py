@@ -69,15 +69,19 @@ handle is ever sent. Not reachable today regardless:
 (only NOOP/MOVE/ATTACK/CAST_E), so this changes no existing training or eval
 behaviour.
 
-Pathing, and the one place this differs from the wire
------------------------------------------------------
+Pathing and its explicit approximation boundary
+------------------------------------------------
 The server paths a move order through ``GetPath`` and falls back to a raw
-two-point line when that returns null. On device there is no A*, so a move order
-becomes the two-point line directly. Measured (§1.5 of the plan): in the laning
-region 76% of sub-500-unit paths and 45% of sub-1800-unit paths are already
-straight lines, so this is exact most of the time and wrong near terrain.
-**Booked, unmeasured**, and the fix when it matters is the baked next-hop table,
-not an A* in the step function.
+two-point line when that returns null. Production training passes a bounded
+``LocalRouteTable`` to :func:`apply_orders`: it reconstructs a radius-aware
+static-terrain route by repeated local gathers and records a non-ready result in
+``state.route_status``. Dynamic minion/champion block remains in
+``sim.collision`` where it belongs. A caller that deliberately omits the table
+still gets the historical two-point approximation; ``train.run_train`` requires
+the production artifact by default and exposes ``--no-route-table`` only as an
+explicit comparison/debug switch. The static graph's reverse-BFS choice and
+collinear-only smoothing are not bit-identical to server A* + ``SmoothPath``;
+the complete boundary is PATH-001--PATH-005 in the fidelity ledger.
 """
 from __future__ import annotations
 
@@ -86,10 +90,19 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from .spells import R_CAST_RANGE, Slot, cast_e, cast_q, cast_r, cast_w, enemy_champion_index
-from .state import Kind, LaneState, MoveOrder
+from ..obs.fog import visible_to
+from .combat import growth_sum
+from .spells import (R_CAST_RANGE, R_CAST_TIME_S, Slot, cast_e, cast_q,
+                     cast_r, cast_w, enemy_champion_index)
+from .state import Kind, LaneState, MoveOrder, Team
 
-__all__ = ["OrderKind", "Orders", "apply_orders"]
+__all__ = ["OrderKind", "Orders", "OBSERVED_CAST_SCREEN_RADIUS", "apply_orders"]
+
+
+# `lanerl_rl.constants.SCREEN_RADIUS`: a visible unit may be known from the
+# minimap, but a cast animation is only witnessed on screen. Kept local to the
+# simulator rather than importing the Python observation stack.
+OBSERVED_CAST_SCREEN_RADIUS = 1800.0
 
 
 class OrderKind:
@@ -119,6 +132,10 @@ class OrderKind:
     #: target (``GarenR.json`` ``TextFlags``: ``AffectEnemies | AffectHeroes``,
     #: no minions/turrets/buildings/neutral/friends), enforced below.
     CAST_R = 7
+    #: ``LanerlOrderKind.Recall``: blue pill's 0.5 s windup followed by its
+    #: cancellable 8 s channel.  This is intentionally distinct from the
+    #: Garen buff table, whose R-pending mailbox belongs to a different spell.
+    RECALL = 8
 
 
 class Orders(NamedTuple):
@@ -145,8 +162,53 @@ def _ad_placeholder(state):
     return _jnp.full(state.x.shape, 78.134765625, state.x.dtype)
 
 
-def apply_orders(state: LaneState, orders: Orders) -> LaneState:
-    """Write champion orders into the state. Non-champion slots are untouched."""
+def _record_observed_enemy_casts(state: LaneState, successful: jax.Array) -> jax.Array:
+    """Update the two agents' witnessed-enemy-cast clocks at cast ingress.
+
+    ``successful`` is ``(2, 4)`` (caster champion slot, Q/W/E/R), taken from
+    the spell helpers' successful result rather than from an order request or
+    an enemy cooldown. Each observer learns only about the other champion,
+    only when that caster is visible to the observer's team and lies within the
+    observer's 1800-unit UI radius at this exact pre-tick position.
+
+    A team mate can provide fog visibility, as in the source observer, but does
+    not move the camera: the on-screen distance is always from the observing
+    champion. Thus a minimap-visible cast never leaks into this memory.
+    """
+    observer = jnp.arange(2, dtype=jnp.int32)
+    observer_team = state.team[:2]
+    caster_team = state.team[:2]
+    seen_blue = visible_to(Team.BLUE, state.x, state.y, state.kind,
+                           state.team, state.alive)
+    seen_red = visible_to(Team.RED, state.x, state.y, state.kind,
+                          state.team, state.alive)
+    # Rows are observers; columns are the two possible champion casters.
+    caster_visible = jnp.where(
+        observer_team[:, None] == Team.BLUE,
+        seen_blue[None, :2], seen_red[None, :2])
+    dx = state.x[:2][None, :] - state.x[:2][:, None]
+    dy = state.y[:2][None, :] - state.y[:2][:, None]
+    on_screen = dx * dx + dy * dy <= OBSERVED_CAST_SCREEN_RADIUS ** 2
+    observer_live = ((state.kind[:2] == Kind.CHAMPION) & state.alive[:2])
+    caster_live = ((state.kind[:2] == Kind.CHAMPION) & state.alive[:2])
+    can_witness = (
+        observer_live[:, None] & caster_live[None, :]
+        & (observer[:, None] != observer[None, :])
+        & (observer_team[:, None] != caster_team[None, :])
+        & caster_visible & on_screen)
+    witnessed = jnp.any(can_witness[:, :, None] & successful[None, :, :], axis=1)
+    return jnp.where(witnessed, jnp.zeros_like(state.observed_enemy_cast_ms),
+                     state.observed_enemy_cast_ms)
+
+
+def apply_orders(state: LaneState, orders: Orders, params=None, *,
+                 route_table=None, terrain=None) -> LaneState:
+    """Write champion orders into the state. Non-champion slots are untouched.
+
+    Production callers pass ``params`` so E snapshots the caster's live,
+    level-scaled AD. It remains optional only for narrow table-free unit tests,
+    which retain the historical level-one snapshot fallback.
+    """
     n = state.kind.shape[-1]
     n_ch = orders.kind.shape[0]
     idx = jnp.arange(n)
@@ -161,54 +223,144 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
     oy = per_unit(orders.y.astype(state.y.dtype), 0)
     otgt = per_unit(orders.target.astype(jnp.int8), -1)
 
-    casting_e = champ & (kind == OrderKind.CAST_E)
-    casting_q = champ & (kind == OrderKind.CAST_Q)
-    casting_w = champ & (kind == OrderKind.CAST_W)
+    # Recall's windup is an ordinary non-instant cast: while `_castingSpell`
+    # is live the server refuses movement and every further spell cast.  The
+    # channel, by contrast, is cancellable by a successful ordinary cast.
+    can_cast = ((state.silenced_ms <= 0) & (state.recall_windup_ms <= 0)
+                & (state.r_cast_ms <= 0))
+    casting_e = champ & can_cast & (kind == OrderKind.CAST_E)
+    casting_q = champ & can_cast & (kind == OrderKind.CAST_Q)
+    casting_w = champ & can_cast & (kind == OrderKind.CAST_W)
     # R's only legal target is the enemy champion (`GarenR.json` TextFlags --
     # see spells.cast_r's docstring), within CastRange. A minion/turret index,
     # an ally index, or an out-of-range enemy champion all fail this and the
     # order becomes a no-op, the same "fail closed" contract as `cast_r`'s own
     # internal re-check.
     enemy_champ = enemy_champion_index(n)
-    r_target_ok = (otgt == enemy_champ) & (enemy_champ >= 0)
+    # Targeted SpellData validation rejects a dead unit before the cast state
+    # is created.  Keep this distinct from R's *post-cast* target-death rule:
+    # a victim dying during its already-live windup does not cancel R.
+    r_target_ok = ((otgt == enemy_champ) & (enemy_champ >= 0)
+                   & state.alive[jnp.clip(enemy_champ, 0, n - 1)])
     r_mirror = jnp.clip(enemy_champ, 0, n - 1)
     r_d2 = ((state.x - state.x[r_mirror]) ** 2
             + (state.y - state.y[r_mirror]) ** 2)
     r_in_range = r_d2 <= (R_CAST_RANGE * R_CAST_RANGE)
-    casting_r = champ & (kind == OrderKind.CAST_R) & r_target_ok & r_in_range
-    moving = champ & (kind == OrderKind.MOVE)
-    attacking = champ & (kind == OrderKind.ATTACK) & (otgt >= 0)
+    casting_r = (champ & can_cast & (kind == OrderKind.CAST_R)
+                 & r_target_ok & r_in_range)
+    # SetWaypoints fails while the pill is still winding up (`_castingSpell`),
+    # exactly like a server Move packet that cannot pass CanChangeWaypoints.
+    moving = (champ & (kind == OrderKind.MOVE)
+              & (state.recall_windup_ms <= 0) & (state.r_cast_ms <= 0))
+    # A live R is an uncancellable ordinary spell cast. Unlike a silence it
+    # also prevents target/attack-order changes until FinishCasting.
+    attacking = (champ & (kind == OrderKind.ATTACK) & (otgt >= 0)
+                 & (state.r_cast_ms <= 0))
+    # LanerlControl stops BEFORE it calls `pill.Cast`. A second B press while
+    # the pill is already channeling therefore still clears a just-issued
+    # MoveTo (the cast itself is refused because that Spell is not READY),
+    # rescuing the ongoing channel instead of cancelling it.
+    recall_stop = champ & (kind == OrderKind.RECALL) & can_cast
+    recalling = recall_stop & (state.recall_channel_ms <= 0)
     # `OrderKind.STOP` has no server receiver at all (module docstring) -- not
     # read anywhere below; kept only as a named no-op rather than removed, so
     # this enum's numbering (and any action-space index built against it)
     # does not shift.
 
-    # `path[0] = champ.Position` -- SetWaypoints requires the path to start on us
+    # `path[0] = champ.Position` -- SetWaypoints requires the path to start on us.
+    # With a local table, reconstruct the bounded static-terrain route here.
+    # Dynamic bodies deliberately remain absent: CollisionHandler applies
+    # minion/champion block later, from their live positions.
     two = jnp.stack([jnp.stack([state.x, state.y], -1),
                      jnp.stack([ox, oy], -1)], 1)
-    waypoints = jnp.where(moving[:, None, None],
-                          state.waypoints.at[:, :2].set(two), state.waypoints)
+    routed_n = jnp.full((n,), 2, jnp.int8)
+    if route_table is None:
+        from .local_pathing import LocalRouteStatus
+        routed_status = jnp.full((n,), LocalRouteStatus.TABLE_DISABLED, jnp.int8)
+    else:
+        routed_status = jnp.zeros((n,), jnp.int8)
+    candidate_waypoints = state.waypoints.at[:, :2].set(two)
+    if route_table is not None:
+        if terrain is None or params is None:
+            raise ValueError("route_table requires both terrain and profile params")
+        from .local_pathing import build_local_waypoints
 
-    bid, bel, bdur, bpow, _ = cast_e(
+        path_radius = params["pathfinding_radius"][state.model[:n_ch]]
+        # The routed result is committed only under `moving` below.  Giving
+        # non-Move orders an identity route keeps those deliberately-discarded
+        # lanes from extending the vectorised reconstruction while-loop with a
+        # meaningless path to their screen-coordinate placeholder (0, 0).
+        # Their visible state/status remains exactly unchanged by the masks in
+        # the return value below.
+        route_x = jnp.where(moving[:n_ch], ox[:n_ch], state.x[:n_ch])
+        route_y = jnp.where(moving[:n_ch], oy[:n_ch], state.y[:n_ch])
+        routed = jax.vmap(
+            lambda sx, sy, gx, gy, radius: build_local_waypoints(
+                sx, sy, gx, gy, radius, route_table, terrain)
+        )(state.x[:n_ch], state.y[:n_ch], route_x, route_y, path_radius)
+        candidate_waypoints = candidate_waypoints.at[:n_ch].set(routed.waypoints)
+        routed_n = routed_n.at[:n_ch].set(routed.n_waypoints)
+        routed_status = routed_status.at[:n_ch].set(routed.status)
+    waypoints = jnp.where(moving[:, None, None], candidate_waypoints,
+                          state.waypoints)
+
+    if params is None:
+        e_ad = _ad_placeholder(state)
+    else:
+        e_ad = (params["attack_damage"][state.model]
+                + params["ad_per_level"][state.model]
+                * growth_sum(state.level, jnp))
+    bid, bel, bdur, bpow, cast_e_now = cast_e(
         state.buff_id, state.buff_elapsed, state.buff_duration,
         state.buff_power, state.spell_cooldown, casting_e,
-        state.spell_level[:, Slot.E], state.hp * 0 + _ad_placeholder(state))
+        state.spell_level[:, Slot.E], e_ad)
     cd = state.spell_cooldown       # cast_e never touches cooldown; step_buffs does.
 
-    bid, bel, bdur, bpow, cd, _ = cast_q(
+    bid, bel, bdur, bpow, cd, cast_q_now = cast_q(
         bid, bel, bdur, bpow, cd, casting_q, state.spell_level[:, Slot.Q])
-    bid, bel, bdur, bpow, cd, _ = cast_w(
+    bid, bel, bdur, bpow, cd, cast_w_now = cast_w(
         bid, bel, bdur, bpow, cd, casting_w, state.spell_level[:, Slot.W])
-    bid, bel, bdur, bpow, cd, _ = cast_r(
+    bid, bel, bdur, bpow, cd, cast_r_now = cast_r(
         bid, bel, bdur, bpow, cd, casting_r, state.spell_level[:, Slot.R],
         state.hp, state.max_hp, otgt)
+
+    # `Spell.Cast` cancels an existing cancellable channel before it starts
+    # the new cast.  Do this only for a spell that really became active; an
+    # unavailable Q/W/E/R is a no-op and leaves Recall intact.
+    ordinary_cast = cast_e_now | cast_q_now | cast_w_now | cast_r_now
+    successful_cast = jnp.stack(
+        [cast_q_now, cast_w_now, cast_e_now, cast_r_now], axis=1)[:2]
+    observed_enemy_cast_ms = _record_observed_enemy_casts(state, successful_cast)
+    cancel_channel = ordinary_cast & (state.recall_channel_ms > 0)
+    stop_for_recall = recall_stop
+    # `UpdateMoveOrder(Stop)` drops TargetUnit only when the pre-stop path is
+    # unfinished. LanerlControl calls StopMovement afterwards regardless, but
+    # StopMovement itself does not touch the target; a stationary champion can
+    # therefore retain its held target through the pill cast.
+    stop_clears_target = stop_for_recall & (state.waypoint_key < state.n_waypoints)
+    stop_waypoints = stop_for_recall[:, None, None]
+    reset_path = state.waypoints.at[:, 0].set(jnp.stack([state.x, state.y], -1))
 
     return state.replace(
         buff_id=bid, buff_elapsed=bel, buff_duration=bdur, buff_power=bpow,
         spell_cooldown=cd,
-        waypoints=waypoints,
-        n_waypoints=jnp.where(moving, jnp.int8(2), state.n_waypoints),
-        waypoint_key=jnp.where(moving, jnp.int8(1), state.waypoint_key),
+        observed_enemy_cast_ms=observed_enemy_cast_ms,
+        # `GarenQ.OnActivate` calls `CancelAutoAttack(true)` before setting
+        # `SkipNextAutoAttack()`.  R is likewise an ordinary non-instant spell
+        # and `Spell.Cast` calls `AutoAttackSpell.CastCancelCheck` after it
+        # becomes the owner's cast spell.  In either case a pending ordinary
+        # swing is discarded and its cooldown reset; otherwise an already
+        # started swing could deal damage during R's uncancellable cast lock.
+        # The Q skip bit itself is carried by its fixed buff lane and consumed
+        # by `step_autoattack` at the next swing gate.
+        aa_cooldown=jnp.where(cast_q_now | cast_r_now, 0.0, state.aa_cooldown),
+        aa_windup=jnp.where(cast_q_now | cast_r_now, 0.0, state.aa_windup),
+        is_attacking=jnp.where(cast_q_now | cast_r_now, False, state.is_attacking),
+        waypoints=jnp.where(stop_waypoints, reset_path, waypoints),
+        n_waypoints=jnp.where(stop_for_recall, jnp.int8(1),
+                              jnp.where(moving, routed_n, state.n_waypoints)),
+        waypoint_key=jnp.where(stop_for_recall, jnp.int8(1),
+                               jnp.where(moving, jnp.int8(1), state.waypoint_key)),
         # A Move order does NOT clear the target -- `LanerlControl.cs:349-371`
         # never calls `SetTargetUnit`, and `UpdateMoveOrder(MoveTo, ...)`
         # itself only clears the target for OrderNone/Stop/PetHardStop
@@ -217,6 +369,17 @@ def apply_orders(state: LaneState, orders: Orders) -> LaneState:
         # block (`ObjAIBase.RefreshWaypoints`, `:602-604`) for as long as it
         # stays alive and visible -- see the module docstring's "Sticky
         # targets" section.
-        target=jnp.where(attacking, otgt, state.target),
-        move_order=jnp.where(moving, jnp.int8(MoveOrder.MOVE_TO), state.move_order),
+        target=jnp.where(stop_clears_target, jnp.int8(-1),
+                         jnp.where(attacking, otgt, state.target)),
+        move_order=jnp.where(stop_for_recall, jnp.int8(MoveOrder.STOP),
+                             jnp.where(moving, jnp.int8(MoveOrder.MOVE_TO), state.move_order)),
+        route_status=jnp.where(moving, routed_status, state.route_status),
+        recall_windup_ms=jnp.where(recalling, jnp.asarray(500.0, state.x.dtype),
+                                   state.recall_windup_ms),
+        recall_channel_ms=jnp.where(cancel_channel, 0.0, state.recall_channel_ms),
+        recall_damage_pending=jnp.where(cancel_channel, False,
+                                        state.recall_damage_pending),
+        r_cast_ms=jnp.where(cast_r_now,
+                            jnp.asarray(R_CAST_TIME_S * 1000.0, state.x.dtype),
+                            state.r_cast_ms),
     )

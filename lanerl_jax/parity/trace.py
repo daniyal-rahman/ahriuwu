@@ -61,6 +61,8 @@ __all__ = [
     "Entity",
     "ChampionBlock",
     "AIBlock",
+    "AIInternal",
+    "MissileInternal",
     "Snapshot",
     "Trace",
     "parse_row",
@@ -76,6 +78,7 @@ StatQ = 1024.0
 
 HASH_RE = re.compile(r"LANERL_STATEHASH t=(-?\d+) n=(\d+) h=([0-9a-f]{16})")
 ROW_RE = re.compile(r"LANERL_STATEROW t=(-?\d+) (.*)$")
+INTERNAL_RE = re.compile(r"LANERL_INTERNAL t=(-?\d+) (ai|missile) (.*)$")
 
 #: field counts -> kind, from ``Describe``.  See the module docstring.
 _PARTS_GAMEOBJECT = 2
@@ -127,6 +130,66 @@ class ChampionBlock:
     #: per slot 0..3 (Q/W/E/R): (spell level, cooldown in StatQ units).
     #: level -1 and cooldown -1 mean the slot holds no spell at all.
     spells: Tuple[Tuple[int, int], ...]
+
+
+@dataclass(slots=True, frozen=True)
+class AIInternal:
+    """Opt-in, behaviour-neutral controller state excluded from the hash."""
+
+    net_id: int
+    kind: str
+    team: int
+    q_x: int
+    q_y: int
+    x_bits: Optional[int]
+    y_bits: Optional[int]
+    target_net_id: int
+    target_kind: str
+    target_team: int
+    target_q_x: int
+    target_q_y: int
+    waypoint_key: int
+    waypoints: Tuple[Tuple[int, int], ...]
+    #: False for legacy diagnostic lines written before the collision-cache
+    #: field existed.  This differs materially from ``coll=none``: absent
+    #: means "unknown, retain the temporal proxy"; explicit none means the
+    #: server says this unit was absent from the quadtree.
+    collision_observed: bool
+    collision_q_x: Optional[int]
+    collision_q_y: Optional[int]
+    collision_x_bits: Optional[int]
+    collision_y_bits: Optional[int]
+    q_aa_cooldown: int
+    aa_state: int
+    q_aa_cast: int
+    q_aa_delay: int
+    q_aa_windup: int
+    is_attacking: bool
+    has_auto_attacked: bool
+    q_ai_timer: Optional[int]
+    q_ai_local: Optional[int]
+    q_time_since_attack: Optional[int]
+    target_priority: Optional[int]
+    lane_waypoint_key: Optional[int]
+    had_target: Optional[bool]
+    ignored: Tuple[Tuple[int, int], ...]
+    help: Tuple[Tuple[int, int], ...]
+
+
+@dataclass(slots=True, frozen=True)
+class MissileInternal:
+    """One in-flight targeted missile from the diagnostic stream."""
+
+    net_id: int
+    kind: str
+    q_x: int
+    q_y: int
+    x_bits: Optional[int]
+    y_bits: Optional[int]
+    owner_net_id: int
+    target_net_id: int
+    q_speed: int
+    q_damage: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -189,6 +252,8 @@ class Snapshot:
     state_hash: Optional[str] = None
     #: the ``n=`` the server reported, cross-checked against the rows parsed.
     expected_n: Optional[int] = None
+    ai_internals: List[AIInternal] = field(default_factory=list)
+    missile_internals: List[MissileInternal] = field(default_factory=list)
 
     def by_group(self) -> Dict[Tuple[str, int], List[Entity]]:
         out: Dict[Tuple[str, int], List[Entity]] = {}
@@ -319,6 +384,127 @@ def parse_row(body: str) -> Entity:
     )
 
 
+def _kv(body: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    for token in body.split():
+        if "=" not in token:
+            raise TraceFormatError(f"internal token should be key=value, got {token!r}")
+        key, value = token.split("=", 1)
+        out[key] = value
+    return out
+
+
+def _optional_int(token: str, what: str) -> Optional[int]:
+    return None if token == "-" else _int(token, what)
+
+
+def _pairs(token: str, what: str) -> Tuple[Tuple[int, int], ...]:
+    if token in ("", "none"):
+        return ()
+    if token == "-":
+        return ()
+    pairs = []
+    for item in token.split(","):
+        bits = item.split(":")
+        if len(bits) != 2:
+            raise TraceFormatError(f"{what}: expected id:value pairs, got {token!r}")
+        pairs.append((_int(bits[0], f"{what} id"), _int(bits[1], f"{what} value")))
+    return tuple(pairs)
+
+
+def _waypoints(token: str) -> Tuple[Tuple[int, int], ...]:
+    if token == "none":
+        return ()
+    out = []
+    for item in token.split(";"):
+        xy = item.split(",")
+        if len(xy) != 2:
+            raise TraceFormatError(f"waypoints: expected x,y pairs, got {token!r}")
+        out.append((_int(xy[0], "waypoint x"), _int(xy[1], "waypoint y")))
+    return tuple(out)
+
+
+def _collision_position(token: str) -> Tuple[Optional[int], Optional[int]]:
+    if token == "none":
+        return None, None
+    xy = token.split(",")
+    if len(xy) != 2:
+        raise TraceFormatError(
+            f"collision position: expected x,y or none, got {token!r}")
+    return (_int(xy[0], "collision x"), _int(xy[1], "collision y"))
+
+
+def _optional_xy(token: Optional[str], what: str) -> Tuple[Optional[int], Optional[int]]:
+    if token is None or token == "none":
+        return None, None
+    xy = token.split(",")
+    if len(xy) != 2:
+        raise TraceFormatError(f"{what}: expected x,y or none, got {token!r}")
+    return _int(xy[0], f"{what} x"), _int(xy[1], f"{what} y")
+
+
+def parse_internal(kind: str, body: str) -> AIInternal | MissileInternal:
+    values = _kv(body)
+    try:
+        if kind == "missile":
+            return MissileInternal(
+                net_id=_int(values["id"], "missile id"), kind=values["kind"],
+                q_x=_int(values["x"], "missile x"), q_y=_int(values["y"], "missile y"),
+                x_bits=_optional_int(values.get("xbits", "-"), "missile x bits"),
+                y_bits=_optional_int(values.get("ybits", "-"), "missile y bits"),
+                owner_net_id=_int(values["owner"], "missile owner"),
+                target_net_id=_int(values["target"], "missile target"),
+                q_speed=_int(values["speed"], "missile speed"),
+                q_damage=_int(values["damage"], "missile damage"),
+            )
+        target = values["target"].split(",")
+        if len(target) != 5:
+            raise TraceFormatError(f"AI target should have five comma fields, got {values['target']!r}")
+        collision_observed = "coll" in values
+        collision_q_x, collision_q_y = (
+            _collision_position(values["coll"])
+            if collision_observed else (None, None))
+        collision_x_bits, collision_y_bits = _optional_xy(
+            values.get("collbits"), "collision bits")
+        return AIInternal(
+            net_id=_int(values["id"], "AI id"), kind=values["kind"],
+            team=_int(values["team"], "AI team"), q_x=_int(values["x"], "AI x"),
+            q_y=_int(values["y"], "AI y"),
+            x_bits=_optional_int(values.get("xbits", "-"), "AI x bits"),
+            y_bits=_optional_int(values.get("ybits", "-"), "AI y bits"),
+            target_net_id=_int(target[0], "target id"),
+            target_kind=target[1], target_team=_int(target[2], "target team"),
+            target_q_x=_int(target[3], "target x"), target_q_y=_int(target[4], "target y"),
+            # These fields were added after the first internal fixtures.  An
+            # absent pair means "no diagnostic override" in inject.py, not an
+            # observed empty route.
+            waypoint_key=_int(values.get("wpkey", "0"), "waypoint key"),
+            waypoints=_waypoints(values.get("wps", "none")),
+            collision_observed=collision_observed,
+            collision_q_x=collision_q_x,
+            collision_q_y=collision_q_y,
+            collision_x_bits=collision_x_bits,
+            collision_y_bits=collision_y_bits,
+            q_aa_cooldown=_int(values["aacd"], "AA cooldown"),
+            aa_state=_int(values["aastate"], "AA state"),
+            q_aa_cast=_int(values["aacast"], "AA cast time"),
+            q_aa_delay=_int(values["aadelay"], "AA delay"),
+            q_aa_windup=_int(values["aawindup"], "AA windup"),
+            is_attacking=values["attacking"] == "1",
+            has_auto_attacked=values["hasaa"] == "1",
+            q_ai_timer=_optional_int(values["aitimer"], "AI timer"),
+            q_ai_local=_optional_int(values["ailocal"], "AI local time"),
+            q_time_since_attack=_optional_int(values["aitsa"], "time since attack"),
+            target_priority=_optional_int(values["aiprio"], "target priority"),
+            lane_waypoint_key=_optional_int(values["aiwp"], "AI waypoint"),
+            had_target=(None if values["aihad"] == "-" else values["aihad"] == "1"),
+            ignored=_pairs(values["aiignore"], "ignore map"),
+            help=_pairs(values["aihelp"], "help map"),
+        )
+    except KeyError as exc:
+        raise TraceFormatError(f"internal {kind} line missing {exc.args[0]!r}: {body!r}") from exc
+
+
 def parse_stream(lines: Sequence[str] | Iterator[str]) -> Trace:
     """Pull every STATEHASH/STATEROW out of a server log.
 
@@ -362,6 +548,19 @@ def parse_stream(lines: Sequence[str] | Iterator[str]) -> Trace:
                 state_hash=m.group(3),
                 expected_n=int(m.group(2)),
             )
+            continue
+
+        m = INTERNAL_RE.search(line)
+        if m is not None:
+            t = int(m.group(1))
+            if current is None or t != current.t_ms:
+                raise TraceFormatError(
+                    f"an INTERNAL row for t={t} has no matching open snapshot")
+            value = parse_internal(m.group(2), m.group(3))
+            if isinstance(value, AIInternal):
+                current.ai_internals.append(value)
+            else:
+                current.missile_internals.append(value)
             continue
 
         m = ROW_RE.search(line)

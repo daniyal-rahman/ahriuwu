@@ -17,11 +17,9 @@ the loop. Under an Anakin design the update is part of the same XLA program and
 its cost adds to this, which is why the J3 gate re-measures end to end rather
 than trusting this number.
 
-Sampling uses one PRNG key split per step, which is the real cost; the action
-decode maps screen bins to a world offset with a straight-line approximation
-rather than `projection.screen_to_world_centred`. The decode is a handful of
-elementwise ops either way, so it does not move the number -- but it is named
-here rather than quietly assumed.
+Sampling uses one PRNG key split per step, which is the real cost. The shared
+action decoder uses the calibrated locked-camera perspective projection and
+the observer-side lane reflection, the same mapping as the real environment.
 """
 from __future__ import annotations
 
@@ -35,17 +33,16 @@ import numpy as np
 from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
 from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane, lane_params
-from ..sim.orders import OrderKind, Orders, apply_orders
+from ..sim.orders import apply_orders
 from ..sim.state import Team
 from ..sim.step import step_decision
-from .policy import LanePolicy, PolicyConfig
+from .policy import LanePolicy, PolicyConfig, apply_flattened_batch
+from .actions import orders_from
 
 __all__ = ["BenchResult", "run_benchmark"]
 
 BLUE_NEXUS = (1131.8, 1426.3)
 RED_NEXUS = (12760.9, 13026.1)
-#: `constants.SCREEN_RADIUS` -- how far a screen click can name a point.
-SCREEN_RADIUS = 1800.0
 
 
 class BenchResult(NamedTuple):
@@ -64,13 +61,11 @@ class BenchResult(NamedTuple):
         )
 
 
-def _decode(logits, state, key):
+def _decode(logits, state, slot_unit, key, frame=None):
     """Sample an action and turn it into champion orders.
 
     One key split per step, which is the real per-decision cost. The screen
-    heads name a point relative to the champion; the mapping used here is a
-    plain polar offset rather than `projection.screen_to_world_centred`, which
-    is a few elementwise ops either way.
+    heads name a point in the calibrated champion-centred viewport.
     """
     kb, kx, ky, kt = jax.random.split(key, 4)
     button = jax.random.categorical(kb, logits.button)
@@ -78,52 +73,66 @@ def _decode(logits, state, key):
     sy = jax.random.categorical(ky, logits.screen_y)
     tgt = jax.random.categorical(kt, logits.target)
 
-    nx = (sx + 0.5) / logits.screen_x.shape[-1] * 2.0 - 1.0
-    ny = (sy + 0.5) / logits.screen_y.shape[-1] * 2.0 - 1.0
-    ox = state.x[:2] + nx * SCREEN_RADIUS
-    oy = state.y[:2] + ny * SCREEN_RADIUS
-
-    # BUTTONS = (noop, move, attack_move, q, w, e, r, recall)
-    kind = jnp.where(button == 1, OrderKind.MOVE,
-                     jnp.where(button == 2, OrderKind.ATTACK,
-                               jnp.where(button == 5, OrderKind.CAST_E,
-                                         OrderKind.NOOP)))
-    return Orders(kind=kind.astype(jnp.int8), x=ox, y=oy,
-                  target=tgt.astype(jnp.int8))
+    return orders_from((button, sx, sy, tgt), state, slot_unit, frame,
+                       cfg_x=logits.screen_x.shape[-1],
+                       cfg_y=logits.screen_y.shape[-1])
 
 
 def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
-                  seed: int = 0) -> BenchResult:
+                  seed: int = 0, *, route_table=None, terrain=None,
+                  enable_collision: bool = True,
+                  collision_terrain: bool = False,
+                  defer_collision_terrain: bool = True,
+                  initial_state=None) -> BenchResult:
+    if route_table is not None and terrain is None:
+        raise ValueError("route_table requires a TerrainGrid")
     patch_params = lane_params()
     path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
     frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
+    red_frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
+                                TOP_OUTER_TURRET[Team.BLUE], RED_NEXUS)
     policy = LanePolicy(PolicyConfig())
 
-    base = init_lane()
+    base = init_lane() if initial_state is None else initial_state
     states = jax.tree.map(lambda a: jnp.broadcast_to(a, (n_envs,) + a.shape), base)
 
-    obs0 = build_observation(base, 0, frame)
+    obs0 = build_observation(base, 0, frame, params=patch_params)
     variables = policy.init(jax.random.key(seed), obs0.entities[None],
                             obs0.entity_pad_mask[None], obs0.self_vec[None],
                             obs0.global_vec[None])
 
-    def one_env(state, key):
+    def observe_one(state):
         # both champions act; the policy is shared, which is the mirror setup
-        obs = jax.vmap(lambda i: build_observation(state, i, frame))(jnp.arange(2))
-        logits = policy.apply(variables, obs.entities, obs.entity_pad_mask,
-                              obs.self_vec, obs.global_vec)
-        orders = _decode(logits, state, key)
-        state = apply_orders(state, orders)
-        return step_decision(state, patch_params, lane_path=path)
+        blue = build_observation(state, 0, frame, params=patch_params)
+        red = build_observation(state, 1, red_frame, params=patch_params)
+        return jax.tree.map(lambda a, b: jnp.stack([a, b]), blue, red)
+
+    def finish_one(state, obs, logits, key):
+        orders = _decode(logits, state, obs.slot_unit, key, frame)
+        state = apply_orders(state, orders, patch_params,
+                             route_table=route_table, terrain=terrain)
+        return step_decision(
+            state, patch_params, lane_path=path,
+            enable_collision=enable_collision,
+            collision_terrain=collision_terrain,
+            defer_collision_terrain=defer_collision_terrain)
 
     @jax.jit
     def full_step(states, keys):
-        return jax.vmap(one_env)(states, keys)
+        obs = jax.vmap(observe_one)(states)
+        logits = apply_flattened_batch(
+            policy, variables, obs.entities, obs.entity_pad_mask,
+            obs.self_vec, obs.global_vec)
+        return jax.vmap(finish_one)(states, obs, logits, keys)
 
     @jax.jit
     def sim_step(states):
-        return jax.vmap(lambda s: step_decision(s, patch_params, lane_path=path))(states)
+        return jax.vmap(lambda s: step_decision(
+            s, patch_params, lane_path=path,
+            enable_collision=enable_collision,
+            collision_terrain=collision_terrain,
+            defer_collision_terrain=defer_collision_terrain))(states)
 
     keys = jax.random.split(jax.random.key(seed), n_envs)
     t0 = time.perf_counter()

@@ -105,6 +105,70 @@ def test_creation_order_not_slot_order_drives_the_outer_sequence():
 
 
 # --------------------------------------------------------------------------
+# 1b. Frozen quadtree candidate membership, live query and collision tests.
+# --------------------------------------------------------------------------
+
+def test_escape_cannot_admit_a_collider_absent_from_the_rebuilt_tree():
+    """A hand-derived regression for the stale-index rule in
+    ``CollisionHandler.Update``.  At rebuild time, unit 0's query circle
+    contains unit 1 (70 < 80) but not unit 2 (90 > 80), so its source-derived
+    candidate list is exactly ``[0, 1]``. Its collision with unit 1 moves it
+    from 1000 to 989. Unit 2 is now only 79 away, but it was not in that
+    fixed list and must not be processed.
+
+    The incorrect dynamic-all-units scan produces ``[991, 1072, 910]`` by
+    admitting unit 2 and then allowing unit 1 to react to that changed
+    position. The source sequence instead gives ``[989, 1070, 910]``.
+    """
+    kwargs = _arrays(
+        x=[1000.0, 1070.0, 910.0], y=[0.0, 0.0, 0.0],
+        kind=[Kind.LANE_MINION] * 3, seq=[0, 1, 2],
+        cr=[40.0, 40.0, 40.0], pr=[40.0, 40.0, 40.0],
+    )
+    nx, ny = resolve_collisions(**kwargs)
+    np.testing.assert_allclose(np.asarray(nx), [989.0, 1070.0, 910.0])
+    np.testing.assert_allclose(np.asarray(ny), 0.0)
+
+
+def test_quadtree_query_center_is_live_but_nodes_are_from_last_rebuild():
+    """``GetNearestObjects(obj)`` constructs its query circle from the live
+    ``obj.Position`` but searches node circles stored at the previous rebuild.
+    Unit 0 moved 100 units since that rebuild: its OLD node at 900 would not
+    reach unit 1's old node at 1070, whereas its LIVE query at 1000 does.
+    The collision must consequently occur and move unit 0 to 989.
+    """
+    kwargs = _arrays(
+        x=[1000.0, 1070.0], y=[0.0, 0.0],
+        kind=[Kind.LANE_MINION, Kind.TURRET], seq=[0, 1],
+        cr=[40.0, 40.0], pr=[40.0, 40.0],
+    )
+    nx, _ = resolve_collisions(
+        **kwargs,
+        candidate_x=jnp.asarray([900.0, 1070.0], jnp.float32),
+        candidate_y=jnp.asarray([0.0, 0.0], jnp.float32),
+        candidate_present=jnp.asarray([True, True]),
+    )
+    np.testing.assert_allclose(np.asarray(nx), [989.0, 1070.0])
+
+
+def test_coincident_centres_follow_the_source_atan2_zero_direction():
+    """At exactly equal positions, the source's Atan2(0,0) direction is +X.
+    With radii 40/40 it escapes by 40 - (40 + 1) = -1 on X, rather than
+    silently ignoring the collision or applying an 81-unit overlap push.
+    """
+    kwargs = _arrays(
+        x=[0.0, 0.0], y=[0.0, 0.0],
+        # The second object is static so this isolates the first
+        # ``OnCollision`` call rather than testing its later reciprocal one.
+        kind=[Kind.LANE_MINION, Kind.TURRET], seq=[0, 1],
+        cr=[40.0, 40.0], pr=[40.0, 40.0],
+    )
+    nx, ny = resolve_collisions(**kwargs)
+    np.testing.assert_allclose(np.asarray(nx), [-1.0, 0.0])
+    np.testing.assert_allclose(np.asarray(ny), [0.0, 0.0])
+
+
+# --------------------------------------------------------------------------
 # 2. Turret obstacle-but-not-affected split.
 # --------------------------------------------------------------------------
 
@@ -192,6 +256,29 @@ def test_trigger_still_fires_within_the_true_collision_radius():
     )
     nx, _ = resolve_collisions(**kwargs)
     assert float(nx[0]) == pytest.approx(65.0 - 81.0)
+
+
+def test_creep_block_is_dynamic_collision_not_a_static_route_obstacle():
+    """A champion walking on a perfectly clear terrain segment still cannot
+    occupy a live minion's body. This is the gameplay seam the local static
+    router must preserve: baking the current wave into navigation would go
+    stale immediately, while omitting this collision would erase creep block
+    and change step-in/step-out trade timing.
+
+    The champion was created before lane minions, so its collision turn comes
+    first. At distance 50 the trigger overlaps (30+40=70); resolution places
+    the champion exactly ``35+1+40=76`` from the first minion, i.e. x=-26.
+    The second minion is dynamic too but too far away to participate.
+    """
+    kwargs = _arrays(
+        x=[0.0, 50.0, 100.0], y=[0.0, 0.0, 0.0],
+        kind=[Kind.CHAMPION, Kind.LANE_MINION, Kind.LANE_MINION],
+        seq=[0, 1, 2],
+        cr=[30.0, 40.0, 40.0], pr=[35.0, 40.0, 40.0],
+    )
+    nx, ny = resolve_collisions(**kwargs)
+    assert float(nx[0]) == pytest.approx(-26.0)
+    assert np.allclose(np.asarray(ny), 0.0)
 
 
 # --------------------------------------------------------------------------
@@ -301,7 +388,8 @@ def test_spawn_minion_never_reuses_a_recycled_slots_old_rank():
 # --------------------------------------------------------------------------
 
 def _python_reference(x, y, kind, alive, spawn_seq, collision_radius,
-                      pathfinding_radius, ghosted):
+                      pathfinding_radius, ghosted, candidate_x=None,
+                      candidate_y=None, candidate_present=None):
     """A slow, unvectorised, unbounded transcription of
     ``CollisionHandler.Update``/``UpdateCollision``/``AttackableUnit.
     OnCollision``, independent of ``resolve_collisions``'s own
@@ -314,23 +402,49 @@ def _python_reference(x, y, kind, alive, spawn_seq, collision_radius,
     n = len(x)
     x = list(x)
     y = list(y)
+    query_x = list(x)
+    query_y = list(y)
+    candidate_x = list(query_x if candidate_x is None else candidate_x)
+    candidate_y = list(query_y if candidate_y is None else candidate_y)
     obstacle = [alive[i] and kind[i] != Kind.NONE and not ghosted[i] for i in range(n)]
     affected = [obstacle[i] and kind[i] != Kind.TURRET for i in range(n)]
+    candidate_present = list(obstacle if candidate_present is None else candidate_present)
     order = sorted(range(n), key=lambda i: spawn_seq[i])
+
+    # This deliberately builds the source-style candidate lists before the
+    # collision sweep.  It is a plain nested-loop oracle, not the production
+    # masked-round implementation: query centres are live, node centres and
+    # membership are from the previous rebuild, and only later collision
+    # checks read the mutating positions below.
+    candidates = []
+    for i in range(n):
+        row = []
+        for j in order:
+            if not candidate_present[j]:
+                continue
+            if math.hypot(candidate_x[j] - query_x[i],
+                          candidate_y[j] - query_y[i]) < \
+                    collision_radius[i] + collision_radius[j]:
+                row.append(j)
+        candidates.append(row)
+
     for i in order:
         if not affected[i]:
             continue
-        for j in order:
+        for j in candidates[i]:
             if j == i or not obstacle[j]:
                 continue
             dx, dy = x[j] - x[i], y[j] - y[i]
             d = math.hypot(dx, dy)
             touch = collision_radius[i] + collision_radius[j]
-            if 0 < d < touch:
-                ux, uy = dx / d, dy / d
-                push = d - (pathfinding_radius[i] + 1.0) - pathfinding_radius[j]
-                x[i] += ux * push
-                y[i] += uy * push
+            if d < touch:
+                if d == 0.0:
+                    x[i] += pathfinding_radius[j] - (pathfinding_radius[i] + 1.0)
+                else:
+                    ux, uy = dx / d, dy / d
+                    push = d - (pathfinding_radius[i] + 1.0) - pathfinding_radius[j]
+                    x[i] += ux * push
+                    y[i] += uy * push
     return x, y
 
 

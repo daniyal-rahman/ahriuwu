@@ -39,10 +39,16 @@ from __future__ import annotations
 
 import json
 import math
+from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional
 
+from lanerl_rl import constants as C
+from lanerl_rl.frame import LaneFrame
+from lanerl_rl.projection import screen_to_world_centred
+
+from ..train.actions import MINIMAP_X_MIN, MINIMAP_Y_MIN
 from .targets import TRACE_ENV
 
 __all__ = ["ActionLog", "Fixture", "scripted_action", "record_trace", "record_fixture"]
@@ -87,6 +93,38 @@ def _champs(obs: Mapping) -> Dict[int, dict]:
 MEETING_POINT = (3907.0, 13243.0)
 #: `Stats.Range.Total + collision radius` for Garen against a minion, with slack.
 ENGAGE_RANGE = 170.0
+#: Compatibility name for callers that only need a conservative distance
+#: guard. The actual contract is stronger: every scripted Move below is one of
+#: the deployed 96x54 projected bin centres, excluding the minimap rectangle.
+#: The farthest legal bin centre is about 2,281.27 units from the champion.
+LOCAL_MOVE_RADIUS = 2282.0
+
+
+@lru_cache(maxsize=2)
+def _legal_click_offsets(team: int) -> tuple[tuple[float, float], ...]:
+    """World offsets for every policy-reachable non-minimap screen bin."""
+    enemy = C.TEAM_RED if team == C.TEAM_BLUE else C.TEAM_BLUE
+    frame = LaneFrame(
+        C.TOP_OUTER_TURRET[team], C.TOP_OUTER_TURRET[enemy],
+        C.NEXUS_POSITION[team])
+    offsets: list[tuple[float, float]] = []
+    for sx in C.SCREEN_X_VALUES:
+        for sy in C.SCREEN_Y_VALUES:
+            sx_f, sy_f = float(sx), float(sy)
+            if sx_f >= MINIMAP_X_MIN and sy_f >= MINIMAP_Y_MIN:
+                continue
+            ds, dn = screen_to_world_centred(0.0, 0.0, sx_f, sy_f)
+            offsets.append(frame.to_world_vector(ds, dn))
+    return tuple(offsets)
+
+
+def _local_move_toward(ch: Mapping, x: float, y: float) -> dict:
+    """Choose the legal projected screen bin nearest an arbitrary target."""
+    cx, cy = float(ch["x"]), float(ch["y"])
+    dx, dy = float(x) - cx, float(y) - cy
+    ox, oy = min(_legal_click_offsets(int(ch["tm"])),
+                 key=lambda p: (p[0] - dx) ** 2 + (p[1] - dy) ** 2)
+    return {"t": "move", "x": cx + ox, "y": cy + oy}
 
 
 def _nearest_enemy(obs: Mapping, ch: Mapping):
@@ -152,17 +190,18 @@ def scripted_action(obs: Optional[Mapping], i: int) -> Optional[Dict[str, dict]]
             # in range: alternate swinging and shuffling, so the fixture covers
             # both a clean attack cadence and cancels mid-wind-up
             out[side] = ({"t": "attack", "id": tid} if i % 5 else
-                         {"t": "move",
-                          "x": float(ch["x"]) + sign * 60.0 * math.cos(i * 0.7),
-                          "y": float(ch["y"]) + sign * 60.0 * math.sin(i * 0.7)})
+                         _local_move_toward(
+                             ch,
+                             float(ch["x"]) + sign * 60.0 * math.cos(i * 0.7),
+                             float(ch["y"]) + sign * 60.0 * math.sin(i * 0.7)))
         elif tid is not None and dist < 2500.0:
             tgt = next(u for u in obs["u"] if u.get("id") == tid)
-            out[side] = {"t": "move", "x": float(tgt["x"]), "y": float(tgt["y"])}
+            out[side] = _local_move_toward(ch, tgt["x"], tgt["y"])
         elif i % 7 == 0:
             out[side] = {"t": "noop"}
         else:
             # nothing to fight yet: walk to where the waves meet
-            out[side] = {"t": "move", "x": MEETING_POINT[0], "y": MEETING_POINT[1]}
+            out[side] = _local_move_toward(ch, *MEETING_POINT)
     return out
 
 
@@ -192,6 +231,7 @@ def record_trace(
             bot_seed=SEED,
             step_ticks=step_ticks,
             extra_env={"LANERL_STATE_DUMP": "1", "LANERL_STATE_DUMP_FULL": "1",
+                       "LANERL_STATE_DUMP_INTERNALS": "1",
                        **TRACE_ENV},
         ),
         log_dir=out_dir / tag,

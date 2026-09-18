@@ -135,11 +135,20 @@ from .last_hit_oracle import ChampView, MinionView, decide
 __all__ = [
     "DECISIONS_600S", "WIRE_MINION_TYPE", "APPROACH_WAYPOINTS",
     "ARRIVE_RADIUS", "SimRun", "ServerRun",
+    "DEFAULT_GATE3_ROUTE_ARTIFACT", "gate3_route_inputs",
     "run_oracle_in_sim", "run_oracle_on_server",
 ]
 
 #: 600 s at the 30 Hz decision rate (``step_ticks=2`` off a 60 Hz sim).
 DECISIONS_600S = 18_000
+
+# Gate 3 issues real Move orders during its scripted walk-in.  The server
+# routes every one through GetPath and production JAX training uses this
+# artifact, so the routed path is the parity default.  The former raw segment
+# remains available only through ``table_disabled=True`` as a PATH-006
+# isolation control.
+DEFAULT_GATE3_ROUTE_ARTIFACT = (Path(__file__).resolve().parents[2] / "data" /
+                                "jax_routes" / "map1_garen_r35_o50_v2")
 
 #: wire ``MinionSpawnType`` -> patch-table minion key. See the module
 #: docstring for why this is not the identity map.
@@ -177,6 +186,32 @@ APPROACH_WAYPOINTS = TOP_LANE_PATH[:6]
 #: not hover just short of the target forever waiting for an exact hit.
 ARRIVE_RADIUS = 100.0
 _ARRIVE_RADIUS_SQ = ARRIVE_RADIUS * ARRIVE_RADIUS
+
+
+def gate3_route_inputs(*, route_table=None, terrain=None,
+                       table_disabled: bool = False):
+    """Return the routed Gate-3 inputs, or the explicit raw-path ablation.
+
+    Callers may inject already-loaded inputs for a focused test.  Otherwise
+    canonical Gate 3 loads the same v2 local-route artifact production uses.
+    Supplying a terrain/table pair while asking for the raw ablation is an
+    error: it would make the reported mode ambiguous.
+    """
+    if table_disabled:
+        if route_table is not None or terrain is not None:
+            raise ValueError("table_disabled conflicts with route_table/terrain")
+        return None, None
+    if route_table is None:
+        from ..data.local_route_artifact import load_local_route_artifact
+
+        artifact = load_local_route_artifact(
+            DEFAULT_GATE3_ROUTE_ARTIFACT, pathfinding_radius=35.0)
+        route_table = artifact.as_jax()
+    if terrain is None:
+        from ..sim.terrain_jax import map1_terrain
+
+        terrain = map1_terrain()
+    return route_table, terrain
 
 
 def _advance_approach(x: float, y: float, idx: int,
@@ -246,7 +281,14 @@ class ServerRun:
     log_path: Optional[Path] = None
 
 
-def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
+def run_oracle_in_sim(
+    decisions: int = DECISIONS_600S,
+    seed: int = 0,
+    *,
+    route_table=None,
+    terrain=None,
+    table_disabled: bool = False,
+) -> SimRun:
     """Run the oracle against blue in the JAX sim; red never receives an order.
 
     One :func:`~lanerl_jax.sim.step.step_decision` call per decision (30 Hz,
@@ -260,6 +302,8 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
     swing gate is the auto-attack cooldown, not "is this a new order"
     (``sim/autoattack.py``'s docstring).
     """
+    route_table, terrain = gate3_route_inputs(
+        route_table=route_table, terrain=terrain, table_disabled=table_disabled)
     params_tbl = lane_params()
     params_np = {k: np.asarray(v) for k, v in params_tbl.items()}
     path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
@@ -273,26 +317,15 @@ def run_oracle_in_sim(decisions: int = DECISIONS_600S, seed: int = 0) -> SimRun:
             y=jnp.array([order_y, 0.0], dtype=state.y.dtype),
             target=jnp.array([order_target, -1], dtype=jnp.int8),
         )
-        # TRIED `enable_call_for_help=True` here on the strength of
-        # `docs/CALL_FOR_HELP_SWITCH_RATE.md` part 6, which measured a
-        # champion-in-lane scenario (`StandInWave`) and found call-for-help
-        # a bounded, self-limiting RELEASE mechanism there -- minions pulled
-        # back OFF the champion onto fresh targets, 6 of 7 metrics moving
-        # toward the server. It made this gate dramatically WORSE instead
-        # (cs 9->0, deaths 5->8, measured 2026-09-16), and the reason is the
-        # difference between the two scenarios: `StandInWave` never orders an
-        # attack, so it only ever exercises cfh's release side. This oracle
-        # attacks routinely (that is the whole point of it), and every swing
-        # that lands is itself a call-for-help broadcast
-        # (`ObjAIBase.TakeDamage`, `CHAMPION_ATTACKING_MINION` = priority 5,
-        # BETTER than any minion's own 6-9) -- so an active last-hitter
-        # recruits fresh aggressors onto itself every time it attacks, a
-        # positive-feedback loop the passive scenario never triggers. Left
-        # here, and left OFF (the `step_decision` default), as a recorded
-        # negative result rather than silently discarded -- the next person
-        # tempted to flip this toggle for an ACTIVE champion scenario should
-        # find this instead of re-deriving it.
-        return step_decision(apply_orders(state, orders), params_tbl,
+        # Canonical parity leaves call-for-help ON by taking `step_decision`'s
+        # source-faithful default.  The server has no corresponding off
+        # switch: `ObjAIBase.TakeDamage` broadcasts on every landed hit,
+        # including a champion last-hit swing.  Earlier gate notes treated an
+        # OFF ablation as a baseline after it happened to reduce deaths here;
+        # that was regression-shaped tuning, not server parity.
+        return step_decision(apply_orders(state, orders, params_tbl,
+                                          route_table=route_table,
+                                          terrain=terrain), params_tbl,
                              lane_path=path)
 
     wp_idx = 0
@@ -521,4 +554,6 @@ def run_oracle_on_server(
         env.close()
 
     return ServerRun(cs=cs, decisions=decisions, approach_decisions=approach_decisions,
-                     attacks=attacks, moves=moves, holds=holds, log_path=log_path)
+                     attacks=attacks, moves=moves, holds=holds, deaths=deaths,
+                     vis_mean=float(np.mean(vis_counts)) if vis_counts else 0.0,
+                     log_path=log_path)

@@ -1,12 +1,13 @@
 """Tier 1, finally built: inject a server snapshot into a :class:`LaneState`.
 
 ``lanerl_jax.parity.sim_vs_server`` explains why nobody had done this yet: the
-state dump (``LanerlStateDump.Describe``) does not carry ``TargetUnit``, the
-auto-attack clock, waypoint *positions*, the minion AI's own timers, its
-ignore list, or the wave spawner's internal counters.  Injecting the
-observable subset and leaving the rest at ``empty_state`` defaults does not
-produce "the server's state, one step on" -- it produces a state that shares
-some fields with it and is silently wrong in the rest.
+canonical state dump (``LanerlStateDump.Describe``) does not carry
+``TargetUnit``, the auto-attack clock, waypoint *positions*, the minion AI's
+own timers/maps, missiles, or the collision-cache position. Its opt-in
+diagnostic-internals stream does carry those one-step recovery fields, outside
+the canonical hash. Injecting a canonical-only snapshot still does not produce
+"the server's state, one step on"; diagnostic recovery must remain visibly
+distinct from canonical reset recovery.
 
 This module does it anyway, on the theory that a **precisely scoped** wrong
 answer beats no answer, provided every approximation is named where it is
@@ -29,12 +30,13 @@ hiding them.  Three kinds of field, by provenance:
     function of game time alone (``sim/waves.py``), so replaying it from
     ``t=0`` using the trace's own recorded tick times reproduces them exactly,
     with no independent clock to drift against the server's.
-  - a marching minion's waypoints: ``Waypoints.Count`` is in the dump but the
+  - a marching minion's movement waypoints: ``Waypoints.Count`` is in the dump but the
     vertices are not.  A minion with no target walks the same static lane
     corridor every episode (``TOP_LANE_PATH``, forward for blue / reversed for
     red -- see ``sim/init.py``), so a position that lies on that corridor
-    pins down the corridor *and* which vertex is next.  This is exact when it
-    is on the corridor and refused otherwise (see ``reconstruct_waypoints``).
+    pins down the corridor *and* which vertex is next. The same projection
+    initializes LaneMinionAI's separate private cursor: exact on-corridor and
+    explicitly labelled nearest/upcoming guess off-corridor.
 
 * **unrecoverable** -- defaulted to the same values :func:`empty_state` uses,
   and named here so a downstream report can say which mechanics they poison
@@ -44,13 +46,18 @@ hiding them.  Three kinds of field, by provenance:
   injected guess) but it belongs next to the ATTACK_TO bullet it was tried
   and rejected alongside, not scattered away from that comparison:
 
-  - ``target`` (all units): minion-target identity is not observable at all
+  - ``target`` (all units) **without diagnostic internals**: minion-target
+    identity is normally not observable
     (see ``parity.diff.UNOBSERVABLE``); champion/turret target identity
     *would* be recoverable from the observation wire / turret trace, but this
     injector does not consume those streams (the recorded fixture is a pure
     no-orders idle trace, so no champion ever has a target and this
     limitation happens not to bite it -- it would for a driven fixture).
-    Defaulting to ``-1`` plus ``ai_timer=250`` (forces immediate
+    One narrow exception is a minion in ``ATTACK_TO`` with exactly one
+    injected lane enemy within acquisition range: that identity is injected
+    as a conditional constraint, explicitly labelled because a targetable
+    object outside this simulator's lane kinds would invalidate it.  Every
+    other case defaults to ``-1`` plus ``ai_timer=250`` (forces immediate
     re-evaluation, see below) means every unit re-acquires its target from
     scratch on every injected tick. That is *not* the same experiment as
     "did the server's held target survive this tick" -- it tests "does a
@@ -60,11 +67,14 @@ hiding them.  Three kinds of field, by provenance:
     acquisition is not, see ``sim/minion_ai.py``). Any target-selection
     disagreement this harness finds is real evidence of a difference, but a
     *lack* of disagreement does not confirm the hysteresis rule is right.
-  - ``aa_cooldown`` / ``aa_windup`` / ``is_attacking`` / ``has_auto_attacked``:
+  - ``aa_cooldown`` / ``aa_windup`` / ``is_attacking`` / ``has_auto_attacked``
+    **without diagnostic internals**:
     completely absent from the dump (measured in
     ``parity/tests/test_autoattack.py``: ``cast_spell`` is ``"-"`` on 100% of
     15,162 champion rows in a run with 32 real swings). Defaulted to
-    "not attacking, cooldown ready". **This is the single biggest hole**: the
+    "not attacking, cooldown ready", except that a minion's ``MOVE_TO`` or
+    ``ATTACK_TO`` order rules out an in-flight windup and is injected as such.
+    **This is the single biggest hole**: the
     plan's Tier-1 target for auto-attack is the exact fire tick, and this
     injector cannot pin the fire tick of any swing except the first one after
     two units meet (where "cooldown ready" is close to true) -- every swing in
@@ -72,7 +82,8 @@ hiding them.  Three kinds of field, by provenance:
     ``docs/ONE_STEP_DIFFERENTIAL.md`` for how the harness works around this
     (event-level hit/no-hit agreement, which does not need the clock to be
     right, only the outcome).
-  - the minion AI's own bookkeeping: ``target_priority`` (-> 14, "no
+  - the minion AI's own bookkeeping **without diagnostic internals**:
+    ``target_priority`` (-> 14, "no
     incumbent"), ``ignore_until`` (-> 0, nothing ignored), ``help_priority``
     (-> 14, no call for help pending), ``ai_local_time`` (-> 0),
     ``time_since_attack`` (-> 0). None of these are in the dump. Consequence:
@@ -103,17 +114,14 @@ hiding them.  Three kinds of field, by provenance:
     negative* against the honest default. Left empty (``n_waypoints=0``,
     i.e. frozen) and flagged ``movement_trustworthy=False``, as before, but
     now for a measured reason rather than an assumed one.
-  - waypoints for a minion that is marching (``move_order=MOVE_TO``) but is
+  - movement waypoints for a minion that is marching (``move_order=MOVE_TO``) but is
     **not** on the known lane corridor within tolerance -- this happens to a
     minion that just gave up a chase (see ``sim/minion_ai.py``'s
-    ``ReevaluateBehavior``: the server resumes the corridor from
-    ``PathingWaypoints``, a *separate* list our own sim does not model at all
-    -- ``sim/step.py``'s ai-driven ``MOVE_TO`` branch does not touch
-    ``waypoints``/``n_waypoints``, so a minion that just lost a chase target
-    keeps the stale two-point chase line in our own sim across MULTIPLE
-    ticks, a genuine unmodelled-mechanic gap that matters for a multi-tick
-    rollout -- but NOT for this one-step injector, which only needs THIS
-    tick's waypoints to be right). Unlike the ATTACK_TO case above, a guess
+    ``ReevaluateBehavior``: the server resumes the corridor from its separate
+    ``PathingWaypoints[currentWaypointIndex]``. The sim now represents that
+    cursor and the injector initializes it by nearest/upcoming projection;
+    the transient movement route below remains a one-step guess rather than a
+    recovered server waypoint list. Unlike the ATTACK_TO case above, a guess
     HERE was measured to help, decisively: the same corridor projection
     ``reconstruct_waypoints`` uses, but without its perpendicular-distance
     gate (see ``reconstruct_waypoints_relaxed``), beats "predict no
@@ -127,21 +135,26 @@ hiding them.  Three kinds of field, by provenance:
     is; see that function's docstring for the numbers before relying on this
     for anything past Tier 1.
 
-Everything not listed above that the dump does not carry (``mr``,
-``attack_speed``, ``skill_points``, ``buffs``, ``can_move``, ``cast_spell``,
-``channel_spell``, spell levels/cooldowns beyond what ``ChampionBlock``
-supplies) is simply not part of :class:`LaneState` and is excluded from every
-comparison via ``sim_vs_server.NOT_MODELLED`` -- that list is unchanged by
-this module.
+The canonical dump's named buff identities and champion spell cooldowns are
+injected where their meaning is known. Diagnostic internals additionally restore
+target/AA/AI/missile/waypoint/collision-cache state for a one-step trace, while
+finite-buff phase/power, generic cast/channel state and ``can_move`` remain
+absent. The injector records those absences per unit rather than treating an
+empty simulator field as agreement.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from ..sim.init import TOP_LANE_PATH
+from ..sim.spells import (
+    BuffId, E_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT, W_BUFF_SLOT,
+    W_PASSIVE_BUFF_SLOT,
+)
 from ..sim.state import (
     CH_SLICE,
     MI_SLICE,
@@ -153,14 +166,15 @@ from ..sim.state import (
     empty_state,
 )
 from ..sim.waves import FIRST_WAVE_MS, WaveState, step_waves
+from .diff import _match_group
 from .recover_waypoints import point_line_distance
-from .trace import Entity, Snapshot, StatQ
+from .trace import Entity, PosQ, Snapshot, StatQ
 
 __all__ = [
     "KIND_NAME_TO_ID", "SERVER_TEAM_TO_ID",
     "UnitInjectionNote", "InjectionReport",
     "infer_minion_model", "reconstruct_waypoints", "reconstruct_waypoints_relaxed",
-    "replay_wave_states", "inject_snapshot",
+    "replay_wave_states", "xp_bounds_for_level", "inject_snapshot",
 ]
 
 KIND_NAME_TO_ID = {
@@ -177,6 +191,34 @@ SERVER_TEAM_TO_ID = {100: Team.BLUE, 200: Team.RED, 300: Team.NEUTRAL}
 #: minion (e.g. mid-collision-push, or resuming from a chase) is refused
 #: rather than silently mis-reconstructed.
 CORRIDOR_TOLERANCE = 8.0
+
+# The state dump prints names, while the simulator intentionally uses a small
+# fixed-width enum.  Only names whose identity is documented by the content
+# scripts are listed here.  In particular, GarenPassive/GarenPassiveHeal are
+# deliberately *not* aliases for a simulated buff: their timers are not on the
+# wire and their behaviour is represented elsewhere (regen.py).
+_DUMP_BUFF_TO_SIM = {
+    "GarenE": (BuffId.GAREN_E, E_BUFF_SLOT),
+    "GarenW": (BuffId.GAREN_W, W_BUFF_SLOT),
+    "GarenWPassive": (BuffId.GAREN_W_PASSIVE, W_PASSIVE_BUFF_SLOT),
+    "GarenQ": (BuffId.GAREN_Q, Q_BUFF_SLOT),
+    "GarenQHaste": (BuffId.GAREN_Q_HASTE, Q_HASTE_BUFF_SLOT),
+}
+
+
+def xp_bounds_for_level(level: int, xp_curve) -> Tuple[float, Optional[float]]:
+    """Return the closed/open cumulative-XP interval visible as ``level``.
+
+    The dump exposes level but not XP.  ``[curve[level - 1], curve[level])``
+    is therefore the *entire* recoverable fact; choosing the lower bound for
+    ``LaneState.xp`` is a deterministic representative, not an observation.
+    At the level cap there is no finite upper bound in the model.
+    """
+    n = len(xp_curve)
+    i = max(0, min(int(level) - 1, n - 1))
+    lower = float(xp_curve[i])
+    upper = float(xp_curve[i + 1]) if i + 1 < n else None
+    return lower, upper
 
 
 @dataclass(slots=True)
@@ -199,6 +241,21 @@ class UnitInjectionNote:
     #: thing that silently drifts from this one).
     slot: int = -1
     entity: Optional[Entity] = None
+    #: These are provenance labels, not confidence scores.  A report must say
+    #: which state was actually reconstructed and which was merely defaulted.
+    target_recovery: str = "not attempted"
+    attack_recovery: str = "not attempted"
+    collision_cache_recovery: str = "current-position fallback"
+    position_recovery: str = "canonical 1/16-quantised position"
+    cooldown_recovery: str = "not applicable"
+    buff_recovery: str = "not applicable"
+    cast_recovery: str = "not applicable"
+    #: LaneMinionAI.currentWaypointIndex is not dumped. It is projected onto
+    #: the team-relative immutable corridor; the label distinguishes an
+    #: on-corridor recovery from the off-corridor nearest/upcoming guess.
+    lane_waypoint_recovery: str = "not applicable"
+    #: ``(inclusive lower, exclusive upper)``; ``upper=None`` at level cap.
+    xp_bounds: Optional[Tuple[float, Optional[float]]] = None
 
 
 @dataclass(slots=True)
@@ -217,6 +274,23 @@ class InjectionReport:
     @property
     def n_units(self) -> int:
         return len(self.notes)
+
+    def provenance_counts(self) -> Dict[str, int]:
+        """Count recovery labels for a compact one-step uncertainty report."""
+        out: Dict[str, int] = {}
+        for note in self.notes:
+            for field_name in (
+                "target_recovery", "attack_recovery", "collision_cache_recovery",
+                "position_recovery",
+                "cooldown_recovery", "buff_recovery", "cast_recovery",
+                "lane_waypoint_recovery",
+            ):
+                key = f"{field_name}={getattr(note, field_name)}"
+                out[key] = out.get(key, 0) + 1
+            if note.xp_bounds is not None:
+                out["xp_bounds=within-level interval (lower bound injected)"] = (
+                    out.get("xp_bounds=within-level interval (lower bound injected)", 0) + 1)
+        return out
 
 
 def infer_turret_model(x: float, y: float, team: int) -> Tuple[Optional[int], str]:
@@ -425,9 +499,13 @@ def replay_wave_states(trace: Trace) -> List[WaveState]:
 
 def inject_snapshot(
     snapshot: Snapshot, wave_state: WaveState, params: dict, profiles,
-    dtype=None,
+    dtype=None, previous_snapshot: Optional[Snapshot] = None,
 ) -> Tuple[LaneState, InjectionReport]:
     """Build a :class:`LaneState` from one server :class:`Snapshot`.
+
+    ``previous_snapshot``, when supplied, is the immediately preceding dump
+    tick.  It is used only for a labelled collision-cache proxy; no future
+    snapshot is consulted, so this remains a causal injection.
 
     Slot assignment is ours to choose (champions -> ``CH_SLICE`` by team,
     minions/turrets -> the free slots of ``MI_SLICE``/``TU_SLICE`` in the
@@ -462,14 +540,36 @@ def inject_snapshot(
     move_order = arr(s.move_order)
     n_waypoints = arr(s.n_waypoints)
     waypoint_key = arr(s.waypoint_key)
+    lane_waypoint_key = arr(s.lane_waypoint_key)
     waypoints = arr(s.waypoints)
-    level = arr(s.level); gold = arr(s.gold)
+    level = arr(s.level); xp = arr(s.xp); gold = arr(s.gold)
     cs = arr(s.cs); deaths = arr(s.deaths)
     spell_level = arr(s.spell_level)
     spell_cooldown = arr(s.spell_cooldown)
+    target = arr(s.target)
+    is_attacking = arr(s.is_attacking)
+    has_auto_attacked = arr(s.has_auto_attacked)
+    aa_cooldown = arr(s.aa_cooldown)
+    aa_windup = arr(s.aa_windup)
+    buff_id = arr(s.buff_id)
+    buff_elapsed = arr(s.buff_elapsed)
+    buff_duration = arr(s.buff_duration)
+    buff_power = arr(s.buff_power)
+    collision_x = arr(s.collision_x); collision_y = arr(s.collision_y)
+    collision_present = arr(s.collision_present)
     spawn_x = arr(s.spawn_x); spawn_y = arr(s.spawn_y)
+    spawn_seq = arr(s.spawn_seq)
+    ai_timer = arr(s.ai_timer); target_priority = arr(s.target_priority)
+    ignore_until = arr(s.ignore_until); help_priority = arr(s.help_priority)
+    ai_local_time = arr(s.ai_local_time)
+    time_since_attack = arr(s.time_since_attack)
+    missile_alive = arr(s.missile_alive); missile_x = arr(s.missile_x)
+    missile_y = arr(s.missile_y); missile_tx = arr(s.missile_tx)
+    missile_source = arr(s.missile_source)
+    missile_damage = arr(s.missile_damage); missile_speed = arr(s.missile_speed)
 
-    slot_of: Dict[int, int] = {}   # id(entity) -> slot, for debugging only
+    slot_of: Dict[int, int] = {}   # id(entity) -> slot, for temporal recovery
+    note_of: Dict[int, UnitInjectionNote] = {}
 
     for ent in snapshot.entities:
         if ent.kind not in KIND_NAME_TO_ID:
@@ -512,6 +612,7 @@ def inject_snapshot(
         max_hp[i] = ent.q_max_hp / StatQ
         move_order[i] = ent.ai.move_order if ent.ai else MoveOrder.NONE
         n_waypoints[i] = ent.ai.waypoints if ent.ai else 0
+        slot_of[id(ent)] = i
 
         # ---- model -------------------------------------------------------
         if ek == Kind.CHAMPION:
@@ -532,6 +633,9 @@ def inject_snapshot(
         # ---- champion-only fields -----------------------------------------
         if ek == Kind.CHAMPION and ent.champ is not None:
             level[i] = ent.champ.level
+            # The lower bound is deliberately only a representative.  The
+            # note records the full within-level interval below.
+            xp[i], _ = xp_bounds_for_level(int(level[i]), params["xp_curve"])
             gold[i] = ent.champ.q_gold / StatQ
             cs[i] = ent.champ.minions_killed
             deaths[i] = ent.champ.deaths
@@ -548,7 +652,25 @@ def inject_snapshot(
 
         # ---- movement / waypoints -------------------------------------
         trustworthy, reason = True, "movement blocked this tick (order not MOVE_TO/ATTACK_TO)"
+        lane_key_reason = "not a LaneMinion"
         mo = move_order[i]
+        if ek == Kind.LANE_MINION:
+            # `currentWaypointIndex` is private AI state absent from the dump.
+            # The immutable path and direction ARE known, so choose the
+            # upcoming vertex of the nearest corridor segment. This is exact
+            # on the corridor; after a chase it is an explicit nearest-path
+            # guess, but never the silently catastrophic default-0 cursor.
+            lane_path = _corridor_path(et)
+            lane_seg, lane_dist, lane_t = _project_to_polyline(
+                ent.x, ent.y, lane_path)
+            lane_waypoint_key[i] = _key_from_projection(lane_path, lane_seg, lane_t)
+            lane_key_reason = (
+                f"on-corridor upcoming index={lane_waypoint_key[i]} "
+                f"(perpendicular distance {lane_dist:.2f})"
+                if lane_dist <= CORRIDOR_TOLERANCE else
+                f"OFF-CORRIDOR nearest/upcoming projection guess index="
+                f"{lane_waypoint_key[i]} (perpendicular distance {lane_dist:.1f}; "
+                "private currentWaypointIndex unobservable)")
         if mo == MoveOrder.MOVE_TO:
             wp, key, n, reason = reconstruct_waypoints(ent.x, ent.y, et)
             if wp is None:
@@ -602,7 +724,7 @@ def inject_snapshot(
                      "(see module docstring); waypoints left empty")
             n_waypoints[i] = 0
 
-        report.notes.append(UnitInjectionNote(
+        note = UnitInjectionNote(
             # NOTE: `team` here is the server's RAW id (100/200/300, same as
             # `Entity.team`), not the sim's compact `Team` enum (`et`) --
             # deliberately, so this note can be grouped/joined against
@@ -612,31 +734,295 @@ def inject_snapshot(
             model_row=int(model[i]), model_reason=model_reason,
             movement_trustworthy=trustworthy, movement_reason=reason,
             slot=i, entity=ent,
-        ))
+            cooldown_recovery=(
+                "exact dumped cooldowns" if ek == Kind.CHAMPION and ent.champ is not None
+                else "not applicable"),
+            cast_recovery=(
+                "no active cast visible" if ent.ai is not None
+                and ent.ai.cast_spell == "-" and ent.ai.channel_spell == "-"
+                else "visible cast/channel has no LaneState representation"),
+            lane_waypoint_recovery=lane_key_reason,
+            xp_bounds=(xp_bounds_for_level(ent.champ.level, params["xp_curve"])
+                       if ek == Kind.CHAMPION and ent.champ is not None else None),
+        )
+        report.notes.append(note)
+        note_of[id(ent)] = note
+
+    # ---- named buffs: identity can be recovered, timing cannot ------------
+    # Buff.Update advances elapsed before applying its semantics.  For active
+    # finite buffs the dump omits elapsed/duration/power, so do NOT invent a
+    # remaining duration or a cast-time damage snapshot.  A zero duration
+    # preserves the incoming ID for collision's pre-buff ghost check (E), then
+    # expires safely at the next buff update.  The permanent W passive needs no
+    # phase and is represented exactly.
+    for note in report.notes:
+        ent = note.entity
+        if ent is None or ent.ai is None:
+            continue
+        known, unknown = [], []
+        for name in ent.ai.buffs:
+            mapping = _DUMP_BUFF_TO_SIM.get(name)
+            if mapping is None:
+                unknown.append(name)
+                continue
+            buff, bslot = mapping
+            buff_id[note.slot, bslot] = buff
+            known.append(name)
+        if known:
+            finite = [b for b in known if b != "GarenWPassive"]
+            note.buff_recovery = (
+                "exact permanent identity" if not finite else
+                "identity only; finite-buff phase/power intentionally unresolved")
+        elif ent.ai.buffs:
+            note.buff_recovery = "dump buff names have no LaneState mapping"
+        if unknown:
+            note.buff_recovery += "; unmapped=" + "+".join(unknown)
+
+    # The optional internal stream is excluded from the canonical hash, but
+    # makes one-tick replay exact: NetIds recover identity, attack phase and
+    # LaneMinionAI's private clocks without changing server behaviour.
+    unmatched = list(snapshot.ai_internals)
+    internal_for_note = {}
+    note_by_slot = {n.slot: n for n in report.notes}
+    for note in report.notes:
+        candidates = [v for v in unmatched if v.kind == note.kind and v.team == note.team]
+        if not candidates:
+            continue
+        qx, qy = round(note.x * 16), round(note.y * 16)
+        internal = min(candidates, key=lambda v: (v.q_x - qx) ** 2 + (v.q_y - qy) ** 2)
+        unmatched.remove(internal)
+        internal_for_note[note.slot] = internal
+
+    id_to_slot = {v.net_id: slot for slot, v in internal_for_note.items()}
+    creation_rank = {net_id: rank for rank, net_id in enumerate(sorted(id_to_slot))}
+    for slot, internal in internal_for_note.items():
+        note = note_by_slot[slot]
+        if internal.x_bits is not None and internal.y_bits is not None:
+            x[slot] = np.asarray(
+                np.uint32(internal.x_bits & 0xFFFFFFFF)).view(np.float32).item()
+            y[slot] = np.asarray(
+                np.uint32(internal.y_bits & 0xFFFFFFFF)).view(np.float32).item()
+            note.position_recovery = "exact float32 bits from diagnostic stream"
+        spawn_seq[slot] = creation_rank[internal.net_id]
+        target[slot] = id_to_slot.get(internal.target_net_id, -1)
+        aa_cooldown[slot] = internal.q_aa_cooldown / StatQ
+        is_attacking[slot] = internal.is_attacking
+        has_auto_attacked[slot] = internal.has_auto_attacked
+        aa_windup[slot] = (internal.q_aa_windup / StatQ
+                           if internal.aa_state == 1 and internal.is_attacking else 0.0)
+        note.target_recovery = "exact NetId from diagnostic internal stream"
+        note.attack_recovery = "exact cooldown/windup/attack flags from diagnostic stream"
+        if internal.waypoints:
+            width = min(len(internal.waypoints), waypoints.shape[1])
+            waypoints[slot] = 0.0
+            waypoints[slot, :width] = np.asarray(
+                internal.waypoints[:width], dtype=np.float32) / 16.0
+            waypoint_key[slot] = min(internal.waypoint_key, max(0, width - 1))
+            n_waypoints[slot] = width
+            note.movement_trustworthy = len(internal.waypoints) <= waypoints.shape[1]
+            note.movement_reason = (
+                "exact waypoint list/current key from diagnostic stream"
+                if note.movement_trustworthy else
+                "diagnostic waypoint list exceeded fixed LaneState capacity")
+        if internal.q_ai_timer is not None:
+            ai_timer[slot] = internal.q_ai_timer / StatQ
+        if internal.q_ai_local is not None:
+            ai_local_time[slot] = internal.q_ai_local / StatQ
+        if internal.q_time_since_attack is not None:
+            time_since_attack[slot] = internal.q_time_since_attack / StatQ
+        if internal.target_priority is not None:
+            target_priority[slot] = internal.target_priority
+        if internal.lane_waypoint_key is not None:
+            lane_waypoint_key[slot] = internal.lane_waypoint_key
+            note.lane_waypoint_recovery = "exact private currentWaypointIndex"
+        for other_id, q_until in internal.ignored:
+            other = id_to_slot.get(other_id)
+            if other is not None:
+                ignore_until[slot, other] = q_until / StatQ
+        for other_id, priority in internal.help:
+            other = id_to_slot.get(other_id)
+            if other is not None:
+                help_priority[slot, other] = priority
+        other = id_to_slot.get(internal.target_net_id)
+        if (not internal.waypoints and other is not None
+                and move_order[slot] == MoveOrder.ATTACK_TO):
+            waypoints[slot, 0] = (x[slot], y[slot])
+            waypoints[slot, 1] = (x[other], y[other])
+            waypoint_key[slot] = 1
+            n_waypoints[slot] = 2
+            note.movement_trustworthy = True
+            note.movement_reason = "exact target-derived ATTACK_TO segment"
+
+    for mi, internal in enumerate(snapshot.missile_internals[:len(missile_alive)]):
+        source = id_to_slot.get(internal.owner_net_id)
+        dest = id_to_slot.get(internal.target_net_id)
+        if source is None or dest is None:
+            continue
+        missile_alive[mi] = True
+        if internal.x_bits is not None and internal.y_bits is not None:
+            missile_x[mi] = np.asarray(
+                np.uint32(internal.x_bits & 0xFFFFFFFF)).view(np.float32).item()
+            missile_y[mi] = np.asarray(
+                np.uint32(internal.y_bits & 0xFFFFFFFF)).view(np.float32).item()
+        else:
+            missile_x[mi], missile_y[mi] = internal.q_x / 16.0, internal.q_y / 16.0
+        missile_source[mi], missile_tx[mi] = source, dest
+        missile_speed[mi] = internal.q_speed / StatQ
+        missile_damage[mi] = internal.q_damage / StatQ
+
+    # ---- target / attack-state facts recoverable from the current dump -----
+    # A live minion in ATTACK_TO has a held target outside ideal attack range.
+    # If the dump leaves exactly one *modelled* enemy inside that minion's
+    # acquisition range, its identity is constrained conditionally.  This intentionally does
+    # not guess from nearest-target priority or use the result for champions /
+    # turrets, whose held-target rules differ.
+    live_notes = [n for n in report.notes if n.entity is not None and not n.entity.dead]
+    for note in live_notes:
+        ent = note.entity
+        assert ent is not None
+        if note.slot in internal_for_note:
+            continue
+        if ent.kind != "LaneMinion" or ent.ai is None:
+            continue
+        if ent.ai.move_order == MoveOrder.ATTACK_TO:
+            is_attacking[note.slot] = False
+            aa_windup[note.slot] = 0.0
+            note.attack_recovery = (
+                "windup ruled out by ATTACK_TO; cooldown/last-hit state unobservable")
+            acq = float(params["acquisition_range"][int(model[note.slot])])
+            candidates = [other for other in live_notes
+                          if other.team != note.team
+                          and math.hypot(other.x - note.x, other.y - note.y) <= acq]
+            if len(candidates) == 1:
+                target[note.slot] = candidates[0].slot
+                note.target_recovery = (
+                    "unique ATTACK_TO candidate among injected lane entities "
+                    "(unmodelled targetable kinds remain a blind spot)")
+            else:
+                note.target_recovery = (
+                    f"unresolved ATTACK_TO target ({len(candidates)} injected candidates)")
+        elif ent.ai.move_order == MoveOrder.MOVE_TO:
+            # LaneMinionAI reaches MOVE_TO only after it has no target.  This
+            # excludes a windup without assigning an invisible target clock.
+            is_attacking[note.slot] = False
+            aa_windup[note.slot] = 0.0
+            note.target_recovery = "no held target implied by minion MOVE_TO"
+            note.attack_recovery = "windup ruled out by minion MOVE_TO; cooldown unobservable"
+        else:
+            note.target_recovery = "unobservable from dump"
+            note.attack_recovery = "auto-attack clock unobservable from dump"
+
+    # ---- collision cache ---------------------------------------------------
+    # At N+1 collision queries the cache rebuilt before N's movement.  The N
+    # dump is after movement, but N-1 is a materially better proxy than N for a
+    # continuously tracked unit.  Matching is intentionally bounded to one
+    # normal tick; crowded/teleport/death cases fall back to the observable N
+    # position and are reported as such.
+    collision_x[:] = x
+    collision_y[:] = y
+    collision_present[:] = alive & (kind != Kind.NONE)
+    # Never turn an older, dropped-log snapshot into an apparently precise
+    # quadtree cache.  A normal server interval is 16--17 ms; 34 permits a
+    # single scheduler-sized long tick but refuses a genuine trace gap.
+    previous_is_adjacent = (
+        previous_snapshot is not None
+        and 0 < snapshot.t_ms - previous_snapshot.t_ms <= 34)
+    if previous_is_adjacent:
+        previous_by_group: Dict[Tuple[str, int], List[Entity]] = {}
+        current_by_group: Dict[Tuple[str, int], List[Entity]] = {}
+        for n in report.notes:
+            assert n.entity is not None
+            current_by_group.setdefault((n.kind, n.team), []).append(n.entity)
+        for old in previous_snapshot.entities:
+            if old.kind in KIND_NAME_TO_ID and not old.dead and old.team is not None:
+                previous_by_group.setdefault((old.kind, old.team), []).append(old)
+        for key, cur_entities in current_by_group.items():
+            matched, _old_only, _new_only = _match_group(
+                previous_by_group.get(key, []), cur_entities, 16 * 8)
+            for old, cur, _distance_q in matched:
+                slot = slot_of[id(cur)]
+                collision_x[slot], collision_y[slot] = old.x, old.y
+                note_of[id(cur)].collision_cache_recovery = (
+                    "preceding-position temporal proxy (pre-move cache unobservable)")
+
+    # New diagnostic traces expose the actual quadtree position.  The stream
+    # is deliberately outside the canonical hash, so this improves differential
+    # injection without changing reset/determinism semantics.  Older traces
+    # retain the explicitly labelled temporal proxy above.
+    for slot, internal in internal_for_note.items():
+        if not internal.collision_observed:
+            continue
+        if internal.collision_q_x is None or internal.collision_q_y is None:
+            collision_present[slot] = False
+            note_by_slot[slot].collision_cache_recovery = (
+                "exact diagnostic absence (not present in server quadtree)")
+        else:
+            if (internal.collision_x_bits is not None
+                    and internal.collision_y_bits is not None):
+                collision_x[slot] = np.asarray(
+                    np.uint32(internal.collision_x_bits & 0xFFFFFFFF)).view(np.float32).item()
+                collision_y[slot] = np.asarray(
+                    np.uint32(internal.collision_y_bits & 0xFFFFFFFF)).view(np.float32).item()
+                cache_label = "exact cached position (float32 bits) from diagnostic stream"
+            else:
+                collision_x[slot] = internal.collision_q_x / PosQ
+                collision_y[slot] = internal.collision_q_y / PosQ
+                cache_label = "exact cached position (quantised) from diagnostic stream"
+            collision_present[slot] = True
+            note_by_slot[slot].collision_cache_recovery = cache_label
 
     s = s.replace(
         t_ms=jnp.asarray(snapshot.t_ms, dtype), tick=s.tick,
         kind=jnp.asarray(kind), team=jnp.asarray(team),
         alive=jnp.asarray(alive), model=jnp.asarray(model),
+        spawn_seq=jnp.asarray(spawn_seq),
         x=jnp.asarray(x, dtype), y=jnp.asarray(y, dtype),
+        # Diagnostic traces use the exact server cache.  Legacy traces use the
+        # explicitly labelled temporal proxy above.
+        collision_x=jnp.asarray(collision_x, dtype),
+        collision_y=jnp.asarray(collision_y, dtype),
+        collision_present=jnp.asarray(collision_present),
         waypoints=jnp.asarray(waypoints, dtype),
         waypoint_key=jnp.asarray(waypoint_key),
+        lane_waypoint_key=jnp.asarray(lane_waypoint_key),
         n_waypoints=jnp.asarray(n_waypoints),
         move_order=jnp.asarray(move_order),
         hp=jnp.asarray(hp, dtype), max_hp=jnp.asarray(max_hp, dtype),
         spawn_x=jnp.asarray(spawn_x, dtype), spawn_y=jnp.asarray(spawn_y, dtype),
-        level=jnp.asarray(level), gold=jnp.asarray(gold, dtype),
+        level=jnp.asarray(level), xp=jnp.asarray(xp, dtype),
+        gold=jnp.asarray(gold, dtype),
         cs=jnp.asarray(cs), deaths=jnp.asarray(deaths),
         spell_level=jnp.asarray(spell_level),
         spell_cooldown=jnp.asarray(spell_cooldown, dtype),
+        target=jnp.asarray(target),
+        is_attacking=jnp.asarray(is_attacking),
+        has_auto_attacked=jnp.asarray(has_auto_attacked),
+        aa_cooldown=jnp.asarray(aa_cooldown, dtype),
+        aa_windup=jnp.asarray(aa_windup, dtype),
+        buff_id=jnp.asarray(buff_id),
+        buff_elapsed=jnp.asarray(buff_elapsed, dtype),
+        buff_duration=jnp.asarray(buff_duration, dtype),
+        buff_power=jnp.asarray(buff_power, dtype),
+        ai_timer=jnp.asarray(ai_timer, dtype),
+        target_priority=jnp.asarray(target_priority),
+        ignore_until=jnp.asarray(ignore_until, dtype),
+        help_priority=jnp.asarray(help_priority),
+        ai_local_time=jnp.asarray(ai_local_time, dtype),
+        time_since_attack=jnp.asarray(time_since_attack, dtype),
+        missile_alive=jnp.asarray(missile_alive),
+        missile_x=jnp.asarray(missile_x, dtype),
+        missile_y=jnp.asarray(missile_y, dtype),
+        missile_tx=jnp.asarray(missile_tx),
+        missile_source=jnp.asarray(missile_source),
+        missile_damage=jnp.asarray(missile_damage, dtype),
+        missile_speed=jnp.asarray(missile_speed, dtype),
         # wave spawner: derived exactly, see replay_wave_states
         next_spawn_ms=jnp.asarray(wave_state.next_spawn_ms, dtype),
         minion_number=jnp.asarray(wave_state.minion_number, jnp.int32),
         cannon_count=jnp.asarray(wave_state.cannon_count, jnp.int32),
-        # everything below is an UNRECOVERABLE default -- see module docstring
-        # target=-1, target_priority=14, ai_timer=250, ignore_until=0,
-        # help_priority=14, ai_local_time=0, time_since_attack=0,
-        # aa_cooldown=0, aa_windup=0, is_attacking=False,
-        # has_auto_attacked=False are all already `empty_state`'s defaults.
+        next_spawn_seq=jnp.asarray(len(creation_rank), jnp.int32),
+        # Remaining minion bookkeeping and attack cooldown/last-hit state are
+        # unrecoverable defaults.  UnitInjectionNote records the narrower
+        # target/windup facts set above, so a default never reads as evidence.
     )
     return s, report

@@ -84,11 +84,15 @@ for this specific run's cs/attacks/deaths either way, but philosophically
 still the right default for a gate that is supposed to isolate last-hitting
 from an item system the sim does not have)::
 
-    sim (JAX):  cs=9  approach_decisions=6998  attacks=473  moves=0     holds=10529  deaths=5
+    sim (JAX):  cs=7  approach_decisions=1768  attacks=72   moves=0     holds=16160  deaths=1
     server:     cs=4  approach_decisions=3197  attacks=86   moves=0     holds=14717  deaths=1
 
-This is the OPPOSITE direction from the stale figure above: the sim now
-scores MORE CS and gets MORE attack opportunities than the server, not fewer.
+The current source-faithful fixture scores more CS in the sim despite the sim
+now getting *fewer* attack-decision frames.  ``hp_band.py`` makes the reason
+observable: the 72 sim frames form 7 lethal windows (mean 10.29 frames), while
+the 86 server frames form only 4 windows (mean 21.50 frames).  One sim window
+currently becomes one CS; this is a minion HP/crossover cadence discrepancy,
+not a duplicated-attack-order counter or an excess death/pathing exposure.
 ``moves=0`` on both sides is expected and correct -- the oracle's
 ``hold_position=True`` fallback never returns a move order post-handover (see
 ``last_hit_oracle.decide``), so every post-approach decision is an attack or a
@@ -114,20 +118,17 @@ What was checked and ruled OUT as the cause of the remaining gap:
   IDENTICAL cs/attacks/deaths -- the one death that occurs on the server is
   not prevented or even delayed meaningfully by the extra HP pool. Real
   mechanism, not the explanation for this pattern.
-* **``enable_call_for_help=True``** -- tried on the strength of
-  ``docs/CALL_FOR_HELP_SWITCH_RATE.md`` part 6 (measured to help a
-  champion-in-lane scenario). Made this gate dramatically WORSE (sim cs
-  9 -> 0, deaths 5 -> 8), because that scenario (``StandInWave``) never
-  attacks and so only ever exercises call-for-help's release side, while this
-  oracle attacks routinely and every landed swing is itself a
-  ``CHAMPION_ATTACKING_MINION`` (priority 5, beats any minion's own 6-9) call
-  for help that recruits fresh aggressors onto the champion. Reverted; see
-  ``last_hit_drive.run_oracle_in_sim``'s inline comment for the citation.
+* **Call for help disabled** -- not a valid candidate or baseline.  The server
+  broadcasts aggro on every landed hit; canonical ``step_decision`` now enables
+  that source-derived mechanism by default.  The old OFF ablation was a
+  regression-shaped tuning experiment and is retained only as history, not
+  gate evidence.
 
-What was NOT ruled out, and is the leading open item: the sim's champion
-dies 5 times to the server's 0-1, and each death costs a full
-fountain-to-lane walk (``approach_decisions`` 6998 vs 3197) that the
-champion cannot farm during.
+The remainder of this historical death/isolation investigation predates the
+current canonical call-for-help fixture. It remains useful provenance for the
+old cs=9/473-attack run, but it is **not** the leading explanation now: the
+fresh fixture has one death on each side and isolates the remaining gap to the
+number of distinct HP-band crossovers.
 
 **The release rule itself is not the cause -- checked against the C# source
 directly, not inferred.** ``lanerl_jax.sim.minion_ai``'s
@@ -178,6 +179,7 @@ loosen the tolerance to make it pass.
 """
 from __future__ import annotations
 
+import inspect
 import os
 
 import pytest
@@ -187,6 +189,7 @@ from lanerl_jax.parity.last_hit_drive import (
     run_oracle_in_sim,
     run_oracle_on_server,
 )
+from lanerl_jax.sim.step import step_decision
 
 #: Exact match. See the module docstring: two 600 s server runs under
 #: different bot_seeds produced bit-identical decision streams, so there is no
@@ -198,6 +201,23 @@ CS_TOLERANCE = 0
 #: -- is the default because a shorter run answers a different question (CS at
 #: some other clock, which nothing else reports against).
 DECISIONS = int(os.environ.get("LANERL_LAST_HIT_DECISIONS", str(DECISIONS_600S)))
+
+
+def test_gate3_canonical_call_for_help_default_is_enabled():
+    """The server always broadcasts on damage; OFF is only an explicit ablation."""
+    assert inspect.signature(step_decision).parameters[
+        "enable_call_for_help"].default is True
+
+
+def test_gate3_canonical_sim_path_is_routed():
+    """The server and production simulator both route Move orders.
+
+    ``table_disabled`` is deliberately opt-in so a raw two-point segment can
+    remain available for PATH-006 isolation without quietly becoming gate
+    evidence again.
+    """
+    assert inspect.signature(run_oracle_in_sim).parameters[
+        "table_disabled"].default is False
 
 
 @pytest.mark.slow
@@ -217,36 +237,21 @@ def test_oracle_scores_the_same_cs_in_sim_and_server():
     isolates last-hitting, and the server's champion should not be scoring a
     free defensive item the sim has no way to model.
 
-    See the module docstring for the measured tolerance and for the gap this
-    is currently finding, including why the number this test used to compare
-    against (server CS=10) was stale and what replaced it. This assertion is
-    written to the gate's real criterion, not to what happens to pass today --
-    so as of 2026-09-16 it FAILS, and that failure is the deliverable: sim
-    CS=9 against the server's CS=4 over the same 600 s, same policy, same
-    scripted approach -- the gap did not close, but its DIRECTION reversed
-    from every previously recorded measurement, which is itself evidence the
-    old baseline was never comparable to begin with (see the module
-    docstring's staleness note).
+    See the module docstring for the measured tolerance and current source-
+    faithful gap. The assertion is written to the gate's real criterion, not
+    to what happens to pass today: the current full fixture fails at sim CS=7
+    versus server CS=4, even though it has fewer eligible decision frames
+    (72 versus 86). The deliverable is the measured HP-window disagreement,
+    not a loosened tolerance.
     """
     sim = run_oracle_in_sim(decisions=DECISIONS)
     server = run_oracle_on_server(
         decisions=DECISIONS, port_base=46000, bot_seed=4242, tag="last_hit_gate",
         autobuy=False)
 
-    # Deaths are reported first because they dominate CS: each one costs a
-    # respawn plus a walk back that the champion cannot farm during
-    # (approach_decisions balloons from ~1300 for a deathless run to 6998 for
-    # the sim's 5 deaths here). NOT asserted to be zero any more -- unlike the
-    # old [:7]-waypoint bug this guarded against (a champion parked inside the
-    # enemy turret's range, dying to TOWER fire), the server's own current
-    # baseline under the CORRECTED [:6] position sits RIGHT AT a life/death
-    # boundary late in the episode: four independent runs (one contended, two
-    # on a clean slurm allocation, one via this exact test) agree EXACTLY on
-    # cs=4/attacks=86/approach_decisions=3197 every time, but split 3:1 on
-    # whether that boundary tick reads as death=0 or death=1 -- a genuine
-    # near-miss, not the settled "0" the old comment claimed. Asserting a
-    # specific value here would be pinning a coin flip, not guarding an
-    # invariant; deaths are logged, not asserted.
+    # Deaths are logged rather than asserted.  The current canonical run has
+    # one on each side, so death/respawn exposure cannot explain its CS gap;
+    # future mechanics work may nevertheless move this near-boundary value.
     if sim.deaths or server.deaths:
         print(f"deaths: sim={sim.deaths} server={server.deaths} "
               f"(each one costs a fountain walk; see approach_decisions below)")
@@ -262,11 +267,8 @@ def test_oracle_scores_the_same_cs_in_sim_and_server():
         f"attacks={server.attacks} moves={server.moves} holds={server.holds} "
         f"deaths={server.deaths} log={server.log_path}. "
         "This is the behavioural gate (J1 gate 3, docs/JAX_REWRITE_PLAN.md); "
-        "champion-AD level-scaling and LANERL_AUTOBUY have both been checked "
-        "and ruled out as the explanation (see the module docstring) -- the "
-        "leading open suspect is the sim's minion-pile-up-without-release "
-        "behaviour (lanerl_jax.sim.targeting.call_for_help_map's own "
-        "docstring), and enabling call-for-help for this scenario has been "
-        "tried and makes it WORSE, not better (see the module docstring) -- "
-        "do not raise CS_TOLERANCE to silence this, fix the cause instead."
+        "canonical call-for-help is enabled (the server has no OFF mode). "
+        "The focused HP-band diagnostic shows distinct lethal windows, not "
+        "duplicated ATTACK orders; do not raise CS_TOLERANCE to silence this, "
+        "fix the HP/crossover cause instead."
     )

@@ -63,6 +63,20 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
+from ..sim.combat import growth_sum, stat_total
+from ..sim.spells import (
+    BuffId,
+    E_BUFF_SLOT,
+    E_COOLDOWNS,
+    Q_BUFF_SLOT,
+    Q_COOLDOWN,
+    R_COOLDOWNS,
+    Slot,
+    W_COOLDOWNS,
+    W_PASSIVE_ARMOR_PCT,
+    W_PASSIVE_MR_PCT,
+    W_PASSIVE_BUFF_SLOT,
+)
 from ..sim.state import Kind, LaneState, Team
 from .fog import visible_to
 from .frame import LaneFrame, delta_to_lane, to_lane
@@ -121,9 +135,14 @@ def _topk_slots(score: jax.Array, eligible: jax.Array, k: int):
     return jnp.where(jnp.isfinite(-neg), idx, -1).astype(jnp.int32)
 
 
-def build_observation(state: LaneState, me: int, frame: LaneFrame,
+def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
                       horizon_s: float = 600.0) -> Observation:
-    """Build one agent's observation. ``me`` is the champion's unit index."""
+    """Build one agent's observation. ``me`` is the champion's unit index.
+
+    ``params`` is the profile table used by ``step_decision``.  It is explicit
+    because live combat stats are profile- and level-dependent; using a second
+    hidden stat table here would let policy inputs drift from the simulator.
+    """
     n = state.kind.shape[0]
     my_team = state.team[me]
     vis = visible_to(my_team, state.x, state.y, state.kind, state.team,
@@ -191,25 +210,89 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame,
     # ---- self ------------------------------------------------------------
     s_, n_ = to_lane(frame, state.x[me], state.y[me])
     my_hp = jnp.where(state.max_hp[me] > 0, state.hp[me] / state.max_hp[me], 0.0)
+    # The stat table is the simulator's source of truth. AP has no source in
+    # this no-items state and remains explicitly 0.
+    p = lambda key: params[key][state.model[me]]  # noqa: E731
+    growth = growth_sum(state.level[me], jnp)
+    ad = p("attack_damage") + p("ad_per_level") * growth
+    armor_base = p("armor") + p("armor_per_level") * growth
+    mr_base = p("magic_resist") + p("mr_per_level") * growth
+    has_w_passive = ((state.buff_id[me, W_PASSIVE_BUFF_SLOT]
+                      == BuffId.GAREN_W_PASSIVE) & state.alive[me])
+    armor = stat_total(
+        armor_base - p("armor_flat_bonus"),
+        flat_bonus=p("armor_flat_bonus"),
+        percent_base_bonus=jnp.where(has_w_passive, -W_PASSIVE_ARMOR_PCT, 0.0),
+        percent_bonus=jnp.where(has_w_passive, W_PASSIVE_ARMOR_PCT, 0.0),
+    )
+    mr = stat_total(
+        mr_base,
+        percent_base_bonus=jnp.where(has_w_passive, -W_PASSIVE_MR_PCT, 0.0),
+        percent_bonus=jnp.where(has_w_passive, W_PASSIVE_MR_PCT, 0.0),
+    )
+
+    rank = state.spell_level[me].astype(jnp.int32)
+    w_cd = jnp.asarray(W_COOLDOWNS, state.x.dtype)
+    e_cd = jnp.asarray(E_COOLDOWNS, state.x.dtype)
+    r_cd = jnp.asarray(R_COOLDOWNS, state.x.dtype)
+    base_cd = jnp.stack([
+        jnp.asarray(Q_COOLDOWN, state.x.dtype),
+        w_cd[jnp.clip(rank[Slot.W], 1, len(W_COOLDOWNS)) - 1],
+        e_cd[jnp.clip(rank[Slot.E], 1, len(E_COOLDOWNS)) - 1],
+        r_cd[jnp.clip(rank[Slot.R], 1, len(R_COOLDOWNS)) - 1],
+    ])
+    # E's cooldown starts after its spin and Q's after the empowerment window;
+    # both are unavailable while active despite a zero countdown.
+    cast_locked = jnp.asarray([
+        state.buff_id[me, Q_BUFF_SLOT] == BuffId.GAREN_Q,
+        False,
+        state.buff_id[me, E_BUFF_SLOT] == BuffId.GAREN_E,
+        False,
+    ])
+    cooldowns = jnp.where(
+        (rank > 0) & ~cast_locked,
+        jnp.clip(state.spell_cooldown[me] / base_cd, 0.0, 1.0),
+        1.0,
+    )
+
     self_vec = jnp.stack([
         s_ / NORM_XY, n_ / NORM_XY,
         jnp.round(my_hp * HP_BAR_STEPS) / HP_BAR_STEPS,
         state.level[me].astype(jnp.float32) / 18.0,
         state.gold[me] / NORM_GOLD,
         state.cs[me].astype(jnp.float32) / NORM_CS,
-        # cooldowns are not modelled yet; explicit zeros rather than omitted, so
-        # the layout matches `constants.SELF_FIELD_NAMES` slot for slot.
-        jnp.float32(0.0), jnp.float32(0.0), jnp.float32(0.0), jnp.float32(0.0),
-        jnp.float32(0.0), jnp.float32(0.0), jnp.float32(0.0), jnp.float32(0.0),
+        cooldowns[Slot.Q], cooldowns[Slot.W], cooldowns[Slot.E], cooldowns[Slot.R],
+        ad / NORM_AD,
+        jnp.float32(0.0),          # no AP source exists in LaneState/profiles
+        armor / NORM_AD,
+        mr / NORM_AD,
         (~state.alive[me]).astype(jnp.float32),
-        jnp.float32(0.0),          # recalling: not modelled yet
+        (state.recall_channel_ms[me] > 0).astype(jnp.float32),
     ])
 
     # ---- global ----------------------------------------------------------
     enemy_champ_visible = (enemy_champ[0] >= 0).astype(jnp.float32)
+    # This is witnessed-event memory, not an estimate of the enemy's live
+    # cooldown.  A never-seen event uses the saturated value deliberately:
+    # both "unknown" and "long ago" mean an old cast carries no useful timing
+    # information, while the state keeps ``-1`` as an auditable sentinel.
+    # Normalise against rank-1 bases only, so we never leak the enemy's level
+    # or spell ranks into the actor observation.
+    observed_ms = state.observed_enemy_cast_ms[me]
+    observed_base_ms = jnp.asarray([
+        Q_COOLDOWN * 1000.0,
+        W_COOLDOWNS[0] * 1000.0,
+        E_COOLDOWNS[0] * 1000.0,
+        R_COOLDOWNS[0] * 1000.0,
+    ], state.x.dtype)
+    since_observed_cast = jnp.where(
+        observed_ms >= 0,
+        jnp.clip(observed_ms / observed_base_ms, 0.0, 1.0),
+        1.0,
+    )
     global_vec = jnp.concatenate([
         jnp.stack([state.t_ms / (horizon_s * 1000.0), enemy_champ_visible]),
-        jnp.zeros((4,), jnp.float32),   # time-since-observed-cast, not modelled
+        since_observed_cast,
     ])
 
     return Observation(entities=entities, entity_pad_mask=~valid,

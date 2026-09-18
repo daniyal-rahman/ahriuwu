@@ -46,20 +46,31 @@ distribution, and shrinking it only makes the critic start further from useful.
 """
 from __future__ import annotations
 
+import math
 from typing import NamedTuple
 
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
-__all__ = ["PolicyConfig", "LanePolicy", "ActionLogits"]
+from lanerl_rl.constants import (
+    ENTITY_DIM,
+    GLOBAL_DIM,
+    N_BUTTONS,
+    N_SCREEN_X,
+    N_SCREEN_Y,
+    N_SLOTS,
+    SELF_DIM,
+)
+
+__all__ = ["PolicyConfig", "LanePolicy", "ActionLogits", "apply_flattened_batch"]
 
 
 class PolicyConfig(NamedTuple):
-    n_slots: int = 32
-    entity_dim: int = 16
-    self_dim: int = 16
-    global_dim: int = 6
+    n_slots: int = N_SLOTS
+    entity_dim: int = ENTITY_DIM
+    self_dim: int = SELF_DIM
+    global_dim: int = GLOBAL_DIM
     d_model: int = 128
     n_layers: int = 2
     n_heads: int = 4
@@ -69,9 +80,9 @@ class PolicyConfig(NamedTuple):
     mlp_hidden: int = 1024
     mlp_layers: int = 4
     frame_stack: int = 4
-    n_buttons: int = 8
-    n_screen_x: int = 96
-    n_screen_y: int = 54
+    n_buttons: int = N_BUTTONS
+    n_screen_x: int = N_SCREEN_X
+    n_screen_y: int = N_SCREEN_Y
 
 
 class ActionLogits(NamedTuple):
@@ -154,3 +165,23 @@ class LanePolicy(nn.Module):
             target=target,
             value=nn.Dense(1, **VALUE)(h)[..., 0],
         )
+
+
+def apply_flattened_batch(policy: LanePolicy, variables, entities, pad_mask,
+                          self_vec, global_vec) -> ActionLogits:
+    """Apply an independent policy batch as one leading axis.
+
+    The policy has no interaction across leading examples. Flattening them
+    therefore preserves its architecture and probability distribution while
+    allowing XLA to use one larger matmul layout instead of a nested batch
+    layout. Floating-point reduction order may differ at ordinary GPU roundoff
+    level; the numerical contract is covered by ``test_policy``.
+    """
+    leading = entities.shape[:-2]
+    n = math.prod(leading)
+    flat_entities = entities.reshape((n,) + entities.shape[-2:])
+    flat_mask = pad_mask.reshape((n,) + pad_mask.shape[-1:])
+    flat_self = self_vec.reshape((n,) + self_vec.shape[-1:])
+    flat_global = global_vec.reshape((n,) + global_vec.shape[-1:])
+    flat = policy.apply(variables, flat_entities, flat_mask, flat_self, flat_global)
+    return jax.tree.map(lambda a: a.reshape(leading + a.shape[1:]), flat)

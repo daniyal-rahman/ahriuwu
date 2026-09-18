@@ -90,6 +90,7 @@ def _dist32(ax: float, ay: float, bx: float, by: float) -> float:
 __all__ = [
     "NavigationGridCellFlags",
     "NavGrid",
+    "GridPath",
     "DEFAULT_NGRID",
     "GAREN_PATHFINDING_RADIUS",
 ]
@@ -111,6 +112,21 @@ class NavigationGridCellFlags:
     NOT_PASSABLE = 0x2
     SEE_THROUGH = 0x40
     HAS_GLOBAL_VISION = 0x100
+
+
+@dataclass(frozen=True)
+class GridPath:
+    """The unsmoothed cell itinerary produced by ``GetPath``.
+
+    This is deliberately separate from :meth:`NavGrid.get_path`: a route-table
+    bake needs the adjacent cell hops *before* ``SmoothPath`` collapses them,
+    while normal reference callers want the server-visible world waypoints.
+    ``goal`` is already the server's terrain-clamped destination.
+    """
+
+    source: Tuple[float, float]
+    goal: Tuple[float, float]
+    cells: Tuple[Tuple[int, int], ...]
 
 
 def _short(v: float) -> int:
@@ -400,13 +416,15 @@ class NavGrid:
                    for ix, iy in self.cells_in_range(cx, cy, radius))
 
     # -------------------------------------------------------------- A* -----
-    def get_path(self, from_xy: Tuple[float, float], to_xy: Tuple[float, float],
-                 radius: float = 0.0, max_expansions: int = 200_000
-                 ) -> Optional[List[Tuple[float, float]]]:
-        """Port of ``NavigationGrid.GetPath``. World in, world waypoints out.
+    def get_cell_path(self, from_xy: Tuple[float, float], to_xy: Tuple[float, float],
+                      radius: float = 0.0, max_expansions: int = 200_000
+                      ) -> Optional[GridPath]:
+        """Port of ``GetPath`` through A*, before its ``SmoothPath`` pass.
 
-        Returns ``None`` for the server's no-solution cases, including
-        ``from == to``.
+        The returned cells include source and destination.  This low-level
+        form is for deterministic offline route-table bakes; gameplay callers
+        should use :meth:`get_path`, whose output is the server's smoothed
+        world-waypoint sequence.
         """
         if from_xy == to_xy:
             return None
@@ -418,7 +436,7 @@ class NavGrid:
         if not self.in_bounds(*cell_from) or not self.in_bounds(*cell_to):
             return None
         if cell_from == cell_to:
-            return [from_xy, to_xy]
+            return GridPath(from_xy, to_xy, (cell_from, cell_to))
 
         # closed-on-ENQUEUE, exactly as the server does it, and on .NET's own
         # 4-ary heap -- with this pathfinder the frontier order decides not only
@@ -471,11 +489,27 @@ class NavGrid:
 
         if path is None:
             return None
+        return GridPath(from_xy, to_xy, tuple(path))
+
+    def get_path(self, from_xy: Tuple[float, float], to_xy: Tuple[float, float],
+                 radius: float = 0.0, max_expansions: int = 200_000
+                 ) -> Optional[List[Tuple[float, float]]]:
+        """Port of ``NavigationGrid.GetPath``. World in, world waypoints out.
+
+        Returns ``None`` for the server's no-solution cases, including
+        ``from == to``.  ``get_cell_path`` owns the A* implementation so an
+        offline bake can consume its unsmoothed adjacent hops without
+        accidentally substituting a different search.
+        """
+        route = self.get_cell_path(from_xy, to_xy, radius, max_expansions)
+        if route is None:
+            return None
+        path = list(route.cells)
         self._smooth(path, radius)
-        out = [from_xy]
+        out = [route.source]
         for ix, iy in path[1:-1]:
             out.append(self.cell_center_world(ix, iy))
-        out.append(to_xy)
+        out.append(route.goal)
         return out
 
     def _smooth(self, path: List[Tuple[int, int]], radius: float) -> None:

@@ -7,10 +7,8 @@ reason stated: *"E first: it is the farming and trading spell."* A Garen with no
 abilities cannot clear a wave the way the policy will be trained to, so this is
 the first one that changes what the agent can do rather than how accurately it
 does it. E was built and tested first for that reason; Q, W and R follow the
-same pattern (rank tables, cooldowns, cast gating, buff slots) but each hits a
-different wall in how far that pattern can go without touching ``state.py`` or
-``step.py``, which are owned by another agent. Each section below says exactly
-where its wall is.
+same pattern (rank tables, cooldowns, cast gating, buff slots), with their
+combat effects integrated by ``step.py``.
 
 The spell, from ``Characters/Garen/E.cs`` and ``Buffs/Garen/GarenE.cs``
 ---------------------------------------------------------------------
@@ -63,31 +61,18 @@ moment. A comment in the buff script (``GarenQ.cs:47-56``) explicitly forbids
 "fixing" this into an instant hit: doing so was measured to make Q *worse* as
 a last-hit tool, because the real mechanic is an empowered auto, not a nuke.
 
-That is the wall. This module implements everything that is genuinely
-independent of the auto-attack system -- the pure damage/silence/haste
-formulas (tested directly against the C# below), the rank/cooldown gating,
-and the buff bookkeeping for the empowerment window and the haste window,
-including the ``SealSpellSlot`` recast-lock (Q.cs:84, ``GarenQ.cs:97``) and the
-cooldown, which is genuinely simple: the engine's default
+The autoattack integration is implemented in ``step.py``: it consumes the
+one skipped swing, replaces the following hit's damage, applies the ranked
+silence to that hit's target, closes the empowerment window, and begins the
+cooldown. This module supplies the formulas and buff bookkeeping, including
+the ``SealSpellSlot`` recast-lock (Q.cs:84, ``GarenQ.cs:97``). The engine's default
 ``CurrentCooldown = GetCooldown()`` at cast (``Spell.cs:1017-1021``) is
 overwritten to 0 in the same event by Q's own ``OnSpellPostCast``
 (Q.cs:85, ``spell.SetCooldown(0)``), and the real 8 s cooldown is set only when
 the empowerment window ends (``GarenQ.cs:98``, hardcoded, not rank-scaled --
 ``GarenQ.json``'s ``Cooldown1``-``Cooldown5`` are all ``"8.0000"`` too, so the
-override and the JSON agree). What this module does **not** do is deal Q's
-damage or apply its silence, because that requires knowing when the caster's
-next auto-attack lands -- a fact ``autoattack.py``/``step.py`` compute, not
-this module. See the docstring on :func:`cast_q` for the exact hook this
-needs. Until that lands, casting Q in the sim opens the window, blocks a
-recast, and starts the cooldown on schedule, but the empowered swing itself
-deals ordinary auto-attack damage.
-
-One more consequence of "the buff always starts a fresh window": our sim
-cannot see the early-landing case (window closes as soon as the empowered
-swing connects, which can be well under 4.5 s after cast) because that also
-needs the auto-attack hook above. Until it lands, Q is on cooldown for a full
-4.5 s window plus 8 s here, which is a strict upper bound on the real
-lockout, not the real number.
+override and the JSON agree). If no empowered hit lands, expiry starts that
+same cooldown after the full 4.5-second window.
 
 W -- Courage, from ``Characters/Garen/W.cs`` and ``Buffs/Garen/GarenW*.cs``
 ----------------------------------------------------------------------
@@ -149,9 +134,8 @@ to re-thread the multiply site.
 
 R -- Demacian Justice, from ``Characters/Garen/R.cs``
 ------------------------------------------------------
-The one spell in the kit that is a genuine instant, unconditional, single-target
-hit -- no buff, no windup modelled in the script, the whole thing happens
-synchronously in ``OnSpellPostCast`` (R.cs:23-39)::
+R is a single-target spell whose script damage happens synchronously in
+``OnSpellPostCast`` (R.cs:23-39), after the engine's 0.435-second cast time::
 
     percentMissingHP = [0.2857, 0.3333, 0.4][rank - 1]
     damage = 175 * rank + percentMissingHP * (MaxHP - CurrentHP)
@@ -166,24 +150,10 @@ because modern-patch League's Demacian Justice is physical: this is patch
 to an *enemy champion* -- an engine-level ``SpellData`` targeting rule rather
 than a content-script one, and outside the audit's stated scope, but real and
 cited from the same JSON, and enforced here (see ``orders.apply_orders``).
-Cooldown (``GarenR.json`` ``Cooldown1``-``Cooldown3``: 160/120/80 s) is,
-like W's, the unmodified engine default starting at cast -- R.cs never calls
-``SetCooldown``.
-
-This is fully implementable inside this module: the raw (pre-mitigation)
-damage is computed at cast from data ``apply_orders`` already has
-(``state.hp``, ``state.max_hp``), mirroring E's "snapshot everything at cast"
-discipline, and the mitigation step (against ``MagicResist``, not ``Armor`` --
-this is a magic-damage spell) happens in :func:`step_buffs` the same way E's
-own damage is mitigated against ``Armor`` there. The one real gap: this
-project's ``UnitParams``/``LaneState`` split keeps ``magic_resist`` in
-``params`` (gathered per-profile-row in ``step.py``), and the existing
-``step.py`` call to :func:`step_buffs` does not pass it -- only ``armor`` was
-ever needed before R existed. See :func:`step_buffs`'s ``magic_resist``
-parameter for the exact one-line addition ``step.py`` needs; until it is
-added, :func:`step_buffs` falls back to reusing ``armor`` (documented in
-place, wrong whenever Armor != Magic Resist, and dead code for every existing
-test because none of them cast R).
+Cooldown (``GarenR.json`` ``Cooldown1``-``Cooldown3``: 160/120/80 s) is the
+unmodified engine default and begins when casting finishes. Target health is
+read at that finish event, exactly when ``OnSpellPostCast`` runs, and damage
+is mitigated against Magic Resist.
 
 All three hooks this section used to ask ``step.py`` to add are now wired
 there (``magic_resist=P("magic_resist")`` into :func:`step_buffs`;
@@ -216,11 +186,12 @@ __all__ = [
     "E_BUFF_SLOT", "W_BUFF_SLOT", "W_PASSIVE_BUFF_SLOT", "Q_BUFF_SLOT",
     "Q_HASTE_BUFF_SLOT", "R_PENDING_BUFF_SLOT",
     "Q_BUFF_DURATION", "Q_COOLDOWN",
-    "q_haste_duration_at_rank", "q_silence_duration_at_rank",
-    "q_damage_at_rank", "cast_q",
+    "Q_HASTE_MULTIPLIER", "q_haste_duration_at_rank", "q_silence_duration_at_rank",
+    "q_damage_at_rank", "cast_q", "consume_q_on_hit",
     "W_DURATIONS", "W_COOLDOWNS", "W_DAMAGE_MULT", "W_PASSIVE_ARMOR_PCT",
     "W_PASSIVE_MR_PCT", "w_duration_at_rank", "cast_w",
     "R_COOLDOWNS", "R_BASE_PER_RANK", "R_MISSING_HP_FRAC", "R_CAST_RANGE",
+    "R_CAST_TIME_S",
     "r_damage_at_rank", "cast_r", "enemy_champion_index",
     "BuffStep", "step_buffs", "ranks_for_level",
 ]
@@ -272,6 +243,9 @@ W_PASSIVE_BUFF_SLOT = 2
 Q_BUFF_SLOT = 3
 Q_HASTE_BUFF_SLOT = 4
 R_PENDING_BUFF_SLOT = 5
+
+# `Buffs/Garen/GarenQHaste.cs:34`: `MoveSpeed.PercentBonus += 0.35f`.
+Q_HASTE_MULTIPLIER = 1.35
 
 #: ``GetUnitsInRange(Owner.Position, 330f, true)``
 E_RADIUS = 330.0
@@ -408,8 +382,29 @@ def cast_q(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
         jnp.where(ready, haste_dur, buff_duration[:, haste_slot]))
     spell_cooldown = spell_cooldown.at[:, Slot.Q].set(
         jnp.where(ready, 0.0, spell_cooldown[:, Slot.Q]))
+    # `GarenQ.OnActivate` calls `SkipNextAutoAttack()` after cancelling the
+    # current swing. The fixed Q buff lane carries that one-bit state until
+    # `step_autoattack` consumes it at the next swing gate.
+    buff_power = buff_power.at[:, slot].set(
+        jnp.where(ready, jnp.ones_like(buff_power[:, slot]), buff_power[:, slot]))
 
     return buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown, ready
+
+
+def consume_q_on_hit(buff_id, spell_cooldown, q_landed, slot=Q_BUFF_SLOT):
+    """End Q and begin its fixed cooldown when ``GarenQAttack`` lands.
+
+    `GarenQAttack.OnSpellPostCast` calls `OnSpellEnd`, which deactivates the
+    still-live `GarenQ` buff. Its `OnDeactivate` restores the ordinary attack
+    spell and sets cooldown 8 immediately; this is earlier than the natural
+    4.5-second expiry in the usual successful-hit case.
+    """
+    buff_id = buff_id.at[:, slot].set(
+        jnp.where(q_landed, jnp.int8(BuffId.NONE), buff_id[:, slot]))
+    spell_cooldown = spell_cooldown.at[:, Slot.Q].set(
+        jnp.where(q_landed, jnp.asarray(Q_COOLDOWN, spell_cooldown.dtype),
+                  spell_cooldown[:, Slot.Q]))
+    return buff_id, spell_cooldown
 
 
 # --------------------------------------------------------------------- W ---
@@ -479,6 +474,10 @@ R_MISSING_HP_FRAC = (0.2857, 0.3333, 0.4)
 #: audit's stated scope -- but real, and the same JSON that gives the cooldown
 #: table above, so it is applied here rather than left as a silent gap.
 R_CAST_RANGE = 400.0
+# `SpellData.GetCastTime() = (1 + DelayCastOffsetPercent) * 0.5`; GarenR's
+# data has `DelayCastOffsetPercent = -0.13` and lacks `InstantCast`, so its
+# script's post-cast damage lands after this real engine windup.
+R_CAST_TIME_S = 0.435
 
 
 def r_damage_at_rank(rank: jax.Array, missing_hp: jax.Array) -> jax.Array:
@@ -511,14 +510,14 @@ def enemy_champion_index(n: int) -> jax.Array:
 
 def cast_r(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
            want_cast, rank, hp, max_hp, target, slot=R_PENDING_BUFF_SLOT):
-    """Snapshot Demacian Justice's damage at cast and mark the target for it.
+    """Start R's windup and mark its target for a delayed hit.
 
-    Everything the server's synchronous ``OnSpellPostCast`` (R.cs:23-39) reads
-    -- rank and the target's current/max HP -- is available where champion
-    orders are decoded, so (mirroring E's "snapshot at cast" discipline) the
-    raw pre-mitigation damage is computed here rather than deferred. Only the
-    mitigation step (Magic Resist) waits for :func:`step_buffs`, the same way
-    E's damage is computed here-ish and mitigated there.
+    `GarenR.OnSpellPostCast` reads the target's health, not
+    `OnSpellPreCast`. The pending lane therefore stores the caster's rank --
+    not a precomputed damage snapshot -- and :func:`step_buffs` reads current
+    HP when the 0.435-second engine cast timer completes. ``hp``/``max_hp``
+    remain accepted for source-compatible callers but are intentionally not
+    read here.
 
     The pending hit is written onto the **target's** buff row (not the
     caster's) via :data:`enemy_champion_index`, not through a data-dependent
@@ -536,32 +535,24 @@ def cast_r(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
     """
     n = buff_id.shape[0]
     mirror = enemy_champion_index(n)
-    valid_target = (target == mirror) & (mirror >= 0)
-    ready = (want_cast & (spell_cooldown[:, Slot.R] <= 0) & (rank > 0)
-             & (target >= 0) & valid_target)
-
-    r = jnp.clip(rank.astype(jnp.int32), 1, len(R_COOLDOWNS))
-    cd_table = jnp.asarray(R_COOLDOWNS, spell_cooldown.dtype)
-
     mirror_idx = jnp.clip(mirror, 0, n - 1).astype(jnp.int32)
-    missing_hp = jnp.maximum(max_hp - hp, 0.0)          # each unit's own
-    target_missing_hp = missing_hp[mirror_idx]          # its mirror's missing HP
-    raw_by_caster = r_damage_at_rank(rank, target_missing_hp)
+    valid_target = (target == mirror) & (mirror >= 0)
+    already_casting = buff_id[mirror_idx, slot] == BuffId.GAREN_R_PENDING
+    ready = (want_cast & (spell_cooldown[:, Slot.R] <= 0) & (rank > 0)
+             & (target >= 0) & valid_target & ~already_casting)
 
     hits_me = ready[mirror_idx]
-    dmg_to_me = raw_by_caster[mirror_idx]
+    rank_to_me = rank[mirror_idx]
 
     buff_id = buff_id.at[:, slot].set(
         jnp.where(hits_me, jnp.int8(BuffId.GAREN_R_PENDING), buff_id[:, slot]))
     buff_elapsed = buff_elapsed.at[:, slot].set(
         jnp.where(hits_me, 0.0, buff_elapsed[:, slot]))
     buff_duration = buff_duration.at[:, slot].set(
-        jnp.where(hits_me, 0.0, buff_duration[:, slot]))
+        jnp.where(hits_me, R_CAST_TIME_S, buff_duration[:, slot]))
     buff_power = buff_power.at[:, slot].set(
-        jnp.where(hits_me, dmg_to_me, buff_power[:, slot]))
-
-    spell_cooldown = spell_cooldown.at[:, Slot.R].set(
-        jnp.where(ready, cd_table[r - 1], spell_cooldown[:, Slot.R]))
+        jnp.where(hits_me, rank_to_me.astype(buff_power.dtype),
+                  buff_power[:, slot]))
 
     return buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown, ready
 
@@ -569,6 +560,7 @@ def cast_r(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
 class BuffStep(NamedTuple):
     buff_id: jax.Array
     buff_elapsed: jax.Array
+    buff_power: jax.Array
     spell_cooldown: jax.Array
     damage_dealt: jax.Array     # (N,) post-mitigation damage received this tick
     dealt_by: jax.Array         # (N,) who dealt it, -1 if nobody
@@ -596,11 +588,16 @@ class BuffStep(NamedTuple):
     #: Same pair, for ``MagicResist`` (``GarenWPassive.cs:36``).
     mr_percent_base_bonus: jax.Array
     mr_percent_bonus: jax.Array
+    #: Q remains a live spell-swapped auto after its one skipped swing.
+    q_empowered: jax.Array
+    #: The one-bit `SkipNextAutoAttack` marker carried in Q's buff-power lane.
+    q_skip_next: jax.Array
 
 
 def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
                spell_cooldown, spell_level, x, y, kind, team, alive, armor,
-               magic_resist=None, delta_ms: float = 1000.0 / 60.0,
+               magic_resist=None, hp=None, max_hp=None,
+               delta_ms: float = 1000.0 / 60.0,
                e_slot: int = E_BUFF_SLOT, w_slot: int = W_BUFF_SLOT,
                wp_slot: int = W_PASSIVE_BUFF_SLOT, q_slot: int = Q_BUFF_SLOT,
                qh_slot: int = Q_HASTE_BUFF_SLOT,
@@ -628,10 +625,14 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
     e_elapsed = jnp.where(e_active, buff_elapsed[:, e_slot] + dt_s,
                           buff_elapsed[:, e_slot])
 
-    # `TimeSinceLastTick >= 500` -- a tick every 500 ms of buff life
+    # `GarenE.TimeSinceLastTick` is constructed at 500 ms, so its first
+    # `OnUpdate(diff)` fires immediately; only later ticks wait another 500.
+    # `buff_elapsed == 0` is the fixed-shape equivalent of that private
+    # script-field initial condition.
     before = jnp.floor(buff_elapsed[:, e_slot] * 1000.0 / E_TICK_MS)
     after = jnp.floor(e_elapsed * 1000.0 / E_TICK_MS)
-    fires = e_active & (after > before)
+    first_update = (buff_elapsed[:, e_slot] == 0.0) & (e_elapsed > 0.0)
+    fires = e_active & (first_update | (after > before))
 
     d2 = (x[None, :] - x[:, None]) ** 2 + (y[None, :] - y[:, None]) ** 2
     hittable = alive & (kind != Kind.TURRET) & (kind != Kind.NONE)
@@ -709,12 +710,13 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
         jnp.zeros_like(x))
 
     # ---- Q: empowerment window + haste window ------------------------------
-    # Neither deals damage or applies silence here -- see the module
-    # docstring's Q section for why that needs the auto-attack system.
     q_active = (buff_id[:, q_slot] == BuffId.GAREN_Q) & alive
     q_elapsed = jnp.where(q_active, buff_elapsed[:, q_slot] + dt_s,
                           buff_elapsed[:, q_slot])
     q_expired = q_active & (q_elapsed >= buff_duration[:, q_slot])
+    q_live = q_active & ~q_expired
+    q_skip_next = q_live & (buff_power[:, q_slot] > 0)
+    q_empowered = q_live & ~q_skip_next
 
     qh_active = (buff_id[:, qh_slot] == BuffId.GAREN_Q_HASTE) & alive
     qh_elapsed = jnp.where(qh_active, buff_elapsed[:, qh_slot] + dt_s,
@@ -723,21 +725,33 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
 
     # ---- R: one-shot pending hit --------------------------------------------
     mr = armor if magic_resist is None else magic_resist
-    r_active = (buff_id[:, r_slot] == BuffId.GAREN_R_PENDING) & alive
-    # Fires on the tick that sees the INCOMING (pre-advance) elapsed still at
-    # 0 -- i.e. the first step_buffs call after cast_r wrote it -- and then
-    # expires unconditionally this same tick (duration was set to 0 at cast),
-    # matching R.cs having no windup or duration of its own: cast and hit are
-    # the same instant.
-    r_fires = r_active & (buff_elapsed[:, r_slot] == 0.0)
-    raw_r = buff_power[:, r_slot]
-    damage_r = jnp.where(r_fires, post_mitigation_damage(raw_r, mr, jnp),
-                         jnp.zeros_like(raw_r))
+    r_pending = buff_id[:, r_slot] == BuffId.GAREN_R_PENDING
+    # `GarenR` has `CantCancelWhileWindingUp=1`: a target dying during the
+    # cast does not cancel its owner's spell or prevent its cooldown from
+    # beginning. Owner death *does* take the generic CastCancelCheck path.
+    # The mailbox lives on the target row, so look the owner up through the
+    # fixed champion mirror rather than incorrectly using target `alive`.
     mirror = enemy_champion_index(n)
-    dealt_by_r = jnp.where(r_fires, mirror, -1).astype(jnp.int8)
+    r_caster = jnp.clip(mirror, 0, n - 1).astype(jnp.int32)
+    r_cancelled = r_pending & ~alive[r_caster]
+    r_active = r_pending & ~r_cancelled
     r_elapsed = jnp.where(r_active, buff_elapsed[:, r_slot] + dt_s,
                           buff_elapsed[:, r_slot])
-    r_expired = r_active
+    r_fires = r_active & (r_elapsed >= buff_duration[:, r_slot])
+    if hp is None or max_hp is None:
+        # Compatibility only for direct, non-R callers. A real pending R
+        # requires the target-health snapshot supplied by `step.tick`.
+        missing_hp = jnp.zeros_like(x)
+    else:
+        missing_hp = jnp.maximum(max_hp - hp, 0.0)
+    raw_r = r_damage_at_rank(buff_power[:, r_slot].astype(jnp.int32), missing_hp)
+    damage_r = jnp.where(r_fires & alive, post_mitigation_damage(raw_r, mr, jnp),
+                         jnp.zeros_like(raw_r))
+    dealt_by_r = jnp.where(r_fires, mirror, -1).astype(jnp.int8)
+    # The mailbox survives through the real cast windup. Clearing it on the
+    # first `UpdateBuffs` call would silently restore the old synchronous
+    # behavior by deleting the queued hit before `Spell.Update` can finish it.
+    r_expired = r_fires | r_cancelled
 
     # ---- combine E's and R's directly-dealt damage for tick()'s kill
     # attribution cumsum. A victim can in principle take both in the same
@@ -759,6 +773,12 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
         jnp.where(e_expired, e_cd_table[e_rank], decayed_cd[:, Slot.E]))
     new_cd = new_cd.at[:, Slot.Q].set(
         jnp.where(q_expired, Q_COOLDOWN, decayed_cd[:, Slot.Q]))
+    r_cast_finished = r_fires[r_caster]
+    r_rank = jnp.clip(buff_power[r_caster, r_slot].astype(jnp.int32), 1,
+                      len(R_COOLDOWNS))
+    r_cd_table = jnp.asarray(R_COOLDOWNS, spell_cooldown.dtype)
+    new_cd = new_cd.at[:, Slot.R].set(
+        jnp.where(r_cast_finished, r_cd_table[r_rank - 1], new_cd[:, Slot.R]))
 
     buff_id_out = buff_id
     buff_id_out = buff_id_out.at[:, e_slot].set(
@@ -790,6 +810,7 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
     return BuffStep(
         buff_id=buff_id_out,
         buff_elapsed=buff_elapsed_out,
+        buff_power=buff_power,
         spell_cooldown=new_cd,
         damage_dealt=damage_dealt.astype(x.dtype),
         dealt_by=dealt_by,
@@ -802,4 +823,6 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
         armor_percent_bonus=armor_percent_bonus,
         mr_percent_base_bonus=mr_percent_base_bonus,
         mr_percent_bonus=mr_percent_bonus,
+        q_empowered=q_empowered,
+        q_skip_next=q_skip_next,
     )

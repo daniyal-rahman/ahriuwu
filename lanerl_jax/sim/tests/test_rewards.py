@@ -135,18 +135,31 @@ def test_the_lowest_index_attacker_to_cross_zero_takes_the_kill():
     y[0] = y[1] = y[mi] = 6000.0
     team[0] = team[1] = B
     hp[mi] = 1.0                       # one hit from either champion kills it
+    # This fixture injects a fresh pre-collision snapshot.  The server's
+    # CollisionHandler uses a separately stored quadtree position from the
+    # preceding rebuild; for a constructed snapshot that cache must describe
+    # the same injected world (and the newly activated minion must have a
+    # node), rather than the unrelated lane-start layout from `init_lane`.
+    collision_present = alive & (kind != Kind.NONE)
     s = s.replace(kind=jnp.asarray(kind), team=jnp.asarray(team),
                   alive=jnp.asarray(alive), x=jnp.asarray(x), y=jnp.asarray(y),
+                  collision_x=jnp.asarray(x), collision_y=jnp.asarray(y),
+                  collision_present=jnp.asarray(collision_present),
                   hp=jnp.asarray(hp), model=jnp.asarray(model),
                   target=jnp.asarray(np.full(n, -1, np.int8)))
     orders = Orders(kind=jnp.asarray([OrderKind.ATTACK, OrderKind.ATTACK], jnp.int8),
                     x=jnp.zeros(2), y=jnp.zeros(2),
                     target=jnp.asarray([mi, mi], jnp.int8))
     s = apply_orders(s, orders)
-    for _ in range(40):                # long enough for the wind-up to resolve
-        s = step_decision(s, params)
-        if not bool(s.alive[mi]):
-            break
+    # Enter the tick just before two already-started ordinary swings finish.
+    # The test is about `tick`'s ordered cumulative attribution, not the
+    # separate wall-clock time to begin an autoattack; priming this legal
+    # in-windup state keeps the fixture fast despite collision's full update.
+    s = s.replace(
+        is_attacking=s.is_attacking.at[:2].set(True),
+        aa_windup=s.aa_windup.at[:2].set(0.001),
+    )
+    s = step_decision(s, params, step_ticks=1)
     assert not bool(s.alive[mi]), "the minion should have died"
     assert int(s.cs[0]) + int(s.cs[1]) == 1, "exactly one champion gets the CS"
     assert int(s.cs[0]) == 1, "ties go to the lower slot index, as in object order"

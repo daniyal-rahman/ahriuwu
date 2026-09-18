@@ -23,9 +23,11 @@ constant           measured   note
 ``N_TURRETS`` 24      exactly 24  every map turret exists as an object even under
                                   ``LANERL_TOPONLY``; only two ever act, and they
                                   cost nothing in a masked array
-``MAX_WAYPOINTS`` 24  worst 19  from the ported A* at ``SCREEN_RADIUS`` (1800u)
-                                click distance -- NOT from the state dump, whose
-                                "max 5" was bot-driven short hops
+``MAX_WAYPOINTS`` 64  server SmoothPath worst 19 in the earlier 1800u corpus. The local
+                                reverse-BFS router deliberately only removes
+                                collinear cells: 110,890 random valid bounded
+                                Map1 routes measured p99=24 and max=45. 64 keeps
+                                headroom while overflow remains diagnostic.
 ``MAX_BUFFS`` 8       max 5
 ``N_MISSILES`` 24     max 16  from a 600 s **idle** top lane (``init_lane`` +
                                 ``step_decision``, no orders, no wave-spawn
@@ -86,7 +88,7 @@ N_MINIONS = 40
 N_TURRETS = 24
 N_UNITS = N_CHAMPIONS + N_MINIONS + N_TURRETS      # 66
 
-MAX_WAYPOINTS = 24
+MAX_WAYPOINTS = 64
 MAX_BUFFS = 8
 N_MISSILES = 24
 
@@ -215,11 +217,31 @@ class LaneState:
     # ---- position and movement ------------------------------------------
     x: jax.Array               # (N,)
     y: jax.Array               # (N,)
+    #: Positions stored in CollisionHandler's dynamic quadtree. The server
+    #: rebuilds these immediately after collision resolution, before units
+    #: move, so they intentionally lag ``x``/``y`` by one movement phase.
+    collision_x: jax.Array     # (N,)
+    collision_y: jax.Array     # (N,)
+    #: Whether this slot currently has a node in that quadtree. Newly spawned
+    #: objects are inserted immediately by ``GameObject.OnAdded``.
+    collision_present: jax.Array  # (N,) bool
     waypoints: jax.Array       # (N, MAX_WAYPOINTS, 2)
     #: ``CurrentWaypointKey``. 1 after ``SetWaypoints``; never 0.
     waypoint_key: jax.Array    # (N,) int8
     n_waypoints: jax.Array     # (N,) int8
+    #: ``LaneMinionAI.currentWaypointIndex`` into its immutable
+    #: ``PathingWaypoints`` list. This is deliberately distinct from
+    #: ``waypoint_key``: the latter indexes a transient movement route and is
+    #: overwritten while a minion chases a target; the AI resumes its lane
+    #: route at this persistent index after combat.
+    lane_waypoint_key: jax.Array  # (N,) int8
     move_order: jax.Array      # (N,) int8, see MoveOrder
+    #: Diagnostic for the most recently accepted champion Move route. Zero is
+    #: ``LocalRouteStatus.READY``; nonzero values make table coverage,
+    #: no-route and fixed-shape overflows visible to rollouts instead of
+    #: silently presenting a raw two-point fallback as exact pathing. Minions
+    #: do not consume the local player-click table and retain zero here.
+    route_status: jax.Array     # (N,) int8
 
     # ---- combat ----------------------------------------------------------
     hp: jax.Array              # (N,)
@@ -234,6 +256,24 @@ class LaneState:
     aa_cooldown: jax.Array     # (N,)
     #: remaining wind-up, seconds. Zero when not winding up.
     aa_windup: jax.Array       # (N,)
+    #: Remaining silence duration in milliseconds. A silenced unit may move
+    #: and autoattack but cannot issue Q/W/E/R casts.
+    silenced_ms: jax.Array     # (N,)
+    #: Garen R's non-instant engine cast. This is held on the caster (unlike
+    #: the target-side pending-hit mailbox) because `_castingSpell` locks its
+    #: movement, attacks and later casts for the 0.435 s windup.
+    r_cast_ms: jax.Array       # (N,), 0 when no R windup is active
+    #: Recall has the ordinary 0.5 s spell windup before its 8 s channel.
+    #: The windup is deliberately separate: the server only exposes the
+    #: latter as ``Champion.ChannelSpell`` / wire ``rc``.
+    recall_windup_ms: jax.Array  # (N,), 0 when not winding up
+    #: Remaining blue-pill channel time.  A positive value is the exact
+    #: ``ChannelSpell != null`` state used by LanerlControl's observation.
+    recall_channel_ms: jax.Array  # (N,), 0 when not channeling
+    #: ``Buffs/Global/Recall.OnTakeDamage`` sets ``willRemove``; its own
+    #: ``OnUpdate`` cancels on the following tick, before Spell.Update.  Keep
+    #: that one-tick latch rather than retroactively cancelling the hit tick.
+    recall_damage_pending: jax.Array  # (N,) bool
 
     # ---- progression -----------------------------------------------------
     #: ``Champion.RespawnTimer``, ms. -1 when alive. Champions only.
@@ -311,6 +351,12 @@ class LaneState:
     spell_level: jax.Array     # (N, 4) int8
     #: remaining cooldown, SECONDS
     spell_cooldown: jax.Array  # (N, 4)
+    #: Per observing champion (blue slot 0, red slot 1) and Q/W/E/R: elapsed
+    #: milliseconds since that observer *witnessed* an opposing cast. ``-1``
+    #: means never witnessed, deliberately distinct from a long elapsed timer
+    #: in state even though both normalize to 1.0 for the policy.  This is
+    #: observation memory, not privileged enemy cooldown state.
+    observed_enemy_cast_ms: jax.Array  # (N_CHAMPIONS, 4)
 
     # ---- minion AI -------------------------------------------------------
     #: ``minionActionTimer``; the AI re-evaluates at 250 ms
@@ -353,6 +399,10 @@ class LaneState:
     #: N_CHAMPIONS` ranks itself (map load, then the two players -- see
     #: `spawn_seq`'s own docstring), so this starts there, not at 0.
     next_spawn_seq: jax.Array
+
+    #: Both Map1 fountains start their independent 1 s heal timers at zero and
+    #: receive the same ``diff``, so one scalar represents both exactly.
+    fountain_heal_ms: jax.Array
 
     # ---- rng -------------------------------------------------------------
     key: jax.Array
@@ -398,15 +448,22 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         # ever being stepped.
         visible_to_enemy=jnp.zeros((n_units,), dtype=bool),
         x=z(n_units), y=z(n_units),
+        collision_x=z(n_units), collision_y=z(n_units),
+        collision_present=jnp.zeros((n_units,), dtype=bool),
         waypoints=z(n_units, MAX_WAYPOINTS, 2),
         waypoint_key=jnp.ones((n_units,), dtype=jnp.int8),
+        lane_waypoint_key=zi(n_units),
         n_waypoints=zi(n_units),
         move_order=jnp.full((n_units,), MoveOrder.NONE, dtype=jnp.int8),
+        route_status=zi(n_units),
         hp=z(n_units), max_hp=z(n_units),
         target=jnp.full((n_units,), -1, dtype=jnp.int8),
         is_attacking=jnp.zeros((n_units,), dtype=bool),
         has_auto_attacked=jnp.zeros((n_units,), dtype=bool),
-        aa_cooldown=z(n_units), aa_windup=z(n_units),
+        aa_cooldown=z(n_units), aa_windup=z(n_units), silenced_ms=z(n_units),
+        r_cast_ms=z(n_units),
+        recall_windup_ms=z(n_units), recall_channel_ms=z(n_units),
+        recall_damage_pending=jnp.zeros((n_units,), dtype=bool),
         respawn_ms=jnp.full((n_units,), -1.0, dtype=dtype),
         spawn_x=z(n_units), spawn_y=z(n_units),
         level=jnp.ones((n_units,), dtype=jnp.int8),
@@ -425,6 +482,7 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         buff_power=z(n_units, MAX_BUFFS),
         spell_level=zi(n_units, 4),
         spell_cooldown=z(n_units, 4),
+        observed_enemy_cast_ms=jnp.full((N_CHAMPIONS, 4), -1.0, dtype=dtype),
         # 250 so the first tick re-evaluates, as `minionActionTimer = 250f` does
         ai_timer=jnp.full((n_units,), 250.0, dtype=dtype),
         target_priority=jnp.full((n_units,), 14, dtype=jnp.int8),
@@ -441,5 +499,6 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         minion_number=jnp.asarray(0, dtype=jnp.int32),
         cannon_count=jnp.asarray(0, dtype=jnp.int32),
         next_spawn_seq=jnp.asarray(0, dtype=jnp.int32),
+        fountain_heal_ms=jnp.asarray(0.0, dtype=dtype),
         key=jax.random.key(seed),
     )
