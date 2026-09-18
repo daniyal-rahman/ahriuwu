@@ -461,6 +461,16 @@ nothing measurable, though it was kept since it removes a known deviation).
 
 ### 1.12 MEASURED: the routed J1 throughput gate, on the RTX 5080
 
+> **This section is history, not the current answer.** The canonical gate-4
+> row and the exact command that produces it live in
+> `docs/JAX_FIDELITY_LEDGER.md`. The numbers below were the state on
+> 2026-09-16 and are now stale: on 2026-09-18 the same workload measured
+> 55,054 / 55,565 / 55,049 dec/s. They went stale precisely because two
+> documents both claimed to hold the gate result and the figure came from a
+> script nobody committed. Record new measurements in the ledger; keep this
+> section for the reasoning it contains, not for its numbers.
+
+
 Run 2026-09-16 on `desktop` (RTX 5080, 16 GB, sm_120, driver 580.173.02),
 `jax[cuda12]==0.10.2`. The full loop is observation → policy forward → action
 decode → two simulator ticks, both champions acting, with the real policy
@@ -872,10 +882,11 @@ builder** (§1.1), not by a fast C++ engine as SMAC's was, so J2 alone recovers 
 large factor that SMAX never had available. Second, our baseline runs 24 envs;
 filling the device is where the env-vectorisation factor lives.
 
-**Gate 4 remains open for the realistic routed benchmark** — 53,228
-decisions/s at 4096 minion-bearing environments is 4.95% short, and stable
-nearby batches also fail. **Gate 5 is MET** — 12.9 s; see §1.12. **Gate 6 is MET** — reset costs 2.17% of a step at 512 envs (falling to
-1.74% at 2048), measured on CPU; see §1.13. The contingency below is kept for
+**Current gate status lives in `docs/JAX_FIDELITY_LEDGER.md`'s dashboard, not
+here.** As of 2026-09-18: gates 2, 5 and 6 pass; gates 1, 3 and 4 are open.
+Gate 4 is 1.6–2.5% short against about 1% run-to-run spread — closer than the
+4.95% this paragraph used to claim, which is exactly why the number belongs in
+one place with the command that produces it. The contingency below is kept for
 the record of what the decision would have been.
 
 *If gate 4 had failed after three weeks of honest effort: stop and reconsider —
@@ -929,10 +940,12 @@ identity, stats and time ramp; minion spawn positions; tick phase order; the
 minion population and lane balance. **Champion Move/AttackTo terrain routing is
 still APPROX**: terrain repair remains a deliberately labelled training
 approximation pending route equivalence and waypoint differential work. The
-validated stable realistic minion-bearing routed result is 53,228 decisions/s
-at 4096 environments (47x, 4.95% below gate 4); gate 5 passes at 12.9 s. This
-does not complete J1 because gates 1, 3, and 4 remain open.
-**260 pass; 1 fails by design, the gate-3 oracle test, until gate 3 closes.**
+throughput and compile figures that used to be quoted here (53,228 dec/s,
+4.95% short, 12.9 s compile) were superseded on 2026-09-18 and now live, with
+the command that reproduces them, in `docs/JAX_FIDELITY_LEDGER.md`'s gate
+dashboard -- the one place gate results are allowed to be recorded. This does
+not complete J1 because gates 1, 3, and 4 remain open.
+**The gate-3 oracle test fails by design until gate 3 closes.**
 
 **Gate 2 is MET.** `docs/TIER2_DIVERGENCE.md`: four full 600 s episodes
 (idle, and three genuinely different champion-driven scenarios -- neither
