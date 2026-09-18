@@ -29,6 +29,8 @@ __all__ = [
     "MAX_TERRAIN_EXIT_STEPS",
     "MAX_CAST_CIRCLE_LINE_STEPS",
     "MAX_CAST_CIRCLE_SPAN_CELLS",
+    "TERRAIN_EXIT_LOOP_UNROLL",
+    "CAST_CIRCLE_LINE_UNROLL",
     "map1_terrain",
     "row_prefix",
     "is_walkable",
@@ -79,6 +81,46 @@ MAX_TERRAIN_EXIT_STEPS = 4096
 # and needs no window.
 MAX_CAST_CIRCLE_LINE_STEPS = 256
 MAX_CAST_CIRCLE_SPAN_CELLS = 128
+
+# SmoothPath asks CastCircle about far longer segments than A* does, and the
+# cost is linear in this bound, so the two callers get their own.
+#
+#   bake / A* neighbour hops : n is 3, always (measured, 10,850 samples)
+#   SmoothPath segments      : median 35, p90 62, p99 84, max 97
+#                              (2,050 segments over 300 production routes)
+#
+# 128 covers 100% of the measured SmoothPath population with 30% to spare.  It
+# is NOT the algebraic worst case: two cells at opposite corners of the +/-50
+# window would need ~201.  That case fails CLOSED -- `exhausted` folds into
+# `blocked`, the greedy keeps the waypoint, and the route stays walkable and
+# merely less smoothed -- and it is reported through `smooth_exhausted`, which
+# is 0 across every corpus run so far.  Raise it if that counter is ever
+# nonzero rather than assuming it cannot happen.
+SMOOTH_CAST_LINE_STEPS = 128
+
+# The spiral is data-dependent and almost always unnecessary: over 8,192 real
+# routed goals its per-lane iteration count is p50 = 0, p90 = 0, p99 = 88,
+# max = 203.  Under `vmap` the while predicate is `jnp.any`, so ONE straggler
+# makes the whole batch pay every trip -- and a bare trip costs ~9.5 us of XLA
+# loop control at the production batch, about half the per-iteration cost.
+# Chaining N masked bodies per trip amortises that. Measured on the 5080 at
+# 4,096 envs: 4.203 ms at 1, 1.104 at 8, 0.914 at 16, 0.900 at 32, 0.981 at 64.
+# Each body keeps its own `active` mask, so every lane executes exactly the
+# sequence it would have alone; this is a scheduling change, not a semantic
+# one, and it is verified bit-identical against unroll 1.
+TERRAIN_EXIT_LOOP_UNROLL = 16
+
+# Same disease, same cure, one level down.  The line walk is a fixed scan and
+# its cost is *perfectly* linear in the step bound -- 256 -> 4.58 ms, 128 ->
+# 2.13, 64 -> 1.06 at 8,192 lanes.  That is ~18 us per step for what is a
+# handful of scalar ops on 8,192 elements, i.e. essentially all of it is
+# per-trip launch and loop control, not arithmetic.  `scan(unroll=)` chains
+# bodies inside one trip; it changes nothing about the walk.  Swept on the
+# 5080 at 8,192 lanes / 256 steps: 4.578 ms at 1, 2.198 at 8, 2.048 at 16,
+# 1.989 at 32, 1.935 at 64, 2.829 at 128.  32 is the knee -- 64 is marginally
+# faster at 256 steps but clearly worse at 64, so it is not robust to the
+# bound.
+CAST_CIRCLE_LINE_UNROLL = 32
 
 
 @lru_cache(maxsize=1)
@@ -253,7 +295,20 @@ def cast_circle_blocked(x0: jax.Array, y0: jax.Array,
     px = jnp.where(length == 0, 0., -(y1-y0)/safe*rad)
     py = jnp.where(length == 0, 0., (x1-x0)/safe*rad)
 
-    def consume_line(carry, ax, ay, bx, by):
+    def consume_line(ax, ay, bx, by):
+        """Walk one offset line, returning the cells it enumerates.
+
+        The scan used to fold each step straight into the per-row extrema.
+        That is three scatter-updates into a 128-row array per step, 256 steps,
+        twice per cast -- and at the production batch it was the entire cost of
+        ``CastCircle`` (perfectly linear in the step bound, ~16.5 us/step).
+
+        Emitting the cells and reducing **once** afterwards is the same
+        arithmetic in the same order, but it turns ~768 scatters of one element
+        into one scatter of ~768.  The walk itself is unchanged, including the
+        ``error == 0`` branch that visits both diagonal neighbours and consumes
+        two from the counter.
+        """
         dx, dy = jnp.abs(bx-ax), jnp.abs(by-ay)
         ix0, iy0 = jnp.floor(ax).astype(jnp.int32), jnp.floor(ay).astype(jnp.int32)
         fx, fy = jnp.floor(bx).astype(jnp.int32), jnp.floor(by).astype(jnp.int32)
@@ -264,26 +319,30 @@ def cast_circle_blocked(x0: jax.Array, y0: jax.Array,
         ey = jnp.where(dy == 0, -jnp.inf, jnp.where(yp, -(iy0.astype(dtype)+1-ay)*dx, -(ay-iy0.astype(dtype))*dx))
         n = jnp.int32(1) + jnp.where(dx == 0, 0, jnp.abs(fx-ix0)) + jnp.where(dy == 0, 0, jnp.abs(fy-iy0))
         def body(c, _):
-            ix, iy, err, left, lo, hi, bad = c
+            ix, iy, err, left = c
             active = left > 0
-            lo, hi, bad = add(lo, hi, bad, ix, iy, active)
             tie = err == 0
-            lo, hi, bad = add(lo, hi, bad, ix+xi, iy, active & tie)
-            lo, hi, bad = add(lo, hi, bad, ix, iy+yi, active & tie)
+            cells_x = jnp.stack([ix, ix + xi, ix])
+            cells_y = jnp.stack([iy, iy, iy + yi])
+            live = jnp.stack([active, active & tie, active & tie])
             gt, lt = err > 0, err < 0
             # NavigationGrid.GetAllCellsInLine: positive error advances Y,
             # negative advances X; a zero tie visits both then advances both.
             return (jnp.where(lt|tie, ix+xi, ix), jnp.where(gt|tie, iy+yi, iy),
                     jnp.where(gt, err-dx, jnp.where(lt, err+dy, err+dy-dx)),
-                    left-jnp.where(active, 1+tie.astype(jnp.int32), 0), lo, hi, bad), None
-        ix, iy, err, left, lo, hi, bad = carry
-        (ix, iy, err, left, lo, hi, bad), _ = jax.lax.scan(body, (ix0, iy0, ex+ey, n, lo, hi, bad), None, length=max_line_steps)
-        return (ix, iy, err, left, lo, hi, bad), left > 0
+                    left-jnp.where(active, 1+tie.astype(jnp.int32), 0)
+                    ), (cells_x, cells_y, live)
+        (_ix, _iy, _err, left), (cells_x, cells_y, live) = jax.lax.scan(
+            body, (ix0, iy0, ex+ey, n), None, length=max_line_steps,
+            unroll=CAST_CIRCLE_LINE_UNROLL)
+        return (cells_x.reshape(-1), cells_y.reshape(-1), live.reshape(-1),
+                left > 0)
 
-    initial = (jnp.int32(0), jnp.int32(0), jnp.asarray(0., dtype), jnp.int32(0), lo0, hi0, bad0)
-    a, ex_a = consume_line(initial, x0+px, y0+py, x1+px, y1+py)
-    b, ex_b = consume_line(a, x0-px, y0-py, x1-px, y1-py)
-    _ix, _iy, _err, _left, lo, hi, bad = b
+    ax_, ay_, aa_, ex_a = consume_line(x0+px, y0+py, x1+px, y1+py)
+    bx_, by_, ba_, ex_b = consume_line(x0-px, y0-py, x1-px, y1-py)
+    lo, hi, bad = add(lo0, hi0, bad0,
+                      jnp.concatenate([ax_, bx_]), jnp.concatenate([ay_, by_]),
+                      jnp.concatenate([aa_, ba_]))
     # ``for (int x = xRanges[y,0] + 1; x < xRanges[y,1]; x++)``: the strict
     # interior of each row's enumerated span.  Two prefix reads per row answer
     # it exactly; see :func:`row_prefix` for why that matters here.
@@ -320,27 +379,41 @@ def closest_terrain_exit(x: jax.Array, y: jax.Array, radius: jax.Array,
     exit and makes the JAX-only safety cap observable to corpus diagnostics.
     The caller must treat a true value as a bound failure, not a walkable
     result.  ``lax.while_loop`` executes zero iterations for a walkable seed,
-    unlike an unrolled masked scan that would pay the full cap every tick.
+    unlike a fixed masked scan that would pay the full cap every tick.  The
+    body chains ``TERRAIN_EXIT_LOOP_UNROLL`` masked steps; see that constant
+    for why, and for the measurement.
     """
     dtype = jnp.result_type(x, y, radius, jnp.float32)
     radius = jnp.asarray(radius, dtype)
     max_steps_i = jnp.asarray(max_steps, jnp.int32)
 
-    def cond(carry):
+    def still_going(carry):
         px, py, r = carry
         return (~is_walkable(px, py, radius, terrain)) & (r <= max_steps_i)
 
-    def body(carry):
+    def one_step(carry):
         px, py, r = carry
         # C# starts with angle=pi/4 and increments it after each cumulative
         # displacement.  r*pi/4 gives the same sequence in float32 geometry.
+        active = still_going(carry)
         angle = r.astype(dtype) * jnp.asarray(jnp.pi / 4.0, dtype)
-        px = px + r.astype(dtype) * jnp.cos(angle)
-        py = py + r.astype(dtype) * jnp.sin(angle)
-        return px, py, r + jnp.int32(1)
+        nx = px + r.astype(dtype) * jnp.cos(angle)
+        ny = py + r.astype(dtype) * jnp.sin(angle)
+        # A lane that has already exited must not drift. Under `vmap` the
+        # while_loop batching rule does this masking for us; unrolling inside
+        # the body means doing it explicitly, and it is what makes the unroll
+        # semantics-preserving rather than an approximation.
+        return (jnp.where(active, nx, px), jnp.where(active, ny, py),
+                r + active.astype(jnp.int32))
+
+    def body(carry):
+        for _ in range(TERRAIN_EXIT_LOOP_UNROLL):
+            carry = one_step(carry)
+        return carry
 
     px, py, next_r = jax.lax.while_loop(
-        cond, body, (jnp.asarray(x, dtype), jnp.asarray(y, dtype), jnp.int32(1)))
+        still_going, body,
+        (jnp.asarray(x, dtype), jnp.asarray(y, dtype), jnp.int32(1)))
     return px, py, ~is_walkable(px, py, radius, terrain)
 
 

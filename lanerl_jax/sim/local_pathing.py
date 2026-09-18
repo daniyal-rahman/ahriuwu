@@ -38,8 +38,8 @@ import jax.numpy as jnp
 
 from ..data.route_artifact import DIRECTION_OFFSETS, NO_ROUTE, STAY
 from .state import MAX_WAYPOINTS
-from .terrain_jax import (TerrainGrid, cast_circle_blocked,
-                          closest_terrain_exit)
+from .terrain_jax import (SMOOTH_CAST_LINE_STEPS, TerrainGrid,
+                          cast_circle_blocked, closest_terrain_exit)
 
 __all__ = [
     "MAX_RAW_ROUTE_HOPS", "LocalRouteStatus", "LocalRouteTable",
@@ -58,6 +58,13 @@ MAX_RAW_ROUTE_HOPS = 128
 # for every raw grid edge.  This is only a scheduling/layout change: every hop
 # still executes in order and the inactive masks retain the original result.
 ROUTE_LOOP_UNROLL = 8
+# Deliberately NOT unrolled, unlike every other loop here.  Measured on the
+# 5080 at 8,192 lanes: 82.97 ms at 1, 88.75 at 2, 87.91 at 4, 103.81 at 16.
+# The route and line loops unroll well because their bodies are a few scalar
+# ops and the per-trip launch dominates.  A SmoothPath body is a whole
+# `CastCircle`, so a masked-off chained body is real wasted work, not amortised
+# overhead.  Same technique, opposite sign; the difference is the body's cost.
+SMOOTH_LOOP_UNROLL = 1
 
 
 class LocalRouteStatus:
@@ -263,7 +270,9 @@ def smooth_cell_path(cells, n_cells, pathfinding_radius,
         active = i < n_cells
         ax, ay = centre(cells[jnp.clip(j, 0, hi)])
         bx, by = centre(cells[jnp.clip(i, 0, hi)])
-        blocked, ex = cast_circle_blocked(ax, ay, bx, by, radius, terrain)
+        blocked, ex = cast_circle_blocked(
+            ax, ay, bx, by, radius, terrain,
+            max_line_steps=SMOOTH_CAST_LINE_STEPS)
         commit = active & blocked
         previous = cells[jnp.clip(i - 1, 0, hi)]
         slot = jnp.clip(j + 1, 0, hi)
@@ -271,8 +280,13 @@ def smooth_cell_path(cells, n_cells, pathfinding_radius,
         return (cells, j + commit.astype(j.dtype), i + active.astype(i.dtype),
                 exhausted | (active & ex))
 
+    def unrolled(carry):
+        for _ in range(SMOOTH_LOOP_UNROLL):
+            carry = body(carry)
+        return carry
+
     cells, j, _i, exhausted = jax.lax.while_loop(
-        cond, body, (cells, jnp.int32(0), jnp.int32(2), jnp.asarray(False)))
+        cond, unrolled, (cells, jnp.int32(0), jnp.int32(2), jnp.asarray(False)))
 
     # "Add last", then everything past it is dropped -- here by reporting a
     # shorter count, since the array itself is fixed shape.

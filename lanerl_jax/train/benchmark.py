@@ -348,6 +348,15 @@ def _main() -> None:
     ap.add_argument("--no-route-table", action="store_true",
                     help="the PATH-001 two-point control. Faster, and NOT gate "
                          "evidence -- the gate is the routed number.")
+    ap.add_argument("--no-smooth", action="store_true",
+                    help="labelled control: skip the server's SmoothPath pass. "
+                         "NOT a gate result -- it emits 6-9 waypoints where the "
+                         "server emits 3 (see PATH-001).")
+    ap.add_argument("--smooth-line-steps", type=int, default=None,
+                    help="sweep SMOOTH_CAST_LINE_STEPS. Lowering it below the "
+                         "measured population fails CLOSED (less smoothing, "
+                         "reported via smooth_exhausted), but it is an "
+                         "approximation and not the canonical setting.")
     ap.add_argument("--route-unroll", type=int, default=None,
                     help="override sim.local_pathing.ROUTE_LOOP_UNROLL, the "
                          "number of identical masked hop bodies chained per "
@@ -362,6 +371,16 @@ def _main() -> None:
                     help="production stack's own logged decisions/s")
     a = ap.parse_args()
 
+    if a.no_smooth or a.smooth_line_steps is not None:
+        from lanerl_jax.sim import local_pathing, terrain_jax
+        if a.smooth_line_steps is not None:
+            terrain_jax.SMOOTH_CAST_LINE_STEPS = a.smooth_line_steps
+            local_pathing.SMOOTH_CAST_LINE_STEPS = a.smooth_line_steps
+        if a.no_smooth:
+            _orig = local_pathing.build_local_waypoints
+            local_pathing.build_local_waypoints = (
+                lambda *args, **kw: _orig(*args, **{**kw, "smooth": False}))
+            import lanerl_jax.sim.orders  # imports the symbol lazily; nothing to patch
     if a.route_unroll is not None:
         from ..sim import local_pathing
         local_pathing.ROUTE_LOOP_UNROLL = a.route_unroll
