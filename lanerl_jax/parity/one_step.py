@@ -23,10 +23,10 @@ module is built to test, with the champion side mostly reduced to "does HP
 regen exist" (it does on the server, and not at all in the sim -- see
 ``docs/TICK_PARITY_AUDIT.md`` Gap 1).
 
-Two matching passes, not one
------------------------------
+Three passes, not one
+---------------------
 Entity correspondence has to be *recovered* (the dump strips NetId, see
-``parity.diff``), and this module needs it twice, for two different
+``parity.diff``), and this module needs it three times, for three different
 questions, and conflating them would blur a clean result:
 
 1. **Death/spawn**: did the same units that existed at tick N still exist at
@@ -38,8 +38,13 @@ questions, and conflating them would blur a clean result:
    both sides agree survived, how far off is the sim's one-step prediction?
    Matched by *post-tick* position, sim's predicted output against the
    server's real N+1 entities.
+3. **Post-step controller state** (target identity, auto-attack fire tick):
+   for units both sides kept alive, does the sim hold the same target NetId
+   and swing on the same tick? Keyed on diagnostic NetId, never on proximity
+   -- a target is an identity, and proximity cannot distinguish "kept the
+   incumbent" from "acquired whatever is standing there now".
 
-Reusing one pass for both would silently score a death disagreement as a
+Reusing one pass for these would silently score a death disagreement as a
 "missing" position sample or vice versa.
 """
 from __future__ import annotations
@@ -64,7 +69,7 @@ from .trace import Entity, PosQ, Snapshot, StatQ
 
 __all__ = [
     "SEED", "GAME_SECONDS", "record_idle_trace",
-    "MatchedPair", "DeathEvent", "SpawnEvent", "FieldStats",
+    "MatchedPair", "DeathEvent", "SpawnEvent", "ControllerPair", "FieldStats",
     "OneStepResult", "merge_one_step_results", "run_one_step_differential",
 ]
 
@@ -90,6 +95,10 @@ POS_Q_UNIT = 1.0 / PosQ
 #: loosening the criterion by anything that would matter to a real miss.
 POS_GATE_TOL = POS_Q_UNIT
 POS_GATE_SLACK = 1e-2
+#: how many concrete mismatching cases each controller comparison keeps.  A
+#: rate says a field disagrees; only a case says what it disagreed about, and
+#: these are cheap enough to retain unconditionally.
+EXAMPLE_LIMIT = 12
 
 #: `tick()` has fixed shapes throughout (LaneState's whole point, per D2 in
 #: the rewrite plan), so it JIT-compiles once and every subsequent call in
@@ -186,11 +195,54 @@ class SpawnEvent:
 
 
 @dataclass(slots=True)
+class ControllerPair:
+    """Post-step controller state for one NetId-identified unit.
+
+    The injector restores target identity and the auto-attack clock from the
+    diagnostic stream (RESET-001/RESET-002), but restoring a field and
+    *scoring* it are different things: until this pair existed, a one-step run
+    could retarget every unit wrongly and still report a clean sheet, because
+    nothing compared the post-step values at all.
+
+    Both sides are read against the SAME pre-tick baseline -- the injected
+    ``LaneState``, whose AA clock and target came bit-for-bit off the server's
+    tick-N internal line -- so "did this unit start a swing this tick" is the
+    same question on both sides rather than two differently-derived events.
+    """
+
+    kind: str
+    team: int
+    slot: int
+    net_id: int
+    #: ``None`` when the sim targets a slot that has no tick-N NetId (a unit
+    #: the sim spawned this tick).  Scored as unmappable, never as a miss.
+    sim_target_net_id: Optional[int]
+    server_target_net_id: int
+    sim_target_label: str
+    server_target_label: str
+    #: a swing *started* this tick: the auto-attack cooldown was re-armed,
+    #: which only ``AutoAttackSpell.Cast`` does (`ObjAIBase.UpdateTarget`).
+    sim_fire: bool
+    server_fire: bool
+    #: the swing's damage *landed* this tick: ``HasAutoAttacked`` went false
+    #: -> true, which only ``AutoAttackHit`` does.
+    sim_hit: bool
+    server_hit: bool
+    sim_attacking: bool
+    server_attacking: bool
+    sim_has_auto_attacked: bool
+    server_has_auto_attacked: bool
+    sim_aa_cooldown_q: int
+    server_aa_cooldown_q: int
+
+
+@dataclass(slots=True)
 class TickResult:
     t_ms: int
     matched: List[MatchedPair] = field(default_factory=list)
     deaths: List[DeathEvent] = field(default_factory=list)
     spawns: List[SpawnEvent] = field(default_factory=list)
+    controller: List[ControllerPair] = field(default_factory=list)
     n_units_injected: int = 0
     n_untrustworthy_movement: int = 0
     identity_mode: str = "legacy proximity"
@@ -203,6 +255,83 @@ def _by_group(entities, key_fn) -> Dict[Tuple[str, int], List]:
         if k is None:
             continue
         out.setdefault(k, []).append(e)
+    return out
+
+
+def _q_away_from_zero(v: float, scale: float) -> int:
+    """The server's own quantiser (``LanerlStateDump.Q``).
+
+    ``Math.Round(v * scale, MidpointRounding.AwayFromZero)`` -- NOT numpy's
+    banker's rounding, which would disagree on exact halves and turn a
+    matching clock into a one-quantum "disagreement".
+    """
+    x = float(v) * scale
+    return int(math.floor(abs(x) + 0.5)) * (1 if x >= 0 else -1)
+
+
+def _compare_controller(
+    state_n: LaneState, pred_state: LaneState, snap_n1: Snapshot,
+    real_by_net_id: Dict[int, Entity], pre_net_id_to_slot: Dict[int, int],
+    note_by_slot: Dict[int, UnitInjectionNote], pred_alive,
+) -> List[ControllerPair]:
+    """Post-step target identity and auto-attack fire, per NetId.
+
+    Only units that **both** sides kept alive are scored: a unit one side
+    killed has no meaningful post-step target, and pass 1 already owns that
+    disagreement.  Scoring it here as well would double-count one bug and
+    contaminate a target-selection number with a death-timing one.
+    """
+    internals_n1 = {iv.net_id: iv for iv in snap_n1.ai_internals}
+    slot_to_net_id = {slot: net_id for net_id, slot in pre_net_id_to_slot.items()}
+    post_target = np.asarray(pred_state.target)
+    post_attacking = np.asarray(pred_state.is_attacking)
+    post_has_aa = np.asarray(pred_state.has_auto_attacked)
+    post_cd = np.asarray(pred_state.aa_cooldown)
+    pre_cd = np.asarray(state_n.aa_cooldown)
+    pre_has_aa = np.asarray(state_n.has_auto_attacked)
+
+    out: List[ControllerPair] = []
+    for net_id, slot in pre_net_id_to_slot.items():
+        iv = internals_n1.get(net_id)
+        note = note_by_slot.get(slot)
+        real = real_by_net_id.get(net_id)
+        if iv is None or note is None or real is None or real.dead:
+            continue
+        if not bool(pred_alive[slot]):
+            continue
+
+        sim_slot = int(post_target[slot])
+        if sim_slot < 0:
+            sim_target_net_id: Optional[int] = 0
+            sim_label = "-"
+        else:
+            sim_target_net_id = slot_to_net_id.get(sim_slot)
+            tnote = note_by_slot.get(sim_slot)
+            sim_label = tnote.kind if tnote is not None else "spawned-this-tick"
+
+        pre_cd_q = _q_away_from_zero(pre_cd[slot], StatQ)
+        sim_cd_q = _q_away_from_zero(post_cd[slot], StatQ)
+        out.append(ControllerPair(
+            kind=note.kind, team=note.team, slot=slot, net_id=net_id,
+            sim_target_net_id=sim_target_net_id,
+            server_target_net_id=iv.target_net_id,
+            sim_target_label=sim_label,
+            server_target_label=iv.target_kind,
+            # A re-armed cooldown is the server's own swing-start signature:
+            # `_autoAttackCurrentCooldown` only ever decreases (Update) or is
+            # zeroed (CancelAutoAttack) except in the `AutoAttackSpell.Cast`
+            # branch, which sets it to `1 / GetTotalAttackSpeed()`.
+            sim_fire=sim_cd_q > pre_cd_q,
+            server_fire=iv.q_aa_cooldown > pre_cd_q,
+            sim_hit=bool(post_has_aa[slot]) and not bool(pre_has_aa[slot]),
+            server_hit=iv.has_auto_attacked and not bool(pre_has_aa[slot]),
+            sim_attacking=bool(post_attacking[slot]),
+            server_attacking=bool(iv.is_attacking),
+            sim_has_auto_attacked=bool(post_has_aa[slot]),
+            server_has_auto_attacked=bool(iv.has_auto_attacked),
+            sim_aa_cooldown_q=sim_cd_q,
+            server_aa_cooldown_q=iv.q_aa_cooldown,
+        ))
     return out
 
 
@@ -384,6 +513,16 @@ def compare_one_tick(state_n: LaneState, notes: List[UnitInjectionNote],
                     pred=a, real=b, movement_trustworthy=trust,
                     movement_reason=reason, pre_x=pre_x, pre_y=pre_y,
                 ))
+
+    # ---- pass 3: post-step controller state ---------------------------------
+    # Needs NetIds on both sides: a target is an *identity*, and proximity
+    # recovery cannot tell "kept the same target" from "acquired the unit
+    # standing where the old one was".  Legacy traces are left unscored rather
+    # than scored approximately.
+    if identity_complete:
+        out.controller = _compare_controller(
+            state_n, pred_state, snap_n1, real_by_net_id, pre_net_id_to_slot,
+            note_by_slot, pred_alive)
     return out
 
 
@@ -460,6 +599,27 @@ class OneStepResult:
     action_kinds: Dict[str, int] = field(default_factory=dict)
     n_diagnostic_identity_ticks: int = 0
     n_legacy_proximity_identity_ticks: int = 0
+    #: Post-step controller scoring (see :class:`ControllerPair`).  Separate
+    #: counters because these are scored on a strictly smaller population than
+    #: the field-accuracy pairs: diagnostic-identity ticks only, and only for
+    #: units both sides kept alive.
+    n_controller_ticks: int = 0
+    n_controller_pairs: int = 0
+    #: the sim targeted a slot with no tick-N NetId (a unit it spawned this
+    #: tick), so the comparison is not expressible.  Never scored as a miss.
+    n_target_unmappable: int = 0
+    #: mismatch breakdowns, keyed so the *shape* of a disagreement is visible
+    #: without reading the examples: a percentage cannot distinguish "targets
+    #: the wrong minion" from "holds a target where the server has none".
+    target_mismatch_kinds: Dict[str, int] = field(default_factory=dict)
+    target_mismatch_examples: List[str] = field(default_factory=list)
+    aa_fire_mismatch_kinds: Dict[str, int] = field(default_factory=dict)
+    aa_fire_mismatch_examples: List[str] = field(default_factory=list)
+    #: How often each side's boolean was TRUE at all.  Without this a 100%
+    #: agreement rate is unreadable: "never fires, and neither does the
+    #: server" and "fires 4,000 times on the same ticks" score identically,
+    #: and only one of them is evidence.
+    controller_event_counts: Dict[str, int] = field(default_factory=dict)
 
     def get(self, kind: str, name: str) -> FieldStats:
         key = (kind, name)
@@ -583,6 +743,37 @@ class OneStepResult:
             for kind, count in sorted(self.action_kinds.items()):
                 lines.append(f"  {kind}: {count}")
         lines.append("")
+        lines.append("-- post-step controller state (diagnostic NetId ticks "
+                     "only; units both sides kept alive) --")
+        lines.append(f"  scored on {self.n_controller_pairs} unit-ticks over "
+                     f"{self.n_controller_ticks} ticks")
+        if self.n_controller_pairs:
+            for name in ("target", "aa_fire", "aa_hit", "is_attacking",
+                         "has_auto_attacked", "aa_cooldown"):
+                for kind in sorted({k for k, n in self.fields if n == name}):
+                    lines.append("  " + self.fields[(kind, name)].summary())
+            lines.append("  base rates (how often each boolean was true at "
+                         "all -- a 100% agreement on an event that never "
+                         "happens is not evidence):")
+            for key in sorted(self.controller_event_counts):
+                lines.append(f"    {key}: {self.controller_event_counts[key]}")
+            lines.append(f"  sim target unmappable (targeted a slot spawned "
+                         f"this tick): {self.n_target_unmappable}")
+            if self.target_mismatch_kinds:
+                lines.append("  target mismatches by shape:")
+                for key, n in sorted(self.target_mismatch_kinds.items(),
+                                     key=lambda kv: -kv[1]):
+                    lines.append(f"    {n}: {key}")
+            for line in self.target_mismatch_examples[:EXAMPLE_LIMIT]:
+                lines.append(f"    e.g. {line}")
+            if self.aa_fire_mismatch_kinds:
+                lines.append("  auto-attack fire-tick mismatches by shape:")
+                for key, n in sorted(self.aa_fire_mismatch_kinds.items(),
+                                     key=lambda kv: -kv[1]):
+                    lines.append(f"    {n}: {key}")
+            for line in self.aa_fire_mismatch_examples[:EXAMPLE_LIMIT]:
+                lines.append(f"    e.g. {line}")
+        lines.append("")
         lines.append("-- entity correspondence provenance --")
         lines.append(f"  diagnostic NetId: {self.n_diagnostic_identity_ticks} ticks")
         lines.append(
@@ -616,6 +807,11 @@ def merge_one_step_results(parts: Iterable[OneStepResult]) -> OneStepResult:
         out.n_diagnostic_identity_ticks += part.n_diagnostic_identity_ticks
         out.n_legacy_proximity_identity_ticks += (
             part.n_legacy_proximity_identity_ticks)
+        out.n_controller_ticks += part.n_controller_ticks
+        out.n_controller_pairs += part.n_controller_pairs
+        out.n_target_unmappable += part.n_target_unmappable
+        out.target_mismatch_examples.extend(part.target_mismatch_examples)
+        out.aa_fire_mismatch_examples.extend(part.aa_fire_mismatch_examples)
 
         for key, src in part.fields.items():
             dst = out.fields.get(key)
@@ -637,6 +833,8 @@ def merge_one_step_results(parts: Iterable[OneStepResult]) -> OneStepResult:
 
         for attr in (
             "spawn_mismatches", "n_spawn_ticks", "recovery_counts", "action_kinds",
+            "target_mismatch_kinds", "aa_fire_mismatch_kinds",
+            "controller_event_counts",
         ):
             dst_counts = getattr(out, attr)
             for key, value in getattr(part, attr).items():
@@ -885,6 +1083,72 @@ def run_one_step_differential(
             if sp.n_real_new != sp.n_sim_new:
                 result.spawn_mismatches[sp.kind] = (
                     result.spawn_mismatches.get(sp.kind, 0) + 1)
+
+        # Post-step controller state.  The injector restores target identity
+        # and the auto-attack clock (RESET-001/RESET-002); these are the
+        # comparisons that make restoring them falsifiable.
+        if tr.controller:
+            result.n_controller_ticks += 1
+            result.n_controller_pairs += len(tr.controller)
+        for c in tr.controller:
+            target_agrees = c.sim_target_net_id == c.server_target_net_id
+            if c.sim_target_net_id is None:
+                result.n_target_unmappable += 1
+            else:
+                fs_t = result.get(c.kind, "target")
+                fs_t.n_total += 1
+                fs_t.n_exact += int(target_agrees)
+                if not target_agrees:
+                    shape = (f"{c.kind}: sim->{c.sim_target_label} "
+                             f"server->{c.server_target_label}")
+                    result.target_mismatch_kinds[shape] = (
+                        result.target_mismatch_kinds.get(shape, 0) + 1)
+                    if len(result.target_mismatch_examples) < EXAMPLE_LIMIT:
+                        result.target_mismatch_examples.append(
+                            f"t={snap_n.t_ms} {c.kind}(team={c.team}, "
+                            f"net={c.net_id}): server target "
+                            f"{c.server_target_net_id}({c.server_target_label}) "
+                            f"vs sim {c.sim_target_net_id}({c.sim_target_label})")
+
+            for name, sim_v, srv_v in (
+                ("target_held", c.sim_target_net_id not in (0, None),
+                 c.server_target_net_id != 0),
+                ("aa_fire", c.sim_fire, c.server_fire),
+                ("aa_hit", c.sim_hit, c.server_hit),
+                ("is_attacking", c.sim_attacking, c.server_attacking),
+                ("has_auto_attacked", c.sim_has_auto_attacked,
+                 c.server_has_auto_attacked),
+                ("aa_cooldown", c.sim_aa_cooldown_q, c.server_aa_cooldown_q),
+            ):
+                if name != "target_held":
+                    fs_c = result.get(c.kind, name)
+                    fs_c.n_total += 1
+                    fs_c.n_exact += int(sim_v == srv_v)
+                    if name == "aa_cooldown" and sim_v != srv_v:
+                        fs_c.errors.append((sim_v - srv_v) / StatQ)
+                if isinstance(sim_v, bool):
+                    for side, value in (("sim", sim_v), ("server", srv_v)):
+                        if value:
+                            k = f"{c.kind}.{name}.{side}"
+                            result.controller_event_counts[k] = (
+                                result.controller_event_counts.get(k, 0) + 1)
+
+            if c.sim_fire != c.server_fire:
+                shape = (f"{c.kind}: sim_fire={int(c.sim_fire)} "
+                         f"server_fire={int(c.server_fire)}, "
+                         f"target_agrees={int(bool(target_agrees))}, "
+                         f"sim_attacking={int(c.sim_attacking)} "
+                         f"server_attacking={int(c.server_attacking)}")
+                result.aa_fire_mismatch_kinds[shape] = (
+                    result.aa_fire_mismatch_kinds.get(shape, 0) + 1)
+                if len(result.aa_fire_mismatch_examples) < EXAMPLE_LIMIT:
+                    result.aa_fire_mismatch_examples.append(
+                        f"t={snap_n.t_ms} {c.kind}(team={c.team}, "
+                        f"net={c.net_id}): fire sim={int(c.sim_fire)} "
+                        f"server={int(c.server_fire)}; aa_cooldown q "
+                        f"sim={c.sim_aa_cooldown_q} "
+                        f"server={c.server_aa_cooldown_q}; target sim="
+                        f"{c.sim_target_net_id} server={c.server_target_net_id}")
 
         result.per_tick_worst_pos_error.append((snap_n.t_ms, worst_pos))
 
