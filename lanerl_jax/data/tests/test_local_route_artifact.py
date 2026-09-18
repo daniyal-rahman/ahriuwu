@@ -1,4 +1,26 @@
+"""Unit tests for the offline local-route artifact baker.
+
+`_bake_local_table` is numba-parallel by design and raises rather than falling
+back to a slow guess, so these tests need numba. It is present in `.venv-jax`
+(the login-node env, where artifacts are actually generated) and absent from
+`.venv-gpu`, which is a real venv with `include-system-site-packages = false`
+and therefore cannot see the conda env's copy either.
+
+That split is deliberate rather than an oversight to repair by installing into
+`.venv-gpu`: `.venv-gpu` carries `jax[cuda12]` and is the environment every
+gate-4 number is measured in, and numba pins numpy. The skip below is scoped to
+BUILDING an artifact. LOADING one is pure numpy and works in both envs, which
+is why routed training and the throughput gate are unaffected -- see OPS-001 in
+`docs/JAX_FIDELITY_LEDGER.md`.
+"""
 import numpy as np
+import pytest
+
+numba = pytest.importorskip(
+    "numba",
+    reason="offline artifact generation needs numba; present in .venv-jax, "
+           "absent from .venv-gpu by design (see this module's docstring). "
+           "Loading a pre-built artifact does NOT need it.")
 
 from lanerl_jax.data.local_route_artifact import _bake_local_table
 from lanerl_jax.data.route_artifact import DIRECTION_OFFSETS, NO_ROUTE, STAY

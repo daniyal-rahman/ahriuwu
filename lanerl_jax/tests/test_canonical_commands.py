@@ -36,9 +36,19 @@ SBATCH = sorted((REPO / "slurm").glob("*.sbatch"))
 MOUNT_PREFIX = "/mnt/nfs/"
 
 
-def _login_path(p: str) -> Path:
-    """Translate a compute-node path to its login-node spelling."""
-    return Path(p.replace("/mnt/nfs/", "/srv/nfs/", 1))
+def _resolves(p: str) -> bool:
+    """Does this NFS path name a real directory, from whichever host we are on?
+
+    `danilogin` has BOTH `/srv/nfs` and `/mnt/nfs` (same export); `desktop` has
+    only `/mnt/nfs`. An earlier version of this file translated `/mnt/nfs` ->
+    `/srv/nfs` unconditionally and therefore passed on the login node and
+    failed every path on `desktop` -- which is the exact mount-portability bug
+    this module exists to catch, committed inside the catcher. Accept the path
+    if EITHER spelling of the same export resolves here.
+    """
+    return any(Path(c).is_dir() for c in
+               (p, p.replace("/mnt/nfs/", "/srv/nfs/", 1),
+                p.replace("/srv/nfs/", "/mnt/nfs/", 1)))
 
 
 @pytest.mark.parametrize("script", SBATCH, ids=lambda p: p.name)
@@ -51,7 +61,7 @@ def test_sbatch_repo_still_exists(script: Path):
     assert repo.startswith(MOUNT_PREFIX), (
         f"{script.name}: REPO={repo} must be spelled {MOUNT_PREFIX}... -- the "
         "compute node has no /srv/nfs mount")
-    assert _login_path(repo).is_dir(), (
+    assert _resolves(repo), (
         f"{script.name}: REPO={repo} does not exist. If its worktree was "
         "consolidated away, delete this script rather than leaving a job that "
         "fails after the queue wait.")
@@ -82,11 +92,12 @@ def test_sbatch_directive_paths_still_exist(script: Path):
                 f"{MOUNT_PREFIX} -- the job dies before writing anything.")
             if not raw.startswith(MOUNT_PREFIX):
                 continue                   # node-local; unverifiable from here
-            want = _login_path(raw.split("%")[0])
-            want = want if flag == "chdir" else want.parent
-            assert want.is_dir(), (
-                f"{script.name}: --{flag}={raw} resolves to {want}, which does "
-                "not exist. The job will die before writing any output.")
+            base = raw.split("%")[0]
+            want = base if flag == "chdir" else str(Path(base).parent)
+            assert _resolves(want), (
+                f"{script.name}: --{flag}={raw} points at {want}, which does "
+                "not exist under either mount spelling. The job will die "
+                "before writing any output.")
 
 
 @pytest.mark.parametrize("script", SBATCH, ids=lambda p: p.name)
