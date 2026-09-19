@@ -841,7 +841,39 @@ def main(argv=None) -> None:
                         if gt_precedent is None:
                             gt_precedent = False
 
+                # ---- CFH-002: is this row the UNOBSERVABLE call-for-help map? ----
+                # `LaneMinionAI` populates `unitsAttackingAllies` from
+                # `OnCallForHelp` during a tick, consumes it in
+                # `FoundNewTarget`, and CLEARS it at the end of that same
+                # `OnUpdate` (`LaneMinionAI.cs:100-104`, armed by `:159`).
+                # `LanerlStateDump` reads that live dictionary (`aihelp=`,
+                # `LanerlStateDump.cs:221`) AFTER `OnUpdate` has run, so the
+                # dump sees it post-clear and is empty ~99.5% of the time.
+                # An injected tick therefore starts with no call-for-help
+                # information and CANNOT reproduce a call-for-help re-target
+                # -- so every one is scored here as a target-selection
+                # failure that the simulator had no way to get right.
+                #
+                # The observable signature, which needs no extra dump field:
+                # the unit the SERVER picked was itself attacking an ALLY of
+                # the minion doing the picking, on this tick. That is exactly
+                # what `OnCallForHelp` broadcasts.
+                srv_iv = pre_internal.get(srv_t) if srv_t else None
+                cfh_victim = (srv_iv.target_net_id
+                              if srv_iv is not None else None)
+                cfh_victim_slot = (slot_of.get(cfh_victim)
+                                   if cfh_victim else None)
+                server_pick_attacks_my_ally = bool(
+                    cfh_victim_slot is not None
+                    and _team_of(model0[cfh_victim_slot]) == team)
+                my_help_map_was_empty = bool(iv is None or not iv.help)
+                cfh_unobservable = bool(server_pick_attacks_my_ally
+                                        and my_help_map_was_empty)
+
                 target_rows.append(dict(
+                    cfh_attacks_my_ally=server_pick_attacks_my_ally,
+                    help_map_empty=my_help_map_was_empty,
+                    cfh_unobservable=cfh_unobservable,
                     t_ms=sn.t_ms, kind=c.kind, net=c.net_id,
                     sim_target=c.sim_target_net_id,
                     server_target=c.server_target_net_id,
@@ -980,6 +1012,37 @@ def main(argv=None) -> None:
     print("   marginals -- by transition type:")
     for verdict, n in collections.Counter(
             r["verdict"] for r in minion_rows).most_common():
+        print(f"     {n:6d}  {verdict}")
+
+    print("\n-- CFH-002: is the residual the UNOBSERVABLE call-for-help map? --")
+    print("   The server populates, consumes and CLEARS `unitsAttackingAllies`")
+    print("   inside one tick; the dump reads it after the clear, so an")
+    print("   injected tick begins with no call-for-help information and")
+    print("   cannot reproduce a call-for-help re-target at all. Signature:")
+    print("   the unit the SERVER picked was itself attacking an ALLY of the")
+    print("   minion doing the picking, while that minion's own dumped help")
+    print("   map was empty.")
+    n_cfh = sum(1 for r in minion_rows if r["cfh_unobservable"])
+    n_ally = sum(1 for r in minion_rows if r["cfh_attacks_my_ally"])
+    n_empty = sum(1 for r in minion_rows if r["help_map_empty"])
+    print(f"   {n_ally} / {len(minion_rows)} the server's pick was attacking "
+          f"one of the chooser's allies")
+    print(f"   {n_empty} / {len(minion_rows)} the chooser's dumped help map "
+          f"was empty (so the sim had nothing to go on)")
+    print(f"   {n_cfh} / {len(minion_rows)} "
+          f"({100 * n_cfh / max(1, len(minion_rows)):.1f}%) BOTH -- i.e. "
+          f"unobservable, not a simulator error")
+    print("   by verdict:")
+    for verdict, _n in collections.Counter(
+            r["verdict"] for r in minion_rows).most_common():
+        sub = [r for r in minion_rows if r["verdict"] == verdict]
+        yes = sum(1 for r in sub if r["cfh_unobservable"])
+        print(f"     {verdict}: {yes}/{len(sub)} "
+              f"({100 * yes / max(1, len(sub)):.1f}%)")
+    left = [r for r in minion_rows if not r["cfh_unobservable"]]
+    print(f"   NOT explained by the unobservable map: {len(left)}, by verdict:")
+    for verdict, n in collections.Counter(
+            r["verdict"] for r in left).most_common():
         print(f"     {n:6d}  {verdict}")
 
     print("\n-- ORDER-003: is the residual CONFINED to a possible serial-order "
