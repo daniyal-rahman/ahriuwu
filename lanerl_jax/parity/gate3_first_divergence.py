@@ -153,20 +153,30 @@ class Recorder:
         i = ev["i"]
         if "decision" in ev:
             d = ev["decision"]
-            self.decisions[i] = (
-                ("attack", None) if d.attack is not None else
-                ("move", (round(d.move[0], 3), round(d.move[1], 3)))
-                if d.move is not None else ("hold", None))
+            if d.attack is not None:
+                # Resolve the attacked unit to its GEOMETRY, never its uid: the
+                # sim's uid is a recycled slot index and the server's is a
+                # NetId, so the two are not comparable and comparing them has
+                # already produced one wrong conclusion in this project.
+                who = self.inputs.get(i, {}).get("by_uid", {}).get(d.attack)
+                self.decisions[i] = ("attack", who)
+            elif d.move is not None:
+                self.decisions[i] = ("move", (round(d.move[0], 3),
+                                              round(d.move[1], 3)))
+            else:
+                self.decisions[i] = ("hold", None)
             return
         champ = ev["champ"]
+        ms = [(float(m.x), float(m.y), float(m.hp), float(m.armor),
+               float(m.collision_radius)) for m in ev["minions"]]
         self.inputs[i] = {
             "level": ev["level"],
             "cx": float(champ.x), "cy": float(champ.y),
             "ad": float(champ.attack_damage),
             "rng": float(champ.attack_range),
-            "minions": sorted(
-                ((float(m.x), float(m.y), float(m.hp), float(m.armor),
-                  float(m.collision_radius)) for m in ev["minions"])),
+            "minions": sorted(ms),
+            "by_uid": {int(m.uid): (float(m.x), float(m.y), float(m.hp))
+                       for m in ev["minions"]},
         }
 
 
@@ -244,11 +254,83 @@ def first_decision_divergence(sim: Recorder, srv: Recorder) -> Optional[int]:
     return None
 
 
+def attribute_choice(sim_in: dict, srv_in: dict) -> List[str]:
+    """Which INPUT flips the shared oracle's mind at one decision?
+
+    ``decide`` is pure and shared, so this is a complete causal decomposition
+    of a single divergent choice and it costs nothing to run: re-evaluate the
+    same function on the recorded inputs with one side's field substituted at
+    a time, and report which substitution changes the answer.  No server, no
+    simulator, no re-run -- which is the point, because each real run of this
+    gate costs ~10 minutes and the interesting question only appears at the
+    end of one.
+    """
+    from .last_hit_oracle import ChampView, MinionView, decide
+
+    def champ_of(d, ad=None, pos=None, rng=None):
+        cx, cy = pos if pos is not None else (d["cx"], d["cy"])
+        return ChampView(x=cx, y=cy,
+                         attack_damage=d["ad"] if ad is None else ad,
+                         attack_range=d["rng"] if rng is None else rng)
+
+    def minions_of(d):
+        return [MinionView(uid=k, x=m[0], y=m[1], hp=m[2], armor=m[3],
+                           collision_radius=m[4])
+                for k, m in enumerate(d["minions"])]
+
+    def label(dec):
+        if dec.attack is not None:
+            return "attack"
+        return "move" if dec.move is not None else "hold"
+
+    base_sim = label(decide(champ_of(sim_in), minions_of(sim_in),
+                            lethal_epsilon=0.0))
+    base_srv = label(decide(champ_of(srv_in), minions_of(srv_in),
+                            lethal_epsilon=0.0))
+    out = [f"replayed from recorded inputs: sim -> {base_sim}, "
+           f"server -> {base_srv}"]
+    if base_sim == base_srv:
+        out.append("  !! the replay does NOT reproduce the divergence. The "
+                   "recorded inputs are therefore not the whole story -- "
+                   "something outside them (oracle state, ordering) differs, "
+                   "and that is itself the finding.")
+        return out
+
+    trials = (
+        ("server's AD only",
+         label(decide(champ_of(sim_in, ad=srv_in["ad"]), minions_of(sim_in),
+                      lethal_epsilon=0.0))),
+        ("server's champion POSITION only",
+         label(decide(champ_of(sim_in, pos=(srv_in["cx"], srv_in["cy"])),
+                      minions_of(sim_in), lethal_epsilon=0.0))),
+        ("server's attack RANGE only",
+         label(decide(champ_of(sim_in, rng=srv_in["rng"]), minions_of(sim_in),
+                      lethal_epsilon=0.0))),
+        ("server's MINION LIST only",
+         label(decide(champ_of(sim_in), minions_of(srv_in),
+                      lethal_epsilon=0.0))),
+    )
+    out.append("  starting from the SIM's inputs and substituting one field:")
+    for name, got in trials:
+        flipped = "FLIPS to the server's answer" if got == base_srv else "no change"
+        out.append(f"    {name:38s} -> {got:6s}  {flipped}")
+    if not any(got == base_srv for _, got in trials):
+        out.append("    no single field flips it: the divergence needs two or "
+                   "more inputs together, which is itself informative.")
+    return out
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--decisions", type=int, default=18_000)
     ap.add_argument("--port-base", type=int, default=47100)
     ap.add_argument("--examples", type=int, default=3)
+    ap.add_argument("--save", default=None,
+                    help="write both recorded streams here as JSON. A real run "
+                        "of this gate costs ~10 minutes and boots a server; "
+                        "saving lets every follow-up question be answered "
+                        "offline from the same run rather than from a new one "
+                        "that may not reproduce it.")
     a = ap.parse_args(argv)
 
     from .last_hit_drive import run_oracle_in_sim, run_oracle_on_server
@@ -355,6 +437,31 @@ def main(argv=None) -> None:
             print(f"   ({d_i - hit['i']} decisions after the first input "
                   f"difference -- that gap is the slack between 'the engines "
                   f"disagree' and 'it changes the episode')")
+        a_in, b_in = sim_rec.inputs.get(d_i), srv_rec.inputs.get(d_i)
+        if a_in and b_in:
+            print(f"   sim champ    ({a_in['cx']:.3f},{a_in['cy']:.3f}) "
+                  f"ad={a_in['ad']:.4f} lvl={a_in['level']} "
+                  f"nvis={len(a_in['minions'])}")
+            print(f"   server champ ({b_in['cx']:.3f},{b_in['cy']:.3f}) "
+                  f"ad={b_in['ad']:.4f} lvl={b_in['level']} "
+                  f"nvis={len(b_in['minions'])}")
+            print("\n   -- which INPUT flips the shared oracle's mind? --")
+            for ln in attribute_choice(a_in, b_in):
+                print(f"   {ln}")
+
+    if a.save:
+        import json
+        with open(a.save, "w") as fh:
+            json.dump({"sim": {"inputs": {str(k): v for k, v in sim_rec.inputs.items()},
+                               "decisions": {str(k): v for k, v in sim_rec.decisions.items()},
+                               "pos": {str(k): v for k, v in sim_path.pos.items()},
+                               "approaching": {str(k): v for k, v in sim_path.approaching.items()}},
+                       "server": {"inputs": {str(k): v for k, v in srv_rec.inputs.items()},
+                                  "decisions": {str(k): v for k, v in srv_rec.decisions.items()},
+                                  "pos": {str(k): v for k, v in srv_path.pos.items()},
+                                  "approaching": {str(k): v for k, v in srv_path.approaching.items()}}},
+                      fh)
+        print(f"\nsaved both streams to {a.save}")
 
     print("\n== TOTALS (contaminated after the first divergence; for context "
           "only) ==")
