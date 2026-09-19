@@ -279,6 +279,7 @@ def main(argv=None) -> None:
     order_rows = []
     order_denom = collections.Counter()
     wp_confusion = collections.Counter()
+    wp_rows_keyed = []
     fire_rows = []
     target_rows = []
     hp_rows = []
@@ -393,6 +394,12 @@ def main(argv=None) -> None:
             if wp_x:
                 wp_confusion[(m.kind, m.pred.ai.waypoints,
                               m.real.ai.waypoints)] += 1
+                # keyed copy, so the containment report below can ask whether
+                # this row is the SAME event as a target/fire disagreement
+                # rather than an independent one
+                wp_rows_keyed.append(dict(t_ms=sn.t_ms,
+                                          net=net_of_slot.get(m.slot),
+                                          kind=m.kind))
 
             # ------------- move_order residual (the 4,791) ----------------
             # `ORDER-002` took this row from 34,295 to 4,807 and `HOLD-001`
@@ -1260,6 +1267,28 @@ def main(argv=None) -> None:
                   f"{100 * sel.mean():.1f}%, of which "
                   f"{100 * cov[sel].mean() if sel.sum() else 0:.1f}% are on a "
                   f"tick that also disagreed on aa_fire or aa_hit")
+    print("\n-- RESIDUAL CONTAINMENT: are move_order/waypoints SEPARATE defects? --")
+    print("   `RefreshWaypoints` rebuilds a 2-point chase path from the unit's")
+    print("   TARGET every tick it holds one, and the move order is chosen by")
+    print("   the same re-evaluation that picks the target. So a target")
+    print("   disagreement mechanically implies a waypoint and often a move-")
+    print("   order one. Counting them as independent residuals would triple-")
+    print("   count a single cause -- which is how `AA-002` once presented as")
+    print("   three separate fields. Keyed on (tick, netid).")
+    tgt_keys = {(r["t_ms"], r["net"]) for r in target_rows}
+    fire_keys = {(r["t_ms"], r["net"]) for r in fire_rows}
+    for name, rows in (("move_order", order_rows), ("waypoints", wp_rows_keyed)):
+        if not rows:
+            print(f"   {name}: no rows in this window")
+            continue
+        k = [(r["t_ms"], r["net"]) for r in rows]
+        in_t = sum(1 for x in k if x in tgt_keys)
+        in_f = sum(1 for x in k if x in fire_keys)
+        either = sum(1 for x in k if x in tgt_keys or x in fire_keys)
+        print(f"   {name}: {len(k)} rows; {in_t} share a tick+unit with a "
+              f"TARGET disagreement, {in_f} with a FIRE one, {either} with "
+              f"either ({100 * either / len(k):.1f}%)")
+
     print("\n-- AA-004: is the fire residual the dump's COOLDOWN GATE CLAMP? --")
     print("   `Q(Math.Max(0f, remaining), StatQ)` clamps BEFORE quantising, so")
     print("   a still-positive cooldown within rounding of the gate publishes")
