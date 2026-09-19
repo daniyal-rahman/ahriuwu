@@ -208,7 +208,25 @@ def main(argv=None) -> None:
     ap.add_argument("--to-ms", type=int, default=10**9)
     ap.add_argument("--max-pairs", type=int, default=2000)
     ap.add_argument("--examples", type=int, default=6)
+    ap.add_argument("--decision-log", default=None,
+                    help="a LANERL_DECISION_TRACE=1 recording of the SAME "
+                        "seed/config, for a ground-truth ORDER-003 check: "
+                        "does the server's own branch log show another "
+                        "unit's event EARLIER in the SAME tick than this "
+                        "minion's SetTargetUnit? State diff alone cannot "
+                        "see intra-tick order; the branch log can.")
     a = ap.parse_args(argv)
+
+    dec_by_t = None
+    if a.decision_log:
+        from .decision_trace import parse_decisions
+        print(f"loading decision trace: {a.decision_log}", flush=True)
+        decisions = parse_decisions(a.decision_log)
+        dec_by_t = collections.defaultdict(list)
+        for d in decisions:
+            dec_by_t[d.t_ms].append(d)
+        print(f"  {len(decisions)} branch events over {len(dec_by_t)} ticks",
+              flush=True)
 
     import jax.numpy as jnp
 
@@ -223,7 +241,7 @@ def main(argv=None) -> None:
     from ..sim.state import Kind
     from ..sim.targeting import MinionType
     from .tier1_full import FIRST_WAVE_MS
-    from .trace import PosQ, StatQ, load_trace
+    from .trace import PosQ, StatQ, load_trace_window
 
     _SUBTYPE_NAME = {MinionType.MELEE: "melee", MinionType.CASTER: "caster",
                      MinionType.CANNON: "cannon", MinionType.SUPER: "super"}
@@ -234,7 +252,14 @@ def main(argv=None) -> None:
             return "non-minion"
         return _SUBTYPE_NAME.get(subtype, f"subtype{subtype}")
 
-    trace = load_trace(Path(a.existing_log))
+    # Windowed: the full parse builds an `Entity` for every STATEROW in a
+    # ~575 MB dump, which is where this drill's 26 GB went -- `--max-pairs`
+    # bounded the loop and not the parse, so even a 2,000-pair slice OOMed.
+    # `load_trace_window` keeps index alignment and keeps `t_ms` on every
+    # tick (which is all `replay_wave_states` reads), so the wave replay is
+    # unchanged; only the rows outside the window stop being materialised.
+    trace = load_trace_window(Path(a.existing_log), from_ms=a.from_ms,
+                              to_ms=a.to_ms, max_snapshots=a.max_pairs + 1)
     snaps = [s for s in trace.snapshots if s.t_ms >= FIRST_WAVE_MS]
     wave_states = replay_wave_states(snaps)
     patch = load_patch()
@@ -244,6 +269,11 @@ def main(argv=None) -> None:
     collision_radius = np.asarray(params["collision_radius"])
     missile_speed = np.asarray(params["missile_speed"])
     pathfinding_radius = np.asarray(params["pathfinding_radius"])
+    acquisition_range = np.asarray(params["acquisition_range"])
+
+    def _team_of(model_row: int):
+        _kind, _subtype, team = PROFILE_SPECS[int(model_row)]
+        return int(team)
 
     order_confusion = collections.Counter()
     order_rows = []
@@ -598,6 +628,11 @@ def main(argv=None) -> None:
         real_order_by_slot = {m.slot: (m.real.ai.move_order
                                        if m.real.ai is not None else None)
                               for m in tr.matched}
+        # Post-tick server Entity by PRE-tick slot -- the `ORDER-003`
+        # containment check below needs both the pre-tick (`note_by_slot`,
+        # from the injected snapshot) and post-tick server hp/dead/position
+        # for any unit a target row names, not just the minion itself.
+        real_by_slot = {m.slot: m.real for m in tr.matched}
         for c in tr.controller:
             slot = c.slot
             iv = pre_internal.get(c.net_id)
@@ -687,6 +722,125 @@ def main(argv=None) -> None:
                     verdict = "sim SWITCHED off the incumbent, server held"
                 else:
                     verdict = "both moved, to different units"
+
+                # -------------- ORDER-003: an INDEPENDENT floor size -------
+                # The floor claim is about SERIAL evaluation order: a minion
+                # later in `ObjectManager`'s per-tick foreach can see a kill
+                # or a call-for-help broadcast that a minion earlier in that
+                # same foreach cannot, because `step.py` evaluates every
+                # minion controller at once on TICK-START state. That is only
+                # a *possible* explanation on a tick where something the
+                # scan reads actually changed between the injected snapshot
+                # (`sn`, tick-start) and the next one (`sn1`, tick-end):
+                #   * the unit this row is ABOUT (the server's new/dropped
+                #     target) died, took damage, or crossed the acquisition
+                #     boundary this same tick -- `TargetJustDied()`/vision/
+                #     range are all evaluated on LIVE state mid-tick; or
+                #   * ANY ally of this minion within ITS OWN acquisition
+                #     range took damage this tick -- `TakeDamage` broadcasts
+                #     `OnCallForHelp` to every allied `ObjAIBase` in range of
+                #     BOTH victim and attacker (`ObjAIBase.cs:1127-1152`),
+                #     and `FoundNewTarget(true)` re-checks that channel every
+                #     tick (not just every 250 ms).
+                # If NEITHER happened, nothing relevant changed within the
+                # tick at all, so a fixed-phase and a serial evaluation of
+                # the SAME tick-start facts should have agreed -- and a row
+                # like that is not explained by this floor.
+                cls = _class_of(model0[slot])
+                team = _team_of(model0[slot])
+                relevant_net = (
+                    srv_t if verdict.startswith("server ACQUIRED")
+                    or verdict.startswith("server SWITCHED")
+                    or verdict == "both moved, to different units"
+                    else pre_t if verdict.startswith("server DROPPED")
+                    else None)
+                relevant_slot = slot_of.get(relevant_net) if relevant_net else None
+                pre_note = (note_by_slot.get(relevant_slot)
+                            if relevant_slot is not None else None)
+                pre_e = pre_note.entity if pre_note is not None else None
+                post_e = (real_by_slot.get(relevant_slot)
+                          if relevant_slot is not None else None)
+                relevant_died = bool(
+                    pre_e is not None and not pre_e.dead
+                    and (post_e is None or post_e.dead))
+                relevant_hp_dropped = bool(
+                    pre_e is not None and post_e is not None
+                    and pre_e.q_hp is not None and post_e.q_hp is not None
+                    and post_e.q_hp < pre_e.q_hp)
+                minion_post = real_by_slot.get(slot)
+                d_pre = (math.hypot(x0[relevant_slot] - x0[slot],
+                                    y0[relevant_slot] - y0[slot])
+                         if relevant_slot is not None else None)
+                d_post = (math.hypot(post_e.x - minion_post.x,
+                                     post_e.y - minion_post.y)
+                          if post_e is not None and minion_post is not None
+                          else None)
+                acq = float(acquisition_range[model0[slot]])
+                crossed = bool(d_pre is not None and d_post is not None
+                               and (d_pre > acq) != (d_post > acq))
+                ally_cfh = False
+                for oslot in live_slots:
+                    if oslot == slot or _team_of(model0[oslot]) != team:
+                        continue
+                    dd = math.hypot(x0[oslot] - x0[slot], y0[oslot] - y0[slot])
+                    if dd > acq:
+                        continue
+                    on = note_by_slot.get(oslot)
+                    if on is None or on.entity is None:
+                        continue
+                    oe = on.entity
+                    op = real_by_slot.get(oslot)
+                    if op is None:
+                        if not oe.dead:
+                            ally_cfh = True
+                            break
+                        continue
+                    if (oe.q_hp is not None and op.q_hp is not None
+                            and op.q_hp < oe.q_hp):
+                        ally_cfh = True
+                        break
+                    if (not oe.dead) and op.dead:
+                        ally_cfh = True
+                        break
+                could_be_floor = (relevant_died or relevant_hp_dropped
+                                   or crossed or ally_cfh)
+
+                # -------- GROUND TRUTH, from LANERL_DECISION_TRACE=1 -------
+                # State diff can only see BEFORE/AFTER a tick. The branch log
+                # is written in the server's own `_objects.Values` iteration
+                # order (`ObjectManager.cs:74-81`), so two events sharing the
+                # same `t` appear in the log in the order the server actually
+                # produced them -- the one axis a state diff cannot recover.
+                # `found_settarget` sanity-checks that this row's own
+                # SetTargetUnit is where expected; `earlier_finishcast` is
+                # the decisive test: did the unit this minion just acquired
+                # finish an attack (dealt damage) EARLIER in this SAME tick,
+                # i.e. before this minion's own controller ran? That is
+                # `TakeDamage`'s `OnCallForHelp` broadcast, seen in the act.
+                gt_found = gt_precedent = None
+                gt_detail = ""
+                if dec_by_t is not None:
+                    tick_events = dec_by_t.get(sn1.t_ms, [])
+                    my_pos = None
+                    for i2, d in enumerate(tick_events):
+                        if (d.kind == "SetTargetUnit" and d.net_id == c.net_id
+                                and d.fields.get("to") == str(srv_t)):
+                            my_pos = i2
+                            break
+                    gt_found = my_pos is not None
+                    if my_pos is not None:
+                        watch = {srv_t} if srv_t else set()
+                        for d in tick_events[:my_pos]:
+                            if (d.kind == "FinishCasting"
+                                    and d.fields.get("auto") == "True"
+                                    and d.net_id in watch):
+                                gt_precedent = True
+                                gt_detail = (f"FinishCasting auto=True "
+                                            f"id={d.net_id} earlier same tick")
+                                break
+                        if gt_precedent is None:
+                            gt_precedent = False
+
                 target_rows.append(dict(
                     t_ms=sn.t_ms, kind=c.kind, net=c.net_id,
                     sim_target=c.sim_target_net_id,
@@ -699,6 +853,14 @@ def main(argv=None) -> None:
                     sim_ideal=None if gs is None else gs[1],
                     server_d=None if gv is None else gv[0],
                     server_ideal=None if gv is None else gv[1],
+                    cls=cls, team=team,
+                    relevant_died=relevant_died,
+                    relevant_hp_dropped=relevant_hp_dropped,
+                    crossed_acq_boundary=crossed,
+                    ally_took_damage_nearby=ally_cfh,
+                    could_be_floor=could_be_floor,
+                    gt_found=gt_found, gt_precedent=gt_precedent,
+                    gt_detail=gt_detail,
                 ))
 
             # ---------------- aa_hit residual (the 1,041) -----------------
@@ -801,6 +963,100 @@ def main(argv=None) -> None:
         for (sa, va), n in flags.most_common(4):
             print(f"     {n:6d}  {verdict}: sim_attacking={int(sa)} "
                   f"server_attacking={int(va)}")
+
+    print("\n-- ORDER-003: target residual DECOMPOSED, LaneMinion only --")
+    print("   by minion profile x team x transition (the full table, not a rate)")
+    minion_rows = [r for r in target_rows if r["kind"] == "LaneMinion"]
+    dec = collections.Counter(
+        (r["cls"], r["team"], r["verdict"]) for r in minion_rows)
+    for (cls, team, verdict), n in dec.most_common():
+        print(f"     {n:6d}  cls={cls:<8} team={team}  {verdict}")
+    print("   marginals -- by profile:")
+    for cls, n in collections.Counter(r["cls"] for r in minion_rows).most_common():
+        print(f"     {n:6d}  {cls}")
+    print("   marginals -- by team:")
+    for team, n in collections.Counter(r["team"] for r in minion_rows).most_common():
+        print(f"     {n:6d}  team={team}")
+    print("   marginals -- by transition type:")
+    for verdict, n in collections.Counter(
+            r["verdict"] for r in minion_rows).most_common():
+        print(f"     {n:6d}  {verdict}")
+
+    print("\n-- ORDER-003: is the residual CONFINED to a possible serial-order "
+          "floor? --")
+    print("   `could_be_floor` = the row's relevant unit (server's new/dropped")
+    print("   target) died, took damage or crossed the acquisition boundary")
+    print("   THIS tick, OR an ally within this minion's own acquisition range")
+    print("   took damage this tick (the call-for-help broadcast channel).")
+    print("   If the residual is NOT confined to these, the floor argument")
+    print("   does not cover it and something else is left unexplained.")
+    n_floor = sum(1 for r in minion_rows if r["could_be_floor"])
+    print(f"   {n_floor} / {len(minion_rows)} "
+          f"({100 * n_floor / max(1, len(minion_rows)):.1f}%) could be floor")
+    print("   breakdown by verdict:")
+    for verdict, _n in collections.Counter(
+            r["verdict"] for r in minion_rows).most_common():
+        sub = [r for r in minion_rows if r["verdict"] == verdict]
+        yes = sum(1 for r in sub if r["could_be_floor"])
+        print(f"     {verdict}: {yes}/{len(sub)} ({100 * yes / max(1, len(sub)):.1f}%)")
+    print("   which sub-signal explains it, among the could-be-floor rows:")
+    floor_rows = [r for r in minion_rows if r["could_be_floor"]]
+    for key in ("relevant_died", "relevant_hp_dropped", "crossed_acq_boundary",
+                "ally_took_damage_nearby"):
+        n = sum(1 for r in floor_rows if r[key])
+        print(f"     {n:6d} / {len(floor_rows)}  {key}")
+    print("   the NOT-covered rows, by verdict (this is what still needs an")
+    print("   explanation if the count is not ~0):")
+    uncovered = [r for r in minion_rows if not r["could_be_floor"]]
+    for verdict, n in collections.Counter(
+            r["verdict"] for r in uncovered).most_common():
+        print(f"     {n:6d}  {verdict}")
+
+    if dec_by_t is not None:
+        print("\n-- ORDER-003: GROUND TRUTH from the branch log --")
+        print("   Does the branch log confirm this row's SetTargetUnit at the")
+        print("   tick we think it is, and is there another unit's completed")
+        print("   attack EARLIER in the SAME tick, in the server's own")
+        print("   `_objects.Values` iteration order -- not inferred from a")
+        print("   before/after state diff, but read off the log line order?")
+        found = sum(1 for r in minion_rows if r["gt_found"])
+        print(f"   {found} / {len(minion_rows)} rows located their own "
+              f"SetTargetUnit at the expected tick")
+        prec = [r for r in minion_rows if r["gt_precedent"] is True]
+        checked = [r for r in minion_rows if r["gt_precedent"] is not None]
+        print(f"   {len(prec)} / {len(checked)} have an EARLIER same-tick "
+              f"FinishCasting(auto=True) by the unit they just acquired "
+              f"(the CFH mechanism, caught in the act)")
+        print("   cross-tab against the state-diff heuristic (`could_be_floor`):")
+        tab = collections.Counter(
+            (r["could_be_floor"], r["gt_precedent"]) for r in checked)
+        for (heur, gt), n in sorted(tab.items()):
+            print(f"     {n:6d}  heuristic could_be_floor={heur}  "
+                  f"ground-truth precedent={gt}")
+        print("   by verdict, ground-truth precedent rate:")
+        for verdict, _n in collections.Counter(
+                r["verdict"] for r in checked).most_common():
+            sub = [r for r in checked if r["verdict"] == verdict]
+            yes = sum(1 for r in sub if r["gt_precedent"])
+            print(f"     {verdict}: {yes}/{len(sub)} "
+                  f"({100 * yes / max(1, len(sub)):.1f}%)")
+        combined = sum(1 for r in minion_rows
+                       if r["could_be_floor"] or r["gt_precedent"] is True)
+        print(f"   COMBINED (heuristic OR ground-truth precedent): "
+              f"{combined} / {len(minion_rows)} "
+              f"({100 * combined / max(1, len(minion_rows)):.1f}%)")
+        still_uncovered = [r for r in minion_rows
+                           if not r["could_be_floor"]
+                           and r["gt_precedent"] is not True]
+        print(f"   still UNCOVERED by either check: {len(still_uncovered)}, "
+              f"by verdict:")
+        for verdict, n in collections.Counter(
+                r["verdict"] for r in still_uncovered).most_common():
+            print(f"     {n:6d}  {verdict}")
+        for r in still_uncovered[:a.examples]:
+            print(f"    e.g. t={r['t_ms']} net={r['net']} {r['verdict']}: "
+                  f"gt_found={r['gt_found']} gt_detail={r['gt_detail']!r}")
+
     for r in target_rows[:a.examples]:
         print(f"    e.g. t={r['t_ms']} {r['kind']} net={r['net']}: "
               f"sim->{r['sim_target']} (d={r['sim_d']}, ideal={r['sim_ideal']}) "

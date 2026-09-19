@@ -246,6 +246,15 @@ class Snapshot:
 
     t_ms: int
     entities: List[Entity] = field(default_factory=list)
+    #: set by :func:`load_trace_window` on a snapshot whose rows were skipped
+    #: at parse time because it fell outside the requested window.  It exists
+    #: only to carry ``t_ms`` forward, because `inject.replay_wave_states`
+    #: needs an entry per tick and reads nothing else.  It is POISONED rather
+    #: than merely empty: an empty snapshot handed to a diff scores every
+    #: missing entity as agreement, which is the exact failure `parse_stream`
+    #: raises `TraceFormatError` over for a truncated snapshot.  Reading any
+    #: entity view of one raises instead.
+    placeholder: bool = False
     #: the server's own FNV-1a 64 over the sorted rows, when the HASH line was
     #: present.  Two snapshots with equal hashes are identical by construction,
     #: which makes it a free fast path before any field-by-field work.
@@ -255,13 +264,24 @@ class Snapshot:
     ai_internals: List[AIInternal] = field(default_factory=list)
     missile_internals: List[MissileInternal] = field(default_factory=list)
 
+    def _require_rows(self, what: str) -> None:
+        if self.placeholder:
+            raise TraceFormatError(
+                f"t={self.t_ms}: {what} was read from a snapshot parsed as a "
+                "window placeholder, so its rows were never read off the log. "
+                "It has no entities because none were PARSED, not because the "
+                "server reported none -- scoring it would count every entity "
+                "as agreeing. Widen load_trace_window's window to cover it.")
+
     def by_group(self) -> Dict[Tuple[str, int], List[Entity]]:
+        self._require_rows("by_group()")
         out: Dict[Tuple[str, int], List[Entity]] = {}
         for e in self.entities:
             out.setdefault(e.group_key(), []).append(e)
         return out
 
     def champion(self, team: int) -> Optional[Entity]:
+        self._require_rows("champion()")
         for e in self.entities:
             if e.is_champion and e.team == team:
                 return e
@@ -589,5 +609,90 @@ def load_trace(path: Path | str) -> Trace:
     path = Path(path)
     with path.open(errors="replace") as fh:
         trace = parse_stream(fh)
+    trace.source = path
+    return trace
+
+
+def load_trace_window(
+    path: Path | str,
+    from_ms: Optional[int] = None,
+    to_ms: Optional[int] = None,
+    max_snapshots: Optional[int] = None,
+) -> Trace:
+    """`load_trace`, but materialising entity rows only inside a window.
+
+    A 600 s dump is ~575 MB of STATEROW, and `load_trace` builds an `Entity`
+    for every row in it.  That is where the one-step differential's 26 GB
+    goes, and why it OOMs on anything smaller than the compute node -- even
+    when the caller asked for a 2,000-pair slice, because ``--max-pairs``
+    bounded the WORK and the parse had already happened.  This bounds the
+    parse instead: snapshots outside ``[from_ms, to_ms]`` become
+    ``placeholder=True`` stubs carrying only ``t_ms``, which is the only field
+    `inject.replay_wave_states` reads off them -- so the wave replay, the one
+    thing that genuinely needs every tick from ``FIRST_WAVE_MS`` forward,
+    stays exact rather than being approximated by an early stop.
+
+    ``max_snapshots`` caps how many snapshots are kept in full even if the
+    window is wide, so a caller that only wants N pairs gets O(N) memory
+    without having to convert N into a time bound it cannot know in advance.
+
+    One snapshot past ``to_ms`` is always kept in full: every consumer here
+    diffs ``snaps[i]`` against ``snaps[i + 1]``, so a window whose last tick
+    had no successor would silently drop its own final pair.
+
+    Index alignment with `load_trace` is preserved exactly -- same snapshots,
+    same order, same count -- so a windowed trace and a full one are
+    interchangeable anywhere that respects the placeholder poison.
+    """
+    lo = -(2 ** 62) if from_ms is None else int(from_ms)
+    hi = 2 ** 62 if to_ms is None else int(to_ms)
+    path = Path(path)
+    trace = Trace()
+    buf: List[str] = []
+    cur_t: Optional[int] = None
+    keep = False
+    kept = 0
+    tail_used = False
+
+    def flush() -> None:
+        nonlocal kept
+        if cur_t is None:
+            return
+        if keep:
+            sub = parse_stream(buf)
+            if len(sub.snapshots) != 1:
+                raise TraceFormatError(
+                    f"t={cur_t}: windowed parse produced "
+                    f"{len(sub.snapshots)} snapshots for one STATEHASH")
+            trace.snapshots.append(sub.snapshots[0])
+            kept += 1
+        else:
+            trace.snapshots.append(Snapshot(t_ms=cur_t, placeholder=True))
+        buf.clear()
+
+    with path.open(errors="replace") as fh:
+        for line in fh:
+            m = HASH_RE.search(line)
+            if m is not None:
+                flush()
+                cur_t = int(m.group(1))
+                keep = lo <= cur_t <= hi
+                if not keep and lo <= cur_t and not tail_used and cur_t > hi:
+                    # the successor of the window's last tick; see docstring
+                    keep = True
+                    tail_used = True
+                if keep and max_snapshots is not None and kept >= max_snapshots:
+                    keep = False
+                if keep:
+                    buf.append(line)
+                continue
+            if cur_t is None and ROW_RE.search(line) is not None:
+                raise TraceFormatError(
+                    "a STATEROW arrived before any STATEHASH line. This log "
+                    "uses the hashless STATE_DUMP_FULL form, which a windowed "
+                    "parse cannot delimit; use load_trace instead.")
+            if keep:
+                buf.append(line)
+    flush()
     trace.source = path
     return trace

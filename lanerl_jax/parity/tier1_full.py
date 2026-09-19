@@ -3,11 +3,16 @@
 Committed version of the script that produced ``docs/TIER1_POST_REORDER.md``
 (that run was driven from an uncommitted scratch script -- see this file's
 git history / the commit that added it for the note). Queue it on `desktop`
-via slurm, never on the login node (a full-trace one-step differential was
-OOM-killed there before, and it is CPU-bound work this repo already has a
-node for):
+via slurm.  It is CPU-bound work this repo has a node for, and an
+unchunked full-trace run holds the entire 575 MB dump as parsed `Entity`
+objects (~26 GB), which is why it was OOM-killed on the login node before:
 
     sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_full
+
+``--chunk-pairs`` removes that constraint by parsing one window at a time, so
+the same corpus, pair for pair, fits in a few GB and can run anywhere -- which
+matters whenever `desktop` is down.  Use it with a hard cap that has swap
+disabled (`ops/login_capped.sh`) rather than trusting the estimate.
 
 ``python -m`` is required (not a bare path) so the ``lanerl_jax`` package
 resolves the same way it does under pytest.
@@ -19,6 +24,7 @@ from pathlib import Path
 
 from .one_step import (
     GAME_SECONDS,
+    merge_one_step_results,
     record_idle_trace,
     run_one_step_differential,
 )
@@ -26,7 +32,7 @@ from .parallel_one_step import (
     ParallelProgress,
     run_parallel_one_step_differential,
 )
-from .trace import load_trace
+from .trace import load_trace, load_trace_window
 
 #: The recorded fixture is idle from t=0, but nothing with a minion in it
 #: exists before the first wave (`sim.waves.FIRST_WAVE_MS`) -- comparing
@@ -59,6 +65,12 @@ def main(argv=None) -> None:
     ap.add_argument("--action-log", default=None,
                     help="ActionLog JSON recorded beside a driven fixture; "
                          "orders are replayed at their endpoint dump boundary")
+    ap.add_argument("--chunk-pairs", type=int, default=None,
+                    help="stream the corpus this many tick-pairs at a time, "
+                        "parsing only the snapshots each chunk needs. The "
+                        "shards are the SAME disjoint pair ranges the "
+                        "--workers path already merges, so the report is "
+                        "identical -- this bounds memory, not work.")
     ap.add_argument("--route-artifact", default=None,
                     help="local Map1 route artifact for driven Move replay; "
                          "defaults to the production training artifact when "
@@ -93,13 +105,48 @@ def main(argv=None) -> None:
         terrain = map1_terrain()
         print(f"loaded production local routes: {route_path}", flush=True)
 
-    trace = load_trace(log)
     # Idle fixtures contain no lane units before the first wave, so those
     # pairs only dilute minion metrics.  Driven fixtures are different: their
     # pre-wave champion actions are exactly what the action replay validates.
-    selected = (trace.snapshots if action_log is not None else
-                [s for s in trace.snapshots if s.t_ms >= FIRST_WAVE_MS])
+    def _select(snapshots):
+        return (snapshots if action_log is not None else
+                [s for s in snapshots if s.t_ms >= FIRST_WAVE_MS])
+
     selection = "full driven trace" if action_log is not None else "at/after first wave"
+
+    if a.chunk_pairs:
+        if a.workers != 1:
+            ap.error("--chunk-pairs streams shards serially; it is an "
+                     "alternative to --workers, not a companion")
+        # One cheap pass for the tick times alone: `max_snapshots=0` makes
+        # every snapshot a placeholder, so this reads the file without
+        # building a single Entity.  The pair indices computed here are the
+        # same indices the unchunked path uses, because `load_trace_window`
+        # preserves snapshot count and order exactly.
+        times = [s.t_ms for s in _select(
+            load_trace_window(log, max_snapshots=0).snapshots)]
+        n_pairs = max(0, len(times) - 1)
+        if a.max_pairs is not None:
+            n_pairs = min(n_pairs, a.max_pairs)
+        print(f"{len(times)} snapshots {selection}; streaming {n_pairs} pairs "
+              f"in chunks of {a.chunk_pairs}", flush=True)
+        parts = []
+        for start in range(0, n_pairs, a.chunk_pairs):
+            stop = min(start + a.chunk_pairs, n_pairs)
+            # `times[stop]` is snapshot `stop`, which pair `stop - 1` needs as
+            # its endpoint -- so the window is inclusive of it.
+            chunk = _select(load_trace_window(
+                log, from_ms=times[start], to_ms=times[stop]).snapshots)
+            parts.append(run_one_step_differential(
+                chunk, pair_start=start, pair_stop=stop, action_log=action_log,
+                route_table=route_table, terrain=terrain))
+            print(f"progress: {stop}/{n_pairs} pairs", flush=True)
+        res = merge_one_step_results(parts)
+        print(res.report())
+        return
+
+    trace = load_trace(log)
+    selected = _select(trace.snapshots)
     print(f"{len(trace)} snapshots, {len(selected)} {selection}", flush=True)
 
     if a.workers == 1:

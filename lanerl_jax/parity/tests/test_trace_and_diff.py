@@ -262,3 +262,97 @@ def test_scoping_excludes_from_the_diff_but_never_from_the_count():
     assert d.skipped.get("LevelProp") == 2            # but counted
     assert "LaneTurret" in kinds_reported             # in scope, so its loss shows
     assert "out of scope" in d.report()
+
+
+# --------------------------------------------------------------------------
+# load_trace_window: the full loader is the ORACLE, never a re-derivation
+# --------------------------------------------------------------------------
+# These deliberately do not restate what a windowed parse "should" produce.
+# Restating it would reproduce any mistake in the windowing logic inside the
+# expectation and pass -- the `STAT-002` trap, where two tests agreed with a
+# wrong constant because both read it from the code under test. Instead the
+# unwindowed `load_trace` parses the same bytes and IS the expectation.
+
+
+def _multi_tick_log(times):
+    return "".join(_log(t, ROWS, h=f"{i:016x}") for i, t in enumerate(times))
+
+
+def test_a_windowed_parse_agrees_with_the_full_parse_inside_the_window(tmp_path):
+    from lanerl_jax.parity.trace import load_trace_window
+
+    times = [1000 + 33 * i for i in range(10)]
+    log = tmp_path / "s.log"
+    log.write_text(_multi_tick_log(times))
+
+    full = load_trace(log)
+    win = load_trace_window(log, from_ms=1099, to_ms=1198)
+
+    # Same snapshots, same order, same count -- windowing must not renumber.
+    assert [s.t_ms for s in win.snapshots] == [s.t_ms for s in full.snapshots]
+    for a, b in zip(full.snapshots, win.snapshots):
+        if b.placeholder:
+            continue
+        assert b.state_hash == a.state_hash and b.expected_n == a.expected_n
+        assert [e.describe() if hasattr(e, "describe") else repr(e)
+                for e in b.entities] == [
+               e.describe() if hasattr(e, "describe") else repr(e)
+               for e in a.entities], f"t={a.t_ms} rows differ from the full parse"
+    real = [s.t_ms for s in win.snapshots if not s.placeholder]
+    # 1099..1198 covers 1099/1132/1165/1198, plus the one successor the
+    # docstring promises so the window's last pair is not silently dropped.
+    assert real == [1099, 1132, 1165, 1198, 1231]
+
+
+def test_a_window_placeholder_refuses_to_be_scored_instead_of_agreeing(tmp_path):
+    """The failure this exists to prevent: a placeholder has no entities
+    because none were PARSED. Diffed against a real snapshot it would score
+    every entity as missing-on-both-sides, i.e. as agreement -- the same
+    silent corruption `parse_stream` raises over for a truncated snapshot.
+    """
+    from lanerl_jax.parity.trace import load_trace_window
+
+    log = tmp_path / "s.log"
+    log.write_text(_multi_tick_log([1000, 1033, 1066]))
+    win = load_trace_window(log, from_ms=1066, to_ms=1066)
+    ghost = win.snapshots[0]
+    assert ghost.placeholder and ghost.t_ms == 1000
+    with pytest.raises(TraceFormatError, match="window placeholder"):
+        ghost.by_group()
+    with pytest.raises(TraceFormatError, match="window placeholder"):
+        ghost.champion(100)
+    with pytest.raises(TraceFormatError, match="window placeholder"):
+        diff_snapshots(ghost, win.snapshots[-1])
+
+
+def test_max_snapshots_bounds_the_parse_not_just_the_caller_s_loop(tmp_path):
+    """``--max-pairs`` used to bound the WORK while the parse had already
+    built every entity in the file -- which is why a 2,000-pair slice still
+    OOMed. A cap the parse itself honours is the difference.
+    """
+    from lanerl_jax.parity.trace import load_trace_window
+
+    times = [1000 + 33 * i for i in range(20)]
+    log = tmp_path / "s.log"
+    log.write_text(_multi_tick_log(times))
+    win = load_trace_window(log, max_snapshots=3)
+    assert len(win.snapshots) == 20, "snapshot indices must still line up"
+    assert sum(not s.placeholder for s in win.snapshots) == 3
+    assert sum(len(s.entities) for s in win.snapshots) == 3 * len(ROWS)
+
+
+def test_the_wave_replay_is_unchanged_by_windowing(tmp_path):
+    """`replay_wave_states` is the one consumer that genuinely needs every
+    tick from `FIRST_WAVE_MS` forward, and it is the reason placeholders
+    carry `t_ms` rather than the window simply starting late.
+    """
+    from lanerl_jax.parity.inject import replay_wave_states
+    from lanerl_jax.parity.trace import load_trace_window
+
+    times = [90000 + 33 * i for i in range(40)]
+    log = tmp_path / "s.log"
+    log.write_text(_multi_tick_log(times))
+    full = replay_wave_states(load_trace(log).snapshots)
+    win = replay_wave_states(load_trace_window(log, from_ms=91000).snapshots)
+    assert [(w.next_spawn_ms, w.minion_number, w.cannon_count) for w in win] == \
+           [(w.next_spawn_ms, w.minion_number, w.cannon_count) for w in full]
