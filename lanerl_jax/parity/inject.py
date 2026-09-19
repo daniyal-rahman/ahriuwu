@@ -446,6 +446,60 @@ def snap_windup_to_tick_grid(q_windup: float, model_row: int, unit_level: float,
     return float(out), "snapped onto the server's cast-clock grid"
 
 
+def snap_cooldown_to_tick_grid(q_cooldown: float, model_row: int, unit_level: float,
+                               params: dict) -> Tuple[float, str]:
+    """Recover the exact remaining auto-attack cooldown, the way `AA-002`
+    recovered wind-up -- same clock shape, same dump, same fix.
+
+    ``ObjAIBase.Update`` decrements ``_autoAttackCurrentCooldown`` by exactly
+    ``diff/1000`` every tick it is positive (`ObjAIBase.cs:1103-1105`), from a
+    value set only at swing start, ``1.0f / Stats.GetTotalAttackSpeed()``
+    (`:1263`). So -- for the identical reason `AA-002` gave for the wind-up
+    clock -- the true remaining cooldown always lies on the grid
+    ``period - k*dt`` for the unit's fixed period ``period``. The dump
+    (`LanerlStateDump.cs:205`) publishes ``Q(Math.Max(0f, remaining), StatQ)``:
+    the clamp happens BEFORE the quantisation, so this is not simply the
+    wind-up fix with different constants -- every already-fired tick and
+    every not-yet-fired tick within one rounding step of the gate collapse
+    onto the same dumped ``0``, and no per-tick formula can tell those apart
+    (doing so needs the previous tick's own dump, which is outside this
+    function's contract; see the module docstring's discussion of the
+    ``aa_fire`` timing question, which this does NOT attempt to resolve). A
+    dumped ``0`` is therefore left alone.
+
+    For every OTHER dumped value -- i.e. everywhere the cooldown is not
+    within rounding distance of the gate -- ``k`` is exactly as recoverable as
+    `AA-002`'s: ``round((period - q_cooldown) / dt)`` is unambiguous because
+    the dump's rounding error (<= 1/2048 s) is 17x smaller than the
+    17.0667-quantum tick stride. This is the mechanism behind the measured
+    82.3%-of-misses "<=2 quanta" mode in `docs/JAX_FIDELITY_LEDGER.md`'s
+    `aa_cooldown` row: two independent roundings (this tick's dump and the
+    next tick's) of the SAME real-valued grid point, not two different real
+    values. Recovering the grid point before the sim decrements it once
+    removes the second rounding's chance to disagree with the first.
+    """
+    dt = TICK_MS / 1000.0
+    if q_cooldown <= 0.0:
+        return q_cooldown, "at the dump's gate clamp; no grid to recover"
+    asm = 1.0 + (float(params["attack_speed_per_level"][model_row]) / 100.0) * float(
+        growth_sum(np.float32(unit_level), np))
+    period = float(params["attack_period"][model_row]) / asm
+    if not period > 0.0:
+        return q_cooldown, "no attack period in this profile"
+    k = round((period - q_cooldown) / dt)
+    if k < 0:
+        return q_cooldown, "dumped cooldown exceeds the profile period"
+    exact = period - k * dt
+    if abs(exact - q_cooldown) > 1.0 / (2.0 * StatQ) + 1e-6:
+        return q_cooldown, (
+            f"profile period {period:.6f}s puts tick {k} at {exact:.6f}s, "
+            f"{abs(exact - q_cooldown) * 1000:.3f} ms from the dumped "
+            f"{q_cooldown:.6f}s -- more than rounding, so not snapped")
+    if exact <= 0.0:
+        return 0.0, "recovered tick is at or past the gate"
+    return exact, "snapped onto the server's cooldown-clock grid"
+
+
 #: ``LaneMinionAI.minionActionTimer`` is only ever ``= 0`` (at a sweep),
 #: ``= 250f`` (at construction) or ``+= delta``, and the server's free-run
 #: ``deltaTime`` is ``(float)REFRESH_RATE`` (`Game.cs:333`). So the timer is
@@ -971,7 +1025,12 @@ def inject_snapshot(
             note.position_recovery = "exact float32 bits from diagnostic stream"
         spawn_seq[slot] = creation_rank[internal.net_id]
         target[slot] = id_to_slot.get(internal.target_net_id, -1)
-        aa_cooldown[slot] = internal.q_aa_cooldown / StatQ
+        # `aa_cooldown`'s own grid recovery -- same mechanism as the wind-up
+        # snap just below, see `snap_cooldown_to_tick_grid`'s docstring.
+        cd_snapped, cd_why = snap_cooldown_to_tick_grid(
+            internal.q_aa_cooldown / StatQ, int(model[slot]),
+            float(level[slot]), params)
+        aa_cooldown[slot] = cd_snapped
         is_attacking[slot] = internal.is_attacking
         has_auto_attacked[slot] = internal.has_auto_attacked
         note.target_recovery = "exact NetId from diagnostic internal stream"
@@ -985,12 +1044,13 @@ def inject_snapshot(
                 float(level[slot]), params)
             aa_windup[slot] = snapped
             note.attack_recovery = (
-                "exact cooldown/attack flags from diagnostic stream; "
-                f"wind-up {why}")
+                "exact attack flags from diagnostic stream; "
+                f"cooldown {cd_why}; wind-up {why}")
         else:
             aa_windup[slot] = 0.0
             note.attack_recovery = (
-                "exact cooldown/windup/attack flags from diagnostic stream")
+                "exact windup/attack flags from diagnostic stream; "
+                f"cooldown {cd_why}")
         if internal.waypoints:
             width = min(len(internal.waypoints), waypoints.shape[1])
             waypoints[slot] = 0.0

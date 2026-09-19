@@ -334,7 +334,16 @@ def test_internal_stream_restores_identity_attack_ai_maps_and_missile():
     assert "float32 bits" in source.collision_cache_recovery
     assert source.position_recovery == "exact float32 bits from diagnostic stream"
     assert "exact NetId" in source.target_recovery
-    assert "exact cooldown" in source.attack_recovery
+    # This fixture's `aacd=512` (0.5 s) does not land on this minion profile's
+    # own cooldown grid (it is a synthetic value, not sampled from a real
+    # attack clock), so `snap_cooldown_to_tick_grid` correctly REJECTS the
+    # recovery and reports why rather than silently keeping a stale "exact"
+    # label from before that function existed -- the numeric assertion above
+    # (`aa_cooldown == 0.5`, i.e. the dump wins on rejection) is the load-
+    # bearing check; this only confirms the attempt happened and is honest
+    # about its outcome.
+    assert "cooldown" in source.attack_recovery
+    assert "not snapped" in source.attack_recovery
 
 
 def test_an_injected_champion_in_lane_is_not_standing_in_its_own_fountain():
@@ -433,6 +442,83 @@ def test_a_windup_the_profile_table_cannot_explain_is_left_alone():
     value, why = snap_windup_to_tick_grid(0.0083, row, 1.0, params)
     assert value == 0.0083
     assert "not snapped" in why
+
+
+def test_the_dumped_cooldown_is_snapped_back_onto_the_servers_cooldown_grid():
+    """The `aa_cooldown` analogue of `AA-002`: same clock shape, same dump,
+    same fix.
+
+    `ObjAIBase.Update` (`ObjAIBase.cs:1103-1105`) decrements
+    `_autoAttackCurrentCooldown` by exactly one tick every Update it is
+    positive, from `1.0f / Stats.GetTotalAttackSpeed()` (`:1263`), so the
+    remaining cooldown only ever takes the values `period - k*dt` for a
+    profile's fixed `period` -- `AA-002`'s wind-up argument with a different
+    constant. `LanerlStateDump` rounds it to 1/1024 s (`aacd=`,
+    `LanerlStateDump.cs:205`), which is where the corpus's
+    82.3%-of-misses "<=2 quanta" `aa_cooldown` mode comes from: two
+    independent ~0.5-quantum roundings of the SAME grid point (this tick's
+    dump and the next tick's), not a real difference between the two ticks.
+
+    This walks every profile's whole cooldown clock (skipping the single tick
+    nearest the gate, which the dump's `Math.Max(0f, .)` clamp -- applied
+    BEFORE quantisation -- makes genuinely ambiguous with every already-fired
+    tick, and which `snap_cooldown_to_tick_grid` deliberately leaves alone)
+    and asserts the snap recovers the exact grid point.
+    """
+    import numpy as np
+
+    from lanerl_jax.parity.inject import snap_cooldown_to_tick_grid
+    from lanerl_jax.sim.movement_jax import TICK_MS
+
+    params = lane_params()
+    dt = TICK_MS / 1000.0
+    checked = 0
+    for row in range(len(PROFILES)):
+        period = float(params["attack_period"][row])
+        if not period > 0.0 or period > 100.0:
+            continue
+        for k in range(int(np.ceil(period / dt)) + 1):
+            remaining = period - k * dt
+            if remaining <= 1.0 / 2048.0:
+                continue  # the ambiguous gate tick; not this function's job
+            dumped = round(remaining * 1024.0) / 1024.0
+            if dumped <= 0.0:
+                continue
+            snapped, why = snap_cooldown_to_tick_grid(dumped, row, 1.0, params)
+            assert abs(snapped - remaining) < 1e-6, (
+                f"profile {PROFILES[row]} (period={period:.6f}s) tick {k}: "
+                f"dumped {dumped:.6f}s snapped to {snapped:.6f}s ({why}), "
+                f"expected the true remainder {remaining:.6f}s")
+            checked += 1
+    assert checked > 100, "the profile table stopped carrying attack periods"
+
+
+def test_a_cooldown_the_profile_table_cannot_explain_is_left_alone():
+    """The snap is a recovery, not an override -- same guard as `AA-002`'s."""
+    from lanerl_jax.parity.inject import snap_cooldown_to_tick_grid
+
+    params = lane_params()
+    row = profile_id(Kind.LANE_MINION, 0, Team.BLUE)
+    value, why = snap_cooldown_to_tick_grid(0.0083, row, 1.0, params)
+    assert value == 0.0083
+    assert "not snapped" in why
+
+
+def test_a_dumped_zero_cooldown_is_left_at_the_gate_clamp_not_invented():
+    """`Math.Max(0f, remaining)` runs BEFORE the dump's quantisation
+    (`LanerlAim.AutoAttackCooldownRemaining`), so a dumped `0` collapses every
+    already-fired tick together with the single not-yet-fired tick within
+    rounding of the gate. Disambiguating that needs the previous tick's own
+    dump, which is outside this function's contract -- so a dumped `0` must
+    come back unchanged, never a manufactured small positive residue.
+    """
+    from lanerl_jax.parity.inject import snap_cooldown_to_tick_grid
+
+    params = lane_params()
+    row = profile_id(Kind.LANE_MINION, 0, Team.BLUE)
+    value, why = snap_cooldown_to_tick_grid(0.0, row, 1.0, params)
+    assert value == 0.0
+    assert "gate clamp" in why
 
 
 def test_the_dumped_action_timer_is_snapped_back_onto_the_server_tick_grid():
