@@ -307,6 +307,7 @@ def run_oracle_in_sim(
     terrain=None,
     table_disabled: bool = False,
     on_decision: Optional[Callable[[dict], None]] = None,
+    on_oracle: Optional[Callable[[dict], None]] = None,
 ) -> SimRun:
     """Run the oracle against blue in the JAX sim; red never receives an order.
 
@@ -328,6 +329,17 @@ def run_oracle_in_sim(
     PATH-006 failure mode: ``isolation.py`` drove the raw path for weeks while
     the gate ran routed). Default ``None`` costs nothing; a callback that pulls
     device arrays pays for those syncs itself.
+
+    ``on_oracle``, if given, is called immediately before every ``decide()``
+    call with that call's EXACT inputs.  Both drivers call the same shared
+    ``decide()``, so the oracle itself cannot be a source of disagreement --
+    any difference in what the two engines do is a difference in what they
+    FEED it.  Recording the inputs is therefore the whole of the comparison,
+    and it is what lets a diagnostic find the FIRST decision index at which
+    the two runs diverge instead of comparing end-of-episode totals.  That
+    matters because both engines are bit-reproducible: after the first
+    divergence every later number is contaminated, so a final CS of 7 against
+    4 is one observation of a cascade, not four independent ones.
     """
     route_table, terrain = gate3_route_inputs(
         route_table=route_table, terrain=terrain, table_disabled=table_disabled)
@@ -444,7 +456,12 @@ def run_oracle_in_sim(
             for i in enemy
         ]
         vis_counts.append(len(minions))
+        if on_oracle is not None:
+            on_oracle({"i": _i, "engine": "sim", "champ": champ,
+                       "minions": minions, "level": int(np.asarray(state.level)[0])})
         d = decide(champ, minions, lethal_epsilon=0.0)
+        if on_oracle is not None:
+            on_oracle({"i": _i, "engine": "sim", "decision": d})
         if d.attack is not None:
             attacks += 1
             state = _step(state, OrderKind.ATTACK, 0.0, 0.0, d.attack)
@@ -471,6 +488,7 @@ def run_oracle_on_server(
     log_dir: Optional[Path] = None,
     autobuy: bool = False,
     on_decision: Optional[Callable[[dict], None]] = None,
+    on_oracle: Optional[Callable[[dict], None]] = None,
     extra_env: Optional[dict] = None,
 ) -> ServerRun:
     """Run the oracle against blue on a real server; red is never sent an order.
@@ -643,7 +661,12 @@ def run_oracle_on_server(
                     collision_radius=float(stat.collision_radius)))
 
             vis_counts.append(len(minions))
+            if on_oracle is not None:
+                on_oracle({"i": i, "engine": "server", "champ": champ,
+                           "minions": minions, "level": int(blue.get("lvl", 0))})
             d = decide(champ, minions, lethal_epsilon=0.0)
+            if on_oracle is not None:
+                on_oracle({"i": i, "engine": "server", "decision": d})
             if d.attack is not None:
                 attacks += 1
                 act = {"t": "attack", "id": d.attack}
