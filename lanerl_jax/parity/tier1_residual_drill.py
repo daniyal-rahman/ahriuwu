@@ -686,6 +686,19 @@ def main(argv=None) -> None:
                     ideal=None if g is None else g[1],
                     margin=None if g is None else g[0] - g[1],
                     target_agrees=c.sim_target_net_id == c.server_target_net_id,
+                    # AA-004: was the INJECTED cooldown sitting on the dump's
+                    # gate clamp?  `LanerlAim.AutoAttackCooldownRemaining`
+                    # publishes `Q(Math.Max(0f, remaining), StatQ)` -- the
+                    # clamp runs BEFORE the quantisation, so a cooldown that is
+                    # still strictly positive but within rounding of the gate
+                    # publishes as a flat 0.  Injecting that 0 tells the sim
+                    # the swing is READY when on the server it was not, and the
+                    # sim fires a tick early.  That is the one-sided direction
+                    # observed (sim_fire=1/server_fire=0 dominating ~40:1), and
+                    # it is the SAME clamp that makes `snap_cooldown_to_tick_
+                    # grid` refuse to touch a dumped zero.
+                    injected_cd_q=(None if iv is None
+                                   else iv.q_aa_cooldown),
                 ))
             if c.sim_target_net_id != c.server_target_net_id:
                 gs = geometry(slot_of.get(c.sim_target_net_id),
@@ -1247,6 +1260,28 @@ def main(argv=None) -> None:
                   f"{100 * sel.mean():.1f}%, of which "
                   f"{100 * cov[sel].mean() if sel.sum() else 0:.1f}% are on a "
                   f"tick that also disagreed on aa_fire or aa_hit")
+    print("\n-- AA-004: is the fire residual the dump's COOLDOWN GATE CLAMP? --")
+    print("   `Q(Math.Max(0f, remaining), StatQ)` clamps BEFORE quantising, so")
+    print("   a still-positive cooldown within rounding of the gate publishes")
+    print("   as a flat 0. Injecting that 0 says READY when the server was")
+    print("   not, and the sim swings one tick early. Prediction: the")
+    print("   sim-fires-early rows should sit overwhelmingly on a dumped 0,")
+    print("   and the sim-fires-LATE rows should not.")
+    early = [r for r in fire_rows if r["sim_fire"] and not r["server_fire"]]
+    late = [r for r in fire_rows if r["server_fire"] and not r["sim_fire"]]
+    for name, rows in (("sim fires, server does NOT", early),
+                       ("server fires, sim does NOT", late)):
+        known = [r for r in rows if r["injected_cd_q"] is not None]
+        zero = sum(1 for r in known if r["injected_cd_q"] == 0)
+        print(f"   {name}: {len(rows)} rows, {len(known)} with a dumped "
+              f"cooldown, {zero} of those at the gate clamp (0)"
+              + (f" = {100 * zero / len(known):.1f}%" if known else ""))
+        if known:
+            nz = sorted({r["injected_cd_q"] for r in known
+                         if r["injected_cd_q"] != 0})[:8]
+            if nz:
+                print(f"     non-zero dumped cooldowns present: {nz}")
+
     print("\n-- is_attacking / has_auto_attacked: contained in fire U hit? --")
     for (name, tag), n in sorted(bool_join.items()):
         print(f"   {name}: {tag} {n}")
