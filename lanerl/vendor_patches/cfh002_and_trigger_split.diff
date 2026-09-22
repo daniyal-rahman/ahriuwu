@@ -1,0 +1,114 @@
+--- Content/LeagueSandbox-Scripts/AIScripts/LaneMinionAI.cs	2026-09-18 23:30:13.681440211 +0000
++++ /srv/nfs/projects/lanerl-vendor/Content-trace/LeagueSandbox-Scripts/AIScripts/LaneMinionAI.cs	2026-09-21 23:24:29.755575460 +0000
+@@ -73,32 +73,92 @@
+                 }
+ 
+                 minionActionTimer += delta;
+-                if(
+-                    //Quote: There’s also a number of things
+-                    //       that can occur between the 0.25 second interval
+-                    //       of the normal sweep through the AI Priority List:
+-                    //Quote: Taunt/Fear/Flee/Movement Disable/Attack Disable.
+-                    //       All of these cause a minion to freshly reevaluate its behavior immediately.
+-                    LaneMinion.MovementParameters == null
+-                    //Quote: Collisions.
+-                    //       Minions that end up overlapping other minions will reevaluate their behavior immediately.
+-                    //&& !LaneMinion.RecalculateAttackPosition()
+-                    && (
+-                        //Quote: Their current attack target dies.
+-                        //       Minions who witness the death of their foe will check for a new valid target in their acquisition range.
+-                        TargetJustDied()
+-                        //Quote: Call for Help.
+-                        || FoundNewTarget(true)
+-                        || minionActionTimer >= 250.0f
+-                    )
+-                ) {
++                // LANERL (isolated Content-trace copy only -- see
++                // parity/decision_trace.py; the canonical tree MUST stay clean
++                // because a broken script silently no-ops, METH-003).
++                //
++                // Which of the three arms fired is the single most useful fact
++                // about this block and is UNRECOVERABLE from state: all three
++                // produce the same observable, a re-evaluated move order.
++                // `INJ-003` lived exactly here -- the injected
++                // `minionActionTimer` fell 0.00035 ms short of a trigger the
++                // server crosses by 0.0000305 ms, so the sweep fired on 0 of
++                // 395,366 injected tick-pairs against the server's 26,537.
++                //
++                // EVALUATION ORDER IS PRESERVED EXACTLY. The original is a
++                // short-circuit `A && (B || C || D)`: B/C/D are not evaluated
++                // when A is false, C is not evaluated when B is true, D not
++                // when either is. `FoundNewTarget` takes a flag and is not
++                // known to be pure, so re-evaluating any arm to label the
++                // trace would be a behaviour change made in order to observe
++                // behaviour. The nesting below reproduces the same call
++                // sequence on every path, and the state-row digest check is
++                // what actually proves it.
++                bool lanerlFired = false;
++                string lanerlTrigger = null;
++                float lanerlTimer = minionActionTimer;
++                if (LaneMinion.MovementParameters == null)
++                {
++                    if (TargetJustDied())
++                    {
++                        lanerlFired = true; lanerlTrigger = "TargetJustDied";
++                    }
++                    else if (FoundNewTarget(true))
++                    {
++                        lanerlFired = true; lanerlTrigger = "CallForHelp";
++                    }
++                    else if (minionActionTimer >= 250.0f)
++                    {
++                        lanerlFired = true; lanerlTrigger = "Sweep250";
++                    }
++                }
++                if (lanerlFired) {
+                     OrderType nextBehaviour = ReevaluateBehavior(delta);
++                    LeagueSandbox.GameServer.Lanerl.LanerlDecisionTrace.Emit(
++                        localTime, "MinionReevaluate", LaneMinion.NetId,
++                        "trigger=" + lanerlTrigger + " order=" + nextBehaviour
++                        + " timer=" + lanerlTimer.ToString("F4",
++                            System.Globalization.CultureInfo.InvariantCulture));
+                     LaneMinion.UpdateMoveOrder(nextBehaviour);
+                     minionActionTimer = 0;
+                 }
+ 
+                 if(callsForHelpMayBeCleared)
+                 {
++                    // LANERL (isolated Content-trace copy only, CFH-002). Behaviour-
++                    // neutral: this only READS unitsAttackingAllies and calls the
++                    // existing trace Emit, which is itself a no-op unless
++                    // LANERL_DECISION_TRACE=1; nothing here writes state or changes
++                    // the clear below.
++                    //
++                    // unitsAttackingAllies is populated by OnCallForHelp earlier
++                    // this tick and read by FoundNewTarget, where a candidate
++                    // present in the map takes its priority FROM THE MAP (2-3)
++                    // instead of from ClassifyTarget (melee 9 / caster 8) -- a
++                    // decisive override. It is cleared right below, and
++                    // LanerlStateDump's `aihelp=` field reads this same dictionary
++                    // AFTER OnUpdate returns, so the dump only ever observes it
++                    // POST-clear (measured: 0.45% of minion-ticks carry any entry).
++                    // Emit the map contents here, immediately before the clear, so
++                    // what is recorded is what FoundNewTarget actually saw.
++                    //
++                    // `localTime` (not game time) is passed as the trace's `t`,
++                    // same convention as the MinionReevaluate site above: it is
++                    // time-since-THIS-minion-spawned, not the server clock. That is
++                    // fine here because LanerlStateDump separately publishes each
++                    // minion's own `ailocal=` every tick, so (NetId, localTime) can
++                    // be aligned back to a game tick after the fact.
++                    if (LeagueSandbox.GameServer.Lanerl.LanerlDecisionTrace.Enabled)
++                    {
++                        string detail = "n=" + unitsAttackingAllies.Count;
++                        if (unitsAttackingAllies.Count > 0)
++                        {
++                            detail += " " + string.Join(";", unitsAttackingAllies
++                                .Select(kv => kv.Key.NetId + ":" + kv.Value));
++                        }
++                        LeagueSandbox.GameServer.Lanerl.LanerlDecisionTrace.Emit(
++                            localTime, "CallForHelpClear", LaneMinion.NetId, detail);
++                    }
+                     callsForHelpMayBeCleared = false;
+                     unitsAttackingAllies.Clear();
+                 }

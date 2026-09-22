@@ -1,0 +1,251 @@
+diff --git a/GameServerLib/Lanerl/LanerlAim.cs b/GameServerLib/Lanerl/LanerlAim.cs
+index fd385558..ed6ff5ee 100644
+--- a/GameServerLib/Lanerl/LanerlAim.cs
++++ b/GameServerLib/Lanerl/LanerlAim.cs
+@@ -46,6 +46,34 @@ namespace LeagueSandbox.GameServer.Lanerl
+             return v is float f ? Math.Max(0f, f) : 0f;
+         }
+ 
++        /// <summary>
++        /// AA-004: the SAME private counter as <see cref="AutoAttackCooldownRemaining"/>,
++        /// but WITHOUT the <c>Math.Max(0f, ...)</c> floor. That floor runs before
++        /// <c>LanerlStateDump</c> quantises the value, so a cooldown that is still
++        /// strictly positive but within rounding of zero is dumped as a flat 0 --
++        /// indistinguishable from a genuinely-ready swing. That false "ready" makes
++        /// an injected one-step sim fire a swing the server had not actually
++        /// allowed yet (measured: 79/79 sim-fires-early rows sit on a dumped 0).
++        /// This accessor exists purely so the dump can publish the unclamped,
++        /// SIGNED value in a new field alongside the existing clamped one -- it
++        /// does not change <see cref="AutoAttackCooldownRemaining"/> or anything
++        /// that reads it, so every existing consumer of the clamped value is
++        /// unaffected.
++        /// </summary>
++        public static float AutoAttackCooldownRemainingRaw(ObjAIBase unit)
++        {
++            if (unit == null) return 0f;
++            if (_aaCooldownField == null)
++            {
++                _aaCooldownField = typeof(ObjAIBase).GetField(
++                    "_autoAttackCurrentCooldown",
++                    BindingFlags.NonPublic | BindingFlags.Instance);
++            }
++            if (_aaCooldownField == null) return 0f;
++            var v = _aaCooldownField.GetValue(unit);
++            return v is float f ? f : 0f;
++        }
++
+         /// <summary>Post-mitigation damage of one auto attack, matching AutoAttackHit exactly.</summary>
+         public static float AutoAttackDamage(ObjAIBase attacker, AttackableUnit target)
+         {
+diff --git a/GameServerLib/Lanerl/LanerlStateDump.cs b/GameServerLib/Lanerl/LanerlStateDump.cs
+index 03ad9a4d..c63926a3 100644
+--- a/GameServerLib/Lanerl/LanerlStateDump.cs
++++ b/GameServerLib/Lanerl/LanerlStateDump.cs
+@@ -8,6 +8,8 @@ using LeagueSandbox.GameServer.GameObjects;
+ using LeagueSandbox.GameServer.GameObjects.AttackableUnits;
+ using LeagueSandbox.GameServer.GameObjects.AttackableUnits.AI;
+ using LeagueSandbox.GameServer.GameObjects.AttackableUnits.Buildings;
++using LeagueSandbox.GameServer.GameObjects.SpellNS.Missile;
++using System.Reflection;
+ 
+ namespace LeagueSandbox.GameServer.Lanerl
+ {
+@@ -61,6 +63,12 @@ namespace LeagueSandbox.GameServer.Lanerl
+             Environment.GetEnvironmentVariable("LANERL_STATE_DUMP") == "1";
+         public static readonly bool Full =
+             Environment.GetEnvironmentVariable("LANERL_STATE_DUMP_FULL") == "1";
++        // Behaviour-neutral, deliberately excluded from the canonical hash.
++        // NetIds and private controller phases are needed to inject a one-tick
++        // parity state, but NetIds change across resets and therefore must not
++        // contaminate the reset/determinism hash above.
++        public static readonly bool Internals =
++            Environment.GetEnvironmentVariable("LANERL_STATE_DUMP_INTERNALS") == "1";
+ 
+         private const float PosQ = 16f;     // 1/16 unit
+         private const float StatQ = 1024f;  // 1/1024
+@@ -71,6 +79,167 @@ namespace LeagueSandbox.GameServer.Lanerl
+             return (long)Math.Round(v * scale, MidpointRounding.AwayFromZero);
+         }
+ 
++        private static int Bits(float v)
++        {
++            return BitConverter.SingleToInt32Bits(v);
++        }
++
++        private static string PrivateField(object obj, string name, float scale = 1f)
++        {
++            if (obj == null) return "-";
++            try
++            {
++                var f = obj.GetType().GetField(name,
++                    BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
++                if (f == null) return "-";
++                var v = f.GetValue(obj);
++                if (v is float fv) return Q(fv, scale).ToString(CultureInfo.InvariantCulture);
++                if (v is int iv) return iv.ToString(CultureInfo.InvariantCulture);
++                if (v is bool bv) return bv ? "1" : "0";
++                if (v is System.Collections.IDictionary d) return d.Count.ToString(CultureInfo.InvariantCulture);
++            }
++            catch { }
++            return "-";
++        }
++
++        private static object PrivateMember(object obj, string name)
++        {
++            if (obj == null) return null;
++            try
++            {
++                var flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public;
++                var f = obj.GetType().GetField(name, flags);
++                if (f != null) return f.GetValue(obj);
++                var p = obj.GetType().GetProperty(name, flags);
++                if (p != null) return p.GetValue(obj);
++            }
++            catch { }
++            return null;
++        }
++
++        // Full identities are required here: a count cannot reconstruct either
++        // LaneMinionAI's 500 ms ignore expiry or its call-for-help priority.
++        private static string PrivateDictionary(object obj, string name, bool valuesAreFloats)
++        {
++            var value = PrivateMember(obj, name);
++            if (!(value is System.Collections.IDictionary dict)) return "-";
++            var rows = new List<string>();
++            foreach (System.Collections.DictionaryEntry pair in dict)
++            {
++                uint id;
++                if (pair.Key is AttackableUnit unit) id = unit.NetId;
++                else if (pair.Key is uint raw) id = raw;
++                else continue;
++                string v;
++                if (valuesAreFloats && pair.Value is float f)
++                    v = Q(f, StatQ).ToString(CultureInfo.InvariantCulture);
++                else
++                    v = Convert.ToInt32(pair.Value, CultureInfo.InvariantCulture)
++                        .ToString(CultureInfo.InvariantCulture);
++                rows.Add(id.ToString(CultureInfo.InvariantCulture) + ":" + v);
++            }
++            rows.Sort(StringComparer.Ordinal);
++            return rows.Count == 0 ? "none" : string.Join(",", rows);
++        }
++
++        private static string TargetDescriptor(AttackableUnit target)
++        {
++            if (target == null) return "0,-,0,0,0";
++            return target.NetId.ToString(CultureInfo.InvariantCulture) + "," +
++                   target.GetType().Name + "," + ((int)target.Team).ToString(CultureInfo.InvariantCulture) + "," +
++                   Q(target.Position.X, PosQ).ToString(CultureInfo.InvariantCulture) + "," +
++                   Q(target.Position.Y, PosQ).ToString(CultureInfo.InvariantCulture);
++        }
++
++        private static string WaypointDescriptor(ObjAIBase ai)
++        {
++            if (ai == null || ai.Waypoints == null || ai.Waypoints.Count == 0)
++                return "none";
++            return string.Join(";", ai.Waypoints.Select(p =>
++                Q(p.X, PosQ).ToString(CultureInfo.InvariantCulture) + "," +
++                Q(p.Y, PosQ).ToString(CultureInfo.InvariantCulture)));
++        }
++
++        private static string DescribeInternals(Game game, GameObject o)
++        {
++            if (o is SpellMissile missile)
++            {
++                var owner = missile.CastInfo == null ? null : missile.CastInfo.Owner;
++                return "missile id=" + missile.NetId +
++                    " kind=" + missile.GetType().Name +
++                    " x=" + Q(missile.Position.X, PosQ) +
++                    " y=" + Q(missile.Position.Y, PosQ) +
++                    " xbits=" + Bits(missile.Position.X) +
++                    " ybits=" + Bits(missile.Position.Y) +
++                    " owner=" + (owner == null ? 0u : owner.NetId) +
++                    " target=" + (missile.TargetUnit == null ? 0u : missile.TargetUnit.NetId) +
++                    " speed=" + Q(missile.GetSpeed(), StatQ) +
++                    " damage=" + Q(owner == null ? 0f : owner.Stats.AttackDamage.Total, StatQ);
++            }
++            if (!(o is ObjAIBase ai)) return null;
++            var aa = ai.AutoAttackSpell;
++            var script = ai.AIScript;
++            System.Numerics.Vector2 collisionPosition;
++            var collision = game.Map.CollisionHandler.TryGetDiagnosticCachedPosition(
++                ai.NetId, out collisionPosition)
++                ? Q(collisionPosition.X, PosQ).ToString(CultureInfo.InvariantCulture) + "," +
++                  Q(collisionPosition.Y, PosQ).ToString(CultureInfo.InvariantCulture)
++                : "none";
++            var collisionBits = collision == "none" ? "none" :
++                Bits(collisionPosition.X).ToString(CultureInfo.InvariantCulture) + "," +
++                Bits(collisionPosition.Y).ToString(CultureInfo.InvariantCulture);
++            return "ai id=" + ai.NetId +
++                " kind=" + ai.GetType().Name +
++                " team=" + (int)ai.Team +
++                " x=" + Q(ai.Position.X, PosQ) +
++                " y=" + Q(ai.Position.Y, PosQ) +
++                " xbits=" + Bits(ai.Position.X) +
++                " ybits=" + Bits(ai.Position.Y) +
++                " cr=" + Q(ai.CollisionRadius, StatQ) +
++                " pr=" + Q(ai.PathfindingRadius, StatQ) +
++                " target=" + TargetDescriptor(ai.TargetUnit) +
++                " wpkey=" + ai.CurrentWaypointKey +
++                " wps=" + WaypointDescriptor(ai) +
++                " coll=" + collision +
++                " collbits=" + collisionBits +
++                " aacd=" + Q(LanerlAim.AutoAttackCooldownRemaining(ai), StatQ) +
++                // AA-004: `aacd=` above is clamped to >=0 BEFORE quantisation, so a
++                // cooldown that is still strictly positive but within rounding of
++                // the gate is indistinguishable from a genuinely-ready 0. This is
++                // the UNCLAMPED, SIGNED counterpart -- a NEW field, additive only.
++                // `aacd=` itself is left untouched: every recorded corpus and every
++                // parser depends on it, and changing it would silently invalidate
++                // all historical numbers.
++                " aacdraw=" + Q(LanerlAim.AutoAttackCooldownRemainingRaw(ai), StatQ) +
++                // AA-004 (follow-up): `aacdraw=` above is still quantised at
++                // 1/1024 s, and the case AA-004 exists for is a SUB-QUANTUM
++                // positive residue -- `_autoAttackCurrentCooldown` walks
++                // `period - k*dt` with dt = 1/60 s, and `period/dt` is
++                // generally not an integer, so the tick before the real
++                // crossing can leave e.g. +0.00027 s = 0.28 quanta, which
++                // `Q()` rounds straight to 0 -- identical to the clamped
++                // field it was meant to disambiguate. Bit pattern is exact
++                // and lossless, same idiom as `xbits=`/`ybits=`/`collbits=`
++                // above, so the sign and magnitude of that residue survive.
++                " aacdbits=" + Bits(LanerlAim.AutoAttackCooldownRemainingRaw(ai)) +
++                " aastate=" + (aa == null ? -1 : (int)aa.State) +
++                " aacast=" + (aa == null ? -1L : Q(aa.CurrentCastTime, StatQ)) +
++                " aadelay=" + (aa == null ? -1L : Q(aa.CurrentDelayTime, StatQ)) +
++                " aawindup=" + (aa == null ? 0L : Q(Math.Max(0f,
++                    aa.CastInfo.DesignerCastTime / Math.Max(0.01f, aa.CastInfo.AttackSpeedModifier)
++                    - aa.CurrentDelayTime), StatQ)) +
++                " attacking=" + (ai.IsAttacking ? 1 : 0) +
++                " hasaa=" + (ai.HasAutoAttacked ? 1 : 0) +
++                " aitimer=" + PrivateField(script, "minionActionTimer", StatQ) +
++                " ailocal=" + PrivateField(script, "localTime", StatQ) +
++                " aitsa=" + PrivateField(script, "timeSinceLastAttack", StatQ) +
++                " aiprio=" + PrivateField(script, "targetUnitPriority") +
++                " aiwp=" + PrivateField(script, "currentWaypointIndex") +
++                " aihad=" + PrivateField(script, "hadTarget") +
++                " aiignore=" + PrivateDictionary(script, "temporaryIgnored", true) +
++                " aihelp=" + PrivateDictionary(script, "unitsAttackingAllies", false);
++        }
++
+         /// <summary>One entity, rendered so that identical states render identically.</summary>
+         private static string Describe(GameObject o)
+         {
+@@ -183,6 +352,17 @@ namespace LeagueSandbox.GameServer.Lanerl
+                     Console.WriteLine("LANERL_STATEROW t=" + t.ToString(CultureInfo.InvariantCulture) + " " + r);
+                 }
+             }
++            if (Internals)
++            {
++                foreach (var kv in game.ObjectManager.GetObjects())
++                {
++                    if (kv.Value == null) continue;
++                    var details = DescribeInternals(game, kv.Value);
++                    if (details != null)
++                        Console.WriteLine("LANERL_INTERNAL t=" +
++                            t.ToString(CultureInfo.InvariantCulture) + " " + details);
++                }
++            }
+         }
+     }
+ }
