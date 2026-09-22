@@ -289,6 +289,12 @@ def _by_group(entities, key_fn) -> Dict[Tuple[str, int], List]:
     return out
 
 
+def _f32_from_bits(bits: int) -> float:
+    """A float32 bit pattern as published by `Bits()` in the dump, back to a
+    float."""
+    return float(np.asarray(np.uint32(bits & 0xFFFFFFFF)).view(np.float32).item())
+
+
 def _q_away_from_zero(v: float, scale: float) -> int:
     """The server's own quantiser (``LanerlStateDump.Q``).
 
@@ -340,8 +346,35 @@ def _compare_controller(
             tnote = note_by_slot.get(sim_slot)
             sim_label = tnote.kind if tnote is not None else "spawned-this-tick"
 
+        # COMPARE EXACT AGAINST EXACT.
+        # `_autoAttackCurrentCooldown` goes negative -- `ObjAIBase.cs:1155-1158`
+        # decrements only while the value is positive, so the tick that crosses
+        # zero leaves a residue. `aacd=` publishes `Q(Math.Max(0f, remaining))`
+        # and cannot express that; `aacdbits=` publishes the float32 exactly.
+        #
+        # While the injector fed the sim the CLAMPED value both sides here were
+        # non-negative and the mismatch was invisible. Injecting the exact
+        # cooldown makes the sim hold the true value, and then `server_fire`
+        # below -- the server's CLAMPED value against the SIM's pre-tick one --
+        # compares `>= 0` against a negative and is true nearly every tick.
+        # Measured: `aa_fire` 968 -> 13,605 and `aa_cooldown` 2,087 -> 15,698,
+        # at the same moment `has_auto_attacked` went 932 -> 12 and
+        # `is_attacking` 1,023 -> 102. A fire DECISION that improves 77x while
+        # the fire COMPARISON degrades 14x is an incommensurable diff, not a
+        # regression.
+        #
+        # Clamping the sim side would make them commensurable but would throw
+        # away the discrimination `aacdbits` was added to provide: `sim=-0.5`
+        # and `server=-0.0166` would both read 0. Using the server's exact
+        # value keeps it. Both sides stay quantised at StatQ, so the tolerance
+        # is unchanged -- only the clamp is gone.
+        server_cd_exact = (
+            _f32_from_bits(iv.aa_cooldown_bits)
+            if iv.aa_cooldown_bits is not None else None)
         pre_cd_q = _q_away_from_zero(pre_cd[slot], StatQ)
         sim_cd_q = _q_away_from_zero(post_cd[slot], StatQ)
+        server_cd_q = (_q_away_from_zero(server_cd_exact, StatQ)
+                       if server_cd_exact is not None else iv.q_aa_cooldown)
         out.append(ControllerPair(
             kind=note.kind, team=note.team, slot=slot, net_id=net_id,
             sim_target_net_id=sim_target_net_id,
@@ -353,7 +386,7 @@ def _compare_controller(
             # zeroed (CancelAutoAttack) except in the `AutoAttackSpell.Cast`
             # branch, which sets it to `1 / GetTotalAttackSpeed()`.
             sim_fire=sim_cd_q > pre_cd_q,
-            server_fire=iv.q_aa_cooldown > pre_cd_q,
+            server_fire=server_cd_q > pre_cd_q,
             sim_hit=bool(post_has_aa[slot]) and not bool(pre_has_aa[slot]),
             server_hit=iv.has_auto_attacked and not bool(pre_has_aa[slot]),
             sim_attacking=bool(post_attacking[slot]),
@@ -361,7 +394,7 @@ def _compare_controller(
             sim_has_auto_attacked=bool(post_has_aa[slot]),
             server_has_auto_attacked=bool(iv.has_auto_attacked),
             sim_aa_cooldown_q=sim_cd_q,
-            server_aa_cooldown_q=iv.q_aa_cooldown,
+            server_aa_cooldown_q=server_cd_q,
         ))
     return out
 

@@ -1062,10 +1062,34 @@ def inject_snapshot(
         target[slot] = id_to_slot.get(internal.target_net_id, -1)
         # `aa_cooldown`'s own grid recovery -- same mechanism as the wind-up
         # snap just below, see `snap_cooldown_to_tick_grid`'s docstring.
-        cd_snapped, cd_why = snap_cooldown_to_tick_grid(
-            internal.q_aa_cooldown / StatQ, int(model[slot]),
-            float(level[slot]), params)
-        aa_cooldown[slot] = cd_snapped
+        if internal.aa_cooldown_bits is not None:
+            # EXACT and UNCLAMPED, straight off the server. `aacd=` publishes
+            # `Q(Math.Max(0f, remaining), StatQ)` -- the clamp runs BEFORE the
+            # quantisation, so a still-positive cooldown within one rounding
+            # step of the gate publishes as a flat 0 and is indistinguishable
+            # from genuinely ready. Injecting that 0 tells the simulator READY
+            # when the server was not, and it swings one tick early.
+            #
+            # MEASURED on a 2,500-pair window of the canonical corpus: of the
+            # 122 `sim fires, server does NOT` rows, **122 (100%) sit on a
+            # dumped cooldown of 0, and 121 of those have a strictly POSITIVE
+            # exact value** (residue 5.51e-07 s). Strictly negative -- the
+            # server genuinely ready and something else stopping it, i.e. an
+            # actual port bug -- is **0**.
+            #
+            # `snap_cooldown_to_tick_grid` below cannot fix this and is not at
+            # fault: the clamp has already destroyed the SIGN before the
+            # reconstruction sees the value, so no amount of grid snapping can
+            # tell "+5.51e-07, do not fire" from "0, fire". Only the exact
+            # bits can, which is why `aacdbits=` was added. It has been
+            # published and parsed since 2026-09-21 and simply never consumed.
+            aa_cooldown[slot] = _f32_from_bits(internal.aa_cooldown_bits)
+            cd_why = "EXACT (aacdbits, unclamped)"
+        else:
+            cd_snapped, cd_why = snap_cooldown_to_tick_grid(
+                internal.q_aa_cooldown / StatQ, int(model[slot]),
+                float(level[slot]), params)
+            aa_cooldown[slot] = cd_snapped
         is_attacking[slot] = internal.is_attacking
         has_auto_attacked[slot] = internal.has_auto_attacked
         note.target_recovery = "exact NetId from diagnostic internal stream"
