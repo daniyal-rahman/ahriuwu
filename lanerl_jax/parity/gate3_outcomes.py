@@ -184,22 +184,37 @@ def main(argv=None) -> None:
             print(f"\n   seeds produce {len(sig)} distinct outcomes of "
                   f"{len(rows)} -- the knob is live")
 
-    print(f"\n-- outcome gaps over {len(rows)} seeds --")
-    print(f"   {'metric':<14} {'sim vs server':>22} "
-          + (f"{'server vs shuffled':>22}   verdict" if a.shuffled else ""))
-    ss = [_gap(r["sim"], r["server"]) for r in rows]
-    sh = [_gap(r["server"], r["shuffled"]) for r in rows] if a.shuffled else None
+    print(f"\n-- outcome gaps over {len(rows)} seeds, PAIRED --")
+    print("   The three arms share a seed, so the comparison is paired and the\n"
+          "   test is on the per-seed DIFFERENCE. Comparing two means without a\n"
+          "   test was the first version of this and it was wrong: the spreads\n"
+          "   are as large as the means (cs 2.000 +/- 2.066 against 1.533 +/-\n"
+          "   2.262), so mean-vs-mean called EXCESS on all five metrics when a\n"
+          "   paired test separates only two. A verdict that ignores variance is\n"
+          "   not a verdict.\n")
+    print(f"   {'metric':<13} {'mean diff':>10} {'95% CI':>22} {'t':>7}  verdict")
     for m in ("cs", "deaths", "max_level", "levelup_lag", "xp_share"):
-        va = [g[m] for g in ss if not (isinstance(g[m], float) and math.isnan(g[m]))]
-        sa = statistics.mean(va) if va else float("nan")
-        line = f"   {m:<14} {sa:>22.3f}"
-        if sh:
-            vb = [g[m] for g in sh
+        if not sh:
+            va = [g[m] for g in ss
                   if not (isinstance(g[m], float) and math.isnan(g[m]))]
-            sb = statistics.mean(vb) if vb else float("nan")
-            ok = "PASS" if sa <= sb else "EXCESS"
-            line += f" {sb:>22.3f}   {ok}"
-        print(line)
+            print(f"   {m:<13} {statistics.mean(va) if va else float('nan'):>10.3f}"
+                  f"{'  (no reference -- pass --shuffled)':>40}")
+            continue
+        d = [a[m] - b[m] for a, b in zip(ss, sh)
+             if not (isinstance(a[m], float) and math.isnan(a[m]))
+             and not (isinstance(b[m], float) and math.isnan(b[m]))]
+        n = len(d)
+        mu = statistics.mean(d) if n else float("nan")
+        sd = statistics.stdev(d) if n > 1 else 0.0
+        se = sd / math.sqrt(n) if n else float("nan")
+        t = mu / se if se else float("nan")
+        lo, hi = mu - 1.96 * se, mu + 1.96 * se
+        v = "EXCESS" if lo > 0 else ("PASS" if hi < 0 else "INDISTINGUISHABLE")
+        print(f"   {m:<13} {mu:>10.3f} {lo:>10.2f}..{hi:<10.2f} {t:>7.2f}  {v}")
+    print("\n   diff > 0 means the SIM deviates from the server more than the\n"
+          "   server deviates from ITSELF under a permuted update order.\n"
+          "   INDISTINGUISHABLE is neither pass nor fail: at this sample size the\n"
+          "   experiment cannot separate them, and that is the honest report.")
 
     if sh and all(
             statistics.mean([g[m] for g in sh
