@@ -584,6 +584,7 @@ def run_oracle_on_server(
     on_oracle: Optional[Callable[[dict], None]] = None,
     extra_env: Optional[dict] = None,
     policy: Optional[Callable] = None,
+    server_dir: Optional[Path] = None,
 ) -> ServerRun:
     """Run the oracle against blue on a real server; red is never sent an order.
 
@@ -675,9 +676,19 @@ def run_oracle_on_server(
     log_dir = Path(log_dir) if log_dir is not None else Path(
         tempfile.mkdtemp(prefix="last_hit_oracle_"))
 
+    # `paths.server_dir()` is bin/Release, which is a SEPARATE build from the
+    # instrumented bin/Trace one. Any env-gated diagnostic added to the vendored
+    # source is absent from Release until Release is rebuilt, and the failure is
+    # SILENT: the variable is set, the server ignores it, and the run looks
+    # normal. Measured cost: a 24-seed outcome sweep whose shuffled-server
+    # reference came back 0.000 on every metric, because both arms ran the same
+    # unpatched Release binary. A reference gap of exactly zero turns every
+    # comparison into one against zero -- the exact-parity trap the outcome gate
+    # exists to escape.
     env = VecLaneEnv(
         1,
         spec=ServerLaunchSpec(
+            server_dir=server_dir,
             toponly=True, bot_teams="none", bot_seed=bot_seed, step_ticks=2,
             extra_env={**extra_env,
                        "LANERL_AUTOBUY": "1" if autobuy else "0"}),

@@ -44,6 +44,17 @@ import statistics
 from pathlib import Path
 
 
+def _trace_server_dir() -> Path:
+    """The instrumented build. See `run_oracle_on_server`'s note: the default
+    `paths.server_dir()` is bin/Release, which lacks every env-gated diagnostic
+    added to the vendored source, and ignores the flags silently."""
+    from lanerl_train import paths
+    d = paths.server_dir().parent.parent / "Trace" / "net6.0"
+    if not d.exists():
+        raise SystemExit(f"instrumented build missing: {d}")
+    return d
+
+
 def _levels(rec) -> dict:
     """level -> first decision index it was seen at."""
     ups, prev = {}, None
@@ -85,9 +96,14 @@ def _one(seed: int, decisions: int, port_base: int, shuffled: int | None,
 
     rec = Recorder()
     env = {"LANERL_SHUFFLE_ORDER": str(shuffled)} if shuffled is not None else None
+    # BOTH arms run the INSTRUMENTED build. The shuffle lives only there
+    # (bin/Release is a separate, older build), and if only the shuffled arm
+    # switched binaries the comparison would be between BUILDS rather than
+    # between update orders.
     srv = run_oracle_on_server(decisions=decisions, bot_seed=seed,
                                port_base=port_base, on_oracle=rec,
-                               extra_env=env, policy=pol)
+                               extra_env=env, policy=pol,
+                               server_dir=_trace_server_dir())
     key = "shuffled" if shuffled is not None else "server"
     out[key] = dict(cs=srv.cs, deaths=srv.deaths, attacks=srv.attacks,
                     levels=_levels(rec), xp_share=_xp_range_share(rec))
@@ -184,6 +200,20 @@ def main(argv=None) -> None:
             ok = "PASS" if sa <= sb else "EXCESS"
             line += f" {sb:>22.3f}   {ok}"
         print(line)
+
+    if sh and all(
+            statistics.mean([g[m] for g in sh
+                             if not (isinstance(g[m], float) and math.isnan(g[m]))]
+                            or [0.0]) == 0.0
+            for m in ("cs", "deaths", "max_level", "levelup_lag", "xp_share")):
+        print("\n!! REFERENCE GAP IS EXACTLY ZERO ON EVERY METRIC.\n"
+              "   The shuffled arm almost certainly ran WITHOUT the shuffle, so both\n"
+              "   arms were the same server and every verdict above is a comparison\n"
+              "   against zero -- which is the exact-parity trap this gate exists to\n"
+              "   escape. Measured cause, once: `paths.server_dir()` is bin/Release,\n"
+              "   a SEPARATE and older build from the instrumented bin/Trace one, so\n"
+              "   LANERL_SHUFFLE_ORDER was set and silently ignored. Confirm the\n"
+              "   server log contains `SHUFFLE_ORDER active` before believing a PASS.")
 
     if a.shuffled:
         print("\n   PASS means the simulator differs from the server by no more\n"
