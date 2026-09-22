@@ -295,7 +295,11 @@ def noisy_policy(seed: int, epsilon: float = 0.15, radius: float = 450.0):
 
 def heuristic_policy(approach_factor: float = 4.0,
                      approach_hp_frac: float = 0.0,
-                     hold_behind: float = 260.0):
+                     hold_behind: float = 260.0,
+                     retreat_hp_frac: float = 0.25,
+                     resume_hp_frac: float = 0.50,
+                     retreat_distance: float = 1200.0,
+                     standoff: float = 500.0):
     """`LanerlBot`'s FARM CORE, mirrored -- the acceptance-test policy.
 
     This is the C# bot's own logic and its own thresholds, not an invented
@@ -343,7 +347,39 @@ def heuristic_policy(approach_factor: float = 4.0,
     Deterministic: no RNG, so two trials on one engine are identical by
     construction and any trial-to-trial spread is the ENGINE's.
     """
+    # Branch 1's hysteresis is STATEFUL -- `_retreating` latches in the C# bot
+    # (`LanerlBot.cs:471-473`) precisely so it does not oscillate on the
+    # threshold and do neither thing. A pure function of the current frame
+    # cannot reproduce that, so the latch lives here, in the closure. It makes
+    # the policy stateful but still deterministic, and the two engines each get
+    # their own instance, exactly as two bot objects would.
+    st = {"retreating": False}
+
     def policy(champ, minions, i: int):
+        # branch 1 -- retreat with hysteresis. Thresholds are the bot's own:
+        # RetreatHpFrac 0.25 / ResumeHpFrac 0.50 (`LanerlConfig.cs:61,63`).
+        # `hp`/`max_hp` are int-truncated on both sides; see `ChampView`.
+        if champ.max_hp > 0:
+            frac = champ.hp / champ.max_hp
+            if frac < retreat_hp_frac:
+                st["retreating"] = True
+            elif frac > resume_hp_frac:
+                st["retreating"] = False
+            if st["retreating"]:
+                # `Retreat` walks back along the lane (`LanerlBot.cs:727`:
+                # `PointAt(along - forward * RetreatDistance)`). The shared view
+                # has no lane object, so back away from the wave along the
+                # champion->wave axis, which is the same direction in this lane.
+                if minions:
+                    cx, cy = champ.x, champ.y
+                    m = min(minions, key=lambda u: (u.x - cx) ** 2 + (u.y - cy) ** 2)
+                    dx, dy = cx - m.x, cy - m.y
+                    n = math.hypot(dx, dy) or 1.0
+                    return Decision(attack=None,
+                                    move=(cx + dx / n * retreat_distance,
+                                          cy + dy / n * retreat_distance))
+                return Decision(attack=None, move=None)
+
         # branch 8a -- plain-auto last hit, `IsLastHitPure` at zero incoming
         d = decide(champ, minions, lethal_epsilon=0.0)
         if d.attack is not None:
@@ -357,17 +393,43 @@ def heuristic_policy(approach_factor: float = 4.0,
         cands = [m for m in minions
                  if m.hp <= post_mitigation(champ.attack_damage, m.armor) * approach_factor
                  and (approach_hp_frac <= 0.0 or m.hp <= approach_hp_frac * m.hp)]
-        pool = cands or minions
-        m = min(pool, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
+        # NO `or minions` FALLBACK. Falling back to the nearest minion when no
+        # approach candidate exists made the policy walk at the wave
+        # permanently, which is exactly the parking-in-the-wave behaviour the
+        # standoff below exists to stop. The bot's branch 8c only fires for
+        # minions that pass `IsApproachTarget`; with none, it falls through to
+        # branch 9 and holds.
+        nearest = min(minions, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
+        m = (min(cands, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
+             if cands else nearest)
         dist = math.hypot(m.x - cx, m.y - cy)
         reach = champ.attack_range + m.collision_radius
-        if dist > reach:
+        if cands and dist > reach:
             # close to just inside attack range, as `MoveTo(approach.Position +
             # dir * stand)` does (`LanerlBot.cs:650`)
             ux, uy = (m.x - cx) / (dist or 1.0), (m.y - cy) / (dist or 1.0)
             step = min(dist - reach * 0.9, 400.0)
             return Decision(attack=None, move=(cx + ux * step, cy + uy * step))
-        # branch 9 -- in range and nothing to hit: hold
+        # branch 9 -- `MoveTo(HoldPoint())`. The bot does NOT park in the wave:
+        # `HoldPoint` stands at the furthest point forward where it is still
+        # un-acquired, plus `MinionAvoidRange = 100` (`LanerlBot.cs:1154-1168`,
+        # `LanerlConfig.cs:150`). Standing inside minion acquisition range is
+        # how a naive bot bleeds HP and dies -- measured, the first version of
+        # this mirror parked at attack range and died 3 times by level 4 while
+        # the C# bot reached level 8.
+        #
+        # The shared view has no lane object and no per-minion acquisition
+        # range, so the standoff is taken from the wave itself: back off to
+        # `standoff` from the nearest minion when there is nothing worth
+        # stepping in for. The approach branch above is what steps back in, and
+        # it fires early (hp <= damage * 4) precisely so the walk is already
+        # under way before the minion is executable.
+        ndist = math.hypot(nearest.x - cx, nearest.y - cy)
+        if ndist < standoff:
+            ux = (cx - nearest.x) / (ndist or 1.0)
+            uy = (cy - nearest.y) / (ndist or 1.0)
+            back = standoff - ndist
+            return Decision(attack=None, move=(cx + ux * back, cy + uy * back))
         return Decision(attack=None, move=None)
 
     return policy
@@ -598,10 +660,20 @@ def run_oracle_in_sim(
         champ_ad = float(params_np["attack_damage"][model[0]]
                          + params_np["ad_per_level"][model[0]]
                          * growth_sum(int(np.asarray(state.level)[0])))
+        # POSITIONS ARE INT-TRUNCATED HERE TOO. The wire emits
+        # `((int)au.Position.X)` (`LanerlControl.cs:188-189`), so the server arm's
+        # policy has always seen integer coordinates while the sim arm saw exact
+        # floats -- visible in gate 3's own output, where the server champion
+        # reads (2806.000, 13075.000) and the sim (2736.387, 13008.614). Any
+        # range or distance threshold could therefore resolve differently for a
+        # wire-format reason. Truncating the sim side makes the POLICY INPUT
+        # symmetric; it does not touch the simulation itself.
         champ = ChampView(
-            x=x0, y=y0,
+            x=float(int(x0)), y=float(int(y0)),
             attack_damage=champ_ad,
             attack_range=float(params_np["attack_range"][model[0]]),
+            hp=float(int(np.asarray(state.hp)[0])),
+            max_hp=float(int(np.asarray(state.max_hp)[0])),
         )
         # FOG. The server hands the driver a wire observation that has already
         # had fog of war applied; `LaneState` has no fog, so reading it
@@ -834,7 +906,10 @@ def run_oracle_on_server(
                 cur_walk = 0
 
             champ = ChampView(x=bx, y=by,
-                              attack_damage=float(blue["ad"]), attack_range=float(blue["rng"]))
+                              attack_damage=float(blue["ad"]),
+                              attack_range=float(blue["rng"]),
+                              hp=float(blue.get("hp", 0)),
+                              max_hp=float(blue.get("mhp", 0)))
 
             minions = []
             for u in units:

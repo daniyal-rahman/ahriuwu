@@ -72,6 +72,19 @@ class ChampView(NamedTuple):
     y: float
     attack_damage: float
     attack_range: float
+    #: Current and max health, INT-TRUNCATED on both sides.
+    #:
+    #: The server reaches a policy only through the wire, which emits
+    #: `((int)au.Stats.CurrentHealth)` and `((int)au.Stats.HealthPoints.Total)`
+    #: (`LanerlControl.cs:190-191`). A policy that branches on `hp/mhp` against
+    #: the simulator's exact floats would therefore cross a threshold on a
+    #: different tick in the two engines for a WIRE-FORMAT reason, and the
+    #: comparison would stop being about the engines. Both drivers truncate.
+    #:
+    #: Defaulted so every existing caller and test keeps working; a policy that
+    #: does not read them is unaffected.
+    hp: float = 0.0
+    max_hp: float = 0.0
 
 
 class Decision(NamedTuple):
