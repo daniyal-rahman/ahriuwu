@@ -80,6 +80,7 @@ _SRV = _VENDOR / "LoLServer"
 _OBJAI = _SRV / "GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs"
 _UNIT = _SRV / "GameServerLib/GameObjects/AttackableUnits/AttackableUnit.cs"
 _OBJMGR = _SRV / "GameServerLib/ObjectManager.cs"
+_DUMP = _SRV / "GameServerLib/Lanerl/LanerlStateDump.cs"
 
 _CMN = "System.Runtime.CompilerServices.CallerMemberName"
 _CLN = "System.Runtime.CompilerServices.CallerLineNumber"
@@ -333,6 +334,72 @@ _DIE_B = (
     "            _game.ObjectManager.StopTargeting(this);\n"
 )
 
+
+# --- 7. The auto-attack windup accumulator, EXACTLY -------------------------
+# `aadelay=` already publishes `Spell.CurrentDelayTime` -- the accumulator the
+# server actually tests, `Spell.cs:1665-1669`:
+#
+#     CurrentDelayTime += diff / 1000f;
+#     if (CurrentDelayTime >= CastInfo.DesignerCastTime / AttackSpeedModifier)
+#
+# but it publishes it through `Q(.., StatQ)`, i.e. rounded to 1/1024 s. The
+# port does not inject it at all; it RECONSTRUCTS the windup as `W - k*dt` on
+# the tick grid (`inject.py:snap_windup_to_tick_grid`). Those two differ by
+# the float32 accumulation error of ~20 successive `+=`, on the order of
+# 1e-7 s -- roughly four orders of magnitude BELOW the 9.8e-4 s quantum, so
+# the existing field rounds the entire difference away and injecting it would
+# buy nothing.
+#
+# This is the same reasoning that produced `aacdbits=` for AA-004: the case
+# the field exists for is a sub-quantum residue, and `Q()` destroys exactly
+# that. The melee minion's `W/dt` is 20.0016, leaving 2.67e-5 s on the final
+# windup tick -- 0.027 of a quantum. Bit patterns are exact and lossless, the
+# same idiom as `xbits=`/`aacdbits=`, and they go in `DescribeInternals`,
+# which `Describe()` never calls, so the canonical hash stream is untouched.
+_DELAY_A = (
+    '                " aadelay=" + (aa == null ? -1L : Q(aa.CurrentDelayTime, StatQ)) +\n'
+)
+_DELAY_B = (
+    '                " aadelay=" + (aa == null ? -1L : Q(aa.CurrentDelayTime, StatQ)) +\n'
+    '                " aadelaybits=" + (aa == null ? 0L : Bits(aa.CurrentDelayTime)) +\n'
+    '                " aacastbits=" + (aa == null ? 0L : Bits(aa.CurrentCastTime)) +\n'
+)
+
+
+# --- 8. The windup REMAINDER, exactly -- the field the port actually uses ---
+# `aawindup=` is what `inject.py` injects as `q_aa_windup`, and it is the
+# whole quantity the port needs: `max(0, W - CurrentDelayTime)` where
+# `W = DesignerCastTime / AttackSpeedModifier`. It is published through
+# `Q(.., StatQ)`, so the melee minion's final windup tick -- 2.67e-5 s left,
+# 0.027 of a quantum -- publishes as a flat 0, indistinguishable from
+# genuinely complete. `AA-002` is that rounding, and the port answers it by
+# RECONSTRUCTING the value: `snap_windup_to_tick_grid` re-derives `W - k*dt`
+# from an `asm` it computes itself.
+#
+# That reconstruction has two documented ways to fail back to the flat 0 --
+# it is rejected outright when the derived `asm` disagrees with the server's
+# `AttackSpeedMultiplier` by more than a rounding quantum, and `aa_windup` is
+# forced to 0.0 whenever `aa_state != 1`. Publishing the remainder LOSSLESSLY
+# removes the reconstruction entirely rather than repairing one term of it:
+# no `W`, no `asm`, no tick grid, nothing to disagree about. Same idiom and
+# same justification as `aacdbits=`, and in `DescribeInternals`, so the
+# canonical hash stream does not move.
+_WINDUP_A = (
+    '                " aawindup=" + (aa == null ? 0L : Q(Math.Max(0f,\n'
+    '                    aa.CastInfo.DesignerCastTime / Math.Max(0.01f, aa.CastInfo.AttackSpeedModifier)\n'
+    '                    - aa.CurrentDelayTime), StatQ)) +\n'
+)
+_WINDUP_B = (
+    '                " aawindup=" + (aa == null ? 0L : Q(Math.Max(0f,\n'
+    '                    aa.CastInfo.DesignerCastTime / Math.Max(0.01f, aa.CastInfo.AttackSpeedModifier)\n'
+    '                    - aa.CurrentDelayTime), StatQ)) +\n'
+    '                " aawindupbits=" + (aa == null ? 0L : Bits(Math.Max(0f,\n'
+    '                    aa.CastInfo.DesignerCastTime / Math.Max(0.01f, aa.CastInfo.AttackSpeedModifier)\n'
+    '                    - aa.CurrentDelayTime))) +\n'
+    '                " aathreshbits=" + (aa == null ? 0L : Bits(\n'
+    '                    aa.CastInfo.DesignerCastTime / Math.Max(0.01f, aa.CastInfo.AttackSpeedModifier))) +\n'
+)
+
 _EDITS = [
     (_OBJAI, "SetTargetUnit signature", _TGT_SIG_A, _TGT_SIG_B, "lanerlTgtCaller"),
     (_OBJAI, "SetTargetUnit emit", _TGT_EMIT_A, _TGT_EMIT_B, "caller=\" + lanerlTgtCaller"),
@@ -345,6 +412,8 @@ _EDITS = [
     (_OBJAI, "Untarget passthrough", _UNT_BODY_A, _UNT_BODY_B, '"Untarget<"'),
     (_OBJMGR, "StopTargeting signature", _STOP_SIG_A, _STOP_SIG_B, "lanerlStopCaller"),
     (_OBJMGR, "StopTargeting passthrough", _STOP_BODY_A, _STOP_BODY_B, '"StopTargeting<"'),
+    (_DUMP, "aadelaybits/aacastbits", _DELAY_A, _DELAY_B, "aadelaybits"),
+    (_DUMP, "aawindupbits/aathreshbits", _WINDUP_A, _WINDUP_B, "aawindupbits"),
     (_UNIT, "Die emit", _DIE_A, _DIE_B, '"Die", NetId'),
     (_UNIT, "SetWaypoints signature", _WPT_SIG_A, _WPT_SIG_B, "lanerlWptCaller"),
     (_UNIT, "SetWaypoints reject/accept emit", _WPT_BODY_A, _WPT_BODY_B, "SetWaypointsRejected"),

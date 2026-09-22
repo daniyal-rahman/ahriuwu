@@ -372,6 +372,13 @@ def infer_minion_model(max_hp: float, team: int, params: dict,
 _MIN_CASTING_WINDUP = 1.0 / 1_048_576.0
 
 
+def _f32_from_bits(bits: int) -> float:
+    """A float32 bit pattern as published by `Bits()` in the dump, back to a
+    float. Same idiom `inject.py` already uses for the buff phase."""
+    import numpy as _np
+    return float(_np.asarray(_np.uint32(bits & 0xFFFFFFFF)).view(_np.float32).item())
+
+
 def snap_windup_to_tick_grid(q_windup: float, model_row: int, unit_level: float,
                              params: dict) -> Tuple[float, str]:
     """``AA-002``: recover the exact remaining wind-up from the rounded dump.
@@ -1067,13 +1074,37 @@ def inject_snapshot(
         # rounded to 1/1024 s, so snap it back onto the server's own tick grid
         # before the sim's `remaining <= dt` hit test reads it.
         if internal.aa_state == 1 and internal.is_attacking:
-            snapped, why = snap_windup_to_tick_grid(
-                internal.q_aa_windup / StatQ, int(model[slot]),
-                float(level[slot]), params)
-            aa_windup[slot] = snapped
-            note.attack_recovery = (
-                "exact attack flags from diagnostic stream; "
-                f"cooldown {cd_why}; wind-up {why}")
+            if internal.aa_windup_bits is not None:
+                # EXACT, straight off the server. `aawindup=` publishes
+                # `Q(max(0, W - CurrentDelayTime), StatQ)`, and the case that
+                # matters is sub-quantum: measured on this corpus, **522 of
+                # 53,673 mid-windup LaneMinion unit-ticks (0.973%) publish a
+                # flat 0 while the true remainder is positive**, median
+                # 2.676e-05 s = 0.0274 of a quantum. That is `AA-002`.
+                #
+                # `snap_windup_to_tick_grid` below exists to reconstruct that
+                # residue by re-deriving `W - k*dt` from an attack-speed
+                # multiplier it computes itself. It is a good reconstruction
+                # and it is still a reconstruction: it can be REJECTED when
+                # its derived `asm` disagrees with the server's, and then it
+                # falls back to the same flat 0 it was built to avoid.
+                # `aawindupbits=` removes the derivation rather than repairing
+                # a term of it -- no `W`, no `asm`, no tick grid. It can only
+                # be wrong if the server's own field is wrong.
+                aa_windup[slot] = _f32_from_bits(internal.aa_windup_bits)
+                note.attack_recovery = (
+                    "exact attack flags from diagnostic stream; "
+                    f"cooldown {cd_why}; wind-up EXACT (aawindupbits)")
+                snapped = why = None
+            else:
+                snapped, why = snap_windup_to_tick_grid(
+                    internal.q_aa_windup / StatQ, int(model[slot]),
+                    float(level[slot]), params)
+                aa_windup[slot] = snapped
+            if why is not None:
+                note.attack_recovery = (
+                    "exact attack flags from diagnostic stream; "
+                    f"cooldown {cd_why}; wind-up {why}")
         else:
             aa_windup[slot] = 0.0
             note.attack_recovery = (

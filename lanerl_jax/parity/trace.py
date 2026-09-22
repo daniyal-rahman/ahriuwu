@@ -195,6 +195,30 @@ class AIInternal:
     #: `LanerlAim.AutoAttackGateBits`, and `GATE_BITS` below. `None` on every
     #: recording made before the field existed.
     aa_gate_bits: Optional[int] = None
+    #: `aawindupbits` / `aathreshbits` -- the float32 BIT PATTERNS of the
+    #: remaining auto-attack windup and of the threshold it is measured
+    #: against, added 2026-09-22. `aawindup` publishes the same remainder
+    #: through `Q(.., StatQ)`, and the case it matters for is sub-quantum: a
+    #: melee minion's final windup tick has 2.67e-5 s left, 0.027 of a
+    #: quantum, and rounds to a flat 0 indistinguishable from complete
+    #: (`AA-002`). The port's answer was to RECONSTRUCT the value --
+    #: `snap_windup_to_tick_grid` re-derives `W - k*dt` from an attack-speed
+    #: multiplier it computes itself -- and that reconstruction has two paths
+    #: back to the flat 0: rejection when the derived `asm` disagrees with the
+    #: server's, and a hard `0.0` whenever `aa_state != 1`. These two fields
+    #: remove the reconstruction rather than repairing a term of it.
+    #: `None` on every recording made before they existed.
+    aa_windup_bits: Optional[int] = None
+    aa_thresh_bits: Optional[int] = None
+    #: `aadelaybits` / `aacastbits` -- `Spell.CurrentDelayTime` and
+    #: `CurrentCastTime`, the accumulators themselves. The server's windup test
+    #: is `CurrentDelayTime >= DesignerCastTime / AttackSpeedModifier`
+    #: (`Spell.cs:1665-1669`), an accumulation of ~20 float32 `+=` rather than
+    #: a single `k*dt`. Published exactly because the difference between those
+    #: two is ~1e-7 s, four orders of magnitude below the 1/1024 s quantum
+    #: that `aadelay` rounds to.
+    aa_delay_bits: Optional[int] = None
+    aa_cast_bits: Optional[int] = None
     #: `status` -- the raw `StatusFlags` word. The packed bits above say that a
     #: gate was shut; this says WHICH flag shut it.
     status_flags: Optional[int] = None
@@ -648,6 +672,14 @@ def parse_internal(kind: str, body: str) -> AIInternal | MissileInternal:
             q_aa_cooldown=_int(values["aacd"], "AA cooldown"),
             aa_cooldown_bits=_optional_int(
                 values.get("aacdbits", "-"), "AA cooldown bits"),
+            aa_windup_bits=_optional_int(
+                values.get("aawindupbits", "-"), "AA windup bits"),
+            aa_thresh_bits=_optional_int(
+                values.get("aathreshbits", "-"), "AA windup threshold bits"),
+            aa_delay_bits=_optional_int(
+                values.get("aadelaybits", "-"), "AA delay accumulator bits"),
+            aa_cast_bits=_optional_int(
+                values.get("aacastbits", "-"), "AA cast accumulator bits"),
             aa_gate_bits=_optional_int(
                 values.get("aagate", "-"), "AA gate bits"),
             status_flags=_optional_int(
