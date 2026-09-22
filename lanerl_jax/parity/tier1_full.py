@@ -88,6 +88,28 @@ def main(argv=None) -> None:
 
     action_log = None
     route_table = terrain = None
+    if not a.action_log and a.existing_log:
+        # Same refusal as the residual drill (`METH-006`). A DRIVEN fixture read
+        # without its action stream does not fail: it steps the simulator with
+        # no orders while the server's champion follows the script, and scores
+        # the difference as a port defect. On the drill that produced 186
+        # phantom champion target disagreements and 142 phantom move-order rows
+        # -- numbers with exactly the shape of a large real residual.
+        from .record import ActionLog as _AL
+        _lp = Path(a.existing_log)
+        for _g in sorted(_lp.parent.parent.glob("*_actions.json")):
+            try:
+                _c = _AL.load(_g)
+            except Exception:
+                continue
+            _n = sum(1 for w in list(_c.blue) + list(_c.red)
+                     if str(w.get("t", "noop")) != "noop")
+            if _n:
+                raise SystemExit(
+                    f"REFUSING TO RUN: {_g} carries {_n} non-noop orders, so "
+                    "this is a DRIVEN fixture, but no --action-log was given. "
+                    "Every champion row would measure the missing orders "
+                    f"rather than the port.\n  pass:  --action-log {_g}")
     if a.action_log:
         from .record import ActionLog
         from ..data.local_route_artifact import load_local_route_artifact
