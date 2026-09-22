@@ -60,6 +60,28 @@ def _cfh_entries(cfh_pre, net_id, iv, tol_ms: int = 2):
     return None
 
 
+def _reeval_arm(reeval, net_id, iv, tol_ms: int = 2):
+    """Which arm opened this minion's re-evaluation gate, or a reason it is unknown.
+
+    ``"<no-event>"`` means the server emitted nothing for this unit on this
+    tick, i.e. the gate did NOT open -- a real and important answer, not a
+    lookup failure. ``"<unaligned>"`` means the dump carried no `ailocal` to
+    join on. Collapsing those two into one blank is how a "the gate never
+    fired" finding turns into a "we could not tell" non-finding.
+    """
+    if not reeval:
+        return None
+    if iv is None or iv.q_ai_local is None:
+        return "<unaligned>"
+    lt = int(round(iv.q_ai_local / 1024.0))
+    for d in range(0, tol_ms + 1):
+        for cand in ((lt - d, lt + d) if d else (lt,)):
+            hit = reeval.get((net_id, cand))
+            if hit is not None:
+                return hit
+    return "<no-event>"
+
+
 def _cfh_lookup(cfh_pre, net_id, iv):
     e = _cfh_entries(cfh_pre, net_id, iv)
     return None if e is None else bool(e)
@@ -369,6 +391,7 @@ def main(argv=None) -> None:
               f"({100 * n_nonempty / max(1, n_ev):.2f}%)", flush=True)
 
     dec_by_t = None
+    reeval = {}
     if a.decision_log:
         from .decision_trace import parse_decisions
         print(f"loading decision trace: {a.decision_log}", flush=True)
@@ -377,6 +400,22 @@ def main(argv=None) -> None:
         for d in decisions:
             dec_by_t[d.t_ms].append(d)
         print(f"  {len(decisions)} branch events over {len(dec_by_t)} ticks",
+              flush=True)
+        # `MinionReevaluate` is the server saying, per minion per tick,
+        # WHETHER its re-evaluation gate opened and WHICH of the three arms
+        # opened it. The drill has been inferring that from a reconstructed
+        # 250 ms timer; this is the server's own answer. Keyed like the CFH
+        # map -- on (net_id, localTime) -- because a Content script cannot
+        # reach game time and emits `localTime` instead.
+        reeval = {}
+        arms = collections.Counter()
+        for d in decisions:
+            if d.kind != "MinionReevaluate":
+                continue
+            reeval[(d.net_id, d.t_ms)] = d.fields.get("trigger", "?")
+            arms[d.fields.get("trigger", "?")] += 1
+        print(f"  MinionReevaluate arms: "
+              + ", ".join(f"{k}={v}" for k, v in arms.most_common()),
               flush=True)
 
     import jax.numpy as jnp
@@ -444,6 +483,13 @@ def main(argv=None) -> None:
     wp_rows_keyed = []
     fire_rows = []
     target_rows = []
+    # `ORDER-003`/target base rate: how often the server's gate opens on
+    # an ORDINARY minion tick. Without it, 'N of the disagreements had no
+    # branch event' is unreadable -- the gate is shut on most ticks by
+    # design (the sweep is 250 ms against a 16.67 ms tick), so a high
+    # `<no-event>` share among disagreements may be the base rate and
+    # nothing more. Checking denominators is the standing lesson here.
+    arm_base = collections.Counter()
     hp_rows = []
     hp_detail = []
     pos_rows = []
@@ -502,6 +548,13 @@ def main(argv=None) -> None:
 
         has_missile = any(e.kind == "SpellMissile" for e in sn.entities)
         pre_internal = {iv.net_id: iv for iv in sn.ai_internals}
+        # Tick N+1, needed for anything about WHY the state changed
+        # ACROSS the boundary. The branch stream is keyed on the
+        # script's `localTime`, and a target that moves between N and
+        # N+1 moved during tick N+1, so joining the branch event on
+        # tick N's `ailocal` misses it by a full 16.67 ms stride and
+        # reports `<no-event>` for essentially every row.
+        post_internal = {iv.net_id: iv for iv in sn1.ai_internals}
         model0 = np.asarray(state_n.model)
         x0 = np.asarray(state_n.x)
         y0 = np.asarray(state_n.y)
@@ -926,6 +979,10 @@ def main(argv=None) -> None:
                     injected_gate_bits=None if iv is None else iv.aa_gate_bits,
                     injected_status=None if iv is None else iv.status_flags,
                 ))
+            if c.kind == "LaneMinion":
+                arm_base[_reeval_arm(reeval, c.net_id,
+                                     post_internal.get(c.net_id))] += 1
+
             if c.sim_target_net_id != c.server_target_net_id:
                 gs = geometry(slot_of.get(c.sim_target_net_id),
                               c.sim_target_net_id)
@@ -937,6 +994,13 @@ def main(argv=None) -> None:
                 # *retention* failure from an *acquisition* failure. Reporting
                 # only the post-tick pair cannot tell those apart, and they
                 # have different branches in `minion_ai.py`.
+                # Which arm of the server's re-evaluation gate opened on
+                # this tick, straight from the branch stream -- not the
+                # reconstructed 250 ms timer, which cannot see the
+                # every-tick call-for-help pass or the edge-triggered
+                # TargetJustDied at all.
+                server_arm = _reeval_arm(
+                    reeval, c.net_id, post_internal.get(c.net_id))
                 pre_t = 0 if iv is None else iv.target_net_id
                 # Did the 250 ms timer alone predict a sweep on this tick?
                 # `LaneMinionAI.OnUpdate`'s trigger is
@@ -1142,6 +1206,7 @@ def main(argv=None) -> None:
                     server_target=c.server_target_net_id,
                     pre_target=pre_t, verdict=verdict,
                     sweep_predicted=sw_pred,
+                    server_arm=server_arm,
                     server_attacking=c.server_attacking,
                     sim_attacking=c.sim_attacking,
                     sim_d=None if gs is None else gs[0],
@@ -1258,6 +1323,46 @@ def main(argv=None) -> None:
         for (sa, va), n in flags.most_common(4):
             print(f"     {n:6d}  {verdict}: sim_attacking={int(sa)} "
                   f"server_attacking={int(va)}")
+
+    # The server's OWN answer to the same question, from the branch stream.
+    # The reconstructed timer above can only see the 250 ms sweep; it is blind
+    # to the other two arms by construction -- `FoundNewTarget(true)` runs
+    # EVERY tick off the call-for-help channel, and `TargetJustDied()` is
+    # edge-triggered. So "0% on a timer-predicted sweep" does not mean the
+    # server's gate stayed shut; it means the sweep was not why it opened.
+    armed = [r for r in target_rows if r.get("server_arm") is not None]
+    if armed:
+        print("\n   which arm actually opened the server's gate? "
+              "(`MinionReevaluate`, the server's own branch stream)")
+        print("     `<no-event>` = the gate did NOT open on that tick, which is")
+        print("     an answer, not a lookup failure. Arms: Sweep250 (the 250 ms")
+        print("     timer), CallForHelp (every tick), TargetJustDied (edge).")
+        base_total = sum(v for k, v in arm_base.items() if k is not None)
+        if base_total:
+            print(f"     BASE RATE over all {base_total} LaneMinion unit-ticks "
+                  f"in this window, agreeing or not:")
+            for arm, n in arm_base.most_common():
+                if arm is None:
+                    continue
+                print(f"       {n:7d}  {arm:18s} {100 * n / base_total:5.2f}%")
+        tab = collections.Counter((r["verdict"], r["server_arm"]) for r in armed)
+        dis_total = len(armed)
+        print(f"     the {dis_total} DISAGREEING rows, by arm and verdict:")
+        for (verdict, arm), n in sorted(tab.items(), key=lambda kv: -kv[1]):
+            base_share = (100 * arm_base.get(arm, 0) / base_total
+                          if base_total else float("nan"))
+            print(f"     {n:5d}  {arm:18s} {verdict}   "
+                  f"(this arm is {base_share:.2f}% of ordinary ticks)")
+        # The comparison that actually carries information.
+        arm_dis = collections.Counter(r["server_arm"] for r in armed)
+        print("     ENRICHMENT -- share among disagreements vs share among all "
+              "minion ticks. Only a ratio far from 1.0 is a finding:")
+        for arm in sorted(set(arm_dis) | set(k for k in arm_base if k)):
+            d = 100 * arm_dis.get(arm, 0) / max(1, dis_total)
+            b = 100 * arm_base.get(arm, 0) / max(1, base_total)
+            ratio = (d / b) if b else float("inf")
+            print(f"       {arm:18s} disagreements {d:6.2f}%  ordinary {b:6.2f}%"
+                  f"   x{ratio:.2f}")
 
     print("\n-- ORDER-003: target residual DECOMPOSED, LaneMinion only --")
     print("   by minion profile x team x transition (the full table, not a rate)")
