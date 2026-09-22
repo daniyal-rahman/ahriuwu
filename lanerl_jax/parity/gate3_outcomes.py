@@ -139,6 +139,13 @@ def main(argv=None) -> None:
                         "gate is judged against.")
     ap.add_argument("--policy", choices=("oracle", "noisy"), default="oracle",
                     help="`oracle` is the scripted last-hitter: deterministic, and since this scenario runs with bot_teams=\"none\" the seed drives NOTHING through it -- a 30-seed sweep returned 30 byte-identical outcomes. `noisy` wanders with probability 0.15, seeded, which is the only way a seed enters this experiment at all, and it visits the turret-aggro, death and off-route states the oracle never reaches.")
+    ap.add_argument("--run-tag", default=None,
+                    help="an identifier shared by every job in ONE batch, "
+                        "stamped into each saved row. `pool_outcomes.py` "
+                        "refuses to mix tags. mtime cannot do this job: jobs "
+                        "in the same batch finish minutes apart when one is "
+                        "queued behind the others, and an mtime-skew guard "
+                        "then discards the jobs that finished FIRST.")
     ap.add_argument("--save", type=Path, default=None)
     a = ap.parse_args(argv)
 
@@ -148,7 +155,7 @@ def main(argv=None) -> None:
         if a.shuffled:
             r.update(_one(s, a.decisions, a.port_base + i * 4 + 2,
                           shuffled=1000 + s, policy_name=a.policy))
-        rows.append({"seed": s, **r})
+        rows.append({"seed": s, "run_tag": a.run_tag, **r})
         print(f"  seed {s}: sim cs={r['sim']['cs']} d={r['sim']['deaths']} "
               f"| server cs={r['server']['cs']} d={r['server']['deaths']}"
               + (f" | shuffled cs={r['shuffled']['cs']} "
@@ -183,6 +190,14 @@ def main(argv=None) -> None:
         else:
             print(f"\n   seeds produce {len(sig)} distinct outcomes of "
                   f"{len(rows)} -- the knob is live")
+
+    # These two were deleted by the edit that introduced the paired report,
+    # leaving `ss`/`sh` as unbound globals -- so the tool ran every sim arm AND
+    # every real server arm, wrote --save, printed the per-seed lines, and only
+    # then died on NameError. The expensive work completed and the verdict
+    # never printed.
+    ss = [_gap(r["sim"], r["server"]) for r in rows]
+    sh = [_gap(r["server"], r["shuffled"]) for r in rows] if a.shuffled else None
 
     print(f"\n-- outcome gaps over {len(rows)} seeds, PAIRED --")
     print("   The three arms share a seed, so the comparison is paired and the\n"

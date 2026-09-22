@@ -2,27 +2,46 @@
 import json, math, statistics, sys
 from pathlib import Path
 
-# STALENESS GUARD. Per-job JSONs are written at job END, so a re-run leaves
-# the previous run's file in place until its replacement lands. Pooling once
-# mixed 24 valid seeds with 6 from a superseded run whose reference gap was a
-# broken 0.000 -- which biased the reference DOWN and flipped `levelup_lag`
-# from indistinguishable to EXCESS. Newest-file mtime is the reference; a file
-# more than `SKEW` older than it is from a different run.
-SKEW = 300
+# RUN GUARD. Per-job JSONs are written at job END, so a re-run leaves the
+# previous run's file in place until its replacement lands; pooling once mixed
+# 24 valid seeds with 6 from a superseded run whose reference gap was a broken
+# 0.000, which flipped a verdict.
+#
+# mtime was the first attempt and it is the WRONG SIGNAL: jobs in one batch
+# routinely finish minutes apart when one is queued behind the others, and the
+# skew rule then threw away the 24 seeds that finished first and kept the 6
+# that finished last. Rows now carry an explicit `run_tag`; untagged files fall
+# back to mtime with a generous window, and the fallback says so.
 paths = sorted(Path("lanerl_jax/runs").glob(
     sys.argv[1] if len(sys.argv) > 1 else "noisy_g*.json"))
 if not paths:
     raise SystemExit("no outcome JSONs found")
-newest = max(q.stat().st_mtime for q in paths)
+loaded = [(p, json.loads(p.read_text())) for p in paths]
+tags = {r.get("run_tag") for _p, rs in loaded for r in rs}
 rows, stale = [], []
-for p in paths:
-    if newest - p.stat().st_mtime > SKEW:
-        stale.append(f"{p.name} ({int(newest - p.stat().st_mtime)}s older)")
-        continue
-    rows.extend(json.loads(p.read_text()))
+if tags - {None}:
+    from collections import Counter
+    best = Counter(r.get("run_tag") for _p, rs in loaded
+                   for r in rs if r.get("run_tag")).most_common(1)[0][0]
+    for p, rs in loaded:
+        keep = [r for r in rs if r.get("run_tag") == best]
+        (rows.extend(keep) if keep
+         else stale.append(f"{p.name} (tag != {best})"))
+    print(f"run_tag = {best}")
+else:
+    SKEW = 3600
+    newest = max(p.stat().st_mtime for p, _ in loaded)
+    print("!! no run_tag in these files -- falling back to mtime with a "
+          f"{SKEW}s window, which cannot distinguish a slow job from a stale one")
+    for p, rs in loaded:
+        if newest - p.stat().st_mtime > SKEW:
+            stale.append(f"{p.name} ({int(newest - p.stat().st_mtime)}s older)")
+        else:
+            rows.extend(rs)
 if stale:
-    print(f"!! SKIPPED STALE (from a superseded run): {', '.join(stale)}")
-print(f"pooled {len(rows)} seeds from {len(list(Path('lanerl_jax/runs').glob('noisy_g*.json')))} jobs")
+    print(f"!! SKIPPED: {', '.join(stale)}")
+print(f"pooled {len(rows)} seeds from {len(paths) - len(stale)} jobs"
+      f" ({len(paths)} found, {len(stale)} skipped)")
 
 # the inertness guard, applied to the POOL as well as each job
 sig = {json.dumps({k: v for k, v in r.items() if k != "seed"},
@@ -47,19 +66,33 @@ have_shuf = all("shuffled" in r for r in rows)
 ss = [gap(r["sim"], r["server"]) for r in rows]
 sh = [gap(r["server"], r["shuffled"]) for r in rows] if have_shuf else None
 
-print(f"\n{'metric':<14} {'sim-server mean':>16} {'sd':>8} "
-      + (f"{'srv-shuffled mean':>18} {'sd':>8}   verdict" if sh else ""))
+# PAIRED, because the three arms share a seed. The first version of this
+# compared two MEANS with no test, which `gate3_outcomes.py` itself documents
+# as a silent defect: the spreads here are as large as the means (cs
+# 2.000+/-2.066 against 1.533+/-2.262), so mean-vs-mean called EXCESS on all
+# five metrics where the paired test separates one. Worse, this file is the
+# tool that pools ACROSS jobs, so it produced the headline verdict while its
+# sibling had already been corrected -- nothing at HEAD could reproduce the
+# published t and CI values.
+print(f"\n{'metric':<13} {'mean diff':>10} {'95% CI':>22} {'t':>7}  verdict")
 for m in ("cs", "deaths", "max_level", "levelup_lag", "xp_share"):
-    va = [g[m] for g in ss if not (isinstance(g[m], float) and math.isnan(g[m]))]
-    ma = statistics.mean(va) if va else float("nan")
-    sa = statistics.pstdev(va) if len(va) > 1 else 0.0
-    line = f"{m:<14} {ma:>16.3f} {sa:>8.3f}"
-    if sh:
-        vb = [g[m] for g in sh if not (isinstance(g[m], float) and math.isnan(g[m]))]
-        mb = statistics.mean(vb) if vb else float("nan")
-        sb = statistics.pstdev(vb) if len(vb) > 1 else 0.0
-        line += f" {mb:>18.3f} {sb:>8.3f}   {'PASS' if ma <= mb else 'EXCESS'}"
-    print(line)
-if sh:
-    print("\nPASS = the simulator differs from the server by no more than the server\n"
-          "differs from ITSELF under an equally arbitrary update order.")
+    if not sh:
+        print(f"{m:<13} {'(no reference -- rerun with --shuffled)':>44}")
+        continue
+    d = [a[m] - b[m] for a, b in zip(ss, sh)
+         if not (isinstance(a[m], float) and math.isnan(a[m]))
+         and not (isinstance(b[m], float) and math.isnan(b[m]))]
+    n = len(d)
+    if n < 2:
+        print(f"{m:<13} {'(too few paired samples)':>44}")
+        continue
+    mu = statistics.mean(d)
+    se = statistics.stdev(d) / math.sqrt(n)
+    t = mu / se if se else float("inf")
+    lo, hi = mu - 1.96 * se, mu + 1.96 * se
+    v = "EXCESS" if lo > 0 else ("PASS" if hi < 0 else "INDISTINGUISHABLE")
+    print(f"{m:<13} {mu:>10.3f} {lo:>10.2f}..{hi:<10.2f} {t:>7.2f}  {v}")
+print("\ndiff > 0 = the SIM deviates from the server MORE than the server")
+print("deviates from ITSELF under a permuted update order.")
+print("INDISTINGUISHABLE is neither pass nor fail: at this sample size the")
+print("experiment cannot separate them.")
