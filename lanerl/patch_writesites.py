@@ -400,6 +400,33 @@ _WINDUP_B = (
     '                    aa.CastInfo.DesignerCastTime / Math.Max(0.01f, aa.CastInfo.AttackSpeedModifier))) +\n'
 )
 
+
+# --- 9. hp, move order, and AD -- the three fields the floor cannot reach ---
+# `hp` (264 rows) and `move_order` (267) are scored by the parity report but
+# are NOT in `DescribeInternals`, so `server_vs_server.py` -- which joins on
+# the per-unit stream -- cannot measure an order floor for either. They are
+# the only two scored families with no floor, which means they are the only
+# two that cannot yet be classified FLOOR or real under `GATE1-004`.
+#
+# `adbits=` is `STAT-003`: `RUNE_AD_BONUS` in `init.py` is defined as
+# `78.134765625 - 57.88`, and 78.134765625 is exactly 80010/1024 -- the
+# dump's own `Q(AD, StatQ)` value, round-tripped and frozen into a constant.
+# The observation stream rounds to 2 dp, so it bounds the true level-1 AD to
+# [78.135, 78.145) and cannot pin it. Only the exact bits can. Same idiom and
+# same reason as `aacdbits=`.
+#
+# All three go in `DescribeInternals`, which `Describe()` never calls, so the
+# canonical `LANERL_STATEROW` hash stream does not move -- verified by
+# re-recording, not assumed.
+_EXTRA_A = '                " aibuffs=" + BuffDescriptor(ai);\n'
+_EXTRA_B = (
+    '                " hp=" + Q(ai.Stats.CurrentHealth, StatQ) +\n'
+    '                " mhp=" + Q(ai.Stats.HealthPoints.Total, StatQ) +\n'
+    '                " mo=" + (int)ai.MoveOrder +\n'
+    '                " adbits=" + Bits(ai.Stats.AttackDamage.Total) +\n'
+    '                " aibuffs=" + BuffDescriptor(ai);\n'
+)
+
 _EDITS = [
     (_OBJAI, "SetTargetUnit signature", _TGT_SIG_A, _TGT_SIG_B, "lanerlTgtCaller"),
     (_OBJAI, "SetTargetUnit emit", _TGT_EMIT_A, _TGT_EMIT_B, "caller=\" + lanerlTgtCaller"),
@@ -414,6 +441,7 @@ _EDITS = [
     (_OBJMGR, "StopTargeting passthrough", _STOP_BODY_A, _STOP_BODY_B, '"StopTargeting<"'),
     (_DUMP, "aadelaybits/aacastbits", _DELAY_A, _DELAY_B, "aadelaybits"),
     (_DUMP, "aawindupbits/aathreshbits", _WINDUP_A, _WINDUP_B, "aawindupbits"),
+    (_DUMP, "hp/mo/adbits", _EXTRA_A, _EXTRA_B, '" hp=" + Q(ai.Stats'),
     (_UNIT, "Die emit", _DIE_A, _DIE_B, '"Die", NetId'),
     (_UNIT, "SetWaypoints signature", _WPT_SIG_A, _WPT_SIG_B, "lanerlWptCaller"),
     (_UNIT, "SetWaypoints reject/accept emit", _WPT_BODY_A, _WPT_BODY_B, "SetWaypointsRejected"),
