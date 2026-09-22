@@ -769,6 +769,7 @@ def inject_snapshot(
     spawn_x = arr(s.spawn_x); spawn_y = arr(s.spawn_y)
     spawn_seq = arr(s.spawn_seq)
     ai_timer = arr(s.ai_timer); target_priority = arr(s.target_priority)
+    had_target = arr(s.had_target)
     ignore_until = arr(s.ignore_until); help_priority = arr(s.help_priority)
     ai_local_time = arr(s.ai_local_time)
     time_since_attack = arr(s.time_since_attack)
@@ -1138,6 +1139,16 @@ def inject_snapshot(
             time_since_attack[slot] = internal.q_time_since_attack / StatQ
         if internal.target_priority is not None:
             target_priority[slot] = internal.target_priority
+        if internal.had_target is not None:
+            # `aihad=` is the server's own latch. Substituting
+            # `target >= 0` for it disagrees on 556 of 395,486 scored
+            # LaneMinion unit-ticks -- the same order as the whole
+            # `target` residual (522) and in the direction that opens
+            # the port's `TargetJustDied` arm when the server's stays
+            # shut. Injecting it removes a reconstruction, which is the
+            # cheapest class of fix: it changes no model, only what the
+            # model is started from.
+            had_target[slot] = bool(internal.had_target)
         if internal.lane_waypoint_key is not None:
             lane_waypoint_key[slot] = internal.lane_waypoint_key
             note.lane_waypoint_recovery = "exact private currentWaypointIndex"
@@ -1311,6 +1322,7 @@ def inject_snapshot(
         buff_power=jnp.asarray(buff_power, dtype),
         ai_timer=jnp.asarray(ai_timer, dtype),
         target_priority=jnp.asarray(target_priority),
+        had_target=jnp.asarray(had_target, dtype=bool),
         ignore_until=jnp.asarray(ignore_until, dtype),
         help_priority=jnp.asarray(help_priority),
         ai_local_time=jnp.asarray(ai_local_time, dtype),

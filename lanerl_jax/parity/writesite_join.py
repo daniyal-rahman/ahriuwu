@@ -24,6 +24,30 @@ contact with its base rate (`<no-event>` at "7 of 9", against a 93.3% base
 rate). So every caller is reported as share-of-residual, share-of-corpus,
 and the ratio; only the ratio is evidence.
 
+THE LAST-WRITER RULE IS A SELECTION EFFECT. READ THIS BEFORE QUOTING A RATIO.
+----------------------------------------------------------------------------
+This attributes a row to the LAST write in the window, which is what the
+post-tick dump shows. That is correct as a description and misleading as a
+cause, because which site writes last is itself conditional on what else
+happened that tick.
+
+The concrete case, found the day this tool landed. `move_order` attributed
+62.8% of its residual to `LaneMinionAI.OnUpdate@122` against a 13.1% base
+rate -- 4.8x, the largest enrichment in the report, and wrong.
+`LaneMinion.UpdateMoveOrder` survives to end-of-tick only when
+`ObjAIBase.UpdateTarget` declines to write after it (the `IsAttacking` early
+return, or the already-`AttackTo` chase branch). Those are precisely the
+ticks on which the PORT's spurious `HOLD` comes from `step.py`'s `hold` or
+`finish_casting` -- neither of them script code. So a defect living entirely
+in the port's hold/fire timing lights up `OnUpdate@122` at high ratio with
+`LaneMinionAI` completely innocent.
+
+A high ratio here means "this site is the last writer disproportionately
+often among disagreements". It does NOT mean "this site chose wrongly".
+Before acting on one, ask what has to be true for that site to be last, and
+check whether THAT condition is the real correlate. The base rate protects
+against the common-site error; it does not protect against this one.
+
 JOIN WINDOW
 -----------
 Rows are keyed at the INJECTION tick N. The server's write lands during
@@ -164,6 +188,11 @@ def main(argv=None) -> None:
                   f"{pcor:>7.2f}% {ratio:>6.1f}x")
         print()
 
+    print("CAVEAT: rows are attributed to the LAST write in the window, and which\n"
+          "site writes last is itself conditional on what else happened that tick.\n"
+          "A high ratio means 'last writer disproportionately often among\n"
+          "disagreements', NOT 'chose wrongly'. See this module's docstring for a\n"
+          "worked case where the top-ranked site at 4.8x was innocent.\n")
     print("ratio = share of the residual / share of the corpus. 1.0x means the "
           "site is no more common\namong disagreements than among all writes, "
           "i.e. it explains nothing. Only a large\nratio is evidence, and "
