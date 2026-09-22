@@ -49,9 +49,25 @@ command is in `lanerl/patch_observability.py`'s docstring. Build to
     python -m lanerl_jax.parity.tier1_full --out lanerl_jax/runs/tier1_full \
         --game-seconds 420
 
-    # instrumented recording, for AA-004 / CFH-002
-    #   must exceed 200 s of game time: waves clash at ~110 s, so a 120 s
-    #   window exercises neither emit site and "passes" while proving nothing.
+    # instrumented recording, for AA-004 / CFH-002 / AA-005
+    ops/login_capped.sh 6G 2 .venv-jax/bin/python -m lanerl_jax.parity.record \
+        --out lanerl_jax/runs/<name> --tag <tag> --game-seconds 250
+
+`--game-seconds` must exceed ~200 s: waves clash at ~110 s, so a 120 s window
+exercises none of the emit sites and "passes" while proving nothing
+(`METH-002`). The command defaults to the INSTRUMENTED build
+(`bin/Trace/net6.0` + `lanerl/cfg/garen1v1_trace.json`) and fails loudly if it
+is missing; `--stock` opts out and is the only way to get a recording with no
+`aacdbits`/`aagate`/`CallForHelpClear` in it.
+
+This recording is **driven** — the champion follows a deterministic scripted
+action stream, written to `<tag>_actions.json` beside the log. **Every analysis
+of it must be passed that file.** Without it the simulator steps with no orders
+while the server's champion walks, attack-moves and casts, and the difference
+is scored as a port defect: one such run reported 186 phantom champion target
+disagreements and 142 phantom move-order rows (`METH-006`). The drill now
+refuses to start rather than let that happen, but `tier1_full` does not — pass
+`--action-log` there by hand.
 
 Then, on any recording whose numbers you will quote:
 

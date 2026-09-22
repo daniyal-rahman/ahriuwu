@@ -369,14 +369,44 @@ def _main(argv: Optional[List[str]] = None) -> int:
                     f"instrumented build missing: {p}\n"
                     "Build it first -- see lanerl/patch_observability.py's docstring.")
 
+    # The instrumented BUILD is only half of it. `CallForHelpClear` and the
+    # minion branch stream (`trigger=`/`order=`/`timer=`) are both compiled in
+    # but gated at runtime on `LANERL_DECISION_TRACE`, so recording against
+    # `bin/Trace` without it yields a log that is instrumented in the assembly
+    # and silent in the file -- which is exactly what happened on the first
+    # `aa005_gate` recording, and nothing said so. Default it ON for an
+    # instrumented recording, since that is the entire reason for choosing one.
+    extra_env = None if args.stock else {"LANERL_DECISION_TRACE": "1"}
+
     fx = record_fixture(args.out, decisions=decisions, port_base=args.port_base,
-                        tag=args.tag, server_dir=server_dir, config_path=config_path)
+                        tag=args.tag, server_dir=server_dir,
+                        config_path=config_path, extra_env=extra_env)
 
     # A script that fails to compile does NOT stop the server; it silently stops
     # being the AI and the trace still parses (METH-003). Never hand back a log
     # without saying which it was.
     from .script_health import check_script_load
     print(f"log: {fx.log}")
+    # Say which instrumented streams are actually IN the file. Every one of
+    # these has now failed silently at least once: the field absent because the
+    # build was stock, the emit absent because the env gate was off, the script
+    # absent because it failed to compile and the server carried on without it.
+    # Streamed, not `read_text`: these logs run to hundreds of MB and this
+    # runs on a shared 6-core login node where a needless resident copy is
+    # somebody else's problem.
+    needles = ((" aacdbits=", "AA-004 unclamped cooldown"),
+               (" aagate=", "AA-005 swing gate word"),
+               ("CallForHelpClear", "CFH-002 pre-clear map"),
+               ("trigger=", "minion branch stream"))
+    counts = {n: 0 for n, _ in needles}
+    with fx.log.open(errors="replace") as fh:
+        for line in fh:
+            for needle, _ in needles:
+                if needle in line:
+                    counts[needle] += 1
+    for needle, what in needles:
+        n = counts[needle]
+        print(f"  {'OK ' if n else 'ABSENT'}  {what} ({n} lines)")
     print(f"actions: {fx.actions}")
     print(f"observations: {fx.observations}")
     print(f"script health: {check_script_load(fx.log)}")
