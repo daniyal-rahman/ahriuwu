@@ -80,12 +80,20 @@ def _xp_range_share(rec, radius: float = 1400.0) -> float:
 def _one(seed: int, decisions: int, port_base: int, shuffled: int | None,
          policy_name: str = "oracle"):
     from .gate3_first_divergence import Recorder
-    from .last_hit_drive import (noisy_policy, run_oracle_in_sim,
-                                 run_oracle_on_server)
+    from .last_hit_drive import (heuristic_policy, noisy_policy,
+                                 run_oracle_in_sim, run_oracle_on_server)
 
     # One policy object per SEED, shared by both engines, so the arm is
     # identical on each side and any outcome difference is the engines.
-    pol = noisy_policy(seed) if policy_name == "noisy" else None
+    if policy_name == "noisy":
+        pol = noisy_policy(seed)
+    elif policy_name == "heuristic":
+        # `LanerlBot`'s farm core, DETERMINISTIC -- the seed is inert
+        # through it by design, so repeated trials on one engine must
+        # come out identical and any spread is the engine's.
+        pol = heuristic_policy()
+    else:
+        pol = None
 
     out = {}
     rec = Recorder()
@@ -137,7 +145,8 @@ def main(argv=None) -> None:
                     help="ALSO run the server with its update order permuted, "
                         "on the same seeds, to get the reference gap this "
                         "gate is judged against.")
-    ap.add_argument("--policy", choices=("oracle", "noisy"), default="oracle",
+    ap.add_argument("--policy", choices=("oracle", "noisy", "heuristic"),
+                    default="oracle",
                     help="`oracle` is the scripted last-hitter: deterministic, and since this scenario runs with bot_teams=\"none\" the seed drives NOTHING through it -- a 30-seed sweep returned 30 byte-identical outcomes. `noisy` wanders with probability 0.15, seeded, which is the only way a seed enters this experiment at all, and it visits the turret-aggro, death and off-route states the oracle never reaches.")
     ap.add_argument("--run-tag", default=None,
                     help="an identifier shared by every job in ONE batch, "

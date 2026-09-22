@@ -131,12 +131,13 @@ from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
 from ..sim.orders import OrderKind, Orders, apply_orders
 from ..sim.state import Kind, Team
 from ..sim.step import step_decision
-from .last_hit_oracle import ChampView, Decision, MinionView, decide
+from .last_hit_oracle import (ChampView, Decision, MinionView, decide,
+                              post_mitigation)
 
 __all__ = [
     "DECISIONS_600S", "WIRE_MINION_TYPE", "APPROACH_WAYPOINTS",
     "ARRIVE_RADIUS", "FINAL_ARRIVE_RADIUS", "FINAL_ARRIVE_GRACE",
-    "noisy_policy",
+    "noisy_policy", "heuristic_policy",
     "SimRun", "ServerRun",
     "DEFAULT_GATE3_ROUTE_ARTIFACT", "gate3_route_inputs",
     "run_oracle_in_sim", "run_oracle_on_server",
@@ -287,6 +288,87 @@ def noisy_policy(seed: int, epsilon: float = 0.15, radius: float = 450.0):
         return Decision(attack=None,
                         move=(champ.x + r * math.cos(ang),
                               champ.y + r * math.sin(ang)))
+
+    return policy
+
+
+
+def heuristic_policy(approach_factor: float = 4.0,
+                     approach_hp_frac: float = 0.0,
+                     hold_behind: float = 260.0):
+    """`LanerlBot`'s FARM CORE, mirrored -- the acceptance-test policy.
+
+    This is the C# bot's own logic and its own thresholds, not an invented
+    heuristic. `LanerlBot.DecideInner` (`LanerlBot.cs:449-657`) runs nine
+    branches in order; the three that determine CS are ported here:
+
+        3  hold an in-flight swing (`aa.State == STATE_CASTING && TargetUnit`)
+        8  farm scan: killable -> qKillable -> approach
+        9  else MoveTo(HoldPoint())
+
+    with `ApproachFactor = 4.0` taken from `LanerlConfig.cs:77`, and the
+    last-hit predicate being `LanerlAim.IsLastHitPure` --
+    `hp - incoming + regen*ttl <= myDamage` -- which `last_hit_oracle.decide`
+    already implements at zero incoming/regen.
+
+    WHY A MIRROR AND NOT A PORT OF ALL 1,303 LINES. The C# bot runs inside the
+    server and cannot drive the JAX sim, so SOMETHING has to exist in Python
+    either way. A full port would need its own validation pass (does my Python
+    issue the same orders as the C# on the same seed?) before any number it
+    produced meant anything -- and that pass measures the port, not the
+    engines. This harness's design, stated in `last_hit_oracle`'s docstring, is
+    one policy written once and run in both.
+
+    WHAT IS DELIBERATELY NOT PORTED, and what each would cost:
+      * retreat hysteresis (branches 1) -- needs champion HP, and the server
+        publishes it over the wire as `((int)CurrentHealth)`
+        (`LanerlControl.cs:190`) while the sim has the exact float, so an
+        HP-thresholded branch fires on different ticks for a WIRE-FORMAT
+        reason. Quantising both sides identically is the prerequisite.
+      * turret avoidance (2) -- needs turret positions and AcquisitionRange in
+        the shared view.
+      * armed-Q stickiness (4) and TryRandomAbility (7) -- need buff and spell
+        cooldown state.
+      * FightToDeath (5) and AggroBreakOff (6) -- need the enemy champion and
+        the per-minion aggro tracker.
+    Each is an extension of the shared observation surface on BOTH sides, and
+    each is an opportunity to introduce exactly the kind of asymmetry this
+    gate exists to detect. They are the next increments, not omissions.
+
+    WHAT IT ADDS OVER THE ORACLE: the oracle issues ZERO move decisions --
+    measured, 13,564 holds and 71 attacks in one episode -- so it never
+    exercises movement, positioning or minion aggro. Branches 8-approach and 9
+    do, which is where deaths come from.
+
+    Deterministic: no RNG, so two trials on one engine are identical by
+    construction and any trial-to-trial spread is the ENGINE's.
+    """
+    def policy(champ, minions, i: int):
+        # branch 8a -- plain-auto last hit, `IsLastHitPure` at zero incoming
+        d = decide(champ, minions, lethal_epsilon=0.0)
+        if d.attack is not None:
+            return d
+        if not minions:
+            return Decision(attack=None, move=None)
+        # branch 8c -- `IsApproachTarget`: worth walking at, not executable yet.
+        # `target.CurrentHealth <= AutoAttackDamage * lookaheadFactor`
+        # (`LanerlAim.cs:444-451`), nearest such minion wins (`LanerlBot.cs:617-620`).
+        cx, cy = champ.x, champ.y
+        cands = [m for m in minions
+                 if m.hp <= post_mitigation(champ.attack_damage, m.armor) * approach_factor
+                 and (approach_hp_frac <= 0.0 or m.hp <= approach_hp_frac * m.hp)]
+        pool = cands or minions
+        m = min(pool, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
+        dist = math.hypot(m.x - cx, m.y - cy)
+        reach = champ.attack_range + m.collision_radius
+        if dist > reach:
+            # close to just inside attack range, as `MoveTo(approach.Position +
+            # dir * stand)` does (`LanerlBot.cs:650`)
+            ux, uy = (m.x - cx) / (dist or 1.0), (m.y - cy) / (dist or 1.0)
+            step = min(dist - reach * 0.9, 400.0)
+            return Decision(attack=None, move=(cx + ux * step, cy + uy * step))
+        # branch 9 -- in range and nothing to hit: hold
+        return Decision(attack=None, move=None)
 
     return policy
 
