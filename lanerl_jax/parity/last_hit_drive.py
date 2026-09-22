@@ -134,7 +134,8 @@ from .last_hit_oracle import ChampView, MinionView, decide
 
 __all__ = [
     "DECISIONS_600S", "WIRE_MINION_TYPE", "APPROACH_WAYPOINTS",
-    "ARRIVE_RADIUS", "SimRun", "ServerRun",
+    "ARRIVE_RADIUS", "FINAL_ARRIVE_RADIUS", "FINAL_ARRIVE_GRACE",
+    "SimRun", "ServerRun",
     "DEFAULT_GATE3_ROUTE_ARTIFACT", "gate3_route_inputs",
     "run_oracle_in_sim", "run_oracle_on_server",
 ]
@@ -187,6 +188,40 @@ APPROACH_WAYPOINTS = TOP_LANE_PATH[:6]
 ARRIVE_RADIUS = 100.0
 _ARRIVE_RADIUS_SQ = ARRIVE_RADIUS * ARRIVE_RADIUS
 
+#: The LAST approach waypoint is different, and the generous radius above is
+#: wrong for it.
+#:
+#: Intermediate waypoints are waypoints: the champion keeps walking, so
+#: advancing 100 u early costs nothing -- the next leg absorbs it. The final
+#: one is a STOPPING POINT. The moment it is reached the driver hands over to
+#: `decide()`, which on an empty lane returns `hold`, and the champion stands
+#: wherever it happened to be for the next several thousand decisions.
+#:
+#: Measured on the canonical gate-3 run: at the handover decision (1242) the
+#: SERVER's champion is at (2806.000, 13075.000) -- exactly the waypoint,
+#: 0.00 u -- while the SIM's is at (2736.387, 13008.614), **96.19 u short**,
+#: which the 100 u ball accepts. The server lands exactly because its movement
+#: engine carries the champion to the order's destination; the sim stops
+#: because the driver stopped issuing orders. That asymmetry is in the
+#: HARNESS, not in either engine's pathing.
+#:
+#: The 96 u then persists as a 66.4 u standing offset (median == p90 == 66.4
+#: over 3,200 decisions, i.e. zero variance), which is enough to put the sim
+#: outside League's 1,400 u XP radius on 11.4% of decisions against the
+#: server's 0.2%, cost it the level-4 race at decision 7,460, and open the CS
+#: and death gaps downstream (`GATE3-002`). Gate 3's outcome gap was being
+#: charged to `PATH-007`; most of it is this constant.
+FINAL_ARRIVE_RADIUS = 8.0
+_FINAL_ARRIVE_RADIUS_SQ = FINAL_ARRIVE_RADIUS * FINAL_ARRIVE_RADIUS
+
+#: Bounded wait on that tight radius. An engine that cannot close the last few
+#: units -- terrain, a collision push, a movement-speed difference -- must not
+#: hang the experiment; it hands over anyway and the caller reports the miss,
+#: because a driver that silently waits forever is worse than one that is
+#: visibly approximate. 600 decisions is 20 s, far longer than the ~4 s the
+#: last leg takes.
+FINAL_ARRIVE_GRACE = 600
+
 
 def gate3_route_inputs(*, route_table=None, terrain=None,
                        table_disabled: bool = False):
@@ -215,7 +250,8 @@ def gate3_route_inputs(*, route_table=None, terrain=None,
 
 
 def _advance_approach(x: float, y: float, idx: int,
-                      respawned: bool = False) -> int:
+                      respawned: bool = False,
+                      stalled: int = 0) -> int:
     """Bump ``idx`` into :data:`APPROACH_WAYPOINTS` once arrived at it.
 
     Closed-loop on each engine's OWN reported position rather than a
@@ -235,7 +271,18 @@ def _advance_approach(x: float, y: float, idx: int,
     if idx >= len(APPROACH_WAYPOINTS):
         return idx
     tx, ty = APPROACH_WAYPOINTS[idx]
-    if (x - tx) ** 2 + (y - ty) ** 2 <= _ARRIVE_RADIUS_SQ:
+    d2 = (x - tx) ** 2 + (y - ty) ** 2
+    # The final waypoint is a stopping point, not a waypoint: see
+    # `FINAL_ARRIVE_RADIUS`. Advancing early there leaves the champion parked
+    # up to `ARRIVE_RADIUS` from where the other engine parks, and that offset
+    # -- not either engine's pathing -- drove gate 3's XP gap.
+    last = idx == len(APPROACH_WAYPOINTS) - 1
+    if d2 <= (_FINAL_ARRIVE_RADIUS_SQ if last else _ARRIVE_RADIUS_SQ):
+        return idx + 1
+    if last and stalled >= FINAL_ARRIVE_GRACE:
+        # Bounded wait: hand over rather than hang. See FINAL_ARRIVE_GRACE.
+        # The caller reports the miss, because a driver that waits forever is
+        # worse than one that is visibly approximate.
         return idx + 1
     return idx
 
@@ -368,6 +415,7 @@ def run_oracle_in_sim(
                              lane_path=path)
 
     wp_idx = 0
+    _stall = 0   # consecutive decisions on the FINAL approach waypoint
     approach_decisions = attacks = moves = holds = deaths = 0
     walks: list = []
     cur_walk = 0
@@ -387,7 +435,8 @@ def run_oracle_in_sim(
         if respawned and cur_walk:
             walks.append(cur_walk)
             cur_walk = 0
-        wp_idx = _advance_approach(x0, y0, wp_idx, respawned)
+        _stall = _stall + 1 if wp_idx == len(APPROACH_WAYPOINTS) - 1 else 0
+        wp_idx = _advance_approach(x0, y0, wp_idx, respawned, _stall)
 
         if on_decision is not None:
             on_decision({
@@ -594,6 +643,7 @@ def run_oracle_on_server(
     )
     env.start()
     wp_idx = 0
+    _stall = 0   # consecutive decisions on the FINAL approach waypoint
     approach_decisions = attacks = moves = holds = deaths = 0
     walks: list = []
     cur_walk = 0
@@ -623,7 +673,8 @@ def run_oracle_on_server(
             if respawned and cur_walk:
                 walks.append(cur_walk)
                 cur_walk = 0
-            wp_idx = _advance_approach(bx, by, wp_idx, respawned)
+            _stall = _stall + 1 if wp_idx == len(APPROACH_WAYPOINTS) - 1 else 0
+            wp_idx = _advance_approach(bx, by, wp_idx, respawned, _stall)
 
             if on_decision is not None:
                 on_decision({

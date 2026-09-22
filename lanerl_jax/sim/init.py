@@ -327,7 +327,17 @@ TURRET_HP_BONUS_NEXUS = 125.0
 #: (quints ``5335``) = 15.2548 of rune, plus ``Martial Mastery``'s flat 5.0
 #: (talent ``4132``), = 20.2548; armour is 9 x 1.0 from the seals (``5317``),
 #: = 9.0, with no armour talent scripted at all.
-RUNE_AD_BONUS = 78.134765625 - 57.88            # +20.2548
+RUNE_AD_BONUS = 78.13500213623047 - 57.88      # +20.2550021
+#: The level-1 total was previously written as 78.134765625, which is
+#: exactly 80010/1024 -- the DUMP's `Q(AD, StatQ)` value, round-tripped
+#: and frozen into a constant. The server's true float32 is
+#: 78.13500213623047, read from `adbits=` (an exact-bits emit added for
+#: `STAT-003`, same idiom as `aacdbits`). The observation stream rounds
+#: to 2 dp and shows 78.14, which is a correct rounding of 78.135002 and
+#: bounds the truth to [78.135, 78.145) without pinning it -- reading the
+#: error off that stream overstated it 20x, as 0.0052 rather than the
+#: true 0.000237. AD is order-INDEPENDENT arithmetic, so no order floor
+#: applies and the gate requires it exact regardless of size.
 RUNE_ARMOR_BONUS = 36.5361328125 - 27.5361328125  # +9.0
 
 #: `Brute Force` (talent `4122`, rank 3 in `lanerl/cfg/garen1v1.json`) does
