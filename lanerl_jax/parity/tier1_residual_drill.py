@@ -337,6 +337,15 @@ def main(argv=None) -> None:
                         "pre-clear call-for-help map). Turns CFH-002 from an "
                         "inferred signature into a direct test of whether the "
                         "map actually contained the server's pick.")
+    ap.add_argument("--dump-rows", default=None,
+                    help="write every disagreeing row, in every family, as "
+                        "JSONL. The printed report is a set of aggregates "
+                        "chosen in advance; the open residuals are the ones "
+                        "no chosen aggregate explains, so they are invisible "
+                        "in it by construction. This is the raw evidence, "
+                        "for joining against the server's own write-site "
+                        "stream (`caller=` on SetTargetUnit / UpdateMoveOrder "
+                        "/ SetWaypoints) rather than against a hypothesis.")
     ap.add_argument("--decision-log", default=None,
                     help="a LANERL_DECISION_TRACE=1 recording of the SAME "
                         "seed/config, for a ground-truth ORDER-003 check: "
@@ -1258,6 +1267,33 @@ def main(argv=None) -> None:
     print("\n-- move_order confusion (sim -> server) --")
     for (kind, sim_v, srv_v), n in order_confusion.most_common(20):
         print(f"  {n:6d}  {kind}: sim={sim_v} server={srv_v}")
+
+    # ---- raw rows, before any aggregate is chosen ------------------------
+    if a.dump_rows:
+        import json as _json
+        _families = (
+            ("target", target_rows), ("move_order", order_rows),
+            ("waypoints", wp_rows_keyed), ("fire", fire_rows),
+            ("position", pos_rows), ("aa_hit", hit_rows),
+        )
+        _dst = Path(a.dump_rows)
+        _dst.parent.mkdir(parents=True, exist_ok=True)
+        _n = 0
+        with _dst.open("w") as _fh:
+            for _fam, _rows in _families:
+                for _r in _rows:
+                    # numpy scalars are not JSON-serialisable and several of
+                    # these fields are read straight off arrays.
+                    _out = {"family": _fam}
+                    for _k, _v in _r.items():
+                        if hasattr(_v, "item") and getattr(_v, "shape", ()) == ():
+                            _v = _v.item()
+                        elif isinstance(_v, (bytes, bytearray)):
+                            _v = _v.decode("utf-8", "replace")
+                        _out[_k] = _v
+                    _fh.write(_json.dumps(_out, default=str) + "\n")
+                    _n += 1
+        print(f"\n[dump-rows] {_n} rows -> {_dst}")
 
     _drill_move_order(order_rows, order_denom)
 
