@@ -1000,6 +1000,28 @@ def main(argv=None) -> None:
                                         and my_help_map_was_empty)
 
                 target_rows.append(dict(
+                    # GIVE-001: the server's 4-second failed-to-attack rule.
+                    # `ReevaluateBehavior` (`LaneMinionAI.cs:323-334`): a target
+                    # that is STILL VALID is nonetheless dropped and `Ignore()`d
+                    # for 500 ms once `timeSinceLastAttack >= 4000f`. The
+                    # counter resets to 0 whenever `LaneMinion.IsAttacking` is
+                    # true or there is no target (`:66-73`), so it measures
+                    # "how long have I been unable to land a swing on this
+                    # target". It is dumped as `aitsa=`, so no new
+                    # instrumentation is needed to test it -- which matters,
+                    # because the two previous attributions here were both made
+                    # from signatures and both turned out wrong.
+                    # UNITS: `aitsa` is `Q(timeSinceLastAttack, StatQ)` and
+                    # the field itself is in MILLISECONDS (`+= delta`, and the
+                    # rule's literal is `4000f` for four seconds). So
+                    # `q / StatQ` is milliseconds, NOT seconds, and the
+                    # threshold to compare against is 4000. Getting this wrong
+                    # once made a 1.03 s maximum read as "1033 s", which is
+                    # longer than the whole recording -- the tell that caught
+                    # it was the magnitude being physically impossible.
+                    injected_tsa_ms=(None if iv is None
+                                     or iv.q_time_since_attack is None
+                                     else iv.q_time_since_attack / StatQ),
                     cfh_pre_nonempty=_cfh_lookup(cfh_pre, c.net_id, iv),
                     cfh_pre_has_pick=_cfh_has(cfh_pre, c.net_id, iv, srv_t),
                     cfh_attacks_my_ally=server_pick_attacks_my_ally,
@@ -1186,6 +1208,33 @@ def main(argv=None) -> None:
         agree = sum(1 for r in gt
                     if bool(r["cfh_unobservable"]) == bool(r["cfh_pre_has_pick"]))
         print(f"      heuristic agreed with ground truth on {agree}/{len(gt)}")
+
+    print("\n-- GIVE-001: is the residual the server's 4 s give-up rule? --")
+    print("   `ReevaluateBehavior` drops a STILL-VALID target and ignores it")
+    print("   for 500 ms once `timeSinceLastAttack >= 4000 ms`. If the sim")
+    print("   does not reproduce that, the server lets go while the sim holds")
+    print("   -- which is exactly the dominant verdict here.")
+    have = [r for r in minion_rows if r["injected_tsa_ms"] is not None]
+    if not have:
+        print("   (no dumped `aitsa` on these rows)")
+    else:
+        over = [r for r in have if r["injected_tsa_ms"] >= 4000.0]
+        print(f"   {len(have)} rows carry a dumped time-since-attack; "
+              f"{len(over)} ({100 * len(over) / len(have):.1f}%) are at or "
+              f"past the 4000 ms threshold")
+        print("   by verdict (n at/past 4 s / n with a value, and the max seen):")
+        for verdict, _n in collections.Counter(
+                r["verdict"] for r in have).most_common():
+            sub = [r for r in have if r["verdict"] == verdict]
+            yes = sum(1 for r in sub if r["injected_tsa_ms"] >= 4000.0)
+            mx = max(r["injected_tsa_ms"] for r in sub)
+            print(f"     {verdict}: {yes}/{len(sub)}  max tsa {mx:.1f} ms")
+        print("   distribution of time-since-attack on these rows:")
+        for lo, hi in ((0, 1), (1, 100), (100, 500), (500, 1000),
+                       (1000, 2000), (2000, 3900), (3900, 4000), (4000, 1e12)):
+            n = sum(1 for r in have if lo <= r["injected_tsa_ms"] < hi)
+            if n:
+                print(f"     {n:5d}  {lo} ms <= tsa < {hi} ms")
 
     left = [r for r in minion_rows if not r["cfh_unobservable"]]
     print(f"   NOT explained by the unobservable map: {len(left)}, by verdict:")
