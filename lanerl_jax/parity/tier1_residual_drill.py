@@ -39,6 +39,39 @@ ORDER_NAMES = {0: "NONE", 1: "HOLD", 2: "MOVE_TO", 3: "ATTACK_TO",
                4: "ATTACK_MOVE", 5: "STOP", 6: "CAST_SPELL"}
 
 
+def _cfh_entries(cfh_pre, net_id, iv, tol_ms: int = 2):
+    """The pre-clear call-for-help map for one unit at one tick, or None.
+
+    ``iv.q_ai_local`` is the dump's `ailocal` in StatQ, and the event's key is
+    the script's `localTime` in whole ms, so the join is approximate by
+    construction; ``tol_ms`` is the slack. ``None`` means "no event found",
+    which is NOT the same as "the map was empty" and must not be collapsed
+    with it -- a minion that did not re-evaluate this tick emits no event at
+    all.
+    """
+    if not cfh_pre or iv is None or iv.q_ai_local is None:
+        return None
+    lt = int(round(iv.q_ai_local / 1024.0))
+    for d in range(0, tol_ms + 1):
+        for cand in ((lt - d,) if d else (lt,)) + ((lt + d,) if d else ()):
+            hit = cfh_pre.get((net_id, cand))
+            if hit is not None:
+                return hit
+    return None
+
+
+def _cfh_lookup(cfh_pre, net_id, iv):
+    e = _cfh_entries(cfh_pre, net_id, iv)
+    return None if e is None else bool(e)
+
+
+def _cfh_has(cfh_pre, net_id, iv, pick):
+    e = _cfh_entries(cfh_pre, net_id, iv)
+    if e is None or not pick:
+        return None
+    return pick in e
+
+
 def _drill_move_order(rows, denom) -> None:
     """Is the LaneMinion move-order residual a mechanism or a floor?
 
@@ -209,6 +242,11 @@ def main(argv=None) -> None:
     ap.add_argument("--to-ms", type=int, default=10**9)
     ap.add_argument("--max-pairs", type=int, default=2000)
     ap.add_argument("--examples", type=int, default=6)
+    ap.add_argument("--cfh-log", default=None,
+                    help="a recording carrying `CallForHelpClear` events (the "
+                        "pre-clear call-for-help map). Turns CFH-002 from an "
+                        "inferred signature into a direct test of whether the "
+                        "map actually contained the server's pick.")
     ap.add_argument("--decision-log", default=None,
                     help="a LANERL_DECISION_TRACE=1 recording of the SAME "
                         "seed/config, for a ground-truth ORDER-003 check: "
@@ -217,6 +255,50 @@ def main(argv=None) -> None:
                         "minion's SetTargetUnit? State diff alone cannot "
                         "see intra-tick order; the branch log can.")
     a = ap.parse_args(argv)
+
+    # ---- CFH-002's GROUND TRUTH: the pre-clear call-for-help map ---------
+    # `CallForHelpClear` (added 2026-09-21) emits `unitsAttackingAllies`
+    # immediately BEFORE `LaneMinionAI` wipes it, i.e. exactly the map
+    # `FoundNewTarget` just read. Its `t=` is the script's own `localTime`
+    # (time since THAT minion spawned), not game time, because a Content
+    # script cannot reach `_game` (`GameObject._game` is protected). The dump
+    # publishes each minion's `ailocal=` every tick, so (netid, localTime)
+    # aligns to a game tick -- verified on a real event: localTime 30666 for
+    # id 1073743694 lands on game tick 120660 where ailocal=31402226, i.e.
+    # 30666*1024 to within 242 quanta (0.24 ms).
+    #
+    # This is what turns `CFH-002` from an inferred signature into a direct
+    # test: for a disagreeing target row, was the chooser's pre-clear map
+    # actually non-empty, and did it actually contain the unit the server
+    # picked?
+    cfh_pre = {}
+    if a.cfh_log:
+        import re as _re
+        pat = _re.compile(
+            r"LANERL_DECISION t=(\d+) k=CallForHelpClear id=(\d+) n=(\d+)(.*)")
+        n_ev = n_nonempty = 0
+        with open(a.cfh_log, errors="replace") as fh:
+            for line in fh:
+                m = pat.search(line)
+                if m is None:
+                    continue
+                n_ev += 1
+                lt, nid, cnt, rest = (int(m.group(1)), int(m.group(2)),
+                                      int(m.group(3)), m.group(4).strip())
+                entries = {}
+                if cnt and rest:
+                    for tok in rest.split(";"):
+                        if ":" in tok:
+                            k, v = tok.split(":", 1)
+                            try:
+                                entries[int(k)] = int(v)
+                            except ValueError:
+                                pass
+                if entries:
+                    n_nonempty += 1
+                cfh_pre[(nid, lt)] = entries
+        print(f"pre-clear CFH maps: {n_ev} events, {n_nonempty} non-empty "
+              f"({100 * n_nonempty / max(1, n_ev):.2f}%)", flush=True)
 
     dec_by_t = None
     if a.decision_log:
@@ -918,6 +1000,8 @@ def main(argv=None) -> None:
                                         and my_help_map_was_empty)
 
                 target_rows.append(dict(
+                    cfh_pre_nonempty=_cfh_lookup(cfh_pre, c.net_id, iv),
+                    cfh_pre_has_pick=_cfh_has(cfh_pre, c.net_id, iv, srv_t),
                     cfh_attacks_my_ally=server_pick_attacks_my_ally,
                     help_map_empty=my_help_map_was_empty,
                     cfh_unobservable=cfh_unobservable,
@@ -1086,6 +1170,23 @@ def main(argv=None) -> None:
         yes = sum(1 for r in sub if r["cfh_unobservable"])
         print(f"     {verdict}: {yes}/{len(sub)} "
               f"({100 * yes / max(1, len(sub)):.1f}%)")
+    gt = [r for r in minion_rows if r["cfh_pre_nonempty"] is not None]
+    if gt:
+        print("   -- GROUND TRUTH from the pre-clear map (`CallForHelpClear`) --")
+        print("      This replaces the inferred signature above with the map")
+        print("      the server actually read. `None` = no clear event found for")
+        print("      that unit+tick, which means it did NOT re-evaluate, and is")
+        print("      NOT the same as an empty map.")
+        ne = sum(1 for r in gt if r["cfh_pre_nonempty"])
+        hp = sum(1 for r in gt if r["cfh_pre_has_pick"])
+        print(f"      {len(gt)} / {len(minion_rows)} rows located a clear event")
+        print(f"      {ne} of those had a NON-EMPTY pre-clear map")
+        print(f"      {hp} of those had the SERVER'S PICK actually IN the map "
+              f"-- this is the only number that confirms CFH-002 caused the row")
+        agree = sum(1 for r in gt
+                    if bool(r["cfh_unobservable"]) == bool(r["cfh_pre_has_pick"]))
+        print(f"      heuristic agreed with ground truth on {agree}/{len(gt)}")
+
     left = [r for r in minion_rows if not r["cfh_unobservable"]]
     print(f"   NOT explained by the unobservable map: {len(left)}, by verdict:")
     for verdict, n in collections.Counter(
