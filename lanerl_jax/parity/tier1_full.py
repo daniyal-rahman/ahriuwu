@@ -62,6 +62,13 @@ def main(argv=None) -> None:
                     help="reuse an already-recorded server log instead of "
                         "booting a fresh server (for iterating on the "
                         "differ/report without paying to re-record)")
+    ap.add_argument(
+        "--instrumented", action="store_true",
+        help="Record against the observability build, so the corpus carries "
+             "aacdbits/aagate/status/aibuffs and the branch stream. Every "
+             "emission is behaviour-neutral, so this reproduces the stock "
+             "corpus byte for byte and merely carries more -- which is what "
+             "lets the canonical numbers be ATTRIBUTED instead of counted.")
     ap.add_argument("--action-log", default=None,
                     help="ActionLog JSON recorded beside a driven fixture; "
                          "orders are replayed at their endpoint dump boundary")
@@ -83,7 +90,8 @@ def main(argv=None) -> None:
     else:
         out = Path(a.out)
         log = record_idle_trace(out, game_seconds=a.game_seconds,
-                                port_base=a.port_base)
+                                port_base=a.port_base,
+                                instrumented=a.instrumented)
         print(f"recorded: {log}", flush=True)
 
     action_log = None

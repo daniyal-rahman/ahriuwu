@@ -106,14 +106,42 @@ EXAMPLE_LIMIT = 12
 _tick_jit = jax.jit(tick)
 
 
+def _trace_server_dir() -> Path:
+    from lanerl_train import paths
+    d = paths.server_dir().parent.parent / "Trace" / "net6.0"
+    if not d.exists():
+        raise SystemExit(
+            f"instrumented build missing: {d}\n"
+            "Build it first -- see lanerl/patch_observability.py's docstring.")
+    return d
+
+
+def _trace_config() -> Path:
+    p = Path(__file__).resolve().parents[2] / "lanerl" / "cfg" / "garen1v1_trace.json"
+    if not p.exists():
+        raise SystemExit(f"instrumented config missing: {p}")
+    return p
+
+
 def record_idle_trace(out_dir: Path, game_seconds: float = GAME_SECONDS,
-                      port_base: int = 48765, seed: int = SEED) -> Path:
+                      port_base: int = 48765, seed: int = SEED,
+                      instrumented: bool = False) -> Path:
     """Boot one server, drive it with NO orders at all, return the log path.
 
     ``bot_teams="none"`` and every ``env.step`` call passes ``[None]`` --
     nothing ever issues a command, so the only things moving are the minion
     waves, the wave spawner's clock, and the turrets they eventually walk
     into range of. Fully deterministic and policy-free by construction.
+
+    ``instrumented`` records against the observability build instead of the
+    stock one, adding `aacdbits`/`aagate`/`status`/`aibuffs` and the minion
+    branch stream. This is what lets the CANONICAL corpus be attributed rather
+    than merely counted: every emission is behaviour-neutral by construction
+    (all of them live in `DescribeInternals`, which `Describe()` never calls)
+    and measured to be so, so an instrumented idle recording at the same seed
+    and duration reproduces the stock corpus's canonical stream BYTE FOR BYTE
+    and simply carries more alongside it. Verify that, do not assume it: the
+    whole value of the exercise is that the historical numbers stay comparable.
     """
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
@@ -126,8 +154,11 @@ def record_idle_trace(out_dir: Path, game_seconds: float = GAME_SECONDS,
         1,
         spec=ServerLaunchSpec(
             toponly=True, bot_teams="none", bot_seed=seed, step_ticks=2,
+            server_dir=_trace_server_dir() if instrumented else None,
+            config_path=_trace_config() if instrumented else None,
             extra_env={"LANERL_STATE_DUMP": "1", "LANERL_STATE_DUMP_FULL": "1",
-                       "LANERL_STATE_DUMP_INTERNALS": "1"},
+                       "LANERL_STATE_DUMP_INTERNALS": "1",
+                       **({"LANERL_DECISION_TRACE": "1"} if instrumented else {})},
         ),
         log_dir=out_dir / "server",
         ports=PortAllocator(base=port_base).allocate(1),
