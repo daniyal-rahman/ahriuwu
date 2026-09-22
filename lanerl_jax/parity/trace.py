@@ -174,6 +174,16 @@ class AIInternal:
     had_target: Optional[bool]
     ignored: Tuple[Tuple[int, int], ...]
     help: Tuple[Tuple[int, int], ...]
+    #: `aacdbits` -- the float32 BIT PATTERN of the UNCLAMPED remaining
+    #: auto-attack cooldown, added 2026-09-21 for `AA-004`. `aacd` publishes
+    #: `Q(Math.Max(0f, remaining), StatQ)`: the clamp runs before the
+    #: quantisation, so a still-positive sub-quantum residue is flattened to a
+    #: flat 0 and becomes indistinguishable from a genuinely ready swing. The
+    #: quantised `aacdraw` does not fix that either -- rounding destroys the
+    #: same information. Only the exact bits can separate "+1.3 us remaining,
+    #: server will NOT fire" from "0" and from "-1 tick, already ready".
+    #: `None` on every recording made before the field existed.
+    aa_cooldown_bits: Optional[int] = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -506,6 +516,8 @@ def parse_internal(kind: str, body: str) -> AIInternal | MissileInternal:
             collision_x_bits=collision_x_bits,
             collision_y_bits=collision_y_bits,
             q_aa_cooldown=_int(values["aacd"], "AA cooldown"),
+            aa_cooldown_bits=_optional_int(
+                values.get("aacdbits", "-"), "AA cooldown bits"),
             aa_state=_int(values["aastate"], "AA state"),
             q_aa_cast=_int(values["aacast"], "AA cast time"),
             q_aa_delay=_int(values["aadelay"], "AA delay"),

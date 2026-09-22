@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import collections
 import math
+import struct
 from pathlib import Path
 
 import numpy as np
@@ -706,6 +707,32 @@ def main(argv=None) -> None:
                     # grid` refuse to touch a dumped zero.
                     injected_cd_q=(None if iv is None
                                    else iv.q_aa_cooldown),
+                    # The EXACT unclamped cooldown, when the recording carries
+                    # it (`aacdbits`, added for `AA-004`). This is what decides
+                    # between the two readings of a dumped 0: a strictly
+                    # POSITIVE exact residue means the server genuinely was not
+                    # ready and the clamp hid it (an instrument blind spot),
+                    # while a zero or NEGATIVE one means the server WAS ready
+                    # and declined to fire for some other reason -- which would
+                    # be a missing gate in the simulator, not a dump artifact.
+                    # `AutoAttackSpell.State` and the attacking flag, from the
+                    # dump. The server's swing needs the FULL chain
+                    # (`ObjAIBase.cs:1254-1290`): target valid, inside
+                    # `Stats.Range.Total + TargetUnit.CollisionRadius`,
+                    # `MovementParameters == null`, **`AutoAttackSpell.State ==
+                    # STATE_READY`**, `CanAttack()`, `_autoAttackCurrentCooldown
+                    # <= 0`, `!_skipNextAutoAttack`. A cooldown of exactly 0 IS
+                    # ready by that `<= 0`, so a row with an exact 0 or negative
+                    # residue is NOT the clamp hiding anything -- some OTHER gate
+                    # held the server back, and the spell state is the first
+                    # place to look. SpellState: 0 READY, 1 CASTING,
+                    # 2 COOLDOWN, 3 CHANNELING.
+                    injected_aa_state=None if iv is None else iv.aa_state,
+                    injected_attacking=None if iv is None else iv.is_attacking,
+                    injected_cd_exact=(
+                        None if iv is None or iv.aa_cooldown_bits is None
+                        else struct.unpack("<f", struct.pack(
+                            "<i", iv.aa_cooldown_bits))[0]),
                 ))
             if c.sim_target_net_id != c.server_target_net_id:
                 gs = geometry(slot_of.get(c.sim_target_net_id),
@@ -1310,6 +1337,57 @@ def main(argv=None) -> None:
                          if r["injected_cd_q"] != 0})[:8]
             if nz:
                 print(f"     non-zero dumped cooldowns present: {nz}")
+            # The decisive split, only available on a recording carrying
+            # `aacdbits`. Being AT the clamp is necessary for the blind-spot
+            # story but not sufficient: it is only a blind spot if the exact
+            # value was strictly POSITIVE.
+            clamp = [r for r in known if r["injected_cd_q"] == 0]
+            exact = [r for r in clamp if r["injected_cd_exact"] is not None]
+            if not exact:
+                print("     (this recording has no `aacdbits`, so whether the "
+                      "clamp HID a positive residue is unobservable here)")
+            else:
+                pos = [r for r in exact if r["injected_cd_exact"] > 0.0]
+                zer = [r for r in exact if r["injected_cd_exact"] == 0.0]
+                neg = [r for r in exact if r["injected_cd_exact"] < 0.0]
+                print(f"     of the {len(clamp)} at the clamp, {len(exact)} "
+                      f"carry an exact unclamped value:")
+                print(f"       strictly POSITIVE (server NOT ready; the clamp "
+                      f"hid it -> instrument blind spot): {len(pos)}")
+                print(f"       exactly ZERO  (ambiguous): {len(zer)}")
+                print(f"       strictly NEGATIVE (server WAS ready; something "
+                      f"ELSE stopped it -> candidate sim bug): {len(neg)}")
+                if pos:
+                    vs = sorted({round(r["injected_cd_exact"], 9) for r in pos})
+                    print(f"       positive residues seen: {vs[:6]}")
+                if neg:
+                    vs = sorted({round(r["injected_cd_exact"], 9) for r in neg})
+                    print(f"       negative residues seen: {vs[:6]}")
+                ready = zer + neg
+                if ready:
+                    print(f"     the {len(ready)} rows where the server was "
+                          f"READY by its own `<= 0` gate and still did not "
+                          f"fire -- what ELSE held it? (SpellState 0=READY "
+                          f"1=CASTING 2=COOLDOWN 3=CHANNELING)")
+                    tab = collections.Counter(
+                        (r["injected_aa_state"], r["injected_attacking"])
+                        for r in ready)
+                    for (st, at), n in sorted(tab.items(),
+                                              key=lambda kv: -kv[1]):
+                        verdict = ("spell NOT ready -> the server cannot swing; "
+                                   "a gate the sim may not apply"
+                                   if st not in (0, None) else
+                                   "spell READY too -> neither gate explains it")
+                        print(f"       {n:5d}  aastate={st} is_attacking={at}"
+                              f"   {verdict}")
+                    print(f"     for contrast, the {len(pos)} clamp-hidden rows "
+                          f"by the same key:")
+                    tab2 = collections.Counter(
+                        (r["injected_aa_state"], r["injected_attacking"])
+                        for r in pos)
+                    for (st, at), n in sorted(tab2.items(),
+                                              key=lambda kv: -kv[1]):
+                        print(f"       {n:5d}  aastate={st} is_attacking={at}")
 
     print("\n-- is_attacking / has_auto_attacked: contained in fire U hit? --")
     for (name, tag), n in sorted(bool_join.items()):
