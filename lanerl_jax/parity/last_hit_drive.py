@@ -115,11 +115,12 @@ one dict.
 """
 from __future__ import annotations
 
+import inspect
 import math
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -131,6 +132,7 @@ from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
 from ..sim.orders import OrderKind, Orders, apply_orders
 from ..sim.state import Kind, Team
 from ..sim.step import step_decision
+from .lanerl_lane import LanerlLane, forward_for
 from .last_hit_oracle import (ChampView, Decision, MinionView, decide,
                               post_mitigation)
 
@@ -293,72 +295,124 @@ def noisy_policy(seed: int, epsilon: float = 0.15, radius: float = 450.0):
 
 
 
+
+def _call_policy(policy, champ, minions, i, allies):
+    """Call a policy with allies if it wants them, without them if not.
+
+    `noisy_policy` and the plain oracle take `(champ, minions, i)`; the
+    `LanerlBot` mirror needs the ally wave as well, because `HoldPoint` holds
+    behind its OWN wave front. Sniffing the signature keeps both working rather
+    than forcing a flag day on every policy.
+    """
+    # Signature inspection, NOT try/except TypeError. A bare except would also
+    # swallow a TypeError raised INSIDE the policy and silently re-call it with
+    # three arguments -- a convenient fallback that changes the semantics, which
+    # is the same bug as an `or` default on a filtered list.
+    n = len(inspect.signature(policy).parameters)
+    return (policy(champ, minions, i, allies) if n >= 4
+            else policy(champ, minions, i))
+
+
 def heuristic_policy(approach_factor: float = 4.0,
                      approach_hp_frac: float = 0.0,
-                     hold_behind: float = 260.0,
                      retreat_hp_frac: float = 0.25,
                      resume_hp_frac: float = 0.50,
-                     retreat_distance: float = 1200.0,
-                     standoff: float = 500.0):
-    """`LanerlBot`'s FARM CORE, mirrored -- the acceptance-test policy.
+                     retreat_distance: float = 2200.0,
+                     minion_avoid_range: float = 100.0,
+                     lane_corridor_width: float = 1500.0,
+                     holdback_distance: float = 150.0,
+                     wave_follow_margin: float = 250.0,
+                     waves_met_gap: float = 900.0,
+                     contact_hold_radius: float = 0.0,
+                     is_blue: bool = True):
+    """`LanerlBot`'s lane behaviour, ported rather than approximated.
 
-    This is the C# bot's own logic and its own thresholds, not an invented
-    heuristic. `LanerlBot.DecideInner` (`LanerlBot.cs:449-657`) runs nine
-    branches in order; the three that determine CS are ported here:
+    Every default here is the C# bot's own (`LanerlConfig.cs`): ApproachFactor
+    4.0, RetreatHpFrac 0.25, ResumeHpFrac 0.50, RetreatDistance 2200,
+    MinionAvoidRange 100, LaneCorridorWidth 1500, HoldbackDistance 150,
+    WaveFollowMargin 250, WavesMetGap 900.
 
-        3  hold an in-flight swing (`aa.State == STATE_CASTING && TargetUnit`)
-        8  farm scan: killable -> qKillable -> approach
-        9  else MoveTo(HoldPoint())
+    Branches ported, in the bot's order (`LanerlBot.DecideInner:449-657`):
+      1  retreat, with the `_retreating` hysteresis latch
+      8  farm scan: killable (`IsLastHitPure`) then approach (`IsApproachTarget`)
+      9  `MoveTo(HoldPoint())` -- the real one, see below
 
-    with `ApproachFactor = 4.0` taken from `LanerlConfig.cs:77`, and the
-    last-hit predicate being `LanerlAim.IsLastHitPure` --
-    `hp - incoming + regen*ttl <= myDamage` -- which `last_hit_oracle.decide`
-    already implements at zero incoming/regen.
+    WHY THE EARLIER APPROXIMATIONS FAILED, measured. `HoldPoint` was replaced by
+    "back off 500 u from the nearest minion" and the server arm went from 12 CS
+    to 5. The real thing (`LanerlBot.cs:1154-1224`) is:
+      * the wave FRONTS, not means -- averaging counts minions still walking out
+        of the base and drags the hold point halfway home;
+      * a lane-corridor filter, so minions in other lanes are ignored;
+      * the furthest-forward position still UN-ACQUIRED, from each minion's own
+        `AcquisitionRange` -- 600 melee, 700 caster, so no single standoff number
+        is correct for both;
+      * hold behind its OWN wave front by `WaveFollowMargin`, falling back to the
+        enemy front only when it has no wave;
+      * a floor at the friendly turret, or the bot turns round at 1:30 and walks
+        to meet its own minions at the base.
 
-    WHY A MIRROR AND NOT A PORT OF ALL 1,303 LINES. The C# bot runs inside the
-    server and cannot drive the JAX sim, so SOMETHING has to exist in Python
-    either way. A full port would need its own validation pass (does my Python
-    issue the same orders as the C# on the same seed?) before any number it
-    produced meant anything -- and that pass measures the port, not the
-    engines. This harness's design, stated in `last_hit_oracle`'s docstring, is
-    one policy written once and run in both.
+    `ContactHoldRadius` defaults to 0 HERE, where the bot uses 250: that branch
+    orbits the wave-contact point using `_orbitPhase`, seeded per episode from
+    `new Random(cfg.Seed + seedOffset + 977)`. Reproducing a seeded C# RNG
+    exactly is a port risk with no upside for a determinism test, so the orbit
+    is switched off and said so rather than silently approximated.
 
-    WHAT IS DELIBERATELY NOT PORTED, and what each would cost:
-      * retreat hysteresis (branches 1) -- needs champion HP, and the server
-        publishes it over the wire as `((int)CurrentHealth)`
-        (`LanerlControl.cs:190`) while the sim has the exact float, so an
-        HP-thresholded branch fires on different ticks for a WIRE-FORMAT
-        reason. Quantising both sides identically is the prerequisite.
-      * turret avoidance (2) -- needs turret positions and AcquisitionRange in
-        the shared view.
-      * armed-Q stickiness (4) and TryRandomAbility (7) -- need buff and spell
-        cooldown state.
-      * FightToDeath (5) and AggroBreakOff (6) -- need the enemy champion and
-        the per-minion aggro tracker.
-    Each is an extension of the shared observation surface on BOTH sides, and
-    each is an opportunity to introduce exactly the kind of asymmetry this
-    gate exists to detect. They are the next increments, not omissions.
-
-    WHAT IT ADDS OVER THE ORACLE: the oracle issues ZERO move decisions --
-    measured, 13,564 holds and 71 attacks in one episode -- so it never
-    exercises movement, positioning or minion aggro. Branches 8-approach and 9
-    do, which is where deaths come from.
-
-    Deterministic: no RNG, so two trials on one engine are identical by
-    construction and any trial-to-trial spread is the ENGINE's.
+    `TryRandomAbility`, armed-Q stickiness, turret avoidance, FightToDeath and
+    AggroBreakOff remain unported; each needs spell/buff/aggro state in the
+    shared view.
     """
-    # Branch 1's hysteresis is STATEFUL -- `_retreating` latches in the C# bot
-    # (`LanerlBot.cs:471-473`) precisely so it does not oscillate on the
-    # threshold and do neither thing. A pure function of the current frame
-    # cannot reproduce that, so the latch lives here, in the closure. It makes
-    # the policy stateful but still deterministic, and the two engines each get
-    # their own instance, exactly as two bot objects would.
+    lane = LanerlLane()
+    fwd = forward_for(is_blue)
+    # `FriendlyFrontTurretAlong` -- blue's own outer turret, the floor that stops
+    # the bot trailing its wave home (`LanerlBot.cs:1221-1222`).
+    from ..sim.init import TOP_OUTER_TURRET
+    # `{0: blue, 1: red}` keyed by team index, each an (x, y). Blue's own outer
+    # turret is the floor `FriendlyFrontTurretAlong` supplies.
+    own_xy = TOP_OUTER_TURRET[0 if is_blue else 1]
+    own_turret_f = lane.along_of((float(own_xy[0]), float(own_xy[1]))) * fwd
+
+    def lane_point(f: float) -> Tuple[float, float]:
+        """`LanePoint(f, 0)` -- lateral offset unused with the orbit off."""
+        return lane.point_at(f * fwd)
+
+    def hold_point(minions, allies, extra_standoff: float = 0.0):
+        have_e = have_a = False
+        e_front = a_front = 0.0
+        safe_f = float("inf")
+        standoff = minion_avoid_range + extra_standoff
+        if extra_standoff > 0.0 and standoff < extra_standoff:
+            standoff = extra_standoff
+        for m, mine in [(m, False) for m in minions] + [(a, True) for a in allies]:
+            if lane.distance_to((m.x, m.y)) > lane_corridor_width:
+                continue
+            f = lane.along_of((m.x, m.y)) * fwd
+            if mine:
+                if not have_a or f > a_front:
+                    a_front, have_a = f, True
+            else:
+                if not have_e or f < e_front:     # the enemy furthest toward us
+                    e_front, have_e = f, True
+                limit = f - (m.acquisition_range + standoff)
+                if limit < safe_f:
+                    safe_f = limit
+        if have_a and have_e and e_front - a_front <= waves_met_gap:
+            f = 0.5 * (a_front + e_front) - holdback_distance
+            return lane_point(min(f, safe_f))
+        if have_a:
+            hold_f = a_front - wave_follow_margin
+        elif have_e:
+            hold_f = e_front - waves_met_gap
+        else:
+            return lane_point(min(own_turret_f, safe_f)) if own_turret_f else \
+                lane.point_at(lane.length * 0.5)
+        if hold_f < own_turret_f:
+            hold_f = own_turret_f
+        return lane_point(min(hold_f, safe_f))
+
     st = {"retreating": False}
 
-    def policy(champ, minions, i: int):
-        # branch 1 -- retreat with hysteresis. Thresholds are the bot's own:
-        # RetreatHpFrac 0.25 / ResumeHpFrac 0.50 (`LanerlConfig.cs:61,63`).
-        # `hp`/`max_hp` are int-truncated on both sides; see `ChampView`.
+    def policy(champ, minions, i: int, allies=()):
+        # branch 1 -- retreat, with the bot's hysteresis latch
         if champ.max_hp > 0:
             frac = champ.hp / champ.max_hp
             if frac < retreat_hp_frac:
@@ -366,71 +420,30 @@ def heuristic_policy(approach_factor: float = 4.0,
             elif frac > resume_hp_frac:
                 st["retreating"] = False
             if st["retreating"]:
-                # `Retreat` walks back along the lane (`LanerlBot.cs:727`:
-                # `PointAt(along - forward * RetreatDistance)`). The shared view
-                # has no lane object, so back away from the wave along the
-                # champion->wave axis, which is the same direction in this lane.
-                if minions:
-                    cx, cy = champ.x, champ.y
-                    m = min(minions, key=lambda u: (u.x - cx) ** 2 + (u.y - cy) ** 2)
-                    dx, dy = cx - m.x, cy - m.y
-                    n = math.hypot(dx, dy) or 1.0
-                    return Decision(attack=None,
-                                    move=(cx + dx / n * retreat_distance,
-                                          cy + dy / n * retreat_distance))
-                return Decision(attack=None, move=None)
-
-        # branch 8a -- plain-auto last hit, `IsLastHitPure` at zero incoming
+                # `Retreat`: `PointAt(along - forward * RetreatDistance)`
+                along = lane.along_of((champ.x, champ.y))
+                return Decision(attack=None,
+                                move=lane.point_at(along - fwd * retreat_distance))
+        # branch 8a -- plain-auto last hit
         d = decide(champ, minions, lethal_epsilon=0.0)
         if d.attack is not None:
             return d
         if not minions:
-            return Decision(attack=None, move=None)
-        # branch 8c -- `IsApproachTarget`: worth walking at, not executable yet.
-        # `target.CurrentHealth <= AutoAttackDamage * lookaheadFactor`
-        # (`LanerlAim.cs:444-451`), nearest such minion wins (`LanerlBot.cs:617-620`).
+            return Decision(attack=None, move=hold_point(minions, allies))
+        # branch 8c -- `IsApproachTarget`: hp <= AutoAttackDamage * factor
         cx, cy = champ.x, champ.y
         cands = [m for m in minions
-                 if m.hp <= post_mitigation(champ.attack_damage, m.armor) * approach_factor
-                 and (approach_hp_frac <= 0.0 or m.hp <= approach_hp_frac * m.hp)]
-        # NO `or minions` FALLBACK. Falling back to the nearest minion when no
-        # approach candidate exists made the policy walk at the wave
-        # permanently, which is exactly the parking-in-the-wave behaviour the
-        # standoff below exists to stop. The bot's branch 8c only fires for
-        # minions that pass `IsApproachTarget`; with none, it falls through to
-        # branch 9 and holds.
-        nearest = min(minions, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
-        m = (min(cands, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
-             if cands else nearest)
-        dist = math.hypot(m.x - cx, m.y - cy)
-        reach = champ.attack_range + m.collision_radius
-        if cands and dist > reach:
-            # close to just inside attack range, as `MoveTo(approach.Position +
-            # dir * stand)` does (`LanerlBot.cs:650`)
-            ux, uy = (m.x - cx) / (dist or 1.0), (m.y - cy) / (dist or 1.0)
-            step = min(dist - reach * 0.9, 400.0)
-            return Decision(attack=None, move=(cx + ux * step, cy + uy * step))
-        # branch 9 -- `MoveTo(HoldPoint())`. The bot does NOT park in the wave:
-        # `HoldPoint` stands at the furthest point forward where it is still
-        # un-acquired, plus `MinionAvoidRange = 100` (`LanerlBot.cs:1154-1168`,
-        # `LanerlConfig.cs:150`). Standing inside minion acquisition range is
-        # how a naive bot bleeds HP and dies -- measured, the first version of
-        # this mirror parked at attack range and died 3 times by level 4 while
-        # the C# bot reached level 8.
-        #
-        # The shared view has no lane object and no per-minion acquisition
-        # range, so the standoff is taken from the wave itself: back off to
-        # `standoff` from the nearest minion when there is nothing worth
-        # stepping in for. The approach branch above is what steps back in, and
-        # it fires early (hp <= damage * 4) precisely so the walk is already
-        # under way before the minion is executable.
-        ndist = math.hypot(nearest.x - cx, nearest.y - cy)
-        if ndist < standoff:
-            ux = (cx - nearest.x) / (ndist or 1.0)
-            uy = (cy - nearest.y) / (ndist or 1.0)
-            back = standoff - ndist
-            return Decision(attack=None, move=(cx + ux * back, cy + uy * back))
-        return Decision(attack=None, move=None)
+                 if m.hp <= post_mitigation(champ.attack_damage, m.armor) * approach_factor]
+        if cands:
+            m = min(cands, key=lambda u: ((u.x - cx) ** 2 + (u.y - cy) ** 2, u.uid))
+            dist = math.hypot(m.x - cx, m.y - cy)
+            reach = champ.attack_range + m.collision_radius
+            if dist > reach:
+                ux, uy = (m.x - cx) / (dist or 1.0), (m.y - cy) / (dist or 1.0)
+                step = min(dist - reach * 0.9, 400.0)
+                return Decision(attack=None, move=(cx + ux * step, cy + uy * step))
+        # branch 9 -- the real HoldPoint
+        return Decision(attack=None, move=hold_point(minions, allies))
 
     return policy
 
@@ -691,21 +704,38 @@ def run_oracle_in_sim(
         # the union of the team's sight bubbles, not just the champion's.
         vis = np.asarray(visible_to(
             Team.BLUE, state.x, state.y, state.kind, state.team, state.alive))
+        # ALLY minions too. `LanerlBot.HoldPoint` needs both wave FRONTS -- it
+        # holds behind its own wave (`allyFrontF - WaveFollowMargin`) and only
+        # falls back to the enemy front when it has no wave of its own
+        # (`LanerlBot.cs:1214-1216`). Passing only enemies made a faithful port
+        # impossible, which is why the first version guessed a fixed standoff.
+        ally = np.flatnonzero((kind == Kind.LANE_MINION) & (team == Team.BLUE) & alive)
         enemy = np.flatnonzero((kind == Kind.LANE_MINION) & (team == Team.RED)
                                & alive & vis)
         minions = [
             MinionView(
-                uid=int(i), x=float(x[i]), y=float(y[i]), hp=float(hp[i]),
+                # positions int-truncated to match the wire, as for the champion
+                uid=int(i), x=float(int(x[i])), y=float(int(y[i])), hp=float(hp[i]),
                 armor=float(params_np["armor"][model[i]]),
                 collision_radius=float(params_np["collision_radius"][model[i]]),
+                acquisition_range=float(params_np["acquisition_range"][model[i]]),
             )
             for i in enemy
+        ]
+        allies = [
+            MinionView(
+                uid=int(i), x=float(int(x[i])), y=float(int(y[i])), hp=float(hp[i]),
+                armor=float(params_np["armor"][model[i]]),
+                collision_radius=float(params_np["collision_radius"][model[i]]),
+                acquisition_range=float(params_np["acquisition_range"][model[i]]),
+            )
+            for i in ally
         ]
         vis_counts.append(len(minions))
         if on_oracle is not None:
             on_oracle({"i": _i, "engine": "sim", "champ": champ,
                        "minions": minions, "level": int(np.asarray(state.level)[0])})
-        d = (policy(champ, minions, _i) if policy is not None
+        d = (_call_policy(policy, champ, minions, _i, allies) if policy is not None
              else decide(champ, minions, lethal_epsilon=0.0))
         if on_oracle is not None:
             on_oracle({"i": _i, "engine": "sim", "decision": d})
@@ -912,8 +942,20 @@ def run_oracle_on_server(
                               max_hp=float(blue.get("mhp", 0)))
 
             minions = []
+            allies = []
             for u in units:
-                if u.get("k") != "LaneMinion" or u.get("tm") != 200:
+                if u.get("k") != "LaneMinion":
+                    continue
+                if u.get("tm") == 100:        # own wave -- HoldPoint needs its front
+                    st = patch.minions[
+                        f"{WIRE_MINION_TYPE.get(int(u.get('mt', 0)), 'melee')}_blue"]
+                    allies.append(MinionView(
+                        uid=int(u["id"]), x=float(u["x"]), y=float(u["y"]),
+                        hp=float(u["hp"]), armor=float(st.armor),
+                        collision_radius=float(st.collision_radius),
+                        acquisition_range=float(st.acquisition_range)))
+                    continue
+                if u.get("tm") != 200:
                     continue
                 if not u.get("vb", 0):        # visible to blue only
                     continue
@@ -922,13 +964,14 @@ def run_oracle_on_server(
                 minions.append(MinionView(
                     uid=int(u["id"]), x=float(u["x"]), y=float(u["y"]),
                     hp=float(u["hp"]), armor=float(stat.armor),
-                    collision_radius=float(stat.collision_radius)))
+                    collision_radius=float(stat.collision_radius),
+                    acquisition_range=float(stat.acquisition_range)))
 
             vis_counts.append(len(minions))
             if on_oracle is not None:
                 on_oracle({"i": i, "engine": "server", "champ": champ,
                            "minions": minions, "level": int(blue.get("lvl", 0))})
-            d = (policy(champ, minions, i) if policy is not None
+            d = (_call_policy(policy, champ, minions, i, allies) if policy is not None
                  else decide(champ, minions, lethal_epsilon=0.0))
             if on_oracle is not None:
                 on_oracle({"i": i, "engine": "server", "decision": d})

@@ -65,6 +65,15 @@ class MinionView(NamedTuple):
     hp: float
     armor: float
     collision_radius: float
+    #: `Stats.AcquisitionRange.Total` -- the range at which THIS minion will
+    #: acquire the champion. `LanerlBot.HoldPoint` computes the furthest-forward
+    #: un-acquired position from it per minion (`LanerlBot.cs:1183`), which is
+    #: why substituting a single fixed standoff distance was wrong: melee is
+    #: 600 and caster 700, so one number is correct for neither.
+    #:
+    #: Both sides read it from the same patch table -- the sim by model row, the
+    #: server by the wire's `mt` subtype -- so there is nothing to diverge.
+    acquisition_range: float = 0.0
 
 
 class ChampView(NamedTuple):
