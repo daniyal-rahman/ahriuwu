@@ -66,13 +66,20 @@ def _xp_range_share(rec, radius: float = 1400.0) -> float:
     return inr / n if n else float("nan")
 
 
-def _one(seed: int, decisions: int, port_base: int, shuffled: int | None):
+def _one(seed: int, decisions: int, port_base: int, shuffled: int | None,
+         policy_name: str = "oracle"):
     from .gate3_first_divergence import Recorder
-    from .last_hit_drive import run_oracle_in_sim, run_oracle_on_server
+    from .last_hit_drive import (noisy_policy, run_oracle_in_sim,
+                                 run_oracle_on_server)
+
+    # One policy object per SEED, shared by both engines, so the arm is
+    # identical on each side and any outcome difference is the engines.
+    pol = noisy_policy(seed) if policy_name == "noisy" else None
 
     out = {}
     rec = Recorder()
-    sim = run_oracle_in_sim(decisions=decisions, seed=seed, on_oracle=rec)
+    sim = run_oracle_in_sim(decisions=decisions, seed=seed, on_oracle=rec,
+                            policy=pol)
     out["sim"] = dict(cs=sim.cs, deaths=sim.deaths, attacks=sim.attacks,
                       levels=_levels(rec), xp_share=_xp_range_share(rec))
 
@@ -80,7 +87,7 @@ def _one(seed: int, decisions: int, port_base: int, shuffled: int | None):
     env = {"LANERL_SHUFFLE_ORDER": str(shuffled)} if shuffled is not None else None
     srv = run_oracle_on_server(decisions=decisions, bot_seed=seed,
                                port_base=port_base, on_oracle=rec,
-                               extra_env=env)
+                               extra_env=env, policy=pol)
     key = "shuffled" if shuffled is not None else "server"
     out[key] = dict(cs=srv.cs, deaths=srv.deaths, attacks=srv.attacks,
                     levels=_levels(rec), xp_share=_xp_range_share(rec))
@@ -114,15 +121,17 @@ def main(argv=None) -> None:
                     help="ALSO run the server with its update order permuted, "
                         "on the same seeds, to get the reference gap this "
                         "gate is judged against.")
+    ap.add_argument("--policy", choices=("oracle", "noisy"), default="oracle",
+                    help="`oracle` is the scripted last-hitter: deterministic, and since this scenario runs with bot_teams=\"none\" the seed drives NOTHING through it -- a 30-seed sweep returned 30 byte-identical outcomes. `noisy` wanders with probability 0.15, seeded, which is the only way a seed enters this experiment at all, and it visits the turret-aggro, death and off-route states the oracle never reaches.")
     ap.add_argument("--save", type=Path, default=None)
     a = ap.parse_args(argv)
 
     rows = []
     for i, s in enumerate(a.seeds):
-        r = _one(s, a.decisions, a.port_base + i * 4, None)
+        r = _one(s, a.decisions, a.port_base + i * 4, None, a.policy)
         if a.shuffled:
             r.update(_one(s, a.decisions, a.port_base + i * 4 + 2,
-                          shuffled=1000 + s))
+                          shuffled=1000 + s, policy_name=a.policy))
         rows.append({"seed": s, **r})
         print(f"  seed {s}: sim cs={r['sim']['cs']} d={r['sim']['deaths']} "
               f"| server cs={r['server']['cs']} d={r['server']['deaths']}"
@@ -134,6 +143,30 @@ def main(argv=None) -> None:
         a.save.parent.mkdir(parents=True, exist_ok=True)
         a.save.write_text(json.dumps(rows, indent=1, default=str))
         print(f"\nsaved {len(rows)} seeds -> {a.save}")
+
+    # GUARD: a seed that changes nothing is not a sample.
+    # This scenario has no bots, so `bot_seed` drives nothing and the scripted
+    # oracle is deterministic; a 30-seed sweep once returned 30 byte-identical
+    # outcomes and was very nearly reported as a distribution. Identical rows
+    # are not a pass, they are an inert knob, and the difference is invisible
+    # in every summary statistic.
+    if len(rows) > 1:
+        sig = {json.dumps({k: v for k, v in r.items() if k != "seed"},
+                          sort_keys=True, default=str) for r in rows}
+        if len(sig) == 1:
+            print(f"\n!! SEEDS ARE INERT: all {len(rows)} seeds produced "
+                  f"byte-identical outcomes.\n"
+                  f"   This is ONE run measured {len(rows)} times, not a sample, "
+                  f"and no gap below\n"
+                  f"   means anything. With --policy oracle that is expected: "
+                  f"the scenario runs\n"
+                  f"   bot_teams=\"none\" and the oracle is deterministic, so the "
+                  f"seed has nothing\n"
+                  f"   to act on. Re-run with --policy noisy, where the seed "
+                  f"enters the policy.")
+        else:
+            print(f"\n   seeds produce {len(sig)} distinct outcomes of "
+                  f"{len(rows)} -- the knob is live")
 
     print(f"\n-- outcome gaps over {len(rows)} seeds --")
     print(f"   {'metric':<14} {'sim vs server':>22} "

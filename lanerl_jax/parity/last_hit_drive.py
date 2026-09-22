@@ -115,6 +115,7 @@ one dict.
 """
 from __future__ import annotations
 
+import math
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -130,11 +131,12 @@ from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
 from ..sim.orders import OrderKind, Orders, apply_orders
 from ..sim.state import Kind, Team
 from ..sim.step import step_decision
-from .last_hit_oracle import ChampView, MinionView, decide
+from .last_hit_oracle import ChampView, Decision, MinionView, decide
 
 __all__ = [
     "DECISIONS_600S", "WIRE_MINION_TYPE", "APPROACH_WAYPOINTS",
     "ARRIVE_RADIUS", "FINAL_ARRIVE_RADIUS", "FINAL_ARRIVE_GRACE",
+    "noisy_policy",
     "SimRun", "ServerRun",
     "DEFAULT_GATE3_ROUTE_ARTIFACT", "gate3_route_inputs",
     "run_oracle_in_sim", "run_oracle_on_server",
@@ -249,6 +251,46 @@ def gate3_route_inputs(*, route_table=None, terrain=None,
     return route_table, terrain
 
 
+
+def noisy_policy(seed: int, epsilon: float = 0.15, radius: float = 450.0):
+    """A wandering arm for the outcome gate, seeded so it actually varies.
+
+    WHY THIS EXISTS. The scripted oracle is deterministic and this scenario
+    has no bots (`bot_teams="none"`), so `bot_seed` and the sim seed drive
+    NOTHING: a 30-seed sweep ran and returned 30 byte-identical outcomes,
+    which is one run measured thirty times wearing a distribution's clothing.
+    The seed has to enter through the POLICY or it does not enter at all.
+
+    It also fixes a narrowness problem the identical-outcomes result hid. The
+    oracle holds position on an empty lane, so the scripted arm visits a thin
+    slice of states -- it never walks into turret range, rarely dies, and
+    never takes a route the approach did not already script. Those are exactly
+    the states an RL policy will spend its time in.
+
+    DETERMINISTIC IN THE INPUTS, which is what keeps the comparison about the
+    ENGINES. The draw is a pure function of (seed, decision index), so both
+    engines choose the same action whenever they are fed the same scene; any
+    difference in what they do is a difference in what they saw, never in what
+    the policy rolled.
+    """
+    import hashlib
+
+    def _u01(i: int) -> float:
+        h = hashlib.blake2b(f"{seed}:{i}".encode(), digest_size=8).digest()
+        return int.from_bytes(h, "big") / float(1 << 64)
+
+    def policy(champ, minions, i: int):
+        if _u01(i) >= epsilon:
+            return decide(champ, minions, lethal_epsilon=0.0)
+        ang = _u01(i * 2 + 1) * 2.0 * math.pi
+        r = radius * (0.25 + 0.75 * _u01(i * 2 + 2))
+        return Decision(attack=None,
+                        move=(champ.x + r * math.cos(ang),
+                              champ.y + r * math.sin(ang)))
+
+    return policy
+
+
 def _advance_approach(x: float, y: float, idx: int,
                       respawned: bool = False,
                       stalled: int = 0) -> int:
@@ -355,6 +397,7 @@ def run_oracle_in_sim(
     table_disabled: bool = False,
     on_decision: Optional[Callable[[dict], None]] = None,
     on_oracle: Optional[Callable[[dict], None]] = None,
+    policy: Optional[Callable] = None,
 ) -> SimRun:
     """Run the oracle against blue in the JAX sim; red never receives an order.
 
@@ -508,7 +551,8 @@ def run_oracle_in_sim(
         if on_oracle is not None:
             on_oracle({"i": _i, "engine": "sim", "champ": champ,
                        "minions": minions, "level": int(np.asarray(state.level)[0])})
-        d = decide(champ, minions, lethal_epsilon=0.0)
+        d = (policy(champ, minions, _i) if policy is not None
+             else decide(champ, minions, lethal_epsilon=0.0))
         if on_oracle is not None:
             on_oracle({"i": _i, "engine": "sim", "decision": d})
         if d.attack is not None:
@@ -539,6 +583,7 @@ def run_oracle_on_server(
     on_decision: Optional[Callable[[dict], None]] = None,
     on_oracle: Optional[Callable[[dict], None]] = None,
     extra_env: Optional[dict] = None,
+    policy: Optional[Callable] = None,
 ) -> ServerRun:
     """Run the oracle against blue on a real server; red is never sent an order.
 
@@ -715,7 +760,8 @@ def run_oracle_on_server(
             if on_oracle is not None:
                 on_oracle({"i": i, "engine": "server", "champ": champ,
                            "minions": minions, "level": int(blue.get("lvl", 0))})
-            d = decide(champ, minions, lethal_epsilon=0.0)
+            d = (policy(champ, minions, i) if policy is not None
+                 else decide(champ, minions, lethal_epsilon=0.0))
             if on_oracle is not None:
                 on_oracle({"i": i, "engine": "server", "decision": d})
             if d.attack is not None:
