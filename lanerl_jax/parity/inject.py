@@ -1024,6 +1024,33 @@ def inject_snapshot(
                 np.uint32(internal.y_bits & 0xFFFFFFFF)).view(np.float32).item()
             note.position_recovery = "exact float32 bits from diagnostic stream"
         spawn_seq[slot] = creation_rank[internal.net_id]
+        # `BUFF-001`: the buff PHASE, which the canonical row cannot carry.
+        # The identity-only pass above deliberately leaves duration at 0, and
+        # the consequence is not cosmetic: `spells.py` computes
+        # `e_expired = e_active & (e_elapsed >= buff_duration[e_slot])`, so a
+        # zero duration expires Garen E on the very tick it is injected.
+        # `suppress_attack` then goes false, and a champion the server has
+        # locked out of attacking for the rest of its 3.0 s spin swings in the
+        # simulator -- measured at 258 of 647 sim-fires-early rows, 40%, and
+        # previously charged to the simulator as a missing `CanAttack()` gate.
+        # With `aibuffs` the phase is exact, so restore it.
+        #
+        # `buff_power` is still NOT restored: it is a cast-time damage
+        # snapshot and the dump does not publish it. Recovering phase while
+        # inventing power would trade a visible residual for an invisible one.
+        if internal.buffs_phase is not None:
+            for bname, el_bits, du_bits in internal.buffs_phase:
+                mapping = _DUMP_BUFF_TO_SIM.get(bname)
+                if mapping is None:
+                    continue
+                _bid, bslot = mapping
+                buff_id[slot, bslot] = _bid
+                buff_elapsed[slot, bslot] = np.asarray(
+                    np.uint32(el_bits & 0xFFFFFFFF)).view(np.float32).item()
+                buff_duration[slot, bslot] = np.asarray(
+                    np.uint32(du_bits & 0xFFFFFFFF)).view(np.float32).item()
+            note.buff_recovery = (
+                "exact phase from diagnostic stream (power still unresolved)")
         target[slot] = id_to_slot.get(internal.target_net_id, -1)
         # `aa_cooldown`'s own grid recovery -- same mechanism as the wind-up
         # snap just below, see `snap_cooldown_to_tick_grid`'s docstring.

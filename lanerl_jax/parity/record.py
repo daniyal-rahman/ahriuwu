@@ -397,7 +397,8 @@ def _main(argv: Optional[List[str]] = None) -> int:
     needles = ((" aacdbits=", "AA-004 unclamped cooldown"),
                (" aagate=", "AA-005 swing gate word"),
                ("CallForHelpClear", "CFH-002 pre-clear map"),
-               ("trigger=", "minion branch stream"))
+               ("trigger=", "minion branch stream"),
+               (" aibuffs=", "BUFF-001 buff phase"))
     counts = {n: 0 for n, _ in needles}
     with fx.log.open(errors="replace") as fh:
         for line in fh:

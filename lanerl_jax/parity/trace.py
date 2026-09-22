@@ -198,6 +198,18 @@ class AIInternal:
     #: `status` -- the raw `StatusFlags` word. The packed bits above say that a
     #: gate was shut; this says WHICH flag shut it.
     status_flags: Optional[int] = None
+    #: `aibuffs` -- every buff as `(name, elapsed_bits, duration_bits)`, added
+    #: 2026-09-22 for `BUFF-001`. The canonical row publishes buff NAMES only,
+    #: so an injected one-step test can restore a buff's identity but not its
+    #: PHASE: `inject.py` writes the id with a zero duration and documents that
+    #: it is doing so. A champion caught mid-Garen-E is therefore injected as
+    #: one whose spin has already ended, the sim swings, the server cannot, and
+    #: the difference is scored against the sim (258 of 647 early-fire rows).
+    #: Bit patterns rather than quantised values for the same reason as
+    #: `aa_cooldown_bits`: `Buff.Elapsed()` is `TimeElapsed >= Duration`, and
+    #: rounding at 1/1024 s collapses the two sides exactly at the answer.
+    #: `None` on recordings predating the field; `()` means "observed, none".
+    buffs_phase: Optional[Tuple[Tuple[str, int, int], ...]] = None
 
 
 #: Sentinel for "this recording predates `aagate=`", distinct from "no gate
@@ -246,6 +258,33 @@ GATE_CHAIN: Tuple[str, ...] = (
     "cooldown_elapsed",
     "skip_next_auto_attack",
 )
+
+
+def _parse_buff_phase(raw: Optional[str]):
+    """`aibuffs` -> ((name, elapsed_bits, duration_bits), ...), or None.
+
+    `None` means the field is absent (an old recording). `()` means the server
+    looked and the unit had no buffs. Those are different facts and collapsing
+    them would let a pre-`BUFF-001` corpus read as "no buff was ever active",
+    which is the absent-versus-observed-empty confusion `collision_observed`
+    already exists to prevent. `"?"` is the dump's own marker for an exception
+    while rendering and is treated as absent, not as empty.
+    """
+    if raw is None or raw == "?":
+        return None
+    if raw == "-":
+        return ()
+    out = []
+    for part in raw.split(";"):
+        if not part:
+            continue
+        name, _, rest = part.partition(":")
+        el, _, du = rest.partition(":")
+        try:
+            out.append((name, int(el), int(du)))
+        except ValueError as exc:
+            raise TraceFormatError(f"malformed aibuffs entry {part!r}") from exc
+    return tuple(out)
 
 
 def gate_flags(bits: Optional[int]) -> Dict[str, bool]:
@@ -613,6 +652,7 @@ def parse_internal(kind: str, body: str) -> AIInternal | MissileInternal:
                 values.get("aagate", "-"), "AA gate bits"),
             status_flags=_optional_int(
                 values.get("status", "-"), "status flags"),
+            buffs_phase=_parse_buff_phase(values.get("aibuffs")),
             aa_state=_int(values["aastate"], "AA state"),
             q_aa_cast=_int(values["aacast"], "AA cast time"),
             q_aa_delay=_int(values["aadelay"], "AA delay"),

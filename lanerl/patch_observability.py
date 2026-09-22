@@ -177,6 +177,13 @@ _DUMP_GATE_ANCHOR = '                " aacdbits=" + Bits(LanerlAim.AutoAttackCoo
 _DUMP_GATE_ADD = '                // AA-005: the residual after `aacdbits=` is 50 unit-ticks that were\n                // ready by every gate this dump publishes and still did not swing.\n                // Every remaining gate -- SpellToCast, MovementParameters, the\n                // status flags behind CanAttack(), _castingSpell, ChannelSpell,\n                // _skipNextAutoAttack -- is unpublished state, so three separate\n                // inferred explanations have now been refuted by the first direct\n                // measurement of them. `aagate=` publishes the gates themselves.\n                // Bit layout is documented on LanerlAim.AutoAttackGateBits; bits\n                // 14/15 carry CanMove()/CanChangeWaypoints(), which gate the\n                // movement update the same way and cost nothing extra here.\n                " aagate=" + LanerlAim.AutoAttackGateBits(ai) +\n                // The raw status word behind CanAttack()/CanMove(): which flag is\n                // missing matters, and the packed bits above only say that one was.\n                " status=" + (long)ai.Status +\n'
 
 
+_BUFF_ANCHOR = '                " aihelp=" + PrivateDictionary(script, "unitsAttackingAllies", false)'
+_BUFF_ADD = ' +\n                // BUFF-001: the canonical row publishes buff NAMES and nothing\n                // else, so an injected one-step test can restore a buff\'s\n                // identity but not its PHASE -- `inject.py` writes the id with\n                // a zero duration and says so ("identity only; finite-buff\n                // phase/power intentionally unresolved"). A champion caught\n                // mid-Garen-E is therefore injected as a champion whose spin\n                // has already ended: the simulator swings, the server (whose\n                // `CanAttack()` is suppressed for the rest of the spin) does\n                // not, and the difference is scored against the simulator.\n                // Measured at 258 of 647 sim-fires-early rows, 40%.\n                //\n                // BITS, not `Q()`, for the same reason `aacdbits=` exists.\n                // `Buff.Elapsed()` is `TimeElapsed >= Duration`, another\n                // knife-edge comparison, and quantising at 1/1024 s would\n                // round the two sides together exactly where the answer lives.\n                //\n                // Goes in `DescribeInternals`, NOT in `Describe()`: the name\n                // list there feeds the canonical `LANERL_STATEROW` hash, and\n                // changing that stream would invalidate every recorded corpus\n                // and every digest quoted against it.\n                " aibuffs=" + BuffDescriptor(ai);\n'
+
+_BUFF_HELPER_ANCHOR = '        /// <summary>One entity, rendered so that identical states render identically.</summary>\n'
+_BUFF_HELPER = '        /// <summary>\n        /// Every buff on a unit as `name:elapsedBits:durationBits`, joined by\n        /// \';\', or "-" when there are none. Names are sorted so two runs in the\n        /// same state render identically, matching the canonical row\'s own\n        /// ordering rule. Total: a dump that can throw is worse than one that\n        /// is missing a field, so any failure renders "?".\n        /// </summary>\n        private static string BuffDescriptor(ObjAIBase ai)\n        {\n            if (ai == null) return "-";\n            try\n            {\n                var buffs = ai.GetBuffs();\n                if (buffs == null) return "-";\n                var parts = new List<string>();\n                foreach (var b in buffs)\n                {\n                    if (b == null) continue;\n                    parts.Add(b.Name + ":" + Bits(b.TimeElapsed) + ":" + Bits(b.Duration));\n                }\n                if (parts.Count == 0) return "-";\n                parts.Sort(StringComparer.Ordinal);\n                return string.Join(";", parts);\n            }\n            catch { return "?"; }\n        }\n\n        /// <summary>One entity, rendered so that identical states render identically.</summary>\n'
+
+
 def _insert_once(path: Path, anchor: str, addition: str, marker: str) -> str:
     if not path.exists():
         return f"MISSING {path}"
@@ -205,6 +212,8 @@ def verify() -> int:
         ("LanerlAim.AutoAttackGateBits", _AIM, "AutoAttackGateBits"),
         ("LanerlStateDump aagate=", _DUMP, '" aagate="'),
         ("LanerlStateDump status=", _DUMP, '" status="'),
+        ("LanerlStateDump aibuffs=", _DUMP, '" aibuffs="'),
+        ("LanerlStateDump BuffDescriptor", _DUMP, "BuffDescriptor"),
     ]
     ok = True
     for name, path, needle in checks:
@@ -252,6 +261,8 @@ def main() -> None:
     print(_insert_once(_ISO_AI, _CFH_ANCHOR, "\n" + _CFH_ADD, "CallForHelpClear"))
     print(_insert_once(_AIM, _GATE_ANCHOR, _GATE_ACCESSOR, "AutoAttackGateBits"))
     print(_insert_once(_DUMP, _DUMP_GATE_ANCHOR, _DUMP_GATE_ADD, '" aagate="'))
+    print(_insert_once(_DUMP, _BUFF_HELPER_ANCHOR, _BUFF_HELPER, "BuffDescriptor"))
+    print(_insert_once(_DUMP, _BUFF_ANCHOR, _BUFF_ADD, '" aibuffs="'))
     print("\nNow REBUILD (assemblies changed) -- see this module's docstring, "
           "then `--verify`, then check `Loaded all` on the first recording.")
 
