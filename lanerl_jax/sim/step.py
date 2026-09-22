@@ -685,9 +685,31 @@ def tick(state: LaneState, params: UnitParams,
     turret_target = jnp.where(left_range | target_gone, jnp.int8(-1),
                               turret_pick)
 
+    # `TGT-NULLOUT`: `ObjAIBase.UpdateTarget` runs for EVERY `ObjAIBase`, lane
+    # minions included, AFTER the AI script and every tick -- and it nulls a
+    # target that is dead, untargetable-and-useable, or no longer visible
+    # (`ObjAIBase.cs:1203-1211`). This port applied it to champions and turrets
+    # only, so a minion kept a target the server had already dropped until its
+    # own 250 ms sweep came round, which can be fifteen ticks later.
+    #
+    # Measured, not assumed: joining every target disagreement to the server's
+    # own branch stream, 21 of 216 rows are cases where the minion's script gate
+    # never opened at all -- and all 21 carry the same verdict, `server DROPPED
+    # an incumbent the sim kept`. The script cannot have dropped it with the
+    # gate shut, so the engine did. The other 194 are `ORDER-003`.
+    #
+    # Deliberately NOT the script's `IsValidTarget`, which also tests
+    # acquisition range: the engine pass has no range term, and copying the
+    # wider predicate here would drop targets the server keeps and trade one
+    # residual for its mirror image.
+    mtgt = jnp.clip(ai.target, 0, n - 1)
+    minion_target = jnp.where(
+        (ai.target >= 0) & (~state.alive[mtgt] | ~visible[mtgt]),
+        jnp.int8(-1), ai.target)
+
     target = jnp.where(
         is_champ, jnp.where(keep_champ, state.target, champ_pick),
-        jnp.where(is_turret, turret_target, ai.target))
+        jnp.where(is_turret, turret_target, minion_target))
 
     # ---- 3b. RefreshWaypoints -------------------------------------------
     # `ObjAIBase.RefreshWaypoints`: a unit holding a target either stops,
