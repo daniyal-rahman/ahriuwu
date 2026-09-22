@@ -365,17 +365,6 @@ class LaneState:
     #: ``targetUnitPriority`` -- a ``ClassifyUnit`` value, 1..14, lower is
     #: higher priority. 14 (DEFAULT) means "no committed target".
     target_priority: jax.Array     # (N,) int8
-    #: ``hadTarget`` -- `LaneMinionAI`'s one-tick latch, NOT ``target >= 0``.
-    #: It is set true only on the tick AFTER an acquisition (`LaneMinionAI.cs:44`)
-    #: and cleared when `TargetJustDied` fires (`:48`), so it disagrees with
-    #: ``target >= 0`` on exactly the acquisition tick and on the tick after a
-    #: give-up null-out. Measured on the canonical corpus: **556 of 395,486
-    #: scored LaneMinion unit-ticks (0.1406%)**, 494 of them ``target`` set
-    #: while the latch is clear. Reconstructing it as ``target >= 0`` made the
-    #: port fire `TargetJustDied` on those 494 ticks where the server does not.
-    #: The server publishes it as ``aihad=`` and `trace.py` has always parsed
-    #: it; it simply had nowhere to be stored.
-    had_target: jax.Array          # (N,) bool
     #: ``temporaryIgnored``: per (unit, other) the local time until which the
     #: other is ignored. Dense because a dict is not a fixed shape.
     ignore_until: jax.Array    # (N, N)
@@ -497,7 +486,6 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         # 250 so the first tick re-evaluates, as `minionActionTimer = 250f` does
         ai_timer=jnp.full((n_units,), 250.0, dtype=dtype),
         target_priority=jnp.full((n_units,), 14, dtype=jnp.int8),
-        had_target=jnp.zeros((n_units,), dtype=bool),
         ignore_until=z(n_units, n_units),
         help_priority=jnp.full((n_units, n_units), 14, dtype=jnp.int8),
         ai_local_time=z(n_units),

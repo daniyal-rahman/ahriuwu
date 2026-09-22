@@ -74,7 +74,28 @@ sh = [gap(r["server"], r["shuffled"]) for r in rows] if have_shuf else None
 # tool that pools ACROSS jobs, so it produced the headline verdict while its
 # sibling had already been corrected -- nothing at HEAD could reproduce the
 # published t and CI values.
-print(f"\n{'metric':<13} {'mean diff':>10} {'95% CI':>22} {'t':>7}  verdict")
+# SIGNED bias and POWER, alongside the agreement test. Both were missing and
+# both produced published errors.
+#
+# `gap()` takes abs(), so a large value means the two arms DISAGREE per seed --
+# it says nothing about direction. `deaths 0.542 EXCESS` was reported as "the
+# sim dies 0.54 times more per episode"; the signed bias is -0.125 (t=-0.37),
+# i.e. the sim dies slightly LESS and indistinguishably so. The marginals were
+# sim 1.625 / server 1.750. An agreement metric read as a directional one.
+#
+# And a metric can be INDISTINGUISHABLE because the test has no power. If the
+# order-shuffle already destroys all per-seed correlation, the reference gap
+# equals the fully-decoupled bound E|X-Y| and NOTHING can exceed it. Measured:
+# cs 1.06 and attacks 0.97 of that bound -- those two can never fail, so
+# reporting them as "indistinguishable from the floor" was not evidence of
+# agreement. deaths 0.47, xp_share 0.46, max_level 0.59 do have headroom.
+def _decouple_bound(xs, ys):
+    """E|X-Y| if the two arms were independent: all cross-seed pairs."""
+    return (statistics.mean(abs(x - y) for x in xs for y in ys)
+            if xs and ys else float("nan"))
+
+print(f"\n{'metric':<13} {'|diff|':>9} {'95% CI':>20} {'t':>6} "
+      f"{'signed':>9} {'power':>7}  verdict")
 for m in ("cs", "deaths", "max_level", "levelup_lag", "xp_share"):
     if not sh:
         print(f"{m:<13} {'(no reference -- rerun with --shuffled)':>44}")
@@ -91,8 +112,32 @@ for m in ("cs", "deaths", "max_level", "levelup_lag", "xp_share"):
     t = mu / se if se else float("inf")
     lo, hi = mu - 1.96 * se, mu + 1.96 * se
     v = "EXCESS" if lo > 0 else ("PASS" if hi < 0 else "INDISTINGUISHABLE")
-    print(f"{m:<13} {mu:>10.3f} {lo:>10.2f}..{hi:<10.2f} {t:>7.2f}  {v}")
-print("\ndiff > 0 = the SIM deviates from the server MORE than the server")
-print("deviates from ITSELF under a permuted update order.")
-print("INDISTINGUISHABLE is neither pass nor fail: at this sample size the")
-print("experiment cannot separate them.")
+
+    # signed sim-vs-server bias on the raw metric, where one exists
+    signed = float("nan")
+    if m in ("cs", "deaths"):
+        sv = [r["sim"][m] - r["server"][m] for r in rows]
+        signed = statistics.mean(sv)
+    # power: reference gap over the fully-decoupled bound. ~1.0 = no power.
+    ref = statistics.mean(
+        [b[m] for b in sh
+         if not (isinstance(b[m], float) and math.isnan(b[m]))] or [float("nan")])
+    if m in ("cs", "deaths", "max_level"):
+        bound = _decouple_bound([r["server"][m] for r in rows],
+                                [r["shuffled"][m] for r in rows]) \
+            if m in ("cs", "deaths") else float("nan")
+    else:
+        bound = float("nan")
+    power = ref / bound if bound and not math.isnan(bound) else float("nan")
+    pw = "NONE" if (not math.isnan(power) and power >= 0.9) else (
+        f"{power:.2f}" if not math.isnan(power) else "-")
+    sg = f"{signed:+.3f}" if not math.isnan(signed) else "-"
+    print(f"{m:<13} {mu:>9.3f} {lo:>9.2f}..{hi:<9.2f} {t:>6.2f} "
+          f"{sg:>9} {pw:>7}  {v}")
+
+print("\n|diff| is an AGREEMENT metric -- it is abs(), so it says nothing about")
+print("direction. `signed` is the raw sim-minus-server bias; read it before")
+print("claiming the sim does more or less of anything.")
+print("power = reference gap / fully-decoupled bound. NONE (>=0.9) means the")
+print("shuffle already destroys all per-seed pairing, so the metric CANNOT fail")
+print("and an INDISTINGUISHABLE verdict on it is not evidence of agreement.")

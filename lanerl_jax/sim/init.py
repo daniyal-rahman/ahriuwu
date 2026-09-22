@@ -327,17 +327,7 @@ TURRET_HP_BONUS_NEXUS = 125.0
 #: (quints ``5335``) = 15.2548 of rune, plus ``Martial Mastery``'s flat 5.0
 #: (talent ``4132``), = 20.2548; armour is 9 x 1.0 from the seals (``5317``),
 #: = 9.0, with no armour talent scripted at all.
-RUNE_AD_BONUS = 78.13500213623047 - 57.88      # +20.2550021
-#: The level-1 total was previously written as 78.134765625, which is
-#: exactly 80010/1024 -- the DUMP's `Q(AD, StatQ)` value, round-tripped
-#: and frozen into a constant. The server's true float32 is
-#: 78.13500213623047, read from `adbits=` (an exact-bits emit added for
-#: `STAT-003`, same idiom as `aacdbits`). The observation stream rounds
-#: to 2 dp and shows 78.14, which is a correct rounding of 78.135002 and
-#: bounds the truth to [78.135, 78.145) without pinning it -- reading the
-#: error off that stream overstated it 20x, as 0.0052 rather than the
-#: true 0.000237. AD is order-INDEPENDENT arithmetic, so no order floor
-#: applies and the gate requires it exact regardless of size.
+RUNE_AD_BONUS = 78.134765625 - 57.88            # +20.2548
 RUNE_ARMOR_BONUS = 36.5361328125 - 27.5361328125  # +9.0
 
 #: `Brute Force` (talent `4122`, rank 3 in `lanerl/cfg/garen1v1.json`) does
@@ -613,19 +603,6 @@ def spawn_minion(state: LaneState, team, profile, hp,
         lane_waypoint_key=setv(state.lane_waypoint_key, jnp.int8(0)),
         move_order=setv(state.move_order, jnp.int8(MoveOrder.HOLD)),
         target=setv(state.target, jnp.int8(-1)),
-        # `hadTarget` is a LATCH, and a recycled slot must start clean. It used
-        # to be reconstructed every tick as `target >= 0`, so this reset was
-        # implicit; persisting it in `LaneState` (HADTGT-001) made the omission
-        # a real leak. A minion that dies holding a target ends the tick
-        # `alive=False, target=-1, had_target=True`, and `minion_ai` only
-        # writes the latch for live lane minions -- so the NEXT wave's minion
-        # inherits it, `just_died = had_target & ~cur_ok` fires on its very
-        # first AI tick, and the call-for-help acquisition arm is suppressed on
-        # the spawn tick. The server constructs a fresh `LaneMinionAI` with
-        # `hadTarget=false` and does call `FoundNewTarget(true)` there.
-        # Tier 1 never saw this because the latch is injected every tick; tier
-        # 2, gate 3 and RL rollouts all would.
-        had_target=setv(state.had_target, False),
         ai_timer=setv(state.ai_timer, jnp.asarray(250.0, state.x.dtype)),
         next_spawn_seq=jnp.where(ok, state.next_spawn_seq + 1,
                                  state.next_spawn_seq),
