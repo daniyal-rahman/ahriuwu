@@ -212,11 +212,22 @@ def record_trace(
     step_ticks: int = 2,
     tag: str = "fixture",
     extra_env: Optional[Mapping[str, str]] = None,
+    server_dir: Optional[Path] = None,
+    config_path: Optional[Path] = None,
 ) -> Path:
     """Boot one server, drive it, and return the path to its log.
 
     The log carries the STATEHASH/STATEROW stream; parse it with
     :func:`lanerl_jax.parity.trace.load_trace`.
+
+    ``server_dir`` and ``config_path`` select WHICH server binary and which
+    script package to record against. They default to the stock build, i.e. the
+    uninstrumented one. Every observability field -- ``aacdbits``, ``aagate``,
+    ``CallForHelpClear`` -- lives only in the build under ``bin/Trace/net6.0``
+    and the isolated ``Content-trace`` package, so a recording made without
+    these two arguments will parse cleanly, hash correctly, and contain none of
+    them. That is the failure this pair exists to prevent: it is silent, and it
+    is the same shape as `METH-003`.
     """
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
@@ -231,6 +242,8 @@ def record_trace(
             bot_teams="none",
             bot_seed=SEED,
             step_ticks=step_ticks,
+            server_dir=Path(server_dir) if server_dir else None,
+            config_path=Path(config_path) if config_path else None,
             extra_env={"LANERL_STATE_DUMP": "1", "LANERL_STATE_DUMP_FULL": "1",
                        "LANERL_STATE_DUMP_INTERNALS": "1",
                        **TRACE_ENV, **(dict(extra_env) if extra_env else {})},
@@ -295,11 +308,80 @@ class Fixture:
 
 def record_fixture(out_dir: Path, decisions: int = 600, port_base: int = 41000,
                    tag: str = "fixture",
-                   extra_env: Optional[Mapping[str, str]] = None) -> Fixture:
+                   extra_env: Optional[Mapping[str, str]] = None,
+                   server_dir: Optional[Path] = None,
+                   config_path: Optional[Path] = None) -> Fixture:
     """Record one episode and return the paths to all three streams."""
     log = record_trace(out_dir, decisions=decisions, port_base=port_base, tag=tag,
+                       server_dir=server_dir, config_path=config_path,
                        extra_env=extra_env)
     out_dir = Path(out_dir)
     return Fixture(log=log,
                    actions=out_dir / f"{tag}_actions.json",
                    observations=out_dir / f"{tag}_obs.jsonl")
+
+
+def _main(argv: Optional[List[str]] = None) -> int:
+    """Record one instrumented episode from the command line.
+
+    This exists because the runbook's "re-record the instrumented corpus" step
+    had no command behind it: the AA-004 recording was made by an ad-hoc script
+    that was never committed, so the single most expensive artefact in the
+    project was the one step a reader could not repeat.
+    """
+    import argparse
+
+    from lanerl_train import paths
+
+    trace_server = (paths.server_dir().parent.parent / "Trace" / "net6.0")
+    trace_cfg = Path(__file__).resolve().parents[2] / "lanerl" / "cfg" / "garen1v1_trace.json"
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--out", required=True, type=Path)
+    ap.add_argument("--tag", default="rec")
+    ap.add_argument(
+        "--game-seconds", type=float, default=420.0,
+        help="Wall time of game to record. Must exceed ~200 s: the waves do not "
+             "clash until ~110 s, so a shorter run exercises none of the "
+             "instrumented sites and 'passes' while proving nothing.")
+    ap.add_argument("--port-base", type=int, default=41000)
+    ap.add_argument(
+        "--stock", action="store_true",
+        help="Record against the STOCK build instead of the instrumented one. "
+             "The result will carry no aacdbits/aagate/CallForHelpClear and "
+             "will not say so -- only pass this deliberately.")
+    ap.add_argument("--server-dir", type=Path, default=None)
+    ap.add_argument("--config", type=Path, default=None)
+    args = ap.parse_args(argv)
+
+    from lanerl_rl import constants as C
+
+    decisions = int(round(args.game_seconds * C.DECISION_HZ))
+
+    server_dir = args.server_dir
+    config_path = args.config
+    if not args.stock:
+        server_dir = server_dir or trace_server
+        config_path = config_path or trace_cfg
+        for p in (server_dir, config_path):
+            if not Path(p).exists():
+                raise SystemExit(
+                    f"instrumented build missing: {p}\n"
+                    "Build it first -- see lanerl/patch_observability.py's docstring.")
+
+    fx = record_fixture(args.out, decisions=decisions, port_base=args.port_base,
+                        tag=args.tag, server_dir=server_dir, config_path=config_path)
+
+    # A script that fails to compile does NOT stop the server; it silently stops
+    # being the AI and the trace still parses (METH-003). Never hand back a log
+    # without saying which it was.
+    from .script_health import check_script_load
+    print(f"log: {fx.log}")
+    print(f"actions: {fx.actions}")
+    print(f"observations: {fx.observations}")
+    print(f"script health: {check_script_load(fx.log)}")
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(_main())

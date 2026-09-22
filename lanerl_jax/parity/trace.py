@@ -184,6 +184,97 @@ class AIInternal:
     #: server will NOT fire" from "0" and from "-1 tick, already ready".
     #: `None` on every recording made before the field existed.
     aa_cooldown_bits: Optional[int] = None
+    #: `aagate` -- every gate on the auto-attack swing path, packed one bit per
+    #: CONDITION, added 2026-09-22 for `AA-005`. The residual after `AA-004` is
+    #: 50 unit-ticks that were ready by every gate the dump published and still
+    #: did not swing; the remaining gates (`SpellToCast`, `MovementParameters`,
+    #: the status flags behind `CanAttack()`, `_castingSpell`, `ChannelSpell`,
+    #: `_skipNextAutoAttack`) were all unpublished. Three inferred explanations
+    #: were refuted by the first direct measurement of them, so this publishes
+    #: the gates rather than their shadows. Bit layout: see
+    #: `LanerlAim.AutoAttackGateBits`, and `GATE_BITS` below. `None` on every
+    #: recording made before the field existed.
+    aa_gate_bits: Optional[int] = None
+    #: `status` -- the raw `StatusFlags` word. The packed bits above say that a
+    #: gate was shut; this says WHICH flag shut it.
+    status_flags: Optional[int] = None
+
+
+#: Sentinel for "this recording predates `aagate=`", distinct from "no gate
+#: was shut". See `first_shut_gate`.
+GATE_UNRECORDED = "<unrecorded>"
+
+#: `AA-005`: bit -> (name, what being SET means for the swing).
+#: Mirrors `LanerlAim.AutoAttackGateBits`; keep the two in step. The bits are
+#: CONDITIONS, not outcomes, so the chain can be re-evaluated from them rather
+#: than trusting the server's idea of which gate mattered. `blocks` is True when
+#: the bit being SET is what stops the swing, False when the bit being CLEAR is.
+GATE_BITS: Tuple[Tuple[int, str, bool], ...] = (
+    (0, "target_present", False),
+    (1, "target_is_enemy", False),
+    (2, "move_order_is_cast_spell", True),
+    (3, "movement_parameters_set", True),
+    (4, "aa_spell_ready", False),
+    (5, "can_attack", False),
+    (6, "casting_spell_set", True),
+    (7, "channel_spell_set", True),
+    (8, "skip_next_auto_attack", True),
+    (9, "spell_to_cast_set", True),
+    (10, "is_attacking", True),
+    (11, "has_made_initial_attack", False),
+    (12, "target_in_range", False),
+    (13, "target_invalid", True),
+    (14, "can_move", False),
+    (15, "can_change_waypoints", False),
+    (16, "cooldown_elapsed", False),
+)
+
+#: The gates in the order `ObjAIBase.Update` evaluates them, so "which gate shut
+#: FIRST" is a well-defined question. Anything after the first shut gate was
+#: never reached and its value is not evidence about the swing.
+GATE_CHAIN: Tuple[str, ...] = (
+    "target_present",
+    "target_invalid",
+    "is_attacking",
+    "spell_to_cast_set",
+    "target_is_enemy",
+    "move_order_is_cast_spell",
+    "target_in_range",
+    "movement_parameters_set",
+    "aa_spell_ready",
+    "can_attack",
+    "cooldown_elapsed",
+    "skip_next_auto_attack",
+)
+
+
+def gate_flags(bits: Optional[int]) -> Dict[str, bool]:
+    """Unpack an `aagate` word into named booleans (empty when not recorded)."""
+    if bits is None or bits < 0:
+        return {}
+    return {name: bool(bits >> shift & 1) for shift, name, _ in GATE_BITS}
+
+
+def first_shut_gate(bits: Optional[int]) -> Optional[str]:
+    """The FIRST gate on the swing path that was closed, in server order.
+
+    `None` means every gate was open -- i.e. the server should have swung, and a
+    row where it did not is a genuine unexplained residual rather than a gate we
+    simply could not see. `UNRECORDED` means the opposite: this recording predates
+    the field, so nothing is known. Collapsing those two into one `None` is the
+    same absent-vs-observed-empty confusion that `collision_observed` exists to
+    avoid, and it would score old recordings as clean.
+    """
+    flags = gate_flags(bits)
+    if not flags:
+        return GATE_UNRECORDED
+    blocks = {name: b for _, name, b in GATE_BITS}
+    for name in GATE_CHAIN:
+        if name not in flags:
+            continue
+        if flags[name] == blocks[name]:
+            return name
+    return None
 
 
 @dataclass(slots=True, frozen=True)
@@ -518,6 +609,10 @@ def parse_internal(kind: str, body: str) -> AIInternal | MissileInternal:
             q_aa_cooldown=_int(values["aacd"], "AA cooldown"),
             aa_cooldown_bits=_optional_int(
                 values.get("aacdbits", "-"), "AA cooldown bits"),
+            aa_gate_bits=_optional_int(
+                values.get("aagate", "-"), "AA gate bits"),
+            status_flags=_optional_int(
+                values.get("status", "-"), "status flags"),
             aa_state=_int(values["aastate"], "AA state"),
             q_aa_cast=_int(values["aacast"], "AA cast time"),
             q_aa_delay=_int(values["aadelay"], "AA delay"),

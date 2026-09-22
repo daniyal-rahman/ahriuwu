@@ -72,6 +72,59 @@ def _cfh_has(cfh_pre, net_id, iv, pick):
     return pick in e
 
 
+def _resolve_action_log(a):
+    """Load the recorded action stream, and REFUSE to silently do without it.
+
+    A driven fixture's champion is moved by a scripted action stream. Inject the
+    server's state, step the sim with no orders, and the champion stands still
+    while the server's walks, attack-moves and casts -- so every champion row in
+    every section below is an artifact of the missing stream, not a port defect.
+    That is not a hypothetical: run without it and the target section reports
+    ~190 `server ACQUIRED from none, sim did not` champion rows, a number which
+    looks exactly like a large real residual and is entirely self-inflicted.
+
+    Silence is the failure mode, so the default is to refuse. An IDLE fixture
+    (no action file, or one that is all noop) needs nothing and is let through.
+    """
+    from pathlib import Path as _P
+
+    from .record import ActionLog
+
+    if a.action_log:
+        log = ActionLog.load(_P(a.action_log))
+        print(f"actions: {a.action_log} ({len(log.t_ms)} decisions)")
+        return log
+
+    # No flag given. Is there an action file next to this log that we are
+    # ignoring? The recorder writes `<tag>_actions.json` one level up from
+    # `<tag>/instance000.log`.
+    log_path = _P(a.existing_log)
+    guesses = sorted(log_path.parent.parent.glob("*_actions.json"))
+    for g in guesses:
+        try:
+            cand = ActionLog.load(g)
+        except Exception:
+            continue
+        driven = sum(1 for w in list(cand.blue) + list(cand.red)
+                     if str(w.get("t", "noop")) != "noop")
+        if driven == 0:
+            continue
+        if a.no_actions:
+            print(f"WARNING: {g.name} carries {driven} non-noop orders and "
+                  f"--no-actions was passed. Champion rows below are "
+                  f"MEANINGLESS; read the LaneMinion and turret sections only.")
+            return None
+        raise SystemExit(
+            f"REFUSING TO RUN: {g} carries {driven} non-noop orders, so this "
+            "is a DRIVEN fixture, but no --action-log was given. The sim would "
+            "step with no orders while the server's champion follows the "
+            "script, and every champion row would be an artifact of that gap "
+            "rather than a port defect.\n"
+            f"  pass:  --action-log {g}\n"
+            "  or, to read only the minion/turret sections: --no-actions")
+    return None
+
+
 def _drill_move_order(rows, denom) -> None:
     """Is the LaneMinion move-order residual a mechanism or a floor?
 
@@ -242,6 +295,21 @@ def main(argv=None) -> None:
     ap.add_argument("--to-ms", type=int, default=10**9)
     ap.add_argument("--max-pairs", type=int, default=2000)
     ap.add_argument("--examples", type=int, default=6)
+    ap.add_argument(
+        "--action-log", default=None,
+        help="The `*_actions.json` recorded alongside the log. REQUIRED for a "
+             "DRIVEN fixture. Without it the sim receives no orders while the "
+             "server's champion obeys the scripted drive, and every champion "
+             "row becomes an artifact of the missing action stream rather than "
+             "a port defect -- the drill will happily report 186 `server "
+             "ACQUIRED from none, sim did not` rows that mean nothing. The "
+             "drill refuses to run on a fixture that has a non-noop action "
+             "file unless this is passed or --no-actions is explicit.")
+    ap.add_argument(
+        "--no-actions", action="store_true",
+        help="Proceed without an action log even though the fixture has one. "
+             "Champion rows will be meaningless; only pass this when reading "
+             "the LaneMinion/turret sections.")
     ap.add_argument("--cfh-log", default=None,
                     help="a recording carrying `CallForHelpClear` events (the "
                         "pre-clear call-for-help map). Turns CFH-002 from an "
@@ -324,7 +392,8 @@ def main(argv=None) -> None:
     from ..sim.state import Kind
     from ..sim.targeting import MinionType
     from .tier1_full import FIRST_WAVE_MS
-    from .trace import PosQ, StatQ, load_trace_window
+    from .trace import (GATE_UNRECORDED, PosQ, StatQ, first_shut_gate,
+                        gate_flags, load_trace_window)
 
     _SUBTYPE_NAME = {MinionType.MELEE: "melee", MinionType.CASTER: "caster",
                      MinionType.CANNON: "cannon", MinionType.SUPER: "super"}
@@ -341,9 +410,19 @@ def main(argv=None) -> None:
     # `load_trace_window` keeps index alignment and keeps `t_ms` on every
     # tick (which is all `replay_wave_states` reads), so the wave replay is
     # unchanged; only the rows outside the window stop being materialised.
+    action_log = _resolve_action_log(a)
     trace = load_trace_window(Path(a.existing_log), from_ms=a.from_ms,
                               to_ms=a.to_ms, max_snapshots=a.max_pairs + 1)
     snaps = [s for s in trace.snapshots if s.t_ms >= FIRST_WAVE_MS]
+    action_at_snapshot = {}
+    n_action_boundaries = 0
+    n_orders_unresolvable = 0
+    if action_log is not None:
+        from .action_replay import align_action_log
+        action_at_snapshot = align_action_log(snaps, action_log)
+        print(f"aligned {len(action_at_snapshot)} action boundaries "
+              f"onto {len(snaps)} snapshots")
+
     wave_states = replay_wave_states(snaps)
     patch = load_patch()
     params = lane_params(patch)
@@ -395,7 +474,29 @@ def main(argv=None) -> None:
         state_n, report = inject_snapshot(
             sn, wave_states[i], params, PROFILES, previous_snapshot=previous)
         net_id_slots = net_id_to_injected_slot(sn, report.notes)
+        endpoint_orders = None
+        decision = action_at_snapshot.get(i + 1)
+        if decision is not None:
+            from .action_replay import ActionReplayError, decision_to_orders
+            try:
+                endpoint_orders = decision_to_orders(decision, net_id_slots)
+                n_action_boundaries += 1
+            except ActionReplayError:
+                # The recorded order names a unit that is not in this snapshot
+                # (it spawned or died across the boundary). SKIP the pair.
+                #
+                # Not substituting a noop, which is the other obvious option:
+                # a noop leaves the sim's champion standing still while the
+                # server's executes the real order, which is precisely the
+                # artifact `_resolve_action_log` exists to prevent -- it would
+                # reappear here, per-pair and invisible, in a drill that had
+                # just been given the action stream specifically to avoid it.
+                # A skipped pair is missing data; a substituted one is wrong
+                # data that reads as a residual.
+                n_orders_unresolvable += 1
+                continue
         tr = compare_one_tick(state_n, report.notes, sn1, params, lane_path,
+                              endpoint_orders=endpoint_orders,
                               pre_net_id_to_slot=net_id_slots)
         n_pairs += 1
 
@@ -815,6 +916,15 @@ def main(argv=None) -> None:
                         None if iv is None or iv.aa_cooldown_bits is None
                         else struct.unpack("<f", struct.pack(
                             "<i", iv.aa_cooldown_bits))[0]),
+                    # AA-005: the rest of the chain, published rather than
+                    # inferred. Every gate listed in the comment above except
+                    # the cooldown lives in state the dump did not carry, which
+                    # is why three successive inferred explanations for this
+                    # residual (target priority, call-for-help, the 4 s give-up
+                    # rule) each died on first contact with a direct
+                    # measurement. `aagate` carries all of them.
+                    injected_gate_bits=None if iv is None else iv.aa_gate_bits,
+                    injected_status=None if iv is None else iv.status_flags,
                 ))
             if c.sim_target_net_id != c.server_target_net_id:
                 gs = geometry(slot_of.get(c.sim_target_net_id),
@@ -1538,6 +1648,79 @@ def main(argv=None) -> None:
                     for (st, at), n in sorted(tab2.items(),
                                               key=lambda kv: -kv[1]):
                         print(f"       {n:5d}  aastate={st} is_attacking={at}")
+
+    if n_action_boundaries or n_orders_unresolvable:
+        print(f"\naction boundaries replayed: {n_action_boundaries}; "
+              f"pairs SKIPPED because the recorded order named a unit absent "
+              f"from the snapshot: {n_orders_unresolvable}")
+
+    print("\n-- AA-005: WHICH gate held the server back? (published, not inferred) --")
+    print("   `aagate` carries every gate on ObjAIBase.Update's swing path.")
+    print("   Reading order is the server's evaluation order, so the FIRST shut")
+    print("   gate is the only one that is evidence -- anything after it was")
+    print("   never reached. `<unrecorded>` means this log predates the field.")
+    # Only the direction AA-005 is about: the SIM swung and the SERVER did not.
+    # The opposite direction is a different bug with a different cause, and
+    # pooling them would average two unrelated populations. `early`/`late` are
+    # already bound by the AA-004 section above.
+    print("   DIRECTIONALITY. `aagate` is dumped at the END of tick N, which is")
+    print("   the state the server's tick N+1 evaluates its gates FROM. That is")
+    print("   the right instant for `sim fires, server does NOT` -- it is")
+    print("   exactly the gate chain that declined the swing. It is the WRONG")
+    print("   instant for the opposite direction: there the server DID swing")
+    print("   during N+1, so a gate shut at the end of N cannot be why, and the")
+    print("   histogram below is context, NOT attribution. Reading it as")
+    print("   attribution would be the same mistake as scoring a residual")
+    print("   against a gate that was never evaluated.")
+    for name, rows, attributive in (
+            ("sim fires, server does NOT", early, True),
+            ("server fires, sim does NOT (NOT attributive, see above)",
+             late, False)):
+        if not rows:
+            continue
+        seen = [r for r in rows if r["injected_gate_bits"] is not None]
+        print(f"   {name}: {len(rows)} rows, {len(seen)} carrying `aagate`")
+        if not seen:
+            print("     (this recording predates `aagate`)")
+            continue
+        tab = collections.Counter(first_shut_gate(r["injected_gate_bits"])
+                                  for r in seen)
+        for gate, n in sorted(tab.items(), key=lambda kv: -kv[1]):
+            if not attributive:
+                verdict = "(state at end of N; not a cause of the N+1 swing)"
+            elif gate is None:
+                verdict = ("EVERY gate was open -- the server should have swung "
+                           "and did not. This is the genuine residual: not a "
+                           "gate we could not see, but one that is not in the "
+                           "chain as read.")
+            elif gate == GATE_UNRECORDED:
+                verdict = "no `aagate` in this recording; nothing is known"
+            else:
+                verdict = ("the server was blocked here; the sim does not apply "
+                           "this gate")
+            print(f"     {n:5d}  {gate}   {verdict}")
+        if not attributive:
+            # What these rows actually need is the swing-start detector's own
+            # inputs. `server_fire` is "the cooldown ROSE across the boundary",
+            # so a large injected cooldown means the detector, not a gate, is
+            # the thing to explain.
+            byk = collections.Counter(
+                (r["kind"], r["injected_cd_q"] is not None
+                 and r["injected_cd_q"] > 64)
+                for r in seen)
+            print("     what these rows are, by kind and whether the INJECTED "
+                  "cooldown was already well above zero at N:")
+            for (kind, big), n in sorted(byk.items(), key=lambda kv: -kv[1]):
+                print(f"       {n:5d}  {kind}  injected_cd_q>64={big}")
+        # For the rows a gate DOES explain, the status word says which flag.
+        blocked = [r for r in seen
+                   if first_shut_gate(r["injected_gate_bits"]) == "can_attack"]
+        if blocked:
+            st = collections.Counter(r["injected_status"] for r in blocked)
+            print("     CanAttack() rows by raw status word "
+                  "(which flag is missing is the answer):")
+            for word, n in st.most_common(6):
+                print(f"       {n:5d}  status={word}")
 
     print("\n-- is_attacking / has_auto_attacked: contained in fire U hit? --")
     for (name, tag), n in sorted(bool_join.items()):
