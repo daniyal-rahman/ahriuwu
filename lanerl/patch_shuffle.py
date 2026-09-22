@@ -144,6 +144,22 @@ namespace LeagueSandbox.GameServer.Lanerl
         public static readonly int Seed =
             Enabled ? int.Parse(_raw) : 0;
 
+        /// <summary>
+        /// Shuffle only from this tick onward. Ticks before it run in the
+        /// server's natural order, so the run is IDENTICAL to the canonical
+        /// corpus up to that point and the FIRST shuffled tick is a true
+        /// one-step sample: same input state, one tick, two update orders.
+        ///
+        /// That distinction is the whole point. Shuffling from tick 0 measures
+        /// FREE-RUNNING divergence, which by mid-game reaches 31% of minion
+        /// targets -- a real and important number, but not the one to compare
+        /// a one-step residual against. Using it that way would excuse any
+        /// residual at all.
+        /// </summary>
+        public static readonly long From =
+            long.TryParse(Environment.GetEnvironmentVariable(
+                "LANERL_SHUFFLE_FROM"), out var f) ? f : 0L;
+
         private static long _tick;
         private static bool _announced;
 
@@ -155,16 +171,21 @@ namespace LeagueSandbox.GameServer.Lanerl
         public static GameObject[] Permute(IEnumerable<GameObject> objects)
         {
             var arr = objects.ToArray();
+            if (_tick++ < From)
+            {
+                return arr;   // natural order, untouched
+            }
             if (!_announced)
             {
                 // Once, loudly: a shuffled log must never be mistaken for a
                 // clean one, and the parity corpora are compared by hash.
                 Console.WriteLine(
                     "LANERL_SHUFFLE_ORDER active seed=" + Seed +
+                    " from=" + From +
                     " -- THIS RECORDING IS NOT THE CANONICAL CORPUS");
                 _announced = true;
             }
-            long t = _tick++;
+            long t = _tick;
             for (int i = arr.Length - 1; i > 0; i--)
             {
                 int j = (int)(Mix((ulong)Seed, (ulong)t, (ulong)i) % (ulong)(i + 1));
