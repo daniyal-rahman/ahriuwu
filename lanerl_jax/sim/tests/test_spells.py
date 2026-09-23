@@ -343,15 +343,16 @@ def test_the_cooldown_starts_when_the_spin_ENDS():
             mid = float(s.spell_cooldown[0, Slot.E])
     assert mid == pytest.approx(0.0, abs=1e-3), "cooldown ran during the spin"
     # `STRUCT-007`: exact, not `rel=0.1` -- at 10% the rank-2 row (12 s,
-    # 12/13 = 0.923) passed too. `end_e` writes the rank value AFTER that
-    # tick's countdown, so on the end tick it is exactly E_COOLDOWNS[0].
+    # 12/13 = 0.923) passed too. `end_e` writes the rank value BEFORE that
+    # tick's countdown (`SPELL-012`: `Spell.Update` runs after
+    # `UpdateBuffs`), so on the end tick it is E_COOLDOWNS[0] less one tick.
     start, since, final = _cooldown_from_its_start(
         _cast_e(_lane_with_minions()), Slot.E,
         int(E_DURATION_S * 60) + 60)
-    assert start == np.float32(E_COOLDOWNS[0]), (
-        f"rank-1 cooldown written as {start}, not 13 s")
+    assert start == _decayed(E_COOLDOWNS[0], 1), (
+        f"rank-1 cooldown on its end tick is {start}, not 13 s less one tick")
     assert since == 59, f"the spin did not end on tick 181 ({since})"
-    assert final == _decayed(E_COOLDOWNS[0], since)
+    assert final == _decayed(E_COOLDOWNS[0], since + 1)
 
 
 def test_e_cannot_be_recast_while_on_cooldown():
@@ -1316,3 +1317,118 @@ def test_e_tick_schedule_drifts_like_the_server_accumulator():
         assert got == pytest.approx(exp, abs=0.02), (
             f"fire schedule {fire_times} does not drift like the server's "
             f"accumulator; wanted {want}")
+
+
+# ------------------------------------------------------- SPELL-012: E's end --
+def _e_listed(s):
+    """Is ``GarenE`` in the champion's buff list -- the server's
+    ``GetBuffs()`` view the gate renders, not the behavioural ``active``."""
+    from lanerl_jax.sim.spells import active_by_name
+    return bool(active_by_name(s.buffs)["GarenE"][0])
+
+
+def _spin_to_cancellable(s):
+    """Tick a fresh spin until ``GarenECancel`` is ready; return the state and
+    how many ticks that took."""
+    from lanerl_jax.sim.spells import e_cancellable
+    step = _tick_stepper()
+    n = 0
+    while not bool(e_cancellable(s.buffs)[0]):
+        s = step(s)
+        n += 1
+        assert n < 200, "the spin never became cancellable"
+    return s, n
+
+
+def test_e_cancel_is_tick_exact_the_buff_lingers_one_row_without_effect():
+    """`SPELL-012`, the cancel path, row by row against the server.
+
+    The server applies the cancel in `LanerlControl.OnTick`, inside
+    `LanerlHooks.OnUpdate`, BEFORE `LanerlStateDump.Emit` and before
+    `ObjectManager.Update`. `GarenECancel.OnSpellPostCast` -> `RemoveBuff` ->
+    `RemoveBuffsWithName` -> `Buff.DeactivateBuff`: `OnDeactivate` runs NOW
+    (status restored via the unit's `SetStatus`, slot swapped back, cooldown
+    `SetCooldown(13)`), but the `Buff` object only gets `_remove = true`; it
+    leaves `BuffList` at the next `UpdateBuffs` (`if (buff.Elapsed())
+    RemoveBuff(buff)`, which never calls `OnUpdate`). So:
+
+      row of the cancel tick   GarenE LISTED, cooldown 13.0 exactly (written
+                               in OnTick, `Spell.Update` has not run), NOT
+                               ghosted, may attack;
+      next row                 GarenE gone, cooldown 13 - 1 tick;
+      the tick in between      NO damage tick, even with the accumulator due.
+
+    Measured in `runs/parity001/obsharden-b0ctl-120s` (`t=10017` red:
+    `GarenE` listed with `13312` = 13.0 * 1024; `t=10033`: gone, `13295`).
+    """
+    from lanerl_jax.sim.spells import E_TICK_MS, status_of
+    step = _tick_stepper()
+    s, n = _spin_to_cancellable(_cast_e(_lane_with_minions(hp=1.0e6)))
+    assert n == 61, f"GarenECancel ready after {n} ticks, not 61"
+    # Make the accumulator DUE, so a buff update on the next tick would fire.
+    s = _set_buff(s, "e", "tick_acc_ms", 0, E_TICK_MS)
+    minions = slice(2, 6)
+
+    # control: without the cancel, the next tick fires a damage tick.
+    ctl = step(s)
+    assert np.all(np.asarray(ctl.hp[minions]) < np.asarray(s.hp[minions])), (
+        "control: the due accumulator did not fire, so the test proves nothing")
+
+    c = _cast_e(s)                               # the cancel, in OnTick
+    assert not bool(c.buffs.e.active[0]), "the cancel did not end the spin"
+    st = status_of(c)
+    assert not bool(st.ghosted[0]) and bool(st.can_attack[0]), (
+        "OnDeactivate's SetStatus is immediate: the cancel row is not ghosted")
+    assert np.float32(c.spell_cooldown[0, Slot.E]) == np.float32(E_COOLDOWNS[0]), (
+        "cancel row: cooldown must be exactly 13.0, not yet counted down")
+    assert _e_listed(c), (
+        "cancel row: the server still LISTS GarenE (_remove set, not yet "
+        "out of BuffList)")
+
+    t1 = step(c)                                 # UpdateBuffs removes it
+    assert not _e_listed(t1), "GarenE still listed a tick after the cancel"
+    assert np.float32(t1.spell_cooldown[0, Slot.E]) == _decayed(E_COOLDOWNS[0], 1)
+    assert np.array_equal(np.asarray(t1.hp[minions]), np.asarray(c.hp[minions])), (
+        "the cancelled spin dealt a damage tick on the tick it was removed")
+
+    t2 = step(t1)
+    assert not _e_listed(t2)
+    assert np.float32(t2.spell_cooldown[0, Slot.E]) == _decayed(E_COOLDOWNS[0], 2)
+
+
+def test_e_expiry_is_tick_exact_cooldown_counts_down_on_the_end_tick():
+    """`SPELL-012`, the expiry path. `Buff.Update` (inside `UpdateBuffs`, the
+    first thing in `AttackableUnit.Update`) calls `DeactivateBuff` once
+    `TimeElapsed >= Duration`; `OnDeactivate` writes `SetCooldown(13)`; THEN
+    `ObjAIBase.Update` runs `Spell.Update` on every slot -- including the
+    GarenE just swapped back -- which counts it down in the same tick. The
+    `Buff` stays in `BuffList` (`_remove` set) until the next `UpdateBuffs`.
+
+      row of the expiry tick   GarenE LISTED, cooldown 13 - 1 tick;
+      next row                 GarenE gone, cooldown 13 - 2 ticks, no damage.
+
+    Measured: `t=3167` blue, `GarenE` listed with `13295`; `t=3183` gone,
+    `13278` -- the gate's first divergence (sim: gone and 13.0 on `t=3167`).
+    """
+    from lanerl_jax.sim.spells import E_TICK_MS
+    step = _tick_stepper()
+    s = _cast_e(_lane_with_minions(hp=1.0e6))
+    n = 0
+    while bool(s.buffs.e.active[0]):
+        s = step(s)
+        n += 1
+        assert n < 400
+    assert n == 181, f"the spin ended on tick {n}, not 181"
+    assert np.float32(s.spell_cooldown[0, Slot.E]) == _decayed(E_COOLDOWNS[0], 1), (
+        "expiry row: Spell.Update runs after UpdateBuffs, so the cooldown "
+        f"OnDeactivate wrote is already one tick down; got "
+        f"{float(s.spell_cooldown[0, Slot.E])!r}")
+    assert _e_listed(s), "expiry row: the server still LISTS GarenE"
+
+    minions = slice(2, 6)
+    s = _set_buff(s, "e", "tick_acc_ms", 0, E_TICK_MS)   # due, if it were live
+    t1 = step(s)
+    assert not _e_listed(t1), "GarenE still listed a tick after expiry"
+    assert np.float32(t1.spell_cooldown[0, Slot.E]) == _decayed(E_COOLDOWNS[0], 2)
+    assert np.array_equal(np.asarray(t1.hp[minions]), np.asarray(s.hp[minions])), (
+        "the expired spin dealt a damage tick while it lingered in the list")

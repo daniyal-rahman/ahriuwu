@@ -194,6 +194,14 @@ class EBuff:
     #: `GarenE.TimeSinceLastTick`, ms, primed to 500 at cast and reset to 0
     #: on every fire -- the drifting six-tick schedule (`SPELL-003`).
     tick_acc_ms: jax.Array  # (N,)
+    #: The ENDED spin's `Buff` object is still in `BuffList` (`SPELL-012`).
+    #: `Buff.DeactivateBuff` runs `OnDeactivate` at once but only sets
+    #: `_remove`; the object leaves the list at the NEXT `UpdateBuffs`
+    #: (`if (buff.Elapsed()) RemoveBuff(buff)`, no `OnUpdate`). So for one
+    #: row the server still LISTS `GarenE` while it does nothing: set by
+    #: `end_e`, cleared by the next `step_buffs`, read only by
+    #: `spells.active_by_name` (the name view). Never by `status`.
+    lingering: jax.Array    # (N,) bool
 
 
 @struct.dataclass
@@ -245,7 +253,8 @@ def empty_buffs(n_units: int = 0, dtype=jnp.float32) -> Buffs:
     f = lambda: jnp.zeros((n_units,), dtype=dtype)       # noqa: E731
     r = lambda: jnp.zeros((n_units,), dtype=jnp.int8)    # noqa: E731
     return Buffs(
-        e=EBuff(active=b(), elapsed_s=f(), power=f(), tick_acc_ms=f()),
+        e=EBuff(active=b(), elapsed_s=f(), power=f(), tick_acc_ms=f(),
+                lingering=b()),
         q=QBuff(active=b(), elapsed_s=f(), skip_next=b()),
         q_haste=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
         w=RankedBuff(active=b(), elapsed_s=f(), rank=r()),

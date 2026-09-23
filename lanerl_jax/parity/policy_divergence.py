@@ -292,13 +292,17 @@ def fetch(state) -> Dict[str, np.ndarray]:
     """The fields the renderer and the counters read, as numpy, in one copy.
 
     Buffs are fetched by server NAME (``buff:<name>``, ``(N,)`` bool) plus
-    E's elapsed clock, which the renderer needs for the cancel projection."""
+    E's elapsed clock and whether the spin is LIVE (``e_active``), which the
+    renderer needs for the cancel projection. The two differ for one row
+    after a spin ends: the server still lists ``GarenE`` (`SPELL-012`) while
+    its slot 2 already holds ``GarenE`` again, on its rank cooldown."""
     import jax
     from ..sim.spells import active_by_name
     out = {k: getattr(state, k) for k in _FETCH}
     for name, on in active_by_name(state.buffs).items():
         out["buff:" + name] = on
     out["e_elapsed_s"] = state.buffs.e.elapsed_s
+    out["e_active"] = state.buffs.e.active
     return jax.device_get(out)
 
 
@@ -318,7 +322,9 @@ def render_sim_snapshot(f: Mapping[str, np.ndarray], t_ms: int) -> Snapshot:
     the cancel on the spin's elapsed clock ``>= E_CANCEL_MIN_S``. So E's
     cooldown is rendered as ``max(0, E_CANCEL_MIN_S - elapsed)`` while the
     spin is up -- the quantity the server shows -- and as the spell cooldown
-    otherwise.
+    otherwise. "Up" is the LIVE spin (``e_active``), not the name list: on
+    the row after a spin ends the name is still listed (`SPELL-012`) but
+    ``OnDeactivate`` has already swapped ``GarenE`` back into the slot.
     """
     from ..sim.spells import E_CANCEL_MIN_S, Slot
     from ..sim.state import Kind, Team
@@ -344,7 +350,7 @@ def render_sim_snapshot(f: Mapping[str, np.ndarray], t_ms: int) -> Snapshot:
             spells = []
             for s in range(4):
                 cd = float(f["spell_cooldown"][c, s])
-                if s == Slot.E and f["buff:GarenE"][i]:
+                if s == Slot.E and f["e_active"][i]:
                     cd = max(0.0, E_CANCEL_MIN_S - float(f["e_elapsed_s"][i]))
                 spells.append((int(f["spell_level"][c, s]),
                                int(round(max(cd, 0.0) * StatQ))))
