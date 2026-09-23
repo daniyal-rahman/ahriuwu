@@ -243,7 +243,9 @@ def test_server_projection_clamps_ready_cooldowns_and_filters_buffs():
 def test_floor_scoring():
     rep = {"first_divergence": {"t_ms": 500},
            "counters": {"sim": {"blue": {"cs": 3}, "red": {"cs": 1}},
-                        "server": {"blue": {"cs": 5}, "red": {"cs": 1}}}}
+                        "server": {"blue": {"cs": 5}, "red": {"cs": 1}}},
+           "position_resync": {"intervals": 10, "unexplained": 0,
+                               "path001": 2, "path001_rate": 0.2}}
     assert g.score_against_floor(rep, None)["verdict"] == "UNSCORED"
     floor = {"first_divergence": {"t_ms": 400},
              "counters": {"a": {"blue": {"cs": 5}, "red": {"cs": 1}},
@@ -257,6 +259,156 @@ def test_floor_scoring():
     v = g.score_against_floor(rep, floor)
     assert v["verdict"] == "FAIL" and v["failures"] == [
         "blue.cs: sim-vs-server gap 2 > floor 1"]
+    # position: scored per decision; the PATH-001 rate is reported, not gated
+    floor["counters"]["b"]["blue"]["cs"] = 3
+    v = g.score_against_floor(rep, floor)
+    assert v["verdict"] == "PASS" and v["path001_rate"] == 0.2
+    rep["position_resync"]["unexplained"] = 1
+    v = g.score_against_floor(rep, floor)
+    assert v["verdict"] == "FAIL" and "champion position: 1 of 10" in v["failures"][0]
+    del rep["position_resync"]
+    v = g.score_against_floor(rep, floor)
+    assert v["verdict"] == "FAIL" and "not scored" in v["failures"][0]
+
+
+def test_free_run_champion_position_is_reported_not_scored_while_routing_is_approx():
+    import dataclasses
+    assert g.ROUTING_APPROX
+    assert not g._is_scored("Champion.pos.x") and not g._is_scored("Champion.pos.y")
+    assert g._is_scored("LaneMinion.pos.x") and g._is_scored("Champion.hp")
+    tr = g.DivergenceTracker(g.gate_tolerance())
+    snaps, _ = _sim_snaps(2)
+    moved = dataclasses.replace(snaps[1], entities=[
+        dataclasses.replace(e, q_x=e.q_x + 32) if e.kind == "Champion" else e
+        for e in snaps[1].entities])
+    tr.update(snaps[1], moved, tick=1, decision=0)
+    out = tr.as_dict()
+    assert out["first_divergence"] is None
+    assert "Champion.pos.x" in out["reported_only_first_by_field"]
+
+
+def _f32_bits(v: float) -> int:
+    return int(np.array([v], np.float32).view(np.int32)[0])
+
+
+def _internal(t, team, x, y, key, wps):
+    q = ";".join(f"{int(round(a * 16))},{int(round(b * 16))}" for a, b in wps)
+    xb, yb = _f32_bits(x), _f32_bits(y)
+    return (f"LANERL_INTERNAL t={t} ai id={BLUE_NID if team == 100 else RED_NID} "
+            f"kind=Champion team={team} x=0 y=0 xbits={xb} ybits={yb} cr=1 "
+            f"pr=1 target=0,-,0,0,0 wpkey={key} wps={q} coll=0,0 "
+            f"collbits={xb},{yb} aacd=0 hasaa=0")
+
+
+def test_internal_champion_rows_parse_exact_bits_and_waypoints():
+    line = _internal(17, 200, 13850.6640625, 14375.5, 1,
+                     [(13850.6640625, 14375.5), (12635.390625, 14141.2265625)])
+    team, c = g._parse_champ_internal(line)
+    assert team == 200 and (c.x, c.y) == (13850.6640625, 14375.5)
+    assert (c.cx, c.cy) == (c.x, c.y) and c.key == 1
+    assert c.remaining == ((12635.375, 14141.25),)    # the dump's 1/16 quantum
+    _, neg = g._parse_champ_internal(
+        _internal(0, 100, -26.75, 257.5, 1, [(0.0, 0.0)]))
+    assert neg.x == -26.75
+
+
+class FakeResyncEngine(FakeEngine):
+    """`FakeEngine` plus the resync surface: blue walks +1 u/tick, a blue
+    MOVE installs the route [(9, 9)], anything else keeps the resynced one."""
+
+    def __init__(self):
+        super().__init__()
+        self.routes = {}
+
+    def resync(self, st, champ):
+        st = copy.deepcopy(st)
+        for team, c in champ.items():
+            i = g.CHAMP_SLOT[team]
+            st.x[i], st.y[i] = np.float32(c.x), np.float32(c.y)
+        self.routes = {t: list(c.remaining) for t, c in champ.items()}
+        return st
+
+    def apply(self, st, orders):
+        st = super().apply(st, orders)
+        if int(orders.kind[0]) == OrderKind.MOVE:
+            self.routes[100] = [(9.0, 9.0)]
+        return st
+
+    def champion_routes(self, st):
+        return {t: {"x": float(st.x[i]), "y": float(st.y[i]),
+                    "remaining": self.routes[t], "route_status": 0}
+                for t, i in g.CHAMP_SLOT.items()}
+
+
+class FakeGrid:
+    """Host `GetPath`: a fixed route to (7, 7), or null for goal (8, 8)."""
+
+    def __init__(self):
+        self.calls = []
+
+    def get_path(self, src, goal, radius):
+        self.calls.append((src, goal))
+        return None if goal == (8.0, 8.0) else [src, (7.0, 7.0)]
+
+
+def _resync_log(tmp_path, blue_orders, blue_srv_goal):
+    """Seven ticks, decisions at 1, 3, 5. The server's blue runs +1 u/tick
+    like the fake sim and holds ``[pos, blue_srv_goal]`` from tick 3; both
+    champions are 1 u off the sim from tick 5 on."""
+    snaps, _ = _sim_snaps(7)
+    st0 = _initial_numpy_state()
+    bx, by = float(st0.x[0]), float(st0.y[0])
+    rx, ry = float(st0.x[1]), float(st0.y[1])
+    lines = []
+    for j, s in enumerate(snaps):
+        lines.append(f"LANERL_STATEHASH t={s.t_ms} n={len(s.entities)} h={j:016x}")
+        lines += [f"LANERL_STATEROW t={s.t_ms} {_row(e)}" for e in s.entities]
+        off = 1.0 if j >= 5 else 0.0
+        blue_now = (bx + j + off, by)
+        blue_wps = [blue_now, blue_srv_goal] if j == 3 else [blue_now]
+        lines.append(_internal(s.t_ms, 100, *blue_now, 1, blue_wps))
+        red_now = (rx, ry + off)
+        lines.append(_internal(s.t_ms, 200, *red_now, 1, [red_now, (rx, ry + 50)]))
+    log_path = tmp_path / "srv.log"
+    log_path.write_text("\n".join(lines) + "\n")
+    log = _log([16, 50, 83], blue_orders, [{"t": "noop"}] * 3)
+    return log, log_path, (bx, by)
+
+
+def test_resync_scores_position_per_decision_and_classifies_mismatches(tmp_path):
+    """Intervals 1->3 and 3->5 per team. At tick 5 blue is 1 u off after a
+    MOVE whose sim route differs from the server's and the host port
+    reproduces the server's (PATH-001); red is 1 u off with identical
+    waypoints (unexplained)."""
+    log, log_path, (bx, by) = _resync_log(
+        tmp_path, [{"t": "noop"}, {"t": "move", "x": 7.0, "y": 7.0},
+                   {"t": "noop"}], (7.0, 7.0))
+    grid = FakeGrid()
+    rs = g.replay_resync(log, log_path, engine=FakeResyncEngine(), grid=grid,
+                         radius=35.0)
+    assert (rs["intervals"], rs["within_tol"], rs["path001"], rs["unexplained"]) \
+        == (4, 2, 1, 1)
+    assert rs["path001_rate"] == 0.25 and rs["max_err_u"] == 1.0
+    assert grid.calls == [((bx + 3, by), (7.0, 7.0))]      # the float32 click
+    assert rs["unexplained_by_reason"] == {"same waypoints, still off": 1}
+    ex = rs["unexplained_examples"]
+    assert len(ex) == 1 and ex[0]["team"] == 200 and ex[0]["waypoints_agree"]
+    assert rs["by_order"]["move"] == {"intervals": 1, "within_tol": 0,
+                                      "path001": 1, "unexplained": 0}
+
+
+def test_resync_fails_a_server_null_the_sim_routed_around(tmp_path):
+    """`PATH-008`: the host port says GetPath is null and the server walked
+    ``[Position, click]``; a sim that routed instead is NOT a tie-break."""
+    log, log_path, _ = _resync_log(
+        tmp_path, [{"t": "noop"}, {"t": "move", "x": 8.0, "y": 8.0},
+                   {"t": "noop"}], (8.0, 8.0))
+    rs = g.replay_resync(log, log_path, engine=FakeResyncEngine(),
+                         grid=FakeGrid(), radius=35.0)
+    assert rs["path001"] == 0 and rs["unexplained"] == 2
+    assert rs["unexplained_by_reason"] == {
+        "server GetPath null the sim did not reproduce (PATH-008)": 1,
+        "same waypoints, still off": 1}
 
 
 def test_replay_wire_driver_remaps_netids_by_rank():

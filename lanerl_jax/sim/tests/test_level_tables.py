@@ -85,10 +85,10 @@ def test_xp_to_reach_level_is_the_level_up_threshold_at_every_level(tables):
     assert int(level_for_xp(jnp.asarray([1e9], jnp.float32), curve)[0]) == 18
 
 
-def test_the_legacy_xp_curve_view_is_the_same_numbers_shifted(tables):
-    """``xp_curve`` survives only for `parity/inject.py`'s level-1 reader."""
-    np.testing.assert_array_equal(tables["xp_curve"],
-                                  tables["xp_to_reach_level"][1:])
+def test_the_legacy_xp_curve_view_is_gone(tables):
+    """One level-table convention: `parity/inject.py` reads
+    ``xp_to_reach_level`` too, so the 18-row ``xp_curve`` view is deleted."""
+    assert "xp_curve" not in tables
 
 
 def test_death_times_is_the_death_timer_at_every_level(tables):

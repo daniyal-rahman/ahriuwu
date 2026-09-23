@@ -223,7 +223,7 @@ class AIInternal:
     #: are scored by the parity report but were absent from this stream, so they
     #: were the only two families with no order-dependence floor and the only
     #: two that could not be classified under `GATE1-004`. `adbits` is
-    #: `STAT-003`: the observation stream rounds champion AD to 2 dp, which
+    #: `STAT-004`: the observation stream rounds champion AD to 2 dp, which
     #: bounds level-1 AD to [78.135, 78.145) without pinning it, and the exact
     #: float is 78.13500213623047.
     hp_q: Optional[int] = None

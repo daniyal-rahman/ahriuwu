@@ -39,3 +39,11 @@ def test_every_ledger_row_is_in_the_manifest():
 def test_the_manifest_is_sorted_and_unique():
     m = _manifest()
     assert m == sorted(set(m))
+
+
+def test_no_id_names_two_rows():
+    """Two rows once both said `STAT-003` (MR and level-1 AD), so a citation
+    could not say which one it meant; the newer became `STAT-004`."""
+    ids = ROW.findall((ROOT / "docs" / "JAX_FIDELITY_LEDGER.md").read_text())
+    dup = sorted({i for i in ids if ids.count(i) > 1})
+    assert not dup, f"ledger IDs used by more than one row: {dup}"

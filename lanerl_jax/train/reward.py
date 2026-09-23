@@ -25,7 +25,7 @@ death costs exactly the potential drop and the respawn refunds it. Weight 4.0
 rather than the published 2.0, raised so that trading can pay for its own
 opportunity cost.
 
-**The ambient trickle is removed from the money term.** 1.9 gold/s arrives
+**The ambient trickle is removed from the money term.** ~1.84 gold/s arrives
 whether the agent plays or not, and paying for it rewards standing still. The
 sim knows the rate exactly (`sim/rewards.AMBIENT_GOLD_*`), so this subtracts the
 known quantity rather than estimating it -- from 90 s, when the sim starts
@@ -81,7 +81,7 @@ import numpy as np
 
 from ..sim.init import TOP_OUTER_TURRET
 from ..sim.rewards import (AMBIENT_GOLD_AMOUNT, AMBIENT_GOLD_DELAY_MS,
-                           AMBIENT_GOLD_INTERVAL_MS)
+                           AMBIENT_GOLD_PERIOD_TICKS)
 from ..sim.state import LaneState, Team
 
 __all__ = ["RewardWeights", "RewardConfig", "RewardState", "reward_init",
@@ -174,8 +174,11 @@ def lane_approach_potential(x, y, per_1000: float,
     """
     return -(per_1000 / 1000.0) * lane_corridor_distance(x, y, corridor, axis)
 
-#: 0.95 per 500 ms, measured from the server -- see `sim/rewards.py`.
-AMBIENT_GOLD_PER_S = AMBIENT_GOLD_AMOUNT / (AMBIENT_GOLD_INTERVAL_MS / 1000.0)
+#: 0.95 per 31 ticks (~517 ms) -- the server's float32 500 ms timer overshoots
+#: by one tick, see `sim/rewards.py`. ~1.839 gold/s, not the nominal 1.9: the
+#: nominal rate over-subtracted ~0.06 gold/s from every post-90 s decision.
+AMBIENT_GOLD_PER_S = AMBIENT_GOLD_AMOUNT / (
+    AMBIENT_GOLD_PERIOD_TICKS * (1000.0 / 60.0) / 1000.0)
 
 
 class RewardWeights(NamedTuple):

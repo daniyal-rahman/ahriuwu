@@ -214,6 +214,40 @@ def test_ambient_gold_matches_the_server():
     assert AMBIENT_GOLD_AMOUNT == 0.95 and AMBIENT_GOLD_INTERVAL_MS == 500.0
 
 
+#: Every server ambient-gold payment in the 120 s PARITY-001 recording
+#: (`runs/parity001/obsharden-b0ctl-120s`, shop off), as dump tick indices:
+#: identical for both champions -- first at tick 5402 (t = 90.032 s; tick
+#: 5401 is the first with GameTime >= 90000 and only sets the flag), then
+#: every 31 ticks, 59 payments through tick 7200.
+SERVER_AMBIENT_PAYMENT_TICKS = tuple(range(5402, 7201, 31))
+
+
+def test_ambient_gold_pays_on_the_servers_ticks():
+    """Tick-for-tick against the recording, through the float32 clock the
+    sim's `tick` keeps (`t_ms + delta_ms`, the server's `GameTime += diff`).
+    The pre-fix sim paid on the flag tick and every 32 ticks after: 57
+    payments by 120 s against the server's 59."""
+    from lanerl_jax.sim.rewards import (AMBIENT_GOLD_AMOUNT,
+                                        AMBIENT_GOLD_PERIOD_TICKS, ambient_gold)
+    from lanerl_jax.sim.movement_jax import TICK_MS
+
+    assert len(SERVER_AMBIENT_PAYMENT_TICKS) == 59
+    assert AMBIENT_GOLD_PERIOD_TICKS == 31
+    step = jax.jit(lambda t, timer: ambient_gold(t, timer, jnp.ones(2, bool)))
+    t = jnp.float32(0.0)
+    timer = jnp.zeros(2, jnp.float32)
+    paid = []
+    for j in range(1, 7202):
+        g, timer = step(t, timer)          # `state.t_ms`: the clock before
+        t = t + jnp.float32(TICK_MS)       # step.py's `t_ms + delta_ms`
+        g = np.asarray(g)
+        assert g[0] == g[1]
+        if g[0] > 0:
+            assert g[0] == np.float32(AMBIENT_GOLD_AMOUNT)
+            paid.append(j)
+    assert tuple(paid) == SERVER_AMBIENT_PAYMENT_TICKS
+
+
 def test_ambient_gold_rate_is_the_documented_one():
     """0.95 per 500 ms is 1.9 gold/s -- `constants.AMBIENT_GOLD_PER_S`."""
     from lanerl_jax.sim.rewards import (

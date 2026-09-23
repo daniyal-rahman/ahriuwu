@@ -100,12 +100,12 @@ _WAIVED = {
     #: `floor_pool.py` can measure their order-dependence floor -- `hp` and
     #: `move_order` were the only two scored families without one, and so the
     #: only two that could not be classified under `GATE1-004`. `adbits` pinned
-    #: `STAT-003`'s exact level-1 AD (78.13500213623047) where the observation
+    #: `STAT-004`'s exact level-1 AD (78.13500213623047) where the observation
     #: stream's 2 dp rounding could only bound it to [78.135, 78.145).
     "hp": "canonical row already injects it; parsed for the order-floor measure",
     "mhp": "as hp",
     "mo": "canonical row already injects move_order; parsed for the floor measure",
-    "adbits": "diagnostic: pinned STAT-003's exact level-1 AD, not injected",
+    "adbits": "diagnostic: pinned STAT-004's exact level-1 AD, not injected",
 }
 
 

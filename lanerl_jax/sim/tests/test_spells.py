@@ -96,7 +96,8 @@ def _tick_stepper():
     """One jitted SERVER tick, for tests that pin a value to the tick
     (`STRUCT-007`): a decision is two ticks, so a decision-level loop can only
     say "on this tick or the one before", which is how a 40 ms tolerance got
-    in."""
+    in. Every tick in this file goes through it: an eager ``tick`` is ~10 s
+    per call on the login node, and all these tests use the same params."""
     params = lane_params(load_patch())
     return jax.jit(lambda st: tick(st, params))
 
@@ -535,7 +536,7 @@ def test_q_haste_multiplies_the_real_movement_budget():
     )
     s = _cast_q(s)
     before = float(s.x[0])
-    s = tick(s, params)
+    s = _tick_stepper()(s)
     want = float(params["move_speed"][s.model[0]]) * 1.35 * (1000.0 / 60.0) / 1000.0
     # The movement integrator/state are float32, while this host-side expected
     # value is built in Python float64.
@@ -851,7 +852,7 @@ def test_w_passive_composes_via_stat_total_through_a_real_autoattack():
     hp0 = float(s.hp[0])
     dealt = None
     for i in range(29):        # well under the 30-tick (500ms) regen boundary
-        s = tick(s, params)
+        s = _tick_stepper()(s)
         hp1 = float(s.hp[0])
         if hp1 < hp0:
             dealt = hp0 - hp1
@@ -1013,7 +1014,7 @@ def test_rs_cooldown_starts_when_its_noninstant_cast_finishes():
     patch = load_patch()
     s = _lane_for_r()
     s = _at_level(s, patch, 6)      # ranks_for_level(6) == (1, 1, 3, 1): R=1
-    s = tick(s, params)
+    s = _tick_stepper()(s)
     assert int(s.spell_level[0, Slot.R]) == 1
     s = _cast_r(s, caster=0, target=1)
     assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(0.0)
@@ -1068,7 +1069,7 @@ def test_r_windup_locks_orders_then_finishes_hold_and_delayed_hit():
     s = _set_buff(s.replace(r_cast_ms=s.r_cast_ms.at[0].set(1.0)),
                   "r_pending", "elapsed_s", 1, R_CAST_TIME_S)
     hp_before = float(s.hp[1])
-    s = tick(s, params)
+    s = _tick_stepper()(s)
     assert float(s.r_cast_ms[0]) == pytest.approx(0.0)
     assert int(s.move_order[0]) == MoveOrder.HOLD
     assert int(s.n_waypoints[0]) == 1 and int(s.waypoint_key[0]) == 1
@@ -1083,10 +1084,10 @@ def test_r_cast_cancels_on_caster_death_without_starting_cooldown():
     params = lane_params(load_patch())
     s = _cast_r(_lane_for_r())
     s = s.replace(hp=s.hp.at[0].set(0.0))
-    s = tick(s, params)       # establishes caster death and clears cast lock
+    s = _tick_stepper()(s)       # establishes caster death and clears cast lock
     assert not bool(s.alive[0])
     assert float(s.r_cast_ms[0]) == pytest.approx(0.0)
-    s = tick(s, params)       # target mailbox observes dead caster and cancels
+    s = _tick_stepper()(s)       # target mailbox observes dead caster and cancels
     assert not bool(s.buffs.r_pending.active[1])
     assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(0.0)
 
@@ -1109,7 +1110,7 @@ def test_death_does_not_reset_q_it_runs_out_on_the_corpse_and_starts_its_cooldow
     s = _cast_q(s)
     assert bool(s.buffs.q.active[0])
     s = s.replace(hp=s.hp.at[0].set(0.0))
-    s = tick(s, params)
+    s = _tick_stepper()(s)
     assert not bool(s.alive[0])
     assert bool(s.buffs.q.active[0]), "death must not remove the Q window"
     assert bool(s.buffs.q_haste.active[0]), "nor its haste"
@@ -1137,7 +1138,7 @@ def test_a_corpse_keeps_its_spin_deals_its_damage_and_starts_the_cooldown():
     s = _lane_with_minions(n_minions=1, dist=100.0, hp=10_000.0)
     s = _cast_e(s)
     s = s.replace(hp=s.hp.at[0].set(0.0))
-    s = tick(s, params)                         # dies; the spin's first tick
+    s = _tick_stepper()(s)                         # dies; the spin's first tick
     assert not bool(s.alive[0])
     assert bool(s.buffs.e.active[0]), "death must not remove the spin"
     hp_after_death = float(s.hp[2])
@@ -1171,7 +1172,7 @@ def test_e_damage_on_a_champion_uses_the_w_passive_armor():
     s = _cast_e(s)
     power = float(s.buffs.e.power[0])
     hp0 = float(s.hp[1])
-    s2 = tick(s, params)                        # the first spin tick fires
+    s2 = _tick_stepper()(s)                        # the first spin tick fires
     dealt = hp0 - float(s2.hp[1])
     m = int(s.model[1])
     g = float(growth_sum(s.level[1], jnp))

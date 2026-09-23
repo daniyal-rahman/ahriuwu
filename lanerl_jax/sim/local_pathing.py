@@ -44,7 +44,8 @@ from .terrain_jax import (SMOOTH_CAST_LINE_STEPS, TerrainGrid,
 __all__ = [
     "MAX_RAW_ROUTE_HOPS", "LocalRouteStatus", "LocalRouteTable",
     "LocalRouteResult", "lookup_local_hop", "build_local_waypoints",
-    "smooth_cell_path",
+    "smooth_cell_path", "server_path_null", "SERVER_EXACT",
+    "route_is_server_exact",
 ]
 
 
@@ -76,6 +77,25 @@ class LocalRouteStatus:
     WAYPOINT_OVERFLOW = 5
     ENDPOINT_UNANCHORED = 6
     TABLE_DISABLED = 7
+    #: The server's own ``GetPath`` returns null here (`PATH-008`): its first
+    #: A* expansion closes all 8 neighbours of the start cell, or no
+    #: neighbour of the goal cell can ever be entered
+    #: (:func:`server_path_null`), so ``LanerlControl`` walks the raw
+    #: two-point line to the unprojected click. The returned ``[source, goal]`` IS the server's trajectory, not
+    #: an approximation, so this status counts as ready wherever readiness is
+    #: measured (:data:`SERVER_EXACT`).
+    SERVER_NULL = 8
+
+
+#: Statuses whose waypoints are the server's own behaviour (the trainer's
+#: ``route_nonready`` counts everything else).
+SERVER_EXACT = (LocalRouteStatus.READY, LocalRouteStatus.SERVER_NULL)
+
+
+def route_is_server_exact(status):
+    """``status`` is READY or SERVER_NULL (works on arrays and ints)."""
+    status = jnp.asarray(status)
+    return (status == LocalRouteStatus.READY) | (status == LocalRouteStatus.SERVER_NULL)
 
 
 class LocalRouteTable(NamedTuple):
@@ -219,6 +239,84 @@ def _nearest_covered_cell(x, y, ix, iy, table: LocalRouteTable,
     return chosen, anchored
 
 
+# A null-path cast is short: source-to-neighbour-centre, or zero length at a
+# neighbour centre. Its offset lines cross at most 3 cells (the bake measured
+# n == 3 on every one of 10,850 A* neighbour hops) and its rows span
+# < 1.5 + 2 * 0.7 + 3, so these bounds are never reached.
+NULL_PATH_CAST_LINE_STEPS = 8
+NULL_PATH_SPAN_CELLS = 8
+# GetCellNeighbors' 8 offsets (self excluded: the start cell is already closed).
+_NEIGHBOUR_OFFSETS = tuple((dx, dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1)
+                           if (dx, dy) != (0, 0))
+
+
+def server_path_null(source_x, source_y, sx, sy, goal_cell,
+                     pathfinding_radius, terrain: TerrainGrid):
+    """The two ways the server's ``GetPath`` A* provably returns null
+    (`PATH-008`), as ``(first_expansion_empty, goal_unenterable)``.
+
+    **First expansion empty.** ``NavigationGrid.GetPath`` closes the start
+    cell, then casts ``CastCircle(fromNav, neighbour.GetCenter(), r)`` from
+    the EXACT float source (not the start cell's centre) to each neighbour
+    and closes every one that is blocked; the goal cell is exempt (it is
+    enqueued without a cast). When the source's radius circle already
+    overlaps terrain every cast fails, nothing is enqueued, and
+    ``TryDequeue`` returns null.
+
+    **Goal unenterable.** ``cellTo`` is only ever enqueued as a neighbour of
+    an expanded cell, and every cell but the start is expanded only after a
+    cast INTO its centre succeeded. Every such cast includes
+    ``GetAllCellsInRange(centre, r)`` (a zero-length cast is exactly that
+    set). If every in-grid neighbour of ``cellTo`` fails it -- and the start
+    cell is not one of them -- no path can end at ``cellTo``. Seen on goals
+    projected into the map's edge row/column near the blue fountain.
+
+    Both are sufficient, not necessary: a search that dies later for another
+    reason is not detected (none in the 120 s corpus). ``LanerlControl`` then
+    walks ``[Position, click]``. ``goal_cell`` is the flattened cell of the
+    terrain-projected goal (``cellTo``), not a re-anchored table cell.
+    Neighbour bounds follow ``GetCell``'s ``x > CellCountX`` test, as the host
+    port does. An exhausted cast (impossible at these bounds) counts as OPEN,
+    i.e. keeps the table route rather than inventing a server null.
+    """
+    dtype = jnp.float32
+    cs = jnp.asarray(terrain.cell_size, dtype)
+    # TranslateToNavGrid: per-component float32 (x - min) / CellSize.
+    fnx = (jnp.asarray(source_x, dtype) - jnp.asarray(terrain.min_x, dtype)) / cs
+    fny = (jnp.asarray(source_y, dtype) - jnp.asarray(terrain.min_y, dtype)) / cs
+    height, width = terrain.walkable.shape
+    offs = jnp.asarray(_NEIGHBOUR_OFFSETS, jnp.int32)
+    goal_x, goal_y = goal_cell % jnp.int32(width), goal_cell // jnp.int32(width)
+    source_cell = sy * jnp.int32(width) + sx
+
+    def ring(cx, cy):
+        nx, ny = cx + offs[:, 0], cy + offs[:, 1]
+        flat = ny * jnp.int32(width) + nx
+        in_grid = ((nx >= 0) & (nx <= width) & (ny >= 0) & (ny <= height)
+                   & (flat < width * height))
+        return nx.astype(dtype) + 0.5, ny.astype(dtype) + 0.5, flat, in_grid
+
+    sbx, sby, sflat, s_in = ring(sx, sy)
+    gbx, gby, gflat, g_in = ring(goal_x, goal_y)
+    # One vmapped batch of 16 casts: 8 from the exact source, 8 zero-length.
+    x0 = jnp.concatenate([jnp.broadcast_to(fnx, sbx.shape), gbx])
+    y0 = jnp.concatenate([jnp.broadcast_to(fny, sby.shape), gby])
+    x1 = jnp.concatenate([sbx, gbx])
+    y1 = jnp.concatenate([sby, gby])
+    blocked, _exhausted = jax.vmap(
+        lambda a, b, c, d: cast_circle_blocked(
+            a, b, c, d, pathfinding_radius, terrain,
+            max_line_steps=NULL_PATH_CAST_LINE_STEPS,
+            span_cells=NULL_PATH_SPAN_CELLS)
+    )(x0, y0, x1, y1)
+    # `blocked` already folds exhaustion in; un-fold it (fail open).
+    clear = ~blocked | _exhausted
+    k = len(_NEIGHBOUR_OFFSETS)
+    first_empty = ~jnp.any(s_in & ((sflat == goal_cell) | clear[:k]))
+    goal_unenterable = ~jnp.any(g_in & ((gflat == source_cell) | clear[k:]))
+    return first_empty, goal_unenterable
+
+
 def smooth_cell_path(cells, n_cells, pathfinding_radius,
                      terrain: TerrainGrid, max_cells: int = MAX_WAYPOINTS):
     """``NavigationGrid.SmoothPath``, fixed shape, over a list of cell ids.
@@ -307,7 +405,9 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
     The destination first passes through the server-equivalent
     ``GetClosestTerrainExit`` port. On any non-ready status the returned
     waypoint array is the explicit raw two-point fallback and ``status`` tells
-    the caller why it is approximate.
+    the caller why it is approximate -- except ``SERVER_NULL``, where the
+    two-point line is exactly what the server walks (`PATH-008`,
+    :func:`server_path_null`).
 
     ``smooth=False`` keeps the pre-2026-09-18 collinear-only polyline. It is
     the named control for measuring what the ``SmoothPath`` pass costs and
@@ -391,10 +491,31 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
         raw_hops = raw_hops + jumped_hops
         return (current, previous, turns, count, status, done, raw_hops), None
 
+    # PATH-008: before any table lookup, ask whether the SERVER's A* would
+    # even leave its start cell (or could ever enter the goal's). The table's
+    # source anchoring snaps to the nearest covered centre and would
+    # otherwise report READY with a multi-corner route the server never walks.
+    # `GetCell` returns null for a start or (terrain-projected) goal off the
+    # grid, and GetPath returns null with it -- its own bounds test, quirk
+    # included (`x == CellCountX` aliases into the next row).
+    def get_cell_null(cx, cy):
+        return ~((cx >= 0) & (cx <= width) & (cy >= 0) & (cy <= height)
+                 & (cy * jnp.int32(width) + cx < width * height))
+
+    off_grid = get_cell_null(sx, sy) | get_cell_null(gx, gy)
+    server_null = ~terrain_exhausted & (
+        off_grid
+        | (source_in_bounds & goal_in_bounds
+           & (raw_source_cell != raw_goal_cell)
+           & jnp.any(jnp.stack(server_path_null(
+               source_x, source_y, sx, sy, raw_goal_cell,
+               pathfinding_radius, terrain)))))
     initially_ready = (source_in_bounds & goal_in_bounds & ~terrain_exhausted
                        & source_anchored & goal_anchored)
-    initial_status = jnp.where(initially_ready, LocalRouteStatus.READY,
-                               LocalRouteStatus.ENDPOINT_UNANCHORED).astype(jnp.int8)
+    initial_status = jnp.where(
+        server_null, LocalRouteStatus.SERVER_NULL,
+        jnp.where(initially_ready, LocalRouteStatus.READY,
+                  LocalRouteStatus.ENDPOINT_UNANCHORED)).astype(jnp.int8)
     initial_done = source_cell == goal_cell
     # A fixed ``scan`` made every routed decision pay all 128 table gathers,
     # including routes which had reached their goal after a handful of hops.

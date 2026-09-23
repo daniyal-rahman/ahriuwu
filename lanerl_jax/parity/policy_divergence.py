@@ -70,7 +70,8 @@ from the static profile table. Every list is echoed in the report.
     python -m lanerl_jax.parity.policy_divergence \\
         --checkpoint lanerl_jax/runs/train/<run>/ckpt_latest.msgpack \\
         --seconds 300 --out runs/parity001/<run> [--floor floor.json]
-    python -m lanerl_jax.parity.policy_divergence --existing runs/parity001/<run>
+    python -m lanerl_jax.parity.policy_divergence --existing runs/parity001/<run> \\
+        [--floor runs/parity001/<run>/floor.json] [--out <elsewhere>]
     python -m lanerl_jax.parity.policy_divergence --make-floor runs/parity001/<run> \\
         --server-dir <build with LANERL_SHUFFLE_ORDER> --config <cfg>
 """
@@ -95,7 +96,8 @@ __all__ = [
     "TRACKED_BUFFS", "NOT_MODELLED", "REPORTED_ONLY",
     "TrainingStepEngine", "render_sim_snapshot", "project_server_snapshot",
     "iter_server_ticks", "EventCounters", "DivergenceTracker",
-    "replay_and_diff", "compare_server_logs", "score_against_floor",
+    "replay_and_diff", "replay_resync", "compare_server_logs",
+    "score_against_floor", "ROUTING_APPROX", "FREE_RUN_REPORTED_ONLY",
     "ReplayWireDriver", "main",
 ]
 
@@ -139,6 +141,24 @@ REPORTED_ONLY: Dict[str, str] = {
                         "decision later, and never before the first decision)"
     for s in "QWER"
 }
+
+#: `PATH-001` is `APPROX`: the route table does not reproduce the server's A*
+#: tie-break, so a free-running sim champion leaves the fountain on a slightly
+#: different line and never re-converges -- every later tick "diverges" from
+#: one early routing choice. While that holds, free-run champion position is
+#: REPORTED (first tick, ticks diverged) but not scored; position is scored per
+#: decision by :func:`replay_resync` instead. Never a scalar distance
+#: tolerance on free-run positions: that would hide exactly the drift this
+#: gate exists to see.
+ROUTING_APPROX = True
+FREE_RUN_REPORTED_ONLY: Dict[str, str] = {
+    "Champion.pos.x": "free-run champion position while routing is APPROX "
+                      "(PATH-001); scored per decision under resync instead",
+    "Champion.pos.y": "see Champion.pos.x",
+}
+
+#: Per-decision position tolerance under resync: the dump's own quantum.
+RESYNC_POS_TOL_U = 1.0 / 16.0
 
 #: `GarenECancel`'s cooldown (`E.cs`): what the server's slot-2 cooldown shows
 #: during a spin. A rise to at most this many seconds is a spin START.
@@ -216,6 +236,51 @@ class TrainingStepEngine:
         return {**self.sim_config.describe(),
                 "fingerprint": self.sim_config.fingerprint(),
                 "granularity": "1 tick per call, x2 per decision"}
+
+    def resync(self, state, champ: Mapping[int, "ChampInternal"]):
+        """Teleport each champion to the server's exact state: position,
+        collision-quadtree position, and waypoint list + key (the list the
+        server holds after this tick's orders; a Move applied next replaces
+        it, as on the server)."""
+        import jax.numpy as jnp
+        x, y = state.x, state.y
+        cx, cy = state.collision_x, state.collision_y
+        wp, nw, key = state.waypoints, state.n_waypoints, state.waypoint_key
+        cap = wp.shape[1]
+        for team, c in champ.items():
+            i = CHAMP_SLOT[team]
+            x, y = x.at[i].set(c.x), y.at[i].set(c.y)
+            cx, cy = cx.at[i].set(c.cx), cy.at[i].set(c.cy)
+            if c.wps:
+                w = np.zeros(wp.shape[1:], np.float32)
+                pts = np.asarray(c.wps[:cap], np.float32)
+                w[:len(pts)] = pts
+                wp = wp.at[i].set(jnp.asarray(w, wp.dtype))
+                nw = nw.at[i].set(len(pts))
+                key = key.at[i].set(min(c.key, len(pts)))
+        return state.replace(x=x, y=y, collision_x=cx, collision_y=cy,
+                             waypoints=wp, n_waypoints=nw, waypoint_key=key)
+
+    def champion_routes(self, state) -> Dict[int, dict]:
+        """Per team: exact position, the remaining waypoints (from the key)
+        and the last Move's ``route_status``."""
+        import jax
+        g = jax.device_get({"x": state.x, "y": state.y, "wp": state.waypoints,
+                            "n": state.n_waypoints, "key": state.waypoint_key,
+                            "rs": state.route_status})
+        out = {}
+        for team, i in CHAMP_SLOT.items():
+            n, k = int(g["n"][i]), int(g["key"][i])
+            out[team] = {"x": float(g["x"][i]), "y": float(g["y"][i]),
+                         "remaining": [tuple(map(float, g["wp"][i, q]))
+                                       for q in range(k, n)],
+                         "route_status": int(g["rs"][i])}
+        return out
+
+
+#: Server team -> sim unit slot. Champions are unit slots 0 (blue) and 1
+#: (red) in every `init_lane` state (`render_sim_snapshot` relies on it too).
+CHAMP_SLOT = {100: 0, 200: 1}
 
 
 _FETCH = ("kind", "alive", "team", "x", "y", "hp", "max_hp", "level", "gold",
@@ -339,6 +404,43 @@ def project_server_snapshot(snap: Snapshot,
 _INT_CHAMP = re.compile(
     r"LANERL_INTERNAL t=-?\d+ ai id=(\d+) kind=Champion team=(\d+) .*?\bhasaa=(\d)")
 _INT_MINION = re.compile(r"LANERL_INTERNAL t=-?\d+ ai id=(\d+) kind=LaneMinion ")
+#: The exact float32 position (``xbits``/``ybits``), the waypoint list the
+#: server holds AFTER this tick's orders (``wps``, in PosQ units) with its
+#: ``CurrentWaypointKey``, and the collision quadtree position.
+_INT_CHAMP_POS = re.compile(
+    r"LANERL_INTERNAL t=-?\d+ ai id=\d+ kind=Champion team=(\d+) .*?"
+    r"\bxbits=(-?\d+) ybits=(-?\d+) .*?\bwpkey=(\d+) wps=(\S+) .*?"
+    r"\bcollbits=(-?\d+),(-?\d+)")
+
+
+def _bits_f32(b: str) -> float:
+    return float(np.array([int(b)], np.int64).astype(np.int32).view(np.float32)[0])
+
+
+@dataclasses.dataclass(frozen=True)
+class ChampInternal:
+    """One champion's exact state from a `LANERL_INTERNAL` row."""
+    x: float
+    y: float
+    cx: float
+    cy: float
+    key: int
+    wps: Tuple[Tuple[float, float], ...]
+
+    @property
+    def remaining(self) -> Tuple[Tuple[float, float], ...]:
+        return self.wps[self.key:]
+
+
+def _parse_champ_internal(line: str) -> Optional[Tuple[int, ChampInternal]]:
+    m = _INT_CHAMP_POS.search(line)
+    if m is None:
+        return None
+    wps = () if m.group(5) == "-" else tuple(
+        tuple(int(v) / 16.0 for v in p.split(",")) for p in m.group(5).split(";"))
+    return int(m.group(1)), ChampInternal(
+        _bits_f32(m.group(2)), _bits_f32(m.group(3)), _bits_f32(m.group(6)),
+        _bits_f32(m.group(7)), int(m.group(4)), wps)
 
 
 def iter_server_ticks(path, to_ms: Optional[int] = None
@@ -346,12 +448,14 @@ def iter_server_ticks(path, to_ms: Optional[int] = None
     """Yield ``(snapshot, extra)`` per server tick, one tick in memory at a time.
 
     ``extra`` carries what the canonical rows do not: ``hasaa`` per champion
-    team (from the INTERNAL stream, None when the log has none) and the
-    LaneMinion NetIds present that tick. Each snapshot goes through
+    team (from the INTERNAL stream, None when the log has none), the
+    LaneMinion NetIds present that tick, and ``champ``: a
+    :class:`ChampInternal` per team when the INTERNAL rows carry exact bits
+    (what :func:`replay_resync` teleports to). Each snapshot goes through
     `trace.parse_stream`, so the ``n=`` row-count check still applies.
     """
     buf: List[str] = []
-    extra: dict = {"hasaa": {}, "minions": []}
+    extra: dict = {"hasaa": {}, "minions": [], "champ": {}}
 
     def flush():
         snaps = parse_stream(buf).snapshots
@@ -368,7 +472,7 @@ def iter_server_ticks(path, to_ms: Optional[int] = None
                         return
                     yield s, extra
                 buf = [line]
-                extra = {"hasaa": {}, "minions": []}
+                extra = {"hasaa": {}, "minions": [], "champ": {}}
             elif "LANERL_STATEROW" in line:
                 if buf:
                     buf.append(line)
@@ -376,6 +480,9 @@ def iter_server_ticks(path, to_ms: Optional[int] = None
                 m = _INT_CHAMP.search(line)
                 if m is not None:
                     extra["hasaa"][int(m.group(2))] = m.group(3) == "1"
+                    c = _parse_champ_internal(line)
+                    if c is not None:
+                        extra["champ"][c[0]] = c[1]
                     continue
                 m = _INT_MINION.search(line)
                 if m is not None:
@@ -483,6 +590,8 @@ def _diff_names(d) -> List[Tuple[str, str]]:
 
 
 def _is_scored(key: str) -> bool:
+    if ROUTING_APPROX and key in FREE_RUN_REPORTED_ONLY:
+        return False
     return key.split(".", 1)[1] not in REPORTED_ONLY
 
 
@@ -585,6 +694,30 @@ def _for_sim(order: Mapping) -> Mapping:
     return {"t": "noop"} if order.get("t") == "level" else order
 
 
+def _decision_orders(log, k: int, ranks, f):
+    """Decision ``k`` as sim `Orders`, NetIds mapped by creation rank.
+
+    Returns ``(orders, unmapped_sides, rank_mismatches)``: an attack on a
+    NetId with no live slot is sent as a noop and its side reported."""
+    table = ranks.slot_table(f["spawn_seq"], f["alive"], f["kind"])
+    sides, unmapped, rank_mismatch = [], [], 0
+    for side, wire, rec in (("blue", log.blue[k], log.blue_sim[k]),
+                            ("red", log.red[k], log.red_sim[k])):
+        w = _for_sim(wire)
+        if w.get("t") == "attack":
+            nid = int(w.get("id", 0))
+            if rec and rec.get("target_spawn_seq") is not None \
+                    and ranks.spawn_seq_of(nid) != rec["target_spawn_seq"]:
+                rank_mismatch += 1
+            if nid not in table:
+                unmapped.append(side)
+                w = {"t": "noop"}
+        sides.append(w)
+    orders = decision_to_orders(
+        RecordedDecision(log.t_ms[k], sides[0], sides[1]), table)
+    return orders, unmapped, rank_mismatch
+
+
 def replay_and_diff(log, server_log: Path, *, engine=None,
                     to_ms: Optional[int] = None,
                     on_tick=None) -> dict:
@@ -636,22 +769,10 @@ def replay_and_diff(log, server_log: Path, *, engine=None,
                 k += 1
             if k < n_dec and abs(log.t_ms[k] - srv.t_ms) <= 1:
                 f = fetch(state)
-                table = ranks.slot_table(f["spawn_seq"], f["alive"], f["kind"])
-                sides = []
-                for side, wire, rec in (("blue", log.blue[k], log.blue_sim[k]),
-                                        ("red", log.red[k], log.red_sim[k])):
-                    w = _for_sim(wire)
-                    if w.get("t") == "attack":
-                        nid = int(w.get("id", 0))
-                        if rec and rec.get("target_spawn_seq") is not None \
-                                and ranks.spawn_seq_of(nid) != rec["target_spawn_seq"]:
-                            rank_mismatch += 1
-                        if nid not in table:
-                            unmapped[side] += 1
-                            w = {"t": "noop"}
-                    sides.append(w)
-                orders = decision_to_orders(
-                    RecordedDecision(log.t_ms[k], sides[0], sides[1]), table)
+                orders, um, rm = _decision_orders(log, k, ranks, f)
+                for side in um:
+                    unmapped[side] += 1
+                rank_mismatch += rm
                 state = engine.apply(state, orders)
                 last_dec = k
                 k += 1
@@ -684,6 +805,186 @@ def replay_and_diff(log, server_log: Path, *, engine=None,
                   "server": None if last_srv is None else _champ_summary(last_srv)},
     })
     return out
+
+
+def _route_equal(a, b, tol: float = RESYNC_POS_TOL_U) -> bool:
+    """Two waypoint lists agree point for point to the dump's quantum (the
+    server's are 1/16-quantised, so an identical route differs by <= 1/32)."""
+    return len(a) == len(b) and all(
+        abs(p[0] - q[0]) <= tol and abs(p[1] - q[1]) <= tol for p, q in zip(a, b))
+
+
+def _host_route(grid, src, order: Mapping, srv: "ChampInternal",
+                radius: float):
+    """What the host port of `GetPath` says the server walks from ``src``
+    for this decision: ``(remaining waypoints, get_path_was_null)``, or
+    ``(None, False)`` when the server did not path this tick (its key is not
+    a fresh 1).
+
+    A Move goes to the float32 click, through `LanerlControl`'s null
+    fallback (``[Position, click]``). Any other order is judged against the
+    server's own final waypoint (e.g. an attack chase), dequantised."""
+    if srv.key != 1 or len(srv.wps) < 2:
+        return None, False
+    if order.get("t") == "move":
+        goal = (float(np.float32(order["x"])), float(np.float32(order["y"])))
+    else:
+        goal = srv.wps[-1]
+    path = grid.get_path(tuple(src), tuple(goal), radius)
+    null = path is None or len(path) < 2
+    if null:
+        path = [tuple(src), goal]
+    return [tuple(p) for p in path[1:]], null
+
+
+def replay_resync(log, server_log: Path, *, engine=None,
+                  to_ms: Optional[int] = None, grid=None,
+                  radius: Optional[float] = None, max_examples: int = 25,
+                  on_tick=None) -> dict:
+    """Champion position scored PER DECISION under teleport + waypoint resync.
+
+    At every decision tick, before the orders are applied, each sim champion
+    is reset to the server's exact state from the INTERNAL row (float32
+    position bits, collision position, waypoint list and key); the orders are
+    applied and the sim runs to the next decision, where its position is
+    compared with the server's exact one at ``RESYNC_POS_TOL_U`` per axis.
+    So every interval starts from agreement and one routing choice cannot
+    pollute every later tick, which is what free-run position does while
+    `PATH-001` is `APPROX`.
+
+    An interval outside tolerance is classified:
+
+    * ``path001`` -- the sim's waypoints after the order differ from the
+      server's, and the host port of `GetPath` (``data/navgrid.py``, which
+      reproduces the server's waypoints) DOES reproduce the server's: the
+      route table chose a different A* tie-break. Counted, and reported as
+      the PATH-001 rate.
+    * ``unexplained`` -- anything else: identical waypoints and still off; a
+      route the host port does not reproduce either; or a server ``GetPath``
+      null (the host port returns None and the server walks ``[Position,
+      click]``) that the sim routed around -- that is `PATH-008`, which the
+      sim reproduces, not a tie-break. The gate FAILS on any of these;
+      ``unexplained_by_reason`` says which.
+    """
+    from ..data.navgrid import GAREN_PATHFINDING_RADIUS, NavGrid
+
+    engine = engine if engine is not None else TrainingStepEngine()
+    grid = grid if grid is not None else NavGrid.load()
+    radius = GAREN_PATHFINDING_RADIUS if radius is None else radius
+    ranks = log.rank_map()
+    k, n_dec = 0, len(log.t_ms)
+    state, prev_t = None, None
+    pending: Dict[int, dict] = {}
+    counts = {"intervals": 0, "within_tol": 0, "path001": 0, "unexplained": 0}
+    by_order: Dict[str, Dict[str, int]] = {}
+    status_counts: Dict[int, int] = {}
+    examples: List[dict] = []
+    reasons: Dict[str, int] = {}
+    max_err = 0.0
+    t0 = time.time()
+
+    def close(team, srv_now: "ChampInternal", sim_now: dict):
+        nonlocal max_err
+        p = pending[team]
+        ex, ey = sim_now["x"] - srv_now.x, sim_now["y"] - srv_now.y
+        err = max(abs(ex), abs(ey))
+        max_err = max(max_err, err)
+        kind = p["order"].get("t", "?")
+        bo = by_order.setdefault(kind, {"intervals": 0, "within_tol": 0,
+                                        "path001": 0, "unexplained": 0})
+        counts["intervals"] += 1
+        bo["intervals"] += 1
+        if err <= RESYNC_POS_TOL_U:
+            counts["within_tol"] += 1
+            bo["within_tol"] += 1
+            return
+        srv = p["srv"]
+        same = _route_equal(p["sim_remaining"], srv.remaining)
+        host, host_null = ((None, False) if same else
+                           _host_route(grid, (srv.x, srv.y), p["order"], srv,
+                                       radius))
+        reproduced = host is not None and _route_equal(host, srv.remaining)
+        # A server null the sim routed around is `PATH-008`, not a tie-break:
+        # the host port explains it, but the sim is supposed to reproduce it.
+        cls = "path001" if reproduced and not host_null else "unexplained"
+        counts[cls] += 1
+        bo[cls] += 1
+        if cls == "unexplained":
+            why = ("server GetPath null the sim did not reproduce (PATH-008)"
+                   if reproduced else
+                   "same waypoints, still off" if same else
+                   "route the host port does not reproduce either")
+            reasons[why] = reasons.get(why, 0) + 1
+        if cls == "unexplained" and len(examples) < max_examples:
+            examples.append({
+                "decision": p["k"], "t_ms": p["t_ms"], "team": team,
+                "order": dict(p["order"]), "err_u": round(err, 4),
+                "route_status": p["route_status"], "why": why,
+                "waypoints_agree": same,
+                "sim": [[round(v, 3) for v in q] for q in p["sim_remaining"]][:8],
+                "server": [[round(v, 3) for v in q] for q in srv.remaining][:8],
+                "host": None if host is None
+                else [[round(v, 3) for v in q] for q in host][:8]})
+
+    for j, (srv, extra) in enumerate(iter_server_ticks(server_log, to_ms=to_ms)):
+        ranks.add_minions(extra["minions"])
+        if j == 0:
+            if srv.t_ms != 0:
+                raise ValueError(f"the dump starts at t={srv.t_ms}, not at the reset")
+            state = engine.init()
+        else:
+            dt = srv.t_ms - prev_t
+            if not (TICK_MS - 2.0 <= dt <= TICK_MS + 2.0):
+                raise ValueError(f"dump steps {prev_t} -> {srv.t_ms} ms: not one tick")
+            state = engine.tick(state)
+            while k < n_dec and log.t_ms[k] < srv.t_ms - 1:
+                k += 1
+            if k < n_dec and abs(log.t_ms[k] - srv.t_ms) <= 1:
+                champ = extra.get("champ") or {}
+                if set(champ) != set(CHAMP_SLOT):
+                    raise ValueError(
+                        f"t={srv.t_ms}: resync needs both champions' INTERNAL rows "
+                        "with xbits/wps/collbits; this dump has "
+                        f"{sorted(champ)}")
+                if pending:
+                    now = engine.champion_routes(state)
+                    for team in CHAMP_SLOT:
+                        close(team, champ[team], now[team])
+                f = fetch(state)
+                orders, _, _ = _decision_orders(log, k, ranks, f)
+                state = engine.apply(engine.resync(state, champ), orders)
+                after = engine.champion_routes(state)
+                pending = {}
+                for team, side in ((100, "blue"), (200, "red")):
+                    order = getattr(log, side)[k]
+                    if order.get("t") == "move":
+                        rs = after[team]["route_status"]
+                        status_counts[rs] = status_counts.get(rs, 0) + 1
+                    pending[team] = {"k": k, "t_ms": srv.t_ms, "order": order,
+                                     "srv": champ[team],
+                                     "sim_remaining": after[team]["remaining"],
+                                     "route_status": after[team]["route_status"]}
+                k += 1
+        prev_t = srv.t_ms
+        if on_tick is not None:
+            on_tick(j, srv.t_ms)
+    n = max(counts["intervals"], 1)
+    from ..sim.local_pathing import LocalRouteStatus
+    names = {v: k_ for k_, v in vars(LocalRouteStatus).items()
+             if not k_.startswith("_") and isinstance(v, int)}
+    return {
+        "tolerance_u": RESYNC_POS_TOL_U,
+        **counts,
+        "path001_rate": round(counts["path001"] / n, 4),
+        "unexplained_rate": round(counts["unexplained"] / n, 4),
+        "max_err_u": round(max_err, 4),
+        "by_order": by_order,
+        "move_route_status": {names.get(s, str(s)): c
+                              for s, c in sorted(status_counts.items())},
+        "unexplained_by_reason": reasons,
+        "unexplained_examples": examples,
+        "wall_s": round(time.time() - t0, 1),
+    }
 
 
 def compare_server_logs(a: Path, b: Path, to_ms: Optional[int] = None) -> dict:
@@ -727,10 +1028,13 @@ GATED_COUNTERS = ("casts_accepted", "e_spin_starts", "e_spin_ends", "aa_hits",
 def score_against_floor(report: dict, floor: Optional[dict]) -> dict:
     """PASS / FAIL / UNSCORED.
 
-    PASS needs both: the sim agrees with the server at least as long as the
-    server agrees with ITSELF under a reordered update loop (scored first
-    divergence no earlier than the floor's), and every gated counter's
-    sim-vs-server gap is no larger than the server-vs-shuffled gap. One floor
+    PASS needs all three: the sim agrees with the server at least as long as
+    the server agrees with ITSELF under a reordered update loop (scored first
+    divergence no earlier than the floor's); every gated counter's
+    sim-vs-server gap is no larger than the server-vs-shuffled gap; and, while
+    routing is APPROX, every per-decision champion position interval under
+    resync (:func:`replay_resync`) is within tolerance or explained by the
+    PATH-001 tie-break -- whose rate is returned, not gated. One floor
     run is one sample of the reordering noise; the report says which clause
     failed so a thin floor can be judged, not trusted.
     """
@@ -741,6 +1045,19 @@ def score_against_floor(report: dict, floor: Optional[dict]) -> dict:
                        "server's own order-dependence (FLOOR-001). Unscored is "
                        "not passing."}
     fails = []
+    # Champion position, per decision under resync (free-run position is
+    # reported only while routing is APPROX). The floor for it is zero: the
+    # champions are order-insensitive (`FLOOR-001`), so any interval the
+    # PATH-001 tie-break does not explain is a sim defect.
+    rs = report.get("position_resync")
+    if ROUTING_APPROX and rs is None:
+        fails.append("champion position not scored: no per-decision resync "
+                     "pass in this report")
+    elif rs is not None and rs.get("unexplained", 0) > 0:
+        fails.append(f"champion position: {rs['unexplained']} of "
+                     f"{rs['intervals']} decision intervals off by more than "
+                     f"{RESYNC_POS_TOL_U} u that the PATH-001 tie-break does "
+                     "not explain")
     fd = (report.get("first_divergence") or {}).get("t_ms")
     ffd = (floor.get("first_divergence") or {}).get("t_ms")
     if fd is not None and (ffd is None or fd < ffd):
@@ -758,7 +1075,8 @@ def score_against_floor(report: dict, floor: Optional[dict]) -> dict:
             if gap > allow:
                 fails.append(f"{side}.{k}: sim-vs-server gap {gap} > floor {allow}")
     return {"verdict": "FAIL" if fails else "PASS", "failures": fails,
-            "floor_first_divergence_t_ms": ffd}
+            "floor_first_divergence_t_ms": ffd,
+            "path001_rate": None if rs is None else rs.get("path001_rate")}
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +1185,13 @@ def _headline(rep: dict) -> str:
                                             "e_cd_rising_edges", "aa_hits", "cs",
                                             "deaths", "gold", "level"))
             + "   (sim/server)")
+    rs = rep.get("position_resync")
+    if rs:
+        lines.append(
+            f"  champion position per decision (resync, tol {rs['tolerance_u']} u): "
+            f"{rs['within_tol']}/{rs['intervals']} within, {rs['path001']} PATH-001 "
+            f"tie-break ({rs['path001_rate']:.2%}), {rs['unexplained']} unexplained; "
+            f"move route status {rs['move_route_status']}")
     if rep["verdict"].get("failures"):
         lines += [f"  FAIL {f}" for f in rep["verdict"]["failures"]]
     return "\n".join(lines)
@@ -925,9 +1250,14 @@ def main(argv=None) -> int:
 
     from .policy_driver import PolicyActionLog
     if a.existing is not None:
-        out = a.existing
-        log = PolicyActionLog.load(out / "policy_policy_actions.json")
-        server_log = Path(log.meta.get("server_log") or out / "policy" / "instance000.log")
+        log = PolicyActionLog.load(a.existing / "policy_policy_actions.json")
+        server_log = Path(log.meta.get("server_log")
+                          or a.existing / "policy" / "instance000.log")
+        if not server_log.exists():        # recorded under another mount
+            server_log = a.existing / "policy" / "instance000.log"
+        # `--out` keeps a re-score from overwriting the recording's own report.
+        out = a.out or a.existing
+        out.mkdir(parents=True, exist_ok=True)
     else:
         if not a.checkpoint:
             ap.error("--checkpoint is required (or --existing / --make-floor)")
@@ -943,6 +1273,8 @@ def main(argv=None) -> int:
     engine = TrainingStepEngine(a.route_artifact, use_route_table=not a.no_route_table)
     to_ms = int(a.seconds * 1000) if a.existing is None or a.seconds else None
     rep = replay_and_diff(log, server_log, engine=engine, to_ms=to_ms)
+    rep["position_resync"] = replay_resync(log, server_log, engine=engine,
+                                           to_ms=to_ms)
     floor = json.loads(a.floor.read_text()) if a.floor else None
     rep = {"gate": "PARITY-001", "checkpoint": log.meta.get("checkpoint"),
            "label": log.meta.get("label"), "red": log.meta.get("red"),
@@ -950,6 +1282,8 @@ def main(argv=None) -> int:
            "seconds": a.seconds, "server_log": str(server_log),
            "orders": {"blue": _wire_counts(log.blue), "red": _wire_counts(log.red)},
            "not_scored": {"ignored": NOT_MODELLED, "reported_only": REPORTED_ONLY,
+                          "reported_only_free_run": (FREE_RUN_REPORTED_ONLY
+                                                     if ROUTING_APPROX else {}),
                           "tracked_buffs": list(TRACKED_BUFFS)},
            **rep}
     rep["verdict"] = score_against_floor(rep, floor)

@@ -1281,8 +1281,10 @@ def tick(state: LaneState, params: UnitParams,
         minion_gold=rw.gold, death_spree=ckr.death_spree,
         gold_from_minions=ckr.gold_from_minions)
 
-    amb, gold_timer = ambient_gold(t_now, state.gold_timer,
-                                   state.kind == Kind.CHAMPION)
+    # The clock BEFORE this tick's advance: the server's IsGeneratingGold is
+    # set one tick before the first payment (`ambient_gold`).
+    amb, gold_timer = ambient_gold(state.t_ms, state.gold_timer,
+                                   state.kind == Kind.CHAMPION, delta_ms)
     gold = state.gold + rw.gold + amb + ckr.gold + tk_gold
     xp = state.xp + rw.xp + ckr.xp + tk_xp
     cs = state.cs + rw.cs.astype(state.cs.dtype)

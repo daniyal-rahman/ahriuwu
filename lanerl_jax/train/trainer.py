@@ -64,6 +64,7 @@ from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
 from ..sim.config import SimConfig
 from ..sim.init import TOP_OUTER_TURRET, init_lane
+from ..sim.local_pathing import route_is_server_exact
 from ..sim.orders import OrderKind
 from ..sim.state import Team
 from ..sim.step import env_advance, env_apply
@@ -301,8 +302,10 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             # Moves, TOP lane waves) is `SimConfig.training`'s -- see its
             # docstring for why training defers the repair.
             ordered = env_apply(state, orders, sim)
+            # SERVER_NULL (`PATH-008`) is the server's own two-point walk,
+            # not an approximation, so it is not counted as non-ready.
             route_nonready = ((orders.kind == OrderKind.MOVE)
-                              & (ordered.route_status[:2] != 0))
+                              & ~route_is_server_exact(ordered.route_status[:2]))
             nxt = env_advance(ordered, sim)
             # gamma is the TRAINER's gamma, threaded through deliberately:
             # the shaping potential is policy-invariant only under the same

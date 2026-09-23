@@ -45,7 +45,8 @@ import jax.numpy as jnp
 from .state import Kind
 
 __all__ = ["EXP_RADIUS", "AMBIENT_GOLD_DELAY_MS", "AMBIENT_GOLD_AMOUNT",
-           "AMBIENT_GOLD_INTERVAL_MS", "DeathRewards", "death_rewards",
+           "AMBIENT_GOLD_INTERVAL_MS", "AMBIENT_GOLD_PERIOD_TICKS",
+           "DeathRewards", "death_rewards",
            "level_for_xp", "ambient_gold",
            "HIT_FLAG_MS", "CHAMPION_BASE_GOLD", "CHAMPION_MAX_GOLD",
            "CHAMPION_MIN_GOLD", "FIRST_BLOOD_EXTRA_GOLD",
@@ -84,19 +85,35 @@ GOLD_FROM_MINIONS_THRESHOLD = 1000.0
 #: ``LaneTurret.Die`` (`LaneTurret.cs:44`): ``Stats.Range.Total * 1.5f``.
 TURRET_RANGE_MULTIPLE = 1.5
 
-#: Ambient ("passive") gold, measured from a 600 s idle server run rather than
-#: derived. The Content constants are `AmbientGoldAmount 9.5` /
-#: `AmbientGoldInterval 5.0`, but the observed behaviour is **0.9502 every
-#: ~517 ms** -- a tenth of each, with the 17 ms being one tick of overshoot on a
-#: 500 ms timer decremented by 16.667 per tick. The rate works out the same
-#: (1.9/s); the granularity does not, and granularity is what a reward signal
-#: sees.
+#: Ambient ("passive") gold: `Champion.Update` (`Champion.cs:230-243`) with
+#: Map1's `ai_AmbientGoldAmount 9.5` / `ai_AmbientGoldInterval 5.0`, which
+#: `GlobalData` rescales to **0.95 per 500 ms** (`/ (10 / 5) / 5` and `* 100`).
 #:
-#: Starts at `ObjAIBaseVariables.AmbientGoldDelay` = 90 s, and the first tick
-#: fires immediately at 90 s rather than 500 ms later.
+#: The timer is decrement-THEN-test on a float32 `_goldTimer` reset to 500
+#: (not advanced by it): `500 - 30 * 16.666666f` is still just above zero, so
+#: a payment lands every **31** ticks (~517 ms, 1.839 gold/s), not 30. And the
+#: flag is an `else if`: the first tick with `GameTime >= 90000` only SETS
+#: `IsGeneratingGold`; the first payment is the tick after (`_goldTimer` starts
+#: at 0). Measured tick-for-tick against the 120 s PARITY-001 recording:
+#: first payment at tick 5402 (t = 90.032 s), then every 31 ticks.
 AMBIENT_GOLD_DELAY_MS = 90_000.0
 AMBIENT_GOLD_AMOUNT = 0.95
 AMBIENT_GOLD_INTERVAL_MS = 500.0
+
+
+def _ambient_gold_period_ticks(tick_ms: float = 1000.0 / 60.0) -> int:
+    """Ticks between payments, from the server's own float32 recurrence."""
+    import numpy as np
+    d, t, n = np.float32(tick_ms), np.float32(AMBIENT_GOLD_INTERVAL_MS), 0
+    while True:
+        t = np.float32(t - d)
+        n += 1
+        if t <= 0:
+            return n
+
+
+#: 31 at the 60 Hz tick (see above).
+AMBIENT_GOLD_PERIOD_TICKS = _ambient_gold_period_ticks()
 
 #: ``GlobalData.ObjAIBaseVariables.ExpRadius2``.
 EXP_RADIUS = 1600.0
@@ -458,19 +475,28 @@ def level_for_xp(xp: jax.Array, curve: jax.Array) -> jax.Array:
     return jnp.sum(xp[:, None] >= curve[None, 1:], axis=1).astype(jnp.int8)
 
 
-def ambient_gold(t_ms: Any, gold_timer: Any, is_champion: Any, xp: Any = None):
+def ambient_gold(t_prev_ms: Any, gold_timer: Any, is_champion: Any,
+                 delta_ms: float = 1000.0 / 60.0):
     """One tick of ``Champion.Update``'s ambient gold block.
 
-    Returns ``(gold_gained, new_timer)``. Ambient **experience** is not modelled
-    because ``ChampionVariables.AmbientXPAmount`` is **0.0** -- the block exists
-    in the server and pays nothing.
+    ``t_prev_ms`` is the clock BEFORE this tick's advance (``state.t_ms``):
+    the server's ``IsGeneratingGold`` was set by an earlier tick whose
+    ``GameTime`` had reached the delay, so "generating this tick" is exactly
+    "the previous tick's clock >= delay". On that setting tick nothing is paid
+    and the timer is untouched (the ``else if``). While generating, the timer
+    is decremented by the tick in float32 FIRST and a payment fires when it is
+    ``<= 0``, resetting it to the interval. Returns ``(gold_gained,
+    new_timer)``. Ambient **experience** is not modelled because
+    ``ChampionVariables.AmbientXPAmount`` is **0.0** -- the block exists in the
+    server and pays nothing.
     """
     import jax.numpy as jnp
 
-    generating = is_champion & (t_ms >= AMBIENT_GOLD_DELAY_MS)
-    fires = generating & (gold_timer <= 0)
+    generating = is_champion & (t_prev_ms >= AMBIENT_GOLD_DELAY_MS)
+    dec = gold_timer - jnp.asarray(delta_ms, gold_timer.dtype)
+    fires = generating & (dec <= 0)
     gained = jnp.where(fires, AMBIENT_GOLD_AMOUNT, 0.0)
     new_timer = jnp.where(
-        fires, AMBIENT_GOLD_INTERVAL_MS,
-        jnp.where(generating, gold_timer - (1000.0 / 60.0), gold_timer))
+        fires, jnp.asarray(AMBIENT_GOLD_INTERVAL_MS, gold_timer.dtype),
+        jnp.where(generating, dec, gold_timer))
     return gained.astype(gold_timer.dtype), new_timer

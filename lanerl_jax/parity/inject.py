@@ -240,18 +240,20 @@ def _set_buff(buffs, field: str, i: int, *, elapsed_s: float, rank: int = 0):
         rec.rank[i] = rank
 
 
-def xp_bounds_for_level(level: int, xp_curve) -> Tuple[float, Optional[float]]:
+def xp_bounds_for_level(level: int, xp_to_reach_level) -> Tuple[float, Optional[float]]:
     """Return the closed/open cumulative-XP interval visible as ``level``.
 
-    The dump exposes level but not XP.  ``[curve[level - 1], curve[level])``
-    is therefore the *entire* recoverable fact; choosing the lower bound for
+    ``xp_to_reach_level`` is `profiles`' level table (`STRUCT-005`): 19 rows,
+    row ``L`` the cumulative XP at which a champion BECOMES level ``L``, row 0
+    unused. The dump exposes level but not XP, so ``[table[L], table[L + 1])``
+    is the *entire* recoverable fact; choosing the lower bound for
     ``LaneState.xp`` is a deterministic representative, not an observation.
-    At the level cap there is no finite upper bound in the model.
+    At the level cap (18, the last row) there is no finite upper bound.
     """
-    n = len(xp_curve)
-    i = max(0, min(int(level) - 1, n - 1))
-    lower = float(xp_curve[i])
-    upper = float(xp_curve[i + 1]) if i + 1 < n else None
+    n = len(xp_to_reach_level)
+    L = max(1, min(int(level), n - 1))
+    lower = float(xp_to_reach_level[L])
+    upper = float(xp_to_reach_level[L + 1]) if L + 1 < n else None
     return lower, upper
 
 
@@ -883,7 +885,7 @@ def inject_snapshot(
             level[i] = ent.champ.level
             # The lower bound is deliberately only a representative.  The
             # note records the full within-level interval below.
-            xp[i], _ = xp_bounds_for_level(int(level[i]), params["xp_curve"])
+            xp[i], _ = xp_bounds_for_level(int(level[i]), params["xp_to_reach_level"])
             gold[i] = ent.champ.q_gold / StatQ
             cs[i] = ent.champ.minions_killed
             deaths[i] = ent.champ.deaths
@@ -1001,7 +1003,7 @@ def inject_snapshot(
                 and ent.ai.cast_spell == "-" and ent.ai.channel_spell == "-"
                 else "visible cast/channel has no LaneState representation"),
             lane_waypoint_recovery=lane_key_reason,
-            xp_bounds=(xp_bounds_for_level(ent.champ.level, params["xp_curve"])
+            xp_bounds=(xp_bounds_for_level(ent.champ.level, params["xp_to_reach_level"])
                        if ek == Kind.CHAMPION and ent.champ is not None else None),
         )
         report.notes.append(note)

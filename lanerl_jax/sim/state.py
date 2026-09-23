@@ -337,8 +337,11 @@ class LaneState:
     #: Diagnostic for the most recently accepted champion Move route. Zero is
     #: ``LocalRouteStatus.READY``; nonzero values make table coverage,
     #: no-route and fixed-shape overflows visible to rollouts instead of
-    #: silently presenting a raw two-point fallback as exact pathing. Minions
-    #: do not consume the local player-click table and retain zero here.
+    #: silently presenting a raw two-point fallback as exact pathing. The one
+    #: nonzero value that IS exact is ``SERVER_NULL`` (`PATH-008`): the
+    #: server's own GetPath returns null there and it walks the same raw
+    #: line. Minions do not consume the local player-click table and retain
+    #: zero here.
     route_status: jax.Array     # (N,) int8
 
     # ---- combat ----------------------------------------------------------

@@ -7,8 +7,25 @@ stat JSON -- and missing one is worth 43% of a turret's output against a wave.
 """
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 import pytest
+
+
+@functools.lru_cache(maxsize=1)
+def _jtick():
+    """One jitted ``tick`` under the default patch's params, shared by every
+    tick loop in this file. An eager ``tick`` is ~10 s per call on the login
+    node, and the loops here run up to 200 of them."""
+    import jax
+
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import lane_params
+    from lanerl_jax.sim.step import tick
+
+    params = lane_params(load_patch())
+    return jax.jit(lambda st: tick(st, params))
 
 
 
@@ -434,14 +451,12 @@ def _minion_breaks_garens_combat(minion_type, level):
     import jax.numpy as jnp
 
     from lanerl_jax.data.patch import load_patch
-    from lanerl_jax.sim.init import init_lane, lane_params
+    from lanerl_jax.sim.init import init_lane
     from lanerl_jax.sim.profiles import profile_id
     from lanerl_jax.sim.state import Kind, Team
-    from lanerl_jax.sim.step import tick
     from lanerl_jax.sim.targeting import MinionType  # noqa: F401 (re-exported name below)
 
     patch = load_patch()
-    params = lane_params(patch)
     s = init_lane(patch, include_all_turrets=False)
     kind = np.asarray(s.kind).copy()
     team = np.asarray(s.team).copy()
@@ -462,7 +477,7 @@ def _minion_breaks_garens_combat(minion_type, level):
                   if level > 1 else s.xp)
     for _ in range(200):
         hp_before = float(s.hp[0])
-        s = tick(s, params)
+        s = _jtick()(s)
         if float(s.hp[0]) < hp_before:
             return float(s.ms_since_damaged[0]) < 1.0
     raise AssertionError("the minion never landed a hit in 200 ticks")
@@ -592,13 +607,10 @@ def test_an_attack_order_on_an_allied_minion_holds_it_but_never_swings_or_pays()
     ticks and paid +20 gold and +1 CS for it -- a policy that learned to deny
     its own wave would score CS here and zero in the server.
     """
-    import jax
-
     from lanerl_jax.data.patch import load_patch
     from lanerl_jax.sim.init import lane_params
     from lanerl_jax.sim.orders import apply_orders
     from lanerl_jax.sim.state import Team
-    from lanerl_jax.sim.step import tick
 
     patch = load_patch()
     params = lane_params(patch)
@@ -607,8 +619,7 @@ def test_an_attack_order_on_an_allied_minion_holds_it_but_never_swings_or_pays()
     s = apply_orders(s, _attack(ally), params)
     assert int(s.target[0]) == ally, "the order is accepted, as on the server"
     gold0 = float(s.gold[0])
-    # Jitted: an eager `tick` is ~10 s per call on the login node.
-    jtick = jax.jit(lambda st: tick(st, params))
+    jtick = _jtick()
     for _ in range(90):
         s = jtick(s)
     assert bool(s.alive[ally]) and float(s.hp[ally]) == 50.0, "never swung at"
@@ -628,13 +639,10 @@ def test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on():
     on the 455 HP minion A, re-order onto the 30 HP minion B on the last
     frame, and B died while A was untouched -- zero-wind-up last-hitting.
     """
-    import jax
-
     from lanerl_jax.data.patch import load_patch
     from lanerl_jax.sim.init import lane_params
     from lanerl_jax.sim.orders import apply_orders
     from lanerl_jax.sim.state import Team
-    from lanerl_jax.sim.step import tick
 
     patch = load_patch()
     params = lane_params(patch)
@@ -642,7 +650,7 @@ def test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on():
     s = _arena_with_minions(patch, [(a, Team.RED, 455.0, 60.0),
                                     (b, Team.RED, 30.0, 110.0)])
     s = apply_orders(s, _attack(a), params)
-    jtick = jax.jit(lambda st: tick(st, params))
+    jtick = _jtick()
     for _ in range(5):
         s = jtick(s)
         if bool(s.is_attacking[0]):

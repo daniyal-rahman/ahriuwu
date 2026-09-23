@@ -152,11 +152,15 @@ class MovementParityResult:
         if scored:
             ok = sum(t.local_count_agrees for t in scored)
             ready = sum(t.local_status == 0 for t in scored)
+            from ..sim.local_pathing import LocalRouteStatus
+            server_null = sum(t.local_status == LocalRouteStatus.SERVER_NULL
+                              for t in scored)                    # PATH-008
             dv = np.array([t.local_deviation for t in scored])
             lines += [
                 "  -- production device router (build_local_waypoints) --",
                 f"  local waypoint count agrees: {ok}/{len(scored)}",
                 f"  local route READY          : {ready}/{len(scored)}",
+                f"  local route SERVER_NULL    : {server_null}/{len(scored)}",
                 f"  local mean waypoints {np.mean([t.local_waypoints for t in scored]):.2f}"
                 f"  vs server {np.mean([t.server_waypoints for t in scored]):.2f}"
                 f"  vs host port {np.mean([t.my_waypoints for t in scored]):.2f}",

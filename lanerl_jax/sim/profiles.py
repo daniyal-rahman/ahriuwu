@@ -351,11 +351,6 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
     # `ExpCurve[L-2]`; level 1 is where every champion starts, row 1 = 0.
     out["xp_to_reach_level"] = jnp.asarray(
         [0.0, 0.0] + [exp_curve_cs[L - 2] for L in range(2, LEVEL_ROWS)], dtype)
-    # LEGACY VIEW for `parity/inject.py`'s `xp_bounds_for_level`, which
-    # indexes `curve[level - 1]` and `curve[level]` and is owned outside the
-    # sim: `xp_curve[i] == xp_to_reach_level[i + 1]`, 18 rows. The sim does not
-    # read it. Delete it once that reader moves to `xp_to_reach_level`.
-    out["xp_curve"] = out["xp_to_reach_level"][1:]
     # `death_times[L]`: seconds a champion that dies at level L stays dead.
     # `Champion.Die` reads `MapData.DeathTimes[Stats.Level]` (`Champion.cs:400`)
     # and `Package.cs:141-153` fills that list from `i = 1`, so

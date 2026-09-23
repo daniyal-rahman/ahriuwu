@@ -247,7 +247,7 @@ def test_xp_bounds_and_dumped_cooldowns_are_not_conflated_with_a_point_xp_value(
         "|1:0|1:2048|1:5120|-1:-1")
     state, report = _state_for(Snapshot(t_ms=1017, entities=[champ]))
     note = report.notes[0]
-    lower, upper = xp_bounds_for_level(2, lane_params()["xp_curve"])
+    lower, upper = xp_bounds_for_level(2, lane_params()["xp_to_reach_level"])
 
     assert note.xp_bounds == (lower, upper)
     assert float(state.xp[note.slot]) == lower
@@ -267,7 +267,7 @@ def test_xp_bounds_and_dumped_cooldowns_are_not_conflated_with_a_point_xp_value(
 
 
 def test_level_cap_has_no_fabricated_xp_ceiling():
-    lower, upper = xp_bounds_for_level(18, lane_params()["xp_curve"])
+    lower, upper = xp_bounds_for_level(18, lane_params()["xp_to_reach_level"])
     assert lower > 0
     assert upper is None
 

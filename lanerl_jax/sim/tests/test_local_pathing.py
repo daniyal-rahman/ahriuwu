@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -10,6 +12,8 @@ from lanerl_jax.sim.local_pathing import (
     LocalRouteTable,
     build_local_waypoints,
     lookup_local_hop,
+    route_is_server_exact,
+    server_path_null,
     smooth_cell_path,
 )
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
@@ -287,3 +291,106 @@ def test_apply_orders_installs_route_and_persists_diagnostic_status():
     assert int(routed.n_waypoints[0]) == 2
     # A non-Move action does not overwrite the last route diagnostic.
     assert int(routed.route_status[1]) == LocalRouteStatus.READY
+
+
+# ---------------------------------------------------------------------------
+# PATH-008: the server's own GetPath returns null, so it walks a raw line
+# ---------------------------------------------------------------------------
+_PATH008_FIXTURE = Path(__file__).parent / "fixtures" / "path008_moves.json"
+
+
+def _f32_of_bits(bits: int) -> float:
+    return float(np.array([bits], np.int32).view(np.float32)[0])
+
+
+def _gate_route_table_or_skip():
+    from lanerl_jax.sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
+    if not DEFAULT_ROUTE_ARTIFACT.exists():
+        pytest.skip("production route artifact not available here")
+    cfg = SimConfig.gate()
+    return cfg.route_table, cfg.terrain
+
+
+#: Red, decision 103 of the 120 s PARITY-001 recording: Garen stands at the
+#: exact float position below, 214 u from the red fountain, and clicks west.
+#: His 35-u circle overlaps terrain, so every first-expansion CastCircle from
+#: that exact source fails, the queue empties and GetPath returns null; the
+#: server walked [position, click] (its dumped waypoints). The table used to
+#: snap the source to a covered centre and return READY with 4 waypoints.
+PATH008_SOURCE = (13850.6640625, 14375.5)
+PATH008_GOAL = (12635.390625, 14141.2265625)
+
+
+def test_path008_pinned_first_expansion_null():
+    navgrid = pytest.importorskip(
+        "lanerl_jax.data.navgrid",
+        reason="vendored Map1 navgrid content is not available here")
+    grid = navgrid.NavGrid.load()
+    radius = navgrid.GAREN_PATHFINDING_RADIUS
+    assert grid.get_cell_path(PATH008_SOURCE, PATH008_GOAL, radius) is None
+    assert not grid.is_walkable_world(*PATH008_SOURCE, radius)
+
+    terrain = map1_terrain()
+    fnx, fny = grid.to_nav(*PATH008_SOURCE)
+    pgx, pgy = grid.to_nav(*grid.closest_terrain_exit(*PATH008_GOAL, radius))
+    goal_cell = int(pgy) * grid.cell_count_x + int(pgx)
+    first_empty, goal_unenterable = server_path_null(
+        jnp.float32(PATH008_SOURCE[0]), jnp.float32(PATH008_SOURCE[1]),
+        jnp.int32(int(fnx)), jnp.int32(int(fny)), jnp.int32(goal_cell),
+        jnp.float32(radius), terrain)
+    assert bool(first_empty) and not bool(goal_unenterable)
+
+    table, terrain = _gate_route_table_or_skip()
+    r = build_local_waypoints(
+        jnp.float32(PATH008_SOURCE[0]), jnp.float32(PATH008_SOURCE[1]),
+        jnp.float32(PATH008_GOAL[0]), jnp.float32(PATH008_GOAL[1]),
+        jnp.float32(radius), table, terrain)
+    assert int(r.status) == LocalRouteStatus.SERVER_NULL
+    assert int(r.n_waypoints) == 2
+    np.testing.assert_array_equal(
+        np.asarray(r.waypoints[:2]),
+        np.asarray([PATH008_SOURCE, PATH008_GOAL], np.float32))
+    assert bool(route_is_server_exact(r.status))
+
+
+def test_path008_null_status_matches_the_host_port_on_every_recorded_move():
+    """Every Move of the 120 s recording (3,045, both teams, exact source
+    floats from its INTERNAL rows): SERVER_NULL iff the host port of
+    `GetPath` (which reproduces the server's waypoints) returns None. The
+    fixture freezes the host verdicts (190 s to recompute); a sample is
+    re-derived here so a stale fixture cannot pass silently."""
+    import json
+    navgrid = pytest.importorskip(
+        "lanerl_jax.data.navgrid",
+        reason="vendored Map1 navgrid content is not available here")
+    table, terrain = _gate_route_table_or_skip()
+    fx = json.loads(_PATH008_FIXTURE.read_text())
+    rows = np.asarray(fx["rows"], np.int64)
+    bits = rows[:, 2:6].astype(np.int32).view(np.float32)
+    host_null = rows[:, 6].astype(bool)
+    assert len(rows) == 3045 and int(host_null.sum()) == 1626
+
+    fn = jax.jit(jax.vmap(lambda sx, sy, gx, gy: build_local_waypoints(
+        sx, sy, gx, gy, jnp.float32(fx["radius"]), table, terrain)))
+    r = jax.device_get(fn(*(jnp.asarray(bits[:, c]) for c in range(4))))
+    status = np.asarray(r.status)
+    sim_null = status == LocalRouteStatus.SERVER_NULL
+    bad = np.flatnonzero(sim_null != host_null)
+    assert bad.size == 0, [tuple(rows[i, :2]) for i in bad[:10]]
+    # A non-null move is always routed by the table here (no fallback left).
+    assert set(status[~host_null].tolist()) == {LocalRouteStatus.READY}
+    # SERVER_NULL returns exactly the server's [position, unprojected click].
+    n = np.asarray(r.n_waypoints)
+    assert (n[sim_null] == 2).all()
+    np.testing.assert_array_equal(np.asarray(r.waypoints)[sim_null, 1],
+                                  bits[sim_null][:, 2:4])
+
+    grid = navgrid.NavGrid.load()
+    rng = np.random.default_rng(8)
+    sample = np.concatenate([
+        rng.choice(np.flatnonzero(host_null), 3, replace=False),
+        rng.choice(np.flatnonzero(~host_null), 3, replace=False)])
+    for i in sample:
+        src = (float(bits[i, 0]), float(bits[i, 1]))
+        goal = (float(bits[i, 2]), float(bits[i, 3]))
+        assert (grid.get_cell_path(src, goal, fx["radius"]) is None) == host_null[i]

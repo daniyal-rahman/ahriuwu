@@ -332,7 +332,7 @@ RUNE_AD_BONUS = 78.13500213623047 - 57.88      # +20.2550021
 #: exactly 80010/1024 -- the DUMP's `Q(AD, StatQ)` value, round-tripped
 #: and frozen into a constant. The server's true float32 is
 #: 78.13500213623047, read from `adbits=` (an exact-bits emit added for
-#: `STAT-003`, same idiom as `aacdbits`). The observation stream rounds
+#: `STAT-004`, same idiom as `aacdbits`). The observation stream rounds
 #: to 2 dp and shows 78.14, which is a correct rounding of 78.135002 and
 #: bounds the truth to [78.135, 78.145) without pinning it -- reading the
 #: error off that stream overstated it 20x, as 0.0052 rather than the

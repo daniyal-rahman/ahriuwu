@@ -408,7 +408,7 @@ _WINDUP_B = (
 # the only two scored families with no floor, which means they are the only
 # two that cannot yet be classified FLOOR or real under `GATE1-004`.
 #
-# `adbits=` is `STAT-003`: `RUNE_AD_BONUS` in `init.py` is defined as
+# `adbits=` is `STAT-004`: `RUNE_AD_BONUS` in `init.py` is defined as
 # `78.134765625 - 57.88`, and 78.134765625 is exactly 80010/1024 -- the
 # dump's own `Q(AD, StatQ)` value, round-tripped and frozen into a constant.
 # The observation stream rounds to 2 dp, so it bounds the true level-1 AD to

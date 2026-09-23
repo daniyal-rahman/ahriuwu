@@ -208,7 +208,7 @@ def test_champion_ad_matches_the_servers_dumped_ladder(patch):
     # `Q(AttackDamage.Total, StatQ)` with `StatQ = 1024f`
     # (`LanerlStateDump.cs:74`), so that value was the QUANTISED dump. The
     # exact-bits field `adbits=` (`LanerlStateDump.cs:285`) reads
-    # 78.13500213623047, which `109286e` adopted for `STAT-003` (TEST-001).
+    # 78.13500213623047, which `109286e` adopted for `STAT-004` (TEST-001).
     # It is also what float32 arithmetic over the page's own terms gives --
     # 57.88 + 9 x 0.945 + 3 x 2.25 + 5.0 -- so both the bits and the source
     # agree, and the quantised value is still reproduced below.
