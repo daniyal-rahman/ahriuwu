@@ -35,37 +35,53 @@
 # Stage B re-runs the top two arms at 600 updates on additional seeds, and only
 # that is allowed to be quoted.
 set -uo pipefail                # NOT -e: one arm failing must not kill the rest
-REPO=/mnt/nfs/projects/ahriuwu-lanerl-jax
+# REPO may be a SNAPSHOT worktree (`git worktree add ... <sha>`) so that edits
+# to the live tree during a multi-hour sweep cannot make later arms run
+# different code from earlier ones -- which happened once (sweep 1271 was
+# cancelled for exactly that). The venv is not in git: symlink `.venv-gpu`
+# in the snapshot to the live tree's. Runs are written to OUT_ROOT so the
+# snapshot can be deleted afterwards.
+REPO=${REPO:-/mnt/nfs/projects/ahriuwu-lanerl-jax}
+export REPO
 cd "$REPO"
 
 UPDATES=${UPDATES:-300}
-GROUP=${GROUP:-sweepA-$(date -u +%Y%m%d)}
+export SWEEP=${SWEEP:-sweepB}
+export OUT_ROOT=${OUT_ROOT:-/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/train}
+GROUP=${GROUP:-$SWEEP-$(date -u +%Y%m%d)}
 export WANDB_RUN_GROUP="$GROUP"     # wandb reads this; the helper has no --group
 export WANDB_INIT_TIMEOUT=60        # an unreachable wandb must not hang the GPU
 export WANDB_HTTP_TIMEOUT=30
 
 # arm name | extra args
 ARMS=(
+  # Sweep B (2026-09-23): the corrected simulator (SPELL-001..005, ENT-01/02,
+  # COLL-004, SLOT-001) and the corrected trainer (PPO-01 head masking,
+  # PPO-04/05/06/07). Nothing measured in sweep A is comparable. Dropped
+  # a5/a6: lr 3e-4 already blew the critic up in chunk 0 (PPO-04); 1e-3
+  # is not a candidate. Added the value-clip arms (PPO-02): the 0.2
+  # absolute clip on O(10-30) returns is the leading critic hypothesis now
+  # that a0-vs-a1 showed critic_lr was not.
   "a0-control|--lr 1e-5 --critic-lr 1e-5 --target-kl 1e9"
   "a1-base|--lr 1e-5"
   "a2-lr1e4|--lr 1e-4"
   "a3-lr3e4|--lr 3e-4"
   "a4-lr1e4-ent01|--lr 1e-4 --entropy-coef 0.01"
-  "a5-lr3e4-ent01|--lr 3e-4 --entropy-coef 0.01"
-  "a6-lr1e3|--lr 1e-3"
+  "a7-noclip|--lr 1e-5 --no-value-clip"
+  "a8-lr1e4-noclip|--lr 1e-4 --no-value-clip"
 )
 
 echo "=== sweep $GROUP | ${#ARMS[@]} arms x $UPDATES updates | $(date -u) ==="
-echo "git $(git rev-parse --short HEAD)"
+echo "git $(git rev-parse --short HEAD) | repo $REPO | out $OUT_ROOT"
 for entry in "${ARMS[@]}"; do
     name=${entry%%|*}
     args=${entry#*|}
     echo
     echo "--- arm $name : $args --- $(date -u +%H:%M:%S)"
     # shellcheck disable=SC2086
-    bash slurm/rl_train.sbatch --tag "sweepA-$name" --updates "$UPDATES" \
-        --wandb-tags sweepA "$name" \
-        --notes "sweep A arm $name ($args); group $GROUP" $args
+    bash slurm/rl_train.sbatch --tag "$SWEEP-$name" --updates "$UPDATES" \
+        --out-root "$OUT_ROOT" --wandb-tags "$SWEEP" "$name" \
+        --notes "sweep $SWEEP arm $name ($args); group $GROUP" $args
     echo "--- arm $name exit $? --- $(date -u +%H:%M:%S)"
 done
 echo
@@ -75,7 +91,8 @@ python3 - <<'PY'
 # here rather than reconstructed later so the job's own log is self-contained.
 import json, glob, os
 rows = []
-for m in glob.glob("lanerl_jax/runs/train/sweepA-*/manifest.json"):
+for m in glob.glob(os.path.join(os.environ.get("OUT_ROOT", "lanerl_jax/runs/train"),
+                               os.environ.get("SWEEP", "sweepA") + "-*", "manifest.json")):
     d = json.load(open(m))
     r = d.get("results") or {}
     cs = r.get("cs_at_10min") or []

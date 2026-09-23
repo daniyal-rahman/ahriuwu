@@ -31,7 +31,7 @@
 # only valid there. `danilogin`'s 1060 will run a smoke test and must never be
 # quoted for throughput.
 set -euo pipefail
-REPO=/mnt/nfs/projects/ahriuwu-lanerl-jax
+REPO=${REPO:-/mnt/nfs/projects/ahriuwu-lanerl-jax}
 test -d "$REPO/lanerl_jax" || { echo "REPO $REPO not visible from $(hostname)"; exit 1; }
 cd "$REPO"
 mkdir -p lanerl_jax/runs/train
