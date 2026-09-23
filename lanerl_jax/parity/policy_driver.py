@@ -8,7 +8,9 @@ TRAINING observation builder and decoder (`build_observation`,
 `train.actions.orders_from`), and the wire encoding (:func:`order_to_wire`).
 See the tool's module docstring for why the observation is built this way and
 the one place it is not exact (buffs are not on the control wire; E is
-recovered from `cd2` edges, Q is not).
+recovered from `cd2` edges, Q is not). `StateRebuilder`'s docstring lists the
+three wire quantities it translates into the sim's meaning rather than copying
+(gold, witnessed enemy casts, `GarenWPassive`: `OBS-04/05/06`).
 
 What this module adds on top of the move
 ----------------------------------------
@@ -59,7 +61,8 @@ from ..train.policy import LanePolicy, PolicyConfig
 from ..train.trainer import BLUE_NEXUS, RED_NEXUS, _sample
 
 __all__ = [
-    "WIRE_MT_TO_SIM", "WIRE_TEAM", "E_CANCEL_ARMED_MAX_MS", "StateRebuilder",
+    "WIRE_MT_TO_SIM", "WIRE_TEAM", "E_CANCEL_ARMED_MAX_MS", "STARTING_GOLD",
+    "StateRebuilder",
     "load_params", "order_to_wire", "pending_rank_up", "make_driver",
     "DriverStep", "PolicyDriver", "CreationRankMap", "PolicyActionLog",
     "PolicyPairDriver",
@@ -110,6 +113,22 @@ def _turret_slot_map(base) -> dict:
 #: `GarenECancel`'s cooldown is 1000 ms; one 30 Hz frame of slack.
 E_CANCEL_ARMED_MAX_MS = 1100.0
 
+#: `LanerlConfig.StartingGold`: the wire's ``gold`` is the WALLET and starts
+#: here. The sim's `state.gold` is EARNINGS from 0 (`OBS-04`).
+STARTING_GOLD = 475.0
+
+#: How long before its wire cooldown RISE each spell was pressed, in ms, for
+#: the witnessed-cast memory (`OBS-05`). W and E (start) write their cooldown
+#: at the press, so the rise is seen on the next frame and the press was the
+#: previous frame. R writes it at `FinishCasting`, `R_CAST_TIME_S` after the
+#: press. Q writes 0 at the press (`Q.cs`) and the real cooldown when its
+#: window closes, which may be up to 4.5 s later and is not recoverable from
+#: the wire -- so Q is recorded at the window's end (late; `OBS-05` row).
+_CAST_RISE_LAG_MS = (0.0, 0.0, 0.0, 435.0)
+
+#: A wire cooldown must move up by more than this (ms) to count as a rise.
+_RISE_EPS_MS = 1.0
+
 
 class StateRebuilder:
     """Rebuilds a training-shaped `LaneState` from each control-channel frame.
@@ -122,6 +141,32 @@ class StateRebuilder:
     different minion than the one the policy selected. netid -> slot is
     therefore assigned once, on first sight, and freed when the slot's minion
     is no longer in the frame.
+
+    Three more per-champion memories make the state mean what the SIM's state
+    means, since the observation is built from it by the training builder:
+
+    * **gold** (`OBS-04`): the wire carries the WALLET (starts at
+      :data:`STARTING_GOLD`, drops on a purchase); the sim's `state.gold` is
+      EARNINGS from 0 -- minion last-hits, ambient gold from 90 s, champion and
+      turret kills (`step.py`: ``state.gold + rw.gold + amb + ckr.gold +
+      tk_gold``), and nothing is ever subtracted. So earnings are
+      ``wallet - 475`` on first sight, then the sum of positive wallet deltas,
+      which ignores a purchase instead of reading it as negative income. The
+      wire rounds the wallet DOWN to an integer, so this is at most 1 gold
+      below the sim's float (3e-4 of the feature's 3000 scale).
+    * **witnessed enemy casts** (`OBS-05`): `orders._record_observed_enemy_casts`
+      mirrored from wire cooldown RISES, since casts are not on the wire. A
+      rise counts when the caster is alive and visible to the observer's team
+      (the sim's `visible_to`) and within `OBSERVED_CAST_SCREEN_RADIUS` of the
+      alive observer, judged on the frame the order was issued (the previous
+      rebuilt frame), as the sim judges it on the pre-tick state. E rises
+      TWICE per spin (to `GarenECancel`'s ~1000 ms at the start, to the rank
+      cooldown at the end); only the first is a cast, as `cast_e` reports
+      only a start. Timing per :data:`_CAST_RISE_LAG_MS`.
+    * **`GarenWPassive`** (`OBS-06`): the sim grants it the tick W first has a
+      rank and never removes it; the builder reads it for own armour/MR. It
+      was never set here, so from W's first rank the server-path observation
+      showed the pre-passive resists.
     """
 
     def __init__(self):
@@ -135,6 +180,76 @@ class StateRebuilder:
         self.n_units = int(self.base.x.shape[0])
         # Per-champion E-spin inference from `cd2` edges (module docstring).
         self._e = [{"prev_cd2": 0.0, "spin_start_ms": None} for _ in range(2)]
+        # OBS-04: per champion, last wallet seen and earnings so far.
+        self._wallet_prev: list = [None, None]
+        self._earned = [0.0, 0.0]
+        # OBS-05: per champion, last wire cooldowns (ms), None before first
+        # sight; per OBSERVER row, the frame time of each witnessed enemy cast
+        # (NaN = never); the previous frame's witness matrix and time.
+        self._cd_prev: list = [None, None]
+        self._cast_t = np.full((2, 4), np.nan)
+        self._prev_witness: Optional[np.ndarray] = None
+        self._prev_t: Optional[float] = None
+        # OBS-06: GarenWPassive, sticky once granted.
+        self._w_passive = [False, False]
+
+    def _earnings(self, tm: int, wallet: float) -> float:
+        prev = self._wallet_prev[tm]
+        if prev is None:
+            self._earned[tm] = max(0.0, wallet - STARTING_GOLD)
+        elif wallet > prev:
+            self._earned[tm] += wallet - prev
+        self._wallet_prev[tm] = wallet
+        return self._earned[tm]
+
+    @staticmethod
+    def _witness_matrix(x, y, kind, team, alive) -> np.ndarray:
+        """``(2, 2)`` bool, [observer, caster]: `_record_observed_enemy_casts`'s
+        ``can_witness`` on this frame's rebuilt arrays."""
+        from ..obs.fog import visible_to
+        from ..sim.orders import OBSERVED_CAST_SCREEN_RADIUS
+        ch = slice(CH_SLICE.start, CH_SLICE.start + 2)
+        seen = {t: np.asarray(visible_to(t, jnp.asarray(x), jnp.asarray(y),
+                                         jnp.asarray(kind), jnp.asarray(team),
+                                         jnp.asarray(alive)))[ch]
+                for t in (Team.BLUE, Team.RED)}
+        cx, cy = x[ch].astype(np.float64), y[ch].astype(np.float64)
+        live = (kind[ch] == Kind.CHAMPION) & alive[ch]
+        out = np.zeros((2, 2), bool)
+        for o in range(2):
+            for c in range(2):
+                if o == c or team[CH_SLICE.start + o] == team[CH_SLICE.start + c]:
+                    continue
+                d2 = (cx[c] - cx[o]) ** 2 + (cy[c] - cy[o]) ** 2
+                out[o, c] = bool(live[o] and live[c]
+                                 and seen[int(team[CH_SLICE.start + o])][c]
+                                 and d2 <= OBSERVED_CAST_SCREEN_RADIUS ** 2)
+        return out
+
+    def _observed_casts(self, t_now: float, cds: dict, witness: np.ndarray
+                        ) -> np.ndarray:
+        """Update the witnessed-cast memory from this frame's cooldowns and
+        return `observed_enemy_cast_ms` ``(2, 4)``: ms since each observer
+        last witnessed the enemy cast each slot, -1 if never."""
+        judge = self._prev_witness if self._prev_witness is not None else witness
+        t_press = self._prev_t if self._prev_t is not None else t_now
+        for c, cd in cds.items():
+            prev = self._cd_prev[c]
+            self._cd_prev[c] = cd
+            if prev is None:
+                continue                       # first sight: no edge yet
+            for s in range(4):
+                if cd[s] <= prev[s] + _RISE_EPS_MS:
+                    continue
+                if s == 2 and cd[s] > E_CANCEL_ARMED_MAX_MS:
+                    continue                   # spin END, not a cast
+                for o in range(2):
+                    if judge[o, c]:
+                        self._cast_t[o, s] = t_press - _CAST_RISE_LAG_MS[s]
+        self._prev_witness = witness
+        self._prev_t = t_now
+        return np.where(np.isnan(self._cast_t), -1.0,
+                        np.maximum(0.0, t_now - np.nan_to_num(self._cast_t)))
 
     def rebuild(self, frame: dict):
         """Returns `(state, netid_of_unit)`; `netid_of_unit[i]` is 0 if empty."""
@@ -160,6 +275,8 @@ class StateRebuilder:
         # buff record stays at the base state's (empty) value.
         e_active = np.asarray(self.base.buffs.e.active).copy()
         e_elapsed = np.asarray(self.base.buffs.e.elapsed_s).copy()
+        w_passive = np.asarray(self.base.buffs.w_passive).copy()
+        cds: dict = {}                 # team -> wire cooldowns (ms), this frame
         t_now = float(frame.get("t", 0))
 
         units = frame.get("u", [])
@@ -184,15 +301,21 @@ class StateRebuilder:
                 kind[i] = Kind.CHAMPION
                 model[i] = profile_id(Kind.CHAMPION, -1, int(tm))
                 level[i] = max(1, int(u.get("lvl", 1)))
-                gold[i] = float(u.get("gold", 0.0))
+                # OBS-04: earnings, not the wallet (class docstring).
+                gold[i] = self._earnings(int(tm), float(u.get("gold", 0.0) or 0.0))
                 cs[i] = int(u.get("cs", 0))
                 sl = u.get("sl") or [0, 0, 0, 0]
                 spell_level[int(tm)] = [int(v) for v in sl[:4]]
+                # OBS-06: `grant_w_passive` -- alive with W ranked; sticky.
+                if float(u.get("hp", 0.0)) > 0.0 and int(sl[1]) >= 1:
+                    self._w_passive[int(tm)] = True
+                w_passive[i] = self._w_passive[int(tm)]
                 # wire cd<slot> is ms; `state.spell_cooldown` is seconds, as
                 # `build_observation` divides it by the seconds-valued
                 # Q_COOLDOWN / *_COOLDOWNS tables.
-                spell_cd[int(tm)] = [max(0.0, float(u.get(f"cd{s}", 0)) / 1000.0)
-                                     for s in range(4)]
+                cds[int(tm)] = [max(0.0, float(u.get(f"cd{s}", 0) or 0.0))
+                                for s in range(4)]
+                spell_cd[int(tm)] = [v / 1000.0 for v in cds[int(tm)]]
                 recall[i] = 1.0 if int(u.get("rc", 0)) else 0.0
                 # E spin from the cd2 edge: <= 1.1 s is `GarenECancel`
                 # being armed (a spin began); anything larger is the
@@ -237,6 +360,9 @@ class StateRebuilder:
             alive[i] = hp[i] > 0.0
             netid[i] = int(u["id"])
 
+        observed = self._observed_casts(
+            t_now, cds, self._witness_matrix(x, y, kind, team, alive))
+
         state = self.base.replace(
             x=jnp.asarray(x), y=jnp.asarray(y), hp=jnp.asarray(hp),
             max_hp=jnp.asarray(mhp), alive=jnp.asarray(alive),
@@ -246,10 +372,14 @@ class StateRebuilder:
             spell_level=jnp.asarray(spell_level),
             spell_cooldown=jnp.asarray(spell_cd),
             recall_channel_ms=jnp.asarray(recall),
-            buffs=self.base.buffs.replace(e=self.base.buffs.e.replace(
-                active=jnp.asarray(e_active),
-                elapsed_s=jnp.asarray(e_elapsed,
-                                      self.base.buffs.e.elapsed_s.dtype))),
+            buffs=self.base.buffs.replace(
+                e=self.base.buffs.e.replace(
+                    active=jnp.asarray(e_active),
+                    elapsed_s=jnp.asarray(e_elapsed,
+                                          self.base.buffs.e.elapsed_s.dtype)),
+                w_passive=jnp.asarray(w_passive)),
+            observed_enemy_cast_ms=jnp.asarray(
+                observed, self.base.observed_enemy_cast_ms.dtype),
             t_ms=jnp.asarray(t_now, jnp.float32))
         return state, netid
 

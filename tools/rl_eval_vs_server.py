@@ -439,7 +439,8 @@ def selftest() -> int:
     chk(int(st.kind[1]) == Kind.CHAMPION and int(st.team[1]) == Team.RED,
         "red champion is not slot 1")
     chk(int(st.level[0]) == 3 and int(st.cs[0]) == 7
-        and abs(float(st.gold[0]) - 550.0) < 1e-6, "blue champion scalars")
+        and abs(float(st.gold[0]) - 75.0) < 1e-6,     # OBS-04: 550 wallet - 475
+        "blue champion scalars")
     chk(list(np.asarray(st.spell_level[0])) == [1, 0, 2, 0], "spell ranks")
     # ms on the wire, SECONDS in the state -- build_observation divides by the
     # seconds-valued cooldown tables.
