@@ -54,7 +54,9 @@ def _resolves(p: str) -> bool:
 @pytest.mark.parametrize("script", SBATCH, ids=lambda p: p.name)
 def test_sbatch_repo_still_exists(script: Path):
     """A REPO pointing at a deleted worktree is a job that cannot run."""
-    m = re.search(r"^REPO=(\S+)", script.read_text(), re.M)
+    # `REPO=${REPO:-/mnt/...}` (overridable for a snapshot worktree) or a
+    # bare `REPO=/mnt/...`: the DEFAULT is what must exist.
+    m = re.search(r"^REPO=(?:\$\{REPO:-)?([^}\s]+)\}?", script.read_text(), re.M)
     if m is None:
         pytest.skip(f"{script.name} defines no REPO")
     repo = m.group(1)
