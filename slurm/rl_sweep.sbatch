@@ -54,6 +54,8 @@ export WANDB_INIT_TIMEOUT=60        # an unreachable wandb must not hang the GPU
 export WANDB_HTTP_TIMEOUT=30
 
 # arm name | extra args
+# ARMS_SPEC (newline-separated "name|args" entries) replaces the list below,
+# so a stage-B seed sweep does not mean editing the canonical arm list.
 ARMS=(
   # Sweep B (2026-09-23): the corrected simulator (SPELL-001..005, ENT-01/02,
   # COLL-004, SLOT-001) and the corrected trainer (PPO-01 head masking,
@@ -70,6 +72,8 @@ ARMS=(
   "a7-noclip|--lr 1e-5 --no-value-clip"
   "a8-lr1e4-noclip|--lr 1e-4 --no-value-clip"
 )
+
+if [ -n "${ARMS_SPEC:-}" ]; then mapfile -t ARMS <<< "$ARMS_SPEC"; fi
 
 echo "=== sweep $GROUP | ${#ARMS[@]} arms x $UPDATES updates | $(date -u) ==="
 echo "git $(git rev-parse --short HEAD) | repo $REPO | out $OUT_ROOT"

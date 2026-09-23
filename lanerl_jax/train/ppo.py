@@ -103,7 +103,12 @@ class PPOConfig(NamedTuple):
     max_grad_norm: float = 1.0
     target_kl: float = 0.02
     lr: float = 1e-5
-    critic_lr: float = 3e-4
+    #: 1e-5, not 3e-4: sweep B (2026-09-23, corrected sim, one seed, 300
+    #: updates) put the 3e-4 critic at 0.03 CS against 23.3 with the critic
+    #: at the actor's 1e-5 -- and at every actor lr the fast critic lost
+    #: (a2 9.9, a3 5.3, a7 no-clip 0.7). Seeds are running; until they land
+    #: this is the best single measurement, not a settled number.
+    critic_lr: float = 1e-5
     epochs: int = 4
     normalize_advantage: bool = True
 
