@@ -166,6 +166,10 @@ class Transition(NamedTuple):
     #: Fractional diagnostic input to the rollout aggregate: one for a
     #: semantic Move whose local route table returned a non-ready status.
     route_nonready: jax.Array
+    #: Per-weight reward breakdown, summing to `reward` exactly. Only the TOTAL
+    #: used to be logged, so when cs@10min moved there was no way to say which
+    #: term moved it -- and the last reward change (`RL-002`) was a reweighting.
+    reward_terms: dict
 
 
 def _sample(logits, key):
@@ -261,8 +265,9 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             # gamma is the TRAINER's gamma, threaded through deliberately:
             # the shaping potential is policy-invariant only under the same
             # discount the advantage estimator uses.
-            reward, rstate = lane_reward(nxt, rstate, dt_s, cfg.reward,
-                                         runner.step, gamma=cfg.ppo.gamma)
+            reward, rstate, rterms = lane_reward(
+                nxt, rstate, dt_s, cfg.reward, runner.step,
+                gamma=cfg.ppo.gamma, return_terms=True)
             # Phi is read BEFORE the reset masks it back to the fountain value.
             phi = rstate.phi
             done = nxt.t_ms >= deadline
@@ -293,7 +298,8 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                 cs=cs_at_done,
                 done_full=jnp.broadcast_to(done_full, reward.shape),
                 lane_dist=lane_dist,
-                route_nonready=route_nonready.astype(jnp.float32))
+                route_nonready=route_nonready.astype(jnp.float32),
+                reward_terms=rterms)
             return nxt, rstate, deadline, t
 
         keys = jax.random.split(sk, cfg.n_envs)
@@ -364,6 +370,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                 params, opt_state, stopped = carry
                 (loss, info), grads = jax.value_and_grad(_loss, has_aux=True)(
                     params, b, cfg.ppo)
+                # `max_grad_norm` is 1.0 and nothing recorded whether the clip
+                # was ACTIVE. If it is active on most updates then the effective
+                # learning rate is not `lr`, it is `1.0 / ||g||` -- and a sweep
+                # over `lr` is then partly measuring nothing.
+                gnorm = optax.global_norm(grads)
+                info = {**info, "grad_norm": gnorm,
+                        "grad_clipped": (gnorm > cfg.ppo.max_grad_norm
+                                         ).astype(jnp.float32)}
                 updates, new_opt_state = tx.update(grads, opt_state, params)
                 new_params = optax.apply_updates(params, updates)
                 keep = ~stopped
@@ -414,6 +428,17 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         metrics["returns_absmax"] = jnp.abs(returns).max()
         metrics["value_absmax"] = jnp.abs(tr.value).max()
         metrics["adv_absmax"] = jnp.abs(adv).max()
+        # EXPLAINED VARIANCE, the scale-free version of the value diagnostic.
+        # `value_loss` is unnormalised, so 542.7 could be a broken critic or a
+        # large return scale; this says which without needing the absmaxes.
+        # 1.0 is a perfect critic, 0.0 is no better than predicting the mean,
+        # and NEGATIVE is worse than that -- which is the reading that matters.
+        r_var = returns.var()
+        metrics["value_explained_var"] = jnp.where(
+            r_var > 0, 1.0 - (returns - tr.value).var() / r_var, jnp.nan)
+        # Which reward term is actually driving the total.
+        for k, v in tr.reward_terms.items():
+            metrics[f"reward_{k}"] = v.mean()
         # How far from the lane corridor the champions sat, in game units.
         # ~7,981 at spawn, 0 anywhere in lane. This is the leading indicator.
         metrics["lane_dist"] = tr.lane_dist.mean()

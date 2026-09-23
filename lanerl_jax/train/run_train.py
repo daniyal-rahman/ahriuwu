@@ -59,6 +59,17 @@ def main() -> None:
              "each call so there is still exactly one compile.")
     ap.add_argument("--ckpt-every", type=int, default=5,
                     help="checkpoint every N chunks (0 = only at the end)")
+    ap.add_argument(
+        "--resume", type=Path, default=None,
+        help="resume params AND optimiser state from a ckpt_*.msgpack. "
+             "Checkpoints were being written and nothing read one, so a 12-hour "
+             "run that died in hour 11 restarted from zero -- which has already "
+             "happened once, at update ~450 of 600. The chunked loop is half "
+             "that fix; this is the other half. NOTE: the environment and RNG "
+             "state are NOT restored (they are not in the checkpoint), so a "
+             "resumed run continues the POLICY, not the episode -- it is a "
+             "crash recovery, not a bit-exact continuation, and the manifest "
+             "records which checkpoint it came from.")
     ap.add_argument("--lr", type=float, default=None,
                     help="override PPO learning rate. The inherited 1e-5 comes "
                          "from a BC FINE-TUNE config, chosen to avoid destroying "
@@ -174,6 +185,28 @@ def main() -> None:
     n_chunks, rem = divmod(cfg.n_updates, chunk)
     step_fn = jax.jit(built.run_chunk, static_argnums=1)
     runner = built.initial_runner(jax.random.key(a.seed))
+    if a.resume is not None:
+        from flax.serialization import from_bytes
+        if not a.resume.exists():
+            ap.error(f"--resume checkpoint not found: {a.resume}")
+        # Deserialised INTO the freshly built runner's own pytrees, so a
+        # checkpoint whose structure no longer matches the model fails here
+        # rather than loading something plausible. Params and optimiser state
+        # both: resuming the weights without Adam's moments throws away the
+        # second-moment estimate and the first few updates after the resume are
+        # then effectively at a different learning rate.
+        payload = from_bytes(
+            {"params": runner.params, "opt_state": runner.opt_state},
+            a.resume.read_bytes())
+        runner = runner._replace(params=payload["params"],
+                                 opt_state=payload["opt_state"])
+        run.manifest["resumed_from"] = {
+            "checkpoint": str(a.resume),
+            "note": "params + opt_state only; env state and RNG are fresh, so "
+                    "this continues the policy and not the episode",
+        }
+        run.write()
+        print(f"resumed params + opt_state from {a.resume}")
     jax.block_until_ready(runner)
 
     parts, t0 = [], time.perf_counter()
@@ -251,10 +284,13 @@ def main() -> None:
 
     print()
     cols = ("reward", "entropy", "approx_kl", "clip_frac", "value_loss",
-            "lane_dist", "route_nonready", "cs_at_10min")
-    print(f"{'upd':>5}" + "".join(f"{c:>12}" for c in cols))
+            "value_explained_var", "grad_norm", "lane_dist", "cs_at_10min")
+    print(f"{'upd':>5}" + "".join(f"{c:>20}" if len(c) > 11 else f"{c:>12}"
+                                    for c in cols))
     for i in range(0, cfg.n_updates, a.every):
-        row = "".join(f"{float(np.asarray(m[c])[i]):>12.4f}" for c in cols)
+        row = "".join(
+            f"{float(np.asarray(m[c])[i]):>20.4f}" if len(c) > 11
+            else f"{float(np.asarray(m[c])[i]):>12.4f}" for c in cols)
         print(f"{i:>5}{row}")
     print()
     e0 = float(np.asarray(m["entropy"])[0])
@@ -301,6 +337,13 @@ def main() -> None:
         entropy_last=round(float(np.asarray(m["entropy"])[-1]), 4),
         wall_s=round(first, 1),
         env_decisions_per_s=round(n_dec / first, 1),
+        # Which reward term drove the total, over the whole run. A rebalance is
+        # the change this answers directly rather than by inference.
+        reward_terms={k[len("reward_"):]: round(float(np.asarray(v).mean()), 8)
+                      for k, v in m.items() if k.startswith("reward_")},
+        value_explained_var_last=round(
+            float(np.asarray(m["value_explained_var"])[-1]), 4),
+        grad_clipped_frac=round(float(np.asarray(m["grad_clipped"]).mean()), 4),
     )
     if wb is not None:
         try:

@@ -262,8 +262,11 @@ def reward_init(state: LaneState,
 
 def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
                 cfg: RewardConfig = RewardConfig(), train_step=0,
-                gamma: float | None = None):
+                gamma: float | None = None, *, return_terms: bool = False):
     """One step of reward for both champions. Returns ``(reward(2,), new_prev)``.
+
+    With ``return_terms`` it returns ``(reward, new_prev, terms)`` instead, where
+    ``terms`` is the per-weight breakdown and sums to ``reward`` exactly.
 
     ``primed`` exists because the first call after a reset has no previous state
     to difference against. The source is explicit about the equivalent: a
@@ -312,6 +315,40 @@ def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
                 "under the discount it was built for. Pass cfg.ppo.gamma.")
         shaping = gamma * phi - prev.phi
         reward = reward + jnp.where(prev.primed, shaping, jnp.zeros_like(shaping))
+
+    if return_terms:
+        # PER-TERM CONTRIBUTIONS, and they sum to `reward` exactly.
+        #
+        # Reported after the zero-sum combination (`t - alpha * t[::-1]`), not
+        # before, so the sum is checkable rather than indicative -- see
+        # `test_reward_terms_sum_to_reward`. Reporting the raw halves would have
+        # been easier and would not add up, which is the kind of diagnostic that
+        # gets quoted as if it did.
+        #
+        # Why this exists: the reward is a weighted sum of five terms plus a
+        # potential, and only the TOTAL was ever logged. When cs@10min moved we
+        # could not say which term moved it, and the last reward change
+        # (`RL-002`) was a reweighting -- exactly the change this answers
+        # directly instead of by inference.
+        def zs(t):
+            t = jnp.where(prev.primed, t, jnp.zeros_like(t))
+            return t - alpha * t[::-1]
+
+        terms = {
+            "money": zs(w.money * d_gold),
+            "exp": zs(w.exp * d_xp),
+            "hp_point": zs(w.hp_point * d_hp),
+            "death": zs(w.death * d_deaths),
+            "last_hit": zs(w.last_hit * d_cs),
+            "shaping": (jnp.where(prev.primed, gamma * phi - prev.phi, 0.0)
+                        if (cfg.enable_lane_approach or cfg.enable_shaping)
+                        else jnp.zeros_like(reward)),
+        }
+        return reward, RewardState(
+            gold=state.gold[:2], xp=state.xp[:2], hp_frac=hp,
+            deaths=state.deaths[:2].astype(jnp.float32),
+            cs=state.cs[:2].astype(jnp.float32),
+            primed=jnp.ones((), bool), phi=phi), terms
 
     return reward, RewardState(
         gold=state.gold[:2], xp=state.xp[:2], hp_frac=hp,

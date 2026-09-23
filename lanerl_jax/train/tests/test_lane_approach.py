@@ -240,3 +240,50 @@ def test_walking_towards_lane_pays_and_walking_away_charges():
     r_away, _ = lane_reward(away, rs, 1 / 30.0, cfg, gamma=0.999)
     assert float(r_to[0]) > float(r_away[0])
     assert float(r_to[0]) > 0.0 > float(r_away[0])
+
+
+def test_reward_terms_sum_to_reward():
+    """The per-term breakdown must ADD UP, not merely indicate.
+
+    Reported after the zero-sum combination (`t - alpha * t[::-1]`) rather than
+    before, precisely so this assertion can exist. Raw halves would have been
+    easier to produce and would not sum to the reward -- and a diagnostic that
+    nearly adds up is the kind that gets quoted as if it did.
+    """
+    import jax.numpy as jnp
+    import numpy as np
+
+    from lanerl_jax.sim.init import init_lane
+    from lanerl_jax.train.reward import RewardConfig, lane_reward, reward_init
+    from lanerl_jax.train.trainer import TrainConfig
+
+    cfg = RewardConfig()
+    gamma = TrainConfig().ppo.gamma
+    s0 = init_lane()
+    rs = reward_init(s0, cfg)
+    # prime it, then move gold/xp/hp/cs/deaths so every term is non-zero
+    _, rs = lane_reward(s0, rs, 1 / 30.0, cfg, 0, gamma=gamma)
+    s1 = s0.replace(
+        gold=s0.gold.at[:2].set(
+            s0.gold[:2] + jnp.asarray([37.0, 11.0], s0.gold.dtype)),
+        xp=s0.xp.at[:2].set(
+            s0.xp[:2] + jnp.asarray([140.0, 60.0], s0.xp.dtype)),
+        hp=s0.hp.at[:2].set(
+            s0.hp[:2] * jnp.asarray([0.8, 0.95], s0.hp.dtype)),
+        cs=s0.cs.at[:2].set(s0.cs[:2] + jnp.asarray([2, 1], s0.cs.dtype)),
+        deaths=s0.deaths.at[:2].set(
+            s0.deaths[:2] + jnp.asarray([1, 0], s0.deaths.dtype)),
+        x=s0.x.at[:2].set(s0.x[:2] + 900.0))
+    reward, _, terms = lane_reward(s1, rs, 1 / 30.0, cfg, 0, gamma=gamma,
+                                   return_terms=True)
+    total = sum(np.asarray(v) for v in terms.values())
+    np.testing.assert_allclose(total, np.asarray(reward), rtol=0, atol=2e-5)
+    # ... and the breakdown is not trivially all-zero, which would satisfy the
+    # assertion above while reporting nothing. Every one of the five weighted
+    # terms was perturbed here, so every one must be non-zero; `last_hit` is
+    # weighted 0.0 by design (see RewardWeights) and is allowed to be flat.
+    nonzero = {k: float(np.abs(np.asarray(v)).max()) for k, v in terms.items()}
+    for k, v in nonzero.items():
+        if k == "last_hit":
+            continue
+        assert v > 0.0, f"reward term {k!r} is identically zero: {nonzero}"
