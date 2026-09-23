@@ -1,12 +1,12 @@
 """The lane reward, ported from ``lanerl_rl/reward.py`` -- core terms only.
 
-Zero-sum, with the shape the source uses::
+Zero-sum, exactly::
 
-    r_team = raw_team - alpha * raw_other
+    r_team = raw_team - raw_other          (+ the per-agent lane potential)
 
-At ``alpha = 1`` and with shaping off, ``r_blue == -r_red`` exactly. Alpha
-anneals from 0.5 to 1 over training: starting below 1 lets the agent learn to
-farm at all before the game becomes exactly adversarial.
+so with shaping ignored ``r_blue == -r_red``. The source mixed with an
+``alpha`` annealed 0.5 -> 1; that anneal is gone (below), and alpha is the
+constant 1.
 
 Two terms are not what a naive reading gives, and both are documented failures
 in the source
@@ -28,7 +28,8 @@ opportunity cost.
 **The ambient trickle is removed from the money term.** 1.9 gold/s arrives
 whether the agent plays or not, and paying for it rewards standing still. The
 sim knows the rate exactly (`sim/rewards.AMBIENT_GOLD_*`), so this subtracts the
-known quantity rather than estimating it.
+known quantity rather than estimating it -- from 90 s, when the sim starts
+paying it (`REW-07`).
 
 ``lane_approach``: why the walk has to be paid for
 --------------------------------------------------
@@ -47,16 +48,27 @@ optimal. A naive "closer to lane than last tick" bonus is not a potential and
 pays an agent to oscillate toward and away from lane forever.
 
 **The gamma MUST be the trainer's gamma or the invariance is lost**, so it is a
-required argument rather than a config default -- see :func:`lane_reward`.
+required keyword argument rather than a config default -- see
+:func:`lane_reward`.
 
-Booked as NOT ported yet
-------------------------
-* potential-based last-hit shaping (``enable_shaping``)
-* ``kill`` credit, which needs killer attribution routed out of the sim
-* ``tower_hp``
+Removed for the baseline (2026-09-23)
+-------------------------------------
+Recoverable from commit ``490bb38`` (`reward.py` and the trainer's
+``zero_sum_alpha`` metric):
 
-Their weights are carried in the config and multiplied by zero, so turning one
-on is a one-line change and nothing silently reads as "included".
+* ``RewardConfig.zero_sum_alpha_start/_end/zero_sum_anneal_steps`` and
+  ``RewardConfig.alpha()``: the 0.5 -> 1.0 anneal. Its clock counted
+  champion-decisions (65,536 per update), so it ended at update ~31, before
+  any full episode, and restarted on every resume (`PPO-06`/`REW-02`).
+  Alpha is now the constant 1 and ``lane_reward`` has no ``train_step``.
+* ``RewardConfig.enable_kill/enable_tower/enable_shaping`` and
+  ``RewardWeights.kill/tower_hp``: unported terms, unread, then guarded by a
+  ``NotImplementedError`` (`REW-06`). Kills are still paid through gold/XP
+  (`REW-01`).
+* ``RewardWeights.last_hit`` (0.0) and ``RewardState.cs``: a term multiplied
+  by zero, logged as an always-zero ``reward_last_hit``.
+* ``RewardConfig.enable_lane_approach`` and ``subtract_ambient_gold``
+  (both True, no CLI flag): toggles whose off paths no run could reach.
 """
 from __future__ import annotations
 
@@ -74,7 +86,8 @@ from ..sim.state import LaneState, Team
 
 __all__ = ["RewardWeights", "RewardConfig", "RewardState", "reward_init",
            "lane_reward", "AMBIENT_GOLD_PER_S", "LANE_HALF_WIDTH",
-           "NEXUS_POSITION", "LANE_AXIS", "lane_approach_potential"]
+           "NEXUS_POSITION", "LANE_AXIS", "lane_approach_potential",
+           "lane_corridor_distance"]
 
 #: ``lanerl_rl.constants.LANE_HALF_WIDTH``. The corridor the potential
 #: saturates inside, so it stops paying exactly where being in lane begins.
@@ -129,18 +142,16 @@ def _lane_axis():
 LANE_AXIS = _lane_axis()
 
 
-def lane_approach_potential(x, y, per_1000: float,
-                            corridor: float = LANE_HALF_WIDTH, axis=None):
-    r"""``-per_1000/1000 * distance(champ, lane corridor)``; 0 once inside.
-
-    ``x`` and ``y`` are ``(2,)``, blue then red, and the result is ``(2,)``.
+def lane_corridor_distance(x, y, corridor: float = LANE_HALF_WIDTH, axis=None):
+    """Distance in game units from each champion to its lane corridor
+    RECTANGLE; 0 anywhere inside. ``x``/``y`` are ``(2,)``, blue then red.
 
     Distance is to the **rectangle**, not to the axis: a champion at the right
     ``s`` but 3k units off-axis and one at ``n = 0`` but sitting in its own
-    base are both far, and both get a gradient pointing at the nearest piece of
-    lane. From blue's spawn this is about **-0.56**, so the entire walk is
-    worth roughly half of one last hit -- enough to point the way, far too
-    little to be worth farming instead of minions.
+    base are both far, and both get a gradient pointing at the nearest piece
+    of lane. Also the trainer's ``lane_dist`` diagnostic, read directly
+    rather than recovered from the potential by dividing out its weight
+    (`REW-09`: that read 0 with shaping off and divided by zero at weight 0).
     """
     a = axis if axis is not None else LANE_AXIS
     px = x - a["origin_x"]
@@ -150,83 +161,68 @@ def lane_approach_potential(x, y, per_1000: float,
     off_n = jnp.maximum(0.0, jnp.abs(n) - corridor)
     off_s = jnp.maximum(
         0.0, jnp.maximum(-corridor - s, s - (a["length"] + corridor)))
-    return -(per_1000 / 1000.0) * jnp.hypot(off_n, off_s)
+    return jnp.hypot(off_n, off_s)
+
+
+def lane_approach_potential(x, y, per_1000: float,
+                            corridor: float = LANE_HALF_WIDTH, axis=None):
+    r"""``-per_1000/1000 * lane_corridor_distance``; 0 once inside.
+
+    From blue's spawn this is about **-0.56**, so the entire walk is worth
+    roughly half of one last hit -- enough to point the way, far too little
+    to be worth farming instead of minions.
+    """
+    return -(per_1000 / 1000.0) * lane_corridor_distance(x, y, corridor, axis)
 
 #: 0.95 per 500 ms, measured from the server -- see `sim/rewards.py`.
 AMBIENT_GOLD_PER_S = AMBIENT_GOLD_AMOUNT / (AMBIENT_GOLD_INTERVAL_MS / 1000.0)
 
 
 class RewardWeights(NamedTuple):
-    """`runs/rl-league-0915e/resolved_config.json`. Unported terms are kept at
-    their real weights but gated off, so nothing reads as included."""
+    """`runs/rl-league-0915e/resolved_config.json`, rebalanced 2026-09-23.
 
-    #: GOLD AND XP ARE THE PRIMARY TERMS, and `last_hit` is deliberately 0.
-    #:
-    #: The inherited weights were `money` 0.008, `exp` 0.001, `last_hit` 1.0.
-    #: Priced against real minion values (melee 20g/77xp, caster 10g/51xp,
-    #: cannon 30g/94xp) that made a last hit worth:
-    #:
-    #:     term        melee   caster   cannon
-    #:     CS  x1.0    1.000    1.000    1.000
-    #:     gold x.008  0.160    0.080    0.240
-    #:     xp  x.001   0.077    0.051    0.094
-    #:
-    #: Two problems. The flat CS term is 6x the gold term AND identical across
-    #: minion types, so the agent was explicitly taught that a 10-gold caster
-    #: and a 30-gold cannon are worth the same -- erasing the distinction that
-    #: makes the cannon the biggest CS on the board. And it DOUBLE-COUNTS: a
-    #: last hit yields +1 cs and +gold, so the proxy drowned the quantity it
-    #: proxies for.
-    #:
-    #: Rescaled so a melee last hit still totals ~1.0 -- the old scale, so no
-    #: other weight needs re-tuning -- split roughly 2:1 gold:xp:
-    #:
-    #:     gold 20x0.0335 + xp 77x0.0043 = 0.67 + 0.33 = 1.00  melee
-    #:                                     0.34 + 0.22 = 0.55  caster
-    #:                                     1.01 + 0.40 = 1.40  cannon
-    #:
-    #: a 2.5x spread that matches lane value. XP is the denser half: it accrues
-    #: from PROXIMITY to a dying minion, not only from the killing blow, so
-    #: raising it supplies the "be in lane while minions die" gradient without
-    #: inventing a shaping term.
-    #:
-    #: REPRODUCIBILITY: runs before 2026-09-23 used the old weights; a reward
-    #: curve is not comparable across this change.
+    GOLD AND XP ARE THE PRIMARY TERMS; there is no flat per-last-hit term.
+
+    The inherited weights were `money` 0.008, `exp` 0.001, `last_hit` 1.0.
+    Priced against real minion values (melee 20g/77xp, caster 10g/51xp,
+    cannon 30g/94xp) that made a last hit worth:
+
+        term        melee   caster   cannon
+        CS  x1.0    1.000    1.000    1.000
+        gold x.008  0.160    0.080    0.240
+        xp  x.001   0.077    0.051    0.094
+
+    Two problems. The flat CS term was 6x the gold term AND identical across
+    minion types, so the agent was explicitly taught that a 10-gold caster
+    and a 30-gold cannon are worth the same. And it DOUBLE-COUNTED: a last
+    hit yields +1 cs and +gold, so the proxy drowned the quantity it proxies.
+
+    Rescaled so a melee last hit still totals ~1.0, split roughly 2:1
+    gold:xp:
+
+        gold 20x0.0335 + xp 77x0.0043 = 0.67 + 0.33 = 1.00  melee
+                                        0.34 + 0.22 = 0.55  caster
+                                        1.01 + 0.40 = 1.40  cannon
+
+    a 2.5x spread that matches lane value. XP is the denser half: it accrues
+    from PROXIMITY to a dying minion, not only from the killing blow, so it
+    supplies the "be in lane while minions die" gradient without inventing a
+    shaping term.
+
+    REPRODUCIBILITY: runs before 2026-09-23 used the old weights; a reward
+    curve is not comparable across this change.
+    """
+
     money: float = 0.0335
     hp_point: float = 4.0
     death: float = -1.0
     exp: float = 0.0043
-    #: 0.0 -- see `money`. Kept as a knob rather than deleted so the old
-    #: behaviour is one assignment away and the change stays measurable.
-    last_hit: float = 0.0
-    # --- carried, not yet ported (see the module docstring) ---
-    kill: float = -0.5
-    tower_hp: float = 10.0
+    #: the potential-based walk-to-lane shaping, per 1000 units of distance
     lane_approach: float = 0.07
 
 
 class RewardConfig(NamedTuple):
     weights: RewardWeights = RewardWeights()
-    zero_sum_alpha_start: float = 0.5
-    zero_sum_alpha_end: float = 1.0
-    zero_sum_anneal_steps: int = 2_000_000
-    subtract_ambient_gold: bool = True
-    #: which terms are actually live; the rest multiply by zero
-    enable_kill: bool = False
-    enable_tower: bool = False
-    #: potential-based LAST-HIT shaping; still unported
-    enable_shaping: bool = False
-    #: potential-based lane-approach shaping. ON, because with it off the
-    #: reward is identically zero along the 13,532-unit walk to lane and the
-    #: agent has no gradient to follow -- see the module docstring.
-    enable_lane_approach: bool = True
-
-    def alpha(self, train_step) -> jax.Array:
-        if self.zero_sum_anneal_steps <= 0:
-            return jnp.asarray(self.zero_sum_alpha_end)
-        frac = jnp.clip(train_step / self.zero_sum_anneal_steps, 0.0, 1.0)
-        return (self.zero_sum_alpha_start
-                + frac * (self.zero_sum_alpha_end - self.zero_sum_alpha_start))
 
 
 class RewardState(NamedTuple):
@@ -236,34 +232,36 @@ class RewardState(NamedTuple):
     xp: jax.Array
     hp_frac: jax.Array
     deaths: jax.Array
-    cs: jax.Array
     primed: jax.Array          # the first step has no previous to difference
     phi: jax.Array             # Phi(s) of the shaping potential
 
 
 def _phi(state: LaneState, cfg: RewardConfig):
-    """``Phi(s)`` -- the sum of the enabled potentials. Two potentials sum to
-    one potential, so the invariance survives adding more of them later."""
-    phi = jnp.zeros((2,), jnp.float32)
-    if cfg.enable_lane_approach:
-        phi = phi + lane_approach_potential(
-            state.x[:2], state.y[:2], per_1000=cfg.weights.lane_approach)
-    return phi
+    """``Phi(s)``, the lane-approach potential, ``(2,)``."""
+    return lane_approach_potential(
+        state.x[:2], state.y[:2], per_1000=cfg.weights.lane_approach)
+
+
+def _snapshot(state: LaneState, hp, primed, phi) -> RewardState:
+    return RewardState(
+        gold=state.gold[:2], xp=state.xp[:2], hp_frac=hp,
+        deaths=state.deaths[:2].astype(jnp.float32),
+        primed=primed, phi=phi)
+
+
+def _hp_frac(state: LaneState):
+    return jnp.where(state.max_hp[:2] > 0, state.hp[:2] / state.max_hp[:2], 0.0)
 
 
 def reward_init(state: LaneState,
                 cfg: RewardConfig = RewardConfig()) -> RewardState:
-    hp = jnp.where(state.max_hp[:2] > 0, state.hp[:2] / state.max_hp[:2], 0.0)
-    return RewardState(
-        gold=state.gold[:2], xp=state.xp[:2], hp_frac=hp,
-        deaths=state.deaths[:2].astype(jnp.float32),
-        cs=state.cs[:2].astype(jnp.float32),
-        primed=jnp.zeros((), bool), phi=_phi(state, cfg))
+    return _snapshot(state, _hp_frac(state), jnp.zeros((), bool),
+                     _phi(state, cfg))
 
 
 def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
-                cfg: RewardConfig = RewardConfig(), train_step=0,
-                gamma: float | None = None, *, return_terms: bool = False):
+                cfg: RewardConfig = RewardConfig(), *, gamma: float,
+                return_terms: bool = False):
     """One step of reward for both champions. Returns ``(reward(2,), new_prev)``.
 
     With ``return_terms`` it returns ``(reward, new_prev, terms)`` instead, where
@@ -274,98 +272,52 @@ def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
     potential-based term would otherwise score the jump from the previous
     episode's final state to this one's initial state as a real transition.
 
-    ``gamma`` is **required** whenever a potential is enabled, and it must be
-    the same gamma the advantage estimator uses. ``F = gamma*Phi(s') - Phi(s)``
-    is policy-invariant only under the discount it was built for; pass the
-    wrong one and the shaping silently stops being invariant while still
-    looking like it works. There is no default for exactly that reason -- a
-    default would be a number that is right by luck.
+    ``gamma`` is **required**, and it must be the same gamma the advantage
+    estimator uses. ``F = gamma*Phi(s') - Phi(s)`` is policy-invariant only
+    under the discount it was built for; pass the wrong one and the shaping
+    silently stops being invariant while still looking like it works. There
+    is no default for exactly that reason -- a default would be a number that
+    is right by luck.
     """
     w = cfg.weights
-    hp = jnp.where(state.max_hp[:2] > 0, state.hp[:2] / state.max_hp[:2], 0.0)
+    hp = _hp_frac(state)
 
-    if cfg.enable_kill or cfg.enable_tower or cfg.enable_shaping:
-        # These terms are NOT ported. They used to be documented as
-        # "multiplied by zero"; they were simply unread, so flipping one
-        # silently did nothing (`REW-06`, the `RL-004` failure class).
-        raise NotImplementedError(
-            "enable_kill / enable_tower / enable_shaping are not ported")
     d_gold = state.gold[:2] - prev.gold
-    if cfg.subtract_ambient_gold:
-        # Only once the sim actually pays it: ambient gold starts at
-        # `AMBIENT_GOLD_DELAY_MS` (90 s), and subtracting from t=0 put a
-        # policy-independent -5.7 raw into every episode's first 90 s
-        # (`REW-07`). It cancels under zero-sum at alpha=1 and only ever
-        # offset the value targets, but the value targets are what the
-        # critic fits.
-        paying = state.t_ms >= AMBIENT_GOLD_DELAY_MS
-        d_gold = d_gold - jnp.where(paying, AMBIENT_GOLD_PER_S * dt_s, 0.0)
+    # Only once the sim actually pays it: ambient gold starts at
+    # `AMBIENT_GOLD_DELAY_MS` (90 s), and subtracting from t=0 put a
+    # policy-independent -5.7 raw into every episode's first 90 s (`REW-07`).
+    paying = state.t_ms >= AMBIENT_GOLD_DELAY_MS
+    d_gold = d_gold - jnp.where(paying, AMBIENT_GOLD_PER_S * dt_s, 0.0)
     d_xp = state.xp[:2] - prev.xp
     d_hp = hp - prev.hp_frac                       # potential difference
     d_deaths = state.deaths[:2].astype(jnp.float32) - prev.deaths
-    d_cs = state.cs[:2].astype(jnp.float32) - prev.cs
 
-    raw = (w.money * d_gold
-           + w.exp * d_xp
-           + w.hp_point * d_hp
-           + w.death * d_deaths
-           + w.last_hit * d_cs)
-    raw = jnp.where(prev.primed, raw, jnp.zeros_like(raw))
-
-    # r_self - alpha * r_other
-    alpha = cfg.alpha(train_step)
-    reward = raw - alpha * raw[::-1]
+    def zs(t):
+        # unprimed -> nothing; then r_self - r_other (alpha = 1)
+        t = jnp.where(prev.primed, t, jnp.zeros_like(t))
+        return t - t[::-1]
 
     # Shaping is added AFTER the zero-sum combination, not inside it. It is
     # policy-invariant per agent; zero-summing it would make each agent's
     # shaping depend on the other's position, which is neither invariant nor
     # what the source does (``rewards[t] += shaping[t]``).
     phi = _phi(state, cfg)
-    if cfg.enable_lane_approach or cfg.enable_shaping:
-        if gamma is None:
-            raise ValueError(
-                "lane_reward needs the trainer's gamma when a potential is "
-                "enabled: F = gamma*Phi(s') - Phi(s) is policy-invariant only "
-                "under the discount it was built for. Pass cfg.ppo.gamma.")
-        shaping = gamma * phi - prev.phi
-        reward = reward + jnp.where(prev.primed, shaping, jnp.zeros_like(shaping))
-
+    terms = {
+        "money": zs(w.money * d_gold),
+        "exp": zs(w.exp * d_xp),
+        "hp_point": zs(w.hp_point * d_hp),
+        "death": zs(w.death * d_deaths),
+        "shaping": jnp.where(prev.primed, gamma * phi - prev.phi, 0.0),
+    }
+    # The sum of the per-term contributions IS the reward, so the breakdown
+    # below adds up by construction (`test_reward_terms_sum_to_reward`).
+    reward = (terms["money"] + terms["exp"] + terms["hp_point"]
+              + terms["death"] + terms["shaping"])
+    new_prev = _snapshot(state, hp, jnp.ones((), bool), phi)
     if return_terms:
-        # PER-TERM CONTRIBUTIONS, and they sum to `reward` exactly.
-        #
-        # Reported after the zero-sum combination (`t - alpha * t[::-1]`), not
-        # before, so the sum is checkable rather than indicative -- see
-        # `test_reward_terms_sum_to_reward`. Reporting the raw halves would have
-        # been easier and would not add up, which is the kind of diagnostic that
-        # gets quoted as if it did.
-        #
-        # Why this exists: the reward is a weighted sum of five terms plus a
-        # potential, and only the TOTAL was ever logged. When cs@10min moved we
-        # could not say which term moved it, and the last reward change
-        # (`RL-002`) was a reweighting -- exactly the change this answers
-        # directly instead of by inference.
-        def zs(t):
-            t = jnp.where(prev.primed, t, jnp.zeros_like(t))
-            return t - alpha * t[::-1]
-
-        terms = {
-            "money": zs(w.money * d_gold),
-            "exp": zs(w.exp * d_xp),
-            "hp_point": zs(w.hp_point * d_hp),
-            "death": zs(w.death * d_deaths),
-            "last_hit": zs(w.last_hit * d_cs),
-            "shaping": (jnp.where(prev.primed, gamma * phi - prev.phi, 0.0)
-                        if (cfg.enable_lane_approach or cfg.enable_shaping)
-                        else jnp.zeros_like(reward)),
-        }
-        return reward, RewardState(
-            gold=state.gold[:2], xp=state.xp[:2], hp_frac=hp,
-            deaths=state.deaths[:2].astype(jnp.float32),
-            cs=state.cs[:2].astype(jnp.float32),
-            primed=jnp.ones((), bool), phi=phi), terms
-
-    return reward, RewardState(
-        gold=state.gold[:2], xp=state.xp[:2], hp_frac=hp,
-        deaths=state.deaths[:2].astype(jnp.float32),
-        cs=state.cs[:2].astype(jnp.float32),
-        primed=jnp.ones((), bool), phi=phi)
+        # PER-TERM CONTRIBUTIONS, reported after the zero-sum combination so
+        # the sum is checkable rather than indicative. Only the TOTAL used to
+        # be logged, so when cs@10min moved there was no way to say which term
+        # moved it -- and the last reward change (`RL-002`) was a reweighting.
+        return reward, new_prev, terms
+    return reward, new_prev

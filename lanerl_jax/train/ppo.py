@@ -62,24 +62,39 @@ constant, but reading it against a *current* run silently inflates the number:
 the 8.876 it reports was 89% of the old maximum and would be **63%** of this
 one.
 
-**Early stopping is on the EXCESS KL, not the absolute.** An off-policy rollout
-already carries staleness drift before a single gradient is taken, so stopping
-on the absolute value stops on that. The reference is epoch 0's own mean.
+**Early stopping is on the ABSOLUTE per-minibatch KL**, measured before the
+minibatch's step (:func:`kl_stopped_epochs`). The torch stack stopped on the
+EXCESS over epoch 0's mean because its off-policy rollouts already carried
+staleness drift; under Anakin the rollout and the update use the same
+parameters, so the first minibatch's KL is zero up to roundoff and the
+absolute value is the right quantity (`PPO-05`).
+
+Removed for the baseline (2026-09-23)
+-------------------------------------
+Nothing in `PPOConfig` was unread (`PPO-12`). `decision_hz` stays here
+because ``gamma`` is defined by it; `TrainConfig.decision_hz` is now a
+read-only view of this field instead of a second copy that could disagree.
+Return normalisation is deliberately NOT here: it is the first candidate
+experiment (`PPO-02`), not baseline. The zero-sum alpha anneal, the unported
+reward terms and `PolicyConfig.frame_stack` were removed from `reward.py`,
+`policy.py` and `trainer.py`; all are recoverable from commit ``490bb38``.
 """
 from __future__ import annotations
 
-from typing import NamedTuple, Optional
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 
 from lanerl_rl.constants import BUTTON_INDEX, BUTTONS, N_SCREEN_X, N_SCREEN_Y, N_SLOTS
 
 __all__ = [
     "PPOConfig", "gamma_for_horizon", "gae", "factored_log_prob",
     "factored_entropy", "policy_loss", "value_loss", "MAX_FACTORED_ENTROPY",
-    "USES_SCREEN_HEADS", "USES_TARGET_HEAD",
+    "USES_SCREEN_HEADS", "USES_TARGET_HEAD", "kl_stopped_epochs",
+    "summarise_minibatches",
 ]
 
 
@@ -238,3 +253,104 @@ def value_loss(value, old_value, returns, cfg: PPOConfig):
     clipped_v = old_value + jnp.clip(
         value - old_value, -cfg.value_clip_eps, cfg.value_clip_eps)
     return 0.5 * jnp.maximum(unclipped, (clipped_v - returns) ** 2).mean()
+
+
+def kl_stopped_epochs(loss_fn, tx, params, opt_state, batch, rng, *,
+                      epochs: int, n_minibatches: int, target_kl: float,
+                      max_grad_norm: float):
+    """``epochs`` passes of shuffled minibatch steps with the KL early stop.
+
+    ``loss_fn(params, minibatch) -> (loss, info)``; ``info`` must carry
+    ``approx_kl``. Returns ``(params, opt_state, rng, info)`` with every
+    ``info`` leaf shaped ``(epochs, n_minibatches)``.
+
+    The stop is MASKED rather than branched, because this runs inside
+    ``scan``. The KL is measured on the params a minibatch starts from, and
+    the first minibatch whose KL is not ``<= target_kl`` is WITHHELD, as is
+    every later one, across epochs as well as minibatches. A withheld
+    minibatch keeps both params AND optimiser state, so it is a true no-op
+    rather than a zero-gradient Adam step that would still decay the moments
+    (`RL-004`). Latching before the step is `PPO-05` (SB3 checks before
+    stepping); ``~(kl <= target)`` rather than ``kl > target`` so a NaN KL
+    stops too.
+
+    Each minibatch reports ``applied`` (1 if its step was kept) and
+    ``loss_nonfinite`` (1 if its loss or KL was not finite) alongside the
+    loss's own ``info`` and ``grad_norm``/``grad_clipped``. Aggregate with
+    :func:`summarise_minibatches`, which excludes the withheld ones.
+    """
+    n = jax.tree.leaves(batch)[0].shape[0]
+
+    def epoch(carry, _):
+        params, opt_state, rng, stopped = carry
+        rng, pk = jax.random.split(rng)
+        perm = jax.random.permutation(pk, n)
+        mb = jax.tree.map(lambda x: x[perm].reshape(
+            n_minibatches, -1, *x.shape[1:]), batch)
+
+        def minibatch(carry, b):
+            params, opt_state, stopped = carry
+            (loss, info), grads = jax.value_and_grad(loss_fn, has_aux=True)(
+                params, b)
+            # Under ADAM an always-active clip still steps ~lr (Adam is
+            # invariant to gradient scale), so `grad_clipped` near 1 does not
+            # mean an lr sweep measured nothing (`PPO-10`). What clipping
+            # changes is the relative weight of the updates where it is
+            # intermittent, which is why the fraction is logged.
+            gnorm = optax.global_norm(grads)
+            info = {**info, "grad_norm": gnorm,
+                    "grad_clipped": (gnorm > max_grad_norm).astype(jnp.float32)}
+            updates, new_opt_state = tx.update(grads, opt_state, params)
+            new_params = optax.apply_updates(params, updates)
+            kl = info["approx_kl"]
+            stopped = stopped | ~(kl <= target_kl)
+            keep = ~stopped
+            params = jax.tree.map(lambda new, old: jnp.where(keep, new, old),
+                                  new_params, params)
+            opt_state = jax.tree.map(
+                lambda new, old: jnp.where(keep, new, old),
+                new_opt_state, opt_state)
+            return (params, opt_state, stopped), {
+                **info,
+                "applied": keep.astype(jnp.float32),
+                "loss_nonfinite": (~jnp.isfinite(loss) | ~jnp.isfinite(kl)
+                                   ).astype(jnp.float32)}
+
+        (params, opt_state, stopped), info = jax.lax.scan(
+            minibatch, (params, opt_state, stopped), mb)
+        return (params, opt_state, rng, stopped), info
+
+    (params, opt_state, rng, _), info = jax.lax.scan(
+        epoch, (params, opt_state, rng, jnp.asarray(False)), None,
+        length=epochs)
+    return params, opt_state, rng, info
+
+
+def summarise_minibatches(info) -> dict:
+    """Per-update scalars from :func:`kl_stopped_epochs`'s per-minibatch info.
+
+    Every loss/gradient statistic is the mean over the minibatches whose step
+    was APPLIED. The plain mean used to include the KL-stopped ones, so
+    ``grad_norm``/``grad_clipped`` averaged in gradients that were never
+    applied (`PPO-11`). NaN if no minibatch was applied, which requires the
+    very first minibatch -- measured on the rollout's own params -- to be
+    over ``target_kl``: an actor/learner disagreement or a NaN, both of which
+    the divergence guard should see.
+
+    Two scalars are over ALL minibatches, and are named for it:
+    ``kl_stopped`` (the fraction withheld) and ``loss_nonfinite`` (the
+    fraction whose loss or KL was not finite, withheld or not). The
+    divergence guard reads the latter, because a NaN-KL minibatch is by
+    construction a withheld one and the applied-only means cannot show it.
+    """
+    applied = info["applied"]
+    n = applied.sum()
+    out = {}
+    for k, v in info.items():
+        if k in ("applied", "loss_nonfinite"):
+            continue
+        tot = jnp.where(applied > 0, v, 0.0).sum()
+        out[k] = jnp.where(n > 0, tot / jnp.maximum(n, 1.0), jnp.nan)
+    out["kl_stopped"] = 1.0 - applied.mean()
+    out["loss_nonfinite"] = info["loss_nonfinite"].mean()
+    return out

@@ -31,11 +31,26 @@ That is the mirror self-play setup, and it makes the zero-sum reward meaningful
 is a later step and is a different object (a second parameter set carried on the
 env axis, not a second policy here).
 
-What is NOT here yet
---------------------
+What is NOT here
+----------------
 The KL-to-reference term (there is no BC prior to anchor to yet), league/PFSP
-opponent sampling, and the recurrent core. `PPOConfig` carries the first two so
-they are a wiring change rather than a redesign.
+opponent sampling, and a recurrent core or frame stack. None of them has a
+config field: each is an experiment with its own contract
+(`docs/EXPERIMENT_METHOD.md`), not a dormant knob. (This docstring used to
+say `PPOConfig` carried the first two; it never did.)
+
+Removed for the baseline (2026-09-23)
+-------------------------------------
+Recoverable from commit ``490bb38``:
+
+* the ``zero_sum_alpha`` metric -- alpha is now the constant 1
+  (`reward.py`), and a constant logged every update is noise;
+* ``TrainConfig.decision_hz`` as a FIELD: it duplicated
+  ``PPOConfig.decision_hz``, and the two could disagree silently (dt and the
+  episode clock from one, gamma from the other, `PPO-12`). It is now a
+  property reading ``ppo.decision_hz``;
+* ``make_train``'s hard-coded ``PolicyConfig()``: the policy config is now
+  ``TrainConfig.policy``, so the manifest records the one that ran.
 """
 from __future__ import annotations
 
@@ -59,10 +74,13 @@ from .ppo import (
     factored_entropy,
     factored_log_prob,
     gae,
+    kl_stopped_epochs,
     policy_loss,
+    summarise_minibatches,
     value_loss,
 )
-from .reward import RewardConfig, lane_reward, reward_init
+from .reward import (RewardConfig, lane_corridor_distance, lane_reward,
+                     reward_init)
 
 __all__ = ["TrainConfig", "RunnerState", "make_train"]
 
@@ -103,9 +121,15 @@ class TrainConfig(NamedTuple):
     n_minibatches: int = 4
     #: how long an episode runs. NOT the discount horizon.
     episode_s: float = 600.0
-    decision_hz: float = 30.0
     ppo: PPOConfig = PPOConfig()
     reward: RewardConfig = RewardConfig()
+    policy: PolicyConfig = PolicyConfig()
+
+    @property
+    def decision_hz(self) -> float:
+        """ONE decision rate: gamma, dt and the episode clock all read
+        ``ppo.decision_hz``. A second field here could disagree (`PPO-12`)."""
+        return self.ppo.decision_hz
 
     @property
     def episode_steps(self) -> int:
@@ -118,6 +142,9 @@ class RunnerState(NamedTuple):
     env_state: object
     reward_state: object
     rng: jax.Array
+    #: Champion-decisions so far (``n_batch`` per update). Read only for the
+    #: resume RNG fold-in and checkpoint names since the alpha anneal was
+    #: removed. int32: it wraps after ~32k updates at 256 envs x 128 steps.
     step: jax.Array
     #: ``(n_envs,)`` game-ms at which each env's CURRENT episode ends.
     #:
@@ -209,7 +236,7 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
     red_frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
                                 TOP_OUTER_TURRET[Team.BLUE], RED_NEXUS)
-    policy = LanePolicy(PolicyConfig())
+    policy = LanePolicy(cfg.policy)
     fresh = init_lane()                    # the constant pytree reset writes
     fresh_reward = reward_init(fresh, cfg.reward)
     dt_s = 1.0 / cfg.decision_hz
@@ -281,10 +308,17 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             # the shaping potential is policy-invariant only under the same
             # discount the advantage estimator uses.
             reward, rstate, rterms = lane_reward(
-                nxt, rstate, dt_s, cfg.reward, runner.step,
+                nxt, rstate, dt_s, cfg.reward,
                 gamma=cfg.ppo.gamma, return_terms=True)
-            # Phi is read BEFORE the reset masks it back to the fountain value.
-            phi = rstate.phi
+            # Distance from the lane corridor, in game units, read BEFORE the
+            # reset moves the champions back to the fountain. This is the
+            # diagnostic that actually moves: CS cannot change until a
+            # champion has walked 13,532 units AND the first wave has spawned
+            # at 90 s, so it says nothing for the first ~140 updates. Lane
+            # distance responds inside a single update. Read from positions,
+            # NOT recovered from the potential by dividing out its weight,
+            # which is 0 * inf = NaN at weight 0 (`REW-09`).
+            lane_dist = lane_corridor_distance(nxt.x[:2], nxt.y[:2])
             done = nxt.t_ms >= deadline
             # A full-length episode is one whose deadline was never shortened
             # for phase staggering -- see `RunnerState.deadline_ms`. After
@@ -299,13 +333,6 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             nxt = jax.tree.map(lambda a, b: jnp.where(done, b, a), nxt, fresh)
             rstate = jax.tree.map(lambda a, b: jnp.where(done, b, a),
                                   rstate, fresh_reward)
-            # Distance from the lane corridor, in game units, recovered from
-            # the potential. This is the diagnostic that actually moves: CS
-            # cannot change until a champion has walked 13,532 units AND the
-            # first wave has spawned at 90 s, so it says nothing for the first
-            # ~140 updates. Lane distance responds inside a single update.
-            per_1000 = cfg.reward.weights.lane_approach
-            lane_dist = -phi * (1000.0 / per_1000)
             t = Transition(
                 obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
                 action, log_prob, logits.value, reward,
@@ -362,70 +389,20 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             a = flat["adv"]
             flat["adv"] = (a - a.mean()) / (a.std() + 1e-8)
 
-        # `target_kl` is ENFORCED, over epochs and minibatches both. It was
-        # not: like `critic_lr` it was declared in `PPOConfig`, recorded in
-        # every manifest, and read by nothing -- so all four epochs ran
-        # unconditionally however far the policy had already moved. Under a
-        # trust-region method that is the difference between a step and a leap.
-        #
-        # Masked rather than branched, because this is inside `scan`: once the
-        # k3 KL estimate crosses the target, every later minibatch keeps its
-        # params AND its optimiser state, so a stopped epoch is a true no-op
-        # and not a zero-gradient Adam step (which would still decay the
-        # moments). `kl_stopped` is logged as the fraction of minibatches
-        # skipped -- a run sitting near 1.0 is a run whose lr is too high.
-        def epoch(carry, _):
-            params, opt_state, rng, stopped = carry
-            rng, pk = jax.random.split(rng)
-            perm = jax.random.permutation(pk, n_batch)
-            mb = jax.tree.map(lambda x: x[perm].reshape(
-                cfg.n_minibatches, -1, *x.shape[1:]), flat)
+        # `target_kl` is ENFORCED, over epochs and minibatches both
+        # (`RL-004`); see `ppo.kl_stopped_epochs` for the masked stop and
+        # why a withheld minibatch keeps its optimiser state too.
+        params, opt_state, rng, info = kl_stopped_epochs(
+            lambda p, b: _loss(p, b, cfg.ppo), tx, runner.params,
+            runner.opt_state, flat, runner.rng, epochs=cfg.ppo.epochs,
+            n_minibatches=cfg.n_minibatches, target_kl=cfg.ppo.target_kl,
+            max_grad_norm=cfg.ppo.max_grad_norm)
 
-            def minibatch(carry, b):
-                params, opt_state, stopped = carry
-                (loss, info), grads = jax.value_and_grad(_loss, has_aux=True)(
-                    params, b, cfg.ppo)
-                # `max_grad_norm` is 1.0 and nothing recorded whether the clip
-                # was ACTIVE. Under SGD an always-active clip would make the
-                # effective step `lr / ||g||`; under ADAM it does not -- Adam is
-                # invariant to gradient scale, so an always-active clip still
-                # steps ~lr and the lr sweep still measures lr (`PPO-10`). What
-                # clipping changes under Adam is the relative weight of updates
-                # where it is intermittent, which is why the fraction is logged.
-                gnorm = optax.global_norm(grads)
-                info = {**info, "grad_norm": gnorm,
-                        "grad_clipped": (gnorm > cfg.ppo.max_grad_norm
-                                         ).astype(jnp.float32)}
-                updates, new_opt_state = tx.update(grads, opt_state, params)
-                new_params = optax.apply_updates(params, updates)
-                # Latch BEFORE deciding whether to apply this minibatch: the
-                # KL is measured on the params this step starts from, so
-                # the minibatch that first shows it over target is the one
-                # to withhold (SB3 checks before stepping). Latching after
-                # applied one over-target step per update (`PPO-05`).
-                # Written as `~(kl <= target)` so a NaN KL also stops:
-                # `NaN > x` is False and would have sailed through.
-                stopped = stopped | ~(info["approx_kl"] <= cfg.ppo.target_kl)
-                keep = ~stopped
-                params = jax.tree.map(
-                    lambda new, old: jnp.where(keep, new, old),
-                    new_params, params)
-                opt_state = jax.tree.map(
-                    lambda new, old: jnp.where(keep, new, old),
-                    new_opt_state, opt_state)
-                return ((params, opt_state, stopped),
-                        {**info, "kl_stopped": stopped.astype(jnp.float32)})
-
-            (params, opt_state, stopped), info = jax.lax.scan(
-                minibatch, (params, opt_state, stopped), mb)
-            return (params, opt_state, rng, stopped), info
-
-        (params, opt_state, rng, _stopped), info = jax.lax.scan(
-            epoch,
-            (runner.params, runner.opt_state, runner.rng, jnp.asarray(False)),
-            None, length=cfg.ppo.epochs)
-
-        metrics = jax.tree.map(lambda x: x.mean(), info)
+        # Loss/gradient metrics are means over the APPLIED minibatches only;
+        # `kl_stopped` and `loss_nonfinite` are over all of them (`PPO-11`,
+        # `ppo.summarise_minibatches`). `kl_stopped` near 1.0 is a run whose
+        # lr is too high.
+        metrics = summarise_minibatches(info)
         metrics["reward"] = tr.reward.mean()
         # cs@10min, averaged over the episodes that actually ENDED in this
         # rollout. Sampling `env_state.cs` at the end of the rollout instead
@@ -440,15 +417,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         n_done = tr.done_full.sum()
         metrics["cs_at_10min"] = jnp.where(
             n_done > 0, tr.cs.sum() / jnp.maximum(n_done, 1), jnp.nan)
-        #: How many full episodes the mean above is over. A metric whose
-        #: denominator is invisible is how "BC = 37.3" got quoted off three
-        #: games; with staggered phases this should be ~n_envs/141 per update,
-        #: and a persistent 0 means the stagger stopped working.
+        #: The denominator of the mean above, in CHAMPION-episodes: `done_full`
+        #: is broadcast to both champions, so one finished env-episode counts
+        #: TWICE, matching `cs_at_10min` being CS per champion. With staggered
+        #: phases this is ~2 * n_envs / 141 per update at the production
+        #: config (the comment used to say n_envs/141, `PPO-11`); a persistent
+        #: 0 means the stagger stopped working. A metric whose denominator is
+        #: invisible is how "BC = 37.3" got quoted off three games.
         metrics["cs_episodes"] = n_done.astype(jnp.float32)
-        # The zero-sum mixing weight, logged because it is a function of
-        # `step` and `step` restarted at 0 on every resume (`REW-02`).
-        metrics["zero_sum_alpha"] = jnp.asarray(
-            cfg.reward.alpha(runner.step), jnp.float32)
         # SCALE diagnostics, because `value_loss` reached 542.7 in the RL-002
         # run and a loss number alone cannot say whether the critic diverged
         # or the targets grew. These say which: `returns_absmax` climbing with
@@ -520,7 +496,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
     def train(rng):
         return run_chunk(initial_runner(rng), cfg.n_updates)
 
+    def rollout(runner: RunnerState):
+        """One rollout exactly as `_update` collects it: ``(runner, Transition)``
+        with leaves ``(rollout_steps, n_envs, ...)``. For the actor/learner
+        agreement test, which needs the batch the update will see."""
+        return jax.lax.scan(_env_step, runner, None, length=cfg.rollout_steps)
+
     train.initial_runner = initial_runner
     train.run_chunk = run_chunk
+    train.rollout = rollout
     train.sim_config = sim
     return train

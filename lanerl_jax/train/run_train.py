@@ -13,7 +13,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
-from .run_manifest import RunDir
+from .ppo import MAX_FACTORED_ENTROPY
+from .run_manifest import RunDir, file_sha256
 from .trainer import TrainConfig, make_train
 
 # The shared wandb helpers live outside the package tree (`src/ahriuwu/...`) and
@@ -24,10 +25,64 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 # `DEFAULT_ROUTE_ARTIFACT` lives in `sim/config.py` with `SimConfig`; the
 # name is re-exported here because parity tools import it from this module.
-__all__ = ["main", "DEFAULT_ROUTE_ARTIFACT"]
+__all__ = ["main", "build_parser", "cli_record", "manifest_config",
+           "DEFAULT_ROUTE_ARTIFACT"]
 
 
-def main() -> None:
+def cli_record(args: argparse.Namespace) -> dict:
+    """The parsed command line as recorded in the manifest and replayed by
+    the README's "Reproducing" block (`run_manifest.reproduce_command`).
+
+    Paths are recorded as strings rather than dropped: the old record left
+    out ``--route-artifact``, ``--out-root`` and ``--resume`` altogether.
+    ``None`` means "not given, default applies" and is omitted; wandb options
+    are the logging helper's, not the run's.
+    """
+    out = {}
+    for k, v in vars(args).items():
+        if (k.startswith(("wandb", "_")) or k == "run_name"
+                or v is None):
+            continue
+        out[k] = str(v) if isinstance(v, Path) else v
+    return out
+
+
+def manifest_config(cfg: TrainConfig, args: argparse.Namespace, sim_config,
+                    n_dec: int) -> dict:
+    """Everything that defines the run, as recorded in `manifest.json`.
+
+    `PPO-12` added the policy config (it used to be a hard-coded
+    `PolicyConfig()` nothing recorded) and the route artifact by CONTENT;
+    library versions and `XLA_FLAGS` are in the manifest's `software`
+    block (`run_manifest.software_provenance`).
+    """
+    if sim_config.route_artifact is not None:
+        art = Path(sim_config.route_artifact)
+        route_prov = {
+            "path": str(art), "resolved": str(art.resolve()),
+            # The loader re-hashes the arrays against these and raises on a
+            # mismatch, so this digest is of the CONTENT that ran.
+            "content_sha256": sim_config.route_digest,
+            "manifest_sha256": file_sha256(art / "manifest.json"),
+        }
+    else:
+        route_prov = None
+    return {
+        "train": cfg, "ppo": cfg.ppo, "policy": cfg.policy,
+        "cli": cli_record(args),
+        "reward_weights": cfg.reward.weights,
+        "env_decisions": n_dec,
+        "route_artifact": route_prov,
+        # `STRUCT-003`: the ONE step configuration this run's env step used,
+        # and a digest of its arrays.
+        "sim_config": {**sim_config.describe(),
+                       "fingerprint": sim_config.fingerprint()},
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The real parser, also used by `test_run_manifest` to parse the
+    README's reproduce command back."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--envs", type=int, default=256)
     ap.add_argument("--rollout", type=int, default=128)
@@ -106,13 +161,19 @@ def main() -> None:
     try:
         from ahriuwu.utils.logging import add_wandb_args
         add_wandb_args(ap)
-        _have_wandb_args = True
+        ap.set_defaults(_have_wandb_args=True)
     except Exception as exc:                        # pragma: no cover
         print(f"wandb helpers unavailable ({exc}); --wandb disabled")
-        _have_wandb_args = False
-    a = ap.parse_args()
+        ap.set_defaults(_have_wandb_args=False)
+    return ap
 
-    ppo = cfg_ppo = TrainConfig().ppo
+
+def main() -> None:
+    ap = build_parser()
+    a = ap.parse_args()
+    _have_wandb_args = a._have_wandb_args
+
+    ppo = TrainConfig().ppo
     if a.lr is not None:
         ppo = ppo._replace(lr=a.lr)
     if a.entropy_coef is not None:
@@ -154,23 +215,12 @@ def main() -> None:
         print("WARNING: local routing disabled; Move uses the PATH-001 raw segment")
 
     built = make_train(cfg, sim_config=sim_config)
-    sim_desc = {**sim_config.describe(), "fingerprint": sim_config.fingerprint()}
+    config = manifest_config(cfg, a, sim_config, n_dec)
+    sim_desc = config["sim_config"]
     print(f"sim config {sim_desc['name']} fingerprint {sim_desc['fingerprint']}")
 
     # ---- run directory, manifest, wandb ---------------------------------
-    cli = {k: v for k, v in vars(a).items()
-           if not k.startswith("wandb") and v is not None
-           and not isinstance(v, Path)}
-    run = RunDir(a.out_root, a.tag,
-                 {"train": cfg, "ppo": cfg.ppo, "cli": cli,
-                  "reward_weights": __import__(
-                      "lanerl_jax.train.reward", fromlist=["RewardWeights"]
-                  ).RewardWeights()._asdict(),
-                  "env_decisions": n_dec,
-                  # `STRUCT-003`: the ONE step configuration this run's env
-                  # step used, and a digest of its arrays.
-                  "sim_config": sim_desc},
-                 notes=a.notes)
+    run = RunDir(a.out_root, a.tag, config, notes=a.notes)
     print(f"run dir {run.path}")
     # The wandb run NAME is the run-dir id, so a chart and a checkpoint can be
     # matched without opening either. init_wandb() reads args.run_name.
@@ -217,7 +267,7 @@ def main() -> None:
             payload = from_bytes(
                 {"params": runner.params, "opt_state": runner.opt_state}, raw)
             payload["step"] = runner.step
-            print("WARNING: checkpoint has no `step`; the reward anneal "
+            print("WARNING: checkpoint has no `step`; the step counter "
                   "restarts from 0", flush=True)
         # A resumed run must not replay the seed's RNG stream from the
         # start: fold the restored step in.
@@ -235,7 +285,7 @@ def main() -> None:
         print(f"resumed params + opt_state from {a.resume}")
     jax.block_until_ready(runner)
 
-    parts, t0 = [], time.perf_counter()
+    parts, t0, diverged = [], time.perf_counter(), False
     for ci in range(n_chunks + (1 if rem else 0)):
         n = chunk if ci < n_chunks else rem
         runner, mc = step_fn(runner, n)
@@ -267,7 +317,7 @@ def main() -> None:
         print(f"  chunk {ci:>3} upd {upd:>5} reward {row['reward']:+.5f} "
               f"entropy {row['entropy']:.3f} kl {row['approx_kl']:.4f} "
               f"vloss {row['value_loss']:.3f} "
-              + (f"cs {np.mean(done):.2f} (n={row['cs_episodes']:.0f})"
+              + (f"cs {np.mean(done):.2f} (n={row['cs_episodes']:.0f} champion-episodes)"
                  if done.size else "cs -"), flush=True)
         # DIVERGENCE GUARD. A run whose loss has gone non-finite is producing
         # nothing but wall-clock, and the RL-002 log shows `value_loss` going
@@ -277,8 +327,13 @@ def main() -> None:
         # mid-chunk hides behind the finite updates before it under
         # `nanmean` (`PPO-07`), and `reward` stays finite regardless
         # because the sim is driven by sampled actions.
+        # The loss metrics are means over APPLIED minibatches (`PPO-11`), and
+        # a NaN-KL minibatch is never applied, so `loss_nonfinite` (over ALL
+        # minibatches) is what sees a NaN that the stop withheld.
         bad = [k for k in ("policy_loss", "value_loss", "entropy", "approx_kl")
                if not np.all(np.isfinite(np.asarray(mc[k])))]
+        if np.any(np.asarray(mc["loss_nonfinite"]) > 0):
+            bad.append("loss_nonfinite")
         params_finite = all(bool(np.all(np.isfinite(np.asarray(p))))
                             for p in jax.tree.leaves(runner.params))
         if a.ckpt_every and (ci + 1) % a.ckpt_every == 0 and not bad \
@@ -298,14 +353,22 @@ def main() -> None:
             run.set_results(diverged_at_update=upd, diverged_metrics=bad)
             print(f"\nDIVERGED at update {upd}: {bad} non-finite. "
                   f"Stopping; see {run.path}", flush=True)
+            diverged = True
             break
 
     m = jax.tree.map(lambda *xs: np.concatenate([np.asarray(x) for x in xs]),
                      *parts) if len(parts) > 1 else \
         jax.tree.map(np.asarray, parts[0])
     out = (runner, m)
-    run.save(int(np.asarray(runner.step)), cfg.n_updates,
-             {"params": runner.params, "opt_state": runner.opt_state})
+    # `step` too, like the periodic saves: without it a resume from the final
+    # checkpoint took the "old checkpoint" path and restarted the counter.
+    # NOT after a divergence: this used to run after the guard's `break` and
+    # overwrite `ckpt_latest` with the non-finite params the guard had just
+    # kept out of it (`PPO-07`).
+    if not diverged:
+        run.save(int(np.asarray(runner.step)), cfg.n_updates,
+                 {"params": runner.params, "opt_state": runner.opt_state,
+                  "step": runner.step})
     jax.block_until_ready(out)
     first = time.perf_counter() - t0
 
@@ -329,7 +392,9 @@ def main() -> None:
             "value_explained_var", "grad_norm", "lane_dist", "cs_at_10min")
     print(f"{'upd':>5}" + "".join(f"{c:>20}" if len(c) > 11 else f"{c:>12}"
                                     for c in cols))
-    for i in range(0, cfg.n_updates, a.every):
+    # len(m), not n_updates: a diverged run stops early and indexing past
+    # its last update raised before the results were written.
+    for i in range(0, len(np.asarray(m["reward"])), a.every):
         row = "".join(
             f"{float(np.asarray(m[c])[i]):>20.4f}" if len(c) > 11
             else f"{float(np.asarray(m[c])[i]):>12.4f}" for c in cols)
@@ -337,8 +402,9 @@ def main() -> None:
     print()
     e0 = float(np.asarray(m["entropy"])[0])
     e1 = float(np.asarray(m["entropy"])[-1])
-    print(f"entropy {e0:.3f} -> {e1:.3f} of a 14.099 uniform maximum "
-          f"({100 * e1 / 14.099:.0f}%)")
+    # The MASKED ceiling (`PPO-01`); 14.099 counted heads no button uses.
+    print(f"entropy {e0:.3f} -> {e1:.3f} of a {MAX_FACTORED_ENTROPY:.3f} "
+          f"masked maximum ({100 * e1 / MAX_FACTORED_ENTROPY:.0f}%)")
     print(f"mean reward first/last update: "
           f"{float(np.asarray(m['reward'])[0]):+.5f} -> "
           f"{float(np.asarray(m['reward'])[-1]):+.5f}")

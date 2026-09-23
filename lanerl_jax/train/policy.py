@@ -43,6 +43,16 @@ Scaling the trunk is what actually makes the start uniform.
 
 The value head keeps a full-scale initialisation: it is a regression, not a
 distribution, and shrinking it only makes the critic start further from useful.
+
+Removed for the baseline (2026-09-23)
+-------------------------------------
+``PolicyConfig.frame_stack`` (4): declared, recorded, read by nothing -- the
+policy has never stacked frames (`PPO-03`). A memory mechanism is an
+experiment with its own contract, not a dormant field. Recoverable from
+commit ``490bb38``. The input widths (``n_slots``/``entity_dim``/
+``self_dim``/``global_dim``) were in the same state and are now checked
+against the observation instead of removed, because they are the contract
+with `obs/builder.py`.
 """
 from __future__ import annotations
 
@@ -67,6 +77,10 @@ __all__ = ["PolicyConfig", "LanePolicy", "ActionLogits", "apply_flattened_batch"
 
 
 class PolicyConfig(NamedTuple):
+    #: The input widths are CHECKED against the observation on every call
+    #: (`LanePolicy.__call__`), not merely recorded: flax infers them from
+    #: the arrays, so without the check these four were declared, written
+    #: into manifests and read by nothing (`RL-004` class).
     n_slots: int = N_SLOTS
     entity_dim: int = ENTITY_DIM
     self_dim: int = SELF_DIM
@@ -79,7 +93,6 @@ class PolicyConfig(NamedTuple):
     core_dim: int = 512
     mlp_hidden: int = 1024
     mlp_layers: int = 4
-    frame_stack: int = 4
     n_buttons: int = N_BUTTONS
     n_screen_x: int = N_SCREEN_X
     n_screen_y: int = N_SCREEN_Y
@@ -130,6 +143,15 @@ class LanePolicy(nn.Module):
     @nn.compact
     def __call__(self, entities, pad_mask, self_vec, global_vec):
         c = self.cfg
+        # Static shapes, so this is a trace-time check with no runtime cost.
+        got = (tuple(entities.shape[-2:]), tuple(pad_mask.shape[-1:]),
+               tuple(self_vec.shape[-1:]), tuple(global_vec.shape[-1:]))
+        want = ((c.n_slots, c.entity_dim), (c.n_slots,), (c.self_dim,),
+                (c.global_dim,))
+        if got != want:
+            raise ValueError(
+                f"observation widths {got} do not match PolicyConfig {want} "
+                "(entities, pad_mask, self_vec, global_vec)")
         tokens = nn.Dense(c.d_model, **TRUNK)(entities)
         # `key_padding_mask=~valid` in the PyTorch model: masked slots must not
         # be attended to. An empty slot is all-zero, which is NOT the same as

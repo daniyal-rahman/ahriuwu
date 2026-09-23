@@ -108,7 +108,10 @@ for m in glob.glob(os.path.join(os.environ.get("OUT_ROOT", "lanerl_jax/runs/trai
                  r.get("entropy_last"), r.get("wall_s"),
                  r.get("diverged_at_update")))
 rows.sort(key=lambda x: (-(x[4] if x[4] == x[4] else -1e9)))
-print(f"{'arm':<26}{'lr':>9}{'ent':>8}{'n_ep':>6}{'CS(last50)':>12}"
+# `n_upd`: UPDATES that carried a cs@10min sample (results.cs_at_10min holds
+# one per-update mean each), not episodes -- it was headed `n_ep` (PPO-11).
+# CS(last50) is the mean of the last 50 such per-update means.
+print(f"{'arm':<26}{'lr':>9}{'ent':>8}{'n_upd':>6}{'CS(last50)':>12}"
       f"{'entropy':>9}{'wall_s':>8}  diverged")
 for r in rows:
     print(f"{r[0]:<26}{r[1]:>9.0e}{r[2]:>8.4f}{r[3]:>6}{r[4]:>12.2f}"

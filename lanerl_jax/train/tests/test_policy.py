@@ -51,6 +51,19 @@ def test_dimensions_match_the_production_config():
     assert cfg.n_slots == 32
 
 
+def test_input_widths_are_checked_against_the_config(built):
+    """`n_slots`/`entity_dim`/`self_dim`/`global_dim` were declared, recorded
+    and read by nothing (flax infers widths from the arrays), so an
+    observation that drifted from the config was silently accepted
+    (`RL-004` class). They are now a checked contract."""
+    p, v, (ent, mask, sv, gv), cfg = built
+    with pytest.raises(ValueError, match="PolicyConfig"):
+        p.apply(v, ent, mask, jnp.zeros((3, cfg.self_dim + 1)), gv)
+    wide = LanePolicy(cfg._replace(entity_dim=cfg.entity_dim + 1))
+    with pytest.raises(ValueError, match="PolicyConfig"):
+        wide.init(jax.random.key(0), ent, mask, sv, gv)
+
+
 def test_masked_slots_cannot_be_targeted(built):
     """A padded slot must be unreachable, not merely unlikely."""
     p, v, (ent, _, sv, gv), cfg = built

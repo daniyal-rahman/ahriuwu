@@ -62,10 +62,9 @@ def test_the_potential_is_zero_in_lane_and_negative_in_the_fountain():
 
 
 #: What one melee minion is worth under the CURRENT weights. Priced from the
-#: patch (melee 20 gold, 77 xp) rather than from `RewardWeights.last_hit`,
-#: which is now 0.0: gold and xp are the primary terms and the flat per-kill
-#: term was removed because it double-counted gold and paid the same for a
-#: 10-gold caster as a 30-gold cannon. The INVARIANT this test defends is
+#: patch (melee 20 gold, 77 xp): gold and xp are the primary terms and the
+#: flat per-last-hit term was removed because it double-counted gold and paid
+#: the same for a 10-gold caster as a 30-gold cannon. The INVARIANT this test defends is
 #: unchanged -- shaping must guide, never compete with farming -- only the
 #: reference moved, so it is computed here instead of read off a weight that
 #: no longer carries it.
@@ -73,7 +72,7 @@ MELEE_GOLD, MELEE_XP = 20.0, 77.0
 
 
 def _one_melee_last_hit(w: RewardWeights) -> float:
-    return w.money * MELEE_GOLD + w.exp * MELEE_XP + w.last_hit
+    return w.money * MELEE_GOLD + w.exp * MELEE_XP
 
 
 def test_the_whole_walk_is_worth_less_than_one_last_hit():
@@ -85,7 +84,7 @@ def test_the_whole_walk_is_worth_less_than_one_last_hit():
     w = RewardWeights()
     one_hit = _one_melee_last_hit(w)
     assert one_hit > 0.0, (
-        "no term pays for a last hit at all -- gold, xp and last_hit are all "
+        "no term pays for a last hit at all -- gold and xp are both "
         "zero, and the walk-versus-farm comparison below is then vacuous")
     spawn = phi([CHAMPION_SPAWN[Team.BLUE][0]], [CHAMPION_SPAWN[Team.BLUE][1]])
     walk = 0.0 - float(spawn[0])
@@ -195,13 +194,12 @@ def test_shaping_without_the_trainers_gamma_is_refused():
 
     F is policy-invariant under the discount it was built for and no other.
     A mismatched gamma leaves the term looking like it works while quietly
-    no longer being invariant -- so this raises rather than guessing.
+    no longer being invariant -- so it is a required keyword with no default.
     """
     state = init_lane()
     cfg = RewardConfig()
-    assert cfg.enable_lane_approach
     rs = reward_init(state, cfg)
-    with pytest.raises(ValueError, match="gamma"):
+    with pytest.raises(TypeError, match="gamma"):
         lane_reward(state, rs, dt_s=1 / 30.0, cfg=cfg)
 
 
@@ -245,7 +243,7 @@ def test_walking_towards_lane_pays_and_walking_away_charges():
 def test_reward_terms_sum_to_reward():
     """The per-term breakdown must ADD UP, not merely indicate.
 
-    Reported after the zero-sum combination (`t - alpha * t[::-1]`) rather than
+    Reported after the zero-sum combination (`t - t[::-1]`) rather than
     before, precisely so this assertion can exist. Raw halves would have been
     easier to produce and would not sum to the reward -- and a diagnostic that
     nearly adds up is the kind that gets quoted as if it did.
@@ -262,7 +260,7 @@ def test_reward_terms_sum_to_reward():
     s0 = init_lane()
     rs = reward_init(s0, cfg)
     # prime it, then move gold/xp/hp/cs/deaths so every term is non-zero
-    _, rs = lane_reward(s0, rs, 1 / 30.0, cfg, 0, gamma=gamma)
+    _, rs = lane_reward(s0, rs, 1 / 30.0, cfg, gamma=gamma)
     s1 = s0.replace(
         gold=s0.gold.at[:2].set(
             s0.gold[:2] + jnp.asarray([37.0, 11.0], s0.gold.dtype)),
@@ -274,16 +272,39 @@ def test_reward_terms_sum_to_reward():
         deaths=s0.deaths.at[:2].set(
             s0.deaths[:2] + jnp.asarray([1, 0], s0.deaths.dtype)),
         x=s0.x.at[:2].set(s0.x[:2] + 900.0))
-    reward, _, terms = lane_reward(s1, rs, 1 / 30.0, cfg, 0, gamma=gamma,
+    reward, _, terms = lane_reward(s1, rs, 1 / 30.0, cfg, gamma=gamma,
                                    return_terms=True)
     total = sum(np.asarray(v) for v in terms.values())
     np.testing.assert_allclose(total, np.asarray(reward), rtol=0, atol=2e-5)
     # ... and the breakdown is not trivially all-zero, which would satisfy the
-    # assertion above while reporting nothing. Every one of the five weighted
-    # terms was perturbed here, so every one must be non-zero; `last_hit` is
-    # weighted 0.0 by design (see RewardWeights) and is allowed to be flat.
+    # assertion above while reporting nothing. Every weighted term was
+    # perturbed here, so every one must be non-zero.
     nonzero = {k: float(np.abs(np.asarray(v)).max()) for k, v in terms.items()}
+    assert set(nonzero) == {"money", "exp", "hp_point", "death", "shaping"}
     for k, v in nonzero.items():
-        if k == "last_hit":
-            continue
         assert v > 0.0, f"reward term {k!r} is identically zero: {nonzero}"
+
+
+def test_zero_sum_is_exact_alpha_one_from_the_first_step():
+    """Alpha is the CONSTANT 1: `r_blue = raw_blue - raw_red` on the very first
+    primed step, with hand numbers.
+
+    The removed anneal started at 0.5 and was clocked in champion-decisions,
+    so it ended at update ~31 and restarted on every resume (`PPO-06`). Under
+    it this step paid blue `0.0335 * (37 - 0.5 * 11) = 1.05525`.
+
+    Before 90 s no ambient gold is subtracted (`REW-07`), so the money term is
+    exactly `0.0335 * (37 - 11) = 0.871` for blue and `-0.871` for red. The
+    per-agent lane potential is not zero-summed, so it is taken out first.
+    """
+    cfg = RewardConfig()
+    s0 = init_lane()
+    assert float(s0.t_ms) < 90_000.0
+    rs = reward_init(s0, cfg)
+    _, rs = lane_reward(s0, rs, 1 / 30.0, cfg, gamma=0.999)       # prime
+    s1 = s0.replace(gold=s0.gold.at[:2].set(
+        s0.gold[:2] + jnp.asarray([37.0, 11.0], s0.gold.dtype)))
+    reward, _, terms = lane_reward(s1, rs, 1 / 30.0, cfg, gamma=0.999,
+                                   return_terms=True)
+    unshaped = np.asarray(reward) - np.asarray(terms["shaping"])
+    np.testing.assert_allclose(unshaped, [0.871, -0.871], rtol=0, atol=1e-5)

@@ -147,6 +147,69 @@ def test_the_actor_and_the_learner_agree_on_log_probs():
                                rtol=0, atol=1e-6)
 
 
+def test_rollout_and_update_log_probs_agree_over_every_head_class():
+    """The agreement check THROUGH THE LOOP, on the batch the update sees.
+
+    The test above calls `factored_log_prob` twice on one hand-built
+    observation, so it can only catch a nondeterministic policy; it cannot see
+    the rollout's vmap/stack, the flatten into minibatches, or a head read in a
+    different order. Here the rollout runs as `_update` runs it, and:
+
+    1. every stored log-prob is recomputed from the stored observation and
+       action under the same params, per sample, across all four button
+       classes of the `PPO-01` masking (none / screen / screen+target /
+       target) -- the batch is asserted to contain each;
+    2. one full update at ``lr = critic_lr = 0`` (params cannot move) must
+       then report ``approx_kl`` ~ 0, no clipping and no KL stop, because
+       every minibatch compares the rollout's log-probs with the loss path's
+       recomputation under the SAME params.
+
+    The same run carries ``lane_approach = 0``: `lane_dist` must still read
+    the ~8,000-unit fountain distance. It used to be recovered from the
+    potential as ``-phi * 1000 / weight`` -- 0/0 = NaN at weight 0 (`REW-09`).
+    """
+    from lanerl_jax.train.ppo import factored_log_prob as flp
+    from lanerl_rl import constants as C
+
+    w = SMALL.reward.weights._replace(lane_approach=0.0)
+    cfg = SMALL._replace(
+        n_updates=1,
+        ppo=SMALL.ppo._replace(lr=0.0, critic_lr=0.0),
+        reward=SMALL.reward._replace(weights=w))
+    built = make_train(cfg)
+    r0 = built.initial_runner(jax.random.PRNGKey(5))
+
+    _, tr = jax.jit(built.rollout)(r0)
+    policy = LanePolicy(cfg.policy)
+    n = cfg.rollout_steps * cfg.n_envs * 2
+    lg = policy.apply(r0.params,
+                      tr.obs_entities.reshape(n, *tr.obs_entities.shape[-2:]),
+                      tr.obs_mask.reshape(n, -1), tr.obs_self.reshape(n, -1),
+                      tr.obs_global.reshape(n, -1))
+    act = tuple(a.reshape(n) for a in tr.action)
+    again = flp((lg.button, lg.screen_x, lg.screen_y, lg.target), act)
+    np.testing.assert_allclose(np.asarray(again),
+                               np.asarray(tr.log_prob).reshape(n),
+                               rtol=0, atol=1e-5)
+    buttons = set(np.asarray(act[0]).tolist())
+    classes = {"none": {C.BUTTON_INDEX[b] for b in ("noop", "recall", "q", "w", "e")},
+               "screen": {C.BUTTON_INDEX["move"]},
+               "screen+target": {C.BUTTON_INDEX["attack_move"]},
+               "target": {C.BUTTON_INDEX["r"]}}
+    missing = [k for k, v in classes.items() if not (buttons & v)]
+    assert not missing, f"batch lacks button classes {missing}: {sorted(buttons)}"
+
+    r1, m = jax.jit(built.run_chunk, static_argnums=1)(r0, 1)
+    for a, b in zip(jax.tree.leaves(r0.params), jax.tree.leaves(r1.params)):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+    assert float(np.asarray(m["approx_kl"])[0]) < 1e-8
+    assert float(np.asarray(m["clip_frac"])[0]) == 0.0
+    assert float(np.asarray(m["kl_stopped"])[0]) == 0.0
+    d = float(np.asarray(m["lane_dist"])[0])
+    assert np.isfinite(d) and 7_000 < d < 9_000, (
+        f"lane_dist {d} at shaping weight 0 -- it must not depend on the weight")
+
+
 def test_a_sampled_action_never_lands_on_a_masked_slot():
     """A masked slot must be unreachable by SAMPLING, not merely improbable.
 

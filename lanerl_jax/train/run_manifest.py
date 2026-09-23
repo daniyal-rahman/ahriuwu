@@ -43,7 +43,71 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-__all__ = ["RunDir", "git_provenance"]
+__all__ = ["RunDir", "git_provenance", "software_provenance",
+           "reproduce_command", "file_sha256"]
+
+#: The launcher the README's "Reproducing" block invokes.
+LAUNCHER = "slurm/rl_train.sbatch"
+
+
+def software_provenance() -> dict:
+    """Library versions and the XLA environment (`PPO-12`).
+
+    A numerics change between jax/jaxlib/flax/optax releases, or an
+    ``XLA_FLAGS`` difference between two nodes, changes a run without
+    changing a line of this repo, so the git sha alone cannot say what ran.
+    """
+    import importlib.metadata as md
+
+    def ver(pkg: str) -> str:
+        try:
+            return md.version(pkg)
+        except md.PackageNotFoundError:
+            return "absent"
+
+    return {
+        "packages": {p: ver(p) for p in
+                     ("jax", "jaxlib", "flax", "optax", "numpy",
+                      "jax-cuda12-plugin", "jax-cuda12-pjrt")},
+        "env": {k: os.environ.get(k) for k in
+                ("XLA_FLAGS", "XLA_PYTHON_CLIENT_PREALLOCATE",
+                 "XLA_PYTHON_CLIENT_MEM_FRACTION", "JAX_PLATFORMS",
+                 "JAX_ENABLE_X64", "CUDA_VISIBLE_DEVICES")},
+    }
+
+
+def file_sha256(path: Path, chunk: int = 1 << 20) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        while b := f.read(chunk):
+            h.update(b)
+    return h.hexdigest()
+
+
+def reproduce_command(tag: str, cli: Mapping[str, Any]) -> str:
+    """The launcher command that re-runs a recorded ``cli`` dict.
+
+    It must be a command argparse ACCEPTS: a ``store_true`` flag is emitted
+    bare when set and omitted when not (the old README wrote
+    ``--no-route-table False``, which argparse rejects), and every value is
+    shell-quoted (``--notes`` with spaces was emitted unquoted, `PPO-12`).
+    ``test_run_manifest`` parses the result back with the real parser.
+    """
+    import shlex
+
+    parts = [f"sbatch {LAUNCHER}", f"--tag {shlex.quote(str(tag))}"]
+    for k, v in sorted(cli.items()):
+        if k == "tag" or v is None:
+            continue
+        flag = "--" + k.replace("_", "-")
+        if isinstance(v, bool):
+            if v:
+                parts.append(flag)
+            continue
+        parts.append(f"{flag} {shlex.quote(str(v))}")
+    return " \\\n    ".join(parts)
 
 
 def _run(cmd: list[str]) -> str:
@@ -184,6 +248,7 @@ class RunDir:
                 "gpu": _run(["nvidia-smi", "--query-gpu=name",
                              "--format=csv,noheader"]),
             },
+            "software": software_provenance(),
             "config": _jsonable(config),
             "checkpoints": [],
             "results": {},
@@ -210,6 +275,7 @@ class RunDir:
 
 Started `{m['started_utc']}` on `{h['hostname']}`{f" (slurm job {h['slurm_job']})" if h['slurm_job'] else ''}
 GPU: {h['gpu'] or 'none'} · Python {h['python']}
+{' · '.join(f"{k} {v}" for k, v in m.get('software', {}).get('packages', {}).items() if v != 'absent')} · XLA_FLAGS `{m.get('software', {}).get('env', {}).get('XLA_FLAGS') or ''}`
 
 ## What code ran
 
@@ -239,8 +305,7 @@ GPU: {h['gpu'] or 'none'} · Python {h['python']}
 
 ```bash
 git checkout {g['sha']}
-sbatch slurm/rl_train.sbatch --tag {m['tag']} \\
-{chr(10).join(f"    --{k.replace('_','-')} {v}" for k, v in sorted(m['config'].get('cli', {}).items()))}
+{reproduce_command(m['tag'], m['config'].get('cli', {}))}
 ```
 
 Metrics: one JSON object per chunk in `metrics.jsonl`.
