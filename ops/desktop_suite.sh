@@ -34,7 +34,11 @@ run() {  # file mem cores
     fi
 }
 export -f run
-ls lanerl_jax/sim/tests/test_*.py \
+# Files that load the full route table need more than a small per-file cap;
+# they run after the parallel batch, one at a time, at 10G.
+HEAVY='test_local_pathing.py'
+ls lanerl_jax/sim/tests/test_*.py | grep -v -E "$HEAVY" \
   | xargs -P "$par" -I{} bash -c 'run {} '"$mem"' 2'
+for h in $(echo "$HEAVY" | tr '|' ' '); do run "lanerl_jax/sim/tests/$h" 10G 4; done
 REMOTE
 # (summary: grep -c ^PASS / ^FAIL on the log)
