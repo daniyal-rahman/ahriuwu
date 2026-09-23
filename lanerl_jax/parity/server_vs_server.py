@@ -267,8 +267,15 @@ def main(argv=None) -> None:
         print(f"== {kind}: {n} shared unit-ticks ==")
         rows = sorted(set(list(_FIELDS) + ["position_linf"]))
         for name in rows:
-            denom = totals[kind].get(
-                (name if name == "position_linf" else name) + "_n", 0)
+            # The denominator for `position_linf` is written as `position_n`
+            # (see the increment above), so it needs the mapping. The previous
+            # expression was `(name if name == "position_linf" else name)`,
+            # which is `name` in BOTH branches -- it looked up `position_linf_n`,
+            # got 0, and `continue`d. The position row was therefore never
+            # printed at all, whatever the L-inf residual was, and `FLOOR-001`
+            # quoted a position floor this tool could not have produced.
+            denom_key = ("position" if name == "position_linf" else name) + "_n"
+            denom = totals[kind].get(denom_key, 0)
             if not denom:
                 continue
             miss = per_kind[kind].get(name, 0)

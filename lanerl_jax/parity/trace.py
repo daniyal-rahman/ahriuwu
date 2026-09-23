@@ -219,6 +219,17 @@ class AIInternal:
     #: that `aadelay` rounds to.
     aa_delay_bits: Optional[int] = None
     aa_cast_bits: Optional[int] = None
+    #: `hp` / `mhp` / `mo` / `adbits`, added 2026-09-22. `hp` and `move_order`
+    #: are scored by the parity report but were absent from this stream, so they
+    #: were the only two families with no order-dependence floor and the only
+    #: two that could not be classified under `GATE1-004`. `adbits` is
+    #: `STAT-003`: the observation stream rounds champion AD to 2 dp, which
+    #: bounds level-1 AD to [78.135, 78.145) without pinning it, and the exact
+    #: float is 78.13500213623047.
+    hp_q: Optional[int] = None
+    max_hp_q: Optional[int] = None
+    move_order_raw: Optional[int] = None
+    attack_damage_bits: Optional[int] = None
     #: `status` -- the raw `StatusFlags` word. The packed bits above say that a
     #: gate was shut; this says WHICH flag shut it.
     status_flags: Optional[int] = None
@@ -676,6 +687,11 @@ def parse_internal(kind: str, body: str) -> AIInternal | MissileInternal:
                 values.get("aawindupbits", "-"), "AA windup bits"),
             aa_thresh_bits=_optional_int(
                 values.get("aathreshbits", "-"), "AA windup threshold bits"),
+            hp_q=_optional_int(values.get("hp", "-"), "current health"),
+            max_hp_q=_optional_int(values.get("mhp", "-"), "max health"),
+            move_order_raw=_optional_int(values.get("mo", "-"), "move order"),
+            attack_damage_bits=_optional_int(
+                values.get("adbits", "-"), "attack damage bits"),
             aa_delay_bits=_optional_int(
                 values.get("aadelaybits", "-"), "AA delay accumulator bits"),
             aa_cast_bits=_optional_int(

@@ -53,40 +53,59 @@ _ROOT = Path(__file__).resolve().parents[3]
 _TRACE = _ROOT / "lanerl_jax/parity/trace.py"
 _INJECT = _ROOT / "lanerl_jax/parity/inject.py"
 
+#: dump key -> why it is deliberately NOT PARSED by `trace.py`.
+#:
+#: A separate list from `_WAIVED`, because the chain has two stages and they
+#: need different exemptions: published->parsed, then parsed->injected. Putting
+#: an unparsed field in `_WAIVED` made the staleness check fire on it, which was
+#: correct -- a waiver naming a field the scrape never sees is stale
+#: documentation for the stage it claims to cover.
+_NOT_PARSED = {
+    "aacdraw": "quantised duplicate of aacdbits; kept in the dump so older "
+               "corpora stay readable, but aacdbits is what anything new parses",
+}
+
 #: dump key -> why it does not have to reach `inject.py`.
+#:
+#: PRUNED 2026-09-23. This list had 32 entries of which 15 named fields that
+#: `inject.py` ACTUALLY CONSUMES -- aacd, aibuffs, aihelp, aiignore, aiwp,
+#: damage, id, owner, speed, wpkey, wps, x, xbits, y, ybits. A waiver on a
+#: consumed field protects nothing today and silently permits its removal
+#: tomorrow, which is the opposite of the point. The dangerous one was `aacd`,
+#: waived as "superseded by aacdbits" while being the live FALLBACK for
+#: recordings older than 2026-09-21: delete that fallback as dead code and this
+#: test would still have passed while every historical corpus injected
+#: aa_cooldown = 0. Those 15 are gone, so their consumption is now enforced.
+#: `aahelp` is also gone -- it was a typo for `aihelp` and was never a dump key,
+#: so the staleness test below could never have flagged it.
 _WAIVED = {
-    "aacd": "superseded by `aacdbits`, which is the same quantity unclamped",
     "aadelay": "accumulator; the port needs the REMAINDER, which is aawindupbits",
     "aacast": "cast-time accumulator; not part of the injected state",
-    "aacdraw": "quantised duplicate of aacdbits, kept for historical corpora",
     "aagate": "AA-005 diagnostic: the gate CONDITIONS, read but never injected",
     "status": "raw StatusFlags word, a diagnostic beside aagate",
     "aathreshbits": "windup threshold; only needed if the remainder were derived",
     "aadelaybits": "as aadelay, exact",
     "aacastbits": "as aacast, exact",
-    "aahelp": "call-for-help map, injected via `help` under a different name",
-    "id": "identity, not state",
     "kind": "identity, not state",
     "team": "identity, not state",
-    "owner": "missile identity, not unit state",
     "coll": "collision-cache diagnostic",
     "collbits": "collision-cache diagnostic",
     "cr": "static profile constant, not per-tick state",
     "pr": "static profile constant, not per-tick state",
     "h": "hash field of the canonical row",
     "n": "entity count of the canonical row",
-    "speed": "read from the profile table, not injected per unit",
-    "damage": "read from the profile table, not injected per unit",
-    "x": "position, injected via xbits where available",
-    "y": "position, injected via ybits where available",
-    "xbits": "position bits, consumed through the position path",
-    "ybits": "position bits, consumed through the position path",
-    "wps": "waypoint list, consumed through `waypoints`",
-    "wpkey": "waypoint cursor, consumed through `waypoints`",
-    "aiwp": "lane waypoint cursor, consumed via lane_waypoint_key",
-    "aibuffs": "buff phase, consumed via buffs_phase",
-    "aiignore": "ignore list, consumed via `ignored`",
-    "aihelp": "call-for-help map, consumed via `help`",
+    #: Parsed 2026-09-23 for DIAGNOSTIC reads, not for injection.
+    #: `hp`/`mhp`/`mo` duplicate quantities the canonical row already injects;
+    #: they are parsed off the per-unit stream so `server_vs_server.py` and
+    #: `floor_pool.py` can measure their order-dependence floor -- `hp` and
+    #: `move_order` were the only two scored families without one, and so the
+    #: only two that could not be classified under `GATE1-004`. `adbits` pinned
+    #: `STAT-003`'s exact level-1 AD (78.13500213623047) where the observation
+    #: stream's 2 dp rounding could only bound it to [78.135, 78.145).
+    "hp": "canonical row already injects it; parsed for the order-floor measure",
+    "mhp": "as hp",
+    "mo": "canonical row already injects move_order; parsed for the floor measure",
+    "adbits": "diagnostic: pinned STAT-003's exact level-1 AD, not injected",
 }
 
 
@@ -151,41 +170,61 @@ def test_every_parsed_field_is_injected_or_waived():
 
 
 def test_waivers_are_live():
-    """A waiver for a field that no longer exists is stale documentation."""
-    parsed = _parsed_fields()
-    known = set(parsed) | {
-        # canonical-row keys, not part of the AIInternal scrape
-        "h", "n", "cr", "pr", "aacdraw", "coll", "collbits", "wps", "wpkey",
-        "status", "aagate", "aathreshbits", "aadelaybits", "aacastbits",
-        "aahelp", "aibuffs",
-    }
-    stale = sorted(k for k in _WAIVED if k not in known)
-    assert not stale, (
-        f"waivers for fields that are no longer parsed: {stale}. "
-        "Remove them so the waiver list stays a statement about the present."
-    )
+    """A waiver for a field that is not parsed, or that IS consumed, is wrong.
 
+    The previous version unioned in a hardcoded list of 16 names that happened
+    to contain every phantom, so it could not fire on any of them -- including
+    `aahelp`, which was never a dump key at all.
 
-def test_scrape_would_catch_the_bugs_it_was_written_for():
-    """Negative control. A completeness check that cannot fail is decoration.
-
-    Rebuild the PRE-FIX injector by deleting the two consumption sites added
-    on 2026-09-22, and assert both fields show up as orphans. The first
-    version of `_parsed_fields` failed exactly this and passed everything
-    else.
+    Two failure modes, both real and both previously invisible:
+      * a waiver whose field is not parsed is stale documentation;
+      * a waiver whose field IS consumed masks a live site (see `_WAIVED`).
     """
     parsed = _parsed_fields()
-    for key in ("aihad", "aacdbits"):
-        assert key in parsed, f"{key} is not even parsed -- the scrape is blind"
-    pre_fix = (_INJECT.read_text()
-               .replace("internal.had_target", "_gone_")
-               .replace("internal.aa_cooldown_bits", "_gone_"))
-    orphans = {
-        key for key, attr in parsed.items()
-        if key not in _WAIVED
-        and not re.search(rf"internal\.{attr}\b|iv\.{attr}\b", pre_fix)
-    }
-    assert {"aihad", "aacdbits"} <= orphans, (
-        f"the scrape would NOT have caught {sorted({'aihad','aacdbits'} - orphans)}; "
-        "this test cannot detect the class of bug it exists for"
-    )
+    inject_src = _INJECT.read_text()
+
+    # Canonical-row keys are not `AIInternal` fields and are never parsed by
+    # the scrape; they are named explicitly rather than folded into a blanket
+    # allow-list, so adding one is a visible decision.
+    CANONICAL_ROW = {"h", "n", "cr", "pr", "coll", "collbits"}
+
+    stale = sorted(k for k in _WAIVED if k not in parsed and k not in CANONICAL_ROW)
+    assert not stale, (
+        f"waivers for fields that are not parsed at all: {stale}. Remove them, "
+        "or add them to CANONICAL_ROW if they are canonical-row keys.")
+
+    redundant = sorted(
+        k for k, a in parsed.items()
+        if k in _WAIVED and re.search(rf"internal\.{a}\b|iv\.{a}\b", inject_src))
+    assert not redundant, (
+        f"these fields are WAIVED but actually consumed: {redundant}. A waiver "
+        "on a consumed field protects nothing now and permits its silent "
+        "removal later -- drop the waiver so the consumption is enforced.")
+
+
+def test_published_but_unparsed_is_reported():
+    """`trace.py -> inject.py` is only the second half of the chain.
+
+    The title of this module promises "every field the server PUBLISHES must be
+    consumed", and the scrape only sees what `trace.py` parses. A field added to
+    `LanerlStateDump.cs` and never parsed is invisible to every check above --
+    the same bug class as `aihad`, one layer earlier. `aacdraw` is the live
+    example: published since 2026-09-19, parsed by nothing.
+
+    The vendored server is not in this repository (see `REPRODUCING_GATES.md`),
+    so this SKIPS rather than fails when it is absent, and says which.
+    """
+    dump = (_ROOT.parent / "lanerl-vendor" / "LoLServer" / "GameServerLib"
+            / "Lanerl" / "LanerlStateDump.cs")
+    if not dump.exists():
+        pytest.skip(f"vendored server absent ({dump}); published-field check "
+                    "cannot run from a bare clone")
+    published = set(re.findall(r'" (\w+)=" \+', dump.read_text()))
+    assert published, "scraped no published fields -- the emit idiom moved"
+    parsed = set(_parsed_fields())
+    unparsed = sorted(published - parsed - _NOT_PARSED.keys()
+                      - {"h", "n", "cr", "pr", "coll", "collbits"})
+    assert not unparsed, (
+        f"published by the server but parsed by nothing: {unparsed}. Either "
+        "parse them in trace.py or waive them with a reason -- an unparsed "
+        "field cannot be consumed, and no other check in this file can see it.")

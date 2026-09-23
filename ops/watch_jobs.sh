@@ -14,8 +14,14 @@ PREFIX="${1:?job name prefix}"
 GLOB="${2:?output file glob}"
 STALL="${3:-600}"
 declare -A SEEN SIZE STAMP
+SEEN_ANY=
+EMPTY_ONCE=
 while true; do
   RUNNING=$(squeue -h -o '%j' | grep -c "^${PREFIX}"); RUNNING=${RUNNING:-0}
+  # STALL must only consider jobs actually RUNNING. Counting queued ones made a
+  # job pending longer than the stall window fire a false STALL -- the
+  # cries-wolf problem the chdir filter comment warns about.
+  ACTIVE=$(squeue -h -t R -o '%j' | grep -c "^${PREFIX}"); ACTIVE=${ACTIVE:-0}
   for f in $GLOB; do
     [ -e "$f" ] || continue
     # failure signatures -- report once each
@@ -47,14 +53,27 @@ while true; do
     now=$(date +%s)
     if [ "${SIZE[$f]:-0}" != "$sz" ]; then SIZE[$f]=$sz; STAMP[$f]=$now; fi
     age=$(( now - ${STAMP[$f]:-$now} ))
-    if [ "$RUNNING" -gt 0 ] && [ "$age" -gt "$STALL" ] && [ -z "${SEEN[stall:$f]}" ]; then
+    if [ "$ACTIVE" -gt 0 ] && [ "$age" -gt "$STALL" ] && [ -z "${SEEN[stall:$f]}" ]; then
       SEEN[stall:$f]=1
       echo "STALL $f :: no output for ${age}s while jobs still queued/running"
     fi
   done
+  # GRACE BEFORE DECLARING DONE. `RUNNING` is read at the top of the loop, so
+  # arming the watcher in the same breath as the submit -- or hitting any squeue
+  # gap before the jobs register -- saw 0 on the first pass and printed
+  # "DONE ... no jobs remain", which is the precise failure the header warns
+  # against: silence that reads as success. Require the queue to be empty on
+  # SEEN_ANY, or twice in a row, before believing it.
   if [ "$RUNNING" -eq 0 ]; then
-    echo "DONE no '${PREFIX}*' jobs remain in the queue"
-    exit 0
+    if [ -n "${SEEN_ANY}" ] || [ -n "${EMPTY_ONCE}" ]; then
+      echo "DONE no '${PREFIX}*' jobs remain in the queue"
+      exit 0
+    fi
+    EMPTY_ONCE=1
+    echo "WAIT queue shows no '${PREFIX}*' job yet -- not declaring done on the first pass"
+  else
+    SEEN_ANY=1
+    EMPTY_ONCE=
   fi
   sleep 20
 done

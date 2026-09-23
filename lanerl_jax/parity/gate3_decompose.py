@@ -67,7 +67,7 @@ def main(argv=None) -> None:
           "   minions the oracle could see, `d_wave` the mean distance to the\n"
           "   nearest visible minion, and the last three the decision mix.\n")
     hdr = (f"   {'bucket':>8} {'side':>7} {'n':>6} {'lvl':>4} {'mins':>6} "
-           f"{'d_wave':>8} {'atk':>6} {'mv':>5} {'hold':>6}")
+           f"{'d_wave':>8} {'atk':>6} {'mv':>5} {'hold':>6} {'no_dec':>7}")
     print(hdr)
 
     buckets = collections.defaultdict(lambda: collections.defaultdict(list))
@@ -92,11 +92,23 @@ def main(argv=None) -> None:
                 ds.append(min(math.hypot(m[0] - v["cx"], m[1] - v["cy"])
                               for m in v["minions"]))
             dw = sum(ds) / len(ds) if ds else float("nan")
+            # `no_dec` is the bucket size minus the decisions that EXIST, and
+            # it is the column that matters: the oracle is not called while the
+            # champion is dead, so a bucket showing 89 of 1,500 is 94% dead, not
+            # 94% holding. That gap was previously only inferrable from `n`.
+            #
+            # A MISSING decision is also not a hold. The oracle is not called while
+            # the champion is dead, and defaulting those to "hold" reported
+            # ~1,403 holds for a bucket where the sim recorded 97 of 1,500
+            # decisions -- reading "the sim held position" when the truth was
+            # "the sim was dead". The `hold` column was the union of two
+            # different facts; absent is now its own category.
             mix = collections.Counter(
-                dec[side].get(str(i), ("hold", None))[0] for i, _v in rows)
+                (dec[side][str(i)][0] if str(i) in dec[side] else "absent")
+                for i, _v in rows)
             print(f"   {b * a.bucket:>8} {side:>7} {n:>6} {lvl:>4} "
                   f"{mins:>6.2f} {dw:>8.1f} {mix['attack']:>6} "
-                  f"{mix['move']:>5} {mix['hold']:>6}")
+                  f"{mix['move']:>5} {mix['hold']:>6} {a.bucket - n:>7}")
         # first bucket where the levels differ at all
         if first_level_gap is None:
             ls = {s: (buckets[b][s][-1][1]["level"] if buckets[b][s] else None)

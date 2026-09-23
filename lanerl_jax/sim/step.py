@@ -537,7 +537,7 @@ def tick(state: LaneState, params: UnitParams,
         ai_timer=state.ai_timer, ai_local_time=state.ai_local_time,
         time_since_attack=state.time_since_attack,
         ignore_until=state.ignore_until,
-        had_target=state.target >= 0, move_order=state.move_order,
+        had_target=state.had_target, move_order=state.move_order,
         spawn_seq=state.spawn_seq,
         delta_ms=delta_ms)
 
@@ -1012,6 +1012,67 @@ def tick(state: LaneState, params: UnitParams,
     alive = state.alive & (hp > 0)
     died = state.alive & ~alive
 
+    # ---- 5a'. UpdateTarget, at the server's PHASE (TGT-DEATHTICK) ---------
+    # The null-out in phase 3 above runs before damage, so a unit killed this
+    # tick is still `alive` for the whole of this tick's targeting and is only
+    # dropped on the NEXT one. The server's order is the reverse, and it is
+    # per-unit: `Spell.Update` resolves auto-attack damage and sets `IsDead`
+    # synchronously (`AttackableUnit.cs:588-592`), and `UpdateTarget` runs
+    # after it inside the same `ObjAIBase.Update` (`ObjAIBase.cs:1142`, then
+    # `:1153`). So the port was exactly one tick late on every death-driven
+    # target drop.
+    #
+    # MEASURED, not argued. Each of the three fields has one write site, and
+    # those sites now carry `caller=<member>@<line>` (`patch_writesites.py`).
+    # Joining the write stream to the death stream on the canonical corpus:
+    #
+    #   Untarget<StopTargeting<Die   204 events, ALL at +0 ms from the death
+    #   UpdateTarget (invalid target) 18 at +0 ms, 13 at -16/-17 ms
+    #   ReevaluateBehavior (script)   33 at +0 ms, 20 at -16 ms
+    #
+    # Nothing lands late. The negative lags are not an error: `IsDead` flips
+    # during damage, whereas `Die()` -- and so the broadcast that the +0 ms
+    # events come from -- is deferred to the VICTIM's own update, which may
+    # be the following tick. Units reading the flag beat the broadcast to it.
+    #
+    # Why re-apply here rather than move the phase-3 block: the server's
+    # interleaving is per-unit (`A.damage, A.target, B.damage, B.target`) and
+    # no vectorised tick can reproduce that ordering exactly. Applying the
+    # same predicate twice -- once on start-of-tick state, once on
+    # post-damage state -- is the closest total order, and it is idempotent,
+    # so the phase-3 pass costs nothing where it already fired.
+    # MEASURED AND REVERTED. Applying it cost 50 target rows (522 -> 572) and
+    # 5 turret rows (30 -> 35) on the canonical corpus, with all 25 other
+    # fields bit-identical. Two reasons, both visible in the C# once the
+    # result forced a re-read:
+    #
+    #   * The server's clear is ORDER-DEPENDENT. `IsDead` is set inside the
+    #     KILLER's `Spell.Update`, so only units whose own `UpdateTarget` runs
+    #     later in the same `foreach` (`ObjectManager.cs:79-82`) see it that
+    #     tick. A vectorised pass applies it to everyone, which is strictly
+    #     more eager than the server for every unit ordered before the killer.
+    #   * It makes `target` DOWNSTREAM of the fire decision. Tier 1 re-injects
+    #     state every tick, so the sim can only retire a unit the server keeps
+    #     by dealing damage the server did not deal in that same tick -- i.e.
+    #     an `AA-004` fire error. Measured: one such tick at t=133343 turned a
+    #     single early fire into 75 minions plus 13 turrets all dropping the
+    #     same still-alive target.
+    #
+    # Fidelity to the source is not the criterion; agreement with the server
+    # is. Keeping the unconditional form would have traded a measured 522 for
+    # a measured 572 in exchange for a better-looking call graph.
+    #
+    # dtgt = jnp.clip(target, 0, n - 1)
+    # target = jnp.where((target >= 0) & ~alive[dtgt], -1, target)
+
+    # `ObjAIBase.UpdateTarget`'s FIRST branch (`ObjAIBase.cs:1219-1227`): a
+    # unit that is itself dead drops its own target. 98 calls on the corpus
+    # (`caller=UpdateTarget@1224`), and entirely absent from the port -- a
+    # dead unit carried its target through death AND through respawn, because
+    # the respawn block resets `silenced_ms`/`r_cast_ms`/buffs and never
+    # touches `target`.
+    target = jnp.where(~alive, -1, target)
+
     # ---- 5b. call for help -------------------------------------------------
     # `targeting.call_for_help_map` implements the broadcast faithfully and is
     # The toggle is retained for ablations.  Production defaults ON: the server
@@ -1169,22 +1230,18 @@ def tick(state: LaneState, params: UnitParams,
     # episodes -- which is itself a bug this project has paid for; see
     # ObjectManager.Update's comment about a map losing four towers over a run).
     is_ch = state.kind == Kind.CHAMPION
-    # OFF BY ONE TABLE ROW. `Champion.Die` (`Champion.cs:400`) is
-    #     RespawnTimer = MapData.DeathTimes[Stats.Level] * 1000f
-    # and `Package.cs:141-153` fills that list with `for (i = 1; i < Count; i++)`,
-    # so `DeathTimes[k]` holds `TimeDeadPerLevel.Level(k+1)`. A champion at
-    # level L therefore waits `Level(L+1)`, not `Level(L)`. `profiles.py:334`
-    # loads the table indexed by level-1, so the port was reading `Level(L)`
-    # and respawning 2.5 s early at EVERY level (the table is linear at
-    # 2.5 s/level).
+    # OFF BY ONE TABLE ROW. `Champion.Die` (`Champion.cs:400`) reads
+    # `MapData.DeathTimes[Stats.Level]`, and `Package.cs:141-153` fills that list
+    # with `for (i = 1; i < Count; i++)`, so `DeathTimes[k]` holds
+    # `TimeDeadPerLevel.Level(k+1)`: a champion at level L waits `Level(L+1)`.
+    # `profiles.py:334` loads the table indexed by level-1, so the port read
+    # `Level(L)` and respawned 2.5 s early at EVERY level.
     #
-    # Measured, not inferred: the sim's level-4 death froze the champion for
-    # 457 decisions = 15.23 s, which is Level04 = 15.0; the server's level-8
-    # death spanned 817 decisions = 27.23 s, which is Level09 = 27.5, not
-    # Level08 = 25.0.
+    # Measured, not inferred: the sim's level-4 death froze the champion for 457
+    # decisions = 15.23 s, which is Level04 = 15.0; the server's level-8 death
+    # spanned 817 decisions = 27.23 s, which is Level09 = 27.5, not Level08.
     #
-    # Clamp AFTER the +1 so level 18 reads the last row rather than running
-    # off the end.
+    # Clamp AFTER the +1 so level 18 reads the last row rather than past the end.
     lvl = jnp.clip(level.astype(jnp.int32) + 1, 1,
                    params["death_times"].shape[0]) - 1
     died_ch = died & is_ch
@@ -1237,6 +1294,7 @@ def tick(state: LaneState, params: UnitParams,
         n_waypoints=jnp.where(finish_casting, jnp.int8(1), n_wp),
         target=target.astype(state.target.dtype),
         target_priority=ai.target_priority,
+        had_target=ai.had_target,
         move_order=jnp.where(finish_casting, jnp.int8(MoveOrder.HOLD),
                              move_order_out),
         ai_timer=ai.ai_timer, ai_local_time=ai.ai_local_time,
