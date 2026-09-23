@@ -13,7 +13,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 fail=0; pass=0
 for f in lanerl_jax/sim/tests/test_*.py; do
-    if out=$(ops/login_capped.sh 18G 4 .venv-jax/bin/python -m pytest -q -p no:cacheprovider "$f" "$@" 2>&1); then
+    if out=$(ops/desktop_cpu.sh 8 16G .venv-jax/bin/python -m pytest -q -p no:cacheprovider "$f" "$@" 2>&1); then
         pass=$((pass+1)); echo "PASS $f: $(echo "$out" | tail -1)"
     else
         fail=$((fail+1)); echo "FAIL $f"; echo "$out" | tail -40
