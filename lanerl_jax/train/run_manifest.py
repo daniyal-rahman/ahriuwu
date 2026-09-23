@@ -261,14 +261,19 @@ Metrics: one JSON object per chunk in `metrics.jsonl`.
     #: benefit over the last few.
     keep_checkpoints: int = 3
 
-    def save(self, step: int, update: int, payload: Any) -> Path:
+    def save(self, step: int, update: int, payload: Any, *,
+             latest: bool = True) -> Path:
+        """``latest=False`` writes a checkpoint the divergence guard can
+        keep for a post-mortem WITHOUT making it the ``--resume`` target."""
         from flax.serialization import to_bytes
-        f = self.path / f"ckpt_{step:09d}.msgpack"
+        f = self.path / (f"ckpt_{step:09d}.msgpack" if latest
+                         else f"ckpt_{step:09d}_diverged.msgpack")
         f.write_bytes(to_bytes(payload))
-        (self.path / "ckpt_latest.msgpack").write_bytes(f.read_bytes())
+        if latest:
+            (self.path / "ckpt_latest.msgpack").write_bytes(f.read_bytes())
         self.manifest["checkpoints"].append(
             {"file": f.name, "step": int(step), "update": int(update),
-             "bytes": f.stat().st_size,
+             "bytes": f.stat().st_size, "latest": bool(latest),
              "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
         # rotate: keep the newest `keep_checkpoints`, always keep ckpt_latest
         kept = self.manifest["checkpoints"]

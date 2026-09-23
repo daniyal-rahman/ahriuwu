@@ -22,11 +22,28 @@ would give 0.999444. The source file records that its own worked example said
 15 Hz long after the stack moved to 30 -- exactly the silent change it warns
 about.
 
-**The action distribution is factored** over four independent heads (button,
-screen_x, screen_y, target), so log-probs and entropies **sum**. Maximum
-factored entropy is ``ln 8 + ln 96 + ln 54 + ln 32`` = **14.099 nats**.
+**The action distribution is factored** over four heads (button, screen_x,
+screen_y, target), but only the heads THE CHOSEN BUTTON PUTS ON THE WIRE
+count. `train/actions.orders_from` is the only thing that decides that:
+noop/recall/q/w/e read nothing beyond the button, move reads the screen
+heads, attack_move reads the target head (and falls back to the screen
+point when the slot is empty, so conservatively both), r reads the target
+head. The log-prob is ``lp_b + uses_screen[b]*(lp_x+lp_y) +
+uses_target[b]*lp_t`` and the entropy is ``H_b + P(uses_screen)*(H_x+H_y) +
+P(uses_target)*H_t`` -- exactly the torch reference's `_head_usage`. The
+port summed all four unconditionally (`PPO-01`, 2026-09-23): with E cast on
+80% of decisions, 80% of the screen/target samples were pure noise in the
+ratio -- zero-mean gradient of variance ~A^2, spurious clipping that also
+cut the button's gradient, an inflated `approx_kl` feeding `target_kl`,
+and an entropy figure that counted heads the behaviour never used.
 
-**14.099 is a ceiling, not an achievable value.** The target head is masked to
+The maximum of the masked entropy is ``ln(sum_b exp(c_b))`` where ``c_b`` is
+the auxiliary entropy button ``b`` unlocks (``ln 96 + ln 54`` for move, that
+plus ``ln 32`` for attack_move, ``ln 32`` for r, 0 otherwise): **12.050
+nats**, attained by ``softmax(c)`` over the buttons, NOT by a uniform button
+(which gives 5.08). The old 14.099 counted every head regardless.
+
+**Even that is a ceiling, not an achievable value.** The target head is masked to
 the *visible* entity slots, so its share of the budget is ``ln(n_visible)``, not
 ``ln 32``. At episode start only four units exist, so that head contributes
 **zero** entropy -- there is nothing to be uncertain about -- and the whole
@@ -55,10 +72,14 @@ from typing import NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+
+from lanerl_rl.constants import BUTTON_INDEX, BUTTONS, N_SCREEN_X, N_SCREEN_Y, N_SLOTS
 
 __all__ = [
     "PPOConfig", "gamma_for_horizon", "gae", "factored_log_prob",
     "factored_entropy", "policy_loss", "value_loss", "MAX_FACTORED_ENTROPY",
+    "USES_SCREEN_HEADS", "USES_TARGET_HEAD",
 ]
 
 
@@ -91,9 +112,31 @@ class PPOConfig(NamedTuple):
         return gamma_for_horizon(self.horizon_s, self.decision_hz)
 
 
-#: ln 8 + ln 96 + ln 54 + ln 32 -- a uniform policy over the four heads.
-MAX_FACTORED_ENTROPY = float(
-    jnp.log(8.0) + jnp.log(96.0) + jnp.log(54.0) + jnp.log(32.0))
+def _head_usage():
+    """Which auxiliary heads each button puts on the wire (module docstring).
+    Read off `train/actions.orders_from`; if that decoder changes, this must.
+    """
+    uses_screen = np.zeros(len(BUTTONS), dtype=bool)
+    uses_target = np.zeros(len(BUTTONS), dtype=bool)
+    uses_screen[BUTTON_INDEX["move"]] = True
+    # attack_move: the target head when the chosen slot holds a visible
+    # unit, the screen point otherwise -- a function of the observation,
+    # not of the button, so both may reach the wire.
+    uses_screen[BUTTON_INDEX["attack_move"]] = True
+    uses_target[BUTTON_INDEX["attack_move"]] = True
+    uses_target[BUTTON_INDEX["r"]] = True
+    return (jnp.asarray(uses_screen, jnp.float32),
+            jnp.asarray(uses_target, jnp.float32))
+
+
+USES_SCREEN_HEADS, USES_TARGET_HEAD = _head_usage()
+
+#: ln(sum_b exp(c_b)) with c_b the auxiliary entropy button b unlocks -- the
+#: supremum of the masked factored entropy, attained at softmax(c) over the
+#: buttons with every auxiliary head uniform. 12.050 nats.
+MAX_FACTORED_ENTROPY = float(jax.nn.logsumexp(
+    USES_SCREEN_HEADS * (jnp.log(float(N_SCREEN_X)) + jnp.log(float(N_SCREEN_Y)))
+    + USES_TARGET_HEAD * jnp.log(float(N_SLOTS))))
 
 
 def gae(rewards, values, dones, last_value, gamma: float, lam: float):
@@ -119,24 +162,48 @@ def gae(rewards, values, dones, last_value, gamma: float, lam: float):
     return adv, adv + values
 
 
+def _chosen(lg, a):
+    lp = jax.nn.log_softmax(lg, axis=-1)
+    return jnp.take_along_axis(lp, a[..., None].astype(jnp.int32), axis=-1)[..., 0]
+
+
+def _entropy(lg):
+    lp = jax.nn.log_softmax(lg, axis=-1)
+    return -jnp.sum(jnp.exp(lp) * lp, axis=-1)
+
+
 def factored_log_prob(logits, actions) -> jax.Array:
-    """Sum of per-head log-probs. ``logits``/``actions`` are matching pytrees."""
-    total = None
-    for lg, a in zip(logits, actions):
-        lp = jax.nn.log_softmax(lg, axis=-1)
-        chosen = jnp.take_along_axis(lp, a[..., None].astype(jnp.int32), axis=-1)[..., 0]
-        total = chosen if total is None else total + chosen
-    return total
+    """Log-prob of the joint action, counting only the heads the chosen
+    button puts on the wire (module docstring). ``logits``/``actions`` are
+    ``(button, screen_x, screen_y, target)`` sequences; a single-head call
+    (``[button]``) is the button alone.
+    """
+    lg_b, a_b = logits[0], actions[0]
+    total = _chosen(lg_b, a_b)
+    if len(logits) == 1:
+        return total
+    b = a_b.astype(jnp.int32)
+    lg_x, lg_y, lg_t = logits[1], logits[2], logits[3]
+    a_x, a_y, a_t = actions[1], actions[2], actions[3]
+    return (total
+            + USES_SCREEN_HEADS[b] * (_chosen(lg_x, a_x) + _chosen(lg_y, a_y))
+            + USES_TARGET_HEAD[b] * _chosen(lg_t, a_t))
 
 
 def factored_entropy(logits) -> jax.Array:
-    """Sum of per-head entropies, in nats. Max is :data:`MAX_FACTORED_ENTROPY`."""
-    total = None
-    for lg in logits:
-        lp = jax.nn.log_softmax(lg, axis=-1)
-        h = -jnp.sum(jnp.exp(lp) * lp, axis=-1)
-        total = h if total is None else total + h
-    return total
+    """Entropy of the joint action in nats, each auxiliary head weighted by
+    the probability the button unlocks it. Sup is :data:`MAX_FACTORED_ENTROPY`.
+    A single-head call (``[head]``) is that head's own entropy.
+    """
+    if len(logits) == 1:
+        return _entropy(logits[0])
+    lg_b, lg_x, lg_y, lg_t = logits[0], logits[1], logits[2], logits[3]
+    p_b = jax.nn.softmax(lg_b, axis=-1)
+    p_screen = jnp.sum(p_b * USES_SCREEN_HEADS, axis=-1)
+    p_target = jnp.sum(p_b * USES_TARGET_HEAD, axis=-1)
+    return (_entropy(lg_b)
+            + p_screen * (_entropy(lg_x) + _entropy(lg_y))
+            + p_target * _entropy(lg_t))
 
 
 def policy_loss(log_prob, old_log_prob, adv, cfg: PPOConfig):

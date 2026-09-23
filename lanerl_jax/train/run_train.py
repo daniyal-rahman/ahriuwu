@@ -9,6 +9,7 @@ import warnings
 from pathlib import Path
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 from .run_manifest import RunDir
@@ -78,6 +79,13 @@ def main() -> None:
                          "training ~30x slower than a normal PPO rate for a "
                          "reason that does not apply.")
     ap.add_argument("--entropy-coef", type=float, default=None)
+    ap.add_argument("--no-value-clip", action="store_true",
+                    help="unclipped value loss. The clipped form bounds each "
+                         "state's value move to value_clip_eps=0.2 PER UPDATE in "
+                         "raw return units, and returns here are O(10-30) and "
+                         "unnormalised, so a +-15 kill swing takes ~75 updates "
+                         "to fit (PPO-02). Andrychowicz 2021 / Engstrom 2020 "
+                         "found the clip neutral-to-harmful.")
     ap.add_argument("--critic-lr", type=float, default=None,
                     help="value-head learning rate. Declared in PPOConfig at "
                          "3e-4 but read by nothing until 2026-09-23, so every "
@@ -111,6 +119,8 @@ def main() -> None:
         ppo = ppo._replace(critic_lr=a.critic_lr)
     if a.target_kl is not None:
         ppo = ppo._replace(target_kl=a.target_kl)
+    if a.no_value_clip:
+        ppo = ppo._replace(clip_value_loss=False)
     if a.value_coef is not None:
         ppo = ppo._replace(value_coef=a.value_coef)
     cfg = TrainConfig(n_envs=a.envs, rollout_steps=a.rollout,
@@ -195,11 +205,26 @@ def main() -> None:
         # both: resuming the weights without Adam's moments throws away the
         # second-moment estimate and the first few updates after the resume are
         # then effectively at a different learning rate.
-        payload = from_bytes(
-            {"params": runner.params, "opt_state": runner.opt_state},
-            a.resume.read_bytes())
+        raw = a.resume.read_bytes()
+        try:
+            payload = from_bytes(
+                {"params": runner.params, "opt_state": runner.opt_state,
+                 "step": runner.step}, raw)
+        except (ValueError, KeyError):
+            # checkpoints written before `step` was saved (PPO-06): the
+            # zero-sum alpha anneal restarted from 0.5 on every resume.
+            payload = from_bytes(
+                {"params": runner.params, "opt_state": runner.opt_state}, raw)
+            payload["step"] = runner.step
+            print("WARNING: checkpoint has no `step`; the reward anneal "
+                  "restarts from 0", flush=True)
+        # A resumed run must not replay the seed's RNG stream from the
+        # start: fold the restored step in.
+        rng = jax.random.fold_in(runner.rng, int(np.asarray(payload["step"])))
         runner = runner._replace(params=payload["params"],
-                                 opt_state=payload["opt_state"])
+                                 opt_state=payload["opt_state"],
+                                 step=jnp.asarray(payload["step"], jnp.int32),
+                                 rng=rng)
         run.manifest["resumed_from"] = {
             "checkpoint": str(a.resume),
             "note": "params + opt_state only; env state and RNG are fresh, so "
@@ -243,18 +268,32 @@ def main() -> None:
               f"vloss {row['value_loss']:.3f} "
               + (f"cs {np.mean(done):.2f} (n={row['cs_episodes']:.0f})"
                  if done.size else "cs -"), flush=True)
-        if a.ckpt_every and (ci + 1) % a.ckpt_every == 0:
-            run.save(int(np.asarray(runner.step)), upd,
-                     {"params": runner.params, "opt_state": runner.opt_state})
         # DIVERGENCE GUARD. A run whose loss has gone non-finite is producing
         # nothing but wall-clock, and the RL-002 log shows `value_loss` going
         # 0.0024 -> 2.0032 -> 542.7 without anything stopping it. Checkpoint,
         # record why, and get off the GPU so the next arm can have it.
-        bad = [k for k in ("policy_loss", "value_loss", "reward", "entropy")
-               if not np.isfinite(row[k])]
-        if bad:
+        # Checked PER UPDATE, not on the chunk mean: a NaN that starts
+        # mid-chunk hides behind the finite updates before it under
+        # `nanmean` (`PPO-07`), and `reward` stays finite regardless
+        # because the sim is driven by sampled actions.
+        bad = [k for k in ("policy_loss", "value_loss", "entropy", "approx_kl")
+               if not np.all(np.isfinite(np.asarray(mc[k])))]
+        params_finite = all(bool(np.all(np.isfinite(np.asarray(p))))
+                            for p in jax.tree.leaves(runner.params))
+        if a.ckpt_every and (ci + 1) % a.ckpt_every == 0 and not bad \
+                and params_finite:
             run.save(int(np.asarray(runner.step)), upd,
-                     {"params": runner.params, "opt_state": runner.opt_state})
+                     {"params": runner.params, "opt_state": runner.opt_state,
+                      "step": runner.step})
+        if bad or not params_finite:
+            # Saved for the post-mortem, but NOT as `ckpt_latest`: that is
+            # the documented `--resume` target and a NaN payload there
+            # poisons the next run.
+            run.save(int(np.asarray(runner.step)), upd,
+                     {"params": runner.params, "opt_state": runner.opt_state,
+                      "step": runner.step}, latest=False)
+            if not params_finite:
+                bad = bad + ["params"]
             run.set_results(diverged_at_update=upd, diverged_metrics=bad)
             print(f"\nDIVERGED at update {upd}: {bad} non-finite. "
                   f"Stopping; see {run.path}", flush=True)

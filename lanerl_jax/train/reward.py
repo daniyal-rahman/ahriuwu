@@ -68,7 +68,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..sim.init import TOP_OUTER_TURRET
-from ..sim.rewards import AMBIENT_GOLD_AMOUNT, AMBIENT_GOLD_INTERVAL_MS
+from ..sim.rewards import (AMBIENT_GOLD_AMOUNT, AMBIENT_GOLD_DELAY_MS,
+                           AMBIENT_GOLD_INTERVAL_MS)
 from ..sim.state import LaneState, Team
 
 __all__ = ["RewardWeights", "RewardConfig", "RewardState", "reward_init",
@@ -283,9 +284,22 @@ def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
     w = cfg.weights
     hp = jnp.where(state.max_hp[:2] > 0, state.hp[:2] / state.max_hp[:2], 0.0)
 
+    if cfg.enable_kill or cfg.enable_tower or cfg.enable_shaping:
+        # These terms are NOT ported. They used to be documented as
+        # "multiplied by zero"; they were simply unread, so flipping one
+        # silently did nothing (`REW-06`, the `RL-004` failure class).
+        raise NotImplementedError(
+            "enable_kill / enable_tower / enable_shaping are not ported")
     d_gold = state.gold[:2] - prev.gold
     if cfg.subtract_ambient_gold:
-        d_gold = d_gold - AMBIENT_GOLD_PER_S * dt_s
+        # Only once the sim actually pays it: ambient gold starts at
+        # `AMBIENT_GOLD_DELAY_MS` (90 s), and subtracting from t=0 put a
+        # policy-independent -5.7 raw into every episode's first 90 s
+        # (`REW-07`). It cancels under zero-sum at alpha=1 and only ever
+        # offset the value targets, but the value targets are what the
+        # critic fits.
+        paying = state.t_ms >= AMBIENT_GOLD_DELAY_MS
+        d_gold = d_gold - jnp.where(paying, AMBIENT_GOLD_PER_S * dt_s, 0.0)
     d_xp = state.xp[:2] - prev.xp
     d_hp = hp - prev.hp_frac                       # potential difference
     d_deaths = state.deaths[:2].astype(jnp.float32) - prev.deaths

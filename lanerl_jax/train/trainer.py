@@ -228,14 +228,22 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
     tx = optax.chain(
         optax.clip_by_global_norm(cfg.ppo.max_grad_norm),
         optax.multi_transform(
-            {"actor": optax.adam(cfg.ppo.lr),
-             "critic": optax.adam(cfg.ppo.critic_lr)},
+            # eps=1e-5 (CleanRL, Huang et al. detail #3), not optax's 1e-8:
+            # fresh Adam with 1e-8 steps ~lr*sign(g) on every parameter,
+            # including those whose gradient is ~0, and the lr-3e-4 arms
+            # blew the critic up in chunk 0 (`PPO-04`).
+            {"actor": optax.adam(cfg.ppo.lr, eps=1e-5),
+             "critic": optax.adam(cfg.ppo.critic_lr, eps=1e-5)},
             _label),
     )
 
     def _obs(state):
-        blue = build_observation(state, 0, frame, params=params_tbl)
-        red = build_observation(state, 1, red_frame, params=params_tbl)
+        # The clock feature is t/episode_s; the builder's default 600 was a
+        # second copy of `episode_s` that `--episode-s` did not move (`OBS-10`).
+        blue = build_observation(state, 0, frame, params=params_tbl,
+                                 horizon_s=cfg.episode_s)
+        red = build_observation(state, 1, red_frame, params=params_tbl,
+                                 horizon_s=cfg.episode_s)
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), blue, red)
 
     full_ms = jnp.asarray(cfg.episode_s * 1000.0, jnp.float32)
@@ -380,6 +388,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                                          ).astype(jnp.float32)}
                 updates, new_opt_state = tx.update(grads, opt_state, params)
                 new_params = optax.apply_updates(params, updates)
+                # Latch BEFORE deciding whether to apply this minibatch: the
+                # KL is measured on the params this step starts from, so
+                # the minibatch that first shows it over target is the one
+                # to withhold (SB3 checks before stepping). Latching after
+                # applied one over-target step per update (`PPO-05`).
+                # Written as `~(kl <= target)` so a NaN KL also stops:
+                # `NaN > x` is False and would have sailed through.
+                stopped = stopped | ~(info["approx_kl"] <= cfg.ppo.target_kl)
                 keep = ~stopped
                 params = jax.tree.map(
                     lambda new, old: jnp.where(keep, new, old),
@@ -387,7 +403,6 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                 opt_state = jax.tree.map(
                     lambda new, old: jnp.where(keep, new, old),
                     new_opt_state, opt_state)
-                stopped = stopped | (info["approx_kl"] > cfg.ppo.target_kl)
                 return ((params, opt_state, stopped),
                         {**info, "kl_stopped": stopped.astype(jnp.float32)})
 
@@ -420,6 +435,10 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         #: games; with staggered phases this should be ~n_envs/141 per update,
         #: and a persistent 0 means the stagger stopped working.
         metrics["cs_episodes"] = n_done.astype(jnp.float32)
+        # The zero-sum mixing weight, logged because it is a function of
+        # `step` and `step` restarted at 0 on every resume (`REW-02`).
+        metrics["zero_sum_alpha"] = jnp.asarray(
+            cfg.reward.alpha(runner.step), jnp.float32)
         # SCALE diagnostics, because `value_loss` reached 542.7 in the RL-002
         # run and a loss number alone cannot say whether the critic diverged
         # or the targets grew. These say which: `returns_absmax` climbing with
