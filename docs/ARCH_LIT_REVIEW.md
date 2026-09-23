@@ -188,3 +188,128 @@ Ordered by expected impact on CS@10 and on sim-to-server transfer, then by cost.
 - Yu et al. 2022, The Surprising Effectiveness of PPO in Cooperative Multi-Agent Games (MAPPO). https://arxiv.org/abs/2103.01955
 - Zabounidis et al. 2026, Overcoming Valid Action Suppression in Unmasked Policy Gradient Algorithms. https://arxiv.org/abs/2603.09090
 - Zhao et al. 2023, ACT (action chunking). https://arxiv.org/abs/2304.13705
+
+---
+
+## Deep dives (2026-09-23)
+
+These are two follow-ups to §1 and §4 above, answered from the primary PDFs. I read the full text of Berner 2019, both Ye 2020 papers, Wei 2022, Hokoff, AlphaStar Unplugged, Metamon, Radosavovic 2024, Kinetix, and the IRIS/TWM/STORM/DIAMOND/Dedieu/Dreamer 4 papers. The rest come from abstracts or official pages, and the text says so where that matters. Arithmetic and proposals that are mine are labelled as such.
+
+### Q1. Multi-hero generalisation: what failed, and what let Five share one policy
+
+**Findings**
+
+1. **In Five, what an action means lives in its embedding, not in a fixed output slot.** The primary action is "a linear projection over the available actions": a dot product between the LSTM output and an embedding of each action that is currently available. Each ability is observed as a categorical **"ability name"** plus cooldown, in-use, castable and level-unlocked features. There are no per-hero heads. Instead, 6 **action target types** decide which argument heads get read: no target, point, unit, unit+offset, teleport, and ward. Examples are Move = offset from the caster, and Shrapnel = unit + offset. Teleport has its own target head because its rare signal "would be drowned out" in the shared one. Hero identity comes from appending the controlled hero's unit embedding to the LSTM input. Item and ability-point builds were **scripted per hero**, which shrinks what has to be learned per hero ([Berner et al., 2019](https://arxiv.org/abs/1912.06680), Appx F, Table 5, Figs 17-18).
+
+2. **Five trained 17 heroes jointly. It did not show generalisation.**
+   - (a) The Appendix P pool-size study (5 to 80 heroes; 80 gives a "speedup factor of approximately 0.8") was **evaluated only on the smallest hero set** and **only early in training**: TrueSkill up to about 200, against a final 254. The authors warn that "the speedup factor [could become] worse later in training".
+   - (b) OpenAI's own blog says: "We spent several weeks training with hero pools up to 25 heroes, bringing those heroes to approximately 5k MMR … they weren't learning fast enough to reach pro level before Finals." Their hypotheses were "insufficient model capacity … better matchmaking … more training time for new heroes to catch up to old heroes" ([OpenAI, 2019](https://openai.com/index/openai-five-defeats-dota-2-world-champions/)). JueWu's summary of this as "unacceptably slow training and degraded AI performance" is harsher than the source, and §4 above repeated it.
+   - (c) Lich was **removed** when patch 7.20 changed his abilities. A learned ability-name embedding does not survive a change in what the ability does.
+   - (d) Skill was uneven across heroes. The agent "had trouble dealing with geometry of [Earthshaker's] Fissure skill".
+   - (e) No held-out-hero test was ever reported.
+
+   **Compute.** Five used 770±50 PFlops/s·days up to the OG match, which was about 45,000 years of self-play over 10 months. The surgery-free Rerun reproduced it with 150 PFlops/s·days. My arithmetic: 10 of the 17 heroes play in each game, so each hero was in about 59% of games, which is on the order of 25k game-years per hero.
+
+3. **JueWu 1v1, the closest analogue to our task, trained one model per hero.** "To train one hero, we use 48 P40 GPU cards and 18,000 CPU cores." That is about 500 human-years of play per day per hero, in mirror matches, reaching pro level after about 70 h ([Ye et al., AAAI 2020](https://arxiv.org/abs/1912.09729)). The pro-level MOBA 1v1 result therefore says **nothing** about sharing weights across heroes.
+
+4. **JueWu full game: what the "learning collapse" actually was** ([Ye et al., NeurIPS 2020](https://arxiv.org/abs/2011.12692), Table 1, §3.3, Appx 8.3/8.6).
+   - **Observation.** One resource unit is 320 GPUs and 35k CPUs. With random lineups, the 20-hero baseline **did converge**, in 192 h against 144 h for CSPL. At 40 heroes it did not: "NA (> 480 h) … very slow or non convergence", against 336 h for CSPL.
+   - **Stated cause.** The count of lineups is combinatorial: 4.9M at 17 heroes, 2.1×10¹¹ at 40. Self-play is also non-stationary. "Learning collapse" is cited to Bengio's curriculum paper and to the OpenAI blog. **No ablation isolates the mechanism.**
+   - **Fix, phase 1.** Four fixed, balanced 10-hero lineups, balanced using human win rates. Each hero appears in **exactly one** teacher lineup. Teachers have 9M parameters and an LSTM-512, and train for about 72 h each on half a resource unit.
+   - **Fix, phase 2.** Student-driven distillation. The loss is the cross-entropy to each teacher's policy plus the MSE to **each of the teacher's value heads**, computed on states that the *student* visits in the teacher's lineup. It converged in about 48 h "not sensitive to the hero pool size", with the student's Elo "marginally below the teacher".
+   - **Fix, phase 3.** Random-lineup RL from the distilled initialisation, with 17M parameters and an LSTM-1024.
+   - **What the student conditions on.** Hero ID, job (role), per-hero attack and defence stats (the Attribute block, 1,330 dims), and per-skill **cooldown, usability, level, range, buff and debuff effects** (2,095 dims). The action head stays **slot-indexed**: Skill1-Skill4, where "only a few heroes have Skill4".
+
+5. **Honor of Kings Arena: the exact setup** ([Wei et al., NeurIPS 2022](https://arxiv.org/abs/2209.08483), §5, Appx D). This is 1v1 over 20 heroes, and the opponent is a **behaviour-tree bot, not self-play**. PPO was trained on Diaochan (RL) vs Diaochan (BT) and reached a 90% win rate. Two tests followed:
+   - (a) Diaochan against the 19 other opponent heroes.
+   - (b) The 19 other heroes as the controlled hero, against Diaochan.
+
+   Both "drop dramatically". For (b) the stated reason is that "the change of target heroes differs the action meaning". Two remedies were tried: multi-task training on 5 heroes, and student-driven distillation from 5 single-task models. Both "improve the performance in all the test tasks", but Peiqinhu and Shangguanwaner stay at a **0%** win rate. The observation contains a hero ID, plus hand-written hero-specific feature blocks for only four heroes (Diaochan 11 dims, Luna 7, Jvyoujing 9, Luban 5). **Identity conditioning was never ablated.** A policy trained on a single hero never sees the ID vary, so it cannot use it. The results are published only as figures, and I did not extract per-hero numbers.
+
+6. **Hokoff (offline, 2023) puts numbers on the asymmetry** ([Qu et al., NeurIPS 2023 D&B](https://arxiv.org/abs/2408.10556), Table 4).
+   - Models trained on Luban-only data win 0.31-0.33 (BC/CQL/IQL/QMIX+CQL, "norm_medium"). Given **other heroes to control**, they win only **0.06-0.08**. With **other opponents**, the same models win 0.42-0.58. That second comparison is not clean, because the opponents' levels differ.
+   - Training on 5-hero data gives 0.07-0.11.
+   - In short, changing *who you control* is catastrophic and changing *who you face* is not. That is the action-semantics mechanism.
+
+7. **StarCraft, one network for all races** ([AlphaStar Unplugged, 2023](https://arxiv.org/abs/2308.03526), Table 5). Race is an input (home_race, away_race), and the authors state "agents are typically better when they are trained on a single race". AlphaStar Supervised scored Elo 1171 for all races (75% vs very_hard) and **1280 for race-specific networks** (82%). Their better-tuned all-race BC agent reached 1380. So sharing costs about 110 Elo in behaviour cloning, which is smaller than the gain from tuning. Offline only.
+
+8. **Why a concatenated identity interferes (MARL, 2021-2025).** Sharing parameters indiscriminately "can also have a detrimental effect on learning" ([SePS, Christianos et al., ICML 2021](https://arxiv.org/abs/2102.07475)). HyperMARL finds that "coupling agent IDs with observations" worsens cross-agent **gradient interference**. It fixes this with a hypernetwork that maps the ID to agent-specific weights ([Tessera et al., NeurIPS 2025](https://arxiv.org/abs/2412.04233)). Kaleidoscope uses per-agent learnable masks over shared weights ([Li et al., NeurIPS 2024](https://arxiv.org/abs/2410.08540)). These are small cooperative benchmarks, so they are evidence of the mechanism, not of its size in a MOBA.
+
+9. **Where cross-identity transfer works, the identity is described compositionally rather than named by an ID.**
+   - **Kinetix.** One PPO agent was trained over tens of millions of procedurally generated physics tasks built from 4 primitives, using a transformer over entities with no memory. It zero-shot solves some unseen hand-designed levels, and fine-tuning from it beats tabula rasa, including on levels that scratch training fails ([Matthews et al., ICLR 2025](https://arxiv.org/abs/2410.23208)).
+   - **Metamon** encodes Pokémon and moves as text tokens (87 words + 48 numbers) and trains on a decade of replays ([Grigsby et al., RLC 2025](https://arxiv.org/abs/2504.04395)).
+   - I found **no 2023-2026 MOBA paper reporting zero-shot control of an unseen hero.** JueWu's stated follow-up to the full 101-hero pool never appeared as a primary paper that I could find.
+
+**What this means for lanerl_jax.**
+
+*Expected failure mechanisms, most likely first.*
+- (i) **Action-semantics mismatch.** Our Q/W/E/R buttons are slot-indexed, like HoK's, and that is exactly the design whose transfer collapsed (0.33→0.07 in Hokoff). Five avoided it by scoring actions against **per-ability embeddings**.
+- (ii) **Gradient interference** through a shared trunk fed a concatenated ID. It will show up as CS regression on champion #1 when champion #2 is added.
+- (iii) **Imbalance.** Anchored champions get KL-to-human while the rest get entropy, which is two different objectives on one trunk. Per-champion reward scales also differ, so normalise the value per champion (PopArt, §8.1).
+- (iv) **Lineup combinatorics**, JueWu's stated cause, **mostly does not apply**: 1v1 lane has N² matchups (100 at N = 10), not 10¹¹.
+
+*Minimum structure that worked, turned into a proposal (my synthesis).* Keep §4's champion embedding and ability descriptors, but move the descriptors **into the action head**:
+- Button logits: `logit_k = <q(h), e_k>`, where `e_k = MLP(ability_id_emb ⊕ descriptor_k)`. The descriptor is cast type, range, cooldown, cost and scalings. Generic buttons (move, attack, noop) keep learned constant embeddings.
+- The **cast type selects the argument head**, as Five's 6 target types do.
+- Rare-semantics actions (flash, recall) get their own argument head.
+- Keep JueWu's route of per-champion teachers → student-driven distillation (policy CE + per-value-head MSE) → joint RL as the **fallback**. At 20 heroes, JueWu's random mixing still converged, so at N ≤ 4 plain joint training should be tried first.
+
+*Cheapest early experiments (my design).*
+- (0) **Slot-permutation test, possible now with Garen alone.** Shuffle which slot holds which ability each episode, with the descriptor travelling with the ability. If CS@10 and per-ability usage match the unshuffled run within seed noise, the head is reading descriptors, not slot indices. No new sim work is needed.
+- (1) **When Darius exists.** Run Garen-only, Darius-only and joint, at **matched per-champion samples**. Interference = joint Garen CS@10 minus solo Garen CS@10. If it is negative beyond seed noise, switch to teachers + distillation.
+- (2) **Held-out third champion,** chosen with a different cast-type mix. Report zero-shot CS@10 as a floor, but the metric that counts is **samples-to-threshold when fine-tuning from the joint policy against from scratch** (Kinetix-style). Positive transfer there is the realistic meaning of "generalises". Zero-shot competence is not supported by any evidence above.
+
+*Uncertainty.* No system above anchored *some* identities to human data and left others unanchored, so that part of the plan has no precedent.
+
+### Q2. Recency: transformers over time in RL, 2023-2026 evidence
+
+**Findings**
+
+1. **Every successful online use of a transformer over time since 2023 came with a crutch.**
+   - **AdA** found Transformer-XL best, but "incorporating a multi-head attention module into an RNN recovers most of the performance". It was trained with Muesli plus a **distillation loss from a pre-trained teacher for the first 4B steps**, at more than 500M parameters, on meta-RL that needs memory across trials ([AdA Team, 2023](https://arxiv.org/abs/2301.07608)).
+   - The closest real-time analogue is **humanoid locomotion**: a 1.4M-parameter causal transformer with a **context of 16** running at **50 Hz**, which beat LSTM and TCN. It was trained with PPO plus **KL to an MLP teacher, annealed to 0 by mid-training**, and "joint … outperforms either … alone" ([Radosavovic et al., Science Robotics 2024](https://arxiv.org/abs/2303.03381)).
+   - AMAGO trains long-sequence transformers online, but **off-policy, from replay** ([Grigsby et al., ICLR 2024](https://arxiv.org/abs/2310.09971)).
+
+2. **Without a crutch, head-to-head results are mixed and lean recurrent.**
+   - **Memory Gym** (PPO, from scratch): TrXL beats GRU on finite tasks "only when utilizing an auxiliary loss to reconstruct observations", and the two are about equal in wall-clock. **GRU wins every endless task**; on Endless Mortar Mayhem it scores 84-120 against 17 ([Pleines et al., JMLR 2025](https://arxiv.org/abs/2309.17207)).
+   - **RLBenchNet** (PPO) finds MLPs best when the task is fully observable, and LSTM/GRU robust for moderate memory. Only TrXL, GTrXL and Mamba-2 solve the most memory-intensive tasks ([Smirnov & Gu, 2025](https://arxiv.org/abs/2505.15040)).
+   - **Craftax:** TrXL-PPO scores 18.3% against 15.3% for PPO-RNN at 1B steps. This comes from a GitHub repo, **not peer-reviewed** ([Reytuag](https://github.com/Reytuag/transformerXL_PPO_JAX); baseline from [Matthews et al., ICML 2024](https://arxiv.org/abs/2402.16801)).
+   - DeepMind's Craftax state of the art, which beat human-level reward for the first time, *added a GRU* to its model-free agent and found that a small hidden state works best ([Dedieu et al., 2025](https://arxiv.org/abs/2502.01591)).
+
+3. **Transformer world models use the transformer as the model, not the policy.**
+   - **IRIS:** CNN + **LSTM-512** actor-critic ([Micheli et al., ICLR 2023](https://arxiv.org/abs/2209.00588)).
+   - **TWM:** the policy sees only z with frame stacking. Adding the transformer's hidden state "can result in lower final scores" ([Robine et al., ICLR 2023](https://arxiv.org/abs/2303.07109)).
+   - **STORM:** MLP policy on [z, h] ([Zhang et al., NeurIPS 2023](https://arxiv.org/abs/2310.09615)).
+   - **DIAMOND:** a diffusion world model with a CNN-**LSTM** agent ([Alonso et al., NeurIPS 2024](https://arxiv.org/abs/2405.12399)).
+   - **Δ-IRIS** keeps the IRIS agent-in-imagination design. I did not verify its actor architecture ([Micheli et al., ICML 2024](https://github.com/vmicheli/delta-iris)).
+   - **Dreamer 4** is the exception. Its policy heads sit on agent tokens inside a 2B-parameter transformer. It is trained **offline**, the transformer is **frozen** during RL, and the policy is regularised toward "a frozen copy of the policy head that serves as a behavioral prior" ([Hafner et al., 2025](https://arxiv.org/abs/2509.24527)).
+
+4. **Offline and imitation settings are where transformers pay off.**
+   - **AlphaStar Unplugged**, in BC win rate against very_hard: **LSTM 70% < no memory 84% ≈ TrXL 85%** at 10¹⁰ frames. At 2×10¹⁰ frames TrXL reaches 89% while the memory-less agent saturates. Even so, "Transformer require extensive hyperparameter tuning and longer training times", so every agent in the main results is memory-less ([2023](https://arxiv.org/abs/2308.03526)).
+   - **Metamon:** transformers up to 200M parameters, offline RL on replays, top 10% of the ladder. The game is turn-based ([2025](https://arxiv.org/abs/2504.04395)).
+   - **π\*0.6:** RL fine-tuning of a 5B VLA pretrained on demonstrations ([Physical Intelligence, 2025](https://arxiv.org/abs/2511.14759)).
+   - Offline, an xLSTM matches transformers at faster inference ([LRAM, ICML 2025](https://arxiv.org/abs/2410.22391)).
+
+5. **Linear recurrences and SSMs are the 2023-2025 middle ground: parallel training like a transformer, O(1) inference like a GRU.**
+   - **S5 in JAX PPO** "outperforms RNN's while also running over five times faster" ([Lu et al., NeurIPS 2023](https://arxiv.org/abs/2303.03982)).
+   - **Memoroids** add tape-based batching for recurrent PPO ([Morad et al., NeurIPS 2024](https://arxiv.org/abs/2402.09900)).
+   - In RLBenchNet, Mamba reaches up to 4.5× LSTM throughput at comparable return.
+
+6. **Large-scale agents from 2024-2026.**
+   - The GT7 vision agent is recurrent and GIGAFLOW is feed-forward (§1).
+   - Kinetix uses a transformer over entities, with no memory.
+   - **SIMA 2** is Gemini-based: demonstrations first, then self-improvement from Gemini-generated tasks and rewards. It is LLM-based and outside this question's scope ([SIMA Team, 2025](https://arxiv.org/abs/2512.04797)).
+   - I found **no published 2023-2026 real-time competitive game agent trained online from scratch with a transformer-over-time core**. That is absence of evidence: industrial agents (Tencent, NetEase) may exist unpublished.
+
+**The honest split.** Transformers win when there is **lots of offline data** (Unplugged scaling, Metamon, VPT, Dreamer 4), when there is **a teacher or KL anchor** (humanoid, AdA), for **cross-episode or very long memory** (AdA, the hardest RLBenchNet and finite Memory Gym tasks, the latter with an auxiliary loss), and for **multi-task conditioning at scale**. Recurrent and feed-forward cores still win at **from-scratch on-policy RL** (Memory Gym endless tasks, Dedieu, RLBenchNet), at **sample and compute efficiency** in wall-clock, and on **stability and tuning burden**, which Unplugged, Memory Gym and GTrXL all flag. Linear recurrences increasingly match GRU returns at higher throughput.
+
+**What this means for lanerl_jax.**
+
+- **The recency argument does not change the recommendation for the current phase.** For online RL from scratch, the 2023-2026 evidence *strengthens* the GRU choice, and it adds S5/LRU as the modern alternative.
+- **The regime changes at the replay-BC phase**, because a BC prior plus a KL anchor is exactly the setting where transformers over time have won (humanoid, VPT, Dreamer 4).
+- **Proposed switch point (mine).**
+  1. When the replay-BC pipeline exists, run an offline ablation: GRU vs causal transformer (context 64-256 steps, i.e. 2-8 s at 30 Hz) vs S5. Compare held-out replay NLL and sim CS@10 at matched compute and at 2× data. Unplugged showed the transformer's edge appears only once the memory-less agent saturates.
+  2. Adopt the transformer only if it wins there *and* holds under KL-anchored PPO.
+  3. Separately, reconsider if a memory probe shows a need for memory beyond about 10 s, or when the pool grows past a handful of champions.
+- **Hedge now at no cost.** Write the §1 GRU behind a `(carry, x) -> (carry, y)` core interface with stored initial state and minibatching over the env axis. GRU, S5/LRU and a cached-memory GTrXL all fit that interface, so the later switch becomes a config change, not a rewrite.
+- **Uncertainty.** The humanoid result is the strongest pro-transformer datum for real-time control. Its 16-step (0.3 s) context is doing short-window system identification, which the per-unit deltas plus GRU in §1 also target. I cannot rule out that a transformer would already match the GRU here. The evidence only says it has not been shown to beat one without a crutch.
