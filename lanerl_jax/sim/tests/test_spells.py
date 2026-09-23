@@ -1021,3 +1021,50 @@ def test_death_clears_owner_q_empowerment_and_haste():
     assert not bool(out.alive[0])
     assert int(out.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
     assert int(out.buff_id[0, Q_HASTE_BUFF_SLOT]) == BuffId.NONE
+
+
+def test_e_recast_during_the_spin_is_refused():
+    """A second E while the spin is running must be a no-op.
+
+    The regression test for a simulator exploit an RL policy actually found and
+    learned. E's cooldown starts when the spin ENDS, so mid-spin
+    `spell_cooldown[E]` is 0; without an `already_open` guard the re-cast passed
+    `ready` and reset `buff_elapsed` to 0.0, so a policy casting E every
+    decision held the spin at elapsed 0 forever -- a permanent damage aura that
+    never expired and never went on cooldown. Measured on the trained
+    checkpoint: 80-83% of decisions were E casts and the sim's E cooldown never
+    rose once in 300 s, against 44 completed spins in the C# server under the
+    same orders.
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, E_DURATION_S, cast_e
+
+    n = 2
+    z = lambda: jnp.zeros((n, 8), jnp.float32)          # noqa: E731
+    buff_id = jnp.zeros((n, 8), jnp.int8)
+    cd = jnp.zeros((n, 4), jnp.float32)
+    rank = jnp.ones((n,), jnp.int32)
+    ad = jnp.full((n,), 78.0, jnp.float32)
+    want = jnp.ones((n,), bool)
+
+    bid, bel, bdur, bpow, started = cast_e(
+        buff_id, z(), z(), z(), cd, want, rank, ad)
+    assert bool(started[0]) and int(bid[0, E_BUFF_SLOT]) == BuffId.GAREN_E
+    assert float(bdur[0, E_BUFF_SLOT]) == E_DURATION_S
+
+    # the spin has been running 2.5 s of its 3.0 s and the cooldown is still 0,
+    # which is exactly the window the exploit lived in
+    bel = bel.at[:, E_BUFF_SLOT].set(2.5)
+    bid2, bel2, _, _, started2 = cast_e(
+        bid, bel, bdur, bpow, cd, want, rank, ad)
+    assert not bool(started2[0]), "E re-cast during its own spin was accepted"
+    assert float(bel2[0, E_BUFF_SLOT]) == 2.5, (
+        "the re-cast reset buff_elapsed -- the spin can never expire")
+
+    # once the buff slot is clear the spell is castable again, so the guard is
+    # not just permanently disabling E
+    _, _, _, _, started3 = cast_e(
+        bid.at[:, E_BUFF_SLOT].set(BuffId.NONE), bel, bdur, bpow, cd, want,
+        rank, ad)
+    assert bool(started3[0]), "E refused after the spin ended"

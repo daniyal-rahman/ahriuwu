@@ -291,7 +291,38 @@ def cast_e(buff_id, buff_elapsed, buff_duration, buff_power,
     gather here: Garen has exactly one buff that does anything in lane, and the
     slot is a fixed lane in the table.
     """
-    ready = want_cast & (spell_cooldown[:, Slot.E] <= 0) & (rank > 0)
+    # `already_open` is NOT optional, and leaving it out gave the RL agent a
+    # permanent damage aura.
+    #
+    # E is the one Garen spell whose cooldown starts when the spin ENDS, not
+    # when it is cast (`orders.py`: "cast_e never touches cooldown; step_buffs
+    # does"). So mid-spin `spell_cooldown[E]` is 0, and without this guard a
+    # re-cast passed `ready` and reset `buff_elapsed` to 0.0 below. A policy
+    # casting E every decision therefore held the spin at elapsed 0.0 for the
+    # whole episode: it never reached `E_DURATION_S`, never expired, never
+    # started its cooldown, and kept dealing its 500 ms periodic damage.
+    #
+    # Measured, on the RL-006 checkpoint: E cast on 80-83% of decisions and the
+    # cooldown never rose ONCE in 300 s of game time, against 44 spins in the
+    # C# server over the same window under the same orders. `Spell.Cast` there
+    # is gated by `champ.CanCast(sp)`, which refuses a cast while the spell is
+    # active -- `LanerlControl`'s cast handler returns on it silently, because
+    # a refused cast is ordinary gameplay.
+    #
+    # `cast_q` has always had this guard, in this exact shape, for the same
+    # reason (Q's cooldown starts after its empowerment window). `cast_w` and
+    # `cast_r` do not need it: both write their cooldown at cast time, so the
+    # `spell_cooldown <= 0` term already refuses a re-cast.
+    #
+    # The observation builder ALREADY modelled the correct rule -- its
+    # `cast_locked` term reports E unavailable while `buff_id[E] ==
+    # BuffId.GAREN_E`, "unavailable while active despite a zero countdown". So
+    # the sim was telling the policy E was unavailable and then casting it
+    # anyway, which is the worst of both: the feature could not explain the
+    # reward, and the reward taught the policy to press the button regardless.
+    already_open = buff_id[:, slot] == BuffId.GAREN_E
+    ready = (want_cast & (spell_cooldown[:, Slot.E] <= 0) & (rank > 0)
+             & ~already_open)
     dmg = e_damage_at_rank(rank, attack_damage)
     return (
         buff_id.at[:, slot].set(
