@@ -493,3 +493,13 @@ work" is almost certainly true and is still not a measurement.
     updates because it was the last number used. Measuring cs@10min against
     update budget at two or three sizes and extrapolating says how long the real
     run should be, and whether the 45-47 CS plateau is a plateau or a budget.
+
+**Added 2026-09-23 by the PPO audit (rows `PPO-*`):**
+14. **Mask unused action heads** in the log-prob, entropy and KL -- DONE (`PPO-01`).
+15. **A no-value-clip / return-normalisation arm** in the sweep (`PPO-02`); `--no-value-clip` exists, the arm has not run.
+16. **A frame stack for the MLP core** or a recurrent core; `frame_stack=4` is declared and unread (`PPO-03`).
+17. **Adam eps 1e-5** -- DONE -- plus an lr warm-up and per-loss trunk gradient norms (`PPO-04`).
+18. **Button-level invalid-action masking** from `cast_locked` (`PPO-13`).
+19. **`XLA_FLAGS=--xla_gpu_deterministic_ops=true`** for the determinism check in item 11; `rl_train.sbatch` does not set it and GPU scatter-adds are nondeterministic by default.
+20. **Decide the zero-sum anneal length in UPDATES** (`PPO-06`): at 65,536 champion-decisions per update the 2e6-step anneal ends at update ~31, before any full episode; the torch clock was ~32x slower.
+21. **A policy-driven divergence gate** (`PARITY-001`): replay every promoted checkpoint's own action stream through both engines and report the first divergent tick. The one check that would have caught `SPELL-001` on its first re-cast.

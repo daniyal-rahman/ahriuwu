@@ -250,6 +250,15 @@ class LaneState:
     #: identity here, and it is chosen to match the server's iteration order.
     target: jax.Array          # (N,) int8
     is_attacking: jax.Array    # (N,) bool
+    #: unit-index the CURRENT SWING was started on, or -1. This is
+    #: ``AutoAttackSpell.CastInfo.Targets[0].Unit``: the unit the hit lands
+    #: on when the wind-up runs out, which ``SetTargetUnit`` never rewrites
+    #: (``Spell.cs:1030``, and the ``SetCurrentTarget`` branch at
+    #: ``ObjAIBase.cs:1326`` is unreachable behind the ``IsAttacking`` early
+    #: return at ``:1245``). ``target`` may change during the wind-up; this
+    #: may not. Kept separately because resolving the hit against ``target``
+    #: let a policy re-aim a swing on its last frame (``ENT-02``).
+    aa_target: jax.Array       # (N,) int8
     has_auto_attacked: jax.Array   # (N,) bool
     #: ``_autoAttackCurrentCooldown``, in SECONDS (the server counts down by
     #: ``diff / 1000`` in ``ObjAIBase.Update``).
@@ -470,6 +479,7 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         hp=z(n_units), max_hp=z(n_units),
         target=jnp.full((n_units,), -1, dtype=jnp.int8),
         is_attacking=jnp.zeros((n_units,), dtype=bool),
+        aa_target=jnp.full((n_units,), -1, dtype=jnp.int8),
         has_auto_attacked=jnp.zeros((n_units,), dtype=bool),
         aa_cooldown=z(n_units), aa_windup=z(n_units), silenced_ms=z(n_units),
         r_cast_ms=z(n_units),

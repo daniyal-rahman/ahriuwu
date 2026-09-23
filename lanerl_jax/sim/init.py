@@ -627,6 +627,45 @@ def spawn_minion(state: LaneState, team, profile, hp,
         # 2, gate 3 and RL rollouts all would.
         had_target=setv(state.had_target, False),
         ai_timer=setv(state.ai_timer, jnp.asarray(250.0, state.x.dtype)),
+        # `SLOT-001`: EVERY per-unit field, not a hand-picked subset. The
+        # server constructs a new `Minion` object per spawn; a recycled
+        # slot here inherited the dead occupant's `has_auto_attacked`
+        # (8-19 times a minute), `aa_cooldown`, `ai_local_time`, and its
+        # `ignore_until`/`help_priority` rows and columns (measured over a
+        # 600 s idle lane by the structural review, 2026-09-23). The
+        # `had_target` leak above was the same class, fixed one field at a
+        # time; this is the rest of the row. Values are `empty_state`'s.
+        is_attacking=setv(state.is_attacking, False),
+        aa_target=setv(state.aa_target, jnp.int8(-1)),
+        has_auto_attacked=setv(state.has_auto_attacked, False),
+        aa_cooldown=setv(state.aa_cooldown, jnp.asarray(0.0, state.x.dtype)),
+        aa_windup=setv(state.aa_windup, jnp.asarray(0.0, state.x.dtype)),
+        silenced_ms=setv(state.silenced_ms, jnp.asarray(0.0, state.x.dtype)),
+        ms_since_damaged=setv(state.ms_since_damaged,
+                              jnp.asarray(1e6, state.x.dtype)),
+        hit_flag_ms=setv(state.hit_flag_ms, jnp.asarray(0.0, state.x.dtype)),
+        hit_flag_by=setv(state.hit_flag_by, jnp.int8(-1)),
+        target_priority=setv(state.target_priority, jnp.int8(14)),
+        ai_local_time=setv(state.ai_local_time, jnp.asarray(0.0, state.x.dtype)),
+        time_since_attack=setv(state.time_since_attack,
+                               jnp.asarray(0.0, state.x.dtype)),
+        route_status=setv(state.route_status, jnp.int8(0)),
+        visible_to_enemy=setv(state.visible_to_enemy, False),
+        respawn_ms=setv(state.respawn_ms, jnp.asarray(-1.0, state.x.dtype)),
+        # The (N, N) tables: the new unit's row AND every other unit's
+        # column about it.
+        ignore_until=jnp.where(
+            ok, state.ignore_until.at[i, :].set(0.0).at[:, i].set(0.0),
+            state.ignore_until),
+        help_priority=jnp.where(
+            ok, state.help_priority.at[i, :].set(14).at[:, i].set(14),
+            state.help_priority),
+        # A missile still flying at the DEAD occupant would land on the
+        # new one: death is resolved after the missile step within a tick,
+        # so the drop (`target died in flight`) has not yet happened when
+        # the next tick's spawn reuses the slot.
+        missile_alive=jnp.where(ok & (state.missile_tx == i), False,
+                                state.missile_alive),
         next_spawn_seq=jnp.where(ok, state.next_spawn_seq + 1,
                                  state.next_spawn_seq),
     )

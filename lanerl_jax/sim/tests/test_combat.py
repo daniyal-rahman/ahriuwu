@@ -527,3 +527,156 @@ def test_garen_passive_exempt_matrix():
         got = garen_passive_exempt(is_lane_minion, is_cannon_or_super,
                                    jnp.asarray([level]), jnp)[:, 0]
         assert list(np.asarray(got)) == want, f"level {level}"
+
+
+# ---------------------------------------------------------------------------
+# `ENT-01` / `ENT-02` (entity audit, 2026-09-23): two ways a policy earned CS
+# in the sim that the server does not pay. Both were found by an audit that
+# read `ObjAIBase.UpdateTarget` against `step.py`, and both were then
+# reproduced through a real tick before being fixed.
+# ---------------------------------------------------------------------------
+def _arena_with_minions(patch, minions):
+    """Blue Garen (slot 0) at (6000, 6000) and a list of ``(slot, team, hp,
+    dx)`` melee minions placed ``dx`` units along +x from him. Champion 1 is
+    parked far away so it plays no part. All 24 turrets are omitted (an
+    in-range turret steals kills; see the lowest-index test in test_rewards).
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.init import init_lane
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, Team
+    from lanerl_jax.sim.targeting import MinionType
+
+    s = init_lane(patch, include_all_turrets=False)
+    kind = np.asarray(s.kind).copy(); team = np.asarray(s.team).copy()
+    alive = np.asarray(s.alive).copy(); x = np.asarray(s.x).copy()
+    y = np.asarray(s.y).copy(); hp = np.asarray(s.hp).copy()
+    model = np.asarray(s.model).copy()
+    x[0], y[0] = 6000.0, 6000.0
+    x[1], y[1] = 1000.0, 1000.0
+    team[0], team[1] = Team.BLUE, Team.RED
+    for slot, t, h, dx in minions:
+        kind[slot] = Kind.LANE_MINION
+        team[slot] = t
+        alive[slot] = True
+        model[slot] = profile_id(Kind.LANE_MINION, MinionType.MELEE, t)
+        x[slot], y[slot] = 6000.0 + dx, 6000.0
+        hp[slot] = h
+    present = alive & (kind != Kind.NONE)
+    return s.replace(
+        kind=jnp.asarray(kind), team=jnp.asarray(team), alive=jnp.asarray(alive),
+        x=jnp.asarray(x), y=jnp.asarray(y), hp=jnp.asarray(hp),
+        collision_x=jnp.asarray(x), collision_y=jnp.asarray(y),
+        collision_present=jnp.asarray(present), model=jnp.asarray(model),
+        target=jnp.asarray(np.full(kind.shape[0], -1, np.int8)))
+
+
+def _attack(slot):
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.orders import OrderKind, Orders
+    return Orders(kind=jnp.asarray([OrderKind.ATTACK, OrderKind.NOOP], jnp.int8),
+                  x=jnp.zeros(2), y=jnp.zeros(2),
+                  target=jnp.asarray([slot, -1], jnp.int8))
+
+
+def test_an_attack_order_on_an_allied_minion_holds_it_but_never_swings_or_pays():
+    """`ENT-01`. `LanerlControl` sets any unit as `TargetUnit` with no team
+    check, and `ObjAIBase.UpdateTarget` then does nothing with it: the swing,
+    chase and hold branch is inside `if (TargetUnit.Team != Team ...)`
+    (`ObjAIBase.cs:1285`). So the order is ACCEPTED and HELD (it releases a
+    sticky enemy target, the server's only disengage) and never swings.
+
+    Before the fix the sim chased, swung, killed a 50 HP allied minion in 22
+    ticks and paid +20 gold and +1 CS for it -- a policy that learned to deny
+    its own wave would score CS here and zero in the server.
+    """
+    import jax
+
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import lane_params
+    from lanerl_jax.sim.orders import apply_orders
+    from lanerl_jax.sim.state import Team
+    from lanerl_jax.sim.step import tick
+
+    patch = load_patch()
+    params = lane_params(patch)
+    ally = 2
+    s = _arena_with_minions(patch, [(ally, Team.BLUE, 50.0, 60.0)])
+    s = apply_orders(s, _attack(ally), params)
+    assert int(s.target[0]) == ally, "the order is accepted, as on the server"
+    gold0 = float(s.gold[0])
+    # Jitted: an eager `tick` is ~10 s per call on the login node.
+    jtick = jax.jit(lambda st: tick(st, params))
+    for _ in range(90):
+        s = jtick(s)
+    assert bool(s.alive[ally]) and float(s.hp[ally]) == 50.0, "never swung at"
+    assert int(s.cs[0]) == 0 and float(s.gold[0]) == gold0
+    assert not bool(s.is_attacking[0])
+    assert int(s.target[0]) == ally, "held, not dropped: the disengage works"
+
+
+def test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on():
+    """`ENT-02`. `Spell.FinishCasting` applies the melee hit to
+    `CastInfo.Targets[0].Unit` (`Spell.cs:1030`), the unit the swing was
+    declared on; `SetTargetUnit` never rewrites it, and the
+    `SetCurrentTarget` branch (`ObjAIBase.cs:1326`) is dead code behind the
+    `IsAttacking` early return at `:1245`.
+
+    Before the fix the hit resolved against the CURRENT target: start a swing
+    on the 455 HP minion A, re-order onto the 30 HP minion B on the last
+    frame, and B died while A was untouched -- zero-wind-up last-hitting.
+    """
+    import jax
+
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import lane_params
+    from lanerl_jax.sim.orders import apply_orders
+    from lanerl_jax.sim.state import Team
+    from lanerl_jax.sim.step import tick
+
+    patch = load_patch()
+    params = lane_params(patch)
+    a, b = 2, 3
+    s = _arena_with_minions(patch, [(a, Team.RED, 455.0, 60.0),
+                                    (b, Team.RED, 30.0, 110.0)])
+    s = apply_orders(s, _attack(a), params)
+    jtick = jax.jit(lambda st: tick(st, params))
+    for _ in range(5):
+        s = jtick(s)
+        if bool(s.is_attacking[0]):
+            break
+    assert bool(s.is_attacking[0]) and int(s.aa_target[0]) == a
+    # Re-aim mid-wind-up. The current target changes; the swing's does not.
+    s = apply_orders(s, _attack(b), params)
+    assert int(s.target[0]) == b and int(s.aa_target[0]) == a
+    hp_a, hp_b = float(s.hp[a]), float(s.hp[b])
+    for _ in range(60):
+        s = jtick(s)
+        if float(s.hp[a]) < hp_a or float(s.hp[b]) < hp_b:
+            break
+    assert float(s.hp[a]) < hp_a, "the hit landed on A, the swing's target"
+    assert float(s.hp[b]) == hp_b and bool(s.alive[b]), "B untouched"
+    assert int(s.cs[0]) == 0
+    assert int(s.aa_target[0]) == -1, "cleared once the swing has landed"
+
+
+def test_death_rewards_never_pay_a_same_team_killer():
+    """Belt and braces under `ENT-01`: even if a same-team killer index
+    reached attribution, `death_rewards` pays no gold and no CS for it."""
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.rewards import death_rewards
+    from lanerl_jax.sim.state import Kind, Team
+
+    kind = jnp.asarray([Kind.CHAMPION, Kind.CHAMPION, Kind.LANE_MINION], jnp.int8)
+    team = jnp.asarray([Team.BLUE, Team.RED, Team.BLUE], jnp.int8)
+    out = death_rewards(
+        died=jnp.asarray([False, False, True]),
+        killer=jnp.asarray([-1, -1, 0], jnp.int8),
+        x=jnp.zeros(3), y=jnp.zeros(3), team=team, kind=kind,
+        alive=jnp.asarray([True, True, False]),
+        gold_on_death=jnp.asarray([0.0, 0.0, 20.0]),
+        xp_on_death=jnp.asarray([0.0, 0.0, 60.0]))
+    assert float(out.gold[0]) == 0.0 and int(out.cs[0]) == 0

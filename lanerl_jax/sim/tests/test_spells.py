@@ -221,8 +221,13 @@ def test_spinning_damages_nearby_enemies():
     assert after < before, "the spin dealt no damage"
     # six 500 ms ticks over 3 s, minions at 0.75x, melee minions have 0 armour
     per_tick = float(e_damage_at_rank(jnp.int32(1), jnp.float32(GAREN_AD_L1)))
+    # rel=0.05, not 0.25. At 0.25 this assertion passed with SEVEN ticks
+    # (7/6 = 1.167, comfortably inside the tolerance) while its own comment said
+    # six -- which is how a +16.7% error on the one spell this policy farms with
+    # survived in a test named for the behaviour. See
+    # `test_e_tick_schedule_drifts_like_the_server_accumulator`.
     assert before - after == pytest.approx(
-        per_tick * E_MINION_MULTIPLIER * 6, rel=0.25)
+        per_tick * E_MINION_MULTIPLIER * 6, rel=0.05)
 
 
 def test_enemies_outside_the_radius_are_untouched():
@@ -1023,48 +1028,139 @@ def test_death_clears_owner_q_empowerment_and_haste():
     assert int(out.buff_id[0, Q_HASTE_BUFF_SLOT]) == BuffId.NONE
 
 
-def test_e_recast_during_the_spin_is_refused():
-    """A second E while the spin is running must be a no-op.
+def test_e_recast_is_ignored_early_and_cancels_the_spin_after_one_second():
+    """E has THREE outcomes, and modelling it with two was exploitable.
 
-    The regression test for a simulator exploit an RL policy actually found and
-    learned. E's cooldown starts when the spin ENDS, so mid-spin
-    `spell_cooldown[E]` is 0; without an `already_open` guard the re-cast passed
-    `ready` and reset `buff_elapsed` to 0.0, so a policy casting E every
-    decision held the spin at elapsed 0 forever -- a permanent damage aura that
-    never expired and never went on cooldown. Measured on the trained
-    checkpoint: 80-83% of decisions were E casts and the sim's E cooldown never
-    rose once in 300 s, against 44 completed spins in the C# server under the
-    same orders.
+    `Characters/Garen/E.cs` swaps the E slot for `GarenECancel` on cast and
+    gives that a 1 s cooldown, so:
+
+        re-cast at elapsed < 1.0 s   ignored, spin continues
+        re-cast at elapsed >= 1.0 s  spin ends NOW, full rank cooldown starts
+        no re-cast                   spin ends at 3.0 s, same cooldown
+
+    Real League agrees ("can be recast after 1 second while active"). With
+    neither branch modelled, mid-spin `spell_cooldown[E]` is 0, a re-cast
+    passed the gate and reset `buff_elapsed` to 0.0 -- so a policy casting E
+    every decision held the spin at elapsed 0 forever: a permanent damage aura
+    that never expired and never went on cooldown. Measured on the trained
+    checkpoint: E cast on 80-83% of decisions, the sim's E cooldown never rose
+    once in 300 s, against 44 completed spins in the C# server over the same
+    window under the same orders, and 53 CS in the sim against 0 in the server.
     """
     import jax.numpy as jnp
 
-    from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, E_DURATION_S, cast_e
+    from lanerl_jax.sim.spells import (BuffId, E_BUFF_SLOT, E_CANCEL_MIN_S,
+                                       E_COOLDOWNS, E_DURATION_S, Slot, cast_e)
 
     n = 2
     z = lambda: jnp.zeros((n, 8), jnp.float32)          # noqa: E731
     buff_id = jnp.zeros((n, 8), jnp.int8)
-    cd = jnp.zeros((n, 4), jnp.float32)
+    cd0 = jnp.zeros((n, 4), jnp.float32)
     rank = jnp.ones((n,), jnp.int32)
     ad = jnp.full((n,), 78.0, jnp.float32)
     want = jnp.ones((n,), bool)
 
-    bid, bel, bdur, bpow, started = cast_e(
-        buff_id, z(), z(), z(), cd, want, rank, ad)
+    bid, bel, bdur, bpow, cd, started = cast_e(
+        buff_id, z(), z(), z(), cd0, want, rank, ad)
     assert bool(started[0]) and int(bid[0, E_BUFF_SLOT]) == BuffId.GAREN_E
     assert float(bdur[0, E_BUFF_SLOT]) == E_DURATION_S
+    assert float(cd[0, Slot.E]) == 0.0, "the cooldown must not start at cast"
 
-    # the spin has been running 2.5 s of its 3.0 s and the cooldown is still 0,
-    # which is exactly the window the exploit lived in
-    bel = bel.at[:, E_BUFF_SLOT].set(2.5)
-    bid2, bel2, _, _, started2 = cast_e(
-        bid, bel, bdur, bpow, cd, want, rank, ad)
-    assert not bool(started2[0]), "E re-cast during its own spin was accepted"
-    assert float(bel2[0, E_BUFF_SLOT]) == 2.5, (
-        "the re-cast reset buff_elapsed -- the spin can never expire")
+    # (1) inside the cancel window: silently refused, and -- the exploit -- the
+    # elapsed clock must NOT be reset, or the spin can never expire.
+    early = bel.at[:, E_BUFF_SLOT].set(E_CANCEL_MIN_S - 0.1)
+    bid1, bel1, _, _, cd1, started1 = cast_e(
+        bid, early, bdur, bpow, cd, want, rank, ad)
+    assert not bool(started1[0])
+    assert int(bid1[0, E_BUFF_SLOT]) == BuffId.GAREN_E, "spin ended too early"
+    assert float(bel1[0, E_BUFF_SLOT]) == pytest.approx(E_CANCEL_MIN_S - 0.1), (
+        "the refused re-cast reset buff_elapsed -- the spin can never expire")
+    assert float(cd1[0, Slot.E]) == 0.0
 
-    # once the buff slot is clear the spell is castable again, so the guard is
-    # not just permanently disabling E
-    _, _, _, _, started3 = cast_e(
-        bid.at[:, E_BUFF_SLOT].set(BuffId.NONE), bel, bdur, bpow, cd, want,
+    # (2) at or past the window: the spin ends now and the FULL rank cooldown
+    # starts, which is `GarenE.OnDeactivate`'s `SetCooldown(GetCooldown())`.
+    late = bel.at[:, E_BUFF_SLOT].set(E_CANCEL_MIN_S + 0.5)
+    bid2, bel2, _, _, cd2, started2 = cast_e(
+        bid, late, bdur, bpow, cd, want, rank, ad)
+    assert not bool(started2[0]), "a cancel must not report as a fresh cast"
+    assert int(bid2[0, E_BUFF_SLOT]) == BuffId.NONE, "the spin did not end"
+    assert float(bel2[0, E_BUFF_SLOT]) == 0.0
+    assert float(cd2[0, Slot.E]) == pytest.approx(E_COOLDOWNS[0]), (
+        "cancelling did not start the full rank cooldown")
+
+    # (3) the guard is not permanently disabling E: with the lane clear and the
+    # cooldown expired, E casts again.
+    _, _, _, _, _, started3 = cast_e(
+        bid.at[:, E_BUFF_SLOT].set(BuffId.NONE), bel2, bdur, bpow, cd0, want,
         rank, ad)
     assert bool(started3[0]), "E refused after the spin ended"
+
+    # (4) rank selects the cooldown, so this is not a hardcoded 13.
+    r3 = jnp.full((n,), 3, jnp.int32)
+    _, _, _, _, cd4, _ = cast_e(bid, late, bdur, bpow, cd, want, r3, ad)
+    assert float(cd4[0, Slot.E]) == pytest.approx(E_COOLDOWNS[2])
+
+
+def test_e_tick_schedule_drifts_like_the_server_accumulator():
+    """SIX ticks, at the server's drifting times -- not seven on an exact grid.
+
+    `GarenE.OnUpdate` keeps `TimeSinceLastTick` in ms, primed to 500 so the
+    first update fires immediately, and RESETS IT TO 0 on each fire. The period
+    therefore drifts by one frame each time and the spin fires at
+
+        0.0167  0.5333  1.0500  1.5667  2.0833  2.6000   (six)
+
+    with the seventh falling at 3.117 s, past the 3.0 s expiry. The previous
+    implementation used an absolute `floor(elapsed * 1000 / 500)` grid, which
+    fires at 0.0167 and then at every exact multiple of 500 ms -- 0.5, 1.0, 1.5,
+    2.0, 2.5, 3.0 -- i.e. SEVEN ticks and up to 83 ms of phase error. That is
+    +16.7% damage per spin on the one spell the trained policy farms with, and
+    the phase decides which minions are inside the radius when a tick lands.
+
+    Driven through `step_buffs` directly, feeding its own outputs back, because
+    the schedule is a property of the accumulator and nothing else.
+    """
+    from lanerl_jax.sim.spells import (E_TICK_BUFF_SLOT, E_TICK_MS, cast_e,
+                                       step_buffs)
+
+    n = 2
+    delta_ms = 1000.0 / 60.0
+    z = lambda: jnp.zeros((n, 8), jnp.float32)          # noqa: E731
+    x = jnp.asarray([0.0, 100.0], jnp.float32)
+    y = jnp.zeros((n,), jnp.float32)
+    kind = jnp.asarray([Kind.CHAMPION, Kind.LANE_MINION], jnp.int32)
+    team = jnp.asarray([0, 1], jnp.int32)
+    alive = jnp.ones((n,), bool)
+
+    bid, bel, bdur, bpow, cd, started = cast_e(
+        jnp.zeros((n, 8), jnp.int8), z(), z(), z(), jnp.zeros((n, 4), jnp.float32),
+        jnp.asarray([True, False]), jnp.ones((n,), jnp.int32),
+        jnp.full((n,), GAREN_AD_L1, jnp.float32))
+    assert bool(started[0])
+    assert float(bel[0, E_TICK_BUFF_SLOT]) == pytest.approx(E_TICK_MS), (
+        "cast_e did not prime the accumulator to the server's 500 ms")
+
+    fire_times, t_s = [], 0.0
+    for _ in range(int(4.0 * 60)):                 # a second past expiry
+        bs = step_buffs(
+            buff_id=bid, buff_elapsed=bel, buff_duration=bdur, buff_power=bpow,
+            spell_cooldown=cd, spell_level=jnp.ones((n, 4), jnp.int32),
+            x=x, y=y, kind=kind, team=team, alive=alive,
+            armor=jnp.zeros((n,), jnp.float32),
+            collision_radius=jnp.asarray([30.0, 40.0], jnp.float32),
+            delta_ms=delta_ms)
+        t_s += delta_ms / 1000.0
+        if float(bs.damage_dealt[1]) > 0:
+            fire_times.append(round(t_s, 4))
+        # `BuffStep` carries no `buff_duration` -- durations are set at cast
+        # and never change, so the cast-time value is carried through unchanged.
+        bid, bel, bpow, cd = (bs.buff_id, bs.buff_elapsed, bs.buff_power,
+                              bs.spell_cooldown)
+
+    assert len(fire_times) == 6, (
+        f"{len(fire_times)} ticks, want 6: {fire_times}")
+    want = [0.0167, 0.5333, 1.0500, 1.5667, 2.0833, 2.6000]
+    for got, exp in zip(fire_times, want):
+        assert got == pytest.approx(exp, abs=0.02), (
+            f"fire schedule {fire_times} does not drift like the server's "
+            f"accumulator; wanted {want}")

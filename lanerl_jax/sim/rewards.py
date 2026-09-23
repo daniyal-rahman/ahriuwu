@@ -140,8 +140,13 @@ def death_rewards(*, died: jax.Array, killer: jax.Array, x: jax.Array,
 
     # ---- gold and CS: the killer alone -----------------------------------
     k = jnp.clip(killer, 0, n - 1)
+    # `& (team[k] != team)`: the order path refuses to swing at an ally
+    # (`step.py`, `ENT-01`), so a same-team killer cannot arise from a
+    # champion's own auto-attack. It is guarded here as well because gold
+    # for killing your own minion is the single most valuable wrong answer
+    # this function could give, and the guard is one gather.
     pays = died & victim_is_minion & (killer >= 0) & is_champ[k] \
-        & (gold_on_death > 0)
+        & (gold_on_death > 0) & (team[k] != team)
     gold = jnp.zeros((n,), x.dtype).at[k].add(
         jnp.where(pays, gold_on_death, jnp.zeros_like(gold_on_death)))
     cs = jnp.zeros((n,), jnp.int32).at[k].add(jnp.where(pays, 1, 0))

@@ -133,6 +133,8 @@ class AutoAttackOut(NamedTuple):
     hit: Any             # True on the tick the damage lands
     damage: Any          # post-mitigation damage on that tick, else 0
     consumed_skip: Any   # True where a pending SkipNextAutoAttack was consumed
+    start: Any           # True on the tick a swing begins (its target is
+                         # the one the hit will land on -- see `step.py`)
 
 
 def ideal_attack_range(attack_range: Any, target_collision_radius: Any) -> Any:
@@ -165,6 +167,7 @@ def step_autoattack(
     empowered_attack: Any = False,
     empowered_damage: Any = None,
     skip_next_autoattack: Any = False,
+    may_engage: Any = True,
     xp: Any = np,
 ) -> AutoAttackOut:
     """One tick of the auto-attack clock for a batch of units.
@@ -207,7 +210,22 @@ def step_autoattack(
     # for the whole windup, so this is always a `reset=true` cancel -- cooldown
     # and windup both zero, immediately re-engageable.
     still_casting = winding & (windup > 0)
-    cancel = still_casting & (~has_target | ~in_range)
+    # `~can_attack` belongs here, and leaving it out was exploitable.
+    #
+    # `can_attack` carries E's `suppress_attack`, but it only gated the START
+    # of a swing below -- so a swing already winding up when E was cast kept
+    # decrementing and `hit` fired. A policy that times E to land on the last
+    # frame of a windup therefore got the auto AND the spin, straight into the
+    # last-hit reward channel.
+    #
+    # The server cancels it: `GarenE` clears `StatusFlags.CanAttack`, Garen's
+    # basic attacks carry `CantCancelWhileWindingUp = 0`, so `CastCancelCheck`
+    # reaches `Spell.cs`'s `(CastInfo.IsAutoAttack && ... ||
+    # !status.HasFlag(StatusFlags.CanAttack))` and calls `ResetSpellCast()`.
+    # Real League agrees -- E makes you unable to declare basic attacks.
+    cancel_lost_target = still_casting & (~has_target | ~in_range)
+    cancel_suppressed = still_casting & ~can_attack
+    cancel = cancel_lost_target | cancel_suppressed
 
     # A skipped auto sets `IsAttacking` but never calls `Spell.Cast` or starts
     # its cooldown. On the following server update `UpdateTarget` observes the
@@ -230,12 +248,20 @@ def step_autoattack(
                          is_attacking)
     hit_done = has_auto_attacked | hit
     windup = xp.where(hit | cancel, xp.zeros_like(windup), windup)
-    cd = xp.where(cancel, xp.zeros_like(cd), cd)
+    # ONLY the lost-target cancel zeroes the cooldown. That path is
+    # `CancelAutoAttack(!HasAutoAttacked, true)` -- a `reset=true` cancel.
+    # `ResetSpellCast` on the suppressed path leaves `_autoAttackCurrentCooldown`
+    # alone, so a suppressed swing does not hand back a free re-engage.
+    cd = xp.where(cancel_lost_target, xp.zeros_like(cd), cd)
 
     # 3. the swing gate. `AutoAttackSpell.State == STATE_READY` is "not already
     #    winding up", which is `~attacking` here.
-    start = (has_target & in_range & can_attack & (~attacking) & (cd <= 0)
-             & ~skipped_ready)
+    #    `may_engage` is `TargetUnit.Team != Team` (`ObjAIBase.cs:1285`): the
+    #    swing branch is inside that test, the cancel branch above is not.
+    #    A held ALLY target therefore neither starts a swing nor cancels
+    #    one already in flight (which lands on the unit it started on).
+    start = (has_target & in_range & can_attack & may_engage & (~attacking)
+             & (cd <= 0) & ~skipped_ready)
     consumed_skip = start & skip_next_autoattack
     cd = xp.where(start, xp.where(consumed_skip, xp.zeros_like(cd), attack_period), cd)
     windup = xp.where(start,
@@ -253,4 +279,5 @@ def step_autoattack(
     #    (an idle unit, or a `reset=true` cancel) is never pushed negative.
     cd = xp.where(cd > 0, cd - dt_s, cd)
 
-    return AutoAttackOut(cd, windup, attacking, hit_done, hit, dmg, consumed_skip)
+    return AutoAttackOut(cd, windup, attacking, hit_done, hit, dmg, consumed_skip,
+                         start)

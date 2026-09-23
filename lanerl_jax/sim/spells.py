@@ -184,7 +184,8 @@ __all__ = [
     "E_MINION_MULTIPLIER", "E_COOLDOWNS", "SKILL_ORDER", "RANKS_BY_LEVEL",
     "e_damage_at_rank", "cast_e",
     "E_BUFF_SLOT", "W_BUFF_SLOT", "W_PASSIVE_BUFF_SLOT", "Q_BUFF_SLOT",
-    "Q_HASTE_BUFF_SLOT", "R_PENDING_BUFF_SLOT",
+    "Q_HASTE_BUFF_SLOT", "R_PENDING_BUFF_SLOT", "E_TICK_BUFF_SLOT",
+    "E_CANCEL_MIN_S",
     "Q_BUFF_DURATION", "Q_COOLDOWN",
     "Q_HASTE_MULTIPLIER", "q_haste_duration_at_rank", "q_silence_duration_at_rank",
     "q_damage_at_rank", "cast_q", "consume_q_on_hit",
@@ -243,6 +244,19 @@ W_PASSIVE_BUFF_SLOT = 2
 Q_BUFF_SLOT = 3
 Q_HASTE_BUFF_SLOT = 4
 R_PENDING_BUFF_SLOT = 5
+#: E's periodic-damage accumulator, and the ONLY lane whose `buff_elapsed`
+#: entry is in MILLISECONDS rather than seconds. That asymmetry is deliberate
+#: and it is the point: the server's `GarenE.OnUpdate` keeps a
+#: `TimeSinceLastTick` in ms which it initialises to 500 and RESETS TO 0 on
+#: every fire, so the period drifts with the frame time and the fire times are
+#: 0.0167, 0.5333, 1.050, 1.5667, 2.0833, 2.600 -- SIX ticks, the seventh
+#: falling at 3.117 s, past the 3.0 s expiry. Reproducing that needs the
+#: server's own accumulator arithmetic in the server's own units; an absolute
+#: `floor(elapsed / 500)` grid fires at 0.0167 and then every exact 500 ms,
+#: which is SEVEN ticks (+16.7% damage per spin) with a phase up to 83 ms off,
+#: and phase decides which minions are inside the radius when a tick lands.
+#: `buff_id` is never set for this lane -- it is scratch space, not a buff.
+E_TICK_BUFF_SLOT = 6
 
 # `Buffs/Garen/GarenQHaste.cs:34`: `MoveSpeed.PercentBonus += 0.35f`.
 Q_HASTE_MULTIPLIER = 1.35
@@ -255,6 +269,12 @@ E_DURATION_S = 3.0
 E_TICK_MS = 500.0
 #: minions take three quarters
 E_MINION_MULTIPLIER = 0.75
+#: `GetSpell("GarenECancel").SetCooldown(1f, true)` -- Characters/Garen/E.cs.
+#: A re-cast before this is silently refused (`Spell.Cast` sees a spell that is
+#: not `STATE_READY`) and the spin continues; at or after it, the spin ends and
+#: the full rank cooldown starts. Real League: "can be recast after 1 second
+#: while active".
+E_CANCEL_MIN_S = 1.0
 #: ``constants.GAREN_COOLDOWNS["E"]`` -- Spells/GarenE/GarenE.json
 E_COOLDOWNS = (13.0, 12.0, 11.0, 10.0, 9.0)
 
@@ -284,54 +304,89 @@ def e_damage_at_rank(rank: jax.Array, attack_damage: jax.Array) -> jax.Array:
 
 
 def cast_e(buff_id, buff_elapsed, buff_duration, buff_power,
-           spell_cooldown, want_cast, rank, attack_damage, slot=E_BUFF_SLOT):
+           spell_cooldown, want_cast, rank, attack_damage, slot=E_BUFF_SLOT,
+           tick_slot=E_TICK_BUFF_SLOT):
     """Start the spin for every unit whose ``want_cast`` is set and E is ready.
 
     Writes into buff slot ``slot``. A general free-slot search is not worth the
     gather here: Garen has exactly one buff that does anything in lane, and the
     slot is a fixed lane in the table.
     """
-    # `already_open` is NOT optional, and leaving it out gave the RL agent a
-    # permanent damage aura.
+    # E HAS THREE OUTCOMES, not two, and modelling it with two gave an RL
+    # policy a permanent damage aura it learned to live off.
     #
-    # E is the one Garen spell whose cooldown starts when the spin ENDS, not
-    # when it is cast (`orders.py`: "cast_e never touches cooldown; step_buffs
-    # does"). So mid-spin `spell_cooldown[E]` is 0, and without this guard a
-    # re-cast passed `ready` and reset `buff_elapsed` to 0.0 below. A policy
-    # casting E every decision therefore held the spin at elapsed 0.0 for the
-    # whole episode: it never reached `E_DURATION_S`, never expired, never
-    # started its cooldown, and kept dealing its 500 ms periodic damage.
+    # The server does not "refuse" a re-cast -- it SWAPS THE SLOT.
+    # `Characters/Garen/E.cs`'s `OnSpellPostCast` does
+    # `SetSpell("GarenECancel", 2, true)`, which replaces `Spells[2]` with a
+    # different spell object and deactivates the GarenE one (discarding the
+    # cooldown `FinishCasting` had just written), then puts GarenECancel on a
+    # 1 s cooldown. So a "cast slot 2" during the spin reaches GarenECancel,
+    # whose `OnSpellPostCast` removes the GarenE buff; the buff's
+    # `OnDeactivate` (`Buffs/Garen/GarenE.cs`) restores `CanAttack`, clears
+    # `Ghosted`, swaps GarenE back and sets the FULL rank cooldown. Inside the
+    # first second GarenECancel is not `STATE_READY`, so `Spell.Cast` returns
+    # false and the spin simply continues.
     #
-    # Measured, on the RL-006 checkpoint: E cast on 80-83% of decisions and the
-    # cooldown never rose ONCE in 300 s of game time, against 44 spins in the
-    # C# server over the same window under the same orders. `Spell.Cast` there
-    # is gated by `champ.CanCast(sp)`, which refuses a cast while the spell is
-    # active -- `LanerlControl`'s cast handler returns on it silently, because
-    # a refused cast is ordinary gameplay.
+    #     re-cast at elapsed < 1.0 s   ignored, spin continues
+    #     re-cast at elapsed >= 1.0 s  spin ENDS NOW, full cooldown starts
+    #     no re-cast                   spin ends at 3.0 s, same cooldown
     #
-    # `cast_q` has always had this guard, in this exact shape, for the same
-    # reason (Q's cooldown starts after its empowerment window). `cast_w` and
-    # `cast_r` do not need it: both write their cooldown at cast time, so the
-    # `spell_cooldown <= 0` term already refuses a re-cast.
+    # Real League agrees: "Recast: Judgment is ended early", "can be recast
+    # after 1 second while active". (Real League also starts the cooldown on
+    # CAST; this 4.20 build starts it when the spin ends. The server is the
+    # authority here, so cooldown-on-end stays.)
     #
-    # The observation builder ALREADY modelled the correct rule -- its
+    # What the old two-outcome model cost: with neither the cancel nor a guard,
+    # mid-spin `spell_cooldown[E]` is 0, the re-cast passed `ready`, and it
+    # reset `buff_elapsed` to 0.0 -- so a policy casting E every decision held
+    # the spin at elapsed 0 forever. It never reached `E_DURATION_S`, never
+    # expired, never started its cooldown, and kept dealing its 500 ms periodic
+    # damage. Measured on the trained checkpoint: E cast on 80-83% of decisions
+    # and the sim's E cooldown never rose ONCE in 300 s, against 44 completed
+    # spins in the C# server over the same window under the same orders.
+    #
+    # An intermediate "always refuse" guard was wrong in the other direction --
+    # it gave 19 spins per 300 s against the server's 44, because a spin that
+    # cannot be cancelled runs its full 3 s before the cooldown even begins.
+    #
+    # `cast_q` carries the analogous guard for the analogous reason (Q's
+    # cooldown starts after its empowerment window). `cast_w` and `cast_r` need
+    # none: both write their cooldown at cast time, so `spell_cooldown <= 0`
+    # already refuses a re-cast.
+    #
+    # The observation builder ALREADY modelled availability correctly -- its
     # `cast_locked` term reports E unavailable while `buff_id[E] ==
-    # BuffId.GAREN_E`, "unavailable while active despite a zero countdown". So
-    # the sim was telling the policy E was unavailable and then casting it
-    # anyway, which is the worst of both: the feature could not explain the
-    # reward, and the reward taught the policy to press the button regardless.
-    already_open = buff_id[:, slot] == BuffId.GAREN_E
+    # BuffId.GAREN_E`. The sim was telling the policy E was unavailable and
+    # casting it anyway, which is the worst of both: the feature could not
+    # explain the reward, and the reward taught the policy to press regardless.
+    open_now = buff_id[:, slot] == BuffId.GAREN_E
+    cancellable = open_now & (buff_elapsed[:, slot] >= E_CANCEL_MIN_S)
     ready = (want_cast & (spell_cooldown[:, Slot.E] <= 0) & (rank > 0)
-             & ~already_open)
+             & ~open_now)
+    cancel = want_cast & cancellable
     dmg = e_damage_at_rank(rank, attack_damage)
+    r = jnp.clip(rank.astype(jnp.int32), 1, len(E_COOLDOWNS))
+    cd_table = jnp.asarray(E_COOLDOWNS, spell_cooldown.dtype)
+    # A cancelled spin deals no tick on the tick it is cancelled: orders run
+    # before `step_buffs`, which is also the server's order (`RemoveBuff` in
+    # the order phase, `UpdateBuffs` after).
     return (
         buff_id.at[:, slot].set(
-            jnp.where(ready, jnp.int8(BuffId.GAREN_E), buff_id[:, slot])),
+            jnp.where(ready, jnp.int8(BuffId.GAREN_E),
+                      jnp.where(cancel, jnp.int8(BuffId.NONE),
+                                buff_id[:, slot]))),
         buff_elapsed.at[:, slot].set(
-            jnp.where(ready, 0.0, buff_elapsed[:, slot])),
+            jnp.where(ready | cancel, 0.0, buff_elapsed[:, slot])
+            # ... and prime E's tick accumulator to E_TICK_MS, which is the
+            # server's `TimeSinceLastTick = 500` initial condition: the first
+            # `OnUpdate` after the cast fires immediately.
+            ).at[:, tick_slot].set(
+            jnp.where(ready, E_TICK_MS, buff_elapsed[:, tick_slot])),
         buff_duration.at[:, slot].set(
             jnp.where(ready, E_DURATION_S, buff_duration[:, slot])),
         buff_power.at[:, slot].set(jnp.where(ready, dmg, buff_power[:, slot])),
+        spell_cooldown.at[:, Slot.E].set(
+            jnp.where(cancel, cd_table[r - 1], spell_cooldown[:, Slot.E])),
         ready,
     )
 
@@ -628,8 +683,10 @@ class BuffStep(NamedTuple):
 def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
                spell_cooldown, spell_level, x, y, kind, team, alive, armor,
                magic_resist=None, hp=None, max_hp=None,
+               collision_radius=None,
                delta_ms: float = 1000.0 / 60.0,
                e_slot: int = E_BUFF_SLOT, w_slot: int = W_BUFF_SLOT,
+               tick_slot: int = E_TICK_BUFF_SLOT,
                wp_slot: int = W_PASSIVE_BUFF_SLOT, q_slot: int = Q_BUFF_SLOT,
                qh_slot: int = Q_HASTE_BUFF_SLOT,
                r_slot: int = R_PENDING_BUFF_SLOT) -> BuffStep:
@@ -657,20 +714,32 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
                           buff_elapsed[:, e_slot])
 
     # `GarenE.TimeSinceLastTick` is constructed at 500 ms, so its first
-    # `OnUpdate(diff)` fires immediately; only later ticks wait another 500.
-    # `buff_elapsed == 0` is the fixed-shape equivalent of that private
-    # script-field initial condition.
-    before = jnp.floor(buff_elapsed[:, e_slot] * 1000.0 / E_TICK_MS)
-    after = jnp.floor(e_elapsed * 1000.0 / E_TICK_MS)
-    first_update = (buff_elapsed[:, e_slot] == 0.0) & (e_elapsed > 0.0)
-    fires = e_active & (first_update | (after > before))
+    # THE SERVER'S ACCUMULATOR, not an absolute grid. `GarenE.OnUpdate` keeps
+    # `TimeSinceLastTick` in ms, primed to 500 by `cast_e` and reset to 0 on
+    # every fire, so the period drifts by one frame each time: 0.0167, 0.5333,
+    # 1.050, 1.5667, 2.0833, 2.600 -- six ticks, the seventh at 3.117 s never
+    # arriving because the buff expires at 3.0. The previous
+    # `floor(elapsed / 500)` grid fired seven times, +16.7% damage per spin on
+    # the one spell this policy farms with, with a phase error up to 83 ms.
+    tick_acc = buff_elapsed[:, tick_slot] + jnp.where(e_active, delta_ms, 0.0)
+    fires = e_active & (tick_acc >= E_TICK_MS)
+    tick_acc = jnp.where(fires, 0.0, tick_acc)
 
     d2 = (x[None, :] - x[:, None]) ** 2 + (y[None, :] - y[:, None]) ** 2
     hittable = alive & (kind != Kind.TURRET) & (kind != Kind.NONE)
+    # E's 330 is CENTRE-TO-EDGE on the server, not centre-to-centre.
+    # `GetUnitsInRange` goes through `CollisionHandler.GetNearestObjects`, whose
+    # quadtree nodes are circles of the unit's own collision radius, and
+    # `Circle.IntersectsWith(Circle)` tests `dist^2 < (330 + r_unit)^2`. Minions
+    # are 40 and champions 30, so the effective radius is 370 and 360 -- about
+    # 26% more area than the 330 this used, i.e. the sim systematically
+    # UNDER-hit. Strict `<`, matching `IntersectsWith`.
+    reach = E_RADIUS + (jnp.zeros_like(x) if collision_radius is None
+                        else collision_radius)
     hit = (
         fires[:, None] & hittable[None, :]
         & (team[None, :] != team[:, None])
-        & (d2 <= E_RADIUS * E_RADIUS)
+        & (d2 < (reach ** 2)[None, :])
     )
     mult = jnp.where(kind == Kind.LANE_MINION, E_MINION_MULTIPLIER, 1.0)
     raw = buff_power[:, e_slot][:, None] * mult[None, :]
@@ -833,6 +902,11 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
         jnp.where(q_expired, 0.0, q_elapsed))
     buff_elapsed_out = buff_elapsed_out.at[:, qh_slot].set(
         jnp.where(qh_expired, 0.0, qh_elapsed))
+    # E's tick accumulator, written back so the drift carries across ticks.
+    # Zeroed when the spin is not active so a later cast starts clean even
+    # though `cast_e` primes it anyway.
+    buff_elapsed_out = buff_elapsed_out.at[:, tick_slot].set(
+        jnp.where(e_active, tick_acc, 0.0))
     buff_elapsed_out = buff_elapsed_out.at[:, r_slot].set(
         jnp.where(r_expired, 0.0, r_elapsed))
     # wp_slot's elapsed/duration are left untouched: `infiniteduration` means

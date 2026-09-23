@@ -461,7 +461,8 @@ def repair_collision_terrain_batch(x: jax.Array, y: jax.Array,
                                    pathfinding_radius: jax.Array,
                                    moved_by_unit: jax.Array,
                                    terrain: TerrainGrid,
-                                   max_steps: int = MAX_TERRAIN_EXIT_STEPS):
+                                   max_steps: int = MAX_TERRAIN_EXIT_STEPS,
+                                   eligible: jax.Array | None = None):
     """Vectorized deferred collision-terrain repair for one environment.
 
     Unmoved units use CollisionHandler's point-query guard; units moved by a
@@ -469,6 +470,13 @@ def repair_collision_terrain_batch(x: jax.Array, y: jax.Array,
     independent per unit, but one masked while-loop lets the common case (no
     blocked result anywhere in the lane) execute zero iterations instead of
     lowering one conditional/while pair per unit.
+
+    ``eligible`` restricts the repair to units the inline path would repair:
+    `resolve_collisions` limits its terrain queries to `mover_indices`
+    (champions and minions), and without the same limit here the two
+    FOUNTAIN turrets -- which spawn on unwalkable cells by design -- were
+    spiralled out of terrain every tick and walked off across the map in
+    every RL run since 2026-09-18 (`COLL-004`).  Turrets never move.
 
     Deferring repair until the dynamic sweep completes is not source-order
     exact when an escape into terrain would have changed a later neighbour
@@ -482,6 +490,8 @@ def repair_collision_terrain_batch(x: jax.Array, y: jax.Array,
     walkable = jax.vmap(lambda px, py, r: is_walkable(px, py, r, terrain))(
         x, y, guard_radius)
     active0 = ~walkable
+    if eligible is not None:
+        active0 = active0 & jnp.asarray(eligible, bool)
     r0 = jnp.ones_like(radius, dtype=jnp.int32)
     cap = jnp.asarray(max_steps, jnp.int32)
     exit_radius = radius + jnp.asarray(1.0, radius.dtype)

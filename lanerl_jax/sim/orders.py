@@ -310,11 +310,14 @@ def apply_orders(state: LaneState, orders: Orders, params=None, *,
         e_ad = (params["attack_damage"][state.model]
                 + params["ad_per_level"][state.model]
                 * growth_sum(state.level, jnp))
-    bid, bel, bdur, bpow, cast_e_now = cast_e(
+    # `cast_e` DOES touch the cooldown now, and the comment that said otherwise
+    # was describing only one of E's three outcomes. A re-cast at >= 1 s ends
+    # the spin early and starts the full rank cooldown there and then; the
+    # natural 3 s expiry still starts it in `step_buffs`. See `cast_e`.
+    bid, bel, bdur, bpow, cd, cast_e_now = cast_e(
         state.buff_id, state.buff_elapsed, state.buff_duration,
         state.buff_power, state.spell_cooldown, casting_e,
         state.spell_level[:, Slot.E], e_ad)
-    cd = state.spell_cooldown       # cast_e never touches cooldown; step_buffs does.
 
     bid, bel, bdur, bpow, cd, cast_q_now = cast_q(
         bid, bel, bdur, bpow, cd, casting_q, state.spell_level[:, Slot.Q])

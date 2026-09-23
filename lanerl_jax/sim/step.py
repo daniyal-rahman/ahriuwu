@@ -57,7 +57,8 @@ from ..obs.fog import visible_to_enemy as _visible_to_enemy
 from .init import MINION_SPAWN, spawn_minion
 from .missiles import step_missiles
 from .profiles import PROFILES
-from .spells import (Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER,
+from .spells import (E_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT,
+                     Q_HASTE_MULTIPLIER,
                      R_PENDING_BUFF_SLOT, W_PASSIVE_BUFF_SLOT,
                      RANKS_BY_LEVEL, BuffId, Slot,
                      consume_q_on_hit, q_damage_at_rank,
@@ -272,7 +273,14 @@ def tick(state: LaneState, params: UnitParams,
     # already run. Collision therefore sees the Ghosted flag as it stood at the
     # end of last tick. Garen's E sets `StatusFlags.Ghosted`, so a spinning
     # Garen passes through units instead of being shoved out of the wave.
-    pre_ghosted = (state.buff_id[:, Slot.E] == BuffId.GAREN_E) & state.alive
+    # `E_BUFF_SLOT`, not `Slot.E`. `Slot.E` is 2 -- the SPELL slot -- while E's
+    # buff lives in buff lane `E_BUFF_SLOT` = 0. Lane 2 is `W_PASSIVE_BUFF_SLOT`
+    # and only ever holds `GAREN_W_PASSIVE` (3) or `NONE`, so this comparison
+    # was identically False and Garen NEVER ghosted while spinning. The sim was
+    # denying a real mechanic: spinning THROUGH a wave instead of being shoved
+    # out of it is a positioning tool the policy could never learn, and it
+    # biased every E-while-in-wave position. `obs/builder.py` had it right.
+    pre_ghosted = (state.buff_id[:, E_BUFF_SLOT] == BuffId.GAREN_E) & state.alive
     if enable_collision:
         cx, cy = resolve_collisions(state.x, state.y, state.kind, state.alive,
                                     state.spawn_seq, P("collision_radius"),
@@ -288,8 +296,13 @@ def tick(state: LaneState, params: UnitParams,
         cx, cy = state.x, state.y
     if enable_collision and defer_collision_terrain:
         moved_by_unit = (cx != state.x) | (cy != state.y)
+        # Same eligibility as the inline path's `mover_indices`: champions
+        # and minions. Without it the fountain turrets, which sit on
+        # unwalkable cells by design, were "repaired" out of terrain every
+        # tick and walked across the map in every RL run (`COLL-004`).
         cx, cy, _terrain_exhausted = repair_collision_terrain_batch(
-            cx, cy, P("pathfinding_radius"), moved_by_unit, _MAP1_TERRAIN)
+            cx, cy, P("pathfinding_radius"), moved_by_unit, _MAP1_TERRAIN,
+            eligible=jnp.arange(state.x.shape[0]) < TU_SLICE.start)
     # UpdateQuadTree runs now, before wave spawns and unit movement. A later
     # spawn is inserted into the same tree immediately by OnAdded; spawn_minion
     # mirrors that insertion in its masked slot write.
@@ -381,6 +394,10 @@ def tick(state: LaneState, params: UnitParams,
         x=state.x, y=state.y, kind=state.kind, team=state.team,
         alive=state.alive, armor=armor_now,
         magic_resist=magic_resist_now, hp=state.hp, max_hp=state.max_hp,
+        # E's 330 is centre-to-EDGE on the server: `GetUnitsInRange` tests the
+        # quadtree's per-unit collision circle, so the effective radius is
+        # 330 + r_target (370 vs minions, 360 vs champions).
+        collision_radius=P("collision_radius"),
         delta_ms=delta_ms)
 
     # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
@@ -633,7 +650,12 @@ def tick(state: LaneState, params: UnitParams,
     # reproduces both halves of that condition that apply here -- IsDead and
     # !IsVisibleByTeam -- rather than needing a separate alive check.
     cur_champ = jnp.clip(state.target, 0, n - 1)
-    keep_champ = is_champ & (state.target >= 0) & visible[cur_champ]
+    # `visible` is visible-to-the-ENEMY, which equals `IsVisibleByTeam(Team)`
+    # only for a hostile target. An ALLY target (`ENT-01`: accepted and held,
+    # the server's disengage) is unconditionally visible to its own team, so
+    # it is kept on the team test instead of blinking out on the fog test.
+    keep_champ = is_champ & (state.target >= 0) & (
+        visible[cur_champ] | (state.team[cur_champ] == state.team))
 
     # Turrets have their own rule entirely: priority first, distance never,
     # plus the dive override. `BaseTurret : ObjAIBase` (BaseTurret.cs:17), so
@@ -737,6 +759,30 @@ def tick(state: LaneState, params: UnitParams,
     ideal = P("attack_range") + P("collision_radius")[tgt]
     in_rng = d2 <= ideal * ideal
     has_tgt = target >= 0
+    # `ENT-01`. `UpdateTarget`'s swing/chase/hold branch sits inside
+    #     if (TargetUnit != null && TargetUnit.Team != Team && ...)
+    # (`ObjAIBase.cs:1285`). `LanerlControl` accepts an ALLY as a target with
+    # no team check, and the server then holds it and does nothing: no
+    # swing, no chase, no hold. Its one effect is to release a sticky enemy
+    # target, which is the server's only disengage, so the order is kept
+    # rather than refused. The port had no team test anywhere on this path:
+    # an ATTACK on an allied minion chased it, swung, killed it, and
+    # `death_rewards` paid the killer gold and CS for it (measured: +20 gold,
+    # +1 CS in 22 ticks). Real League cannot target allies at all.
+    hostile = has_tgt & (state.team[tgt] != state.team)
+    # `ENT-02`. The hit lands on the unit the SWING STARTED ON, not the
+    # current target: `Spell.FinishCasting` deals melee damage to
+    # `CastInfo.Targets[0].Unit` (`Spell.cs:1030`), a ranged swing's missile
+    # carries its own `TargetUnit`, and `SetTargetUnit` rewrites neither.
+    # Only the CANCEL test (`ObjAIBase.cs:1247`, out of range of the current
+    # target) reads `TargetUnit` during a wind-up. Resolving the hit against
+    # `target` let a policy re-aim a swing on its last frame onto whichever
+    # minion had just become killable -- zero-wind-up last-hitting, which the
+    # server does not do (measured: minion B died, A untouched). A swing
+    # carried in with no recorded target (hand-built test states, and
+    # checkpoints from before the field existed) falls back to `target`.
+    hit_target = jnp.where(state.aa_target >= 0, state.aa_target, target)
+    hit_tgt = jnp.clip(hit_target, 0, n - 1)
 
     # `UpdateTarget` DOES NOT REACH `RefreshWaypoints` DURING A WINDUP.
     # `ObjAIBase.cs:1192-1205` is an early return that fires on the
@@ -770,7 +816,7 @@ def tick(state: LaneState, params: UnitParams,
     # (`BaseTurret.cs:108-110`) is an empty override -- "Overridden function
     # unused by turrets" -- so a turret's move order is never touched by this
     # path at all and simply persists.
-    refresh = has_tgt & ~state.is_attacking & (state.kind != Kind.TURRET)
+    refresh = hostile & ~state.is_attacking & (state.kind != Kind.TURRET)
     hold = refresh & in_rng
     chase = refresh & ~in_rng
     wp = wp_after_lane
@@ -841,7 +887,7 @@ def tick(state: LaneState, params: UnitParams,
     attack_period_now = P("attack_period") / attack_speed_multiplier
     attack_windup_now = P("attack_windup") / attack_speed_multiplier
     raw_ad = _attack_damage_against(
-        ad_now, state.kind, state.kind[tgt], state.model, t_now)
+        ad_now, state.kind, state.kind[hit_tgt], state.model, t_now)
     aa = step_autoattack(
         state.aa_cooldown, state.aa_windup, state.is_attacking,
         state.has_auto_attacked,
@@ -854,13 +900,14 @@ def tick(state: LaneState, params: UnitParams,
         attack_period=attack_period_now,
         windup_time=attack_windup_now,
         attack_damage=raw_ad,
-        target_resist=armor_eff[tgt],
+        target_resist=armor_eff[hit_tgt],
         # Q's first post-cast gate is intentionally skipped; the following
         # swing uses GarenQAttack's complete replacement damage, not normal AD
         # plus an extra component.
         empowered_attack=bs.q_empowered,
         empowered_damage=q_damage_at_rank(state.spell_level[:, Slot.Q], ad_now),
         skip_next_autoattack=bs.q_skip_next,
+        may_engage=hostile,
         delta_ms=delta_ms, xp=jnp)
 
     q_landed = aa.hit & bs.q_empowered
@@ -878,7 +925,7 @@ def tick(state: LaneState, params: UnitParams,
         state.silenced_ms - jnp.asarray(delta_ms, dtype), 0.0)
     silence_by_attacker = (
         q_silence_duration_at_rank(state.spell_level[:, Slot.Q]) * 1000.0)
-    silence_added = jnp.zeros_like(silence_left).at[tgt].max(
+    silence_added = jnp.zeros_like(silence_left).at[hit_tgt].max(
         jnp.where(q_landed, silence_by_attacker, 0.0))
     silenced_ms = jnp.maximum(silence_left, silence_added)
 
@@ -900,7 +947,7 @@ def tick(state: LaneState, params: UnitParams,
     # a MISSILE instead of dealing damage now, at ITS OWN `missile_speed`, and
     # that damage is lost entirely if the target dies before the missile
     # lands. Melee attackers (minions and Garen) are unchanged.
-    swings = aa.hit & state.alive & (target >= 0)
+    swings = aa.hit & state.alive & (hit_target >= 0)
     ranged = P("fires_missile") > 0
     launches = swings & ranged
     landed = swings & ~ranged
@@ -911,10 +958,10 @@ def tick(state: LaneState, params: UnitParams,
         m_damage=state.missile_damage, m_speed=state.missile_speed,
         launches=launches, raw_damage=raw_ad, launch_speed=P("missile_speed"),
         x=x, y=y, alive=state.alive,
-        targetable=state.alive, armor=armor_eff, target=target,
+        targetable=state.alive, armor=armor_eff, target=hit_target,
         delta_ms=delta_ms)
 
-    dmg_ij = jnp.where(landed[:, None] & (jnp.arange(n)[None, :] == tgt[:, None]),
+    dmg_ij = jnp.where(landed[:, None] & (jnp.arange(n)[None, :] == hit_tgt[:, None]),
                        aa.damage[:, None], jnp.zeros((n, n), dtype))
     # A missile that lands this tick is credited to the unit that FIRED it, in
     # that unit's own attacker row, so the lowest-index-crosses-zero rule below
@@ -1072,6 +1119,14 @@ def tick(state: LaneState, params: UnitParams,
     # the respawn block resets `silenced_ms`/`r_cast_ms`/buffs and never
     # touches `target`.
     target = jnp.where(~alive, -1, target)
+    # The swing's own target: fixed at the start tick, held for the wind-up,
+    # cleared when the swing ends however it ends (`aa.is_attacking` is
+    # false after a hit, a cancel, or a consumed skip) or the unit dies.
+    aa_target = jnp.where(
+        aa.start, target,
+        jnp.where(aa.is_attacking, hit_target, jnp.int8(-1)))
+    aa_target = jnp.where(alive, aa_target, jnp.int8(-1)).astype(
+        state.aa_target.dtype)
 
     # ---- 5b. call for help -------------------------------------------------
     # `targeting.call_for_help_map` implements the broadcast faithfully and is
@@ -1301,6 +1356,7 @@ def tick(state: LaneState, params: UnitParams,
         time_since_attack=ai.time_since_attack, ignore_until=ai.ignore_until,
         aa_cooldown=aa.aa_cooldown, aa_windup=aa.aa_windup,
         is_attacking=aa.is_attacking, has_auto_attacked=aa.has_auto_attacked,
+        aa_target=aa_target,
         silenced_ms=silenced_ms,
         r_cast_ms=r_cast_ms,
         recall_windup_ms=recall_windup,
