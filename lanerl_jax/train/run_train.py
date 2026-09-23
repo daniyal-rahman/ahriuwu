@@ -309,11 +309,13 @@ def main() -> None:
     first = time.perf_counter() - t0
 
     if a.time_steady:
-        # Same shapes, so no recompile; the difference is the compile.
+        # `n` is a STATIC argument: the chunks above compiled `n=chunk`, so
+        # a call with `n=cfg.n_updates` is a new XLA program and its time
+        # includes a second compile (`PPO-08`). Time one chunk and scale.
         t0 = time.perf_counter()
         jax.block_until_ready(step_fn(
-            built.initial_runner(jax.random.key(a.seed + 1)), cfg.n_updates))
-        steady = time.perf_counter() - t0
+            built.initial_runner(jax.random.key(a.seed + 1)), chunk))
+        steady = (time.perf_counter() - t0) * cfg.n_updates / chunk
         print(f"first call {first:.1f}s (compile ~{first - steady:.1f}s) | "
               f"steady {steady:.1f}s -> {n_dec / steady:,.0f} env-decisions/s "
               f"END TO END, gradient step included")

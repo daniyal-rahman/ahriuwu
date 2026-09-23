@@ -35,14 +35,22 @@ recall channel flag (`rc`).
 not on the wire, so they stay at their empty-state values. Consequences, both
 bounded and both reported by this script:
 
-* `buff_id` feeds `has_w_passive` and the Q/E `cast_locked` flags. Garen's E
-  cooldown starts AFTER the 3 s spin, so during a spin the wire's `cd2` reads 0
-  -- indistinguishable from ready -- and no derivation from the wire can
-  recover it. The reconstructed observation therefore tells the policy Q/E are
-  available during their own active window. This can only cost a wasted cast,
-  and `--report-casts` counts every cast the policy issues so the exposure is a
-  measured number rather than an assumption. Zero casts means the deviation is
-  inert for that episode.
+* `buff_id` feeds `has_w_passive` and the Q/E `cast_locked` flags. **E IS
+  recovered from the wire** (`OBS-01`, 2026-09-23): `E.cs` swaps slot 2 for
+  `GarenECancel` with a 1 s cooldown for the length of the spin, so `cd2`
+  reads ~1000 ms falling to 0 during the spin and then jumps to the full
+  rank cooldown when the spin ends or is cancelled. A rising edge of `cd2`
+  to <= 1.1 s is therefore a spin START and a rising edge above it a spin
+  END, and `StateRebuilder` sets `buff_id[E]`/`buff_elapsed` from that, so
+  the policy sees E locked for the spin exactly as in training. Before this
+  the reconstructed obs showed E READY from 1 s into every spin, and under
+  the server's rules a press then is a CANCEL: the spin ended after 2 of
+  its 6 ticks and the full cooldown started -- not "a wasted cast" as
+  this paragraph used to say. Q is NOT recoverable: `Q.cs` sets the
+  cooldown to 0 for the window, so `cd0` reads 0 before, during and after
+  the cast and only the window's END is visible (`SPELL-008`, `OBS-02`);
+  the obs shows Q ready during its own window here and locked in
+  training. `--report-casts` counts every cast the policy issues.
 * `observed_enemy_cast_ms` is witnessed-event memory that training accumulates
   over an episode. Left at the -1 sentinel it renders as the saturated
   "long ago" value, which is what a never-seen cast is supposed to look like.
@@ -80,6 +88,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import statistics
 import sys
 import tempfile
@@ -98,6 +107,7 @@ from lanerl_jax.obs.frame import make_lane_frame                      # noqa: E4
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params  # noqa: E402
 from lanerl_jax.sim.orders import OrderKind                           # noqa: E402
 from lanerl_jax.sim.profiles import profile_id                        # noqa: E402
+from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, E_DURATION_S  # noqa: E402
 from lanerl_jax.sim.state import (CH_SLICE, MI_SLICE, TU_SLICE, Kind,  # noqa: E402
                                   Team)
 from lanerl_jax.train.actions import orders_from                      # noqa: E402
@@ -186,6 +196,10 @@ def _turret_slot_map(base) -> dict:
     return match
 
 
+#: `GarenECancel`'s cooldown is 1000 ms; one 30 Hz frame of slack.
+E_CANCEL_ARMED_MAX_MS = 1100.0
+
+
 class StateRebuilder:
     """Rebuilds a training-shaped `LaneState` from each control-channel frame.
 
@@ -208,6 +222,8 @@ class StateRebuilder:
         self._free = list(range(MI_SLICE.start, MI_SLICE.stop))
         self._dropped = 0
         self.n_units = int(self.base.x.shape[0])
+        # Per-champion E-spin inference from `cd2` edges (module docstring).
+        self._e = [{"prev_cd2": 0.0, "spin_start_ms": None} for _ in range(2)]
 
     def rebuild(self, frame: dict):
         """Returns `(state, netid_of_unit)`; `netid_of_unit[i]` is 0 if empty."""
@@ -227,6 +243,10 @@ class StateRebuilder:
         spell_level = np.zeros((2, 4), np.int32)
         spell_cd = np.zeros((2, 4), np.float32)
         recall = np.zeros(n, np.float32)
+        buff_id = np.asarray(self.base.buff_id).copy()
+        buff_elapsed = np.asarray(self.base.buff_elapsed).copy()
+        buff_duration = np.asarray(self.base.buff_duration).copy()
+        t_now = float(frame.get("t", 0))
 
         units = frame.get("u", [])
         turrets = [u for u in units if "Turret" in str(u.get("k", ""))]
@@ -260,6 +280,23 @@ class StateRebuilder:
                 spell_cd[int(tm)] = [max(0.0, float(u.get(f"cd{s}", 0)) / 1000.0)
                                      for s in range(4)]
                 recall[i] = 1.0 if int(u.get("rc", 0)) else 0.0
+                # E spin from the cd2 edge: <= 1.1 s is `GarenECancel`
+                # being armed (a spin began); anything larger is the
+                # rank cooldown (the spin ended, by time or by cancel).
+                e = self._e[int(tm)]
+                cd2_ms = float(u.get("cd2", 0) or 0.0)
+                if cd2_ms > e["prev_cd2"] + 1.0:
+                    e["spin_start_ms"] = (
+                        t_now if cd2_ms <= E_CANCEL_ARMED_MAX_MS else None)
+                e["prev_cd2"] = cd2_ms
+                if e["spin_start_ms"] is not None:
+                    el = (t_now - e["spin_start_ms"]) / 1000.0
+                    if el >= E_DURATION_S:
+                        e["spin_start_ms"] = None
+                    else:
+                        buff_id[i, E_BUFF_SLOT] = BuffId.GAREN_E
+                        buff_elapsed[i, E_BUFF_SLOT] = el
+                        buff_duration[i, E_BUFF_SLOT] = E_DURATION_S
             elif k in _MINION_KINDS:
                 nid = int(u["id"])
                 i = self._minion.get(nid)
@@ -296,7 +333,9 @@ class StateRebuilder:
             spell_level=jnp.asarray(spell_level),
             spell_cooldown=jnp.asarray(spell_cd),
             recall_channel_ms=jnp.asarray(recall),
-            t_ms=jnp.asarray(float(frame.get("t", 0)), jnp.float32))
+            buff_id=jnp.asarray(buff_id), buff_elapsed=jnp.asarray(buff_elapsed),
+            buff_duration=jnp.asarray(buff_duration),
+            t_ms=jnp.asarray(t_now, jnp.float32))
         return state, netid
 
     @property
@@ -517,6 +556,11 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
     this script exists to refuse.
     """
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
+    # `ENT-05`: `LanerlHooks._autoBuyUndriven = LANERL_AUTOBUY != "0"`, and
+    # `vec.py` never set it, so both server champions started with a 475
+    # wallet and bought Doran's Shield and potions -- against a sim with no
+    # items. `ServerLaunchSpec.environment` copies `os.environ`.
+    os.environ.setdefault("LANERL_AUTOBUY", "0")
 
     spec = ServerLaunchSpec(
         # None lets `ServerLaunchSpec.resolved_server_dir()` pick, which is
@@ -726,6 +770,24 @@ def selftest() -> int:
         and abs(float(st.spell_cooldown[0, 2]) - 3.0) < 1e-6, "spell cooldowns")
     chk(float(st.recall_channel_ms[1]) > 0 and float(st.recall_channel_ms[0]) == 0,
         "recall flag")
+    # E spin inference (`OBS-01`): a cd2 edge to ~1000 ms opens the spin,
+    # the buff stays through cd2's fall to 0, and the edge to the full
+    # cooldown closes it.
+    rb2 = StateRebuilder()
+    def champ(t, cd2):
+        return {"t": t, "u": [{"id": 11, "k": "Champion", "tm": 100,
+                "x": 0, "y": 0, "hp": 1, "mhp": 1, "sl": [0, 0, 1, 0],
+                "cd0": 0, "cd1": 0, "cd2": cd2, "cd3": 0}]}
+    seq = [(1000, 0, False, None), (1033, 983, True, 0.0),
+           (2500, 0, True, 1.467), (2533, 0, True, 1.5),
+           (4100, 8500, False, None), (4133, 8467, False, None)]
+    for t, cd2, want_on, want_el in seq:
+        s2, _ = rb2.rebuild(champ(t, cd2))
+        on = int(s2.buff_id[0, E_BUFF_SLOT]) == BuffId.GAREN_E
+        chk(on == want_on, f"E spin at t={t} cd2={cd2}: on={on} want {want_on}")
+        if want_on:
+            chk(abs(float(s2.buff_elapsed[0, E_BUFF_SLOT]) - want_el) < 0.01,
+                f"E elapsed at t={t}: {float(s2.buff_elapsed[0, E_BUFF_SLOT])}")
 
     mi = {int(netid[i]): i for i in range(rb.n_units) if netid[i]}
     for nid, want in ((21, (0, Team.BLUE)), (22, (1, Team.RED)), (23, (2, Team.RED))):

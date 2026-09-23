@@ -379,9 +379,12 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                 (loss, info), grads = jax.value_and_grad(_loss, has_aux=True)(
                     params, b, cfg.ppo)
                 # `max_grad_norm` is 1.0 and nothing recorded whether the clip
-                # was ACTIVE. If it is active on most updates then the effective
-                # learning rate is not `lr`, it is `1.0 / ||g||` -- and a sweep
-                # over `lr` is then partly measuring nothing.
+                # was ACTIVE. Under SGD an always-active clip would make the
+                # effective step `lr / ||g||`; under ADAM it does not -- Adam is
+                # invariant to gradient scale, so an always-active clip still
+                # steps ~lr and the lr sweep still measures lr (`PPO-10`). What
+                # clipping changes under Adam is the relative weight of updates
+                # where it is intermittent, which is why the fraction is logged.
                 gnorm = optax.global_norm(grads)
                 info = {**info, "grad_norm": gnorm,
                         "grad_clipped": (gnorm > cfg.ppo.max_grad_norm
