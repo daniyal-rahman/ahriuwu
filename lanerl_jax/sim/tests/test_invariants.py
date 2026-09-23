@@ -1,19 +1,16 @@
 """Invariants that hold in EVERY step configuration the trainer uses.
 
 Each of these would have caught a recorded bug; the row ID is in the test
-name or docstring. They run the tick in the TRAINING configuration
-(`trainer.py`: `collision_terrain=False, defer_collision_terrain=True`), not
-only the default one, because the fountain-turret drift (`COLL-004`) lived
-exclusively in the deferred path and no other test ran it.
+name or docstring. They run the sim in the TRAINING configuration --
+`SimConfig.training`, the object `trainer.py` steps (`STRUCT-003`) -- not only
+the default one, because the fountain-turret drift (`COLL-004`) lived
+exclusively in the deferred path and no other test ran it. Unrouted
+(`route_artifact=None`): routing only affects ordered champions, and these
+tests issue no orders.
 """
 from __future__ import annotations
 
 import numpy as np
-
-
-def _train_tick(s, params):
-    from lanerl_jax.sim.step import tick
-    return tick(s, params, collision_terrain=False, defer_collision_terrain=True)
 
 
 def test_turrets_never_move_in_the_training_step_configuration():
@@ -24,16 +21,22 @@ def test_turrets_never_move_in_the_training_step_configuration():
     120 s, off the map by 360 s -- with 1250 range and 999 AD -- in every RL
     run since 2026-09-18. Found by the structural review (2026-09-23).
     """
+    import jax
+
     from lanerl_jax.data.patch import load_patch
-    from lanerl_jax.sim.init import init_lane, lane_params
+    from lanerl_jax.sim.config import SimConfig
+    from lanerl_jax.sim.init import init_lane
     from lanerl_jax.sim.state import TU_SLICE
+    from lanerl_jax.sim.step import env_advance
 
     patch = load_patch()
-    params = lane_params(patch)
+    cfg = SimConfig.training(patch, route_artifact=None)
+    assert (cfg.collision_terrain, cfg.defer_collision_terrain) == (False, True)
     s = init_lane(patch)
     tx, ty = np.asarray(s.x[TU_SLICE]).copy(), np.asarray(s.y[TU_SLICE]).copy()
-    for _ in range(6):
-        s = _train_tick(s, params)
+    step = jax.jit(lambda st: env_advance(st, cfg))
+    for _ in range(3):                       # 3 decisions = 6 ticks
+        s = step(s)
     assert np.array_equal(np.asarray(s.x[TU_SLICE]), tx), \
         "a turret moved: " + str(np.nonzero(np.asarray(s.x[TU_SLICE]) != tx)[0])
     assert np.array_equal(np.asarray(s.y[TU_SLICE]), ty)

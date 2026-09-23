@@ -79,10 +79,11 @@ from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane, lane_params
-from ..sim.orders import OrderKind, Orders, apply_orders
+from ..sim.config import SimConfig
+from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane
+from ..sim.orders import OrderKind, Orders
 from ..sim.state import Kind, Team
-from ..sim.step import step_decision
+from ..sim.step import env_step
 
 __all__ = [
     "lane_fraction",
@@ -617,7 +618,8 @@ class ResponseCurve:
 
 def run_sim_episode(perturbation: Perturbation, perturbed: bool, seed: int,
                      decisions: int, sample_every: int = 60,
-                     enable_call_for_help: bool = False) -> ResponseCurve:
+                     enable_call_for_help: bool = False, *,
+                     sim_config: Optional[SimConfig] = None) -> ResponseCurve:
     """Drive ``perturbation`` against the JAX sim for ``decisions`` decisions
     (30 Hz, i.e. ``step_ticks=2``, matching every other driver in this tree).
 
@@ -629,13 +631,22 @@ def run_sim_episode(perturbation: Perturbation, perturbed: bool, seed: int,
     driver in this tree and `lanerl_jax.sim.step.tick`'s own default -- see
     `docs/CALL_FOR_HELP_SWITCH_RATE.md` for why this stays a toggle a caller
     opts into rather than the sim's permanent default.
+
+    ``sim_config`` overrides the step configuration (and then
+    ``enable_call_for_help`` is ignored); default
+    ``SimConfig.scripted(enable_call_for_help=...)``.
     """
     import jax
     import jax.numpy as jnp
 
-    params_tbl = lane_params()
+    # `STRUCT-003`: one step configuration. The default is exactly what this
+    # driver always ran -- TOP lane waves, inline terrain repair, UNROUTED
+    # Moves (`PATH-006`: pass `SimConfig.scripted(route_artifact=...)` to
+    # route them; that changes results, so it is not the default here).
+    sim = (sim_config if sim_config is not None else
+           SimConfig.scripted(enable_call_for_help=enable_call_for_help))
+    params_tbl = sim.params
     params_np = {k: np.asarray(v) for k, v in params_tbl.items()}
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
     state = init_lane(seed=seed)
 
     @jax.jit
@@ -646,8 +657,7 @@ def run_sim_episode(perturbation: Perturbation, perturbed: bool, seed: int,
             y=jnp.array([y, 0.0], dtype=state.y.dtype),
             target=jnp.array([target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders, params_tbl), params_tbl, lane_path=path,
-                             enable_call_for_help=enable_call_for_help)
+        return env_step(state, orders, sim)
 
     script = perturbation.new_script()
     samples: List[Dict[str, float]] = []

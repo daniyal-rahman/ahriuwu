@@ -44,16 +44,15 @@ WHAT IT DOES
 
 THE STEP CONFIGURATION IS THE TRAINING ONE
 ------------------------------------------
-The sim is stepped exactly as `train/trainer.py::_env_step` steps it:
-`apply_orders(state, orders, params, route_table=..., terrain=...)` then
-`step_decision(..., lane_path=TOP_LANE_PATH, collision_terrain=False,
-defer_collision_terrain=True)` (trainer.py ~L262-272), with the same Map1
-local-route artifact `run_train.py` loads by default. No other parity tool ran
-this configuration, which is how the fountain turrets walked across the map in
-every RL run without a gate noticing (`COLL-004`). Until `STRUCT-003`'s shared
-`SimConfig` exists the flags are copied here, and
-`tests/test_policy_divergence.py` asserts they still match the trainer's
-source. The only difference is granularity: the gate steps one tick at a time
+The sim is stepped exactly as `train/trainer.py::_env_step` steps it: both
+build their configuration from `sim.config.SimConfig.training` and step it
+through `sim.step.env_apply` + `env_advance`, with the same Map1 local-route
+artifact `run_train.py` loads by default. No other parity tool ran this
+configuration, which is how the fountain turrets walked across the map in
+every RL run without a gate noticing (`COLL-004`). The gate uses
+`SimConfig.gate`, which `sim/tests/test_sim_config.py` asserts differs from
+the training config only in an allow-list citing ledger rows (`STRUCT-003`).
+The only difference is granularity: the gate steps one tick at a time
 (``step_ticks=1`` twice per decision, orders applied before the first) so it
 can diff every server tick; `step_decision` is a `lax.scan` of the same `tick`,
 so two one-tick calls are the same computation as one two-tick call.
@@ -93,16 +92,12 @@ from .diff import LANE_KINDS, Tolerance, diff_snapshots
 from .trace import AIBlock, ChampionBlock, Entity, Snapshot, StatQ, parse_stream
 
 __all__ = [
-    "TRAINING_STEP_FLAGS", "TRACKED_BUFFS", "NOT_MODELLED", "REPORTED_ONLY",
+    "TRACKED_BUFFS", "NOT_MODELLED", "REPORTED_ONLY",
     "TrainingStepEngine", "render_sim_snapshot", "project_server_snapshot",
     "iter_server_ticks", "EventCounters", "DivergenceTracker",
     "replay_and_diff", "compare_server_logs", "score_against_floor",
     "ReplayWireDriver", "main",
 ]
-
-#: `trainer.py`'s `step_decision` flags. Copied, not imported, because the
-#: trainer builds them inline; `test_policy_divergence.py` pins the copy.
-TRAINING_STEP_FLAGS = {"collision_terrain": False, "defer_collision_terrain": True}
 
 #: 30 Hz decisions off a 60 Hz server: `LANERL_STEP_TICKS=2`.
 TICK_MS = 1000.0 / 60.0
@@ -156,12 +151,13 @@ _E_ARMED_MAX_S = 1.1
 # ---------------------------------------------------------------------------
 
 def _default_route_artifact() -> Path:
-    return (Path(__file__).resolve().parents[2] / "data" / "jax_routes"
-            / "map1_garen_r35_o50_v2")
+    from ..sim.config import DEFAULT_ROUTE_ARTIFACT
+    return DEFAULT_ROUTE_ARTIFACT
 
 
 class TrainingStepEngine:
-    """`apply_orders` + `step_decision` exactly as the trainer runs them.
+    """`env_apply` + `env_advance` under `SimConfig.gate` -- the trainer's
+    configuration, one tick per call (`STRUCT-003`).
 
     The route table (~240 MB) and terrain are passed to the jitted
     `apply_orders` as ARGUMENTS rather than closed over, so they are not baked
@@ -170,30 +166,28 @@ class TrainingStepEngine:
     """
 
     def __init__(self, route_artifact: Optional[Path] = None,
-                 use_route_table: bool = True):
+                 use_route_table: bool = True, *, sim_config=None):
         import jax
-        import jax.numpy as jnp
 
-        from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
-        from ..sim.orders import apply_orders
-        from ..sim.step import step_decision
+        from ..sim.config import SimConfig
+        from ..sim.init import init_lane
+        from ..sim.step import env_advance, env_apply
 
-        self.params = lane_params()
-        self.path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+        if sim_config is None:
+            artifact = None
+            if use_route_table:
+                artifact = (Path(route_artifact) if route_artifact
+                            else _default_route_artifact())
+            sim_config = SimConfig.gate(route_artifact=artifact)
+        cfg = self.sim_config = sim_config
+        self.params = cfg.params
+        self.path = cfg.lane_path
         self._init_lane = init_lane
-        self.route_artifact = None
-        rt = ter = None
-        if use_route_table:
-            from ..data.local_route_artifact import load_local_route_artifact
-            from ..sim.terrain_jax import map1_terrain
-            p = Path(route_artifact) if route_artifact else _default_route_artifact()
-            rt = load_local_route_artifact(p, pathfinding_radius=35.0).as_jax()
-            ter = map1_terrain()
-            self.route_artifact = str(p)
-        params, path = self.params, self.path
+        self.route_artifact = cfg.route_artifact
+        rt, ter = cfg.route_table, cfg.terrain
 
         if rt is None:
-            self._apply_j = jax.jit(lambda s, o: apply_orders(s, o, params))
+            self._apply_j = jax.jit(lambda s, o: env_apply(s, o, cfg))
             self._apply = lambda s, o: self._apply_j(s, o)
         else:
             rt_arrays = (rt.cell_to_row, rt.next_hop, rt.run_length)
@@ -203,13 +197,12 @@ class TrainingStepEngine:
                 r = rt._replace(cell_to_row=rta[0], next_hop=rta[1],
                                 run_length=rta[2])
                 t = ter._replace(walkable=tera[0], walkable_prefix=tera[1])
-                return apply_orders(s, o, params, route_table=r, terrain=t)
+                return env_apply(s, o, cfg.replace(route_table=r, terrain=t))
 
             self._apply_j = jax.jit(_ap)
             self._apply = lambda s, o: self._apply_j(s, o, rt_arrays, ter_arrays)
 
-        self._tick = jax.jit(lambda s: step_decision(
-            s, params, step_ticks=1, lane_path=path, **TRAINING_STEP_FLAGS))
+        self._tick = jax.jit(lambda s: env_advance(s, cfg))
 
     def init(self):
         return self._init_lane()
@@ -221,12 +214,9 @@ class TrainingStepEngine:
         return self._tick(state)
 
     def describe(self) -> dict:
-        return {"apply_orders": "params + route_table + terrain"
-                if self.route_artifact else "params only (no route table)",
-                "route_artifact": self.route_artifact,
-                "step_decision": {"lane_path": "TOP_LANE_PATH",
-                                  **TRAINING_STEP_FLAGS,
-                                  "step_ticks": "1 per tick, x2 per decision"}}
+        return {**self.sim_config.describe(),
+                "fingerprint": self.sim_config.fingerprint(),
+                "granularity": "1 tick per call, x2 per decision"}
 
 
 _FETCH = ("kind", "alive", "team", "x", "y", "hp", "max_hp", "level", "gold",

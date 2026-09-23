@@ -35,10 +35,10 @@ from lanerl_rl.constants import DECISION_HZ
 
 from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
-from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane, lane_params
-from ..sim.orders import apply_orders
+from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
+from ..sim.init import TOP_OUTER_TURRET, init_lane
 from ..sim.state import Team
-from ..sim.step import step_decision
+from ..sim.step import env_advance, env_step
 from .policy import LanePolicy, PolicyConfig, apply_flattened_batch
 from .actions import orders_from
 
@@ -63,8 +63,8 @@ BLUE_NEXUS = (1131.8, 1426.3)
 RED_NEXUS = (12760.9, 13026.1)
 
 
-DEFAULT_ROUTE_ARTIFACT = (Path(__file__).resolve().parents[2] / "data" /
-                          "jax_routes" / "map1_garen_r35_o50_v2")
+# `DEFAULT_ROUTE_ARTIFACT` is `sim/config.py`'s (re-exported: `movement_parity`
+# imports it from here).
 
 
 def gate4_route_inputs(artifact_path: Path | None = None, *,
@@ -105,12 +105,11 @@ def warm_state(warm_s: float = GATE4_WARM_S, *, seed: int = 0):
     routing it would make the benchmark's setup depend on the artifact it is
     trying to time, and the champion is not under orders here anyway.
     """
-    params = lane_params()
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+    sim = SimConfig.scripted()
 
     @jax.jit
     def one(state):
-        return step_decision(state, params, lane_path=path)
+        return env_advance(state, sim)
 
     state = init_lane(seed=seed)
     for _ in range(int(round(warm_s * DECISION_HZ))):
@@ -161,11 +160,20 @@ def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
                   enable_collision: bool = True,
                   collision_terrain: bool = False,
                   defer_collision_terrain: bool = True,
-                  initial_state=None) -> BenchResult:
-    if route_table is not None and terrain is None:
-        raise ValueError("route_table requires a TerrainGrid")
-    patch_params = lane_params()
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+                  initial_state=None, sim_config=None) -> BenchResult:
+    """Time the trainer's env step. ``sim_config`` (a `SimConfig`) overrides
+    the route/terrain/collision keywords; by default they build
+    ``SimConfig.training`` with those flags, which ARE the training flags
+    unless a caller changes them (`STRUCT-003`)."""
+    if sim_config is None:
+        sim_config = SimConfig.training(
+            route_artifact=None, route_table=route_table, terrain=terrain,
+        ).replace(enable_collision=enable_collision,
+                  collision_terrain=collision_terrain,
+                  defer_collision_terrain=defer_collision_terrain,
+                  name="benchmark")
+    sim = sim_config
+    patch_params = sim.params
     frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
     red_frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
@@ -188,13 +196,7 @@ def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
 
     def finish_one(state, obs, logits, key):
         orders = _decode(logits, state, obs.slot_unit, key, frame)
-        state = apply_orders(state, orders, patch_params,
-                             route_table=route_table, terrain=terrain)
-        return step_decision(
-            state, patch_params, lane_path=path,
-            enable_collision=enable_collision,
-            collision_terrain=collision_terrain,
-            defer_collision_terrain=defer_collision_terrain)
+        return env_step(state, orders, sim)
 
     @jax.jit
     def full_step(states, keys):
@@ -206,11 +208,7 @@ def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
 
     @jax.jit
     def sim_step(states):
-        return jax.vmap(lambda s: step_decision(
-            s, patch_params, lane_path=path,
-            enable_collision=enable_collision,
-            collision_terrain=collision_terrain,
-            defer_collision_terrain=defer_collision_terrain))(states)
+        return jax.vmap(lambda s: env_advance(s, sim))(states)
 
     keys = jax.random.split(jax.random.key(seed), n_envs)
     t0 = time.perf_counter()
@@ -284,8 +282,7 @@ def run_reset_benchmark(n_envs: int, steps: int = 200, warmup: int = 5,
     env, and the whole thing is `vmap`ped over `n_envs` the same way
     `_env_step`'s `one` is.
     """
-    patch_params = lane_params()
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+    sim = SimConfig.scripted()
     # `trainer.py` broadcasts this SAME constant for both the initial batch
     # and the reset target (`env_state = jax.tree.map(..., fresh)`); mirrored
     # here rather than building the starting batch from a second call.
@@ -301,7 +298,7 @@ def run_reset_benchmark(n_envs: int, steps: int = 200, warmup: int = 5,
 
     @jax.jit
     def sim_step(states):
-        return jax.vmap(lambda s: step_decision(s, patch_params, lane_path=path))(states)
+        return jax.vmap(lambda s: env_advance(s, sim))(states)
 
     # Alternating true/false rather than all-true: `jnp.where`'s cost does not
     # depend on the predicate's VALUE (XLA does not branch per-element), so

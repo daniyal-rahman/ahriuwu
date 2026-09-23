@@ -128,10 +128,11 @@ import numpy as np
 
 from ..obs.fog import visible_to
 from ..sim.combat import growth_sum
-from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
-from ..sim.orders import OrderKind, Orders, apply_orders
+from ..sim.config import SimConfig
+from ..sim.init import TOP_LANE_PATH, init_lane
+from ..sim.orders import OrderKind, Orders
 from ..sim.state import Kind, Team
-from ..sim.step import step_decision
+from ..sim.step import env_step
 from .lanerl_lane import LanerlLane, forward_for
 from .last_hit_oracle import (ChampView, Decision, MinionView, decide,
                               post_mitigation)
@@ -590,9 +591,11 @@ def run_oracle_in_sim(
     """
     route_table, terrain = gate3_route_inputs(
         route_table=route_table, terrain=terrain, table_disabled=table_disabled)
-    params_tbl = lane_params()
+    # `STRUCT-003`: one step configuration -- TOP lane waves, the tick's
+    # INLINE terrain repair, call for help on, routed unless table_disabled.
+    sim = SimConfig.scripted(route_table=route_table, terrain=terrain)
+    params_tbl = sim.params
     params_np = {k: np.asarray(v) for k, v in params_tbl.items()}
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
     state = init_lane(seed=seed)
 
     @jax.jit
@@ -609,10 +612,7 @@ def run_oracle_in_sim(
         # including a champion last-hit swing.  Earlier gate notes treated an
         # OFF ablation as a baseline after it happened to reduce deaths here;
         # that was regression-shaped tuning, not server parity.
-        return step_decision(apply_orders(state, orders, params_tbl,
-                                          route_table=route_table,
-                                          terrain=terrain), params_tbl,
-                             lane_path=path)
+        return env_step(state, orders, sim)
 
     wp_idx = 0
     _stall = 0   # consecutive decisions on the FINAL approach waypoint

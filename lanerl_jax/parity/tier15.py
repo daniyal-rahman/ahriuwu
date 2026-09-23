@@ -954,7 +954,7 @@ def run_tier15(
     import jax.numpy as jnp
 
     from ..data.patch import load_patch
-    from ..sim.init import lane_params
+    from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
     from ..sim.orders import apply_orders
     from ..sim.step import tick
     from .one_step import _tick_jit          # the exact tick one_step diffs
@@ -972,8 +972,13 @@ def run_tier15(
             enable_collision=enable_collision)
 
     patch = patch or load_patch()
-    params = lane_params(patch)
-    lane_path = jnp.asarray(np.asarray(TOP_LANE_PATH, np.float32))
+    # `STRUCT-003`: params, lane path and routing from ONE SimConfig. The
+    # tick itself stays per-tick `tick` (injection needs one tick at a time).
+    sim = SimConfig.scripted(
+        patch, route_artifact=None if table_disabled else (
+            Path(route_artifact) if route_artifact else DEFAULT_ROUTE_ARTIFACT))
+    params = sim.params
+    lane_path = sim.lane_path
 
     trace = load_trace_upto(fixture.log, max_t_ms)
     actions = ActionLog.load(fixture.actions)
@@ -983,16 +988,7 @@ def run_tier15(
     sel = select_start(trace, params=params, team=team,
                        tail_ticks=n_ticks + 1, **selection_kwargs)
 
-    route_table = terrain = None
-    if not table_disabled:
-        from ..data.local_route_artifact import load_local_route_artifact
-        from ..sim.terrain_jax import map1_terrain
-        from ..train.run_train import DEFAULT_ROUTE_ARTIFACT
-        art = load_local_route_artifact(
-            Path(route_artifact) if route_artifact else DEFAULT_ROUTE_ARTIFACT,
-            pathfinding_radius=35.0)
-        route_table = art.as_jax()
-        terrain = map1_terrain()
+    route_table, terrain = sim.route_table, sim.terrain
 
     # Orders go through a JITTED wrapper, not a bare `apply_orders`.
     # Measured on `desktop`: applying a routed order eagerly, once per

@@ -59,6 +59,10 @@ from lanerl_jax.sim.state import TU_SLICE, Kind, MoveOrder, Team
 from lanerl_jax.sim.step import step_decision, tick
 from lanerl_jax.sim.targeting import MinionType
 
+# `apply_orders` requires params (`STRUCT-003`); the level-one
+# placeholder AD it used to fall back to is gone.
+_PARAMS = lane_params() if CONTENT_ROOT.exists() else None
+
 pytestmark = pytest.mark.skipif(
     not CONTENT_ROOT.exists(), reason="vendored Content tree not available"
 )
@@ -135,7 +139,8 @@ def _cast_e(s, params=None):
     return apply_orders(s, Orders(
         kind=jnp.asarray([OrderKind.CAST_E, OrderKind.NOOP], jnp.int8),
         x=jnp.zeros(2), y=jnp.zeros(2),
-        target=jnp.asarray([-1, -1], jnp.int8)), params)
+        target=jnp.asarray([-1, -1], jnp.int8)),
+        _PARAMS if params is None else params)
 
 
 def _cast_q(s, caster=0):
@@ -143,7 +148,7 @@ def _cast_q(s, caster=0):
     kind[caster] = OrderKind.CAST_Q
     return apply_orders(s, Orders(
         kind=jnp.asarray(kind, jnp.int8), x=jnp.zeros(2), y=jnp.zeros(2),
-        target=jnp.asarray([-1, -1], jnp.int8)))
+        target=jnp.asarray([-1, -1], jnp.int8)), _PARAMS)
 
 
 def _cast_w(s, caster=0):
@@ -151,7 +156,7 @@ def _cast_w(s, caster=0):
     kind[caster] = OrderKind.CAST_W
     return apply_orders(s, Orders(
         kind=jnp.asarray(kind, jnp.int8), x=jnp.zeros(2), y=jnp.zeros(2),
-        target=jnp.asarray([-1, -1], jnp.int8)))
+        target=jnp.asarray([-1, -1], jnp.int8)), _PARAMS)
 
 
 def _cast_r(s, caster=0, target=1):
@@ -161,7 +166,7 @@ def _cast_r(s, caster=0, target=1):
     tgt[caster] = target
     return apply_orders(s, Orders(
         kind=jnp.asarray(kind, jnp.int8), x=jnp.zeros(2), y=jnp.zeros(2),
-        target=jnp.asarray(tgt, jnp.int8)))
+        target=jnp.asarray(tgt, jnp.int8)), _PARAMS)
 
 
 def _at_level(s, patch, level):
@@ -762,7 +767,7 @@ def test_w_passive_composes_via_stat_total_through_a_real_autoattack():
     # champion 1 attacks champion 0.
     s = apply_orders(s, Orders(
         kind=jnp.asarray([OrderKind.NOOP, OrderKind.ATTACK], jnp.int8),
-        x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([-1, 0], jnp.int8)))
+        x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([-1, 0], jnp.int8)), _PARAMS)
 
     hp0 = float(s.hp[0])
     dealt = None
@@ -976,11 +981,11 @@ def test_r_windup_locks_orders_then_finishes_hold_and_delayed_hit():
     blocked_move = apply_orders(s, Orders(
         kind=jnp.asarray([OrderKind.MOVE, OrderKind.NOOP], jnp.int8),
         x=jnp.asarray([9000.0, 0.0]), y=jnp.zeros(2),
-        target=jnp.asarray([-1, -1], jnp.int8)))
+        target=jnp.asarray([-1, -1], jnp.int8)), _PARAMS)
     assert int(blocked_move.n_waypoints[0]) == 2
     blocked_attack = apply_orders(s, Orders(
         kind=jnp.asarray([OrderKind.ATTACK, OrderKind.NOOP], jnp.int8),
-        x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([1, -1], jnp.int8)))
+        x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([1, -1], jnp.int8)), _PARAMS)
     assert int(blocked_attack.target[0]) == -1
     blocked_q = _cast_q(s)
     assert int(blocked_q.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE

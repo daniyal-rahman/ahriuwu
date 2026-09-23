@@ -26,6 +26,10 @@ from lanerl_jax.sim.rewards import (  # noqa: E402
 from lanerl_jax.sim.state import Kind, Team  # noqa: E402
 from lanerl_jax.sim.step import step_decision  # noqa: E402
 
+# `apply_orders` requires params (`STRUCT-003`); the level-one
+# placeholder AD it used to fall back to is gone.
+_PARAMS = lane_params() if CONTENT_ROOT.exists() else None
+
 pytestmark = pytest.mark.skipif(
     not CONTENT_ROOT.exists(), reason="vendored Content tree not available"
 )
@@ -150,7 +154,7 @@ def test_the_lowest_index_attacker_to_cross_zero_takes_the_kill():
     orders = Orders(kind=jnp.asarray([OrderKind.ATTACK, OrderKind.ATTACK], jnp.int8),
                     x=jnp.zeros(2), y=jnp.zeros(2),
                     target=jnp.asarray([mi, mi], jnp.int8))
-    s = apply_orders(s, orders)
+    s = apply_orders(s, orders, _PARAMS)
     # Enter the tick just before two already-started ordinary swings finish.
     # The test is about `tick`'s ordered cumulative attribution, not the
     # separate wall-clock time to begin an autoattack; priming this legal
@@ -499,7 +503,7 @@ def test_a_champion_kill_pays_gold_and_xp_through_a_real_tick():
     orders = Orders(kind=jnp.asarray([OrderKind.ATTACK, OrderKind.NOOP], jnp.int8),
                     x=jnp.zeros(2), y=jnp.zeros(2),
                     target=jnp.asarray([1, -1], jnp.int8))
-    s = apply_orders(s, orders)
+    s = apply_orders(s, orders, _PARAMS)
     gold_before = float(s.gold[0])
     for _ in range(40):
         s = step_decision(s, params)

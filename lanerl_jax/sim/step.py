@@ -75,7 +75,8 @@ from .state import Kind, LaneState, MoveOrder, Team, TurretTier, TU_SLICE
 from .targeting import (MinionType, base_priority, call_for_help_map,
                         nearest_enemy, turret_acquire)
 
-__all__ = ["UnitParams", "tick", "step_decision"]
+__all__ = ["UnitParams", "tick", "step_decision", "env_apply", "env_advance",
+           "env_step"]
 
 # One static 293x294 boolean device constant, not per-environment state.
 # `CollisionHandler.Update` needs it before the first object update every tick.
@@ -1421,3 +1422,39 @@ def step_decision(state: LaneState, params: UnitParams,
                     collision_terrain, defer_collision_terrain), None
     out, _ = jax.lax.scan(one, state, None, length=step_ticks)
     return out
+
+
+def env_apply(state: LaneState, orders, cfg) -> LaneState:
+    """Write ``orders`` into ``state`` under ``cfg`` (a
+    :class:`~lanerl_jax.sim.config.SimConfig`): its params (E's live AD
+    snapshot) and its route table/terrain (routed Moves). The first half of
+    :func:`env_step`; exposed because the trainer reads the post-order
+    ``route_status`` and the per-tick gate applies orders once per decision.
+    """
+    from .orders import apply_orders
+    return apply_orders(state, orders, cfg.params,
+                        route_table=cfg.route_table, terrain=cfg.terrain)
+
+
+def env_advance(state: LaneState, cfg) -> LaneState:
+    """Run ``cfg.step_ticks`` ticks with every behaviour flag from ``cfg``.
+    The second half of :func:`env_step`."""
+    return step_decision(
+        state, cfg.params, step_ticks=cfg.step_ticks, delta_ms=cfg.delta_ms,
+        lane_path=cfg.lane_path, minion_hp=cfg.minion_hp,
+        enable_call_for_help=cfg.enable_call_for_help,
+        enable_collision=cfg.enable_collision,
+        collision_terrain=cfg.collision_terrain,
+        defer_collision_terrain=cfg.defer_collision_terrain)
+
+
+def env_step(state: LaneState, orders, cfg) -> LaneState:
+    """THE entry point (`STRUCT-003`): apply ``orders`` with ``cfg``'s params
+    and route table, then run ``cfg.step_ticks`` ticks in ``cfg``'s mode.
+
+    Build ``cfg`` with one of :class:`~lanerl_jax.sim.config.SimConfig`'s
+    named constructors rather than passing flags to ``tick``/
+    ``step_decision`` by hand -- hand-assembled flags are how the training
+    mode ended up run by nothing but the trainer (`COLL-004`).
+    """
+    return env_advance(env_apply(state, orders, cfg), cfg)

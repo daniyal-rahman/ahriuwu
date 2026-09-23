@@ -147,21 +147,6 @@ class Orders(NamedTuple):
     target: jax.Array    # unit index, -1 for none
 
 
-def _ad_placeholder(state):
-    """Attack damage for the E snapshot.
-
-    Orders are applied before the tick, and the tick is what holds the stat
-    tables, so the caller passes AD in via ``state`` rather than this module
-    importing the profile tables. Until champion AD is carried on the state
-    this reads the champion profile's base, which is exact while no item or
-    buff changes it -- true for the whole laning slice today, and a lie the
-    moment Q or an item lands. Marked so it is not forgotten.
-    """
-    import jax.numpy as _jnp
-
-    return _jnp.full(state.x.shape, 78.134765625, state.x.dtype)
-
-
 def _record_observed_enemy_casts(state: LaneState, successful: jax.Array) -> jax.Array:
     """Update the two agents' witnessed-enemy-cast clocks at cast ingress.
 
@@ -201,14 +186,21 @@ def _record_observed_enemy_casts(state: LaneState, successful: jax.Array) -> jax
                      state.observed_enemy_cast_ms)
 
 
-def apply_orders(state: LaneState, orders: Orders, params=None, *,
+def apply_orders(state: LaneState, orders: Orders, params, *,
                  route_table=None, terrain=None) -> LaneState:
     """Write champion orders into the state. Non-champion slots are untouched.
 
-    Production callers pass ``params`` so E snapshots the caster's live,
-    level-scaled AD. It remains optional only for narrow table-free unit tests,
-    which retain the historical level-one snapshot fallback.
+    ``params`` (``lane_params(patch)``) is REQUIRED: E snapshots the caster's
+    live, level-scaled AD from it. It used to be optional, with a hard-coded
+    level-one AD (``_ad_placeholder``) as a silent fallback that any caller
+    forgetting ``params`` got without a word (`STRUCT-003`). Prefer
+    :func:`lanerl_jax.sim.step.env_step` with a
+    :class:`~lanerl_jax.sim.config.SimConfig`, which also supplies the route
+    table.
     """
+    if params is None:
+        raise TypeError("apply_orders requires params (lane_params(patch)); "
+                        "the placeholder-AD fallback was removed (STRUCT-003)")
     n = state.kind.shape[-1]
     n_ch = orders.kind.shape[0]
     idx = jnp.arange(n)
@@ -304,12 +296,9 @@ def apply_orders(state: LaneState, orders: Orders, params=None, *,
     waypoints = jnp.where(moving[:, None, None], candidate_waypoints,
                           state.waypoints)
 
-    if params is None:
-        e_ad = _ad_placeholder(state)
-    else:
-        e_ad = (params["attack_damage"][state.model]
-                + params["ad_per_level"][state.model]
-                * growth_sum(state.level, jnp))
+    e_ad = (params["attack_damage"][state.model]
+            + params["ad_per_level"][state.model]
+            * growth_sum(state.level, jnp))
     # `cast_e` DOES touch the cooldown now, and the comment that said otherwise
     # was describing only one of E's three outcomes. A re-cast at >= 1 s ends
     # the spin early and starts the full rank cooldown there and then; the

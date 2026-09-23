@@ -96,10 +96,11 @@ from .perturbation import (
     server_units,
     sim_units,
 )
-from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
-from ..sim.orders import OrderKind, Orders, apply_orders
+from ..sim.config import SimConfig
+from ..sim.init import init_lane
+from ..sim.orders import OrderKind, Orders
 from ..sim.state import Kind, Team
-from ..sim.step import step_decision
+from ..sim.step import env_step
 
 __all__ = [
     "RawCurve", "run_sim_raw", "run_server_raw",
@@ -190,7 +191,8 @@ def run_sim_raw(perturbation: Perturbation, perturbed: bool, seed: int,
                  ulp_perturb_axis: Optional[str] = None,
                  ulp_perturb_unit: Optional[int] = None,
                  ulp_perturb_dir: int = 1,
-                 ulp_perturb_at_decision: int = 0) -> RawCurve:
+                 ulp_perturb_at_decision: int = 0, *,
+                 sim_config: Optional[SimConfig] = None) -> RawCurve:
     """Drive ``perturbation`` against the JAX sim, recording every live
     unit's (kind, team, x, y, hp) at each sample.
 
@@ -213,13 +215,22 @@ def run_sim_raw(perturbation: Perturbation, perturbed: bool, seed: int,
     the underlying dynamics have some. A live minion mid-wave is coupled to
     collision and targeting on every tick, which is what actually gives a
     chaos probe a chance to find something.
+
+    ``sim_config`` overrides the step configuration (and then
+    ``enable_call_for_help`` is ignored); default
+    ``SimConfig.scripted(enable_call_for_help=...)``.
     """
     import jax
     import jax.numpy as jnp
 
-    params_tbl = lane_params()
+    # `STRUCT-003`: one step configuration. The default is exactly what this
+    # driver always ran -- TOP lane waves, inline terrain repair, UNROUTED
+    # Moves (`PATH-006`: pass `SimConfig.scripted(route_artifact=...)` to
+    # route them; that changes results, so it is not the default here).
+    sim = (sim_config if sim_config is not None else
+           SimConfig.scripted(enable_call_for_help=enable_call_for_help))
+    params_tbl = sim.params
     params_np = {k: np.asarray(v) for k, v in params_tbl.items()}
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
     state = init_lane(seed=seed)
     note = ""
 
@@ -255,8 +266,7 @@ def run_sim_raw(perturbation: Perturbation, perturbed: bool, seed: int,
             y=jnp.array([y, 0.0], dtype=state.y.dtype),
             target=jnp.array([target, -1], dtype=jnp.int8),
         )
-        return step_decision(apply_orders(state, orders, params_tbl), params_tbl, lane_path=path,
-                             enable_call_for_help=enable_call_for_help)
+        return env_step(state, orders, sim)
 
     script = perturbation.new_script()
     t_s: List[float] = []

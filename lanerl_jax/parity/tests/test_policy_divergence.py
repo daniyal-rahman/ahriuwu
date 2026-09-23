@@ -7,7 +7,6 @@ So "first divergence at tick 5 in `Champion.hp`" is asserted, not observed.
 from __future__ import annotations
 
 import copy
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -273,12 +272,23 @@ def test_replay_wire_driver_remaps_netids_by_rank():
     assert drv(frame, 5) == {"blue": {"t": "noop"}, "red": {"t": "noop"}}
 
 
-def test_gate_step_flags_are_the_trainers():
-    """`STRUCT-003` until a shared SimConfig exists: pin the copy to the source."""
+def test_gate_step_config_is_the_trainers():
+    """`STRUCT-003`: the gate's engine steps a `SimConfig` that equals the one
+    `make_train` actually closes over, except `step_ticks` (the gate diffs
+    every tick, `PARITY-001`). Compared as objects, not as a regex over the
+    trainer's source; the allow-list and its ledger citations live in
+    `sim/tests/test_sim_config.py`."""
+    from lanerl_jax.sim.config import DEFAULT_ROUTE_ARTIFACT
+    from lanerl_jax.train.run_train import DEFAULT_ROUTE_ARTIFACT as TRAIN_DEFAULT
+    from lanerl_jax.train.trainer import TrainConfig, make_train
+
+    engine = g.TrainingStepEngine(use_route_table=False)
+    built = make_train(TrainConfig(n_envs=2, rollout_steps=2, n_updates=1))
+    assert engine.sim_config.differing_fields(built.sim_config) == {"step_ticks"}
+    assert (engine.sim_config.step_ticks, built.sim_config.step_ticks) == (1, 2)
+    # routed by default, from the artifact `run_train` trains on
+    assert g._default_route_artifact() == DEFAULT_ROUTE_ARTIFACT == TRAIN_DEFAULT
+    # and the trainer can only step through the config object
     src = (REPO / "lanerl_jax" / "train" / "trainer.py").read_text()
-    calls = re.findall(r"step_decision\((.*?)\)\n", src, re.S)
-    assert calls, "trainer no longer calls step_decision -- re-read the gate"
-    flags = dict(re.findall(r"(collision_terrain|defer_collision_terrain)=(\w+)",
-                            " ".join(calls)))
-    assert {k: v == "True" for k, v in flags.items()} == g.TRAINING_STEP_FLAGS
-    assert "route_table=route_table, terrain=terrain" in src
+    assert "step_decision(" not in src and "apply_orders(" not in src
+    assert "env_apply(state, orders, sim)" in src and "env_advance(ordered, sim)" in src

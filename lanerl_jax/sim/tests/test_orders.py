@@ -24,6 +24,10 @@ from lanerl_jax.sim.step import tick
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
+# `apply_orders` requires params (`STRUCT-003`); the level-one
+# placeholder AD it used to fall back to is gone.
+_PARAMS = lane_params()
+
 
 def _state_with_target(target: int = 5):
     s = empty_state()
@@ -47,7 +51,7 @@ def _order(kind, x=0.0, y=0.0, target=-1):
 def test_a_move_order_does_not_clear_a_held_target():
     """`LanerlControl.cs:349-371` -- `case Move` never calls `SetTargetUnit`."""
     s = _state_with_target(target=5)
-    s2 = apply_orders(s, _order(OrderKind.MOVE, x=1000.0, y=1000.0))
+    s2 = apply_orders(s, _order(OrderKind.MOVE, x=1000.0, y=1000.0), _PARAMS)
     assert int(s2.target[0]) == 5, "a Move order must not drop the held target"
     assert int(s2.move_order[0]) == MoveOrder.MOVE_TO
     assert int(s2.route_status[0]) == LocalRouteStatus.TABLE_DISABLED
@@ -56,7 +60,7 @@ def test_a_move_order_does_not_clear_a_held_target():
 def test_an_attack_order_still_replaces_the_target():
     """`Attack` is `SetTargetUnit` alone -- unaffected by this fix."""
     s = _state_with_target(target=5)
-    s2 = apply_orders(s, _order(OrderKind.ATTACK, target=6))
+    s2 = apply_orders(s, _order(OrderKind.ATTACK, target=6), _PARAMS)
     assert int(s2.target[0]) == 6
 
 
@@ -67,7 +71,7 @@ def test_stop_is_a_true_no_op():
     `LanerlControl.Execute`'s switch sees an order kind it does not handle."""
     s = _state_with_target(target=5)
     s = s.replace(move_order=jnp.asarray(s.move_order).at[0].set(MoveOrder.ATTACK_TO))
-    s2 = apply_orders(s, _order(OrderKind.STOP))
+    s2 = apply_orders(s, _order(OrderKind.STOP), _PARAMS)
     assert int(s2.target[0]) == 5
     assert int(s2.move_order[0]) == MoveOrder.ATTACK_TO
 
@@ -75,7 +79,7 @@ def test_stop_is_a_true_no_op():
 def test_noop_leaves_target_and_move_order_untouched():
     s = _state_with_target(target=5)
     s = s.replace(move_order=jnp.asarray(s.move_order).at[0].set(MoveOrder.HOLD))
-    s2 = apply_orders(s, _order(OrderKind.NOOP))
+    s2 = apply_orders(s, _order(OrderKind.NOOP), _PARAMS)
     assert int(s2.target[0]) == 5
     assert int(s2.move_order[0]) == MoveOrder.HOLD
 
@@ -85,10 +89,10 @@ def test_silence_blocks_spell_orders_but_not_movement():
     s = s.replace(
         silenced_ms=s.silenced_ms.at[0].set(500.0),
         spell_level=s.spell_level.at[0, Slot.Q].set(1))
-    blocked = apply_orders(s, _order(OrderKind.CAST_Q))
+    blocked = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
     assert int(blocked.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
 
-    moved = apply_orders(s, _order(OrderKind.MOVE, x=50.0, y=75.0))
+    moved = apply_orders(s, _order(OrderKind.MOVE, x=50.0, y=75.0), _PARAMS)
     assert int(moved.move_order[0]) == MoveOrder.MOVE_TO
 
 
@@ -100,7 +104,7 @@ def test_recall_stops_an_unfinished_path_and_starts_its_windup():
         n_waypoints=s.n_waypoints.at[0].set(2),
         waypoint_key=s.waypoint_key.at[0].set(1),
     )
-    s2 = apply_orders(s, _order(OrderKind.RECALL))
+    s2 = apply_orders(s, _order(OrderKind.RECALL), _PARAMS)
     assert float(s2.recall_windup_ms[0]) == pytest.approx(500.0)
     assert float(s2.recall_channel_ms[0]) == 0.0
     assert int(s2.move_order[0]) == MoveOrder.STOP
@@ -113,7 +117,7 @@ def test_recall_keeps_a_target_when_its_old_path_was_already_finished():
     s = _state_with_target(target=5)
     s = s.replace(n_waypoints=s.n_waypoints.at[0].set(1),
                   waypoint_key=s.waypoint_key.at[0].set(1))
-    s2 = apply_orders(s, _order(OrderKind.RECALL))
+    s2 = apply_orders(s, _order(OrderKind.RECALL), _PARAMS)
     assert int(s2.target[0]) == 5
 
 
@@ -131,7 +135,7 @@ def test_only_successful_visible_enemy_casts_enter_observer_memory(kind, slot, t
         x=s.x.at[0].set(0.0).at[1].set(100.0),
         spell_level=s.spell_level.at[0, slot].set(1),
     )
-    out = apply_orders(s, _order(kind, target=target))
+    out = apply_orders(s, _order(kind, target=target), _PARAMS)
     assert float(out.observed_enemy_cast_ms[1, slot]) == 0.0
     assert np.all(np.asarray(out.observed_enemy_cast_ms[0]) == -1.0), (
         "a champion must never observe its own cast")
@@ -150,7 +154,7 @@ def test_fogged_or_off_screen_casts_do_not_enter_observer_memory():
         alive=s.alive.at[5].set(False),
         spell_level=s.spell_level.at[0, Slot.Q].set(1),
     )
-    fogged = apply_orders(s, _order(OrderKind.CAST_Q))
+    fogged = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
     assert np.all(np.asarray(fogged.observed_enemy_cast_ms) == -1.0)
 
     # A red minion can put blue on the team's minimap, but the red champion is
@@ -164,7 +168,7 @@ def test_fogged_or_off_screen_casts_do_not_enter_observer_memory():
         x=s.x.at[0].set(0.0).at[1].set(1801.0).at[2].set(0.0),
         spell_level=s.spell_level.at[0, Slot.Q].set(1),
     )
-    off_screen = apply_orders(s, _order(OrderKind.CAST_Q))
+    off_screen = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
     assert np.all(np.asarray(off_screen.observed_enemy_cast_ms) == -1.0)
 
 
@@ -172,13 +176,13 @@ def test_failed_spell_orders_do_not_reset_cast_memory():
     s = _state_with_target()
     s = s.replace(x=s.x.at[0].set(0.0).at[1].set(100.0))
     # Q at rank zero is an unavailable order, not a witnessed cast.
-    unlearned = apply_orders(s, _order(OrderKind.CAST_Q))
+    unlearned = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
     assert np.all(np.asarray(unlearned.observed_enemy_cast_ms) == -1.0)
 
     # A learned spell on cooldown is equally a no-op at the ingress boundary.
     s = s.replace(spell_level=s.spell_level.at[0, Slot.Q].set(1),
                   spell_cooldown=s.spell_cooldown.at[0, Slot.Q].set(1.0))
-    cooling_down = apply_orders(s, _order(OrderKind.CAST_Q))
+    cooling_down = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
     assert np.all(np.asarray(cooling_down.observed_enemy_cast_ms) == -1.0)
 
 

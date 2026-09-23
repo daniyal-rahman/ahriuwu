@@ -12,6 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
 from .run_manifest import RunDir
 from .trainer import TrainConfig, make_train
 
@@ -21,8 +22,9 @@ from .trainer import TrainConfig, make_train
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 
-DEFAULT_ROUTE_ARTIFACT = (Path(__file__).resolve().parents[2] / "data" /
-                          "jax_routes" / "map1_garen_r35_o50_v2")
+# `DEFAULT_ROUTE_ARTIFACT` lives in `sim/config.py` with `SimConfig`; the
+# name is re-exported here because parity tools import it from this module.
+__all__ = ["main", "DEFAULT_ROUTE_ARTIFACT"]
 
 
 def main() -> None:
@@ -137,27 +139,23 @@ def main() -> None:
           f"{cfg.n_updates * cfg.rollout_steps / cfg.episode_steps:.1f} "
           f"episodes per env")
 
-    route_table = terrain = None
     if not a.no_route_table:
         if not a.route_artifact.exists():
             ap.error(
                 f"route artifact not found: {a.route_artifact}. Build it with: "
                 "python -m lanerl_jax.data.local_route_artifact "
                 f"--out {a.route_artifact} --radius 35 --offset-radius 50")
-        from ..data.local_route_artifact import load_local_route_artifact
-        from ..sim.terrain_jax import map1_terrain
-
-        artifact = load_local_route_artifact(
-            a.route_artifact, pathfinding_radius=35.0)
-        route_table = artifact.as_jax()
-        terrain = map1_terrain()
-        print(f"local routes {artifact.manifest.source_count:,} source cells x "
-              f"{artifact.manifest.table_shape[1]}² offsets "
-              f"({artifact.next_hop.nbytes / 2**20:.1f} MiB)")
+        sim_config = SimConfig.training(route_artifact=a.route_artifact)
+        nh = sim_config.route_table.next_hop
+        print(f"local routes {a.route_artifact.name} "
+              f"({nh.nbytes / 2**20:.1f} MiB next-hop table)")
     else:
+        sim_config = SimConfig.training(route_artifact=None)
         print("WARNING: local routing disabled; Move uses the PATH-001 raw segment")
 
-    built = make_train(cfg, route_table=route_table, terrain=terrain)
+    built = make_train(cfg, sim_config=sim_config)
+    sim_desc = {**sim_config.describe(), "fingerprint": sim_config.fingerprint()}
+    print(f"sim config {sim_desc['name']} fingerprint {sim_desc['fingerprint']}")
 
     # ---- run directory, manifest, wandb ---------------------------------
     cli = {k: v for k, v in vars(a).items()
@@ -168,7 +166,10 @@ def main() -> None:
                   "reward_weights": __import__(
                       "lanerl_jax.train.reward", fromlist=["RewardWeights"]
                   ).RewardWeights()._asdict(),
-                  "env_decisions": n_dec},
+                  "env_decisions": n_dec,
+                  # `STRUCT-003`: the ONE step configuration this run's env
+                  # step used, and a digest of its arrays.
+                  "sim_config": sim_desc},
                  notes=a.notes)
     print(f"run dir {run.path}")
     # The wandb run NAME is the run-dir id, so a chart and a checkpoint can be

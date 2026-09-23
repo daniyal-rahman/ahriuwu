@@ -43,16 +43,15 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import optax
 
 from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
-from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane, lane_params
-from ..sim.orders import apply_orders
+from ..sim.config import SimConfig
+from ..sim.init import TOP_OUTER_TURRET, init_lane
 from ..sim.orders import OrderKind
 from ..sim.state import Team
-from ..sim.step import step_decision
+from ..sim.step import env_advance, env_apply
 from .policy import VALUE_HEAD_NAME, LanePolicy, PolicyConfig
 from .actions import orders_from
 from .ppo import (
@@ -188,12 +187,24 @@ _orders_from = orders_from
 
 
 def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
-               terrain=None):
-    """Build the jittable training function. Returns ``train(rng) -> (state, metrics)``."""
-    if route_table is not None and terrain is None:
-        raise ValueError("route_table requires a TerrainGrid")
-    params_tbl = lane_params()
-    path = jnp.asarray(np.array(TOP_LANE_PATH, np.float32))
+               terrain=None, sim_config: SimConfig | None = None):
+    """Build the jittable training function. Returns ``train(rng) -> (state, metrics)``.
+
+    The sim is stepped under ONE :class:`~lanerl_jax.sim.config.SimConfig`
+    (`STRUCT-003`): ``sim_config`` if given, else
+    ``SimConfig.training(route_artifact=None, route_table=..., terrain=...)``
+    -- the training configuration, routed iff a table is passed. It is exposed
+    as ``train.sim_config`` so a manifest and the gates can read the exact
+    object rather than a copy of its flags.
+    """
+    if sim_config is None:
+        sim_config = SimConfig.training(route_artifact=None,
+                                        route_table=route_table,
+                                        terrain=terrain)
+    elif route_table is not None or terrain is not None:
+        raise ValueError("pass route_table/terrain inside sim_config, not both")
+    sim = sim_config
+    params_tbl = sim.params
     frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
     red_frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
@@ -258,18 +269,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                                   obs.global_vec)
             action, log_prob = _sample(logits, key)
             orders = _orders_from(action, state, obs.slot_unit, frame)
-            ordered = apply_orders(
-                state, orders, params_tbl,
-                route_table=route_table, terrain=terrain)
+            # `env_step`'s two halves, split only to read the post-order
+            # route status. The step mode (deferred terrain repair, routed
+            # Moves, TOP lane waves) is `SimConfig.training`'s -- see its
+            # docstring for why training defers the repair.
+            ordered = env_apply(state, orders, sim)
             route_nonready = ((orders.kind == OrderKind.MOVE)
                               & (ordered.route_status[:2] != 0))
-            # Exact per-neighbour terrain repair lowers through nested dynamic
-            # control flow and misses J1's throughput gate by two orders of
-            # magnitude. Training uses the documented deferred repair: every
-            # individual terrain query is preserved, after the dynamic sweep.
-            nxt = step_decision(
-                ordered, params_tbl, lane_path=path,
-                collision_terrain=False, defer_collision_terrain=True)
+            nxt = env_advance(ordered, sim)
             # gamma is the TRAINER's gamma, threaded through deliberately:
             # the shaping potential is policy-invariant only under the same
             # discount the advantage estimator uses.
@@ -515,4 +522,5 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
 
     train.initial_runner = initial_runner
     train.run_chunk = run_chunk
+    train.sim_config = sim
     return train
