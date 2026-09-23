@@ -9,7 +9,7 @@ unmatched real ("new") entity -- if that distance clusters far above the
 corrupted by something other than a raw wave-spawn timing bug (e.g. a
 same-group re-identification failure for tightly-spaced marching minions).
 
-    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_wave_spawn_detail
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.archive.tier1_wave_spawn_detail
 """
 from __future__ import annotations
 

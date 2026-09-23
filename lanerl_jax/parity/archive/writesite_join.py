@@ -57,7 +57,7 @@ alone was tried and missed essentially every event -- a 16.67 ms stride
 against a 33.3 ms key.
 
 USAGE
-    python -m lanerl_jax.parity.writesite_join --rows <rows.jsonl> \
+    python -m lanerl_jax.parity.archive.writesite_join --rows <rows.jsonl> \
         --log <server.log> [--window-ms 34]
 """
 

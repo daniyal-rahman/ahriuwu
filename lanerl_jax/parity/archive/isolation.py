@@ -91,7 +91,7 @@ here.
 HOW TO READ THE OUTPUT
 -----------------------
 Run as a script for a human-readable report; import the ``run_*`` functions
-for a test or a follow-up analysis. ``python -m lanerl_jax.parity.isolation``.
+for a test or a follow-up analysis. ``python -m lanerl_jax.parity.archive.isolation``.
 """
 from __future__ import annotations
 
@@ -102,9 +102,9 @@ from typing import List, Optional
 
 import numpy as np
 
-from .last_hit_drive import (DECISIONS_600S, APPROACH_WAYPOINTS, WIRE_MINION_TYPE,
+from ..last_hit_drive import (DECISIONS_600S, APPROACH_WAYPOINTS, WIRE_MINION_TYPE,
                              _advance_approach, gate3_route_inputs)
-from .last_hit_oracle import ChampView, MinionView, decide
+from ..last_hit_oracle import ChampView, MinionView, decide
 
 __all__ = ["IsolationRun", "run_sim_isolation", "run_server_isolation", "summarize"]
 
@@ -152,11 +152,11 @@ def run_sim_isolation(decisions: int = DECISIONS_600S, seed: int = 0, *,
     import jax
     import jax.numpy as jnp
 
-    from ..obs.fog import visible_to
-    from ..sim.init import TOP_LANE_PATH, init_lane, lane_params
-    from ..sim.orders import OrderKind, Orders, apply_orders
-    from ..sim.state import Kind, Team
-    from ..sim.step import step_decision
+    from ...obs.fog import visible_to
+    from ...sim.init import TOP_LANE_PATH, init_lane, lane_params
+    from ...sim.orders import OrderKind, Orders, apply_orders
+    from ...sim.state import Kind, Team
+    from ...sim.step import step_decision
 
     route_table, terrain = gate3_route_inputs(
         route_table=route_table, terrain=terrain, table_disabled=table_disabled)
@@ -266,7 +266,7 @@ def run_server_isolation(
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
 
-    from ..data.patch import load_patch
+    from ...data.patch import load_patch
 
     patch = load_patch()
     log_dir = Path(log_dir) if log_dir is not None else Path(

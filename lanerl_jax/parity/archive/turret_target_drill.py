@@ -52,7 +52,7 @@ server held anything at N at all, whether its tick-N target was alive at N+1,
 whether the sim's pick is a stale hold or a fresh acquisition, and whether the
 server re-acquires by N+2.  Also attributes the spurious fires by team.
 
-    python -m lanerl_jax.parity.turret_target_drill --existing-log LOG \\
+    python -m lanerl_jax.parity.archive.turret_target_drill --existing-log LOG \\
         --phase both --out-json OUT.json
 """
 from __future__ import annotations
@@ -99,8 +99,8 @@ def _classify(entity) -> int:
 # --------------------------------------------------------------------------
 
 def phase_a(snaps, out: dict, examples: int = 8) -> None:
-    from .diagnostic_identity import net_id_to_entity
-    from .trace import PosQ
+    from ..diagnostic_identity import net_id_to_entity
+    from ..trace import PosQ
 
     prev = {}                       # turret net_id -> previous tick's target
     drop_reason = collections.Counter()
@@ -227,13 +227,13 @@ def phase_b(snaps, out: dict, from_ms: int, to_ms: int, max_pairs: int,
             examples: int = 10) -> None:
     import jax.numpy as jnp
 
-    from ..data.patch import load_patch
-    from ..sim.init import TOP_LANE_PATH, lane_params
-    from ..sim.profiles import PROFILES
-    from .diagnostic_identity import net_id_to_entity, net_id_to_injected_slot
-    from .inject import inject_snapshot, replay_wave_states
-    from .one_step import compare_one_tick
-    from .trace import PosQ, StatQ
+    from ...data.patch import load_patch
+    from ...sim.init import TOP_LANE_PATH, lane_params
+    from ...sim.profiles import PROFILES
+    from ..diagnostic_identity import net_id_to_entity, net_id_to_injected_slot
+    from ..inject import inject_snapshot, replay_wave_states
+    from ..one_step import compare_one_tick
+    from ..trace import PosQ, StatQ
 
     wave_states = replay_wave_states(snaps)
     patch = load_patch()
@@ -361,8 +361,8 @@ def main(argv=None) -> None:
     ap.add_argument("--out-json", default=None)
     a = ap.parse_args(argv)
 
-    from .tier1_full import FIRST_WAVE_MS
-    from .trace import load_trace
+    from ..tier1_full import FIRST_WAVE_MS
+    from ..trace import load_trace
 
     trace = load_trace(Path(a.existing_log))
     snaps = [s for s in trace.snapshots if s.t_ms >= FIRST_WAVE_MS]

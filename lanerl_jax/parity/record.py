@@ -42,7 +42,7 @@ import math
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional
+from typing import Callable, Dict, List, Mapping, Optional
 
 from lanerl_rl import constants as C
 from lanerl_rl.frame import LaneFrame
@@ -51,7 +51,14 @@ from lanerl_rl.projection import screen_to_world_centred
 from ..train.actions import MINIMAP_X_MIN, MINIMAP_Y_MIN
 from .targets import TRACE_ENV
 
-__all__ = ["ActionLog", "Fixture", "scripted_action", "record_trace", "record_fixture"]
+__all__ = ["ActionLog", "Driver", "Fixture", "scripted_action", "record_trace",
+           "record_fixture"]
+
+#: ``driver(obs, i) -> {"blue": wire, "red": wire} | None`` -- the signature of
+#: :func:`scripted_action`, and of `policy_driver.PolicyPairDriver`. ``obs`` is
+#: the control-channel observation BEFORE the action (None before the first
+#: frame), ``i`` the decision index.
+Driver = Callable[[Optional[Mapping], int], Optional[Dict[str, dict]]]
 
 #: Seed for the server-side bot RNG. Fixed so a fixture is reproducible; the
 #: bots are off anyway, but the seed also strides other server-side streams.
@@ -214,8 +221,15 @@ def record_trace(
     extra_env: Optional[Mapping[str, str]] = None,
     server_dir: Optional[Path] = None,
     config_path: Optional[Path] = None,
+    driver: Optional[Driver] = None,
 ) -> Path:
     """Boot one server, drive it, and return the path to its log.
+
+    ``driver`` chooses the actions; the default is :func:`scripted_action`,
+    whose recordings are the fixture corpus, so leaving it unset changes
+    nothing. `PARITY-001` passes `policy_driver.PolicyPairDriver` to record a
+    TRAINED policy's own action stream -- the stream no parity tool had ever
+    run, and where `SPELL-001`'s exploit lived.
 
     The log carries the STATEHASH/STATEROW stream; parse it with
     :func:`lanerl_jax.parity.trace.load_trace`.
@@ -253,6 +267,7 @@ def record_trace(
         step_timeout_s=180.0,
         auto_restart=False,
     )
+    drive = driver if driver is not None else scripted_action
     env.start()
     actions = ActionLog(t_ms=[], blue=[], red=[])
     obs_path = out_dir / f"{tag}_obs.jsonl"
@@ -262,7 +277,7 @@ def record_trace(
         with obs_path.open("w") as obs_fh:
             for i in range(decisions):
                 obs = env.last_obs[0]
-                act = scripted_action(obs, i)
+                act = drive(obs, i)
                 if obs is not None:
                     # The observation BEFORE the action -- so a fixture row reads
                     # "in this state, this action was issued", which is the tuple
@@ -310,11 +325,12 @@ def record_fixture(out_dir: Path, decisions: int = 600, port_base: int = 41000,
                    tag: str = "fixture",
                    extra_env: Optional[Mapping[str, str]] = None,
                    server_dir: Optional[Path] = None,
-                   config_path: Optional[Path] = None) -> Fixture:
+                   config_path: Optional[Path] = None,
+                   driver: Optional[Driver] = None) -> Fixture:
     """Record one episode and return the paths to all three streams."""
     log = record_trace(out_dir, decisions=decisions, port_base=port_base, tag=tag,
                        server_dir=server_dir, config_path=config_path,
-                       extra_env=extra_env)
+                       extra_env=extra_env, driver=driver)
     out_dir = Path(out_dir)
     return Fixture(log=log,
                    actions=out_dir / f"{tag}_actions.json",

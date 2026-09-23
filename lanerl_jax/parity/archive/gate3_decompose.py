@@ -27,7 +27,7 @@ This reads the streams `gate3_first_divergence --save` already writes, so it
 costs no server time.
 
 USAGE
-    python -m lanerl_jax.parity.gate3_decompose --streams <g3_streams.json>
+    python -m lanerl_jax.parity.archive.gate3_decompose --streams <g3_streams.json>
 """
 
 from __future__ import annotations

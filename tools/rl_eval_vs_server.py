@@ -78,10 +78,12 @@ starting stats of every episode are compared before any mean is printed.
 `--checkpoint random` runs the untrained network, which is the reference every
 absolute number needs.
 
-Lives in `tools/` rather than `lanerl_jax/parity/` for one release only: a new
-file under `lanerl_jax/` changes `run_manifest.source_fingerprint()`, and this
-was written while a seven-arm sweep was in flight whose arms must all report the
-same fingerprint. Move it once that campaign is closed.
+The DRIVER (wire frame -> `LaneState`, checkpoint loading, the jitted act,
+the wire encoding) now lives in `lanerl_jax/parity/policy_driver.py` and is
+imported from there (`PARITY-001`): the policy-divergence gate
+(`python -m lanerl_jax.parity.policy_divergence`) drives the server with the
+same code, so there is one copy. This script keeps the episode loop, the
+counters, `--replay` and `--selftest`.
 """
 from __future__ import annotations
 
@@ -94,8 +96,6 @@ import sys
 import tempfile
 from pathlib import Path
 
-import jax
-import jax.numpy as jnp
 import numpy as np
 
 _REPO = Path(__file__).resolve().parents[1]
@@ -104,28 +104,18 @@ sys.path.insert(0, str(_REPO))
 from lanerl_jax.obs.builder import build_observation                  # noqa: E402
 from lanerl_jax.parity.lanerl_lane import LanerlLane                  # noqa: E402
 from lanerl_jax.obs.frame import make_lane_frame                      # noqa: E402
-from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params  # noqa: E402
+from lanerl_jax.sim.init import TOP_OUTER_TURRET, lane_params         # noqa: E402
 from lanerl_jax.sim.orders import OrderKind                           # noqa: E402
-from lanerl_jax.sim.profiles import profile_id                        # noqa: E402
-from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, E_DURATION_S  # noqa: E402
-from lanerl_jax.sim.state import (CH_SLICE, MI_SLICE, TU_SLICE, Kind,  # noqa: E402
-                                  Team)
-from lanerl_jax.train.actions import orders_from                      # noqa: E402
-from lanerl_jax.train.policy import LanePolicy, PolicyConfig          # noqa: E402
-from lanerl_jax.train.trainer import BLUE_NEXUS, RED_NEXUS, _sample   # noqa: E402
-
-#: wire ``MinionSpawnType`` -> `sim.targeting.MinionType`. The server numbers
-#: them MELEE=0 SUPER=1 CANNON=2 CASTER=3; the sim uses `MinionWaveTypes`'
-#: spawn order, MELEE=0 CASTER=1 CANNON=2 SUPER=3. Caster and cannon are
-#: swapped, which is why this is not the identity map -- see
-#: `parity.last_hit_drive.WIRE_MINION_TYPE`, whose docstring records the same
-#: trap for the patch-table keys.
-WIRE_MT_TO_SIM = {0: 0, 1: 3, 2: 2, 3: 1}
-
-#: Server team ids on the wire -> compact `Team` indices.
-WIRE_TEAM = {100: Team.BLUE, 200: Team.RED}
-
-_MINION_KINDS = ("LaneMinion", "Minion")
+from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT                 # noqa: E402
+from lanerl_jax.sim.state import MI_SLICE, TU_SLICE, Kind, Team       # noqa: E402
+from lanerl_jax.train.trainer import BLUE_NEXUS                       # noqa: E402
+# The driver lives in ONE place (`PARITY-001`): the policy-divergence gate
+# drives the server with exactly this code. Re-exported here so the eval's
+# names (and anything that imported them from this script) keep working.
+from lanerl_jax.parity.policy_driver import (                         # noqa: E402,F401
+    E_CANCEL_ARMED_MAX_MS, WIRE_MT_TO_SIM, WIRE_TEAM, _MINION_KINDS,
+    CreationRankMap, StateRebuilder, _turret_slot_map, load_params,
+    make_driver, order_to_wire, pending_rank_up)
 
 
 class HeterogeneousEpisodes(RuntimeError):
@@ -165,342 +155,6 @@ def check_homogeneous(rows: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# wire frame -> LaneState
-# ---------------------------------------------------------------------------
-
-def _turret_slot_map(base) -> dict:
-    """Wire netid -> turret unit index, resolved by POSITION.
-
-    Turret tier is not on the control wire, and tier selects the stat profile
-    (`PROFILES` has one row per tier per team, which is the bug `TurretTier`
-    exists to fix). `init_lane` already places all 24 turrets with the right
-    tiers, so matching a wire turret to the nearest placed turret recovers the
-    tier without inventing it. Turrets never move, so the match is exact rather
-    than approximate.
-
-    Returned as a builder because netids are only known once a frame arrives.
-    """
-    tx = np.asarray(base.x[TU_SLICE])
-    ty = np.asarray(base.y[TU_SLICE])
-    off = TU_SLICE.start
-
-    def match(units):
-        out = {}
-        for u in units:
-            d = (tx - float(u["x"])) ** 2 + (ty - float(u["y"])) ** 2
-            j = int(np.argmin(d))
-            if d[j] > 100.0 ** 2:      # 100 u: turrets are >1,000 u apart
-                continue               # not one of the placed 24 (e.g. inhibitor)
-            out[int(u["id"])] = off + j
-        return out
-    return match
-
-
-#: `GarenECancel`'s cooldown is 1000 ms; one 30 Hz frame of slack.
-E_CANCEL_ARMED_MAX_MS = 1100.0
-
-
-class StateRebuilder:
-    """Rebuilds a training-shaped `LaneState` from each control-channel frame.
-
-    Stateful for one reason: minion slot assignment must be STABLE across
-    frames within an episode. Entity slots in the observation are chosen by
-    `top_k` on distance with ties to the lowest index, so a minion that hops
-    between unit slots frame to frame would reorder the observation under a tie
-    and, more importantly, would make `Orders.target` (a unit index) point at a
-    different minion than the one the policy selected. netid -> slot is
-    therefore assigned once, on first sight, and freed when the slot's minion
-    is no longer in the frame.
-    """
-
-    def __init__(self):
-        self.base = init_lane()
-        self.params = lane_params()
-        self._turret_match = _turret_slot_map(self.base)
-        self._turrets: dict[int, int] = {}
-        self._minion: dict[int, int] = {}
-        self._free = list(range(MI_SLICE.start, MI_SLICE.stop))
-        self._dropped = 0
-        self.n_units = int(self.base.x.shape[0])
-        # Per-champion E-spin inference from `cd2` edges (module docstring).
-        self._e = [{"prev_cd2": 0.0, "spin_start_ms": None} for _ in range(2)]
-
-    def rebuild(self, frame: dict):
-        """Returns `(state, netid_of_unit)`; `netid_of_unit[i]` is 0 if empty."""
-        n = self.n_units
-        x = np.zeros(n, np.float32)
-        y = np.zeros(n, np.float32)
-        hp = np.zeros(n, np.float32)
-        mhp = np.zeros(n, np.float32)
-        alive = np.zeros(n, bool)
-        kind = np.zeros(n, np.int32)
-        team = np.asarray(self.base.team, np.int32).copy()
-        model = np.asarray(self.base.model, np.int32).copy()
-        level = np.asarray(self.base.level, np.int32).copy()
-        gold = np.zeros(n, np.float32)
-        cs = np.zeros(n, np.int32)
-        netid = np.zeros(n, np.int64)
-        spell_level = np.zeros((2, 4), np.int32)
-        spell_cd = np.zeros((2, 4), np.float32)
-        recall = np.zeros(n, np.float32)
-        buff_id = np.asarray(self.base.buff_id).copy()
-        buff_elapsed = np.asarray(self.base.buff_elapsed).copy()
-        buff_duration = np.asarray(self.base.buff_duration).copy()
-        t_now = float(frame.get("t", 0))
-
-        units = frame.get("u", [])
-        turrets = [u for u in units if "Turret" in str(u.get("k", ""))]
-        if turrets and not self._turrets:
-            self._turrets = self._turret_match(turrets)
-
-        # Minion slots first, so a slot freed this frame can be reused by a
-        # minion that spawned in the same frame.
-        seen = {int(u["id"]) for u in units
-                if u.get("k") in _MINION_KINDS}
-        for nid in [k for k in self._minion if k not in seen]:
-            self._free.append(self._minion.pop(nid))
-
-        for u in units:
-            k = str(u.get("k", ""))
-            tm = WIRE_TEAM.get(int(u.get("tm", -1)))
-            if tm is None:
-                continue                       # neutral/unowned: not modelled
-            if k == "Champion":
-                i = CH_SLICE.start + int(tm)
-                kind[i] = Kind.CHAMPION
-                model[i] = profile_id(Kind.CHAMPION, -1, int(tm))
-                level[i] = max(1, int(u.get("lvl", 1)))
-                gold[i] = float(u.get("gold", 0.0))
-                cs[i] = int(u.get("cs", 0))
-                sl = u.get("sl") or [0, 0, 0, 0]
-                spell_level[int(tm)] = [int(v) for v in sl[:4]]
-                # wire cd<slot> is ms; `state.spell_cooldown` is seconds, as
-                # `build_observation` divides it by the seconds-valued
-                # Q_COOLDOWN / *_COOLDOWNS tables.
-                spell_cd[int(tm)] = [max(0.0, float(u.get(f"cd{s}", 0)) / 1000.0)
-                                     for s in range(4)]
-                recall[i] = 1.0 if int(u.get("rc", 0)) else 0.0
-                # E spin from the cd2 edge: <= 1.1 s is `GarenECancel`
-                # being armed (a spin began); anything larger is the
-                # rank cooldown (the spin ended, by time or by cancel).
-                e = self._e[int(tm)]
-                cd2_ms = float(u.get("cd2", 0) or 0.0)
-                if cd2_ms > e["prev_cd2"] + 1.0:
-                    e["spin_start_ms"] = (
-                        t_now if cd2_ms <= E_CANCEL_ARMED_MAX_MS else None)
-                e["prev_cd2"] = cd2_ms
-                if e["spin_start_ms"] is not None:
-                    el = (t_now - e["spin_start_ms"]) / 1000.0
-                    if el >= E_DURATION_S:
-                        e["spin_start_ms"] = None
-                    else:
-                        buff_id[i, E_BUFF_SLOT] = BuffId.GAREN_E
-                        buff_elapsed[i, E_BUFF_SLOT] = el
-                        buff_duration[i, E_BUFF_SLOT] = E_DURATION_S
-            elif k in _MINION_KINDS:
-                nid = int(u["id"])
-                i = self._minion.get(nid)
-                if i is None:
-                    if not self._free:
-                        self._dropped += 1     # slot table full -- see below
-                        continue
-                    i = self._free.pop(0)
-                    self._minion[nid] = i
-                kind[i] = Kind.LANE_MINION
-                mt = WIRE_MT_TO_SIM.get(int(u.get("mt", 0)), 0)
-                model[i] = profile_id(Kind.LANE_MINION, mt, int(tm))
-            elif "Turret" in k:
-                i = self._turrets.get(int(u["id"]))
-                if i is None:
-                    continue
-                kind[i] = Kind.TURRET       # model/team come from init_lane
-            else:
-                continue
-            team[i] = int(tm)
-            x[i] = float(u["x"])
-            y[i] = float(u["y"])
-            hp[i] = float(u.get("hp", 0.0))
-            mhp[i] = float(u.get("mhp", 0.0))
-            alive[i] = hp[i] > 0.0
-            netid[i] = int(u["id"])
-
-        state = self.base.replace(
-            x=jnp.asarray(x), y=jnp.asarray(y), hp=jnp.asarray(hp),
-            max_hp=jnp.asarray(mhp), alive=jnp.asarray(alive),
-            kind=jnp.asarray(kind), team=jnp.asarray(team),
-            model=jnp.asarray(model), level=jnp.asarray(level),
-            gold=jnp.asarray(gold), cs=jnp.asarray(cs),
-            spell_level=jnp.asarray(spell_level),
-            spell_cooldown=jnp.asarray(spell_cd),
-            recall_channel_ms=jnp.asarray(recall),
-            buff_id=jnp.asarray(buff_id), buff_elapsed=jnp.asarray(buff_elapsed),
-            buff_duration=jnp.asarray(buff_duration),
-            t_ms=jnp.asarray(t_now, jnp.float32))
-        return state, netid
-
-    @property
-    def dropped_minions(self) -> int:
-        """How many live minions did not fit in the slot table.
-
-        `N_MINIONS` is 40, sized for a top-only lane, and both teams' minions
-        share it. A frame carrying more live minions than that means the
-        observation was built from a SUBSET, which is a different measurement --
-        so it is counted and reported rather than tolerated silently.
-
-        Counted at the point of the drop. Deriving it from `len(self._minion)`
-        would always have returned 0, because a dropped minion never enters
-        that dict.
-        """
-        return self._dropped
-
-
-# ---------------------------------------------------------------------------
-# policy
-# ---------------------------------------------------------------------------
-
-def load_params(path: str):
-    """Params out of a `RunDir` checkpoint, or a fresh untrained set.
-
-    The checkpoint payload is `{"params": ..., "opt_state": ...}` serialised by
-    `flax.serialization.to_bytes`, which needs a TARGET of the right structure
-    to deserialise into -- so the network is constructed the way the trainer
-    constructs it (`LanePolicy(PolicyConfig())`, initialised on a real
-    observation) and the bytes are read into that. Building it any other way is
-    how an eval ends up silently measuring a different network from the one that
-    was trained.
-    """
-    from flax.serialization import from_bytes
-
-    frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
-                            TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
-    policy = LanePolicy(PolicyConfig())
-    obs0 = build_observation(init_lane(), 0, frame, params=lane_params())
-    fresh = policy.init(jax.random.key(0), obs0.entities, obs0.entity_pad_mask,
-                        obs0.self_vec, obs0.global_vec)
-    if path == "random":
-        return policy, fresh, "random"
-    payload = from_bytes({"params": fresh, "opt_state": None},
-                         Path(path).read_bytes())
-    return policy, payload["params"], Path(path).parent.name
-
-
-def order_to_wire(kind: int, ox: float, oy: float, target_unit: int,
-                  netid: np.ndarray) -> dict:
-    """One semantic `Orders` row -> one control-channel action.
-
-    An ATTACK whose target slot resolved to an empty unit becomes a noop rather
-    than an attack on netid 0. The server's complaint counter would catch it,
-    but a silently retargeted attack would not be caught by anything.
-    """
-    if kind == OrderKind.MOVE:
-        return {"t": "move", "x": float(ox), "y": float(oy)}
-    if kind == OrderKind.ATTACK:
-        nid = int(netid[target_unit]) if 0 <= target_unit < len(netid) else 0
-        return {"t": "attack", "id": nid} if nid else {"t": "noop"}
-    for slot, k in enumerate((OrderKind.CAST_Q, OrderKind.CAST_W,
-                              OrderKind.CAST_E, OrderKind.CAST_R)):
-        if kind == k:
-            return {"t": "cast", "slot": slot}
-    if kind == OrderKind.RECALL:
-        return {"t": "recall"}
-    return {"t": "noop"}
-
-
-def make_driver(policy, params, *, deterministic: bool, seed: int):
-    """A `frame -> (wire action, stats)` callable.
-
-    `deterministic` defaults OFF. A deterministic argmax policy has already made
-    an evaluation in this project measure nothing at all: it froze the champion
-    and the CS number that came out looked plausible for weeks. Sampling is also
-    what training did, so it is the like-for-like comparison.
-    """
-    frame_blue = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
-                                 TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
-
-    @jax.jit
-    def act(state, key):
-        obs = build_observation(state, 0, frame_blue, params=lane_params())
-        logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
-                              obs.self_vec, obs.global_vec)
-        if deterministic:
-            action = (jnp.argmax(logits.button), jnp.argmax(logits.screen_x),
-                      jnp.argmax(logits.screen_y), jnp.argmax(logits.target))
-        else:
-            action, _ = _sample(logits, key)
-        # `orders_from` is the TRAINING decoder and expects the (2, ...) batch
-        # of both champions. Only blue is driven here, so the row is doubled and
-        # row 0 is used -- doubling rather than reshaping keeps the exact
-        # per-side lane-frame handling in `orders_from` (`side = +-1` by team)
-        # instead of reimplementing it.
-        act2 = tuple(jnp.stack([a, a]) for a in action)
-        slots = jnp.stack([obs.slot_unit, obs.slot_unit])
-        orders = orders_from(act2, state, slots, frame_blue)
-        return (orders.kind[0], orders.x[0], orders.y[0], orders.target[0],
-                action[0])
-
-    rb = StateRebuilder()
-    key = jax.random.key(seed)
-    counts = {"cast": 0, "attack": 0, "move": 0, "noop": 0, "recall": 0,
-              "level": 0}
-
-    def pending_rank_up(champ: dict):
-        """The slot the SIM would have ranked up by now, or None.
-
-        THE BUG THIS FIXES, and it is worth stating because the first run of
-        this eval scored 1.5 CS against 44.6 in the sim and this was the whole
-        difference. The JAX sim ranks spells automatically: `step.py` indexes
-        `_RANK_TABLE = RANKS_BY_LEVEL` by champion level on every tick, so a
-        level-3 champion HAS E rank 2 with no action spent. The C# server ranks
-        spells in `AutoLevel`, which belongs to the SCRIPTED BOT -- and this eval
-        drives blue itself, so blue's `sl` stayed `[0,0,0,0]` for the whole game
-        while red (bot-driven) had E at rank 1 from the first frame.
-
-        A policy that presses E on 72% of its decisions (measured, same
-        checkpoint, both engines) was therefore casting an UNRANKED spell.
-        `Spell.Cast` does not check spell level -- the cast goes through and the
-        cooldown starts -- so nothing complained and nothing looked wrong; the
-        spin simply did rank-0 damage. `docs` records "spell rank 0" as one of
-        the five original BC blockers, which is the same bug in a different
-        harness.
-
-        So the eval sends the rank-ups itself, following `spells.SKILL_ORDER`
-        (E first: 2,0,1,2,2,3,...) via `RANKS_BY_LEVEL`, which is the exact table
-        training uses. It costs the decision it is sent on -- the wire takes one
-        order per side per step -- which is at most 18 of 18,000 decisions, and
-        the count is reported.
-        """
-        from lanerl_jax.sim.spells import RANKS_BY_LEVEL
-
-        lvl = int(champ.get("lvl") or 1)
-        want = RANKS_BY_LEVEL[min(lvl, len(RANKS_BY_LEVEL) - 1)]
-        have = [int(v) for v in (champ.get("sl") or [0, 0, 0, 0])[:4]]
-        for slot in range(4):
-            if have[slot] < want[slot]:
-                return slot
-        return None
-
-    def drive(frame: dict) -> dict:
-        nonlocal key
-        blue = next((u for u in frame.get("u", [])
-                     if u.get("k") == "Champion" and u.get("tm") == 100), None)
-        if blue is not None:
-            slot = pending_rank_up(blue)
-            if slot is not None:
-                counts["level"] += 1
-                return {"t": "level", "slot": slot}
-        key, k = jax.random.split(key)
-        state, netid = rb.rebuild(frame)
-        kind, ox, oy, tgt, _btn = act(state, k)
-        wire = order_to_wire(int(kind), float(ox), float(oy), int(tgt), netid)
-        counts[wire["t"]] = counts.get(wire["t"], 0) + 1
-        return wire
-
-    drive.counts = counts
-    drive.rebuilder = rb
-    return drive
-
-
-# ---------------------------------------------------------------------------
 # episodes
 # ---------------------------------------------------------------------------
 
@@ -517,29 +171,52 @@ def replay_driver(path: Path, counts: dict):
 
     MOVE carries world coordinates and CAST carries a slot, so both replay
     exactly. ATTACK carries a sim UNIT INDEX, which has no meaning on the
-    server -- those are dropped and counted, never guessed at. They are 3.4% of
-    the sim's orders, so the replay is a test of movement and casting, which is
-    what is in question. Beyond the first death the trajectories are no longer
-    comparable at all; read the walk-to-lane window.
+    server. It is mapped through CREATION RANK when the line carries the
+    target's ``target_spawn_seq`` (the sim's `LaneState.spawn_seq` of the
+    targeted unit at record time): `spawn_seq` -> champion by team, turret by
+    position, or the k-th LaneMinion NetId this server has created, where
+    ``k = spawn_seq - first_minion_seq`` (`policy_driver.CreationRankMap`;
+    both engines create minions in the same order, red before blue within a
+    wave, `RESET-004`). A line WITHOUT ``target_spawn_seq`` (every recording
+    made before 2026-09-23), or whose rank names a minion this server has not
+    created, is dropped and counted -- never guessed at. Those were 3.4% of
+    the sim's orders and the CS-producing ones (`SPELL-001`).
+
+    JSONL schema, one decision per line::
+
+        {"kind": <OrderKind>, "x": float, "y": float,
+         "target": <sim slot>, "target_spawn_seq": <int, optional>}
     """
     orders = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    ranks = CreationRankMap()
     i = 0
 
     def drive(frame: dict) -> dict:
         nonlocal i
+        ranks.observe(frame)
         if i >= len(orders):
             counts["noop"] = counts.get("noop", 0) + 1
             return {"t": "noop"}
         o = orders[i]
         i += 1
-        wire = order_to_wire(int(o["kind"]), o["x"], o["y"], -1, np.zeros(0))
-        if int(o["kind"]) == OrderKind.ATTACK:
-            counts["attack_dropped"] = counts.get("attack_dropped", 0) + 1
+        kind = int(o["kind"])
+        netid = np.zeros(0, np.int64)
+        tgt = -1
+        if kind == OrderKind.ATTACK:
+            seq = o.get("target_spawn_seq")
+            nid = ranks.netid_of_spawn_seq(int(seq)) if seq is not None else None
+            if nid:
+                netid, tgt = np.asarray([nid], np.int64), 0
+                counts["attack_mapped"] = counts.get("attack_mapped", 0) + 1
+            else:
+                counts["attack_dropped"] = counts.get("attack_dropped", 0) + 1
+        wire = order_to_wire(kind, o["x"], o["y"], tgt, netid)
         counts[wire["t"]] = counts.get(wire["t"], 0) + 1
         return wire
 
     drive.counts = counts
     drive.rebuilder = None
+    drive.ranks = ranks
     return drive
 
 

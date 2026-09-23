@@ -30,8 +30,8 @@ collision-ordering work would have removed them.  Run both arms as separate
 processes (the constant is read at `tick` trace time and baked into the
 compiled program):
 
-    python -m lanerl_jax.parity.tier1_same_wave_collision --existing-log LOG
-    python -m lanerl_jax.parity.tier1_same_wave_collision --existing-log LOG \\
+    python -m lanerl_jax.parity.archive.tier1_same_wave_collision --existing-log LOG
+    python -m lanerl_jax.parity.archive.tier1_same_wave_collision --existing-log LOG \\
         --rounded-spawn
 """
 from __future__ import annotations
@@ -76,8 +76,8 @@ def main(argv=None) -> None:
                     help="run with the PRE-FIX rounded barracks coordinates")
     a = ap.parse_args(argv)
 
-    from ..sim import step as step_module
-    from ..sim.state import Team
+    from ...sim import step as step_module
+    from ...sim.state import Team
 
     if a.rounded_spawn:
         # Patched before anything imports `tick` into a jit cache; `tick`
@@ -95,16 +95,16 @@ def main(argv=None) -> None:
 
     import jax.numpy as jnp
 
-    from ..data.patch import load_patch
-    from ..sim.init import TOP_LANE_PATH, lane_params
-    from ..sim.profiles import PROFILES
-    from ..sim.state import Kind
-    from .diagnostic_identity import net_id_to_entity
-    from .inject import inject_snapshot, replay_wave_states
-    from .one_step import POS_GATE_SLACK, POS_GATE_TOL, compare_one_tick, \
+    from ...data.patch import load_patch
+    from ...sim.init import TOP_LANE_PATH, lane_params
+    from ...sim.profiles import PROFILES
+    from ...sim.state import Kind
+    from ..diagnostic_identity import net_id_to_entity
+    from ..inject import inject_snapshot, replay_wave_states
+    from ..one_step import POS_GATE_SLACK, POS_GATE_TOL, compare_one_tick, \
         record_idle_trace
-    from .tier1_full import FIRST_WAVE_MS
-    from .trace import load_trace
+    from ..tier1_full import FIRST_WAVE_MS
+    from ..trace import load_trace
 
     if a.existing_log:
         log = Path(a.existing_log)
@@ -138,7 +138,7 @@ def main(argv=None) -> None:
             previous = None
         state_n, report = inject_snapshot(
             sn, wave_states[i], params, PROFILES, previous_snapshot=previous)
-        from .diagnostic_identity import net_id_to_injected_slot
+        from ..diagnostic_identity import net_id_to_injected_slot
         net_id_slots = net_id_to_injected_slot(sn, report.notes)
         tr = compare_one_tick(state_n, report.notes, sn1, params, lane_path,
                               pre_net_id_to_slot=net_id_slots)

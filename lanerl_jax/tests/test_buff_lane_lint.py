@@ -10,7 +10,7 @@ The kit has two small-integer index spaces that read alike and are not:
 ``Slot.E`` is 2 and ``E_BUFF_SLOT`` is 0, so ``buff_id[:, Slot.E]`` reads lane 2
 (``W_PASSIVE_BUFF_SLOT``) and compares identically False against
 ``BuffId.GAREN_E`` -- ``SPELL-005``: Garen never ghosted while spinning
-(``step.py``, and the same line in ``parity/truncation_bound_probe.py``);
+(``step.py``, and the same line in ``parity/archive/truncation_bound_probe.py``);
 ``STRUCT-001`` counts the ``Slot.E``/``E_BUFF_SLOT`` collision at three sites,
 and nothing failed on any of them. This lint flags, over ``lanerl_jax/**/*.py`` and
 ``tools/**/*.py``:

@@ -1,6 +1,6 @@
 """The gate-3 swarm arrival process: the sim is not burstier, it is stickier.
 
-:mod:`lanerl_jax.parity.gate3_swarm` left gate 3 with one live lead, recorded
+:mod:`lanerl_jax.parity.archive.gate3_swarm` left gate 3 with one live lead, recorded
 in the ledger as *clumping*::
 
     engaged decisions with      sim     server
@@ -135,7 +135,7 @@ independent radius: the only radius is the victim's ``AcquisitionRange`` in
 
 Usage::
 
-    python -m lanerl_jax.parity.gate3_arrivals \\
+    python -m lanerl_jax.parity.archive.gate3_arrivals \\
         --sim runs/g3_sim_swarm.npz --server runs/g3_srv_swarm.npz \\
         --server-log runs/g3_srv_swarm_log/instance000.log
 """
@@ -147,12 +147,12 @@ from pathlib import Path
 
 import numpy as np
 
-from ..sim.init import lane_params
-from ..sim.state import Kind, Team
+from ...sim.init import lane_params
+from ...sim.state import Kind, Team
 from .gate3_swarm import (SRV_MINION, SRV_BLUE, SRV_RED, _server_first_seen,
                           _server_mrt_decision, lane_fraction, server_occupancy)
-from .last_hit_drive import WIRE_MINION_TYPE
-from .targets import parse_target_traces
+from ..last_hit_drive import WIRE_MINION_TYPE
+from ..targets import parse_target_traces
 
 __all__ = [
     "sim_holds", "server_holds", "occupancy", "dispersion", "release_audit",

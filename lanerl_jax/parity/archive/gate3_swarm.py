@@ -1,6 +1,6 @@
 """Why gate 3's sim champion is swarmed by red minions and the server's is not.
 
-:mod:`lanerl_jax.parity.gate3_attribution` reduced gate 3's whole deficit to
+:mod:`lanerl_jax.parity.archive.gate3_attribution` reduced gate 3's whole deficit to
 one unexplained fact::
 
                                         sim     server
@@ -45,7 +45,7 @@ Observability is asymmetric and that asymmetry drives the design:
 Usage (after the two ``gate3_attribution`` collections, the server one with
 ``--aggro-trace``)::
 
-    python -m lanerl_jax.parity.gate3_swarm \
+    python -m lanerl_jax.parity.archive.gate3_swarm \
         --sim runs/g3_sim_swarm.npz --server runs/g3_srv_swarm.npz \
         --server-log runs/g3_srv_swarm_log/instance000.log
 """
@@ -57,10 +57,10 @@ from pathlib import Path
 
 import numpy as np
 
-from ..sim.init import TOP_LANE_PATH, lane_params
-from ..sim.state import Kind, Team
-from .last_hit_drive import WIRE_MINION_TYPE
-from .targets import parse_target_traces
+from ...sim.init import TOP_LANE_PATH, lane_params
+from ...sim.state import Kind, Team
+from ..last_hit_drive import WIRE_MINION_TYPE
+from ..targets import parse_target_traces
 
 __all__ = ["sim_acquisitions", "server_acquisitions", "report"]
 

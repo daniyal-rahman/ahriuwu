@@ -32,7 +32,7 @@ guaranteed zero by construction and would only dilute the histogram.
 Usage::
 
     ops/login_capped.sh 4G 1 .venv-jax/bin/python -m \\
-        lanerl_jax.parity.truncation_bound_probe \\
+        lanerl_jax.parity.archive.truncation_bound_probe \\
         --log lanerl_jax/runs/tier1_full/server/instance000.log \\
         --from-ms 200000 --to-ms 250000 --probe-steps 32 --probe-escapes 32
 """
@@ -61,16 +61,16 @@ def main(argv=None) -> None:
 
     import jax.numpy as jnp
 
-    from ..data.patch import load_patch
-    from ..sim.collision import max_escapes_used
-    from ..sim.init import lane_params
-    from ..sim.movement_jax import TICK_MS, max_steps_used
-    from ..sim.profiles import PROFILES
-    from ..sim.spells import E_BUFF_SLOT, BuffId, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER, Slot
-    from ..sim.state import Kind
-    from .inject import inject_snapshot, replay_wave_states
-    from .tier1_full import FIRST_WAVE_MS
-    from .trace import load_trace_window
+    from ...data.patch import load_patch
+    from ...sim.collision import max_escapes_used
+    from ...sim.init import lane_params
+    from ...sim.movement_jax import TICK_MS, max_steps_used
+    from ...sim.profiles import PROFILES
+    from ...sim.spells import E_BUFF_SLOT, BuffId, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER, Slot
+    from ...sim.state import Kind
+    from ..inject import inject_snapshot, replay_wave_states
+    from ..tier1_full import FIRST_WAVE_MS
+    from ..trace import load_trace_window
 
     print(f"loading window [{a.from_ms}, {a.to_ms}] ms from {a.log} "
           f"(max_snapshots={a.max_snapshots})", flush=True)

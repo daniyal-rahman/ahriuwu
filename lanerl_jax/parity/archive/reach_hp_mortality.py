@@ -58,7 +58,7 @@ anything else and must not be read as a mechanism, only as a residual size.
 
 HOW TO READ THE OUTPUT
 -----------------------
-``python -m lanerl_jax.parity.reach_hp_mortality`` for a human-readable
+``python -m lanerl_jax.parity.archive.reach_hp_mortality`` for a human-readable
 report; import the ``run_*`` functions for a follow-up analysis. Always quote
 `print_provenance()`'s digest next to any number taken from this module
 (`METH-001`).
@@ -74,18 +74,18 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from ..obs.fog import visible_to
-from ..sim.init import ALL_TURRETS, TOP_LANE_PATH, init_lane, lane_params
-from ..sim.orders import OrderKind, Orders, apply_orders
-from ..sim.profiles import PROFILES
-from ..sim.state import Kind, Team, TurretTier
-from ..sim.step import step_decision
-from ..sim.targeting import MinionType
-from .hp_band import BandSample, leveled_ad_of
-from .last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
+from ...obs.fog import visible_to
+from ...sim.init import ALL_TURRETS, TOP_LANE_PATH, init_lane, lane_params
+from ...sim.orders import OrderKind, Orders, apply_orders
+from ...sim.profiles import PROFILES
+from ...sim.state import Kind, Team, TurretTier
+from ...sim.step import step_decision
+from ...sim.targeting import MinionType
+from ..hp_band import BandSample, leveled_ad_of
+from ..last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
                              WIRE_MINION_TYPE, _advance_approach,
                              gate3_route_inputs)
-from .last_hit_oracle import ChampView, MinionView, decide, post_mitigation
+from ..last_hit_oracle import ChampView, MinionView, decide, post_mitigation
 
 __all__ = [
     "MortalityEvent", "PositionStats", "SimReachRun", "ServerReachRun",
@@ -249,7 +249,7 @@ def run_sim_reach(
     every enemy minion in reach (like `hp_band.run_sim_band`) PLUS every
     enemy-minion death and the champion's own position, in one pass.
     """
-    from ..data.patch import load_patch
+    from ...data.patch import load_patch
 
     patch = load_patch()
     base_ad = patch.champion.base_ad
@@ -403,7 +403,7 @@ def run_server_reach(
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
 
-    from ..data.patch import load_patch
+    from ...data.patch import load_patch
 
     patch = load_patch()
     blue_turrets = _blue_top_lane_turrets(patch)
@@ -641,7 +641,7 @@ def mortality_summary(name: str, events: List[MortalityEvent]) -> str:
 def _main() -> None:
     import argparse
 
-    from .provenance import print_provenance
+    from ..provenance import print_provenance
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--decisions", type=int, default=DECISIONS_600S)

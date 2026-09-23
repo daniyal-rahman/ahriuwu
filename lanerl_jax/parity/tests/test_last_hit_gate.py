@@ -143,7 +143,7 @@ a targeting bug -- it is what the rule produces once that minion has nothing
 else nearby worth switching to.
 
 **That reframes the question as WHERE the champion ends up relative to its
-own wave**, which ``lanerl_jax/parity/isolation.py`` measures directly, in
+own wave**, which ``lanerl_jax/parity/archive/isolation.py`` (archived 2026-09-23) measures directly, in
 both engines, over this same scripted scenario (both drivers walk to the
 identical ``APPROACH_WAYPOINTS`` coordinate, so the destination itself is
 not in question)::

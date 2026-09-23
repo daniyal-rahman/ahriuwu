@@ -71,7 +71,7 @@ targeting on a slightly different position -- not what this question asks).
 Run via slurm, not the login node (records its own trace, O(N^2) python per
 tick, N<=66):
 
-    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_collision_sequential
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.archive.tier1_collision_sequential
 
 Why PRODUCTION scores slightly worse than the "creation order" reference
 above at neighbours>=2, 2026-09-16 follow-up (root-caused, not left open)

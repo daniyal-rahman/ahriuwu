@@ -124,9 +124,9 @@ One death is worth about 2,600 approach decisions and about 385 XP here.
 
 Usage::
 
-    python -m lanerl_jax.parity.gate3_attribution sim    --out runs/g3_sim.npz
-    python -m lanerl_jax.parity.gate3_attribution server --out runs/g3_srv.npz
-    python -m lanerl_jax.parity.gate3_attribution report \
+    python -m lanerl_jax.parity.archive.gate3_attribution sim    --out runs/g3_sim.npz
+    python -m lanerl_jax.parity.archive.gate3_attribution server --out runs/g3_srv.npz
+    python -m lanerl_jax.parity.archive.gate3_attribution report \
         --sim runs/g3_sim.npz --server runs/g3_srv.npz
 
 The two collection commands are independent; the server one boots a real
@@ -141,10 +141,10 @@ from typing import Optional
 
 import numpy as np
 
-from ..sim.local_pathing import LocalRouteStatus
-from ..sim.rewards import EXP_RADIUS
-from ..sim.state import Kind, Team
-from .last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
+from ...sim.local_pathing import LocalRouteStatus
+from ...sim.rewards import EXP_RADIUS
+from ...sim.state import Kind, Team
+from ..last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
                              run_oracle_in_sim, run_oracle_on_server)
 
 __all__ = ["SimTracer", "ServerTracer", "collect_sim", "collect_server",
@@ -424,7 +424,7 @@ def collect_server(out: Path, decisions: int = DECISIONS_600S,
     is recorded as ``summary["log_path"]``, so an analysis that needs both the
     switch events and the per-decision unit census can join them.
     """
-    from .targets import TRACE_ENV
+    from ..targets import TRACE_ENV
 
     tr = ServerTracer()
     run = run_oracle_on_server(decisions=decisions, port_base=port_base,
