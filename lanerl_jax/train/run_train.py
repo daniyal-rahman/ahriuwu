@@ -5,6 +5,7 @@ import argparse
 import json
 import sys
 import time
+import warnings
 from pathlib import Path
 
 import jax
@@ -186,7 +187,12 @@ def main() -> None:
         # `reward` and `entropy` are noisy enough that a chunk-end sample and a
         # chunk mean can point different directions, and the chunk boundary is
         # an artefact of --chunk.
-        row = {k: float(np.nanmean(np.asarray(v))) for k, v in mc.items()}
+        with warnings.catch_warnings():
+            # cs_at_10min is all-NaN on any chunk where no episode ended, and
+            # `nanmean` of that is NaN with a RuntimeWarning. NaN is the right
+            # answer here -- "no sample" -- so the warning is noise.
+            warnings.simplefilter("ignore", RuntimeWarning)
+            row = {k: float(np.nanmean(np.asarray(v))) for k, v in mc.items()}
         # cs_at_10min is NaN on updates where no episode ended, so its mean is
         # over the episodes that DID end; the count is the denominator.
         row["cs_episodes"] = float(np.asarray(mc["cs_episodes"]).sum())

@@ -42,7 +42,20 @@ export PYTHONUNBUFFERED=1
 export WANDB_DIR="$REPO/lanerl_jax/runs/train"
 
 echo "host $(hostname)  job ${SLURM_JOB_ID:-none}  $(date -u)"
-echo "git  $(git rev-parse --short HEAD)$(git status --porcelain | grep -q . && echo ' DIRTY' || echo ' clean')"
+# This is a WORKTREE: .git is a file pointing at /srv/nfs/..., which this node
+# cannot see (it mounts the same filesystem at /mnt/nfs and has no /srv). Left
+# untranslated, every git command here failed and the log printed "clean" for a
+# tree it had never read. run_manifest._worktree_git_env does the same thing for
+# the manifest.
+if ! git rev-parse --git-dir >/dev/null 2>&1 && [ -f .git ]; then
+    gd=$(sed -n 's/^gitdir: *//p' .git)
+    [ -d "$gd" ] || gd=${gd/\/srv\/nfs\//\/mnt\/nfs\/}
+    # `cmd && export` as the last statement of the block would return 1 when
+    # the test fails, and `set -e` would kill the whole job over a missing
+    # git dir. `if` instead.
+    if [ -d "$gd" ]; then export GIT_DIR="$gd" GIT_WORK_TREE="$REPO"; fi
+fi
+echo "git  $(git rev-parse --short HEAD 2>/dev/null || echo UNKNOWN)$(git status --porcelain 2>/dev/null | grep -q . && echo ' DIRTY' || echo ' clean')"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
 ./.venv-gpu/bin/python -m lanerl_jax.train.run_train \

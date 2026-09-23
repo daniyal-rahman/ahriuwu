@@ -54,6 +54,66 @@ def _run(cmd: list[str]) -> str:
         return "?"
 
 
+def _worktree_git_env() -> dict:
+    """A `git` environment that works on a node which cannot see `/srv/nfs`.
+
+    This checkout is a WORKTREE, so `.git` is a file holding
+    `gitdir: /srv/nfs/projects/ahriuwu/.git/worktrees/ahriuwu-lanerl-jax`. The
+    Slurm GPU node mounts the same filesystem at `/mnt/nfs` and has no `/srv`
+    at all, so every git command there failed with "not a git repository" --
+    and `_run` returns "?" on failure, so the run id came out as
+    `gpusmoke-20260923-050059-` with an empty sha and the manifest recorded
+    `dirty: false` for a tree it had not looked at. That is worse than no
+    provenance, because it reads as a clean checkout.
+
+    Returns extra environment for the git subprocess, or `{}` if the ordinary
+    path already works.
+    """
+    if _run(["git", "rev-parse", "--git-dir"]) not in ("?", ""):
+        return {}
+    dotgit = Path(".git")
+    if not dotgit.is_file():
+        return {}
+    ref = dotgit.read_text().strip()
+    if not ref.startswith("gitdir:"):
+        return {}
+    target = ref.split(":", 1)[1].strip()
+    # The ONLY translation, and it is the one the cluster actually needs
+    # (`docs`/memory: `/srv/nfs` on the login node is `/mnt/nfs` on `desktop`).
+    # Applied only when the recorded path is absent and the translated one is
+    # present, so it cannot silently point at a different repository.
+    if not Path(target).exists():
+        alt = target.replace("/srv/nfs/", "/mnt/nfs/", 1)
+        if Path(alt).exists():
+            target = alt
+        else:
+            return {}
+    return {"GIT_DIR": target, "GIT_WORK_TREE": str(Path.cwd())}
+
+
+def source_fingerprint(root: Path | None = None) -> dict:
+    """sha256 over the simulator and trainer sources that actually ran.
+
+    Independent of git, deliberately. A sha plus a dirty flag cannot tell two
+    dirty trees apart, and this project has already had a GPU node execute
+    PRE-EDIT source over NFS while the sha said otherwise. Two runs whose
+    `files` count and `sha256` agree ran the same Python; if they disagree, the
+    manifest says so even when git is unavailable on the node.
+    """
+    import hashlib
+
+    root = root or Path.cwd()
+    h, n = hashlib.sha256(), 0
+    for f in sorted((root / "lanerl_jax").rglob("*.py")):
+        if "__pycache__" in f.parts or "/tests/" in str(f):
+            continue
+        h.update(str(f.relative_to(root)).encode())
+        h.update(f.read_bytes())
+        n += 1
+    return {"sha256": h.hexdigest()[:16], "files": n,
+            "root": str(root), "note": "lanerl_jax/**/*.py excluding tests"}
+
+
 def git_provenance() -> dict:
     """What code actually ran.
 
@@ -62,6 +122,9 @@ def git_provenance() -> dict:
     whose sha looks right can still have executed different source. A dirty run
     is not reproducible from the sha alone and the manifest says so out loud.
     """
+    env = _worktree_git_env()
+    if env:
+        os.environ.update(env)
     sha = _run(["git", "rev-parse", "HEAD"])
     dirty = _run(["git", "status", "--porcelain"])
     return {
@@ -77,6 +140,10 @@ def git_provenance() -> dict:
         "dirty_files": [l.split(maxsplit=1)[-1]
                         for l in dirty.splitlines() if l.strip()][:40],
         "describe": _run(["git", "describe", "--always", "--dirty"]),
+        # Empty unless the worktree gitdir had to be path-translated for this
+        # node; present means git was NOT readable at the recorded path.
+        "gitdir_translated": env.get("GIT_DIR", ""),
+        "source": source_fingerprint(),
     }
 
 
