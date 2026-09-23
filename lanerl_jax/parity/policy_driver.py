@@ -459,6 +459,17 @@ class PolicyDriver:
         kind, ox, oy, tgt, _btn = self._act(state, k)
         kind, ox, oy, tgt = int(kind), float(ox), float(oy), int(tgt)
         wire = order_to_wire(kind, ox, oy, tgt, netid)
+        # `SPELL-010`: the server casts an UNRANKED spell (`Spell.Cast` never
+        # checks the level); the sim and real League refuse it. The rank-up
+        # order is sent first, but the policy can press before it lands, so
+        # the wire order is gated here on the rank the frame reported --
+        # the same rule `orders.py` applies -- and counted separately.
+        if wire.get("t") == "cast":
+            rank = int(state.spell_level[int(self.team), int(wire["slot"])])
+            if rank <= 0:
+                self.counts["cast_unranked"] = self.counts.get("cast_unranked", 0) + 1
+                wire = {"t": "noop"}
+                kind = int(OrderKind.NOOP)
         self.counts[wire["t"]] = self.counts.get(wire["t"], 0) + 1
         return DriverStep(wire, {"kind": kind, "x": ox, "y": oy, "target": tgt},
                           state, netid)
