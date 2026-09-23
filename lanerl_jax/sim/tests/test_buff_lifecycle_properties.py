@@ -455,13 +455,6 @@ def test_unit_sanity_on_every_snapshot(seed):
         assert not bad[k], _report(bad, k)
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "finding (no ledger row yet): step.tick clears `target` and `aa_target` "
-    "for a unit that dies this tick (step.py:1121, :1128) but stores "
-    "`is_attacking=aa.is_attacking` unmasked (step.py:1358), so a unit killed "
-    "mid-wind-up ends its death tick dead AND attacking. Cleared on the next "
-    "tick (the swing cancels for want of a target), so no hit can land; a "
-    "one-tick stale flag, not an exploit. Remove this xfail when fixed."))
 def test_a_dead_unit_is_not_mid_swing():
     rows = []
     for seed in SEEDS:

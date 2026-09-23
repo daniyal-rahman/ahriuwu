@@ -1355,7 +1355,14 @@ def tick(state: LaneState, params: UnitParams,
         ai_timer=ai.ai_timer, ai_local_time=ai.ai_local_time,
         time_since_attack=ai.time_since_attack, ignore_until=ai.ignore_until,
         aa_cooldown=aa.aa_cooldown, aa_windup=aa.aa_windup,
-        is_attacking=aa.is_attacking, has_auto_attacked=aa.has_auto_attacked,
+        # `AA-006`: a unit that died this tick is not mid-swing. `UpdateTarget`'s
+        # first branch cancels a dead unit's auto-attack on its own update;
+        # `target`/`aa_target` were masked above, this flag was not, and a
+        # corpse ended its death tick `is_attacking` (cleared next tick, no
+        # hit could land -- one tick of a stale flag, found by the STRUCT-001
+        # property tests).
+        is_attacking=aa.is_attacking & alive,
+        has_auto_attacked=aa.has_auto_attacked,
         aa_target=aa_target,
         silenced_ms=silenced_ms,
         r_cast_ms=r_cast_ms,
