@@ -66,6 +66,15 @@ def main() -> None:
                          "training ~30x slower than a normal PPO rate for a "
                          "reason that does not apply.")
     ap.add_argument("--entropy-coef", type=float, default=None)
+    ap.add_argument("--critic-lr", type=float, default=None,
+                    help="value-head learning rate. Declared in PPOConfig at "
+                         "3e-4 but read by nothing until 2026-09-23, so every "
+                         "earlier run trained the critic at --lr.")
+    ap.add_argument("--target-kl", type=float, default=None,
+                    help="stop the remaining minibatches of an update once the "
+                         "k3 KL estimate exceeds this. Also declared and "
+                         "unenforced before 2026-09-23.")
+    ap.add_argument("--value-coef", type=float, default=None)
     ap.add_argument(
         "--time-steady", action="store_true",
         help="run the whole job TWICE to separate compile from steady state. "
@@ -86,6 +95,12 @@ def main() -> None:
         ppo = ppo._replace(lr=a.lr)
     if a.entropy_coef is not None:
         ppo = ppo._replace(entropy_coef=a.entropy_coef)
+    if a.critic_lr is not None:
+        ppo = ppo._replace(critic_lr=a.critic_lr)
+    if a.target_kl is not None:
+        ppo = ppo._replace(target_kl=a.target_kl)
+    if a.value_coef is not None:
+        ppo = ppo._replace(value_coef=a.value_coef)
     cfg = TrainConfig(n_envs=a.envs, rollout_steps=a.rollout,
                       n_updates=a.updates, n_minibatches=a.minibatches,
                       episode_s=a.episode_s, ppo=ppo)
@@ -134,6 +149,9 @@ def main() -> None:
                   "env_decisions": n_dec},
                  notes=a.notes)
     print(f"run dir {run.path}")
+    # The wandb run NAME is the run-dir id, so a chart and a checkpoint can be
+    # matched without opening either. init_wandb() reads args.run_name.
+    a.run_name = run.run_id
     wb = None
     if _have_wandb_args:
         try:
@@ -164,7 +182,14 @@ def main() -> None:
         jax.block_until_ready(mc)
         parts.append(mc)
         upd = (ci + 1) * chunk if ci < n_chunks else cfg.n_updates
-        row = {k: float(np.asarray(v)[-1]) for k, v in mc.items()}
+        # MEAN over the chunk, not the last update of it. A single update's
+        # `reward` and `entropy` are noisy enough that a chunk-end sample and a
+        # chunk mean can point different directions, and the chunk boundary is
+        # an artefact of --chunk.
+        row = {k: float(np.nanmean(np.asarray(v))) for k, v in mc.items()}
+        # cs_at_10min is NaN on updates where no episode ended, so its mean is
+        # over the episodes that DID end; the count is the denominator.
+        row["cs_episodes"] = float(np.asarray(mc["cs_episodes"]).sum())
         row.update(update=upd, chunk=ci,
                    step=int(np.asarray(runner.step)),
                    wall_s=round(time.perf_counter() - t0, 1))
@@ -175,11 +200,26 @@ def main() -> None:
         cs = np.asarray(mc["cs_at_10min"])
         done = cs[~np.isnan(cs)]
         print(f"  chunk {ci:>3} upd {upd:>5} reward {row['reward']:+.5f} "
-              f"entropy {row['entropy']:.3f} "
-              + (f"cs {done[-1]:.2f}" if done.size else "cs -"), flush=True)
+              f"entropy {row['entropy']:.3f} kl {row['approx_kl']:.4f} "
+              f"vloss {row['value_loss']:.3f} "
+              + (f"cs {np.mean(done):.2f} (n={row['cs_episodes']:.0f})"
+                 if done.size else "cs -"), flush=True)
         if a.ckpt_every and (ci + 1) % a.ckpt_every == 0:
             run.save(int(np.asarray(runner.step)), upd,
                      {"params": runner.params, "opt_state": runner.opt_state})
+        # DIVERGENCE GUARD. A run whose loss has gone non-finite is producing
+        # nothing but wall-clock, and the RL-002 log shows `value_loss` going
+        # 0.0024 -> 2.0032 -> 542.7 without anything stopping it. Checkpoint,
+        # record why, and get off the GPU so the next arm can have it.
+        bad = [k for k in ("policy_loss", "value_loss", "reward", "entropy")
+               if not np.isfinite(row[k])]
+        if bad:
+            run.save(int(np.asarray(runner.step)), upd,
+                     {"params": runner.params, "opt_state": runner.opt_state})
+            run.set_results(diverged_at_update=upd, diverged_metrics=bad)
+            print(f"\nDIVERGED at update {upd}: {bad} non-finite. "
+                  f"Stopping; see {run.path}", flush=True)
+            break
 
     m = jax.tree.map(lambda *xs: np.concatenate([np.asarray(x) for x in xs]),
                      *parts) if len(parts) > 1 else \
@@ -193,7 +233,8 @@ def main() -> None:
     if a.time_steady:
         # Same shapes, so no recompile; the difference is the compile.
         t0 = time.perf_counter()
-        jax.block_until_ready(train(jax.random.key(a.seed + 1)))
+        jax.block_until_ready(step_fn(
+            built.initial_runner(jax.random.key(a.seed + 1)), cfg.n_updates))
         steady = time.perf_counter() - t0
         print(f"first call {first:.1f}s (compile ~{first - steady:.1f}s) | "
               f"steady {steady:.1f}s -> {n_dec / steady:,.0f} env-decisions/s "
@@ -220,11 +261,12 @@ def main() -> None:
 
     # --- the two numbers the sampled table above cannot show ---------------
     #
-    # cs_at_10min is NaN except in the one update whose rollout happens to
-    # contain an episode boundary -- 18,000 decisions per episode against 128
-    # per rollout, so roughly 1 update in 141. Printing every `--every`th row
-    # samples past all of them: an 800-update run reports NaN in every printed
-    # row while the number exists. Print the episodes themselves instead.
+    # cs_at_10min is NaN on updates where no episode ended. Before the phase
+    # stagger (`RunnerState.deadline_ms`) that was all but 1 update in 141 --
+    # every env resetting on the same step -- so printing every `--every`th row
+    # reported NaN throughout an 800-update run while the number existed. With
+    # the stagger the samples arrive continuously, but the row-level NaNs remain
+    # real, so the per-episode list stays.
     cs = np.asarray(m["cs_at_10min"])
     done_at = np.flatnonzero(~np.isnan(cs))
     if len(done_at):

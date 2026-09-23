@@ -53,7 +53,7 @@ from ..sim.orders import apply_orders
 from ..sim.orders import OrderKind
 from ..sim.state import Team
 from ..sim.step import step_decision
-from .policy import LanePolicy, PolicyConfig
+from .policy import VALUE_HEAD_NAME, LanePolicy, PolicyConfig
 from .actions import orders_from
 from .ppo import (
     PPOConfig,
@@ -120,6 +120,29 @@ class RunnerState(NamedTuple):
     reward_state: object
     rng: jax.Array
     step: jax.Array
+    #: ``(n_envs,)`` game-ms at which each env's CURRENT episode ends.
+    #:
+    #: Why this is not just ``episode_s``: ``done`` used to be
+    #: ``t_ms >= episode_s * 1000`` with every env initialised from the same
+    #: constant pytree, so all ``n_envs`` episodes ran in LOCKSTEP. Two
+    #: consequences, both bad and both invisible in the metrics.
+    #:
+    #: (1) A rollout of 128 decisions at 30 Hz is a 4.27 s window of game
+    #: time, and every env was in the same 4.27 s of its game. So a
+    #: 256-env batch held 256 samples of one moment -- the fountain walk, or
+    #: the 3rd wave, never both -- and the critic was asked to fit a value
+    #: function from one time-slice per update.
+    #: (2) CS@10min arrives only on the update where ``done`` fires, which is
+    #: every ``episode_s * decision_hz / rollout_steps`` = 141 updates, all
+    #: 256 envs at once. A 300-update run yields TWO samples of the headline
+    #: metric, which is why RL-001 could not distinguish "not learning" from
+    #: "not enough episodes".
+    #:
+    #: Each env's FIRST episode is therefore cut short at a random point, and
+    #: from then on the phases stay spread: CS samples arrive on ~every update
+    #: and each batch spans the whole game. The first episode's CS is NOT
+    #: comparable (it is a partial game) and is excluded by ``done_full``.
+    deadline_ms: jax.Array
 
 
 class Transition(NamedTuple):
@@ -135,6 +158,10 @@ class Transition(NamedTuple):
     #: Diagnostics. Not consumed by the loss -- see `_update`'s metrics block
     #: for why CS alone is not a readable training signal.
     cs: jax.Array
+    #: One where this step ended a FULL-LENGTH episode, so its `cs` is a real
+    #: cs@10min. The staggered first episode per env is short by construction
+    #: and its CS would drag the mean down for the first ~141 updates.
+    done_full: jax.Array
     lane_dist: jax.Array
     #: Fractional diagnostic input to the rollout aggregate: one for a
     #: semantic Move whose local route table returned a non-ready status.
@@ -173,9 +200,33 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
     dt_s = 1.0 / cfg.decision_hz
     n_batch = cfg.rollout_steps * cfg.n_envs * 2      # two champions per env
 
+    # `critic_lr` (3e-4) and `lr` (1e-5) are BOTH honoured. They were not:
+    # the optimiser was a single `adam(cfg.ppo.lr)`, so `critic_lr` sat in the
+    # config -- and in every run manifest, reading as if it were in effect --
+    # while the critic actually trained at the actor's 1e-5, thirty times
+    # slower than its declared rate. That is the leading candidate for the
+    # `value_loss` blow-up observed in the RL-002 run (0.0024 -> 2.0032 ->
+    # 542.7 near update 597): as the policy starts earning gold the return
+    # scale grows by orders of magnitude, and a linear readout at 1e-5 cannot
+    # rescale to follow it.
+    #
+    # The split is the value READOUT only. The trunk is shared with the actor
+    # and stays at `lr` by design -- running shared features at the critic's
+    # rate would drag the policy along with them, which is the failure mode
+    # `value_coef` exists to balance instead.
+    def _label(params):
+        return jax.tree_util.tree_map_with_path(
+            lambda path, _: ("critic" if any(
+                getattr(k, "key", None) == VALUE_HEAD_NAME for k in path)
+                else "actor"),
+            params)
+
     tx = optax.chain(
         optax.clip_by_global_norm(cfg.ppo.max_grad_norm),
-        optax.adam(cfg.ppo.lr),
+        optax.multi_transform(
+            {"actor": optax.adam(cfg.ppo.lr),
+             "critic": optax.adam(cfg.ppo.critic_lr)},
+            _label),
     )
 
     def _obs(state):
@@ -183,10 +234,12 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         red = build_observation(state, 1, red_frame, params=params_tbl)
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), blue, red)
 
+    full_ms = jnp.asarray(cfg.episode_s * 1000.0, jnp.float32)
+
     def _env_step(runner: RunnerState, _):
         rng, sk = jax.random.split(runner.rng)
 
-        def one(state, rstate, key):
+        def one(state, rstate, deadline, key):
             obs = _obs(state)
             logits = policy.apply(runner.params, obs.entities,
                                   obs.entity_pad_mask, obs.self_vec,
@@ -212,10 +265,16 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                                          runner.step, gamma=cfg.ppo.gamma)
             # Phi is read BEFORE the reset masks it back to the fountain value.
             phi = rstate.phi
-            done = nxt.t_ms >= cfg.episode_s * 1000.0
+            done = nxt.t_ms >= deadline
+            # A full-length episode is one whose deadline was never shortened
+            # for phase staggering -- see `RunnerState.deadline_ms`. After
+            # reset every deadline is `full_ms`, so this is true for all but
+            # each env's first episode.
+            done_full = done & (deadline >= full_ms)
+            deadline = jnp.where(done, full_ms, deadline)
             # CS is read BEFORE the reset zeroes it. episode_s is 600 s, so
             # this is literally cs@10min -- the headline absolute metric.
-            cs_at_done = jnp.where(done, nxt.cs[:2].astype(jnp.float32), 0.0)
+            cs_at_done = jnp.where(done_full, nxt.cs[:2].astype(jnp.float32), 0.0)
             # reset is a WHERE against a constant pytree -- see the module docstring
             nxt = jax.tree.map(lambda a, b: jnp.where(done, b, a), nxt, fresh)
             rstate = jax.tree.map(lambda a, b: jnp.where(done, b, a),
@@ -231,15 +290,17 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                 obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
                 action, log_prob, logits.value, reward,
                 jnp.broadcast_to(done, reward.shape),
-                cs=cs_at_done, lane_dist=lane_dist,
+                cs=cs_at_done,
+                done_full=jnp.broadcast_to(done_full, reward.shape),
+                lane_dist=lane_dist,
                 route_nonready=route_nonready.astype(jnp.float32))
-            return nxt, rstate, t
+            return nxt, rstate, deadline, t
 
         keys = jax.random.split(sk, cfg.n_envs)
-        env_state, reward_state, tr = jax.vmap(one)(
-            runner.env_state, runner.reward_state, keys)
+        env_state, reward_state, deadline_ms, tr = jax.vmap(one)(
+            runner.env_state, runner.reward_state, runner.deadline_ms, keys)
         return runner._replace(env_state=env_state, reward_state=reward_state,
-                               rng=rng), tr
+                               deadline_ms=deadline_ms, rng=rng), tr
 
     def _loss(params, batch, cfg_ppo):
         logits = policy.apply(params, batch["entities"], batch["mask"],
@@ -280,27 +341,50 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             a = flat["adv"]
             flat["adv"] = (a - a.mean()) / (a.std() + 1e-8)
 
+        # `target_kl` is ENFORCED, over epochs and minibatches both. It was
+        # not: like `critic_lr` it was declared in `PPOConfig`, recorded in
+        # every manifest, and read by nothing -- so all four epochs ran
+        # unconditionally however far the policy had already moved. Under a
+        # trust-region method that is the difference between a step and a leap.
+        #
+        # Masked rather than branched, because this is inside `scan`: once the
+        # k3 KL estimate crosses the target, every later minibatch keeps its
+        # params AND its optimiser state, so a stopped epoch is a true no-op
+        # and not a zero-gradient Adam step (which would still decay the
+        # moments). `kl_stopped` is logged as the fraction of minibatches
+        # skipped -- a run sitting near 1.0 is a run whose lr is too high.
         def epoch(carry, _):
-            params, opt_state, rng = carry
+            params, opt_state, rng, stopped = carry
             rng, pk = jax.random.split(rng)
             perm = jax.random.permutation(pk, n_batch)
             mb = jax.tree.map(lambda x: x[perm].reshape(
                 cfg.n_minibatches, -1, *x.shape[1:]), flat)
 
             def minibatch(carry, b):
-                params, opt_state = carry
+                params, opt_state, stopped = carry
                 (loss, info), grads = jax.value_and_grad(_loss, has_aux=True)(
                     params, b, cfg.ppo)
-                updates, opt_state = tx.update(grads, opt_state, params)
-                return (optax.apply_updates(params, updates), opt_state), info
+                updates, new_opt_state = tx.update(grads, opt_state, params)
+                new_params = optax.apply_updates(params, updates)
+                keep = ~stopped
+                params = jax.tree.map(
+                    lambda new, old: jnp.where(keep, new, old),
+                    new_params, params)
+                opt_state = jax.tree.map(
+                    lambda new, old: jnp.where(keep, new, old),
+                    new_opt_state, opt_state)
+                stopped = stopped | (info["approx_kl"] > cfg.ppo.target_kl)
+                return ((params, opt_state, stopped),
+                        {**info, "kl_stopped": stopped.astype(jnp.float32)})
 
-            (params, opt_state), info = jax.lax.scan(
-                minibatch, (params, opt_state), mb)
-            return (params, opt_state, rng), info
+            (params, opt_state, stopped), info = jax.lax.scan(
+                minibatch, (params, opt_state, stopped), mb)
+            return (params, opt_state, rng, stopped), info
 
-        (params, opt_state, rng), info = jax.lax.scan(
-            epoch, (runner.params, runner.opt_state, runner.rng), None,
-            length=cfg.ppo.epochs)
+        (params, opt_state, rng, _stopped), info = jax.lax.scan(
+            epoch,
+            (runner.params, runner.opt_state, runner.rng, jnp.asarray(False)),
+            None, length=cfg.ppo.epochs)
 
         metrics = jax.tree.map(lambda x: x.mean(), info)
         metrics["reward"] = tr.reward.mean()
@@ -310,8 +394,26 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         # function of t_ms), so that number climbs through an episode and
         # drops to zero together, and its value depends on where the rollout
         # boundary happens to fall rather than on how well the agent plays.
-        n_done = tr.done.sum()
-        metrics["cs_at_10min"] = jnp.where(n_done > 0, tr.cs.sum() / jnp.maximum(n_done, 1), jnp.nan)
+        # Counted over FULL-LENGTH episodes only (`done_full`), not `done`:
+        # each env's first episode is deliberately cut short to stagger the
+        # phases, and averaging those partial games in would have made the
+        # first ~141 updates read as a CS collapse.
+        n_done = tr.done_full.sum()
+        metrics["cs_at_10min"] = jnp.where(
+            n_done > 0, tr.cs.sum() / jnp.maximum(n_done, 1), jnp.nan)
+        #: How many full episodes the mean above is over. A metric whose
+        #: denominator is invisible is how "BC = 37.3" got quoted off three
+        #: games; with staggered phases this should be ~n_envs/141 per update,
+        #: and a persistent 0 means the stagger stopped working.
+        metrics["cs_episodes"] = n_done.astype(jnp.float32)
+        # SCALE diagnostics, because `value_loss` reached 542.7 in the RL-002
+        # run and a loss number alone cannot say whether the critic diverged
+        # or the targets grew. These say which: `returns_absmax` climbing with
+        # `value_absmax` flat is a critic that has fallen behind; both
+        # climbing together is a reward-scale problem.
+        metrics["returns_absmax"] = jnp.abs(returns).max()
+        metrics["value_absmax"] = jnp.abs(tr.value).max()
+        metrics["adv_absmax"] = jnp.abs(adv).max()
         # How far from the lane corridor the champions sat, in game units.
         # ~7,981 at spawn, 0 anywhere in lane. This is the leading indicator.
         metrics["lane_dist"] = tr.lane_dist.mean()
@@ -341,8 +443,21 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         reward_state = jax.tree.map(
             lambda a: jnp.broadcast_to(a, (cfg.n_envs,) + jnp.shape(a)),
             fresh_reward)
+        # The phase stagger, applied ONCE at init: each env's first episode
+        # ends at a uniformly random point of a full episode, and every episode
+        # after that runs the full `episode_s`. So after one episode the envs
+        # are permanently spread over the game clock -- see
+        # `RunnerState.deadline_ms` for the two failures that fixes. Floored at
+        # two rollouts so no env is resetting inside its own first rollout,
+        # which would produce a `done` on step 0 with no preceding transition.
+        rng, dk = jax.random.split(rng)
+        floor = 2.0 * cfg.rollout_steps / cfg.decision_hz * 1000.0
+        deadline_ms = jax.random.uniform(
+            dk, (cfg.n_envs,), jnp.float32,
+            minval=jnp.minimum(floor, cfg.episode_s * 1000.0),
+            maxval=cfg.episode_s * 1000.0)
         return RunnerState(params, tx.init(params), env_state, reward_state,
-                           rng, jnp.asarray(0, jnp.int32))
+                           rng, jnp.asarray(0, jnp.int32), deadline_ms)
 
     def run_chunk(runner: RunnerState, n: int):
         """`n` updates from `runner`. `n` is static -- one compile per value."""

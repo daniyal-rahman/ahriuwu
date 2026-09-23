@@ -226,3 +226,113 @@ def test_episode_length_is_not_the_discount_horizon():
     # long enough for the first wave (90 s) plus the walk to lane (~39 s)
     assert cfg.episode_s > 90.0 + 39.0 + 60.0
     assert cfg.episode_steps == 18_000
+
+
+def test_episode_phases_are_staggered_not_lockstep():
+    """Envs must not all reset on the same update.
+
+    With `done = t_ms >= episode_s * 1000` and every env broadcast from the
+    same constant pytree, all `n_envs` episodes ran in lockstep: a rollout was
+    `rollout_steps / decision_hz` seconds of ONE moment of the game repeated
+    `n_envs` times, and cs@10min arrived in a single burst every
+    `episode_steps / rollout_steps` updates (141 at the production config).
+    Both failures are invisible in the metrics, so they are asserted here.
+    """
+    cfg = TrainConfig(n_envs=16, rollout_steps=4, n_updates=1, n_minibatches=2,
+                      episode_s=4.0)
+    built = make_train(cfg)
+    runner = built.initial_runner(jax.random.PRNGKey(0))
+
+    d = np.asarray(runner.deadline_ms)
+    assert d.shape == (16,)
+    assert len(np.unique(d)) > 1, "deadlines identical -- envs are in lockstep"
+    full = cfg.episode_s * 1000.0
+    assert d.max() <= full and d.min() > 0
+    # Floored at two rollouts so nothing resets inside its own first rollout.
+    assert d.min() >= min(2.0 * cfg.rollout_steps / cfg.decision_hz * 1000.0,
+                          full) - 1e-3
+
+    # Run past the longest first episode; the clocks must then be spread out.
+    runner, _ = jax.jit(built.run_chunk, static_argnums=1)(
+        runner, int(cfg.episode_steps / cfg.rollout_steps) + 4)
+    t = np.asarray(runner.env_state.t_ms)
+    assert len(np.unique(np.round(t, 3))) > 1, (
+        "game clocks converged -- the phase offset did not survive reset")
+    # Every deadline is back to the full length: only the FIRST episode is cut.
+    np.testing.assert_allclose(np.asarray(runner.deadline_ms), full, rtol=0,
+                               atol=1e-3)
+
+
+def test_partial_first_episode_is_excluded_from_cs():
+    """`cs_at_10min` must average full games only.
+
+    The stagger makes each env's first episode short by construction. Counting
+    those would read as a CS collapse over the first ~141 updates -- a metric
+    artefact indistinguishable from the agent getting worse.
+    """
+    cfg = TrainConfig(n_envs=8, rollout_steps=4, n_updates=1, n_minibatches=2,
+                      episode_s=4.0)
+    built = make_train(cfg)
+    runner = built.initial_runner(jax.random.PRNGKey(1))
+    n = int(cfg.episode_steps / cfg.rollout_steps)
+    # First pass: partial episodes end here, so `done` fires and `done_full`
+    # must not.
+    _, metrics = jax.jit(built.run_chunk, static_argnums=1)(runner, n)
+    eps = np.asarray(metrics["cs_episodes"])
+    assert eps.sum() == 0.0, (
+        "a partial first episode was counted as a cs@10min sample")
+
+
+def test_target_kl_is_enforced_rather_than_merely_configured():
+    """A `target_kl` of 0 must stop every minibatch after the first.
+
+    `critic_lr` and `target_kl` were both declared in `PPOConfig`, recorded in
+    run manifests, and read by nothing. This is the regression test for the
+    half of that which is behavioural.
+    """
+    import dataclasses  # noqa: F401  (NamedTuple._replace is the real tool)
+
+    cfg = SMALL._replace(ppo=SMALL.ppo._replace(target_kl=0.0))
+    built = make_train(cfg)
+    _, metrics = jax.jit(built.run_chunk, static_argnums=1)(
+        built.initial_runner(jax.random.PRNGKey(2)), 1)
+    # approx_kl is >= 0 and is > 0 for any nonzero step, so the stop latches on
+    # the first minibatch and every later one is skipped.
+    assert float(np.asarray(metrics["kl_stopped"])[0]) > 0.0
+
+    loose = SMALL._replace(ppo=SMALL.ppo._replace(target_kl=1e9))
+    _, m2 = jax.jit(make_train(loose).run_chunk, static_argnums=1)(
+        make_train(loose).initial_runner(jax.random.PRNGKey(2)), 1)
+    assert float(np.asarray(m2["kl_stopped"])[0]) == 0.0
+
+
+def test_critic_head_runs_at_critic_lr():
+    """The value readout must be optimised at `critic_lr`, not `lr`.
+
+    A single `adam(lr)` trained it thirty times slower than the rate the config
+    advertised, which is the leading candidate for `value_loss` reaching 542.7
+    in the RL-002 run. Asserted through the optimiser's own hyperparameters so
+    the test fails if the label tree stops matching the module name.
+    """
+    from lanerl_jax.train.policy import VALUE_HEAD_NAME
+
+    cfg = SMALL._replace(ppo=SMALL.ppo._replace(lr=1e-5, critic_lr=3e-4))
+    built = make_train(cfg)
+    r0 = built.initial_runner(jax.random.PRNGKey(3))
+    names = jax.tree_util.tree_flatten_with_path(r0.params)[0]
+    assert any(VALUE_HEAD_NAME in jax.tree_util.keystr(p) for p, _ in names), (
+        f"no {VALUE_HEAD_NAME!r} subtree -- the label tree cannot be matching")
+
+    r1, _ = jax.jit(built.run_chunk, static_argnums=1)(r0, 1)
+    moved = jax.tree_util.tree_map(
+        lambda a, b: float(jnp.abs(a - b).max()), r0.params, r1.params)
+    flat = {jax.tree_util.keystr(p): v
+            for p, v in jax.tree_util.tree_flatten_with_path(moved)[0]}
+    critic = [v for k, v in flat.items() if VALUE_HEAD_NAME in k]
+    actor = [v for k, v in flat.items() if VALUE_HEAD_NAME not in k]
+    assert critic and actor
+    # Adam's first step is ~lr in magnitude regardless of gradient scale, so a
+    # 30x lr ratio shows up directly as a step-size ratio.
+    assert max(critic) > 10.0 * max(actor), (
+        f"critic step {max(critic):.2e} vs actor {max(actor):.2e} -- the "
+        "critic is not on its own learning rate")

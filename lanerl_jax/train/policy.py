@@ -100,6 +100,11 @@ HEAD = dict(kernel_init=nn.initializers.orthogonal(0.01),
             bias_init=nn.initializers.zeros)
 VALUE = dict(kernel_init=nn.initializers.orthogonal(1.0),
              bias_init=nn.initializers.zeros)
+#: The value readout's module name. `trainer.py` builds an `optax` label tree
+#: keyed on it to run the critic head at `PPOConfig.critic_lr` while the shared
+#: trunk stays at `PPOConfig.lr`. Named rather than left as flax's positional
+#: `Dense_N` because a positional name moves when a layer is inserted above it.
+VALUE_HEAD_NAME = "value_head"
 
 
 class _Block(nn.Module):
@@ -163,7 +168,11 @@ class LanePolicy(nn.Module):
             screen_x=nn.Dense(c.n_screen_x, **HEAD)(h),
             screen_y=nn.Dense(c.n_screen_y, **HEAD)(h),
             target=target,
-            value=nn.Dense(1, **VALUE)(h)[..., 0],
+            # NAMED, and load-bearing: `PPOConfig.critic_lr` is applied to
+            # exactly this subtree via `optax.multi_transform`, so the label
+            # tree in `trainer.py` matches on the literal string below. A
+            # rename here silently sends the critic back to the actor's lr.
+            value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(h)[..., 0],
         )
 
 
