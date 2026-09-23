@@ -66,7 +66,7 @@ def main(argv=None) -> None:
     from ..sim.init import lane_params
     from ..sim.movement_jax import TICK_MS, max_steps_used
     from ..sim.profiles import PROFILES
-    from ..sim.spells import BuffId, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER, Slot
+    from ..sim.spells import E_BUFF_SLOT, BuffId, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER, Slot
     from ..sim.state import Kind
     from .inject import inject_snapshot, replay_wave_states
     from .tier1_full import FIRST_WAVE_MS
@@ -132,7 +132,7 @@ def main(argv=None) -> None:
                 step_examples.append((sn.t_ms, cnt))
 
         # ---- collision: mirror sim/step.py's resolve_collisions call ----
-        pre_ghosted = ((state_n.buff_id[:, Slot.E] == BuffId.GAREN_E)
+        pre_ghosted = ((state_n.buff_id[:, E_BUFF_SLOT] == BuffId.GAREN_E)
                       & state_n.alive)
         collision_radius = P("collision_radius")
         pathfinding_radius = P("pathfinding_radius")

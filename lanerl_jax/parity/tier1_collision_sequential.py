@@ -352,7 +352,7 @@ def main() -> None:
         alive0 = np.asarray(state_n.alive)
         model0 = np.asarray(state_n.model)
         move_order0 = np.asarray(state_n.move_order)
-        ghosted0 = (np.asarray(state_n.buff_id)[:, Slot.E] == BuffId.GAREN_E) & alive0
+        ghosted0 = (np.asarray(state_n.buff_id)[:, E_BUFF_SLOT] == BuffId.GAREN_E) & alive0
 
         # current (JAX) collision, on the SAME pre-tick snapshot -- the
         # PRE-PARITY-PASS module: single push, Jacobi, one shared radius.

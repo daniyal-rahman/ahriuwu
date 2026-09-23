@@ -73,7 +73,7 @@ walk's entire gap is path LENGTH: 15,829 units against 13,680, a ratio of
 1.157 against a decision ratio of 1.158. That is the same ~18% the 400-route
 host comparison measured for the baked artifact's polylines, and it is all it
 can buy. Re-issuing the Move order every decision costs nothing measurable,
-and ``MOVE-001``'s 8-transition cap never binds.
+and ``MOVE-000``'s (restored from the old ``MOVE-001``) 8-transition cap never binds.
 
 **The route fallback is not the story either.** 324 of 6,400 approach
 decisions (5.1%) report ``GOAL_OUTSIDE_WINDOW`` -- the approach legs are up
