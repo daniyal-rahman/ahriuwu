@@ -320,7 +320,18 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                                  step=runner.step + n_batch)
         return runner, metrics
 
-    def train(rng):
+    def initial_runner(rng) -> RunnerState:
+        """The state a run starts from. Factored out of `train` so a caller can
+        drive the loop in CHUNKS and see it in flight.
+
+        The whole update loop used to live inside one `jax.jit` call, so nothing
+        -- no metric, no checkpoint -- was observable until it finished. A
+        45-minute run was therefore all-or-nothing, and a node failure mid-run
+        lost everything (it did, once). Exposing the carry lets `run_train` scan
+        N updates, come back to Python to log and checkpoint, and scan on. The
+        jitted function is called repeatedly with identical shapes, so there is
+        exactly one compile.
+        """
         rng, ik = jax.random.split(rng)
         obs0 = _obs(fresh)
         params = policy.init(ik, obs0.entities, obs0.entity_pad_mask,
@@ -330,8 +341,16 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         reward_state = jax.tree.map(
             lambda a: jnp.broadcast_to(a, (cfg.n_envs,) + jnp.shape(a)),
             fresh_reward)
-        runner = RunnerState(params, tx.init(params), env_state, reward_state,
-                             rng, jnp.asarray(0, jnp.int32))
-        return jax.lax.scan(_update, runner, None, length=cfg.n_updates)
+        return RunnerState(params, tx.init(params), env_state, reward_state,
+                           rng, jnp.asarray(0, jnp.int32))
 
+    def run_chunk(runner: RunnerState, n: int):
+        """`n` updates from `runner`. `n` is static -- one compile per value."""
+        return jax.lax.scan(_update, runner, None, length=n)
+
+    def train(rng):
+        return run_chunk(initial_runner(rng), cfg.n_updates)
+
+    train.initial_runner = initial_runner
+    train.run_chunk = run_chunk
     return train

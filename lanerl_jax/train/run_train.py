@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 import time
 from pathlib import Path
 
 import jax
 import numpy as np
 
+from .run_manifest import RunDir
 from .trainer import TrainConfig, make_train
+
+# The shared wandb helpers live outside the package tree (`src/ahriuwu/...`) and
+# are used by every dreamer script, so reuse them rather than starting a second
+# logging convention.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 
 DEFAULT_ROUTE_ARTIFACT = (Path(__file__).resolve().parents[2] / "data" /
@@ -33,16 +41,54 @@ def main() -> None:
         help="explicitly run the PATH-001 two-point approximation; intended "
              "only for comparison/debugging")
     ap.add_argument(
+        "--tag", default="rl",
+        help="run label. The run directory is <tag>-<timestamp>-<sha>, so two "
+             "runs of the same tag never collide and the sha is visible without "
+             "opening anything.")
+    ap.add_argument("--notes", default="",
+                    help="free text recorded in the manifest and the README")
+    ap.add_argument("--out-root", type=Path,
+                    default=Path("lanerl_jax/runs/train"))
+    ap.add_argument(
+        "--chunk", type=int, default=20,
+        help="updates per jitted call. The loop used to be ONE jit call, so no "
+             "metric and no checkpoint was observable until it finished -- a "
+             "node failure at update ~450 of 600 lost the whole run. Chunking "
+             "returns to Python to log and checkpoint; shapes are identical "
+             "each call so there is still exactly one compile.")
+    ap.add_argument("--ckpt-every", type=int, default=5,
+                    help="checkpoint every N chunks (0 = only at the end)")
+    ap.add_argument("--lr", type=float, default=None,
+                    help="override PPO learning rate. The inherited 1e-5 comes "
+                         "from a BC FINE-TUNE config, chosen to avoid destroying "
+                         "a behaviour-cloned prior -- and `trainer.py` says there "
+                         "is no BC prior here yet, so from-scratch runs are "
+                         "training ~30x slower than a normal PPO rate for a "
+                         "reason that does not apply.")
+    ap.add_argument("--entropy-coef", type=float, default=None)
+    ap.add_argument(
         "--time-steady", action="store_true",
         help="run the whole job TWICE to separate compile from steady state. "
              "Exact, and it doubles the cost -- `n_updates` is the scan length "
              "and therefore baked into the graph, so there is no cheaper honest "
              "way. Use it for a benchmark, not for a real training run.")
+    try:
+        from ahriuwu.utils.logging import add_wandb_args
+        add_wandb_args(ap)
+        _have_wandb_args = True
+    except Exception as exc:                        # pragma: no cover
+        print(f"wandb helpers unavailable ({exc}); --wandb disabled")
+        _have_wandb_args = False
     a = ap.parse_args()
 
+    ppo = cfg_ppo = TrainConfig().ppo
+    if a.lr is not None:
+        ppo = ppo._replace(lr=a.lr)
+    if a.entropy_coef is not None:
+        ppo = ppo._replace(entropy_coef=a.entropy_coef)
     cfg = TrainConfig(n_envs=a.envs, rollout_steps=a.rollout,
                       n_updates=a.updates, n_minibatches=a.minibatches,
-                      episode_s=a.episode_s)
+                      episode_s=a.episode_s, ppo=ppo)
     n_dec = cfg.n_envs * cfg.rollout_steps * cfg.n_updates
     print(f"device {jax.devices()[0]}")
     print(f"{cfg.n_envs} envs x {cfg.rollout_steps} steps x {cfg.n_updates} "
@@ -74,9 +120,73 @@ def main() -> None:
     else:
         print("WARNING: local routing disabled; Move uses the PATH-001 raw segment")
 
-    train = jax.jit(make_train(cfg, route_table=route_table, terrain=terrain))
-    t0 = time.perf_counter()
-    out = train(jax.random.key(a.seed))
+    built = make_train(cfg, route_table=route_table, terrain=terrain)
+
+    # ---- run directory, manifest, wandb ---------------------------------
+    cli = {k: v for k, v in vars(a).items()
+           if not k.startswith("wandb") and v is not None
+           and not isinstance(v, Path)}
+    run = RunDir(a.out_root, a.tag,
+                 {"train": cfg, "ppo": cfg.ppo, "cli": cli,
+                  "reward_weights": __import__(
+                      "lanerl_jax.train.reward", fromlist=["RewardWeights"]
+                  ).RewardWeights()._asdict(),
+                  "env_decisions": n_dec},
+                 notes=a.notes)
+    print(f"run dir {run.path}")
+    wb = None
+    if _have_wandb_args:
+        try:
+            from ahriuwu.utils.logging import finish_wandb, init_wandb, log_step
+            wb = init_wandb(a, job_type="lanerl_rl",
+                            extra_config=run.manifest["config"])
+            if wb is not None:
+                run.manifest["wandb"] = {
+                    "run_name": getattr(wb, "name", None),
+                    "run_path": getattr(wb, "path", None),
+                    "url": getattr(wb, "url", None)}
+                run.write()
+                print(f"wandb {run.manifest['wandb'].get('url')}")
+        except Exception as exc:
+            print(f"wandb init failed ({exc}); continuing without it")
+
+    # ---- chunked loop ----------------------------------------------------
+    chunk = max(1, min(a.chunk, cfg.n_updates))
+    n_chunks, rem = divmod(cfg.n_updates, chunk)
+    step_fn = jax.jit(built.run_chunk, static_argnums=1)
+    runner = built.initial_runner(jax.random.key(a.seed))
+    jax.block_until_ready(runner)
+
+    parts, t0 = [], time.perf_counter()
+    for ci in range(n_chunks + (1 if rem else 0)):
+        n = chunk if ci < n_chunks else rem
+        runner, mc = step_fn(runner, n)
+        jax.block_until_ready(mc)
+        parts.append(mc)
+        upd = (ci + 1) * chunk if ci < n_chunks else cfg.n_updates
+        row = {k: float(np.asarray(v)[-1]) for k, v in mc.items()}
+        row.update(update=upd, chunk=ci,
+                   step=int(np.asarray(runner.step)),
+                   wall_s=round(time.perf_counter() - t0, 1))
+        run.log(row)
+        if wb is not None:
+            log_step({f"train/{k}": v for k, v in row.items() if k != "update"},
+                     step=upd)
+        cs = np.asarray(mc["cs_at_10min"])
+        done = cs[~np.isnan(cs)]
+        print(f"  chunk {ci:>3} upd {upd:>5} reward {row['reward']:+.5f} "
+              f"entropy {row['entropy']:.3f} "
+              + (f"cs {done[-1]:.2f}" if done.size else "cs -"), flush=True)
+        if a.ckpt_every and (ci + 1) % a.ckpt_every == 0:
+            run.save(int(np.asarray(runner.step)), upd,
+                     {"params": runner.params, "opt_state": runner.opt_state})
+
+    m = jax.tree.map(lambda *xs: np.concatenate([np.asarray(x) for x in xs]),
+                     *parts) if len(parts) > 1 else \
+        jax.tree.map(np.asarray, parts[0])
+    out = (runner, m)
+    run.save(int(np.asarray(runner.step)), cfg.n_updates,
+             {"params": runner.params, "opt_state": runner.opt_state})
     jax.block_until_ready(out)
     first = time.perf_counter() - t0
 
@@ -92,7 +202,6 @@ def main() -> None:
         print(f"wall {first:.1f}s -> {n_dec / first:,.0f} env-decisions/s "
               f"including compile (pass --time-steady to separate them)")
 
-    _, m = out
     print()
     cols = ("reward", "entropy", "approx_kl", "clip_frac", "value_loss",
             "lane_dist", "route_nonready", "cs_at_10min")
@@ -132,6 +241,30 @@ def main() -> None:
     # lane_dist is dominated by WHERE in the episode each rollout falls: a
     # rollout just after a reset has both champions back at the fountain at
     # ~8,000. The minimum over the run is what says whether they ever arrive.
+    _cs = np.asarray(m["cs_at_10min"])
+    _done = _cs[~np.isnan(_cs)]
+    run.set_results(
+        cs_at_10min=[round(float(x), 3) for x in _done],
+        cs_at_10min_last=(round(float(_done[-1]), 3) if _done.size else None),
+        episodes_ended=int(_done.size),
+        reward_first=round(float(np.asarray(m["reward"])[0]), 6),
+        reward_last=round(float(np.asarray(m["reward"])[-1]), 6),
+        entropy_first=round(float(np.asarray(m["entropy"])[0]), 4),
+        entropy_last=round(float(np.asarray(m["entropy"])[-1]), 4),
+        wall_s=round(first, 1),
+        env_decisions_per_s=round(n_dec / first, 1),
+    )
+    if wb is not None:
+        try:
+            log_step({"final/cs_at_10min": run.manifest["results"]["cs_at_10min_last"]
+                      or float("nan")}, step=cfg.n_updates)
+            finish_wandb()
+        except Exception:
+            pass
+    run.close()
+    print(f"\nrun dir {run.path}\n  manifest.json / README.md / metrics.jsonl / "
+          f"ckpt_latest.msgpack")
+
     ld = np.asarray(m["lane_dist"])
     print(f"\nlane distance: start {ld[0]:,.0f} -> min {ld.min():,.0f} "
           f"(0 = inside the lane corridor, ~8,000 = the fountain)")
