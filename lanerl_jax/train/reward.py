@@ -159,11 +159,45 @@ class RewardWeights(NamedTuple):
     """`runs/rl-league-0915e/resolved_config.json`. Unported terms are kept at
     their real weights but gated off, so nothing reads as included."""
 
-    money: float = 0.008
+    #: GOLD AND XP ARE THE PRIMARY TERMS, and `last_hit` is deliberately 0.
+    #:
+    #: The inherited weights were `money` 0.008, `exp` 0.001, `last_hit` 1.0.
+    #: Priced against real minion values (melee 20g/77xp, caster 10g/51xp,
+    #: cannon 30g/94xp) that made a last hit worth:
+    #:
+    #:     term        melee   caster   cannon
+    #:     CS  x1.0    1.000    1.000    1.000
+    #:     gold x.008  0.160    0.080    0.240
+    #:     xp  x.001   0.077    0.051    0.094
+    #:
+    #: Two problems. The flat CS term is 6x the gold term AND identical across
+    #: minion types, so the agent was explicitly taught that a 10-gold caster
+    #: and a 30-gold cannon are worth the same -- erasing the distinction that
+    #: makes the cannon the biggest CS on the board. And it DOUBLE-COUNTS: a
+    #: last hit yields +1 cs and +gold, so the proxy drowned the quantity it
+    #: proxies for.
+    #:
+    #: Rescaled so a melee last hit still totals ~1.0 -- the old scale, so no
+    #: other weight needs re-tuning -- split roughly 2:1 gold:xp:
+    #:
+    #:     gold 20x0.0335 + xp 77x0.0043 = 0.67 + 0.33 = 1.00  melee
+    #:                                     0.34 + 0.22 = 0.55  caster
+    #:                                     1.01 + 0.40 = 1.40  cannon
+    #:
+    #: a 2.5x spread that matches lane value. XP is the denser half: it accrues
+    #: from PROXIMITY to a dying minion, not only from the killing blow, so
+    #: raising it supplies the "be in lane while minions die" gradient without
+    #: inventing a shaping term.
+    #:
+    #: REPRODUCIBILITY: runs before 2026-09-23 used the old weights; a reward
+    #: curve is not comparable across this change.
+    money: float = 0.0335
     hp_point: float = 4.0
     death: float = -1.0
-    exp: float = 0.001
-    last_hit: float = 1.0
+    exp: float = 0.0043
+    #: 0.0 -- see `money`. Kept as a knob rather than deleted so the old
+    #: behaviour is one assignment away and the change stays measurable.
+    last_hit: float = 0.0
     # --- carried, not yet ported (see the module docstring) ---
     kill: float = -0.5
     tower_hp: float = 10.0

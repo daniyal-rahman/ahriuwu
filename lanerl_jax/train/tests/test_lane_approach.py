@@ -61,16 +61,37 @@ def test_the_potential_is_zero_in_lane_and_negative_in_the_fountain():
     assert abs(float(spawn[0]) - float(spawn[1])) < 0.02
 
 
+#: What one melee minion is worth under the CURRENT weights. Priced from the
+#: patch (melee 20 gold, 77 xp) rather than from `RewardWeights.last_hit`,
+#: which is now 0.0: gold and xp are the primary terms and the flat per-kill
+#: term was removed because it double-counted gold and paid the same for a
+#: 10-gold caster as a 30-gold cannon. The INVARIANT this test defends is
+#: unchanged -- shaping must guide, never compete with farming -- only the
+#: reference moved, so it is computed here instead of read off a weight that
+#: no longer carries it.
+MELEE_GOLD, MELEE_XP = 20.0, 77.0
+
+
+def _one_melee_last_hit(w: RewardWeights) -> float:
+    return w.money * MELEE_GOLD + w.exp * MELEE_XP + w.last_hit
+
+
 def test_the_whole_walk_is_worth_less_than_one_last_hit():
     """Scale is the safety property. Shaping must guide, never compete.
 
-    At weight 1.0 for `last_hit`, a walk worth more than 1.0 would make
-    standing in lane a better living than killing minions in it.
+    A walk worth more than one minion would make standing in lane a better
+    living than killing things in it.
     """
+    w = RewardWeights()
+    one_hit = _one_melee_last_hit(w)
+    assert one_hit > 0.0, (
+        "no term pays for a last hit at all -- gold, xp and last_hit are all "
+        "zero, and the walk-versus-farm comparison below is then vacuous")
     spawn = phi([CHAMPION_SPAWN[Team.BLUE][0]], [CHAMPION_SPAWN[Team.BLUE][1]])
     walk = 0.0 - float(spawn[0])
     assert 0.3 < walk < 1.0, f"the walk pays {walk:.3f}"
-    assert walk < RewardWeights().last_hit
+    assert walk < one_hit, (
+        f"the walk pays {walk:.3f} against {one_hit:.3f} for one melee minion")
 
 
 def test_the_discounted_shaping_telescopes_to_the_endpoints():
