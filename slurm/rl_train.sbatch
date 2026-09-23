@@ -2,8 +2,8 @@
 #SBATCH --job-name=rl-lane
 #SBATCH --partition=gpup
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=24G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=12G
 #SBATCH --time=8:00:00
 #SBATCH --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax
 #SBATCH --output=/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/train/%x-%j.out
