@@ -91,6 +91,46 @@ def _run(s, n):
     return s
 
 
+@functools.lru_cache(maxsize=1)
+def _tick_stepper():
+    """One jitted SERVER tick, for tests that pin a value to the tick
+    (`STRUCT-007`): a decision is two ticks, so a decision-level loop can only
+    say "on this tick or the one before", which is how a 40 ms tolerance got
+    in."""
+    params = lane_params(load_patch())
+    return jax.jit(lambda st: tick(st, params))
+
+
+#: `decay_cooldowns` subtracts the Python float ``delta_ms / 1000`` from a
+#: float32 array, i.e. ``float32(1/60)`` per tick.
+_DT_S = np.float32(1000.0 / 60.0 / 1000.0)
+
+
+def _decayed(start: float, ticks: int) -> np.float32:
+    """``start`` after ``ticks`` float32 countdown steps, floored at 0 --
+    ``decay_cooldowns`` replayed in the server's own precision."""
+    v = np.float32(start)
+    for _ in range(ticks):
+        v = np.maximum(np.float32(v - _DT_S), np.float32(0.0))
+    return v
+
+
+def _cooldown_from_its_start(s, slot, n_ticks):
+    """Tick ``s`` ``n_ticks`` times; return (the cooldown on the tick it was
+    first written, ticks since then, the final cooldown)."""
+    step = _tick_stepper()
+    start = None
+    since = 0
+    for _ in range(n_ticks):
+        s = step(s)
+        cd = np.float32(s.spell_cooldown[0, slot])
+        if start is None and cd > 0:
+            start = cd
+        elif start is not None:
+            since += 1
+    return start, since, np.float32(s.spell_cooldown[0, slot])
+
+
 def _lane_with_minions(n_minions=4, dist=200.0, hp=455.0, e_rank=1):
     """Blue Garen well away from any turret, with red minions at ``dist``.
 
@@ -301,8 +341,16 @@ def test_the_cooldown_starts_when_the_spin_ENDS():
         if k == 20:
             mid = float(s.spell_cooldown[0, Slot.E])
     assert mid == pytest.approx(0.0, abs=1e-3), "cooldown ran during the spin"
-    assert float(s.spell_cooldown[0, Slot.E]) == pytest.approx(
-        E_COOLDOWNS[0], rel=0.1), "rank-1 cooldown is 13 s"
+    # `STRUCT-007`: exact, not `rel=0.1` -- at 10% the rank-2 row (12 s,
+    # 12/13 = 0.923) passed too. `end_e` writes the rank value AFTER that
+    # tick's countdown, so on the end tick it is exactly E_COOLDOWNS[0].
+    start, since, final = _cooldown_from_its_start(
+        _cast_e(_lane_with_minions()), Slot.E,
+        int(E_DURATION_S * 60) + 60)
+    assert start == np.float32(E_COOLDOWNS[0]), (
+        f"rank-1 cooldown written as {start}, not 13 s")
+    assert since == 59, f"the spin did not end on tick 181 ({since})"
+    assert final == _decayed(E_COOLDOWNS[0], since)
 
 
 def test_e_cannot_be_recast_while_on_cooldown():
@@ -356,13 +404,21 @@ def test_skill_order_matches_lanerl_rl_constants():
     assert SKILL_ORDER == C.GAREN_SKILL_ORDER
 
 
+# `SPELL-011`: these rows used to be the first-L entries of the order ("E
+# maxed at 9"). The server's auto-level walks FORWARD past an entry
+# `CanLevelUpSpell` refuses (E rank 5 needs level 9, and its entry comes due at
+# level 8), so that E entry is skipped for good and E stays at 4. The server
+# log shows it directly: every `LANERL_AUTOLEVEL ... champlvl=8` line in
+# `lanerl_jax/runs` is `slot=0 rank=2` (Q), where the old table said E 5.
+# `test_level_tables.py` checks all 18 levels against the C# loop.
 @pytest.mark.parametrize("level,want", [
     (1, (0, 0, 1, 0)),      # E first: the farming and trading spell
     (2, (1, 0, 1, 0)),
     (6, (1, 1, 3, 1)),      # R at 6
-    (9, (2, 1, 5, 1)),      # E maxed at 9
-    (13, (5, 1, 5, 2)),
-    (18, (5, 5, 5, 3)),
+    (8, (2, 1, 4, 1)),      # the server's level-8 point goes to Q
+    (9, (3, 1, 4, 1)),
+    (13, (5, 2, 4, 2)),
+    (18, (5, 5, 4, 3)),     # one point unspent: the skipped E entry
 ])
 def test_ranks_at_level(level, want):
     from lanerl_jax.sim.spells import ranks_for_level
@@ -398,7 +454,9 @@ def test_e_ranks_up_as_the_champion_levels():
     s = step(s)
     assert int(s.level[0]) == 9
     assert int(s.spell_level[0, Slot.E]) == RANKS_BY_LEVEL[9][Slot.E]
-    assert int(s.spell_level[0, Slot.E]) == 5, "E is maxed by level 9"
+    # 4, not 5: `SPELL-011` (the level-8 E entry is refused by the rank-5
+    # level gate and skipped, as the server's own auto-level log shows).
+    assert int(s.spell_level[0, Slot.E]) == 4, "E is rank 4 at level 9"
 
 
 # ------------------------------------------------------------------ Q ------
@@ -561,8 +619,13 @@ def test_qs_cooldown_starts_when_the_window_closes_not_at_cast():
         if k == 5:
             mid = float(s.spell_cooldown[0, Slot.Q])
     assert mid == pytest.approx(0.0, abs=1e-3), "cooldown ran during the window"
-    assert float(s.spell_cooldown[0, Slot.Q]) == pytest.approx(
-        Q_COOLDOWN, rel=0.1)
+    # `STRUCT-007`: exact tick arithmetic instead of `rel=0.1`.
+    s0 = _at_level(_lane_with_minions(), patch, 2)
+    s0 = _tick_stepper()(s0)
+    start, since, final = _cooldown_from_its_start(
+        _cast_q(s0), Slot.Q, int(Q_BUFF_DURATION * 60) + 6)
+    assert start == np.float32(Q_COOLDOWN), f"Q's cooldown written as {start}"
+    assert final == _decayed(Q_COOLDOWN, since)
 
 
 def test_q_skips_once_then_lands_the_replacement_auto_damage():
@@ -579,6 +642,7 @@ def test_q_skips_once_then_lands_the_replacement_auto_damage():
     assert int(s.spell_level[0, Slot.Q]) == 1
     s = s.replace(target=s.target.at[0].set(2))
     s = _cast_q(s)
+    s_cast = s
     before = float(s.hp[2])
     hit = None
     for _ in range(90):
@@ -596,7 +660,20 @@ def test_q_skips_once_then_lands_the_replacement_auto_damage():
              * float(growth_sum(2)))
     expected = float(q_damage_at_rank(jnp.int32(1), jnp.float32(ad_l2)))
     assert hit == pytest.approx(expected, abs=0.05)
-    assert float(s.silenced_ms[2]) == pytest.approx(1500.0, abs=40.0)
+    # `STRUCT-007`: exact, not `abs=40 ms` (more than two ticks). Re-run the
+    # same cast one SERVER tick at a time: the silence is written as
+    # `q_silence_duration_at_rank(1) * 1000` = 1500 on the hit tick and
+    # counts down by float32(delta_ms) from the next one.
+    step1 = _tick_stepper()
+    t = s_cast
+    for _ in range(180):
+        t = step1(t)
+        if float(t.hp[2]) < before:
+            break
+    assert np.float32(t.silenced_ms[2]) == np.float32(1500.0)
+    t = step1(t)
+    assert np.float32(t.silenced_ms[2]) == np.float32(
+        np.float32(1500.0) - np.float32(1000.0 / 60.0))
     assert not bool(s.buffs.q.active[0])
     assert float(s.spell_cooldown[0, Slot.Q]) > Q_COOLDOWN - 1.0
 

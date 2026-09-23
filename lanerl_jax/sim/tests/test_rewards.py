@@ -94,8 +94,8 @@ def test_a_dead_champion_does_not_share_xp():
 
 def test_level_thresholds_are_the_servers(): 
     patch = load_patch()
-    curve = jnp.asarray([0.0] + [patch.xp_for_level(i) for i in range(2, 19)],
-                        jnp.float32)
+    curve = jnp.asarray([0.0, 0.0] + [patch.xp_for_level(i) for i in range(2, 19)],
+                        jnp.float32)            # level-indexed, STRUCT-005
     got = [int(level_for_xp(jnp.asarray([v], jnp.float32), curve)[0])
            for v in (0.0, 279.0, 280.0, 660.0, 2400.0, 18360.0)]
     assert got == [1, 1, 2, 3, 6, 18]

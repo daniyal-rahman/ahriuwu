@@ -298,17 +298,37 @@ E_CANCEL_MIN_S = 1.0
 E_COOLDOWNS = (13.0, 12.0, 11.0, 10.0, 9.0)
 
 
-def ranks_for_level(level: int) -> tuple:
-    """Rank in each slot at a champion level, from :data:`SKILL_ORDER`.
+#: ``CharData.SpellsUpLevels`` defaults (`CharData.cs:78-84`; Garen's Content
+#: overrides none): the champion level at which each slot may take rank
+#: ``r+1``. ``ObjAIBase.CanLevelUpSpell`` is
+#: ``SpellsUpLevels[slot][SpellLevel] <= Stats.Level`` (`ObjAIBase.cs:367-370`).
+SPELLS_UP_LEVELS = ((1, 3, 5, 7, 9, 99),) * 3 + ((6, 11, 16, 99, 99, 99),)
 
-    R is capped at 3 ranks (``Champion.LevelUpSpell``); the skill order puts a
-    point in it at levels 6, 11 and 16 and never again, so the cap is not
-    reached by this order anyway -- but it is applied rather than assumed.
+
+def ranks_for_level(level: int) -> tuple:
+    """Rank in each slot at a champion level -- the server's auto-level, not
+    the first ``level`` entries of :data:`SKILL_ORDER`.
+
+    ``LanerlHooks.AutoLevelUndriven`` (`LanerlHooks.cs:286-360`, the path for a
+    champion no bot drives; ``LanerlBot.AutoLevel`` is the same loop) spends
+    each point on the first ``SkillOrder`` entry AT OR AFTER the number of
+    points already spent whose spell is below rank 5 and passes
+    ``CanLevelUpSpell``. A gated entry is therefore skipped for good, not
+    deferred: at level 8 the order's next entry is E's fifth rank, which needs
+    level 9, so the point goes to Q (entry 8) and E stays at rank 4 for the
+    rest of the game -- Q5/W5/E4/R3 at 18, one point unspent. The server's own
+    log shows it: every ``LANERL_AUTOLEVEL ... champlvl=8`` line is
+    ``slot=0 rank=2``. Counting the first ``level`` entries (as this did until
+    `STRUCT-005`'s per-level test) gave E rank 5 at level 8 and Q rank 5
+    never before 13.
     """
     ranks = [0, 0, 0, 0]
-    for slot in SKILL_ORDER[:max(0, min(level, len(SKILL_ORDER)))]:
-        cap = 3 if slot == Slot.R else 5
-        ranks[slot] = min(ranks[slot] + 1, cap)
+    for lvl in range(1, max(0, min(level, 18)) + 1):   # one point per level
+        spent = sum(ranks)
+        for slot in SKILL_ORDER[spent:]:
+            if ranks[slot] < 5 and SPELLS_UP_LEVELS[slot][ranks[slot]] <= lvl:
+                ranks[slot] += 1
+                break
     return tuple(ranks)
 
 

@@ -107,15 +107,29 @@ def base_priority(kind: jax.Array, minion_type: jax.Array) -> jax.Array:
     return p
 
 
-def help_priority_for(attacker_kind: jax.Array, victim_kind: jax.Array) -> jax.Array:
+def help_priority_for(attacker_kind: jax.Array, victim_kind: jax.Array,
+                      attacker_minion_type: jax.Array) -> jax.Array:
     """``ClassifyTarget(target, victim)`` -- the call-for-help table.
 
     ``attacker_kind`` and ``victim_kind`` broadcast against each other, so
     passing ``(N,1)`` and ``(1,N)`` yields the full ``(N,N)`` matrix the state
-    carries as ``help_priority``.
+    carries as ``help_priority``; ``attacker_minion_type`` broadcasts with
+    ``attacker_kind``.
+
+    `ENT-06`: a pair with no "ally in distress" case is NOT "no call".
+    ``ObjAIBase.ClassifyTarget`` (`ObjAIBase.cs:388-448`) tries the
+    ``victium != null`` switch first and, when no case matches, FALLS THROUGH
+    to the attacker's own base class -- the same value as
+    :func:`base_priority`. ``LaneMinionAI.OnCallForHelp`` stores whatever that
+    returns (`Math.Min(existing, ClassifyTarget(attacker, victim))`), so a
+    turret shooting a champion registers at ``TURRET`` (10), a champion
+    hitting a turret at ``CHAMPION`` (11), and a minion hitting a turret at
+    its own minion class (7/8/9). This used to return ``DEFAULT`` for all
+    three, i.e. no call at all.
     """
     ak, vk = attacker_kind, victim_kind
     is_minionish = (vk == Kind.LANE_MINION)
+    fallback = base_priority(ak, attacker_minion_type)
     return jnp.select(
         [(ak == Kind.CHAMPION) & (vk == Kind.CHAMPION),
          (ak == Kind.CHAMPION) & is_minionish,
@@ -127,12 +141,13 @@ def help_priority_for(attacker_kind: jax.Array, victim_kind: jax.Array) -> jax.A
          jnp.int8(ClassifyUnit.MINION_ATTACKING_CHAMPION),
          jnp.int8(ClassifyUnit.MINION_ATTACKING_MINION),
          jnp.int8(ClassifyUnit.TURRET_ATTACKING_MINION)],
-        default=jnp.int8(ClassifyUnit.DEFAULT),
+        default=jnp.broadcast_to(
+            fallback, jnp.broadcast_shapes(jnp.shape(ak), jnp.shape(vk))),
     )
 
 
 def call_for_help_map(*, damage_ij, x, y, alive, kind, team,
-                      acquisition_range) -> jax.Array:
+                      acquisition_range, minion_type) -> jax.Array:
     """``(N, N)`` ``[listener, attacker]`` call-for-help priorities.
 
     This is the signal that was MISSING. ``help_priority`` was declared, was
@@ -189,7 +204,8 @@ def call_for_help_map(*, damage_ij, x, y, alive, kind, team,
     ua_v = d2[:, :, None] <= r2[None, None, :]
 
     valid = hit[None, :, :] & uv[:, None, :] & ua_v
-    cls = help_priority_for(kind[:, None], kind[None, :])  # [attacker, victim]
+    cls = help_priority_for(kind[:, None], kind[None, :],
+                            minion_type[:, None])          # [attacker, victim]
     prio = jnp.where(valid, cls[None, :, :],
                      jnp.int8(ClassifyUnit.DEFAULT))
     return jnp.min(prio, axis=2).astype(jnp.int8)          # min over victims

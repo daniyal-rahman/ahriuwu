@@ -120,7 +120,7 @@ def test_level_up_increases_current_and_max_hp_by_the_growth_increment(patch):
     s = init_lane(patch, include_all_turrets=False)
     before_hp = float(s.hp[0])
     before_max = float(s.max_hp[0])
-    s = s.replace(xp=s.xp.at[0].set(params["xp_curve"][1]))
+    s = s.replace(xp=s.xp.at[0].set(params["xp_to_reach_level"][2]))
     s = tick(s, params)
     # `Juggernaut`'s +3% is the OUTER `PercentBonus` of `Stat.Total`, and
     # `Stats.LevelUp` adds its increment to `HealthPoints.BaseValue` -- inside
@@ -202,9 +202,26 @@ def test_champion_ad_matches_the_servers_dumped_ladder(patch):
         assert abs(ours - observed) < 0.01, (
             f"level {level}: sim {ours:.4f}, server dumped {observed}")
 
+    # Level 1 is pinned to the server's exact float32, not to the dump.
+    # This line used to read `abs(base - 78.134765625) < 1e-6`, and
+    # 78.134765625 is exactly 80010/1024: the `ad=` field is written as
+    # `Q(AttackDamage.Total, StatQ)` with `StatQ = 1024f`
+    # (`LanerlStateDump.cs:74`), so that value was the QUANTISED dump. The
+    # exact-bits field `adbits=` (`LanerlStateDump.cs:285`) reads
+    # 78.13500213623047, which `109286e` adopted for `STAT-003` (TEST-001).
+    # It is also what float32 arithmetic over the page's own terms gives --
+    # 57.88 + 9 x 0.945 + 3 x 2.25 + 5.0 -- so both the bits and the source
+    # agree, and the quantised value is still reproduced below.
+    f32 = np.float32
+    source = (f32(57.88) + f32(9) * f32(0.945) + f32(3) * f32(2.25)
+              + f32(5.0))
+    assert f32(base) == f32(78.13500213623047) == source, (
+        f"level-1 AD {base!r} is not the server's float32 (adbits=)")
+    assert round(float(f32(base)) * 1024) == 80010, (
+        "the sim's level-1 AD no longer quantises to the dump's `ad=` value")
+
     # And state the failure mode directly, so a regression names itself: the
     # pre-fix slope is right at level 1 and wrong everywhere after it.
-    assert abs(base - 78.134765625) < 1e-6, "level-1 AD is not the slope's job"
     stale = [lv for lv, o in SERVER_AD_BY_LEVEL.items()
             if abs(base + 3.5 * float(growth_sum(lv)) - o) < 0.01]
     assert stale == [1], (
@@ -408,8 +425,12 @@ def test_the_jax_spawner_matches_the_python_reference():
         t = t + jnp.float32(dt)
     ref = spawn_schedule(300_000)
     assert [m for _, m in got] == [m for _, m in ref]
+    # `STRUCT-007`: bit-for-bit, not `abs=20 ms`. Both loops accumulate the
+    # clock in float32 (`waves.spawn_schedule`'s docstring says why), so the
+    # spawn times are the same floats; 20 ms was more than a whole tick.
+    assert len(got) == len(ref)
     for (a, _), (b, _) in zip(got, ref):
-        assert a == pytest.approx(b, abs=20.0)
+        assert a == b, f"spawn at {a!r} vs reference {b!r}"
 
 
 @pytest.mark.slow

@@ -78,6 +78,36 @@ def test_jax_mover_equals_the_numpy_reference(seed):
     assert (np.asarray(jmoved) == rmoved).all()
 
 
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_the_float32_mover_tracks_the_reference_to_float32_rounding(seed):
+    """`STRUCT-007`: the pin above runs in float64 (the suite's conftest
+    enables x64), while production state is float32. This is the same
+    comparison in the production dtype: every waypoint decision identical, and
+    positions within 4 float32 ulps of the double-precision reference (one
+    tick's arithmetic is a handful of rounded ops: a subtract, a norm, a
+    divide, a multiply-add)."""
+    xs, ys, wp, nwp, key, speeds = _random_paths(96, seed)
+    f32 = np.float32
+    # the reference runs on the SAME (float32-representable) inputs, so what
+    # is measured is the tick's arithmetic, not the input rounding
+    xs, ys, wp, speeds = (a.astype(f32).astype(np.float64)
+                          for a in (xs, ys, wp, speeds))
+    rx, ry, rk, rmoved = _reference(xs, ys, wp, nwp, key, speeds)
+    jx, jy, jk, jmoved = step_move_units(
+        jnp.asarray(xs, jnp.float32), jnp.asarray(ys, jnp.float32),
+        jnp.asarray(wp, jnp.float32),
+        jnp.asarray(key, jnp.int8), jnp.asarray(nwp, jnp.int8),
+        jnp.asarray(speeds, jnp.float32), jnp.ones(len(xs), bool), TICK_MS,
+        MAX_STEPS_PER_TICK)
+    assert np.asarray(jx).dtype == np.float32
+    assert (np.asarray(jk).astype(int) == rk).all()
+    assert (np.asarray(jmoved) == rmoved).all()
+    for got, ref in ((np.asarray(jx), rx), (np.asarray(jy), ry)):
+        ulp = np.spacing(np.abs(ref).astype(f32)).astype(np.float64)
+        assert (np.abs(got.astype(np.float64) - ref) <= 4 * ulp).all(), (
+            np.max(np.abs(got.astype(np.float64) - ref) / ulp))
+
+
 def test_can_move_false_is_a_no_op():
     """``ObjAIBase.Move`` returns false under CastSpell/OrderNone/Stop/Taunt."""
     xs, ys, wp, nwp, key, speeds = _random_paths(32, 7)

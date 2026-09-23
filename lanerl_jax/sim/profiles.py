@@ -27,7 +27,11 @@ from .state import Kind, Team, TurretTier
 from .targeting import MinionType
 
 __all__ = ["PROFILES", "N_PROFILES", "TURRET_MODEL_NAME", "profile_id",
-          "build_profile_tables"]
+          "build_profile_tables", "LEVEL_ROWS"]
+
+#: Rows in every level-indexed table: row ``L`` is champion level ``L``
+#: (1..18), row 0 unused (`STRUCT-005`).
+LEVEL_ROWS = 19
 
 #: ``(kind, subtype, team)`` -> row. ``subtype`` is `MinionType` for a lane
 #: minion, `TurretTier` for a turret, and -1 for a champion (there is only one
@@ -326,25 +330,51 @@ def build_profile_tables(patch: PatchTable | None = None, dtype=jnp.float32) -> 
     # should find the table rather than rediscover it.
 
     out = {k: jnp.asarray(v, dtype) for k, v in cols.items()}
-    # `ExpCurve` thresholds, index i = XP needed to reach level i+1, so [0] is 0.
-    out["xp_curve"] = jnp.asarray(
-        [0.0] + [patch.xp_for_level(i) for i in range(2, 19)], dtype)
-    # `DeathTimes.TimeDeadPerLevel`, seconds, indexed by level-1.
+    # ---- level-indexed tables (`STRUCT-005`) --------------------------------
+    # ONE convention for every table keyed by champion level: `LEVEL_ROWS`
+    # (19) rows, row `L` is the value FOR a champion at level `L` (1..18), row
+    # 0 is unused. Readers index with the level itself, clipped to [1, 18] --
+    # never `level - 1`, never `level + 1`. These tables used to have three
+    # bases (level-1 for `xp_curve` and `death_times`, the latter with a `+1`
+    # at the reader; level for `champion_kill_exp` and `RANKS_BY_LEVEL`), and
+    # the respawn off-by-one (`eaa2e77`) was that mismatch. Each row is pinned
+    # to its C# expression, for every level, in `tests/test_level_tables.py`.
     from ..data.patch import load_map_table
+    exp_json = load_map_table("ExpCurve")
+    # `mapData.ExpCurve` (`Package.cs:124-130`): `Level2`, `Level3`, ... in
+    # order, so `ExpCurve[k]` is JSON `Level(k+2)`.
+    exp_curve_cs = [float(exp_json["EXP"][f"Level{i}"])
+                    for i in range(2, len(exp_json["EXP"]) + 2)]
+    # `xp_to_reach_level[L]`: cumulative XP at which a champion BECOMES level
+    # L. `Champion.AddExperience` levels L-1 -> L once
+    # `Experience >= ExpCurve[(L-1) - 1]` (`Champion.cs:330,343`), so row L is
+    # `ExpCurve[L-2]`; level 1 is where every champion starts, row 1 = 0.
+    out["xp_to_reach_level"] = jnp.asarray(
+        [0.0, 0.0] + [exp_curve_cs[L - 2] for L in range(2, LEVEL_ROWS)], dtype)
+    # LEGACY VIEW for `parity/inject.py`'s `xp_bounds_for_level`, which
+    # indexes `curve[level - 1]` and `curve[level]` and is owned outside the
+    # sim: `xp_curve[i] == xp_to_reach_level[i + 1]`, 18 rows. The sim does not
+    # read it. Delete it once that reader moves to `xp_to_reach_level`.
+    out["xp_curve"] = out["xp_to_reach_level"][1:]
+    # `death_times[L]`: seconds a champion that dies at level L stays dead.
+    # `Champion.Die` reads `MapData.DeathTimes[Stats.Level]` (`Champion.cs:400`)
+    # and `Package.cs:141-153` fills that list from `i = 1`, so
+    # `DeathTimes[k]` is JSON `TimeDeadPerLevel.Level(k+1)`: row L is
+    # `Level(L+1)` -- the `+1` lives in the table, not at the reader.
     dt_tbl = load_map_table("DeathTimes")["TimeDeadPerLevel"]
+    death_times_cs = [float(dt_tbl[f"Level{i:02d}"])
+                      for i in range(1, len(dt_tbl))]
     out["death_times"] = jnp.asarray(
-        [float(dt_tbl[f"Level{i:02d}"]) for i in range(1, 19)], dtype)
-    # `Champion.Die` (`Champion.cs:444`): `EXP = mapData.ExpCurve[Stats.Level-1]
-    # * mapData.BaseExpMultiple`. `mapData.ExpCurve` is a C# List<float> built
-    # by `Package.cs:124-130` iterating `Level2..Level30` in order, so its
-    # index `Level-1` is JSON key `Level(Level+1)` -- e.g. a level-1 victim
-    # reads `ExpCurve[0]` = `Level2` = 280, a level-18 victim reads
-    # `ExpCurve[17]` = `Level19` = 19060. `patch.exp_curve` is keyed directly
-    # by the JSON level number (unlike `xp_curve` above, which is truncated to
-    # the level-up-threshold table), so this is `patch.xp_for_level(L+1)`, not
-    # `xp_for_level(L)`. Indexed 1..18 (index 0 unused -- level 0 never
-    # occurs); `BaseExpMultiple=0.55` from Map1's `ExpCurve.json`
-    # `Values.ExpGrantedOnDeath` block. See `sim/rewards.champion_kill_rewards`.
+        [death_times_cs[L] for L in range(LEVEL_ROWS)], dtype)
+    # `champion_kill_exp[L]`: XP for killing a level-L champion, before the
+    # level-difference adjustment. `Champion.Die` (`Champion.cs:444`):
+    # `EXP = mapData.ExpCurve[Stats.Level - 1] * mapData.BaseExpMultiple`,
+    # i.e. JSON `Level(L+1)` -- a level-1 victim is worth `Level2` = 280, a
+    # level-18 victim `Level19` = 19060 -- times Map1's `BaseExpMultiple`
+    # (0.55, `ExpCurve.json`'s `ExpGrantedOnDeath`). See
+    # `sim/rewards.champion_kill_rewards`.
+    base_exp_multiple = float(exp_json["ExpGrantedOnDeath"]["BaseExpMultiple"])
     out["champion_kill_exp"] = jnp.asarray(
-        [0.0] + [patch.xp_for_level(L + 1) * 0.55 for L in range(1, 19)], dtype)
+        [0.0] + [exp_curve_cs[L - 1] * base_exp_multiple
+                 for L in range(1, LEVEL_ROWS)], dtype)
     return out

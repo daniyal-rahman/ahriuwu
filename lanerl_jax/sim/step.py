@@ -28,13 +28,48 @@ the same 97-tick period for a 1.6 s cooldown (the gate at tick T+k sees
 ``1.6 - k*step`` either way), but that is a coincidence of this particular
 arrangement, not a licence to reorder.
 
-Scope
------
-Movement, minion AI, target acquisition and the auto-attack clock, over the
-fixed-shape :class:`~lanerl_jax.sim.state.LaneState`. Not yet wired in: buff
-ticking, hp/mana regen, spell casts, missiles, wave spawning into free slots,
-gold/XP on death, and the champion action decode. Each of those has its own
-module or is still to come; this is the spine they hang on.
+The phases of ``tick()``
+-----------------------
+Numbered exactly as the ``# ---- N.`` markers in :func:`tick`, in the order
+they run (`tests/test_step_phase_order.py` fails if the two drift apart). The
+server order they reproduce is ``Map.Update`` (collision, fountain, waves),
+then per object ``AttackableUnit.Update`` (buffs, regen, move),
+``AIScript.OnUpdate``, ``Spell.Update``, ``UpdateTarget``, with deaths and
+their rewards resolved after every unit's update.
+
+   1. collision push-apart (Map.Update, FIRST thing in the tick)
+   2. fountain healing (LevelScriptObjects.OnUpdate -> Fountain)
+   3. wave spawning (MapScript.Update, still inside Map.Update)
+   4. buffs (ObjectManager.Update -> AttackableUnit.UpdateBuffs)
+   5. Garen's W: the resist/damage hooks spells.py asks for
+   6. Stats.Update: HP regen (AttackableUnit.Update, after buffs)
+   7. recall damage-buff / cast-windup state
+   8. movement (AttackableUnit.Move, after UpdateBuffs)
+   9. recall and R Spell.Update (after Move, before targeting)
+  10. fog of war (ObjectManager.Update's vision pass)
+  11. the minion controller (AIScript.OnUpdate)
+  12. LaneMinionAI.WaypointReached
+  13. target acquisition (ObjAIBase.UpdateTarget, TurretAI)
+  14. RefreshWaypoints
+  15. the swing gate and auto-attack clock; Q's hit and silence
+  16. apply damage (melee hits, missiles, buff damage)
+  17. Champion._championHitFlagTimer / _playerHitId
+  18. out-of-combat clock, for Garen's passive
+  19. the dead drop target and swing (UpdateTarget; TGT-DEATHTICK)
+  20. call for help
+  21. kill attribution and death rewards (AttackableUnit.Die)
+  22. champion-kill gold/XP (Champion.Die)
+  23. turret-destruction gold/XP (LaneTurret.Die)
+  24. gold, XP, level-up and spell ranks
+  25. move order out, and FinishCasting's Hold
+  26. champion death and respawn (Champion.Update)
+
+Known order deviations (`STRUCT-006`), each low impact and each recorded:
+the sim computes vision fresh at phase 10 from this tick's positions, while
+the server's targeting reads a visibility cache written at the END of the
+previous tick (`LanerlFow.cs`); and R's damage is applied at the buff phase
+(4) where the server applies it in ``Spell.Update`` after the AI script (one
+regen step apart).
 """
 from __future__ import annotations
 
@@ -247,7 +282,7 @@ def tick(state: LaneState, params: UnitParams,
         TURRET_ARMOR_PER_RAMP * other_turret_ramps(t_now, jnp),
         jnp.zeros_like(base_armor))
 
-    # ---- 0. collision push-apart (Map.Update, FIRST thing in the tick) ----
+    # ---- 1. collision push-apart (Map.Update, FIRST thing in the tick) ------
     # `Game.Update` runs `Map.Update` (Game.cs:481) before `ObjectManager.
     # Update` (:483), and `CollisionHandler.Update()` is the first call inside
     # it (MapScriptHandler.cs:96-100) -- ahead of pathing, ahead of wave
@@ -307,7 +342,7 @@ def tick(state: LaneState, params: UnitParams,
         x=cx, y=cy, collision_x=cx, collision_y=cy,
         collision_present=collision_present)
 
-    # ---- 0b. fountain healing (LevelScriptObjects.OnUpdate -> Fountain) ---
+    # ---- 2. fountain healing (LevelScriptObjects.OnUpdate -> Fountain) ------
     # Map1 updates its two Fountain objects before ObjectManager. Their timers
     # start together at zero and are reset (not remainder-preserved) together,
     # so one scalar is exact. A recall which completes later in this tick does
@@ -332,7 +367,7 @@ def tick(state: LaneState, params: UnitParams,
                      state.hp),
         fountain_heal_ms=fountain_timer)
 
-    # ---- 1. wave spawning (MapScript.Update, still inside Map.Update) ------
+    # ---- 3. wave spawning (MapScript.Update, still inside Map.Update) -------
     # `Game.Update` (`Game.cs:474-497`): `GameTime += diff` runs BEFORE
     # `Map.Update(diff)` (which is where `LevelScript.Update`'s spawn check
     # lives) in the SAME call. So the gameTime `LevelScript.Update` reads for
@@ -377,7 +412,7 @@ def tick(state: LaneState, params: UnitParams,
         state = state.replace(next_spawn_ms=next_spawn, minion_number=m_no,
                               cannon_count=c_no)
 
-    # ---- 2a. buffs (ObjectManager.Update -> AttackableUnit.UpdateBuffs) ----
+    # ---- 4. buffs (ObjectManager.Update -> AttackableUnit.UpdateBuffs) ------
     # First thing inside the unit's own Update, and therefore AFTER the
     # collision pass above and BEFORE movement below. It reads post-collision,
     # pre-move positions. That distinction only became real once collision
@@ -396,7 +431,7 @@ def tick(state: LaneState, params: UnitParams,
     buffs_in = grant_w_passive(state.buffs, state.spell_level, state.alive)
     wp = w_passive_modifiers(buffs_in, state.alive, dtype)
 
-    # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
+    # ---- 5. Garen's W: the resist/damage hooks spells.py asks for -----------
     # W's PASSIVE is granted once on first rank-up of W (`W.cs:26-46` registers
     # an OnLevelUpSpell listener at spell construction, so it does not require
     # ever pressing W) and is NOT a clean +20% to either stat -- see
@@ -448,7 +483,7 @@ def tick(state: LaneState, params: UnitParams,
         collision_radius=P("collision_radius"),
         delta_ms=delta_ms)
 
-    # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
+    # ---- 6. Stats.Update: HP regen (AttackableUnit.Update, after buffs) -----
     # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.
     # Not modelling this is why our champion died 7 times in an oracle-driven
     # 600 s episode where the server's died 0 -- see `sim/regen.py`.
@@ -461,7 +496,7 @@ def tick(state: LaneState, params: UnitParams,
     state = state.replace(hp=rg.hp, stat_timer=rg.stat_timer,
                           heal_timer=rg.heal_timer)
 
-    # ---- 2a3. Recall damage-buff / cast-windup state ---------------------
+    # ---- 7. recall damage-buff / cast-windup state --------------------------
     # Recall's buff observes non-periodic damage and cancels itself on ITS
     # NEXT OnUpdate. This phase is before movement and Spell.Update, matching
     # `AttackableUnit.UpdateBuffs`; it therefore prevents a pending channel
@@ -478,20 +513,31 @@ def tick(state: LaneState, params: UnitParams,
         move_order=jnp.where(recall_from_damage, jnp.int8(MoveOrder.HOLD),
                              state.move_order))
 
-    # ---- 2b. movement (AttackableUnit.Move, after UpdateBuffs) -------------
+    # ---- 8. movement (AttackableUnit.Move, after UpdateBuffs) ---------------
     # GarenQHaste writes `MoveSpeed.PercentBonus += .35` on activation. Read
     # the post-UpdateBuffs table so its expiry frame uses the unbuffed speed.
     q_hasted = bs.buffs.q_haste.active
     move_speed = P("move_speed") * jnp.where(
         q_hasted, jnp.asarray(Q_HASTE_MULTIPLIER, dtype), 1.0)
+    # `ENT-12`: a DEAD champion keeps walking. `ObjAIBase.CanMove`
+    # (`ObjAIBase.cs:302-315`) binds `!IsDead` only to the dash clause;
+    # `Champion.Die` stops a dash and nothing else (`Champion.cs:504-505`),
+    # and a champion is never removed, so `AttackableUnit.Update` keeps
+    # calling `Move` on the corpse. Measured on the server dumps: every
+    # champion that died on an unfinished MoveTo moved on every dead tick
+    # (598/598, 599/599, 899/899). Orders are still refused while dead
+    # (`CanChangeWaypoints` has `!IsDead`; `orders.py` gates on `alive`), so
+    # the corpse only finishes the route it had. Dead MINIONS are removed on
+    # the server (`SetToRemove` in `AttackableUnit.Die`) and stay frozen here.
+    corpse_walks = state.kind == Kind.CHAMPION
     x, y, wp_key, _ = step_move_units(
         state.x, state.y, state.waypoints, state.waypoint_key,
         state.n_waypoints, move_speed,
-        (_can_move(state.move_order, state.alive)
+        (_can_move(state.move_order, state.alive | corpse_walks)
          & (recall_windup_start <= 0) & (recall_channel_start <= 0)
          & (r_cast_start <= 0)), delta_ms)
 
-    # ---- 2c. Recall Spell.Update (after Move, before targeting) ----------
+    # ---- 9. recall and R Spell.Update (after Move, before targeting) --------
     # The BluePill has the engine's ordinary 0.5 s cast time, then the
     # script's 8 s channel. `Spell.Update` decrements a live channel before
     # ChannelCancelCheck; a MoveTo/Attack* order consequently consumes this
@@ -535,22 +581,21 @@ def tick(state: LaneState, params: UnitParams,
                           r_cast_start)
     r_cast_finished = r_cast_live & (r_cast_ms <= 0)
 
-    # ---- 2p. fog of war (ObjectManager.Update's vision pass) ---------------
-    # The server recomputes `IsVisibleByTeam` once per tick, from that tick's
-    # positions, and everything downstream just reads the cached flag
-    # (`GameServerLib/Lanerl/LanerlFow.cs`'s "AT THE CACHE" comment; the write
-    # side is `ObjectManager.UpdateTeamsVision`, `ObjectManager.cs:196`). Done
-    # here, once, on the POST-MOVEMENT `x, y` for the same reason target
-    # acquisition below uses them and not `state.x/state.y`: a unit that walks
-    # into sight range this tick is seen this tick, matching "targeting sees
-    # post-movement positions" in this module's own docstring. Recomputed
-    # rather than threaded through unchanged from last tick because it is a
-    # pure function of (position, kind, team, alive), all already updated
-    # above -- there is no cross-tick memory to preserve, unlike e.g.
-    # `ignore_until`.
+    # ---- 10. fog of war (ObjectManager.Update's vision pass) ----------------
+    # The server recomputes `IsVisibleByTeam` once per tick and everything
+    # else just reads the cached flag (`GameServerLib/Lanerl/LanerlFow.cs`'s
+    # "AT THE CACHE" comment). BUT the write, `UpdateTeamsVision`, runs in
+    # `ObjectManager.Update` AFTER every object's `Update` (`ObjectManager.cs`:
+    # the `foreach ... obj.Update(diff)` loop, then removals/additions, then
+    # `UpdateTeamsVision(obj)`), so this tick's targeting on the server reads
+    # the flags written from LAST tick's end positions. The sim instead
+    # computes vision here from this tick's post-movement `x, y`: a unit that
+    # walks into sight is seen one tick earlier than on the server. Recorded
+    # as a known deviation (`STRUCT-006`, and this module's docstring), not
+    # changed here: the difference is at most one tick at a sight boundary.
     visible = _visible_to_enemy(x, y, state.kind, state.team, state.alive)
 
-    # ---- 2. the minion controller (AIScript.OnUpdate) ----------------------
+    # ---- 11. the minion controller (AIScript.OnUpdate) ----------------------
     prio = base_priority(state.kind, _minion_type_of(state))
     ai = step_minion_ai(
         kind=state.kind, alive=state.alive, x=x, y=y, team=state.team,
@@ -566,7 +611,7 @@ def tick(state: LaneState, params: UnitParams,
         spawn_seq=state.spawn_seq,
         delta_ms=delta_ms)
 
-    # ---- 2c. LaneMinionAI.WaypointReached ---------------------------------
+    # ---- 12. LaneMinionAI.WaypointReached -----------------------------------
     # A lane minion owns TWO waypoint cursors on the server: the transient
     # AttackableUnit movement route, and LaneMinionAI's persistent index into
     # PathingWaypoints. Combat overwrites the first while chasing a target, so
@@ -622,7 +667,7 @@ def tick(state: LaneState, params: UnitParams,
         n_wp_after_lane = jnp.where(
             lane.reset_path, jnp.int8(2), state.n_waypoints)
 
-    # ---- 3. target acquisition for non-minions (ObjAIBase.UpdateTarget) ----
+    # ---- 13. target acquisition (ObjAIBase.UpdateTarget, TurretAI) ----------
     # Champions on attack-move take the nearest enemy, no priority. Turrets have
     # their own rule (targeting.turret_acquire) and are wired in with buildings.
     # `ObjAIBase.UpdateTarget`'s auto-acquisition runs ONLY under
@@ -683,11 +728,19 @@ def tick(state: LaneState, params: UnitParams,
     # somehow sits in attack range but out of every ally's sight (unreached
     # today, but a real gap in the rule otherwise).
     is_turret = state.kind == Kind.TURRET
-    turret_pick = turret_acquire(
-        x, y, state.team, state.alive, state.alive & visible, state.kind,
-        _minion_type_of(state), P("attack_range"), state.target,
-        state.target, P("attack_range"), state.spawn_seq,
-        collision_radius=P("collision_radius"))
+    # `ENT-07`: `if (!baseTurret.IsAttacking) CheckForTargets();`
+    # (`TurretAI.cs:23`). The AI script runs before `Spell.Update`
+    # (`ObjAIBase.cs:1131-1145`), so the gate reads the `IsAttacking` carried
+    # into the tick: a turret mid-swing keeps what it holds and cannot switch
+    # to a diver until the swing ends. The retention/`target_gone` drops below
+    # still apply -- they are not inside that `if`.
+    turret_pick = jnp.where(
+        state.is_attacking, state.target,
+        turret_acquire(
+            x, y, state.team, state.alive, state.alive & visible, state.kind,
+            _minion_type_of(state), P("attack_range"), state.target,
+            state.target, P("attack_range"), state.spawn_seq,
+            collision_radius=P("collision_radius")))
     # `TURRET-001`. The retention test is applied to the target the turret
     # holds AFTER `CheckForTargets`, not to the one it entered the tick with,
     # because that is the order inside a single `TurretAI.OnUpdate`
@@ -741,7 +794,7 @@ def tick(state: LaneState, params: UnitParams,
         is_champ, jnp.where(keep_champ, state.target, champ_pick),
         jnp.where(is_turret, turret_target, minion_target))
 
-    # ---- 3b. RefreshWaypoints -------------------------------------------
+    # ---- 14. RefreshWaypoints -----------------------------------------------
     # `ObjAIBase.RefreshWaypoints`: a unit holding a target either stops,
     # because the target is already in range, or re-paths onto it.
     #
@@ -824,7 +877,18 @@ def tick(state: LaneState, params: UnitParams,
     # (`BaseTurret.cs:108-110`) is an empty override -- "Overridden function
     # unused by turrets" -- so a turret's move order is never touched by this
     # path at all and simply persists.
-    refresh = hostile & ~state.is_attacking & (state.kind != Kind.TURRET)
+    #
+    # `ENT-10`: nor does it reach one during a recall. `RefreshWaypoints`
+    # promotes the order to `AttackTo` only when `_castingSpell == null &&
+    # ChannelSpell == null` (`ObjAIBase.cs:622-625`); the recall left the
+    # order at `Stop`, so it then finds no `targetPos` and returns
+    # (`:635-668`) -- no chase, no Hold, no route reset. Writing `ATTACK_TO`
+    # here made the next tick's `ChannelCancelCheck` (phase 9) cancel the
+    # recall in the sim only. `recall_windup`/`recall_channel` are the
+    # post-`Spell.Update` values, which is what `UpdateTarget` sees.
+    in_recall = (recall_windup > 0) | (recall_channel > 0)
+    refresh = (hostile & ~state.is_attacking & (state.kind != Kind.TURRET)
+               & ~in_recall)
     hold = refresh & in_rng
     chase = refresh & ~in_rng
     wp = wp_after_lane
@@ -866,6 +930,7 @@ def tick(state: LaneState, params: UnitParams,
     wp = jnp.where(hold[:, None, None], wp.at[:, 0].set(hold_here), wp)
     wp_key = jnp.where(hold, jnp.int8(1), wp_key)
     n_wp = jnp.where(hold, jnp.int8(1), n_wp)
+    # ---- 15. the swing gate and auto-attack clock; Q's hit and silence ------
     # Champion attack damage is NOT static. `Stats.LevelUp`
     # (`GameServerLib/GameObjects/Stats/Stats.cs:270-271`) grows
     # `AttackDamage` every level-up through the same non-linear curve as
@@ -941,7 +1006,7 @@ def tick(state: LaneState, params: UnitParams,
         jnp.where(q_landed, silence_by_attacker, 0.0))
     silenced_ms = jnp.maximum(silence_left, silence_added)
 
-    # ---- 5. apply damage, and attribute the kill --------------------------
+    # ---- 16. apply damage (melee hits, missiles, buff damage) ---------------
     # Who gets the gold is the whole of last-hitting, so attribution is not a
     # detail. The server applies each attacker's damage inside its own
     # `Update`, in ObjectManager iteration order, and `TakeDamage` records the
@@ -980,7 +1045,7 @@ def tick(state: LaneState, params: UnitParams,
     # sees melee hits and missile hits in one ordering rather than two.
     dmg_ij = dmg_ij + ms.damage_ij
 
-    # ---- Champion._championHitFlagTimer / _playerHitId --------------------
+    # ---- 17. Champion._championHitFlagTimer / _playerHitId ------------------
     # `Champion.TakeDamage` (`Champion.cs:569-575`) resets these on EVERY hit
     # this champion takes, from any source -- no melee/caster-minion exemption
     # like the passive's combat clock below. Read here, off the real (not yet
@@ -1010,7 +1075,7 @@ def tick(state: LaneState, params: UnitParams,
         state.recall_damage_pending
         | (recall_listener_live & nonperiodic_hit))
 
-    # ---- out-of-combat clock, for Garen's passive -------------------------
+    # ---- 18. out-of-combat clock, for Garen's passive -----------------------
     # `CharScriptGaren.ShouldPassiveTurnOff(unit, damageData)` (`unit` = the
     # DEFENDER this passive belongs to, i.e. Garen; `damageData.Attacker` =
     # whoever hit him) returns FALSE -- the passive keeps running, the hit
@@ -1070,8 +1135,8 @@ def tick(state: LaneState, params: UnitParams,
     alive = state.alive & (hp > 0)
     died = state.alive & ~alive
 
-    # ---- 5a'. UpdateTarget, at the server's PHASE (TGT-DEATHTICK) ---------
-    # The null-out in phase 3 above runs before damage, so a unit killed this
+    # ---- 19. the dead drop target and swing (UpdateTarget; TGT-DEATHTICK) ---
+    # The null-out in phase 13 above runs before damage, so a unit killed this
     # tick is still `alive` for the whole of this tick's targeting and is only
     # dropped on the NEXT one. The server's order is the reverse, and it is
     # per-unit: `Spell.Update` resolves auto-attack damage and sets `IsDead`
@@ -1093,12 +1158,12 @@ def tick(state: LaneState, params: UnitParams,
     # events come from -- is deferred to the VICTIM's own update, which may
     # be the following tick. Units reading the flag beat the broadcast to it.
     #
-    # Why re-apply here rather than move the phase-3 block: the server's
+    # Why re-apply here rather than move the phase-13 block: the server's
     # interleaving is per-unit (`A.damage, A.target, B.damage, B.target`) and
     # no vectorised tick can reproduce that ordering exactly. Applying the
     # same predicate twice -- once on start-of-tick state, once on
     # post-damage state -- is the closest total order, and it is idempotent,
-    # so the phase-3 pass costs nothing where it already fired.
+    # so the phase-13 pass costs nothing where it already fired.
     # MEASURED AND REVERTED. Applying it cost 50 target rows (522 -> 572) and
     # 5 turret rows (30 -> 35) on the canonical corpus, with all 25 other
     # fields bit-identical. Two reasons, both visible in the C# once the
@@ -1139,7 +1204,7 @@ def tick(state: LaneState, params: UnitParams,
     aa_target = jnp.where(alive, aa_target, jnp.int8(-1)).astype(
         state.aa_target.dtype)
 
-    # ---- 5b. call for help -------------------------------------------------
+    # ---- 20. call for help --------------------------------------------------
     # `targeting.call_for_help_map` implements the broadcast faithfully and is
     # The toggle is retained for ablations.  Production defaults ON: the server
     # has no corresponding switch, so using an aggregate rollout regression to
@@ -1156,11 +1221,13 @@ def tick(state: LaneState, params: UnitParams,
         help_priority = call_for_help_map(
             damage_ij=dmg_ij + buff_damage_ij,
             x=x, y=y, alive=alive, kind=state.kind,
-            team=state.team, acquisition_range=P("acquisition_range"))
+            team=state.team, acquisition_range=P("acquisition_range"),
+            minion_type=_minion_type_of(state))
     else:
         help_priority = state.help_priority
 
 
+    # ---- 21. kill attribution and death rewards (AttackableUnit.Die) --------
     # Judgment's damage is applied inside the buff's own update, which runs
     # BEFORE the auto-attack gate, so it is prepended to the attribution order.
     dmg_ij = jnp.concatenate(
@@ -1180,7 +1247,7 @@ def tick(state: LaneState, params: UnitParams,
         alive=alive, gold_on_death=P("gold_on_death"),
         xp_on_death=P("xp_on_death"))
 
-    # ---- champion-kill gold/XP (`Champion.Die`, `Champion.cs:392-461`) -----
+    # ---- 22. champion-kill gold/XP (Champion.Die) ---------------------------
     # `death_rewards` above is `AttackableUnit.Die`'s path -- minions (and,
     # numerically inertly, turrets) only. `Champion` overrides `Die` entirely
     # and never calls `base.Die`, so THIS is the only thing that ever pays
@@ -1194,12 +1261,13 @@ def tick(state: LaneState, params: UnitParams,
         first_blood_done=state.first_blood_done,
         kill_exp_table=params["champion_kill_exp"])
 
-    # ---- turret-destruction gold/XP (`LaneTurret.Die`, `LaneTurret.cs:37-88`) ---
+    # ---- 23. turret-destruction gold/XP (LaneTurret.Die) --------------------
     tk_gold, tk_xp = turret_kill_rewards(
         died=died, kind=state.kind, team=state.team, alive=alive, x=x, y=y,
         local_gold=P("local_gold_on_death"), global_gold=P("global_gold_on_death"),
         global_xp=P("global_xp_on_death"), attack_range=P("attack_range"))
 
+    # ---- 24. gold, XP, level-up and spell ranks -----------------------------
     # `Champion.OnKill`'s minion-kill branch (`Champion.cs:379-388`) is the
     # OTHER place `DeathSpree`/`GoldFromMinions` change; `death_rewards.gold`
     # IS exactly this tick's minion-kill gold (its only source), so it feeds
@@ -1220,7 +1288,7 @@ def tick(state: LaneState, params: UnitParams,
     cs = state.cs + rw.cs.astype(state.cs.dtype)
     kills = state.kills + ckr.kills
     level = jnp.where(state.kind == Kind.CHAMPION,
-                      level_for_xp(xp, params["xp_curve"]), state.level)
+                      level_for_xp(xp, params["xp_to_reach_level"]), state.level)
     # Stats.LevelUp raises both maximum and current HP by the same nonlinear
     # growth increment. The cumulative-curve difference also handles a rare
     # multi-level XP jump without a Python loop.
@@ -1231,7 +1299,8 @@ def tick(state: LaneState, params: UnitParams,
     # Spell ranks are a pure function of champion level under a fixed skill
     # order, so they need no state of their own. The server spends the points
     # through `AutoLevelUndriven` / `Champion.LevelUpSpell`; the order is the
-    # one in `constants.GAREN_SKILL_ORDER`.
+    # one in `constants.GAREN_SKILL_ORDER`, walked forward past entries the
+    # `SpellsUpLevels` gate refuses (`spells.ranks_for_level`, `SPELL-011`).
     spell_level = jnp.where(
         (state.kind == Kind.CHAMPION)[:, None],
         _RANK_TABLE[jnp.clip(level.astype(jnp.int32), 0, 18)],
@@ -1247,6 +1316,7 @@ def tick(state: LaneState, params: UnitParams,
     buffs_out = buffs_out.replace(
         w_passive=buffs_out.w_passive | gained_w_passive)
 
+    # ---- 25. move order out, and FinishCasting's Hold -----------------------
     minion_order = jnp.where(lane_stop, jnp.int8(MoveOrder.STOP), ai.move_order)
     move_order_out = jnp.where(
         hold, jnp.int8(MoveOrder.HOLD),
@@ -1287,7 +1357,7 @@ def tick(state: LaneState, params: UnitParams,
     # against sim-wrote-server-held 22.
     finish_casting = r_cast_finished | aa.hit
 
-    # ---- 6. champion death and respawn -----------------------------------
+    # ---- 26. champion death and respawn (Champion.Update) -------------------
     # `Champion.Die` sets RespawnTimer = DeathTimes[Level] * 1000; the timer is
     # decremented in `Champion.Update` and `Respawn()` restores FULL health at
     # the spawn point. Minions and turrets do not come back within an episode
@@ -1295,20 +1365,15 @@ def tick(state: LaneState, params: UnitParams,
     # episodes -- which is itself a bug this project has paid for; see
     # ObjectManager.Update's comment about a map losing four towers over a run).
     is_ch = state.kind == Kind.CHAMPION
-    # OFF BY ONE TABLE ROW. `Champion.Die` (`Champion.cs:400`) reads
-    # `MapData.DeathTimes[Stats.Level]`, and `Package.cs:141-153` fills that list
-    # with `for (i = 1; i < Count; i++)`, so `DeathTimes[k]` holds
-    # `TimeDeadPerLevel.Level(k+1)`: a champion at level L waits `Level(L+1)`.
-    # `profiles.py:334` loads the table indexed by level-1, so the port read
-    # `Level(L)` and respawned 2.5 s early at EVERY level.
-    #
-    # Measured, not inferred: the sim's level-4 death froze the champion for 457
-    # decisions = 15.23 s, which is Level04 = 15.0; the server's level-8 death
-    # spanned 817 decisions = 27.23 s, which is Level09 = 27.5, not Level08.
-    #
-    # Clamp AFTER the +1 so level 18 reads the last row rather than past the end.
-    lvl = jnp.clip(level.astype(jnp.int32) + 1, 1,
-                   params["death_times"].shape[0]) - 1
+    # `Champion.Die` (`Champion.cs:400`) reads `MapData.DeathTimes[Stats.Level]`,
+    # and `Package.cs:141-153` fills that list from `i = 1`, so a champion at
+    # level L waits `TimeDeadPerLevel.Level(L+1)`. The port once read `Level(L)`
+    # and respawned 2.5 s early at every level (`eaa2e77`; measured: the
+    # server's level-8 death spanned 27.23 s = Level09, not Level08). Since
+    # `STRUCT-005` that shift lives IN the table -- `death_times[L]` is the
+    # value for level L, like every level-indexed table -- so the reader
+    # indexes with the level itself.
+    lvl = jnp.clip(level.astype(jnp.int32), 1, params["death_times"].shape[0] - 1)
     died_ch = died & is_ch
     rt = jnp.where(died_ch, params["death_times"][lvl] * 1000.0, state.respawn_ms)
     rt = jnp.where(rt > 0, rt - jnp.asarray(delta_ms, dtype), rt)
@@ -1317,6 +1382,24 @@ def tick(state: LaneState, params: UnitParams,
     hp = jnp.where(reborn, max_hp, hp)
     x = jnp.where(reborn, state.spawn_x, x)
     y = jnp.where(reborn, state.spawn_y, y)
+    # `ENT-12`: `Respawn` moves the champion through `SetPosition(spawnPos)`
+    # (`Champion.cs:285-288`), and that setter (`AttackableUnit.cs:195-229`)
+    # is not a bare teleport: a route that had ended (`IsPathEnded`,
+    # `CurrentWaypointKey >= Waypoints.Count`) is reset to `[Position]`, an
+    # unfinished one is re-pathed from the new position to `Waypoints.Last()`.
+    # BOOKED APPROXIMATION, as for the chase in 3b: the re-path is a straight
+    # two-point route, not `GetPath` + `GetClosestTerrainExit`.
+    path_open = wp_key < n_wp
+    last_wp = jnp.take_along_axis(
+        wp, jnp.clip(n_wp.astype(jnp.int32) - 1, 0, wp.shape[1] - 1)[:, None, None],
+        axis=1)[:, 0]
+    spawn_xy = jnp.stack([state.spawn_x, state.spawn_y], -1)
+    respawn_route = wp.at[:, 0].set(spawn_xy).at[:, 1].set(
+        jnp.where(path_open[:, None], last_wp, spawn_xy))
+    wp = jnp.where(reborn[:, None, None], respawn_route, wp)
+    n_wp = jnp.where(reborn, jnp.where(path_open, jnp.int8(2), jnp.int8(1)),
+                     n_wp)
+    wp_key = jnp.where(reborn, jnp.int8(1), wp_key)
     rt = jnp.where(reborn, jnp.asarray(-1.0, dtype), rt)
     deaths = state.deaths + died_ch.astype(state.deaths.dtype)
     silenced_ms = jnp.where(died | reborn, 0.0, silenced_ms)

@@ -450,10 +450,12 @@ def minion_gold_deathspree_decay(*, minion_gold: jax.Array,
 def level_for_xp(xp: jax.Array, curve: jax.Array) -> jax.Array:
     """Level implied by total experience.
 
-    ``curve`` is ``(18,)`` cumulative thresholds, ``curve[i]`` being the XP to
-    reach level ``i+1`` (so ``curve[0] == 0``). Returns a level in 1..18.
+    ``curve`` is ``profiles``' ``xp_to_reach_level``: ``(19,)``, row ``L`` the
+    cumulative XP at which a champion becomes level ``L`` (row 1 is 0, row 0
+    unused -- `STRUCT-005`). Returns a level in 1..18: the number of levels
+    1..18 whose threshold has been reached.
     """
-    return (1 + jnp.sum(xp[:, None] >= curve[None, :], axis=1) - 1).astype(jnp.int8)
+    return jnp.sum(xp[:, None] >= curve[None, 1:], axis=1).astype(jnp.int8)
 
 
 def ambient_gold(t_ms: Any, gold_timer: Any, is_champion: Any, xp: Any = None):

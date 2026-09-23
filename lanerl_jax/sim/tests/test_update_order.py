@@ -221,6 +221,62 @@ def test_a_minion_in_the_annulus_is_acquired_and_dropped_on_the_same_tick():
     assert firing == 0, "and therefore does not swing"
 
 
+def _turret_dive_scene(turret_is_attacking: bool):
+    """A blue outer turret mid-swing on a red melee minion while the red
+    champion, inside turret range, targets the blue champion within its own
+    attack range -- the textbook dive that ``CheckForTargets``'s holding
+    branch switches to (`TurretAI.cs:64-80`)."""
+    patch = load_patch()
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    turret = TU_SLICE.start
+    tx, ty = TOP_OUTER_TURRET[Team.BLUE]
+    s = spawn_minion(
+        s, Team.RED, profile_id(Kind.LANE_MINION, MinionType.MELEE, Team.RED),
+        patch.minions["melee_red"].hp_at_level(1),
+        jnp.asarray(np.asarray([[tx + 200.0, ty]], np.float32)),
+        spawn_xy=(tx + 200.0, ty))
+    minion = MI_SLICE.start
+    assert int(s.team[minion]) == Team.RED and bool(s.alive[minion])
+    blue, red = 0, 1
+    assert int(s.team[blue]) == Team.BLUE and int(s.team[red]) == Team.RED
+    s = s.replace(
+        x=s.x.at[blue].set(tx + 300.0).at[red].set(tx + 400.0),
+        y=s.y.at[blue].set(ty).at[red].set(ty),
+        target=s.target.at[turret].set(minion).at[red].set(blue),
+        move_order=s.move_order.at[red].set(MoveOrder.ATTACK_TO),
+        is_attacking=s.is_attacking.at[turret].set(turret_is_attacking),
+        aa_windup=s.aa_windup.at[turret].set(
+            0.1 if turret_is_attacking else 0.0),
+        aa_cooldown=s.aa_cooldown.at[turret].set(0.5),
+    )
+    return int(tick(s, params).target[turret]), red, minion
+
+
+def test_a_turret_does_not_re_pick_its_target_during_its_own_windup():
+    """`ENT-07`. ``TurretAI.OnUpdate`` (`TurretAI.cs:21-26`)::
+
+        if (!baseTurret.IsAttacking) { CheckForTargets(); }
+
+    and ``AIScript.OnUpdate`` runs before ``Spell.Update`` inside
+    ``ObjAIBase.Update`` (`ObjAIBase.cs:1131-1145`), so the gate reads the
+    ``IsAttacking`` the turret carried into the tick. A turret whose swing on
+    a minion is in flight therefore keeps the minion even with a champion
+    diving under it; it switches only once the swing is over.
+    """
+    held, red, minion = _turret_dive_scene(turret_is_attacking=True)
+    assert held == minion, (
+        f"the turret re-targeted to {held} during its own windup; "
+        "CheckForTargets is gated on !IsAttacking")
+
+
+def test_an_idle_turret_holding_a_minion_switches_to_the_diver():
+    """Control for the test above: same scene with no swing in flight, and
+    the holding branch of ``CheckForTargets`` takes the diving champion."""
+    held, red, minion = _turret_dive_scene(turret_is_attacking=False)
+    assert held == red, f"expected the diving champion, got {held}"
+
+
 # --------------------------------------------------------------------------
 # The move-order Hold: UpdateTarget() returns early while a swing is in flight
 # --------------------------------------------------------------------------
@@ -390,6 +446,69 @@ def test_the_out_of_range_repath_still_produces_a_two_point_route():
     assert float(out.x[0]) > 1000.0, "it should have walked toward the target"
 
 
+def _recalling_champ_with_target(*, gap, recall_channel_ms=4000.0,
+                                 recall_windup_ms=0.0):
+    """Champion 0 mid-recall (``LanerlControl`` issued ``Stop`` before the
+    pill, so its order is STOP) that has just been given an ATTACK order on
+    champion 1 ``gap`` units away -- ``SetTargetUnit`` alone
+    (`LanerlControl.cs:373-391`), no move order."""
+    patch = load_patch()
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    s = s.replace(
+        x=s.x.at[0].set(1000.0).at[1].set(1000.0 + gap),
+        y=s.y.at[0].set(1000.0).at[1].set(1000.0),
+        target=s.target.at[0].set(1),
+        move_order=s.move_order.at[0].set(MoveOrder.STOP),
+        waypoints=s.waypoints.at[0, 0].set(jnp.asarray([1000.0, 1000.0])),
+        n_waypoints=s.n_waypoints.at[0].set(1),
+        waypoint_key=s.waypoint_key.at[0].set(1),
+        recall_channel_ms=s.recall_channel_ms.at[0].set(recall_channel_ms),
+        recall_windup_ms=s.recall_windup_ms.at[0].set(recall_windup_ms),
+    )
+    return s, params
+
+
+@pytest.mark.parametrize("channel_ms, windup_ms", [(4000.0, 0.0), (0.0, 300.0)])
+def test_an_attack_order_during_a_recall_does_not_chase_or_cancel_it(
+        channel_ms, windup_ms):
+    """`ENT-10`. ``RefreshWaypoints`` promotes the order to ``AttackTo`` only
+    when ``_castingSpell == null && ChannelSpell == null``
+    (`ObjAIBase.cs:622-625`), and with the order left at ``Stop`` it finds no
+    ``targetPos`` and returns (`:635-668`). So a recalling champion given an
+    attack order neither chases nor holds, and -- because the order never
+    becomes ``AttackTo`` -- ``ChannelCancelCheck`` (`Spell.cs:936-943`) has
+    nothing to cancel on. The pill's 0.5 s windup is the ``_castingSpell``
+    half of the same condition.
+
+    The sim's chase wrote ``ATTACK_TO`` and the next tick's channel check
+    cancelled the recall: an out-of-range attack click cost the recall in the
+    sim only.
+    """
+    import jax
+    s, params = _recalling_champ_with_target(
+        gap=600.0, recall_channel_ms=channel_ms, recall_windup_ms=windup_ms)
+    step = jax.jit(lambda st: tick(st, params))
+    out = step(step(s))
+    assert int(out.move_order[0]) != MoveOrder.ATTACK_TO, (
+        "the chase promoted the order to AttackTo during a recall")
+    assert float(out.x[0]) == 1000.0, "the champion walked during its recall"
+    assert (float(out.recall_channel_ms[0]) > 0.0
+            or float(out.recall_windup_ms[0]) > 0.0), (
+        "the attack order cancelled the recall")
+
+
+def test_an_attack_order_without_a_recall_still_chases():
+    """Control for the test above: the same scene with no recall in progress
+    promotes to ``AttackTo`` and walks toward the target."""
+    import jax
+    s, params = _recalling_champ_with_target(gap=600.0, recall_channel_ms=0.0)
+    step = jax.jit(lambda st: tick(st, params))
+    out = step(step(s))   # the route is written in 3b, walked next tick
+    assert int(out.move_order[0]) == MoveOrder.ATTACK_TO
+    assert float(out.x[0]) > 1000.0
+
+
 # --------------------------------------------------------------------------
 # ORDER-004: on a tick a minion enters mid-swing, the 250 ms controller is the
 # only move-order writer there is
@@ -414,13 +533,20 @@ def test_the_out_of_range_repath_still_produces_a_two_point_route():
 
 
 def _minion_pair(*, gap, is_attacking=False, windup=0.0, ai_timer=0.0,
-                 order=MoveOrder.HOLD, target_alive=True):
+                 order=MoveOrder.HOLD, target_alive=True, had_target=True):
     """Two enemy lane minions ``gap`` apart, blue targeting red.
 
     Deliberately built with ``lane_path=None`` (the default ``tick`` takes):
     the lane-walk tail of ``ReevaluateBehavior`` is a separate mechanism with
     its own tests, and leaving it out keeps these assertions about the order
     writer and nothing else.
+
+    ``had_target`` defaults to True: a minion that has held ``target`` for at
+    least one tick has ``LaneMinionAI.hadTarget`` set (`LaneMinionAI.cs:43-45`).
+    Since `HADTGT-001` (`abb33ae`, 2026-09-22) the latch is its own state
+    field instead of being reconstructed as ``target >= 0``, so a fixture that
+    sets ``target`` must set the latch too -- leaving it at the spawn default
+    (False) is what made the death test below fail (`TEST-001`).
     """
     patch = load_patch()
     params = lane_params(patch)
@@ -436,6 +562,7 @@ def _minion_pair(*, gap, is_attacking=False, windup=0.0, ai_timer=0.0,
     s = s.replace(
         alive=s.alive.at[red].set(target_alive),
         target=s.target.at[blue].set(red),
+        had_target=s.had_target.at[blue].set(had_target),
         move_order=s.move_order.at[blue].set(order),
         is_attacking=s.is_attacking.at[blue].set(is_attacking),
         aa_windup=s.aa_windup.at[blue].set(windup),
@@ -511,6 +638,25 @@ def test_a_target_dying_re_evaluates_the_move_order_with_the_timer_not_due():
         "one the minion was holding, so only the 250 ms timer can be firing")
 
 
+def test_a_dead_target_without_the_latch_does_not_trigger_a_re_evaluation():
+    """The latch half of `TargetJustDied()` (`LaneMinionAI.cs:39-51`): it
+    returns true only ``else if (hadTarget)``. A minion whose latch is clear
+    -- the acquisition tick itself, or the tick after a give-up null-out
+    (`HADTGT-001`: 494 corpus ticks) -- does NOT get an event sweep when its
+    target is invalid, so with the timer not due the order is carried.
+
+    This is the other side of the test above and the reason that test's
+    fixture now sets the latch explicitly: `TEST-001` was the fixture relying
+    on the pre-`HADTGT-001` reconstruction ``had_target = target >= 0``.
+    """
+    s, params, blue = _minion_pair(gap=100.0, is_attacking=False,
+                                   ai_timer=0.0, order=MoveOrder.HOLD,
+                                   target_alive=False, had_target=False)
+    out = tick(s, params)
+    assert int(out.move_order[blue]) == MoveOrder.HOLD, (
+        "TargetJustDied fired with hadTarget clear")
+
+
 def test_finishing_an_auto_attack_holds_and_destroys_the_route():
     """`ORDER-005`. ``Spell.FinishCasting`` (`Spell.cs:1051-1065`) ends with
 
@@ -565,3 +711,87 @@ def test_a_swing_still_winding_up_does_not_get_finish_castings_hold():
     assert bool(out.is_attacking[blue]), "still winding up"
     assert int(out.move_order[blue]) == MoveOrder.ATTACK_TO, (
         "Hold was written on a tick FinishCasting does not run")
+
+
+# --------------------------------------------------------------------------
+# ENT-12: a dead champion keeps walking, and Respawn re-paths through
+# SetPosition
+# --------------------------------------------------------------------------
+
+def _dead_champ_on_a_route(dest_dx: float, respawn_ms: float):
+    """Champion 0 dead (hp 0, respawn pending), MoveTo along a two-point route
+    from (1000, 1000) to (1000 + dest_dx, 1000), spawn point far away."""
+    patch = load_patch()
+    params = lane_params(patch)
+    s = init_lane(patch, include_all_turrets=False)
+    route = np.zeros(s.waypoints.shape[1:], np.float32)
+    route[0] = (1000.0, 1000.0)
+    route[1] = (1000.0 + dest_dx, 1000.0)
+    s = s.replace(
+        x=s.x.at[0].set(1000.0), y=s.y.at[0].set(1000.0),
+        alive=s.alive.at[0].set(False), hp=s.hp.at[0].set(0.0),
+        respawn_ms=s.respawn_ms.at[0].set(respawn_ms),
+        target=s.target.at[0].set(-1),
+        move_order=s.move_order.at[0].set(MoveOrder.MOVE_TO),
+        waypoints=s.waypoints.at[0].set(jnp.asarray(route)),
+        waypoint_key=s.waypoint_key.at[0].set(1),
+        n_waypoints=s.n_waypoints.at[0].set(2),
+        spawn_x=s.spawn_x.at[0].set(500.0), spawn_y=s.spawn_y.at[0].set(500.0),
+    )
+    return s, params
+
+
+def test_a_dead_champion_keeps_walking_its_route():
+    """`ENT-12`, first half. ``ObjAIBase.CanMove`` (`ObjAIBase.cs:302-315`)
+    binds ``!IsDead`` only to the dash clause, ``Champion.Die`` stops a dash
+    and nothing else (`Champion.cs:504-505`), and ``AttackableUnit.Update``
+    moves whatever ``CanMove()`` admits (`AttackableUnit.cs:253-264`). Measured
+    on the server dumps (`LANERL_STATEROW ...|D|`): every champion that died
+    on an unfinished MoveTo (order 2, wps 2) changed position on **every**
+    dead tick -- 598/598, 599/599, 899/899 across `tier15`, `tier15_noshop`,
+    `champ_dynamic_audit` -- and one whose route ended on its death tick
+    stood still for all 598.
+    """
+    import jax
+    s, params = _dead_champ_on_a_route(dest_dx=2000.0, respawn_ms=5000.0)
+    step = jax.jit(lambda st: tick(st, params))
+    out = step(step(step(s)))
+    assert not bool(out.alive[0])
+    assert float(out.x[0]) > 1000.0, "a dead champion stopped walking"
+
+
+@pytest.mark.parametrize("dest_dx, open_path", [(2000.0, True), (5.0, False)])
+def test_respawn_re_paths_an_unfinished_route_and_resets_a_finished_one(
+        dest_dx, open_path):
+    """`ENT-12`, second half. ``Champion.Respawn`` calls
+    ``SetPosition(spawnPos)`` (`Champion.cs:285-288`), and the setter
+    (`AttackableUnit.cs:195-229`) resets the route to ``[Position]`` if the
+    path had ended, else re-paths from the new position to
+    ``Waypoints.Last()``. The sim teleported and kept the old waypoints and
+    key, so a respawned champion walked its OLD next waypoint in a straight
+    line from the fountain.
+
+    The re-path is straight (the tick has no ``GetPath``), booked like
+    ``RefreshWaypoints``'s chase.
+    """
+    import jax
+    s, params = _dead_champ_on_a_route(dest_dx=dest_dx, respawn_ms=40.0)
+    step = jax.jit(lambda st: tick(st, params))
+    out = s
+    for _ in range(3):              # 40 ms = the third tick
+        out = step(out)
+    assert bool(out.alive[0]), "respawned"
+    assert (float(out.x[0]), float(out.y[0])) == (500.0, 500.0)
+    wp = np.asarray(out.waypoints[0])
+    assert int(out.waypoint_key[0]) == 1
+    assert tuple(wp[0]) == (500.0, 500.0), "the route must start on the spawn"
+    if open_path:
+        assert int(out.n_waypoints[0]) == 2
+        assert tuple(wp[1]) == (1000.0 + dest_dx, 1000.0), (
+            "the re-path must end on the old route's LAST waypoint")
+    else:
+        assert int(out.n_waypoints[0]) == 1, (
+            "a route that ended while dead is reset to [Position]")
+        after = step(out)
+        assert (float(after.x[0]), float(after.y[0])) == (500.0, 500.0), (
+            "a champion whose route had ended walked after respawning")
