@@ -93,6 +93,7 @@ _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 
 from lanerl_jax.obs.builder import build_observation                  # noqa: E402
+from lanerl_jax.parity.lanerl_lane import LanerlLane                  # noqa: E402
 from lanerl_jax.obs.frame import make_lane_frame                      # noqa: E402
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params  # noqa: E402
 from lanerl_jax.sim.orders import OrderKind                           # noqa: E402
@@ -400,10 +401,54 @@ def make_driver(policy, params, *, deterministic: bool, seed: int):
 
     rb = StateRebuilder()
     key = jax.random.key(seed)
-    counts = {"cast": 0, "attack": 0, "move": 0, "noop": 0, "recall": 0}
+    counts = {"cast": 0, "attack": 0, "move": 0, "noop": 0, "recall": 0,
+              "level": 0}
+
+    def pending_rank_up(champ: dict):
+        """The slot the SIM would have ranked up by now, or None.
+
+        THE BUG THIS FIXES, and it is worth stating because the first run of
+        this eval scored 1.5 CS against 44.6 in the sim and this was the whole
+        difference. The JAX sim ranks spells automatically: `step.py` indexes
+        `_RANK_TABLE = RANKS_BY_LEVEL` by champion level on every tick, so a
+        level-3 champion HAS E rank 2 with no action spent. The C# server ranks
+        spells in `AutoLevel`, which belongs to the SCRIPTED BOT -- and this eval
+        drives blue itself, so blue's `sl` stayed `[0,0,0,0]` for the whole game
+        while red (bot-driven) had E at rank 1 from the first frame.
+
+        A policy that presses E on 72% of its decisions (measured, same
+        checkpoint, both engines) was therefore casting an UNRANKED spell.
+        `Spell.Cast` does not check spell level -- the cast goes through and the
+        cooldown starts -- so nothing complained and nothing looked wrong; the
+        spin simply did rank-0 damage. `docs` records "spell rank 0" as one of
+        the five original BC blockers, which is the same bug in a different
+        harness.
+
+        So the eval sends the rank-ups itself, following `spells.SKILL_ORDER`
+        (E first: 2,0,1,2,2,3,...) via `RANKS_BY_LEVEL`, which is the exact table
+        training uses. It costs the decision it is sent on -- the wire takes one
+        order per side per step -- which is at most 18 of 18,000 decisions, and
+        the count is reported.
+        """
+        from lanerl_jax.sim.spells import RANKS_BY_LEVEL
+
+        lvl = int(champ.get("lvl") or 1)
+        want = RANKS_BY_LEVEL[min(lvl, len(RANKS_BY_LEVEL) - 1)]
+        have = [int(v) for v in (champ.get("sl") or [0, 0, 0, 0])[:4]]
+        for slot in range(4):
+            if have[slot] < want[slot]:
+                return slot
+        return None
 
     def drive(frame: dict) -> dict:
         nonlocal key
+        blue = next((u for u in frame.get("u", [])
+                     if u.get("k") == "Champion" and u.get("tm") == 100), None)
+        if blue is not None:
+            slot = pending_rank_up(blue)
+            if slot is not None:
+                counts["level"] += 1
+                return {"t": "level", "slot": slot}
         key, k = jax.random.split(key)
         state, netid = rb.rebuild(frame)
         kind, ox, oy, tgt, _btn = act(state, k)
@@ -420,9 +465,49 @@ def make_driver(policy, params, *, deterministic: bool, seed: int):
 # episodes
 # ---------------------------------------------------------------------------
 
+def replay_driver(path: Path, counts: dict):
+    """An OPEN-LOOP driver: send a recorded sim order stream, ignore the server.
+
+    The isolation this exists for. The same checkpoint scores 53 CS in the JAX
+    sim and 0 in the C# server, and the two runs also show different action
+    mixes (attack 3.4% in the sim against 8.9% here), so the closed-loop
+    comparison cannot separate "the engines behave differently" from "my
+    reconstructed observation makes the policy behave differently". Feeding the
+    sim's own orders to the server removes the observation from the loop: if the
+    server champion STILL never reaches lane, it is the engine.
+
+    MOVE carries world coordinates and CAST carries a slot, so both replay
+    exactly. ATTACK carries a sim UNIT INDEX, which has no meaning on the
+    server -- those are dropped and counted, never guessed at. They are 3.4% of
+    the sim's orders, so the replay is a test of movement and casting, which is
+    what is in question. Beyond the first death the trajectories are no longer
+    comparable at all; read the walk-to-lane window.
+    """
+    orders = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    i = 0
+
+    def drive(frame: dict) -> dict:
+        nonlocal i
+        if i >= len(orders):
+            counts["noop"] = counts.get("noop", 0) + 1
+            return {"t": "noop"}
+        o = orders[i]
+        i += 1
+        wire = order_to_wire(int(o["kind"]), o["x"], o["y"], -1, np.zeros(0))
+        if int(o["kind"]) == OrderKind.ATTACK:
+            counts["attack_dropped"] = counts.get("attack_dropped", 0) + 1
+        counts[wire["t"]] = counts.get(wire["t"], 0) + 1
+        return wire
+
+    drive.counts = counts
+    drive.rebuilder = None
+    return drive
+
+
 def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
                deterministic: bool, red: str, bot_config=None,
-               log_dir: Path, server_dir=None) -> list[dict]:
+               log_dir: Path, server_dir=None, trace_every_s: float = 0.0,
+               replay: Path | None = None) -> list[dict]:
     """`n` episodes in `n` FRESH server processes, all stepped in lockstep.
 
     Parallel because the servers are independent processes and the policy step
@@ -453,8 +538,12 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
     )
     env = VecLaneEnv(n, spec=spec, log_dir=log_dir, step_timeout_s=180.0,
                      auto_restart=False)
-    drivers = [make_driver(policy, params, deterministic=deterministic,
-                           seed=seed + i) for i in range(n)]
+    drivers = [
+        replay_driver(replay, {"cast": 0, "attack": 0, "move": 0, "noop": 0,
+                               "recall": 0, "level": 0})
+        if replay is not None else
+        make_driver(policy, params, deterministic=deterministic, seed=seed + i)
+        for i in range(n)]
     rows = [{"episode": i} for i in range(n)]
     res = env.start()
     try:
@@ -465,7 +554,16 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
             rows[i]["booted"] = bool(res.alive[i])
         track = [{"path": 0.0, "prev": None, "hp_lost": 0.0, "prev_hp": None,
                   "deaths": 0, "was_alive": True, "seen": set(), "died": set(),
-                  "alive_prev": set()} for _ in range(n)]
+                  "alive_prev": set(), "trace": [], "next_trace": 0.0,
+                  "spins": 0, "prev_cd2": 0.0}
+                 for _ in range(n)]
+        # WHERE the champion was, sampled on a clock. A policy that never
+        # leaves the fountain and one that farms both score 0 deaths and a
+        # plausible-looking gold total; only the movement stats tell them apart,
+        # which is the spike eval's own argument for recording them. Lane
+        # fraction is the sim's `lane_dist` seen from the other side: 0.0 is
+        # blue's outer turret, 1.0 is red's, and the waves meet at ~0.5.
+        lane = LanerlLane()          # TOP_LANE_DEFAULT
         last = list(res.obs)
         while True:
             live = [i for i in range(n) if env.alive[i] and last[i] is not None
@@ -509,6 +607,35 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
                 if t["was_alive"] and not alive:
                     t["deaths"] += 1
                 t["was_alive"] = alive
+                cd2 = float(b.get("cd2") or 0.0)
+                if cd2 > t["prev_cd2"] + 1.0:
+                    t["spins"] += 1
+                t["prev_cd2"] = cd2
+                if trace_every_s:
+                    tsec = int(o.get("t", 0)) / 1000.0
+                    if tsec >= t["next_trace"]:
+                        t["next_trace"] = tsec + trace_every_s
+                        t["trace"].append({
+                            "t_s": round(tsec, 1),
+                            # `along_of` is distance ALONG the lane in game
+                            # units; divided by the polyline length it is the
+                            # 0..1 fraction the gate-3 work quotes.
+                            "lane": round(lane.along_of((b["x"], b["y"]))
+                                          / lane.length, 3),
+                            "off": round(lane.distance_to((b["x"], b["y"]))),
+                            "cs": b.get("cs"), "gold": b.get("gold"),
+                            "lvl": b.get("lvl"),
+                            "hp": round(100.0 * hp / max(1.0, float(b.get("mhp", 1)))),
+                            # Every rising edge of cd2 is one Garen E spin that
+                            # ACTUALLY started -- a refused cast leaves it
+                            # counting down. This is how "the policy pressed E
+                            # 8,325 times" becomes "N spins landed", which is
+                            # the only version of the number that can be
+                            # compared across engines.
+                            "spins": t["spins"],
+                            "sl": b.get("sl"),
+                            "cds": [b.get(f"cd{j}") for j in range(4)],
+                        })
         for i in range(n):
             o, t = last[i], track[i]
             champs = {u["tm"]: u for u in (o or {}).get("u", [])
@@ -528,7 +655,10 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
                 # Non-zero means the buff deviation in the module docstring was
                 # LIVE for this episode; zero means it was inert.
                 casts=drivers[i].counts.get("cast", 0),
-                minions_dropped=drivers[i].rebuilder.dropped_minions,
+                spins=t["spins"],
+                minions_dropped=(drivers[i].rebuilder.dropped_minions
+                                 if drivers[i].rebuilder is not None else 0),
+                trace=t["trace"],
             )
     finally:
         env.close()
@@ -676,13 +806,29 @@ def main() -> int:
     ap.add_argument("--server-dir", type=Path, default=None)
     ap.add_argument("--log-dir", type=Path, default=None)
     ap.add_argument("--out", default="")
+    ap.add_argument("--trace-every-s", type=float, default=0.0,
+                    help="sample lane position / CS / gold / spell ranks every N "
+                         "game-seconds and print the timeline. 'never left the "
+                         "fountain' and 'farmed badly' look identical in the "
+                         "summary row and completely different here.")
+    ap.add_argument("--replay", type=Path, default=None,
+                    help="JSONL of recorded sim orders to send OPEN-LOOP, "
+                         "ignoring the policy and the server's observations. "
+                         "The isolation that separates an engine difference "
+                         "from an observation difference.")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.replay is not None and not a.checkpoint:
+        # The replay supplies every order, so no network is consulted; a fresh
+        # one is built only because `load_params` returns the module too.
+        a.checkpoint = "random"
     if not a.checkpoint:
-        ap.error("--checkpoint is required (or pass --selftest)")
+        ap.error("--checkpoint is required (or pass --selftest or --replay)")
 
     policy, params, label = load_params(a.checkpoint)
+    if a.replay is not None:
+        label = f"replay:{a.replay.name}"
     log_dir = a.log_dir or Path(tempfile.mkdtemp(prefix="rl_eval_vs_server_"))
     par = a.parallel or a.episodes
     print(f"{label}: {a.episodes} episodes vs red={a.red}, {par} servers at a "
@@ -695,7 +841,8 @@ def main() -> int:
         batch = play_batch(policy, params, n=k, max_game_ms=a.max_game_ms,
                            seed=a.seed + done, deterministic=a.deterministic,
                            red=a.red, bot_config=a.bot_config,
-                           log_dir=log_dir, server_dir=a.server_dir)
+                           log_dir=log_dir, server_dir=a.server_dir,
+                           trace_every_s=a.trace_every_s, replay=a.replay)
         for r in batch:
             r["episode"] = done
             done += 1
@@ -704,7 +851,11 @@ def main() -> int:
                   + (f"conv={r['conversion']:.0f}% " if r['conversion'] else "")
                   + f"gold={r['blue_gold']} lvl={r['blue_lvl']} "
                   f"deaths={r['deaths']} dist={r['distance']} "
-                  f"acts={r['actions']}", flush=True)
+                  f"spins={r['spins']} acts={r['actions']}", flush=True)
+            for tr in (r.get("trace") or []):
+                print(f"      t={tr['t_s']:>6.0f}s lane={tr['lane']:+.3f} "
+                      f"off={tr['off']:>6} cs={tr['cs']:>3} gold={tr['gold']:>5} "
+                      f"lvl={tr['lvl']} hp={tr['hp']:>3}% sl={tr['sl']}")
         rows += batch
 
     # Before the mean, not after. The whole output is one number, and a number
