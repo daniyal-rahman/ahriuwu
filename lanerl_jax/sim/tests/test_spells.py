@@ -30,22 +30,16 @@ from lanerl_jax.sim.spells import (
     E_RADIUS,
     E_TICK_MS,
     Q_BUFF_DURATION,
-    Q_BUFF_SLOT,
     Q_COOLDOWN,
-    Q_HASTE_BUFF_SLOT,
     R_BASE_PER_RANK,
     R_CAST_TIME_S,
     R_CAST_RANGE,
     R_COOLDOWNS,
     R_MISSING_HP_FRAC,
-    R_PENDING_BUFF_SLOT,
-    W_BUFF_SLOT,
     W_COOLDOWNS,
     W_DAMAGE_MULT,
     W_PASSIVE_ARMOR_PCT,
-    W_PASSIVE_BUFF_SLOT,
     W_PASSIVE_MR_PCT,
-    BuffId,
     Slot,
     e_damage_at_rank,
     q_damage_at_rank,
@@ -179,6 +173,14 @@ def _at_level(s, patch, level):
     return s.replace(xp=s.xp.at[0].set(float(patch.xp_for_level(level)) + 1.0))
 
 
+def _set_buff(s, rec, field, unit, value):
+    """``s`` with ``s.buffs.<rec>.<field>[unit] = value``."""
+    r = getattr(s.buffs, rec)
+    arr = getattr(r, field)
+    return s.replace(buffs=s.buffs.replace(
+        **{rec: r.replace(**{field: arr.at[unit].set(value)})}))
+
+
 def _step_buffs_from(s, params, **overrides):
     """Call :func:`step_buffs` directly against fixture ``s``, bypassing
     ``tick()``/``step_decision`` entirely.
@@ -191,8 +193,7 @@ def _step_buffs_from(s, params, **overrides):
     through the whole tick pipeline for no extra fidelity.
     """
     kwargs = dict(
-        buff_id=s.buff_id, buff_elapsed=s.buff_elapsed,
-        buff_duration=s.buff_duration, buff_power=s.buff_power,
+        buffs=s.buffs,
         spell_cooldown=s.spell_cooldown, spell_level=s.spell_level,
         x=s.x, y=s.y, kind=s.kind, team=s.team, alive=s.alive,
         armor=params["armor"][s.model],
@@ -214,8 +215,10 @@ def test_damage_formula_matches_the_buff_script():
 
 def test_casting_starts_the_spin():
     s = _cast_e(_lane_with_minions())
-    assert int(s.buff_id[0, 0]) == BuffId.GAREN_E
-    assert float(s.buff_duration[0, 0]) == pytest.approx(E_DURATION_S)
+    assert bool(s.buffs.e.active[0])
+    assert float(s.buffs.e.elapsed_s[0]) == 0.0
+    # primed to the server's `TimeSinceLastTick = 500`: fires on first update
+    assert float(s.buffs.e.tick_acc_ms[0]) == E_TICK_MS
 
 
 def test_spinning_damages_nearby_enemies():
@@ -305,8 +308,8 @@ def test_the_cooldown_starts_when_the_spin_ENDS():
 def test_e_cannot_be_recast_while_on_cooldown():
     s = _run(_cast_e(_lane_with_minions()),
              int(E_DURATION_S * DECISIONS_PER_S) + 10)
-    assert int(s.buff_id[0, 0]) == BuffId.NONE
-    assert int(_cast_e(s).buff_id[0, 0]) == BuffId.NONE
+    assert not bool(s.buffs.e.active[0])
+    assert not bool(_cast_e(s).buffs.e.active[0])
 
 
 def test_an_unlearned_e_does_nothing_here():
@@ -315,7 +318,7 @@ def test_an_unlearned_e_does_nothing_here():
     The sim gates on rank instead, so a masking bug upstream fails loudly rather
     than silently handing out a free spell."""
     s = _lane_with_minions(e_rank=0)
-    assert int(_cast_e(s).buff_id[0, 0]) == BuffId.NONE
+    assert not bool(_cast_e(s).buffs.e.active[0])
 
 
 def test_turrets_are_immune_to_the_spin():
@@ -446,10 +449,12 @@ def test_casting_q_opens_the_empowerment_and_haste_windows():
     s = _lane_with_minions(e_rank=0)
     s = s.replace(spell_level=s.spell_level.at[0, Slot.Q].set(1))
     s = _cast_q(s)
-    assert int(s.buff_id[0, Q_BUFF_SLOT]) == BuffId.GAREN_Q
-    assert int(s.buff_id[0, Q_HASTE_BUFF_SLOT]) == BuffId.GAREN_Q_HASTE
-    assert float(s.buff_duration[0, Q_BUFF_SLOT]) == pytest.approx(Q_BUFF_DURATION)
-    assert float(s.buff_duration[0, Q_HASTE_BUFF_SLOT]) == pytest.approx(1.5)
+    assert bool(s.buffs.q.active[0]) and bool(s.buffs.q.skip_next[0])
+    assert bool(s.buffs.q_haste.active[0])
+    assert Q_BUFF_DURATION == 4.5
+    # the haste lasts by the rank it was cast at: 1.5 s at rank 1
+    assert int(s.buffs.q_haste.rank[0]) == 1
+    assert float(q_haste_duration_at_rank(s.buffs.q_haste.rank[0])) == pytest.approx(1.5)
     # Q.cs:85 -- `spell.SetCooldown(0)` overwrites the engine's default
     # cast-time cooldown in the same event; the real 8s starts only when the
     # window closes (see the timing test below).
@@ -489,7 +494,7 @@ def test_e_snapshots_level_scaled_ad_when_params_are_supplied():
         params["attack_damage"][s.model[0]]
         + params["ad_per_level"][s.model[0]] * growth_sum(jnp.int8(6), jnp))
     expected = 10.0 + expected_ad * 0.35
-    assert float(s.buff_power[0, 0]) == pytest.approx(float(expected), abs=1e-4)
+    assert float(s.buffs.e.power[0]) == pytest.approx(float(expected), abs=1e-4)
 
 
 def test_e_first_buff_update_hits_immediately():
@@ -519,15 +524,15 @@ def test_q_cannot_be_recast_while_the_window_is_open():
     s = _lane_with_minions(e_rank=0)
     s = s.replace(spell_level=s.spell_level.at[0, Slot.Q].set(1))
     s = _cast_q(s)
-    s = s.replace(buff_elapsed=s.buff_elapsed.at[0, Q_BUFF_SLOT].set(2.0))
+    s = _set_buff(s, "q", "elapsed_s", 0, 2.0)
     s2 = _cast_q(s)
-    assert float(s2.buff_elapsed[0, Q_BUFF_SLOT]) == pytest.approx(2.0), \
+    assert float(s2.buffs.q.elapsed_s[0]) == pytest.approx(2.0), \
         "a recast while the window is open must not refresh it"
 
 
 def test_an_unlearned_q_does_nothing():
     s = _lane_with_minions(e_rank=0)
-    assert int(_cast_q(s).buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(_cast_q(s).buffs.q.active[0])
 
 
 def test_qs_cooldown_starts_when_the_window_closes_not_at_cast():
@@ -592,7 +597,7 @@ def test_q_skips_once_then_lands_the_replacement_auto_damage():
     expected = float(q_damage_at_rank(jnp.int32(1), jnp.float32(ad_l2)))
     assert hit == pytest.approx(expected, abs=0.05)
     assert float(s.silenced_ms[2]) == pytest.approx(1500.0, abs=40.0)
-    assert int(s.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(s.buffs.q.active[0])
     assert float(s.spell_cooldown[0, Slot.Q]) > Q_COOLDOWN - 1.0
 
 
@@ -627,15 +632,16 @@ def test_casting_w_opens_the_window_and_sets_the_cooldown_immediately():
     s = _lane_with_minions(e_rank=0)
     s = s.replace(spell_level=s.spell_level.at[0, Slot.W].set(3))
     s = _cast_w(s)
-    assert int(s.buff_id[0, W_BUFF_SLOT]) == BuffId.GAREN_W
-    assert float(s.buff_duration[0, W_BUFF_SLOT]) == pytest.approx(4.0)  # 2+3-1
+    assert bool(s.buffs.w.active[0])
+    assert int(s.buffs.w.rank[0]) == 3
+    assert float(w_duration_at_rank(s.buffs.w.rank[0])) == pytest.approx(4.0)  # 2+3-1
     assert float(s.spell_cooldown[0, Slot.W]) == pytest.approx(W_COOLDOWNS[2])
 
 
 def test_an_unlearned_w_does_nothing():
     s = _lane_with_minions(e_rank=0)
     out = _cast_w(s)
-    assert int(out.buff_id[0, W_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(out.buffs.w.active[0])
     assert float(out.spell_cooldown[0, Slot.W]) == pytest.approx(0.0)
 
 
@@ -646,10 +652,10 @@ def test_ws_active_damage_reduction_never_reaches_hp_bug_compat():
     subtraction (and lifesteal) never see the 0.7x, only a cosmetic
     damage-number packet does. So ``damage_multiplier`` must be
     unconditionally 1.0, **including while the window is genuinely open**
-    (checked via ``buff_id`` below, independent of the multiplier) --
+    (checked via ``buffs.w.active`` below, independent of the multiplier) --
     reproducing the server's bug rather than the intended mechanic this sim
     used to implement. Also checks the window still genuinely opens and
-    expires on schedule (``buff_id``/``buff_elapsed``, unaffected by this
+    expires on schedule (``buffs.w``, unaffected by this
     fix), the same boundary E's and Q's cooldown tests check.
     """
     patch = load_patch()
@@ -658,20 +664,16 @@ def test_ws_active_damage_reduction_never_reaches_hp_bug_compat():
     s = s.replace(spell_level=s.spell_level.at[0, Slot.W].set(1))  # 2s window
     s = _cast_w(s)
     bs = _step_buffs_from(s, params)
-    assert int(s.buff_id[0, W_BUFF_SLOT]) == BuffId.GAREN_W, \
-        "the window is genuinely open"
+    assert bool(s.buffs.w.active[0]), "the window is genuinely open"
     assert float(bs.damage_multiplier[0]) == pytest.approx(1.0), \
         "no real damage reduction even while W is active -- see the docstring"
     assert float(bs.damage_multiplier[1]) == pytest.approx(1.0)
 
-    s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed,
-                 spell_cooldown=bs.spell_cooldown)
+    s = s.replace(buffs=bs.buffs, spell_cooldown=bs.spell_cooldown)
     for _ in range(int(2.5 * 60)):      # 2.5s of 60Hz ticks, past the 2s window
         bs = _step_buffs_from(s, params)
-        s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed,
-                      spell_cooldown=bs.spell_cooldown)
-    assert int(s.buff_id[0, W_BUFF_SLOT]) == BuffId.NONE, \
-        "the window still genuinely expires"
+        s = s.replace(buffs=bs.buffs, spell_cooldown=bs.spell_cooldown)
+    assert not bool(s.buffs.w.active[0]), "the window still genuinely expires"
     assert float(bs.damage_multiplier[0]) == pytest.approx(1.0)
 
 
@@ -697,12 +699,12 @@ def test_garenwpassive_is_granted_once_on_rank_up_and_is_permanent():
 
     for _ in range(120):    # unranked and never cast: must stay ungranted
         bs = _step_buffs_from(s, params)
-        s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed)
-    assert int(s.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.NONE
+        s = s.replace(buffs=bs.buffs)
+    assert not bool(s.buffs.w_passive[0])
 
     s = s.replace(spell_level=s.spell_level.at[0, Slot.W].set(1))  # rank-up, no cast
     bs = _step_buffs_from(s, params)
-    assert int(bs.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
+    assert bool(bs.buffs.w_passive[0])
     # The raw `PercentBaseBonus`/`PercentBonus` pair the server writes
     # (`GarenWPassive.cs:34-37`) -- NOT a single +20% multiplier, see
     # `spells.py`'s W-passive citation for why these compose around
@@ -711,12 +713,12 @@ def test_garenwpassive_is_granted_once_on_rank_up_and_is_permanent():
     assert float(bs.armor_percent_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
     assert float(bs.mr_percent_base_bonus[0]) == pytest.approx(-W_PASSIVE_MR_PCT)
     assert float(bs.mr_percent_bonus[0]) == pytest.approx(W_PASSIVE_MR_PCT)
-    s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed)
+    s = s.replace(buffs=bs.buffs)
 
     for _ in range(600):    # permanent: survives an arbitrarily long stretch
         bs = _step_buffs_from(s, params)
-        s = s.replace(buff_id=bs.buff_id, buff_elapsed=bs.buff_elapsed)
-    assert int(s.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
+        s = s.replace(buffs=bs.buffs)
+    assert bool(s.buffs.w_passive[0])
     assert float(bs.armor_percent_bonus[0]) == pytest.approx(W_PASSIVE_ARMOR_PCT)
 
 
@@ -736,7 +738,7 @@ def test_w_passive_is_committed_on_the_same_tick_as_xp_rank_up():
     s = step(s)
 
     assert int(s.spell_level[0, Slot.W]) == 1
-    assert int(s.buff_id[0, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
+    assert bool(s.buffs.w_passive[0])
 
 
 def test_w_passive_composes_via_stat_total_through_a_real_autoattack():
@@ -836,11 +838,9 @@ def test_r_can_only_target_the_enemy_champion():
     """
     s = _lane_for_r()
     minion_idx = 2       # first red minion from _lane_with_minions
-    assert int(_cast_r(s, 0, minion_idx).buff_id[minion_idx, R_PENDING_BUFF_SLOT]) \
-        == BuffId.NONE
-    assert int(_cast_r(s, 0, 0).buff_id[0, R_PENDING_BUFF_SLOT]) == BuffId.NONE
-    assert int(_cast_r(s, 0, 1).buff_id[1, R_PENDING_BUFF_SLOT]) \
-        == BuffId.GAREN_R_PENDING
+    assert not bool(_cast_r(s, 0, minion_idx).buffs.r_pending.active[minion_idx])
+    assert not bool(_cast_r(s, 0, 0).buffs.r_pending.active[0])
+    assert bool(_cast_r(s, 0, 1).buffs.r_pending.active[1])
 
 
 def test_r_rejects_an_already_dead_enemy_before_starting_its_cast():
@@ -851,7 +851,7 @@ def test_r_rejects_an_already_dead_enemy_before_starting_its_cast():
     s = _lane_for_r()
     s = s.replace(alive=s.alive.at[1].set(False))
     out = _cast_r(s, caster=0, target=1)
-    assert int(out.buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(out.buffs.r_pending.active[1])
     assert float(out.r_cast_ms[0]) == pytest.approx(0.0)
 
 
@@ -862,15 +862,14 @@ def test_r_respects_cast_range():
     same way a client would refuse to send the order out of range.
     """
     s_far = _lane_for_r(dist=R_CAST_RANGE + 50.0)
-    assert int(_cast_r(s_far, 0, 1).buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(_cast_r(s_far, 0, 1).buffs.r_pending.active[1])
     s_near = _lane_for_r(dist=R_CAST_RANGE - 50.0)
-    assert int(_cast_r(s_near, 0, 1).buff_id[1, R_PENDING_BUFF_SLOT]) \
-        == BuffId.GAREN_R_PENDING
+    assert bool(_cast_r(s_near, 0, 1).buffs.r_pending.active[1])
 
 
 def test_an_unlearned_r_does_nothing():
     s = _lane_for_r(r_rank=0)
-    assert int(_cast_r(s, 0, 1).buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(_cast_r(s, 0, 1).buffs.r_pending.active[1])
 
 
 def test_rs_damage_is_magical_not_physical():
@@ -886,7 +885,8 @@ def test_rs_damage_is_magical_not_physical():
     params = lane_params(patch)
     s = _lane_for_r()
     s = _cast_r(s, caster=0, target=1)
-    assert int(s.buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.GAREN_R_PENDING
+    assert bool(s.buffs.r_pending.active[1])
+    assert int(s.buffs.r_pending.rank[1]) == 1, "the CASTER's rank"
 
     armor = params["armor"][s.model]
     magic_resist = params["magic_resist"][s.model]
@@ -896,8 +896,8 @@ def test_rs_damage_is_magical_not_physical():
     # target's health when the engine's 0.435-second cast timer completes.
     bs = _step_buffs_from(s, params, armor=armor, magic_resist=magic_resist)
     assert float(bs.damage_dealt[1]) == pytest.approx(0.0)
-    s = s.replace(buff_elapsed=bs.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(
-        R_CAST_TIME_S))
+    s = _set_buff(s.replace(buffs=bs.buffs), "r_pending", "elapsed_s", 1,
+                  R_CAST_TIME_S)
     bs = _step_buffs_from(s, params, armor=armor, magic_resist=magic_resist)
 
     missing = float(s.max_hp[1] - s.hp[1])
@@ -918,8 +918,7 @@ def test_r_falls_back_to_armor_only_when_magic_resist_is_not_supplied():
     s = _lane_for_r()
     s = _cast_r(s, caster=0, target=1)
     armor = params["armor"][s.model]
-    s = s.replace(buff_elapsed=s.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(
-        R_CAST_TIME_S))
+    s = _set_buff(s, "r_pending", "elapsed_s", 1, R_CAST_TIME_S)
     bs = _step_buffs_from(s, params, magic_resist=None)
     raw = float(r_damage_at_rank(
         jnp.int32(1), jnp.float32(float(s.max_hp[1] - s.hp[1]))))
@@ -941,13 +940,11 @@ def test_rs_cooldown_starts_when_its_noninstant_cast_finishes():
     assert int(s.spell_level[0, Slot.R]) == 1
     s = _cast_r(s, caster=0, target=1)
     assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(0.0)
-    assert int(_cast_r(s, caster=0, target=1).buff_id[1, R_PENDING_BUFF_SLOT]) \
-        == BuffId.GAREN_R_PENDING
+    assert bool(_cast_r(s, caster=0, target=1).buffs.r_pending.active[1])
 
     # Place the pending R just before its final cast-timer decrement, then
     # execute exactly one buff update. At finish the normal cooldown begins.
-    s = s.replace(buff_elapsed=s.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(
-        R_CAST_TIME_S))
+    s = _set_buff(s, "r_pending", "elapsed_s", 1, R_CAST_TIME_S)
     bs = _step_buffs_from(s, params)
     assert float(bs.spell_cooldown[0, Slot.R]) == pytest.approx(R_COOLDOWNS[0])
 
@@ -988,13 +985,11 @@ def test_r_windup_locks_orders_then_finishes_hold_and_delayed_hit():
         x=jnp.zeros(2), y=jnp.zeros(2), target=jnp.asarray([1, -1], jnp.int8)), _PARAMS)
     assert int(blocked_attack.target[0]) == -1
     blocked_q = _cast_q(s)
-    assert int(blocked_q.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(blocked_q.buffs.q.active[0])
 
     # Complete both fixed-shape timer representations on one simulation tick.
-    s = s.replace(
-        r_cast_ms=s.r_cast_ms.at[0].set(1.0),
-        buff_elapsed=s.buff_elapsed.at[1, R_PENDING_BUFF_SLOT].set(R_CAST_TIME_S),
-    )
+    s = _set_buff(s.replace(r_cast_ms=s.r_cast_ms.at[0].set(1.0)),
+                  "r_pending", "elapsed_s", 1, R_CAST_TIME_S)
     hp_before = float(s.hp[1])
     s = tick(s, params)
     assert float(s.r_cast_ms[0]) == pytest.approx(0.0)
@@ -1015,22 +1010,103 @@ def test_r_cast_cancels_on_caster_death_without_starting_cooldown():
     assert not bool(s.alive[0])
     assert float(s.r_cast_ms[0]) == pytest.approx(0.0)
     s = tick(s, params)       # target mailbox observes dead caster and cancels
-    assert int(s.buff_id[1, R_PENDING_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(s.buffs.r_pending.active[1])
     assert float(s.spell_cooldown[0, Slot.R]) == pytest.approx(0.0)
 
 
-def test_death_clears_owner_q_empowerment_and_haste():
-    """A dead Garen must not resume Q/haste after respawn."""
-    params = lane_params(load_patch())
+def test_death_does_not_reset_q_it_runs_out_on_the_corpse_and_starts_its_cooldown():
+    """`SPELL-006`. Nothing on the server removes a buff on death:
+    `AttackableUnit.UpdateBuffs` keeps ticking a corpse's buffs, and neither
+    `Champion.Die` nor `Champion.Respawn` touches one. So a Q window open at
+    death runs out on the corpse and `GarenQ.OnDeactivate` starts the 8 s
+    cooldown on schedule. The sim used to wipe Q and its haste on death with
+    NO cooldown -- every death was a free Q reset.
+
+    Replaces `test_death_clears_owner_q_empowerment_and_haste`, which pinned
+    the wipe. Garen is at level 1 here, so his respawn timer (>= 10 s) is far
+    longer than the 4.5 s window: the window ends on the corpse.
+    """
+    step, params = _stepper()
     s = _lane_with_minions(n_minions=0, e_rank=0)
     s = s.replace(spell_level=s.spell_level.at[0, Slot.Q].set(1))
     s = _cast_q(s)
-    assert int(s.buff_id[0, Q_BUFF_SLOT]) == BuffId.GAREN_Q
+    assert bool(s.buffs.q.active[0])
     s = s.replace(hp=s.hp.at[0].set(0.0))
-    out = tick(s, params)
-    assert not bool(out.alive[0])
-    assert int(out.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
-    assert int(out.buff_id[0, Q_HASTE_BUFF_SLOT]) == BuffId.NONE
+    s = tick(s, params)
+    assert not bool(s.alive[0])
+    assert bool(s.buffs.q.active[0]), "death must not remove the Q window"
+    assert bool(s.buffs.q_haste.active[0]), "nor its haste"
+    assert float(s.spell_cooldown[0, Slot.Q]) == 0.0
+    ended_at = None
+    for k in range(int(Q_BUFF_DURATION * DECISIONS_PER_S) + 5):
+        s = step(s)
+        if ended_at is None and not bool(s.buffs.q.active[0]):
+            ended_at = k
+            cd_at_end = float(s.spell_cooldown[0, Slot.Q])
+    assert not bool(s.alive[0]), "the window must end on the corpse"
+    assert ended_at is not None, "a corpse's Q window never ended"
+    # 4.5 s after the cast, at 2 ticks per decision (+-1 decision)
+    assert abs(ended_at + 1 - Q_BUFF_DURATION * DECISIONS_PER_S) <= 1, ended_at
+    assert cd_at_end == pytest.approx(Q_COOLDOWN, abs=2.0 / 60.0), \
+        "the corpse's Q window ended without starting its cooldown"
+
+
+def test_a_corpse_keeps_its_spin_deals_its_damage_and_starts_the_cooldown():
+    """`SPELL-006`, E. The spin on a corpse runs its full 3 s, and
+    `GarenE.OnUpdate` has no `IsDead` check, so it keeps dealing its periodic
+    damage from where the corpse lies; `OnDeactivate` then starts the rank
+    cooldown. The sim used to wipe the spin on death, with no cooldown."""
+    step, params = _stepper()
+    s = _lane_with_minions(n_minions=1, dist=100.0, hp=10_000.0)
+    s = _cast_e(s)
+    s = s.replace(hp=s.hp.at[0].set(0.0))
+    s = tick(s, params)                         # dies; the spin's first tick
+    assert not bool(s.alive[0])
+    assert bool(s.buffs.e.active[0]), "death must not remove the spin"
+    hp_after_death = float(s.hp[2])
+    for _ in range(int(E_DURATION_S * DECISIONS_PER_S) + 5):
+        s = step(s)
+    assert not bool(s.alive[0])
+    assert not bool(s.buffs.e.active[0]), "the corpse's spin never expired"
+    assert float(s.hp[2]) < hp_after_death, "a corpse's spin dealt no damage"
+    per_tick = float(e_damage_at_rank(jnp.int32(1), jnp.float32(GAREN_AD_L1)))
+    # five more of the six ticks landed after the death tick's first one
+    assert hp_after_death - float(s.hp[2]) == pytest.approx(
+        5 * per_tick * E_MINION_MULTIPLIER, rel=0.02)
+    assert float(s.spell_cooldown[0, Slot.E]) == pytest.approx(
+        E_COOLDOWNS[0], abs=0.5), "the corpse's spin did not start its cooldown"
+
+
+def test_e_damage_on_a_champion_uses_the_w_passive_armor():
+    """`SPELL-007`. `TakeDamage` mitigates every hit against
+    `Stats.Armor.Total`, which includes `GarenWPassive`'s modifier -- for a
+    spin exactly as for an auto-attack. `step.py` computed the passive-adjusted
+    resists AFTER `step_buffs`, so E (and R) used the RAW armour of a champion
+    with W ranked. Checked through a real tick, against both candidates."""
+    from lanerl_jax.sim.combat import post_mitigation_damage, stat_total
+
+    params = lane_params(load_patch())
+    s = _lane_with_minions(n_minions=0)
+    # red Garen inside the spin, with W ranked: the passive is granted on the
+    # tick's first buff update, before any damage
+    s = s.replace(x=s.x.at[1].set(s.x[0] + 100.0), y=s.y.at[1].set(s.y[0]),
+                  spell_level=s.spell_level.at[1, Slot.W].set(1))
+    s = _cast_e(s)
+    power = float(s.buffs.e.power[0])
+    hp0 = float(s.hp[1])
+    s2 = tick(s, params)                        # the first spin tick fires
+    dealt = hp0 - float(s2.hp[1])
+    m = int(s.model[1])
+    g = float(growth_sum(s.level[1], jnp))
+    armor_now = float(params["armor"][m]) + float(params["armor_per_level"][m]) * g
+    flat = float(params["armor_flat_bonus"][m])
+    armor_eff = stat_total(armor_now - flat, 0.0, -W_PASSIVE_ARMOR_PCT, flat,
+                           W_PASSIVE_ARMOR_PCT)
+    want = float(post_mitigation_damage(power, armor_eff, np))
+    raw = float(post_mitigation_damage(power, armor_now, np))
+    assert want != pytest.approx(raw, abs=1e-3), "fixture cannot tell them apart"
+    assert dealt == pytest.approx(want, abs=1e-3)
+    assert bool(s2.buffs.w_passive[1])
 
 
 def test_e_recast_is_ignored_early_and_cancels_the_spin_after_one_second():
@@ -1054,55 +1130,52 @@ def test_e_recast_is_ignored_early_and_cancels_the_spin_after_one_second():
     """
     import jax.numpy as jnp
 
-    from lanerl_jax.sim.spells import (BuffId, E_BUFF_SLOT, E_CANCEL_MIN_S,
-                                       E_COOLDOWNS, E_DURATION_S, Slot, cast_e)
+    from lanerl_jax.sim.spells import (E_CANCEL_MIN_S, E_COOLDOWNS, Slot,
+                                       cast_e)
+    from lanerl_jax.sim.state import empty_buffs
 
     n = 2
-    z = lambda: jnp.zeros((n, 8), jnp.float32)          # noqa: E731
-    buff_id = jnp.zeros((n, 8), jnp.int8)
     cd0 = jnp.zeros((n, 4), jnp.float32)
     rank = jnp.ones((n,), jnp.int32)
     ad = jnp.full((n,), 78.0, jnp.float32)
     want = jnp.ones((n,), bool)
 
-    bid, bel, bdur, bpow, cd, started = cast_e(
-        buff_id, z(), z(), z(), cd0, want, rank, ad)
-    assert bool(started[0]) and int(bid[0, E_BUFF_SLOT]) == BuffId.GAREN_E
-    assert float(bdur[0, E_BUFF_SLOT]) == E_DURATION_S
+    def at_elapsed(b, t):
+        return b.replace(e=b.e.replace(elapsed_s=b.e.elapsed_s.at[:].set(t)))
+
+    b, cd, started = cast_e(empty_buffs(n), cd0, want, rank, ad)
+    assert bool(started[0]) and bool(b.e.active[0])
+    assert float(b.e.elapsed_s[0]) == 0.0
     assert float(cd[0, Slot.E]) == 0.0, "the cooldown must not start at cast"
 
     # (1) inside the cancel window: silently refused, and -- the exploit -- the
     # elapsed clock must NOT be reset, or the spin can never expire.
-    early = bel.at[:, E_BUFF_SLOT].set(E_CANCEL_MIN_S - 0.1)
-    bid1, bel1, _, _, cd1, started1 = cast_e(
-        bid, early, bdur, bpow, cd, want, rank, ad)
+    b1, cd1, started1 = cast_e(at_elapsed(b, E_CANCEL_MIN_S - 0.1), cd, want,
+                               rank, ad)
     assert not bool(started1[0])
-    assert int(bid1[0, E_BUFF_SLOT]) == BuffId.GAREN_E, "spin ended too early"
-    assert float(bel1[0, E_BUFF_SLOT]) == pytest.approx(E_CANCEL_MIN_S - 0.1), (
-        "the refused re-cast reset buff_elapsed -- the spin can never expire")
+    assert bool(b1.e.active[0]), "spin ended too early"
+    assert float(b1.e.elapsed_s[0]) == pytest.approx(E_CANCEL_MIN_S - 0.1), (
+        "the refused re-cast reset the elapsed clock -- the spin can never expire")
     assert float(cd1[0, Slot.E]) == 0.0
 
     # (2) at or past the window: the spin ends now and the FULL rank cooldown
     # starts, which is `GarenE.OnDeactivate`'s `SetCooldown(GetCooldown())`.
-    late = bel.at[:, E_BUFF_SLOT].set(E_CANCEL_MIN_S + 0.5)
-    bid2, bel2, _, _, cd2, started2 = cast_e(
-        bid, late, bdur, bpow, cd, want, rank, ad)
+    late = at_elapsed(b, E_CANCEL_MIN_S + 0.5)
+    b2, cd2, started2 = cast_e(late, cd, want, rank, ad)
     assert not bool(started2[0]), "a cancel must not report as a fresh cast"
-    assert int(bid2[0, E_BUFF_SLOT]) == BuffId.NONE, "the spin did not end"
-    assert float(bel2[0, E_BUFF_SLOT]) == 0.0
+    assert not bool(b2.e.active[0]), "the spin did not end"
+    assert float(b2.e.elapsed_s[0]) == 0.0
     assert float(cd2[0, Slot.E]) == pytest.approx(E_COOLDOWNS[0]), (
         "cancelling did not start the full rank cooldown")
 
-    # (3) the guard is not permanently disabling E: with the lane clear and the
+    # (3) the guard is not permanently disabling E: with the spin over and the
     # cooldown expired, E casts again.
-    _, _, _, _, _, started3 = cast_e(
-        bid.at[:, E_BUFF_SLOT].set(BuffId.NONE), bel2, bdur, bpow, cd0, want,
-        rank, ad)
+    _, _, started3 = cast_e(b2, cd0, want, rank, ad)
     assert bool(started3[0]), "E refused after the spin ended"
 
     # (4) rank selects the cooldown, so this is not a hardcoded 13.
     r3 = jnp.full((n,), 3, jnp.int32)
-    _, _, _, _, cd4, _ = cast_e(bid, late, bdur, bpow, cd, want, r3, ad)
+    _, cd4, _ = cast_e(late, cd, want, r3, ad)
     assert float(cd4[0, Slot.E]) == pytest.approx(E_COOLDOWNS[2])
 
 
@@ -1125,30 +1198,29 @@ def test_e_tick_schedule_drifts_like_the_server_accumulator():
     Driven through `step_buffs` directly, feeding its own outputs back, because
     the schedule is a property of the accumulator and nothing else.
     """
-    from lanerl_jax.sim.spells import (E_TICK_BUFF_SLOT, E_TICK_MS, cast_e,
-                                       step_buffs)
+    from lanerl_jax.sim.spells import E_TICK_MS, cast_e, step_buffs
+    from lanerl_jax.sim.state import empty_buffs
 
     n = 2
     delta_ms = 1000.0 / 60.0
-    z = lambda: jnp.zeros((n, 8), jnp.float32)          # noqa: E731
     x = jnp.asarray([0.0, 100.0], jnp.float32)
     y = jnp.zeros((n,), jnp.float32)
     kind = jnp.asarray([Kind.CHAMPION, Kind.LANE_MINION], jnp.int32)
     team = jnp.asarray([0, 1], jnp.int32)
     alive = jnp.ones((n,), bool)
 
-    bid, bel, bdur, bpow, cd, started = cast_e(
-        jnp.zeros((n, 8), jnp.int8), z(), z(), z(), jnp.zeros((n, 4), jnp.float32),
+    b, cd, started = cast_e(
+        empty_buffs(n), jnp.zeros((n, 4), jnp.float32),
         jnp.asarray([True, False]), jnp.ones((n,), jnp.int32),
         jnp.full((n,), GAREN_AD_L1, jnp.float32))
     assert bool(started[0])
-    assert float(bel[0, E_TICK_BUFF_SLOT]) == pytest.approx(E_TICK_MS), (
+    assert float(b.e.tick_acc_ms[0]) == pytest.approx(E_TICK_MS), (
         "cast_e did not prime the accumulator to the server's 500 ms")
 
     fire_times, t_s = [], 0.0
     for _ in range(int(4.0 * 60)):                 # a second past expiry
         bs = step_buffs(
-            buff_id=bid, buff_elapsed=bel, buff_duration=bdur, buff_power=bpow,
+            buffs=b,
             spell_cooldown=cd, spell_level=jnp.ones((n, 4), jnp.int32),
             x=x, y=y, kind=kind, team=team, alive=alive,
             armor=jnp.zeros((n,), jnp.float32),
@@ -1157,10 +1229,7 @@ def test_e_tick_schedule_drifts_like_the_server_accumulator():
         t_s += delta_ms / 1000.0
         if float(bs.damage_dealt[1]) > 0:
             fire_times.append(round(t_s, 4))
-        # `BuffStep` carries no `buff_duration` -- durations are set at cast
-        # and never change, so the cast-time value is carried through unchanged.
-        bid, bel, bpow, cd = (bs.buff_id, bs.buff_elapsed, bs.buff_power,
-                              bs.spell_cooldown)
+        b, cd = bs.buffs, bs.spell_cooldown
 
     assert len(fire_times) == 6, (
         f"{len(fire_times)} ticks, want 6: {fire_times}")

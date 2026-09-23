@@ -18,7 +18,7 @@ import pytest
 from lanerl_jax.sim.init import init_lane, lane_params
 from lanerl_jax.sim.local_pathing import LocalRouteStatus
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
-from lanerl_jax.sim.spells import Q_BUFF_SLOT, BuffId, Slot
+from lanerl_jax.sim.spells import Slot
 from lanerl_jax.sim.state import Kind, MoveOrder, Team, empty_state
 from lanerl_jax.sim.step import tick
 
@@ -90,7 +90,7 @@ def test_silence_blocks_spell_orders_but_not_movement():
         silenced_ms=s.silenced_ms.at[0].set(500.0),
         spell_level=s.spell_level.at[0, Slot.Q].set(1))
     blocked = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
-    assert int(blocked.buff_id[0, Q_BUFF_SLOT]) == BuffId.NONE
+    assert not bool(blocked.buffs.q.active[0])
 
     moved = apply_orders(s, _order(OrderKind.MOVE, x=50.0, y=75.0), _PARAMS)
     assert int(moved.move_order[0]) == MoveOrder.MOVE_TO

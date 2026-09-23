@@ -652,6 +652,11 @@ def spawn_minion(state: LaneState, team, profile, hp,
         route_status=setv(state.route_status, jnp.int8(0)),
         visible_to_enemy=setv(state.visible_to_enemy, False),
         respawn_ms=setv(state.respawn_ms, jnp.asarray(-1.0, state.x.dtype)),
+        # Every buff record's row: `empty_state`'s is all-zero / False. No
+        # buff a minion can carry exists in Garen's kit today, which is
+        # exactly why this must not rely on it (`STRUCT-001`).
+        buffs=jax.tree.map(lambda a: setv(a, jnp.zeros((), a.dtype)),
+                           state.buffs),
         # The (N, N) tables: the new unit's row AND every other unit's
         # column about it.
         ignore_until=jnp.where(

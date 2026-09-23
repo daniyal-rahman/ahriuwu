@@ -93,7 +93,7 @@ import jax.numpy as jnp
 from ..obs.fog import visible_to
 from .combat import growth_sum
 from .spells import (R_CAST_RANGE, R_CAST_TIME_S, Slot, cast_e, cast_q,
-                     cast_r, cast_w, enemy_champion_index)
+                     cast_r, cast_w, enemy_champion_index, status_of)
 from .state import Kind, LaneState, MoveOrder, Team
 
 __all__ = ["OrderKind", "Orders", "OBSERVED_CAST_SCREEN_RADIUS", "apply_orders"]
@@ -215,14 +215,21 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     oy = per_unit(orders.y.astype(state.y.dtype), 0)
     otgt = per_unit(orders.target.astype(jnp.int8), -1)
 
-    # Recall's windup is an ordinary non-instant cast: while `_castingSpell`
-    # is live the server refuses movement and every further spell cast.  The
-    # channel, by contrast, is cancellable by a successful ordinary cast.
-    can_cast = ((state.silenced_ms <= 0) & (state.recall_windup_ms <= 0)
-                & (state.r_cast_ms <= 0))
-    casting_e = champ & can_cast & (kind == OrderKind.CAST_E)
-    casting_q = champ & can_cast & (kind == OrderKind.CAST_Q)
-    casting_w = champ & can_cast & (kind == OrderKind.CAST_W)
+    # ONE availability rule (`spells.status`, `STRUCT-001`), the same one the
+    # observation's spell features read -- so the policy is told a spell is
+    # available exactly when pressing it does something. `may_cast` is the
+    # unit-level half: alive, not silenced, and no ordinary cast in progress
+    # (Recall's windup is an ordinary non-instant cast: while `_castingSpell`
+    # is live the server refuses movement and every further spell cast; R's
+    # windup likewise). The channel, by contrast, is cancellable by a
+    # successful ordinary cast. `can_cast` adds each spell's own rule: rank,
+    # cooldown, Q's open window, and E's cancel (a press on a spin at least
+    # `E_CANCEL_MIN_S` old ends it).
+    st = status_of(state)
+    can_cast = st.may_cast
+    casting_e = champ & st.can_cast[:, Slot.E] & (kind == OrderKind.CAST_E)
+    casting_q = champ & st.can_cast[:, Slot.Q] & (kind == OrderKind.CAST_Q)
+    casting_w = champ & st.can_cast[:, Slot.W] & (kind == OrderKind.CAST_W)
     # R's only legal target is the enemy champion (`GarenR.json` TextFlags --
     # see spells.cast_r's docstring), within CastRange. A minion/turret index,
     # an ally index, or an out-of-range enemy champion all fail this and the
@@ -238,7 +245,7 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     r_d2 = ((state.x - state.x[r_mirror]) ** 2
             + (state.y - state.y[r_mirror]) ** 2)
     r_in_range = r_d2 <= (R_CAST_RANGE * R_CAST_RANGE)
-    casting_r = (champ & can_cast & (kind == OrderKind.CAST_R)
+    casting_r = (champ & st.can_cast[:, Slot.R] & (kind == OrderKind.CAST_R)
                  & r_target_ok & r_in_range)
     # SetWaypoints fails while the pill is still winding up (`_castingSpell`),
     # exactly like a server Move packet that cannot pass CanChangeWaypoints.
@@ -299,22 +306,19 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     e_ad = (params["attack_damage"][state.model]
             + params["ad_per_level"][state.model]
             * growth_sum(state.level, jnp))
-    # `cast_e` DOES touch the cooldown now, and the comment that said otherwise
-    # was describing only one of E's three outcomes. A re-cast at >= 1 s ends
-    # the spin early and starts the full rank cooldown there and then; the
-    # natural 3 s expiry still starts it in `step_buffs`. See `cast_e`.
-    bid, bel, bdur, bpow, cd, cast_e_now = cast_e(
-        state.buff_id, state.buff_elapsed, state.buff_duration,
-        state.buff_power, state.spell_cooldown, casting_e,
+    # A press of E has three outcomes (start, cancel at >= 1 s, nothing); a
+    # cancel ends the spin through `end_e`, which starts the full rank
+    # cooldown there and then. The natural 3 s expiry does the same from
+    # `step_buffs`. See `cast_e`.
+    buffs, cd, cast_e_now = cast_e(
+        state.buffs, state.spell_cooldown, casting_e,
         state.spell_level[:, Slot.E], e_ad)
-
-    bid, bel, bdur, bpow, cd, cast_q_now = cast_q(
-        bid, bel, bdur, bpow, cd, casting_q, state.spell_level[:, Slot.Q])
-    bid, bel, bdur, bpow, cd, cast_w_now = cast_w(
-        bid, bel, bdur, bpow, cd, casting_w, state.spell_level[:, Slot.W])
-    bid, bel, bdur, bpow, cd, cast_r_now = cast_r(
-        bid, bel, bdur, bpow, cd, casting_r, state.spell_level[:, Slot.R],
-        state.hp, state.max_hp, otgt)
+    buffs, cd, cast_q_now = cast_q(
+        buffs, cd, casting_q, state.spell_level[:, Slot.Q])
+    buffs, cd, cast_w_now = cast_w(
+        buffs, cd, casting_w, state.spell_level[:, Slot.W])
+    buffs, cd, cast_r_now = cast_r(
+        buffs, cd, casting_r, state.spell_level[:, Slot.R], otgt)
 
     # `Spell.Cast` cancels an existing cancellable channel before it starts
     # the new cast.  Do this only for a spell that really became active; an
@@ -334,8 +338,7 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     reset_path = state.waypoints.at[:, 0].set(jnp.stack([state.x, state.y], -1))
 
     return state.replace(
-        buff_id=bid, buff_elapsed=bel, buff_duration=bdur, buff_power=bpow,
-        spell_cooldown=cd,
+        buffs=buffs, spell_cooldown=cd,
         observed_enemy_cast_ms=observed_enemy_cast_ms,
         # `GarenQ.OnActivate` calls `CancelAutoAttack(true)` before setting
         # `SkipNextAutoAttack()`.  R is likewise an ordinary non-instant spell
@@ -343,8 +346,8 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
         # becomes the owner's cast spell.  In either case a pending ordinary
         # swing is discarded and its cooldown reset; otherwise an already
         # started swing could deal damage during R's uncancellable cast lock.
-        # The Q skip bit itself is carried by its fixed buff lane and consumed
-        # by `step_autoattack` at the next swing gate.
+        # The Q skip bit itself is carried by the Q buff (`skip_next`) and
+        # consumed by `step_autoattack` at the next swing gate.
         aa_cooldown=jnp.where(cast_q_now | cast_r_now, 0.0, state.aa_cooldown),
         aa_windup=jnp.where(cast_q_now | cast_r_now, 0.0, state.aa_windup),
         is_attacking=jnp.where(cast_q_now | cast_r_now, False, state.is_attacking),

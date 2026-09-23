@@ -10,6 +10,7 @@ import copy
 from pathlib import Path
 from types import SimpleNamespace
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -20,7 +21,7 @@ from lanerl_jax.parity.trace import StatQ
 from lanerl_jax.sim.init import TOP_LANE_PATH, init_lane, lane_params, spawn_minion
 from lanerl_jax.sim.orders import OrderKind
 from lanerl_jax.sim.profiles import PROFILES
-from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, Slot
+from lanerl_jax.sim.spells import Slot
 from lanerl_jax.sim.state import Kind, Team
 
 REPO = Path(__file__).resolve().parents[3]
@@ -70,7 +71,8 @@ def _initial_numpy_state():
         row = PROFILES.index((Kind.LANE_MINION, 0, team))
         s = spawn_minion(s, team, row, params["max_hp"][row],
                          path[::-1] if team == Team.RED else path)
-    return SimpleNamespace(**{k: np.array(getattr(s, k)) for k in g._FETCH})
+    return SimpleNamespace(**{k: np.array(getattr(s, k)) for k in g._FETCH},
+                           buffs=jax.tree.map(np.array, s.buffs))
 
 
 class FakeEngine:
@@ -216,8 +218,8 @@ def test_counters_separate_spin_starts_ends_and_the_evals_double_count():
 
 def test_render_projects_e_cooldown_during_the_spin_and_keeps_dead_champions():
     st = _initial_numpy_state()
-    st.buff_id[0, E_BUFF_SLOT] = BuffId.GAREN_E
-    st.buff_elapsed[0, E_BUFF_SLOT] = 0.25
+    st.buffs.e.active[0] = True
+    st.buffs.e.elapsed_s[0] = 0.25
     st.spell_cooldown[0, Slot.E] = 0.0
     st.spell_level[0] = [0, 0, 1, 0]
     st.alive[1] = False

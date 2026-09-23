@@ -25,28 +25,29 @@ the reconstruction of that `LaneState` from the server's control-channel frame.
 That reconstruction is tractable because `build_observation` reads exactly
 seventeen state fields (`grep -o 'state\\.\\w*'`): x, y, team, kind, alive, hp,
 max_hp, model, level, gold, cs, t_ms, spell_level, spell_cooldown,
-recall_channel_ms, buff_id, observed_enemy_cast_ms. The control wire
+recall_channel_ms, buffs, observed_enemy_cast_ms. The control wire
 (`LanerlControl.BuildObservation`) already publishes all but the last two:
 position, hp/mhp, team, kind, minion subtype (`mt`), and for champions
 gold/xp/lvl/cs, spell ranks (`sl`), per-slot cooldowns (`cd0..cd3`) and the
 recall channel flag (`rc`).
 
-**The deviation, stated up front.** `buff_id` and `observed_enemy_cast_ms` are
+**The deviation, stated up front.** `buffs` and `observed_enemy_cast_ms` are
 not on the wire, so they stay at their empty-state values. Consequences, both
 bounded and both reported by this script:
 
-* `buff_id` feeds `has_w_passive` and the Q/E `cast_locked` flags. **E IS
+* `buffs` feeds `has_w_passive` and the Q/E `cast_locked` flags. **E IS
   recovered from the wire** (`OBS-01`, 2026-09-23): `E.cs` swaps slot 2 for
   `GarenECancel` with a 1 s cooldown for the length of the spin, so `cd2`
   reads ~1000 ms falling to 0 during the spin and then jumps to the full
   rank cooldown when the spin ends or is cancelled. A rising edge of `cd2`
   to <= 1.1 s is therefore a spin START and a rising edge above it a spin
-  END, and `StateRebuilder` sets `buff_id[E]`/`buff_elapsed` from that, so
-  the policy sees E locked for the spin exactly as in training. Before this
-  the reconstructed obs showed E READY from 1 s into every spin, and under
-  the server's rules a press then is a CANCEL: the spin ended after 2 of
-  its 6 ticks and the full cooldown started -- not "a wasted cast" as
-  this paragraph used to say. Q is NOT recoverable: `Q.cs` sets the
+  END, and `StateRebuilder` sets `buffs.e.active`/`elapsed_s` from that, so
+  the policy sees E exactly as in training: locked for the first
+  `E_CANCEL_MIN_S` of the spin, then AVAILABLE, because a press from 1.0 s on
+  is a CANCEL on both sides (`STRUCT-001` made the training observation say
+  so; it used to report E locked for the whole spin while the sim accepted
+  the cancel). Before `OBS-01` the reconstructed obs showed E READY from the
+  START of every spin. Q is NOT recoverable: `Q.cs` sets the
   cooldown to 0 for the window, so `cd0` reads 0 before, during and after
   the cast and only the window's END is visible (`SPELL-008`, `OBS-02`);
   the obs shows Q ready during its own window here and locked in
@@ -106,7 +107,6 @@ from lanerl_jax.parity.lanerl_lane import LanerlLane                  # noqa: E4
 from lanerl_jax.obs.frame import make_lane_frame                      # noqa: E402
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, lane_params         # noqa: E402
 from lanerl_jax.sim.orders import OrderKind                           # noqa: E402
-from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT                 # noqa: E402
 from lanerl_jax.sim.state import MI_SLICE, TU_SLICE, Kind, Team       # noqa: E402
 from lanerl_jax.train.trainer import BLUE_NEXUS                       # noqa: E402
 # The driver lives in ONE place (`PARITY-001`): the policy-divergence gate
@@ -460,11 +460,11 @@ def selftest() -> int:
            (4100, 8500, False, None), (4133, 8467, False, None)]
     for t, cd2, want_on, want_el in seq:
         s2, _ = rb2.rebuild(champ(t, cd2))
-        on = int(s2.buff_id[0, E_BUFF_SLOT]) == BuffId.GAREN_E
+        on = bool(s2.buffs.e.active[0])
         chk(on == want_on, f"E spin at t={t} cd2={cd2}: on={on} want {want_on}")
         if want_on:
-            chk(abs(float(s2.buff_elapsed[0, E_BUFF_SLOT]) - want_el) < 0.01,
-                f"E elapsed at t={t}: {float(s2.buff_elapsed[0, E_BUFF_SLOT])}")
+            chk(abs(float(s2.buffs.e.elapsed_s[0]) - want_el) < 0.01,
+                f"E elapsed at t={t}: {float(s2.buffs.e.elapsed_s[0])}")
 
     mi = {int(netid[i]): i for i in range(rb.n_units) if netid[i]}
     for nid, want in ((21, (0, Team.BLUE)), (22, (1, Team.RED)), (23, (2, Team.RED))):

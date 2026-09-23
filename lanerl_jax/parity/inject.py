@@ -154,8 +154,8 @@ from ..sim.combat import growth_sum
 from ..sim.init import CHAMPION_SPAWN, TOP_LANE_PATH
 from ..sim.movement_jax import TICK_MS
 from ..sim.spells import (
-    BuffId, E_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT, W_BUFF_SLOT,
-    W_PASSIVE_BUFF_SLOT,
+    BUFF_NAMES, E_DURATION_S, Q_BUFF_DURATION, Slot, q_haste_duration_at_rank,
+    w_duration_at_rank,
 )
 from ..sim.state import (
     CH_SLICE,
@@ -194,18 +194,50 @@ SERVER_TEAM_TO_ID = {100: Team.BLUE, 200: Team.RED, 300: Team.NEUTRAL}
 #: rather than silently mis-reconstructed.
 CORRIDOR_TOLERANCE = 8.0
 
-# The state dump prints names, while the simulator intentionally uses a small
-# fixed-width enum.  Only names whose identity is documented by the content
-# scripts are listed here.  In particular, GarenPassive/GarenPassiveHeal are
+# The state dump prints names; the simulator keeps one typed record per buff
+# kind (`sim.state.Buffs`, `STRUCT-001`) and `spells.BUFF_NAMES` maps one to
+# the other.  Only names whose identity is documented by the content scripts
+# are listed there.  In particular, GarenPassive/GarenPassiveHeal are
 # deliberately *not* aliases for a simulated buff: their timers are not on the
 # wire and their behaviour is represented elsewhere (regen.py).
-_DUMP_BUFF_TO_SIM = {
-    "GarenE": (BuffId.GAREN_E, E_BUFF_SLOT),
-    "GarenW": (BuffId.GAREN_W, W_BUFF_SLOT),
-    "GarenWPassive": (BuffId.GAREN_W_PASSIVE, W_PASSIVE_BUFF_SLOT),
-    "GarenQ": (BuffId.GAREN_Q, Q_BUFF_SLOT),
-    "GarenQHaste": (BuffId.GAREN_Q_HASTE, Q_HASTE_BUFF_SLOT),
-}
+_DUMP_BUFF_TO_SIM = BUFF_NAMES
+
+#: A rank-timed buff's spell slot: its duration is a function of the rank it
+#: was cast at, which the record carries instead of a duration.
+_RANKED_BUFF_SPELL = {"w": Slot.W, "q_haste": Slot.Q}
+
+
+def _buff_duration_s(field: str, rank: int) -> float:
+    """The sim's duration for buff record ``field`` cast at ``rank``."""
+    import jax.numpy as jnp
+    if field == "e":
+        return E_DURATION_S
+    if field == "q":
+        return Q_BUFF_DURATION
+    fn = w_duration_at_rank if field == "w" else q_haste_duration_at_rank
+    return float(fn(jnp.asarray(rank, jnp.int32)))
+
+
+def _rank_for_duration(field: str, duration_s: float) -> int:
+    """Invert ``_buff_duration_s`` for the rank-timed records: W lasts
+    ``rank + 1`` s, Q-haste ``1.5 + 0.75*(rank-1)`` s."""
+    if field == "w":
+        r = round(duration_s - 1.0)
+    else:
+        r = round((duration_s - 1.5) / 0.75 + 1.0)
+    return int(min(max(r, 1), 5))
+
+
+def _set_buff(buffs, field: str, i: int, *, elapsed_s: float, rank: int = 0):
+    """Mark buff ``field`` live on unit ``i`` in a numpy-leaved ``Buffs``."""
+    if field == "w_passive":
+        buffs.w_passive[i] = True
+        return
+    rec = getattr(buffs, field)
+    rec.active[i] = True
+    rec.elapsed_s[i] = elapsed_s
+    if hasattr(rec, "rank"):
+        rec.rank[i] = rank
 
 
 def xp_bounds_for_level(level: int, xp_curve) -> Tuple[float, Optional[float]]:
@@ -767,10 +799,9 @@ def inject_snapshot(
     has_auto_attacked = arr(s.has_auto_attacked)
     aa_cooldown = arr(s.aa_cooldown)
     aa_windup = arr(s.aa_windup)
-    buff_id = arr(s.buff_id)
-    buff_elapsed = arr(s.buff_elapsed)
-    buff_duration = arr(s.buff_duration)
-    buff_power = arr(s.buff_power)
+    # numpy copies of every buff record's arrays, same struct shape
+    import jax
+    buffs = jax.tree.map(arr, s.buffs)
     collision_x = arr(s.collision_x); collision_y = arr(s.collision_y)
     collision_present = arr(s.collision_present)
     spawn_x = arr(s.spawn_x); spawn_y = arr(s.spawn_y)
@@ -979,22 +1010,33 @@ def inject_snapshot(
     # ---- named buffs: identity can be recovered, timing cannot ------------
     # Buff.Update advances elapsed before applying its semantics.  For active
     # finite buffs the dump omits elapsed/duration/power, so do NOT invent a
-    # remaining duration or a cast-time damage snapshot.  A zero duration
-    # preserves the incoming ID for collision's pre-buff ghost check (E), then
-    # expires safely at the next buff update.  The permanent W passive needs no
-    # phase and is represented exactly.
+    # remaining duration or a cast-time damage snapshot.  The buff is placed
+    # AT ITS END (elapsed = its full duration): that preserves the incoming
+    # identity for collision's pre-buff ghost check (E), then expires safely
+    # at the next buff update -- what a zero duration did in the old lane
+    # table, where duration was state.  (A consequence of durations no longer
+    # being state, and of this phase being invented either way: an
+    # identity-only E now reads as past `E_CANCEL_MIN_S`, i.e. cancellable,
+    # where the zero-duration form read as 0 s into the spin.)  A rank-timed
+    # buff (W, Q-haste) takes the unit's current rank in that spell.  The
+    # permanent W passive needs no phase and is represented exactly.
     for note in report.notes:
         ent = note.entity
         if ent is None or ent.ai is None:
             continue
         known, unknown = [], []
         for name in ent.ai.buffs:
-            mapping = _DUMP_BUFF_TO_SIM.get(name)
-            if mapping is None:
+            bfield = _DUMP_BUFF_TO_SIM.get(name)
+            if bfield is None:
                 unknown.append(name)
                 continue
-            buff, bslot = mapping
-            buff_id[note.slot, bslot] = buff
+            rank = 0
+            if bfield in _RANKED_BUFF_SPELL:
+                rank = int(min(max(spell_level[note.slot,
+                                               _RANKED_BUFF_SPELL[bfield]], 1), 5))
+            _set_buff(buffs, bfield, note.slot, rank=rank,
+                      elapsed_s=(0.0 if bfield == "w_passive"
+                                 else _buff_duration_s(bfield, rank)))
             known.append(name)
         if known:
             finite = [b for b in known if b != "GarenWPassive"]
@@ -1033,32 +1075,43 @@ def inject_snapshot(
             note.position_recovery = "exact float32 bits from diagnostic stream"
         spawn_seq[slot] = creation_rank[internal.net_id]
         # `BUFF-001`: the buff PHASE, which the canonical row cannot carry.
-        # The identity-only pass above deliberately leaves duration at 0, and
-        # the consequence is not cosmetic: `spells.py` computes
-        # `e_expired = e_active & (e_elapsed >= buff_duration[e_slot])`, so a
-        # zero duration expires Garen E on the very tick it is injected.
-        # `suppress_attack` then goes false, and a champion the server has
-        # locked out of attacking for the rest of its 3.0 s spin swings in the
-        # simulator -- measured at 258 of 647 sim-fires-early rows, 40%, and
-        # previously charged to the simulator as a missing `CanAttack()` gate.
-        # With `aibuffs` the phase is exact, so restore it.
+        # The identity-only pass above places a finite buff at its END, and
+        # the consequence is not cosmetic: it expires Garen E on the very tick
+        # it is injected, `CanAttack` comes back, and a champion the server
+        # has locked out of attacking for the rest of its 3.0 s spin swings in
+        # the simulator -- measured at 258 of 647 sim-fires-early rows, 40%,
+        # and previously charged to the simulator as a missing `CanAttack()`
+        # gate. With `aibuffs` the phase is exact, so restore it. The dumped
+        # DURATION is not state in the sim (`STRUCT-001`): E's and Q's are
+        # constants, and W's and Q-haste's give back the rank they were cast
+        # at, which is what the record carries.
         #
-        # `buff_power` is still NOT restored: it is a cast-time damage
-        # snapshot and the dump does not publish it. Recovering phase while
-        # inventing power would trade a visible residual for an invisible one.
+        # E's damage snapshot (`buffs.e.power`) is still NOT restored: the
+        # dump does not publish it. Recovering phase while inventing power
+        # would trade a visible residual for an invisible one.
         if internal.buffs_phase is not None:
+            mismatched = []
             for bname, el_bits, du_bits in internal.buffs_phase:
-                mapping = _DUMP_BUFF_TO_SIM.get(bname)
-                if mapping is None:
+                bfield = _DUMP_BUFF_TO_SIM.get(bname)
+                if bfield is None:
                     continue
-                _bid, bslot = mapping
-                buff_id[slot, bslot] = _bid
-                buff_elapsed[slot, bslot] = np.asarray(
+                el = np.asarray(
                     np.uint32(el_bits & 0xFFFFFFFF)).view(np.float32).item()
-                buff_duration[slot, bslot] = np.asarray(
+                du = np.asarray(
                     np.uint32(du_bits & 0xFFFFFFFF)).view(np.float32).item()
+                rank = (_rank_for_duration(bfield, du)
+                        if bfield in _RANKED_BUFF_SPELL else 0)
+                if (bfield != "w_passive"
+                        and np.float32(_buff_duration_s(bfield, rank))
+                        != np.float32(du)):
+                    mismatched.append(f"{bname}={du}")
+                _set_buff(buffs, bfield, slot, rank=rank,
+                          elapsed_s=0.0 if bfield == "w_passive" else el)
             note.buff_recovery = (
                 "exact phase from diagnostic stream (power still unresolved)")
+            if mismatched:
+                note.buff_recovery += ("; dumped duration differs from the "
+                                       "sim's: " + "+".join(mismatched))
         target[slot] = id_to_slot.get(internal.target_net_id, -1)
         # `aa_cooldown`'s own grid recovery -- same mechanism as the wind-up
         # snap just below, see `snap_cooldown_to_tick_grid`'s docstring.
@@ -1371,10 +1424,9 @@ def inject_snapshot(
         has_auto_attacked=jnp.asarray(has_auto_attacked),
         aa_cooldown=jnp.asarray(aa_cooldown, dtype),
         aa_windup=jnp.asarray(aa_windup, dtype),
-        buff_id=jnp.asarray(buff_id),
-        buff_elapsed=jnp.asarray(buff_elapsed, dtype),
-        buff_duration=jnp.asarray(buff_duration, dtype),
-        buff_power=jnp.asarray(buff_power, dtype),
+        buffs=jax.tree.map(
+            lambda a: jnp.asarray(a, dtype if a.dtype.kind == "f" else a.dtype),
+            buffs),
         ai_timer=jnp.asarray(ai_timer, dtype),
         target_priority=jnp.asarray(target_priority),
         had_target=jnp.asarray(had_target, dtype=bool),

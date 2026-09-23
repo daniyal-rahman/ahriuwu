@@ -58,9 +58,8 @@ from lanerl_jax.data.patch import CONTENT_ROOT, load_patch
 from lanerl_jax.sim.init import init_lane, lane_params
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
 from lanerl_jax.sim.profiles import profile_id
-from lanerl_jax.sim.spells import (E_BUFF_SLOT, E_CANCEL_MIN_S, E_COOLDOWNS,
-                                   E_DURATION_S, RANKS_BY_LEVEL, BuffId,
-                                   Slot)
+from lanerl_jax.sim.spells import (E_CANCEL_MIN_S, E_COOLDOWNS,
+                                   E_DURATION_S, RANKS_BY_LEVEL, Slot)
 from lanerl_jax.sim.state import Kind, Team
 from lanerl_jax.sim.step import tick
 from lanerl_jax.sim.targeting import MinionType
@@ -127,7 +126,7 @@ def _arena(patch):
 
 
 def _snap(s):
-    return dict(e_on=s.buff_id[0, E_BUFF_SLOT] == BuffId.GAREN_E,
+    return dict(e_on=s.buffs.e.active[0],
                 cd_e=s.spell_cooldown[0, Slot.E],
                 level=s.level[0], alive=s.alive[0], rank_e=s.spell_level[0, Slot.E])
 

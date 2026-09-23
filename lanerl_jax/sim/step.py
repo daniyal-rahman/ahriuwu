@@ -57,12 +57,10 @@ from ..obs.fog import visible_to_enemy as _visible_to_enemy
 from .init import MINION_SPAWN, spawn_minion
 from .missiles import step_missiles
 from .profiles import PROFILES
-from .spells import (E_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT,
-                     Q_HASTE_MULTIPLIER,
-                     R_PENDING_BUFF_SLOT, W_PASSIVE_BUFF_SLOT,
-                     RANKS_BY_LEVEL, BuffId, Slot,
-                     consume_q_on_hit, q_damage_at_rank,
-                     q_silence_duration_at_rank, step_buffs)
+from .spells import (Q_HASTE_MULTIPLIER, RANKS_BY_LEVEL, Slot,
+                     consume_q_skip, end_q, grant_w_passive,
+                     q_damage_at_rank, q_silence_duration_at_rank, status,
+                     status_of, step_buffs, w_passive_modifiers)
 from .terrain_jax import map1_terrain, repair_collision_terrain_batch
 from .waves_jax import step_waves_jax
 from .minion_ai import LaneWaypointOut, advance_lane_waypoints, step_minion_ai
@@ -274,14 +272,11 @@ def tick(state: LaneState, params: UnitParams,
     # already run. Collision therefore sees the Ghosted flag as it stood at the
     # end of last tick. Garen's E sets `StatusFlags.Ghosted`, so a spinning
     # Garen passes through units instead of being shoved out of the wave.
-    # `E_BUFF_SLOT`, not `Slot.E`. `Slot.E` is 2 -- the SPELL slot -- while E's
-    # buff lives in buff lane `E_BUFF_SLOT` = 0. Lane 2 is `W_PASSIVE_BUFF_SLOT`
-    # and only ever holds `GAREN_W_PASSIVE` (3) or `NONE`, so this comparison
-    # was identically False and Garen NEVER ghosted while spinning. The sim was
-    # denying a real mechanic: spinning THROUGH a wave instead of being shoved
-    # out of it is a positioning tool the policy could never learn, and it
-    # biased every E-while-in-wave position. `obs/builder.py` had it right.
-    pre_ghosted = (state.buff_id[:, E_BUFF_SLOT] == BuffId.GAREN_E) & state.alive
+    # Read through `status` (`STRUCT-001`): this line used to index the buff
+    # lane table with `Slot.E` -- 2, the SPELL slot -- where E's buff lived in
+    # lane 0, so it compared the W-passive lane against GAREN_E, was
+    # identically False, and Garen NEVER ghosted while spinning (`SPELL-005`).
+    pre_ghosted = status_of(state).ghosted
     if enable_collision:
         cx, cy = resolve_collisions(state.x, state.y, state.kind, state.alive,
                                     state.spawn_seq, P("collision_radius"),
@@ -388,18 +383,18 @@ def tick(state: LaneState, params: UnitParams,
     # pre-move positions. That distinction only became real once collision
     # moved to the front of the tick: while collision ran last, pre-move and
     # post-collision were the same positions and this was harmless.
-    bs = step_buffs(
-        buff_id=state.buff_id, buff_elapsed=state.buff_elapsed,
-        buff_duration=state.buff_duration, buff_power=state.buff_power,
-        spell_cooldown=state.spell_cooldown, spell_level=state.spell_level,
-        x=state.x, y=state.y, kind=state.kind, team=state.team,
-        alive=state.alive, armor=armor_now,
-        magic_resist=magic_resist_now, hp=state.hp, max_hp=state.max_hp,
-        # E's 330 is centre-to-EDGE on the server: `GetUnitsInRange` tests the
-        # quadtree's per-unit collision circle, so the effective radius is
-        # 330 + r_target (370 vs minions, 360 vs champions).
-        collision_radius=P("collision_radius"),
-        delta_ms=delta_ms)
+    #
+    # The effective resists are computed FIRST, from the incoming buff state
+    # with this tick's W-passive grant applied, and E's and R's damage inside
+    # `step_buffs` is mitigated against them (`SPELL-007`). They used to be
+    # computed after `step_buffs`, so a spin or an R landing on a champion
+    # with W ranked saw pre-passive Armor/MR while an auto-attack landing on
+    # the same unit in the same tick saw the passive: `TakeDamage` reads
+    # `Stats.Armor.Total`, which includes `GarenWPassive`'s modifier, for all
+    # of them. (Downstream values are unchanged: the passive `step_buffs`
+    # reports is the same grant on the same inputs.)
+    buffs_in = grant_w_passive(state.buffs, state.spell_level, state.alive)
+    wp = w_passive_modifiers(buffs_in, state.alive, dtype)
 
     # ---- Garen's W: the two resist/damage hooks spells.py asks for ---------
     # W's PASSIVE is granted once on first rank-up of W (`W.cs:26-46` registers
@@ -434,12 +429,24 @@ def tick(state: LaneState, params: UnitParams,
     armor_flat = P("armor_flat_bonus")
     armor_eff = stat_total(
         armor_now - armor_flat, base_bonus=0.0,
-        percent_base_bonus=bs.armor_percent_base_bonus,
-        flat_bonus=armor_flat, percent_bonus=bs.armor_percent_bonus)
+        percent_base_bonus=wp.armor_percent_base_bonus,
+        flat_bonus=armor_flat, percent_bonus=wp.armor_percent_bonus)
     magic_resist_eff = stat_total(
         magic_resist_now, base_bonus=0.0,
-        percent_base_bonus=bs.mr_percent_base_bonus, flat_bonus=0.0,
-        percent_bonus=bs.mr_percent_bonus)
+        percent_base_bonus=wp.mr_percent_base_bonus, flat_bonus=0.0,
+        percent_bonus=wp.mr_percent_bonus)
+
+    bs = step_buffs(
+        buffs=buffs_in, spell_cooldown=state.spell_cooldown,
+        spell_level=state.spell_level,
+        x=state.x, y=state.y, kind=state.kind, team=state.team,
+        alive=state.alive, armor=armor_eff,
+        magic_resist=magic_resist_eff, hp=state.hp, max_hp=state.max_hp,
+        # E's 330 is centre-to-EDGE on the server: `GetUnitsInRange` tests the
+        # quadtree's per-unit collision circle, so the effective radius is
+        # 330 + r_target (370 vs minions, 360 vs champions).
+        collision_radius=P("collision_radius"),
+        delta_ms=delta_ms)
 
     # ---- 2a2. Stats.Update: HP regen (AttackableUnit.Update, after buffs) --
     # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.
@@ -474,7 +481,7 @@ def tick(state: LaneState, params: UnitParams,
     # ---- 2b. movement (AttackableUnit.Move, after UpdateBuffs) -------------
     # GarenQHaste writes `MoveSpeed.PercentBonus += .35` on activation. Read
     # the post-UpdateBuffs table so its expiry frame uses the unbuffed speed.
-    q_hasted = bs.buff_id[:, Q_HASTE_BUFF_SLOT] == BuffId.GAREN_Q_HASTE
+    q_hasted = bs.buffs.q_haste.active
     move_speed = P("move_speed") * jnp.where(
         q_hasted, jnp.asarray(Q_HASTE_MULTIPLIER, dtype), 1.0)
     x, y, wp_key, _ = step_move_units(
@@ -893,10 +900,14 @@ def tick(state: LaneState, params: UnitParams,
         state.aa_cooldown, state.aa_windup, state.is_attacking,
         state.has_auto_attacked,
         in_range=in_rng,
-        # `SetStatus(CanAttack, false)` for Judgment's duration
-        can_attack=(state.alive & ~bs.suppress_attack
-                    & (recall_windup <= 0)
-                    & (recall_channel <= 0) & (r_cast_ms <= 0)),
+        # `SetStatus(CanAttack, false)` for Judgment's duration, and no
+        # swing through a recall or R's windup -- the post-`UpdateBuffs`
+        # status, with this tick's recall/R timers.
+        can_attack=status(
+            bs.buffs, alive=state.alive, spell_level=state.spell_level,
+            spell_cooldown=bs.spell_cooldown, silenced_ms=state.silenced_ms,
+            recall_windup_ms=recall_windup, recall_channel_ms=recall_channel,
+            r_cast_ms=r_cast_ms).can_attack,
         has_target=has_tgt,
         attack_period=attack_period_now,
         windup_time=attack_windup_now,
@@ -912,12 +923,12 @@ def tick(state: LaneState, params: UnitParams,
         delta_ms=delta_ms, xp=jnp)
 
     q_landed = aa.hit & bs.q_empowered
-    buff_id_out, spell_cooldown_out = consume_q_on_hit(
-        bs.buff_id, bs.spell_cooldown, q_landed)
+    # `GarenQAttack.OnSpellPostCast` -> `OnSpellEnd` deactivates the live
+    # GarenQ buff: its `OnDeactivate` is `end_q`, the same one expiry calls.
+    buffs_out, spell_cooldown_out = end_q(bs.buffs, bs.spell_cooldown, q_landed)
     # `SkipNextAutoAttack` is consumed at the swing gate, before the real
-    # GarenQAttack swing begins. `buff_power` is otherwise Q's private bit.
-    buff_power_out = bs.buff_power.at[:, Q_BUFF_SLOT].set(
-        jnp.where(aa.consumed_skip, 0.0, bs.buff_power[:, Q_BUFF_SLOT]))
+    # GarenQAttack swing begins.
+    buffs_out = consume_q_skip(buffs_out, aa.consumed_skip)
     # GarenQAttack applies silence to the unit hit. Status duration is carried
     # explicitly so subsequent semantic cast orders fail exactly while the
     # server's CanCast flag is suppressed. Multiple simultaneous Q hits use
@@ -992,8 +1003,7 @@ def tick(state: LaneState, params: UnitParams,
     # attacks/missiles are non-periodic; E is periodic and must NOT interrupt
     # a base. R's pending hit is a regular spell hit and does. The listener
     # sets a latch now which its OnUpdate consumes at the top of the next tick.
-    r_hit = ((state.buff_id[:, R_PENDING_BUFF_SLOT] == BuffId.GAREN_R_PENDING)
-             & (bs.damage_dealt > 0))
+    r_hit = state.buffs.r_pending.active & (bs.damage_dealt > 0)
     nonperiodic_hit = (dmg_ij.sum(axis=0) > 0) | r_hit
     recall_listener_live = recall_channel > (_RECALL_CHANNEL_MS - _RECALL_DAMAGE_BUFF_MS)
     recall_damage_pending = (
@@ -1234,9 +1244,8 @@ def tick(state: LaneState, params: UnitParams,
     # frame reporting level-three W with level-two armor/MR.
     gained_w_passive = ((state.kind == Kind.CHAMPION)
                         & (spell_level[:, Slot.W] >= 1))
-    buff_id_out = buff_id_out.at[:, W_PASSIVE_BUFF_SLOT].set(
-        jnp.where(gained_w_passive, jnp.int8(BuffId.GAREN_W_PASSIVE),
-                  buff_id_out[:, W_PASSIVE_BUFF_SLOT]))
+    buffs_out = buffs_out.replace(
+        w_passive=buffs_out.w_passive | gained_w_passive)
 
     minion_order = jnp.where(lane_stop, jnp.int8(MoveOrder.STOP), ai.move_order)
     move_order_out = jnp.where(
@@ -1315,19 +1324,16 @@ def tick(state: LaneState, params: UnitParams,
     recall_windup = jnp.where(died | reborn, 0.0, recall_windup)
     recall_channel = jnp.where(died | reborn, 0.0, recall_channel)
     recall_damage_pending = jnp.where(died | reborn, False, recall_damage_pending)
-    # Death removes the owner's ordinary buff state.  Keep the R lane out of
-    # this cleanup: it is our target-side mailbox rather than a real target
-    # buff, and GarenR intentionally completes/cools down if its *victim*
-    # dies during the already-live windup.  A dead caster cancels it through
-    # `step_buffs`'s mirror-owner check on the following update.
-    owner_buff_slots = jnp.arange(state.buff_id.shape[1]) < R_PENDING_BUFF_SLOT
-    clear_owner_buffs = (died | reborn)[:, None] & owner_buff_slots[None, :]
-    buff_id_final = jnp.where(clear_owner_buffs, jnp.int8(BuffId.NONE),
-                              buff_id_out)
-    buff_elapsed_final = jnp.where(clear_owner_buffs, 0.0, bs.buff_elapsed)
-    buff_power_final = jnp.where(clear_owner_buffs, 0.0, buff_power_out)
-    buff_duration_final = jnp.where(clear_owner_buffs, 0.0,
-                                    state.buff_duration)
+    # Death and respawn do NOT touch buffs (`SPELL-006`, fixed). Nothing on
+    # the server removes one: `AttackableUnit.UpdateBuffs` keeps ticking a
+    # corpse's buffs and neither `Champion.Die` nor `Champion.Respawn`
+    # touches them, so a spin or a Q window on a corpse runs out on
+    # schedule and its `OnDeactivate` (`end_e`/`end_q`, from `step_buffs`)
+    # starts the cooldown -- and `GarenE.OnUpdate` keeps dealing its damage
+    # from the corpse. This used to wipe E/Q/W/Q-haste on `died | reborn`
+    # with NO cooldown, which made every death a free E and Q reset. R's
+    # pending hit is cancelled by its CASTER's death inside `step_buffs`
+    # (the generic `CastCancelCheck`), as before.
     # Observation memory records a witnessed cast at ingress (0 ms) and then
     # ages once for every server tick.  The -1 sentinel means "never seen",
     # not a negative elapsed duration, and must survive resets/normal ticking.
@@ -1389,9 +1395,7 @@ def tick(state: LaneState, params: UnitParams,
         hit_flag_ms=hit_flag_ms, hit_flag_by=hit_flag_by,
         first_blood_done=ckr.first_blood_done,
         gold_timer=gold_timer, ms_since_damaged=ms_since_damaged,
-        spell_level=spell_level, buff_id=buff_id_final,
-        buff_elapsed=buff_elapsed_final, buff_duration=buff_duration_final,
-        buff_power=buff_power_final,
+        spell_level=spell_level, buffs=buffs_out,
         spell_cooldown=spell_cooldown_out,
         missile_alive=ms.alive, missile_x=ms.x, missile_y=ms.y,
         missile_tx=ms.target.astype(state.missile_tx.dtype),

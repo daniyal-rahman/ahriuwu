@@ -107,12 +107,13 @@ Two independent effects share the slot:
   moment W's rank first becomes 1. **This is not tied to ever casting W.** A
   Garen who puts a point in W at level 3 and never presses W again still has
   this (real, not-flat-+20%) mitigation change from that level onward.
-  Modelled here the same way: :func:`step_buffs` grants it the tick
+  Modelled here the same way: :func:`grant_w_passive` grants it the tick
   ``spell_level[..., Slot.W]`` first becomes >= 1, independent of
-  :func:`cast_w`, and reports the RAW ``PercentBaseBonus``/``PercentBonus``
-  pair (``-0.2``/``+0.2`` while granted, ``0``/``0`` otherwise) rather than a
-  single pre-composed multiplier, so the caller can run the real
-  ``combat.stat_total`` formula instead of a flat ``*1.2``.
+  :func:`cast_w`, and :func:`w_passive_modifiers` reports the RAW
+  ``PercentBaseBonus``/``PercentBonus`` pair (``-0.2``/``+0.2`` while
+  granted, ``0``/``0`` otherwise) rather than a single pre-composed
+  multiplier, so the caller can run the real ``combat.stat_total`` formula
+  instead of a flat ``*1.2``.
 
 What this module does: the buff bookkeeping for both (duration, expiry,
 cooldown-at-cast for the active window, permanent-and-granted-once for the
@@ -121,12 +122,13 @@ passive), plus the pure constants (``W_DAMAGE_MULT``, ``W_PASSIVE_ARMOR_PCT``,
 caller needs to actually apply these -- ``BuffStep.damage_multiplier``
 (unconditionally 1.0, per the active-window bug-compat note above) and the
 ``armor_percent_base_bonus``/``armor_percent_bonus``/``mr_percent_base_bonus``/
-``mr_percent_bonus`` quartet (the passive). Wired into ``step.py``: it passes
-``magic_resist=P("magic_resist")`` into :func:`step_buffs`, then computes
-``armor_eff``/``magic_resist_eff`` via ``combat.stat_total`` (not a flat
-``* (1 + pct)``, which is exactly the bug this section replaced) and uses
-those wherever mitigation is computed downstream that tick
-(``step_autoattack``'s ``target_resist``, ``step_missiles``'s ``armor``).
+``mr_percent_bonus`` quartet (the passive). Wired into ``step.py``: it
+grants the passive and computes ``armor_eff``/``magic_resist_eff`` via
+``combat.stat_total`` (not a flat ``* (1 + pct)``, which is exactly the bug
+this section replaced) BEFORE :func:`step_buffs`, and uses those wherever
+mitigation is computed that tick -- E's and R's damage inside
+:func:`step_buffs` (`SPELL-007`: they used to see the pre-passive resists),
+``step_autoattack``'s ``target_resist``, ``step_missiles``'s ``armor``.
 ``damage_multiplier`` is still multiplied into the final per-unit damage
 total in ``step.py``, unconditionally a no-op now that it is always 1.0 --
 left in place rather than removed so a future, different W fix does not need
@@ -155,19 +157,44 @@ unmodified engine default and begins when casting finishes. Target health is
 read at that finish event, exactly when ``OnSpellPostCast`` runs, and damage
 is mitigated against Magic Resist.
 
-All three hooks this section used to ask ``step.py`` to add are now wired
-there (``magic_resist=P("magic_resist")`` into :func:`step_buffs`;
-``armor_eff``/``magic_resist_eff`` via ``combat.stat_total`` right after; the
-``damage_multiplier`` multiply before ``hp = jnp.maximum(state.hp - dealt,
-...)``) -- left named here rather than deleted so the next person can find
-where each one lives without re-reading ``step.py`` end to end.
+The buff lifecycle (`STRUCT-001`)
+---------------------------------
+State: ``LaneState.buffs``, one typed record per buff kind
+(:class:`~lanerl_jax.sim.state.Buffs`) -- not a lane table. Every buff has
+exactly one START (its ``cast_*``, or :func:`grant_w_passive`) and exactly one
+END, ``end_<kind>``, which is the C# ``OnDeactivate`` and is called by EVERY
+removal path:
 
-Q's auto-attack-empowerment hook (damage + silence delivered on the next
-landed swing while ``GarenQ`` is active, then the buff deactivates early) is
-a fourth, structurally different ask -- it needs the auto-attack resolution
-in ``autoattack.py``/``step.py`` to notice the buff and a way to signal back
-"that swing was the empowered one" -- and is *not* attempted here; seeGarenQ's
-section above.
+    ==============  ===========================================================
+    end_e           expiry at 3.0 s (step_buffs); cancel by re-press >= 1.0 s
+                    (cast_e). Writes the rank cooldown.
+    end_q           expiry at 4.5 s (step_buffs); the empowered swing landing
+                    (step.py). Writes the 8 s cooldown.
+    end_q_haste     expiry (step_buffs). No cooldown.
+    end_w           expiry (step_buffs). No cooldown (W's starts at cast).
+    end_r_pending   the windup completing (step_buffs; writes the CASTER's R
+                    cooldown) or the caster dying (step_buffs; no cooldown --
+                    the generic CastCancelCheck).
+    ==============  ===========================================================
+
+**Death is not a removal path** (`SPELL-006`, fixed): nothing on the server
+removes a buff on death -- ``AttackableUnit.UpdateBuffs`` keeps ticking them
+and neither ``Champion.Die`` nor ``Champion.Respawn`` touches one -- so a
+corpse's E and Q run out normally and their ``OnDeactivate`` writes the
+cooldown, and ``GarenE.OnUpdate`` (no ``IsDead`` check) keeps dealing spin
+damage from the corpse. The sim used to wipe E/Q/W on death with no cooldown,
+which made dying a free E and Q reset.
+
+The writer set of ``spell_cooldown`` is :data:`COOLDOWN_WRITERS` and nothing
+else in the simulator writes it (``tests/test_buff_lane_lint.py`` enforces
+it).
+
+What a unit may DO under its buffs is :func:`status` -- ``ghosted`` (collision),
+``can_attack`` (the auto-attack gate), ``cast_locked``/``can_cast`` (the cast
+gate in ``orders.apply_orders`` AND the observation's spell-availability
+feature). One function, so the observation and the cast gate cannot disagree
+again: E is locked for the first ``E_CANCEL_MIN_S`` of its spin and then
+pressable -- as a CANCEL -- in both.
 """
 from __future__ import annotations
 
@@ -177,23 +204,23 @@ import jax
 import jax.numpy as jnp
 
 from .combat import post_mitigation_damage
-from .state import Kind
+from .state import Buffs, Kind
 
 __all__ = [
-    "Slot", "BuffId", "E_RADIUS", "E_DURATION_S", "E_TICK_MS",
+    "Slot", "E_RADIUS", "E_DURATION_S", "E_TICK_MS",
     "E_MINION_MULTIPLIER", "E_COOLDOWNS", "SKILL_ORDER", "RANKS_BY_LEVEL",
-    "e_damage_at_rank", "cast_e",
-    "E_BUFF_SLOT", "W_BUFF_SLOT", "W_PASSIVE_BUFF_SLOT", "Q_BUFF_SLOT",
-    "Q_HASTE_BUFF_SLOT", "R_PENDING_BUFF_SLOT", "E_TICK_BUFF_SLOT",
-    "E_CANCEL_MIN_S",
+    "e_damage_at_rank", "cast_e", "end_e", "E_CANCEL_MIN_S",
     "Q_BUFF_DURATION", "Q_COOLDOWN",
     "Q_HASTE_MULTIPLIER", "q_haste_duration_at_rank", "q_silence_duration_at_rank",
-    "q_damage_at_rank", "cast_q", "consume_q_on_hit",
+    "q_damage_at_rank", "cast_q", "end_q", "end_q_haste", "consume_q_skip",
     "W_DURATIONS", "W_COOLDOWNS", "W_DAMAGE_MULT", "W_PASSIVE_ARMOR_PCT",
-    "W_PASSIVE_MR_PCT", "w_duration_at_rank", "cast_w",
+    "W_PASSIVE_MR_PCT", "w_duration_at_rank", "cast_w", "end_w",
+    "grant_w_passive", "WPassiveModifiers", "w_passive_modifiers",
     "R_COOLDOWNS", "R_BASE_PER_RANK", "R_MISSING_HP_FRAC", "R_CAST_RANGE",
     "R_CAST_TIME_S",
-    "r_damage_at_rank", "cast_r", "enemy_champion_index",
+    "r_damage_at_rank", "cast_r", "end_r_pending", "enemy_champion_index",
+    "decay_cooldowns", "COOLDOWN_WRITERS", "BUFF_NAMES", "active_by_name",
+    "Status", "status", "status_of", "cast_locked", "e_cancellable",
     "BuffStep", "step_buffs", "ranks_for_level",
 ]
 
@@ -215,48 +242,35 @@ SKILL_ORDER = (2, 0, 1, 2, 2, 3, 2, 2, 0, 0, 3, 0, 0, 1, 1, 3, 1, 1)
 
 class Slot:
     """``CharData``'s ``Spell1``-``Spell4`` -- ``LeagueSandbox-Default/Stats/Garen/Garen.json``
-    ``Data``: ``Spell1=GarenQ, Spell2=GarenW, Spell3=GarenE, Spell4=GarenR``."""
+    ``Data``: ``Spell1=GarenQ, Spell2=GarenW, Spell3=GarenE, Spell4=GarenR``.
+
+    Indexes ``spell_level``/``spell_cooldown`` and :class:`Status`'s
+    ``cast_locked``/``can_cast`` -- and NOTHING about buffs, which are
+    records found by name (`STRUCT-001`, `SPELL-005`)."""
     Q, W, E, R = 0, 1, 2, 3
 
 
-class BuffId:
-    """0 is "empty slot", so a zeroed buff table holds no buffs."""
-    NONE = 0
-    GAREN_E = 1
-    GAREN_W = 2
-    GAREN_W_PASSIVE = 3
-    GAREN_Q = 4
-    GAREN_Q_HASTE = 5
-    #: Marks a unit as having just been hit by an R cast against it; consumed
-    #: and cleared by :func:`step_buffs` the very next time it runs. Not a
-    #: real buff on the server -- R has none -- this is purely a same-tick
-    #: mailbox so R's mitigation can happen where the other spell damage does.
-    GAREN_R_PENDING = 6
+#: Server buff name (``AddBuff("...")`` in the vendored Garen scripts) ->
+#: the :class:`~lanerl_jax.sim.state.Buffs` field that models it. R's pending
+#: hit is a sim-only mailbox and has no server name.
+BUFF_NAMES = {
+    "GarenE": "e",
+    "GarenW": "w",
+    "GarenWPassive": "w_passive",
+    "GarenQ": "q",
+    "GarenQHaste": "q_haste",
+}
 
 
-#: Fixed lanes in the ``(N, MAX_BUFFS)`` buff table, chosen once here rather
-#: than searched for at runtime -- see `cast_e`'s docstring for why a free-slot
-#: search is not worth it for a kit this small. ``MAX_BUFFS`` is 8; six slots
-#: are spoken for, two remain.
-E_BUFF_SLOT = 0
-W_BUFF_SLOT = 1
-W_PASSIVE_BUFF_SLOT = 2
-Q_BUFF_SLOT = 3
-Q_HASTE_BUFF_SLOT = 4
-R_PENDING_BUFF_SLOT = 5
-#: E's periodic-damage accumulator, and the ONLY lane whose `buff_elapsed`
-#: entry is in MILLISECONDS rather than seconds. That asymmetry is deliberate
-#: and it is the point: the server's `GarenE.OnUpdate` keeps a
-#: `TimeSinceLastTick` in ms which it initialises to 500 and RESETS TO 0 on
-#: every fire, so the period drifts with the frame time and the fire times are
-#: 0.0167, 0.5333, 1.050, 1.5667, 2.0833, 2.600 -- SIX ticks, the seventh
-#: falling at 3.117 s, past the 3.0 s expiry. Reproducing that needs the
-#: server's own accumulator arithmetic in the server's own units; an absolute
-#: `floor(elapsed / 500)` grid fires at 0.0167 and then every exact 500 ms,
-#: which is SEVEN ticks (+16.7% damage per spin) with a phase up to 83 ms off,
-#: and phase decides which minions are inside the radius when a tick lands.
-#: `buff_id` is never set for this lane -- it is scratch space, not a buff.
-E_TICK_BUFF_SLOT = 6
+def active_by_name(buffs: Buffs) -> dict:
+    """``{server buff name: (N,) bool}`` -- which named buffs each unit has.
+    For renderers and injectors that speak the server's names."""
+    out = {}
+    for name, field in BUFF_NAMES.items():
+        rec = getattr(buffs, field)
+        out[name] = rec if field == "w_passive" else rec.active
+    return out
+
 
 # `Buffs/Garen/GarenQHaste.cs:34`: `MoveSpeed.PercentBonus += 0.35f`.
 Q_HASTE_MULTIPLIER = 1.35
@@ -265,7 +279,12 @@ Q_HASTE_MULTIPLIER = 1.35
 E_RADIUS = 330.0
 #: ``AddBuff("GarenE", 3f, ...)``
 E_DURATION_S = 3.0
-#: ``TimeSinceLastTick >= 500.0f``
+#: ``TimeSinceLastTick >= 500.0f``. E's accumulator is the one buff clock kept
+#: in MILLISECONDS (``EBuff.tick_acc_ms``), because the server's is: it is
+#: initialised to 500, RESET TO 0 on every fire, so the period drifts with the
+#: frame time and the fire times are 0.0167, 0.5333, 1.050, 1.5667, 2.0833,
+#: 2.600 -- SIX ticks, the seventh falling at 3.117 s, past the 3.0 s expiry
+#: (`SPELL-003`). An absolute `floor(elapsed / 500)` grid fires SEVEN times.
 E_TICK_MS = 500.0
 #: minions take three quarters
 E_MINION_MULTIPLIER = 0.75
@@ -297,20 +316,84 @@ def ranks_for_level(level: int) -> tuple:
 RANKS_BY_LEVEL = tuple(ranks_for_level(l) for l in range(0, 19))
 
 
+def _where(mask, new, old):
+    return jnp.where(mask, jnp.asarray(new, old.dtype), old)
+
+
+def _cast_rank(rank, cap):
+    """The rank a cast records on its buff: 1..cap, int8."""
+    return jnp.clip(rank.astype(jnp.int32), 1, cap).astype(jnp.int8)
+
+
+# ------------------------------------------------------------ cooldowns ---
+def decay_cooldowns(spell_cooldown, dt_s):
+    """``Spell.Update``'s per-tick countdown on all four slots, floored at 0.
+    The only cooldown writer that is not a cast or a buff end."""
+    return jnp.maximum(spell_cooldown - dt_s, 0.0)
+
+
+#: EVERY function that writes ``spell_cooldown`` in the simulator. Nothing
+#: else may (`STRUCT-001`; ``tests/test_buff_lane_lint.py`` rule 4). Casts
+#: write their cast-time value, ends write the ``OnDeactivate`` value:
+#:
+#: * ``cast_q``  -- 0 (``Q.cs:85`` overwrites the engine's cast-time cooldown);
+#: * ``cast_w``  -- the rank cooldown, at cast (engine default, unmodified);
+#: * ``end_e``   -- the rank cooldown, on expiry OR cancel (``GarenE.OnDeactivate``);
+#: * ``end_q``   -- 8 s, on expiry OR the empowered hit (``GarenQ.OnDeactivate``);
+#: * ``end_r_pending`` -- the caster's rank cooldown when R's windup FINISHES
+#:   (``Spell.FinishCasting``); none when the caster dies mid-windup;
+#: * ``decay_cooldowns`` -- the per-tick countdown.
+#:
+#: ``cast_e`` and ``cast_r`` write none themselves (E's cooldown starts when the
+#: spin ends, R's when the windup finishes); ``cast_e``'s cancel goes through
+#: ``end_e``. State constructors (``empty_state``, parity injection, the eval's
+#: ``StateRebuilder``) build the array from outside the simulation and are not
+#: writers in this sense.
+COOLDOWN_WRITERS = ("cast_q", "cast_w", "end_e", "end_q", "end_r_pending",
+                    "decay_cooldowns")
+
+
+# --------------------------------------------------------------------- E ---
 def e_damage_at_rank(rank: jax.Array, attack_damage: jax.Array) -> jax.Array:
     """``10 + 12.5*(rank-1) + AD*(0.35 + 0.05*(rank-1))``, snapshotted at cast."""
     r = jnp.maximum(rank.astype(attack_damage.dtype), 1.0)
     return 10.0 + 12.5 * (r - 1.0) + attack_damage * (0.35 + 0.05 * (r - 1.0))
 
 
-def cast_e(buff_id, buff_elapsed, buff_duration, buff_power,
-           spell_cooldown, want_cast, rank, attack_damage, slot=E_BUFF_SLOT,
-           tick_slot=E_TICK_BUFF_SLOT):
-    """Start the spin for every unit whose ``want_cast`` is set and E is ready.
+def e_cancellable(buffs: Buffs) -> jax.Array:
+    """``GarenECancel`` is ``STATE_READY``: the spin is live and at least
+    :data:`E_CANCEL_MIN_S` old, so a press ENDS it (``SPELL-001``)."""
+    return buffs.e.active & (buffs.e.elapsed_s >= E_CANCEL_MIN_S)
 
-    Writes into buff slot ``slot``. A general free-slot search is not worth the
-    gather here: Garen has exactly one buff that does anything in lane, and the
-    slot is a fixed lane in the table.
+
+def _e_can_start(buffs: Buffs, cooldown_e, rank):
+    return (cooldown_e <= 0) & (rank > 0) & ~buffs.e.active
+
+
+def end_e(buffs: Buffs, spell_cooldown, ended, rank):
+    """``GarenE.OnDeactivate``: restore ``CanAttack``, clear ``Ghosted``, swap
+    ``GarenE`` back into the slot and ``SetCooldown`` the FULL rank cooldown.
+    Called on expiry (:func:`step_buffs`) and on cancel (:func:`cast_e`).
+
+    ``power`` and ``tick_acc_ms`` belong to the ended script instance and are
+    left as they are: nothing reads them while the spin is inactive, the
+    accumulator is zeroed by the next :func:`step_buffs` and both are
+    re-primed by the next cast.
+    """
+    r = jnp.clip(rank.astype(jnp.int32), 1, len(E_COOLDOWNS))
+    cd_table = jnp.asarray(E_COOLDOWNS, spell_cooldown.dtype)
+    spell_cooldown = spell_cooldown.at[:, Slot.E].set(
+        jnp.where(ended, cd_table[r - 1], spell_cooldown[:, Slot.E]))
+    e = buffs.e.replace(active=buffs.e.active & ~ended,
+                        elapsed_s=_where(ended, 0.0, buffs.e.elapsed_s))
+    return buffs.replace(e=e), spell_cooldown
+
+
+def cast_e(buffs: Buffs, spell_cooldown, want_cast, rank, attack_damage):
+    """A press of E: start the spin, or cancel the running one, or nothing.
+
+    Returns ``(buffs, spell_cooldown, started)``; ``started`` is a fresh cast
+    only (a cancel is not reported as a cast).
     """
     # E HAS THREE OUTCOMES, not two, and modelling it with two gave an RL
     # policy a permanent damage aura it learned to live off.
@@ -322,10 +405,10 @@ def cast_e(buff_id, buff_elapsed, buff_duration, buff_power,
     # cooldown `FinishCasting` had just written), then puts GarenECancel on a
     # 1 s cooldown. So a "cast slot 2" during the spin reaches GarenECancel,
     # whose `OnSpellPostCast` removes the GarenE buff; the buff's
-    # `OnDeactivate` (`Buffs/Garen/GarenE.cs`) restores `CanAttack`, clears
-    # `Ghosted`, swaps GarenE back and sets the FULL rank cooldown. Inside the
-    # first second GarenECancel is not `STATE_READY`, so `Spell.Cast` returns
-    # false and the spin simply continues.
+    # `OnDeactivate` (`end_e`) restores `CanAttack`, clears `Ghosted`, swaps
+    # GarenE back and sets the FULL rank cooldown. Inside the first second
+    # GarenECancel is not `STATE_READY`, so `Spell.Cast` returns false and the
+    # spin simply continues.
     #
     #     re-cast at elapsed < 1.0 s   ignored, spin continues
     #     re-cast at elapsed >= 1.0 s  spin ENDS NOW, full cooldown starts
@@ -336,59 +419,35 @@ def cast_e(buff_id, buff_elapsed, buff_duration, buff_power,
     # CAST; this 4.20 build starts it when the spin ends. The server is the
     # authority here, so cooldown-on-end stays.)
     #
-    # What the old two-outcome model cost: with neither the cancel nor a guard,
-    # mid-spin `spell_cooldown[E]` is 0, the re-cast passed `ready`, and it
-    # reset `buff_elapsed` to 0.0 -- so a policy casting E every decision held
-    # the spin at elapsed 0 forever. It never reached `E_DURATION_S`, never
-    # expired, never started its cooldown, and kept dealing its 500 ms periodic
-    # damage. Measured on the trained checkpoint: E cast on 80-83% of decisions
-    # and the sim's E cooldown never rose ONCE in 300 s, against 44 completed
-    # spins in the C# server over the same window under the same orders.
+    # What the old two-outcome model cost (`SPELL-001`): with neither the
+    # cancel nor a guard, mid-spin `spell_cooldown[E]` is 0, the re-cast
+    # passed `ready`, and it reset the elapsed clock to 0 -- so a policy
+    # casting E every decision held the spin at elapsed 0 forever. Measured on
+    # the trained checkpoint: E cast on 80-83% of decisions and the sim's E
+    # cooldown never rose ONCE in 300 s. An intermediate "always refuse" guard
+    # was wrong in the other direction: a spin that cannot be cancelled runs
+    # its full 3 s before the cooldown even begins.
     #
-    # An intermediate "always refuse" guard was wrong in the other direction --
-    # it gave 19 spins per 300 s against the server's 44, because a spin that
-    # cannot be cancelled runs its full 3 s before the cooldown even begins.
-    #
-    # `cast_q` carries the analogous guard for the analogous reason (Q's
-    # cooldown starts after its empowerment window). `cast_w` and `cast_r` need
-    # none: both write their cooldown at cast time, so `spell_cooldown <= 0`
-    # already refuses a re-cast.
-    #
-    # The observation builder ALREADY modelled availability correctly -- its
-    # `cast_locked` term reports E unavailable while `buff_id[E] ==
-    # BuffId.GAREN_E`. The sim was telling the policy E was unavailable and
-    # casting it anyway, which is the worst of both: the feature could not
-    # explain the reward, and the reward taught the policy to press regardless.
-    open_now = buff_id[:, slot] == BuffId.GAREN_E
-    cancellable = open_now & (buff_elapsed[:, slot] >= E_CANCEL_MIN_S)
-    ready = (want_cast & (spell_cooldown[:, Slot.E] <= 0) & (rank > 0)
-             & ~open_now)
-    cancel = want_cast & cancellable
-    dmg = e_damage_at_rank(rank, attack_damage)
-    r = jnp.clip(rank.astype(jnp.int32), 1, len(E_COOLDOWNS))
-    cd_table = jnp.asarray(E_COOLDOWNS, spell_cooldown.dtype)
+    # The observation reads the SAME rule through `status` (`cast_locked[E]`
+    # is "live and younger than E_CANCEL_MIN_S"), so a policy is told E is
+    # pressable exactly when a press does something.
+    start = want_cast & _e_can_start(buffs, spell_cooldown[:, Slot.E], rank)
+    cancel = want_cast & e_cancellable(buffs)
     # A cancelled spin deals no tick on the tick it is cancelled: orders run
     # before `step_buffs`, which is also the server's order (`RemoveBuff` in
     # the order phase, `UpdateBuffs` after).
-    return (
-        buff_id.at[:, slot].set(
-            jnp.where(ready, jnp.int8(BuffId.GAREN_E),
-                      jnp.where(cancel, jnp.int8(BuffId.NONE),
-                                buff_id[:, slot]))),
-        buff_elapsed.at[:, slot].set(
-            jnp.where(ready | cancel, 0.0, buff_elapsed[:, slot])
-            # ... and prime E's tick accumulator to E_TICK_MS, which is the
-            # server's `TimeSinceLastTick = 500` initial condition: the first
-            # `OnUpdate` after the cast fires immediately.
-            ).at[:, tick_slot].set(
-            jnp.where(ready, E_TICK_MS, buff_elapsed[:, tick_slot])),
-        buff_duration.at[:, slot].set(
-            jnp.where(ready, E_DURATION_S, buff_duration[:, slot])),
-        buff_power.at[:, slot].set(jnp.where(ready, dmg, buff_power[:, slot])),
-        spell_cooldown.at[:, Slot.E].set(
-            jnp.where(cancel, cd_table[r - 1], spell_cooldown[:, Slot.E])),
-        ready,
-    )
+    buffs, spell_cooldown = end_e(buffs, spell_cooldown, cancel, rank)
+    dmg = e_damage_at_rank(rank, attack_damage)
+    e = buffs.e
+    e = e.replace(
+        active=e.active | start,
+        elapsed_s=_where(start, 0.0, e.elapsed_s),
+        power=jnp.where(start, dmg.astype(e.power.dtype), e.power),
+        # prime the accumulator to E_TICK_MS: the server's
+        # `TimeSinceLastTick = 500` initial condition, so the first
+        # `OnUpdate` after the cast fires immediately.
+        tick_acc_ms=_where(start, E_TICK_MS, e.tick_acc_ms))
+    return buffs.replace(e=e), spell_cooldown, start
 
 
 # --------------------------------------------------------------------- Q ---
@@ -432,65 +491,67 @@ def q_damage_at_rank(rank: jax.Array, attack_damage: jax.Array) -> jax.Array:
     return 30.0 + 25.0 * (r - 1.0) + attack_damage * 1.4
 
 
-def cast_q(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
-           want_cast, rank, slot=Q_BUFF_SLOT, haste_slot=Q_HASTE_BUFF_SLOT):
+def _q_can_start(buffs: Buffs, cooldown_q, rank):
+    return (cooldown_q <= 0) & (rank > 0) & ~buffs.q.active
+
+
+def cast_q(buffs: Buffs, spell_cooldown, want_cast, rank):
     """Open Garen's empowered-next-auto-attack window (Q.cs:76-85).
 
-    Gated on rank, cooldown, and -- matching ``SealSpellSlot`` (Q.cs:84,
-    ``GarenQ.cs:97``) -- on the window not already being open, since the real
-    spell slot is locked for the cast bar the whole time ``GarenQ`` is active
-    and cannot be recast regardless of what the cooldown timer shows.
+    Gated on rank, cooldown, and on the window not already being open
+    (``SPELL-008``: the server would RENEW the buff -- ``SealSpellSlot`` is
+    inert -- and real League refuses; the sim keeps the League-correct
+    refusal as a recorded deviation).
 
     Sets the spell's cooldown to 0 immediately (Q.cs:85 overwrites the
-    engine's default cast-time cooldown in the same event -- see the module
-    docstring). :func:`step_buffs` is what sets the real 8 s cooldown, when
-    the window closes.
+    engine's default cast-time cooldown in the same event). :func:`end_q`
+    sets the real 8 s when the window closes.
 
-    Does **not** deal Q's damage or apply its silence -- see the module
-    docstring's Q section for exactly why and what is needed to add it.
+    Does **not** deal Q's damage or apply its silence -- the empowered swing
+    does, in ``step.py``.
     """
-    already_open = buff_id[:, slot] == BuffId.GAREN_Q
-    ready = (want_cast & (spell_cooldown[:, Slot.Q] <= 0) & (rank > 0)
-             & ~already_open)
-    haste_dur = q_haste_duration_at_rank(rank)
-
-    buff_id = buff_id.at[:, slot].set(
-        jnp.where(ready, jnp.int8(BuffId.GAREN_Q), buff_id[:, slot]))
-    buff_id = buff_id.at[:, haste_slot].set(
-        jnp.where(ready, jnp.int8(BuffId.GAREN_Q_HASTE), buff_id[:, haste_slot]))
-    buff_elapsed = buff_elapsed.at[:, slot].set(
-        jnp.where(ready, 0.0, buff_elapsed[:, slot]))
-    buff_elapsed = buff_elapsed.at[:, haste_slot].set(
-        jnp.where(ready, 0.0, buff_elapsed[:, haste_slot]))
-    buff_duration = buff_duration.at[:, slot].set(
-        jnp.where(ready, Q_BUFF_DURATION, buff_duration[:, slot]))
-    buff_duration = buff_duration.at[:, haste_slot].set(
-        jnp.where(ready, haste_dur, buff_duration[:, haste_slot]))
+    ready = want_cast & _q_can_start(buffs, spell_cooldown[:, Slot.Q], rank)
+    q = buffs.q.replace(
+        active=buffs.q.active | ready,
+        elapsed_s=_where(ready, 0.0, buffs.q.elapsed_s),
+        # `GarenQ.OnActivate` calls `SkipNextAutoAttack()` after cancelling
+        # the current swing; `step_autoattack` consumes it at the next gate.
+        skip_next=buffs.q.skip_next | ready)
+    qh = buffs.q_haste.replace(
+        active=buffs.q_haste.active | ready,
+        elapsed_s=_where(ready, 0.0, buffs.q_haste.elapsed_s),
+        rank=jnp.where(ready, _cast_rank(rank, 5), buffs.q_haste.rank))
     spell_cooldown = spell_cooldown.at[:, Slot.Q].set(
         jnp.where(ready, 0.0, spell_cooldown[:, Slot.Q]))
-    # `GarenQ.OnActivate` calls `SkipNextAutoAttack()` after cancelling the
-    # current swing. The fixed Q buff lane carries that one-bit state until
-    # `step_autoattack` consumes it at the next swing gate.
-    buff_power = buff_power.at[:, slot].set(
-        jnp.where(ready, jnp.ones_like(buff_power[:, slot]), buff_power[:, slot]))
-
-    return buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown, ready
+    return buffs.replace(q=q, q_haste=qh), spell_cooldown, ready
 
 
-def consume_q_on_hit(buff_id, spell_cooldown, q_landed, slot=Q_BUFF_SLOT):
-    """End Q and begin its fixed cooldown when ``GarenQAttack`` lands.
-
-    `GarenQAttack.OnSpellPostCast` calls `OnSpellEnd`, which deactivates the
-    still-live `GarenQ` buff. Its `OnDeactivate` restores the ordinary attack
-    spell and sets cooldown 8 immediately; this is earlier than the natural
-    4.5-second expiry in the usual successful-hit case.
-    """
-    buff_id = buff_id.at[:, slot].set(
-        jnp.where(q_landed, jnp.int8(BuffId.NONE), buff_id[:, slot]))
+def end_q(buffs: Buffs, spell_cooldown, ended):
+    """``GarenQ.OnDeactivate``: restore the ordinary attack spell, unseal the
+    slot and ``SetCooldown(8)``. Called on expiry (:func:`step_buffs`) and when
+    the empowered ``GarenQAttack`` lands (``step.py``: its
+    ``OnSpellPostCast`` calls ``OnSpellEnd``, which deactivates the buff --
+    earlier than the natural 4.5 s in the usual successful-hit case)."""
     spell_cooldown = spell_cooldown.at[:, Slot.Q].set(
-        jnp.where(q_landed, jnp.asarray(Q_COOLDOWN, spell_cooldown.dtype),
+        jnp.where(ended, jnp.asarray(Q_COOLDOWN, spell_cooldown.dtype),
                   spell_cooldown[:, Slot.Q]))
-    return buff_id, spell_cooldown
+    q = buffs.q.replace(active=buffs.q.active & ~ended,
+                        elapsed_s=_where(ended, 0.0, buffs.q.elapsed_s),
+                        skip_next=buffs.q.skip_next & ~ended)
+    return buffs.replace(q=q), spell_cooldown
+
+
+def consume_q_skip(buffs: Buffs, consumed):
+    """``SkipNextAutoAttack`` spent at the swing gate (``step_autoattack``)."""
+    return buffs.replace(q=buffs.q.replace(skip_next=buffs.q.skip_next & ~consumed))
+
+
+def end_q_haste(buffs: Buffs, ended):
+    """``GarenQHaste.OnDeactivate``: the +35% move speed goes. No cooldown."""
+    qh = buffs.q_haste
+    return buffs.replace(q_haste=qh.replace(
+        active=qh.active & ~ended, elapsed_s=_where(ended, 0.0, qh.elapsed_s),
+        rank=_where(ended, 0, qh.rank)))
 
 
 # --------------------------------------------------------------------- W ---
@@ -517,38 +578,75 @@ def w_duration_at_rank(rank: jax.Array) -> jax.Array:
     return r + 1.0
 
 
-def cast_w(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
-           want_cast, rank, slot=W_BUFF_SLOT):
+def cast_w(buffs: Buffs, spell_cooldown, want_cast, rank):
     """Open Garen's 0.7x-incoming-damage window (W.cs:49-53).
 
     Sets the cooldown to the rank's table value **immediately**, unlike
     :func:`cast_q` and E -- see :data:`W_COOLDOWNS`. Does not touch
-    ``GarenWPassive``: that is granted on rank-up, not on cast, and is handled
-    entirely in :func:`step_buffs` -- see the module docstring's W section for
-    why casting W is the wrong trigger for it.
+    ``GarenWPassive``: that is granted on rank-up, not on cast
+    (:func:`grant_w_passive`).
     """
     ready = want_cast & (spell_cooldown[:, Slot.W] <= 0) & (rank > 0)
     r = jnp.clip(rank.astype(jnp.int32), 1, len(W_COOLDOWNS))
-    dur = r.astype(buff_duration.dtype) + 1.0
     cd_table = jnp.asarray(W_COOLDOWNS, spell_cooldown.dtype)
-
-    buff_id = buff_id.at[:, slot].set(
-        jnp.where(ready, jnp.int8(BuffId.GAREN_W), buff_id[:, slot]))
-    buff_elapsed = buff_elapsed.at[:, slot].set(
-        jnp.where(ready, 0.0, buff_elapsed[:, slot]))
-    buff_duration = buff_duration.at[:, slot].set(
-        jnp.where(ready, dur, buff_duration[:, slot]))
+    w = buffs.w.replace(
+        active=buffs.w.active | ready,
+        elapsed_s=_where(ready, 0.0, buffs.w.elapsed_s),
+        rank=jnp.where(ready, _cast_rank(rank, len(W_COOLDOWNS)), buffs.w.rank))
     spell_cooldown = spell_cooldown.at[:, Slot.W].set(
         jnp.where(ready, cd_table[r - 1], spell_cooldown[:, Slot.W]))
+    return buffs.replace(w=w), spell_cooldown, ready
 
-    return buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown, ready
+
+def end_w(buffs: Buffs, ended):
+    """``GarenW.OnDeactivate``: the window closes. No cooldown -- W's started
+    at cast."""
+    w = buffs.w
+    return buffs.replace(w=w.replace(
+        active=w.active & ~ended, elapsed_s=_where(ended, 0.0, w.elapsed_s),
+        rank=_where(ended, 0, w.rank)))
+
+
+def grant_w_passive(buffs: Buffs, spell_level, alive):
+    """``W.OnLevelUpSpell``: ``GarenWPassive`` the moment W first has a rank.
+
+    Registered from spell-object construction, independent of ever pressing W
+    (see the module docstring's W section). ``infiniteduration``: never ended.
+    """
+    grant = alive & (spell_level[:, Slot.W] >= 1)
+    return buffs.replace(w_passive=buffs.w_passive | grant)
+
+
+class WPassiveModifiers(NamedTuple):
+    """The RAW ``PercentBaseBonus``/``PercentBonus`` pairs ``GarenWPassive``
+    writes (``-0.2``/``+0.2`` while it is up, ``0``/``0`` otherwise) -- not one
+    pre-composed multiplier, because ``Stat.Total``'s ``FlatBonus`` term sits
+    BETWEEN them (``combat.stat_total``) and Garen's Armor has a flat rune
+    bonus."""
+    armor_percent_base_bonus: jax.Array
+    armor_percent_bonus: jax.Array
+    mr_percent_base_bonus: jax.Array
+    mr_percent_bonus: jax.Array
+
+
+def w_passive_modifiers(buffs: Buffs, alive, dtype=jnp.float32) -> WPassiveModifiers:
+    """Per-unit resist modifiers from ``GarenWPassive``, for anything that
+    mitigates damage against a unit's Armor/MR (``step.py``) or reports it
+    (the observation)."""
+    on = alive & buffs.w_passive
+    z = jnp.zeros(on.shape, dtype)
+    return WPassiveModifiers(
+        armor_percent_base_bonus=jnp.where(on, jnp.asarray(-W_PASSIVE_ARMOR_PCT, dtype), z),
+        armor_percent_bonus=jnp.where(on, jnp.asarray(W_PASSIVE_ARMOR_PCT, dtype), z),
+        mr_percent_base_bonus=jnp.where(on, jnp.asarray(-W_PASSIVE_MR_PCT, dtype), z),
+        mr_percent_bonus=jnp.where(on, jnp.asarray(W_PASSIVE_MR_PCT, dtype), z))
 
 
 # --------------------------------------------------------------------- R ---
 #: ``Spells/GarenR/GarenR.json`` ``Cooldown1``-``Cooldown3`` (ranks 4-6 exist
 #: in the JSON as padding but are unreachable -- R caps at 3 ranks). No
 #: ``SetCooldown`` call anywhere in ``R.cs``: like W, this is the engine's
-#: unmodified default, starting at cast.
+#: unmodified default, starting when casting finishes.
 R_COOLDOWNS = (160.0, 120.0, 80.0)
 #: ``175f * spell.CastInfo.SpellLevel`` -- Characters/Garen/R.cs:29.
 R_BASE_PER_RANK = 175.0
@@ -594,146 +692,218 @@ def enemy_champion_index(n: int) -> jax.Array:
                      jnp.where(idx == 1, jnp.int8(0), jnp.int8(-1)))
 
 
-def cast_r(buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown,
-           want_cast, rank, hp, max_hp, target, slot=R_PENDING_BUFF_SLOT):
+def cast_r(buffs: Buffs, spell_cooldown, want_cast, rank, target):
     """Start R's windup and mark its target for a delayed hit.
 
     `GarenR.OnSpellPostCast` reads the target's health, not
-    `OnSpellPreCast`. The pending lane therefore stores the caster's rank --
+    `OnSpellPreCast`. The pending record therefore stores the caster's rank --
     not a precomputed damage snapshot -- and :func:`step_buffs` reads current
-    HP when the 0.435-second engine cast timer completes. ``hp``/``max_hp``
-    remain accepted for source-compatible callers but are intentionally not
-    read here.
+    HP when the 0.435-second engine cast timer completes. Writes no cooldown:
+    R's starts when the windup finishes (:func:`end_r_pending`).
 
-    The pending hit is written onto the **target's** buff row (not the
-    caster's) via :data:`enemy_champion_index`, not through a data-dependent
-    scatter on ``target`` -- with exactly two champion slots, "the other
-    champion" is a fixed permutation, and scattering through an
-    attacker-chosen index would risk one champion's not-casting no-op write
-    landing on the same destination row as the other's real write in the same
-    ``.at[].set()`` call, with JAX's duplicate-index tie-break deciding which
-    one survives.
+    The pending hit is written onto the **target's** row (not the caster's)
+    via :data:`enemy_champion_index`, not through a data-dependent scatter on
+    ``target`` -- with exactly two champion slots, "the other champion" is a
+    fixed permutation, and scattering through an attacker-chosen index would
+    risk one champion's not-casting no-op write landing on the same
+    destination row as the other's real write in the same ``.at[].set()``
+    call, with JAX's duplicate-index tie-break deciding which one survives.
 
     ``target`` is expected to already be validated by the caller (an enemy
     champion, in range) -- see ``orders.apply_orders``. Re-checked against
     :func:`enemy_champion_index` here anyway, so a caller that skips that gate
     fails closed (no cast) instead of open.
     """
-    n = buff_id.shape[0]
+    n = rank.shape[0]
     mirror = enemy_champion_index(n)
     mirror_idx = jnp.clip(mirror, 0, n - 1).astype(jnp.int32)
     valid_target = (target == mirror) & (mirror >= 0)
-    already_casting = buff_id[mirror_idx, slot] == BuffId.GAREN_R_PENDING
+    already_casting = buffs.r_pending.active[mirror_idx]
     ready = (want_cast & (spell_cooldown[:, Slot.R] <= 0) & (rank > 0)
              & (target >= 0) & valid_target & ~already_casting)
 
     hits_me = ready[mirror_idx]
     rank_to_me = rank[mirror_idx]
-
-    buff_id = buff_id.at[:, slot].set(
-        jnp.where(hits_me, jnp.int8(BuffId.GAREN_R_PENDING), buff_id[:, slot]))
-    buff_elapsed = buff_elapsed.at[:, slot].set(
-        jnp.where(hits_me, 0.0, buff_elapsed[:, slot]))
-    buff_duration = buff_duration.at[:, slot].set(
-        jnp.where(hits_me, R_CAST_TIME_S, buff_duration[:, slot]))
-    buff_power = buff_power.at[:, slot].set(
-        jnp.where(hits_me, rank_to_me.astype(buff_power.dtype),
-                  buff_power[:, slot]))
-
-    return buff_id, buff_elapsed, buff_duration, buff_power, spell_cooldown, ready
+    rp = buffs.r_pending
+    rp = rp.replace(
+        active=rp.active | hits_me,
+        elapsed_s=_where(hits_me, 0.0, rp.elapsed_s),
+        rank=jnp.where(hits_me, rank_to_me.astype(jnp.int8), rp.rank))
+    return buffs.replace(r_pending=rp), spell_cooldown, ready
 
 
+def end_r_pending(buffs: Buffs, spell_cooldown, fired, cancelled):
+    """R's pending hit leaves the victim's row. ``fired`` is
+    ``Spell.FinishCasting`` -- it starts the CASTER's rank cooldown (the
+    caster is the victim's :func:`enemy_champion_index` mirror, and the rank is
+    the one the pending record carries); ``cancelled`` is the caster dying
+    mid-windup, the generic ``CastCancelCheck``, which starts none."""
+    n = fired.shape[0]
+    mirror = enemy_champion_index(n)
+    r_caster = jnp.clip(mirror, 0, n - 1).astype(jnp.int32)
+    r_cast_finished = fired[r_caster]
+    r_rank = jnp.clip(buffs.r_pending.rank[r_caster].astype(jnp.int32), 1,
+                      len(R_COOLDOWNS))
+    r_cd_table = jnp.asarray(R_COOLDOWNS, spell_cooldown.dtype)
+    spell_cooldown = spell_cooldown.at[:, Slot.R].set(
+        jnp.where(r_cast_finished, r_cd_table[r_rank - 1],
+                  spell_cooldown[:, Slot.R]))
+    ended = fired | cancelled
+    rp = buffs.r_pending
+    rp = rp.replace(active=rp.active & ~ended,
+                    elapsed_s=_where(ended, 0.0, rp.elapsed_s),
+                    rank=_where(ended, 0, rp.rank))
+    return buffs.replace(r_pending=rp), spell_cooldown
+
+
+# ---------------------------------------------------------------- status ---
+class Status(NamedTuple):
+    """What each unit may do under its buffs and cast state, ONE derivation
+    consumed by collision, the auto-attack gate, the cast gate and the
+    observation (`STRUCT-001`)."""
+    #: ``StatusFlags.Ghosted`` (GarenE): passes through unit collision.
+    ghosted: jax.Array      # (N,) bool
+    #: ``StatusFlags.CanAttack`` and no cast in progress: GarenE clears the
+    #: flag for its spin (`SPELL-002`), a recall wind-up/channel or R's
+    #: uncancellable windup holds the attack.
+    can_attack: jax.Array   # (N,) bool
+    #: alive, not silenced, and no ordinary cast in progress (recall wind-up,
+    #: R's windup) -- the unit-level half of ``can_cast``.
+    may_cast: jax.Array     # (N,) bool
+    #: by ``Slot``: the slot is not ``STATE_READY`` despite a zero cooldown --
+    #: Q while its window is open, E for the first ``E_CANCEL_MIN_S`` of its
+    #: spin. What the observation's cooldown feature reports as locked.
+    cast_locked: jax.Array  # (N, 4) bool
+    #: by ``Slot``: a press does something (for E, starting OR cancelling the
+    #: spin). R's target and range are order properties, checked by the order.
+    can_cast: jax.Array     # (N, 4) bool
+
+
+def cast_locked(buffs: Buffs) -> jax.Array:
+    """``(N, 4)`` by :class:`Slot`: locked by a live buff despite a zero
+    cooldown. Q: the empowerment window is open (``SPELL-008``). E: the spin
+    is live and ``GarenECancel`` is not yet ready (``SPELL-001``)."""
+    none = jnp.zeros_like(buffs.q.active)
+    by_slot = {Slot.Q: buffs.q.active, Slot.W: none,
+               Slot.E: buffs.e.active & ~e_cancellable(buffs), Slot.R: none}
+    return jnp.stack([by_slot[s] for s in range(4)], axis=1)
+
+
+def status(buffs: Buffs, *, alive, spell_level, spell_cooldown, silenced_ms,
+           recall_windup_ms, recall_channel_ms, r_cast_ms) -> Status:
+    """:class:`Status` from a buff state and the cast-lock timers.
+
+    Takes arrays rather than a ``LaneState`` because ``step.py`` asks it at
+    two points of a tick: collision reads the INCOMING buffs (``UpdateBuffs``
+    runs after ``Map.Update``), the auto-attack gate the post-``UpdateBuffs``
+    ones with this tick's recall/R timers. :func:`status_of` is the
+    whole-state form every other caller uses.
+    """
+    ghosted = buffs.e.active & alive
+    no_cast_in_progress = (recall_windup_ms <= 0) & (r_cast_ms <= 0)
+    can_attack = (alive & ~buffs.e.active & no_cast_in_progress
+                  & (recall_channel_ms <= 0))
+    may_cast = alive & (silenced_ms <= 0) & no_cast_in_progress
+    ranked = spell_level > 0
+    off_cd = spell_cooldown <= 0
+    ready = {
+        Slot.Q: _q_can_start(buffs, spell_cooldown[:, Slot.Q],
+                             spell_level[:, Slot.Q]),
+        Slot.W: ranked[:, Slot.W] & off_cd[:, Slot.W],
+        Slot.E: (_e_can_start(buffs, spell_cooldown[:, Slot.E],
+                              spell_level[:, Slot.E])
+                 | e_cancellable(buffs)),
+        Slot.R: ranked[:, Slot.R] & off_cd[:, Slot.R],
+    }
+    can_cast = may_cast[:, None] & jnp.stack([ready[s] for s in range(4)], axis=1)
+    return Status(ghosted=ghosted, can_attack=can_attack, may_cast=may_cast,
+                  cast_locked=cast_locked(buffs), can_cast=can_cast)
+
+
+def status_of(state) -> Status:
+    """:func:`status` of a whole ``LaneState``."""
+    return status(state.buffs, alive=state.alive, spell_level=state.spell_level,
+                  spell_cooldown=state.spell_cooldown,
+                  silenced_ms=state.silenced_ms,
+                  recall_windup_ms=state.recall_windup_ms,
+                  recall_channel_ms=state.recall_channel_ms,
+                  r_cast_ms=state.r_cast_ms)
+
+
+# ------------------------------------------------------------ step_buffs ---
 class BuffStep(NamedTuple):
-    buff_id: jax.Array
-    buff_elapsed: jax.Array
-    buff_power: jax.Array
+    buffs: Buffs
     spell_cooldown: jax.Array
     damage_dealt: jax.Array     # (N,) post-mitigation damage received this tick
     dealt_by: jax.Array         # (N,) who dealt it, -1 if nobody
-    suppress_attack: jax.Array  # (N,) bool: CanAttack cleared
-    ghosted: jax.Array          # (N,) bool
     #: Multiply a unit's total incoming damage by this before subtracting HP.
     #: Unconditionally **1.0** -- see :func:`step_buffs`'s W-active section for
     #: why: on this server build, ``GarenW``'s 0.7x never reaches real HP loss
     #: (a stale-local-vs-mutated-field bug in ``AttackableUnit.TakeDamage``),
     #: so bug-compatibility means this field does nothing, not that it holds
     #: :data:`W_DAMAGE_MULT`. Kept as a field (rather than deleted) so a
-    #: caller does not need special-casing, and so the window's own
-    #: (unaffected) duration/cooldown tracking has an obvious place to grow a
-    #: real consumer later (e.g. an observation) without re-plumbing.
+    #: caller does not need special-casing.
     damage_multiplier: jax.Array
-    #: ``Stat.Armor.PercentBaseBonus`` contribution from ``GarenWPassive``:
-    #: ``-0.2`` once granted, ``0`` otherwise (``GarenWPassive.cs:34``). See
-    #: :func:`step_buffs`'s W-passive section for why this is reported
-    #: separately from ``armor_percent_bonus`` rather than pre-composed into
-    #: one multiplier -- they compose around ``FlatBonus`` differently.
+    #: ``GarenWPassive``'s modifiers after this tick's grant -- see
+    #: :class:`WPassiveModifiers`.
     armor_percent_base_bonus: jax.Array
-    #: ``Stat.Armor.PercentBonus`` contribution: ``+0.2`` once granted, ``0``
-    #: otherwise (``GarenWPassive.cs:34``).
     armor_percent_bonus: jax.Array
-    #: Same pair, for ``MagicResist`` (``GarenWPassive.cs:36``).
     mr_percent_base_bonus: jax.Array
     mr_percent_bonus: jax.Array
     #: Q remains a live spell-swapped auto after its one skipped swing.
     q_empowered: jax.Array
-    #: The one-bit `SkipNextAutoAttack` marker carried in Q's buff-power lane.
+    #: ``SkipNextAutoAttack`` still pending on a live window.
     q_skip_next: jax.Array
 
 
-def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
-               spell_cooldown, spell_level, x, y, kind, team, alive, armor,
-               magic_resist=None, hp=None, max_hp=None,
+def step_buffs(*, buffs: Buffs, spell_cooldown, spell_level, x, y, kind, team,
+               alive, armor, magic_resist=None, hp=None, max_hp=None,
                collision_radius=None,
-               delta_ms: float = 1000.0 / 60.0,
-               e_slot: int = E_BUFF_SLOT, w_slot: int = W_BUFF_SLOT,
-               tick_slot: int = E_TICK_BUFF_SLOT,
-               wp_slot: int = W_PASSIVE_BUFF_SLOT, q_slot: int = Q_BUFF_SLOT,
-               qh_slot: int = Q_HASTE_BUFF_SLOT,
-               r_slot: int = R_PENDING_BUFF_SLOT) -> BuffStep:
+               delta_ms: float = 1000.0 / 60.0) -> BuffStep:
     """Advance every Garen buff one tick: E's spin, W's window and passive,
     Q's empowerment/haste windows, and R's one-shot pending hit.
 
     The tick boundary follows ``Buff.Update`` for all of them: elapsed
     advances first, then a buff's effect for this tick is evaluated, then it
-    deactivates once ``TimeElapsed >= Duration``.
+    deactivates -- through its ``end_*`` -- once ``TimeElapsed >= Duration``.
 
-    ``magic_resist`` is optional and falls back to reusing ``armor`` if not
-    given -- WRONG whenever Magic Resist != Armor, but harmless today because
-    no existing caller casts R (the only consumer of this value): the
-    fallback is dead code until ``step.py``'s call site is updated to pass
-    ``magic_resist=P("magic_resist")``. Kept optional specifically so adding
-    R here does not break every other test in this file, which do not go
-    through ``apply_orders``'s R path at all.
+    A DEAD unit's buffs keep running (`SPELL-006`): ``UpdateBuffs`` has no
+    death check, so a corpse's spin expires and starts its cooldown on
+    schedule, and ``GarenE.OnUpdate`` keeps dealing its periodic damage from
+    the corpse. Only the targets must be alive. The exception is R's pending
+    hit, whose CASTER dying cancels it (``CastCancelCheck``).
+
+    ``armor``/``magic_resist`` are the TARGETS' effective resists, i.e. with
+    ``GarenWPassive`` applied from the incoming buff state (`SPELL-007`);
+    ``step.py`` computes them before calling this. ``magic_resist`` falls back
+    to ``armor`` if omitted (a direct-caller convenience; ``step.py`` passes
+    it).
     """
     n = x.shape[0]
     dt_s = delta_ms / 1000.0
 
-    # ---- E: the spin (unchanged from before Q/W/R existed) ---------------
-    e_active = (buff_id[:, e_slot] == BuffId.GAREN_E) & alive
-    e_elapsed = jnp.where(e_active, buff_elapsed[:, e_slot] + dt_s,
-                          buff_elapsed[:, e_slot])
-
-    # `GarenE.TimeSinceLastTick` is constructed at 500 ms, so its first
+    # ---- E: the spin -------------------------------------------------------
+    e = buffs.e
+    e_active = e.active
+    e_elapsed = jnp.where(e_active, e.elapsed_s + dt_s, e.elapsed_s)
     # THE SERVER'S ACCUMULATOR, not an absolute grid. `GarenE.OnUpdate` keeps
     # `TimeSinceLastTick` in ms, primed to 500 by `cast_e` and reset to 0 on
     # every fire, so the period drifts by one frame each time: 0.0167, 0.5333,
     # 1.050, 1.5667, 2.0833, 2.600 -- six ticks, the seventh at 3.117 s never
-    # arriving because the buff expires at 3.0. The previous
-    # `floor(elapsed / 500)` grid fired seven times, +16.7% damage per spin on
-    # the one spell this policy farms with, with a phase error up to 83 ms.
-    tick_acc = buff_elapsed[:, tick_slot] + jnp.where(e_active, delta_ms, 0.0)
+    # arriving because the buff expires at 3.0 (`SPELL-003`).
+    tick_acc = e.tick_acc_ms + jnp.where(e_active, delta_ms, 0.0)
     fires = e_active & (tick_acc >= E_TICK_MS)
     tick_acc = jnp.where(fires, 0.0, tick_acc)
 
     d2 = (x[None, :] - x[:, None]) ** 2 + (y[None, :] - y[:, None]) ** 2
     hittable = alive & (kind != Kind.TURRET) & (kind != Kind.NONE)
-    # E's 330 is CENTRE-TO-EDGE on the server, not centre-to-centre.
-    # `GetUnitsInRange` goes through `CollisionHandler.GetNearestObjects`, whose
-    # quadtree nodes are circles of the unit's own collision radius, and
-    # `Circle.IntersectsWith(Circle)` tests `dist^2 < (330 + r_unit)^2`. Minions
-    # are 40 and champions 30, so the effective radius is 370 and 360 -- about
-    # 26% more area than the 330 this used, i.e. the sim systematically
-    # UNDER-hit. Strict `<`, matching `IntersectsWith`.
+    # E's 330 is CENTRE-TO-EDGE on the server, not centre-to-centre
+    # (`SPELL-004`). `GetUnitsInRange` goes through
+    # `CollisionHandler.GetNearestObjects`, whose quadtree nodes are circles
+    # of the unit's own collision radius, and `Circle.IntersectsWith(Circle)`
+    # tests `dist^2 < (330 + r_unit)^2`. Minions are 40 and champions 30, so
+    # the effective radius is 370 and 360. Strict `<`, matching
+    # `IntersectsWith`.
     reach = E_RADIUS + (jnp.zeros_like(x) if collision_radius is None
                         else collision_radius)
     hit = (
@@ -742,17 +912,13 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
         & (d2 < (reach ** 2)[None, :])
     )
     mult = jnp.where(kind == Kind.LANE_MINION, E_MINION_MULTIPLIER, 1.0)
-    raw = buff_power[:, e_slot][:, None] * mult[None, :]
+    raw = e.power[:, None] * mult[None, :]
     dealt = jnp.where(hit, post_mitigation_damage(raw, armor[None, :], jnp),
                       jnp.zeros_like(d2))
     damage_e = dealt.sum(axis=0)
     any_hit = jnp.any(hit, axis=0)
     dealt_by_e = jnp.where(any_hit, jnp.argmax(hit, axis=0), -1).astype(jnp.int8)
-
-    e_expired = e_active & (e_elapsed >= buff_duration[:, e_slot])
-    e_rank = jnp.clip(spell_level[:, Slot.E].astype(jnp.int32), 1,
-                      len(E_COOLDOWNS)) - 1
-    e_cd_table = jnp.asarray(E_COOLDOWNS, spell_cooldown.dtype)
+    e_expired = e_active & (e_elapsed >= E_DURATION_S)
 
     # ---- W active: the 0.7x window (real buff, but a no-op on this server) --
     # `GarenW.cs:47-55`'s `PreTakeDamage` listener does
@@ -762,172 +928,96 @@ def step_buffs(*, buff_id, buff_elapsed, buff_duration, buff_power,
     # `OnPreTakeDamage` -- both the real HP subtraction (`:585`) and lifesteal
     # (`:612-616`) read that stale local, never the mutated `damageData`
     # field. Only the cosmetic floating-damage-number packet (`:606`) ever
-    # sees the 0.7x. Verified directly from both files, not inferred from the
-    # bug's plausibility. So on THIS server build, W's active window changes
-    # NOTHING about real damage taken -- reproduced as bug-compatibility, not
-    # "fixed" to the intended mechanic our sim used to implement. The window
-    # itself (duration, cooldown-at-cast) is still real and tracked
-    # (`w_active_now`) since the buff genuinely exists and genuinely expires
-    # on schedule; only `damage_multiplier` is unconditionally 1.0.
-    w_active = (buff_id[:, w_slot] == BuffId.GAREN_W) & alive
-    w_elapsed = jnp.where(w_active, buff_elapsed[:, w_slot] + dt_s,
-                          buff_elapsed[:, w_slot])
-    w_expired = w_active & (w_elapsed >= buff_duration[:, w_slot])
-    w_active_now = w_active & ~w_expired
+    # sees the 0.7x. So on THIS server build, W's active window changes
+    # NOTHING about real damage taken -- reproduced as bug-compatibility. The
+    # window itself (duration, cooldown-at-cast) is still real and tracked.
+    w = buffs.w
+    w_active = w.active
+    w_elapsed = jnp.where(w_active, w.elapsed_s + dt_s, w.elapsed_s)
+    w_expired = w_active & (w_elapsed >= w_duration_at_rank(w.rank))
     damage_multiplier = jnp.ones_like(x)
 
     # ---- GarenWPassive: granted on RANK-UP, not on cast --------------------
-    # See the module docstring's W section: `OnLevelUpSpell` is registered from
-    # spell-object construction, independent of ever pressing W, and fires
-    # once when SpellLevel first becomes 1. Reproduced the same way: as soon
-    # as `spell_level[..., Slot.W] >= 1` and the passive isn't already marked,
-    # grant it; once granted (`infiniteduration`) nothing here ever clears it.
-    #
-    # Reports the RAW `PercentBaseBonus`/`PercentBonus` pair the server writes
-    # (`-0.2`/`+0.2`, `GarenWPassive.cs:34-37`) rather than a single combined
-    # multiplier: `Stat.Total`'s `FlatBonus` term sits BETWEEN these two
-    # percent terms (`combat.stat_total`), so a caller with a nonzero
-    # `FlatBonus` (Garen's Armor, via the rune page) needs both terms
-    # separately to compose the formula correctly -- collapsing them into one
-    # multiplier here would silently re-introduce the flat `*1.2` bug this
-    # replaces.
-    has_wp = buff_id[:, wp_slot] == BuffId.GAREN_W_PASSIVE
-    grant_wp = alive & (spell_level[:, Slot.W] >= 1) & ~has_wp
-    buff_id_wp = jnp.where(grant_wp, jnp.int8(BuffId.GAREN_W_PASSIVE),
-                           buff_id[:, wp_slot])
-    wp_active_now = alive & (buff_id_wp == BuffId.GAREN_W_PASSIVE)
-    armor_percent_base_bonus = jnp.where(
-        wp_active_now, jnp.asarray(-W_PASSIVE_ARMOR_PCT, x.dtype),
-        jnp.zeros_like(x))
-    armor_percent_bonus = jnp.where(
-        wp_active_now, jnp.asarray(W_PASSIVE_ARMOR_PCT, x.dtype),
-        jnp.zeros_like(x))
-    mr_percent_base_bonus = jnp.where(
-        wp_active_now, jnp.asarray(-W_PASSIVE_MR_PCT, x.dtype),
-        jnp.zeros_like(x))
-    mr_percent_bonus = jnp.where(
-        wp_active_now, jnp.asarray(W_PASSIVE_MR_PCT, x.dtype),
-        jnp.zeros_like(x))
+    buffs = grant_w_passive(buffs, spell_level, alive)
+    wp = w_passive_modifiers(buffs, alive, x.dtype)
 
     # ---- Q: empowerment window + haste window ------------------------------
-    q_active = (buff_id[:, q_slot] == BuffId.GAREN_Q) & alive
-    q_elapsed = jnp.where(q_active, buff_elapsed[:, q_slot] + dt_s,
-                          buff_elapsed[:, q_slot])
-    q_expired = q_active & (q_elapsed >= buff_duration[:, q_slot])
+    q = buffs.q
+    q_active = q.active
+    q_elapsed = jnp.where(q_active, q.elapsed_s + dt_s, q.elapsed_s)
+    q_expired = q_active & (q_elapsed >= Q_BUFF_DURATION)
     q_live = q_active & ~q_expired
-    q_skip_next = q_live & (buff_power[:, q_slot] > 0)
+    q_skip_next = q_live & q.skip_next
     q_empowered = q_live & ~q_skip_next
 
-    qh_active = (buff_id[:, qh_slot] == BuffId.GAREN_Q_HASTE) & alive
-    qh_elapsed = jnp.where(qh_active, buff_elapsed[:, qh_slot] + dt_s,
-                           buff_elapsed[:, qh_slot])
-    qh_expired = qh_active & (qh_elapsed >= buff_duration[:, qh_slot])
+    qh = buffs.q_haste
+    qh_active = qh.active
+    qh_elapsed = jnp.where(qh_active, qh.elapsed_s + dt_s, qh.elapsed_s)
+    qh_expired = qh_active & (qh_elapsed >= q_haste_duration_at_rank(qh.rank))
 
-    # ---- R: one-shot pending hit --------------------------------------------
+    # ---- R: one-shot pending hit, on the victim's row ----------------------
     mr = armor if magic_resist is None else magic_resist
-    r_pending = buff_id[:, r_slot] == BuffId.GAREN_R_PENDING
+    rp = buffs.r_pending
+    r_pending = rp.active
     # `GarenR` has `CantCancelWhileWindingUp=1`: a target dying during the
     # cast does not cancel its owner's spell or prevent its cooldown from
     # beginning. Owner death *does* take the generic CastCancelCheck path.
-    # The mailbox lives on the target row, so look the owner up through the
+    # The record lives on the target row, so look the owner up through the
     # fixed champion mirror rather than incorrectly using target `alive`.
     mirror = enemy_champion_index(n)
     r_caster = jnp.clip(mirror, 0, n - 1).astype(jnp.int32)
     r_cancelled = r_pending & ~alive[r_caster]
     r_active = r_pending & ~r_cancelled
-    r_elapsed = jnp.where(r_active, buff_elapsed[:, r_slot] + dt_s,
-                          buff_elapsed[:, r_slot])
-    r_fires = r_active & (r_elapsed >= buff_duration[:, r_slot])
+    r_elapsed = jnp.where(r_active, rp.elapsed_s + dt_s, rp.elapsed_s)
+    r_fires = r_active & (r_elapsed >= R_CAST_TIME_S)
     if hp is None or max_hp is None:
         # Compatibility only for direct, non-R callers. A real pending R
         # requires the target-health snapshot supplied by `step.tick`.
         missing_hp = jnp.zeros_like(x)
     else:
         missing_hp = jnp.maximum(max_hp - hp, 0.0)
-    raw_r = r_damage_at_rank(buff_power[:, r_slot].astype(jnp.int32), missing_hp)
+    raw_r = r_damage_at_rank(rp.rank.astype(jnp.int32), missing_hp)
     damage_r = jnp.where(r_fires & alive, post_mitigation_damage(raw_r, mr, jnp),
                          jnp.zeros_like(raw_r))
     dealt_by_r = jnp.where(r_fires, mirror, -1).astype(jnp.int8)
-    # The mailbox survives through the real cast windup. Clearing it on the
-    # first `UpdateBuffs` call would silently restore the old synchronous
-    # behavior by deleting the queued hit before `Spell.Update` can finish it.
-    r_expired = r_fires | r_cancelled
 
     # ---- combine E's and R's directly-dealt damage for tick()'s kill
     # attribution cumsum. A victim can in principle take both in the same
-    # tick (E's spin from a nearby enemy AND an R landing, from either
-    # champion) -- rare, since R only ever targets the enemy champion, but
-    # not impossible. Summed for HP; R's attacker wins the attribution tie,
-    # an arbitrary but documented choice for a genuinely rare double-source
-    # tick, rather than the two-row plumbing a fully general fix would need.
+    # tick; summed for HP, R's attacker wins the attribution tie -- an
+    # arbitrary but documented choice for a genuinely rare double-source tick.
     damage_dealt = damage_e + damage_r
     dealt_by = jnp.where(damage_r > 0, dealt_by_r, dealt_by_e)
 
-    # ---- cooldowns: generic per-tick decay on ALL FOUR spell slots, with
-    # E and Q overriding their column to the rank's/flat table value on the
-    # tick their buff expires. Before Q/W/R existed only E's column was ever
-    # touched here; W's and R's cooldowns are set once at cast (`cast_w`,
-    # `cast_r`) and, without this, would never count back down.
-    decayed_cd = jnp.maximum(spell_cooldown - dt_s, 0.0)
-    new_cd = decayed_cd.at[:, Slot.E].set(
-        jnp.where(e_expired, e_cd_table[e_rank], decayed_cd[:, Slot.E]))
-    new_cd = new_cd.at[:, Slot.Q].set(
-        jnp.where(q_expired, Q_COOLDOWN, decayed_cd[:, Slot.Q]))
-    r_cast_finished = r_fires[r_caster]
-    r_rank = jnp.clip(buff_power[r_caster, r_slot].astype(jnp.int32), 1,
-                      len(R_COOLDOWNS))
-    r_cd_table = jnp.asarray(R_COOLDOWNS, spell_cooldown.dtype)
-    new_cd = new_cd.at[:, Slot.R].set(
-        jnp.where(r_cast_finished, r_cd_table[r_rank - 1], new_cd[:, Slot.R]))
-
-    buff_id_out = buff_id
-    buff_id_out = buff_id_out.at[:, e_slot].set(
-        jnp.where(e_expired, jnp.int8(BuffId.NONE), buff_id[:, e_slot]))
-    buff_id_out = buff_id_out.at[:, w_slot].set(
-        jnp.where(w_expired, jnp.int8(BuffId.NONE), buff_id[:, w_slot]))
-    buff_id_out = buff_id_out.at[:, wp_slot].set(buff_id_wp)
-    buff_id_out = buff_id_out.at[:, q_slot].set(
-        jnp.where(q_expired, jnp.int8(BuffId.NONE), buff_id[:, q_slot]))
-    buff_id_out = buff_id_out.at[:, qh_slot].set(
-        jnp.where(qh_expired, jnp.int8(BuffId.NONE), buff_id[:, qh_slot]))
-    buff_id_out = buff_id_out.at[:, r_slot].set(
-        jnp.where(r_expired, jnp.int8(BuffId.NONE), buff_id[:, r_slot]))
-
-    buff_elapsed_out = buff_elapsed
-    buff_elapsed_out = buff_elapsed_out.at[:, e_slot].set(
-        jnp.where(e_expired, 0.0, e_elapsed))
-    buff_elapsed_out = buff_elapsed_out.at[:, w_slot].set(
-        jnp.where(w_expired, 0.0, w_elapsed))
-    buff_elapsed_out = buff_elapsed_out.at[:, q_slot].set(
-        jnp.where(q_expired, 0.0, q_elapsed))
-    buff_elapsed_out = buff_elapsed_out.at[:, qh_slot].set(
-        jnp.where(qh_expired, 0.0, qh_elapsed))
-    # E's tick accumulator, written back so the drift carries across ticks.
-    # Zeroed when the spin is not active so a later cast starts clean even
-    # though `cast_e` primes it anyway.
-    buff_elapsed_out = buff_elapsed_out.at[:, tick_slot].set(
-        jnp.where(e_active, tick_acc, 0.0))
-    buff_elapsed_out = buff_elapsed_out.at[:, r_slot].set(
-        jnp.where(r_expired, 0.0, r_elapsed))
-    # wp_slot's elapsed/duration are left untouched: `infiniteduration` means
-    # there is no countdown to track.
+    # ---- write the advanced clocks, then END what expired ------------------
+    # Every end goes through its `end_*` (= `OnDeactivate`). A cooldown a
+    # buff end writes replaces this tick's countdown value for that slot, as
+    # before.
+    buffs = buffs.replace(
+        # the accumulator carries the drift across ticks; zeroed while no
+        # spin is live, so a later cast starts clean (cast_e primes it).
+        e=buffs.e.replace(elapsed_s=e_elapsed,
+                          tick_acc_ms=jnp.where(e_active, tick_acc, 0.0)),
+        w=buffs.w.replace(elapsed_s=w_elapsed),
+        q=buffs.q.replace(elapsed_s=q_elapsed),
+        q_haste=buffs.q_haste.replace(elapsed_s=qh_elapsed),
+        r_pending=buffs.r_pending.replace(elapsed_s=r_elapsed))
+    cd = decay_cooldowns(spell_cooldown, dt_s)
+    buffs, cd = end_e(buffs, cd, e_expired, spell_level[:, Slot.E])
+    buffs = end_w(buffs, w_expired)
+    buffs, cd = end_q(buffs, cd, q_expired)
+    buffs = end_q_haste(buffs, qh_expired)
+    buffs, cd = end_r_pending(buffs, cd, fired=r_fires, cancelled=r_cancelled)
 
     return BuffStep(
-        buff_id=buff_id_out,
-        buff_elapsed=buff_elapsed_out,
-        buff_power=buff_power,
-        spell_cooldown=new_cd,
+        buffs=buffs,
+        spell_cooldown=cd,
         damage_dealt=damage_dealt.astype(x.dtype),
         dealt_by=dealt_by,
-        # `SetStatus(CanAttack, false)` and `SetStatus(Ghosted, true)` for the
-        # duration -- E suppresses autos and passes through collision.
-        suppress_attack=e_active & ~e_expired,
-        ghosted=e_active & ~e_expired,
         damage_multiplier=damage_multiplier,
-        armor_percent_base_bonus=armor_percent_base_bonus,
-        armor_percent_bonus=armor_percent_bonus,
-        mr_percent_base_bonus=mr_percent_base_bonus,
-        mr_percent_bonus=mr_percent_bonus,
+        armor_percent_base_bonus=wp.armor_percent_base_bonus,
+        armor_percent_bonus=wp.armor_percent_bonus,
+        mr_percent_base_bonus=wp.mr_percent_base_bonus,
+        mr_percent_bonus=wp.mr_percent_bonus,
         q_empowered=q_empowered,
         q_skip_next=q_skip_next,
     )

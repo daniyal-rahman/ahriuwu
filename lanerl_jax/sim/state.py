@@ -28,7 +28,10 @@ constant           measured   note
                                 collinear cells: 110,890 random valid bounded
                                 Map1 routes measured p99=24 and max=45. 64 keeps
                                 headroom while overflow remains diagnostic.
-``MAX_BUFFS`` 8       max 5
+buffs               n/a     not a capped table any more: one typed record per
+                                buff KIND (``Buffs``, below), because Garen's kit
+                                has exactly six and each has its own fields
+                                (`STRUCT-001`)
 ``N_MISSILES`` 24     max 16  from a 600 s **idle** top lane (``init_lane`` +
                                 ``step_decision``, no orders, no wave-spawn
                                 variance beyond the schedule itself) -- NOT the
@@ -77,9 +80,10 @@ from flax import struct
 
 __all__ = [
     "N_CHAMPIONS", "N_MINIONS", "N_TURRETS", "N_UNITS",
-    "MAX_WAYPOINTS", "MAX_BUFFS", "N_MISSILES",
+    "MAX_WAYPOINTS", "N_MISSILES",
     "CH_SLICE", "MI_SLICE", "TU_SLICE",
     "Kind", "Team", "MoveOrder", "TurretTier",
+    "EBuff", "QBuff", "RankedBuff", "Buffs", "empty_buffs",
     "LaneState", "empty_state",
 ]
 
@@ -89,7 +93,6 @@ N_TURRETS = 24
 N_UNITS = N_CHAMPIONS + N_MINIONS + N_TURRETS      # 66
 
 MAX_WAYPOINTS = 64
-MAX_BUFFS = 8
 N_MISSILES = 24
 
 CH_SLICE = slice(0, N_CHAMPIONS)
@@ -154,6 +157,101 @@ class MoveOrder:
     ATTACK_MOVE = 4
     STOP = 5
     CAST_SPELL = 6
+
+
+# ------------------------------------------------------------------ buffs ---
+# `STRUCT-001`. Garen's buffs used to live in a `(N, 8)` fixed-lane table
+# (`buff_id` / `buff_elapsed` / `buff_duration` / `buff_power`) whose lanes
+# each meant something different: `buff_power` was a damage snapshot in the E
+# lane, a one-bit flag in the Q lane and a rank in the R lane; lane 6's
+# `buff_elapsed` was MILLISECONDS in an otherwise seconds array; and the lane
+# constants (`E_BUFF_SLOT = 0`) read exactly like the spell-slot constants
+# (`Slot.E = 2`) they must never be mixed with -- `SPELL-005` was that
+# collision, and nothing failed. One typed record per buff kind removes every
+# one of those: a field has one meaning and its unit is in its name, and a
+# buff is found by name, never by a small integer.
+#
+# Units. Buff clocks are ``elapsed_s``, float32 SECONDS, because that is the
+# server's own unit and accumulation (`Buff.Update`: ``TimeElapsed += diff /
+# 1000.0f``, then ``TimeElapsed >= Duration``). The same clock kept in ms
+# crosses its thresholds on a DIFFERENT tick in float32 -- 3.0 s is reached on
+# tick 181 in seconds and on tick 180 in ms, 1.0 s (E's cancel) on 61 vs 60 --
+# so "one unit everywhere" in ms would have shortened every spin by a tick.
+# E's periodic-damage clock is ``tick_acc_ms``, MILLISECONDS, because the
+# server's `GarenE.TimeSinceLastTick` is (`SPELL-003`). Durations are NOT
+# state: E, Q and R's are constants, W's and Q-haste's are a function of the
+# rank the spell had when it was cast, which is what the record carries.
+
+
+@struct.dataclass
+class EBuff:
+    """`GarenE`, the spin, on the caster's row."""
+    active: jax.Array       # (N,) bool
+    #: `Buff.TimeElapsed`, seconds. Expires at `spells.E_DURATION_S`.
+    elapsed_s: jax.Array    # (N,)
+    #: damage per tick, snapshotted at cast (`GarenE.OnActivate`).
+    power: jax.Array        # (N,)
+    #: `GarenE.TimeSinceLastTick`, ms, primed to 500 at cast and reset to 0
+    #: on every fire -- the drifting six-tick schedule (`SPELL-003`).
+    tick_acc_ms: jax.Array  # (N,)
+
+
+@struct.dataclass
+class QBuff:
+    """`GarenQ`, the empowerment window, on the caster's row."""
+    active: jax.Array       # (N,) bool
+    #: seconds. Expires at `spells.Q_BUFF_DURATION`.
+    elapsed_s: jax.Array    # (N,)
+    #: `SkipNextAutoAttack()` from `GarenQ.OnActivate`, consumed at the next
+    #: swing gate by `step_autoattack`.
+    skip_next: jax.Array    # (N,) bool
+
+
+@struct.dataclass
+class RankedBuff:
+    """A timed buff whose length depends on the rank it was cast at: `GarenW`
+    (``rank + 1`` s), `GarenQHaste` (``1.5 + 0.75*(rank-1)`` s), and R's
+    pending hit (fixed 0.435 s cast time; the rank sets the damage and the
+    caster's cooldown)."""
+    active: jax.Array       # (N,) bool
+    elapsed_s: jax.Array    # (N,)
+    rank: jax.Array         # (N,) int8, 1..5 while active, 0 otherwise
+
+
+@struct.dataclass
+class Buffs:
+    """Every buff Garen's kit can put on a unit, one record per kind.
+
+    Written only by the cast and buff-lifecycle functions in `sim/spells.py`
+    (`cast_*`, `end_*`, `step_buffs`, `grant_w_passive`, `consume_q_skip`) and
+    by the state constructors (`empty_state`, `spawn_minion`, parity
+    injection, the eval's state rebuilder). Read through `spells.status`.
+    """
+    e: EBuff
+    q: QBuff
+    q_haste: RankedBuff
+    w: RankedBuff
+    #: `GarenWPassive`: infinite, granted when W first gets a rank.
+    w_passive: jax.Array    # (N,) bool
+    #: R's pending hit, on the VICTIM's row. Not a server buff -- a same-tick
+    #: mailbox so R's mitigation happens where the other spell damage does.
+    #: `rank` is the CASTER's R rank.
+    r_pending: RankedBuff
+
+
+def empty_buffs(n_units: int = 0, dtype=jnp.float32) -> Buffs:
+    """No buff on any unit."""
+    b = lambda: jnp.zeros((n_units,), dtype=bool)        # noqa: E731
+    f = lambda: jnp.zeros((n_units,), dtype=dtype)       # noqa: E731
+    r = lambda: jnp.zeros((n_units,), dtype=jnp.int8)    # noqa: E731
+    return Buffs(
+        e=EBuff(active=b(), elapsed_s=f(), power=f(), tick_acc_ms=f()),
+        q=QBuff(active=b(), elapsed_s=f(), skip_next=b()),
+        q_haste=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
+        w=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
+        w_passive=b(),
+        r_pending=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
+    )
 
 
 @struct.dataclass
@@ -346,19 +444,17 @@ class LaneState:
     first_blood_done: jax.Array   # () bool
 
     # ---- buffs -----------------------------------------------------------
-    buff_id: jax.Array         # (N, MAX_BUFFS) int8, 0 = empty
-    buff_elapsed: jax.Array    # (N, MAX_BUFFS)
-    buff_duration: jax.Array   # (N, MAX_BUFFS)
-    #: per-buff scalar the script needs. Judgment snapshots its damage at cast
-    #: (the AD ratio is NOT recomputed per tick), so it lives here.
-    buff_power: jax.Array      # (N, MAX_BUFFS)
+    #: one typed record per buff kind -- see :class:`Buffs` (`STRUCT-001`).
+    buffs: Buffs
 
     # ---- spells ----------------------------------------------------------
     #: rank per slot, 0 = unlearned. ``Spell.Cast`` does **not** check the
     #: level, so casting an unlearned spell is not a no-op on the server -- it
     #: grants the effect anyway. The action mask is what must forbid it.
     spell_level: jax.Array     # (N, 4) int8
-    #: remaining cooldown, SECONDS
+    #: remaining cooldown, SECONDS, indexed by ``spells.Slot``. Written by the
+    #: cast functions and the buff-end functions in `sim/spells.py` ONLY --
+    #: the full writer set is listed at `spells.COOLDOWN_WRITERS`.
     spell_cooldown: jax.Array  # (N, 4)
     #: Per observing champion (blue slot 0, red slot 1) and Q/W/E/R: elapsed
     #: milliseconds since that observer *witnessed* an opposing cast. ``-1``
@@ -497,10 +593,7 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         hit_flag_ms=z(n_units),
         hit_flag_by=jnp.full((n_units,), -1, dtype=jnp.int8),
         first_blood_done=jnp.asarray(False),
-        buff_id=zi(n_units, MAX_BUFFS),
-        buff_elapsed=z(n_units, MAX_BUFFS),
-        buff_duration=z(n_units, MAX_BUFFS),
-        buff_power=z(n_units, MAX_BUFFS),
+        buffs=empty_buffs(n_units, dtype),
         spell_level=zi(n_units, 4),
         spell_cooldown=z(n_units, 4),
         observed_enemy_cast_ms=jnp.full((N_CHAMPIONS, 4), -1.0, dtype=dtype),

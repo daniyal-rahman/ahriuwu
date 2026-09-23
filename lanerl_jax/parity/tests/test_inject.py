@@ -27,7 +27,7 @@ from lanerl_jax.parity.one_step import OneStepResult
 from lanerl_jax.sim.init import lane_params
 from lanerl_jax.sim.init import ALL_TURRETS, TOP_LANE_PATH
 from lanerl_jax.sim.profiles import PROFILES, profile_id
-from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, W_PASSIVE_BUFF_SLOT
+from lanerl_jax.sim.spells import E_DURATION_S
 from lanerl_jax.sim.state import Kind, Team
 from lanerl_jax.sim.waves import FIRST_WAVE_MS, WaveState, step_waves
 
@@ -255,10 +255,12 @@ def test_xp_bounds_and_dumped_cooldowns_are_not_conflated_with_a_point_xp_value(
     assert float(state.spell_cooldown[note.slot, 1]) == 2.0
     assert float(state.spell_cooldown[note.slot, 2]) == 5.0
     # Exact identity survives, but no made-up elapsed duration/power creates a
-    # fictitious full-length Garen E on the following tick.
-    assert int(state.buff_id[note.slot, E_BUFF_SLOT]) == BuffId.GAREN_E
-    assert float(state.buff_duration[note.slot, E_BUFF_SLOT]) == 0.0
-    assert int(state.buff_id[note.slot, W_PASSIVE_BUFF_SLOT]) == BuffId.GAREN_W_PASSIVE
+    # fictitious full-length Garen E on the following tick: the unknown phase
+    # is placed at the spin's END, so it expires at the next buff update.
+    assert bool(state.buffs.e.active[note.slot])
+    assert float(state.buffs.e.elapsed_s[note.slot]) == E_DURATION_S
+    assert float(state.buffs.e.power[note.slot]) == 0.0
+    assert bool(state.buffs.w_passive[note.slot])
     assert "phase/power intentionally unresolved" in note.buff_recovery
     assert "Mystery" in note.buff_recovery
     assert note.cooldown_recovery == "exact dumped cooldowns"

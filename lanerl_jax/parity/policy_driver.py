@@ -52,7 +52,7 @@ from ..obs.frame import make_lane_frame
 from ..sim.init import TOP_OUTER_TURRET, init_lane, lane_params
 from ..sim.orders import OrderKind
 from ..sim.profiles import profile_id
-from ..sim.spells import BuffId, E_BUFF_SLOT, E_DURATION_S
+from ..sim.spells import E_DURATION_S
 from ..sim.state import CH_SLICE, MI_SLICE, TU_SLICE, Kind, Team
 from ..train.actions import orders_from
 from ..train.policy import LanePolicy, PolicyConfig
@@ -151,12 +151,15 @@ class StateRebuilder:
         gold = np.zeros(n, np.float32)
         cs = np.zeros(n, np.int32)
         netid = np.zeros(n, np.int64)
-        spell_level = np.zeros((2, 4), np.int32)
-        spell_cd = np.zeros((2, 4), np.float32)
+        # (N, 4), the state's own shape: only the champion rows (slots 0/1,
+        # = team) are filled, but `spells.status` reads every row.
+        spell_level = np.zeros((n, 4), np.int32)
+        spell_cd = np.zeros((n, 4), np.float32)
         recall = np.zeros(n, np.float32)
-        buff_id = np.asarray(self.base.buff_id).copy()
-        buff_elapsed = np.asarray(self.base.buff_elapsed).copy()
-        buff_duration = np.asarray(self.base.buff_duration).copy()
+        # Only E's spin is recoverable from the wire (below); every other
+        # buff record stays at the base state's (empty) value.
+        e_active = np.asarray(self.base.buffs.e.active).copy()
+        e_elapsed = np.asarray(self.base.buffs.e.elapsed_s).copy()
         t_now = float(frame.get("t", 0))
 
         units = frame.get("u", [])
@@ -205,9 +208,8 @@ class StateRebuilder:
                     if el >= E_DURATION_S:
                         e["spin_start_ms"] = None
                     else:
-                        buff_id[i, E_BUFF_SLOT] = BuffId.GAREN_E
-                        buff_elapsed[i, E_BUFF_SLOT] = el
-                        buff_duration[i, E_BUFF_SLOT] = E_DURATION_S
+                        e_active[i] = True
+                        e_elapsed[i] = el
             elif k in _MINION_KINDS:
                 nid = int(u["id"])
                 i = self._minion.get(nid)
@@ -244,8 +246,10 @@ class StateRebuilder:
             spell_level=jnp.asarray(spell_level),
             spell_cooldown=jnp.asarray(spell_cd),
             recall_channel_ms=jnp.asarray(recall),
-            buff_id=jnp.asarray(buff_id), buff_elapsed=jnp.asarray(buff_elapsed),
-            buff_duration=jnp.asarray(buff_duration),
+            buffs=self.base.buffs.replace(e=self.base.buffs.e.replace(
+                active=jnp.asarray(e_active),
+                elapsed_s=jnp.asarray(e_elapsed,
+                                      self.base.buffs.e.elapsed_s.dtype))),
             t_ms=jnp.asarray(t_now, jnp.float32))
         return state, netid
 

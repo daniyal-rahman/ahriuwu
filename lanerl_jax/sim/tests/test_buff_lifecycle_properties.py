@@ -10,18 +10,20 @@ hold on EVERY tick regardless of the order stream:
    and one E spin never lasts longer than ``E_DURATION_S`` + one tick
    (``SPELL-001``: a re-cast reset the spin forever);
 2. at most six E damage ticks per spin (``SPELL-003``: seven);
-3. every E/Q buff end that is NOT a death writes that spell's cooldown on the
-   same step (``SPELL-001``'s "never started its cooldown"). Ends BY DEATH do
-   not write it today (``SPELL-006``, OPEN): those are counted and reported,
-   and pinned by a separate ``xfail(strict=True)`` test that the fix must
-   flip;
+3. every E/Q buff end writes that spell's cooldown on the same step
+   (``SPELL-001``'s "never started its cooldown") -- including a window whose
+   owner DIED inside it (``SPELL-006``, fixed by ``STRUCT-001``: the server
+   keeps ticking a corpse's buffs and their ``OnDeactivate`` writes the
+   cooldown on schedule; the sim used to wipe them on death with none, which
+   made death a free spell reset). Those are counted separately and pinned
+   by ``test_an_e_or_q_ended_by_death_still_starts_its_cooldown``, which was
+   a strict xfail until the fix;
 4. every rise of ``spell_cooldown[E]`` pairs with an E end on the same step;
    every rise of ``spell_cooldown[Q]`` with a Q end or cast; ``[W]`` with a W
    cast; ``[R]`` with the R windup completing on the enemy's pending lane;
 5. hp <= max_hp; level in [1, 18]; a dead unit holds no target and no swing
-   target (``ENT-02``'s ``aa_target``); a dead unit is not mid-swing -- which
-   FAILS today on the death tick itself (a finding, pinned as a strict xfail
-   in ``test_a_dead_unit_is_not_mid_swing``; beyond that tick it is asserted);
+   target (``ENT-02``'s ``aa_target``); a dead unit is not mid-swing, not
+   even on its death tick (``AA-006``, found by this file);
 6. a champion's cs never rises on a tick where no enemy minion died, and its
    gold never rises unless an enemy minion or the enemy champion died (or
    ambient gold has started): ``ENT-01`` paid gold and CS for killing your
@@ -59,16 +61,13 @@ from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
 from lanerl_jax.sim.profiles import profile_id
 from lanerl_jax.sim.rewards import AMBIENT_GOLD_DELAY_MS
 from lanerl_jax.sim.spells import (
-    E_BUFF_SLOT,
     E_DURATION_S,
-    E_TICK_BUFF_SLOT,
-    Q_BUFF_SLOT,
-    Q_HASTE_BUFF_SLOT,
-    R_PENDING_BUFF_SLOT,
+    Q_BUFF_DURATION,
+    R_CAST_TIME_S,
     RANKS_BY_LEVEL,
-    W_BUFF_SLOT,
-    BuffId,
     Slot,
+    q_haste_duration_at_rank,
+    w_duration_at_rank,
 )
 from lanerl_jax.sim.state import Kind, Team
 from lanerl_jax.sim.step import tick
@@ -93,10 +92,8 @@ BLOCK = 150
 #: so there is something to last-hit for the whole stream.
 REFILL = 300
 LEVEL = 6
-#: Timed lanes: E, W, Q, Q haste, R pending. W-passive is infinite; lane 6 is
-#: E's millisecond accumulator, not a buff.
-TIMED_LANES = (E_BUFF_SLOT, W_BUFF_SLOT, Q_BUFF_SLOT, Q_HASTE_BUFF_SLOT,
-               R_PENDING_BUFF_SLOT)
+#: Timed buff records: E, W, Q, Q haste, R pending. W-passive is infinite.
+TIMED = ("e", "w", "q", "q_haste", "r_pending")
 ARENA = ((5900.0, 6000.0), (6250.0, 6000.0))
 KINDS = np.array([OrderKind.NOOP, OrderKind.MOVE, OrderKind.ATTACK,
                   OrderKind.CAST_E, OrderKind.CAST_Q, OrderKind.CAST_W,
@@ -190,7 +187,7 @@ def _random_orders(s, key, spam):
         score = jnp.where(elig, jax.random.uniform(kt, (n,)), -1.0)
         atk = jnp.where(jnp.any(elig), jnp.argmax(score), -1)
         # calm: no E re-press while this champion's own spin is live
-        e_live = s.buff_id[c, E_BUFF_SLOT] == BuffId.GAREN_E
+        e_live = s.buffs.e.active[c]
         kind = jnp.where(~spam & e_live & (kind == OrderKind.CAST_E),
                          jnp.asarray(OrderKind.NOOP, kind.dtype), kind)
         tgt = jnp.where(kind == OrderKind.ATTACK, atk,
@@ -202,9 +199,26 @@ def _random_orders(s, key, spam):
                   target=jnp.stack(tgts).astype(jnp.int8))
 
 
+def _durations(b):
+    """Each timed buff's duration, seconds, from its constant or its
+    cast rank -- durations are not state (`STRUCT-001`)."""
+    return {
+        "e": jnp.full(b.e.active.shape, E_DURATION_S),
+        "q": jnp.full(b.q.active.shape, Q_BUFF_DURATION),
+        "w": w_duration_at_rank(b.w.rank),
+        "q_haste": q_haste_duration_at_rank(b.q_haste.rank),
+        "r_pending": jnp.full(b.r_pending.active.shape, R_CAST_TIME_S),
+    }
+
+
 def _snap(s):
+    b = s.buffs
+    dur = _durations(b)
     return dict(
-        bid=s.buff_id[:2], bel=s.buff_elapsed[:2], bdur=s.buff_duration[:2],
+        on={k: getattr(b, k).active[:2] for k in TIMED},
+        el={k: getattr(b, k).elapsed_s[:2] for k in TIMED},
+        dur={k: dur[k][:2] for k in TIMED},
+        e_tick_acc_ms=b.e.tick_acc_ms[:2],
         cd=s.spell_cooldown[:2], hp=s.hp, max_hp=s.max_hp, alive=s.alive,
         kind=s.kind, team=s.team, cs=s.cs[:2], gold=s.gold[:2], level=s.level[:2],
         target=s.target, is_attacking=s.is_attacking, aa_target=s.aa_target,
@@ -226,8 +240,7 @@ def _runner():
         s = apply_orders(s, o, params)
         snap_orders = _snap(s)
         # death injection: only while E or Q is live, so it lands mid-window
-        live_window = ((s.buff_id[:2, E_BUFF_SLOT] == BuffId.GAREN_E)
-                       | (s.buff_id[:2, Q_BUFF_SLOT] == BuffId.GAREN_Q))
+        live_window = s.buffs.e.active[:2] | s.buffs.q.active[:2]
         inject = (jax.random.uniform(k_die, (2,)) < P_DEATH) & live_window & s.alive[:2]
         s = s.replace(hp=s.hp.at[:2].set(jnp.where(inject, -1000.0, s.hp[:2])))
 
@@ -256,11 +269,16 @@ def _trace(seed):
     t0 = time.time()
     snap_orders, snaps, kinds, inject = jax.block_until_ready(run(seed))
     wall = time.time() - t0
+    def cat(a, b):
+        a = np.asarray(a)[:, None]
+        b = np.asarray(b)
+        return np.concatenate([a, b], axis=1).reshape((-1,) + a.shape[2:])
     flat = {}
     for k in snap_orders:
-        a = np.asarray(snap_orders[k])[:, None]
-        b = np.asarray(snaps[k])
-        flat[k] = np.concatenate([a, b], axis=1).reshape((-1,) + a.shape[2:])
+        if isinstance(snap_orders[k], dict):
+            flat[k] = {r: cat(snap_orders[k][r], snaps[k][r]) for r in snap_orders[k]}
+        else:
+            flat[k] = cat(snap_orders[k], snaps[k])
     phase = np.tile(np.arange(STEP_TICKS + 1), N_DECISIONS)
     return flat, phase, np.asarray(kinds), np.asarray(inject), wall
 
@@ -275,68 +293,82 @@ def _analyse(seed):
     ev = dict(e_casts=0, e_cancels=0, e_expiries=0, e_death_ends=0,
               q_casts=0, q_ends=0, q_death_ends=0, w_casts=0, r_landed=0,
               deaths=0, injected=int(inject.sum()), fires=0, cs_gain=0,
-              e_death_ends_with_cd=0, q_death_ends_with_cd=0, dead_swinging=0)
+              e_death_ends_with_cd=0, q_death_ends_with_cd=0, dead_swinging=0,
+              corpse_fires=0)
     tol = 1e-4
-    bid, bel, bdur, cd = f["bid"], f["bel"], f["bdur"], f["cd"]
+    on, el, dur, cd = f["on"], f["el"], f["dur"], f["cd"]
     alive, kind, team = f["alive"], f["kind"], f["team"]
     for c in (0, 1):
         spin_ticks, spin_fires = 0, 0
+        # `SPELL-006`: a window whose owner died while it was live. Buffs are
+        # not removed by death any more, so such a window ENDS later (on the
+        # corpse, or after respawn) -- and that end must write the cooldown
+        # like any other.
+        e_saw_death = q_saw_death = False
         for t in range(T):
             where = f"seed {seed} snapshot {t} (decision {t // (STEP_TICKS + 1)}, phase {phase[t]}) champ {c}"
             # --- 1. timed buffs never overrun
-            for lane in TIMED_LANES:
-                if bid[t, c, lane] != BuffId.NONE and \
-                        bel[t, c, lane] > bdur[t, c, lane] + TICK_S + tol:
-                    bad["timed"].append(f"{where}: lane {lane} elapsed "
-                                        f"{bel[t, c, lane]:.4f} > duration {bdur[t, c, lane]:.4f}")
+            for rec in TIMED:
+                if on[rec][t, c] and \
+                        el[rec][t, c] > dur[rec][t, c] + TICK_S + tol:
+                    bad["timed"].append(f"{where}: {rec} elapsed "
+                                        f"{el[rec][t, c]:.4f} > duration {dur[rec][t, c]:.4f}")
             # --- 5. per-snapshot sanity
             if not (1 <= f["level"][t, c] <= 18):
                 bad["level"].append(f"{where}: level {f['level'][t, c]}")
             if t == 0:
                 continue
             p = t - 1
-            e_prev = bid[p, c, E_BUFF_SLOT] == BuffId.GAREN_E
-            e_now = bid[t, c, E_BUFF_SLOT] == BuffId.GAREN_E
-            q_prev = bid[p, c, Q_BUFF_SLOT] == BuffId.GAREN_Q
-            q_now = bid[t, c, Q_BUFF_SLOT] == BuffId.GAREN_Q
+            e_prev, e_now = on["e"][p, c], on["e"][t, c]
+            q_prev, q_now = on["q"][p, c], on["q"][t, c]
             died = alive[p, c] and not alive[t, c]
             ev["deaths"] += int(died)
             rise = cd[t, c] > cd[p, c] + 1e-6
             is_tick = phase[t] != 0
-            # --- 1b/2. spin length and damage ticks (a tick that ENTERED live)
+            if died and e_prev:
+                e_saw_death = True
+            if died and q_prev:
+                q_saw_death = True
+            # --- 1b/2. spin length and damage ticks (a tick that ENTERED
+            # live, alive OR dead: a corpse's spin keeps running, SPELL-006)
             if e_now and not e_prev:
                 spin_ticks, spin_fires = 0, 0
                 ev["e_casts"] += 1
-            if is_tick and e_prev and alive[p, c]:
+            if is_tick and e_prev:
                 spin_ticks += 1
-                if bel[t, c, E_TICK_BUFF_SLOT] == 0.0:
+                if f["e_tick_acc_ms"][t, c] == 0.0:
                     spin_fires += 1
                     ev["fires"] += 1
+                    ev["corpse_fires"] += int(not alive[p, c])
                 if spin_ticks > round(E_DURATION_S / TICK_S) + 1:
                     bad["spin_len"].append(f"{where}: spin live for {spin_ticks} ticks")
                 if spin_fires > MAX_E_FIRES:
                     bad["fires"].append(f"{where}: {spin_fires} E damage ticks in one spin")
-            # --- 3. every E/Q end writes its cooldown, unless it is a death
+            # --- 3. every E/Q end writes its cooldown -- a window its owner
+            # died in included (counted separately: SPELL-006)
             if e_prev and not e_now:
-                if died:
+                if e_saw_death:
                     ev["e_death_ends"] += 1
                     ev["e_death_ends_with_cd"] += int(rise[Slot.E])
+                elif is_tick:
+                    ev["e_expiries"] += 1
                 else:
-                    if is_tick:
-                        ev["e_expiries"] += 1
-                    else:
-                        ev["e_cancels"] += 1
-                    if not rise[Slot.E]:
-                        bad["end_no_cd"].append(f"{where}: E ended without a cooldown "
-                                                f"({cd[p, c, Slot.E]:.3f} -> {cd[t, c, Slot.E]:.3f})")
+                    ev["e_cancels"] += 1
+                if not rise[Slot.E]:
+                    bad["end_no_cd"].append(f"{where}: E ended without a cooldown "
+                                            f"({cd[p, c, Slot.E]:.3f} -> {cd[t, c, Slot.E]:.3f})"
+                                            + (" [owner died in the spin]" if e_saw_death else ""))
+                e_saw_death = False
             if q_prev and not q_now:
-                if died:
+                if q_saw_death:
                     ev["q_death_ends"] += 1
                     ev["q_death_ends_with_cd"] += int(rise[Slot.Q])
                 else:
                     ev["q_ends"] += 1
-                    if not rise[Slot.Q]:
-                        bad["end_no_cd"].append(f"{where}: Q ended without a cooldown")
+                if not rise[Slot.Q]:
+                    bad["end_no_cd"].append(f"{where}: Q ended without a cooldown"
+                                            + (" [owner died in the window]" if q_saw_death else ""))
+                q_saw_death = False
             if q_now and not q_prev:
                 ev["q_casts"] += 1
             # --- 4. every cooldown rise has its cause on the same step
@@ -344,15 +376,14 @@ def _analyse(seed):
                 bad["cd_rise"].append(f"{where}: cd[E] rose with no E end")
             if rise[Slot.Q] and not ((q_prev and not q_now) or (q_now and not q_prev)):
                 bad["cd_rise"].append(f"{where}: cd[Q] rose with no Q end or cast")
-            w_started = (bid[t, c, W_BUFF_SLOT] == BuffId.GAREN_W
-                         and (bid[p, c, W_BUFF_SLOT] != BuffId.GAREN_W
-                              or bel[t, c, W_BUFF_SLOT] < bel[p, c, W_BUFF_SLOT]))
+            w_started = (on["w"][t, c]
+                         and (not on["w"][p, c]
+                              or el["w"][t, c] < el["w"][p, c]))
             ev["w_casts"] += int(w_started)
             if rise[Slot.W] and not w_started:
                 bad["cd_rise"].append(f"{where}: cd[W] rose with no W cast")
             other = 1 - c
-            r_fired = (bid[p, other, R_PENDING_BUFF_SLOT] == BuffId.GAREN_R_PENDING
-                       and bid[t, other, R_PENDING_BUFF_SLOT] != BuffId.GAREN_R_PENDING)
+            r_fired = on["r_pending"][p, other] and not on["r_pending"][t, other]
             if rise[Slot.R]:
                 ev["r_landed"] += 1
                 if not r_fired:
@@ -432,9 +463,10 @@ def test_at_most_six_e_damage_ticks_per_spin(seed):
 
 
 @pytest.mark.parametrize("seed", SEEDS)
-def test_every_live_e_or_q_end_writes_its_cooldown(seed):
-    """Property 3, the NON-DEATH case (expiry, cancel, Q consumed on hit).
-    Ends by death are counted and pinned separately (`SPELL-006`)."""
+def test_every_e_or_q_end_writes_its_cooldown(seed):
+    """Property 3: expiry, cancel, Q consumed on hit -- and a window whose
+    owner died inside it, whose end is ALSO counted and pinned separately
+    below (`SPELL-006`)."""
     bad, _, _ = _analysis(seed)
     assert not bad["end_no_cd"], _report(bad, "end_no_cd")
 
@@ -449,7 +481,7 @@ def test_every_cooldown_rise_has_its_cause_on_the_same_step(seed):
 def test_unit_sanity_on_every_snapshot(seed):
     """hp <= max_hp, level in [1, 18], a dead unit holds no target and no
     swing target, and a corpse's `is_attacking` never outlives its death tick
-    (the death-tick case itself is the xfail below)."""
+    (the death-tick case itself is `test_a_dead_unit_is_not_mid_swing`, AA-006)."""
     bad, _, _ = _analysis(seed)
     for k in ("hp", "level", "dead", "dead_stale"):
         assert not bad[k], _report(bad, k)
@@ -499,14 +531,12 @@ def test_the_random_streams_exercise_every_path():
         "no death landed inside an E or Q window: SPELL-006 is untested"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "SPELL-006 (OPEN): death clears E and Q without starting their cooldowns, "
-    "so death is a free spell reset. When fixed, remove this xfail."))
 def test_an_e_or_q_ended_by_death_still_starts_its_cooldown():
-    """The server lets the buffs run out on the corpse and ``OnDeactivate``
-    sets the full cooldown; the sim wipes them in ``clear_owner_buffs`` with
-    no cooldown. Requires the stream to have produced such deaths (asserted
-    first, so an XPASS cannot come from zero samples)."""
+    """`SPELL-006`, fixed. The server lets the buffs run out on the corpse
+    and ``OnDeactivate`` sets the full cooldown; the sim used to wipe them on
+    death with no cooldown (a free spell reset). A strict xfail until the
+    fix. Requires the stream to have produced such deaths (asserted first, so
+    a pass cannot come from zero samples)."""
     tot = _totals()
     n = tot["e_death_ends"] + tot["q_death_ends"]
     assert n >= 2, "coverage lost -- see test_the_random_streams_exercise_every_path"

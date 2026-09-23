@@ -21,7 +21,7 @@ from lanerl_jax.obs.fog import visible_to, visible_to_enemy
 from lanerl_jax.obs.frame import make_lane_frame, to_lane
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
 from lanerl_jax.sim.combat import growth_sum
-from lanerl_jax.sim.spells import BuffId, E_BUFF_SLOT, Q_BUFF_SLOT
+from lanerl_jax.sim.spells import E_CANCEL_MIN_S
 from lanerl_jax.sim.state import Kind, Team
 
 pytestmark = pytest.mark.skipif(
@@ -250,16 +250,28 @@ def test_self_stats_and_cooldowns_come_from_live_state_and_profiles(frames):
 
 
 def test_q_and_e_windows_report_unavailable_even_before_cooldown_starts(frames):
+    """Q is locked for its whole window; E for the first `E_CANCEL_MIN_S`
+    of its spin, after which a press CANCELS it, so the obs reports it
+    available -- the same rule `apply_orders` gates on (`STRUCT-001`)."""
     fb, _ = frames
     p = load_patch()
-    s = init_lane(p).replace(
-        spell_level=jnp.asarray([[1, 0, 1, 0]] + [[0] * 4] * 65, jnp.int8),
-        buff_id=init_lane(p).buff_id.at[0, Q_BUFF_SLOT].set(BuffId.GAREN_Q)
-        .at[0, E_BUFF_SLOT].set(BuffId.GAREN_E),
-    )
-    ob = build_observation(s, 0, fb, params=lane_params(p))
+    base = init_lane(p)
+    b = base.buffs
+
+    def with_spin(e_elapsed):
+        return base.replace(
+            spell_level=jnp.asarray([[1, 0, 1, 0]] + [[0] * 4] * 65, jnp.int8),
+            buffs=b.replace(
+                q=b.q.replace(active=b.q.active.at[0].set(True)),
+                e=b.e.replace(active=b.e.active.at[0].set(True),
+                              elapsed_s=b.e.elapsed_s.at[0].set(e_elapsed))))
+
+    ob = build_observation(with_spin(0.5), 0, fb, params=lane_params(p))
     assert float(ob.self_vec[6]) == 1.0
     assert float(ob.self_vec[8]) == 1.0
+    ob = build_observation(with_spin(E_CANCEL_MIN_S), 0, fb, params=lane_params(p))
+    assert float(ob.self_vec[6]) == 1.0
+    assert float(ob.self_vec[8]) == 0.0, "a press from 1 s on is a cancel"
 
 
 def test_global_cast_memory_uses_rank_one_bases_and_never_seen_sentinel(frames):

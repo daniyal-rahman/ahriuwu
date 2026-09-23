@@ -102,13 +102,12 @@ __all__ = [
 #: 30 Hz decisions off a 60 Hz server: `LANERL_STEP_TICKS=2`.
 TICK_MS = 1000.0 / 60.0
 
-#: sim `BuffId` -> the server's buff name (`AddBuff("...")` in the vendored
-#: Garen scripts). `GAREN_R_PENDING` is a sim-only mailbox, not a buff.
-def _buff_names() -> Dict[int, str]:
-    from ..sim.spells import BuffId
-    return {BuffId.GAREN_E: "GarenE", BuffId.GAREN_W: "GarenW",
-            BuffId.GAREN_W_PASSIVE: "GarenWPassive", BuffId.GAREN_Q: "GarenQ",
-            BuffId.GAREN_Q_HASTE: "GarenQHaste"}
+#: the server's buff names (`AddBuff("...")` in the vendored Garen scripts)
+#: the sim models, from `spells.BUFF_NAMES`. R's pending hit is a sim-only
+#: mailbox, not a buff, and has no name.
+def _buff_names():
+    from ..sim.spells import BUFF_NAMES
+    return tuple(BUFF_NAMES)
 
 
 #: Buff names compared on both sides. The server also carries GarenPassive,
@@ -220,14 +219,22 @@ class TrainingStepEngine:
 
 
 _FETCH = ("kind", "alive", "team", "x", "y", "hp", "max_hp", "level", "gold",
-          "cs", "deaths", "spell_level", "spell_cooldown", "buff_id",
-          "buff_elapsed", "has_auto_attacked", "spawn_seq", "t_ms")
+          "cs", "deaths", "spell_level", "spell_cooldown",
+          "has_auto_attacked", "spawn_seq", "t_ms")
 
 
 def fetch(state) -> Dict[str, np.ndarray]:
-    """The fields the renderer and the counters read, as numpy, in one copy."""
+    """The fields the renderer and the counters read, as numpy, in one copy.
+
+    Buffs are fetched by server NAME (``buff:<name>``, ``(N,)`` bool) plus
+    E's elapsed clock, which the renderer needs for the cancel projection."""
     import jax
-    return jax.device_get({k: getattr(state, k) for k in _FETCH})
+    from ..sim.spells import active_by_name
+    out = {k: getattr(state, k) for k in _FETCH}
+    for name, on in active_by_name(state.buffs).items():
+        out["buff:" + name] = on
+    out["e_elapsed_s"] = state.buffs.e.elapsed_s
+    return jax.device_get(out)
 
 
 def render_sim_snapshot(f: Mapping[str, np.ndarray], t_ms: int) -> Snapshot:
@@ -243,11 +250,12 @@ def render_sim_snapshot(f: Mapping[str, np.ndarray], t_ms: int) -> Snapshot:
     One projection: during an E spin the server's slot 2 holds
     `GarenECancel`, whose cooldown is 1 s from the cast (`E.cs`), and the dump
     reports THAT; the sim keeps E's own cooldown at 0 for the spin and gates
-    the cancel on `buff_elapsed >= E_CANCEL_MIN_S`. So E's cooldown is
-    rendered as ``max(0, E_CANCEL_MIN_S - buff_elapsed[E])`` while the spin is
-    up -- the quantity the server shows -- and as the spell cooldown otherwise.
+    the cancel on the spin's elapsed clock ``>= E_CANCEL_MIN_S``. So E's
+    cooldown is rendered as ``max(0, E_CANCEL_MIN_S - elapsed)`` while the
+    spin is up -- the quantity the server shows -- and as the spell cooldown
+    otherwise.
     """
-    from ..sim.spells import BuffId, E_BUFF_SLOT, E_CANCEL_MIN_S, Slot
+    from ..sim.spells import E_CANCEL_MIN_S, Slot
     from ..sim.state import Kind, Team
 
     kind_name = {Kind.CHAMPION: "Champion", Kind.LANE_MINION: "LaneMinion",
@@ -262,8 +270,7 @@ def render_sim_snapshot(f: Mapping[str, np.ndarray], t_ms: int) -> Snapshot:
         is_champ = k == Kind.CHAMPION
         if not alive[i] and not is_champ:
             continue
-        buffs = tuple(sorted({names[int(b)] for b in f["buff_id"][i]
-                              if int(b) in names}))
+        buffs = tuple(sorted(nm for nm in names if f["buff:" + nm][i]))
         ai = AIBlock(move_order=0, waypoints=0, cast_spell="-",
                      channel_spell="-", can_move=True, buffs=buffs)
         champ = None
@@ -272,10 +279,8 @@ def render_sim_snapshot(f: Mapping[str, np.ndarray], t_ms: int) -> Snapshot:
             spells = []
             for s in range(4):
                 cd = float(f["spell_cooldown"][c, s])
-                if (s == Slot.E and int(f["buff_id"][i, E_BUFF_SLOT])
-                        == BuffId.GAREN_E):
-                    cd = max(0.0, E_CANCEL_MIN_S
-                             - float(f["buff_elapsed"][i, E_BUFF_SLOT]))
+                if s == Slot.E and f["buff:GarenE"][i]:
+                    cd = max(0.0, E_CANCEL_MIN_S - float(f["e_elapsed_s"][i]))
                 spells.append((int(f["spell_level"][c, s]),
                                int(round(max(cd, 0.0) * StatQ))))
             champ = ChampionBlock(

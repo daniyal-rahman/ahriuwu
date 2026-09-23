@@ -65,17 +65,13 @@ import jax.numpy as jnp
 
 from ..sim.combat import growth_sum, stat_total
 from ..sim.spells import (
-    BuffId,
-    E_BUFF_SLOT,
     E_COOLDOWNS,
-    Q_BUFF_SLOT,
     Q_COOLDOWN,
     R_COOLDOWNS,
     Slot,
     W_COOLDOWNS,
-    W_PASSIVE_ARMOR_PCT,
-    W_PASSIVE_MR_PCT,
-    W_PASSIVE_BUFF_SLOT,
+    status_of,
+    w_passive_modifiers,
 )
 from ..sim.state import Kind, LaneState, Team
 from .fog import visible_to
@@ -217,18 +213,18 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
     ad = p("attack_damage") + p("ad_per_level") * growth
     armor_base = p("armor") + p("armor_per_level") * growth
     mr_base = p("magic_resist") + p("mr_per_level") * growth
-    has_w_passive = ((state.buff_id[me, W_PASSIVE_BUFF_SLOT]
-                      == BuffId.GAREN_W_PASSIVE) & state.alive[me])
+    # The same `GarenWPassive` modifiers the sim mitigates with (`step.py`).
+    wp = w_passive_modifiers(state.buffs, state.alive, state.x.dtype)
     armor = stat_total(
         armor_base - p("armor_flat_bonus"),
         flat_bonus=p("armor_flat_bonus"),
-        percent_base_bonus=jnp.where(has_w_passive, -W_PASSIVE_ARMOR_PCT, 0.0),
-        percent_bonus=jnp.where(has_w_passive, W_PASSIVE_ARMOR_PCT, 0.0),
+        percent_base_bonus=wp.armor_percent_base_bonus[me],
+        percent_bonus=wp.armor_percent_bonus[me],
     )
     mr = stat_total(
         mr_base,
-        percent_base_bonus=jnp.where(has_w_passive, -W_PASSIVE_MR_PCT, 0.0),
-        percent_bonus=jnp.where(has_w_passive, W_PASSIVE_MR_PCT, 0.0),
+        percent_base_bonus=wp.mr_percent_base_bonus[me],
+        percent_bonus=wp.mr_percent_bonus[me],
     )
 
     rank = state.spell_level[me].astype(jnp.int32)
@@ -241,14 +237,16 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
         e_cd[jnp.clip(rank[Slot.E], 1, len(E_COOLDOWNS)) - 1],
         r_cd[jnp.clip(rank[Slot.R], 1, len(R_COOLDOWNS)) - 1],
     ])
-    # E's cooldown starts after its spin and Q's after the empowerment window;
-    # both are unavailable while active despite a zero countdown.
-    cast_locked = jnp.asarray([
-        state.buff_id[me, Q_BUFF_SLOT] == BuffId.GAREN_Q,
-        False,
-        state.buff_id[me, E_BUFF_SLOT] == BuffId.GAREN_E,
-        False,
-    ])
+    # E's cooldown starts after its spin and Q's after the empowerment window,
+    # so both read a zero countdown while their buff is live. Whether a press
+    # does anything then is `spells.status`'s `cast_locked` -- the SAME rule
+    # `apply_orders` gates the cast on (`STRUCT-001`): Q is locked for its
+    # whole window; E for the first `E_CANCEL_MIN_S` of its spin and then
+    # AVAILABLE, because a press from 1.0 s on CANCELS the spin (and starts
+    # its cooldown). This used to report E locked for the whole spin while
+    # the sim accepted the cancel -- the observation and the cast gate
+    # disagreeing on the spell the policy farms with (`OBS-01`).
+    cast_locked = status_of(state).cast_locked[me]
     cooldowns = jnp.where(
         (rank > 0) & ~cast_locked,
         jnp.clip(state.spell_cooldown[me] / base_cd, 0.0, 1.0),

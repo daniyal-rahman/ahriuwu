@@ -8,21 +8,21 @@ when the spell is unranked or ``cast_locked`` (Q's or E's buff is live) and
 feature is ``> 0``, and "AVAILABLE" means it is exactly 0.
 
 The sim's truth is whether ``apply_orders`` with that cast changed the spell
-state (the buff table, the cooldowns, R's cast timer, the recall channel).
+state (the buffs, the cooldowns, R's cast timer, the recall channel).
 
-The invariant this file enforces is one-directional and has no exceptions
-except the one ``STRUCT-001`` records:
+The invariant this file enforces is one-directional and has no exceptions:
 
     obs LOCKED  =>  the sim refuses the cast.
 
-The one standing exception is E during its spin at ``elapsed >= 1.0 s``: the
-obs reports E LOCKED for the whole spin (``cast_locked[E]`` is "E's buff is
-live"), while ``cast_e`` ACCEPTS a press from ``E_CANCEL_MIN_S`` on as a
-CANCEL that ends the spin and starts the cooldown (``SPELL-001``, ``OBS-01``).
-Those cases are ``xfail(strict=True)``. **When the buff/spell rewrite lands,
-it must resolve that disagreement one way or the other -- and then the xfail
-marks on ``E_SPIN_CANCELLABLE`` below MUST be removed** (strict xfail turns an
-unexpected pass into a failure precisely so this cannot be forgotten).
+It had one, recorded by ``STRUCT-001``: E during its spin at ``elapsed >=
+1.0 s``, where the obs reported E LOCKED for the whole spin while ``cast_e``
+ACCEPTED a press from ``E_CANCEL_MIN_S`` on as a CANCEL that ends the spin and
+starts the cooldown (``SPELL-001``, ``OBS-01``). The rewrite RESOLVED it: the
+obs and the cast gate now read one rule (``spells.status``), and E is locked
+for the first ``E_CANCEL_MIN_S`` of the spin and AVAILABLE from then on --
+where a press is a cancel. Those cases (``E_SPIN_CANCELLABLE``) were strict
+xfails; they now pass, and are checked in the stronger direction too (shown
+available AND accepted).
 
 The other direction (obs AVAILABLE but the sim refuses) is not a contradiction
 in the same sense: silence, death, a recall wind-up, R's own cast lock and R's
@@ -47,16 +47,9 @@ from lanerl_jax.obs.frame import make_lane_frame
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
 from lanerl_jax.sim.orders import OrderKind, Orders, apply_orders
 from lanerl_jax.sim.spells import (
-    E_BUFF_SLOT,
     E_CANCEL_MIN_S,
-    E_DURATION_S,
-    E_TICK_BUFF_SLOT,
     E_TICK_MS,
-    Q_BUFF_DURATION,
-    Q_BUFF_SLOT,
-    Q_HASTE_BUFF_SLOT,
     R_CAST_RANGE,
-    BuffId,
     Slot,
 )
 from lanerl_jax.sim.state import Team
@@ -114,26 +107,26 @@ def _state(*, enemy_dx=300.0, ranks=(1, 1, 1, 1), **edits):
     return edits.get("edit", lambda st: st)(s)
 
 
-def _with_buff(st, lane, bid, elapsed, duration, power=0.0):
-    return st.replace(
-        buff_id=st.buff_id.at[0, lane].set(bid),
-        buff_elapsed=st.buff_elapsed.at[0, lane].set(elapsed),
-        buff_duration=st.buff_duration.at[0, lane].set(duration),
-        buff_power=st.buff_power.at[0, lane].set(power))
-
-
 def _e_spin(elapsed):
     def edit(st):
-        st = _with_buff(st, E_BUFF_SLOT, BuffId.GAREN_E, elapsed, E_DURATION_S, 30.0)
-        # a mid-spin accumulator value, in ms (lane 6 is the E tick clock)
-        return st.replace(buff_elapsed=st.buff_elapsed.at[0, E_TICK_BUFF_SLOT].set(
-            E_TICK_MS / 3))
+        e = st.buffs.e
+        return st.replace(buffs=st.buffs.replace(e=e.replace(
+            active=e.active.at[0].set(True),
+            elapsed_s=e.elapsed_s.at[0].set(elapsed),
+            power=e.power.at[0].set(30.0),
+            # a mid-spin accumulator value (ms, the server's unit)
+            tick_acc_ms=e.tick_acc_ms.at[0].set(E_TICK_MS / 3))))
     return edit
 
 
 def _q_window(st):
-    st = _with_buff(st, Q_BUFF_SLOT, BuffId.GAREN_Q, 1.0, Q_BUFF_DURATION, 0.0)
-    return _with_buff(st, Q_HASTE_BUFF_SLOT, BuffId.GAREN_Q_HASTE, 1.0, 1.5)
+    b = st.buffs
+    return st.replace(buffs=b.replace(
+        q=b.q.replace(active=b.q.active.at[0].set(True),
+                      elapsed_s=b.q.elapsed_s.at[0].set(1.0)),
+        q_haste=b.q_haste.replace(active=b.q_haste.active.at[0].set(True),
+                                  elapsed_s=b.q_haste.elapsed_s.at[0].set(1.0),
+                                  rank=b.q_haste.rank.at[0].set(1))))
 
 
 def _cooldown(slot, value):
@@ -174,11 +167,9 @@ CASES = [
     ("E_during_own_R_cast", Slot.E, _field("r_cast_ms", 200.0), 300.0),
 ]
 
-#: Obs says E LOCKED for the whole spin; `cast_e` cancels from 1.0 s on.
+#: A press here CANCELS the spin; the obs must say E is available. These were
+#: strict xfails until `STRUCT-001` put the obs and the gate on one rule.
 E_SPIN_CANCELLABLE = {"E_spin_1.0s", "E_spin_2.5s"}
-_XFAIL_E_CANCEL = pytest.mark.xfail(
-    strict=True,
-    reason="STRUCT-001: obs says locked, cast_e cancels at >= 1 s")
 
 #: Obs AVAILABLE (cooldown feature 0) but the sim refuses -- a real refusal
 #: the cooldown feature does not encode. Pinned so the set cannot grow
@@ -209,36 +200,38 @@ def _evaluate(case_id, slot, edit, enemy_dx):
                x=jnp.zeros(2, jnp.float32), y=jnp.zeros(2, jnp.float32),
                target=jnp.asarray([target, -1], jnp.int8))
     after = orders_fn(st, o)
-    changed = any(
-        not np.array_equal(np.asarray(getattr(st, f)), np.asarray(getattr(after, f)))
-        for f in ("buff_id", "buff_elapsed", "buff_duration", "buff_power",
-                  "spell_cooldown", "r_cast_ms", "recall_channel_ms"))
+    before_leaves = jax.tree_util.tree_leaves(
+        (st.buffs, st.spell_cooldown, st.r_cast_ms, st.recall_channel_ms))
+    after_leaves = jax.tree_util.tree_leaves(
+        (after.buffs, after.spell_cooldown, after.r_cast_ms,
+         after.recall_channel_ms))
+    changed = any(not np.array_equal(np.asarray(a), np.asarray(b))
+                  for a, b in zip(before_leaves, after_leaves))
     return feature, changed, ob
 
 
-def _params(filter_fn=lambda c: True, xfail_ids=frozenset()):
-    out = []
-    for c in CASES:
-        if not filter_fn(c):
-            continue
-        marks = [_XFAIL_E_CANCEL] if c[0] in xfail_ids else []
-        out.append(pytest.param(*c, id=c[0], marks=marks))
-    return out
+def _params(filter_fn=lambda c: True):
+    return [pytest.param(*c, id=c[0]) for c in CASES if filter_fn(c)]
 
 
-@pytest.mark.parametrize("case_id,slot,edit,enemy_dx",
-                         _params(xfail_ids=E_SPIN_CANCELLABLE))
+@pytest.mark.parametrize("case_id,slot,edit,enemy_dx", _params())
 def test_a_spell_the_obs_shows_locked_is_never_accepted(case_id, slot, edit, enemy_dx):
     feature, changed, _ = _evaluate(case_id, slot, edit, enemy_dx)
     if feature > 0.0:
         assert not changed, (
             f"{case_id}: obs cooldown feature {feature:.3f} (LOCKED) but "
             f"apply_orders ACCEPTED the cast")
-    else:
-        # Not a locked case: nothing to check in this direction -- but an
-        # xfail case landing here means the obs changed, which the strict
-        # xfail will surface as XPASS.
-        pass
+
+
+@pytest.mark.parametrize("case_id", sorted(E_SPIN_CANCELLABLE))
+def test_a_cancellable_spin_is_shown_available_and_the_press_cancels_it(case_id):
+    """The resolved `STRUCT-001` disagreement, in both directions: from
+    `E_CANCEL_MIN_S` on the obs shows E AVAILABLE and the press ends the
+    spin and starts the rank cooldown."""
+    _, slot, edit, dx = next(c for c in CASES if c[0] == case_id)
+    feature, changed, _ = _evaluate(case_id, slot, edit, dx)
+    assert feature == 0.0, f"{case_id}: obs shows E locked ({feature})"
+    assert changed, f"{case_id}: the press did not cancel the spin"
 
 
 @pytest.mark.parametrize("case_id,slot,edit,enemy_dx", _params())
