@@ -109,13 +109,15 @@ from lanerl_jax.sim.init import TOP_OUTER_TURRET, lane_params         # noqa: E4
 from lanerl_jax.sim.orders import OrderKind                           # noqa: E402
 from lanerl_jax.sim.state import MI_SLICE, TU_SLICE, Kind, Team       # noqa: E402
 from lanerl_jax.train.trainer import BLUE_NEXUS                       # noqa: E402
+from lanerl_jax.parity.record import (                                # noqa: E402
+    ServerLaunchRefused, assert_two_garens, resolve_server_path)
 # The driver lives in ONE place (`PARITY-001`): the policy-divergence gate
 # drives the server with exactly this code. Re-exported here so the eval's
 # names (and anything that imported them from this script) keep working.
 from lanerl_jax.parity.policy_driver import (                         # noqa: E402,F401
     E_CANCEL_ARMED_MAX_MS, WIRE_MT_TO_SIM, WIRE_TEAM, _MINION_KINDS,
-    CreationRankMap, StateRebuilder, _turret_slot_map, load_params,
-    make_driver, order_to_wire, pending_rank_up)
+    CastFreezeDetector, CreationRankMap, StateRebuilder, _turret_slot_map,
+    load_params, make_driver, order_to_wire, pending_rank_up)
 
 
 class HeterogeneousEpisodes(RuntimeError):
@@ -266,6 +268,10 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
         make_driver(policy, params, deterministic=deterministic, seed=seed + i)
         for i in range(n)]
     rows = [{"episode": i} for i in range(n)]
+    # `SERVER-001`: one per instance, fed every frame. A champion stuck in
+    # MoveOrder=CastSpell drops every order for the rest of the game; its CS
+    # measures the freeze. Such an episode is stopped and reported INVALID.
+    freeze = [CastFreezeDetector() for _ in range(n)]
     res = env.start()
     try:
         if not any(res.alive):
@@ -273,6 +279,13 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
         for i, o in enumerate(res.obs):
             rows[i]["start_stats"] = start_stats(o)
             rows[i]["booted"] = bool(res.alive[i])
+            freeze[i].observe(o)
+        # The server must be running the game this eval is about. A config
+        # the server cannot find is not an error to it: it writes its own
+        # default (Shaco vs Ezreal) and plays that (see `record.py`).
+        for i in range(n):
+            if res.alive[i]:
+                assert_two_garens(Path(env.handles[i].log_path))
         track = [{"path": 0.0, "prev": None, "hp_lost": 0.0, "prev_hp": None,
                   "deaths": 0, "was_alive": True, "seen": set(), "died": set(),
                   "alive_prev": set(), "trace": [], "next_trace": 0.0,
@@ -288,7 +301,8 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
         last = list(res.obs)
         while True:
             live = [i for i in range(n) if env.alive[i] and last[i] is not None
-                    and int(last[i].get("t", 0)) < max_game_ms]
+                    and int(last[i].get("t", 0)) < max_game_ms
+                    and not freeze[i].frozen]
             if not live:
                 break
             actions = [None] * n
@@ -300,6 +314,7 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
                 if o is None:
                     continue
                 last[i] = o
+                freeze[i].observe(o)
                 t = track[i]
                 units = o.get("u", [])
                 # Enemy minions alive now; anything alive last frame and gone
@@ -381,6 +396,21 @@ def play_batch(policy, params, *, n: int, max_game_ms: int, seed: int,
                                  if drivers[i].rebuilder is not None else 0),
                 trace=t["trace"],
             )
+            fz = freeze[i]
+            rows[i]["cast_freeze"] = fz.report()
+            rows[i]["valid"] = not fz.invalid
+            if fz.invalid:
+                # Keep the raw counters for diagnosis, under a name nothing
+                # aggregates, and blank every skill field.
+                rows[i]["invalid_reason"] = fz.reason()
+                rows[i]["raw_not_a_measurement"] = {
+                    k: rows[i][k] for k in ("blue_cs", "red_cs", "blue_gold",
+                                            "red_gold", "blue_lvl", "red_lvl",
+                                            "conversion", "deaths")}
+                for k in ("blue_cs", "red_cs", "blue_gold", "red_gold",
+                          "blue_lvl", "red_lvl", "conversion", "deaths",
+                          "hp_lost", "distance"):
+                    rows[i][k] = None
     finally:
         env.close()
     return rows
@@ -514,6 +544,36 @@ def selftest() -> int:
     chk({22, 23} <= placed,
         f"enemy minions missing from the observation slots: {sorted(placed)}")
 
+    # SERVER-001: the freeze check. A 500 ms CastSpell windup is healthy; a
+    # stretch past CAST_FREEZE_MS is a freeze and blanks the episode; a wire
+    # with no `mo` cannot be checked and is not a pass either.
+    def cf_frames(stretch_ms, start=100_000, mo_key=True):
+        out = []
+        for t in range(start - 1000, start + stretch_ms + 1000, 33):
+            mo = 15 if start <= t < start + stretch_ms else 2
+            u = {"id": 11, "k": "Champion", "tm": 100, "x": 1, "y": 2, "hp": 500}
+            if mo_key:
+                u["mo"] = mo
+            out.append({"t": t, "u": [u]})
+        return out
+    ok = CastFreezeDetector()
+    for f in cf_frames(500):
+        ok.observe(f)
+    chk(not ok.invalid and not ok.frozen, "a 500 ms windup was flagged as a freeze")
+    bad = CastFreezeDetector()
+    for f in cf_frames(3500):
+        bad.observe(f)
+    chk(bad.invalid and bad.frozen_teams() == [100],
+        f"a 3.5 s CastSpell stretch was not flagged: {bad.report()}")
+    none = CastFreezeDetector()
+    for f in cf_frames(3500, mo_key=False):
+        none.observe(f)
+    chk(none.invalid and none.unchecked and not none.frozen,
+        "a wire without 'mo' must be INVALID (unchecked), not a pass")
+    from lanerl_jax.parity.record import champions_in_log
+    chk(champions_in_log("x Player a Added: Shaco\ny Player b Added: Ezreal")
+        == [("a", "Shaco"), ("b", "Ezreal")], "champion boot-line parser")
+
     for m in fail:
         print(f"  FAIL {m}")
     print(f"selftest: {'FAILED' if fail else 'ok'} "
@@ -565,6 +625,14 @@ def main() -> int:
         a.checkpoint = "random"
     if not a.checkpoint:
         ap.error("--checkpoint is required (or pass --selftest or --replay)")
+    # Both reach the server, which resolves relative paths against its OWN
+    # directory; resolve them against ours and refuse a missing one.
+    try:
+        a.bot_config = resolve_server_path(a.bot_config, what="--bot-config")
+        a.server_dir = resolve_server_path(a.server_dir, what="--server-dir",
+                                           kind="dir")
+    except ServerLaunchRefused as e:
+        ap.error(str(e))
 
     policy, params, label = load_params(a.checkpoint)
     if a.replay is not None:
@@ -586,6 +654,13 @@ def main() -> int:
         for r in batch:
             r["episode"] = done
             done += 1
+            if not r.get("valid", True):
+                raw = r.get("raw_not_a_measurement") or {}
+                print(f"  ep{r['episode']}: INVALID at t={r['t_s']:.0f}s -- "
+                      f"{r.get('invalid_reason')} (raw cs={raw.get('blue_cs')} "
+                      f"vs red {raw.get('red_cs')}: NOT a skill measurement)",
+                      flush=True)
+                continue
             print(f"  ep{r['episode']}: t={r['t_s']:.0f}s cs={r['blue_cs']} "
                   f"(red {r['red_cs']}) died={r['enemy_minions_died']} "
                   + (f"conv={r['conversion']:.0f}% " if r['conversion'] else "")
@@ -607,7 +682,12 @@ def main() -> int:
         return statistics.mean(v) if v else float("nan")
 
     cs = [r["blue_cs"] for r in rows if isinstance(r.get("blue_cs"), (int, float))]
+    valid = [r for r in rows if r.get("valid", True)]
+    n_invalid = len(rows) - len(valid)
     print()
+    if n_invalid:
+        print(f"  {n_invalid} of {len(rows)} episodes INVALID (server cast "
+              f"freeze, SERVER-001) and excluded from every number below.")
     if len(cs) >= 2:
         sd = statistics.stdev(cs)
         print(f"  CS@10 sd={sd:.1f} over n={len(cs)}, se={sd / math.sqrt(len(cs)):.1f}"
@@ -615,7 +695,7 @@ def main() -> int:
               f"Do not read a difference smaller than that.")
     drops = sum(r.get("minions_dropped") or 0 for r in rows)
     casts = sum(r.get("casts") or 0 for r in rows)
-    print(f"  {label}: n={len(rows)}  CS={agg('blue_cs'):.1f} vs red "
+    print(f"  {label}: n={len(valid)}  CS={agg('blue_cs'):.1f} vs red "
           f"{agg('red_cs'):.1f}  gold={agg('blue_gold'):.0f}  "
           f"lvl={agg('blue_lvl'):.1f}  deaths={agg('deaths'):.2f}  "
           f"dist={agg('distance'):.0f}")
@@ -629,8 +709,12 @@ def main() -> int:
     if a.out:
         Path(a.out).write_text(json.dumps(
             {"label": label, "checkpoint": a.checkpoint, "red": a.red,
-             "deterministic": a.deterministic, "rows": rows}, indent=2))
+             "deterministic": a.deterministic, "n_valid": len(valid),
+             "n_invalid": n_invalid, "rows": rows}, indent=2))
         print(f"  wrote {a.out}")
+    if not valid:
+        print("  NO VALID EPISODES: there is no CS number for this run.")
+        return 3
     return 0
 
 

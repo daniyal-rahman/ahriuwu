@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import time
 from functools import lru_cache
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,7 +54,93 @@ from ..train.actions import MINIMAP_X_MIN, MINIMAP_Y_MIN
 from .targets import TRACE_ENV
 
 __all__ = ["ActionLog", "Driver", "Fixture", "scripted_action", "record_trace",
-           "record_fixture"]
+           "record_fixture", "ServerLaunchRefused", "resolve_server_path",
+           "champions_in_log", "assert_two_garens", "EXPECTED_CHAMPIONS"]
+
+
+# ---------------------------------------------------------------------------
+# launch guards: the server must run the game we think it runs
+# ---------------------------------------------------------------------------
+
+class ServerLaunchRefused(RuntimeError):
+    """The server would run (or ran) a different game than the one asked for."""
+
+
+def resolve_server_path(path, *, what: str = "--config",
+                        kind: str = "file") -> Optional[Path]:
+    """``path`` as an ABSOLUTE path that exists, or refuse. None stays None.
+
+    The server runs with ``cwd = server_dir`` (`lanerl_train/vec.py`), while
+    Python checks existence relative to ITS OWN cwd. So a relative
+    ``--config lanerl/cfg/garen1v1_trace.json`` passed the Python check,
+    reached the server as a path under ``bin/Trace/net6.0/``, and the server
+    did not fail. `GameServerConsole/Program.cs:106-129` (`LoadConfig`) WRITES
+    its built-in default to the missing path and plays that: Shaco vs Ezreal.
+    The PARITY-001 gate then "failed at 0 ms" instead of refusing. The written
+    file persists, so every later run with the same relative path loads Shaco
+    vs Ezreal without writing anything. Resolving here, against the caller's
+    cwd, is the only reading of the path that means what the caller meant.
+
+    ``kind`` is ``"file"`` or ``"dir"``.
+    """
+    if path is None or str(path) == "":
+        return None
+    raw = Path(path).expanduser()
+    p = (raw if raw.is_absolute() else Path.cwd() / raw).resolve()
+    ok = p.is_file() if kind == "file" else p.is_dir()
+    if not ok:
+        raise ServerLaunchRefused(
+            f"{what} {str(path)!r} resolves to {p}, which is not an existing "
+            f"{kind}. Refusing to launch: the server resolves a relative path "
+            f"against its own directory and, for a game config it cannot "
+            f"find, silently writes and plays its default (Shaco vs Ezreal).")
+    return p
+
+
+#: What every game in this project is: a Garen mirror.
+EXPECTED_CHAMPIONS = ("Garen", "Garen")
+
+#: `LeagueSandbox.GameServer.Game` logs one line per player at boot:
+#: ``Player brian8544 Added: Garen`` (the champion MODEL name).
+_PLAYER_ADDED = re.compile(r"Player (\S+) Added: (\S+)")
+
+
+def champions_in_log(text: str) -> List[tuple]:
+    """``[(player, model), ...]`` from a server log, in boot order."""
+    return [(m.group(1), m.group(2)) for m in _PLAYER_ADDED.finditer(text)]
+
+
+def assert_two_garens(log_path: Path, *, timeout_s: float = 10.0,
+                      expected=EXPECTED_CHAMPIONS) -> List[str]:
+    """Refuse a server that did not boot two Garens. Call after the first frame.
+
+    The control-channel frame has no model name, so the check reads the
+    server's own boot log. It waits up to ``timeout_s`` for both player lines,
+    since stdout is flushed per line but the file is read from another
+    process. It reads only the head: boot lines come first, and these logs
+    reach hundreds of MB.
+    """
+    log_path = Path(log_path)
+    deadline = time.monotonic() + timeout_s
+    found: List[tuple] = []
+    while True:
+        try:
+            with log_path.open("r", errors="replace") as fh:
+                found = champions_in_log(fh.read(4_000_000))
+        except FileNotFoundError:
+            found = []
+        if len(found) >= len(expected) or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    models = [m for _, m in found]
+    if sorted(models) != sorted(expected):
+        raise ServerLaunchRefused(
+            f"server log {log_path} shows champions {models or 'none'} "
+            f"({found}), expected {list(expected)}. This is not the game the "
+            f"run is about. The known cause is a --config the server could not "
+            f"find (it plays its default, Shaco vs Ezreal); aborting before any "
+            f"number is produced.")
+    return models
 
 #: ``driver(obs, i) -> {"blue": wire, "red": wire} | None`` -- the signature of
 #: :func:`scripted_action`, and of `policy_driver.PolicyPairDriver`. ``obs`` is
@@ -246,6 +334,8 @@ def record_trace(
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
 
+    config_path = resolve_server_path(config_path, what="config_path")
+    server_dir = resolve_server_path(server_dir, what="server_dir", kind="dir")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -274,6 +364,7 @@ def record_trace(
     try:
         if not all(env.alive):
             raise RuntimeError(f"server failed to boot: {env.alive}")
+        assert_two_garens(Path(env.handles[0].log_path))
         with obs_path.open("w") as obs_fh:
             for i in range(decisions):
                 obs = env.last_obs[0]
@@ -374,8 +465,12 @@ def _main(argv: Optional[List[str]] = None) -> int:
 
     decisions = int(round(args.game_seconds * C.DECISION_HZ))
 
-    server_dir = args.server_dir
-    config_path = args.config
+    try:
+        server_dir = resolve_server_path(args.server_dir, what="--server-dir",
+                                         kind="dir")
+        config_path = resolve_server_path(args.config, what="--config")
+    except ServerLaunchRefused as e:
+        ap.error(str(e))
     if not args.stock:
         server_dir = server_dir or trace_server
         config_path = config_path or trace_cfg

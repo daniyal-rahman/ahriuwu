@@ -446,3 +446,83 @@ def test_gate_step_config_is_the_trainers():
     src = (REPO / "lanerl_jax" / "train" / "trainer.py").read_text()
     assert "step_decision(" not in src and "apply_orders(" not in src
     assert "env_apply(state, orders, sim)" in src and "env_advance(ordered, sim)" in src
+
+
+# ---------------------------------------------------------------------------
+# launch guards: a relative/missing --config, and a server that booted the
+# wrong champions (the audit's Shaco-vs-Ezreal "FAIL at 0 ms")
+# ---------------------------------------------------------------------------
+
+def test_server_config_is_resolved_against_our_cwd_and_a_missing_one_refused(
+        tmp_path, monkeypatch):
+    from lanerl_jax.parity.record import ServerLaunchRefused, resolve_server_path
+    (tmp_path / "cfg").mkdir()
+    cfg = tmp_path / "cfg" / "g.json"
+    cfg.write_text("{}")
+    monkeypatch.chdir(tmp_path)
+    got = resolve_server_path("cfg/g.json")
+    assert got.is_absolute() and got == cfg.resolve()
+    assert resolve_server_path(None) is None and resolve_server_path("") is None
+    with pytest.raises(ServerLaunchRefused, match="Shaco vs Ezreal"):
+        resolve_server_path("cfg/missing.json")
+    with pytest.raises(ServerLaunchRefused):
+        resolve_server_path("cfg")                          # a dir is not a file
+    assert resolve_server_path("cfg", kind="dir") == (tmp_path / "cfg").resolve()
+
+
+def test_gate_cli_refuses_a_missing_config_before_launching(tmp_path, monkeypatch,
+                                                            capsys):
+    """The audit's exact argument, from a cwd where it does not exist."""
+    monkeypatch.chdir(tmp_path)
+
+    def launched(*a, **k):
+        raise AssertionError("the gate launched a server with a missing config")
+
+    monkeypatch.setattr(g, "record_policy_run", launched)
+    with pytest.raises(SystemExit) as e:
+        g.main(["--checkpoint", "random", "--config",
+                "lanerl/cfg/garen1v1_trace.json", "--out", str(tmp_path / "o")])
+    assert e.value.code == 2
+    assert "is not an existing file" in capsys.readouterr().err
+
+
+def test_two_garens_guard_reads_the_boot_log(tmp_path):
+    from lanerl_jax.parity.record import (ServerLaunchRefused, assert_two_garens,
+                                          champions_in_log)
+    head = "[2026-09-24 00:46:20,049] [1] INFO LeagueSandbox.GameServer.Game - "
+    good = tmp_path / "good.log"
+    good.write_text(f"{head}Player brian8544 Added: Garen\nnoise\n"
+                    f"{head}Player prienten Added: Garen\n")
+    assert assert_two_garens(good, timeout_s=0) == ["Garen", "Garen"]
+    # the audit's relative-config run, in its log's own shape
+    bad = tmp_path / "bad.log"
+    bad.write_text(f"{head}Player brian8544 Added: Shaco\n"
+                   f"{head}Player prienten Added: Ezreal\n")
+    assert champions_in_log(bad.read_text()) == [("brian8544", "Shaco"),
+                                                 ("prienten", "Ezreal")]
+    with pytest.raises(ServerLaunchRefused, match="Shaco"):
+        assert_two_garens(bad, timeout_s=0)
+    one = tmp_path / "one.log"
+    one.write_text(f"{head}Player brian8544 Added: Garen\n")
+    with pytest.raises(ServerLaunchRefused):
+        assert_two_garens(one, timeout_s=0.3)
+    with pytest.raises(ServerLaunchRefused):
+        assert_two_garens(tmp_path / "absent.log", timeout_s=0)
+
+
+def test_a_server_cast_freeze_makes_the_gate_invalid_not_a_port_failure():
+    """`SERVER-001`: the sim cannot freeze, so a frozen server champion would
+    otherwise read as the port's first divergence."""
+    floor = {"first_divergence": {"t_ms": 400},
+             "counters": {"a": {"blue": {"cs": 5}}, "b": {"blue": {"cs": 5}}}}
+    rep = {"first_divergence": {"t_ms": 500},
+           "counters": {"sim": {"blue": {"cs": 5}}, "server": {"blue": {"cs": 5}}},
+           "position_resync": {"intervals": 1, "unexplained": 0, "path001": 0,
+                               "path001_rate": 0.0},
+           "cast_freeze": {"frozen": [{"team": 100, "start_t_ms": 213934}],
+                           "reason": "server cast freeze (SERVER-001): ..."}}
+    for fl in (floor, None):
+        v = g.score_against_floor(rep, fl)
+        assert v["verdict"] == "INVALID" and "SERVER-001" in v["why"]
+    rep["cast_freeze"] = {"frozen": [], "reason": None}
+    assert g.score_against_floor(rep, floor)["verdict"] == "PASS"

@@ -1044,6 +1044,14 @@ def score_against_floor(report: dict, floor: Optional[dict]) -> dict:
     run is one sample of the reordering noise; the report says which clause
     failed so a thin floor can be judged, not trusted.
     """
+    # `SERVER-001`: a champion stuck in MoveOrder=CastSpell on the SERVER makes
+    # every later tick a server bug, not a port divergence. The sim has no such
+    # state, so the gate would otherwise report it as the port's first
+    # divergence and send someone hunting in the sim.
+    cf = report.get("cast_freeze")
+    if cf and cf.get("frozen"):
+        return {"verdict": "INVALID", "why": cf.get("reason"),
+                "cast_freeze": cf}
     if not floor:
         return {"verdict": "UNSCORED",
                 "why": "no floor file: the counters and first divergence are "
@@ -1200,6 +1208,8 @@ def _headline(rep: dict) -> str:
             f"move route status {rs['move_route_status']}")
     if rep["verdict"].get("failures"):
         lines += [f"  FAIL {f}" for f in rep["verdict"]["failures"]]
+    if rep["verdict"].get("verdict") in ("INVALID", "UNSCORED"):
+        lines.append(f"  {rep['verdict']['verdict']}: {rep['verdict'].get('why')}")
     return "\n".join(lines)
 
 
@@ -1232,6 +1242,17 @@ def main(argv=None) -> int:
     ap.add_argument("--no-route-table", action="store_true",
                     help="NOT the training configuration; for debugging only")
     a = ap.parse_args(argv)
+    # A relative --config reached the server as a path under ITS cwd; the
+    # server wrote its default (Shaco vs Ezreal) there and played it, and the
+    # gate "failed at 0 ms" (`record.resolve_server_path`). Resolve against
+    # OUR cwd and refuse a missing file before anything is loaded or launched.
+    from .record import ServerLaunchRefused, resolve_server_path
+    try:
+        a.config = resolve_server_path(a.config, what="--config")
+        a.server_dir = resolve_server_path(a.server_dir, what="--server-dir",
+                                           kind="dir")
+    except ServerLaunchRefused as e:
+        ap.error(str(e))
 
     if a.make_floor is not None:
         from .policy_driver import PolicyActionLog
@@ -1282,6 +1303,12 @@ def main(argv=None) -> int:
     rep["position_resync"] = replay_resync(log, server_log, engine=engine,
                                            to_ms=to_ms)
     floor = json.loads(a.floor.read_text()) if a.floor else None
+    obs_path = (a.existing if a.existing is not None else out) / "policy_obs.jsonl"
+    cast_freeze = None
+    if obs_path.exists():
+        from .policy_driver import scan_cast_freeze
+        with obs_path.open() as fh:
+            cast_freeze = scan_cast_freeze(fh).report()
     rep = {"gate": "PARITY-001", "checkpoint": log.meta.get("checkpoint"),
            "label": log.meta.get("label"), "red": log.meta.get("red"),
            "deterministic": log.meta.get("deterministic"),
@@ -1291,6 +1318,7 @@ def main(argv=None) -> int:
                           "reported_only_free_run": (FREE_RUN_REPORTED_ONLY
                                                      if ROUTING_APPROX else {}),
                           "tracked_buffs": list(TRACKED_BUFFS)},
+           "cast_freeze": cast_freeze,
            **rep}
     rep["verdict"] = score_against_floor(rep, floor)
     (out / "report.json").write_text(json.dumps(rep, indent=1, default=str))

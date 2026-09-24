@@ -310,6 +310,9 @@ wave does **not** systematically lag. The 612-vs-315 figure is conditional on
 | PATH-008 | `FIXED` 2026-09-23 | champion move routing: the server's own `GetPath` null | `NavigationGrid.GetPath` closes the start cell (`NavigationGrid.cs:212`) and casts `CastCircle` from the EXACT float source to each of the 8 neighbour centres (`:251-260`, the goal cell exempt); when the champion's 35-u circle already overlaps terrain all 8 are closed, the queue empties and it returns null (`:219-222`). It also returns null when the start or terrain-projected goal is off the grid (`GetCell` null, `:195`), and whenever no neighbour of the goal cell can ever be entered (every cast INTO a cell includes `GetAllCellsInRange` at its centre). `LanerlControl.cs:366-368` then walks the raw two-point line `[Position, click]` to the UNPROJECTED click. | Before: `local_pathing.build_local_waypoints` snapped the source to the nearest covered cell centre and returned READY with a multi-corner route (or ENDPOINT_UNANCHORED for off-grid goals, same line but labelled approximate). Now, before any table lookup, `server_path_null` runs the server's first expansion (8 `cast_circle_blocked` calls from the exact source, goal exempt) and the goal-side check (8 zero-length casts at the goal's neighbour centres), plus `GetCell`'s bounds test, and returns `[source, raw goal]` under the new status `LocalRouteStatus.SERVER_NULL` (8). SERVER_NULL is the server's own trajectory, so `route_is_server_exact` counts it with READY and the trainer's `route_nonready` does not count it. | It was two thirds of the sim-vs-server champion position divergence: a champion standing near the fountain wall walked a routed dog-leg the server never walks (red decision 103: 4 waypoints vs the server's 2). | Corpus: all 3,045 Moves of `runs/parity001/obsharden-b0ctl-120s` (exact source floats from its `LANERL_INTERNAL` xbits/ybits): sim SERVER_NULL == host port `navgrid.get_cell_path(...) is None` on **3,045/3,045** (1,626 null: 357 first-expansion, 130 goal-side, 1,139 off-grid; pre-fix 363 of the 1,782 table-routed Moves -- ~the "1,750 routed moves" -- were READY while the server returned null). Frozen as `sim/tests/fixtures/path008_moves.json`; `test_local_pathing.py::test_path008_null_status_matches_the_host_port_on_every_recorded_move` and `::test_path008_pinned_first_expansion_null` (red decision 103, (13850.664, 14375.5) -> (12635.39, 14141.23)). PARITY-001 per-decision resync: 314 unexplained position intervals before (all server nulls the sim routed), 0 after. A search that dies LATER for another reason is not detected (none in the corpus). |
 | PERF-001 | `APPROX` | routed-training throughput gate | The JAX rewrite must retain accelerator throughput high enough for RL. | **The table was the wrong suspect and the unroll sweep tuned the wrong loop.** Full profile 2026-09-18 (5 repeats x 60 steps): observation 10.005 ms, policy 14.486, `apply_orders` non-routing 0.926, routing 4.349, `step_decision` 44.737. Inside routing, `closest_terrain_exit` is 90.3% and the hop-table gathers are **0.3%**. `ROUTE_LOOP_UNROLL` moved nothing because it tunes a loop that runs **6** trips; the spiral runs up to **203**, on a per-lane distribution of p50 = 0, p90 = 0, p99 = 88 -- so 97.5% of lanes need none and one straggler makes the whole `vmap` batch pay. Three semantics-preserving fixes landed in `d47ab44` (spiral unroll, `CastCircle` reducing once instead of per-step scattering, and a `scan(unroll=32)` on the line walk whose cost was *perfectly* linear in its bound at ~18 us/step, i.e. essentially all launch overhead). Result: **58,255 dec/s without `SmoothPath` -- gate 4 PASSES** -- and 51,270 with it. Negative result worth keeping: unrolling `SmoothPath`'s own greedy makes it **worse** (82.97 ms at 1, 103.81 at 16), because a masked-off chained body there is a whole wasted `CastCircle` rather than amortised launch overhead. | Gate 4 passes on the pre-`SmoothPath` simulator. What remains is a stated trade, not an unknown. | Reproduce only with the canonical command; `--no-smooth` and `--smooth-line-steps` are labelled controls. Next, if the 12% is wanted back: measure the line-step distribution on the **real action lattice** (gameplay clicks are viewport-bounded, so 128 is likely far looser than needed), and surface `smooth_exhausted` in training the way `route_nonready` is. Unattributed and larger than all of the above: `step_decision` is 60% of the step, with `input_reduce_fusion_13` at 10.80 ms and ~12.8 ms of CUB radix sorts. |
 | OPS-001 | `BOUNDED` | route asset distribution | A training checkout needs the exact artifact matching navgrid bytes, radius, and ABI. | Heavy route data live under ignored `data/jax_routes/`; production remains pinned to `map1_garen_r35_o50_v2` (231 MiB packed hops). The loader also accepts the measured `v3` same-direction-run sidecar experiment (693 MiB total), but its memory/compile cost has not yet produced a gate result, so it is not required. Unknown versions, hashes, shapes, or v3 sidecar semantics fail closed. | A fresh machine cannot start routed training until the pinned artifact is generated or distributed. **Generating and loading need different environments**, measured 2026-09-18: the baker is numba-parallel and raises rather than guessing, and `.venv-gpu` is a real venv with `include-system-site-packages = false`, so it cannot see the conda env's numba. Artifacts are therefore generated in `.venv-jax` (login) and only *loaded* in `.venv-gpu` (desktop/GPU). Loading is pure numpy, so routed training and gate 4 are unaffected -- the gate-4 run loads the 231 MiB v2 table in `.venv-gpu` without numba. Left that way on purpose: numba pins numpy, and `.venv-gpu` is the environment every gate-4 number is measured in. | `data/local_route_artifact.py`, `train/run_train.py`; publish the pinned artifact to the project artifact store before remote training. |
+| SERVER-001 | `OPEN` 2026-09-24 (root-caused; vendor patch written, NOT applied; eval and gate now refuse to score it) | **server: a Garen Q empowered attack freezes the champion for the rest of the process** | Five steps (vendor line numbers). (1) Q's buff `GarenQ.OnActivate` does `CancelAutoAttack(true)` + `SkipNextAutoAttack` and listens on `OnPreAttack` (`Buffs/Garen/GarenQ.cs:72-75`). (2) The next basic swing's own `Spell.Cast` publishes `OnPreAttack` (`Spell.cs:586`). The listener swaps `AutoAttackSpell` to `GarenQAttack` (`GarenQ.cs:78-82`). THEN the basic sets itself `STATE_CASTING` (`Spell.cs:593`) as an **orphan**: it is no longer `Owner.AutoAttackSpell`. (3) If the policy retargets inside the orphan's windup, its `CastCancelCheck` fires (`Spell.cs:279-287`). That calls `Owner.CancelAutoAttack`, which resets `Owner.AutoAttackSpell`, i.e. GarenQAttack (`ObjAIBase.cs:469-484`), NOT the orphan. The orphan stays CASTING forever and re-runs that check every tick, zeroing the AA cooldown each time (reset = `!HasAutoAttacked`). (4) GarenQAttack sits in ExtraSpell slot 45, so `IsAutoAttack` is false and its cast takes the non-auto path. That path sets `_castingSpell` (`Spell.cs:458`) and `MoveOrder = CastSpell` (`Spell.cs:492`), and only `FinishCasting` clears them (`Spell.cs:1061-1064`). The next tick the orphan (slot 64, updated after slot 45, `ObjAIBase.cs:1142`) sees `GetCastSpell() != null` and cancels GarenQAttack to READY. `FinishCasting` never runs. (5) `CanMove`/`CanChangeWaypoints`/`CanAttack`/`CanCast` all need `_castingSpell == null` (`ObjAIBase.cs:302-362`), so every later order is dropped (`SetWaypointsRejected reason=cannotchange`). `GetCastSpell() != null` is now permanent, so the orphan keeps cancelling. The 09-14 death fix (`Spell.cs:215-250`) runs only for a spell in `STATE_CASTING`, and GarenQAttack is READY, so death and respawn do not clear it; only `LanerlEpisode.Reset` does (`LanerlEpisode.cs:339-357`). The same `ResetSpellCast`-without-owner-cleanup omission sits in the non-auto target-lost branch (`Spell.cs:274`) and the status branch (`:309`). Real League has no such state: a retarget cancels the in-flight swing and the empowered attack still comes next. | The sim cannot freeze. Q's empowered swing is an ordinary `step_autoattack` swing with replaced damage (`step.py:960-1010`, `consume_q_skip`/`end_q`, `spells.py:568-600`). No orphan spell object exists, and nothing writes `MoveOrder.CAST_SPELL` (`step.py:229` is its only reader). The deviation is the server's. | Any server number after the first Q that meets a retarget inside the next basic's windup. RL policies retarget at 30 Hz (diag1b: 2,956 attack orders in 3,600 blue decisions, alternating targets), so this is near-certain within minutes. diag1b vs the bot: frozen from **159.5 s**, 1 CS vs 40, 440 s lost. | **Evidence.** (a) `/tmp/baseline_audit/eval_vs_bot_logs/instance000.log`: the only `GarenQAttack SpellPreCast/SpellCast` of the game (01:00:29) has no `SpellPostCast`/`Spell End`. `casting=GarenQAttack canmove=False` from t=180 s, `dead=True` still casting at 210 s, then fountain (26,264) to 600 s. (b) **Reproduced exactly** (same checkpoint, seed 0, 300 s, `bin/Trace`, `LANERL_DECISION_TRACE=1`): cast at t=159,501 on 1073744341, one tick after a policy retarget (`SetTargetUnit ... caller=Execute@391` at 159,484). No `FinishCasting` for blue. `SetWaypointsRejected reason=cannotchange` from 159,517. Same 180/210/240/270 s rows. (c) **Per-tick proof** in the mirror gate recording `runs/parity001/sweepA-a4-300s` (`LANERL_INTERNAL`, blue 1073743317). 210,600: basic cast, AA swapped (`aawindup` 341 -> 256, aacd 1588). 210,833: retarget. 210,850: `aacd` 1349 -> 0 (the orphan's cancel). `hasaa` never returns to 1. 213,918: GarenQAttack cast (`aastate=1 aacast=256 attacking=1`). 213,934: `aastate=0 aacast=0 aacd=0 attacking=0`, target unchanged, alive, `mo=15` to the end of the recording (86 s, through a death). That recording was never flagged. **Detection (landed):** `policy_driver.CastFreezeDetector` flags wire `mo == CastSpell (15)` held >= `CAST_FREEZE_MS` = 3 s. The healthy maximum over 7 recordings is 501 ms. On existing recordings it flags only sweepA-a4 blue (213,934 -> 299,992 ms). `tools/rl_eval_vs_server.py` stops the episode, blanks every skill field, reports INVALID (exit 3 if nothing is valid) and keeps the raw counters under `raw_not_a_measurement`. `policy_divergence` scores the gate `INVALID`. Both read only the wire, so the policy's input is unchanged. **Fix:** the vendor patch below (§ "SERVER-001: the vendor patch"). The orphan cancels itself; `CancelAutoAttack` clears a `_castingSpell` that IS the AA spell; the two bare `ResetSpellCast` aborts clear the owner's cast state. Untested (no rebuild here). **Resolution trigger:** rebuild Release and Trace with the patch, re-run this seed-0 300 s eval (freeze at 159.5 s must be gone), then 4 episodes vs the bot with the detector reporting 0 frozen stretches. |
+| OPS-002 | `FIXED (harness)` 2026-09-24; one vendor-side artifact still to delete | **a relative `--config` made the server play Shaco vs Ezreal** | `GameServerConsole/Program.cs:106-129` `LoadConfig`: a config path that does not exist is not an error. The server creates its directory, WRITES its built-in default JSON there and plays it. The server runs with `cwd = server_dir` (`lanerl_train/vec.py:298`), so a relative path is resolved under `bin/<build>/net6.0/`. | `vec.py:155` checked `cfg.exists()` against PYTHON's cwd, where the relative path did exist, so nothing refused. The audit's gate "failed at 0 ms" on HP (637/536 vs 672). | Every counter and the first divergence describe a different game. After the first such run the written file persists, so later runs with the same relative path load Shaco vs Ezreal **silently, without writing anything**. | `parity/record.py`: `resolve_server_path` makes `--config`/`--server-dir`/`--bot-config` absolute against the caller's cwd and refuses a missing one. Callers: `policy_divergence.main`, `record._main`, `record_trace`, `tools/rl_eval_vs_server.py`. `assert_two_garens` reads the server's `Player <name> Added: <Model>` boot lines after the first frame and aborts unless they are exactly Garen+Garen (the frame carries no model name). Called from `record_trace` and the eval's `play_batch`. Tests: `parity/tests/test_policy_divergence.py::test_server_config_is_resolved_*`, `::test_gate_cli_refuses_a_missing_config_before_launching`, `::test_two_garens_guard_reads_the_boot_log`. **Still to do by hand (vendor tree, not touched here):** delete `lanerl-vendor/LoLServer/GameServerConsole/bin/Trace/net6.0/lanerl/cfg/garen1v1_trace.json`. The server wrote it at 2026-09-24 00:46:16 and it holds Shaco (BLUE) / Ezreal (RED). |
+| PATH-009 | `APPROX` 2026-09-24 (was booked only in a `step.py` comment; now measured) | **champion attack-chase routing: straight line vs `GetPath`** | `RefreshWaypoints` (`ObjAIBase.cs:~596-690`), for `AttackTo` out of `idealRange`, re-paths EVERY tick with `PathingHandler.GetPath(Position, targetPos, PathfindingRadius)` (A* + `SmoothPath`, after `GetClosestTerrainExit` when the target cell is unwalkable, as a turret's is). It keeps the old waypoints when `GetPath` returns null or a single point. | `step.py:893-899` writes the two-point line `[position, target]` every tick ("BOOKED APPROXIMATION", `step.py:811-815`; `PORT_AUDIT_MOVEMENT.md:181`), with no terrain exit and no keep-old-on-null. | The policy navigates by attack orders (diag1b: attack 2,956 / move 555 blue decisions), including far targets. In the sim it walks straight at a turret 4.5-7 km away where the server walks the lane's A* corners. | **These are PARITY-001's 60 "same waypoints, still off" intervals** (`runs/parity001/diag1b-120s/report.json`), all 60 of them, from a scratch re-run of `replay_resync` with per-tick capture (`/tmp/qfreeze_repro/resync_diag*.py`). Every one is a decision where the champion must chase a far HOSTILE target: blue on 1073742821 (29) or 1073742759 (2), red on 1073742201 (23), plus 6 Moves, where the target stays set (`ORDER-001`) and the chase resumes next tick. Tick 1 agrees to <= 0.001 u (both still walk the resynced path). In tick 1's `RefreshWaypoints` the server takes a 5-10 waypoint A* path and the sim a single waypoint AT the target (distance 4,478-7,178 u). Tick 2 steps 5.75 u on both sides (345 ms / 60 Hz, identical: no speed modifier, collision, cast state or tick-length effect; all 60 at `ms` 345, no cast, no Q buff). Heading gap 2.1-40.6 deg (median 14.2), and the measured error equals the chord `2*5.75*sin(gap/2)` to 0.01 u in **60/60**. Max 3.01 u. The report's `max_err_u` 15.63 is a PATH-001 interval, not one of these. Intervals alternating to targets the server does not chase (1073742077/1073742139) agree at 0.0007 u. The gate's label is wrong because `replay_resync` compares routes right after `apply`, BEFORE the tick's chase re-path (`policy_divergence.py:908`). **Sim fix (not made):** in block 14, for CHAMPIONS, replace the two-point chase with the Move router (`local_pathing`, the PATH-001 route table) from `(x, y)` to `GetClosestTerrainExit(target)`. Keep the current waypoints (do not write the straight line) when the route status is not READY/SERVER_NULL. Minions can keep the straight line (acquisition range 600, open corridor) until measured. **Gate fix (not made):** classify by comparing the tick-1 route too, so this is reported as `PATH-009` rather than as unexplained. |
 
 ## SmoothPath: what it fixed, and what it turned out not to explain (2026-09-18)
 
@@ -515,3 +518,121 @@ work" is almost certainly true and is still not a measurement.
 19. **`XLA_FLAGS=--xla_gpu_deterministic_ops=true`** for the determinism check in item 11; `rl_train.sbatch` does not set it and GPU scatter-adds are nondeterministic by default.
 20. **Decide the zero-sum anneal length in UPDATES** (`PPO-06`): at 65,536 champion-decisions per update the 2e6-step anneal ends at update ~31, before any full episode; the torch clock was ~32x slower.
 21. **A policy-driven divergence gate** (`PARITY-001`): replay every promoted checkpoint's own action stream through both engines and report the first divergent tick. The one check that would have caught `SPELL-001` on its first re-cast.
+
+## SERVER-001: the vendor patch (written 2026-09-24, NOT applied)
+
+The vendor tree was not modified. To apply: patch `lanerl-vendor/`, then rebuild both `bin/Release` AND `bin/Trace`. A change built only into Trace is silently absent from Release. Then verify with the seed-0 300 s eval in the `SERVER-001` row. The patch is untested because no rebuild was run.
+
+```diff
+--- a/LoLServer/GameServerLib/GameObjects/Spell/Spell.cs
++++ b/LoLServer/GameServerLib/GameObjects/Spell/Spell.cs
+@@ -267,11 +267,11 @@
+                 {
+                     if (CastInfo.IsAutoAttack)
+                     {
+-                        CastInfo.Owner.CancelAutoAttack(true);
++                        CancelThisAutoAttack(true, false);
+                         return true;
+                     }
+ 
+-                    ResetSpellCast();
++                    AbortCast();
+                     return true;
+                 }
+ 
+@@ -282,7 +282,7 @@
+                 || CastInfo.Owner.GetCastSpell() != null
+                 || CastInfo.Owner.ChannelSpell != null))
+                 {
+-                    CastInfo.Owner.CancelAutoAttack(!CastInfo.Owner.HasAutoAttacked, true);
++                    CancelThisAutoAttack(!CastInfo.Owner.HasAutoAttacked, true);
+                     return true;
+                 }
+             }
+@@ -290,7 +290,7 @@
+             {
+                 if (CastInfo.IsAutoAttack)
+                 {
+-                    CastInfo.Owner.CancelAutoAttack(true);
++                    CancelThisAutoAttack(true, false);
+                     return true;
+                 }
+             }
+@@ -306,13 +306,53 @@
+             || (CastInfo.IsAutoAttack && (status == StatusFlags.Disarmed || !status.HasFlag(StatusFlags.CanAttack)))
+             || (!CastInfo.IsAutoAttack && (status == StatusFlags.Silenced || !status.HasFlag(StatusFlags.CanCast))))
+             {
+-                ResetSpellCast();
++                AbortCast();
+                 return true;
+             }
+ 
+             return false;
+         }
+ 
++        /// <summary>
++        /// SERVER-001. Cancel THIS auto-attack. `ObjAIBase.CancelAutoAttack` acts on
++        /// `Owner.AutoAttackSpell`, which is not always this spell: GarenQ's
++        /// OnPreAttack listener swaps AutoAttackSpell to GarenQAttack in the middle
++        /// of this spell's own Cast (OnPreAttack is published before
++        /// `State = STATE_CASTING`), leaving this basic attack CASTING as an orphan.
++        /// If the orphan's cancel condition then fires (a retarget inside its
++        /// windup), cancelling the owner's attack instead of itself left it
++        /// CASTING forever, re-running this check every tick -- and once the owner
++        /// cast GarenQAttack (`GetCastSpell() != null`) it cancelled that cast one
++        /// tick in, with `_castingSpell` and MoveOrder=CastSpell never cleared.
++        /// </summary>
++        private void CancelThisAutoAttack(bool reset, bool fullCancel)
++        {
++            if (CastInfo.Owner.AutoAttackSpell == this)
++            {
++                CastInfo.Owner.CancelAutoAttack(reset, fullCancel);
++                return;
++            }
++            ResetSpellCast();
++        }
++
++        /// <summary>
++        /// Abort a non-auto cast mid-windup. `ResetSpellCast` alone resets this
++        /// spell's state but not the owner's `_castingSpell` / MoveOrder, which only
++        /// FinishCasting clears -- the same omission the death branch above fixes.
++        /// </summary>
++        private void AbortCast()
++        {
++            ResetSpellCast();
++            if (CastInfo.Owner.GetCastSpell() == this)
++            {
++                CastInfo.Owner.SetCastSpell(null);
++                if (CastInfo.Owner.MoveOrder == OrderType.CastSpell)
++                {
++                    CastInfo.Owner.UpdateMoveOrder(OrderType.Stop, false);
++                }
++            }
++        }
++
+         public bool Cast(Vector2 start, Vector2 end, AttackableUnit unit = null)
+         {
+             if ((unit == null && SpellData.TargetingType == TargetingType.Target)
+--- a/LoLServer/GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs
++++ b/LoLServer/GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs
+@@ -469,6 +469,19 @@
+         public void CancelAutoAttack(bool reset, bool fullCancel = false)
+         {
+             AutoAttackSpell.SetSpellState(SpellState.STATE_READY);
++            // SERVER-001: an attack cast through the non-auto path (GarenQAttack:
++            // extra slot 45, so CastInfo.IsAutoAttack is false) set _castingSpell and
++            // MoveOrder=CastSpell, and only FinishCasting clears them. Forcing it
++            // READY here without clearing them froze the champion for the rest of
++            // the process (CanMove/CanChangeWaypoints/CanAttack/CanCast all false).
++            if (_castingSpell != null && _castingSpell == AutoAttackSpell)
++            {
++                _castingSpell = null;
++                if (MoveOrder == OrderType.CastSpell)
++                {
++                    UpdateMoveOrder(OrderType.Stop, false);
++                }
++            }
+             if (reset)
+             {
+                 _autoAttackCurrentCooldown = 0;
+```

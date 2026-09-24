@@ -386,3 +386,66 @@ def test_w_passive_granted_from_the_first_w_rank_and_sticky():
     assert ar1 > ar0
     st, _ = rb.rebuild(_champs(80, blue={"lvl": 3, "sl": [1, 1, 1, 0], "hp": 0}))
     assert bool(st.buffs.w_passive[0])                   # never removed
+
+
+# ---------------------------------------------------------------------------
+# SERVER-001: the server cast freeze, detected from the wire's `mo`
+# ---------------------------------------------------------------------------
+
+def _mo_frames(stretches, *, team=100, t_end=20_000, dt=33, hp_zero=()):
+    """Frames every `dt` ms; `mo` is CastSpell inside any [start, end) stretch.
+    A minion with mo=15 and the other champion ride along: neither may count."""
+    out = []
+    for t in range(0, t_end, dt):
+        casting = any(s <= t < e for s, e in stretches)
+        dead = any(s <= t < e for s, e in hp_zero)
+        out.append({"t": t, "u": [
+            {"id": 1, "k": "Champion", "tm": team, "x": 10, "y": 20,
+             "hp": 0 if dead else 500,
+             "mo": pd.WIRE_ORDER_CAST_SPELL if casting else 2},
+            {"id": 2, "k": "Champion", "tm": 300 - team, "x": 0, "y": 0,
+             "hp": 500, "mo": 3},
+            {"id": 3, "k": "LaneMinion", "tm": team, "x": 0, "y": 0, "mo": 15}]})
+    return out
+
+
+def test_cast_freeze_ignores_legitimate_windups():
+    # Q attack 250 ms, R 435 ms, recall pill 500 ms: the measured healthy max
+    det = pd.scan_cast_freeze(_mo_frames([(1000, 1250), (4000, 4435), (8000, 8501)]))
+    assert not det.invalid and det.frozen == [] and det.reason() is None
+
+
+def test_cast_freeze_flags_a_stuck_champion_by_team_through_a_death():
+    det = pd.scan_cast_freeze(_mo_frames([(5000, 20_000)], team=100,
+                                         hp_zero=[(9000, 12_000)]))
+    assert det.invalid and det.frozen_teams() == [100]
+    (s,) = det.report()["frozen"]
+    assert s["start_t_ms"] == 5016 and s["last_t_ms"] == 19_998
+    assert s["died_while_stuck"] is True
+    assert "SERVER-001" in det.reason() and "blue" in det.reason()
+
+
+def test_cast_freeze_threshold_and_stretches_reset_on_any_other_order():
+    thr = int(pd.CAST_FREEZE_MS)
+    # two stretches just under the threshold, split by one non-cast frame
+    det = pd.scan_cast_freeze(_mo_frames([(1000, 1000 + thr - 50),
+                                          (1000 + thr, 1000 + 2 * thr - 50)]))
+    assert not det.invalid
+    det = pd.scan_cast_freeze(_mo_frames([(1000, 1000 + thr + 50)]))
+    assert det.invalid
+
+
+def test_cast_freeze_without_mo_on_the_wire_is_unchecked_not_passing():
+    frames = _mo_frames([])
+    for f in frames:
+        for u in f["u"]:
+            u.pop("mo", None)
+    det = pd.scan_cast_freeze(frames)
+    assert det.unchecked and det.invalid and not det.frozen
+    assert "impossible" in det.reason()
+
+
+def test_cast_freeze_scans_a_recorded_jsonl_stream():
+    lines = [json.dumps(f) for f in _mo_frames([(2000, 9000)], team=200)]
+    det = pd.scan_cast_freeze(iter(lines + ["", "  "]))
+    assert det.frozen_teams() == [200] and "red" in det.reason()

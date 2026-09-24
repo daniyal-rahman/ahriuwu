@@ -65,7 +65,8 @@ __all__ = [
     "StateRebuilder",
     "load_params", "order_to_wire", "pending_rank_up", "make_driver",
     "DriverStep", "PolicyDriver", "CreationRankMap", "PolicyActionLog",
-    "PolicyPairDriver",
+    "PolicyPairDriver", "WIRE_ORDER_CAST_SPELL", "CAST_FREEZE_MS",
+    "CastFreezeDetector", "scan_cast_freeze",
 ]
 
 #: wire ``MinionSpawnType`` -> `sim.targeting.MinionType`. The server numbers
@@ -614,6 +615,132 @@ class PolicyDriver:
             return DriverStep(wire, None, None, None)
         state, netid = self.rebuilder.rebuild(frame)
         return self.decide(state, netid)
+
+
+#: `OrderType.CastSpell` as the control wire's ``mo`` carries it
+#: (`GameServerCore/Enums/OrderType.cs:77`, ``CastSpell = 0xF``).
+WIRE_ORDER_CAST_SPELL = 15
+
+#: How long a champion may hold ``mo == CastSpell`` before it is FROZEN, in
+#: game ms. The longest legitimate stretch is a cast windup: GarenQAttack
+#: 250 ms, R ~435 ms, the recall pill 500 ms. Measured over seven recordings
+#: (sweepA-a4 300 s, diag1b and obsharden 120 s, aa005_full, tier15,
+#: champ_dynamic_audit, buff001): every healthy stretch was <= 501 ms. The one
+#: exception was sweepA-a4's blue from 213,934 ms to the end of the recording,
+#: an 86 s freeze (`SERVER-001`). 3 s is 6x the longest legitimate stretch and
+#: still flags a freeze within 90 decisions.
+CAST_FREEZE_MS = 3000.0
+
+
+class CastFreezeDetector:
+    """Flag a server champion stuck in ``MoveOrder == CastSpell`` (`SERVER-001`).
+
+    The server can leave a champion with ``_castingSpell`` set and
+    ``MoveOrder == CastSpell`` for the rest of the process. `ObjAIBase.CanMove`,
+    `CanChangeWaypoints`, `CanAttack` and `CanCast` then all refuse, so every
+    later order is silently dropped. It survives death and respawn. The
+    policy's observation cannot tell: position, hp and gold still update. The
+    eval's CS number then measures the freeze, not the policy (diag1b: 1 CS
+    against the bot's 40, frozen from 159.5 s).
+
+    Detection reads ONLY the wire's ``mo``, which `LanerlControl.BuildObservation`
+    already publishes for champions. It adds nothing to what the policy sees.
+    A frame whose champions carry no ``mo`` cannot be checked. That is recorded
+    (``unchecked``) and makes the run invalid: an unscored run is not a pass.
+
+    ``observe(frame)`` once per frame; ``report()`` is JSON-able. ``invalid``
+    is True once any champion has held CastSpell for ``threshold_ms``.
+    """
+
+    def __init__(self, threshold_ms: float = CAST_FREEZE_MS):
+        self.threshold_ms = float(threshold_ms)
+        self._open: Dict[int, dict] = {}       # wire team -> current stretch
+        self.frozen: List[dict] = []            # stretches past the threshold
+        self.frames = 0
+        self.champion_rows = 0
+        self.rows_without_mo = 0
+
+    def observe(self, frame: Optional[Mapping]) -> None:
+        if not frame:
+            return
+        self.frames += 1
+        t = float(frame.get("t", 0))
+        for u in frame.get("u", []):
+            if u.get("k") != "Champion":
+                continue
+            self.champion_rows += 1
+            tm = int(u.get("tm", -1))
+            mo = u.get("mo")
+            if mo is None:
+                self.rows_without_mo += 1
+                continue
+            if int(mo) != WIRE_ORDER_CAST_SPELL:
+                self._open.pop(tm, None)
+                continue
+            s = self._open.get(tm)
+            if s is None:
+                s = self._open[tm] = {
+                    "team": tm, "start_t_ms": t, "last_t_ms": t,
+                    "x": u.get("x"), "y": u.get("y"),
+                    "died_while_stuck": False, "flagged": False}
+            s["last_t_ms"] = t
+            if float(u.get("hp", 1)) <= 0:
+                s["died_while_stuck"] = True
+            if not s["flagged"] and t - s["start_t_ms"] >= self.threshold_ms:
+                s["flagged"] = True
+                self.frozen.append(s)       # by reference: keeps extending
+
+    @property
+    def unchecked(self) -> bool:
+        """No champion row carried ``mo``: the check could not run."""
+        return self.champion_rows == 0 or self.rows_without_mo == self.champion_rows
+
+    @property
+    def invalid(self) -> bool:
+        return bool(self.frozen) or self.unchecked
+
+    def frozen_teams(self) -> List[int]:
+        return sorted({int(s["team"]) for s in self.frozen})
+
+    def reason(self) -> Optional[str]:
+        if self.frozen:
+            parts = []
+            for s in self.frozen:
+                side = {100: "blue", 200: "red"}.get(int(s["team"]), str(s["team"]))
+                parts.append(
+                    f"{side} champion held MoveOrder=CastSpell from "
+                    f"t={s['start_t_ms'] / 1000:.1f}s to {s['last_t_ms'] / 1000:.1f}s "
+                    f"({(s['last_t_ms'] - s['start_t_ms']) / 1000:.1f}s"
+                    + (", through a death" if s["died_while_stuck"] else "") + ")")
+            return ("server cast freeze (SERVER-001): " + "; ".join(parts)
+                    + ". Every order after that was dropped by the server, so "
+                      "the counters measure the freeze, not the policy.")
+        if self.unchecked:
+            return ("freeze check impossible: no champion row carried the wire "
+                    "field 'mo' (a server build older than the control "
+                    "channel's tgt/atk/mo fields?)")
+        return None
+
+    def report(self) -> dict:
+        return {"threshold_ms": self.threshold_ms, "frames": self.frames,
+                "unchecked": self.unchecked, "invalid": self.invalid,
+                "frozen": [{k: v for k, v in s.items() if k != "flagged"}
+                           for s in self.frozen],
+                "reason": self.reason()}
+
+
+def scan_cast_freeze(frames, threshold_ms: float = CAST_FREEZE_MS) -> CastFreezeDetector:
+    """Run a detector over an iterable of wire frames (e.g. a recorded
+    ``*_obs.jsonl``, one JSON frame per line, or already-parsed dicts)."""
+    det = CastFreezeDetector(threshold_ms)
+    for fr in frames:
+        if isinstance(fr, (str, bytes)):
+            fr = fr.strip()
+            if not fr:
+                continue
+            fr = json.loads(fr)
+        det.observe(fr)
+    return det
 
 
 def make_driver(policy, params, *, deterministic: bool, seed: int):
