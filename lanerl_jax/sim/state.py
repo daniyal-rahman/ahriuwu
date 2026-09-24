@@ -213,6 +213,11 @@ class QBuff:
     #: `SkipNextAutoAttack()` from `GarenQ.OnActivate`, consumed at the next
     #: swing gate by `step_autoattack`.
     skip_next: jax.Array    # (N,) bool
+    #: The ENDED window's `Buff` is still in `BuffList` for one row, exactly
+    #: as `EBuff.lingering` (`SPELL-013`): set by `end_q` on BOTH ends
+    #: (expiry and the empowered hit), cleared by the next `step_buffs`,
+    #: read only by `spells.active_by_name`. Never by `status`.
+    lingering: jax.Array    # (N,) bool
 
 
 @struct.dataclass
@@ -224,6 +229,12 @@ class RankedBuff:
     active: jax.Array       # (N,) bool
     elapsed_s: jax.Array    # (N,)
     rank: jax.Array         # (N,) int8, 1..5 while active, 0 otherwise
+    #: One-row `BuffList` linger after the end (`SPELL-012`/`SPELL-013`).
+    #: Set ONLY for `GarenQHaste` (`end_q_haste`), cleared by the next
+    #: `step_buffs`, read only by `spells.active_by_name`. `GarenW` has the
+    #: same server shape but is NOT ported (always False; see `SPELL-013`);
+    #: `r_pending` is not a server buff and never lingers.
+    lingering: jax.Array    # (N,) bool
 
 
 @struct.dataclass
@@ -255,11 +266,13 @@ def empty_buffs(n_units: int = 0, dtype=jnp.float32) -> Buffs:
     return Buffs(
         e=EBuff(active=b(), elapsed_s=f(), power=f(), tick_acc_ms=f(),
                 lingering=b()),
-        q=QBuff(active=b(), elapsed_s=f(), skip_next=b()),
-        q_haste=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
-        w=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
+        q=QBuff(active=b(), elapsed_s=f(), skip_next=b(), lingering=b()),
+        q_haste=RankedBuff(active=b(), elapsed_s=f(), rank=r(),
+                           lingering=b()),
+        w=RankedBuff(active=b(), elapsed_s=f(), rank=r(), lingering=b()),
         w_passive=b(),
-        r_pending=RankedBuff(active=b(), elapsed_s=f(), rank=r()),
+        r_pending=RankedBuff(active=b(), elapsed_s=f(), rank=r(),
+                             lingering=b()),
     )
 
 

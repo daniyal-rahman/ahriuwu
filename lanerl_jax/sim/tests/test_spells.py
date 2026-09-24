@@ -626,8 +626,11 @@ def test_qs_cooldown_starts_when_the_window_closes_not_at_cast():
     s0 = _tick_stepper()(s0)
     start, since, final = _cooldown_from_its_start(
         _cast_q(s0), Slot.Q, int(Q_BUFF_DURATION * 60) + 6)
-    assert start == np.float32(Q_COOLDOWN), f"Q's cooldown written as {start}"
-    assert final == _decayed(Q_COOLDOWN, since)
+    # `SPELL-013`: on EXPIRY the 8 s is written inside `UpdateBuffs` and
+    # counted down by that tick's `Spell.Update`, so the first row that shows
+    # it is already one tick down (server `t=217769`: 8175/1024).
+    assert start == _decayed(Q_COOLDOWN, 1), f"Q's cooldown written as {start}"
+    assert final == _decayed(Q_COOLDOWN, since + 1)
 
 
 def test_q_skips_once_then_lands_the_replacement_auto_damage():
@@ -1126,7 +1129,9 @@ def test_death_does_not_reset_q_it_runs_out_on_the_corpse_and_starts_its_cooldow
     assert ended_at is not None, "a corpse's Q window never ended"
     # 4.5 s after the cast, at 2 ticks per decision (+-1 decision)
     assert abs(ended_at + 1 - Q_BUFF_DURATION * DECISIONS_PER_S) <= 1, ended_at
-    assert cd_at_end == pytest.approx(Q_COOLDOWN, abs=2.0 / 60.0), \
+    # a decision is two ticks, and the expiry row is already one tick down
+    # (`SPELL-013`): at most 8 - 2 ticks at the decision boundary.
+    assert cd_at_end == pytest.approx(Q_COOLDOWN, abs=2.0 / 60.0 + 1e-4), \
         "the corpse's Q window ended without starting its cooldown"
 
 
@@ -1432,3 +1437,140 @@ def test_e_expiry_is_tick_exact_cooldown_counts_down_on_the_end_tick():
     assert np.float32(t1.spell_cooldown[0, Slot.E]) == _decayed(E_COOLDOWNS[0], 2)
     assert np.array_equal(np.asarray(t1.hp[minions]), np.asarray(s.hp[minions])), (
         "the expired spin dealt a damage tick while it lingered in the list")
+
+
+# ------------------------------------------------- SPELL-013: Q's two ends --
+def _listed(s, name):
+    """Is ``name`` in champion 0's buff list (the server's ``GetBuffs()``)."""
+    from lanerl_jax.sim.spells import active_by_name
+    return bool(active_by_name(s.buffs)[name][0])
+
+
+def _q_rank1_lane(**kw):
+    """Champion 0 with Q at rank 1 (level 2 through XP, one tick to apply)."""
+    s = _at_level(_lane_with_minions(**kw), load_patch(), 2)
+    s = _tick_stepper()(s)
+    assert int(s.spell_level[0, Slot.Q]) == 1
+    return s
+
+
+def test_q_expiry_is_tick_exact_listed_and_cooldown_counts_down_on_the_end_tick():
+    """`SPELL-013`, Q's EXPIRY -- E's `SPELL-012` expiry shape exactly.
+
+    `Buff.Update` (inside `UpdateBuffs`, first in `AttackableUnit.Update`)
+    deactivates at `TimeElapsed >= 4.5`; `GarenQ.OnDeactivate` unseals and
+    `SetCooldown(8)`; `ObjAIBase.Update` then runs `Spell.Update` on slot 0,
+    so the end row already shows 8 - 1 tick. The `Buff` has `_remove` set and
+    leaves `BuffList` at the next `UpdateBuffs`.
+
+      end row    GarenQ LISTED, window closed (unsealed), cooldown 8 - 1 tick;
+      next row   GarenQ gone, cooldown 8 - 2 ticks.
+
+    Measured, `runs/parity001/sweepA-a4-300s` (no GarenQAttack cast in the
+    window): `t=217769` blue `GarenQ` listed + `8175` (= 8*1024 - 17),
+    `t=217786` gone + `8158`; red `t=227372` listed + `8175`, `t=227389`
+    gone + `8158`. Pre-fix the sim showed the name gone and 8.0 on the end
+    row, one tick behind for the whole 8 s.
+    """
+    from lanerl_jax.sim.spells import cast_locked
+    step = _tick_stepper()
+    s = _cast_q(_q_rank1_lane(n_minions=0))
+    assert bool(s.buffs.q.active[0])
+    n = 0
+    while bool(s.buffs.q.active[0]):
+        s = step(s)
+        n += 1
+        assert n < 400
+    assert n == 270, f"the window ended on tick {n}, not 270"
+    assert not bool(cast_locked(s.buffs)[0, Slot.Q]), (
+        "OnDeactivate unseals at once: the end row is not recast-locked")
+    assert np.float32(s.spell_cooldown[0, Slot.Q]) == _decayed(Q_COOLDOWN, 1), (
+        "expiry row: Spell.Update runs after UpdateBuffs, so the 8 s "
+        f"OnDeactivate wrote is already one tick down; got "
+        f"{float(s.spell_cooldown[0, Slot.Q])!r}")
+    assert _listed(s, "GarenQ"), "expiry row: the server still LISTS GarenQ"
+
+    t1 = step(s)
+    assert not _listed(t1, "GarenQ"), "GarenQ still listed a tick after expiry"
+    assert np.float32(t1.spell_cooldown[0, Slot.Q]) == _decayed(Q_COOLDOWN, 2)
+
+
+def test_q_hit_is_tick_exact_listed_with_the_cooldown_at_exactly_8():
+    """`SPELL-013`, Q CONSUMED by the empowered hit. NOT the expiry shape:
+
+    `GarenQAttack.OnSpellPostCast` -> `OnSpellEnd` -> `DeactivateBuff` runs
+    inside `GarenQAttack`'s own `Spell.Update` (its windup completing in
+    `FinishCasting`). `ObjAIBase.Update` walks `Spells.Values` in insertion
+    order and `GarenQAttack` is `ExtraSpell1`, slot 45, inserted after
+    `GarenQ`'s slot 0 (`ObjAIBase.cs:155-206`): slot 0 has ALREADY counted
+    down this tick, so `SetCooldown(8)` survives the tick untouched.
+
+      hit row    GarenQ LISTED, window closed, cooldown EXACTLY 8.0;
+      next row   GarenQ gone, cooldown 8 - 1 tick.
+
+    Measured, `sweepA-a4-300s`: blue `t=200097` casting `GarenQAttack`,
+    `t=200113` cast finished, `GarenQ` listed + `8192` (8.0), `t=200130`
+    gone + `8175`; red `t=213384` listed + `8192`, `t=213401` gone + `8175`.
+    Pre-fix the cooldown was already right; the name was dropped a row early.
+    """
+    from lanerl_jax.sim.spells import cast_locked
+    step = _tick_stepper()
+    s = _q_rank1_lane(n_minions=1, dist=60.0, hp=10_000.0, e_rank=0)
+    s = _cast_q(s.replace(target=s.target.at[0].set(2)))
+    before = float(s.hp[2])
+    n = 0
+    while float(s.hp[2]) >= before:
+        s = step(s)
+        n += 1
+        assert n < 270, "Q's empowered swing never landed inside the window"
+    assert not bool(s.buffs.q.active[0]), "the hit did not close the window"
+    assert not bool(cast_locked(s.buffs)[0, Slot.Q])
+    assert np.float32(s.spell_cooldown[0, Slot.Q]) == np.float32(Q_COOLDOWN), (
+        "hit row: GarenQAttack (slot 45) updates after GarenQ (slot 0), so "
+        f"the 8 s is not yet counted down; got "
+        f"{float(s.spell_cooldown[0, Slot.Q])!r}")
+    assert _listed(s, "GarenQ"), "hit row: the server still LISTS GarenQ"
+
+    t1 = step(s)
+    assert not _listed(t1, "GarenQ"), "GarenQ still listed a tick after the hit"
+    assert np.float32(t1.spell_cooldown[0, Slot.Q]) == _decayed(Q_COOLDOWN, 1)
+
+
+def test_q_haste_expiry_moves_at_base_speed_and_stays_listed_one_row():
+    """`SPELL-013`, GarenQHaste's expiry. `DeactivateBuff` removes the
+    `StatsModifier` itself (`Buff.cs:143-146`) inside `UpdateBuffs`, before
+    that tick's `Move`: the end tick already moves at BASE speed while the
+    name is still LISTED, and the next `UpdateBuffs` drops it.
+
+    Measured, `sweepA-a4-300s` blue: the step into `t=200380` is 124.3
+    (quantised) units, into `t=200397` 92.3 (ratio 1.347, i.e. the 1.35x
+    gone) with `GarenQHaste` still listed on `t=200397`; `t=200413` gone.
+    """
+    step = _tick_stepper()
+    params = lane_params(load_patch())
+    s = _q_rank1_lane(n_minions=0, e_rank=0)
+    s = s.replace(
+        move_order=s.move_order.at[0].set(MoveOrder.MOVE_TO),
+        n_waypoints=s.n_waypoints.at[0].set(2),
+        waypoint_key=s.waypoint_key.at[0].set(1),
+        waypoints=s.waypoints.at[0, 0].set(
+            jnp.asarray([6000.0, 6000.0], dtype=s.waypoints.dtype))
+                           .at[0, 1].set(
+            jnp.asarray([9000.0, 6000.0], dtype=s.waypoints.dtype)))
+    s = _cast_q(s)
+    base = float(params["move_speed"][s.model[0]]) * (1000.0 / 60.0) / 1000.0
+    n = 0
+    while bool(s.buffs.q_haste.active[0]):
+        prev_x = float(s.x[0])
+        s = step(s)
+        n += 1
+        assert n < 200
+    assert n == 91, f"the haste ended on tick {n}, not 91 (1.5 s at rank 1)"
+    assert float(s.x[0]) - prev_x == pytest.approx(base, abs=3e-4), (
+        "the end tick must already move at base speed")
+    assert _listed(s, "GarenQHaste"), "end row: the server still LISTS the haste"
+    assert bool(s.buffs.q.active[0]), "the 4.5 s window outlives the haste"
+
+    t1 = step(s)
+    assert not _listed(t1, "GarenQHaste"), "GarenQHaste listed a tick late"
+    assert _listed(t1, "GarenQ")

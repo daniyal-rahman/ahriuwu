@@ -267,17 +267,13 @@ def active_by_name(buffs: Buffs) -> dict:
     For renderers and injectors that speak the server's names.
 
     This is the server's ``GetBuffs()`` view, which is not quite "active":
-    an ended ``GarenE`` stays LISTED for one more row (``EBuff.lingering``,
-    `SPELL-012`). Behaviour reads :func:`status`, never this."""
+    an ended ``GarenE``, ``GarenQ`` or ``GarenQHaste`` stays LISTED for one
+    more row (``lingering``, `SPELL-012`/`SPELL-013`). Behaviour reads
+    :func:`status`, never this."""
     out = {}
     for name, field in BUFF_NAMES.items():
         rec = getattr(buffs, field)
-        if field == "w_passive":
-            out[name] = rec
-        elif field == "e":
-            out[name] = rec.active | rec.lingering
-        else:
-            out[name] = rec.active
+        out[name] = rec if field == "w_passive" else rec.active | rec.lingering
     return out
 
 
@@ -371,6 +367,9 @@ def decay_cooldowns(spell_cooldown, dt_s):
 #:   on expiry it is written BEFORE that tick's countdown (``Spell.Update``
 #:   runs after ``UpdateBuffs``, `SPELL-012`), on cancel in the order phase;
 #: * ``end_q``   -- 8 s, on expiry OR the empowered hit (``GarenQ.OnDeactivate``);
+#:   on expiry BEFORE that tick's countdown (like ``end_e``), on the hit AFTER
+#:   it (``GarenQAttack``, slot 45, updates after ``GarenQ``, slot 0,
+#:   `SPELL-013`);
 #: * ``end_r_pending`` -- the caster's rank cooldown when R's windup FINISHES
 #:   (``Spell.FinishCasting``); none when the caster dies mid-windup;
 #: * ``decay_cooldowns`` -- the per-tick countdown.
@@ -571,13 +570,30 @@ def end_q(buffs: Buffs, spell_cooldown, ended):
     slot and ``SetCooldown(8)``. Called on expiry (:func:`step_buffs`) and when
     the empowered ``GarenQAttack`` lands (``step.py``: its
     ``OnSpellPostCast`` calls ``OnSpellEnd``, which deactivates the buff --
-    earlier than the natural 4.5 s in the usual successful-hit case)."""
+    earlier than the natural 4.5 s in the usual successful-hit case).
+
+    Same shape as :func:`end_e` (`SPELL-013`): the window closes NOW but the
+    buff stays LISTED until the next :func:`step_buffs` (``lingering``;
+    ``DeactivateBuff`` only sets ``_remove``). Where the cooldown lands in
+    the tick differs by path, and each caller puts this call there:
+
+    * EXPIRY -- inside ``UpdateBuffs``, before ``Spell.Update``: the 8 s is
+      already one tick down on the end row (server `t=217769` blue:
+      ``GarenQ`` listed, ``8175``/1024). :func:`step_buffs` calls this
+      BEFORE :func:`decay_cooldowns`.
+    * THE EMPOWERED HIT -- ``GarenQAttack``'s own ``Spell.Update``
+      (``FinishCasting`` -> ``OnSpellPostCast`` -> ``OnSpellEnd``), which
+      runs AFTER ``GarenQ``'s in the ``Spells`` loop (slot 45, an
+      ``ExtraSpell``, is inserted after slot 0, ``ObjAIBase.cs:155-206``):
+      exactly 8.0 on the end row (server `t=200113` blue, ``8192``).
+      ``step.py`` calls this after :func:`step_buffs`' decay."""
     spell_cooldown = spell_cooldown.at[:, Slot.Q].set(
         jnp.where(ended, jnp.asarray(Q_COOLDOWN, spell_cooldown.dtype),
                   spell_cooldown[:, Slot.Q]))
     q = buffs.q.replace(active=buffs.q.active & ~ended,
                         elapsed_s=_where(ended, 0.0, buffs.q.elapsed_s),
-                        skip_next=buffs.q.skip_next & ~ended)
+                        skip_next=buffs.q.skip_next & ~ended,
+                        lingering=buffs.q.lingering | ended)
     return buffs.replace(q=q), spell_cooldown
 
 
@@ -587,11 +603,18 @@ def consume_q_skip(buffs: Buffs, consumed):
 
 
 def end_q_haste(buffs: Buffs, ended):
-    """``GarenQHaste.OnDeactivate``: the +35% move speed goes. No cooldown."""
+    """``GarenQHaste.OnDeactivate``: the +35% move speed goes. No cooldown.
+
+    The speed goes NOW: ``DeactivateBuff`` removes the ``StatsModifier``
+    itself (``Buff.cs:143-146``), inside ``UpdateBuffs``, before that tick's
+    ``Move`` -- so the end tick already moves at base speed (``step.py``
+    block 8 reads ``active``). The name stays LISTED for one more row
+    (``lingering``, `SPELL-013`; server `t=200397` blue: ``GarenQHaste``
+    listed after a base-speed step, gone at `t=200413`)."""
     qh = buffs.q_haste
     return buffs.replace(q_haste=qh.replace(
         active=qh.active & ~ended, elapsed_s=_where(ended, 0.0, qh.elapsed_s),
-        rank=_where(ended, 0, qh.rank)))
+        rank=_where(ended, 0, qh.rank), lingering=qh.lingering | ended))
 
 
 # --------------------------------------------------------------------- W ---
@@ -924,10 +947,14 @@ def step_buffs(*, buffs: Buffs, spell_cooldown, spell_level, x, y, kind, team,
 
     # ---- E: the spin -------------------------------------------------------
     # `UpdateBuffs` first removes every buff whose `_remove` is set -- the
-    # spin `end_e` ended last tick or in this tick's order phase -- without
-    # an `OnUpdate` (`SPELL-012`). It stops being listed now.
-    buffs = buffs.replace(e=buffs.e.replace(
-        lingering=jnp.zeros_like(buffs.e.lingering)))
+    # spin `end_e` ended last tick or in this tick's order phase, the Q
+    # window/haste `end_q`/`end_q_haste` ended last tick -- without an
+    # `OnUpdate` (`SPELL-012`, `SPELL-013`). They stop being listed now.
+    buffs = buffs.replace(
+        e=buffs.e.replace(lingering=jnp.zeros_like(buffs.e.lingering)),
+        q=buffs.q.replace(lingering=jnp.zeros_like(buffs.q.lingering)),
+        q_haste=buffs.q_haste.replace(
+            lingering=jnp.zeros_like(buffs.q_haste.lingering)))
     e = buffs.e
     e_active = e.active
     e_elapsed = jnp.where(e_active, e.elapsed_s + dt_s, e.elapsed_s)
@@ -1040,8 +1067,9 @@ def step_buffs(*, buffs: Buffs, spell_cooldown, spell_level, x, y, kind, team,
     # `ObjAIBase.Update` runs `Spell.Update` on every slot -- including the
     # GarenE `OnDeactivate` just swapped back in -- after it, so the rank
     # cooldown is already one tick down on the expiry row (server `t=3167`:
-    # 13295/1024, not 13.0). Q's and R's ends still replace the countdown
-    # value for their slot, as before.
+    # 13295/1024, not 13.0). Q's EXPIRY is the same (`SPELL-013`: `GarenQ`'s
+    # `OnDeactivate` `SetCooldown(8)` inside `UpdateBuffs`; server `t=217769`
+    # 8175/1024). R's end still replaces the countdown value for its slot.
     buffs = buffs.replace(
         # the accumulator carries the drift across ticks; zeroed while no
         # spin is live, so a later cast starts clean (cast_e primes it).
@@ -1052,9 +1080,9 @@ def step_buffs(*, buffs: Buffs, spell_cooldown, spell_level, x, y, kind, team,
         q_haste=buffs.q_haste.replace(elapsed_s=qh_elapsed),
         r_pending=buffs.r_pending.replace(elapsed_s=r_elapsed))
     buffs, cd = end_e(buffs, spell_cooldown, e_expired, spell_level[:, Slot.E])
+    buffs, cd = end_q(buffs, cd, q_expired)
     cd = decay_cooldowns(cd, dt_s)
     buffs = end_w(buffs, w_expired)
-    buffs, cd = end_q(buffs, cd, q_expired)
     buffs = end_q_haste(buffs, qh_expired)
     buffs, cd = end_r_pending(buffs, cd, fired=r_fires, cancelled=r_cancelled)
 

@@ -990,7 +990,10 @@ def tick(state: LaneState, params: UnitParams,
     q_landed = aa.hit & bs.q_empowered
     # `GarenQAttack.OnSpellPostCast` -> `OnSpellEnd` deactivates the live
     # GarenQ buff: its `OnDeactivate` is `end_q`, the same one expiry calls.
-    buffs_out, spell_cooldown_out = end_q(bs.buffs, bs.spell_cooldown, q_landed)
+    # Called AFTER `step_buffs`' countdown: `GarenQAttack` (slot 45) updates
+    # after `GarenQ` (slot 0), so the hit row shows exactly 8.0 and the name
+    # still LISTED (`SPELL-013`).
+    buffs_out,spell_cooldown_out = end_q(bs.buffs, bs.spell_cooldown, q_landed)
     # `SkipNextAutoAttack` is consumed at the swing gate, before the real
     # GarenQAttack swing begins.
     buffs_out = consume_q_skip(buffs_out, aa.consumed_skip)
