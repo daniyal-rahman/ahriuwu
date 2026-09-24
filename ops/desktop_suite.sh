@@ -25,7 +25,7 @@ if (( need > avail - 8 )); then echo "REFUSED: $par x $mem = ${need}G > availabl
 run() {  # file mem cores
     f="$1"; m="$2"; c="$3"
     if out=$(systemd-run --user --scope --quiet -p MemoryMax="$m" -p MemorySwapMax=0 \
-             nice -n 5 env JAX_PLATFORMS=cpu OMP_NUM_THREADS="$c" \
+             nice -n 5 env JAX_PLATFORMS=cpu LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor OMP_NUM_THREADS="$c" \
              XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=$c" \
              .venv-jax/bin/python -m pytest -q -p no:cacheprovider "$f" 2>&1); then
         echo "PASS $f: $(echo "$out" | tail -1)"
