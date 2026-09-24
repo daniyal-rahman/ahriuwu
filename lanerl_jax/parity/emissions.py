@@ -96,6 +96,14 @@ INPUT_PACKET_NAMES: dict[int, str] = {
     0x9A: "NPC_CastSpellReq",
 }
 
+GAME_PACKET_CHANNELS = frozenset({1, 2, 3, 4})
+CHANNEL_NAMES = {
+    0: "handshake",
+    5: "chat",
+    6: "quick_chat",
+    7: "loading_screen",
+}
+
 
 def packet_id(data: bytes) -> int:
     """Return the real ID, including League's 16-bit extended packet IDs."""
@@ -125,6 +133,10 @@ class PacketRecord:
 
     @property
     def scope(self) -> Scope:
+        # Packet IDs live in different namespaces on handshake/chat/loading
+        # channels. A KeyCheck byte equal to 0x0C is not a Basic_Attack.
+        if self.channel not in GAME_PACKET_CHANNELS:
+            return "out_of_scope"
         if self.direction == "in" and self.packet_id in INPUT_PACKET_NAMES:
             return "input"
         if self.packet_id in IN_SCOPE_PACKET_NAMES:
@@ -135,6 +147,9 @@ class PacketRecord:
 
     @property
     def packet_name(self) -> str:
+        if self.channel not in GAME_PACKET_CHANNELS:
+            channel = CHANNEL_NAMES.get(self.channel, f"channel_{self.channel}")
+            return f"{channel}_packet_0x{self.packet_id:X}"
         return (
             IN_SCOPE_PACKET_NAMES.get(self.packet_id)
             or OUT_OF_SCOPE_PACKET_NAMES.get(self.packet_id)

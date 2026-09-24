@@ -53,6 +53,13 @@ def test_log_is_strict_and_census_never_drops_unknown_types(tmp_path):
     assert any(row["packet_name"] == "UNKNOWN_0x42" for row in report["by_type"])
 
 
+def test_packet_id_namespace_is_channel_specific():
+    # KeyCheck/handshake byte 0x0C must not be counted as game Basic_Attack.
+    record = PacketRecord(1, 0.0, "out", "send", 0, 0, 128, b"\x0c\0\0\0\0")
+    assert record.scope == "out_of_scope"
+    assert record.packet_name == "handshake_packet_0xC"
+
+
 def test_log_rejects_gaps_and_byte_id_disagreement(tmp_path):
     path = tmp_path / "packets.jsonl"
     path.write_text(json.dumps(_row(2, b"\x0c\0\0\0\0")) + "\n")
