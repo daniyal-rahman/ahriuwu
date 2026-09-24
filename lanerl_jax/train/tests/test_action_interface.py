@@ -5,8 +5,9 @@ on, and so does every trained policy:
 
 (a) every valid target slot decodes to an ATTACK on exactly the unit whose
     features the observation wrote into that slot;
-(b) a MOVE on a screen cell decodes to a world point that projects back into
-    the same cell, seen from the agent's own (red: mirrored) frame;
+(b) a MOVE on a screen cell whose raw decode is standable (the rest are
+    snapped to the nearest standable cell, `PATH-010`) decodes to a world
+    point that projects back into the same cell, seen from the agent's own (red: mirrored) frame;
 (c) the features the scripted player reads -- enemy minion HP bar, subtype,
     position, own AD -- equal the underlying ``LaneState`` after the builder's
     documented normalisation, and own AD is the damage a swing really deals.
@@ -34,7 +35,7 @@ from lanerl_jax.sim.state import Kind, Team
 from lanerl_jax.sim.step import env_step
 from lanerl_jax.sim.targeting import MinionType
 from lanerl_jax.train import scripted_policy as SP
-from lanerl_jax.train.actions import orders_from
+from lanerl_jax.train.actions import move_snap_table, orders_from
 from lanerl_jax.train.trainer import BLUE_NEXUS, RED_NEXUS
 from lanerl_rl import constants as C
 from lanerl_rl.projection import centred_on, world_to_screen
@@ -178,48 +179,74 @@ def test_a_invalid_slot_is_not_an_attack():
 _CAM = centred_on(0.0, 0.0)
 
 
+def _raw_cell_standable(x, y):
+    """Is the RAW (pre-snap) decoded point on a cell a 35-u champion can
+    stand on?  Only those points are passed through by the `PATH-010` snap;
+    the rest are moved to the nearest standable cell centre and so, by
+    design, need not project back into the clicked screen cell."""
+    t = move_snap_table()
+    nx = (float(x) - t.min_x) / t.cell_size
+    ny = (float(y) - t.min_y) / t.cell_size
+    if not (0 <= nx < t.width and 0 <= ny < t.height):
+        return False
+    return bool(t.standable[int(ny) * t.width + int(nx)])
+
+
 def _roundtrip_failures(state, decode_state=None, cell_shift=0):
     """Decode every executable cell for both champions, re-express the world
-    point in the champion's OWN frame and project it back to the screen."""
+    point in the champion's OWN frame and project it back to the screen.
+
+    Cells whose raw decode is off-grid or unstandable at r=35 are skipped
+    (the snap moves them on purpose, `PATH-010`); returns
+    ``(fails, checked, skipped)``."""
     decode_state = state if decode_state is None else decode_state
     _, _, ok = SP.screen_grid()
     ys, xs = np.where(ok)
     sel = np.arange(0, len(xs), 7)             # ~700 of 5k cells, spread out
     xs, ys = xs[sel], ys[sel]
-    fails = 0
+    fails = checked = skipped = 0
     slots = jnp.full((2, C.N_SLOTS), -1, jnp.int32)
     for sx, sy in zip(xs, ys):
         action = (jnp.asarray([MOVE, MOVE]), jnp.asarray([sx + cell_shift] * 2),
                   jnp.asarray([sy, sy]), jnp.asarray([0, 0]))
         o = orders_from(action, decode_state, slots, BLUE_FRAME)
+        raw = orders_from(action, decode_state, slots, BLUE_FRAME,
+                          snap_moves=False)
         for me in (0, 1):
+            if not _raw_cell_standable(raw.x[me], raw.y[me]):
+                skipped += 1
+                continue
+            checked += 1
             ds, dn = delta_to_lane(FRAMES[me], o.x[me] - state.x[me],
                                    o.y[me] - state.y[me])
             px, py = world_to_screen(_CAM, float(ds), float(dn))
             cx, cy = int(np.floor(px * C.N_SCREEN_X)), int(np.floor(py * C.N_SCREEN_Y))
             if (cx, cy) != (sx, sy):
                 fails += 1
-    return fails, 2 * len(xs)
+    return fails, checked, skipped
 
 
 def test_b_move_cell_round_trips_in_both_frames():
     state, _ = _state()
-    fails, n = _roundtrip_failures(state)
-    assert n > 1000 and fails == 0, (fails, n)
+    fails, n, skipped = _roundtrip_failures(state)
+    # 453 of the 1,380 sampled (cell, side) pairs decode off-grid or onto an
+    # unstandable cell from these mid-lane positions and are snapped (452 of
+    # them no longer round-trip; one snapped centre still lands in its cell).
+    assert n > 900 and fails == 0 and skipped == 453, (fails, n, skipped)
 
 
 def test_b_detects_red_decoded_without_its_mirror():
     state, _ = _state()
     # the decoder picks the red flip from state.team; lie that red is blue
     no_mirror = state.replace(team=state.team.at[1].set(Team.BLUE))
-    fails, n = _roundtrip_failures(state, decode_state=no_mirror)
+    fails, n, _ = _roundtrip_failures(state, decode_state=no_mirror)
     assert fails > n // 4, (fails, n)
 
 
 def test_b_detects_cell_off_by_one():
     state, _ = _state()
-    fails, n = _roundtrip_failures(state, cell_shift=1)
-    assert fails == n, (fails, n)
+    fails, n, _ = _roundtrip_failures(state, cell_shift=1)
+    assert n > 900 and fails == n, (fails, n)
 
 
 def test_b_scripted_click_on_a_minion_lands_on_it():
