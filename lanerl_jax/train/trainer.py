@@ -445,8 +445,15 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         metrics["value_explained_var"] = jnp.where(
             r_var > 0, 1.0 - (returns - tr.value).var() / r_var, jnp.nan)
         # Which reward term is actually driving the total.
+        # The zero-summed terms (`r_self - r_other`) average to EXACTLY zero
+        # over the two champions, so their plain mean -- what this logged
+        # until 2026-09-24 -- was 0.0 in every row of every run and said
+        # nothing (`BASELINE_AUDIT.md`). What matters is how much of the
+        # learning signal each term carries: its mean ABSOLUTE contribution.
+        # Shaping is per-agent and not zero-summed, so it keeps its mean.
         for k, v in tr.reward_terms.items():
-            metrics[f"reward_{k}"] = v.mean()
+            metrics[f"reward_{k}"] = (v.mean() if k == "shaping"
+                                        else jnp.abs(v).mean())
         # How far from the lane corridor the champions sat, in game units.
         # ~7,981 at spawn, 0 anywhere in lane. This is the leading indicator.
         metrics["lane_dist"] = tr.lane_dist.mean()
