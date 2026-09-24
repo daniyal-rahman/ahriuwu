@@ -168,6 +168,7 @@ def step_autoattack(
     empowered_damage: Any = None,
     skip_next_autoattack: Any = False,
     may_engage: Any = True,
+    swing_target_gone: Any = False,
     xp: Any = np,
 ) -> AutoAttackOut:
     """One tick of the auto-attack clock for a batch of units.
@@ -178,6 +179,11 @@ def step_autoattack(
     reaches zero only as a result of **this** tick's decrement does not permit
     a swing until the **next** tick, and a swing started this tick has already
     paid one tick of its new cooldown by the time the tick ends.
+
+    ``swing_target_gone``: the unit the swing was DECLARED on
+    (``CastInfo.Targets[0]``, ``step.py``'s ``aa_target``) is dead -- which
+    may be a different unit from the current ``TargetUnit``. See
+    ``AA-007`` below.
     """
     # The decrement must be computed in the SAME precision as the state.
     #
@@ -197,8 +203,35 @@ def step_autoattack(
     #    the gate. See this module's docstring for the dumped evidence.
     cd = aa_cooldown
 
+    # 2a. `AA-007`: `Spell.Update` runs BEFORE `UpdateTarget`
+    #    (`ObjAIBase.cs:1142-1153`), and for a swing in `STATE_CASTING` its
+    #    first act is `CastCancelCheck` (`Spell.cs:1645-1649`), ahead of the
+    #    wind-up advance and `FinishCasting`. That check reads the swing's OWN
+    #    target, `CastInfo.Targets[0].Unit` (`Spell.cs:252-271`):
+    #
+    #        if (!spellTarget.IsVisibleByTeam(...) || !Targetable || spellTarget.IsDead)
+    #            if (CastInfo.IsAutoAttack) { Owner.CancelAutoAttack(true); return true; }
+    #
+    #    `CancelAutoAttack(reset=true)` (`ObjAIBase.cs:469-484`): spell back to
+    #    READY, `_autoAttackCurrentCooldown = 0`, `ResetSpellCast` (the wind-up
+    #    clock). No `fullCancel`, so `IsAttacking` survives into `UpdateTarget`
+    #    -- and every branch there then clears it and RETURNS before the swing
+    #    gate (`:1235-1256`: a dead/invisible TargetUnit cancels and nulls it; a
+    #    live one hits `IsAttacking && State == READY -> IsAttacking = false;
+    #    return`; a null one `CancelAutoAttack(!HasAutoAttacked, true)`s and
+    #    has nothing to swing at). So: no hit, cooldown 0, wind-up 0, not
+    #    attacking, and NO new swing this tick. `HasAutoAttacked` is untouched.
+    #
+    #    Before this the port only cancelled on the CURRENT target
+    #    (`cancel_lost_target` below): a swing whose declared target died
+    #    while the unit had already switched `target` to a live unit in range
+    #    wound up to the end and fired at the dead slot -- or, once the next
+    #    wave recycled that slot, at the newborn ALLY at its barracks
+    #    (`docs/PLAYTEST_SWEEP.md` (c)1).
+    dead_target_cancel = is_attacking & (aa_windup > 0) & swing_target_gone
+
     # 2. advance an in-flight swing; the hit lands when the wind-up runs out
-    winding = is_attacking & (aa_windup > 0)
+    winding = is_attacking & (aa_windup > 0) & ~dead_target_cancel
     windup = xp.where(winding, aa_windup - xp.asarray(dt_s, aa_windup.dtype), aa_windup)
     hit = winding & (windup <= 0)
 
@@ -243,16 +276,18 @@ def step_autoattack(
     dmg = xp.where(hit, post_mitigation_damage(raw, target_resist, xp),
                    xp.zeros_like(attack_damage))
 
-    attacking = xp.where(hit | cancel | skipped_ready,
+    attacking = xp.where(hit | cancel | skipped_ready | dead_target_cancel,
                          xp.zeros_like(is_attacking, dtype=bool),
                          is_attacking)
     hit_done = has_auto_attacked | hit
-    windup = xp.where(hit | cancel, xp.zeros_like(windup), windup)
-    # ONLY the lost-target cancel zeroes the cooldown. That path is
-    # `CancelAutoAttack(!HasAutoAttacked, true)` -- a `reset=true` cancel.
-    # `ResetSpellCast` on the suppressed path leaves `_autoAttackCurrentCooldown`
-    # alone, so a suppressed swing does not hand back a free re-engage.
-    cd = xp.where(cancel_lost_target, xp.zeros_like(cd), cd)
+    windup = xp.where(hit | cancel | dead_target_cancel,
+                      xp.zeros_like(windup), windup)
+    # ONLY the lost-target cancels zero the cooldown. Those paths are
+    # `CancelAutoAttack(!HasAutoAttacked, true)` and (`AA-007`)
+    # `CancelAutoAttack(true)` -- both `reset=true`. `ResetSpellCast` on the
+    # suppressed path leaves `_autoAttackCurrentCooldown` alone, so a
+    # suppressed swing does not hand back a free re-engage.
+    cd = xp.where(cancel_lost_target | dead_target_cancel, xp.zeros_like(cd), cd)
 
     # 3. the swing gate. `AutoAttackSpell.State == STATE_READY` is "not already
     #    winding up", which is `~attacking` here.
@@ -260,8 +295,10 @@ def step_autoattack(
     #    swing branch is inside that test, the cancel branch above is not.
     #    A held ALLY target therefore neither starts a swing nor cancels
     #    one already in flight (which lands on the unit it started on).
+    #    `~dead_target_cancel`: `UpdateTarget` returns before this gate on the
+    #    tick `CastCancelCheck` cancelled a swing on a dead target (`AA-007`).
     start = (has_target & in_range & can_attack & may_engage & (~attacking)
-             & (cd <= 0) & ~skipped_ready)
+             & (cd <= 0) & ~skipped_ready & ~dead_target_cancel)
     consumed_skip = start & skip_next_autoattack
     cd = xp.where(start, xp.where(consumed_skip, xp.zeros_like(cd), attack_period), cd)
     windup = xp.where(start,

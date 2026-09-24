@@ -64,6 +64,7 @@ import numpy as np
 
 from ..data.patch import PatchTable, load_patch
 from .state import (
+    AA_TARGET_GONE,
     CH_SLICE,
     MAX_WAYPOINTS,
     MI_SLICE,
@@ -612,7 +613,25 @@ def spawn_minion(state: LaneState, team, profile, hp,
         waypoint_key=setv(state.waypoint_key, jnp.int8(1)),
         lane_waypoint_key=setv(state.lane_waypoint_key, jnp.int8(0)),
         move_order=setv(state.move_order, jnp.int8(MoveOrder.HOLD)),
-        target=setv(state.target, jnp.int8(-1)),
+        # `SLOT-002`: and every OTHER unit's reference to the slot. The
+        # server's `TargetUnit` and `CastInfo.Targets[0]` point at an OBJECT;
+        # the corpse that held this slot is not the minion now written into
+        # it. A held `target` on it is dropped (`UpdateTarget`'s dead-target
+        # branch, `ObjAIBase.cs:1235-1243`, would have done so on the
+        # holder's next update), and a swing declared on it is marked
+        # `AA_TARGET_GONE` so it is cancelled rather than resolved against the
+        # newcomer (`AA-007`). For `aa_target` this is belt-and-braces:
+        # `step.py` already swaps the index for the sentinel on the death
+        # tick, and this catches any state that reaches a spawn without
+        # passing through it (hand-built, injected). For `target` it is
+        # load-bearing: the sim drops a dead `target` on the holder's NEXT
+        # tick (`TGT-DEATHTICK`, measured), and the spawn runs at the top of
+        # that tick, before the drop. Without it, a caster mid-windup on a
+        # dead blue minion fired across the map at the red minion spawned
+        # into its slot (`docs/PLAYTEST_SWEEP.md` (c)1), and a champion held
+        # a recycled ALLY as its target (the same doc, champion variant).
+        target=setv(jnp.where(ok & (state.target == i), jnp.int8(-1),
+                              state.target), jnp.int8(-1)),
         # `hadTarget` is a LATCH, and a recycled slot must start clean. It used
         # to be reconstructed every tick as `target >= 0`, so this reset was
         # implicit; persisting it in `LaneState` (HADTGT-001) made the omission
@@ -636,7 +655,9 @@ def spawn_minion(state: LaneState, team, profile, hp,
         # `had_target` leak above was the same class, fixed one field at a
         # time; this is the rest of the row. Values are `empty_state`'s.
         is_attacking=setv(state.is_attacking, False),
-        aa_target=setv(state.aa_target, jnp.int8(-1)),
+        aa_target=setv(jnp.where(ok & (state.aa_target == i),
+                                 jnp.int8(AA_TARGET_GONE), state.aa_target),
+                       jnp.int8(-1)),
         has_auto_attacked=setv(state.has_auto_attacked, False),
         aa_cooldown=setv(state.aa_cooldown, jnp.asarray(0.0, state.x.dtype)),
         aa_windup=setv(state.aa_windup, jnp.asarray(0.0, state.x.dtype)),

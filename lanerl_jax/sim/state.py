@@ -80,7 +80,7 @@ from flax import struct
 
 __all__ = [
     "N_CHAMPIONS", "N_MINIONS", "N_TURRETS", "N_UNITS",
-    "MAX_WAYPOINTS", "N_MISSILES",
+    "MAX_WAYPOINTS", "N_MISSILES", "AA_TARGET_GONE",
     "CH_SLICE", "MI_SLICE", "TU_SLICE",
     "Kind", "Team", "MoveOrder", "TurretTier",
     "EBuff", "QBuff", "RankedBuff", "Buffs", "empty_buffs",
@@ -94,6 +94,15 @@ N_UNITS = N_CHAMPIONS + N_MINIONS + N_TURRETS      # 66
 
 MAX_WAYPOINTS = 64
 N_MISSILES = 24
+
+#: ``LaneState.aa_target`` value for a swing whose declared target has DIED
+#: (`AA-007`). Written on the death tick in place of the slot index, so the
+#: next wave's spawn -- which may reuse the slot before the swing is resolved
+#: -- cannot turn the reference into a live unit. The swing is cancelled on
+#: the attacker's next update (`autoattack.step_autoattack`'s
+#: ``swing_target_gone``). Distinct from -1, which means "no recorded swing
+#: target: resolve against ``target``" (`ENT-02`'s fallback).
+AA_TARGET_GONE = -2
 
 CH_SLICE = slice(0, N_CHAMPIONS)
 MI_SLICE = slice(N_CHAMPIONS, N_CHAMPIONS + N_MINIONS)
@@ -381,6 +390,8 @@ class LaneState:
     #: return at ``:1245``). ``target`` may change during the wind-up; this
     #: may not. Kept separately because resolving the hit against ``target``
     #: let a policy re-aim a swing on its last frame (``ENT-02``).
+    #: ``AA_TARGET_GONE`` (-2) while a swing's target is dead and the cancel
+    #: is pending (`AA-007`).
     aa_target: jax.Array       # (N,) int8
     has_auto_attacked: jax.Array   # (N,) bool
     #: ``_autoAttackCurrentCooldown``, in SECONDS (the server counts down by
@@ -526,6 +537,17 @@ class LaneState:
     missile_y: jax.Array       # (M,)
     missile_tx: jax.Array      # (M,)  target unit index, -1 if none
     missile_source: jax.Array  # (M,) int8
+    #: The shooter's IDENTITY, which the slot index above is not: its
+    #: ``spawn_seq`` and ``model`` at launch (`SLOT-003`). A shooter that
+    #: dies leaves its missile flying (``SpellMissile.Update`` tests only the
+    #: TARGET, `SpellMissile.cs:70-84`), and the next wave may recycle its
+    #: slot before the missile lands. ``spawn_seq[missile_source] !=
+    #: missile_source_seq`` then means "the shooter no longer exists": the
+    #: damage still lands but is attributed to a dead minion, not to the
+    #: slot's new occupant. -1 = unknown (hand-built / injected states): the
+    #: slot is trusted, as before.
+    missile_source_seq: jax.Array    # (M,) int32
+    missile_source_model: jax.Array  # (M,) int8
     missile_damage: jax.Array  # (M,)
     missile_speed: jax.Array   # (M,)
 
@@ -634,6 +656,8 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         missile_x=z(n_missiles), missile_y=z(n_missiles),
         missile_tx=jnp.full((n_missiles,), -1, dtype=jnp.int8),
         missile_source=jnp.full((n_missiles,), -1, dtype=jnp.int8),
+        missile_source_seq=jnp.full((n_missiles,), -1, dtype=jnp.int32),
+        missile_source_model=jnp.zeros((n_missiles,), dtype=jnp.int8),
         missile_damage=z(n_missiles), missile_speed=z(n_missiles),
         next_spawn_ms=jnp.asarray(0.0, dtype=dtype),
         minion_number=jnp.asarray(0, dtype=jnp.int32),

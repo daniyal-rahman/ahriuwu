@@ -187,8 +187,15 @@ def death_rewards(*, died: jax.Array, killer: jax.Array, x: jax.Array,
 def update_hit_flag(*, kind: jax.Array, damage_ij: jax.Array,
                     buff_damage: jax.Array, buff_dealt_by: jax.Array,
                     hit_flag_ms: jax.Array, hit_flag_by: jax.Array,
-                    delta_ms: float):
+                    delta_ms: float, orphan_damage: jax.Array | None = None):
     """One tick of ``Champion._championHitFlagTimer``/``_playerHitId``.
+
+    ``orphan_damage`` (victim-wise, `SLOT-003`): missile damage whose shooter
+    no longer exists -- its slot was recycled in flight. On the server that
+    hit still resets the timer and records the DEAD minion's id, which can
+    never be paid as a champion assist; here that is ``-1`` (a slot index
+    would name the slot's new occupant). Ordered after every ordinary
+    attacker, as ``step.py``'s kill attribution orders it.
 
     ``Champion.TakeDamage`` (`Champion.cs:569-575`) resets the timer to 15000
     and records the attacker's id on **every** hit, unconditionally -- no
@@ -222,6 +229,10 @@ def update_hit_flag(*, kind: jax.Array, damage_ij: jax.Array,
         any_ordinary, last_ordinary,
         jnp.where(buff_damage > 0, buff_dealt_by.astype(idx.dtype), -1))
     any_hit = any_ordinary | (buff_damage > 0)
+    if orphan_damage is not None:
+        orphan = orphan_damage > 0
+        last_attacker = jnp.where(orphan, -1, last_attacker)
+        any_hit = any_hit | orphan
 
     new_timer = jnp.where(
         any_hit, jnp.asarray(HIT_FLAG_MS, hit_flag_ms.dtype),

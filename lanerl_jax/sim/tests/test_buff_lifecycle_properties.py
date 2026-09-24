@@ -222,6 +222,7 @@ def _snap(s):
         cd=s.spell_cooldown[:2], hp=s.hp, max_hp=s.max_hp, alive=s.alive,
         kind=s.kind, team=s.team, cs=s.cs[:2], gold=s.gold[:2], level=s.level[:2],
         target=s.target, is_attacking=s.is_attacking, aa_target=s.aa_target,
+        aa_windup=s.aa_windup, aa_cooldown=s.aa_cooldown,
         t_ms=s.t_ms)
 
 
@@ -436,6 +437,28 @@ def _analyse(seed):
             bad["dead_swing"].append(
                 f"seed {seed} snapshot {t} phase {phase[t]}: unit {u} "
                 f"(kind {kind[t, u]}) died this tick with is_attacking=True")
+    # `AA-006` in full (`docs/PLAYTEST_SWEEP.md` (c)4): the death-tick cancel
+    # is `CancelAutoAttack(true, true)` -- the wind-up is gone on EVERY
+    # snapshot of a corpse, and a unit that was mid-swing when it died (so
+    # held a target: the branch is `if (TargetUnit != null)`) has its
+    # cooldown reset to 0 on the death tick. The step used to mask only
+    # `is_attacking`, leaving e.g. a 0.461 s wind-up and a counting-down
+    # cooldown on the corpse.
+    for t, u in zip(*np.nonzero(dead & (f["aa_windup"] != 0))):
+        bad["dead_swing"].append(
+            f"seed {seed} snapshot {t} phase {phase[t]}: dead unit {u} "
+            f"(kind {kind[t, u]}) keeps aa_windup {f['aa_windup'][t, u]:.4f}")
+    died_now = np.zeros_like(dead)
+    died_now[1:] = present[1:] & alive[:-1] & ~alive[1:] & (phase[1:, None] != 0)
+    was_swinging = np.zeros_like(dead)
+    was_swinging[1:] = f["is_attacking"][:-1]
+    for t, u in zip(*np.nonzero(died_now & was_swinging
+                                & (f["aa_cooldown"] != 0))):
+        bad["dead_swing"].append(
+            f"seed {seed} snapshot {t} phase {phase[t]}: unit {u} "
+            f"(kind {kind[t, u]}) died mid-swing and kept aa_cooldown "
+            f"{f['aa_cooldown'][t, u]:.4f} (CancelAutoAttack(reset=true) zeroes it)")
+    ev["deaths_mid_swing"] = int((died_now & was_swinging).sum())
     return bad, ev, wall
 
 
@@ -488,11 +511,17 @@ def test_unit_sanity_on_every_snapshot(seed):
 
 
 def test_a_dead_unit_is_not_mid_swing():
-    rows = []
+    """`AA-006`: `UpdateTarget`'s dead-unit branch `CancelAutoAttack(true,
+    true)`s -- not attacking, no wind-up, cooldown reset -- on the death tick.
+    Requires deaths mid-swing to have happened (asserted, so a pass cannot
+    come from zero samples)."""
+    rows, n_mid = [], 0
     for seed in SEEDS:
-        bad, _, _ = _analysis(seed)
+        bad, ev, _ = _analysis(seed)
         rows += bad["dead_swing"]
-    assert not rows, f"{len(rows)} deaths mid-swing left is_attacking=True:\n  " + \
+        n_mid += ev["deaths_mid_swing"]
+    assert n_mid >= 5, f"only {n_mid} deaths mid-swing: the property is untested"
+    assert not rows, f"{len(rows)} corpses left mid-swing:\n  " + \
         "\n  ".join(rows[:8])
 
 

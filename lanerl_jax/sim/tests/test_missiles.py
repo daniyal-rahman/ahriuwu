@@ -430,6 +430,136 @@ def test_a_missile_homes_on_a_moving_target():
     assert moved > 500.0, "the target barely moved; this would not distinguish homing from luck"
 
 
+def _recycle_slot(s, slot, team, xy):
+    """Kill ``slot`` and spawn the next wave's melee minion of ``team`` into
+    it (``spawn_minion`` takes the lowest free minion slot) at ``xy``."""
+    from lanerl_jax.sim.init import spawn_minion
+
+    s = s.replace(alive=s.alive.at[slot].set(False))
+    path = jnp.asarray([[xy[0], xy[1]], [xy[0] + 1000.0, xy[1]]], s.x.dtype)
+    seq_before = int(s.spawn_seq[slot])
+    s = spawn_minion(s, team, profile_id(Kind.LANE_MINION, MinionType.MELEE, team),
+                     455.0, path, spawn_xy=xy)
+    assert bool(s.alive[slot]) and int(s.team[slot]) == team, "the slot was reused"
+    assert int(s.spawn_seq[slot]) != seq_before
+    return s
+
+
+def test_a_missile_records_its_shooters_identity_and_outlives_a_recycled_slot():
+    """`SLOT-003` (`docs/PLAYTEST_SWEEP.md` (c)2). A shooter that dies leaves
+    its missile flying -- `SpellMissile.Update` tests only the TARGET
+    (`SpellMissile.cs:70-84`) -- and it lands, credited to the dead owner
+    OBJECT (`CheckFlagsForUnit` -> `Owner.AutoAttackHit`,
+    `SpellMissile.cs:177-196`). The sim credited `missile_source`, a SLOT, so
+    once the next wave recycled the slot the landing was attributed to the
+    newcomer. Here that newcomer is on the VICTIM's team and next to it: the
+    hit raised a call for help naming it -- an ally "attacking" an ally. On
+    the server the call names the dead caster, which `LaneMinionAI` never
+    acquires (`IsValidTarget`'s `!u.IsDead`), so no priority is set."""
+    victim, listener, shooter = 3, 4, 2
+    s = _two_minions(MinionType.CASTER, Team.BLUE, (5000.0, 5000.0),
+                     MinionType.MELEE, Team.RED, (5300.0, 5000.0), hp_b=455.0)
+    step, _ = _ticker()
+    s, _ = _run_until_missile(s, step)
+    m = int(np.flatnonzero(np.asarray(s.missile_alive))[0])
+    assert int(s.missile_source[m]) == shooter
+    assert int(s.missile_source_seq[m]) == int(s.spawn_seq[shooter]), \
+        "the launch records WHO fired, not only the slot"
+    assert int(s.missile_source_model[m]) == int(s.model[shooter])
+
+    # The caster dies; the next red wave takes its slot, beside the victim,
+    # with a red listener in range of both.
+    vx, vy = float(s.x[victim]), float(s.y[victim])
+    s = s.replace(
+        kind=s.kind.at[listener].set(Kind.LANE_MINION),
+        team=s.team.at[listener].set(Team.RED),
+        alive=s.alive.at[listener].set(True),
+        model=s.model.at[listener].set(
+            profile_id(Kind.LANE_MINION, MinionType.MELEE, Team.RED)),
+        x=s.x.at[listener].set(vx + 50.0), y=s.y.at[listener].set(vy),
+        hp=s.hp.at[listener].set(455.0), max_hp=s.max_hp.at[listener].set(455.0))
+    s = _recycle_slot(s, shooter, Team.RED, (vx, vy + 100.0))
+
+    hp0 = float(s.hp[victim])
+    for _ in range(60):
+        s = step(s)
+        if _n_missiles(s) == 0:
+            break
+    assert _n_missiles(s) == 0
+    assert float(s.hp[victim]) < hp0, "the dead shooter's missile still lands"
+    assert int(s.help_priority[listener, shooter]) == 14, \
+        "the landing was attributed to the slot's new occupant, the victim's own ally"
+
+
+def test_a_dead_shooters_missile_does_not_hand_the_hit_flag_to_the_slots_new_occupant():
+    """`SLOT-003`, the champion hit-flag (`Champion.TakeDamage` records the
+    attacker on every hit, `Champion.cs:569-575`). On the server that is the
+    dead caster -- never a champion, so never paid as an assist. The sim
+    recorded the slot, i.e. whoever spawned into it after the caster died.
+    The flag still resets (the hit is real); the attacker is -1."""
+    from lanerl_jax.sim.rewards import HIT_FLAG_MS
+
+    garen, shooter = 0, 2
+    s = _two_minions(MinionType.CASTER, Team.RED, (5000.0, 5000.0),
+                     MinionType.MELEE, Team.BLUE, (15000.0, 15000.0))
+    s = s.replace(x=s.x.at[garen].set(5300.0).at[1].set(0.0),
+                  y=s.y.at[garen].set(5000.0).at[1].set(20000.0))
+    caster_model = int(s.model[shooter])
+    dead_seq = int(s.spawn_seq[shooter])
+    # A missile the caster fired at Garen, 3 units short of him.
+    s = s.replace(
+        missile_alive=s.missile_alive.at[0].set(True),
+        missile_x=s.missile_x.at[0].set(5297.0),
+        missile_y=s.missile_y.at[0].set(5000.0),
+        missile_tx=s.missile_tx.at[0].set(garen),
+        missile_source=s.missile_source.at[0].set(shooter),
+        missile_source_seq=s.missile_source_seq.at[0].set(dead_seq),
+        missile_source_model=s.missile_source_model.at[0].set(caster_model),
+        missile_damage=s.missile_damage.at[0].set(23.0),
+        missile_speed=s.missile_speed.at[0].set(650.0))
+    s = _recycle_slot(s, shooter, Team.BLUE, (2000.0, 2000.0))
+    hp0 = float(s.hp[garen])
+    step, _ = _ticker()
+    s = step(s)
+    assert _n_missiles(s) == 0 and float(s.hp[garen]) < hp0, "it lands"
+    assert float(s.hit_flag_ms[garen]) == pytest.approx(HIT_FLAG_MS), "the flag resets"
+    assert int(s.hit_flag_by[garen]) == -1, \
+        "the hit was credited to the blue minion now in the caster's slot"
+
+
+def test_step_missiles_credits_a_live_shooter_and_orphans_a_recycled_one():
+    """`SLOT-003` at the function: two missiles land on unit 3 in the same
+    tick. Unit 1's slot still holds the unit that fired (same `spawn_seq`):
+    credited in `damage_ij`, as before. Unit 2's slot now holds a different
+    unit: the damage is `orphan_damage`, with no row. A missile with no
+    recorded identity (-1: hand-built or injected) trusts the slot."""
+    from lanerl_jax.sim.missiles import step_missiles
+
+    n, M = 4, 3
+    z = jnp.zeros((n,))
+    out = step_missiles(
+        m_alive=jnp.asarray([True, True, True]),
+        m_x=jnp.asarray([99.0, 99.0, 99.0]), m_y=jnp.zeros((M,)),
+        m_target=jnp.asarray([3, 3, 3], jnp.int8),
+        m_source=jnp.asarray([1, 2, 2], jnp.int8),
+        m_damage=jnp.asarray([10.0, 20.0, 40.0]),
+        m_speed=jnp.full((M,), 650.0),
+        launches=jnp.zeros((n,), bool), raw_damage=z, launch_speed=z,
+        x=jnp.asarray([0.0, 0.0, 0.0, 100.0]), y=z,
+        alive=jnp.ones((n,), bool), targetable=jnp.ones((n,), bool),
+        armor=z, target=jnp.full((n,), -1, jnp.int8), delta_ms=1000.0 / 60.0,
+        m_source_seq=jnp.asarray([7, 8, -1], jnp.int32),
+        m_source_model=jnp.zeros((M,), jnp.int8),
+        spawn_seq=jnp.asarray([0, 7, 30, 3], jnp.int32),
+        model=jnp.zeros((n,), jnp.int8))
+    dij = np.asarray(out.damage_ij)
+    assert dij[1, 3] == pytest.approx(10.0), "a live shooter is credited"
+    assert dij[2, 3] == pytest.approx(40.0), "unknown identity: the slot, as before"
+    assert float(np.asarray(out.orphan_damage)[1]) == pytest.approx(20.0)
+    assert int(np.asarray(out.victim)[1]) == 3
+    assert float(np.asarray(out.orphan_damage)[[0, 2]].sum()) == 0.0
+
+
 @pytest.mark.slow
 def test_missile_overflow_stays_zero_over_a_long_run():
     """``step_missiles`` reports ``overflow`` -- launches that found no free

@@ -117,11 +117,23 @@ class MissileOut(NamedTuple):
     damage_ij: jax.Array
     #: launches that found no free slot -- must stay 0; see the test
     overflow: jax.Array
+    #: the shooter's identity per missile slot (`SLOT-003`); passed through
+    #: unchanged, or -1/0, when the caller does not track it
+    source_seq: Any = None
+    source_model: Any = None
+    #: ``(M,)`` post-mitigation damage landed THIS tick by a missile whose
+    #: shooter no longer exists (its slot was recycled), indexed by the
+    #: missile slot it flew in. NOT in ``damage_ij``: that row now belongs to
+    #: a different unit. ``victim`` is the unit it landed on.
+    orphan_damage: Any = None
+    victim: Any = None
 
 
 def step_missiles(*, m_alive, m_x, m_y, m_target, m_source, m_damage, m_speed,
                   launches, raw_damage, launch_speed, x, y, alive, targetable,
-                  armor, target, delta_ms: float) -> MissileOut:
+                  armor, target, delta_ms: float,
+                  m_source_seq=None, m_source_model=None, spawn_seq=None,
+                  model=None) -> MissileOut:
     """One tick of ``SpellMissile.Update`` for every missile, then the launches.
 
     Advance-then-spawn, so a missile created at the end of a cast does not also
@@ -139,6 +151,19 @@ def step_missiles(*, m_alive, m_x, m_y, m_target, m_source, m_damage, m_speed,
     not a single constant -- a caster's missile and a turret's travel at
     650 and 1200 u/s respectively, not the same speed. Read only for units in
     ``launches``; every other unit's entry is irrelevant.
+
+    ``spawn_seq``/``model`` (per unit) and ``m_source_seq``/``m_source_model``
+    (per missile) track the SHOOTER's identity (`SLOT-003`). The server's
+    missile holds its owner as an object (``CastInfo.Owner``) and lands
+    whether or not that owner is still alive: ``Update`` tests only the
+    target (`SpellMissile.cs:70-84`), ``CheckFlagsForUnit`` tests the target
+    and ``IsValidTarget(Owner, target)`` -- teams and flags, not the owner's
+    death (`SpellMissile.cs:177-196`, `SpellData.cs:191-222`) -- and then
+    ``Owner.AutoAttackHit`` credits the dead owner. Here the owner is a slot
+    index, and a recycled slot is a different unit. A landing whose shooter
+    slot's ``spawn_seq`` no longer matches the one recorded at launch goes to
+    ``orphan_damage`` instead of ``damage_ij``'s row. Without the four
+    arguments nothing is tracked and every landing is credited to the slot.
     """
     n = x.shape[0]
     dt_s = delta_ms / 1000.0
@@ -164,7 +189,17 @@ def step_missiles(*, m_alive, m_x, m_y, m_target, m_source, m_damage, m_speed,
     src = jnp.clip(m_source, 0, n - 1)
     landed = jnp.where(arrives, post_mitigation_damage(m_damage, armor[t], jnp),
                        jnp.zeros_like(m_damage))
+    tracked = m_source_seq is not None and spawn_seq is not None
+    if tracked:
+        # `SLOT-003`: the shooter is gone when its slot now holds a different
+        # unit. -1 = not recorded (hand-built/injected): trust the slot.
+        orphaned = (m_source_seq >= 0) & (spawn_seq[src] != m_source_seq)
+    else:
+        orphaned = jnp.zeros_like(m_alive)
+    orphan_damage = jnp.where(orphaned, landed, jnp.zeros_like(landed))
+    landed = jnp.where(orphaned, jnp.zeros_like(landed), landed)
     damage_ij = jnp.zeros((n, n), dtype).at[src, t].add(landed.astype(dtype))
+    victim = t
 
     m_alive = m_alive & ~arrives & ~dropped
 
@@ -190,8 +225,14 @@ def step_missiles(*, m_alive, m_x, m_y, m_target, m_source, m_damage, m_speed,
     m_source = put(m_source, jnp.arange(n))
     m_damage = put(m_damage, raw_damage)
     m_speed = put(m_speed, launch_speed)
+    if tracked:
+        m_source_seq = put(m_source_seq, spawn_seq)
+        if m_source_model is not None and model is not None:
+            m_source_model = put(m_source_model, model)
 
     return MissileOut(alive=m_alive, x=m_x, y=m_y, target=m_target,
                       source=m_source, damage=m_damage, speed=m_speed,
                       damage_ij=damage_ij,
-                      overflow=jnp.sum(launches) - jnp.sum(ok))
+                      overflow=jnp.sum(launches) - jnp.sum(ok),
+                      source_seq=m_source_seq, source_model=m_source_model,
+                      orphan_damage=orphan_damage.astype(dtype), victim=victim)

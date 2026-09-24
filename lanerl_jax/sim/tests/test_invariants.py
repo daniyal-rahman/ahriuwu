@@ -95,3 +95,45 @@ def test_a_reused_minion_slot_starts_from_the_template():
     # and nothing about any OTHER unit changed
     j = i + 1
     assert float(out.ignore_until[j, j + 1]) == float(s.ignore_until[j, j + 1])
+
+
+def test_a_reused_minion_slot_is_not_anyone_elses_target():
+    """`SLOT-002` (`docs/PLAYTEST_SWEEP.md` (c)1). The server's `TargetUnit`
+    and `CastInfo.Targets[0]` reference an OBJECT; the corpse that held a
+    slot is not the minion spawned into it. `spawn_minion` cleared missiles
+    aimed at the slot but left every other unit's `target`/`aa_target` on
+    it, so a caster mid-windup on a dead blue minion fired at the red minion
+    that took its slot, across the map; and a champion held a recycled ALLY
+    as its target. A held target is dropped; a swing is marked
+    `AA_TARGET_GONE` (cancelled on its next update, `AA-007`), not -1, which
+    would re-resolve it against `target`."""
+    import jax.numpy as jnp
+
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import init_lane, spawn_minion
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, MI_SLICE, Team
+    from lanerl_jax.sim.targeting import MinionType
+
+    s = init_lane(load_patch())
+    i = MI_SLICE.start          # the lowest free minion slot: this is the one reused
+    j, k = i + 1, 0             # a minion mid-swing on it; a champion holding it
+    other = i + 2               # a unit targeting something else: untouched
+    s = s.replace(
+        alive=s.alive.at[i].set(False).at[j].set(True).at[other].set(True),
+        kind=s.kind.at[j].set(Kind.LANE_MINION).at[other].set(Kind.LANE_MINION),
+        target=s.target.at[j].set(i + 3).at[k].set(i).at[other].set(i + 3),
+        aa_target=s.aa_target.at[j].set(i).at[other].set(i + 3),
+        is_attacking=s.is_attacking.at[j].set(True).at[other].set(True),
+        aa_windup=s.aa_windup.at[j].set(0.2).at[other].set(0.2))
+    path = jnp.asarray([[1000.0, 1000.0], [2000.0, 2000.0]], s.x.dtype)
+    out = spawn_minion(s, Team.RED,
+                       profile_id(Kind.LANE_MINION, MinionType.CASTER, Team.RED),
+                       290.0, path)
+    assert bool(out.alive[i])
+    assert int(out.aa_target[j]) != i, "a swing on the corpse would land on the newcomer"
+    from lanerl_jax.sim.state import AA_TARGET_GONE
+    assert int(out.aa_target[j]) == AA_TARGET_GONE
+    assert int(out.target[j]) == i + 3, "its current target is someone else"
+    assert int(out.target[k]) == -1, "the champion's held target was the corpse"
+    assert int(out.target[other]) == i + 3 and int(out.aa_target[other]) == i + 3

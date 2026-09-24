@@ -388,7 +388,12 @@ as an ally (`ENT-01`), so Garen silently loses his enemy target.
   - t=141,874: the missile lands, and the red caster in slot 3 drops
     290 -> 267 hp at (9854, 13262).
 
-**Fix direction** (not applied): in `spawn_minion`, also clear any
+**Status 2026-09-24: FIXED** as `AA-007` (a swing whose declared target
+died is cancelled, `reset=true`, the server's `CastCancelCheck`) and
+`SLOT-002` (`spawn_minion` drops other units' references to the slot). The
+repro above now shows no friendly launch and no friendly hit.
+
+**Fix direction** (as written before the fix): in `spawn_minion`, also clear any
 `aa_target == i` (cancel that swing: `is_attacking`, `aa_windup`,
 `aa_target`) and any `target == i` for other units, alongside the existing
 `missile_tx == i` drop. Or, matching the server, stop resolving a swing whose
@@ -415,6 +420,10 @@ occupant can be credited:
 **Location:** `init.py` `spawn_minion` clears `missile_tx == i` and not
 `missile_source == i`. That is the same `SLOT-001` class, the other end of
 the index.
+
+**Status 2026-09-24: FIXED** as `SLOT-003`: missiles record the shooter's
+`spawn_seq`; a landing after the slot was reused still deals its damage but
+is credited to no live unit.
 
 **Frequency:** 170-214 missiles per condition land after their shooter
 died. How many of those had their source slot reused before landing was not
@@ -459,6 +468,10 @@ dies on the tick it starts, or finishes, a swing keeps `aa_windup` (e.g.
 Nothing reads a dead unit's windup, so there is no gameplay effect. A port
 that draws attack state from `aa_windup` would show a corpse "mid-attack".
 Either mask it or correct the row.
+
+**Status 2026-09-24: FIXED.** The death tick now applies the whole
+`CancelAutoAttack(true, true)` (no wind-up, cooldown 0 when a target was
+held, `has_auto_attacked` untouched), and the `AA-006` row is corrected.
 
 ## Classification summary
 

@@ -104,7 +104,8 @@ from .regen import step_regen
 from .rewards import (ambient_gold, champion_kill_rewards, death_rewards,
                       level_for_xp, minion_gold_deathspree_decay,
                       turret_kill_rewards, update_hit_flag)
-from .state import Kind, LaneState, MoveOrder, Team, TurretTier, TU_SLICE
+from .state import (AA_TARGET_GONE, Kind, LaneState, MoveOrder, Team,
+                    TurretTier, TU_SLICE)
 from .targeting import (MinionType, base_priority, call_for_help_map,
                         nearest_enemy, turret_acquire)
 
@@ -844,6 +845,13 @@ def tick(state: LaneState, params: UnitParams,
     # checkpoints from before the field existed) falls back to `target`.
     hit_target = jnp.where(state.aa_target >= 0, state.aa_target, target)
     hit_tgt = jnp.clip(hit_target, 0, n - 1)
+    # `AA-007`: the swing's declared target is gone -- it died on an earlier
+    # tick (phase 19 replaced the index with `AA_TARGET_GONE` then, so a
+    # recycled slot cannot be mistaken for it), or a hand-built / injected
+    # state carries a dead index. `step_autoattack` cancels such a swing at
+    # `CastCancelCheck`'s position, before the wind-up can complete.
+    swing_target_gone = (state.aa_target == AA_TARGET_GONE) | (
+        (state.aa_target >= 0) & ~state.alive[jnp.clip(state.aa_target, 0, n - 1)])
 
     # `UpdateTarget` DOES NOT REACH `RefreshWaypoints` DURING A WINDUP.
     # `ObjAIBase.cs:1192-1205` is an early return that fires on the
@@ -985,6 +993,7 @@ def tick(state: LaneState, params: UnitParams,
         empowered_damage=q_damage_at_rank(state.spell_level[:, Slot.Q], ad_now),
         skip_next_autoattack=bs.q_skip_next,
         may_engage=hostile,
+        swing_target_gone=swing_target_gone,
         delta_ms=delta_ms, xp=jnp)
 
     q_landed = aa.hit & bs.q_empowered
@@ -1039,7 +1048,10 @@ def tick(state: LaneState, params: UnitParams,
         launches=launches, raw_damage=raw_ad, launch_speed=P("missile_speed"),
         x=x, y=y, alive=state.alive,
         targetable=state.alive, armor=armor_eff, target=hit_target,
-        delta_ms=delta_ms)
+        delta_ms=delta_ms,
+        m_source_seq=state.missile_source_seq,
+        m_source_model=state.missile_source_model,
+        spawn_seq=state.spawn_seq, model=state.model)
 
     dmg_ij = jnp.where(landed[:, None] & (jnp.arange(n)[None, :] == hit_tgt[:, None]),
                        aa.damage[:, None], jnp.zeros((n, n), dtype))
@@ -1047,6 +1059,16 @@ def tick(state: LaneState, params: UnitParams,
     # that unit's own attacker row, so the lowest-index-crosses-zero rule below
     # sees melee hits and missile hits in one ordering rather than two.
     dmg_ij = dmg_ij + ms.damage_ij
+    # `SLOT-003`: a missile whose shooter's slot was recycled while it flew.
+    # The server lands it and credits the DEAD owner object (see
+    # `step_missiles`). Its damage is real -- hp, W's multiplier, a recall
+    # interrupt -- but it has no row: `dmg_ij`'s row for that slot is the NEW
+    # occupant's, and routing it there credited the kill, the champion
+    # hit-flag and a call for help to a unit that did not fire it (and is
+    # usually on the victim's own team). What each consumer should see
+    # instead is written where it is read below. The shooter is always a
+    # lane minion: only `spawn_minion` recycles a slot.
+    orphan_dmg = jnp.zeros((n,), dtype).at[ms.victim].add(ms.orphan_damage)
 
     # ---- 17. Champion._championHitFlagTimer / _playerHitId ------------------
     # `Champion.TakeDamage` (`Champion.cs:569-575`) resets these on EVERY hit
@@ -1059,12 +1081,14 @@ def tick(state: LaneState, params: UnitParams,
     hit_flag_ms, hit_flag_by = update_hit_flag(
         kind=state.kind, damage_ij=dmg_ij, buff_damage=bs.damage_dealt,
         buff_dealt_by=bs.dealt_by, hit_flag_ms=state.hit_flag_ms,
-        hit_flag_by=state.hit_flag_by, delta_ms=delta_ms)
+        hit_flag_by=state.hit_flag_by, delta_ms=delta_ms,
+        orphan_damage=orphan_dmg)
 
     # W's active scales the victim's TOTAL incoming damage for the tick, so it
     # is applied here rather than per attacker -- one multiply on the sum, not
     # one per source, which is what `TakeDamage`'s post-mitigation hook does.
-    dealt = (dmg_ij.sum(axis=0) + bs.damage_dealt) * bs.damage_multiplier
+    dealt = (dmg_ij.sum(axis=0) + orphan_dmg + bs.damage_dealt) \
+        * bs.damage_multiplier
     hp = jnp.maximum(state.hp - dealt, jnp.zeros_like(state.hp))
 
     # `Buffs/Global/Recall` listens only while its 7.9 s buff exists. Auto
@@ -1072,7 +1096,7 @@ def tick(state: LaneState, params: UnitParams,
     # a base. R's pending hit is a regular spell hit and does. The listener
     # sets a latch now which its OnUpdate consumes at the top of the next tick.
     r_hit = state.buffs.r_pending.active & (bs.damage_dealt > 0)
-    nonperiodic_hit = (dmg_ij.sum(axis=0) > 0) | r_hit
+    nonperiodic_hit = (dmg_ij.sum(axis=0) > 0) | (orphan_dmg > 0) | r_hit
     recall_listener_live = recall_channel > (_RECALL_CHANNEL_MS - _RECALL_DAMAGE_BUFF_MS)
     recall_damage_pending = (
         state.recall_damage_pending
@@ -1128,9 +1152,21 @@ def tick(state: LaneState, params: UnitParams,
     # that prepends the buff-damage row further down. Judgment's damage is
     # carried separately in `bs.damage_dealt` and comes from a champion, so it
     # always counts as combat.
-    hit_by_combat = (
+    # `SLOT-003`: an orphaned missile's `Attacker` is the dead minion, whose
+    # `UnitTags` are its own -- read from the model recorded at launch, not
+    # from the slot's new occupant. PRE-launch arrays: `ms.orphan_damage` is
+    # indexed by the missile slot as it was before this tick's launches.
+    o_type = _MINION_TYPE_TABLE[state.missile_source_model]
+    o_siege = (o_type == MinionType.CANNON) | (o_type == MinionType.SUPER)
+    # `garen_passive_exempt` for a lane-minion attacker, per missile (the
+    # helper builds the full attacker x victim matrix): exempt unless it is a
+    # cannon/super and the victim is below level 11.
+    o_breaks = o_siege & (state.level[ms.victim] < 11)
+    orphan_combat = jnp.zeros((n,), bool).at[ms.victim].max(
+        (ms.orphan_damage > 0) & o_breaks)
+    hit_by_combat = ((
         jnp.where(breaks_combat_pair, dmg_ij, 0.0).sum(axis=0)
-        + bs.damage_dealt) > 0
+        + bs.damage_dealt) > 0) | orphan_combat
     ms_since_damaged = jnp.where(
         hit_by_combat, jnp.zeros_like(state.ms_since_damaged),
         state.ms_since_damaged + delta_ms)
@@ -1197,6 +1233,20 @@ def tick(state: LaneState, params: UnitParams,
     # dead unit carried its target through death AND through respawn, because
     # the respawn block resets `silenced_ms`/`r_cast_ms`/buffs and never
     # touches `target`.
+    #
+    # `AA-006`, in full. That branch is
+    #     if (TargetUnit != null) { CancelAutoAttack(true, true); SetTargetUnit(null, true); }
+    # and `CancelAutoAttack(reset: true, fullCancel: true)` (`ObjAIBase.cs:
+    # 469-484`) does four things: spell back to READY, `_autoAttackCurrent
+    # Cooldown = 0` and `ResetSpellCast()` (reset), `IsAttacking = false`
+    # (fullCancel). It does NOT touch `HasAutoAttacked`. The wind-up is
+    # cleared either way: a corpse still `STATE_CASTING` is `ResetSpellCast`
+    # by `CastCancelCheck`'s owner-dead branch (`Spell.cs:215-217`) even with
+    # no target. Only the cooldown depends on holding a target, and a unit
+    # mid-swing always holds one here (`step_autoattack` cancels a swing
+    # whose target is null). Applied at the corpse's death tick, as the
+    # `target` null is; the stored values are below.
+    cancel_on_death = died & (target >= 0)
     target = jnp.where(~alive, -1, target)
     # The swing's own target: fixed at the start tick, held for the wind-up,
     # cleared when the swing ends however it ends (`aa.is_attacking` is
@@ -1204,6 +1254,24 @@ def tick(state: LaneState, params: UnitParams,
     aa_target = jnp.where(
         aa.start, target,
         jnp.where(aa.is_attacking, hit_target, jnp.int8(-1)))
+    # `AA-007`: a swing whose declared target is dead at the end of this tick
+    # (it died this tick, in practice) drops the index now, on the death
+    # tick, for `AA_TARGET_GONE`. The server's reference is
+    # to an OBJECT (`CastInfo.Targets[0].Unit`): the corpse stays that object
+    # and a recycled slot is a different one. Keeping the slot index let the
+    # next wave's spawn -- which runs at the top of the next tick, before
+    # the swing is resolved -- turn it into a live unit: a red caster's swing
+    # on a dead blue minion then fired at the newborn red caster at its
+    # barracks, 8-11k units away (`docs/PLAYTEST_SWEEP.md` (c)1).
+    #
+    # The CANCEL itself stays on the attacker's next update, as the `target`
+    # drop does (`TGT-DEATHTICK`, measured and reverted above): it is
+    # `CastCancelCheck` in the attacker's own `Spell.Update`, which sees the
+    # death on the same tick only when it is ordered after the killer --
+    # and missiles, which land most kills, are created late and update late.
+    aa_tgt_c = jnp.clip(aa_target, 0, n - 1)
+    aa_target = jnp.where((aa_target >= 0) & ~alive[aa_tgt_c],
+                          jnp.int8(AA_TARGET_GONE), aa_target)
     aa_target = jnp.where(alive, aa_target, jnp.int8(-1)).astype(
         state.aa_target.dtype)
 
@@ -1215,6 +1283,9 @@ def tick(state: LaneState, params: UnitParams,
     if enable_call_for_help:
         # `ObjAIBase.TakeDamage`'s broadcast reacts to every landed hit --
         # melee autoattacks and missiles are both folded into `dmg_ij` above.
+        # Orphaned missiles (`SLOT-003`) are not: the server's call names the
+        # DEAD shooter, and `LaneMinionAI` never acquires a dead unit
+        # (`IsValidTarget`, `LaneMinionAI.cs:125-135`), so it changes nothing.
         # Buff damage is carried victim-wise, so scatter it into its caster's
         # row before broadcasting.  This covers Judgment as well as the E tick.
         buff_src = jnp.clip(bs.dealt_by, 0, n - 1)
@@ -1233,15 +1304,24 @@ def tick(state: LaneState, params: UnitParams,
     # ---- 21. kill attribution and death rewards (AttackableUnit.Die) --------
     # Judgment's damage is applied inside the buff's own update, which runs
     # BEFORE the auto-attack gate, so it is prepended to the attribution order.
+    # `SLOT-003`: orphaned missile damage (shooter's slot recycled in flight)
+    # is APPENDED as a last row. Its killer is a dead minion, which neither
+    # `death_rewards` nor `champion_kill_rewards` can pay (both require a
+    # champion killer), so it is recorded as -1 rather than as whichever
+    # unit now occupies the slot. Last, not in the slot's row, because that
+    # row's position is the NEW occupant's; the order among same-tick hits
+    # is the sim's own approximation either way (see above).
     dmg_ij = jnp.concatenate(
-        [jnp.zeros((1, n), dtype).at[0].set(bs.damage_dealt), dmg_ij], axis=0)
+        [jnp.zeros((1, n), dtype).at[0].set(bs.damage_dealt), dmg_ij,
+         orphan_dmg[None, :]], axis=0)
     cum = jnp.cumsum(dmg_ij, axis=0)                     # (attacker, victim)
     crosses = (cum >= state.hp[None, :]) & (dmg_ij > 0)
     first_row = jnp.argmax(crosses, axis=0)
     # row 0 is the Judgment lane; map it back to whoever cast the spin
     killer = jnp.where(
         jnp.any(crosses, axis=0),
-        jnp.where(first_row == 0, bs.dealt_by, first_row - 1),
+        jnp.where(first_row == 0, bs.dealt_by,
+                  jnp.where(first_row == n + 1, -1, first_row - 1)),
         -1).astype(jnp.int8)
     killer = jnp.where(died, killer, jnp.int8(-1))
 
@@ -1449,13 +1529,17 @@ def tick(state: LaneState, params: UnitParams,
                              move_order_out),
         ai_timer=ai.ai_timer, ai_local_time=ai.ai_local_time,
         time_since_attack=ai.time_since_attack, ignore_until=ai.ignore_until,
-        aa_cooldown=aa.aa_cooldown, aa_windup=aa.aa_windup,
         # `AA-006`: a unit that died this tick is not mid-swing. `UpdateTarget`'s
-        # first branch cancels a dead unit's auto-attack on its own update;
-        # `target`/`aa_target` were masked above, this flag was not, and a
-        # corpse ended its death tick `is_attacking` (cleared next tick, no
-        # hit could land -- one tick of a stale flag, found by the STRUCT-001
-        # property tests).
+        # first branch `CancelAutoAttack(true, true)`s a dead unit's
+        # auto-attack on its own update (see `cancel_on_death` above).
+        # `target`/`aa_target` were masked above. This used to mask ONLY
+        # `is_attacking`: a corpse kept its wind-up (0.461 s, 3e-5 s) and a
+        # counting-down cooldown forever (`docs/PLAYTEST_SWEEP.md` (c)4).
+        # `has_auto_attacked` is deliberately untouched: `CancelAutoAttack`
+        # does not write it.
+        aa_cooldown=jnp.where(cancel_on_death,
+                              jnp.zeros_like(aa.aa_cooldown), aa.aa_cooldown),
+        aa_windup=jnp.where(alive, aa.aa_windup, jnp.zeros_like(aa.aa_windup)),
         is_attacking=aa.is_attacking & alive,
         has_auto_attacked=aa.has_auto_attacked,
         aa_target=aa_target,
@@ -1488,6 +1572,9 @@ def tick(state: LaneState, params: UnitParams,
         missile_alive=ms.alive, missile_x=ms.x, missile_y=ms.y,
         missile_tx=ms.target.astype(state.missile_tx.dtype),
         missile_source=ms.source.astype(state.missile_source.dtype),
+        missile_source_seq=ms.source_seq.astype(state.missile_source_seq.dtype),
+        missile_source_model=ms.source_model.astype(
+            state.missile_source_model.dtype),
         missile_damage=ms.damage, missile_speed=ms.speed,
         help_priority=help_priority,
     )

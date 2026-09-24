@@ -670,6 +670,162 @@ def test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on():
     assert int(s.aa_target[0]) == -1, "cleared once the swing has landed"
 
 
+def test_a_swing_whose_target_died_is_cancelled_and_never_lands_on_the_recycled_slot():
+    """`AA-007` + `SLOT-002` (`docs/PLAYTEST_SWEEP.md` (c)1). The server's
+    swing target is an OBJECT, `CastInfo.Targets[0].Unit`. When it dies,
+    `CastCancelCheck` -- first thing in the attacker's `Spell.Update`, before
+    the wind-up advances (`Spell.cs:1645-1649`) -- sees `spellTarget.IsDead`
+    and calls `CancelAutoAttack(true)` (`Spell.cs:264-271`): no hit, cooldown
+    and wind-up zeroed; `UpdateTarget` then clears `IsAttacking` and returns
+    before the swing gate (`ObjAIBase.cs:1252-1256`).
+
+    The sim held the swing target as a slot INDEX and cancelled only on the
+    CURRENT target, so a swing whose declared target died while the attacker
+    had already re-aimed at a live unit wound up to the end -- and when the
+    next wave recycled the dead slot first, it landed on the newcomer. In the
+    playtest that was red casters firing 8-11k units back up the lane into a
+    red minion at its own barracks. Here: Garen swings at red A, re-aims at
+    red B, A dies, and a BLUE minion is spawned into A's slot in melee range.
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import lane_params, spawn_minion
+    from lanerl_jax.sim.orders import apply_orders
+    from lanerl_jax.sim.profiles import profile_id
+    from lanerl_jax.sim.state import Kind, Team
+    from lanerl_jax.sim.targeting import MinionType
+
+    patch = load_patch()
+    params = lane_params(patch)
+    a, b = 2, 3
+    s = _arena_with_minions(patch, [(a, Team.RED, 455.0, 60.0),
+                                    (b, Team.RED, 455.0, 110.0)])
+    s = apply_orders(s, _attack(a), params)
+    jtick = _jtick()
+    for _ in range(5):
+        s = jtick(s)
+        if bool(s.is_attacking[0]):
+            break
+    assert bool(s.is_attacking[0]) and int(s.aa_target[0]) == a
+    s = apply_orders(s, _attack(b), params)
+    assert int(s.target[0]) == b and int(s.aa_target[0]) == a
+    # A dies on the next tick (an hp no regen can lift above zero).
+    s = s.replace(hp=s.hp.at[a].set(-100.0))
+    s = jtick(s)
+    assert not bool(s.alive[a])
+    assert int(s.aa_target[0]) != a, \
+        "the swing still names the dead slot: the next spawn into it becomes the target"
+    from lanerl_jax.sim.state import AA_TARGET_GONE
+    assert int(s.aa_target[0]) == AA_TARGET_GONE
+    # The next wave recycles A's slot with one of Garen's OWN minions, in range.
+    path = jnp.asarray([[6060.0, 6000.0], [7000.0, 6000.0]], s.x.dtype)
+    s = spawn_minion(s, Team.BLUE,
+                     profile_id(Kind.LANE_MINION, MinionType.MELEE, Team.BLUE),
+                     455.0, path)
+    assert bool(s.alive[a]) and int(s.team[a]) == Team.BLUE, "slot A was reused"
+    s = jtick(s)
+    assert not bool(s.is_attacking[0]), "CastCancelCheck cancels the swing"
+    assert float(s.aa_windup[0]) == 0.0
+    assert float(s.aa_cooldown[0]) == 0.0, "CancelAutoAttack(reset=true)"
+    assert int(s.aa_target[0]) == -1
+    hp_b = float(s.hp[b])
+    for _ in range(60):
+        s = jtick(s)
+    assert float(s.hp[a]) == 455.0 and bool(s.alive[a]), \
+        "Garen hit his own newly spawned minion"
+    assert float(s.hp[b]) < hp_b, "and he did go on to swing at B"
+
+
+def test_a_swing_on_a_dead_target_is_cancelled_before_it_can_complete():
+    """`AA-007`, the clock alone. `CastCancelCheck` precedes the wind-up
+    advance, so even a swing due to land THIS tick is cancelled; and
+    `UpdateTarget` returns before the swing gate on that tick, so a live
+    in-range `TargetUnit` does not start a new swing until the next one.
+    Contrast `test_a_swing_that_completes_this_tick_is_not_retroactively_
+    cancelled`, where the CURRENT target is lost: that check runs after."""
+    import jax.numpy as jnp
+
+    from lanerl_jax.sim.autoattack import step_autoattack
+
+    dt = 1000.0 / 60.0
+    out = step_autoattack(
+        aa_cooldown=jnp.asarray([0.0]),
+        aa_windup=jnp.asarray([dt / 1000.0]),   # would complete THIS tick
+        is_attacking=jnp.asarray([True]),
+        has_auto_attacked=jnp.asarray([False]),
+        in_range=jnp.asarray([True]),
+        can_attack=jnp.asarray([True]),
+        has_target=jnp.asarray([True]),
+        attack_period=jnp.asarray([1.6]),
+        windup_time=jnp.asarray([0.5]),
+        attack_damage=jnp.asarray([70.0]),
+        target_resist=jnp.asarray([30.0]),
+        swing_target_gone=jnp.asarray([True]),
+        delta_ms=dt)
+    assert not bool(out.hit[0]) and float(out.damage[0]) == 0.0
+    assert not bool(out.is_attacking[0])
+    assert float(out.aa_windup[0]) == 0.0 and float(out.aa_cooldown[0]) == 0.0
+    assert not bool(out.start[0]), "no new swing on the cancel tick"
+    assert not bool(out.has_auto_attacked[0])
+
+
+def _swing_then_die(after_hit):
+    """Garen swings at a 455 HP red minion; he dies either mid-wind-up or,
+    with ``after_hit``, once the hit has landed and the cooldown is running
+    with the target still held. Returns (state before the death tick, after)."""
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.init import lane_params
+    from lanerl_jax.sim.orders import apply_orders
+    from lanerl_jax.sim.state import Team
+
+    patch = load_patch()
+    params = lane_params(patch)
+    a = 2
+    s = _arena_with_minions(patch, [(a, Team.RED, 455.0, 60.0)])
+    s = apply_orders(s, _attack(a), params)
+    jtick = _jtick()
+    for _ in range(90):
+        s = jtick(s)
+        if (bool(s.has_auto_attacked[0]) and not bool(s.is_attacking[0])) \
+                if after_hit else bool(s.is_attacking[0]):
+            break
+    before = s
+    s = jtick(s.replace(hp=s.hp.at[0].set(-100.0)))
+    assert not bool(s.alive[0])
+    return before, s
+
+
+def test_a_champion_that_dies_mid_windup_ends_its_death_tick_with_no_swing_state():
+    """`AA-006`, all of it. `UpdateTarget`'s dead-unit branch is
+    `if (TargetUnit != null) { CancelAutoAttack(true, true); SetTargetUnit(null) }`
+    (`ObjAIBase.cs:1219-1227`), and `CancelAutoAttack(reset: true, fullCancel:
+    true)` (`ObjAIBase.cs:469-484`) zeroes `_autoAttackCurrentCooldown`,
+    `ResetSpellCast`s the wind-up and drops `IsAttacking` -- and does not
+    write `HasAutoAttacked`. The sim masked only `is_attacking`: the corpse
+    kept its wind-up and a counting-down cooldown (`docs/PLAYTEST_SWEEP.md`
+    (c)4)."""
+    before, s = _swing_then_die(after_hit=False)
+    assert bool(before.is_attacking[0]) and float(before.aa_windup[0]) > 0.0
+    assert not bool(s.is_attacking[0])
+    assert float(s.aa_windup[0]) == 0.0, "corpse still winding up"
+    assert float(s.aa_cooldown[0]) == 0.0, "reset=true zeroes the cooldown"
+    assert not bool(s.has_auto_attacked[0]), "the swing never landed"
+    assert int(s.target[0]) == -1 and int(s.aa_target[0]) == -1
+
+
+def test_a_champion_that_dies_between_swings_keeps_has_auto_attacked():
+    """The same branch between swings: the target is still held, so the
+    cooldown is reset; `HasAutoAttacked` is not `CancelAutoAttack`'s to
+    touch, so it stays true."""
+    before, s = _swing_then_die(after_hit=True)
+    assert bool(before.has_auto_attacked[0]) and float(before.aa_cooldown[0]) > 0.0
+    assert int(before.target[0]) == 2
+    assert float(s.aa_cooldown[0]) == 0.0, "reset=true zeroes the cooldown"
+    assert float(s.aa_windup[0]) == 0.0
+    assert bool(s.has_auto_attacked[0]), "CancelAutoAttack does not write it"
+
+
 def test_death_rewards_never_pay_a_same_team_killer():
     """Belt and braces under `ENT-01`: even if a same-team killer index
     reached attribution, `death_rewards` pays no gold and no CS for it."""
