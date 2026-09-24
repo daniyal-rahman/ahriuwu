@@ -41,6 +41,13 @@ binary decoders are therefore not needed for the first pass.
 The first real recording is pending only because the Windows host was
 unreachable at the time this slice was built (SSH to `windows`, 2026-09-24).
 
+The first bounded rendered-client path is also implemented now. See
+[`JAX_REAL_CLIENT_SMOKE.md`](JAX_REAL_CLIENT_SMOKE.md). It hands authority to
+JAX during established lane combat and covers waypoint, attack-start, HP, time,
+and move/attack input packets. It deliberately stops before the next wave;
+spawn/destruction, complete death presentation, missiles, and spells remain the
+next emitter families rather than being hidden behind the relay.
+
 ## Build the recorder server
 
 On either Linux node (the NFS root may appear as `/srv/nfs` or `/mnt/nfs`):
@@ -102,8 +109,9 @@ be called decoded without inspecting whether the missing bytes are scored.
    should cite the concrete packet and why it is or is not modeled.
 3. Normalize LeaguePackets output into field-level events and establish the
    spawn-based NetId mapping.
-4. Implement the independent JAX emitter in small packet families (spawn and
-   waypoint first, then attacks/missiles, replication/death/level, spells and
-   buffs), with a one-step diff after each family.
-5. Only after field-level diffing works, add the byte relay for rendered client
-   playtesting.
+4. Expand the independent JAX emitter from the bounded rendered slice: spawn
+   and destruction first, then missiles, death/level, spells, and buffs, with a
+   one-step diff after each family.
+5. Run the checked Windows smoke, preserve its recorder output, and use it as
+   the first field-level packet corpus rather than treating a visually
+   plausible client as parity evidence.
