@@ -58,8 +58,51 @@ fi
 echo "git  $(git rev-parse --short HEAD 2>/dev/null || echo UNKNOWN)$(git status --porcelain 2>/dev/null | grep -q . && echo ' DIRTY' || echo ' clean')"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
-./.venv-gpu/bin/python -m lanerl_jax.train.run_train \
-    --envs 256 --rollout 128 --minibatches 4 \
-    --chunk 20 --ckpt-every 5 \
-    "$@"
+# ---- pinned GEMM autotuning (THROUGHPUT_AUDIT.md section 7, RL-007) --------
+# Runs were NOT reproducible across processes: the same command and seed gave
+# 1.86 and 18.69 CS. The cause is XLA autotuning picking different GEMM
+# kernels per process (the first rollout matches; update 1 diverges). Pinning
+# the autotune results makes runs bit-identical across processes for +0.8%
+# (noise) and ~100 s less compile; the deterministic-ops flags cost +56%.
+# The file is keyed on everything that changes the HLO: the lanerl_jax source,
+# the shape/optimiser arguments, jax/jaxlib, and the GPU + driver. A new key
+# DUMPS a fresh file (that run autotunes normally); an existing key LOADS it.
+set -- --envs 256 --rollout 128 --minibatches 4 --chunk 20 --ckpt-every 5 "$@"
+AT_DIR=/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/autotune
+mkdir -p "$AT_DIR"
+AT_KEY=$(./.venv-gpu/bin/python - "$@" <<'PY'
+import hashlib, pathlib, subprocess, sys
+import jax, jaxlib
+h = hashlib.sha256()
+for f in sorted(pathlib.Path("lanerl_jax").rglob("*.py")):
+    if "/tests/" in str(f) or "/archive/" in str(f):
+        continue
+    h.update(str(f).encode()); h.update(f.read_bytes())
+# arguments that do not change the compiled program are left out of the key
+skip = {"--tag", "--notes", "--out-root", "--resume", "--seed", "--updates",
+        "--wandb-tags", "--wandb-project", "--wandb-entity", "--ckpt-every"}
+args, it = [], iter(sys.argv[1:])
+for a in it:
+    if a in skip:
+        next(it, None)
+        continue
+    args.append(a)
+h.update(" ".join(args).encode())
+h.update(f"{jax.__version__} {jaxlib.__version__}".encode())
+gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                     capture_output=True, text=True).stdout.strip()
+h.update(gpu.encode())
+print(h.hexdigest()[:16])
+PY
+)
+AT_FILE="$AT_DIR/autotune_${AT_KEY}.textproto"
+if [ -s "$AT_FILE" ]; then
+    export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_load_autotune_results_from=$AT_FILE"
+    echo "autotune: LOAD $AT_FILE (sha256 $(sha256sum "$AT_FILE" | cut -c1-16))"
+else
+    export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_dump_autotune_results_to=$AT_FILE"
+    echo "autotune: DUMP $AT_FILE (first run for key $AT_KEY; it autotunes normally)"
+fi
+
+./.venv-gpu/bin/python -m lanerl_jax.train.run_train "$@"
 echo "done $(date -u)"
