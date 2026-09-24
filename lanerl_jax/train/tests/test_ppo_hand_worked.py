@@ -20,8 +20,11 @@ from lanerl_rl import constants as C
 
 from lanerl_jax.train.ppo import (
     PPOConfig,
+    expected_head_usage,
+    factored_entropy,
     factored_log_prob,
     gae,
+    head_usage,
     kl_stopped_epochs,
     summarise_minibatches,
     value_loss,
@@ -67,11 +70,28 @@ def test_gae_hand_worked_reset_in_the_middle_and_last_step_bootstrap():
 
 
 # ------------------------------------------- masked factored log-prob -----
-#: Which auxiliary heads each button puts on the wire, written out from
-#: `train/actions.orders_from` by hand -- NOT read from `ppo.USES_*`, which
-#: is what is under test.
-_USES = {"noop": (0, 0), "recall": (0, 0), "q": (0, 0), "w": (0, 0),
-         "e": (0, 0), "move": (1, 0), "attack_move": (1, 1), "r": (0, 1)}
+#: Which auxiliary heads a sample puts on the wire, written out from
+#: `train/actions.orders_from` by hand -- NOT read from `ppo.head_usage`,
+#: which is what is under test. PER SAMPLE (`PPO-14`): attack_move reaches
+#: the target head when its slot holds a unit (ATTACK) and the screen heads
+#: when it does not (the fallback MOVE); r reaches the target head only when
+#: its slot holds a unit (an empty slot sends target -1 whatever was picked).
+def _np_usage(name, slot_ok):
+    if name == "move":
+        return (1, 0)
+    if name == "attack_move":
+        return (0, 1) if slot_ok else (1, 0)
+    if name == "r":
+        return (0, 1) if slot_ok else (0, 0)
+    return (0, 0)
+
+
+#: The per-BUTTON rule `PPO-01` shipped: attack_move counted screen AND
+#: target "conservatively", r always target. `PPO-14` measured attack_move
+#: decoding to ATTACK in 100.0% of 5.76 M decisions, so its screen term was
+#: pure noise. Kept to show the new tests reject it.
+def _np_usage_ppo01(name, slot_ok):
+    return {"move": (1, 0), "attack_move": (1, 1), "r": (0, 1)}.get(name, (0, 0))
 
 
 def _np_log_softmax(z):
@@ -79,27 +99,32 @@ def _np_log_softmax(z):
     return z - np.log(np.exp(z).sum(axis=-1, keepdims=True))
 
 
-def test_masked_log_prob_and_its_gradient_match_numpy_per_button_class():
-    """For each of the 8 buttons (4 classes: none / screen / screen+target /
-    target) the log-prob is ``lp_b + s*(lp_x + lp_y) + t*lp_t`` and its
-    gradient w.r.t. each head's logits is ``u * (onehot(a) - softmax(z))``
-    with ``u`` = 1 for the button and the head's usage bit otherwise -- ZERO
-    on a head the button does not use. Screen/target widths are shrunk to
-    3/4/5; the masking does not depend on them.
+def _check_log_prob_and_grad(usage_rule):
+    """Every button x {slot holds a unit, slot empty}: the log-prob is
+    ``lp_b + s*(lp_x + lp_y) + t*lp_t`` and its gradient w.r.t. each head's
+    logits is ``u * (onehot(a) - softmax(z))`` with ``u`` = 1 for the button
+    and the SAMPLE's usage bit otherwise -- ZERO on a head the sample did not
+    put on the wire. ``usage_rule`` is the numpy reference; the
+    implementation is `ppo.head_usage` + `ppo.factored_log_prob`.
+    Screen/target widths are shrunk to 3/4/5; the masking does not depend on
+    them.
     """
     rng = np.random.default_rng(11)
     widths = (len(C.BUTTONS), 3, 4, 5)
-    n = len(C.BUTTONS)
+    nb = len(C.BUTTONS)
+    buttons = np.concatenate([np.arange(nb), np.arange(nb)])
+    slot_ok = np.repeat([True, False], nb)
+    n = len(buttons)
     z = [rng.normal(size=(n, k)).astype(np.float64) for k in widths]
-    a = [np.arange(n)] + [rng.integers(0, k, size=n) for k in widths[1:]]
+    a = [buttons] + [rng.integers(0, k, size=n) for k in widths[1:]]
+    valid = np.ones((n, widths[3]), bool)
+    valid[np.arange(n), a[3]] = slot_ok
     use = np.zeros((n, 4))
     use[:, 0] = 1.0
-    for name, b in C.BUTTON_INDEX.items():
-        s, t = _USES[name]
-        use[b, 1] = use[b, 2] = s
-        use[b, 3] = t
-    assert {tuple(u) for u in use} == {(1, 0, 0, 0), (1, 1, 1, 0),
-                                       (1, 1, 1, 1), (1, 0, 0, 1)}
+    for i, b in enumerate(buttons):
+        s, t = usage_rule(C.BUTTONS[b], bool(slot_ok[i]))
+        use[i, 1] = use[i, 2] = s
+        use[i, 3] = t
 
     want_lp = sum(use[:, h] * _np_log_softmax(z[h])[np.arange(n), a[h]]
                   for h in range(4))
@@ -111,15 +136,127 @@ def test_masked_log_prob_and_its_gradient_match_numpy_per_button_class():
 
     zj = [jnp.asarray(x, jnp.float32) for x in z]
     aj = [jnp.asarray(x) for x in a]
-    got_lp = factored_log_prob(zj, aj)
-    got_grad = jax.grad(lambda zz: factored_log_prob(zz, aj).sum())(zj)
+    masks = head_usage(aj[0], aj[3], jnp.asarray(valid))
+    got_lp = factored_log_prob(zj, aj, *masks)
+    got_grad = jax.grad(
+        lambda zz: factored_log_prob(zz, aj, *masks).sum())(zj)
 
-    for name, b in C.BUTTON_INDEX.items():
-        assert float(got_lp[b]) == pytest.approx(want_lp[b], abs=1e-5), name
+    for i, b in enumerate(buttons):
+        tag = f"{C.BUTTONS[b]} slot_ok={bool(slot_ok[i])}"
+        assert float(got_lp[i]) == pytest.approx(want_lp[i], abs=1e-5), tag
         for h, head in enumerate(("button", "screen_x", "screen_y", "target")):
             np.testing.assert_allclose(
-                np.asarray(got_grad[h][b]), want_grad[h][b], rtol=0, atol=1e-5,
-                err_msg=f"d logp / d {head} logits for button {name}")
+                np.asarray(got_grad[h][i]), want_grad[h][i], rtol=0,
+                atol=1e-5, err_msg=f"d logp / d {head} logits for {tag}")
+    return use
+
+
+def test_masked_log_prob_and_its_gradient_match_numpy_per_sample():
+    """The per-sample rule (`PPO-14`), all four usage classes present:
+    none (noop/recall/q/w/e, and r on an empty slot), screen (move, and
+    attack_move on an empty slot), target (attack_move and r on a unit).
+    attack_move is never screen+target any more."""
+    use = _check_log_prob_and_grad(_np_usage)
+    assert {tuple(u) for u in use} == {(1, 0, 0, 0), (1, 1, 1, 0),
+                                       (1, 0, 0, 1)}
+
+
+def test_the_PPO01_per_button_rule_fails_the_per_sample_test():
+    """The rule the trainer used until 2026-09-24 must not pass the test
+    above: its attack_move-on-a-unit samples carry the screen log-prob and a
+    nonzero screen-head gradient the implementation (correctly) does not."""
+    with pytest.raises(AssertionError, match="attack_move slot_ok=True"):
+        _check_log_prob_and_grad(_np_usage_ppo01)
+
+
+def _wire_distribution(z, valid):
+    """Enumerate the joint ``(b, x, y, t)`` space of ONE observation and
+    aggregate it by what `orders_from` puts on the wire (the button is always
+    on it). Returns ``(rows, p_joint, keys, p_wire)``."""
+    lp = [_np_log_softmax(h) for h in z]
+    rows, pj, keys = [], [], []
+    for b in range(z[0].shape[0]):
+        name = C.BUTTONS[b]
+        for x in range(z[1].shape[0]):
+            for y in range(z[2].shape[0]):
+                for t in range(z[3].shape[0]):
+                    p = np.exp(lp[0][b] + lp[1][x] + lp[2][y] + lp[3][t])
+                    if name == "move" or (name == "attack_move"
+                                          and not valid[t]):
+                        key = (b, "point", x, y)
+                    elif name in ("attack_move", "r"):
+                        key = (b, "unit", t if valid[t] else -1)
+                    else:
+                        key = (b,)
+                    rows.append((b, x, y, t))
+                    pj.append(p)
+                    keys.append(key)
+    p_wire = {}
+    for k, p in zip(keys, pj):
+        p_wire[k] = p_wire.get(k, 0.0) + p
+    return np.asarray(rows), np.asarray(pj), keys, p_wire
+
+
+@pytest.mark.parametrize("valid", [
+    np.asarray([True, False, True, False, False]),   # some slot visible
+    np.zeros(5, bool),                               # nothing visible
+], ids=["some-visible", "none-visible"])
+def test_log_prob_and_entropy_are_the_exact_wire_action_distribution(valid):
+    """The derivation in `ppo`'s docstring, by brute force.
+
+    Enumerate every joint sample (8 x 3 x 4 x 5 = 480), merge the samples
+    `orders_from` cannot tell apart -- the screen point is irrelevant to an
+    ATTACK, the slot to a MOVE, an empty slot to r -- and compute the exact
+    probability of each wire action and the exact entropy of that
+    distribution. The target logits carry the policy's -1e9 on empty slots.
+
+    * ``factored_log_prob`` under `head_usage`'s per-sample masks equals
+      ``log P(wire action)`` for every sample with nonzero probability;
+    * ``factored_entropy`` under `expected_head_usage` equals the wire
+      entropy -- with the target head's valid-slot mass ``q``, not a
+      constant.
+
+    The `PPO-01` rule (attack_move = screen + target, r = target) fails
+    both whenever a slot is visible.
+    """
+    rng = np.random.default_rng(5)
+    widths = (len(C.BUTTONS), 3, 4, 5)
+    z = [rng.normal(size=k) for k in widths]
+    z[3] = np.where(valid, z[3], -1e9)
+    rows, pj, keys, p_wire = _wire_distribution(z, valid)
+    live = pj > 0
+    exact_lp = np.log([p_wire[k] for k, ok in zip(keys, live) if ok])
+    probs = np.asarray(list(p_wire.values()))
+    probs = probs[probs > 0]
+    exact_h = float(-(probs * np.log(probs)).sum())
+
+    n = int(live.sum())
+    zj = [jnp.broadcast_to(jnp.asarray(h, jnp.float32), (n, h.shape[0]))
+          for h in z]
+    aj = [jnp.asarray(rows[live, h]) for h in range(4)]
+    vj = jnp.broadcast_to(jnp.asarray(valid), (n, len(valid)))
+    got_lp = np.asarray(factored_log_prob(zj, aj, *head_usage(aj[0], aj[3], vj)))
+    np.testing.assert_allclose(got_lp, exact_lp, rtol=0, atol=1e-4)
+    got_h = float(factored_entropy(
+        [h[:1] for h in zj], *expected_head_usage(zj[0][:1], zj[3][:1],
+                                                   vj[:1]))[0])
+    assert got_h == pytest.approx(exact_h, abs=1e-4)
+
+    # The PPO-01 rule, in numpy: fails wherever a slot is visible.
+    lps = [_np_log_softmax(h) for h in z]
+    old_use = np.asarray([_np_usage_ppo01(C.BUTTONS[b], True)
+                          for b in rows[live, 0]], float)
+    r = rows[live]
+    old_lp = (lps[0][r[:, 0]] + old_use[:, 0] * (lps[1][r[:, 1]] + lps[2][r[:, 2]])
+              + old_use[:, 1] * lps[3][r[:, 3]])
+    p_b = np.exp(lps[0])
+    ent = [float(-(np.exp(h) * h).sum()) for h in lps]
+    am, rr, mv = (C.BUTTON_INDEX[k] for k in ("attack_move", "r", "move"))
+    old_h = (ent[0] + (p_b[mv] + p_b[am]) * (ent[1] + ent[2])
+             + (p_b[am] + p_b[rr]) * ent[3])
+    if valid.any():
+        assert not np.allclose(old_lp, exact_lp, rtol=0, atol=1e-4)
+        assert old_h != pytest.approx(exact_h, abs=1e-3)
 
 
 # ------------------------------------------------------- value loss -------

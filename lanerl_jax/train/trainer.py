@@ -60,21 +60,25 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from lanerl_rl.constants import BUTTON_INDEX
+
 from ..obs.builder import build_observation
 from ..obs.frame import make_lane_frame
 from ..sim.config import SimConfig
 from ..sim.init import TOP_OUTER_TURRET, init_lane
 from ..sim.local_pathing import route_is_server_exact
 from ..sim.orders import OrderKind
-from ..sim.state import Team
+from ..sim.state import Kind, Team
 from ..sim.step import env_advance, env_apply
 from .policy import VALUE_HEAD_NAME, LanePolicy, PolicyConfig
 from .actions import orders_from
 from .ppo import (
     PPOConfig,
+    expected_head_usage,
     factored_entropy,
     factored_log_prob,
     gae,
+    head_usage,
     kl_stopped_epochs,
     policy_loss,
     summarise_minibatches,
@@ -179,6 +183,12 @@ class Transition(NamedTuple):
     obs_global: jax.Array
     action: tuple
     log_prob: jax.Array
+    #: Per-sample head masks (`ppo.head_usage`, `PPO-14`): 1.0 where this
+    #: sample's screen point / target slot reached the wire. Computed at
+    #: sampling time and consumed by the loss, so the stored `log_prob` and
+    #: the loss's recomputation mask the same heads.
+    uses_screen: jax.Array
+    uses_target: jax.Array
     value: jax.Array
     reward: jax.Array
     done: jax.Array
@@ -197,16 +207,65 @@ class Transition(NamedTuple):
     #: used to be logged, so when cs@10min moved there was no way to say which
     #: term moved it -- and the last reward change (`RL-002`) was a reweighting.
     reward_terms: dict
+    #: Diagnostic: `ATTACK_CLASSES` code per champion-decision (0 = not an
+    #: attack_move), for the attack-by-target-type metrics.
+    attack_class: jax.Array
 
 
-def _sample(logits, key):
+def _sample(logits, key, slot_valid):
+    """Sample the four heads. Returns ``(action, log_prob, usage)``.
+
+    ``slot_valid`` is the observation's ``~entity_pad_mask`` (True where the
+    slot holds a unit). ``usage = (uses_screen, uses_target)`` is the
+    per-sample head mask (`ppo.head_usage`, `PPO-14`): which heads this
+    sample put on the wire, a function of the sampled button, the sampled
+    target slot and the slot validity. The log-prob is computed under it, and
+    it is stored in the `Transition` so the loss recomputes the log-prob under
+    the SAME mask.
+    """
     kb, kx, ky, kt = jax.random.split(key, 4)
     a = (jax.random.categorical(kb, logits.button),
          jax.random.categorical(kx, logits.screen_x),
          jax.random.categorical(ky, logits.screen_y),
          jax.random.categorical(kt, logits.target))
     lg = (logits.button, logits.screen_x, logits.screen_y, logits.target)
-    return a, factored_log_prob(lg, a)
+    usage = head_usage(a[0], a[3], slot_valid)
+    return a, factored_log_prob(lg, a, *usage), usage
+
+
+#: `attack_class` codes (the R3 dashboard metric, `NONFARMING_FAILURES.md`):
+#: what each champion-decision's attack_move turned into on the wire.
+ATTACK_CLASSES = {
+    "attack_enemy_minion": 1,
+    "attack_enemy_champion": 2,
+    "attack_enemy_turret": 3,
+    #: an ATTACK on an allied unit (own turret, allied minion): held with no
+    #: swing, chase or hold (`ENT-01`) -- the free "stop" / do-nothing.
+    "attack_ally": 4,
+    #: attack_move whose sampled slot was empty: the screen-point MOVE (or the
+    #: NOOP a minimap click is suppressed to, `actions.orders_from`).
+    "attack_move_fallback": 5,
+}
+
+
+def _attack_class(button, orders, state):
+    """Per-champion `ATTACK_CLASSES` code, 0 for any other decision.
+
+    Read from the decoded ``orders`` and the PRE-order ``state`` (the one the
+    observation was built from), so it classifies the unit the order named.
+    """
+    is_am = button == BUTTON_INDEX["attack_move"]
+    attack = orders.kind == OrderKind.ATTACK
+    tgt = jnp.clip(orders.target.astype(jnp.int32), 0, state.kind.shape[0] - 1)
+    kind = state.kind[tgt]
+    ally = state.team[tgt] == state.team[:2]
+    hostile = attack & ~ally
+    cls = jnp.where(attack & ally, 4, 0)
+    cls = jnp.where(hostile & (kind == Kind.LANE_MINION), 1, cls)
+    cls = jnp.where(hostile & (kind == Kind.CHAMPION), 2, cls)
+    cls = jnp.where(hostile & (kind == Kind.TURRET), 3, cls)
+    cls = jnp.where(is_am & ~attack, 5, cls)
+    return cls.astype(jnp.int8)
 
 
 # Kept as the local name for callers/tests that used the rollout helper before
@@ -295,8 +354,10 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             logits = policy.apply(runner.params, obs.entities,
                                   obs.entity_pad_mask, obs.self_vec,
                                   obs.global_vec)
-            action, log_prob = _sample(logits, key)
+            action, log_prob, (uses_screen, uses_target) = _sample(
+                logits, key, ~obs.entity_pad_mask)
             orders = _orders_from(action, state, obs.slot_unit, frame)
+            attack_class = _attack_class(action[0], orders, state)
             # `env_step`'s two halves, split only to read the post-order
             # route status. The step mode (deferred terrain repair, routed
             # Moves, TOP lane waves) is `SimConfig.training`'s -- see its
@@ -338,13 +399,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                                   rstate, fresh_reward)
             t = Transition(
                 obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
-                action, log_prob, logits.value, reward,
-                jnp.broadcast_to(done, reward.shape),
+                action, log_prob, uses_screen, uses_target, logits.value,
+                reward, jnp.broadcast_to(done, reward.shape),
                 cs=cs_at_done,
                 done_full=jnp.broadcast_to(done_full, reward.shape),
                 lane_dist=lane_dist,
                 route_nonready=route_nonready.astype(jnp.float32),
-                reward_terms=rterms)
+                reward_terms=rterms,
+                attack_class=attack_class)
             return nxt, rstate, deadline, t
 
         keys = jax.random.split(sk, cfg.n_envs)
@@ -357,8 +419,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         logits = policy.apply(params, batch["entities"], batch["mask"],
                               batch["self"], batch["global"])
         lg = (logits.button, logits.screen_x, logits.screen_y, logits.target)
-        log_prob = factored_log_prob(lg, batch["action"])
-        entropy = factored_entropy(lg).mean()
+        # The SAME per-sample head masks the rollout computed its log-prob
+        # under (`PPO-14`); the entropy's expected usage reads the stored
+        # observation's slot validity (`ppo.expected_head_usage`).
+        log_prob = factored_log_prob(lg, batch["action"], batch["uses_screen"],
+                                     batch["uses_target"])
+        entropy = factored_entropy(
+            lg, *expected_head_usage(logits.button, logits.target,
+                                     ~batch["mask"])).mean()
         pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy
@@ -384,6 +452,8 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             "global": tr.obs_global.reshape(n_batch, -1),
             "action": tuple(a.reshape(n_batch) for a in tr.action),
             "log_prob": tr.log_prob.reshape(n_batch),
+            "uses_screen": tr.uses_screen.reshape(n_batch),
+            "uses_target": tr.uses_target.reshape(n_batch),
             "value": tr.value.reshape(n_batch),
             "adv": adv.reshape(n_batch),
             "returns": returns.reshape(n_batch),
@@ -417,6 +487,14 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         # each env's first episode is deliberately cut short to stagger the
         # phases, and averaging those partial games in would have made the
         # first ~141 updates read as a CS collapse.
+        # IT LAGS THE PARAMETERS (`NONFARMING_FAILURES.md` R7): an episode that
+        # ended in this rollout was PLAYED over the previous ~141 updates
+        # (`episode_steps / rollout_steps` at the production config), so this
+        # number describes a mixture of the last ~141 updates' policies, not
+        # the parameters of the update it is logged against. A fresh rollout of
+        # the final parameters scored higher than the update-280 readout in 7
+        # of 9 checkpoints (e.g. c13s0a 1.86 -> 9.88). Read a trend, and score
+        # a checkpoint by rolling it out, not by this row.
         n_done = tr.done_full.sum()
         metrics["cs_at_10min"] = jnp.where(
             n_done > 0, tr.cs.sum() / jnp.maximum(n_done, 1), jnp.nan)
@@ -458,6 +536,13 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
         # ~7,981 at spawn, 0 anywhere in lane. This is the leading indicator.
         metrics["lane_dist"] = tr.lane_dist.mean()
         metrics["route_nonready"] = tr.route_nonready.mean()
+        # What attack_move actually did, as fractions of ALL champion-
+        # decisions (`NONFARMING_FAILURES.md` R3): "attack_move %" is not
+        # "attacking" -- an ATTACK on an allied unit (usually the own turret)
+        # is a free, always-available stop (`ENT-01`) and took 56-85% of the
+        # pointer in the non-farmers. The five sum to p(attack_move).
+        for k, code in ATTACK_CLASSES.items():
+            metrics[k] = (tr.attack_class == code).mean()
         runner = runner._replace(params=params, opt_state=opt_state, rng=rng,
                                  step=runner.step + n_batch)
         return runner, metrics

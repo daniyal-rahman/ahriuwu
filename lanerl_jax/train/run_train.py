@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
-from .ppo import MAX_FACTORED_ENTROPY
+from .ppo import MAX_FACTORED_ENTROPY_TARGET_VISIBLE
 from .run_manifest import RunDir, file_sha256
 from .trainer import TrainConfig, make_train
 
@@ -402,9 +402,12 @@ def main() -> None:
     print()
     e0 = float(np.asarray(m["entropy"])[0])
     e1 = float(np.asarray(m["entropy"])[-1])
-    # The MASKED ceiling (`PPO-01`); 14.099 counted heads no button uses.
-    print(f"entropy {e0:.3f} -> {e1:.3f} of a {MAX_FACTORED_ENTROPY:.3f} "
-          f"masked maximum ({100 * e1 / MAX_FACTORED_ENTROPY:.0f}%)")
+    # The MASKED ceiling with a visible slot -- every training observation
+    # (`PPO-14`; 12.050 under `PPO-01`, 14.099 unmasked). `ppo`'s docstring
+    # has the observation-free supremum (9.250) and why it is not the one.
+    cap = MAX_FACTORED_ENTROPY_TARGET_VISIBLE
+    print(f"entropy {e0:.3f} -> {e1:.3f} of a {cap:.3f} "
+          f"masked maximum ({100 * e1 / cap:.0f}%)")
     print(f"mean reward first/last update: "
           f"{float(np.asarray(m['reward'])[0]):+.5f} -> "
           f"{float(np.asarray(m['reward'])[-1]):+.5f}")

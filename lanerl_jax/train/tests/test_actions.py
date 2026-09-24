@@ -71,3 +71,70 @@ def test_minimap_move_cell_is_suppressed_but_targeted_attack_is_not():
     orders = orders_from(action, state, slots, blue)
     assert int(orders.kind[0]) == OrderKind.NOOP
     assert int(orders.kind[1]) == OrderKind.ATTACK
+
+
+def test_head_usage_matches_what_orders_from_puts_on_the_wire():
+    """`ppo.head_usage` (`PPO-14`) must say exactly which heads the decoder
+    read for each SAMPLE, from the observation's pad mask -- the same
+    observation that produced ``slot_unit``.
+
+    * target used  <=>  the order is ATTACK or CAST_R on a real unit;
+    * screen used  <=>  a move/attack_move that did not become an ATTACK
+      (a Move, or the NOOP a minimap click is suppressed to -- the screen
+      point decided that too);
+    * and re-rolling the screen point leaves every order whose screen head
+      was NOT used unchanged.
+
+    Random slots, including empty ones, so attack_move's fallback MOVE and r
+    on an empty slot are both exercised.
+    """
+    import jax.numpy as jnp
+
+    from lanerl_jax.obs.builder import build_observation
+    from lanerl_jax.sim.init import lane_params
+    from lanerl_jax.train.ppo import head_usage
+
+    state = init_lane()
+    blue, red = _frames()
+    params = lane_params()
+    obs = [build_observation(state, i, f, params=params)
+           for i, f in enumerate((blue, red))]
+    slot_unit = jnp.stack([o.slot_unit for o in obs])
+    pad = jnp.stack([o.entity_pad_mask for o in obs])
+    np.testing.assert_array_equal(np.asarray(pad), np.asarray(slot_unit) < 0)
+    assert np.asarray(pad).any() and (~np.asarray(pad)).any()
+
+    rng = np.random.default_rng(0)
+    B = C.BUTTON_INDEX
+    valid_slots = [np.flatnonzero(~np.asarray(p)) for p in pad]
+    seen = set()
+    for _ in range(64):
+        # half the slots drawn from the row's valid ones, half uniformly
+        # (mostly empty), so both attack_move outcomes occur
+        t = np.asarray([rng.choice(v) if rng.random() < 0.5
+                        else rng.integers(0, C.N_SLOTS) for v in valid_slots],
+                       np.int32)
+        a = (np.asarray(rng.integers(0, len(C.BUTTONS), 2), np.int32),
+             np.asarray(rng.integers(0, C.N_SCREEN_X, 2), np.int32),
+             np.asarray(rng.integers(0, C.N_SCREEN_Y, 2), np.int32),
+             t)
+        o = orders_from(a, state, slot_unit, blue)
+        us, ut = (np.asarray(u) for u in head_usage(
+            jnp.asarray(a[0]), jnp.asarray(a[3]), ~pad))
+        kind, target = np.asarray(o.kind), np.asarray(o.target)
+        b = a[0]
+        want_t = (np.isin(kind, [OrderKind.ATTACK, OrderKind.CAST_R])
+                  & (target >= 0))
+        want_s = np.isin(b, [B["move"], B["attack_move"]]) & (
+            kind != OrderKind.ATTACK)
+        np.testing.assert_array_equal(ut, want_t.astype(np.float32))
+        np.testing.assert_array_equal(us, want_s.astype(np.float32))
+
+        a2 = (a[0], (a[1] + 37) % C.N_SCREEN_X, (a[2] + 23) % C.N_SCREEN_Y, a[3])
+        o2 = orders_from(a2, state, slot_unit, blue)
+        same = ((np.asarray(o2.kind) == kind)
+                & (np.asarray(o2.target) == target))
+        assert same[us == 0].all(), "screen changed an order it does not reach"
+        seen |= {(int(bb), float(s), float(t)) for bb, s, t in zip(b, us, ut)}
+    am, r = B["attack_move"], B["r"]
+    assert {(am, 0.0, 1.0), (am, 1.0, 0.0), (r, 0.0, 1.0), (r, 0.0, 0.0)} <= seen

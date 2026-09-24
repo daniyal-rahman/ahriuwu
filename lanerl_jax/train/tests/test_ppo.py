@@ -15,11 +15,12 @@ import jax.numpy as jnp
 
 from lanerl_jax.train.ppo import (
     MAX_FACTORED_ENTROPY,
-    USES_SCREEN_HEADS,
-    USES_TARGET_HEAD,
+    MAX_FACTORED_ENTROPY_TARGET_VISIBLE,
     PPOConfig,
+    expected_head_usage,
     factored_entropy,
     factored_log_prob,
+    head_usage,
     gae,
     gamma_for_horizon,
     policy_loss,
@@ -135,37 +136,83 @@ def test_value_loss_matches_the_torch_version():
     assert float(got) == pytest.approx(want, abs=1e-5)
 
 
+def _aux_entropy(c_attack_move, c_r):
+    """Per-button auxiliary entropy ``c_b``: move unlocks the screen heads,
+    attack_move and r whatever `PPO-14` says they put on the wire."""
+    c = np.zeros(len(C.BUTTONS))
+    c[C.BUTTON_INDEX["move"]] = np.log(C.N_SCREEN_X) + np.log(C.N_SCREEN_Y)
+    c[C.BUTTON_INDEX["r"]] = c_r
+    c[C.BUTTON_INDEX["attack_move"]] = c_attack_move
+    return c
+
+
+def _entropy_of(logits, slot_valid):
+    lg = [jnp.asarray(x, jnp.float32) for x in logits]
+    v = jnp.asarray(slot_valid)
+    return float(factored_entropy(lg, *expected_head_usage(lg[0], lg[3], v))[0])
+
+
 def test_factored_entropy_ceiling_is_the_MASKED_action_space():
-    """12.050 nats: `ln(sum_b exp(c_b))`, the supremum of the entropy that
-    counts each auxiliary head only in proportion to the buttons that put it
-    on the wire. It is attained by `softmax(c)` over the buttons with uniform
-    auxiliary heads -- NOT by a uniform button, and NOT the 14.099 of the
-    unmasked four-head sum, which counted screen and target heads the
-    behaviour never used (`PPO-01`). The 9.940 in `lanerl_rl/ppo.py`'s notes
-    is the unmasked sum for the 9x9 grid of 2026-09-11; both are history.
+    """`ln(sum_b exp(c_b))`, the supremum of the entropy that counts each
+    auxiliary head only in proportion to the probability it reaches the
+    wire, attained by `softmax(c)` over the buttons with uniform auxiliary
+    heads -- NOT by a uniform button.
+
+    Since `PPO-14` attack_move unlocks the target head (a visible slot was
+    picked: ATTACK) OR the screen heads (an empty one: MOVE), never both:
+
+    * with a visible slot -- every training observation, the own turret is
+      always slotted -- c(attack_move) = c(r) = ln 32 and the ceiling is
+      8.567;
+    * with none, c(attack_move) = ln 96 + ln 54 and c(r) = 0 (an empty slot
+      sends target -1 whatever was picked), and the ceiling is 9.247, the
+      observation-free supremum `MAX_FACTORED_ENTROPY`.
+
+    History: `PPO-01`'s 12.050 counted attack_move at screen + target; the
+    unmasked four-head sum is 14.099; the 9.940 in `lanerl_rl/ppo.py`'s notes
+    is the unmasked sum for the 9x9 grid of 2026-09-11.
     """
-    c = (USES_SCREEN_HEADS * (np.log(C.N_SCREEN_X) + np.log(C.N_SCREEN_Y))
-         + USES_TARGET_HEAD * np.log(C.N_SLOTS))
-    best = [c[None, :], jnp.zeros((1, C.N_SCREEN_X)),
-            jnp.zeros((1, C.N_SCREEN_Y)), jnp.zeros((1, C.N_SLOTS))]
-    assert float(factored_entropy(best)[0]) == pytest.approx(
-        MAX_FACTORED_ENTROPY, abs=1e-4)
-    assert MAX_FACTORED_ENTROPY == pytest.approx(12.050, abs=1e-3)
-    uniform = [jnp.zeros((1, k)) for k in
-               (len(C.BUTTONS), C.N_SCREEN_X, C.N_SCREEN_Y, C.N_SLOTS)]
-    assert float(factored_entropy(uniform)[0]) == pytest.approx(5.084, abs=1e-3)
+    ln_scr = np.log(C.N_SCREEN_X) + np.log(C.N_SCREEN_Y)
+    uniform_aux = [np.zeros((1, C.N_SCREEN_X)), np.zeros((1, C.N_SCREEN_Y)),
+                   np.zeros((1, C.N_SLOTS))]
+    all_valid = np.ones((1, C.N_SLOTS), bool)
+    none_valid = np.zeros((1, C.N_SLOTS), bool)
+    # the policy's own masking of empty slots (`policy.py`: -1e9)
+    masked_t = np.where(none_valid, -1e9, 0.0)
+
+    c_vis = _aux_entropy(np.log(C.N_SLOTS), np.log(C.N_SLOTS))
+    got = _entropy_of([c_vis[None, :]] + uniform_aux, all_valid)
+    assert got == pytest.approx(MAX_FACTORED_ENTROPY_TARGET_VISIBLE, abs=1e-4)
+    assert MAX_FACTORED_ENTROPY_TARGET_VISIBLE == pytest.approx(8.567, abs=1e-3)
+
+    c_none = _aux_entropy(ln_scr, 0.0)
+    got = _entropy_of([c_none[None, :]] + uniform_aux[:2] + [masked_t],
+                      none_valid)
+    assert got == pytest.approx(MAX_FACTORED_ENTROPY, abs=1e-4)
+    assert MAX_FACTORED_ENTROPY == pytest.approx(9.247, abs=1e-3)
+    assert MAX_FACTORED_ENTROPY_TARGET_VISIBLE < MAX_FACTORED_ENTROPY
+
+    uniform_b = np.zeros((1, len(C.BUTTONS)))
+    assert _entropy_of([uniform_b] + uniform_aux, all_valid) == pytest.approx(
+        4.015, abs=1e-3)
+    # The PPO-01 ceiling is no longer the ceiling: counting attack_move at
+    # screen + target is exactly what `PPO-14` removed.
+    old = float(np.log(np.exp(_aux_entropy(ln_scr + np.log(C.N_SLOTS),
+                                           np.log(C.N_SLOTS))).sum()))
+    assert old == pytest.approx(12.050, abs=1e-3)
     unmasked = float(np.log(8) + np.log(96) + np.log(54) + np.log(32))
     assert unmasked == pytest.approx(14.099, abs=1e-3)
-    assert MAX_FACTORED_ENTROPY < unmasked
+    assert MAX_FACTORED_ENTROPY < old < unmasked
 
 
-def test_factored_log_prob_counts_only_the_heads_the_button_uses():
-    """`train/actions.orders_from` is the only thing that decides which heads
-    reach the wire: noop/recall/q/w/e read none, move reads screen_x/y,
-    attack_move reads target (and screen when the slot is empty), r reads
-    target. The port summed all four heads for every button, so an E cast --
-    80% of the trained policy's decisions -- carried three heads of pure noise
-    in its ratio (`PPO-01`).
+def test_factored_log_prob_counts_only_the_heads_the_sample_uses():
+    """`train/actions.orders_from` decides which heads reach the wire:
+    noop/recall/q/w/e read none, move reads screen_x/y, r reads target, and
+    attack_move reads target when the sampled slot holds a unit and screen
+    when it does not -- per SAMPLE, not per button (`PPO-14`). The port once
+    summed all four for every button (`PPO-01`), then counted attack_move as
+    screen+target, which put pure noise into the screen heads' gradient on
+    every attack_move (100% of which decoded to ATTACK).
 
     The torch reference's `_head_usage` marks q/w/e/r as using BOTH because
     its wire cast carries a point and a target; the JAX decoder's casts are
@@ -175,27 +222,45 @@ def test_factored_log_prob_counts_only_the_heads_the_button_uses():
 
     rng = np.random.default_rng(3)
     widths = (len(C.BUTTONS), C.N_SCREEN_X, C.N_SCREEN_Y, C.N_SLOTS)
-    n = len(C.BUTTONS)
+    am, r = C.BUTTON_INDEX["attack_move"], C.BUTTON_INDEX["r"]
+    # every button with a valid chosen slot, then attack_move and r with an
+    # empty one
+    buttons = np.concatenate([np.arange(len(C.BUTTONS)), [am, r]])
+    n = len(buttons)
     logits = [jnp.asarray(rng.normal(size=(n, k)).astype(np.float32))
               for k in widths]
-    acts = [jnp.arange(n)] + [jnp.asarray(rng.integers(0, k, size=n))
-                              for k in widths[1:]]
-    got = factored_log_prob(logits, acts)
+    acts = [jnp.asarray(buttons)] + [jnp.asarray(rng.integers(0, k, size=n))
+                                     for k in widths[1:]]
+    valid = np.ones((n, C.N_SLOTS), bool)
+    valid[-2, int(acts[3][-2])] = False
+    valid[-1, int(acts[3][-1])] = False
+    us, ut = head_usage(acts[0], acts[3], jnp.asarray(valid))
+    got = factored_log_prob(logits, acts, us, ut)
     uses = {"noop": (0, 0), "recall": (0, 0), "q": (0, 0), "w": (0, 0),
-            "e": (0, 0), "move": (1, 0), "attack_move": (1, 1), "r": (0, 1)}
-    for name, b in C.BUTTON_INDEX.items():
-        lp = [float(jnn.log_softmax(lg[b])[int(a[b])])
+            "e": (0, 0), "move": (1, 0), "attack_move": (0, 1), "r": (0, 1)}
+    for i, b in enumerate(buttons):
+        name = C.BUTTONS[b]
+        scr, tgt = {n - 2: (1, 0), n - 1: (0, 0)}.get(i, uses[name])
+        assert (float(us[i]), float(ut[i])) == (scr, tgt), (i, name)
+        lp = [float(jnn.log_softmax(lg[i])[int(a[i])])
               for lg, a in zip(logits, acts)]
-        scr, tgt = uses[name]
         want = lp[0] + scr * (lp[1] + lp[2]) + tgt * lp[3]
-        assert float(got[b]) == pytest.approx(want, abs=1e-5), name
-    # And the negative form: re-rolling the screen/target logits under a
-    # button that does not read them leaves its log-prob untouched.
-    other = [logits[0]] + [jnp.asarray(rng.normal(size=(n, k)).astype(np.float32))
-                           for k in widths[1:]]
-    again = factored_log_prob(other, acts)
-    for name in ("noop", "recall", "q", "w", "e"):
-        b = C.BUTTON_INDEX[name]
-        assert float(again[b]) == pytest.approx(float(got[b]), abs=1e-6), name
-    assert float(again[C.BUTTON_INDEX["move"]]) != pytest.approx(
-        float(got[C.BUTTON_INDEX["move"]]), abs=1e-3)
+        assert float(got[i]) == pytest.approx(want, abs=1e-5), (i, name)
+    # The negative form: re-rolling the screen logits leaves untouched every
+    # sample whose action did not put the screen point on the wire --
+    # including attack_move when its slot held a unit.
+    rerolled = [logits[0]] + [
+        jnp.asarray(rng.normal(size=(n, k)).astype(np.float32))
+        for k in widths[1:3]] + [logits[3]]
+    again = factored_log_prob(rerolled, acts, us, ut)
+    for i in range(n):
+        if float(us[i]) == 0.0:
+            assert float(again[i]) == pytest.approx(float(got[i]), abs=1e-6), i
+        else:
+            assert float(again[i]) != pytest.approx(float(got[i]), abs=1e-3), i
+    assert float(us[am]) == 0.0 and float(us[-2]) == 1.0
+    # No silent fallback to a per-button table.
+    with pytest.raises(TypeError):
+        factored_log_prob(logits, acts)
+    with pytest.raises(TypeError):
+        factored_entropy(logits)

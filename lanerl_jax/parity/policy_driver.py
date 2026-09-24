@@ -519,7 +519,7 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
             action = (jnp.argmax(logits.button), jnp.argmax(logits.screen_x),
                       jnp.argmax(logits.screen_y), jnp.argmax(logits.target))
         else:
-            action, _ = _sample(logits, key)
+            action, _, _ = _sample(logits, key, ~obs.entity_pad_mask)
         # `orders_from` is the TRAINING decoder and expects the (2, ...) batch
         # of both champions. One champion is driven here, so the row is
         # doubled and row `team` is used -- doubling rather than reshaping

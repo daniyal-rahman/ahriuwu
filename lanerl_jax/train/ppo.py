@@ -23,25 +23,78 @@ would give 0.999444. The source file records that its own worked example said
 about.
 
 **The action distribution is factored** over four heads (button, screen_x,
-screen_y, target), but only the heads THE CHOSEN BUTTON PUTS ON THE WIRE
+screen_y, target), but only the heads THE SAMPLED ACTION PUTS ON THE WIRE
 count. `train/actions.orders_from` is the only thing that decides that:
 noop/recall/q/w/e read nothing beyond the button, move reads the screen
-heads, attack_move reads the target head (and falls back to the screen
-point when the slot is empty, so conservatively both), r reads the target
-head. The log-prob is ``lp_b + uses_screen[b]*(lp_x+lp_y) +
-uses_target[b]*lp_t`` and the entropy is ``H_b + P(uses_screen)*(H_x+H_y) +
-P(uses_target)*H_t`` -- exactly the torch reference's `_head_usage`. The
-port summed all four unconditionally (`PPO-01`, 2026-09-23): with E cast on
-80% of decisions, 80% of the screen/target samples were pure noise in the
-ratio -- zero-mean gradient of variance ~A^2, spurious clipping that also
-cut the button's gradient, an inflated `approx_kl` feeding `target_kl`,
-and an entropy figure that counted heads the behaviour never used.
+heads, attack_move reads the target head when the sampled slot holds a unit
+(ATTACK) and the screen point when it does not (the fallback MOVE), and r
+reads the target head when the slot holds a unit (an empty slot sends
+target -1 whichever slot was picked, so the pointer did not reach the wire).
+The attack_move and r usage is a property of the SAMPLE -- the button, the
+sampled target slot and the observation's slot validity -- so the usage is a
+per-sample mask
+computed at sampling time (:func:`head_usage`), stored in the rollout's
+`Transition`, and passed to :func:`factored_log_prob` by both the rollout and
+the loss. The stored and the recomputed log-prob therefore use the SAME mask
+by construction. The log-prob is ``lp_b + uses_screen*(lp_x+lp_y) +
+uses_target*lp_t``.
 
-The maximum of the masked entropy is ``ln(sum_b exp(c_b))`` where ``c_b`` is
-the auxiliary entropy button ``b`` unlocks (``ln 96 + ln 54`` for move, that
-plus ``ln 32`` for attack_move, ``ln 32`` for r, 0 otherwise): **12.050
-nats**, attained by ``softmax(c)`` over the buttons, NOT by a uniform button
-(which gives 5.08). The old 14.099 counted every head regardless.
+History. `PPO-01` (2026-09-23): the port summed all four heads for every
+sample; with E cast on 80% of decisions, 80% of the screen/target samples
+were pure noise in the ratio -- zero-mean gradient of variance ~A^2, spurious
+clipping that also cut the button's gradient, an inflated `approx_kl` feeding
+`target_kl`, and an entropy that counted heads the behaviour never used. Its
+fix used a per-BUTTON table and marked attack_move as using both screen and
+target, "conservatively". `PPO-14` (2026-09-24): over 10 checkpoints and
+5.76 M decisions attack_move decoded to a unit ATTACK in 100.0% of cases --
+the own turret is always visible, so a valid slot always exists and the
+masked pointer always hits one -- so the screen heads took pure-noise policy
+gradient on the 22-75% of decisions that were attack_move, and sat at 88-96%
+of their maximum entropy in every run.
+
+**The entropy, derived.** Given attack_move, the wire action is a mixture:
+with probability ``q = sum_{valid s} softmax(target)_s`` the pointer picks a
+unit and the order is ATTACK(t); with ``1 - q`` it picks an empty slot and
+the order is MOVE(x, y). The exact entropy of that is
+``H2(q) + q*H(t | valid) + (1-q)*(H_x + H_y)``. The policy masks empty slots
+with a -1e9 logit, so in float32 ``q`` is exactly 1 whenever ANY slot is
+valid and exactly 0 (uniform over empty slots) when none is. At those two
+values ``H2(q) = 0`` and ``q*H_t = q*H(t | valid)``, so with the expected
+usage (:func:`expected_head_usage`)
+
+    p_screen = p(move) + p(attack_move) * (1 - q)
+    p_target = (p(r) + p(attack_move)) * q
+
+``H_b + p_screen*(H_x+H_y) + p_target*H_t`` (:func:`factored_entropy`) IS the
+exact wire-action entropy (r is the same argument with an empty slot sending
+nothing the pointer chose). The same float argument makes the per-sample
+log-prob the exact wire log-likelihood: the ATTACK case's ``lp_t`` already
+contains ``log q``, and the MOVE case's omitted ``log(1-q)`` is ``log 1 = 0``
+whenever that case has nonzero probability
+(`test_log_prob_and_entropy_are_the_exact_wire_action_distribution`
+enumerates it). ``q`` rather than a constant keeps the entropy a continuous
+function of the logits and right for an observation with no visible unit.
+
+**The ceiling changed with `PPO-14`.** The supremum of the masked entropy is
+``ln(sum_b exp(c_b))`` where ``c_b`` is the auxiliary entropy button ``b``
+unlocks, attained by ``softmax(c)`` over the buttons with uniform auxiliary
+heads -- NOT by a uniform button. ``c_b`` now depends on the observation:
+move always unlocks ``ln 96 + ln 54 = 8.553``, and attack_move unlocks the
+target head OR the screen heads, never both.
+
+* With a visible slot (``c``: move 8.553, attack_move ``ln 32``, r ``ln 32``,
+  0 for the five others) the ceiling is
+  :data:`MAX_FACTORED_ENTROPY_TARGET_VISIBLE` = **8.567 nats**. Every
+  observation the trainer produces is this case (the own turret is always
+  slotted), so read ``entropy`` against it. A uniform button gives 4.015.
+* With no visible slot (move 8.553, attack_move 8.553, r 0) it is
+  ``ln(6 + 2 * 5184)`` = **9.247 nats**.
+* :data:`MAX_FACTORED_ENTROPY` is the larger, the observation-free
+  supremum (9.247): a true upper bound no sample can exceed.
+
+The `PPO-01` ceiling was 12.050 (attack_move at 8.553 + 3.466), the unmasked
+sum 14.099. Entropy figures from before 2026-09-24 are not comparable with
+those after.
 
 **Even that is a ceiling, not an achievable value.** The target head is masked to
 the *visible* entity slots, so its share of the budget is ``ln(n_visible)``, not
@@ -93,7 +146,8 @@ from lanerl_rl.constants import BUTTON_INDEX, BUTTONS, N_SCREEN_X, N_SCREEN_Y, N
 __all__ = [
     "PPOConfig", "gamma_for_horizon", "gae", "factored_log_prob",
     "factored_entropy", "policy_loss", "value_loss", "MAX_FACTORED_ENTROPY",
-    "USES_SCREEN_HEADS", "USES_TARGET_HEAD", "kl_stopped_epochs",
+    "MAX_FACTORED_ENTROPY_TARGET_VISIBLE", "head_usage",
+    "expected_head_usage", "kl_stopped_epochs",
     "summarise_minibatches",
 ]
 
@@ -132,31 +186,80 @@ class PPOConfig(NamedTuple):
         return gamma_for_horizon(self.horizon_s, self.decision_hz)
 
 
-def _head_usage():
-    """Which auxiliary heads each button puts on the wire (module docstring).
-    Read off `train/actions.orders_from`; if that decoder changes, this must.
+_MOVE = BUTTON_INDEX["move"]
+_ATTACK_MOVE = BUTTON_INDEX["attack_move"]
+_R = BUTTON_INDEX["r"]
+
+
+def head_usage(button, target_slot, slot_valid):
+    """Per-sample ``(uses_screen, uses_target)``, float32, shaped like
+    ``button``: which auxiliary heads THIS sample put on the wire.
+
+    Read off `train/actions.orders_from`; if that decoder changes, this must
+    (`test_head_usage_matches_what_orders_from_puts_on_the_wire`).
+    ``slot_valid`` is ``(..., n_slots)`` bool, True where the observation's
+    slot holds a unit: ``~entity_pad_mask``, i.e. ``slot_unit >= 0``.
+
+    * move: screen.
+    * attack_move: target if the sampled slot is valid (ATTACK), else screen
+      (the fallback MOVE).
+    * r: target if the sampled slot is valid; an empty slot sends target -1
+      whichever slot was picked.
+    * noop/recall/q/w/e: neither.
+
+    A function of the observation and the sampled action only, so it is legal
+    inside the log-prob (module docstring, `PPO-14`).
     """
-    uses_screen = np.zeros(len(BUTTONS), dtype=bool)
-    uses_target = np.zeros(len(BUTTONS), dtype=bool)
-    uses_screen[BUTTON_INDEX["move"]] = True
-    # attack_move: the target head when the chosen slot holds a visible
-    # unit, the screen point otherwise -- a function of the observation,
-    # not of the button, so both may reach the wire.
-    uses_screen[BUTTON_INDEX["attack_move"]] = True
-    uses_target[BUTTON_INDEX["attack_move"]] = True
-    uses_target[BUTTON_INDEX["r"]] = True
-    return (jnp.asarray(uses_screen, jnp.float32),
-            jnp.asarray(uses_target, jnp.float32))
+    b = button.astype(jnp.int32)
+    n_slots = slot_valid.shape[-1]
+    t = jnp.clip(target_slot.astype(jnp.int32), 0, n_slots - 1)
+    has_target = jnp.take_along_axis(slot_valid, t[..., None], axis=-1)[..., 0]
+    is_am = b == _ATTACK_MOVE
+    uses_screen = (b == _MOVE) | (is_am & ~has_target)
+    uses_target = (is_am | (b == _R)) & has_target
+    return uses_screen.astype(jnp.float32), uses_target.astype(jnp.float32)
 
 
-USES_SCREEN_HEADS, USES_TARGET_HEAD = _head_usage()
+def expected_head_usage(button_logits, target_logits, slot_valid):
+    """``(p_screen, p_target)``: the probability under the policy that the
+    screen heads / the target head reach the wire -- :func:`head_usage`'s
+    expectation over the button AND the target slot. With
+    ``q = sum_{valid s} softmax(target)_s``::
 
-#: ln(sum_b exp(c_b)) with c_b the auxiliary entropy button b unlocks -- the
-#: supremum of the masked factored entropy, attained at softmax(c) over the
-#: buttons with every auxiliary head uniform. 12.050 nats.
-MAX_FACTORED_ENTROPY = float(jax.nn.logsumexp(
-    USES_SCREEN_HEADS * (jnp.log(float(N_SCREEN_X)) + jnp.log(float(N_SCREEN_Y)))
-    + USES_TARGET_HEAD * jnp.log(float(N_SLOTS))))
+        p_screen = p(move) + p(attack_move) * (1 - q)
+        p_target = (p(r) + p(attack_move)) * q
+
+    The module docstring derives why this makes :func:`factored_entropy` the
+    exact wire-action entropy.
+    """
+    p_b = jax.nn.softmax(button_logits, axis=-1)
+    q = jnp.sum(jax.nn.softmax(target_logits, axis=-1)
+                * slot_valid.astype(target_logits.dtype), axis=-1)
+    p_am = p_b[..., _ATTACK_MOVE]
+    return (p_b[..., _MOVE] + p_am * (1.0 - q),
+            (p_b[..., _R] + p_am) * q)
+
+
+def _ceiling(target_visible: bool) -> float:
+    """``ln(sum_b exp(c_b))``: the masked entropy's supremum over the logits
+    for an observation with (or without) a visible slot (module docstring)."""
+    ln_screen = np.log(N_SCREEN_X) + np.log(N_SCREEN_Y)
+    c = np.zeros(len(BUTTONS))
+    c[_MOVE] = ln_screen
+    c[_ATTACK_MOVE] = np.log(N_SLOTS) if target_visible else ln_screen
+    c[_R] = np.log(N_SLOTS) if target_visible else 0.0
+    return float(np.log(np.exp(c).sum()))
+
+
+#: The ceiling for any observation with a visible slot -- every training
+#: observation, since the own turret is always slotted. 8.567 nats. Read
+#: ``entropy`` against this one.
+MAX_FACTORED_ENTROPY_TARGET_VISIBLE = _ceiling(True)
+#: The observation-free supremum of the masked factored entropy, 9.247 nats,
+#: reached only by an observation with NO visible unit (attack_move then
+#: unlocks the screen heads). No sample can exceed it. Was 12.050 before
+#: `PPO-14` counted attack_move's screen and target as alternatives.
+MAX_FACTORED_ENTROPY = max(_ceiling(True), _ceiling(False))
 
 
 def gae(rewards, values, dones, last_value, gamma: float, lam: float):
@@ -192,35 +295,47 @@ def _entropy(lg):
     return -jnp.sum(jnp.exp(lp) * lp, axis=-1)
 
 
-def factored_log_prob(logits, actions) -> jax.Array:
-    """Log-prob of the joint action, counting only the heads the chosen
-    button puts on the wire (module docstring). ``logits``/``actions`` are
-    ``(button, screen_x, screen_y, target)`` sequences; a single-head call
-    (``[button]``) is the button alone.
+def factored_log_prob(logits, actions, uses_screen=None,
+                      uses_target=None) -> jax.Array:
+    """Log-prob of the joint action, counting only the heads THIS sample put
+    on the wire: ``lp_b + uses_screen*(lp_x+lp_y) + uses_target*lp_t``.
+
+    ``logits``/``actions`` are ``(button, screen_x, screen_y, target)``
+    sequences; ``uses_screen``/``uses_target`` are the per-sample masks from
+    :func:`head_usage` and are REQUIRED for the four-head form. The rollout
+    computes them at sampling time and stores them, and the loss passes the
+    stored ones, so both log-probs use the same mask (`PPO-14`). A
+    single-head call (``[button]``) is the button alone and takes no masks.
     """
     lg_b, a_b = logits[0], actions[0]
     total = _chosen(lg_b, a_b)
     if len(logits) == 1:
         return total
-    b = a_b.astype(jnp.int32)
+    if uses_screen is None or uses_target is None:
+        raise TypeError("the four-head factored_log_prob needs the per-sample "
+                        "uses_screen/uses_target masks (ppo.head_usage)")
     lg_x, lg_y, lg_t = logits[1], logits[2], logits[3]
     a_x, a_y, a_t = actions[1], actions[2], actions[3]
     return (total
-            + USES_SCREEN_HEADS[b] * (_chosen(lg_x, a_x) + _chosen(lg_y, a_y))
-            + USES_TARGET_HEAD[b] * _chosen(lg_t, a_t))
+            + uses_screen * (_chosen(lg_x, a_x) + _chosen(lg_y, a_y))
+            + uses_target * _chosen(lg_t, a_t))
 
 
-def factored_entropy(logits) -> jax.Array:
-    """Entropy of the joint action in nats, each auxiliary head weighted by
-    the probability the button unlocks it. Sup is :data:`MAX_FACTORED_ENTROPY`.
-    A single-head call (``[head]``) is that head's own entropy.
+def factored_entropy(logits, p_screen=None, p_target=None) -> jax.Array:
+    """Entropy of the joint wire action in nats,
+    ``H_b + p_screen*(H_x+H_y) + p_target*H_t``, where ``p_screen``/
+    ``p_target`` are the per-sample expected usage from
+    :func:`expected_head_usage` (REQUIRED for the four-head form; they carry
+    the observation's slot validity). Sup is :data:`MAX_FACTORED_ENTROPY`,
+    and :data:`MAX_FACTORED_ENTROPY_TARGET_VISIBLE` with a visible slot. A
+    single-head call (``[head]``) is that head's own entropy.
     """
     if len(logits) == 1:
         return _entropy(logits[0])
+    if p_screen is None or p_target is None:
+        raise TypeError("the four-head factored_entropy needs the per-sample "
+                        "expected usage (ppo.expected_head_usage)")
     lg_b, lg_x, lg_y, lg_t = logits[0], logits[1], logits[2], logits[3]
-    p_b = jax.nn.softmax(lg_b, axis=-1)
-    p_screen = jnp.sum(p_b * USES_SCREEN_HEADS, axis=-1)
-    p_target = jnp.sum(p_b * USES_TARGET_HEAD, axis=-1)
     return (_entropy(lg_b)
             + p_screen * (_entropy(lg_x) + _entropy(lg_y))
             + p_target * _entropy(lg_t))

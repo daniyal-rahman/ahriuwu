@@ -339,7 +339,7 @@ def cmd_phases(a):
         policy, p, o.entities, o.entity_pad_mask, o.self_vec, o.global_vec))
 
     def _dec(lg, s, su, k):
-        act, _ = _sample(lg, k)
+        act, _, _ = _sample(lg, k, su >= 0)
         return orders_from(act, s, su, frame)
     dec_fn = jax.jit(jax.vmap(_dec))
     raw = sim.replace(route_table=None, terrain=None)

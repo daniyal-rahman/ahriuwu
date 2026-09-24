@@ -26,8 +26,11 @@ from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
 from lanerl_jax.sim.orders import OrderKind
 from lanerl_jax.sim.state import Team
 from lanerl_jax.train.policy import LanePolicy, PolicyConfig
-from lanerl_jax.train.ppo import factored_log_prob
-from lanerl_jax.train.trainer import TrainConfig, _orders_from, make_train
+from lanerl_jax.train.ppo import factored_log_prob, head_usage
+from lanerl_jax.train.trainer import (ATTACK_CLASSES, TrainConfig,
+                                      _attack_class, _orders_from, make_train)
+
+from lanerl_rl.constants import BUTTON_INDEX as C_BUTTON
 
 SMALL = TrainConfig(n_envs=4, rollout_steps=8, n_updates=2, n_minibatches=2)
 
@@ -73,10 +76,13 @@ def trained():
 def test_the_loop_runs_and_produces_the_expected_metrics(trained):
     _, m = trained
     for k in ("policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac",
-              "dual_clip_frac", "reward", "lane_dist", "route_nonready"):
+              "dual_clip_frac", "reward", "lane_dist", "route_nonready",
+              *ATTACK_CLASSES):
         assert k in m, k
         assert np.isfinite(np.asarray(m[k])).all(), f"{k} went non-finite"
     assert np.asarray(m["policy_loss"]).shape[0] == SMALL.n_updates
+    tot = sum(np.asarray(m[k]) for k in ATTACK_CLASSES)
+    assert ((tot >= 0) & (tot <= 1)).all()
 
 
 def test_cs_at_10min_is_nan_until_an_episode_actually_ends(trained):
@@ -135,13 +141,15 @@ def test_the_actor_and_the_learner_agree_on_log_probs():
     lg = (logits.button, logits.screen_x, logits.screen_y, logits.target)
     keys = jax.random.split(jax.random.key(7), 4)
     action = tuple(jax.random.categorical(k, l) for k, l in zip(keys, lg))
-    at_sample = factored_log_prob(lg, action)
+    usage = head_usage(action[0], action[3], ~obs.entity_pad_mask)
+    at_sample = factored_log_prob(lg, action, *usage)
 
     # the update path: same params, same observation, recomputed
     again = policy.apply(params, obs.entities, obs.entity_pad_mask,
                          obs.self_vec, obs.global_vec)
     at_update = factored_log_prob(
-        (again.button, again.screen_x, again.screen_y, again.target), action)
+        (again.button, again.screen_x, again.screen_y, again.target), action,
+        *usage)
 
     np.testing.assert_allclose(np.asarray(at_update), np.asarray(at_sample),
                                rtol=0, atol=1e-6)
@@ -156,9 +164,11 @@ def test_rollout_and_update_log_probs_agree_over_every_head_class():
     different order. Here the rollout runs as `_update` runs it, and:
 
     1. every stored log-prob is recomputed from the stored observation and
-       action under the same params, per sample, across all four button
-       classes of the `PPO-01` masking (none / screen / screen+target /
-       target) -- the batch is asserted to contain each;
+       action under the same params and the STORED per-sample head masks
+       (`PPO-14`), per sample, across the usage classes (none / screen /
+       target) -- the batch is asserted to contain each, and the stored
+       masks must equal `head_usage` recomputed from the stored observation
+       and action;
     2. one full update at ``lr = critic_lr = 0`` (params cannot move) must
        then report ``approx_kl`` ~ 0, no clipping and no KL stop, because
        every minibatch compares the rollout's log-probs with the loss path's
@@ -187,17 +197,32 @@ def test_rollout_and_update_log_probs_agree_over_every_head_class():
                       tr.obs_mask.reshape(n, -1), tr.obs_self.reshape(n, -1),
                       tr.obs_global.reshape(n, -1))
     act = tuple(a.reshape(n) for a in tr.action)
-    again = flp((lg.button, lg.screen_x, lg.screen_y, lg.target), act)
+    us, ut = tr.uses_screen.reshape(n), tr.uses_target.reshape(n)
+    again = flp((lg.button, lg.screen_x, lg.screen_y, lg.target), act, us, ut)
     np.testing.assert_allclose(np.asarray(again),
                                np.asarray(tr.log_prob).reshape(n),
                                rtol=0, atol=1e-5)
-    buttons = set(np.asarray(act[0]).tolist())
-    classes = {"none": {C.BUTTON_INDEX[b] for b in ("noop", "recall", "q", "w", "e")},
-               "screen": {C.BUTTON_INDEX["move"]},
-               "screen+target": {C.BUTTON_INDEX["attack_move"]},
-               "target": {C.BUTTON_INDEX["r"]}}
-    missing = [k for k, v in classes.items() if not (buttons & v)]
-    assert not missing, f"batch lacks button classes {missing}: {sorted(buttons)}"
+    rs, rt = head_usage(act[0], act[3], ~tr.obs_mask.reshape(n, -1))
+    np.testing.assert_array_equal(np.asarray(rs), np.asarray(us))
+    np.testing.assert_array_equal(np.asarray(rt), np.asarray(ut))
+    usage = {(float(a), float(b)) for a, b in zip(np.asarray(us), np.asarray(ut))}
+    missing = {(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)} - usage
+    assert not missing, f"batch lacks usage classes {missing}: {usage}"
+    assert (1.0, 1.0) not in usage, "a sample used screen AND target"
+    b = np.asarray(act[0])
+    am = b == C.BUTTON_INDEX["attack_move"]
+    assert am.any() and (b == C.BUTTON_INDEX["r"]).any()
+    # attack_move on a unit reads the target head and NOT the screen heads
+    assert (np.asarray(ut)[am] == 1.0).any()
+    # The attack-by-target metrics partition exactly the attack_move
+    # decisions: a unit ATTACK iff the target head was used, the fallback
+    # iff the screen heads were.
+    cls = np.asarray(tr.attack_class).reshape(n)
+    np.testing.assert_array_equal(cls > 0, am)
+    np.testing.assert_array_equal((cls >= 1) & (cls <= 4),
+                                  am & (np.asarray(ut) == 1.0))
+    np.testing.assert_array_equal(cls == ATTACK_CLASSES["attack_move_fallback"],
+                                  am & (np.asarray(us) == 1.0))
 
     r1, m = jax.jit(built.run_chunk, static_argnums=1)(r0, 1)
     for a, b in zip(jax.tree.leaves(r0.params), jax.tree.leaves(r1.params)):
@@ -399,3 +424,53 @@ def test_critic_head_runs_at_critic_lr():
     assert max(critic) > 10.0 * max(actor), (
         f"critic step {max(critic):.2e} vs actor {max(actor):.2e} -- the "
         "critic is not on its own learning rate")
+
+
+def test_attack_class_splits_attack_orders_by_target_type():
+    """The R3 dashboard metric (`NONFARMING_FAILURES.md`): attack_move is
+    split into enemy minion / enemy champion / enemy turret / an allied unit
+    (the free stop, `ENT-01`) / the fallback move, relative to EACH
+    champion's own team. Any other button is class 0."""
+    from lanerl_jax.sim.orders import Orders
+    from lanerl_jax.sim.state import MI_SLICE, TU_SLICE, Kind
+
+    state = init_lane()
+    team = np.asarray(state.team)
+    kind = np.asarray(state.kind)
+    assert team[0] == Team.BLUE and team[1] == Team.RED
+    tu = np.arange(TU_SLICE.start, TU_SLICE.stop)
+    blue_tu = int(tu[(kind[tu] == Kind.TURRET) & (team[tu] == Team.BLUE)][0])
+    red_tu = int(tu[(kind[tu] == Kind.TURRET) & (team[tu] == Team.RED)][0])
+    m_blue, m_red = MI_SLICE.start, MI_SLICE.start + 1
+    state = state.replace(
+        kind=state.kind.at[m_blue].set(Kind.LANE_MINION)
+        .at[m_red].set(Kind.LANE_MINION),
+        team=state.team.at[m_blue].set(Team.BLUE).at[m_red].set(Team.RED))
+
+    am = C_BUTTON["attack_move"]
+    atk, mv = OrderKind.ATTACK, OrderKind.MOVE
+
+    def cls(buttons, kinds, targets):
+        o = Orders(kind=jnp.asarray(kinds, jnp.int8),
+                   x=jnp.zeros(2), y=jnp.zeros(2),
+                   target=jnp.asarray(targets, jnp.int8))
+        return np.asarray(_attack_class(jnp.asarray(buttons), o, state)).tolist()
+
+    A = ATTACK_CLASSES
+    # blue (row 0) and red (row 1) on the same units: mirror classes
+    assert cls([am, am], [atk, atk], [m_red, m_red]) == [
+        A["attack_enemy_minion"], A["attack_ally"]]
+    assert cls([am, am], [atk, atk], [m_blue, m_blue]) == [
+        A["attack_ally"], A["attack_enemy_minion"]]
+    assert cls([am, am], [atk, atk], [1, 0]) == [
+        A["attack_enemy_champion"], A["attack_enemy_champion"]]
+    assert cls([am, am], [atk, atk], [red_tu, red_tu]) == [
+        A["attack_enemy_turret"], A["attack_ally"]]
+    assert cls([am, am], [atk, atk], [blue_tu, blue_tu]) == [
+        A["attack_ally"], A["attack_enemy_turret"]]
+    # the fallback move (and its minimap-suppressed NOOP)
+    assert cls([am, am], [mv, OrderKind.NOOP], [-1, -1]) == [
+        A["attack_move_fallback"], A["attack_move_fallback"]]
+    # not attack_move: nothing, even an order that names a unit
+    assert cls([C_BUTTON["move"], C_BUTTON["r"]],
+               [mv, OrderKind.CAST_R], [-1, 0]) == [0, 0]
