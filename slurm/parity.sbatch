@@ -18,7 +18,7 @@
 # login node while two subagents were running, which is a scheduling problem,
 # not a memory-footprint problem.
 #
-#   sbatch slurm/parity.sbatch python -m lanerl_jax.parity.one_step ...
+#   sbatch slurm/parity.sbatch python -m lanerl_jax.parity.archive.one_step ...
 #
 # REPO is the one portable literal: danilogin has /mnt/nfs symlinked to
 # /srv/nfs and the compute node has only /mnt/nfs, so this spelling resolves on
