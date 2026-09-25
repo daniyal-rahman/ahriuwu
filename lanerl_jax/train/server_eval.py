@@ -65,6 +65,8 @@ def main():
     p.add_argument('--start-near-wave', action='store_true')
     p.add_argument('--step-ticks', type=int, default=2)
     p.add_argument('--server-dir', type=Path)
+    p.add_argument('--red', choices=('idle', 'policy'), default='idle',
+                   help='policy: mirror self-play, the same parameters drive red')
     a = p.parse_args()
     if a.server_dir is not None:
         a.server_dir = a.server_dir.resolve()
@@ -99,25 +101,34 @@ def main():
     started = time.monotonic()
     setup_driver = None
     if a.start_near_wave:
-        from .server_train import WaveStart, WAVE_START_MS
+        from .server_train import WaveStart, WAVE_START_MS, TEAM_WAVE_START, TEAM_KEY, TEAM_WIRE
         if a.seconds <= WAVE_START_MS / 1000:
             p.error('wave-start evaluation must last beyond 120 game seconds')
-        setup = WaveStart()
+        teams = (0, 1) if a.red == 'policy' else (0,)
+        setups = {t: WaveStart(TEAM_WAVE_START[t], 100. if t == 0 else 250.) for t in teams}
         finished = False
         def setup_driver(obs, i, pair):
             nonlocal finished
             validate_champion_life(obs)
             if not finished:
-                me = next(u for u in obs['u'] if u.get('k') == 'Champion' and u['tm'] == 100)
-                cmd = setup.order(me, obs['t'])
-                if cmd is not None:
+                cmds = {}
+                for t, setup in list(setups.items()):
+                    me = next(u for u in obs['u'] if u.get('k') == 'Champion' and u['tm'] == TEAM_WIRE[t])
+                    cmd = setup.order(me, obs['t'])
+                    if cmd is None:
+                        del setups[t]
+                    else:
+                        cmds[TEAM_KEY[t]] = cmd
+                if setups:
+                    for t in (0, 1):
+                        cmds.setdefault(TEAM_KEY[t], {'t': 'noop'})
                     pair.ranks.observe(obs)
-                    pair.log.append(obs['t'], cmd, {'t': 'noop'}, None, None)
-                    return {'blue': cmd, 'red': {'t': 'noop'}}
+                    pair.log.append(obs['t'], cmds['blue'], cmds['red'], None, None)
+                    return cmds
                 finished = True
             return pair(obs, i)
     _, actions = record_policy_run(str(a.checkpoint), a.out, seconds=a.seconds,
-        red='idle', deterministic=False, seed=a.seed, port_base=a.port_base,
+        red=a.red, deterministic=False, seed=a.seed, port_base=a.port_base,
         setup_driver=setup_driver, step_ticks=a.step_ticks, server_dir=a.server_dir)
     with (a.out / 'policy_obs.jsonl').open() as f:
         frames = [json.loads(line) for line in f]
@@ -127,7 +138,7 @@ def main():
         seed=a.seed, seconds=a.seconds, wall_s=time.monotonic()-started,
         freeze=detector.report(), counts=actions.meta['driver_counts'],
         cs={str(tm): u['cs'] for tm, u in last.items()}, source=source,
-        opponent='idle-fountain', environment='source-server', start_near_wave=a.start_near_wave,
+        opponent='idle-fountain' if a.red == 'idle' else 'mirror-self-play', environment='source-server', start_near_wave=a.start_near_wave,
         step_ticks=a.step_ticks, decision_hz=60. / a.step_ticks,
         observation_interface='viewport-structured-v3', life_state='authoritative champion dead Boolean')
     result['behavior'] = summarize_frames(frames)
