@@ -581,45 +581,27 @@ def test_the_entropy_numbers_in_the_docstring_are_the_real_ones():
     assert math.log(C.N_BUTTONS * C.N_SCREEN_X * C.N_SCREEN_Y * C.N_SLOTS) == pytest.approx(14.099, abs=1e-3)
 
 
-def test_head_usage_matches_what_decode_action_puts_on_the_wire(quiet_fog):
-    """The mask is only unbiased if it agrees with the ENVIRONMENT.
-
-    Masking a head the server does read would make two genuinely different
-    actions share a log-probability, and then the ratio really would be wrong.
-    So the table is checked against the only thing that decides it: whether
-    changing that head changes the order on the wire.  Note that
-    ``constants.TARGETED_BUTTONS`` / ``MOVE_BUTTONS`` do NOT agree with this
-    (they are referenced by nothing) -- a cast sends both ``id`` and ``x``/``y``.
-    """
-    from lanerl_rl.env import decode_action, order_for_command
+def test_decode_action_emits_coordinates_without_entity_pointer(quiet_fog):
+    """Changing a legacy target field cannot redirect a production click."""
+    from lanerl_rl.env import decode_action, order_for_command, ServerCommand
 
     frame = top_lane_sequence(n=1)[0]
     builder = ObservationBuilder(C.TEAM_BLUE, fog_model=quiet_fog)
     ob = builder.build(frame)
     me = frame.champion_of_team(C.TEAM_BLUE)
-    netids = [1000 + i for i in range(C.N_SLOTS)]
-    valid = [i for i in range(C.N_SLOTS) if ob.entities[i, C.E_VALID] > 0.5]
-    empty = [i for i in range(C.N_SLOTS) if ob.entities[i, C.E_VALID] < 0.5]
-    assert len(valid) >= 2 and empty, "scenario cannot exercise the target head"
-
-    def order(b, mx, mz, t):
-        return order_for_command(
-            decode_action(
-                {"button": b, "screen_x": mx, "screen_y": mz, "target": t},
-                builder, ob, me, netids,
-            )
-        )
-
-    mid, hi = C.N_SCREEN_Y // 2, C.N_SCREEN_Y - 1
     for b, name in enumerate(C.BUTTONS):
-        # attack_move only falls back to a positional move when the chosen
-        # slot is empty, so "does the move head matter" is asked of both.
-        move_matters = any(
-            order(b, 0, 0, t) != order(b, hi, hi, t) for t in (valid[0], empty[0])
-        )
-        target_matters = order(b, mid, mid, valid[0]) != order(b, mid, mid, valid[1])
-        assert move_matters == bool(USES_MOVE_HEAD[b]), f"{name}: move head"
-        assert target_matters == bool(USES_TARGET_HEAD[b]), f"{name}: target head"
+        action = {"button": b, "screen_x": C.N_SCREEN_X // 2,
+                  "screen_y": C.N_SCREEN_Y // 2}
+        base = order_for_command(decode_action(action, builder, ob, me, []))
+        poisoned = order_for_command(decode_action(
+            dict(action, target=999999), builder, ob, me, [1073743388]))
+        assert base == poisoned
+        assert "id" not in base
+        if name in ("attack_move", "q", "w", "e", "r"):
+            assert base["t"] == "click" and base["button"] == name
+            assert "x" in base and "y" in base
+    with pytest.raises(ValueError, match="entity ID"):
+        order_for_command(ServerCommand("attack_move", x=0, y=0, target_netid=42))
 
 
 def test_masked_logits_do_not_poison_an_unused_head():

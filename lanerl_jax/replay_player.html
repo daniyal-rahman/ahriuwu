@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lane replay</title>
+<style>
+body{margin:0;background:#10181f;color:#e8eff4;font:15px system-ui,sans-serif}main{max-width:1280px;margin:auto;padding:20px}h1{font-size:23px;font-weight:500;margin:0 0 6px}p{color:#b8c7d1;margin:6px 0 18px}canvas{width:100%;background:#10181f;display:block}button,select{font:inherit;color:inherit;background:#24353f;border:1px solid #50616e;border-radius:6px;padding:8px 13px;cursor:pointer}button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid #59b8ff}nav{display:flex;gap:10px;align-items:center;flex-wrap:wrap}input[type=range]{flex:1;min-width:180px;accent-color:#59b8ff}output{font-variant-numeric:tabular-nums;min-width:104px}.summary{display:flex;gap:25px;flex-wrap:wrap;margin-top:18px}.summary div{flex:1;min-width:240px;line-height:1.7}small{color:#a0b1bf}a{color:#9cd0ff}
+</style>
+<main>
+<h1 id="title">Lane replay</h1>
+<p>Recorded game coordinates. All entities shown; the policy acts through its own observation and fog.</p>
+<nav aria-label="Replay controls">
+<button id="play">Play</button><button id="prev" aria-label="Previous snapshot">−0.1s</button><button id="next" aria-label="Next snapshot">+0.1s</button>
+<input id="seek" type="range" min="0" value="0" step="1" aria-label="Game time">
+<output id="time"></output>
+<label>Speed <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="5">5×</option><option value="10" selected>10×</option><option value="20">20×</option></select></label>
+<label>View <select id="view"><option value="map">Full map</option><option value="combat">Combat</option></select></label><label>Follow <select id="follow"><option value="wave">Engaged wave (Blue priority)</option><option value="0">Blue Garen</option><option value="1">Red Garen</option></select></label>
+<label>Zoom <select id="zoom"><option value="1200">Detail</option><option value="1800" selected>Close</option><option value="2700">Wide</option></select></label>
+</nav><nav style="margin-top:12px" aria-label="Diagnostic overlays"><label><input type="checkbox" id="targets" checked> Targets / AA windup</label><label><input type="checkbox" id="routes" checked> Routes</label><label><input type="checkbox" id="missiles" checked> Projectiles</label><label><input type="checkbox" id="labels" checked> Unit IDs / HP</label><label><input type="checkbox" id="clicks" checked> Clicks</label><label><input type="checkbox" id="camera"> Clickable screen footprint</label></nav>
+<canvas id="map" width="1280" height="800" aria-label="Full minimap and close-up with unit positions, health, orders, and CS"></canvas>
+<small>Circles: Garen · squares: minions · diamonds: turrets · purple lines: move commands · yellow lines: attack commands. Ten snapshots per game second. Yellow: winding attack → victim; gray: held target; mint: actual remaining route. Projectiles use recorded positions. Net HP includes healing, not attributed damage. Playback may be subsampled; consult the recording metadata for capture rate and unavailable fields.</small>
+<p id="inspect">Hover a unit to inspect its identity, health and attack target. M = melee, C = caster, S = siege/cannon, U = super.</p><div class="summary" id="summary"></div>
+<details><summary>Recording details</summary><pre id="details" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+</main>
+<script>
+const D=__REPLAY_DATA__;
+const frames=D.frames, canvas=document.getElementById('map'), ctx=canvas.getContext('2d');
+const seek=document.getElementById('seek'), play=document.getElementById('play'), time=document.getElementById('time');
+const follow=document.getElementById('follow'), speed=document.getElementById('speed');
+const colors=['#59b8ff','#ff787e'], terrain=D.meta.terrain, bg=new Image();
+const view=document.getElementById('view');view.value=D.view||'map';
+if(view.value==='combat')speed.value='1';
+const zoom=document.getElementById('zoom');
+const on=id=>document.getElementById(id).checked;
+let hitboxes=[];
+let index=Math.max(0,frames.findIndex(f=>f[0]>=(D.start_seconds||0))), playing=false, clock=frames[index][0], last=0;
+seek.max=frames.length-1;
+if(!D.camera_offsets){document.getElementById('camera').disabled=true;document.getElementById('camera').parentElement.title='Camera frame unavailable in this trace'}
+document.getElementById('title').textContent=D.meta.label;
+document.getElementById('details').textContent=JSON.stringify({checkpoint:D.meta.checkpoint,sha256:D.meta.checkpoint_sha256,seed:D.meta.seed,source:D.meta.source,alignment:D.meta.action_alignment},null,2);
+function stamp(t){return Math.floor(t/60).toString().padStart(2,'0')+':'+(t%60).toFixed(1).padStart(4,'0')}
+function text(s,x,y,color='#e8eff4',size=18){ctx.fillStyle=color;ctx.font=`${size}px system-ui`;ctx.fillText(s,x,y)}
+function draw(){
+ const [t,units,champs,detail]=frames[index], byId=new Map(units.map(u=>[u[0],u])), extras=new Map(detail.units.map(u=>[u[0],u]));
+ hitboxes=[];ctx.fillStyle='#10181f';ctx.fillRect(0,0,1280,800);
+ const cs=terrain.cell_size,x0=terrain.min_x,y0=terrain.min_y;
+ function panel(left,top,size,bx,by,bw,bh,zoom){
+  ctx.save();ctx.beginPath();ctx.rect(left,top,size,size);ctx.clip();
+  ctx.imageSmoothingEnabled=false;
+  // Full image positioned in world coordinates; clipping handles off-map zoom.
+  ctx.drawImage(bg,left+(x0-bx)/bw*size,top+size-(y0+D.height*cs-by)/bh*size,D.width*cs/bw*size,D.height*cs/bh*size);
+  const point=(x,y)=>[left+(x-bx)/bw*size,top+size-(y-by)/bh*size];
+  if(on('camera')&&D.camera_offsets)for(let s=0;s<2;s++){const me=byId.get(s);if(!me||!me[6])continue;ctx.strokeStyle=colors[s];ctx.lineWidth=2;ctx.setLineDash([5,5]);ctx.beginPath();D.camera_offsets[s].forEach((p,j)=>{const a=point(me[1]+p[0],me[2]+p[1]);j?ctx.lineTo(...a):ctx.moveTo(...a)});ctx.closePath();ctx.stroke();ctx.setLineDash([])}
+  if(on('targets')&&zoom)for(const u of units){
+   const e=extras.get(u[0]);if(!u[6]||!e)continue;
+   const winding=e[6]&&e[5]>0,target=byId.get(winding?e[4]:e[3]);if(!target||!target[6])continue;
+   const a=point(u[1],u[2]),b=point(target[1],target[2]);ctx.strokeStyle=winding?'#fff29a':'#64747d';ctx.lineWidth=winding?3:1;ctx.beginPath();ctx.moveTo(...a);ctx.lineTo(...b);ctx.stroke();
+   if(winding){ctx.beginPath();ctx.arc(...b,8,0,Math.PI*2);ctx.stroke()}
+  }
+  if(on('routes'))for(let s=0;s<2;s++){const me=byId.get(s),r=detail.champs[s].route;if(!me||!me[6]||!r.length)continue;ctx.strokeStyle='#64efcb';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(...point(me[1],me[2]));for(const p of r)ctx.lineTo(...point(...p));ctx.stroke()}
+  if(on('missiles'))for(const m of detail.missiles||[]){const a=point(m[1],m[2]),v=byId.get(m[3]);ctx.strokeStyle=m[5]<0?'white':colors[m[5]];ctx.lineWidth=3;if(v){const b=point(v[1],v[2]),dx=b[0]-a[0],dy=b[1]-a[1],len=Math.max(1,Math.hypot(dx,dy));ctx.beginPath();ctx.moveTo(a[0]-dx/len*12,a[1]-dy/len*12);ctx.lineTo(...a);ctx.stroke()}ctx.fillStyle='white';ctx.beginPath();ctx.arc(...a,3,0,Math.PI*2);ctx.fill()}
+  if(on('clicks'))for(let s=0;s<2;s++){
+   const me=byId.get(s), c=champs[s];if(!me||!me[6])continue;
+   const p=point(me[1],me[2]);let q;
+   if(c[6]===1){q=point(c[8],c[9]);ctx.strokeStyle='#dba7ff'}
+   else if(c[6]===2&&byId.has(c[7])){const u=byId.get(c[7]);q=D.cursor_coordinates?point(c[8],c[9]):point(u[1],u[2]);ctx.strokeStyle='#ffe185'}
+   if(q){ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(...p);ctx.lineTo(...q);ctx.stroke();ctx.beginPath();ctx.arc(...q,4,0,Math.PI*2);ctx.stroke()}
+  }
+  for(const u of units){
+   const [id,wx,wy,hp,kind,team,alive]=u,[x,y]=point(wx,wy),color=alive?colors[team]:'#7e858c';
+   if(x<left-20||x>left+size+20||y<top-20||y>top+size+20)continue;
+   const r=kind===1?(zoom?10:8):kind===2?(zoom?6:3):7;
+   if(zoom)hitboxes.push({x,y,id});
+   ctx.fillStyle=color;ctx.beginPath();
+   if(kind===1&&detail.champs[id].active[2]){ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,330/bw*size,0,Math.PI*2);ctx.stroke();ctx.beginPath()}
+   if(kind===1){ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#fff';ctx.lineWidth=2;ctx.stroke();text((team===0?'B':'R')+(alive?'':' dead'),x+12,y+5,color,14)}
+   else if(kind===3){ctx.moveTo(x,y-r);ctx.lineTo(x+r,y);ctx.lineTo(x,y+r);ctx.lineTo(x-r,y);ctx.closePath();ctx.fill()}
+   else ctx.fillRect(x-r,y-r,2*r,2*r);
+   if(zoom&&on('labels')){const e=extras.get(id);const label=(D.meta.profile_label||(D.meta.profiles||[]).map(p=>p.label))[e[8]]||'minion',prefix=kind===2?({melee:'M',caster:'C',cannon:'S',super:'U'}[label]||'m'):kind===3?'T':'';text(`${prefix}${id}`+(kind===1?' HP '+Math.round(e[1]):''),x+11,y+18,color,12);if(kind===1&&e[6]&&e[5]>0)text(`AA >${e[4]} ${e[5].toFixed(2)}s`,x+9,y-20,'#fff29a',12)}
+   if(zoom||kind===1){ctx.fillStyle='#10181f';ctx.fillRect(x-10,y-r-7,20,3);ctx.fillStyle=color;ctx.fillRect(x-10,y-r-7,20*Math.max(0,Math.min(1,hp)),3)}
+  }
+  ctx.restore();
+ }
+ const lane=units.filter(u=>u[4]===2&&u[6]&&u[1]<6500&&u[2]>8000);
+ const median=arr=>{arr.sort((a,b)=>a-b);return arr.length?arr[Math.floor(arr.length/2)]:null};
+ let cluster=lane;
+ for(let s=0;s<2;s++){const champ=byId.get(s),near=lane.filter(u=>Math.hypot(u[1]-champ[1],u[2]-champ[2])<1100);if(champ[6]&&near.length){cluster=[...near,champ];break}else if(s===1&&lane.length){cluster=lane.map(a=>lane.filter(b=>Math.hypot(a[1]-b[1],a[2]-b[2])<1100)).sort((a,b)=>b.length-a.length)[0]}}
+ const me=follow.value==='wave'?[null,median(cluster.map(u=>u[1]))??1900,median(cluster.map(u=>u[2]))??12100]:byId.get(Number(follow.value));
+ if(view.value==='combat'){
+  const span=Number(zoom.value);panel(20,25,700,me[1]-span/2,me[2]-span/2,span,span,true);
+  panel(765,25,330,-500,7500,7500,7500,false);text('TOP LANE OVERVIEW',777,46,'white',14);
+ }else{
+  panel(20,25,700,x0,y0,D.width*cs,D.height*cs,false);
+  panel(765,25,330,me[1]-1600,me[2]-1600,3200,3200,true);
+ }
+ text((follow.value==='wave'?'WAVE':follow.value==='0'?'BLUE GAREN':'RED GAREN')+' FOLLOW',32,46,'white',15);
+ for(let s=0;s<2;s++){
+  const c=champs[s],e=extras.get(s),v=detail.champs[s],y=383+s*138;
+  text(`${s===0?'BLUE':'RED'} HP ${Math.round(e[1])}/${Math.round(e[2])}  CS ${c[0]}  deaths ${c[1]}`,765,y,colors[s],17);
+  text(c[3],765,y+23,'#e8eff4',14);
+  text(`AA windup ${c[4].toFixed(2)}s / cooldown ${c[5].toFixed(2)}s`,765,y+44,'#b8c7d1',13);
+  text('held target: '+c[10],765,y+64,'#b8c7d1',13);
+  text('Q / W / E: '+v.active.map((a,j)=>'QWE'[j]+(v.ranks&&v.ranks[j]===0?' locked':a===null?' ?':a?' ON':' off')).join(' · ')+(v.r_cast_ms>0?' · R CAST':''),765,y+84,'#b8c7d1',13);
+  text('Q/W/E/R cooldown: '+(v.cooldown?v.cooldown.map((x,j)=>v.ranks&&v.ranks[j]===0?'-':x.toFixed(1)).join(' / '):'unavailable'),765,y+104,'#b8c7d1',13);
+  text('1s net HP: '+(v.net_hp_1s===null?'n/a (life transition)':(v.net_hp_1s>=0?'+':'')+Math.round(v.net_hp_1s))+' · route status: '+(v.route_status??'unavailable'),765,y+124,'#b8c7d1',13);
+ }
+ text('Minions: '+units.filter(u=>u[4]===2&&u[6]).length+' · Projectiles: '+(detail.missiles===null?'unavailable in this trace':detail.missiles.length+'/'+D.missile_capacity+' in flight'),24,752,'#b8c7d1',14);
+ text('Omniscient diagnostic view. State samples may miss sub-frame events.',24,776,'#b8c7d1',13);
+ // Shared CS chart provides context while seeking; fixed scale for both teams.
+ const gx=765,gy=755,gw=432,gh=75,maxCS=Math.max(1,...D.meta.summary.map(s=>s.cs));
+ for(let s=0;s<2;s++){ctx.strokeStyle=colors[s];ctx.lineWidth=2;ctx.beginPath();frames.forEach((f,j)=>{const x=gx+(f[0]-frames[0][0])/Math.max(frames.at(-1)[0]-frames[0][0],.001)*gw,y=gy-f[2][s][0]/maxCS*gh;if(j===0)ctx.moveTo(x,y);else ctx.lineTo(x,y)});ctx.stroke()}
+ ctx.strokeStyle='#b8c7d1';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(gx+t/frames.at(-1)[0]*gw,gy-gh);ctx.lineTo(gx+t/frames.at(-1)[0]*gw,gy);ctx.stroke();
+ text('CS over game time',gx,gy+24,'#b8c7d1',14);
+ time.value=stamp(t)+' / '+stamp(frames.at(-1)[0]);seek.value=index;
+}
+for(const s of D.meta.summary){const el=document.createElement('div');el.style.borderTop='2px solid '+colors[s.side==='blue'?0:1];el.textContent=`${s.side.toUpperCase()}: ${s.cs} CS · ${s.deaths} deaths. Near an enemy minion (≤250 units): ${(s.near_enemy_minion_fraction*100).toFixed(1)}% of alive time. Attack orders on enemy minions: ${(s.attack_enemy_minion_fraction*100).toFixed(1)}% of decisions. Attacks on allies: ${(s.attack_ally_fraction*100).toFixed(1)}%.`;document.getElementById('summary').appendChild(el)}
+canvas.onmousemove=event=>{const rect=canvas.getBoundingClientRect(),x=(event.clientX-rect.left)/rect.width*canvas.width,y=(event.clientY-rect.top)/rect.height*canvas.height;let best=null,dist=22;for(const hit of hitboxes){const d=Math.hypot(x-hit.x,y-hit.y);if(d<dist){best=hit;dist=d}}if(best){const info=frames[index][3].units.find(u=>u[0]===best.id);const profile=(D.meta.profiles||[])[info[8]];document.getElementById('inspect').textContent=`${profile?profile.label:'unit'} #${best.id} spawn ${info[7]} · HP ${info[1].toFixed(1)}/${info[2].toFixed(1)} · held target #${info[3]} · AA victim #${info[4]} · ${info[6]?'attacking':'not attacking'} · remaining windup ${info[5].toFixed(3)}s`}};
+function pause(){playing=false;play.textContent='Play'}
+play.onclick=()=>{playing=!playing;if(index===frames.length-1){index=0;clock=frames[0][0]}play.textContent=playing?'Pause':'Play';last=performance.now()};
+seek.oninput=()=>{pause();index=Number(seek.value);clock=frames[index][0];draw()};
+function step(delta){pause();index=Math.max(0,Math.min(frames.length-1,index+delta));clock=frames[index][0];draw()}
+document.getElementById('prev').onclick=()=>step(-1);document.getElementById('next').onclick=()=>step(1);follow.onchange=draw;view.onchange=draw;zoom.onchange=draw;for(const id of ['targets','routes','missiles','labels','clicks','camera'])document.getElementById(id).onchange=draw;
+function animate(now){if(playing){clock+=Math.min((now-last)/1000,.25)*Number(speed.value);while(index<frames.length-1&&frames[index+1][0]<=clock)index++;if(index===frames.length-1)pause();draw()}last=now;requestAnimationFrame(animate)}
+bg.onload=()=>{draw();requestAnimationFrame(animate)};bg.src=D.map;
+</script>
+</html>

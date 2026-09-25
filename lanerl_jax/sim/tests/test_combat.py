@@ -628,17 +628,14 @@ def test_an_attack_order_on_an_allied_minion_holds_it_but_never_swings_or_pays()
     assert int(s.target[0]) == ally, "held, not dropped: the disengage works"
 
 
-def test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on():
-    """`ENT-02`. `Spell.FinishCasting` applies the melee hit to
-    `CastInfo.Targets[0].Unit` (`Spell.cs:1030`), the unit the swing was
-    declared on; `SetTargetUnit` never rewrites it, and the
-    `SetCurrentTarget` branch (`ObjAIBase.cs:1326`) is dead code behind the
-    `IsAttacking` early return at `:1245`.
+@pytest.mark.parametrize("last_frame", [False, True])
+def test_a_retarget_during_the_windup_restarts_the_swing(last_frame):
+    """ENT-02: server CastCancelCheck runs BEFORE FinishCasting.
 
-    Before the fix the hit resolved against the CURRENT target: start a swing
-    on the 455 HP minion A, re-order onto the 30 HP minion B on the last
-    frame, and B died while A was untouched -- zero-wind-up last-hitting.
+    Neither the old victim nor the new victim is hit on a switch, even on
+    the old swing's final frame. The new victim needs a full fresh windup.
     """
+    import jax.numpy as jnp
     from lanerl_jax.data.patch import load_patch
     from lanerl_jax.sim.init import lane_params
     from lanerl_jax.sim.orders import apply_orders
@@ -656,17 +653,23 @@ def test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on():
         if bool(s.is_attacking[0]):
             break
     assert bool(s.is_attacking[0]) and int(s.aa_target[0]) == a
+    if last_frame:
+        s = s.replace(aa_windup=s.aa_windup.at[0].set(jnp.float32(0.001)))
     # Re-aim mid-wind-up. The current target changes; the swing's does not.
     s = apply_orders(s, _attack(b), params)
     assert int(s.target[0]) == b and int(s.aa_target[0]) == a
     hp_a, hp_b = float(s.hp[a]), float(s.hp[b])
+    s = jtick(s)
+    assert float(s.hp[a]) == hp_a and float(s.hp[b]) == hp_b
+    assert bool(s.is_attacking[0]) and int(s.aa_target[0]) == b
+    assert float(s.aa_windup[0]) > 0.3, "new swing gets its full windup"
     for _ in range(60):
         s = jtick(s)
         if float(s.hp[a]) < hp_a or float(s.hp[b]) < hp_b:
             break
-    assert float(s.hp[a]) < hp_a, "the hit landed on A, the swing's target"
-    assert float(s.hp[b]) == hp_b and bool(s.alive[b]), "B untouched"
-    assert int(s.cs[0]) == 0
+    assert float(s.hp[a]) == hp_a, "the cancelled swing never hits A"
+    assert not bool(s.alive[b]), "the fresh swing kills B"
+    assert int(s.cs[0]) == 1
     assert int(s.aa_target[0]) == -1, "cleared once the swing has landed"
 
 
@@ -684,8 +687,10 @@ def test_a_swing_whose_target_died_is_cancelled_and_never_lands_on_the_recycled_
     had already re-aimed at a live unit wound up to the end -- and when the
     next wave recycled the dead slot first, it landed on the newcomer. In the
     playtest that was red casters firing 8-11k units back up the lane into a
-    red minion at its own barracks. Here: Garen swings at red A, re-aims at
-    red B, A dies, and a BLUE minion is spawned into A's slot in melee range.
+    red minion at its own barracks. Here: Garen swings at red A, A dies,
+    then Garen re-aims at red B and a BLUE minion reuses A's slot. A switch
+    BEFORE death instead cancels immediately under ENT-02, so it cannot
+    exercise the dead-target sentinel anymore.
     """
     import jax.numpy as jnp
 
@@ -708,8 +713,6 @@ def test_a_swing_whose_target_died_is_cancelled_and_never_lands_on_the_recycled_
         if bool(s.is_attacking[0]):
             break
     assert bool(s.is_attacking[0]) and int(s.aa_target[0]) == a
-    s = apply_orders(s, _attack(b), params)
-    assert int(s.target[0]) == b and int(s.aa_target[0]) == a
     # A dies on the next tick (an hp no regen can lift above zero).
     s = s.replace(hp=s.hp.at[a].set(-100.0))
     s = jtick(s)
@@ -718,6 +721,8 @@ def test_a_swing_whose_target_died_is_cancelled_and_never_lands_on_the_recycled_
         "the swing still names the dead slot: the next spawn into it becomes the target"
     from lanerl_jax.sim.state import AA_TARGET_GONE
     assert int(s.aa_target[0]) == AA_TARGET_GONE
+    s = apply_orders(s, _attack(b), params)
+    assert int(s.target[0]) == b and int(s.aa_target[0]) == AA_TARGET_GONE
     # The next wave recycles A's slot with one of Garen's OWN minions, in range.
     path = jnp.asarray([[6060.0, 6000.0], [7000.0, 6000.0]], s.x.dtype)
     s = spawn_minion(s, Team.BLUE,

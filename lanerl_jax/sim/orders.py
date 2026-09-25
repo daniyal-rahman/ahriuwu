@@ -91,6 +91,8 @@ import jax
 import jax.numpy as jnp
 
 from ..obs.fog import visible_to
+from ..obs.frame import make_lane_frame, delta_to_lane
+from lanerl_rl.projection import target_on_screen
 from .combat import growth_sum
 from .spells import (R_CAST_RANGE, R_CAST_TIME_S, Slot, cast_e, cast_q,
                      cast_r, cast_w, enemy_champion_index, status_of)
@@ -99,9 +101,8 @@ from .state import Kind, LaneState, MoveOrder, Team
 __all__ = ["OrderKind", "Orders", "OBSERVED_CAST_SCREEN_RADIUS", "apply_orders"]
 
 
-# `lanerl_rl.constants.SCREEN_RADIUS`: a visible unit may be known from the
-# minimap, but a cast animation is only witnessed on screen. Kept local to the
-# simulator rather than importing the Python observation stack.
+# Legacy diagnostic compatibility only. Production witnessed-cast memory
+# below uses the same projected viewport as actor observations.
 OBSERVED_CAST_SCREEN_RADIUS = 1800.0
 
 
@@ -136,6 +137,8 @@ class OrderKind:
     #: cancellable 8 s channel.  This is intentionally distinct from the
     #: Garen buff table, whose R-pending mailbox belongs to a different spell.
     RECALL = 8
+    #: Screen A-click on ground; normal nearest-enemy acquisition stays in tick.
+    ATTACK_MOVE = 9
 
 
 class Orders(NamedTuple):
@@ -145,16 +148,19 @@ class Orders(NamedTuple):
     x: jax.Array
     y: jax.Array
     target: jax.Array    # unit index, -1 for none
+    # New coordinate-click ingress clears a chase on a ground click. Legacy
+    # low-level Move orders omit this and retain their ORDER-001 semantics.
+    clear_target: jax.Array | None = None
 
 
-def _record_observed_enemy_casts(state: LaneState, successful: jax.Array) -> jax.Array:
+def _record_observed_enemy_casts(state: LaneState, successful: jax.Array, vision=None) -> jax.Array:
     """Update the two agents' witnessed-enemy-cast clocks at cast ingress.
 
     ``successful`` is ``(2, 4)`` (caster champion slot, Q/W/E/R), taken from
     the spell helpers' successful result rather than from an order request or
     an enemy cooldown. Each observer learns only about the other champion,
     only when that caster is visible to the observer's team and lies within the
-    observer's 1800-unit UI radius at this exact pre-tick position.
+    observer's canonical viewport at this exact pre-tick position.
 
     A team mate can provide fog visibility, as in the source observer, but does
     not move the camera: the on-screen distance is always from the observing
@@ -164,16 +170,25 @@ def _record_observed_enemy_casts(state: LaneState, successful: jax.Array) -> jax
     observer_team = state.team[:2]
     caster_team = state.team[:2]
     seen_blue = visible_to(Team.BLUE, state.x, state.y, state.kind,
-                           state.team, state.alive)
+                           state.team, state.alive, vision)
     seen_red = visible_to(Team.RED, state.x, state.y, state.kind,
-                          state.team, state.alive)
+                          state.team, state.alive, vision)
     # Rows are observers; columns are the two possible champion casters.
     caster_visible = jnp.where(
         observer_team[:, None] == Team.BLUE,
         seen_blue[None, :2], seen_red[None, :2])
     dx = state.x[:2][None, :] - state.x[:2][:, None]
     dy = state.y[:2][None, :] - state.y[:2][:, None]
-    on_screen = dx * dx + dy * dy <= OBSERVED_CAST_SCREEN_RADIUS ** 2
+    from .init import TOP_OUTER_TURRET
+    blue_frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
+                                 TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
+    red_frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
+                                TOP_OUTER_TURRET[Team.BLUE], (12760.9, 13026.1))
+    blue_ds, blue_dn = delta_to_lane(blue_frame, dx, dy)
+    red_ds, red_dn = delta_to_lane(red_frame, dx, dy)
+    on_screen = jnp.where(observer_team[:, None] == Team.BLUE,
+                          target_on_screen(blue_ds, blue_dn),
+                          target_on_screen(red_ds, red_dn))
     observer_live = ((state.kind[:2] == Kind.CHAMPION) & state.alive[:2])
     caster_live = ((state.kind[:2] == Kind.CHAMPION) & state.alive[:2])
     can_witness = (
@@ -187,7 +202,7 @@ def _record_observed_enemy_casts(state: LaneState, successful: jax.Array) -> jax
 
 
 def apply_orders(state: LaneState, orders: Orders, params, *,
-                 route_table=None, terrain=None) -> LaneState:
+                 route_table=None, terrain=None, vision=None) -> LaneState:
     """Write champion orders into the state. Non-champion slots are untouched.
 
     ``params`` (``lane_params(patch)``) is REQUIRED: E snapshots the caster's
@@ -249,7 +264,7 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
                  & r_target_ok & r_in_range)
     # SetWaypoints fails while the pill is still winding up (`_castingSpell`),
     # exactly like a server Move packet that cannot pass CanChangeWaypoints.
-    moving = (champ & (kind == OrderKind.MOVE)
+    moving = (champ & ((kind == OrderKind.MOVE) | (kind == OrderKind.ATTACK_MOVE))
               & (state.recall_windup_ms <= 0) & (state.r_cast_ms <= 0))
     # A live R is an uncancellable ordinary spell cast. Unlike a silence it
     # also prevents target/attack-order changes until FinishCasting.
@@ -293,9 +308,13 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
         # the return value below.
         route_x = jnp.where(moving[:n_ch], ox[:n_ch], state.x[:n_ch])
         route_y = jnp.where(moving[:n_ch], oy[:n_ch], state.y[:n_ch])
+        # Long setup moves and screen-edge detours can leave the local
+        # table window. Reuse chase's bounded full-map fallback, rather than
+        # replacing a reachable destination with a straight failed route.
         routed = jax.vmap(
             lambda sx, sy, gx, gy, radius: build_local_waypoints(
-                sx, sy, gx, gy, radius, route_table, terrain)
+                sx, sy, gx, gy, radius, route_table, terrain,
+                max_raw_hops=512, global_chase=True)
         )(state.x[:n_ch], state.y[:n_ch], route_x, route_y, path_radius)
         candidate_waypoints = candidate_waypoints.at[:n_ch].set(routed.waypoints)
         routed_n = routed_n.at[:n_ch].set(routed.n_waypoints)
@@ -326,7 +345,7 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     ordinary_cast = cast_e_now | cast_q_now | cast_w_now | cast_r_now
     successful_cast = jnp.stack(
         [cast_q_now, cast_w_now, cast_e_now, cast_r_now], axis=1)[:2]
-    observed_enemy_cast_ms = _record_observed_enemy_casts(state, successful_cast)
+    observed_enemy_cast_ms = _record_observed_enemy_casts(state, successful_cast, vision)
     cancel_channel = ordinary_cast & (state.recall_channel_ms > 0)
     stop_for_recall = recall_stop
     # `UpdateMoveOrder(Stop)` drops TargetUnit only when the pre-stop path is
@@ -337,6 +356,8 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     stop_waypoints = stop_for_recall[:, None, None]
     reset_path = state.waypoints.at[:, 0].set(jnp.stack([state.x, state.y], -1))
 
+    clear_clicked_target = (jnp.zeros_like(moving) if orders.clear_target is None
+                            else moving & per_unit(orders.clear_target, False))
     return state.replace(
         buffs=buffs, spell_cooldown=cd,
         observed_enemy_cast_ms=observed_enemy_cast_ms,
@@ -364,10 +385,11 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
         # block (`ObjAIBase.RefreshWaypoints`, `:602-604`) for as long as it
         # stays alive and visible -- see the module docstring's "Sticky
         # targets" section.
-        target=jnp.where(stop_clears_target, jnp.int8(-1),
+        target=jnp.where(stop_clears_target | clear_clicked_target, jnp.int8(-1),
                          jnp.where(attacking, otgt, state.target)),
         move_order=jnp.where(stop_for_recall, jnp.int8(MoveOrder.STOP),
-                             jnp.where(moving, jnp.int8(MoveOrder.MOVE_TO), state.move_order)),
+                             jnp.where(moving, jnp.where(kind == OrderKind.ATTACK_MOVE,
+                                 jnp.int8(MoveOrder.ATTACK_MOVE), jnp.int8(MoveOrder.MOVE_TO)), state.move_order)),
         route_status=jnp.where(moving, routed_status, state.route_status),
         recall_windup_ms=jnp.where(recalling, jnp.asarray(500.0, state.x.dtype),
                                    state.recall_windup_ms),

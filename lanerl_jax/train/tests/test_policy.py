@@ -31,7 +31,7 @@ def built():
 
 
 def test_head_widths_match_the_action_space(built):
-    """8 buttons x 96 screen_x x 54 screen_y x 32 targets."""
+    """8 buttons x 96 screen_x x 54 screen_y; no actor entity target."""
     from lanerl_rl import constants as C
 
     p, v, args, cfg = built
@@ -39,7 +39,7 @@ def test_head_widths_match_the_action_space(built):
     assert out.button.shape[-1] == len(C.BUTTONS) == cfg.n_buttons
     assert out.screen_x.shape[-1] == C.N_SCREEN_X
     assert out.screen_y.shape[-1] == C.N_SCREEN_Y
-    assert out.target.shape[-1] == C.N_SLOTS
+    assert out._fields == ("button", "screen_x", "screen_y", "value")
     assert out.value.shape == (3,)
 
 
@@ -64,16 +64,6 @@ def test_input_widths_are_checked_against_the_config(built):
         wide.init(jax.random.key(0), ent, mask, sv, gv)
 
 
-def test_masked_slots_cannot_be_targeted(built):
-    """A padded slot must be unreachable, not merely unlikely."""
-    p, v, (ent, _, sv, gv), cfg = built
-    mask = np.zeros((3, cfg.n_slots), bool)
-    mask[:, 5:] = True
-    out = p.apply(v, ent, jnp.asarray(mask), sv, gv)
-    probs = jax.nn.softmax(out.target, axis=-1)
-    assert float(np.asarray(probs)[:, 5:].max()) < 1e-12
-
-
 def test_padded_slots_do_not_change_the_output(built):
     """An empty slot is all-zero, and a zero row is NOT the same as absent --
     it still moves an unmasked mean. This is what `key_padding_mask` is for."""
@@ -88,18 +78,12 @@ def test_padded_slots_do_not_change_the_output(built):
     ent2[0, 4:] = rng.normal(size=ent2[0, 4:].shape)
     b = p.apply(v, jnp.asarray(ent2), jnp.asarray(mask), sv[:1], gv[:1])
     for x, y in ((a.button, b.button), (a.screen_x, b.screen_x),
-                 (a.value, b.value)):
+                 (a.screen_y, b.screen_y), (a.value, b.value)):
         np.testing.assert_allclose(np.asarray(x), np.asarray(y), atol=1e-5)
 
 
-def test_the_target_head_is_a_pointer_not_a_classifier(built):
-    """`softmax(FC(h) . tokens^T)`: permutation-equivariant within a block.
-
-    Permuting two valid slots must permute their logits and leave the others
-    alone. A fixed 32-way classifier would not do this, and the property is why
-    `LAST_HIT_SORT_K` can be 0 -- the head finds the weak minion instead of
-    learning that it lives at index 13.
-    """
+def test_entity_permutation_preserves_screen_policy(built):
+    """Slot identity cannot act as an implicit target selector."""
     p, v, (_, _, sv, gv), cfg = built
     rng = np.random.default_rng(1)
     ent = rng.normal(size=(1, cfg.n_slots, cfg.entity_dim)).astype(np.float32)
@@ -108,12 +92,11 @@ def test_the_target_head_is_a_pointer_not_a_classifier(built):
     swapped = ent.copy()
     swapped[0, [2, 7]] = swapped[0, [7, 2]]
     out = p.apply(v, jnp.asarray(swapped), jnp.asarray(mask), sv[:1], gv[:1])
-    t0 = np.asarray(base.target)[0]
-    t1 = np.asarray(out.target)[0]
-    assert t1[2] == pytest.approx(t0[7], abs=1e-4)
-    assert t1[7] == pytest.approx(t0[2], abs=1e-4)
-    others = [i for i in range(cfg.n_slots) if i not in (2, 7)]
-    np.testing.assert_allclose(t1[others], t0[others], atol=1e-4)
+    for a, b in zip(base, out):
+        np.testing.assert_allclose(a, b, atol=1e-4)
+    names = [jax.tree_util.keystr(path) for path, _ in
+             jax.tree_util.tree_flatten_with_path(v)[0]]
+    assert not any("target" in name for name in names)
 
 
 def test_it_jits_and_vmaps(built):
@@ -134,8 +117,8 @@ def test_flattened_batch_preserves_policy_distribution(built):
         delta = np.abs(np.asarray(a) - np.asarray(b))
         assert float(delta.max()) < 2e-5
     # Action heads are the behavioural surface.  Check their distributions,
-    # including the masked target pointer, rather than only raw logit scale.
-    for a, b in zip(ordinary[:4], flat[:4]):
+    # rather than only raw logit scale.
+    for a, b in zip(ordinary[:3], flat[:3]):
         pa = np.asarray(jax.nn.softmax(a, axis=-1))
         pb = np.asarray(jax.nn.softmax(b, axis=-1))
         kl = np.sum(pa * (np.log(np.maximum(pa, 1e-30))
@@ -152,22 +135,7 @@ def test_parameter_count_is_in_the_right_ballpark(built):
 
 
 def test_each_head_starts_uniform_over_its_OWN_support(built):
-    """Exploration should start unbiased -- per head, against what that head
-    can actually reach.
-
-    Two versions of this test were wrong before this one:
-
-    1. fed all-zero observations, where the trunk output is small and even a
-       badly-scaled head looks uniform. It passed while the policy was starting
-       25% peaked on real inputs.
-    2. compared the total against `MAX_FACTORED_ENTROPY` (14.099). That is a
-       ceiling, not an achievable value: the target head is masked to the
-       *visible* slots, and at episode start only four units exist, so it
-       contributes **zero** entropy while the other three heads are exactly
-       uniform. 10.63 was the right answer, not a failure.
-
-    So: check each head against `ln(support)`.
-    """
+    """Real observations should start each head near ln(its support)."""
     import numpy as _np
 
     from lanerl_jax.obs.builder import build_observation
@@ -192,24 +160,11 @@ def test_each_head_starts_uniform_over_its_OWN_support(built):
         assert h == pytest.approx(float(_np.log(support)), abs=0.01), (
             f"{name}: {h:.4f} vs uniform {_np.log(support):.4f}")
 
-    n_visible = int((~_np.asarray(ob.entity_pad_mask)).sum())
-    h_target = float(factored_entropy([out.target])[0])
-    assert h_target == pytest.approx(float(_np.log(max(n_visible, 1))), abs=0.01)
 
 
-def test_masked_target_logits_do_not_overflow_float32(built):
-    """The mask sentinel is -1e9, not -1e30.
-
-    The softmax is insensitive to the magnitude -- it subtracts the max -- but
-    -1e30 squared is 1e60, which overflows float32, so any variance or norm
-    taken over these logits becomes inf. That is the kind of thing that shows
-    up as a NaN gradient three modules away.
-    """
-    import numpy as _np
-
+def test_fully_padded_observation_has_finite_outputs(built):
+    """An empty visible entity set must not cause attention/gradient NaNs."""
     p, v, (ent, _, sv, gv), cfg = built
-    mask = _np.zeros((3, cfg.n_slots), bool)
-    mask[:, 4:] = True
-    out = p.apply(v, ent, jnp.asarray(mask), sv, gv)
-    t = _np.asarray(out.target, dtype=_np.float32)
-    assert _np.isfinite((t.astype(_np.float64) ** 2).sum())
+    out = p.apply(v, ent, jnp.ones((3, cfg.n_slots), bool), sv, gv)
+    for logits in out:
+        assert np.isfinite(np.asarray(logits)).all()

@@ -154,3 +154,32 @@ def test_endpoint_move_replay_uses_the_production_route_inputs(monkeypatch):
         state, [], endpoint, {}, jnp.zeros((1, 2)),
         endpoint_orders=orders, route_table=route_table, terrain=terrain)
     assert seen == {"route_table": route_table, "terrain": terrain}
+
+
+def test_ground_click_replay_preserves_disengagement_and_legacy_move():
+    from lanerl_jax.parity.policy_divergence import _for_sim, ReplayWireDriver
+
+    click = {"t": "click", "button": "attack_move", "x": 12.5, "y": 30.0}
+    record = {"kind": int(OrderKind.MOVE), "target": -1, "clear_target": True}
+    converted = _for_sim(click, record)
+    orders = decision_to_orders(RecordedDecision(100, converted,
+        {"t": "move", "x": 12.5, "y": 30.0}), {})
+    np.testing.assert_array_equal(orders.clear_target, [True, False])
+    np.testing.assert_array_equal(orders.kind, [OrderKind.MOVE, OrderKind.MOVE])
+    from types import SimpleNamespace
+    from lanerl_jax.parity.policy_divergence import _decision_orders
+    log = SimpleNamespace(blue=[click], red=[{"t": "noop"}],
+                          blue_sim=[record], red_sim=[None], t_ms=[100])
+    ranks = SimpleNamespace(slot_table=lambda *args: {})
+    replayed, missing, mismatch = _decision_orders(log, 0, ranks,
+        {"spawn_seq": [], "alive": [], "kind": []})
+    np.testing.assert_array_equal(replayed.clear_target, [True, False])
+    assert missing == [] and mismatch == 0
+    raw_move = decision_to_orders(RecordedDecision(100,
+        {**click, "button": "move"}, {"t": "noop"}), {})
+    assert bool(raw_move.clear_target[0])
+    # Wire replay never replaces coordinates by a recorded entity pointer.
+    replay = object.__new__(ReplayWireDriver)
+    assert replay._map(click) == click
+    with pytest.raises(ActionReplayError, match="recorded semantic"):
+        decision_to_orders(RecordedDecision(100, click, {"t": "noop"}), {})

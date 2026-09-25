@@ -1,0 +1,132 @@
+diff --git a/GameServerLib/Lanerl/LanerlControl.cs b/GameServerLib/Lanerl/LanerlControl.cs
+index 23441eee..1264ba42 100644
+--- a/GameServerLib/Lanerl/LanerlControl.cs
++++ b/GameServerLib/Lanerl/LanerlControl.cs
+@@ -346,6 +346,50 @@ namespace LeagueSandbox.GameServer.Lanerl
+         {
+             switch (a.Kind)
+             {
++                case LanerlOrderKind.Click:
++                {
++                    // Ground-plane collision circles are the shared simulator /
++                    // server cursor footprint; visual mesh hitboxes are not modeled.
++                    AttackableUnit hit = null;
++                    float best = float.PositiveInfinity;
++                    var point = new Vector2(a.X, a.Y);
++                    foreach (var kv in game.ObjectManager.GetObjects())
++                    {
++                        if (!(kv.Value is AttackableUnit unit) || unit == champ || unit.IsDead
++                            || !unit.IsVisibleByTeam(champ.Team)) continue;
++                        float d2 = Vector2.DistanceSquared(point, unit.Position);
++                        if (d2 > unit.CollisionRadius * unit.CollisionRadius) continue;
++                        if (d2 < best || (d2 == best && (hit == null || unit.NetId < hit.NetId)))
++                        {
++                            hit = unit;
++                            best = d2;
++                        }
++                    }
++                    // Allied footprints also participate: clicking an ally must
++                    // not select an enemy hidden behind its nearer footprint.
++                    var hostile = hit != null && hit.Team != champ.Team ? hit : null;
++                    if (a.Button == "attack_move" || a.Button == "move")
++                    {
++                        if (hostile != null && a.Button == "attack_move") champ.SetTargetUnit(hostile, true);
++                        else
++                        {
++                            // An explicit ground click disengages the held target.
++                            // Legacy diagnostic Move retains historical semantics.
++                            champ.SetTargetUnit(null, true);
++                            Execute(game, champ, new LanerlOrder {
++                                Kind = LanerlOrderKind.Move, X = a.X, Y = a.Y, HasPosition = true });
++                        }
++                    }
++                    else
++                    {
++                        byte slot = (byte)(a.Button == "q" ? 0 : a.Button == "w" ? 1 : a.Button == "e" ? 2 : 3);
++                        Execute(game, champ, new LanerlOrder {
++                            Kind = LanerlOrderKind.Cast, Slot = slot, HasSlot = true,
++                            X = a.X, Y = a.Y, HasPosition = true,
++                            TargetId = hostile?.NetId ?? 0, HasTarget = hostile != null });
++                    }
++                    break;
++                }
+                 case LanerlOrderKind.Move:
+                 {
+                     var goal = new Vector2(a.X, a.Y);
+diff --git a/GameServerLib/Lanerl/LanerlWire.cs b/GameServerLib/Lanerl/LanerlWire.cs
+index 2e8e39a3..c26c84a8 100644
+--- a/GameServerLib/Lanerl/LanerlWire.cs
++++ b/GameServerLib/Lanerl/LanerlWire.cs
+@@ -15,7 +15,8 @@ namespace LeagueSandbox.GameServer.Lanerl
+         Attack,
+         Cast,
+         Level,
+-        Recall
++        Recall,
++        Click
+     }
+ 
+     /// <summary>
+@@ -29,6 +30,7 @@ namespace LeagueSandbox.GameServer.Lanerl
+     public sealed class LanerlOrder
+     {
+         public LanerlOrderKind Kind;
++        public string Button;
+ 
+         /// <summary>Move goal, or an explicit cast position. Only meaningful when HasPosition.</summary>
+         public float X;
+@@ -272,6 +274,29 @@ namespace LeagueSandbox.GameServer.Lanerl
+                     return ord;
+                 }
+ 
++                case "click":
++                {
++                    // Production policy interface: no pointer/NetId shortcut.
++                    if (o["id"] != null || o["target"] != null)
++                    {
++                        errs.Add($"{where}: click cannot contain an entity target");
++                        return null;
++                    }
++                    var button = o["button"]?.Type == JTokenType.String ? (string)o["button"] : null;
++                    if (button != "move" && button != "attack_move" && button != "q" && button != "w" && button != "e" && button != "r")
++                    {
++                        errs.Add($"{where}: click needs button move/attack_move/q/w/e/r");
++                        return null;
++                    }
++                    bool cx = TryFloat(o, "x", where, errs, true, out var x);
++                    bool cy = TryFloat(o, "y", where, errs, true, out var y);
++                    if (!cx || !cy) return null;
++                    ord.Kind = LanerlOrderKind.Click;
++                    ord.Button = button;
++                    ord.X = x; ord.Y = y; ord.HasPosition = true;
++                    return ord;
++                }
++
+                 case "attack":
+                 {
+                     ord.Kind = LanerlOrderKind.Attack;
+diff --git a/GameServerLibTests/Tests/Lanerl/TestLanerlWire.cs b/GameServerLibTests/Tests/Lanerl/TestLanerlWire.cs
+index 995e5b38..68ce527d 100644
+--- a/GameServerLibTests/Tests/Lanerl/TestLanerlWire.cs
++++ b/GameServerLibTests/Tests/Lanerl/TestLanerlWire.cs
+@@ -45,6 +45,20 @@ namespace GameServerLibTests.Tests.Lanerl
+         // the six order types, in the exact shape lanerl_rl/env.py emits
+         // ------------------------------------------------------------------
+ 
++        [TestMethod]
++        public void CoordinateClick_CarriesButtonAndPositionOnly()
++        {
++            var r = Ok("{\"blue\":{\"t\":\"click\",\"button\":\"attack_move\",\"x\":123.5,\"y\":456}}");
++            Assert.AreEqual(LanerlOrderKind.Click, r.Blue.Kind);
++            Assert.AreEqual("attack_move", r.Blue.Button);
++            Assert.IsTrue(r.Blue.HasPosition);
++            Assert.IsFalse(r.Blue.HasTarget);
++            Assert.AreEqual(123.5f, r.Blue.X);
++            Assert.IsNull(Bad("{\"blue\":{\"t\":\"click\",\"button\":\"r\",\"x\":1,\"y\":2,\"id\":42}}").Blue);
++            Assert.IsNull(Bad("{\"blue\":{\"t\":\"click\",\"button\":\"r\",\"x\":1}}").Blue);
++            Assert.IsNull(Bad("{\"blue\":{\"t\":\"click\",\"button\":\"bad\",\"x\":1,\"y\":2}}").Blue);
++        }
++
+         [TestMethod]
+         public void Noop_BothSides()
+         {

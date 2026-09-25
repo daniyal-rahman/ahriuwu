@@ -3,8 +3,8 @@
 Three properties the scripted last-hitter (`train/scripted_policy.py`) relies
 on, and so does every trained policy:
 
-(a) every valid target slot decodes to an ATTACK on exactly the unit whose
-    features the observation wrote into that slot;
+(a) screen clicks resolve to living units under the cursor in both frames,
+    independently of observation slot ordering;
 (b) a MOVE on a screen cell whose raw decode is standable (the rest are
     snapped to the nearest standable cell, `PATH-010`) decodes to a world
     point that projects back into the same cell, seen from the agent's own (red: mirrored) frame;
@@ -12,10 +12,9 @@ on, and so does every trained policy:
     position, own AD -- equal the underlying ``LaneState`` after the builder's
     documented normalisation, and own AD is the damage a swing really deals.
 
-Each check is a function returning its failures, so every test also shows the
-check FAILS on a deliberately broken interface: slot table off by one, blue's
-slot table used for red, red decoded without its mirror, red's features built
-in blue's frame.
+Round-trip and feature checks also exercise deliberately broken mappings:
+shifted cells, red decoded without its mirror, and red features built in
+blue's frame.
 """
 from __future__ import annotations
 
@@ -87,90 +86,50 @@ def _obs(state, params, frames=FRAMES):
     return [build_observation(state, i, frames[i], params=params) for i in (0, 1)]
 
 
-def _expected_row(state, me, u, frame):
-    """The 16 features of unit ``u`` for observer ``me``, rebuilt from LaneState."""
-    dx = state.x[u] - state.x[me]
-    dy = state.y[u] - state.y[me]
-    ds, dn = delta_to_lane(frame, dx, dy)
-    hp = np.round(float(state.hp[u] / state.max_hp[u]) * HP_BAR_STEPS) / HP_BAR_STEPS
-    k = int(state.kind[u])
-    t = int(state.team[u])
-    mine = int(state.team[me])
-    row = np.zeros(16, np.float32)
-    row[0] = 1
-    row[1], row[2], row[3] = float(ds) / NORM_DIST, float(dn) / NORM_DIST, hp
-    row[4:10] = [k == Kind.CHAMPION, k == Kind.LANE_MINION, k == Kind.TURRET, 0, 0, 0]
-    row[10:13] = [t == mine, t != mine, t == Team.NEUTRAL]
-    if k == Kind.LANE_MINION:
-        mt = PROFILES[int(state.model[u])][1]
-        row[13:16] = [mt == MinionType.MELEE, mt == MinionType.CASTER,
-                      mt == MinionType.CANNON]
-    return row
-
-
 # --------------------------------------------------------------------------
-# (a) slot -> unit
+# (a) screen click -> unit, independent of observation slot ordering
 # --------------------------------------------------------------------------
-def _slot_failures(state, obs, slot_tables):
-    """For every valid slot of each champion, press attack_move on it and check
-    the order is ATTACK on the unit whose LaneState reproduces that row."""
-    fails = []
-    for k in range(C.N_SLOTS):
-        valid = [bool(o.entities[k, 0] > 0.5) for o in obs]
-        action = (jnp.asarray([AM, AM]), jnp.asarray([48, 48]),
-                  jnp.asarray([27, 27]), jnp.asarray([k, k]))
-        orders = orders_from(action, state, jnp.stack(slot_tables), BLUE_FRAME)
-        for me in (0, 1):
-            if not valid[me]:
-                continue
-            if int(orders.kind[me]) != OrderKind.ATTACK:
-                fails.append((me, k, "not ATTACK"))
-                continue
-            u = int(orders.target[me])
-            row = np.asarray(obs[me].entities[k])
-            want = _expected_row(state, me, u, FRAMES[me])
-            if not np.allclose(row, want, atol=1e-5):
-                fails.append((me, k, u))
-    return fails
+@pytest.mark.parametrize("me", [0, 1])
+def test_a_click_hits_visible_enemy_in_each_screen_frame(me):
+    state, params = _state(turrets=False)
+    # Keep only the two champions and put the enemy exactly under a valid
+    # screen cell. No slot table is needed to resolve a world-space hit.
+    state = state.replace(alive=state.alive.at[2:].set(False))
+    action = (jnp.asarray([AM, AM]), jnp.asarray([58, 58]), jnp.asarray([25, 25]))
+    empty = jnp.full((2, C.N_SLOTS), -1, jnp.int32)
+    click = orders_from(action, state, empty, BLUE_FRAME, snap_moves=False)
+    enemy = 1 - me
+    state = state.replace(x=state.x.at[enemy].set(click.x[me]),
+                          y=state.y.at[enemy].set(click.y[me]))
+    orders = orders_from(action, state, empty, BLUE_FRAME)
+    assert int(orders.kind[me]) == OrderKind.ATTACK
+    assert int(orders.target[me]) == enemy
+    # A bogus pointer table cannot change which physical unit is clicked.
+    wrong = jnp.full((2, C.N_SLOTS), 57, jnp.int32)
+    again = orders_from(action, state, wrong, BLUE_FRAME)
+    for a, b in zip(orders, again):
+        np.testing.assert_array_equal(a, b)
+    # Moving the click away must miss the unit, even with a table naming it.
+    missed = orders_from((action[0], jnp.asarray([38, 38]), action[2]),
+                         state, jnp.full_like(empty, enemy), BLUE_FRAME)
+    assert int(missed.kind[me]) == OrderKind.ATTACK_MOVE
+    assert int(missed.target[me]) == -1
 
 
-def test_a_every_valid_slot_attacks_the_unit_in_that_slot_both_frames():
-    state, params = _state()
-    obs = _obs(state, params)
-    n_valid = [int((o.entities[:, 0] > 0.5).sum()) for o in obs]
-    n_enemy_min = [int((o.entities[slice(*SLOT_ENEMY_MINION), 0] > 0.5).sum())
-                   for o in obs]
-    assert min(n_enemy_min) >= 5 and min(n_valid) >= 10, (n_valid, n_enemy_min)
-    assert _slot_failures(state, obs, [o.slot_unit for o in obs]) == []
-
-
-def test_a_detects_slot_table_off_by_one():
-    state, params = _state()
-    obs = _obs(state, params)
-    shifted = [jnp.roll(o.slot_unit, 1) for o in obs]
-    assert len(_slot_failures(state, obs, shifted)) > 10
-
-
-def test_a_detects_red_decoded_with_blue_slot_table():
-    state, params = _state()
-    obs = _obs(state, params)
-    swapped = [obs[0].slot_unit, obs[0].slot_unit]      # red reads blue's table
-    fails = _slot_failures(state, obs, swapped)
-    assert any(me == 1 for me, *_ in fails)
-
-
-def test_a_invalid_slot_is_not_an_attack():
-    state, params = _state()
-    obs = _obs(state, params)
-    for me in (0, 1):
-        empty = np.where(np.asarray(obs[me].entity_pad_mask))[0]
-        assert len(empty)
-        k = int(empty[0])
-        action = (jnp.asarray([AM, AM]), jnp.asarray([48, 48]),
-                  jnp.asarray([27, 27]), jnp.asarray([k, k]))
-        orders = orders_from(action, state,
-                             jnp.stack([o.slot_unit for o in obs]), BLUE_FRAME)
-        assert int(orders.kind[me]) == OrderKind.MOVE
+@pytest.mark.parametrize("me", [0, 1])
+def test_a_dead_unit_under_click_does_not_resolve_to_attack(me):
+    state, _ = _state(turrets=False)
+    state = state.replace(alive=state.alive.at[2:].set(False))
+    action = (jnp.asarray([AM, AM]), jnp.asarray([58, 58]), jnp.asarray([25, 25]))
+    slots = jnp.full((2, C.N_SLOTS), 1 - me, jnp.int32)
+    click = orders_from(action, state, slots, BLUE_FRAME, snap_moves=False)
+    enemy = 1 - me
+    state = state.replace(x=state.x.at[enemy].set(click.x[me]),
+                          y=state.y.at[enemy].set(click.y[me]),
+                          alive=state.alive.at[enemy].set(False))
+    orders = orders_from(action, state, slots, BLUE_FRAME)
+    assert int(orders.kind[me]) == OrderKind.ATTACK_MOVE
+    assert int(orders.target[me]) == -1
 
 
 # --------------------------------------------------------------------------
@@ -208,7 +167,7 @@ def _roundtrip_failures(state, decode_state=None, cell_shift=0):
     slots = jnp.full((2, C.N_SLOTS), -1, jnp.int32)
     for sx, sy in zip(xs, ys):
         action = (jnp.asarray([MOVE, MOVE]), jnp.asarray([sx + cell_shift] * 2),
-                  jnp.asarray([sy, sy]), jnp.asarray([0, 0]))
+                  jnp.asarray([sy, sy]))
         o = orders_from(action, decode_state, slots, BLUE_FRAME)
         raw = orders_from(action, decode_state, slots, BLUE_FRAME,
                           snap_moves=False)
@@ -266,7 +225,7 @@ def test_b_scripted_click_on_a_minion_lands_on_it():
                 continue
             sx, sy = SP.cell_for_offset(ds, dn)
             action = (jnp.asarray([MOVE, MOVE]), jnp.asarray([sx, sx]),
-                      jnp.asarray([sy, sy]), jnp.asarray([0, 0]))
+                      jnp.asarray([sy, sy]))
             ords = orders_from(action, state, jnp.stack([q.slot_unit for q in obs]),
                                BLUE_FRAME)
             u = int(o.slot_unit[k])
@@ -369,8 +328,9 @@ def test_c_obs_ad_is_the_damage_a_swing_deals(mtype, level):
     tab = SP.static_tables()
     sub = np.asarray(obs[0].entities[k, 13:16])
     want = float(obs[0].self_vec[C.S_AD]) * NORM_AD * 100.0 / (100.0 + float(sub @ tab["armor"]))
-    action = (jnp.asarray([AM, 0]), jnp.asarray([48, 0]), jnp.asarray([27, 0]),
-              jnp.asarray([k, 0]))
+    sx, sy = SP.cell_for_offset(obs[0].entities[k, 1] * NORM_DIST,
+                                obs[0].entities[k, 2] * NORM_DIST)
+    action = (jnp.asarray([AM, 0]), jnp.asarray([sx, 0]), jnp.asarray([sy, 0]))
     orders = orders_from(action, s, jnp.stack([o.slot_unit for o in obs]), BLUE_FRAME)
     hp0 = float(s.hp[2])
     drop = 0.0

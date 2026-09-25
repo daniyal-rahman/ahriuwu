@@ -1,4 +1,7 @@
+"""The model clicks coordinates; entity identity is resolved by the environment."""
+import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from lanerl_jax.obs.frame import make_lane_frame
 from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane
@@ -9,132 +12,92 @@ from lanerl_rl import constants as C
 from lanerl_rl.projection import screen_to_world_centred
 
 
-BLUE_NEXUS = (1131.8, 1426.3)
-RED_NEXUS = (12760.9, 13026.1)
-
-
 def _frames():
-    blue = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
-                           TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
-    red = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
-                          TOP_OUTER_TURRET[Team.BLUE], RED_NEXUS)
-    return blue, red
+    return (make_lane_frame(TOP_OUTER_TURRET[0], TOP_OUTER_TURRET[1], (1131.8, 1426.3)),
+            make_lane_frame(TOP_OUTER_TURRET[1], TOP_OUTER_TURRET[0], (12760.9, 13026.1)))
 
 
-def test_jax_decoder_matches_reference_perspective_projection_for_both_sides():
+def _action(button, x=54, y=27):
+    return tuple(jnp.array([v, v], jnp.int32) for v in (C.BUTTON_INDEX[button], x, y))
+
+
+def test_decoder_matches_reference_projection_for_both_sides():
     state = init_lane()
     blue, red = _frames()
-    bx, by = 79, 11
-    action = (np.asarray([C.BUTTON_INDEX["move"]] * 2, np.int32),
-              np.asarray([bx] * 2, np.int32),
-              np.asarray([by] * 2, np.int32),
-              np.asarray([0, 0], np.int32))
-    slots = np.full((2, C.N_SLOTS), -1, np.int32)
-    orders = orders_from(action, state, slots, blue)
-
-    sx, sy = float(C.SCREEN_X_VALUES[bx]), float(C.SCREEN_Y_VALUES[by])
-    ds, dn = screen_to_world_centred(0.0, 0.0, sx, sy)
+    action = _action('move', 79, 11)
+    orders = orders_from(action, state, None, blue, snap_moves=False)
+    ds, dn = screen_to_world_centred(0., 0., (79.5)/96, (11.5)/54)
     expected = []
     for i, frame in enumerate((blue, red)):
-        dx = ds * float(frame.axis[0]) + dn * float(frame.normal[0])
-        dy = ds * float(frame.axis[1]) + dn * float(frame.normal[1])
-        expected.append((float(state.x[i]) + dx, float(state.y[i]) + dy))
-    np.testing.assert_allclose(np.asarray([orders.x, orders.y]).T,
-                               np.asarray(expected), rtol=0, atol=2e-3)
+        expected.append([float(state.x[i]) + ds * float(frame.axis[0]) + dn * float(frame.normal[0]),
+                         float(state.y[i]) + ds * float(frame.axis[1]) + dn * float(frame.normal[1])])
+    np.testing.assert_allclose(np.array([orders.x, orders.y]).T, expected, atol=2e-3)
 
 
-def test_screen_grid_is_not_the_old_plus_minus_1800_world_square():
+def test_cursor_hits_entity_without_any_slot_pointer_and_miss_moves():
     state = init_lane()
-    blue, _ = _frames()
-    slots = np.full((2, C.N_SLOTS), -1, np.int32)
-    action = (np.asarray([C.BUTTON_INDEX["move"]] * 2, np.int32),
-              np.asarray([C.N_SCREEN_X - 1] * 2, np.int32),
-              np.asarray([0] * 2, np.int32),
-              np.asarray([0, 0], np.int32))
-    orders = orders_from(action, state, slots, blue)
-    dx = float(orders.x[0] - state.x[0])
-    dy = float(orders.y[0] - state.y[0])
-    assert not np.isclose(abs(dx), C.SCREEN_RADIUS)
-    assert not np.isclose(abs(dy), C.SCREEN_RADIUS)
-
-
-def test_minimap_move_cell_is_suppressed_but_targeted_attack_is_not():
-    state = init_lane()
-    blue, _ = _frames()
-    slots = np.full((2, C.N_SLOTS), -1, np.int32)
-    slots[1, 0] = 0
-    action = (np.asarray([C.BUTTON_INDEX["move"],
-                          C.BUTTON_INDEX["attack_move"]], np.int32),
-              np.asarray([C.N_SCREEN_X - 1] * 2, np.int32),
-              np.asarray([C.N_SCREEN_Y - 1] * 2, np.int32),
-              np.asarray([0, 0], np.int32))
-    orders = orders_from(action, state, slots, blue)
-    assert int(orders.kind[0]) == OrderKind.NOOP
-    assert int(orders.kind[1]) == OrderKind.ATTACK
-
-
-def test_head_usage_matches_what_orders_from_puts_on_the_wire():
-    """`ppo.head_usage` (`PPO-14`) must say exactly which heads the decoder
-    read for each SAMPLE, from the observation's pad mask -- the same
-    observation that produced ``slot_unit``.
-
-    * target used  <=>  the order is ATTACK or CAST_R on a real unit;
-    * screen used  <=>  a move/attack_move that did not become an ATTACK
-      (a Move, or the NOOP a minimap click is suppressed to -- the screen
-      point decided that too);
-    * and re-rolling the screen point leaves every order whose screen head
-      was NOT used unchanged.
-
-    Random slots, including empty ones, so attack_move's fallback MOVE and r
-    on an empty slot are both exercised.
-    """
-    import jax.numpy as jnp
-
-    from lanerl_jax.obs.builder import build_observation
+    frame = _frames()[0]
+    state = state.replace(x=state.x.at[0].set(1500.), y=state.y.at[0].set(12500.),
+                          alive=jnp.zeros_like(state.alive).at[:2].set(True))
+    cursor = orders_from(_action('move'), state, None, frame, snap_moves=False)
+    state = state.replace(x=state.x.at[1].set(cursor.x[0]), y=state.y.at[1].set(cursor.y[0]))
+    hit = orders_from(_action('attack_move'), state, None, frame, snap_moves=False)
+    assert int(hit.kind[0]) == OrderKind.ATTACK and int(hit.target[0]) == 1
+    right_click = orders_from(_action('move'), state, None, frame, snap_moves=False)
+    assert int(right_click.kind[0]) == OrderKind.ATTACK and int(right_click.target[0]) == 1
+    # Changing the coordinates, not a pointer, changes what is hit.
+    miss = orders_from(_action('attack_move', 5, 5), state, None, frame, snap_moves=False)
+    assert int(miss.kind[0]) == OrderKind.ATTACK_MOVE and int(miss.target[0]) == -1
+    from lanerl_jax.sim.orders import apply_orders
     from lanerl_jax.sim.init import lane_params
-    from lanerl_jax.train.ppo import head_usage
+    from lanerl_jax.sim.state import MoveOrder
+    ordered = apply_orders(state, miss, lane_params())
+    assert int(ordered.move_order[0]) == MoveOrder.ATTACK_MOVE
+    # Injecting an observation-slot map cannot redirect the cursor.
+    poisoned_slots = jnp.full((2, 32), 43)
+    unchanged = orders_from(_action('attack_move'), state, poisoned_slots, frame, snap_moves=False)
+    np.testing.assert_array_equal(unchanged.target, hit.target)
+    dead = state.replace(alive=state.alive.at[1].set(False))
+    assert int(orders_from(_action('attack_move'), dead, None, frame).target[0]) == -1
 
-    state = init_lane()
-    blue, red = _frames()
-    params = lane_params()
-    obs = [build_observation(state, i, f, params=params)
-           for i, f in enumerate((blue, red))]
-    slot_unit = jnp.stack([o.slot_unit for o in obs])
-    pad = jnp.stack([o.entity_pad_mask for o in obs])
-    np.testing.assert_array_equal(np.asarray(pad), np.asarray(slot_unit) < 0)
-    assert np.asarray(pad).any() and (~np.asarray(pad)).any()
 
-    rng = np.random.default_rng(0)
-    B = C.BUTTON_INDEX
-    valid_slots = [np.flatnonzero(~np.asarray(p)) for p in pad]
-    seen = set()
-    for _ in range(64):
-        # half the slots drawn from the row's valid ones, half uniformly
-        # (mostly empty), so both attack_move outcomes occur
-        t = np.asarray([rng.choice(v) if rng.random() < 0.5
-                        else rng.integers(0, C.N_SLOTS) for v in valid_slots],
-                       np.int32)
-        a = (np.asarray(rng.integers(0, len(C.BUTTONS), 2), np.int32),
-             np.asarray(rng.integers(0, C.N_SCREEN_X, 2), np.int32),
-             np.asarray(rng.integers(0, C.N_SCREEN_Y, 2), np.int32),
-             t)
-        o = orders_from(a, state, slot_unit, blue)
-        us, ut = (np.asarray(u) for u in head_usage(
-            jnp.asarray(a[0]), jnp.asarray(a[3]), ~pad))
-        kind, target = np.asarray(o.kind), np.asarray(o.target)
-        b = a[0]
-        want_t = (np.isin(kind, [OrderKind.ATTACK, OrderKind.CAST_R])
-                  & (target >= 0))
-        want_s = np.isin(b, [B["move"], B["attack_move"]]) & (
-            kind != OrderKind.ATTACK)
-        np.testing.assert_array_equal(ut, want_t.astype(np.float32))
-        np.testing.assert_array_equal(us, want_s.astype(np.float32))
+def test_far_tower_cannot_be_selected_via_slot_table():
+    s = init_lane()
+    out = orders_from(_action('attack_move'), s, jnp.full((2, 32), 43), _frames()[0])
+    assert np.all(np.asarray(out.target) == -1)
 
-        a2 = (a[0], (a[1] + 37) % C.N_SCREEN_X, (a[2] + 23) % C.N_SCREEN_Y, a[3])
-        o2 = orders_from(a2, state, slot_unit, blue)
-        same = ((np.asarray(o2.kind) == kind)
-                & (np.asarray(o2.target) == target))
-        assert same[us == 0].all(), "screen changed an order it does not reach"
-        seen |= {(int(bb), float(s), float(t)) for bb, s, t in zip(b, us, ut)}
-    am, r = B["attack_move"], B["r"]
-    assert {(am, 0.0, 1.0), (am, 1.0, 0.0), (r, 0.0, 1.0), (r, 0.0, 0.0)} <= seen
+
+def test_minimap_suppresses_attack_and_move_clicks():
+    for button in ('move', 'attack_move', 'r'):
+        out = orders_from(_action(button, 95, 53), init_lane(), None, _frames()[0])
+        assert np.all(np.asarray(out.kind) == OrderKind.NOOP)
+
+
+def test_pointer_actions_are_rejected():
+    with pytest.raises(ValueError, match='entity pointers are not accepted'):
+        orders_from(_action('attack_move') + (jnp.zeros(2, jnp.int32),), init_lane(), None)
+
+
+def test_three_head_likelihood_tracks_coordinate_usage():
+    from lanerl_jax.train.ppo import factored_log_prob, screen_head_usage
+    buttons = jnp.arange(len(C.BUTTONS))
+    used, target = screen_head_usage(buttons)
+    np.testing.assert_array_equal(used, np.isin(np.arange(len(C.BUTTONS)),
+        [C.BUTTON_INDEX[b] for b in ('move', 'attack_move', 'r')]))
+    assert not np.asarray(target).any()
+    logits = (jnp.zeros((8, 8)), jnp.zeros((8, 96)), jnp.zeros((8, 54)))
+    actions = (buttons, jnp.zeros(8, jnp.int32), jnp.zeros(8, jnp.int32))
+    np.testing.assert_allclose(factored_log_prob(logits, actions),
+        -np.log(8) - np.asarray(used) * np.log(96 * 54), rtol=1e-6)
+
+
+def test_ground_click_cancels_held_chase_at_ingress():
+    from lanerl_jax.sim.orders import apply_orders
+    from lanerl_jax.sim.init import lane_params
+    state = init_lane().replace(target=init_lane().target.at[0].set(1))
+    order = orders_from(_action('move'), state, None, _frames()[0])
+    out = apply_orders(state, order, lane_params())
+    assert int(out.target[0]) == -1
+    # The historical low-level diagnostic order retains its old semantics.
+    legacy = apply_orders(state, order._replace(clear_target=None), lane_params())
+    assert int(legacy.target[0]) == 1

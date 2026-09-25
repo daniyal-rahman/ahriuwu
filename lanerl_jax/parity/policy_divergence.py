@@ -89,6 +89,7 @@ from typing import Dict, Iterator, List, Mapping, Optional, Tuple
 import numpy as np
 
 from .action_replay import RecordedDecision, decision_to_orders
+from ..sim.orders import OrderKind
 from .diff import LANE_KINDS, Tolerance, diff_snapshots
 from .trace import AIBlock, ChampionBlock, Entity, Snapshot, StatQ, parse_stream
 
@@ -695,9 +696,28 @@ def _tick_of(t_ms: float) -> int:
     return int(round(float(t_ms) / TICK_MS))
 
 
-def _for_sim(order: Mapping) -> Mapping:
-    """A wire order the sim can decode: `level` has no sim counterpart."""
-    return {"t": "noop"} if order.get("t") == "level" else order
+def _for_sim(order: Mapping, recorded: Mapping | None = None) -> Mapping:
+    """Preserve new click semantics; legacy wire orders retain their meaning.
+
+    Attack/R click logs need the diagnostic resolution captured at the action
+    boundary. This conversion is for frozen-command diagnostics, not policy
+    inference; ReplayWireDriver sends the original coordinate click untouched.
+    """
+    if order.get("t") == "level":
+        return {"t": "noop"}
+    if order.get("t") != "click" or recorded is None:
+        return order
+    kind = int(recorded["kind"])
+    if kind == OrderKind.MOVE:
+        return {"t": "move", "x": order["x"], "y": order["y"],
+                "clear_target": bool(recorded.get("clear_target", True))}
+    if kind == OrderKind.ATTACK:
+        return {"t": "attack", "id": int(recorded.get("target_netid", 0))}
+    for slot, cast in enumerate((OrderKind.CAST_Q, OrderKind.CAST_W, OrderKind.CAST_E, OrderKind.CAST_R)):
+        if kind == cast:
+            return {"t": "cast", "slot": slot, "x": order["x"], "y": order["y"],
+                    "id": int(recorded.get("target_netid", 0))}
+    return {"t": "noop"}
 
 
 def _decision_orders(log, k: int, ranks, f):
@@ -709,7 +729,7 @@ def _decision_orders(log, k: int, ranks, f):
     sides, unmapped, rank_mismatch = [], [], 0
     for side, wire, rec in (("blue", log.blue[k], log.blue_sim[k]),
                             ("red", log.red[k], log.red_sim[k])):
-        w = _for_sim(wire)
+        w = _for_sim(wire, rec)
         if w.get("t") == "attack":
             nid = int(w.get("id", 0))
             if rec and rec.get("target_spawn_seq") is not None \
@@ -1135,18 +1155,19 @@ class ReplayWireDriver:
 
 
 def _record(out: Path, *, tag: str, decisions: int, driver, server_dir,
-            config_path, port_base: int, extra_env: Optional[dict] = None) -> Path:
+            config_path, port_base: int, extra_env: Optional[dict] = None,
+            step_ticks: int = 2) -> Path:
     from .record import record_trace
     env = {"LANERL_AUTOBUY": "0", **(extra_env or {})}
     return Path(record_trace(out, decisions=decisions, port_base=port_base,
                              tag=tag, extra_env=env, server_dir=server_dir,
-                             config_path=config_path, driver=driver))
+                             config_path=config_path, driver=driver, step_ticks=step_ticks))
 
 
 def record_policy_run(checkpoint: str, out: Path, *, seconds: float,
                       red: str = "policy", deterministic: bool = False,
                       seed: int = 0, server_dir=None, config_path=None,
-                      port_base: int = 41000):
+                      port_base: int = 41000, setup_driver=None, step_ticks: int = 2):
     """(a): one server, the checkpoint driving it, dump + `PolicyActionLog`."""
     from lanerl_rl import constants as C
 
@@ -1158,10 +1179,14 @@ def record_policy_run(checkpoint: str, out: Path, *, seconds: float,
                                              "label": label,
                                              "server_dir": str(server_dir or ""),
                                              "config": str(config_path or "")})
-    decisions = int(round(seconds * C.DECISION_HZ))
-    log_path = _record(out, tag="policy", decisions=decisions, driver=pair,
+    if step_ticks < 1:
+        raise ValueError('step_ticks must be positive')
+    decisions = int(round(seconds * C.SERVER_TICK_HZ / step_ticks))
+    pair.log.meta['step_ticks'] = step_ticks
+    drive = pair if setup_driver is None else lambda obs, i: setup_driver(obs, i, pair)
+    log_path = _record(out, tag="policy", decisions=decisions, driver=drive,
                        server_dir=server_dir, config_path=config_path,
-                       port_base=port_base)
+                       port_base=port_base, step_ticks=step_ticks)
     pair.log.meta["server_log"] = str(log_path)
     pair.log.meta["driver_counts"] = pair.counts
     pair.log.save(out / "policy_policy_actions.json")

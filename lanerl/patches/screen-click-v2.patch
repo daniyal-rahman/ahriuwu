@@ -1,0 +1,42 @@
+--- a/GameServerLib/Lanerl/LanerlControl.cs
++++ b/GameServerLib/Lanerl/LanerlControl.cs
+@@ -370,15 +370,19 @@
+                     var hostile = hit != null && hit.Team != champ.Team ? hit : null;
+                     if (a.Button == "attack_move" || a.Button == "move")
+                     {
+-                        if (hostile != null && a.Button == "attack_move") champ.SetTargetUnit(hostile, true);
+-                        else
+-                        {
+-                            // An explicit ground click disengages the held target.
+-                            // Legacy diagnostic Move retains historical semantics.
+-                            champ.SetTargetUnit(null, true);
+-                            Execute(game, champ, new LanerlOrder {
+-                                Kind = LanerlOrderKind.Move, X = a.X, Y = a.Y, HasPosition = true });
+-                        }
++                        // Match HandleMove: right-click can target an enemy;
++                        // A-click on ground preserves AttackMove acquisition.
++                        var orderType = a.Button == "attack_move" ? OrderType.AttackMove
++                            : hostile != null ? OrderType.AttackTo : OrderType.MoveTo;
++                        List<Vector2> path = null;
++                        try { path = game.Map.PathingHandler.GetPath(champ.Position, point, champ.PathfindingRadius); }
++                        catch { }
++                        if (path == null || path.Count < 2) path = new List<Vector2> { champ.Position, point };
++                        else path[0] = champ.Position;
++                        champ.UpdateMoveOrder(orderType, true);
++                        champ.SetWaypoints(path);
++                        champ.SetTargetUnit(hostile, true);
++                        if (champ.SpellToCast != null) champ.SetSpellToCast(null, Vector2.Zero);
+                     }
+                     else
+                     {
+--- a/GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs
++++ b/GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs
+@@ -1367,7 +1367,7 @@
+                         {
+                             if (!(it.Value is AttackableUnit u) ||
+                                 u.IsDead ||
+-                                u.Team == Team ||
++                                u.Team == Team || !u.IsVisibleByTeam(Team) ||
+                                 Vector2.DistanceSquared(Position, u.Position) > range * range ||
+                                 !u.Status.HasFlag(StatusFlags.Targetable))
+                             {

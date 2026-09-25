@@ -51,6 +51,8 @@ testpaths = [
     "lanerl_jax/sim/tests",
     "lanerl_jax/obs/tests",
     "lanerl_jax/train/tests",
+    "lanerl_jax/data/tests",
+    "lanerl_jax/tests",
 ]
 pythonpath = ["src"]
 # `slow` was already used by lanerl_train/tests/test_state_hash_pairs.py while

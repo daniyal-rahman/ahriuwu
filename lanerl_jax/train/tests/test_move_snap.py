@@ -58,8 +58,7 @@ def _decode(blue, red, button, snap):
     slots = jnp.full((2, N_SLOTS), -1, jnp.int32)
 
     def one(a, b):
-        act = (jnp.full((2,), button), jnp.stack([a, a]), jnp.stack([b, b]),
-               jnp.zeros((2,), jnp.int32))
+        act = (jnp.full((2,), button), jnp.stack([a, a]), jnp.stack([b, b]))
         o = orders_from(act, st, slots, FB, snap_moves=snap)
         return o.kind, o.x, o.y
     k, x, y = jax.jit(jax.vmap(one))(sx, sy)
@@ -166,8 +165,7 @@ def test_d_orders_from_jits_under_vmap_over_envs():
     rng = np.random.default_rng(0)
     act = (jnp.full((n_env, 2), BUTTON_INDEX["move"]),
            jnp.asarray(rng.integers(0, N_SCREEN_X, (n_env, 2))),
-           jnp.asarray(rng.integers(0, N_SCREEN_Y, (n_env, 2))),
-           jnp.zeros((n_env, 2), jnp.int32))
+           jnp.asarray(rng.integers(0, N_SCREEN_Y, (n_env, 2))))
     slots = jnp.full((n_env, 2, N_SLOTS), -1, jnp.int32)
     f = jax.jit(jax.vmap(lambda a, s, su: orders_from(a, s, su, FB)))
     o = f(act, states, slots)

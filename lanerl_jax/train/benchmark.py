@@ -138,21 +138,20 @@ class BenchResult(NamedTuple):
         )
 
 
-def _decode(logits, state, slot_unit, key, frame=None):
+def _decode(logits, state, slot_unit, key, frame=None, *, vision=None):
     """Sample an action and turn it into champion orders.
 
     One key split per step, which is the real per-decision cost. The screen
     heads name a point in the calibrated champion-centred viewport.
     """
-    kb, kx, ky, kt = jax.random.split(key, 4)
+    kb, kx, ky = jax.random.split(key, 3)
     button = jax.random.categorical(kb, logits.button)
     sx = jax.random.categorical(kx, logits.screen_x)
     sy = jax.random.categorical(ky, logits.screen_y)
-    tgt = jax.random.categorical(kt, logits.target)
 
-    return orders_from((button, sx, sy, tgt), state, slot_unit, frame,
+    return orders_from((button, sx, sy), state, slot_unit, frame,
                        cfg_x=logits.screen_x.shape[-1],
-                       cfg_y=logits.screen_y.shape[-1])
+                       cfg_y=logits.screen_y.shape[-1], vision=vision)
 
 
 def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
@@ -183,19 +182,19 @@ def run_benchmark(n_envs: int, steps: int = 60, warmup: int = 3,
     base = init_lane() if initial_state is None else initial_state
     states = jax.tree.map(lambda a: jnp.broadcast_to(a, (n_envs,) + a.shape), base)
 
-    obs0 = build_observation(base, 0, frame, params=patch_params)
+    obs0 = build_observation(base, 0, frame, params=patch_params, vision=sim.vision)
     variables = policy.init(jax.random.key(seed), obs0.entities[None],
                             obs0.entity_pad_mask[None], obs0.self_vec[None],
                             obs0.global_vec[None])
 
     def observe_one(state):
         # both champions act; the policy is shared, which is the mirror setup
-        blue = build_observation(state, 0, frame, params=patch_params)
-        red = build_observation(state, 1, red_frame, params=patch_params)
+        blue = build_observation(state, 0, frame, params=patch_params, vision=sim.vision)
+        red = build_observation(state, 1, red_frame, params=patch_params, vision=sim.vision)
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), blue, red)
 
     def finish_one(state, obs, logits, key):
-        orders = _decode(logits, state, obs.slot_unit, key, frame)
+        orders = _decode(logits, state, obs.slot_unit, key, frame, vision=sim.vision)
         return env_step(state, orders, sim)
 
     @jax.jit

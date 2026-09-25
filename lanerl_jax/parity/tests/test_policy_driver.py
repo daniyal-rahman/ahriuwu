@@ -11,6 +11,7 @@ import importlib.util
 import json
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -52,7 +53,8 @@ def _wire(state, netid_of_seq: dict, t: int = 0) -> dict:
                 Kind.TURRET: "LaneTurret"}[k]
         units.append({"id": netid_of_seq[int(s["spawn_seq"][i])], "k": name,
                       "tm": tm, "x": float(s["x"][i]), "y": float(s["y"][i]),
-                      "hp": 100, "mhp": 100, "mt": 0})
+                      "hp": 100, "mhp": 100, "mt": 0, "dead": False,
+                      "ad": 78., "ap": 0., "ar": 30., "mr": 30., "se": [1, 1, 1, 1]})
     return {"t": t, "u": units}
 
 
@@ -164,8 +166,8 @@ def test_policy_action_log_round_trip(tmp_path):
 
 def _stub_act(target_slot: int):
     def make(policy, params, *, deterministic, team):
-        def act(state, key):
-            return (OrderKind.ATTACK, 0.0, 0.0, target_slot, 0)
+        def act(state, key, visibility=None, hud=None):
+            return (OrderKind.ATTACK, 0.0, 0.0, target_slot, pd.BUTTONS.index("attack_move"))
         return act
     return make
 
@@ -182,7 +184,7 @@ def test_pair_driver_logs_wire_netid_and_spawn_seq(monkeypatch):
     # the rebuilder puts the first minion ON THE WIRE in the first free slot
     first_wire_minion = next(u for u in frame["u"] if u["k"] == "LaneMinion")
     nid = first_wire_minion["id"]
-    assert out["blue"] == {"t": "attack", "id": nid} == out["red"]
+    assert out["blue"] == {"t": "click", "button": "attack_move", "x": 0.0, "y": 0.0} == out["red"]
     rec = drv.log.blue_sim[0]
     assert rec["kind"] == OrderKind.ATTACK and rec["target"] == MI_SLICE.start
     assert rec["target_netid"] == nid
@@ -205,9 +207,9 @@ def test_pair_driver_idle_red_sends_noops(monkeypatch):
     monkeypatch.setattr(pd, "_make_act", _stub_act(-1))
     drv = PolicyPairDriver(None, None, red="idle")
     frame = {"t": 16, "u": [
-        {"id": 5, "k": "Champion", "tm": 100, "x": 0, "y": 0, "hp": 1, "mhp": 1,
-         "lvl": 1, "sl": [0, 0, 1, 0]},
-        {"id": 6, "k": "Champion", "tm": 200, "x": 9, "y": 9, "hp": 1, "mhp": 1,
+        {"id": 5, "k": "Champion", "tm": 100, "x": 0, "y": 0, "hp": 1, "mhp": 1, "dead": False,
+         "lvl": 1, "sl": [0, 0, 1, 0], "ad": 78, "ap": 0, "ar": 30, "mr": 30, "se": [1, 1, 1, 1]},
+        {"id": 6, "k": "Champion", "tm": 200, "x": 9, "y": 9, "hp": 1, "mhp": 1, "dead": False,
          "lvl": 1, "sl": [0, 0, 0, 0]}]}
     out = drv(frame, 0)
     assert out["red"] == {"t": "noop"} and drv.log.red_sim[0] is None
@@ -271,11 +273,56 @@ def _champs(t, *, blue=None, red=None):
     def one(nid, tm, x, y, over):
         u = {"id": nid, "k": "Champion", "tm": tm, "x": x, "y": y, "hp": 600,
              "mhp": 672, "gold": 475, "lvl": 1, "cs": 0, "rc": 0,
+             "vb": 1, "vr": 1, "dead": False,
              "sl": [0, 0, 1, 0], "cd0": 0, "cd1": 0, "cd2": 0, "cd3": 0}
         u.update(over or {})
         return u
     return {"t": t, "u": [one(11, 100, 5000, 9000, blue),
                           one(12, 200, 5400, 9000, red)]}
+
+
+@pytest.mark.parametrize('team', [0, 1])
+def test_hidden_wire_fields_cannot_change_actual_policy_inputs(team):
+    """Exercise raw wire -> rebuilder -> fog/HUD -> actual policy call."""
+    import copy
+    from lanerl_jax.train.policy import ActionLogits
+    from lanerl_rl.constants import N_SCREEN_X, N_SCREEN_Y
+    captured = []
+    class CapturePolicy:
+        def apply(self, params, *actor_inputs):
+            assert len(actor_inputs) == 4  # No IDs/diagnostic slot table.
+            jax.debug.callback(lambda *a: captured.append(tuple(np.array(x) for x in a)),
+                               *actor_inputs, ordered=True)
+            return ActionLogits(jnp.zeros(len(pd.BUTTONS)).at[pd.BUTTONS.index('noop')].set(9),
+                                jnp.zeros(N_SCREEN_X), jnp.zeros(N_SCREEN_Y), jnp.float32(0))
+    base = _champs(1000)
+    for unit in base['u']:
+        unit.update(ad=78., ap=0., ar=30., mr=30., se=[1,1,1,1])
+    key = 'vb' if team == 0 else 'vr'
+    hidden = copy.deepcopy(base)
+    hidden['t'] = 1033
+    hidden['u'][1-team][key] = 0
+    changed = copy.deepcopy(hidden)
+    changed['u'][1-team].update(id=987654, hp=17., mhp=999., gold=9000., cs=53,
+        lvl=18, sl=[5,5,5,3], cd0=5000, cd1=6000, cd2=7000, cd3=8000,
+        ad=400., ar=200., mr=150., x=5300., y=9200.)
+    changed['u'].reverse()
+    results = []
+    for last in (hidden, changed):
+        driver = pd.PolicyDriver(CapturePolicy(), {}, team=team, deterministic=True)
+        # Equal witnessed history, then one hidden frame before perturbation.
+        driver.step(base)
+        driver.step(hidden)
+        final = copy.deepcopy(last); final['t'] = 1066
+        driver.step(final)
+        jax.effects_barrier()
+        results.append(captured[-1])
+    for a, b in zip(*results):
+        np.testing.assert_array_equal(a, b)
+    # Non-vacuity: the actual call sees own HUD and excludes the enemy row.
+    assert results[0][0].shape == (32, 16)
+    assert bool(results[0][1][0])
+    assert results[0][2][10] == np.float32(78./200.)
 
 
 def test_gold_is_earnings_not_wallet():
@@ -338,8 +385,9 @@ def test_witnessed_enemy_cast_from_cooldown_rises():
 def test_unwitnessed_casts_are_not_recorded():
     """Off screen (> 1800 u), fogged, or a dead observer: nothing recorded."""
     for red_pos, blue_over in (({"x": 7000}, None),   # 2000 u: off screen
-                               ({"x": 6500}, None),   # 1500 u: on screen, fogged
-                               ({}, {"hp": 0})):      # observer dead
+                               ({"x": 6500, "vb": 0}, None),  # authoritative fog
+                               ({"vb": 0}, None),    # nearby but hidden in brush
+                               ({}, {"hp": 0, "dead": True})):      # observer dead
         rb = pd.StateRebuilder()
         rb.rebuild(_champs(1000, red=red_pos, blue=blue_over))
         m = _obs_ms(rb, _champs(1033, red={**red_pos, "cd2": 983},
@@ -348,7 +396,7 @@ def test_unwitnessed_casts_are_not_recorded():
     # judged on the frame the order was ISSUED: red walks into view on the
     # rise frame, but was fogged when it pressed
     rb = pd.StateRebuilder()
-    rb.rebuild(_champs(1000, red={"x": 6500}))
+    rb.rebuild(_champs(1000, red={"x": 6500, "vb": 0}))
     m = _obs_ms(rb, _champs(1033, red={"cd2": 983}))
     assert m[Team.BLUE, 2] == -1.0
     # the first frame has no previous cooldown, so it is never an edge
@@ -384,7 +432,7 @@ def test_w_passive_granted_from_the_first_w_rank_and_sticky():
     ar1 = float(build_observation(st, 0, blue_frame, params=p).self_vec[12])
     # (base*0.8 + 9)*1.2 against base + 9: the rune's flat armour gains 20%
     assert ar1 > ar0
-    st, _ = rb.rebuild(_champs(80, blue={"lvl": 3, "sl": [1, 1, 1, 0], "hp": 0}))
+    st, _ = rb.rebuild(_champs(80, blue={"lvl": 3, "sl": [1, 1, 1, 0], "hp": 0, "dead": True}))
     assert bool(st.buffs.w_passive[0])                   # never removed
 
 
@@ -401,10 +449,10 @@ def _mo_frames(stretches, *, team=100, t_end=20_000, dt=33, hp_zero=()):
         dead = any(s <= t < e for s, e in hp_zero)
         out.append({"t": t, "u": [
             {"id": 1, "k": "Champion", "tm": team, "x": 10, "y": 20,
-             "hp": 0 if dead else 500,
+             "hp": 0 if dead else 500, "dead": dead,
              "mo": pd.WIRE_ORDER_CAST_SPELL if casting else 2},
             {"id": 2, "k": "Champion", "tm": 300 - team, "x": 0, "y": 0,
-             "hp": 500, "mo": 3},
+             "hp": 500, "mo": 3, "dead": False},
             {"id": 3, "k": "LaneMinion", "tm": team, "x": 0, "y": 0, "mo": 15}]})
     return out
 
@@ -449,3 +497,54 @@ def test_cast_freeze_scans_a_recorded_jsonl_stream():
     lines = [json.dumps(f) for f in _mo_frames([(2000, 9000)], team=200)]
     det = pd.scan_cast_freeze(iter(lines + ["", "  "]))
     assert det.frozen_teams() == [200] and "red" in det.reason()
+
+
+def test_policy_loading_rejects_pointer_checkpoint_before_deserializing(tmp_path):
+    checkpoint = tmp_path / "ckpt_latest.msgpack"
+    checkpoint.write_bytes(b"not a checkpoint")
+    with pytest.raises(ValueError, match="manifest"):
+        pd.load_params(str(checkpoint))
+    (tmp_path / "manifest.json").write_text(json.dumps({"config": {"train": {"policy": {}}}}))
+    with pytest.raises(ValueError, match="entity-pointer"):
+        pd.load_params(str(checkpoint))
+
+
+def test_jitted_policy_driver_uses_three_heads_and_emits_click():
+    from lanerl_jax.train.policy import ActionLogits
+    from lanerl_rl.constants import N_SCREEN_X, N_SCREEN_Y
+
+    class FixedPolicy:
+        def apply(self, params, *obs):
+            return ActionLogits(
+                jnp.zeros(len(pd.BUTTONS)).at[pd.BUTTONS.index("attack_move")].set(10),
+                jnp.zeros(N_SCREEN_X).at[N_SCREEN_X // 2].set(10),
+                jnp.zeros(N_SCREEN_Y).at[N_SCREEN_Y // 2].set(10), jnp.float32(0))
+
+    driver = pd.PolicyDriver(FixedPolicy(), {}, deterministic=True)
+    state = init_lane()
+    step = driver.decide(state, np.arange(state.x.size, dtype=np.int64) + 1073741824)
+    assert step.wire["t"] == "click"
+    assert step.wire["button"] == "attack_move"
+    assert set(step.wire) == {"t", "button", "x", "y"}
+    assert np.isfinite([step.wire["x"], step.wire["y"]]).all()
+
+
+def test_v2_checkpoint_cannot_silently_load_under_authoritative_life_contract(tmp_path):
+    checkpoint = tmp_path/'initial.msgpack'
+    checkpoint.write_bytes(b'not deserialized')
+    (tmp_path/'manifest.json').write_text(json.dumps({'config':{'train':{'policy':{
+        'action_interface':'screen-click-v2', 'observation_interface':'viewport-structured-v2'}}}}))
+    with pytest.raises(ValueError, match='v3 authoritative life-state'):
+        pd.load_params(str(checkpoint))
+
+
+def test_pair_actor_positive_hp_corpse_cannot_emit_gameplay_commands(monkeypatch):
+    monkeypatch.setattr(pd, '_make_act', _stub_act(-1))
+    frame = _champs(1000, blue=dict(dead=True, hp=35, ad=78., ap=0., ar=30., mr=30.,
+                                   se=[1,1,1,1]))
+    driver = PolicyPairDriver(None, None, red='idle')
+    assert driver(frame, 0)['blue'] == {'t':'noop'}
+    assert driver.log.blue_sim[0]['kind'] == OrderKind.NOOP
+    # Same positive HP after authoritative respawn permits normal control.
+    frame['u'][0]['dead'] = False
+    assert driver(frame, 1)['blue']['t'] == 'click'

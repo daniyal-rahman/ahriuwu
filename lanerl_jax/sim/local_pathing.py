@@ -117,6 +117,8 @@ class LocalRouteTable(NamedTuple):
     # reconstruction to jump between exactly the same turn cells.  ``None``
     # retains the defensive one-hop path used by compact fixtures/v2 callers.
     run_length: jax.Array | None = None
+    chase_landmark: jax.Array | None = None
+    chase_next_hop: jax.Array | None = None
 
 
 class LocalRouteResult(NamedTuple):
@@ -398,7 +400,8 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
                           pathfinding_radius, table: LocalRouteTable,
                           terrain: TerrainGrid,
                           max_raw_hops: int = MAX_RAW_ROUTE_HOPS,
-                          smooth: bool = True
+                          smooth: bool = True,
+                          global_chase: bool = False
                           ) -> LocalRouteResult:
     """Reconstruct one bounded route as fixed-shape JAX waypoints.
 
@@ -452,6 +455,14 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
     def body(carry, _, within_budget=True):
         current, previous, turns, count, status, done, raw_hops = carry
         code, hop_status = lookup_local_hop(current, goal_cell, table, width)
+        local_ready = hop_status == LocalRouteStatus.READY
+        if global_chase and table.chase_next_hop is not None:
+            row = table.cell_to_row[jnp.clip(current, 0, table.cell_to_row.size - 1)]
+            landmark = table.chase_landmark[jnp.clip(goal_cell, 0, table.cell_to_row.size - 1)]
+            global_code = table.chase_next_hop[jnp.maximum(row, 0), jnp.maximum(landmark, 0)]
+            usable = (row >= 0) & (landmark >= 0) & (global_code != NO_ROUTE)
+            code = jnp.where(~local_ready & usable, global_code, code)
+            hop_status = jnp.where(~local_ready & usable, LocalRouteStatus.READY, hop_status)
         active = within_budget & ~done & (status == LocalRouteStatus.READY)
         failed = active & (hop_status != LocalRouteStatus.READY)
         arrived = active & (code == jnp.asarray(STAY, code.dtype))
@@ -477,6 +488,7 @@ def build_local_waypoints(source_x, source_y, goal_x, goal_y,
                              DIRECTION_OFFSETS.shape[0] - 1)
         offsets = jnp.asarray(DIRECTION_OFFSETS, jnp.int32)[safe_code]
         run = lookup_local_run_length(current, goal_cell, table, width)
+        run = jnp.where(local_ready, run, 1)
         remaining = jnp.asarray(max_raw_hops, jnp.int32) - raw_hops
         jumped_hops = jnp.minimum(run, remaining)
         jumped_hops = jnp.where(moving, jumped_hops, jnp.int32(0))

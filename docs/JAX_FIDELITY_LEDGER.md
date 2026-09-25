@@ -21,6 +21,634 @@ must be entered in the same commit that introduces them.
 | `BOUNDED` | Equivalent inside an explicit fixed-shape bound; exceeding the bound is a diagnostic failure. |
 | `VERIFIED` | Source-port and tests or differential evidence support parity for the stated scope. |
 
+## Source-server RL isolation — 2026-09-25
+
+Dani requested source-server training first, from random initialization, then
+an otherwise matched JAX comparison. Pixel interpretation is explicitly out of
+scope for this comparison; structured observations may include actual visible
+unit/HUD information, but no hidden or off-camera entity information.
+
+- **Observation repair:** the old builder filtered team fog but still exposed
+  off-screen entities. It now also applies the canonical viewport before slot
+  selection. The server policy adapter uses authoritative `vb`/`vr`, including
+  brush/terrain occlusion, rather than reconstructing fog from JAX radii.
+  Missing flags fail closed. Witnessed-cast memory uses server flags and the
+  same viewport. Own AD/AP/armour/MR come from the server HUD fields.
+  `viewport-structured-v1` records the new observation contract; old captures
+  remain historical. Passed 15 observation tests and 22 driver/collector tests.
+- **JAX visibility implemented, APPROX:** production SimConfig constructors
+  now load Map1 brush/wall flags. Observations, click resolution, target
+  visibility and witnessed casts use bounded supercover rays; cast memory also
+  uses the canonical viewport. Radius-only visibility remains for synthetic
+  tests when no grid is supplied. Passed 36 observation/vision/order tests,
+  plus the final actor-slot brush regression; a stale radius-based off-screen
+  fixture was corrected and passed. `runs/visibility_20260925` retains source,
+  commands and logs. Candidate masks/early termination improved a cold,
+  one-environment, no-routing CPU smoke from 12 to 63 decisions/s (simulation
+  alone 21 to 99); this is not population/GPU throughput evidence. Float32
+  near-corner handling is deliberately conservative. Live C# differential
+  vision checks and warm production throughput remain unresolved.
+- **SERVER-001:** applied `lanerl/patches/server-q-cast-freeze.patch` and rebuilt
+  canonical Release on desktop. Replayed the historical 300-second action
+  stream from `parity001/sweepA-a4-300s`: 9,000 decisions, zero unresolved
+  targets, zero frozen stretches, with GarenQAttack casts in the server log.
+  `runs/server_first_20260925/q-replay/verification.json` retains the outcome.
+  This supersedes the old “patch not applied” status below. Trace build and
+  broader opposing-bot coverage are not established by this replay.
+- **Shared learner:** extracted the existing optimizer/loss into
+  `train/learner.py`; both collectors use it. All 15 trainer regressions passed
+  after extraction. Four initially failing adapter tests had outdated mocks /
+  absent authoritative visibility flags; the corrected focused suite passes.
+  The source rollout/update loop is now also shared with `train/jax_train.py`
+  through `run_farming_learner`. Six source/shared-loop tests passed in
+  78.26 s. A live HudProbe smoke completed two finite updates, eight decisions
+  and four fresh-process episode resets; parameters changed and its explicit
+  budget checkpoint was preserved (162.84 s including learner initialization).
+  Evidence: `runs/shared_farming_learner_20260925`. This validates the loop
+  extraction, not farming. JAX learning awaits the collector's batched checks.
+- **Source-only collector:** `train/server_train.py` advances only real server
+  processes. Random Flax initialization; no demonstrations/reference loss.
+  Fixed idle red champion, no shopping, automatic skill progression. Fresh
+  processes at episode boundaries preserve runes; a 0.5-second reset smoke
+  completed two finite updates and verified starting HUD stats were unchanged.
+  Policy log-probs are recomputed against each collected batch before updates.
+  The smoke changed parameters and wrote a checkpoint, not a farming result.
+- **Initial screen:** SERVER-FIRST-01 in EXPERIMENT_METHOD; 131,072 decisions,
+  two servers, seed 0, 512 updates, from the frozen detached worktree
+  `/srv/nfs/projects/ahriuwu-server-first-20260925`. Run
+  `runs/server_first_20260925/server-farm-20260925-001918-8378bb11` retains source
+  archive, vendor patch/binary hash, command, configuration and initial weights.
+  Completed 512 finite updates in 667.21 wall seconds; parameters changed.
+  Completed training episodes had 0 CS. Frozen final evaluation
+  `runs/server_first_20260925/eval-final-s0`: 600 game seconds, 18,000 decisions,
+  0 CS, no cast freeze, 115.71 wall seconds. Blue reached top lane and level 6,
+  but its closest enemy minion was 585.67 units away (zero frames within 250).
+  This establishes a farming failure without JAX dynamics, not its cause or
+  a successful learner baseline. Evaluation metadata was captured at the end;
+  it does not independently preserve the exact source loaded at launch.
+- **Untrained control:** `runs/server_first_20260925/eval-initial-s0`, 600 game
+  seconds, 18,000 decisions, 0 CS and no cast freeze. Blue never came within
+  250 units of an enemy minion; its recorded bounds were x=[-229,857],
+  y=[-15,775]. This is a control, not evidence that the trained agent cannot
+  improve. No JAX dynamics ran in the training or evaluation collector.
+- **Near-wave intervention:** SERVER-FIRST-02 changes only episode setup;
+  measured first minion contact sets a safe starting point behind blue's wave.
+  Position/alive/zero-CS checks and a fresh-process reset smoke passed
+  (`server-farm-20260925-004137-8378bb11`, `...004326-8378bb11`). Two initial
+  concurrent jobs collided on a second-resolution output directory and were
+  stopped; `wave-start/server-farm-20260925-004511-8378bb11/INVALID.txt`
+  records why none of its mixed checkpoints/metrics is evidence. RunDir now
+  reserves directories atomically; all four manifest regressions pass.
+  Replacement seeds 0/1 completed under separate `wave-start/seed0` and
+  `wave-start/seed1` roots, each `server-farm-sN-20260925-005105-8378bb11`,
+  from the frozen `/srv/nfs/projects/ahriuwu-server-wave-20260925` checkout.
+  Each completed 131,072 decisions (816.56/803.84 wall seconds). Frozen initial
+  policies scored 0/0 CS; frozen finals scored 0/2 CS, one episode per seed.
+  `wave-start/farming-analysis-v1.json` records the full-rate diagnosis:
+  zero attacking/hasaa ticks in all four traces, maximum diagnostic gap 17 ms.
+  Minion targets appeared only briefly despite nearby waves. This supports
+  failed attack entry, not an observed repeated-windup-cancellation pattern.
+  Final seed 1's actual map/combat replays are under `eval-final-s1/{map,combat}`.
+- **Control correction, screen-click-v2:** v1's `attack_move` was a targeted
+  click but became plain movement on empty ground; `move` ignored hostile
+  cursor hits. The C# click interface now exposes ground AttackMove and
+  hostile-targeting right-clicks, using HandleMove's order/path/target flow.
+  Automatic acquisition additionally requires visibility (brush-hidden targets
+  must not be auto-selected). JAX exposes OrderKind.ATTACK_MOVE for ground
+  A-clicks. `lanerl/patches/screen-click-v2.patch` applies after v1/Q fixes.
+  Passed 10 action/collector regressions and the live click/acquisition test;
+  canonical Release rebuilt with zero errors. Fresh same-budget seed 0/1 runs
+  started from `ahriuwu-server-clickv2-20260925`, under
+  `click-v2/seedN/server-farm-sN-20260925-013050-8378bb11`. Desktop SSH dropped
+  at 01:39 UTC after updates 324/302; saved checkpoints are retained and
+  these are not completed comparison runs. Dani subsequently confirmed the
+  desktop had switched to Windows and instructed capped danilogin work.
+- **Own ability HUD correction:** Q's cooldown reads zero while its HUD slot
+  is sealed. The previous server adapter left Q buffs empty and reported it
+  ready. `server-hud-ability-state.patch` emits own slot enablement and ignores
+  disabled keyboard spell clicks, leaving the raw diagnostic Cast API separate.
+  `viewport-structured-v2` masks own unavailable slots from authoritative HUD
+  bits; enemy enablement is not an actor feature. Adapter/collector tests:
+  23 passed. Separate HudProbe build succeeded; two live tests passed in
+  48.68 seconds, including six seconds of Q-key spam: the disabled presses do
+  not refresh its 4.5-second empowerment and the cooldown starts normally.
+  Canonical Release is still the pre-HUD v2 binary for existing experiments.
+- **HUD baseline execution:** frozen random initial seed 0 with the corrected
+  interface completed both 600-second near-wave evaluations in `hud-rate`
+  under `runs/server_first_20260925`: 30 Hz gave 14 CS, zero deaths, 574.40 s
+  wall; 10 Hz gave 11 CS, one death, 412.85 s wall. Neither triggered the
+  cast-freeze detector. These are untrained controls, one episode per rate;
+  neither a learning gain nor a frequency ranking is established. Fresh
+  30 Hz training is contracted as SERVER-FIRST-04, with a checkpoint at the
+  previous decision budget and a larger final budget. Run
+  `hud-train/seed0/server-farm-s0-20260925-020120-8378bb11` has begun from
+  the frozen `ahriuwu-server-hudtrain-20260925` checkout; its first update was
+  finite (256 decisions, 60.54 s including learner initialization). This is
+  running evidence, not a completed training result. This run was subsequently
+  stopped at update 447 because of the dead-control defect below; its requested
+  update-512 checkpoint was never reached. Explicit budget copies
+  now survive ordinary checkpoint rotation; this already-running checkout
+  uses its recorded `preserve_budget.py` watcher for the 131,072-step copy.
+  The first two completed training episodes scored 6/14 CS at update 112;
+  weights changed during those trajectories, so these are not frozen-policy
+  comparisons or evidence of consistent improvement.
+  Full-rate analysis (`hud-rate/farming-analysis-initial0.json`) observed
+  42/38 attack starts and 1/8 cast-completion marker rises at 30/10 Hz,
+  respectively, with maximum diagnostic gaps of 17 ms. Those markers do not
+  identify damage victims and can include spells using attack cast time.
+  Ends without completion are cancellation-compatible, not proof of cause.
+  Approximate time within 250 units of enemy minions was 58/61 s. Thus CS
+  alone hides execution differences. Both map/combat HTML and verified
+  60-second videos are in `hud-rate/eval-initial-0-30hz/{map,combat}`; first
+  CS occurs around game time 5:46. Analyzer sampling metadata now respects
+  the actual decision interval; its two focused regressions passed.
+- **Reset isolation:** source skill-ranking commands previously advanced
+  unrelated server processes through NOOPs. `_rank` now sends only to servers
+  with pending skill points. The live two-server reset isolation regression
+  passed in 79.99 s (`runs/server_first_20260925/hud-verification/`).
+- **JAX farming collector, routed reset validated:** `train/jax_farm.py`
+  provides the corresponding blue-only task and shared farming reward. Five
+  focused tests passed in 82.31 s using explicitly unrouted control fixtures.
+  The initial 240 s timeout was traced to compilation. Passing map arrays as
+  arguments and sharing one dynamics executable removed duplicate compile
+  work. `runs/jax_farm_20260925/shared-kernel-near-wave` completed two policy
+  steps and two fresh resets in 263.98 s at 4 GB/two CPUs. Initial setup and
+  both resets naturally reached (1950,12350), alive with zero deaths/CS, at
+  120.027 s. Dynamics lowering/compile took 22.7/101.1 s; setup/reset warmups
+  took 41.99/39.63/40.98 s. This validates the setup, not learned farming or
+  server-equivalent dynamics. Evidence is in `runs/jax_farm_20260925`.
+  Long Move ingress now uses the existing full-map landmark fallback and
+  512-hop bound, as chase does; the former local-window/128-hop path failed
+  its long-move regression before the fix. Landmark routing remains an
+  approximation to source A*. Rank timing is approximate: extra
+  NOOP time is reproduced, but ranks install within JAX simulation ticks.
+  Five batched collector regressions passed in 59.89 s after fixing a dtype
+  mismatch exposed by tests enabling x64: setup/decoded coordinates now share
+  the simulation dtype at the cached kernel boundary. The production
+  single-environment smoke alone had not exercised that mismatch. A full-policy
+  one-update JAX learner smoke completed from the refreshed frozen
+  `ahriuwu-jax-farm-20260925` checkout: four decisions, finite losses,
+  parameters changed, pinned checkpoint preserved, 49.81 s learner wall
+  excluding collector setup/compile. Run:
+  `runs/server_first_20260925/jax-smoke/jax-farm-s0-20260925-022347-8378bb11`.
+  Its initial checkpoint hash exactly matches the source seed-0 initial
+  checkpoint (`9f9c753eb6c4f6408825416042a203e8f896bfaa2253ab9e6ec674ad6dba09b7`).
+  This is integration evidence; no JAX farming improvement is established yet.
+  JAX-FARM-01's first 512-update attempt is preserved under
+  `runs/server_first_20260925/jax-train/seed0/jax-farm-s0-20260925-022820-8378bb11`,
+  capped at 6 GB/one CPU. It was stopped during setup, before any PPO updates:
+  the two-environment dynamics calls measured 0.73–1.26 s, versus milliseconds
+  for one environment. Outer vmap turns scalar conditional branches into
+  selection and executes expensive inactive lane-waypoint work. A CPU-only
+  scalar-control-flow batching alternative is being measured before retrying.
+  `stop-reason.json`, console log and launch record preserve this failed
+  feasibility attempt. Source training continues independently.
+  CPU `lax.map` now preserves per-environment scalar branches; accelerator
+  mode retains vmap. A two-environment production NOOP smoke measured
+  10.15/10.42 ms on invocations 10/20. The natural near-wave run completed
+  initial setup plus two resets in 235.99 s: all six checks reached the exact
+  goal alive with zero CS/deaths; warmups took 43.10/45.06/43.86 s.
+  Evidence: `runs/jax_farm_20260925/cpu-map-two-env{,-near-wave}`. Operator-level
+  cost attribution and accelerator throughput remain unmeasured. All six
+  collector regressions passed in 64.83 s, including independent scalar
+  agreement on a wave-spawn tick and exact paused-peer preservation. The
+  replacement 512-update run (`jax-cpumap-train/seed0`) and full frozen initial
+  evaluation (`jax-cpumap-eval/initial-s0`) have started under
+  `runs/server_first_20260925`, each at 6 GB/one CPU, from the separate frozen
+  `ahriuwu-jax-cpumap-20260925` checkout.
+  Replacement run `jax-farm-s0-20260925-024519-8378bb11` has completed its
+  first two finite updates with sampled-action diagnostics. Its initial
+  checkpoint hash differs from source seed 0 despite the same seed. Numeric
+  comparison found five dense kernels differing by at most 2.05e-6 (largest
+  RMS difference 7.15e-8); other arrays are identical. The source/tiny-smoke
+  launches used two CPU threads and this run uses one, so numerical
+  initialization differences are plausible, not proven. The current frozen
+  cross-engine control deliberately retains the byte-identical source initial
+  weights; future within-run controls should use the run's own initial file.
+  `initial-parameter-comparison.json` preserves the numerical comparison.
+  Update 2 took approximately
+  26 s at one CPU after initialization; this does not establish a CPU speed
+  advantage over source training. The frozen ten-minute control completed:
+  2 CS, one death, 14,397 policy decisions after the fixed near-wave setup,
+  1,386.22 s wall, with unchanged parameters and no reset. Its exact same
+  initial weights scored 14 CS and zero deaths in the source 30 Hz control.
+  This is one cross-engine pair, not a convergence comparison or a diagnosis
+  of the gap. The JAX trace is sampled at 10 Hz; source diagnostics are 60 Hz,
+  so short attack-state transitions cannot be compared by raw event counts.
+  Both map/combat HTML and videos are verified under that evaluation's
+  `map/` and `combat/` directories (48.07 s videos, setup omitted). Timestamp-
+  weighted analysis over the common recorded interval found 20.79 s within
+  250 units of enemy minions in JAX versus 57.88 s in source. JAX gained CS
+  around 483.16/510.64 s with E active in those samples, died at 520.64 s
+  amid an enemy wave, and never returned within 250 units. At 10 Hz the
+  observed attack starts are 11/13; source's full-rate count was 42, illustrating
+  missed short transitions. `frozen-pair-analysis.json` and
+  `render-verification.json` retain evidence and commands. Reusable NPZ
+  analysis in `parity/analyze_farming.py` passed three tests, including
+  irregular timestamp duration accounting. Source training was subsequently
+  stopped for the dead-control defect below.
+  A second frozen source sampling seed completed under
+  `hud-controls/initial-train0-eval1` at 6 GB/one CPU: 4 CS, zero deaths,
+  no detected cast freeze, 858.24 s wall, exit 0. Same untrained checkpoint,
+  sampling seed 1 rather than 0. The 14/4 CS spread reinforces the need for
+  multiple frozen controls; no trained comparison is complete yet.
+- **Ground-click comparison correction:** the JAX farming adapter inherited
+  `orders_from(..., snap_moves=True)`, adding nearest-standable-cell EDT
+  normalization before routing. The current source adapter sends the raw
+  projected point. Both engines already repair endpoints internally: JAX
+  `build_local_waypoints` calls `closest_terrain_exit` for Move/attack-move,
+  as source navigation does. PATH-010's historical claim that both adapters
+  apply EDT no longer describes this farming pair. The completed JAX control
+  and training arm are therefore nonmatched on click normalization. Training
+  `jax-farm-s0-20260925-024519-8378bb11` was stopped with SIGINT/exit 130 after
+  update 88 (22,528 decisions); `stop-reason.json` and `console.log` preserve
+  its evidence. The collector now explicitly disables adapter snapping and
+  records normalization provenance, retaining environment repair. Seven
+  collector tests, Move/attack-move blocked-goal repair cases, the host spiral
+  reference and four evaluation tests passed. A two-environment production
+  near-wave setup and decoded step passed in 114.29 s at 6 GB/one CPU;
+  evidence: `runs/jax_farm_20260925/raw-screen-{regression,production}`.
+  No replacement training has launched. This does not remove existing float32,
+  bounded-spiral, route-table/landmark or null-path approximations.
+- **Visible combat state limitation:** the current feedforward actor has no
+  animation/history inputs. In particular, own E ready to start and E active
+  but ready to cancel both expose zero cooldown and an enabled slot; the
+  builder does not include an E-active indicator. The same button therefore
+  has different effects in states the actor cannot distinguish from that HUD
+  encoding alone (`obs/builder.py`, `sim/spells.py`). Minion HP is present,
+  quantized to 60 health-bar steps. This is missing visible context, not
+  evidence of a broken PPO update. Current frozen runs retain their interface.
+  Next diagnostic: E start/duration/cancel events and confirmed minion hits
+  in initial/final source recordings before choosing an observation change;
+  internal attack timers must not be mislabeled as screen-visible signals.
+  Full-rate E phase analysis now completed for untrained controls at 30 Hz
+  seed 0, 10 Hz seed 0, and 30 Hz seed 1: premature ends 34/35, 26/33 and
+  32/35; median observed durations 1.516/1.815/1.451 s. Nearby emitted E
+  inputs accompany 20/17/18 premature ends, but no execution acknowledgement
+  confirms key cancellation. Two 10 Hz endings have dead-state context,
+  requiring a separate dead-input/instrumentation check. Evidence:
+  `hud-rate/e-activity-diagnostic/`, 96.41 s at 4 GB/one CPU, four tests passed.
+- **Dead-control defect, confirmed:** the source click spell path does not
+  reject `IsDead`, and dead champions can regain positive HP. In the historical
+  10 Hz control, authoritative dead-state rows show E starting at 458893 ms
+  while dead and CS increasing from 7 to 11 before its end at 461508 ms.
+  The Python adapter's `HP > 0` alive inference therefore also mislabels the
+  regenerating corpse. This invalidates use of affected trajectories as
+  legitimate farming evidence. Source training stopped with exit 130 at update
+  447 (114,432 decisions); the third source control also stopped, and the
+  checkpoint watcher was terminated. Each has `stop-reason.json` and console
+  logs. The completed 30 Hz controls have zero recorded deaths, but they do
+  not establish safety of this interface across episodes. Next: authoritative
+  wire dead state, dead keyboard-control rejection, adapter/reward correction,
+  a new semantic observation contract, and live dead/respawn regression before
+  restarting. JAX already gates orders and regeneration on authoritative alive
+  state. Its positive-HP corpse regression passed: Move, attack-move, attack,
+  Q/W/E/R and recall all leave the same state as NOOP, despite ready ranked
+  spells and a nearby live target (5.08 s at 4 GB/one CPU). Evidence:
+  `runs/jax_farm_20260925/dead-control`. Existing pre-death E damage can still
+  tick after death under SPELL-006; that is distinct from starting a new spin
+  through dead keyboard input. No JAX runtime change was needed for this gate.
+  The source correction is implemented in `server-dead-control.patch`, with
+  a separate DeadProbe build; prior HudProbe/Release hashes are unchanged.
+  Three live regressions passed: natural death produced 75 positive-HP corpse
+  observations, repeated live-only inputs started no E and gained no CS, and
+  E worked after respawn; existing live click and disabled-Q cases also pass.
+  Evidence: `runs/server_dead_control_20260925` (dead case 33.56 s; existing
+  cases 50.74 s). Python now requires Boolean `dead`, uses it for actor/HUD/
+  death reward and setup guards, and rejects v2 weights under semantic
+  `viewport-structured-v3`. Its 27 focused tests passed in 20.31 s, including
+  positive-HP corpses, actual respawn, hidden enemies and one penalty per
+  death (`dead-authoritative-python/`). Fresh v3 learner/reset smoke completed
+  two finite updates, 16 decisions and eight episode completions/resets;
+  parameters changed and the requested budget checkpoint hash was verified
+  (167.76 s at 6 GB/two CPUs). Evidence: `dead-smoke/server-farm-s0-20260925-034138-8378bb11/verification.json`.
+  Untrained near-wave evaluation (`dead-controls/initial-train0-eval0`)
+  completed: 14 CS, zero deaths, no detected cast freeze, 527.83 s wall,
+  exit 0 at 6 GB/two CPUs. Its CS matches the historical zero-death control;
+  full-rate analysis also matches its 42 observed attack starts, one completion
+  marker and 35 E spins/34 premature ends. This is a corrected baseline,
+  not learned improvement. Sampling seed 1 also completed at 6 GB/one CPU:
+  4 CS, zero deaths, no detected cast freeze, 794.47 s wall and exit 0.
+  SERVER-FIRST-05 training (`dead-train/seed0`) continues at 6 GB/two CPUs.
+  Its bounded live zero-learning-rate control also passed: two finite updates
+  over 512 decisions, zero measured KL, and byte-identical serialized initial/
+  final parameters with both learning rates zero. Initial checkpoint hash
+  matches the main run and frozen controls exactly. Evidence:
+  `dead-lr0/server-farm-s0-20260925-045648-8378bb11/verification.json`, with
+  the exact verification command, training source/config/command, console and
+  checkpoint hashes retained. Learner time was 72.52 s, excluding collector
+  setup, at 6 GB/two CPUs; exit 0. This is a disabled-optimizer check, not an
+  equal-budget training ablation or a completed farming episode.
+  Both use the separate frozen `ahriuwu-server-dead-20260925` checkout.
+  Initial weights exactly match the historical seed-0 random weights; the
+  observation contract and server behavior are corrected. No E-active feature
+  was added, and no farming improvement is yet established.
+  Both corrected-control map/combat HTML and 60-second videos are verified
+  under `dead-controls/initial-train0-eval0/{map,combat}`. All 36,000 champion
+  wire rows have valid Boolean life flags. The diagnostic analyzer now also
+  requires authoritative flags for v3; HP fallback requires explicit legacy
+  provenance (five tests passed). The sequential `train/server_eval_batch.py`
+  launcher passed 11 tests and independently validated this real episode's
+  18,000 aligned decisions and recorded hashes (11.87 s). Evidence:
+  `runs/server_eval_batch_20260925`. Corrected control seeds 2–4 completed
+  sequentially in `dead-controls/cohort-seeds2-4` at 6 GB/one CPU, with frozen
+  evaluator cwd; their partial cohort is not a five-seed median by itself.
+  Seed 2 completed and passed cohort validation: 6 CS, zero deaths,
+  612.47 s wall. Seed 3 also passed: 9 CS, one death, 724.57 s wall.
+  Seed 4 passed: 8 CS, one death, 815.37 s wall; cohort exited 0.
+  All five controls were independently revalidated using the batch tool's
+  `--collect` mode without launching games or modifying episodes: CS
+  14/4/6/9/8, deaths 0/0/0/1/1, median 8 CS. Command, launcher snapshot,
+  per-episode hashes and source consistency checks are recorded in
+  `dead-controls/all-five/cohort.json` (48.56 s at 6 GB/one CPU, exit 0).
+  Collection and launch regressions passed 15 tests in 0.49 s; evidence:
+  `collect-tool-verification/`. These five sampling seeds share one random
+  checkpoint; they are not independent training seeds.
+  Update 120 was preserved as `diagnostic_000030720.msgpack` with verified
+  copy hash; `dead-eval/update120-s0` completed its frozen seed-0 episode at
+  6 GB/one CPU: 20 CS, zero deaths, 686.41 s wall, exit 0 and all cohort
+  validation checks passed. The paired untrained seed scored 14 CS. This is
+  a positive single-pair screen, not consistent improvement or the 30-CS gate;
+  both replay views and their 60-second videos are verified. Compared with
+  initial, time within 250 units of enemy minions was 67.61 versus 57.88 s,
+  E-active time 65.66 versus 58.00 s, and observed AA completion markers
+  zero versus one. Nineteen of 20 trained CS credits occurred in E-active
+  replay samples (context, not damage attribution). These findings do not
+  establish better autoattacking. The mutable `hasaa` latch can in principle
+  be set and cleared between dumps; existing `LANERL_DECISION_TRACE=1`
+  cast-completion events are the next diagnostic, without a server rebuild.
+  The first 5,400 decisions were replayed with that trace OFF and ON: all
+  wire observations and 10,802 canonical tick hashes through 180024 ms match
+  the original prefix exactly. Blue's first 2 CS occurred with zero
+  `FinishCasting auto=True` events; recorded completions include 4 E casts,
+  3 E cancellations, 2 Q casts and 71 Recall casts. This establishes the
+  absence of logged basic-attack completions in this prefix, not damage-source
+  attribution for the whole 20-CS episode. Evidence:
+  `runs/aa_attribution_20260925/comparison.json`; OFF/ON took 83.56/83.67 s,
+  comparison 21.17 s, at 4 GB/one CPU. Three replay-tool tests passed.
+  Full-episode OFF/ON replay subsequently matched all 18,000 observations
+  and 36,002 canonical tick hashes against the original, ending at 20 CS.
+  It logged zero `auto=True` completions but **three `GarenQAttack`
+  completions** (which carry `auto=False`), so zero ordinary-auto events
+  must not be interpreted as zero attack-derived damage. Other blue events:
+  35 E casts, 30 E cancellations, 35 Q casts, 17 W casts and 583 Recall
+  casts. This does not establish per-victim damage attribution or reliable
+  basic-attack farming. Evidence: `runs/aa_attribution_20260925/full/`
+  (`summary.json`, `comparison.json`, commands and source/binary provenance).
+  OFF/ON took 260.47/261.86 s and comparison 61.44 s at 4 GB/one CPU;
+  both replays passed unresolved-target and cast-freeze checks. No training,
+  policy, server binary or mechanics changed for this diagnostic.
+  This early diagnostic does not replace contracted
+  update-512/final comparisons. The first completed training episodes scored
+  5/19 CS; those changing-weight trajectories do not establish learning.
+- **Exploration objective caveat:** current factored entropy rewards the
+  latent button/cursor representation, not distinct resolved wire commands.
+  `train/entropy_audit.py` verifies actual JAX gradients against independent
+  analytic/finite-difference calculations and enumerates all 5,184 unranked-R
+  cursor choices collapsing to NOOP. At uniform logits, each coordinate
+  button has entropy gradient +0.668229 and each other button -0.400937.
+  Evidence: `runs/entropy_audit_20260925/uniform-v1`, 5.14 s at 3 GB/one CPU.
+  This is an exploration bias, not a likelihood algebra failure or proof of
+  the farming cause. The objective remains unchanged in the running baseline.
+  The corrected v3 source run logs sampled buttons and unranked-R choices
+  before wire suppression; older frozen runs predate that diagnostic. Next:
+  measure task-versus-entropy gradients on real rollouts before a controlled
+  entropy intervention. Read-only audit of the v3 update-120 evaluation found
+  that its replay cannot recover original training gradients: it stores
+  pre-action observations and resolved commands, but not raw categorical
+  samples, old log-probabilities/head-use masks, values/bootstrap values, or
+  the paired 128-by-2 training batches. Multiple latent actions become NOOP;
+  evaluation rank-up decisions also differ from training's bundled rank-up
+  transitions. No approximate reconstruction was executed. A future actual
+  learner capture must retain actor tensors, latent actions and masks, old
+  log-probabilities/values, rewards/dones, bootstrap data, batch identities,
+  and checkpoint/config/source provenance; verify advantages and returns.
+  Relevant code: `parity/policy_driver.py` (`PolicyActionLog`, driver sampling),
+  `train/server_train.py` (`run_farming_learner`). The running frozen baseline
+  is unchanged. Normalizing cursor entropy alone retains the bias;
+  masking unranked R addresses availability but retains move/A pressure.
+- **Provenance correction:** RunDir's mount workaround previously exported
+  GIT_DIR globally, causing later vendor queries to return the training repo's
+  HEAD/diff. Git environment translation is now scoped per repository; seven
+  manifest regressions pass, including source-training reproduction commands
+  and reopening a saved collector artifact path. Path values now serialize
+  as strings; older farming manifests contain Python reprs in collector fields,
+  so JAX evaluation prefers the simulator's recorded resolved route path.
+  Affected historical runs have a
+  `vendor-provenance-correction.json` sidecar and a preserved matching binary
+  under `server-before-click-v2`. Corrected vendor patches were captured after
+  those runs, not at launch. Future source/evaluation archives use scoped git
+  environments. Evaluation directories are reserved before recording.
+- **Frozen JAX farming evaluation:** `train/jax_eval.py` uses the same
+  blue-only collector and idle opponent, inherits task settings, checks frozen
+  parameters and stops without resetting. Six focused tests passed. A live
+  near-wave 120.05 s integration check loaded the matching initial checkpoint,
+  took one policy decision from 120026.867 to 120060.195 ms, retained zero
+  CS/deaths and unchanged parameters, and wrote `trace.npz` (328.09 s including
+  compile/setup). Evidence is under
+  `runs/server_first_20260925/jax-eval-smoke/initial-120s-resolved`.
+  This is a boundary/replay check, not a ten-minute farming result. The first
+  attempt exposed the collector-path serialization issue recorded above.
+- **Server replays:** `parity/render_recording.py` streams actual diagnostic
+  server rows into the shared map/combat viewer. Missiles, held targets, routes,
+  health and buffs are recorded, not simulated. Separate melee swing victims
+  and R cast timers are unavailable and are not inferred. Positions/health are
+  dump-quantized; the actor does not consume this omniscient stream.
+
+## Screen-click contract and chase repair — 2026-09-24
+
+Dani's replay review exposed two separate failures: attack chase overwrote
+terrain detours with straight lines, and the entity pointer could select
+team-visible objects outside the local camera. The requested contract is now
+**screen-click-v1: button + screen X + screen Y, no actor entity pointer**.
+This supersedes the four-head policy/PPO-14 action interface below; those
+measurements remain historical evidence, not the current action definition.
+
+- `train/policy.py` emits three heads. `train/actions.py` projects the cursor
+  and resolves the nearest alive, team-visible collision circle under it;
+  an enemy hit attacks, empty ground/an ally moves, and R uses the cursor hit.
+  The supplied observation-slot map cannot redirect a click. Ground clicks
+  explicitly clear the old chase; legacy low-level Move preserves ORDER-001.
+- `train/ppo.py` computes three-head likelihood/entropy: coordinates count
+  for move, attack and R; Garen Q/W/E, recall and noop do not depend on cursor
+  location. Old four-head math remains only for historical numerical tests.
+  `PolicyConfig.action_interface`, CLI resume and replay checks reject old
+  pointer checkpoints. A fresh policy must be trained; none of today's old
+  checkpoint CS totals validates this replacement policy.
+- Server changes are reproducible through
+  `lanerl/patches/screen-click-v1.patch`. Production decoders send coordinate
+  `click` commands, never target IDs. Existing raw `attack/id` remains a
+  mechanics-diagnostic API. The active JAX server driver also uses clicks.
+- PATH-009: champion RefreshWaypoints now uses the terrain router. A compact
+  derived landmark/BFS table supplies distant routes using only the existing
+  radius-certified graph edges; local paths take over when available.
+  Failed searches retain the old route rather than draw a new wall-crossing
+  line. Minion chase, respawn repathing and exact server A* tie breaks remain
+  approximations. Source-circle overlap can still return SERVER_NULL.
+
+**Diagnostic control:** the same pre-existing strong pointer checkpoint and
+seed 123, with chase routing changed, produced blue/red **26/26 CS, 4/4 deaths**
+(previously **14/36 CS, 3/2 deaths**). Files:
+`lanerl_jax/runs/minimap_20260924/chase-fixed.npz` and
+`chase-fixed/replay.{mp4,html}`. This is evidence of a navigation effect,
+not a controlled learning result or a screen-click-v1 policy evaluation.
+The process began before the action-interface edits; its recorded end-of-run
+Git provenance does not capture the exact loaded source. Keep that limitation
+with this historical control. Future replay captures save a source archive
+before rollout plus its hash, and record raw cursor coordinates.
+
+**Remaining contract approximations:** collision circles stand in for real
+client sprite hitboxes; exact-distance ties use JAX slot order versus server
+NetId; JAX fog is radius-based, while the server supplies its own visibility.
+The canonical lane-aligned camera is still a virtual camera, not calibrated
+against today's modern client. PATH-010 terrain snapping still differs from
+the server's raw-ground-click path. These repairs do not establish modern
+client readiness or reliable learned farming. The canonical server was rebuilt and passed real-server cursor-hit and
+five-subsequent-step disengagement checks. Also passed: 35 C# wire tests,
+18 Python/JAX driver-decoder checks, and 2 JIT/checkpoint-guard checks.
+Evidence and exact commands: `lanerl_jax/runs/screen_click_20260924/server/verification.json`.
+The new routed JAX CLI completed two finite optimizer updates and wrote
+`screen-click-smoke-20260924-232432-8378bb11/ckpt_latest.msgpack` under
+`lanerl_jax/runs/hardening_20260924/` (1 env, 4 steps, 2 updates, 0.1-second
+reset episodes). That proves execution/reset/checkpoint plumbing, not learning.
+No new research experiment starts here.
+
+### Combat microscope artifact
+
+`lanerl_jax/runs/combat_view_20260924/view/replay.html` is the self-contained
+combat player; `replay.mp4` covers **118–140 game seconds at 1x**. Its fresh
+180-second scripted brawler mirror records actual missiles, swing state,
+remaining routes, raw cursor positions, HP, CS and Q/W/E/R state. It is a
+visualization/command diagnostic, not a learned-agent performance result.
+At 124.8 seconds six missiles are in flight. The scripted controllers use
+only attacks/movement; the inactive/locked ability displays are intentional.
+
+The viewer exposes top-lane context, engaged-wave/Blue/Red following, zoom,
+target/route/projectile toggles, unit hover inspection and the canonical
+camera footprint. Net HP is explicitly not damage attribution. Old captures
+without missiles remain viewable with an unavailable label. Fixed an older
+viewer mistake: Garen E's centre radius is 330, not 400. Records remain 30 Hz;
+HTML samples 10 Hz and video 15 fps, so subframe events may not be visible.
+Reproduction commands are in `docs/README.md`; the run retains its source
+archive, metadata, command record and visualization checks.
+
+## Farming diagnosis with minimap replays — 2026-09-24
+
+**Current priority: get the learned policy to farm reliably. Exact simulator /
+server CS equality is not a prerequisite for this investigation.** The open
+parity gates below remain diagnostics; they do not explain the observed low-CS
+policy by themselves.
+
+Two fresh **current-code**, frozen-checkpoint mirror games on **danilogin**,
+under `ops/login_capped.sh 6G 2`, seed 123, through the actual trainer rollout
+and decoder. No GPU, real client, training update, or reset during the capture.
+Each trace contains 18,003 pre-action observations, t=0 through 600.030 s.
+These checkpoints predate today's training/action/combat fixes; this is not a
+new training run or a controlled comparison of optimizer settings. The stronger
+checkpoint also had more training. One game per checkpoint is behavioral
+evidence, not a success-rate estimate across seeds.
+
+| checkpoint | CS blue / red | decisions attacking enemy minions, blue / red | alive time within 250 units of enemy minions, blue / red | decisions attacking allies, blue / red |
+|---|---|---|---|---|
+| `scratch-13c30d4-s2-20260924-061408-13c30d40` | **0 / 0** | **1.34% / 3.33%** | **0% / 0%** | 37.77% / 36.85% |
+| `diag1b-20260923-231936-54371e99` | **14 / 36** | **44.96% / 34.31%** | **15.10% / 30.70%** | 33.45% / 39.57% |
+
+The poor policy reaches top lane, but never gets into basic-attack range of
+an enemy minion at a recorded decision. Its closest alive approaches are
+287.25 / 396.84 units, and **zero frames have a windup on an enemy minion**.
+Blue's median nearest-enemy-minion distance while alive is 1,041.93 units.
+The stronger checkpoint has 932 / 1,826 recorded enemy-minion windup frames.
+These are 30 Hz decision observations, not 60 Hz tick traces; windup-frame
+counts are not counts of completed attacks or cancellations.
+
+**Immediate behavioral gap: selecting enemy minions and approaching the wave,
+not merely timing the finishing hit.** Allied clicks are common in BOTH
+policies, so their presence alone is not a sufficient explanation and this
+comparison does not prove that masking them would fix learning. Which training
+mechanism produced the difference remains unisolated. In particular, these old
+weights cannot measure the benefit of retraining after `PPO-14`.
+
+Reproduce the two captures (each checkpoint's `manifest.json` supplies the
+policy architecture and observation horizon):
+
+```sh
+ops/login_capped.sh 6G 2 .venv-jax/bin/python -m lanerl_jax.replay --checkpoint lanerl_jax/runs/bisect/scratch-13c30d4-s2-20260924-061408-13c30d40/ckpt_latest.msgpack --out lanerl_jax/runs/minimap_20260924/low-cs.npz --label "Previously zero-CS policy"
+ops/login_capped.sh 6G 2 .venv-jax/bin/python -m lanerl_jax.replay --checkpoint lanerl_jax/runs/train/diag1b-20260923-231936-54371e99/ckpt_latest.msgpack --out lanerl_jax/runs/minimap_20260924/farming.npz --label "Stronger farming checkpoint"
+ops/login_capped.sh 2G 1 .venv-jax/bin/python -m lanerl_jax.replay_render lanerl_jax/runs/minimap_20260924/low-cs.npz --out-dir lanerl_jax/runs/minimap_20260924/low-cs --video
+ops/login_capped.sh 2G 1 .venv-jax/bin/python -m lanerl_jax.replay_render lanerl_jax/runs/minimap_20260924/farming.npz --out-dir lanerl_jax/runs/minimap_20260924/farming --video
+```
+
+Each output directory contains a self-contained `replay.html` player and a
+1280x800 H.264 `replay.mp4` (10x, about 60 s). Actual navigation-grid terrain,
+all unit positions, HP, command destinations/targets, held targets, swing
+clocks, CS, deaths, full map and close-up. The view is omniscient; policy inputs
+still use fog. HTML samples at 5 Hz, NPZ keeps every decision. Inspect around
+2–5 game minutes to see wave contact. `diagnosis.json` contains the output of
+`lanerl_jax.replay.summarize` on both raw traces. Browser seek, single-step,
+play/pause and red/blue follow controls were exercised in headless Chromium;
+rendered frames were visually inspected. All outputs are gitignored in
+`lanerl_jax/runs/minimap_20260924/`.
+
+## Hardening verification — 2026-09-24
+
+Checked branch `lane-rl/jax`, base `8378bb1` plus the hardening working-tree
+changes. Claude's final conversation stopped at the unresolved mid-windup
+retarget question; its initial recording ended before the first swing.
+The extended real-server recording closes that question and **corrects
+ENT-02**: switching targets cancels the old swing and restarts the windup.
+Previous training trajectories and farming measurements predate this fix.
+
+**The system is not certified simulator/server equivalent.** The fresh,
+full-length canonical gate-3 test remains red: **sim CS=3, server CS=4**,
+sim/server deaths 0/1, attacks 74/86, approach decisions 1250/3214.
+The exact-match tolerance stays zero. This supersedes the older gate-3
+score in the historical dashboard below; it does not identify the remaining
+cause or close gate 1. No new learning experiment was launched.
+
+Verification commands (CPU work is capped; set `LANERL_VENDOR_ROOT` to the
+vendor mount on the execution host, `/mnt/nfs/projects/lanerl-vendor` on
+desktop):
+
+- `ops/desktop_suite.sh 2 6G`: all simulator test files, each in a separate
+  process: **392 tests across 22 files pass**, counting the full run plus
+  the corrected combat-file rerun. The clean wrapper run caught one stale
+  death/recycling fixture after ENT-02 changed retarget timing; it returned
+  failure correctly. The fixture now kills the target before retargeting
+  and passes all 42 combat tests. The runner propagates failures and
+  budgets for the 10G route-table test. Failure propagation has independent
+  shell tests using failing subprocesses.
+- `ops/desktop_cpu.sh 4 10G env LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor .venv-jax/bin/python -m pytest -q -rs -p no:cacheprovider lanerl_jax/train/tests lanerl_jax/obs/tests lanerl_jax/tests lanerl_jax/data/tests`:
+  **186 passed, 20 skipped**. Skips are legacy Slurm files with no REPO
+  variable, not unavailable RL tests. Data/ledger/ops tests are now included
+  in the default pytest collection. The new metric tests separately pass.
+- `ops/desktop_cpu.sh 2 6G env LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor .venv-jax/bin/python -m pytest -q -rs -p no:cacheprovider lanerl_jax/parity/tests -m 'not slow'`:
+  **190 passed, 2 deselected**, rerun after the ENT-02 change. Focused
+  combat/autoattack tests also pass: **50 passed** after the fixture correction.
+- `ops/desktop_cpu.sh 2 6G env LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor .venv-jax/bin/python -m pytest -q -rs -p no:cacheprovider lanerl_train/tests/test_live_server.py lanerl_train/tests/test_reset_invariance.py lanerl_train/tests/test_e2e_real_server.py`:
+  **12 passed**, real server boot/step/actions/reset/restart and end-to-end.
+- `ops/desktop_cpu.sh 2 6G env LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor .venv-jax/bin/python -m pytest -q -rs -p no:cacheprovider lanerl_jax/parity/tests/test_last_hit_gate.py`:
+  **2 passed, 1 failed**, the CS mismatch above.
+
+Additional training checks: the parameter-change test now compares against
+`initial_runner` with the identical seed, rather than another random
+initialization that could pass with no learning. It passes with real
+optimizer updates; the existing zero-learning-rate actor/learner agreement
+tests also pass. Chunk CS means are weighted by completed champion-episodes,
+and final episode counts use those same denominators (`PPO-11`).
+
+The production routed CLI completed a two-update smoke run, reset episodes,
+and wrote checkpoints (`--envs 2 --rollout 4 --updates 2 --minibatches 1
+--chunk 1 --ckpt-every 1 --episode-s 0.2`). A one-update `--resume` continued
+step 32 -> 48 with finite losses. This tests plumbing, **not farming or
+convergence**; resume intentionally restores parameters/optimizer, not the
+ongoing episode. A deliberately nonfinite `--value-coef nan` control stops
+with exit 1, records divergence, and leaves `ckpt_latest` absent. Previously
+the divergence guard stopped training but returned success to the scheduler.
+
+Logs, command outputs, recordings, and smoke checkpoints are retained under
+`lanerl_jax/runs/hardening_20260924/` (gitignored). GPU performance and
+reproducibility were not re-certified; this verification used CPU execution.
+
 ## Phase 1 gate dashboard (canonical results, 2026-09-18)
 
 This is the short authoritative answer to “is Phase 1 done?” Detailed history
@@ -173,7 +801,7 @@ Gate-4 rules that are part of the measurement, not preferences:
 | RESET-003 | `UNOBSERVABLE` | buffs and casts | Buff callbacks, fractional phase/power, generic cast/channel metadata, and every script-private field are not fully serialized. | Fixed lanes cover implemented Garen buffs/casts; recovery cannot recreate unknown script-private state. | Divergence at expiry, spell completion, or immediately after reset. | `sim/spells.py`, `sim/buffs.py`, hidden-state audit. Extend oracle before expanding champion/content scope. |
 | RESET-004 | `APPROX` | missiles and collision cache | The canonical hash/dump omit live missile integration state and the pre-move collision-cache position. | Diagnostic internals restore modelled missile owner/target/position/speed/damage and exact cached collision position; raw float32 position bits avoid injecting a rounded wire coordinate. These fields remain outside the canonical hash. Stable NetIds produced 2,400/2,400 identity-clean pairs. The full quantized run reached 28,526/28,570 (99.85%) componentwise position parity; a 300-pair raw-float pre-clash sample reached 2,160/2,170 (99.54%), with ten remaining perpendicular collision residuals. **Those ten are resolved as of 2026-09-18 and were never a collision bug** (`parity/tier1_same_wave_collision.py`): the current tree is **2,170/2,170**, and reverting *only* `MINION_SPAWN` to its rounded pre-fix value reproduces exactly 10. All ten are freshly spawned minions sitting on the rounded barracks coordinate with **zero colliding neighbours**, five spawn events by two teams, displaced by precisely the two constants' rounding deltas. No collision pass ever touched them. Free-running wave creation now matches the source's red/Chaos-before-blue/Order insertion order; diagnostic injection already reconstructed that order from NetIds, so this source fix correctly leaves the ten residuals unchanged. | A canonical-only/legacy trace can still schedule ranged damage or collision from the wrong state; the last ten collision cases are explained: an already-fixed wrong spawn constant, misattributed to collision ordering. | `parity/trace.py`, `parity/inject.py`, `parity/diagnostic_identity.py`, `sim/tests/test_lane.py::test_map1_top_wave_creates_red_before_blue_for_collision_order`; ~~resolve the same-wave collision residual before closing Gate 1~~ **done 2026-09-18**; keep `tier1_same_wave_collision.py --rounded-spawn` as the regression control, since it reproduces the failure on demand. **The missile blind spot is now measured rather than inferred, and it is 1.1%, not 7.0%.** The 7.0%-with-a-missile against 1.3%-without split is a **confound**, not a mechanism: a tick with a missile in flight is a tick with active combat, which is also a tick with minions swinging. `parity/tier1_residual_drill.py` re-cut the same 1,127 hp misses against the missile aimed at **that unit** rather than against any missile anywhere (job 1005, whole corpus): 684 have an inbound missile that did **not** leave the field that tick, 396 have no inbound missile at all, and only **47** coincide with a missile leaving the field -- of which only **12 (1.1%)** involve a missile the injector could not restore. Across the corpus the injector restores **44,421 of 44,870** missiles from the diagnostic stream and drops **449 (1.00%)**, always because the owner or target NetId does not map to an injected slot. So `RESET-004`'s unobservable floor on hp is **1.1% of the residual**; the other 92.5% is one hit of damage (12.0 x814 melee, 23.0 x228 caster) landing one tick out, i.e. the same swing-completion phase as `aa_hit` -- see `AA-002`. **Update 2026-09-18, after `AA-002`:** with the windup grid recovered, the hp residual falls 1,126 -> **263** and the missile split collapses with it -- 7.0% with a missile in flight -> **1.7%**, and the missile-free rate 1.3% -> **0.0% (0/5,085)**. That is the confound draining away: what looked like a missile blind spot was the melee swing-completion tick, and the true missile-side floor on hp is what is left of the 263. The 263 are now **cleanly isolated to the missile path**: 263 of 263 have a missile in flight and **0 have none**, 259 of them have a missile aimed at *that unit*, and the magnitudes are the caster minion's (23.0 x230). 24 coincide with a missile leaving the field, of which 12 were dropped by the injector. So this row's real floor is measurable at last, on a residual that is no longer contaminated by `AA-002`. |
 | PROG-001 | `BOUNDED` | experience | Server exposes level but not fractional XP or level-up scheduling phase. | Injection records the exact recoverable within-level interval `[XP(level), XP(next level))` and uses a deterministic representative, never claiming the fractional value is observed. | A reset can level at a different subsequent tick. | `parity.inject.xp_bounds_for_level`; retain the interval in reports and do not use a cross-level reset as a mechanics verdict. |
-| ORDER-001 | `VERIFIED` | move/target interaction | A `Move` packet does not clear `TargetUnit`; `RefreshWaypoints` can resume `AttackTo`. The real wire has no `Stop` action. | Move preserves the target; the internal `STOP` enum is not emitted and behaves as a no-op. | If regressed: the policy gains a disengage action the server lacks. | `sim/orders.py`, `sim/tests/test_orders.py`, `PORT_AUDIT_AI.md`. |
+| ORDER-001 | `VERIFIED` for legacy low-level Move; screen-click ground moves explicitly clear targets | move/target interaction | A `Move` packet does not clear `TargetUnit`; `RefreshWaypoints` can resume `AttackTo`. The real wire has no `Stop` action. | Move preserves the target; the internal `STOP` enum is not emitted and behaves as a no-op. | If regressed: the policy gains a disengage action the server lacks. | `sim/orders.py`, `sim/tests/test_orders.py`, `PORT_AUDIT_AI.md`. |
 | SPELL-000 | `APPROX` -- restored 2026-09-23; was `SPELL-001` until that ID was reused by the E re-cast row | E damage snapshot AD | Server snapshots the caster's live attack damage. | Production uses profile base plus level growth, but modifiers outside the implemented buff/item slice are absent; table-free unit tests use a level-one placeholder. | Spin damage wrong after future items/buffs are added. | `_ad_placeholder` in `sim/orders.py`. Remove the fallback when all callers provide parameters and extend the live stat pipeline with content scope. |
 | SCOPE-001 | `APPROX` | supported game content | The server supports the full map roster, items, runes, neutrals, objectives, all champions, and modern client rules. | The JAX scope is a 1v1 Garen top-lane training slice with lane minions and turrets. Unsupported content is absent, not approximately simulated. | Policies exploit missing pressure or fail when transferred beyond the slice. | `JAX_REWRITE_PLAN.md` scope. Add one ledger row per newly admitted content family before implementation. |
 | AA-001 | `VERIFIED` | auto-attack cooldown ordering | `ObjAIBase.Update` calls `UpdateTarget()` (`ObjAIBase.cs:1101`) and only **then** decrements `_autoAttackCurrentCooldown` (`:1103-1105`). A unit therefore cannot swing on the tick its cooldown expires, and a swing tick ends one tick *into* the cooldown it just set. | **Fixed 2026-09-18.** `sim/autoattack.py` now evaluates the swing gate against the cooldown as it stands on entry and decrements last; the module docstring, which asserted the opposite order as established fact and was the reason the code read the way it did, is corrected and now carries the dumped evidence. Before the fix every sim swing started one tick (16.67 ms) early. | The period was never wrong -- both orderings see `period - k*step` at the k-th gate, so the 97-tick drain of a 1.6 s cooldown is identical either way. That is precisely why it survived: it is a **phase** error and every existing test pinned a **rate**. Reconciled against a rollout before the fix: the corpus's 2.19x swing ratio was a per-pair injection artifact, not a rate error (free-running, the swing rate was 1.009x), so this was never the cause of gate 3. | Corpus job 943 against job 882's baseline: minion `aa_fire` misses 2,880 -> **984**, `is_attacking` 3,455 -> 1,559, `aa_cooldown` 14,935 -> 11,725 with p95 1.4932 s -> 0.7832 s; sim fires 5,121 -> 3,225 against a server 2,337. The mismatch *shape* changed with it: the drilled examples went from `aa_cooldown q sim=819` (a whole 0.8 s period) to `sim=802` (0.8 s minus one tick), i.e. the sim's swing tick now ends on the server's own value. The 936 that remain are the `RESET-002` sub-quantum cooldown, matched 39.9% against 40.0% by a scan of all 2,306 server swing starts in the raw log (see the gate-1 row). Regression guard: `sim/tests/test_update_order.py` -- `test_a_unit_cannot_swing_on_the_tick_its_cooldown_expires`, `test_a_swing_tick_ends_one_tick_into_its_own_new_cooldown`, and `test_the_swing_period_is_unchanged_by_the_reordering` as the control that shows why a rate test cannot catch this. |
@@ -249,7 +877,7 @@ wave does **not** systematically lag. The 612-vs-315 figure is conditional on
 | SPELL-012 | `FIXED` 2026-09-23 | **an ended Garen E stays LISTED for one more row on the server, and an EXPIRED spin's cooldown is already one tick down on its end row** | End = `Buff.DeactivateBuff` (`Buff.cs:124-148`): `OnDeactivate` runs at once -- `SetStatus(CanAttack, true)`/`SetStatus(Ghosted, false)` write the unit's status immediately (`GarenE.cs:56-57` -> `AttackableUnit.cs:717-737`), `SetSpell("GarenE")` + `SetCooldown(13)` (`GarenE.cs:60-61`) -- but the buff only gets `_remove = true` (`Buff.cs:130`); it leaves `BuffList` at the NEXT `UpdateBuffs` (`AttackableUnit.cs:819-821`: `if (buff.Elapsed()) RemoveBuff(buff)`, no `OnUpdate`, no status contribution). CANCEL: `GarenECancel.OnSpellPostCast` -> `RemoveBuff(owner, "GarenE")` (`E.cs:39`) -> `RemoveBuffsWithName` -> `DeactivateBuff` (`ApiFunctionManager.cs:339-342`, `AttackableUnit.cs:1543-1552`), synchronously inside `Spell.Cast` (InstantCast -> `FinishCasting`, `Spell.cs:577-608,1091`), inside `LanerlControl.OnTick` (`LanerlHooks.cs:120`), i.e. BEFORE the row is dumped (`LanerlHooks.cs:124`) and before `ObjectManager.Update` (`Game.cs:477` vs `:483`): row = GarenE listed, cd exactly 13.0; next row = gone, 13 - 1 tick. EXPIRY: `Buff.Update` runs `OnUpdate` then `DeactivateBuff` at `TimeElapsed >= Duration` (`Buff.cs:215,223`) inside `UpdateBuffs`, the first call of `AttackableUnit.Update` (`AttackableUnit.cs:239`); `ObjAIBase.Update` then runs `Spell.Update` on every slot (`ObjAIBase.cs:1119` base, `:1142-1144` spells; decay `Spell.cs:1673-1680`), including the GarenE just swapped back, so the end row shows GarenE listed and 13 - 1 tick. Recording `obsharden-b0ctl-120s`: expiry `t=3167` blue `GarenE` + `13295`/1024, `t=3183` gone + `13278`; cancel `t=10017` red `GarenE` + `13312` (13.0), `t=10033` gone + `13295`. The extra listed row has NO effect: no damage tick, no ghosting, attack not suppressed. | `end_e` dropped the buff from the name view in the same step it ended it, and `step_buffs` wrote E's expiry cooldown AFTER `decay_cooldowns`: on every E end the gate saw `buffs '-' != 'GarenE'`, and on every expiry the sim's E cooldown ran one tick behind the server for the whole 13 s (4,469 diverged ticks in 120 s; first divergence `t=3167`). | Low for training (the E ready-edge was one tick late after an unpressed spin; nothing behavioural lingered), but it was the PARITY-001 gate's first divergence and hid everything after it. | `EBuff.lingering` (set by `end_e`, cleared at the top of the next `step_buffs`) is read only by `spells.active_by_name` (the `GetBuffs()` name view), never by `status`; `step_buffs` now calls `end_e` BEFORE `decay_cooldowns` (Q's and R's ends unchanged); the gate's `render_sim_snapshot` keys E's GarenECancel projection on the live spin (`fetch`'s new `e_active`), not the listed name. Tests: `sim/tests/test_spells.py::test_e_cancel_is_tick_exact_the_buff_lingers_one_row_without_effect` (cancel row listed + 13.0 exact + not ghosted; next tick gone, `13 - 1 tick`, no damage with the accumulator due; control fires) and `::test_e_expiry_is_tick_exact_cooldown_counts_down_on_the_end_tick` (tick 181: listed + `13 - 1 tick`; next tick gone, `13 - 2 ticks`, no damage); pre-fix they failed on the cancel row's listing and on the expiry cooldown `13.0 != 12.983334`. Re-scored gate: `Champion.buffs` and `Champion.spell.E.cooldown` 0 diverged ticks (were 14 and 4,469); first divergence now `t=92614` `LaneMinion.pos`. NOT checked: Q's expiry (`GarenQ.OnDeactivate` `SetCooldown(8)` inside `UpdateBuffs`) has the same `Spell.Update`-after-`UpdateBuffs` shape and the same lingering listing; no Q in this recording. **CHECKED 2026-09-23 -> `SPELL-013`**: Q's expiry is this shape; Q's empowered-hit end lingers the same but writes its cooldown AFTER the countdown (exactly 8.0 on the end row). |
 | SPELL-013 | `FIXED` 2026-09-23 | **Garen Q's two ends and Q-haste's expiry: all three LINGER one listed row like E (`SPELL-012`), but only EXPIRY counts the cooldown down on the end row -- the empowered-hit end shows exactly 8.0** | All three go through `Buff.DeactivateBuff` (`Buff.cs:122-148`): `OnDeactivate` + `RemoveStatModifier` at once, `_remove = true`, the `Buff` leaves `BuffList` at the NEXT `UpdateBuffs` (`AttackableUnit.cs:810-821`) with no `OnUpdate`. (1) **Q EXPIRY**: `Buff.Update` deactivates at `TimeElapsed >= 4.5` inside `UpdateBuffs` (`AttackableUnit.cs:239`, first in `Update`); `GarenQ.OnDeactivate` restores the basic attack, unseals slot 0, `SetCooldown(8)` (`Buffs/Garen/GarenQ.cs:86-105`, `:98`); `ObjAIBase.Update` then runs `Spell.Update` on every slot (`ObjAIBase.cs:1119`, `:1142-1145`; `STATE_COOLDOWN` decay `Spell.cs:1673-1680`): end row = `GarenQ` listed + 8 - 1 tick. (2) **Q CONSUMED by the empowered hit**: `GarenQAttack.OnSpellPostCast` -> `OnSpellEnd` -> `GetBuffWithName("GarenQ").DeactivateBuff()` (`Characters/Garen/Q.cs:116-132,155-163`; also when the target is null/dead at `FinishCasting`), inside `GarenQAttack`'s OWN `Spell.Update` (auto-attack windup -> `FinishCasting`, `Spell.cs:1645,1666-1668`). The `Spells` loop walks a `Dictionary<short,Spell>` in insertion order and `GarenQAttack` is `ExtraSpell1` (`Stats/Garen/Garen.json:41`), slot 45, inserted after slot 0 (`ObjAIBase.cs:155-206`): `GarenQ` has ALREADY counted down this tick, so `SetCooldown(8)` survives it: end row = `GarenQ` listed + exactly 8.0. **This path does NOT behave like E's expiry**; it is E's cancel shape (cooldown written after that tick's countdown). (3) **GarenQHaste EXPIRY**: no cooldown; `DeactivateBuff` removes the +35% `StatsModifier` itself (`Buff.cs:143-146`) BEFORE that tick's `Move` (`AttackableUnit.cs:253-263`), so the end row already moved at base speed while `GarenQHaste` is still listed. Measured, `lanerl_jax/runs/parity001/sweepA-a4-300s/policy/instance000.log` (the only recording with Q ends; 4 of them): hit -- blue `t=200097` casting `GarenQAttack`, `t=200113` `GarenQ` listed + `8192`/1024 (8.0), `t=200130` gone + `8175`; red `t=213384` listed + `8192`, `t=213401` gone + `8175`. Expiry -- blue `t=217769` listed + `8175`, `t=217786` gone + `8158`; red `t=227372` listed + `8175`, `t=227389` gone + `8158`. Haste -- blue per-tick step 124.3 -> 92.3 quantised units into `t=200397` (ratio 1.347) with `GarenQHaste` still listed, gone at `t=200413`. | `end_q`/`end_q_haste` dropped the name in the step that ended it (all three paths), and `step_buffs` wrote Q's expiry 8 s AFTER `decay_cooldowns` (one tick behind for 8 s on every unconsumed Q). The hit path's cooldown was already right. | Low for training (Q ready one tick late after an unconsumed window; nothing behavioural lingered), but every Q end would have been a gate divergence (`Champion.buffs` on all three, `spell.Q.cooldown` for 8 s after each expiry) the moment a policy casts Q. | `QBuff.lingering` and `RankedBuff.lingering` (`sim/state.py`; set only for `q_haste` -- `GarenW` has the same server shape by source but is NOT ported or measured, and `r_pending` is not a server buff) are set by `end_q`/`end_q_haste`, cleared at the top of the next `step_buffs` with E's, and read only by `spells.active_by_name` (now `active | lingering` for every record), never by `status`/`cast_locked`. `step_buffs` calls `end_q` BEFORE `decay_cooldowns` (with `end_e`); `step.py` block 15's hit-path `end_q` stays after it. Tests (`sim/tests/test_spells.py`, the one jitted `tick`): `::test_q_expiry_is_tick_exact_listed_and_cooldown_counts_down_on_the_end_tick` (window ends on tick 270; end row listed, unsealed, `8 - 1 tick`; next gone, `8 - 2 ticks`), `::test_q_hit_is_tick_exact_listed_with_the_cooldown_at_exactly_8` (hit row listed, exactly 8.0; next gone, `8 - 1 tick`), `::test_q_haste_expiry_moves_at_base_speed_and_stays_listed_one_row` (tick 91 at rank 1: base-speed step, listed; next gone); pre-fix all three failed (expiry: `8.0 != 7.983333`; hit and haste: not listed). Two older tests pinned the old expiry value and were updated (`test_qs_cooldown_starts_when_the_window_closes_not_at_cast`: first written value `8 - 1 tick`; the `SPELL-006` corpse test's tolerance `2/60 -> 2/60 + 1e-4`, a decision boundary now reaching `8 - 2 ticks`). NOT done: (a) the window length (270 ticks) and haste length (91 at rank 1) are the sim's existing counts, not re-derived against a clean server cast here (sweep A's Qs are rank-0 renewals); (b) **tier-1 injection resurrects a lingering buff**: `parity/inject.py:1031-1041,1095-1111` marks every LISTED name `active` with the dumped phase, so a row carrying an ended E (cancel) or a consumed Q (elapsed < 4.5) re-opens the spin/window in the sim -- the dump would need the `_remove` bit (or `lingering` inferred from the slot state) before tier 1 can inject end rows faithfully; (c) `GarenW`'s expiry. |
 | ENT-01 | `FIXED` 2026-09-23 | **an ATTACK order on your OWN minion swung, killed it, and paid gold and CS** | `LanerlControl.cs:391` sets any unit as `TargetUnit` with no team check, but `ObjAIBase.UpdateTarget`'s swing/chase/hold branch is inside `if (TargetUnit.Team != Team && ...)` (`ObjAIBase.cs:1285`): an ally target is HELD and does nothing. Its one effect is to release a sticky enemy target -- the server's only disengage. Real League cannot target allies at all. | No team test anywhere on the path: `orders.py` accepted the target, `step.py`'s RefreshWaypoints chased it, `autoattack.py` swung, `rewards.death_rewards` paid. Measured: blue Garen killed a 50 HP blue minion in 22 ticks, +20 gold, +1 CS. | **High.** Deny your own low minions for gold and CS, and starve the opponent of them; in the server the same orders do nothing. The same class as `SPELL-001`: sim CS that is 0 in the server. | `hostile = has_tgt & (team[tgt] != team)` gates `refresh` (chase/hold) and a new `may_engage` input to `step_autoattack` gates the swing START only -- a swing already in flight is not cancelled by re-targeting an ally (`ObjAIBase.cs:1245` cancels only on range/death), and lands on its own target (`ENT-02`). The ORDER is still accepted and held, so the disengage exists. `death_rewards` also carries `& (team[k] != team)` as belt-and-braces. Tests: `test_an_attack_order_on_an_allied_minion_holds_it_but_never_swings_or_pays`, `test_death_rewards_never_pay_a_same_team_killer`. Found by the entity audit (2026-09-23). |
-| ENT-02 | `FIXED` 2026-09-23 | **re-targeting during the wind-up moved the hit onto the NEW target** | `Spell.FinishCasting` deals melee damage to `CastInfo.Targets[0].Unit` (`Spell.cs:1030`) -- the unit the swing was declared on -- and a ranged swing's missile carries its own `TargetUnit`. `SetTargetUnit` rewrites neither; the `SetCurrentTarget` branch at `ObjAIBase.cs:1326` is dead code behind the `IsAttacking` early return at `:1245`. Real League: a new attack command cancels the wind-up and starts a new one. | `step.py` resolved `dmg_ij`, the armour lookup, the missile launch target and Q's silence against the CURRENT `target`. Measured: swing started on a 455 HP minion A, re-ordered onto a 30 HP minion B one tick before impact -- B died (+20 gold, CS 1), A untouched. | **High.** Re-issue "attack the lowest killable minion in range" every decision and last-hit with ZERO wind-up, removing the skill the whole CS metric is supposed to measure; untelegraphed trades (wind up on a minion, finish on the champion). In the server the hit lands on A. | New state field `aa_target` (the swing's own target, set on `aa.start`, held through the wind-up, cleared when the swing ends or the unit dies); `hit_target = where(aa_target >= 0, aa_target, target)` feeds the hit row, resist, missile and silence. The cancel test keeps reading the current target, as `ObjAIBase.cs:1247` does. A hand-built state with `is_attacking` and no `aa_target` falls back to `target`, which is what every pre-existing test assumed. Test: `test_a_retarget_during_the_windup_lands_on_the_unit_the_swing_started_on`. Entity audit. |
+| ENT-02 | `VERIFIED` 2026-09-24 (retarget cancellation) | **changing targets during an auto-attack windup** | `Spell.CastCancelCheck` (`Spell.cs:279-287`) checks `CastInfo.Targets[0].Unit != Owner.TargetUnit` BEFORE advancing the windup or calling `FinishCasting`. It calls `CancelAutoAttack(!HasAutoAttacked, true)`: cancel the old swing and permit a fresh swing immediately if the new target is in range. | The 2026-09-23 fix correctly stored swing identity but incorrectly let the old swing land after retargeting. Corrected: `step_autoattack(swing_target_changed=...)` cancels before completion, refunds the cooldown when appropriate, and starts a full new windup. Dead-target cancellation remains distinct (`AA-007`: no immediate restart). | High: changes the last-hit timing problem and invalidates prior training/evaluation trajectories. Neither victim gets an instantaneous hit on a switch. | Real Trace-server recording, 15,000 single-tick decisions / 250 s, autobuy off, all scripts loaded; seven issued switches including in-range early/late, after-hit, and out-of-range controls. At t=125276 ms the in-range late switch resets `aadelay` 324 -> 0, `aawindup` 17 -> 341, `aacd` 1297 -> 1621 (dump units); no old hit lands. Reproduce: `python -m lanerl_jax.parity.retarget_probe --out lanerl_jax/runs/retarget_check` (under the resource cap). Evidence: `lanerl_jax/runs/hardening_20260924/retarget/{driver.jsonl,ent02/instance000.log}`. Regression: `test_a_retarget_during_the_windup_restarts_the_swing`, early and final-frame cases. This corrects the previous claim that the server lands the hit on A. |
 | ENT-03 | `OPEN` (server deviation, sim copies it) 2026-09-23 | turret aggro triggers only on "targeting a champion within 125", never on ability damage or on autos landed from 125-155 | `TurretAI.cs:64-80`: switches only when `enemyChamp.TargetUnit is Champion` and distance <= `Range.Total` (125, centre-to-centre). Garen's autos reach 125+30=155, and E/Q/R damage never sets `TargetUnit`. Real League: ANY damage to an allied champion inside turret range draws the turret. | `targeting.turret_acquire` is identical. | High in BOTH engines (spin or ult the enemy under his own turret for free; auto from max range), so it TRANSFERS to the server and fails only in real League. | No JAX change while the server is the reference. To go League-correct, both engines would trigger on the tick's damage to allied champions in range. Entity audit. |
 | ENT-04 | `APPROX` (deliberate, `obs/fog.py`) 2026-09-23 | fog has no brush and no terrain line-of-sight | `ObjectManager.UnitHasVisionOn` also requires `!IsAnythingBetween` (`ObjectManager.cs:536`); `NavigationGrid.CastRay` applies brush via `HAS_GRASS`. Entering top-lane brush hides a champion and drops the enemy's minion/turret/champion targets on it. | pure radius test; the same model is applied to wire positions in the server eval, so eval and training agree. | Medium, distribution shift not exploit: the sim over-reveals, the policy never learns brush or aggro-shedding, and meets fog holes it has never seen. | Bake `HAS_GRASS` and vision-blocking cells into a static mask and add a ray test in `visible_to`. Was `OBS-001` (restored, see `LEDGER-001`). |
 | ENT-05 | `FIXED (eval)` 2026-09-23 | the server eval played with the SHOP ON while the sim has no items | `LanerlHooks.cs:365`: `_autoBuyUndriven = LANERL_AUTOBUY != "0"`; `lanerl_train/vec.py` never set it, so both server champions started with a 475 wallet and bought Doran's Shield (+80 HP, +1.2 HP/s) and potions. The wire's `gold` is the wallet, not earnings (`OBS-04`). | no item model; `gold` is earnings from 0. `ITEM-001`/`SCOPE-001` (restored) record the scope. | Medium, a transfer problem: trade thresholds learned item-free are ~12% off in HP, and the gold feature carries a +0.16 offset and goes DOWN. | `tools/rl_eval_vs_server.py` now sets `LANERL_AUTOBUY=0` in the spawn environment. Earned-gold reconstruction (`OBS-04`) FIXED 2026-09-23. Entity audit. |
@@ -265,7 +893,7 @@ wave does **not** systematically lag. The 612-vs-315 figure is conditional on
 | COLL-005 | `APPROX` 2026-09-24 (deliberate throughput trade, previously unledgered) | **the training step repairs collision-into-terrain AFTER the whole dynamic sweep, so a later unit escapes from an earlier unit's PRE-repair position** | `AttackableUnit.OnCollision` (`AttackableUnit.cs:312-316`): the circle exit is re-projected by `GetClosestTerrainExit` INSIDE that unit's own `OnCollision`, and `CollisionHandler.Update` visits units serially in creation order (`COLL-001`/`COLL-003`), so every LATER unit tests and escapes against the earlier unit's terrain-corrected position. | `SimConfig.training`/`.gate` (`sim/config.py:189-209`) run `collision_terrain=False, defer_collision_terrain=True`: `resolve_collisions` sweeps with no terrain and `repair_collision_terrain_batch` (`sim/step.py:328-336`) repairs afterwards -- chosen because the inline per-neighbour repair 'misses J1's throughput gate by two orders of magnitude' (`config.py`), and flagged in code ('not source-order exact ... Callers must expose that approximation', `sim/terrain_jax.py:481-484`) but never given a row. Every tier-1 / gate-1 / gate-3 measurement ran `tick()`'s default INLINE repair (`parity/one_step.py:106,418`; `SimConfig.scripted`), so none of them could see this. | Minion (and champion) positions differ by up to one escape when an earlier unit in the same contact is pushed into terrain; it compounds once a unit is off (the next escapes differ). | **Measured 2026-09-24 on `runs/parity001/obsharden-b0ctl-120s`** (the PARITY-001 gate's first divergence, `t=92,614`): red wave-1 melee minion B (sim slot 4, `spawn_seq` 28, server NetId 1073743689) is 71.0 u behind melee minion A (slot 2, NetId 1073743556) when A's escape from B lands in terrain. Server, source order: A escapes to (12255.21, 12851.91), is re-projected to (12259.21, 12842.25) [`coll` field], then B, 71.32 u from A's REPAIRED position (< 80 trigger), escapes by (+1.10, +0.41) to (12327.2266, 12867.3164). Sim, deferred: B tests A's PRE-repair exit, exactly 72.487 u = `PR + 1 + PR` away, push 0; A is repaired afterwards. Replaying that one collision pass from the sim's own pre-tick state: deferred B = (12326.1270, 12866.9111) = no push; INLINE B = (12327.226562, 12867.316406), **bit-identical to the server's `collbits`**. Rate over the whole 120 s replay (both passes from the same pre-tick state every tick, `/tmp/triage_p001/rate.py`): **75 of 7,201 ticks, 75 of 207,386 live unit-ticks, all LaneMinion; 75 of the 568 unit-ticks the inline pass pushes (13.2%); max L-inf 20.02 u; none before 92,614.** Counterfactual gate free-run with the inline repair: minion first divergence moves 92,614 -> **93,564 ms** (`LaneMinion.pos` diverged ticks 418/242 -> 39/39; `only_in_*` 1,640 -> 1,588) -- a DIFFERENT, unowned mechanism (same minion B takes a ~10.6 u (+3.87, -9.87) escape in the sim that the server does not; B already carries a sub-quantum 0.019 u offset inherited from A's turret escapes, which first appears at 92,065 at 0.0215 u; neither diagnosed). Resolution: either port the inline repair at acceptable cost (the J1 throughput measurement is the gate) or keep this row and score gate minion state per tick in the training configuration so this is counted as `APPROX`, not as a free-run first divergence (`PARITY-001` 2026-09-24 note). **DECISION 2026-09-24: the deferral STAYS for training.** Exact per-neighbour terrain repair inside the collision sweep missed the J1 throughput gate by two orders of magnitude (`SimConfig.training`'s docstring), while the deferral's cost is 75 of 7,201 ticks differing, minions only, max 20 u, in a 120 s policy replay. A 100x slower simulator to remove a 1% minion-position residual is not a trade this project can make; the gate scores minion state with `COLL-005` as its own bucket instead (`PARITY-001`). Revisit only if a measured policy behaviour depends on wall-hugging minion collisions. |
 | SLOT-001 | `FIXED` 2026-09-23 | a recycled minion slot inherited the dead occupant's state | The server constructs a fresh `Minion` object per spawn. | `spawn_minion` reset a hand-picked subset of fields. Measured over a 600 s idle lane: `has_auto_attacked=True` inherited 8-19 times a minute, stale `aa_cooldown`, `ai_local_time` on every reuse, `ignore_until` rows/columns 1-11 a minute. A missile still flying at the corpse would land on the newcomer (death resolves after the missile step, the spawn reuses the slot before the drop). | Low-Medium per field; `HADTGT-001` (restored) was this class fixed one field at a time. | Every per-unit field is now written from `empty_state`'s value, both (N,N) tables have row AND column cleared, missiles aimed at the slot are dropped. Test: `test_a_reused_minion_slot_starts_from_the_template`. Structural review. |
 | AA-006 | `FIXED` 2026-09-23; row corrected and fix completed 2026-09-24 | a unit that dies mid-wind-up keeps its swing state on the corpse | `UpdateTarget`'s first branch (`ObjAIBase.cs:1219-1227`): a dead unit holding a target does `CancelAutoAttack(true, true)` and drops the target. `CancelAutoAttack(reset: true, fullCancel: true)` (`ObjAIBase.cs:469-484`) puts the spell back to READY, sets `_autoAttackCurrentCooldown = 0`, calls `ResetSpellCast` (clears the wind-up clock) and sets `IsAttacking = false`. It does NOT write `HasAutoAttacked`. A corpse still `STATE_CASTING` is also `ResetSpellCast` by `CastCancelCheck`'s owner-dead branch (`Spell.cs:215-217`), with or without a target. | 2026-09-23: `step.py` masked `target` and `aa_target` for a unit that died this tick, but stored `is_attacking=aa.is_attacking` unmasked, so the flag cleared on the NEXT tick (86-118 occurrences per 100 s random-stream run). The 09-23 fix masked `is_attacking` only. This row used to claim `aa_windup` and `has_auto_attacked` were masked too; they were not (`docs/PLAYTEST_SWEEP.md` (c)4). A unit that died on the tick it started or finished a swing kept `aa_windup` (e.g. 0.461 s, 3e-5 s) and a counting-down `aa_cooldown` on its corpse. | Low: nothing reads a corpse's wind-up. A port drawing attack state from `aa_windup` would show a corpse mid-attack. A champion's cooldown survived into its respawn. | 2026-09-24, the whole `CancelAutoAttack(true, true)` on the death tick (`step.py` `cancel_on_death`, and the return block): `is_attacking` false and `aa_windup` 0 on every dead unit; `aa_cooldown` 0 when the unit held a target at death, which a unit mid-swing always does; `has_auto_attacked` left as it was. Tests: `test_a_dead_unit_is_not_mid_swing` (now also asserts no wind-up on any corpse snapshot and a zero cooldown for every death mid-swing: 74 such deaths over 3 seeds; on the 09-23 code it reports 59,506 corpse snapshots with a wind-up), `test_a_champion_that_dies_mid_windup_ends_its_death_tick_with_no_swing_state` (fails before: `aa_windup` 0.317), `test_a_champion_that_dies_between_swings_keeps_has_auto_attacked` (fails before: `aa_cooldown` 1.217). Found by the STRUCT-001 property tests; completed after the automated playtest. |
-| AA-007 | `FIXED` 2026-09-24 | **a swing whose declared target died kept winding up, and landed on whatever was later spawned into the slot** | The swing's target is an OBJECT, `AutoAttackSpell.CastInfo.Targets[0].Unit`. `Spell.Update` runs before `UpdateTarget` (`ObjAIBase.cs:1142-1153`). For a swing in `STATE_CASTING` its first act is `CastCancelCheck` (`Spell.cs:1645-1649`), before the wind-up advances or `FinishCasting` runs. If `Targets[0].Unit.IsDead`, it calls `Owner.CancelAutoAttack(true)` (`Spell.cs:264-271`): READY, cooldown 0, wind-up reset, no `fullCancel`. `UpdateTarget` then clears `IsAttacking` and returns before the swing gate in every branch (`:1235-1256`). Result: no hit, cooldown 0, wind-up 0, not attacking, `HasAutoAttacked` untouched, no new swing that tick. | `aa_target` held a slot INDEX. `step_autoattack` cancelled only on the CURRENT target (`cancel_lost_target`). A swing whose declared target died while the attacker had re-aimed at a live unit in range wound up to the end and fired at the dead slot. `spawn_minion` runs at the top of the next tick. If the next wave reused that slot first, the swing landed on the newcomer. Measured by the playtest: red casters firing 8-11k units back up the lane into a new red minion at its own barracks, 23-40 damage; 7-16 recycles under a held swing per condition. | Medium: friendly-fire damage and cross-map projectiles on screen. A swing that should have been cancelled with a cooldown refund instead paid its full cooldown. | `step.py` phase 19 replaces an `aa_target` whose unit is dead at the end of the tick with the sentinel `AA_TARGET_GONE` (-2, `state.py`), so no index to a dead unit survives into the next tick. `step_autoattack(swing_target_gone=...)` then cancels the swing at `CastCancelCheck`'s position (before the advance), with `reset=true` semantics, and blocks a new start that tick. The same test catches a dead index from a hand-built or injected state. The CANCEL is on the attacker's next update rather than the death tick, for the reason `TGT-DEATHTICK` measured: the server sees the death on the same tick only for units updated after the killer, and missiles, which land most kills, update late. Repro (`docs/PLAYTEST_SWEEP.md` (c)1, `repro_training_trained_recycle_1.pkl`): before, a missile launched at t=130,537 and hit the red caster 290->267 at t=141,874. After, the swing is cancelled on the first tick (cooldown 0) and a new swing starts on the live target one tick later. There is no friendly launch and no friendly hit over 700 ticks. Tests: `test_a_swing_whose_target_died_is_cancelled_and_never_lands_on_the_recycled_slot` (fails before: `aa_target` still 2 after the death tick), `test_a_swing_on_a_dead_target_is_cancelled_before_it_can_complete`. **Not addressed, flagged:** `CastCancelCheck` also cancels an auto-attack whose `Targets[0] != Owner.TargetUnit` (`Spell.cs:279-287`, `CancelAutoAttack(!HasAutoAttacked, true)`). On the server the precondition of this bug, a unit mid-swing on A with `TargetUnit` = B, does not survive one update. `ENT-02` keeps such a swing and lands it on A. That row needs re-reading against this clause. |
+| AA-007 | `FIXED` 2026-09-24 | **a swing whose declared target died kept winding up, and landed on whatever was later spawned into the slot** | The swing's target is an OBJECT, `AutoAttackSpell.CastInfo.Targets[0].Unit`. `Spell.Update` runs before `UpdateTarget` (`ObjAIBase.cs:1142-1153`). For a swing in `STATE_CASTING` its first act is `CastCancelCheck` (`Spell.cs:1645-1649`), before the wind-up advances or `FinishCasting` runs. If `Targets[0].Unit.IsDead`, it calls `Owner.CancelAutoAttack(true)` (`Spell.cs:264-271`): READY, cooldown 0, wind-up reset, no `fullCancel`. `UpdateTarget` then clears `IsAttacking` and returns before the swing gate in every branch (`:1235-1256`). Result: no hit, cooldown 0, wind-up 0, not attacking, `HasAutoAttacked` untouched, no new swing that tick. | `aa_target` held a slot INDEX. `step_autoattack` cancelled only on the CURRENT target (`cancel_lost_target`). A swing whose declared target died while the attacker had re-aimed at a live unit in range wound up to the end and fired at the dead slot. `spawn_minion` runs at the top of the next tick. If the next wave reused that slot first, the swing landed on the newcomer. Measured by the playtest: red casters firing 8-11k units back up the lane into a new red minion at its own barracks, 23-40 damage; 7-16 recycles under a held swing per condition. | Medium: friendly-fire damage and cross-map projectiles on screen. A swing that should have been cancelled with a cooldown refund instead paid its full cooldown. | `step.py` phase 19 replaces an `aa_target` whose unit is dead at the end of the tick with the sentinel `AA_TARGET_GONE` (-2, `state.py`), so no index to a dead unit survives into the next tick. `step_autoattack(swing_target_gone=...)` then cancels the swing at `CastCancelCheck`'s position (before the advance), with `reset=true` semantics, and blocks a new start that tick. The same test catches a dead index from a hand-built or injected state. The CANCEL is on the attacker's next update rather than the death tick, for the reason `TGT-DEATHTICK` measured: the server sees the death on the same tick only for units updated after the killer, and missiles, which land most kills, update late. Repro (`docs/PLAYTEST_SWEEP.md` (c)1, `repro_training_trained_recycle_1.pkl`): before, a missile launched at t=130,537 and hit the red caster 290->267 at t=141,874. After, the swing is cancelled on the first tick (cooldown 0) and a new swing starts on the live target one tick later. There is no friendly launch and no friendly hit over 700 ticks. Tests: `test_a_swing_whose_target_died_is_cancelled_and_never_lands_on_the_recycled_slot` (fails before: `aa_target` still 2 after the death tick), `test_a_swing_on_a_dead_target_is_cancelled_before_it_can_complete`. **Follow-up closed 2026-09-24:** the real-server retarget recording confirms cancellation and immediate fresh windup; see corrected `ENT-02`. |
 | SLOT-002 | `FIXED` 2026-09-24 | a recycled minion slot stayed OTHER units' `target`/`aa_target` | `TargetUnit` and `CastInfo.Targets[0]` reference objects. The corpse that held a slot is not the minion constructed into it, and a dead `TargetUnit` is dropped by the holder's own `UpdateTarget` (`ObjAIBase.cs:1235-1243`). | `SLOT-001` reset the reused slot's own row and dropped missiles aimed at it, but left every other unit's `target`/`aa_target` pointing at it. The sim drops a dead `target` on the holder's NEXT tick (`TGT-DEATHTICK`), after that tick's spawn. So a held reference became the newcomer: the caster swing of `AA-007`, and (playtest, scripted/trained env0 t=384.47 s) red Garen's `target` recycled into an allied caster at the red barracks, held as an ally (`ENT-01`) so he silently lost his enemy target. | Medium (with `AA-007`); low for the champion case. | `spawn_minion` (`init.py`, `SLOT-002` comment) sets every other unit's `target == slot` to -1 and `aa_target == slot` to `AA_TARGET_GONE`. It uses the sentinel, not -1, because -1 means 'resolve against `target`' (`ENT-02`'s fallback). Load-bearing for `target`; belt-and-braces for `aa_target`, which `AA-007` already swaps on the death tick. Test: `test_a_reused_minion_slot_is_not_anyone_elses_target` (fails before: the other unit's `aa_target` still names the slot). |
 | SLOT-003 | `FIXED` 2026-09-24 | a missile whose shooter's slot was recycled in flight was credited to the slot's new occupant | A missile holds its owner as an object and lands whether or not that owner is alive. `SpellMissile.Update` tests only the target (`SpellMissile.cs:70-84`). `CheckFlagsForUnit` tests the target and `IsValidTarget(Owner, target)`, which checks teams and flags, not the owner's death (`SpellMissile.cs:177-196`, `SpellData.cs:191-222`). Then `Owner.AutoAttackHit` deals the damage with `Attacker` = the dead minion (`ObjAIBase.cs:269-294`). So: the damage lands. The killer is a dead minion, and neither minion death nor `Champion.Die` pays one. The champion hit-flag records the dead minion, which is never a champion assist. The call for help names the dead minion, and `LaneMinionAI` never acquires a dead unit (`IsValidTarget`, `LaneMinionAI.cs:125-135`), so nothing changes. Garen's passive reads the dead minion's own `UnitTags`. | `missile_source` is a slot index, and `spawn_minion` did not touch it. A landing after the slot was reused went into `dmg_ij`'s row for the NEW occupant. That row fed the killer index, `hit_flag_by`, call-for-help from the newcomer's position and team (usually the victim's own team, so allies saw an ally attacking an ally), and the passive's combat test with the newcomer's type. The playtest measured 170-214 missiles per condition landing after their shooter died; how many had the slot reused was not counted. | Low: reward-equivalent for kill credit and the hit-flag (the newcomer is also a minion). Call-for-help aliasing and the passive's cannon/caster type are real but rare. | New per-missile fields `missile_source_seq` (the shooter's `spawn_seq`; -1 = unknown, trust the slot, for hand-built and injected states) and `missile_source_model`, written at launch. In `step_missiles`, a landing whose slot now holds a different `spawn_seq` goes to `orphan_damage`, not `damage_ij`. `step.py` then applies it to hp, W's multiplier and the recall interrupt. It is appended as the LAST row of the kill-attribution cumsum with killer -1. `update_hit_flag(orphan_damage=...)` resets the timer with attacker -1. It is excluded from call-for-help, and it breaks Garen's passive by the launch-time model (cannon/super below victim level 11). Tests: `test_a_missile_records_its_shooters_identity_and_outlives_a_recycled_slot` (with the fields present but the old logic: the red listener's `help_priority` for the new red occupant is 3, not 14), `test_a_dead_shooters_missile_does_not_hand_the_hit_flag_to_the_slots_new_occupant` (before: `hit_flag_by` 2), `test_step_missiles_credits_a_live_shooter_and_orphans_a_recycled_one`. |
 | TEST-001 | `FIXED` 2026-09-23 -- both tests were STALE, the sim was right; neither was loosened | **two sim tests had been failing since 2026-09-22 and nobody ran the whole suite** | n/a | (1) `test_update_order.py::test_a_target_dying_re_evaluates_the_move_order_with_the_timer_not_due`: `TargetJustDied()` fires only `else if (hadTarget)` (`LaneMinionAI.cs:39-51`). The test was written 09-18 (`bb09fad`) when the port reconstructed the latch as `target >= 0`; `HADTGT-001` (`abb33ae`, 09-22) made `had_target` a real field, and the fixture `_minion_pair` set `target` but left the latch at its spawn default False -- a state in which the server does NOT re-evaluate either. Not `TGT-DEATHTICK` (the target here is dead at tick start, not killed this tick). Fix: the fixture sets `had_target` (default True, the state of any minion holding a target for >= 1 tick), plus a new mirror test `test_a_dead_target_without_the_latch_does_not_trigger_a_re_evaluation` pinning the latch-clear half. (2) `test_lane.py::test_champion_ad_matches_the_servers_dumped_ladder` pinned 78.134765625 = 80010/1024, which is the QUANTISED `ad=` dump field (`Q(AttackDamage.Total, StatQ)`, `StatQ = 1024f`, `LanerlStateDump.cs:74`), not the float32. `109286e` (09-22, the `STAT-004` AD row) moved `RUNE_AD_BONUS` to the exact-bits `adbits=` value 78.13500213623047 (`LanerlStateDump.cs:285`), which is also what float32 `57.88 + 9*0.945 + 3*2.25 + 5.0` gives. The test now pins that float32 exactly AND asserts it still quantises to the dump's 80010/1024. | The suite was not a gate: a red test that nobody sees is a green test. | Both pass per file. The ledger's earlier "failing since 09-18" was the date the tests were WRITTEN; they went red on 09-22 (`abb33ae`, `109286e`). |
@@ -279,7 +907,7 @@ wave does **not** systematically lag. The 612-vs-315 figure is conditional on
 | PPO-08 | `FIXED` 2026-09-23 | `--time-steady` recompiled, so its "steady" figure included compile | n/a | it called `step_fn` with `n=cfg.n_updates` after chunks ran with `n=chunk`; `n` is static. | Low, budget planning. | time with `n=chunk`. PPO audit. |
 | PPO-09 | `BOUNDED` 2026-09-23 | the 600 s time limit is treated as a true end (no bootstrap) | Pardo 2018: bootstrap at time limits the agent cannot see. | The clock IS in the observation and the deadline is fixed, so the problem is Markov and a true end is correct for a 10-minute objective. The exception: each env's FIRST episode ends at a random unobserved deadline (256 spurious terminals per run). The end-of-horizon effect on `hp_point` (damage never healed back in the last ~120 s pays in full) encourages end-of-episode all-ins (`REW-04`). | Low. | Optional: `done_full` as the terminal mask with a bootstrap for the partial episodes. PPO + reward audits. |
 | PPO-10 | `FIXED` (comment) 2026-09-23 | the grad-clip comment and expert-list item 6 misread Adam | Adam is invariant to gradient scale: a clip that is always active still steps ~lr. | the comment said an active clip makes the effective lr `1/||g||` (true for SGD). | Low, but it changes how the lr sweep is read: `grad_clipped` near 1 does not mean the sweep measured nothing. | Comment corrected. PPO audit. |
-| PPO-11 | `FIXED` 2026-09-23 | several metrics were mislabelled | n/a | `metrics = mean(info)` averaged over STOPPED minibatches (grad_norm/grad_clipped for gradients never applied); `cs_episodes` counts champion-episodes (2 per env-episode) while its comment said `n_envs/141`; the sweep's `n_ep` was updates-with-a-sample; cs@10min at update u reflects the policy over u-141..u, so curves lag ~70 updates. | Low. | `ppo.summarise_minibatches`: every loss/gradient metric is the mean over APPLIED minibatches (NaN if none); `kl_stopped` and the new `loss_nonfinite` are over ALL minibatches and named for it -- the divergence guard reads `loss_nonfinite`, because a NaN-KL minibatch is always a withheld one. Pinned on a hand-worked case (applied-only `approx_kl` 0.125 where the plain mean read 0.529). `cs_episodes` KEPT in champion-episodes (it is the denominator of a per-champion mean) and the comment corrected to ~2*n_envs/141; the console prints `champion-episodes`. The sweep column is now `n_upd`. The ~70-update lag is a property of the metric, documented, not changed. PPO audit. |
+| PPO-11 | `FIXED` 2026-09-23 | several metrics were mislabelled | n/a | `metrics = mean(info)` averaged over STOPPED minibatches (grad_norm/grad_clipped for gradients never applied); `cs_episodes` counts champion-episodes (2 per env-episode) while its comment said `n_envs/141`; the sweep's `n_ep` was updates-with-a-sample; cs@10min at update u reflects the policy over u-141..u, so curves lag ~70 updates. | Low. | `ppo.summarise_minibatches`: every loss/gradient metric is the mean over APPLIED minibatches (NaN if none); `kl_stopped` and the new `loss_nonfinite` are over ALL minibatches and named for it -- the divergence guard reads `loss_nonfinite`, because a NaN-KL minibatch is always a withheld one. Pinned on a hand-worked case (applied-only `approx_kl` 0.125 where the plain mean read 0.529). `cs_episodes` KEPT in champion-episodes (it is the denominator of a per-champion mean) and the comment corrected to ~2*n_envs/141; the console prints `champion-episodes`. The sweep column is now `n_upd`. The ~70-update lag is a property of the metric, documented, not changed. PPO audit. **2026-09-24 hardening:** `run_train` now weights chunk CS means by `cs_episodes`; `episodes_ended` sums champion-episode counts instead of counting sampled updates. Added `cs_at_10min_mean` for the whole run and corrected console labels. Tests: `test_episode_metrics.py` (unequal counts, no sample, nonfinite sample). |
 | PPO-12 | `FIXED` 2026-09-23 | provenance gaps | n/a | not in the manifest: the route artifact path and its hash, `PolicyConfig`, jax/jaxlib/flax/optax versions, `XLA_FLAGS`; the README's "Reproducing" command emitted `--no-route-table False` (argparse rejects it) and left `--notes` unquoted; Path-valued options (`--route-artifact`, `--resume`, `--out-root`) were dropped from the recorded CLI; `PPOConfig.decision_hz` vs `TrainConfig.decision_hz` duplicated. All `PPOConfig` fields ARE read. | Low. | Manifest `software` block (`run_manifest.software_provenance`: package versions + `XLA_FLAGS`/`XLA_PYTHON_CLIENT_*`/`JAX_PLATFORMS`/`CUDA_VISIBLE_DEVICES`); `config.policy` (now `TrainConfig.policy`, no longer a hard-coded `PolicyConfig()` in `make_train`); `config.route_artifact` = path, resolved path, the loader-verified content digest and the artifact manifest's sha256 (`run_train.manifest_config`); `reproduce_command` emits bare `store_true` flags and `shlex.quote`s every value; `TrainConfig.decision_hz` is a property of `ppo.decision_hz`. `test_run_manifest.py` parses the README command back with the real `build_parser()`. PPO audit. |
 | PPO-13 | `OPEN` (design) 2026-09-23 | no invalid-action masking on the button head | Huang & Ontanon 2020: masking from the observation is legal in deployment. | unavailable spells are sampled and silently do nothing, though the obs already computes `cast_locked`. | Low-Medium: wasted exploration; it would have made the `SPELL-001` exploit unreachable (the sim bug still needed fixing). | Mask the button logits from `cast_locked`. PPO audit. |
 | PPO-14 | `FIXED` 2026-09-24 | **`PPO-01`'s head mask credited the screen heads for every attack_move, though attack_move always decoded to a unit ATTACK** (`NONFARMING_FAILURES.md` R1) | `train/actions.orders_from`: attack_move is ATTACK on the sampled slot's unit when the slot holds one, else a MOVE to the screen point. Which heads reach the wire is a function of the observation (slot validity) and the SAMPLED target slot, so it is legal inside the log-prob. | `ppo._head_usage` was a per-BUTTON table and marked attack_move as using BOTH the screen and the target heads "conservatively". Measured over 10 checkpoints (5.76 M decisions, `lanerl_jax/runs/nofarm/an_*.json` `attack_move_decode`): attack_move decoded to a unit ATTACK in **100.0%** of samples (0 MOVE, 0 NOOP), because the own turret is always slotted and visible, so a valid slot always exists and the -1e9-masked pointer always hits one. `factored_log_prob` therefore added the screen-x/y log-probs, and `factored_entropy` their entropy weighted by p(attack_move), on the 22-75% of decisions that were attack_move, where they had no effect. | High: pure-noise policy gradient into the movement heads on 22-75% of decisions (zero-mean, variance ~A^2, plus spurious clipping and `approx_kl` from the screen ratio); consistent with screen entropy at 88-96% of max in every checkpoint, diag1b after 2,000 updates included. | Per-SAMPLE masks. `ppo.head_usage(button, target_slot, slot_valid)`: move -> screen; attack_move -> target if the sampled slot is valid, else screen; r -> target if the slot is valid (an empty slot sends target -1 whatever was picked; only reachable with no visible unit); the rest -> none. `trainer._sample(logits, key, ~entity_pad_mask)` computes them at sampling time, they are stored in `Transition.uses_screen/uses_target`, and `_loss` passes the stored ones to `factored_log_prob` -- the rollout's and the loss's log-probs use the SAME mask by construction (the four-head `factored_log_prob`/`factored_entropy` now raise without masks, no silent per-button fallback). Entropy: `ppo.expected_head_usage` weights with q = target softmax mass on valid slots, p_screen = p(move) + p(attack_move)(1-q), p_target = (p(r)+p(attack_move)) q; derived in `ppo`'s docstring as the EXACT wire-action entropy because the -1e9 mask makes q exactly 0 or 1 in float32. **The ceiling changed:** `MAX_FACTORED_ENTROPY_TARGET_VISIBLE` = **8.567** nats (every training observation; `run_train` now reads entropy against it), observation-free supremum `MAX_FACTORED_ENTROPY` = **9.247** (was 12.050). Entropy figures before 2026-09-24 are not comparable with those after. Tests: `test_ppo.py` (per-sample log-prob, both ceilings), `test_ppo_hand_worked.py` (numpy per-sample reference incl. gradients; brute-force enumeration of the 480-action joint space showing log-prob and entropy equal the exact wire-action distribution; the `PPO-01` rule is asserted to FAIL both), `test_actions.py::test_head_usage_matches_what_orders_from_puts_on_the_wire`, `test_trainer.py` rollout-vs-update agreement under the stored masks (exact, and approx_kl < 1e-8 at lr 0). Checkpoints trained before this fix keep their params; nothing reloads a stored mask. Also added: per-update `attack_enemy_minion`/`attack_enemy_champion`/`attack_enemy_turret`/`attack_ally`/`attack_move_fallback` metrics (fractions of all champion-decisions; R3). |
@@ -317,7 +945,7 @@ wave does **not** systematically lag. The 612-vs-315 figure is conditional on
 | OPS-001 | `BOUNDED` | route asset distribution | A training checkout needs the exact artifact matching navgrid bytes, radius, and ABI. | Heavy route data live under ignored `data/jax_routes/`; production remains pinned to `map1_garen_r35_o50_v2` (231 MiB packed hops). The loader also accepts the measured `v3` same-direction-run sidecar experiment (693 MiB total), but its memory/compile cost has not yet produced a gate result, so it is not required. Unknown versions, hashes, shapes, or v3 sidecar semantics fail closed. | A fresh machine cannot start routed training until the pinned artifact is generated or distributed. **Generating and loading need different environments**, measured 2026-09-18: the baker is numba-parallel and raises rather than guessing, and `.venv-gpu` is a real venv with `include-system-site-packages = false`, so it cannot see the conda env's numba. Artifacts are therefore generated in `.venv-jax` (login) and only *loaded* in `.venv-gpu` (desktop/GPU). Loading is pure numpy, so routed training and gate 4 are unaffected -- the gate-4 run loads the 231 MiB v2 table in `.venv-gpu` without numba. Left that way on purpose: numba pins numpy, and `.venv-gpu` is the environment every gate-4 number is measured in. | `data/local_route_artifact.py`, `train/run_train.py`; publish the pinned artifact to the project artifact store before remote training. |
 | SERVER-001 | `OPEN` 2026-09-24 (root-caused; vendor patch written, NOT applied; eval and gate now refuse to score it) | **server: a Garen Q empowered attack freezes the champion for the rest of the process** | Five steps (vendor line numbers). (1) Q's buff `GarenQ.OnActivate` does `CancelAutoAttack(true)` + `SkipNextAutoAttack` and listens on `OnPreAttack` (`Buffs/Garen/GarenQ.cs:72-75`). (2) The next basic swing's own `Spell.Cast` publishes `OnPreAttack` (`Spell.cs:586`). The listener swaps `AutoAttackSpell` to `GarenQAttack` (`GarenQ.cs:78-82`). THEN the basic sets itself `STATE_CASTING` (`Spell.cs:593`) as an **orphan**: it is no longer `Owner.AutoAttackSpell`. (3) If the policy retargets inside the orphan's windup, its `CastCancelCheck` fires (`Spell.cs:279-287`). That calls `Owner.CancelAutoAttack`, which resets `Owner.AutoAttackSpell`, i.e. GarenQAttack (`ObjAIBase.cs:469-484`), NOT the orphan. The orphan stays CASTING forever and re-runs that check every tick, zeroing the AA cooldown each time (reset = `!HasAutoAttacked`). (4) GarenQAttack sits in ExtraSpell slot 45, so `IsAutoAttack` is false and its cast takes the non-auto path. That path sets `_castingSpell` (`Spell.cs:458`) and `MoveOrder = CastSpell` (`Spell.cs:492`), and only `FinishCasting` clears them (`Spell.cs:1061-1064`). The next tick the orphan (slot 64, updated after slot 45, `ObjAIBase.cs:1142`) sees `GetCastSpell() != null` and cancels GarenQAttack to READY. `FinishCasting` never runs. (5) `CanMove`/`CanChangeWaypoints`/`CanAttack`/`CanCast` all need `_castingSpell == null` (`ObjAIBase.cs:302-362`), so every later order is dropped (`SetWaypointsRejected reason=cannotchange`). `GetCastSpell() != null` is now permanent, so the orphan keeps cancelling. The 09-14 death fix (`Spell.cs:215-250`) runs only for a spell in `STATE_CASTING`, and GarenQAttack is READY, so death and respawn do not clear it; only `LanerlEpisode.Reset` does (`LanerlEpisode.cs:339-357`). The same `ResetSpellCast`-without-owner-cleanup omission sits in the non-auto target-lost branch (`Spell.cs:274`) and the status branch (`:309`). Real League has no such state: a retarget cancels the in-flight swing and the empowered attack still comes next. | The sim cannot freeze. Q's empowered swing is an ordinary `step_autoattack` swing with replaced damage (`step.py:960-1010`, `consume_q_skip`/`end_q`, `spells.py:568-600`). No orphan spell object exists, and nothing writes `MoveOrder.CAST_SPELL` (`step.py:229` is its only reader). The deviation is the server's. | Any server number after the first Q that meets a retarget inside the next basic's windup. RL policies retarget at 30 Hz (diag1b: 2,956 attack orders in 3,600 blue decisions, alternating targets), so this is near-certain within minutes. diag1b vs the bot: frozen from **159.5 s**, 1 CS vs 40, 440 s lost. | **Evidence.** (a) `/tmp/baseline_audit/eval_vs_bot_logs/instance000.log`: the only `GarenQAttack SpellPreCast/SpellCast` of the game (01:00:29) has no `SpellPostCast`/`Spell End`. `casting=GarenQAttack canmove=False` from t=180 s, `dead=True` still casting at 210 s, then fountain (26,264) to 600 s. (b) **Reproduced exactly** (same checkpoint, seed 0, 300 s, `bin/Trace`, `LANERL_DECISION_TRACE=1`): cast at t=159,501 on 1073744341, one tick after a policy retarget (`SetTargetUnit ... caller=Execute@391` at 159,484). No `FinishCasting` for blue. `SetWaypointsRejected reason=cannotchange` from 159,517. Same 180/210/240/270 s rows. (c) **Per-tick proof** in the mirror gate recording `runs/parity001/sweepA-a4-300s` (`LANERL_INTERNAL`, blue 1073743317). 210,600: basic cast, AA swapped (`aawindup` 341 -> 256, aacd 1588). 210,833: retarget. 210,850: `aacd` 1349 -> 0 (the orphan's cancel). `hasaa` never returns to 1. 213,918: GarenQAttack cast (`aastate=1 aacast=256 attacking=1`). 213,934: `aastate=0 aacast=0 aacd=0 attacking=0`, target unchanged, alive, `mo=15` to the end of the recording (86 s, through a death). That recording was never flagged. **Detection (landed):** `policy_driver.CastFreezeDetector` flags wire `mo == CastSpell (15)` held >= `CAST_FREEZE_MS` = 3 s. The healthy maximum over 7 recordings is 501 ms. On existing recordings it flags only sweepA-a4 blue (213,934 -> 299,992 ms). `tools/rl_eval_vs_server.py` stops the episode, blanks every skill field, reports INVALID (exit 3 if nothing is valid) and keeps the raw counters under `raw_not_a_measurement`. `policy_divergence` scores the gate `INVALID`. Both read only the wire, so the policy's input is unchanged. **Fix:** the vendor patch below (§ "SERVER-001: the vendor patch"). The orphan cancels itself; `CancelAutoAttack` clears a `_castingSpell` that IS the AA spell; the two bare `ResetSpellCast` aborts clear the owner's cast state. Untested (no rebuild here). **Resolution trigger:** rebuild Release and Trace with the patch, re-run this seed-0 300 s eval (freeze at 159.5 s must be gone), then 4 episodes vs the bot with the detector reporting 0 frozen stretches. |
 | OPS-002 | `FIXED (harness)` 2026-09-24; one vendor-side artifact still to delete | **a relative `--config` made the server play Shaco vs Ezreal** | `GameServerConsole/Program.cs:106-129` `LoadConfig`: a config path that does not exist is not an error. The server creates its directory, WRITES its built-in default JSON there and plays it. The server runs with `cwd = server_dir` (`lanerl_train/vec.py:298`), so a relative path is resolved under `bin/<build>/net6.0/`. | `vec.py:155` checked `cfg.exists()` against PYTHON's cwd, where the relative path did exist, so nothing refused. The audit's gate "failed at 0 ms" on HP (637/536 vs 672). | Every counter and the first divergence describe a different game. After the first such run the written file persists, so later runs with the same relative path load Shaco vs Ezreal **silently, without writing anything**. | `parity/record.py`: `resolve_server_path` makes `--config`/`--server-dir`/`--bot-config` absolute against the caller's cwd and refuses a missing one. Callers: `policy_divergence.main`, `record._main`, `record_trace`, `tools/rl_eval_vs_server.py`. `assert_two_garens` reads the server's `Player <name> Added: <Model>` boot lines after the first frame and aborts unless they are exactly Garen+Garen (the frame carries no model name). Called from `record_trace` and the eval's `play_batch`. Tests: `parity/tests/test_policy_divergence.py::test_server_config_is_resolved_*`, `::test_gate_cli_refuses_a_missing_config_before_launching`, `::test_two_garens_guard_reads_the_boot_log`. **Still to do by hand (vendor tree, not touched here):** delete `lanerl-vendor/LoLServer/GameServerConsole/bin/Trace/net6.0/lanerl/cfg/garen1v1_trace.json`. The server wrote it at 2026-09-24 00:46:16 and it holds Shaco (BLUE) / Ezreal (RED). |
-| PATH-009 | `APPROX` 2026-09-24 (was booked only in a `step.py` comment; now measured) | **champion attack-chase routing: straight line vs `GetPath`** | `RefreshWaypoints` (`ObjAIBase.cs:~596-690`), for `AttackTo` out of `idealRange`, re-paths EVERY tick with `PathingHandler.GetPath(Position, targetPos, PathfindingRadius)` (A* + `SmoothPath`, after `GetClosestTerrainExit` when the target cell is unwalkable, as a turret's is). It keeps the old waypoints when `GetPath` returns null or a single point. | `step.py:893-899` writes the two-point line `[position, target]` every tick ("BOOKED APPROXIMATION", `step.py:811-815`; `PORT_AUDIT_MOVEMENT.md:181`), with no terrain exit and no keep-old-on-null. | The policy navigates by attack orders (diag1b: attack 2,956 / move 555 blue decisions), including far targets. In the sim it walks straight at a turret 4.5-7 km away where the server walks the lane's A* corners. | **These are PARITY-001's 60 "same waypoints, still off" intervals** (`runs/parity001/diag1b-120s/report.json`), all 60 of them, from a scratch re-run of `replay_resync` with per-tick capture (`/tmp/qfreeze_repro/resync_diag*.py`). Every one is a decision where the champion must chase a far HOSTILE target: blue on 1073742821 (29) or 1073742759 (2), red on 1073742201 (23), plus 6 Moves, where the target stays set (`ORDER-001`) and the chase resumes next tick. Tick 1 agrees to <= 0.001 u (both still walk the resynced path). In tick 1's `RefreshWaypoints` the server takes a 5-10 waypoint A* path and the sim a single waypoint AT the target (distance 4,478-7,178 u). Tick 2 steps 5.75 u on both sides (345 ms / 60 Hz, identical: no speed modifier, collision, cast state or tick-length effect; all 60 at `ms` 345, no cast, no Q buff). Heading gap 2.1-40.6 deg (median 14.2), and the measured error equals the chord `2*5.75*sin(gap/2)` to 0.01 u in **60/60**. Max 3.01 u. The report's `max_err_u` 15.63 is a PATH-001 interval, not one of these. Intervals alternating to targets the server does not chase (1073742077/1073742139) agree at 0.0007 u. The gate's label is wrong because `replay_resync` compares routes right after `apply`, BEFORE the tick's chase re-path (`policy_divergence.py:908`). **Sim fix (not made):** in block 14, for CHAMPIONS, replace the two-point chase with the Move router (`local_pathing`, the PATH-001 route table) from `(x, y)` to `GetClosestTerrainExit(target)`. Keep the current waypoints (do not write the straight line) when the route status is not READY/SERVER_NULL. Minions can keep the straight line (acquisition range 600, open corridor) until measured. **Gate fix (not made):** classify by comparing the tick-1 route too, so this is reported as `PATH-009` rather than as unexplained. |
+| PATH-009 | `APPROX` — champion routing repaired; see screen-click section above. Historical evidence: 2026-09-24 (was booked only in a `step.py` comment; now measured) | **champion attack-chase routing: straight line vs `GetPath`** | `RefreshWaypoints` (`ObjAIBase.cs:~596-690`), for `AttackTo` out of `idealRange`, re-paths EVERY tick with `PathingHandler.GetPath(Position, targetPos, PathfindingRadius)` (A* + `SmoothPath`, after `GetClosestTerrainExit` when the target cell is unwalkable, as a turret's is). It keeps the old waypoints when `GetPath` returns null or a single point. | `step.py:893-899` writes the two-point line `[position, target]` every tick ("BOOKED APPROXIMATION", `step.py:811-815`; `PORT_AUDIT_MOVEMENT.md:181`), with no terrain exit and no keep-old-on-null. | The policy navigates by attack orders (diag1b: attack 2,956 / move 555 blue decisions), including far targets. In the sim it walks straight at a turret 4.5-7 km away where the server walks the lane's A* corners. | **These are PARITY-001's 60 "same waypoints, still off" intervals** (`runs/parity001/diag1b-120s/report.json`), all 60 of them, from a scratch re-run of `replay_resync` with per-tick capture (`/tmp/qfreeze_repro/resync_diag*.py`). Every one is a decision where the champion must chase a far HOSTILE target: blue on 1073742821 (29) or 1073742759 (2), red on 1073742201 (23), plus 6 Moves, where the target stays set (`ORDER-001`) and the chase resumes next tick. Tick 1 agrees to <= 0.001 u (both still walk the resynced path). In tick 1's `RefreshWaypoints` the server takes a 5-10 waypoint A* path and the sim a single waypoint AT the target (distance 4,478-7,178 u). Tick 2 steps 5.75 u on both sides (345 ms / 60 Hz, identical: no speed modifier, collision, cast state or tick-length effect; all 60 at `ms` 345, no cast, no Q buff). Heading gap 2.1-40.6 deg (median 14.2), and the measured error equals the chord `2*5.75*sin(gap/2)` to 0.01 u in **60/60**. Max 3.01 u. The report's `max_err_u` 15.63 is a PATH-001 interval, not one of these. Intervals alternating to targets the server does not chase (1073742077/1073742139) agree at 0.0007 u. The gate's label is wrong because `replay_resync` compares routes right after `apply`, BEFORE the tick's chase re-path (`policy_divergence.py:908`). **Sim fix (not made):** in block 14, for CHAMPIONS, replace the two-point chase with the Move router (`local_pathing`, the PATH-001 route table) from `(x, y)` to `GetClosestTerrainExit(target)`. Keep the current waypoints (do not write the straight line) when the route status is not READY/SERVER_NULL. Minions can keep the straight line (acquisition range 600, open corridor) until measured. **Gate fix (not made):** classify by comparing the tick-1 route too, so this is reported as `PATH-009` rather than as unexplained. |
 | PATH-010 | `VERIFIED` 2026-09-24 (direct server recording; answers `NONFARMING_FAILURES.md` R2); **fix applied in the action space** 2026-09-24 (engine unchanged, still faithful) | **a Move whose `GetPath` is null: what the champion does at the terrain edge** | `LanerlControl.cs:368`: null path -> `SetWaypoints([Position, click])` to the UNPROJECTED click, so the raw line runs into the border terrain. The unit then does not stop, clamp or slide along the wall. It stays **pinned and jitters in place, and the order never completes**. Each tick `Move` steps it into a `NOT_PASSABLE` cell. At the start of the next tick `CollisionHandler.cs:154-156` (`IsWalkable(Position)`, radius 0) calls `OnCollision(null, isTerrain)`, which runs `GetClosestTerrainExit(Position, r+1)` (the drifting spiral) and then `SetPosition(exit, repath:false)` (`AttackableUnit.cs:297`). That setter rewrites only `Waypoints[0]` (`:232`) and keeps the goal, so the unit walks straight back in. Recorded: after 5 s the unit still has 1 waypoint left. Over the last 30 ticks its path length is 280-350 u against a net displacement of 4-48 u, with 44-188 heading reversals in 300 ticks. It holds a box 15-140 u wide at the wall. Nothing in the server's own logic ends the order; the next Move does. The pinned unit's 35-u circle then overlaps terrain, so the NEXT click also gets a null path (first-expansion null, `PATH-008`) and is another raw line: **99.0-99.5% of all 96x54 clicks are null from the recorded pinned points**. Real League pathfinds a click in unwalkable/off-map space to the nearest reachable point, walks there and stops. That differs from this server. | Faithful. `SERVER_NULL` gives `[pos, raw click]`; the training-mode deferred terrain repair (`repair_collision_terrain_batch`: radius-0 guard, spiral at r+1, no repath) does the same push-back. **Same pinned box in all 10 stuck cases.** Mean position over the last 3 s agrees to <=11 u. Within 0.02 u for all 302 ticks in 6 cases (5 of them <0.01 u throughout). Two cases diverge because the spiral exit is chaotic in its input. In blue trial 2 the two agree to 1e-3 u, then one repair jumps 64 u on the server and 50 u in the sim: max 70 u. Red trial 2 reaches 11 u and ends 0.2 u apart. The other two inherit a start error of 0.1 u and 21 u from the routed walk back to the spawn (`PATH-001` tie-break); both reach a max of about 55 u. | Blue's fountain is not a trap by the decoder's geometry alone. **From the two spawn points the screen grid is symmetric.** Over all 4,827 clickable bins: off-grid 49.7% blue vs 49.4% red; null 59.0% vs 57.2%; only 1.9% of bins are null for blue but not for red. Weighted by c13s1's own MOVE histogram: 53.6-56.1% vs 50.7-53.0%. The `x < 0` statistic in R2 is not "off-map": the grid starts at x=-328.9, and the walkable floor near the blue fountain reaches x ~ -235 (a click to (-135,596) is READY and reached exactly). The lane is symmetric too (turret front 16.1% vs 16.1% null, corner 8.9% vs 8.2%). What differs is the WORLD direction of the same canonical click. c13s1's mean near-spawn click offset is (-269,+492) from blue, i.e. into the west wall, against (-511,+258) from red, i.e. along red's exit. Blue then sits pinned (x in [-184,-42], y in [462,650] holds 73% of its near-spawn time), where every click is a raw line; 81% of blue's time is within 1500 u of its spawn, against red's 16%. | Recording `/tmp/r2fountain/server/r2/instance000.log`: Trace build, absolute `garen1v1_trace.json`, `LANERL_AUTOBUY=0`, 86.7 s, one server under `ops/login_capped.sh 8G 2`. 8 trials x 2 sides; each trial walks back to the spawn, then sends one Move to a bin centre decoded at the spawn and holds 5 s. The 16 Moves: 5 to off-grid points (blue 3, red 2), 5 to on-grid points whose path is null (blue 2, red 3) and 6 controls (READY; all reached or routed as in the server). Driver: `/tmp/r2fountain/server_record.py`. The sim replay (`sim_replay.py`: `TrainingStepEngine` = `SimConfig.gate` = training at 1 tick/call, orders at the server's boundary) and the per-trial numbers (`analyze.py`, `per_trial.json`, `traces.npz`) are in the same directory; the decoder statistics are in `decode_grid.py`, `weighted.py` and `pinned.py`. **Fix direction (IMPLEMENTED 2026-09-24, see the note at the end of this cell), in the ACTION SPACE, not the engine:** in `train/actions.py::orders_from`, snap every MOVE point (including targetless attack-move) to the centre of the nearest radius-35-walkable navgrid cell. Clamp to the grid first, then look the cell up in a static table precomputed by an EDT over `NavGrid.walkable_mask`. `policy_driver` decodes through the same function, so the server receives the snapped order too and parity is unaffected. This matches what the real client does. A bbox clamp alone is not enough: 5 of the 10 recorded pins had ON-grid goals (goal-side null). The snap does not cure a source already overlapping terrain (first-expansion null). **Note 2026-09-24, fix applied:** `train/actions.py` (`MoveSnapTable`, `move_snap_table`, `snap_move_point`; `orders_from(..., snap_moves=True)` by default). Every MOVE point (plain move and targetless attack-move; casts keep the raw point) is clamped to the grid; if its cell is not standable it goes to the centre of the nearest standable cell (exact EDT over cell indices). A click whose cell is already standable passes through bit-identically. Standable = the sim's own `terrain_jax.is_walkable(cell centre, 35)`: 47,477 of 86,142 cells, one 8-connected component, identical to the host `_traversable_centres` and to the route artifact's `source_cells`. Table: built on first use in ~0.4 s CPU (under `ensure_compile_time_eval`, so a first call inside `jit` is safe), 294x293 int32 (345 KB) plus a bool mask, JIT constants. `policy_driver` decodes through `orders_from`, so the server gets the same snapped Move (`rl_eval_vs_server.py --selftest` ok). Tests `train/tests/test_move_snap.py`: raw decode puts 71.8% of MOVE bins (both sides) from the spawns on an unstandable cell, 36-48% from three lane positions; after the snap, 0% everywhere; host `get_cell_path` r=35 from each spawn is non-null for every snapped goal. `test_action_interface.py` round-trip now skips the 453 of 1,380 sampled (cell, side) pairs whose raw decode is unstandable. Effect on c13s1 (`runs/bisect/scratch-13c30d4-s1-...`), trainer rollout, 8 envs x 600 s, seeds 0/1, raw vs snapped: time alive within 1,500 u of spawn blue 0.63/0.66 -> 0.08/0.09, red 0.09/0.09 -> 0.09/0.08; CS mean blue 2.25/2.0 -> 5.4/7.6, red 6.6/6.0 -> 5.1/10.5 (checkpoint trained WITHOUT the snap; `runs/movesnap/`). |
 
 ## SmoothPath: what it fixed, and what it turned out not to explain (2026-09-18)

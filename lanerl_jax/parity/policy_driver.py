@@ -5,7 +5,8 @@ from here, so the external eval and the policy-divergence gate
 (:mod:`lanerl_jax.parity.policy_divergence`) drive the server with the same
 code: the wire frame -> `LaneState` rebuild (:class:`StateRebuilder`), the
 TRAINING observation builder and decoder (`build_observation`,
-`train.actions.orders_from`), and the wire encoding (:func:`order_to_wire`).
+`train.actions.orders_from`), and coordinate-only wire encoding in :class:`PolicyDriver`.
+``order_to_wire`` remains an explicit legacy diagnostic helper.
 See the tool's module docstring for why the observation is built this way and
 the one place it is not exact (buffs are not on the control wire; E is
 recovered from `cd2` edges, Q is not). `StateRebuilder`'s docstring lists the
@@ -17,8 +18,7 @@ What this module adds on top of the move
 * :class:`PolicyDriver` -- ``step(frame) -> DriverStep(wire, orders, state,
   netid)``: the wire order sent, the semantic sim `Orders` row it came from
   (target as a REBUILDER slot), the rebuilt state the policy saw, and the
-  rebuilder's slot -> NetId table. `make_driver` is kept, unchanged in
-  behaviour, as the eval's ``frame -> wire`` closure.
+  rebuilder's slot -> NetId table. `make_driver` exposes the eval's ``frame -> wire`` closure.
 * :class:`CreationRankMap` -- NetId <-> sim slot by CREATION RANK. A sim unit
   index means nothing on the server and a NetId means nothing in the sim; what
   both engines share is the ORDER in which units were created. Server NetIds
@@ -28,8 +28,8 @@ What this module adds on top of the move
   the server ever created is the minion whose `spawn_seq` is
   ``first_minion_seq + k``. Champions map by team, turrets by their fixed
   position (the same match `StateRebuilder` uses).
-* :class:`PolicyActionLog` -- per decision, the wire order (attack targets as
-  NetIds) AND the sim order AND the target's NetId/`spawn_seq`, plus the full
+* :class:`PolicyActionLog` -- per decision, the coordinate wire order AND the
+  diagnostic sim order and resolved target's NetId/`spawn_seq`, plus the full
   sorted list of minion NetIds seen, so a replay can re-derive every mapping.
   `to_action_log()` gives the plain `record.ActionLog` the rest of the parity
   apparatus aligns on.
@@ -57,6 +57,7 @@ from ..sim.profiles import profile_id
 from ..sim.spells import E_DURATION_S
 from ..sim.state import CH_SLICE, MI_SLICE, TU_SLICE, Kind, Team
 from ..train.actions import orders_from
+from lanerl_rl.constants import BUTTONS
 from ..train.policy import LanePolicy, PolicyConfig
 from ..train.trainer import BLUE_NEXUS, RED_NEXUS, _sample
 
@@ -81,6 +82,23 @@ WIRE_MT_TO_SIM = {0: 0, 1: 3, 2: 2, 3: 1}
 WIRE_TEAM = {100: Team.BLUE, 200: Team.RED}
 
 _MINION_KINDS = ("LaneMinion", "Minion")
+
+
+def champion_dead(champion):
+    """Authoritative life-state HUD; HP can regenerate while the corpse is dead."""
+    value = champion.get('dead')
+    if type(value) is not bool:
+        raise ValueError('source observation requires authoritative champion dead Boolean; use the death-capable server build')
+    return value
+
+
+def validate_champion_life(frame):
+    """Reject unsupported source frames before setup or any policy decision."""
+    champions = [u for u in frame.get('u', []) if u.get('k') == 'Champion']
+    if not champions:
+        raise ValueError('source frame has no authoritative champion life state')
+    for champion in champions:
+        champion_dead(champion)
 
 
 def _turret_slot_map(base) -> dict:
@@ -254,6 +272,7 @@ class StateRebuilder:
 
     def rebuild(self, frame: dict):
         """Returns `(state, netid_of_unit)`; `netid_of_unit[i]` is 0 if empty."""
+        validate_champion_life(frame)
         n = self.n_units
         x = np.zeros(n, np.float32)
         y = np.zeros(n, np.float32)
@@ -308,7 +327,7 @@ class StateRebuilder:
                 sl = u.get("sl") or [0, 0, 0, 0]
                 spell_level[int(tm)] = [int(v) for v in sl[:4]]
                 # OBS-06: `grant_w_passive` -- alive with W ranked; sticky.
-                if float(u.get("hp", 0.0)) > 0.0 and int(sl[1]) >= 1:
+                if not champion_dead(u) and int(sl[1]) >= 1:
                     self._w_passive[int(tm)] = True
                 w_passive[i] = self._w_passive[int(tm)]
                 # wire cd<slot> is ms; `state.spell_cooldown` is seconds, as
@@ -358,11 +377,26 @@ class StateRebuilder:
             y[i] = float(u["y"])
             hp[i] = float(u.get("hp", 0.0))
             mhp[i] = float(u.get("mhp", 0.0))
-            alive[i] = hp[i] > 0.0
+            alive[i] = not champion_dead(u) if u.get("k") == "Champion" else hp[i] > 0.0
             netid[i] = int(u["id"])
 
-        observed = self._observed_casts(
-            t_now, cds, self._witness_matrix(x, y, kind, team, alive))
+        # Cast memory follows the same authoritative fog and viewport as
+        # entity observations. Hidden cooldown edges cannot create memories.
+        from lanerl_rl.projection import target_on_screen
+        frames = _lane_frames()
+        flags = {int(u["id"]): u for u in units if "id" in u}
+        witness = np.zeros((2, 2), bool)
+        for observer in range(2):
+            f = frames[observer]
+            for caster in range(2):
+                dx, dy = x[caster] - x[observer], y[caster] - y[observer]
+                ds = dx * float(f.axis[0]) + dy * float(f.axis[1])
+                dn = dx * float(f.normal[0]) + dy * float(f.normal[1])
+                visible = flags.get(int(netid[caster]), {}).get(
+                    "vb" if observer == 0 else "vr", False)
+                witness[observer, caster] = (observer != caster and alive[observer]
+                    and alive[caster] and visible and bool(target_on_screen(ds, dn)))
+        observed = self._observed_casts(t_now, cds, witness)
 
         state = self.base.replace(
             x=jnp.asarray(x), y=jnp.asarray(y), hp=jnp.asarray(hp),
@@ -412,24 +446,36 @@ def load_params(path: str):
     how an eval ends up silently measuring a different network from the one that
     was trained.
     """
-    from flax.serialization import from_bytes
+    from flax.serialization import from_state_dict, msgpack_restore
 
     frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                             TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
-    policy = LanePolicy(PolicyConfig())
+    cfg = PolicyConfig()
+    if path != "random":
+        manifest_path = Path(path).parent / "manifest.json"
+        if not manifest_path.exists():
+            raise ValueError("policy evaluation requires a manifest identifying screen-click-v2")
+        saved = json.loads(manifest_path.read_text()).get("config", {}).get("train", {}).get("policy", {})
+        if saved.get("action_interface") != "screen-click-v2":
+            raise ValueError("entity-pointer checkpoints cannot evaluate as screen-click-v2; train a new policy")
+        if saved.get("observation_interface") != "viewport-structured-v3":
+            raise ValueError("checkpoint does not declare v3 authoritative life-state observations; use its historical capture")
+        cfg = PolicyConfig(**saved)
+    policy = LanePolicy(cfg)
     obs0 = build_observation(init_lane(), 0, frame, params=lane_params())
     fresh = policy.init(jax.random.key(0), obs0.entities, obs0.entity_pad_mask,
                         obs0.self_vec, obs0.global_vec)
     if path == "random":
         return policy, fresh, "random"
-    payload = from_bytes({"params": fresh, "opt_state": None},
-                         Path(path).read_bytes())
-    return policy, payload["params"], Path(path).parent.name
+    payload = msgpack_restore(Path(path).read_bytes())
+    return policy, from_state_dict(fresh, payload["params"]), Path(path).parent.name
 
 
 def order_to_wire(kind: int, ox: float, oy: float, target_unit: int,
                   netid: np.ndarray) -> dict:
-    """One semantic `Orders` row -> one control-channel action.
+    """Legacy diagnostic semantic order -> control-channel action.
+
+    Production policies must use coordinate clicks in ``PolicyDriver.decide``.
 
     An ATTACK whose target slot resolved to an empty unit becomes a noop rather
     than an attack on netid 0. The server's complaint counter would catch it,
@@ -437,6 +483,8 @@ def order_to_wire(kind: int, ox: float, oy: float, target_unit: int,
     """
     if kind == OrderKind.MOVE:
         return {"t": "move", "x": float(ox), "y": float(oy)}
+    if kind == OrderKind.ATTACK_MOVE:
+        return {"t": "click", "button": "attack_move", "x": float(ox), "y": float(oy)}
     if kind == OrderKind.ATTACK:
         nid = int(netid[target_unit]) if 0 <= target_unit < len(netid) else 0
         return {"t": "attack", "id": nid} if nid else {"t": "noop"}
@@ -511,13 +559,16 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
     row = int(team)
 
     @jax.jit
-    def act(state, key):
-        obs = build_observation(state, row, own, params=lane_params())
+    def act(state, key, visibility=None, hud=None):
+        obs = build_observation(state, row, own, params=lane_params(),
+                                visibility=visibility)
+        if hud is not None:
+            obs = apply_own_hud(obs, hud)
         logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
                               obs.self_vec, obs.global_vec)
         if deterministic:
             action = (jnp.argmax(logits.button), jnp.argmax(logits.screen_x),
-                      jnp.argmax(logits.screen_y), jnp.argmax(logits.target))
+                      jnp.argmax(logits.screen_y))
         else:
             action, _, _ = _sample(logits, key, ~obs.entity_pad_mask)
         # `orders_from` is the TRAINING decoder and expects the (2, ...) batch
@@ -527,7 +578,7 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
         # (`side = +-1` by team) instead of reimplementing it.
         act2 = tuple(jnp.stack([a, a]) for a in action)
         slots = jnp.stack([obs.slot_unit, obs.slot_unit])
-        orders = orders_from(act2, state, slots, frame_blue)
+        orders = orders_from(act2, state, slots, frame_blue, snap_moves=False)
         return (orders.kind[row], orders.x[row], orders.y[row],
                 orders.target[row], action[0])
 
@@ -548,6 +599,38 @@ class DriverStep(NamedTuple):
     orders: Optional[dict]
     state: object
     netid: Optional[np.ndarray]
+
+
+def wire_visibility(frame, netid, team):
+    """Server-authoritative fog, aligned to reconstructed diagnostic slots.
+
+    Missing flags fail closed. Slot IDs only align data inside the adapter;
+    neither these IDs nor hidden-unit state enters the actor.
+    """
+    key = "vb" if int(team) == Team.BLUE else "vr"
+    flags = {int(u["id"]): bool(u.get(key, False))
+             for u in frame.get("u", []) if "id" in u}
+    return jnp.asarray([flags.get(int(n), False) for n in netid], dtype=bool)
+
+
+def wire_own_hud(frame, team):
+    me = next(u for u in frame["u"] if u.get("k") == "Champion"
+              and u["tm"] == (100 if int(team) == 0 else 200))
+    dead = champion_dead(me)
+    # Enablement is an OWN HUD bit, never an enemy cooldown/ability input.
+    if len(me.get('se', [])) != 4:
+        raise ValueError('source observation lacks own ability HUD enablement; use the HUD-capable server build')
+    return jnp.asarray([me[k] / 200. for k in ("ad", "ap", "ar", "mr")] + list(me['se']) + [float(dead)], dtype=jnp.float32)
+
+
+def apply_own_hud(obs, hud):
+    own = obs.self_vec.at[10:14].set(hud[:4])
+    # A sealed spell is not ready even when its cooldown reads zero (Garen Q).
+    if hud.shape[0] != 9:
+        raise ValueError('v3 own HUD requires authoritative dead flag')
+    own = own.at[6:10].set(jnp.where(hud[4:8] > 0, own[6:10], 1.))
+    own = own.at[14].set(hud[8])
+    return obs._replace(self_vec=own)
 
 
 class PolicyDriver:
@@ -588,33 +671,52 @@ class PolicyDriver:
         self.counts["level"] += 1
         return {"t": "level", "slot": slot}
 
-    def decide(self, state, netid: np.ndarray) -> DriverStep:
+    def decide(self, state, netid: np.ndarray, visibility=None, hud=None) -> DriverStep:
         """Act on an already-rebuilt state."""
         self.key, k = jax.random.split(self.key)
-        kind, ox, oy, tgt, _btn = self._act(state, k)
+        result = (self._act(state, k) if visibility is None
+                  else self._act(state, k, visibility, hud))
+        kind, ox, oy, tgt, _btn = result
         kind, ox, oy, tgt = int(kind), float(ox), float(oy), int(tgt)
-        wire = order_to_wire(kind, ox, oy, tgt, netid)
+        button = BUTTONS[int(_btn)]
+        sampled = f"sampled_{button}"
+        self.counts[sampled] = self.counts.get(sampled, 0) + 1
+        if button == "r" and int(state.spell_level[int(self.team), 3]) == 0:
+            self.counts["sampled_r_unranked"] = self.counts.get("sampled_r_unranked", 0) + 1
+        if not bool(state.alive[int(self.team)]):
+            kind, tgt = int(OrderKind.NOOP), -1
+        if kind == OrderKind.NOOP:
+            wire = {"t": "noop"}
+        elif button == "recall":
+            wire = {"t": "recall"}
+        else:
+            # The server resolves the raw cursor point. Rebuilt target IDs are
+            # diagnostic only and may never enter the policy wire command.
+            wire = {"t": "click", "button": button, "x": ox, "y": oy}
         # `SPELL-010`: the server casts an UNRANKED spell (`Spell.Cast` never
         # checks the level); the sim and real League refuse it. The rank-up
         # order is sent first, but the policy can press before it lands, so
         # the wire order is gated here on the rank the frame reported --
         # the same rule `orders.py` applies -- and counted separately.
-        if wire.get("t") == "cast":
-            rank = int(state.spell_level[int(self.team), int(wire["slot"])])
+        if wire.get("t") == "click" and button in ("q", "w", "e", "r"):
+            rank = int(state.spell_level[int(self.team), ("q", "w", "e", "r").index(button)])
             if rank <= 0:
                 self.counts["cast_unranked"] = self.counts.get("cast_unranked", 0) + 1
                 wire = {"t": "noop"}
                 kind = int(OrderKind.NOOP)
         self.counts[wire["t"]] = self.counts.get(wire["t"], 0) + 1
-        return DriverStep(wire, {"kind": kind, "x": ox, "y": oy, "target": tgt},
+        return DriverStep(wire, {"kind": kind, "x": ox, "y": oy, "target": tgt,
+                                 "clear_target": kind in (OrderKind.MOVE, OrderKind.ATTACK_MOVE)},
                           state, netid)
 
     def step(self, frame: Mapping) -> DriverStep:
+        validate_champion_life(frame)
         wire = self.rank_up(frame)
         if wire is not None:
             return DriverStep(wire, None, None, None)
         state, netid = self.rebuilder.rebuild(frame)
-        return self.decide(state, netid)
+        return self.decide(state, netid, wire_visibility(frame, netid, self.team),
+                           wire_own_hud(frame, self.team))
 
 
 #: `OrderType.CastSpell` as the control wire's ``mo`` carries it
@@ -684,7 +786,7 @@ class CastFreezeDetector:
                     "x": u.get("x"), "y": u.get("y"),
                     "died_while_stuck": False, "flagged": False}
             s["last_t_ms"] = t
-            if float(u.get("hp", 1)) <= 0:
+            if u.get("dead") is True:
                 s["died_while_stuck"] = True
             if not s["flagged"] and t - s["start_t_ms"] >= self.threshold_ms:
                 s["flagged"] = True
@@ -1035,7 +1137,7 @@ class PolicyPairDriver:
         o = dict(st.orders)
         o["target_netid"] = 0
         o["target_spawn_seq"] = None
-        if o["kind"] == OrderKind.ATTACK:
+        if o["kind"] in (OrderKind.ATTACK, OrderKind.CAST_R):
             t = o["target"]
             nid = int(st.netid[t]) if 0 <= t < len(st.netid) else 0
             o["target_netid"] = nid
@@ -1045,6 +1147,7 @@ class PolicyPairDriver:
     def __call__(self, obs: Optional[Mapping], i: int) -> Optional[Dict[str, dict]]:
         if obs is None:
             return None
+        validate_champion_life(obs)
         self.ranks.observe(obs)
         state = netid = None
         out: Dict[str, dict] = {}
@@ -1063,7 +1166,8 @@ class PolicyPairDriver:
                 continue
             if state is None:
                 state, netid = self.rebuilder.rebuild(obs)
-            st = d.decide(state, netid)
+            st = d.decide(state, netid, wire_visibility(obs, netid, team),
+                           wire_own_hud(obs, team))
             out[side] = st.wire
             sims[side] = self._sim_record(st)
         self.log.append(int(obs.get("t", -1)), out["blue"], out["red"],

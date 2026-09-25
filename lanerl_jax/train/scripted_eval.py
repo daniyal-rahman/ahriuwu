@@ -68,8 +68,8 @@ def make_runner(blue_name, red_name, n_envs, sim, *, drop=0.05,
     frames = (frame, red_frame)
 
     def obs_of(state):
-        b = build_observation(state, 0, frame, params=params, horizon_s=EPISODE_S)
-        r = build_observation(state, 1, red_frame, params=params, horizon_s=EPISODE_S)
+        b = build_observation(state, 0, frame, params=params, horizon_s=EPISODE_S, vision=sim.vision)
+        r = build_observation(state, 1, red_frame, params=params, horizon_s=EPISODE_S, vision=sim.vision)
         return b, r
 
     def one(state, key, delay_ms, perturb):
@@ -83,7 +83,7 @@ def make_runner(blue_name, red_name, n_envs, sim, *, drop=0.05,
         button = jnp.where(drop_now, BUTTON_INDEX["noop"], action[0])
         action = (button,) + action[1:]
         slot_unit = jnp.stack([b.slot_unit, r.slot_unit])
-        orders = orders_from(action, state, slot_unit, frame)
+        orders = orders_from(action, state, slot_unit, frame, params=params, vision=sim.vision)
         nxt = env_step(state, orders, sim)
 
         # ---- instrumentation (state-side, never shown to the players) ----
@@ -98,7 +98,7 @@ def make_runner(blue_name, red_name, n_envs, sim, *, drop=0.05,
         dmg = ad * 100.0 / (100.0 + params["armor"][state.model[uc]])
         # does the unit the order names look like what the policy read in
         # the slot it chose? (enemy lane minion, same offset, same bar)
-        slot = jnp.clip(action[3], 0, 31)
+        slot = jnp.argmax(slot_unit == u[:, None], axis=1)
         feats = jnp.stack([b.entities[slot[0]], r.entities[slot[1]]])
         ds0, dn0 = delta_to_lane(frame, state.x[uc[0]] - state.x[0], state.y[uc[0]] - state.y[0])
         ds1, dn1 = delta_to_lane(red_frame, state.x[uc[1]] - state.x[1], state.y[uc[1]] - state.y[1])

@@ -14,6 +14,8 @@ Run it deliberately::
 from __future__ import annotations
 
 import math
+import os
+from pathlib import Path
 
 import pytest
 
@@ -29,9 +31,26 @@ from lanerl_train.vec import (
 
 from .fakes import FakeAdapter, FakeEncoder, FakePolicy
 
+def selected_server_dir():
+    """One explicit binary selection for eligibility and every live launch."""
+    return Path(os.environ.get("LANERL_TEST_SERVER_DIR", paths.server_dir())).resolve()
+
+
+def _selected_server_available():
+    selected = selected_server_dir()
+    available = (selected / "GameServerConsole").is_file() or (
+        (selected / "GameServerConsole.dll").is_file()
+        and (paths.dotnet_root() / "dotnet").is_file())
+    if "LANERL_TEST_SERVER_DIR" in os.environ:
+        if os.environ.get("LANERL_SKIP_SERVER_TESTS") == "1":
+            raise RuntimeError("explicit live server requested but LANERL_SKIP_SERVER_TESTS=1")
+        if not available:
+            raise RuntimeError(f"explicit live server is unavailable: {selected}")
+    return available and os.environ.get("LANERL_SKIP_SERVER_TESTS") != "1"
+
+
 pytestmark = pytest.mark.skipif(
-    not paths.server_available(),
-    reason="vendored server build not available (or LANERL_SKIP_SERVER_TESTS=1)",
+    not _selected_server_available(), reason="default live server unavailable; select LANERL_TEST_SERVER_DIR",
 )
 
 N = 2  # kept small: the login node has 6 cores; the 16-instance figure is desktop's
@@ -43,7 +62,8 @@ def champions(obs):
 
 @pytest.fixture(scope="module")
 def live_env(tmp_path_factory):
-    spec = ServerLaunchSpec(step_ticks=4, toponly=True, bot_teams="none")
+    spec = ServerLaunchSpec(step_ticks=4, toponly=True, bot_teams="none",
+                            server_dir=selected_server_dir())
     env = VecLaneEnv(
         N,
         spec=spec,
@@ -156,7 +176,8 @@ def test_a_killed_instance_is_restarted_on_the_same_port(tmp_path, caplog):
     import os
     import signal
 
-    spec = ServerLaunchSpec(step_ticks=4, toponly=True, bot_teams="none")
+    spec = ServerLaunchSpec(step_ticks=4, toponly=True, bot_teams="none",
+                            server_dir=selected_server_dir())
     env = VecLaneEnv(
         2,
         spec=spec,
@@ -197,3 +218,183 @@ def test_a_killed_instance_is_restarted_on_the_same_port(tmp_path, caplog):
         assert all(o is not None for o in after.obs)
     finally:
         env.close()
+
+
+@pytest.mark.slow
+def test_coordinate_click_hits_visible_unit_and_empty_ground_moves(tmp_path):
+    """Exercise server hit-testing, not a client-selected entity ID."""
+    import os
+    from pathlib import Path
+
+    override = os.environ.get("LANERL_TEST_SERVER_DIR")
+    spec = ServerLaunchSpec(step_ticks=4, toponly=True, bot_teams="none",
+                            server_dir=selected_server_dir())
+    env = VecLaneEnv(1, spec=spec, log_dir=tmp_path / "click_logs",
+                     ports=PortAllocator(base=48700).allocate(1),
+                     step_timeout_s=120.0, auto_restart=False)
+    try:
+        env.start()
+        # Approach through ordinary navigation; no teleport/setup entity pointer.
+        for _ in range(2400):
+            obs = env.last_obs[0]
+            blue = champions(obs)[100]
+            candidates = [u for u in obs["u"] if u["k"] == "LaneMinion"
+                          and u["tm"] == 200 and u["hp"] > 0 and u["vb"]
+                          and math.dist((blue["x"], blue["y"]), (u["x"], u["y"])) < 700]
+            if candidates:
+                break
+            result = env.step([{"blue": {"t": "move", "x": 3000.0, "y": 12700.0}}])
+            assert all(result.alive)
+        assert candidates, "setup never brought a visible enemy into the local view"
+        unit = min(candidates, key=lambda u: math.dist((blue["x"], blue["y"]), (u["x"], u["y"])))
+        result = env.step([{"blue": {"t": "click", "button": "attack_move",
+                                     "x": unit["x"], "y": unit["y"]}}])
+        assert all(result.alive)
+        assert champions(env.last_obs[0])[100]["tgt"] == unit["id"]
+        # Ordinary right-click on vacant ground must clear the selected target.
+        blue = champions(env.last_obs[0])[100]
+        point = (blue["x"] - 300, blue["y"] - 300)
+        env.step([{"blue": {"t": "click", "button": "move", "x": point[0], "y": point[1]}}])
+        for _ in range(5):
+            assert champions(env.last_obs[0])[100]["tgt"] == 0
+            env.step([None])
+        # A-click on empty ground retains attack-move semantics. Unlike the
+        # old decoder it can acquire a nearby minion without clicking its body.
+        obs = env.last_obs[0]
+        blue = champions(obs)[100]
+        nearby = [u for u in obs['u'] if u['k'] == 'LaneMinion'
+                  and u['tm'] == 200 and u['hp'] > 0 and u['vb']]
+        assert nearby
+        unit = min(nearby, key=lambda u: math.dist((blue['x'], blue['y']), (u['x'], u['y'])))
+        point = (unit['x'] - 120, unit['y'] - 120)
+        env.step([{'blue': {'t': 'click', 'button': 'attack_move',
+                            'x': point[0], 'y': point[1]}}])
+        acquired = False
+        for _ in range(120):
+            frame = env.last_obs[0]
+            targets = {u['id'] for u in frame['u'] if u['k'] == 'LaneMinion'
+                       and u['tm'] == 200 and u['vb'] and u['hp'] > 0}
+            acquired |= champions(frame)[100]['tgt'] in targets
+            env.step([None])
+        assert acquired, 'A-click never acquired a visible minion from ground'
+    finally:
+        env.close()
+
+
+@pytest.mark.slow
+def test_disabled_q_keyboard_presses_do_not_refresh_empowerment(tmp_path):
+    """HUD-disabled Q must be ignored, not repeatedly re-cast at zero CD."""
+    import os
+    from pathlib import Path
+    override = os.environ.get('LANERL_TEST_SERVER_DIR')
+    env = VecLaneEnv(1, spec=ServerLaunchSpec(step_ticks=4, toponly=True,
+                     bot_teams='none', server_dir=selected_server_dir()),
+                     log_dir=tmp_path/'q_hud', ports=PortAllocator(base=48800).allocate(1),
+                     step_timeout_s=120., auto_restart=False)
+    try:
+        env.start()
+        env.step([{'blue': {'t': 'level', 'slot': 0}}])
+        me = champions(env.last_obs[0])[100]
+        assert me['se'][0] == 1 and me['sl'][0] == 1
+        click = {'blue': {'t': 'click', 'button': 'q', 'x': me['x'], 'y': me['y']}}
+        env.step([click])
+        me = champions(env.last_obs[0])[100]
+        assert me['se'][0] == 0 and me['cd0'] == 0
+        # Six seconds of repeated presses must not extend the 4.5s buff.
+        for _ in range(90):
+            env.step([click])
+        me = champions(env.last_obs[0])[100]
+        assert me['cd0'] > 1000, 'disabled Q presses kept refreshing its empowerment'
+    finally:
+        env.close()
+
+
+@pytest.mark.slow
+def test_dead_positive_hp_rejects_gameplay_until_respawn(tmp_path):
+    """A real corpse may regenerate HP; keyboard eligibility must use IsDead."""
+    import json
+    import os
+    from pathlib import Path
+
+    override = os.environ.get('LANERL_TEST_SERVER_DIR')
+    env = VecLaneEnv(1, spec=ServerLaunchSpec(step_ticks=6, toponly=True,
+        bot_teams='none', server_dir=selected_server_dir(),
+        extra_env={'LANERL_AUTOBUY': '0'}), log_dir=tmp_path/'dead_control',
+        ports=PortAllocator(base=48900).allocate(1), step_timeout_s=120., auto_restart=False)
+    evidence = []
+    try:
+        env.start()
+        me = champions(env.last_obs[0])[100]
+        assert me.get('dead') is False, 'requires authoritative-death server build'
+        env.step([{'blue': {'t': 'level', 'slot': 2}}])
+        # Earn proximity XP behind the wave, without casts or attacks. Level
+        # four leaves enough death-screen time for the passive to heal a corpse.
+        env.step([{'blue': {'t': 'move', 'x': 1500., 'y': 11800.}}])
+        for _ in range(5000):
+            me = champions(env.last_obs[0])[100]
+            assert not me['dead'], 'setup died before reaching the required level'
+            if me['lvl'] >= 4:
+                break
+            env.step([None])
+        assert me['lvl'] >= 4, 'setup never earned proximity XP'
+        assert me['cs'] == 0, 'setup unexpectedly farmed'
+        evidence.append({'event': 'setup', 't': env.last_obs[0]['t'], 'champion': me})
+        # Ordinary navigation into the opposing wave/turret causes a real death.
+        env.step([{'blue': {'t': 'move', 'x': 3907., 'y': 13243.}}])
+        for _ in range(1800):
+            me = champions(env.last_obs[0])[100]
+            if me['dead']:
+                break
+            env.step([None])
+        assert me['dead'], 'setup did not die under enemy fire'
+        assert me['cd2'] <= 0, 'setup must not leave an existing E running'
+        dead_cs = me['cs']
+        dead_at = env.last_obs[0]['t']
+        evidence.append({'event': 'death', 't': dead_at, 'champion': me})
+        positive_hp_samples = 0
+        commands = [{'t': 'click', 'button': b, 'x': 1950., 'y': 12350.}
+                    for b in ('e', 'move', 'e', 'attack_move', 'e', 'q', 'e', 'w', 'e', 'r')]
+        commands += [{'t': 'recall'}, {'t': 'move', 'x': 1950., 'y': 12350.},
+                     {'t': 'attack', 'id': champions(env.last_obs[0])[200]['id']}]
+        for i in range(600):
+            me = champions(env.last_obs[0])[100]
+            if not me['dead']:
+                break
+            positive_hp_samples += me['hp'] > 0
+            assert me['cs'] == dead_cs, 'dead keyboard inputs earned CS'
+            assert me['cd2'] <= 0, 'dead keyboard E started a spin/cooldown'
+            assert not me.get('rc', 0), 'dead keyboard recall started a channel'
+            evidence.append({'event': 'dead_input', 't': env.last_obs[0]['t'],
+                             'champion': me, 'command': commands[i % len(commands)]})
+            env.step([{'blue': commands[i % len(commands)]}])
+        assert not me['dead'], 'champion never respawned'
+        assert positive_hp_samples > 0, 'regression did not exercise positive-HP corpse'
+        assert me['cs'] == dead_cs
+        evidence.append({'event': 'respawn', 't': env.last_obs[0]['t'], 'champion': me})
+        env.step([{'blue': {'t': 'click', 'button': 'e', 'x': me['x'], 'y': me['y']}}])
+        me = champions(env.last_obs[0])[100]
+        assert not me['dead'] and me['cd2'] > 0, 'alive E did not work after respawn'
+        evidence.append({'event': 'alive_e', 't': env.last_obs[0]['t'], 'champion': me})
+        print(json.dumps({'dead_at_ms': dead_at, 'positive_hp_dead_samples': positive_hp_samples,
+                          'cs_before_after_death': [dead_cs, me['cs']], 'post_respawn_e_cd': me['cd2']}))
+    finally:
+        (tmp_path/'dead_control_evidence.json').write_text(json.dumps(evidence, indent=2))
+        env.close()
+
+
+@pytest.mark.slow
+def test_reset_skill_setup_does_not_advance_the_other_server(tmp_path):
+    import os
+    from pathlib import Path
+    import numpy as np
+    from lanerl_jax.train.server_train import ServerCollector
+    override = os.environ.get('LANERL_TEST_SERVER_DIR')
+    collector = ServerCollector(2, tmp_path, 48600, 600.,
+                                server_dir=selected_server_dir())
+    try:
+        peer_before = collector.env.last_obs[1]
+        collector.restart_done(np.array([True, False]))
+        assert collector.env.last_obs[1] == peer_before
+        assert collector.episodes == [1, 0]
+    finally:
+        collector.close()

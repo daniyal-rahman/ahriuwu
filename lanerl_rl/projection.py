@@ -171,3 +171,29 @@ def units_per_pixel_at_centre(cam: Camera) -> Tuple[float, float]:
     x1, _ = screen_to_world(cam, 0.5 + 1.0 / w, 0.5)
     _, z1 = screen_to_world(cam, 0.5, 0.5 + 1.0 / h)
     return abs(x1 - x0), abs(z1 - z0)
+
+
+# Same HUD exclusion as the movement decoder. Kept here so entity clicks and
+# ground clicks share the same definition of the playable viewport.
+MINIMAP_X_MIN = 275.0 / 352.0
+MINIMAP_Y_MIN = 240.0 / 352.0
+
+
+def target_on_screen(ds, dn):
+    """Whether a canonical ground offset is clickable in the centred camera.
+
+    Works with scalars, NumPy or JAX arrays. Cross-multiplied projection avoids
+    divisions at/behind the camera plane. This is a screen bound, not a radius
+    or a team-vision check; callers must additionally require a visible unit.
+    """
+    tilt = math.radians(DEFAULT_TILT_DEG)
+    ct, st = math.cos(tilt), math.sin(tilt)
+    dy = FLOOR_Y - DEFAULT_CAM_Y
+    dz = dn - dy * ct / st
+    vy, vz = dy * ct + dz * st, -dy * st + dz * ct
+    tv = math.tan(math.radians(DEFAULT_FOV_V_DEG) / 2)
+    th = tv * DEFAULT_RESOLUTION[0] / DEFAULT_RESOLUTION[1]
+    inside = (vz > 0) & (abs(ds) <= vz * th) & (abs(vy) <= vz * tv)
+    minimap = ((ds >= (2 * MINIMAP_X_MIN - 1) * vz * th)
+               & (-vy >= (2 * MINIMAP_Y_MIN - 1) * vz * tv))
+    return inside & ~minimap

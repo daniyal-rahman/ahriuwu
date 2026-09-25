@@ -70,7 +70,8 @@ from ..sim.local_pathing import route_is_server_exact
 from ..sim.orders import OrderKind
 from ..sim.state import Kind, Team
 from ..sim.step import env_advance, env_apply
-from .policy import VALUE_HEAD_NAME, LanePolicy, PolicyConfig
+from .policy import LanePolicy, PolicyConfig
+from .learner import make_learner
 from .actions import orders_from
 from .ppo import (
     PPOConfig,
@@ -78,7 +79,7 @@ from .ppo import (
     factored_entropy,
     factored_log_prob,
     gae,
-    head_usage,
+    head_usage, screen_head_usage, expected_screen_usage,
     kl_stopped_epochs,
     policy_loss,
     summarise_minibatches,
@@ -184,7 +185,7 @@ class Transition(NamedTuple):
     action: tuple
     log_prob: jax.Array
     #: Per-sample head masks (`ppo.head_usage`, `PPO-14`): 1.0 where this
-    #: sample's screen point / target slot reached the wire. Computed at
+    #: sample's screen point reached the wire. uses_target is always zero. Computed at
     #: sampling time and consumed by the loss, so the stored `log_prob` and
     #: the loss's recomputation mask the same heads.
     uses_screen: jax.Array
@@ -213,23 +214,17 @@ class Transition(NamedTuple):
 
 
 def _sample(logits, key, slot_valid):
-    """Sample the four heads. Returns ``(action, log_prob, usage)``.
+    """Sample button and screen coordinates, with matching PPO likelihood.
 
-    ``slot_valid`` is the observation's ``~entity_pad_mask`` (True where the
-    slot holds a unit). ``usage = (uses_screen, uses_target)`` is the
-    per-sample head mask (`ppo.head_usage`, `PPO-14`): which heads this
-    sample put on the wire, a function of the sampled button, the sampled
-    target slot and the slot validity. The log-prob is computed under it, and
-    it is stored in the `Transition` so the loss recomputes the log-prob under
-    the SAME mask.
+    slot_valid is an unused compatibility argument. uses_target stays zero
+    in the transition schema; there is no actor entity-pointer head.
     """
-    kb, kx, ky, kt = jax.random.split(key, 4)
+    kb, kx, ky = jax.random.split(key, 3)
     a = (jax.random.categorical(kb, logits.button),
          jax.random.categorical(kx, logits.screen_x),
-         jax.random.categorical(ky, logits.screen_y),
-         jax.random.categorical(kt, logits.target))
-    lg = (logits.button, logits.screen_x, logits.screen_y, logits.target)
-    usage = head_usage(a[0], a[3], slot_valid)
+         jax.random.categorical(ky, logits.screen_y))
+    lg = (logits.button, logits.screen_x, logits.screen_y)
+    usage = screen_head_usage(a[0])
     return a, factored_log_prob(lg, a, *usage), usage
 
 
@@ -316,32 +311,15 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
     # and stays at `lr` by design -- running shared features at the critic's
     # rate would drag the policy along with them, which is the failure mode
     # `value_coef` exists to balance instead.
-    def _label(params):
-        return jax.tree_util.tree_map_with_path(
-            lambda path, _: ("critic" if any(
-                getattr(k, "key", None) == VALUE_HEAD_NAME for k in path)
-                else "actor"),
-            params)
-
-    tx = optax.chain(
-        optax.clip_by_global_norm(cfg.ppo.max_grad_norm),
-        optax.multi_transform(
-            # eps=1e-5 (CleanRL, Huang et al. detail #3), not optax's 1e-8:
-            # fresh Adam with 1e-8 steps ~lr*sign(g) on every parameter,
-            # including those whose gradient is ~0, and the lr-3e-4 arms
-            # blew the critic up in chunk 0 (`PPO-04`).
-            {"actor": optax.adam(cfg.ppo.lr, eps=1e-5),
-             "critic": optax.adam(cfg.ppo.critic_lr, eps=1e-5)},
-            _label),
-    )
+    tx, _loss = make_learner(policy, cfg.ppo)
 
     def _obs(state):
         # The clock feature is t/episode_s; the builder's default 600 was a
         # second copy of `episode_s` that `--episode-s` did not move (`OBS-10`).
         blue = build_observation(state, 0, frame, params=params_tbl,
-                                 horizon_s=cfg.episode_s)
+                                 horizon_s=cfg.episode_s, vision=sim.vision)
         red = build_observation(state, 1, red_frame, params=params_tbl,
-                                 horizon_s=cfg.episode_s)
+                                 horizon_s=cfg.episode_s, vision=sim.vision)
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), blue, red)
 
     full_ms = jnp.asarray(cfg.episode_s * 1000.0, jnp.float32)
@@ -356,7 +334,7 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
                                   obs.global_vec)
             action, log_prob, (uses_screen, uses_target) = _sample(
                 logits, key, ~obs.entity_pad_mask)
-            orders = _orders_from(action, state, obs.slot_unit, frame)
+            orders = _orders_from(action, state, obs.slot_unit, frame, vision=sim.vision)
             attack_class = _attack_class(action[0], orders, state)
             # `env_step`'s two halves, split only to read the post-order
             # route status. The step mode (deferred terrain repair, routed
@@ -414,24 +392,6 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             runner.env_state, runner.reward_state, runner.deadline_ms, keys)
         return runner._replace(env_state=env_state, reward_state=reward_state,
                                deadline_ms=deadline_ms, rng=rng), tr
-
-    def _loss(params, batch, cfg_ppo):
-        logits = policy.apply(params, batch["entities"], batch["mask"],
-                              batch["self"], batch["global"])
-        lg = (logits.button, logits.screen_x, logits.screen_y, logits.target)
-        # The SAME per-sample head masks the rollout computed its log-prob
-        # under (`PPO-14`); the entropy's expected usage reads the stored
-        # observation's slot validity (`ppo.expected_head_usage`).
-        log_prob = factored_log_prob(lg, batch["action"], batch["uses_screen"],
-                                     batch["uses_target"])
-        entropy = factored_entropy(
-            lg, *expected_head_usage(logits.button, logits.target,
-                                     ~batch["mask"])).mean()
-        pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
-        vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
-        total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy
-        return total, {"policy_loss": pl, "value_loss": vl, "entropy": entropy,
-                       **stats}
 
     def _update(runner: RunnerState, _):
         runner, tr = jax.lax.scan(_env_step, runner, None,

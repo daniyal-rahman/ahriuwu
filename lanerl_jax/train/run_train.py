@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
-from .ppo import MAX_FACTORED_ENTROPY_TARGET_VISIBLE
+from .ppo import MAX_SCREEN_CLICK_ENTROPY
 from .run_manifest import RunDir, file_sha256
 from .trainer import TrainConfig, make_train
 
@@ -168,10 +168,31 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+def episode_cs_mean(cs, counts) -> float:
+    """Combine per-update means using their champion-episode counts."""
+    cs, counts = np.asarray(cs), np.asarray(counts)
+    sampled = counts > 0
+    if not np.any(sampled):
+        return float("nan")
+    return float(np.sum(cs[sampled] * counts[sampled]) / counts[sampled].sum())
+
+
 def main() -> None:
     ap = build_parser()
     a = ap.parse_args()
     _have_wandb_args = a._have_wandb_args
+    if a.resume is not None:
+        if not a.resume.exists():
+            ap.error(f"--resume checkpoint not found: {a.resume}")
+        previous_manifest = a.resume.parent / "manifest.json"
+        if not previous_manifest.exists():
+            ap.error("resume requires a manifest identifying screen-click-v2")
+        previous = json.loads(previous_manifest.read_text())
+        interface = previous.get("config", {}).get("train", {}).get("policy", {}).get("action_interface")
+        if interface != "screen-click-v2":
+            ap.error("old entity-pointer checkpoints cannot resume as screen-click-v2; start a fresh run")
+        if previous["config"]["train"]["policy"].get("observation_interface") != "viewport-structured-v3":
+            ap.error("checkpoint does not declare v3 authoritative life-state observations; start a fresh run")
 
     ppo = TrainConfig().ppo
     if a.lr is not None:
@@ -248,8 +269,6 @@ def main() -> None:
     runner = built.initial_runner(jax.random.key(a.seed))
     if a.resume is not None:
         from flax.serialization import from_bytes
-        if not a.resume.exists():
-            ap.error(f"--resume checkpoint not found: {a.resume}")
         # Deserialised INTO the freshly built runner's own pytrees, so a
         # checkpoint whose structure no longer matches the model fails here
         # rather than loading something plausible. Params and optimiser state
@@ -302,8 +321,9 @@ def main() -> None:
             # answer here -- "no sample" -- so the warning is noise.
             warnings.simplefilter("ignore", RuntimeWarning)
             row = {k: float(np.nanmean(np.asarray(v))) for k, v in mc.items()}
-        # cs_at_10min is NaN on updates where no episode ended, so its mean is
-        # over the episodes that DID end; the count is the denominator.
+        # Updates finish different numbers of episodes. Weight their means
+        # by the counts; nanmean would weight a single game like ten games.
+        row["cs_at_10min"] = episode_cs_mean(mc["cs_at_10min"], mc["cs_episodes"])
         row["cs_episodes"] = float(np.asarray(mc["cs_episodes"]).sum())
         row.update(update=upd, chunk=ci,
                    step=int(np.asarray(runner.step)),
@@ -317,7 +337,7 @@ def main() -> None:
         print(f"  chunk {ci:>3} upd {upd:>5} reward {row['reward']:+.5f} "
               f"entropy {row['entropy']:.3f} kl {row['approx_kl']:.4f} "
               f"vloss {row['value_loss']:.3f} "
-              + (f"cs {np.mean(done):.2f} (n={row['cs_episodes']:.0f} champion-episodes)"
+              + (f"cs {row['cs_at_10min']:.2f} (n={row['cs_episodes']:.0f} champion-episodes)"
                  if done.size else "cs -"), flush=True)
         # DIVERGENCE GUARD. A run whose loss has gone non-finite is producing
         # nothing but wall-clock, and the RL-002 log shows `value_loss` going
@@ -372,7 +392,7 @@ def main() -> None:
     jax.block_until_ready(out)
     first = time.perf_counter() - t0
 
-    if a.time_steady:
+    if a.time_steady and not diverged:
         # `n` is a STATIC argument: the chunks above compiled `n=chunk`, so
         # a call with `n=cfg.n_updates` is a new XLA program and its time
         # includes a second compile (`PPO-08`). Time one chunk and scale.
@@ -402,10 +422,7 @@ def main() -> None:
     print()
     e0 = float(np.asarray(m["entropy"])[0])
     e1 = float(np.asarray(m["entropy"])[-1])
-    # The MASKED ceiling with a visible slot -- every training observation
-    # (`PPO-14`; 12.050 under `PPO-01`, 14.099 unmasked). `ppo`'s docstring
-    # has the observation-free supremum (9.250) and why it is not the one.
-    cap = MAX_FACTORED_ENTROPY_TARGET_VISIBLE
+    cap = MAX_SCREEN_CLICK_ENTROPY
     print(f"entropy {e0:.3f} -> {e1:.3f} of a {cap:.3f} "
           f"masked maximum ({100 * e1 / cap:.0f}%)")
     print(f"mean reward first/last update: "
@@ -423,7 +440,7 @@ def main() -> None:
     cs = np.asarray(m["cs_at_10min"])
     done_at = np.flatnonzero(~np.isnan(cs))
     if len(done_at):
-        print(f"\nCS@10min, per episode that ENDED ({len(done_at)} of them):")
+        print(f"\nEpisode CS, per update with completed episodes ({len(done_at)} updates):")
         for i in done_at:
             print(f"  update {int(i):>5}   {float(cs[i]):.3f} CS per champion")
     else:
@@ -441,7 +458,9 @@ def main() -> None:
     run.set_results(
         cs_at_10min=[round(float(x), 3) for x in _done],
         cs_at_10min_last=(round(float(_done[-1]), 3) if _done.size else None),
-        episodes_ended=int(_done.size),
+        episodes_ended=int(np.asarray(m["cs_episodes"]).sum()),
+        cs_at_10min_mean=(episode_cs_mean(m["cs_at_10min"], m["cs_episodes"])
+                         if np.asarray(m["cs_episodes"]).sum() > 0 else None),
         reward_first=round(float(np.asarray(m["reward"])[0]), 6),
         reward_last=round(float(np.asarray(m["reward"])[-1]), 6),
         entropy_first=round(float(np.asarray(m["entropy"])[0]), 4),
@@ -458,18 +477,24 @@ def main() -> None:
     )
     if wb is not None:
         try:
-            log_step({"final/cs_at_10min": run.manifest["results"]["cs_at_10min_last"]
-                      or float("nan")}, step=cfg.n_updates)
+            final_cs = run.manifest["results"]["cs_at_10min_last"]
+            log_step({"final/cs_at_10min": (float("nan") if final_cs is None
+                                           else final_cs)}, step=cfg.n_updates)
             finish_wandb()
         except Exception:
             pass
     run.close()
-    print(f"\nrun dir {run.path}\n  manifest.json / README.md / metrics.jsonl / "
-          f"ckpt_latest.msgpack")
+    print(f"\nrun dir {run.path}\n  manifest.json / README.md / metrics.jsonl"
+          + (" / diagnostic checkpoint (latest unchanged)" if diverged
+             else " / ckpt_latest.msgpack"))
 
     ld = np.asarray(m["lane_dist"])
     print(f"\nlane distance: start {ld[0]:,.0f} -> min {ld.min():,.0f} "
           f"(0 = inside the lane corridor, ~8,000 = the fountain)")
+    if diverged:
+        # Keep the diagnostics, but do not let Slurm or a shell pipeline
+        # report a numerically failed training run as successful.
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

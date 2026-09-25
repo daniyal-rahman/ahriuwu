@@ -1130,7 +1130,10 @@ class ObservationBuilder:
 
         screen_x = np.ones(C.N_SCREEN_X, dtype=bool)
         screen_y = np.ones(C.N_SCREEN_Y, dtype=bool)
-        target = entities[:, C.E_VALID] > 0.5
+        from .projection import target_on_screen
+        target = ((entities[:, C.E_VALID] > 0.5)
+                  & target_on_screen(entities[:, C.E_DS] * C.NORM_DIST,
+                                     entities[:, C.E_DN] * C.NORM_DIST))
         if not target.any():
             # Never hand the policy an all-masked categorical.
             target = target.copy()

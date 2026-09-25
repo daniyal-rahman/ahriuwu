@@ -1,0 +1,26 @@
+--- a/GameServerLib/Lanerl/LanerlControl.cs
++++ b/GameServerLib/Lanerl/LanerlControl.cs
+@@ -208,6 +208,9 @@
+                 }
+                 if (au is Champion ch)
+                 {
++                    // IsDead is authoritative: Garen's passive can leave a
++                    // corpse with positive HP before the respawn timer ends.
++                    sb.Append(",\"dead\":").Append(ch.IsDead ? "true" : "false");
+                     sb.Append(",\"gold\":").Append(((int)ch.Stats.Gold).ToString(CultureInfo.InvariantCulture))
+                       .Append(",\"xp\":").Append(((int)ch.Stats.Experience).ToString(CultureInfo.InvariantCulture))
+                       .Append(",\"lvl\":").Append(ch.Stats.Level.ToString(CultureInfo.InvariantCulture))
+@@ -353,6 +356,13 @@
+ 
+         private void Execute(Game game, Champion champ, LanerlOrder a)
+         {
++            // Keyboard/mouse gameplay cannot act during the death screen.
++            // CanCast alone is insufficient: it checks status flags, not
++            // IsDead, and instant spells bypass delayed cast cancellation.
++            // Keep raw diagnostic Cast separate; skill ranking remains legal.
++            if (champ.IsDead && (a.Kind == LanerlOrderKind.Click
++                || a.Kind == LanerlOrderKind.Move || a.Kind == LanerlOrderKind.Attack
++                || a.Kind == LanerlOrderKind.Recall)) return;
+             switch (a.Kind)
+             {
+                 case LanerlOrderKind.Click:

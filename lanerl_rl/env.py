@@ -78,7 +78,7 @@ class ServerCommand:
 
     ``kind`` is one of ``noop``, ``move``, ``attack_move``, ``cast``, ``recall``.
     ``spell_slot`` is 0..3 for Q/W/E/R.  ``target_netid`` is the server net id
-    of the unit the target head selected, or ``None``.
+    used only by explicit legacy diagnostic commands; policy decoding never sets it.
     """
 
     kind: str
@@ -95,13 +95,17 @@ def decode_action(
     self_unit: Unit,
     slot_netids: Sequence[Optional[int]],
 ) -> ServerCommand:
-    """Turn the four categorical heads into one server order.
+    """Turn button and screen-coordinate heads into one server order.
 
     The move heads live in the agent's **canonical** frame, so the chosen
     direction is rotated back into world space through the agent's mirror
     transform before it becomes a click position.  That inverse is what makes a
     red-side policy trained in canonical space produce correct red-side orders.
     """
+    for name, limit in (("button", C.N_BUTTONS), ("screen_x", C.N_SCREEN_X),
+                        ("screen_y", C.N_SCREEN_Y)):
+        if not 0 <= int(action[name]) < limit:
+            raise ValueError(f"{name} index is outside the action grid")
     button = C.BUTTONS[int(action["button"])]
     if button == "noop":
         return ServerCommand(kind="noop")
@@ -116,6 +120,9 @@ def decode_action(
     # 125, minion aggro several hundred).
     sx = float(C.SCREEN_X_VALUES[int(action["screen_x"])])
     sy = float(C.SCREEN_Y_VALUES[int(action["screen_y"])])
+    if (button in ("move", "attack_move", "r")
+            and sx >= projection.MINIMAP_X_MIN and sy >= projection.MINIMAP_Y_MIN):
+        return ServerCommand(kind="noop")
     try:
         # The screen offset from the champion, in a CANONICAL champion-centred
         # view. Taken about the origin so it is a pure offset, then mapped
@@ -144,17 +151,14 @@ def decode_action(
     px = self_unit.x + wx
     py = self_unit.y + wy
 
-    slot_idx = int(action["target"])
-    target_netid = slot_netids[slot_idx] if slot_idx < len(slot_netids) else None
-    if observation.entities[slot_idx, C.E_VALID] < 0.5:
-        target_netid = None
-
+    # Entity hit-testing belongs to the server. Observation slots and any legacy
+    # ``target`` action field cannot alter the chosen screen location.
     if button == "move":
         return ServerCommand(kind="move", x=px, y=py)
     if button == "attack_move":
-        return ServerCommand(kind="attack_move", x=px, y=py, target_netid=target_netid)
+        return ServerCommand(kind="attack_move", x=px, y=py)
     spell = {"q": 0, "w": 1, "e": 2, "r": 3}[button]
-    return ServerCommand(kind="cast", spell_slot=spell, x=px, y=py, target_netid=target_netid)
+    return ServerCommand(kind="cast", spell_slot=spell, x=px, y=py)
 
 
 # --------------------------------------------------------------------------
@@ -170,53 +174,27 @@ def decode_action(
 
 
 def order_for_command(cmd: Optional[ServerCommand]) -> Dict[str, object]:
-    """One :class:`ServerCommand` -> one ``LanerlControl.Execute`` order object.
+    """Serialize coordinate-only policy commands.
 
-    The mapping is the wire contract in ``LanerlControl.cs``:
-
-    ==============  ==========================================================
-    ``kind``        order
-    ==============  ==========================================================
-    ``noop``        ``{"t":"noop"}`` -- League orders persist, so this is
-                    action-repeat, not a stop
-    ``move``        ``{"t":"move","x":..,"y":..}``
-    ``cast``        ``{"t":"cast","slot":..}`` plus ``id``/``x``/``y``
-    ``attack_move`` ``{"t":"attack","id":..}`` when a target was selected,
-                    otherwise a plain ``move``.  The engine only swings at
-                    targets already in range, so closing the distance is the
-                    policy's job -- that is the behaviour we want learned.
-    ``recall``      ``{"t":"recall"}`` -- casts the blue pill in
-                    ``SpellSlotType.BluePillSlot`` (13), a 0.5 s windup plus an
-                    8 s channel that a move order or any non-periodic damage
-                    cancels.  Not an instant teleport; see ``LanerlControl.cs``.
-    ==============  ==========================================================
+    The server resolves clicks against visible, alive units. Entity-ID attack
+    and cast orders remain available directly on the diagnostic wire, but this
+    production adapter never emits them.
     """
     if cmd is None or cmd.kind == "noop":
         return {"t": "noop"}
     if cmd.kind == "recall":
         return {"t": "recall"}
     if cmd.kind == "move":
-        return {"t": "move", "x": _coord(cmd.x), "y": _coord(cmd.y)}
+        return {"t": "click", "button": "move", "x": _coord(cmd.x), "y": _coord(cmd.y)}
+    if cmd.target_netid is not None:
+        raise ValueError("policy commands cannot select an entity ID; use screen coordinates")
     if cmd.kind == "attack_move":
-        if cmd.target_netid is not None:
-            return {"t": "attack", "id": int(cmd.target_netid)}
-        return {"t": "move", "x": _coord(cmd.x), "y": _coord(cmd.y)}
+        return {"t": "click", "button": "attack_move", "x": _coord(cmd.x), "y": _coord(cmd.y)}
     if cmd.kind == "cast":
-        if cmd.spell_slot is None:
-            raise ValueError("a cast command needs a spell_slot")
-        # `id` is always sent, though LanerlWire.ParseOrder treats it as optional
-        # for "cast": an absent key is fine, and 0 is the documented "no target"
-        # value that FindUnit short-circuits on. Sending it explicitly just keeps
-        # every cast order the same shape.
-        order: Dict[str, object] = {
-            "t": "cast",
-            "slot": int(cmd.spell_slot),
-            "id": 0 if cmd.target_netid is None else int(cmd.target_netid),
-        }
-        if cmd.x is not None and cmd.y is not None:
-            order["x"] = _coord(cmd.x)
-            order["y"] = _coord(cmd.y)
-        return order
+        if cmd.spell_slot not in (0, 1, 2, 3):
+            raise ValueError("a cast command needs spell_slot 0..3")
+        return {"t": "click", "button": ("q", "w", "e", "r")[cmd.spell_slot],
+                "x": _coord(cmd.x), "y": _coord(cmd.y)}
     raise ValueError(f"unknown ServerCommand kind {cmd.kind!r}")
 
 

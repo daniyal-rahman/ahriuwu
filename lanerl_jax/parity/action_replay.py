@@ -88,6 +88,15 @@ _CAST_KIND = {
 
 def _decode_wire_order(order: Mapping, ids: Mapping[int, int]) -> Tuple[int, float, float, int]:
     kind = order.get("t", "noop")
+    if kind == "click":
+        button = order.get("button")
+        if button == "move":
+            order = {**order, "t": "move"}
+        elif button in ("q", "w", "e"):
+            order = {**order, "t": "cast", "slot": ("q", "w", "e").index(button)}
+        else:
+            raise ActionReplayError("attack/R click replay needs its recorded semantic resolution or world state")
+        kind = order["t"]
     if kind == "noop":
         return OrderKind.NOOP, 0.0, 0.0, -1
     if kind == "move":
@@ -135,4 +144,7 @@ def decision_to_orders(decision: RecordedDecision,
         x=jnp.asarray([v[1] for v in decoded], jnp.float32),
         y=jnp.asarray([v[2] for v in decoded], jnp.float32),
         target=jnp.asarray([v[3] for v in decoded], jnp.int8),
+        clear_target=jnp.asarray([
+            bool(w.get("clear_target", False)) or (w.get("t") == "click" and w.get("button") == "move")
+            for w in (decision.blue, decision.red)], jnp.bool_),
     )

@@ -5,7 +5,7 @@ Why this exists
 Most from-scratch runs never learn to farm (`RL-007`). Before blaming
 learning, rule out the interface: if a rule-based player that sees ONLY the
 `Observation` tensors and emits ONLY the factored 4-tuple
-``(button, screen_x, screen_y, target_slot)`` cannot farm through
+``(button, screen_x, screen_y)`` cannot farm through
 ``orders_from``, no amount of training will.
 
 Contract
@@ -272,12 +272,12 @@ def _act(obs, key, *, require_lasthit: bool):
     go = jnp.any(killable_far)
     tds = jnp.where(go, ds[far] * k, tds)
     tdn = jnp.where(go, dn[far] * k, tdn)
-    sx, sy = cell_for_offset(tds, tdn)
+    sx, sy = cell_for_offset(jnp.where(attack, ds[pick], tds),
+                             jnp.where(attack, dn[pick], tdn))
     dead = obs.self_vec[C.S_IS_DEAD] > 0.5
     button = jnp.where(attack, _AM, _MOVE)
     button = jnp.where(dead, _NOOP, button).astype(jnp.int32)
-    slot = jnp.where(attack, _ENEMY_MINION[0] + pick, 0).astype(jnp.int32)
-    return button, sx, sy, slot
+    return button, sx, sy
 
 
 def scripted_act(obs, key):
@@ -293,7 +293,7 @@ def scripted_act_any(obs, key):
 def noop_act(obs, key):
     del key
     z = jnp.int32(0)
-    return jnp.int32(_NOOP), z, z, z
+    return jnp.int32(_NOOP), z, z
 
 
 PLAYERS = {"lasthit": scripted_act, "brawler": scripted_act_any,

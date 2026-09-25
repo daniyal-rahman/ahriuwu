@@ -118,3 +118,247 @@ separately, `block_until_ready()` around every timing.
    what each one covers.
 6. Only then: experiments as git snapshots (worktree at a commit, runs written
    to the live tree's `runs/`), one contract each.
+
+## Recording an experiment without creating document sprawl
+
+The 2026-09-24 conversation reaffirmed the method above. Its architecture
+ideas are candidates, not accepted implementations. Current scope and
+hardening priorities are in [PROJECT.md](PROJECT.md); gate verdicts remain
+in the fidelity ledger. In particular, simulator/server agreement is evidence
+about practical control and transfer, not a demand to perfect every tick
+before investigating a demonstrated farming failure.
+
+Before starting research, add one compact contract under this section. Link
+existing evidence and manifests rather than repeating their measurements:
+
+```text
+ID / question / owner / date / status:
+Suspected bottleneck and existing evidence:
+Intervention, reference implementation/version, fixed baseline:
+Independent implementation check:
+Measured feasibility and total comparison budget:
+Evaluation: opponents, side swaps, seeds, holdouts, metrics, selection rule:
+Success / stopping criteria:
+Run IDs and evidence links:
+Decision, reason, limitations, next check:
+```
+
+No new research contract is approved by the presence of this template. A
+correctness repair can proceed as a diagnosis plus regression; do not label
+it an architecture experiment or compare its scores as if mechanics were fixed.
+
+Each run lives under a named ignored `lanerl_jax/runs/` directory. Use the
+existing `lanerl_jax.train.run_manifest` machinery for training. For diagnostics,
+record equivalent provenance in the sidecar/run README: exact command and cwd,
+resolved settings, seeds, source commit, actual dirty patch and relevant
+untracked source if present, input/checkpoint/route/vendor versions or hashes,
+software and hardware, elapsed time, exit status, and artifact paths. A dirty
+flag or hash alone does not preserve the source. Evidence cited by a decision
+must have versioned reproduction code or a retained source snapshot; a script
+left only in `/tmp` is insufficient.
+
+Distinguish a new run, crash recovery, and an exact continuation. Identify
+whether evaluation uses historical code or current code with old weights.
+Record both sides' farming/combat outcomes and failure cases so a combined
+score cannot hide one side stalling. Keep unsuccessful and inconclusive runs
+linked alongside successful ones. At completion, update the contract's decision
+and the appropriate ledger row; preserve detailed run output as evidence.
+
+
+## SERVER-FIRST-01 — uncontested farming, 2026-09-25
+
+Status: ongoing until consistent farming improvement. Dani selected this
+stopping point on 2026-09-25, rather than stopping after diagnosis or after
+the JAX comparison. Working operational target proposed in the conversation:
+three independently trained seeds, five frozen evaluation episodes per seed,
+each seed's trained median at least 30 CS by game time 600 s and above its
+paired untrained median. Record all episodes, deaths and attack engagement;
+replays must show repeated minion attacks/last-hits. No hidden-input/control
+violations or cast-freeze failures may count as successes. The near-wave task
+is an intermediate test; report its 120-second setup explicitly and confirm
+the final result from normal fountain spawn. This threshold is a first
+functional farming milestone, not lane strength or D2-level performance.
+
+Dani explicitly requested this
+baseline to separate learner failures from JAX dynamics. This supersedes the
+requirement to finish simulator parity before this server-only investigation.
+
+- Question: can randomly initialized PPO learn useful farming on the source
+  server, then under the same learner and task on JAX?
+- No pretrained checkpoint, demonstrations, imitation loss or reference-policy
+  prior. Structured observations are intentional: pixel interpretation is
+  deferred. Actor entities must be alive, visible by the environment's own fog
+  rules (including brush), and inside the local viewport. Actor outputs remain
+  button plus screen coordinates. Diagnostic traces may contain hidden state.
+- First task: ten-minute top lane with the enemy champion idle in its fountain;
+  both teams' minions and turrets remain active. This is uncontested farming,
+  not a matchup result. Start with blue, then evaluate both sides. Keep spawn,
+  skill progression, rewards, decision rate and episode boundaries explicit.
+- Reuse the same policy, PPO loss/optimizer, observation layout and reward code
+  across the source-server and JAX collectors. JAX as the learner library is
+  allowed; source-server rollouts must never call the JAX dynamics step.
+- Verify screen/fog exclusion, sampled/recomputed likelihood agreement, finite
+  updates, real parameter changes, episode reset homogeneity and Q retarget
+  recovery before spending a training budget. Measure collector throughput and
+  memory before choosing the budget; do not substitute game counts for equal
+  decision budgets.
+- Evaluate frozen initial and final policies with the same sampling protocol;
+  include an lr=0 control and independent seeds before claiming learning.
+  Report CS, deaths, wave proximity, attack completion and invalid/frozen runs
+  per side. Save minimap and combat replays from the actual evaluated episodes.
+- Stop on nonfinite optimization, frozen champions, hidden-information leaks,
+  dropped entities or heterogeneous resets. Flat CS alone is an inconclusive
+  learning result requiring trajectory inspection, not permission to tune many
+  things at once.
+- JAX comparison and cross-play follow a credible server baseline and matching
+  visibility rules. Modern-client fidelity remains a separate later question.
+
+Initial feasibility: two servers on desktop CPU, 128-step rollouts, four PPO
+updates: 1,024 decisions in 15.33 s including compilation; later updates took
+1.07–1.41 s per 256 decisions. Reset smoke: two finite updates and fresh-process
+resets with identical initial HUD stats. The first screen budget is 512 updates
+x 2 servers x 128 steps = 131,072 decisions, seed 0, lr=critic_lr=1e-5.
+Reward is explicitly +1/CS, -2/death, plus 5 times discounted lane-approach
+potential (zero terminal potential); no damage, XP or ambient-gold reward.
+This replaces the old mirror reward for BOTH planned comparison collectors.
+Skill ranking uses a fixed environment progression and costs extra server
+ticks; those ticks must be accounted for in the subsequent matched JAX task.
+The first screen and its initial/final frozen evaluations completed with 0 CS.
+The final policy reached lane but never came within 585.67 units of an enemy
+minion. See the fidelity ledger for evidence and limitations; SERVER-FIRST-02
+tests whether removing the trip from fountain changes minion engagement.
+
+
+### SERVER-FIRST-02 — fixed near-wave start
+
+The first source-only screen completed 131,072 decisions with finite updates
+and changed parameters, but no CS. Its frozen policy reached top lane and
+level 6, while never approaching an enemy minion closer than 585.67 units.
+The untrained control stayed near the fountain. This motivates separating
+navigation/exploration from last-hitting rather than changing the learner.
+
+Only the reset setup changes: a non-learning controller walks to (1950,12350)
+and hands control over at 120 game seconds, just behind the first blue wave.
+This point is based on the untouched source control's first minion damage at
+124.909 s, blue (2157,12474), red (2259,12573). Setup actions are excluded from
+PPO batches; weights are freshly random, with no demonstrations or prior loss.
+The first attempted setup point (3600,13100) was inside enemy turret range;
+its guard rejected the run before learning. It is not an RL result.
+
+Episodes still end at game time 600 s; the policy controls approximately the
+last 480 seconds. Report this as a near-wave scenario, not full-match farming.
+Deaths still respawn normally; only episode boundaries repeat the setup.
+Require reached position, alive champion and zero setup CS. Keep the same
+policy/PPO/reward settings as SERVER-FIRST-01. Initial budget: 512 updates x
+2 envs x 128 steps per seed, fresh seeds 0 and 1. Score frozen initial/final
+policies on the same setup. A positive result requires improved CS and actual
+minion attack engagement; finite optimization alone does not count. Preserve
+zero/failing results and inspect trajectories before changing another factor.
+
+### SERVER-FIRST-03 — actual attack-move controls
+
+The v1 replay diagnosis found no observed autoattacks, with targets acquired
+only briefly. Inspecting the source handler showed that the exposed A-click
+was converted to plain movement on empty ground, and right-click ignored
+hostile cursor hits. Correct the control interface, retaining buttons and
+screen coordinates only. Fresh seed 0/1 runs keep SERVER-FIRST-02's learner,
+reward, near-wave setup, 30 Hz and 131,072-decision budget. This is a control
+repair comparison, not proof of improved optimization. Desktop disconnection
+interrupted observation of these runs; do not treat partial checkpoints as
+completed budget results.
+
+The independent audit found no PPO algebra defect, but highlighted absent own
+attack-animation/history inputs and sparse reward exposure. Before choosing
+another training intervention, compare frozen v2 policies at 30 versus 10 Hz
+for fixed 600-second episodes and paired sampling seeds. This diagnoses
+execution sensitivity; changing frequency at a fixed decision budget also
+changes wave exposure. Any subsequent training arm must report both decisions
+and simulated game time and retain a matched-game-time checkpoint. The source
+collector now accepts `--step-ticks`; gamma and lambda adapt to preserve their
+physical time horizons. A 12-tick fresh-process reset smoke passed two finite
+updates, but is not a learning result.
+
+### SERVER-FIRST-04 — corrected HUD baseline and longer exposure
+
+The source HUD repair prevents repeated disabled Q presses from refreshing
+empowerment. Frozen random seed 0 now scores 14 CS at 30 Hz and 11 at 10 Hz
+in one near-wave episode each; this is control evidence, not learning. Keep
+30 Hz, the existing reward and architecture, and train fresh seed 0 for
+2,048 updates (2 environments x 128 decisions = 524,288 decisions). Preserve
+the 131,072-decision checkpoint for the earlier budget comparison. This is
+a baseline feasibility run; if frozen evaluation improves, repeat independent
+training seeds and the five-evaluation protocol above before claiming success.
+Do not infer a frequency winner from one paired episode. The separate
+HudProbe binary and viewport-structured-v2 are required. The frozen checkout
+is `ahriuwu-server-hudtrain-20260925`; capped login execution is used while
+desktop SSH remains unavailable. Stop this run on invalid controls, nonfinite
+updates, or its stated budget; the overall farming objective remains active.
+
+Stopped at update 447: the dead-input investigation confirmed E can start
+while dead in this server interface, and HP regeneration makes the adapter's
+HP-based alive inference incorrect. The 10 Hz control includes four CS gained
+from a dead-started spin. Preserve these trajectories as defect evidence;
+they cannot establish legitimate farming. See the fidelity ledger.
+
+### SERVER-FIRST-05 — authoritative dead-state baseline
+
+Repair the concrete invalid-control mechanism before restarting: expose the
+server's authoritative champion dead flag, reject live-only keyboard/mouse
+commands while dead, and use that flag for actor state and death reward.
+Require a live positive-HP corpse regression, no new E cast from dead input,
+normal control after respawn, and one death penalty per death. Version the
+semantic observation contract so historical v2 checkpoints cannot silently
+load as corrected policies. Do not bundle new E-active features or reward
+changes into this repair.
+
+After those checks and a finite update/reset smoke pass, restart fresh random
+seed 0 with SERVER-FIRST-04's settings and budgets: 2 envs, 128-step rollouts,
+30 Hz, 2,048 updates with a preserved 512-update checkpoint, same near-wave
+task and PPO/reward. Preserve initial weights and compare frozen evaluations
+using the same corrected interface. Measured previous login cost was roughly
+12–14 s/update at two CPUs; the full budget is therefore several hours, not
+the old desktop timing. Stop on invalid controls, nonfinite updates or budget.
+This remains an intermediate gate; the three-seed/five-evaluation criterion
+and normal-fountain confirmation remain required for the overall goal.
+
+Use the otherwise free evaluation CPU for one frozen update-120 diagnostic
+(30,720 decisions, approximately the first completed training episodes).
+Preserve that ordinary checkpoint before rotation. Its seed-0 episode checks
+learned control execution early; it does not replace the update-512/final
+comparisons or justify a hyperparameter change from one score.
+
+Run a bounded live zero-learning-rate control through the same frozen v3
+collector and shared learner: seed 0, two environments, 128-step rollouts,
+two updates, near-wave setup, 600-second episode horizon and 30 Hz. Require
+finite updates and byte-identical initial/final parameters with both actor
+and critic learning rates zero. This checks the disabled optimizer path;
+512 decisions do not constitute a ten-minute farming evaluation or an
+equal-budget training ablation. The five frozen initial-policy evaluations
+remain the behavioral no-learning baseline.
+
+### JAX-FARM-01 — shared learner, independent dynamics
+
+After production-routed setup and reset pass, validate the shared learner
+with one environment, four decisions and one update. Require finite losses,
+rollout/recomputed likelihood agreement, changed parameters and preserved
+source/configuration; this smoke does not measure farming. Then a fresh
+seed-0 screen uses the same 2 environments, 128-decision rollout, 30 Hz,
+near-wave setup, reward and PPO configuration as SERVER-FIRST-04, initially
+512 updates (131,072 decisions). Compare frozen initial/final policies on
+the source server as well as JAX. Report disagreement; do not select a JAX
+checkpoint solely on its simulator score.
+
+Use `train/jax_train.py`, whose learner loop is shared with source training.
+Record the route artifact and simulator fingerprint. Known remaining
+differences include landmark routing, rank-event ordering and STAT-003's
+missing MR rune bonus (including the actor's own-MR feature). This is a
+task-matched diagnostic, not a claim of exact mechanical equivalence. Stop
+on setup failures, nonfinite updates or the stated budget; expand seeds
+only after evaluating the screen. The source baseline continues independently.
+
+The CPU-map arm stopped at update 88 after finding extra EDT ground-click
+normalization in its adapter. The corrected raw-screen adapter passed its
+focused and production setup checks. A future arm must also use the corrected
+dead-state observation contract from SERVER-FIRST-05. Keep source farming as
+the primary gate; do not spend a fresh full JAX training budget while the
+source interface is failing a known control invariant.

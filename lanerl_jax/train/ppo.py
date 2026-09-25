@@ -1,5 +1,11 @@
 """Dual-clip PPO, ported from ``lanerl_rl/ppo.py``.
 
+Current production actions are screen-click-v2: button, screen X, screen Y.
+``screen_head_usage`` and the three-head branches below define their likelihood
+and entropy. Four-head functions and derivations are retained only as
+historical numerical controls for PPO-14; they do not describe the current
+policy. See the fidelity ledger's screen-click contract before changing this.
+
 The pieces, and why each is the way it is
 -----------------------------------------
 
@@ -191,6 +197,17 @@ _ATTACK_MOVE = BUTTON_INDEX["attack_move"]
 _R = BUTTON_INDEX["r"]
 
 
+def screen_head_usage(button):
+    """Three-head interface: ground position matters for move, attack and R."""
+    used = ((button == _MOVE) | (button == _ATTACK_MOVE) | (button == _R))
+    return used.astype(jnp.float32), jnp.zeros_like(button, dtype=jnp.float32)
+
+
+def expected_screen_usage(button_logits):
+    p = jax.nn.softmax(button_logits, axis=-1)
+    return p[..., _MOVE] + p[..., _ATTACK_MOVE] + p[..., _R]
+
+
 def head_usage(button, target_slot, slot_valid):
     """Per-sample ``(uses_screen, uses_target)``, float32, shaped like
     ``button``: which auxiliary heads THIS sample put on the wire.
@@ -261,6 +278,9 @@ MAX_FACTORED_ENTROPY_TARGET_VISIBLE = _ceiling(True)
 #: `PPO-14` counted attack_move's screen and target as alternatives.
 MAX_FACTORED_ENTROPY = max(_ceiling(True), _ceiling(False))
 
+# Current three-head contract: move, attack and R consume coordinates.
+MAX_SCREEN_CLICK_ENTROPY = float(np.log(3 * N_SCREEN_X * N_SCREEN_Y + len(BUTTONS) - 3))
+
 
 def gae(rewards, values, dones, last_value, gamma: float, lam: float):
     """Generalised advantage estimation over ``(T, ...)`` arrays.
@@ -311,6 +331,9 @@ def factored_log_prob(logits, actions, uses_screen=None,
     total = _chosen(lg_b, a_b)
     if len(logits) == 1:
         return total
+    if len(logits) == 3:
+        used, _ = screen_head_usage(actions[0])
+        return total + used * (_chosen(logits[1], actions[1]) + _chosen(logits[2], actions[2]))
     if uses_screen is None or uses_target is None:
         raise TypeError("the four-head factored_log_prob needs the per-sample "
                         "uses_screen/uses_target masks (ppo.head_usage)")
@@ -322,16 +345,24 @@ def factored_log_prob(logits, actions, uses_screen=None,
 
 
 def factored_entropy(logits, p_screen=None, p_target=None) -> jax.Array:
-    """Entropy of the joint wire action in nats,
+    """Entropy of the sampled factored action representation in nats,
     ``H_b + p_screen*(H_x+H_y) + p_target*H_t``, where ``p_screen``/
     ``p_target`` are the per-sample expected usage from
     :func:`expected_head_usage` (REQUIRED for the four-head form; they carry
     the observation's slot validity). Sup is :data:`MAX_FACTORED_ENTROPY`,
     and :data:`MAX_FACTORED_ENTROPY_TARGET_VISIBLE` with a visible slot. A
     single-head call (``[head]``) is that head's own entropy.
+
+    The environment can collapse distinct samples to the same wire command
+    (for example every unranked R cursor becomes NOOP). This is not entropy
+    over those resolved commands. Coordinate usage is differentiable, so
+    this regularizer also favors buttons with coordinate heads.
     """
     if len(logits) == 1:
         return _entropy(logits[0])
+    if len(logits) == 3:
+        return (_entropy(logits[0]) + expected_screen_usage(logits[0])
+                * (_entropy(logits[1]) + _entropy(logits[2])))
     if p_screen is None or p_target is None:
         raise TypeError("the four-head factored_entropy needs the per-sample "
                         "expected usage (ppo.expected_head_usage)")

@@ -62,6 +62,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from lanerl_rl.projection import target_on_screen
 
 from ..sim.combat import growth_sum, stat_total
 from ..sim.spells import (
@@ -132,7 +133,7 @@ def _topk_slots(score: jax.Array, eligible: jax.Array, k: int):
 
 
 def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
-                      horizon_s: float = 600.0) -> Observation:
+                      horizon_s: float = 600.0, visibility=None, vision=None) -> Observation:
     """Build one agent's observation. ``me`` is the champion's unit index.
 
     ``params`` is the profile table used by ``step_decision``.  It is explicit
@@ -141,8 +142,10 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
     """
     n = state.kind.shape[0]
     my_team = state.team[me]
-    vis = visible_to(my_team, state.x, state.y, state.kind, state.team,
-                     state.alive)
+    # A server caller supplies its own visibility flags. Never reconstruct
+    # server fog with the simulator's approximate radius model.
+    vis = (visible_to(my_team, state.x, state.y, state.kind, state.team,
+                      state.alive, vision) if visibility is None else visibility)
 
     dx = state.x - state.x[me]
     dy = state.y - state.y[me]
@@ -155,7 +158,8 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
     ally = state.team == my_team
     enemy = (state.team != my_team) & (state.kind != Kind.NONE)
 
-    base = vis & not_me & state.alive
+    screen_ds, screen_dn = delta_to_lane(frame, dx, dy)
+    base = vis & not_me & state.alive & target_on_screen(screen_ds, screen_dn)
     enemy_champ = _topk_slots(d2, base & is_champ & enemy, 1)
     ally_minion = _topk_slots(d2, base & is_minion & ally, 12)
     enemy_minion = _topk_slots(d2, base & is_minion & enemy, 12)

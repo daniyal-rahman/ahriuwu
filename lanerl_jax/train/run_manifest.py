@@ -27,8 +27,8 @@ LAYOUT
         ckpt_latest.msgpack  a copy of the newest, so resume needs no globbing
         metrics.jsonl      one line per chunk: every logged scalar
 
-`run_id` is `<tag>-<YYYYmmdd-HHMMSS>-<git sha>`, so two runs of the same tag
-never collide and the sha is visible without opening anything.
+`run_id` is `<tag>-<YYYYmmdd-HHMMSS>-<git sha>`, with a numeric suffix if
+already reserved. Atomic reservation keeps concurrent runs separate.
 """
 
 from __future__ import annotations
@@ -118,41 +118,33 @@ def _run(cmd: list[str]) -> str:
         return "?"
 
 
-def _worktree_git_env() -> dict:
-    """A `git` environment that works on a node which cannot see `/srv/nfs`.
+def git_environment(root: Path | None = None) -> dict:
+    """Scope mount translation to one repository, never the parent process.
 
-    This checkout is a WORKTREE, so `.git` is a file holding
-    `gitdir: /srv/nfs/projects/ahriuwu/.git/worktrees/ahriuwu-lanerl-jax`. The
-    Slurm GPU node mounts the same filesystem at `/mnt/nfs` and has no `/srv`
-    at all, so every git command there failed with "not a git repository" --
-    and `_run` returns "?" on failure, so the run id came out as
-    `gpusmoke-20260923-050059-` with an empty sha and the manifest recorded
-    `dirty: false` for a tree it had not looked at. That is worse than no
-    provenance, because it reads as a clean checkout.
-
-    Returns extra environment for the git subprocess, or `{}` if the ordinary
-    path already works.
+    Exporting GIT_DIR globally made subsequent vendor queries report the
+    training repository's HEAD and diff, even with cwd set to the vendor.
     """
-    if _run(["git", "rev-parse", "--git-dir"]) not in ("?", ""):
-        return {}
-    dotgit = Path(".git")
-    if not dotgit.is_file():
-        return {}
-    ref = dotgit.read_text().strip()
-    if not ref.startswith("gitdir:"):
-        return {}
-    target = ref.split(":", 1)[1].strip()
-    # The ONLY translation, and it is the one the cluster actually needs
-    # (`docs`/memory: `/srv/nfs` on the login node is `/mnt/nfs` on `desktop`).
-    # Applied only when the recorded path is absent and the translated one is
-    # present, so it cannot silently point at a different repository.
-    if not Path(target).exists():
-        alt = target.replace("/srv/nfs/", "/mnt/nfs/", 1)
-        if Path(alt).exists():
-            target = alt
-        else:
-            return {}
-    return {"GIT_DIR": target, "GIT_WORK_TREE": str(Path.cwd())}
+    root = Path.cwd() if root is None else Path(root)
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    dotgit = root / ".git"
+    if dotgit.is_file():
+        ref = dotgit.read_text().strip()
+        if ref.startswith("gitdir:"):
+            target = Path(ref.split(":", 1)[1].strip())
+            if not target.is_absolute():
+                target = root / target
+            if not target.exists():
+                alternate = Path(str(target).replace("/srv/nfs/", "/mnt/nfs/", 1))
+                if alternate.exists():
+                    target = alternate
+            env.update(GIT_DIR=str(target), GIT_WORK_TREE=str(root.resolve()))
+    return env
+
+
+def git_output(args: list[str], root: Path | None = None) -> bytes:
+    return subprocess.check_output(["git", *args], cwd=root,
+                                   env=git_environment(root))
 
 
 def source_fingerprint(root: Path | None = None) -> dict:
@@ -186,14 +178,17 @@ def git_provenance() -> dict:
     whose sha looks right can still have executed different source. A dirty run
     is not reproducible from the sha alone and the manifest says so out loud.
     """
-    env = _worktree_git_env()
-    if env:
-        os.environ.update(env)
-    sha = _run(["git", "rev-parse", "HEAD"])
-    dirty = _run(["git", "status", "--porcelain"])
+    env = git_environment()
+    def read(args):
+        try:
+            return git_output(args).decode().strip()
+        except (OSError, subprocess.CalledProcessError):
+            return "?"
+    sha = read(["rev-parse", "HEAD"])
+    dirty = read(["status", "--porcelain"])
     return {
         "sha": sha,
-        "branch": _run(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
+        "branch": read(["rev-parse", "--abbrev-ref", "HEAD"]),
         "dirty": bool(dirty),
         # Split on whitespace, do NOT slice a fixed 3 characters. `_run`
         # applies `.strip()`, which eats the leading space of porcelain's first
@@ -203,7 +198,7 @@ def git_provenance() -> dict:
         # filename is worse than none.
         "dirty_files": [l.split(maxsplit=1)[-1]
                         for l in dirty.splitlines() if l.strip()][:40],
-        "describe": _run(["git", "describe", "--always", "--dirty"]),
+        "describe": read(["describe", "--always", "--dirty"]),
         # Empty unless the worktree gitdir had to be path-translated for this
         # node; present means git was NOT readable at the recorded path.
         "gitdir_translated": env.get("GIT_DIR", ""),
@@ -212,6 +207,8 @@ def git_provenance() -> dict:
 
 
 def _jsonable(v: Any) -> Any:
+    if isinstance(v, Path):
+        return str(v)
     if is_dataclass(v) and not isinstance(v, type):
         return {k: _jsonable(x) for k, x in asdict(v).items()}
     if hasattr(v, "_asdict"):                      # NamedTuple
@@ -234,7 +231,18 @@ class RunDir:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.run_id = f"{tag}-{stamp}-{prov['sha'][:8]}"
         self.path = Path(root) / self.run_id
-        self.path.mkdir(parents=True, exist_ok=True)
+        # Concurrent seeds can enter in the same second. Reserve a directory
+        # atomically rather than silently sharing metrics and checkpoints.
+        base_id = self.run_id
+        suffix = 0
+        while True:
+            try:
+                self.path.mkdir(parents=True, exist_ok=False)
+                break
+            except FileExistsError:
+                suffix += 1
+                self.run_id = f"{base_id}-{suffix}"
+                self.path = Path(root) / self.run_id
         self.manifest = {
             "run_id": self.run_id,
             "tag": tag,
@@ -269,6 +277,10 @@ class RunDir:
         res = json.dumps(m["results"], indent=2, sort_keys=True)
         cks = "\n".join(f"  - `{c['file']}` at step {c['step']}"
                         f" (update {c['update']})" for c in m["checkpoints"]) or "  - none yet"
+        command = m['config'].get('command')
+        reproduction = (f"# Restore source.tar.gz in an isolated checkout of {g['sha']}.\n{command}"
+                        if command else f"git checkout {g['sha']}\n"
+                        + reproduce_command(m['tag'], m['config'].get('cli', {})))
         return f"""# {m['run_id']}
 
 {m['notes'] or '_no notes given_'}
@@ -304,8 +316,7 @@ GPU: {h['gpu'] or 'none'} · Python {h['python']}
 ## Reproducing
 
 ```bash
-git checkout {g['sha']}
-{reproduce_command(m['tag'], m['config'].get('cli', {}))}
+{reproduction}
 ```
 
 Metrics: one JSON object per chunk in `metrics.jsonl`.

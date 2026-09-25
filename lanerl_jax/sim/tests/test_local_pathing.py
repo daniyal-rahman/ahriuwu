@@ -265,7 +265,8 @@ def test_same_direction_run_sidecar_matches_one_hop_route_and_overflow():
             np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
 
 
-def test_apply_orders_installs_route_and_persists_diagnostic_status():
+@pytest.mark.parametrize('order_kind', [OrderKind.MOVE, OrderKind.ATTACK_MOVE])
+def test_apply_orders_installs_route_and_persists_diagnostic_status(order_kind):
     state = empty_state().replace(
         kind=jnp.zeros(66, jnp.int8).at[:2].set(Kind.CHAMPION),
         alive=jnp.zeros(66, bool).at[:2].set(True),
@@ -274,21 +275,27 @@ def test_apply_orders_installs_route_and_persists_diagnostic_status():
         y=jnp.zeros(66, jnp.float32).at[:2].set(
             jnp.asarray([1.75, 1.75], jnp.float32)))
     orders = Orders(
-        kind=jnp.asarray([OrderKind.MOVE, OrderKind.NOOP], jnp.int8),
-        x=jnp.asarray([4.2, 1.25], jnp.float32),
-        y=jnp.asarray([3.8, 1.75], jnp.float32),
+        kind=jnp.asarray([order_kind, OrderKind.NOOP], jnp.int8),
+        x=jnp.asarray([0.1, 1.25], jnp.float32),
+        y=jnp.asarray([0.1, 1.75], jnp.float32),
         target=jnp.asarray([-1, -1], jnp.int8))
-    params = {
+    from lanerl_jax.sim.init import lane_params
+    params = dict(lane_params())
+    params.update({
         "pathfinding_radius": jnp.asarray([0.0], jnp.float32),
         "attack_damage": jnp.asarray([78.0], jnp.float32),
         "ad_per_level": jnp.asarray([4.0], jnp.float32),
-    }
-    routed = apply_orders(state, orders, params,
-                          route_table=_table(), terrain=_terrain())
+    })
+    terrain = _terrain()._replace(walkable=_terrain().walkable.at[0, 0].set(False))
+    table = _table()
+    routed = jax.jit(lambda s, o: apply_orders(s, o, params,
+                          route_table=table, terrain=terrain))(state, orders)
     assert int(routed.route_status[0]) == LocalRouteStatus.READY
-    # Smoothed: the open-terrain corner is gone. See
-    # test_smoothpath_drops_the_corner_the_line_of_sight_can_skip.
-    assert int(routed.n_waypoints[0]) == 2
+    # The raw blocked click reaches the existing cumulative spiral; its first
+    # two displacements exit cell (0,0). Neither action uses an EDT cell snap.
+    expected = [0.1 + np.sqrt(.5), 0.1 + np.sqrt(.5) + 2.]
+    np.testing.assert_allclose(routed.waypoints[0, int(routed.n_waypoints[0])-1],
+                               expected, rtol=0, atol=2e-6)
     # A non-Move action does not overwrite the last route diagnostic.
     assert int(routed.route_status[1]) == LocalRouteStatus.READY
 

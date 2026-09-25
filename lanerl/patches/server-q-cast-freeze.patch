@@ -1,0 +1,111 @@
+--- a/GameServerLib/GameObjects/Spell/Spell.cs
++++ b/GameServerLib/GameObjects/Spell/Spell.cs
+@@ -267,11 +267,11 @@
+                 {
+                     if (CastInfo.IsAutoAttack)
+                     {
+-                        CastInfo.Owner.CancelAutoAttack(true);
++                        CancelThisAutoAttack(true, false);
+                         return true;
+                     }
+ 
+-                    ResetSpellCast();
++                    AbortCast();
+                     return true;
+                 }
+ 
+@@ -282,7 +282,7 @@
+                 || CastInfo.Owner.GetCastSpell() != null
+                 || CastInfo.Owner.ChannelSpell != null))
+                 {
+-                    CastInfo.Owner.CancelAutoAttack(!CastInfo.Owner.HasAutoAttacked, true);
++                    CancelThisAutoAttack(!CastInfo.Owner.HasAutoAttacked, true);
+                     return true;
+                 }
+             }
+@@ -290,7 +290,7 @@
+             {
+                 if (CastInfo.IsAutoAttack)
+                 {
+-                    CastInfo.Owner.CancelAutoAttack(true);
++                    CancelThisAutoAttack(true, false);
+                     return true;
+                 }
+             }
+@@ -306,13 +306,53 @@
+             || (CastInfo.IsAutoAttack && (status == StatusFlags.Disarmed || !status.HasFlag(StatusFlags.CanAttack)))
+             || (!CastInfo.IsAutoAttack && (status == StatusFlags.Silenced || !status.HasFlag(StatusFlags.CanCast))))
+             {
+-                ResetSpellCast();
++                AbortCast();
+                 return true;
+             }
+ 
+             return false;
+         }
+ 
++        /// <summary>
++        /// SERVER-001. Cancel THIS auto-attack. `ObjAIBase.CancelAutoAttack` acts on
++        /// `Owner.AutoAttackSpell`, which is not always this spell: GarenQ's
++        /// OnPreAttack listener swaps AutoAttackSpell to GarenQAttack in the middle
++        /// of this spell's own Cast (OnPreAttack is published before
++        /// `State = STATE_CASTING`), leaving this basic attack CASTING as an orphan.
++        /// If the orphan's cancel condition then fires (a retarget inside its
++        /// windup), cancelling the owner's attack instead of itself left it
++        /// CASTING forever, re-running this check every tick -- and once the owner
++        /// cast GarenQAttack (`GetCastSpell() != null`) it cancelled that cast one
++        /// tick in, with `_castingSpell` and MoveOrder=CastSpell never cleared.
++        /// </summary>
++        private void CancelThisAutoAttack(bool reset, bool fullCancel)
++        {
++            if (CastInfo.Owner.AutoAttackSpell == this)
++            {
++                CastInfo.Owner.CancelAutoAttack(reset, fullCancel);
++                return;
++            }
++            ResetSpellCast();
++        }
++
++        /// <summary>
++        /// Abort a non-auto cast mid-windup. `ResetSpellCast` alone resets this
++        /// spell's state but not the owner's `_castingSpell` / MoveOrder, which only
++        /// FinishCasting clears -- the same omission the death branch above fixes.
++        /// </summary>
++        private void AbortCast()
++        {
++            ResetSpellCast();
++            if (CastInfo.Owner.GetCastSpell() == this)
++            {
++                CastInfo.Owner.SetCastSpell(null);
++                if (CastInfo.Owner.MoveOrder == OrderType.CastSpell)
++                {
++                    CastInfo.Owner.UpdateMoveOrder(OrderType.Stop, false);
++                }
++            }
++        }
++
+         public bool Cast(Vector2 start, Vector2 end, AttackableUnit unit = null)
+         {
+             if ((unit == null && SpellData.TargetingType == TargetingType.Target)
+--- a/GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs
++++ b/GameServerLib/GameObjects/AttackableUnits/AI/ObjAIBase.cs
+@@ -469,6 +469,19 @@
+         public void CancelAutoAttack(bool reset, bool fullCancel = false)
+         {
+             AutoAttackSpell.SetSpellState(SpellState.STATE_READY);
++            // SERVER-001: an attack cast through the non-auto path (GarenQAttack:
++            // extra slot 45, so CastInfo.IsAutoAttack is false) set _castingSpell and
++            // MoveOrder=CastSpell, and only FinishCasting clears them. Forcing it
++            // READY here without clearing them froze the champion for the rest of
++            // the process (CanMove/CanChangeWaypoints/CanAttack/CanCast all false).
++            if (_castingSpell != null && _castingSpell == AutoAttackSpell)
++            {
++                _castingSpell = null;
++                if (MoveOrder == OrderType.CastSpell)
++                {
++                    UpdateMoveOrder(OrderType.Stop, false);
++                }
++            }
+             if (reset)
+             {
+                 _autoAttackCurrentCooldown = 0;

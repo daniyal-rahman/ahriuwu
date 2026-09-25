@@ -169,6 +169,7 @@ def step_autoattack(
     skip_next_autoattack: Any = False,
     may_engage: Any = True,
     swing_target_gone: Any = False,
+    swing_target_changed: Any = False,
     xp: Any = np,
 ) -> AutoAttackOut:
     """One tick of the auto-attack clock for a batch of units.
@@ -229,6 +230,18 @@ def step_autoattack(
     #    wave recycled that slot, at the newborn ALLY at its barracks
     #    (`docs/PLAYTEST_SWEEP.md` (c)1).
     dead_target_cancel = is_attacking & (aa_windup > 0) & swing_target_gone
+
+    # Spell.CastCancelCheck checks target identity BEFORE advancing the
+    # windup, including its final frame. Unlike the dead-target branch,
+    # this calls CancelAutoAttack(!HasAutoAttacked, fullCancel=true), so
+    # UpdateTarget may start a fresh swing on the new target in this tick.
+    # A 250 s real-server recording confirms the delay resets to zero on
+    # an in-range switch (ENT-02); it never transfers the old hit.
+    retarget_cancel = (is_attacking & (aa_windup > 0)
+                       & swing_target_changed & ~dead_target_cancel)
+    cd = xp.where(retarget_cancel & ~has_auto_attacked, xp.zeros_like(cd), cd)
+    aa_windup = xp.where(retarget_cancel, xp.zeros_like(aa_windup), aa_windup)
+    is_attacking = is_attacking & ~retarget_cancel
 
     # 2. advance an in-flight swing; the hit lands when the wind-up runs out
     winding = is_attacking & (aa_windup > 0) & ~dead_target_cancel
@@ -293,8 +306,8 @@ def step_autoattack(
     #    winding up", which is `~attacking` here.
     #    `may_engage` is `TargetUnit.Team != Team` (`ObjAIBase.cs:1285`): the
     #    swing branch is inside that test, the cancel branch above is not.
-    #    A held ALLY target therefore neither starts a swing nor cancels
-    #    one already in flight (which lands on the unit it started on).
+    #    Switching to an ALLY cancels the previous swing above, but cannot
+    #    start a new one here.
     #    `~dead_target_cancel`: `UpdateTarget` returns before this gate on the
     #    tick `CastCancelCheck` cancelled a swing on a dead target (`AA-007`).
     start = (has_target & in_range & can_attack & may_engage & (~attacking)

@@ -563,6 +563,13 @@ def _build_driver_for_actor(
 def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = build_argparser().parse_args(argv)
+    raise RuntimeError(
+        "Legacy Torch training uses an entity-pointer policy and is incompatible "
+        "with the screen-click-v1 server interface. Train with "
+        "python -m lanerl_jax.train.server_train for source-server rollouts, or "
+        "python -m lanerl_jax.train.run_train for JAX dynamics, with fresh weights. "
+        "Legacy checkpoints are for historical diagnostics only."
+    )
 
     # Resolve --opponent HERE, not on the actor thread that first needs it.
     # build_driver_for_actor is called lazily inside ActorLoop, so a typo in a

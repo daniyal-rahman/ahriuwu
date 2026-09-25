@@ -54,7 +54,7 @@ ROUTE_PATHFINDING_RADIUS = 35.0
 #: The fields the sim READS. Everything else on the object is provenance for
 #: ``describe()`` and never changes what a step computes.
 BEHAVIOUR_FIELDS = (
-    "params", "route_table", "terrain", "lane_path", "minion_hp",
+    "params", "route_table", "terrain", "vision", "lane_path", "minion_hp",
     "collision_terrain", "defer_collision_terrain", "enable_collision",
     "enable_call_for_help", "step_ticks", "delta_ms",
 )
@@ -96,7 +96,13 @@ def _load_routes(route_artifact, route_table, terrain):
     digest = m.table_sha256
     if getattr(m, "run_length_sha256", ""):
         digest += ":" + m.run_length_sha256
-    return (art.as_jax(), terrain if terrain is not None else map1_terrain(),
+    from ..data.chase_routes import derive_chase_routes
+    import jax.numpy as jnp
+    landmarks, hops = derive_chase_routes(art)
+    routed = art.as_jax()._replace(chase_landmark=jnp.asarray(landmarks),
+                                  chase_next_hop=jnp.asarray(hops))
+    digest += ":chase-landmarks-v1:" + _digest((landmarks, hops))
+    return (routed, terrain if terrain is not None else map1_terrain(),
             str(path), digest)
 
 
@@ -154,6 +160,8 @@ class SimConfig:
     route_table: Any = None
     #: Map1 walkability grid used by routed Moves.
     terrain: Any = None
+    #: Brush/wall vision grid; None is the synthetic radius-only test model.
+    vision: Any = None
     #: ``(W, 2)`` lane waypoints; ``None`` runs without wave spawning.
     lane_path: Any = None
     minion_hp: Any = None
@@ -199,8 +207,9 @@ class SimConfig:
         may be passed instead of a path (then ``route_artifact`` must be None).
         """
         from .init import lane_params
+        from ..obs.vision import map1_vision
         rt, ter, art, dig = _load_routes(route_artifact, route_table, terrain)
-        return cls(params=lane_params(patch), route_table=rt, terrain=ter,
+        return cls(params=lane_params(patch), route_table=rt, terrain=ter, vision=map1_vision(),
                    lane_path=_top_lane_path(),
                    collision_terrain=False, defer_collision_terrain=True,
                    enable_collision=True, enable_call_for_help=True,
@@ -227,8 +236,9 @@ class SimConfig:
         ``step_decision``'s INLINE terrain repair (not the training mode),
         routed only when a table or artifact is given."""
         from .init import lane_params
+        from ..obs.vision import map1_vision
         rt, ter, art, dig = _load_routes(route_artifact, route_table, terrain)
-        return cls(params=lane_params(patch), route_table=rt, terrain=ter,
+        return cls(params=lane_params(patch), route_table=rt, terrain=ter, vision=map1_vision(),
                    lane_path=_top_lane_path(),
                    enable_call_for_help=enable_call_for_help,
                    name="scripted", patch_root=_patch_root(patch),
@@ -259,6 +269,7 @@ class SimConfig:
             route_artifact=self.route_artifact,
             route_digest=self.route_digest,
             terrain=None if self.terrain is None else "map1",
+            vision=None if self.vision is None else "map-grid-supercover-v1",
             lane_path=_describe_lane_path(self.lane_path),
             minion_hp=None if self.minion_hp is None else "custom",
             n_params=len(self.params),
@@ -281,6 +292,7 @@ class SimConfig:
         h.update(str(_digest(dict(self.params))).encode())
         h.update(str(_digest(self.lane_path)).encode())
         h.update(str(_digest(self.minion_hp)).encode())
+        h.update(str(_digest(None if self.vision is None else tuple(self.vision))).encode())
         h.update(str(_digest(None if self.terrain is None
                              else tuple(self.terrain))).encode())
         if self.route_table is not None and self.route_digest is None:

@@ -206,6 +206,34 @@ def test_empty_slots_are_zero_and_masked(frames):
     assert float(np.abs(np.asarray(ob.entities)[empty]).sum()) == 0.0
 
 
+def test_team_visible_offscreen_units_cannot_change_actor_observation(frames):
+    """Team vision is not permission to read off-camera health or position."""
+    fb, _ = frames
+    s = init_lane(load_patch())
+    all_visible = jnp.ones_like(s.alive)
+    before = build_observation(s, 0, fb, params=lane_params(),
+                               visibility=all_visible)
+    s = s.replace(hp=s.hp.at[1].set(1), x=s.x.at[1].add(100))
+    after = build_observation(s, 0, fb, params=lane_params(),
+                              visibility=all_visible)
+    for field in ("entities", "entity_pad_mask", "self_vec", "global_vec"):
+        np.testing.assert_array_equal(getattr(before, field), getattr(after, field))
+    assert 1 not in np.asarray(after.slot_unit)
+
+
+def test_authoritative_visibility_hides_nearby_enemy(frames):
+    fb, _ = frames
+    s = init_lane(load_patch())
+    s = s.replace(x=s.x.at[1].set(s.x[0] + 100),
+                  y=s.y.at[1].set(s.y[0]))
+    visible = jnp.ones_like(s.alive)
+    shown = build_observation(s, 0, fb, params=lane_params(), visibility=visible)
+    hidden = build_observation(s, 0, fb, params=lane_params(),
+                               visibility=visible.at[1].set(False))
+    assert 1 in np.asarray(shown.slot_unit)
+    assert 1 not in np.asarray(hidden.slot_unit)
+
+
 def test_hp_frac_is_quantised_to_bar_resolution(frames):
     """A player reads a health bar, not a float."""
     fb, _ = frames

@@ -21,11 +21,11 @@ BPTT, burn-in staleness, stored hidden state and chunked sequence minibatching
 from the first JAX trainer in one go. The GRU comes back once the loop is
 trusted -- as an ablation that was wanted anyway.
 
-The target head reads the entity tokens
----------------------------------------
-`softmax(FC(h) . tokens^T)` -- a pointer over slots rather than a fixed 32-way
-classifier, so it stays permutation-equivariant within a block and does not
-learn slot indices. That property is the reason `LAST_HIT_SORT_K` is 0.
+Actions are screen clicks
+------------------------
+The actor emits button, screen_x and screen_y logits only. Entity tokens are
+observation context, never a pointer head. The environment/server resolves
+what lies under the cursor. screen-click-v2 requires new checkpoints.
 
 Initialisation is the standard PPO recipe, and it needed both halves
 --------------------------------------------------------------------
@@ -81,6 +81,9 @@ class PolicyConfig(NamedTuple):
     #: (`LanePolicy.__call__`), not merely recorded: flax infers them from
     #: the arrays, so without the check these four were declared, written
     #: into manifests and read by nothing (`RL-004` class).
+    action_interface: str = "screen-click-v2"
+    # v3 keeps tensor widths but requires authoritative death, independent of HP.
+    observation_interface: str = "viewport-structured-v3"
     n_slots: int = N_SLOTS
     entity_dim: int = ENTITY_DIM
     self_dim: int = SELF_DIM
@@ -102,7 +105,6 @@ class ActionLogits(NamedTuple):
     button: jax.Array
     screen_x: jax.Array
     screen_y: jax.Array
-    target: jax.Array
     value: jax.Array
 
 
@@ -143,6 +145,10 @@ class LanePolicy(nn.Module):
     @nn.compact
     def __call__(self, entities, pad_mask, self_vec, global_vec):
         c = self.cfg
+        if c.action_interface != "screen-click-v2":
+            raise ValueError("policy requires screen-click-v2; pointer checkpoints need retraining")
+        if c.observation_interface != "viewport-structured-v3":
+            raise ValueError("policy requires viewport-structured-v3 observations")
         # Static shapes, so this is a trace-time check with no runtime cost.
         got = (tuple(entities.shape[-2:]), tuple(pad_mask.shape[-1:]),
                tuple(self_vec.shape[-1:]), tuple(global_vec.shape[-1:]))
@@ -177,19 +183,10 @@ class LanePolicy(nn.Module):
             h = nn.relu(nn.Dense(c.mlp_hidden, **TRUNK)(h))
         h = nn.Dense(c.core_dim, **TRUNK)(h)
 
-        # target head: a POINTER over slots, not a 32-way classifier
-        q = nn.Dense(c.d_model, **HEAD)(h)
-        target = jnp.einsum("...d,...sd->...s", q, tokens)
-        # -1e9, not -1e30: the softmax is insensitive to the magnitude (it
-        # subtracts the max) but -1e30 SQUARED overflows float32, so any
-        # variance or norm computed over these logits goes to inf.
-        target = jnp.where(pad_mask, -1e9, target)
-
         return ActionLogits(
             button=nn.Dense(c.n_buttons, **HEAD)(h),
             screen_x=nn.Dense(c.n_screen_x, **HEAD)(h),
             screen_y=nn.Dense(c.n_screen_y, **HEAD)(h),
-            target=target,
             # NAMED, and load-bearing: `PPOConfig.critic_lr` is applied to
             # exactly this subtree via `optax.multi_transform`, so the label
             # tree in `trainer.py` matches on the literal string below. A

@@ -1,10 +1,9 @@
-"""Policy-action decoding shared by rollout and benchmark paths.
+"""Project screen-click-v2 actions and resolve them in the simulator.
 
-The target head names an *observation slot*, not a simulator unit index.  That
-distinction is invisible while the enemy champion happens to be in slot 0, but
-it is decisive for minions and turrets: slot 13 is an enemy-minion slot, not
-unit 13.  Keep the conversion here, at the observation/action boundary, so the
-simulator continues to receive only semantic unit-index orders.
+The actor emits button and two screen coordinates. Entity identities enter
+only during environment hit-testing, never as an actor output. This decoder
+is shared by rollout and benchmark paths; the real server resolves the same
+coordinate clicks through its click protocol.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ from lanerl_rl.projection import (
     DEFAULT_FOV_V_DEG,
     DEFAULT_RESOLUTION,
     DEFAULT_TILT_DEG,
-    FLOOR_Y,
+    FLOOR_Y, MINIMAP_X_MIN, MINIMAP_Y_MIN,
 )
 
 from ..sim.config import ROUTE_PATHFINDING_RADIUS
@@ -152,8 +151,6 @@ def snap_move_point(x, y, table: MoveSnapTable | None = None):
 # autoregressive, so decode those sampled pairs as NOOP. This prevents the
 # live client from reinterpreting a supposed local ground click as a global
 # minimap order. See docs/archive/INFERENCE_FAILURE_ANALYSIS.md M11/H100.
-MINIMAP_X_MIN = 275.0 / 352.0
-MINIMAP_Y_MIN = 240.0 / 352.0
 
 
 def _screen_to_centred_lane(sx, sy):
@@ -179,24 +176,18 @@ def _screen_to_centred_lane(sx, sy):
 
 
 def orders_from(action, state, slot_unit, frame=None,
-                cfg_x=N_SCREEN_X, cfg_y=N_SCREEN_Y, snap_moves=True):
-    """Decode factored policy actions into semantic champion orders.
+                cfg_x=N_SCREEN_X, cfg_y=N_SCREEN_Y, snap_moves=True, params=None, vision=None):
+    """Project (button, screen_x, screen_y), then resolve the cursor hit.
 
-    ``slot_unit`` has shape ``(n_champions, n_slots)`` and comes from the same
-    observation that produced ``action``.  An invalid slot is represented by
-    ``-1``.  Attack-move follows the wire's behaviour: attack a selected
-    visible unit, otherwise move to the selected screen point.
-
-    Every MOVE point is snapped to a cell a 35-u champion can stand on
-    (:func:`snap_move_point`, `PATH-010`). ``snap_moves=False`` is the raw
-    pre-snap decode, kept only for tests and before/after measurements.
+    The actor supplies no entity identity. The simulation resolves visible
+    collision circles at the clicked point, with nearest-centre/slot-order
+    ties. A hostile hit attacks; empty ground or an ally click moves. R uses
+    the hostile hit as its cast target. ``slot_unit`` is unused and retained
+    only while callers migrate. MOVE terrain snapping is PATH-010.
     """
-    button, sx, sy, target_slot = action
-    n_slots = slot_unit.shape[-1]
-    target_slot = jnp.clip(target_slot.astype(jnp.int32), 0, n_slots - 1)
-    target = jnp.take_along_axis(slot_unit, target_slot[:, None], axis=1)[:, 0]
-    has_target = target >= 0
-
+    if len(action) != 3:
+        raise ValueError("screen-click-v2 requires (button, screen_x, screen_y); entity pointers are not accepted")
+    button, sx, sy = action
     screen_x = (sx + 0.5) / cfg_x
     screen_y = (sy + 0.5) / cfg_y
     ds, dn = _screen_to_centred_lane(screen_x, screen_y)
@@ -214,17 +205,35 @@ def orders_from(action, state, slot_unit, frame=None,
     side = jnp.where(state.team[:2] == Team.BLUE, 1.0, -1.0)
     world_dx = side * ds * axis[0] + dn * normal[0]
     world_dy = side * ds * axis[1] + dn * normal[1]
+    x = state.x[:2] + world_dx
+    y = state.y[:2] + world_dy
+    # Server-side hit testing in the simulator. The actor supplies no slot or
+    # unit identity; slot_unit is an unused compatibility argument for callers.
+    from ..obs.fog import visible_to
+    if params is None:
+        from ..sim.init import lane_params
+        params = lane_params()
+    radii = params["collision_radius"][state.model]
+    visible = jax.vmap(lambda team: visible_to(team, state.x, state.y,
+        state.kind, state.team, state.alive, vision))(state.team[:2])
+    under_cursor = (state.x[None, :] - x[:, None]) ** 2 + (state.y[None, :] - y[:, None]) ** 2
+    eligible = (visible & state.alive[None, :]
+                & (jnp.arange(state.x.size)[None, :] != jnp.arange(2)[:, None])
+                & (under_cursor <= radii[None, :] ** 2))
+    picked = jnp.argmin(jnp.where(eligible, under_cursor, jnp.inf), axis=1)
+    has_target = jnp.any(eligible, axis=1) & (state.team[picked] != state.team[:2])
+    target = jnp.where(has_target, picked, -1)
     is_attack_move = button == BUTTON_INDEX["attack_move"]
     in_minimap = (screen_x >= MINIMAP_X_MIN) & (screen_y >= MINIMAP_Y_MIN)
 
     # BUTTONS is the canonical tuple in lanerl_rl.constants.  Q/W/E/R and the
     # blue pill all have concrete semantic order handlers.
     kind = jnp.where(
-        button == BUTTON_INDEX["move"], OrderKind.MOVE,
+        button == BUTTON_INDEX["move"], jnp.where(has_target, OrderKind.ATTACK, OrderKind.MOVE),
         jnp.where(
             is_attack_move & has_target, OrderKind.ATTACK,
             jnp.where(
-                is_attack_move, OrderKind.MOVE,
+                is_attack_move, OrderKind.ATTACK_MOVE,
                 jnp.where(
                     button == BUTTON_INDEX["q"], OrderKind.CAST_Q,
                     jnp.where(
@@ -236,18 +245,18 @@ def orders_from(action, state, slot_unit, frame=None,
                                 jnp.where(button == BUTTON_INDEX["recall"],
                                           OrderKind.RECALL,
                                           OrderKind.NOOP))))))))
-    # Attack-move with a visible target is a semantic unit order and does not
-    # consume the sampled ground point. Plain Move (including targetless
-    # attack-move) would click the minimap and is suppressed.
-    kind = jnp.where((kind == OrderKind.MOVE) & in_minimap,
-                     OrderKind.NOOP, kind)
+    # Every cursor-dependent action is suppressed over the minimap.
+    invalid_click = ((sx < 0) | (sx >= cfg_x) | (sy < 0) | (sy >= cfg_y) | in_minimap)
+    kind = jnp.where(invalid_click & ((kind == OrderKind.MOVE) | (kind == OrderKind.ATTACK_MOVE) | (kind == OrderKind.ATTACK)
+                     | (kind == OrderKind.CAST_R)), OrderKind.NOOP, kind)
+    target = jnp.where(invalid_click, -1, target)
     x = state.x[:2] + world_dx
     y = state.y[:2] + world_dy
     if snap_moves:
         # PATH-010: never emit a Move goal the champion cannot stand on (see
         # the block comment above `MoveSnapTable`). Casts keep the raw point.
         sx_w, sy_w = snap_move_point(x, y)
-        is_move = kind == OrderKind.MOVE
+        is_move = (kind == OrderKind.MOVE) | (kind == OrderKind.ATTACK_MOVE)
         x = jnp.where(is_move, sx_w, x)
         y = jnp.where(is_move, sy_w, y)
     return Orders(
@@ -255,4 +264,5 @@ def orders_from(action, state, slot_unit, frame=None,
         x=x,
         y=y,
         target=target.astype(jnp.int8),
+        clear_target=((kind == OrderKind.MOVE) | (kind == OrderKind.ATTACK_MOVE)),
     )

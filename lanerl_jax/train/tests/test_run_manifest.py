@@ -24,6 +24,65 @@ ARGV = ["--tag", "t1", "--updates", "7", "--lr", "3e-4",
         "--resume", "/tmp/ckpt latest.msgpack"]
 
 
+def test_same_second_runs_do_not_overwrite_each_other(tmp_path, monkeypatch):
+    from lanerl_jax.train import run_manifest
+
+    monkeypatch.setattr(run_manifest.time, "strftime", lambda *args: "fixed-time")
+    first = RunDir(tmp_path, "same-tag", {"seed": 0})
+    original = (first.path / "manifest.json").read_bytes()
+    try:
+        second = RunDir(tmp_path, "same-tag", {"seed": 1})
+        try:
+            assert first.path != second.path
+            assert (first.path / "manifest.json").read_bytes() == original
+            assert json.loads((second.path / "manifest.json").read_text())["config"]["seed"] == 1
+        finally:
+            second.close()
+    finally:
+        first.close()
+
+
+def test_git_queries_do_not_redirect_vendor_to_training_repo(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    from lanerl_jax.train.run_manifest import git_output, git_provenance
+
+    root, vendor = tmp_path / 'root', tmp_path / 'vendor'
+    for path in (root, vendor):
+        subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    monkeypatch.chdir(root)
+    monkeypatch.setenv('GIT_DIR', str(root / '.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(root))
+    before = dict(os.environ)
+    git_provenance()
+    assert dict(os.environ) == before
+    assert git_output(['rev-parse', '--show-toplevel'], vendor).decode().strip() == str(vendor)
+
+
+def test_server_run_readme_uses_the_recorded_server_command(tmp_path):
+    command = 'python -m lanerl_jax.train.server_train --seed 3 --step-ticks 6'
+    run = RunDir(tmp_path, 'server', {'command': command})
+    try:
+        readme = (run.path / 'README.md').read_text()
+        assert command in readme
+        assert 'sbatch slurm/rl_train.sbatch' not in readme
+        assert 'Restore source.tar.gz' in readme
+    finally:
+        run.close()
+
+
+def test_collector_path_can_be_reopened_from_manifest(tmp_path):
+    from pathlib import Path
+    artifact = tmp_path / 'route artifact'
+    artifact.mkdir()
+    run = RunDir(tmp_path, 'paths', {'collector': {'route_artifact': artifact}})
+    try:
+        saved = json.loads((run.path / 'manifest.json').read_text())
+        assert Path(saved['config']['collector']['route_artifact']).samefile(artifact)
+    finally:
+        run.close()
+
+
 def _parse_back(command: str):
     tokens = shlex.split(command.replace("\\\n", " "))
     assert tokens[:2] == ["sbatch", "slurm/rl_train.sbatch"], tokens[:2]

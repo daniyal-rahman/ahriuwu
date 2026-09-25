@@ -240,7 +240,8 @@ def tick(state: LaneState, params: UnitParams,
          minion_hp=None, enable_call_for_help: bool = True,
          enable_collision: bool = True,
          collision_terrain: bool = True,
-         defer_collision_terrain: bool = False) -> LaneState:
+         defer_collision_terrain: bool = False,
+         route_table=None, terrain=None, vision=None) -> LaneState:
     """Advance one 16.667 ms server tick.
 
     ``lane_path`` is ``(W, 2)`` -- ``MinionPaths[LANE_L]``, walked forward by
@@ -594,7 +595,7 @@ def tick(state: LaneState, params: UnitParams,
     # walks into sight is seen one tick earlier than on the server. Recorded
     # as a known deviation (`STRUCT-006`, and this module's docstring), not
     # changed here: the difference is at most one tick at a sight boundary.
-    visible = _visible_to_enemy(x, y, state.kind, state.team, state.alive)
+    visible = _visible_to_enemy(x, y, state.kind, state.team, state.alive, vision)
 
     # ---- 11. the minion controller (AIScript.OnUpdate) ----------------------
     prio = base_priority(state.kind, _minion_type_of(state))
@@ -678,20 +679,11 @@ def tick(state: LaneState, params: UnitParams,
     # the whole of last-hitting.
     is_champ = state.kind == Kind.CHAMPION
     attack_moving = is_champ & (state.move_order == MoveOrder.ATTACK_MOVE)
-    # The fresh-acquisition scan itself does NOT gate on vision. It is the
-    # `MoveOrder == OrderType.AttackMove` branch of `ObjAIBase.UpdateTarget`
-    # (ObjAIBase.cs:1288-1320 -- "Acquires the closest target"), and its loop
-    # only rejects on `IsDead`, `Team`, `DistanceSquared > range*range` and
-    # `!Targetable`; no `IsVisibleByTeam` call appears in it at all. Nor need
-    # one: `range` there is `Stats.AcquisitionRange.Total` (400 for Garen,
-    # `profiles.py`), smaller than a champion's own `VisionRadius` (1200,
-    # `fog.VISION_RADIUS`), so anything the scan can find is already seen by
-    # the champion doing the looking regardless of any other teammate --
-    # filtering candidates here would be a no-op on this patch's numbers, and
-    # skipping it matches the server line-for-line instead of only in effect.
+    # A-click must not acquire an enemy hidden in brush. The source-server
+    # ingress repair adds the same visibility gate to its acquisition scan.
     champ_pick = jnp.where(
         attack_moving,
-        nearest_enemy(x, y, state.team, state.alive, state.alive,
+        nearest_enemy(x, y, state.team, state.alive, visible,
                       P("acquisition_range"), state.spawn_seq),
         jnp.int8(-1))
     # What DOES gate on vision -- and matters, because this branch carries no
@@ -809,11 +801,10 @@ def tick(state: LaneState, params: UnitParams,
     # before this block existed: 40/40 slots full by t=210 s against a measured
     # server median of 15.
     #
-    # BOOKED APPROXIMATION: the re-path is a straight line, not `GetPath`.
-    # Targets are acquired within `AcquisitionRange` (600 for a minion) and
-    # lane combat happens in the open corridor, where 76% of paths under 500
-    # units are already straight (measured). Chasing across terrain is where
-    # this is wrong, and it is unmeasured.
+    # PATH-009: champions use the terrain router, including distant targets.
+    # Minions retain the short straight chase approximation. Failed champion
+    # searches retain the old route, as RefreshWaypoints does on the server;
+    # they must never replace a valid detour with a line through terrain.
     tgt = jnp.clip(target, 0, n - 1)
     d2 = (x[tgt] - x) ** 2 + (y[tgt] - y) ** 2
     # `idealRange = Stats.Range.Total + TargetUnit.CollisionRadius` -- edge to
@@ -836,8 +827,9 @@ def tick(state: LaneState, params: UnitParams,
     # current target: `Spell.FinishCasting` deals melee damage to
     # `CastInfo.Targets[0].Unit` (`Spell.cs:1030`), a ranged swing's missile
     # carries its own `TargetUnit`, and `SetTargetUnit` rewrites neither.
-    # Only the CANCEL test (`ObjAIBase.cs:1247`, out of range of the current
-    # target) reads `TargetUnit` during a wind-up. Resolving the hit against
+    # `Spell.CastCancelCheck` cancels a target change BEFORE advancing the
+    # windup, even on its final frame. The stored identity still matters
+    # for death/recycling and for resolving an unchanged swing. Resolving against
     # `target` let a policy re-aim a swing on its last frame onto whichever
     # minion had just become killable -- zero-wind-up last-hitting, which the
     # server does not do (measured: minion B died, A untouched). A swing
@@ -901,10 +893,33 @@ def tick(state: LaneState, params: UnitParams,
     chase = refresh & ~in_rng
     wp = wp_after_lane
     two = jnp.stack([jnp.stack([x, y], -1), jnp.stack([x[tgt], y[tgt]], -1)], 1)
-    wp = jnp.where(chase[:, None, None],
-                   wp.at[:, :2].set(two)[:, :, :], wp)
-    wp_key = jnp.where(chase, jnp.int8(1), wp_key_after_lane)
-    n_wp = jnp.where(chase, jnp.int8(2), n_wp_after_lane)
+    candidate = wp.at[:, :2].set(two)
+    candidate_n = jnp.full((n,), 2, jnp.int8)
+    commit_chase = chase
+    route_status = state.route_status
+    if route_table is not None:
+        from .local_pathing import build_local_waypoints, LocalRouteStatus
+        if terrain is None:
+            raise ValueError("chase route_table requires terrain")
+        # Champions occupy the first two slots. Inactive searches receive
+        # identity endpoints so they cannot extend the batched route loop.
+        active = chase[:2]
+        gx = jnp.where(active, x[tgt[:2]], x[:2])
+        gy = jnp.where(active, y[tgt[:2]], y[:2])
+        routed = jax.vmap(lambda sx, sy, ex, ey, radius:
+            build_local_waypoints(sx, sy, ex, ey, radius, route_table, terrain,
+                                  max_raw_hops=512, global_chase=True))(
+                x[:2], y[:2], gx, gy, P("pathfinding_radius")[:2])
+        candidate = candidate.at[:2].set(routed.waypoints)
+        candidate_n = candidate_n.at[:2].set(routed.n_waypoints)
+        commit_chase = commit_chase.at[:2].set(
+            active & (routed.status == LocalRouteStatus.READY)
+            & (routed.n_waypoints > 1))
+        route_status = route_status.at[:2].set(
+            jnp.where(active, routed.status, route_status[:2]))
+    wp = jnp.where(commit_chase[:, None, None], candidate, wp)
+    wp_key = jnp.where(commit_chase, jnp.int8(1), wp_key_after_lane)
+    n_wp = jnp.where(commit_chase, candidate_n, n_wp_after_lane)
     # `HOLD-001`. The in-range branch does not only write an order.
     # `UpdateMoveOrder(OrderType.Hold, true)` (`ObjAIBase.cs:1362-1366`) calls
     # `StopMovement()`, which for a non-dashing unit is
@@ -994,6 +1009,7 @@ def tick(state: LaneState, params: UnitParams,
         skip_next_autoattack=bs.q_skip_next,
         may_engage=hostile,
         swing_target_gone=swing_target_gone,
+        swing_target_changed=(state.aa_target >= 0) & (state.aa_target != target),
         delta_ms=delta_ms, xp=jnp)
 
     q_landed = aa.hit & bs.q_empowered
@@ -1518,6 +1534,7 @@ def tick(state: LaneState, params: UnitParams,
         x=x, y=y,
         waypoint_key=jnp.where(finish_casting, jnp.int8(1), wp_key),
         lane_waypoint_key=lane_key,
+        route_status=route_status,
         waypoints=jnp.where(
             finish_casting[:, None, None],
             wp.at[:, 0].set(jnp.stack([x, y], -1)), wp),
@@ -1586,7 +1603,8 @@ def step_decision(state: LaneState, params: UnitParams,
                   enable_call_for_help: bool = True,
                   enable_collision: bool = True,
                   collision_terrain: bool = True,
-                  defer_collision_terrain: bool = False) -> LaneState:
+                  defer_collision_terrain: bool = False,
+                  route_table=None, terrain=None, vision=None) -> LaneState:
     """One agent decision = ``LANERL_STEP_TICKS`` server ticks.
 
     ``step_ticks`` is 2 in this stack (30 Hz decisions off a 60 Hz sim), set by
@@ -1598,7 +1616,7 @@ def step_decision(state: LaneState, params: UnitParams,
     def one(s, _):
         return tick(s, params, delta_ms, lane_path, minion_hp,
                     enable_call_for_help, enable_collision,
-                    collision_terrain, defer_collision_terrain), None
+                    collision_terrain, defer_collision_terrain, route_table, terrain, vision), None
     out, _ = jax.lax.scan(one, state, None, length=step_ticks)
     return out
 
@@ -1612,7 +1630,7 @@ def env_apply(state: LaneState, orders, cfg) -> LaneState:
     """
     from .orders import apply_orders
     return apply_orders(state, orders, cfg.params,
-                        route_table=cfg.route_table, terrain=cfg.terrain)
+                        route_table=cfg.route_table, terrain=cfg.terrain, vision=cfg.vision)
 
 
 def env_advance(state: LaneState, cfg) -> LaneState:
@@ -1624,7 +1642,8 @@ def env_advance(state: LaneState, cfg) -> LaneState:
         enable_call_for_help=cfg.enable_call_for_help,
         enable_collision=cfg.enable_collision,
         collision_terrain=cfg.collision_terrain,
-        defer_collision_terrain=cfg.defer_collision_terrain)
+        defer_collision_terrain=cfg.defer_collision_terrain,
+        route_table=cfg.route_table, terrain=cfg.terrain, vision=cfg.vision)
 
 
 def env_step(state: LaneState, orders, cfg) -> LaneState:

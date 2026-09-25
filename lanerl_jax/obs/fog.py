@@ -17,12 +17,11 @@ its slot with ``valid = 0`` ... it is never written into a slot with
 on top of me" -- the single worst hallucination available.*  So fog is not a
 nicety; getting it wrong puts a phantom enemy in the agent's lap.
 
-**Booked approximation:** this is a radius model, not the server's own
-brush/terrain-aware vision. `lanerl_rl` carries the same approximation as
-`ApproxFogModel` and gates production on the server's `vb`/`vr` instead, with a
-differential test (`test_fog_comes_from_the_server`) proving which one ran.
-The JAX sim has no server to ask, so the approximation is the only option here
-and its cost is unmeasured -- brush in particular is invisible to it.
+Production configs supply the map brush/wall grid and require an unobstructed
+source-style visibility ray as well as viewer range. ``vision=None`` retains
+the radius-only model for synthetic fixtures. The bounded float32 ray caster
+conservatively handles near-corner ties; it is not bit-exact server parity.
+Server collectors use authoritative ``vb``/``vr`` instead of either model.
 
 Turrets are not fogged, and this is not the radius approximation talking
 ------------------------------------------------------------------------
@@ -75,7 +74,7 @@ def vision_radius_of(kind: jax.Array) -> jax.Array:
 
 
 def visible_to(team: int, x: jax.Array, y: jax.Array, kind: jax.Array,
-               unit_team: jax.Array, alive: jax.Array) -> jax.Array:
+               unit_team: jax.Array, alive: jax.Array, vision=None) -> jax.Array:
     """``(N,)`` bool: which units the given team can currently see.
 
     A unit always sees itself and its allies -- the server's own units are
@@ -92,13 +91,20 @@ def visible_to(team: int, x: jax.Array, y: jax.Array, kind: jax.Array,
     r = vision_radius_of(kind)
     viewer = alive & (unit_team == team)
     d2 = (x[:, None] - x[None, :]) ** 2 + (y[:, None] - y[None, :]) ** 2
-    seen = jnp.any(viewer[:, None] & (d2 <= (r[:, None] ** 2)), axis=0)
+    within = d2 < (r[:, None] ** 2) if vision is not None else d2 <= (r[:, None] ** 2)
+    if vision is not None:
+        from .vision import clear_ray
+        candidate = (within & viewer[:, None] & alive[None, :]
+                     & (unit_team[None, :] != team) & (kind[None, :] != Kind.TURRET))
+        within &= clear_ray(vision, x[:, None], y[:, None], x[None, :], y[None, :],
+                            enabled=candidate)
+    seen = jnp.any(viewer[:, None] & within, axis=0)
     never_fogged = kind == Kind.TURRET
     return alive & (seen | (unit_team == team) | never_fogged)
 
 
 def visible_to_enemy(x: jax.Array, y: jax.Array, kind: jax.Array,
-                     unit_team: jax.Array, alive: jax.Array) -> jax.Array:
+                     unit_team: jax.Array, alive: jax.Array, vision=None) -> jax.Array:
     """``(N,)`` bool: is each unit visible to the team that is NOT its own.
 
     This is the one number target acquisition actually needs. The server's
@@ -121,8 +127,8 @@ def visible_to_enemy(x: jax.Array, y: jax.Array, kind: jax.Array,
     :func:`visible_to` are made; each unit then reads off whichever one
     belongs to its own opponent.
     """
-    seen_by_blue = visible_to(Team.BLUE, x, y, kind, unit_team, alive)
-    seen_by_red = visible_to(Team.RED, x, y, kind, unit_team, alive)
+    seen_by_blue = visible_to(Team.BLUE, x, y, kind, unit_team, alive, vision)
+    seen_by_red = visible_to(Team.RED, x, y, kind, unit_team, alive, vision)
     # unit_team == BLUE -> its opponent is RED -> read seen_by_red, and vice
     # versa. A NEUTRAL-team slot (an empty/unused unit slot) takes the RED
     # branch by construction of jnp.where's default; harmless, since such a

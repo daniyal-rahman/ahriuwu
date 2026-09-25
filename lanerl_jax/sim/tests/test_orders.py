@@ -11,6 +11,7 @@ by this file and untouched by this fix).
 """
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -46,6 +47,39 @@ def _order(kind, x=0.0, y=0.0, target=-1):
     return Orders(kind=jnp.asarray([kind, OrderKind.NOOP], jnp.int8),
                  x=jnp.asarray([x, 0.0]), y=jnp.asarray([y, 0.0]),
                  target=jnp.asarray([target, -1], jnp.int8))
+
+
+def test_positive_hp_corpse_cannot_accept_new_controls():
+    """Authoritative death wins over health, rank and cooldown readiness.
+
+    Source corpses can have positive HP. That must never reopen Move/A,
+    attack, QWER or recall; an already-running pre-death buff is separate.
+    """
+    from lanerl_jax.sim.spells import status_of
+    s = init_lane()
+    s = s.replace(alive=s.alive.at[0].set(False), hp=s.hp.at[0].set(50.),
+                  level=s.level.at[0].set(6),
+                  spell_level=s.spell_level.at[0].set(1),
+                  spell_cooldown=s.spell_cooldown.at[0].set(0.),
+                  x=s.x.at[1].set(s.x[0] + 100.),
+                  y=s.y.at[1].set(s.y[0]))
+    status = status_of(s)
+    assert not bool(status.may_cast[0])
+    assert not np.asarray(status.can_cast[0]).any()
+    assert not bool(status.can_attack[0])
+    apply = jax.jit(lambda state, orders: apply_orders(state, orders, _PARAMS))
+    baseline = apply(s, _order(OrderKind.NOOP))
+    for kind in (OrderKind.MOVE, OrderKind.ATTACK_MOVE, OrderKind.ATTACK,
+                 OrderKind.CAST_Q, OrderKind.CAST_W, OrderKind.CAST_E,
+                 OrderKind.CAST_R, OrderKind.RECALL):
+        got = apply(s, _order(kind, x=float(s.x[0])+300., y=float(s.y[0]), target=1))
+        for a, b in zip(jax.tree.leaves(got), jax.tree.leaves(baseline)):
+            if jax.dtypes.issubdtype(a.dtype, jax.dtypes.prng_key):
+                a, b = jax.random.key_data(a), jax.random.key_data(b)
+            np.testing.assert_array_equal(a, b, err_msg=f'dead order {kind}')
+        assert not bool(got.alive[0])
+        assert float(got.hp[0]) == 50.
+        assert not bool(got.buffs.e.active[0])
 
 
 def test_a_move_order_does_not_clear_a_held_target():
@@ -131,7 +165,7 @@ def test_only_successful_visible_enemy_casts_enter_observer_memory(kind, slot, t
     """This is witnessed-event memory, not an opponent cooldown side channel."""
     s = _state_with_target()
     s = s.replace(
-        # The champions are close, visible, and inside the 1800-unit UI radius.
+        # The champions are close, visible, and inside the canonical viewport.
         x=s.x.at[0].set(0.0).at[1].set(100.0),
         spell_level=s.spell_level.at[0, slot].set(1),
     )
@@ -158,16 +192,22 @@ def test_fogged_or_off_screen_casts_do_not_enter_observer_memory():
     assert np.all(np.asarray(fogged.observed_enemy_cast_ms) == -1.0)
 
     # A red minion can put blue on the team's minimap, but the red champion is
-    # 1801 away.  A cast animation outside its own screen must not leak in.
+    # far beyond the viewport. A cast outside its screen must not leak in.
     s = _state_with_target()
     kind = s.kind.at[2].set(Kind.LANE_MINION)
     team = s.team.at[2].set(Team.RED)
     alive = s.alive.at[2].set(True)
     s = s.replace(
         kind=kind, team=team, alive=alive,
-        x=s.x.at[0].set(0.0).at[1].set(1801.0).at[2].set(0.0),
+        x=s.x.at[0].set(0.0).at[1].set(4000.0).at[2].set(0.0),
         spell_level=s.spell_level.at[0, Slot.Q].set(1),
     )
+    from lanerl_jax.obs.frame import make_lane_frame, delta_to_lane
+    from lanerl_jax.sim.init import TOP_OUTER_TURRET
+    from lanerl_rl.projection import target_on_screen
+    frame = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
+                            TOP_OUTER_TURRET[Team.BLUE], (12760.9, 13026.1))
+    assert not bool(target_on_screen(*delta_to_lane(frame, -4000., 0.)))
     off_screen = apply_orders(s, _order(OrderKind.CAST_Q), _PARAMS)
     assert np.all(np.asarray(off_screen.observed_enemy_cast_ms) == -1.0)
 

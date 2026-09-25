@@ -26,7 +26,7 @@ from lanerl_jax.sim.init import TOP_OUTER_TURRET, init_lane, lane_params
 from lanerl_jax.sim.orders import OrderKind
 from lanerl_jax.sim.state import Team
 from lanerl_jax.train.policy import LanePolicy, PolicyConfig
-from lanerl_jax.train.ppo import factored_log_prob, head_usage
+from lanerl_jax.train.ppo import factored_log_prob, screen_head_usage
 from lanerl_jax.train.trainer import (ATTACK_CLASSES, TrainConfig,
                                       _attack_class, _orders_from, make_train)
 
@@ -35,36 +35,11 @@ from lanerl_rl.constants import BUTTON_INDEX as C_BUTTON
 SMALL = TrainConfig(n_envs=4, rollout_steps=8, n_updates=2, n_minibatches=2)
 
 
-def test_policy_targets_are_observation_slots_not_simulator_unit_indices():
-    """Slot 13 is an enemy-minion slot; it need not be unit 13."""
+def test_pointer_actions_are_rejected():
     state = init_lane()
     slots = jnp.full((2, 32), -1, jnp.int32)
-    slots = slots.at[0, 13].set(41).at[1, 19].set(57)
-
-    attack_r = _orders_from(
-        (jnp.asarray([2, 6]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
-         jnp.asarray([13, 19])), state, slots)
-    np.testing.assert_array_equal(np.asarray(attack_r.target), [41, 57])
-    np.testing.assert_array_equal(np.asarray(attack_r.kind),
-                                  [OrderKind.ATTACK, OrderKind.CAST_R])
-
-    q_w = _orders_from(
-        (jnp.asarray([3, 4]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
-         jnp.asarray([13, 19])), state, slots)
-    np.testing.assert_array_equal(np.asarray(q_w.kind),
-                                  [OrderKind.CAST_Q, OrderKind.CAST_W])
-    e_recall = _orders_from(
-        (jnp.asarray([5, 7]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
-         jnp.asarray([13, 19])), state, slots)
-    np.testing.assert_array_equal(np.asarray(e_recall.kind),
-                                  [OrderKind.CAST_E, OrderKind.RECALL])
-
-    no_target = _orders_from(
-        (jnp.asarray([2, 1]), jnp.asarray([0, 0]), jnp.asarray([0, 0]),
-         jnp.asarray([0, 0])), state, slots)
-    np.testing.assert_array_equal(np.asarray(no_target.kind),
-                                  [OrderKind.MOVE, OrderKind.MOVE])
-    np.testing.assert_array_equal(np.asarray(no_target.target), [-1, -1])
+    with pytest.raises(ValueError, match="screen-click-v2"):
+        _orders_from(tuple(jnp.zeros(2, jnp.int32) for _ in range(4)), state, slots)
 
 
 @pytest.fixture(scope="module")
@@ -138,17 +113,17 @@ def test_the_actor_and_the_learner_agree_on_log_probs():
 
     logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
                           obs.self_vec, obs.global_vec)
-    lg = (logits.button, logits.screen_x, logits.screen_y, logits.target)
-    keys = jax.random.split(jax.random.key(7), 4)
+    lg = (logits.button, logits.screen_x, logits.screen_y)
+    keys = jax.random.split(jax.random.key(7), 3)
     action = tuple(jax.random.categorical(k, l) for k, l in zip(keys, lg))
-    usage = head_usage(action[0], action[3], ~obs.entity_pad_mask)
+    usage = screen_head_usage(action[0])
     at_sample = factored_log_prob(lg, action, *usage)
 
     # the update path: same params, same observation, recomputed
     again = policy.apply(params, obs.entities, obs.entity_pad_mask,
                          obs.self_vec, obs.global_vec)
     at_update = factored_log_prob(
-        (again.button, again.screen_x, again.screen_y, again.target), action,
+        (again.button, again.screen_x, again.screen_y), action,
         *usage)
 
     np.testing.assert_allclose(np.asarray(at_update), np.asarray(at_sample),
@@ -165,10 +140,9 @@ def test_rollout_and_update_log_probs_agree_over_every_head_class():
 
     1. every stored log-prob is recomputed from the stored observation and
        action under the same params and the STORED per-sample head masks
-       (`PPO-14`), per sample, across the usage classes (none / screen /
-       target) -- the batch is asserted to contain each, and the stored
-       masks must equal `head_usage` recomputed from the stored observation
-       and action;
+       per sample, across both usage classes (none / screen) -- the batch
+       must contain each, and stored masks must equal `screen_head_usage`
+       recomputed from the button;
     2. one full update at ``lr = critic_lr = 0`` (params cannot move) must
        then report ``approx_kl`` ~ 0, no clipping and no KL stop, because
        every minibatch compares the rollout's log-probs with the loss path's
@@ -198,31 +172,28 @@ def test_rollout_and_update_log_probs_agree_over_every_head_class():
                       tr.obs_global.reshape(n, -1))
     act = tuple(a.reshape(n) for a in tr.action)
     us, ut = tr.uses_screen.reshape(n), tr.uses_target.reshape(n)
-    again = flp((lg.button, lg.screen_x, lg.screen_y, lg.target), act, us, ut)
+    again = flp((lg.button, lg.screen_x, lg.screen_y), act, us, ut)
     np.testing.assert_allclose(np.asarray(again),
                                np.asarray(tr.log_prob).reshape(n),
                                rtol=0, atol=1e-5)
-    rs, rt = head_usage(act[0], act[3], ~tr.obs_mask.reshape(n, -1))
+    rs, rt = screen_head_usage(act[0])
     np.testing.assert_array_equal(np.asarray(rs), np.asarray(us))
     np.testing.assert_array_equal(np.asarray(rt), np.asarray(ut))
     usage = {(float(a), float(b)) for a, b in zip(np.asarray(us), np.asarray(ut))}
-    missing = {(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)} - usage
+    missing = {(0.0, 0.0), (1.0, 0.0)} - usage
     assert not missing, f"batch lacks usage classes {missing}: {usage}"
     assert (1.0, 1.0) not in usage, "a sample used screen AND target"
     b = np.asarray(act[0])
     am = b == C.BUTTON_INDEX["attack_move"]
     assert am.any() and (b == C.BUTTON_INDEX["r"]).any()
-    # attack_move on a unit reads the target head and NOT the screen heads
-    assert (np.asarray(ut)[am] == 1.0).any()
-    # The attack-by-target metrics partition exactly the attack_move
-    # decisions: a unit ATTACK iff the target head was used, the fallback
-    # iff the screen heads were.
+    assert len(act) == 3
+    assert np.all(np.asarray(ut) == 0.0)
+    expected_screen = np.isin(b, [C.BUTTON_INDEX[k] for k in ("move", "attack_move", "r")])
+    np.testing.assert_array_equal(us, expected_screen)
+    # Attack telemetry still partitions the attack button after click resolution.
     cls = np.asarray(tr.attack_class).reshape(n)
     np.testing.assert_array_equal(cls > 0, am)
-    np.testing.assert_array_equal((cls >= 1) & (cls <= 4),
-                                  am & (np.asarray(ut) == 1.0))
-    np.testing.assert_array_equal(cls == ATTACK_CLASSES["attack_move_fallback"],
-                                  am & (np.asarray(us) == 1.0))
+    assert np.isin(cls[am], list(ATTACK_CLASSES.values())).all()
 
     r1, m = jax.jit(built.run_chunk, static_argnums=1)(r0, 1)
     for a, b in zip(jax.tree.leaves(r0.params), jax.tree.leaves(r1.params)):
@@ -235,33 +206,20 @@ def test_rollout_and_update_log_probs_agree_over_every_head_class():
         f"lane_dist {d} at shaping weight 0 -- it must not depend on the weight")
 
 
-def test_a_sampled_action_never_lands_on_a_masked_slot():
-    """A masked slot must be unreachable by SAMPLING, not merely improbable.
-
-    Targeting an entity that is not there is the action-space version of the
-    fog hallucination `obs.py` guards against -- and it would be scored as a
-    real action by the update.
-    """
-    frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
-                            TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
-    policy = LanePolicy(PolicyConfig())
-    state = init_lane()
-    params_tbl = lane_params()
-    obs = jax.vmap(
-        lambda i: build_observation(state, i, frame, params=params_tbl)
-    )(jnp.arange(2))
-    params = policy.init(jax.random.key(0), obs.entities, obs.entity_pad_mask,
-                         obs.self_vec, obs.global_vec)
-    logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
-                          obs.self_vec, obs.global_vec)
-
-    pad = np.asarray(obs.entity_pad_mask)
-    assert pad.any(), "fixture has no masked slots, so this proves nothing"
-    for i in range(256):
-        tgt = np.asarray(jax.random.categorical(
-            jax.random.key(i), logits.target))
-        for row in range(tgt.shape[0]):
-            assert not pad[row, tgt[row]], f"sampled masked slot {tgt[row]}"
+def test_sampling_emits_only_buttons_and_screen_bins():
+    from lanerl_jax.train.trainer import _sample
+    from lanerl_jax.train.policy import ActionLogits
+    logits = ActionLogits(jnp.zeros((256, 8)), jnp.zeros((256, 96)),
+                          jnp.zeros((256, 54)), jnp.zeros(256))
+    action, lp, (screen, target) = _sample(logits, jax.random.key(3),
+                                         jnp.zeros((256, 32), bool))
+    assert len(action) == 3
+    for values, bound in zip(action, (8, 96, 54)):
+        assert np.all((np.asarray(values) >= 0) & (np.asarray(values) < bound))
+    assert np.isfinite(np.asarray(lp)).all()
+    assert np.all(np.asarray(target) == 0)
+    assert set(np.asarray(action[0]).tolist()) == set(range(8))
+    np.testing.assert_array_equal(screen, np.isin(action[0], [1, 2, 6]))
 
 
 def test_reset_is_a_where_against_a_constant(trained):
@@ -284,12 +242,11 @@ def test_reset_is_a_where_against_a_constant(trained):
 def test_training_changes_the_parameters(trained):
     """A loop that runs and learns nothing looks identical to one that works."""
     runner, _ = trained
-    # the pad mask is BOOL -- the policy inverts it, and a float mask fails with
-    # "not does not accept dtype float64" rather than anything about masking
-    fresh = LanePolicy(PolicyConfig()).init(
-        jax.random.key(0), jnp.zeros((2, 32, 16)), jnp.zeros((2, 32), bool),
-        jnp.zeros((2, 16)), jnp.zeros((2, 6)))
-    moved = [not np.allclose(np.asarray(a), np.asarray(b), atol=1e-9)
+    # Use the trainer's EXACT initialization. policy.init(key(0)) differs
+    # from initial_runner(key(0)), which splits the key before init; comparing
+    # those random initializations passed even if the optimizer did nothing.
+    fresh = make_train(SMALL).initial_runner(jax.random.key(0)).params
+    moved = [not np.array_equal(np.asarray(a), np.asarray(b))
              for a, b in zip(jax.tree.leaves(runner.params),
                              jax.tree.leaves(fresh))]
     assert any(moved), "no parameter moved across two updates"

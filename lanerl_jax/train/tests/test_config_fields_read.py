@@ -38,7 +38,7 @@ TRAIN = PKG / "train"
 CONFIGS = {"PPOConfig", "PolicyConfig", "TrainConfig", "RewardConfig",
            "RewardWeights"}
 NOT_CONFIGS = {"ActionLogits", "RunnerState", "Transition", "RewardState",
-               "BenchResult", "ResetBenchResult"}
+               "BenchResult", "ResetBenchResult", "MoveSnapTable"}
 
 
 def _is_record(cls: ast.ClassDef) -> bool:

@@ -1,0 +1,29 @@
+--- a/GameServerLib/Lanerl/LanerlControl.cs
++++ b/GameServerLib/Lanerl/LanerlControl.cs
+@@ -287,6 +287,15 @@
+                               .Append(",\"y\":").Append(((int)bot.LastOrderY).ToString(CultureInfo.InvariantCulture));
+                         sb.Append('}');
+                     }
++                    // Own HUD slot enablement: Q remains sealed during its
++                    // empowerment even though its cooldown currently reads zero.
++                    sb.Append(",\"se\":[");
++                    for (byte sl = 0; sl < 4; sl++)
++                    {
++                        if (sl > 0) sb.Append(',');
++                        sb.Append(ch.Stats.GetSpellEnabled(sl) ? 1 : 0);
++                    }
++                    sb.Append(']');
+                     for (byte sl = 0; sl < 4; sl++)
+                     {
+                         var sp = ch.Spells.ContainsKey(sl) ? ch.Spells[sl] : null;
+@@ -387,6 +396,10 @@
+                     else
+                     {
+                         byte slot = (byte)(a.Button == "q" ? 0 : a.Button == "w" ? 1 : a.Button == "e" ? 2 : 3);
++                        // The real client's disabled ability button cannot send
++                        // another cast. Keep this guard on keyboard ingress;
++                        // raw diagnostic Cast remains an explicit engine API.
++                        if (!champ.Stats.GetSpellEnabled(slot)) break;
+                         Execute(game, champ, new LanerlOrder {
+                             Kind = LanerlOrderKind.Cast, Slot = slot, HasSlot = true,
+                             X = a.X, Y = a.Y, HasPosition = true,
