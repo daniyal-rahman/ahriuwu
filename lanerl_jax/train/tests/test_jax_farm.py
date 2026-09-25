@@ -81,7 +81,7 @@ def test_ground_clicks_reach_physics_without_decoder_terrain_snap(collector, mon
     terrain = map1_terrain()
     walkable = np.asarray(terrain.walkable)
     points = {}
-    champion = {'x': float(c.states.x[0, 0]), 'y': float(c.states.y[0, 0])}
+    champion = {'x': float(c.states.x[0, 0]), 'y': float(c.states.y[0, 0]), 'dead': False}
     for ix in range(len(SCREEN_X_VALUES)):
         for iy in range(len(SCREEN_Y_VALUES)):
             wire = screen_order([BUTTON_INDEX['move'], ix, iy], champion, c.frame)

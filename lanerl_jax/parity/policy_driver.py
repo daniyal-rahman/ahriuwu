@@ -40,6 +40,7 @@ What this module adds on top of the move
 from __future__ import annotations
 
 import bisect
+import functools
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -383,39 +384,42 @@ class StateRebuilder:
         # Cast memory follows the same authoritative fog and viewport as
         # entity observations. Hidden cooldown edges cannot create memories.
         from lanerl_rl.projection import target_on_screen
-        frames = _lane_frames()
+        frames = _lane_frame_floats()
         flags = {int(u["id"]): u for u in units if "id" in u}
         witness = np.zeros((2, 2), bool)
         for observer in range(2):
-            f = frames[observer]
+            ax, ay, nx_, ny_ = frames[observer]
             for caster in range(2):
-                dx, dy = x[caster] - x[observer], y[caster] - y[observer]
-                ds = dx * float(f.axis[0]) + dy * float(f.axis[1])
-                dn = dx * float(f.normal[0]) + dy * float(f.normal[1])
+                dx, dy = float(x[caster] - x[observer]), float(y[caster] - y[observer])
+                ds = dx * ax + dy * ay
+                dn = dx * nx_ + dy * ny_
                 visible = flags.get(int(netid[caster]), {}).get(
                     "vb" if observer == 0 else "vr", False)
                 witness[observer, caster] = (observer != caster and alive[observer]
                     and alive[caster] and visible and bool(target_on_screen(ds, dn)))
         observed = self._observed_casts(t_now, cds, witness)
 
-        state = self.base.replace(
-            x=jnp.asarray(x), y=jnp.asarray(y), hp=jnp.asarray(hp),
-            max_hp=jnp.asarray(mhp), alive=jnp.asarray(alive),
-            kind=jnp.asarray(kind), team=jnp.asarray(team),
-            model=jnp.asarray(model), level=jnp.asarray(level),
-            gold=jnp.asarray(gold), cs=jnp.asarray(cs),
-            spell_level=jnp.asarray(spell_level),
-            spell_cooldown=jnp.asarray(spell_cd),
-            recall_channel_ms=jnp.asarray(recall),
-            buffs=self.base.buffs.replace(
-                e=self.base.buffs.e.replace(
-                    active=jnp.asarray(e_active),
-                    elapsed_s=jnp.asarray(e_elapsed,
-                                          self.base.buffs.e.elapsed_s.dtype)),
-                w_passive=jnp.asarray(w_passive)),
-            observed_enemy_cast_ms=jnp.asarray(
-                observed, self.base.observed_enemy_cast_ms.dtype),
-            t_ms=jnp.asarray(t_now, jnp.float32))
+        # Host numpy leaves, in the base state's dtypes. Twenty eager
+        # `jnp.asarray` dispatches per frame were most of a decision's wall
+        # time; a jitted consumer converts the whole (stacked) state once.
+        b = self.base
+        state = b.replace(
+            x=x.astype(b.x.dtype), y=y.astype(b.y.dtype), hp=hp.astype(b.hp.dtype),
+            max_hp=mhp.astype(b.max_hp.dtype), alive=alive,
+            kind=kind.astype(b.kind.dtype), team=team.astype(b.team.dtype),
+            model=model.astype(b.model.dtype), level=level.astype(b.level.dtype),
+            gold=gold.astype(b.gold.dtype), cs=cs.astype(b.cs.dtype),
+            spell_level=spell_level.astype(b.spell_level.dtype),
+            spell_cooldown=spell_cd.astype(b.spell_cooldown.dtype),
+            recall_channel_ms=recall.astype(b.recall_channel_ms.dtype),
+            buffs=b.buffs.replace(
+                e=b.buffs.e.replace(
+                    active=e_active,
+                    elapsed_s=np.asarray(e_elapsed, b.buffs.e.elapsed_s.dtype)),
+                w_passive=w_passive),
+            observed_enemy_cast_ms=np.asarray(
+                observed, b.observed_enemy_cast_ms.dtype),
+            t_ms=np.float32(t_now))
         return state, netid
 
     @property
@@ -536,12 +540,24 @@ def pending_rank_up(champ: Mapping) -> Optional[int]:
     return None
 
 
+@functools.lru_cache(maxsize=None)
 def _lane_frames():
+    """Blue and red lane frames. Cached: they are constants, and building
+    them eagerly on every `StateRebuilder.rebuild` cost 0.8 ms per frame."""
     blue = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                            TOP_OUTER_TURRET[Team.RED], BLUE_NEXUS)
     red = make_lane_frame(TOP_OUTER_TURRET[Team.RED],
                           TOP_OUTER_TURRET[Team.BLUE], RED_NEXUS)
     return blue, red
+
+
+@functools.lru_cache(maxsize=None)
+def _lane_frame_floats():
+    """``((ax, ay, nx, ny) blue, (...) red)`` as Python floats, for the
+    per-frame host-side witness geometry in `StateRebuilder.rebuild`."""
+    return tuple((float(f.axis[0]), float(f.axis[1]),
+                  float(f.normal[0]), float(f.normal[1]))
+                 for f in _lane_frames())
 
 
 def _make_act(policy, params, *, deterministic: bool, team: int):

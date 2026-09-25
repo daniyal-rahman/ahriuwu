@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from lanerl_rl.constants import BUTTONS, SCREEN_X_VALUES, SCREEN_Y_VALUES
+from lanerl_jax.sim.state import Team
 from lanerl_rl.projection import (screen_to_world_centred, MINIMAP_X_MIN,
                                    MINIMAP_Y_MIN)
 from lanerl_train.ports import PortAllocator
@@ -84,35 +85,90 @@ WAVE_START_MS = 120_000
 # Measured first minion contact in the untouched source-server control:
 # 124.909 s, blue (2157,12474), red (2259,12573). Start behind blue's wave.
 WAVE_START_POS = (1950., 12350.)
+# Red's mirror of the same setup: the same distance (~240 u) behind ITS
+# wave's contact point, along the blue->red contact direction. A single Move
+# from red's fountain to that point stops at (12058,12979) -- the server's
+# pathfinder gives up on that long route (measured, `runs/throughput_server_
+# 20260925/redroute.log`) -- so red walks it in legs along the top lane.
+RED_WAVE_START_POS = (2431., 12741.)
+TEAM_WAVE_START = {0: (WAVE_START_POS,),
+                   1: ((11000., 13600.), (7500., 13700.), (4500., 13600.), RED_WAVE_START_POS)}
+TEAM_KEY = {0: 'blue', 1: 'red'}
+TEAM_WIRE = {0: 100, 1: 200}
 
 
 class WaveStart:
-    """Fixed reset setup only; never contributes actions to the PPO batch."""
-    def __init__(self):
-        self.moved = False
+    """Fixed reset setup only; never contributes actions to the PPO batch.
+
+    ``legs`` is the Move sequence; the next leg is issued once the champion
+    is within ``leg_reach`` of the current one or has stopped moving.
+    """
+    def __init__(self, legs=(WAVE_START_POS,), tol=100., leg_reach=150.):
+        self.legs = tuple(legs)
+        self.pos, self.tol, self.leg_reach = self.legs[-1], tol, leg_reach
+        self.leg = -1
+        self.last = None
+        self.still = 0
 
     def order(self, champion, t_ms):
         if champion_dead(champion) or champion['cs'] != 0:
             raise RuntimeError('wave-start setup died or farmed before policy control')
         if t_ms >= WAVE_START_MS:
-            if np.hypot(champion['x']-WAVE_START_POS[0], champion['y']-WAVE_START_POS[1]) > 100:
-                raise RuntimeError(f"wave-start setup missed {WAVE_START_POS}: "
+            if np.hypot(champion['x']-self.pos[0], champion['y']-self.pos[1]) > self.tol:
+                raise RuntimeError(f"wave-start setup missed {self.pos}: "
                                    f"position=({champion['x']}, {champion['y']}), hp={champion['hp']}")
             return None
         rank = pending_rank_up(champion)
         if rank is not None:
             return {'t': 'level', 'slot': rank}
-        if not self.moved:
-            self.moved = True
-            return {'t': 'move', 'x': WAVE_START_POS[0], 'y': WAVE_START_POS[1]}
+        pos = (champion['x'], champion['y'])
+        self.still = self.still + 1 if pos == self.last else 0
+        self.last = pos
+        if self.leg < 0:
+            self.leg = 0
+            return {'t': 'move', 'x': self.legs[0][0], 'y': self.legs[0][1]}
+        if self.leg + 1 < len(self.legs):
+            tx, ty = self.legs[self.leg]
+            if np.hypot(pos[0]-tx, pos[1]-ty) <= self.leg_reach or self.still >= 10:
+                self.leg += 1
+                self.still = 0
+                return {'t': 'move', 'x': self.legs[self.leg][0], 'y': self.legs[self.leg][1]}
         return {'t': 'noop'}
 
 
+def _visibility_np(frame, netid, team):
+    """Host copy of `wire_visibility` (same fail-closed rule, no device array)."""
+    key = "vb" if int(team) == Team.BLUE else "vr"
+    flags = {int(u["id"]): bool(u.get(key, False))
+             for u in frame.get("u", []) if "id" in u}
+    return np.asarray([flags.get(int(n), False) for n in netid], dtype=bool)
+
+
+def _own_hud_np(frame, team):
+    """Host copy of `wire_own_hud`: (ad, ap, ar, mr)/200, 4 slot-enable bits, dead."""
+    me = next(u for u in frame["u"] if u.get("k") == "Champion" and u["tm"] == TEAM_WIRE[int(team)])
+    dead = champion_dead(me)
+    if len(me.get('se', [])) != 4:
+        raise ValueError('source observation lacks own ability HUD enablement; use the HUD-capable server build')
+    return np.asarray([me[k] / 200. for k in ("ad", "ap", "ar", "mr")] + list(me['se']) + [float(dead)], dtype=np.float32)
+
+
 class ServerCollector:
+    """``n`` server processes, ``teams`` policy-driven champions each.
+
+    Agent rows are env-major then team: row ``i * len(teams) + k`` is env
+    ``i``'s champion ``teams[k]``. ``teams=(0,)`` is blue farming against an
+    idle red; ``teams=(0, 1)`` is mirror self-play, one policy on both sides.
+    Every JAX call is batched over environments: one jitted, vmapped encode
+    per team and one potential call per step, not one dispatch per env.
+    """
     def __init__(self, n, out, port_base, episode_s, start_near_wave=False, step_ticks=2,
-                 server_dir=None):
-        self.n, self.out, self.episode_s = n, Path(out), episode_s
-        self.frame = _lane_frames()[0]
+                 server_dir=None, teams=(0,)):
+        self.n_envs, self.out, self.episode_s = n, Path(out), episode_s
+        self.teams = tuple(int(t) for t in teams)
+        self.T = len(self.teams)
+        self.n = n * self.T
+        self.frames = _lane_frames()
         self.env = VecLaneEnv(n, spec=ServerLaunchSpec(
             bot_teams="none", step_ticks=step_ticks, toponly=True,
             server_dir=server_dir,
@@ -121,47 +177,69 @@ class ServerCollector:
             auto_restart=False)
         self.rebuilders = [StateRebuilder() for _ in range(n)]
         self.detectors = [CastFreezeDetector() for _ in range(n)]
-        self.episodes = [0] * n
-        self.initial_stats = [None] * n
+        self.episodes = [0] * self.n
+        self.initial_stats = [None] * self.n
         self.start_near_wave = start_near_wave
         params = self.rebuilders[0].params
-        self.encode = jax.jit(lambda s, vis: build_observation(
-            s, 0, self.frame, params=params, horizon_s=episode_s, visibility=vis))
-        self.potential = jax.jit(lambda s: -lane_corridor_distance(s.x[:2], s.y[:2])[0] / 10000.)
+
+        def encoder(team):
+            frame = self.frames[team]
+            def one(s, vis, hud):
+                return apply_own_hud(build_observation(
+                    s, team, frame, params=params, horizon_s=episode_s, visibility=vis), hud)
+            return jax.jit(jax.vmap(one))
+        self.encoders = {t: encoder(t) for t in self.teams}
+        self.potential = jax.jit(jax.vmap(
+            lambda s: -lane_corridor_distance(s.x[:2], s.y[:2]) / 10000.))
         try:
             self.env.start()
             for raw in self.env.last_obs:
                 validate_champion_life(raw)
-                wire_own_hud(raw, 0)  # fail before setup if the binary lacks required HUD fields
+                for t in self.teams:
+                    wire_own_hud(raw, t)  # fail before setup if the binary lacks required HUD fields
             self._rank()
-            self.initial_stats = [tuple(self.champion(i)[k] for k in ('mhp', 'ad', 'ar', 'mr'))
-                                  for i in range(self.n)]
+            for i in range(n):
+                for k, t in enumerate(self.teams):
+                    self.initial_stats[i * self.T + k] = self._hud_stats(i, t)
             self._prepare()
         except BaseException:
             self.env.close()
             raise
 
+    def _hud_stats(self, i, t):
+        return tuple(self.champion(i, t)[k] for k in ('mhp', 'ad', 'ar', 'mr'))
+
     def _prepare(self, indices=None):
         if not self.start_near_wave:
             return
-        indices = list(range(self.n)) if indices is None else list(indices)
-        setups = {i: WaveStart() for i in indices}
+        indices = list(range(self.n_envs)) if indices is None else list(indices)
+        setups = {i: {t: WaveStart(TEAM_WAVE_START[t], 100. if t == 0 else 250.)
+                      for t in self.teams} for i in indices}
         count = 0
         # Only newly reset processes advance. Other environments remain paused.
         while setups:
-            actions = [None] * self.n
+            actions = [None] * self.n_envs
             active = []
             for i in list(setups):
-                cmd = setups[i].order(self.champion(i), self.env.last_obs[i]['t'])
-                if cmd is None:
+                cmds = {}
+                for t, setup in list(setups[i].items()):
+                    cmd = setup.order(self.champion(i, t), self.env.last_obs[i]['t'])
+                    if cmd is None:
+                        del setups[i][t]
+                    else:
+                        cmds[TEAM_KEY[t]] = cmd
+                if not setups[i]:
                     del setups[i]
-                else:
-                    actions[i] = {'blue': cmd, 'red': {'t': 'noop'}}
-                    active.append(i)
-                    if count % 300 == 0 or cmd['t'] != 'noop':
-                        with (self.out / 'setup.jsonl').open('a') as f:
-                            f.write(json.dumps({'env': int(i), 't': self.env.last_obs[i]['t'],
-                                                'champion': self.champion(i), 'command': cmd}) + '\n')
+                    continue
+                for t in (0, 1):
+                    cmds.setdefault(TEAM_KEY[t], {'t': 'noop'})
+                actions[i] = cmds
+                active.append(i)
+                if count % 300 == 0 or any(c['t'] != 'noop' for c in cmds.values()):
+                    with (self.out / 'setup.jsonl').open('a') as f:
+                        f.write(json.dumps({'env': int(i), 't': self.env.last_obs[i]['t'],
+                                            'champion': [self.champion(i, t) for t in self.teams],
+                                            'command': cmds}) + '\n')
             if active:
                 for i in active:
                     self.env.handles[i].send_line(json.dumps(actions[i]))
@@ -174,31 +252,36 @@ class ServerCollector:
         # Automatic fixed skill progression is task setup. These transitions
         # are not attributed to a sampled policy action.
         for _ in range(18):
-            slots = [pending_rank_up(self.champion(i)) for i in range(self.n)]
-            if all(s is None for s in slots):
+            pending = {}
+            for i in range(self.n_envs):
+                cmds = {TEAM_KEY[t]: {'t': 'level', 'slot': slot}
+                        for t in self.teams
+                        if (slot := pending_rank_up(self.champion(i, t))) is not None}
+                if cmds:
+                    for t in (0, 1):
+                        cmds.setdefault(TEAM_KEY[t], {'t': 'noop'})
+                    pending[i] = cmds
+            if not pending:
                 return
             # A level-up in one process must not silently advance its peers.
-            # VecLaneEnv.step(None) advances that process with a NOOP; send
-            # only to the instances whose HUD reports an available skill point.
-            active = [i for i, slot in enumerate(slots) if slot is not None]
-            for i in active:
-                self.env.handles[i].send_line(json.dumps({
-                    'blue': {'t': 'level', 'slot': slots[i]}, 'red': {'t': 'noop'}}))
-            result = self.env._collect(active)
+            for i, cmds in pending.items():
+                self.env.handles[i].send_line(json.dumps(cmds))
+            result = self.env._collect(list(pending))
             if result.died:
                 raise RuntimeError(f'skill progression lost a server: {result.died}')
         raise RuntimeError("skill progression failed to settle")
 
-    def champion(self, i):
+    def champion(self, i, team=0):
         return next(u for u in self.env.last_obs[i]["u"]
-                    if u.get("k") == "Champion" and u["tm"] == 100)
+                    if u.get("k") == "Champion" and u["tm"] == TEAM_WIRE[int(team)])
 
     def spell_ranks(self):
-        """Own blue ranks for sampled-action diagnostics; not actor features."""
-        return np.asarray([self.champion(i)["sl"] for i in range(self.n)], dtype=np.int32)
+        """Own ranks per agent row for sampled-action diagnostics; not actor features."""
+        return np.asarray([self.champion(i, t)["sl"] for i in range(self.n_envs)
+                           for t in self.teams], dtype=np.int32)
 
     def observe(self):
-        observations, stats = [], []
+        states, vis, huds = [], {t: [] for t in self.teams}, {t: [] for t in self.teams}
         for i, raw in enumerate(self.env.last_obs):
             self.detectors[i].observe(raw)
             if self.detectors[i].invalid:
@@ -206,26 +289,45 @@ class ServerCollector:
             state, ids = self.rebuilders[i].rebuild(raw)
             if self.rebuilders[i].dropped_minions:
                 raise RuntimeError("server observation exceeded entity capacity")
-            obs = self.encode(state, wire_visibility(raw, ids, 0))
-            me = self.champion(i)
-            # Own HUD is authoritative, not reconstructed simulator stats.
-            obs = apply_own_hud(obs, wire_own_hud(raw, 0))
-            observations.append(obs)
-            stats.append(source_farm_stats(me, self.potential(state)))
-            if self.initial_stats[i] is None:
-                self.initial_stats[i] = tuple(me[k] for k in ("mhp", "ad", "ar", "mr"))
-        return jax.tree.map(lambda *v: jnp.stack(v), *observations), np.asarray(stats)
+            states.append(state)
+            for t in self.teams:
+                vis[t].append(_visibility_np(raw, ids, t))
+                # Own HUD is authoritative, not reconstructed simulator stats.
+                huds[t].append(_own_hud_np(raw, t))
+        # Stack on the host: the rebuilt leaves are numpy already and the
+        # untouched base leaves are tiny device arrays (a jnp.stack per leaf
+        # per step was 85 eager dispatches). Only the PRNG key leaf must stay
+        # a device array.
+        batched = jax.tree.map(
+            lambda *a: jnp.stack(a) if jax.dtypes.issubdtype(a[0].dtype, jax.dtypes.prng_key)
+            else np.stack([np.asarray(v) for v in a]), *states)
+        pot = np.asarray(self.potential(batched))            # (n_envs, 2)
+        per_team = [self.encoders[t](batched, np.stack(vis[t]), np.stack(huds[t]))
+                    for t in self.teams]
+        # Interleave to agent rows: env-major, then team.
+        obs = jax.tree.map(
+            lambda *x: jnp.stack(x, axis=1).reshape((self.n,) + x[0].shape[1:]), *per_team)
+        stats = np.asarray([source_farm_stats(self.champion(i, t), pot[i, t])
+                            for i in range(self.n_envs) for t in self.teams])
+        return obs, stats
 
     def step(self, actions):
-        self.env.step([{"blue": screen_order(a, self.champion(i), self.frame),
-                        "red": {"t": "noop"}} for i, a in enumerate(actions)])
+        lines = []
+        for i in range(self.n_envs):
+            cmds = {TEAM_KEY[t]: screen_order(actions[i * self.T + k], self.champion(i, t), self.frames[t])
+                    for k, t in enumerate(self.teams)}
+            for t in (0, 1):
+                cmds.setdefault(TEAM_KEY[t], {"t": "noop"})
+            lines.append(cmds)
+        self.env.step(lines)
         self._rank()
-        return np.asarray([o["t"] >= self.episode_s * 1000 for o in self.env.last_obs])
+        done = np.asarray([o["t"] >= self.episode_s * 1000 for o in self.env.last_obs])
+        return np.repeat(done, self.T)
 
     def restart_done(self, done):
-        for i in np.flatnonzero(done):
+        envs = sorted({int(a) // self.T for a in np.flatnonzero(done)})
+        for i in envs:
             # Fresh process preserves runes; the legacy in-process reset does not.
-            self.episodes[i] += 1
             self.env.handles[i].close()
             h = self.env._default_factory(int(i), self.env.ports[i])
             self.env.handles[i] = h
@@ -236,19 +338,21 @@ class ServerCollector:
             self.rebuilders[i] = StateRebuilder()
             self.detectors[i] = CastFreezeDetector()
             validate_champion_life(self.env.last_obs[i])
-            me = self.champion(i)
-            stats = tuple(me[k] for k in ("mhp", "ad", "ar", "mr"))
-            if stats != self.initial_stats[i]:
-                raise RuntimeError(f"reset changed initial HUD stats: {stats} vs {self.initial_stats[i]}")
+            for k, t in enumerate(self.teams):
+                a = i * self.T + k
+                self.episodes[a] += 1
+                stats = self._hud_stats(i, t)
+                if stats != self.initial_stats[a]:
+                    raise RuntimeError(f"reset changed initial HUD stats: {stats} vs {self.initial_stats[a]}")
         self._rank()
-        self._prepare(np.flatnonzero(done))
+        self._prepare(envs)
 
     def close(self):
         self.env.close()
 
 
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
-                        save_updates=()):
+                        save_updates=(), n_minibatches=1, resume=None, ckpt_every=10):
     """Train either farming collector with exactly the same PPO/reward loop.
 
     Collectors provide n, episodes, observe(), step(actions), restart_done(),
@@ -265,6 +369,19 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
         tx, loss = make_learner(policy, cfg)
         opt_state = tx.init(params)
+        start_update = 0
+        if resume is not None:
+            # Exact continuation of another run's latest checkpoint: params,
+            # optimizer moments and the step counter; the RNG is folded with
+            # the resumed update so the action stream does not restart.
+            from flax.serialization import from_state_dict, msgpack_restore
+            payload = msgpack_restore(Path(resume).read_bytes())
+            params = from_state_dict(params, payload["params"])
+            opt_state = from_state_dict(opt_state, payload["opt_state"])
+            start_update = int(payload["step"]) // (collector.n * rollout)
+            rng = jax.random.fold_in(rng, start_update)
+            run.set_results(resumed_from=str(resume), resumed_update=start_update)
+            print(f"resumed {resume} at update {start_update}", flush=True)
         @jax.jit
         def act(params, obs, key):
             logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
@@ -273,12 +390,12 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         @jax.jit
         def update(params, opt_state, batch, key):
             return kl_stopped_epochs(lambda q, b: loss(q, b, cfg), tx, params,
-                opt_state, batch, key, epochs=cfg.epochs, n_minibatches=1,
+                opt_state, batch, key, epochs=cfg.epochs, n_minibatches=n_minibatches,
                 target_kl=cfg.target_kl, max_grad_norm=cfg.max_grad_norm)
         initial = jax.tree.map(lambda x: np.asarray(x).copy(), params)
         from flax.serialization import to_bytes
         (run.path / "initial.msgpack").write_bytes(to_bytes({"params": params}))
-        for u in range(updates):
+        for u in range(start_update, updates):
             rows, values, rewards, dones, reward_terms = [], [], [], [], []
             sampled_buttons = np.zeros(len(BUTTONS), dtype=np.int64)
             sampled_r_unranked = 0
@@ -336,7 +453,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                 metrics["reward_" + name] = float(jnp.stack([r[name] for r in reward_terms]).mean())
             run.log(metrics)
             print(json.dumps(metrics), flush=True)
-            if (u + 1) % 10 == 0 or u + 1 == updates or u + 1 in save_updates:
+            if (u + 1) % ckpt_every == 0 or u + 1 == updates or u + 1 in save_updates:
                 saved = run.save(step, u + 1, {"params": params, "opt_state": opt_state, "step": step})
                 if u + 1 in save_updates:
                     # RunDir rotates ordinary checkpoints. Explicit budget
@@ -356,6 +473,61 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         raise
     finally:
         collector.close()
+
+
+def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1):
+    """Frozen-policy episodes through the training collector itself.
+
+    Same observation encoding, same sampling, same server binary as training;
+    no learner. Each agent row's completed episodes are logged with CS and
+    deaths. Returns the per-episode records.
+    """
+    rng = jax.random.key(seed)
+    @jax.jit
+    def act(params, obs, key):
+        logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
+        action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
+        return action
+    obs, stats = collector.observe()
+    deaths = np.zeros(collector.n, np.int64)
+    records = []
+    done_count = np.zeros(collector.n, np.int64)
+    steps = 0
+    started = time.monotonic()
+    try:
+        while (done_count < episodes_per_env).any():
+            rng, key = jax.random.split(rng)
+            host_actions = np.stack(jax.device_get(act(params, obs, key)), axis=-1)
+            done = collector.step(host_actions)
+            next_obs, next_stats = collector.observe()
+            deaths += (stats[:, 1].astype(bool) & ~next_stats[:, 1].astype(bool))
+            steps += 1
+            for i in np.flatnonzero(done):
+                rec = {"agent": int(i), "env": int(i) // collector.T,
+                       "team": collector.teams[int(i) % collector.T],
+                       "episode": collector.episodes[i], "cs": float(next_stats[i, 0]),
+                       "deaths": int(deaths[i]), "wall_s": time.monotonic() - started}
+                records.append(rec); run.log(rec); print(json.dumps(rec), flush=True)
+                deaths[i] = 0
+                done_count[i] += 1
+            if done.any():
+                collector.restart_done(done)
+                next_obs, next_stats = collector.observe()
+            obs, stats = next_obs, next_stats
+        by_team = {}
+        for r in records:
+            by_team.setdefault(str(r["team"]), []).append(r["cs"])
+        summary = {t: {"n": len(v), "mean_cs": float(np.mean(v)), "median_cs": float(np.median(v)),
+                       "min_cs": float(np.min(v)), "max_cs": float(np.max(v))} for t, v in by_team.items()}
+        run.set_results(status="complete", evaluation=summary, episodes=records,
+                        decisions=int(steps * collector.n), wall_s=time.monotonic() - started)
+        print(json.dumps(summary), flush=True)
+    except BaseException as exc:
+        run.set_results(status="failed", error=repr(exc))
+        raise
+    finally:
+        collector.close()
+    return records
 
 
 def snapshot_farming_source(run, command):
@@ -382,6 +554,16 @@ def main():
     p.add_argument("--episode-s", type=float, default=600.)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--lr", type=float, default=1e-5)
+    p.add_argument("--critic-lr", type=float, default=None, help="defaults to --lr")
+    p.add_argument("--entropy-coef", type=float, default=PPOConfig().entropy_coef)
+    p.add_argument("--epochs", type=int, default=PPOConfig().epochs)
+    p.add_argument("--minibatches", type=int, default=1)
+    p.add_argument("--opponent", choices=("idle", "mirror"), default="idle",
+                   help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions")
+    p.add_argument("--resume", type=Path, default=None, help="ckpt_latest.msgpack of a compatible run")
+    p.add_argument("--ckpt-every", type=int, default=10)
+    p.add_argument("--eval-episodes", type=int, default=0,
+                   help="evaluate the --resume checkpoint frozen for this many episodes per env; no learning")
     p.add_argument("--start-near-wave", action="store_true")
     p.add_argument("--step-ticks", type=int, default=2)
     p.add_argument("--server-dir", type=Path)
@@ -394,14 +576,22 @@ def main():
         p.error("envs, rollout, updates, episode-s and step-ticks must be positive")
     if args.start_near_wave and args.episode_s <= WAVE_START_MS / 1000:
         p.error('wave-start episodes must end after 120 game seconds')
-    cfg = PPOConfig(lr=args.lr, critic_lr=args.lr, decision_hz=60. / args.step_ticks,
+    if (args.envs * (2 if args.opponent == "mirror" else 1) * args.rollout) % args.minibatches:
+        p.error("minibatches must divide envs x agents x rollout")
+    cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,
+                    entropy_coef=args.entropy_coef, epochs=args.epochs,
+                    decision_hz=60. / args.step_ticks,
                     gae_lambda=PPOConfig().gae_lambda ** (args.step_ticks / 2.))
+    # The rollout/recompute likelihood check compares per-step and batched
+    # forward passes; TF32 matmuls on the GPU would fail its 2e-5 tolerance.
+    jax.config.update("jax_default_matmul_precision", "highest")
     policy = LanePolicy(PolicyConfig())
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.server_train', *sys.argv[1:]])
     run = RunDir(args.out, f"server-farm-s{args.seed}", {"train": {"policy": policy.cfg._asdict()},
         "command": command, "cwd": str(Path.cwd()),
         "ppo": cfg._asdict(), "collector": vars(args), "environment": "source-server",
-        "observation": "viewport+server-fog+structured-HUD", "opponent": "idle-fountain",
+        "observation": "viewport+server-fog+structured-HUD",
+        "opponent": "idle-fountain" if args.opponent == "idle" else "mirror-self-play",
         "reward": "CS - 2*death + 5*(gamma*terminal_zero_lane_potential_next - potential)",
         "initialization": "random; no prior"})
     snapshot_farming_source(run, command)
@@ -421,13 +611,27 @@ def main():
     run.write()
     try:
         collector = ServerCollector(args.envs, run.path, args.port_base, args.episode_s,
-                                    args.start_near_wave, args.step_ticks, args.server_dir)
+                                    args.start_near_wave, args.step_ticks, args.server_dir,
+                                    teams=(0,) if args.opponent == "idle" else (0, 1))
     except BaseException as exc:
         run.set_results(status='failed', error=repr(exc))
         raise
+    if args.eval_episodes:
+        from flax.serialization import from_state_dict, msgpack_restore
+        obs0, _ = collector.observe()
+        params = policy.init(jax.random.key(args.seed), obs0.entities, obs0.entity_pad_mask,
+                             obs0.self_vec, obs0.global_vec)
+        if args.resume is not None:
+            params = from_state_dict(params, msgpack_restore(Path(args.resume).read_bytes())["params"])
+        run.set_results(evaluated_checkpoint=str(args.resume) if args.resume else "random",
+                        checkpoint_sha256=file_sha256(args.resume) if args.resume else None)
+        evaluate_frozen(collector, policy, params, run, seed=args.seed,
+                        episodes_per_env=args.eval_episodes)
+        return
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
-                        save_updates=args.save_updates)
+                        save_updates=args.save_updates, n_minibatches=args.minibatches,
+                        resume=args.resume, ckpt_every=args.ckpt_every)
 
 
 if __name__ == "__main__":
