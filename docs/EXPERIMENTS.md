@@ -15,4 +15,8 @@ labelled `train`.
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
 
-Frozen evaluations (the only numbers that count for the gate): none yet.
+Frozen evaluations (the only numbers that count for the gate):
+
+| Eval dir (`runs/EVAL/`) | Checkpoint | Task | Episodes | Blue CS (mean / median / min-max) | Red CS | Deaths | Verdict |
+|---|---|---|---|---|---|---|---|
+| `server-farm-s0-20260925-202409-047737a5` | E01 seed 0, update 760 (`eval_u760.msgpack`) | mirror, near-wave, 600 s, 10 Hz, sampled | 5 envs x 1 | 19.4 / 20 / 11-27 | 16.0 / 12 / 11-29 | 0-2 per agent | below the 30-CS gate; keep training |

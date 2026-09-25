@@ -30,8 +30,12 @@ server target for BLUE and RED, raw and through the grid + lane frame, at
 quantisation exceeds the minion's collision radius; attack-move auto-acquire
 covers that range. Verdict: the click interface is implemented correctly.
 
+**First frozen evaluation (update 760, 5 mirror episodes, 20:28 UTC):** blue
+mean 19.4 CS (11-27), red mean 16.0 (11-29), 0-2 deaths each. Below the 30
+gate; the run continues (train CS ~21 mean, 34 max).
+
 **Next:**
-1. Frozen evaluation of `mirror-wave-s0` at its next checkpoint, 5 episodes.
+1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).
 3. Multi-process collector (`--workers N`, `MultiProcessCollector`) is
    implemented and smoke-tested: 12 envs mirror, workers=1 vs 3 gave the same
    ~770 decisions/s on 6 cores while E01 held 8 cores -- the desktop is
