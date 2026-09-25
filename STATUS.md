@@ -32,7 +32,10 @@ covers that range. Verdict: the click interface is implemented correctly.
 
 **First frozen evaluation (update 760, 5 mirror episodes, 20:28 UTC):** blue
 mean 19.4 CS (11-27), red mean 16.0 (11-29), 0-2 deaths each. Below the 30
-gate; the run continues (train CS ~21 mean, 34 max).
+gate. Update 1080: blue 14.2 (5-22), red 21.0. Train CS has been FLAT at
+16-18 per episode since about update 500: the run has plateaued at half the
+gate. Diagnosis in progress (button mix, deaths, reward terms) before any
+hyper-parameter change.
 
 **Next:**
 1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).

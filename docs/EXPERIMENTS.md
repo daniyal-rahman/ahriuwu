@@ -20,3 +20,4 @@ Frozen evaluations (the only numbers that count for the gate):
 | Eval dir (`runs/EVAL/`) | Checkpoint | Task | Episodes | Blue CS (mean / median / min-max) | Red CS | Deaths | Verdict |
 |---|---|---|---|---|---|---|---|
 | `server-farm-s0-20260925-202409-047737a5` | E01 seed 0, update 760 (`eval_u760.msgpack`) | mirror, near-wave, 600 s, 10 Hz, sampled | 5 envs x 1 | 19.4 / 20 / 11-27 | 16.0 / 12 / 11-29 | 0-2 per agent | below the 30-CS gate; keep training |
+| `EVAL/eval_u1080.out` | E01 seed 0, update 1080 | same | 5 envs x 1 | 14.2 / 13 / 5-22 | 21.0 / - / - | - | no improvement over u760; train CS flat at 16-18 since ~u500 |
