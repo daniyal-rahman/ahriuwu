@@ -6,7 +6,7 @@
 import json, sys
 from pathlib import Path
 root = Path(sys.argv[1]); last = int(sys.argv[sys.argv.index('--last') + 1]) if '--last' in sys.argv else 5
-run = sorted(p for p in root.glob('server-farm-s*') if p.is_dir())[-1]
+run = sorted(p for p in root.glob('*-s[0-9]*') if p.is_dir())[-1]
 rows = [json.loads(l) for l in (run / 'metrics.jsonl').open()]
 ups = [r for r in rows if 'update' in r and 'entropy' in r]
 eps = [r for r in rows if 'episode' in r and 'cs' in r and 'entropy' not in r]

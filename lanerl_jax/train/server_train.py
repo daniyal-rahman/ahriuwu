@@ -294,7 +294,14 @@ class ServerCollector:
             result = self.env._collect(list(pending))
             if result.died:
                 raise RuntimeError(f'skill progression lost a server: {result.died}')
-        raise RuntimeError("skill progression failed to settle")
+        # Not settled after 18 tries: record who is stuck and carry on; the
+        # pending rank is retried on every later step. Raising here killed
+        # the first two mirror runs (a dead champion, then an unknown case).
+        with (self.out / 'rank_warnings.jsonl').open('a') as f:
+            f.write(json.dumps({'t': [o['t'] for o in self.env.last_obs],
+                'champions': [{k: self.champion(i, t).get(k) for k in ('tm', 'lvl', 'sl', 'dead', 'hp', 'xp', 'rc')}
+                              for i in pending for t in self.teams],
+                'pending': {int(i): c for i, c in pending.items()}}) + '\n')
 
     def champion(self, i, team=0):
         return next(u for u in self.env.last_obs[i]["u"]
