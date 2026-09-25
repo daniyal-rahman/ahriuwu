@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-25 16:45 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-25 17:05 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
@@ -40,12 +40,13 @@ covers that range. Verdict: the click interface is implemented correctly.
 logged basic-attack completions in a 20-CS episode); `trainer.py` still has
 the PPO-15 bias; ENT-02 vs AA-007 (retarget mid-windup) unmeasured.
 
-**Needs Dani's approval (irreversible):** delete branches `bronze`,
-`eval-results-jan12`, `report/2026-09-02`, `t3code/4b6bc7fc` (all tagged
-`archive/*` now); remove the 8 frozen worktrees
-`/srv/nfs/projects/ahriuwu-*-20260925` (1.3 GB; source is in each run's
-`source.tar.gz`); delete superseded server builds `HudProbe`, `ScreenClick`,
-`Release`.
+**Approved and done 2026-09-25:** branches `bronze`, `eval-results-jan12`,
+`report/2026-09-02`, `lane-rl/spike`, `t3code/4b6bc7fc` and the agent
+worktree branch deleted (tags `archive/*` pushed to origin); the eight
+frozen `ahriuwu-*-20260925` worktrees and `_deprecated/ahriuwu-lanerl`
+removed; server builds `HudProbe`, `ScreenClick` deleted and `Release`
+replaced by a symlink to `DeadProbe`. Remaining branches: `main`,
+`lane-rl/jax` (active), `t3code/9283ee84` (another T3 thread's worktree).
 
 Rules: whoever starts or stops a run edits this file in the same commit.
 History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.

@@ -15,10 +15,8 @@ on 2026-09-25) and compiled into the canonical build. They stack in this order.
 
 | Build | Status | Contents |
 |---|---|---|
-| `DeadProbe/net6.0` | **CANONICAL** (all training and evaluation) | all five patches |
-| `HudProbe/net6.0` | superseded | through the HUD patch |
-| `ScreenClick/net6.0` | superseded | through click v1 |
-| `Release/net6.0` | superseded | pre-HUD click v2 |
+| `DeadProbe/net6.0` | **CANONICAL** (all training and evaluation; `lanerl_train.paths.server_dir()`) | all five patches |
+| `Release/net6.0` | symlink to `DeadProbe` (2026-09-25) | keeps legacy scripts resolving |
 | `Trace/net6.0` | diagnostic only | 2026-09-22 build with `LANERL_SHUFFLE_ORDER` for parity floors; predates all five patches |
 
-Deleting the superseded builds is irreversible and needs Dani's approval.
+`HudProbe` and `ScreenClick` were deleted on 2026-09-25 with Dani's approval.
