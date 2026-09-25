@@ -5,8 +5,7 @@ No environment initialization, dynamics, routing, or server I/O lives here.
 import jax
 import optax
 from .policy import VALUE_HEAD_NAME
-from .ppo import (factored_log_prob, factored_entropy, expected_screen_usage,
-                  policy_loss, value_loss)
+from .ppo import (factored_log_prob, _entropy, policy_loss, value_loss)
 
 
 def make_learner(policy, ppo):
@@ -34,12 +33,17 @@ def make_learner(policy, ppo):
                               batch["self"], batch["global"])
         lg = (logits.button, logits.screen_x, logits.screen_y)
         # The SAME per-sample head masks the rollout computed its log-prob
-        # under (`PPO-14`); the entropy's expected usage reads the stored
-        # three-head screen usage (`ppo.expected_screen_usage`).
+        # under (`PPO-14`).
         log_prob = factored_log_prob(lg, batch["action"], batch["uses_screen"],
                                      batch["uses_target"])
-        entropy = factored_entropy(
-            lg, expected_screen_usage(logits.button)).mean()
+        # UNCONDITIONAL per-head entropy, H_b + H_x + H_y. The usage-weighted
+        # form H_b + p_screen*(H_x+H_y) hands every coordinate button a
+        # +0.67-nat gradient and every other button -0.40 at uniform logits
+        # (`runs/entropy_audit_20260925`), so at entropy_coef 0.01 both
+        # 2026-09-25 source runs converged in ~150 updates to move/attack_move/R
+        # at 1/3 each with uniform clicks, and CS fell below the random
+        # baseline (`PPO-15`). With independent heads no button is favoured.
+        entropy = (_entropy(lg[0]) + _entropy(lg[1]) + _entropy(lg[2])).mean()
         pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy

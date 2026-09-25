@@ -64,12 +64,17 @@ def screen_order(action, champion, frame):
 
 
 def source_farm_stats(champion, potential):
-    """Reward life state comes from the server flag, never its regenerating HP."""
-    return champion["cs"], not champion_dead(champion), float(potential)
+    """(cs, alive, potential, xp). Life state comes from the server flag, never
+    its regenerating HP."""
+    return champion["cs"], not champion_dead(champion), float(potential), float(champion.get("xp", 0.))
+
+
+XP_WEIGHT = 0.005   # melee 77 xp -> 0.385; xp accrues from PROXIMITY to a dying minion
 
 
 def farm_reward(cs_before, cs_after, alive_before, alive_after,
-                potential_before, potential_after, done=None, gamma=None):
+                potential_before, potential_after, done=None, gamma=None,
+                xp_before=None, xp_after=None):
     """Explicit task reward, shared by the matched JAX collector.
 
     +1 per CS, -2 per death, plus lane-approach potential shaping
@@ -90,7 +95,11 @@ def farm_reward(cs_before, cs_after, alive_before, alive_after,
     cs = cs_after - cs_before
     death = -2. * (alive_before & ~alive_after)
     shaping = 5. * (potential_after - potential_before)
-    return cs + death + shaping, {"cs": cs, "death": death, "approach": shaping}
+    # Experience is the dense half of farming: it is paid for standing near a
+    # minion when it dies, killing blow or not, so it supplies the "be at the
+    # wave while it dies" gradient the +1 CS term alone does not.
+    xp = (XP_WEIGHT * (xp_after - xp_before)) if xp_after is not None else jnp.zeros_like(cs)
+    return cs + death + shaping + xp, {"cs": cs, "death": death, "approach": shaping, "xp": xp}
 
 
 WAVE_START_MS = 120_000
@@ -421,9 +430,10 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                     & (collector.spell_ranks()[:, 3] == 0)))
                 done = collector.step(host_actions)
                 next_obs, next_stats = collector.observe()
+                xp = (stats[:, 3], next_stats[:, 3]) if stats.shape[1] > 3 else (None, None)
                 reward, terms = farm_reward(stats[:, 0], next_stats[:, 0],
                     stats[:, 1].astype(bool), next_stats[:, 1].astype(bool),
-                    stats[:, 2], next_stats[:, 2], done, cfg.gamma)
+                    stats[:, 2], next_stats[:, 2], done, cfg.gamma, *xp)
                 rows.append({"entities": obs.entities, "mask": obs.entity_pad_mask,
                     "self": obs.self_vec, "global": obs.global_vec, "action": action,
                     "log_prob": lp, "uses_screen": usage[0], "uses_target": usage[1], "value": value})
@@ -608,7 +618,7 @@ def main():
         "ppo": cfg._asdict(), "collector": vars(args), "environment": "source-server",
         "observation": "viewport+server-fog+structured-HUD",
         "opponent": "idle-fountain" if args.opponent == "idle" else "mirror-self-play",
-        "reward": "CS - 2*death + 5*(gamma*terminal_zero_lane_potential_next - potential)",
+        "reward": "CS - 2*death + 5*(lane_potential_next - potential) + 0.005*xp",
         "initialization": "random; no prior"})
     snapshot_farming_source(run, command)
     vendor = server_paths.server_dir().parents[3]

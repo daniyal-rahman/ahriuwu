@@ -34,18 +34,23 @@ from .actions import orders_from
 from .policy import PolicyConfig
 from .ppo import PPOConfig
 from .reward import lane_corridor_distance
-from .server_train import WAVE_START_MS, WAVE_START_POS, farm_reward
+from .server_train import WAVE_START_MS, WAVE_START_POS, RED_WAVE_START_POS, farm_reward
+from ..parity.policy_driver import _lane_frames
 
 GROUND_CLICK_NORMALIZATION = 'raw-screen-projection; environment-terrain-exit; no-decoder-EDT'
 
 
-def validate_wave_start(state):
+WAVE_START = {0: (WAVE_START_POS, 100.), 1: (RED_WAVE_START_POS, 250.)}
+
+
+def validate_wave_start(state, team=0):
     """Check actual reset trajectory outcome, without repairing its state."""
-    position = np.array([state.x[0], state.y[0]])
-    if not bool(state.alive[0]) or int(state.deaths[0]) or int(state.cs[0]):
+    goal, tol = WAVE_START[team]
+    position = np.array([state.x[team], state.y[team]])
+    if not bool(state.alive[team]) or int(state.deaths[team]) or int(state.cs[team]):
         raise RuntimeError('wave-start setup died or farmed before policy control')
-    if np.linalg.norm(position - WAVE_START_POS) > 100:
-        raise RuntimeError(f'wave-start setup missed {WAVE_START_POS}: {position.tolist()}')
+    if np.linalg.norm(position - goal) > tol:
+        raise RuntimeError(f'wave-start setup missed {goal}: {position.tolist()}')
     if float(state.t_ms) < WAVE_START_MS:
         raise RuntimeError('wave-start setup returned before 120 game seconds')
 
@@ -59,7 +64,7 @@ class JaxFarmCollector:
     ``states`` is privileged diagnostic state and is never an actor input.
     """
     def __init__(self, n, out, episode_s=600., start_near_wave=False, step_ticks=2,
-                 *, seed=0, sim_config=None, batch_mode="auto"):
+                 *, seed=0, sim_config=None, batch_mode="auto", teams=(0,)):
         if n <= 0 or episode_s <= 0 or step_ticks <= 0 or int(step_ticks) != step_ticks:
             raise ValueError('n, episode_s and integer step_ticks must be positive')
         if start_near_wave and episode_s * 1000 <= WAVE_START_MS:
@@ -72,7 +77,11 @@ class JaxFarmCollector:
             raise ValueError('batch_mode must be auto, map or vmap')
         self.platform = jax.default_backend()
         self.batch_mode = ('map' if self.platform == 'cpu' else 'vmap') if batch_mode == 'auto' else batch_mode
-        self.n, self.out, self.episode_s = int(n), Path(out), float(episode_s)
+        # Agent rows are env-major then team, exactly as ServerCollector.
+        self.teams = tuple(int(t) for t in teams)
+        self.T = len(self.teams)
+        self.n_envs, self.out, self.episode_s = int(n), Path(out), float(episode_s)
+        self.n = self.n_envs * self.T
         self.out.mkdir(parents=True, exist_ok=True)
         self.seed, self.start_near_wave = int(seed), bool(start_near_wave)
         self.sim = (SimConfig.training() if sim_config is None else sim_config).replace(
@@ -90,14 +99,18 @@ class JaxFarmCollector:
         self.last_orders = None  # Privileged replay diagnostic, never an actor input.
         self.frame = make_lane_frame(TOP_OUTER_TURRET[Team.BLUE],
                                      TOP_OUTER_TURRET[Team.RED], (1131.8, 1426.3))
+        self.frames = _lane_frames()
         self.noop = Orders(jnp.array([OrderKind.NOOP]*2, jnp.int8),
                            jnp.zeros(2, jnp.float32), jnp.zeros(2, jnp.float32), jnp.full(2, -1, jnp.int8),
                            clear_target=jnp.zeros(2, bool))
         self._noop_orders = self._batch_orders(self.noop)
-        def decode_one(state, blue_action, model):
+        def decode_one(state, agent_actions, model):
+            # agent_actions: (T, 3). A team without a policy row gets NOOP.
             sim = self._config(model)
-            actions = tuple(jnp.stack([blue_action[i], jnp.int32(
-                BUTTON_INDEX['noop'] if i == 0 else 0)]) for i in range(3))
+            rows = {t: agent_actions[k] for k, t in enumerate(self.teams)}
+            noop = jnp.asarray([BUTTON_INDEX['noop'], 0, 0], jnp.int32)
+            per_team = [rows.get(t, noop) for t in (0, 1)]
+            actions = tuple(jnp.stack([per_team[0][i], per_team[1][i]]) for i in range(3))
             return orders_from(actions, state, None, self.frame,
                                snap_moves=False, params=sim.params, vision=sim.vision)
         self._decode = jax.jit(jax.vmap(decode_one, in_axes=(0, 0, None)))
@@ -114,19 +127,24 @@ class JaxFarmCollector:
                 (states, orders, enabled)))
         else:
             self._step = jax.jit(jax.vmap(step_one, in_axes=(0, 0, 0, None)))
-        self._observe = jax.jit(jax.vmap(lambda s, model: build_observation(
-            s, 0, self.frame, params=model[0], horizon_s=self.episode_s,
-            vision=model[3]), in_axes=(0, None)))
-        self._stats = jax.jit(jax.vmap(lambda s: jnp.stack([
-            s.cs[0].astype(jnp.float32), s.alive[0].astype(jnp.float32),
-            -lane_corridor_distance(s.x[:2], s.y[:2])[0] / 10000.])))
+        def observe_all(s, model):
+            per_team = [build_observation(s, t, self.frames[t], params=model[0],
+                                          horizon_s=self.episode_s, vision=model[3])
+                        for t in self.teams]
+            return jax.tree.map(lambda *x: jnp.stack(x, axis=0), *per_team)   # (T, ...)
+        self._observe = jax.jit(jax.vmap(observe_all, in_axes=(0, None)))
+        def stats_all(s):
+            pot = -lane_corridor_distance(s.x[:2], s.y[:2]) / 10000.
+            return jnp.stack([jnp.stack([s.cs[t].astype(jnp.float32), s.alive[t].astype(jnp.float32),
+                                         pot[t], s.xp[t].astype(jnp.float32)]) for t in self.teams])   # (T, 4)
+        self._stats = jax.jit(jax.vmap(stats_all))
         self.states = jax.tree.map(lambda *a: jnp.stack(a),
-                                   *(self._fresh(i) for i in range(self.n)))
+                                   *(self._fresh(i) for i in range(self.n_envs)))
         self._write_metadata()
-        self._initialize(np.ones(self.n, bool))
+        self._initialize(np.ones(self.n_envs, bool))
 
     def _batch_orders(self, orders):
-        return jax.tree.map(lambda a: jnp.broadcast_to(a, (self.n,) + a.shape), orders)
+        return jax.tree.map(lambda a: jnp.broadcast_to(a, (self.n_envs,) + a.shape), orders)
 
     def _step_states(self, states, orders, enabled):
         # The simulation uses explicit float32 even when reference tests enable
@@ -167,7 +185,7 @@ class JaxFarmCollector:
 
     def _fresh(self, i):
         # Separate deterministic streams; episode reset preserves all base stats.
-        return init_lane(seed=self.seed + i + self.n * self.episodes[i])
+        return init_lane(seed=self.seed + i + self.n_envs * self.episodes[i * self.T])
 
     def _rank_time(self, previous_ranks):
         """Account for rank-command time only in environments with pending ranks.
@@ -175,14 +193,15 @@ class JaxFarmCollector:
         JAX has already applied ranks in the preceding tick. This is timing
         accounting, not exact source spell-rank event ordering.
         """
-        pending = np.maximum(np.asarray(self.states.spell_level[:, 0]) - previous_ranks, 0).sum(axis=1)
+        ts = list(self.teams)
+        pending = np.maximum(np.asarray(self.states.spell_level[:, ts]) - previous_ranks, 0).sum(axis=(1, 2))
         for _ in range(18):
             if not np.any(pending):
                 return
-            before = np.asarray(self.states.spell_level[:, 0])
+            before = np.asarray(self.states.spell_level[:, ts])
             self.states = self._step_states(self.states, self._noop_orders, pending > 0)
             self.rank_decisions += 1
-            gained = np.maximum(np.asarray(self.states.spell_level[:, 0]) - before, 0).sum(axis=1)
+            gained = np.maximum(np.asarray(self.states.spell_level[:, ts]) - before, 0).sum(axis=(1, 2))
             pending = np.maximum(pending - 1, 0) + gained
         raise RuntimeError('automatic skill progression failed to settle')
 
@@ -195,19 +214,21 @@ class JaxFarmCollector:
             self._prepare(mask)
 
     def _prepare(self, mask):
-        move = Orders(jnp.array([OrderKind.MOVE, OrderKind.NOOP], jnp.int8),
-                      jnp.array([WAVE_START_POS[0], 0.], jnp.float32),
-                      jnp.array([WAVE_START_POS[1], 0.], jnp.float32), jnp.full(2, -1, jnp.int8),
-                      clear_target=jnp.zeros(2, bool))
+        red = 1 in self.teams
+        move = Orders(jnp.array([OrderKind.MOVE, OrderKind.MOVE if red else OrderKind.NOOP], jnp.int8),
+                      jnp.array([WAVE_START_POS[0], RED_WAVE_START_POS[0] if red else 0.], jnp.float32),
+                      jnp.array([WAVE_START_POS[1], RED_WAVE_START_POS[1] if red else 0.], jnp.float32),
+                      jnp.full(2, -1, jnp.int8), clear_target=jnp.zeros(2, bool))
         # Reuse the policy dynamics executable during setup. A separate JIT
         # around this loop would compile the full routing graph a second time.
         self.states = self._step_states(self.states, self._batch_orders(move), mask)
         max_decisions = int(np.ceil(WAVE_START_MS / (self.sim.step_ticks * self.sim.delta_ms))) + 1
         started = time.monotonic()
         for count in range(max_decisions):
-            failed = mask & ((~np.asarray(self.states.alive[:, 0]))
-                            | (np.asarray(self.states.deaths[:, 0]) > 0)
-                            | (np.asarray(self.states.cs[:, 0]) != 0))
+            ts = list(self.teams)
+            failed = mask & ((~np.asarray(self.states.alive[:, ts])).any(axis=1)
+                            | (np.asarray(self.states.deaths[:, ts]) > 0).any(axis=1)
+                            | (np.asarray(self.states.cs[:, ts]) != 0).any(axis=1))
             if failed.any():
                 break
             active = mask & (np.asarray(self.states.t_ms) < WAVE_START_MS)
@@ -219,22 +240,26 @@ class JaxFarmCollector:
         for i in np.flatnonzero(mask):
             state = jax.tree.map(lambda a: a[i], self.states)
             with (self.out / 'setup.jsonl').open('a') as f:
-                f.write(json.dumps({'env': int(i), 'episode': self.episodes[i],
-                    't_ms': float(state.t_ms), 'x': float(state.x[0]), 'y': float(state.y[0]),
-                    'cs': int(state.cs[0]), 'deaths': int(state.deaths[0]),
-                    'alive': bool(state.alive[0]), 'goal': WAVE_START_POS,
+                f.write(json.dumps({'env': int(i), 'episode': self.episodes[i * self.T],
+                    't_ms': float(state.t_ms),
+                    'champions': [{'team': t, 'x': float(state.x[t]), 'y': float(state.y[t]),
+                                   'cs': int(state.cs[t]), 'deaths': int(state.deaths[t]),
+                                   'alive': bool(state.alive[t]), 'goal': WAVE_START[t][0]}
+                                  for t in self.teams],
                     'setup': 'one routed move then idle; no teleports'}) + '\n')
-            validate_wave_start(state)
+            for t in self.teams:
+                validate_wave_start(state, t)
 
     def _write_metadata(self):
         data = {'environment': 'jax-experimental-farming', 'seed': self.seed,
-                'n': self.n, 'episode_s': self.episode_s, 'start_near_wave': self.start_near_wave,
+                'n': self.n, 'envs': self.n_envs, 'teams': list(self.teams),
+                'episode_s': self.episode_s, 'start_near_wave': self.start_near_wave,
                 'platform': self.platform, 'batch_mode': self.batch_mode,
                 'ground_click_normalization': GROUND_CLICK_NORMALIZATION,
                 'sim': self.sim.describe(), 'sim_fingerprint': self.sim.fingerprint(),
                 'compilation_cache': jax.config.jax_compilation_cache_dir,
                 'action_interface': 'screen-click-v2', 'observation_interface': 'viewport-structured-v3',
-                'opponent': 'idle red fountain', 'items': 'none',
+                'opponent': 'mirror self-play' if 1 in self.teams else 'idle red fountain', 'items': 'none',
                 'rank_timing': 'native within-tick ranks; extra per-environment NOOP decisions after policy level gains',
                 'warmup_rank_timing': 'native automatic ranks; no extra decision per warmup rank',
                 'reset_timing': 'only reset environments advance during initial rank and warmup',
@@ -243,13 +268,15 @@ class JaxFarmCollector:
 
     def observe(self):
         self._check_open()
-        return (self._call('observe', self._observe, self.states, self._model),
-                np.asarray(self._call('stats', self._stats, self.states)))
+        obs = self._call('observe', self._observe, self.states, self._model)   # (n_envs, T, ...)
+        obs = jax.tree.map(lambda x: x.reshape((self.n,) + x.shape[2:]), obs)
+        stats = np.asarray(self._call('stats', self._stats, self.states)).reshape(self.n, 4)
+        return obs, stats
 
     def spell_ranks(self):
-        """Own blue HUD ranks for diagnostics; never expose opponent ranks."""
+        """Own HUD ranks per agent row for diagnostics; never an actor input."""
         self._check_open()
-        return np.asarray(self.states.spell_level[:, 0])
+        return np.asarray(self.states.spell_level[:, list(self.teams)]).reshape(self.n, 4)
 
     def step(self, actions):
         self._check_open()
@@ -259,25 +286,30 @@ class JaxFarmCollector:
         limits = np.array([len(BUTTONS), len(SCREEN_X_VALUES), len(SCREEN_Y_VALUES)])
         if np.any(actions < 0) or np.any(actions >= limits):
             raise ValueError('action outside screen-click-v2 grid')
-        ranks = np.asarray(self.states.spell_level[:, 0])
-        orders = self._call('decode', self._decode, self.states, jnp.asarray(actions), self._model)
+        ranks = np.asarray(self.states.spell_level[:, list(self.teams)])
+        orders = self._call('decode', self._decode, self.states,
+                            jnp.asarray(actions).reshape(self.n_envs, self.T, 3), self._model)
         self.last_orders = orders
-        self.states = self._step_states(self.states, orders, np.ones(self.n, bool))
+        self.states = self._step_states(self.states, orders, np.ones(self.n_envs, bool))
         self._rank_time(ranks)
-        return np.asarray(self.states.t_ms >= self.episode_s * 1000.)
+        return np.repeat(np.asarray(self.states.t_ms >= self.episode_s * 1000.), self.T)
 
     def restart_done(self, done):
         self._check_open()
         done = np.asarray(done, bool)
         if done.shape != (self.n,):
-            raise ValueError('done must have one entry per environment')
+            raise ValueError('done must have one entry per agent row')
         if not done.any():
             return
-        for i in np.flatnonzero(done):
-            self.episodes[i] += 1
+        envs = np.zeros(self.n_envs, bool)
+        for a in np.flatnonzero(done):
+            envs[int(a) // self.T] = True
+        for i in np.flatnonzero(envs):
+            for k in range(self.T):
+                self.episodes[i * self.T + k] += 1
             fresh = self._fresh(i)
             self.states = jax.tree.map(lambda a, b: a.at[i].set(b), self.states, fresh)
-        self._initialize(done)
+        self._initialize(envs)
 
     def _check_open(self):
         if self.closed:
