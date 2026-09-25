@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-25 16:35 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-25 16:45 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
@@ -23,13 +23,15 @@ aborts; red setup route legged in both engines; legacy code moved to
 **Screen-click verified on the live server (probe 1, `lanerl_jax/probes/screen_click_probe.py`):**
 a click cell is 30 x 36 world units at screen centre (smaller than a minion);
 attack-move clicks on a minion acquired it; ground clicks land within
-quantisation (7-22 u) and the champion arrives within 1 u. NOT working: a
-plain right-click (`move`) on a hostile minion never set a target, although
-`screen-click-v2` says it should. Probe 2 (raw clicks, both sides) running.
+quantisation (7-22 u) and the champion arrives within 1 u. Probe 2
+(`screen_click_probe2.py`): right-click and attack-move on a minion set the
+server target for BLUE and RED, raw and through the grid + lane frame, at
+65-685 u. Probe 1's right-click misses were at 600-1000 u where cell
+quantisation exceeds the minion's collision radius; attack-move auto-acquire
+covers that range. Verdict: the click interface is implemented correctly.
 
 **Next:**
-1. Settle the right-click result; fix the patch or the projection if needed.
-2. Frozen evaluation of `mirror-wave-s0` at its next checkpoint, 5 episodes.
+1. Frozen evaluation of `mirror-wave-s0` at its next checkpoint, 5 episodes.
 3. If train CS plateaus below 30: adopt the process-parallel collector
    (`lanerl_train/procactor.py`, 4,829 dec/s at 96 servers) into
    `server_train.py` and run 3 seeds.
