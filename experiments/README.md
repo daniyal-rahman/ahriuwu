@@ -18,4 +18,6 @@ Rules:
 |---|---|---|---|
 | E01_mirror_wave | mirror self-play from the near-wave start: does PPO from scratch learn to farm? | 21700 | C# |
 | E02_idle_wave | same learner, idle opponent: cleanest learner check | 21900 | C# |
-| (next) | | 22100 | |
+| E03_mirror_wave_lr1e-4 | E01 continued from update 1120 at lr 1e-4: is the plateau a step-size problem? | 22100 | C# |
+| EVAL_frozen | frozen-policy evaluation of any checkpoint | 22500 | C# |
+| (next) | | 22700 | |

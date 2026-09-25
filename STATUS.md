@@ -34,8 +34,11 @@ covers that range. Verdict: the click interface is implemented correctly.
 mean 19.4 CS (11-27), red mean 16.0 (11-29), 0-2 deaths each. Below the 30
 gate. Update 1080: blue 14.2 (5-22), red 21.0. Train CS has been FLAT at
 16-18 per episode since about update 500: the run has plateaued at half the
-gate. Diagnosis in progress (button mix, deaths, reward terms) before any
-hyper-parameter change.
+gate. Diagnosis: the button mix swings between strategies (E-spin 81% at u460,
+attack-move 38% at u820, Q 63% at u1126) with KL ~1e-2 per update: the
+policy wanders rather than converges. E03 branches E01's state at update 1120
+at lr 1e-4 (6 servers x 256 steps, same batch) on the free cores; E01 keeps
+running as the control.
 
 **Next:**
 1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).
