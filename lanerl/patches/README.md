@@ -10,12 +10,14 @@ on 2026-09-25) and compiled into the canonical build. They stack in this order.
 | `screen-click-v2.patch` | LIVE | ground A-click = AttackMove; right-click on hostile attacks; auto-acquire needs visibility | screen-click-v2 |
 | `server-hud-ability-state.patch` | LIVE | own slot-enabled bits on the wire; disabled key presses ignored | HUD correction |
 | `server-dead-control.patch` | LIVE | authoritative `dead` flag; live-only input rejected while dead | dead-control defect |
+| `screen-click-v3.patch` | LIVE (build `ClickV3`) | ground clicks and Moves onto unwalkable ground resolve to the closest reachable point (`GetClosestTerrainExit`) instead of a straight line into the wall | PATH-011 |
 
 ## Server builds under `GameServerConsole/bin/`
 
 | Build | Status | Contents |
 |---|---|---|
-| `DeadProbe/net6.0` | **CANONICAL** (all training and evaluation; `lanerl_train.paths.server_dir()`) | all five patches |
+| `ClickV3/net6.0` | **CANONICAL** from 2026-09-25 22:00 (E04 onward) | all six patches |
+| `DeadProbe/net6.0` | previous canonical (E01-E03 ran on it) | five patches, no click-v3 |
 | `Release/net6.0` | symlink to `DeadProbe` (2026-09-25) | keeps legacy scripts resolving |
 | `Trace/net6.0` | diagnostic only | 2026-09-22 build with `LANERL_SHUFFLE_ORDER` for parity floors; predates all five patches |
 

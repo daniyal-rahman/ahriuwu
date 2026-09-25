@@ -110,7 +110,7 @@ def vendor_root() -> Path:
 def server_dir() -> Path:
     # DeadProbe carries all five lanerl/patches; bin/Release is a symlink to
     # it (2026-09-25) so legacy scripts keep resolving.
-    return vendor_root() / "LoLServer/GameServerConsole/bin/DeadProbe/net6.0"
+    return vendor_root() / "LoLServer/GameServerConsole/bin/ClickV3/net6.0"
 
 
 def server_binary() -> Path:

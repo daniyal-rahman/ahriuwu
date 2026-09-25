@@ -1,0 +1,41 @@
+--- a/GameServerLib/Lanerl/LanerlControl.cs	2026-09-25 21:55:08.582026768 +0000
++++ b/GameServerLib/Lanerl/LanerlControl.cs	2026-09-25 21:55:08.591026729 +0000
+@@ -354,6 +354,22 @@
+             }
+         }
+ 
++        /// <summary>
++        /// screen-click-v3: a click on unwalkable ground (walls, the map's edge, the void
++        /// past it) means "go to the closest reachable point", as the real client does.
++        /// Before this, GetPath returned null for such points and the fallback below
++        /// walked the champion in a straight line INTO the wall; a trained policy sent
++        /// 46-54% of its movement clicks there and hugged the map edge.
++        /// </summary>
++        private static Vector2 Reachable(Game game, Champion champ, Vector2 point)
++        {
++            var grid = game.Map.NavigationGrid;
++            point.X = Math.Clamp(point.X, grid.MinGridPosition.X, grid.MaxGridPosition.X);
++            point.Y = Math.Clamp(point.Y, grid.MinGridPosition.Z, grid.MaxGridPosition.Z);
++            if (grid.IsWalkable(point, champ.PathfindingRadius)) return point;
++            return grid.GetClosestTerrainExit(point, champ.PathfindingRadius);
++        }
++
+         private void Execute(Game game, Champion champ, LanerlOrder a)
+         {
+             // Keyboard/mouse gameplay cannot act during the death screen.
+@@ -393,6 +409,7 @@
+                         // A-click on ground preserves AttackMove acquisition.
+                         var orderType = a.Button == "attack_move" ? OrderType.AttackMove
+                             : hostile != null ? OrderType.AttackTo : OrderType.MoveTo;
++                        if (hostile == null) point = Reachable(game, champ, point);
+                         List<Vector2> path = null;
+                         try { path = game.Map.PathingHandler.GetPath(champ.Position, point, champ.PathfindingRadius); }
+                         catch { }
+@@ -433,6 +450,7 @@
+                     // MoveTo is what Spell.ChannelCancelCheck uses to cancel a
+                     // recall. A stand-still action must not cancel a recall.
+                     if (goal == champ.Position) return;
++                    goal = Reachable(game, champ, goal);
+                     List<Vector2> path = null;
+                     try { path = game.Map.PathingHandler.GetPath(champ.Position, goal, champ.PathfindingRadius); }
+                     catch { }
