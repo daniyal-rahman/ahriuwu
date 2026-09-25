@@ -4,7 +4,7 @@
 # Writes lanerl_jax/runs/EVAL/<run-name>/ with per-episode CS/deaths per agent.
 set -e
 : "${CKPT:?set CKPT}"; ENVS=${ENVS:-5}; EPISODES=${EPISODES:-1}; OPP=${OPP:-mirror}; WAVE=${WAVE:-1}; SEED=${SEED:-0}
-SD=/mnt/nfs/projects/lanerl-vendor/LoLServer/GameServerConsole/bin/DeadProbe/net6.0
+SD=/mnt/nfs/projects/lanerl-vendor/LoLServer/GameServerConsole/bin/ClickV3/net6.0
 ARGS=(--envs $ENVS --opponent $OPP --step-ticks 6 --episode-s 600 --seed $SEED --port-base 22500
       --server-dir $SD --resume "$CKPT" --eval-episodes $EPISODES --out lanerl_jax/runs/EVAL)
 [ "$WAVE" = 1 ] && ARGS+=(--start-near-wave)

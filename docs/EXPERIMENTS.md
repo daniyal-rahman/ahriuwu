@@ -13,7 +13,7 @@ labelled `train`.
 | `server_train/mirror-wave-s0` = **E01_mirror_wave** seed 0 (4 dirs: crash, resume, resume, resume; a 5th empty dir from a bad resume path was removed) | 09-25 14:45 | C# | mirror, near-wave, 10 Hz, 10 envs | same | running | train CS 3.5 → ~12.5 by 190 episodes; max 27 | running |
 | `E03_mirror_wave_lr1e-4/seed0` | 09-25 21:15 | C# | E01 state at update 1120, continued: mirror, near-wave, 10 Hz, 6 envs x 256 | lr 1e-4 (was 3e-4), otherwise E01 | running | — | running: is the plateau a step-size problem? |
 | `E03_mirror_wave_lr1e-4/seed0` | 09-25 21:15 | C# | (stopped 22:40 after ~90 updates, superseded by E04; no eval) | | | | stopped: two larger defects found first |
-| `E04_mirror_wave_snap_noxp/seed0` | 09-25 22:45 | C# | E01 state at update 1520, continued: mirror, near-wave, 10 Hz, 6 envs x 256 | lr 3e-4; clicks snapped to standable ground; XP weight 0 | running | — | running: do wall-clicks (46-54% of movement clicks) and XP camping explain the plateau? |
+| `E04_mirror_wave_snap_noxp/seed0` | 09-25 22:45 | C# | E01 state at update 1520, continued: mirror, near-wave, 10 Hz, 6 envs x 256 | lr 3e-4; ClickV3 server build (PATH-011); XP weight 0.002 | running | — | running: do wall-clicks (46-54% of movement clicks) and XP camping explain the plateau? |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |

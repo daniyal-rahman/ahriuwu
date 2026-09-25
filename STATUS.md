@@ -39,10 +39,12 @@ attack-move 38% at u820, Q 63% at u1126) with KL ~1e-2 per update: the
 policy wanders rather than converges. Dani's replay review found the real defects: 46-54% of movement clicks land on
 unwalkable ground (the server then walks straight into the wall, hence the
 edge-hugging), and the +0.005*xp term paid 1.11x the CS term, teaching both
-champions to camp the brush beside the wave. Fixed: clicks snap to the nearest
-standable cell (PATH-010 table, both engines), `--xp-weight` (E04 uses 0).
-E03 (lr test) stopped; E04 branches E01's state at update 1520 with the two
-fixes at the same lr; E01 keeps running as the control.
+champions to camp the brush beside the wave. Fixed on the SERVER (`screen-click-v3`, build `ClickV3`, PATH-011): unwalkable
+click targets resolve to the closest reachable point, as the real client does.
+XP is enemy-only on the server (checked, SIDE-001) and stays, at weight 0.002
+(was 0.005, which out-paid CS).
+E03 (lr test) stopped; E04 branches E01's state at update 1520 on ClickV3 with
+XP 0.002 at the same lr; E01 keeps running on DeadProbe as the control.
 
 **Next:**
 1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).
