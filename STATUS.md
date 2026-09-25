@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-25 16:10 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-25 16:35 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
@@ -7,7 +7,9 @@ runs are paused until that gate is met.
 **Running (desktop, 14 server processes + GPU learner):**
 - `mirror-wave-s0`: C# mirror self-play, both champions start behind their
   first wave at 120 s, 10 envs. Train CS per episode 3.5 → ~12.5 (max 27)
-  after ~200 episodes. Resumed twice after rank-loop crashes (fixed).
+  after ~200 episodes. Resumed three times: two rank-loop crashes (fixed)
+  and one "address already in use" on an episode-reset server restart
+  (fixed: ports rotate, three attempts).
 - `idle-wave2-s0`: C# blue vs idle red, 4 envs. Train CS 4 → ~10.
 - Check: `python ops/server_train_status.py lanerl_jax/runs/server_train/<run>`.
 
@@ -18,9 +20,15 @@ the dead learner; REW-11 (shaping paid for sitting in base) and PPO-15
 aborts; red setup route legged in both engines; legacy code moved to
 `legacy/`; CODEMAP, EXPERIMENTS, patch and probe indexes written.
 
+**Screen-click verified on the live server (probe 1, `lanerl_jax/probes/screen_click_probe.py`):**
+a click cell is 30 x 36 world units at screen centre (smaller than a minion);
+attack-move clicks on a minion acquired it; ground clicks land within
+quantisation (7-22 u) and the champion arrives within 1 u. NOT working: a
+plain right-click (`move`) on a hostile minion never set a target, although
+`screen-click-v2` says it should. Probe 2 (raw clicks, both sides) running.
+
 **Next:**
-1. Screen-click verification probe on the live server (does the inverse
-   projection land on the intended minion; how wide is a click cell).
+1. Settle the right-click result; fix the patch or the projection if needed.
 2. Frozen evaluation of `mirror-wave-s0` at its next checkpoint, 5 episodes.
 3. If train CS plateaus below 30: adopt the process-parallel collector
    (`lanerl_train/procactor.py`, 4,829 dec/s at 96 servers) into

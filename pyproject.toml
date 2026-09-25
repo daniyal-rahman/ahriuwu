@@ -28,7 +28,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ahriuwu"]
+packages = ["legacy/src/ahriuwu"]
 
 [tool.ruff]
 line-length = 100
@@ -43,7 +43,7 @@ select = ["E", "F", "I", "W"]
 # this list from its first test for the same reason -- an uncollected suite is
 # a suite that rots silently.
 testpaths = [
-    "tests",
+    "legacy/tests",
     "lanerl_bot/tests",
     "lanerl_rl/tests",
     "lanerl_train/tests",

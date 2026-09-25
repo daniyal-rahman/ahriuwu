@@ -190,11 +190,16 @@ class ServerCollector:
         self.T = len(self.teams)
         self.n = n * self.T
         self.frames = _lane_frames()
+        # Four port sets per env, rotated on every fresh process: a restart
+        # on the port the previous process just released hit "Address already
+        # in use" (server exit 97) and killed a run at an episode reset.
+        self._port_pool = PortAllocator(base=port_base).allocate(4 * n)
+        self._port_turn = [0] * n
         self.env = VecLaneEnv(n, spec=ServerLaunchSpec(
             bot_teams="none", step_ticks=step_ticks, toponly=True,
             server_dir=server_dir,
             extra_env={"LANERL_AUTOBUY": "0"}),
-            log_dir=self.out / "server", ports=PortAllocator(base=port_base).allocate(n),
+            log_dir=self.out / "server", ports=[self._port_pool[4 * i] for i in range(n)],
             auto_restart=False)
         self.rebuilders = [StateRebuilder() for _ in range(n)]
         self.detectors = [CastFreezeDetector() for _ in range(n)]
@@ -361,12 +366,22 @@ class ServerCollector:
         for i in envs:
             # Fresh process preserves runes; the legacy in-process reset does not.
             self.env.handles[i].close()
-            h = self.env._default_factory(int(i), self.env.ports[i])
-            self.env.handles[i] = h
-            h.start()
-            result = self.env._collect([int(i)])
-            if result.died:
-                raise RuntimeError(f"fresh server failed: {result.died}")
+            for attempt in range(3):
+                self._port_turn[i] = (self._port_turn[i] + 1) % 4
+                ports = self._port_pool[4 * i + self._port_turn[i]]
+                self.env.ports[i] = ports
+                h = self.env._default_factory(int(i), ports)
+                self.env.handles[i] = h
+                h.start()
+                result = self.env._collect([int(i)])
+                if not result.died:
+                    break
+                with (self.out / 'restart_warnings.jsonl').open('a') as f:
+                    f.write(json.dumps({'env': int(i), 'attempt': attempt, 'died': result.died}) + '\n')
+                self.env.alive[i] = True
+                h.close()
+            else:
+                raise RuntimeError(f"fresh server failed three times: {result.died}")
             self.rebuilders[i] = StateRebuilder()
             self.detectors[i] = CastFreezeDetector()
             validate_champion_life(self.env.last_obs[i])

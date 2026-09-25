@@ -20,7 +20,7 @@ from .trainer import TrainConfig, make_train
 # The shared wandb helpers live outside the package tree (`src/ahriuwu/...`) and
 # are used by every dreamer script, so reuse them rather than starting a second
 # logging convention.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "legacy" / "src"))
 
 
 # `DEFAULT_ROUTE_ARTIFACT` lives in `sim/config.py` with `SimConfig`; the
