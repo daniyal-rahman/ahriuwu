@@ -263,7 +263,7 @@ def reward_init(state: LaneState,
 
 
 def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
-                cfg: RewardConfig = RewardConfig(), *, gamma: float,
+                cfg: RewardConfig = RewardConfig(), *, gamma: float = None,
                 return_terms: bool = False):
     """One step of reward for both champions. Returns ``(reward(2,), new_prev)``.
 
@@ -275,12 +275,16 @@ def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
     potential-based term would otherwise score the jump from the previous
     episode's final state to this one's initial state as a real transition.
 
-    ``gamma`` is **required**, and it must be the same gamma the advantage
-    estimator uses. ``F = gamma*Phi(s') - Phi(s)`` is policy-invariant only
-    under the discount it was built for; pass the wrong one and the shaping
-    silently stops being invariant while still looking like it works. There
-    is no default for exactly that reason -- a default would be a number that
-    is right by luck.
+    The shaping is the UNDISCOUNTED potential difference ``Phi(s') - Phi(s)``
+    (`REW-11`, 2026-09-25). The textbook ``gamma*Phi(s') - Phi(s)`` is
+    policy-invariant for the discounted objective, but it pays
+    ``(1-gamma)*|Phi|`` on every step a champion spends standing still away
+    from the lane: at 30 Hz with the 120 s horizon that is ~2.8 reward per
+    600 s episode for sitting in the fountain, against ~1.0 for a melee last
+    hit -- a denser reward than farming. The difference form pays exactly
+    zero while stationary and only the endpoints of a walk; a there-and-back
+    trip sums to zero exactly. ``gamma`` is accepted and unused so callers
+    that thread the trainer's gamma keep working.
     """
     w = cfg.weights
     hp = _hp_frac(state)
@@ -310,7 +314,7 @@ def lane_reward(state: LaneState, prev: RewardState, dt_s: float,
         "exp": zs(w.exp * d_xp),
         "hp_point": zs(w.hp_point * d_hp),
         "death": zs(w.death * d_deaths),
-        "shaping": jnp.where(prev.primed, gamma * phi - prev.phi, 0.0),
+        "shaping": jnp.where(prev.primed, phi - prev.phi, 0.0),
     }
     # The sum of the per-term contributions IS the reward, so the breakdown
     # below adds up by construction (`test_reward_terms_sum_to_reward`).

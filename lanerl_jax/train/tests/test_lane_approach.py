@@ -93,29 +93,45 @@ def test_the_whole_walk_is_worth_less_than_one_last_hit():
         f"the walk pays {walk:.3f} against {one_hit:.3f} for one melee minion")
 
 
-def test_the_discounted_shaping_telescopes_to_the_endpoints():
+def test_the_shaping_telescopes_to_the_endpoints():
     """THE invariance property, stated as an identity.
 
-    sum_t gamma^t * (gamma*Phi(s_{t+1}) - Phi(s_t))  ==  gamma^T*Phi(s_T) - Phi(s_0)
+    sum_t (Phi(s_{t+1}) - Phi(s_t))  ==  Phi(s_T) - Phi(s_0)
 
     Every intermediate term cancels, so the shaping contributes a quantity that
     depends ONLY on where the trajectory starts and ends -- never on the route
     taken or how long it took. That is exactly why it cannot create a cycle the
     agent can farm, and it is the thing a "closer than last tick" bonus fails.
     """
-    gamma = 0.999
     rng = np.random.default_rng(0)
     # a deliberately silly route: it wanders, doubles back, and loops
     xs = np.cumsum(rng.normal(0, 400, 200)) + 3000.0
     ys = np.cumsum(rng.normal(0, 400, 200)) + 8000.0
 
     phis = [float(phi([x], [y])[0]) for x, y in zip(xs, ys)]
-    total = sum((gamma ** t) * (gamma * phis[t + 1] - phis[t])
-                for t in range(len(phis) - 1))
-    expect = (gamma ** (len(phis) - 1)) * phis[-1] - phis[0]
+    total = sum(phis[t + 1] - phis[t] for t in range(len(phis) - 1))
+    expect = phis[-1] - phis[0]
     assert total == pytest.approx(expect, abs=1e-6), (
-        "the discounted shaping did not telescope, so it is not a potential "
+        "the shaping did not telescope, so it is not a potential "
         "and the policy-invariance guarantee is gone")
+
+
+def test_standing_still_far_from_lane_pays_exactly_nothing():
+    """`REW-11`: the discounted form gamma*Phi(s') - Phi(s) paid
+    (1-gamma)*|Phi| per step to a champion parked in its fountain -- ~2.8 per
+    episode at 30 Hz, more than a melee last hit -- and the first source-server
+    run at lr 3e-4 learned to recall and sit. Through lane_reward, at the
+    spawn, with every gamma the trainer might use: zero, to the bit."""
+    cfg = RewardConfig()
+    state = init_lane()
+    for gamma in (0.9, 0.999, 0.99972):
+        rs = reward_init(state, cfg)
+        _, rs = lane_reward(state, rs, 1 / 30.0, cfg, gamma=gamma)   # prime
+        for _ in range(5):
+            r, rs, terms = lane_reward(state, rs, 1 / 30.0, cfg, gamma=gamma,
+                                       return_terms=True)
+            assert np.all(np.asarray(terms["shaping"]) == 0.0), (
+                f"gamma={gamma}: stationary shaping {np.asarray(terms['shaping'])}")
 
 
 def test_a_round_trip_pays_almost_nothing():
@@ -129,9 +145,8 @@ def test_a_round_trip_pays_almost_nothing():
     out = [(26.0 + t * 200.0, 280.0 + t * 600.0) for t in range(12)]
     route = out + out[::-1]
     phis = [float(phi([x], [y])[0]) for x, y in route]
-    total = sum((gamma ** t) * (gamma * phis[t + 1] - phis[t])
-                for t in range(len(phis) - 1))
-    assert abs(total) < 0.03, (
+    total = sum(phis[t + 1] - phis[t] for t in range(len(phis) - 1))
+    assert abs(total) < 1e-6, (
         f"a there-and-back round trip paid {total:.4f}; a potential must "
         "return to where it started")
 
@@ -187,20 +202,6 @@ def test_both_teams_share_one_world_normal():
     s_red = ((px - a["origin_x"][1]) * a["axis_x"][1]
              + (py - a["origin_y"][1]) * a["axis_y"][1])
     assert s_blue == pytest.approx(L - s_red, abs=1e-2)
-
-
-def test_shaping_without_the_trainers_gamma_is_refused():
-    """No default gamma, because a default would be right only by luck.
-
-    F is policy-invariant under the discount it was built for and no other.
-    A mismatched gamma leaves the term looking like it works while quietly
-    no longer being invariant -- so it is a required keyword with no default.
-    """
-    state = init_lane()
-    cfg = RewardConfig()
-    rs = reward_init(state, cfg)
-    with pytest.raises(TypeError, match="gamma"):
-        lane_reward(state, rs, dt_s=1 / 30.0, cfg=cfg)
 
 
 def test_the_first_step_after_a_reset_pays_no_shaping():

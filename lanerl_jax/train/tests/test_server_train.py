@@ -22,18 +22,23 @@ def test_fog_is_server_authoritative_and_missing_flags_fail_closed():
     np.testing.assert_array_equal(wire_visibility(raw, [11, 12, 0], 1), [True, False, False])
 
 
-def test_discounted_shaping_telescopes_independently_of_path():
-    gamma = .9
+def test_shaping_telescopes_independently_of_path_and_pays_nothing_when_still():
     # Same start and terminal potentials, two different intermediate paths.
     totals = []
     for path in ([-.8, -.5, -.2, 0.], [-.8, -.9, -.7, 0.]):
         rewards = []
         for i in range(3):
             r, _ = farm_reward(0., 0., jnp.array(True), jnp.array(True),
-                               path[i], path[i+1], i == 2, gamma)
+                               path[i], path[i+1], i == 2, .9)
             rewards.append(float(r))
-        totals.append(sum(gamma**i * r for i, r in enumerate(rewards)))
+        totals.append(sum(rewards))
     np.testing.assert_allclose(totals, [4., 4.], atol=1e-6)
+    # `REW-11`: parked far from the lane, at the episode's last step or not,
+    # the shaping is exactly zero -- the discounted/zero-terminal form paid
+    # (1-gamma)*|Phi| per step plus |Phi| at the cutoff for sitting in base.
+    for done in (False, True):
+        r, terms = farm_reward(0., 0., jnp.array(True), jnp.array(True), -.8, -.8, done, .9)
+        assert float(r) == 0. and float(terms["approach"]) == 0.
 
 
 def test_own_sealed_spell_is_not_reported_ready_at_zero_cooldown():

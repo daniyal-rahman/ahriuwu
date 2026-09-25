@@ -69,15 +69,27 @@ def source_farm_stats(champion, potential):
 
 
 def farm_reward(cs_before, cs_after, alive_before, alive_after,
-                potential_before, potential_after, done, gamma):
-    """Explicit task reward, shared by future matched-environment collector.
+                potential_before, potential_after, done=None, gamma=None):
+    """Explicit task reward, shared by the matched JAX collector.
 
-    +1 per CS, -2 per death, plus lane-approach potential shaping. Terminal
-    potential is zero. No opponent term, damage bonus or ambient-gold reward.
+    +1 per CS, -2 per death, plus lane-approach potential shaping
+    ``5 * (Phi(s') - Phi(s))``. No opponent term, damage bonus or
+    ambient-gold reward.
+
+    The shaping is the UNDISCOUNTED potential difference, and the last step
+    of an episode uses the real final potential (``potential_after`` is
+    read before the reset). The earlier form ``gamma*Phi(s') - Phi(s)`` with
+    a zero terminal potential paid ``(1-gamma)*|Phi|`` on every step spent
+    standing far from the lane (+0.0033/step in the fountain at 10 Hz) plus
+    ``|Phi|`` for ending the episode far away; the first lr-3e-4 run learned
+    to recall and sit in the fountain within 40 updates (`REW-11`). With the
+    difference form a stationary champion earns exactly zero, and only the
+    endpoints of the walk are paid. ``done``/``gamma`` are accepted for
+    call compatibility and unused.
     """
     cs = cs_after - cs_before
     death = -2. * (alive_before & ~alive_after)
-    shaping = 5. * (gamma * jnp.where(done, 0., potential_after) - potential_before)
+    shaping = 5. * (potential_after - potential_before)
     return cs + death + shaping, {"cs": cs, "death": death, "approach": shaping}
 
 
@@ -562,6 +574,9 @@ def main():
                    help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions")
     p.add_argument("--resume", type=Path, default=None, help="ckpt_latest.msgpack of a compatible run")
     p.add_argument("--ckpt-every", type=int, default=10)
+    p.add_argument("--normalize-advantage", action="store_true",
+                   help="per-batch advantage standardisation (off: batches with no reward "
+                        "would otherwise turn critic noise into unit-variance gradients)")
     p.add_argument("--eval-episodes", type=int, default=0,
                    help="evaluate the --resume checkpoint frozen for this many episodes per env; no learning")
     p.add_argument("--start-near-wave", action="store_true")
@@ -580,6 +595,7 @@ def main():
         p.error("minibatches must divide envs x agents x rollout")
     cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,
                     entropy_coef=args.entropy_coef, epochs=args.epochs,
+                    normalize_advantage=args.normalize_advantage,
                     decision_hz=60. / args.step_ticks,
                     gae_lambda=PPOConfig().gae_lambda ** (args.step_ticks / 2.))
     # The rollout/recompute likelihood check compares per-step and batched

@@ -2,8 +2,8 @@
 #SBATCH --job-name=srv-train
 #SBATCH --partition=gpup
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=14
-#SBATCH --mem=22G
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=14G
 #SBATCH --time=24:00:00
 #SBATCH --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax
 #SBATCH --output=/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/server_train/%x-%j.out
