@@ -1,45 +1,31 @@
-# Working on ahriuwu
+# Working here (read fully; it is short)
 
-Read [STATUS.md](STATUS.md) first (what is running, what is next), then [docs/PROJECT.md](docs/PROJECT.md): goal, current priority, file map,
-and cleanup plan. Read the relevant rows in
-[docs/JAX_FIDELITY_LEDGER.md](docs/JAX_FIDELITY_LEDGER.md) before interpreting
-simulator or RL behavior. Research work follows
-[docs/EXPERIMENT_METHOD.md](docs/EXPERIMENT_METHOD.md).
+**Start:** `STATUS.md` (what runs, what is next), then `docs/CODEMAP.md`
+(what is live). Findings go in `docs/JAX_FIDELITY_LEDGER.md` rows; runs go in
+`docs/EXPERIMENTS.md` rows. Do not write new status/report files.
 
-- The destination is winning modern League 5v5 against D2-level opponents.
-  The current laboratory is ten-minute Garen mirror lanes; passing it does
-  not establish full-game strength or champion generalization.
-- Actor actions are buttons plus screen coordinates. Resolve the click to
-  terrain/entities in the environment/server interface; never give the actor
-  a direct entity-ID target shortcut. Keep privileged diagnostic state out
-  of actor observations.
-- Inspect existing code/docs and the working-tree diff before editing.
-  Preserve other agents' work. Check active work ownership before parallel edits.
-- Put reusable code in its owning package, operational launchers in `ops/`,
-  and durable regressions beside the subsystem they protect. Put disposable
-  investigation code and outputs under a named ignored run directory. Promote
-  any script needed to reproduce cited evidence into versioned source.
-- Add findings to the fidelity ledger, not a new status/report file. Keep
-  project scope in PROJECT, experiment contracts in EXPERIMENT_METHOD, and
-  historical evidence frozen. Update the relevant record with the code change
-  or completed investigation; record why, evidence, and the next unresolved check.
-- Do not prune tests by age or file count. Keep independent behavioral
-  regressions; consolidate redundant fixtures/assertions only after checking
-  their distinct coverage. Do not add tests for documentation-only changes.
-- Record the command, resolved configuration, code/input provenance, seeds,
-  runtime, and outcome for evidence-producing runs. A dirty-tree hash without
-  the actual source changes is not enough to reconstruct a run.
-- Respect the user's current machine availability. On danilogin, cap JAX and
-  other substantial workloads with `ops/login_capped.sh <memory> <cpus> ...`.
-  Do not infer desktop availability from old runbooks.
+**Goal now:** PPO from random init reaching >30 CS in a 10-minute mirror trial
+on the C# server (frozen evaluation, several seeds). JAX is paused until then.
 
-- **STATUS.md is the whiteboard.** Starting or stopping a run, finishing a
-  fix, or handing off a session means rewriting STATUS.md in the same
-  commit and appending a row to docs/EXPERIMENTS.md. A session whose last
-  commit did not touch STATUS.md is not finished.
-- **Classify what you add** (docs/CODEMAP.md): live path, tool, one-off
-  diagnostic (goes in `probes/` or `parity/archive/` with a README row), or
-  legacy (`legacy/`). Server patches are listed in `lanerl/patches/README.md`
-  with their status and the canonical build.
-- Irreversible actions (deleting branches, worktrees, builds, data) wait for
-  Dani; reversible ones (moves, tags, renames under git) do not.
+**Layout:** C# server = `/srv/nfs/projects/lanerl-vendor/LoLServer` (patches:
+`lanerl/patches/`, canonical build `bin/DeadProbe`). RL = `lanerl_jax/train/`
+(`server_train.py` collector, `learner.py`, `policy.py`, `ppo.py`). JAX sim =
+`lanerl_jax/sim/`. Launchers = `experiments/`. One-offs = `lanerl_jax/probes/`.
+History = `legacy/`, `docs/archive/`.
+
+**Rules**
+1. A run starts only from `experiments/<ID>.sh`; new config = new ID + row.
+2. Starting or stopping a run, or ending a session, rewrites `STATUS.md` in
+   the same commit. No STATUS edit = not finished.
+3. Classify what you add: live path, tool, probe (with README row), or legacy.
+   Never leave scripts in `runs/` or `/tmp` that a ledger row depends on.
+4. Quote only frozen-policy evaluations as results; training CS is `train`.
+5. Reversible actions (git mv, tags, new files) proceed; irreversible ones
+   (delete branches/worktrees/builds/data, vendor edits) wait for Dani.
+6. Desktop: servers and GPU live there; keep port bases < 32768; one core
+   per server; cap login-node work with `ops/login_capped.sh`. Never yield to
+   `llm-serve`. Kill jobs by ID; never `pkill -f`.
+7. Never commit inside the vendor tree; server changes are patches in
+   `lanerl/patches/` with a README row and a rebuilt `DeadProbe`.
+8. Parallel agents: one git worktree and one experiment ID each; touch only
+   your ID's runs; commit small, rebase on `lane-rl/jax` before handoff.
