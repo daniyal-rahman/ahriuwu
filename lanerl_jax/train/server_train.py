@@ -366,22 +366,33 @@ class ServerCollector:
         for i in envs:
             # Fresh process preserves runes; the legacy in-process reset does not.
             self.env.handles[i].close()
-            for attempt in range(3):
+            from lanerl_train.ports import is_port_free
+            from lanerl_train.vec import InstanceDied
+            last = None
+            for attempt in range(4):
                 self._port_turn[i] = (self._port_turn[i] + 1) % 4
                 ports = self._port_pool[4 * i + self._port_turn[i]]
+                if not (is_port_free(ports.control) and is_port_free(ports.game)):
+                    last = f'ports {ports.control}/{ports.game} busy'
+                    continue
                 self.env.ports[i] = ports
                 h = self.env._default_factory(int(i), ports)
                 self.env.handles[i] = h
-                h.start()
-                result = self.env._collect([int(i)])
-                if not result.died:
+                try:
+                    h.start()
+                    result = self.env._collect([int(i)])
+                    died = result.died
+                except InstanceDied as exc:
+                    died = {int(i): str(exc)}
+                if not died:
                     break
+                last = died
                 with (self.out / 'restart_warnings.jsonl').open('a') as f:
-                    f.write(json.dumps({'env': int(i), 'attempt': attempt, 'died': result.died}) + '\n')
+                    f.write(json.dumps({'env': int(i), 'attempt': attempt, 'died': str(died)}) + '\n')
                 self.env.alive[i] = True
                 h.close()
             else:
-                raise RuntimeError(f"fresh server failed three times: {result.died}")
+                raise RuntimeError(f"fresh server failed after four attempts: {last}")
             self.rebuilders[i] = StateRebuilder()
             self.detectors[i] = CastFreezeDetector()
             validate_champion_life(self.env.last_obs[i])
@@ -618,7 +629,10 @@ def main():
     p.add_argument("--start-near-wave", action="store_true")
     p.add_argument("--step-ticks", type=int, default=2)
     p.add_argument("--server-dir", type=Path)
-    p.add_argument("--port-base", type=int, default=49300)
+    p.add_argument("--port-base", type=int, default=21300,
+                   help="control/game port base. Keep it BELOW 32768: ports inside the kernel's "
+                        "ephemeral range (32768-60999) get taken by outgoing connections, and a "
+                        "server restarted on such a port dies with exit 97 'Address already in use'")
     p.add_argument("--out", type=Path, default=Path("lanerl_jax/runs/server_first_20260925"))
     args = p.parse_args()
     if args.server_dir is not None:

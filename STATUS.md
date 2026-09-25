@@ -1,10 +1,10 @@
-# STATUS (rewrite in place; last edit 2026-09-25 17:05 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-25 17:20 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
-**Running (desktop, 14 server processes + GPU learner):**
+**Runs (desktop) — BOTH DIED 16:20-16:30 UTC on OPS-003 (ephemeral-range ports at episode reset); the desktop then went "Not responding" in slurm. A watcher relaunches both on port bases 21700/21900 when the node returns, resuming from the last checkpoints:**
 - `mirror-wave-s0`: C# mirror self-play, both champions start behind their
   first wave at 120 s, 10 envs. Train CS per episode 3.5 → ~12.5 (max 27)
   after ~200 episodes. Resumed three times: two rank-loop crashes (fixed)
