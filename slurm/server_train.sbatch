@@ -5,6 +5,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=10G
 #SBATCH --time=24:00:00
+#SBATCH --no-requeue
 #SBATCH --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax
 #SBATCH --output=/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/server_train/%x-%j.out
 #
