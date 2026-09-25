@@ -1,0 +1,16 @@
+# Experiments (one row per run; append, never rewrite a verdict)
+
+Metric for the current gate: mean CS per frozen-policy 10-minute episode, C#
+server, mirror self-play, over seeds. Training-time CS (changing weights) is
+labelled `train`.
+
+| Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
+|---|---|---|---|---|---|---|---|
+| `server_first_20260925/dead-train/seed0` (Codex) | 09-25 | C# | idle red, near-wave, 30 Hz, 2 envs | lr 1e-5, ent 0.001, adv-norm | 175k dec | uniform buttons after 684 updates; train CS 0-19 | no learning: lr too small |
+| `server_train/idle-wave-s0` | 09-25 08:42 | C# | idle, near-wave, 10 Hz, 4 envs | lr 3e-4, ent 0.001 | 2.5M dec | collapsed to `recall`, sat in fountain (train CS 3-7) | REW-11 shaping bug |
+| `server_train/mirror-s0` | 09-25 08:53 | C# | mirror, from fountain, 10 Hz, 12 envs | lr 3e-4, ent 0.01 | 5.3M dec | move/attack_move/R only, entropy 9.6, CS 0.1 | PPO-15 entropy bias |
+| `server_train/idle-wave2-s0` | 09-25 14:44 | C# | idle, near-wave, 10 Hz, 4 envs | lr 3e-4, ent 0.001, +xp, no adv-norm | running | train CS 4 → ~10 by 190 episodes | running |
+| `server_train/mirror-wave-s0` (3 dirs: crash, resume, resume) | 09-25 14:45 | C# | mirror, near-wave, 10 Hz, 10 envs | same | running | train CS 3.5 → ~12.5 by 190 episodes; max 27 | running |
+| `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
+
+Frozen evaluations (the only numbers that count for the gate): none yet.

@@ -1,6 +1,6 @@
 # Working on ahriuwu
 
-Read [docs/PROJECT.md](docs/PROJECT.md) first: goal, current priority, file map,
+Read [STATUS.md](STATUS.md) first (what is running, what is next), then [docs/PROJECT.md](docs/PROJECT.md): goal, current priority, file map,
 and cleanup plan. Read the relevant rows in
 [docs/JAX_FIDELITY_LEDGER.md](docs/JAX_FIDELITY_LEDGER.md) before interpreting
 simulator or RL behavior. Research work follows
@@ -32,3 +32,14 @@ simulator or RL behavior. Research work follows
 - Respect the user's current machine availability. On danilogin, cap JAX and
   other substantial workloads with `ops/login_capped.sh <memory> <cpus> ...`.
   Do not infer desktop availability from old runbooks.
+
+- **STATUS.md is the whiteboard.** Starting or stopping a run, finishing a
+  fix, or handing off a session means rewriting STATUS.md in the same
+  commit and appending a row to docs/EXPERIMENTS.md. A session whose last
+  commit did not touch STATUS.md is not finished.
+- **Classify what you add** (docs/CODEMAP.md): live path, tool, one-off
+  diagnostic (goes in `probes/` or `parity/archive/` with a README row), or
+  legacy (`legacy/`). Server patches are listed in `lanerl/patches/README.md`
+  with their status and the canonical build.
+- Irreversible actions (deleting branches, worktrees, builds, data) wait for
+  Dani; reversible ones (moves, tags, renames under git) do not.
