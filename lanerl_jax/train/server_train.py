@@ -39,6 +39,44 @@ from .run_manifest import RunDir, file_sha256, git_environment
 from .trainer import _sample
 
 
+_SNAP = {}
+
+
+def _snap_table_np():
+    """Host copy of `actions.move_snap_table` (PATH-010): standable mask and
+    nearest-standable-cell index per grid cell."""
+    if not _SNAP:
+        from .actions import move_snap_table
+        t = move_snap_table()
+        _SNAP.update(standable=np.asarray(t.standable), nearest=np.asarray(t.nearest),
+                     height=t.height, width=t.width, min_x=float(t.min_x), min_y=float(t.min_y),
+                     cell=float(t.cell_size))
+    return _SNAP
+
+
+def snap_click(x, y):
+    """(x, y, snapped): the nearest standable cell centre if the click's cell is
+    not standable (walls, off-map). 46-54% of a trained policy's movement clicks
+    hit unwalkable ground (`runs/EVAL/replay_u1080`), and the server's click
+    handler answers a null path with a straight line INTO the wall, so the
+    champion hugged the map edge. Real League moves you to the closest reachable
+    point; this does the same, with the table the JAX decoder snaps with."""
+    t = _snap_table_np()
+    ix = int(np.clip(np.floor((x - t["min_x"]) / t["cell"]), 0, t["width"] - 1))
+    iy = int(np.clip(np.floor((y - t["min_y"]) / t["cell"]), 0, t["height"] - 1))
+    flat = iy * t["width"] + ix
+    in_grid = (t["min_x"] <= x < t["min_x"] + t["width"] * t["cell"]
+               and t["min_y"] <= y < t["min_y"] + t["height"] * t["cell"])
+    if in_grid and t["standable"][flat]:
+        return float(x), float(y), False
+    n = int(t["nearest"][flat])
+    return (t["min_x"] + (n % t["width"] + 0.5) * t["cell"],
+            t["min_y"] + (n // t["width"] + 0.5) * t["cell"], True)
+
+
+SNAP_CLICKS = {"on": True, "count": 0, "total": 0}
+
+
 def screen_order(action, champion, frame):
     """Project buttons/cursor to wire; never accepts an entity ID."""
     button, ix, iy = map(int, action)
@@ -58,9 +96,13 @@ def screen_order(action, champion, frame):
             return {"t": "noop"}
     ds, dn = screen_to_world_centred(0., 0., sx, sy)
     axis, normal = np.asarray(frame.axis), np.asarray(frame.normal)
-    return {"t": "click", "button": name,
-            "x": float(champion["x"] + ds * axis[0] + dn * normal[0]),
-            "y": float(champion["y"] + ds * axis[1] + dn * normal[1])}
+    x = float(champion["x"] + ds * axis[0] + dn * normal[0])
+    y = float(champion["y"] + ds * axis[1] + dn * normal[1])
+    if SNAP_CLICKS["on"] and name in ("move", "attack_move"):
+        x, y, snapped = snap_click(x, y)
+        SNAP_CLICKS["total"] += 1
+        SNAP_CLICKS["count"] += int(snapped)
+    return {"t": "click", "button": name, "x": x, "y": y}
 
 
 def source_farm_stats(champion, potential):
@@ -69,7 +111,10 @@ def source_farm_stats(champion, potential):
     return champion["cs"], not champion_dead(champion), float(potential), float(champion.get("xp", 0.))
 
 
-XP_WEIGHT = 0.005   # melee 77 xp -> 0.385; xp accrues from PROXIMITY to a dying minion
+#: XP proximity reward per xp point. 0.005 (melee 77 xp -> 0.385) paid MORE per
+#: step than the CS term in E01 (ratio 1.11 over updates 950-1150) and taught
+#: both champions to camp the brush beside the wave; E04 runs it at 0.
+XP_WEIGHT = 0.005
 
 
 def farm_reward(cs_before, cs_after, alive_before, alive_after,
@@ -592,6 +637,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # spells/minimap clicks to NOOP. Diagnostic state is not an input.
             metrics["sampled_buttons"] = dict(zip(BUTTONS, sampled_buttons.tolist()))
             metrics["sampled_r_unranked"] = int(sampled_r_unranked)
+            metrics["snapped_clicks"] = SNAP_CLICKS["count"] / max(SNAP_CLICKS["total"], 1)
+            SNAP_CLICKS["count"] = SNAP_CLICKS["total"] = 0
             for name in reward_terms[0]:
                 metrics["reward_" + name] = float(jnp.stack([r[name] for r in reward_terms]).mean())
             run.log(metrics)
@@ -708,6 +755,10 @@ def main():
     p.add_argument("--normalize-advantage", action="store_true",
                    help="per-batch advantage standardisation (off: batches with no reward "
                         "would otherwise turn critic noise into unit-variance gradients)")
+    p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
+                   help="XP proximity reward per xp point (0 disables it)")
+    p.add_argument("--no-snap-clicks", action="store_true",
+                   help="send raw projected click points (pre-E04 behaviour: walls become straight-line walks)")
     p.add_argument("--workers", type=int, default=1,
                    help=">1: spawn that many collector processes, each owning envs/workers servers "
                         "(MultiProcessCollector); port blocks are base + 200*worker")
@@ -738,6 +789,8 @@ def main():
     # The rollout/recompute likelihood check compares per-step and batched
     # forward passes; TF32 matmuls on the GPU would fail its 2e-5 tolerance.
     jax.config.update("jax_default_matmul_precision", "highest")
+    globals()["XP_WEIGHT"] = args.xp_weight
+    SNAP_CLICKS["on"] = not args.no_snap_clicks
     policy = LanePolicy(PolicyConfig())
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.server_train', *sys.argv[1:]])
     run = RunDir(args.out, f"server-farm-s{args.seed}", {"train": {"policy": policy.cfg._asdict()},
@@ -745,7 +798,8 @@ def main():
         "ppo": cfg._asdict(), "collector": vars(args), "environment": "source-server",
         "observation": "viewport+server-fog+structured-HUD",
         "opponent": "idle-fountain" if args.opponent == "idle" else "mirror-self-play",
-        "reward": "CS - 2*death + 5*(lane_potential_next - potential) + 0.005*xp",
+        "reward": f"CS - 2*death + 5*(lane_potential_next - potential) + {args.xp_weight}*xp",
+        "click_snap": not args.no_snap_clicks,
         "initialization": "random; no prior"})
     snapshot_farming_source(run, command)
     vendor = server_paths.server_dir().parents[3]

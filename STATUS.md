@@ -36,9 +36,13 @@ gate. Update 1080: blue 14.2 (5-22), red 21.0. Train CS has been FLAT at
 16-18 per episode since about update 500: the run has plateaued at half the
 gate. Diagnosis: the button mix swings between strategies (E-spin 81% at u460,
 attack-move 38% at u820, Q 63% at u1126) with KL ~1e-2 per update: the
-policy wanders rather than converges. E03 branches E01's state at update 1120
-at lr 1e-4 (6 servers x 256 steps, same batch) on the free cores; E01 keeps
-running as the control.
+policy wanders rather than converges. Dani's replay review found the real defects: 46-54% of movement clicks land on
+unwalkable ground (the server then walks straight into the wall, hence the
+edge-hugging), and the +0.005*xp term paid 1.11x the CS term, teaching both
+champions to camp the brush beside the wave. Fixed: clicks snap to the nearest
+standable cell (PATH-010 table, both engines), `--xp-weight` (E04 uses 0).
+E03 (lr test) stopped; E04 branches E01's state at update 1520 with the two
+fixes at the same lr; E01 keeps running as the control.
 
 **Next:**
 1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).

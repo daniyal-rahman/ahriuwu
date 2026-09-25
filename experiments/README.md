@@ -20,4 +20,5 @@ Rules:
 | E02_idle_wave | same learner, idle opponent: cleanest learner check | 21900 | C# |
 | E03_mirror_wave_lr1e-4 | E01 continued from update 1120 at lr 1e-4: is the plateau a step-size problem? | 22100 | C# |
 | EVAL_frozen | frozen-policy evaluation of any checkpoint | 22500 | C# |
-| (next) | | 22700 | |
+| E04_mirror_wave_snap_noxp | E01 continued with click snapping + XP weight 0: do wall-clicks and XP camping explain the plateau? | 22700 | C# |
+| (next) | | 22900 | |
