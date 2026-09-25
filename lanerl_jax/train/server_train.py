@@ -275,9 +275,13 @@ class ServerCollector:
         for _ in range(18):
             pending = {}
             for i in range(self.n_envs):
+                # A dead champion cannot rank (the server rejects live-only
+                # input while dead); it ranks on respawn. Waiting on it here
+                # spun the 18-try loop and killed the first mirror run.
                 cmds = {TEAM_KEY[t]: {'t': 'level', 'slot': slot}
                         for t in self.teams
-                        if (slot := pending_rank_up(self.champion(i, t))) is not None}
+                        if not champion_dead(self.champion(i, t))
+                        and (slot := pending_rank_up(self.champion(i, t))) is not None}
                 if cmds:
                     for t in (0, 1):
                         cmds.setdefault(TEAM_KEY[t], {'t': 'noop'})

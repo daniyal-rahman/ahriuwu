@@ -49,7 +49,7 @@ def test_blue_only_observation_and_selective_reset(collector):
     c = collector
     obs, stats = c.observe()
     assert obs.entities.shape[:2] == (2, 32)
-    assert stats.shape == (2, 3)
+    assert stats.shape == (2, 4)   # cs, alive, potential, xp
     np.testing.assert_array_equal(c.spell_ranks(), [[0, 0, 1, 0]]*2)
     initial_hp = np.asarray(c.states.max_hp[:, 0]).copy()
     initial_red = np.asarray(c.states.x[:, 1]).copy()

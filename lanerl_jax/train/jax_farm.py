@@ -41,6 +41,11 @@ GROUND_CLICK_NORMALIZATION = 'raw-screen-projection; environment-terrain-exit; n
 
 
 WAVE_START = {0: (WAVE_START_POS, 100.), 1: (RED_WAVE_START_POS, 250.)}
+#: JAX red setup legs (`runs/throughput_server_20260925/jaxchain.log`, route A:
+#: arrives at 30.4 s). The server's own legs start with (11000,13600), which
+#: JAX's router cannot reach from the fountain (stalls at (12154,12990)).
+JAX_RED_LEGS = ((12500., 13300.), (11500., 13700.), (11000., 13600.),
+                (7500., 13700.), (4500., 13600.), RED_WAVE_START_POS)
 
 
 def validate_wave_start(state, team=0):
@@ -214,14 +219,29 @@ class JaxFarmCollector:
             self._prepare(mask)
 
     def _prepare(self, mask):
+        # Blue walks straight to its point. Red's single Move from its
+        # fountain to the top-lane corner stalls at ~(12150,12990) in BOTH
+        # engines (server: `runs/throughput_server_20260925/redroute.log`;
+        # JAX: `jax-smoke.log`), so red walks the same legs the server
+        # collector uses (`server_train.TEAM_WAVE_START`).
         red = 1 in self.teams
-        move = Orders(jnp.array([OrderKind.MOVE, OrderKind.MOVE if red else OrderKind.NOOP], jnp.int8),
-                      jnp.array([WAVE_START_POS[0], RED_WAVE_START_POS[0] if red else 0.], jnp.float32),
-                      jnp.array([WAVE_START_POS[1], RED_WAVE_START_POS[1] if red else 0.], jnp.float32),
-                      jnp.full(2, -1, jnp.int8), clear_target=jnp.zeros(2, bool))
+        legs = JAX_RED_LEGS
+        leg = np.zeros(self.n_envs, int)
+        def orders(mask_move_blue, red_targets):
+            kinds = jnp.asarray([[OrderKind.MOVE if b else OrderKind.NOOP,
+                                  OrderKind.MOVE if r is not None else OrderKind.NOOP]
+                                 for b, r in zip(mask_move_blue, red_targets)], jnp.int8)
+            xs = jnp.asarray([[WAVE_START_POS[0], r[0] if r is not None else 0.]
+                              for r in red_targets], jnp.float32)
+            ys = jnp.asarray([[WAVE_START_POS[1], r[1] if r is not None else 0.]
+                              for r in red_targets], jnp.float32)
+            return Orders(kinds, xs, ys, jnp.full((self.n_envs, 2), -1, jnp.int8),
+                          clear_target=jnp.zeros((self.n_envs, 2), bool))
+        first = orders([bool(m) for m in mask],
+                       [legs[0] if (red and m) else None for m in mask])
         # Reuse the policy dynamics executable during setup. A separate JIT
         # around this loop would compile the full routing graph a second time.
-        self.states = self._step_states(self.states, self._batch_orders(move), mask)
+        self.states = self._step_states(self.states, first, mask)
         max_decisions = int(np.ceil(WAVE_START_MS / (self.sim.step_ticks * self.sim.delta_ms))) + 1
         started = time.monotonic()
         for count in range(max_decisions):
@@ -234,7 +254,18 @@ class JaxFarmCollector:
             active = mask & (np.asarray(self.states.t_ms) < WAVE_START_MS)
             if not active.any():
                 break
-            self.states = self._step_states(self.states, self._noop_orders, active)
+            red_targets = [None] * self.n_envs
+            if red:
+                rx, ry = np.asarray(self.states.x[:, 1]), np.asarray(self.states.y[:, 1])
+                for i in np.flatnonzero(active):
+                    if leg[i] + 1 < len(legs) and np.hypot(rx[i] - legs[leg[i]][0], ry[i] - legs[leg[i]][1]) <= 150.:
+                        leg[i] += 1
+                        red_targets[i] = legs[leg[i]]
+            if any(t is not None for t in red_targets):
+                step_orders = orders([False] * self.n_envs, red_targets)
+            else:
+                step_orders = self._noop_orders
+            self.states = self._step_states(self.states, step_orders, active)
         self._event(kernel='prepare', phase='execute', decisions=count+1,
                     wall_s=time.monotonic()-started)
         for i in np.flatnonzero(mask):
