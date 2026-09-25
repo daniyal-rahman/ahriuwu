@@ -71,7 +71,7 @@ def gate4_route_inputs(artifact_path: Path | None = None, *,
                        table_disabled: bool = False):
     """Return the routed gate-4 inputs, or the explicitly named raw control.
 
-    Mirrors :func:`lanerl_jax.parity.last_hit_drive.gate3_route_inputs` on
+    Mirrors :func:`lanerl_jax.parity.archive.last_hit_drive.gate3_route_inputs` on
     purpose: gate 3 and gate 4 must not silently measure two different
     movement semantics.  Routing is the default because the gate is the routed
     number; the two-point control is reachable only by asking for it by name.

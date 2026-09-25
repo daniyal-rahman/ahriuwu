@@ -40,7 +40,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     failures = []
     for name in scenarios:
         out = out_dir / f"{args.engine}_{name}.json"
-        cmd = [sys.executable, "-m", "lanerl_jax.parity.tier2", "raw",
+        cmd = [sys.executable, "-m", "lanerl_jax.parity.archive.tier2", "raw",
                "--engine", args.engine, "--scenario", name,
                "--seed", str(args.seed), "--minutes", str(args.minutes),
                "--sample-every-s", str(args.sample_every_s), "--out", str(out)]

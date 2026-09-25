@@ -30,8 +30,8 @@ decisions inside League's 1,400 u XP radius -- the factor that decomposition
 identified as the mechanism.
 
 USAGE
-    python -m lanerl_jax.parity.gate3_outcomes --seeds 0 1 2 --decisions 9000
-    python -m lanerl_jax.parity.gate3_outcomes --seeds ... --shuffled
+    python -m lanerl_jax.parity.archive.gate3_outcomes --seeds 0 1 2 --decisions 9000
+    python -m lanerl_jax.parity.archive.gate3_outcomes --seeds ... --shuffled
 """
 
 from __future__ import annotations

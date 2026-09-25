@@ -1,6 +1,6 @@
 """Tier 1, finally built: inject a server snapshot into a :class:`LaneState`.
 
-``lanerl_jax.parity.sim_vs_server`` explains why nobody had done this yet: the
+``lanerl_jax.parity.archive.sim_vs_server`` explains why nobody had done this yet: the
 canonical state dump (``LanerlStateDump.Describe``) does not carry
 ``TargetUnit``, the auto-attack clock, waypoint *positions*, the minion AI's
 own timers/maps, missiles, or the collision-cache position. Its opt-in

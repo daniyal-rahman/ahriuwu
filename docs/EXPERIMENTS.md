@@ -13,4 +13,6 @@ labelled `train`.
 | `server_train/mirror-wave-s0` = **E01_mirror_wave** seed 0 (4 dirs: crash, resume, resume, resume; a 5th empty dir from a bad resume path was removed) | 09-25 14:45 | C# | mirror, near-wave, 10 Hz, 10 envs | same | running | train CS 3.5 → ~12.5 by 190 episodes; max 27 | running |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
+| `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
+
 Frozen evaluations (the only numbers that count for the gate): none yet.

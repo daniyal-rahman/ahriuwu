@@ -1,6 +1,6 @@
 """Drive the J1 gate 3 oracle against the JAX sim and against the real server.
 
-:mod:`lanerl_jax.parity.last_hit_oracle` is the policy: pure, deterministic,
+:mod:`lanerl_jax.parity.archive.last_hit_oracle` is the policy: pure, deterministic,
 JAX-free, and identical in both places by construction. This module is the two
 *drivers* -- the glue that turns each implementation's own state representation
 into the ``ChampView``/``MinionView`` the oracle reads, and its ``Decision``
@@ -126,14 +126,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from ..obs.fog import visible_to
-from ..sim.combat import growth_sum
-from ..sim.config import SimConfig
-from ..sim.init import TOP_LANE_PATH, init_lane
-from ..sim.orders import OrderKind, Orders
-from ..sim.state import Kind, Team
-from ..sim.step import env_step
-from .lanerl_lane import LanerlLane, forward_for
+from ...obs.fog import visible_to
+from ...sim.combat import growth_sum
+from ...sim.config import SimConfig
+from ...sim.init import TOP_LANE_PATH, init_lane
+from ...sim.orders import OrderKind, Orders
+from ...sim.state import Kind, Team
+from ...sim.step import env_step
+from ..lanerl_lane import LanerlLane, forward_for
 from .last_hit_oracle import (ChampView, Decision, MinionView, decide,
                               post_mitigation)
 
@@ -243,13 +243,13 @@ def gate3_route_inputs(*, route_table=None, terrain=None,
             raise ValueError("table_disabled conflicts with route_table/terrain")
         return None, None
     if route_table is None:
-        from ..data.local_route_artifact import load_local_route_artifact
+        from ...data.local_route_artifact import load_local_route_artifact
 
         artifact = load_local_route_artifact(
             DEFAULT_GATE3_ROUTE_ARTIFACT, pathfinding_radius=35.0)
         route_table = artifact.as_jax()
     if terrain is None:
-        from ..sim.terrain_jax import map1_terrain
+        from ...sim.terrain_jax import map1_terrain
 
         terrain = map1_terrain()
     return route_table, terrain
@@ -366,7 +366,7 @@ def heuristic_policy(approach_factor: float = 4.0,
     fwd = forward_for(is_blue)
     # `FriendlyFrontTurretAlong` -- blue's own outer turret, the floor that stops
     # the bot trailing its wave home (`LanerlBot.cs:1221-1222`).
-    from ..sim.init import TOP_OUTER_TURRET
+    from ...sim.init import TOP_OUTER_TURRET
     # `{0: blue, 1: red}` keyed by team index, each an (x, y). Blue's own outer
     # turret is the floor `FriendlyFrontTurretAlong` supplies.
     own_xy = TOP_OUTER_TURRET[0 if is_blue else 1]
@@ -786,7 +786,7 @@ def run_oracle_on_server(
 
     * unit id ``0`` is the wire's documented "no target" value and
       ``LanerlWire`` rejects an ``attack`` order carrying it -- never a
-      concern here because :func:`~lanerl_jax.parity.last_hit_oracle.decide`
+      concern here because :func:`~lanerl_jax.parity.archive.last_hit_oracle.decide`
       only ever returns a real minion's NetId, never 0.
     * an ``attack`` on a unit that is not currently visible is accepted by
       the wire and then silently cleared on the very next tick
@@ -854,7 +854,7 @@ def run_oracle_on_server(
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
 
-    from ..data.patch import load_patch
+    from ...data.patch import load_patch
 
     patch = load_patch()
     log_dir = Path(log_dir) if log_dir is not None else Path(

@@ -38,7 +38,7 @@ Six of the eight scored families are, including `target`, which is the field
 `ORDER-003` is actually about.
 
 USAGE
-    python -m lanerl_jax.parity.server_vs_server --a <normal.log> --b <shuffled.log>
+    python -m lanerl_jax.parity.archive.server_vs_server --a <normal.log> --b <shuffled.log>
 """
 
 from __future__ import annotations

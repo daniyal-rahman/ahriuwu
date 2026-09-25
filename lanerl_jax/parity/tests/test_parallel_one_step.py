@@ -1,7 +1,7 @@
 from dataclasses import asdict
 
-from lanerl_jax.parity.one_step import FieldStats, OneStepResult, merge_one_step_results
-from lanerl_jax.parity.parallel_one_step import partition_pair_ranges
+from lanerl_jax.parity.archive.one_step import FieldStats, OneStepResult, merge_one_step_results
+from lanerl_jax.parity.archive.parallel_one_step import partition_pair_ranges
 
 
 def test_partition_pair_ranges_is_balanced_contiguous_and_complete():

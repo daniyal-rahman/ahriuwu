@@ -69,7 +69,7 @@ def main(argv=None) -> None:
     from ...sim.spells import E_BUFF_SLOT, BuffId, Q_HASTE_BUFF_SLOT, Q_HASTE_MULTIPLIER, Slot
     from ...sim.state import Kind
     from ..inject import inject_snapshot, replay_wave_states
-    from ..tier1_full import FIRST_WAVE_MS
+    from .tier1_full import FIRST_WAVE_MS
     from ..trace import load_trace_window
 
     print(f"loading window [{a.from_ms}, {a.to_ms}] ms from {a.log} "

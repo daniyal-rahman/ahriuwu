@@ -27,7 +27,7 @@ offset. Assuming it did once produced an empty curve.
 Seeds are varied across runs so the result is not one permutation's quirk.
 
 USAGE
-    python -m lanerl_jax.parity.floor_pool --ref <reference.log> \
+    python -m lanerl_jax.parity.archive.floor_pool --ref <reference.log> \
         --runs <shuffled1.log> <shuffled2.log> ...
 """
 

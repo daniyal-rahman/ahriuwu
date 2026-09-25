@@ -65,11 +65,11 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from ..data.navgrid import GAREN_PATHFINDING_RADIUS, NavGrid
-from ..sim.movement import follow
-from ..train.benchmark import DEFAULT_ROUTE_ARTIFACT
-from .recover_waypoints import compare_paths, recover_waypoints
-from .trace import load_trace
+from ...data.navgrid import GAREN_PATHFINDING_RADIUS, NavGrid
+from ...sim.movement import follow
+from ...train.benchmark import DEFAULT_ROUTE_ARTIFACT
+from ..recover_waypoints import compare_paths, recover_waypoints
+from ..trace import load_trace
 
 __all__ = ["MoveTrial", "MovementParityResult", "run_movement_parity"]
 
@@ -152,7 +152,7 @@ class MovementParityResult:
         if scored:
             ok = sum(t.local_count_agrees for t in scored)
             ready = sum(t.local_status == 0 for t in scored)
-            from ..sim.local_pathing import LocalRouteStatus
+            from ...sim.local_pathing import LocalRouteStatus
             server_null = sum(t.local_status == LocalRouteStatus.SERVER_NULL
                               for t in scored)                    # PATH-008
             dv = np.array([t.local_deviation for t in scored])
@@ -187,9 +187,9 @@ def _local_router(artifact: Path, radius: float):
     import jax
     import jax.numpy as jnp
 
-    from ..data.local_route_artifact import load_local_route_artifact
-    from ..sim.local_pathing import build_local_waypoints
-    from ..sim.terrain_jax import map1_terrain
+    from ...data.local_route_artifact import load_local_route_artifact
+    from ...sim.local_pathing import build_local_waypoints
+    from ...sim.terrain_jax import map1_terrain
 
     table = load_local_route_artifact(artifact, pathfinding_radius=radius).as_jax()
     terrain = map1_terrain()

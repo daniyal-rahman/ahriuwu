@@ -151,7 +151,7 @@ from ...sim.init import lane_params
 from ...sim.state import Kind, Team
 from .gate3_swarm import (SRV_MINION, SRV_BLUE, SRV_RED, _server_first_seen,
                           _server_mrt_decision, lane_fraction, server_occupancy)
-from ..last_hit_drive import WIRE_MINION_TYPE
+from .last_hit_drive import WIRE_MINION_TYPE
 from ..targets import parse_target_traces
 
 __all__ = [

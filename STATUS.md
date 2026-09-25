@@ -10,7 +10,7 @@ runs are paused until that gate is met.
   after ~200 episodes. Resumed three times: two rank-loop crashes (fixed)
   and one "address already in use" on an episode-reset server restart
   (fixed: ports rotate, three attempts).
-- `idle-wave2-s0`: C# blue vs idle red, 4 envs. Train CS 4 → ~10.
+- `idle-wave2-s0` (E02): STOPPED 18:40 UTC to free cores for the multi-process collector throughput test; resumable from its last checkpoint with `RESUME=... experiments/E02_idle_wave.sh`. Train CS 4 → ~10, noisy.
 - Check: `python ops/server_train_status.py lanerl_jax/runs/server_train/<run>`.
 
 **Done today:** Codex's uncommitted server-first work committed (`35210dc`);
@@ -32,9 +32,12 @@ covers that range. Verdict: the click interface is implemented correctly.
 
 **Next:**
 1. Frozen evaluation of `mirror-wave-s0` at its next checkpoint, 5 episodes.
-3. If train CS plateaus below 30: adopt the process-parallel collector
-   (`lanerl_train/procactor.py`, 4,829 dec/s at 96 servers) into
-   `server_train.py` and run 3 seeds.
+3. Multi-process collector (`--workers N`, `MultiProcessCollector`) is
+   implemented and smoke-tested: 12 envs mirror, workers=1 vs 3 gave the same
+   ~770 decisions/s on 6 cores while E01 held 8 cores -- the desktop is
+   SERVER-CPU-bound at ~14 servers, not Python-bound any more. More throughput
+   needs more cores (or fewer ticks per decision), not more workers.
+4. If E01 plateaus below 30: run seeds 1-2 (`SEED=1 experiments/E01_mirror_wave.sh`).
 
 **Open bugs / unknowns:** attack completion is not attributed (Codex saw zero
 logged basic-attack completions in a 20-CS episode); `trainer.py` still has

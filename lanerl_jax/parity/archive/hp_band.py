@@ -9,7 +9,7 @@ killable minion appears in reach ... i.e. minion HP trajectories, not
 last-hitting." That is a hypothesis about *where* the missing opportunities
 come from, not a measurement -- nobody had yet looked at the HP band itself.
 This module is that measurement: for both engines, over the identical scripted
-scenario :mod:`lanerl_jax.parity.last_hit_drive` already drives, record every
+scenario :mod:`lanerl_jax.parity.archive.last_hit_drive` already drives, record every
 enemy minion's HP while it sits within Garen's reach, and how much of that
 time is inside the one-shot band
 ``hp <= post_mitigation(garen_ad, minion_armor)``.
@@ -49,7 +49,7 @@ size stays visible after the bug it measured is gone. See
 HOW TO READ THE OUTPUT
 -----------------------
 Run as a script for a human-readable report; import the ``run_*`` functions
-for a test or a follow-up analysis. ``python -m lanerl_jax.parity.hp_band``.
+for a test or a follow-up analysis. ``python -m lanerl_jax.parity.archive.hp_band``.
 """
 from __future__ import annotations
 
@@ -63,15 +63,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from ..obs.fog import visible_to
-from ..sim.combat import growth_sum, post_mitigation_damage
-from ..sim.config import SimConfig
-from ..sim.init import RUNE_AD_BONUS, init_lane
-from ..sim.orders import OrderKind, Orders
-from ..sim.profiles import PROFILES
-from ..sim.state import Kind, Team
-from ..sim.step import env_step
-from ..sim.targeting import MinionType
+from ...obs.fog import visible_to
+from ...sim.combat import growth_sum, post_mitigation_damage
+from ...sim.config import SimConfig
+from ...sim.init import RUNE_AD_BONUS, init_lane
+from ...sim.orders import OrderKind, Orders
+from ...sim.profiles import PROFILES
+from ...sim.state import Kind, Team
+from ...sim.step import env_step
+from ...sim.targeting import MinionType
 from .last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
                              WIRE_MINION_TYPE, _advance_approach,
                              gate3_route_inputs)
@@ -233,13 +233,13 @@ def run_sim_band(
     table_disabled: bool = False,
 ) -> SimBandRun:
     """Drive the same approach + oracle policy as
-    :func:`lanerl_jax.parity.last_hit_drive.run_oracle_in_sim`, instrumenting
+    :func:`lanerl_jax.parity.archive.last_hit_drive.run_oracle_in_sim`, instrumenting
     every enemy minion within Garen's reach post-handover instead of only
     counting attacks. Does NOT change the policy's behaviour (still decides
     off the sim's real, flat, current ``attack_damage``) -- this is a read,
     not a fix.
     """
-    from ..data.patch import load_patch
+    from ...data.patch import load_patch
 
     patch = load_patch()
     base_ad = patch.champion.base_ad
@@ -422,14 +422,14 @@ def run_server_band(
     observation_path: Optional[Path] = None,
 ) -> ServerBandRun:
     """Same approach + oracle policy as
-    :func:`lanerl_jax.parity.last_hit_drive.run_oracle_on_server`,
+    :func:`lanerl_jax.parity.archive.last_hit_drive.run_oracle_on_server`,
     instrumenting every enemy minion within Garen's reach post-handover. Reads
     the server's own real, leveled ``ad``/``lvl`` fields straight off the wire
     -- see the module docstring on why re-deriving either is the mistake this
     project already paid for once.
 
     ``autobuy`` defaults to **off** here (unlike
-    :func:`~lanerl_jax.parity.last_hit_drive.run_oracle_on_server`, which
+    :func:`~lanerl_jax.parity.archive.last_hit_drive.run_oracle_on_server`, which
     defaults it on to leave old callers unchanged): this instrument exists to
     read the HP band the last-hit MECHANIC produces, and ``LanerlHooks.
     AutoBuyUndriven`` buying Doran's Shield for free at boot (+80 max HP,
@@ -441,7 +441,7 @@ def run_server_band(
     from lanerl_train.ports import PortAllocator
     from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
 
-    from ..data.patch import load_patch
+    from ...data.patch import load_patch
 
     patch = load_patch()
     log_dir = Path(log_dir) if log_dir is not None else Path(

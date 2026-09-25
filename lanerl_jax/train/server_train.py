@@ -409,6 +409,90 @@ class ServerCollector:
         self.env.close()
 
 
+class MultiProcessCollector:
+    """``workers`` processes, each owning ``n // workers`` servers and its own
+    `ServerCollector`; the same host-facing API, agent rows concatenated in
+    worker order (env-major then team is preserved).
+
+    Why: one process stepping N servers in lockstep is bound by its own Python
+    (observe + rebuild + JSON) at ~600 decisions/s regardless of N, while the
+    servers idle. Workers parallelise that per-env work and the server ticks
+    behind it; the learner process only batches the results. This is the
+    pattern `lanerl_train/procactor.py` measured at 4,829 dec/s with 96
+    servers on the desktop, without its staleness queue: steps stay
+    synchronous, so every transition is on-policy exactly as before.
+    """
+    def __init__(self, n, out, port_base, episode_s, start_near_wave=False, step_ticks=2,
+                 server_dir=None, teams=(0,), workers=2):
+        import multiprocessing as mp
+        from .server_worker import worker_main
+        if n % workers:
+            raise ValueError("envs must divide evenly across workers")
+        self.teams, self.T = tuple(int(t) for t in teams), len(teams)
+        self.n_envs, self.workers = n, workers
+        self.n = n * self.T
+        per = n // workers
+        ctx = mp.get_context("spawn")
+        self.conns, self.procs = [], []
+        for w in range(workers):
+            parent, child = ctx.Pipe()
+            kwargs = dict(n=per, out=Path(out) / f"worker{w}", port_base=port_base + 200 * w,
+                          episode_s=episode_s, start_near_wave=start_near_wave,
+                          step_ticks=step_ticks, server_dir=server_dir, teams=self.teams)
+            Path(kwargs["out"]).mkdir(parents=True, exist_ok=True)
+            proc = ctx.Process(target=worker_main, args=(child, kwargs), daemon=True)
+            proc.start()
+            self.conns.append(parent); self.procs.append(proc)
+        for c in self.conns:
+            self._expect(c, "ready")
+        self.episodes = [0] * self.n
+        self._per_rows = per * self.T
+
+    def _expect(self, conn, want="ok"):
+        kind, payload = conn.recv()
+        if kind == "error":
+            raise RuntimeError("collector worker failed:\n" + payload)
+        if kind != want:
+            raise RuntimeError(f"collector worker sent {kind!r}, expected {want!r}")
+        return payload
+
+    def _all(self, cmd, args=None):
+        for w, c in enumerate(self.conns):
+            c.send((cmd, None if args is None else args[w]))
+        return [self._expect(c) for c in self.conns]
+
+    def observe(self):
+        parts = self._all("observe")
+        from ..obs.builder import Observation
+        obs = Observation(*[jnp.concatenate([np.asarray(p[0][k]) for p in parts]) for k in range(5)])
+        return obs, np.concatenate([p[1] for p in parts])
+
+    def step(self, actions):
+        actions = np.asarray(actions)
+        chunks = [actions[w * self._per_rows:(w + 1) * self._per_rows] for w in range(self.workers)]
+        return np.concatenate(self._all("step", chunks))
+
+    def restart_done(self, done):
+        done = np.asarray(done, bool)
+        chunks = [done[w * self._per_rows:(w + 1) * self._per_rows] for w in range(self.workers)]
+        eps = self._all("restart", chunks)
+        self.episodes = [e for part in eps for e in part]
+
+    def spell_ranks(self):
+        return np.concatenate(self._all("ranks"))
+
+    def close(self):
+        for c in self.conns:
+            try:
+                c.send(("close", None)); c.recv()
+            except Exception:
+                pass
+        for p in self.procs:
+            p.join(timeout=30)
+            if p.is_alive():
+                p.kill()
+
+
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                         save_updates=(), n_minibatches=1, resume=None, ckpt_every=10):
     """Train either farming collector with exactly the same PPO/reward loop.
@@ -624,6 +708,9 @@ def main():
     p.add_argument("--normalize-advantage", action="store_true",
                    help="per-batch advantage standardisation (off: batches with no reward "
                         "would otherwise turn critic noise into unit-variance gradients)")
+    p.add_argument("--workers", type=int, default=1,
+                   help=">1: spawn that many collector processes, each owning envs/workers servers "
+                        "(MultiProcessCollector); port blocks are base + 200*worker")
     p.add_argument("--eval-episodes", type=int, default=0,
                    help="evaluate the --resume checkpoint frozen for this many episodes per env; no learning")
     p.add_argument("--start-near-wave", action="store_true")
@@ -676,9 +763,15 @@ def main():
         "config_sha256": file_sha256(server_paths.default_game_config())}
     run.write()
     try:
-        collector = ServerCollector(args.envs, run.path, args.port_base, args.episode_s,
-                                    args.start_near_wave, args.step_ticks, args.server_dir,
-                                    teams=(0,) if args.opponent == "idle" else (0, 1))
+        teams = (0,) if args.opponent == "idle" else (0, 1)
+        if args.workers > 1:
+            collector = MultiProcessCollector(args.envs, run.path, args.port_base, args.episode_s,
+                                              args.start_near_wave, args.step_ticks, args.server_dir,
+                                              teams=teams, workers=args.workers)
+        else:
+            collector = ServerCollector(args.envs, run.path, args.port_base, args.episode_s,
+                                        args.start_near_wave, args.step_ticks, args.server_dir,
+                                        teams=teams)
     except BaseException as exc:
         run.set_results(status='failed', error=repr(exc))
         raise

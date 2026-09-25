@@ -96,11 +96,11 @@ from .perturbation import (
     server_units,
     sim_units,
 )
-from ..sim.config import SimConfig
-from ..sim.init import init_lane
-from ..sim.orders import OrderKind, Orders
-from ..sim.state import Kind, Team
-from ..sim.step import env_step
+from ...sim.config import SimConfig
+from ...sim.init import init_lane
+from ...sim.orders import OrderKind, Orders
+from ...sim.state import Kind, Team
+from ...sim.step import env_step
 
 __all__ = [
     "RawCurve", "run_sim_raw", "run_server_raw",
@@ -476,7 +476,7 @@ def _compare_sample(a: Sequence[UnitRecord], b: Sequence[UnitRecord], t_s: float
     # (PERTURBATION_RESPONSE.md, TICK_DIVERGENCE_TRACE.md) -- the pair either
     # side of a 1v1 top lane can plausibly reach in one episode.
     turret_hp_err, turret_alive_a, turret_alive_b = {}, {}, {}
-    from ..sim.init import TOP_OUTER_TURRET
+    from ...sim.init import TOP_OUTER_TURRET
     for team_enum, name in ((Team.BLUE, "blue"), (Team.RED, "red")):
         tx, ty = TOP_OUTER_TURRET[team_enum]
         server_team = _SERVER_TEAM[team_enum]

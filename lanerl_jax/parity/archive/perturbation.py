@@ -50,7 +50,7 @@ of this module's output.
 Both champions in `lanerl/cfg/garen1v1.json` are Garen (`"map": 1`, confirmed
 at line 132) -- the same config the whole project trains and evals against.
 Red never receives an order in any of these runs, matching
-`docs/TICK_DIVERGENCE_TRACE.md` and `lanerl_jax.parity.last_hit_drive`'s own
+`docs/TICK_DIVERGENCE_TRACE.md` and `lanerl_jax.parity.archive.last_hit_drive`'s own
 setup: only blue (slot 0 in the sim, `tm == 100` on the wire) is scripted.
 
 WHERE THE METRICS COME FROM
@@ -59,7 +59,7 @@ WHERE THE METRICS COME FROM
 server's `LANERL_STATE_DUMP` log -- built for a different job (bit-exact
 per-tick diffing) and requiring `LANERL_STATE_DUMP_FULL=1` plus a log-file
 round-trip. This module does not need that: `LanerlControl`'s own observation
-(`lanerl_jax.parity.last_hit_drive.run_oracle_on_server`'s `obs["u"]`) already
+(`lanerl_jax.parity.archive.last_hit_drive.run_oracle_on_server`'s `obs["u"]`) already
 carries every live `AttackableUnit` -- champions, lane minions *and* lane
 turrets, with `k`/`tm`/`x`/`y`/`hp` -- once per decision, over the same TCP
 channel already used to drive the champion. Dead units are simply absent (the
@@ -79,11 +79,11 @@ from typing import Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ..sim.config import SimConfig
-from ..sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane
-from ..sim.orders import OrderKind, Orders
-from ..sim.state import Kind, Team
-from ..sim.step import env_step
+from ...sim.config import SimConfig
+from ...sim.init import TOP_LANE_PATH, TOP_OUTER_TURRET, init_lane
+from ...sim.orders import OrderKind, Orders
+from ...sim.state import Kind, Team
+from ...sim.step import env_step
 
 __all__ = [
     "lane_fraction",
@@ -168,7 +168,7 @@ _OUTER_TURRET_XY = {100: TOP_OUTER_TURRET[Team.BLUE], 200: TOP_OUTER_TURRET[Team
 def sim_units(state) -> List[UnitRecord]:
     """:class:`~lanerl_jax.sim.state.LaneState` -> live :class:`UnitRecord`\\ s.
 
-    Mirrors `lanerl_jax.parity.sim_vs_server.state_to_snapshot`'s entity
+    Mirrors `lanerl_jax.parity.archive.sim_vs_server.state_to_snapshot`'s entity
     filter (``kind != NONE`` and ``alive``) and kind/team naming, without
     building a full `Snapshot`/`Entity` (this module needs four scalar fields,
     not the whole parity-trace row shape).
@@ -327,7 +327,7 @@ class ActionSpec(NamedTuple):
 #: champion happens to be standing.
 CAMP_POINT: Tuple[float, float] = TOP_LANE_PATH[2]
 
-#: `TOP_LANE_PATH[5]` -- the exact point `lanerl_jax.parity.last_hit_drive
+#: `TOP_LANE_PATH[5]` -- the exact point `lanerl_jax.parity.archive.last_hit_drive
 #: .APPROACH_WAYPOINTS` stops at, and for the same reason cited there: lane
 #: fraction ~0.55 (past the ~0.5 point where the two waves meet, so real
 #: minion contact is reliable), 1,248 units from the red outer turret's 750

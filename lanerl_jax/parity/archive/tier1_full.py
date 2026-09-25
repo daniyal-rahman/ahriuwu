@@ -7,7 +7,7 @@ via slurm.  It is CPU-bound work this repo has a node for, and an
 unchunked full-trace run holds the entire 575 MB dump as parsed `Entity`
 objects (~26 GB), which is why it was OOM-killed on the login node before:
 
-    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier1_full
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.archive.tier1_full
 
 ``--chunk-pairs`` removes that constraint by parsing one window at a time, so
 the same corpus, pair for pair, fits in a few GB and can run anywhere -- which
@@ -32,7 +32,7 @@ from .parallel_one_step import (
     ParallelProgress,
     run_parallel_one_step_differential,
 )
-from .trace import load_trace, load_trace_window
+from ..trace import load_trace, load_trace_window
 
 #: The recorded fixture is idle from t=0, but nothing with a minion in it
 #: exists before the first wave (`sim.waves.FIRST_WAVE_MS`) -- comparing
@@ -103,7 +103,7 @@ def main(argv=None) -> None:
         # the difference as a port defect. On the drill that produced 186
         # phantom champion target disagreements and 142 phantom move-order rows
         # -- numbers with exactly the shape of a large real residual.
-        from .record import ActionLog as _AL
+        from ..record import ActionLog as _AL
         _lp = Path(a.existing_log)
         for _g in sorted(_lp.parent.parent.glob("*_actions.json")):
             try:
@@ -119,10 +119,10 @@ def main(argv=None) -> None:
                     "Every champion row would measure the missing orders "
                     f"rather than the port.\n  pass:  --action-log {_g}")
     if a.action_log:
-        from .record import ActionLog
-        from ..data.local_route_artifact import load_local_route_artifact
-        from ..sim.terrain_jax import map1_terrain
-        from ..train.run_train import DEFAULT_ROUTE_ARTIFACT
+        from ..record import ActionLog
+        from ...data.local_route_artifact import load_local_route_artifact
+        from ...sim.terrain_jax import map1_terrain
+        from ...train.run_train import DEFAULT_ROUTE_ARTIFACT
 
         action_log = ActionLog.load(Path(a.action_log))
         print(f"loaded recorded actions: {a.action_log} "

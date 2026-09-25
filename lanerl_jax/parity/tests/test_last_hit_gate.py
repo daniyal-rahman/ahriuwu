@@ -7,7 +7,7 @@ tick, or the distribution of live minions. Both can hold inside tolerance
 while the thing the simulator is *for* is broken: the minion-population
 comparison (``lanerl_jax/sim/tests/test_lane.py``) sat at +17% while the lane
 underneath it was collapsing to one side. This gate instead runs one fixed,
-deterministic policy -- :mod:`lanerl_jax.parity.last_hit_oracle` -- against
+deterministic policy -- :mod:`lanerl_jax.parity.archive.last_hit_oracle` -- against
 both implementations and compares the score it gets. See that module's
 docstring for why the policy is a greedy last-hitter and not a "perfect" one,
 and ``lanerl_jax/parity/last_hit_drive.py`` for the two drivers, both now
@@ -28,7 +28,7 @@ server's CS 16 (382 attacks against the sim's 0-11) -- a real number, but one
 that measured the pathing approximation, not last-hitting, which was never
 actually exercised. The fix (below) is a scripted, terrain-safe approach that
 both drivers walk identically before either ever calls ``decide()``; see
-:data:`~lanerl_jax.parity.last_hit_drive.APPROACH_WAYPOINTS`. This is
+:data:`~lanerl_jax.parity.archive.last_hit_drive.APPROACH_WAYPOINTS`. This is
 recorded here because a gate that silently measures the wrong thing is
 precisely the failure mode gate 3 exists to catch, and it caught itself.
 
@@ -61,7 +61,7 @@ THE "10 CS / 535 ATTACKS" FIGURE IN docs/JAX_REWRITE_PLAN.md IS STALE
 Traced by commit timestamp, not assumption. That figure was written in
 ``89c5d58`` at 13:13:53Z; ``d463533`` ("the gate stops standing under the
 enemy turret") landed 37 minutes later at 13:50:25Z and moved
-:data:`~lanerl_jax.parity.last_hit_drive.APPROACH_WAYPOINTS` from
+:data:`~lanerl_jax.parity.archive.last_hit_drive.APPROACH_WAYPOINTS` from
 ``TOP_LANE_PATH[:7]`` (ending 412 units from red's outer turret, inside its
 750 range) to ``[:6]``. So "535 attacks" was measured with the champion
 parked inside the enemy turret's attack range, and nobody re-measured the
@@ -184,7 +184,7 @@ import os
 
 import pytest
 
-from lanerl_jax.parity.last_hit_drive import (
+from lanerl_jax.parity.archive.last_hit_drive import (
     DECISIONS_600S,
     run_oracle_in_sim,
     run_oracle_on_server,
@@ -228,7 +228,7 @@ def test_gate3_canonical_sim_path_is_routed():
 def test_oracle_scores_the_same_cs_in_sim_and_server():
     """J1 gate 3. Boots one real server; takes several minutes.
 
-    Both sides walk :data:`~lanerl_jax.parity.last_hit_drive.APPROACH_WAYPOINTS`
+    Both sides walk :data:`~lanerl_jax.parity.archive.last_hit_drive.APPROACH_WAYPOINTS`
     before either ever calls the oracle -- see the module docstring for why a
     first version of this test measured pathing instead of last-hitting, and
     why that walk-in is now scripted rather than oracle-driven.

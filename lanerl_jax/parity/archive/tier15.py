@@ -125,10 +125,10 @@ CANONICAL COMMAND
 -----------------
 See the ledger's "Canonical commands" table. In short::
 
-    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier15 record \\
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.archive.tier15 record \\
         --out-dir lanerl_jax/runs/tier15_noshop --decisions 12000 \\
         --port-base 45300 --no-autobuy --repeat 2
-    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.tier15 run \\
+    sbatch slurm/parity.sbatch python -m lanerl_jax.parity.archive.tier15 run \\
         --fixture lanerl_jax/runs/tier15_noshop --predicate champ_near_minion \\
         --radius 90 --min-hp-frac 0.5 --decisions 600 \\
         --out lanerl_jax/runs/tier15_noshop/q1_champ_into_wave.json
@@ -144,19 +144,19 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ..sim.init import TOP_LANE_PATH
-from ..sim.profiles import PROFILES
-from ..sim.state import CH_SLICE, Kind, MoveOrder, Team
-from ..sim.targeting import MinionType
-from .action_replay import (ActionReplayError, RecordedDecision,
+from ...sim.init import TOP_LANE_PATH
+from ...sim.profiles import PROFILES
+from ...sim.state import CH_SLICE, Kind, MoveOrder, Team
+from ...sim.targeting import MinionType
+from ..action_replay import (ActionReplayError, RecordedDecision,
                             align_action_log, decision_to_orders)
-from .diagnostic_identity import net_id_to_entity, net_id_to_injected_slot
-from .diff import DEFAULT_TOLERANCE, LANE_KINDS, _compare
-from .inject import (InjectionReport, infer_minion_model, inject_snapshot,
+from ..diagnostic_identity import net_id_to_entity, net_id_to_injected_slot
+from ..diff import DEFAULT_TOLERANCE, LANE_KINDS, _compare
+from ..inject import (InjectionReport, infer_minion_model, inject_snapshot,
                      replay_wave_states)
-from .record import ActionLog, Fixture
+from ..record import ActionLog, Fixture
 from .sim_vs_server import NOT_MODELLED
-from .trace import HASH_RE, Snapshot, Trace, load_trace, parse_stream
+from ..trace import HASH_RE, Snapshot, Trace, load_trace, parse_stream
 
 __all__ = [
     "StartSelection", "select_start", "Tick15Row", "Tier15Result",
@@ -953,10 +953,10 @@ def run_tier15(
     import jax
     import jax.numpy as jnp
 
-    from ..data.patch import load_patch
-    from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
-    from ..sim.orders import apply_orders
-    from ..sim.step import tick
+    from ...data.patch import load_patch
+    from ...sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
+    from ...sim.orders import apply_orders
+    from ...sim.step import tick
     from .one_step import _tick_jit          # the exact tick one_step diffs
 
     if enable_call_for_help and enable_collision:
@@ -1272,7 +1272,7 @@ def record_fixtures(out_dir: Path, decisions: int, port_base: int,
     champion-in-a-wave tick in a default fixture that predates them:
     `autobuy=False` is the only way to get a clean one.
     """
-    from .record import record_fixture
+    from ..record import record_fixture
 
     extra = None if autobuy else {"LANERL_AUTOBUY": "0"}
     out = []
@@ -1325,7 +1325,7 @@ def compare_determinism(a: Fixture, b: Fixture) -> str:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="python -m lanerl_jax.parity.tier15", description=__doc__,
+        prog="python -m lanerl_jax.parity.archive.tier15", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 

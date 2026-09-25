@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from lanerl_jax.parity.one_step import _compare_controller, _q_away_from_zero
+from lanerl_jax.parity.archive.one_step import _compare_controller, _q_away_from_zero
 from lanerl_jax.parity.trace import AIInternal, Entity, Snapshot, StatQ
 from lanerl_jax.parity.inject import UnitInjectionNote
 

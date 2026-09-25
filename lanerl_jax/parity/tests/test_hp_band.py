@@ -1,6 +1,6 @@
 """Pure aggregation checks for the gate-3 HP-band diagnostic."""
 
-from lanerl_jax.parity.hp_band import BandSample, band_windows
+from lanerl_jax.parity.archive.hp_band import BandSample, band_windows
 
 
 def _sample(t_ms: float, *, in_band: bool = True) -> BandSample:

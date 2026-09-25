@@ -57,15 +57,15 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 import jax
 import numpy as np
 
-from ..sim.init import TOP_LANE_PATH
-from ..sim.orders import Orders, apply_orders
-from ..sim.profiles import PROFILES
-from ..sim.state import Kind, LaneState
-from ..sim.step import tick
-from .diff import LANE_KINDS, _match_group
-from .inject import UnitInjectionNote, inject_snapshot, replay_wave_states
+from ...sim.init import TOP_LANE_PATH
+from ...sim.orders import Orders, apply_orders
+from ...sim.profiles import PROFILES
+from ...sim.state import Kind, LaneState
+from ...sim.step import tick
+from ..diff import LANE_KINDS, _match_group
+from ..inject import UnitInjectionNote, inject_snapshot, replay_wave_states
 from .sim_vs_server import state_to_snapshot
-from .trace import Entity, PosQ, Snapshot, StatQ
+from ..trace import Entity, PosQ, Snapshot, StatQ
 
 __all__ = [
     "SEED", "GAME_SECONDS", "record_idle_trace",
@@ -432,7 +432,7 @@ def compare_one_tick(state_n: LaneState, notes: List[UnitInjectionNote],
                          lambda e: (e.kind, e.team) if e.kind in LANE_KINDS
                          and e.team is not None else None)
     pre_by_group = _by_group(notes, lambda n: (n.kind, n.team))
-    from .diagnostic_identity import net_id_to_entity
+    from ..diagnostic_identity import net_id_to_entity
     real_by_net_id = net_id_to_entity(snap_n1)
     pre_net_id_to_slot = pre_net_id_to_slot or {}
     identity_complete = (
@@ -933,8 +933,8 @@ def run_one_step_differential(
     """
     import jax.numpy as jnp
 
-    from ..data.patch import load_patch
-    from ..sim.init import lane_params
+    from ...data.patch import load_patch
+    from ...sim.init import lane_params
 
     patch = patch or load_patch()
     params = lane_params(patch)
@@ -958,7 +958,7 @@ def run_one_step_differential(
     lane_path = jnp.asarray(np.asarray(TOP_LANE_PATH, np.float32))
     action_at_snapshot = {}
     if action_log is not None:
-        from .action_replay import align_action_log
+        from ..action_replay import align_action_log
         action_at_snapshot = align_action_log(trace, action_log)
 
     result = OneStepResult()
@@ -991,11 +991,11 @@ def run_one_step_differential(
         for label, count in report.provenance_counts().items():
             result.recovery_counts[label] = result.recovery_counts.get(label, 0) + count
         endpoint_orders = None
-        from .diagnostic_identity import net_id_to_injected_slot
+        from ..diagnostic_identity import net_id_to_injected_slot
         net_id_slots = net_id_to_injected_slot(snap_n, report.notes)
         decision = action_at_snapshot.get(i + 1)
         if decision is not None:
-            from .action_replay import decision_to_orders
+            from ..action_replay import decision_to_orders
             endpoint_orders = decision_to_orders(
                 decision, net_id_slots)
             result.n_action_boundaries += 1

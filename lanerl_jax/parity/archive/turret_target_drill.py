@@ -232,7 +232,7 @@ def phase_b(snaps, out: dict, from_ms: int, to_ms: int, max_pairs: int,
     from ...sim.profiles import PROFILES
     from ..diagnostic_identity import net_id_to_entity, net_id_to_injected_slot
     from ..inject import inject_snapshot, replay_wave_states
-    from ..one_step import compare_one_tick
+    from .one_step import compare_one_tick
     from ..trace import PosQ, StatQ
 
     wave_states = replay_wave_states(snaps)
@@ -361,7 +361,7 @@ def main(argv=None) -> None:
     ap.add_argument("--out-json", default=None)
     a = ap.parse_args(argv)
 
-    from ..tier1_full import FIRST_WAVE_MS
+    from .tier1_full import FIRST_WAVE_MS
     from ..trace import load_trace
 
     trace = load_trace(Path(a.existing_log))

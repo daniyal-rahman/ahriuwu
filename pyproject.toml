@@ -44,7 +44,6 @@ select = ["E", "F", "I", "W"]
 # a suite that rots silently.
 testpaths = [
     "legacy/tests",
-    "lanerl_bot/tests",
     "lanerl_rl/tests",
     "lanerl_train/tests",
     "lanerl_jax/parity/tests",

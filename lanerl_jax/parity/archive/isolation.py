@@ -102,9 +102,9 @@ from typing import List, Optional
 
 import numpy as np
 
-from ..last_hit_drive import (DECISIONS_600S, APPROACH_WAYPOINTS, WIRE_MINION_TYPE,
+from .last_hit_drive import (DECISIONS_600S, APPROACH_WAYPOINTS, WIRE_MINION_TYPE,
                              _advance_approach, gate3_route_inputs)
-from ..last_hit_oracle import ChampView, MinionView, decide
+from .last_hit_oracle import ChampView, MinionView, decide
 
 __all__ = ["IsolationRun", "run_sim_isolation", "run_server_isolation", "summarize"]
 

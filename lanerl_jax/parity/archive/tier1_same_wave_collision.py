@@ -101,9 +101,9 @@ def main(argv=None) -> None:
     from ...sim.state import Kind
     from ..diagnostic_identity import net_id_to_entity
     from ..inject import inject_snapshot, replay_wave_states
-    from ..one_step import POS_GATE_SLACK, POS_GATE_TOL, compare_one_tick, \
+    from .one_step import POS_GATE_SLACK, POS_GATE_TOL, compare_one_tick, \
         record_idle_trace
-    from ..tier1_full import FIRST_WAVE_MS
+    from .tier1_full import FIRST_WAVE_MS
     from ..trace import load_trace
 
     if a.existing_log:

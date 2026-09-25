@@ -40,8 +40,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .diff import LANE_KINDS, DEFAULT_TOLERANCE, Tolerance, diff_snapshots
-from .trace import Entity, Snapshot, load_trace
+from ..diff import LANE_KINDS, DEFAULT_TOLERANCE, Tolerance, diff_snapshots
+from ..trace import Entity, Snapshot, load_trace
 
 __all__ = ["SimVsServer", "state_to_snapshot", "compare_streams"]
 
@@ -57,8 +57,8 @@ def state_to_snapshot(state, t_ms: float, params=None) -> Snapshot:
     structural mismatch on every row; the unmodelled fields are excluded through
     ``Tolerance.ignore_fields`` instead, which *names* them in the report.
     """
-    from ..sim.state import Kind, MoveOrder, Team
-    from ..parity.trace import AIBlock, ChampionBlock
+    from ...sim.state import Kind, MoveOrder, Team
+    from ...parity.trace import AIBlock, ChampionBlock
 
     kind_name = {Kind.CHAMPION: "Champion", Kind.LANE_MINION: "LaneMinion",
                  Kind.TURRET: "LaneTurret"}

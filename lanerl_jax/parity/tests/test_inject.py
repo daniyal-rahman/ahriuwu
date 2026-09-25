@@ -23,7 +23,7 @@ from lanerl_jax.parity.inject import (
     xp_bounds_for_level,
 )
 from lanerl_jax.parity.trace import Snapshot, parse_row, parse_stream
-from lanerl_jax.parity.one_step import OneStepResult
+from lanerl_jax.parity.archive.one_step import OneStepResult
 from lanerl_jax.sim.init import lane_params
 from lanerl_jax.sim.init import ALL_TURRETS, TOP_LANE_PATH
 from lanerl_jax.sim.profiles import PROFILES, profile_id

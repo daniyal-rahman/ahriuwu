@@ -22,7 +22,7 @@ short of 100%:
   which is the known blind spot (RESET-004), so a missile-driven HP error is
   never reported as a damage-formula error.
 
-    python -m lanerl_jax.parity.tier1_residual_drill --existing-log LOG \\
+    python -m lanerl_jax.parity.archive.tier1_residual_drill --existing-log LOG \\
         --from-ms 124000 --to-ms 136000
 """
 from __future__ import annotations
@@ -110,7 +110,7 @@ def _resolve_action_log(a):
     """
     from pathlib import Path as _P
 
-    from .record import ActionLog
+    from ..record import ActionLog
 
     if a.action_log:
         log = ActionLog.load(_P(a.action_log))
@@ -429,18 +429,18 @@ def main(argv=None) -> None:
 
     import jax.numpy as jnp
 
-    from ..data.patch import load_patch
-    from ..sim.init import TOP_LANE_PATH, lane_params
-    from ..sim.profiles import PROFILES
-    from .diagnostic_identity import net_id_to_injected_slot
-    from .inject import inject_snapshot, replay_wave_states
+    from ...data.patch import load_patch
+    from ...sim.init import TOP_LANE_PATH, lane_params
+    from ...sim.profiles import PROFILES
+    from ..diagnostic_identity import net_id_to_injected_slot
+    from ..inject import inject_snapshot, replay_wave_states
     from .one_step import compare_one_tick
-    from ..sim.minion_ai import ACTION_TIMER_MS
-    from ..sim.profiles import PROFILES as PROFILE_SPECS
-    from ..sim.state import Kind
-    from ..sim.targeting import MinionType
+    from ...sim.minion_ai import ACTION_TIMER_MS
+    from ...sim.profiles import PROFILES as PROFILE_SPECS
+    from ...sim.state import Kind
+    from ...sim.targeting import MinionType
     from .tier1_full import FIRST_WAVE_MS
-    from .trace import (GATE_UNRECORDED, PosQ, StatQ, first_shut_gate,
+    from ..trace import (GATE_UNRECORDED, PosQ, StatQ, first_shut_gate,
                         gate_flags, load_trace_window)
 
     _SUBTYPE_NAME = {MinionType.MELEE: "melee", MinionType.CASTER: "caster",
@@ -466,7 +466,7 @@ def main(argv=None) -> None:
     n_action_boundaries = 0
     n_orders_unresolvable = 0
     if action_log is not None:
-        from .action_replay import align_action_log
+        from ..action_replay import align_action_log
         action_at_snapshot = align_action_log(snaps, action_log)
         print(f"aligned {len(action_at_snapshot)} action boundaries "
               f"onto {len(snaps)} snapshots")
@@ -532,7 +532,7 @@ def main(argv=None) -> None:
         endpoint_orders = None
         decision = action_at_snapshot.get(i + 1)
         if decision is not None:
-            from .action_replay import ActionReplayError, decision_to_orders
+            from ..action_replay import ActionReplayError, decision_to_orders
             try:
                 endpoint_orders = decision_to_orders(decision, net_id_slots)
                 n_action_boundaries += 1

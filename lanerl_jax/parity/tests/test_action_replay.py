@@ -90,7 +90,7 @@ def test_diagnostic_netid_maps_to_the_slot_chosen_by_injection():
 def test_one_step_netid_survives_collision_displacement_beyond_legacy_radius(monkeypatch):
     """A 48u push is still the same unit, not one death plus one spawn."""
     import jax.numpy as jnp
-    import lanerl_jax.parity.one_step as one_step
+    import lanerl_jax.parity.archive.one_step as one_step
 
     before = parse_row(
         "LaneMinion|200|18000,170000|477184/477184|A|4|2|-|-|1|")
@@ -131,7 +131,7 @@ def test_one_step_netid_survives_collision_displacement_beyond_legacy_radius(mon
 def test_endpoint_move_replay_uses_the_production_route_inputs(monkeypatch):
     """Driven parity must compare the server route, not a raw two-point move."""
     import jax.numpy as jnp
-    import lanerl_jax.parity.one_step as one_step
+    import lanerl_jax.parity.archive.one_step as one_step
 
     state = empty_state()
     endpoint = Snapshot(t_ms=17)

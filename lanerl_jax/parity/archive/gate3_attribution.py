@@ -144,7 +144,7 @@ import numpy as np
 from ...sim.local_pathing import LocalRouteStatus
 from ...sim.rewards import EXP_RADIUS
 from ...sim.state import Kind, Team
-from ..last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
+from .last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
                              run_oracle_in_sim, run_oracle_on_server)
 
 __all__ = ["SimTracer", "ServerTracer", "collect_sim", "collect_server",

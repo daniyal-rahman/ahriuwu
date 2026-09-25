@@ -59,7 +59,7 @@ import numpy as np
 
 from ...sim.init import TOP_LANE_PATH, lane_params
 from ...sim.state import Kind, Team
-from ..last_hit_drive import WIRE_MINION_TYPE
+from .last_hit_drive import WIRE_MINION_TYPE
 from ..targets import parse_target_traces
 
 __all__ = ["sim_acquisitions", "server_acquisitions", "report"]

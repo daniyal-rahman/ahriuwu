@@ -76,7 +76,7 @@ MODULES: Tuple[str, ...] = (
     "lanerl_jax.sim.profiles",
     "lanerl_jax.sim.init",
     "lanerl_jax.parity.inject",
-    "lanerl_jax.parity.one_step",
+    "lanerl_jax.parity.archive.one_step",
 )
 
 #: Live constants worth printing verbatim, because a digest tells you

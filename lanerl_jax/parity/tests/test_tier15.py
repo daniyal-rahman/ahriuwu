@@ -22,7 +22,7 @@ from dataclasses import replace as dc_replace
 import pytest
 
 from lanerl_jax.parity.action_replay import RecordedDecision
-from lanerl_jax.parity.tier15 import (STEP_TICKS, SideTick, StartSelection,
+from lanerl_jax.parity.archive.tier15 import (STEP_TICKS, SideTick, StartSelection,
                                       Tick15Row, Tier15Result,
                                       _seed_champion_orders, select_start)
 from lanerl_jax.parity.trace import parse_stream

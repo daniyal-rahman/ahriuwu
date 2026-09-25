@@ -81,11 +81,11 @@ from ...sim.profiles import PROFILES
 from ...sim.state import Kind, Team, TurretTier
 from ...sim.step import step_decision
 from ...sim.targeting import MinionType
-from ..hp_band import BandSample, leveled_ad_of
-from ..last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
+from .hp_band import BandSample, leveled_ad_of
+from .last_hit_drive import (APPROACH_WAYPOINTS, DECISIONS_600S,
                              WIRE_MINION_TYPE, _advance_approach,
                              gate3_route_inputs)
-from ..last_hit_oracle import ChampView, MinionView, decide, post_mitigation
+from .last_hit_oracle import ChampView, MinionView, decide, post_mitigation
 
 __all__ = [
     "MortalityEvent", "PositionStats", "SimReachRun", "ServerReachRun",

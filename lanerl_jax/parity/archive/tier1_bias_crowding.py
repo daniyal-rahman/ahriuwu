@@ -21,17 +21,17 @@ from pathlib import Path
 import numpy as np
 
 from ..inject import inject_snapshot, replay_wave_states
-from ..one_step import POS_Q_UNIT, record_idle_trace
+from .one_step import POS_Q_UNIT, record_idle_trace
 from ..trace import load_trace
 from ...sim.init import TOP_LANE_PATH, lane_params
 from ...sim.profiles import PROFILES
-from ..tier1_full import FIRST_WAVE_MS
+from .tier1_full import FIRST_WAVE_MS
 
 
 def main() -> None:
     import jax.numpy as jnp
     from ...data.patch import load_patch
-    from ..one_step import compare_one_tick
+    from .one_step import compare_one_tick
 
     out = Path("lanerl_jax/runs/tier1_bias_crowding")
     log = record_idle_trace(out, game_seconds=200.0, port_base=51700)
