@@ -17,7 +17,7 @@ labelled `train`.
 | `E05_mirror_wave_gru_standard/seed0` | 09-26 01:20 | C# | from scratch: mirror, near-wave, 10 Hz, 10 servers x 128, ClickV3 | GRU core; PPOConfig.standard (lr 2.5e-4 annealed, lambda 0.95, entropy 0.01, clip-grad 0.5, adv-norm, no KL stop); XP 0.002 | stopped at 912 updates (2.3M dec) | frozen u860: blue 6.5 (5-8), red 10.0 (3-19); train flat 8-12; entropy pinned 9.0 | entropy 0.01 on the 3-head SUM is 3x CleanRL's per-head push; superseded by E06 |
 | `E06_mirror_wave_gru_ent3/seed0` | 09-26 03:25 | C# | as E05 | as E05 with entropy 0.01/3 (now the preset default) | stopped at u3800 of 6000 | frozen (both sides averaged): 5.6, 11.0, 14.8, 19.4, 13.0, 18.9, 15.2, 13.4, 14.9, 21.6, 17.1 | plateau ~17 (band 13-22) from 4M decisions; control for E07 |
 | `E07_frozen_opponent/seed0` | 09-26 18:30 | C# | E06's learner continued from u3140; opponent FROZEN at E06 u2200; learner side alternates blue/red across 6 servers x 256 steps | E06's (GRU, standard) | INVALID: `--resume` inherited E06's update counter (started at 5234) and lr schedule, so it ran 767 updates (1.2M dec) at a near-zero lr and stopped at 'update 6000'; its 3 evaluations failed (no --opponent-ckpt passed). Train chunks 17-23. Dir `seed0_v1_inherited_schedule` | — | superseded by the relaunch below |
-| `E07_frozen_opponent/seed0` (relaunch) | 09-26 21:55 | C# | as above, `--init-from` E06 u3140 (params only): fresh optimizer, own lr schedule and 3000-update budget | E06's (GRU, standard, anneal over 3000) | 3000 updates (4.6M dec) | running | running |
+| `E07_frozen_opponent/seed0` (relaunch) | 09-26 21:55 | C# | as above, `--init-from` E06 u3140 (params only): fresh optimizer, own lr schedule and 3000-update budget | E06's (GRU, standard, anneal over 3000) | PAUSED at u178 (Dani, 22:40 UTC) for the oracle/BC/learner diagnostics | train CS 16 -> 8-10 after the fresh-optimizer restart; no frozen eval | paused |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
@@ -29,6 +29,7 @@ Interface oracle (scripted last-hitter `train/scripted_policy.py` through the SA
 | `idle-lasthit` | idle red | 60 | - | 0 | the interface supports 60 CS |
 | `mirror-lasthit` | scripted last-hitter both sides | 45 | 28 | 2 | gate reachable; RED side 17 CS behind with the same deterministic script (open: dynamics or a side bug, SIDE-001 class) |
 | `mirror-any` | scripted brawler both sides | 23 | 26 | 5 | attacking any minion in range costs 5 deaths and halves CS |
+| `idle-lasthit-red` | scripted RED vs idle blue | - | 74 | 0 | red's interface is fine; the 45/28 mirror split is wave interaction, not a side bug |
 
 Frozen evaluations (the only numbers that count for the gate):
 

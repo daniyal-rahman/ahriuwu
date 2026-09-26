@@ -7,12 +7,15 @@ runs are paused until that gate is met.
 **INTERFACE ORACLE (22:25 UTC):** the scripted last-hitter through the policy's own
 observation->click path scores 60 CS vs idle red and 45 (blue) / 28 (red) in a
 scripted mirror, deterministic across servers. The gate is reachable through
-this interface; the trained policies' 15-22 is a learning gap. OPEN: red 17 CS
-behind blue with the same script (test running: scripted red vs idle blue).
+this interface; the trained policies' 15-22 is a learning gap. Scripted RED vs idle blue: 74 CS, 0 deaths, so the 45/28 mirror split is wave
+interaction, not a side bug.
 Next diagnostics: behaviour-clone the oracle (representability), then PPO from
 that init (does the learner preserve a 40-CS policy?).
 
-**Running:** E07 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
+**Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
+BC representability, PPO-from-BC learner test); then a heuristics-initialised
+GRU on the JAX sim to a compare point; then cross-play E04 vs that agent on
+the C# server. **Running:** demo recording for BC. E07 PAUSED at u178 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
 optimizer/schedule, own 3000-update budget) vs a FROZEN E06 checkpoint. The first
 E07 attempt inherited E06's counter and schedule (767 updates at ~0 lr, evals
 failed) and is recorded as invalid.

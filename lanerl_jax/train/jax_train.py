@@ -38,6 +38,10 @@ def main():
     parser.add_argument('--normalize-advantage', action='store_true')
     parser.add_argument('--opponent', choices=('idle', 'mirror'), default='idle')
     parser.add_argument('--resume', type=Path, default=None)
+    parser.add_argument('--init-from', type=Path, default=None, help='params only: fresh optimizer/schedule/budget')
+    parser.add_argument('--lr-anneal', action='store_true')
+    parser.add_argument('--core', choices=('mlp', 'gru'), default='mlp')
+    parser.add_argument('--preset', choices=('legacy', 'standard'), default='legacy')
     parser.add_argument('--ckpt-every', type=int, default=10)
     parser.add_argument('--eval-episodes', type=int, default=0)
     parser.add_argument('--batch-mode', choices=['auto', 'map', 'vmap'], default='auto')
@@ -53,14 +57,25 @@ def main():
     if args.start_near_wave and args.episode_s <= WAVE_START_MS / 1000:
         parser.error('wave-start episodes must end after 120 game seconds')
     teams = (0,) if args.opponent == 'idle' else (0, 1)
-    cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,
-                    entropy_coef=args.entropy_coef, epochs=args.epochs,
-                    normalize_advantage=args.normalize_advantage,
-                    decision_hz=60. / args.step_ticks,
-                    gae_lambda=PPOConfig().gae_lambda ** (args.step_ticks / 2.))
-    import jax
+    hz = 60. / args.step_ticks
+    if args.preset == 'standard':
+        cfg = PPOConfig.standard(decision_hz=hz)
+    else:
+        cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,
+                        entropy_coef=args.entropy_coef, epochs=args.epochs,
+                        normalize_advantage=args.normalize_advantage, decision_hz=hz,
+                        gae_lambda=PPOConfig().gae_lambda ** (args.step_ticks / 2.))
+    import jax, json as _json
     jax.config.update("jax_default_matmul_precision", "highest")
-    policy = LanePolicy(PolicyConfig())
+    resume_params_only = False
+    if args.init_from is not None:
+        args.resume, resume_params_only = args.init_from, True
+    pcfg = PolicyConfig(core=args.core)
+    if args.resume is not None and (args.resume.parent / 'manifest.json').exists():
+        saved = _json.loads((args.resume.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})
+        if saved:
+            pcfg = PolicyConfig(**saved)
+    policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.jax_train', *sys.argv[1:]])
     run = RunDir(args.out, f'jax-farm-s{args.seed}', {
         'train': {'policy': policy.cfg._asdict()}, 'command': command,
@@ -111,7 +126,8 @@ def main():
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
                         save_updates=args.save_updates, n_minibatches=args.minibatches,
-                        resume=args.resume, ckpt_every=args.ckpt_every)
+                        resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal,
+                        resume_params_only=resume_params_only)
 
 
 if __name__ == '__main__':
