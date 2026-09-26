@@ -35,7 +35,7 @@ BC representability diagnostic (`train/bc_diag.py` on the 19,196 x 8 scripted mi
 
 | Run (`runs/BC/`) | Core | Held-out accuracy (button / x / y) | Mirror eval, sampled | Meaning |
 |---|---|---|---|---|
-| `bc-mlp-20260926-223919` | MLP | 0.99 / 0.74 / 0.72 | 5.3 / 3.8 CS (teacher: 45 / 28) | per-step accuracy is high but sampled clicks a cell off miss the minion and errors compound; click heads must be SHARP. Argmax eval pending |
+| `bc-mlp-20260926-223919` | MLP | 0.99 / 0.74 / 0.72 | 5.3 / 3.8 CS sampled; 12 / 11 argmax (teacher: 45 / 28) | per-step accuracy is high but the clone is wrong at the decisive (attack) steps; a 150-epoch run with attack-step accuracy reported is checking undertraining vs a representational ceiling |
 | `bc-gru` (batch 1024, seq 32, 20 epochs) | GRU | 0.87 / 0.29 / 0.29 | not evaluated | under-trained; not used |
 
 Frozen evaluations (the only numbers that count for the gate):

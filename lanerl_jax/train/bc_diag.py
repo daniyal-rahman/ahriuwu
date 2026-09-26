@@ -47,11 +47,20 @@ def main():
     params = policy.init(key, *init_args)
     tx = optax.adam(a.lr); opt = tx.init(params)
 
+    ATTACK = 2   # BUTTONS.index("attack_move")
+
     def heads_loss(logits, action):
         lp = [jax.nn.log_softmax(l, axis=-1) for l in (logits.button, logits.screen_x, logits.screen_y)]
         nll = -sum(jnp.take_along_axis(l, action[..., i:i+1], axis=-1)[..., 0] for i, l in enumerate(lp))
-        acc = jnp.stack([jnp.argmax(l, -1) == action[..., i] for i, l in enumerate(lp)], -1)
-        return nll.mean(), acc.mean(0)
+        hit = jnp.stack([jnp.argmax(l, -1) == action[..., i] for i, l in enumerate(lp)], -1)
+        # Accuracy overall and on ATTACK steps (the last-hit clicks that decide CS);
+        # the attack-step click is the number that matters.
+        is_atk = (action[..., 0] == ATTACK).astype(jnp.float32)[..., None]
+        atk_acc = (hit * is_atk).sum(axis=tuple(range(hit.ndim - 1))) / jnp.maximum(is_atk.sum(), 1.0)
+        both = jnp.all(hit[..., 1:], -1).astype(jnp.float32)
+        atk_xy_both = (both * is_atk[..., 0]).sum() / jnp.maximum(is_atk.sum(), 1.0)
+        acc = jnp.concatenate([hit.reshape(-1, 3).mean(0), atk_acc.reshape(-1), atk_xy_both.reshape(1)])
+        return nll.mean(), acc
 
     if a.core == "mlp":
         def loss_fn(params, e, m, s, g, act):
@@ -102,8 +111,10 @@ def main():
             vw = np.array([(s0, n) for s0 in starts for n in val_rows])
             sl = lambda x: np.stack([x[s0:s0+a.seq_len, n] for s0, n in vw])
             vl, vacc = eval_loss(params, sl(ent), sl(mask), sl(sv), sl(gv), sl(act).astype(np.int32), sl(done))
-        row = {"epoch": epoch + 1, "train_loss": float(np.mean(losses)), "train_acc_button_x_y": np.mean(accs, 0).round(3).tolist(),
-               "val_loss": float(vl), "val_acc_button_x_y": np.asarray(vacc).round(3).tolist(), "wall_s": round(time.time() - t0, 1)}
+        v = np.asarray(vacc).round(3).tolist()
+        row = {"epoch": epoch + 1, "train_loss": float(np.mean(losses)), "train_acc": np.mean(accs, 0).round(3).tolist(),
+               "val_loss": float(vl), "val_acc_button_x_y": v[:3], "val_acc_on_attack_steps_button_x_y": v[3:6],
+               "val_attack_click_exact": v[6], "wall_s": round(time.time() - t0, 1)}
         run.log(row); print(json.dumps(row), flush=True)
     step = a.epochs * T * len(tr_rows)
     run.save(step, a.epochs, {"params": params, "opt_state": opt, "step": step})

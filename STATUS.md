@@ -18,7 +18,10 @@ GRU on the JAX sim to a compare point; then cross-play E04 vs that agent on
 the C# server. **BC representability (23:20 UTC):** the MLP clone matches the scripted teacher
 99% (button) / 74% (click x,y) per step but scores 5.3 / 3.8 CS sampled in a
 mirror (teacher 45 / 28): sampled clicks a cell off miss the minion and the
-errors compound. Argmax eval running. E08 = PPO from this clone (learner test).
+errors compound. Argmax eval: 12 / 11 CS, so the clone is wrong at the decisive steps, not
+just blurred by sampling. A 150-epoch BC with attack-step click accuracy is
+running to tell undertraining from a representational ceiling. E08 = PPO
+from the 20-epoch clone (learner test), running.
 **Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
 steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.
 JAX shared-loop GRU probe: ~430 dec/s at 8 envs (server-level), OOM at 32
