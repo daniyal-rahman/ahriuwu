@@ -11,9 +11,11 @@ decisions), not by the policy. Fixed 09:50 UTC; E06 resumed from its u620
 checkpoint. Post-fix frozen u1260: 15.3 / 14.3; u1580: 14.3 / 24.5; u1900: 11.3 / 14.8
 u2200: 20.3 / 17.5 (best); u2520: 16.8 / 13.8; u2840: 12.5 / 14.3; u3140: 15.5 / 14.3. Plateau band 14-20 frozen since
 u1260 (E01's band). Leak fixed (eager scan re-traced per update): memory now
-+2.4 MB/update, 7.4 s/update. Proposed next: E07 = E06 against a FROZEN
-earlier checkpoint (past-self opponent) to stop self-play drift into duels;
-awaiting Dani's go-ahead. OOM-killed at
++2.4 MB/update, 7.4 s/update. E07 launched 18:30 UTC (Dani's go-ahead): E06's learner continued
+against E06's u2200 checkpoint as a FROZEN opponent, learner side alternating
+per server (`--opponent frozen`). Runs beside E06. Parallel-server audit of
+E06: all 20 agent slots average 13.7-17.7 CS, no outlier server, zero rank/
+restart/fatal/complaint events, all servers at 309 ticks/s. OOM-killed at
 u1931 (slurm 10 GB limit, 12:55 UTC); resumed 14:30 UTC at 20 GB from u1920
 with per-update RSS now logged (`rss_gb`). All numbers past level 9 before the fix are suspect.
 Throughput 12 s/update = 213 dec/s with the node to itself; the GRU's

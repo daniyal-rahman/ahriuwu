@@ -467,8 +467,10 @@ def load_params(path: str):
         cfg = PolicyConfig(**saved)
     policy = LanePolicy(cfg)
     obs0 = build_observation(init_lane(), 0, frame, params=lane_params())
-    fresh = policy.init(jax.random.key(0), obs0.entities, obs0.entity_pad_mask,
-                        obs0.self_vec, obs0.global_vec)
+    init_args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
+    if cfg.core == "gru":
+        init_args = init_args + (policy.initial_carry(()),)
+    fresh = policy.init(jax.random.key(0), *init_args)
     if path == "random":
         return policy, fresh, "random"
     payload = msgpack_restore(Path(path).read_bytes())
@@ -588,14 +590,20 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
     own = frame_blue if int(team) == Team.BLUE else frame_red
     row = int(team)
 
+    recurrent = getattr(policy.cfg, "core", "mlp") == "gru"
+
     @jax.jit
-    def act(state, key, visibility=None, hud=None):
+    def act(state, key, visibility=None, hud=None, carry=None):
         obs = build_observation(state, row, own, params=lane_params(),
                                 visibility=visibility)
         if hud is not None:
             obs = apply_own_hud(obs, hud)
-        logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
-                              obs.self_vec, obs.global_vec)
+        if recurrent:
+            logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask,
+                                         obs.self_vec, obs.global_vec, carry)
+        else:
+            logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
+                                  obs.self_vec, obs.global_vec)
         if deterministic:
             action = (jnp.argmax(logits.button), jnp.argmax(logits.screen_x),
                       jnp.argmax(logits.screen_y))
@@ -610,7 +618,7 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
         slots = jnp.stack([obs.slot_unit, obs.slot_unit])
         orders = orders_from(act2, state, slots, frame_blue, snap_moves=False)
         return (orders.kind[row], orders.x[row], orders.y[row],
-                orders.target[row], action[0])
+                orders.target[row], action[0], carry)
 
     return act
 
@@ -685,6 +693,7 @@ class PolicyDriver:
         self.key = jax.random.key(seed)
         self.counts = {"cast": 0, "attack": 0, "move": 0, "noop": 0,
                        "recall": 0, "level": 0}
+        self.policy = policy
         self._act = _make_act(policy, params, deterministic=deterministic,
                               team=self.team)
 
@@ -704,9 +713,13 @@ class PolicyDriver:
     def decide(self, state, netid: np.ndarray, visibility=None, hud=None) -> DriverStep:
         """Act on an already-rebuilt state."""
         self.key, k = jax.random.split(self.key)
-        result = (self._act(state, k) if visibility is None
-                  else self._act(state, k, visibility, hud))
-        kind, ox, oy, tgt, _btn = result
+        # GRU policies carry their state across decisions (one episode per driver).
+        if getattr(self.policy.cfg, "core", "mlp") == "gru" and getattr(self, "carry", None) is None:
+            self.carry = self.policy.initial_carry(())
+        carry = getattr(self, "carry", None)
+        result = (self._act(state, k, None, None, carry) if visibility is None
+                  else self._act(state, k, visibility, hud, carry))
+        kind, ox, oy, tgt, _btn, self.carry = result
         kind, ox, oy, tgt = int(kind), float(ox), float(oy), int(tgt)
         button = BUTTONS[int(_btn)]
         sampled = f"sampled_{button}"

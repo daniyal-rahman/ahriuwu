@@ -23,4 +23,5 @@ Rules:
 | E04_mirror_wave_snap_noxp | E01 continued with click snapping + XP weight 0: do wall-clicks and XP camping explain the plateau? | 22700 | C# |
 | E05_mirror_wave_gru_standard | from scratch, GRU core, published PPO defaults, ClickV3 | 22900 | C# |
 | E06_mirror_wave_gru_ent3 | E05 with the per-head-scaled entropy coefficient | 23100 | C# |
-| (next) | | 23300 | |
+| E07_frozen_opponent | E06 continued against a frozen E06 checkpoint (past-self opponent) | 23300 | C# |
+| (next) | | 23500 | |

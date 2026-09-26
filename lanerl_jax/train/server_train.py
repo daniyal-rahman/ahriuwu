@@ -538,6 +538,83 @@ class MultiProcessCollector:
                 p.kill()
 
 
+class FrozenOpponentCollector:
+    """Mirror servers where the learner drives ONE champion per server and a
+    frozen checkpoint drives the other (a fixed sparring partner instead of
+    live self-play, the remedy for self-play drift into duels). The learner's
+    side alternates across servers (blue on even, red on odd) so neither side
+    is favoured. Exposes the ServerCollector API with n = number of servers.
+    """
+    def __init__(self, inner, opp_policy, opp_params, *, seed=0):
+        if inner.T != 2:
+            raise ValueError("frozen opponent needs a mirror (two-team) collector")
+        self.inner, self.n_envs, self.n, self.T, self.teams = inner, inner.n_envs, inner.n_envs, 1, (0,)
+        self.side = np.arange(self.n_envs) % 2                 # learner's team per server
+        self.rows = np.arange(self.n_envs) * 2 + self.side      # learner's agent rows in `inner`
+        self.opp_rows = np.arange(self.n_envs) * 2 + (1 - self.side)
+        self.opp_policy, self.opp_params = opp_policy, opp_params
+        self.opp_recurrent = getattr(opp_policy.cfg, "core", "mlp") == "gru"
+        self.opp_carry = opp_policy.initial_carry((self.n_envs,)) if self.opp_recurrent else None
+        self.rng = jax.random.key(seed + 7919)
+        @jax.jit
+        def opp_act(params, obs, key, carry):
+            if self.opp_recurrent:
+                logits, carry = opp_policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
+            else:
+                logits = opp_policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
+            action, _, _ = _sample(logits, key, ~obs.entity_pad_mask)
+            return action, carry
+        self._opp_act = opp_act
+        self._opp_obs = None
+        self.episodes = [0] * self.n_envs
+
+    def _split(self, obs, stats):
+        take = lambda x: x[self.rows]
+        self._opp_obs = jax.tree.map(lambda x: x[self.opp_rows], obs)
+        return jax.tree.map(take, obs), stats[self.rows]
+
+    def observe(self):
+        return self._split(*self.inner.observe())
+
+    def spell_ranks(self):
+        return self.inner.spell_ranks()[self.rows]
+
+    def step(self, actions):
+        self.rng, key = jax.random.split(self.rng)
+        opp_action, carry = self._opp_act(self.opp_params, self._opp_obs, key, self.opp_carry)
+        opp_host = np.stack(jax.device_get(opp_action), axis=-1)
+        merged = np.zeros((self.inner.n, 3), np.int32)
+        merged[self.rows] = np.asarray(actions)
+        merged[self.opp_rows] = opp_host
+        done = self.inner.step(merged)[self.rows]
+        if self.opp_recurrent:
+            self.opp_carry = jnp.where(jnp.asarray(done)[:, None], 0.0, carry)
+        return done
+
+    def restart_done(self, done):
+        self.inner.restart_done(np.repeat(np.asarray(done, bool), 2))
+        self.episodes = list(np.asarray(self.inner.episodes)[self.rows])
+
+    def close(self):
+        self.inner.close()
+
+
+def load_checkpoint_policy(path):
+    """(policy, params) for a checkpoint, architecture from its run manifest."""
+    from flax.serialization import from_state_dict, msgpack_restore
+    from ..obs.builder import build_observation
+    from ..sim.init import init_lane, lane_params
+    saved = json.loads((Path(path).parent / "manifest.json").read_text())["config"]["train"]["policy"]
+    policy = LanePolicy(PolicyConfig(**saved))
+    obs0 = build_observation(init_lane(), 0, _lane_frames()[0], params=lane_params())
+    args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
+    if policy.cfg.core == "gru":
+        args = args + (policy.initial_carry(()),)
+    fresh = policy.init(jax.random.key(0), *args)
+    params = from_state_dict(fresh, msgpack_restore(Path(path).read_bytes())["params"])
+    return policy, params
+
+
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                         save_updates=(), n_minibatches=1, resume=None, ckpt_every=10,
                         lr_anneal=False):
@@ -797,8 +874,10 @@ def main():
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--minibatches", type=int, default=1)
-    p.add_argument("--opponent", choices=("idle", "mirror"), default="idle",
-                   help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions")
+    p.add_argument("--opponent", choices=("idle", "mirror", "frozen"), default="idle",
+                   help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions; "
+                        "frozen: the learner drives one side (alternating per server), --opponent-ckpt drives the other")
+    p.add_argument("--opponent-ckpt", type=Path, default=None, help="checkpoint for --opponent frozen")
     p.add_argument("--resume", type=Path, default=None, help="ckpt_latest.msgpack of a compatible run")
     p.add_argument("--ckpt-every", type=int, default=10)
     p.add_argument("--normalize-advantage", action="store_true",
@@ -829,6 +908,8 @@ def main():
         p.error('wave-start episodes must end after 120 game seconds')
     if (args.envs * (2 if args.opponent == "mirror" else 1) * args.rollout) % args.minibatches:
         p.error("minibatches must divide envs x agents x rollout")
+    if args.opponent == "frozen" and (args.opponent_ckpt is None or not args.opponent_ckpt.exists()):
+        p.error("--opponent frozen needs an existing --opponent-ckpt")
     hz = 60. / args.step_ticks
     if args.preset == "standard":
         cfg = PPOConfig.standard(decision_hz=hz)
@@ -862,7 +943,8 @@ def main():
         "command": command, "cwd": str(Path.cwd()),
         "ppo": cfg._asdict(), "collector": vars(args), "environment": "source-server",
         "observation": "viewport+server-fog+structured-HUD",
-        "opponent": "idle-fountain" if args.opponent == "idle" else "mirror-self-play",
+        "opponent": {"idle": "idle-fountain", "mirror": "mirror-self-play",
+                     "frozen": f"frozen checkpoint {args.opponent_ckpt} (learner side alternates per server)"}[args.opponent],
         "reward": f"CS - 2*death + 5*(lane_potential_next - potential) + {args.xp_weight}*xp",
         "click_snap": not args.no_snap_clicks,
         "initialization": "random; no prior"})
@@ -883,6 +965,9 @@ def main():
     run.write()
     try:
         teams = (0,) if args.opponent == "idle" else (0, 1)
+        if args.opponent == "frozen":
+            opp_policy, opp_params = load_checkpoint_policy(args.opponent_ckpt)
+            run.set_results(opponent_ckpt_sha256=file_sha256(args.opponent_ckpt))
         if args.workers > 1:
             collector = MultiProcessCollector(args.envs, run.path, args.port_base, args.episode_s,
                                               args.start_near_wave, args.step_ticks, args.server_dir,
@@ -891,6 +976,8 @@ def main():
             collector = ServerCollector(args.envs, run.path, args.port_base, args.episode_s,
                                         args.start_near_wave, args.step_ticks, args.server_dir,
                                         teams=teams)
+        if args.opponent == "frozen":
+            collector = FrozenOpponentCollector(collector, opp_policy, opp_params, seed=args.seed)
     except BaseException as exc:
         run.set_results(status='failed', error=repr(exc))
         raise
