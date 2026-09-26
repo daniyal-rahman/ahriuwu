@@ -25,7 +25,8 @@ sampled and 5 / 10 argmax (teacher 45 / 28): per-step accuracy does not
 transfer; compounding error. DAgger (relabel the clone's own states with the
 scripted policy offline, retrain) started to get a genuinely strong network
 policy for the learner test and the cross-play compare point. E08 (from the weak clone) stopped; E09 = PPO
-from the strong clone (learner test) launched 23:15 UTC, eval every 100.
+from the strong clone launched 23:15 UTC: frozen u120 9.3 / 11.3, up from the
+clone's 7.8 / 5.3, train chunks 3 -> 10 (improving, not degrading).
 **Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
 steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.
 JAX shared-loop GRU probe: ~430 dec/s at 8 envs (server-level), OOM at 32
