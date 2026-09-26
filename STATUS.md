@@ -8,7 +8,8 @@ runs are paused until that gate is met.
 re-armed). Frozen u320: 5.3 / 6.0 CS; u620: 8.5 / 13.5 (learning); u920: 2.5 / 1.5 --
 COLLAPSE caused by OPS-004 (rank loop starving level-9+ champions of
 decisions), not by the policy. Fixed 09:50 UTC; E06 resumed from its u620
-checkpoint (job below). All numbers past level 9 before the fix are suspect.
+checkpoint. Post-fix frozen u1260: 15.3 / 14.3 (zero rank warnings); train
+chunks 13-21. All numbers past level 9 before the fix are suspect.
 Throughput 12 s/update = 213 dec/s with the node to itself; the GRU's
 BPTT update (128-step scan x 16 minibatch-epochs) is ~2/3 of that and is
 the next thing to optimise if E06 shows learning. The desktop was on Windows 04:11-06:37 UTC, which cancelled E04 and E06. Dani's decision (04:55 UTC): continue ONLY the GRU arm
