@@ -4,12 +4,13 @@
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
-**Running:** E06 only (resumed 06:48 UTC from update 260, job 1453, evaluator
-re-armed). Frozen u320: 5.3 / 6.0 CS; u620: 8.5 / 13.5 (learning); u920: 2.5 / 1.5 --
+**Running:** E07 only (E06's learner vs a FROZEN E06 checkpoint, started 19:05 UTC).
+E06 STOPPED 19:25 UTC at update 3800: plateau ~17 CS (band 13-22 over 11 frozen
+evaluations since 4M decisions); it is the control. Earlier E06 notes: Frozen u320: 5.3 / 6.0 CS; u620: 8.5 / 13.5 (learning); u920: 2.5 / 1.5 --
 COLLAPSE caused by OPS-004 (rank loop starving level-9+ champions of
 decisions), not by the policy. Fixed 09:50 UTC; E06 resumed from its u620
 checkpoint. Post-fix frozen u1260: 15.3 / 14.3; u1580: 14.3 / 24.5; u1900: 11.3 / 14.8
-u2200: 20.3 / 17.5 (best); u2520: 16.8 / 13.8; u2840: 12.5 / 14.3; u3140: 15.5 / 14.3; u3460: 22.5 / 20.8 (best; both sides > 20). Plateau band 14-20 frozen since
+u2200: 20.3 / 17.5 (best); u2520: 16.8 / 13.8; u2840: 12.5 / 14.3; u3140: 15.5 / 14.3; u3460: 22.5 / 20.8 (best; both sides > 20); u3780: 18.3 / 16.0. Plateau band 14-20 frozen since
 u1260 (E01's band). Leak fixed (eager scan re-traced per update): memory now
 +2.4 MB/update, 7.4 s/update. E07 launched 18:30 UTC (Dani's go-ahead): E06's learner continued
 against E06's u2200 checkpoint as a FROZEN opponent, learner side alternating
