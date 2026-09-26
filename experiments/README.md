@@ -1,8 +1,13 @@
 # Experiments: one launcher per contracted experiment
 
-Every run that counts is started from a script here, never from an ad hoc
-command line. The script name is the experiment ID used in
-`docs/EXPERIMENTS.md`; the run directory is `lanerl_jax/runs/<ID>/`.
+Every run that counts is started with `ops/launch.py <ID>` from a JSON spec
+here (`<ID>.json`: args, slurm resources, port base, init/opponent checkpoints).
+The launcher resolves and checks every path, refuses ephemeral-range ports
+and duplicate job names, runs a 3-minute CANARY of the exact config, writes
+`launch.json` into the run directory, then submits. Evaluations:
+`ops/launch.py eval --ckpt <ckpt> [--opponent frozen --opponent-ckpt <ckpt>]`.
+The `.sh` launchers for E01-E05 are the historical form and are not to be
+copied. The run directory is `lanerl_jax/runs/<ID>/`.
 
 Rules:
 - One ID = one question, one config. Changing anything but seed or resume

@@ -14,7 +14,11 @@ on the C# server (frozen evaluation, several seeds). JAX is paused until then.
 History = `legacy/`, `docs/archive/`.
 
 **Rules**
-1. A run starts only from `experiments/<ID>.sh`; new config = new ID + row.
+1. A run starts only via `ops/launch.py <ID>` from `experiments/<ID>.json`;
+   new config = new ID + row. Never build a launch in the shell: no `ls -d`
+   path capture (zsh drops the trailing slash), no env-var plumbing, no
+   `--resume` for a new experiment (use `--init-from`: fresh optimizer,
+   schedule and budget). `--dry-run` first; the canary must pass.
 2. Starting or stopping a run, or ending a session, rewrites `STATUS.md` in
    the same commit. No STATUS edit = not finished.
 3. Classify what you add: live path, tool, probe (with README row), or legacy.
