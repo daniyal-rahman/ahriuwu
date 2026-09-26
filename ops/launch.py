@@ -139,7 +139,9 @@ def main():
     a = p.parse_args()
     if a.experiment == "eval":
         ck = must_exist("checkpoint", a.ckpt); must_exist("manifest", Path(srv(a.ckpt)).parent / "manifest.json")
-        spec = {"id": "EVAL", "port_base": 24300, "slurm": {"partition": "cpu", "cpus": 2, "mem": "4G", "time": "4:00:00"},
+        # Concurrent evaluations must not share ports: offset by the live EVAL jobs.
+        n_live = sum(1 for j in live_jobs() if j[0].startswith("EVAL"))
+        spec = {"id": "EVAL", "port_base": 24300 + 40 * n_live, "slurm": {"partition": "cpu", "cpus": 2, "mem": "4G", "time": "4:00:00"},
                 "args": {"envs": a.envs, "opponent": a.opponent or "mirror", "start-near-wave": True, "step-ticks": 6,
                          "episode-s": 600, "eval-episodes": a.episodes, "seed": 0}}
         args = build_args(spec, argparse.Namespace(seed=None, init_from=None, resume=ck, opponent_ckpt=a.opponent_ckpt))

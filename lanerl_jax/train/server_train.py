@@ -264,7 +264,10 @@ class ServerCollector:
             lambda s: -lane_corridor_distance(s.x[:2], s.y[:2]) / 10000.))
         try:
             self.env.start()
-            for raw in self.env.last_obs:
+            for i, raw in enumerate(self.env.last_obs):
+                if raw is None:
+                    raise RuntimeError(f"server {i} produced no first observation (port {self.env.ports[i]}): "
+                                       f"see {self.out}/server/instance{i:03d}.log; a port collision exits the server with 97")
                 validate_champion_life(raw)
                 for t in self.teams:
                     wire_own_hud(raw, t)  # fail before setup if the binary lacks required HUD fields
