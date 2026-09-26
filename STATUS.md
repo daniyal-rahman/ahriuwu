@@ -5,7 +5,10 @@
 runs are paused until that gate is met.
 
 **Running:** E06 only (resumed 06:48 UTC from update 260, job 1453, evaluator
-re-armed). The desktop was on Windows 04:11-06:37 UTC, which cancelled E04 and E06. Dani's decision (04:55 UTC): continue ONLY the GRU arm
+re-armed). Frozen u320: 5.3 / 6.0 CS (untrained level; 0.8M decisions).
+Throughput 12 s/update = 213 dec/s with the node to itself; the GRU's
+BPTT update (128-step scan x 16 minibatch-epochs) is ~2/3 of that and is
+the next thing to optimise if E06 shows learning. The desktop was on Windows 04:11-06:37 UTC, which cancelled E04 and E06. Dani's decision (04:55 UTC): continue ONLY the GRU arm
 with published defaults (E06). E04 stays stopped (frozen 18.8/24.5 at u2020,
 train chunks 27-31 at u3070; its checkpoints remain). 
 

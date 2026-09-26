@@ -27,3 +27,4 @@ Frozen evaluations (the only numbers that count for the gate):
 | `server-farm-s0-20260925-202409-047737a5` | E01 seed 0, update 760 (`eval_u760.msgpack`) | mirror, near-wave, 600 s, 10 Hz, sampled | 5 envs x 1 | 19.4 / 20 / 11-27 | 16.0 / 12 / 11-29 | 0-2 per agent | below the 30-CS gate; keep training |
 | `EVAL/eval_u1080.out` | E01 seed 0, update 1080 | same | 5 envs x 1 | 14.2 / 13 / 5-22 | 21.0 / - / - | - | no improvement over u760; train CS flat at 16-18 since ~u500 |
 | `EVAL/eval_u2020.out` | E04 seed 0, update 2020 (500 updates after the branch) | mirror, near-wave, ClickV3 | 4 envs x 1 | 18.8 / 18.5 / 16-22 | 24.5 / 25.5 / 20-27 | - | both sides above E01's frozen 14-21; below the 30 gate; train chunks 22-29 |
+| `EVAL/eval_u320.out` | E06 seed 0, update 320 (0.8M decisions) | mirror, near-wave, ClickV3 | 4 envs x 1 | 5.3 / 4.5 / 3-9 | 6.0 / 6.0 / 2-10 | - | untrained level, as expected this early (E01 was ~5 train CS at the same budget) |
