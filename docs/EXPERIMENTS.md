@@ -37,3 +37,4 @@ Frozen evaluations (the only numbers that count for the gate):
 | `EVAL/eval_u2520.out` | E06 seed 0, update 2520 (6.5M decisions; leak-fixed segment) | same | 4 envs x 1 | 16.8 / 17.5 / 11-21 | 13.8 / 14.5 / 7-19 | - | plateau band 14-20 both sides since u1260; memory now +2.4 MB/update (was +10) |
 | `EVAL/eval_u2840.out` | E06 seed 0, update 2840 (7.3M decisions) | same | 4 envs x 1 | 12.5 / 13 / 9-15 | 14.3 / 15 / 5-22 | - | still in the 12-20 band; train chunks 12-15 |
 | `EVAL/eval_u3140.out` | E06 seed 0, update 3140 (8.0M decisions) | same | 4 envs x 1 | 15.5 / 15 / 12-20 | 14.3 / 15 / 11-16 | - | seventh evaluation in the 12-20 band; train chunks 15-19 |
+| `EVAL/eval_u3460.out` | E06 seed 0, update 3460 (8.9M decisions) | same | 4 envs x 1 | 22.5 / 21.5 / 16-31 | 20.8 / 20.5 / 15-27 | - | best so far, both sides above 20; train chunks 16-21 with 31-33 episodes |

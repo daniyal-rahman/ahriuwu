@@ -3,7 +3,7 @@
 #SBATCH --partition=gpup
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=20G
+#SBATCH --mem=12G
 #SBATCH --time=24:00:00
 #SBATCH --no-requeue
 #SBATCH --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax

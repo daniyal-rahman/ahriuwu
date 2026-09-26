@@ -12,7 +12,7 @@ ARGS=(--envs 6 --opponent frozen --opponent-ckpt "$OPP" --start-near-wave --roll
       --save-updates 3500 4000 5000 --seed "$SEED" --port-base $((23300 + 40 * SEED))
       --out lanerl_jax/runs/E07_frozen_opponent/seed$SEED)
 if [ -n "$RESUME" ]; then [ -f "${RESUME/\/mnt\/nfs/\/srv\/nfs}" ] || { echo "RESUME must exist: $RESUME" >&2; exit 2; }; ARGS+=(--resume "$RESUME"); fi
-exec srun -p cpu -w desktop --cpus-per-task=6 --mem=10G --time=24:00:00 --job-name=E07-s$SEED \
+exec srun -p cpu -w desktop --cpus-per-task=6 --mem=8G --time=24:00:00 --job-name=E07-s$SEED \
   --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax \
   env XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor \
   ./.venv-gpu/bin/python -m lanerl_jax.train.server_train "${ARGS[@]}"
