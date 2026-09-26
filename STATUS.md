@@ -9,7 +9,11 @@ re-armed). Frozen u320: 5.3 / 6.0 CS; u620: 8.5 / 13.5 (learning); u920: 2.5 / 1
 COLLAPSE caused by OPS-004 (rank loop starving level-9+ champions of
 decisions), not by the policy. Fixed 09:50 UTC; E06 resumed from its u620
 checkpoint. Post-fix frozen u1260: 15.3 / 14.3; u1580: 14.3 / 24.5; u1900: 11.3 / 14.8
-u2200: 20.3 / 17.5 (best so far; train chunks 16-20). OOM-killed at
+u2200: 20.3 / 17.5 (best); u2520: 16.8 / 13.8. Plateau band 14-20 frozen since
+u1260 (E01's band). Leak fixed (eager scan re-traced per update): memory now
++2.4 MB/update, 7.4 s/update. Proposed next: E07 = E06 against a FROZEN
+earlier checkpoint (past-self opponent) to stop self-play drift into duels;
+awaiting Dani's go-ahead. OOM-killed at
 u1931 (slurm 10 GB limit, 12:55 UTC); resumed 14:30 UTC at 20 GB from u1920
 with per-update RSS now logged (`rss_gb`). All numbers past level 9 before the fix are suspect.
 Throughput 12 s/update = 213 dec/s with the node to itself; the GRU's
