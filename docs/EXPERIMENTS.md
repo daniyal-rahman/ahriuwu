@@ -20,6 +20,7 @@ labelled `train`.
 | `E07_frozen_opponent/seed0` (relaunch) | 09-26 21:55 | C# | as above, `--init-from` E06 u3140 (params only): fresh optimizer, own lr schedule and 3000-update budget | E06's (GRU, standard, anneal over 3000) | PAUSED at u178 (Dani, 22:40 UTC) for the oracle/BC/learner diagnostics | train CS 16 -> 8-10 after the fresh-optimizer restart; no frozen eval | paused |
 | `E08_ppo_from_bc/seed0` | 09-26 22:52 | C# | PPO (standard, MLP) from the 20-epoch clone, mirror | budget 600 | stopped at u40: init too weak (5 CS); superseded by E09 | — | superseded |
 | `E09_ppo_from_bc150/seed0` | 09-26 23:15 | C# | PPO (standard, MLP, anneal) from the 150-epoch clone, mirror, 10 servers | budget 600, eval every 100 | running; at u75: train CS 3-6, entropy already 8.0, KL 0.035/update: the standard preset diffuses the sharp clone within 50 updates | learner test; init turned out weak closed-loop (7 CS). Frozen u120: 9.3 / 11.3 (init 7.8 / 5.3); train chunks 3 -> 10: PPO is improving, not degrading, the clone |
+| `E10_ppo_from_dagger1/seed0` | 09-27 00:00 | C# | PPO (standard, MLP, anneal) from the DAgger-1 clone (24 / 33 CS), mirror, 10 servers | budget 600, eval every 100 | running | THE learner test: preserve/improve a farming policy? |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
@@ -39,6 +40,7 @@ BC representability diagnostic (`train/bc_diag.py` on the 19,196 x 8 scripted mi
 |---|---|---|---|---|
 | `bc-mlp-20260926-223919` | MLP | 0.99 / 0.74 / 0.72 | 5.3 / 3.8 CS sampled; 12 / 11 argmax (teacher: 45 / 28) | per-step accuracy is high but the clone is wrong at the decisive (attack) steps; a 150-epoch run with attack-step accuracy reported is checking undertraining vs a representational ceiling |
 | `bc-mlp` 150 epochs | MLP | 1.00 / 0.97 / 0.97; on ATTACK steps 1.00 / 0.96 / 0.97, exact attack click 0.94 | sampled 7.8 / 5.3; argmax 5 / 10 CS (teacher 45 / 28) | per-step accuracy does NOT transfer closed-loop: compounding error off the demo distribution. DAgger relabelling (offline, scripted policy is a pure function of the observation) started |
+| `bc-mlp-20260926-233833` DAgger-1 (demos + the clone's own 9,599 x 8 states relabelled by the script; 150 epochs) | MLP | on attack steps 0.98 / 0.87 / 0.90 | 24.3 / 32.8 CS sampled (15-39 / 25-44) | one DAgger round lifts the clone from 7.8 / 5.3 to the gate region: compounding error confirmed (teacher disagreed with the first clone on 94% of the clone's own states); the observation is sufficient |
 | `bc-gru` (batch 1024, seq 32, 20 epochs) | GRU | 0.87 / 0.29 / 0.29 | not evaluated | under-trained; not used |
 
 Frozen evaluations (the only numbers that count for the gate):
