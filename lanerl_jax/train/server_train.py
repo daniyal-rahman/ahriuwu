@@ -785,7 +785,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         collector.close()
 
 
-def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1):
+def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1, act_fn=None):
     """Frozen-policy episodes through the training collector itself.
 
     Same observation encoding, same sampling, same server binary as training;
@@ -793,9 +793,13 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1)
     deaths. Returns the per-episode records.
     """
     rng = jax.random.key(seed)
-    recurrent = getattr(policy.cfg, "core", "mlp") == "gru"
+    recurrent = act_fn is None and getattr(policy.cfg, "core", "mlp") == "gru"
     @jax.jit
     def act(params, obs, key, carry=None):
+        if act_fn is not None:
+            # A scripted player through the SAME observation/click interface
+            # (`train/scripted_policy.py`): the interface oracle.
+            return jax.vmap(act_fn, in_axes=(0, None))(obs, key), carry
         if recurrent:
             logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
         else:
@@ -901,6 +905,8 @@ def main():
                         "(MultiProcessCollector); port blocks are base + 200*worker")
     p.add_argument("--eval-episodes", type=int, default=0,
                    help="evaluate the --resume checkpoint frozen for this many episodes per env; no learning")
+    p.add_argument("--scripted", choices=("lasthit", "any"), default=None,
+                   help="eval only: drive the learner's rows with the scripted last-hitter (interface oracle) instead of a checkpoint")
     p.add_argument("--start-near-wave", action="store_true")
     p.add_argument("--step-ticks", type=int, default=2)
     p.add_argument("--server-dir", type=Path)
@@ -1006,10 +1012,15 @@ def main():
         params = policy.init(jax.random.key(args.seed), *init_args)
         if args.resume is not None:
             params = from_state_dict(params, msgpack_restore(Path(args.resume).read_bytes())["params"])
-        run.set_results(evaluated_checkpoint=str(args.resume) if args.resume else "random",
+        act_fn = None
+        if args.scripted:
+            from .scripted_policy import scripted_act, scripted_act_any
+            act_fn = scripted_act if args.scripted == "lasthit" else scripted_act_any
+        run.set_results(evaluated_checkpoint=(f"scripted:{args.scripted}" if args.scripted else
+                                              str(args.resume) if args.resume else "random"),
                         checkpoint_sha256=file_sha256(args.resume) if args.resume else None)
         evaluate_frozen(collector, policy, params, run, seed=args.seed,
-                        episodes_per_env=args.eval_episodes)
+                        episodes_per_env=args.eval_episodes, act_fn=act_fn)
         return
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
