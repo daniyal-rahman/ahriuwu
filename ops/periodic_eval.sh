@@ -11,7 +11,8 @@ while true; do
     cp $RUN/ckpt_latest.msgpack $RUN/eval_u$U.msgpack
     CKPT=/mnt/nfs/projects/ahriuwu-lanerl-jax/$RUN/eval_u$U.msgpack experiments/EVAL_frozen.sh > lanerl_jax/runs/EVAL/eval_u$U.out 2>&1
     SUMMARY=$(grep -o '{"0": .*}' lanerl_jax/runs/EVAL/eval_u$U.out | tail -1)
-    echo "{\"update\": $U, \"checkpoint\": \"$RUN/eval_u$U.msgpack\", \"time\": \"$(date -u +%FT%TZ)\", \"summary\": $SUMMARY}" >> lanerl_jax/runs/EVAL/summary.jsonl
+    [ -z "$SUMMARY" ] && SUMMARY='null'
+    echo "{\"run\": \"$ROOT\", \"update\": $U, \"checkpoint\": \"$RUN/eval_u$U.msgpack\", \"time\": \"$(date -u +%FT%TZ)\", \"summary\": $SUMMARY}" >> lanerl_jax/runs/EVAL/summary.jsonl
     LAST=$U
   fi
   sleep 300
