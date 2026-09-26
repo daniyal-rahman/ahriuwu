@@ -1,0 +1,33 @@
+{
+ "id": "E08_ppo_from_bc",
+ "question": "LEARNER TEST (diagnostic, not a gate run): does PPO with the current reward PRESERVE or IMPROVE a policy that already farms (BC of the scripted last-hitter, MLP core, mirror self-play)? A decline within a few hundred updates means the objective/advantage pipeline is wrong; a hold or rise means the learner is sound and the from-scratch gap is exploration.",
+ "port_base": 25500,
+ "slurm": {
+  "partition": "gpup",
+  "cpus": 8,
+  "mem": "12G"
+ },
+ "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/BC/bc-mlp-20260926-223919-2ab4b78b/ckpt_latest.msgpack",
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 600,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "mlp",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   100,
+   200,
+   400
+  ],
+  "seed": 0
+ }
+}
