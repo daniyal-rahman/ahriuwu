@@ -21,4 +21,5 @@ Rules:
 | E03_mirror_wave_lr1e-4 | E01 continued from update 1120 at lr 1e-4: is the plateau a step-size problem? | 22100 | C# |
 | EVAL_frozen | frozen-policy evaluation of any checkpoint | 22500 | C# |
 | E04_mirror_wave_snap_noxp | E01 continued with click snapping + XP weight 0: do wall-clicks and XP camping explain the plateau? | 22700 | C# |
-| (next) | | 22900 | |
+| E05_mirror_wave_gru_standard | from scratch, GRU core, published PPO defaults, ClickV3 | 22900 | C# |
+| (next) | | 23100 | |

@@ -50,8 +50,8 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0):
         def step(carry, xs):
             e, m, s, g, d_prev = xs
             carry = jnp.where(d_prev[:, None], 0.0, carry)
-            logits, carry = policy.apply(params, e, m, s, g, carry)
-            return carry, logits
+            logits, new_carry = policy.apply(params, e, m, s, g, carry)
+            return new_carry.astype(carry.dtype), logits
         d_prev = jnp.concatenate([jnp.zeros_like(done[:1]), done[:-1]], axis=0)
         _, logits = jax.lax.scan(step, batch["carry0"], (ent, mask, sv, gv, d_prev))
         return jax.tree.map(tm, logits)          # back to [N, T, ...]

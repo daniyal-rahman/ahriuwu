@@ -4,7 +4,12 @@
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
-**Running (desktop, relaunched 17:40 UTC on port bases 21700/21900 after OPS-003 killed both and the node rebooted; resumed from their last checkpoints). Launchers: `experiments/E01_mirror_wave.sh`, `E02_idle_wave.sh`:**
+**Running (desktop):**
+- `E05_mirror_wave_gru_standard` (started 01:20 UTC): from scratch, GRU core,
+  published PPO defaults (`docs/HYPERPARAMS.md`), ClickV3 server. 10 servers.
+- `E04_mirror_wave_snap_noxp`: E01's policy continued on ClickV3 with XP 0.002.
+  First 12 training episodes averaged 28 CS. Frozen eval at update 1820 pending.
+- E01 (control) stopped 01:20 UTC; E02/E03 stopped earlier. Older notes:
 - `mirror-wave-s0`: C# mirror self-play, both champions start behind their
   first wave at 120 s, 10 envs. Train CS per episode 3.5 → ~12.5 (max 27)
   after ~200 episodes. Resumed three times: two rank-loop crashes (fixed)
@@ -49,9 +54,7 @@ training episodes average 28.1 CS (30-42 in eight of them) against E01's
 17-21 at the same point: the wall-click fix is the biggest single gain so far.
 Frozen eval at E04 update 1820 pending. E01 (control, DeadProbe) still running.
 
-NEXT ARM (E05, launching once the learner tests pass): from scratch, GRU core
-(memory learned, not hand-built), published PPO defaults
-(`docs/HYPERPARAMS.md`, `--preset standard`, lr annealed), ClickV3.
+E05 launched 01:20 UTC (see Running).
 
 **Next:**
 1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).

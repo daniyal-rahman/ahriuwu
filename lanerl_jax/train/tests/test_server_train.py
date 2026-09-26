@@ -254,8 +254,8 @@ def test_shared_learner_learns_rewarded_action_and_zero_lr_is_invariant(tmp_path
     make_learner = server_train.make_learner
     checked_batches = []
 
-    def checked_learner(policy, cfg):
-        tx, loss = make_learner(policy, cfg)
+    def checked_learner(policy, cfg, **kw):
+        tx, loss = make_learner(policy, cfg, **kw)
 
         def check(action, returns, advantages, values, context):
             expected = (np.asarray(action) == rewarded_button).astype(float)
@@ -268,6 +268,7 @@ def test_shared_learner_learns_rewarded_action_and_zero_lr_is_invariant(tmp_path
             jax.debug.callback(check, batch['action'][0], batch['returns'],
                 batch['adv'], batch['value'], batch['self'][:, 0], ordered=True)
             return loss(params, batch, ppo)
+        checked_loss.forward = loss.forward
         return tx, checked_loss
 
     monkeypatch.setattr(server_train, 'make_learner', checked_learner)
