@@ -15,7 +15,10 @@ that init (does the learner preserve a 40-CS policy?).
 **Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
 BC representability, PPO-from-BC learner test); then a heuristics-initialised
 GRU on the JAX sim to a compare point; then cross-play E04 vs that agent on
-the C# server. **Running:** demo recording for BC. E07 PAUSED at u178 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
+the C# server. **Running:** BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
+steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.
+JAX shared-loop GRU probe: ~430 dec/s at 8 envs (server-level), OOM at 32
+envs beside llm-serve, so the JAX leg needs the Anakin port; deferred. E07 PAUSED at u178 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
 optimizer/schedule, own 3000-update budget) vs a FROZEN E06 checkpoint. The first
 E07 attempt inherited E06's counter and schedule (767 updates at ~0 lr, evals
 failed) and is recorded as invalid.
