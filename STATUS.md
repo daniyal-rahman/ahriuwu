@@ -4,22 +4,12 @@
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
-**Running (desktop):**
-- `E06_mirror_wave_gru_ent3` (started 03:25 UTC): from scratch, GRU core,
-  published PPO defaults with entropy 0.01 PER HEAD (0.0033 on the sum). E05
-  (entropy 0.01 on the sum) was stopped at 912 updates: entropy pinned at 9.0,
-  frozen CS 6.5/10.0, i.e. it never left the untrained regime.
-- `E04_mirror_wave_snap_noxp`: E01's policy continued on ClickV3 with XP 0.002.
-  Frozen eval at update 2020 (03:10 UTC): blue 18.8 (16-22), red 24.5 (20-27);
-  above E01's frozen 14-21, below the gate. Train chunks 22-29, single episodes to 42.
-- E01 (control) stopped 01:20 UTC; E02/E03 stopped earlier. Older notes:
-- `mirror-wave-s0`: C# mirror self-play, both champions start behind their
-  first wave at 120 s, 10 envs. Train CS per episode 3.5 → ~12.5 (max 27)
-  after ~200 episodes. Resumed three times: two rank-loop crashes (fixed)
-  and one "address already in use" on an episode-reset server restart
-  (fixed: ports rotate, three attempts).
-- `idle-wave2-s0` (E02): STOPPED 18:40 UTC to free cores for the multi-process collector throughput test; resumable from its last checkpoint with `RESUME=... experiments/E02_idle_wave.sh`. Train CS 4 → ~10, noisy.
-- Check: `python ops/server_train_status.py lanerl_jax/runs/server_train/<run>`.
+**Running:** nothing. The desktop was booted to Windows at 04:11 UTC, which
+cancelled E04 and E06. Dani's decision (04:55 UTC): continue ONLY the GRU arm
+with published defaults (E06). E04 stays stopped (frozen 18.8/24.5 at u2020,
+train chunks 27-31 at u3070; its checkpoints remain). A watcher on danilogin
+resumes E06 from its update-280 checkpoint and restarts its evaluator as soon
+as the node returns to Linux.
 
 **Done today:** Codex's uncommitted server-first work committed (`35210dc`);
 collector 3-5x faster; mirror mode, resume, frozen eval; lr 1e-5 identified as
