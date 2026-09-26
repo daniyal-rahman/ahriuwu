@@ -785,7 +785,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         collector.close()
 
 
-def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1, act_fn=None):
+def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1, act_fn=None,
+                    record_npz=None):
     """Frozen-policy episodes through the training collector itself.
 
     Same observation encoding, same sampling, same server binary as training;
@@ -813,12 +814,20 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
     done_count = np.zeros(collector.n, np.int64)
     steps = 0
     started = time.monotonic()
+    traj = {"entities": [], "mask": [], "self": [], "global": [], "action": [], "done": []} if record_npz else None
     try:
         while (done_count < episodes_per_env).any():
             rng, key = jax.random.split(rng)
             action, carry = act(params, obs, key, carry)
             host_actions = np.stack(jax.device_get(action), axis=-1)
+            if traj is not None:
+                # (obs, action) pairs per agent row, for behaviour-cloning diagnostics
+                traj["entities"].append(np.asarray(obs.entities, np.float16)); traj["mask"].append(np.asarray(obs.entity_pad_mask))
+                traj["self"].append(np.asarray(obs.self_vec, np.float32)); traj["global"].append(np.asarray(obs.global_vec, np.float32))
+                traj["action"].append(host_actions.astype(np.int16))
             done = collector.step(host_actions)
+            if traj is not None:
+                traj["done"].append(np.asarray(done))
             if recurrent:
                 carry = jnp.where(jnp.asarray(done)[:, None], 0.0, carry)
             next_obs, next_stats = collector.observe()
@@ -843,6 +852,10 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
                        "min_cs": float(np.min(v)), "max_cs": float(np.max(v))} for t, v in by_team.items()}
         run.set_results(status="complete", evaluation=summary, episodes=records,
                         decisions=int(steps * collector.n), wall_s=time.monotonic() - started)
+        if traj is not None:
+            # time-major [T, N, ...]
+            np.savez_compressed(record_npz, **{k: np.stack(v) for k, v in traj.items()})
+            print("recorded", record_npz, {k: np.stack(v).shape for k, v in traj.items()}, flush=True)
         print(json.dumps(summary), flush=True)
     except BaseException as exc:
         run.set_results(status="failed", error=repr(exc))
@@ -907,6 +920,8 @@ def main():
                         "(MultiProcessCollector); port blocks are base + 200*worker")
     p.add_argument("--eval-episodes", type=int, default=0,
                    help="evaluate the --resume checkpoint frozen for this many episodes per env; no learning")
+    p.add_argument("--record-npz", type=Path, default=None,
+                   help="eval only: save (observation, action, done) per step, time-major, for BC diagnostics")
     p.add_argument("--scripted", choices=("lasthit", "any"), default=None,
                    help="eval only: drive the learner's rows with the scripted last-hitter (interface oracle) instead of a checkpoint")
     p.add_argument("--start-near-wave", action="store_true")
@@ -1022,7 +1037,8 @@ def main():
                                               str(args.resume) if args.resume else "random"),
                         checkpoint_sha256=file_sha256(args.resume) if args.resume else None)
         evaluate_frozen(collector, policy, params, run, seed=args.seed,
-                        episodes_per_env=args.eval_episodes, act_fn=act_fn)
+                        episodes_per_env=args.eval_episodes, act_fn=act_fn,
+                        record_npz=(run.path / args.record_npz.name) if args.record_npz else None)
         return
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
