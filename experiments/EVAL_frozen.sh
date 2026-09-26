@@ -8,6 +8,7 @@ SD=/mnt/nfs/projects/lanerl-vendor/LoLServer/GameServerConsole/bin/ClickV3/net6.
 ARGS=(${EXTRA:-} --envs $ENVS --opponent $OPP --step-ticks 6 --episode-s 600 --seed $SEED --port-base ${PORT:-22500}
       --server-dir $SD --resume "$CKPT" --eval-episodes $EPISODES --out lanerl_jax/runs/EVAL)
 [ "$WAVE" = 1 ] && ARGS+=(--start-near-wave)
+echo "EVAL args: ${ARGS[*]}"
 exec srun -p cpu -w desktop --cpus-per-task=2 --mem=4G --time=4:00:00 --job-name=EVAL \
   --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax \
   env XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor \

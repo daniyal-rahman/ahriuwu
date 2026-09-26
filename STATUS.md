@@ -4,7 +4,10 @@
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
-**Running:** E07 only (E06's learner vs a FROZEN E06 checkpoint, started 19:05 UTC).
+**Running:** E07 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
+optimizer/schedule, own 3000-update budget) vs a FROZEN E06 checkpoint. The first
+E07 attempt inherited E06's counter and schedule (767 updates at ~0 lr, evals
+failed) and is recorded as invalid.
 E06 STOPPED 19:25 UTC at update 3800: plateau ~17 CS (band 13-22 over 11 frozen
 evaluations since 4M decisions); it is the control. Earlier E06 notes: Frozen u320: 5.3 / 6.0 CS; u620: 8.5 / 13.5 (learning); u920: 2.5 / 1.5 --
 COLLAPSE caused by OPS-004 (rank loop starving level-9+ champions of

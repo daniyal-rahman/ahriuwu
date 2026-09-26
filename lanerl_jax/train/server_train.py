@@ -617,7 +617,7 @@ def load_checkpoint_policy(path):
 
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                         save_updates=(), n_minibatches=1, resume=None, ckpt_every=10,
-                        lr_anneal=False):
+                        lr_anneal=False, resume_params_only=False):
     """Train either farming collector with exactly the same PPO/reward loop.
 
     Collectors provide n, episodes, observe(), step(actions), restart_done(),
@@ -653,10 +653,18 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             from flax.serialization import from_state_dict, msgpack_restore
             payload = msgpack_restore(Path(resume).read_bytes())
             params = from_state_dict(params, payload["params"])
-            opt_state = from_state_dict(opt_state, payload["opt_state"])
-            start_update = int(payload["step"]) // (collector.n * rollout)
-            rng = jax.random.fold_in(rng, start_update)
-            run.set_results(resumed_from=str(resume), resumed_update=start_update)
+            if resume_params_only:
+                # A NEW experiment seeded with another run's weights: fresh
+                # optimizer, fresh lr schedule, its own update budget. (E07
+                # inherited E06's counter and schedule and ran 767 updates at
+                # a near-zero lr before hitting "update 6000".)
+                run.set_results(initialised_from=str(resume))
+                print(f"initialised params from {resume}; fresh optimizer and budget", flush=True)
+            else:
+                opt_state = from_state_dict(opt_state, payload["opt_state"])
+                start_update = int(payload["step"]) // (collector.n * rollout)
+                rng = jax.random.fold_in(rng, start_update)
+                run.set_results(resumed_from=str(resume), resumed_update=start_update)
             print(f"resumed {resume} at update {start_update}", flush=True)
         @jax.jit
         def act(params, obs, key, carry=None):
@@ -879,6 +887,8 @@ def main():
                         "frozen: the learner drives one side (alternating per server), --opponent-ckpt drives the other")
     p.add_argument("--opponent-ckpt", type=Path, default=None, help="checkpoint for --opponent frozen")
     p.add_argument("--resume", type=Path, default=None, help="ckpt_latest.msgpack of a compatible run")
+    p.add_argument("--init-from", type=Path, default=None,
+                   help="take only the PARAMS from this checkpoint (fresh optimizer, schedule and budget)")
     p.add_argument("--ckpt-every", type=int, default=10)
     p.add_argument("--normalize-advantage", action="store_true",
                    help="per-batch advantage standardisation (the standard preset has it on)")
@@ -930,6 +940,12 @@ def main():
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
     pcfg = PolicyConfig(core=args.core)
+    if args.init_from is not None:
+        if args.resume is not None:
+            p.error("--init-from and --resume are exclusive")
+        args.resume, resume_params_only = args.init_from, True
+    else:
+        resume_params_only = False
     if args.resume is not None and (args.resume.parent / "manifest.json").exists():
         # A checkpoint's own architecture wins over the flag: a gru checkpoint
         # loaded into an mlp policy would fail, an mlp one into a gru would be
@@ -998,7 +1014,8 @@ def main():
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
                         save_updates=args.save_updates, n_minibatches=args.minibatches,
-                        resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal)
+                        resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal,
+                        resume_params_only=resume_params_only)
 
 
 if __name__ == "__main__":
