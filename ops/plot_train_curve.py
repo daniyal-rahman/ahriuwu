@@ -32,7 +32,7 @@ try:
     evals = [json.loads(l) for l in open('lanerl_jax/runs/EVAL/summary.jsonl')]
     key = '/'.join(roots[0].rstrip('/').split('/')[-2:])
     evals = [v for v in evals if v.get('summary') and v.get('run', '').rstrip('/').endswith(key)]
-    invalid = {920}   # E06 u920: OPS-004
+    invalid = {920, 960}   # E06 u920, u960: OPS-004 (collapsed segment)
     evals = [v for v in evals if v['update'] not in invalid]
     _, _, per0 = load(roots[0])
     ex = [v['update'] * per0 / 1e6 for v in evals]
