@@ -563,6 +563,10 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         else:
             params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
         tx, loss = make_learner(policy, cfg, anneal_steps=(updates * cfg.epochs * n_minibatches) if lr_anneal else 0)
+        # Jitted ONCE. Calling loss.forward eagerly re-traced its scan closure
+        # every update: a fresh compiled executable per update, ~10 MB each,
+        # which is what walked E06 into slurm's memory limit (OOM at u1931).
+        forward = jax.jit(loss.forward)
         opt_state = tx.init(params)
         start_update = 0
         if resume is not None:
@@ -646,7 +650,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             if cfg.normalize_advantage:
                 batch["adv"] = (batch["adv"] - adv.mean()) / (adv.std() + 1e-8)
             # Independent rollout/recompute equality before any optimizer step.
-            logits = loss.forward(params, batch)
+            logits = forward(params, batch)
             recomputed = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
                 batch["action"], batch["uses_screen"], batch["uses_target"])
             np.testing.assert_allclose(recomputed, batch["log_prob"], atol=2e-5, rtol=2e-5)
