@@ -9,5 +9,5 @@ ARGS=(--envs 10 --opponent mirror --start-near-wave --rollout 128 --updates 6000
       --xp-weight 0.002 --no-snap-clicks --minibatches 4 --ckpt-every 20
       --save-updates 500 1000 2000 4000 --seed "$SEED" --port-base $((23100 + 40 * SEED))
       --out lanerl_jax/runs/E06_mirror_wave_gru_ent3/seed$SEED)
-[ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
+if [ -n "$RESUME" ]; then [ -f "${RESUME/\/mnt\/nfs/\/srv\/nfs}" ] || { echo "RESUME must exist: $RESUME" >&2; exit 2; }; ARGS+=(--resume "$RESUME"); fi
 exec sbatch --parsable --job-name=E06-s$SEED slurm/server_train.sbatch "${ARGS[@]}"

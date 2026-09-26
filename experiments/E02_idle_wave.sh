@@ -8,7 +8,7 @@ ARGS=(--envs 4 --opponent idle --start-near-wave --rollout 128 --updates 20000
       --step-ticks 6 --episode-s 600 --lr 3e-4 --critic-lr 3e-4 --entropy-coef 0.001
       --epochs 4 --minibatches 2 --ckpt-every 20 --save-updates 500 1000 2000
       --seed "$SEED" --port-base $((21900 + 40 * SEED)) --server-dir $SD --out $OUT)
-[ -n "$RESUME" ] && ARGS+=(--resume "$RESUME")
+if [ -n "$RESUME" ]; then [ -f "${RESUME/\/mnt\/nfs/\/srv\/nfs}" ] || { echo "RESUME must exist: $RESUME" >&2; exit 2; }; ARGS+=(--resume "$RESUME"); fi
 exec srun -p cpu -w desktop --cpus-per-task=5 --mem=8G --time=24:00:00 --job-name=E02-s$SEED \
   --chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax \
   env XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor \
