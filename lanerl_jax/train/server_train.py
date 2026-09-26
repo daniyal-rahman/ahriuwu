@@ -890,6 +890,8 @@ def main():
                    help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions; "
                         "frozen: the learner drives one side (alternating per server), --opponent-ckpt drives the other")
     p.add_argument("--opponent-ckpt", type=Path, default=None, help="checkpoint for --opponent frozen")
+    p.add_argument("--team", type=int, choices=(0, 1), default=0,
+                   help="idle mode: which side the learner/scripted player takes (1 = red, blue idles)")
     p.add_argument("--resume", type=Path, default=None, help="ckpt_latest.msgpack of a compatible run")
     p.add_argument("--init-from", type=Path, default=None,
                    help="take only the PARAMS from this checkpoint (fresh optimizer, schedule and budget)")
@@ -986,7 +988,7 @@ def main():
         "config_sha256": file_sha256(server_paths.default_game_config())}
     run.write()
     try:
-        teams = (0,) if args.opponent == "idle" else (0, 1)
+        teams = (args.team,) if args.opponent == "idle" else (0, 1)
         if args.opponent == "frozen":
             opp_policy, opp_params = load_checkpoint_policy(args.opponent_ckpt)
             run.set_results(opponent_ckpt_sha256=file_sha256(args.opponent_ckpt))

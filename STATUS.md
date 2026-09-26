@@ -4,6 +4,14 @@
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
+**INTERFACE ORACLE (22:25 UTC):** the scripted last-hitter through the policy's own
+observation->click path scores 60 CS vs idle red and 45 (blue) / 28 (red) in a
+scripted mirror, deterministic across servers. The gate is reachable through
+this interface; the trained policies' 15-22 is a learning gap. OPEN: red 17 CS
+behind blue with the same script (test running: scripted red vs idle blue).
+Next diagnostics: behaviour-clone the oracle (representability), then PPO from
+that init (does the learner preserve a 40-CS policy?).
+
 **Running:** E07 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
 optimizer/schedule, own 3000-update budget) vs a FROZEN E06 checkpoint. The first
 E07 attempt inherited E06's counter and schedule (767 updates at ~0 lr, evals

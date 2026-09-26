@@ -22,6 +22,14 @@ labelled `train`.
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
 
+Interface oracle (scripted last-hitter `train/scripted_policy.py` through the SAME observation->click path, C# server, ClickV3, near-wave, 600 s, 4 servers, deterministic: all 4 identical):
+
+| Run (`runs/ORACLE/`) | Opponent | Blue CS | Red CS | Deaths/agent | Meaning |
+|---|---|---|---|---|---|
+| `idle-lasthit` | idle red | 60 | - | 0 | the interface supports 60 CS |
+| `mirror-lasthit` | scripted last-hitter both sides | 45 | 28 | 2 | gate reachable; RED side 17 CS behind with the same deterministic script (open: dynamics or a side bug, SIDE-001 class) |
+| `mirror-any` | scripted brawler both sides | 23 | 26 | 5 | attacking any minion in range costs 5 deaths and halves CS |
+
 Frozen evaluations (the only numbers that count for the gate):
 
 | Eval dir (`runs/EVAL/`) | Checkpoint | Task | Episodes | Blue CS (mean / median / min-max) | Red CS | Deaths | Verdict |
