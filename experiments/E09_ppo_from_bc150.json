@@ -1,0 +1,33 @@
+{
+ "id": "E09_ppo_from_bc150",
+ "question": "LEARNER TEST from the STRONG clone (150-epoch BC of the scripted last-hitter, 94% exact attack clicks): does PPO with the current reward preserve/improve a policy that already farms? Decline = objective/advantage pipeline wrong; hold/rise = learner sound, from-scratch gap is exploration.",
+ "port_base": 25700,
+ "slurm": {
+  "partition": "gpup",
+  "cpus": 8,
+  "mem": "12G"
+ },
+ "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/BC/bc-mlp-20260926-230036-99140770/ckpt_latest.msgpack",
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 600,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "mlp",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   100,
+   200,
+   400
+  ],
+  "seed": 0
+ }
+}
