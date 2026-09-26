@@ -19,9 +19,10 @@ the C# server. **BC representability (23:20 UTC):** the MLP clone matches the sc
 99% (button) / 74% (click x,y) per step but scores 5.3 / 3.8 CS sampled in a
 mirror (teacher 45 / 28): sampled clicks a cell off miss the minion and the
 errors compound. Argmax eval: 12 / 11 CS, so the clone is wrong at the decisive steps, not
-just blurred by sampling. A 150-epoch BC with attack-step click accuracy is
-running to tell undertraining from a representational ceiling. E08 = PPO
-from the 20-epoch clone (learner test), running.
+just blurred by sampling. 150-epoch BC: 97% click accuracy, 94% exact attack clicks -- the net CAN
+represent the last-hit click; undertraining, not a ceiling. Its mirror evals
+(sampled, argmax) are running. E08 (from the weak clone) stopped; E09 = PPO
+from the strong clone (learner test) launched 23:15 UTC, eval every 100.
 **Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
 steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.
 JAX shared-loop GRU probe: ~430 dec/s at 8 envs (server-level), OOM at 32
