@@ -9,7 +9,7 @@ re-armed). Frozen u320: 5.3 / 6.0 CS; u620: 8.5 / 13.5 (learning); u920: 2.5 / 1
 COLLAPSE caused by OPS-004 (rank loop starving level-9+ champions of
 decisions), not by the policy. Fixed 09:50 UTC; E06 resumed from its u620
 checkpoint. Post-fix frozen u1260: 15.3 / 14.3; u1580: 14.3 / 24.5; u1900: 11.3 / 14.8
-(zero rank warnings); train chunks 13-18, flat since ~u1300. OOM-killed at
+u2200: 20.3 / 17.5 (best so far; train chunks 16-20). OOM-killed at
 u1931 (slurm 10 GB limit, 12:55 UTC); resumed 14:30 UTC at 20 GB from u1920
 with per-update RSS now logged (`rss_gb`). All numbers past level 9 before the fix are suspect.
 Throughput 12 s/update = 213 dec/s with the node to itself; the GRU's

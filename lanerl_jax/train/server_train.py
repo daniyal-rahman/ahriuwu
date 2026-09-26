@@ -661,8 +661,13 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # spells/minimap clicks to NOOP. Diagnostic state is not an input.
             metrics["sampled_buttons"] = dict(zip(BUTTONS, sampled_buttons.tolist()))
             metrics["sampled_r_unranked"] = int(sampled_r_unranked)
-            import resource
-            metrics["rss_gb"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6   # OOM watch (E06 died at 10 GB)
+            # OOM watch (E06 died at slurm's 10 GB): CURRENT resident set, not
+            # the monotonic peak ru_maxrss reports.
+            try:
+                with open("/proc/self/status") as f:
+                    metrics["rss_gb"] = next(int(l.split()[1]) for l in f if l.startswith("VmRSS")) / 1e6
+            except (OSError, StopIteration):
+                metrics["rss_gb"] = -1.0
             metrics["snapped_clicks"] = SNAP_CLICKS["count"] / max(SNAP_CLICKS["total"], 1)
             SNAP_CLICKS["count"] = SNAP_CLICKS["total"] = 0
             for name in reward_terms[0]:
