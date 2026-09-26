@@ -15,7 +15,11 @@ that init (does the learner preserve a 40-CS policy?).
 **Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
 BC representability, PPO-from-BC learner test); then a heuristics-initialised
 GRU on the JAX sim to a compare point; then cross-play E04 vs that agent on
-the C# server. **Running:** BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
+the C# server. **BC representability (23:20 UTC):** the MLP clone matches the scripted teacher
+99% (button) / 74% (click x,y) per step but scores 5.3 / 3.8 CS sampled in a
+mirror (teacher 45 / 28): sampled clicks a cell off miss the minion and the
+errors compound. Argmax eval running. E08 = PPO from this clone (learner test).
+**Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
 steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.
 JAX shared-loop GRU probe: ~430 dec/s at 8 envs (server-level), OOM at 32
 envs beside llm-serve, so the JAX leg needs the Anakin port; deferred. E07 PAUSED at u178 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh

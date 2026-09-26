@@ -31,6 +31,13 @@ Interface oracle (scripted last-hitter `train/scripted_policy.py` through the SA
 | `mirror-any` | scripted brawler both sides | 23 | 26 | 5 | attacking any minion in range costs 5 deaths and halves CS |
 | `idle-lasthit-red` | scripted RED vs idle blue | - | 74 | 0 | red's interface is fine; the 45/28 mirror split is wave interaction, not a side bug |
 
+BC representability diagnostic (`train/bc_diag.py` on the 19,196 x 8 scripted mirror steps; NOT a gate prior):
+
+| Run (`runs/BC/`) | Core | Held-out accuracy (button / x / y) | Mirror eval, sampled | Meaning |
+|---|---|---|---|---|
+| `bc-mlp-20260926-223919` | MLP | 0.99 / 0.74 / 0.72 | 5.3 / 3.8 CS (teacher: 45 / 28) | per-step accuracy is high but sampled clicks a cell off miss the minion and errors compound; click heads must be SHARP. Argmax eval pending |
+| `bc-gru` (batch 1024, seq 32, 20 epochs) | GRU | 0.87 / 0.29 / 0.29 | not evaluated | under-trained; not used |
+
 Frozen evaluations (the only numbers that count for the gate):
 
 | Eval dir (`runs/EVAL/`) | Checkpoint | Task | Episodes | Blue CS (mean / median / min-max) | Red CS | Deaths | Verdict |

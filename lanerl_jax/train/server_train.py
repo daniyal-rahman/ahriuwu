@@ -786,7 +786,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
 
 
 def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1, act_fn=None,
-                    record_npz=None):
+                    record_npz=None, deterministic=False):
     """Frozen-policy episodes through the training collector itself.
 
     Same observation encoding, same sampling, same server binary as training;
@@ -805,7 +805,12 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
             logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
         else:
             logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
-        action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
+        if deterministic:
+            # DIAGNOSTIC only (argmax clicks): the ledger records deterministic
+            # evaluations misleading us before; never a gate number.
+            action = (jnp.argmax(logits.button, -1), jnp.argmax(logits.screen_x, -1), jnp.argmax(logits.screen_y, -1))
+        else:
+            action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
         return action, carry
     carry = policy.initial_carry((collector.n,)) if recurrent else None
     obs, stats = collector.observe()
@@ -920,6 +925,7 @@ def main():
                         "(MultiProcessCollector); port blocks are base + 200*worker")
     p.add_argument("--eval-episodes", type=int, default=0,
                    help="evaluate the --resume checkpoint frozen for this many episodes per env; no learning")
+    p.add_argument("--deterministic", action="store_true", help="eval only: argmax actions (diagnostic, never a gate number)")
     p.add_argument("--record-npz", type=Path, default=None,
                    help="eval only: save (observation, action, done) per step, time-major, for BC diagnostics")
     p.add_argument("--scripted", choices=("lasthit", "any"), default=None,
@@ -1038,7 +1044,8 @@ def main():
                         checkpoint_sha256=file_sha256(args.resume) if args.resume else None)
         evaluate_frozen(collector, policy, params, run, seed=args.seed,
                         episodes_per_env=args.eval_episodes, act_fn=act_fn,
-                        record_npz=(run.path / args.record_npz.name) if args.record_npz else None)
+                        record_npz=(run.path / args.record_npz.name) if args.record_npz else None,
+                        deterministic=args.deterministic)
         return
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,

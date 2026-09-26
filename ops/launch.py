@@ -135,6 +135,7 @@ def main():
     p.add_argument("--ckpt", help="eval: checkpoint to evaluate"); p.add_argument("--opponent", default=None)
     p.add_argument("--opponent-ckpt"); p.add_argument("--envs", type=int, default=4); p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--no-canary", action="store_true")
+    p.add_argument("--deterministic", action="store_true", help="eval: argmax actions (diagnostic)")
     a = p.parse_args()
     if a.experiment == "eval":
         ck = must_exist("checkpoint", a.ckpt); must_exist("manifest", Path(srv(a.ckpt)).parent / "manifest.json")
@@ -143,7 +144,8 @@ def main():
                          "episode-s": 600, "eval-episodes": a.episodes, "seed": 0}}
         args = build_args(spec, argparse.Namespace(seed=None, init_from=None, resume=ck, opponent_ckpt=a.opponent_ckpt))
         args["out"] = "lanerl_jax/runs/EVAL"
-        submit(spec, args, "EVAL", a.dry_run); return
+        if a.deterministic: args["deterministic"] = True
+        submit(spec, args, "EVAL-det" if a.deterministic else "EVAL", a.dry_run); return
     spec = json.loads((REPO_SRV / "experiments" / f"{a.experiment}.json").read_text())
     name = f"{spec['id']}-s{a.seed if a.seed is not None else spec['args'].get('seed', 0)}"
     if any(j[0] == name for j in live_jobs()):
