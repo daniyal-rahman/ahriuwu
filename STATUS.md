@@ -20,8 +20,11 @@ the C# server. **BC representability (23:20 UTC):** the MLP clone matches the sc
 mirror (teacher 45 / 28): sampled clicks a cell off miss the minion and the
 errors compound. Argmax eval: 12 / 11 CS, so the clone is wrong at the decisive steps, not
 just blurred by sampling. 150-epoch BC: 97% click accuracy, 94% exact attack clicks -- the net CAN
-represent the last-hit click; undertraining, not a ceiling. Its mirror evals
-(sampled, argmax) are running. E08 (from the weak clone) stopped; E09 = PPO
+represent the last-hit click; undertraining, not a ceiling. Closed-loop it scores only 7.8 / 5.3
+sampled and 5 / 10 argmax (teacher 45 / 28): per-step accuracy does not
+transfer; compounding error. DAgger (relabel the clone's own states with the
+scripted policy offline, retrain) started to get a genuinely strong network
+policy for the learner test and the cross-play compare point. E08 (from the weak clone) stopped; E09 = PPO
 from the strong clone (learner test) launched 23:15 UTC, eval every 100.
 **Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
 steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.

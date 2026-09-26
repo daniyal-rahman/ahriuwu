@@ -19,7 +19,7 @@ labelled `train`.
 | `E07_frozen_opponent/seed0` | 09-26 18:30 | C# | E06's learner continued from u3140; opponent FROZEN at E06 u2200; learner side alternates blue/red across 6 servers x 256 steps | E06's (GRU, standard) | INVALID: `--resume` inherited E06's update counter (started at 5234) and lr schedule, so it ran 767 updates (1.2M dec) at a near-zero lr and stopped at 'update 6000'; its 3 evaluations failed (no --opponent-ckpt passed). Train chunks 17-23. Dir `seed0_v1_inherited_schedule` | — | superseded by the relaunch below |
 | `E07_frozen_opponent/seed0` (relaunch) | 09-26 21:55 | C# | as above, `--init-from` E06 u3140 (params only): fresh optimizer, own lr schedule and 3000-update budget | E06's (GRU, standard, anneal over 3000) | PAUSED at u178 (Dani, 22:40 UTC) for the oracle/BC/learner diagnostics | train CS 16 -> 8-10 after the fresh-optimizer restart; no frozen eval | paused |
 | `E08_ppo_from_bc/seed0` | 09-26 22:52 | C# | PPO (standard, MLP) from the 20-epoch clone, mirror | budget 600 | stopped at u40: init too weak (5 CS); superseded by E09 | — | superseded |
-| `E09_ppo_from_bc150/seed0` | 09-26 23:15 | C# | PPO (standard, MLP, anneal) from the 150-epoch clone, mirror, 10 servers | budget 600, eval every 100 | running | learner test from a strong init |
+| `E09_ppo_from_bc150/seed0` | 09-26 23:15 | C# | PPO (standard, MLP, anneal) from the 150-epoch clone, mirror, 10 servers | budget 600, eval every 100 | running; at u75: train CS 3-6, entropy already 8.0, KL 0.035/update: the standard preset diffuses the sharp clone within 50 updates | learner test; init turned out weak closed-loop (7 CS) |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
@@ -38,7 +38,7 @@ BC representability diagnostic (`train/bc_diag.py` on the 19,196 x 8 scripted mi
 | Run (`runs/BC/`) | Core | Held-out accuracy (button / x / y) | Mirror eval, sampled | Meaning |
 |---|---|---|---|---|
 | `bc-mlp-20260926-223919` | MLP | 0.99 / 0.74 / 0.72 | 5.3 / 3.8 CS sampled; 12 / 11 argmax (teacher: 45 / 28) | per-step accuracy is high but the clone is wrong at the decisive (attack) steps; a 150-epoch run with attack-step accuracy reported is checking undertraining vs a representational ceiling |
-| `bc-mlp` 150 epochs | MLP | 1.00 / 0.97 / 0.97; on ATTACK steps 1.00 / 0.96 / 0.97, exact attack click 0.94 | evals running | the network CAN represent the last-hit click; the 20-epoch clone was undertrained |
+| `bc-mlp` 150 epochs | MLP | 1.00 / 0.97 / 0.97; on ATTACK steps 1.00 / 0.96 / 0.97, exact attack click 0.94 | sampled 7.8 / 5.3; argmax 5 / 10 CS (teacher 45 / 28) | per-step accuracy does NOT transfer closed-loop: compounding error off the demo distribution. DAgger relabelling (offline, scripted policy is a pure function of the observation) started |
 | `bc-gru` (batch 1024, seq 32, 20 epochs) | GRU | 0.87 / 0.29 / 0.29 | not evaluated | under-trained; not used |
 
 Frozen evaluations (the only numbers that count for the gate):
