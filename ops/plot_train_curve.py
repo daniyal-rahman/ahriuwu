@@ -30,7 +30,8 @@ for i, root in enumerate(roots):
         k = 24; ax.plot(x[k-1:], np.convolve(y, np.ones(k)/k, mode='valid'), color=COLORS[i], lw=2, label=f'{root.split("/")[-2] if root.endswith("seed0") else root.split("/")[-1]} (24-episode mean)')
 try:
     evals = [json.loads(l) for l in open('lanerl_jax/runs/EVAL/summary.jsonl')]
-    evals = [v for v in evals if v.get('summary') and roots[0].rstrip('/').endswith(v.get('run', '').rstrip('/').split('/')[-2] + '/' + v.get('run', '').rstrip('/').split('/')[-1])]
+    key = '/'.join(roots[0].rstrip('/').split('/')[-2:])
+    evals = [v for v in evals if v.get('summary') and v.get('run', '').rstrip('/').endswith(key)]
     invalid = {920}   # E06 u920: OPS-004
     evals = [v for v in evals if v['update'] not in invalid]
     _, _, per0 = load(roots[0])
