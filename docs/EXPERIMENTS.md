@@ -34,3 +34,4 @@ Frozen evaluations (the only numbers that count for the gate):
 | `EVAL/eval_u1580.out`, `eval_u1900.out` | E06 seed 0, updates 1580 / 1900 (4.0M / 4.9M decisions) | same | 4 envs x 1 each | 14.3 (8-22) / 11.3 | 24.5 (16-36) / 14.8 | - | plateau band 11-25; train chunks 13-18. Job OOM-killed at u1931 (10 GB limit); resumed at 20 GB |
 | `EVAL/eval_u2200.out` | E06 seed 0, update 2200 (5.6M decisions) | same | 4 envs x 1 | 20.3 / 23 / 11-24 | 17.5 / 17.5 / 16-19 | - | best so far; train chunks 16-20, recent episodes 23-29 |
 | `EVAL/eval_u2520.out` | E06 seed 0, update 2520 (6.5M decisions; leak-fixed segment) | same | 4 envs x 1 | 16.8 / 17.5 / 11-21 | 13.8 / 14.5 / 7-19 | - | plateau band 14-20 both sides since u1260; memory now +2.4 MB/update (was +10) |
+| `EVAL/eval_u2840.out` | E06 seed 0, update 2840 (7.3M decisions) | same | 4 envs x 1 | 12.5 / 13 / 9-15 | 14.3 / 15 / 5-22 | - | still in the 12-20 band; train chunks 12-15 |
