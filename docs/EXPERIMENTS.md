@@ -29,3 +29,4 @@ Frozen evaluations (the only numbers that count for the gate):
 | `EVAL/eval_u2020.out` | E04 seed 0, update 2020 (500 updates after the branch) | mirror, near-wave, ClickV3 | 4 envs x 1 | 18.8 / 18.5 / 16-22 | 24.5 / 25.5 / 20-27 | - | both sides above E01's frozen 14-21; below the 30 gate; train chunks 22-29 |
 | `EVAL/eval_u320.out` | E06 seed 0, update 320 (0.8M decisions) | mirror, near-wave, ClickV3 | 4 envs x 1 | 5.3 / 4.5 / 3-9 | 6.0 / 6.0 / 2-10 | - | untrained level, as expected this early (E01 was ~5 train CS at the same budget) |
 | `EVAL/eval_u620.out` | E06 seed 0, update 620 (1.6M decisions) | same | 4 envs x 1 | 8.5 / 9 / 4-12 | 13.5 / 13 / 11-17 | - | learning: train chunks 10 -> 15, attack-move now 45% of actions |
+| `EVAL/eval_u920.out` | E06 seed 0, update 920 | same | 4 envs x 1 | 2.5 / 2.5 / 1-4 | 1.5 / 1.5 / 1-2 | - | INVALID: OPS-004 rank loop starved level-9+ champions (one decision per 1.9 s); run resumed from u620 after the fix |

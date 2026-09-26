@@ -532,10 +532,24 @@ def pending_rank_up(champ: Mapping) -> Optional[int]:
     from ..sim.spells import RANKS_BY_LEVEL
 
     lvl = int(champ.get("lvl") or 1)
-    want = RANKS_BY_LEVEL[min(lvl, len(RANKS_BY_LEVEL) - 1)]
     have = [int(v) for v in (champ.get("sl") or [0, 0, 0, 0])[:4]]
+    # OPS-004: one point per level, and the WIRE says how many are spent. The
+    # table below is a model of the server's auto-level; the server put E at
+    # rank 5 at level 9 where the table expected Q at 3, so this asked for a
+    # Q rank with no point left, every step, and each step then spun 18
+    # retries x 6 ticks (one decision per 1.9 s for that champion). E06's CS
+    # collapsed the moment its champions reached level 9.
+    if sum(have) >= lvl:
+        return None
+    want = RANKS_BY_LEVEL[min(lvl, len(RANKS_BY_LEVEL) - 1)]
     for slot in range(4):
         if have[slot] < want[slot]:
+            return slot
+    # Points remain but the table is satisfied (the server ranked differently):
+    # spend on the skill order's priority, respecting the caps and R's levels.
+    r_cap = sum(lvl >= L for L in (6, 11, 16))
+    for slot, cap in ((2, 5), (0, 5), (1, 5), (3, r_cap)):
+        if have[slot] < cap:
             return slot
     return None
 

@@ -548,3 +548,15 @@ def test_pair_actor_positive_hp_corpse_cannot_emit_gameplay_commands(monkeypatch
     # Same positive HP after authoritative respawn permits normal control.
     frame['u'][0]['dead'] = False
     assert driver(frame, 1)['blue']['t'] == 'click'
+
+
+def test_pending_rank_up_never_asks_for_a_point_the_champion_does_not_have():
+    """OPS-004: the server ranked E to 5 at level 9 where the table expected Q;
+    asking for Q anyway spun the rank loop forever and starved the champion of
+    decisions. The wire's spent points are authoritative."""
+    from lanerl_jax.parity.policy_driver import pending_rank_up
+    assert pending_rank_up({"lvl": 9, "sl": [2, 1, 5, 1]}) is None       # 9 points spent
+    assert pending_rank_up({"lvl": 10, "sl": [2, 1, 5, 1]}) == 0         # a point left: Q
+    assert pending_rank_up({"lvl": 6, "sl": [1, 1, 3, 0]}) == 3          # R at 6
+    assert pending_rank_up({"lvl": 1, "sl": [0, 0, 0, 0]}) == 2          # E first
+    assert pending_rank_up({"lvl": 12, "sl": [5, 1, 5, 2]}) is None      # 13 > 12: nothing owed
