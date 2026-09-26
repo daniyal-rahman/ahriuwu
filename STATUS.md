@@ -8,7 +8,8 @@ runs are paused until that gate is met.
 - `E05_mirror_wave_gru_standard` (started 01:20 UTC): from scratch, GRU core,
   published PPO defaults (`docs/HYPERPARAMS.md`), ClickV3 server. 10 servers.
 - `E04_mirror_wave_snap_noxp`: E01's policy continued on ClickV3 with XP 0.002.
-  First 12 training episodes averaged 28 CS. Frozen eval at update 1820 pending.
+  Frozen eval at update 2020 (03:10 UTC): blue 18.8 (16-22), red 24.5 (20-27);
+  above E01's frozen 14-21, below the gate. Train chunks 22-29, single episodes to 42.
 - E01 (control) stopped 01:20 UTC; E02/E03 stopped earlier. Older notes:
 - `mirror-wave-s0`: C# mirror self-play, both champions start behind their
   first wave at 120 s, 10 envs. Train CS per episode 3.5 → ~12.5 (max 27)
