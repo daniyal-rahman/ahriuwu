@@ -200,8 +200,12 @@ class PPOConfig(NamedTuple):
         4 epochs, per-minibatch advantage normalisation, no KL early stop.
         gamma stays horizon-based (120 s) because the task is 600 s at 10 Hz;
         OpenAI Five used 180-360 s horizons for a 45-minute game."""
+        # entropy 0.01 is CleanRL's value for ONE discrete head; our regulariser
+        # is the SUM of three head entropies (button + x + y, up to 10.6 nats),
+        # so the same push per head is 0.01/3. E05 ran 0.01 on the sum: entropy
+        # pinned at 9.0, frozen CS 6.5/10.0 after 2.3M decisions (untrained: 8).
         base = dict(lr=2.5e-4, critic_lr=2.5e-4, gae_lambda=0.95, clip_eps=0.2,
-                    entropy_coef=0.01, value_coef=0.5, max_grad_norm=0.5, epochs=4,
+                    entropy_coef=0.01 / 3, value_coef=0.5, max_grad_norm=0.5, epochs=4,
                     normalize_advantage=True, target_kl=float("inf"),
                     decision_hz=decision_hz)
         base.update(overrides)

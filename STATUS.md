@@ -5,8 +5,10 @@
 runs are paused until that gate is met.
 
 **Running (desktop):**
-- `E05_mirror_wave_gru_standard` (started 01:20 UTC): from scratch, GRU core,
-  published PPO defaults (`docs/HYPERPARAMS.md`), ClickV3 server. 10 servers.
+- `E06_mirror_wave_gru_ent3` (started 03:25 UTC): from scratch, GRU core,
+  published PPO defaults with entropy 0.01 PER HEAD (0.0033 on the sum). E05
+  (entropy 0.01 on the sum) was stopped at 912 updates: entropy pinned at 9.0,
+  frozen CS 6.5/10.0, i.e. it never left the untrained regime.
 - `E04_mirror_wave_snap_noxp`: E01's policy continued on ClickV3 with XP 0.002.
   Frozen eval at update 2020 (03:10 UTC): blue 18.8 (16-22), red 24.5 (20-27);
   above E01's frozen 14-21, below the gate. Train chunks 22-29, single episodes to 42.

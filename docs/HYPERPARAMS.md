@@ -13,7 +13,7 @@ result never depends on a value we invented. `PPOConfig.standard()` in
 | GAE lambda | 0.95 | Schulman 2017, CleanRL | 0.97 | |
 | Clip eps | 0.2 | PPO paper | same | dual clip 3.0 kept (Ye et al. 2020) |
 | Value coef | 0.5, clipped value loss | CleanRL | same | |
-| Entropy coef | 0.01 | CleanRL | 0.001 | valid only with the PPO-15 per-head entropy |
+| Entropy coef | 0.01 per head = 0.01/3 on our 3-head sum | CleanRL (single head) | 0.001 | E05 used 0.01 on the sum: entropy pinned at 9.0, no learning (frozen 6.5/10.0 at 2.3M decisions). E06 uses 0.0033 |
 | Max grad norm | 0.5 | CleanRL | 1.0 | |
 | Epochs x minibatches | 4 x 4 | CleanRL Atari | same | gru: minibatches split sequences |
 | Advantage normalisation | on, per minibatch | CleanRL | off (E01-E04) | off was a workaround for PPO-15 |
