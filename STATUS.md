@@ -4,12 +4,10 @@
 10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
 runs are paused until that gate is met.
 
-**Running:** nothing. The desktop was booted to Windows at 04:11 UTC, which
-cancelled E04 and E06. Dani's decision (04:55 UTC): continue ONLY the GRU arm
+**Running:** E06 only (resumed 06:48 UTC from update 260, job 1453, evaluator
+re-armed). The desktop was on Windows 04:11-06:37 UTC, which cancelled E04 and E06. Dani's decision (04:55 UTC): continue ONLY the GRU arm
 with published defaults (E06). E04 stays stopped (frozen 18.8/24.5 at u2020,
-train chunks 27-31 at u3070; its checkpoints remain). A watcher on danilogin
-resumes E06 from its update-280 checkpoint and restarts its evaluator as soon
-as the node returns to Linux.
+train chunks 27-31 at u3070; its checkpoints remain). 
 
 **Done today:** Codex's uncommitted server-first work committed (`35210dc`);
 collector 3-5x faster; mirror mode, resume, frozen eval; lr 1e-5 identified as
