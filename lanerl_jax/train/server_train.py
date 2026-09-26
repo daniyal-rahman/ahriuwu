@@ -707,7 +707,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                 values.append(value); rewards.append(reward); dones.append(done)
                 reward_terms.append(terms)
                 for i in np.flatnonzero(done):
-                    run.log({"episode": collector.episodes[i], "env": int(i),
+                    run.log({"episode": int(collector.episodes[i]), "env": int(i),
                              "cs": float(next_stats[i, 0]), "update": u})
                 if done.any():
                     collector.restart_done(done)
@@ -822,8 +822,8 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1)
             steps += 1
             for i in np.flatnonzero(done):
                 rec = {"agent": int(i), "env": int(i) // collector.T,
-                       "team": collector.teams[int(i) % collector.T],
-                       "episode": collector.episodes[i], "cs": float(next_stats[i, 0]),
+                       "team": int(collector.teams[int(i) % collector.T]),
+                       "episode": int(collector.episodes[i]), "cs": float(next_stats[i, 0]),
                        "deaths": int(deaths[i]), "wall_s": time.monotonic() - started}
                 records.append(rec); run.log(rec); print(json.dumps(rec), flush=True)
                 deaths[i] = 0
