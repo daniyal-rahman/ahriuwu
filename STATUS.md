@@ -44,7 +44,14 @@ click targets resolve to the closest reachable point, as the real client does.
 XP is enemy-only on the server (checked, SIDE-001) and stays, at weight 0.002
 (was 0.005, which out-paid CS).
 E03 (lr test) stopped; E04 branches E01's state at update 1520 on ClickV3 with
-XP 0.002 at the same lr; E01 keeps running on DeadProbe as the control.
+XP 0.002 at the same lr. FIRST SIGNAL (2026-09-26 00:40 UTC): E04's first 12
+training episodes average 28.1 CS (30-42 in eight of them) against E01's
+17-21 at the same point: the wall-click fix is the biggest single gain so far.
+Frozen eval at E04 update 1820 pending. E01 (control, DeadProbe) still running.
+
+NEXT ARM (E05, launching once the learner tests pass): from scratch, GRU core
+(memory learned, not hand-built), published PPO defaults
+(`docs/HYPERPARAMS.md`, `--preset standard`, lr annealed), ClickV3.
 
 **Next:**
 1. Periodic frozen evaluation every ~300 updates (`ops/periodic_eval.sh`, results in `runs/EVAL/summary.jsonl`).

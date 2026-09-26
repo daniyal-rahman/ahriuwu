@@ -539,7 +539,8 @@ class MultiProcessCollector:
 
 
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
-                        save_updates=(), n_minibatches=1, resume=None, ckpt_every=10):
+                        save_updates=(), n_minibatches=1, resume=None, ckpt_every=10,
+                        lr_anneal=False):
     """Train either farming collector with exactly the same PPO/reward loop.
 
     Collectors provide n, episodes, observe(), step(actions), restart_done(),
@@ -549,12 +550,19 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
     """
     rng = jax.random.key(seed)
     started = time.monotonic()
+    recurrent = getattr(getattr(policy, "cfg", None), "core", "mlp") == "gru"
     print(run.path, flush=True)
     try:
         obs, stats = collector.observe()
         rng, init_key = jax.random.split(rng)
-        params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
-        tx, loss = make_learner(policy, cfg)
+        carry = policy.initial_carry((collector.n,)) if recurrent else None
+        if recurrent:
+            if collector.n % n_minibatches:
+                raise ValueError("gru: minibatches must divide the number of agent rows (sequences)")
+            params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
+        else:
+            params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
+        tx, loss = make_learner(policy, cfg, anneal_steps=(updates * cfg.epochs * n_minibatches) if lr_anneal else 0)
         opt_state = tx.init(params)
         start_update = 0
         if resume is not None:
@@ -570,10 +578,13 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             run.set_results(resumed_from=str(resume), resumed_update=start_update)
             print(f"resumed {resume} at update {start_update}", flush=True)
         @jax.jit
-        def act(params, obs, key):
-            logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
+        def act(params, obs, key, carry=None):
+            if recurrent:
+                logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
+            else:
+                logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
             action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
-            return action, lp, usage, logits.value
+            return action, lp, usage, logits.value, carry
         @jax.jit
         def update(params, opt_state, batch, key):
             return kl_stopped_epochs(lambda q, b: loss(q, b, cfg), tx, params,
@@ -586,9 +597,10 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             rows, values, rewards, dones, reward_terms = [], [], [], [], []
             sampled_buttons = np.zeros(len(BUTTONS), dtype=np.int64)
             sampled_r_unranked = 0
+            carry0 = carry
             for t in range(rollout):
                 rng, key = jax.random.split(rng)
-                action, lp, usage, value = act(params, obs, key)
+                action, lp, usage, value, new_carry = act(params, obs, key, carry)
                 host_actions = np.stack(jax.device_get(action), axis=-1)
                 sampled_buttons += np.bincount(host_actions[:, 0], minlength=len(BUTTONS))
                 sampled_r_unranked += int(np.sum(
@@ -612,17 +624,29 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                     collector.restart_done(done)
                     next_obs, next_stats = collector.observe()
                 obs, stats = next_obs, next_stats
+                if recurrent:
+                    # The new episode starts from a zero state; the loss scan
+                    # applies the same reset from the stored `done` flags.
+                    carry = jnp.where(jnp.asarray(done)[:, None], 0.0, new_carry)
             rng, key = jax.random.split(rng)
-            _, _, _, last_v = act(params, obs, key)
+            _, _, _, last_v, _ = act(params, obs, key, carry)
             adv, returns = gae(jnp.stack(rewards), jnp.stack(values), jnp.asarray(dones),
                                last_v, cfg.gamma, cfg.gae_lambda)
-            batch = jax.tree.map(lambda *x: jnp.stack(x).reshape((-1,) + x[0].shape[1:]), *rows)
-            batch["adv"] = adv.reshape(-1)
+            if recurrent:
+                # agent-major sequences [N, T, ...] so minibatches split agents
+                batch = jax.tree.map(lambda *x: jnp.swapaxes(jnp.stack(x), 0, 1), *rows)
+                batch["adv"] = jnp.swapaxes(adv, 0, 1)
+                batch["returns"] = jnp.swapaxes(returns, 0, 1)
+                batch["done"] = jnp.swapaxes(jnp.asarray(dones), 0, 1)
+                batch["carry0"] = carry0
+            else:
+                batch = jax.tree.map(lambda *x: jnp.stack(x).reshape((-1,) + x[0].shape[1:]), *rows)
+                batch["adv"] = adv.reshape(-1)
+                batch["returns"] = returns.reshape(-1)
             if cfg.normalize_advantage:
                 batch["adv"] = (batch["adv"] - adv.mean()) / (adv.std() + 1e-8)
-            batch["returns"] = returns.reshape(-1)
             # Independent rollout/recompute equality before any optimizer step.
-            logits = policy.apply(params, batch["entities"], batch["mask"], batch["self"], batch["global"])
+            logits = loss.forward(params, batch)
             recomputed = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
                 batch["action"], batch["uses_screen"], batch["uses_target"])
             np.testing.assert_allclose(recomputed, batch["log_prob"], atol=2e-5, rtol=2e-5)
@@ -673,11 +697,16 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1)
     deaths. Returns the per-episode records.
     """
     rng = jax.random.key(seed)
+    recurrent = getattr(policy.cfg, "core", "mlp") == "gru"
     @jax.jit
-    def act(params, obs, key):
-        logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
+    def act(params, obs, key, carry=None):
+        if recurrent:
+            logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
+        else:
+            logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
         action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
-        return action
+        return action, carry
+    carry = policy.initial_carry((collector.n,)) if recurrent else None
     obs, stats = collector.observe()
     deaths = np.zeros(collector.n, np.int64)
     records = []
@@ -687,8 +716,11 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1)
     try:
         while (done_count < episodes_per_env).any():
             rng, key = jax.random.split(rng)
-            host_actions = np.stack(jax.device_get(act(params, obs, key)), axis=-1)
+            action, carry = act(params, obs, key, carry)
+            host_actions = np.stack(jax.device_get(action), axis=-1)
             done = collector.step(host_actions)
+            if recurrent:
+                carry = jnp.where(jnp.asarray(done)[:, None], 0.0, carry)
             next_obs, next_stats = collector.observe()
             deaths += (stats[:, 1].astype(bool) & ~next_stats[:, 1].astype(bool))
             steps += 1
@@ -743,18 +775,23 @@ def main():
                    help="Additional update numbers to checkpoint for matched-budget evaluation")
     p.add_argument("--episode-s", type=float, default=600.)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--lr", type=float, default=1e-5)
+    p.add_argument("--preset", choices=("legacy", "standard"), default="legacy",
+                   help="standard: PPOConfig.standard() (CleanRL defaults, docs/HYPERPARAMS.md); "
+                        "explicit flags below override the preset")
+    p.add_argument("--core", choices=("mlp", "gru"), default="mlp",
+                   help="gru: recurrent core, truncated BPTT over the rollout (memory is learned)")
+    p.add_argument("--lr-anneal", action="store_true", help="linear lr decay to 0 over --updates")
+    p.add_argument("--lr", type=float, default=None)
     p.add_argument("--critic-lr", type=float, default=None, help="defaults to --lr")
-    p.add_argument("--entropy-coef", type=float, default=PPOConfig().entropy_coef)
-    p.add_argument("--epochs", type=int, default=PPOConfig().epochs)
+    p.add_argument("--entropy-coef", type=float, default=None)
+    p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--minibatches", type=int, default=1)
     p.add_argument("--opponent", choices=("idle", "mirror"), default="idle",
                    help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions")
     p.add_argument("--resume", type=Path, default=None, help="ckpt_latest.msgpack of a compatible run")
     p.add_argument("--ckpt-every", type=int, default=10)
     p.add_argument("--normalize-advantage", action="store_true",
-                   help="per-batch advantage standardisation (off: batches with no reward "
-                        "would otherwise turn critic noise into unit-variance gradients)")
+                   help="per-batch advantage standardisation (the standard preset has it on)")
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
     p.add_argument("--no-snap-clicks", action="store_true",
@@ -781,17 +818,34 @@ def main():
         p.error('wave-start episodes must end after 120 game seconds')
     if (args.envs * (2 if args.opponent == "mirror" else 1) * args.rollout) % args.minibatches:
         p.error("minibatches must divide envs x agents x rollout")
-    cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,
-                    entropy_coef=args.entropy_coef, epochs=args.epochs,
-                    normalize_advantage=args.normalize_advantage,
-                    decision_hz=60. / args.step_ticks,
-                    gae_lambda=PPOConfig().gae_lambda ** (args.step_ticks / 2.))
+    hz = 60. / args.step_ticks
+    if args.preset == "standard":
+        cfg = PPOConfig.standard(decision_hz=hz)
+    else:
+        cfg = PPOConfig(lr=1e-5, critic_lr=1e-5, decision_hz=hz,
+                        gae_lambda=PPOConfig().gae_lambda ** (args.step_ticks / 2.),
+                        normalize_advantage=args.normalize_advantage)
+    over = {}
+    if args.lr is not None: over["lr"] = args.lr; over["critic_lr"] = args.lr
+    if args.critic_lr is not None: over["critic_lr"] = args.critic_lr
+    if args.entropy_coef is not None: over["entropy_coef"] = args.entropy_coef
+    if args.epochs is not None: over["epochs"] = args.epochs
+    if args.normalize_advantage: over["normalize_advantage"] = True
+    cfg = cfg._replace(**over)
     # The rollout/recompute likelihood check compares per-step and batched
     # forward passes; TF32 matmuls on the GPU would fail its 2e-5 tolerance.
     jax.config.update("jax_default_matmul_precision", "highest")
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
-    policy = LanePolicy(PolicyConfig())
+    pcfg = PolicyConfig(core=args.core)
+    if args.resume is not None and (args.resume.parent / "manifest.json").exists():
+        # A checkpoint's own architecture wins over the flag: a gru checkpoint
+        # loaded into an mlp policy would fail, an mlp one into a gru would be
+        # a silently untrained core.
+        saved = json.loads((args.resume.parent / "manifest.json").read_text()).get("config", {}).get("train", {}).get("policy", {})
+        if saved:
+            pcfg = PolicyConfig(**saved)
+    policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.server_train', *sys.argv[1:]])
     run = RunDir(args.out, f"server-farm-s{args.seed}", {"train": {"policy": policy.cfg._asdict()},
         "command": command, "cwd": str(Path.cwd()),
@@ -832,8 +886,10 @@ def main():
     if args.eval_episodes:
         from flax.serialization import from_state_dict, msgpack_restore
         obs0, _ = collector.observe()
-        params = policy.init(jax.random.key(args.seed), obs0.entities, obs0.entity_pad_mask,
-                             obs0.self_vec, obs0.global_vec)
+        init_args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
+        if pcfg.core == "gru":
+            init_args = init_args + (policy.initial_carry((collector.n,)),)
+        params = policy.init(jax.random.key(args.seed), *init_args)
         if args.resume is not None:
             params = from_state_dict(params, msgpack_restore(Path(args.resume).read_bytes())["params"])
         run.set_results(evaluated_checkpoint=str(args.resume) if args.resume else "random",
@@ -844,7 +900,7 @@ def main():
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
                         save_updates=args.save_updates, n_minibatches=args.minibatches,
-                        resume=args.resume, ckpt_every=args.ckpt_every)
+                        resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal)
 
 
 if __name__ == "__main__":

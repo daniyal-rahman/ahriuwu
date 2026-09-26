@@ -301,3 +301,51 @@ def test_shared_learner_learns_rewarded_action_and_zero_lr_is_invariant(tmp_path
     for a, b in zip(jax.tree.leaves(initial_trees[0]), jax.tree.leaves(initial_trees[1])):
         np.testing.assert_array_equal(a, b)
     assert checked_batches == [64] * 6
+
+
+def test_gru_core_learns_rewarded_action_and_sequence_forward_matches_rollout(tmp_path):
+    """The recurrent path: same one-step bandit as the mlp test, run through the
+    [N, T] sequence batch. Checks (a) the loss's scan forward reproduces the
+    rollout's log-probs (asserted inside run_farming_learner before every
+    update), (b) the rewarded button's probability rises, (c) the carry resets
+    at terminals (every step here is terminal, so any carry leak would change
+    the recomputed log-prob and trip the assert)."""
+    import jax
+    from flax.serialization import msgpack_restore
+    from lanerl_jax.obs.builder import Observation, N_SLOTS, ENTITY_DIM, SELF_DIM, GLOBAL_DIM
+    from lanerl_jax.train.policy import LanePolicy, PolicyConfig
+    from lanerl_jax.train.ppo import PPOConfig
+    from lanerl_jax.train.run_manifest import RunDir
+    from lanerl_jax.train import server_train
+    rewarded_button = BUTTON_INDEX['e']
+
+    class BanditCollector:
+        n = 8; T = 1; teams = (0,)
+        def __init__(self):
+            self.episodes = [0] * self.n; self.cs = np.zeros(self.n)
+            self.obs = Observation(jnp.zeros((self.n, N_SLOTS, ENTITY_DIM)), jnp.ones((self.n, N_SLOTS), bool),
+                jnp.zeros((self.n, SELF_DIM)).at[:, 0].set(.75), jnp.zeros((self.n, GLOBAL_DIM)),
+                jnp.full((self.n, N_SLOTS), -1, dtype=jnp.int32))
+        def observe(self): return self.obs, np.stack([self.cs, np.ones(self.n), np.zeros(self.n)], axis=1)
+        def spell_ranks(self): return np.ones((self.n, 4), dtype=np.int32)
+        def step(self, actions):
+            self.cs = (actions[:, 0] == rewarded_button).astype(float); return np.ones(self.n, bool)
+        def restart_done(self, done): self.episodes = [n + 1 for n in self.episodes]; self.cs[:] = 0
+        def close(self): pass
+
+    policy = LanePolicy(PolicyConfig(core='gru', d_model=8, n_layers=1, n_heads=1, ffn_dim=8,
+                                     ctx_dim=8, core_dim=8, mlp_hidden=8, mlp_layers=1))
+    collector = BanditCollector()
+    run = RunDir(tmp_path, 'gru-bandit', {})
+    cfg = PPOConfig.standard(decision_hz=10.)._replace(lr=.01, critic_lr=0., value_coef=0., entropy_coef=0.,
+                                                       epochs=1, normalize_advantage=False)
+    server_train.run_farming_learner(collector, policy, cfg, run, seed=3, rollout=8, updates=4, n_minibatches=2)
+    before = msgpack_restore((run.path / 'initial.msgpack').read_bytes())['params']
+    after = msgpack_restore((run.path / 'ckpt_latest.msgpack').read_bytes())['params']
+    carry = policy.initial_carry((collector.n,))
+    def prob(params):
+        logits, _ = policy.apply(params, collector.obs.entities, collector.obs.entity_pad_mask,
+                                 collector.obs.self_vec, collector.obs.global_vec, carry)
+        return float(jax.nn.softmax(logits.button)[0, rewarded_button])
+    assert prob(after) > prob(before) + .005
+    assert run.manifest['results']['parameters_changed'] is True

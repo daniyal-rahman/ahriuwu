@@ -99,6 +99,11 @@ class PolicyConfig(NamedTuple):
     n_buttons: int = N_BUTTONS
     n_screen_x: int = N_SCREEN_X
     n_screen_y: int = N_SCREEN_Y
+    #: "mlp": feed-forward (E01-E04). "gru": a GRUCell of `core_dim` on top of
+    #: the trunk, the standard PPO-LSTM recipe (CleanRL ppo_lstm, OpenAI Five):
+    #: memory is LEARNED, not hand-built from windup flags or frame stacks.
+    #: `__call__` then takes and returns the carry.
+    core: str = "mlp"
 
 
 class ActionLogits(NamedTuple):
@@ -143,7 +148,7 @@ class LanePolicy(nn.Module):
     cfg: PolicyConfig = PolicyConfig()
 
     @nn.compact
-    def __call__(self, entities, pad_mask, self_vec, global_vec):
+    def __call__(self, entities, pad_mask, self_vec, global_vec, carry=None):
         c = self.cfg
         if c.action_interface != "screen-click-v2":
             raise ValueError("policy requires screen-click-v2; pointer checkpoints need retraining")
@@ -182,8 +187,15 @@ class LanePolicy(nn.Module):
         for _ in range(c.mlp_layers):
             h = nn.relu(nn.Dense(c.mlp_hidden, **TRUNK)(h))
         h = nn.Dense(c.core_dim, **TRUNK)(h)
+        new_carry = None
+        if c.core == "gru":
+            if carry is None:
+                raise ValueError("gru core needs a carry; use LanePolicy.initial_carry")
+            new_carry, h = nn.GRUCell(features=c.core_dim, name="core_gru")(carry, h)
+        elif c.core != "mlp":
+            raise ValueError(f"unknown core {c.core!r}")
 
-        return ActionLogits(
+        logits = ActionLogits(
             button=nn.Dense(c.n_buttons, **HEAD)(h),
             screen_x=nn.Dense(c.n_screen_x, **HEAD)(h),
             screen_y=nn.Dense(c.n_screen_y, **HEAD)(h),
@@ -193,6 +205,12 @@ class LanePolicy(nn.Module):
             # rename here silently sends the critic back to the actor's lr.
             value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(h)[..., 0],
         )
+        return (logits, new_carry) if c.core == "gru" else logits
+
+    def initial_carry(self, batch_shape=()):
+        """Zero GRU state, ``batch_shape + (core_dim,)``; the reset value at
+        every episode boundary."""
+        return jnp.zeros(tuple(batch_shape) + (self.cfg.core_dim,), jnp.float32)
 
 
 def apply_flattened_batch(policy: LanePolicy, variables, entities, pad_mask,

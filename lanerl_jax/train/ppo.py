@@ -191,6 +191,22 @@ class PPOConfig(NamedTuple):
     def gamma(self) -> float:
         return gamma_for_horizon(self.horizon_s, self.decision_hz)
 
+    @classmethod
+    def standard(cls, decision_hz: float = 10.0, **overrides) -> "PPOConfig":
+        """Known PPO defaults (CleanRL `ppo`/`ppo_lstm`, Schulman et al. 2017),
+        adopted 2026-09-26 so no arm depends on a value we invented: lr 2.5e-4
+        (actor and critic, linear anneal to 0 is the launcher's job), GAE
+        lambda 0.95, clip 0.2, entropy 0.01, value coef 0.5, max grad norm 0.5,
+        4 epochs, per-minibatch advantage normalisation, no KL early stop.
+        gamma stays horizon-based (120 s) because the task is 600 s at 10 Hz;
+        OpenAI Five used 180-360 s horizons for a 45-minute game."""
+        base = dict(lr=2.5e-4, critic_lr=2.5e-4, gae_lambda=0.95, clip_eps=0.2,
+                    entropy_coef=0.01, value_coef=0.5, max_grad_norm=0.5, epochs=4,
+                    normalize_advantage=True, target_kl=float("inf"),
+                    decision_hz=decision_hz)
+        base.update(overrides)
+        return cls(**base)
+
 
 _MOVE = BUTTON_INDEX["move"]
 _ATTACK_MOVE = BUTTON_INDEX["attack_move"]

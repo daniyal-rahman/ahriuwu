@@ -24,7 +24,7 @@ mkdir -p lanerl_jax/runs/server_train
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PYTHONUNBUFFERED=1
 export LANERL_VENDOR_ROOT=${LANERL_VENDOR_ROOT:-/mnt/nfs/projects/lanerl-vendor}
-SERVER_DIR=${SERVER_DIR:-$LANERL_VENDOR_ROOT/LoLServer/GameServerConsole/bin/DeadProbe/net6.0}
+SERVER_DIR=${SERVER_DIR:-$LANERL_VENDOR_ROOT/LoLServer/GameServerConsole/bin/ClickV3/net6.0}
 ARGS=("$@")
 case " $* " in *" --server-dir "*) ;; *) ARGS+=(--server-dir "$SERVER_DIR");; esac
 case " $* " in *" --out "*) ;; *) ARGS+=(--out lanerl_jax/runs/server_train);; esac
