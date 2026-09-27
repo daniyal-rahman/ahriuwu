@@ -8,7 +8,14 @@ while true; do
   RUN=$(ls -d $ROOT/*-s[0-9]*/ | tail -1)
   U=$(python3 -c "import json;m=json.load(open('$RUN/manifest.json'));print(m['checkpoints'][-1]['update'] if m.get('checkpoints') else 0)" 2>/dev/null || echo 0)
   if [ "$U" -ge $((LAST + STEP)) ]; then
-    cp $RUN/ckpt_latest.msgpack $RUN/eval_u$U.msgpack
+    # Copy only a checkpoint that is not mid-write: two copies 3 s apart must be
+    # identical and must unpack (u240 of E18b evaluated a truncated copy).
+    for try in 1 2 3 4 5; do
+      cp $RUN/ckpt_latest.msgpack $RUN/eval_u$U.msgpack; sleep 3
+      if cmp -s $RUN/ckpt_latest.msgpack $RUN/eval_u$U.msgpack && \
+         .venv-jax/bin/python -c "from flax.serialization import msgpack_restore; import sys; msgpack_restore(open(sys.argv[1],'rb').read())" $RUN/eval_u$U.msgpack 2>/dev/null; then break; fi
+      sleep 10
+    done
     # Through the validating launcher (no env-var plumbing): OPPONENT / OPPONENT_CKPT are optional.
     # One tag (= job name = log file) PER RUN AND UPDATE. Two evaluators sharing
     # the tag "EVAL" copied each other's log (E14 u400 / E15 u700, 2026-09-27).

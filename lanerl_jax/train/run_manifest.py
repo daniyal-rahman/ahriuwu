@@ -346,7 +346,10 @@ Metrics: one JSON object per chunk in `metrics.jsonl`.
                          else f"ckpt_{step:09d}_diverged.msgpack")
         f.write_bytes(to_bytes(payload))
         if latest:
-            (self.path / "ckpt_latest.msgpack").write_bytes(f.read_bytes())
+            # Atomic: a reader (periodic evaluator) copying mid-write got a
+            # truncated msgpack (E18b u240). Write a temp file, then rename.
+            tmp = self.path / "ckpt_latest.msgpack.tmp"
+            tmp.write_bytes(f.read_bytes()); tmp.replace(self.path / "ckpt_latest.msgpack")
         self.manifest["checkpoints"].append(
             {"file": f.name, "step": int(step), "update": int(update),
              "bytes": f.stat().st_size, "latest": bool(latest),
