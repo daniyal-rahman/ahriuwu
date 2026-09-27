@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 17:55 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 18:45 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
