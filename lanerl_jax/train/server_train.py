@@ -192,7 +192,7 @@ class StepDiag:
             wx = pos[i, 0] + self.ds * ax[0] + self.dn * nm[0]; wy = pos[i, 1] + self.ds * ax[1] + self.dn * nm[1]
             ok, _ = self._standable_xy(wx.reshape(-1), wy.reshape(-1))
             unw = ~ok.reshape(wx.shape) & ~self.minimap
-            p_unw[i] = float((px[i][:, None] * py[i][None, :] * unw).sum())
+            p_unw[i] = float((px[i][:, None] * py[i][None, :] * unw).sum()) if np.isfinite(px[i]).all() else np.nan
             b, sx, sy = actions[i]
             act_unw[i] = bool(unw[int(sx), int(sy)]) and BUTTONS[int(b)] in ("move", "attack_move")
         env = np.arange(N) // self.collector.T
@@ -1058,7 +1058,10 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
         if act_fn is not None:
             # A scripted player through the SAME observation/click interface
             # (`train/scripted_policy.py`): the interface oracle.
-            return jax.vmap(act_fn, in_axes=(0, None))(obs, key), carry
+            a = jax.vmap(act_fn, in_axes=(0, None))(obs, key)
+            n = obs.entities.shape[0]
+            nan = jnp.full((n,), jnp.nan)
+            return a, carry, (nan, jnp.full((n, len(SCREEN_X_VALUES)), jnp.nan), jnp.full((n, len(SCREEN_Y_VALUES)), jnp.nan), jnp.full((n, 3), jnp.nan))
         if recurrent:
             logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
         else:
@@ -1071,7 +1074,7 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
             action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask, click_mask=click_mask)
         return action, carry, (logits.value, *policy_click_marginals(logits))
     carry = policy.initial_carry((collector.n,)) if recurrent else None
-    diag = StepDiag.create(run.path, collector) if (diag_steps and act_fn is None) else None
+    diag = StepDiag.create(run.path, collector) if diag_steps else None   # scripted runs too (parity timelines)
     obs, stats = collector.observe()
     deaths = np.zeros(collector.n, np.int64)
     records = []
