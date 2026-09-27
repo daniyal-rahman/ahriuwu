@@ -34,3 +34,4 @@ History = `legacy/`, `docs/archive/`.
    `lanerl/patches/` with a README row and a rebuilt `DeadProbe`.
 8. Parallel agents: one git worktree and one experiment ID each; touch only
    your ID's runs; commit small, rebase on `lane-rl/jax` before handoff.
+- Desktop core budget (16): two 8-core training jobs starve every 2-core evaluation and canary for hours. Training specs use `cpus` 7 (or 4 for fine-tunes); always leave 2 cores for evaluations.
