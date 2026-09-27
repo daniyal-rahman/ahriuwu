@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 16:20 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 17:20 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -64,9 +64,9 @@ JAX rollouts. **E13** (no-prior fixed-wiring GRU on JAX, `runs/E13_jax_gru_scrat
 (see `experiments/E13_jax_gru_scratch.json`). E14 (PPO-16 fix arm, lr 1e-5 from E12a) COMPLETE at u400 in 24 min: post_kl
 0.006-0.023 per update, training CS windows 31 / 24 / 27 where E12b had 3 / 1 / 0:
 the prior survives: **final frozen 37.5 / 36.4** (prior 45.5 / 49.5, E12b 0).
-E16 = E14 with entropy 0 queued (is the bonus the residual drift?). E15 frozen: u100 12.8 / 11.0,
-u280 20.8 / 12.0, u700 14.2 / 14.2, u800 14.8 / 17.8 (E06 band 13-22; its best 22.5 / 20.8 at
-u3460). Periodic evaluators now use one tag per run+update (two shared a log).
+E16 (entropy 0) complete: same trajectory as E14, frozen u120 41.3 / 34.0; the bonus is not the drift. E15 frozen: u100 12.8 / 11.0,
+u280 20.8 / 12.0, u700 14.2 / 14.2, u800 14.8 / 17.8, u940 13.3 / 17.8, **u1220 24.5 / 21.8** -- above
+E06's best (22.5 / 20.8 at u3460) at a third of the updates; gate is 30. Periodic evaluators now use one tag per run+update (two shared a log).
 Step 3: PPO on JAX from the GRU clone (`jax_train.py
 --init-from --core gru --preset standard`). Step 4: `ops/launch.py eval
 --ckpt <E04> --opponent frozen --opponent-ckpt <jax gru>` on the C# server.
