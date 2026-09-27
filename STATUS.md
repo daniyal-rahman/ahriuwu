@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-28 05:40 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 06:40 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -8,9 +8,11 @@ no prior, seed 1, XP 0 -- ABOVE THE GATE** (E15 seed 0: 28.5 / 31.8).
 **Dani's two questions (09-28):** (1) JAX vs C# parity for the scripted bot within
 1-3 CS, solo and mirror; (2) can PPO improve a prior, after replacing the custom
 update with a transcription of PureJaxRL `ppo_rnn.py` (handed to a second agent;
-handoff in the chat log). Parity, identical single-env config: solo JAX 70 vs
-server 65 (gap entirely in minutes 7-8), mirror 48 / 43 vs 45 / 43. Server spread
-over 4 seeds being measured (`runs/PARITY/`).
+handoff in the chat log). Parity (PARITY-002): both engines deterministic (4 server seeds identical); solo JAX 70
+vs server 65, mirror 48 / 43 vs 45 / 43. Wave POPULATIONS match within 4% by type
+with the same cadence and lifetimes; the residual is wave-clash TIMING (fronts
+2-3k u apart at moments), and the ~5-CS solo offset flips sign between measurement
+paths. Side-by-side videos in `runs/PARITY/side_by_side/`. Next: mirror side-by-side.
 ## Reference PPO port
 
 Live learner ported to PureJaxRL `ppo_rnn.py` revision
