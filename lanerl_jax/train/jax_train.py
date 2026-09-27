@@ -111,7 +111,7 @@ def main():
         run.write()
         collector = JaxFarmCollector(args.envs, run.path, args.episode_s,
             args.start_near_wave, args.step_ticks, seed=args.seed, sim_config=sim,
-            batch_mode=args.batch_mode, teams=teams)
+            batch_mode=args.batch_mode, teams=teams, drop_unwalkable_moves=(args.unwalkable_click == "noop"))
     except BaseException as exc:
         if collector is not None:
             collector.close()

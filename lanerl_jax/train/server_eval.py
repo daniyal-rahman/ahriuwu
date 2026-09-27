@@ -65,9 +65,13 @@ def main():
     p.add_argument('--start-near-wave', action='store_true')
     p.add_argument('--step-ticks', type=int, default=2)
     p.add_argument('--server-dir', type=Path)
+    p.add_argument('--unwalkable-click', choices=('resolve', 'noop'), default='resolve',
+                   help='movement click onto unwalkable ground: resolve (server) or drop (INT-001)')
     p.add_argument('--red', choices=('idle', 'policy'), default='idle',
                    help='policy: mirror self-play, the same parameters drive red')
     a = p.parse_args()
+    from ..parity import policy_driver as _pd
+    _pd.UNWALKABLE_CLICK['mode'] = a.unwalkable_click
     if a.server_dir is not None:
         a.server_dir = a.server_dir.resolve()
     if a.step_ticks < 1:

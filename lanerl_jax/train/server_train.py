@@ -75,6 +75,12 @@ def snap_click(x, y):
 
 
 SNAP_CLICKS = {"on": True, "count": 0, "total": 0}
+#: What a movement click onto unwalkable ground does. "resolve": the server (or
+#: `snap_click`) walks to the closest reachable point -- which near a wall IS
+#: the wall, so 43-58% of a diffuse policy's clicks pull it onto the map edge
+#: and hold it there (INT-001, `probes/wall_click_probe.py`). "noop": the click
+#: is dropped; the wall attracts nothing.
+UNWALKABLE_CLICK = {"mode": "resolve", "dropped": 0, "total": 0}
 
 
 def screen_order(action, champion, frame):
@@ -98,10 +104,16 @@ def screen_order(action, champion, frame):
     axis, normal = np.asarray(frame.axis), np.asarray(frame.normal)
     x = float(champion["x"] + ds * axis[0] + dn * normal[0])
     y = float(champion["y"] + ds * axis[1] + dn * normal[1])
-    if SNAP_CLICKS["on"] and name in ("move", "attack_move"):
-        x, y, snapped = snap_click(x, y)
-        SNAP_CLICKS["total"] += 1
-        SNAP_CLICKS["count"] += int(snapped)
+    if name in ("move", "attack_move"):
+        if UNWALKABLE_CLICK["mode"] == "noop":
+            UNWALKABLE_CLICK["total"] += 1
+            if snap_click(x, y)[2]:
+                UNWALKABLE_CLICK["dropped"] += 1
+                return {"t": "noop"}
+        elif SNAP_CLICKS["on"]:
+            x, y, snapped = snap_click(x, y)
+            SNAP_CLICKS["total"] += 1
+            SNAP_CLICKS["count"] += int(snapped)
     return {"t": "click", "button": name, "x": x, "y": y}
 
 
@@ -776,6 +788,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                 metrics["rss_gb"] = -1.0
             metrics["snapped_clicks"] = SNAP_CLICKS["count"] / max(SNAP_CLICKS["total"], 1)
             SNAP_CLICKS["count"] = SNAP_CLICKS["total"] = 0
+            metrics["dropped_clicks"] = UNWALKABLE_CLICK["dropped"] / max(UNWALKABLE_CLICK["total"], 1)
+            UNWALKABLE_CLICK["dropped"] = UNWALKABLE_CLICK["total"] = 0
             for name in reward_terms[0]:
                 metrics["reward_" + name] = float(jnp.stack([r[name] for r in reward_terms]).mean())
             run.log(metrics)
@@ -938,6 +952,8 @@ def main():
                    help="per-batch advantage standardisation (the standard preset has it on)")
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
+    p.add_argument("--unwalkable-click", choices=("resolve", "noop"), default="resolve",
+                   help="movement click onto unwalkable ground: resolve to the closest reachable point (server/snap) or drop it (INT-001)")
     p.add_argument("--no-snap-clicks", action="store_true",
                    help="send raw projected click points (pre-E04 behaviour: walls become straight-line walks)")
     p.add_argument("--workers", type=int, default=1,
@@ -989,6 +1005,7 @@ def main():
     jax.config.update("jax_default_matmul_precision", "highest")
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
+    UNWALKABLE_CLICK["mode"] = args.unwalkable_click
     pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual)
     if args.init_from is not None:
         if args.resume is not None:
@@ -1013,6 +1030,7 @@ def main():
                      "frozen": f"frozen checkpoint {args.opponent_ckpt} (learner side alternates per server)"}[args.opponent],
         "reward": f"CS - 2*death + 5*(lane_potential_next - potential) + {args.xp_weight}*xp",
         "click_snap": not args.no_snap_clicks,
+        "unwalkable_click": args.unwalkable_click,
         "initialization": "random; no prior"})
     snapshot_farming_source(run, command)
     vendor = server_paths.server_dir().parents[3]

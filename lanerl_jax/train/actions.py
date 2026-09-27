@@ -176,7 +176,8 @@ def _screen_to_centred_lane(sx, sy):
 
 
 def orders_from(action, state, slot_unit, frame=None,
-                cfg_x=N_SCREEN_X, cfg_y=N_SCREEN_Y, snap_moves=True, params=None, vision=None):
+                cfg_x=N_SCREEN_X, cfg_y=N_SCREEN_Y, snap_moves=True, params=None, vision=None,
+                drop_unwalkable_moves=False):
     """Project (button, screen_x, screen_y), then resolve the cursor hit.
 
     The actor supplies no entity identity. The simulation resolves visible
@@ -252,7 +253,15 @@ def orders_from(action, state, slot_unit, frame=None,
     target = jnp.where(invalid_click, -1, target)
     x = state.x[:2] + world_dx
     y = state.y[:2] + world_dy
-    if snap_moves:
+    if drop_unwalkable_moves:
+        # INT-001: a movement click onto unwalkable ground is a no-op, matching
+        # `server_train --unwalkable-click noop`. Resolving it to the closest
+        # reachable point makes walls attract a diffuse policy.
+        sx_w, sy_w = snap_move_point(x, y)
+        is_move = (kind == OrderKind.MOVE) | (kind == OrderKind.ATTACK_MOVE)
+        unwalkable = (sx_w != x) | (sy_w != y)
+        kind = jnp.where(is_move & unwalkable, OrderKind.NOOP, kind)
+    elif snap_moves:
         # PATH-010: never emit a Move goal the champion cannot stand on (see
         # the block comment above `MoveSnapTable`). Casts keep the raw point.
         sx_w, sy_w = snap_move_point(x, y)

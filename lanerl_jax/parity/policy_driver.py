@@ -150,6 +150,16 @@ _CAST_RISE_LAG_MS = (0.0, 0.0, 0.0, 435.0)
 _RISE_EPS_MS = 1.0
 
 
+#: INT-001 unwalkable-click semantics for the evaluator path ("resolve" | "noop");
+#: `server_eval --unwalkable-click` sets it. See `server_train.UNWALKABLE_CLICK`.
+UNWALKABLE_CLICK = {"mode": "resolve"}
+
+
+def _unwalkable_point(x, y):
+    from ..train.server_train import snap_click
+    return bool(snap_click(float(x), float(y))[2])
+
+
 class StateRebuilder:
     """Rebuilds a training-shaped `LaneState` from each control-channel frame.
 
@@ -732,6 +742,13 @@ class PolicyDriver:
             wire = {"t": "noop"}
         elif button == "recall":
             wire = {"t": "recall"}
+        elif (UNWALKABLE_CLICK["mode"] == "noop" and button in ("move", "attack_move")
+              and _unwalkable_point(ox, oy)):
+            # INT-001: a movement click onto unwalkable ground is dropped
+            # (`server_train --unwalkable-click noop`); resolving it to the
+            # closest reachable point makes walls attract a diffuse policy.
+            self.counts["dropped_unwalkable"] = self.counts.get("dropped_unwalkable", 0) + 1
+            wire = {"t": "noop"}
         else:
             # The server resolves the raw cursor point. Rebuilt target IDs are
             # diagnostic only and may never enter the policy wire command.

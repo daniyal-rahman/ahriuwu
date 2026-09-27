@@ -69,7 +69,8 @@ class JaxFarmCollector:
     ``states`` is privileged diagnostic state and is never an actor input.
     """
     def __init__(self, n, out, episode_s=600., start_near_wave=False, step_ticks=2,
-                 *, seed=0, sim_config=None, batch_mode="auto", teams=(0,)):
+                 *, seed=0, sim_config=None, batch_mode="auto", teams=(0,), drop_unwalkable_moves=False):
+        self.drop_unwalkable_moves = bool(drop_unwalkable_moves)
         if n <= 0 or episode_s <= 0 or step_ticks <= 0 or int(step_ticks) != step_ticks:
             raise ValueError('n, episode_s and integer step_ticks must be positive')
         if start_near_wave and episode_s * 1000 <= WAVE_START_MS:
@@ -117,7 +118,8 @@ class JaxFarmCollector:
             per_team = [rows.get(t, noop) for t in (0, 1)]
             actions = tuple(jnp.stack([per_team[0][i], per_team[1][i]]) for i in range(3))
             return orders_from(actions, state, None, self.frame,
-                               snap_moves=False, params=sim.params, vision=sim.vision)
+                               snap_moves=False, params=sim.params, vision=sim.vision,
+                               drop_unwalkable_moves=self.drop_unwalkable_moves)
         self._decode = jax.jit(jax.vmap(decode_one, in_axes=(0, 0, None)))
         def step_one(state, orders, enabled, model):
             sim = self._config(model)
