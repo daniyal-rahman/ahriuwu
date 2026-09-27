@@ -12,7 +12,7 @@ ups = [r for r in rows if 'update' in r and 'entropy' in r]
 eps = [r for r in rows if 'episode' in r and 'cs' in r and 'entropy' not in r]
 print(run.name, f'{len(ups)} updates, {len(eps)} completed episodes')
 for r in ups[-last:]:
-    print(f"u{r['update']:5d} steps {r['steps']:8d} wall {r['wall_s']:7.0f}s ent {r['entropy']:.3f} kl {r['approx_kl']:.1e} "
+    print(f"u{r['update']:5d} steps {r['steps']:8d} wall {r['wall_s']:7.0f}s ent {r['entropy']:.3f} kl {r['approx_kl']:.1e} post_kl {r.get('post_kl', float('nan')):.3f} "
           f"clip {r['clip_frac']:.3f} vl {r['value_loss']:.3f} r {r['mean_reward']:.4f} "
           f"btn {r['sampled_buttons']}")
 if len(ups) > 1:

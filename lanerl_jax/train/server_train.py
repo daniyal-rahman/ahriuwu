@@ -749,6 +749,15 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                                        err_msg="rollout/recompute log-prob mismatch (head masks?)")
             params, opt_state, rng, info = update(params, opt_state, batch, rng)
             metrics = {k: float(v) for k, v in summarise_minibatches(info).items()}
+            # KL(rollout policy || updated policy) on the whole batch AFTER the
+            # update. `approx_kl` above averages the APPLIED minibatch steps,
+            # each measured before its own step, so with a KL stop that trips
+            # on the second minibatch it reads 0 while the one applied step
+            # moved the policy by 0.3 (PPO-16, E11/E12b). This is the drift.
+            logits = forward(params, batch)
+            post_lp = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
+                batch["action"], batch["uses_screen"], batch["uses_target"])
+            metrics["post_kl"] = float(jnp.mean(batch["log_prob"] - post_lp))
             if not all(np.isfinite(np.asarray(v)).all() for v in jax.tree.leaves(params)) or metrics.get("loss_nonfinite", 0):
                 raise RuntimeError("nonfinite learner; refusing latest checkpoint")
             step = (u + 1) * collector.n * rollout
