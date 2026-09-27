@@ -847,7 +847,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                     # applies the same reset from the stored `done` flags.
                     carry = jnp.where(jnp.asarray(done)[:, None], 0.0, new_carry)
             rng, key = jax.random.split(rng)
-            _, _, _, last_v, _ = act(params, obs, key, carry)
+            _, _, _, last_v, _, _ = act(params, obs, key, carry)
             adv, returns = gae(jnp.stack(rewards), jnp.stack(values), jnp.asarray(dones),
                                last_v, cfg.gamma, cfg.gae_lambda)
             if recurrent:
