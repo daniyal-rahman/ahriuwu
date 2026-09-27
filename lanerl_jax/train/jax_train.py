@@ -44,6 +44,10 @@ def main():
     parser.add_argument('--preset', choices=('legacy', 'standard'), default='legacy')
     parser.add_argument('--ckpt-every', type=int, default=10)
     parser.add_argument('--eval-episodes', type=int, default=0)
+    parser.add_argument('--scripted', choices=('lasthit', 'any'), default=None)
+    parser.add_argument('--record-npz', type=Path, default=None)
+    parser.add_argument('--deterministic', action='store_true')
+    parser.add_argument('--minibatches-note', default=None, help=argparse.SUPPRESS)
     parser.add_argument('--batch-mode', choices=['auto', 'map', 'vmap'], default='auto')
     parser.add_argument('--start-near-wave', action='store_true')
     parser.add_argument('--step-ticks', type=int, default=2)
@@ -71,8 +75,9 @@ def main():
     if args.init_from is not None:
         args.resume, resume_params_only = args.init_from, True
     pcfg = PolicyConfig(core=args.core)
-    if args.resume is not None and (args.resume.parent / 'manifest.json').exists():
-        saved = _json.loads((args.resume.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})
+    src_ckpt = args.resume or args.init_from
+    if src_ckpt is not None and (src_ckpt.parent / 'manifest.json').exists():
+        saved = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})
         if saved:
             pcfg = PolicyConfig(**saved)
     policy = LanePolicy(pcfg)
@@ -114,14 +119,23 @@ def main():
         from flax.serialization import from_state_dict, msgpack_restore
         from .server_train import evaluate_frozen
         obs0, _ = collector.observe()
-        params = policy.init(jax.random.key(args.seed), obs0.entities, obs0.entity_pad_mask,
-                             obs0.self_vec, obs0.global_vec)
+        init_args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
+        if pcfg.core == 'gru':
+            init_args = init_args + (policy.initial_carry((collector.n,)),)
+        params = policy.init(jax.random.key(args.seed), *init_args)
         if args.resume is not None:
             params = from_state_dict(params, msgpack_restore(Path(args.resume).read_bytes())["params"])
-        run.set_results(evaluated_checkpoint=str(args.resume) if args.resume else "random",
+        act_fn = None
+        if args.scripted:
+            from .scripted_policy import scripted_act, scripted_act_any
+            act_fn = scripted_act if args.scripted == 'lasthit' else scripted_act_any
+        run.set_results(evaluated_checkpoint=(f"scripted:{args.scripted}" if args.scripted else
+                                              str(args.resume) if args.resume else "random"),
                         checkpoint_sha256=file_sha256(args.resume) if args.resume else None)
         evaluate_frozen(collector, policy, params, run, seed=args.seed,
-                        episodes_per_env=args.eval_episodes)
+                        episodes_per_env=args.eval_episodes, act_fn=act_fn,
+                        record_npz=(run.path / args.record_npz.name) if args.record_npz else None,
+                        deterministic=args.deterministic)
         return
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
