@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-28 01:00 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 02:30 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -21,6 +21,15 @@ advantage normalisation on near-zero-variance batches, entropy 0.01/3 per
 head pulling apart a sharp policy (entropy 0.3 -> 1.0 in E11), deaths
 (-2, ~4 per update across 20 agents in mirror) dominating the per-update
 signal, GAE/done handling in the [N,T] batch. E12b cancelled (its job).
+
+**LEARNER, Dani's challenge (09-28 02:30 UTC):** a near-monotone decline from the
+prior is a systematic gradient, not noise. E21 = E14 with the critic DETACHED from
+the trunk + per-term trunk gradient norms: value term into the trunk = 0, policy
+term 10-27, entropy term 0.06, and entropy still rises 0.31 -> 0.59 in 7 updates
+(E14's rate). So the critic is not the driver; the policy-gradient term is
+(softmax-saturation asymmetry: reinforcing a rare action raises entropy, suppressing
+one changes nothing). E21's frozen CS decides; E22 = KL-to-prior penalty (the
+league/AlphaStar anchor) is being implemented.
 
 **PER-STEP RECORD (23:00 UTC):** every run now logs value, reward terms, click mass and
 position per step (`<run>/diag/`, `ops/diag_report.py`). On E12b/E06/E15 it shows: the
