@@ -33,7 +33,9 @@
   "lr": 1e-05,
   "critic-lr": 1e-05,
   "target-kl": 0.02,
-  "kl-prior": 2.0
+  "kl-prior": 2.0,
+  "reward": "farm"
  },
- "note": "cpu partition (GPU visible from the desktop's cpu partition) because E13 holds the gpup GPU allocation for ~15 h"
+ "note": "cpu partition (GPU visible from the desktop's cpu partition) because E13 holds the gpup GPU allocation for ~15 h",
+ "note_reward": "farm: apples-to-apples with E14/E16/E21 (fine-tune comparison)"
 }

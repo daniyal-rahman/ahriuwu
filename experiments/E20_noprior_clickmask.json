@@ -33,7 +33,9 @@
   "core-norm": true,
   "core-residual": true,
   "unwalkable-click": "noop",
-  "click-mask": true
+  "click-mask": true,
+  "reward": "farm"
  },
- "note": "cpu partition (GPU visible) because E13 holds the gpup allocation"
+ "note": "cpu partition (GPU visible) because E13 holds the gpup allocation",
+ "note_reward": "farm: apples-to-apples with E15 (mask comparison)"
 }
