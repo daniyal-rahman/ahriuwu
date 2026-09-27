@@ -42,6 +42,7 @@ def main():
     parser.add_argument('--lr-anneal', action='store_true')
     parser.add_argument('--core', choices=('mlp', 'gru'), default='mlp')
     parser.add_argument('--reward', choices=('farm', 'relative'), default='relative')
+    parser.add_argument('--click-mask', action='store_true', help='masked joint click distribution over walkable cells (INT-001)')
     parser.add_argument('--unwalkable-click', choices=('resolve', 'noop'), default='resolve', help='movement click onto unwalkable ground: resolve (closest exit) or drop (INT-001)')
     parser.add_argument("--core-norm", action="store_true", help="gru: LayerNorm on the GRU input")
     parser.add_argument("--core-residual", action="store_true", help="gru: heads see trunk + GRU output (plain GRU heads are near-blind, ARCH-001)")
