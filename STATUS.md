@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 15:50 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 16:20 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -51,7 +51,9 @@ the JAX sim to a compare point, then E04 vs that agent on the C# server.
 **DAgger-1 GRU clone on JAX: 41.0 / 44.4 CS sampled mirror (26-59 / 34-58)** -- the
 JAX heuristics-init GRU compare point; **cross-play on the C# server: E04 29.5 CS (22-33) vs the JAX GRU clone;
 the JAX clone in a server mirror 31.4 / 29.2 (JAX 41 / 44: ~70% transfers)**;
-round 3 running. E13 (no-prior JAX GRU, snap clicks) at u~80: 16 CS vs idle.
+DAgger-2 clone: **44.2 / 45.4** (round 3 done; clone
+`runs/BC/bc-grunr-20260927-121409-bee9ebca`). Next on JAX when cores free: PPO from
+that clone with the PPO-16 settings (lr 1e-5, KL stop, entropy 0) = the JAX learner test. E13 (no-prior JAX GRU, snap clicks) at u~80: 16 CS vs idle.
 Step 1 done: scripted last-hitter on the JAX sim vs idle red = 65 CS on all
 16 envs (deterministic sim: identical trajectories), 4792 decisions each in
 140 s wall (~550 dec/s at 16 envs, 5.5 GB GPU). Mirror scripted demos
