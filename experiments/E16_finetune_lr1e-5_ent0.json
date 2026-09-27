@@ -4,7 +4,7 @@
  "port_base": 26900,
  "slurm": {
   "partition": "cpu",
-  "cpus": 8,
+  "cpus": 4,
   "mem": "9G",
   "time": "6:00:00"
  },
