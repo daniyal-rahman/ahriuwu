@@ -181,7 +181,10 @@ def main():
         # evaluators submitting within seconds saw the same count and shared a
         # port block (E19 u240: "server 2 produced no first observation").
         import zlib
-        port_base = 24300 + 40 * (zlib.crc32(a.tag.encode()) % 180)
+        # 30000-32360: disjoint from the experiment port bases (21300-27900),
+        # which the 24300-31500 range overlapped (E19 trained on 27500 while
+        # two evaluations hung with servers that never accepted a connection).
+        port_base = 30000 + 40 * (zlib.crc32(a.tag.encode()) % 60)
         spec = {"id": "EVAL", "port_base": port_base, "slurm": {"partition": "cpu", "cpus": 2, "mem": "4G", "time": "4:00:00"},
                 "args": {"envs": a.envs, "opponent": a.opponent or "mirror", "start-near-wave": True, "step-ticks": 6,
                          "episode-s": 600, "eval-episodes": a.episodes, "seed": 0}}
