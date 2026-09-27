@@ -75,15 +75,10 @@ from .learner import make_learner
 from .actions import orders_from
 from .ppo import (
     PPOConfig,
-    expected_head_usage,
-    factored_entropy,
     factored_log_prob,
     gae,
-    head_usage, screen_head_usage, expected_screen_usage,
-    kl_stopped_epochs,
-    policy_loss,
-    summarise_minibatches,
-    value_loss,
+    screen_head_usage,
+    update_epochs,
 )
 from .reward import (RewardConfig, lane_corridor_distance, lane_reward,
                      reward_init)
@@ -184,7 +179,7 @@ class Transition(NamedTuple):
     obs_global: jax.Array
     action: tuple
     log_prob: jax.Array
-    #: Per-sample head masks (`ppo.head_usage`, `PPO-14`): 1.0 where this
+    #: Per-sample coordinate usage (plus a zero target placeholder): 1.0 where this
     #: sample's screen point reached the wire. uses_target is always zero. Computed at
     #: sampling time and consumed by the loss, so the stored `log_prob` and
     #: the loss's recomputation mask the same heads.
@@ -306,21 +301,7 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
     dt_s = 1.0 / cfg.decision_hz
     n_batch = cfg.rollout_steps * cfg.n_envs * 2      # two champions per env
 
-    # `critic_lr` (3e-4) and `lr` (1e-5) are BOTH honoured. They were not:
-    # the optimiser was a single `adam(cfg.ppo.lr)`, so `critic_lr` sat in the
-    # config -- and in every run manifest, reading as if it were in effect --
-    # while the critic actually trained at the actor's 1e-5, thirty times
-    # slower than its declared rate. That is the leading candidate for the
-    # `value_loss` blow-up observed in the RL-002 run (0.0024 -> 2.0032 ->
-    # 542.7 near update 597): as the policy starts earning gold the return
-    # scale grows by orders of magnitude, and a linear readout at 1e-5 cannot
-    # rescale to follow it.
-    #
-    # The split is the value READOUT only. The trunk is shared with the actor
-    # and stays at `lr` by design -- running shared features at the critic's
-    # rate would drag the policy along with them, which is the failure mode
-    # `value_coef` exists to balance instead.
-    tx, _loss = make_learner(policy, cfg.ppo)
+    tx, _loss = make_learner(policy, cfg.ppo._replace(n_minibatches=cfg.n_minibatches))
 
     def _obs(state):
         # The clock feature is t/episode_s; the builder's default 600 was a
@@ -427,24 +408,11 @@ def make_train(cfg: TrainConfig = TrainConfig(), *, route_table=None,
             "adv": adv.reshape(n_batch),
             "returns": returns.reshape(n_batch),
         }
-        if cfg.ppo.normalize_advantage:
-            a = flat["adv"]
-            flat["adv"] = (a - a.mean()) / (a.std() + 1e-8)
-
-        # `target_kl` is ENFORCED, over epochs and minibatches both
-        # (`RL-004`); see `ppo.kl_stopped_epochs` for the masked stop and
-        # why a withheld minibatch keeps its optimiser state too.
-        params, opt_state, rng, info = kl_stopped_epochs(
+        params, opt_state, rng, metrics = update_epochs(
             lambda p, b: _loss(p, b, cfg.ppo), tx, runner.params,
             runner.opt_state, flat, runner.rng, epochs=cfg.ppo.epochs,
-            n_minibatches=cfg.n_minibatches, target_kl=cfg.ppo.target_kl,
-            max_grad_norm=cfg.ppo.max_grad_norm)
+            n_minibatches=cfg.n_minibatches, max_grad_norm=cfg.ppo.max_grad_norm)
 
-        # Loss/gradient metrics are means over the APPLIED minibatches only;
-        # `kl_stopped` and `loss_nonfinite` are over all of them (`PPO-11`,
-        # `ppo.summarise_minibatches`). `kl_stopped` near 1.0 is a run whose
-        # lr is too high.
-        metrics = summarise_minibatches(info)
         metrics["reward"] = tr.reward.mean()
         # cs@10min, averaged over the episodes that actually ENDED in this
         # rollout. Sampling `env_state.cs` at the end of the rollout instead

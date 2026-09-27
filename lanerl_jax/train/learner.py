@@ -5,37 +5,37 @@ Two batch layouts: flat ``[B, ...]`` for the feed-forward policy, and
 agent-major sequences ``[N, T, ...]`` plus ``carry0 [N, core]`` and
 ``done [N, T]`` for the GRU policy (truncated BPTT over the rollout, carry
 reset after every terminal step, exactly as the rollout ran it).
+
+Optimizer and loss adapted from Chris Lu, PureJaxRL ppo_rnn.py, revision
+31756b197773a52db763fdbe6d635e4b46522a73 (Apache-2.0; licenses/PureJaxRL-LICENSE).
 """
 import jax
 import jax.numpy as jnp
 import optax
 from .policy import VALUE_HEAD_NAME
-from .ppo import (factored_log_prob, _entropy, policy_loss, value_loss, joint_click_entropy)
+from .ppo import factored_log_prob, factored_entropy, policy_loss, value_loss
 
 
 def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
-    """``anneal_steps`` > 0: linear lr decay to zero over that many optimizer
-    steps (updates x epochs x minibatches), the CleanRL default."""
-    def _label(params):
-        return jax.tree_util.tree_map_with_path(
-            lambda path, _: ("critic" if any(
-                getattr(k, "key", None) == VALUE_HEAD_NAME for k in path)
-                else "actor"),
-            params)
+    """Reference clipped Adam; anneal_steps counts optimizer minibatch steps.
 
-    def sched(lr):
-        return optax.linear_schedule(lr, 0.0, anneal_steps) if anneal_steps else lr
+    PureJaxRL's schedule is constant inside an update and drops at its next
+    boundary. The caller supplies the total number of optimizer steps and
+    config's n_minibatches describes how many belong to each update.
+    """
+    if ppo.critic_lr is not None and ppo.critic_lr != ppo.lr:
+        raise ValueError("reference PPO uses one Adam learning rate; critic_lr must equal lr")
+    if ppo.kl_prior_coef > 0 and prior_params is None:
+        raise ValueError("kl_prior_coef requires frozen prior_params")
+    steps_per_update = ppo.epochs * ppo.n_minibatches
+
+    def linear_schedule(count):
+        frac = 1.0 - (count // steps_per_update) / (anneal_steps / steps_per_update)
+        return ppo.lr * frac
 
     tx = optax.chain(
         optax.clip_by_global_norm(ppo.max_grad_norm),
-        optax.multi_transform(
-            # eps=1e-5 (CleanRL, Huang et al. detail #3), not optax's 1e-8:
-            # fresh Adam with 1e-8 steps ~lr*sign(g) on every parameter,
-            # including those whose gradient is ~0, and the lr-3e-4 arms
-            # blew the critic up in chunk 0 (`PPO-04`).
-            {"actor": optax.adam(sched(ppo.lr), eps=1e-5),
-             "critic": optax.adam(sched(ppo.critic_lr), eps=1e-5)},
-            _label),
+        optax.adam(linear_schedule if anneal_steps else ppo.lr, eps=1e-5),
     )
     recurrent = getattr(policy.cfg, "core", "mlp") == "gru"
 
@@ -49,7 +49,7 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
         ent, mask, sv, gv, done = (tm(batch[k]) for k in ("entities", "mask", "self", "global", "done"))
         def step(carry, xs):
             e, m, s, g, d_prev = xs
-            carry = jnp.where(d_prev[:, None], 0.0, carry)
+            carry = jnp.where(d_prev[:, None], policy.initial_carry((carry.shape[0],)), carry)
             logits, new_carry = policy.apply(params, e, m, s, g, carry)
             return new_carry.astype(carry.dtype), logits
         d_prev = jnp.concatenate([jnp.zeros_like(done[:1]), done[:-1]], axis=0)
@@ -80,18 +80,10 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
     def _loss(params, batch, cfg_ppo):
         logits = forward(params, batch)
         lg = (logits.button, logits.screen_x, logits.screen_y)
-        # The SAME per-sample head masks the rollout computed its log-prob
-        # under (`PPO-14`).
+        # Preserve the coordinate usage stored by the collector.
         click_mask = batch.get("click_mask")
-        log_prob = factored_log_prob(lg, batch["action"], batch["uses_screen"],
-                                     batch["uses_target"], click_mask=click_mask)
-        # UNCONDITIONAL per-head entropy, H_b + H_x + H_y (`PPO-15`): the
-        # usage-weighted form favoured coordinate buttons. With a click mask
-        # the click entropy is that of the masked joint distribution.
-        if click_mask is not None:
-            entropy = (_entropy(lg[0]) + joint_click_entropy(lg[1], lg[2], click_mask)).mean()
-        else:
-            entropy = (_entropy(lg[0]) + _entropy(lg[1]) + _entropy(lg[2])).mean()
+        log_prob = factored_log_prob(lg, batch["action"], batch.get("uses_screen"), click_mask=click_mask)
+        entropy = factored_entropy(lg, click_mask=click_mask).mean()
         pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy
@@ -103,6 +95,7 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
         return total, info
 
     _loss.forward = forward
+    _loss.kl_to_prior = kl_to_prior
 
     def trunk_grad_norms(params, batch, cfg_ppo):
         """Diagnostic: the gradient norm each loss term sends into the TRUNK
@@ -112,11 +105,10 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
             logits = forward(q, batch)
             lg = (logits.button, logits.screen_x, logits.screen_y)
             cm = batch.get("click_mask")
-            lp = factored_log_prob(lg, batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=cm)
+            lp = factored_log_prob(lg, batch["action"], batch.get("uses_screen"), click_mask=cm)
             pl, _ = policy_loss(lp, batch["log_prob"], batch["adv"], cfg_ppo)
             vl = cfg_ppo.value_coef * value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
-            ent = -cfg_ppo.entropy_coef * ((_entropy(lg[0]) + (joint_click_entropy(lg[1], lg[2], cm) if cm is not None
-                                             else _entropy(lg[1]) + _entropy(lg[2]))).mean())
+            ent = -cfg_ppo.entropy_coef * factored_entropy(lg, click_mask=cm).mean()
             return pl, vl, ent
         def trunk(g):
             return jax.tree_util.tree_map_with_path(
@@ -130,3 +122,16 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
                 "cos_pg_value": dot / (n_pl * n_vl + 1e-12)}
     _loss.trunk_grad_norms = trunk_grad_norms
     return tx, _loss
+
+
+def make_update(tx, loss, cfg):
+    """Build update(params, opt_state, batch, key), shared with the trainer."""
+    from .ppo import update_epochs
+
+    @jax.jit
+    def update(params, opt_state, batch, key):
+        return update_epochs(lambda q, b: loss(q, b, cfg), tx, params,
+                             opt_state, batch, key, epochs=cfg.epochs,
+                             n_minibatches=cfg.n_minibatches,
+                             max_grad_norm=cfg.max_grad_norm)
+    return update

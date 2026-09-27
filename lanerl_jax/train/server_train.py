@@ -30,9 +30,9 @@ from ..parity.policy_driver import (StateRebuilder, _lane_frames,
                                     wire_visibility, pending_rank_up,
                                     CastFreezeDetector, wire_own_hud, apply_own_hud,
                                     champion_dead, validate_champion_life)
-from .learner import make_learner
+from .learner import make_learner, make_update
 from .policy import LanePolicy, PolicyConfig
-from .ppo import (PPOConfig, gae, kl_stopped_epochs, summarise_minibatches,
+from .ppo import (PPOConfig, gae,
                   factored_log_prob)
 from .reward import lane_corridor_distance
 from .run_manifest import RunDir, file_sha256, git_environment
@@ -863,6 +863,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             from flax.serialization import from_state_dict as _fsd, msgpack_restore as _mr
             prior_params = jax.tree.map(jnp.asarray, _fsd(params, _mr(Path(resume).read_bytes())["params"]))
             run.set_results(kl_prior=str(resume))
+        cfg = cfg._replace(n_minibatches=n_minibatches)
         tx, loss = make_learner(policy, cfg, anneal_steps=(updates * cfg.epochs * n_minibatches) if lr_anneal else 0,
                                 prior_params=prior_params)
         # Jitted ONCE. Calling loss.forward eagerly re-traced its scan closure
@@ -904,11 +905,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask, click_mask=click_mask)
             return action, lp, usage, logits.value, carry, policy_click_marginals(logits)
         diag = StepDiag.create(run.path, collector) if diag_steps else None
-        @jax.jit
-        def update(params, opt_state, batch, key):
-            return kl_stopped_epochs(lambda q, b: loss(q, b, cfg), tx, params,
-                opt_state, batch, key, epochs=cfg.epochs, n_minibatches=n_minibatches,
-                target_kl=cfg.target_kl, max_grad_norm=cfg.max_grad_norm)
+        update = make_update(tx, loss, cfg)
         initial = jax.tree.map(lambda x: np.asarray(x).copy(), params)
         from flax.serialization import to_bytes
         (run.path / "initial.msgpack").write_bytes(to_bytes({"params": params}))
@@ -964,8 +961,6 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                 batch = jax.tree.map(lambda *x: jnp.stack(x).reshape((-1,) + x[0].shape[1:]), *rows)
                 batch["adv"] = adv.reshape(-1)
                 batch["returns"] = returns.reshape(-1)
-            if cfg.normalize_advantage:
-                batch["adv"] = (batch["adv"] - adv.mean()) / (adv.std() + 1e-8)
             # Independent rollout/recompute equality before any optimizer step.
             logits = forward(params, batch)
             recomputed = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
@@ -983,13 +978,11 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             _v = np.asarray(batch["value"]).reshape(-1); _r = np.asarray(batch["returns"]).reshape(-1)
             grad_diag["explained_variance"] = float(1.0 - np.var(_r - _v) / (np.var(_r) + 1e-8))
             params, opt_state, rng, info = update(params, opt_state, batch, rng)
-            metrics = {k: float(v) for k, v in summarise_minibatches(info).items()}
+            metrics = {k: float(v) for k, v in info.items()}
             metrics.update(grad_diag)
             # KL(rollout policy || updated policy) on the whole batch AFTER the
-            # update. `approx_kl` above averages the APPLIED minibatch steps,
-            # each measured before its own step, so with a KL stop that trips
-            # on the second minibatch it reads 0 while the one applied step
-            # moved the policy by 0.3 (PPO-16, E11/E12b). This is the drift.
+            # update. approx_kl averages pre-step minibatch measurements;
+            # post_kl measures the final policy's drift over the rollout.
             logits = forward(params, batch)
             post_lp = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
                 batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"))
@@ -1162,7 +1155,7 @@ def main():
     p.add_argument("--episode-s", type=float, default=600.)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--preset", choices=("legacy", "standard"), default="legacy",
-                   help="standard: PPOConfig.standard() (CleanRL defaults, docs/HYPERPARAMS.md); "
+                   help="standard: PPOConfig.standard() (PureJaxRL defaults, docs/HYPERPARAMS.md); "
                         "explicit flags below override the preset")
     p.add_argument("--core", choices=("mlp", "gru"), default="mlp",
                    help="gru: recurrent core, truncated BPTT over the rollout (memory is learned)")
@@ -1170,10 +1163,10 @@ def main():
     p.add_argument("--core-residual", action="store_true", help="gru: heads see trunk + GRU output (plain GRU heads are near-blind, ARCH-001)")
     p.add_argument("--lr-anneal", action="store_true", help="linear lr decay to 0 over --updates")
     p.add_argument("--lr", type=float, default=None)
-    p.add_argument("--critic-lr", type=float, default=None, help="defaults to --lr")
+    p.add_argument("--critic-lr", type=float, default=None, help="compatibility argument; must equal --lr (one reference Adam)")
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
-    p.add_argument("--target-kl", type=float, default=None, help="KL early stop per update (fine-tuning a sharp prior needs ~0.02)")
+    p.add_argument("--target-kl", type=float, default=None, help="deprecated compatibility argument; reference PPO does not stop on KL")
     p.add_argument("--kl-prior", type=float, default=None, help="coefficient of KL(prior || policy) to the --init-from checkpoint (the league / AlphaStar anchor)")
     p.add_argument("--minibatches", type=int, default=1)
     p.add_argument("--opponent", choices=("idle", "mirror", "frozen"), default="idle",
@@ -1187,7 +1180,7 @@ def main():
                    help="take only the PARAMS from this checkpoint (fresh optimizer, schedule and budget)")
     p.add_argument("--ckpt-every", type=int, default=10)
     p.add_argument("--normalize-advantage", action="store_true",
-                   help="per-batch advantage standardisation (the standard preset has it on)")
+                   help="per-minibatch advantage standardisation (the standard preset has it on)")
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
     p.add_argument("--reward", choices=("farm", "relative"), default="relative",
@@ -1242,7 +1235,8 @@ def main():
     if args.critic_lr is not None: over["critic_lr"] = args.critic_lr
     if args.entropy_coef is not None: over["entropy_coef"] = args.entropy_coef
     if args.epochs is not None: over["epochs"] = args.epochs
-    if args.target_kl is not None: over["target_kl"] = args.target_kl
+    if args.target_kl is not None:
+        print("--target-kl is ignored: reference PPO applies every minibatch", flush=True)
     if args.kl_prior is not None: over["kl_prior_coef"] = args.kl_prior
     if args.normalize_advantage: over["normalize_advantage"] = True
     cfg = cfg._replace(**over)

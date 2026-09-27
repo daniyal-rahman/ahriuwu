@@ -69,7 +69,7 @@ def main():
     teams = (0,) if args.opponent == 'idle' else (0, 1)
     hz = 60. / args.step_ticks
     if args.preset == 'standard':
-        cfg = (PPOConfig.standard(decision_hz=hz, lr=1e-5, critic_lr=1e-5, entropy_coef=0.0, target_kl=0.02)
+        cfg = (PPOConfig.standard(decision_hz=hz, lr=1e-5, critic_lr=1e-5, entropy_coef=0.0)
                if args.fine_tune else PPOConfig.standard(decision_hz=hz))
     else:
         cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,

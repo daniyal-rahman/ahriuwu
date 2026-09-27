@@ -11,6 +11,35 @@ update with a transcription of PureJaxRL `ppo_rnn.py` (handed to a second agent;
 handoff in the chat log). Parity, identical single-env config: solo JAX 70 vs
 server 65 (gap entirely in minutes 7-8), mirror 48 / 43 vs 45 / 43. Server spread
 over 4 seeds being measured (`runs/PARITY/`).
+## Reference PPO port
+
+Live learner ported to PureJaxRL `ppo_rnn.py` revision
+`31756b197773a52db763fdbe6d635e4b46522a73` (PPO-17): reference GAE, clipped
+surrogate/value loss, per-minibatch advantage normalisation, trajectory
+shuffling and epoch/minibatch scans, single clipped Adam eps 1e-5 and
+update-boundary linear annealing. Removed dual clip, KL early stop,
+applied-only summaries, usage-weighted entropy and the target-head path.
+LanePolicy, click masking, optional prior KL/detached critic, GRU batch
+layout, post_kl, trunk gradient norms and explained variance are preserved.
+`standard()` now uses gamma .99 and 4 x 4 epochs/minibatches; legacy CLI
+`--target-kl` is accepted but ignored, unequal critic lr is rejected.
+Network code changes are comments only. Sim/parity/collector behavior and
+experiment JSONs are untouched. Paused trainer imports/update call migrated
+to the same shared loop. Vendored oracle and license are test support.
+
+Validation: reference loss/gradients/GAE agree within 1e-6; trajectory
+integrity, optimizer steps/schedule, GRU reset/replay and masked click checks
+pass. 47 distinct focused tests passed (33 + 23 with 9 repeated) under
+`ops/login_capped.sh 12G 3 .venv-jax/bin/python -m pytest`; all 146 train
+tests collect. Server help and the unchanged E14 dry-run command work. No training or evaluation jobs launched. Old optimizer
+states are incompatible; the next arm uses E12a `--init-from`, E14 settings
+plus `--detach-critic`, in a NEW experiment ID owned/launched by the other
+agent, against E21 frozen 45.8 / 43.0. Explicitly set `--reward farm` to
+match E14/E21: E14 JSON omits reward and today's default is relative. The
+new gamma and removal of KL stopping are intentional comparison differences.
+
+## Previous session notes
+
 **E15 FINAL (20:50 UTC): 28.5 / 31.8 CS over 12 episodes per side (23-37 / 18-44),
 combined 30.1, deaths ~0.1 -- a no-prior GRU AT the gate after ARCH-001 (GRU
 wiring) + INT-001 (no wall attraction). Not yet clearly above it: late checkpoints

@@ -1,9 +1,18 @@
 """Source-server collector contracts, independent of live server availability."""
+import pytest
 import numpy as np
 import jax.numpy as jnp
 from lanerl_rl.constants import BUTTON_INDEX
 from lanerl_jax.parity.policy_driver import _lane_frames, wire_visibility
 from lanerl_jax.train.server_train import screen_order, farm_reward
+
+
+@pytest.fixture(autouse=True)
+def farm_reward_fixture(monkeypatch):
+    # These synthetic collectors expose CS/alive/potential, not gold/XP.
+    # Pin the reward they test; the CLI default changed to relative in E23.
+    from lanerl_jax.train import server_train
+    monkeypatch.setitem(server_train.RELATIVE_REWARD, "mode", "farm")
 
 
 def test_cursor_command_is_independent_of_entity_identity():
@@ -269,6 +278,7 @@ def test_shared_learner_learns_rewarded_action_and_zero_lr_is_invariant(tmp_path
                 batch['adv'], batch['value'], batch['self'][:, 0], ordered=True)
             return loss(params, batch, ppo)
         checked_loss.forward = loss.forward
+        checked_loss.trunk_grad_norms = loss.trunk_grad_norms
         return tx, checked_loss
 
     monkeypatch.setattr(server_train, 'make_learner', checked_learner)
@@ -278,7 +288,7 @@ def test_shared_learner_learns_rewarded_action_and_zero_lr_is_invariant(tmp_path
     for lr in (0., .01):
         collector = BanditCollector()
         run = RunDir(tmp_path, f'actor-credit-lr{lr}', {})
-        cfg = PPOConfig(lr=lr, critic_lr=0., value_coef=0., entropy_coef=0.,
+        cfg = PPOConfig(lr=lr, critic_lr=lr, value_coef=0., entropy_coef=0.,
                         epochs=1, normalize_advantage=False)
         server_train.run_farming_learner(collector, policy, cfg, run,
                                         seed=7, rollout=8, updates=3)
@@ -338,7 +348,7 @@ def test_gru_core_learns_rewarded_action_and_sequence_forward_matches_rollout(tm
                                      ctx_dim=8, core_dim=8, mlp_hidden=8, mlp_layers=1))
     collector = BanditCollector()
     run = RunDir(tmp_path, 'gru-bandit', {})
-    cfg = PPOConfig.standard(decision_hz=10.)._replace(lr=.01, critic_lr=0., value_coef=0., entropy_coef=0.,
+    cfg = PPOConfig.standard(decision_hz=10.)._replace(lr=.01, critic_lr=.01, value_coef=0., entropy_coef=0.,
                                                        epochs=1, normalize_advantage=False)
     server_train.run_farming_learner(collector, policy, cfg, run, seed=3, rollout=8, updates=4, n_minibatches=2)
     before = msgpack_restore((run.path / 'initial.msgpack').read_bytes())['params']

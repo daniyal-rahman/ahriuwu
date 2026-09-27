@@ -137,20 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "reason that does not apply.")
     ap.add_argument("--entropy-coef", type=float, default=None)
     ap.add_argument("--no-value-clip", action="store_true",
-                    help="unclipped value loss. The clipped form bounds each "
-                         "state's value move to value_clip_eps=0.2 PER UPDATE in "
-                         "raw return units, and returns here are O(10-30) and "
-                         "unnormalised, so a +-15 kill swing takes ~75 updates "
-                         "to fit (PPO-02). Andrychowicz 2021 / Engstrom 2020 "
-                         "found the clip neutral-to-harmful.")
+                    help="unsupported: reference PPO always clips value loss")
     ap.add_argument("--critic-lr", type=float, default=None,
-                    help="value-head learning rate. Declared in PPOConfig at "
-                         "3e-4 but read by nothing until 2026-09-23, so every "
-                         "earlier run trained the critic at --lr.")
+                    help="compatibility argument; must equal --lr (one reference Adam)")
     ap.add_argument("--target-kl", type=float, default=None,
-                    help="stop the remaining minibatches of an update once the "
-                         "k3 KL estimate exceeds this. Also declared and "
-                         "unenforced before 2026-09-23.")
+                    help="deprecated compatibility argument; ignored by reference PPO")
     ap.add_argument("--value-coef", type=float, default=None)
     ap.add_argument(
         "--time-steady", action="store_true",
@@ -202,9 +193,9 @@ def main() -> None:
     if a.critic_lr is not None:
         ppo = ppo._replace(critic_lr=a.critic_lr)
     if a.target_kl is not None:
-        ppo = ppo._replace(target_kl=a.target_kl)
+        print("--target-kl ignored: reference PPO applies every minibatch")
     if a.no_value_clip:
-        ppo = ppo._replace(clip_value_loss=False)
+        ap.error("reference PPO always clips the value loss")
     if a.value_coef is not None:
         ppo = ppo._replace(value_coef=a.value_coef)
     cfg = TrainConfig(n_envs=a.envs, rollout_steps=a.rollout,

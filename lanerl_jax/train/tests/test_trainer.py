@@ -51,7 +51,7 @@ def trained():
 def test_the_loop_runs_and_produces_the_expected_metrics(trained):
     _, m = trained
     for k in ("policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac",
-              "dual_clip_frac", "reward", "lane_dist", "route_nonready",
+              "reward", "lane_dist", "route_nonready",
               *ATTACK_CLASSES):
         assert k in m, k
         assert np.isfinite(np.asarray(m[k])).all(), f"{k} went non-finite"
@@ -328,59 +328,10 @@ def test_partial_first_episode_is_excluded_from_cs():
         "a partial first episode was counted as a cs@10min sample")
 
 
-def test_target_kl_is_enforced_rather_than_merely_configured():
-    """A `target_kl` of 0 must stop every minibatch after the first.
-
-    `critic_lr` and `target_kl` were both declared in `PPOConfig`, recorded in
-    run manifests, and read by nothing. This is the regression test for the
-    half of that which is behavioural.
-    """
-    import dataclasses  # noqa: F401  (NamedTuple._replace is the real tool)
-
-    cfg = SMALL._replace(ppo=SMALL.ppo._replace(target_kl=0.0))
-    built = make_train(cfg)
-    _, metrics = jax.jit(built.run_chunk, static_argnums=1)(
-        built.initial_runner(jax.random.PRNGKey(2)), 1)
-    # approx_kl is >= 0 and is > 0 for any nonzero step, so the stop latches on
-    # the first minibatch and every later one is skipped.
-    assert float(np.asarray(metrics["kl_stopped"])[0]) > 0.0
-
-    loose = SMALL._replace(ppo=SMALL.ppo._replace(target_kl=1e9))
-    _, m2 = jax.jit(make_train(loose).run_chunk, static_argnums=1)(
-        make_train(loose).initial_runner(jax.random.PRNGKey(2)), 1)
-    assert float(np.asarray(m2["kl_stopped"])[0]) == 0.0
-
-
-def test_critic_head_runs_at_critic_lr():
-    """The value readout must be optimised at `critic_lr`, not `lr`.
-
-    A single `adam(lr)` trained it thirty times slower than the rate the config
-    advertised, which is the leading candidate for `value_loss` reaching 542.7
-    in the RL-002 run. Asserted through the optimiser's own hyperparameters so
-    the test fails if the label tree stops matching the module name.
-    """
-    from lanerl_jax.train.policy import VALUE_HEAD_NAME
-
-    cfg = SMALL._replace(ppo=SMALL.ppo._replace(lr=1e-5, critic_lr=3e-4))
-    built = make_train(cfg)
-    r0 = built.initial_runner(jax.random.PRNGKey(3))
-    names = jax.tree_util.tree_flatten_with_path(r0.params)[0]
-    assert any(VALUE_HEAD_NAME in jax.tree_util.keystr(p) for p, _ in names), (
-        f"no {VALUE_HEAD_NAME!r} subtree -- the label tree cannot be matching")
-
-    r1, _ = jax.jit(built.run_chunk, static_argnums=1)(r0, 1)
-    moved = jax.tree_util.tree_map(
-        lambda a, b: float(jnp.abs(a - b).max()), r0.params, r1.params)
-    flat = {jax.tree_util.keystr(p): v
-            for p, v in jax.tree_util.tree_flatten_with_path(moved)[0]}
-    critic = [v for k, v in flat.items() if VALUE_HEAD_NAME in k]
-    actor = [v for k, v in flat.items() if VALUE_HEAD_NAME not in k]
-    assert critic and actor
-    # Adam's first step is ~lr in magnitude regardless of gradient scale, so a
-    # 30x lr ratio shows up directly as a step-size ratio.
-    assert max(critic) > 10.0 * max(actor), (
-        f"critic step {max(critic):.2e} vs actor {max(actor):.2e} -- the "
-        "critic is not on its own learning rate")
+def test_reference_optimizer_rejects_a_separate_critic_rate():
+    # PPO-17 uses the reference single Adam; don't silently ignore old configs.
+    with pytest.raises(ValueError, match="one Adam learning rate"):
+        make_train(SMALL._replace(ppo=SMALL.ppo._replace(lr=1e-5, critic_lr=3e-4)))
 
 
 def test_attack_class_splits_attack_orders_by_target_type():

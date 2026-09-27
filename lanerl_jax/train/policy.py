@@ -135,10 +135,8 @@ HEAD = dict(kernel_init=nn.initializers.orthogonal(0.01),
             bias_init=nn.initializers.zeros)
 VALUE = dict(kernel_init=nn.initializers.orthogonal(1.0),
              bias_init=nn.initializers.zeros)
-#: The value readout's module name. `trainer.py` builds an `optax` label tree
-#: keyed on it to run the critic head at `PPOConfig.critic_lr` while the shared
-#: trunk stays at `PPOConfig.lr`. Named rather than left as flax's positional
-#: `Dense_N` because a positional name moves when a layer is inserted above it.
+#: Stable value-head name for checkpoint compatibility and trunk diagnostics.
+#: A positional Dense_N name would move when a preceding layer is inserted.
 VALUE_HEAD_NAME = "value_head"
 
 
@@ -216,10 +214,7 @@ class LanePolicy(nn.Module):
             button=nn.Dense(c.n_buttons, **HEAD)(h),
             screen_x=nn.Dense(c.n_screen_x, **HEAD)(h),
             screen_y=nn.Dense(c.n_screen_y, **HEAD)(h),
-            # NAMED, and load-bearing: `PPOConfig.critic_lr` is applied to
-            # exactly this subtree via `optax.multi_transform`, so the label
-            # tree in `trainer.py` matches on the literal string below. A
-            # rename here silently sends the critic back to the actor's lr.
+            # Stable name also lets learner diagnostics exclude this head.
             value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(
                 jax.lax.stop_gradient(h) if c.detach_critic else h)[..., 0],
         )
