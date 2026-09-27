@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--core-norm", action="store_true", help="gru: LayerNorm on the GRU input")
     parser.add_argument("--core-residual", action="store_true", help="gru: heads see trunk + GRU output (plain GRU heads are near-blind, ARCH-001)")
     parser.add_argument('--preset', choices=('legacy', 'standard'), default='legacy')
+    parser.add_argument('--fine-tune', action='store_true', help='standard preset with the PPO-16 fine-tune recipe: lr 1e-5 both, entropy 0, KL stop 0.02 (E14/E16)')
     parser.add_argument('--ckpt-every', type=int, default=10)
     parser.add_argument('--eval-episodes', type=int, default=0)
     parser.add_argument('--scripted', choices=('lasthit', 'any'), default=None)
@@ -66,7 +67,8 @@ def main():
     teams = (0,) if args.opponent == 'idle' else (0, 1)
     hz = 60. / args.step_ticks
     if args.preset == 'standard':
-        cfg = PPOConfig.standard(decision_hz=hz)
+        cfg = (PPOConfig.standard(decision_hz=hz, lr=1e-5, critic_lr=1e-5, entropy_coef=0.0, target_kl=0.02)
+               if args.fine_tune else PPOConfig.standard(decision_hz=hz))
     else:
         cfg = PPOConfig(lr=args.lr, critic_lr=args.lr if args.critic_lr is None else args.critic_lr,
                         entropy_coef=args.entropy_coef, epochs=args.epochs,
