@@ -30,6 +30,7 @@ labelled `train`.
 | `BC/bc-mlp-20260927-092347` (JAX mirror demos) | 09-27 09:23 | JAX | MLP clone, 60 epochs | - | val 100% / 95% / 98%, attack-click exact ~98% | the data is learnable |
 | `BC/bc-gru-*-1e-3` (JAX mirror demos) | 09-27 09:23 | JAX | plain GRU, lr 1e-3, 100 epochs | - | cancelled at epoch 41: loss 3.79, 0% on attack steps | confirms ARCH-001 |
 | `BC/bc-grunr-*` (JAX mirror demos) | 09-27 10:33 | JAX | GRU + LayerNorm input + residual heads, 60 epochs | - | running | the JAX-leg clone (step 2) |
+| `E13_jax_gru_scratch/seed0` | 09-27 10:50 | JAX | no-prior GRU (norm + residual), standard preset, mirror, 16 envs, lr anneal, job 1576 | budget 3000 | running | JAX twin of E06 with a core that sees; compare point |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |

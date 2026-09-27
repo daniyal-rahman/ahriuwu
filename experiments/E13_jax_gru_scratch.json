@@ -1,0 +1,12 @@
+{
+ "id": "E13_jax_gru_scratch",
+ "engine": "JAX",
+ "question": "No-prior GRU (fixed wiring: LayerNorm input + residual heads, ARCH-001) with published PPO defaults on the JAX sim, mirror, near-wave start. The JAX-side twin of E06 with a core that can see. Compare point for the heuristics-initialised GRU and for E04 cross-play.",
+ "launch": "sbatch --job-name=E13_jax_gru_scratch-s0 slurm/jax_train.sbatch <args>",
+ "args": {
+  "envs": 16, "opponent": "mirror", "start-near-wave": true, "step-ticks": 6, "episode-s": 600,
+  "rollout": 128, "updates": 3000, "minibatches": 4, "preset": "standard", "core": "gru",
+  "core-norm": true, "core-residual": true, "lr-anneal": true, "ckpt-every": 20, "seed": 0,
+  "out": "lanerl_jax/runs/E13_jax_gru_scratch/seed0"
+ }
+}
