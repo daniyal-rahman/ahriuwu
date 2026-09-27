@@ -32,10 +32,10 @@ def main():
         edges = np.quantile(d["update"], [0, .25, .5, .75, 1.0]); buckets = [(f"u{int(edges[i])}-{int(edges[i+1])}", (d["update"] >= edges[i]) & (d["update"] < edges[i+1] + (1 if i == 3 else 0))) for i in range(4)]
     print(f"{'bucket':16s} {'share':>6s} {'value':>7s} {'CS/min':>7s} {'r_death/min':>11s} {'r_appr/min':>10s} {'r_xp/min':>8s} {'p_unwalk':>8s} {'act_unw':>7s} {'ent_x':>6s}")
     for name, sel in buckets:
-        sel = sel & alive; n = sel.sum()
+        sel_all = sel; sel = sel & alive; n = sel.sum()   # death frames (alive_after=0) stay in the term sums
         if n == 0: print(f"{name:16s} {'0':>6s}"); continue
         mins = n / a.hz / 60
-        print(f"{name:16s} {n/alive.sum():6.0%} {np.nanmean(d['value'][sel]):7.3f} {d['r_cs'][sel].sum()/mins:7.2f} {d['r_death'][sel].sum()/mins:11.3f} "
+        print(f"{name:16s} {n/alive.sum():6.0%} {np.nanmean(d['value'][sel]):7.3f} {d['r_cs'][sel].sum()/mins:7.2f} {d['r_death'][sel_all].sum()/mins:11.3f} "
               f"{d['r_approach'][sel].sum()/mins:10.3f} {d['r_xp'][sel].sum()/mins:8.3f} {np.nanmean(d['p_unwalkable'][sel]):8.2f} {np.nanmean(d['act_unwalkable'][sel]):7.2f} {np.nanmean(d['ent_x'][sel]):6.2f}")
 
 if __name__ == "__main__":
