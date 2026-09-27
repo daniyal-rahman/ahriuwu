@@ -30,6 +30,8 @@ def worker_main(conn, kwargs):
                 conn.send(("ok", list(collector.episodes)))
             elif cmd == "ranks":
                 conn.send(("ok", collector.spell_ranks()))
+            elif cmd == "positions":
+                conn.send(("ok", collector.positions()))
             elif cmd == "close":
                 conn.send(("ok", None))
                 break

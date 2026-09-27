@@ -83,6 +83,104 @@ SNAP_CLICKS = {"on": True, "count": 0, "total": 0}
 UNWALKABLE_CLICK = {"mode": "resolve", "dropped": 0, "total": 0}
 
 
+class StepDiag:
+    """Per-step, per-agent record of what the code COMPUTED, written by both
+    the training rollout and frozen evaluation (`<run>/diag/steps_NNNNN.npz`).
+
+    Columns: update, t, agent, env, team, x, y, wall_dist, alive, cs, xp,
+    potential, r_cs, r_death, r_approach, r_xp (the reward function's own
+    terms), value (critic), ent_button/ent_x/ent_y (policy entropies),
+    p_unwalkable (click-distribution mass on unwalkable screen cells, from the
+    same projection the click takes), button, sx, sy, act_unwalkable, done.
+
+    Lesson of INT-001 / PPO-16 (2026-09-27): the wall and the KL questions
+    took a day of post-hoc probes because no run logged what it saw; this
+    costs ~200 rows/s and makes them a query. `--no-diag` turns it off.
+    """
+    COLS = ("update", "t", "agent", "env", "team", "x", "y", "wall_dist", "alive", "cs", "xp",
+            "potential", "r_cs", "r_death", "r_approach", "r_xp", "value", "ent_button", "ent_x",
+            "ent_y", "p_unwalkable", "button", "sx", "sy", "act_unwalkable", "done")
+
+    @classmethod
+    def create(cls, run_path, collector):
+        """None for collectors without `positions()` (the JAX collector, for now)."""
+        return cls(run_path, collector) if hasattr(collector, "positions") else None
+
+    def __init__(self, run_path, collector, flush_rows=50000):
+        self.dir = Path(run_path) / "diag"; self.dir.mkdir(parents=True, exist_ok=True)
+        self.collector, self.flush_rows = collector, flush_rows
+        self.rows, self.chunk = [], 0
+        t = _snap_table_np()
+        standable = t["standable"].reshape(t["height"], t["width"]).astype(bool)
+        try:
+            from scipy import ndimage
+            self.wall = ndimage.distance_transform_edt(standable) * t["cell"]
+        except ImportError:
+            self.wall = np.where(standable, np.nan, 0.0)
+        self.t = t
+        # Lane-frame offsets of every screen cell centre (champion-independent).
+        ds = np.zeros((len(SCREEN_X_VALUES), len(SCREEN_Y_VALUES))); dn = ds.copy()
+        for ix, sx in enumerate(SCREEN_X_VALUES):
+            for iy, sy in enumerate(SCREEN_Y_VALUES):
+                ds[ix, iy], dn[ix, iy] = screen_to_world_centred(0., 0., float(sx), float(sy))
+        self.ds, self.dn = ds, dn
+        self.minimap = (np.asarray(SCREEN_X_VALUES)[:, None] >= MINIMAP_X_MIN) & (np.asarray(SCREEN_Y_VALUES)[None, :] >= MINIMAP_Y_MIN)
+
+    def _standable_xy(self, x, y):
+        t = self.t
+        ix = np.floor((x - t["min_x"]) / t["cell"]).astype(int); iy = np.floor((y - t["min_y"]) / t["cell"]).astype(int)
+        inside = (ix >= 0) & (ix < t["width"]) & (iy >= 0) & (iy < t["height"])
+        flat = np.clip(iy, 0, t["height"] - 1) * t["width"] + np.clip(ix, 0, t["width"] - 1)
+        return inside & t["standable"][flat].astype(bool), np.where(inside, self.wall.reshape(-1)[flat], 0.0)
+
+    def add(self, update, t, stats, next_stats, terms, value, px, py, ent, actions, done):
+        """stats/next_stats: (N, 4) cs, alive, potential, xp; terms: dict of (N,);
+        value (N,); px (N, 96), py (N, 54) click marginals; ent (N, 3); actions (N, 3)."""
+        pos = self.collector.positions()
+        N = pos.shape[0]
+        teams = np.asarray([self.collector.teams[i % self.collector.T] for i in range(N)])
+        frames = self.collector.frames if hasattr(self.collector, "frames") else None
+        stand, wall = self._standable_xy(pos[:, 0], pos[:, 1])
+        p_unw = np.full(N, np.nan); act_unw = np.zeros(N, bool)
+        for i in range(N):
+            if not np.isfinite(pos[i, 0]) or frames is None:
+                continue
+            fr = frames[int(teams[i])]; ax, nm = np.asarray(fr.axis), np.asarray(fr.normal)
+            wx = pos[i, 0] + self.ds * ax[0] + self.dn * nm[0]; wy = pos[i, 1] + self.ds * ax[1] + self.dn * nm[1]
+            ok, _ = self._standable_xy(wx.reshape(-1), wy.reshape(-1))
+            unw = ~ok.reshape(wx.shape) & ~self.minimap
+            p_unw[i] = float((px[i][:, None] * py[i][None, :] * unw).sum())
+            b, sx, sy = actions[i]
+            act_unw[i] = bool(unw[int(sx), int(sy)]) and BUTTONS[int(b)] in ("move", "attack_move")
+        env = np.arange(N) // self.collector.T
+        for i in range(N):
+            self.rows.append((update, t, i, env[i], teams[i], pos[i, 0], pos[i, 1], wall[i], next_stats[i, 1], next_stats[i, 0],
+                              next_stats[i, 3] if next_stats.shape[1] > 3 else np.nan, next_stats[i, 2],
+                              float(terms["cs"][i]), float(terms["death"][i]), float(terms["approach"][i]), float(terms["xp"][i]),
+                              float(value[i]), float(ent[i, 0]), float(ent[i, 1]), float(ent[i, 2]), p_unw[i],
+                              int(actions[i, 0]), int(actions[i, 1]), int(actions[i, 2]), act_unw[i], bool(done[i])))
+        if len(self.rows) >= self.flush_rows:
+            self.flush()
+
+    def flush(self):
+        if not self.rows:
+            return
+        arr = np.asarray(self.rows, dtype=np.float64)
+        np.savez_compressed(self.dir / f"steps_{self.chunk:05d}.npz", cols=np.asarray(self.COLS), data=arr.astype(np.float32))
+        self.chunk += 1; self.rows = []
+
+    def close(self):
+        self.flush()
+
+
+def policy_click_marginals(logits):
+    """Softmax marginals of the two click heads and the three head entropies."""
+    px, py = jax.nn.softmax(logits.screen_x, -1), jax.nn.softmax(logits.screen_y, -1)
+    def ent(l):
+        lp = jax.nn.log_softmax(l, -1); return -(jnp.exp(lp) * lp).sum(-1)
+    return px, py, jnp.stack([ent(logits.button), ent(logits.screen_x), ent(logits.screen_y)], -1)
+
+
 def screen_order(action, champion, frame):
     """Project buttons/cursor to wire; never accepts an entity ID."""
     button, ix, iy = map(int, action)
@@ -377,6 +475,11 @@ class ServerCollector:
         return np.asarray([self.champion(i, t)["sl"] for i in range(self.n_envs)
                            for t in self.teams], dtype=np.int32)
 
+    def positions(self):
+        """(n, 2) world x, y per agent row (diagnostics only, never an actor input)."""
+        return np.asarray([[self.champion(i, t)["x"], self.champion(i, t)["y"]] for i in range(self.n_envs)
+                           for t in self.teams], dtype=np.float64)
+
     def observe(self):
         states, vis, huds = [], {t: [] for t in self.teams}, {t: [] for t in self.teams}
         for i, raw in enumerate(self.env.last_obs):
@@ -541,6 +644,9 @@ class MultiProcessCollector:
     def spell_ranks(self):
         return np.concatenate(self._all("ranks"))
 
+    def positions(self):
+        return np.concatenate(self._all("positions"))
+
     def close(self):
         for c in self.conns:
             try:
@@ -594,6 +700,9 @@ class FrozenOpponentCollector:
     def spell_ranks(self):
         return self.inner.spell_ranks()[self.rows]
 
+    def positions(self):
+        return self.inner.positions()[self.rows]
+
     def step(self, actions):
         self.rng, key = jax.random.split(self.rng)
         opp_action, carry = self._opp_act(self.opp_params, self._opp_obs, key, self.opp_carry)
@@ -632,7 +741,7 @@ def load_checkpoint_policy(path):
 
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                         save_updates=(), n_minibatches=1, resume=None, ckpt_every=10,
-                        lr_anneal=False, resume_params_only=False):
+                        lr_anneal=False, resume_params_only=False, diag_steps=True):
     """Train either farming collector with exactly the same PPO/reward loop.
 
     Collectors provide n, episodes, observe(), step(actions), restart_done(),
@@ -644,6 +753,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
     started = time.monotonic()
     recurrent = getattr(getattr(policy, "cfg", None), "core", "mlp") == "gru"
     print(run.path, flush=True)
+    diag = None
     try:
         obs, stats = collector.observe()
         rng, init_key = jax.random.split(rng)
@@ -688,7 +798,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             else:
                 logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
             action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
-            return action, lp, usage, logits.value, carry
+            return action, lp, usage, logits.value, carry, policy_click_marginals(logits)
+        diag = StepDiag.create(run.path, collector) if diag_steps else None
         @jax.jit
         def update(params, opt_state, batch, key):
             return kl_stopped_epochs(lambda q, b: loss(q, b, cfg), tx, params,
@@ -704,7 +815,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             carry0 = carry
             for t in range(rollout):
                 rng, key = jax.random.split(rng)
-                action, lp, usage, value, new_carry = act(params, obs, key, carry)
+                action, lp, usage, value, new_carry, (px, py, ent) = act(params, obs, key, carry)
                 host_actions = np.stack(jax.device_get(action), axis=-1)
                 sampled_buttons += np.bincount(host_actions[:, 0], minlength=len(BUTTONS))
                 sampled_r_unranked += int(np.sum(
@@ -719,6 +830,9 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                 rows.append({"entities": obs.entities, "mask": obs.entity_pad_mask,
                     "self": obs.self_vec, "global": obs.global_vec, "action": action,
                     "log_prob": lp, "uses_screen": usage[0], "uses_target": usage[1], "value": value})
+                if diag is not None:
+                    diag.add(u, t, stats, next_stats, jax.device_get(terms), np.asarray(value),
+                             np.asarray(px), np.asarray(py), np.asarray(ent), host_actions, np.asarray(done))
                 values.append(value); rewards.append(reward); dones.append(done)
                 reward_terms.append(terms)
                 for i in np.flatnonzero(done):
@@ -813,11 +927,13 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         run.set_results(status="failed", error=repr(exc))
         raise
     finally:
+        if diag is not None:
+            diag.close()
         collector.close()
 
 
 def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1, act_fn=None,
-                    record_npz=None, deterministic=False):
+                    record_npz=None, deterministic=False, diag_steps=True):
     """Frozen-policy episodes through the training collector itself.
 
     Same observation encoding, same sampling, same server binary as training;
@@ -842,8 +958,9 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
             action = (jnp.argmax(logits.button, -1), jnp.argmax(logits.screen_x, -1), jnp.argmax(logits.screen_y, -1))
         else:
             action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
-        return action, carry
+        return action, carry, (logits.value, *policy_click_marginals(logits))
     carry = policy.initial_carry((collector.n,)) if recurrent else None
+    diag = StepDiag.create(run.path, collector) if (diag_steps and act_fn is None) else None
     obs, stats = collector.observe()
     deaths = np.zeros(collector.n, np.int64)
     records = []
@@ -854,7 +971,7 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
     try:
         while (done_count < episodes_per_env).any():
             rng, key = jax.random.split(rng)
-            action, carry = act(params, obs, key, carry)
+            action, carry, extra = act(params, obs, key, carry)
             host_actions = np.stack(jax.device_get(action), axis=-1)
             if traj is not None:
                 # (obs, action) pairs per agent row, for behaviour-cloning diagnostics
@@ -868,6 +985,12 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
                 carry = jnp.where(jnp.asarray(done)[:, None], 0.0, carry)
             next_obs, next_stats = collector.observe()
             deaths += (stats[:, 1].astype(bool) & ~next_stats[:, 1].astype(bool))
+            if diag is not None:
+                xp = (stats[:, 3], next_stats[:, 3]) if stats.shape[1] > 3 else (None, None)
+                _, terms = farm_reward(stats[:, 0], next_stats[:, 0], stats[:, 1].astype(bool), next_stats[:, 1].astype(bool),
+                                       stats[:, 2], next_stats[:, 2], done, None, *xp)
+                value, px, py, ent = (np.asarray(v) for v in jax.device_get(extra))
+                diag.add(0, steps, stats, next_stats, jax.device_get(terms), value, px, py, ent, host_actions, np.asarray(done))
             steps += 1
             for i in np.flatnonzero(done):
                 rec = {"agent": int(i), "env": int(i) // collector.T,
@@ -897,6 +1020,8 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
         run.set_results(status="failed", error=repr(exc))
         raise
     finally:
+        if diag is not None:
+            diag.close()
         collector.close()
     return records
 
@@ -952,6 +1077,7 @@ def main():
                    help="per-batch advantage standardisation (the standard preset has it on)")
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
+    p.add_argument("--no-diag", action="store_true", help="skip the per-step diagnostic record (<run>/diag/)")
     p.add_argument("--unwalkable-click", choices=("resolve", "noop"), default="resolve",
                    help="movement click onto unwalkable ground: resolve to the closest reachable point (server/snap) or drop it (INT-001)")
     p.add_argument("--no-snap-clicks", action="store_true",
@@ -1084,13 +1210,13 @@ def main():
         evaluate_frozen(collector, policy, params, run, seed=args.seed,
                         episodes_per_env=args.eval_episodes, act_fn=act_fn,
                         record_npz=(run.path / args.record_npz.name) if args.record_npz else None,
-                        deterministic=args.deterministic)
+                        deterministic=args.deterministic, diag_steps=not args.no_diag)
         return
     run_farming_learner(collector, policy, cfg, run, seed=args.seed,
                         rollout=args.rollout, updates=args.updates,
                         save_updates=args.save_updates, n_minibatches=args.minibatches,
                         resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal,
-                        resume_params_only=resume_params_only)
+                        resume_params_only=resume_params_only, diag_steps=not args.no_diag)
 
 
 if __name__ == "__main__":
