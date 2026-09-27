@@ -741,7 +741,12 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             logits = forward(params, batch)
             recomputed = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
                 batch["action"], batch["uses_screen"], batch["uses_target"])
-            np.testing.assert_allclose(recomputed, batch["log_prob"], atol=2e-5, rtol=2e-5)
+            # Head-mask mismatches are O(1) errors; a near-deterministic policy
+            # (a BC clone) has log-probs of -20 and beyond whose float32
+            # recomputation differs by ~1e-4, which failed the old 2e-5 gate
+            # and killed E11 at update 2.
+            np.testing.assert_allclose(recomputed, batch["log_prob"], atol=1e-3, rtol=1e-3,
+                                       err_msg="rollout/recompute log-prob mismatch (head masks?)")
             params, opt_state, rng, info = update(params, opt_state, batch, rng)
             metrics = {k: float(v) for k, v in summarise_minibatches(info).items()}
             if not all(np.isfinite(np.asarray(v)).all() for v in jax.tree.leaves(params)) or metrics.get("loss_nonfinite", 0):

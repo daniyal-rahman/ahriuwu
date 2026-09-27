@@ -128,7 +128,7 @@ def submit(spec, args, name, dry):
     print("srun started; log", log); return "srun"
 
 
-def watch_startup(name, log_glob, seconds=180):
+def watch_startup(name, log_glob, seconds=300):
     """After submission: wait for RUNNING, then watch for `seconds` that the job
     stays in the queue and its log shows no traceback. A run that dies on
     startup (bad resume path, port, memory) is reported here, not hours later."""
