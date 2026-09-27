@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-28 06:40 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 08:10 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -74,7 +74,9 @@ through the shared trunk was the systematic drift; a separate critic is the fix.
 rewrote the trunk (feature cosine 0.36 vs prior) while staying sharp = step size;
 the slow slide keeps the representation (cosine 0.9+) and 93-96% of click mass
 near the prior's click but the peak cell wanders (matches 30-48%) = precision
-loss, no directed shift. E22 = KL-to-prior penalty, launching behind E21.
+loss, no directed shift. E22 (KL-to-prior 2.0) FINAL 47.2 / 43.5: holds the prior like E21. Both fixes preserve a
+45-CS prior over 400 updates; neither improves it (the improve-on-prior question moves
+to the reference PPO port).
 
 **REWARD (Dani, 04:40 UTC):** the server runs never used the delta-gold/delta-XP/lane-keep
 reward; they used Codex's farm reward (+1 CS, -2 death, shaping, xp). `--reward relative`
