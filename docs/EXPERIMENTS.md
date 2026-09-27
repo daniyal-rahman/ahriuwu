@@ -44,6 +44,14 @@ BC representability diagnostic (`train/bc_diag.py` on the 19,196 x 8 scripted mi
 | `bc-mlp-20260927-000035` DAgger-2 (+ the DAgger-1 clone's 9,599 x 8 states relabelled; 150 epochs) | MLP | teacher agreed with the DAgger-1 clone on 16% of its own states | **45.5 / 49.5 CS sampled (31-53 / 35-67)** | a NETWORK policy above the gate through the click interface (prior-derived: not the no-prior result). Compare-point agent for cross-play |
 | `bc-gru` (batch 1024, seq 32, 20 epochs) | GRU | 0.87 / 0.29 / 0.29 | not evaluated | under-trained; not used |
 
+Cross-play on the C# server vs the DAgger-2 clone (frozen opponent, the evaluated checkpoint alternates blue/red across 4 servers, one 600 s episode each):
+
+| Evaluated checkpoint | CS (mean / range) | Deaths | Note |
+|---|---|---|---|
+| E04 latest (u3070) | 27.5 / 21-33 | 0-2 | better than its own mirror evals (18.8 / 24.5): the clone farms instead of duelling |
+| E06 u3460 | 17.3 / 11-26 | 0-2 | its usual band |
+| DAgger-2 clone vs itself (mirror) | 45.5 / 49.5 | - | reference |
+
 Frozen evaluations (the only numbers that count for the gate):
 
 | Eval dir (`runs/EVAL/`) | Checkpoint | Task | Episodes | Blue CS (mean / median / min-max) | Red CS | Deaths | Verdict |
