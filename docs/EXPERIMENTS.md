@@ -29,7 +29,9 @@ labelled `train`.
 | `BC/bc-gru-20260927-091748` (JAX idle demos) | 09-27 09:17 | JAX | plain GRU clone, 30 epochs | - | 92% button / 35% x / 40% y, 0% on attack steps: majority class | plain GRU cannot fit (ARCH-001) |
 | `BC/bc-mlp-20260927-092347` (JAX mirror demos) | 09-27 09:23 | JAX | MLP clone, 60 epochs | - | val 100% / 95% / 98%, attack-click exact ~98% | the data is learnable |
 | `BC/bc-gru-*-1e-3` (JAX mirror demos) | 09-27 09:23 | JAX | plain GRU, lr 1e-3, 100 epochs | - | cancelled at epoch 41: loss 3.79, 0% on attack steps | confirms ARCH-001 |
-| `BC/bc-grunr-*` (JAX mirror demos) | 09-27 10:33 | JAX | GRU + LayerNorm input + residual heads, 60 epochs | - | running | the JAX-leg clone (step 2) |
+| `BC/bc-grunr-20260927-094449` (JAX mirror demos) | 09-27 09:44 | JAX | GRU + LayerNorm input + residual heads, 60 epochs | - | val 100% / 99% / 99%, attack steps 100 / 100 / 99.9%; closed-loop on JAX mirror (sampled): 8.7 / 9.4 CS (median 7 / 6, max 21 / 33), 1 death | fixed GRU fits; compounding error as on the server |
+| `JAX_ORACLE/dagger1` -> `BC/bc-grunr-20260927-102346` | 09-27 10:23 | JAX | DAgger round 1 (relabelled clone rollout + demos, 9582 x 32 steps), 60 epochs | - | clone trained; round 2 rollout measures it | `ops/jax_dagger_round.py 1` |
+| `EVAL/replay_E12b_u140`, `_u600` | 09-27 12:05 | C# | E12b midway and degenerate replays, mirror, seed 0 | 1 ep | u140: 11 / 7 CS, attack-move 18% of decisions; u600: 0 / 0, attack-move 9%, red 579 no-ops | videos `map/replay.mp4`, `combat/replay.mp4` |
 | `E13_jax_gru_scratch/seed0` | 09-27 10:50 | JAX | no-prior GRU (norm + residual), standard preset, mirror, 16 envs, lr anneal, job 1576 | budget 3000 | running | JAX twin of E06 with a core that sees; compare point |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 

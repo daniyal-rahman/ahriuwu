@@ -56,14 +56,14 @@ def main():
     srun(f"dagger{a.round}-rollout",
          f"-m lanerl_jax.train.jax_train --envs {a.envs} --opponent mirror --episode-s 600 --start-near-wave "
          f"--step-ticks 6 --eval-episodes 1 --record-npz rollout.npz --seed {seed} --resume {mnt(clone.resolve())} --out {mnt(out_roll)}",
-         mem="12G")
+         mem="6G")
     roll = sorted(out_roll.glob("*/rollout.npz"), key=lambda p: p.stat().st_mtime)[-1]
     merged = REPO_SRV / f"lanerl_jax/runs/JAX_ORACLE/jax_dagger{a.round}.npz"
-    srun(f"dagger{a.round}-relabel", f"-m lanerl_jax.train.bc_dagger {mnt(merged)} {mnt(prev.resolve())} {mnt(roll)}", cpus=2, mem="16G")
+    srun(f"dagger{a.round}-relabel", f"-m lanerl_jax.train.bc_dagger {mnt(merged)} {mnt(prev.resolve())} {mnt(roll)}", cpus=2, mem="8G")
     must(merged, "merged dataset")
     before = {p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru*")}
     srun(f"dagger{a.round}-bc", f"-m lanerl_jax.train.bc_diag {mnt(merged)} --out lanerl_jax/runs/BC --core gru --core-norm --core-residual --epochs {a.epochs}",
-         mem="16G", minutes=120)
+         mem="8G", minutes=120)
     new = sorted({p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru*")} - before)
     if not new:
         sys.exit("no new clone directory")
