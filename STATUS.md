@@ -12,7 +12,11 @@ interaction, not a side bug.
 Next diagnostics: behaviour-clone the oracle (representability), then PPO from
 that init (does the learner preserve a 40-CS policy?).
 
-**PAUSED by Dani at 2026-09-27 00:40 UTC: all jobs cancelled (E10 at ~u130, the E11 canary, evaluations), evaluator loops and the auto-push loop stopped. Nothing is running. To resume: `ops/launch.py E11_ppo_from_dagger1_kl` (constrained PPO from the DAgger-2 clone, the learner verdict), then re-arm `ops/periodic_eval.sh` for it.**
+**RESUMED 2026-09-27 01:40 UTC (Dani). Running: E11 = constrained PPO (lr 5e-5,
+KL stop 0.02, standard preset otherwise) from the DAgger-2 clone (45/50 CS),
+mirror, 10 servers; canary passed, healthy at +180 s; evaluator every 100
+updates. This is the learner verdict: hold/rise = learner sound; decline =
+objective/advantage pipeline damages good behaviour. (Paused 00:40-01:36.)**
 
 **Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
 BC representability, PPO-from-BC learner test); then a heuristics-initialised
