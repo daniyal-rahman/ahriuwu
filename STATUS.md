@@ -1,53 +1,44 @@
-# STATUS (rewrite in place; last edit 2026-09-25 17:45 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 09:40 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
-10-minute mirror trial on the C# server, evaluated frozen over seeds. JAX
-runs are paused until that gate is met.
+10-minute mirror trial on the C# server, evaluated frozen over seeds.
 
-**INTERFACE ORACLE (22:25 UTC):** the scripted last-hitter through the policy's own
-observation->click path scores 60 CS vs idle red and 45 (blue) / 28 (red) in a
-scripted mirror, deterministic across servers. The gate is reachable through
-this interface; the trained policies' 15-22 is a learning gap. Scripted RED vs idle blue: 74 CS, 0 deaths, so the 45/28 mirror split is wave
-interaction, not a side bug.
-Next diagnostics: behaviour-clone the oracle (representability), then PPO from
-that init (does the learner preserve a 40-CS policy?).
+**LEARNER TEST VERDICT (09:20 UTC): NEGATIVE.** Constrained PPO fine-tuning
+from the DAgger-2 clone (45 / 50 CS frozen) destroys it in every form tried:
+E10 plain (KL 0.38 in one update), E11 (lr 5e-5, KL stop 0.02): 0 CS by u140,
+E12b (same, after E12a critic warm-up, value loss 21 -> 1.2): frozen u140
+10.8 / 12.0, u280 2.5 / 2.3, u440 0.3 / 1.3, training CS 0 by u520.
+E12a with actor lr 0 kept the clone intact (training CS peaks 30.6 at
+mid-episode every 47 updates), so the collapse is caused by the actor update
+itself, not by the init or the collector. A working PPO does not move a
+policy from +45 return to 0 with a correlated reward. The learner, or the
+reward as the learner sees it, is the open bug. Candidates, in order:
+advantage normalisation on near-zero-variance batches, entropy 0.01/3 per
+head pulling apart a sharp policy (entropy 0.3 -> 1.0 in E11), deaths
+(-2, ~4 per update across 20 agents in mirror) dominating the per-update
+signal, GAE/done handling in the [N,T] batch. E12b cancelled (its job).
 
-**LEARNER TEST, first result (02:15 UTC): E11 (constrained PPO, lr 5e-5, KL
-stop 0.02, from the 45/50-CS clone) collapsed to 100% 'move' and 0 CS within
-140 updates. Value loss was 23 at update 1: BC left the value head random,
-so the first updates optimised critic noise (advantage normalisation makes
-it unit-variance) and the entropy bonus pulled the sharp clicks apart.
-E12a (critic warm-up, actor frozen): value loss 21 -> 1.2 in 150 updates.
-Running: E12b = fine-tune from it (lr 5e-5, KL stop 0.02). That is the
-learner verdict; its first canary attempt was SIGTERMed by slurm at 199 s
-(cause unknown) and relaunched.**
+**JAX LEG (running, per Dani's 22:40 plan):** heuristics-initialised GRU on
+the JAX sim to a compare point, then E04 vs that agent on the C# server.
+Step 1 done: scripted last-hitter on the JAX sim vs idle red = 65 CS on all
+16 envs (deterministic sim: identical trajectories), 4792 decisions each in
+140 s wall (~550 dec/s at 16 envs, 5.5 GB GPU). Mirror scripted demos
+recording (`runs/JAX_ORACLE/demos_mirror`). Step 2: GRU clone
+(`train/bc_diag.py --core gru`, `runs/BC/bc-gru-*`), then DAgger rounds on
+JAX rollouts. Step 3: PPO on JAX from the GRU clone (`jax_train.py
+--init-from --core gru --preset standard`). Step 4: `ops/launch.py eval
+--ckpt <E04> --opponent frozen --opponent-ckpt <jax gru>` on the C# server.
+Porting issues: the shared-loop JAX trainer is server-speed (430-550
+dec/s); the fast Anakin trainer lacks GRU/init-from/frozen opponent; parity
+gaps COLL-005, SPELL-013, STAT-003 mean the JAX agent's clicks may transfer
+imperfectly; an observation-contract match (viewport-structured-v3) is what
+makes the cross-play possible at all.
 
-**Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
-BC representability, PPO-from-BC learner test); then a heuristics-initialised
-GRU on the JAX sim to a compare point; then cross-play E04 vs that agent on
-the C# server. **BC representability (23:20 UTC):** the MLP clone matches the scripted teacher
-99% (button) / 74% (click x,y) per step but scores 5.3 / 3.8 CS sampled in a
-mirror (teacher 45 / 28): sampled clicks a cell off miss the minion and the
-errors compound. Argmax eval: 12 / 11 CS, so the clone is wrong at the decisive steps, not
-just blurred by sampling. 150-epoch BC: 97% click accuracy, 94% exact attack clicks -- the net CAN
-represent the last-hit click; undertraining, not a ceiling. Closed-loop it scores only 7.8 / 5.3
-sampled and 5 / 10 argmax (teacher 45 / 28): per-step accuracy does not
-transfer; compounding error. DAgger round 1 (23:52 UTC): the relabelled clone scores 24.3 / 32.8 CS
-sampled (episodes to 39 / 44). A network policy on this observation reaches
-the gate region. E09 stopped (superseded). E10 = plain PPO from the DAgger-1
-clone: its FIRST update moved the policy by KL 0.38 (clip 0.54): a
-near-deterministic prior makes PPO's ratios explode, the known
-fine-tune-from-BC failure. Its u100 eval is kept as evidence; E11 (lr 5e-5,
-KL stop 0.02) is the fine-tuning form and replaces it. DAgger round 2 (00:15 UTC): **45.5 / 49.5 CS sampled** -- a network policy
-above the gate through this interface (prior-derived). E11's init switched to
-it. Cross-play vs the DAgger-2 clone on the C# server: E04 27.5 CS (21-33),
-E06 17.3 (11-26); the clone itself 45/50. E04 farms BETTER against the
-non-duelling clone than in mirror self-play. E08 (from the weak clone) stopped; E09 = PPO
-from the strong clone launched 23:15 UTC: frozen u120 9.3 / 11.3, up from the
-clone's 7.8 / 5.3, train chunks 3 -> 10 (improving, not degrading).
-**Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
-steps (`runs/ORACLE/demos`); their frozen evaluations follow automatically.
-JAX shared-loop GRU probe: ~430 dec/s at 8 envs (server-level), OOM at 32
+**History of the diagnostics (09-26/27):** interface oracle 60 CS vs idle,
+74 as red, 45 / 28 scripted mirror; MLP clone 94-97% per-step accuracy but
+5-10 CS closed-loop (compounding error); DAgger-1 24 / 33; DAgger-2 45 / 50;
+cross-play vs the DAgger-2 clone on the server: E04 27.5 (21-33), E06 17.3.
+
 envs beside llm-serve, so the JAX leg needs the Anakin port; deferred. E07 PAUSED at u178 (relaunched 21:55 UTC with `--init-from`: E06 u3140 params, fresh
 optimizer/schedule, own 3000-update budget) vs a FROZEN E06 checkpoint. The first
 E07 attempt inherited E06's counter and schedule (767 updates at ~0 lr, evals
