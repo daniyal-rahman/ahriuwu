@@ -449,6 +449,31 @@ class StateRebuilder:
 
 
 
+class ScriptedPolicy:
+    """`LanePolicy` stand-in for the evaluators: `apply` returns logits that put
+    all mass on the scripted player's action (`train/scripted_policy.py`), so
+    `_sample` reproduces the scripted decision exactly. No parameters."""
+    cfg = PolicyConfig()
+
+    def __init__(self, act_fn):
+        self.act_fn = act_fn
+
+    def initial_carry(self, batch_shape=()):
+        return jnp.zeros(tuple(batch_shape) + (1,), jnp.float32)
+
+    def apply(self, params, entities, pad_mask, self_vec, global_vec, carry=None):
+        from ..obs.builder import Observation
+        from ..train.policy import ActionLogits
+        def one(e, m, s, g):
+            obs = Observation(e, m, s, g, jnp.full((e.shape[0],), -1, jnp.int32))
+            b, x, y = self.act_fn(obs, None)
+            big = 1e4
+            return ActionLogits(button=jax.nn.one_hot(b, 8) * big, screen_x=jax.nn.one_hot(x, 96) * big,
+                                screen_y=jax.nn.one_hot(y, 54) * big, value=jnp.zeros(()))
+        out = jax.vmap(one)(entities, pad_mask, self_vec, global_vec) if entities.ndim == 3 else one(entities, pad_mask, self_vec, global_vec)
+        return (out, carry) if carry is not None else out
+
+
 def load_params(path: str):
     """Params out of a `RunDir` checkpoint, or a fresh untrained set.
 
@@ -474,6 +499,12 @@ def load_params(path: str):
             raise ValueError("entity-pointer checkpoints cannot evaluate as screen-click-v2; train a new policy")
         if saved.get("observation_interface") != "viewport-structured-v3":
             raise ValueError("checkpoint does not declare v3 authoritative life-state observations; use its historical capture")
+        scripted = json.loads(manifest_path.read_text()).get("scripted")
+        if scripted:
+            # A scripted player packaged as a checkpoint directory (PARITY
+            # timelines): the evaluators' copy/hash/manifest plumbing is unchanged.
+            from ..train.scripted_policy import PLAYERS
+            return ScriptedPolicy(PLAYERS[scripted]), {}, f"scripted:{scripted}"
         cfg = PolicyConfig(**saved)
     policy = LanePolicy(cfg)
     obs0 = build_observation(init_lane(), 0, frame, params=lane_params())
