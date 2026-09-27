@@ -226,10 +226,22 @@ MINION_SPAWN: Dict[int, Tuple[float, float]] = {
 }
 #: ``LanerlLane.TopLaneDefault`` -- taken verbatim from the map script's
 #: ``MinionPaths`` so minions walk the same line the server walks them along.
+#:
+#: RED END (PARITY-002, 2026-09-28): the map script's last vertex (12511, 12776)
+#: is 65-119 u off the line the server's red minions ACTUALLY walk out of their
+#: barracks, and joining it cost every JAX red minion ~1 s / ~100 u of lane
+#: progress (measured on the same deterministic scripted game: identical
+#: spawn coordinates and times, identical first two seconds, then the JAX
+#: minion walked straight down to the vertex while the server's cut west).
+#: The last four vertices below are the server's walked line
+#: (`runs/PARITY/srv_trace_idle_740`, 1-s samples of the 126.5 s wave:
+#: (12481, 12891) -> (12252, 12877) -> (12203, 12780) -> (12111, 12753) ->
+#: (12006, 12807) -> lane). Blue's end matched the server to the unit already.
 TOP_LANE_PATH: Tuple[Tuple[float, float], ...] = (
     (917.0, 1725.0), (1170.0, 4041.0), (861.0, 6459.0), (880.0, 10180.0),
     (1268.0, 11675.0), (2806.0, 13075.0), (3907.0, 13243.0), (7550.0, 13407.0),
-    (10244.0, 13238.0), (10947.0, 13135.0), (12511.0, 12776.0),
+    (10244.0, 13238.0), (10947.0, 13135.0), (12006.0, 12807.0), (12111.0, 12753.0),
+    (12252.0, 12878.0), (12481.0, 12891.0),
 )
 
 #: Champion max HP above the Content base curve. **Not runes** -- the rune page
