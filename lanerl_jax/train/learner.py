@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 import optax
 from .policy import VALUE_HEAD_NAME
-from .ppo import (factored_log_prob, _entropy, policy_loss, value_loss)
+from .ppo import (factored_log_prob, _entropy, policy_loss, value_loss, joint_click_entropy)
 
 
 def make_learner(policy, ppo, *, anneal_steps: int = 0):
@@ -61,11 +61,16 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0):
         lg = (logits.button, logits.screen_x, logits.screen_y)
         # The SAME per-sample head masks the rollout computed its log-prob
         # under (`PPO-14`).
+        click_mask = batch.get("click_mask")
         log_prob = factored_log_prob(lg, batch["action"], batch["uses_screen"],
-                                     batch["uses_target"])
+                                     batch["uses_target"], click_mask=click_mask)
         # UNCONDITIONAL per-head entropy, H_b + H_x + H_y (`PPO-15`): the
-        # usage-weighted form favoured coordinate buttons.
-        entropy = (_entropy(lg[0]) + _entropy(lg[1]) + _entropy(lg[2])).mean()
+        # usage-weighted form favoured coordinate buttons. With a click mask
+        # the click entropy is that of the masked joint distribution.
+        if click_mask is not None:
+            entropy = (_entropy(lg[0]) + joint_click_entropy(lg[1], lg[2], click_mask)).mean()
+        else:
+            entropy = (_entropy(lg[0]) + _entropy(lg[1]) + _entropy(lg[2])).mean()
         pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy

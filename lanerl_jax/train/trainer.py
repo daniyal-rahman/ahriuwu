@@ -213,19 +213,28 @@ class Transition(NamedTuple):
     attack_class: jax.Array
 
 
-def _sample(logits, key, slot_valid):
+def _sample(logits, key, slot_valid, click_mask=None):
     """Sample button and screen coordinates, with matching PPO likelihood.
 
     slot_valid is an unused compatibility argument. uses_target stays zero
     in the transition schema; there is no actor entity-pointer head.
+    ``click_mask`` (..., n_x, n_y) bool: sample the click from the masked
+    JOINT distribution (walkable cells only) and return its log-prob under
+    that same distribution (`ppo.joint_click_log_prob`).
     """
     kb, kx, ky = jax.random.split(key, 3)
-    a = (jax.random.categorical(kb, logits.button),
-         jax.random.categorical(kx, logits.screen_x),
-         jax.random.categorical(ky, logits.screen_y))
+    if click_mask is not None:
+        from .ppo import joint_click_logits
+        flat = jax.random.categorical(kx, joint_click_logits(logits.screen_x, logits.screen_y, click_mask))
+        n_y = logits.screen_y.shape[-1]
+        a = (jax.random.categorical(kb, logits.button), flat // n_y, flat % n_y)
+    else:
+        a = (jax.random.categorical(kb, logits.button),
+             jax.random.categorical(kx, logits.screen_x),
+             jax.random.categorical(ky, logits.screen_y))
     lg = (logits.button, logits.screen_x, logits.screen_y)
     usage = screen_head_usage(a[0])
-    return a, factored_log_prob(lg, a, *usage), usage
+    return a, factored_log_prob(lg, a, *usage, click_mask=click_mask), usage
 
 
 #: `attack_class` codes (the R3 dashboard metric, `NONFARMING_FAILURES.md`):

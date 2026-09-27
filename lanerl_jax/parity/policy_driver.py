@@ -614,11 +614,15 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
         else:
             logits = policy.apply(params, obs.entities, obs.entity_pad_mask,
                                   obs.self_vec, obs.global_vec)
+        click_mask = None
+        if getattr(policy.cfg, "click_mask", False):
+            from ..train.actions import click_mask_from_position
+            click_mask = click_mask_from_position(state.x[row], state.y[row], jnp.asarray(own.axis), jnp.asarray(own.normal))
         if deterministic:
             action = (jnp.argmax(logits.button), jnp.argmax(logits.screen_x),
                       jnp.argmax(logits.screen_y))
         else:
-            action, _, _ = _sample(logits, key, ~obs.entity_pad_mask)
+            action, _, _ = _sample(logits, key, ~obs.entity_pad_mask, click_mask=click_mask)
         # `orders_from` is the TRAINING decoder and expects the (2, ...) batch
         # of both champions. One champion is driven here, so the row is
         # doubled and row `team` is used -- doubling rather than reshaping

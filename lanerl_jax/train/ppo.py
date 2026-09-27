@@ -335,8 +335,32 @@ def _entropy(lg):
     return -jnp.sum(jnp.exp(lp) * lp, axis=-1)
 
 
+def joint_click_logits(lg_x, lg_y, click_mask):
+    """Masked joint click distribution over the 96 x 54 screen cells:
+    ``softmax(lg_x[i] + lg_y[j] + log(mask[i, j]))``. The SAME two factored
+    heads (no new parameters; E15-era checkpoints load unchanged), but the
+    probability is renormalised over walkable cells only -- invalid-action
+    masking (Huang & Ontanon 2020), INT-001's principled fix. Returns
+    ``(..., n_x * n_y)`` logits with ``-inf`` on masked cells."""
+    joint = lg_x[..., :, None] + lg_y[..., None, :]
+    joint = jnp.where(click_mask, joint, -jnp.inf)
+    return joint.reshape(joint.shape[:-2] + (-1,))
+
+
+def joint_click_log_prob(lg_x, lg_y, click_mask, a_x, a_y):
+    lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask), axis=-1)
+    idx = a_x * lg_y.shape[-1] + a_y
+    return jnp.take_along_axis(lp, idx[..., None], axis=-1)[..., 0]
+
+
+def joint_click_entropy(lg_x, lg_y, click_mask):
+    lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask), axis=-1)
+    p = jnp.exp(lp)
+    return -jnp.sum(jnp.where(p > 0, p * lp, 0.0), axis=-1)
+
+
 def factored_log_prob(logits, actions, uses_screen=None,
-                      uses_target=None) -> jax.Array:
+                      uses_target=None, click_mask=None) -> jax.Array:
     """Log-prob of the joint action, counting only the heads THIS sample put
     on the wire: ``lp_b + uses_screen*(lp_x+lp_y) + uses_target*lp_t``.
 
@@ -353,6 +377,8 @@ def factored_log_prob(logits, actions, uses_screen=None,
         return total
     if len(logits) == 3:
         used, _ = screen_head_usage(actions[0])
+        if click_mask is not None:
+            return total + used * joint_click_log_prob(logits[1], logits[2], click_mask, actions[1], actions[2])
         return total + used * (_chosen(logits[1], actions[1]) + _chosen(logits[2], actions[2]))
     if uses_screen is None or uses_target is None:
         raise TypeError("the four-head factored_log_prob needs the per-sample "

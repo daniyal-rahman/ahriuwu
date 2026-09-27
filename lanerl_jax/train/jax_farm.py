@@ -299,6 +299,12 @@ class JaxFarmCollector:
                 'control': self.sim.route_table is None}
         (self.out / 'collector.json').write_text(json.dumps(data, indent=2) + '\n')
 
+    def positions(self):
+        """(n, 2) world x, y per agent row (env-major, teams in `self.teams` order); diagnostics / click mask."""
+        x = np.asarray(self.states.x[:, :2]); y = np.asarray(self.states.y[:, :2])
+        ts = list(self.teams)
+        return np.stack([x[:, ts].reshape(-1), y[:, ts].reshape(-1)], -1).astype(np.float64)
+
     def observe(self):
         self._check_open()
         obs = self._call('observe', self._observe, self.states, self._model)   # (n_envs, T, ...)

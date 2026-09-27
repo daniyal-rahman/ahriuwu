@@ -79,7 +79,7 @@ def main():
     resume_params_only = False
     if args.init_from is not None:
         args.resume, resume_params_only = args.init_from, True
-    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual)
+    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask)
     src_ckpt = args.resume or args.init_from
     if src_ckpt is not None and (src_ckpt.parent / 'manifest.json').exists():
         saved = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})

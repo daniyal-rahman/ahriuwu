@@ -83,6 +83,56 @@ SNAP_CLICKS = {"on": True, "count": 0, "total": 0}
 UNWALKABLE_CLICK = {"mode": "resolve", "dropped": 0, "total": 0}
 
 
+class ScreenCellTable:
+    """Lane-frame offsets of every screen cell centre, the minimap exclusion,
+    and the standable grid: everything needed to ask "which screen cells are
+    walkable from here?" (shared by `StepDiag` and `click_mask_host`)."""
+    _inst = None
+
+    @classmethod
+    def get(cls):
+        if cls._inst is None:
+            cls._inst = cls()
+        return cls._inst
+
+    def __init__(self):
+        self.t = _snap_table_np()
+        ds = np.zeros((len(SCREEN_X_VALUES), len(SCREEN_Y_VALUES))); dn = ds.copy()
+        for ix, sx in enumerate(SCREEN_X_VALUES):
+            for iy, sy in enumerate(SCREEN_Y_VALUES):
+                ds[ix, iy], dn[ix, iy] = screen_to_world_centred(0., 0., float(sx), float(sy))
+        self.ds, self.dn = ds, dn
+        self.minimap = (np.asarray(SCREEN_X_VALUES)[:, None] >= MINIMAP_X_MIN) & (np.asarray(SCREEN_Y_VALUES)[None, :] >= MINIMAP_Y_MIN)
+
+    def standable(self, x, y):
+        t = self.t
+        ix = np.floor((x - t["min_x"]) / t["cell"]).astype(int); iy = np.floor((y - t["min_y"]) / t["cell"]).astype(int)
+        inside = (ix >= 0) & (ix < t["width"]) & (iy >= 0) & (iy < t["height"])
+        flat = np.clip(iy, 0, t["height"] - 1) * t["width"] + np.clip(ix, 0, t["width"] - 1)
+        return inside & t["standable"][flat].astype(bool)
+
+    def walkable_cells(self, x, y, frame):
+        """(96, 54) bool: screen cells whose world point is standable and not on the minimap."""
+        ax, nm = np.asarray(frame.axis), np.asarray(frame.normal)
+        wx = x + self.ds * ax[0] + self.dn * nm[0]; wy = y + self.ds * ax[1] + self.dn * nm[1]
+        return self.standable(wx.reshape(-1), wy.reshape(-1)).reshape(wx.shape) & ~self.minimap
+
+
+def click_mask_host(collector):
+    """(n, 96, 54) bool walkable-cell mask per agent row from the collector's
+    positions and lane frames (PolicyConfig.click_mask). A dead or unknown
+    position gets an all-True mask (no cell is impossible to name)."""
+    tab = ScreenCellTable.get()
+    pos = collector.positions(); n = pos.shape[0]
+    out = np.ones((n, len(SCREEN_X_VALUES), len(SCREEN_Y_VALUES)), bool)
+    for i in range(n):
+        if np.isfinite(pos[i, 0]):
+            m = tab.walkable_cells(pos[i, 0], pos[i, 1], collector.frames[collector.teams[i % collector.T]])
+            if m.any():
+                out[i] = m
+    return out
+
+
 class StepDiag:
     """Per-step, per-agent record of what the code COMPUTED, written by both
     the training rollout and frozen evaluation (`<run>/diag/steps_NNNNN.npz`).
@@ -110,21 +160,14 @@ class StepDiag:
         self.dir = Path(run_path) / "diag"; self.dir.mkdir(parents=True, exist_ok=True)
         self.collector, self.flush_rows = collector, flush_rows
         self.rows, self.chunk = [], 0
-        t = _snap_table_np()
+        tab = ScreenCellTable.get(); t = tab.t
         standable = t["standable"].reshape(t["height"], t["width"]).astype(bool)
         try:
             from scipy import ndimage
             self.wall = ndimage.distance_transform_edt(standable) * t["cell"]
         except ImportError:
             self.wall = np.where(standable, np.nan, 0.0)
-        self.t = t
-        # Lane-frame offsets of every screen cell centre (champion-independent).
-        ds = np.zeros((len(SCREEN_X_VALUES), len(SCREEN_Y_VALUES))); dn = ds.copy()
-        for ix, sx in enumerate(SCREEN_X_VALUES):
-            for iy, sy in enumerate(SCREEN_Y_VALUES):
-                ds[ix, iy], dn[ix, iy] = screen_to_world_centred(0., 0., float(sx), float(sy))
-        self.ds, self.dn = ds, dn
-        self.minimap = (np.asarray(SCREEN_X_VALUES)[:, None] >= MINIMAP_X_MIN) & (np.asarray(SCREEN_Y_VALUES)[None, :] >= MINIMAP_Y_MIN)
+        self.t, self.ds, self.dn, self.minimap = t, tab.ds, tab.dn, tab.minimap
 
     def _standable_xy(self, x, y):
         t = self.t
@@ -791,13 +834,16 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                 rng = jax.random.fold_in(rng, start_update)
                 run.set_results(resumed_from=str(resume), resumed_update=start_update)
             print(f"resumed {resume} at update {start_update}", flush=True)
+        use_mask = bool(getattr(policy.cfg, "click_mask", False))
+        if use_mask and not hasattr(collector, "positions"):
+            raise ValueError("click_mask needs a collector with positions()")
         @jax.jit
-        def act(params, obs, key, carry=None):
+        def act(params, obs, key, carry=None, click_mask=None):
             if recurrent:
                 logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
             else:
                 logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
-            action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
+            action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask, click_mask=click_mask)
             return action, lp, usage, logits.value, carry, policy_click_marginals(logits)
         diag = StepDiag.create(run.path, collector) if diag_steps else None
         @jax.jit
@@ -815,7 +861,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             carry0 = carry
             for t in range(rollout):
                 rng, key = jax.random.split(rng)
-                action, lp, usage, value, new_carry, (px, py, ent) = act(params, obs, key, carry)
+                click_mask = jnp.asarray(click_mask_host(collector)) if use_mask else None
+                action, lp, usage, value, new_carry, (px, py, ent) = act(params, obs, key, carry, click_mask)
                 host_actions = np.stack(jax.device_get(action), axis=-1)
                 sampled_buttons += np.bincount(host_actions[:, 0], minlength=len(BUTTONS))
                 sampled_r_unranked += int(np.sum(
@@ -829,7 +876,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                     stats[:, 2], next_stats[:, 2], done, cfg.gamma, *xp)
                 rows.append({"entities": obs.entities, "mask": obs.entity_pad_mask,
                     "self": obs.self_vec, "global": obs.global_vec, "action": action,
-                    "log_prob": lp, "uses_screen": usage[0], "uses_target": usage[1], "value": value})
+                    "log_prob": lp, "uses_screen": usage[0], "uses_target": usage[1], "value": value,
+                    **({"click_mask": click_mask} if use_mask else {})})
                 if diag is not None:
                     diag.add(u, t, stats, next_stats, jax.device_get(terms), np.asarray(value),
                              np.asarray(px), np.asarray(py), np.asarray(ent), host_actions, np.asarray(done))
@@ -847,7 +895,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                     # applies the same reset from the stored `done` flags.
                     carry = jnp.where(jnp.asarray(done)[:, None], 0.0, new_carry)
             rng, key = jax.random.split(rng)
-            _, _, _, last_v, _, _ = act(params, obs, key, carry)
+            _, _, _, last_v, _, _ = act(params, obs, key, carry, jnp.asarray(click_mask_host(collector)) if use_mask else None)
             adv, returns = gae(jnp.stack(rewards), jnp.stack(values), jnp.asarray(dones),
                                last_v, cfg.gamma, cfg.gae_lambda)
             if recurrent:
@@ -866,7 +914,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # Independent rollout/recompute equality before any optimizer step.
             logits = forward(params, batch)
             recomputed = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
-                batch["action"], batch["uses_screen"], batch["uses_target"])
+                batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"))
             # Head-mask mismatches are O(1) errors; a near-deterministic policy
             # (a BC clone) has log-probs of -20 and beyond whose float32
             # recomputation differs by ~1e-4, which failed the old 2e-5 gate
@@ -882,7 +930,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # moved the policy by 0.3 (PPO-16, E11/E12b). This is the drift.
             logits = forward(params, batch)
             post_lp = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
-                batch["action"], batch["uses_screen"], batch["uses_target"])
+                batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"))
             metrics["post_kl"] = float(jnp.mean(batch["log_prob"] - post_lp))
             if not all(np.isfinite(np.asarray(v)).all() for v in jax.tree.leaves(params)) or metrics.get("loss_nonfinite", 0):
                 raise RuntimeError("nonfinite learner; refusing latest checkpoint")
@@ -942,8 +990,9 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
     """
     rng = jax.random.key(seed)
     recurrent = act_fn is None and getattr(policy.cfg, "core", "mlp") == "gru"
+    use_mask = act_fn is None and bool(getattr(policy.cfg, "click_mask", False))
     @jax.jit
-    def act(params, obs, key, carry=None):
+    def act(params, obs, key, carry=None, click_mask=None):
         if act_fn is not None:
             # A scripted player through the SAME observation/click interface
             # (`train/scripted_policy.py`): the interface oracle.
@@ -957,7 +1006,7 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
             # evaluations misleading us before; never a gate number.
             action = (jnp.argmax(logits.button, -1), jnp.argmax(logits.screen_x, -1), jnp.argmax(logits.screen_y, -1))
         else:
-            action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask)
+            action, lp, usage = _sample(logits, key, ~obs.entity_pad_mask, click_mask=click_mask)
         return action, carry, (logits.value, *policy_click_marginals(logits))
     carry = policy.initial_carry((collector.n,)) if recurrent else None
     diag = StepDiag.create(run.path, collector) if (diag_steps and act_fn is None) else None
@@ -971,7 +1020,7 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
     try:
         while (done_count < episodes_per_env).any():
             rng, key = jax.random.split(rng)
-            action, carry, extra = act(params, obs, key, carry)
+            action, carry, extra = act(params, obs, key, carry, jnp.asarray(click_mask_host(collector)) if use_mask else None)
             host_actions = np.stack(jax.device_get(action), axis=-1)
             if traj is not None:
                 # (obs, action) pairs per agent row, for behaviour-cloning diagnostics
@@ -1078,6 +1127,7 @@ def main():
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
     p.add_argument("--no-diag", action="store_true", help="skip the per-step diagnostic record (<run>/diag/)")
+    p.add_argument("--click-mask", action="store_true", help="sample clicks from the masked joint distribution over walkable cells (INT-001 principled fix; PolicyConfig.click_mask)")
     p.add_argument("--unwalkable-click", choices=("resolve", "noop"), default="resolve",
                    help="movement click onto unwalkable ground: resolve to the closest reachable point (server/snap) or drop it (INT-001)")
     p.add_argument("--no-snap-clicks", action="store_true",
@@ -1132,7 +1182,7 @@ def main():
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
     UNWALKABLE_CLICK["mode"] = args.unwalkable_click
-    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual)
+    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask)
     if args.init_from is not None:
         if args.resume is not None:
             p.error("--init-from and --resume are exclusive")

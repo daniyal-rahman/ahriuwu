@@ -1,0 +1,39 @@
+{
+ "id": "E20_noprior_clickmask",
+ "question": "E15 recipe (fixed GRU, standard PPO, mirror, XP 0.002, seed 0) with the click sampled from the MASKED JOINT distribution over walkable cells (invalid-action masking; same parameters, PolicyConfig.click_mask). The principled INT-001 fix Dani asked for: no probability mass on impossible clicks, PPO consistent under the mask. Compare with E15 (28.5 / 31.8 final; dropped clicks) at equal updates.",
+ "port_base": 27700,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 8,
+  "mem": "12G",
+  "time": "12:00:00"
+ },
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 3000,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "gru",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   500,
+   1000,
+   2000,
+   4000
+  ],
+  "seed": 0,
+  "core-norm": true,
+  "core-residual": true,
+  "unwalkable-click": "noop",
+  "click-mask": true
+ },
+ "note": "cpu partition (GPU visible) because E13 holds the gpup allocation"
+}

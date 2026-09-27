@@ -110,6 +110,11 @@ class PolicyConfig(NamedTuple):
     #: GRU clone that could not memorise 16 sequences (probes/gru_bc_*).
     core_norm: bool = False
     core_residual: bool = False
+    #: INT-001 principled fix: the click is sampled from the masked joint
+    #: distribution over WALKABLE screen cells (`ppo.joint_click_logits`), and
+    #: the loss uses the same masked log-prob. No parameters change; the
+    #: collector supplies the mask per step from the champion's position.
+    click_mask: bool = False
 
 
 class ActionLogits(NamedTuple):

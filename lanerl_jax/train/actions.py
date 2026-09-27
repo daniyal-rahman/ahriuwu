@@ -123,6 +123,36 @@ def move_snap_table() -> MoveSnapTable:
         return build_move_snap_table(map1_terrain())
 
 
+@lru_cache(maxsize=1)
+def screen_cell_offsets():
+    """(96, 54) lane-frame offsets (ds, dn) of every screen cell centre and the
+    minimap exclusion, as constants (the click mask's geometry)."""
+    from lanerl_rl.constants import SCREEN_X_VALUES, SCREEN_Y_VALUES
+    from lanerl_rl.projection import screen_to_world_centred, MINIMAP_X_MIN, MINIMAP_Y_MIN
+    ds = np.zeros((N_SCREEN_X, N_SCREEN_Y)); dn = ds.copy()
+    for ix, sx in enumerate(SCREEN_X_VALUES):
+        for iy, sy in enumerate(SCREEN_Y_VALUES):
+            ds[ix, iy], dn[ix, iy] = screen_to_world_centred(0., 0., float(sx), float(sy))
+    minimap = (np.asarray(SCREEN_X_VALUES)[:, None] >= MINIMAP_X_MIN) & (np.asarray(SCREEN_Y_VALUES)[None, :] >= MINIMAP_Y_MIN)
+    return jnp.asarray(ds, jnp.float32), jnp.asarray(dn, jnp.float32), jnp.asarray(~minimap)
+
+
+def click_mask_from_position(x, y, axis, normal, table: MoveSnapTable | None = None):
+    """(96, 54) bool: screen cells whose world point is standable and off the
+    minimap, for a champion at (x, y) with lane frame (axis, normal). The
+    device-side twin of `server_train.click_mask_host`; all-True if nothing
+    is standable (a dead/absent champion), so sampling stays defined."""
+    t = move_snap_table() if table is None else table
+    ds, dn, not_minimap = screen_cell_offsets()
+    wx = x + ds * axis[0] + dn * normal[0]; wy = y + ds * axis[1] + dn * normal[1]
+    dtype = jnp.result_type(wx, jnp.float32); cs = jnp.asarray(t.cell_size, dtype)
+    nx = (wx - jnp.asarray(t.min_x, dtype)) / cs; ny = (wy - jnp.asarray(t.min_y, dtype)) / cs
+    in_grid = (nx >= 0) & (nx < t.width) & (ny >= 0) & (ny < t.height)
+    ix = jnp.clip(jnp.floor(nx), 0, t.width - 1).astype(jnp.int32); iy = jnp.clip(jnp.floor(ny), 0, t.height - 1).astype(jnp.int32)
+    ok = in_grid & t.standable[iy * jnp.int32(t.width) + ix] & not_minimap
+    return jnp.where(jnp.any(ok), ok, True)
+
+
 def snap_move_point(x, y, table: MoveSnapTable | None = None):
     """Clamp a world point to the grid and snap it to a standable cell.
 
