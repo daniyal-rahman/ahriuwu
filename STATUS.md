@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-28 02:30 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 04:10 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -28,8 +28,11 @@ the trunk + per-term trunk gradient norms: value term into the trunk = 0, policy
 term 10-27, entropy term 0.06, and entropy still rises 0.31 -> 0.59 in 7 updates
 (E14's rate). So the critic is not the driver; the policy-gradient term is
 (softmax-saturation asymmetry: reinforcing a rare action raises entropy, suppressing
-one changes nothing). E21's frozen CS decides; E22 = KL-to-prior penalty (the
-league/AlphaStar anchor) is being implemented.
+one changes nothing). E21 slid too (u280 37.5 / 41.8). `probes/prior_drift_probe.py`: the collapse
+rewrote the trunk (feature cosine 0.36 vs prior) while staying sharp = step size;
+the slow slide keeps the representation (cosine 0.9+) and 93-96% of click mass
+near the prior's click but the peak cell wanders (matches 30-48%) = precision
+loss, no directed shift. E22 = KL-to-prior penalty, launching behind E21.
 
 **PER-STEP RECORD (23:00 UTC):** every run now logs value, reward terms, click mass and
 position per step (`<run>/diag/`, `ops/diag_report.py`). On E12b/E06/E15 it shows: the
