@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-28 08:10 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 09:40 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -12,7 +12,15 @@ handoff in the chat log). Parity (PARITY-002): both engines deterministic (4 ser
 vs server 65, mirror 48 / 43 vs 45 / 43. Wave POPULATIONS match within 4% by type
 with the same cadence and lifetimes; the residual is wave-clash TIMING (fronts
 2-3k u apart at moments), and the ~5-CS solo offset flips sign between measurement
-paths. Side-by-side videos in `runs/PARITY/side_by_side/`. Next: mirror side-by-side.
+paths. Side-by-side videos in `runs/PARITY/side_by_side/` (solo and mirror). ROOT CAUSE FOUND:
+the JAX red-lane path's barracks-exit vertex was 65-119 u off the server's walked
+line (every JAX red minion lost ~1 s / ~100 u joining it); `TOP_LANE_PATH`'s red end
+is now the server's measured line. Residual: the server's red minions crawl ~0.4 s
+through the barracks turns (unmodelled). Single deterministic games are CHAOTIC in CS
+under sub-second offsets, so parity is now measured as a MEAN over 16 games with
+seeded start jitter (`--start-jitter-s 20`, both engines): JAX runs on the login
+node now; the server runs wait for the desktop (booted to Windows, 09-28 ~09:30 UTC;
+E20's final evaluation is queued behind it too).
 ## Reference PPO port
 
 Live learner ported to PureJaxRL `ppo_rnn.py` revision
