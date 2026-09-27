@@ -177,8 +177,12 @@ def main():
     if a.experiment == "eval":
         ck = must_exist("checkpoint", a.ckpt); must_exist("manifest", Path(srv(a.ckpt)).parent / "manifest.json")
         # Concurrent evaluations must not share ports: offset by the live EVAL jobs.
-        n_live = sum(1 for j in live_jobs() if j[0].startswith("EVAL"))
-        spec = {"id": "EVAL", "port_base": 24300 + 40 * n_live, "slurm": {"partition": "cpu", "cpus": 2, "mem": "4G", "time": "4:00:00"},
+        # Ports from a hash of the tag, not from the live-job count: two
+        # evaluators submitting within seconds saw the same count and shared a
+        # port block (E19 u240: "server 2 produced no first observation").
+        import zlib
+        port_base = 24300 + 40 * (zlib.crc32(a.tag.encode()) % 180)
+        spec = {"id": "EVAL", "port_base": port_base, "slurm": {"partition": "cpu", "cpus": 2, "mem": "4G", "time": "4:00:00"},
                 "args": {"envs": a.envs, "opponent": a.opponent or "mirror", "start-near-wave": True, "step-ticks": 6,
                          "episode-s": 600, "eval-episodes": a.episodes, "seed": 0}}
         args = build_args(spec, argparse.Namespace(seed=None, init_from=None, resume=ck, opponent_ckpt=a.opponent_ckpt))
