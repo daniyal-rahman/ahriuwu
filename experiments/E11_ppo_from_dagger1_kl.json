@@ -1,13 +1,13 @@
 {
  "id": "E11_ppo_from_dagger1_kl",
- "question": "LEARNER TEST, fine-tuning form: same as E10 but lr 5e-5 and KL early stop 0.02 per update, because E10's first update moved the sharp clone by KL 0.38 (clip fraction 0.54): plain PPO from a near-deterministic prior explodes the ratios. Does constrained PPO preserve/improve the 24/33-CS clone?",
+ "question": "LEARNER TEST, fine-tuning form: same as E10 but lr 5e-5 and KL early stop 0.02 per update, because E10's first update moved the sharp clone by KL 0.38 (clip fraction 0.54): plain PPO from a near-deterministic prior explodes the ratios. Does constrained PPO preserve/improve the DAgger-2 clone (45/50 CS)?",
  "port_base": 26100,
  "slurm": {
   "partition": "gpup",
   "cpus": 8,
   "mem": "12G"
  },
- "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/BC/bc-mlp-20260926-233833-addea346/ckpt_latest.msgpack",
+ "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/BC/bc-mlp-20260927-000035-6817e3d2/ckpt_latest.msgpack",
  "args": {
   "envs": 10,
   "opponent": "mirror",

@@ -28,7 +28,10 @@ the gate region. E09 stopped (superseded). E10 = plain PPO from the DAgger-1
 clone: its FIRST update moved the policy by KL 0.38 (clip 0.54): a
 near-deterministic prior makes PPO's ratios explode, the known
 fine-tune-from-BC failure. Its u100 eval is kept as evidence; E11 (lr 5e-5,
-KL stop 0.02) is the fine-tuning form and replaces it. DAgger round 2 running. E08 (from the weak clone) stopped; E09 = PPO
+KL stop 0.02) is the fine-tuning form and replaces it. DAgger round 2 (00:15 UTC): **45.5 / 49.5 CS sampled** -- a network policy
+above the gate through this interface (prior-derived). E11's init switched to
+it. Cross-play launched: E04 and E06 checkpoints vs the DAgger-2 clone on the
+C# server (frozen opponent, learner side alternating). E08 (from the weak clone) stopped; E09 = PPO
 from the strong clone launched 23:15 UTC: frozen u120 9.3 / 11.3, up from the
 clone's 7.8 / 5.3, train chunks 3 -> 10 (improving, not degrading).
 **Running:** E08; BC diagnostic training (mlp, gru) on 19,196 x 8 scripted mirror
