@@ -233,15 +233,20 @@ MINION_SPAWN: Dict[int, Tuple[float, float]] = {
 #: progress (measured on the same deterministic scripted game: identical
 #: spawn coordinates and times, identical first two seconds, then the JAX
 #: minion walked straight down to the vertex while the server's cut west).
-#: The last four vertices below are the server's walked line
-#: (`runs/PARITY/srv_trace_idle_740`, 1-s samples of the 126.5 s wave:
-#: (12481, 12891) -> (12252, 12877) -> (12203, 12780) -> (12111, 12753) ->
-#: (12006, 12807) -> lane). Blue's end matched the server to the unit already.
+#: The last seven vertices below are the server's walked line out of the
+#: barracks (`runs/PARITY/srv_trace_idle_740`, Douglas-Peucker 15 u on the
+#: recorded track, INCLUDING its east-west detour: dropping the detour put
+#: the JAX minion 200 u AHEAD). UNMODELLED: the server minion crawls at
+#: ~120 u/s for ~0.6 s through those sharp turns (blue's straight exit does
+#: not), so JAX red minions still reach the lane ~0.4 s / ~130 u early; the
+#: speed profiles are in the ledger (PARITY-002). Blue's end matched the
+#: server to the unit.
 TOP_LANE_PATH: Tuple[Tuple[float, float], ...] = (
     (917.0, 1725.0), (1170.0, 4041.0), (861.0, 6459.0), (880.0, 10180.0),
     (1268.0, 11675.0), (2806.0, 13075.0), (3907.0, 13243.0), (7550.0, 13407.0),
     (10244.0, 13238.0), (10947.0, 13135.0), (12006.0, 12807.0), (12111.0, 12753.0),
-    (12252.0, 12878.0), (12481.0, 12891.0),
+    (12252.0, 12780.0), (12247.0, 12878.0), (12486.0, 12836.0), (12435.0, 13075.0),
+    (12468.0, 13094.0),
 )
 
 #: Champion max HP above the Content base curve. **Not runes** -- the rune page
