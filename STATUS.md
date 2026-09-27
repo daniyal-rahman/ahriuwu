@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 14:25 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 15:05 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -59,7 +59,10 @@ recording (`runs/JAX_ORACLE/demos_mirror`). Step 2: GRU clone
 (`train/bc_diag.py --core gru`, `runs/BC/bc-gru-*`), then DAgger rounds on
 JAX rollouts. **E13** (no-prior fixed-wiring GRU on JAX, `runs/E13_jax_gru_scratch`) PAUSED at
 ~u90 (14:20 UTC) to give E14 its cores; resume with `sbatch slurm/jax_train.sbatch ... --resume <ckpt_latest>`
-(see `experiments/E13_jax_gru_scratch.json`). E14 (PPO-16 fix arm, lr 1e-5 from E12a) running since 14:20.
+(see `experiments/E13_jax_gru_scratch.json`). E14 (PPO-16 fix arm, lr 1e-5 from E12a) COMPLETE at u400 in 24 min: post_kl
+0.006-0.023 per update, training CS windows 31 / 24 / 27 where E12b had 3 / 1 / 0:
+the prior survives; frozen final eval running. E15 frozen: u100 12.8 / 11.0,
+u280 20.8 / 12.0 -- ahead of E06's pace (8.5 / 13.5 at u620).
 Step 3: PPO on JAX from the GRU clone (`jax_train.py
 --init-from --core gru --preset standard`). Step 4: `ops/launch.py eval
 --ckpt <E04> --opponent frozen --opponent-ckpt <jax gru>` on the C# server.
