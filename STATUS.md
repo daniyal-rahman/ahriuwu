@@ -30,7 +30,8 @@ Step 1 done: scripted last-hitter on the JAX sim vs idle red = 65 CS on all
 140 s wall (~550 dec/s at 16 envs, 5.5 GB GPU). Mirror scripted demos
 recording (`runs/JAX_ORACLE/demos_mirror`). Step 2: GRU clone
 (`train/bc_diag.py --core gru`, `runs/BC/bc-gru-*`), then DAgger rounds on
-JAX rollouts. Step 3: PPO on JAX from the GRU clone (`jax_train.py
+JAX rollouts. Also running: **E13** = no-prior fixed-wiring GRU on JAX (job 1576, `runs/E13_jax_gru_scratch`), the JAX twin of E06.
+Step 3: PPO on JAX from the GRU clone (`jax_train.py
 --init-from --core gru --preset standard`). Step 4: `ops/launch.py eval
 --ckpt <E04> --opponent frozen --opponent-ckpt <jax gru>` on the C# server.
 Porting issues: the shared-loop JAX trainer is server-speed (430-550
