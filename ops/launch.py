@@ -139,6 +139,8 @@ def watch_startup(name, log_glob, seconds=300):
         if state and state[0] == "RUNNING":
             break
         if not state:
+            if time.time() - t0 < 90:      # an srun job takes a moment to appear in squeue
+                time.sleep(5); continue
             sys.exit(f"STARTUP FAILED: job {name} left the queue before running")
         time.sleep(10)
     else:

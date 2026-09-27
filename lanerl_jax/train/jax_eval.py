@@ -117,20 +117,28 @@ def evaluate(args):
         initial_parameter_hash = hashlib.sha256(to_bytes(params)).hexdigest()
         key = jax.random.key(args.seed)
 
+        recurrent = getattr(policy.cfg, 'core', 'mlp') == 'gru'
+        carry = None   # GRU: created on the first observation with its batch shape
+
         @jax.jit
-        def sample(obs, rng):
-            logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
+        def sample(obs, rng, carry):
+            if recurrent:
+                logits, carry = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
+            else:
+                logits = policy.apply(params, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
             action, _, _ = _sample(logits, rng, ~obs.entity_pad_mask)
             finite = jnp.all(jnp.stack([jnp.all(jnp.isfinite(x))
                                         for x in jax.tree.leaves(logits)]))
-            return jnp.stack(action, axis=-1), finite
+            return jnp.stack(action, axis=-1), finite, carry
 
         def choose(obs):
-            nonlocal key
+            nonlocal key, carry
             if not all(np.isfinite(np.asarray(a)).all() for a in jax.tree.leaves(obs)):
                 raise RuntimeError('nonfinite actor observation')
             key, action_key = jax.random.split(key)
-            action, finite = sample(obs, action_key)
+            if recurrent and carry is None:
+                carry = policy.initial_carry(tuple(np.shape(obs.entities)[:-2]))
+            action, finite, carry = sample(obs, action_key, carry)
             if not bool(finite):
                 raise RuntimeError('nonfinite frozen policy output')
             return np.asarray(action)
