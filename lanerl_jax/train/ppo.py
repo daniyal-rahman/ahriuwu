@@ -343,7 +343,11 @@ def joint_click_logits(lg_x, lg_y, click_mask):
     masking (Huang & Ontanon 2020), INT-001's principled fix. Returns
     ``(..., n_x * n_y)`` logits with ``-inf`` on masked cells."""
     joint = lg_x[..., :, None] + lg_y[..., None, :]
-    joint = jnp.where(click_mask, joint, -jnp.inf)
+    # A large FINITE penalty, not -inf: with -inf the entropy's p * log p is
+    # 0 * -inf = NaN on masked cells and its gradient poisons the update even
+    # under jnp.where (E20 canary: "nonfinite learner"). exp(-1e4) underflows
+    # to exactly 0 in float32, so the masked mass is zero either way.
+    joint = jnp.where(click_mask, joint, -1e4)
     return joint.reshape(joint.shape[:-2] + (-1,))
 
 
@@ -355,8 +359,7 @@ def joint_click_log_prob(lg_x, lg_y, click_mask, a_x, a_y):
 
 def joint_click_entropy(lg_x, lg_y, click_mask):
     lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask), axis=-1)
-    p = jnp.exp(lp)
-    return -jnp.sum(jnp.where(p > 0, p * lp, 0.0), axis=-1)
+    return -jnp.sum(jnp.exp(lp) * lp, axis=-1)
 
 
 def factored_log_prob(logits, actions, uses_screen=None,

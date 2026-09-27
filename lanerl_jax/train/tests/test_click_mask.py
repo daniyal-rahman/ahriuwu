@@ -37,3 +37,14 @@ def test_click_mask_from_position_shapes():
     from lanerl_jax.train.actions import click_mask_from_position
     m = click_mask_from_position(jnp.float32(1500.), jnp.float32(12800.), jnp.asarray([0.697, 0.717]), jnp.asarray([-0.717, 0.697]))
     assert m.shape == (N_X, N_Y) and 0.2 < float(m.mean()) < 0.9
+
+def test_masked_loss_gradient_is_finite():
+    """The E20 canary: entropy/log-prob gradients through the mask must be finite."""
+    from lanerl_jax.train.ppo import joint_click_log_prob
+    lg = _logits(jax.random.key(3), n=16); rng = np.random.default_rng(1)
+    mask = jnp.asarray(rng.random((16, N_X, N_Y)) < 0.3)
+    a_x = jnp.argmax(jnp.where(mask.any(-1), 1.0, 0.0), -1); a_y = jnp.argmax(mask[jnp.arange(16), a_x], -1)
+    def loss(lx, ly):
+        return (joint_click_entropy(lx, ly, mask) + joint_click_log_prob(lx, ly, mask, a_x, a_y)).sum()
+    gx, gy = jax.grad(loss, argnums=(0, 1))(lg.screen_x, lg.screen_y)
+    assert bool(jnp.isfinite(gx).all()) and bool(jnp.isfinite(gy).all())
