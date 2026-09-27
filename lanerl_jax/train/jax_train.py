@@ -84,7 +84,7 @@ def main():
     if src_ckpt is not None and (src_ckpt.parent / 'manifest.json').exists():
         saved = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})
         if saved:
-            pcfg = PolicyConfig(**saved)
+            pcfg = PolicyConfig(**{**saved, "click_mask": args.click_mask or saved.get("click_mask", False)})
     policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.jax_train', *sys.argv[1:]])
     run = RunDir(args.out, f'jax-farm-s{args.seed}', {

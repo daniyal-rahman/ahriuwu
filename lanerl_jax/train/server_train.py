@@ -1201,7 +1201,11 @@ def main():
         # a silently untrained core.
         saved = json.loads((args.resume.parent / "manifest.json").read_text()).get("config", {}).get("train", {}).get("policy", {})
         if saved:
-            pcfg = PolicyConfig(**saved)
+            # Architecture from the checkpoint; the INTERFACE/training switches
+            # (no parameters) stay under the flags, so a fine-tune can turn
+            # them on: E21 --detach-critic from E12a, E20-style --click-mask.
+            pcfg = PolicyConfig(**{**saved, "click_mask": args.click_mask or saved.get("click_mask", False),
+                                   "detach_critic": args.detach_critic or saved.get("detach_critic", False)})
     policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.server_train', *sys.argv[1:]])
     run = RunDir(args.out, f"server-farm-s{args.seed}", {"train": {"policy": policy.cfg._asdict()},
