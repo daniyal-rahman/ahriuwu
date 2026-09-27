@@ -807,7 +807,15 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec, carry)
         else:
             params = policy.init(init_key, obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec)
-        tx, loss = make_learner(policy, cfg, anneal_steps=(updates * cfg.epochs * n_minibatches) if lr_anneal else 0)
+        prior_params = None
+        if cfg.kl_prior_coef > 0:
+            if resume is None:
+                raise ValueError("kl_prior_coef needs a prior: --init-from <checkpoint>")
+            from flax.serialization import from_state_dict as _fsd, msgpack_restore as _mr
+            prior_params = jax.tree.map(jnp.asarray, _fsd(params, _mr(Path(resume).read_bytes())["params"]))
+            run.set_results(kl_prior=str(resume))
+        tx, loss = make_learner(policy, cfg, anneal_steps=(updates * cfg.epochs * n_minibatches) if lr_anneal else 0,
+                                prior_params=prior_params)
         # Jitted ONCE. Calling loss.forward eagerly re-traced its scan closure
         # every update: a fresh compiled executable per update, ~10 MB each,
         # which is what walked E06 into slurm's memory limit (OOM at u1931).
@@ -1115,6 +1123,7 @@ def main():
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
     p.add_argument("--target-kl", type=float, default=None, help="KL early stop per update (fine-tuning a sharp prior needs ~0.02)")
+    p.add_argument("--kl-prior", type=float, default=None, help="coefficient of KL(prior || policy) to the --init-from checkpoint (the league / AlphaStar anchor)")
     p.add_argument("--minibatches", type=int, default=1)
     p.add_argument("--opponent", choices=("idle", "mirror", "frozen"), default="idle",
                    help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions; "
@@ -1179,6 +1188,7 @@ def main():
     if args.entropy_coef is not None: over["entropy_coef"] = args.entropy_coef
     if args.epochs is not None: over["epochs"] = args.epochs
     if args.target_kl is not None: over["target_kl"] = args.target_kl
+    if args.kl_prior is not None: over["kl_prior_coef"] = args.kl_prior
     if args.normalize_advantage: over["normalize_advantage"] = True
     cfg = cfg._replace(**over)
     # The rollout/recompute likelihood check compares per-step and batched

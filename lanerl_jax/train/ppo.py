@@ -175,6 +175,10 @@ class PPOConfig(NamedTuple):
     value_clip_eps: float = 0.2
     clip_value_loss: bool = True
     entropy_coef: float = 0.001
+    #: KL(prior || policy) penalty to a FROZEN prior (the init-from
+    #: parameters): the league / AlphaStar anchor for fine-tuning from a
+    #: behaviour-cloned prior. 0 = off. `learner.make_learner(prior_params=)`.
+    kl_prior_coef: float = 0.0
     max_grad_norm: float = 1.0
     target_kl: float = 0.02
     lr: float = 1e-5

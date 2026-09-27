@@ -13,7 +13,7 @@ from .policy import VALUE_HEAD_NAME
 from .ppo import (factored_log_prob, _entropy, policy_loss, value_loss, joint_click_entropy)
 
 
-def make_learner(policy, ppo, *, anneal_steps: int = 0):
+def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
     """``anneal_steps`` > 0: linear lr decay to zero over that many optimizer
     steps (updates x epochs x minibatches), the CleanRL default."""
     def _label(params):
@@ -56,6 +56,27 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0):
         _, logits = jax.lax.scan(step, batch["carry0"], (ent, mask, sv, gv, d_prev))
         return jax.tree.map(tm, logits)          # back to [N, T, ...]
 
+    def _head_kl(p_lg, q_lg):
+        """KL(p || q) per sample for one head of logits."""
+        lp, lq = jax.nn.log_softmax(p_lg, -1), jax.nn.log_softmax(q_lg, -1)
+        return jnp.sum(jnp.exp(lp) * (lp - lq), axis=-1)
+
+    def kl_to_prior(params, batch):
+        """Mean KL(prior || current) over the batch, summed over the heads
+        (masked joint click when a click mask is present). The prior's
+        forward pass runs under stop_gradient: it is a fixed reference."""
+        cur = forward(params, batch)
+        pri = jax.lax.stop_gradient(forward(prior_params, batch))
+        cm = batch.get("click_mask")
+        kl = _head_kl(pri.button, cur.button)
+        if cm is not None:
+            from .ppo import joint_click_logits
+            kl = kl + _head_kl(joint_click_logits(pri.screen_x, pri.screen_y, cm),
+                               joint_click_logits(cur.screen_x, cur.screen_y, cm))
+        else:
+            kl = kl + _head_kl(pri.screen_x, cur.screen_x) + _head_kl(pri.screen_y, cur.screen_y)
+        return kl.mean()
+
     def _loss(params, batch, cfg_ppo):
         logits = forward(params, batch)
         lg = (logits.button, logits.screen_x, logits.screen_y)
@@ -74,8 +95,12 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0):
         pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy
-        return total, {"policy_loss": pl, "value_loss": vl, "entropy": entropy,
-                       **stats}
+        info = {"policy_loss": pl, "value_loss": vl, "entropy": entropy, **stats}
+        if prior_params is not None and cfg_ppo.kl_prior_coef > 0:
+            klp = kl_to_prior(params, batch)
+            total = total + cfg_ppo.kl_prior_coef * klp
+            info["kl_prior"] = klp
+        return total, info
 
     _loss.forward = forward
 
