@@ -33,6 +33,10 @@ labelled `train`.
 | `JAX_ORACLE/dagger1` -> `BC/bc-grunr-20260927-102346` | 09-27 10:23 | JAX | DAgger round 1 (relabelled clone rollout + demos, 9582 x 32 steps), 60 epochs | - | clone trained; round 2 rollout measures it | `ops/jax_dagger_round.py 1` |
 | `EVAL/replay_E12b_u140`, `_u600` | 09-27 12:05 | C# | E12b midway and degenerate replays, mirror, seed 0 | 1 ep | u140: 11 / 7 CS, attack-move 18% of decisions; u600: 0 / 0, attack-move 9%, red 579 no-ops | videos `map/replay.mp4`, `combat/replay.mp4` |
 | `E13_jax_gru_scratch/seed0` | 09-27 10:50 | JAX | no-prior GRU (norm + residual), standard preset, mirror, 16 envs, lr anneal, job 1576 | budget 3000 | running | JAX twin of E06 with a core that sees; compare point |
+| `JAX_ORACLE/dagger2` -> `BC/bc-grunr-20260927-105448` | 09-27 10:33 | JAX | DAgger round 2; round-1 clone measured closed-loop first | - | **round-1 GRU clone: 41.0 / 44.4 CS sampled JAX mirror (26-59 / 34-58), 1.8 deaths** | JAX heuristics-init GRU above the gate; compare point |
+| `EVAL/XPLAY_E04_vs_jaxgru` | 09-27 13:40 | C# | E04 vs the JAX DAgger-1 GRU clone (frozen opponent), 4 servers x 2 | 8 ep | running | the cross-play Dani asked for |
+| `EVAL/XFER_jaxgru_mirror` | 09-27 13:40 | C# | the JAX GRU clone in a server mirror | 8 ep | running | JAX -> server transfer of a 41-CS policy |
+| `E15_noprior_gru_noopclick/seed0` | 09-27 13:35 | C# | no-prior GRU (norm+residual) + unwalkable clicks dropped (INT-001), standard preset, mirror, job 1603 | budget 3000 | running | THE gate test after ARCH-001 + INT-001 |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |
