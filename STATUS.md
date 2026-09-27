@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 11:40 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 13:10 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -17,6 +17,17 @@ advantage normalisation on near-zero-variance batches, entropy 0.01/3 per
 head pulling apart a sharp policy (entropy 0.3 -> 1.0 in E11), deaths
 (-2, ~4 per update across 20 agents in mirror) dominating the per-update
 signal, GAE/done handling in the [N,T] batch. E12b cancelled (its job).
+
+**WALL HUGGING = CLICK INTERFACE (INT-001, 13:10 UTC), Dani's top priority:**
+not bushes (server vision ignores grass; sim has none), not the potential
+(0 inside a corridor that contains the walls), not XP. Clicks onto unwalkable
+ground resolve to the closest reachable point = the wall; 43-49% of E06's
+clicks were unwalkable (51-58% near walls), so a diffuse policy is pulled to
+walls and held. Random policy, same seed: 35% of frames within 150 u of a
+wall with resolve, 6% with the new `--unwalkable-click noop`. **E15** =
+no-prior GRU (fixed core) + noop clicks, launching via `ops/launch.py`
+(`runs/E15_noprior_gru_noopclick`). Masking unwalkable cells (joint 2-D click
+head) is the principled follow-up.
 
 **WHY THE PRIOR DEGRADES (PPO-16, 11:40 UTC):** E12b applied ONE minibatch
 step per update: the KL stop measures pre-step KL, the first step is always
