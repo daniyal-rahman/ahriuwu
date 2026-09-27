@@ -128,6 +128,38 @@ def submit(spec, args, name, dry):
     print("srun started; log", log); return "srun"
 
 
+def watch_startup(name, log_glob, seconds=180):
+    """After submission: wait for RUNNING, then watch for `seconds` that the job
+    stays in the queue and its log shows no traceback. A run that dies on
+    startup (bad resume path, port, memory) is reported here, not hours later."""
+    import glob
+    t0 = time.time()
+    while time.time() - t0 < 600:
+        state = [j[1] for j in live_jobs() if j[0] == name]
+        if state and state[0] == "RUNNING":
+            break
+        if not state:
+            sys.exit(f"STARTUP FAILED: job {name} left the queue before running")
+        time.sleep(10)
+    else:
+        print(f"warning: {name} still pending after 10 min; not watched", flush=True); return
+    started = time.time()
+    while time.time() - started < seconds:
+        time.sleep(15)
+        if not any(j[0] == name for j in live_jobs()):
+            logs = sorted(glob.glob(log_glob), key=os.path.getmtime)
+            tail = ""
+            if logs:
+                lines = [l for l in open(logs[-1], errors="replace").read().splitlines() if "absl" not in l and "cudart" not in l]
+                tail = "\n".join(lines[-15:])
+            sys.exit(f"STARTUP FAILED: {name} exited within {seconds}s of starting.\n{tail}")
+        for lg in sorted(glob.glob(log_glob), key=os.path.getmtime)[-1:]:
+            txt = open(lg, errors="replace").read()
+            if "Traceback" in txt:
+                sys.exit(f"STARTUP FAILED: traceback in {lg}:\n" + "\n".join(txt.splitlines()[-12:]))
+    print(f"{name} healthy {seconds}s after start", flush=True)
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("experiment", help="experiment ID (experiments/<ID>.json) or 'eval'")
@@ -135,6 +167,7 @@ def main():
     p.add_argument("--ckpt", help="eval: checkpoint to evaluate"); p.add_argument("--opponent", default=None)
     p.add_argument("--opponent-ckpt"); p.add_argument("--envs", type=int, default=4); p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--no-canary", action="store_true")
+    p.add_argument("--no-watch", action="store_true", help="skip the 3-minute post-start health watch")
     p.add_argument("--deterministic", action="store_true", help="eval: argmax actions (diagnostic)")
     p.add_argument("--record", help="eval: record (obs, action) pairs to this npz name inside the run dir")
     p.add_argument("--tag", default="EVAL", help="eval: job name / run tag")
@@ -158,7 +191,11 @@ def main():
     args = build_args(spec, a)
     if not a.dry_run and not a.no_canary:
         canary(args, name)
-    submit(spec, args, name, a.dry_run)
+    jid = submit(spec, args, name, a.dry_run)
+    if jid and not a.no_watch:
+        log_glob = (f"{REPO_SRV}/lanerl_jax/runs/server_train/{name}-*.out" if spec["slurm"].get("partition") == "gpup"
+                    else f"{REPO_SRV}/{args['out']}/{name}.out")
+        watch_startup(name, log_glob)
 
 
 if __name__ == "__main__":

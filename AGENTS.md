@@ -18,7 +18,8 @@ History = `legacy/`, `docs/archive/`.
    new config = new ID + row. Never build a launch in the shell: no `ls -d`
    path capture (zsh drops the trailing slash), no env-var plumbing, no
    `--resume` for a new experiment (use `--init-from`: fresh optimizer,
-   schedule and budget). `--dry-run` first; the canary must pass.
+   schedule and budget). `--dry-run` first; the canary must pass, and the launcher's 3-minute
+   post-start watch must report the job healthy before you move on.
 2. Starting or stopping a run, or ending a session, rewrites `STATUS.md` in
    the same commit. No STATUS edit = not finished.
 3. Classify what you add: live path, tool, probe (with README row), or legacy.
