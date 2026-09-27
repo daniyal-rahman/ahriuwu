@@ -5,7 +5,7 @@
  "slurm": {
   "partition": "cpu",
   "cpus": 8,
-  "mem": "12G",
+  "mem": "9G",
   "time": "6:00:00"
  },
  "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/E12a_critic_warmup/seed0/server-farm-s0-20260927-022151-6eb81e88/ckpt_latest.msgpack",
