@@ -29,9 +29,9 @@ def run_episode(collector, choose, on_transition, max_decisions):
         action = np.asarray(choose(obs), dtype=np.int32)
         done = np.asarray(collector.step(action), dtype=bool)
         on_transition(before, action, collector.last_orders)
-        if done.shape != (1,):
+        if done.shape[0] not in (1, 2):
             raise RuntimeError('frozen evaluator requires exactly one environment')
-        if done[0]:
+        if bool(done.any()):
             return count + 1
     raise RuntimeError('collector did not terminate within the game-time decision bound')
 
@@ -96,7 +96,7 @@ def evaluate(args):
             'ground_click_normalization', 'unspecified; inspect frozen source'),
         checkpoint_sha256=file_sha256(inputs / 'checkpoint.msgpack'),
         checkpoint_manifest_sha256=file_sha256(inputs / 'manifest.json'), source=source,
-        seed=args.seed, environment='jax-experimental-farming', opponent='idle-fountain',
+        seed=args.seed, environment='jax-experimental-farming', opponent=('policy-mirror' if args.red == 'policy' else 'idle-fountain'),
         task=task, route_artifact=str(route), decision_hz=60. / task['step_ticks'],
         action_interface='screen-click-v2', observation_interface='viewport-structured-v3',
         limitations=['JAX/source dynamics parity is not established; see fidelity ledger.',
@@ -112,7 +112,8 @@ def evaluate(args):
         shutil.copyfile(route / 'manifest.json', args.out / 'route-manifest.json')
         result['simulation'] = dict(resolved=sim.describe(), fingerprint=sim.fingerprint(),
             route_manifest_sha256=file_sha256(args.out / 'route-manifest.json'))
-        collector = JaxFarmCollector(1, args.out, seed=args.seed, sim_config=sim, **task)
+        teams = (0, 1) if args.red == 'policy' else (0,)
+        collector = JaxFarmCollector(1, args.out, seed=args.seed, sim_config=sim, teams=teams, **task)
         policy, params, _ = load_params(str(inputs / 'checkpoint.msgpack'))
         initial_parameter_hash = hashlib.sha256(to_bytes(params)).hexdigest()
         key = jax.random.key(args.seed)
@@ -163,7 +164,7 @@ def evaluate(args):
             def record(before, action, orders):
                 nonlocal next_sample_ms
                 t_ms = float(before.t_ms[0])
-                action_log.write(json.dumps(dict(t_ms=t_ms, blue=action[0].tolist()))+'\n')
+                action_log.write(json.dumps(dict(t_ms=t_ms, blue=action[0].tolist(), red=(action[1].tolist() if len(action) > 1 else None)))+'\n')
                 if args.replay and t_ms >= next_sample_ms:
                     state = jax.tree.map(lambda a: a[0], before)
                     order = jax.tree.map(lambda a: a[0], orders)
@@ -192,7 +193,7 @@ def evaluate(args):
             if task['start_near_wave']:
                 label += ' (setup omitted)'
             metadata = dict(label=label,
-                controller='frozen blue policy; red idle', environment='jax-experimental-farming',
+                controller=('frozen policy on both champions (mirror)' if args.red == 'policy' else 'frozen blue policy; red idle'), environment='jax-experimental-farming',
                 **render_metadata(), **{k:result[k] for k in ('checkpoint', 'checkpoint_sha256', 'seed',
                     'simulation', 'source', 'action_interface', 'observation_interface',
                     'ground_click_normalization', 'checkpoint_ground_click_normalization')},
@@ -226,6 +227,7 @@ def main():
     p.add_argument('--start-near-wave', action=argparse.BooleanOptionalAction, default=None)
     p.add_argument('--route-artifact', type=Path)
     p.add_argument('--replay', action='store_true')
+    p.add_argument('--red', choices=('idle', 'policy'), default='idle', help='policy: mirror (red under the same policy)')
     p.add_argument('--replay-hz', type=float, default=10.)
     p.add_argument('--label')
     evaluate(p.parse_args())
