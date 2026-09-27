@@ -906,6 +906,7 @@ def main():
     p.add_argument("--critic-lr", type=float, default=None, help="defaults to --lr")
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--epochs", type=int, default=None)
+    p.add_argument("--target-kl", type=float, default=None, help="KL early stop per update (fine-tuning a sharp prior needs ~0.02)")
     p.add_argument("--minibatches", type=int, default=1)
     p.add_argument("--opponent", choices=("idle", "mirror", "frozen"), default="idle",
                    help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions; "
@@ -964,6 +965,7 @@ def main():
     if args.critic_lr is not None: over["critic_lr"] = args.critic_lr
     if args.entropy_coef is not None: over["entropy_coef"] = args.entropy_coef
     if args.epochs is not None: over["epochs"] = args.epochs
+    if args.target_kl is not None: over["target_kl"] = args.target_kl
     if args.normalize_advantage: over["normalize_advantage"] = True
     cfg = cfg._replace(**over)
     # The rollout/recompute likelihood check compares per-step and batched
