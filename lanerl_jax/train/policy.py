@@ -115,6 +115,10 @@ class PolicyConfig(NamedTuple):
     #: the loss uses the same masked log-prob. No parameters change; the
     #: collector supplies the mask per step from the champion's position.
     click_mask: bool = False
+    #: Stop the critic's gradient at the shared trunk: the value head trains
+    #: only its own weights (E12a's regime), the actor trains the trunk. The
+    #: decisive test of "the critic drags the trunk" (PPO-16 follow-up).
+    detach_critic: bool = False
 
 
 class ActionLogits(NamedTuple):
@@ -216,7 +220,8 @@ class LanePolicy(nn.Module):
             # exactly this subtree via `optax.multi_transform`, so the label
             # tree in `trainer.py` matches on the literal string below. A
             # rename here silently sends the critic back to the actor's lr.
-            value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(h)[..., 0],
+            value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(
+                jax.lax.stop_gradient(h) if c.detach_critic else h)[..., 0],
         )
         return (logits, new_carry) if c.core == "gru" else logits
 

@@ -78,4 +78,30 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0):
                        **stats}
 
     _loss.forward = forward
+
+    def trunk_grad_norms(params, batch, cfg_ppo):
+        """Diagnostic: the gradient norm each loss term sends into the TRUNK
+        (everything except the value head), and the cosine between the policy
+        and value terms there. Which term is steering the shared features?"""
+        def terms(q):
+            logits = forward(q, batch)
+            lg = (logits.button, logits.screen_x, logits.screen_y)
+            cm = batch.get("click_mask")
+            lp = factored_log_prob(lg, batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=cm)
+            pl, _ = policy_loss(lp, batch["log_prob"], batch["adv"], cfg_ppo)
+            vl = cfg_ppo.value_coef * value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
+            ent = -cfg_ppo.entropy_coef * ((_entropy(lg[0]) + (joint_click_entropy(lg[1], lg[2], cm) if cm is not None
+                                             else _entropy(lg[1]) + _entropy(lg[2]))).mean())
+            return pl, vl, ent
+        def trunk(g):
+            return jax.tree_util.tree_map_with_path(
+                lambda path, x: jnp.zeros_like(x) if any(getattr(k, "key", None) == VALUE_HEAD_NAME for k in path) else x, g)
+        g_pl = trunk(jax.grad(lambda q: terms(q)[0])(params))
+        g_vl = trunk(jax.grad(lambda q: terms(q)[1])(params))
+        g_en = trunk(jax.grad(lambda q: terms(q)[2])(params))
+        dot = sum(jnp.vdot(a, b) for a, b in zip(jax.tree.leaves(g_pl), jax.tree.leaves(g_vl)))
+        n_pl, n_vl, n_en = (optax.global_norm(g) for g in (g_pl, g_vl, g_en))
+        return {"g_trunk_pg": n_pl, "g_trunk_value": n_vl, "g_trunk_entropy": n_en,
+                "cos_pg_value": dot / (n_pl * n_vl + 1e-12)}
+    _loss.trunk_grad_norms = trunk_grad_norms
     return tx, _loss

@@ -1,0 +1,39 @@
+{
+ "id": "E21_finetune_detach_critic",
+ "question": "Dani: a near-monotone decline (45 -> 38 over 400 updates in E14/E16/E17) is a systematic gradient, not noise. Candidate 1: the critic's gradient through the shared trunk (E12a with the trunk frozen did not degrade; the value term alone moves the clone by KL 0.11/step). E14 config with the critic DETACHED from the trunk, and per-term trunk gradient norms logged (g_trunk_pg / g_trunk_value / g_trunk_entropy, cos_pg_value). If the decline vanishes, the fix is a separate critic; if it persists, it is softmax-saturation drift and the fix is a KL-to-prior anchor.",
+ "port_base": 27900,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 4,
+  "mem": "9G",
+  "time": "6:00:00"
+ },
+ "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/E12a_critic_warmup/seed0/server-farm-s0-20260927-022151-6eb81e88/ckpt_latest.msgpack",
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 400,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "mlp",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   100,
+   200,
+   400
+  ],
+  "seed": 0,
+  "lr": 1e-05,
+  "critic-lr": 1e-05,
+  "target-kl": 0.02,
+  "detach-critic": true
+ },
+ "note": "cpu partition (GPU visible from the desktop's cpu partition) because E13 holds the gpup GPU allocation for ~15 h"
+}

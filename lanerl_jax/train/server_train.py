@@ -812,6 +812,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
         # every update: a fresh compiled executable per update, ~10 MB each,
         # which is what walked E06 into slurm's memory limit (OOM at u1931).
         forward = jax.jit(loss.forward)
+        trunk_norms = jax.jit(lambda q, b: loss.trunk_grad_norms(q, b, cfg))
         opt_state = tx.init(params)
         start_update = 0
         if resume is not None:
@@ -921,8 +922,11 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # and killed E11 at update 2.
             np.testing.assert_allclose(recomputed, batch["log_prob"], atol=1e-3, rtol=1e-3,
                                        err_msg="rollout/recompute log-prob mismatch (head masks?)")
+            # Which loss term steers the shared trunk (before this update's step).
+            grad_diag = {k: float(v) for k, v in trunk_norms(params, batch).items()}
             params, opt_state, rng, info = update(params, opt_state, batch, rng)
             metrics = {k: float(v) for k, v in summarise_minibatches(info).items()}
+            metrics.update(grad_diag)
             # KL(rollout policy || updated policy) on the whole batch AFTER the
             # update. `approx_kl` above averages the APPLIED minibatch steps,
             # each measured before its own step, so with a KL stop that trips
@@ -1127,6 +1131,7 @@ def main():
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
     p.add_argument("--no-diag", action="store_true", help="skip the per-step diagnostic record (<run>/diag/)")
+    p.add_argument("--detach-critic", action="store_true", help="stop the critic's gradient at the shared trunk (PolicyConfig.detach_critic)")
     p.add_argument("--click-mask", action="store_true", help="sample clicks from the masked joint distribution over walkable cells (INT-001 principled fix; PolicyConfig.click_mask)")
     p.add_argument("--unwalkable-click", choices=("resolve", "noop"), default="resolve",
                    help="movement click onto unwalkable ground: resolve to the closest reachable point (server/snap) or drop it (INT-001)")
@@ -1182,7 +1187,8 @@ def main():
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
     UNWALKABLE_CLICK["mode"] = args.unwalkable_click
-    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask)
+    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask,
+                        detach_critic=args.detach_critic)
     if args.init_from is not None:
         if args.resume is not None:
             p.error("--init-from and --resume are exclusive")
