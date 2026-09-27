@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 23:05 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 01:00 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -38,8 +38,9 @@ walls and held. Random policy, same seed: 35% of frames within 150 u of a
 wall with resolve, 6% with the new `--unwalkable-click noop`. **E15** =
 no-prior GRU (fixed core) + noop clicks, RUNNING since 11:08 UTC (job 1603,
 `runs/E15_noprior_gru_noopclick`, evaluator armed every 100 updates): ~8 s per
-update, 51% of movement clicks dropped at update 37, post_kl ~0.04. Masking unwalkable cells (joint 2-D click
-head) is the principled follow-up.
+update, 51% of movement clicks dropped at update 37, post_kl ~0.04. Masking is now implemented (`--click-mask`: the same heads, the click
+renormalised over walkable cells, PPO consistent under the mask; 3 tests); E20 = E15
+recipe with the mask, launching.
 
 **WHY THE PRIOR DEGRADES (PPO-16, 11:40 UTC):** E12b applied ONE minibatch
 step per update: the KL stop measures pre-step KL, the first step is always
