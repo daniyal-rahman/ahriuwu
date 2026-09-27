@@ -17,8 +17,10 @@ stop 0.02, from the 45/50-CS clone) collapsed to 100% 'move' and 0 CS within
 140 updates. Value loss was 23 at update 1: BC left the value head random,
 so the first updates optimised critic noise (advantage normalisation makes
 it unit-variance) and the entropy bonus pulled the sharp clicks apart.
-Running: E12a = critic warm-up (actor lr 0, 150 updates), then E12b =
-fine-tune from that with lr 5e-5 + KL stop. That is the learner verdict.**
+E12a (critic warm-up, actor frozen): value loss 21 -> 1.2 in 150 updates.
+Running: E12b = fine-tune from it (lr 5e-5, KL stop 0.02). That is the
+learner verdict; its first canary attempt was SIGTERMed by slurm at 199 s
+(cause unknown) and relaunched.**
 
 **Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
 BC representability, PPO-from-BC learner test); then a heuristics-initialised
