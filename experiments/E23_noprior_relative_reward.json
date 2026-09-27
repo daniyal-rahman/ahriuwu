@@ -1,0 +1,38 @@
+{
+ "id": "E23_noprior_relative_reward",
+ "question": "Dani's reward: (own - enemy) gold delta / 20 + 0.008 * (own - enemy) XP delta + lane-keep shaping, NO death term (a death costs exactly its consequences: the enemy's kill gold and the lost farm). E15 recipe otherwise (fixed GRU, dropped unwalkable clicks, standard PPO, mirror, seed 0). Gate is still measured in CS.",
+ "port_base": 28300,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 8,
+  "mem": "12G",
+  "time": "12:00:00"
+ },
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 3000,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "gru",
+  "lr-anneal": true,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   500,
+   1000,
+   2000,
+   4000
+  ],
+  "seed": 0,
+  "core-norm": true,
+  "core-residual": true,
+  "unwalkable-click": "noop",
+  "reward": "relative"
+ },
+ "note": "cpu partition (GPU visible) because E13 holds the gpup allocation"
+}

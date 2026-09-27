@@ -259,9 +259,54 @@ def screen_order(action, champion, frame):
 
 
 def source_farm_stats(champion, potential):
-    """(cs, alive, potential, xp). Life state comes from the server flag, never
-    its regenerating HP."""
-    return champion["cs"], not champion_dead(champion), float(potential), float(champion.get("xp", 0.))
+    """(cs, alive, potential, xp, gold). Life state comes from the server flag,
+    never its regenerating HP. Gold is the wallet (`Stats.Gold`); the agent
+    never buys, so it is earned gold plus the ambient trickle, and the trickle
+    cancels in the RELATIVE reward."""
+    return (champion["cs"], not champion_dead(champion), float(potential),
+            float(champion.get("xp", 0.)), float(champion.get("gold", 0.)))
+
+
+#: Relative reward (Dani, 2026-09-28): gold and XP are what decide fights, every
+#: other stat derives from them, and a death is worth exactly its consequences
+#: (the enemy's kill gold, your lost farm), not a hand-set -2. Scales: 20 gold
+#: ~ one last-hit, so GOLD_SCALE 20 keeps "+1 per CS" magnitudes; XP_SCALE
+#: 0.008 makes a shared minion's XP (~60) worth ~0.5.
+RELATIVE_REWARD = {"mode": "farm", "gold_scale": 20.0, "xp_scale": 0.008}
+
+
+def relative_reward(stats_before, stats_after, enemy_before, enemy_after, done=None):
+    """(own gold gain - enemy gold gain)/gold_scale + xp_scale*(own xp gain -
+    enemy xp gain) + lane-keep shaping, no death term. `enemy_*` rows are the
+    opponent champion's stats aligned to each agent row (zeros when no
+    opponent row exists: solo farming, where the terms reduce to own gold/xp).
+    Terms keep the farm names so every consumer (metrics, StepDiag) reads them:
+    cs -> the gold term, death -> 0, approach -> shaping, xp -> the xp term."""
+    g = RELATIVE_REWARD["gold_scale"]; wx = RELATIVE_REWARD["xp_scale"]
+    d_gold = (stats_after[:, 4] - stats_before[:, 4]) - (enemy_after[:, 4] - enemy_before[:, 4])
+    d_xp = (stats_after[:, 3] - stats_before[:, 3]) - (enemy_after[:, 3] - enemy_before[:, 3])
+    shaping = 5. * (stats_after[:, 2] - stats_before[:, 2])
+    gold = jnp.asarray(d_gold / g, jnp.float32); xp = jnp.asarray(wx * d_xp, jnp.float32); shaping = jnp.asarray(shaping, jnp.float32)
+    zero = jnp.zeros_like(gold)
+    return gold + xp + shaping, {"cs": gold, "death": zero, "approach": shaping, "xp": xp}
+
+
+def enemy_rows(collector, stats):
+    """Opponent champion's stats per agent row: the other team's row of the
+    same env (mirror), or zeros when the collector has a single team."""
+    if getattr(collector, "T", 1) == 2:
+        n = stats.shape[0]; idx = np.arange(n) ^ 1
+        return stats[idx]
+    return np.zeros_like(stats)
+
+
+def step_reward(collector, stats, next_stats, done, gamma):
+    """The configured reward for one collector step (farm or relative)."""
+    if RELATIVE_REWARD["mode"] == "relative":
+        return relative_reward(stats, next_stats, enemy_rows(collector, stats), enemy_rows(collector, next_stats), done)
+    xp = (stats[:, 3], next_stats[:, 3]) if stats.shape[1] > 3 else (None, None)
+    return farm_reward(stats[:, 0], next_stats[:, 0], stats[:, 1].astype(bool), next_stats[:, 1].astype(bool),
+                       stats[:, 2], next_stats[:, 2], done, gamma, *xp)
 
 
 #: XP proximity reward per xp point. 0.005 (melee 77 xp -> 0.385) paid MORE per
@@ -879,10 +924,7 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                     & (collector.spell_ranks()[:, 3] == 0)))
                 done = collector.step(host_actions)
                 next_obs, next_stats = collector.observe()
-                xp = (stats[:, 3], next_stats[:, 3]) if stats.shape[1] > 3 else (None, None)
-                reward, terms = farm_reward(stats[:, 0], next_stats[:, 0],
-                    stats[:, 1].astype(bool), next_stats[:, 1].astype(bool),
-                    stats[:, 2], next_stats[:, 2], done, cfg.gamma, *xp)
+                reward, terms = step_reward(collector, stats, next_stats, done, cfg.gamma)
                 rows.append({"entities": obs.entities, "mask": obs.entity_pad_mask,
                     "self": obs.self_vec, "global": obs.global_vec, "action": action,
                     "log_prob": lp, "uses_screen": usage[0], "uses_target": usage[1], "value": value,
@@ -1047,9 +1089,7 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
             next_obs, next_stats = collector.observe()
             deaths += (stats[:, 1].astype(bool) & ~next_stats[:, 1].astype(bool))
             if diag is not None:
-                xp = (stats[:, 3], next_stats[:, 3]) if stats.shape[1] > 3 else (None, None)
-                _, terms = farm_reward(stats[:, 0], next_stats[:, 0], stats[:, 1].astype(bool), next_stats[:, 1].astype(bool),
-                                       stats[:, 2], next_stats[:, 2], done, None, *xp)
+                _, terms = step_reward(collector, stats, next_stats, done, None)
                 value, px, py, ent = (np.asarray(v) for v in jax.device_get(extra))
                 diag.add(0, steps, stats, next_stats, jax.device_get(terms), value, px, py, ent, host_actions, np.asarray(done))
             steps += 1
@@ -1139,6 +1179,9 @@ def main():
                    help="per-batch advantage standardisation (the standard preset has it on)")
     p.add_argument("--xp-weight", type=float, default=XP_WEIGHT,
                    help="XP proximity reward per xp point (0 disables it)")
+    p.add_argument("--reward", choices=("farm", "relative"), default="farm",
+                   help="farm: +1 CS, -2 death, shaping, xp; relative: (own - enemy) gold and xp deltas + shaping, no death term")
+    p.add_argument("--gold-scale", type=float, default=20.0); p.add_argument("--xp-scale", type=float, default=0.008)
     p.add_argument("--no-diag", action="store_true", help="skip the per-step diagnostic record (<run>/diag/)")
     p.add_argument("--detach-critic", action="store_true", help="stop the critic's gradient at the shared trunk (PolicyConfig.detach_critic)")
     p.add_argument("--click-mask", action="store_true", help="sample clicks from the masked joint distribution over walkable cells (INT-001 principled fix; PolicyConfig.click_mask)")
@@ -1197,6 +1240,7 @@ def main():
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
     UNWALKABLE_CLICK["mode"] = args.unwalkable_click
+    RELATIVE_REWARD.update(mode=args.reward, gold_scale=args.gold_scale, xp_scale=args.xp_scale)
     pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask,
                         detach_critic=args.detach_critic)
     if args.init_from is not None:
@@ -1227,6 +1271,7 @@ def main():
         "reward": f"CS - 2*death + 5*(lane_potential_next - potential) + {args.xp_weight}*xp",
         "click_snap": not args.no_snap_clicks,
         "unwalkable_click": args.unwalkable_click,
+        "reward": args.reward, "gold_scale": args.gold_scale, "xp_scale": args.xp_scale,
         "initialization": "random; no prior"})
     snapshot_farming_source(run, command)
     vendor = server_paths.server_dir().parents[3]

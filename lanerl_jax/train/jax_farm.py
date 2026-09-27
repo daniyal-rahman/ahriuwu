@@ -143,7 +143,7 @@ class JaxFarmCollector:
         def stats_all(s):
             pot = -lane_corridor_distance(s.x[:2], s.y[:2]) / 10000.
             return jnp.stack([jnp.stack([s.cs[t].astype(jnp.float32), s.alive[t].astype(jnp.float32),
-                                         pot[t], s.xp[t].astype(jnp.float32)]) for t in self.teams])   # (T, 4)
+                                         pot[t], s.xp[t].astype(jnp.float32), s.gold[t].astype(jnp.float32)]) for t in self.teams])   # (T, 5)
         self._stats = jax.jit(jax.vmap(stats_all))
         self.states = jax.tree.map(lambda *a: jnp.stack(a),
                                    *(self._fresh(i) for i in range(self.n_envs)))
@@ -309,7 +309,7 @@ class JaxFarmCollector:
         self._check_open()
         obs = self._call('observe', self._observe, self.states, self._model)   # (n_envs, T, ...)
         obs = jax.tree.map(lambda x: x.reshape((self.n,) + x.shape[2:]), obs)
-        stats = np.asarray(self._call('stats', self._stats, self.states)).reshape(self.n, 4)
+        stats = np.asarray(self._call('stats', self._stats, self.states)).reshape(self.n, 5)
         return obs, stats
 
     def spell_ranks(self):
