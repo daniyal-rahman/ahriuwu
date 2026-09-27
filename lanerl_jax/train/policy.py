@@ -104,6 +104,12 @@ class PolicyConfig(NamedTuple):
     #: memory is LEARNED, not hand-built from windup flags or frame stacks.
     #: `__call__` then takes and returns the carry.
     core: str = "mlp"
+    #: GRU variants (default False keeps E06-era checkpoints bit-identical):
+    #: `core_norm` LayerNorms the GRU input; `core_residual` feeds the heads
+    #: trunk + GRU output instead of the GRU output alone. Motivated by the
+    #: GRU clone that could not memorise 16 sequences (probes/gru_bc_*).
+    core_norm: bool = False
+    core_residual: bool = False
 
 
 class ActionLogits(NamedTuple):
@@ -191,7 +197,9 @@ class LanePolicy(nn.Module):
         if c.core == "gru":
             if carry is None:
                 raise ValueError("gru core needs a carry; use LanePolicy.initial_carry")
-            new_carry, h = nn.GRUCell(features=c.core_dim, name="core_gru")(carry, h)
+            x = nn.LayerNorm(name="core_norm")(h) if c.core_norm else h
+            new_carry, g = nn.GRUCell(features=c.core_dim, name="core_gru")(carry, x)
+            h = (h + g) if c.core_residual else g
         elif c.core != "mlp":
             raise ValueError(f"unknown core {c.core!r}")
 

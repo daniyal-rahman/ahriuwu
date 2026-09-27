@@ -41,6 +41,8 @@ def main():
     parser.add_argument('--init-from', type=Path, default=None, help='params only: fresh optimizer/schedule/budget')
     parser.add_argument('--lr-anneal', action='store_true')
     parser.add_argument('--core', choices=('mlp', 'gru'), default='mlp')
+    parser.add_argument("--core-norm", action="store_true", help="gru: LayerNorm on the GRU input")
+    parser.add_argument("--core-residual", action="store_true", help="gru: heads see trunk + GRU output (plain GRU heads are near-blind, ARCH-001)")
     parser.add_argument('--preset', choices=('legacy', 'standard'), default='legacy')
     parser.add_argument('--ckpt-every', type=int, default=10)
     parser.add_argument('--eval-episodes', type=int, default=0)
@@ -74,7 +76,7 @@ def main():
     resume_params_only = False
     if args.init_from is not None:
         args.resume, resume_params_only = args.init_from, True
-    pcfg = PolicyConfig(core=args.core)
+    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual)
     src_ckpt = args.resume or args.init_from
     if src_ckpt is not None and (src_ckpt.parent / 'manifest.json').exists():
         saved = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})

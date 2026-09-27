@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 09:40 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 10:40 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -17,6 +17,11 @@ advantage normalisation on near-zero-variance batches, entropy 0.01/3 per
 head pulling apart a sharp policy (entropy 0.3 -> 1.0 in E11), deaths
 (-2, ~4 per update across 20 agents in mirror) dominating the per-update
 signal, GAE/done handling in the [N,T] batch. E12b cancelled (its job).
+
+**ARCH-001 (10:35 UTC): the plain GRU core is near-blind** (heads see only the GRU
+output; BC cannot fit 16 sequences; MLP fits the same data to 98%). Fixed as
+opt-in `--core-norm --core-residual`; E06's ~17 plateau is partly this. The
+JAX-leg GRU uses the fixed wiring.
 
 **JAX LEG (running, per Dani's 22:40 plan):** heuristics-initialised GRU on
 the JAX sim to a compare point, then E04 vs that agent on the C# server.

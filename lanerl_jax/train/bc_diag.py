@@ -24,6 +24,8 @@ def main():
     p.add_argument("demos", type=Path)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--core", choices=("mlp", "gru"), default="mlp")
+    p.add_argument("--core-norm", action="store_true", help="LayerNorm on the GRU input")
+    p.add_argument("--core-residual", action="store_true", help="heads see trunk + GRU output (the plain GRU cannot fit; probes/gru_bc_memorise_probe.py)")
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--batch", type=int, default=2048, help="mlp: samples per step; gru: sequences (agents) x seq_len windows")
@@ -37,8 +39,8 @@ def main():
     ent = ent.astype(np.float32)
     n_val = max(1, int(round(N * a.holdout)))
     val_rows, tr_rows = np.arange(N)[:n_val], np.arange(N)[n_val:]
-    policy = LanePolicy(PolicyConfig(core=a.core))
-    run = RunDir(a.out, f"bc-{a.core}", {"train": {"policy": policy.cfg._asdict()}, "demos": str(a.demos),
+    policy = LanePolicy(PolicyConfig(core=a.core, core_norm=a.core_norm, core_residual=a.core_residual))
+    run = RunDir(a.out, f"bc-{a.core}{'nr' if a.core_residual else ''}", {"train": {"policy": policy.cfg._asdict()}, "demos": str(a.demos),
                                         "shape": {"T": int(T), "N": int(N)}, "epochs": a.epochs, "lr": a.lr,
                                         "purpose": "representability diagnostic (BC of the scripted last-hitter); not a gate prior"})
     key = jax.random.key(a.seed)

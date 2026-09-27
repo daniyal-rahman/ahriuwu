@@ -26,7 +26,10 @@ labelled `train`.
 | `E12b_finetune_after_warmup/seed0` | 09-27 08:37 | C# | constrained PPO (lr 5e-5 both, KL stop 0.02) from the E12a checkpoint (value head fitted, actor = DAgger-2 clone), mirror | budget 600 | CANCELLED at u524: frozen u140 10.8 / 12.0, u280 2.5 / 2.3, u440 0.3 / 1.3; training CS 0 by u520; entropy 0.3 -> 1.0 -> 0.4 | LEARNER TEST NEGATIVE: the actor update destroys a 45-CS prior even with a fitted critic; learner/objective is the open bug |
 | `JAX_ORACLE/demos` | 09-27 09:13 | JAX | scripted last-hitter vs idle red, 16 envs, 600 s, `--record-npz` | 1 episode | 65 CS on all 16 envs (deterministic sim), 4792 decisions/env, 140 s wall (~550 dec/s) | JAX-side interface oracle; demos for the GRU clone |
 | `JAX_ORACLE/demos_mirror` | 09-27 09:35 | JAX | scripted mirror, 16 envs, seed 1 | 1 episode | pending | mirror demos for the GRU clone |
-| `BC/bc-gru-*` (JAX demos) | 09-27 09:36 | JAX | GRU clone of the JAX oracle demos, 30 epochs | - | pending | step 2 of the JAX leg |
+| `BC/bc-gru-20260927-091748` (JAX idle demos) | 09-27 09:17 | JAX | plain GRU clone, 30 epochs | - | 92% button / 35% x / 40% y, 0% on attack steps: majority class | plain GRU cannot fit (ARCH-001) |
+| `BC/bc-mlp-20260927-092347` (JAX mirror demos) | 09-27 09:23 | JAX | MLP clone, 60 epochs | - | val 100% / 95% / 98%, attack-click exact ~98% | the data is learnable |
+| `BC/bc-gru-*-1e-3` (JAX mirror demos) | 09-27 09:23 | JAX | plain GRU, lr 1e-3, 100 epochs | - | cancelled at epoch 41: loss 3.79, 0% on attack steps | confirms ARCH-001 |
+| `BC/bc-grunr-*` (JAX mirror demos) | 09-27 10:33 | JAX | GRU + LayerNorm input + residual heads, 60 epochs | - | running | the JAX-leg clone (step 2) |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 
 | `throughput_server_20260925/mp-w{1,3}` | 09-25 18:45 | C# | 12 envs mirror, 6 cores, E01 running alongside | probe, 6 updates | 1.0 s per 768 decisions for BOTH workers=1 and workers=3 | desktop is server-CPU-bound at ~14 servers |

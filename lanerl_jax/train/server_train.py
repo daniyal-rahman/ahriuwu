@@ -906,6 +906,8 @@ def main():
                         "explicit flags below override the preset")
     p.add_argument("--core", choices=("mlp", "gru"), default="mlp",
                    help="gru: recurrent core, truncated BPTT over the rollout (memory is learned)")
+    p.add_argument("--core-norm", action="store_true", help="gru: LayerNorm on the GRU input")
+    p.add_argument("--core-residual", action="store_true", help="gru: heads see trunk + GRU output (plain GRU heads are near-blind, ARCH-001)")
     p.add_argument("--lr-anneal", action="store_true", help="linear lr decay to 0 over --updates")
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--critic-lr", type=float, default=None, help="defaults to --lr")
@@ -978,7 +980,7 @@ def main():
     jax.config.update("jax_default_matmul_precision", "highest")
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
-    pcfg = PolicyConfig(core=args.core)
+    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual)
     if args.init_from is not None:
         if args.resume is not None:
             p.error("--init-from and --resume are exclusive")

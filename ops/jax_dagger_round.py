@@ -56,10 +56,10 @@ def main():
     merged = REPO_SRV / f"lanerl_jax/runs/JAX_ORACLE/jax_dagger{a.round}.npz"
     srun(f"dagger{a.round}-relabel", f"-m lanerl_jax.train.bc_dagger {merged} {prev} {roll}", cpus=2, mem="16G")
     must(merged, "merged dataset")
-    before = {p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru-*")}
+    before = {p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru*")}
     srun(f"dagger{a.round}-bc", f"-m lanerl_jax.train.bc_diag {merged} --out lanerl_jax/runs/BC --core gru --epochs {a.epochs}",
          mem="16G", minutes=120)
-    new = sorted({p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru-*")} - before)
+    new = sorted({p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru*")} - before)
     if not new:
         sys.exit("no new clone directory")
     ck = new[-1] / "ckpt_latest.msgpack"; must(ck, "new clone checkpoint")
