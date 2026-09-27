@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 13:10 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 13:55 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -25,8 +25,9 @@ ground resolve to the closest reachable point = the wall; 43-49% of E06's
 clicks were unwalkable (51-58% near walls), so a diffuse policy is pulled to
 walls and held. Random policy, same seed: 35% of frames within 150 u of a
 wall with resolve, 6% with the new `--unwalkable-click noop`. **E15** =
-no-prior GRU (fixed core) + noop clicks, launching via `ops/launch.py`
-(`runs/E15_noprior_gru_noopclick`). Masking unwalkable cells (joint 2-D click
+no-prior GRU (fixed core) + noop clicks, RUNNING since 11:08 UTC (job 1603,
+`runs/E15_noprior_gru_noopclick`, evaluator armed every 100 updates): ~8 s per
+update, 51% of movement clicks dropped at update 37, post_kl ~0.04. Masking unwalkable cells (joint 2-D click
 head) is the principled follow-up.
 
 **WHY THE PRIOR DEGRADES (PPO-16, 11:40 UTC):** E12b applied ONE minibatch
@@ -47,6 +48,10 @@ JAX-leg GRU uses the fixed wiring.
 
 **JAX LEG (running, per Dani's 22:40 plan):** heuristics-initialised GRU on
 the JAX sim to a compare point, then E04 vs that agent on the C# server.
+**DAgger-1 GRU clone on JAX: 41.0 / 44.4 CS sampled mirror (26-59 / 34-58)** -- the
+JAX heuristics-init GRU compare point; cross-play E04 vs it and its server
+mirror transfer are running (`runs/EVAL/XPLAY_E04_vs_jaxgru`, `XFER_jaxgru_mirror`);
+round 3 running. E13 (no-prior JAX GRU, snap clicks) at u~80: 16 CS vs idle.
 Step 1 done: scripted last-hitter on the JAX sim vs idle red = 65 CS on all
 16 envs (deterministic sim: identical trajectories), 4792 decisions each in
 140 s wall (~550 dec/s at 16 envs, 5.5 GB GPU). Mirror scripted demos
