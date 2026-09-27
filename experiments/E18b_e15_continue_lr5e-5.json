@@ -1,0 +1,41 @@
+{
+ "id": "E18b_e15_continue_lr5e-5",
+ "question": "E18 (E15 params, fresh anneal from lr 2.5e-4) scrambled the policy: post_kl 0.12/update, frozen u260 10.3 / 5.8 from 28.5 / 31.8. Same continuation at lr 5e-5 (the rate E15 had reached by ~u2400), annealed over 3000 updates: does the gate policy sharpen and hold?",
+ "port_base": 27300,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 8,
+  "mem": "12G",
+  "time": "12:00:00"
+ },
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 3000,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "gru",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   500,
+   1000,
+   2000,
+   4000
+  ],
+  "seed": 0,
+  "core-norm": true,
+  "core-residual": true,
+  "unwalkable-click": "noop",
+  "lr": 5e-05,
+  "critic-lr": 5e-05
+ },
+ "note": "cpu partition (GPU visible) because E13 holds the gpup allocation",
+ "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/E15_noprior_gru_noopclick/seed0/server-farm-s0-20260927-110801-ad482abd/ckpt_latest.msgpack"
+}

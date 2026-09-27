@@ -1,11 +1,11 @@
-# STATUS (rewrite in place; last edit 2026-09-27 20:50 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 21:45 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
 **E15 FINAL (20:50 UTC): 28.5 / 31.8 CS over 12 episodes per side (23-37 / 18-44),
 combined 30.1, deaths ~0.1 -- a no-prior GRU AT the gate after ARCH-001 (GRU
 wiring) + INT-001 (no wall attraction). Not yet clearly above it: late checkpoints
-swing 9-31. E18 (continue from E15's params, fresh anneal, 3000 updates) launching.**
+swing 9-31. E18 at full rate scrambled it (u260 10.3 / 5.8, post_kl 0.12); E18b continues at lr 5e-5.**
 
 **LEARNER TEST VERDICT (09:20 UTC): NEGATIVE.** Constrained PPO fine-tuning
 from the DAgger-2 clone (45 / 50 CS frozen) destroys it in every form tried:
