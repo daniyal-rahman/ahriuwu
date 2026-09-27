@@ -12,11 +12,13 @@ interaction, not a side bug.
 Next diagnostics: behaviour-clone the oracle (representability), then PPO from
 that init (does the learner preserve a 40-CS policy?).
 
-**RESUMED 2026-09-27 01:40 UTC (Dani). Running: E11 = constrained PPO (lr 5e-5,
-KL stop 0.02, standard preset otherwise) from the DAgger-2 clone (45/50 CS),
-mirror, 10 servers; canary passed, healthy at +180 s; evaluator every 100
-updates. This is the learner verdict: hold/rise = learner sound; decline =
-objective/advantage pipeline damages good behaviour. (Paused 00:40-01:36.)**
+**LEARNER TEST, first result (02:15 UTC): E11 (constrained PPO, lr 5e-5, KL
+stop 0.02, from the 45/50-CS clone) collapsed to 100% 'move' and 0 CS within
+140 updates. Value loss was 23 at update 1: BC left the value head random,
+so the first updates optimised critic noise (advantage normalisation makes
+it unit-variance) and the entropy bonus pulled the sharp clicks apart.
+Running: E12a = critic warm-up (actor lr 0, 150 updates), then E12b =
+fine-tune from that with lr 5e-5 + KL stop. That is the learner verdict.**
 
 **Plan (Dani, 22:40 UTC):** pause E07; run the three diagnostics (oracle done,
 BC representability, PPO-from-BC learner test); then a heuristics-initialised
