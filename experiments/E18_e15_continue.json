@@ -1,0 +1,39 @@
+{
+ "id": "E18_e15_continue",
+ "question": "E15 reached the gate on some late checkpoints (u1880 31 / 31, u2460 28.5 / 29.6) but not consistently (u2580 9 / 14, u2660 19 / 18.5) with entropy still ~7 and post_kl ~0.02 per update. Continue from E15's final params (params only, fresh lr anneal over 3000 more updates) to see whether the policy sharpens and the gate holds across checkpoints.",
+ "port_base": 27100,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 8,
+  "mem": "12G",
+  "time": "12:00:00"
+ },
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 3000,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "gru",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   500,
+   1000,
+   2000,
+   4000
+  ],
+  "seed": 0,
+  "core-norm": true,
+  "core-residual": true,
+  "unwalkable-click": "noop"
+ },
+ "note": "cpu partition (GPU visible) because E13 holds the gpup allocation",
+ "init_from": "<E15 final ckpt_latest, filled at launch>"
+}
