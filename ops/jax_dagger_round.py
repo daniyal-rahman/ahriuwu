@@ -31,6 +31,11 @@ def srun(name, cmd, cpus=4, mem="12G", minutes=60):
     return r.stdout
 
 
+def mnt(p):
+    """Desktop-side spelling of a login-side path (/srv/nfs -> /mnt/nfs)."""
+    return str(p).replace("/srv/nfs/", "/mnt/nfs/")
+
+
 def must(p, what):
     p = Path(p)
     if not p.exists():
@@ -50,14 +55,14 @@ def main():
     out_roll = REPO_SRV / f"lanerl_jax/runs/JAX_ORACLE/dagger{a.round}_rollout"
     srun(f"dagger{a.round}-rollout",
          f"-m lanerl_jax.train.jax_train --envs {a.envs} --opponent mirror --episode-s 600 --start-near-wave "
-         f"--step-ticks 6 --eval-episodes 1 --record-npz rollout.npz --seed {seed} --resume {clone} --out {out_roll}",
+         f"--step-ticks 6 --eval-episodes 1 --record-npz rollout.npz --seed {seed} --resume {mnt(clone.resolve())} --out {mnt(out_roll)}",
          mem="12G")
     roll = sorted(out_roll.glob("*/rollout.npz"), key=lambda p: p.stat().st_mtime)[-1]
     merged = REPO_SRV / f"lanerl_jax/runs/JAX_ORACLE/jax_dagger{a.round}.npz"
-    srun(f"dagger{a.round}-relabel", f"-m lanerl_jax.train.bc_dagger {merged} {prev} {roll}", cpus=2, mem="16G")
+    srun(f"dagger{a.round}-relabel", f"-m lanerl_jax.train.bc_dagger {mnt(merged)} {mnt(prev.resolve())} {mnt(roll)}", cpus=2, mem="16G")
     must(merged, "merged dataset")
     before = {p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru*")}
-    srun(f"dagger{a.round}-bc", f"-m lanerl_jax.train.bc_diag {merged} --out lanerl_jax/runs/BC --core gru --epochs {a.epochs}",
+    srun(f"dagger{a.round}-bc", f"-m lanerl_jax.train.bc_diag {mnt(merged)} --out lanerl_jax/runs/BC --core gru --core-norm --core-residual --epochs {a.epochs}",
          mem="16G", minutes=120)
     new = sorted({p for p in (REPO_SRV / "lanerl_jax/runs/BC").glob("bc-gru*")} - before)
     if not new:
