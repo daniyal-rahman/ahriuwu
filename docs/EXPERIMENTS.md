@@ -34,8 +34,8 @@ labelled `train`.
 | `EVAL/replay_E12b_u140`, `_u600` | 09-27 12:05 | C# | E12b midway and degenerate replays, mirror, seed 0 | 1 ep | u140: 11 / 7 CS, attack-move 18% of decisions; u600: 0 / 0, attack-move 9%, red 579 no-ops | videos `map/replay.mp4`, `combat/replay.mp4` |
 | `E13_jax_gru_scratch/seed0` | 09-27 10:50 | JAX | no-prior GRU (norm + residual), standard preset, mirror, 16 envs, lr anneal, job 1576 | budget 3000 | running | JAX twin of E06 with a core that sees; compare point |
 | `JAX_ORACLE/dagger2` -> `BC/bc-grunr-20260927-105448` | 09-27 10:33 | JAX | DAgger round 2; round-1 clone measured closed-loop first | - | **round-1 GRU clone: 41.0 / 44.4 CS sampled JAX mirror (26-59 / 34-58), 1.8 deaths** | JAX heuristics-init GRU above the gate; compare point |
-| `EVAL/XPLAY_E04_vs_jaxgru` | 09-27 13:40 | C# | E04 vs the JAX DAgger-1 GRU clone (frozen opponent), 4 servers x 2 | 8 ep | running | the cross-play Dani asked for |
-| `EVAL/XFER_jaxgru_mirror` | 09-27 13:40 | C# | the JAX GRU clone in a server mirror | 8 ep | running | JAX -> server transfer of a 41-CS policy |
+| `EVAL/XPLAY_E04_vs_jaxgru` | 09-27 13:40 | C# | E04 vs the JAX DAgger-1 GRU clone (frozen opponent), 4 servers x 2 | 8 ep | **E04 29.5 CS (22-33), 0.9 deaths** | vs the server MLP clone E04 got 27.5; in mirror 18.8 / 24.5: E04 farms better against a non-duelling, competent opponent |
+| `EVAL/XFER_jaxgru_mirror` | 09-27 13:40 | C# | the JAX GRU clone in a server mirror | 8 ep | **31.4 / 29.2 CS (19-45 / 21-34), 1.6 deaths** | a JAX-trained policy transfers to the server at ~70% of its JAX score (scripted oracle: 63/61 JAX vs 45/28 server) |
 | `E15_noprior_gru_noopclick/seed0` | 09-27 13:35 | C# | no-prior GRU (norm+residual) + unwalkable clicks dropped (INT-001), standard preset, mirror, job 1603 | budget 3000 | running | THE gate test after ARCH-001 + INT-001 |
 | `server_train/jax-mirror-wave-s0` | 09-25 15:27 | JAX | same as above | same | cancelled at 0 updates | — | JAX deferred until C# gate |
 

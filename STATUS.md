@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-27 13:55 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-27 14:10 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
@@ -49,8 +49,8 @@ JAX-leg GRU uses the fixed wiring.
 **JAX LEG (running, per Dani's 22:40 plan):** heuristics-initialised GRU on
 the JAX sim to a compare point, then E04 vs that agent on the C# server.
 **DAgger-1 GRU clone on JAX: 41.0 / 44.4 CS sampled mirror (26-59 / 34-58)** -- the
-JAX heuristics-init GRU compare point; cross-play E04 vs it and its server
-mirror transfer are running (`runs/EVAL/XPLAY_E04_vs_jaxgru`, `XFER_jaxgru_mirror`);
+JAX heuristics-init GRU compare point; **cross-play on the C# server: E04 29.5 CS (22-33) vs the JAX GRU clone;
+the JAX clone in a server mirror 31.4 / 29.2 (JAX 41 / 44: ~70% transfers)**;
 round 3 running. E13 (no-prior JAX GRU, snap clicks) at u~80: 16 CS vs idle.
 Step 1 done: scripted last-hitter on the JAX sim vs idle red = 65 CS on all
 16 envs (deterministic sim: identical trajectories), 4792 decisions each in
