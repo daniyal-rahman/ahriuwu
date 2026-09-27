@@ -350,6 +350,20 @@ def farm_reward(cs_before, cs_after, alive_before, alive_after,
 
 
 WAVE_START_MS = 120_000
+#: Seeded per-env delay of the policy start (PARITY-002 protocol): a single
+#: deterministic scripted game is chaotic in CS, so engine parity is a MEAN over
+#: games that meet the waves at different phases. `max_s` 0 = off.
+START_JITTER = {"max_s": 0.0, "seed": 0}
+
+
+def start_ms_for(env_index: int) -> float:
+    """Policy start time for env ``env_index``: WAVE_START_MS plus a seeded
+    uniform delay in [0, START_JITTER["max_s"]] seconds (the champion holds
+    its wave-start position meanwhile)."""
+    if START_JITTER["max_s"] <= 0:
+        return float(WAVE_START_MS)
+    rng = np.random.default_rng([int(START_JITTER["seed"]), int(env_index)])
+    return float(WAVE_START_MS + 1000.0 * rng.uniform(0.0, START_JITTER["max_s"]))
 # Measured first minion contact in the untouched source-server control:
 # 124.909 s, blue (2157,12474), red (2259,12573). Start behind blue's wave.
 WAVE_START_POS = (1950., 12350.)
@@ -371,9 +385,10 @@ class WaveStart:
     ``legs`` is the Move sequence; the next leg is issued once the champion
     is within ``leg_reach`` of the current one or has stopped moving.
     """
-    def __init__(self, legs=(WAVE_START_POS,), tol=100., leg_reach=150.):
+    def __init__(self, legs=(WAVE_START_POS,), tol=100., leg_reach=150., start_ms=None):
         self.legs = tuple(legs)
         self.pos, self.tol, self.leg_reach = self.legs[-1], tol, leg_reach
+        self.start_ms = float(WAVE_START_MS if start_ms is None else start_ms)
         self.leg = -1
         self.last = None
         self.still = 0
@@ -381,7 +396,7 @@ class WaveStart:
     def order(self, champion, t_ms):
         if champion_dead(champion) or champion['cs'] != 0:
             raise RuntimeError('wave-start setup died or farmed before policy control')
-        if t_ms >= WAVE_START_MS:
+        if t_ms >= self.start_ms:
             if np.hypot(champion['x']-self.pos[0], champion['y']-self.pos[1]) > self.tol:
                 raise RuntimeError(f"wave-start setup missed {self.pos}: "
                                    f"position=({champion['x']}, {champion['y']}), hp={champion['hp']}")
@@ -489,7 +504,7 @@ class ServerCollector:
         if not self.start_near_wave:
             return
         indices = list(range(self.n_envs)) if indices is None else list(indices)
-        setups = {i: {t: WaveStart(TEAM_WAVE_START[t], 100. if t == 0 else 250.)
+        setups = {i: {t: WaveStart(TEAM_WAVE_START[t], 100. if t == 0 else 250., start_ms=start_ms_for(i))
                       for t in self.teams} for i in indices}
         count = 0
         # Only newly reset processes advance. Other environments remain paused.
@@ -1187,6 +1202,7 @@ def main():
                    help="relative (DEFAULT from 2026-09-28): (own - enemy_scale * enemy) gold and xp deltas + shaping, no death term; farm: the pre-E23 +1 CS, -2 death, shaping, xp")
     p.add_argument("--gold-scale", type=float, default=20.0); p.add_argument("--xp-scale", type=float, default=0.008)
     p.add_argument("--enemy-scale", type=float, default=1.0, help="weight of the opponent's gold/xp deltas (1 = zero-sum mirror, 0 = own only)")
+    p.add_argument("--start-jitter-s", type=float, default=0.0, help="seeded per-env delay of the policy start, 0..S seconds (parity protocol; 0 = off)")
     p.add_argument("--no-diag", action="store_true", help="skip the per-step diagnostic record (<run>/diag/)")
     p.add_argument("--detach-critic", action="store_true", help="stop the critic's gradient at the shared trunk (PolicyConfig.detach_critic)")
     p.add_argument("--click-mask", action="store_true", help="sample clicks from the masked joint distribution over walkable cells (INT-001 principled fix; PolicyConfig.click_mask)")
@@ -1246,6 +1262,7 @@ def main():
     globals()["XP_WEIGHT"] = args.xp_weight
     SNAP_CLICKS["on"] = not args.no_snap_clicks
     UNWALKABLE_CLICK["mode"] = args.unwalkable_click
+    START_JITTER.update(max_s=args.start_jitter_s, seed=args.seed)
     RELATIVE_REWARD.update(mode=args.reward, gold_scale=args.gold_scale, xp_scale=args.xp_scale, enemy_scale=args.enemy_scale)
     pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask,
                         detach_critic=args.detach_critic)
@@ -1276,7 +1293,7 @@ def main():
                      "frozen": f"frozen checkpoint {args.opponent_ckpt} (learner side alternates per server)"}[args.opponent],
         "reward": f"CS - 2*death + 5*(lane_potential_next - potential) + {args.xp_weight}*xp",
         "click_snap": not args.no_snap_clicks,
-        "unwalkable_click": args.unwalkable_click,
+        "unwalkable_click": args.unwalkable_click, "start_jitter_s": args.start_jitter_s,
         "reward": args.reward, "gold_scale": args.gold_scale, "xp_scale": args.xp_scale, "enemy_scale": args.enemy_scale,
         "initialization": "random; no prior"})
     snapshot_farming_source(run, command)

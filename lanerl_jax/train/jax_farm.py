@@ -34,7 +34,7 @@ from .actions import orders_from
 from .policy import PolicyConfig
 from .ppo import PPOConfig
 from .reward import lane_corridor_distance
-from .server_train import WAVE_START_MS, WAVE_START_POS, RED_WAVE_START_POS, farm_reward
+from .server_train import WAVE_START_MS, WAVE_START_POS, RED_WAVE_START_POS, farm_reward, start_ms_for
 from ..parity.policy_driver import _lane_frames
 
 GROUND_CLICK_NORMALIZATION = 'raw-screen-projection; environment-terrain-exit; no-decoder-EDT'
@@ -48,7 +48,7 @@ JAX_RED_LEGS = ((12500., 13300.), (11500., 13700.), (11000., 13600.),
                 (7500., 13700.), (4500., 13600.), RED_WAVE_START_POS)
 
 
-def validate_wave_start(state, team=0):
+def validate_wave_start(state, team=0, start_ms=None):
     """Check actual reset trajectory outcome, without repairing its state."""
     goal, tol = WAVE_START[team]
     position = np.array([state.x[team], state.y[team]])
@@ -56,8 +56,8 @@ def validate_wave_start(state, team=0):
         raise RuntimeError('wave-start setup died or farmed before policy control')
     if np.linalg.norm(position - goal) > tol:
         raise RuntimeError(f'wave-start setup missed {goal}: {position.tolist()}')
-    if float(state.t_ms) < WAVE_START_MS:
-        raise RuntimeError('wave-start setup returned before 120 game seconds')
+    if float(state.t_ms) < (WAVE_START_MS if start_ms is None else start_ms):
+        raise RuntimeError('wave-start setup returned before the policy start time')
 
 
 class JaxFarmCollector:
@@ -244,7 +244,8 @@ class JaxFarmCollector:
         # Reuse the policy dynamics executable during setup. A separate JIT
         # around this loop would compile the full routing graph a second time.
         self.states = self._step_states(self.states, first, mask)
-        max_decisions = int(np.ceil(WAVE_START_MS / (self.sim.step_ticks * self.sim.delta_ms))) + 1
+        start_ms = np.asarray([start_ms_for(i) for i in range(self.n_envs)])
+        max_decisions = int(np.ceil(start_ms.max() / (self.sim.step_ticks * self.sim.delta_ms))) + 1
         started = time.monotonic()
         for count in range(max_decisions):
             ts = list(self.teams)
@@ -253,7 +254,7 @@ class JaxFarmCollector:
                             | (np.asarray(self.states.cs[:, ts]) != 0).any(axis=1))
             if failed.any():
                 break
-            active = mask & (np.asarray(self.states.t_ms) < WAVE_START_MS)
+            active = mask & (np.asarray(self.states.t_ms) < start_ms)
             if not active.any():
                 break
             red_targets = [None] * self.n_envs
@@ -281,7 +282,7 @@ class JaxFarmCollector:
                                   for t in self.teams],
                     'setup': 'one routed move then idle; no teleports'}) + '\n')
             for t in self.teams:
-                validate_wave_start(state, t)
+                validate_wave_start(state, t, start_ms=start_ms_for(int(i)))
 
     def _write_metadata(self):
         data = {'environment': 'jax-experimental-farming', 'seed': self.seed,
