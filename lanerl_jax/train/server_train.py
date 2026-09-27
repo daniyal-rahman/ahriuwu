@@ -978,6 +978,10 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                                        err_msg="rollout/recompute log-prob mismatch (head masks?)")
             # Which loss term steers the shared trunk (before this update's step).
             grad_diag = {k: float(v) for k, v in trunk_norms(params, batch).items()}
+            # Explained variance of the critic on this batch (CleanRL's metric):
+            # 1 = predicts the returns, 0 = no better than their mean, < 0 worse.
+            _v = np.asarray(batch["value"]).reshape(-1); _r = np.asarray(batch["returns"]).reshape(-1)
+            grad_diag["explained_variance"] = float(1.0 - np.var(_r - _v) / (np.var(_r) + 1e-8))
             params, opt_state, rng, info = update(params, opt_state, batch, rng)
             metrics = {k: float(v) for k, v in summarise_minibatches(info).items()}
             metrics.update(grad_diag)
