@@ -1,7 +1,16 @@
-# STATUS (rewrite in place; last edit 2026-09-28 04:40 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 05:40 UTC, Claude)
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
+**E19 FINAL (09-28 05:30 UTC): 34.0 / 40.4 CS over 12 episodes per side (22-41 / 31-48),
+no prior, seed 1, XP 0 -- ABOVE THE GATE** (E15 seed 0: 28.5 / 31.8).
+
+**Dani's two questions (09-28):** (1) JAX vs C# parity for the scripted bot within
+1-3 CS, solo and mirror; (2) can PPO improve a prior, after replacing the custom
+update with a transcription of PureJaxRL `ppo_rnn.py` (handed to a second agent;
+handoff in the chat log). Parity, identical single-env config: solo JAX 70 vs
+server 65 (gap entirely in minutes 7-8), mirror 48 / 43 vs 45 / 43. Server spread
+over 4 seeds being measured (`runs/PARITY/`).
 **E15 FINAL (20:50 UTC): 28.5 / 31.8 CS over 12 episodes per side (23-37 / 18-44),
 combined 30.1, deaths ~0.1 -- a no-prior GRU AT the gate after ARCH-001 (GRU
 wiring) + INT-001 (no wall attraction). Not yet clearly above it: late checkpoints
