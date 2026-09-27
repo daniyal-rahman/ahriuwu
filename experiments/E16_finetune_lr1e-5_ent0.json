@@ -1,0 +1,39 @@
+{
+ "id": "E16_finetune_lr1e-5_ent0",
+ "question": "E14 held the prior (45 -> 37 frozen over 400 updates, E12b -> 0) but still drifted; its entropy rose 0.31 -> 0.57. Same arm with entropy_coef 0: is the entropy bonus the residual drift on a sharp prior?",
+ "port_base": 26900,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 8,
+  "mem": "9G",
+  "time": "6:00:00"
+ },
+ "init_from": "/mnt/nfs/projects/ahriuwu-lanerl-jax/lanerl_jax/runs/E12a_critic_warmup/seed0/server-farm-s0-20260927-022151-6eb81e88/ckpt_latest.msgpack",
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 400,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "mlp",
+  "lr-anneal": true,
+  "xp-weight": 0.002,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   100,
+   200,
+   400
+  ],
+  "seed": 0,
+  "lr": 1e-05,
+  "critic-lr": 1e-05,
+  "target-kl": 0.02,
+  "entropy-coef": 0.0
+ },
+ "note": "cpu partition (GPU visible from the desktop's cpu partition) because E13 holds the gpup GPU allocation for ~15 h"
+}
