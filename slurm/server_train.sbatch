@@ -21,6 +21,9 @@ set -euo pipefail
 REPO=${REPO:-/mnt/nfs/projects/ahriuwu-lanerl-jax}
 cd "$REPO"
 mkdir -p lanerl_jax/runs/server_train
+# Login-node caps must not force the desktop learner onto CPU.
+unset XLA_FLAGS
+export JAX_PLATFORMS=cuda
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export PYTHONUNBUFFERED=1
 export LANERL_VENDOR_ROOT=${LANERL_VENDOR_ROOT:-/mnt/nfs/projects/lanerl-vendor}

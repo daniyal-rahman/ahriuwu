@@ -25,7 +25,7 @@ from pathlib import Path
 REPO_SRV = Path("/srv/nfs/projects/ahriuwu-lanerl-jax")
 REPO_MNT = "/mnt/nfs/projects/ahriuwu-lanerl-jax"
 SERVER_DIR = "/mnt/nfs/projects/lanerl-vendor/LoLServer/GameServerConsole/bin/ClickV3/net6.0"
-ENV = ("env XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 "
+ENV = ("env -u XLA_FLAGS JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1 "
        "LANERL_VENDOR_ROOT=/mnt/nfs/projects/lanerl-vendor ./.venv-gpu/bin/python -m lanerl_jax.train.server_train")
 
 

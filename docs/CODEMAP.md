@@ -15,6 +15,7 @@ LEGACY = kept for history only; nothing imports it.
 | `lanerl_rl/ppo.py`, `model.py` | TOOL (reference only) | the original PyTorch PPO/GAE that `train/tests/test_ppo.py` checks the JAX port against |
 | `lanerl/patches/`, `lanerl/cfg/` | LIVE | vendor server patches (see its README) and the game configs |
 | `experiments/` | LIVE | one launcher per experiment ID; the only way runs start |
+| `ops/continue_heuristic_comparison.py` | TOOL | Registered one-shot E24 continuation: waits for training, runs six frozen comparisons via launcher, records/commits status and scores the fixed endpoint |
 | `ops/heuristic_improvement.py` | TOOL | Read-only paired frozen E25/E26/E27 scorer for the predeclared E24 teacher-improvement test; refuses missing/mismatched cohorts |
 | `ops/figures/readme_figures.py` | TOOL | regenerates every README figure (`docs/figures/`) from run metrics and `runs/EVAL/summary.jsonl`; read-only on runs |
 | `slurm/server_train.sbatch`, `ops/server_train_status.py`, `ops/desktop_suite.sh`, `ops/login_capped.sh` | TOOL | launch and monitor on the desktop; capped CPU work |
