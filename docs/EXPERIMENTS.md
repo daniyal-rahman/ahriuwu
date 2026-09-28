@@ -7,7 +7,7 @@ labelled `train`.
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
 | `E24_dagger_reference_relative/seed0` | 09-28 | C# | DAgger-2 BC initialization vs fixed heuristic, sides alternate, start jitter 20 s | reference PPO, lr 1e-5, detached critic, relative gold/XP/lane only, no KL prior | 400 updates, 409600 decisions | COMPLETE job 1717 at u400; frozen comparisons in progress; no improvement verdict yet | fixed u400 endpoint; success is NOT yet measured |
-| `E25_dagger_teacher_baseline/seed{2,3}` | 09-28 | C# | Frozen initial DAgger-2 clone vs heuristic, paired held-out starts | none | 16 total games (8 per side) | COMPLETE seeds [2]; frozen episodes recorded; paired verdict pending | baseline for PPO improvement beyond initialization |
+| `E25_dagger_teacher_baseline/seed{2,3}` | 09-28 | C# | Frozen initial DAgger-2 clone vs heuristic, paired held-out starts | none | 16 total games (8 per side) | LAUNCHING seed 3; completed seeds [2]; canary/startup watch required | baseline for PPO improvement beyond initialization |
 | `E26_heuristic_teacher_baseline/seed{2,3}` | 09-28 | C# | Heuristic vs heuristic, same held-out starts | none | 16 total games (8 per side) | PREPARED; dry-run passes; waiting for E24 to finish to run sequentially | baseline for improvement beyond the teacher |
 | `E27_reference_teacher_final/seed{2,3}` | 09-28 | C# | Frozen E24 u400 vs heuristic, same held-out starts | none | 16 total games (8 per side) | PREPARED; requires E24's explicit final checkpoint; not launched | `ops/heuristic_improvement.py`: paired return/gold CI lower bounds >0 vs both baselines and mean CS no lower; one training seed = preliminary |
 
