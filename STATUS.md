@@ -24,6 +24,10 @@ and within the 1-3 target on means. Question 1 answered (with the lane-path fix;
 server's 0.4-s barracks crawl remains unmodelled).
 ## BC/DAgger → reference PPO improvement test (E24–E27)
 
+<!-- E24_PIPELINE -->
+E24 completed u400. One-shot comparison is starting matched frozen baselines and the final policy; no improvement verdict yet.
+<!-- /E24_PIPELINE -->
+
 Dani requested a minimal demonstration of learning beyond the heuristic
 using ONLY delta-relative gold, delta-relative XP and lane keep. Prepared
 E24: existing server BC+DAgger-2 checkpoint (150 epochs on `dagger2.npz`),
