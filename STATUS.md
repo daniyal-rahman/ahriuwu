@@ -18,8 +18,8 @@ line (every JAX red minion lost ~1 s / ~100 u joining it); `TOP_LANE_PATH`'s red
 is now the server's measured line. Residual: the server's red minions crawl ~0.4 s
 through the barracks turns (unmodelled). Single deterministic games are CHAOTIC in CS
 under sub-second offsets, so parity is now measured as a MEAN over 16 games with
-seeded start jitter (`--start-jitter-s 20`, both engines): RESULT (16 games/engine): solo JAX 66.3 vs server 65.2; mirror 47.8 / 46.2 vs
-49.9 / 49.7 -- differences +1.1 / -2.1 / -3.5 with standard errors ~1.7: WITHIN NOISE
+seeded start jitter (`--start-jitter-s 20`, both engines): RESULT (16 games/engine): solo JAX 66.3 vs server 65.2; mirror 48.1 / 47.0 vs
+49.9 / 49.7 -- differences +1.1 / -1.8 / -2.7 with standard errors ~1.7: WITHIN NOISE
 and within the 1-3 target on means. Question 1 answered (with the lane-path fix; the
 server's 0.4-s barracks crawl remains unmodelled).
 ## BC/DAgger → reference PPO improvement test (E24–E27)
