@@ -25,7 +25,7 @@ server's 0.4-s barracks crawl remains unmodelled).
 ## BC/DAgger → reference PPO improvement test (E24–E27)
 
 <!-- E24_PIPELINE -->
-E25_dagger_teacher_baseline seed 3, job 1721: canary and startup watch passed. Waiting for all frozen episodes.
+E25_dagger_teacher_baseline seed 3 completed; frozen results preserved for the paired comparison.
 <!-- /E24_PIPELINE -->
 
 Dani requested a minimal demonstration of learning beyond the heuristic
