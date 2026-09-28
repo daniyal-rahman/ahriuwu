@@ -1,4 +1,11 @@
-# STATUS (rewrite in place; last edit 2026-09-28 10:50 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 17:45 UTC, Claude)
+
+**JAX TRAINING (Dani, 09-28 17:40 UTC):** parity established, so training moves to JAX.
+E31 = no prior (fixed GRU, noop clicks, reference PPO, relative reward), E32 = heuristic
+init (DAgger-3 GRU clone) with lr 1e-5, detached critic, no KL; both 16 envs x 11000
+updates (23M steps, ~1.5 days at ~230 dec/s each), evaluated every 500 updates on
+JAX (`ops/jax_periodic_eval.sh`, `runs/EVAL/jax_summary.jsonl`); finals cross-played on
+the C# server. Night-shift cron REMOVED at Dani's request (he will schedule separately).
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
