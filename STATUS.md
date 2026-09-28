@@ -25,7 +25,7 @@ server's 0.4-s barracks crawl remains unmodelled).
 ## BC/DAgger → reference PPO improvement test (E24–E27)
 
 <!-- E24_PIPELINE -->
-E25_dagger_teacher_baseline seed 3 completed; frozen results preserved for the paired comparison.
+E26_heuristic_teacher_baseline seed 2: launching through ops/launch.py with canary and startup watch. E24 final is fixed at u400.
 <!-- /E24_PIPELINE -->
 
 Dani requested a minimal demonstration of learning beyond the heuristic
