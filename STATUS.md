@@ -40,14 +40,13 @@ PPO checkpoint, all against the heuristic on identical held-out seeds 2/3,
 requires reward/gold improvement over BOTH baselines and no lower mean CS.
 No intermediate-checkpoint selection; one training seed is preliminary.
 
-BLOCKED ON HARDWARE: desktop is drained/not responding (`boot to windows`).
-Asked Dani to return it to Linux. No canary, training or evaluation submitted;
-no improvement claimed. E24/E25/E26 dry-runs pass; E27 deliberately refuses
-launch without its final checkpoint. 18 distinct capped tests pass (10 existing
-server-learner tests + 8 reward/evaluation/launcher/scorer regressions); server
-CLI help passes. Scorer refuses missing cohorts with NOT SCORED.
-All run specs/launch sequence are in `experiments/README.md`; no watchdog
-or recurring jobs created. Existing parity queue/jobs remain untouched.
+RUNNING: E24 job **1717** on desktop/gpuhog, 2026-09-28 07:15 UTC.
+Dani confirmed Linux was back; dry-run passed, live canary passed in 28 s,
+and the 400-update run has finite learner metrics. Startup watch in progress.
+Run: `lanerl_jax/runs/E24_dagger_reference_relative/seed0/server-farm-s0-20260928-071520-b95b2fc9`.
+E25/E26/E27 comparisons remain pending; no improvement claimed. 18 distinct
+capped tests passed before launch. Full protocol is in `experiments/README.md`.
+No watchdog or recurring jobs created; other agents' jobs remain untouched.
 
 ## Reference PPO port
 
