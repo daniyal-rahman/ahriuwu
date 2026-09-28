@@ -6,7 +6,7 @@
 cd /srv/nfs/projects/ahriuwu-lanerl-jax
 ROOT=$1; STEP=${2:-500}; LAST=${LAST:-0}; ID=$(basename $(dirname $ROOT))
 while true; do
-  RUN=$(ls -d $ROOT/jax-farm-*/ 2>/dev/null | tail -1)
+  RUN=$(ls -d $ROOT/jax-farm-*/ $ROOT/vec-*/ 2>/dev/null | tail -1)
   U=$(python3 -c "import json;m=json.load(open('$RUN/manifest.json'));print(m['checkpoints'][-1]['update'] if m.get('checkpoints') else 0)" 2>/dev/null || echo 0)
   if [ "$U" -ge $((LAST + STEP)) ]; then
     for try in 1 2 3; do cp $RUN/ckpt_latest.msgpack $RUN/eval_u$U.msgpack; sleep 3; cmp -s $RUN/ckpt_latest.msgpack $RUN/eval_u$U.msgpack && break; sleep 10; done

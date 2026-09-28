@@ -1,4 +1,33 @@
-# STATUS (rewrite in place; last edit 2026-09-28 17:45 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 20:10 UTC, Claude)
+
+**DESKTOP DOWN (booted to Windows 19:53 UTC): E31/E32 CANCELLED at updates 82 / 112;
+both have `ckpt_latest.msgpack` and resume with `--resume`.** Where they were: E31 (no
+prior) episode CS 8.5 (updates 30-60) -> 18.0 (60-100), entropy 10.6 -> 8.6, ev 0.71 --
+LEARNING from scratch at ~14 s/update; E32 (heuristic init, lr 1e-5) 43.9 -> 46.2,
+entropy 0.80, ev -0.38 (critic not fitting yet) -- holding, not yet improving.
+
+**VECTORISED JAX TRAINER BUILT (Dani, 09-28): `lanerl_jax/train/vec_train.py`.** The
+whole rollout is one `jax.lax.scan` over vmapped envs (no host loop): GRU carry in the
+scan (reset on done), NEAR-WAVE reset from a BANK of collector-prepared states (same
+seeds/legs/jitter as `JaxFarmCollector`, `bank/setup.jsonl`), relative reward identical
+to `server_train.relative_reward` (test), dropped/masked unwalkable clicks, `--init-from`,
+scripted opponent, RunDir checkpoints that `jax_eval`/`ops/jax_periodic_eval.sh` load
+unchanged (evaluator glob now also matches `vec-*`). CPU smoke + checkpoint reload OK.
+Throughput of the scan architecture (old `trainer.make_train`, GPU shared with E31/E32):
+16 envs 254 dec/s (0.94 GB), 64 envs 983 dec/s (2.35 GB) -- LINEAR in envs (the step is
+latency-bound), vs ~230 dec/s for the 16-env collector path. 128+ env runs died
+(shared GPU; exit 1, likely OOM beside 11 GB of E31/E32) before the desktop went down.
+TESTS GREEN (`lanerl_jax/train/tests/test_vec_train.py`, 4): reward equality with the
+collector path; actor/learner log-prob agreement EXACT for mlp, gru and gru+scripted red
+(first version scrambled GRU sequences by folding the agent axis after a time/env swap --
+the agreement test caught it); loop runs, full episodes end, metrics finite.
+Sweep with the GPU free (gpup partition; the cpu partition does NOT preempt llm-serve's
+11.7 GB and OOMs): 128 envs 2237 dec/s (4.26 GB), 256 envs 4360 dec/s (8.09 GB); 512 pending.
+Frozen-checkpoint check pending (`runs/VECCHECK`: E32 init at lr 0, 64 envs; episode CS
+must land at the collector's 44 / 45).
+NEXT when desktop is back: (1) resume E31/E32 (`--resume`), or replace them with vec runs;
+(2) vec sweep 64/128/256/512 envs for dec/s + peak GB with the GPU free;
+(3) E31/E32-style runs on the vec path (256+ envs), then C# cross-play finals.
 
 **JAX TRAINING (Dani, 09-28 17:40 UTC):** parity established, so training moves to JAX.
 E31 = no prior (fixed GRU, noop clicks, reference PPO, relative reward), E32 = heuristic
@@ -6,7 +35,6 @@ init (DAgger-3 GRU clone) with lr 1e-5, detached critic, no KL; both 16 envs x 1
 updates (23M steps, ~1.5 days at ~230 dec/s each), evaluated every 500 updates on
 JAX (`ops/jax_periodic_eval.sh`, `runs/EVAL/jax_summary.jsonl`); finals cross-played on
 the C# server. Night-shift cron REMOVED at Dani's request (he will schedule separately).
-
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
 **E19 FINAL (09-28 05:30 UTC): 34.0 / 40.4 CS over 12 episodes per side (22-41 / 31-48),
