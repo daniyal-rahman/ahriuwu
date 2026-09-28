@@ -21,6 +21,33 @@ under sub-second offsets, so parity is now measured as a MEAN over 16 games with
 seeded start jitter (`--start-jitter-s 20`, both engines): JAX runs on the login
 node now; the server runs wait for the desktop (booted to Windows, 09-28 ~09:30 UTC;
 E20's final evaluation is queued behind it too).
+## BC/DAgger → reference PPO improvement test (E24–E27)
+
+Dani requested a minimal demonstration of learning beyond the heuristic
+using ONLY delta-relative gold, delta-relative XP and lane keep. Prepared
+E24: existing server BC+DAgger-2 checkpoint (150 epochs on `dagger2.npz`),
+fresh reference optimizer, fixed heuristic opponent, alternating sides,
+8 servers/8 cores, 400 updates, lr 1e-5 annealed, detached critic, no KL prior.
+Reward explicitly `(own Δgold - enemy Δgold)/20 + .008*(own ΔXP - enemy ΔXP)
++ 5*Δlane_potential`; no direct CS/death reward.
+
+Prerequisite REW-13 fixed: frozen opponents had lost enemy stats (making
+relative reward own-only) and red evaluation rows were labeled blue.
+E25 evaluates the unchanged clone, E26 the heuristic, E27 the fixed u400
+PPO checkpoint, all against the heuristic on identical held-out seeds 2/3,
+16 games each, 8 per side. The paired scorer in `ops/heuristic_improvement.py`
+requires reward/gold improvement over BOTH baselines and no lower mean CS.
+No intermediate-checkpoint selection; one training seed is preliminary.
+
+BLOCKED ON HARDWARE: desktop is drained/not responding (`boot to windows`).
+Asked Dani to return it to Linux. No canary, training or evaluation submitted;
+no improvement claimed. E24/E25/E26 dry-runs pass; E27 deliberately refuses
+launch without its final checkpoint. 18 distinct capped tests pass (10 existing
+server-learner tests + 8 reward/evaluation/launcher/scorer regressions); server
+CLI help passes. Scorer refuses missing cohorts with NOT SCORED.
+All run specs/launch sequence are in `experiments/README.md`; no watchdog
+or recurring jobs created. Existing parity queue/jobs remain untouched.
+
 ## Reference PPO port
 
 Live learner ported to PureJaxRL `ppo_rnn.py` revision

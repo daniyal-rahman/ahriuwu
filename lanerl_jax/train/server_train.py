@@ -118,6 +118,13 @@ class ScreenCellTable:
         return self.standable(wx.reshape(-1), wy.reshape(-1)).reshape(wx.shape) & ~self.minimap
 
 
+def agent_teams(collector):
+    """Actual team of each exposed row, including alternating frozen matches."""
+    if hasattr(collector, "side"):
+        return np.asarray(collector.side)
+    return np.asarray([collector.teams[i % collector.T] for i in range(collector.n)])
+
+
 def click_mask_host(collector):
     """(n, 96, 54) bool walkable-cell mask per agent row from the collector's
     positions and lane frames (PolicyConfig.click_mask). A dead or unknown
@@ -127,7 +134,7 @@ def click_mask_host(collector):
     out = np.ones((n, len(SCREEN_X_VALUES), len(SCREEN_Y_VALUES)), bool)
     for i in range(n):
         if np.isfinite(pos[i, 0]):
-            m = tab.walkable_cells(pos[i, 0], pos[i, 1], collector.frames[collector.teams[i % collector.T]])
+            m = tab.walkable_cells(pos[i, 0], pos[i, 1], collector.frames[int(agent_teams(collector)[i])])
             if m.any():
                 out[i] = m
     return out
@@ -181,7 +188,7 @@ class StepDiag:
         value (N,); px (N, 96), py (N, 54) click marginals; ent (N, 3); actions (N, 3)."""
         pos = self.collector.positions()
         N = pos.shape[0]
-        teams = np.asarray([self.collector.teams[i % self.collector.T] for i in range(N)])
+        teams = agent_teams(self.collector)
         frames = self.collector.frames if hasattr(self.collector, "frames") else None
         stand, wall = self._standable_xy(pos[:, 0], pos[:, 1])
         p_unw = np.full(N, np.nan); act_unw = np.zeros(N, bool)
@@ -298,6 +305,8 @@ def relative_reward(stats_before, stats_after, enemy_before, enemy_after, done=N
 def enemy_rows(collector, stats):
     """Opponent champion's stats per agent row: the other team's row of the
     same env (mirror), or zeros when the collector has a single team."""
+    if hasattr(collector, "enemy_stats"):
+        return collector.enemy_stats(stats)
     if getattr(collector, "T", 1) == 2:
         n = stats.shape[0]; idx = np.arange(n) ^ 1
         return stats[idx]
@@ -777,6 +786,7 @@ class FrozenOpponentCollector:
         if inner.T != 2:
             raise ValueError("frozen opponent needs a mirror (two-team) collector")
         self.inner, self.n_envs, self.n, self.T, self.teams = inner, inner.n_envs, inner.n_envs, 1, (0,)
+        self.frames = getattr(inner, "frames", _lane_frames())
         self.side = np.arange(self.n_envs) % 2                 # learner's team per server
         self.rows = np.arange(self.n_envs) * 2 + self.side      # learner's agent rows in `inner`
         self.opp_rows = np.arange(self.n_envs) * 2 + (1 - self.side)
@@ -799,7 +809,12 @@ class FrozenOpponentCollector:
     def _split(self, obs, stats):
         take = lambda x: x[self.rows]
         self._opp_obs = jax.tree.map(lambda x: x[self.opp_rows], obs)
-        return jax.tree.map(take, obs), stats[self.rows]
+        # Snapshot BOTH sides in the same observation. Cached latest opponent
+        # stats would lose the pre-step values once observe() runs again.
+        return jax.tree.map(take, obs), np.concatenate((stats[self.rows], stats[self.opp_rows]), axis=1)
+
+    def enemy_stats(self, stats):
+        return stats[:, stats.shape[1] // 2:]
 
     def observe(self):
         return self._split(*self.inner.observe())
@@ -1085,6 +1100,10 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
     diag = StepDiag.create(run.path, collector) if diag_steps else None   # scripted runs too (parity timelines)
     obs, stats = collector.observe()
     deaths = np.zeros(collector.n, np.int64)
+    episode_return = np.zeros(collector.n, np.float64)
+    episode_gold = np.zeros(collector.n, np.float64)
+    episode_xp = np.zeros(collector.n, np.float64)
+    episode_shaping = np.zeros(collector.n, np.float64)
     records = []
     done_count = np.zeros(collector.n, np.int64)
     steps = 0
@@ -1107,17 +1126,31 @@ def evaluate_frozen(collector, policy, params, run, *, seed, episodes_per_env=1,
                 carry = jnp.where(jnp.asarray(done)[:, None], 0.0, carry)
             next_obs, next_stats = collector.observe()
             deaths += (stats[:, 1].astype(bool) & ~next_stats[:, 1].astype(bool))
+            reward, terms = step_reward(collector, stats, next_stats, done, None)
+            episode_return += np.asarray(reward)
+            episode_gold += np.asarray(terms["cs"])
+            episode_xp += np.asarray(terms["xp"])
+            episode_shaping += np.asarray(terms["approach"])
             if diag is not None:
-                _, terms = step_reward(collector, stats, next_stats, done, None)
                 value, px, py, ent = (np.asarray(v) for v in jax.device_get(extra))
                 diag.add(0, steps, stats, next_stats, jax.device_get(terms), value, px, py, ent, host_actions, np.asarray(done))
             steps += 1
             for i in np.flatnonzero(done):
                 rec = {"agent": int(i), "env": int(i) // collector.T,
-                       "team": int(collector.teams[int(i) % collector.T]),
+                       "team": int(agent_teams(collector)[i]),
                        "episode": int(collector.episodes[i]), "cs": float(next_stats[i, 0]),
                        "deaths": int(deaths[i]), "wall_s": time.monotonic() - started}
-                records.append(rec); run.log(rec); print(json.dumps(rec), flush=True)
+                if hasattr(collector, "enemy_stats"):
+                    enemy = collector.enemy_stats(next_stats)
+                    rec.update(opponent_cs=float(enemy[i, 0]),
+                               gold_diff=float(next_stats[i, 4] - enemy[i, 4]),
+                               xp_diff=float(next_stats[i, 3] - enemy[i, 3]))
+                rec.update(reward_return=float(episode_return[i]),
+                           reward_gold=float(episode_gold[i]), reward_xp=float(episode_xp[i]),
+                           reward_lane_keep=float(episode_shaping[i]))
+                if done_count[i] < episodes_per_env:
+                    records.append(rec); run.log(rec); print(json.dumps(rec), flush=True)
+                episode_return[i] = episode_gold[i] = episode_xp[i] = episode_shaping[i] = 0
                 deaths[i] = 0
                 done_count[i] += 1
             if done.any():
@@ -1184,9 +1217,9 @@ def main():
     p.add_argument("--target-kl", type=float, default=None, help="deprecated compatibility argument; reference PPO does not stop on KL")
     p.add_argument("--kl-prior", type=float, default=None, help="coefficient of KL(prior || policy) to the --init-from checkpoint (the league / AlphaStar anchor)")
     p.add_argument("--minibatches", type=int, default=1)
-    p.add_argument("--opponent", choices=("idle", "mirror", "frozen"), default="idle",
+    p.add_argument("--opponent", choices=("idle", "mirror", "frozen", "scripted"), default="idle",
                    help="idle: blue farms, red stays in fountain; mirror: one policy drives both champions; "
-                        "frozen: the learner drives one side (alternating per server), --opponent-ckpt drives the other")
+                        "frozen: --opponent-ckpt drives the other side; scripted: fixed heuristic last-hitter (alternating sides)")
     p.add_argument("--opponent-ckpt", type=Path, default=None, help="checkpoint for --opponent frozen")
     p.add_argument("--team", type=int, choices=(0, 1), default=0,
                    help="idle mode: which side the learner/scripted player takes (1 = red, blue idles)")
@@ -1290,6 +1323,7 @@ def main():
         "ppo": cfg._asdict(), "collector": vars(args), "environment": "source-server",
         "observation": "viewport+server-fog+structured-HUD",
         "opponent": {"idle": "idle-fountain", "mirror": "mirror-self-play",
+                     "scripted": "fixed heuristic lasthit (learner side alternates per server)",
                      "frozen": f"frozen checkpoint {args.opponent_ckpt} (learner side alternates per server)"}[args.opponent],
         "reward": f"CS - 2*death + 5*(lane_potential_next - potential) + {args.xp_weight}*xp",
         "click_snap": not args.no_snap_clicks,
@@ -1316,6 +1350,10 @@ def main():
         if args.opponent == "frozen":
             opp_policy, opp_params = load_checkpoint_policy(args.opponent_ckpt)
             run.set_results(opponent_ckpt_sha256=file_sha256(args.opponent_ckpt))
+        if args.opponent == "scripted":
+            from ..parity.policy_driver import ScriptedPolicy
+            from .scripted_policy import scripted_act
+            opp_policy, opp_params = ScriptedPolicy(scripted_act), {}
         if args.workers > 1:
             collector = MultiProcessCollector(args.envs, run.path, args.port_base, args.episode_s,
                                               args.start_near_wave, args.step_ticks, args.server_dir,
@@ -1324,7 +1362,7 @@ def main():
             collector = ServerCollector(args.envs, run.path, args.port_base, args.episode_s,
                                         args.start_near_wave, args.step_ticks, args.server_dir,
                                         teams=teams)
-        if args.opponent == "frozen":
+        if args.opponent in ("frozen", "scripted"):
             collector = FrozenOpponentCollector(collector, opp_policy, opp_params, seed=args.seed)
     except BaseException as exc:
         run.set_results(status='failed', error=repr(exc))

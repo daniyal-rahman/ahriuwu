@@ -63,6 +63,8 @@ def build_args(spec, a):
         args["opponent-ckpt"] = must_exist("opponent checkpoint", a.opponent_ckpt or spec.get("opponent_ckpt", ""))
         must_exist("opponent manifest", Path(srv(args["opponent-ckpt"])).parent / "manifest.json")
     init = a.init_from or spec.get("init_from")
+    if spec.get("require_checkpoint") and not (a.resume or init):
+        sys.exit("REFUSED: this evaluation requires --resume with the fixed final checkpoint")
     if a.resume and init:
         sys.exit("REFUSED: --resume and --init-from are exclusive")
     if a.resume:
@@ -89,6 +91,9 @@ def canary(args, name):
     c = dict(args); c.update({"envs": 1, "rollout": 4, "updates": 2, "minibatches": 1,
                               "port-base": args["port-base"] + 30, "out": args["out"] + "-canary",
                               "save-updates": []})
+    evaluation = bool(args.get("eval-episodes", 0))
+    if evaluation:
+        c.update({"eval-episodes": 1, "episode-s": 130, "start-jitter-s": 0})
     c.pop("resume", None)           # a resume's counter would exceed 2 updates; canary the code path with init-from
     if "init-from" not in c and "resume" in args:
         c["init-from"] = args["resume"]
@@ -99,7 +104,7 @@ def canary(args, name):
     t = time.time()
     r = subprocess.run(cmd, capture_output=True, text=True)
     tail = "\n".join(l for l in (r.stdout + r.stderr).splitlines() if "absl" not in l and "cudart" not in l)[-1500:]
-    if r.returncode != 0 or '"update": 2' not in r.stdout:
+    if r.returncode != 0 or ('"mean_cs"' if evaluation else '"update": 2') not in r.stdout:
         sys.exit(f"CANARY FAILED after {time.time()-t:.0f}s (rc {r.returncode}):\n{tail}")
     print(f"canary passed in {time.time()-t:.0f}s", flush=True)
 
@@ -107,14 +112,14 @@ def canary(args, name):
 def submit(spec, args, name, dry):
     res = spec["slurm"]
     argv = argv_of(args)
-    if res.get("partition") == "gpup":
-        cmd = ["sbatch", "--parsable", f"--job-name={name}", f"--cpus-per-task={res['cpus']}", f"--mem={res['mem']}",
+    if res.get("partition") in ("gpup", "gpuhog"):
+        cmd = ["sbatch", "--parsable", f"--partition={res['partition']}", f"--time={res.get('time', '24:00:00')}", f"--job-name={name}", f"--cpus-per-task={res['cpus']}", f"--mem={res['mem']}",
                "slurm/server_train.sbatch", *argv]
     else:
         cmd = ["srun", "-p", "cpu", "-w", "desktop", f"--cpus-per-task={res['cpus']}", f"--mem={res['mem']}",
                f"--time={res.get('time', '24:00:00')}", f"--chdir={REPO_MNT}", f"--job-name={name}",
                "bash", "-c", ENV + " " + shlex.join(argv)]
-    print("command:", shlex.join(cmd)[:400], flush=True)
+    print("command:", shlex.join(cmd), flush=True)
     if dry:
         return None
     out_dir = srv(REPO_SRV / args["out"]); out_dir.mkdir(parents=True, exist_ok=True)
@@ -128,17 +133,28 @@ def submit(spec, args, name, dry):
     print("srun started; log", log); return "srun"
 
 
-def watch_startup(name, log_glob, seconds=300):
+def watch_startup(name, log_glob, seconds=180, completed_dir=None):
     """After submission: wait for RUNNING, then watch for `seconds` that the job
     stays in the queue and its log shows no traceback. A run that dies on
     startup (bad resume path, port, memory) is reported here, not hours later."""
     import glob
+    def completed():
+        if completed_dir is None:
+            return False
+        files = list(Path(completed_dir).glob("server-farm-*/manifest.json"))
+        launch = Path(completed_dir) / "launch.json"
+        if launch.exists():
+            files = [f for f in files if f.stat().st_mtime >= launch.stat().st_mtime]
+        return len(files) == 1 and json.loads(files[0].read_text()).get("results", {}).get("status") == "complete"
+
     t0 = time.time()
     while time.time() - t0 < 600:
         state = [j[1] for j in live_jobs() if j[0] == name]
         if state and state[0] == "RUNNING":
             break
         if not state:
+            if completed():
+                print(f"{name} completed successfully before startup watch ended", flush=True); return
             if time.time() - t0 < 90:      # an srun job takes a moment to appear in squeue
                 time.sleep(5); continue
             sys.exit(f"STARTUP FAILED: job {name} left the queue before running")
@@ -149,6 +165,8 @@ def watch_startup(name, log_glob, seconds=300):
     while time.time() - started < seconds:
         time.sleep(15)
         if not any(j[0] == name for j in live_jobs()):
+            if completed():
+                print(f"{name} completed successfully during startup watch", flush=True); return
             logs = sorted(glob.glob(log_glob), key=os.path.getmtime)
             tail = ""
             if logs:
@@ -202,9 +220,9 @@ def main():
         canary(args, name)
     jid = submit(spec, args, name, a.dry_run)
     if jid and not a.no_watch:
-        log_glob = (f"{REPO_SRV}/lanerl_jax/runs/server_train/{name}-*.out" if spec["slurm"].get("partition") == "gpup"
+        log_glob = (f"{REPO_SRV}/lanerl_jax/runs/server_train/{name}-*.out" if spec["slurm"].get("partition") in ("gpup", "gpuhog")
                     else f"{REPO_SRV}/{args['out']}/{name}.out")
-        watch_startup(name, log_glob)
+        watch_startup(name, log_glob, completed_dir=REPO_SRV / args["out"])
 
 
 if __name__ == "__main__":

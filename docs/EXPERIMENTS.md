@@ -6,6 +6,11 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E24_dagger_reference_relative/seed0` | 09-28 | C# | DAgger-2 BC initialization vs fixed heuristic, sides alternate, start jitter 20 s | reference PPO, lr 1e-5, detached critic, relative gold/XP/lane only, no KL prior | 400 updates, 409600 decisions | PREPARED; dry-run passes; desktop drained/Windows, no canary or training submitted | fixed u400 endpoint; success is NOT yet measured |
+| `E25_dagger_teacher_baseline/seed{2,3}` | 09-28 | C# | Frozen initial DAgger-2 clone vs heuristic, paired held-out starts | none | 16 total games (8 per side) | PREPARED; seed-2 dry-run passes; desktop unavailable | baseline for PPO improvement beyond initialization |
+| `E26_heuristic_teacher_baseline/seed{2,3}` | 09-28 | C# | Heuristic vs heuristic, same held-out starts | none | 16 total games (8 per side) | PREPARED; seed-2 dry-run passes; desktop unavailable | baseline for improvement beyond the teacher |
+| `E27_reference_teacher_final/seed{2,3}` | 09-28 | C# | Frozen E24 u400 vs heuristic, same held-out starts | none | 16 total games (8 per side) | PREPARED; requires E24's explicit final checkpoint; not launched | `ops/heuristic_improvement.py`: paired return/gold CI lower bounds >0 vs both baselines and mean CS no lower; one training seed = preliminary |
+
 | `server_first_20260925/dead-train/seed0` (Codex) | 09-25 | C# | idle red, near-wave, 30 Hz, 2 envs | lr 1e-5, ent 0.001, adv-norm | 175k dec | uniform buttons after 684 updates; train CS 0-19 | no learning: lr too small |
 | `server_train/idle-wave-s0` | 09-25 08:42 | C# | idle, near-wave, 10 Hz, 4 envs | lr 3e-4, ent 0.001 | 2.5M dec | collapsed to `recall`, sat in fountain (train CS 3-7) | REW-11 shaping bug |
 | `server_train/mirror-s0` | 09-25 08:53 | C# | mirror, from fountain, 10 Hz, 12 envs | lr 3e-4, ent 0.01 | 5.3M dec | move/attack_move/R only, entropy 9.6, CS 0.1 | PPO-15 entropy bias |
