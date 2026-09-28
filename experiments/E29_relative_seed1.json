@@ -1,0 +1,38 @@
+{
+ "id": "E29_relative_seed1",
+ "question": "E23 recipe (E15 + relative reward, no death term) on seed 1: seed replication. Night queue item.",
+ "port_base": 28500,
+ "slurm": {
+  "partition": "cpu",
+  "cpus": 8,
+  "mem": "12G",
+  "time": "12:00:00"
+ },
+ "args": {
+  "envs": 10,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "rollout": 128,
+  "updates": 3000,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "preset": "standard",
+  "core": "gru",
+  "lr-anneal": true,
+  "no-snap-clicks": true,
+  "minibatches": 4,
+  "ckpt-every": 20,
+  "save-updates": [
+   500,
+   1000,
+   2000,
+   4000
+  ],
+  "seed": 1,
+  "core-norm": true,
+  "core-residual": true,
+  "unwalkable-click": "noop",
+  "reward": "relative"
+ },
+ "note": "cpu partition (GPU visible) because E13 holds the gpup allocation"
+}

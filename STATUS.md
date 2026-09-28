@@ -1,5 +1,14 @@
 # STATUS (rewrite in place; last edit 2026-09-28 10:50 UTC, Claude)
 
+## NIGHT QUEUE (pre-approved; the night-shift agent launches the first unlaunched item when the desktop is free)
+- E28_clickmask_seed1
+- E29_relative_seed1
+- E30_finetune_anchor_2000
+launched: (none yet)
+
+## Night shift log
+(none yet)
+
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
 **E19 FINAL (09-28 05:30 UTC): 34.0 / 40.4 CS over 12 episodes per side (22-41 / 31-48),
