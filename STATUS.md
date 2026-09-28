@@ -50,12 +50,13 @@ and clear login XLA_FLAGS; no seed/checkpoint is being selected based on results
 Run: `lanerl_jax/runs/E24_dagger_reference_relative/seed0/server-farm-s0-20260928-071520-b95b2fc9`.
 E25/E26/E27 comparisons remain pending; no improvement claimed. 18 distinct
 capped tests passed before launch. Full protocol is in `experiments/README.md`.
-One-shot continuation `e24-comparison.service` is being armed to wait for E24,
+One-shot continuation `e24-comparison.service` is **ACTIVE** (PID 764627), waiting for E24,
 then launch E25/E26/E27 seeds 2/3 sequentially, with dry-runs, canaries and
 startup watches, and score them. Registered in `/mnt/nfs/shared/jobs/REGISTRY.tsv`;
 no paid services. Log `/mnt/nfs/shared/jobs/E24-comparison.out`; stop with
 `systemctl --user stop e24-comparison.service` (E24 job 1717 is independent).
-The worker commits start/stop progress in these existing docs and removes its
+Continuation/backend regression checks passed (5 tests). The worker commits
+start/stop progress in these existing docs and removes its
 registry entry when done. Other agents' jobs remain untouched.
 
 ## Reference PPO port
