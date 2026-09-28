@@ -1,0 +1,26 @@
+{
+ "engine": "JAX",
+ "launch": "see command in launch.json",
+ "args": {
+  "envs": 16,
+  "opponent": "mirror",
+  "start-near-wave": true,
+  "step-ticks": 6,
+  "episode-s": 600,
+  "rollout": 128,
+  "updates": 11000,
+  "minibatches": 4,
+  "preset": "standard",
+  "reward": "relative",
+  "unwalkable-click": "noop",
+  "lr-anneal": true,
+  "ckpt-every": 50,
+  "seed": 0,
+  "core": "gru",
+  "core-norm": true,
+  "core-residual": true,
+  "out": "lanerl_jax/runs/E31_jax_noprior_gru/seed0"
+ },
+ "id": "E31_jax_noprior_gru",
+ "question": "Dani: on the JAX sim (parity established), how far does NO-prior PPO go? Fixed GRU (norm+residual), dropped unwalkable clicks, reference PPO defaults, relative gold+xp reward, mirror, 11000 updates x 2048 steps = 23M steps (3x the gate budget). Targets: ~6 CS/min and/or sophisticated trading. Final checkpoint cross-played on the C# server."
+}

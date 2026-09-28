@@ -42,13 +42,14 @@ def main():
     parser.add_argument('--lr-anneal', action='store_true')
     parser.add_argument('--core', choices=('mlp', 'gru'), default='mlp')
     parser.add_argument('--reward', choices=('farm', 'relative'), default='relative')
+    parser.add_argument('--detach-critic', action='store_true', help='stop the critic gradient at the shared trunk')
     parser.add_argument('--click-mask', action='store_true', help='masked joint click distribution over walkable cells (INT-001)')
     parser.add_argument('--start-jitter-s', type=float, default=0.0, help='seeded per-env delay of the policy start (parity protocol)')
     parser.add_argument('--unwalkable-click', choices=('resolve', 'noop'), default='resolve', help='movement click onto unwalkable ground: resolve (closest exit) or drop (INT-001)')
     parser.add_argument("--core-norm", action="store_true", help="gru: LayerNorm on the GRU input")
     parser.add_argument("--core-residual", action="store_true", help="gru: heads see trunk + GRU output (plain GRU heads are near-blind, ARCH-001)")
     parser.add_argument('--preset', choices=('legacy', 'standard'), default='legacy')
-    parser.add_argument('--fine-tune', action='store_true', help='standard preset with the PPO-16 fine-tune recipe: lr 1e-5 both, entropy 0, KL stop 0.02 (E14/E16)')
+    parser.add_argument('--fine-tune', action='store_true', help='standard preset with the fine-tune recipe: lr 1e-5 both, entropy 0 (reference loop: no KL stop)')
     parser.add_argument('--ckpt-every', type=int, default=10)
     parser.add_argument('--eval-episodes', type=int, default=0)
     parser.add_argument('--scripted', choices=('lasthit', 'any'), default=None)
@@ -85,12 +86,12 @@ def main():
     resume_params_only = False
     if args.init_from is not None:
         args.resume, resume_params_only = args.init_from, True
-    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask)
+    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask, detach_critic=args.detach_critic)
     src_ckpt = args.resume or args.init_from
     if src_ckpt is not None and (src_ckpt.parent / 'manifest.json').exists():
         saved = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})
         if saved:
-            pcfg = PolicyConfig(**{**saved, "click_mask": args.click_mask or saved.get("click_mask", False)})
+            pcfg = PolicyConfig(**{**saved, "click_mask": args.click_mask or saved.get("click_mask", False), "detach_critic": args.detach_critic or saved.get("detach_critic", False)})
     policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.jax_train', *sys.argv[1:]])
     run = RunDir(args.out, f'jax-farm-s{args.seed}', {
