@@ -42,6 +42,7 @@ def main():
     parser.add_argument('--lr-anneal', action='store_true')
     parser.add_argument('--core', choices=('mlp', 'gru'), default='mlp')
     parser.add_argument('--reward', choices=('farm', 'relative'), default='relative')
+    parser.add_argument('--grad-diag', action='store_true', help='log per-term trunk gradient norms (memory-heavy)')
     parser.add_argument('--detach-critic', action='store_true', help='stop the critic gradient at the shared trunk')
     parser.add_argument('--click-mask', action='store_true', help='masked joint click distribution over walkable cells (INT-001)')
     parser.add_argument('--start-jitter-s', type=float, default=0.0, help='seeded per-env delay of the policy start (parity protocol)')
@@ -153,7 +154,7 @@ def main():
                         rollout=args.rollout, updates=args.updates,
                         save_updates=args.save_updates, n_minibatches=args.minibatches,
                         resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal,
-                        resume_params_only=resume_params_only)
+                        resume_params_only=resume_params_only, grad_diag_on=args.grad_diag)
 
 
 if __name__ == '__main__':

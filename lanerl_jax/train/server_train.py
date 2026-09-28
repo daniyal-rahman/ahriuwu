@@ -863,7 +863,7 @@ def load_checkpoint_policy(path):
 
 def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
                         save_updates=(), n_minibatches=1, resume=None, ckpt_every=10,
-                        lr_anneal=False, resume_params_only=False, diag_steps=True):
+                        lr_anneal=False, resume_params_only=False, diag_steps=True, grad_diag_on=False):
     """Train either farming collector with exactly the same PPO/reward loop.
 
     Collectors provide n, episodes, observe(), step(actions), restart_done(),
@@ -1001,8 +1001,10 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # and killed E11 at update 2.
             np.testing.assert_allclose(recomputed, batch["log_prob"], atol=1e-3, rtol=1e-3,
                                        err_msg="rollout/recompute log-prob mismatch (head masks?)")
-            # Which loss term steers the shared trunk (before this update's step).
-            grad_diag = {k: float(v) for k, v in trunk_norms(params, batch).items()}
+            # Which loss term steers the shared trunk (before this update's step):
+            # three extra full-batch gradients, so opt-in (`--grad-diag`); it was
+            # the 6.6 GB allocation that OOMed E31 beside E32 on the GPU.
+            grad_diag = {k: float(v) for k, v in trunk_norms(params, batch).items()} if grad_diag_on else {}
             # Explained variance of the critic on this batch (CleanRL's metric):
             # 1 = predicts the returns, 0 = no better than their mean, < 0 worse.
             _v = np.asarray(batch["value"]).reshape(-1); _r = np.asarray(batch["returns"]).reshape(-1)
@@ -1237,6 +1239,7 @@ def main():
     p.add_argument("--enemy-scale", type=float, default=1.0, help="weight of the opponent's gold/xp deltas (1 = zero-sum mirror, 0 = own only)")
     p.add_argument("--start-jitter-s", type=float, default=0.0, help="seeded per-env delay of the policy start, 0..S seconds (parity protocol; 0 = off)")
     p.add_argument("--no-diag", action="store_true", help="skip the per-step diagnostic record (<run>/diag/)")
+    p.add_argument("--grad-diag", action="store_true", help="log per-term trunk gradient norms each update (3 extra full-batch gradients; memory-heavy)")
     p.add_argument("--detach-critic", action="store_true", help="stop the critic's gradient at the shared trunk (PolicyConfig.detach_critic)")
     p.add_argument("--click-mask", action="store_true", help="sample clicks from the masked joint distribution over walkable cells (INT-001 principled fix; PolicyConfig.click_mask)")
     p.add_argument("--unwalkable-click", choices=("resolve", "noop"), default="resolve",
@@ -1392,7 +1395,7 @@ def main():
                         rollout=args.rollout, updates=args.updates,
                         save_updates=args.save_updates, n_minibatches=args.minibatches,
                         resume=args.resume, ckpt_every=args.ckpt_every, lr_anneal=args.lr_anneal,
-                        resume_params_only=resume_params_only, diag_steps=not args.no_diag)
+                        resume_params_only=resume_params_only, diag_steps=not args.no_diag, grad_diag_on=args.grad_diag)
 
 
 if __name__ == "__main__":
