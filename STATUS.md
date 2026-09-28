@@ -1,14 +1,5 @@
 # STATUS (rewrite in place; last edit 2026-09-28 10:50 UTC, Claude)
 
-## NIGHT QUEUE (pre-approved; the night-shift agent launches the first unlaunched item when the desktop is free)
-- E28_clickmask_seed1
-- E29_relative_seed1
-- E30_finetune_anchor_2000
-launched: (none yet)
-
-## Night shift log
-- 2026-09-28 17:06 UTC: no training job running (only llm-serve 1710), desktop mix -> launched E28_clickmask_seed1; canary passed (279 s) but STARTUP FAILED within 180 s: JAX RESOURCE_EXHAUSTED allocating 3.17 GiB on GPU (server_train.py:1005 trunk_norms; llm-serve holds 11.7/16 GB). Per procedure: not retried, eval/finish not armed, no further item launched; E28 stays first in the queue. Log: lanerl_jax/runs/E28_clickmask_seed1_launch.out
-
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
 **E19 FINAL (09-28 05:30 UTC): 34.0 / 40.4 CS over 12 episodes per side (22-41 / 31-48),
