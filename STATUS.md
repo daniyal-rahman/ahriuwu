@@ -25,7 +25,7 @@ server's 0.4-s barracks crawl remains unmodelled).
 ## BC/DAgger → reference PPO improvement test (E24–E27)
 
 <!-- E24_PIPELINE -->
-E27_reference_teacher_final seed 3 completed; frozen results preserved for the paired comparison.
+E24 paired frozen comparison gate: FAIL. One training seed; preliminary evidence only. Differences vs baselines (mean, 95% paired bootstrap CI): {"clone": {"cs": {"ci95": [-21.8125, -13.0625], "mean": -17.5}, "gold_diff": {"ci95": [-391.5625, -135.3125], "mean": -268.125}, "reward_return": {"ci95": [-25.523846676171523, -7.773956573242685], "mean": -16.8813491863948}}, "teacher": {"cs": {"ci95": [-35.5640625, -22.8125], "mean": -29.4375}, "gold_diff": {"ci95": [-484.0703125, -264.375], "mean": -377.1875}, "reward_return": {"ci95": [-32.17358934475733, -14.330526756613928], "mean": -23.229222236925125}}}. All six frozen evaluations completed. One-shot continuation finished; no recurring jobs remain.
 <!-- /E24_PIPELINE -->
 
 Dani requested a minimal demonstration of learning beyond the heuristic
