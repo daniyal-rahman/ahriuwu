@@ -7,7 +7,7 @@
 launched: (none yet)
 
 ## Night shift log
-(none yet)
+- 2026-09-28 17:06 UTC: no training job running (only llm-serve 1710), desktop mix -> launched E28_clickmask_seed1; canary passed (279 s) but STARTUP FAILED within 180 s: JAX RESOURCE_EXHAUSTED allocating 3.17 GiB on GPU (server_train.py:1005 trunk_norms; llm-serve holds 11.7/16 GB). Per procedure: not retried, eval/finish not armed, no further item launched; E28 stays first in the queue. Log: lanerl_jax/runs/E28_clickmask_seed1_launch.out
 
 **Goal now:** a randomly initialised PPO policy that scores >30 CS in a
 10-minute mirror trial on the C# server, evaluated frozen over seeds.
