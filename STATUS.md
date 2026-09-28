@@ -1,4 +1,18 @@
-# STATUS (rewrite in place; last edit 2026-09-28 20:10 UTC, Claude)
+# STATUS (rewrite in place; last edit 2026-09-28 22:37 UTC, Codex)
+
+**CPU TIMING CHECK (09-28, Dani; desktop remains unavailable):** Read today’s
+Claude handoff; no training/evaluation launches or production changes. PERF-002
+in `docs/JAX_FIDELITY_LEDGER.md` records the capped CPU probe: one populated
+150-s lane, 44 live entities, 6 ticks/decision. Separate warmed component medians:
+observe 1.05 ms, GRU+sample 3.13, decode 2.64, apply/routing 1.37, sim 10.63
+(~57% of their sum). Disabling collision gives 10.34 ms; disabling call-for-help
+10.12 ms. Not GPU or PPO throughput; fixed idle-champion fixture, quota noise.
+Next candidate to discuss: minion waypoint N² sort/66-step cluster scan and its
+conditional becoming both-branches execution under vmap. Also correct prior
+throughput claims: `vec_bench.py` measured the OLD MLP trainer, not `vec_train`
+GRU; the large measured gain mostly came from increasing env count. Frozen vec
+validation and actual GRU GPU rollout/learner timing remain pending. Probe
+`lanerl_jax/probes/jax_time_breakdown.py`; no persistent jobs created.
 
 **DESKTOP DOWN (booted to Windows 19:53 UTC): E31/E32 CANCELLED at updates 82 / 112;
 both have `ckpt_latest.msgpack` and resume with `--resume`.** Where they were: E31 (no
