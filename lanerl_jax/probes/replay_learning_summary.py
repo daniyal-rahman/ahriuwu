@@ -1,11 +1,13 @@
 """Summarize E36 recorded decisions; windows are descriptive, not causal tests."""
-import argparse,json
+import argparse,json,statistics
 from pathlib import Path
 import numpy as np
 
 
 def summarize(path):
-    d=np.load(path/'trace.npz'); n=len(d['t_ms'])-1
+    with np.load(path/'trace.npz') as archive:
+        d={k:archive[k] for k in archive.files if k not in ('walkable','metadata')}
+    n=len(d['t_ms'])-1
     actions=np.array([[r['blue'],r['red']] for r in map(json.loads,(path/'actions.jsonl').read_text().splitlines())])
     assert n==len(actions)
     audit_path=path/'learning_audit.jsonl'
@@ -61,6 +63,20 @@ def summarize(path):
         row['damage_windows']=windows;out['sides'].append(row)
     return out
 
+def training_summary(path):
+    rows=[json.loads(x) for x in path.read_text().splitlines()]
+    # E33/E34 each collect128 envs x128 decisions x2 champions per update.
+    return dict(path=str(path), decisions=len(rows)*32768,
+        button_counts={k:round(sum(r[k]*32768 for r in rows))
+                       for k in rows[0] if k.startswith('button_')},
+        windows=[dict(first=part[0]['update'],last=part[-1]['update'],
+            explained_variance_median=statistics.median(r['explained_variance'] for r in part),
+            entropy_median=statistics.median(r['entropy'] for r in part))
+            for part in [rows[:100],rows[-100:]]])
+
+
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('paths',type=Path,nargs='+');a=p.parse_args()
-    print(json.dumps([summarize(x) for x in a.paths],indent=2))
+    p=argparse.ArgumentParser();p.add_argument('paths',type=Path,nargs='*')
+    p.add_argument('--metrics',type=Path,nargs='*',default=[]);a=p.parse_args()
+    print(json.dumps(dict(replays=[summarize(x) for x in a.paths],
+        training=[training_summary(x) for x in a.metrics]),indent=2))
