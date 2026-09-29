@@ -90,7 +90,9 @@ class HloSources:
             # are deduplicated across callers; their inherited source names
             # would falsely mix bootstrap, actor and gradient phases.
             calls = re.findall(r'calls=%?([\w.-]+)', body)
-            self.instructions[name] = dict(op=op[1] if op else '', sources=sources, calls=calls)
+            dedup = re.search(r'deduplicated_name="([^"]+)"', body)
+            self.instructions[name] = dict(op=op[1] if op else '', sources=sources, calls=calls,
+                                           dedup=dedup[1] if dedup else name)
             self.computations[current].append(name)
         self._cache = {}
         # CUDA graphs report the enclosing command_buffer as hlo_op. XLA's
@@ -100,12 +102,15 @@ class HloSources:
         for name in self.instructions:
             symbols[re.sub(r'[^A-Za-z0-9_]', '_', name)].append(name)
         self.kernel_symbols = {k: v[0] for k, v in symbols.items() if len(v) == 1}
+        self.dedup_groups = defaultdict(set)
+        for name, info in self.instructions.items():
+            self.dedup_groups[info['dedup']].add(name)
 
     def resolve(self, hlo_op, kernel):
         if hlo_op in self.instructions:
             return hlo_op, 'hlo_op'
         if kernel in self.kernel_symbols:
-            return self.kernel_symbols[kernel], 'unique_kernel_symbol'
+            return self.kernel_symbols[kernel], 'kernel_symbol_candidate'
         return '', 'unmapped'
 
     def sources(self, name, seen=None):
@@ -171,6 +176,35 @@ def summarize(trace_dir, hlo_path, wall_s, annotation=None):
         window = matches[0]
     def included(event):
         return window is None or window[0] <= event.start_ns < window[1]
+    # A generated kernel can serve several cloned HLO callsites. Retain all
+    # observed aliases for command-buffer events lacking an exact hlo_op.
+    kernel_aliases = defaultdict(set)
+    for plane in pd.planes:
+        if 'GPU' not in plane.name:
+            continue
+        for line in plane.lines:
+            if 'stream' not in line.name.lower():
+                continue
+            for event in line.events:
+                if included(event):
+                    op = str(dict(event.stats).get('hlo_op', ''))
+                    if op in hlo.instructions:
+                        kernel_aliases[event.name].add(op)
+    @lru_cache(maxsize=None)
+    def attribution(reported_op, kernel, fallback):
+        op, mapping = hlo.resolve(reported_op, kernel)
+        if mapping == 'kernel_symbol_candidate':
+            aliases = kernel_aliases[kernel] | hlo.dedup_groups[hlo.instructions[op]['dedup']] | {op}
+            phases, sources = set(), set()
+            for alias in aliases:
+                ps, ss = hlo.info(alias)
+                phases.update(ps)
+                sources.update(ss)
+            if len(aliases) > 1:
+                mapping = 'kernel_alias_set'
+        else:
+            phases, sources = hlo.info(op, fallback)
+        return op, mapping, phases, sources
     times = {k: Counter() for k in ('phase_exclusive_or_shared', 'phase_inclusive',
                                   'family_exclusive_or_shared', 'kernel', 'operation_kind',
                                   'network_module', 'autodiff_label')}
@@ -211,10 +245,9 @@ def summarize(trace_dir, hlo_path, wall_s, annotation=None):
                 all_intervals.append((event.start_ns, event.start_ns + duration))
                 durations.append(duration)
                 reported_op = str(stats.get('hlo_op', ''))
-                op, mapping = hlo.resolve(reported_op, event.name)
+                op, mapping, phases, sources = attribution(reported_op, event.name, str(stats.get('name', '')))
                 mapping_times[mapping] += duration
                 mapping_counts[mapping] += 1
-                phases, sources = hlo.info(op, str(stats.get('name', '')))
                 if op in hlo.instructions:
                     mapped += 1
                 else:
