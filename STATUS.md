@@ -1,27 +1,28 @@
-# STATUS (rewrite in place; last edit 2026-09-29 16:18 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 18:45 UTC, Codex)
 
-**E36 CPU FALLBACK RUNNING (job1773):** GPU job1772 cancelled while pending because
-desktop is drained/unavailable (never ran). E36b uses Slurm cpu on danilogin,
-2 cores/10GB, frozen replay only; no training. Corrected click handling and
-red action recording, full-history teacher/initial-policy shadow comparisons.
-8 CPU tests passed; job1773 canary and180-second startup watch passed.
-No persistent watcher/service created.
+**E36 LEARNING AUDIT COMPLETE:** CPU Slurm job1773 completed exit0 in30m04s;
+GPU job1772 cancelled before execution because desktop was unavailable.
+Fixed two replay-only defects: missing checkpoint noop-click handling and red
+button/cursor placeholders. Eight tests/canary passed;180s startup gate passed;
+all three checkpoints unchanged and hashes verified. No training changes.
 
-**LEARNING EXPLANATION / READ-ONLY AUDIT:** LEARN-PAIR-03 records actual
-click handling, lane shaping, discount horizon, detached linear critic and
-minion-only BC teacher. These are candidate limitations, not diagnosed causes.
-Next: attribute specific bad replay moments before another training experiment.
-No new jobs or model/code changes.
+Corrected seed7 mirror diagnostic CS: initial BC46/37, final BC46/38,
+random21/32. These single games do not reproduce/prove the aggregate decline.
+Discarded movement clicks while alive: initial BC2.45%, final BC7.64%, random53.77%.
+BC inherits a pure last-hitter that tanks waves without a combat/escape rule.
+At the blocked-wave example, W/E are ready but total spell probability is1.4e-7;
+631HP lost in5s with zero reward; death reward0 and respawn penalty22.5s later.
+Initial BC exhibits the same basic failure. No PPO/physics bug established.
 
-**E35 VIDEOS COMPLETE:** Final u2500 BC and random mirror minimap videos at
-`/mnt/nfs/shared/E35_final_videos/{bc,random}/replay.mp4` (HTML players alongside).
-Matched seed7, near-wave, game clock120–600s, 8x playback, one frozen episode each.
-BC CS46/28, random6/12: diagnostic examples, not the aggregate evaluation result.
-Both final checkpoint hashes verified; parameters unchanged. Job1771 completed
-exit0 with replay canary passed; earlier failures/BC trace retained in E35 rows.
-Rendered using repo-local `.venv-jax` (Pillow already declared in pyproject.toml).
-No training changes or own jobs/watchers remain. Next: inspect behavior together,
-then investigate BC fine-tuning regression using the frozen trajectory below.
+Evidence and limits: LEARN-PAIR-04. Artifacts:
+`/mnt/nfs/shared/E36b_learning_audit_cpu/`; corrected videos:
+`/mnt/nfs/shared/E36_corrected_videos/{bc_initial,bc_final,random_final}/replay.mp4`.
+Normal-speed12s incident: `.../blocked_wave/replay.mp4`. E35 videos are superseded
+for diagnosis; overnight vectorized frozen evaluations remain unaffected.
+Next discussion: targeted escape counterfactual and a bounded exploration test
+that preserves farming, rather than another unchanged long training run.
+No own jobs/watchers remain; no persistent services created. Clearly labeled
+E36b staged inputs remain under `/mnt/nfs/shared/E36b_learning_audit_cpu-staged-1773/`.
 
 **OVERNIGHT E33/E34 COMPLETE:** Slurm1768 COMPLETED exit0 after7h02m07s.
 Both arms finished2500 updates /81.92M champion decisions each. Only initialization

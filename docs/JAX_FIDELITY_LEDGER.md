@@ -1549,7 +1549,7 @@ then distinguish teacher limitation, imitation error, PPO drift, and simulator o
 interface failure. No causal bug claim, training launch, or behavior change made.
 
 
-### LEARN-PAIR-04 — replay bugs and behavior attribution (2026-09-29; E36b running)
+### LEARN-PAIR-04 — replay bugs and behavior attribution (2026-09-29; E36b complete)
 
 | Evidence | Finding | Limit |
 |---|---|---|
@@ -1564,11 +1564,12 @@ interface failure. No causal bug claim, training launch, or behavior change made
 CPU tests8 passed; E36 GPU job1772 cancelled before execution (desktop drained).
 E36b job1773 uses Slurm cpu danilogin2cores/10GB; canary and180s watch passed.
 Initial-checkpoint self-comparison matches exactly across independent full-history
-carries (first805 decisions checked so far). No training parameters changed.
+carries for all4787 decisions. No training parameters changed.
 Artifacts: `/mnt/nfs/shared/E36b_learning_audit_cpu/` (trace, actions,
 learning_audit.jsonl, frozen provenance); `/mnt/nfs/shared/E36_training_summary.json`;
 `/mnt/nfs/shared/E36_bc_final_summary.json`. Reproducers are
-`probes/replay_learning_audit.py` and `probes/replay_learning_summary.py`.
+`lanerl_jax/train/replay_audit.py` (E36 frozen source used the prior
+`probes/replay_learning_audit.py` location) and `probes/replay_learning_summary.py`.
 Normal-speed incident clip: `/mnt/nfs/shared/E36_corrected_videos/blocked_wave/replay.mp4`.
 Corrected final BC video: `/mnt/nfs/shared/E36_corrected_videos/bc_final/replay.mp4`.
 CPU-vs-GPU rounding and altered click handling can both change trajectories;
@@ -1605,3 +1606,21 @@ In final BC's467.904–472.901s trapped-blue window, mean predicted value is
 This is roughly one spell selection per7million repetitions of such a decision,
 despite learned/ready abilities. It is direct evidence of negligible exploration
 in this failure state, not proof that a particular spell would rescue it.
+
+
+E36b job1773 COMPLETE exit0,30m04s, all three frozen parameter/hash/noop-setting
+checks passed. Random final seed7 CS21/32, deaths5/4; discarded1925/3580 movement
+clicks while alive (53.77%). Count includes movement-button selections decoded
+to NOOP (unwalkable/minimap), not all actions. Initial/final BC comparisons above
+use the same definition. Random final sampled direct orders did not match teacher
+minion targets on its377 teacher-attack frames; this does NOT count attack-move
+auto-acquisition or E damage and cannot establish failed attack execution.
+All artifacts retain original source/checkpoint provenance. Corrected MP4s are
+under `/mnt/nfs/shared/E36_corrected_videos/{bc_initial,bc_final,random_final}/`;
+E35 videos superseded for diagnosis. No own jobs or persistent watchers remain.
+The open causal question is why mean farming performance declined across the
+held-out evaluation cohort; single-episode drift and low spell exploration
+identify next experiments, not a proven PPO or collision implementation defect.
+
+All four MP4s visually inspected via previews and fully decoded with ffmpeg;
+H.2641280x800, full episodes60s at8x and incident12.07s at1x.

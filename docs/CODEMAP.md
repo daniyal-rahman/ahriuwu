@@ -6,6 +6,7 @@ LEGACY = kept for history only; nothing imports it.
 
 | Path | Class | Role |
 |---|---|---|
+| `lanerl_jax/train/replay_audit.py` | TOOL | Optional frozen teacher/initial-policy comparison on full replay observation histories; no shadow action execution |
 | `ops/replay_pair.py`, `slurm/replay_pair.sbatch` | TOOL | Matched final-checkpoint minimap videos via launcher; existing frozen evaluator and renderer |
 | `lanerl_jax/train/paired_vec_train.py`, `slurm/paired_vec.sbatch` | LIVE / TOOL | E33/E34 bounded alternating BC/random training using vec_train; checkpoint/signal handling and integrated frozen held-out evaluations |
 | `lanerl_jax/obs/ray_kernel.py` | LIVE | Fused CUDA full-visibility traversal; CPU reference in vision.py; PERF005/PERF006 |

@@ -19,4 +19,4 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static bush-ID collection/full-update timing; semantics deliberately differ (VIS-FAST).
 
-| `replay_learning_audit.py`, `replay_learning_summary.py` | Teacher/initial BC/final policy decisions on full replay histories; reward and decoded orders | LEARN-PAIR-04 / E36; shadow actions never executed | 2026-09-29 |
+| `replay_learning_summary.py` | Teacher/initial BC/final policy decisions on full replay histories; reward and decoded orders | LEARN-PAIR-04 / E36; shadow actions never executed | 2026-09-29 |

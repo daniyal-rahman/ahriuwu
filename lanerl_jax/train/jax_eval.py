@@ -140,7 +140,7 @@ def evaluate(args):
         initial_parameter_hash = hashlib.sha256(to_bytes(params)).hexdigest()
         comparison = None
         if getattr(args, 'compare_checkpoint', None):
-            from ..probes.replay_learning_audit import ReplayComparison
+            from .replay_audit import ReplayComparison
             comparison = ReplayComparison(args.compare_checkpoint, policy, params, args.out)
             result['comparison_checkpoint_sha256'] = file_sha256(args.compare_checkpoint)
         key = jax.random.key(args.seed)
