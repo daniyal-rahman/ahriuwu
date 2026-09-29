@@ -204,7 +204,37 @@ def summarize(trace_dir, hlo_path, wall_s, annotation=None):
                 mapping = 'kernel_alias_set'
         else:
             phases, sources = hlo.info(op, fallback)
-        return op, mapping, phases, sources
+        family = {family_of(p) for p in phases}
+        phase_key = '+'.join(sorted(phases))
+        family_key = '+'.join(sorted(family))
+        modules = set()
+        labels = set()
+        for s in sources:
+            if 'transpose(' in s:
+                labels.add('backward-labelled')
+            elif phase_of(s) == 'ppo_grad':
+                labels.add('forward-or-residual')
+            if 'core_gru' in s:
+                modules.add('GRU')
+            elif '_Block_' in s or 'Block_' in s:
+                if 'MultiHead' in s:
+                    modules.add('attention')
+                elif 'LayerNorm' in s:
+                    modules.add('transformer_norm')
+                else:
+                    modules.add('transformer_other')
+            elif 'value_head' in s:
+                modules.add('value_head')
+            elif 'LanePolicy' in s:
+                modules.add('policy_other')
+        buckets = {'phase_exclusive_or_shared': [phase_key],
+                   'phase_inclusive': phases,
+                   'family_exclusive_or_shared': [family_key],
+                   'kernel': [kernel],
+                   'operation_kind': [operation_kind(kernel, hlo.instructions.get(op, {}).get('op', ''))],
+                   'network_module': ['+'.join(sorted(modules)) or 'non_network_or_unknown'],
+                   'autodiff_label': ['+'.join(sorted(labels)) or 'other']}
+        return op, mapping, buckets, dict(phases=sorted(phases), sources=sorted(sources))
     times = {k: Counter() for k in ('phase_exclusive_or_shared', 'phase_inclusive',
                                   'family_exclusive_or_shared', 'kernel', 'operation_kind',
                                   'network_module', 'autodiff_label')}
@@ -245,44 +275,14 @@ def summarize(trace_dir, hlo_path, wall_s, annotation=None):
                 all_intervals.append((event.start_ns, event.start_ns + duration))
                 durations.append(duration)
                 reported_op = str(stats.get('hlo_op', ''))
-                op, mapping, phases, sources = attribution(reported_op, event.name, str(stats.get('name', '')))
+                op, mapping, buckets, example = attribution(reported_op, event.name, str(stats.get('name', '')))
                 mapping_times[mapping] += duration
                 mapping_counts[mapping] += 1
                 if op in hlo.instructions:
                     mapped += 1
                 else:
                     missing += 1
-                source_examples.setdefault(op or event.name, dict(phases=sorted(phases), sources=sorted(sources)))
-                family = {family_of(p) for p in phases}
-                phase_key = '+'.join(sorted(phases))
-                family_key = '+'.join(sorted(family))
-                modules = set()
-                labels = set()
-                for s in sources:
-                    if 'transpose(' in s:
-                        labels.add('backward-labelled')
-                    elif phase_of(s) == 'ppo_grad':
-                        labels.add('forward-or-residual')
-                    if 'core_gru' in s:
-                        modules.add('GRU')
-                    elif '_Block_' in s or 'Block_' in s:
-                        if 'MultiHead' in s:
-                            modules.add('attention')
-                        elif 'LayerNorm' in s:
-                            modules.add('transformer_norm')
-                        else:
-                            modules.add('transformer_other')
-                    elif 'value_head' in s:
-                        modules.add('value_head')
-                    elif 'LanePolicy' in s:
-                        modules.add('policy_other')
-                buckets = {'phase_exclusive_or_shared': [phase_key],
-                           'phase_inclusive': phases,
-                           'family_exclusive_or_shared': [family_key],
-                           'kernel': [event.name],
-                           'operation_kind': [operation_kind(event.name, hlo.instructions.get(op, {}).get('op', ''))],
-                           'network_module': ['+'.join(sorted(modules)) or 'non_network_or_unknown'],
-                           'autodiff_label': ['+'.join(sorted(labels)) or 'other']}
+                source_examples.setdefault((op or event.name) + ":" + mapping, example)
                 for group, keys in buckets.items():
                     for key in keys:
                         times[group][key] += duration
