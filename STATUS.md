@@ -4,7 +4,8 @@
 desktop is drained/unavailable (never ran). E36b uses Slurm cpu on danilogin,
 2 cores/10GB, frozen replay only; no training. Corrected click handling and
 red action recording, full-history teacher/initial-policy shadow comparisons.
-8 CPU tests passed. No persistent watcher/service created.
+8 CPU tests passed; job1773 canary and180-second startup watch passed.
+No persistent watcher/service created.
 
 **LEARNING EXPLANATION / READ-ONLY AUDIT:** LEARN-PAIR-03 records actual
 click handling, lane shaping, discount horizon, detached linear critic and

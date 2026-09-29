@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E36b_learning_audit_cpu` | 09-29 | Frozen JAX replay CPU | E36 fallback on Slurm danilogin,2 cores/10GB | unchanged protocol | three diagnostic episodes | RUNNING job1773; dry-run passed, startup gate pending | No training |
+| `E36b_learning_audit_cpu` | 09-29 | Frozen JAX replay CPU | E36 fallback on Slurm danilogin,2 cores/10GB | unchanged protocol | three diagnostic episodes | RUNNING job1773; dry-run, canary and180-second startup watch passed | No training |
 | `E36_learning_audit` | 09-29 | Frozen JAX replay | Correct evaluator noop-click handling and red action recording; teacher/initial policy shadow comparisons | seed7, 600s, near-wave mirror, full history | BC final/initial and random final | CANCELLED job1772 before execution: desktop unavailable | Diagnostic examples, no training or aggregate claim |
 | `E35c_final_minimaps` | 09-29 | Frozen JAX replay | Record remaining random final trace; CPU-render both | matched E35b seed7 mirror | one remaining replay | COMPLETE job1771 exit0; dry-run/canary/completion gate passed; both videos at `/mnt/nfs/shared/E35_final_videos/{bc,random}/replay.mp4` | Preserve completed BC recording; renderer uses capped CPU environment |
 | `E35b_final_minimaps` | 09-29 | Frozen JAX replay | E35 retry with module invocation | unchanged matched final-checkpoint protocol | two videos | FAILED job1770 after complete frozen BC trace: GPU env lacks Pillow for renderer; BC trace preserved | No model/simulation changes |

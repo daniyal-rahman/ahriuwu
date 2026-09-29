@@ -33,6 +33,14 @@ def summarize(path):
             teacher=np.array([r['teacher'][side] for r in audit]); opportunity=alive&(teacher[:,0]==2)
             row.update(teacher_attack_opportunities=int(opportunity.sum()),
                 actual_attack_button_on_teacher_opportunity=int((opportunity&(actions[:,side,0]==2)).sum()))
+            teacher_kind=np.array([r['teacher_orders']['kind'][side] for r in audit])
+            teacher_target=np.array([r['teacher_orders']['target'][side] for r in audit])
+            valid_opportunity=opportunity&(teacher_kind==2)&(teacher_target>=0)
+            initial_kind=np.array([r['initial_mode_orders']['kind'][side] for r in audit])
+            initial_target=np.array([r['initial_mode_orders']['target'][side] for r in audit])
+            row['teacher_direct_attack_opportunities']=int(valid_opportunity.sum())
+            row['actual_same_teacher_target']=int((valid_opportunity&(kinds==2)&(target==teacher_target)).sum())
+            row['initial_mode_same_teacher_target']=int((valid_opportunity&(initial_kind==2)&(initial_target==teacher_target)).sum())
             for name in ['initial','final']:
                 tp=np.array([r[name]['button_prob'][side][2] for r in audit]); lp=np.array([r[name]['teacher_logp'][side] for r in audit])
                 row[name+'_attack_prob_on_teacher_opportunity']=float(tp[opportunity].mean()) if opportunity.any() else None
@@ -58,6 +66,7 @@ def summarize(path):
             if audit:
                 w['teacher_buttons']=np.bincount(teacher[i:j,0],minlength=8).tolist()
                 w['reward_sum']=float(sum(r['reward'][side] for r in audit[i:j]))
+                w['initial_mode_buttons']=np.bincount([r['initial']['mode'][side][0] for r in audit[i:j]],minlength=8).tolist()
             windows.append(w)
             if len(windows)==3:break
         row['damage_windows']=windows;out['sides'].append(row)
