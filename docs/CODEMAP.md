@@ -6,6 +6,7 @@ LEGACY = kept for history only; nothing imports it.
 
 | Path | Class | Role |
 |---|---|---|
+| `lanerl_jax/train/paired_vec_train.py`, `slurm/paired_vec.sbatch` | LIVE / TOOL | E33/E34 bounded alternating BC/random training using vec_train; checkpoint/signal handling and integrated frozen held-out evaluations |
 | `lanerl_jax/obs/ray_kernel.py` | LIVE | Fused CUDA full-visibility traversal; CPU reference in vision.py; PERF005/PERF006 |
 | `slurm/vision_smoke.sbatch` | TOOL | PERF007 production CUDA visibility integration gate via launcher |
 | `slurm/bush_ab.sbatch` | TOOL | PERF006 fused-ray vs static bush-ID A/B via launcher; no saved model |

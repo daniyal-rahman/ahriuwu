@@ -1,0 +1,7 @@
+{
+  "id": "E33_accel_bc",
+  "engine": "paired-member",
+  "launcher": "E33_E34_overnight",
+  "initialization": "BC",
+  "question": "Matched accelerated GRU PPO from BC vs random; only initialization differs. One training seed, conservative lr1e-5 annealed, entropy0, detached critic, N128/T128, 4x4 PPO, mirror training, full visibility, held-out frozen mirror and fixed-heuristic evals at u0/500/1000/1500/2000/2500. 81.92M champion decisions per arm if complete. Interleave every100 updates; checkpoint every100. No cropped map or reward changes."
+}

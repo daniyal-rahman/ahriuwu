@@ -212,10 +212,12 @@ def main():
         if a.record: args["record-npz"] = a.record
         submit(spec, args, (a.tag + "-det") if a.deterministic else a.tag, a.dry_run); return
     spec = json.loads((REPO_SRV / "experiments" / f"{a.experiment}.json").read_text())
-    if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab", "bush-ab", "vision-smoke"):
+    if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab", "bush-ab", "vision-smoke", "paired-vec"):
         from gru_profile_launch import launch
         launch(spec, a.dry_run)
         return
+    if spec.get("engine") == "paired-member":
+        raise SystemExit("Launch paired arms together via ops/launch.py " + spec["launcher"])
     name = f"{spec['id']}-s{a.seed if a.seed is not None else spec['args'].get('seed', 0)}"
     if any(j[0] == name for j in live_jobs()):
         sys.exit(f"REFUSED: a job named {name} is already in the queue")

@@ -1,4 +1,13 @@
-# STATUS (rewrite in place; last edit 2026-09-29 07:13 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 07:44 UTC, Codex)
+
+**OVERNIGHT E33/E34 PREPARED (Dani, 09-29):** Up to nine hours authorized;
+matched accelerated GRU PPO from BC vs random, only initialization differs.
+`E33_E34_overnight`: one GPU job, alternating 100-update blocks, 2500 updates
+per arm, N128/T128, lr1e-5 annealed, entropy0, detached critic, existing relative
+reward/full map/full visibility. Save each100 updates; frozen held-out mirror
+and fixed-heuristic evaluations at u0 and every500. Eight-hour worker guard,
+8h30 Slurm limit. No broad optimization work overnight; only obvious quick fixes.
+Checkpoints/metrics/evaluations: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/`.
 
 **PERF-006/007 COMPLETE — FUSED RAYS INSTALLED:** Job 1766: full fused rays
 2.028s collect / 4.656s update; bush lookup 1.978s / 4.620s. Only 0.8% extra
