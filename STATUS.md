@@ -1,12 +1,14 @@
-# STATUS (rewrite in place; last edit 2026-09-29 07:12 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 07:13 UTC, Codex)
 
-**PERF-006 COMPLETE / INSTALLING FUSED RAYS:** Job 1766: full fused rays
+**PERF-006/007 COMPLETE — FUSED RAYS INSTALLED:** Job 1766: full fused rays
 2.028s collect / 4.656s update; bush lookup 1.978s / 4.620s. Only 0.8% extra
 whole-update throughput, with differing outputs: reject simplification per
 Dani's decision rule. Full visibility preserved; fused CUDA implementation
 selected (PERF005 showed 1.481x whole-update improvement over original).
-CPU retains reference (11 CPU vision tests passed). PERF007 integration
-GPU gate submitted as job 1767; dry-run passed.
+CPU retains reference (11 CPU vision tests passed). PERF007 job 1767
+completed: exact GPU ray/nested-vmap comparison and all 11 production-dispatch
+vision tests passed; launcher reported complete/canary passed. No active jobs
+or watchers from this work. Changes committed/pushed; default keeps full rules.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
 unprofiled collection, PPO and complete-update timing cohorts finished. Complete
