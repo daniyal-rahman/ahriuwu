@@ -1,4 +1,8 @@
-# STATUS (rewrite in place; last edit 2026-09-29 03:10 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 06:39 UTC, Codex)
+
+**PERF-005 RETRY PREPARED:** Desktop is back; `PERF005b_vision_ab` repeats the
+unchanged candidate/protocol. GPU correctness precedes whole-update A/B;
+no measured gain yet.
 
 **PERF-005 GPU BLOCKED:** Probe committed/pushed at `0887a33`. Dry-run passed;
 job 1761 was submitted but desktop is drained/offline (boot to Windows), so
