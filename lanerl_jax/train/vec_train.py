@@ -233,6 +233,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
             xp_at_done = jnp.where(done_full, nxt.xp[:2].astype(jnp.float32), 0.0)
             deaths = (nxt.deaths[:2] - state.deaths[:2]).astype(jnp.float32)
             lane_dist = lane_corridor_distance(nxt.x[:2], nxt.y[:2])
+            hp_at_end = jnp.where(done_full, nxt.hp[:2]/jnp.maximum(nxt.max_hp[:2],1.), 0.)
+            kills_at_end = jnp.where(done_full, nxt.kills[:2], 0)
             idx = jax.random.randint(k_reset, (), 0, K)
             fresh = jax.tree.map(lambda b: b[idx], bank)
             nxt = jax.tree.map(lambda a, b: jnp.where(done, b, a), nxt, fresh)
@@ -242,8 +244,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
                            reward, jnp.broadcast_to(done, reward.shape), terms,
                            cs_at_done, gold_at_done, xp_at_done,
                            jnp.broadcast_to(done_full, reward.shape), deaths, lane_dist, cm,
-                           jnp.where(done_full, nxt.hp[:2]/jnp.maximum(nxt.max_hp[:2],1.), 0.),
-                           jnp.where(done_full, nxt.kills[:2], 0))
+                           hp_at_end, kills_at_end)
             return nxt, new_carry, deadline, t
 
         keys = jax.random.split(sk, cfg.n_envs)

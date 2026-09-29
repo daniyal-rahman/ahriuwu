@@ -105,6 +105,17 @@ def main():
         er=er._replace(env_state=jax.tree.map(lambda b:b[indices],eval_bank))
         print('COMPILE eval',mode,flush=True)
         evaluations[mode]=(er,jax.jit(eb['collect']).lower(er).compile())
+    # Regression gate on the compiled path: endpoint metrics precede reset.
+    probe, probe_fn = evaluations["mirror"]
+    st = probe.env_state
+    st = st.replace(t_ms=jnp.full_like(st.t_ms, cfg.episode_s*1000-.01),
+                    hp=st.hp.at[:,:2].set(st.max_hp[:,:2]*.42),
+                    kills=st.kills.at[:,:2].set(3))
+    _, terminal, _ = jax.block_until_ready(probe_fn(probe._replace(env_state=st)))
+    assert np.all(np.asarray(terminal.done_full[0]))
+    assert np.all(np.asarray(terminal.hp_at_end[0]) < .5), "endpoint HP read after reset"
+    assert np.all(np.asarray(terminal.kills_at_end[0]) == 3), "endpoint kills read after reset"
+    print("ENDPOINT CANARY PASSED: HP/kills recorded before reset",flush=True)
     def evaluate():
         for mode,(template,fn) in evaluations.items():
             r=template._replace(params=runner.params);seen=np.zeros(64,bool);rows=[]
@@ -166,6 +177,9 @@ def main():
     finally:
         save();run.set_results(status='failed' if failed else 'finished' if update==cfg.n_updates else 'interrupted',updates=update)
         run.close()
+        study=json.loads((out/"study.json").read_text())
+        study["status"]="failed" if failed else "complete" if update==cfg.n_updates else "interrupted"
+        (out/"study.json").write_text(json.dumps(study,indent=2))
     print('PROFILE COMPLETE',flush=True)
 
 if __name__=='__main__':main()

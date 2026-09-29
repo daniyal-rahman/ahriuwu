@@ -3,7 +3,9 @@
 **E39 RUNNING (Slurm1777):** Dani authorized75s level3 tower/wave HP-advantage curriculum
 and explicitly chose trained random-start E34 final. Both roles70/100HP,
 fresh optimizer; same physics/reward. Capped CPU reset/reward tests2 passed; dry-run passed.
-GPU canary, scenario calibration and startup watch pending. E38b is superseded for now, not retried.
+GPU canary, scenario calibration and startup watch pending.
+Endpoint metrics capture pre-reset HP/kills; compiled boundary check added
+before training. Run source provenance captured by RunDir at startup. E38b is superseded for now, not retried.
 
 **E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full
 state/carry/RNG exactly; recorded40s control error0, sampled reconstruction
