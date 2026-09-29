@@ -18,8 +18,8 @@ will evaluate every500 and final, save every100, stop itself after8h (~15:46UTC)
 or2500 updates/arm. No side experiments or persistent external watchdog created.
 Read study.json + per-arm metrics/evaluations and Slurm1768 for current status.
 Frozen u500 (still running): BC mirror38.73/38.45, vs heuristic38.30/44.91,
-gold diff -159.73 (u0 -66.41): no improvement. Random mirror18.53/14.56,
-vs heuristic19.30/34.38, gold diff +501.03 (u0 -639.79): positive learning,
+gold diff -159.7 (u0 -66.41): no improvement. Random mirror18.53/14.56,
+vs heuristic19.30/34.38, gold diff +501.0 (u0 -639.79): positive learning,
 not higher CS than teacher. No nonfinite-loss flags; no settings changed.
 
 **PERF-006/007 COMPLETE — FUSED RAYS INSTALLED:** Job 1766: full fused rays
