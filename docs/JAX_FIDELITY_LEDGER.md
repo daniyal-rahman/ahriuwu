@@ -1676,3 +1676,26 @@ a real recurrent LanePolicy and checks forward logits/carry/other heads, all
 other parameters, and input immutability (1 test passed). Actual E33 checkpoint
 load/shift also passed. Earlier toy-schema test was insufficient. No inference
 about exploration effectiveness is possible from this failed run.
+
+### LEARN-SCENARIO-01 — E39 tower-wave curriculum (2026-09-29, running)
+
+User-authorized synthetic reset, not a source-server parity claim. L3 Garens
+near own outer tower;6regular minions/side follow250u behind with260u spacing.
+XP set to L3 threshold; one real step installs stats/ranks before HP reset.
+70/100%HP swapped in paired starts. Recent-damage timer0, normal passive/regen
+afterward. Game clock120s, next wave150s, terminal195s; full75s rounds, no
+initial partial-episode stagger. Observation clock remains normalized by600s
+to match E34. No combat/reward change or damage shaping; no bootstrap beyond
+this deliberately finite task. Geometry train offsets−60/−20/+20/+60u; held-out
+−45/−5/+35/+75u. Fixed75s endpoint may permit end-of-round risk taking; ordinary
+long-lane transfer remains untested.
+
+E34 trained random-start final checkpoint, fresh optimizer/step/schedule.
+PPO GRU retained; lr3e-5 annealed, entropy.001,1000updates or2h. Frozen64games
+per mode at0/100/250/500/750/1000; mirror and fixed original E34 opponent.
+Reports by side and initialHP: CS, relativegold, kills/deaths, terminalHP, spell
+selections, HP at first enemy sight. Mean reward alone cannot establish trading
+strength. Reproducer: `train/wave_scenario_train.py`, `experiments/E39_tower_wave_advantage.json`.
+Artifacts `/mnt/nfs/checkpoints/lanerl-jax/E39_tower_wave_advantage/`.
+CPU reset/reward checks2 passed; GPU production GRU likelihood/reward and frozen
+opponent canaries plus actual scenario/checkpoint gates pending in Slurm1777.
