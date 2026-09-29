@@ -1,5 +1,8 @@
 # STATUS (rewrite in place; last edit 2026-09-29 14:53 UTC, Codex)
 
+**E35 VIDEOS PREPARED:** Matched minimap replays for final E33 BC and E34 random
+checkpoints, mirror seed7, 600s horizon, 8x playback. No training changes.
+
 **OVERNIGHT E33/E34 COMPLETE:** Slurm1768 COMPLETED exit0 after7h02m07s.
 Both arms finished2500 updates /81.92M champion decisions each. Only initialization
 differed: BC vs random; N128/T128, standard4x4 PPO, lr1e-5 annealed, entropy0,

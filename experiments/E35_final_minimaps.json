@@ -1,0 +1,19 @@
+{
+  "id": "E35_final_minimaps",
+  "engine": "replay-pair",
+  "slurm_time": "00:45:00",
+  "seed": 7,
+  "seconds": 600,
+  "speed": 8,
+  "arms": [
+    {
+      "id": "E33_accel_bc",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E33_accel_bc/vec-s0-20260929-074835-33f8c55a/ckpt_081920000.msgpack"
+    },
+    {
+      "id": "E34_accel_random",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E34_accel_random/vec-s0-20260929-074837-33f8c55a/ckpt_081920000.msgpack"
+    }
+  ],
+  "question": "Matched frozen minimap videos for final BC and random GRU policies; mirror, seed7, near-wave setup, 600s game horizon; diagnostic examples not aggregate scores."
+}

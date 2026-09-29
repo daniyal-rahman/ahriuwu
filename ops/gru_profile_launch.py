@@ -17,7 +17,8 @@ def launch(spec, dry):
               'vision-ab': 'slurm/vision_ab.sbatch',
               'bush-ab': 'slurm/bush_ab.sbatch',
               'vision-smoke': 'slurm/vision_smoke.sbatch',
-              'paired-vec': 'slurm/paired_vec.sbatch'}[spec['engine']]
+              'paired-vec': 'slurm/paired_vec.sbatch',
+              'replay-pair': 'slurm/replay_pair.sbatch'}[spec['engine']]
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',
            '--nodelist=desktop', '--cpus-per-task=4', '--mem=24G' if full else '--mem=20G',
            '--time='+spec.get('slurm_time', '01:30:00' if full else '00:35:00'),
