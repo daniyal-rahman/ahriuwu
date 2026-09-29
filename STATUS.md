@@ -1,5 +1,9 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**STRATEGY DISCUSSION:** No new runs or runtime changes. Proposed explicit
+observation-history summaries versus GRU, and a bounded modern replay-data
+slice; details in EXPERIMENT_METHOD. E38b remains failed/repaired, not retried.
+
 **E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full
 state/carry/RNG exactly; recorded40s control error0, sampled reconstruction
 mismatches0. Baseline dies5.70s,+0CS; one E survives40s,+11CS; E then1s

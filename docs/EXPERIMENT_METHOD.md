@@ -400,3 +400,36 @@ Avoid a simultaneous learner/core/data overhaul. Proposed next performance
 milestone: retain BC farming while learning held-out wave survival/ability use
 that the teacher lacks, then confirm source-server transfer. CS alone is not
 the final objective; real modern5v5 match strength remains unestablished.
+
+### Explicit memory / feedforward proposal (discussion, 2026-09-29)
+
+Dani proposes deterministic last-seen/cast tracking in place of learned history.
+Current actor has a512-wide GRU; builder provides own cooldowns and four times
+since witnessed enemy casts, but no explicit last-seen position/age, velocities
+or HP trends. A feedforward actor plus observation-derived tracker is a valid
+candidate, not a memory-free agent. Track unknown/stale separately; never read
+true hidden cooldowns or positions. Include short motion/damage and own-action
+phase history if removing the GRU; champion last-seen/cooldowns alone do not
+summarize all currently missing information for last-hitting.
+
+Small proposed comparison: existing GRU; GRU plus explicit summaries;
+feedforward plus identical summaries. Train compatible models rather than
+remove a trained GRU at evaluation. Compare fixed-wall-time frozen skill and
+time to a skill threshold, not just steps/s. No claim that this is approved or
+that either architecture wins. Keep PPO fixed for this first comparison.
+
+Related structural throughput candidate remains batching the nonrecurrent
+entity encoder/MLP outside learner.forward's time scan, then scanning only the
+GRU. That may retain policy semantics; equivalence must include gradients,
+resets and optimizer updates. PERF005 measured4.56s/update after ray fusion;
+collection~2.00s, remainder~2.56s (not a direct new learner profile). Halving
+the latter implies only~1.39x whole-update speed, not2x. No isolated GRU
+cost or gain has been measured.
+
+Suggested effort allocation: bounded replay-data vertical slice as the next
+engineering investment; a small explicit-memory/feedforward comparison as the
+architecture screen. Avoid simultaneous full modern5v5/champion expansion.
+A pinned Garen-focused dataset can first prove labels/BC offline; simulator
+coverage is required before making closed-loop transfer claims, not before
+all data feasibility work. Modernization needs new modern reference evidence;
+legacy C# parity cannot validate a modern patch. Discussion only; no launches.
