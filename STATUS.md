@@ -1,10 +1,14 @@
-# STATUS (rewrite in place; last edit 2026-09-29 16:07 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 16:18 UTC, Codex)
 
-**E35 VIDEO RETRY:** Job1770 completed BC frozen trace (seed7 mirror, CS46/28),
-then renderer lacked Pillow in GPU environment. BC trace preserved at
-`/mnt/nfs/shared/E35b_final_minimaps/E33_accel_bc/trace.npz`. E35c job1771 submitted (dry-run passed) for
-remaining random trace; both will render with capped CPU Pillow environment.
-No training changes.
+**E35 VIDEOS COMPLETE:** Final u2500 BC and random mirror minimap videos at
+`/mnt/nfs/shared/E35_final_videos/{bc,random}/replay.mp4` (HTML players alongside).
+Matched seed7, near-wave, game clock120–600s, 8x playback, one frozen episode each.
+BC CS46/28, random6/12: diagnostic examples, not the aggregate evaluation result.
+Both final checkpoint hashes verified; parameters unchanged. Job1771 completed
+exit0 with replay canary passed; earlier failures/BC trace retained in E35 rows.
+Rendered using repo-local `.venv-jax` (Pillow already declared in pyproject.toml).
+No training changes or own jobs/watchers remain. Next: inspect behavior together,
+then investigate BC fine-tuning regression using the frozen trajectory below.
 
 **OVERNIGHT E33/E34 COMPLETE:** Slurm1768 COMPLETED exit0 after7h02m07s.
 Both arms finished2500 updates /81.92M champion decisions each. Only initialization

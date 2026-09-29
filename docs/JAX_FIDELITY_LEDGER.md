@@ -1511,3 +1511,23 @@ Artifacts:
 - Slurm log: `/mnt/nfs/shared/E33_E34_overnight-1768.out`.
 - Protocol: `experiments/E33_E34_overnight.json`; runner:
   `lanerl_jax/train/paired_vec_train.py`.
+
+
+### REPLAY-PAIR-01 — final E33/E34 minimap videos (2026-09-29)
+
+| Evidence | Outcome | Scope |
+|---|---|---|
+| E35b BC trace / E35c random trace; final u2500 checkpoints, seed7 mirror, near-wave, 600s horizon | BC CS46/28, deaths1/4; random CS6/12, deaths1/2; unchanged frozen parameters and checkpoint SHA256 matches verified | One diagnostic episode each, not an aggregate score or head-to-head comparison |
+| Existing replay renderer, map view, 8x speed, setup omitted | Two 60s H.264 1280x800 videos with full map, blue closeup, CS/death HUD | Omniscient replay display; actor observation still obeys fog |
+
+Artifacts: `/mnt/nfs/shared/E35_final_videos/bc/` and
+`/mnt/nfs/shared/E35_final_videos/random/`, each containing `replay.mp4`,
+`preview.png`, and `replay.html`. Source traces and frozen evaluation provenance:
+`/mnt/nfs/shared/E35b_final_minimaps/E33_accel_bc/` and
+`/mnt/nfs/shared/E35c_final_minimaps/E34_accel_random/`.
+E35 failed before recording (module import), E35b recorded BC then lacked Pillow
+in the GPU environment. Retained evidence and rendered both on capped login CPU
+using the existing repo-local `.venv-jax`; Pillow is declared in `pyproject.toml`.
+E35c job1771 completed exit0; canary5 passed/1 skipped and launcher completion
+gate passed. No policy, reward, or simulation changes. Clips are for behavioral
+inspection before diagnosing the BC fine-tuning regression in LEARN-PAIR-02.
