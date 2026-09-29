@@ -2,7 +2,7 @@
 
 **E35 VIDEO RETRY:** Job1770 completed BC frozen trace (seed7 mirror, CS46/28),
 then renderer lacked Pillow in GPU environment. BC trace preserved at
-`/mnt/nfs/shared/E35b_final_minimaps/E33_accel_bc/trace.npz`. E35c prepares
+`/mnt/nfs/shared/E35b_final_minimaps/E33_accel_bc/trace.npz`. E35c job1771 submitted (dry-run passed) for
 remaining random trace; both will render with capped CPU Pillow environment.
 No training changes.
 
