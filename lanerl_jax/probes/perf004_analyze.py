@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter, defaultdict
 import gzip
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -18,6 +19,11 @@ def phase_of(name):
     labels = re.findall(r'perf004_([A-Za-z0-9_]+)', name)
     if not labels:
         return 'unattributed'
+    # PERF004b's initial parameter unpack inherited ppo_apply until grad_norm.
+    # JAX's own jvp/transpose scope identifies those gradient computations
+    # independently. This also works with the corrected naming-only probe.
+    if any(x.startswith('ppo_') for x in labels) and 'jvp(' in name:
+        return 'ppo_grad'
     for label in reversed(labels):
         if label.startswith('tick_'):
             return label
@@ -77,10 +83,27 @@ class HloSources:
             name, body = m.groups()
             op = re.search(r'\b([a-z][a-z0-9_-]*)\(', body)
             sources = re.findall(r'op_name="((?:\\.|[^"\\])*)"', body)
-            calls = re.findall(r'(?:calls|to_apply|body|condition)=%?([\w.-]+)', body)
+            # Only descend into fusion bodies. Reducer helper computations
+            # are deduplicated across callers; their inherited source names
+            # would falsely mix bootstrap, actor and gradient phases.
+            calls = re.findall(r'calls=%?([\w.-]+)', body)
             self.instructions[name] = dict(op=op[1] if op else '', sources=sources, calls=calls)
             self.computations[current].append(name)
         self._cache = {}
+        # CUDA graphs report the enclosing command_buffer as hlo_op. XLA's
+        # generated kernel symbol still identifies fusion instructions, with
+        # punctuation converted to underscores. Accept only unique matches.
+        symbols = defaultdict(list)
+        for name in self.instructions:
+            symbols[re.sub(r'[^A-Za-z0-9_]', '_', name)].append(name)
+        self.kernel_symbols = {k: v[0] for k, v in symbols.items() if len(v) == 1}
+
+    def resolve(self, hlo_op, kernel):
+        if hlo_op in self.instructions:
+            return hlo_op, 'hlo_op'
+        if kernel in self.kernel_symbols:
+            return self.kernel_symbols[kernel], 'unique_kernel_symbol'
+        return '', 'unmapped'
 
     def sources(self, name, seen=None):
         name = str(name).lstrip('%')
@@ -93,7 +116,9 @@ class HloSources:
         if name in seen:
             return set()
         seen.add(name)
-        result = set(info['sources'])
+        # Parameters/constant plumbing do not execute inside a fused kernel.
+        result = (set() if info['op'] in ('parameter', 'constant', 'tuple', 'get-tuple-element')
+                  else set(info['sources']))
         for computation in info['calls']:
             for child in self.computations.get(computation, ()):
                 result.update(self.sources(child, seen))
@@ -138,6 +163,7 @@ def summarize(trace_dir, hlo_path, wall_s):
     counts = {k: Counter() for k in times}
     all_intervals, durations = [], []
     mapped = missing = 0
+    mapping_times, mapping_counts = Counter(), Counter()
     source_examples = {}
     for plane in pd.planes:
         if 'GPU' not in plane.name:
@@ -150,13 +176,16 @@ def summarize(trace_dir, hlo_path, wall_s):
                 duration = event.duration_ns
                 all_intervals.append((event.start_ns, event.start_ns + duration))
                 durations.append(duration)
-                op = str(stats.get('hlo_op', ''))
+                reported_op = str(stats.get('hlo_op', ''))
+                op, mapping = hlo.resolve(reported_op, event.name)
+                mapping_times[mapping] += duration
+                mapping_counts[mapping] += 1
                 phases, sources = hlo.info(op, str(stats.get('name', '')))
                 if op in hlo.instructions:
                     mapped += 1
                 else:
                     missing += 1
-                source_examples.setdefault(op, dict(phases=sorted(phases), sources=sorted(sources)))
+                source_examples.setdefault(op or event.name, dict(phases=sorted(phases), sources=sorted(sources)))
                 family = {family_of(p) for p in phases}
                 phase_key = '+'.join(sorted(phases))
                 family_key = '+'.join(sorted(family))
@@ -165,7 +194,7 @@ def summarize(trace_dir, hlo_path, wall_s):
                 for s in sources:
                     if 'transpose(' in s:
                         labels.add('backward-labelled')
-                    elif 'ppo_grad' in s:
+                    elif phase_of(s) == 'ppo_grad':
                         labels.add('forward-or-residual')
                     if 'core_gru' in s:
                         modules.add('GRU')
@@ -201,9 +230,11 @@ def summarize(trace_dir, hlo_path, wall_s):
     busy = union_ns(all_intervals)
     ds = sorted(durations)
     result = dict(file=str(paths[0]), hlo=str(hlo_path), profiled_wall_s=wall_s,
+                  analyzer_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   stream_events=len(durations), gpu_span_s=(stop-start)/1e9,
                   gpu_busy_s=busy/1e9, gpu_busy_fraction_of_span=busy/(stop-start),
                   event_sum_s=total/1e9, hlo_mapped_events=mapped, hlo_missing_events=missing,
+                  source_mapping=_rows(mapping_times, mapping_counts, total),
                   kernel_duration_us={str(q): ds[min(len(ds)-1, int(q*(len(ds)-1)))] / 1e3
                                       for q in (.5, .9, .99)},
                   events_under_5us=sum(x < 5000 for x in durations),

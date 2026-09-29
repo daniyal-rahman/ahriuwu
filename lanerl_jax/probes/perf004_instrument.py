@@ -153,7 +153,8 @@ def _factory_transform(node, source):
                 def choose(statement):
                     nonlocal current
                     names = _target_names(statement)
-                    for name, label in [('grad_norm', 'ppo_grad_norm'),
+                    for name, label in [('grad_fn', 'ppo_grad'), ('grads', 'ppo_grad'),
+                                        ('grad_norm', 'ppo_grad_norm'),
                                         ('updates', 'ppo_adam'), ('params', 'ppo_apply')]:
                         if name in names:
                             current = label
