@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29 16:18 UTC, Codex)
 
-**E36 CPU FALLBACK PREPARED:** GPU job1772 cancelled while pending because
+**E36 CPU FALLBACK RUNNING (job1773):** GPU job1772 cancelled while pending because
 desktop is drained/unavailable (never ran). E36b uses Slurm cpu on danilogin,
 2 cores/10GB, frozen replay only; no training. Corrected click handling and
 red action recording, full-history teacher/initial-policy shadow comparisons.
