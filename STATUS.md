@@ -1,8 +1,9 @@
 # STATUS (rewrite in place; last edit 2026-09-29 16:07 UTC, Codex)
 
-**E35 VIDEOS SUBMITTED (job1769):** Matched minimap replays for final E33 BC and E34 random
+**E35 VIDEO RETRY:** Job1769 failed before replay on worker import path;
+fixed module invocation. E35b prepared. Matched minimap replays for final E33 BC and E34 random
 checkpoints, mirror seed7, 600s horizon, 8x playback. Dry-run passed;
-canary/startup watch pending. No training changes.
+GPU startup gate pending. No training changes.
 
 **OVERNIGHT E33/E34 COMPLETE:** Slurm1768 COMPLETED exit0 after7h02m07s.
 Both arms finished2500 updates /81.92M champion decisions each. Only initialization

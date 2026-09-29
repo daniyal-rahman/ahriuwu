@@ -6,7 +6,8 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E35_final_minimaps` | 09-29 | Frozen JAX replay | Final E33/E34 minimap videos | mirror, seed7, near-wave, 600s, 8x playback | one diagnostic episode per final checkpoint | SUBMITTED job1769; dry-run passed | Same setup; no training or aggregate performance claim |
+| `E35b_final_minimaps` | 09-29 | Frozen JAX replay | E35 retry with module invocation | unchanged matched final-checkpoint protocol | two videos | PREPARED; dry-run pending | No model/simulation changes |
+| `E35_final_minimaps` | 09-29 | Frozen JAX replay | Final E33/E34 minimap videos | mirror, seed7, near-wave, 600s, 8x playback | one diagnostic episode per final checkpoint | FAILED job1769 before replay: worker script import path; fixed module invocation | Same setup; no training or aggregate performance claim |
 | `E33_E34_overnight` | 09-29 | Accelerated JAX GRU | Matched BC/random initialization, interleaved in one GPU job | shared lr1e-5 annealed, entropy0, detached critic, standard4x4 PPO, mirror | N128/T128; 2500 updates/81.92M champion decisions each | COMPLETE job1768 exit0, 7h02m07s; GPU canary, startup/early watch passed; no numerical failures | All12 frozen evals/arm and final checkpoints verified; LEARN-PAIR-02 |
 | `E33_accel_bc` | 09-29 | JAX paired arm | DAgger-3 BC init, fresh optimizer | matched E34 | 2500 updates | COMPLETE; frozen final mirror36.11/34.53; vs heuristic CS37.76, gold diff-136.05 | Below u0 CS45.50/gold−66.41; no positive fine-tuning result |
 | `E34_accel_random` | 09-29 | JAX paired arm | Random init | matched E33 | 2500 updates | COMPLETE; frozen final mirror23.95/24.21; vs heuristic CS24.65, gold diff+784.46 | Improved from u0 CS5.78/gold−639.79; one seed, below30CS mirror; not a C# gate result |
