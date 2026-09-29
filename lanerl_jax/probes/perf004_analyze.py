@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from functools import lru_cache
 import gzip
 import hashlib
 import json
@@ -15,6 +16,7 @@ from pathlib import Path
 import re
 
 
+@lru_cache(maxsize=None)
 def phase_of(name):
     labels = re.findall(r'perf004_([A-Za-z0-9_]+)', name)
     if not labels:
@@ -37,6 +39,7 @@ def phase_of(name):
     return labels[-1]
 
 
+@lru_cache(maxsize=None)
 def family_of(phase):
     if phase.startswith('tick_') or phase == 'simulation':
         return 'simulation'
@@ -126,6 +129,7 @@ class HloSources:
         self._cache[name] = result
         return result
 
+    @lru_cache(maxsize=None)
     def info(self, name, fallback=''):
         sources = self.sources(name)
         if not sources and fallback:
