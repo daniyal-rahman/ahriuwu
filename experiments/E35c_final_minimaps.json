@@ -1,0 +1,15 @@
+{
+  "id": "E35c_final_minimaps",
+  "engine": "replay-pair",
+  "slurm_time": "00:45:00",
+  "seed": 7,
+  "seconds": 600,
+  "speed": 8,
+  "arms": [
+    {
+      "id": "E34_accel_random",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E34_accel_random/vec-s0-20260929-074837-33f8c55a/ckpt_081920000.msgpack"
+    }
+  ],
+  "question": "Record remaining random final replay; retain E35b BC trace. Render both with capped CPU Pillow environment."
+}

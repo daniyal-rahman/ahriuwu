@@ -25,7 +25,5 @@ for arm in spec['arms']:
         '--seconds', str(spec['seconds']), '--step-ticks', '6', '--start-near-wave',
         '--route-artifact', str(scratch/'routes'), '--red', 'policy', '--replay',
         '--replay-hz', '10', '--label', arm['id']+' final u2500 | mirror | seed '+str(spec['seed'])], check=True)
-    subprocess.run([sys.executable, '-m', 'lanerl_jax.replay_render', str(dest/'trace.npz'),
-        '--out-dir', str(dest/'minimap'), '--video', '--view', 'map', '--speed', str(spec['speed'])], check=True)
-    print('VIDEO READY', dest/'minimap/replay.mp4', flush=True)
+    print('REPLAY READY', dest/'trace.npz', flush=True)
 print('PROFILE COMPLETE', flush=True)

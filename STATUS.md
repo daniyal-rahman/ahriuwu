@@ -1,9 +1,10 @@
 # STATUS (rewrite in place; last edit 2026-09-29 16:07 UTC, Codex)
 
-**E35 VIDEO RETRY:** Job1769 failed before replay on worker import path;
-fixed module invocation. E35b job1770 submitted, dry-run passed; canary/watch pending. Matched minimap replays for final E33 BC and E34 random
-checkpoints, mirror seed7, 600s horizon, 8x playback. Dry-run passed;
-GPU startup gate pending. No training changes.
+**E35 VIDEO RETRY:** Job1770 completed BC frozen trace (seed7 mirror, CS46/28),
+then renderer lacked Pillow in GPU environment. BC trace preserved at
+`/mnt/nfs/shared/E35b_final_minimaps/E33_accel_bc/trace.npz`. E35c prepares
+remaining random trace; both will render with capped CPU Pillow environment.
+No training changes.
 
 **OVERNIGHT E33/E34 COMPLETE:** Slurm1768 COMPLETED exit0 after7h02m07s.
 Both arms finished2500 updates /81.92M champion decisions each. Only initialization
