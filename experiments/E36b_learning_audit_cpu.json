@@ -1,0 +1,28 @@
+{
+  "id": "E36b_learning_audit_cpu",
+  "engine": "replay-pair",
+  "slurm_time": "00:45:00",
+  "seed": 7,
+  "seconds": 600,
+  "speed": 8,
+  "compare_checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E33_accel_bc/vec-s0-20260929-074835-33f8c55a/ckpt_000000000.msgpack",
+  "arms": [
+    {
+      "id": "bc_final",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E33_accel_bc/vec-s0-20260929-074835-33f8c55a/ckpt_081920000.msgpack",
+      "label": "BC final u2500; corrected click handling"
+    },
+    {
+      "id": "bc_initial",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E33_accel_bc/vec-s0-20260929-074835-33f8c55a/ckpt_000000000.msgpack",
+      "label": "BC initial u0"
+    },
+    {
+      "id": "random_final",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E34_accel_random/vec-s0-20260929-074837-33f8c55a/ckpt_081920000.msgpack",
+      "label": "Random final u2500; corrected click handling"
+    }
+  ],
+  "question": "Attribute replay failures; honor training noop clicks, preserve red actions, compare teacher and initial BC on full observation history. One seed diagnostic, no training.",
+  "backend": "cpu"
+}

@@ -8,7 +8,8 @@ import sys
 from lanerl_jax.sim.config import DEFAULT_ROUTE_ARTIFACT
 
 spec = json.loads(Path('experiments', sys.argv[1]+'.json').read_text())
-scratch = Path('/scratch') / (spec['id']+'-'+os.environ['SLURM_JOB_ID'])
+stage_root = Path('/mnt/nfs/shared') if spec.get('backend') == 'cpu' else Path('/scratch')
+scratch = stage_root / (spec['id']+'-staged-'+os.environ['SLURM_JOB_ID'])
 scratch.mkdir(parents=True, exist_ok=True)
 shutil.copytree(DEFAULT_ROUTE_ARTIFACT, scratch/'routes')
 out = Path('/mnt/nfs/shared') / spec['id']

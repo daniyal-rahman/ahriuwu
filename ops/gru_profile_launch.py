@@ -26,6 +26,13 @@ def launch(spec, dry):
            '--signal=USR1@120', '--no-requeue', f"--job-name={spec['id']}",
            f"--output=/mnt/nfs/shared/{spec['id']}-%j.out",
            script, spec['id']]
+    if spec.get('backend') == 'cpu':
+        if spec['engine'] != 'replay-pair':
+            raise SystemExit('CPU fallback is limited to frozen replay diagnostics')
+        cmd = [x for x in cmd if x != '--gres=gpu:1']
+        changes = {'--partition=gpup':'--partition=cpu', '--nodelist=desktop':'--nodelist=danilogin',
+                   '--cpus-per-task=4':'--cpus-per-task=2', '--mem=20G':'--mem=10G'}
+        cmd = [changes.get(x,x) for x in cmd]
     print('command:', shlex.join(cmd), flush=True)
     if dry:
         return

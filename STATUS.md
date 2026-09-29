@@ -1,10 +1,10 @@
 # STATUS (rewrite in place; last edit 2026-09-29 16:18 UTC, Codex)
 
-**E36 DIAGNOSTIC RUNNING (job1772):** Found evaluator omitted training noop-click
-handling and replay replaced red button/cursor with placeholders. Actual red
-orders/state and overnight vectorized frozen evaluations are unaffected by
-those recording bugs. Evaluator fixes passed8 capped CPU tests and dry-run. E36 records BC initial/final
-and random final with teacher/initial-policy shadow comparisons. No training.
+**E36 CPU FALLBACK PREPARED:** GPU job1772 cancelled while pending because
+desktop is drained/unavailable (never ran). E36b uses Slurm cpu on danilogin,
+2 cores/10GB, frozen replay only; no training. Corrected click handling and
+red action recording, full-history teacher/initial-policy shadow comparisons.
+8 CPU tests passed. No persistent watcher/service created.
 
 **LEARNING EXPLANATION / READ-ONLY AUDIT:** LEARN-PAIR-03 records actual
 click handling, lane shaping, discount horizon, detached linear critic and
