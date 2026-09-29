@@ -225,8 +225,21 @@ def summarize(trace_dir, hlo_path, wall_s, annotation=None):
                     modules.add('transformer_other')
             elif 'value_head' in s:
                 modules.add('value_head')
+            elif 'core_norm' in s:
+                modules.add('GRU_input_norm')
             elif 'LanePolicy' in s:
-                modules.add('policy_other')
+                # Standard PERF004 policy: entity/context, four MLP layers,
+                # core projection, then three action heads (policy.py).
+                dense = re.search(r'LanePolicy/Dense_(\d+)/', s)
+                if dense:
+                    number = int(dense[1])
+                    modules.add({0: 'entity_projection', 1: 'context_projection',
+                                 2: 'MLP_trunk', 3: 'MLP_trunk', 4: 'MLP_trunk',
+                                 5: 'MLP_trunk', 6: 'core_projection',
+                                 7: 'action_heads', 8: 'action_heads',
+                                 9: 'action_heads'}.get(number, 'policy_other'))
+                else:
+                    modules.add('pooling_or_policy_other')
         buckets = {'phase_exclusive_or_shared': [phase_key],
                    'phase_inclusive': phases,
                    'family_exclusive_or_shared': [family_key],
