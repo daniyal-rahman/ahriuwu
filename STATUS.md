@@ -1,28 +1,25 @@
-# STATUS (rewrite in place; last edit 2026-09-29 02:33 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 02:56 UTC, Codex)
 
-**DETAILED PROFILE APPROVED (09-29, Dani):** Cover every simulation tick phase,
-observations/actions and GRU PPO at a fixed workload; rank measured bottlenecks
-before optimisation or an environment-count sweep. Prior profiling commits
-pushed to origin/lane-rl/jax. Preserve the existing untracked wall-reward probe
-unchanged as part of the committed starting snapshot. PERF-004 prepared:
-all 28 tick scopes (26 phases plus prep/assembly), obs/actions and PPO;
-fixed N128/T128, random/E31 at three game ages, split and fused wall times,
-GPU source traces and memory dumps. CPU lowering confirms identical simulation
-math after scope insertion. Dry-run passed; job **1758** submitted through
-`ops/launch.py PERF004_full_profile` from committed/pushed **9eff7e5**.
-Job 1758 FAILED before canary: desktop cannot resolve worktree Git metadata
-under /srv/nfs. Launcher now passes source SHA in launch.json. Retry `PERF004b_full_profile`, job **1759**, submitted from **e80c87e** after
-dry-run. GPU canary PASSED: identical lowered collection/learner math, matching
-outputs, GPU source attribution present. 180-s startup watch passed; main
-job FAILED (SIGSEGV) after 14m26s, after saving random early/mid collection
-traces. Early full update 6.461s = collect 3.881s + learn 2.580s; middle
-collect 3.928s. Memory/HLO dumps saved. Analyzing preserved artifacts and
-retry `PERF004c_full_profile` job **1760** launched from **f012381** after
-dry-run; corrected-scope graph/numerical canary and 180-s watch PASSED.
-All six timing cohorts, one final profiler
-session for missing late-game and learner attribution. No performance changes.
-Five-million-token ceiling authorised, not a target
-to spend; no parallel agents requested.
+**PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
+unprofiled collection, PPO and complete-update timing cohorts finished. Complete
+updates: 6.315–6.822s (4,803–5,189 champion decisions/s); collection 3.720–4.233s,
+learner 2.603–2.611s. Job 1760 FAILED at the final profiler session (SIGSEGV),
+after saving all ordinary timings; no active profiling job remains. Job 1759
+saved usable random early/mid collection traces; both jobs passed numerical /
+lowered-graph canaries and 180s startup watches. Do not claim missing N128
+learner/late GPU traces succeeded. Sources and limitations: PERF-004 ledger.
+
+Collection ray loops across tick vision, observations, decoding and order
+bookkeeping occupy ~55% of the profiled collection span; collision ~19%,
+waypoint loops ~8%. These are profiler spans, not exact unprofiled wall slices.
+Learner temporary memory 5.43GB, with 4.25GiB in large transformer tensors.
+
+Dani has now authorised implementation work and prioritises structural changes
+with potential multiples of end-to-end improvement, not standalone single-digit
+percentage fixes. Stop expanding the broad profile. No performance edits made
+yet; next work should be a bounded, parity-checked structural experiment with
+collection AND full-update A/B timing. Environment-count sweeps remain deferred.
+Existing wall_reward_probe was preserved unchanged at the committed baseline.
 
 **GRU GPU PROFILE COMPLETE (09-29, Dani):** `PERF003_gru_profile` / job **1757**
 finished successfully. Dry-run, split-vs-fused numerical canary and 180-s startup

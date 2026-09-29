@@ -946,7 +946,7 @@ wave does **not** systematically lag. The 612-vs-315 figure is conditional on
 | PERF-001 | `APPROX` | routed-training throughput gate | The JAX rewrite must retain accelerator throughput high enough for RL. | **The table was the wrong suspect and the unroll sweep tuned the wrong loop.** Full profile 2026-09-18 (5 repeats x 60 steps): observation 10.005 ms, policy 14.486, `apply_orders` non-routing 0.926, routing 4.349, `step_decision` 44.737. Inside routing, `closest_terrain_exit` is 90.3% and the hop-table gathers are **0.3%**. `ROUTE_LOOP_UNROLL` moved nothing because it tunes a loop that runs **6** trips; the spiral runs up to **203**, on a per-lane distribution of p50 = 0, p90 = 0, p99 = 88 -- so 97.5% of lanes need none and one straggler makes the whole `vmap` batch pay. Three semantics-preserving fixes landed in `d47ab44` (spiral unroll, `CastCircle` reducing once instead of per-step scattering, and a `scan(unroll=32)` on the line walk whose cost was *perfectly* linear in its bound at ~18 us/step, i.e. essentially all launch overhead). Result: **58,255 dec/s without `SmoothPath` -- gate 4 PASSES** -- and 51,270 with it. Negative result worth keeping: unrolling `SmoothPath`'s own greedy makes it **worse** (82.97 ms at 1, 103.81 at 16), because a masked-off chained body there is a whole wasted `CastCircle` rather than amortised launch overhead. | Gate 4 passes on the pre-`SmoothPath` simulator. What remains is a stated trade, not an unknown. | Reproduce only with the canonical command; `--no-smooth` and `--smooth-line-steps` are labelled controls. Next, if the 12% is wanted back: measure the line-step distribution on the **real action lattice** (gameplay clicks are viewport-bounded, so 128 is likely far looser than needed), and surface `smooth_exhausted` in training the way `route_nonready` is. Unattributed and larger than all of the above: `step_decision` is 60% of the step, with `input_reduce_fusion_13` at 10.80 ms and ~12.8 ms of CUB radix sorts. |
 | PERF-002 | `MEASURED (CPU microbenchmark)` 2026-09-28 | Current JAX decision cost; no training launched | `probes/jax_time_breakdown.py`; reproduce via `ops/login_capped.sh 8G 2 timeout 360 .venv-jax/bin/python -u -m lanerl_jax.probes.jax_time_breakdown`; raw output `/mnt/nfs/shared/jax-time-breakdown-20260928.out`. | danilogin CPU, one unbatched env, training SimConfig with 6 ticks/decision, 150 s idle-champion warm state (44 alive / 66 slots), random fixed GRU + norm/residual, noop unwalkable clicks. Median of 3 x 30 synchronized calls after compilation: observe both 1.048 ms; GRU + sampling 3.129; decode 2.638; apply/routing 1.370; six sim ticks 10.629. Sum 18.814 ms (sim 56.5%), NOT fused rollout throughput. No-collision control 10.345 ms (-2.7%); no-call-for-help 10.118 (-4.8%), independently, not additive. Some repeats vary under CPU quota: policy 2.100–3.138 ms, decode 1.640–2.813, no-collision 10.245–15.174. Warm compile+execution 70.71 s; apply compile+first call 46.883 s; sim 62.534 s; exclude these from steady timings. | CPU fixture is not a representative policy-driven GPU batch or PPO profile: champions start idle at base, fixed actions/state, no learner. Strong code-level candidate: step.py waypoint cond is inside vec vmap; installed JAX conditionals.py batches data-dependent cond into both branches + select, so the N x N lexsort and 66-step cluster scan in minion_ai.py may run even when masked. Measure/optimise that work, preserving stable order and early-exit semantics. Collision is not dominant on this CPU fixture. | Handoff correction: vec_bench.py measures old trainer.make_train (default MLP), not vec_train GRU; 254 to 4360 champion-dec/s at 16 to 256 envs is mostly batch scaling, not proof host round trips dominate. Existing E31/E32 logs: median post-u10 updates 18.03/18.62 s, 227/220 champion-dec/s; cumulative rates 80/127 include startup/stalls. No production optimisations or training launches in this session. |
 | PERF-003 | `MEASURED (GPU profile)` 2026-09-29 | Actual vectorised GRU training cost and parallel-env constraints | `ops/launch.py PERF003_gru_profile` from its JSON spec; job 1757, code 853e847, RTX 5080 exclusive allocation. Dry-run, 2-env T4 split-vs-fused numerical canary, 180-s startup watch passed; all finite. Raw `/mnt/nfs/shared/PERF003_gru_profile-1757.out`; `runs/PERF003_gru_profile/{canary,env16,env128}/result.json`, collector bank metadata in each profile. | T128, norm/residual GRU, standard PPO 4 epochs x 4 minibatches, FP32/highest matmul precision, random params, 4 collector-prepared near-wave start states with 20-s jitter, 6 sim ticks/decision. Three warmed, fully synchronized repeats reuse identical inputs and discard optimizer outputs. **16 envs:** collect 2.8161 s, learn 1.0741 s, sum 3.8902 s, 1052.9 champion-dec/s (72.4/27.6%). **128 envs:** collect 3.9661 s, learn 2.5507 s, sum 6.5168 s, 5028.3 champion-dec/s (60.9/39.1%). Eightfold env increase yields 4.78x aggregate throughput; collect costs 1.41x, learn 2.37x. Learner includes bootstrap/GAE, all 16 forward/backprop/Adam steps, post-KL and diagnostics. Compile times collect/learn: 74.2/124.9 s at 16, 93.7/239.5 s at 128; bank setup ~41 s separately. | Logical params 24.518 MB, optimizer 49.036 MB. At 128 envs: transition buffer 73.335 MB, env state 8.928 MB, bank 0.279 MB; compiled learn temporary storage **5.429 GB** (16 envs: 0.691 GB); collect temporaries 35.858 MB. Peak live allocations 1.359/6.125 GB at 16/128 (16 peak includes initialization); retained allocator pool 2.150/10.740 GB; configured limit **12.440 GB**. One concurrent read-only GPU snapshot inside own Slurm allocation showed 11,160 MiB physical device-used and 100% utilisation during the final learner stage; not an averaged utilisation or proof of saturation. | Sum of separately compiled stages is NOT a measured fused end-to-end update; outputs are kept alive for profiling and allocation peaks include compilation/init. No full-episode learning, checkpoint, or score gain claimed. Profile covers a short near-wave rollout, not every game phase or policy. Initial candidates only: larger batches (256 is untested; linear learner-temp extrapolation ~10.84 GB plus other allocations is tight against the cap), minion waypoint sort/scan and vmapped conditional work, batching the nonrecurrent transformer/MLP trunk outside the GRU time scan, activation-memory reduction/gradient accumulation, compilation caching. More PPO minibatches, shorter rollouts and fewer epochs change learning; not free speedups. No optimisations applied, per Dani. |
-| PERF-004 | `PROFILING` 2026-09-29 | Full fixed-workload GPU attribution before optimisation | `probes/perf004_{profile,instrument,analyze}.py`; PERF004b job 1759, original failed job 1758 only a desktop Git-path issue | Fixed N128/T128, standard GRU PPO, frozen random/E31 early/mid/late cohorts. All 26 tick phases plus prep/assembly, observations/actions, learner and fused update. Canary original/labelled lowered computations identical and outputs agree; startup watch passed. | CUDA graph events often report command_buffer instead of HLO op: prefer exact HLO op metadata; otherwise map generated symbols to candidate HLO instructions, retaining observed and compiler-declared aliases as shared buckets. Exclude parameter/constant plumbing and deduplicated reducer-helper source names; preserve genuinely shared fusion buckets. Initial PPO unpack scope also covered gradient computation; JAX jvp/transpose metadata recovers it independently, and probe naming is corrected for future runs. Analyzer records its own SHA256. Unmapped events remain explicit. | Measurements pending; no performance changes or environment-count sweep. Traces quantify profiler overhead; unprofiled synchronized repeats supply wall times. Phase inclusive totals are upper bounds, not additive. |
+| PERF-004 | `MEASURED; TRACE COVERAGE PARTIAL` 2026-09-29 | Full fixed-workload GPU attribution before optimisation | `probes/perf004_{profile,instrument,analyze}.py`; PERF004b job 1759, original failed job 1758 only a desktop Git-path issue | Fixed N128/T128, standard GRU PPO, frozen random/E31 early/mid/late cohorts. All 26 tick phases plus prep/assembly, observations/actions, learner and fused update. Canary original/labelled lowered computations identical and outputs agree; startup watch passed. | CUDA graph events often report command_buffer instead of HLO op: prefer exact HLO op metadata; otherwise map generated symbols to candidate HLO instructions, retaining observed and compiler-declared aliases as shared buckets. Exclude parameter/constant plumbing and deduplicated reducer-helper source names; preserve genuinely shared fusion buckets. Initial PPO unpack scope also covered gradient computation; JAX jvp/transpose metadata recovers it independently, and probe naming is corrected for future runs. Analyzer records its own SHA256. Unmapped events remain explicit. | All six unprofiled cohorts measured; collection traces available for random early/mid only. Job 1760 SIGSEGV at final trace after all ordinary timings completed; N128 learner and late traces unavailable. No performance changes or environment-count sweep. Detailed tables and ranked hypotheses below. Traces quantify profiler overhead; unprofiled synchronized repeats supply wall times. Phase inclusive totals are upper bounds, not additive. |
 | OPS-001 | `BOUNDED` | route asset distribution | A training checkout needs the exact artifact matching navgrid bytes, radius, and ABI. | Heavy route data live under ignored `data/jax_routes/`; production remains pinned to `map1_garen_r35_o50_v2` (231 MiB packed hops). The loader also accepts the measured `v3` same-direction-run sidecar experiment (693 MiB total), but its memory/compile cost has not yet produced a gate result, so it is not required. Unknown versions, hashes, shapes, or v3 sidecar semantics fail closed. | A fresh machine cannot start routed training until the pinned artifact is generated or distributed. **Generating and loading need different environments**, measured 2026-09-18: the baker is numba-parallel and raises rather than guessing, and `.venv-gpu` is a real venv with `include-system-site-packages = false`, so it cannot see the conda env's numba. Artifacts are therefore generated in `.venv-jax` (login) and only *loaded* in `.venv-gpu` (desktop/GPU). Loading is pure numpy, so routed training and gate 4 are unaffected -- the gate-4 run loads the 231 MiB v2 table in `.venv-gpu` without numba. Left that way on purpose: numba pins numpy, and `.venv-gpu` is the environment every gate-4 number is measured in. | `data/local_route_artifact.py`, `train/run_train.py`; publish the pinned artifact to the project artifact store before remote training. |
 | SERVER-001 | `OPEN` 2026-09-24 (root-caused; vendor patch written, NOT applied; eval and gate now refuse to score it) | **server: a Garen Q empowered attack freezes the champion for the rest of the process** | Five steps (vendor line numbers). (1) Q's buff `GarenQ.OnActivate` does `CancelAutoAttack(true)` + `SkipNextAutoAttack` and listens on `OnPreAttack` (`Buffs/Garen/GarenQ.cs:72-75`). (2) The next basic swing's own `Spell.Cast` publishes `OnPreAttack` (`Spell.cs:586`). The listener swaps `AutoAttackSpell` to `GarenQAttack` (`GarenQ.cs:78-82`). THEN the basic sets itself `STATE_CASTING` (`Spell.cs:593`) as an **orphan**: it is no longer `Owner.AutoAttackSpell`. (3) If the policy retargets inside the orphan's windup, its `CastCancelCheck` fires (`Spell.cs:279-287`). That calls `Owner.CancelAutoAttack`, which resets `Owner.AutoAttackSpell`, i.e. GarenQAttack (`ObjAIBase.cs:469-484`), NOT the orphan. The orphan stays CASTING forever and re-runs that check every tick, zeroing the AA cooldown each time (reset = `!HasAutoAttacked`). (4) GarenQAttack sits in ExtraSpell slot 45, so `IsAutoAttack` is false and its cast takes the non-auto path. That path sets `_castingSpell` (`Spell.cs:458`) and `MoveOrder = CastSpell` (`Spell.cs:492`), and only `FinishCasting` clears them (`Spell.cs:1061-1064`). The next tick the orphan (slot 64, updated after slot 45, `ObjAIBase.cs:1142`) sees `GetCastSpell() != null` and cancels GarenQAttack to READY. `FinishCasting` never runs. (5) `CanMove`/`CanChangeWaypoints`/`CanAttack`/`CanCast` all need `_castingSpell == null` (`ObjAIBase.cs:302-362`), so every later order is dropped (`SetWaypointsRejected reason=cannotchange`). `GetCastSpell() != null` is now permanent, so the orphan keeps cancelling. The 09-14 death fix (`Spell.cs:215-250`) runs only for a spell in `STATE_CASTING`, and GarenQAttack is READY, so death and respawn do not clear it; only `LanerlEpisode.Reset` does (`LanerlEpisode.cs:339-357`). The same `ResetSpellCast`-without-owner-cleanup omission sits in the non-auto target-lost branch (`Spell.cs:274`) and the status branch (`:309`). Real League has no such state: a retarget cancels the in-flight swing and the empowered attack still comes next. | The sim cannot freeze. Q's empowered swing is an ordinary `step_autoattack` swing with replaced damage (`step.py:960-1010`, `consume_q_skip`/`end_q`, `spells.py:568-600`). No orphan spell object exists, and nothing writes `MoveOrder.CAST_SPELL` (`step.py:229` is its only reader). The deviation is the server's. | Any server number after the first Q that meets a retarget inside the next basic's windup. RL policies retarget at 30 Hz (diag1b: 2,956 attack orders in 3,600 blue decisions, alternating targets), so this is near-certain within minutes. diag1b vs the bot: frozen from **159.5 s**, 1 CS vs 40, 440 s lost. | **Evidence.** (a) `/tmp/baseline_audit/eval_vs_bot_logs/instance000.log`: the only `GarenQAttack SpellPreCast/SpellCast` of the game (01:00:29) has no `SpellPostCast`/`Spell End`. `casting=GarenQAttack canmove=False` from t=180 s, `dead=True` still casting at 210 s, then fountain (26,264) to 600 s. (b) **Reproduced exactly** (same checkpoint, seed 0, 300 s, `bin/Trace`, `LANERL_DECISION_TRACE=1`): cast at t=159,501 on 1073744341, one tick after a policy retarget (`SetTargetUnit ... caller=Execute@391` at 159,484). No `FinishCasting` for blue. `SetWaypointsRejected reason=cannotchange` from 159,517. Same 180/210/240/270 s rows. (c) **Per-tick proof** in the mirror gate recording `runs/parity001/sweepA-a4-300s` (`LANERL_INTERNAL`, blue 1073743317). 210,600: basic cast, AA swapped (`aawindup` 341 -> 256, aacd 1588). 210,833: retarget. 210,850: `aacd` 1349 -> 0 (the orphan's cancel). `hasaa` never returns to 1. 213,918: GarenQAttack cast (`aastate=1 aacast=256 attacking=1`). 213,934: `aastate=0 aacast=0 aacd=0 attacking=0`, target unchanged, alive, `mo=15` to the end of the recording (86 s, through a death). That recording was never flagged. **Detection (landed):** `policy_driver.CastFreezeDetector` flags wire `mo == CastSpell (15)` held >= `CAST_FREEZE_MS` = 3 s. The healthy maximum over 7 recordings is 501 ms. On existing recordings it flags only sweepA-a4 blue (213,934 -> 299,992 ms). `tools/rl_eval_vs_server.py` stops the episode, blanks every skill field, reports INVALID (exit 3 if nothing is valid) and keeps the raw counters under `raw_not_a_measurement`. `policy_divergence` scores the gate `INVALID`. Both read only the wire, so the policy's input is unchanged. **Fix:** the vendor patch below (§ "SERVER-001: the vendor patch"). The orphan cancels itself; `CancelAutoAttack` clears a `_castingSpell` that IS the AA spell; the two bare `ResetSpellCast` aborts clear the owner's cast state. Untested (no rebuild here). **Resolution trigger:** rebuild Release and Trace with the patch, re-run this seed-0 300 s eval (freeze at 159.5 s must be gone), then 4 episodes vs the bot with the detector reporting 0 frozen stretches. |
 | OPS-002 | `FIXED (harness)` 2026-09-24; one vendor-side artifact still to delete | **a relative `--config` made the server play Shaco vs Ezreal** | `GameServerConsole/Program.cs:106-129` `LoadConfig`: a config path that does not exist is not an error. The server creates its directory, WRITES its built-in default JSON there and plays it. The server runs with `cwd = server_dir` (`lanerl_train/vec.py:298`), so a relative path is resolved under `bin/<build>/net6.0/`. | `vec.py:155` checked `cfg.exists()` against PYTHON's cwd, where the relative path did exist, so nothing refused. The audit's gate "failed at 0 ms" on HP (637/536 vs 672). | Every counter and the first divergence describe a different game. After the first such run the written file persists, so later runs with the same relative path load Shaco vs Ezreal **silently, without writing anything**. | `parity/record.py`: `resolve_server_path` makes `--config`/`--server-dir`/`--bot-config` absolute against the caller's cwd and refuses a missing one. Callers: `policy_divergence.main`, `record._main`, `record_trace`, `tools/rl_eval_vs_server.py`. `assert_two_garens` reads the server's `Player <name> Added: <Model>` boot lines after the first frame and aborts unless they are exactly Garen+Garen (the frame carries no model name). Called from `record_trace` and the eval's `play_batch`. Tests: `parity/tests/test_policy_divergence.py::test_server_config_is_resolved_*`, `::test_gate_cli_refuses_a_missing_config_before_launching`, `::test_two_garens_guard_reads_the_boot_log`. **Still to do by hand (vendor tree, not touched here):** delete `lanerl-vendor/LoLServer/GameServerConsole/bin/Trace/net6.0/lanerl/cfg/garen1v1_trace.json`. The server wrote it at 2026-09-24 00:46:16 and it holds Shaco (BLUE) / Ezreal (RED). |
@@ -1288,3 +1288,138 @@ The vendor tree was not modified. To apply: patch `lanerl-vendor/`, then rebuild
              {
                  _autoAttackCurrentCooldown = 0;
 ```
+
+
+## PERF-004: collection bottlenecks and structural optimisation candidates
+
+Artifacts: `runs/PERF004c_full_profile/main/profile_manifest.json` (all six
+unprofiled cohorts), `runs/PERF004b_full_profile/main/*_analysis.json` (two
+collection traces), and `runs/PERF004b_full_profile/xla-dumps.tar.gz` (compiled
+memory reports). Source f012381 for the recovery job; each analysis records
+its own SHA256. No checkpoint was trained or saved. PPO outputs were discarded;
+frozen E31 parameters used a fresh diagnostic optimiser. Same N128/T128,
+6 ticks/decision, standard 4 epochs × 4 minibatches, FP32/highest, GRU with
+normalisation/residual. Cohort initial deadlines were set to 600s to retain game
+age. Three synchronized warmed repeats per stage; compilation excluded.
+
+### Actual update timings
+
+| Frozen parameters / cohort | Mean game age (s) | Collection (s) | PPO including backprop (s) | Complete update (s) | Champion decisions/s |
+|---|---:|---:|---:|---:|---:|
+| random_00 | 132.6 | 3.878 | 2.603 | 6.489 | 5,050 |
+| random_14 | 311.8 | 3.909 | 2.611 | 6.522 | 5,024 |
+| random_35 | 580.6 | 3.720 | 2.609 | 6.315 | 5,189 |
+| E31_00 | 132.6 | 3.926 | 2.608 | 6.524 | 5,022 |
+| E31_14 | 311.8 | 4.233 | 2.610 | 6.822 | 4,803 |
+| E31_35 | 580.6 | 4.157 | 2.609 | 6.777 | 4,835 |
+
+### Zoom into collection
+
+The random middle cohort took **3.909s unprofiled** in the recovery job.
+The preserved matching middle trace took **4.887s**, versus **3.928s** without
+profiling in that job (~24% overhead). Its GPU stream span was 4.885s, GPU busy
+union 3.059s, summed event duration 3.083s, and event count 1,701,516. GPU gaps
+are not proof of CPU-only work or a measured hardware utilisation ceiling.
+
+Host loop spans below include execution/waiting and are measured *inside that
+profile*. They identify sequential work; do not transplant their seconds into
+the 3.909s baseline. Ray loops are identified by their source scopes and HLO
+carry shapes `[128,66,66]` / `[128,2,66,66]`; their separate callsites do not nest.
+
+| Collection work | Profiled host loop span | Share of profiled collection span | Code / implication |
+|---|---:|---:|---|
+| Tick vision rays | 1.757s | 36.0% | `step.py` phase 10 → `fog.visible_to_enemy` → two `visible_to` calls → `vision.clear_ray` |
+| Observation visibility rays | 0.286s | 5.9% | `vec_train._obs` / `builder.build_observation`: both champions |
+| Click-target visibility rays | 0.352s | 7.2% | `train/actions.py:orders_from`, vmapped over champion teams |
+| Spell-witness visibility rays | 0.324s | 6.6% | `orders._record_observed_enemy_casts`: full visibility reconstructed from the same pre-step state |
+| **All those visibility rays** | **2.719s** | **55.7%** | Dense masked arrays traversed in bounded while loops; repeated per-cell GPU dispatch/gathers |
+| Collision loops (union within phase) | 0.946s | 19.4% | `sim/collision.py`: creation-order movers and escape rounds; cannot freely parallelise dependent unit updates |
+| Minion waypoint loops | 0.385s | 7.9% | `minion_ai.advance_lane_waypoints`: stable sort, expanding cluster scan and waypoint traversal |
+| Refresh-waypoint loops | 0.314s | 6.4% | `step.py` phase 14; routing / terrain work |
+
+Repeated pre-decision visibility is a concrete code redundancy. Observation,
+click resolution and witnessed-cast bookkeeping use the same state position,
+team, kind and alive arrays. Share only within that state: reusing visibility
+across movement, death or respawn could change behaviour. The existing known
+one-tick vision parity deviation (STRUCT-006) must not be changed accidentally.
+
+### Entire tick coverage
+
+GPU milliseconds below are **inclusive upper bounds**: a fused kernel or an
+ambiguous cloned-kernel callsite can have several source phases. Rows overlap
+and MUST NOT be summed. Zero means no separately attributed event, not proof
+that the code costs nothing. Exact HLO-op attribution covers ~52% of GPU event
+time; remaining generated-symbol candidates/alias sets and unmapped events are
+explicit in analysis JSON. This table is for coverage and ranking, not invented
+exclusive timings for each line of Python.
+
+| Phase | Work | Early GPU inclusive ms | Middle GPU inclusive ms |
+|---|---|---:|---:|
+| tick_00 | Profile stats and tick clock preparation | 7.0 | 7.4 |
+| tick_01 | collision push-apart (Map.Update, FIRST thing in the tick) | 405.3 | 475.0 |
+| tick_02 | fountain healing (LevelScriptObjects.OnUpdate -> Fountain) | 1.6 | 1.8 |
+| tick_03 | wave spawning (MapScript.Update, still inside Map.Update) | 154.6 | 155.8 |
+| tick_04 | buffs (ObjectManager.Update -> AttackableUnit.UpdateBuffs) | 4.6 | 4.9 |
+| tick_05 | Garen's W: the resist/damage hooks spells.py asks for | 30.0 | 30.7 |
+| tick_06 | Stats.Update: HP regen (AttackableUnit.Update, after buffs) | 80.2 | 81.3 |
+| tick_07 | recall damage-buff / cast-windup state | 12.2 | 12.5 |
+| tick_08 | movement (AttackableUnit.Move, after UpdateBuffs) | 41.2 | 38.8 |
+| tick_09 | recall and R Spell.Update (after Move, before targeting) | 26.3 | 26.7 |
+| tick_10 | fog of war (ObjectManager.Update's vision pass) | 1056.1 | 1040.7 |
+| tick_11 | the minion controller (AIScript.OnUpdate) | 72.2 | 72.7 |
+| tick_12 | LaneMinionAI.WaypointReached | 209.3 | 206.8 |
+| tick_13 | target acquisition (ObjAIBase.UpdateTarget, TurretAI) | 170.4 | 171.8 |
+| tick_14 | RefreshWaypoints | 178.3 | 159.5 |
+| tick_15 | the swing gate and auto-attack clock; Q's hit and silence | 19.9 | 20.6 |
+| tick_16 | apply damage (melee hits, missiles, buff damage) | 29.1 | 30.3 |
+| tick_17 | Champion._championHitFlagTimer / _playerHitId | 7.9 | 8.1 |
+| tick_18 | out-of-combat clock, for Garen's passive | 32.1 | 32.7 |
+| tick_19 | the dead drop target and swing (UpdateTarget; TGT-DEATHTICK) | 1.9 | 2.1 |
+| tick_20 | call for help | 80.9 | 81.2 |
+| tick_21 | kill attribution and death rewards (AttackableUnit.Die) | 31.7 | 31.8 |
+| tick_22 | champion-kill gold/XP (Champion.Die) | 12.3 | 12.7 |
+| tick_23 | turret-destruction gold/XP (LaneTurret.Die) | 17.4 | 17.5 |
+| tick_24 | gold, XP, level-up and spell ranks | 5.3 | 5.6 |
+| tick_25 | move order out, and FinishCasting's Hold | 4.8 | 4.9 |
+| tick_26 | champion death and respawn (Champion.Update) | 25.6 | 26.3 |
+| tick_27 | Final state assembly (including inline expressions) | 8.4 | 9.0 |
+
+### Memory and learner constraints
+
+Learner temporary allocation is **5.429GB / 5.056GiB**. The buffer-assignment
+report contains 32 distinct large transformer-shaped temporary regions totalling
+**4.25GiB (84.1%)**, including `[128,64,32,128]`, `[128,64,32,256]`, and attention
+`[128,64,4,32,32]` tensors (time, minibatch trajectories, entity/head dimensions).
+These are saved intermediates for differentiation, not environment state.
+Parameters are 24.5MB, Adam state 49.0MB, transition data 73.3MB; collection
+compiled temporaries are 35.9MB. The recovery job peaked at 6.990GB live JAX
+allocations while retaining several diagnostic inputs/executables, with a
+10.740GB retained allocator pool and 12.440GB configured allocation limit.
+These are different quantities, not interchangeable estimates of maximum envs.
+
+The learner takes ~2.61s and includes bootstrap, GAE, all 16 PPO gradient/Adam
+updates and the post-update diagnostic forward pass. `learner.forward` scans
+the entire policy over T128: entity transformer and large MLP as well as the
+recurrent GRU. Only the recurrent part inherently requires this time ordering.
+N128 forward/backward kernel percentages remain unmeasured because the profiler
+crashed; N2 canary timings must not be presented as the N128 breakdown.
+
+### Priority after Dani's scope correction: potential multiples
+
+These are hypotheses and conditional bounds, **not achieved speedups**. With a
+60/40 collection/learner split, making collection 3× faster gives ~1.67× total;
+making learning 3× faster gives ~1.36× total. Doubling both gives 2× total.
+Optimising either half alone cannot support arbitrary end-to-end claims.
+
+| Candidate | Evidence and potential | Fidelity / validation requirement | Priority |
+|---|---|---|---|
+| Restructure vision execution to remove repeated passes and per-cell dispatch | Ray loops occupy ~56% of the traced collection span. Sharing same-state results is the low-risk first component; a fused ray traversal is the structural component. No measured speedup yet. Eliminating all visibility would still remove only roughly one-third of a whole update, so 2× total requires other work too. | Preserve directed brush rules, corner tie handling, bounds, masks and visibility timing. Existing vision geometry/brush/wall/hidden-input/cast-memory tests; compare batched rays, observations, decoded orders and full trajectories, then matched N128 collection/full-update A/B. | Best measured simulation target; avoid a long sequence of tiny standalone patches |
+| Batch the nonrecurrent learner trunk across time, retain only GRU recurrence in the scan | Structural small-batch/dispatch opportunity in transformer + 4-layer MLP. No representative per-layer timing or multiplier established. Whole learner 3× speedup would yield only ~1.36× overall. | Preserve parameter names/checkpoint loading, carry resets and full BPTT; compare logits, loss, gradients, optimiser states and actor/learner log-probs, then complete-update timing. | Other major structural candidate; combines with collection improvements |
+| Fuse / reduce collision-loop work | ~19% of profiled collection span; sequential ordering is semantically meaningful. | Preserve creation order, frozen candidate membership and sequential escape effects; collision parity fixtures and trajectory comparisons. | Secondary structural target, higher implementation risk |
+| Activation rematerialisation | 84% of learner temp storage is large transformer tensors; may substantially lower memory but adds compute. | Gradient equivalence and measured peak memory + wall time; preserve minibatch/epoch semantics. | Defer until capacity is actually limiting |
+| Visibility reuse alone, waypoint cleanup, miscellaneous scalar work | Possible single-digit / low-teens total gains; waypoint loops only ~8% of collection span. | Normal equivalence and A/B gates. | Not standalone priorities under the user's multiples threshold |
+
+No environment-count sweep, precision change, model-size change, shortened
+rollout, reduced PPO epochs or physics simplification was made. Those would
+mix throughput with learning/fidelity changes. The next implementation trial
+should be bounded and judged on full-update improvement, not only microbenchmarks.
