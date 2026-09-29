@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `perf004_profile.py`, `perf004_instrument.py`, `perf004_analyze.py` | Full simulation, observation/action and PPO GPU cost attribution at fixed N128 | PERF-004; labelled original AST, numerical/graph canary, frozen random/E31 early/mid/late inputs, HLO mixed-fusion attribution and memory | 2026-09-29 |
 | `wall_reward_probe.py` | Bucket recorded champion outcomes by wall distance | Pre-existing one-off preserved unchanged at the PERF-004 baseline; related to INT-001, not rerun or newly validated here | 2026-09-29 |
 | `gru_throughput.py` | Actual GRU rollout versus learner wall time and memory at 16/128 envs? | PERF-003; `ops/launch.py PERF003_gru_profile`, split/fused canary, no saved model | 2026-09-29 |
 | `jax_time_breakdown.py` | Where does current JAX decision time go on capped danilogin CPU? | PERF-002: populated-lane component timings and collision/help controls; no training | 2026-09-28 |

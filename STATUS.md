@@ -1,11 +1,15 @@
-# STATUS (rewrite in place; last edit 2026-09-29 01:50 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 02:07 UTC, Codex)
 
 **DETAILED PROFILE APPROVED (09-29, Dani):** Cover every simulation tick phase,
 observations/actions and GRU PPO at a fixed workload; rank measured bottlenecks
 before optimisation or an environment-count sweep. Prior profiling commits
 pushed to origin/lane-rl/jax. Preserve the existing untracked wall-reward probe
-unchanged as part of the committed starting snapshot. Preparing PERF-004;
-no new job submitted yet. Five-million-token ceiling authorised, not a target
+unchanged as part of the committed starting snapshot. PERF-004 prepared:
+all 28 tick scopes (26 phases plus prep/assembly), obs/actions and PPO;
+fixed N128/T128, random/E31 at three game ages, split and fused wall times,
+GPU source traces and memory dumps. CPU lowering confirms identical simulation
+math after scope insertion; GPU canary gates the full job. No job submitted yet.
+Five-million-token ceiling authorised, not a target
 to spend; no parallel agents requested.
 
 **GRU GPU PROFILE COMPLETE (09-29, Dani):** `PERF003_gru_profile` / job **1757**

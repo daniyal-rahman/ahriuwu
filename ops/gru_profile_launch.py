@@ -11,11 +11,14 @@ def launch(spec, dry):
     out = root / 'lanerl_jax/runs' / spec['id']
     if out.exists():
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
+    full = spec['engine'] == 'full-profile'
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',
-           '--nodelist=desktop', '--cpus-per-task=4', '--mem=20G',
-           '--time=00:35:00', '--no-requeue', f"--job-name={spec['id']}",
+           '--nodelist=desktop', '--cpus-per-task=4', '--mem=24G' if full else '--mem=20G',
+           '--time=01:30:00' if full else '--time=00:35:00',
+           '--chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax',
+           '--no-requeue', f"--job-name={spec['id']}",
            f"--output=/mnt/nfs/shared/{spec['id']}-%j.out",
-           'slurm/gru_profile.sbatch', spec['id']]
+           'slurm/full_profile.sbatch' if full else 'slurm/gru_profile.sbatch', spec['id']]
     print('command:', shlex.join(cmd), flush=True)
     if dry:
         return
