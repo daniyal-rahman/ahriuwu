@@ -82,7 +82,10 @@ Two independent effects share the slot:
   (i.e. rank+1), during which a ``PreTakeDamage`` listener
   (``Buffs/Garen/GarenW.cs:54``) multiplies **every** instance of
   post-mitigation damage Garen takes by 0.7 -- minion autoattack, turret shot,
-  champion hit, with no source filter. Unlike Q/E, nothing here overrides the
+  champion hit, with no source filter. HOWEVER, this server subtracts HP using
+  a copy made before the listener runs, so active W does not reduce actual
+  damage (intentional bug parity; LEARN-PAIR-05 and the implementation below).
+  Unlike Q/E, nothing here overrides the
   engine's default cooldown-at-cast, so ``GarenW.json``'s ``Cooldown1``-
   ``Cooldown5`` (24/23/22/21/20 s) are the real, unmodified cooldown, and it
   starts **at cast**, not at some later deactivation -- the opposite of E and Q.

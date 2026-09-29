@@ -7,7 +7,8 @@ reverse survives,+12CS. W does not reduce damage: existing C# stale-local
 bug deliberately mirrored in JAX, verified source read-only. No vendor edits.
 Evidence: LEARN-PAIR-05 and `/mnt/nfs/shared/E37b_escape_counterfactual/`.
 
-**E38b RUNNING (Slurm1776):** Dry-run passed; awaiting canary/startup gate. bounded100-update BC/control versus BC/E-bias+10 test,
+**E38b RUNNING (Slurm1776):** Dry-run,3 GPU canary tests and180s startup watch passed.
+Preparing states/compilation; frozen retention gate and learning outcomes pending. bounded100-update BC/control versus BC/E-bias+10 test,
 frozen128-game mirror/heuristic at0/50/100. Initial candidate must retain90%
 of baseline heuristic-match CS or neither arm trains. Fresh optimizers; same
 PPO/reward/physics. E38 W/E protocol not launched, superseded after E37b.

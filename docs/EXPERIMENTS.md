@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E38b_bc_e_exploration` | 09-29 | Paired accelerated PPO | Original BC control vs E button-bias +10 initialization | Same PPO/reward/physics,100updates each,128games/mode at0/50/100 |3.28M decisions/arm | RUNNING job1776; dry-run passed, startup gate pending | Frozen initial farming retention >=90%; no training if gate fails |
+| `E38b_bc_e_exploration` | 09-29 | Paired accelerated PPO | Original BC control vs E button-bias +10 initialization | Same PPO/reward/physics,100updates each,128games/mode at0/50/100 |3.28M decisions/arm | RUNNING job1776; dry-run,3 GPU canaries and180s watch passed | Frozen initial farming retention >=90%; no training if gate fails |
 | `E38_bc_exploration` | 09-29 | Paired accelerated PPO | Original BC control vs W/E button-bias +10 initialization | same PPO/reward/physics,100updates each,128games/mode at0/50/100 |3.28M decisions/arm | NOT RUN; replaced by E38b after W proved ineffective | Pretraining gate: retain90% meanCS vs heuristic; no training on gate failure |
 | `E37b_escape_counterfactual` | 09-29 | Frozen same-state branches | E37 retry with key-safe state serialization | unchanged protocol |10 branches | COMPLETE job1775 exit0,9m16s; exact controls; E survives40s,+11CS | No training |
 | `E37_escape_counterfactual` | 09-29 | Frozen same-state branches | W/E/Q and escape directions at467.904s | same state/carry/RNG, reactive red,40s |10 branches | FAILED job1774 after exact reconstruction, before branches: embedded PRNG-key serialization | No training; CPU matches reference replay |
