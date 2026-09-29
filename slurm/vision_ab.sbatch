@@ -2,7 +2,7 @@
 set -euo pipefail
 cd /mnt/nfs/projects/ahriuwu-lanerl-jax
 unset XLA_FLAGS
-export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1
+export JAX_PLATFORMS=cuda,cpu XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
 trap 'exit 143' TERM
 profile_id="$1"
