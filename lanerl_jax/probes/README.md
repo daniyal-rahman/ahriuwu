@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `perf005_ray_kernel.py`, `perf005_vision_ab.py` | Does a fused ray traversal materially improve the whole update? | PERF-005; probe-only Pallas candidate, CPU interpreter check, GPU exact-ray/vision-suite gate and paired collection/full-update A/B | 2026-09-29 |
 | `perf004_profile.py`, `perf004_instrument.py`, `perf004_analyze.py` | Full simulation, observation/action and PPO GPU cost attribution at fixed N128 | PERF-004; labelled original AST, numerical/graph canary, frozen random/E31 early/mid/late inputs, HLO mixed-fusion attribution and memory | 2026-09-29 |
 | `wall_reward_probe.py` | Bucket recorded champion outcomes by wall distance | Pre-existing one-off preserved unchanged at the PERF-004 baseline; related to INT-001, not rerun or newly validated here | 2026-09-29 |
 | `gru_throughput.py` | Actual GRU rollout versus learner wall time and memory at 16/128 envs? | PERF-003; `ops/launch.py PERF003_gru_profile`, split/fused canary, no saved model | 2026-09-29 |

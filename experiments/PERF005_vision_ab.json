@@ -1,0 +1,6 @@
+{
+  "id": "PERF005_vision_ab",
+  "engine": "vision-ab",
+  "question": "Does keeping visibility traversal inside one GPU kernel materially reduce complete update time, without changing rays, observations, trajectories or PPO outputs?",
+  "protocol": "GPU exact ray comparison on 131073 real-map rays and nested vmap; existing full vision test module with candidate installed. Then paired reference/candidate N128 T128 standard GRU PPO (4x4, FP32/highest), frozen E31 parameters, identical mid-game states after 14 reference collections, four alternating synchronized warmed samples each for collection and complete update. Full transition/state and update comparisons, discrete exact and float atol/rtol 1e-5. No CUPTI profiler, no checkpoints, no env-count sweep. Candidate remains probe-local pending measured payoff and correctness."
+}

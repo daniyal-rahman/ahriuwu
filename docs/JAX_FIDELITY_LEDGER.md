@@ -1423,3 +1423,8 @@ No environment-count sweep, precision change, model-size change, shortened
 rollout, reduced PPO epochs or physics simplification was made. Those would
 mix throughput with learning/fidelity changes. The next implementation trial
 should be bounded and judged on full-update improvement, not only microbenchmarks.
+
+
+| ID | Status | Change | Evidence / gates | Decision |
+|---|---|---|---|---|
+| PERF-005 | CANDIDATE, probe only | `perf005_ray_kernel.clear_ray_fused` executes the existing ray loop inside one Pallas/Triton kernel per ray block. Float32 setup, 64-step bound, directed brush rules, corner tolerance and visibility masks retained. | CPU interpreter: 257 real-map rays plus nested-vmap comparisons exact. GPU gate: 131073 rays, existing full vision suite; then full N128/T128 transition/state/PPO comparisons and alternating collection + complete-update timing. `experiments/PERF005_vision_ab.json`. | No production integration or claimed gain until GPU correctness and measured benefit pass. Broad profiling stopped per Dani; this is the bounded structural experiment. |

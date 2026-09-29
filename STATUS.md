@@ -1,4 +1,11 @@
-# STATUS (rewrite in place; last edit 2026-09-29 02:56 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 03:06 UTC, Codex)
+
+**PERF-005 PREPARED:** Dani approved the structural vision experiment. Probe-local
+Pallas/Triton ray traversal retains all existing visibility rules; CPU interpreter
+comparison (257 map rays + nested vmap) is exact. GPU ray and existing vision
+suite gates precede matched N128/T128 collection/full-update A/B. No production
+changes or measured speedup yet; no job submitted. Desktop work via Slurm;
+capped CPU work on danilogin if desktop becomes unavailable.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
 unprofiled collection, PPO and complete-update timing cohorts finished. Complete

@@ -12,13 +12,16 @@ def launch(spec, dry):
     if out.exists():
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
     full = spec['engine'] == 'full-profile'
+    script = {'full-profile': 'slurm/full_profile.sbatch',
+              'gru-profile': 'slurm/gru_profile.sbatch',
+              'vision-ab': 'slurm/vision_ab.sbatch'}[spec['engine']]
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',
            '--nodelist=desktop', '--cpus-per-task=4', '--mem=24G' if full else '--mem=20G',
            '--time=01:30:00' if full else '--time=00:35:00',
            '--chdir=/mnt/nfs/projects/ahriuwu-lanerl-jax',
            '--no-requeue', f"--job-name={spec['id']}",
            f"--output=/mnt/nfs/shared/{spec['id']}-%j.out",
-           'slurm/full_profile.sbatch' if full else 'slurm/gru_profile.sbatch', spec['id']]
+           script, spec['id']]
     print('command:', shlex.join(cmd), flush=True)
     if dry:
         return
