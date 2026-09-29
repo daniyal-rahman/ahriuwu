@@ -18,7 +18,8 @@ def launch(spec, dry):
               'bush-ab': 'slurm/bush_ab.sbatch',
               'vision-smoke': 'slurm/vision_smoke.sbatch',
               'paired-vec': 'slurm/paired_vec.sbatch',
-              'replay-pair': 'slurm/replay_pair.sbatch'}[spec['engine']]
+              'replay-pair': 'slurm/replay_pair.sbatch',
+              'escape-counterfactual': 'slurm/escape_counterfactual.sbatch'}[spec['engine']]
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',
            '--nodelist=desktop', '--cpus-per-task=4', '--mem=24G' if full else '--mem=20G',
            '--time='+spec.get('slurm_time', '01:30:00' if full else '00:35:00'),
@@ -27,7 +28,7 @@ def launch(spec, dry):
            f"--output=/mnt/nfs/shared/{spec['id']}-%j.out",
            script, spec['id']]
     if spec.get('backend') == 'cpu':
-        if spec['engine'] != 'replay-pair':
+        if spec['engine'] not in ('replay-pair', 'escape-counterfactual'):
             raise SystemExit('CPU fallback is limited to frozen replay diagnostics')
         cmd = [x for x in cmd if x != '--gres=gpu:1']
         changes = {'--partition=gpup':'--partition=cpu', '--nodelist=desktop':'--nodelist=danilogin',

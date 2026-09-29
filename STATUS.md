@@ -1,5 +1,10 @@
 # STATUS (rewrite in place; last edit 2026-09-29 18:45 UTC, Codex)
 
+**E37 PREPARED:** Restore the exact E36b trapped-wave state and recurrent
+history; compare40s frozen branches with W/E/Q and alternate movement.
+CPU Slurm preserves the reference backend; desktop is back for subsequent
+learning work. No training configuration changed.
+
 **E36 LEARNING AUDIT COMPLETE:** CPU Slurm job1773 completed exit0 in30m04s;
 GPU job1772 cancelled before execution because desktop was unavailable.
 Fixed two replay-only defects: missing checkpoint noop-click handling and red

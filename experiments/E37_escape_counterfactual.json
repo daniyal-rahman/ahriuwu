@@ -1,0 +1,22 @@
+{
+  "id": "E37_escape_counterfactual",
+  "engine": "escape-counterfactual",
+  "backend": "cpu",
+  "slurm_time": "00:25:00",
+  "replay": "/mnt/nfs/shared/E36b_learning_audit_cpu/bc_final",
+  "start_seconds": 467.904,
+  "horizon_seconds": 40,
+  "branches": [
+    "recorded_control",
+    "policy_control",
+    "w",
+    "e",
+    "q",
+    "w_then_e",
+    "reverse",
+    "left",
+    "right",
+    "e_then_reverse"
+  ],
+  "question": "Same-state blue escape interventions, reactive frozen red, restored recurrent history and common random numbers. Verify original replay control exactly. No training."
+}

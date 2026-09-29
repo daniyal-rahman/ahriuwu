@@ -20,3 +20,5 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static bush-ID collection/full-update timing; semantics deliberately differ (VIS-FAST).
 
 | `replay_learning_summary.py` | Teacher/initial BC/final policy decisions on full replay histories; reward and decoded orders | LEARN-PAIR-04 / E36; shadow actions never executed | 2026-09-29 |
+
+| `escape_counterfactual.py` | Do spells or alternate movement rescue the exact trapped-wave state? | LEARN-PAIR-05 / E37; frozen reactive opponent, restored full history | 2026-09-29 |
