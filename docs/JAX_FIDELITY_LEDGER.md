@@ -1727,3 +1727,11 @@ flag, update13 wall4.12s. This confirms operational training, not improvement.
 Next frozen u100. Artifacts `/mnt/nfs/checkpoints/lanerl-jax/E39b_tower_wave_advantage/`.
 E39b source snapshot includes reporting correction; no gameplay/protocol change
 from E39. Two-hour process cap includes compilation; expected1000updates fits.
+
+E39b interruption: desktop drained to `boot to windows`; Slurm1778 cancelled
+22:57:25 UTC after13updates, not a numerical failure. Signal handler saved
+checkpoint/optimizer atstep425984, manifest and study status interrupted.
+Latest and numbered checkpoint byte-identical; all decoded arrays finite;
+SHA2564f9368cef611b8fb62942ffd738deac90135447bda356a6fe228062e05bdc353.
+No post-training frozen result, no continuation queued, no own active jobs.
+Prior running/ETA note superseded by this external interruption.
