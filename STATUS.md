@@ -3,7 +3,8 @@
 **E39 FAILED BEFORE TRAINING (Slurm1777):** Four GPU canaries/startup,
 actual scenario/checkpoint and compiled endpoint gates passed. Initial frozen
 evaluation then failed on alive-spell reporting shape (time/team/feature index).
-Fixed helper with shape regression. E39b same-protocol retry prepared;
+Fixed helper; both scenario regressions passed. E39b same-protocol retry
+launched as Slurm1778; dry-run passed, GPU/startup gates pending;
 no PPO updates or scores from E39. Calibration next-wave61–63s remains valid.
 
 **E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full
