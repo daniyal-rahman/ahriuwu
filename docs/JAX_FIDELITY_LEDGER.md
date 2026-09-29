@@ -1427,4 +1427,16 @@ should be bounded and judged on full-update improvement, not only microbenchmark
 
 | ID | Status | Change | Evidence / gates | Decision |
 |---|---|---|---|---|
-| PERF-005 | CANDIDATE, probe only | `perf005_ray_kernel.clear_ray_fused` executes the existing ray loop inside one Pallas/Triton kernel per ray block. Float32 setup, 64-step bound, directed brush rules, corner tolerance and visibility masks retained. | CPU interpreter: 257 real-map rays plus nested-vmap comparisons exact. GPU gate: 131073 rays, existing full vision suite; then full N128/T128 transition/state/PPO comparisons and alternating collection + complete-update timing. `experiments/PERF005_vision_ab.json`. | No production integration or claimed gain until GPU correctness and measured benefit pass. Broad profiling stopped per Dani; this is the bounded structural experiment. |
+| PERF-005 | GPU BLOCKED, probe only | `perf005_ray_kernel.clear_ray_fused` executes the existing ray loop inside one Pallas/Triton kernel per ray block. Float32 setup, 64-step bound, directed brush rules, corner tolerance and visibility masks retained. | CPU interpreter: 257 real-map rays plus nested-vmap comparisons exact; all 10 existing vision tests passed in 40.92s under 4GB/1CPU cap. Job 1761 cancelled while pending (desktop offline); no GPU execution. GPU gate: 131073 rays, existing full vision suite; then full N128/T128 transition/state/PPO comparisons and alternating collection + complete-update timing. `experiments/PERF005_vision_ab.json`. | No production integration or claimed gain until GPU correctness and measured benefit pass. Broad profiling stopped per Dani; this is the bounded structural experiment. |
+
+PERF-005 CPU suite reproduction: under `ops/login_capped.sh 4G 1
+.venv-jax/bin/python`, import `functools`, `pytest`, `lanerl_jax.obs.vision` and
+`perf005_ray_kernel.clear_ray_fused`; assign
+`vision.clear_ray = functools.partial(clear_ray_fused, interpret=True)` before
+`pytest.main(['-q', 'lanerl_jax/obs/tests/test_vision.py'])`.
+The GPU launcher applies the same patch without interpretation. Desktop was
+already drained (boot to Windows) when job 1761 was submitted; elapsed 0s,
+no canary/startup watch passed, and its launcher exited after cancellation.
+Next: new experiment ID using this protocol when desktop returns. No measured
+performance gain and no production integration; CPU interpretation does not
+validate GPU code generation or GPU speed.
