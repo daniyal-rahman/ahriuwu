@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29 18:45 UTC, Codex)
 
-**E37 PREPARED:** Restore the exact E36b trapped-wave state and recurrent
+**E37 RUNNING (job1774):** Restore the exact E36b trapped-wave state and recurrent
 history; compare40s frozen branches with W/E/Q and alternate movement.
 CPU Slurm preserves the reference backend; desktop is back for subsequent
 learning work. No training configuration changed.
