@@ -1,12 +1,27 @@
-# STATUS (rewrite in place; last edit 2026-09-29, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 01:32 UTC, Codex)
 
-**GRU GPU PROFILE (09-29, Dani):** Desktop is back; existing Claude jobs
-1754 (frozen vec check) and 1756 (512-env MLP benchmark) left untouched.
-QUEUED `PERF003_gru_profile`, Slurm **1757**, through `ops/launch.py`: same GRU collection
-and learning halves exposed for instrumentation (no numerical changes),
-2-env/4-step split-vs-fused canary, then 16/128-env T128 timing and memory.
-All benchmark optimizer outputs are discarded; no training/checkpoint run.
-Dry-run passed; canary/startup watch pending GPU allocation. Earlier desktop-down statements below are historical.
+**GRU GPU PROFILE COMPLETE (09-29, Dani):** `PERF003_gru_profile` / job **1757**
+finished successfully. Dry-run, split-vs-fused numerical canary and 180-s startup
+watch passed. Actual GRU, T128, 4 epochs x 4 minibatches, collector-prepared
+near-wave bank with 20-s jitter, same fixed inputs for 3 synchronized repeats.
+16 envs: collect 2.816 s + learn 1.074 s = 3.890 s/update, 1,053 champion-dec/s.
+128 envs: collect 3.966 s + learn 2.551 s = 6.517 s/update, 5,028 champion-dec/s
+(4.78x throughput for 8x envs; split 61% collection / 39% learning).
+These are SEPARATE compiled stages; sum excludes host I/O and is not a fused
+production benchmark. Learner includes GAE, all 16 PPO gradient steps and
+post-update diagnostics. Compilation alone: 199 / 333 s at 16 / 128 envs.
+128-env learner temporary buffers 5.429 GB; rollout 0.073 GB; params 0.025 GB;
+Adam 0.049 GB. Peak live JAX allocations 6.125 GB; retained pool 10.740 GB;
+allocator limit 12.440 GB (single GPU snapshot 11,160 MiB device-used).
+256-env fit/speed and larger-batch learning quality remain unmeasured.
+Dani requested PROFILE ONLY, then discussion: no optimisations or training
+settings changed; only timing hooks added. No benchmark checkpoint saved,
+all optimizer outputs discarded, no active work left from this session.
+Results/provenance: PERF-003 ledger row, `runs/PERF003_gru_profile/*/result.json`.
+Existing Claude frozen check 1754 completed (64 envs, lr 0, median 3093 dec/s,
+4.43 GB, 42.27 aggregate CS over 26 full champion episodes; not a per-side
+or multi-seed gate). Existing 512-env MLP benchmark 1756 failed rc 1; cause
+not diagnosed here. Neither job was modified.
 
 **CPU TIMING CHECK (09-28, Dani; desktop remains unavailable):** Read today’s
 Claude handoff; no training/evaluation launches or production changes. PERF-002
