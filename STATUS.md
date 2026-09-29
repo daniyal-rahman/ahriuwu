@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-29 02:12 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 02:26 UTC, Codex)
 
 **DETAILED PROFILE APPROVED (09-29, Dani):** Cover every simulation tick phase,
 observations/actions and GRU PPO at a fixed workload; rank measured bottlenecks
@@ -14,7 +14,10 @@ Job 1758 FAILED before canary: desktop cannot resolve worktree Git metadata
 under /srv/nfs. Launcher now passes source SHA in launch.json. Retry `PERF004b_full_profile`, job **1759**, submitted from **e80c87e** after
 dry-run. GPU canary PASSED: identical lowered collection/learner math, matching
 outputs, GPU source attribution present. 180-s startup watch passed; main
-fixed-workload profile running. No performance changes applied.
+job FAILED (SIGSEGV) after 14m26s, after saving random early/mid collection
+traces. Early full update 6.461s = collect 3.881s + learn 2.580s; middle
+collect 3.928s. Memory/HLO dumps saved. Analyzing preserved artifacts and
+preparing a retry with one profiler session per process. No performance changes.
 Five-million-token ceiling authorised, not a target
 to spend; no parallel agents requested.
 
