@@ -149,7 +149,7 @@ def _rows(times, counts, total):
                  events=counts[k]) for k, v in times.most_common()]
 
 
-def summarize(trace_dir, hlo_path, wall_s):
+def summarize(trace_dir, hlo_path, wall_s, annotation=None):
     from jax.profiler import ProfileData
     paths = sorted(Path(trace_dir).rglob('*.xplane.pb'))
     if len(paths) != 1:
@@ -157,6 +157,16 @@ def summarize(trace_dir, hlo_path, wall_s):
     with gzip.open(hlo_path, 'rt') if str(hlo_path).endswith('.gz') else open(hlo_path) as f:
         hlo = HloSources(f.read())
     pd = ProfileData.from_file(str(paths[0]))
+    window = None
+    if annotation:
+        matches = [(e.start_ns, e.start_ns + e.duration_ns)
+                   for p in pd.planes if p.name == '/host:CPU'
+                   for l in p.lines for e in l.events if e.name == annotation]
+        if len(matches) != 1:
+            raise ValueError(f'expected one annotation {annotation}, found {len(matches)}')
+        window = matches[0]
+    def included(event):
+        return window is None or window[0] <= event.start_ns < window[1]
     times = {k: Counter() for k in ('phase_exclusive_or_shared', 'phase_inclusive',
                                   'family_exclusive_or_shared', 'kernel', 'operation_kind',
                                   'network_module', 'autodiff_label')}
@@ -172,6 +182,8 @@ def summarize(trace_dir, hlo_path, wall_s):
         if plane.name == '/host:CPU':
             for line in plane.lines:
                 for event in line.events:
+                    if not included(event):
+                        continue
                     if event.name.startswith('while.'):
                         host_loop_times[event.name] += event.duration_ns
                         host_loop_counts[event.name] += 1
@@ -188,6 +200,8 @@ def summarize(trace_dir, hlo_path, wall_s):
             if 'stream' not in line.name.lower():
                 continue
             for event in line.events:
+                if not included(event):
+                    continue
                 stats = dict(event.stats)
                 duration = event.duration_ns
                 all_intervals.append((event.start_ns, event.start_ns + duration))
@@ -246,6 +260,7 @@ def summarize(trace_dir, hlo_path, wall_s):
     busy = union_ns(all_intervals)
     ds = sorted(durations)
     result = dict(file=str(paths[0]), hlo=str(hlo_path), profiled_wall_s=wall_s,
+                  annotation=annotation, window_ns=window,
                   analyzer_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                   stream_events=len(durations), gpu_span_s=(stop-start)/1e9,
                   gpu_busy_s=busy/1e9, gpu_busy_fraction_of_span=busy/(stop-start),
@@ -275,7 +290,7 @@ def main():
     for entry in manifest['traces']:
         tag = entry['tag']
         print('analyze', tag, flush=True)
-        summaries[tag] = summarize(a.out / entry['trace'], a.out / entry['hlo'], entry['wall_s'])
+        summaries[tag] = summarize(a.out / entry['trace'], a.out / entry['hlo'], entry['wall_s'], entry.get('annotation'))
         (a.out / f'{tag}_analysis.json').write_text(json.dumps(summaries[tag], indent=2))
         print(tag, 'events', summaries[tag]['stream_events'], 'busy', summaries[tag]['gpu_busy_fraction_of_span'], flush=True)
     compact = {k: {n: v for n, v in d.items() if n != 'source_examples'} for k, d in summaries.items()}

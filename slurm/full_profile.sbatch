@@ -20,4 +20,8 @@ echo "host $(hostname) job $SLURM_JOB_ID $(date -u)"
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader
 ./.venv-gpu/bin/python -m lanerl_jax.probes.perf004_profile --canary --out "$out/canary"
 export XLA_FLAGS="--xla_dump_to=$scratch/xla --xla_dump_hlo_as_text --xla_dump_hlo_module_re=jit_(collect|learn|lambda)"
-./.venv-gpu/bin/python -m lanerl_jax.probes.perf004_profile --out "$out/main"
+profile_args=()
+if [[ "$profile_id" == PERF004c_full_profile ]]; then
+    profile_args+=(--single-session)
+fi
+./.venv-gpu/bin/python -m lanerl_jax.probes.perf004_profile --out "$out/main" "${profile_args[@]}"

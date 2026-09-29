@@ -16,6 +16,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--canary', action='store_true')
+    p.add_argument('--single-session', action='store_true',
+                   help='Defer selected traces to one final profiler session (PERF004c recovery).')
     a = p.parse_args()
     import jax
     import jax.numpy as jnp
@@ -41,6 +43,7 @@ def main():
     result = dict(device=str(jax.devices()[0]), jax=jax.__version__,
         source=json.loads((a.out.parent / 'launch.json').read_text())['source'],
         config=repr(cfg), sim=repr(sim), stages={}, cohorts={}, traces=[])
+    pending_traces = []
 
     def save():
         (a.out / 'profile_manifest.json').write_text(json.dumps(result, indent=2))
@@ -67,7 +70,10 @@ def main():
             samples.append(time.perf_counter()-start)
         info = dict(samples_s=samples, median_s=statistics.median(samples),
                     device_memory=jax.devices()[0].memory_stats())
-        if trace:
+        if a.single_session:
+            if tag in ('random_35_collect', 'E31_35_collect', 'E31_14_learn'):
+                pending_traces.append((tag, executable, args, hlo))
+        elif trace:
             directory = a.out / 'traces' / tag
             jax.profiler.start_trace(str(directory))
             start = time.perf_counter()
@@ -156,6 +162,18 @@ def main():
             else:
                 current = jax.block_until_ready(collect(current))[0]
             print('cohort advance', policy_name, index, flush=True)
+    if a.single_session:
+        directory = a.out / 'traces' / 'recovery'
+        print('start single trace session', [x[0] for x in pending_traces], flush=True)
+        jax.profiler.start_trace(str(directory))
+        for tag, executable, args, hlo in pending_traces:
+            start = time.perf_counter()
+            with jax.profiler.TraceAnnotation(tag):
+                jax.block_until_ready(executable(*args))
+            wall = time.perf_counter()-start
+            result['traces'].append(dict(tag=tag, trace=str(directory.relative_to(a.out)),
+                hlo=f'{hlo}.hlo.txt.gz', wall_s=wall, annotation=tag))
+        jax.profiler.stop_trace()
     result['status'] = 'complete'
     save()
     print('PROFILE COMPLETE', flush=True)
