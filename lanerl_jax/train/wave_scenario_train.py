@@ -49,6 +49,15 @@ def calibrate(bank,sim,out):
     print('SCENARIO CALIBRATION',json.dumps({k:v for k,v in result.items() if k!='trace'}),flush=True)
 
 
+def alive_spell_count(buttons, self_obs):
+    """Count per-team selections over time; self_obs is [time, team, features]."""
+    alive = np.asarray(self_obs)[..., 14] < .5
+    buttons = np.asarray(buttons)
+    if buttons.shape != alive.shape:
+        raise ValueError(f"action/observation shape mismatch: {buttons.shape} vs {alive.shape}")
+    return ((buttons >= 3) & (buttons <= 6) & alive).sum(axis=0)
+
+
 def main():
     spec=json.loads(Path('experiments',sys.argv[1]+'.json').read_text())
     start=time.monotonic();stopping=[]
@@ -134,8 +143,7 @@ def main():
                             first_seen_hp[env,team]=float(tr.obs_self[visible[0],env,team,2])
                     deaths[env]+=np.asarray(tr.deaths[:end,env]).sum(0)
                     returns[env]+=np.asarray(tr.reward[:end,env]).sum(0)
-                    buttons=np.asarray(tr.action[0][:end,env]);alive=np.asarray(tr.obs_self[:end,env,14])<.5
-                    alive_spells[env]+=((buttons>=3)&(buttons<=6)&alive).sum(0)
+                    alive_spells[env]+=alive_spell_count(tr.action[0][:end,env],tr.obs_self[:end,env])
                     if len(hits):
                         t=end-1;seen[env]=True
                         for team in (0,1):
@@ -174,6 +182,9 @@ def main():
             if update%25==0:print('TRAIN',json.dumps(row),flush=True)
             if update%50==0:save()
             if update in spec['eval_updates']:save();evaluate()
+    except Exception:
+        failed=True
+        raise
     finally:
         save();run.set_results(status='failed' if failed else 'finished' if update==cfg.n_updates else 'interrupted',updates=update)
         run.close()

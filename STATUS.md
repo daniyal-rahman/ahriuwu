@@ -1,12 +1,10 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E39 RUNNING (Slurm1777):** Dani authorized75s level3 tower/wave HP-advantage curriculum
-and explicitly chose trained random-start E34 final. Both roles70/100HP,
-fresh optimizer; same physics/reward. Capped CPU reset/reward tests2 passed; dry-run passed.
-Four GPU canaries and180s startup watch passed; actual checkpoint/setup
-verified. Next-wave central arrival61–63s; training compilation in progress.
-Endpoint metrics capture pre-reset HP/kills; compiled boundary check added
-before training. Run source provenance captured by RunDir at startup. E38b is superseded for now, not retried.
+**E39 FAILED BEFORE TRAINING (Slurm1777):** Four GPU canaries/startup,
+actual scenario/checkpoint and compiled endpoint gates passed. Initial frozen
+evaluation then failed on alive-spell reporting shape (time/team/feature index).
+Fixed helper with shape regression. E39b same-protocol retry prepared;
+no PPO updates or scores from E39. Calibration next-wave61–63s remains valid.
 
 **E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full
 state/carry/RNG exactly; recorded40s control error0, sampled reconstruction

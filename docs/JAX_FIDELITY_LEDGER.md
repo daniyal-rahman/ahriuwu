@@ -1704,3 +1704,9 @@ Calibration: next-wave first minion enters900u central band at61.014s blue,
 63.015s red (stationary champions). Idle disadvantaged HP72.17% at10s,78.34%
 at20s; passive regeneration retained. Full training/eval compile pending.
 Compiled endpoint check before training verifies HP/kills are from before reset.
+
+E39 job1777 failed before PPO on initial frozen evaluation reporting: alive
+feature indexed on the team axis, producing[T,16] against buttons[T,2].
+Corrected to trailing feature axis, extracted shape-checked counter and added
+regression. Compiled endpoint pre-reset HP/kills gate had passed. No learning
+result. E39b retries identical scientific protocol with this reporting repair.

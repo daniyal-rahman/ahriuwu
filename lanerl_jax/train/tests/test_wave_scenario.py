@@ -27,3 +27,10 @@ def test_scenario_starts_and_health_roles():
     np.testing.assert_allclose(b.hp[:2]/b.max_hp[:2],[1.,.7],atol=1e-6)
     np.testing.assert_array_equal(a.x,b.x)
     np.testing.assert_array_equal(a.spell_cooldown,b.spell_cooldown)
+
+
+def test_scenario_alive_spell_counter_keeps_team_axis():
+    from lanerl_jax.train.wave_scenario_train import alive_spell_count
+    buttons=np.array([[5,1],[3,4],[2,5]])
+    obs=np.zeros((3,2,16));obs[1,0,14]=1
+    np.testing.assert_array_equal(alive_spell_count(buttons,obs),[1,2])
