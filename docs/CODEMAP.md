@@ -6,6 +6,8 @@ LEGACY = kept for history only; nothing imports it.
 
 | Path | Class | Role |
 |---|---|---|
+| `lanerl_jax/obs/ray_kernel.py` | LIVE | Fused CUDA full-visibility traversal; CPU reference in vision.py; PERF005/PERF006 |
+| `slurm/vision_smoke.sbatch` | TOOL | PERF007 production CUDA visibility integration gate via launcher |
 | `slurm/bush_ab.sbatch` | TOOL | PERF006 fused-ray vs static bush-ID A/B via launcher; no saved model |
 | `slurm/vision_ab.sbatch` | TOOL | PERF-005 bounded vision-kernel A/B via `ops/launch.py`; correctness first, no saved model or profiler |
 | `slurm/full_profile.sbatch` | TOOL | PERF-004 full GPU diagnostic via `ops/launch.py` and `gru_profile_launch.py`; canary first, fixed workload, source traces and memory dumps, no saved model |

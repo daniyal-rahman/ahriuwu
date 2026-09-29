@@ -1,13 +1,11 @@
 # STATUS (rewrite in place; last edit 2026-09-29 07:04 UTC, Codex)
 
-**PERF-005 COMPLETE / PERF-006 SUBMITTED:** Job 1765 passed all GPU gates,
-full trajectory/PPO equivalence and paired timing: fused rays give 2.098x
-collection (4.204→2.004s), 1.481x full updates (6.753→4.560s).
-Dani requests comparison against removing traversal entirely (static bush-ID
-lookups), keeping full rays if the extra gain is small. PERF006 job 1766
-running; dry-run, GPU fused-ray canary, 11 vision tests and 180s startup
-watch passed; compilation in progress;
-no production choice until that result. Future jungle/5v5 revisit: VIS-FAST.
+**PERF-006 COMPLETE / INSTALLING FUSED RAYS:** Job 1766: full fused rays
+2.028s collect / 4.656s update; bush lookup 1.978s / 4.620s. Only 0.8% extra
+whole-update throughput, with differing outputs: reject simplification per
+Dani's decision rule. Full visibility preserved; fused CUDA implementation
+selected (PERF005 showed 1.481x whole-update improvement over original).
+CPU retains reference. PERF007 integration GPU gate prepared; no active run.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
 unprofiled collection, PPO and complete-update timing cohorts finished. Complete

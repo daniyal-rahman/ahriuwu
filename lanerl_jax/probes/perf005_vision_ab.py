@@ -27,14 +27,14 @@ def canary(interpret=False):
     y0[::13] = np.round(y0[::13]/50)*50
     enabled = jnp.asarray(rng.random(count) > .2)
     args = tuple(jnp.asarray(x) for x in (x0, y0, x1, y1))
-    ref = jax.jit(lambda *x: vision.clear_ray(grid, *x, enabled=enabled))(*args)
+    ref = jax.jit(lambda *x: vision.clear_ray_reference(grid, *x, enabled=enabled))(*args)
     got = jax.jit(lambda *x: clear_ray_fused(grid, *x, enabled=enabled, interpret=interpret))(*args)
     np.testing.assert_array_equal(ref, got)
     # Nested batching matches collector env/team layouts; masked padding too.
     small = tuple(x[:256].reshape(4, 2, 32) for x in args)
     def batched(fn):
         return jax.jit(jax.vmap(jax.vmap(lambda *x: fn(grid, *x))))(*small)
-    np.testing.assert_array_equal(batched(vision.clear_ray),
+    np.testing.assert_array_equal(batched(vision.clear_ray_reference),
         batched(lambda *x: clear_ray_fused(*x, interpret=interpret)))
     print(f'RAY CHECK PASSED: {count} map rays and nested vmap outputs exactly match', flush=True)
 
@@ -61,7 +61,8 @@ def main():
         policy=PolicyConfig(core='gru', core_norm=True, core_residual=True))
     sim = SimConfig.training().replace(step_ticks=6, vision=vision.map1_vision())
     bank = prepare_bank(cfg, sim, a.out/'bank', seed=0)
-    original_ray = vision.clear_ray
+    original_ray = vision.clear_ray_reference
+    vision.clear_ray = original_ray
     if a.bush_ab:
         vision.clear_ray = clear_ray_fused
     baseline_name = 'fused_ray' if a.bush_ab else 'reference'

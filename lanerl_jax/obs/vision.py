@@ -64,13 +64,26 @@ def bush_visible(grid, x0, y0, x1, y1, *, enabled=True):
 
 
 def clear_ray(grid, x0, y0, x1, y1, *, enabled=True):
+    """Full visibility rules, fused on CUDA; optional probe-only bush lookup."""
+    if grid.bush_ids is not None:
+        return bush_visible(grid, x0, y0, x1, y1, enabled=enabled)
+    from .ray_kernel import clear_ray_fused
+    def reference(*args):
+        return clear_ray_reference(grid, *args[:4], enabled=args[4])
+    def fused(*args):
+        return clear_ray_fused(grid, *args[:4], enabled=args[4])
+    return jax.lax.platform_dependent(x0, y0, x1, y1, enabled,
+                                      cuda=fused, default=reference)
+
+
+def clear_ray_reference(grid, x0, y0, x1, y1, *, enabled=True):
     """Broadcastable rays. Fail closed outside the grid or the 64-cell bound.
 
     Disabled pairs return false and do not keep the bounded loop active.
     Map1 sight radius <=1200 and cell size 50 imply at most 36 crossings.
     64 is a bound for this visibility task, not a general-purpose ray caster.
     """
-    # Lane production bypasses the entire traversal, not just its wall test.
+    # The optional lane candidate bypasses the entire traversal.
     # Keep the reference below for fidelity studies and future jungle/5v5.
     if grid.bush_ids is not None:
         return bush_visible(grid, x0, y0, x1, y1, enabled=enabled)
