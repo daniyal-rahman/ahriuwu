@@ -9,7 +9,6 @@ import hashlib
 import json
 from pathlib import Path
 import statistics
-import subprocess
 import time
 
 
@@ -40,7 +39,7 @@ def main():
     baseline = vec_train.make_vec_train(cfg, sim, bank)
     runner = jax.block_until_ready(baseline['initial_runner'](jax.random.key(0)))
     result = dict(device=str(jax.devices()[0]), jax=jax.__version__,
-        source=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+        source=json.loads((a.out.parent / 'launch.json').read_text())['source'],
         config=repr(cfg), sim=repr(sim), stages={}, cohorts={}, traces=[])
 
     def save():

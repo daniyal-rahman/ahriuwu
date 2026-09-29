@@ -24,7 +24,8 @@ def launch(spec, dry):
         return
     out.mkdir(parents=True)
     jid = subprocess.check_output(cmd, text=True, cwd=root).strip().split(';')[0]
-    (out / 'launch.json').write_text(json.dumps(dict(spec=spec, command=cmd, job=jid), indent=2))
+    source = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True, cwd=root).strip()
+    (out / 'launch.json').write_text(json.dumps(dict(spec=spec, command=cmd, job=jid, source=source), indent=2))
     print('job', jid, flush=True)
     log = Path(f"/mnt/nfs/shared/{spec['id']}-{jid}.out")
     # Bounded startup watch; the worker canary must pass before full profiles.

@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-29 02:09 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 02:10 UTC, Codex)
 
 **DETAILED PROFILE APPROVED (09-29, Dani):** Cover every simulation tick phase,
 observations/actions and GRU PPO at a fixed workload; rank measured bottlenecks
@@ -10,7 +10,9 @@ fixed N128/T128, random/E31 at three game ages, split and fused wall times,
 GPU source traces and memory dumps. CPU lowering confirms identical simulation
 math after scope insertion. Dry-run passed; job **1758** submitted through
 `ops/launch.py PERF004_full_profile` from committed/pushed **9eff7e5**.
-GPU canary and 180-s startup watch pending; no performance changes applied.
+Job 1758 FAILED before canary: desktop cannot resolve worktree Git metadata
+under /srv/nfs. Launcher now passes source SHA in launch.json. Preparing retry
+`PERF004b_full_profile`; no performance changes applied.
 Five-million-token ceiling authorised, not a target
 to spend; no parallel agents requested.
 
