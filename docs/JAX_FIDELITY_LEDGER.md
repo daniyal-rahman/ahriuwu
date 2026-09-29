@@ -1573,3 +1573,27 @@ Normal-speed incident clip: `/mnt/nfs/shared/E36_corrected_videos/blocked_wave/r
 Corrected final BC video: `/mnt/nfs/shared/E36_corrected_videos/bc_final/replay.mp4`.
 CPU-vs-GPU rounding and altered click handling can both change trajectories;
 E35→E36 episode differences are not a clean causal A/B of the click fix.
+
+
+E36b BC initial/final comparison now complete (same CPU backend/settings/seed7):
+
+| Diagnostic measure | Initial BC | Final BC |
+|---|---:|---:|
+| Frozen single-episode CS blue/red | 46/37 | 46/38 |
+| Deaths blue/red | 1/2 | 2/2 |
+| Discarded movement clicks while alive / movement clicks | 220/8973 (2.45%) | 663/8676 (7.64%) |
+| Teacher attack decision-frames, both sides (not distinct minions) | 583 | 424 |
+| Actual direct order matches teacher target on those frames | 457/583 | 379/424 |
+| Alive frames within250 units of an enemy minion, blue/red | 77.8%/75.0% | 72.5%/69.8% |
+
+The final policy's sampled target agreement on its own history is379/424;
+initial BC's greedy mode on that SAME history is380/424 (sampling vs mode,
+not a paired performance test). This supports retained local last-hit behavior,
+with changed positioning/click distribution, not a proven cause of mean CS loss.
+This one seed does NOT reproduce the aggregate decline; LEARN-PAIR-02 remains
+the performance evidence. The original clone also tanks waves: blue334.787–
+339.784s loses365.53HP, moves30.99units,50 MOVE orders, teacher also50 MOVE,
+zero reward. Initial self-comparison is exactly equal for all4787 decisions.
+At the final policy's468s incident, nearest allied minion is5084units away;
+Q/W/E/R ranks1/1/3/1, cooldowns all0. The teacher's wait-for-killable rule has
+no allied wave nearby to lower enemy minion HP, and no combat/escape spell rule.
