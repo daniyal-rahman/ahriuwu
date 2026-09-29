@@ -1,10 +1,25 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**E39b TRAINING (Slurm1778):** Five GPU canaries,180s startup watch, actual
+checkpoint/scenario, calibration and compiled pre-reset endpoint checks passed.
+Initial frozen64-game mirror and fixed-E34 evaluations completed identically.
+At least13 PPO updates /425,984 champion decisions completed with finite losses,
+~4.1s/update.1000updates or2h cap; next frozen check at100updates. Estimated
+~70–80min remaining after early startup verification. Init is trained random-
+start E34 final, fresh optimizer.75s level3 tower/wave rounds,70/100HP roles.
+
+Initial mirror role means: fullHP3.42CS vs lowHP2.14CS; deaths0.594 vs0.891.
+Low side is still~72%HP at first enemy sight. These are PRETRAINING scenario
+baselines, not learning improvements or ten-minute lane results.
+Artifacts `/mnt/nfs/checkpoints/lanerl-jax/E39b_tower_wave_advantage/`;
+log `/mnt/nfs/shared/E39b_tower_wave_advantage-1778.out`. Only own active job1778;
+no watchdog/services created. E38b superseded for now.
+
 **E39 FAILED BEFORE TRAINING (Slurm1777):** Four GPU canaries/startup,
 actual scenario/checkpoint and compiled endpoint gates passed. Initial frozen
 evaluation then failed on alive-spell reporting shape (time/team/feature index).
 Fixed helper; both scenario regressions passed. E39b same-protocol retry
-launched as Slurm1778; dry-run passed, GPU/startup gates pending;
+launched as Slurm1778 and passed startup (see above);
 no PPO updates or scores from E39. Calibration next-wave61–63s remains valid.
 
 **E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full

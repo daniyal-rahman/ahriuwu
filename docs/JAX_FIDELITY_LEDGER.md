@@ -1710,3 +1710,20 @@ feature indexed on the team axis, producing[T,16] against buttons[T,2].
 Corrected to trailing feature axis, extracted shape-checked counter and added
 regression. Compiled endpoint pre-reset HP/kills gate had passed. No learning
 result. E39b retries identical scientific protocol with this reporting repair.
+
+E39b job1778 is now TRAINING. Five GPU tests passed,180s startup watch passed;
+actual scenario/checkpoint and compiled pre-reset endpoint gates passed.
+Both u0 frozen64-game cohorts completed, with mirror and original-E34 fixed
+opponent rows identical (as expected at identical initial weights). Mirror
+role means across both sides: CS low2.140625/full3.421875; deaths low0.890625/
+full0.59375; kills low0.203125/full0.453125. Low HP at first enemy sight averages
+~72.1%, confirming the starting advantage persists into interaction.
+For future fixed-opponent comparisons, BLUE initial low/full CS2.1875/3.5625,
+gold difference−76.25/+158.44; do not conflate this with both-side mirror means.
+TerminalHP alone is misleading after respawn (initial disadvantaged side often
+dies then ends near fullHP); interpret with deaths/kills and CS.
+At least13updates/425984 champion decisions checked: finite losses, no nonfinite
+flag, update13 wall4.12s. This confirms operational training, not improvement.
+Next frozen u100. Artifacts `/mnt/nfs/checkpoints/lanerl-jax/E39b_tower_wave_advantage/`.
+E39b source snapshot includes reporting correction; no gameplay/protocol change
+from E39. Two-hour process cap includes compilation; expected1000updates fits.
