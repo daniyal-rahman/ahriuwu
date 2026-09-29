@@ -1597,3 +1597,11 @@ zero reward. Initial self-comparison is exactly equal for all4787 decisions.
 At the final policy's468s incident, nearest allied minion is5084units away;
 Q/W/E/R ranks1/1/3/1, cooldowns all0. The teacher's wait-for-killable rule has
 no allied wave nearby to lower enemy minion HP, and no combat/escape spell rule.
+
+
+In final BC's467.904–472.901s trapped-blue window, mean predicted value is
+−0.959 (the critic recognizes a bad state); mean total Q/W/E/R probability is
+1.4181e-7, versus1.5370e-7 for initial BC on the same full observation history.
+This is roughly one spell selection per7million repetitions of such a decision,
+despite learned/ready abilities. It is direct evidence of negligible exploration
+in this failure state, not proof that a particular spell would rescue it.
