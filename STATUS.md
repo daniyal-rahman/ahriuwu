@@ -1,8 +1,9 @@
 # STATUS (rewrite in place; last edit 2026-09-29 07:44 UTC, Codex)
 
-**OVERNIGHT E33/E34 PREPARED (Dani, 09-29):** Up to nine hours authorized;
+**OVERNIGHT E33/E34 SUBMITTED (Dani, 09-29):** Up to nine hours authorized;
 matched accelerated GRU PPO from BC vs random, only initialization differs.
-`E33_E34_overnight`: one GPU job, alternating 100-update blocks, 2500 updates
+`E33_E34_overnight`: job1768 submitted; dry-run passed, GPU canary/startup
+watch pending. One GPU job, alternating 100-update blocks, 2500 updates
 per arm, N128/T128, lr1e-5 annealed, entropy0, detached critic, existing relative
 reward/full map/full visibility. Save each100 updates; frozen held-out mirror
 and fixed-heuristic evaluations at u0 and every500. Eight-hour worker guard,
