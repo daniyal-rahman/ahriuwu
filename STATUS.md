@@ -11,8 +11,8 @@ GPU source traces and memory dumps. CPU lowering confirms identical simulation
 math after scope insertion. Dry-run passed; job **1758** submitted through
 `ops/launch.py PERF004_full_profile` from committed/pushed **9eff7e5**.
 Job 1758 FAILED before canary: desktop cannot resolve worktree Git metadata
-under /srv/nfs. Launcher now passes source SHA in launch.json. Preparing retry
-`PERF004b_full_profile`; no performance changes applied.
+under /srv/nfs. Launcher now passes source SHA in launch.json. Retry `PERF004b_full_profile`, job **1759**, submitted from **e80c87e** after
+dry-run; GPU canary/startup watch pending. No performance changes applied.
 Five-million-token ceiling authorised, not a target
 to spend; no parallel agents requested.
 
