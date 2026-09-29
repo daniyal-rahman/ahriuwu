@@ -1547,3 +1547,29 @@ These observations motivate a bounded follow-up: attribute a few bad replay
 moments through observation -> sampled action -> decoded order -> attack outcome,
 then distinguish teacher limitation, imitation error, PPO drift, and simulator or
 interface failure. No causal bug claim, training launch, or behavior change made.
+
+
+### LEARN-PAIR-04 — replay bugs and behavior attribution (2026-09-29; E36b running)
+
+| Evidence | Finding | Limit |
+|---|---|---|
+| jax_eval created JaxFarmCollector without drop_unwalkable_moves, despite E33/E34 manifests specifying noop | Corrected evaluator to read checkpoint click handling; E35 videos are superseded for behavior diagnosis | Overnight vectorized training and128-game frozen evaluations did not use this evaluator and remain unaffected |
+| Mirror snapshot received only blue action and filled red with NOOP | Corrected red button/cursor recording; actual red orders and state were already real | E35 red HUD action labels were wrong, not its simulation control |
+| All2500 E33 training metric rows | 2671 Q/W/E/R selections in81.92M champion decisions (~0.00326%); last100 updates only43 | Selections, not successful casts; cannot identify living/dead cases from aggregate rows |
+| Corrected BC final seed7, blue467.904–472.901s | HP loss630.66, displacement0.619 units,50 MOVE orders, ten enemy-minion targets on average, zero CS and zero reward; teacher and initial-BC mode also select movement throughout | Shadow actions are not executed; similar buttons alone do not establish identical outcomes |
+| Same window's geometry | Executed goals286–387 units away; teacher goal350, initial-BC mode347. Several hostile minions66–100 units away obstruct the desired direction | Consistent with body blocking; no counterfactual physics or source-server check, so collision correctness is unresolved |
+| Death473.501s / respawn495.987s | Death transition reward0; respawn transition−3.99084. First major penalty is22.5s after death | Relative gold/XP/lane objective has no direct HP/death penalty; delayed credit is a design concern, not proof of PPO gradient failure |
+| E33 first/last100 training updates | Median critic explained variance−0.217→0.643; entropy0.683→1.402 | Bootstrapped-target fit is not proof of accurate long-horizon values |
+
+CPU tests8 passed; E36 GPU job1772 cancelled before execution (desktop drained).
+E36b job1773 uses Slurm cpu danilogin2cores/10GB; canary and180s watch passed.
+Initial-checkpoint self-comparison matches exactly across independent full-history
+carries (first805 decisions checked so far). No training parameters changed.
+Artifacts: `/mnt/nfs/shared/E36b_learning_audit_cpu/` (trace, actions,
+learning_audit.jsonl, frozen provenance); `/mnt/nfs/shared/E36_training_summary.json`;
+`/mnt/nfs/shared/E36_bc_final_summary.json`. Reproducers are
+`probes/replay_learning_audit.py` and `probes/replay_learning_summary.py`.
+Normal-speed incident clip: `/mnt/nfs/shared/E36_corrected_videos/blocked_wave/replay.mp4`.
+Corrected final BC video: `/mnt/nfs/shared/E36_corrected_videos/bc_final/replay.mp4`.
+CPU-vs-GPU rounding and altered click handling can both change trajectories;
+E35→E36 episode differences are not a clean causal A/B of the click fix.
