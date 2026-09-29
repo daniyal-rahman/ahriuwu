@@ -57,7 +57,7 @@ def clear_ray_fused(grid, x0, y0, x1, y1, *, enabled=True, interpret=False):
 
         def pending(carry):
             iteration, _, _, _, remaining_, clear_ = carry
-            return (iteration < 64) & (jnp.max(((remaining_ > 0) & clear_).astype(jnp.int32)) != 0)
+            return (iteration < 64) & (jnp.max(jnp.where(clear_, remaining_, 0)) > 0)
 
         def advance(carry):
             iteration, xx, yy, error_, remaining_, clear_ = carry

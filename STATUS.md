@@ -1,8 +1,9 @@
 # STATUS (rewrite in place; last edit 2026-09-29 06:39 UTC, Codex)
 
-**PERF-005 RETRY:** Job 1762 failed at GPU canary: Triton does not lower
-boolean reduce_or. Candidate now uses equivalent int-max reduction;
-`PERF005c_vision_ab` submitted as job 1763; dry-run passed; GPU gates pending. No GPU timings or production changes.
+**PERF-005 RETRY:** Jobs 1762/1763 failed at GPU canary: Triton does not lower
+reduce_or, including canonicalized boolean-valued int-max. Candidate now
+reduces remaining cell counts, preserving the loop exit rule;
+`PERF005d_vision_ab` prepared. No timings or production changes.
 
 **PERF-005 GPU BLOCKED:** Probe committed/pushed at `0887a33`. Dry-run passed;
 job 1761 was submitted but desktop is drained/offline (boot to Windows), so
