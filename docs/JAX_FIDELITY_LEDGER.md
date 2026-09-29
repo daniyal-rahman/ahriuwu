@@ -1451,4 +1451,12 @@ validate GPU code generation or GPU speed.
 
 | PERF-007 | INSTALLED / PASSED | Full ray semantics now use `obs/ray_kernel.py` on CUDA through `lax.platform_dependent`; CPU/other backends use `vision.clear_ray_reference`. Default configs retain full rays; bush lookup remains opt-in only. Job 1767 passed 131073-ray/nested-vmap GPU comparison and all 11 vision tests through production dispatch (9.58s). CPU suite 11 passed (32.75s). Launcher completion/canary gate passed. | Selected measured 1.481x whole-update optimization, rejecting PERF006's additional 0.8% in exchange for behavior changes. No training-quality claim or checkpoints. |
 
-| LEARN-PAIR-01 | PREPARED | E33/E34 differ only in BC vs random parameters. Same seed, architecture, N128/T128, lr1e-5 annealed, entropy0, detached critic, standard4x4 PPO, full visibility, relative reward and mirror self-play. Separate optimizers, alternating100 updates on shared executables. Both u0 and every500 evaluated frozen on held-out16-state bank (seed1007), 128 sampled games (action seed2007), mirror plus BLUE vs fixed lasthit RED. | No improvement claim from train CS. Compare each arm against its frozen u0 and fixed teacher; mirror alone changes both opponents. One training seed; games share16 start states. No crop or reward changes. |
+| LEARN-PAIR-01 | RUNNING job1768; startup/first100 updates each passed | E33/E34 differ only in BC vs random parameters. Same seed, architecture, N128/T128, lr1e-5 annealed, entropy0, detached critic, standard4x4 PPO, full visibility, relative reward and mirror self-play. Separate optimizers, alternating100 updates on shared executables. Both u0 and every500 evaluated frozen on held-out16-state bank (seed1007), 128 sampled games (action seed2007), mirror plus BLUE vs fixed lasthit RED. | No improvement claim from train CS. Compare each arm against its frozen u0 and fixed teacher; mirror alone changes both opponents. One training seed; games share16 start states. No crop or reward changes. |
+
+E33/E34 frozen u0 baselines saved in per-arm `evaluations.jsonl` under
+`/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/`: BC mirror43.7656/44.5625,
+vs heuristic45.5/48.8203 CS and -66.4053 gold difference; random
+mirror6.6328/3.8828, vs heuristic5.7813/51.7891 CS and -639.7902 gold difference.
+128 sampled games/mode from16 held-out prepared starts, one model initialization
+seed. Both arms completed/checkpointed first100 updates without nonfinite-loss
+flags; this establishes health, not improvement. Overnight results pending.

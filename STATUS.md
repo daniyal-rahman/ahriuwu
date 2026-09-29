@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-29 07:48 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 08:15 UTC, Codex)
 
 **OVERNIGHT E33/E34 RUNNING (Dani, 09-29):** Up to nine hours authorized;
 matched accelerated GRU PPO from BC vs random, only initialization differs.
@@ -9,6 +9,14 @@ reward/full map/full visibility. Save each100 updates; frozen held-out mirror
 and fixed-heuristic evaluations at u0 and every500. Eight-hour worker guard,
 8h30 Slurm limit. No broad optimization work overnight; only obvious quick fixes.
 Checkpoints/metrics/evaluations: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/`.
+Initial ~30-minute watch passed: both arms saved u100, finite losses,
+~4.4–4.6s/update; automatic BC→random→BC handoff works. Frozen u0 scores
+(128 sampled games, 16 held-out start states): BC mirror43.77/44.56, vs fixed
+heuristic45.50/48.82 (gold diff -66.41); random mirror6.63/3.88, vs heuristic
+5.78/51.79 (gold diff -639.79). No post-training frozen result yet. Worker
+will evaluate every500 and final, save every100, stop itself after8h (~15:46UTC)
+or2500 updates/arm. No side experiments or persistent external watchdog created.
+Read study.json + per-arm metrics/evaluations and Slurm1768 for current status.
 
 **PERF-006/007 COMPLETE — FUSED RAYS INSTALLED:** Job 1766: full fused rays
 2.028s collect / 4.656s update; bush lookup 1.978s / 4.620s. Only 0.8% extra
