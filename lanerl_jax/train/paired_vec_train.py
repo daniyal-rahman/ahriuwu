@@ -14,13 +14,26 @@ import time
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.serialization import from_state_dict, msgpack_restore
+from flax.serialization import from_state_dict, msgpack_restore, to_state_dict
+from lanerl_rl.constants import BUTTON_INDEX
 
 from .policy import PolicyConfig
 from .ppo import PPOConfig
 from .run_manifest import RunDir, file_sha256
 from .vec_train import VecConfig, make_vec_train, prepare_bank
 from ..sim.config import SimConfig, DEFAULT_ROUTE_ARTIFACT
+
+
+def adjust_button_bias(params, shifts):
+    """Experimental initialization only; retain all other checkpoint weights."""
+    state = to_state_dict(params)
+    bias = jnp.asarray(state['params']['button']['bias'])
+    for name, amount in shifts.items():
+        if name not in BUTTON_INDEX or not np.isfinite(amount):
+            raise ValueError(f'invalid button bias shift: {name}={amount}')
+        bias = bias.at[BUTTON_INDEX[name]].add(float(amount))
+    state['params']['button']['bias'] = bias
+    return from_state_dict(params, state)
 
 
 def first_episode_rows(tr, seen, mode):
@@ -69,15 +82,18 @@ def main():
     built = make_vec_train(cfg, sim, bank)
     initial = built['init_params'](jax.random.key(0))
     bc = from_state_dict(initial, msgpack_restore((scratch/'bc.msgpack').read_bytes())['params'])
+    shifts = spec.get('bc_button_bias_shift')
+    second = adjust_button_bias(bc, shifts) if shifts is not None else initial
     arms = []
-    for arm_id, params in zip(spec['arms'], (bc, initial)):
+    for arm_id, params in zip(spec['arms'], (bc, second)):
         run = RunDir(shared/arm_id, 'vec-s0', dict(
             train={'policy': pcfg._asdict()}, ppo=cfg.ppo._asdict(),
             vec={k:v for k,v in cfg._asdict().items() if k not in ('policy','ppo')},
             collector=dict(episode_s=600., step_ticks=6, start_near_wave=True,
                            start_jitter_s=20., unwalkable_click='noop'),
             environment='jax-vectorised', opponent='mirror-self-play',
-            initialization='BC' if arm_id == spec['arms'][0] else 'random',
+            initialization=('BC' if arm_id == spec['arms'][0] else
+                {'BC_button_bias_shift': shifts} if shifts is not None else 'random'),
             bc_source_sha256=file_sha256(checkpoint), paired_spec=spec,
             sim=sim.describe(), sim_fingerprint=sim.fingerprint()),
             notes='Matched initialization experiment; one training seed. Frozen evals in evaluations.jsonl.')
@@ -109,6 +125,7 @@ def main():
     print('TRAINING READY: compiled shared update and frozen evaluators', flush=True)
 
     def evaluate(arm):
+        summaries = {}
         for mode, (template, fn) in evals.items():
             r = template._replace(params=arm['runner'].params)
             seen = np.zeros(cfg.n_envs, bool)
@@ -133,11 +150,22 @@ def main():
                 f.write(json.dumps(summary)+'\n')
             print('FROZEN', arm['id'], 'u', arm['update'], mode,
                   'CS', summary['cs_mean'], 'gold_diff', summary['gold_diff_mean'], flush=True)
+            summaries[mode] = summary
+        return summaries
     status('running')
+    gate_failed = False
     try:
         for arm in arms:
-            evaluate(arm)
-        while not stop() and any(x['update'] < cfg.n_updates and not x['failed'] for x in arms):
+            arm['initial_eval'] = evaluate(arm)
+        if spec.get('initial_cs_retention') is not None and not stop():
+            baseline = arms[0]['initial_eval']['lasthit']['cs_mean'][0]
+            candidate = arms[1]['initial_eval']['lasthit']['cs_mean'][0]
+            gate_failed = candidate < spec['initial_cs_retention'] * baseline
+            gate = dict(baseline_cs=baseline, candidate_cs=candidate,
+                minimum_ratio=spec['initial_cs_retention'], passed=not gate_failed)
+            (shared/'initialization_gate.json').write_text(json.dumps(gate,indent=2))
+            print('INITIALIZATION GATE',json.dumps(gate),flush=True)
+        while not gate_failed and not stop() and any(x['update'] < cfg.n_updates and not x['failed'] for x in arms):
             for arm in arms:
                 if stop() or arm['failed'] or arm['update'] >= cfg.n_updates:
                     continue
@@ -166,10 +194,10 @@ def main():
     finally:
         for arm in arms:
             save(arm)
-            arm['run'].set_results(status='diverged' if arm['failed'] else
+            arm['run'].set_results(status='initial_gate_failed' if gate_failed else 'diverged' if arm['failed'] else
                 'finished' if arm['update'] == cfg.n_updates else 'interrupted', updates=arm['update'])
             arm['run'].close()
-        status('complete' if all(x['update'] == cfg.n_updates for x in arms) else 'stopped')
+        status('initial_gate_failed' if gate_failed else 'complete' if all(x['update'] == cfg.n_updates for x in arms) else 'stopped')
     print('PROFILE COMPLETE', flush=True)
 
 

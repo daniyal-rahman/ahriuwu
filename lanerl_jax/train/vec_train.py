@@ -300,6 +300,10 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
         metrics["lane_dist"] = learn(tr.lane_dist).mean()
         for i, b in enumerate(BUTTONS):
             metrics[f"button_{b}"] = (learn(tr.action[0]) == i).mean()
+        alive = learn(tr.obs_self[..., 14]) < 0.5  # observation S_IS_DEAD
+        spell = (learn(tr.action[0]) >= 3) & (learn(tr.action[0]) <= 6)
+        metrics['alive_spell_decisions'] = (alive & spell).sum().astype(jnp.float32)
+        metrics['alive_spell_fraction'] = (alive & spell).sum() / jnp.maximum(alive.sum(), 1)
         runner = runner._replace(params=params, opt_state=opt_state, rng=rng,
                                  step=runner.step + n_rows * cfg.rollout_steps)
         return runner, metrics

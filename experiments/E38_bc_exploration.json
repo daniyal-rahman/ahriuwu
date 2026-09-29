@@ -1,0 +1,20 @@
+{
+  "id": "E38_bc_exploration",
+  "engine": "paired-vec",
+  "arms": [
+    "E38_bc_control",
+    "E38_bc_we_bias"
+  ],
+  "updates": 100,
+  "block_updates": 50,
+  "eval_every": 50,
+  "max_seconds": 3600,
+  "slurm_time": "01:10:00",
+  "bc_checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E33_accel_bc/vec-s0-20260929-074835-33f8c55a/ckpt_000000000.msgpack",
+  "bc_button_bias_shift": {
+    "w": 10.0,
+    "e": 10.0
+  },
+  "initial_cs_retention": 0.9,
+  "question": "Bounded BC exploration A/B: same original prior; second arm adds10 to W/E button-head biases only, increasing odds byexp(10), retaining move/attack conditional ratio and coordinate weights. Fresh identical PPO,100 updates each, no reward/physics changes. Frozen initial candidate must retain90% of baseline meanCS vs fixed heuristic or neither arm trains. Frozen mirror/heuristic at0/50/100; alive spell selections logged. One training seed; diagnostic, not a best-model claim."
+}
