@@ -1531,3 +1531,19 @@ using the existing repo-local `.venv-jax`; Pillow is declared in `pyproject.toml
 E35c job1771 completed exit0; canary5 passed/1 skipped and launcher completion
 gate passed. No policy, reward, or simulation changes. Clips are for behavioral
 inspection before diagnosing the BC fine-tuning regression in LEARN-PAIR-02.
+
+
+### LEARN-PAIR-03 — explanation/code audit, no new run (2026-09-29)
+
+| Confirmed configuration/code | Implication, not causal proof |
+|---|---|
+| E33/E34 PolicyConfig leaves click_mask=False; decoder drops unwalkable movement clicks to NOOP | Invalid choices remain in the sampled distribution; dropping execution does not teach an explicit invalid-action label |
+| Relative reward is delta gold difference/20 + .008 delta XP difference + 5 delta(-corridor_distance/10000); corridor half-width1400 | No direct HP penalty or stationary off-lane penalty; corridor proximity is not wave proximity |
+| Standard PPO gamma=.99, lambda=.95 at10Hz; rollout128 | Reward discount e-fold time9.95s; direct GAE residual weights decay faster, with later effects relying on learned value bootstrapping |
+| detach_critic=True stops gradients into shared representation; value_head is one Dense(1) | Actor representation is protected from value gradients, but this is not an independently trained critic network |
+| BC source manifest names jax_dagger3.npz; bc_diag trains action likelihood only; scripted last-hitter deliberately targets minions | Prior supplies farming behavior, not a combat curriculum or a fitted value function |
+
+These observations motivate a bounded follow-up: attribute a few bad replay
+moments through observation -> sampled action -> decoded order -> attack outcome,
+then distinguish teacher limitation, imitation error, PPO drift, and simulator or
+interface failure. No causal bug claim, training launch, or behavior change made.

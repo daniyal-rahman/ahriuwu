@@ -1,5 +1,11 @@
 # STATUS (rewrite in place; last edit 2026-09-29 16:18 UTC, Codex)
 
+**LEARNING EXPLANATION / READ-ONLY AUDIT:** LEARN-PAIR-03 records actual
+click handling, lane shaping, discount horizon, detached linear critic and
+minion-only BC teacher. These are candidate limitations, not diagnosed causes.
+Next: attribute specific bad replay moments before another training experiment.
+No new jobs or model/code changes.
+
 **E35 VIDEOS COMPLETE:** Final u2500 BC and random mirror minimap videos at
 `/mnt/nfs/shared/E35_final_videos/{bc,random}/replay.mp4` (HTML players alongside).
 Matched seed7, near-wave, game clock120–600s, 8x playback, one frozen episode each.
