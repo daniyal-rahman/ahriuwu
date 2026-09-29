@@ -5,7 +5,8 @@ full trajectory/PPO equivalence and paired timing: fused rays give 2.098x
 collection (4.204→2.004s), 1.481x full updates (6.753→4.560s).
 Dani requests comparison against removing traversal entirely (static bush-ID
 lookups), keeping full rays if the extra gain is small. PERF006 job 1766
-submitted; dry-run passed, GPU canary and startup watch pending;
+running; dry-run, GPU fused-ray canary, 11 vision tests and 180s startup
+watch passed; compilation in progress;
 no production choice until that result. Future jungle/5v5 revisit: VIS-FAST.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
