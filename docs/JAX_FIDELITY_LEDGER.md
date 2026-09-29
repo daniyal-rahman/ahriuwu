@@ -1697,5 +1697,10 @@ Reports by side and initialHP: CS, relativegold, kills/deaths, terminalHP, spell
 selections, HP at first enemy sight. Mean reward alone cannot establish trading
 strength. Reproducer: `train/wave_scenario_train.py`, `experiments/E39_tower_wave_advantage.json`.
 Artifacts `/mnt/nfs/checkpoints/lanerl-jax/E39_tower_wave_advantage/`.
-CPU reset/reward checks2 passed; GPU production GRU likelihood/reward and frozen
-opponent canaries plus actual scenario/checkpoint gates pending in Slurm1777.
+CPU reset/reward checks2 passed; GPU4 tests passed (production GRU mirror
+and frozen-opponent likelihood/reward included),180s launcher watch passed.
+Actual checkpoint forward and L3/QWE-ready/HP/minion-count assertions passed.
+Calibration: next-wave first minion enters900u central band at61.014s blue,
+63.015s red (stationary champions). Idle disadvantaged HP72.17% at10s,78.34%
+at20s; passive regeneration retained. Full training/eval compile pending.
+Compiled endpoint check before training verifies HP/kills are from before reset.
