@@ -1667,3 +1667,12 @@ Next: E38b bounded E-only exploration initialization, gated on retaining90% of
 initial frozen farming performance. W/E E38 protocol never launched. This tests
 whether making a useful but almost-never-sampled action available helps learning;
 it does not claim biasing E globally is a final training recipe.
+
+E38b operational follow-up: job1776 failed before any learning or frozen
+evaluation, after the startup canary/watch, because `adjust_button_bias` used
+a fictitious named `button` parameter. Production checkpoints use `Dense_7`
+for the default4-layer trunk. Fixed lookup from PolicyConfig; test now creates
+a real recurrent LanePolicy and checks forward logits/carry/other heads, all
+other parameters, and input immutability (1 test passed). Actual E33 checkpoint
+load/shift also passed. Earlier toy-schema test was insufficient. No inference
+about exploration effectiveness is possible from this failed run.

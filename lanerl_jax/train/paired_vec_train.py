@@ -24,15 +24,20 @@ from .vec_train import VecConfig, make_vec_train, prepare_bank
 from ..sim.config import SimConfig, DEFAULT_ROUTE_ARTIFACT
 
 
-def adjust_button_bias(params, shifts):
+def adjust_button_bias(params, shifts, cfg=PolicyConfig()):
     """Experimental initialization only; retain all other checkpoint weights."""
     state = to_state_dict(params)
-    bias = jnp.asarray(state['params']['button']['bias'])
+    # Existing checkpoints use Flax positional Dense names: entity/context,
+    # mlp_layers trunk projections, core projection, then the button head.
+    head = f'Dense_{cfg.mlp_layers + 3}'
+    bias = jnp.asarray(state['params'][head]['bias'])
+    if bias.shape != (cfg.n_buttons,):
+        raise ValueError(f'{head} is not the expected button head: {bias.shape}')
     for name, amount in shifts.items():
         if name not in BUTTON_INDEX or not np.isfinite(amount):
             raise ValueError(f'invalid button bias shift: {name}={amount}')
         bias = bias.at[BUTTON_INDEX[name]].add(float(amount))
-    state['params']['button']['bias'] = bias
+    state['params'][head]['bias'] = bias
     return from_state_dict(params, state)
 
 
@@ -83,7 +88,7 @@ def main():
     initial = built['init_params'](jax.random.key(0))
     bc = from_state_dict(initial, msgpack_restore((scratch/'bc.msgpack').read_bytes())['params'])
     shifts = spec.get('bc_button_bias_shift')
-    second = adjust_button_bias(bc, shifts) if shifts is not None else initial
+    second = adjust_button_bias(bc, shifts, pcfg) if shifts is not None else initial
     arms = []
     for arm_id, params in zip(spec['arms'], (bc, second)):
         run = RunDir(shared/arm_id, 'vec-s0', dict(

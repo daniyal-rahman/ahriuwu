@@ -7,11 +7,14 @@ reverse survives,+12CS. W does not reduce damage: existing C# stale-local
 bug deliberately mirrored in JAX, verified source read-only. No vendor edits.
 Evidence: LEARN-PAIR-05 and `/mnt/nfs/shared/E37b_escape_counterfactual/`.
 
-**E38b RUNNING (Slurm1776):** Dry-run,3 GPU canary tests and180s startup watch passed.
-Preparing states/compilation; frozen retention gate and learning outcomes pending. bounded100-update BC/control versus BC/E-bias+10 test,
-frozen128-game mirror/heuristic at0/50/100. Initial candidate must retain90%
-of baseline heuristic-match CS or neither arm trains. Fresh optimizers; same
-PPO/reward/physics. E38 W/E protocol not launched, superseded after E37b.
+**E38b FAILED BEFORE TRAINING:** Slurm1776 exit1 in4m07s. Startup canary
+and180s watch passed, then initialization failed: helper assumed a named
+`button` layer; checkpoint uses Flax `Dense_7`. No training/evaluation result.
+Corrected layer lookup from PolicyConfig, replaced synthetic-schema test with
+actual GRU forward-pass regression (passed), and checked the actual E33 BC
+checkpoint shift. No retry launched during the strategic discussion; no own
+jobs remain. Next authorized experiment remains the bounded E exploration
+comparison; broader data/architecture direction is proposed, not implemented.
 
 **E36 LEARNING AUDIT COMPLETE:** CPU Slurm job1773 completed exit0 in30m04s;
 GPU job1772 cancelled before execution because desktop was unavailable.

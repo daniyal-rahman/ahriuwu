@@ -362,3 +362,41 @@ focused and production setup checks. A future arm must also use the corrected
 dead-state observation contract from SERVER-FIRST-05. Keep source farming as
 the primary gate; do not spend a fresh full JAX training budget while the
 source interface is failing a known control invariant.
+
+## 2026-09-29 strategic discussion — proposed priorities, not new launch approval
+
+Dani asks whether to continue PPO/heuristic BC, invest in modern human replay
+priors, or revisit architecture. LEARN-PAIR-04/05 show a useful E intervention
+that the prior almost never samples. This supports an exploration bottleneck,
+not a diagnosis of a mathematical local minimum or proof that PPO is adequate
+for the final task. E38b failed operationally before training; repair checked.
+
+Recommendation: keep current PPO + entity-attention/GRU as the reference while
+testing controlled exploration without erasing farming. Heuristic BC is a
+bootstrap and comparison arm, not the intended permanent prior. Strong KL to
+the unsoftened deterministic teacher could reinforce its missing abilities.
+
+Next bounded milestones proposed for discussion:
+1. Repair/rerun the already authorized E exploration comparison; distinguish
+   an initialization benefit from subsequent PPO improvement. Follow promising
+   screening results with independent seeds and held-out failure situations.
+2. Audit a small sample of existing modern replay assets before collecting at
+   scale or building a full decoder. Establish observation/action alignment,
+   HP/cooldowns, visibility boundaries, action-label ambiguity and patch match.
+   Archived movement decoder success and HP-decoder failure are historical,
+   not proof of current compatibility. Existing replay-client extraction is a
+   candidate route. Human prior and PPO are compatible choices.
+3. First architecture candidate: button-conditioned, jointly coherent screen
+   clicks, preserving the no-entity-ID action contract. Critic capacity/credit
+   attribution is another separate candidate. A temporal transformer becomes
+   worth a matched-compute trial with useful offline sequences or evidence of
+   a memory bottleneck; current wave incident does not establish one.
+4. Small simulator counterfactual teacher is an alternative source of missing
+   skills if replay labels are blocked: evaluate a short relevant action set,
+   train on resulting preferences, hold out scenarios, verify ordinary lanes
+   and source-server behavior. Do not implement full AlphaZero search first.
+
+Avoid a simultaneous learner/core/data overhaul. Proposed next performance
+milestone: retain BC farming while learning held-out wave survival/ability use
+that the teacher lacks, then confirm source-server transfer. CS alone is not
+the final objective; real modern5v5 match strength remains unestablished.
