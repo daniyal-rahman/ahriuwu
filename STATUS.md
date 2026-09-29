@@ -1,8 +1,8 @@
 # STATUS (rewrite in place; last edit 2026-09-29 06:39 UTC, Codex)
 
-**PERF-005 RETRY SUBMITTED:** Job 1762, `PERF005b_vision_ab`, repeats the
-unchanged candidate/protocol. GPU correctness precedes whole-update A/B;
-dry-run passed, GPU canary/startup watch pending; no measured gain yet.
+**PERF-005 RETRY:** Job 1762 failed at GPU canary: Triton does not lower
+boolean reduce_or. Candidate now uses equivalent int-max reduction;
+`PERF005c_vision_ab` prepared for retry. No GPU timings or production changes.
 
 **PERF-005 GPU BLOCKED:** Probe committed/pushed at `0887a33`. Dry-run passed;
 job 1761 was submitted but desktop is drained/offline (boot to Windows), so
