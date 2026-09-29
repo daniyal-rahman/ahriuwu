@@ -1,26 +1,32 @@
-# STATUS (rewrite in place; last edit 2026-09-29 09:24 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 14:53 UTC, Codex)
 
-**OVERNIGHT E33/E34 RUNNING (Dani, 09-29):** Up to nine hours authorized;
-matched accelerated GRU PPO from BC vs random, only initialization differs.
-`E33_E34_overnight`: job1768 running; dry-run, GPU reward/GRU actor-learner
-canary and 180s startup watch PASSED. One GPU job, alternating 100-update blocks, 2500 updates
-per arm, N128/T128, lr1e-5 annealed, entropy0, detached critic, existing relative
-reward/full map/full visibility. Save each100 updates; frozen held-out mirror
-and fixed-heuristic evaluations at u0 and every500. Eight-hour worker guard,
-8h30 Slurm limit. No broad optimization work overnight; only obvious quick fixes.
-Checkpoints/metrics/evaluations: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/`.
-Initial ~30-minute watch passed: both arms saved u100, finite losses,
-~4.4–4.6s/update; automatic BC→random→BC handoff works. Frozen u0 scores
-(128 sampled games, 16 held-out start states): BC mirror43.77/44.56, vs fixed
-heuristic45.50/48.82 (gold diff -66.41); random mirror6.63/3.88, vs heuristic
-5.78/51.79 (gold diff -639.79). No post-training frozen result yet. Worker
-will evaluate every500 and final, save every100, stop itself after8h (~15:46UTC)
-or2500 updates/arm. No side experiments or persistent external watchdog created.
-Read study.json + per-arm metrics/evaluations and Slurm1768 for current status.
-Frozen u500 (still running): BC mirror38.73/38.45, vs heuristic38.30/44.91,
-gold diff -159.7 (u0 -66.41): no improvement. Random mirror18.53/14.56,
-vs heuristic19.30/34.38, gold diff +501.0 (u0 -639.79): positive learning,
-not higher CS than teacher. No nonfinite-loss flags; no settings changed.
+**OVERNIGHT E33/E34 COMPLETE:** Slurm1768 COMPLETED exit0 after7h02m07s.
+Both arms finished2500 updates /81.92M champion decisions each. Only initialization
+differed: BC vs random; N128/T128, standard4x4 PPO, lr1e-5 annealed, entropy0,
+detached critic, full visibility/map, relative reward and mirror training.
+No restart, nonfinite-loss flags, or overnight hyperparameter changes.
+
+**Frozen final, 128 games/mode from16 held-out start states, one training seed:**
+- BC vs fixed heuristic: CS45.50→37.76, gold difference
+  -66.41→-136.05. Final mirror36.11/34.53 CS.
+  Fine-tuning did NOT improve the prior; gradual loss of farming performance remains.
+- Random vs fixed heuristic: CS5.78→24.65, gold difference
+  -639.79→+784.46. Final mirror23.95/24.21 CS.
+  Positive learning; still below30CS in JAX mirror. No C# transfer test this run.
+These are fixed final checkpoints, not selected best intermediates. The arms
+were not played head-to-head. Common conservative LR means this does not test
+the best possible scratch recipe.
+
+All twelve frozen evaluations/arm (u0,500,1000,1500,2000,2500 ×mirror/heuristic)
+and2500 metric rows/arm verified. Final checkpoint and optimizer arrays decode
+and are finite; final step81920000, manifests finished. Median updates4.52s BC,
+4.60s random. CPU/GPU canaries, startup and early monitoring passed.
+Artifacts: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/` (study.json,
+per-arm manifests, metrics, evaluations, initial/intermediate/final checkpoints).
+No own jobs/watchers remain; no external watchdog/service was created. Scratch
+staging is job-labeled under `/scratch/E33_E34_overnight-1768/`, auto-retained30days.
+Next: discuss the BC fine-tuning objective/learning issue and scratch-policy
+behavior before another experiment. Full frozen trajectory table: LEARN-PAIR-02.
 
 **PERF-006/007 COMPLETE — FUSED RAYS INSTALLED:** Job 1766: full fused rays
 2.028s collect / 4.656s update; bush lookup 1.978s / 4.620s. Only 0.8% extra

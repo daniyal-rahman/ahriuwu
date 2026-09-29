@@ -1451,7 +1451,7 @@ validate GPU code generation or GPU speed.
 
 | PERF-007 | INSTALLED / PASSED | Full ray semantics now use `obs/ray_kernel.py` on CUDA through `lax.platform_dependent`; CPU/other backends use `vision.clear_ray_reference`. Default configs retain full rays; bush lookup remains opt-in only. Job 1767 passed 131073-ray/nested-vmap GPU comparison and all 11 vision tests through production dispatch (9.58s). CPU suite 11 passed (32.75s). Launcher completion/canary gate passed. | Selected measured 1.481x whole-update optimization, rejecting PERF006's additional 0.8% in exchange for behavior changes. No training-quality claim or checkpoints. |
 
-| LEARN-PAIR-01 | RUNNING job1768; startup/first100 updates each passed | E33/E34 differ only in BC vs random parameters. Same seed, architecture, N128/T128, lr1e-5 annealed, entropy0, detached critic, standard4x4 PPO, full visibility, relative reward and mirror self-play. Separate optimizers, alternating100 updates on shared executables. Both u0 and every500 evaluated frozen on held-out16-state bank (seed1007), 128 sampled games (action seed2007), mirror plus BLUE vs fixed lasthit RED. | No improvement claim from train CS. Compare each arm against its frozen u0 and fixed teacher; mirror alone changes both opponents. One training seed; games share16 start states. No crop or reward changes. |
+| LEARN-PAIR-01 | COMPLETE; final results LEARN-PAIR-02 | E33/E34 differ only in BC vs random parameters. Same seed, architecture, N128/T128, lr1e-5 annealed, entropy0, detached critic, standard4x4 PPO, full visibility, relative reward and mirror self-play. Separate optimizers, alternating100 updates on shared executables. Both u0 and every500 evaluated frozen on held-out16-state bank (seed1007), 128 sampled games (action seed2007), mirror plus BLUE vs fixed lasthit RED. | No improvement claim from train CS. Compare each arm against its frozen u0 and fixed teacher; mirror alone changes both opponents. One training seed; games share16 start states. No crop or reward changes. |
 
 E33/E34 frozen u0 baselines saved in per-arm `evaluations.jsonl` under
 `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/`: BC mirror43.7656/44.5625,
@@ -1467,3 +1467,47 @@ heuristic19.30/34.38, gold difference +501.0 (u0 -639.8): positive learning
 against fixed opponent, though CS remains below the teacher. Same held-out
 starts/action seeds as u0; no hyperparameter changes or early model selection.
 Runs remain numerically healthy and continue to the fixed budget.
+
+
+## LEARN-PAIR-02: overnight matched initialization result
+
+| ID | Status | Evidence | Conclusion |
+|---|---|---|---|
+| LEARN-PAIR-02 | COMPLETE | Slurm1768 exit0, elapsed7h02m07s; both arms2500 updates /81.92M champion decisions. Same model/config/simulation fingerprint verified; all2500 metrics and12 frozen evaluations per arm present; loss_nonfinite always0. Final msgpacks decode, parameter/optimizer arrays finite, step81920000, latest identical to named final. | Random learns against a fixed opponent; BC fine-tuning does not beat its initialization. One training seed and16 held-out start states/128 stochastic games per evaluation; no C# transfer or direct arm-vs-arm match. No overnight setting changes or restarts. |
+
+Frozen BLUE policy versus fixed RED lasthit heuristic, same held-out setup/action
+seeds each checkpoint. CS is the learned policy's; gold difference = BLUE−RED.
+Mirror scores are listed separately because both opponents change there.
+
+| Update | BC CS | BC gold diff | Random CS | Random gold diff |
+|---|---:|---:|---:|---:|
+| 0 | 45.50 | -66.41 | 5.78 | -639.79 |
+| 500 | 38.30 | -159.68 | 19.30 | +501.01 |
+| 1000 | 40.98 | -84.33 | 22.12 | +565.74 |
+| 1500 | 40.55 | -154.76 | 21.44 | +634.23 |
+| 2000 | 39.63 | -137.54 | 25.93 | +775.39 |
+| 2500 | 37.76 | -136.05 | 24.65 | +784.46 |
+
+Frozen final mirror CS: BC **36.11/34.53**
+(start43.77/44.56), random **23.95/24.21**
+(start6.63/3.88). Final2500 is the predeclared endpoint; random's higher u2000
+CS is preserved, not substituted as the headline result. Gold lead alone does
+not establish a general win rate, and these arms were not played head-to-head.
+The random arm is below the30CS mirror target; no source-server gate claim.
+Both used lr1e-5/entropy0 to isolate initialization, so this is not a comparison
+of each initialization's separately tuned best recipe.
+
+Median training update time4.5196s BC /4.6032s random. Full job includes canary,
+compile, setup, checkpoints and3072 frozen games (128 ×2 modes ×6 checkpoints ×2 arms).
+No model/precision/physics/reward changes during the run. Data staged to local
+scratch; outputs on shared checkpoint storage, no recurring watcher/service.
+
+Artifacts:
+- BC final: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E33_accel_bc/vec-s0-20260929-074835-33f8c55a/ckpt_081920000.msgpack`
+- Random final: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E34_accel_random/vec-s0-20260929-074837-33f8c55a/ckpt_081920000.msgpack`
+- Each run retains `ckpt_latest.msgpack`, initial/intermediate checkpoints,
+  `manifest.json`, `metrics.jsonl`, and `evaluations.jsonl` with per-game records.
+- Study status: `/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/study.json`.
+- Slurm log: `/mnt/nfs/shared/E33_E34_overnight-1768.out`.
+- Protocol: `experiments/E33_E34_overnight.json`; runner:
+  `lanerl_jax/train/paired_vec_train.py`.
