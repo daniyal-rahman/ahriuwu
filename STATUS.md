@@ -1,20 +1,11 @@
 # STATUS (rewrite in place; last edit 2026-09-29 06:47 UTC, Codex)
 
-**PERF-005 RETRY:** Job 1764 passed exact GPU comparison of 131073 map rays
-and nested vmap; integration tests then failed because debug callbacks need
-CPU backend enabled alongside CUDA. `PERF005e_vision_ab` submitted as job 1765 with that
-launcher fix; dry-run, exact GPU rays, all 10 integration tests and 180s
-startup watch PASSED. Reference full-update compilation is running. Prior 1762/1763 failed unsupported reduction lowering, fixed by
-reducing remaining cell counts. No timing results or production changes.
-
-**PERF-005 GPU BLOCKED:** Probe committed/pushed at `0887a33`. Dry-run passed;
-job 1761 was submitted but desktop is drained/offline (boot to Windows), so
-cancelled while PENDING; no GPU work ran and no startup/canary gate passed.
-CPU interpreter comparison (257 map rays + nested vmap) is exact; all 10
-existing vision tests passed with the fused interpreter (40.92s, 4GB/1CPU cap).
-No active job or watcher remains. No production changes
-or measured speedup. GPU equivalence and matched N128/T128 collection/full-update
-A/B remain pending; use a new experiment ID when desktop returns.
+**PERF-005 COMPLETE / PERF-006 PREPARED:** Job 1765 passed all GPU gates,
+full trajectory/PPO equivalence and paired timing: fused rays give 2.098x
+collection (4.204→2.004s), 1.481x full updates (6.753→4.560s).
+Dani requests comparison against removing traversal entirely (static bush-ID
+lookups), keeping full rays if the extra gain is small. PERF006 prepared;
+no production choice until that result. Future jungle/5v5 revisit: VIS-FAST.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
 unprofiled collection, PPO and complete-update timing cohorts finished. Complete

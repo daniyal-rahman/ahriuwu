@@ -16,3 +16,5 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 | `red_route_probe.py` | Why does red stop at (12058,12979) walking to the top lane on the C# server? | Long-route pathfinder failure; legged route works (`TEAM_WAVE_START`) | 2026-09-25 |
 | `jax_red_route_probe.py`, `jax_red_chain_probe.py` | Same question in the JAX sim | Stalls at (12154,12990); route A legs work (`JAX_RED_LEGS`) | 2026-09-25 |
 | `smoke_mirror.sh`, `jax_smoke.sh` | Do train → resume → frozen-eval work end to end in mirror mode? | Yes, both engines | 2026-09-25 |
+
+PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static bush-ID collection/full-update timing; semantics deliberately differ (VIS-FAST).

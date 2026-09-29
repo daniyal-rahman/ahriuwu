@@ -269,7 +269,9 @@ class SimConfig:
             route_artifact=self.route_artifact,
             route_digest=self.route_digest,
             terrain=None if self.terrain is None else "map1",
-            vision=None if self.vision is None else "map-grid-supercover-v1",
+            vision=(None if self.vision is None else
+                    "lane-bush-id-v1" if self.vision.bush_ids is not None else
+                    "map-grid-supercover-v1"),
             lane_path=_describe_lane_path(self.lane_path),
             minion_hp=None if self.minion_hp is None else "custom",
             n_params=len(self.params),

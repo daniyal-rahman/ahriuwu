@@ -1440,3 +1440,9 @@ no canary/startup watch passed, and its launcher exited after cancellation.
 Next: new experiment ID using this protocol when desktop returns. No measured
 performance gain and no production integration; CPU interpretation does not
 validate GPU code generation or GPU speed.
+
+
+| ID | Status | Change / evidence | Decision |
+|---|---|---|---|
+| PERF-005-RESULT | MEASURED | `PERF005e_vision_ab`, job 1765 completed. Exact 131073-ray/nested-vmap GPU gate, 10 vision tests, 180s watch and full collection/PPO output comparison passed (discrete exact, float 1e-5). Four alternating warmed N128/T128 samples: reference collection 4.203828s vs fused 2.004102s (2.098x); complete update 6.753106s vs 4.559762s (1.481x). `runs/PERF005e_vision_ab/main/result.json`. | Genuine speed gain without the proposed behavior simplification. Probe remains experimental pending PERF006 comparison. |
+| VIS-FAST | CANDIDATE, user-authorized lane approximation | Precompute edge-connected bush IDs once from static map. At runtime use endpoint IDs: target outside brush or in observer's bush, plus existing radius/team/alive checks. Removes ALL ray traversal, including intervening terrain/brush checks. `map1_lane_vision`; strict `map1_vision` retained. Config description/fingerprint distinguish modes. | Dani requests A/B against fused rays before selection; keep full rays if extra gain small. Revisit terrain occlusion and brush geometry before jungle, other champions or 5v5; this is deliberately not C# parity. |

@@ -219,3 +219,34 @@ def test_brush_filtered_before_actor_slots_are_built():
     assert 1 not in np.asarray(hidden.slot_unit)
     shown = build_observation(s, 0, frame, params=lane_params(), vision=grid(np.zeros_like(flags)))
     assert 1 in np.asarray(shown.slot_unit)
+
+
+def test_lane_visibility_uses_bush_membership_without_ray_traversal():
+    from lanerl_jax.obs.vision import with_bush_ids
+    flags = np.zeros((4, 100), np.uint16)
+    flags[1, 2:5] = 1
+    flags[1, 7:9] = 1
+    flags[1, 6] = 2  # intervening wall deliberately irrelevant in lane mode
+    g = with_bush_ids(grid(flags))
+    rays = jnp.array([
+        [75, 75, 125, 75],    # outside -> bush: hidden
+        [125, 75, 175, 75],  # same bush: visible
+        [125, 75, 75, 75],   # bush -> outside: visible
+        [125, 75, 375, 75],  # different bushes: hidden
+        [275, 75, 475, 75],  # outside -> outside past wall and bush: visible
+        [25, 25, 4500, 25],  # no 64-cell traversal limit (radius gated elsewhere)
+        [-1, 25, 25, 25],    # invalid positions still fail closed
+    ], dtype=jnp.float32)
+    fn = lambda r: clear_ray(g, *r.T)
+    np.testing.assert_array_equal(jax.jit(fn)(rays),
+                                  [False, True, True, False, True, True, False])
+    assert not bool(clear_ray(g, 125., 75., 175., 75., enabled=False))
+    # This is the performance contract: no cell-walking loop in the lane path.
+    assert 'while[' not in str(jax.make_jaxpr(fn)(rays))
+    from lanerl_jax.sim.config import SimConfig
+    cfg = SimConfig.training(route_artifact=None)
+    cfg = cfg.replace(vision=with_bush_ids(cfg.vision))
+    assert cfg.describe()["vision"] == "lane-bush-id-v1"
+    strict = cfg.replace(vision=cfg.vision._replace(bush_ids=None))
+    assert strict.describe()['vision'] == 'map-grid-supercover-v1'
+    assert cfg.fingerprint() != strict.fingerprint()

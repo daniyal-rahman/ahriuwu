@@ -212,7 +212,7 @@ def main():
         if a.record: args["record-npz"] = a.record
         submit(spec, args, (a.tag + "-det") if a.deterministic else a.tag, a.dry_run); return
     spec = json.loads((REPO_SRV / "experiments" / f"{a.experiment}.json").read_text())
-    if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab"):
+    if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab", "bush-ab"):
         from gru_profile_launch import launch
         launch(spec, a.dry_run)
         return

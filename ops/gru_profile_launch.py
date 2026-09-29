@@ -14,7 +14,8 @@ def launch(spec, dry):
     full = spec['engine'] == 'full-profile'
     script = {'full-profile': 'slurm/full_profile.sbatch',
               'gru-profile': 'slurm/gru_profile.sbatch',
-              'vision-ab': 'slurm/vision_ab.sbatch'}[spec['engine']]
+              'vision-ab': 'slurm/vision_ab.sbatch',
+              'bush-ab': 'slurm/bush_ab.sbatch'}[spec['engine']]
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',
            '--nodelist=desktop', '--cpus-per-task=4', '--mem=24G' if full else '--mem=20G',
            '--time=01:30:00' if full else '--time=00:35:00',

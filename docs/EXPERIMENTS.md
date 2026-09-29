@@ -6,7 +6,8 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `PERF005e_vision_ab` | 09-29 | JAX GPU A/B diagnostic | PERF005d with CPU backend enabled for test debug callbacks | same frozen E31 standard GRU PPO | unchanged bounded protocol | RUNNING job 1765; dry-run, GPU exact rays, 10 integration tests and 180s startup watch PASSED | Probe only |
+| `PERF006_bush_ab` | 09-29 | JAX GPU A/B diagnostic | Fused full rays versus position-only bush membership | frozen E31 standard GRU PPO | fixed N128/T128; four alternating collection/full-update samples | PREPARED | Keep full rays if extra gain is small; user decision rule |
+| `PERF005e_vision_ab` | 09-29 | JAX GPU A/B diagnostic | PERF005d with CPU backend enabled for test debug callbacks | same frozen E31 standard GRU PPO | unchanged bounded protocol | COMPLETE job 1765; all gates passed, full collection/PPO output agreement; collection 4.204→2.004s (2.098x), update 6.753→4.560s (1.481x) | Probe only |
 | `PERF005d_vision_ab` | 09-29 | JAX GPU A/B diagnostic | Reduce remaining cell counts instead of boolean activity | same frozen E31 standard GRU PPO | unchanged bounded protocol | FAILED job 1764: GPU exact ray/nested-vmap gate passed; integration debug callback requires CPU backend enabled | Probe only |
 | `PERF005c_vision_ab` | 09-29 | JAX GPU A/B diagnostic | PERF005b with equivalent int-max active-ray reduction | same frozen E31 standard GRU PPO | unchanged bounded protocol | FAILED job 1763: boolean-valued int-max canonicalized to unsupported reduce_or | Probe only |
 | `PERF005b_vision_ab` | 09-29 | JAX GPU A/B diagnostic | PERF005 retry after desktop returns | same frozen E31 standard GRU PPO | fixed N128/T128, four alternating collection/full-update samples | FAILED job 1762 at GPU canary: Pallas Triton reduce_or unsupported; no timings | Same bounded protocol, probe only |

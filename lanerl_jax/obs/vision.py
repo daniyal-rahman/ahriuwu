@@ -18,6 +18,7 @@ class VisionGrid(NamedTuple):
     cell_size: float
     min_x: float
     min_y: float
+    bush_ids: jax.Array | None = None
 
 
 @lru_cache(maxsize=1)
@@ -28,6 +29,40 @@ def map1_vision():
                       float(grid.min_grid[0]), float(grid.min_grid[2]))
 
 
+def with_bush_ids(grid):
+    """Label fixed bushes once on the host; zero means outside any bush."""
+    import numpy as np
+    from scipy.ndimage import label
+    # Edge-connected cells form a bush; touching only at a corner does not.
+    ids, _ = label((np.asarray(grid.flags) & 1) != 0)
+    return grid._replace(bush_ids=jnp.asarray(ids, jnp.int32))
+
+
+@lru_cache(maxsize=1)
+def map1_lane_vision():
+    """Lane approximation approved by Dani; revisit for jungle/5v5 (VIS-FAST)."""
+    return with_bush_ids(map1_vision())
+
+
+def bush_visible(grid, x0, y0, x1, y1, *, enabled=True):
+    """Position lookup only: outside targets or targets in the same bush.
+
+    Radius, team and alive checks belong to fog.visible_to. No runtime ray
+    traversal, intervening-wall test or intervening-brush test on this path.
+    """
+    height, width = grid.bush_ids.shape
+
+    def lookup(x, y):
+        x = jnp.floor((x-grid.min_x)/grid.cell_size).astype(jnp.int32)
+        y = jnp.floor((y-grid.min_y)/grid.cell_size).astype(jnp.int32)
+        valid = (x >= 0) & (y >= 0) & (x < width) & (y < height)
+        return grid.bush_ids[jnp.clip(y, 0, height-1), jnp.clip(x, 0, width-1)], valid
+
+    start, valid0 = lookup(x0, y0)
+    end, valid1 = lookup(x1, y1)
+    return enabled & valid0 & valid1 & ((end == 0) | (start == end))
+
+
 def clear_ray(grid, x0, y0, x1, y1, *, enabled=True):
     """Broadcastable rays. Fail closed outside the grid or the 64-cell bound.
 
@@ -35,6 +70,10 @@ def clear_ray(grid, x0, y0, x1, y1, *, enabled=True):
     Map1 sight radius <=1200 and cell size 50 imply at most 36 crossings.
     64 is a bound for this visibility task, not a general-purpose ray caster.
     """
+    # Lane production bypasses the entire traversal, not just its wall test.
+    # Keep the reference below for fidelity studies and future jungle/5v5.
+    if grid.bush_ids is not None:
+        return bush_visible(grid, x0, y0, x1, y1, enabled=enabled)
     x0, y0, x1, y1 = jnp.broadcast_arrays(
         (x0-grid.min_x)/grid.cell_size, (y0-grid.min_y)/grid.cell_size,
         (x1-grid.min_x)/grid.cell_size, (y1-grid.min_y)/grid.cell_size)

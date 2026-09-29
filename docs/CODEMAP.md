@@ -6,6 +6,7 @@ LEGACY = kept for history only; nothing imports it.
 
 | Path | Class | Role |
 |---|---|---|
+| `slurm/bush_ab.sbatch` | TOOL | PERF006 fused-ray vs static bush-ID A/B via launcher; no saved model |
 | `slurm/vision_ab.sbatch` | TOOL | PERF-005 bounded vision-kernel A/B via `ops/launch.py`; correctness first, no saved model or profiler |
 | `slurm/full_profile.sbatch` | TOOL | PERF-004 full GPU diagnostic via `ops/launch.py` and `gru_profile_launch.py`; canary first, fixed workload, source traces and memory dumps, no saved model |
 | `ops/gru_profile_launch.py`, `slurm/gru_profile.sbatch` | TOOL | Bounded PERF-003 GPU diagnostic through `ops/launch.py`; exact GRU split/fused canary, rollout/learner time and memory, no model checkpoints |

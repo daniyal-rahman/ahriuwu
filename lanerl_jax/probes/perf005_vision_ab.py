@@ -44,6 +44,7 @@ def main():
     p.add_argument('--out', type=Path)
     p.add_argument('--canary', action='store_true')
     p.add_argument('--interpret', action='store_true')
+    p.add_argument('--bush-ab', action='store_true', help='Compare fused rays against position-only bushes')
     a = p.parse_args()
     jax.config.update('jax_default_matmul_precision', 'highest')
     if a.canary:
@@ -58,15 +59,20 @@ def main():
     cfg = VecConfig(n_envs=128, rollout_steps=128, n_updates=1, n_minibatches=4,
         bank_size=4, start_jitter_s=20., ppo=PPOConfig.standard(),
         policy=PolicyConfig(core='gru', core_norm=True, core_residual=True))
-    sim = SimConfig.training().replace(step_ticks=6)
+    sim = SimConfig.training().replace(step_ticks=6, vision=vision.map1_vision())
     bank = prepare_bank(cfg, sim, a.out/'bank', seed=0)
+    original_ray = vision.clear_ray
+    if a.bush_ab:
+        vision.clear_ray = clear_ray_fused
+    baseline_name = 'fused_ray' if a.bush_ab else 'reference'
+    candidate_name = 'bush_lookup' if a.bush_ab else 'fused_ray'
     base = make_vec_train(cfg, sim, bank)
     runner = base['initial_runner'](jax.random.key(0))
     checkpoint = Path('lanerl_jax/runs/E31_jax_noprior_gru/seed0/jax-farm-s0-20260928-184158-ec566530/ckpt_latest.msgpack')
     params = from_state_dict(runner.params, msgpack_restore(checkpoint.read_bytes())['params'])
     runner = base['initial_runner'](jax.random.key(0), params)
     runner = runner._replace(deadline_ms=jnp.full_like(runner.deadline_ms, 600000))
-    result = dict(config=repr(cfg), checkpoint=str(checkpoint), stages={}, status='running')
+    result = dict(config=repr(cfg), checkpoint=str(checkpoint), stages={}, status='running', baseline=baseline_name, candidate=candidate_name)
     def save():
         (a.out/'result.json').write_text(json.dumps(result, indent=2))
     def compile_(name, fn):
@@ -74,16 +80,19 @@ def main():
         start = time.perf_counter()
         executable = jax.jit(fn).lower(runner).compile()
         result['stages'][name] = dict(compile_s=time.perf_counter()-start)
+        save()
         return executable
-    collect_base = compile_('reference_collect', base['collect'])
-    update_base = compile_('reference_update', lambda r: base['run_chunk'](r, 1))
+    collect_base = compile_(baseline_name+'_collect', base['collect'])
+    update_base = compile_(baseline_name+'_update', lambda r: base['run_chunk'](r, 1))
     for i in range(14):
         runner = jax.block_until_ready(collect_base(runner))[0]
     result['game_age_s'] = float(runner.env_state.t_ms.mean()/1000)
-    vision.clear_ray = clear_ray_fused
+    vision.clear_ray = original_ray if a.bush_ab else clear_ray_fused
+    if a.bush_ab:
+        sim = sim.replace(vision=vision.map1_lane_vision())
     candidate = make_vec_train(cfg, sim, bank)
-    collect_new = compile_('fused_ray_collect', candidate['collect'])
-    update_new = compile_('fused_ray_update', lambda r: candidate['run_chunk'](r, 1))
+    collect_new = compile_(candidate_name+'_collect', candidate['collect'])
+    update_new = compile_(candidate_name+'_update', lambda r: candidate['run_chunk'](r, 1))
 
     def compare(x, y):
         for aa, bb in zip(jax.tree.leaves(x), jax.tree.leaves(y)):
@@ -97,22 +106,28 @@ def main():
     for name, fn in [('reference_collect', collect_base), ('fused_ray_collect', collect_new),
                      ('reference_update', update_base), ('fused_ray_update', update_new)]:
         outputs[name] = jax.block_until_ready(fn(runner))
-    compare(outputs['reference_collect'], outputs['fused_ray_collect'])
-    compare(outputs['reference_update'], outputs['fused_ray_update'])
-    result['trajectory_and_update_equivalence'] = 'passed: discrete exact, floats rtol/atol 1e-5'
-    print('COLLECT/UPDATE EQUIVALENCE PASSED', flush=True)
+    try:
+        compare(outputs['reference_collect'], outputs['fused_ray_collect'])
+        compare(outputs['reference_update'], outputs['fused_ray_update'])
+        result['trajectory_and_update_equivalence'] = 'passed: discrete exact, floats rtol/atol 1e-5'
+    except AssertionError:
+        if not a.bush_ab:
+            raise
+        result['trajectory_and_update_equivalence'] = 'different: expected semantic approximation, not parity'
+    print('OUTPUT COMPARISON:', result['trajectory_and_update_equivalence'], flush=True)
+    save()
     # Alternate reference/candidate runs to reduce clock/order bias.
     for kind, left, right in [('collect', collect_base, collect_new), ('update', update_base, update_new)]:
-        samples = {'reference': [], 'fused_ray': []}
+        samples = {baseline_name: [], candidate_name: []}
         for repeat in range(4):
-            pair = [('reference', left), ('fused_ray', right)]
+            pair = [(baseline_name, left), (candidate_name, right)]
             for name, fn in pair if repeat % 2 == 0 else pair[::-1]:
                 start = time.perf_counter()
                 jax.block_until_ready(fn(runner))
                 samples[name].append(time.perf_counter()-start)
         for name, values in samples.items():
             result['stages'][name+'_'+kind].update(samples_s=values, median_s=statistics.median(values))
-        result[kind+'_speedup'] = statistics.median(samples['reference'])/statistics.median(samples['fused_ray'])
+        result[kind+'_speedup'] = statistics.median(samples[baseline_name])/statistics.median(samples[candidate_name])
         save()
         print(kind, samples, 'speedup', result[kind+'_speedup'], flush=True)
     result['status'] = 'complete'
