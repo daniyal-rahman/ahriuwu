@@ -1,4 +1,4 @@
-# STATUS (rewrite in place; last edit 2026-09-29 02:07 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 02:09 UTC, Codex)
 
 **DETAILED PROFILE APPROVED (09-29, Dani):** Cover every simulation tick phase,
 observations/actions and GRU PPO at a fixed workload; rank measured bottlenecks
@@ -8,7 +8,9 @@ unchanged as part of the committed starting snapshot. PERF-004 prepared:
 all 28 tick scopes (26 phases plus prep/assembly), obs/actions and PPO;
 fixed N128/T128, random/E31 at three game ages, split and fused wall times,
 GPU source traces and memory dumps. CPU lowering confirms identical simulation
-math after scope insertion; GPU canary gates the full job. No job submitted yet.
+math after scope insertion. Dry-run passed; job **1758** submitted through
+`ops/launch.py PERF004_full_profile` from committed/pushed **9eff7e5**.
+GPU canary and 180-s startup watch pending; no performance changes applied.
 Five-million-token ceiling authorised, not a target
 to spend; no parallel agents requested.
 
