@@ -1,10 +1,11 @@
-# STATUS (rewrite in place; last edit 2026-09-29 06:47 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 07:04 UTC, Codex)
 
-**PERF-005 COMPLETE / PERF-006 PREPARED:** Job 1765 passed all GPU gates,
+**PERF-005 COMPLETE / PERF-006 SUBMITTED:** Job 1765 passed all GPU gates,
 full trajectory/PPO equivalence and paired timing: fused rays give 2.098x
 collection (4.204→2.004s), 1.481x full updates (6.753→4.560s).
 Dani requests comparison against removing traversal entirely (static bush-ID
-lookups), keeping full rays if the extra gain is small. PERF006 prepared;
+lookups), keeping full rays if the extra gain is small. PERF006 job 1766
+submitted; dry-run passed, GPU canary and startup watch pending;
 no production choice until that result. Future jungle/5v5 revisit: VIS-FAST.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
