@@ -1,11 +1,12 @@
-# STATUS (rewrite in place; last edit 2026-09-29 03:06 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 03:09 UTC, Codex)
 
-**PERF-005 PREPARED:** Dani approved the structural vision experiment. Probe-local
-Pallas/Triton ray traversal retains all existing visibility rules; CPU interpreter
-comparison (257 map rays + nested vmap) is exact. GPU ray and existing vision
-suite gates precede matched N128/T128 collection/full-update A/B. No production
-changes or measured speedup yet; no job submitted. Desktop work via Slurm;
-capped CPU work on danilogin if desktop becomes unavailable.
+**PERF-005 GPU BLOCKED:** Probe committed/pushed at `0887a33`. Dry-run passed;
+job 1761 was submitted but desktop is drained/offline (boot to Windows), so
+cancelled while PENDING; no GPU work ran and no startup/canary gate passed.
+CPU interpreter comparison (257 map rays + nested vmap) is exact; capped
+existing vision-suite check is in progress on danilogin. No production changes
+or measured speedup. GPU equivalence and matched N128/T128 collection/full-update
+A/B remain pending; use a new experiment ID when desktop returns.
 
 **PERF-004 MEASUREMENTS / SCOPE UPDATE (09-29, Dani):** All six fixed-N128/T128
 unprofiled collection, PPO and complete-update timing cohorts finished. Complete
