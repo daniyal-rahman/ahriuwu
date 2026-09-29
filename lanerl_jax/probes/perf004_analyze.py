@@ -165,7 +165,23 @@ def summarize(trace_dir, hlo_path, wall_s):
     mapped = missing = 0
     mapping_times, mapping_counts = Counter(), Counter()
     source_examples = {}
+    host_loop_times, host_loop_counts = Counter(), Counter()
+    host_loop_phases, host_phase_intervals = {}, defaultdict(list)
+    host_runtime_times, host_runtime_counts = Counter(), Counter()
     for plane in pd.planes:
+        if plane.name == '/host:CPU':
+            for line in plane.lines:
+                for event in line.events:
+                    if event.name.startswith('while.'):
+                        host_loop_times[event.name] += event.duration_ns
+                        host_loop_counts[event.name] += 1
+                        phases, _ = hlo.info(event.name)
+                        host_loop_phases[event.name] = sorted(phases)
+                        key = '+'.join(sorted(phases))
+                        host_phase_intervals[key].append((event.start_ns, event.start_ns + event.duration_ns))
+                    if event.name in ('command_buffer::execute',) or 'Synchronize' in event.name:
+                        host_runtime_times[event.name] += event.duration_ns
+                        host_runtime_counts[event.name] += 1
         if 'GPU' not in plane.name:
             continue
         for line in plane.lines:
@@ -235,12 +251,18 @@ def summarize(trace_dir, hlo_path, wall_s):
                   gpu_busy_s=busy/1e9, gpu_busy_fraction_of_span=busy/(stop-start),
                   event_sum_s=total/1e9, hlo_mapped_events=mapped, hlo_missing_events=missing,
                   source_mapping=_rows(mapping_times, mapping_counts, total),
+                  host_loops_inclusive=[dict(name=k, ms=v/1e6, calls=host_loop_counts[k],
+                                              phases=host_loop_phases[k])
+                                        for k, v in host_loop_times.most_common()],
+                  host_loop_phase_union_ms={k: union_ns(v)/1e6 for k, v in host_phase_intervals.items()},
+                  host_runtime_inclusive=[dict(name=k, ms=v/1e6, calls=host_runtime_counts[k])
+                                          for k,v in host_runtime_times.most_common()],
                   kernel_duration_us={str(q): ds[min(len(ds)-1, int(q*(len(ds)-1)))] / 1e3
                                       for q in (.5, .9, .99)},
                   events_under_5us=sum(x < 5000 for x in durations),
                   tables={k: _rows(times[k], counts[k], total) for k in times},
                   source_examples=source_examples,
-                  caveat='Shared fusion buckets are not split; phase_inclusive is non-additive. Profiled wall is not unprofiled runtime.')
+                  caveat='Shared fusion buckets are not split; phase_inclusive is non-additive. Profiled wall is not unprofiled runtime. Host loop spans include nested execution/waits; phase unions remove nesting within a phase but outer simulation/rollout spans overlap inner phases. Host spans are not extra GPU time.')
     return result
 
 
