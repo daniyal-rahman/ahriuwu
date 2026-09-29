@@ -51,6 +51,26 @@ def resolve_task(args, manifest):
                 start_near_wave=bool(near), route_artifact=route)
 
 
+def replay_actions(actions):
+    """Preserve both mirror actors; only an absent red actor gets a placeholder."""
+    import jax.numpy as jnp
+    rows = jnp.asarray(actions)
+    if rows.shape == (1, 3):
+        rows = jnp.concatenate([rows, jnp.zeros((1, 3), rows.dtype)])
+    if rows.shape != (2, 3):
+        raise ValueError('expected one or two actor rows')
+    return tuple(rows[:, i] for i in range(3))
+
+
+def click_handling(manifest):
+    saved = manifest.get('config', {})
+    mode = saved.get('collector', {}).get('unwalkable_click',
+        saved.get('vec', {}).get('unwalkable_click', 'resolve'))
+    if mode not in ('noop', 'resolve'):
+        raise ValueError(f'unknown checkpoint click handling: {mode}')
+    return mode
+
+
 def evaluate(args):
     import jax
     import jax.numpy as jnp
@@ -113,9 +133,16 @@ def evaluate(args):
         result['simulation'] = dict(resolved=sim.describe(), fingerprint=sim.fingerprint(),
             route_manifest_sha256=file_sha256(args.out / 'route-manifest.json'))
         teams = (0, 1) if args.red == 'policy' else (0,)
-        collector = JaxFarmCollector(1, args.out, seed=args.seed, sim_config=sim, teams=teams, **task)
+        result['unwalkable_click'] = click_handling(manifest)
+        collector = JaxFarmCollector(1, args.out, seed=args.seed, sim_config=sim, teams=teams,
+            drop_unwalkable_moves=result['unwalkable_click'] == 'noop', **task)
         policy, params, _ = load_params(str(inputs / 'checkpoint.msgpack'))
         initial_parameter_hash = hashlib.sha256(to_bytes(params)).hexdigest()
+        comparison = None
+        if getattr(args, 'compare_checkpoint', None):
+            from ..probes.replay_learning_audit import ReplayComparison
+            comparison = ReplayComparison(args.compare_checkpoint, policy, params, args.out)
+            result['comparison_checkpoint_sha256'] = file_sha256(args.compare_checkpoint)
         key = jax.random.key(args.seed)
 
         recurrent = getattr(policy.cfg, 'core', 'mlp') == 'gru'
@@ -142,12 +169,13 @@ def evaluate(args):
             action, finite, carry = sample(obs, action_key, carry)
             if not bool(finite):
                 raise RuntimeError('nonfinite frozen policy output')
+            if comparison is not None:
+                comparison.observe(obs, action)
             return np.asarray(action)
 
         @jax.jit
-        def snapshot(state, orders, blue):
-            action = tuple(jnp.stack([blue[i], jnp.int32(
-                BUTTON_INDEX['noop'] if i == 0 else 0)]) for i in range(3))
+        def snapshot(state, orders, actors):
+            action = replay_actions(actors)
             # Reuse projection alone; diagnostic raw cursors do not rerun hit
             # tests or select targets. Resolved orders come from collector.step.
             ds, dn = _screen_to_centred_lane((action[1]+.5)/N_SCREEN_X,
@@ -164,11 +192,13 @@ def evaluate(args):
             def record(before, action, orders):
                 nonlocal next_sample_ms
                 t_ms = float(before.t_ms[0])
+                if comparison is not None:
+                    comparison.record(collector, before, action, orders)
                 action_log.write(json.dumps(dict(t_ms=t_ms, blue=action[0].tolist(), red=(action[1].tolist() if len(action) > 1 else None)))+'\n')
                 if args.replay and t_ms >= next_sample_ms:
                     state = jax.tree.map(lambda a: a[0], before)
                     order = jax.tree.map(lambda a: a[0], orders)
-                    logs.append(jax.tree.map(np.asarray, snapshot(state, order, action[0])))
+                    logs.append(jax.tree.map(np.asarray, snapshot(state, order, action)))
                     next_sample_ms = t_ms + 1000. / args.replay_hz - 1.
             bound = math.ceil(task['episode_s']*1000. / (sim.delta_ms*sim.step_ticks)) + 1
             decisions = run_episode(collector, choose, record, bound)
@@ -185,7 +215,7 @@ def evaluate(args):
             rank_decisions=collector.rank_decisions, episodes=collector.episodes)
         if args.replay:
             # Retain terminal totals without taking an extra action or resetting.
-            terminal_action = jnp.array([BUTTON_INDEX['noop'], 0, 0], jnp.int32)
+            terminal_action = jnp.zeros((len(teams), 3), jnp.int32)
             logs.append(jax.tree.map(np.asarray, snapshot(final, collector.noop, terminal_action)))
             data = {k:np.stack([row[k] for row in logs]) for k in logs[0]}
             terrain = sim.terrain
@@ -230,6 +260,7 @@ def main():
     p.add_argument('--red', choices=('idle', 'policy'), default='idle', help='policy: mirror (red under the same policy)')
     p.add_argument('--replay-hz', type=float, default=10.)
     p.add_argument('--label')
+    p.add_argument('--compare-checkpoint', type=Path, help='Diagnostic only: teacher and initial policy on this observation history')
     evaluate(p.parse_args())
 
 

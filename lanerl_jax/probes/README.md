@@ -18,3 +18,5 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 | `smoke_mirror.sh`, `jax_smoke.sh` | Do train → resume → frozen-eval work end to end in mirror mode? | Yes, both engines | 2026-09-25 |
 
 PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static bush-ID collection/full-update timing; semantics deliberately differ (VIS-FAST).
+
+| `replay_learning_audit.py` | Teacher/initial BC/final policy decisions on full replay histories; reward and decoded orders | LEARN-PAIR-04 / E36; shadow actions never executed | 2026-09-29 |

@@ -20,10 +20,18 @@ for arm in spec['arms']:
     shutil.copyfile(source, staged/'checkpoint.msgpack')
     shutil.copyfile(source.parent/'manifest.json', staged/'manifest.json')
     dest = out/arm['id']
+    extra = []
+    if spec.get('compare_checkpoint'):
+        compare = Path(spec['compare_checkpoint'])
+        compare_dir = staged/'comparison'
+        compare_dir.mkdir()
+        shutil.copyfile(compare, compare_dir/'checkpoint.msgpack')
+        shutil.copyfile(compare.parent/'manifest.json', compare_dir/'manifest.json')
+        extra = ['--compare-checkpoint', str(compare_dir/'checkpoint.msgpack')]
     subprocess.run([sys.executable, '-m', 'lanerl_jax.train.jax_eval',
         str(staged/'checkpoint.msgpack'), '--out', str(dest), '--seed', str(spec['seed']),
         '--seconds', str(spec['seconds']), '--step-ticks', '6', '--start-near-wave',
         '--route-artifact', str(scratch/'routes'), '--red', 'policy', '--replay',
-        '--replay-hz', '10', '--label', arm['id']+' final u2500 | mirror | seed '+str(spec['seed'])], check=True)
+        '--replay-hz', '10', '--label', arm.get('label', arm['id']+' final u2500')+' | mirror | seed '+str(spec['seed']), *extra], check=True)
     print('REPLAY READY', dest/'trace.npz', flush=True)
 print('PROFILE COMPLETE', flush=True)

@@ -7,6 +7,19 @@ import pytest
 from lanerl_jax.train.jax_eval import resolve_task, run_episode
 
 
+def test_mirror_recording_preserves_red_action():
+    from lanerl_jax.train.jax_eval import replay_actions
+    assert np.stack(replay_actions([[1, 12, 23], [2, 34, 45]]), -1).tolist() == [[1, 12, 23], [2, 34, 45]]
+    assert np.stack(replay_actions([[1, 12, 23]]), -1).tolist() == [[1, 12, 23], [0, 0, 0]]
+
+
+def test_evaluation_honors_training_click_handling():
+    from lanerl_jax.train.jax_eval import click_handling
+    assert click_handling({'config': {'collector': {'unwalkable_click': 'noop'}}}) == 'noop'
+    assert click_handling({'config': {'vec': {'unwalkable_click': 'noop'}}}) == 'noop'
+    assert click_handling({}) == 'resolve'
+
+
 def test_terminal_transition_recorded_without_reset_or_extra_action():
     class Collector:
         states = 'before'

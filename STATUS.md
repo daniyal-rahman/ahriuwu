@@ -1,5 +1,11 @@
 # STATUS (rewrite in place; last edit 2026-09-29 16:18 UTC, Codex)
 
+**E36 DIAGNOSTIC PREPARED:** Found evaluator omitted training noop-click
+handling and replay replaced red button/cursor with placeholders. Actual red
+orders/state and overnight vectorized frozen evaluations are unaffected by
+those recording bugs. Correcting evaluator; E36 will record BC initial/final
+and random final with teacher/initial-policy shadow comparisons. No training.
+
 **LEARNING EXPLANATION / READ-ONLY AUDIT:** LEARN-PAIR-03 records actual
 click handling, lane shaping, discount horizon, detached linear critic and
 minion-only BC teacher. These are candidate limitations, not diagnosed causes.
