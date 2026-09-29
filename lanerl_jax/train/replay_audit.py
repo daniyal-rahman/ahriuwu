@@ -14,6 +14,23 @@ from lanerl_jax.train.ppo import factored_log_prob
 from lanerl_jax.train.vec_train import _relative_reward, VecConfig
 
 
+def serialize_replay_state(tree):
+    """Flax cannot directly serialize typed PRNG keys embedded in LaneState."""
+    from flax.serialization import to_bytes
+    return to_bytes(jax.tree.map(lambda x: jax.random.key_data(x)
+        if hasattr(x, 'dtype') and jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key) else x, tree))
+
+
+def restore_replay_state(template, payload):
+    from flax.serialization import from_bytes
+    raw_template = jax.tree.map(lambda x: jax.random.key_data(x)
+        if hasattr(x, 'dtype') and jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key) else x, template)
+    raw = from_bytes(raw_template, payload)
+    return jax.tree.map(lambda t, x: jax.random.wrap_key_data(x, impl=jax.random.key_impl(t))
+        if hasattr(t, 'dtype') and jax.dtypes.issubdtype(t.dtype, jax.dtypes.prng_key) else x,
+        template, raw)
+
+
 class ReplayComparison:
     def __init__(self, checkpoint, policy, params, out):
         self.initial_policy, self.initial_params, _ = load_params(str(checkpoint))

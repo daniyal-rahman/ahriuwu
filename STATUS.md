@@ -1,6 +1,8 @@
 # STATUS (rewrite in place; last edit 2026-09-29 18:45 UTC, Codex)
 
-**E37 RUNNING (job1774):** Restore the exact E36b trapped-wave state and recurrent
+**E37 RETRY PREPARED:** Job1774 failed at state serialization after exact
+reconstruction (embedded typed PRNG key). E37b fixes key serialization and
+round-trip verification. Restore the exact E36b trapped-wave state and recurrent
 history; compare40s frozen branches with W/E/Q and alternate movement.
 CPU Slurm preserves the reference backend; desktop is back for subsequent
 learning work. No training configuration changed.

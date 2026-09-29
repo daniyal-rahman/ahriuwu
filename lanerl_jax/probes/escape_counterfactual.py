@@ -16,6 +16,7 @@ from lanerl_jax.train.trainer import _sample
 from lanerl_jax.train.scripted_policy import cell_for_offset
 from lanerl_jax.train.vec_train import _relative_reward,VecConfig
 from lanerl_jax.train.run_manifest import git_provenance,file_sha256
+from lanerl_jax.train.replay_audit import serialize_replay_state,restore_replay_state
 
 
 def main():
@@ -57,7 +58,11 @@ def main():
     for k in ['x','y','hp','cs','deaths']:
         np.testing.assert_allclose(np.asarray(getattr(base,k))[0],trace[k][index],rtol=0,atol=1e-4)
     np.testing.assert_allclose(np.asarray(base.t_ms)[0],trace['t_ms'][index],rtol=0,atol=1e-4)
-    (out/'restored_state.msgpack').write_bytes(to_bytes(dict(state=base,carry=carry,key=jax.random.key_data(key))))
+    saved=dict(state=base,carry=carry,key=key)
+    payload=serialize_replay_state(saved)
+    restored=restore_replay_state(saved,payload)
+    assert serialize_replay_state(restored)==payload
+    (out/'restored_state.msgpack').write_bytes(payload)
     provenance=dict(spec=spec,source=git_provenance(),checkpoint_sha256=file_sha256(out/'checkpoint.msgpack'),
         state_sha256=file_sha256(out/'restored_state.msgpack'),sim=sim.describe(),sim_fingerprint=sim.fingerprint(),
         restored_index=index,start_ms=float(base.t_ms[0]),prefix_max_state_error=max_error,

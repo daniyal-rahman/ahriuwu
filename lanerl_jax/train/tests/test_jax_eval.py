@@ -71,3 +71,17 @@ def test_resolved_route_path_takes_precedence_over_legacy_path_repr():
     manifest = {'config': {'collector': {'route_artifact': "PosixPath('/legacy')"}},
                 'sim': {'resolved': {'route_artifact': '/actual/routes'}}}
     assert resolve_task(args, manifest)['route_artifact'] == '/actual/routes'
+
+
+def test_full_replay_state_roundtrip_preserves_nested_random_keys():
+    import jax
+    from lanerl_jax.train.replay_audit import serialize_replay_state, restore_replay_state
+    original={'state':{'rng':jax.random.key(37),'hp':np.array([123.],np.float32)},
+              'policy_key':jax.random.key(7),'carry':np.ones((2,4),np.float32)}
+    restored=restore_replay_state(original,serialize_replay_state(original))
+    np.testing.assert_array_equal(jax.random.normal(original['state']['rng'],(4,)),
+                                  jax.random.normal(restored['state']['rng'],(4,)))
+    np.testing.assert_array_equal(jax.random.key_data(original['policy_key']),
+                                  jax.random.key_data(restored['policy_key']))
+    np.testing.assert_array_equal(original['carry'],restored['carry'])
+    np.testing.assert_array_equal(original['state']['hp'],restored['state']['hp'])
