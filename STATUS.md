@@ -1,4 +1,12 @@
-# STATUS (rewrite in place; last edit 2026-09-29 01:32 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29 01:50 UTC, Codex)
+
+**DETAILED PROFILE APPROVED (09-29, Dani):** Cover every simulation tick phase,
+observations/actions and GRU PPO at a fixed workload; rank measured bottlenecks
+before optimisation or an environment-count sweep. Prior profiling commits
+pushed to origin/lane-rl/jax. Preserve the existing untracked wall-reward probe
+unchanged as part of the committed starting snapshot. Preparing PERF-004;
+no new job submitted yet. Five-million-token ceiling authorised, not a target
+to spend; no parallel agents requested.
 
 **GRU GPU PROFILE COMPLETE (09-29, Dani):** `PERF003_gru_profile` / job **1757**
 finished successfully. Dry-run, split-vs-fused numerical canary and 180-s startup
