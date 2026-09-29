@@ -49,14 +49,18 @@ def test_relative_reward_matches_collector_path():
     assert abs(float((terms["cs"] + terms["xp"]).sum())) < 1e-5
 
 
-@pytest.mark.parametrize("core,opponent", [("gru", "mirror"), ("mlp", "mirror"), ("gru", "lasthit")])
+@pytest.mark.parametrize("core,opponent", [("gru", "mirror"), ("mlp", "mirror"), ("gru", "lasthit"), ("gru", "frozen")])
 def test_loop_runs_and_actor_learner_agree(core, opponent):
     pcfg = PolicyConfig(core=core, core_norm=(core == "gru"), core_residual=(core == "gru"),
                         d_model=32, n_layers=1, ffn_dim=32, ctx_dim=32, core_dim=32,
                         mlp_hidden=32, mlp_layers=1)
     cfg = VecConfig(n_envs=2, rollout_steps=6, n_updates=2, n_minibatches=2, episode_s=2.0,
                     opponent=opponent, ppo=PPOConfig.standard(decision_hz=10.0), policy=pcfg)
-    built = make_vec_train(cfg, _sim(), _bank())
+    opponent_params = None
+    if opponent == "frozen":
+        reference = make_vec_train(cfg._replace(opponent="mirror"), _sim(), _bank())
+        opponent_params = reference["init_params"](jax.random.key(17))
+    built = make_vec_train(cfg, _sim(), _bank(), opponent_params=opponent_params)
     runner = built["initial_runner"](jax.random.key(0))
     runner2, tr, batch = jax.jit(built["rollout"])(runner)
     lg = built["loss"].forward(runner.params, batch)

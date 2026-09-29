@@ -18,6 +18,7 @@ def launch(spec, dry):
               'bush-ab': 'slurm/bush_ab.sbatch',
               'vision-smoke': 'slurm/vision_smoke.sbatch',
               'paired-vec': 'slurm/paired_vec.sbatch',
+              'wave-scenario': 'slurm/wave_scenario.sbatch',
               'replay-pair': 'slurm/replay_pair.sbatch',
               'escape-counterfactual': 'slurm/escape_counterfactual.sbatch'}[spec['engine']]
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',

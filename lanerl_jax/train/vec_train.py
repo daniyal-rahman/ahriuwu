@@ -64,6 +64,8 @@ class VecConfig(NamedTuple):
     n_minibatches: int = 4
     episode_s: float = 600.0
     step_ticks: int = 6
+    observation_horizon_s: float | None = None
+    stagger_initial: bool = True
     #: distinct prepared start states; each reset draws one uniformly.
     bank_size: int = 32
     start_jitter_s: float = 0.0
@@ -120,6 +122,8 @@ class Transition(NamedTuple):
     deaths: jax.Array
     lane_dist: jax.Array
     click_mask: jax.Array | None
+    hp_at_end: jax.Array
+    kills_at_end: jax.Array
 
 
 def _relative_reward(prev, nxt, cfg: VecConfig):
@@ -151,11 +155,11 @@ def prepare_bank(cfg: VecConfig, sim: SimConfig, out: Path, seed: int):
     return states
 
 
-def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
+def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, opponent_params=None):
     """Build the jittable pieces. `bank` is the stacked reset pytree."""
     from ..parity.policy_driver import _lane_frames
     from .trainer import _sample
-    if cfg.opponent not in ("mirror", "lasthit", "brawler"):
+    if cfg.opponent not in ("mirror", "lasthit", "brawler", "frozen"):
         raise ValueError(f"unknown opponent {cfg.opponent!r}")
     if cfg.unwalkable_click not in ("noop", "resolve"):
         raise ValueError("unwalkable_click must be noop or resolve")
@@ -164,7 +168,9 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
     recurrent = cfg.policy.core == "gru"
     use_mask = bool(cfg.policy.click_mask)
     scripted = None
-    if cfg.opponent != "mirror":
+    if cfg.opponent == "frozen" and opponent_params is None:
+        raise ValueError("frozen opponent requires opponent_params")
+    if cfg.opponent not in ("mirror", "frozen"):
         from .scripted_policy import PLAYERS
         scripted = PLAYERS[cfg.opponent]
     n_learn = cfg.learn_agents
@@ -181,7 +187,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
 
     def _obs(state):
         per = [build_observation(state, t, frames[t], params=sim.params,
-                                 horizon_s=cfg.episode_s, vision=sim.vision) for t in (0, 1)]
+                                 horizon_s=cfg.observation_horizon_s or cfg.episode_s, vision=sim.vision) for t in (0, 1)]
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), *per)
 
     def _apply(params, obs, carry):
@@ -204,6 +210,10 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
             k_act, k_reset = jax.random.split(key)
             obs = _obs(state)
             logits, new_carry = _apply(runner.params, obs, carry)
+            if cfg.opponent == "frozen":
+                fixed, fixed_carry = _apply(opponent_params, obs, carry)
+                logits = jax.tree.map(lambda a,b:a.at[1].set(b[1]), logits, fixed)
+                new_carry = new_carry.at[1].set(fixed_carry[1])
             cm = _click_mask(state)
             action, log_prob, (uses_screen, uses_target) = _sample(
                 logits, k_act, ~obs.entity_pad_mask, cm)
@@ -231,7 +241,9 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
                            action, log_prob, uses_screen, uses_target, logits.value,
                            reward, jnp.broadcast_to(done, reward.shape), terms,
                            cs_at_done, gold_at_done, xp_at_done,
-                           jnp.broadcast_to(done_full, reward.shape), deaths, lane_dist, cm)
+                           jnp.broadcast_to(done_full, reward.shape), deaths, lane_dist, cm,
+                           jnp.where(done_full, nxt.hp[:2]/jnp.maximum(nxt.max_hp[:2],1.), 0.),
+                           jnp.where(done_full, nxt.kills[:2], 0))
             return nxt, new_carry, deadline, t
 
         keys = jax.random.split(sk, cfg.n_envs)
@@ -329,6 +341,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
         floor = start_ms + 2.0 * cfg.rollout_steps / cfg.decision_hz * 1000.0
         deadline_ms = jax.random.uniform(dk, (cfg.n_envs,), jnp.float32,
                                          minval=jnp.minimum(floor, full_ms), maxval=full_ms)
+        if not cfg.stagger_initial:
+            deadline_ms = jnp.full((cfg.n_envs,), full_ms)
         return VecRunner(params, tx.init(params), env_state, carry, rng,
                          jnp.asarray(0, jnp.int32), deadline_ms)
 

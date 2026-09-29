@@ -433,3 +433,32 @@ A pinned Garen-focused dataset can first prove labels/BC offline; simulator
 coverage is required before making closed-loop transfer claims, not before
 all data feasibility work. Modernization needs new modern reference evidence;
 legacy C# parity cannot validate a modern patch. Discussion only; no launches.
+
+### E39 — tower-wave HP advantage curriculum (Dani approved, 2026-09-29)
+
+Question: does repeated short asymmetric lane practice improve the E34 policy?
+Both Garens level3 at own outer tower (projected onto lane,100u forward),
+standard six-minion waves begin250u behind, normal260u marching spacing.
+Initial HP70/100%, swapped across reset pairs. Four small common position offsets
+train; four different offsets held out. Start clock120s; next normal wave
+spawns at150s, then normal cadence.75s finite terminal horizon, not a time-limit
+bootstrap approximation; endpoint HP is evaluated but not rewarded. Normal
+regeneration and all mechanics retained, with recent-damage timer0 at reset.
+One real tick installs L3 XP/stats/ranks before exact HP fractions are applied.
+
+Dani explicitly selected trained random-start E34 final, not fresh random or
+BC. Parameters only; optimizer/step/schedule reset. PPO GRU unchanged, detached
+critic retained, lr3e-5 annealed, entropy.001 to permit further exploration;
+relative gold/XP/lane shaping unchanged. N128/T128,1000updates,2h process cap,
+Slurm2h10. Fixed terminal clock195s; observations retain600s clock normalization
+from source checkpoint; initial stagger disabled so every trial has full75s.
+
+Checks: reset geometry/route indices, minion count, HP-role pairing; real-step
+level/ranks/cooldowns; calibration of second-wave travel; production GRU actor/
+learner log-probs and reward equality; actual checkpoint forward pass. Source
+server does not currently expose this curriculum; no parity claim for reset.
+Frozen64games against self and original E34 at0/100/250/500/750/1000, byHP role,
+on held-out starts. Compare CS/gold, kills/deaths, terminalHP, spell selections.
+Screen success: improvement versus fixed E34 from both initialHP roles without
+collapse of farming; report separate metrics, no post-hoc composite winner.
+Stop at budget or nonfinite training; one training seed, no universalclaim.

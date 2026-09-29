@@ -1,8 +1,9 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**STRATEGY DISCUSSION:** No new runs or runtime changes. Proposed explicit
-observation-history summaries versus GRU, and a bounded modern replay-data
-slice; details in EXPERIMENT_METHOD. E38b remains failed/repaired, not retried.
+**E39 PREPARING:** Dani authorized75s level3 tower/wave HP-advantage curriculum
+and explicitly chose trained random-start E34 final. Both roles70/100HP,
+fresh optimizer; same physics/reward. Setup/launcher/tests in progress;
+no new job launched yet. E38b is superseded for now, not retried.
 
 **E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full
 state/carry/RNG exactly; recorded40s control error0, sampled reconstruction
