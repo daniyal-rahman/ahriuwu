@@ -2,8 +2,8 @@
 
 **PERF-005 RETRY:** Job 1764 passed exact GPU comparison of 131073 map rays
 and nested vmap; integration tests then failed because debug callbacks need
-CPU backend enabled alongside CUDA. `PERF005e_vision_ab` prepared with that
-launcher fix. Prior 1762/1763 failed unsupported reduction lowering, fixed by
+CPU backend enabled alongside CUDA. `PERF005e_vision_ab` submitted as job 1765 with that
+launcher fix; dry-run passed, startup gates pending. Prior 1762/1763 failed unsupported reduction lowering, fixed by
 reducing remaining cell counts. No timing results or production changes.
 
 **PERF-005 GPU BLOCKED:** Probe committed/pushed at `0887a33`. Dry-run passed;
