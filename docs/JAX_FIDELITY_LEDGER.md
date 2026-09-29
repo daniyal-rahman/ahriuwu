@@ -1624,3 +1624,46 @@ identify next experiments, not a proven PPO or collision implementation defect.
 
 All four MP4s visually inspected via previews and fully decoded with ffmpeg;
 H.2641280x800, full episodes60s at8x and incident12.07s at1x.
+
+### LEARN-PAIR-05 — exact trapped-state intervention (2026-09-29; E37b complete)
+
+CPU Slurm1775 completed exit0 in9m16s; canary and180s watch passed. E37 job1774
+failed only at nested typed-PRNG-key serialization, fixed with lossless key
+round-trip (7 focused evaluator tests). Source: `probes/escape_counterfactual.py`.
+Artifacts: `/mnt/nfs/shared/E37b_escape_counterfactual/` (summary, full state,
+per-branch frames, checkpoint hash, provenance). Reconstructed3468 decisions
+at game467.904s: state exact, sampled-action mismatches0; recorded control
+40s x/y/hp/cs/death error0; frozen reactive-policy control identical summary.
+
+| Intervention, then original frozen policy | First death | CS gained over40s | Discounted return gamma.99 |
+|---|---:|---:|---:|
+| Control |5.696s|0|−0.279|
+| W once |5.696s|0|−0.188|
+| E once |None in40s|11|7.599|
+| Q once |5.696s|0|−0.279|
+| W then E |17.089s|7|6.931|
+| Reverse for1s |6.496s|0|−0.404|
+| Left for1s |5.696s|0|−0.279|
+| Right for1s |5.996s|0|−0.212|
+| E then reverse for1s |None in40s|12|9.640|
+
+These are forced actions in ONE exact state, not a learned policy or aggregate
+improvement. E damages nearby minions and enables movement through units; this
+experiment does not separate those effects. A single brief reverse helps movement
+but the original policy returns to danger. E alone survives narrowly (26HP at20s).
+The present reward already strongly prefers the successful E branch, despite
+poor delayed-death attribution: control return−0.279 under gamma.99 versus−3.326
+with a60s exponential discount horizon. Changing gamma was diagnostic only.
+
+**W active mitigation is an existing server bug, not a new learning failure.**
+`sim/spells.py:996` intentionally returns a1.0 damage multiplier. Read-only vendor
+verification: `AttackableUnits/AttackableUnit.cs:551` copies PostMitigationDamage
+before OnPreTakeDamage at558; HP subtraction at585 reads the stale copy.
+`Buffs/Garen/GarenW.cs:54` modifies the object to0.7 after the copy. W activates
+in replay but early HP losses/death time equal control. Passive resists still
+exist; this finding concerns active damage reduction. No vendor changes made.
+
+Next: E38b bounded E-only exploration initialization, gated on retaining90% of
+initial frozen farming performance. W/E E38 protocol never launched. This tests
+whether making a useful but almost-never-sampled action available helps learning;
+it does not claim biasing E globally is a final training recipe.

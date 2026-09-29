@@ -1,12 +1,16 @@
-# STATUS (rewrite in place; last edit 2026-09-29 18:45 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E37b RUNNING (job1775):** Job1774 failed at state serialization after exact
-reconstruction (embedded typed PRNG key). E37b fixes key serialization and
-round-trip verification (7 focused tests passed; dry-run passed). Job1775
-canary and180-second startup watch passed. E38 remains prepared, not launched. Restore the exact E36b trapped-wave state and recurrent
-history; compare40s frozen branches with W/E/Q and alternate movement.
-CPU Slurm preserves the reference backend; desktop is back for subsequent
-learning work. No training configuration changed.
+**E37b COMPLETE:** Slurm1775 exit0 in9m16s; all10 branches. Restored full
+state/carry/RNG exactly; recorded40s control error0, sampled reconstruction
+mismatches0. Baseline dies5.70s,+0CS; one E survives40s,+11CS; E then1s
+reverse survives,+12CS. W does not reduce damage: existing C# stale-local
+bug deliberately mirrored in JAX, verified source read-only. No vendor edits.
+Evidence: LEARN-PAIR-05 and `/mnt/nfs/shared/E37b_escape_counterfactual/`.
+
+**E38b PREPARED:** bounded100-update BC/control versus BC/E-bias+10 test,
+frozen128-game mirror/heuristic at0/50/100. Initial candidate must retain90%
+of baseline heuristic-match CS or neither arm trains. Fresh optimizers; same
+PPO/reward/physics. E38 W/E protocol not launched, superseded after E37b.
 
 **E36 LEARNING AUDIT COMPLETE:** CPU Slurm job1773 completed exit0 in30m04s;
 GPU job1772 cancelled before execution because desktop was unavailable.
