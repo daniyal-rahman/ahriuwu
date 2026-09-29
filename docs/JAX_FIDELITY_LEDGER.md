@@ -1460,3 +1460,10 @@ mirror6.6328/3.8828, vs heuristic5.7813/51.7891 CS and -639.7902 gold difference
 128 sampled games/mode from16 held-out prepared starts, one model initialization
 seed. Both arms completed/checkpointed first100 updates without nonfinite-loss
 flags; this establishes health, not improvement. Overnight results pending.
+
+E33/E34 interim frozen u500: BC mirror38.73/38.45 and vs heuristic38.30/44.91,
+mean gold difference -159.7 (worse than u0). Random mirror18.53/14.56 and vs
+heuristic19.30/34.38, gold difference +501.0 (u0 -639.8): positive learning
+against fixed opponent, though CS remains below the teacher. Same held-out
+starts/action seeds as u0; no hyperparameter changes or early model selection.
+Runs remain numerically healthy and continue to the fixed budget.
