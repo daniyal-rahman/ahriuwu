@@ -6,6 +6,7 @@ LEGACY = kept for history only; nothing imports it.
 
 | Path | Class | Role |
 |---|---|---|
+| `ops/gru_profile_launch.py`, `slurm/gru_profile.sbatch` | TOOL | Bounded PERF-003 GPU diagnostic through `ops/launch.py`; exact GRU split/fused canary, rollout/learner time and memory, no model checkpoints |
 | `lanerl_jax/train/server_train.py` | LIVE | C# server PPO collector (idle / mirror), resume, frozen eval; the entry point for all current runs |
 | `lanerl_jax/train/learner.py`, `ppo.py`, `policy.py` | LIVE | shared PPO loss/optimiser, factored heads, the network |
 | `lanerl_jax/obs/builder.py`, `obs/frame.py`, `obs/fog.py`, `obs/vision.py` | LIVE | observation contract `viewport-structured-v3` |

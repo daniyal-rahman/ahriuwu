@@ -263,9 +263,13 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
             b["carry0"] = carry0[:, :n_learn].reshape(n_rows, core_dim)
         return b
 
-    def _update(runner: VecRunner, _):
+    def collect(runner: VecRunner):
         carry0 = runner.carry
         runner, tr = jax.lax.scan(_env_step, runner, None, length=cfg.rollout_steps)
+        return runner, tr, carry0
+
+    def learn(runner: VecRunner, tr: Transition, carry0):
+        """The unchanged update half, exposed for separate timing/memory checks."""
         last_obs = jax.vmap(_obs)(runner.env_state)
         last_logits, _ = jax.vmap(lambda o, c: _apply(runner.params, o, c))(last_obs, runner.carry)
         adv, returns = gae(tr.reward, tr.value, tr.done, last_logits.value,
@@ -300,6 +304,9 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
                                  step=runner.step + n_rows * cfg.rollout_steps)
         return runner, metrics
 
+    def _update(runner: VecRunner, _):
+        return learn(*collect(runner))
+
     def init_params(rng):
         obs0 = _obs(jax.tree.map(lambda b: b[0], bank))
         carry = policy.initial_carry((2,)) if recurrent else None
@@ -333,7 +340,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None):
         return runner, tr, _batch(tr, zeros, zeros, carry0)
 
     return dict(initial_runner=initial_runner, run_chunk=run_chunk, rollout=rollout,
-                init_params=init_params, policy=policy, loss=loss)
+                init_params=init_params, policy=policy, loss=loss,
+                collect=collect, learn=learn)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -6,6 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `PERF003_gru_profile` | 09-29 | JAX GPU diagnostic | GRU rollout/learner time and memory, 16/128 envs | standard 4x4 PPO, norm/residual GRU | T128, 3 fixed-input repeats; canary T4 | QUEUED job 1757; dry-run passed, canary/watch pending | No saved model or learning claim |
 | `E24_dagger_reference_relative/seed0` | 09-28 | C# | DAgger-2 BC initialization vs fixed heuristic, sides alternate, start jitter 20 s | reference PPO, lr 1e-5, detached critic, relative gold/XP/lane only, no KL prior | 400 updates, 409600 decisions | COMPLETE job 1717 at u400; frozen comparisons in progress; no improvement verdict yet | fixed u400 endpoint; success is NOT yet measured |
 | `E25_dagger_teacher_baseline/seed{2,3}` | 09-28 | C# | Frozen initial DAgger-2 clone vs heuristic, paired held-out starts | none | 16 total games (8 per side) | COMPLETE seeds [2, 3]; frozen episodes recorded; paired verdict pending | baseline for PPO improvement beyond initialization |
 | `E26_heuristic_teacher_baseline/seed{2,3}` | 09-28 | C# | Heuristic vs heuristic, same held-out starts | none | 16 total games (8 per side) | COMPLETE seeds [2, 3]; frozen episodes recorded; paired verdict pending | baseline for improvement beyond the teacher |

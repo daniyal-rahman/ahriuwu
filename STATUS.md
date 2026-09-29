@@ -1,4 +1,12 @@
-# STATUS (rewrite in place; last edit 2026-09-28 22:37 UTC, Codex)
+# STATUS (rewrite in place; last edit 2026-09-29, Codex)
+
+**GRU GPU PROFILE (09-29, Dani):** Desktop is back; existing Claude jobs
+1754 (frozen vec check) and 1756 (512-env MLP benchmark) left untouched.
+QUEUED `PERF003_gru_profile`, Slurm **1757**, through `ops/launch.py`: same GRU collection
+and learning halves exposed for instrumentation (no numerical changes),
+2-env/4-step split-vs-fused canary, then 16/128-env T128 timing and memory.
+All benchmark optimizer outputs are discarded; no training/checkpoint run.
+Dry-run passed; canary/startup watch pending GPU allocation. Earlier desktop-down statements below are historical.
 
 **CPU TIMING CHECK (09-28, Dani; desktop remains unavailable):** Read today’s
 Claude handoff; no training/evaluation launches or production changes. PERF-002

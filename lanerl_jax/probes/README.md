@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `gru_throughput.py` | Actual GRU rollout versus learner wall time and memory at 16/128 envs? | PERF-003; `ops/launch.py PERF003_gru_profile`, split/fused canary, no saved model | 2026-09-29 |
 | `jax_time_breakdown.py` | Where does current JAX decision time go on capped danilogin CPU? | PERF-002: populated-lane component timings and collision/help controls; no training | 2026-09-28 |
 | `profile_collector.py` | Where does a server-collector decision's wall time go? | observe() was 4 ms/env of eager JAX; now ~0.9 ms/env. `THROUGHPUT` note in STATUS | 2026-09-25 |
 | `probe.sh` | 8 servers at 30 Hz vs 10 Hz: is the server tick the bottleneck? | No: 1.0 s per 256 decisions either way (Python-bound) | 2026-09-25 |
