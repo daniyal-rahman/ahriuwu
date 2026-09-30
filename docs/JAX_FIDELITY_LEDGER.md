@@ -1987,3 +1987,5 @@ may draw gray dead markers; these are not actor input. No training changes.
 Next focused interpretability option: fixed-memory HP/distance/enemy-threat input
 interventions, then real short-rollout validation and a small isolated learning
 check if needed. Attention weights alone cannot establish causal use of a feature.
+
+| LEARN-PAIR-09 | E45 RUNNING | Frozen u4050 caster state: actor HP/distance/threat sensitivity,16 remaining-horizon MC returns, temperature .5/1/2 and argmax, isolated two-update PPO test. | Local learning uses only fresh unforced on-policy trajectories from state after1s directed approach; forced actions are not fed to PPO.512 champion decisions, lr3e-5, fresh optimizer, old red frozen. No weights exported or live job changes. Fixed-memory interventions can be off-distribution; MC is one state. |
