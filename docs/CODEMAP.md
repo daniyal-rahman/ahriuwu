@@ -50,3 +50,5 @@ TOOL: `ops/slurm_event_test.py`, `slurm/event_test.sbatch`: OPS047 bounded Slurm
 TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failure wake into the current T3 conversation; arm after launcher health watch. OPS047 retains the separate array test.
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
+
+TOOL: `ops/figures/afk_lr_comparison.py` regenerates the E50/E51 frozen CS/deaths/personal tower comparison in `docs/figures/E50_E51_comparison.png`.
