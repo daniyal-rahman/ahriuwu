@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E44 RUNNING — CPU1784:** Original caster incident trajectories, critic estimates and1x branch videos. E40 unchanged.
+**E44 COMPLETE — CPU1784 exit0,5m18s:** Original plus4 fresh policy paths miss caster; directed branch kills exact target at1.8s, same HP outcomes. Diagnostic initial GAE positive for directed branch, negative for natural paths; not historical training attribution. Normal-speed branch videos saved; LEARN-PAIR-08. E40 job1780 unchanged.
 
 **E43 COMPLETE — CPU1783 exit0 in9m08s:** Both original E41 mirror traces
 and restored branch controls match exactly. At30.9s fullHP caster opportunity,

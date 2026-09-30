@@ -1957,3 +1957,33 @@ and tie ordering). No exact whole-scenario symmetry test claimed. Shared weights
 separate recurrent state. Keep canonicalization; a side bit would permit learning
 side-dependent behavior but would not enforce symmetry or replace this transform.
 No training, reward, or physics changes made in this diagnostic.
+
+LEARN-PAIR-08 E44 complete (CPU1784 exit0,5m18s;8canaries/180s watch):
+Exact original E41 reconstruction and branch control. Original plus4 freshly
+sampled8s continuations all0CS; targeted3s branch1CS at1.8s. The CS event
+coincides with caster slot8 dying and blue AA target8, confirming target kill.
+Health changes identical across all6 branches. Four samples change both policies'
+RNG; they are illustrative, not a success-probability estimate or historical tree.
+Natural branches issue70–72 movement commands/80,3–6 attack-moves. Original
+caster distance at0/1/2/3/4/5s:639/621/655/654/690/727u; caster dies by6s.
+Initial V=-.0381 shared across branches. Discounted8s reward control.202 vs
+attack.765; reward plus gamma^80 V(final):.096 vs.733. Raw initial truncated
+GAE(gamma.99,lambda.95) control−.084, samples−.062 to−.092, attack+.056.
+These are diagnostic off-policy forced-branch values, not actual PPO updates,
+not minibatch-normalized advantages, and use the critic itself for the terminal
+bootstrap. They do not prove critic accuracy or historical credit assignment;
+they weaken an immediate wrong-sign critic explanation for this exact state.
+Summary computation is versioned in wave_audit_summary.py. Per-decision values,
+rewards, buttons and branch traces live in E44 low_team_1/counterfactuals.json
+and caster_309_{control,attack3s,sample_0,sample_1,sample_2,sample_3}/trace.npz.
+Normal-speed8s branch videos in control/attack3s directories. Original12s clip
+(2:28–2:40 game clock) E43 low_team_1/caster_incident/replay.mp4.
+
+Dead champion observation audit: builder.py base eligibility includes state.alive;
+dead enemy champion slot is padded/zero, visibility flag0. Self has explicit dead
+flag; enemy has no explicit death/respawn flag. Absent enemy could mean dead,
+fogged or outside viewport. GRU can retain witnessed history. Omniscient replay
+may draw gray dead markers; these are not actor input. No training changes.
+Next focused interpretability option: fixed-memory HP/distance/enemy-threat input
+interventions, then real short-rollout validation and a small isolated learning
+check if needed. Attention weights alone cannot establish causal use of a feature.

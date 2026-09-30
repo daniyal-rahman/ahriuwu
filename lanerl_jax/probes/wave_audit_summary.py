@@ -27,5 +27,13 @@ def main():
         for r in json.loads(cf.read_text()):
             c=r['case'];p=c['button_probs']
             report['branches'].append(dict(time=c['seconds'],category=c['category'],e_active=c['e_active'],hp=c['hp'],distance=c['distance'],aa_cd=c['aa_cd'],p_attack_move=p[2],p_move=p[1],p_e=p[5],cursor_near125_mass=c['cursor_within125_mass'],branch=r['branch'],cs_gain=r['cs_gain'],hp_change=r['hp_change'],reward=r['reward'],first_cs_s=r['first_cs_s'],control_error=r['control_error']))
+            if 'decisions' in r:
+                ds=r['decisions'];gae=0.
+                for i in range(len(ds)-1,-1,-1):
+                    vn=ds[i+1]['value'] if i+1<len(ds) else r['bootstrap_value']
+                    gae=ds[i]['reward']+.99*vn-ds[i]['value']+.99*.95*gae
+                report['branches'][-1].update(initial_value=ds[0]['value'],
+                    discounted_reward=r['discounted_reward'],bootstrap_value=r['bootstrap_value'],
+                    bootstrapped_return=r['bootstrapped_return'],diagnostic_initial_gae=gae)
     print(json.dumps(report,indent=2))
 if __name__=='__main__':main()

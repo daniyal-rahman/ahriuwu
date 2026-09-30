@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E44_caster_trajectory` | 09-30 | CPU frozen diagnostic | Original caster incident: branch videos, four policy samples and critic estimates | E40u4050 | one game plus8s branches | RUNNING1784; startup watch pending | No training edits |
+| `E44_caster_trajectory` | 09-30 | CPU frozen diagnostic | Original caster incident: branch videos, four policy samples and critic estimates | E40u4050 | one game plus8s branches | COMPLETE1784 exit0,5m18s;8canaries/180s watch passed | No training edits |
 | `E43_mirror_caster_audit` | 09-30 | CPU frozen diagnostic | Reproduce E41u4050 mirror caster opportunities, both HP roles | Frozen policies |2games plus8s branches | COMPLETE1783 exit0,9m08s;8 canaries/180s watch passed | Original replay and branch controls exact; caster intervention recovers1CS vs0 |
 | `E42_caster_trade_audit` | 09-30 | CPU frozen diagnostic | E40u4400 fullHP vs original E34 lowHP; caster/trade branches and animated75s video | Frozen policies |1game,up to6states×8s interventions | COMPLETE1782 exit0,4m49s;8canaries/180s watch; exact controls | Controls must reproduce recorded state; cursor mass is geometric, not complete attack probability |
 | `E41_wave_video` | 09-30 | CPU frozen replay | E40 u4050,75s mirror, both HP roles, offset−45 | Frozen weights |2games | COMPLETE CPU1781 exit0,4m17s;4canaries/180s watch passed;2 normal-speed MP4s | Diagnostic videos, not aggregate scores |
