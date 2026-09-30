@@ -259,6 +259,8 @@ def tick(state: LaneState, params: UnitParams,
     dtype = state.x.dtype
     # Every stat is a gather through the unit's profile row: a minion slot is
     # reused by whatever spawns into it, so stats cannot be baked per slot.
+    from . import modern as modern_rules
+    was_dashing = state.champion.dash_ms > 0
     P = lambda k: params[k][state.model]          # noqa: E731
     # `Game.Update` (`Game.cs:474-497`): `GameTime += diff` runs BEFORE
     # `Map.Update` and `ObjectManager.Update` in the SAME call -- so every
@@ -474,24 +476,29 @@ def tick(state: LaneState, params: UnitParams,
         percent_base_bonus=wp.mr_percent_base_bonus, flat_bonus=0.0,
         percent_bonus=wp.mr_percent_bonus)
 
-    bs = step_buffs(
-        buffs=buffs_in, spell_cooldown=state.spell_cooldown,
-        spell_level=state.spell_level,
-        x=state.x, y=state.y, kind=state.kind, team=state.team,
-        alive=state.alive, armor=armor_eff,
-        magic_resist=magic_resist_eff, hp=state.hp, max_hp=state.max_hp,
-        # E's 330 is centre-to-EDGE on the server: `GetUnitsInRange` tests the
-        # quadtree's per-unit collision circle, so the effective radius is
-        # 330 + r_target (370 vs minions, 360 vs champions).
-        collision_radius=P("collision_radius"),
-        delta_ms=delta_ms)
+    if state.modern:
+        armor_eff, magic_resist_eff = modern_rules.effective_stats(state, params, armor_now, magic_resist_now)
+        state, bs = modern_rules.advance(state, params, armor_eff, magic_resist_eff, delta_ms)
+    else:
+        bs = step_buffs(
+            buffs=buffs_in, spell_cooldown=state.spell_cooldown,
+            spell_level=state.spell_level,
+            x=state.x, y=state.y, kind=state.kind, team=state.team,
+            alive=state.alive, armor=armor_eff,
+            magic_resist=magic_resist_eff, hp=state.hp, max_hp=state.max_hp,
+            # E's 330 is centre-to-EDGE on the server: `GetUnitsInRange` tests the
+            # quadtree's per-unit collision circle, so the effective radius is
+            # 330 + r_target (370 vs minions, 360 vs champions).
+            collision_radius=P("collision_radius"),
+            delta_ms=delta_ms)
 
     # ---- 6. Stats.Update: HP regen (AttackableUnit.Update, after buffs) -----
     # Right after UpdateBuffs and before Move, on its own 500 ms accumulator.
     # Not modelling this is why our champion died 7 times in an oracle-driven
     # 600 s episode where the server's died 0 -- see `sim/regen.py`.
     rg = step_regen(
-        hp=state.hp, max_hp=state.max_hp, alive=state.alive, kind=state.kind,
+        hp=state.hp, max_hp=state.max_hp, alive=state.alive,
+        kind=jnp.where(state.kind == Kind.CHAMPION, Kind.NONE, state.kind) if state.modern else state.kind,
         level=state.level,
         hp_regen=P("hp_regen") + P("hp_regen_per_level") * level_growth,
         stat_timer=state.stat_timer, heal_timer=state.heal_timer,
@@ -532,7 +539,10 @@ def tick(state: LaneState, params: UnitParams,
     # (`CanChangeWaypoints` has `!IsDead`; `orders.py` gates on `alive`), so
     # the corpse only finishes the route it had. Dead MINIONS are removed on
     # the server (`SetToRemove` in `AttackableUnit.Die`) and stay frozen here.
-    corpse_walks = state.kind == Kind.CHAMPION
+    corpse_walks = (state.kind == Kind.CHAMPION) & (not state.modern)
+    if state.modern:
+        move_speed *= jnp.where((state.champion.stun_ms > 0) | was_dashing, jnp.asarray(0.,dtype), 1.)
+        move_speed *= 1 - jnp.where(state.champion.slow_ms > 0, state.champion.slow_amount, 0.)
     x, y, wp_key, _ = step_move_units(
         state.x, state.y, state.waypoints, state.waypoint_key,
         state.n_waypoints, move_speed,
@@ -811,6 +821,8 @@ def tick(state: LaneState, params: UnitParams,
     # `idealRange = Stats.Range.Total + TargetUnit.CollisionRadius` -- edge to
     # edge, the attacker's own radius deliberately excluded.
     ideal = P("attack_range") + P("collision_radius")[tgt]
+    if state.modern:
+        ideal += modern_rules.attack_range_bonus(state)
     in_rng = d2 <= ideal * ideal
     has_tgt = target >= 0
     # `ENT-01`. `UpdateTarget`'s swing/chase/hold branch sits inside
@@ -981,6 +993,9 @@ def tick(state: LaneState, params: UnitParams,
     attack_speed_multiplier = (
         1.0 + (P("attack_speed_per_level") / 100.0)
         * level_growth)
+    if state.modern:
+        ad_now += state.champion.bonus_ad
+        attack_speed_multiplier += modern_rules.attack_speed_bonus(state, params)
     attack_period_now = P("attack_period") / attack_speed_multiplier
     attack_windup_now = P("attack_windup") / attack_speed_multiplier
     raw_ad = _attack_damage_against(
@@ -992,7 +1007,7 @@ def tick(state: LaneState, params: UnitParams,
         # `SetStatus(CanAttack, false)` for Judgment's duration, and no
         # swing through a recall or R's windup -- the post-`UpdateBuffs`
         # status, with this tick's recall/R timers.
-        can_attack=status(
+        can_attack=modern_rules.status(state).can_attack if state.modern else status(
             bs.buffs, alive=state.alive, spell_level=state.spell_level,
             spell_cooldown=bs.spell_cooldown, silenced_ms=state.silenced_ms,
             recall_windup_ms=recall_windup, recall_channel_ms=recall_channel,
@@ -1006,9 +1021,10 @@ def tick(state: LaneState, params: UnitParams,
         # swing uses GarenQAttack's complete replacement damage, not normal AD
         # plus an extra component.
         empowered_attack=bs.q_empowered,
-        empowered_damage=q_damage_at_rank(state.spell_level[:, Slot.Q], ad_now),
+        empowered_damage=(30 * state.spell_level[:, Slot.Q] + 1.5 * ad_now) if state.modern else q_damage_at_rank(state.spell_level[:, Slot.Q], ad_now),
         skip_next_autoattack=bs.q_skip_next,
         may_engage=hostile,
+        uncancellable=(bs.q_empowered | (state.champion.jax_w_ms>0)) if state.modern else False,
         swing_target_gone=swing_target_gone,
         swing_target_changed=(state.aa_target >= 0) & (state.aa_target != target),
         delta_ms=delta_ms, xp=jnp)
@@ -1023,6 +1039,10 @@ def tick(state: LaneState, params: UnitParams,
     # `SkipNextAutoAttack` is consumed at the swing gate, before the real
     # GarenQAttack swing begins.
     buffs_out = consume_q_skip(buffs_out, aa.consumed_skip)
+    if state.modern:
+        state, aa_damage, q_landed, buffs_out = modern_rules.auto_hits(state, params, aa, hit_tgt, armor_eff, magic_resist_eff, bs.buffs)
+        aa = aa._replace(damage=aa_damage)
+        spell_cooldown_out = state.spell_cooldown
     # GarenQAttack applies silence to the unit hit. Status duration is carried
     # explicitly so subsequent semantic cast orders fail exactly while the
     # server's CanCast flag is suppressed. Multiple simultaneous Q hits use
@@ -1031,6 +1051,8 @@ def tick(state: LaneState, params: UnitParams,
         state.silenced_ms - jnp.asarray(delta_ms, dtype), 0.0)
     silence_by_attacker = (
         q_silence_duration_at_rank(state.spell_level[:, Slot.Q]) * 1000.0)
+    if state.modern:
+        silence_by_attacker = jnp.full_like(silence_by_attacker, 1500.) * jnp.where(state.champion.shield_ms[hit_tgt] > 0, jnp.asarray(.4,dtype), 1.)
     silence_added = jnp.zeros_like(silence_left).at[hit_tgt].max(
         jnp.where(q_landed, silence_by_attacker, 0.0))
     silenced_ms = jnp.maximum(silence_left, silence_added)
@@ -1075,7 +1097,12 @@ def tick(state: LaneState, params: UnitParams,
     # A missile that lands this tick is credited to the unit that FIRED it, in
     # that unit's own attacker row, so the lowest-index-crosses-zero rule below
     # sees melee hits and missile hits in one ordering rather than two.
-    dmg_ij = dmg_ij + ms.damage_ij
+    missile_damage = ms.damage_ij
+    if state.modern:
+        dodged = (state.champion.jax_e_ms[None, :] > 0) & (state.kind[:, None] != Kind.TURRET) & (missile_damage > 0)
+        state = state.replace(champion=state.champion.replace(jax_e_dodges=state.champion.jax_e_dodges+dodged.sum(0)))
+        missile_damage = jnp.where(dodged, 0., missile_damage)
+    dmg_ij = dmg_ij + missile_damage
     # `SLOT-003`: a missile whose shooter's slot was recycled while it flew.
     # The server lands it and credits the DEAD owner object (see
     # `step_missiles`). Its damage is real -- hp, W's multiplier, a recall
@@ -1086,6 +1113,24 @@ def tick(state: LaneState, params: UnitParams,
     # instead is written where it is read below. The shooter is always a
     # lane minion: only `spawn_minion` recycles a slot.
     orphan_dmg = jnp.zeros((n,), dtype).at[ms.victim].add(ms.orphan_damage)
+
+    combat_damage = dmg_ij
+    combat_buff_damage = bs.damage_dealt
+    if state.modern:
+        orphan_dodges=jnp.zeros_like(state.hp).at[ms.victim].add(((ms.orphan_damage>0)&(state.champion.jax_e_ms[ms.victim]>0)).astype(dtype))
+        state=state.replace(champion=state.champion.replace(jax_e_dodges=state.champion.jax_e_dodges+orphan_dodges))
+        orphan_dmg = jnp.where(state.champion.jax_e_ms > 0, 0., orphan_dmg)
+        dr = jnp.where(bs.buffs.w.active, 1-modern_rules.ranked('Garen','W','DRPercent',bs.buffs.w.rank), 1.)
+        dmg_ij *= dr[None, :]
+        orphan_dmg *= dr
+        # Shields consume incoming packets before health and kill attribution.
+        rows = jnp.concatenate([bs.damage_dealt[None,:], dmg_ij, orphan_dmg[None,:]], axis=0)
+        cumulative = jnp.cumsum(rows, axis=0)
+        hp_damage = jnp.maximum(cumulative-state.champion.shield[None,:], 0.)
+        rows = hp_damage-jnp.concatenate([jnp.zeros_like(hp_damage[:1]), hp_damage[:-1]], axis=0)
+        state = state.replace(champion=state.champion.replace(shield=jnp.maximum(0., state.champion.shield-cumulative[-1])))
+        bs = bs._replace(damage_dealt=rows[0])
+        dmg_ij, orphan_dmg = rows[1:-1], rows[-1]
 
     # ---- 17. Champion._championHitFlagTimer / _playerHitId ------------------
     # `Champion.TakeDamage` (`Champion.cs:569-575`) resets these on EVERY hit
@@ -1184,6 +1229,8 @@ def tick(state: LaneState, params: UnitParams,
     hit_by_combat = ((
         jnp.where(breaks_combat_pair, dmg_ij, 0.0).sum(axis=0)
         + bs.damage_dealt) > 0) | orphan_combat
+    if state.modern:
+        hit_by_combat = ((combat_damage * ((state.kind == Kind.CHAMPION) | (state.kind == Kind.TURRET))[:,None]).sum(0) + combat_buff_damage) > 0
     ms_since_damaged = jnp.where(
         hit_by_combat, jnp.zeros_like(state.ms_since_damaged),
         state.ms_since_damaged + delta_ms)
@@ -1409,6 +1456,8 @@ def tick(state: LaneState, params: UnitParams,
         (state.kind == Kind.CHAMPION)[:, None],
         _RANK_TABLE[jnp.clip(level.astype(jnp.int32), 0, 18)],
         state.spell_level)
+    if state.modern:
+        spell_level = modern_rules.skill_ranks(state, level)
     # `W.OnLevelUpSpell` installs its permanent passive synchronously when W
     # first receives a rank.  ``step_buffs`` correctly applies the passive to
     # incoming ranks, but level-up happens later in this tick after XP is
@@ -1530,7 +1579,7 @@ def tick(state: LaneState, params: UnitParams,
         state.observed_enemy_cast_ms,
     )
 
-    return state.replace(
+    result = state.replace(
         respawn_ms=rt, deaths=deaths,
         t_ms=state.t_ms + jnp.asarray(delta_ms, dtype),
         tick=state.tick + 1,
@@ -1600,6 +1649,9 @@ def tick(state: LaneState, params: UnitParams,
         help_priority=help_priority,
     )
 
+    if state.modern:
+        return modern_rules.finish(result, state.alive, died, reborn, killer)
+    return result
 
 def step_decision(state: LaneState, params: UnitParams,
                   step_ticks: int = 2, delta_ms: float = TICK_MS,

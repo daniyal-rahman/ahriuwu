@@ -254,6 +254,9 @@ def orders_from(action, state, slot_unit, frame=None,
     picked = jnp.argmin(jnp.where(eligible, under_cursor, jnp.inf), axis=1)
     has_target = jnp.any(eligible, axis=1) & (state.team[picked] != state.team[:2])
     target = jnp.where(has_target, picked, -1)
+    if state.modern:
+        jax_q = (state.champion.id[:2] == 24) & (button == BUTTON_INDEX["q"])
+        target = jnp.where(jax_q & jnp.any(eligible,axis=1),picked,target)
     is_attack_move = button == BUTTON_INDEX["attack_move"]
     in_minimap = (screen_x >= MINIMAP_X_MIN) & (screen_y >= MINIMAP_Y_MIN)
 

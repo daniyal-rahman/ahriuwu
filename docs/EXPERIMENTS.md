@@ -143,3 +143,17 @@ Frozen evaluations (the only numbers that count for the gate):
 | `EVAL/eval_u3140.out` | E06 seed 0, update 3140 (8.0M decisions) | same | 4 envs x 1 | 15.5 / 15 / 12-20 | 14.3 / 15 / 11-16 | - | seventh evaluation in the 12-20 band; train chunks 15-19 |
 | `EVAL/eval_u3460.out` | E06 seed 0, update 3460 (8.9M decisions) | same | 4 envs x 1 | 22.5 / 21.5 / 16-31 | 20.8 / 20.5 / 15-27 | - | best so far, both sides above 20; train chunks 16-21 with 31-33 episodes |
 | `EVAL/eval_u3780.out` | E06 seed 0, update 3780 (9.7M decisions) | same | 4 envs x 1 | 18.3 | 16.0 | - | back inside the band. E06 STOPPED 19:25 UTC: 11 evaluations put its plateau at 13-22 (mean ~17) since 4M decisions; it is the control for E07 |
+
+| MOD001_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | Modern Garen/Jax 26.19: JAX regressions and isolated C# script-load, stats, E/mana/reset canary | Slurm1806 FAILED: nine JAX tests pass; script health caught three obsolete Garen buff references; no valid server result |
+
+| MOD002_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | Remove superseded champion buff scripts from isolated overlay; add dodge, R proc, death cleanup and vmap tests | Slurm1807 COMPLETED/0:0: 14 JAX checks and C# wire canary passed (87 frames) |
+
+| MOD003_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | Add real C# objects combat selftest (dodge/Q, E stun, W shield/DR, Q+W, both R passives/actives, spin/shred); Jax moving R cast delay and empowered attack locks | Slurm1808 FAILED: wire checks and 14 JAX tests passed; combat fixture teleported objects without updating the quadtree, so AoE test had no targets |
+
+| MOD004_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | Reinsert fixture objects into quadtree; test modern observations, ally Q click and cast edge range; regress shared legacy paths | Slurm1809 FAILED: 45 Python tests and wire checks passed; direct test removal/reinsertion duplicated quadtree nodes (RemoveObject defers tree removal); first10 combat assertions passed |
+
+| MOD005_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | Rebuild test spatial index normally; full combat/legacy regression gates and180s scripted lane smoke | Slurm1810 FAILED:45 Python tests, wire and180s movement completed; fixture physics displaced leap target; scripted log exposed historical Jax animation null exception. Partial result.json is not a full pass |
+
+| MOD006_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | Replace Jax basic-attack animation script; reject ERROR logs; refresh fixture broadphase without physics; full45-test/180s/combat checks | Slurm1811 COMPLETED/0:0 in38s:45 Python checks,1887 wire frames/180s lane,16 direct C# combat assertions passed; zero server errors |
+
+| MOD007_modern_champions | 2026-09-30 | CPU desktop, 2 cores/8GB, 20min cap | JAX multi-tick scan/dtype regression; correct Garen passive BIN breakpoints at7/14 (10.1%/5s at18) in both engines and add5 C# boundary assertions | Slurm1812 COMPLETED/0:0 in40s:47 Python tests,21 C# combat assertions and180s scripted lane/1887 frames pass; zero server errors; no training |

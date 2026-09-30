@@ -26,3 +26,5 @@ PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static 
 | `replay_learning_summary.py` | Teacher/initial BC/final policy decisions on full replay histories; reward and decoded orders | LEARN-PAIR-04 / E36; shadow actions never executed | 2026-09-29 |
 
 | `escape_counterfactual.py` | Do spells or alternate movement rescue the exact trapped-wave state? | LEARN-PAIR-05 / E37; frozen reactive opponent, restored full history | 2026-09-29 |
+
+| `modern_champions.py` + `lanerl/patches/modern-champions/ModernChampionSelfTest.cs` | Do pinned modern Garen/Jax work through C# wire, reset, actual combat objects and a180s scripted lane? | CHAMP-003 / MOD001–MOD007, via `ops/launch.py`; no training | 2026-09-30 |

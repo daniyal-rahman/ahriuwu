@@ -211,6 +211,13 @@ def main():
         if a.deterministic: args["deterministic"] = True
         if a.record: args["record-npz"] = a.record
         submit(spec, args, (a.tag + "-det") if a.deterministic else a.tag, a.dry_run); return
+    local_spec = Path(__file__).resolve().parents[1] / "experiments" / f"{a.experiment}.json"
+    if local_spec.exists():
+        modern_spec=json.loads(local_spec.read_text())
+        if modern_spec.get("engine")=="modern-validation":
+            from modern_validation import launch
+            launch(modern_spec,a.dry_run)
+            return
     spec = json.loads((REPO_SRV / "experiments" / f"{a.experiment}.json").read_text())
     if spec.get("engine") == "slurm-event-test":
         from slurm_event_test import launch

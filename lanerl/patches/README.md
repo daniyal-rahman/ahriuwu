@@ -1,6 +1,6 @@
 # Vendor server patches (LeagueSandbox, `/srv/nfs/projects/lanerl-vendor/LoLServer`)
 
-All five are APPLIED to the vendor source tree (checked with `patch -R --dry-run`
+The six historical patches are APPLIED to the vendor source tree (checked with `patch -R --dry-run`
 on 2026-09-25) and compiled into the canonical build. They stack in this order.
 
 | Patch | Status | What it changes | Ledger |
@@ -22,3 +22,25 @@ on 2026-09-25) and compiled into the canonical build. They stack in this order.
 | `Trace/net6.0` | diagnostic only | 2026-09-22 build with `LANERL_SHUFFLE_ORDER` for parity floors; predates all five patches |
 
 `HudProbe` and `ScreenClick` were deleted on 2026-09-25 with Dani's approval.
+
+
+| Patch | Status | What it changes | Ledger |
+|---|---|---|---|
+| `server-modern-champions-26.19.patch` | ISOLATED, opt-in; not applied to shared vendor | Garen/Jax26.19 stats and Q/W/E/R lane combat, actual W mitigation/shield, dodge before on-hit, dead movement, mana/recast/target validation, per-champion skill order, modern wire state and reset | CHAMP-003 |
+
+The modern overlay sources live in `modern-champions/`; `ops/modern_server.py`
+copies the existing patched vendor into a **new** destination, replaces obsolete
+champion scripts/buffs and modernizes the relevant data. It refuses an existing
+destination unless `--refresh` names a tree carrying its ownership manifest.
+No Git operation writes into the vendor tree. `export_patch(destination, output)`
+exports the exact source/content diff; apply with `patch --binary -p1` to a copy.
+The registered patch includes the C# combat self-test, inactive unless
+`LANERL_MODERN_SELFTEST=1`.
+
+Build with the vendored dotnet SDK, using one consistent canonical path prefix
+(`/srv/nfs` on the login node); mixing `/srv/nfs` and `/mnt/nfs` in one MSBuild
+project graph loses transitive package resolution. Use capped CPU for the build.
+The isolated executable is `bin/DeadProbe/GameServerConsole.dll`, with its own
+`Content`. Modern config removes historical runes/masteries; automatic item
+purchases must be disabled (`LANERL_AUTOBUY=0`) for this bare-champion contract.
+Shared `ClickV3` and existing runs remain historical.

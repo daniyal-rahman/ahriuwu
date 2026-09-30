@@ -57,3 +57,21 @@ collision queries. `lanerl_jax/data/modern/26.19/map11.json` is the reviewed
 asset identity; normalized arrays live outside Git. `ops/fetch_modern_map.py`
 selectively extracts assets from an explicit Riot RMAN. MODERN-009–012 track
 scope, evidence and remaining integration; these do not switch existing runs.
+
+
+Modern champion profile (explicit opt-in, 26.19; CHAMP-003):
+
+| Path | Class | Role |
+|---|---|---|
+| `lanerl_jax/data/modern.py`, `modern_26_19/*.json` | LIVE | Pinned Garen/Jax BIN stats and spell values; no network at runtime |
+| `lanerl_jax/sim/modern.py`, `ChampionState` | LIVE | Champion dispatch, mana, buffs, dodge, dash, true/magic damage; initialize with `modern.init_lane(names)` and `SimConfig.modern(names)` |
+| `lanerl/cfg/modern_garen_jax_26_19.json` | LIVE | Modern bare-champion C# matchup; use only the isolated modern build |
+| `lanerl/patches/modern-champions/ModernChampion.cs` | LIVE | Modern C# champion rules, materialized/exported by `ops/modern_server.py` |
+| `ops/modern_server.py`, `ops/modern_validation.py` | TOOL | Reproducible isolated server overlay/patch export and worktree-snapshot Slurm validation |
+| `lanerl_jax/probes/modern_champions.py`, `ModernChampionSelfTest.cs` | PROBE | Wire/resource/reset,180s scripted lane, actual C# objects damage assertions; invoked by MOD experiments through `ops/launch.py` |
+| `tests/test_modern_champions.py` | TEST | Independent modern mechanic examples and JIT/vmap/observation regressions |
+
+Modern observations have `MODERN_SELF_DIM=28`; create a new `PolicyConfig(self_dim=28)`.
+Legacy observations remain16-wide. Existing trained checkpoints, server wire
+reconstruction and PPO launch defaults are not migrated by this champion port.
+Map/minions/turrets still use the existing world; this is not a modern map/items/runes port.

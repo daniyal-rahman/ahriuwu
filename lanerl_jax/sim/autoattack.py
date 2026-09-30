@@ -170,6 +170,7 @@ def step_autoattack(
     may_engage: Any = True,
     swing_target_gone: Any = False,
     swing_target_changed: Any = False,
+    uncancellable: Any = False,
     xp: Any = np,
 ) -> AutoAttackOut:
     """One tick of the auto-attack clock for a batch of units.
@@ -238,7 +239,7 @@ def step_autoattack(
     # A 250 s real-server recording confirms the delay resets to zero on
     # an in-range switch (ENT-02); it never transfers the old hit.
     retarget_cancel = (is_attacking & (aa_windup > 0)
-                       & swing_target_changed & ~dead_target_cancel)
+                       & swing_target_changed & ~dead_target_cancel & ~xp.asarray(uncancellable, dtype=bool))
     cd = xp.where(retarget_cancel & ~has_auto_attacked, xp.zeros_like(cd), cd)
     aa_windup = xp.where(retarget_cancel, xp.zeros_like(aa_windup), aa_windup)
     is_attacking = is_attacking & ~retarget_cancel
@@ -269,8 +270,8 @@ def step_autoattack(
     # reaches `Spell.cs`'s `(CastInfo.IsAutoAttack && ... ||
     # !status.HasFlag(StatusFlags.CanAttack))` and calls `ResetSpellCast()`.
     # Real League agrees -- E makes you unable to declare basic attacks.
-    cancel_lost_target = still_casting & (~has_target | ~in_range)
-    cancel_suppressed = still_casting & ~can_attack
+    cancel_lost_target = still_casting & (~has_target | ~in_range) & ~xp.asarray(uncancellable, dtype=bool)
+    cancel_suppressed = still_casting & ~can_attack & ~xp.asarray(uncancellable, dtype=bool)
     cancel = cancel_lost_target | cancel_suppressed
 
     # A skipped auto sets `IsAttacking` but never calls `Spell.Cast` or starts

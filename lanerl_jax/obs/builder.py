@@ -89,6 +89,7 @@ __all__ = [
 N_SLOTS = 32
 ENTITY_DIM = 16
 SELF_DIM = 16
+MODERN_SELF_DIM = 28  # explicit profile; old checkpoints keep their 16-column contract
 GLOBAL_DIM = 6
 
 SLOT_ENEMY_CHAMP = (0, 1)
@@ -231,6 +232,14 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
         percent_bonus=wp.mr_percent_bonus[me],
     )
 
+    if state.modern:
+        from ..sim import modern
+        all_growth=growth_sum(state.level,jnp)
+        modern_armor,modern_mr=modern.effective_stats(state,params,
+            params['armor'][state.model]+params['armor_per_level'][state.model]*all_growth,
+            params['magic_resist'][state.model]+params['mr_per_level'][state.model]*all_growth)
+        armor,mr=modern_armor[me],modern_mr[me]
+        ad+=state.champion.bonus_ad[me]
     rank = state.spell_level[me].astype(jnp.int32)
     w_cd = jnp.asarray(W_COOLDOWNS, state.x.dtype)
     e_cd = jnp.asarray(E_COOLDOWNS, state.x.dtype)
@@ -250,6 +259,8 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
     # its cooldown). This used to report E locked for the whole spin while
     # the sim accepted the cancel -- the observation and the cast gate
     # disagreeing on the spell the policy farms with (`OBS-01`).
+    if state.modern:
+        base_cd = modern.cooldown_table(state.champion.id,state.spell_level)[me]
     cast_locked = status_of(state).cast_locked[me]
     cooldowns = jnp.where(
         (rank > 0) & ~cast_locked,
@@ -265,12 +276,22 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
         state.cs[me].astype(jnp.float32) / NORM_CS,
         cooldowns[Slot.Q], cooldowns[Slot.W], cooldowns[Slot.E], cooldowns[Slot.R],
         ad / NORM_AD,
-        jnp.float32(0.0),          # no AP source exists in LaneState/profiles
+        state.champion.ap[me] / NORM_AD if state.modern else jnp.float32(0.0),
         armor / NORM_AD,
         mr / NORM_AD,
         (~state.alive[me]).astype(jnp.float32),
         (state.recall_channel_ms[me] > 0).astype(jnp.float32),
     ])
+
+    if state.modern:
+        c=state.champion
+        other=1-me
+        extra=jnp.stack([(c.id[me]==86).astype(jnp.float32),(c.id[me]==24).astype(jnp.float32),
+            (c.id[other]==86).astype(jnp.float32),(c.id[other]==24).astype(jnp.float32),
+            c.mana[me]/jnp.maximum(1,c.max_mana[me]),c.shield[me]/jnp.maximum(1,state.max_hp[me]),
+            c.jax_stacks[me]/8,c.jax_w_ms[me]/10000,c.jax_e_ms[me]/2000,c.jax_r_ms[me]/8000,
+            (c.stun_ms[me]>0).astype(jnp.float32),c.garen_w_stacks[me]/150])
+        self_vec=jnp.concatenate([self_vec,extra])
 
     # ---- global ----------------------------------------------------------
     enemy_champ_visible = (enemy_champ[0] >= 0).astype(jnp.float32)

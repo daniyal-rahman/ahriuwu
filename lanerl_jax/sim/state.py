@@ -286,9 +286,89 @@ def empty_buffs(n_units: int = 0, dtype=jnp.float32) -> Buffs:
 
 
 @struct.dataclass
+class ChampionState:
+    """26.19 champion resources and persistent combat state; units on axis0."""
+    id: jax.Array
+    mana: jax.Array
+    max_mana: jax.Array
+    ap: jax.Array
+    bonus_ad: jax.Array
+    bonus_hp: jax.Array
+    bonus_as: jax.Array
+    crit: jax.Array
+    shield: jax.Array
+    shield_ms: jax.Array
+    stun_ms: jax.Array
+    slow_ms: jax.Array
+    slow_amount: jax.Array
+    garen_w_stacks: jax.Array
+    garen_shred_ms: jax.Array
+    jax_stacks: jax.Array
+    jax_stack_ms: jax.Array
+    jax_w_ms: jax.Array
+    jax_e_ms: jax.Array
+    jax_e_dodges: jax.Array
+    jax_e_release: jax.Array
+    jax_r_ms: jax.Array
+    jax_r_cast_ms: jax.Array
+    jax_r_hits: jax.Array
+    jax_r_hit_ms: jax.Array
+    jax_r_armor: jax.Array
+    dash_ms: jax.Array
+    dash_target: jax.Array
+    dash_target_seq: jax.Array
+    r_target: jax.Array
+    r_target_seq: jax.Array
+    garen_ticks: jax.Array
+    garen_tick_count: jax.Array
+    garen_hits: jax.Array
+
+
+def empty_champion_state(n, dtype):
+    z = lambda: jnp.zeros((n,), dtype)
+    return ChampionState(id=jnp.zeros(n, jnp.int16),
+        mana=z(),
+        max_mana=z(),
+        ap=z(),
+        bonus_ad=z(),
+        bonus_hp=z(),
+        bonus_as=z(),
+        crit=z(),
+        shield=z(),
+        shield_ms=z(),
+        stun_ms=z(),
+        slow_ms=z(),
+        slow_amount=z(),
+        garen_w_stacks=z(),
+        garen_shred_ms=z(),
+        jax_stacks=z(),
+        jax_stack_ms=z(),
+        jax_w_ms=z(),
+        jax_e_ms=z(),
+        jax_e_dodges=z(),
+        jax_e_release=z(),
+        jax_r_ms=z(),
+        jax_r_cast_ms=z(),
+        jax_r_hits=z(),
+        jax_r_hit_ms=z(),
+        jax_r_armor=z(),
+        dash_ms=z(),
+        dash_target=z(),
+        dash_target_seq=z(),
+        r_target=z(),
+        r_target_seq=z(),
+        garen_ticks=z(),
+        garen_tick_count=z(),
+        garen_hits=jnp.zeros((n, n), jnp.int16))
+
+
+@struct.dataclass
 class LaneState:
     """One lane, one tick. Every field is a leading-axis-``N_UNITS`` array
     unless named otherwise, so ``jax.vmap`` over environments just works."""
+
+    modern: bool = struct.field(pytree_node=False)
+    champion: ChampionState
 
     # ---- clock -----------------------------------------------------------
     #: game time in milliseconds. The server advances this by exactly 1000/60
@@ -596,6 +676,7 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
     z = lambda *s: jnp.zeros(s, dtype=dtype)            # noqa: E731
     zi = lambda *s, t=jnp.int8: jnp.zeros(s, dtype=t)   # noqa: E731
     return LaneState(
+        modern=False, champion=empty_champion_state(n_units, dtype),
         t_ms=jnp.asarray(0.0, dtype=dtype),
         tick=jnp.asarray(0, dtype=jnp.int32),
         kind=zi(n_units),

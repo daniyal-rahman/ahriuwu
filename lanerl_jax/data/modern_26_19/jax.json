@@ -1,0 +1,758 @@
+{
+  "character": {
+    "armorPerLevelModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 4.199999809265137
+    },
+    "attackRangeModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 125
+    },
+    "attackSpeedModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 0.6380000114440918
+    },
+    "attackSpeedPerLevelModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 3.4000000953674316
+    },
+    "attackSpeedRatioModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 0.6380000114440918
+    },
+    "baseArmorModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 36
+    },
+    "baseDamageModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 68
+    },
+    "baseHPModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 650
+    },
+    "baseMR": {
+      "__type": "ModifiableFloat",
+      "baseValue": 32
+    },
+    "baseMoveSpeedModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 350
+    },
+    "baseStaticHPRegenModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 1.7000000476837158
+    },
+    "basicAttack": {
+      "__type": "AttackSlotData",
+      "mAttackDelayCastOffsetPercent": -0.09189043939113617,
+      "mAttackName": "JaxBasicAttack",
+      "mAttackProbability": 1
+    },
+    "damagePerLevelModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 4.25
+    },
+    "hpPerLevelModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 103
+    },
+    "hpRegenPerLevelModifiable": {
+      "__type": "ModifiableFloat",
+      "baseValue": 0.10999999940395355
+    },
+    "mrPerLevel": {
+      "__type": "ModifiableFloat",
+      "baseValue": 2.049999952316284
+    }
+  },
+  "patch": "16.19",
+  "source": "https://raw.communitydragon.org/16.19/game/data/characters/jax/jax.bin.json",
+  "spells": {
+    "Characters/Jax/Spells/JaxEAbility/JaxE": {
+      "calculations": {
+        "MaxDamage": {
+          "__type": "GameCalculationModified",
+          "mModifiedGameCalculation": "TotalDamage",
+          "mMultiplier": {
+            "__type": "NumberCalculationPart",
+            "mNumber": 2
+          },
+          "tooltipOnly": true
+        },
+        "MaxPercentHealthDamage": {
+          "__type": "GameCalculation",
+          "mExpandedTooltipCalculationDisplay": 5,
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "PercentHealthDamage"
+            }
+          ],
+          "mMultiplier": {
+            "__type": "NumberCalculationPart",
+            "mNumber": 2
+          },
+          "tooltipOnly": true
+        },
+        "MonsterDamageCap": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "ByCharLevelInterpolationCalculationPart",
+              "mEndValue": 9000,
+              "mStartValue": 9000
+            }
+          ]
+        },
+        "TotalDamage": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "BaseDamage"
+            },
+            {
+              "__type": "StatByNamedDataValueCalculationPart",
+              "mDataValue": "APRatio",
+              "mStatFormula": 2
+            }
+          ]
+        }
+      },
+      "cooldown": {
+        "__type": "{0a0eddc9}",
+        "values": [
+          17,
+          17,
+          15,
+          13,
+          11,
+          9,
+          9
+        ]
+      },
+      "mana": {
+        "__type": "{630af303}",
+        "values": [
+          50,
+          60,
+          70,
+          80,
+          90,
+          100
+        ],
+        "{0a3e0478}": 50
+      },
+      "values": [
+        {
+          "__type": "SpellDataValue",
+          "name": "BaseDamage",
+          "values": [
+            10,
+            40,
+            70,
+            100,
+            130,
+            160,
+            190
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "StunDuration",
+          "values": [
+            1,
+            1,
+            1,
+            1,
+            1,
+            1,
+            1
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "PercentIncreasedPerDodge",
+          "values": [
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224,
+            0.20000000298023224
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "MaxDodgesForDamageIncrease",
+          "values": [
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "PercentHealthDamage",
+          "values": [
+            4,
+            4,
+            4,
+            4,
+            4,
+            4,
+            4
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "DodgeDuration",
+          "values": [
+            2,
+            2,
+            2,
+            2,
+            2,
+            2,
+            2
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "AoEDamageReduction",
+          "values": [
+            25,
+            25,
+            25,
+            25,
+            25,
+            25,
+            25
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "APRatio",
+          "values": [
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071,
+            0.699999988079071
+          ]
+        }
+      ]
+    },
+    "Characters/Jax/Spells/JaxPassiveAbility/JaxPassive": {
+      "calculations": {
+        "AttackSpeedPerStack": {
+          "__type": "GameCalculation",
+          "mDisplayAsPercent": true,
+          "mFormulaParts": [
+            {
+              "__type": "ByCharLevelBreakpointsCalculationPart",
+              "mBreakpoints": [
+                {
+                  "__type": "Breakpoint",
+                  "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+                  "mLevel": 4
+                },
+                {
+                  "__type": "Breakpoint",
+                  "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+                  "mLevel": 7
+                },
+                {
+                  "__type": "Breakpoint",
+                  "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+                  "mLevel": 10
+                },
+                {
+                  "__type": "Breakpoint",
+                  "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+                  "mLevel": 13
+                },
+                {
+                  "__type": "Breakpoint",
+                  "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+                  "mLevel": 16
+                },
+                {
+                  "__type": "Breakpoint",
+                  "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+                  "mLevel": 19
+                }
+              ],
+              "mLevel1Value": 0.05000000074505806
+            }
+          ],
+          "mPrecision": 1
+        },
+        "BelvethVsJaxQuestRewardAttackSpeed": {
+          "__type": "GameCalculationModified",
+          "mExpandedTooltipCalculationDisplay": 5,
+          "mModifiedGameCalculation": "BelvethVsJaxQuestRewardAttackSpeedPerStack",
+          "mMultiplier": {
+            "__type": "BuffCounterByCoefficientCalculationPart",
+            "mBuffName": "{a8a3dd7a}",
+            "mCoefficient": 1
+          },
+          "mSimpleTooltipCalculationDisplay": 5
+        },
+        "BelvethVsJaxQuestRewardAttackSpeedPerStack": {
+          "__type": "GameCalculation",
+          "mDisplayAsPercent": true,
+          "mFormulaParts": [
+            {
+              "__type": "ByCharLevelBreakpointsCalculationPart",
+              "mBreakpoints": [
+                {
+                  "__type": "Breakpoint",
+                  "mLevel": 14
+                }
+              ],
+              "mInitialBonusPerLevel": 0.0006000000284984708,
+              "mLevel1Value": 0.00279999990016222
+            }
+          ],
+          "mPrecision": 2
+        },
+        "MaxBonusAttackSpeed": {
+          "__type": "GameCalculationModified",
+          "mModifiedGameCalculation": "AttackSpeedPerStack",
+          "mMultiplier": {
+            "__type": "NamedDataValueCalculationPart",
+            "mDataValue": "MaxStacks"
+          },
+          "tooltipOnly": true
+        }
+      },
+      "values": [
+        {
+          "__type": "SpellDataValue",
+          "name": "BuffDuration",
+          "values": [
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "MaxStacks",
+          "values": [
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "FallOffRate",
+          "values": [
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355,
+            0.3499999940395355
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "BelvethVsJaxQuestRewardStacks",
+          "values": [
+            5,
+            5,
+            5,
+            5,
+            5,
+            5,
+            5
+          ]
+        }
+      ]
+    },
+    "Characters/Jax/Spells/JaxQAbility/JaxQ": {
+      "calculations": {
+        "TotalDamage": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "Damage"
+            },
+            {
+              "__type": "StatByCoefficientCalculationPart",
+              "mCoefficient": 1,
+              "mStat": 2,
+              "mStatFormula": 2
+            }
+          ]
+        }
+      },
+      "cooldown": {
+        "__type": "{0a0eddc9}",
+        "values": [
+          8,
+          8,
+          7.5,
+          7,
+          6.5,
+          6,
+          5.5
+        ]
+      },
+      "mana": {
+        "__type": "{630af303}",
+        "values": [
+          50,
+          50,
+          50,
+          50,
+          50,
+          50
+        ],
+        "{0a3e0478}": 50
+      },
+      "values": [
+        {
+          "__type": "SpellDataValue",
+          "name": "Damage",
+          "values": [
+            25,
+            65,
+            105,
+            145,
+            185,
+            225,
+            265
+          ]
+        }
+      ]
+    },
+    "Characters/Jax/Spells/JaxRAbility/JaxR": {
+      "calculations": {
+        "BaseArmor": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "BaseResists"
+            },
+            {
+              "__type": "StatByCoefficientCalculationPart",
+              "mCoefficient": 0.4000000059604645,
+              "mStat": 2,
+              "mStatFormula": 2
+            }
+          ]
+        },
+        "BaseMR": {
+          "__type": "GameCalculationModified",
+          "mModifiedGameCalculation": "BaseArmor",
+          "mMultiplier": {
+            "__type": "NamedDataValueCalculationPart",
+            "mDataValue": "MRMult"
+          }
+        },
+        "BonusArmor": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "ResistsPerExtraTarget"
+            },
+            {
+              "__type": "StatByCoefficientCalculationPart",
+              "mCoefficient": 0.10000000149011612,
+              "mStat": 2,
+              "mStatFormula": 2
+            }
+          ]
+        },
+        "BonusMR": {
+          "__type": "GameCalculationModified",
+          "mModifiedGameCalculation": "BonusArmor",
+          "mMultiplier": {
+            "__type": "NamedDataValueCalculationPart",
+            "mDataValue": "MRMult"
+          }
+        },
+        "FinalDamage": {
+          "__type": "GameCalculationConditional",
+          "mConditionalCalculationRequirements": {
+            "__type": "HasBuffCastRequirement",
+            "mBuffName": "{1e75ffdf}"
+          },
+          "mConditionalGameCalculation": "OnHitDamage"
+        },
+        "OnHitDamage": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "PassiveBaseDamage"
+            },
+            {
+              "__type": "StatByCoefficientCalculationPart",
+              "mCoefficient": 0.6000000238418579
+            }
+          ]
+        },
+        "SwingDamageTotal": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "SwingDamageBase"
+            },
+            {
+              "__type": "StatByCoefficientCalculationPart",
+              "mCoefficient": 1,
+              "mStatFormula": 2
+            }
+          ]
+        }
+      },
+      "cooldown": {
+        "__type": "{0a0eddc9}",
+        "values": [
+          110,
+          110,
+          100,
+          90,
+          8,
+          7,
+          7
+        ]
+      },
+      "mana": {
+        "__type": "{630af303}",
+        "values": [
+          100,
+          100,
+          100,
+          100,
+          100,
+          100
+        ],
+        "{0a3e0478}": 100
+      },
+      "values": [
+        {
+          "__type": "SpellDataValue",
+          "name": "Duration",
+          "values": [
+            8,
+            8,
+            8,
+            8,
+            8,
+            8,
+            8
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "PassiveBaseDamage",
+          "values": [
+            20,
+            75,
+            130,
+            185,
+            240,
+            295,
+            350
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "PassiveFallOffTime",
+          "values": [
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5,
+            2.5
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "BaseResists",
+          "values": [
+            30,
+            45,
+            60,
+            75,
+            90,
+            105,
+            120
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "ResistsPerExtraTarget",
+          "values": [
+            15,
+            20,
+            25,
+            30,
+            35,
+            40,
+            45
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "MRMult",
+          "values": [
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579,
+            0.6000000238418579
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "SwingDamageBase",
+          "values": [
+            25,
+            100,
+            175,
+            250,
+            325,
+            400,
+            475
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "AoESize",
+          "values": [
+            375,
+            375,
+            375,
+            375,
+            375,
+            375,
+            375
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "StructureMod",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    },
+    "Characters/Jax/Spells/JaxWAbility/JaxW": {
+      "calculations": {
+        "FinalDamage": {
+          "__type": "GameCalculationConditional",
+          "mConditionalCalculationRequirements": {
+            "__type": "HasBuffCastRequirement",
+            "mBuffName": "{12395d09}"
+          },
+          "mConditionalGameCalculation": "TotalDamage"
+        },
+        "TotalDamage": {
+          "__type": "GameCalculation",
+          "mFormulaParts": [
+            {
+              "__type": "NamedDataValueCalculationPart",
+              "mDataValue": "Damage"
+            },
+            {
+              "__type": "StatByCoefficientCalculationPart",
+              "mCoefficient": 0.6000000238418579
+            }
+          ]
+        }
+      },
+      "cooldown": {
+        "__type": "{0a0eddc9}",
+        "values": [
+          8,
+          7,
+          6,
+          5,
+          4,
+          3,
+          3
+        ]
+      },
+      "mana": {
+        "__type": "{630af303}",
+        "values": [
+          30,
+          30,
+          30,
+          30,
+          30,
+          30
+        ],
+        "{0a3e0478}": 30
+      },
+      "values": [
+        {
+          "__type": "SpellDataValue",
+          "name": "Damage",
+          "values": [
+            15,
+            50,
+            85,
+            120,
+            155,
+            190,
+            225
+          ]
+        },
+        {
+          "__type": "SpellDataValue",
+          "name": "StructureMod",
+          "values": [
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ]
+        }
+      ]
+    }
+  }
+}

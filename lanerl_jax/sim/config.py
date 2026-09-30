@@ -194,6 +194,12 @@ class SimConfig:
                    patch_root=_patch_root(patch))
 
     @classmethod
+    def modern(cls, names=("Garen", "Jax"), patch=None):
+        """26.19 champions in the existing top-lane world; pair with modern.init_lane."""
+        from .modern import make_params
+        return cls.scripted(patch).replace(params=make_params(names,patch),name="modern_26_19_"+"_".join(names))
+
+    @classmethod
     def training(cls, patch=None, route_artifact=DEFAULT_ROUTE_ARTIFACT, *,
                  route_table=None, terrain=None) -> "SimConfig":
         """Exactly what ``train/trainer.py``'s env step runs.

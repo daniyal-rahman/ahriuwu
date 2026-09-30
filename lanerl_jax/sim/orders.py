@@ -262,6 +262,8 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     r_in_range = r_d2 <= (R_CAST_RANGE * R_CAST_RANGE)
     casting_r = (champ & st.can_cast[:, Slot.R] & (kind == OrderKind.CAST_R)
                  & r_target_ok & r_in_range)
+    if state.modern:
+        casting_q = casting_w = casting_e = casting_r = jnp.zeros_like(champ)
     # SetWaypoints fails while the pill is still winding up (`_castingSpell`),
     # exactly like a server Move packet that cannot pass CanChangeWaypoints.
     moving = (champ & ((kind == OrderKind.MOVE) | (kind == OrderKind.ATTACK_MOVE))
@@ -270,6 +272,10 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     # also prevents target/attack-order changes until FinishCasting.
     attacking = (champ & (kind == OrderKind.ATTACK) & (otgt >= 0)
                  & (state.r_cast_ms <= 0))
+    if state.modern:
+        mobile = (state.champion.stun_ms <= 0) & (state.champion.dash_ms <= 0)
+        moving &= mobile
+        attacking &= mobile
     # LanerlControl stops BEFORE it calls `pill.Cast`. A second B press while
     # the pill is already channeling therefore still clears a just-issued
     # MoveTo (the cast itself is refused because that Spell is not READY),
@@ -358,7 +364,7 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
 
     clear_clicked_target = (jnp.zeros_like(moving) if orders.clear_target is None
                             else moving & per_unit(orders.clear_target, False))
-    return state.replace(
+    result = state.replace(
         buffs=buffs, spell_cooldown=cd,
         observed_enemy_cast_ms=observed_enemy_cast_ms,
         # `GarenQ.OnActivate` calls `CancelAutoAttack(true)` before setting
@@ -400,3 +406,8 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
                             jnp.asarray(R_CAST_TIME_S * 1000.0, state.x.dtype),
                             state.r_cast_ms),
     )
+
+    if state.modern:
+        from .modern import apply_casts
+        return apply_casts(result, orders, params, vision)
+    return result

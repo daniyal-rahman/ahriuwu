@@ -283,6 +283,8 @@ class StateRebuilder:
 
     def rebuild(self, frame: dict):
         """Returns `(state, netid_of_unit)`; `netid_of_unit[i]` is 0 if empty."""
+        if any(u.get("modern") for u in frame.get("u", []) if u.get("k") == "Champion"):
+            raise ValueError("Modern champion wire state requires a modern collector; legacy StateRebuilder assumes Garen and must not silently rebuild Jax as Garen")
         validate_champion_life(frame)
         n = self.n_units
         x = np.zeros(n, np.float32)
