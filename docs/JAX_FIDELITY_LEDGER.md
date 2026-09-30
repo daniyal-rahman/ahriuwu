@@ -1735,3 +1735,63 @@ Latest and numbered checkpoint byte-identical; all decoded arrays finite;
 SHA2564f9368cef611b8fb62942ffd738deac90135447bda356a6fe228062e05bdc353.
 No post-training frozen result, no continuation queued, no own active jobs.
 Prior running/ETA note superseded by this external interruption.
+
+
+| ID | Status | Scope | Finding / next bounded check |
+|---|---|---|---|
+| PERF-008 | CODE REVIEW ONLY, 2026-09-30; no new speed measurement | Remaining sim costs and nonrecurrent PPO batching while E39b continues | Prioritize batching the learner encoder/MLP across time, then collision kernel fusion. Historical collection attribution is pre-fused-ray and must not be relabeled as today's split. No live optimization or competing GPU benchmark launched. |
+
+PERF-008 source audit (`train/learner.py:forward`, `train/policy.py`,
+`sim/collision.py`, `sim/minion_ai.py:advance_lane_waypoints`, `sim/step.py`
+phase14, `sim/local_pathing.py`):
+
+- **PPO:** the full entity transformer, four-layer MLP, GRU and heads execute
+  inside the 128-step learner scan. Only GRU state has a temporal dependency.
+  Encode all minibatch observations together, scan only the GRU with identical
+  episode-boundary carry resets, then batch the heads. Recompute features on
+  every optimizer step: caching them across changing weights would change PPO.
+  Keep full gradients through the encoder and recurrence, the detached critic,
+  parameter names, minibatches and optimizer/schedule unchanged. Larger matrix
+  batches may improve GPU use; workspace and activation memory can limit it.
+  A microbenchmark alone does not establish complete-update improvement.
+- **Collision:** old trace attributed19.4% of collection's instrumented span.
+  Turret mover exclusion, empty-candidate compaction and eight-round inner-loop
+  unrolling ALREADY exist. Remaining creation-order outer while-loop is
+  sequential, with current positions updated after each mover; vectorizing
+  simultaneous pushes would change physics. Candidate: fuse ordered processing
+  inside a GPU kernel per environment, retaining candidate snapshots, tie order,
+  escape bound and ghost rules. Batched loops can also wait for the slowest
+  environment. This is a structural hypothesis, not a proven kernel speedup.
+- **Minion lane waypoints:** computes candidate matrices/sort for66 rows and
+  scans66 cluster candidates even though only minions participate; output masking
+  does not itself skip computation. Candidate: restrict both axes to the40
+  minion slots, preserving stable spawn-order ties, then per-query early exit or
+  fusion. Existing outer conditional under environment vmap is not equivalent
+  to independent per-environment branching. Old trace share7.9%; lower priority.
+- **Chase routing:** champion-only searches already use identity endpoints when
+  inactive. Route reconstruction already has run-length hops / loop unrolling;
+  smoothing explicitly stays rolled because earlier unrolling measured slower.
+  Moving source/target endpoints make naive route caching behavior-changing.
+  No obvious large free win established; old refresh-waypoint trace share6.4%.
+- **Visibility:** original structural fix already measured2.098x collection and
+  1.481x complete update. Removing the remaining wall-ray rules subsequently
+  bought only0.8% overall; keep them. Same-state result sharing is a smaller
+  remaining option, not another assumed2x.
+
+Conditional arithmetic using PERF005's matched post-fix baseline (4.560s total,
+2.004s collection; residual~2.556s learner/other): halving the residual gives
+~3.282s total (1.39x); cutting it to one third gives~2.856s (1.60x).
+Those are illustrative bounds, NOT predictions or measured PPO improvements.
+No verified near-2x PPO optimization is recorded in the existing PERF003–007
+results. E39's~4.05s updates use a different scenario and are not the A/B baseline.
+
+Next bounded trial contract: batching hypothesis -> existing sequential code
+and~2.6s learner -> same-weight forward/carry/loss/gradient/Adam equivalence
+(including episode resets and masked observations) -> alternating warmed
+N128/T128 learner AND complete-update timings, plus peak memory. Aim for a
+material whole-update gain; reject a standalone single-digit-percent change
+under Dani's stated priority. Stop if correctness fails, memory is excessive,
+or the matched wall-time gain is negligible. Run the GPU A/B after E39b so it
+neither competes with training nor contaminates timings. Collision gets its
+own subsequent parity-gated trial if still worthwhile; no broad reprofiling
+or environment-count sweep is needed first.

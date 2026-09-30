@@ -8,7 +8,9 @@ optimizer and learning-rate schedule. Old checkpoint lacks live episodes/carry/
 RNG: fresh episodes explicitly recorded; future checkpoints retain rollout state.
 Original E34 remains the fixed evaluation opponent. Log:
 `/mnt/nfs/shared/E39b_tower_wave_advantage-1779.out`.
-Performance investigation is code/probe only; no optimization installed in this run.
+Performance code review recorded in PERF-008: prioritize batching the PPO
+encoder/MLP outside the GRU scan, then collision fusion. No new speedup measured,
+no live optimization installed and no competing GPU benchmark launched.
 
 **E39b INTERRUPTED — DESKTOP BOOT TO WINDOWS:** Slurm1778 cancelled at
 2026-09-29 22:57:25 UTC after13updates/425,984 champion decisions. Node is
