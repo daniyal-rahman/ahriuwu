@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E45b DIAGNOSTIC COMPLETE — CPU1786 final rendering:**8canaries/180s watch passed.
+**E45b COMPLETE — CPU1786 exit0 in14m29s:**8canaries/180s watch passed.
 HP-sensitive actor; critic V−.038 vs16 full-horizon returns mean+.127(SE.007).
 Temperature .5/1/2/argmax did not rescue incident. Two isolated PPO updates
 changed probabilities but held-out CS unchanged (near1/0/2/1, original all0).

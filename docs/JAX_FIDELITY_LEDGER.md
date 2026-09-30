@@ -2008,7 +2008,7 @@ Temporally correlated exploration has supporting PPO research
 https://arxiv.org/abs/2312.11091, but is not yet validated for this discrete
 screen-click interface. E40 retains T1/entropy.001, no schedule changes.
 
-LEARN-PAIR-09 E45b results (diagnostic complete, final rendering pending):
+LEARN-PAIR-09 E45b results (CPU1786 completed exit0 in14m29s):
 -16 on-policy continuations to195s endpoint (441 decisions) yield discounted
  return mean+.12718, standard error.00745, versus V(start)−.03808. No terminal
  bootstrap used. Local pessimism ~.165; no claim of whole-policy calibration.
