@@ -34,3 +34,8 @@ History = `legacy/`, `docs/archive/`.
    `lanerl/patches/` with a README row and a rebuilt `DeadProbe`.
 8. Parallel agents: one git worktree and one experiment ID each; touch only
    your ID's runs; commit small, rebase on `lane-rl/jax` before handoff.
+
+9. Learning experiments: research relevant literature, state a concrete hypothesis,
+   budget and success/stop criteria, implement, compare frozen results against
+   the existing baseline, then iterate. Prefer established defaults; distinguish
+   published evidence from our engineering estimates.

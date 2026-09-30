@@ -1,5 +1,7 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**NEXT PLAN (not launched):** Literature-backed uncontested farming curriculum and HP/tower reward A/B; bounded5–10M learner decisions/arm, frozen CS-by-type gates. Details LEARN-PAIR-10. E40 job1780 remains running unchanged.
+
 **E45b COMPLETE — CPU1786 exit0 in14m29s:**8canaries/180s watch passed.
 HP-sensitive actor; critic V−.038 vs16 full-horizon returns mean+.127(SE.007).
 Temperature .5/1/2/argmax did not rescue incident. Two isolated PPO updates

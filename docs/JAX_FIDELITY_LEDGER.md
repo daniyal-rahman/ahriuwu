@@ -2035,3 +2035,38 @@ Temperature alone did not rescue sampled incident. Literature-backed stochastic
 PPO/entropy baseline remains appropriate; no new schedule installed. All results
 in /mnt/nfs/shared/E45b_caster_learning/low_team_1/learning_audit.json.
 Restored control matches original E44 x/y/hp/cs/deaths exactly (maxerror0).
+
+| LEARN-PAIR-10 | PROPOSAL ONLY | Uncontested farming curriculum with reward A/B; no new runs or training edits. | User requests literature → plan → implementation → frozen baseline comparison → iteration. Prefer established defaults. |
+
+Evidence: OpenAI Five Appendix G/Table6 rewards hero health changes and building
+HP loss/destruction (https://cdn.openai.com/dota-2.pdf); does not justify copying
+numeric coefficients into our different gold/XP scales. Reverse Curriculum
+Generation (https://arxiv.org/abs/1707.05300) supports easier starts progressively
+farther from success; robotics evidence, not a League-specific learning-time bound.
+Public simplified last-hit PPO demonstration README gives32,500x50=1.625M and
+32,500x150=4.875M steps with64x64 MLP; no enemy hero and no controlled learning
+curve/CS guarantee (https://github.com/xphoniex/dota2-lasthit). Weak planning
+anchor only. OpenAI Five's full-game training scale is not a farming-only budget.
+
+Proposed next: park opponent AFK at fountain, keep both waves/towers and physics.
+Start learner around live wave with randomized legal positions/timing, retain
+current trained checkpoint/shared GRU; evaluate original contested mode as
+transfer check. Two matched arms: current reward vs mild HP-loss and tower-damage
+shaping. CS primary; calibrate HP cost so modest wave damage cannot outweigh a
+caster. No respawn/maxHP artifacts or constant initial-health bonus; tower reward
+from enemy tower actualHP loss, preferably attributable to learner/team push,
+not proximity/click attempts. Fixed initial states must include some safe tower
+opportunities if that term is to be evaluated. AFK cannot teach trading.
+
+Engineering planning budget, NOT published mastery threshold:0.5–2M learner
+decisions for initial trend,5–10M per arm for first endpoint,20M only if improving.
+At current~4s/32,768 two-champion decisions, one learner per world gives nominal
+~4k learner decisions/s (~20–40min for5–10M per arm), plus compile/evaluation;
+actual single-learner throughput unmeasured. Reserve roughly2h for two10M arms
+including startup/evals. Evaluate frozen u0 and1/2/5/10M on64 held-out episodes;
+report CS by subtype, fraction of available wave minions secured, health/deaths,
+tower damage and reward decomposition. Flat2–5M curve triggers diagnosis, not
+an automatic overnight extension. Provisional success target >=80% of measured
+heuristic CS on matched easy starts with meaningful caster capture; challenge
+positions and original75s/10min transfer evaluated separately. No claim512 local
+PPO decisions were a sufficient mastery budget; update KL was large (.111/.032).
