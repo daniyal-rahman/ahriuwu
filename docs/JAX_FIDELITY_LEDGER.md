@@ -1795,3 +1795,20 @@ or the matched wall-time gain is negligible. Run the GPU A/B after E39b so it
 neither competes with training nor contaminates timings. Collision gets its
 own subsequent parity-gated trial if still worthwhile; no broad reprofiling
 or environment-count sweep is needed first.
+
+
+E39b final follow-up (Slurm1779): COMPLETED exit0 in1h23m15s, manifest finished
+2026-09-30T03:36:37Z; study complete at1000updates/32,768,000 champion decisions.
+Final checkpoint and latest present. Frozen64games/mode on held-out75s scenarios,
+one training seed; compare u0 job1778 with u1000 job1779 (predeclared endpoint).
+Against fixed original E34, trained BLUE fullHP: CS3.5625→4.46875,
+deaths0.5625→0.0625, kills0.5625→0.5625, gold difference158.438→272.188.
+BLUE lowHP: CS2.1875→1.84375, deaths0.875→0.84375, kills0.1875→0.15625,
+gold difference−76.250→−147.188. Mirror averages across teams: fullHP
+CS3.421875→3.796875/deaths0.59375→0.484375; lowHP CS2.140625→1.71875/
+deaths0.890625→0.90625. Signal favors advantage conversion/survival, not
+successful disadvantaged CS learning. No multiple-seed or normal10-minute
+transfer conclusion. Final-role HP is confounded by respawn; do not score it
+as survival. Sources:1778/1779 logs and final run
+`/mnt/nfs/checkpoints/lanerl-jax/E39b_tower_wave_advantage/vec-s0-20260930-021812-01c96dd1/`.
+No further optimization experiment ran after PERF-008's code review.

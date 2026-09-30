@@ -1,16 +1,22 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**2026-09-30 — E39b CONTINUATION STARTING (Slurm1779):** Desktop available.
-Same-spec continuation submitted through launcher; dry-run, five GPU canaries
-and 180s startup watch passed. Worker confirmed RESUME13, scenario/calibration
-gates passed; compiling training, no new updates yet. Resume restores u13 parameters,
-optimizer and learning-rate schedule. Old checkpoint lacks live episodes/carry/
-RNG: fresh episodes explicitly recorded; future checkpoints retain rollout state.
-Original E34 remains the fixed evaluation opponent. Log:
-`/mnt/nfs/shared/E39b_tower_wave_advantage-1779.out`.
-Performance code review recorded in PERF-008: prioritize batching the PPO
-encoder/MLP outside the GRU scan, then collision fusion. No new speedup measured,
-no live optimization installed and no competing GPU benchmark launched.
+**E39b COMPLETE — Slurm1779:** Exit0 after1h23m15s; finished2026-09-30
+03:36:37UTC at1000updates/32.768M champion decisions. Study and manifest agree;
+final frozen mirror and fixed-original-E34 evaluations saved. No own jobs or
+watchers remain. Continuation restored u13 optimizer/schedule but restarted live
+episodes because the legacy checkpoint lacked rollout state.
+
+Frozen75s held-out scenario,64games/mode, one training seed: against unchanged
+E34, BLUE fullHP CS3.56→4.47, deaths0.5625→0.0625, gold advantage+158→+272;
+BLUE lowHP CS2.19→1.84, deaths0.875→0.84375, gold difference−76→−147.
+Mixed result: advantaged-role improvement, disadvantaged-role farming not solved.
+Mirror fullHP meanCS3.42→3.80; lowHP2.14→1.72. Not a10-minute transfer result.
+Artifacts `/mnt/nfs/checkpoints/lanerl-jax/E39b_tower_wave_advantage/vec-s0-20260930-021812-01c96dd1/`;
+log `/mnt/nfs/shared/E39b_tower_wave_advantage-1779.out`.
+
+PERF-008 remains CODE REVIEW ONLY. PPO batching/collision optimization tests
+were not launched; no new performance result or background optimization work.
+Next: discuss asymmetric learning result and bounded PPO batching trial.
 
 **E39b INTERRUPTED — DESKTOP BOOT TO WINDOWS:** Slurm1778 cancelled at
 2026-09-29 22:57:25 UTC after13updates/425,984 champion decisions. Node is
@@ -18,7 +24,7 @@ DRAINED with reason `boot to windows`. Signal handler saved params and optimizer
 atupdate13; manifest/study report interrupted. Checkpoint decodes, all arrays
 finite, latest byte-identical to `ckpt_000425984.msgpack` (SHA256
 4f9368cef611b8fb62942ffd738deac90135447bda356a6fe228062e05bdc353).
-At that interruption no own jobs/watchers remained; continuation1779 is now submitted.
+At that interruption no own jobs/watchers remained; continuation1779 subsequently completed.
 
 Experiment startup validated:5 GPU tests,180s watch, actual scenario/checkpoint,
 compiled endpoint gate and both initial64-game frozen evaluations passed.
