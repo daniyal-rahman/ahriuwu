@@ -1,13 +1,17 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E43 PREPARED:** E42's old opponent produced no one-auto caster windows.
+**E43 RUNNING — CPU1783:** E42's old opponent produced no one-auto caster windows.
 Reproduce original E41 mirror videos (u4050, both HP roles) and branch the
 actual caster opportunities there. Require original replay reconstruction
 tolerance1e-4 as well as branch controls. E40 training remains unchanged.
 
-**E42 RUNNING — CPU Slurm1782:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
+**E42 COMPLETE — CPU1782 exit0 in4m49s:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
 video with state-driven spell/attack cues. CPU caster opportunity and restored
-state intervention audit; E40 training unchanged. No HP reward added.
+state intervention audit;8canaries/180s watch passed. All branch controls exact.
+Normal-speed animated video in `/mnt/nfs/shared/E42_caster_trade_audit/low_team_1/combat_blue/replay.mp4`.
+Trade intervention improved net HP exchange but lost CS and8s reward; missed
+melee attack recoverable. No one-auto caster windows in this old-opponent game.
+E40 training unchanged. No HP reward added.
 
 **E41 VIDEOS COMPLETE — CPU1781:** Exit0 in4m17s;4 canaries and180s
 startup watch passed. Frozen E40u4050,75s mirror, both HP roles. Normal-speed

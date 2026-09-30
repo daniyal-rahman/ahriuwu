@@ -1902,3 +1902,35 @@ before progressing delay, and that check includes !CanAttack for auto attacks.
 Existing ordinary suppression test starts E before attacking, so misses this
 last-tick case. A live-server paired boundary fixture remains needed before
 claiming full end-to-end parity; training/physics remain untouched.
+
+
+E42 CPU1782 COMPLETE exit0 in4m49s;8 startup tests and180s watch passed.
+Frozen E40u4400 blue/full vs original E34 random-start final red/low.
+Normal-speed animated MP4s, combat_blue follows current policy; schematic
+Q armed sword/E rotating330u ring/W active aura/observed AA windup and fired
+state cues. W cue does not assert damage mitigation works (known server bug).
+Post-render camera adjustment uses capped repo-local CPU renderer; no sim edits.
+
+Blue requests Q131/W15/E23 times; buff rising edges3/2/4. These are input
+attempts vs successful observed activations, not unlimited casts.
+No visible caster with HP<=estimated ordinary-AA damage within650u in E42;
+therefore E43 tests original E41 mirror conditions instead of explaining
+caster behavior from a mismatched opponent trajectory.
+
+E42 exact-state8s control comparisons (controls x/y/hp/cs/deaths maxerror0):
+-12.799s melee50.25HP at143.54u, AA cooldown.084s: normal continuation+1CS,
+ first at2.0s; forced cursor attack3s+2CS, first.5s, same own/end enemyHP.
+ Reward.708→1.708. Clear missed recoverable farm in this diagnostic.
+-18.601s champion603u away while spinning: normal+1CS, ownHPchange0,
+ enemy−90.10HP, accumulated reward−1.432. Forced attack3s thenpolicy:0CS,
+ own−159.94HP, enemy−465.13HP, reward−2.140. No deaths. HP numbers are NET
+ changes incl healing/other units, not attributable champion damage. Supports
+ short-term objective mismatch; not proof trade is worse over remaining game.
+-Cursor within125u of enemy at that state has.001599 mass conditional on
+ coordinates; P(attack_move)=.777796. Product~.001244 is cursor-region joint
+ probability, NOT total probability of attacking (auto-acquire/persistent orders
+ also matter). Policy is issuing attack-move often without aiming at champion.
+
+E43 will restore original E41u4050/seed7/offset−45 mirror and require original
+trace agreement before caster branches. Historical training encounters were
+not logged; no exact lifetime opportunity count can be claimed.

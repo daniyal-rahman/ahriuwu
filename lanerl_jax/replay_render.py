@@ -50,7 +50,7 @@ def action_name(d, i, side):
     if kind == 1:
         return 'move'
     if kind == 0 and d['button'][i, side] == 1:
-        return 'move suppressed (minimap)'
+        return 'move ignored (invalid click)'
     return BUTTONS[int(d['button'][i, side])]
 
 
@@ -290,7 +290,8 @@ def render_combat(d, meta, i, background):
                 dr.text((x+9,y+5),f'{name} {e[1]:.0f}' if k==1 else name,font=small,fill=color)
                 if k==1 and e[6] and e[5]>0: dr.text((x+9,y-23),f'AA >{e[4]} {e[5]:.2f}s',font=small,fill='#fff29a')
         im.paste(tile,(left,top))
-    cx,cy=wave_center(d,i);panel(20,50,710,cx-900,cy-900,1800,1800,True)
+    cx,cy=(float(d['x'][i,0]),float(d['y'][i,0])) if meta.get('follow_blue') else wave_center(d,i)
+    panel(20,50,710,cx-1100,cy-1100,2200,2200,True)
     panel(760,50,330,-500,7500,7500,7500,False)
     draw.text((767,58),'TOP LANE OVERVIEW',font=small,fill='white')
     for side in range(2):
@@ -346,12 +347,13 @@ def main():
     p.add_argument('--video',action='store_true')
     p.add_argument('--speed',type=float,default=10)
     p.add_argument('--view',choices=('map','combat'),default='map')
+    p.add_argument('--follow-blue',action='store_true',help='Keep the current blue policy in the combat close-up')
     p.add_argument('--start-seconds',type=float,default=0)
     p.add_argument('--end-seconds',type=float)
     p.add_argument('--fps',type=int,default=15)
     args=p.parse_args()
     if args.speed<=0 or args.fps<=0: p.error('speed and fps must be positive')
-    d,meta=load(args.trace); bg=map_image(d)
+    d,meta=load(args.trace); meta['follow_blue']=args.follow_blue; bg=map_image(d)
     start=max(float(d['t_ms'][0]),args.start_seconds*1000)
     end=min(float(d['t_ms'][-1]),args.end_seconds*1000 if args.end_seconds is not None else float(d['t_ms'][-1]))
     if not np.isfinite(start+end+args.speed) or start>=end: p.error('video interval must be finite, nonempty, and overlap trace')
