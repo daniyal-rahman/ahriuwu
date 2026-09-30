@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E41 VIDEO PREPARED:** Frozen E40 u4050, both HP-role75s mirror replays on
+**E41 VIDEO RUNNING — CPU Slurm1781:** Frozen E40 u4050, both HP-role75s mirror replays on
 danilogin CPU; desktop training continues. No learning settings changed.
 
 **E40 EXTENDED TRAINING STARTING — Slurm1780:** Dani requested immediate restart and longer
@@ -8,7 +8,9 @@ unattended training. E39b final weights, fresh optimizer and learning-rate
 schedule,10000additional updates (~12h), same scenario/reward/model. Original
 E34 remains fixed evaluation opponent. Checkpoint every50updates; periodic
 frozen evaluations. Dry-run,5 GPU canaries and180s launcher health watch passed.
-Worker scenario setup/compilation starting; new PPO updates not yet confirmed.
+E40 has passed4000updates; periodic frozen evaluations saved. At u4000
+vs fixed E34: fullHP CS2.75/deaths.0625; lowHP CS2.156/deaths.125.
+Survival improved on lowHP, farming is not improving monotonically.
 Capped CPU checkpoint check: E39b final step/schema/finite parameters verified;
 original E34 opponent loads correctly and differs from learner weights.
 Log `/mnt/nfs/shared/E40_tower_wave_extended-1780.out`.
