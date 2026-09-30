@@ -1,4 +1,4 @@
-**E49 VIDEO PREPARED:** Full120s final E46 AFK replay at1x, blue fullHP, seed7; no training restart.
+**E49 VIDEO RUNNING — CPU Slurm1800:** Full120s final E46 AFK replay at1x, blue fullHP, seed7; startup canary/watch underway. No training restart.
 
 **OPS047 COMPLETE — idle wake verified:** Slurm1788 on danilogin produced COMPLETED/0:0, compiler FAILED/1:0, application FAILED/7:0, and TIMEOUT/0:0 (batch cancelled by SIGTERM). At22:11:44UTC the bounded bridge observed this conversation ready with no active turn; dispatch accepted at22:11:46UTC and its automated message started a fresh agent turn after the prior final response. All four logs/accounting verified. Watcher inactive and registry entry removed; no repeat scheduled. One combined notification tested, not four independent wakeups. Use Slurm State plus ExitCode: timeout can report0:0. Evidence `/mnt/nfs/shared/OPS047_slurm_events/result.json`. Training untouched.
 
