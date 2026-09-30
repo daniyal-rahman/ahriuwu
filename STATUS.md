@@ -1,5 +1,8 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**E41 VIDEO PREPARED:** Frozen E40 u4050, both HP-role75s mirror replays on
+danilogin CPU; desktop training continues. No learning settings changed.
+
 **E40 EXTENDED TRAINING STARTING — Slurm1780:** Dani requested immediate restart and longer
 unattended training. E39b final weights, fresh optimizer and learning-rate
 schedule,10000additional updates (~12h), same scenario/reward/model. Original

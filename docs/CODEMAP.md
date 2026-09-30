@@ -6,6 +6,7 @@ LEGACY = kept for history only; nothing imports it.
 
 | Path | Class | Role |
 |---|---|---|
+| `slurm/wave_replay.sbatch` | TOOL | CPU-only E41 scenario recording/rendering through launcher; probe indexed in probes/README |
 | `lanerl_jax/train/wave_scenario.py`, `wave_scenario_train.py`, `slurm/wave_scenario.sbatch` | LIVE / TOOL | E39 level3 tower-wave curriculum, finite horizon, HP-role paired resets and frozen held-out evaluations |
 | `lanerl_jax/train/replay_audit.py` | TOOL | Optional frozen teacher/initial-policy comparison on full replay observation histories; no shadow action execution |
 | `ops/replay_pair.py`, `slurm/replay_pair.sbatch` | TOOL | Matched final-checkpoint minimap videos via launcher; existing frozen evaluator and renderer |

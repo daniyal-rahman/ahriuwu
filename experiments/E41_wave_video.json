@@ -1,0 +1,12 @@
+{
+  "id": "E41_wave_video",
+  "engine": "wave-replay",
+  "backend": "cpu",
+  "slurm_time": "00:45:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_132710400.msgpack",
+  "update": 4050,
+  "seconds": 75,
+  "seed": 7,
+  "offset": -45,
+  "question": "Two frozen75s E40 mirror diagnostic replays with HP roles swapped, held-out offset; exact production observation/actions/step primitives, 600s observation normalization. No training or aggregate learning claims."
+}

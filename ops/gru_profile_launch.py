@@ -29,6 +29,7 @@ def launch(spec, dry, resume=None):
               'vision-smoke': 'slurm/vision_smoke.sbatch',
               'paired-vec': 'slurm/paired_vec.sbatch',
               'wave-scenario': 'slurm/wave_scenario.sbatch',
+              'wave-replay': 'slurm/wave_replay.sbatch',
               'replay-pair': 'slurm/replay_pair.sbatch',
               'escape-counterfactual': 'slurm/escape_counterfactual.sbatch'}[spec['engine']]
     cmd = ['sbatch', '--parsable', '--partition=gpup', '--gres=gpu:1',
@@ -41,7 +42,7 @@ def launch(spec, dry, resume=None):
     if resume:
         cmd.extend(['--resume', str(checkpoint)])
     if spec.get('backend') == 'cpu':
-        if spec['engine'] not in ('replay-pair', 'escape-counterfactual'):
+        if spec['engine'] not in ('replay-pair', 'escape-counterfactual', 'wave-replay'):
             raise SystemExit('CPU fallback is limited to frozen replay diagnostics')
         cmd = [x for x in cmd if x != '--gres=gpu:1']
         changes = {'--partition=gpup':'--partition=cpu', '--nodelist=desktop':'--nodelist=danilogin',
