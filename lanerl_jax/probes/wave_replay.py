@@ -128,6 +128,9 @@ def main():
             outcomes=[]
             for row,base,base_carry,base_key in cases:
                 if spec.get('case_category') and row['category'] != spec['case_category']: continue
+                if spec.get('learning_audit'):
+                    from .caster_learning_audit import run
+                    run(policy,params,sim,base,base_carry,dest,row['target'],step,decode,reward,target_action)
                 tag=f"{row['category']}_{row['index']}"
                 (dest/(tag+'.msgpack')).write_bytes(serialize_replay_state(dict(state=base,carry=base_carry,key=base_key)))
                 for branch in ('control','attack3s','cancel_e_attack3s','e_trade') + tuple(f'sample_{i}' for i in range(spec.get('sample_branches',0))):

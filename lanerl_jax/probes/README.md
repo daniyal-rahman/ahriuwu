@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `caster_learning_audit.py` | Caster sensitivity, full-horizon MC and isolated on-policy PPO | LEARN-PAIR-09; invoked by E45 wave replay | 2026-09-30 |
 | `wave_audit_summary.py` | Aggregate recorded windows, spell attempts/activations and branches | LEARN-PAIR-08; descriptive read-only summary, no lifetime census | 2026-09-30 |
 | `aa_cancel_boundary.py` | Can suppression on the final windup tick still deal damage? | LEARN-PAIR-08: NumPy routine repro; compare server CastCancelCheck ordering, no simulation changes | 2026-09-30 |
 | `wave_replay.py` | E40 short-scenario behavior with HP roles swapped | LEARN-PAIR-07/08; frozen CPU videos, optional old opponent, policy probabilities, restored-state caster/trade branches, branch videos and fresh policy samples | 2026-09-30 |
