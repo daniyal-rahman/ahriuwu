@@ -4,7 +4,10 @@
 unattended training. E39b final weights, fresh optimizer and learning-rate
 schedule,10000additional updates (~12h), same scenario/reward/model. Original
 E34 remains fixed evaluation opponent. Checkpoint every50updates; periodic
-frozen evaluations. Dry-run passed; GPU canary/startup watch in progress.
+frozen evaluations. Dry-run,5 GPU canaries and180s launcher health watch passed.
+Worker scenario setup/compilation starting; new PPO updates not yet confirmed.
+Capped CPU checkpoint check: E39b final step/schema/finite parameters verified;
+original E34 opponent loads correctly and differs from learner weights.
 Log `/mnt/nfs/shared/E40_tower_wave_extended-1780.out`.
 No optimizer speedup installed.
 

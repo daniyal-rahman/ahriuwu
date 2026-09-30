@@ -1812,3 +1812,16 @@ transfer conclusion. Final-role HP is confounded by respawn; do not score it
 as survival. Sources:1778/1779 logs and final run
 `/mnt/nfs/checkpoints/lanerl-jax/E39b_tower_wave_advantage/vec-s0-20260930-021812-01c96dd1/`.
 No further optimization experiment ran after PERF-008's code review.
+
+
+E40 extension launch: Dani explicitly requested longer uninterrupted training
+from the completed model. Job1780 starts10000additional updates from E39b final
+with fresh Adam and lr3e-5 annealing over the new budget; physics, scenario,
+entropy and rewards unchanged. Optional `eval_opponent_from` separates the
+original E34 fixed opponent from the learner initialization; both paths/hashes
+are recorded in the manifest. Existing configs default to their init source.
+Capped CPU check verified final step32768000, finite matching parameter schemas,
+exact opponent deserialization and distinct learner/opponent weights. Syntax
+check, launcher dry-run,5 GPU tests and180s startup watch passed. Worker setup
+starting; no new frozen result yet. Expected~12h;13.5h worker cap/14h Slurm.
+No persistent watcher or automatic resubmission service created.
