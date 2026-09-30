@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E42 PREPARED:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
+**E42 RUNNING — CPU Slurm1782:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
 video with state-driven spell/attack cues. CPU caster opportunity and restored
 state intervention audit; E40 training unchanged. No HP reward added.
 
