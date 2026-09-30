@@ -127,21 +127,27 @@ def main():
             (dest/'opportunities.json').write_text(json.dumps(audit,indent=2))
             outcomes=[]
             for row,base,base_carry,base_key in cases:
+                if spec.get('case_category') and row['category'] != spec['case_category']: continue
                 tag=f"{row['category']}_{row['index']}"
                 (dest/(tag+'.msgpack')).write_bytes(serialize_replay_state(dict(state=base,carry=base_carry,key=base_key)))
-                for branch in ('control','attack3s','cancel_e_attack3s','e_trade'):
+                for branch in ('control','attack3s','cancel_e_attack3s','e_trade') + tuple(f'sample_{i}' for i in range(spec.get('sample_branches',0))):
                     if branch=='e_trade' and row['category']!='champion':continue
                     if branch=='cancel_e_attack3s' and not row['e_active']:continue
                     bs,bc,bk=base,base_carry,base_key;ret=0.;first_cs=None;target=row['target'];seq=row['spawn_seq'];timeline=[];control_error=0.
+                    branch_rows=[];decisions=[];discounted=0.
+                    if branch.startswith('sample_'): bk=jax.random.fold_in(bk,int(branch.split('_')[1])+1)
                     for tick in range(80):
-                        bk,ak=jax.random.split(bk);a,bc,_=act(bs,bc,ak)
+                        bk,ak=jax.random.split(bk);a,bc,lg=act(bs,bc,ak)
                         same=bool(bs.alive[target]) and int(bs.spawn_seq[target])==seq
-                        if branch!='control' and tick<30 and same:
+                        if branch in ('attack3s','cancel_e_attack3s','e_trade') and tick<30 and same:
                             forced=target_action(bs,target)
                             if (branch=='cancel_e_attack3s' and bool(bs.buffs.e.active[0])) or (branch=='e_trade' and tick==0):
                                 forced=(jnp.int32(5),jnp.int32(0),jnp.int32(0))
                             a=tuple(v.at[0].set(f) for v,f in zip(a,forced))
-                        nxt=jax.block_until_ready(step(bs,decode(a,bs)));ret+=float(reward(bs,nxt)[0])
+                        orders_branch=decode(a,bs)
+                        if spec.get('save_branches'): branch_rows.append(jax.tree.map(np.asarray,snapshot(bs,orders_branch,a)))
+                        nxt=jax.block_until_ready(step(bs,orders_branch));r=float(reward(bs,nxt)[0]);ret+=r;discounted+=(.99**tick)*r
+                        decisions.append(dict(seconds=tick/10,value=float(lg.value[0]),button=int(a[0][0]),button_probs=np.asarray(jax.nn.softmax(lg.button[0])).tolist(),reward=r,target_distance=float(jnp.hypot(bs.x[target]-bs.x[0],bs.y[target]-bs.y[0]))))
                         if first_cs is None and int(nxt.cs[0])>int(base.cs[0]):first_cs=(tick+1)/10
                         bs=nxt
                         if branch=='control' and row['index']+tick+1<len(rows):
@@ -150,6 +156,14 @@ def main():
                         if tick in (9,19,29,49,79):timeline.append(dict(seconds=(tick+1)/10,cs=int(bs.cs[0]-base.cs[0]),hp=np.asarray(bs.hp[:2]).tolist(),target_alive=bool(bs.alive[target]) and int(bs.spawn_seq[target])==seq))
                     result=dict(case=row,branch=branch,cs_gain=int(bs.cs[0]-base.cs[0]),deaths=np.asarray(bs.deaths[:2]-base.deaths[:2]).tolist(),hp_change=np.asarray(bs.hp[:2]-base.hp[:2]).tolist(),reward=ret,first_cs_s=first_cs,control_error=control_error,timeline=timeline)
                     if branch=='control':assert control_error<1e-4,control_error
+                    _,_,end_lg=act(bs,bc,jax.random.key(0))
+                    result.update(discounted_reward=discounted,bootstrap_value=float(end_lg.value[0]),bootstrapped_return=discounted+.99**80*float(end_lg.value[0]),decisions=decisions)
+                    if spec.get('save_branches'):
+                        bd=dest/(tag+'_'+branch);bd.mkdir()
+                        branch_rows.append(jax.tree.map(np.asarray,snapshot(bs,orders_branch,tuple(jnp.zeros(2,jnp.int32) for _ in range(3)))))
+                        arrays={k:np.stack([r[k] for r in branch_rows]) for k in branch_rows[0]}
+                        bm=dict(meta,label=f'{tag} | {branch} | frozen u{spec["update"]}',branch=branch,seconds=8,start_seconds=float(base.t_ms)/1000)
+                        np.savez_compressed(bd/'trace.npz',**arrays,walkable=np.asarray(sim.terrain.walkable),metadata=np.asarray(json.dumps(bm)))
                     outcomes.append(result);print('BRANCH',tag,branch,result['cs_gain'],result['hp_change'],flush=True)
             (dest/'counterfactuals.json').write_text(json.dumps(outcomes,indent=2))
     print('PROFILE COMPLETE',flush=True)

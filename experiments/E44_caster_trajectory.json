@@ -1,0 +1,20 @@
+{
+  "id": "E44_caster_trajectory",
+  "engine": "wave-replay",
+  "backend": "cpu",
+  "slurm_time": "00:45:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_132710400.msgpack",
+  "update": 4050,
+  "seconds": 75,
+  "seed": 7,
+  "offset": -45,
+  "question": "Frozen original caster incident: branch videos, four additional current-policy samples, critic estimates and exact control. No training changes.",
+  "audit": true,
+  "reference_root": "/mnt/nfs/shared/E41_wave_video",
+  "low_teams": [
+    1
+  ],
+  "case_category": "caster",
+  "save_branches": true,
+  "sample_branches": 4
+}
