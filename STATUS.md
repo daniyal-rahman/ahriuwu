@@ -1,9 +1,10 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E43 RUNNING — CPU1783:** E42's old opponent produced no one-auto caster windows.
-Reproduce original E41 mirror videos (u4050, both HP roles) and branch the
-actual caster opportunities there. Require original replay reconstruction
-tolerance1e-4 as well as branch controls. E40 training remains unchanged.
+**E43 COMPLETE — CPU1783 exit0 in9m08s:** Both original E41 mirror traces
+and restored branch controls match exactly. At30.9s fullHP caster opportunity,
+normal continuation0CS vs targeted attack1CS at1.8s, same champion HP changes.
+Source side-frame audit confirms canonical coordinates, no raw world XY or side bit.
+Details LEARN-PAIR-08. E40 job1780 continues unchanged; no reward/physics edits.
 
 **E42 COMPLETE — CPU1782 exit0 in4m49s:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
 video with state-driven spell/attack cues. CPU caster opportunity and restored

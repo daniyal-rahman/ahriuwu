@@ -1934,3 +1934,26 @@ E42 exact-state8s control comparisons (controls x/y/hp/cs/deaths maxerror0):
 E43 will restore original E41u4050/seed7/offset−45 mirror and require original
 trace agreement before caster branches. Historical training encounters were
 not logged; no exact lifetime opportunity count can be claimed.
+
+E43 diagnostic completed: both original E41 traces reproduce exactly (maxerror0),
+including each branch control. FullHP blue has59 decision frames (5.9s) with
+visible one-ordinary-AA casters within650u; none already in AA range. At30.904s,
+caster83HP at639u: normal8s continuation0CS; targeted attack3s then policy1CS,
+first at1.8s, identical net champion HP changes. Reward.408→.908.
+P(attack_move)=.1425, P(move)=.7735; cursor mass within125u of caster=.000484.
+This demonstrates recoverable farming from the actual original-video state,
+not a mechanics impossibility; intervention CS is total, not attributed kill ID.
+LowHP blue has118 candidate frames (11.8s), also none in AA range; selected
+caster interventions likewise recover1CS vs0. Opportunity counts are these
+sampled games only, not training lifetime. Outputs E43 low_team_{0,1}.
+
+Side encoding source audit: obs/frame.py projects own position relative to own
+outer turret and all entity offsets onto own-to-enemy lane axis; red reverses
+forward axis, normal stays outer-wall-positive. builder.py sends no raw world
+XY or explicit blue/red label. train/actions.py converts clicks back. Equivalent
+reflected positions therefore have matching geometric features; actual full
+observations need not match (map geometry, unit arrangement, health, histories,
+and tie ordering). No exact whole-scenario symmetry test claimed. Shared weights,
+separate recurrent state. Keep canonicalization; a side bit would permit learning
+side-dependent behavior but would not enforce symmetry or replace this transform.
+No training, reward, or physics changes made in this diagnostic.
