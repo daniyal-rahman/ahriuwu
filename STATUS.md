@@ -1,7 +1,11 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E41 VIDEO RUNNING — CPU Slurm1781:** Frozen E40 u4050, both HP-role75s mirror replays on
-danilogin CPU; desktop training continues. No learning settings changed.
+**E41 VIDEOS COMPLETE — CPU1781:** Exit0 in4m17s;4 canaries and180s
+startup watch passed. Frozen E40u4050,75s mirror, both HP roles. Normal-speed
+75.1s MP4s and interactive HTML in `/mnt/nfs/shared/E41_wave_video/low_team_{0,1}/`.
+Diagnostic CS blue/red4/2 and3/3; zero deaths. Not aggregate learning scores.
+Parameter/experience/reward/credit-assignment audit recorded LEARN-PAIR-07.
+No training modifications; E40 job1780 continues on desktop. No E41 watcher remains.
 
 **E40 EXTENDED TRAINING STARTING — Slurm1780:** Dani requested immediate restart and longer
 unattended training. E39b final weights, fresh optimizer and learning-rate

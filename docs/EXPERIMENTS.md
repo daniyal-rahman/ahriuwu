@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E41_wave_video` | 09-30 | CPU frozen replay | E40 u4050,75s mirror, both HP roles, offset−45 | Frozen weights |2games | RUNNING CPU1781; startup pending | Diagnostic videos, not aggregate scores |
+| `E41_wave_video` | 09-30 | CPU frozen replay | E40 u4050,75s mirror, both HP roles, offset−45 | Frozen weights |2games | COMPLETE CPU1781 exit0,4m17s;4canaries/180s watch passed;2 normal-speed MP4s | Diagnostic videos, not aggregate scores |
 | `E40_tower_wave_extended` | 09-30 | Accelerated GRU PPO | E39b final initialization, same75s HP-role task; fixed original E34 evaluation opponent | Fresh Adam/schedule,lr3e-5→0,entropy.001 |10000additional updates,13.5h worker cap,14h Slurm | RUNNING Slurm1780; dry-run,5 GPU canaries,180s watch passed; worker setup starting | Final endpoint primary; periodic frozen64games/mode; no performance changes |
 | `E39b_tower_wave_advantage` continuation | 09-30 | Same experiment resume | u13 parameters/optimizer/schedule restored; fresh episodes because old checkpoint omitted rollout state | Identical spec, target u1000 |987updates remain | COMPLETE job1779 exit0,1h23m15s,u1000; frozen fixed-E34 fullHP CS3.56→4.47/deaths.563→.063; lowHP CS2.19→1.84 | E34 evaluation opponent unchanged; new checkpoints retain rollout state |
 | `E39b_tower_wave_advantage` | 09-29 | E39 retry | Same protocol; fixed evaluation alive-spell axis | unchanged |32.768M decisions cap | INTERRUPTED job1778: desktop boot to Windows;13updates saved/verified; startup and initial frozen evals passed | Shape regression added; no PPO updates in failed E39 |

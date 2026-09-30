@@ -1825,3 +1825,56 @@ exact opponent deserialization and distinct learner/opponent weights. Syntax
 check, launcher dry-run,5 GPU tests and180s startup watch passed. Worker setup
 starting; no new frozen result yet. Expected~12h;13.5h worker cap/14h Slurm.
 No persistent watcher or automatic resubmission service created.
+
+
+| ID | Status | Evidence | Interpretation |
+|---|---|---|---|
+| LEARN-PAIR-07 | E41 CPU replay RUNNING; learning-mechanism audit | E40 checkpoint u4050; actual parameter count6,129,439. Ancestry E34 81.92M + E39b32.768M + E40 132.7104M =247.3984M champion decisions. At nominal10Hz,6872.18 champion-hours or3436.09 world-hours; excludes setup/eval and counts shared world only once. | Raw decisions are correlated; four PPO passes reuse each rollout, not new experience. No universal parameter-count→skill threshold. |
+
+E41 contract: freeze numbered u4050 checkpoint (never follow latest); two75s
+mirror replays at held-out offset−45, seed7, alternate initial70%HP side.
+Use actual scenario constructor and production observation/action/sim primitives,
+600s observation normalization,6ticks/decision, full GRU carry, noop rejected
+movement, no extra rank NOOPs and no episode reset. Omniscient render only;
+policy observes normal fog. CPU Slurm1781 via launcher; training1780 unchanged.
+Diagnostic examples, not aggregate evaluations or cross-backend bitwise claims.
+Probe `probes/wave_replay.py`; outputs `/mnt/nfs/shared/E41_wave_video/`.
+
+Learning audit confirmed from actual config/code:
+- Entity transformer2layers/128width/4heads; four1024wideMLPlayers;512GRU;
+ 8buttons and96x54 coordinate bins. Policy click_mask=False; invalid movement
+ becomesNOOP, not a validity-constrained sample. Existing mask helper can compute
+ standable screen cells from public static map and position; no gameplay rollout
+ needed for that geometry. Standable destination does not establish route quality.
+- Reward=(own−enemy gold)/20 +.008*(own−enemyXP) +5*change in lane potential.
+ No direct death or HP term, no pure CS objective. Shaping pays approach, not
+ perpetual stationary lane occupancy. Hypothesis: relative score/safety can
+ favor poor absolute farming; no claim this alone explains observed brush play.
+- discount=.99, GAE lambda=.95 at10Hz. Reward delay10s weight=.366,30s=.049.
+ Direct future TD-residual weight in GAE after10s is(.99*.95)^100=.002167;
+ critic bootstrap still carries future value, so this is NOT a hard memory/
+ planning horizon. Rollout128steps=12.8s; GRU carry persists but backprop chunks
+ are bounded. Temporal memory and explicit action-branch search are distinct.
+- Critic is a linear value head on actor-trained features; detach_critic=True
+ prevents value regression shaping those features (deliberate earlier stability
+ choice). Possible value-prediction constraint, not established failure cause.
+- Advantage normalization means uniform reward scaling is not equivalent to
+ increasing actor learning rate; consistently scaled advantages normalize away.
+ Critic loss, transient value mismatch, Adam and shared gradient clipping make
+ practical changes non-invariant. Changing CS vsXP/kill weighting changes the
+ objective, rather than merely gradient size.
+
+Frozen E40 u4000 vs fixed E34,64games: lowHP CS2.15625/deaths.125 vs E40u0
+1.84375/.84375; fullHP2.75/.0625 vs4.46875/.0625. Stronger lowHP survival,
+nonmonotonic farming. All scores75s, NOT10minute trials. Original E34 long-task
+frozen vsheuristic at2500updates was24.65CS, not single digits; no long-task
+transfer evaluation yet for E39/E40. No learning changes made in this audit.
+
+
+E41 completed CPU1781 exit0 in4m17s. Four replay/scenario canaries and180s
+launcher health watch passed. Both normal-speed MP4s verified via ffprobe:
+75.1s each,1280x800 render; first preview inspected. Low-blue mirror sample
+CS4/2,low-red sample3/3,all deaths0. Interactive replay.html and trace.npz
+preserved alongside videos. CPU fallback records independent sampled diagnostic
+trajectories; not claimed identical to GPU64game aggregate evaluation seeds.
+Training1780 remained running; no gameplay/reward/hyperparameter changes.
