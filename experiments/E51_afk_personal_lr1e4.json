@@ -1,0 +1,34 @@
+{
+  "id": "E51_afk_personal_lr1e4",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 128,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    64,
+    128
+  ],
+  "question": "User-authorized reward cleanup: zeroXP reward, personal Garen enemy top outer damage only, same100gold/fullbarHP penalty and900gold/tower. Paired constantLR3e-5 vs1e-4 from E46final with fresh optimizer, same seeds/settings,128updates/2.097M learner decisions each. Hypothesis: largerLR improves short-budget CS without survival regression. Frozen64game eval at0/1.05/2.10M; report CS/deaths/personal tower damage. Directional success: >=0.5CS over matched control and <=0.05 additional deaths/game; one seed, not significance proof. Stop at budget or nonfinite failure; do not extend automatically. Reward semantics shared by both arms, not separately ablated.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true
+}

@@ -78,6 +78,7 @@ import jax.numpy as jnp
 
 from .autoattack import step_autoattack
 from .combat import (
+    effective_champion_tower_damage,
     TURRET_AD_PER_RAMP,
     TURRET_ARMOR_PER_RAMP,
     TURRET_DAMAGE_VS_MINION,
@@ -1331,6 +1332,8 @@ def tick(state: LaneState, params: UnitParams,
         [jnp.zeros((1, n), dtype).at[0].set(bs.damage_dealt), dmg_ij,
          orphan_dmg[None, :]], axis=0)
     cum = jnp.cumsum(dmg_ij, axis=0)                     # (attacker, victim)
+    champion_tower_damage = state.champion_tower_damage + effective_champion_tower_damage(
+        dmg_ij, cum, state.hp, state.kind, state.team, state.alive, jnp)
     crosses = (cum >= state.hp[None, :]) & (dmg_ij > 0)
     first_row = jnp.argmax(crosses, axis=0)
     # row 0 is the Judgment lane; map it back to whoever cast the spin
@@ -1567,6 +1570,7 @@ def tick(state: LaneState, params: UnitParams,
         recall_damage_pending=recall_damage_pending,
         observed_enemy_cast_ms=observed_enemy_cast_ms,
         hp=hp, max_hp=max_hp, alive=alive,
+        champion_tower_damage=champion_tower_damage,
         # `visible` was computed from this tick's post-movement, PRE-death
         # positions/alive (see the fog-of-war block above) -- exactly what
         # this tick's own targeting needed. ANDed with the tick's final

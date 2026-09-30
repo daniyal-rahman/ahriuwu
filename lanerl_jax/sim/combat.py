@@ -342,3 +342,15 @@ def attack_windup(period: Any, global_cast_percent: float,
     against the server directly.
     """
     return period * (global_cast_percent + attack_delay_cast_offset_percent)
+
+
+def effective_champion_tower_damage(damage_rows, cumulative, hp, kind, team, alive, xp):
+    """Attribute actual HP removed in existing hit order; row0=buff, rows1/2=champs.
+
+    Garen Judgment does not hit buildings; champion autos/Q are in rows1/2.
+    This is telemetry only, never changes damage, kill credit or simulator state.
+    """
+    hits = damage_rows[1:3]
+    remaining = xp.maximum(hp[None, :] - (cumulative[1:3] - hits), 0.)
+    enemy_tower = (kind[None, :] == 3) & (team[None, :] != team[:2, None]) & alive[None, :]
+    return xp.where(enemy_tower, xp.minimum(hits, remaining), 0.)

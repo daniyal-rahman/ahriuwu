@@ -99,9 +99,11 @@ def main():
     pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=True)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
         episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,stagger_initial=False,
-        bank_size=len(bank.t_ms),lr_anneal=True,policy=pcfg,
+        bank_size=len(bank.t_ms),lr_anneal=spec.get("lr_anneal",True),policy=pcfg,
+        xp_scale=spec.get("xp_scale",0.008),
         opponent=spec.get("opponent","mirror"),health_loss_gold=spec.get("health_loss_gold",0.),
         tower_damage_gold=spec.get("tower_damage_gold",0.),
+        tower_damage_personal=spec.get("tower_damage_personal",False),
         ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef']))
     built=make_vec_train(cfg,sim,bank)
     params=from_state_dict(built['init_params'](jax.random.key(0)),msgpack_restore((scratch/'initial.msgpack').read_bytes())['params'])
@@ -199,6 +201,7 @@ def main():
                                 cs=float(tr.cs[t,env,team]),gold=float(tr.gold[t,env,team]),
                                 gold_diff=float(tr.gold[t,env,team]-tr.gold[t,env,1-team]),
                                 first_enemy_seen_hp=float(first_seen_hp[env,team]) if np.isfinite(first_seen_hp[env,team]) else None,
+                                tower_damage=float(tr.tower_damage_at_end[t,env,team]),
                                 kills=float(tr.kills_at_end[t,env,team]),deaths=float(deaths[env,team]),
                                 hp_fraction=float(tr.hp_at_end[t,env,team]),reward=float(returns[env,team]),
                                 spell_selections=float(alive_spells[env,team])))
@@ -210,7 +213,7 @@ def main():
                     cohort=[x for x in rows if x['team']==team and x['low_hp']==disadvantaged]
                     if not cohort: continue
                     summaries[f'{team}_{"low" if disadvantaged else "full"}']={k:float(np.mean([x[k] for x in cohort]))
-                        for k in ('cs','gold_diff','kills','deaths','hp_fraction','reward','spell_selections')}
+                        for k in ('cs','gold_diff','kills','deaths','hp_fraction','reward','spell_selections','tower_damage')}
                     contact=[x['first_enemy_seen_hp'] for x in cohort if x['first_enemy_seen_hp'] is not None]
                     summaries[f'{team}_{"low" if disadvantaged else "full"}']['first_enemy_seen_hp']=float(np.mean(contact)) if contact else None
             result=dict(update=update,frozen=True,opponent=mode,duration_s=spec['duration_s'],games=64,

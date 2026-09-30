@@ -461,6 +461,8 @@ class LaneState:
     #: `kill_spree`/`death_spree` above), carried only for observability,
     #: symmetric with `deaths` above.
     kills: jax.Array           # (N,) int16
+    # Observability only: cumulative effective champion damage to each turret.
+    champion_tower_damage: jax.Array  # (2, N), excludes overkill and other sources
     #: ``Champion._championHitFlagTimer`` (`Champion.cs:21,267-273`) -- ms
     #: remaining since this champion was last hit by ANY source (reset to
     #: 15000 on every `TakeDamage`, decremented every tick, floored at 0; NOT
@@ -637,6 +639,7 @@ def empty_state(dtype=jnp.float32, seed: int = 0,
         cs=zi(n_units, t=jnp.int16), deaths=zi(n_units, t=jnp.int16),
         kill_spree=zi(n_units, t=jnp.int32), death_spree=zi(n_units, t=jnp.int32),
         gold_from_minions=z(n_units), kills=zi(n_units, t=jnp.int16),
+        champion_tower_damage=jnp.zeros((2,n_units),dtype=dtype),
         hit_flag_ms=z(n_units),
         hit_flag_by=jnp.full((n_units,), -1, dtype=jnp.int8),
         first_blood_done=jnp.asarray(False),

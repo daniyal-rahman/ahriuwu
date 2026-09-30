@@ -56,6 +56,8 @@ def test_loop_runs_and_actor_learner_agree(core, opponent):
                         mlp_hidden=32, mlp_layers=1)
     cfg = VecConfig(n_envs=2, rollout_steps=6, n_updates=2, n_minibatches=2, episode_s=2.0,
                     opponent=opponent, ppo=PPOConfig.standard(decision_hz=10.0), policy=pcfg)
+    if opponent == "afk":
+        cfg = cfg._replace(xp_scale=0., tower_damage_gold=900., tower_damage_personal=True, health_loss_gold=100.)
     opponent_params = None
     if opponent == "frozen":
         reference = make_vec_train(cfg._replace(opponent="mirror"), _sim(), _bank())
@@ -99,3 +101,60 @@ def test_relative_reward_afk_health_and_tower():
     dead=p.replace(alive=p.alive.at[0].set(False),hp=p.hp.at[0].set(0))
     assert float(_relative_reward(dead,p,cfg)[1]['health'][0])==0
     np.testing.assert_allclose(_relative_reward(p,dead,cfg)[1]['health'][0],-5.)
+
+
+def test_relative_reward_personal_tower_and_no_xp():
+    from lanerl_jax.sim.init import TOP_OUTER_TURRET
+    p=init_lane(seed=0)
+    xy=np.stack([p.x,p.y],-1)
+    u=int(np.argmin(np.sum((xy-TOP_OUTER_TURRET[1])**2,-1)))
+    cfg=VecConfig(xp_scale=0.,tower_damage_gold=900.,tower_damage_personal=True)
+    q=p.replace(hp=p.hp.at[u].add(-300),xp=p.xp.at[0].add(500))
+    r,terms=_relative_reward(p,q,cfg)
+    assert float(terms['tower'][0])==0. and float(terms['xp'][0])==0.
+    q=q.replace(champion_tower_damage=q.champion_tower_damage.at[0,u].add(100))
+    _,terms=_relative_reward(p,q,cfg)
+    np.testing.assert_allclose(terms['tower'][0],45*100/float(p.max_hp[u]),rtol=1e-6)
+    assert float(terms['tower'][1])==0.
+
+
+def test_relative_reward_personal_tower_attribution():
+    from lanerl_jax.sim.combat import effective_champion_tower_damage
+    # Rows: buff, blue Garen, red Garen, blue minion, orphan projectile.
+    # Victims: champs0/1, red tower2, blue tower3, red minion4.
+    damage=np.zeros((5,5),np.float32)
+    damage[1,2]=80;damage[3,2]=90;damage[2,3]=200;damage[1,4]=50
+    hp=np.array([100,100,100,30,100],np.float32)
+    kind=np.array([1,1,3,3,2]);team=np.array([0,1,1,0,1]);alive=np.ones(5,bool)
+    def attribution(d):
+        return effective_champion_tower_damage(d,np.cumsum(d,axis=0),hp,kind,team,alive,np)
+    got=attribution(damage)
+    np.testing.assert_array_equal(got,[[0,0,80,0,0],[0,0,0,30,0]])
+    damage[1,2]=0 # same minion hit, no Garen damage
+    assert attribution(damage)[0,2]==0
+    damage[1,2]=150 # overkill never earns more than HP removed
+    assert attribution(damage)[0,2]==100
+    alive[2]=False
+    assert attribution(damage)[0,2]==0
+
+
+def test_relative_reward_personal_tower_live_hit():
+    from lanerl_jax.sim.init import TOP_OUTER_TURRET, lane_params
+    from lanerl_jax.data.patch import load_patch
+    from lanerl_jax.sim.step import tick
+    p=init_lane(seed=0)
+    xy=np.stack([p.x,p.y],-1)
+    u=int(np.argmin(np.sum((xy-TOP_OUTER_TURRET[1])**2,-1)))
+    live=jnp.zeros_like(p.alive).at[0].set(True).at[u].set(True)
+    p=p.replace(alive=live,x=p.x.at[0].set(p.x[u]+60),y=p.y.at[0].set(p.y[u]),
+        collision_x=p.collision_x.at[0].set(p.x[u]+60),collision_y=p.collision_y.at[0].set(p.y[u]),
+        target=p.target.at[0].set(u),aa_target=p.aa_target.at[0].set(u),
+        is_attacking=p.is_attacking.at[0].set(True),aa_windup=p.aa_windup.at[0].set(.001),
+        aa_cooldown=p.aa_cooldown.at[0].set(1.0))
+    q=jax.jit(lambda s:tick(s,lane_params(load_patch())))(p)
+    removed=float(p.hp[u]-q.hp[u]);assert removed>0
+    np.testing.assert_allclose(q.champion_tower_damage[0,u],removed,rtol=1e-5)
+    # Telemetry has no effect on any physical state field.
+    r=jax.jit(lambda s:tick(s,lane_params(load_patch())))(p.replace(
+        champion_tower_damage=jnp.ones_like(p.champion_tower_damage)*123))
+    np.testing.assert_array_equal(q.hp,r.hp)

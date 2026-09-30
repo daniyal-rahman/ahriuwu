@@ -78,6 +78,7 @@ class VecConfig(NamedTuple):
     enemy_scale: float = 1.0
     health_loss_gold: float = 0.0
     tower_damage_gold: float = 0.0
+    tower_damage_personal: bool = False
     lr_anneal: bool = False
     ppo: PPOConfig = PPOConfig()
     policy: PolicyConfig = PolicyConfig()
@@ -125,6 +126,7 @@ class Transition(NamedTuple):
     lane_dist: jax.Array
     click_mask: jax.Array | None
     hp_at_end: jax.Array
+    tower_damage_at_end: jax.Array
     kills_at_end: jax.Array
 
 
@@ -152,7 +154,11 @@ def _relative_reward(prev, nxt, cfg: VecConfig):
         xy=jnp.stack([prev.x,prev.y],-1)
         indices=jnp.stack([jnp.argmin(jnp.where((prev.kind==3)&(prev.team==t),jnp.sum((xy-jnp.asarray(TOP_OUTER_TURRET[t]))**2,-1),jnp.inf)) for t in (0,1)])
         damage=jnp.clip(prev.hp[indices]-nxt.hp[indices],0.,prev.hp[indices])*prev.alive[indices]
-        tower=cfg.tower_damage_gold/cfg.gold_scale*damage[::-1]/jnp.maximum(prev.max_hp[indices][::-1],1.)
+        credited = damage[::-1]
+        if cfg.tower_damage_personal:
+            delta = nxt.champion_tower_damage - prev.champion_tower_damage
+            credited = jnp.maximum(delta[jnp.arange(2), indices[::-1]], 0.)
+        tower=cfg.tower_damage_gold/cfg.gold_scale*credited/jnp.maximum(prev.max_hp[indices][::-1],1.)
         total=total+tower;terms['tower']=tower
     return total,terms
 
@@ -252,6 +258,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
             deaths = (nxt.deaths[:2] - state.deaths[:2]).astype(jnp.float32)
             lane_dist = lane_corridor_distance(nxt.x[:2], nxt.y[:2])
             hp_at_end = jnp.where(done_full, nxt.hp[:2]/jnp.maximum(nxt.max_hp[:2],1.), 0.)
+            tower_damage_at_end = jnp.where(done_full, nxt.champion_tower_damage.sum(-1), 0.)
             kills_at_end = jnp.where(done_full, nxt.kills[:2], 0)
             idx = jax.random.randint(k_reset, (), 0, K)
             fresh = jax.tree.map(lambda b: b[idx], bank)
@@ -262,7 +269,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
                            reward, jnp.broadcast_to(done, reward.shape), terms,
                            cs_at_done, gold_at_done, xp_at_done,
                            jnp.broadcast_to(done_full, reward.shape), deaths, lane_dist, cm,
-                           hp_at_end, kills_at_end)
+                           hp_at_end, tower_damage_at_end, kills_at_end)
             return nxt, new_carry, deadline, t
 
         keys = jax.random.split(sk, cfg.n_envs)
