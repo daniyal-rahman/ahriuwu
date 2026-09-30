@@ -86,6 +86,15 @@ def main():
     if spec.get("opponent") == "afk":
         from .wave_scenario import park_afk_opponent
         bank=park_afk_opponent(bank);eval_bank=park_afk_opponent(eval_bank)
+        for name,actual in (("train_bank",bank),("eval_bank",eval_bank)):
+            setup=out/name/'setup.json'
+            rows=json.loads(setup.read_text())
+            for i,row in enumerate(rows):
+                row.update(afk_red=True,hp=np.asarray(actual.hp[i,:2]).tolist(),
+                    xy=np.stack([actual.x[i,:2],actual.y[i,:2]],-1).tolist(),
+                    blue_initial_hp_fraction=float(actual.hp[i,0]/actual.max_hp[i,0]))
+                row.pop('low_hp_team',None)
+            setup.write_text(json.dumps(rows,indent=2))
     calibrate(bank,sim,out)
     pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=True)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
