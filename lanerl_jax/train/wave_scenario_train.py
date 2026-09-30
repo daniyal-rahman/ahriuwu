@@ -77,6 +77,8 @@ def main():
     scratch=Path('/scratch')/(spec['id']+'-'+os.environ['SLURM_JOB_ID']);scratch.mkdir(parents=True)
     shutil.copytree(DEFAULT_ROUTE_ARTIFACT,scratch/'routes')
     source=Path(spec['init_from']);shutil.copyfile(source,scratch/'initial.msgpack')
+    opponent_source=Path(spec.get('eval_opponent_from',spec['init_from']))
+    shutil.copyfile(opponent_source,scratch/'eval_opponent.msgpack')
     out=Path('/mnt/nfs/checkpoints/lanerl-jax')/spec['id'];out.mkdir(parents=True,exist_ok=True)
     sim=SimConfig.training(route_artifact=scratch/'routes').replace(step_ticks=6)
     bank=prepare_scenario_bank(sim,out/'train_bank',spec['train_offsets'],0)
@@ -89,6 +91,7 @@ def main():
         ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef']))
     built=make_vec_train(cfg,sim,bank)
     params=from_state_dict(built['init_params'](jax.random.key(0)),msgpack_restore((scratch/'initial.msgpack').read_bytes())['params'])
+    opponent_params=from_state_dict(params,msgpack_restore((scratch/'eval_opponent.msgpack').read_bytes())['params'])
     runner=built['initial_runner'](jax.random.key(0),params)
     update=0
     if args.resume:
@@ -111,9 +114,10 @@ def main():
         vec={k:v for k,v in cfg._asdict().items() if k not in ('policy','ppo')},
         collector=dict(episode_s=cfg.episode_s,step_ticks=6,unwalkable_click='noop'),
         scenario=spec,environment='jax-vectorised',opponent='mirror-self-play',
-        initialization=('same E39b experiment continuation; optimizer/schedule retained' if args.resume else 'trained E34 random-start final; parameters only, fresh optimizer'),
+        initialization=('same experiment continuation; optimizer/schedule retained' if args.resume else 'init_from checkpoint parameters only; fresh optimizer and schedule'),
         continuation=dict(checkpoint=str(args.resume),sha256=file_sha256(args.resume),start_update=update,continuity=continuity) if args.resume else None,
-        init_source_sha256=file_sha256(source),sim=sim.describe(),sim_fingerprint=sim.fingerprint()),
+        init_source_sha256=file_sha256(source),eval_opponent_source=str(opponent_source),
+        eval_opponent_sha256=file_sha256(opponent_source),sim=sim.describe(),sim_fingerprint=sim.fingerprint()),
         notes='Finite75s tower-wave task; not a ten-minute lane score. Frozen evals by initial HP role.')
     run.keep_checkpoints=0;failed=False
     def save():
@@ -138,7 +142,7 @@ def main():
     evaluations={}
     for mode in ('mirror','frozen'):
         ecfg=cfg._replace(n_envs=64,opponent=mode,bank_size=len(eval_bank.t_ms))
-        eb=make_vec_train(ecfg,sim,eval_bank,opponent_params=params if mode=='frozen' else None)
+        eb=make_vec_train(ecfg,sim,eval_bank,opponent_params=opponent_params if mode=='frozen' else None)
         er=eb['initial_runner'](jax.random.key(2007),params)
         indices=jnp.arange(ecfg.n_envs)%len(eval_bank.t_ms)
         er=er._replace(env_state=jax.tree.map(lambda b:b[indices],eval_bank))
