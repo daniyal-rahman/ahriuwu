@@ -88,6 +88,10 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy
         info = {"policy_loss": pl, "value_loss": vl, "entropy": entropy, **stats}
+        # Marginal categorical entropies; total may use a masked joint click.
+        for name, head in zip(('button', 'screen_x', 'screen_y'), lg):
+            lp = jax.nn.log_softmax(head)
+            info['entropy_' + name] = -(jnp.exp(lp) * lp).sum(-1).mean()
         if prior_params is not None and cfg_ppo.kl_prior_coef > 0:
             klp = kl_to_prior(params, batch)
             total = total + cfg_ppo.kl_prior_coef * klp

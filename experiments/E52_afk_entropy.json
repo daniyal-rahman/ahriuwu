@@ -1,0 +1,35 @@
+{
+  "id": "E52_afk_entropy",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 128,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.01,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    64,
+    128
+  ],
+  "question": "User-authorized exploration/critic investigation. Same E46final init,clean rewards,constantLR1e-4,128updates/2.097M as E51. Only treatment: entropy coefficient0.001 to0.01; categorical sampling staysT1. Frozen64games at0/64/128; compare CS/deaths/personal tower versus E51 and E46baseline. Log marginal head entropy,bootstrapped value bias,raw GAE on positive-gold events (not counterfactual credit proof). Success target >=10.0625CS and <=.05deaths/game; one seed directional only. Stop at budget/nonfinite. Complete both arms, then if an arm beats this gate, one bounded512-update continuation at same settings is authorized by user; otherwise report and diagnose rather than repeat unchanged. Literature: PPO implementation details entropy bonus and shared actor/critic, https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/ ; .01 is an engineering test,not a task-optimal literature guarantee.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "detach_critic": true
+}

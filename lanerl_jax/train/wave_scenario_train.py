@@ -96,7 +96,7 @@ def main():
                 row.pop('low_hp_team',None)
             setup.write_text(json.dumps(rows,indent=2))
     calibrate(bank,sim,out)
-    pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=True)
+    pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=spec.get('detach_critic',True))
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
         episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,stagger_initial=False,
         bank_size=len(bank.t_ms),lr_anneal=spec.get("lr_anneal",True),policy=pcfg,

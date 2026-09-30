@@ -326,7 +326,15 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         r_var = batch["returns"].var()
         metrics["explained_variance"] = jnp.where(
             r_var > 0, 1.0 - (batch["returns"] - batch["value"]).var() / r_var, jnp.nan)
+        metrics['value_mean'] = batch['value'].mean()
+        metrics['target_mean'] = batch['returns'].mean()
+        metrics['value_bias'] = (batch['value'] - batch['returns']).mean()
         learn = lambda x: x[:, :, :n_learn]
+        gold_event = learn(tr.reward_terms['cs']) > 0
+        count = gold_event.sum()
+        metrics['gold_event_decisions'] = count.astype(jnp.float32)
+        metrics['adv_on_gold'] = jnp.where(gold_event, learn(adv), 0.).sum() / jnp.maximum(count, 1)
+        metrics['positive_adv_on_gold'] = (gold_event & (learn(adv) > 0)).sum() / jnp.maximum(count, 1)
         metrics["reward"] = learn(tr.reward).mean()
         for k, v in tr.reward_terms.items():
             metrics[f"reward_{k}"] = learn(v).mean()
