@@ -49,7 +49,7 @@ def test_relative_reward_matches_collector_path():
     assert abs(float((terms["cs"] + terms["xp"]).sum())) < 1e-5
 
 
-@pytest.mark.parametrize("core,opponent", [("gru", "mirror"), ("mlp", "mirror"), ("gru", "lasthit"), ("gru", "frozen")])
+@pytest.mark.parametrize("core,opponent", [("gru", "mirror"), ("mlp", "mirror"), ("gru", "lasthit"), ("gru", "frozen"), ("gru", "afk")])
 def test_loop_runs_and_actor_learner_agree(core, opponent):
     pcfg = PolicyConfig(core=core, core_norm=(core == "gru"), core_residual=(core == "gru"),
                         d_model=32, n_layers=1, ffn_dim=32, ctx_dim=32, core_dim=32,
@@ -63,6 +63,9 @@ def test_loop_runs_and_actor_learner_agree(core, opponent):
     built = make_vec_train(cfg, _sim(), _bank(), opponent_params=opponent_params)
     runner = built["initial_runner"](jax.random.key(0))
     runner2, tr, batch = jax.jit(built["rollout"])(runner)
+    if opponent == "afk":
+        assert np.all(np.asarray(tr.action[0][:,:,1]) == 0)
+        assert batch["carry0"].shape[0] == cfg.n_envs
     lg = built["loss"].forward(runner.params, batch)
     lp = factored_log_prob((lg.button, lg.screen_x, lg.screen_y), batch["action"],
                            batch["uses_screen"], click_mask=batch.get("click_mask"))
@@ -80,3 +83,19 @@ def test_loop_runs_and_actor_learner_agree(core, opponent):
     if core == "gru":
         # the carry is zeroed on done, both for the env and the batch's carry0
         assert batch["carry0"].shape == (cfg.n_envs * cfg.learn_agents, 32)
+
+
+def test_relative_reward_afk_health_and_tower():
+    from lanerl_jax.sim.init import TOP_OUTER_TURRET
+    p=init_lane(seed=0)
+    xy=np.stack([p.x,p.y],-1);u=int(np.argmin(np.sum((xy-TOP_OUTER_TURRET[1])**2,-1)))
+    cfg=VecConfig(health_loss_gold=100.,tower_damage_gold=900.)
+    q=p.replace(hp=p.hp.at[0].add(-p.max_hp[0]*.1).at[u].add(-p.max_hp[u]/6))
+    _,terms=_relative_reward(p,q,cfg)
+    np.testing.assert_allclose(terms['health'][0],-.5,atol=1e-5)
+    np.testing.assert_allclose(terms['tower'][0],7.5,atol=1e-5)
+    growth=p.replace(hp=p.hp.at[0].add(100),max_hp=p.max_hp.at[0].add(100))
+    assert float(_relative_reward(p,growth,cfg)[1]['health'][0])==0
+    dead=p.replace(alive=p.alive.at[0].set(False),hp=p.hp.at[0].set(0))
+    assert float(_relative_reward(dead,p,cfg)[1]['health'][0])==0
+    np.testing.assert_allclose(_relative_reward(p,dead,cfg)[1]['health'][0],-5.)

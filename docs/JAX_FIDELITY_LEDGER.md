@@ -2070,3 +2070,15 @@ an automatic overnight extension. Provisional success target >=80% of measured
 heuristic CS on matched easy starts with meaningful caster capture; challenge
 positions and original75s/10min transfer evaluated separately. No claim512 local
 PPO decisions were a sufficient mastery budget; update KL was large (.111/.032).
+
+| LEARN-PAIR-11 | E46 PREPARED | User selected AFK + HP/tower shaping, no control arm requested. | Red parked at fountain, NOOP commands, only blue learns. Existing70/100HP blue starts and waves retained;120s rounds. Health loss100gold/fullbar, top enemy outer tower900gold/fullbar; no new simulator gold/plates. |
+Health uses positive increase in missingHP (net within decision), excludes maxHP
+level increments and respawn, includes fatal loss; healing has no positive reward.
+Tower credit includes allied minion damage, restricted to top outer tower. Existing
+tower gold is retained; shaping900gold is additional, user-proposed150x6 benchmark.
+Riot26.1 actually lists5plates/120gold (600 total); user scale used as experimental
+benchmark, not a modern parity claim. Source:
+https://www.leagueoflegends.com/en-us/news/game-updates/patch-26-1-notes/.
+Default shaping coefficients0 preserve other runs; AFK is explicit config only.
+CPU5 reward/scenario tests passed; GPU likelihood/loop canary pending. E40 graceful
+SIGUSR1 checkpoint at5795/189890560; untouched resume optimizer/rollout saved.

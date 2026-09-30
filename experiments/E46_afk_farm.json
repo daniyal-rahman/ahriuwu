@@ -1,0 +1,33 @@
+{
+  "id": "E46_afk_farm",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 612,
+  "max_seconds": 6600,
+  "slurm_time": "02:00:00",
+  "lr": 3e-05,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    64,
+    128,
+    306,
+    612
+  ],
+  "question": "User-authorized AFK farming with health penalty and tower damage reward. Red parked at fountain; only blue learns. Level3 existing tower/wave starts with blue70/100HP,120s rounds for waves and tower opportunities. Gold-equivalent health loss100/fullbar; enemy top outer tower900/fullbar, proportional actualHP loss including allied minion damage. No modern plate mechanics or gold injection.10.027M learner decisions; fresh optimizer/schedule. Frozen64-game AFK eval at0/1/2/5/10M. Continue from gracefully interrupted E40u5795; keep its resume checkpoint."
+}

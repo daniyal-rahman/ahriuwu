@@ -34,3 +34,15 @@ def test_scenario_alive_spell_counter_keeps_team_axis():
     buttons=np.array([[5,1],[3,4],[2,5]])
     obs=np.zeros((3,2,16));obs[1,0,14]=1
     np.testing.assert_array_equal(alive_spell_count(buttons,obs),[1,2])
+
+
+def test_scenario_afk_park_preserves_wave_and_blue():
+    import jax
+    from lanerl_jax.train.wave_scenario import park_afk_opponent
+    from lanerl_jax.sim.init import CHAMPION_SPAWN
+    s=raw_state(SimpleNamespace(params=lane_params()),0)
+    b=jax.tree.map(lambda x:x[None],s);a=park_afk_opponent(b)
+    np.testing.assert_allclose([a.x[0,1],a.y[0,1]],CHAMPION_SPAWN[1])
+    assert int(a.target[0,1])==-1
+    np.testing.assert_array_equal(a.x[0,2:],s.x[2:])
+    assert float(a.x[0,0])==float(s.x[0])

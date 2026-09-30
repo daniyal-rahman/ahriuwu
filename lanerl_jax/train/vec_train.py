@@ -76,6 +76,8 @@ class VecConfig(NamedTuple):
     gold_scale: float = 20.0
     xp_scale: float = 0.008
     enemy_scale: float = 1.0
+    health_loss_gold: float = 0.0
+    tower_damage_gold: float = 0.0
     lr_anneal: bool = False
     ppo: PPOConfig = PPOConfig()
     policy: PolicyConfig = PolicyConfig()
@@ -137,8 +139,22 @@ def _relative_reward(prev, nxt, cfg: VecConfig):
     gold = (d_gold - es * d_gold[::-1]) / cfg.gold_scale
     xp = cfg.xp_scale * (d_xp - es * d_xp[::-1])
     shaping = 5.0 * (pot_n - pot_p)
-    return gold + xp + shaping, {"cs": gold, "death": jnp.zeros_like(gold),
-                                 "approach": shaping, "xp": xp}
+    total=gold+xp+shaping
+    terms={"cs":gold,"death":jnp.zeros_like(gold),"approach":shaping,"xp":xp}
+    if cfg.health_loss_gold:
+        # Increase in missing health ignores additive level-up HP gains.
+        # Never charge respawn or reward healing; include the fatal damage.
+        lost=jnp.maximum((nxt.max_hp[:2]-nxt.hp[:2])-(prev.max_hp[:2]-prev.hp[:2]),0.)
+        health=-cfg.health_loss_gold/cfg.gold_scale*lost/jnp.maximum(prev.max_hp[:2],1.)*prev.alive[:2]
+        total=total+health;terms['health']=health
+    if cfg.tower_damage_gold:
+        from ..sim.init import TOP_OUTER_TURRET
+        xy=jnp.stack([prev.x,prev.y],-1)
+        indices=jnp.stack([jnp.argmin(jnp.where((prev.kind==3)&(prev.team==t),jnp.sum((xy-jnp.asarray(TOP_OUTER_TURRET[t]))**2,-1),jnp.inf)) for t in (0,1)])
+        damage=jnp.clip(prev.hp[indices]-nxt.hp[indices],0.,prev.hp[indices])*prev.alive[indices]
+        tower=cfg.tower_damage_gold/cfg.gold_scale*damage[::-1]/jnp.maximum(prev.max_hp[indices][::-1],1.)
+        total=total+tower;terms['tower']=tower
+    return total,terms
 
 
 def prepare_bank(cfg: VecConfig, sim: SimConfig, out: Path, seed: int):
@@ -159,7 +175,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
     """Build the jittable pieces. `bank` is the stacked reset pytree."""
     from ..parity.policy_driver import _lane_frames
     from .trainer import _sample
-    if cfg.opponent not in ("mirror", "lasthit", "brawler", "frozen"):
+    if cfg.opponent not in ("mirror", "lasthit", "brawler", "frozen", "afk"):
         raise ValueError(f"unknown opponent {cfg.opponent!r}")
     if cfg.unwalkable_click not in ("noop", "resolve"):
         raise ValueError("unwalkable_click must be noop or resolve")
@@ -170,7 +186,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
     scripted = None
     if cfg.opponent == "frozen" and opponent_params is None:
         raise ValueError("frozen opponent requires opponent_params")
-    if cfg.opponent not in ("mirror", "frozen"):
+    if cfg.opponent not in ("mirror", "frozen", "afk"):
         from .scripted_policy import PLAYERS
         scripted = PLAYERS[cfg.opponent]
     n_learn = cfg.learn_agents
@@ -220,6 +236,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
             if scripted is not None:
                 red = scripted(jax.tree.map(lambda a: a[1], obs), k_act)
                 action = tuple(a.at[1].set(jnp.asarray(r, a.dtype)) for a, r in zip(action, red))
+            if cfg.opponent == "afk":
+                action = tuple(a.at[1].set(0) for a in action)
             orders = orders_from(action, state, None, frames[0], snap_moves=False,
                                  params=sim.params, vision=sim.vision,
                                  drop_unwalkable_moves=(cfg.unwalkable_click == "noop"))

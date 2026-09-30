@@ -87,3 +87,16 @@ def prepare_scenario_bank(sim, out: Path, offsets, seed):
                 xy=np.stack([pair.x[:2],pair.y[:2]],-1).tolist()))
     (out/'setup.json').write_text(json.dumps(rows,indent=2))
     return jax.tree.map(lambda *xs:jnp.stack(xs),*states)
+
+
+def park_afk_opponent(bank):
+    """Park red at its fountain with no held order; simulator remains unchanged."""
+    from ..sim.init import CHAMPION_SPAWN
+    xy=jnp.asarray(CHAMPION_SPAWN[1],jnp.float32)
+    def one(s):
+        return s.replace(x=s.x.at[1].set(xy[0]),y=s.y.at[1].set(xy[1]),
+            collision_x=s.collision_x.at[1].set(xy[0]),collision_y=s.collision_y.at[1].set(xy[1]),
+            waypoints=s.waypoints.at[1,0].set(xy),n_waypoints=s.n_waypoints.at[1].set(1),
+            waypoint_key=s.waypoint_key.at[1].set(1),target=s.target.at[1].set(-1),
+            hp=s.hp.at[1].set(s.max_hp[1]))
+    return jax.vmap(one)(bank)

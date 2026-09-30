@@ -1,6 +1,13 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**NEXT PLAN (not launched):** Literature-backed uncontested farming curriculum and HP/tower reward A/B; bounded5–10M learner decisions/arm, frozen CS-by-type gates. Details LEARN-PAIR-10. E40 job1780 remains running unchanged.
+**E46 AFK PREPARED:** User selected single AFK arm with health/tower shaping.
+120s rounds,10.027M learner decisions,64-game frozen evaluations; source E40u5795.
+Health penalty100gold/fullbar; enemy top outer tower900gold/fullbar damage.
+
+**E40 CHECKPOINTED / INTERRUPTED TO FREE GPU FOR E46:** User requested AFK now.
+Job1780 exited cleanly after SIGUSR1 at5795updates (189890560 decisions).
+Params/optimizer/full rollout state preserved in `/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack`.
+No automatic resume/watchdog; E46 is the new active training task.
 
 **E45b COMPLETE — CPU1786 exit0 in14m29s:**8canaries/180s watch passed.
 HP-sensitive actor; critic V−.038 vs16 full-horizon returns mean+.127(SE.007).

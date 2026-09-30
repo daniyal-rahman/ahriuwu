@@ -83,11 +83,16 @@ def main():
     sim=SimConfig.training(route_artifact=scratch/'routes').replace(step_ticks=6)
     bank=prepare_scenario_bank(sim,out/'train_bank',spec['train_offsets'],0)
     eval_bank=prepare_scenario_bank(sim,out/'eval_bank',spec['eval_offsets'],1007)
+    if spec.get("opponent") == "afk":
+        from .wave_scenario import park_afk_opponent
+        bank=park_afk_opponent(bank);eval_bank=park_afk_opponent(eval_bank)
     calibrate(bank,sim,out)
     pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=True)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
         episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,stagger_initial=False,
         bank_size=len(bank.t_ms),lr_anneal=True,policy=pcfg,
+        opponent=spec.get("opponent","mirror"),health_loss_gold=spec.get("health_loss_gold",0.),
+        tower_damage_gold=spec.get("tower_damage_gold",0.),
         ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef']))
     built=make_vec_train(cfg,sim,bank)
     params=from_state_dict(built['init_params'](jax.random.key(0)),msgpack_restore((scratch/'initial.msgpack').read_bytes())['params'])
@@ -113,12 +118,12 @@ def main():
     run=RunDir(out,'vec-s0',dict(train={'policy':pcfg._asdict()},ppo=cfg.ppo._asdict(),
         vec={k:v for k,v in cfg._asdict().items() if k not in ('policy','ppo')},
         collector=dict(episode_s=cfg.episode_s,step_ticks=6,unwalkable_click='noop'),
-        scenario=spec,environment='jax-vectorised',opponent='mirror-self-play',
+        scenario=spec,environment='jax-vectorised',opponent=spec.get("opponent","mirror-self-play"),
         initialization=('same experiment continuation; optimizer/schedule retained' if args.resume else 'init_from checkpoint parameters only; fresh optimizer and schedule'),
         continuation=dict(checkpoint=str(args.resume),sha256=file_sha256(args.resume),start_update=update,continuity=continuity) if args.resume else None,
         init_source_sha256=file_sha256(source),eval_opponent_source=str(opponent_source),
         eval_opponent_sha256=file_sha256(opponent_source),sim=sim.describe(),sim_fingerprint=sim.fingerprint()),
-        notes='Finite75s tower-wave task; not a ten-minute lane score. Frozen evals by initial HP role.')
+        notes='Finite tower-wave task; not a ten-minute lane score. Frozen evals by initial HP role; AFK parks red at fountain.')
     run.keep_checkpoints=0;failed=False
     def save():
         from .replay_audit import serialize_replay_state
@@ -140,7 +145,7 @@ def main():
     print('COMPILE training',flush=True)
     update_fn=jax.jit(lambda r:built['run_chunk'](r,1)).lower(runner).compile()
     evaluations={}
-    for mode in ('mirror','frozen'):
+    for mode in (('afk',) if spec.get('opponent')=='afk' else ('mirror','frozen')):
         ecfg=cfg._replace(n_envs=64,opponent=mode,bank_size=len(eval_bank.t_ms))
         eb=make_vec_train(ecfg,sim,eval_bank,opponent_params=opponent_params if mode=='frozen' else None)
         er=eb['initial_runner'](jax.random.key(2007),params)
@@ -149,7 +154,7 @@ def main():
         print('COMPILE eval',mode,flush=True)
         evaluations[mode]=(er,jax.jit(eb['collect']).lower(er).compile())
     # Regression gate on the compiled path: endpoint metrics precede reset.
-    probe, probe_fn = evaluations["mirror"]
+    probe, probe_fn = next(iter(evaluations.values()))
     st = probe.env_state
     st = st.replace(t_ms=jnp.full_like(st.t_ms, cfg.episode_s*1000-.01),
                     hp=st.hp.at[:,:2].set(st.max_hp[:,:2]*.42),
@@ -194,6 +199,7 @@ def main():
             for team in (0,1):
                 for disadvantaged in (True,False):
                     cohort=[x for x in rows if x['team']==team and x['low_hp']==disadvantaged]
+                    if not cohort: continue
                     summaries[f'{team}_{"low" if disadvantaged else "full"}']={k:float(np.mean([x[k] for x in cohort]))
                         for k in ('cs','gold_diff','kills','deaths','hp_fraction','reward','spell_selections')}
                     contact=[x['first_enemy_seen_hp'] for x in cohort if x['first_enemy_seen_hp'] is not None]
