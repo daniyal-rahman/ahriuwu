@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E50_afk_personal_lr3e5` |09-30| JAX PPO AFK | Zero XP, personal tower; constantLR3e-5 | E46 final, fresh optimizer |128updates/2.097M | Slurm1804 submitted; startup gate pending | Matched control for E51 |
+| `E50_afk_personal_lr3e5` |09-30| JAX PPO AFK | Zero XP, personal tower; constantLR3e-5 | E46 final, fresh optimizer |128updates/2.097M | RUNNING1804; GPU canaries/180s watch passed, event bridge armed | Matched control for E51 |
 | `E51_afk_personal_lr1e4` |09-30| JAX PPO AFK | Same rewards; constantLR1e-4 | E46 final, fresh optimizer |128updates/2.097M | Prepared | Frozen CS/deaths/personal tower, same seeds |
 | `E49_afk_final_video` |09-30| CPU frozen video | Full120s E46 final AFK game,1x | E46u612 | One seed7 fullHP game | COMPLETE1800 exit0; both120.1s videos verified,7CS/0deaths; bridge cleaned up | Diagnostic replay, not aggregate score |
 | `OPS047_slurm_events` | 09-30 | CPU infrastructure test | T3 idle wake after Slurm success/compile error/exit7/timeout | No model | Four tiny danilogin array tasks,7min limit | COMPLETE1788: all four expected outcomes; idle T3 wake verified; watcher cleaned up | One combined event started a fresh turn after final; no training changes |
