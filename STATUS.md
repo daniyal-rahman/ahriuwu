@@ -1,3 +1,5 @@
+**E46 EVENT BRIDGE ARMED:** `lanerl-event-1787.service` active; accounting verified RUNNING. Bounded to 2026-10-01 01:14 UTC; completion/failure wakes this conversation once it is idle. State `/mnt/nfs/shared/slurm-events/1787/result.json`; registered, auto-cleanup on exit. AGENTS rule10 requires this for future unattended runs. Training unchanged.
+
 **OPS047 COMPLETE — idle wake verified:** Slurm1788 on danilogin produced COMPLETED/0:0, compiler FAILED/1:0, application FAILED/7:0, and TIMEOUT/0:0 (batch cancelled by SIGTERM). At22:11:44UTC the bounded bridge observed this conversation ready with no active turn; dispatch accepted at22:11:46UTC and its automated message started a fresh agent turn after the prior final response. All four logs/accounting verified. Watcher inactive and registry entry removed; no repeat scheduled. One combined notification tested, not four independent wakeups. Use Slurm State plus ExitCode: timeout can report0:0. Evidence `/mnt/nfs/shared/OPS047_slurm_events/result.json`. Training untouched.
 
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)

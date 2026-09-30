@@ -39,3 +39,21 @@ History = `legacy/`, `docs/archive/`.
    budget and success/stop criteria, implement, compare frozen results against
    the existing baseline, then iterate. Prefer established defaults; distinguish
    published evidence from our engineering estimates.
+
+10. Unattended Slurm runs: after the required startup watch, arm the event bridge
+    before ending the turn: `python3 ops/slurm_event_bridge.py arm --job JOB_ID
+    --experiment EXACT_SLURM_JOB_NAME --max-hours HOURS` (one shell line).
+    Set a bounded lifetime covering the remaining job time plus queue/delivery
+    margin; record the unit and expiry in STATUS. It discovers this T3 thread,
+    checks job ownership/name, registers a capped one-shot watcher, and sends
+    one idempotent completion/failure message only when this conversation is idle.
+    Use this for current and future runs; do not substitute an ETA or active
+    model polling for a wakeup. Verify the service is active and its result JSON
+    is updating before claiming it is armed. Classify Slurm State AND ExitCode
+    (TIMEOUT can have exit0). On wake, inspect logs/checkpoints/frozen evaluations,
+    update the existing ledgers/STATUS, and verify watcher/registry cleanup.
+    Stop with `systemctl --user stop lanerl-event-JOB_ID.service`; artifacts are
+    `/mnt/nfs/shared/slurm-events/JOB_ID/`. No credentials in logs or Git.
+    This tool currently handles single job IDs, not arrays; OPS047 is the array
+    test. If bridge delivery is unavailable, say so explicitly; do not claim a
+    scheduled check. A notification does not authorize a new experiment.
