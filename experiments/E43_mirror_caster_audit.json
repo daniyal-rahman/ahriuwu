@@ -1,0 +1,14 @@
+{
+  "id": "E43_mirror_caster_audit",
+  "engine": "wave-replay",
+  "backend": "cpu",
+  "slurm_time": "00:45:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_132710400.msgpack",
+  "update": 4050,
+  "seconds": 75,
+  "seed": 7,
+  "offset": -45,
+  "question": "Reproduce E41 u4050 mirror conditions to audit caster last-hit opportunities actually seen in original videos. Same HP roles, seed7,offset\u221245. Frozen policy; count windows, same-state8s forced attacks, no training changes.",
+  "audit": true,
+  "reference_root": "/mnt/nfs/shared/E41_wave_video"
+}

@@ -6,6 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E43_mirror_caster_audit` | 09-30 | CPU frozen diagnostic | Reproduce E41u4050 mirror caster opportunities, both HP roles | Frozen policies |2games plus8s branches | PREPARED | Original replay and branch-control equality required |
 | `E42_caster_trade_audit` | 09-30 | CPU frozen diagnostic | E40u4400 fullHP vs original E34 lowHP; caster/trade branches and animated75s video | Frozen policies |1game,up to6states×8s interventions | RUNNING1782; dry-run passed, startup pending | Controls must reproduce recorded state; cursor mass is geometric, not complete attack probability |
 | `E41_wave_video` | 09-30 | CPU frozen replay | E40 u4050,75s mirror, both HP roles, offset−45 | Frozen weights |2games | COMPLETE CPU1781 exit0,4m17s;4canaries/180s watch passed;2 normal-speed MP4s | Diagnostic videos, not aggregate scores |
 | `E40_tower_wave_extended` | 09-30 | Accelerated GRU PPO | E39b final initialization, same75s HP-role task; fixed original E34 evaluation opponent | Fresh Adam/schedule,lr3e-5→0,entropy.001 |10000additional updates,13.5h worker cap,14h Slurm | RUNNING Slurm1780; dry-run,5 GPU canaries,180s watch passed; worker setup starting | Final endpoint primary; periodic frozen64games/mode; no performance changes |

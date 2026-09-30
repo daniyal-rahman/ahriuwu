@@ -113,6 +113,12 @@ def main():
             action_alignment='pre-action; terminal frame has unsent NOOP placeholder',
             terrain=dict(min_x=float(sim.terrain.min_x),min_y=float(sim.terrain.min_y),cell_size=float(sim.terrain.cell_size)),
             **render_metadata())
+        if spec.get('reference_root'):
+            with np.load(Path(spec['reference_root'])/f'low_team_{low}'/'trace.npz') as reference:
+                error=max(float(np.max(np.abs(data[k]-reference[k]))) for k in ('x','y','hp','cs','deaths'))
+            meta['reference_max_error']=error
+            assert error<1e-4, f'Original replay reproduction failed: {error}'
+            print('ORIGINAL REPLAY EXACT',low,error,flush=True)
         meta['summary']=summarize(data)
         np.savez_compressed(dest/'trace.npz',**data,walkable=np.asarray(sim.terrain.walkable),metadata=np.asarray(json.dumps(meta)))
         (dest/'trace.json').write_text(json.dumps(meta,indent=2))

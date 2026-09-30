@@ -1,5 +1,10 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**E43 PREPARED:** E42's old opponent produced no one-auto caster windows.
+Reproduce original E41 mirror videos (u4050, both HP roles) and branch the
+actual caster opportunities there. Require original replay reconstruction
+tolerance1e-4 as well as branch controls. E40 training remains unchanged.
+
 **E42 RUNNING — CPU Slurm1782:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
 video with state-driven spell/attack cues. CPU caster opportunity and restored
 state intervention audit; E40 training unchanged. No HP reward added.
