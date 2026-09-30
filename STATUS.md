@@ -1,12 +1,8 @@
-**E46 EVENT BRIDGE ARMED:** `lanerl-event-1787.service` active; accounting verified RUNNING. Bounded to 2026-10-01 01:14 UTC; completion/failure wakes this conversation once it is idle. State `/mnt/nfs/shared/slurm-events/1787/result.json`; registered, auto-cleanup on exit. AGENTS rule10 requires this for future unattended runs. Training unchanged.
-
 **OPS047 COMPLETE — idle wake verified:** Slurm1788 on danilogin produced COMPLETED/0:0, compiler FAILED/1:0, application FAILED/7:0, and TIMEOUT/0:0 (batch cancelled by SIGTERM). At22:11:44UTC the bounded bridge observed this conversation ready with no active turn; dispatch accepted at22:11:46UTC and its automated message started a fresh agent turn after the prior final response. All four logs/accounting verified. Watcher inactive and registry entry removed; no repeat scheduled. One combined notification tested, not four independent wakeups. Use Slurm State plus ExitCode: timeout can report0:0. Evidence `/mnt/nfs/shared/OPS047_slurm_events/result.json`. Training untouched.
 
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E46 AFK TRAINING — Slurm1787:** User selected single AFK arm with health/tower shaping.
-8 GPU canaries,180s health watch and compiled endpoint gate passed. Baseline64-game frozen eval complete; PPO updates active/finite at~3.4s/update.120s rounds,10.027M learner decisions; source E40u5795.
-Frozen u0 blue CS4.9375(lowHP)/5.96875(fullHP), deaths1.0/.875 per120s.
+**E46 COMPLETE — Slurm1787 exit0,42m51s:**612updates/10,027,008 learner decisions from E40u5795. All five64-game frozen AFK evaluations saved.120s trials: lowHP CS4.9375→9.1875, deaths1→0; fullHP CS5.96875→9.9375, deaths.875→0. Combined CS5.453→9.563 (+75.4%). First1.05M decisions already reached8.531CS/.0156 deaths. One training seed; no active-opponent or10-minute transfer test. Final checkpoint step verified,201 arrays finite,latest byte-identical; all612 metric rows,zero loss_nonfinite,median3.220s/update. Event bridge woke this thread at22:27:17UTC; watcher inactive and registry cleaned. No run restarted. Next discuss frozen gains and whether to inspect replay/transfer before another experiment.
 Run `/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/`.
 Health penalty100gold/fullbar; enemy top outer tower900gold/fullbar damage.
 
