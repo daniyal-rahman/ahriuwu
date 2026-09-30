@@ -2,8 +2,8 @@
 
 **2026-09-30 — E39b CONTINUATION STARTING (Slurm1779):** Desktop available.
 Same-spec continuation submitted through launcher; dry-run, five GPU canaries
-and 180s startup watch passed. Worker initialization/compilation in progress;
-no resumed training progress claimed yet. Resume restores u13 parameters,
+and 180s startup watch passed. Worker confirmed RESUME13, scenario/calibration
+gates passed; compiling training, no new updates yet. Resume restores u13 parameters,
 optimizer and learning-rate schedule. Old checkpoint lacks live episodes/carry/
 RNG: fresh episodes explicitly recorded; future checkpoints retain rollout state.
 Original E34 remains the fixed evaluation opponent. Log:
