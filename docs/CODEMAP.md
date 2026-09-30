@@ -48,3 +48,5 @@ DIAG and lives in `probes/` or `parity/archive/`, never in `tests/`.
 TOOL: `ops/slurm_event_test.py`, `slurm/event_test.sbatch`: OPS047 bounded Slurm-to-T3 idle wake test, launched through `ops/launch.py`.
 
 TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failure wake into the current T3 conversation; arm after launcher health watch. OPS047 retains the separate array test.
+
+TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
