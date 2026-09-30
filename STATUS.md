@@ -1,6 +1,12 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E45 FAILED — CPU1785:** State-copy API typo before interventions/learning; corrected. E45b RUNNING CPU1786 from exact saved E44 state; 8canaries/180s watch passed; input sensitivity complete, MC/local PPO running. Authorized caster input/critic/local learning audit; bounded CPU checkpoint copy, E40 unchanged.
+**E45b DIAGNOSTIC COMPLETE — CPU1786 final rendering:**8canaries/180s watch passed.
+HP-sensitive actor; critic V−.038 vs16 full-horizon returns mean+.127(SE.007).
+Temperature .5/1/2/argmax did not rescue incident. Two isolated PPO updates
+changed probabilities but held-out CS unchanged (near1/0/2/1, original all0).
+No production weights changed. Full evidence/limits LEARN-PAIR-09.
+E45 CPU1785 failed on diagnostic state-copy typo before audit; corrected retry
+restored exact E44 case, branch-control error0. E40 job1780 continues unchanged.
 
 **E44 COMPLETE — CPU1784 exit0,5m18s:** Original plus4 fresh policy paths miss caster; directed branch kills exact target at1.8s, same HP outcomes. Diagnostic initial GAE positive for directed branch, negative for natural paths; not historical training attribution. Normal-speed branch videos saved; LEARN-PAIR-08. E40 job1780 unchanged.
 

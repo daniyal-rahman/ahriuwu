@@ -2007,3 +2007,31 @@ https://github.com/vwxyzjn/ppo-implementation-details/blob/main/ppo.py.
 Temporally correlated exploration has supporting PPO research
 https://arxiv.org/abs/2312.11091, but is not yet validated for this discrete
 screen-click interface. E40 retains T1/entropy.001, no schedule changes.
+
+LEARN-PAIR-09 E45b results (diagnostic complete, final rendering pending):
+-16 on-policy continuations to195s endpoint (441 decisions) yield discounted
+ return mean+.12718, standard error.00745, versus V(start)−.03808. No terminal
+ bootstrap used. Local pessimism ~.165; no claim of whole-policy calibration.
+-Temperature.5/1/2: four8s paths each, all0CS; argmax also0CS. Both champions'
+ sampling changes, so not an isolated blue-temperature causal comparison.
+-Curriculum after1s directed approach: target60HP at296u. All subsequent actions
+ sampled normally; old red fixed. Two PPO updates,8x32 blue decisions each,
+ lr3e-5,4epochs/2minibatches, fresh Adam, no saved/training weights changed.
+ Collection/learner value agreement maxerrors7.75e-7/5.96e-7. Finite losses.
+ Train CS across8 sequences: first [2,0,0,0,2,0,2,0], second [0,0,0,2,2,2,2,1].
+ These different seeds are TRAIN, not improvement evidence.
+-Frozen before/after same4 held-out seeds over8s: original [0,0,0,0] unchanged;
+ near [1,0,2,1] unchanged. Near failed-seed reward improves −.358→+.224 without
+ CS; other3 unchanged. No demonstrated farming improvement or transfer.
+-Original P(attack_move).1425→.1911→.1512; direct125u cursor joint probability
+ .0000690→.0001215→.0000406. Update changes policy but does not reliably move
+ probability toward the specific caster. ApproxKL.111/.032 and clip fractions
+ .566/.328: tiny repeated-state batch causes substantial shifts; do not deploy.
+
+Interpretation: actor responds to caster HP; approach/exploration and local
+credit/generalization remain plausible bottlenecks. Current critic is locally
+pessimistic but these results do not establish it caused historical avoidance.
+Temperature alone did not rescue sampled incident. Literature-backed stochastic
+PPO/entropy baseline remains appropriate; no new schedule installed. All results
+in /mnt/nfs/shared/E45b_caster_learning/low_team_1/learning_audit.json.
+Restored control matches original E44 x/y/hp/cs/deaths exactly (maxerror0).
