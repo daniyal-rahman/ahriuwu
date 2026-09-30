@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E46_afk_farm` | 09-30 | JAX PPO | AFK fountain opponent; HP-loss/tower-damage shaping | E40u5795 weights |612updates/10.027M learner decisions | RUNNING1787; dry-run passed, startup checks |120s rounds, frozen64games at0/1/2/5/10M |
+| `E46_afk_farm` | 09-30 | JAX PPO | AFK fountain opponent; HP-loss/tower-damage shaping | E40u5795 weights |612updates/10.027M learner decisions | RUNNING1787;8GPU canaries passed, production compilation |120s rounds, frozen64games at0/1/2/5/10M |
 | `E45b_caster_learning` | 09-30 | CPU bounded diagnostic | Corrected E45 from saved exact caster state | E40u4050 copy | Same protocol | COMPLETE1786 exit0,14m29s;8canaries/180s watch passed | No live weights changed |
 | `E45_caster_learning` | 09-30 | CPU bounded diagnostic | Caster sensitivity/MC/temperature/local PPO | E40u4050 copy |16 MC +512 on-policy decisions | FAILED1785; state-copy API typo before audit | No live weights changed |
 | `E44_caster_trajectory` | 09-30 | CPU frozen diagnostic | Original caster incident: branch videos, four policy samples and critic estimates | E40u4050 | one game plus8s branches | COMPLETE1784 exit0,5m18s;8canaries/180s watch passed | No training edits |

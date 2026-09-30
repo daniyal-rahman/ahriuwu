@@ -1,7 +1,7 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E46 AFK RUNNING — Slurm1787 (startup checks):** User selected single AFK arm with health/tower shaping.
-120s rounds,10.027M learner decisions,64-game frozen evaluations; source E40u5795.
+**E46 AFK RUNNING — Slurm1787 (production compilation):** User selected single AFK arm with health/tower shaping.
+8 GPU canaries passed;120s rounds,10.027M learner decisions,64-game frozen evaluations; source E40u5795.
 Health penalty100gold/fullbar; enemy top outer tower900gold/fullbar damage.
 
 **E40 CHECKPOINTED / INTERRUPTED TO FREE GPU FOR E46:** User requested AFK now.
