@@ -113,7 +113,8 @@ def main():
         if spec.get('restore_case'):
             with np.load(Path(spec['restore_case']).parent/'trace.npz') as ref:
                 fields=[k for k in ref.files if k not in ('walkable','metadata')]
-                rows=[{k:ref[k][i] for k in fields} for i in range(len(ref['t_ms']))]
+                reference_arrays={k:ref[k] for k in fields}
+                rows=[{k:reference_arrays[k][i] for k in fields} for i in range(len(reference_arrays['t_ms']))]
         else:
             rows.append(jax.tree.map(np.asarray,snapshot(state,orders,tuple(jnp.zeros(2,jnp.int32) for _ in range(3)))))
         data={k:np.stack([r[k] for r in rows]) for k in rows[0]}
