@@ -6,9 +6,19 @@ import subprocess
 import time
 
 
-def launch(spec, dry):
+def launch(spec, dry, resume=None):
     root = Path('/srv/nfs/projects/ahriuwu-lanerl-jax')
     out = root / 'lanerl_jax/runs' / spec['id']
+    if resume:
+        if spec['engine'] != 'wave-scenario':
+            raise SystemExit('Resume is supported here only for the same wave-scenario experiment')
+        checkpoint = Path(resume)
+        manifest = json.loads((checkpoint.parent/'manifest.json').read_text())
+        if not checkpoint.is_file() or manifest['config']['scenario'] != spec:
+            raise SystemExit('Resume checkpoint must belong to this exact experiment spec')
+        if subprocess.check_output(['squeue','-h','-n',spec['id'],'-o','%i'],text=True).strip():
+            raise SystemExit('Experiment already queued or running')
+        out = out / 'continuations' / time.strftime('%Y%m%d-%H%M%S')
     if out.exists():
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
     full = spec['engine'] == 'full-profile'
@@ -28,6 +38,8 @@ def launch(spec, dry):
            '--signal=USR1@120', '--no-requeue', f"--job-name={spec['id']}",
            f"--output=/mnt/nfs/shared/{spec['id']}-%j.out",
            script, spec['id']]
+    if resume:
+        cmd.extend(['--resume', str(checkpoint)])
     if spec.get('backend') == 'cpu':
         if spec['engine'] not in ('replay-pair', 'escape-counterfactual'):
             raise SystemExit('CPU fallback is limited to frozen replay diagnostics')

@@ -1,4 +1,5 @@
 """Bounded E39 curriculum run with frozen role-separated evaluations."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -59,12 +60,20 @@ def alive_spell_count(buttons, self_obs):
 
 
 def main():
-    spec=json.loads(Path('experiments',sys.argv[1]+'.json').read_text())
+    parser=argparse.ArgumentParser()
+    parser.add_argument('experiment');parser.add_argument('--resume',type=Path)
+    args=parser.parse_args()
+    spec=json.loads(Path('experiments',args.experiment+'.json').read_text())
+    if args.resume:
+        previous=json.loads((args.resume.parent/'manifest.json').read_text())
+        if previous['config']['scenario'] != spec:
+            raise ValueError('Resume requires the identical experiment specification')
     start=time.monotonic();stopping=[]
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGUSR1):
         signal.signal(sig,lambda signum,frame:stopping.append(signum))
     def stop():return bool(stopping) or time.monotonic()-start>=spec['max_seconds']
     jax.config.update('jax_default_matmul_precision','highest')
+    jax.config.update('jax_compilation_cache_dir','/scratch/lanerl-jax-compilation-cache')
     scratch=Path('/scratch')/(spec['id']+'-'+os.environ['SLURM_JOB_ID']);scratch.mkdir(parents=True)
     shutil.copytree(DEFAULT_ROUTE_ARTIFACT,scratch/'routes')
     source=Path(spec['init_from']);shutil.copyfile(source,scratch/'initial.msgpack')
@@ -81,16 +90,37 @@ def main():
     built=make_vec_train(cfg,sim,bank)
     params=from_state_dict(built['init_params'](jax.random.key(0)),msgpack_restore((scratch/'initial.msgpack').read_bytes())['params'])
     runner=built['initial_runner'](jax.random.key(0),params)
+    update=0
+    if args.resume:
+        payload=msgpack_restore(args.resume.read_bytes())
+        runner=runner._replace(params=from_state_dict(runner.params,payload['params']),
+            opt_state=from_state_dict(runner.opt_state,payload['opt_state']),
+            step=jnp.asarray(payload['step']))
+        update=int(runner.step)//(cfg.n_envs*cfg.learn_agents*cfg.rollout_steps)
+        assert int(runner.step)==update*cfg.n_envs*cfg.learn_agents*cfg.rollout_steps
+        if 'rollout_state' in payload:
+            from .replay_audit import restore_replay_state
+            template={k:getattr(runner,k) for k in ('env_state','carry','rng','deadline_ms')}
+            runner=runner._replace(**restore_replay_state(template,payload['rollout_state']))
+            continuity='full runner restored'
+        else:
+            runner=runner._replace(rng=jax.random.fold_in(runner.rng,update))
+            continuity='legacy checkpoint: new episodes/carries/RNG; optimizer and schedule preserved'
+        print('RESUME',update,continuity,flush=True)
     run=RunDir(out,'vec-s0',dict(train={'policy':pcfg._asdict()},ppo=cfg.ppo._asdict(),
         vec={k:v for k,v in cfg._asdict().items() if k not in ('policy','ppo')},
         collector=dict(episode_s=cfg.episode_s,step_ticks=6,unwalkable_click='noop'),
         scenario=spec,environment='jax-vectorised',opponent='mirror-self-play',
-        initialization='trained E34 random-start final; parameters only, fresh optimizer',
+        initialization=('same E39b experiment continuation; optimizer/schedule retained' if args.resume else 'trained E34 random-start final; parameters only, fresh optimizer'),
+        continuation=dict(checkpoint=str(args.resume),sha256=file_sha256(args.resume),start_update=update,continuity=continuity) if args.resume else None,
         init_source_sha256=file_sha256(source),sim=sim.describe(),sim_fingerprint=sim.fingerprint()),
         notes='Finite75s tower-wave task; not a ten-minute lane score. Frozen evals by initial HP role.')
-    run.keep_checkpoints=0;update=0;failed=False
+    run.keep_checkpoints=0;failed=False
     def save():
-        run.save(int(runner.step),update,dict(params=runner.params,opt_state=runner.opt_state,step=runner.step))
+        from .replay_audit import serialize_replay_state
+        rollout={k:getattr(runner,k) for k in ('env_state','carry','rng','deadline_ms')}
+        run.save(int(runner.step),update,dict(params=runner.params,opt_state=runner.opt_state,
+            step=runner.step,rollout_state=serialize_replay_state(rollout)))
         (out/'study.json').write_text(json.dumps(dict(job=os.environ['SLURM_JOB_ID'],path=str(run.path),
             update=update,status='failed' if failed else 'complete' if update==cfg.n_updates else 'running',
             elapsed_s=time.monotonic()-start),indent=2))

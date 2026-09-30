@@ -1,5 +1,12 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**2026-09-30 — E39b CONTINUATION PREPARED:** Desktop available again.
+Same-spec resume restores u13 params/optimizer/step (learning-rate schedule
+continues); legacy checkpoint lacks live episodes/carry/RNG, so fresh episodes
+are explicitly recorded. New checkpoints also save rollout state. Original
+E34 remains the fixed evaluation opponent. Dry-run passed;9 focused tests
+passed. Resume launch next; no optimization installed in training.
+
 **E39b INTERRUPTED — DESKTOP BOOT TO WINDOWS:** Slurm1778 cancelled at
 2026-09-29 22:57:25 UTC after13updates/425,984 champion decisions. Node is
 DRAINED with reason `boot to windows`. Signal handler saved params and optimizer

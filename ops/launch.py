@@ -214,7 +214,7 @@ def main():
     spec = json.loads((REPO_SRV / "experiments" / f"{a.experiment}.json").read_text())
     if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab", "bush-ab", "vision-smoke", "paired-vec", "replay-pair", "escape-counterfactual", "wave-scenario"):
         from gru_profile_launch import launch
-        launch(spec, a.dry_run)
+        launch(spec, a.dry_run, resume=a.resume)
         return
     if spec.get("engine") == "paired-member":
         raise SystemExit("Launch paired arms together via ops/launch.py " + spec["launcher"])
