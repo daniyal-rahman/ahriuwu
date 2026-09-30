@@ -82,6 +82,7 @@ def main():
         if spec.get('restore_case'):
             source_case=Path(spec['restore_case'])
             restored=restore_replay_state(dict(state=state,carry=carry,key=key),source_case.read_bytes())
+            restored=jax.tree.map(jnp.asarray,restored)
             candidates=json.loads((source_case.parent/'opportunities.json').read_text())
             case=next(r for r in candidates if f"{r['category']}_{r['index']}"==source_case.stem)
             cases=[(case,restored['state'],restored['carry'],restored['key'])]
