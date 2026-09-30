@@ -35,6 +35,10 @@ def main():
     policy,params,_=load_params(str(stage/'checkpoint.msgpack'))
     assert not policy.cfg.click_mask, 'This probe mirrors the unmasked E40 policy only'
     bank=prepare_scenario_bank(sim,out/'bank',[spec['offset']],1007)
+    afk = spec.get('opponent') == 'afk'
+    if afk:
+        from lanerl_jax.train.wave_scenario import park_afk_opponent
+        bank = park_afk_opponent(bank)
     old_params=None
     if spec.get('opponent_checkpoint'):
         old_source=Path(spec['opponent_checkpoint']); old_stage=stage/'opponent';old_stage.mkdir()
@@ -53,6 +57,8 @@ def main():
             lg=jax.tree.map(lambda a,b:a.at[1].set(b[1]),lg,old_lg)
             carry=carry.at[1].set(old_carry[1])
         action,_,_=_sample(lg,key,~obs.entity_pad_mask)
+        if afk:
+            action = tuple(a.at[1].set(0) for a in action)
         return action,carry,lg
     decode=jax.jit(lambda a,s:orders_from(a,s,None,frames[0],snap_moves=False,
         params=sim.params,vision=sim.vision,drop_unwalkable_moves=True))
@@ -78,7 +84,7 @@ def main():
         dest=out/f'low_team_{low}';dest.mkdir()
         state=jax.tree.map(lambda x:x[low],bank)
         carry=policy.initial_carry((2,));key=jax.random.key(spec['seed']);rows=[];audit=[];cases=[];case_keys=set()
-        assert np.allclose(np.asarray(state.hp[:2]/state.max_hp[:2]),[.7,1.] if low==0 else [1.,.7])
+        assert np.allclose(np.asarray(state.hp[:2]/state.max_hp[:2]),[.7,1.] if low==0 else [1.,1. if afk else .7])
         if spec.get('restore_case'):
             source_case=Path(spec['restore_case'])
             restored=restore_replay_state(dict(state=state,carry=carry,key=key),source_case.read_bytes())
@@ -120,7 +126,7 @@ def main():
             rows.append(jax.tree.map(np.asarray,snapshot(state,orders,tuple(jnp.zeros(2,jnp.int32) for _ in range(3)))))
         data={k:np.stack([r[k] for r in rows]) for k in rows[0]}
         meta=dict(label=spec.get('label',f'E40 u{spec["update"]} | 75s mirror | low HP team {low}'),
-            controller='current blue vs old red' if old_params is not None else 'frozen policy on both champions',environment='jax-wave-scenario',opponent_checkpoint=spec.get('opponent_checkpoint'),
+            controller='frozen blue vs AFK red at fountain' if afk else 'current blue vs old red' if old_params is not None else 'frozen policy on both champions',environment='jax-wave-scenario',opponent_checkpoint=spec.get('opponent_checkpoint'),
             checkpoint=str(source),checkpoint_sha256=file_sha256(stage/'checkpoint.msgpack'),
             source=git_provenance(),seed=spec['seed'],hz=10,seconds=spec['seconds'],start_seconds=120.,
             observation_horizon_s=600.,view='omniscient diagnostic; not actor input',

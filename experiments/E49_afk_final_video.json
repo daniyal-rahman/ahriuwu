@@ -1,0 +1,17 @@
+{
+  "id": "E49_afk_final_video",
+  "engine": "wave-replay",
+  "backend": "cpu",
+  "slurm_time": "00:30:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "update": 612,
+  "seconds": 120,
+  "seed": 7,
+  "offset": -45,
+  "low_teams": [
+    1
+  ],
+  "opponent": "afk",
+  "label": "E46 final | blue 100% HP | AFK opponent | full 120s game | 1x",
+  "question": "One frozen final E46 full120s AFK replay at1x; fullHP blue, red parked fountain as training. Seed7 diagnostic, not aggregate evaluation."
+}

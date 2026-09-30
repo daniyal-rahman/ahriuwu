@@ -6,6 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E49_afk_final_video` |09-30| CPU frozen video | Full120s E46 final AFK game,1x | E46u612 | One seed7 fullHP game | Prepared | Diagnostic replay, not aggregate score |
 | `OPS047_slurm_events` | 09-30 | CPU infrastructure test | T3 idle wake after Slurm success/compile error/exit7/timeout | No model | Four tiny danilogin array tasks,7min limit | COMPLETE1788: all four expected outcomes; idle T3 wake verified; watcher cleaned up | One combined event started a fresh turn after final; no training changes |
 | `E46_afk_farm` | 09-30 | JAX PPO | AFK fountain opponent; HP-loss/tower-damage shaping | E40u5795 weights |612updates/10.027M learner decisions | COMPLETE1787 exit0,42m51s;612updates; final checkpoint verified; bridge woke and cleaned up |120s frozen64games: meanCS5.453→9.563; deaths.9375→0; one seed, AFK only |
 | `E45b_caster_learning` | 09-30 | CPU bounded diagnostic | Corrected E45 from saved exact caster state | E40u4050 copy | Same protocol | COMPLETE1786 exit0,14m29s;8canaries/180s watch passed | No live weights changed |
