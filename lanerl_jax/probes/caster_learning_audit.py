@@ -11,6 +11,7 @@ from lanerl_jax.train.learner import make_learner, make_update
 
 
 def run(policy, initial, sim, base, carry0, dest, target, step, decode, reward, target_action):
+    base=jax.tree.map(jnp.asarray,base);carry0=jnp.asarray(carry0)
     frames=wr._lane_frames(); report={}
     def save(): (dest/'learning_audit.json').write_text(json.dumps(report,indent=2))
     @jax.jit
