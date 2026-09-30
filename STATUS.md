@@ -1,10 +1,12 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E40 EXTENDED TRAINING PREPARED:** Dani requested immediate restart and longer
+**E40 EXTENDED TRAINING STARTING — Slurm1780:** Dani requested immediate restart and longer
 unattended training. E39b final weights, fresh optimizer and learning-rate
 schedule,10000additional updates (~12h), same scenario/reward/model. Original
 E34 remains fixed evaluation opponent. Checkpoint every50updates; periodic
-frozen evaluations. Dry-run/startup gates next. No optimizer speedup installed.
+frozen evaluations. Dry-run passed; GPU canary/startup watch in progress.
+Log `/mnt/nfs/shared/E40_tower_wave_extended-1780.out`.
+No optimizer speedup installed.
 
 **E39b COMPLETE — Slurm1779:** Exit0 after1h23m15s; finished2026-09-30
 03:36:37UTC at1000updates/32.768M champion decisions. Study and manifest agree;
