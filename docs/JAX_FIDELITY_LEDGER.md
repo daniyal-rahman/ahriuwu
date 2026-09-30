@@ -1989,3 +1989,21 @@ interventions, then real short-rollout validation and a small isolated learning
 check if needed. Attention weights alone cannot establish causal use of a feature.
 
 | LEARN-PAIR-09 | E45 RUNNING | Frozen u4050 caster state: actor HP/distance/threat sensitivity,16 remaining-horizon MC returns, temperature .5/1/2 and argmax, isolated two-update PPO test. | Local learning uses only fresh unforced on-policy trajectories from state after1s directed approach; forced actions are not fed to PPO.512 champion decisions, lr3e-5, fresh optimizer, old red frozen. No weights exported or live job changes. Fixed-memory interventions can be off-distribution; MC is one state. |
+
+LEARN-PAIR-09 retry: E45 CPU1785 failed before interventions/learning on a
+LaneState copy-method typo. E45b CPU1786 restores E44 caster_309 directly;
+8canaries and180s startup watch passed. Saved reference trace is copied, not
+re-generated; restored branch control is still checked against original E44.
+Input sensitivities hold recurrent memory fixed. Caster HP160/83/20 gives
+P(attack_move).0665/.1425/.2239; direct125u cursor joint mass rises as HP falls,
+but this is not total attack probability (auto-acquire and persistent orders).
+
+Literature/default decision: PPO samples its categorical policy and uses entropy
+regularization; a decreasing sampling-temperature schedule is not required.
+OpenAI Five Appendix O.1 explicitly lowers entropy coefficient over training
+(https://cdn.openai.com/dota-2.pdf). Entropy-coefficient annealing and sampling
+logit-temperature scaling are distinct controls. Reference implementation:
+https://github.com/vwxyzjn/ppo-implementation-details/blob/main/ppo.py.
+Temporally correlated exploration has supporting PPO research
+https://arxiv.org/abs/2312.11091, but is not yet validated for this discrete
+screen-click interface. E40 retains T1/entropy.001, no schedule changes.

@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E45b_caster_learning` | 09-30 | CPU bounded diagnostic | Corrected E45 from saved exact caster state | E40u4050 copy | Same protocol | RUNNING1786; startup pending | No live weights changed |
+| `E45b_caster_learning` | 09-30 | CPU bounded diagnostic | Corrected E45 from saved exact caster state | E40u4050 copy | Same protocol | RUNNING1786;8canaries/180s watch passed | No live weights changed |
 | `E45_caster_learning` | 09-30 | CPU bounded diagnostic | Caster sensitivity/MC/temperature/local PPO | E40u4050 copy |16 MC +512 on-policy decisions | FAILED1785; state-copy API typo before audit | No live weights changed |
 | `E44_caster_trajectory` | 09-30 | CPU frozen diagnostic | Original caster incident: branch videos, four policy samples and critic estimates | E40u4050 | one game plus8s branches | COMPLETE1784 exit0,5m18s;8canaries/180s watch passed | No training edits |
 | `E43_mirror_caster_audit` | 09-30 | CPU frozen diagnostic | Reproduce E41u4050 mirror caster opportunities, both HP roles | Frozen policies |2games plus8s branches | COMPLETE1783 exit0,9m08s;8 canaries/180s watch passed | Original replay and branch controls exact; caster intervention recovers1CS vs0 |
