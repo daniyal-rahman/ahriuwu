@@ -564,3 +564,8 @@ replaced by a symlink to `DeadProbe`. Remaining branches: `main`,
 
 Rules: whoever starts or stops a run edits this file in the same commit.
 History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
+
+
+| ID | Finding / evidence | Status |
+|---|---|---|
+| OPS-047 | User-authorized idle wake test: Slurm1788 array on danilogin (success, compiler exit1, application exit7, Slurm timeout). Existing Jarvis T3 client targets only thread6638ec1e-0a67-4ea7-bea9-5ecfd4b3d47c; one deterministic command ID, preserves model/modes, no credential copies. Bounded systemd watcher waits for terminal accounting and an idle conversation. `/mnt/nfs/shared/OPS047_slurm_events/{launch,result}.json`, task logs `/mnt/nfs/shared/OPS047-1788_*.out`. | Canary/180s watch passed; registered bounded watcher armed. Actual post-final wake not yet demonstrated. |

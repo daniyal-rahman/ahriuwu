@@ -44,3 +44,5 @@ LEGACY = kept for history only; nothing imports it.
 Every test under a package's `tests/` is a regression that runs in CI-style
 suites (`ops/desktop_suite.sh`); a file that measures one checkpoint once is a
 DIAG and lives in `probes/` or `parity/archive/`, never in `tests/`.
+
+TOOL: `ops/slurm_event_test.py`, `slurm/event_test.sbatch`: OPS047 bounded Slurm-to-T3 idle wake test, launched through `ops/launch.py`.

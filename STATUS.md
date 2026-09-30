@@ -1,3 +1,5 @@
+**OPS047 ARMED — Slurm1788:** User-authorized Slurm event bridge test on danilogin CPU; four terminal outcomes (exit0/compiler exit1/exit7/timeout) and one idle-only T3 wake. Canary and180s startup watch passed for all four tasks. Registered one-shot `lanerl-ops047-events.service` waits for terminal accounting and this T3 thread to become idle, then sends one combined message.15min hard lifetime; auto-removes registry entry. Actual wake pending after this turn ends. Backup: Dani messages after10min if no wake. Artifacts `/mnt/nfs/shared/OPS047_slurm_events/`. E46 unchanged.
+
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
 **E46 AFK TRAINING — Slurm1787:** User selected single AFK arm with health/tower shaping.
