@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E44 PREPARED:** Original caster incident trajectories, critic estimates and1x branch videos. E40 unchanged.
+**E44 RUNNING — CPU1784:** Original caster incident trajectories, critic estimates and1x branch videos. E40 unchanged.
 
 **E43 COMPLETE — CPU1783 exit0 in9m08s:** Both original E41 mirror traces
 and restored branch controls match exactly. At30.9s fullHP caster opportunity,
