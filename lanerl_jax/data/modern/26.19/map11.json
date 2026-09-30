@@ -1,0 +1,42 @@
+{
+  "schema": "lanerl-map-grid-v1",
+  "patch": "26.19",
+  "map_id": 11,
+  "variant": "base",
+  "source": "https://lol.dyn.riotcdn.net/channels/public/releases/4D2A50D5EDAB724A.manifest",
+  "retrieved_at": "2026-09-30",
+  "source_sha256": "b7551b91dcdc3dec0228ff2df63483399b0b040552d2115b65d9fe1faf35bd93",
+  "arrays_sha256": "c706d5a1bd2d21151576efb402d97f004c84eeb4dac8925a1076a7e7e73785ae",
+  "cell_size": 50.0,
+  "min_bounds": [
+    -1.1048965454101562,
+    -71.2406005859375,
+    32.75579833984375
+  ],
+  "max_bounds": [
+    14718.400390625,
+    184.5200958251953,
+    14792.2109375
+  ],
+  "height_spacing": [
+    24.948312759399414,
+    24.9315128326416
+  ],
+  "coordinates": "world-xz; arrays[z,x]",
+  "dynamic_terrain": false,
+  "navigation_format": "7.1",
+  "client_build": "16.19.8230722",
+  "region": "EUW1",
+  "mode": "CLASSIC",
+  "manifest_sha256": "0f7978cf646ff69afc8226f8344ce7a6da5d9d74e1743506f50aa56375a9f8fc",
+  "riot_manifest_sha256": "f7b09f71ae917190df3cb7e7b254724e3fb485417a02f1d20b19f6866adea73c",
+  "wad": "DATA/FINAL/Maps/Shipping/Map11.wad.client",
+  "navigation_asset": "assets/maps/navgrid/map11/aipath_srx_2.aimesh_ngrid",
+  "map_configuration_sha256": "45d16148616eb3da612e31f422afb46d756d5fc615f8387b7429343bda5da88a",
+  "verified_skin_references": [
+    "Default",
+    "SR_Seasonal_Map",
+    "Worlds_SR_Seasonal"
+  ],
+  "status": "static-grid-only; not an integrated modern simulator"
+}

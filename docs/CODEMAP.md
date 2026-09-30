@@ -50,3 +50,10 @@ TOOL: `ops/slurm_event_test.py`, `slurm/event_test.sbatch`: OPS047 bounded Slurm
 TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failure wake into the current T3 conversation; arm after launcher health watch. OPS047 retains the separate array test.
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
+
+TOOL (modern port, not yet on the tick path): `lanerl_jax/data/modern_map.py`,
+`lanerl_jax/sim/modern_terrain.py`: patch-pinned Map11 ingestion and static JAX
+collision queries. `lanerl_jax/data/modern/26.19/map11.json` is the reviewed
+asset identity; normalized arrays live outside Git. `ops/fetch_modern_map.py`
+selectively extracts assets from an explicit Riot RMAN. MODERN-009–012 track
+scope, evidence and remaining integration; these do not switch existing runs.
