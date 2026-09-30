@@ -1883,3 +1883,22 @@ Training1780 remained running; no gameplay/reward/hyperparameter changes.
 | ID | Status | Question / contract | Gates / limits |
 |---|---|---|---|
 | LEARN-PAIR-08 | E42 PREPARED | Current fullHP vs E34 old lowHP. Investigate missed visible lowHP casters and champion trades using action probabilities and same-state interventions; renderer adds state-driven E/Q/W/AA cues. | Freeze checkpoint, preserve GRU/RNG and reactive old opponent; control must reproduce recorded future. Candidate plain-AA damage ignores Q bonus and champion resist buffs (minions unaffected); cursor mass within125u is descriptive and not exact attack probability. Eight-second outcomes, one trajectory, no lifetime-frequency claim or training change. |
+
+
+LEARN-PAIR-08 mechanics audit: existing4 replay/scenario tests and4 selected
+windup/E regressions passed in CPU1782 startup. Source `sim/spells.py:status`
+allows Q/W during E; only E recast is locked for1s, and E suppresses attacks.
+Vendored Characters/Garen/E.cs swaps E into GarenECancel and sets1s cooldown;
+Buffs/Garen/GarenE.cs clears CanAttack, not CanCast. Q/W scripts do not remove E.
+Level3 scenario has no ranked R. Attack hit occurs at windup completion, not
+a fixed fraction of a rendered animation; post-hit movement cannot undo damage.
+
+New boundary discrepancy (NOT fixed or attributed as caster cause): NumPy
+`probes/aa_cancel_boundary.py` reports can_attack=False with50ms windup gives
+no hit; with5ms remaining gives hit/70damage (dt16.667ms). `step_autoattack`
+checks suppression only for still_casting after decrement. Vendored
+GameServerLib/GameObjects/Spell/Spell.cs STATE_CASTING calls CastCancelCheck
+before progressing delay, and that check includes !CanAttack for auto attacks.
+Existing ordinary suppression test starts E before attacking, so misses this
+last-tick case. A live-server paired boundary fixture remains needed before
+claiming full end-to-end parity; training/physics remain untouched.

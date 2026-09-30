@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `aa_cancel_boundary.py` | Can suppression on the final windup tick still deal damage? | LEARN-PAIR-08: NumPy routine repro; compare server CastCancelCheck ordering, no simulation changes | 2026-09-30 |
 | `wave_replay.py` | E40 short-scenario behavior with HP roles swapped | LEARN-PAIR-07/08; frozen CPU videos, optional old opponent, policy probabilities and restored-state caster/trade branches | 2026-09-30 |
 | `perf005_ray_kernel.py`, `perf005_vision_ab.py` | Does a fused ray traversal materially improve the whole update? | PERF-005; probe-only Pallas candidate, CPU interpreter check, GPU exact-ray/vision-suite gate and paired collection/full-update A/B | 2026-09-29 |
 | `perf004_profile.py`, `perf004_instrument.py`, `perf004_analyze.py` | Full simulation, observation/action and PPO GPU cost attribution at fixed N128 | PERF-004; labelled original AST, numerical/graph canary, frozen random/E31 early/mid/late inputs, HLO mixed-fusion attribution and memory | 2026-09-29 |

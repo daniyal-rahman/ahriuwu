@@ -59,7 +59,7 @@ def draw_ability_cues(draw, d, i, u, point, scale):
     if not d['alive'][i,u]: return
     x,y=point(d['x'][i,u],d['y'][i,u]); t=float(d['t_ms'][i])/1000
     if d['e_active'][i,u]:
-        r=max(12,325*scale)
+        r=max(12,330*scale)
         draw.ellipse((x-r,y-r,x+r,y+r),outline='#ffd06b',width=2)
         for a in (t*12,t*12+np.pi):
             dx,dy=np.cos(a),np.sin(a)
@@ -156,7 +156,7 @@ def render_frame(d, meta, i, background, view="map"):
         held = int(d['target'][i,side])
         draw.text((768,y+70), 'held target: '+unit_name(d,i,held), font=small, fill='#b9c4cd')
     draw.text((24,771), 'Circles: Garen  |  squares: minions  |  diamonds: turrets  |  purple: move  |  yellow: attack', font=small, fill='#c4cdd5')
-    draw.text((768,746), 'E: spinning blades | Q: gold sword | W: cyan shield', font=small, fill='#c4cdd5')
+    draw.text((768,746), 'E: spinning blades | Q: gold sword | W: cyan aura', font=small, fill='#c4cdd5')
     return im
 
 
