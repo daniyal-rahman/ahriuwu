@@ -1,0 +1,18 @@
+{
+  "id": "E42_caster_trade_audit",
+  "engine": "wave-replay",
+  "backend": "cpu",
+  "slurm_time": "00:45:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_144179200.msgpack",
+  "opponent_checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E33_E34_overnight/E34_accel_random/vec-s0-20260929-074837-33f8c55a/ckpt_081920000.msgpack",
+  "update": 4400,
+  "seconds": 75,
+  "seed": 7,
+  "offset": -45,
+  "low_teams": [
+    1
+  ],
+  "audit": true,
+  "label": "E40 u4400 (blue 100%) vs E34 (red 70%)",
+  "question": "Frozen current highHP vs original overnight random-start final lowHP, realtime animated state cues. Count visible lowHP minion windows; log action probabilities and cursor-near-target mass (not full attack probability); up to6 restored actual-state8s branches, force attack3s/cancel-E+attack or E trade, compare control with recorded future. No reward/physics/training changes; one-seed diagnostic. Exact lifetime opportunity frequency unavailable without saved training trajectories."
+}

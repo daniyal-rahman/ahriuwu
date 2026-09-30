@@ -54,6 +54,32 @@ def action_name(d, i, side):
     return BUTTONS[int(d['button'][i, side])]
 
 
+def draw_ability_cues(draw, d, i, u, point, scale):
+    """Schematic cues from actual buff/swing state, never requested buttons."""
+    if not d['alive'][i,u]: return
+    x,y=point(d['x'][i,u],d['y'][i,u]); t=float(d['t_ms'][i])/1000
+    if d['e_active'][i,u]:
+        r=max(12,325*scale)
+        draw.ellipse((x-r,y-r,x+r,y+r),outline='#ffd06b',width=2)
+        for a in (t*12,t*12+np.pi):
+            dx,dy=np.cos(a),np.sin(a)
+            draw.line([(x+dx*r*.25,y+dy*r*.25),(x+dx*r,y+dy*r)],fill='#fff0b5',width=4)
+            draw.arc((x-r,y-r,x+r,y+r),start=np.degrees(a)-55,end=np.degrees(a),fill='#ffae42',width=4)
+    if d['q_active'][i,u]:
+        draw.ellipse((x-15,y-15,x+15,y+15),outline='#fff59a',width=3)
+        draw.line([(x+12,y+8),(x+23,y-19)],fill='#fff59a',width=4)
+        draw.line([(x+10,y-2),(x+24,y+3)],fill='#fff59a',width=3)
+    if d['w_active'][i,u]:
+        draw.ellipse((x-19,y-19,x+19,y+19),outline='#93fff4',width=3)
+    target=int(d['aa_target'][i,u])
+    winding=bool(d['is_attacking'][i,u]) and float(d['aa_windup'][i,u])>0
+    fired=i>0 and bool(d['has_auto_attacked'][i,u]) and not bool(d['has_auto_attacked'][i-1,u])
+    if (winding or fired) and 0<=target<d['x'].shape[1]:
+        q=point(d['x'][i,target],d['y'][i,target])
+        draw.line([(x,y),q],fill='#ff934f' if fired else '#fff29a',width=5 if fired else 2)
+        if fired: draw.ellipse((q[0]-9,q[1]-9,q[0]+9,q[1]+9),outline='#ff934f',width=3)
+
+
 def render_frame(d, meta, i, background, view="map"):
     if view == "combat":
         return render_combat(d, meta, i, background)
@@ -107,9 +133,7 @@ def render_frame(d, meta, i, background, view="map"):
             if k == 1:
                 tile_draw.ellipse((x-r,y-r,x+r,y+r), fill=color, outline='#ffffff', width=2)
                 tile_draw.text((x+12, y-10), ('B','R')[side] + ('' if alive else ' dead'), font=small, fill=color)
-                if d['e_active'][i, side]:
-                    er = 330/bw*size
-                    tile_draw.ellipse((x-er,y-er,x+er,y+er), outline=color, width=2)
+                draw_ability_cues(tile_draw,d,i,u,point,size/bw)
             elif k == 3:
                 tile_draw.polygon([(x,y-r),(x+r,y),(x,y+r),(x-r,y)], fill=color)
             else:
@@ -132,7 +156,7 @@ def render_frame(d, meta, i, background, view="map"):
         held = int(d['target'][i,side])
         draw.text((768,y+70), 'held target: '+unit_name(d,i,held), font=small, fill='#b9c4cd')
     draw.text((24,771), 'Circles: Garen  |  squares: minions  |  diamonds: turrets  |  purple: move  |  yellow: attack', font=small, fill='#c4cdd5')
-    draw.text((768,746), 'All units visible; policy still uses its own fog.', font=small, fill='#c4cdd5')
+    draw.text((768,746), 'E: spinning blades | Q: gold sword | W: cyan shield', font=small, fill='#c4cdd5')
     return im
 
 
@@ -254,8 +278,7 @@ def render_combat(d, meta, i, background):
             if not (-30<x<size+30 and -30<y<size+30): continue
             if k==1:
                 dr.ellipse((x-r,y-r,x+r,y+r),fill=color,outline='white',width=2)
-                if info['champs'][u]['active'][2]:
-                    er=330/bw*size; dr.ellipse((x-er,y-er,x+er,y+er),outline=color,width=2)
+                draw_ability_cues(dr,d,i,u,point,size/bw)
             elif k==3: dr.polygon([(x,y-r),(x+r,y),(x,y+r),(x-r,y)],fill=color)
             else: dr.rectangle((x-r,y-r,x+r,y+r),fill=color)
             if detail:

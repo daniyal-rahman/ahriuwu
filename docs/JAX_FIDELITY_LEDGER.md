@@ -1878,3 +1878,8 @@ CS4/2,low-red sample3/3,all deaths0. Interactive replay.html and trace.npz
 preserved alongside videos. CPU fallback records independent sampled diagnostic
 trajectories; not claimed identical to GPU64game aggregate evaluation seeds.
 Training1780 remained running; no gameplay/reward/hyperparameter changes.
+
+
+| ID | Status | Question / contract | Gates / limits |
+|---|---|---|---|
+| LEARN-PAIR-08 | E42 PREPARED | Current fullHP vs E34 old lowHP. Investigate missed visible lowHP casters and champion trades using action probabilities and same-state interventions; renderer adds state-driven E/Q/W/AA cues. | Freeze checkpoint, preserve GRU/RNG and reactive old opponent; control must reproduce recorded future. Candidate plain-AA damage ignores Q bonus and champion resist buffs (minions unaffected); cursor mass within125u is descriptive and not exact attack probability. Eight-second outcomes, one trajectory, no lifetime-frequency claim or training change. |

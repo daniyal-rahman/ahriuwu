@@ -1,5 +1,9 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
+**E42 PREPARED:** Current E40u4400 highHP vs old E34 lowHP,75s normal-speed
+video with state-driven spell/attack cues. CPU caster opportunity and restored
+state intervention audit; E40 training unchanged. No HP reward added.
+
 **E41 VIDEOS COMPLETE — CPU1781:** Exit0 in4m17s;4 canaries and180s
 startup watch passed. Frozen E40u4050,75s mirror, both HP roles. Normal-speed
 75.1s MP4s and interactive HTML in `/mnt/nfs/shared/E41_wave_video/low_team_{0,1}/`.
