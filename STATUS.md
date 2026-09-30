@@ -1,6 +1,6 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**E46 AFK PREPARED:** User selected single AFK arm with health/tower shaping.
+**E46 AFK RUNNING — Slurm1787 (startup checks):** User selected single AFK arm with health/tower shaping.
 120s rounds,10.027M learner decisions,64-game frozen evaluations; source E40u5795.
 Health penalty100gold/fullbar; enemy top outer tower900gold/fullbar damage.
 
