@@ -35,12 +35,12 @@ def run(policy, initial, sim, base, carry0, dest, target, step, decode, reward, 
         return dict(attack=float(bp[2]),move=float(bp[1]),cursor_mass=float(xy[near].sum()),direct_attack_mass=float(bp[2]*xy[near].sum()),value=float(lg.value[0]))
     report['baseline']=inspect(base,carry0);sens=[]
     for hp in (20.,83.,160.,300.):
-        s=base._replace(hp=base.hp.at[target].set(hp));sens.append(dict(change='caster_hp',setting=hp,**inspect(s,carry0)))
+        s=base.replace(hp=base.hp.at[target].set(hp));sens.append(dict(change='caster_hp',setting=hp,**inspect(s,carry0)))
     for hp in (1.,200.,479.,800.):
-        s=base._replace(hp=base.hp.at[1].set(hp));sens.append(dict(change='enemy_hp',setting=hp,**inspect(s,carry0)))
+        s=base.replace(hp=base.hp.at[1].set(hp));sens.append(dict(change='enemy_hp',setting=hp,**inspect(s,carry0)))
     for dist in (150.,300.,450.,639.):
         dx=base.x[target]-base.x[0];dy=base.y[target]-base.y[0];length=jnp.hypot(dx,dy)
-        s=base._replace(x=base.x.at[target].set(base.x[0]+dx/length*dist),y=base.y.at[target].set(base.y[0]+dy/length*dist))
+        s=base.replace(x=base.x.at[target].set(base.x[0]+dx/length*dist),y=base.y.at[target].set(base.y[0]+dy/length*dist))
         sens.append(dict(change='caster_distance',setting=dist,**inspect(s,carry0)))
     report['input_interventions']=sens;save();print('INPUT AUDIT DONE',flush=True)
     def rollout(p,start,c0,seed,n=80,temp=1.,collect=False,greedy=False):

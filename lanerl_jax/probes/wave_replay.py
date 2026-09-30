@@ -20,7 +20,7 @@ from lanerl_jax.sim.combat import growth_sum
 from lanerl_jax.sim.profiles import PROFILES
 from lanerl_jax.obs.fog import visible_to
 from lanerl_jax.train.vec_train import _relative_reward, VecConfig
-from lanerl_jax.train.replay_audit import serialize_replay_state
+from lanerl_jax.train.replay_audit import serialize_replay_state, restore_replay_state
 
 
 def main():
@@ -79,7 +79,14 @@ def main():
         state=jax.tree.map(lambda x:x[low],bank)
         carry=policy.initial_carry((2,));key=jax.random.key(spec['seed']);rows=[];audit=[];cases=[];case_keys=set()
         assert np.allclose(np.asarray(state.hp[:2]/state.max_hp[:2]),[.7,1.] if low==0 else [1.,.7])
-        while float(state.t_ms)<START_MS+spec['seconds']*1000:
+        if spec.get('restore_case'):
+            source_case=Path(spec['restore_case'])
+            restored=restore_replay_state(dict(state=state,carry=carry,key=key),source_case.read_bytes())
+            candidates=json.loads((source_case.parent/'opportunities.json').read_text())
+            case=next(r for r in candidates if f"{r['category']}_{r['index']}"==source_case.stem)
+            cases=[(case,restored['state'],restored['carry'],restored['key'])]
+            audit=candidates
+        while not spec.get('restore_case') and float(state.t_ms)<START_MS+spec['seconds']*1000:
             before_carry,before_key=carry,key
             key,ak=jax.random.split(key)
             action,carry,lg=act(state,carry,ak);orders=decode(action,state)
@@ -103,7 +110,12 @@ def main():
             rows.append(jax.tree.map(np.asarray,snapshot(state,orders,action)))
             state=jax.block_until_ready(step(state,orders))
             if len(rows)%100==0:print('RECORD',low,len(rows),float(state.t_ms),flush=True)
-        rows.append(jax.tree.map(np.asarray,snapshot(state,orders,tuple(jnp.zeros(2,jnp.int32) for _ in range(3)))))
+        if spec.get('restore_case'):
+            with np.load(Path(spec['restore_case']).parent/'trace.npz') as ref:
+                fields=[k for k in ref.files if k not in ('walkable','metadata')]
+                rows=[{k:ref[k][i] for k in fields} for i in range(len(ref['t_ms']))]
+        else:
+            rows.append(jax.tree.map(np.asarray,snapshot(state,orders,tuple(jnp.zeros(2,jnp.int32) for _ in range(3)))))
         data={k:np.stack([r[k] for r in rows]) for k in rows[0]}
         meta=dict(label=spec.get('label',f'E40 u{spec["update"]} | 75s mirror | low HP team {low}'),
             controller='current blue vs old red' if old_params is not None else 'frozen policy on both champions',environment='jax-wave-scenario',opponent_checkpoint=spec.get('opponent_checkpoint'),
@@ -113,7 +125,8 @@ def main():
             action_alignment='pre-action; terminal frame has unsent NOOP placeholder',
             terrain=dict(min_x=float(sim.terrain.min_x),min_y=float(sim.terrain.min_y),cell_size=float(sim.terrain.cell_size)),
             **render_metadata())
-        if spec.get('reference_root'):
+        if spec.get('restore_case'): meta['copied_reference_trace']=str(Path(spec['restore_case']).parent/'trace.npz')
+        if spec.get('reference_root') and not spec.get('restore_case'):
             with np.load(Path(spec['reference_root'])/f'low_team_{low}'/'trace.npz') as reference:
                 error=max(float(np.max(np.abs(data[k]-reference[k]))) for k in ('x','y','hp','cs','deaths'))
             meta['reference_max_error']=error
