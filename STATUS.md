@@ -1,11 +1,14 @@
 # STATUS (rewrite in place; last edit 2026-09-29, Codex)
 
-**2026-09-30 — E39b CONTINUATION PREPARED:** Desktop available again.
-Same-spec resume restores u13 params/optimizer/step (learning-rate schedule
-continues); legacy checkpoint lacks live episodes/carry/RNG, so fresh episodes
-are explicitly recorded. New checkpoints also save rollout state. Original
-E34 remains the fixed evaluation opponent. Dry-run passed;9 focused tests
-passed. Resume launch next; no optimization installed in training.
+**2026-09-30 — E39b CONTINUATION STARTING (Slurm1779):** Desktop available.
+Same-spec continuation submitted through launcher; dry-run, five GPU canaries
+and 180s startup watch passed. Worker initialization/compilation in progress;
+no resumed training progress claimed yet. Resume restores u13 parameters,
+optimizer and learning-rate schedule. Old checkpoint lacks live episodes/carry/
+RNG: fresh episodes explicitly recorded; future checkpoints retain rollout state.
+Original E34 remains the fixed evaluation opponent. Log:
+`/mnt/nfs/shared/E39b_tower_wave_advantage-1779.out`.
+Performance investigation is code/probe only; no optimization installed in this run.
 
 **E39b INTERRUPTED — DESKTOP BOOT TO WINDOWS:** Slurm1778 cancelled at
 2026-09-29 22:57:25 UTC after13updates/425,984 champion decisions. Node is
@@ -13,7 +16,7 @@ DRAINED with reason `boot to windows`. Signal handler saved params and optimizer
 atupdate13; manifest/study report interrupted. Checkpoint decodes, all arrays
 finite, latest byte-identical to `ckpt_000425984.msgpack` (SHA256
 4f9368cef611b8fb62942ffd738deac90135447bda356a6fe228062e05bdc353).
-No own jobs or watchers remain; no automatic continuation is queued.
+At that interruption no own jobs/watchers remained; continuation1779 is now submitted.
 
 Experiment startup validated:5 GPU tests,180s watch, actual scenario/checkpoint,
 compiled endpoint gate and both initial64-game frozen evaluations passed.
