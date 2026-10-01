@@ -1,0 +1,48 @@
+{
+  "id": "E79_afk_cs_only_lr3e4",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0003,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 0.0,
+  "tower_damage_gold": 0.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "LEARN-AFK-33 LR revision: user-requested literal CS-only continuation from frozen E67 parameters. Reward exactly +1 per credited CS; no gold, opponent subtraction, death, HP, XP, tower or positioning reward. Same v3 observations, unmasked actions, GRU/PPO, 128envs, staggered full120s AFK episodes, seed0, LR3e-4, gamma.99, 4epochs and freshAdam as E75c control.512updates/8,388,608 learner decisions; expected about40min including integrated canaries/compilation/evaluation,55minworker/1hSlurm cap. Frozen64games at0/128/256/512 on existing cohort. Every frozen episode must have reward=CS and all other reward terms zero; initial physical trajectories must match E67 while reward intentionally differs. Primary endpoint final meanCS>=10.921875 (baseline+1), also compare E75c final9.453125. Deaths and tower damage are diagnostic outcomes, not rewards or primary success constraints. Stop nonfinite/contract failure/cap; intermediate scores are not selection gates. No blind extension. E65 is not the same intervention: it retained gold, death and lane shaping and used E46 without staggered collection. User requested a larger LR before E78 submission. E79 supersedes unsubmitted E78. Choose3x rather than10x: E75c at1e-4 had median sampled postKL.02684,p95.03596,max.05630 and median clip_frac.19711, so steps were not near-zero. E50/E51 lower-vs-higher LR favored1e-4 but both below their initial baseline. This is an exploratory combined reward/LR intervention, not isolated attribution or a claim3e-4 is optimal. Existing KL/entropy/gradient/clipping/value metrics and frozen behavior retained; no adaptive controller or early best-checkpoint selection.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 0.0,
+  "stagger_initial": true,
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/evaluations.jsonl",
+    "update": 512,
+    "compare_reward": false
+  },
+  "preflight_gate": "/mnt/nfs/shared/E77_combat_mask_preflight/result.json",
+  "init_sha256": "7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55",
+  "combat_features": false,
+  "cs_only": true
+}

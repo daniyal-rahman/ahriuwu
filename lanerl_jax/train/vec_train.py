@@ -79,6 +79,7 @@ class VecConfig(NamedTuple):
     gold_scale: float = 20.0
     xp_scale: float = 0.008
     enemy_scale: float = 1.0
+    cs_only: bool = False
     health_loss_gold: float = 0.0
     death_loss_gold: float = 0.0
     tower_damage_gold: float = 0.0
@@ -140,6 +141,10 @@ class Transition(NamedTuple):
 def _relative_reward(prev, nxt, cfg: VecConfig):
     """`server_train.relative_reward` on device: (2,) per champion, terms
     under the farm names every consumer reads (cs -> gold term)."""
+    if cfg.cs_only:
+        cs = (nxt.cs[:2] - prev.cs[:2]).astype(jnp.float32)
+        zero = jnp.zeros_like(cs)
+        return cs, {"cs": cs, "death": zero, "approach": zero, "xp": zero}
     d_gold = nxt.gold[:2] - prev.gold[:2]
     d_xp = nxt.xp[:2] - prev.xp[:2]
     pot_p = -lane_corridor_distance(prev.x[:2], prev.y[:2]) / 10000.0

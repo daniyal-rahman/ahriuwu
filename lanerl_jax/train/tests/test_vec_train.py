@@ -24,6 +24,25 @@ def _sim():
     return SimConfig.training().replace(step_ticks=6)
 
 
+def test_relative_reward_cs_only_ignores_all_other_events():
+    p = init_lane(seed=0)
+    q = p.replace(gold=p.gold.at[:2].add(jnp.array([1000., 2000.])),
+                  xp=p.xp.at[:2].add(500.), hp=p.hp.at[:2].set(0.),
+                  alive=p.alive.at[:2].set(False), deaths=p.deaths.at[:2].add(1),
+                  kills=p.kills.at[:2].add(1), x=p.x.at[0].add(400.),
+                  champion_tower_damage=p.champion_tower_damage+100.)
+    cfg = VecConfig(cs_only=True, health_loss_gold=100., death_loss_gold=300.,
+                    tower_damage_gold=900., tower_damage_personal=True)
+    reward = jax.jit(lambda a,b: _relative_reward(a,b,cfg))
+    np.testing.assert_array_equal(reward(p,q)[0], [0., 0.])
+    q = q.replace(cs=q.cs.at[:2].add(jnp.array([2, 3], dtype=q.cs.dtype)))
+    r, terms = reward(p,q)
+    np.testing.assert_array_equal(r, [2., 3.])
+    np.testing.assert_array_equal(terms['cs'], r)
+    for key in ('death', 'approach', 'xp'):
+        np.testing.assert_array_equal(terms[key], [0., 0.])
+
+
 def test_relative_reward_matches_collector_path():
     from lanerl_jax.train import server_train as st
     from lanerl_jax.train.reward import lane_corridor_distance

@@ -1,16 +1,20 @@
-# STATUS — 2026-10-01 cleanup and learning discussion
+# STATUS — 2026-10-01 CS-only continuation
 
-Current user task: archive inactive checkouts, investigate Tencent weights and
-explain avoidable AFK farming/pushing inefficiency. Completed cleanup and source
-review; findings in LEARN-AFK-31/32. Discussion ideas are not automatic feature or
-experiment instructions. No new training, projectile integration or transfer work
-submitted. The question is why attainable CS/tower damage is left uncollected,
-not whether the policy has ever improved. The suggested12–18CS opportunity count
-is not yet an independently measured ceiling for the frozen cohort.
+Current user task: run the existing policy with CS reward only for roughly40min,
+while discussing better diagnostic options than requiring human play. E79 prepared (supersedes unsubmitted E78):
+E67 parameters, fresh optimizer, unchanged v3/GRU/actions, LR3e-4 (3x),512updates/8.389M
+learner decisions; literal+1/CS, no other environment reward. Frozen64games at
+0/128/256/512; initial physical behavior retained, reward intentionally changed.
+Final primary gate CS>=10.921875; deaths/tower damage reported as outcomes.
+Code adds integrated CS-isolation smoke test and frozen reward=CS assertions.
+No manual-play client or new teacher/curriculum experiment authorized by this
+ideation alone. Recommendations recorded in LEARN-AFK-33.
 
 ## Jobs
 
-**RL workstream: no running or queued jobs; no ETA or completion bridge pending.**
+**E79_afk_cs_only_lr3e4 PREPARED, not submitted yet.** Expected runtime~40min;
+55minworker/1hSlurm cap. Normal dry-run, canary/startup watch and event bridge
+required. No RL job currently running or queued.
 E77_combat_mask_preflight / Slurm1857 COMPLETED0:0 in4m27s, ended21:28:35UTC.
 Existing log:19GPU tests passed, CANARY PASSED and PROFILE COMPLETE; result.json
 passed for matching job/spec/sourceb63227e5. This resolves the previous interrupted
@@ -68,8 +72,9 @@ level with LuBan; no perfect-CS benchmark. Inputs725 and six action heads differ
 from ours. Full input semantics and cross-game transfer benefit remain unverified.
 Use it as an implementation reference; direct weight transfer is not a quick fix.
 
-Prioritize comparing demonstrated better play against our current reward, then
-imitation and frozen behavior if that direction is agreed. Existing older BC/DAgger
+Human play is currently inconvenient; defer client work. Prefer evaluating the
+existing scripted teacher on matched AFK starts, then a teacher/short last-hit
+curriculum diagnostic if needed after the CS-only result. Existing older BC/DAgger
 success makes this plausible; those longer mirror-task scores are not comparable
 to current120s AFK. LEARN-AFK-32 records sample-budget estimates and hypotheses,
 including short reward horizon/personal tower credit for pushing. No experiment

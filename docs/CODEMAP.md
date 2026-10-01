@@ -97,3 +97,7 @@ updated registrations. Archived worktrees remain registered, deliberately.
 `lanerl-vendor/LoLServer` and the non-Git `lanerl-modern-MOD001-v2` build remain
 dependencies, not additional active feature workstreams. Other projects and
 their jobs are outside this cleanup.
+
+LIVE (opt-in, LEARN-AFK-33): `VecConfig.cs_only` and wave-scenario spec
+`cs_only` select literal per-champion deltaCS reward, bypassing every shaping/gold
+term. Frozen evaluation asserts episode reward=CS. E79 (superseding unsubmitted E78) retains E67 inputs/actions.

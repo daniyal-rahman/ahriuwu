@@ -159,6 +159,7 @@ def main():
         stagger_initial=spec.get('stagger_initial',False),
         bank_size=len(bank.t_ms),lr_anneal=spec.get("lr_anneal",True),policy=pcfg,
         xp_scale=spec.get("xp_scale",0.008),
+        cs_only=spec.get("cs_only",False),
         opponent=spec.get("opponent","mirror"),health_loss_gold=spec.get("health_loss_gold",0.),
         death_loss_gold=spec.get("death_loss_gold",0.),
         tower_damage_gold=spec.get("tower_damage_gold",0.),
@@ -300,6 +301,11 @@ def main():
                 if seen.all():break
             if not seen.all():raise RuntimeError('incomplete scenario eval')
             np.testing.assert_allclose(sum(reward_terms.values()),returns,rtol=1e-5,atol=1e-4)
+            if cfg.cs_only:
+                for row in rows:
+                    np.testing.assert_equal(row['reward'], row['cs'])
+                    np.testing.assert_equal(row['reward_terms']['cs'], row['cs'])
+                    assert all(value == 0. for key,value in row['reward_terms'].items() if key != 'cs')
             summaries={}
             for team in (0,1):
                 for disadvantaged in (True,False):
@@ -326,7 +332,10 @@ def main():
                     for field in ('cs','deaths','kills','spell_selections','low_hp'):
                         if row[field]!=previous[field]:
                             raise RuntimeError(f'initial frozen trajectory changed: env{row["env"]}/team{row["team"]}/{field}')
-                    for field in ('gold','gold_diff','tower_damage','hp_fraction','reward'):
+                    fields=('gold','gold_diff','tower_damage','hp_fraction')
+                    if reference.get('compare_reward', True):
+                        fields += ('reward',)
+                    for field in fields:
                         np.testing.assert_allclose(row[field],previous[field],rtol=1e-5,atol=1e-4,
                             err_msg=f'initial frozen reference: {field}')
                 print('INITIAL FROZEN REFERENCE PASSED: all64games, bothteams, E67source',flush=True)

@@ -1035,3 +1035,47 @@ correlation; controlled memory/input interventions with frozen behavior are need
 to claim the policy uses it. Behavioral comparisons above are the first useful
 debugging step. This entry records discussion/recommendations, not authorization
 to implement every suggestion.
+
+### LEARN-AFK-33 — literal CS-only continuation and alternatives to human play
+
+Dani explicitly requests approximately40min of existing-policy training with CS
+reward and nothing else. E78 selects512updates/8,388,608 learner decisions, based
+on E75c512updates completing in41m26s.55minworker/1hSlurm ceiling; actual runtime
+is an estimate. E67checkpoint/freshAdam, v3 inputs, unmasked original actions,
+GRU, gamma.99/LR1e-4/4epochs, seed0 and staggered120s AFK episodes unchanged.
+E77-approved features/masks are not enabled in this reward-only comparison.
+
+Reward is exactly nextCS-currentCS for each champion, with no enemy subtraction,
+gold/XP/position/health/death/tower terms. Existing entropy regularization and PPO
+optimizer settings remain unchanged; they are not environment rewards. This is a
+CS-only discounted objective, not a claim of undiscounted episode optimization.
+E65 previously retained gold/death/position reward, used E46 initialization and
+unstaggered collection; its failure does not answer this exact request. Tencent's
+explicit last-hit term (LEARN-AFK-27/31) is relevant precedent for rewarding last
+hits, not evidence that our pure-CS configuration will succeed.
+
+Frozen64games at0/128/256/512. Initial cohort must reproduce E67physical metrics;
+only reward comparison is disabled explicitly because that is the intervention.
+Every frozen episode checks reward=CS and all non-CS terms=0. Integrated existing
+submission suite adds a JIT reward-isolation canary with simultaneous unrelated
+state changes and asymmetric CS counts. Primary endpoint is final meanCS>=10.921875
+(E67+1); report paired episode differences and compare E75ccontrol9.453125. No
+best-intermediate selection. Deaths and personal tower damage remain diagnostics,
+not extra rewards or a survival success gate that would contradict the test.
+Stop for nonfinite training, contract/canary failure or budget. No blind extension.
+
+Human demonstration recommendation revised: the playable JAX interface is not
+currently convenient, so building it is not the preferred prerequisite. Discussed
+alternatives, not submitted follow-ups: (1) run the existing scripted last-hitter
+on the SAME AFK starts to measure a feasible CS comparator and miss types;
+(2) use existing BC/DAgger with scripted labels to test whether the current
+observations/network can acquire and retain better timing; teacher privileged
+inputs, if any, must be disclosed and need not be deployable actor inputs;
+(3) short randomized last-hit situations followed by full-wave frozen evaluation
+can test whether PPO learns the local skill but fails to discover/retain it in
+full episodes. A scripted comparator is not a mathematical optimality bound.
+Existing E69/E70 counterfactual tools already demonstrate local opportunities;
+avoid repeating those checks without a new question. No manual client, teacher
+experiment, observation change or Tencent port implemented in this turn.
+
+| LEARN-AFK-33 LR revision | Before submission, Dani requests a roughly10x-or-evidence-based LR increase. E79 replaces never-submitted E78 with LR3e-4 (3x); all other E78 settings/gates retained. E75c512update metrics at1e-4: median sampledpostKL.02684,p95.03596,max.05630; approxKL median.01601; clip_frac median.19711; median gradient norm2.04032, clipping fraction1.0. E50lower3e-5 medianpostKL.01433 versus E51at1e-4 .02747; higher arm had better finalCS8.8594vs8.0313 but neither exceeded9.5625initial. | Steps are not demonstrably too small;3x is an exploratory larger-step choice, not an inferred optimum.10x is not supported by these diagnostics. Reward and LR now both differ from E75c; no isolated causal attribution. Existing sample-based postKL replays128step recurrent segments from cached initial carry, not full-episode hidden-state recomputation or exact categorical KL. PPO paper https://arxiv.org/abs/1707.06347 supports measuring policy movement but clipping is not a hard KL bound. No adaptive LR controller added. |
