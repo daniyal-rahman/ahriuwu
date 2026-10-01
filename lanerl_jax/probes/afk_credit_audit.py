@@ -10,11 +10,38 @@ from lanerl_jax.train.run_manifest import git_provenance,file_sha256
 from lanerl_jax.train.wave_scenario import prepare_scenario_bank,park_afk_opponent
 from lanerl_jax.train.policy import PolicyConfig
 from lanerl_jax.train.ppo import PPOConfig,gae,factored_log_prob
+from lanerl_jax.train.learner import make_learner,make_update
 from lanerl_jax.train.vec_train import VecConfig,make_vec_train
 from lanerl_jax.train.replay_audit import restore_replay_state
 from lanerl_jax.obs.builder import build_observation
 from lanerl_jax.parity.policy_driver import _lane_frames
 
+
+def branch_audit(built,cfg,before,after,batch,hits,production_params):
+ """Same observations/advantages/Adam state/RNG; vary only update settings."""
+ old=built['loss'].forward(before.params,batch)
+ def measure(params):
+  new=built['loss'].forward(params,batch);out={}
+  for i,name in enumerate(('button','screen_x','screen_y')):
+   a=jax.nn.log_softmax(getattr(old,name));b=jax.nn.log_softmax(getattr(new,name))
+   action=batch['action'][i][...,None]
+   delta=np.asarray(jnp.take_along_axis(b-a,action,-1)[...,0])
+   kl=np.asarray((jnp.exp(a)*(a-b)).sum(-1))
+   mask=hits if i==0 else hits & np.asarray(batch['uses_screen']).astype(bool)
+   out[name]={'hit_count':int(mask.sum()),'hit_mean_delta_logprob':float(delta[mask].mean()),
+    'hit_probability_increased':float((delta[mask]>0).mean()),'all_mean_exact_kl':float(kl.mean())}
+  return out
+ result={}
+ for label,changes in [('standard',{}),('lr3e5',{'lr':3e-5}),('one_epoch',{'epochs':1}),('no_entropy',{'entropy_coef':0.})]:
+  pc=cfg.ppo._replace(**changes);tx,loss=make_learner(built['policy'],pc)
+  update=make_update(tx,loss,pc)
+  params,_,_,metrics=jax.block_until_ready(update(before.params,before.opt_state,batch,after.rng))
+  result[label]={'heads':measure(params),'metrics':{k:float(v) for k,v in metrics.items()}}
+  if label=='standard':
+   err=max(float(np.max(np.abs(np.asarray(a)-np.asarray(b)))) for a,b in zip(jax.tree.leaves(params),jax.tree.leaves(production_params)))
+   assert err<1e-6,err
+   result[label]['production_param_max_error']=err
+ return result
 
 def main():
  spec=json.loads(Path('experiments',sys.argv[1]+'.json').read_text())
@@ -55,7 +82,7 @@ def main():
    template={k:getattr(runner,k) for k in ('env_state','carry','rng','deadline_ms')}
    restored=jax.tree.map(jnp.asarray,restore_replay_state(template,payload['rollout_state']))
    runner=runner._replace(params=params,opt_state=from_state_dict(runner.opt_state,payload['opt_state']),step=jnp.asarray(payload['step']),**restored)
-  records=[];anchor=None
+  records=[];anchor=None;branches_done=False
   for u in range(stage['updates']):
    before=runner;after,tr,batch=jax.block_until_ready(roll(before));last=end_value(after)
    av,rt=gae(tr.reward[:,:,0],tr.value[:,:,0],tr.done[:,:,0],last,cfg.ppo.gamma,cfg.ppo.gae_lambda)
@@ -92,6 +119,10 @@ def main():
       normalized_adv=float(normalized[mask].mean()),positive_normalized=float((normalized[mask]>0).mean()),
       delta_logprob=float(delta_lp[mask].mean()),probability_increased=float((delta_lp[mask]>0).mean()),
       button_counts=np.bincount(buttons[mask].astype(int),minlength=8).tolist())
+   if spec.get('branch_audit') and not branches_done and hits.sum()>=16:
+    report.setdefault('branches',{})[name]=branch_audit(built,cfg,before,after,batch,hits,runner.params)
+    branches_done=True
+    print('BRANCH AUDIT',name,report['branches'][name],flush=True)
    record=dict(update=int(runner.step)//16384,cs=int(np.asarray(tr.cs_delta)[:,:,0].sum()),
     actor_learner_logprob_error=lp_error,actor_learner_value_error=v_error,gae_error=gae_error,
     cohorts={'cs_event':summarize(hits),'preceding_1s':summarize(future&~hits),

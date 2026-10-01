@@ -27,3 +27,5 @@ PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static 
 | `replay_learning_summary.py` | Teacher/initial BC/final policy decisions on full replay histories; reward and decoded orders | LEARN-PAIR-04 / E36; shadow actions never executed | 2026-09-29 |
 
 | `escape_counterfactual.py` | Do spells or alternate movement rescue the exact trapped-wave state? | LEARN-PAIR-05 / E37; frozen reactive opponent, restored full history | 2026-09-29 |
+
+| `afk_credit_audit.py` (branch mode) | E55 same-batch headwise LR/epoch/entropy audit | LEARN-AFK-10; isolated parameters only | 2026-10-01 |

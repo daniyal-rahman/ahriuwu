@@ -6,6 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E55_afk_update_branches` |10-01| GPU diagnostic | Matched update size/entropy branches, headwise probabilities | E46fresh/E51restored |6 rollout updates +8 isolated branches,45min cap| Preparing | Standard branch must reproduce production; no exported policy |
 | `E54_afk_credit_audit` |10-01| GPU isolated diagnostic | CS→GAE→PPO probability and retention | E46fresh + E51runner copies |16updates each,no exported weights| Slurm1815 COMPLETED/0:0,5m51s;6canaries/180s watch passed | GAE/likelihood checks pass; positive CS credit81.9/89.3%, probability increases38.0/53.0%; diagnostic only, no frozen score/export |
 | `E52_afk_entropy` |09-30| JAX PPO AFK | LR1e-4; entropy.01 vs E51 .001 | Same E46final |128updates/2.097M| COMPLETE1813 exit0,14m24s; final2.94CS/0deaths/0towerHP, reject extension | Frozen CS/deaths/personal tower |
 | `E53_afk_shared_critic` |09-30| JAX PPO AFK | LR1e-4; enable critic shared-feature gradients | Same E46final |128updates/2.097M| COMPLETE1814 exit0,14m29s; final7.97CS/0deaths/0towerHP; no extension | Same actor/value at init; entropy.001 |
