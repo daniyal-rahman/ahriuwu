@@ -1,116 +1,66 @@
-# STATUS — 2026-10-01 19:22 UTC
+# STATUS — 2026-10-01 19:36 UTC
 
-Current authorization: fresh budget; E68 narrow execution audit then bounded
-visible-history experiment. No broad PPO/LR sweeps. E71b/1839 is the only submitted project job; startup watch in progress.
-Unrelated1803/1736 untouched.
+Dani renewed the research budget in this thread. The old thread token limit and
+15:37 compute window are obsolete. Current task: diagnose E68 caster misses,
+then test visible history with controlled frozen evaluations. No broad PPO/LR
+sweeps; no farming solution demonstrated. Long-term C# gate remains >30CS in
+10minutes across seeds. Existing ledgers hold history and run details.
 
-Narrow investigation COMPLETE (LEARN-AFK-24/25): E69 exact1201frame E68
-reproduction; E69b1836 COMPLETED/0:0; E701837 COMPLETED/0:0,6m28s. Tick versus
-ordinary state agreement maxerror0. Caster15 dies to minion14 at80.953438s
-with ownwindup.1961s. Caster19 dies to minion20 at113.280203s with ownCD.7847s
-after nonlethal normal+Q hits. No missing champion hit/CS credit in these ticks.
-E70 preserves preceding useful actions: delayedAA localCS1→2; delayedQ0→1.
-Wait intervals have no swings; one physical ground click moves23.586units,
-so timing and small position changes are coupled. No learned/global fix claimed.
-E69/E69b/E70 watchers stopped; inactive and registry clean verified.
+## Current phase
 
-Next: opt-in visible HP/position history implementation/preflight, then matched
-E67 original-input control versus history input experiment if gates pass.
-Standalone tracking tests5passed; small policy migration/gradient test passed.
-Collector/reset/resume/GPU and real-trace tracking checks remain.
-E71 FAILED1838/1:0 in1m01s: test injectedfloat64 random kernel under pytestx64;
-fixture corrected tofloat32, production code unchanged.6GPU tests passed but
-collector gate remains pending. E71b retry submitted as1839; no watcher armed for failed
-E71. E72b original-input control and E73b history arm prepared with unique
-configs and512update/1h caps each, not submitted. LEARN-AFK-26
-states hypothesis, matched budget and frozen success criteria. No training
-submitted yet. Experimental files in progress are not a validated policy.
+E71b preflight COMPLETE1839/0:0,4m16s.14GPU tests passed. E68 visible-history
+audit:97022claimed historical samples,zero mismatches; one-step visible-minion
+coverage97.26658%.15past samples available in all four inspected incident
+frames. Single-game association evidence, not CV robustness or a learned gain.
 
-## Previous handoff (historical)
+E72b original-input control and E73b visible-history arm prepared; neither
+submitted yet. Each starts from E67final with fresh optimizer,512updates8.389M
+learner decisions plus discarded stagger warmup,1hSlurm/55minworker cap.
+Only history switch differs: same LR1e-4/4epochs/entropy.001/gamma.99,
+XP0/HP100/personal tower900/death300. Frozen64games at0/128/256/512.
+Initial per-game frozen outcomes must match E67 before learning. Primary final
+gate: historyCS>=10.921875 AND control+1, deaths<=.15; independently confirm if
+promising. No extension on reward alone. Both arms require passed E71b artifact.
+No project jobs currently running/queued. Unrelated1803/1736 untouched.
 
-**Follow-up paused at budget boundary:** Dani approved the narrow tick-level caster investigation. Read repository instructions and existing counterfactual launcher; no simulation, code changes or jobs started before the budget-limited notice arrived. Remaining work: reproduce E68 incidents near81s/113s at60Hz, verify attack/damage/credit ordering, then matched earlier/delayed attack branches. Requires renewed research budget. No new results or solution claim.
+## Narrow investigation completed
 
-**Latest requested feature comparison:** Completed primary-source Tencent Solo/5v5, OpenAI Five and AlphaStar comparison (LEARN-AFK-23). Explicit HP history and combat timing are supported precedents; E67 lacks these inputs. Saved-trace projectile timings support the two caster timing explanations, without proving simulator parity or neural causality. No code/training change, no submitted or queued jobs. Next targeted work: tick-level matched-action audit, then controlled visible-history feature experiment if execution is correct.
+- E69 reproduced every checked E68 state/action field over1201frames exactly;
+  expected12CS/0deaths. Its typed-key comparator failed afterward; repaired in
+  E69b. E69b1836 COMPLETED/0:0; both tick/ordinary baselines maxerror0.
+- Caster15 dies80.953438s to minion14 projectile, ownwindup.1961s remaining.
+  Caster19 dies113.280203s to minion20 projectile, ownCD.7847s remaining after
+  nonlethal normal+Q hits. No missing champion hit or kill credit in these ticks.
+- E701837 COMPLETED/0:0,6m28s. Preserve preceding useful actions and delay AA/Q:
+  caster15 localCS1→2; caster19 localCS0→1. Every pre-intervention tick field
+  matches baseline; no waiting swings. Ground-click displacement23.586units,
+  so these are physical timing/position options, not timing-only causality.
+- LEARN-AFK-24/25 contain exact timestamps, hit damage, attribution and limits.
+  This is local JAX execution evidence, not a C# paired-trace parity proof.
 
-**User-requested E68 behavior review:** Saved-trace checks identify correct-target late swing near81s and nonlethal swing/cooldown miss near113s; detailed timestamps in LEARN-AFK-22. E67 retained HP100/death300/personal tower900 rewards. Current inputs lack explicit per-minion HP trends; shared entity encoder pools before globalGRU. No proof of simulator correctness or neural causal explanation. Next narrow check: tick-level execution and visible-history dependence for these incidents; no hidden target-ID feature added. No jobs launched by this review.
+## Feature implementation and source
 
-**E68 VIDEO COMPLETE:** User-requested latestE67 full120s replay, Slurm1834 COMPLETED/0:0 in4m40s. Canaries/180s watch passed; checkpointSHA matches E67final. Both map and combat MP4s verified120.1s/10fps. Seed7/fullHP blue versusAFK:12CS/0deaths, one diagnostic game. Combat video `/mnt/nfs/shared/E68_afk_current_video/low_team_1/combat/replay.mp4`; map sibling `replay.mp4`. Watcher1834 stopped after active review; inactive/registryclean. No training resumed; no active jobs from this request.
+Opt-in v5 adds15past10Hz health/position/known samples per visible entity via
+mutual position/type association, retaining existing shared attention/pooling
+and globalGRU. No raw unit IDs/targets/projectiles/AA clocks enter the actor.
+Separate zero-weight projection preserves initial checkpoint outputs. Observer
+memory crosses rollouts, resets with episodes and is included in checkpoints.
+Experimental collector currently supports10Hz AFK; C# driver rejects v5 until
+its history collection is validated. LEARN-AFK-26 records research/gates.
 
-# STATUS — 2026-10-01 11:30 UTC
+Current E67 aggregate frozen baseline:9.921875CS/.140625deaths, NOT solved.
+Checkpoint:
+`/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack`
+SHA256 `7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55`.
+E68 trace: `/mnt/nfs/shared/E68_afk_current_video/low_team_1/trace.npz`.
+E69b/E70/E71b artifacts use their experiment names under `/mnt/nfs/shared/`.
 
-Current task: diagnose and improve JAX AFK farming, using frozen 120-second
-trials. No demonstrated solution yet. Dani authorizes bounded reversible
-experiments through **15:37 UTC today**; preserve checkpoints and use Slurm.
-Longer-term transfer gate remains >30 CS in a 10-minute C# mirror trial.
-History and evidence: `docs/EXPERIMENTS.md`, `docs/JAX_FIDELITY_LEDGER.md`.
+E69/E69b/E70 watchers stopped, inactive/registry clean verified. E71 failed a
+float64 test fixture before training; E71b corrected it. Neither E71 attempt
+needed an unattended watcher. E72/E73 prepared configs superseded before
+submission by E72b/E73b to reference successful E71b. E64 remains unsubmitted;
+older E40 checkpoint remains preserved and must not be silently resumed.
 
-## No active runs — token budget reached
-
-All this thread's submitted runs finished; no new experiment authorized beyond
-the exhausted1M-token goal budget. No solution demonstrated. GPU window had
-remaining time, but token budget is the stopping constraint. Existing checkpoints
-and opt-in implementations retained. E64 remains prepared, not submitted.
-
-E67 Slurm1833 COMPLETED/0:0 in41m44s. Frozen CS9.5625→10.0625→6.703125→9.921875;
-final deaths.140625/personal towerHP802.399197/reward24.160935. Final reward
-components:gold7.710979,death−2.109375,health−4.736133,tower23.295461,position~0.
-Staggering greatly improved tower play in this seed, but failed predeclared
-CS>=10.5625/deaths<=.05 gate. No independent-seed confirmation or farming fix.
-Checkpointstep8388608 finite/latest identical,512metrics/nonfinite0,
-medianupdate3.63235s. Fullsize warmup discarded180224untrained decisions;
-initial frozen gameplay exactly matchedE46. Watcher1833 stopped after active
-review; inactive/registry clean. Run
-`/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/`.
-
-E65 Slurm1832 COMPLETED/0:0 in38m01s. FrozenCS9.5625→5.359375→7.109375→3.546875;
-final deaths.015625/towerHP3.191875/reward1.953154. Reward terms:gold2.210945,
-death−.234375,position−.023416,XP0. RemovingHP/tower rewards did not rescue
-farming, even on the simplified objective; no extension. Checkpointstep8388608
-finite/latest identical;512metrics/nonfinite0; medianupdate3.3350s; sourceSHA
-and disabledHP/tower settings verified. Watcher stopped after active review;
-inactive/registry clean. Run
-`/mnt/nfs/checkpoints/lanerl-jax/E65_afk_cs_focus/vec-s0-20261001-101545-cb09e527/`.
-
-E66 Slurm1831 COMPLETED/0:0 in43m32s. Final512update frozen score:
-**9.34375CS,0deaths,75.222872personal towerHP,reward8.102879**.
-Own initial8.890625CS/.015625deaths/4.044495towerHP/reward4.98031;
-originalE46baseline9.5625CS. Some safe tower damage learned, but farming gate
-failed; no extension and no solution claim. Checkpointstep8388608 finite/latest
-identical;512metrics/nonfinite0; medianupdate3.62076s (~8percent slower thanE63).
-Run `/mnt/nfs/checkpoints/lanerl-jax/E66_afk_click_proposals/vec-s0-20261001-093416-d26024a8/`.
-Watcher1831 stopped after active review; inactive and registry clean.
-
-## Latest evidence and next decisions
-
-- Original best E46 frozen score: **9.5625 CS,0 deaths**. Source retained:
-  `/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack`.
-- E61 longer original control:6.0625CS/1death/462.117towerHP. Reward rose
-  while farming deteriorated: tower diving exploited absent explicit death cost.
-- E62 own-action inputs plus death300:8.828125CS/0deaths. E63 original
-  inputs plus death300:8.921875CS/.015625deaths/1.442893towerHP.
-  Death cost suppressed dives; neither improved farming. No extensions.
-  E63 Slurm1830 COMPLETED/0:0 in38m03s;512updates, finalstep8388608,
-  finite checkpoint/latest identical,512metrics/nonfinite0, exact death-cost
-  accounting. E62/E63 watchers stopped after active review; registry cleaned.
-- E58b scripted positive control achieved13.5CS without deaths; interface can
-  farm better. E59 selected caster interventions had small/mixed returns.
-  LEARN-AFK-19 direct-click probability analysis motivates E66 but does not
-  establish a root cause or a66x gameplay improvement.
-- E66 did not pass its predeclared farming threshold. Retain the opt-in code
-  and checkpoints as evidence; do not describe higher total reward as a CS fix.
-- E65 failed the simpler farming objective. Secondary reward conflict alone
-  is not a sufficient explanation; do not promote reward removal as a fix.
-- E67 demonstrates much stronger tower learning in one seed, not reliable
-  farming improvement. A useful next controlled test is E65 farming-focused
-  rewards with E67 phase staggering, compared against both parents. NOT
-  implemented/submitted. If it improves CS, independently replicate and then
-  restore/validate the intended full objective before claiming a solution.
-- E64 longer discount horizon remains prepared, dry-run passed, NOT submitted.
-
-Older E40 mirror training remains interrupted at5795updates; checkpoint
-`/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack`
-preserved. Do not silently resume it or alter unrelated jobs.
-
-All starts/stops/session endings update this file in the same commit.
-On completion inspect Slurm State AND ExitCode, logs, checkpoints and frozen
-scores; update existing ledgers and verify bridge/registry cleanup.
+All starts/stops/session endings update this file in the same commit. For each
+unattended job, verify startup watch then active/updating event bridge. On wake
+check State AND ExitCode, frozen results/checkpoints, and watcher/registry cleanup.
