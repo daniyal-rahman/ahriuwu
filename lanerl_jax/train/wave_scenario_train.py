@@ -64,6 +64,7 @@ def main():
     parser.add_argument('experiment');parser.add_argument('--resume',type=Path)
     args=parser.parse_args()
     spec=json.loads(Path('experiments',args.experiment+'.json').read_text())
+    train_seed = int(spec.get('train_seed', 0))
     if args.resume:
         previous=json.loads((args.resume.parent/'manifest.json').read_text())
         if previous['config']['scenario'] != spec:
@@ -117,7 +118,7 @@ def main():
         other_params=expand_own_action_inputs(other_params)
     params=from_state_dict(built['init_params'](jax.random.key(0)),initial_params)
     opponent_params=from_state_dict(params,other_params)
-    runner=built['initial_runner'](jax.random.key(0),params)
+    runner=built['initial_runner'](jax.random.key(train_seed),params)
     update=0
     if args.resume:
         payload=msgpack_restore(args.resume.read_bytes())
@@ -135,7 +136,7 @@ def main():
             runner=runner._replace(rng=jax.random.fold_in(runner.rng,update))
             continuity='legacy checkpoint: new episodes/carries/RNG; optimizer and schedule preserved'
         print('RESUME',update,continuity,flush=True)
-    run=RunDir(out,'vec-s0',dict(train={'policy':pcfg._asdict()},ppo=cfg.ppo._asdict(),
+    run=RunDir(out,f'vec-s{train_seed}',dict(train={'policy':pcfg._asdict()},ppo=cfg.ppo._asdict(),
         vec={k:v for k,v in cfg._asdict().items() if k not in ('policy','ppo')},
         collector=dict(episode_s=cfg.episode_s,step_ticks=6,unwalkable_click='noop'),
         scenario=spec,environment='jax-vectorised',opponent=spec.get("opponent","mirror-self-play"),
