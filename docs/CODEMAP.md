@@ -64,3 +64,5 @@ TOOL: `slurm/credit_audit.sbatch` / `credit-audit` launcher engine executes inde
 LIVE (opt-in experimental): `lanerl_jax/train/click_proposals.py` projects visible hostile observation rows to screen cells and mixes learned proposal probabilities with factored ground clicks. PolicyConfig.click_proposals defaults False; E66/LEARN-AFK-19. No environment target IDs or hidden state. Shared sampler/learner and policy driver use exact joint screen-cell probabilities; only AFK wave-scenario launch is enabled until broader validation.
 
 LIVE (opt-in): `wave_scenario_train.py:warmup_staggered_runner` discards initial shortened episodes without learning, then starts E67 from varied real game phases; frozen evaluation remains full-length and synchronized. Default off; LEARN-AFK-20.
+
+TOOL: `slurm/afk_tick_audit.sbatch` / `afk-tick-audit` launcher engine runs the indexed E69 frozen tick diagnostic; no training or production simulator changes.

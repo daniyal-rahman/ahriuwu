@@ -1,3 +1,17 @@
+# STATUS — 2026-10-01 18:50 UTC
+
+Dani renewed research authorization and supplied a fresh budget in this thread.
+The old thread budget boundary and15:37 compute window below are historical;
+current work follows the explicit narrow-first instruction, not broad PPO/LR sweeps.
+
+Current: E69 prepared, not yet submitted. Reproduce exact E68 seed7 game, then
+caster15/19 tick-level attack/damage/credit and earlier/delayed physical-click
+branches. No current project jobs; unrelated1803/1736 remain untouched.
+Hypothesis/budget/gates: experiments/E69_afk_tick_audit.json and LEARN-AFK-24.
+Feature experiment remains conditional on these execution checks.
+
+## Previous handoff (historical)
+
 **Follow-up paused at budget boundary:** Dani approved the narrow tick-level caster investigation. Read repository instructions and existing counterfactual launcher; no simulation, code changes or jobs started before the budget-limited notice arrived. Remaining work: reproduce E68 incidents near81s/113s at60Hz, verify attack/damage/credit ordering, then matched earlier/delayed attack branches. Requires renewed research budget. No new results or solution claim.
 
 **Latest requested feature comparison:** Completed primary-source Tencent Solo/5v5, OpenAI Five and AlphaStar comparison (LEARN-AFK-23). Explicit HP history and combat timing are supported precedents; E67 lacks these inputs. Saved-trace projectile timings support the two caster timing explanations, without proving simulator parity or neural causality. No code/training change, no submitted or queued jobs. Next targeted work: tick-level matched-action audit, then controlled visible-history feature experiment if execution is correct.

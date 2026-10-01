@@ -22,7 +22,8 @@ def launch(spec, dry, resume=None):
     if out.exists():
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
     full = spec['engine'] == 'full-profile'
-    script = {'afk-counterfactual': 'slurm/counterfactual_audit.sbatch',
+    script = {'afk-tick-audit': 'slurm/afk_tick_audit.sbatch',
+              'afk-counterfactual': 'slurm/counterfactual_audit.sbatch',
               'behavior-audit': 'slurm/behavior_audit.sbatch',
               'credit-audit': 'slurm/credit_audit.sbatch',
               'full-profile': 'slurm/full_profile.sbatch',
@@ -45,7 +46,7 @@ def launch(spec, dry, resume=None):
     if resume:
         cmd.extend(['--resume', str(checkpoint)])
     if spec.get('backend') == 'cpu':
-        if spec['engine'] not in ('replay-pair', 'escape-counterfactual', 'wave-replay'):
+        if spec['engine'] not in ('replay-pair', 'escape-counterfactual', 'wave-replay', 'afk-tick-audit'):
             raise SystemExit('CPU fallback is limited to frozen replay diagnostics')
         cmd = [x for x in cmd if x != '--gres=gpu:1']
         changes = {'--partition=gpup':'--partition=cpu', '--nodelist=desktop':'--nodelist=danilogin',
