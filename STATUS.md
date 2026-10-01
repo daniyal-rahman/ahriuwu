@@ -1,4 +1,4 @@
-# STATUS — 2026-10-01 09:42 UTC
+# STATUS — 2026-10-01 10:10 UTC
 
 Current task: diagnose and improve JAX AFK farming, using frozen 120-second
 trials. No demonstrated solution yet. Dani authorizes bounded reversible
@@ -8,33 +8,25 @@ History and evidence: `docs/EXPERIMENTS.md`, `docs/JAX_FIDELITY_LEDGER.md`.
 
 ## Running
 
-**E66_afk_click_proposals — Slurm1831**, started09:25UTC, 1-hour allocation.
-Only this thread's active training job; other users/tasks' jobs are untouched.
+**E65_afk_cs_focus — Slurm1832**, started10:09UTC,1-hour allocation.
+Launcher session89112 is attached; startup canaries/180s watch pending.
+No bridge armed yet: arm and verify after healthy-start watch.
 E46 weights, fresh Adam, original v3 inputs, LR1e-4,4epochs,gamma.99,lambda.95;
-XP0, HP100gold/fullbar, personal tower900gold/fullbar, death300gold.
-New learned visible-entity screen-cell proposals mixed with ordinary ground
-clicks, initialized10percent. No simulator, visibility, or action-protocol change.
-512updates/8.389M decisions; frozen64-game evaluations at0/128/256/512.
+XP0, HP-loss reward0, tower reward0, death300gold. Same objective asE63 except
+removing the two secondary HP/tower terms together.512updates/8.389M decisions;
+frozen64-game evaluations at0/128/256/512. Success>=10.5625CS/<=.05deaths.
+This is an easier diagnostic, not a substitute for the intended full objective.
+Approximate completion10:45–10:50UTC; log `/mnt/nfs/shared/E65_afk_cs_focus-1832.out`.
+Future frozen evaluations now report reward components with an accounting check.
 
-15 standard GPU canaries and4 proposal tests passed, including real GRU
-collector/learner likelihood and finite PPO update. Required180s startup watch
-passed. Fullsize compilation and endpoint-before-reset canary passed.
-Frozen u0: **8.890625 CS, .015625 deaths, 4.044495 personal towerHP**;
-new initial distribution differs from old E46 despite retaining old weights.
-Training active; first27updates median3.6155s, versus E63 median3.3476s.
-Frozen u128: **6.203125 CS,0 deaths,0 towerHP**; u256: **7.8125 CS,
-0 deaths,0 towerHP**, both below its own initial. u256 reward5.36288 exceeds
-initial4.98031 despite lower CS; total reward is not the success metric.
-Training continues through the predeclared512-update budget. At update141
-all losses finite; no targeting win established.
-These are training diagnostics, not performance results.
-
-Run: `/mnt/nfs/checkpoints/lanerl-jax/E66_afk_click_proposals/vec-s0-20261001-093416-d26024a8/`.
-Log: `/mnt/nfs/shared/E66_afk_click_proposals-1831.out`.
-Bridge: **lanerl-event-1831.service**, verified active/result updating;
-expiry **2026-10-01T11:34:21.708261+00:00**.
-Artifacts: `/mnt/nfs/shared/slurm-events/1831/`.
-Approximate completion10:10–10:20UTC, subject to measured runtime.
+E66 Slurm1831 COMPLETED/0:0 in43m32s. Final512update frozen score:
+**9.34375CS,0deaths,75.222872personal towerHP,reward8.102879**.
+Own initial8.890625CS/.015625deaths/4.044495towerHP/reward4.98031;
+originalE46baseline9.5625CS. Some safe tower damage learned, but farming gate
+failed; no extension and no solution claim. Checkpointstep8388608 finite/latest
+identical;512metrics/nonfinite0; medianupdate3.62076s (~8percent slower thanE63).
+Run `/mnt/nfs/checkpoints/lanerl-jax/E66_afk_click_proposals/vec-s0-20261001-093416-d26024a8/`.
+Watcher1831 stopped after active review; inactive and registry clean.
 
 ## Latest evidence and next decisions
 
@@ -52,20 +44,15 @@ Approximate completion10:10–10:20UTC, subject to measured runtime.
   farm better. E59 selected caster interventions had small/mixed returns.
   LEARN-AFK-19 direct-click probability analysis motivates E66 but does not
   establish a root cause or a66x gameplay improvement.
-- E66 success requires CS>=max(10.5625,its own initialCS+1), deaths<=.05,
-  then an independent training/evaluation seed repeat. Do not select a winner
-  from training CS or total reward alone. If promising, replicate before claiming
-  a solution; inspect normal-speed gameplay for farming/tower behavior.
-- **E65_afk_cs_focus queued Slurm1832** behind1831; dry-run passed, launcher
-  session89112 awaiting startup canaries/watch. No bridge yet; arm after healthy
-  watch. Same E46/v3/death300/PPO asE63, HP/tower rewards0;512updates8.389M.
-  Tests farming learnability without secondary reward tradeoffs. Success>=10.5625CS
-  and<=.05deaths; not a substitute for the intended farming-plus-tower objective.
-  Estimated35–40min after start. E64 longer discount horizon remains prepared,
-  dry-run validated, **NOT submitted**. E67 training-phase staggering is also
-  prepared/dry-run passed, NOT submitted; GPU warmup/likelihood canary pending.
-  It discards shortened warmup episodes before learning and preserves full120s
-  training/evaluation games; LEARN-AFK-20 records evidence and limits.
+- E66 did not pass its predeclared farming threshold. Retain the opt-in code
+  and checkpoints as evidence; do not describe higher total reward as a CS fix.
+- E65 now tests farming learnability without secondary reward tradeoffs. If it
+  improves, independently validate and restore the intended objective before
+  calling the full problem solved.
+- E64 longer discount horizon and E67 training-phase staggering are prepared,
+  dry-run passed, **NOT submitted**. E67 GPU warmup/likelihood canary pending;
+  it discards shortened warmup episodes before learning and preserves full120s
+  training/evaluation games. LEARN-AFK-20 records evidence and limits.
 
 Older E40 mirror training remains interrupted at5795updates; checkpoint
 `/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack`
