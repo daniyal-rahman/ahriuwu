@@ -752,8 +752,8 @@ train/wave_scenario_train.py and experiments/E67_afk_staggered.json.
 | Attack phase and incoming damage | No entity attack animation/timing or projectile inputs; no own AA cooldown/windup in E67 | Five supplies timing, incoming creep-projectile ETA and estimated melee attackers; some are scripted estimates. Tencent5v5 has spatial bullet channels | High feature gap; observable estimation required for future video. No privileged minion target IDs |
 | Per-unit temporal inputs | Current frame only; global GRU learns memory | Five explicitly has last16 HP samples. Tencent Solo does not establish an explicit HP stack | High inventory item, not proof of necessity. Our15past position+HP stack is an adaptation, not a faithful full Five interface |
 | Previous action and own status | No previous sampled action; own four ability cooldown/lock scalars, AD/AP/armor/MR/death/recall, but sparse buff/action state | Five includes previous action and richer status. AlphaStar includes orders/buffs/CD; not a mandate to use hidden state | Include in feature contract; earlier E62 own-action-only failure does not test complete reference inputs |
-| Spatial encoder | Visible entities plus self/global vectors; no local-map CNN/channel input | Tencent Solo encodes local obstacles with CNN alongside unit/game features; Tencent5v5 includes additional spatial channels | Confirmed architecture/input difference; likely less specific to these in-lane misses |
-| Target/action structure | Separate button,96-bin x,54-bin y heads from same core; no sampled-action-conditioned target head in E67 | Tencent Solo target attention and control dependencies; Five action-conditioned unit selection | High secondary suspect. E66 mixture proposals were not a complete reference implementation. Preserve physical clicks by projecting a chosen observed entity to screen |
+| Spatial encoder | Visible entities plus self/global vectors; no local-map CNN/channel input | Tencent Solo uses obstacle and hero-position image channels with CNN alongside unit/game features; Tencent5v5 includes additional spatial channels | Confirmed architecture/input difference; likely less specific to these in-lane misses |
+| Target/action structure | Separate button,96-bin x,54-bin y heads from same core; no sampled-action-conditioned target head in E67 | Tencent Solo target attention with independent action labels/dependency masks (Eq1–3); Five sampled-action-conditioned unit selection | High secondary suspect. E66 mixture proposals were not a complete reference implementation. Preserve physical clicks by projecting a chosen observed entity to screen |
 | Action availability | E67 click_mask=False; cooldowns observed but no full button availability mask. Decoder rejects/changes some invalid requests | Tencent Solo explicitly masks unavailable actions and physical restrictions | Confirmed exploration difference; mask only observable/known legality |
 | Recurrent trunk | Shared128d,2-layer/4-head entity attention; max+mean pooling;4x1024 MLP;512 GRU with input norm/residual | Tencent Solo type encoders/pooling and1024 LSTM; Five4096 LSTM | Confirmed difference, not evidence GRU fails. Reproduce chosen reference before cell/size ablations; no requirement to copy Five's full scale |
 | Critic gradient path | detach_critic=True: value head cannot train shared representation | Current code confirms deliberate deviation; exact equivalent gradient treatment in chosen paper not yet established | Explicit verification item, not a confirmed paper mismatch or higher-ranked cause |
@@ -775,3 +775,43 @@ to video/HUD/static knowledge or an observable estimator; list unavoidable game
 and compute adaptations. Then train that declared baseline and compare frozen
 outcomes, only afterward remove/add components. No new training submitted under
 this direction yet. Do not silently resume E72b/E73b or label a hybrid exact parity.
+
+
+| LEARN-AFK-27 source correction | Direct recheck of Tencent Solo Eq1–3 and Figure2: its labels are explicitly decoupled/independent; target query is FC(LSTM) against unit keys, with dependencies handled by masks. The p(t given a) notation does not by itself establish a sampled-button autoregressive network. Five Figure18 does explicitly condition target selection on sampled action. | Corrects overly broad preceding shorthand about action conditioning. Tencent's unit-attention target representation and dependency masks remain confirmed differences; independent coordinate heads alone are not a Tencent mismatch. |
+| LEARN-AFK-27 objective detail | Tencent Eq3 sums per-label probability-ratio objectives. Our factored_log_prob sums used-head log probabilities and policy_loss exponentiates their difference, giving one joint-action ratio, then standard clipping. Tencent further uses dual clipping (epsilon.2,c3) for negative advantages; ours has only epsilon.2. | Distinct confirmed objective difference beyond the word PPO. Copying only dual clipping would still not reproduce Tencent's stated objective. No claim this difference caused the caster misses. |
+| LEARN-AFK-27 known matches and missing settings | Tencent reports Adam initialLR1e-4 and GAE lambda.95: both match E67. It reports gamma.997 and a46s reward half-life,1024 LSTM,16steps,1600vector features and2image channels. Its evaluation cadence133ms must not be conflated with the training cadence implied by its stated half-life. | Record actual agreements, not a list where everything is called a defect. At our10Hz gamma.99 has6.90s half-life; matching46s would require approximately.998494, whereas copying.997 yields23.07s. A reference contract must state whether it matches per-decision discount or physical-time credit. Do not invent undisclosed feature definitions or optimizer coefficients. |
+| LEARN-AFK-27 additional Five preprocessing gap | Five AppendixE normalizes float observations by running mean/std and clips to[-5,5]. Our builder uses fixed scaling constants and quantized HP fractions. | Confirmed preprocessing difference, not causal proof. Any copied running statistics must be checkpointed and frozen consistently during evaluation. Not implemented. |
+
+Reference-contract draft, still documentation only:
+
+- **Tencent components directly specified:** type-wise unit encoders and maxpool,
+  separate retained unit keys for target attention, image/vector/game encoders,
+  LSTM1024, independent action labels with dependency/availability masks,
+  component-ratio objective plus dual clipping, published reward categories,
+  Adam LR1e-4/lambda.95. Unspecified layer widths, feature encodings, exact masks,
+  entropy/value weighting, sequence-state handling and reward transforms need
+  explicit engineering choices or stronger primary implementation evidence.
+- **Current known adaptations that cannot be concealed:** League/Garen rather
+  than Honor of Kings; physical mouse/keyboard outputs rather than game-core
+  unit targets; one GPU; AFK farming evaluation rather than professional 1v1
+  win rate. Selecting an observed entity internally can still produce a normal
+  click, but target-to-screen mapping/collisions must be specified and tested.
+- **Input provenance:** visible bars/positions/types come from the observable
+  scene; own stats/ability availability can come from HUD; previous action comes
+  from our controller. Public static combat data is a separate declared source.
+  Animation phase, facing, projectiles and per-unit history require observation
+  tracking/estimation. Raw minion target IDs, hidden cooldowns and fogged current
+  state must not become actor inputs. Merely naming an estimator is not evidence
+  it can recover that field accurately from video.
+- **Five-derived supplement is optional and explicitly separate:** richer
+  combat/timing/history features and running normalization have a published
+  precedent, but adding them does not fill Tencent's unpublished1600-vector
+  specification exactly. E71b validated one visible-history implementation,
+  not this whole supplement. Choice of primary reference was asked asynchronously;
+  no answer is assumed and no implementation/training depends on it yet.
+- **Learning evaluation once a baseline is declared:** keep frozen E67 as the
+  existing behavior comparator; evaluate the chosen architecture trained as a
+  baseline, not just a migrated short fine-tune that may preserve old habits.
+  Record intentional budget/task differences. Only after a working baseline
+  should component removals/additions be interpreted as ablations. No new run
+  budget or success claim is being smuggled into this documentation audit.

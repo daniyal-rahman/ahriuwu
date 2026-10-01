@@ -1,8 +1,8 @@
-# STATUS — 2026-10-01 19:46 UTC
+# STATUS — 2026-10-01 reference audit
 
 Dani renewed the research budget in this thread. The old thread token limit and
-15:37 compute window are obsolete. Current task: diagnose E68 caster misses,
-then test visible history with controlled frozen evaluations. No broad PPO/LR
+15:37 compute window are obsolete. Current task: E68 caster execution audit completed; user now prioritizes a
+reference-deviation inventory and declared baseline before feature ablations. No broad PPO/LR
 sweeps; no farming solution demonstrated. Long-term C# gate remains >30CS in
 10minutes across seeds. Existing ledgers hold history and run details.
 
@@ -16,7 +16,11 @@ frames. Single-game association evidence, not CV robustness or a learned gain.
 Dani redirected the next step: list deviations from known working systems,
 then establish a coherent published-reference baseline before component ablations.
 LEARN-AFK-27 records the code-checked inventory, confirmed differences, unknowns,
-and working priorities. Feature coverage remains the leading hypothesis, not
+and working priorities. Follow-up source check corrects Tencent action-label
+independence and adds component-wise PPO vs our joint-ratio difference, known
+LR/lambda agreements, normalization gap and a documentation-only reference
+contract draft. Primary-reference preference asked; no new implementation/run.
+Feature coverage remains the leading hypothesis, not
 an established cause; global GRU can learn history. No GRU incapacity demonstrated.
 
 E72b/1840 CANCELLED during startup at19:42UTC after5m02s (job0:0,batch0:15).
