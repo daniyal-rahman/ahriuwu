@@ -4,9 +4,9 @@ Dani renewed research authorization and supplied a fresh budget in this thread.
 The old thread budget boundary and15:37 compute window below are historical;
 current work follows the explicit narrow-first instruction, not broad PPO/LR sweeps.
 
-Current: E69 prepared, not yet submitted. Reproduce exact E68 seed7 game, then
+Current: E69 submitted as Slurm1835 (CPU,30min cap), startup watch in progress. Reproduce exact E68 seed7 game, then
 caster15/19 tick-level attack/damage/credit and earlier/delayed physical-click
-branches. No current project jobs; unrelated1803/1736 remain untouched.
+branches. E69 is the only project job; unrelated1803/1736 remain untouched.
 Hypothesis/budget/gates: experiments/E69_afk_tick_audit.json and LEARN-AFK-24.
 Feature experiment remains conditional on these execution checks.
 

@@ -7,7 +7,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E69_afk_tick_audit` |10-01| CPU frozen tick diagnostic | Exact E68 caster15/19 attribution and earlier/delayed physical clicks |E67final unchanged|120s replay +76 local branches,30min cap| Prepared | Require exact replay and instrumented/ordinary state agreement; no learning or aggregate claim |
+| `E69_afk_tick_audit` |10-01| CPU frozen tick diagnostic | Exact E68 caster15/19 attribution and earlier/delayed physical clicks |E67final unchanged|120s replay +76 local branches,30min cap| Slurm1835 running; startup watch pending | Require exact replay and instrumented/ordinary state agreement; no learning or aggregate claim |
 | `E68_afk_current_video` |10-01| CPU frozen replay | LatestE67 full120s video at1x |E67u512 frozen|1game,30min cap| Slurm1834 COMPLETED/0:0,4m40s;120.1s videos;12CS/0deaths;bridge cleaned | No training; seed7/fullHP, matched prior video setup |
 | `E60_afk_own_action` |10-01| JAX AFK PPO | Own combat state inputs, zero-weight migration |E46/freshAdam,4epochs|256updates4.194M| Slurm1827 complete23m29s; final6.1719CS/.78125deaths/361towerHP; reward9.852 versus6.329initial; farming gate failed | Compare E57@128/E61@256, original9.56CS |
 | `E67_afk_staggered` |10-01| JAX AFK PPO | Unsynchronized training phases, full-game evaluation |E46/v3/freshAdam, E63 rewards|512updates8.389M +180224untrained warmup decisions| Slurm1833 COMPLETED/0:0,41m44s;final9.921875CS/.140625deaths/802.40towerHP;farming/survival gate failed | Tests batch temporal diversity; requires original frozen baseline and independent replication |
