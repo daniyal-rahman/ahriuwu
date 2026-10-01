@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E56_afk_one_epoch` |10-01| JAX AFK PPO | 1 epochs per batch | E46final/freshAdam/seed0 |128updates2.097M| Slurm1822 startup pending | Matched frozen CS/deaths/towerHP and elapsed comparison |
+| `E56_afk_one_epoch` |10-01| JAX AFK PPO | 1 epochs per batch | E46final/freshAdam/seed0 |128updates2.097M| Slurm1822 healthy,11canaries/watch passed;bridge armed | Matched frozen CS/deaths/towerHP and elapsed comparison |
 | `E57_afk_four_epochs` |10-01| JAX AFK PPO | 4 epochs per batch | E46final/freshAdam/seed0 |128updates2.097M| Preparing | Matched frozen CS/deaths/towerHP and elapsed comparison |
 | `E55b_afk_update_branches` |10-01| GPU diagnostic | E55 corrected production learn invocation | Same checkpoints |6 trajectory updates,8 branches,45min cap| COMPLETE1821 exit0,4m04s; standard params exact; watcher cleaned | One epoch improves mean recorded hit-button likelihood both batches; no frozen CS verdict or exported weights |
 | `E55_afk_update_branches` |10-01| GPU diagnostic | Matched update size/entropy branches, headwise probabilities | E46fresh/E51restored |6 rollout updates +8 isolated branches,45min cap| FAILED1820: reproduction delta5.5e-5; diagnostic invalid | Standard branch must reproduce production; no exported policy |
