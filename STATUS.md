@@ -22,7 +22,9 @@ passed. Fullsize compilation and endpoint-before-reset canary passed.
 Frozen u0: **8.890625 CS, .015625 deaths, 4.044495 personal towerHP**;
 new initial distribution differs from old E46 despite retaining old weights.
 Training active; first27updates median3.6155s, versus E63 median3.3476s.
-At update70 all losses finite; proposal use about2.6percent when available.
+Frozen u128: **6.203125 CS,0 deaths,0 towerHP**, worse than its own initial.
+Training continues through the predeclared512-update budget. At update141
+all losses finite; no targeting win established.
 These are training diagnostics, not performance results.
 
 Run: `/mnt/nfs/checkpoints/lanerl-jax/E66_afk_click_proposals/vec-s0-20261001-093416-d26024a8/`.
@@ -52,9 +54,13 @@ Approximate completion10:10–10:20UTC, subject to measured runtime.
   then an independent training/evaluation seed repeat. Do not select a winner
   from training CS or total reward alone. If promising, replicate before claiming
   a solution; inspect normal-speed gameplay for farming/tower behavior.
-- E64 longer discount horizon and E65 farming-focused reward diagnostic are
-  prepared and dry-run validated, **NOT submitted**. E65 is an easier diagnostic,
-  not a substitute for the intended farming-plus-tower objective.
+- **E65_afk_cs_focus queued Slurm1832** behind1831; dry-run passed, launcher
+  session89112 awaiting startup canaries/watch. No bridge yet; arm after healthy
+  watch. Same E46/v3/death300/PPO asE63, HP/tower rewards0;512updates8.389M.
+  Tests farming learnability without secondary reward tradeoffs. Success>=10.5625CS
+  and<=.05deaths; not a substitute for the intended farming-plus-tower objective.
+  Estimated35–40min after start. E64 longer discount horizon remains prepared,
+  dry-run validated, **NOT submitted**.
 
 Older E40 mirror training remains interrupted at5795updates; checkpoint
 `/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack`
