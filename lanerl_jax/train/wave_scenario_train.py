@@ -178,7 +178,7 @@ def main():
     for mode in (('afk',) if spec.get('opponent')=='afk' else ('mirror','frozen')):
         ecfg=cfg._replace(n_envs=64,opponent=mode,bank_size=len(eval_bank.t_ms))
         eb=make_vec_train(ecfg,sim,eval_bank,opponent_params=opponent_params if mode=='frozen' else None)
-        er=eb['initial_runner'](jax.random.key(2007),params)
+        er=eb['initial_runner'](jax.random.key(int(spec.get('eval_seed',2007))),params)
         indices=jnp.arange(ecfg.n_envs)%len(eval_bank.t_ms)
         er=er._replace(env_state=jax.tree.map(lambda b:b[indices],eval_bank))
         print('COMPILE eval',mode,flush=True)
