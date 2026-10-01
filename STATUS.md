@@ -1,4 +1,4 @@
-**User-requested video:** E68 prepares a frozen full120s/1x replay of latestE67, fullHP blue versusAFK, seed7. Separate new request; no research training resumed.
+**User-requested video:** E68 Slurm1834 is running startup checks for a frozen full120s/1x replay of latestE67, fullHP blue versusAFK, seed7. Separate new request; no research training resumed.
 
 # STATUS — 2026-10-01 11:30 UTC
 
