@@ -74,3 +74,5 @@ TOOL: `slurm/visible_history_audit.sbatch` / `visible-history-audit` launcher en
 LIVE (opt-in experimental, LEARN-AFK-29): `obs/combat_features.py` v6 appends visible/public combat stats and own readiness/buffs/ranks to v3. `policy.py` zero-projection migration preserves original inputs; collector and integrated evaluator share augmentation. C# driver rejects until own readiness wire/video estimator is validated. No actor enemy clocks/target IDs or exact-HP upgrade.
 
 TOOL: `slurm/combat_feature_audit.sbatch` / `combat-feature-audit` runs E74 GPU contract/regression tests and writes a passed preflight artifact; no learned result.
+
+TOOL: `ops/score_combat_features.py` reads completed E75c/E76c frozen evaluations, checks matched specs/cohorts and E67 initial retention, and scores only update512 against LEARN-AFK-29 gates; no training/checkpoint mutation.

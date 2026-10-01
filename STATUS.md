@@ -20,14 +20,15 @@ and tests prepared, no learned result. Field provenance, video-readiness gap and
 remaining reference differences are explicit. No full Tencent reproduction claim.
 
 E74b/1850 FAILED1:0,4m22s after all13GPUtests passed; artifact writer Git
-path was unavailable on desktop. E74c prepared with launcher-metadata writer
+path was unavailable on desktop. E74c submitted as Slurm1853, startup watch in progress, with launcher-metadata writer
 fix only; feature code unchanged. Earlier E74 migration precision failure is
 resolved at production highest precision, same tolerance. Fountain AS finite
 regression passes. No learned result yet.
 E75ccontrol/E76cfeature prepared,512updates8.389M each/1hSlurmcap. Initial64-game
 E67 retention and passed E74c required. Primary final gate featureCS>=10.921875
 and control+1, deaths<=.15. Earlier control/feature configs never submitted.
-No project jobs running/queued; no training-result ETA. E74b was actively
+E74c/1853 is the only submitted project job, ETA~5min after start.
+No training submitted yet. E74b was actively
 reviewed at failure, so no watcher was armed. Unrelated jobs untouched.
 
 ## Narrow investigation completed
