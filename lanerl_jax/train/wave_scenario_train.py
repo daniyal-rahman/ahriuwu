@@ -234,10 +234,14 @@ def main():
             low=np.asarray(template.env_state.hp[:,:2]/template.env_state.max_hp[:,:2])<.85
             first_seen_hp=np.full((64,2),np.nan)
             deaths=np.zeros((64,2));returns=np.zeros((64,2));alive_spells=np.zeros((64,2))
+            reward_terms={}
             for _ in range(int(np.ceil(spec['duration_s']*10/128))+2):
                 if stop():return
                 r,tr,_=jax.block_until_ready(fn(r))
                 done=np.asarray(tr.done_full[:,:,0])
+                chunk_terms={k:np.asarray(v) for k,v in tr.reward_terms.items()}
+                for k in chunk_terms:
+                    if k not in reward_terms:reward_terms[k]=np.zeros((64,2))
                 for env in np.flatnonzero(~seen):
                     hits=np.flatnonzero(done[:,env]);end=int(hits[0])+1 if len(hits) else len(done)
                     for team in (0,1):
@@ -246,6 +250,7 @@ def main():
                             first_seen_hp[env,team]=float(tr.obs_self[visible[0],env,team,2])
                     deaths[env]+=np.asarray(tr.deaths[:end,env]).sum(0)
                     returns[env]+=np.asarray(tr.reward[:end,env]).sum(0)
+                    for k,v in chunk_terms.items():reward_terms[k][env]+=v[:end,env].sum(0)
                     alive_spells[env]+=alive_spell_count(tr.action[0][:end,env],tr.obs_self[:end,env])
                     if len(hits):
                         t=end-1;seen[env]=True
@@ -257,9 +262,11 @@ def main():
                                 tower_damage=float(tr.tower_damage_at_end[t,env,team]),
                                 kills=float(tr.kills_at_end[t,env,team]),deaths=float(deaths[env,team]),
                                 hp_fraction=float(tr.hp_at_end[t,env,team]),reward=float(returns[env,team]),
+                                reward_terms={k:float(v[env,team]) for k,v in reward_terms.items()},
                                 spell_selections=float(alive_spells[env,team])))
                 if seen.all():break
             if not seen.all():raise RuntimeError('incomplete scenario eval')
+            np.testing.assert_allclose(sum(reward_terms.values()),returns,rtol=1e-5,atol=1e-4)
             summaries={}
             for team in (0,1):
                 for disadvantaged in (True,False):
@@ -269,6 +276,8 @@ def main():
                         for k in ('cs','gold_diff','kills','deaths','hp_fraction','reward','spell_selections','tower_damage')}
                     contact=[x['first_enemy_seen_hp'] for x in cohort if x['first_enemy_seen_hp'] is not None]
                     summaries[f'{team}_{"low" if disadvantaged else "full"}']['first_enemy_seen_hp']=float(np.mean(contact)) if contact else None
+                    summaries[f'{team}_{"low" if disadvantaged else "full"}']['reward_terms']={
+                        k:float(np.mean([x['reward_terms'][k] for x in cohort])) for k in reward_terms}
             result=dict(update=update,frozen=True,opponent=mode,duration_s=spec['duration_s'],games=64,
                         summaries=summaries,episodes=rows)
             with (run.path/'evaluations.jsonl').open('a') as f:f.write(json.dumps(result)+'\n')
