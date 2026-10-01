@@ -925,3 +925,113 @@ no explicit target, cooldown, windup or animation phase. This is specific to
 that documented interface, not proof about the original2020professional model
 or later725-field baseline. Raw game state availability is not actor-feature
 availability. Source: https://aiarena.tencent.com/hok/doc/environments/index.html
+
+### LEARN-AFK-31 — actual public Tencent pretrained artifacts
+
+Official hok_env releases include3v3baseline checkpoints (v2.0.1), but its
+current tree/releases do not establish original2020Tencent Solo weights.
+A separate official Tencent repository, hokoff, explicitly provides1v1 and3v3
+multi-level pretrained models:
+https://github.com/tencent-ailab/hokoff#multi-level-models
+Pinned source9b35f7e5891ad98df45a36e3a18f5192a31e72f4. Official1v1 ZIP HEAD
+returned200,269962162bytes. Read only ~75KB of HTTP-range ZIP directory data:
+74entries, TensorFlow level0–7 directories containing model.ckpt.index,
+model.ckpt.data and model.ckpt.meta plus hero_config.json. No full download,
+weight loading, conversion or transfer run. Baseline evaluator imports
+TensorFlow compat.v1 and BasicLSTMCell; these are incompatible with loading
+weights directly into our GRU. These later checkpoints are a concrete transfer
+candidate, not evidence the professional2020system's weights are released.
+
+Transfer work would first verify matching checkpoint/network/schema, then map
+League observations/scales/missing fields, preserve or faithfully port the
+pretrained recurrent network, adapt the HoK buttons/directions/unit-target
+outputs to Garen's physical clicks, and evaluate fine-tuning against the same
+architecture initialized randomly. Cross-game benefit is unproven. Current
+mask/feature study is separate and does not perform any of this transfer.
+
+| LEARN-AFK-30 completed gate | E77/1857 COMPLETED, ExitCode0:0, elapsed4m27s, ended2026-10-01T21:28:35UTC. Existing log has19passed tests (8+4+7), CANARY PASSED and PROFILE COMPLETE; result.json passed with sourceb63227e5 and matching experiment/job. | Reviewed after interrupted handoff; no re-run. Masks/direct HP passed implementation checks, not a farming evaluation. No1857 bridge service or registry entry; no RL jobs running or queued. |
+
+### LEARN-AFK-31 — weight quality and transfer recommendation, continued
+
+Primary sources newly inspected: [HoKoff paper, AppendixD/F](https://arxiv.org/html/2408.10556v2),
+[actual evaluator config](https://github.com/tencent-ailab/hokoff/blob/9b35f7e5891ad98df45a36e3a18f5192a31e72f4/hok1v1/offline_eval/config/common_config.py),
+[TensorFlow evaluator](https://github.com/tencent-ailab/hokoff/blob/9b35f7e5891ad98df45a36e3a18f5192a31e72f4/hok1v1/offline_eval/baselinemodel/algorithm.py).
+
+| Question | Finding | Consequence |
+|---|---|---|
+| How good are released weights? | HoKoff publishes a ladder of dual-clip-PPO checkpoints. Table13 reports level7 beating level6 in70% of games, level6 beating5 in73%; evaluation fixes the hero to LuBan. The authors describe varying human-level abilities, but this is not an independent human-rank calibration. | Useful trained opponents/teachers in their own game; no published perfect-CS benchmark identified. Do not attach original Solo's professional-match or99.81% public-match result to this released checkpoint. |
+| Do their inputs match ours? | Runtime config:725features =235ownhero+235enemyhero+14public+8x18creeps+4x18structures+25global. Current E67 uses our entity/self/global encodings; opt-in combat inputs only partially align semantics. | Matching names such as HP is insufficient: ordering, scaling, hero-specific fields, units, slot limits and masks differ. The old491-field documentation is not a full725-field specification. |
+| Can we load into our GRU? | Evaluator uses TensorFlow BasicLSTMCell512 and six heads of sizes12/16/16/16/16/8. Our recurrent trunk and mouse/keyboard action interface differ. | Preserve/port the LSTM and its encoders first, then adapt League observations and targets to physical clicks. Alternatively distill an adapted teacher into our GRU. Neither is direct checkpoint loading. |
+| Does it solve video perception? | Tencent uses game-core observations, with invisible units defaulted. Even original Solo's two spatial channels are game-core maps, not rendered video. | Video-to-feature tracking is separate. Positions/bars/HUD/static knowledge are plausible sources; exactHP, timing and inferred missing state need calibrated estimates. Train/evaluate with those errors before claiming video transfer. |
+
+Recommendation: use the implementation as a reference, defer cross-game weights
+as the primary repair. A credible port/adapter/comparison is an estimated
+several days to weeks of engineering, conditional on resolving feature semantics;
+this is an estimate, not a scheduled commitment. Framework conversion is a smaller
+problem than transferring HoK hero mechanics/targeting to Garen. Weight benefit
+must beat random initialization of the SAME adapted architecture on the same
+frozen League cohort. No checkpoint loaded or new implementation/run submitted.
+
+Rechecked the official491-field observation table directly: offsets256–258
+are the nearest enemy-hero bullet position/distance, not all caster missiles.
+The listed creep18-fields omit explicit missile/attack-phase inputs. This supports
+the possibility of farming without explicit creep-projectile tokens; it does
+not prove those tokens are useless, or establish the full725/original1600 schema.
+Recurrent HP/position observations can supply indirect timing information;
+different hidden attack phases can nevertheless remain ambiguous. Projectiles
+remain a hypothesis, not an implemented solution.
+
+### LEARN-AFK-32 — avoidable waste, pushing and demonstration discussion
+
+Dani clarifies the question: why leave obtainable CS/tower damage against AFK
+(roughly9CS versus a suggested12–18opportunities), not whether any learning ever
+occurred. That opportunity denominator is not measured by the aggregate frozen
+CS mean; do not silently promote it to a certified ceiling. LEARN-AFK-24/25
+already establish two recoverable local misses, without proving aggregate maxima.
+
+| Evidence / hypothesis | Interpretation |
+|---|---|
+| E46 frozen120s AFK CS5.453125→9.5625 and deaths.9375→0; E67 final9.921875 | Learning occurred, but substantial inefficiency remains. Earlier gain does not answer Dani's optimization question. |
+| E75c: unchanged-input E67 continuation, fresh Adam,512updates/8.389Mdecisions, same reward and hyperparameters; frozen64 CS9.921875→9.453125 | This bounded continuation did not improve farming. It cannot establish that longer training, another seed, or scratch training will fail. |
+| Leading timing hypothesis: a coarse repeated-attack routine earns enough reward to persist, while learning the better wait/target sequence requires precise exploration and credit | Compatible with recoverable caster misses; not a diagnosed neural cause. HP precision, own availability, action structure, representation, reward and PPO updates remain alternatives. Discounting alone is weak explanation for a subsecond missed last hit. |
+| Tencent Solo uses target attention, legality masks, explicit last-hit reward, richer observations and vastly more experience | [Original paper](https://arxiv.org/pdf/1912.09729) reports48P40GPUs+18000CPUcores per hero and full-game self-play. These make discovery/reinforcement of successful play more plausible, but neither isolate the cause nor demonstrate perfect last-hitting. |
+| Pushing/proxying: current120s level3 resets, gamma.99 at10Hz, XP0, HP-loss/death penalties and personal-only tower damage credit | Reward half-life6.90s; a benefit30s later is weighted4.90%. Proxy travel can incur immediate risk and delayed benefit; allied-minion tower damage receives no direct personal-tower reward. Gold still rewards farming. Hard push/proxy are not established optimal under this objective; CS and immediate tower damage can trade off. |
+
+More training remains a valid hypothesis. The established
+[grokking result](https://arxiv.org/abs/2201.02177) concerns delayed held-out
+generalization after fitting small algorithmic training sets; our unsolved
+training behavior does not demonstrate that pattern. Prefer a declared longer
+budget and fixed frozen checkpoints over assuming a breakthrough will arrive.
+No longer run proposed as an already-submitted experiment.
+
+Human demonstrations are promising and have local precedent: the older
+BC/DAgger ledger reports frozen JAX mirror clones around41–45CS on a different,
+longer task; later PPO often degraded them. These are not120s AFK comparator
+scores. Existing `train/bc_diag.py` and `train/bc_dagger.py` provide a starting
+point; no new imitation implementation here.
+
+Discussion proposal: record synchronized policy-visible observations and actual
+mouse/keyboard actions while Dani plays the SAME simulator scenario, including
+waiting, last hits and pushing. Plain video lacks reliable action labels. Start
+with5two-minute demonstrations for a narrow fitting check, then20–50varied games
+(24k–60kdecisions at10Hz) and corrections on states the learner visits. This is
+an engineering data budget, not a guarantee or a literature-derived minimum.
+Repeated optimization over the same game does not supply new state coverage.
+[DAgger](https://proceedings.mlr.press/v15/ross11a.html) motivates gathering
+corrections on the learner's own states instead of only expert trajectories.
+
+First score demonstrated better behavior under the CURRENT reward on matched
+starts. If higher CS/tower play earns less, the objective is misaligned with the
+desired behavior. If it earns more but PPO does not reach it, investigate discovery,
+credit and optimization. If cloning cannot fit even demonstration sequences,
+inspect observation/action alignment, available information, capacity and optimizer;
+do not conclude missing features from that failure alone. If it fits recordings
+but fails fresh rollouts, coverage and accumulated errors matter. If cloned play
+works then deteriorates under PPO, isolate the reward/update stage.
+
+For later interpretability, demonstrations also label wait-versus-attack decisions
+and expected kill windows. Decoding that distinction from hidden state is only
+correlation; controlled memory/input interventions with frozen behavior are needed
+to claim the policy uses it. Behavioral comparisons above are the first useful
+debugging step. This entry records discussion/recommendations, not authorization
+to implement every suggestion.

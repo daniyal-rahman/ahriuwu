@@ -61,3 +61,11 @@ History = `legacy/`, `docs/archive/`.
     scheduled check. A notification does not authorize a new experiment.
 
 11. Dani's standing research authorization: proceed with bounded, reversible follow-up experiments on available Slurm compute when evidence makes them worth testing; do not wait for another confirmation. Preserve experiment IDs, budgets, canaries, frozen comparisons and event bridges. Before ending a turn, state actual running/queued jobs (or explicitly none), the experiment and rough ETA; distinguish planned follow-ups from submitted jobs. Irreversible actions still require approval.
+
+12. Collaboration: questions and tentative ideas are discussion, not automatic
+    implementation requests. Continue agreed work; change implementation when the
+    idea is concrete or Dani explicitly asks. Use the existing launcher, integrated
+    smoke tests and completion bridge; do not repeatedly poll or rerun checks without
+    a new failure or change. Group coherent edits into useful commits. Keep replies
+    direct: explain an experiment's setup alongside its ID, distinguish observations
+    from hypotheses, and never assume a plateau proves the model cannot learn.

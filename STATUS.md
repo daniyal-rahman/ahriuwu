@@ -1,103 +1,78 @@
-# STATUS — 2026-10-01 reference audit
+# STATUS — 2026-10-01 cleanup and learning discussion
 
-Dani renewed the research budget in this thread. The old thread token limit and
-15:37 compute window are obsolete. Current task: E68 caster execution audit completed; user now prioritizes a
-reference-deviation inventory and declared baseline before feature ablations. No broad PPO/LR
-sweeps; no farming solution demonstrated. Long-term C# gate remains >30CS in
-10minutes across seeds. Existing ledgers hold history and run details.
+Current user task: archive inactive checkouts, investigate Tencent weights and
+explain avoidable AFK farming/pushing inefficiency. Completed cleanup and source
+review; findings in LEARN-AFK-31/32. Discussion ideas are not automatic feature or
+experiment instructions. No new training, projectile integration or transfer work
+submitted. The question is why attainable CS/tower damage is left uncollected,
+not whether the policy has ever improved. The suggested12–18CS opportunity count
+is not yet an independently measured ceiling for the frozen cohort.
 
-## Current phase
+## Jobs
 
-Current authorized work: button/map masks implemented as opt-in scenario switches;
-E77 GPU preflight SUBMITTED job1857 (20min cap), startup watch active; no training submitted. Projectile integration
-removed from live imports; untracked draft remains separate. Direct HP and expanded
-35-field self interface await this new canary. Tencent weights/transfer question next.
+**RL workstream: no running or queued jobs; no ETA or completion bridge pending.**
+E77_combat_mask_preflight / Slurm1857 COMPLETED0:0 in4m27s, ended21:28:35UTC.
+Existing log:19GPU tests passed, CANARY PASSED and PROFILE COMPLETE; result.json
+passed for matching job/spec/sourceb63227e5. This resolves the previous interrupted
+handoff's pending gate. No1857 event service or registry entry. No tests rerun.
+E77 checks direct HP, own action availability, standable-map masks and shared
+actor/learner/reset/update behavior; it is not a learned farming result.
 
+Other workstreams have their own jobs: modern-sim replay extraction2010/2011 and
+analysis2022 were active/queued during review; touchline1803 also runs. Those jobs,
+their compute and their handoffs are outside this RL session; none were stopped.
 
-Latest user direction: explain remaining Tencent gaps; projectile idea is separate.
-No new run submitted. Direct current/max HP now replaces reconstructed bar HP in
-the opt-in combat additions; original v3 inputs unchanged. Corresponding regression
-updated, syntax checked; revised behavior has NOT rerun GPU canaries. Prior E74c
-preflight does not certify this revision. Projectile draft/integration edits remain
-uncommitted and untested, excluded from the original feature-run scope. Scratch
-initialization is not implemented yet. No running/queued project jobs or active ETA.
+## Three active worktrees
 
+- Champions: t3code/toplane-champion-overlap at
+  /home/dani/.t3/worktrees/ahriuwu/t3code-12dab3cf (kept by explicit user request).
+- Modern sim: t3code/modern-jax-sim-port at
+  /home/dani/.t3/worktrees/ahriuwu/t3code-86665351.
+- RL learning proof: lane-rl/jax at /srv/nfs/projects/ahriuwu-lanerl-jax.
 
-E71b preflight COMPLETE1839/0:0,4m16s.14GPU tests passed. E68 visible-history
-audit:97022claimed historical samples,zero mismatches; one-step visible-minion
-coverage97.26658%.15past samples available in all four inspected incident
-frames. Single-game association evidence, not CV robustness or a learned gain.
+Five retired worktrees plus the old main working copy moved intact into
+/mnt/nfs/projects/_archive/, logged in MANIFEST.tsv with no automatic deletion.
+All branch refs and dirty/ignored files preserved. Old /srv/nfs/projects/ahriuwu
+is a compatibility symlink to archived main, which owns the shared Git store.
+Git worktree registrations repaired; archived worktrees intentionally registered.
+CODEMAP lists active paths and retained vendor/build dependencies. T3 metadata was
+read only; no messages sent or thread records changed.
 
-Dani delegated reference choice, prioritizing minimal change and likelihood of
-fixing farming. LEARN-AFK-29 selects a Tencent-documented applicable combat
-feature package; current GRU/PPO/reward/action heads retained. v6 implementation
-and tests prepared, no learned result. Field provenance, video-readiness gap and
-remaining reference differences are explicit. No full Tencent reproduction claim.
+## Current learning state
 
-E74c/1853 COMPLETED0:0,4m21s:13GPUtests passed and result artifact verified.
-Launcher missing-marker false failure repaired; its read-only accounting
-verifier now reports1853 complete/canary passed. Added marker for future runs.
-No repeat tests for reporting-only fix. E74b had already passed tests but failed
-its Git-path writer; E74 precision discrepancy resolved at production precision.
+E46 frozen120s AFK CS5.453125→9.5625 with deaths.9375→0 demonstrated improvement.
+E67 aggregate frozen baseline9.921875CS/.140625deaths remains unsolved:
+/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack
+SHA256 7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55.
+E75c unchanged-input continuation1856 completed512updates/8.389Mdecisions;
+final frozen64:9.453125CS/.109375deaths. No gain; not proof more training cannot help.
+Its event bridge delivered and cleaned up. E76c remains unsubmitted/superseded;
+scratch initialization remains pending, not a running experiment.
 
-E75c unchanged-input control COMPLETED Slurm1856/0:0 in41m26s.
-All512updates finished,8.389M decisions, zero reported nonfinite losses;
-initial64-game/both-team E67 retention passed. Final frozen64-game mean:
-9.453125CS/.109375deaths, versus E67initial9.921875/.140625.
-Extra training alone did not improve CS (-.46875); fewer deaths. No feature
-conclusion yet. Final checkpoint SHA256:
-`cfe534cbeca916fde8f8329c30a44ef7814ed0faf905781c5d458fa7b9de44b6`
-at E75c_combat_feature_control/vec-s0-20261001-202437-fd95388e/ckpt_008388608.msgpack
-under /mnt/nfs/checkpoints/lanerl-jax/.
+E69b/E70 reproduce E68 exactly and establish two locally recoverable caster misses
+with physical wait/attack options; no lost champion damage/CS in those cases.
+LEARN-AFK-24/25 hold exact timing and limits. This is not global sim/C# parity.
+E71b passed visible-history preflight only; E72b cancelled, E73b never submitted.
+E74c passed its earlier feature revision; E77 now covers revised directHP/masks.
 
-E76c combat-feature arm prepared and dry-run passed, NOT submitted. Its planned
-512update/1h budget and final gate remain unchanged: CS>=10.921875 and
-control+1, deaths<=.15. History-only arm remains deferred. User requested less
-polling and standing down; automatic goal continuation is PAUSED. Completion
-review only performed on the authorized1856 notification; no new training.
-No running or queued project jobs; no active experiment ETA. Unrelated jobs
-untouched. Bridge1856 delivered accepted, service inactive and registry entry
-absent, cleanup verified. Next authorized study step would be the matched
-combat-feature arm when work resumes; it has no submitted job or start ETA.
+Combat features/masks are opt-in, self35fields, with queued AA and E cancellation
+preserved. R target-conditioned legality remains absent. v5/v6 C# drivers still
+reject unsupported observation extensions. Untracked obs/projectiles.py is an
+untested, disconnected draft preserved untouched; not part of E77 or any result.
 
-## Narrow investigation completed
+## Recommendations under discussion
 
-- E69 reproduced every checked E68 state/action field over1201frames exactly;
-  expected12CS/0deaths. Its typed-key comparator failed afterward; repaired in
-  E69b. E69b1836 COMPLETED/0:0; both tick/ordinary baselines maxerror0.
-- Caster15 dies80.953438s to minion14 projectile, ownwindup.1961s remaining.
-  Caster19 dies113.280203s to minion20 projectile, ownCD.7847s remaining after
-  nonlethal normal+Q hits. No missing champion hit or kill credit in these ticks.
-- E701837 COMPLETED/0:0,6m28s. Preserve preceding useful actions and delay AA/Q:
-  caster15 localCS1→2; caster19 localCS0→1. Every pre-intervention tick field
-  matches baseline; no waiting swings. Ground-click displacement23.586units,
-  so these are physical timing/position options, not timing-only causality.
-- LEARN-AFK-24/25 contain exact timestamps, hit damage, attribution and limits.
-  This is local JAX execution evidence, not a C# paired-trace parity proof.
+Tencent HoKoff publishes later1v1 TensorFlow512LSTM checkpoints, not established
+original2020Solo weights. Published strongest-level comparison:70% wins vs next
+level with LuBan; no perfect-CS benchmark. Inputs725 and six action heads differ
+from ours. Full input semantics and cross-game transfer benefit remain unverified.
+Use it as an implementation reference; direct weight transfer is not a quick fix.
 
-## Feature implementation and source
-
-Opt-in v5 adds15past10Hz health/position/known samples per visible entity via
-mutual position/type association, retaining existing shared attention/pooling
-and globalGRU. No raw unit IDs/targets/projectiles/AA clocks enter the actor.
-Separate zero-weight projection preserves initial checkpoint outputs. Observer
-memory crosses rollouts, resets with episodes and is included in checkpoints.
-Experimental collector currently supports10Hz AFK; C# driver rejects v5 until
-its history collection is validated. LEARN-AFK-26 records research/gates.
-
-Current E67 aggregate frozen baseline:9.921875CS/.140625deaths, NOT solved.
-Checkpoint:
-`/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack`
-SHA256 `7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55`.
-E68 trace: `/mnt/nfs/shared/E68_afk_current_video/low_team_1/trace.npz`.
-E69b/E70/E71b artifacts use their experiment names under `/mnt/nfs/shared/`.
-
-E69/E69b/E70 watchers stopped, inactive/registry clean verified. E71 failed a
-float64 test fixture before training; E71b corrected it. Neither E71 attempt
-needed an unattended watcher. E72/E73 prepared configs superseded before
-submission by E72b/E73b to reference successful E71b. E64 remains unsubmitted;
-older E40 checkpoint remains preserved and must not be silently resumed.
-
-All starts/stops/session endings update this file in the same commit. For each
-unattended job, verify startup watch then active/updating event bridge. On wake
-check State AND ExitCode, frozen results/checkpoints, and watcher/registry cleanup.
+Prioritize comparing demonstrated better play against our current reward, then
+imitation and frozen behavior if that direction is agreed. Existing older BC/DAgger
+success makes this plausible; those longer mirror-task scores are not comparable
+to current120s AFK. LEARN-AFK-32 records sample-budget estimates and hypotheses,
+including short reward horizon/personal tower credit for pushing. No experiment
+created from these discussion ideas. Long-term gate remains >30CS in10minute C#
+mirror trials across seeds. Future submitted runs use normal launcher, integrated
+canaries/startup watch and bounded completion bridge; no repeated model polling.

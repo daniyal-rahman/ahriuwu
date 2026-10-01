@@ -7,7 +7,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E77_combat_mask_preflight` |10-01| GPU diagnostic | Direct HP, own-action and map masks | No trained policy |20min cap| SUBMITTED1857; startup watch pending | Automatic sampling/likelihood/reset/finite-update and legality regressions; no projectile work |
+| `E77_combat_mask_preflight` |10-01| GPU diagnostic | Direct HP, own-action and map masks | No trained policy |20min cap| COMPLETED1857/0:0,4m27s;19 tests passed | Result passed; CANARY PASSED and PROFILE COMPLETE. Terminal review after interrupted handoff; no learning or projectile result |
 | `E74c_combat_feature_preflight` |10-01| GPU diagnostic | E74b retry: worker uses launcher source metadata |No learned result|20min cap| COMPLETED1853/0:0,4m21s;13tests passed;artifact verified | Passed; launcher missing-marker false failure corrected via accounting verifier |
 | `E75c_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76c |E67/freshAdam|512updates8.389M,1h cap| COMPLETED1856/0:0,41m26s; final frozen64:9.453125CS/.109375deaths | Initial retention passed;512updates; no CS gain over E67; watcher cleaned |
 | `E76c_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Combat package, unchanged GRU/PPO/reward |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15 |

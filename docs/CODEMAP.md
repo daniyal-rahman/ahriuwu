@@ -1,6 +1,6 @@
 # Code map: what is live, what is tooling, what is history
 
-Updated 2026-09-25. LIVE = on the training or evaluation path today. TOOL =
+Updated 2026-10-01. LIVE = on the training or evaluation path today. TOOL =
 reusable, run by hand. DIAG = one-off diagnostic, versioned for reproduction.
 LEGACY = kept for history only; nothing imports it.
 
@@ -17,7 +17,7 @@ LEGACY = kept for history only; nothing imports it.
 | `slurm/vision_ab.sbatch` | TOOL | PERF-005 bounded vision-kernel A/B via `ops/launch.py`; correctness first, no saved model or profiler |
 | `slurm/full_profile.sbatch` | TOOL | PERF-004 full GPU diagnostic via `ops/launch.py` and `gru_profile_launch.py`; canary first, fixed workload, source traces and memory dumps, no saved model |
 | `ops/gru_profile_launch.py`, `slurm/gru_profile.sbatch` | TOOL | Bounded PERF-003 GPU diagnostic through `ops/launch.py`; exact GRU split/fused canary, rollout/learner time and memory, no model checkpoints |
-| `lanerl_jax/train/server_train.py` | LIVE | C# server PPO collector (idle / mirror), resume, frozen eval; the entry point for all current runs |
+| `lanerl_jax/train/server_train.py` | LIVE | C# server PPO collector (idle / mirror), resume, frozen eval; AFK JAX work uses wave_scenario_train.py / vec_train.py |
 | `lanerl_jax/train/learner.py`, `ppo.py`, `policy.py` | LIVE | shared PPO loss/optimiser, factored heads, the network |
 | `lanerl_jax/obs/builder.py`, `obs/frame.py`, `obs/fog.py`, `obs/vision.py` | LIVE | observation contract `viewport-structured-v3` |
 | `lanerl_jax/parity/policy_driver.py` (`StateRebuilder`, wire helpers) | LIVE | wire frame → `LaneState` for the observation builder (shared with the evaluation driver) |
@@ -32,7 +32,7 @@ LEGACY = kept for history only; nothing imports it.
 | `slurm/server_train.sbatch`, `ops/server_train_status.py`, `ops/desktop_suite.sh`, `ops/login_capped.sh` | TOOL | launch and monitor on the desktop; capped CPU work |
 | `lanerl_jax/train/jax_train.py`, `jax_farm.py`, `jax_eval.py` | TOOL (paused) | same learner on the JAX sim; not run until the C# gate is met |
 | `lanerl_jax/train/trainer.py`, `run_train.py`, `slurm/rl_train.sbatch` | TOOL (paused) | the Anakin JAX trainer (256 envs), migrated to the shared reference PPO update (PPO-17) |
-| `lanerl_jax/sim/` | TOOL (paused) | the JAX simulator; only used by the JAX arms |
+| `lanerl_jax/sim/` | LIVE | JAX simulator used by the current AFK training and frozen evaluation path |
 | `lanerl_jax/parity/policy_divergence.py`, `record.py`, `replay_server.py`, `render_recording.py`, `analyze_farming.py` | TOOL | sim-vs-server gate, recordings, replay viewers |
 | `lanerl_jax/parity/archive/`, `lanerl_jax/probes/` | DIAG | one-off probes with README indexes pointing at ledger rows |
 | `lanerl_jax/train/entropy_audit.py`, `throughput_audit.py`, `benchmark.py` | DIAG | audits cited by ledger rows |
@@ -78,3 +78,22 @@ TOOL: `slurm/combat_feature_audit.sbatch` / `combat-feature-audit` runs E74 GPU 
 TOOL: `ops/score_combat_features.py` reads completed E75c/E76c frozen evaluations, checks matched specs/cohorts and E67 initial retention, and scores only update512 against LEARN-AFK-29 gates; no training/checkpoint mutation.
 
 LIVE (opt-in): `train/action_masks.py` masks buttons using own observed availability; shared policy forward keeps actor/learner identical. `wave_scenario_train.py` exposes action_mask/click_mask experiment switches. Existing `actions.py` map mask supplies standable screen cells. LEARN-AFK-30, E77 automatic GPU canary.
+
+Checkout organization, 2026-10-01: three active worktrees, confirmed against T3
+thread metadata and Dani's explicit champion-work exception:
+
+| Workstream | Branch | Checkout |
+|---|---|---|
+| Champion additions | `t3code/toplane-champion-overlap` | `/home/dani/.t3/worktrees/ahriuwu/t3code-12dab3cf` |
+| Modern simulator | `t3code/modern-jax-sim-port` | `/home/dani/.t3/worktrees/ahriuwu/t3code-86665351` |
+| RL learning proof | `lane-rl/jax` | `/srv/nfs/projects/ahriuwu-lanerl-jax` |
+
+Five retired helper/client/boot worktrees and the old main working copy were
+moved intact into `/mnt/nfs/projects/_archive/`, with original paths and restore
+notes in `MANIFEST.tsv`. Dirty and ignored files and branch refs are preserved.
+The archived main owns the common Git store; `/srv/nfs/projects/ahriuwu` remains
+a compatibility symlink for T3 and existing dependencies. `git worktree repair`
+updated registrations. Archived worktrees remain registered, deliberately.
+`lanerl-vendor/LoLServer` and the non-Git `lanerl-modern-MOD001-v2` build remain
+dependencies, not additional active feature workstreams. Other projects and
+their jobs are outside this cleanup.
