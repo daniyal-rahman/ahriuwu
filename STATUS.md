@@ -11,7 +11,9 @@ History and evidence: `docs/EXPERIMENTS.md`, `docs/JAX_FIDELITY_LEDGER.md`.
 **E67_afk_staggered — Slurm1833**, started10:47UTC,1-hour allocation.
 15standardGPUcanaries passed364.28s; additional warmup/GRU canary passed80.81s;
 launcher180s startup watch passed. Bridge lanerl-event-1833.service verified
-active/result updating, expiry2026-10-01T12:54:52.537235+00:00. Fullsize warmup next.
+active/result updating, expiry2026-10-01T12:54:52.537235+00:00. Fullsize warmup passed:180224untrained decisions, all deadlines full.
+Frozen initial exactly9.5625CS/0deaths; u12810.0625CS/.140625deaths/207.2674towerHP.
+Promising CS direction but fails survival gate; continue512budget.
 Same E63 full objective and PPO: E46/v3/freshAdam/LR1e-4/4epochs/gamma.99,
 XP0/HP100/personal tower900/death300. Only training phases differ.
 Fixed-policy warmup discards initial shortened episodes; then all training games
