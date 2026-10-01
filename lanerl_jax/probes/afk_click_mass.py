@@ -95,6 +95,14 @@ def main():
             hypothetical_10pct_mixture_direct_target=cursor_button*(.9*mass+.1*proposal_mass),
             implemented_candidate_count=len(implemented_cells), implemented_cells_hitting_target=implemented_hits,
             implemented_10pct_mixture_direct_target=cursor_button*(.9*mass+.1*implemented_mass)))
+    # Reuse already-computed E59 counterfactuals; no additional game rollout.
+    forks = np.load(a.cases.parent / 'forks.npz')
+    for label, length in (('two_seconds',20),('remaining',len(forks['cs']))):
+        cs = forks['cs'][:length].sum(0).reshape(n,-1,2).mean(1)
+        reward = (forks['reward'][:length] * (.99**np.arange(length))[:,None]).sum(0).reshape(n,-1,2).mean(1)
+        for i,row in enumerate(rows):
+            row[label+'_directed_delta_cs'] = float(cs[i,1]-cs[i,0])
+            row[label+'_directed_delta_return'] = float(reward[i,1]-reward[i,0])
     out = dict(source=git_provenance(), checkpoint_sha256=file_sha256(a.checkpoint),
         cases_sha256=file_sha256(a.cases), value_reproduction_max_error=value_error, rows=rows,
         limitations='16 selected E59 cases, not representative gameplay. Direct clicks only: ground attack-move may auto-acquire. Hypothetical proposal mass is not a trained policy or a gameplay gain.')
