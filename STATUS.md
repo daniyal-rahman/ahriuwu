@@ -1,22 +1,25 @@
-# STATUS — 2026-10-01 19:07 UTC
+# STATUS — 2026-10-01 19:22 UTC
 
-Current authorization: fresh research budget, narrow E68 execution audit first,
-then bounded visible-history experiment if justified; no broad PPO/LR sweeps.
+Current authorization: fresh budget; E68 narrow execution audit then bounded
+visible-history experiment. No broad PPO/LR sweeps. No project jobs running;
+unrelated1803/1736 untouched.
 
-E69b Slurm1836 COMPLETED/0:0 in8m52s. Exact E68 reproduction (E69,1201frames)
-and both tick/ordinary baselines maxerror0. Caster15 killed by minion14 at
-80.953438s while ownwindup.196147s; caster19 killed by minion20 at113.280203s
-while ownCD.784716s after normal+Q nonlethal hits. No missing champion hit/CS
-credit in either baseline; no simultaneous champion/minion lethal race.
-76physical-option branches: caster15 can be secured but local totalCS<=baseline1;
-caster19 can be secured with localCS1 versusbaseline0. Findings LEARN-AFK-24.
-No global farming fix or C# parity claim. E69b watcher stopped; inactive/registry clean verified.
+Narrow investigation COMPLETE (LEARN-AFK-24/25): E69 exact1201frame E68
+reproduction; E69b1836 COMPLETED/0:0; E701837 COMPLETED/0:0,6m28s. Tick versus
+ordinary state agreement maxerror0. Caster15 dies to minion14 at80.953438s
+with ownwindup.1961s. Caster19 dies to minion20 at113.280203s with ownCD.7847s
+after nonlethal normal+Q hits. No missing champion hit/CS credit in these ticks.
+E70 preserves preceding useful actions: delayedAA localCS1→2; delayedQ0→1.
+Wait intervals have no swings; one physical ground click moves23.586units,
+so timing and small position changes are coupled. No learned/global fix claimed.
+E69/E69b/E70 watchers stopped; inactive and registry clean verified.
 
-Next: narrow timing refinement preserving unit15's earlier unit7 kill and
-unit19's first normal hit, with one ground move then NOOP before delayed AA/Q.
-E70 Slurm1837 running:20 local timing branches,30min CPU cap; dry-run passed,
-startup watch in progress. It is the only project job. Unrelated1803/1736 untouched.
-Feature experiment remains conditional on completed execution/timing review.
+Next: opt-in visible HP/position history implementation/preflight, then matched
+E67 original-input control versus history input experiment if gates pass.
+Standalone tracking tests5passed; small policy migration/gradient test passed.
+Collector/reset/resume/GPU and real-trace tracking checks remain. LEARN-AFK-26
+states hypothesis, matched budget and frozen success criteria. No training
+submitted yet. Experimental files in progress are not a validated policy.
 
 ## Previous handoff (historical)
 

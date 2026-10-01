@@ -258,7 +258,7 @@ def main():
                     events.append({name: data[name][t].tolist() for name in data})
             death = np.flatnonzero(data['died'])
             row = dict(target=target, spawn_seq=seq, base_index=case['base_index'], mode=mode,
-                attack_index=attack_index, attack_seconds=(float(base.t_ms)-120000)/1000+attack_index*.1 if attack_index>=0 else None,
+                attack_index=attack_index, attack_seconds=order_rows[attack_index]['seconds'] if attack_index>=0 else None,
                 cs_gain=int(s.cs[0]-base.cs[0]), target_killed_by=int(data['killer'][death[0]]) if len(death) else None,
                 target_death_seconds=(float(data['t_ms'][death[0]])-120000)/1000 if len(death) else None,
                 target_cs=bool(len(death) and data['killer'][death[0]] == 0),
