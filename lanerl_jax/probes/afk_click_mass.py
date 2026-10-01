@@ -21,6 +21,7 @@ from lanerl_jax.train.policy import LanePolicy, PolicyConfig
 from lanerl_jax.train.replay_audit import restore_replay_state
 from lanerl_jax.train.run_manifest import file_sha256, git_provenance
 from lanerl_jax.train.scripted_policy import screen_grid
+from lanerl_jax.train.click_proposals import proposal_cells
 
 
 def main():
@@ -81,12 +82,18 @@ def main():
             flat = int(np.argmin(np.where(clickable, err, np.inf)))
             hits += bool(target_cells.flat[flat])
         proposal_mass = hits / len(candidates) if len(candidates) else mass
+        implemented_cells, implemented_valid = proposal_cells(obs.entities[i], obs.entity_pad_mask[i])
+        implemented_cells = np.asarray(implemented_cells)[np.asarray(implemented_valid)]
+        implemented_hits = int(target_cells[implemented_cells % 54, implemented_cells // 54].sum())
+        implemented_mass = implemented_hits / len(implemented_cells) if len(implemented_cells) else mass
         cursor_button = float(pb[i, 1] + pb[i, 2])
         rows.append(dict(case=i, target_cells=int(target_cells.sum()),
             cursor_button_probability=cursor_button, attack_move_probability=float(pb[i, 2]),
             conditional_direct_target=mass, direct_target_probability=cursor_button*mass,
             candidate_count=len(candidates), candidate_cells_hitting_target=hits,
-            hypothetical_10pct_mixture_direct_target=cursor_button*(.9*mass+.1*proposal_mass)))
+            hypothetical_10pct_mixture_direct_target=cursor_button*(.9*mass+.1*proposal_mass),
+            implemented_candidate_count=len(implemented_cells), implemented_cells_hitting_target=implemented_hits,
+            implemented_10pct_mixture_direct_target=cursor_button*(.9*mass+.1*implemented_mass)))
     out = dict(source=git_provenance(), checkpoint_sha256=file_sha256(a.checkpoint),
         cases_sha256=file_sha256(a.cases), value_reproduction_max_error=value_error, rows=rows,
         limitations='16 selected E59 cases, not representative gameplay. Direct clicks only: ground attack-move may auto-acquire. Hypothetical proposal mass is not a trained policy or a gameplay gain.')

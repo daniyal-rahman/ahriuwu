@@ -651,8 +651,8 @@ def _make_act(policy, params, *, deterministic: bool, team: int):
             from ..train.actions import click_mask_from_position
             click_mask = click_mask_from_position(state.x[row], state.y[row], jnp.asarray(own.axis), jnp.asarray(own.normal))
         if deterministic:
-            action = (jnp.argmax(logits.button), jnp.argmax(logits.screen_x),
-                      jnp.argmax(logits.screen_y))
+            from ..train.trainer import greedy_action
+            action = greedy_action(logits, click_mask)
         else:
             action, _, _ = _sample(logits, key, ~obs.entity_pad_mask, click_mask=click_mask)
         # `orders_from` is the TRAINING decoder and expects the (2, ...) batch

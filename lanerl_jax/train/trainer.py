@@ -208,6 +208,17 @@ class Transition(NamedTuple):
     attack_class: jax.Array
 
 
+def greedy_action(logits, click_mask=None):
+    """Diagnostic argmax, respecting a masked or proposal joint click."""
+    joint = getattr(logits, 'click_logits', None)
+    if joint is not None or click_mask is not None:
+        from .ppo import joint_click_logits
+        flat = jnp.argmax(joint_click_logits(logits.screen_x, logits.screen_y, click_mask, joint), axis=-1)
+        ny = logits.screen_y.shape[-1]
+        return jnp.argmax(logits.button, axis=-1), flat//ny, flat%ny
+    return tuple(jnp.argmax(x, axis=-1) for x in (logits.button, logits.screen_x, logits.screen_y))
+
+
 def _sample(logits, key, slot_valid, click_mask=None):
     """Sample button and screen coordinates, with matching PPO likelihood.
 
@@ -218,9 +229,10 @@ def _sample(logits, key, slot_valid, click_mask=None):
     that same distribution (`ppo.joint_click_log_prob`).
     """
     kb, kx, ky = jax.random.split(key, 3)
-    if click_mask is not None:
+    click_logits = getattr(logits, 'click_logits', None)
+    if click_mask is not None or click_logits is not None:
         from .ppo import joint_click_logits
-        flat = jax.random.categorical(kx, joint_click_logits(logits.screen_x, logits.screen_y, click_mask))
+        flat = jax.random.categorical(kx, joint_click_logits(logits.screen_x, logits.screen_y, click_mask, click_logits))
         n_y = logits.screen_y.shape[-1]
         a = (jax.random.categorical(kb, logits.button), flat // n_y, flat % n_y)
     else:
@@ -229,7 +241,7 @@ def _sample(logits, key, slot_valid, click_mask=None):
              jax.random.categorical(ky, logits.screen_y))
     lg = (logits.button, logits.screen_x, logits.screen_y)
     usage = screen_head_usage(a[0])
-    return a, factored_log_prob(lg, a, *usage, click_mask=click_mask), usage
+    return a, factored_log_prob(lg, a, *usage, click_mask=click_mask, click_logits=click_logits), usage
 
 
 #: `attack_class` codes (the R3 dashboard metric, `NONFARMING_FAILURES.md`):

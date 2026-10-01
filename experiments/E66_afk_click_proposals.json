@@ -1,0 +1,39 @@
+{
+  "id": "E66_afk_click_proposals",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "LEARN-AFK-19: on16saved caster cases direct-target probability .00053; observation-only10percent uniform candidate mixture .03503 (~66x), not a gameplay claim. Add learned attention over visible hostile entity tokens to propose ordinary screen cells, mixed with old ground distribution via learned gate initialized.1. No HP rule, hidden state, target IDs or simulator changes. Exact marginal categorical likelihood/entropy and duplicate-cell aggregation; PPO/GRU/rewards asE63 (v3/death300/HP100/personal tower900/XP0/LR1e-4/4epochs/gamma.99). SourceE46weights retained; newheads only, freshAdam. Initial physical policy changes and must be evaluated. Frozen64games0/128/256/512; success CS>=max(10.5625, newinitialCS+1) with<=.05deaths, compare E63 and original; independentseed replication required.512updates8.389M/55minworker/1hSlurm; extraGPUcollector/update canary before training, stop nonfinite/OOM; no blind extension. OpenAI Five Figure18 motivates entity-attention targeting; our screen-cell mixture is engineering design, not paper reproduction.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 300.0,
+  "click_proposals": true
+}

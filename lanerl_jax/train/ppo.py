@@ -93,35 +93,37 @@ def _entropy(lg):
     return -jnp.sum(jnp.exp(lp) * lp, axis=-1)
 
 
-def joint_click_logits(lg_x, lg_y, click_mask):
+def joint_click_logits(lg_x, lg_y, click_mask, click_logits=None):
     """Masked joint click distribution over the 96 x 54 screen cells:
     ``softmax(lg_x[i] + lg_y[j] + log(mask[i, j]))``. The SAME two factored
     heads (no new parameters; E15-era checkpoints load unchanged), but the
     probability is renormalised over walkable cells only -- invalid-action
     masking (Huang & Ontanon 2020), INT-001's principled fix. Returns
     ``(..., n_x * n_y)`` logits with ``-inf`` on masked cells."""
-    joint = lg_x[..., :, None] + lg_y[..., None, :]
+    joint = (lg_x[..., :, None] + lg_y[..., None, :] if click_logits is None else
+             click_logits.reshape(click_logits.shape[:-1] + (lg_x.shape[-1], lg_y.shape[-1])))
     # A large FINITE penalty, not -inf: with -inf the entropy's p * log p is
     # 0 * -inf = NaN on masked cells and its gradient poisons the update even
     # under jnp.where (E20 canary: "nonfinite learner"). exp(-1e4) underflows
     # to exactly 0 in float32, so the masked mass is zero either way.
-    joint = jnp.where(click_mask, joint, -1e4)
+    if click_mask is not None:
+        joint = jnp.where(click_mask, joint, -1e4)
     return joint.reshape(joint.shape[:-2] + (-1,))
 
 
-def joint_click_log_prob(lg_x, lg_y, click_mask, a_x, a_y):
-    lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask), axis=-1)
+def joint_click_log_prob(lg_x, lg_y, click_mask, a_x, a_y, click_logits=None):
+    lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask, click_logits), axis=-1)
     idx = a_x * lg_y.shape[-1] + a_y
     return jnp.take_along_axis(lp, idx[..., None], axis=-1)[..., 0]
 
 
-def joint_click_entropy(lg_x, lg_y, click_mask):
-    lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask), axis=-1)
+def joint_click_entropy(lg_x, lg_y, click_mask, click_logits=None):
+    lp = jax.nn.log_softmax(joint_click_logits(lg_x, lg_y, click_mask, click_logits), axis=-1)
     return -jnp.sum(jnp.exp(lp) * lp, axis=-1)
 
 
 def factored_log_prob(logits, actions, uses_screen=None,
-                      uses_target=None, click_mask=None):
+                      uses_target=None, click_mask=None, click_logits=None):
     """Button likelihood plus click likelihood for coordinate-using buttons.
 
     uses_target is an unused collector compatibility argument, not a head.
@@ -135,21 +137,21 @@ def factored_log_prob(logits, actions, uses_screen=None,
     if len(logits) == 1:
         return total
     used = screen_head_usage(actions[0])[0] if uses_screen is None else uses_screen
-    if click_mask is not None:
-        click_lp = joint_click_log_prob(logits[1], logits[2], click_mask, actions[1], actions[2])
+    if click_mask is not None or click_logits is not None:
+        click_lp = joint_click_log_prob(logits[1], logits[2], click_mask, actions[1], actions[2], click_logits)
     else:
         click_lp = _chosen(logits[1], actions[1]) + _chosen(logits[2], actions[2])
     return total + used * click_lp
 
 
-def factored_entropy(logits, click_mask=None):
+def factored_entropy(logits, click_mask=None, click_logits=None):
     """Unconditional sum of head entropies (PPO-15)."""
     if len(logits) == 1:
         return _entropy(logits[0])
     if len(logits) != 3:
         raise ValueError("expected one categorical head or three screen-click heads")
-    click = (joint_click_entropy(logits[1], logits[2], click_mask)
-             if click_mask is not None else _entropy(logits[1]) + _entropy(logits[2]))
+    click = (joint_click_entropy(logits[1], logits[2], click_mask, click_logits)
+             if click_mask is not None or click_logits is not None else _entropy(logits[1]) + _entropy(logits[2]))
     return _entropy(logits[0]) + click
 
 

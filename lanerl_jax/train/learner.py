@@ -69,10 +69,10 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
         pri = jax.lax.stop_gradient(forward(prior_params, batch))
         cm = batch.get("click_mask")
         kl = _head_kl(pri.button, cur.button)
-        if cm is not None:
+        if cm is not None or getattr(cur, 'click_logits', None) is not None:
             from .ppo import joint_click_logits
-            kl = kl + _head_kl(joint_click_logits(pri.screen_x, pri.screen_y, cm),
-                               joint_click_logits(cur.screen_x, cur.screen_y, cm))
+            kl = kl + _head_kl(joint_click_logits(pri.screen_x, pri.screen_y, cm, getattr(pri, 'click_logits', None)),
+                               joint_click_logits(cur.screen_x, cur.screen_y, cm, getattr(cur, 'click_logits', None)))
         else:
             kl = kl + _head_kl(pri.screen_x, cur.screen_x) + _head_kl(pri.screen_y, cur.screen_y)
         return kl.mean()
@@ -82,8 +82,9 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
         lg = (logits.button, logits.screen_x, logits.screen_y)
         # Preserve the coordinate usage stored by the collector.
         click_mask = batch.get("click_mask")
-        log_prob = factored_log_prob(lg, batch["action"], batch.get("uses_screen"), click_mask=click_mask)
-        entropy = factored_entropy(lg, click_mask=click_mask).mean()
+        joint = getattr(logits, 'click_logits', None)
+        log_prob = factored_log_prob(lg, batch["action"], batch.get("uses_screen"), click_mask=click_mask, click_logits=joint)
+        entropy = factored_entropy(lg, click_mask=click_mask, click_logits=joint).mean()
         pl, stats = policy_loss(log_prob, batch["log_prob"], batch["adv"], cfg_ppo)
         vl = value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
         total = pl + cfg_ppo.value_coef * vl - cfg_ppo.entropy_coef * entropy
@@ -92,6 +93,15 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
         for name, head in zip(('button', 'screen_x', 'screen_y'), lg):
             lp = jax.nn.log_softmax(head)
             info['entropy_' + name] = -(jnp.exp(lp) * lp).sum(-1).mean()
+        if joint is not None:
+            # Report actual mixture marginals, not the old ground-head entropy.
+            from .ppo import joint_click_logits
+            probabilities = jax.nn.softmax(joint_click_logits(logits.screen_x, logits.screen_y, click_mask, joint))
+            probabilities = probabilities.reshape(probabilities.shape[:-1] + (logits.screen_x.shape[-1], logits.screen_y.shape[-1]))
+            for name, marginal in (('screen_x', probabilities.sum(-1)), ('screen_y', probabilities.sum(-2))):
+                info['entropy_' + name] = -(marginal * jnp.log(jnp.maximum(marginal, 1e-30))).sum(-1).mean()
+            if getattr(logits, 'proposal_mass', None) is not None:
+                info['proposal_mass_mean'] = logits.proposal_mass.mean()
         if prior_params is not None and cfg_ppo.kl_prior_coef > 0:
             klp = kl_to_prior(params, batch)
             total = total + cfg_ppo.kl_prior_coef * klp
@@ -109,10 +119,11 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
             logits = forward(q, batch)
             lg = (logits.button, logits.screen_x, logits.screen_y)
             cm = batch.get("click_mask")
-            lp = factored_log_prob(lg, batch["action"], batch.get("uses_screen"), click_mask=cm)
+            joint = getattr(logits, 'click_logits', None)
+            lp = factored_log_prob(lg, batch["action"], batch.get("uses_screen"), click_mask=cm, click_logits=joint)
             pl, _ = policy_loss(lp, batch["log_prob"], batch["adv"], cfg_ppo)
             vl = cfg_ppo.value_coef * value_loss(logits.value, batch["value"], batch["returns"], cfg_ppo)
-            ent = -cfg_ppo.entropy_coef * factored_entropy(lg, click_mask=cm).mean()
+            ent = -cfg_ppo.entropy_coef * factored_entropy(lg, click_mask=cm, click_logits=joint).mean()
             return pl, vl, ent
         def trunk(g):
             return jax.tree_util.tree_map_with_path(

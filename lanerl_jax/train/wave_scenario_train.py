@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.serialization import from_state_dict, msgpack_restore
-from .policy import PolicyConfig, OWN_ACTION_INTERFACE, expand_own_action_inputs
+from .policy import PolicyConfig, OWN_ACTION_INTERFACE, expand_own_action_inputs, merge_click_proposal_params
 from .ppo import PPOConfig
 from .run_manifest import RunDir, file_sha256
 from .vec_train import VecConfig, make_vec_train
@@ -98,6 +98,10 @@ def main():
             setup.write_text(json.dumps(rows,indent=2))
     calibrate(bank,sim,out)
     pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=spec.get('detach_critic',True))
+    if spec.get('click_proposals', False):
+        if spec.get('opponent') != 'afk':
+            raise ValueError('click-proposal experiment currently supports AFK evaluation only')
+        pcfg=pcfg._replace(click_proposals=True)
     own_action = spec.get('own_action_state', False)
     if own_action:
         pcfg=pcfg._replace(observation_interface=OWN_ACTION_INTERFACE,self_dim=20)
@@ -117,7 +121,11 @@ def main():
     if own_action:
         initial_params=expand_own_action_inputs(initial_params)
         other_params=expand_own_action_inputs(other_params)
-    params=from_state_dict(built['init_params'](jax.random.key(0)),initial_params)
+    initialized=built['init_params'](jax.random.key(0))
+    if pcfg.click_proposals:
+        initial_params=merge_click_proposal_params(initialized,initial_params)
+        other_params=merge_click_proposal_params(initialized,other_params)
+    params=from_state_dict(initialized,initial_params)
     opponent_params=from_state_dict(params,other_params)
     runner=built['initial_runner'](jax.random.key(train_seed),params)
     update=0

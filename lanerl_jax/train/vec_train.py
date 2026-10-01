@@ -332,7 +332,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         new_lg = loss.forward(params, batch)
         new_lp = factored_log_prob((new_lg.button, new_lg.screen_x, new_lg.screen_y),
                                    batch["action"], batch["uses_screen"],
-                                   click_mask=batch.get("click_mask"))
+                                   click_mask=batch.get("click_mask"),
+                                   click_logits=getattr(new_lg, 'click_logits', None))
         metrics["post_kl"] = jnp.mean(batch["log_prob"] - new_lp)
         r_var = batch["returns"].var()
         metrics["explained_variance"] = jnp.where(

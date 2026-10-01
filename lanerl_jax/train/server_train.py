@@ -994,7 +994,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # Independent rollout/recompute equality before any optimizer step.
             logits = forward(params, batch)
             recomputed = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
-                batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"))
+                batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"),
+                click_logits=getattr(logits, 'click_logits', None))
             # Head-mask mismatches are O(1) errors; a near-deterministic policy
             # (a BC clone) has log-probs of -20 and beyond whose float32
             # recomputation differs by ~1e-4, which failed the old 2e-5 gate
@@ -1017,7 +1018,8 @@ def run_farming_learner(collector, policy, cfg, run, *, seed, rollout, updates,
             # post_kl measures the final policy's drift over the rollout.
             logits = forward(params, batch)
             post_lp = factored_log_prob((logits.button, logits.screen_x, logits.screen_y),
-                batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"))
+                batch["action"], batch["uses_screen"], batch["uses_target"], click_mask=batch.get("click_mask"),
+                click_logits=getattr(logits, 'click_logits', None))
             metrics["post_kl"] = float(jnp.mean(batch["log_prob"] - post_lp))
             if not all(np.isfinite(np.asarray(v)).all() for v in jax.tree.leaves(params)) or metrics.get("loss_nonfinite", 0):
                 raise RuntimeError("nonfinite learner; refusing latest checkpoint")

@@ -8,8 +8,7 @@ A sim-only number is the one that flatters and the one that misleads.
 
 Dimensions are `runs/rl-league-0915e/resolved_config.json` verbatim: d_model
 128, 2 layers, 4 heads, ffn 256, 32 entity slots, core 512. The action heads are
-`constants.BUTTONS` (8), `N_SCREEN_X` (96), `N_SCREEN_Y` (54) and a target head
-over the 32 slots.
+`constants.BUTTONS` (8), `N_SCREEN_X` (96), `N_SCREEN_Y` (54).
 
 The core is the MLP, not the GRU
 --------------------------------
@@ -23,9 +22,11 @@ trusted -- as an ablation that was wanted anyway.
 
 Actions are screen clicks
 ------------------------
-The actor emits button, screen_x and screen_y logits only. Entity tokens are
-observation context, never a pointer head. The environment/server resolves
-what lies under the cursor. screen-click-v2 requires new checkpoints.
+The default actor uses factored button, screen_x and screen_y logits.
+Experimental ``click_proposals`` adds learned attention over observed entities
+to propose screen cells, mixed with the original coordinate distribution.
+The actor still emits only button/x/y; the environment/server resolves what
+lies under the cursor. No entity identity is an executed action argument.
 
 Initialisation is the standard PPO recipe, and it needed both halves
 --------------------------------------------------------------------
@@ -139,6 +140,9 @@ class PolicyConfig(NamedTuple):
     #: only its own weights (E12a's regime), the actor trains the trunk. The
     #: decisive test of "the critic drags the trunk" (PPO-16 follow-up).
     detach_critic: bool = False
+    #: Experimental observation-derived screen-cell proposals; physical
+    #: screen-click-v2 protocol unchanged. Initial proposal mass is 10%.
+    click_proposals: bool = False
 
 
 class ActionLogits(NamedTuple):
@@ -146,6 +150,30 @@ class ActionLogits(NamedTuple):
     screen_x: jax.Array
     screen_y: jax.Array
     value: jax.Array
+
+
+class JointActionLogits(NamedTuple):
+    button: jax.Array
+    screen_x: jax.Array
+    screen_y: jax.Array
+    value: jax.Array
+    click_logits: jax.Array
+    proposal_mass: jax.Array | None = None
+
+
+def merge_click_proposal_params(initialized, source):
+    """Keep every checkpoint weight; initialise only the two new named heads."""
+    result = jax.tree.map(lambda x: x, initialized)
+    new, old = result['params'], source['params']
+    extra = set(new) - set(old)
+    if not extra <= {'click_proposal_query', 'click_proposal_gate'} or set(old)-set(new):
+        raise ValueError('proposal migration may only add the two click heads')
+    for name, value in old.items():
+        if (jax.tree.structure(value) != jax.tree.structure(new[name]) or
+            any(a.shape != b.shape for a,b in zip(jax.tree.leaves(value), jax.tree.leaves(new[name])))):
+            raise ValueError(f'incompatible checkpoint parameter: {name}')
+        new[name] = value
+    return result
 
 
 #: the standard PPO recipe -- see the module docstring
@@ -240,6 +268,17 @@ class LanePolicy(nn.Module):
             value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(
                 jax.lax.stop_gradient(h) if c.detach_critic else h)[..., 0],
         )
+        if c.click_proposals:
+            from .click_proposals import proposal_cells, mixture_click_logits
+            query = nn.Dense(c.d_model, name='click_proposal_query',
+                kernel_init=nn.initializers.zeros, bias_init=nn.initializers.zeros)(h)
+            scores = jnp.sum(tokens * query[..., None, :], axis=-1) / math.sqrt(c.d_model)
+            gate = nn.Dense(1, name='click_proposal_gate',
+                kernel_init=nn.initializers.zeros,
+                bias_init=nn.initializers.constant(math.log(.1/.9)))(h)[..., 0]
+            cells, valid = proposal_cells(entities, pad_mask, c.n_screen_x, c.n_screen_y)
+            joint = mixture_click_logits(logits.screen_x, logits.screen_y, scores, gate, cells, valid)
+            logits = JointActionLogits(*logits, joint, jax.nn.sigmoid(gate)*jnp.any(valid,axis=-1))
         return (logits, new_carry) if c.core == "gru" else logits
 
     def initial_carry(self, batch_shape=()):
