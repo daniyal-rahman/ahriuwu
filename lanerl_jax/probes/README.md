@@ -33,3 +33,5 @@ PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static 
 | `afk_behavior_audit.py` | E58 frozen policy/scripted control, opportunity/execution/reward/MC credit audit | LEARN-AFK-12; no training | 2026-10-01 |
 
 | `afk_counterfactual.py` | E59 matched caster option/credit forks | LEARN-AFK-13; frozen diagnostic | 2026-10-01 |
+
+| `afk_click_mass.py` | Exact direct-click probability over saved E59 caster cases, no environment stepping or updates | LEARN-AFK-19; capped CPU saved-artifact analysis, recurrent checkpoint/hash/value reproduction gate | 2026-10-01 |
