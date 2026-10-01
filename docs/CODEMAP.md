@@ -89,3 +89,5 @@ launch modes still target the canonical checkout, so integrate this branch there
 before launching a normal production experiment. MOD validation snapshots this
 worktree explicitly and does not require that integration.
 Map/minions/turrets still use the existing world; this is not a modern map/items/runes port.
+
+TOOL: `lanerl_jax/data/modern_routes.py`, `lanerl_jax/sim/modern_pathing.py` bake/load/query conservative static-map routes; `ops/modern_world_validation.py`, `slurm/modern_world_validation.sbatch` launch snapshot correctness/artifact jobs through `ops/launch.py`. Patch geometry data are `lanerl_jax/data/modern/26.19/geometry.json`; tests are regressions.

@@ -214,6 +214,10 @@ def main():
     local_spec = Path(__file__).resolve().parents[1] / "experiments" / f"{a.experiment}.json"
     if local_spec.exists():
         modern_spec=json.loads(local_spec.read_text())
+        if modern_spec.get("engine")=="modern-world-validation":
+            from modern_world_validation import launch
+            launch(modern_spec,a.dry_run)
+            return
         if modern_spec.get("engine")=="modern-validation":
             from modern_validation import launch
             launch(modern_spec,a.dry_run)
