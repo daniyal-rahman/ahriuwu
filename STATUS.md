@@ -37,6 +37,9 @@ remaining at20:36UTC, hard deadline21:16UTC. Initial frozen retention PASSED for
 Intermediate regression; continue predeclared final512 endpoint, no LR change.
 Bridge lanerl-event-1856.service active and result checked_at advancing
 1790886241.198212→1790886301.5603607; expiry2026-10-01T21:53:59UTC.
+User requested standing down and less polling. Automatic goal continuation paused;
+keep the already-armed completion bridge. Last verified1856 RUNNING at40m27s,
+update500/512; approximately1–3min to final evaluation/exit. No feature job submitted.
 On wake inspect State+ExitCode, logs/initial retention/final frozen results and
 checkpoints, then clean watcher/registry. E76c remains unsubmitted until
 control review. Stand down after this verified handoff. Unrelated jobs untouched.
