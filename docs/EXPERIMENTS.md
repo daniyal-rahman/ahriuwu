@@ -7,7 +7,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E71b_visible_history_preflight` |10-01| GPU diagnostic | E71 retry with float32 test fixture |No updates|20min cap| Prepared | Same tracking and migration/likelihood/reset/resume gates |
+| `E71b_visible_history_preflight` |10-01| GPU diagnostic | E71 retry with float32 test fixture |No updates|20min cap| Slurm1839 submitted; startup watch pending | Same tracking and migration/likelihood/reset/resume gates |
 | `E72b_afk_history_control` |10-01| JAX AFK PPO control | E72 protocol, require successful E71b preflight |E67/freshAdam, matched E73b|512updates8.389M,1h cap| Prepared, not submitted | Original v3 control, initial per-game E67 frozen retention |
 | `E73b_afk_visible_history` |10-01| JAX AFK PPO feature test | E73 protocol, require successful E71b preflight |E67/freshAdam, zero-weight added projection|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15 |
 | `E71_visible_history_preflight` |10-01| GPU diagnostic | History identity/migration/likelihood/reset/resume gates, E68 offline accuracy |No updates|20min cap| FAILED1838/1:0,1m01s; test fixture injectedfloat64 weights, no training or tracking result | Require99.9% precision/80% one-step minion coverage before paired PPO |

@@ -1,7 +1,8 @@
 # STATUS — 2026-10-01 19:22 UTC
 
 Current authorization: fresh budget; E68 narrow execution audit then bounded
-visible-history experiment. No broad PPO/LR sweeps. No project jobs running; unrelated1803/1736 untouched.
+visible-history experiment. No broad PPO/LR sweeps. E71b/1839 is the only submitted project job; startup watch in progress.
+Unrelated1803/1736 untouched.
 
 Narrow investigation COMPLETE (LEARN-AFK-24/25): E69 exact1201frame E68
 reproduction; E69b1836 COMPLETED/0:0; E701837 COMPLETED/0:0,6m28s. Tick versus
@@ -16,10 +17,10 @@ E69/E69b/E70 watchers stopped; inactive and registry clean verified.
 Next: opt-in visible HP/position history implementation/preflight, then matched
 E67 original-input control versus history input experiment if gates pass.
 Standalone tracking tests5passed; small policy migration/gradient test passed.
-Collector/reset/resume/GPU and real-trace tracking checks remain; E71 preflight
+Collector/reset/resume/GPU and real-trace tracking checks remain.
 E71 FAILED1838/1:0 in1m01s: test injectedfloat64 random kernel under pytestx64;
 fixture corrected tofloat32, production code unchanged.6GPU tests passed but
-collector gate remains pending. E71b retry prepared; no watcher armed for failed
+collector gate remains pending. E71b retry submitted as1839; no watcher armed for failed
 E71. E72b original-input control and E73b history arm prepared with unique
 configs and512update/1h caps each, not submitted. LEARN-AFK-26
 states hypothesis, matched budget and frozen success criteria. No training
