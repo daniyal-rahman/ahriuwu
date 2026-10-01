@@ -25,7 +25,7 @@ from lanerl_jax.train.actions import orders_from
 from lanerl_jax.train.trainer import _sample
 from lanerl_jax.train.scripted_policy import cell_for_offset
 from lanerl_jax.train.wave_scenario import prepare_scenario_bank, park_afk_opponent
-from lanerl_jax.train.replay_audit import serialize_replay_state
+from lanerl_jax.train.replay_audit import serialize_replay_state, restore_replay_state
 from lanerl_jax.train.run_manifest import file_sha256, git_provenance
 
 
@@ -50,9 +50,13 @@ def diagnostic_tick():
 
 def max_tree_error(a, b):
     errors = []
+    assert jax.tree.structure(a) == jax.tree.structure(b)
     for x, y in zip(jax.tree.leaves(a), jax.tree.leaves(b)):
+        if jax.dtypes.issubdtype(x.dtype, jax.dtypes.prng_key):
+            x, y = jax.random.key_data(x), jax.random.key_data(y)
         x, y = np.asarray(x), np.asarray(y)
         assert x.shape == y.shape and x.dtype == y.dtype
+        assert np.isfinite(x).all() and np.isfinite(y).all()
         errors.append(float(np.max(np.abs(x.astype(float)-y.astype(float)), initial=0)))
     return max(errors, default=0.)
 
@@ -136,7 +140,22 @@ def main():
         if error > 1e-5:
             raise AssertionError(f'E68 reproduction failed at {i}: {name}, error={error}')
 
-    for i in range(len(ref['t_ms'])):
+    if spec.get('restore_bases'):
+        saved = Path(spec['restore_bases'])
+        reproduction = json.loads((saved/'reproduction.json').read_text())
+        assert reproduction['checkpoint_sha256'] == spec['checkpoint_sha256']
+        assert max(reproduction['max_errors'].values()) == 0
+        assert reproduction['frames'] == len(ref['t_ms'])
+        for i in indices:
+            restored = restore_replay_state(dict(state=state, carry=carry, key=key),
+                                           (saved/f'base_{i}.msgpack').read_bytes())
+            restored = jax.tree.map(jnp.asarray, restored)
+            bases[i] = (restored['state'], restored['carry'], restored['key'])
+            for name in ('t_ms', 'x', 'y', 'hp', 'cs', 'aa_target', 'aa_cooldown', 'aa_windup'):
+                compare('restored_'+name, getattr(restored['state'], name), ref[name][i])
+        reproduction = dict(reproduction, reused_from=str(saved), restored_max_errors=dict(errors))
+        print('RESTORED E68 BASES', sorted(bases), flush=True)
+    for i in range(0 if spec.get('restore_bases') else len(ref['t_ms'])):
         for name in ref:
             if hasattr(state, name):
                 value = getattr(state, name)
@@ -153,8 +172,9 @@ def main():
         for name in ('q', 'w', 'e'): compare(name+'_active', getattr(state.buffs, name).active[:2], ref[name+'_active'][i])
         state = jax.block_until_ready(step(state, o))
         if (i+1) % 200 == 0: print('REPRODUCE', i+1, flush=True)
-    reproduction = dict(max_errors=errors, final_cs=int(state.cs[0]), final_deaths=int(state.deaths[0]),
-                        frames=len(ref['t_ms']), checkpoint_sha256=file_sha256(source))
+    if not spec.get('restore_bases'):
+        reproduction = dict(max_errors=errors, final_cs=int(state.cs[0]), final_deaths=int(state.deaths[0]),
+                            frames=len(ref['t_ms']), checkpoint_sha256=file_sha256(source))
     (out/'reproduction.json').write_text(json.dumps(reproduction, indent=2))
     print('E68 REPRODUCTION PASSED', json.dumps(reproduction), flush=True)
 

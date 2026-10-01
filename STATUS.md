@@ -1,23 +1,16 @@
-# STATUS — 2026-10-01 18:56 UTC
+# STATUS — 2026-10-01 18:57 UTC
 
-Dani renewed research authorization and supplied a fresh budget in this thread.
-The old thread budget boundary and15:37 compute window below are historical;
-current work follows the explicit narrow-first instruction, not broad PPO/LR sweeps.
+Current authorization: renewed research budget in this thread, narrow E68
+caster investigation first; no broad PPO/LR sweeps. The old budget/window below
+are historical. Feature experiment conditional on execution checks.
 
-Current: E69 submitted as Slurm1835 (CPU,30min cap), 12 canaries and launcher180s startup watch passed. Reproduce exact E68 seed7 game, then
-caster15/19 tick-level attack/damage/credit and earlier/delayed physical-click
-branches. E69 is the only project job; unrelated1803/1736 remain untouched.
-Hypothesis/budget/gates: experiments/E69_afk_tick_audit.json and LEARN-AFK-24.
-Bridge `lanerl-event-1835.service` active; result JSON verified updating, expiry 2026-10-01 19:53 UTC.
-Full E68 replay gate passed:1201frames, all checked state/action fields exactly
-match (maxerror0),12CS/0deaths and checkpointSHA verified. Instrumented tick
-branches now compiling/running; no branch conclusions yet. Rough remaining
-ETA5–20min, hard Slurm end19:19UTC. On bridge wake inspect result.json and
-unit15/unit19 baseline event timelines, verify instrument_max_error and decoded
-click counts, compare target-specific CS and total local CS (earlier targeting
-may sacrifice another minion). Review Q reset in unit19 baseline. Stop watcher
-and verify registry cleanup after active review.
-Feature experiment remains conditional on these execution checks.
+E69 Slurm1835 FAILED/1:0 at5m36s: full1201frame E68 reproduction exact on all
+checked state/action fields,12CS/0deaths, correct checkpointSHA. Probe then
+failed converting typed JAX PRNG key in all-state-leaf comparator. No valid
+branch conclusion. Comparator repaired; E69b prepared from saved baseline
+state/carry/key, same76branches and30min cap, not submitted yet.
+E69 watcher stopped after review; verify inactive/registry clean.
+No current project jobs. Unrelated1803/1736 untouched.
 
 ## Previous handoff (historical)
 

@@ -1,0 +1,64 @@
+{
+  "id": "E69b_afk_tick_audit",
+  "engine": "afk-tick-audit",
+  "backend": "cpu",
+  "slurm_time": "00:30:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack",
+  "checkpoint_sha256": "7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55",
+  "reference_trace": "/mnt/nfs/shared/E68_afk_current_video/low_team_1/trace.npz",
+  "cases": [
+    {
+      "target": 15,
+      "base_index": 770,
+      "decisions": 60,
+      "attack_indices": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16,
+        18,
+        20,
+        22,
+        24,
+        26,
+        28,
+        30,
+        32,
+        34,
+        36,
+        38
+      ]
+    },
+    {
+      "target": 19,
+      "base_index": 1100,
+      "decisions": 50,
+      "attack_indices": [
+        0,
+        2,
+        4,
+        6,
+        8,
+        10,
+        12,
+        14,
+        16,
+        18,
+        20,
+        22,
+        24,
+        26,
+        28,
+        30,
+        32
+      ]
+    }
+  ],
+  "question": "Retry E69 after typed PRNG-key comparison bug. Reuse E69 exact-reproduced saved states/carry/key; verify restored states and instrumented baseline against E68. Approved narrow investigation, no learning: reproduce E68 entire frozen seed7 game with matching state/actions before interpreting two target caster misses. Instrument existing tick return only; require ordinary-step all-state-leaf agreement. Branch at77s/110s, before prior attacks: natural baseline, directed earlier attacks, and near-self ground movement withholding followed by directed attacks,200ms start grid. Record60Hz swing/damage/source/death/CS. Hypothesis: misses reflect attack phase versus competing minion damage, not missing champion kill credit. Stop on replay/instrument mismatch,nonfinite or30min. A branch kill supports local timing opportunity only, not global policy improvement or C# parity.",
+  "restore_bases": "/mnt/nfs/shared/E69_afk_tick_audit"
+}
