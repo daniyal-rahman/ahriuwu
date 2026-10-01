@@ -1,4 +1,4 @@
-# STATUS — 2026-10-01 10:10 UTC
+# STATUS — 2026-10-01 10:49 UTC
 
 Current task: diagnose and improve JAX AFK farming, using frozen 120-second
 trials. No demonstrated solution yet. Dani authorizes bounded reversible
@@ -8,20 +8,24 @@ History and evidence: `docs/EXPERIMENTS.md`, `docs/JAX_FIDELITY_LEDGER.md`.
 
 ## Running
 
-**E65_afk_cs_focus — Slurm1832**, started10:09UTC,1-hour allocation.
-15 GPU canaries passed (367.68s), launcher180s healthy-start watch passed.
-Bridge lanerl-event-1832.service verified active/result updating; expiry2026-10-01T12:15:35.617291+00:00.
-Fullsize compilation/endpoint canary passed. Frozen u0 exactly9.5625CS/0deaths/0towerHP,
-reward7.3125407 entirely gold/CS; component accounting passed. Training active. Frozen u128:5.359375CS/.109375deaths/0towerHP/reward2.317232;
-no early farming rescue from removing HP/tower rewards.
-Run `/mnt/nfs/checkpoints/lanerl-jax/E65_afk_cs_focus/vec-s0-20261001-101545-cb09e527/`.
-E46 weights, fresh Adam, original v3 inputs, LR1e-4,4epochs,gamma.99,lambda.95;
-XP0, HP-loss reward0, tower reward0, death300gold. Same objective asE63 except
-removing the two secondary HP/tower terms together.512updates/8.389M decisions;
-frozen64-game evaluations at0/128/256/512. Success>=10.5625CS/<=.05deaths.
-This is an easier diagnostic, not a substitute for the intended full objective.
-Approximate completion10:45–10:50UTC; log `/mnt/nfs/shared/E65_afk_cs_focus-1832.out`.
-Future frozen evaluations now report reward components with an accounting check.
+**E67_afk_staggered — Slurm1833**, started10:47UTC,1-hour allocation.
+Launcher session14791 attached; standard and additional warmup GPUcanaries
+and180s startup watch pending. No bridge yet; arm after healthy-start watch.
+Same E63 full objective and PPO: E46/v3/freshAdam/LR1e-4/4epochs/gamma.99,
+XP0/HP100/personal tower900/death300. Only training phases differ.
+Fixed-policy warmup discards initial shortened episodes; then all training games
+and frozen evaluations retain120s length.512updates8.389M plus180224untrained
+warmup decisions. Success>=10.5625CS/<=.05deaths, sameinitial9.5625CS required.
+Expected finish11:25–11:35UTC. Log `/mnt/nfs/shared/E67_afk_staggered-1833.out`.
+
+E65 Slurm1832 COMPLETED/0:0 in38m01s. FrozenCS9.5625→5.359375→7.109375→3.546875;
+final deaths.015625/towerHP3.191875/reward1.953154. Reward terms:gold2.210945,
+death−.234375,position−.023416,XP0. RemovingHP/tower rewards did not rescue
+farming, even on the simplified objective; no extension. Checkpointstep8388608
+finite/latest identical;512metrics/nonfinite0; medianupdate3.3350s; sourceSHA
+and disabledHP/tower settings verified. Watcher stopped after active review;
+inactive/registry clean. Run
+`/mnt/nfs/checkpoints/lanerl-jax/E65_afk_cs_focus/vec-s0-20261001-101545-cb09e527/`.
 
 E66 Slurm1831 COMPLETED/0:0 in43m32s. Final512update frozen score:
 **9.34375CS,0deaths,75.222872personal towerHP,reward8.102879**.
@@ -50,15 +54,9 @@ Watcher1831 stopped after active review; inactive and registry clean.
   establish a root cause or a66x gameplay improvement.
 - E66 did not pass its predeclared farming threshold. Retain the opt-in code
   and checkpoints as evidence; do not describe higher total reward as a CS fix.
-- E65 now tests farming learnability without secondary reward tradeoffs. If it
-  improves, independently validate and restore the intended objective before
-  calling the full problem solved.
-- **E67_afk_staggered queued Slurm1833** behind1832; dry-run passed,
-  launcher session14791 awaits startup. GPU warmup/likelihood canary pending;
-  no bridge yet, arm after startup watch. Same E63 full reward/PPO settings;
-  discards shortened warmup episodes before learning and preserves full120s
-  training/evaluation games.512updates8.389M plus180224untrained warmup
-  decisions; estimated40min after start. LEARN-AFK-20 records evidence/limits.
+- E65 failed the simpler farming objective. Secondary reward conflict alone
+  is not a sufficient explanation; do not promote reward removal as a fix.
+- E67 now tests training batch phase diversity; LEARN-AFK-20.
 - E64 longer discount horizon remains prepared, dry-run passed, NOT submitted.
 
 Older E40 mirror training remains interrupted at5795updates; checkpoint
