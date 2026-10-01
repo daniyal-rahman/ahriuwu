@@ -25,24 +25,25 @@ verifier now reports1853 complete/canary passed. Added marker for future runs.
 No repeat tests for reporting-only fix. E74b had already passed tests but failed
 its Git-path writer; E74 precision discrepancy resolved at production precision.
 
-E75c control RUNNING Slurm1856.16startup checks passed; launcher reported
-healthy after180s. E76c feature
-prepared, not submitted.512updates8.389M each/1hSlurmcap. Both require
-initial64-game E67 retention. Primary final gate featureCS>=10.921875 and
-control+1, deaths<=.15. No learned improvement claimed. Earlier training IDs
-never submitted; history-only arm remains deferred.
-E75c/1856 is the only running project job; none queued. Rough20–25min
-remaining at20:36UTC, hard deadline21:16UTC. Initial frozen retention PASSED for all64games/bothteams:9.921875CS and
-.140625deaths. Control frozen update128:8.640625CS/.328125deaths (initial9.921875/.140625).
-Intermediate regression; continue predeclared final512 endpoint, no LR change.
-Bridge lanerl-event-1856.service active and result checked_at advancing
-1790886241.198212→1790886301.5603607; expiry2026-10-01T21:53:59UTC.
-User requested standing down and less polling. Automatic goal continuation paused;
-keep the already-armed completion bridge. Last verified1856 RUNNING at40m27s,
-update500/512; approximately1–3min to final evaluation/exit. No feature job submitted.
-On wake inspect State+ExitCode, logs/initial retention/final frozen results and
-checkpoints, then clean watcher/registry. E76c remains unsubmitted until
-control review. Stand down after this verified handoff. Unrelated jobs untouched.
+E75c unchanged-input control COMPLETED Slurm1856/0:0 in41m26s.
+All512updates finished,8.389M decisions, zero reported nonfinite losses;
+initial64-game/both-team E67 retention passed. Final frozen64-game mean:
+9.453125CS/.109375deaths, versus E67initial9.921875/.140625.
+Extra training alone did not improve CS (-.46875); fewer deaths. No feature
+conclusion yet. Final checkpoint SHA256:
+`cfe534cbeca916fde8f8329c30a44ef7814ed0faf905781c5d458fa7b9de44b6`
+at E75c_combat_feature_control/vec-s0-20261001-202437-fd95388e/ckpt_008388608.msgpack
+under /mnt/nfs/checkpoints/lanerl-jax/.
+
+E76c combat-feature arm prepared and dry-run passed, NOT submitted. Its planned
+512update/1h budget and final gate remain unchanged: CS>=10.921875 and
+control+1, deaths<=.15. History-only arm remains deferred. User requested less
+polling and standing down; automatic goal continuation is PAUSED. Completion
+review only performed on the authorized1856 notification; no new training.
+No running or queued project jobs; no active experiment ETA. Unrelated jobs
+untouched. Bridge1856 delivered accepted, service inactive and registry entry
+absent, cleanup verified. Next authorized study step would be the matched
+combat-feature arm when work resumes; it has no submitted job or start ETA.
 
 ## Narrow investigation completed
 
