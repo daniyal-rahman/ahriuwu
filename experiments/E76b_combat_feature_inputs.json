@@ -1,0 +1,46 @@
+{
+  "id": "E76b_combat_feature_inputs",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "LEARN-AFK-29: match the applicable Tencent documented combat feature package while retaining E67 GRU/PPO/rewards/action heads. Original v3 E75b vs combat-input E76b, same E67final SHA and freshAdam,512updates8.389M decisions each,55min worker/1hSlurm cap. Initial all64 frozen games must retain E67 final outcomes before learning. Final primary gate featureCS>=10.921875 AND >=control+1, deaths<=.15; independently confirm if promising. No best-intermediate selection, blind extensions or LR sweep. Zero-weight entity/self projections; current HP points reconstructed from existing rounded bar. Public stat/type/level information plus own availability/buffs/ranks, no enemy hidden clocks or actor target IDs; own readiness is a simulator prototype needing a validated video estimator. This is a bounded feature-alignment fine-tune, not full Tencent reproduction or a test of recurrent incapacity. Stop on nonfinite, preflight/initial-retention/contract failure or cap. Feature arm.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 300.0,
+  "stagger_initial": true,
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/evaluations.jsonl",
+    "update": 512
+  },
+  "preflight_gate": "/mnt/nfs/shared/E74b_combat_feature_preflight/result.json",
+  "init_sha256": "7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55",
+  "combat_features": true
+}

@@ -26,6 +26,10 @@ SELF_FEATURES = (
 )
 COMBAT_ENTITY_DIM = 16 + len(ENTITY_FEATURES)
 COMBAT_SELF_DIM = 16 + len(SELF_FEATURES)
+# Fountain profiles intentionally have zero attack period. Saturate the public
+# rate at 10/s instead of feeding infinity into the policy, including the AFK
+# team's otherwise unused forward pass. Ordinary lane units are below this cap.
+MAX_OBS_ATTACK_SPEED = 10.
 
 
 def append_combat_features(obs, state, me, frame, params):
@@ -43,7 +47,9 @@ not whether attacking any particular minion will work on the next sim tick.
     growth = growth_sum(state.level, jnp)
     p = lambda key: params[key][state.model]
     ad = p('attack_damage') + p('ad_per_level') * growth
-    speed = (1 + p('attack_speed_per_level') / 100 * growth) / p('attack_period')
+    speed = jnp.minimum(MAX_OBS_ATTACK_SPEED,
+        (1 + p('attack_speed_per_level') / 100 * growth)
+        / jnp.maximum(p('attack_period'), 1e-6))
     movement = p('move_speed') * jnp.where(
         state.buffs.q_haste.active, Q_HASTE_MULTIPLIER, 1.)
     s, n = to_lane(frame, state.x[u], state.y[u])

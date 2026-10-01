@@ -3,9 +3,18 @@ from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 from lanerl_jax.obs.combat_features import COMBAT_INTERFACE, COMBAT_ENTITY_DIM, COMBAT_SELF_DIM
 from lanerl_jax.train.policy import LanePolicy, merge_combat_params
 from lanerl_jax.train.tests.test_visible_history import small_config
+
+
+@pytest.fixture(autouse=True)
+def production_matmul_precision():
+    # The scenario worker explicitly uses highest, while CUDA's default may
+    # choose different reduced-precision kernels for sliced vs packed inputs.
+    with jax.default_matmul_precision('highest'):
+        yield
 
 
 def config():

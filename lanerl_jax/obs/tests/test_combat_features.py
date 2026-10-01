@@ -66,3 +66,15 @@ def test_combat_own_readiness_and_permutation():
                            slot_unit=old.slot_unit[perm])
     got = append_combat_features(shuffled,s,0,_lane_frames()[0],p)
     np.testing.assert_array_equal(got.entities, ready.entities[perm])
+
+
+def test_combat_zero_period_profile_has_finite_encoding():
+    s,p = scene()
+    # Fountain attack period is zero in the real profile table. Force the
+    # visible test unit's period to zero to test the observation boundary.
+    changed = dict(p)
+    changed['attack_period'] = p['attack_period'].at[s.model[2]].set(0.)
+    old,new = observe(s,changed,jnp.ones_like(s.alive))
+    row = int(np.flatnonzero(np.asarray(old.slot_unit)==2)[0])
+    assert np.isfinite(new.entities).all() and np.isfinite(new.self_vec).all()
+    assert float(new.entities[row,16+ENTITY_FEATURES.index('attack_speed')]) == 5.

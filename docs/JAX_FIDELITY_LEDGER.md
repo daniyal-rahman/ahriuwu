@@ -883,3 +883,5 @@ initial64-game frozen retention before learning. Final gate featureCS>=10.921875
 and >=control+1, deaths<=.15, then independent confirmation if promising.
 Failed bounded fine-tuning does not disprove the full reference or the features.
 No training submitted at this planning/implementation entry.
+
+| LEARN-AFK-29 E74 retry | E74/1848 FAILED1:0,1m48s. Four tests passed including nonzero actor/learner/reset/update; migration error~1.97e-5 exceeded1e-6. Test used default CUDA matrix precision; worker sets highest. Retry uses production precision, same tolerance. Separately, fountain attack_period0 requires a finite observation: saturate AS at10/s and add zero-period regression. | E74b unique retry; E75b/E76b prepared with new gate. Old training IDs never launched. No training or passed preflight claim. E74 ended before canary marker, no watcher. Precision explanation remains a hypothesis pending retry. |
