@@ -100,4 +100,4 @@ their jobs are outside this cleanup.
 
 LIVE (opt-in, LEARN-AFK-33): `VecConfig.cs_only` and wave-scenario spec
 `cs_only` select literal per-champion deltaCS reward, bypassing every shaping/gold
-term. Frozen evaluation asserts episode reward=CS. E79 (superseding unsubmitted E78) retains E67 inputs/actions.
+term. Frozen evaluation asserts episode reward=CS. E78 retains E67 inputs/actions/LR; E79 larger-LR attempt cancelled.

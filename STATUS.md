@@ -1,8 +1,8 @@
 # STATUS — 2026-10-01 CS-only continuation
 
 Current user task: run the existing policy with CS reward only for roughly40min,
-while discussing better diagnostic options than requiring human play. E79 prepared (supersedes unsubmitted E78):
-E67 parameters, fresh optimizer, unchanged v3/GRU/actions, LR3e-4 (3x),512updates/8.389M
+while discussing better diagnostic options than requiring human play. E78 selected after LR clarification:
+E67 parameters, fresh optimizer, unchanged v3/GRU/actions/PPO, LR1e-4,512updates/8.389M
 learner decisions; literal+1/CS, no other environment reward. Frozen64games at
 0/128/256/512; initial physical behavior retained, reward intentionally changed.
 Final primary gate CS>=10.921875; deaths/tower damage reported as outcomes.
@@ -12,9 +12,16 @@ ideation alone. Recommendations recorded in LEARN-AFK-33.
 
 ## Jobs
 
-**E79_afk_cs_only_lr3e4 PREPARED, not submitted yet.** Expected runtime~40min;
-55minworker/1hSlurm cap. Normal dry-run, canary/startup watch and event bridge
-required. No RL job currently running or queued.
+**E78_afk_cs_only RUNNING, Slurm2161;17canaries and180s launcher watch passed.**
+LR1e-4,512updates/8.389M,~40min,55minworker/1hSlurm cap. Dry-run passed; sourcecf0ff0b.
+Completion bridge lanerl-event-2161.service armed; expires2026-10-02T00:18:41.052256+00:00.
+Service active, registry entry present, result timestamp advancement verified. Rough completion22:52UTC;
+Slurm hard limit23:10UTC. Full-worker compilation/initial frozen retention pending;
+no learned result yet.
+E79/2160 CANCELLED/0:0 after46s during canaries; zero training, no bridge.
+Dani clarified the objective is sensible policy movement, not arbitrary LR increase.
+Recent E75c movement was stable; KL/clipping alone do not prove excessive steps;
+older3e-5arm performed worse. E78 retains established1e-4 and isolates CS reward.
 E77_combat_mask_preflight / Slurm1857 COMPLETED0:0 in4m27s, ended21:28:35UTC.
 Existing log:19GPU tests passed, CANARY PASSED and PROFILE COMPLETE; result.json
 passed for matching job/spec/sourceb63227e5. This resolves the previous interrupted
@@ -72,9 +79,10 @@ level with LuBan; no perfect-CS benchmark. Inputs725 and six action heads differ
 from ours. Full input semantics and cross-game transfer benefit remain unverified.
 Use it as an implementation reference; direct weight transfer is not a quick fix.
 
-Human play is currently inconvenient; defer client work. Prefer evaluating the
-existing scripted teacher on matched AFK starts, then a teacher/short last-hit
-curriculum diagnostic if needed after the CS-only result. Existing older BC/DAgger
+Human play is currently inconvenient; defer client work. E58b already showed
+scripted13.5CS versus policies~9–10 on its diagnostic cohort. Prefer a short
+randomized last-hit curriculum or reuse existing scripted BC/DAgger if needed
+after E78; avoid repeating a broad teacher audit. These remain discussion options. Existing older BC/DAgger
 success makes this plausible; those longer mirror-task scores are not comparable
 to current120s AFK. LEARN-AFK-32 records sample-budget estimates and hypotheses,
 including short reward horizon/personal tower credit for pushing. No experiment
