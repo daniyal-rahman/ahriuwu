@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E55b_afk_update_branches` |10-01| GPU diagnostic | E55 corrected production learn invocation | Same checkpoints |6 trajectory updates,8 branches,45min cap| Slurm1821 healthy;6canaries/180s watch;2h bridge armed | Same invariant; no exported weights |
+| `E55b_afk_update_branches` |10-01| GPU diagnostic | E55 corrected production learn invocation | Same checkpoints |6 trajectory updates,8 branches,45min cap| COMPLETE1821 exit0,4m04s; standard params exact; watcher cleaned | One epoch improves mean recorded hit-button likelihood both batches; no frozen CS verdict or exported weights |
 | `E55_afk_update_branches` |10-01| GPU diagnostic | Matched update size/entropy branches, headwise probabilities | E46fresh/E51restored |6 rollout updates +8 isolated branches,45min cap| FAILED1820: reproduction delta5.5e-5; diagnostic invalid | Standard branch must reproduce production; no exported policy |
 | `E54_afk_credit_audit` |10-01| GPU isolated diagnostic | CS→GAE→PPO probability and retention | E46fresh + E51runner copies |16updates each,no exported weights| Slurm1815 COMPLETED/0:0,5m51s;6canaries/180s watch passed | GAE/likelihood checks pass; positive CS credit81.9/89.3%, probability increases38.0/53.0%; diagnostic only, no frozen score/export |
 | `E52_afk_entropy` |09-30| JAX PPO AFK | LR1e-4; entropy.01 vs E51 .001 | Same E46final |128updates/2.097M| COMPLETE1813 exit0,14m24s; final2.94CS/0deaths/0towerHP, reject extension | Frozen CS/deaths/personal tower |
