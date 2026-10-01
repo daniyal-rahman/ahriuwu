@@ -815,3 +815,27 @@ Reference-contract draft, still documentation only:
   Record intentional budget/task differences. Only after a working baseline
   should component removals/additions be interpreted as ablations. No new run
   budget or success claim is being smuggled into this documentation audit.
+
+
+### LEARN-AFK-28 — official Tencent implementation reference found
+
+Read-only source audit, no new code/run. Official
+[hok_env repository](https://github.com/tencent-ailab/hok_env) exposes a later
+HoK1v1 baseline; inspected commit `c6e0029a5e4b6e037a049804fdbe23ac74484311`.
+It is a distinct versioned implementation reference, not proof of the exact
+AAAI2020 professional Tencent Solo model. This improves reproducibility options
+without inventing the missing2020 details.
+
+| Evidence | Finding | Consequence for deviation inventory |
+|---|---|---|
+| [Official environment observation table](https://aiarena.tencent.com/hok/doc/environments/index.html#observations) | Documented creep18-vector contains HP, HP fraction,maxHP,attack power,kill income,positions/distances,type/alive/team and buff mark. Hero features include normal-attack availability and richer combat/skill state; public features include nearest enemy bullet position/distance. | A concrete Tencent1v1 feature reference exists beyond the2020paper. E67 omits several documented fields. This table does not establish an explicit HP-history stack, creep-projectile ETA or universal AA-windup field. Video-compatible mapping still required; do not copy hidden opponent cooldowns just because an API exposes them. |
+| [Pinned baseline config](https://github.com/tencent-ailab/hok_env/blob/c6e0029a5e4b6e037a049804fdbe23ac74484311/aiarena/1v1/common/config.py) |725observation scalars,512LSTM,16steps,targetembedding32,LR1e-4,gamma.995,lambda.95,entropy beta.025; six action components. | Different from2020paper's1600vectors/2image channels/1024LSTM/gamma.997. Our512memory size is not smaller than this later baseline; GRU vs LSTM and trunk still differ. Do not conflate these baselines. |
+| [Pinned PyTorch network/loss](https://github.com/tencent-ailab/hok_env/blob/c6e0029a5e4b6e037a049804fdbe23ac74484311/aiarena/1v1/common/algorithm_torch.py) | Type-specific MLP processing,512 concat projection,512LSTM,32dtarget attention,valueMLP512→64→1. Per-component weighted surrogate; ratio capped3 with PPO.2. Value MSE contributes through shared LSTM (no detach on this path), unlike E67; no value clipping in this loss. | Resolves the critic-gradient question for this specific official implementation, not the unspecified2020implementation. Reveals value clipping and value-head depth differences too. Network/learner code now inspectable; no port or improvement claim. |
+| Documentation/config version boundary | Official web table ends at491features (128perhero); pinned code expects725 (235perhero+14mainhero+25global+minion/turret blocks). Creep blocks are18in both, but this does not establish every field's version identity. | Must select a consistent code/schema version before claiming reproduction. A live docs table plus current config cannot silently form one interface. Primary reference selection remains open; training deferred. |
+
+Revalidated E69 reproduction.json:1201frames, all recorded comparisons0,
+checkpointSHA matches7f12479...,12CS/0deaths. Re-read E70 representative NPZs:
+all saved fields before intervention array-identical over132ticks(unit15) and
+150ticks(unit19); branchJSON localCS1→2 and0→1, killer0 on delayed kills.
+Actual order releases80.8200625s and112.93009375s match LEARN-AFK-25.
+This strengthens artifact traceability only, not neural-cause attribution.

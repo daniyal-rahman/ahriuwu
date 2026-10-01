@@ -20,6 +20,12 @@ and working priorities. Follow-up source check corrects Tencent action-label
 independence and adds component-wise PPO vs our joint-ratio difference, known
 LR/lambda agreements, normalization gap and a documentation-only reference
 contract draft. Primary-reference preference asked; no new implementation/run.
+LEARN-AFK-28 adds an official later HoK1v1 code reference pinned to
+c6e0029a5e4b6e037a049804fdbe23ac74484311. It supplies inspectable network/loss
+and a richer documented feature list, but differs from2020Solo and its live
+docs491-feature schema differs from current725-feature code. Resolve versions
+before implementation; no reference reproduction claimed. E69/E70 artifact
+revalidation confirms existing exact-match/local-CS evidence.
 Feature coverage remains the leading hypothesis, not
 an established cause; global GRU can learn history. No GRU incapacity demonstrated.
 
