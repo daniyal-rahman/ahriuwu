@@ -102,6 +102,11 @@ def make_learner(policy, ppo, *, anneal_steps: int = 0, prior_params=None):
                 info['entropy_' + name] = -(marginal * jnp.log(jnp.maximum(marginal, 1e-30))).sum(-1).mean()
             if getattr(logits, 'proposal_mass', None) is not None:
                 info['proposal_mass_mean'] = logits.proposal_mass.mean()
+                from .click_proposals import proposal_cells
+                available = proposal_cells(batch['entities'],batch['mask'],
+                    logits.screen_x.shape[-1],logits.screen_y.shape[-1])[1].any(-1)
+                info['proposal_available_fraction'] = available.mean()
+                info['proposal_mass_when_available'] = logits.proposal_mass.sum()/jnp.maximum(available.sum(),1)
         if prior_params is not None and cfg_ppo.kl_prior_coef > 0:
             klp = kl_to_prior(params, batch)
             total = total + cfg_ppo.kl_prior_coef * klp
