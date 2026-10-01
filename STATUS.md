@@ -19,17 +19,19 @@ feature package; current GRU/PPO/reward/action heads retained. v6 implementation
 and tests prepared, no learned result. Field provenance, video-readiness gap and
 remaining reference differences are explicit. No full Tencent reproduction claim.
 
-E74b/1850 FAILED1:0,4m22s after all13GPUtests passed; artifact writer Git
-path was unavailable on desktop. E74c submitted as Slurm1853, startup watch in progress, with launcher-metadata writer
-fix only; feature code unchanged. Earlier E74 migration precision failure is
-resolved at production highest precision, same tolerance. Fountain AS finite
-regression passes. No learned result yet.
-E75ccontrol/E76cfeature prepared,512updates8.389M each/1hSlurmcap. Initial64-game
-E67 retention and passed E74c required. Primary final gate featureCS>=10.921875
-and control+1, deaths<=.15. Earlier control/feature configs never submitted.
-E74c/1853 is the only submitted project job, ETA~5min after start.
-No training submitted yet. E74b was actively
-reviewed at failure, so no watcher was armed. Unrelated jobs untouched.
+E74c/1853 COMPLETED0:0,4m21s:13GPUtests passed and result artifact verified.
+Launcher missing-marker false failure repaired; its read-only accounting
+verifier now reports1853 complete/canary passed. Added marker for future runs.
+No repeat tests for reporting-only fix. E74b had already passed tests but failed
+its Git-path writer; E74 precision discrepancy resolved at production precision.
+
+E75ccontrol/E76cfeature prepared,512updates8.389M each/1hSlurmcap. Both require
+initial64-game E67 retention. Primary final gate featureCS>=10.921875 and
+control+1, deaths<=.15. No learned improvement claimed. Earlier training IDs
+never submitted; history-only arm remains deferred.
+No project jobs running/queued; no training-result ETA. Preflight completed
+under active review, no watcher needed. Next: submit control, verify startup,
+arm completion bridge, stand down. Unrelated jobs untouched.
 
 ## Narrow investigation completed
 

@@ -6,6 +6,25 @@ import subprocess
 import time
 
 
+def verify_completed_job(jid, log_text):
+    """Accept terminal success from accounting when a worker lacks a marker.
+
+    A canary string alone is insufficient: TIMEOUT may also have exit code0.
+    Kept callable for read-only recovery of an already-finished startup watch.
+    """
+    if 'CANARY PASSED' not in log_text or 'Traceback' in log_text:
+        return False
+    rows = subprocess.check_output(
+        ['sacct', '-n', '-P', '-j', str(jid), '--format=JobIDRaw,State,ExitCode'],
+        text=True).splitlines()
+    for line in rows:
+        fields = line.split('|')
+        if fields[:3] == [str(jid), 'COMPLETED', '0:0']:
+            print(f'{jid} profile complete; canary passed; accounting COMPLETED/0:0', flush=True)
+            return True
+    return False
+
+
 def launch(spec, dry, resume=None):
     root = Path('/srv/nfs/projects/ahriuwu-lanerl-jax')
     out = root / 'lanerl_jax/runs' / spec['id']
@@ -69,6 +88,8 @@ def launch(spec, dry, resume=None):
         state = subprocess.check_output(['squeue', '-h', '-j', jid, '-o', '%T'], text=True).strip()
         text = log.read_text(errors='replace') if log.exists() else ''
         complete = 'PROFILE COMPLETE' in text
+        if not state and not complete and verify_completed_job(jid, text):
+            return
         if 'Traceback' in text or (not state and not complete):
             raise SystemExit('PROFILE FAILED: ' + text[-2000:])
         if complete:

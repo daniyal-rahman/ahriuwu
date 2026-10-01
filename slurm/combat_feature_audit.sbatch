@@ -20,4 +20,5 @@ result = dict(passed=True, spec=spec, job=os.environ['SLURM_JOB_ID'],
               gate='GPU feature invariants, migration/gradient, actor/learner/reset/update and v3 regression tests')
 (out/'result.json').write_text(json.dumps(result,indent=2))
 print(json.dumps(result),flush=True)
+print('PROFILE COMPLETE',flush=True)
 PY
