@@ -1,8 +1,9 @@
 # Experiments (one row per run; append, never rewrite a verdict)
 
-Metric for the current gate: mean CS per frozen-policy 10-minute episode, C#
-server, mirror self-play, over seeds. Training-time CS (changing weights) is
-labelled `train`.
+Current diagnostic: frozen-policy 120-second JAX AFK games, with CS, deaths
+and personal tower damage reported separately. Longer-term transfer gate:
+>30 CS per frozen-policy 10-minute C# mirror episode over seeds. Training-time
+CS (changing weights) is labelled `train`; diagnostic scores are not transfer results.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
