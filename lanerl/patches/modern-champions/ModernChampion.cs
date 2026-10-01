@@ -21,7 +21,7 @@ namespace LeagueSandbox.GameServer.Lanerl
         readonly ObjAIBase owner;
         readonly Random rng = new Random(2619);
         public static readonly int[] JaxSkillOrder = {2,0,1,1,1,3,1,2,1,2,3,2,2,0,0,3,0,0};
-        public object Snapshot => new {patch="26.19", id=garen?86:24, mana=owner.Stats.CurrentMana, maxMana=owner.Stats.ManaPoints.Total, q,haste,w,shield,shieldTime,e,eElapsed,spinTicks,spinCount,dodges,passiveStacks,passiveTime,r,rArmor,rHits,jumpTime,kills};
+        public object Snapshot => new {schema=2, castCounts, patch="26.19", stunned=owner.Status.HasFlag(StatusFlags.Stunned), silenced=owner.Status.HasFlag(StatusFlags.Silenced), casting=owner.GetCastSpell()!=null, rPending, id=garen?86:24, mana=owner.Stats.CurrentMana, maxMana=owner.Stats.ManaPoints.Total, q,haste,w,shield,shieldTime,e,eElapsed,spinTicks,spinCount,dodges,passiveStacks,passiveTime,r,rArmor,rHits,jumpTime,kills};
         public void Detach() {owner.RemoveStatModifier(modifier);}
         public float Tenacity => garen && shieldTime>0?.6f:0;
         readonly bool garen;
@@ -32,6 +32,7 @@ namespace LeagueSandbox.GameServer.Lanerl
         int spinTicks, spinCount, dodges, rHits, kills;
         AttackableUnit jumpTarget;
         float jumpTime, rPending;
+        readonly int[] castCounts = new int[4];
         public static float GarenRegenPercent(int lv) => 1.5f+.2f*Math.Min(lv-1,5)+.8f*Math.Clamp(lv-6,0,7)+.4f*Math.Max(lv-13,0);
         public bool Empowered => garen ? q>0 : w>0;
         bool dead;
@@ -61,6 +62,7 @@ namespace LeagueSandbox.GameServer.Lanerl
         }
         public void Cast(int slot, AttackableUnit target)
         {
+            castCounts[slot]++;
             owner.Spells[(short)slot].SetCooldown(CD(slot),true);
             if(garen)
             {

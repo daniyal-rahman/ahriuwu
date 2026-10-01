@@ -32,6 +32,7 @@ from ..sim.state import Team
 from ..sim.step import env_step
 from .actions import orders_from
 from .policy import PolicyConfig
+from . import champion_profile
 from .ppo import PPOConfig
 from .reward import lane_corridor_distance
 from .server_train import WAVE_START_MS, WAVE_START_POS, RED_WAVE_START_POS, farm_reward, start_ms_for
@@ -69,7 +70,8 @@ class JaxFarmCollector:
     ``states`` is privileged diagnostic state and is never an actor input.
     """
     def __init__(self, n, out, episode_s=600., start_near_wave=False, step_ticks=2,
-                 *, seed=0, sim_config=None, batch_mode="auto", teams=(0,), drop_unwalkable_moves=False):
+                 *, seed=0, sim_config=None, batch_mode="auto", teams=(0,), drop_unwalkable_moves=False, modern_champions=None):
+        self.modern_champions = champion_profile.names(modern_champions)
         self.drop_unwalkable_moves = bool(drop_unwalkable_moves)
         if n <= 0 or episode_s <= 0 or step_ticks <= 0 or int(step_ticks) != step_ticks:
             raise ValueError('n, episode_s and integer step_ticks must be positive')
@@ -92,6 +94,9 @@ class JaxFarmCollector:
         self.seed, self.start_near_wave = int(seed), bool(start_near_wave)
         self.sim = (SimConfig.training() if sim_config is None else sim_config).replace(
             step_ticks=int(step_ticks))
+        if self.modern_champions:
+            from ..sim.modern import make_params
+            self.sim = self.sim.replace(params=make_params(self.modern_champions))
         if self.sim.vision is None or self.sim.lane_path is None:
             raise ValueError('farming requires map visibility and top-lane waves')
         self.episodes = [0] * self.n
@@ -192,7 +197,11 @@ class JaxFarmCollector:
 
     def _fresh(self, i):
         # Separate deterministic streams; episode reset preserves all base stats.
-        return init_lane(seed=self.seed + i + self.n_envs * self.episodes[i * self.T])
+        seed = self.seed + i + self.n_envs * self.episodes[i * self.T]
+        if self.modern_champions:
+            from ..sim.modern import init_lane as modern_init
+            return modern_init(self.modern_champions, seed=seed)
+        return init_lane(seed=seed)
 
     def _rank_time(self, previous_ranks):
         """Account for rank-command time only in environments with pending ranks.
@@ -290,6 +299,7 @@ class JaxFarmCollector:
                 'episode_s': self.episode_s, 'start_near_wave': self.start_near_wave,
                 'platform': self.platform, 'batch_mode': self.batch_mode,
                 'ground_click_normalization': GROUND_CLICK_NORMALIZATION,
+                'modern_champions': self.modern_champions,
                 'sim': self.sim.describe(), 'sim_fingerprint': self.sim.fingerprint(),
                 'compilation_cache': jax.config.jax_compilation_cache_dir,
                 'action_interface': 'screen-click-v2', 'observation_interface': 'viewport-structured-v3',

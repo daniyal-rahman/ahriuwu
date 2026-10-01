@@ -199,9 +199,15 @@ class StateRebuilder:
       showed the pre-passive resists.
     """
 
-    def __init__(self):
-        self.base = init_lane()
-        self.params = lane_params()
+    def __init__(self, modern_champions=None):
+        self.modern_champions = tuple(modern_champions) if modern_champions else None
+        if self.modern_champions:
+            from ..sim import modern
+            self.base = modern.init_lane(self.modern_champions)
+            self.params = modern.make_params(self.modern_champions)
+        else:
+            self.base = init_lane()
+            self.params = lane_params()
         self._turret_match = _turret_slot_map(self.base)
         self._turrets: dict[int, int] = {}
         self._minion: dict[int, int] = {}
@@ -217,6 +223,7 @@ class StateRebuilder:
         # sight; per OBSERVER row, the frame time of each witnessed enemy cast
         # (NaN = never); the previous frame's witness matrix and time.
         self._cd_prev: list = [None, None]
+        self._modern_cast_prev = [None, None]
         self._cast_t = np.full((2, 4), np.nan)
         self._prev_witness: Optional[np.ndarray] = None
         self._prev_t: Optional[float] = None
@@ -271,7 +278,7 @@ class StateRebuilder:
             for s in range(4):
                 if cd[s] <= prev[s] + _RISE_EPS_MS:
                     continue
-                if s == 2 and cd[s] > E_CANCEL_ARMED_MAX_MS:
+                if not self.modern_champions and s == 2 and cd[s] > E_CANCEL_ARMED_MAX_MS:
                     continue                   # spin END, not a cast
                 for o in range(2):
                     if judge[o, c]:
@@ -283,8 +290,11 @@ class StateRebuilder:
 
     def rebuild(self, frame: dict):
         """Returns `(state, netid_of_unit)`; `netid_of_unit[i]` is 0 if empty."""
-        if any(u.get("modern") for u in frame.get("u", []) if u.get("k") == "Champion"):
+        if not self.modern_champions and any(u.get("modern") for u in frame.get("u", []) if u.get("k") == "Champion"):
             raise ValueError("Modern champion wire state requires a modern collector; legacy StateRebuilder assumes Garen and must not silently rebuild Jax as Garen")
+        if self.modern_champions:
+            from .modern_wire import validate
+            validate(frame, self.modern_champions)
         validate_champion_life(frame)
         n = self.n_units
         x = np.zeros(n, np.float32)
@@ -409,7 +419,27 @@ class StateRebuilder:
                     "vb" if observer == 0 else "vr", False)
                 witness[observer, caster] = (observer != caster and alive[observer]
                     and alive[caster] and visible and bool(target_on_screen(ds, dn)))
-        observed = self._observed_casts(t_now, cds, witness)
+        if self.modern_champions:
+            # Event counters distinguish cast from delayed cooldown start
+            # (Jax W consumption and either champion's E expiry).
+            judge = self._prev_witness if self._prev_witness is not None else witness
+            for u in units:
+                if u.get("k") != "Champion":
+                    continue
+                c = int(WIRE_TEAM[int(u["tm"])])
+                counts = np.asarray(u["modern"]["castCounts"], np.int64)
+                prev = self._modern_cast_prev[c]
+                if prev is not None:
+                    for o in range(2):
+                        if judge[o, c]:
+                            self._cast_t[o, counts > prev] = t_now
+                self._modern_cast_prev[c] = counts
+            self._prev_witness = witness
+            self._prev_t = t_now
+            observed = np.where(np.isnan(self._cast_t), -1.,
+                                np.maximum(0., t_now - np.nan_to_num(self._cast_t)))
+        else:
+            observed = self._observed_casts(t_now, cds, witness)
 
         # Host numpy leaves, in the base state's dtypes. Twenty eager
         # `jnp.asarray` dispatches per frame were most of a decision's wall
@@ -432,6 +462,9 @@ class StateRebuilder:
             observed_enemy_cast_ms=np.asarray(
                 observed, b.observed_enemy_cast_ms.dtype),
             t_ms=np.float32(t_now))
+        if self.modern_champions:
+            from .modern_wire import reconstruct
+            state = reconstruct(state, frame, self.modern_champions)
         return state, netid
 
     @property
@@ -586,7 +619,11 @@ def pending_rank_up(champ: Mapping) -> Optional[int]:
     # collapsed the moment its champions reached level 9.
     if sum(have) >= lvl:
         return None
-    want = RANKS_BY_LEVEL[min(lvl, len(RANKS_BY_LEVEL) - 1)]
+    if champ.get("modern", {}).get("id") == 24:
+        order = (2,0,1,1,1,3,1,2,1,2,3,2,2,0,0,3,0,0)
+        want = [order[:min(lvl,18)].count(slot) for slot in range(4)]
+    else:
+        want = RANKS_BY_LEVEL[min(lvl, len(RANKS_BY_LEVEL) - 1)]
     for slot in range(4):
         if have[slot] < want[slot]:
             return slot

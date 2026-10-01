@@ -1,5 +1,5 @@
 {
-  "_comment": "The config EVERY training and eval server launches. Champion capability here MUST equal lanerl_bot/configs/garen1v1_bot.json -- runes, talents and summoners -- or a scripted-anchor number is not comparable to an agent number. Both players must also be identical to each other: the observation is side-canonicalised, so the policy cannot see which side it is on. Guarded by lanerl_rl/tests/test_configs_agree.py.",
+  "_comment": "Explicit patch 26.19 bare-champion profile; no runes/talents or autobuy. Requires isolated modern server.",
   "players": [
     {
       "playerId": 1,

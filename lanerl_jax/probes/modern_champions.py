@@ -99,6 +99,54 @@ def run(server,out):
     result=json.loads((out/'result.json').read_text());result['passed']=True;result['combat_selftest_passed']=True
     (out/'result.json').write_text(json.dumps(result,indent=2))
     print('MODERN COMBAT SELFTEST PASSED',flush=True)
+    collector_smoke(server, out)
     print('MODERN VALIDATION COMPLETE',flush=True)
+
+def collector_smoke(server, out):
+    """Real policy -> collector -> wire -> observation, resets and workers."""
+    import jax
+    import numpy as np
+    from flax.serialization import to_bytes
+    from lanerl_jax.train.server_train import (ServerCollector, MultiProcessCollector,
+        evaluate_frozen, load_checkpoint_policy)
+    from lanerl_jax.train.policy import LanePolicy, PolicyConfig
+    from lanerl_jax.train.run_manifest import RunDir
+    results = []
+    # Small networks exercise the normal forward/sampling/checkpoint contract;
+    # this is an integration check, not a policy-quality evaluation.
+    for workers, pair, core in ((1, ('Garen','Jax'), 'mlp'), (2, ('Jax','Garen'), 'gru')):
+        cfg = PolicyConfig(self_dim=28, core=core, d_model=16, n_heads=2,
+                           n_layers=1, ffn_dim=32, ctx_dim=16, core_dim=16,
+                           mlp_hidden=32, mlp_layers=1)
+        run = RunDir(out/'collector', f'workers{workers}', {
+            'train': {'policy': cfg._asdict()}, 'collector': {'modern_champions': pair}})
+        kwargs = dict(n=workers, out=run.path, port_base=27500+200*workers,
+                      episode_s=4, step_ticks=6, server_dir=Path(server), teams=(0,1),
+                      modern_champions=pair)
+        collector = (ServerCollector(**kwargs) if workers==1 else
+                     MultiProcessCollector(**kwargs, workers=workers))
+        try:
+            obs,_ = collector.observe()
+            assert obs.self_vec.shape==(workers*2,28)
+            expected = [[1,0,0,1],[0,1,1,0]] if pair[0]=='Garen' else [[0,1,1,0],[1,0,0,1]]
+            np.testing.assert_array_equal(np.asarray(obs.self_vec)[:,16:20],expected*workers)
+            policy = LanePolicy(cfg)
+            args=(obs.entities,obs.entity_pad_mask,obs.self_vec,obs.global_vec)
+            if core=='gru':args += (policy.initial_carry((workers*2,)),)
+            params=policy.init(jax.random.key(7),*args)
+            checkpoint=run.path/'probe.msgpack';checkpoint.write_bytes(to_bytes({'params':params}))
+            loaded, restored=load_checkpoint_policy(checkpoint)
+            for a,b in zip(jax.tree.leaves(params),jax.tree.leaves(restored)):
+                np.testing.assert_array_equal(a,b)
+            episodes=evaluate_frozen(collector,loaded,restored,run,seed=7,
+                                     episodes_per_env=2,diag_steps=False)
+            assert len(episodes)==workers*4
+            assert all(e==2 for e in collector.episodes)
+            results.append(dict(workers=workers,pair=pair,core=core,episodes=len(episodes)))
+        finally:
+            collector.close()
+    (out/'collector-result.json').write_text(json.dumps(results,indent=2))
+    print('MODERN COLLECTOR PASSED: MLP/GRU, checkpoint reload, both sides, workers and resets',flush=True)
+
 
 if __name__=='__main__':run(sys.argv[1],sys.argv[2])

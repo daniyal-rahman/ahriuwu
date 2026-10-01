@@ -44,3 +44,10 @@ The isolated executable is `bin/DeadProbe/GameServerConsole.dll`, with its own
 `Content`. Modern config removes historical runes/masteries; automatic item
 purchases must be disabled (`LANERL_AUTOBUY=0`) for this bare-champion contract.
 Shared `ClickV3` and existing runs remain historical.
+
+CHAMP-004 adds wire schema2: own stun/silence/cast state, Jax R cast timer,
+and accepted-cast counters. The collector uses counters for witnessed enemy
+cast memory; W consumption/E expiry cooldown edges are not new casts.
+Use `server_train --modern-champions Garen,Jax --server-dir <isolated DeadProbe>`
+with `LANERL_VENDOR_ROOT` pointing at the vendor runtime. The collector writes its
+own pair-specific config and validates identities/patch/schema before setup.

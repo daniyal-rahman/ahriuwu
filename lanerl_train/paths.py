@@ -104,7 +104,8 @@ def projects_root() -> Path:
 
 
 def vendor_root() -> Path:
-    return projects_root() / "lanerl-vendor"
+    override = os.environ.get("LANERL_VENDOR_ROOT")
+    return Path(override).expanduser().resolve() if override else projects_root() / "lanerl-vendor"
 
 
 def server_dir() -> Path:

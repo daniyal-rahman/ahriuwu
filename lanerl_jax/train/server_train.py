@@ -25,6 +25,7 @@ from lanerl_rl.projection import (screen_to_world_centred, MINIMAP_X_MIN,
 from lanerl_train.ports import PortAllocator
 from lanerl_train import paths as server_paths
 from lanerl_train.vec import ServerLaunchSpec, VecLaneEnv
+from . import champion_profile
 from ..obs.builder import build_observation
 from ..parity.policy_driver import (StateRebuilder, _lane_frames,
                                     wire_visibility, pending_rank_up,
@@ -455,7 +456,9 @@ class ServerCollector:
     per team and one potential call per step, not one dispatch per env.
     """
     def __init__(self, n, out, port_base, episode_s, start_near_wave=False, step_ticks=2,
-                 server_dir=None, teams=(0,)):
+                 server_dir=None, teams=(0,), modern_champions=None):
+        self.modern_champions = champion_profile.names(modern_champions)
+        self.game_config = champion_profile.game_config(self.modern_champions, server_dir, out)
         self.n_envs, self.out, self.episode_s = n, Path(out), episode_s
         self.teams = tuple(int(t) for t in teams)
         self.T = len(self.teams)
@@ -468,11 +471,11 @@ class ServerCollector:
         self._port_turn = [0] * n
         self.env = VecLaneEnv(n, spec=ServerLaunchSpec(
             bot_teams="none", step_ticks=step_ticks, toponly=True,
-            server_dir=server_dir,
+            server_dir=server_dir, config_path=self.game_config,
             extra_env={"LANERL_AUTOBUY": "0"}),
             log_dir=self.out / "server", ports=[self._port_pool[4 * i] for i in range(n)],
             auto_restart=False)
-        self.rebuilders = [StateRebuilder() for _ in range(n)]
+        self.rebuilders = [StateRebuilder(self.modern_champions) for _ in range(n)]
         self.detectors = [CastFreezeDetector() for _ in range(n)]
         self.episodes = [0] * self.n
         self.initial_stats = [None] * self.n
@@ -495,6 +498,7 @@ class ServerCollector:
                     raise RuntimeError(f"server {i} produced no first observation (port {self.env.ports[i]}): "
                                        f"see {self.out}/server/instance{i:03d}.log; a port collision exits the server with 97")
                 validate_champion_life(raw)
+                self.rebuilders[i].rebuild(raw)  # verify champion/schema contract before setup
                 for t in self.teams:
                     wire_own_hud(raw, t)  # fail before setup if the binary lacks required HUD fields
             self._rank()
@@ -672,7 +676,7 @@ class ServerCollector:
                 h.close()
             else:
                 raise RuntimeError(f"fresh server failed after four attempts: {last}")
-            self.rebuilders[i] = StateRebuilder()
+            self.rebuilders[i] = StateRebuilder(self.modern_champions)
             self.detectors[i] = CastFreezeDetector()
             validate_champion_life(self.env.last_obs[i])
             for k, t in enumerate(self.teams):
@@ -702,7 +706,7 @@ class MultiProcessCollector:
     synchronous, so every transition is on-policy exactly as before.
     """
     def __init__(self, n, out, port_base, episode_s, start_near_wave=False, step_ticks=2,
-                 server_dir=None, teams=(0,), workers=2):
+                 server_dir=None, teams=(0,), workers=2, modern_champions=None):
         import multiprocessing as mp
         from .server_worker import worker_main
         if n % workers:
@@ -717,7 +721,7 @@ class MultiProcessCollector:
             parent, child = ctx.Pipe()
             kwargs = dict(n=per, out=Path(out) / f"worker{w}", port_base=port_base + 200 * w,
                           episode_s=episode_s, start_near_wave=start_near_wave,
-                          step_ticks=step_ticks, server_dir=server_dir, teams=self.teams)
+                          step_ticks=step_ticks, server_dir=server_dir, teams=self.teams, modern_champions=modern_champions)
             Path(kwargs["out"]).mkdir(parents=True, exist_ok=True)
             proc = ctx.Process(target=worker_main, args=(child, kwargs), daemon=True)
             proc.start()
@@ -850,9 +854,13 @@ def load_checkpoint_policy(path):
     from flax.serialization import from_state_dict, msgpack_restore
     from ..obs.builder import build_observation
     from ..sim.init import init_lane, lane_params
-    saved = json.loads((Path(path).parent / "manifest.json").read_text())["config"]["train"]["policy"]
+    config = json.loads((Path(path).parent / "manifest.json").read_text())["config"]
+    pair = champion_profile.checkpoint_profile(config)
+    champion_profile.validate_checkpoint(config, pair)
+    saved = config["train"]["policy"]
     policy = LanePolicy(PolicyConfig(**saved))
-    obs0 = build_observation(init_lane(), 0, _lane_frames()[0], params=lane_params())
+    rebuilder = StateRebuilder(pair)
+    obs0 = build_observation(rebuilder.base, 0, _lane_frames()[0], params=rebuilder.params)
     args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
     if policy.cfg.core == "gru":
         args = args + (policy.initial_carry(()),)
@@ -1258,6 +1266,8 @@ def main():
                    help="eval only: drive the learner's rows with the scripted last-hitter (interface oracle) instead of a checkpoint")
     p.add_argument("--start-near-wave", action="store_true")
     p.add_argument("--step-ticks", type=int, default=2)
+    p.add_argument("--modern-champions", type=champion_profile.names, default=None,
+                   help="opt in to patch 26.19: BLUE,RED (Garen or Jax); requires isolated --server-dir")
     p.add_argument("--server-dir", type=Path)
     p.add_argument("--port-base", type=int, default=21300,
                    help="control/game port base. Keep it BELOW 32768: ports inside the kernel's "
@@ -1265,6 +1275,8 @@ def main():
                         "server restarted on such a port dies with exit 97 'Address already in use'")
     p.add_argument("--out", type=Path, default=Path("lanerl_jax/runs/server_first_20260925"))
     args = p.parse_args()
+    if args.modern_champions and args.server_dir is None:
+        p.error("--modern-champions requires an isolated --server-dir")
     if args.server_dir is not None:
         args.server_dir = args.server_dir.resolve()
     if min(args.envs, args.rollout, args.updates, args.episode_s, args.step_ticks) <= 0:
@@ -1300,7 +1312,7 @@ def main():
     UNWALKABLE_CLICK["mode"] = args.unwalkable_click
     START_JITTER.update(max_s=args.start_jitter_s, seed=args.seed)
     RELATIVE_REWARD.update(mode=args.reward, gold_scale=args.gold_scale, xp_scale=args.xp_scale, enemy_scale=args.enemy_scale)
-    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask,
+    pcfg = PolicyConfig(self_dim=champion_profile.self_dim(args.modern_champions), core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask,
                         detach_critic=args.detach_critic)
     if args.init_from is not None:
         if args.resume is not None:
@@ -1312,13 +1324,17 @@ def main():
         # A checkpoint's own architecture wins over the flag: a gru checkpoint
         # loaded into an mlp policy would fail, an mlp one into a gru would be
         # a silently untrained core.
-        saved = json.loads((args.resume.parent / "manifest.json").read_text()).get("config", {}).get("train", {}).get("policy", {})
+        checkpoint_config = json.loads((args.resume.parent / "manifest.json").read_text()).get("config", {})
+        champion_profile.validate_checkpoint(checkpoint_config, args.modern_champions)
+        saved = checkpoint_config.get("train", {}).get("policy", {})
         if saved:
             # Architecture from the checkpoint; the INTERFACE/training switches
             # (no parameters) stay under the flags, so a fine-tune can turn
             # them on: E21 --detach-critic from E12a, E20-style --click-mask.
             pcfg = PolicyConfig(**{**saved, "click_mask": args.click_mask or saved.get("click_mask", False),
                                    "detach_critic": args.detach_critic or saved.get("detach_critic", False)})
+    if args.modern_champions and args.resume is not None and not (args.resume.parent / "manifest.json").exists():
+        p.error("modern checkpoints require a manifest with their champion profile")
     policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.server_train', *sys.argv[1:]])
     run = RunDir(args.out, f"server-farm-s{args.seed}", {"train": {"policy": policy.cfg._asdict()},
@@ -1346,11 +1362,12 @@ def main():
     run.manifest["vendor"] = {
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=vendor, env=git_environment(vendor)).decode().strip(),
         "binary_sha256": file_sha256((args.server_dir or server_paths.server_dir()) / "GameServerLib.dll"),
-        "config_sha256": file_sha256(server_paths.default_game_config())}
+        "config_sha256": file_sha256(champion_profile.game_config(args.modern_champions, args.server_dir, run.path) or server_paths.default_game_config())}
     run.write()
     try:
         teams = (args.team,) if args.opponent == "idle" else (0, 1)
         if args.opponent == "frozen":
+            champion_profile.validate_checkpoint(json.loads((args.opponent_ckpt.parent / "manifest.json").read_text())["config"], args.modern_champions)
             opp_policy, opp_params = load_checkpoint_policy(args.opponent_ckpt)
             run.set_results(opponent_ckpt_sha256=file_sha256(args.opponent_ckpt))
         if args.opponent == "scripted":
@@ -1360,11 +1377,11 @@ def main():
         if args.workers > 1:
             collector = MultiProcessCollector(args.envs, run.path, args.port_base, args.episode_s,
                                               args.start_near_wave, args.step_ticks, args.server_dir,
-                                              teams=teams, workers=args.workers)
+                                              teams=teams, workers=args.workers, modern_champions=args.modern_champions)
         else:
             collector = ServerCollector(args.envs, run.path, args.port_base, args.episode_s,
                                         args.start_near_wave, args.step_ticks, args.server_dir,
-                                        teams=teams)
+                                        teams=teams, modern_champions=args.modern_champions)
         if args.opponent in ("frozen", "scripted"):
             collector = FrozenOpponentCollector(collector, opp_policy, opp_params, seed=args.seed)
     except BaseException as exc:

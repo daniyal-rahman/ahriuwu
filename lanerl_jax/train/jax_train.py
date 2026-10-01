@@ -16,6 +16,7 @@ import sys
 from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
 from .jax_farm import JaxFarmCollector, GROUND_CLICK_NORMALIZATION
 from .policy import LanePolicy, PolicyConfig
+from . import champion_profile
 from .ppo import PPOConfig
 from .run_manifest import RunDir, file_sha256
 from .server_train import WAVE_START_MS, run_farming_learner, snapshot_farming_source
@@ -23,6 +24,7 @@ from .server_train import WAVE_START_MS, run_farming_learner, snapshot_farming_s
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--modern-champions', type=champion_profile.names, default=None)
     parser.add_argument('--envs', type=int, default=2)
     parser.add_argument('--rollout', type=int, default=128)
     parser.add_argument('--updates', type=int, default=2)
@@ -87,12 +89,16 @@ def main():
     resume_params_only = False
     if args.init_from is not None:
         args.resume, resume_params_only = args.init_from, True
-    pcfg = PolicyConfig(core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask, detach_critic=args.detach_critic)
+    pcfg = PolicyConfig(self_dim=champion_profile.self_dim(args.modern_champions), core=args.core, core_norm=args.core_norm, core_residual=args.core_residual, click_mask=args.click_mask, detach_critic=args.detach_critic)
     src_ckpt = args.resume or args.init_from
     if src_ckpt is not None and (src_ckpt.parent / 'manifest.json').exists():
-        saved = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {}).get('train', {}).get('policy', {})
+        checkpoint_config = _json.loads((src_ckpt.parent / 'manifest.json').read_text()).get('config', {})
+        champion_profile.validate_checkpoint(checkpoint_config, args.modern_champions)
+        saved = checkpoint_config.get('train', {}).get('policy', {})
         if saved:
             pcfg = PolicyConfig(**{**saved, "click_mask": args.click_mask or saved.get("click_mask", False), "detach_critic": args.detach_critic or saved.get("detach_critic", False)})
+    if args.modern_champions and src_ckpt is not None and not (src_ckpt.parent / 'manifest.json').exists():
+        parser.error('modern checkpoints require a champion profile manifest')
     policy = LanePolicy(pcfg)
     command = shlex.join([sys.executable, '-m', 'lanerl_jax.train.jax_train', *sys.argv[1:]])
     run = RunDir(args.out, f'jax-farm-s{args.seed}', {
@@ -112,6 +118,9 @@ def main():
     try:
         sim = SimConfig.training(route_artifact=args.route_artifact).replace(
             step_ticks=args.step_ticks)
+        if args.modern_champions:
+            from ..sim.modern import make_params
+            sim = sim.replace(params=make_params(args.modern_champions))
         if sim.route_table is None or sim.vision is None or sim.lane_path is None:
             raise RuntimeError('JAX farming requires production routes, map visibility and waves')
         route_manifest = args.route_artifact / 'manifest.json'
@@ -122,7 +131,7 @@ def main():
         run.write()
         collector = JaxFarmCollector(args.envs, run.path, args.episode_s,
             args.start_near_wave, args.step_ticks, seed=args.seed, sim_config=sim,
-            batch_mode=args.batch_mode, teams=teams, drop_unwalkable_moves=(args.unwalkable_click == "noop"))
+            batch_mode=args.batch_mode, teams=teams, modern_champions=args.modern_champions, drop_unwalkable_moves=(args.unwalkable_click == "noop"))
     except BaseException as exc:
         if collector is not None:
             collector.close()

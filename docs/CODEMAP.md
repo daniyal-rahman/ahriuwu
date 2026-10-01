@@ -71,7 +71,21 @@ Modern champion profile (explicit opt-in, 26.19; CHAMP-003):
 | `lanerl_jax/probes/modern_champions.py`, `ModernChampionSelfTest.cs` | PROBE | Wire/resource/reset,180s scripted lane, actual C# objects damage assertions; invoked by MOD experiments through `ops/launch.py` |
 | `tests/test_modern_champions.py` | TEST | Independent modern mechanic examples and JIT/vmap/observation regressions |
 
+| `lanerl_jax/train/champion_profile.py` | LIVE | Explicit pair/config generation, observation width, checkpoint contract checks (CHAMP-004) |
+| `lanerl_jax/parity/modern_wire.py` | LIVE | Schema2 snapshot to observation state; resource/buff/CC reconstruction, not a resumable simulation snapshot |
+| `tests/test_modern_collector.py` | TEST | Pairings, mismatch rejection, ranks, cast-event visibility, checkpoint/config contract, JAX collector reset |
+
 Modern observations have `MODERN_SELF_DIM=28`; create a new `PolicyConfig(self_dim=28)`.
-Legacy observations remain16-wide. Existing trained checkpoints, server wire
-reconstruction and PPO launch defaults are not migrated by this champion port.
+Legacy observations remain16-wide. `server_train` and `jax_train` accept
+`--modern-champions Garen,Jax` (BLUE,RED; either name on either side, including
+same-champion pairs). Policy width is selected automatically; checkpoint manifests
+must match the ordered pair and width. The C# path additionally requires an
+explicit isolated `--server-dir` and `LANERL_VENDOR_ROOT` for the runtime.
+Single-process and worker collectors preserve the profile across resets.
+Frozen evaluation uses `server_train --eval-episodes`; the older recording/
+parity driver is still a legacy-only path. Normal defaults remain historical.
+Launch through an experiment spec and `ops/launch.py`; its ordinary server/JAX
+launch modes still target the canonical checkout, so integrate this branch there
+before launching a normal production experiment. MOD validation snapshots this
+worktree explicitly and does not require that integration.
 Map/minions/turrets still use the existing world; this is not a modern map/items/runes port.
