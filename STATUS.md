@@ -1,4 +1,4 @@
-# STATUS — 2026-10-01 18:50 UTC
+# STATUS — 2026-10-01 18:56 UTC
 
 Dani renewed research authorization and supplied a fresh budget in this thread.
 The old thread budget boundary and15:37 compute window below are historical;
@@ -9,6 +9,14 @@ caster15/19 tick-level attack/damage/credit and earlier/delayed physical-click
 branches. E69 is the only project job; unrelated1803/1736 remain untouched.
 Hypothesis/budget/gates: experiments/E69_afk_tick_audit.json and LEARN-AFK-24.
 Bridge `lanerl-event-1835.service` active; result JSON verified updating, expiry 2026-10-01 19:53 UTC.
+Full E68 replay gate passed:1201frames, all checked state/action fields exactly
+match (maxerror0),12CS/0deaths and checkpointSHA verified. Instrumented tick
+branches now compiling/running; no branch conclusions yet. Rough remaining
+ETA5–20min, hard Slurm end19:19UTC. On bridge wake inspect result.json and
+unit15/unit19 baseline event timelines, verify instrument_max_error and decoded
+click counts, compare target-specific CS and total local CS (earlier targeting
+may sacrifice another minion). Review Q reset in unit19 baseline. Stop watcher
+and verify registry cleanup after active review.
 Feature experiment remains conditional on these execution checks.
 
 ## Previous handoff (historical)
