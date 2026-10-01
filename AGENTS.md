@@ -4,8 +4,10 @@
 (what is live). Findings go in `docs/JAX_FIDELITY_LEDGER.md` rows; runs go in
 `docs/EXPERIMENTS.md` rows. Do not write new status/report files.
 
-**Goal now:** PPO from random init reaching >30 CS in a 10-minute mirror trial
-on the C# server (frozen evaluation, several seeds). JAX is paused until then.
+**Goal now:** Systematically debug and improve AFK farming in the JAX simulator,
+per Dani’s subsequent explicit authorization. Use frozen evaluations and controlled
+experiments; STATUS records the active compute window and next steps. The longer-term
+transfer goal remains >30 CS in a 10-minute C# mirror trial over several seeds.
 
 **Layout:** C# server = `/srv/nfs/projects/lanerl-vendor/LoLServer` (patches:
 `lanerl/patches/`, canonical build `bin/DeadProbe`). RL = `lanerl_jax/train/`
