@@ -109,7 +109,8 @@ def main():
         death_loss_gold=spec.get("death_loss_gold",0.),
         tower_damage_gold=spec.get("tower_damage_gold",0.),
         tower_damage_personal=spec.get("tower_damage_personal",False),
-        ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef'],epochs=spec.get('ppo_epochs',4)))
+        ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef'],
+            epochs=spec.get('ppo_epochs',4),discount=spec.get('discount',0.99)))
     built=make_vec_train(cfg,sim,bank)
     initial_params=msgpack_restore((scratch/'initial.msgpack').read_bytes())['params']
     other_params=msgpack_restore((scratch/'eval_opponent.msgpack').read_bytes())['params']

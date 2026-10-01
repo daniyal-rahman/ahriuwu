@@ -1,0 +1,39 @@
+{
+  "id": "E64_afk_long_horizon",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "Conditional follow-up if death-corrected farming remains flat: isolate gamma.99\u2192.999 (10s\u2192100s discount horizon at10Hz), keep GAE lambda.95 and originalv3inputs/death300/HP100/personal tower900/XP0/E46init/freshAdam/LR1e-4/4epochs/512updates. Compare againstE63 at128/256/512 and original9.5625CS; success>=10.5625CS and<=.05deaths, track towerHP/common reward and independentseed repeat. Domain precedent OpenAI Five section4.5 and AppendixC: longer horizons helped skilled agents while lambda remained.95; our100s choice is an engineering estimate for120s trials. Gamma changes value targets, not a direct100s Monte Carlo credit trace. Budget512updates8.389M/55minworker/1hSlurm; stop on nonfinite, no extension without frozen improvement.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 300.0,
+  "discount": 0.999
+}
