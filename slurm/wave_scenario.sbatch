@@ -15,5 +15,8 @@ fi
 if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(not json.load(open("experiments/"+sys.argv[1]+".json")).get("stagger_initial",False))' "$1"; then
     ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_vec_train.py -k stagger_warmup
 fi
+if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(not json.load(open("experiments/"+sys.argv[1]+".json")).get("combat_features",False))' "$1"; then
+    ./.venv-gpu/bin/python -m pytest -q lanerl_jax/obs/tests/test_combat_features.py lanerl_jax/train/tests/test_combat_features.py
+fi
 echo 'CANARY PASSED: scenario geometry, health roles, GRU likelihood and reward'
 exec ./.venv-gpu/bin/python -m lanerl_jax.train.wave_scenario_train "$@"

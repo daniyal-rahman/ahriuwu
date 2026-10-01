@@ -13,29 +13,18 @@ audit:97022claimed historical samples,zero mismatches; one-step visible-minion
 coverage97.26658%.15past samples available in all four inspected incident
 frames. Single-game association evidence, not CV robustness or a learned gain.
 
-Dani redirected the next step: list deviations from known working systems,
-then establish a coherent published-reference baseline before component ablations.
-LEARN-AFK-27 records the code-checked inventory, confirmed differences, unknowns,
-and working priorities. Follow-up source check corrects Tencent action-label
-independence and adds component-wise PPO vs our joint-ratio difference, known
-LR/lambda agreements, normalization gap and a documentation-only reference
-contract draft. Primary-reference preference asked; no new implementation/run.
-LEARN-AFK-28 adds an official later HoK1v1 code reference pinned to
-c6e0029a5e4b6e037a049804fdbe23ac74484311. It supplies inspectable network/loss
-and a richer documented feature list, but differs from2020Solo and its live
-docs491-feature schema differs from current725-feature code. Resolve versions
-before implementation; no reference reproduction claimed. E69/E70 artifact
-revalidation confirms existing exact-match/local-CS evidence.
-Feature coverage remains the leading hypothesis, not
-an established cause; global GRU can learn history. No GRU incapacity demonstrated.
+Dani delegated reference choice, prioritizing minimal change and likelihood of
+fixing farming. LEARN-AFK-29 selects a Tencent-documented applicable combat
+feature package; current GRU/PPO/reward/action heads retained. v6 implementation
+and tests prepared, no learned result. Field provenance, video-readiness gap and
+remaining reference differences are explicit. No full Tencent reproduction claim.
 
-E72b/1840 CANCELLED during startup at19:42UTC after5m02s (job0:0,batch0:15).
-No canary-passed marker or training/frozen result; this is an intentional stop,
-not evidence against training. E73b is deferred and never submitted. Opt-in
-history implementation and successful E71b preflight remain preserved.
-No project jobs running/queued; no result ETA. Next is reference-contract work,
-not a submitted experiment. Unrelated1842/1803/1736 untouched. No1840 watcher
-was armed because the startup gate was not reached; launcher exited on cancellation.
+E74 combat preflight prepared (20minGPUcap), E75control/E76feature prepared
+(512updates/8.389M each,1hSlurmcap), none submitted yet. Initial64-game E67
+retention and E74pass required. Final primary gate featureCS>=10.921875 and
+control+1, deaths<=.15; confirm independently if promising. E72b1840 was
+intentionally cancelled at startup; E73b history-only remains deferred.
+No project jobs running/queued; no training-result ETA. No watcher needed.
 
 ## Narrow investigation completed
 

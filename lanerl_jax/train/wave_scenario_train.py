@@ -12,8 +12,9 @@ import jax.numpy as jnp
 import numpy as np
 from flax.serialization import from_state_dict, msgpack_restore
 from .policy import (PolicyConfig, OWN_ACTION_INTERFACE, expand_own_action_inputs,
-                     merge_click_proposal_params, merge_visible_history_params)
+                     merge_click_proposal_params, merge_visible_history_params, merge_combat_params)
 from ..obs.visible_history import VISIBLE_HISTORY_INTERFACE, HISTORY_ENTITY_DIM
+from ..obs.combat_features import COMBAT_INTERFACE, COMBAT_ENTITY_DIM, COMBAT_SELF_DIM
 from .ppo import PPOConfig
 from .run_manifest import RunDir, file_sha256
 from .vec_train import VecConfig, make_vec_train
@@ -96,7 +97,7 @@ def main():
     if spec.get('preflight_gate'):
         audit=json.loads(Path(spec['preflight_gate']).read_text())
         if not audit['passed']:
-            raise RuntimeError('required visible-history preflight did not pass')
+            raise RuntimeError('required feature preflight did not pass')
     train_seed = int(spec.get('train_seed', 0))
     if args.resume:
         previous=json.loads((args.resume.parent/'manifest.json').read_text())
@@ -145,6 +146,12 @@ def main():
         if own_action or pcfg.click_proposals or spec.get('opponent') != 'afk':
             raise ValueError('visible-history experiment is AFK-only and separate from own-action/proposal experiments')
         pcfg=pcfg._replace(observation_interface=VISIBLE_HISTORY_INTERFACE, entity_dim=HISTORY_ENTITY_DIM)
+    combat = spec.get('combat_features', False)
+    if combat:
+        if history or own_action or pcfg.click_proposals or spec.get('opponent') != 'afk':
+            raise ValueError('combat feature experiment requires a separate AFK arm')
+        pcfg=pcfg._replace(observation_interface=COMBAT_INTERFACE,
+                          entity_dim=COMBAT_ENTITY_DIM, self_dim=COMBAT_SELF_DIM)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
         episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,
         stagger_initial=spec.get('stagger_initial',False),
@@ -163,6 +170,11 @@ def main():
         initial_params=expand_own_action_inputs(initial_params)
         other_params=expand_own_action_inputs(other_params)
     initialized=built['init_params'](jax.random.key(0))
+    if combat:
+        if 'combat_entities' not in initial_params['params']:
+            initial_params=merge_combat_params(initialized, initial_params)
+        if 'combat_entities' not in other_params['params']:
+            other_params=merge_combat_params(initialized, other_params)
     if pcfg.click_proposals:
         initial_params=merge_click_proposal_params(initialized,initial_params)
         other_params=merge_click_proposal_params(initialized,other_params)

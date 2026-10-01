@@ -839,3 +839,47 @@ all saved fields before intervention array-identical over132ticks(unit15) and
 150ticks(unit19); branchJSON localCS1→2 and0→1, killer0 on delayed kills.
 Actual order releases80.8200625s and112.93009375s match LEARN-AFK-25.
 This strengthens artifact traceability only, not neural-cause attribution.
+
+
+### LEARN-AFK-29 — Tencent-documented combat feature package
+
+Dani delegated the reference choice, balancing minimal change and plausibility
+of improving farming. Select the documented HoK1v1 combat-feature semantics,
+retain E67's GRU/PPO/reward/action heads initially. This supersedes the proposed
+history-only study. Later official implementation and2020paper remain distinct;
+we do not claim to reproduce either full network or resolve their whole schema.
+The491-vs725 distinction is handled by explicitly using the documented field
+semantics as reference, not importing inconsistent tensor offsets from both.
+
+Implemented opt-in v6:27entity fields (original16+11),33self fields (16+17).
+New entity fields: bar-derived HP points,maxHP,base/live-level AD,attack range,
+attack speed,current movement speed,profile kill income,self distance,absolute
+lane s/n,level. New self: bar-derived HP/maxHP,range/AS/movement speed,own AA
+availability,Q/W/E active bits,Q/W/E/R ranks and four cast-availability bits.
+No stack, projectile estimates or previous actions added. Own AD/armor/MR,
+relative positions,HP fractions and other original features remain unchanged.
+This is an applicable combat-stat/readiness package, not the entire documented
+HoK observation: hero-specific HoK kits/items/mana don't apply to this Garen
+sim; nearest enemy-hero bullet tracking and other reference differences remain
+explicitly unimplemented. No claim of full feature parity.
+
+Provenance/limits: public type/level/profile stats plus visible scene/HUD.
+Current HP points use the old1/60-rounded bar times maxHP, never precise stateHP.
+Only existing visible slots receive stats; padding zero. No enemy AA clocks,
+raw target IDs or fogged current data are actor inputs. Own readiness reads
+simulator own cooldown/status as an observation prototype, with no target/range
+oracle; a video estimator and wire support must be validated later. Driver
+rejectsv6 for C# until then. Current no-items scope is explicit; profile damage
+is AD, not target-specific post-mitigation damage or a scripted kill forecast.
+
+Two separate bias-free zero projections preserve the old entity/context matrix
+operations, allowing identical initial policy behavior and trainable new inputs.
+No physics or vendor changes. E74 GPU preflight tests provenance/quantization,
+readiness/padding/permutation, migration/gradients and nonzero actor/learner
+likelihood across reset plus finite update, alongside existingv3canaries.
+Prepared E75control/E76feature use E67final/freshAdam, original settings and
+512updates8.389M decisions each,1hSlurm/55minworker cap. Require E74pass and
+initial64-game frozen retention before learning. Final gate featureCS>=10.921875
+and >=control+1, deaths<=.15, then independent confirmation if promising.
+Failed bounded fine-tuning does not disprove the full reference or the features.
+No training submitted at this planning/implementation entry.

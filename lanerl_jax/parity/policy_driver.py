@@ -497,7 +497,7 @@ def load_params(path: str):
         saved = json.loads(manifest_path.read_text()).get("config", {}).get("train", {}).get("policy", {})
         if saved.get("action_interface") != "screen-click-v2":
             raise ValueError("entity-pointer checkpoints cannot evaluate as screen-click-v2; train a new policy")
-        if saved.get("observation_interface") not in ("viewport-structured-v3", "viewport-structured-v4-own-action", "viewport-structured-v5-visible-history"):
+        if saved.get("observation_interface") not in ("viewport-structured-v3", "viewport-structured-v4-own-action", "viewport-structured-v5-visible-history", "viewport-structured-v6-combat"):
             raise ValueError("checkpoint does not declare v3 authoritative life-state observations; use its historical capture")
         scripted = json.loads(manifest_path.read_text()).get("scripted")
         if scripted:
@@ -514,6 +514,9 @@ def load_params(path: str):
         entities, _ = append_visible_history(obs0.entities, obs0.entity_pad_mask,
                                             obs0.self_vec, empty_visible_history())
         obs0 = obs0._replace(entities=entities)
+    if cfg.observation_interface == 'viewport-structured-v6-combat':
+        from ..obs.combat_features import append_combat_features
+        obs0 = append_combat_features(obs0, init_lane(), 0, frame, lane_params())
     init_args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
     if cfg.core == "gru":
         init_args = init_args + (policy.initial_carry(()),)
@@ -742,6 +745,8 @@ class PolicyDriver:
             raise ValueError("Experimental own-action policy requires own AA telemetry absent from this server wire; use the JAX scenario evaluator")
         if getattr(policy.cfg, "observation_interface", "") == "viewport-structured-v5-visible-history":
             raise ValueError('Experimental visible-history policy requires the tested 10 Hz history collector; use the JAX scenario evaluator until the wire history path is validated')
+        if getattr(policy.cfg, "observation_interface", "") == "viewport-structured-v6-combat":
+            raise ValueError('Experimental combat features require validated own readiness telemetry; use the JAX scenario evaluator until wire/video inputs are implemented')
         self.team = int(team)
         self.wire_team = 100 if self.team == Team.BLUE else 200
         self.rebuilder = rebuilder if rebuilder is not None else StateRebuilder()

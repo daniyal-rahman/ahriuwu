@@ -70,3 +70,7 @@ TOOL: `slurm/afk_tick_audit.sbatch` / `afk-tick-audit` launcher engine runs the 
 LIVE (opt-in experimental, LEARN-AFK-26): `obs/visible_history.py` associates existing visible entity rows by position/type and appends15past health/position samples plus known bits. `train/policy.py` v5 adds a zero-weight projection; `vec_train.py` carries/resets/checkpoints observer memory. Enabled only for10Hz AFK scenarios; C# driver refuses until wire history is validated. Actor never receives diagnostic IDs.
 
 TOOL: `slurm/visible_history_audit.sbatch` / `visible-history-audit` launcher engine runs E71 GPU canaries and the indexed E68 visible association audit before bounded paired learning.
+
+LIVE (opt-in experimental, LEARN-AFK-29): `obs/combat_features.py` v6 appends visible/public combat stats and own readiness/buffs/ranks to v3. `policy.py` zero-projection migration preserves original inputs; collector and integrated evaluator share augmentation. C# driver rejects until own readiness wire/video estimator is validated. No actor enemy clocks/target IDs or exact-HP upgrade.
+
+TOOL: `slurm/combat_feature_audit.sbatch` / `combat-feature-audit` runs E74 GPU contract/regression tests and writes a passed preflight artifact; no learned result.

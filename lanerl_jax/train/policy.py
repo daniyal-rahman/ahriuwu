@@ -94,6 +94,7 @@ from lanerl_rl.constants import (
     SELF_DIM,
 )
 from ..obs.visible_history import VISIBLE_HISTORY_INTERFACE, HISTORY_ENTITY_DIM
+from ..obs.combat_features import COMBAT_INTERFACE, COMBAT_ENTITY_DIM, COMBAT_SELF_DIM
 
 __all__ = ["PolicyConfig", "LanePolicy", "ActionLogits", "apply_flattened_batch"]
 
@@ -193,6 +194,23 @@ def merge_visible_history_params(initialized, source):
     return result
 
 
+def merge_combat_params(initialized, source):
+    """Keep the v3 checkpoint exact; only two zero-weight projections are new."""
+    result = jax.tree.map(lambda x: x, initialized)
+    new, old = result['params'], source['params']
+    extra = {'combat_entities', 'combat_self'}
+    if set(new)-set(old) != extra or set(old)-set(new):
+        raise ValueError('combat migration requires a v3 source and two new projections')
+    for name, value in old.items():
+        if (jax.tree.structure(value) != jax.tree.structure(new[name]) or
+            any(a.shape != b.shape for a,b in zip(jax.tree.leaves(value), jax.tree.leaves(new[name])))):
+            raise ValueError(f'incompatible checkpoint parameter: {name}')
+        new[name] = value
+    if any(bool(jnp.any(x != 0)) for name in extra for x in jax.tree.leaves(new[name])):
+        raise ValueError('combat projections must start at zero')
+    return result
+
+
 #: the standard PPO recipe -- see the module docstring
 TRUNK = dict(kernel_init=nn.initializers.orthogonal(2.0 ** 0.5),
              bias_init=nn.initializers.zeros)
@@ -230,11 +248,14 @@ class LanePolicy(nn.Module):
         c = self.cfg
         if c.action_interface != "screen-click-v2":
             raise ValueError("policy requires screen-click-v2; pointer checkpoints need retraining")
-        if c.observation_interface not in ("viewport-structured-v3", OWN_ACTION_INTERFACE, VISIBLE_HISTORY_INTERFACE):
+        if c.observation_interface not in ("viewport-structured-v3", OWN_ACTION_INTERFACE, VISIBLE_HISTORY_INTERFACE, COMBAT_INTERFACE):
             raise ValueError("unsupported observation interface")
         if c.observation_interface == OWN_ACTION_INTERFACE and c.self_dim != 20:
             raise ValueError("own-action observations require self_dim=20")
         history = c.observation_interface == VISIBLE_HISTORY_INTERFACE
+        combat = c.observation_interface == COMBAT_INTERFACE
+        if combat and (c.entity_dim != COMBAT_ENTITY_DIM or c.self_dim != COMBAT_SELF_DIM):
+            raise ValueError('combat observation dimensions do not match the declared feature contract')
         if history and (c.entity_dim != HISTORY_ENTITY_DIM or c.self_dim != 16):
             raise ValueError('visible-history observations require 76 entity and 16 self features')
         # Static shapes, so this is a trace-time check with no runtime cost.
@@ -246,7 +267,10 @@ class LanePolicy(nn.Module):
             raise ValueError(
                 f"observation widths {got} do not match PolicyConfig {want} "
                 "(entities, pad_mask, self_vec, global_vec)")
-        tokens = nn.Dense(c.d_model, **TRUNK)(entities[..., :16] if history else entities)
+        tokens = nn.Dense(c.d_model, **TRUNK)(entities[..., :16] if history or combat else entities)
+        if combat:
+            tokens = tokens + nn.Dense(c.d_model, use_bias=False,
+                kernel_init=nn.initializers.zeros, name='combat_entities')(entities[..., 16:])
         if history:
             # Separate projection preserves the original GEMM shape and all
             # checkpoint weights. No bias: unknown/ablated history is inert.
@@ -268,7 +292,10 @@ class LanePolicy(nn.Module):
         ent = jnp.concatenate([pooled_max, pooled_mean], axis=-1)
 
         ctx = nn.Dense(c.ctx_dim, **TRUNK)(
-            jnp.concatenate([self_vec, global_vec], axis=-1))
+            jnp.concatenate([self_vec[..., :16] if combat else self_vec, global_vec], axis=-1))
+        if combat:
+            ctx = ctx + nn.Dense(c.ctx_dim, use_bias=False,
+                kernel_init=nn.initializers.zeros, name='combat_self')(self_vec[..., 16:])
         ctx = nn.relu(ctx)
         h = jnp.concatenate([ent, ctx], axis=-1)
 

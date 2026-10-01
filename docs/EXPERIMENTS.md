@@ -7,6 +7,9 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E74_combat_feature_preflight` |10-01| GPU diagnostic | Tencent-documented combat package canaries |No learned result|20min cap| Prepared, not submitted | Visibility/bar precision, migration/gradient, nonzero likelihood/reset/update and v3 regression |
+| `E75_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76 |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | Requires E74 and initial frozen retention |
+| `E76_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Applicable combat stats/readiness package, unchanged GRU/PPO/reward |E67/freshAdam, zero projections|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15 |
 | `E71b_visible_history_preflight` |10-01| GPU diagnostic | E71 retry with float32 test fixture |No updates|20min cap| COMPLETED1839/0:0,4m16s;14GPU tests;97022/97022 histories correct,97.27% minion coverage | Same tracking and migration/likelihood/reset/resume gates |
 | `E72b_afk_history_control` |10-01| JAX AFK PPO control | E72 protocol, require successful E71b preflight |E67/freshAdam, matched E73b|512updates8.389M,1h cap| CANCELLED1840/0:0 (batch0:15),5m02s during startup; no frozen result | Stopped on user redirection to reference-deviation audit; not a learning failure |
 | `E73b_afk_visible_history` |10-01| JAX AFK PPO feature test | E73 protocol, require successful E71b preflight |E67/freshAdam, zero-weight added projection|512updates8.389M,1h cap| Deferred, never submitted | User prioritizes reference-deviation inventory before component ablations |

@@ -53,6 +53,7 @@ from .learner import make_learner
 from .policy import LanePolicy, PolicyConfig, OWN_ACTION_INTERFACE
 from ..obs.visible_history import (
     VISIBLE_HISTORY_INTERFACE, empty_visible_history, append_visible_history)
+from ..obs.combat_features import COMBAT_INTERFACE, append_combat_features
 from .ppo import PPOConfig, factored_log_prob, gae, update_epochs
 from .reward import lane_corridor_distance
 
@@ -227,6 +228,9 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         per = [build_observation(state, t, frames[t], params=sim.params,
                                  horizon_s=cfg.observation_horizon_s or cfg.episode_s, vision=sim.vision,
                                  own_action_state=cfg.policy.observation_interface == OWN_ACTION_INTERFACE) for t in (0, 1)]
+        if cfg.policy.observation_interface == COMBAT_INTERFACE:
+            per = [append_combat_features(o, state, t, frames[t], sim.params)
+                   for t, o in enumerate(per)]
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), *per)
 
     def observe(state, history=None):
