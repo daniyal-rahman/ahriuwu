@@ -88,6 +88,7 @@ def main():
         implemented_mass = implemented_hits / len(implemented_cells) if len(implemented_cells) else mass
         cursor_button = float(pb[i, 1] + pb[i, 2])
         rows.append(dict(case=i, target_cells=int(target_cells.sum()),
+            aa_cooldown=float(state.aa_cooldown[i,0]), aa_windup=float(state.aa_windup[i,0]),
             cursor_button_probability=cursor_button, attack_move_probability=float(pb[i, 2]),
             conditional_direct_target=mass, direct_target_probability=cursor_button*mass,
             candidate_count=len(candidates), candidate_cells_hitting_target=hits,

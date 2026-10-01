@@ -32,6 +32,9 @@ def test_proposal_mixture_duplicates_mask_and_sampling():
     masked = expected.copy(); masked[1] = 0; masked /= masked.sum()
     got = factored_log_prob((button,x,y), (jnp.int32(2),jnp.int32(1),jnp.int32(1)), click_mask=mask, click_logits=joint)
     np.testing.assert_allclose(got, np.log(masked[4]), atol=1e-6)
+    grad = jax.grad(lambda score: factored_entropy((button,x,y),click_mask=mask,
+        click_logits=mixture_click_logits(x,y,score,gate,cells,valid)))(scores)
+    assert np.isfinite(grad).all()
     assert int(greedy_action(logits, mask)[1]*3+greedy_action(logits, mask)[2]) == int(masked.argmax())
     # Permuting candidates, including duplicate locations, changes no distribution.
     order = jnp.array([2,0,1])
