@@ -11,7 +11,7 @@ parser.add_argument('--group',choices=['lr','debug'],default='lr')
 group=parser.parse_args().group
 experiments=[('E50_afk_personal_lr3e5','LR 0.00003'),('E51_afk_personal_lr1e4','LR 0.0001'),('E52_afk_entropy','LR 0.0001 + entropy 0.01'),('E53_afk_shared_critic','LR 0.0001 + shared critic')]
 if group=='debug':
- experiments=[('E60_afk_own_action','E60: own combat inputs'),('E61_afk_long_control','E61: unchanged control'),('E62_afk_own_death_cost','E62: own inputs + death cost'),('E63_afk_death_control','E63: death cost only'),('E66_afk_click_proposals','E66: death cost + click proposals')]
+ experiments=[('E60_afk_own_action','E60: own combat inputs'),('E61_afk_long_control','E61: unchanged control'),('E62_afk_own_death_cost','E62: own inputs + death cost'),('E63_afk_death_control','E63: death cost only'),('E66_afk_click_proposals','E66: death cost + click proposals'),('E65_afk_cs_focus','E65: farming reward diagnostic'),('E67_afk_staggered','E67: staggered training phases')]
 fig,axes=plt.subplots(1,3,figsize=(12,4),layout='constrained')
 for exp,label in experiments:
  study_path=Path('/mnt/nfs/checkpoints/lanerl-jax',exp,'study.json')

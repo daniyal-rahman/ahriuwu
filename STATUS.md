@@ -49,10 +49,13 @@ Watcher1831 stopped after active review; inactive and registry clean.
 - E65 now tests farming learnability without secondary reward tradeoffs. If it
   improves, independently validate and restore the intended objective before
   calling the full problem solved.
-- E64 longer discount horizon and E67 training-phase staggering are prepared,
-  dry-run passed, **NOT submitted**. E67 GPU warmup/likelihood canary pending;
-  it discards shortened warmup episodes before learning and preserves full120s
-  training/evaluation games. LEARN-AFK-20 records evidence and limits.
+- **E67_afk_staggered queued Slurm1833** behind1832; dry-run passed,
+  launcher session14791 awaits startup. GPU warmup/likelihood canary pending;
+  no bridge yet, arm after startup watch. Same E63 full reward/PPO settings;
+  discards shortened warmup episodes before learning and preserves full120s
+  training/evaluation games.512updates8.389M plus180224untrained warmup
+  decisions; estimated40min after start. LEARN-AFK-20 records evidence/limits.
+- E64 longer discount horizon remains prepared, dry-run passed, NOT submitted.
 
 Older E40 mirror training remains interrupted at5795updates; checkpoint
 `/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack`
