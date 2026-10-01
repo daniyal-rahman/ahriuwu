@@ -87,6 +87,26 @@ def test_loop_runs_and_actor_learner_agree(core, opponent):
         assert batch["carry0"].shape == (cfg.n_envs * cfg.learn_agents, 32)
 
 
+def test_relative_reward_afk_death_cost_is_once_per_event():
+    p = init_lane(seed=0)
+    dead = p.replace(alive=p.alive.at[0].set(False), hp=p.hp.at[0].set(0),
+                     deaths=p.deaths.at[0].add(1))
+    cfg = VecConfig(death_loss_gold=300., health_loss_gold=100.)
+    base, base_terms = _relative_reward(p, dead, cfg._replace(death_loss_gold=0.))
+    reward, terms = _relative_reward(p, dead, cfg)
+    np.testing.assert_allclose(reward-base, [-15., 0.])
+    np.testing.assert_allclose(terms['death'], [-15., 0.])
+    np.testing.assert_allclose(terms['health'], base_terms['health'])
+    np.testing.assert_array_equal(base_terms['death'], [0., 0.])
+    # Continued dead frames and respawn never incur another death charge.
+    respawn = p.replace(deaths=dead.deaths)
+    for before, after in ((dead, dead), (dead, respawn)):
+        np.testing.assert_array_equal(_relative_reward(before, after, cfg)[1]['death'], [0., 0.])
+    # The event belongs only to the champion who died, including red.
+    red_dead = p.replace(deaths=p.deaths.at[1].add(1))
+    np.testing.assert_array_equal(_relative_reward(p, red_dead, cfg)[1]['death'], [0., -15.])
+
+
 def test_relative_reward_afk_health_and_tower():
     from lanerl_jax.sim.init import TOP_OUTER_TURRET
     p=init_lane(seed=0)

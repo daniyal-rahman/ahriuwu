@@ -105,6 +105,7 @@ def main():
         bank_size=len(bank.t_ms),lr_anneal=spec.get("lr_anneal",True),policy=pcfg,
         xp_scale=spec.get("xp_scale",0.008),
         opponent=spec.get("opponent","mirror"),health_loss_gold=spec.get("health_loss_gold",0.),
+        death_loss_gold=spec.get("death_loss_gold",0.),
         tower_damage_gold=spec.get("tower_damage_gold",0.),
         tower_damage_personal=spec.get("tower_damage_personal",False),
         ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef'],epochs=spec.get('ppo_epochs',4)))

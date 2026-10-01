@@ -77,6 +77,7 @@ class VecConfig(NamedTuple):
     xp_scale: float = 0.008
     enemy_scale: float = 1.0
     health_loss_gold: float = 0.0
+    death_loss_gold: float = 0.0
     tower_damage_gold: float = 0.0
     tower_damage_personal: bool = False
     lr_anneal: bool = False
@@ -144,6 +145,13 @@ def _relative_reward(prev, nxt, cfg: VecConfig):
     shaping = 5.0 * (pot_n - pot_p)
     total=gold+xp+shaping
     terms={"cs":gold,"death":jnp.zeros_like(gold),"approach":shaping,"xp":xp}
+    if cfg.death_loss_gold:
+        # Opt-in AFK curriculum cost: turret executions need not award enemy
+        # kill gold. Count events, not dead frames; respawn costs nothing.
+        deaths = jnp.maximum(nxt.deaths[:2] - prev.deaths[:2], 0)
+        death = -cfg.death_loss_gold / cfg.gold_scale * deaths
+        total = total + death
+        terms["death"] = death
     if cfg.health_loss_gold:
         # Increase in missing health ignores additive level-up HP gains.
         # Never charge respawn or reward healing; include the fatal damage.

@@ -7,7 +7,8 @@ labelled `train`.
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
 | `E60_afk_own_action` |10-01| JAX AFK PPO | Own combat state inputs, zero-weight migration |E46/freshAdam,4epochs|256updates4.194M| Slurm1827 complete23m29s; final6.1719CS/.78125deaths/361towerHP; reward9.852 versus6.329initial; farming gate failed | Compare E57@128/E61@256, original9.56CS |
-| `E61_afk_long_control` |10-01| JAX AFK PPO | Original v3 longer control |E46/freshAdam,4epochs|512updates8.389M| Dry-run passed; launching | Match E60@256 and duration test |
+| `E62_afk_own_death_cost` |10-01| JAX AFK PPO | Explicit300gold death cost with own-action inputs |E46/freshAdam,4epochs|512updates8.389M| Prepared; opt-in implementation/test added; not submitted | Test risky tower reward mismatch against E60 and original |
+| `E61_afk_long_control` |10-01| JAX AFK PPO | Original v3 longer control |E46/freshAdam,4epochs|512updates8.389M| Slurm1828 startup canaries running | Match E60@256 and duration test |
 | `E59_afk_caster_forks` |10-01| GPU diagnostic | Paired natural/directed caster continuations |E57 frozen;<=16cases x4seeds x2branches|40min cap| COMPLETE1826 0:0,4m53s;16cases,small mixedgain;no training | Reward/credit mechanism; no training |
 | `E58b_afk_behavior_audit` |10-01| GPU frozen diagnostic | E58 corrected JAX helper |32games each120s|30min cap| COMPLETE1825 0:0,5m40s;CS9.91/8.91/13.5;read-only | Same audit, no trained weights |
 | `E58_afk_behavior_audit` |10-01| GPU frozen diagnostic | E46/E57/scripted positive control, opportunity/execution/reward/MC value |32games each120s|30min cap| FAILED1824: diagnostic NumPy tracing helper; no results | No policy changes; onehit windows descriptive |

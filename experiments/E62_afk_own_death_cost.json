@@ -1,0 +1,38 @@
+{
+  "id": "E62_afk_own_death_cost",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "E60 learned risky tower damage while CS fell; its reward rose56percent with .781deaths/game. Hypothesis: absent discrete death cost makes AFK tower execution too cheap. Add300gold own death cost (sim champion base gold), retaining HP100/personal tower900/XP0/v4owninputs/E46init/freshAdam/LR1e-4/4epochs. Compare frozen64game metrics against E60@128/256 and original9.5625CS; success >=10.5625CS with <=.05deaths, track safe towerHP separately; require independentseed replication.512updates8.389M/55min worker/1h Slurm. Engineering reward choice, not published optimality claim. Stop on nonfinite; do not extend if no frozen farming improvement.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": true,
+  "death_loss_gold": 300.0
+}
