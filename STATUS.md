@@ -9,7 +9,7 @@ sweeps; no farming solution demonstrated. Long-term C# gate remains >30CS in
 ## Current phase
 
 Current authorized work: button/map masks implemented as opt-in scenario switches;
-E77 GPU preflight prepared (20min cap), no training submitted. Projectile integration
+E77 GPU preflight SUBMITTED job1857 (20min cap), startup watch active; no training submitted. Projectile integration
 removed from live imports; untracked draft remains separate. Direct HP and expanded
 35-field self interface await this new canary. Tencent weights/transfer question next.
 
