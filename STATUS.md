@@ -25,13 +25,14 @@ verifier now reports1853 complete/canary passed. Added marker for future runs.
 No repeat tests for reporting-only fix. E74b had already passed tests but failed
 its Git-path writer; E74 precision discrepancy resolved at production precision.
 
-E75ccontrol/E76cfeature prepared,512updates8.389M each/1hSlurmcap. Both require
+E75c control submitted as Slurm1856; startup watch in progress. E76c feature
+prepared, not submitted.512updates8.389M each/1hSlurmcap. Both require
 initial64-game E67 retention. Primary final gate featureCS>=10.921875 and
 control+1, deaths<=.15. No learned improvement claimed. Earlier training IDs
 never submitted; history-only arm remains deferred.
-No project jobs running/queued; no training-result ETA. Preflight completed
-under active review, no watcher needed. Next: submit control, verify startup,
-arm completion bridge, stand down. Unrelated jobs untouched.
+E75c/1856 is the only submitted project job, rough45–55min ETA after start.
+Preflight completed under active review, no watcher needed. Next: finish
+control startup, arm completion bridge, stand down. Unrelated jobs untouched.
 
 ## Narrow investigation completed
 

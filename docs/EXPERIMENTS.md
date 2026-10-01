@@ -8,7 +8,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
 | `E74c_combat_feature_preflight` |10-01| GPU diagnostic | E74b retry: worker uses launcher source metadata |No learned result|20min cap| COMPLETED1853/0:0,4m21s;13tests passed;artifact verified | Passed; launcher missing-marker false failure corrected via accounting verifier |
-| `E75c_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76c |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | Requires E74c and initial frozen retention |
+| `E75c_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76c |E67/freshAdam|512updates8.389M,1h cap| Slurm1856 submitted, startup watch pending | Requires E74c and initial frozen retention |
 | `E76c_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Combat package, unchanged GRU/PPO/reward |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15 |
 | `E74b_combat_feature_preflight` |10-01| GPU diagnostic | E74 retry at production precision, finite fountain encoding |No learned result|20min cap| FAILED1850/1:0,4m22s;13tests passed, artifact Git path failed | Same tolerance, added zero-period regression |
 | `E75b_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76b |E67/freshAdam|512updates8.389M,1h cap| Superseded before submission by E75c | Requires E74c and initial frozen retention |
