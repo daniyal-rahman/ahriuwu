@@ -51,4 +51,4 @@ TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failur
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
 
-TOOL: `ops/figures/afk_lr_comparison.py` regenerates the E50/E51 frozen CS/deaths/personal tower comparison in `docs/figures/E50_E51_comparison.png`.
+TOOL: `ops/figures/afk_lr_comparison.py` regenerates the E50–E53 frozen CS/deaths/personal tower comparison in `docs/figures/E50_E51_comparison.png`.

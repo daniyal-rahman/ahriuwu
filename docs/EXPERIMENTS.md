@@ -7,7 +7,7 @@ labelled `train`.
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
 | `E52_afk_entropy` |09-30| JAX PPO AFK | LR1e-4; entropy.01 vs E51 .001 | Same E46final |128updates/2.097M| COMPLETE1813 exit0,14m24s; final2.94CS/0deaths/0towerHP, reject extension | Frozen CS/deaths/personal tower |
-| `E53_afk_shared_critic` |09-30| JAX PPO AFK | LR1e-4; enable critic shared-feature gradients | Same E46final |128updates/2.097M| RUNNING1814;11 GPU canaries/180s watch passed; bridge armed | Same actor/value at init; entropy.001 |
+| `E53_afk_shared_critic` |09-30| JAX PPO AFK | LR1e-4; enable critic shared-feature gradients | Same E46final |128updates/2.097M| COMPLETE1814 exit0,14m29s; final7.97CS/0deaths/0towerHP; no extension | Same actor/value at init; entropy.001 |
 | `E50_afk_personal_lr3e5` |09-30| JAX PPO AFK | Zero XP, personal tower; constantLR3e-5 | E46 final, fresh optimizer |128updates/2.097M | COMPLETE1804 exit0,15m14s; frozenCS9.56→8.03,deaths0→.172,towerHP0→20.15 | Matched control for E51 |
 | `E51_afk_personal_lr1e4` |09-30| JAX PPO AFK | Same rewards; constantLR1e-4 | E46 final, fresh optimizer |128updates/2.097M | COMPLETE1805 exit0,14m21s; frozen8.86CS/0deaths/0personal towerHP; below9.56 baseline | Frozen CS/deaths/personal tower, same seeds |
 | `E49_afk_final_video` |09-30| CPU frozen video | Full120s E46 final AFK game,1x | E46u612 | One seed7 fullHP game | COMPLETE1800 exit0; both120.1s videos verified,7CS/0deaths; bridge cleaned up | Diagnostic replay, not aggregate score |
