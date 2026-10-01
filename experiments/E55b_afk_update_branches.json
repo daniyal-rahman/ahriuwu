@@ -1,0 +1,21 @@
+{
+  "id": "E55b_afk_update_branches",
+  "engine": "credit-audit",
+  "slurm_time": "00:45:00",
+  "stages": [
+    {
+      "name": "from_E46",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+      "restore_runner": false,
+      "updates": 3
+    },
+    {
+      "name": "after_E51",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E51_afk_personal_lr1e4/vec-s0-20260930-231817-279e25e5/ckpt_002097152.msgpack",
+      "restore_runner": true,
+      "updates": 3
+    }
+  ],
+  "question": "Matched same-batch update audit: standardLR1e-4/4epochs vs LR3e-5,1epoch,zeroentropy, identical starting parameters/Adam/advantages/shuffle. First batch with>=16 actual CS frames in E46fresh and E51restored stages. Headwise likelihood and exact KL; standard must reproduce production params <1e-6.6 trajectory updates cap,45min wall cap. No exported weights. Smaller update hypothesis supported only if head drift/credit retention improve; no frozen performance claim. Established PPO loss unchanged, engineering diagnostic not literature-backed optimal hyperparameters. E55 retry using production learn path for every variant; independent reconstructed GAE/update failed strict parameter reproduction (5.5e-5 maxdelta), no causal attribution to training bug.",
+  "branch_audit": true
+}

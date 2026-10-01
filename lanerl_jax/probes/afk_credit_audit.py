@@ -10,14 +10,13 @@ from lanerl_jax.train.run_manifest import git_provenance,file_sha256
 from lanerl_jax.train.wave_scenario import prepare_scenario_bank,park_afk_opponent
 from lanerl_jax.train.policy import PolicyConfig
 from lanerl_jax.train.ppo import PPOConfig,gae,factored_log_prob
-from lanerl_jax.train.learner import make_learner,make_update
 from lanerl_jax.train.vec_train import VecConfig,make_vec_train
 from lanerl_jax.train.replay_audit import restore_replay_state
 from lanerl_jax.obs.builder import build_observation
 from lanerl_jax.parity.policy_driver import _lane_frames
 
 
-def branch_audit(built,cfg,before,after,batch,hits,production_params):
+def branch_audit(built,cfg,sim,bank,before,after,tr,batch,hits,production_params):
  """Same observations/advantages/Adam state/RNG; vary only update settings."""
  old=built['loss'].forward(before.params,batch)
  def measure(params):
@@ -33,9 +32,10 @@ def branch_audit(built,cfg,before,after,batch,hits,production_params):
   return out
  result={}
  for label,changes in [('standard',{}),('lr3e5',{'lr':3e-5}),('one_epoch',{'epochs':1}),('no_entropy',{'entropy_coef':0.})]:
-  pc=cfg.ppo._replace(**changes);tx,loss=make_learner(built['policy'],pc)
-  update=make_update(tx,loss,pc)
-  params,_,_,metrics=jax.block_until_ready(update(before.params,before.opt_state,batch,after.rng))
+  pc=cfg.ppo._replace(**changes)
+  variant=make_vec_train(cfg._replace(ppo=pc),sim,bank)
+  result_runner,metrics=jax.block_until_ready(jax.jit(variant['learn'])(after,tr,before.carry))
+  params=result_runner.params
   result[label]={'heads':measure(params),'metrics':{k:float(v) for k,v in metrics.items()}}
   if label=='standard':
    err=max(float(np.max(np.abs(np.asarray(a)-np.asarray(b)))) for a,b in zip(jax.tree.leaves(params),jax.tree.leaves(production_params)))
@@ -120,7 +120,7 @@ def main():
       delta_logprob=float(delta_lp[mask].mean()),probability_increased=float((delta_lp[mask]>0).mean()),
       button_counts=np.bincount(buttons[mask].astype(int),minlength=8).tolist())
    if spec.get('branch_audit') and not branches_done and hits.sum()>=16:
-    report.setdefault('branches',{})[name]=branch_audit(built,cfg,before,after,batch,hits,runner.params)
+    report.setdefault('branches',{})[name]=branch_audit(built,cfg,sim,bank,before,after,tr,batch,hits,runner.params)
     branches_done=True
     print('BRANCH AUDIT',name,report['branches'][name],flush=True)
    record=dict(update=int(runner.step)//16384,cs=int(np.asarray(tr.cs_delta)[:,:,0].sum()),
