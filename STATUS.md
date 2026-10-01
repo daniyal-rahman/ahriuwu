@@ -1,4 +1,4 @@
-# STATUS — 2026-10-01 10:49 UTC
+# STATUS — 2026-10-01 11:30 UTC
 
 Current task: diagnose and improve JAX AFK farming, using frozen 120-second
 trials. No demonstrated solution yet. Dani authorizes bounded reversible
@@ -6,20 +6,23 @@ experiments through **15:37 UTC today**; preserve checkpoints and use Slurm.
 Longer-term transfer gate remains >30 CS in a 10-minute C# mirror trial.
 History and evidence: `docs/EXPERIMENTS.md`, `docs/JAX_FIDELITY_LEDGER.md`.
 
-## Running
+## No active runs — token budget reached
 
-**E67_afk_staggered — Slurm1833**, started10:47UTC,1-hour allocation.
-15standardGPUcanaries passed364.28s; additional warmup/GRU canary passed80.81s;
-launcher180s startup watch passed. Bridge lanerl-event-1833.service verified
-active/result updating, expiry2026-10-01T12:54:52.537235+00:00. Fullsize warmup passed:180224untrained decisions, all deadlines full.
-Frozen initial exactly9.5625CS/0deaths; u12810.0625CS/.140625deaths/207.2674towerHP.
-Promising CS direction but fails survival gate; continue512budget.
-Same E63 full objective and PPO: E46/v3/freshAdam/LR1e-4/4epochs/gamma.99,
-XP0/HP100/personal tower900/death300. Only training phases differ.
-Fixed-policy warmup discards initial shortened episodes; then all training games
-and frozen evaluations retain120s length.512updates8.389M plus180224untrained
-warmup decisions. Success>=10.5625CS/<=.05deaths, sameinitial9.5625CS required.
-Expected finish11:25–11:35UTC. Log `/mnt/nfs/shared/E67_afk_staggered-1833.out`.
+All this thread's submitted runs finished; no new experiment authorized beyond
+the exhausted1M-token goal budget. No solution demonstrated. GPU window had
+remaining time, but token budget is the stopping constraint. Existing checkpoints
+and opt-in implementations retained. E64 remains prepared, not submitted.
+
+E67 Slurm1833 COMPLETED/0:0 in41m44s. Frozen CS9.5625→10.0625→6.703125→9.921875;
+final deaths.140625/personal towerHP802.399197/reward24.160935. Final reward
+components:gold7.710979,death−2.109375,health−4.736133,tower23.295461,position~0.
+Staggering greatly improved tower play in this seed, but failed predeclared
+CS>=10.5625/deaths<=.05 gate. No independent-seed confirmation or farming fix.
+Checkpointstep8388608 finite/latest identical,512metrics/nonfinite0,
+medianupdate3.63235s. Fullsize warmup discarded180224untrained decisions;
+initial frozen gameplay exactly matchedE46. Watcher1833 stopped after active
+review; inactive/registry clean. Run
+`/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/`.
 
 E65 Slurm1832 COMPLETED/0:0 in38m01s. FrozenCS9.5625→5.359375→7.109375→3.546875;
 final deaths.015625/towerHP3.191875/reward1.953154. Reward terms:gold2.210945,
@@ -59,7 +62,11 @@ Watcher1831 stopped after active review; inactive and registry clean.
   and checkpoints as evidence; do not describe higher total reward as a CS fix.
 - E65 failed the simpler farming objective. Secondary reward conflict alone
   is not a sufficient explanation; do not promote reward removal as a fix.
-- E67 now tests training batch phase diversity; LEARN-AFK-20.
+- E67 demonstrates much stronger tower learning in one seed, not reliable
+  farming improvement. A useful next controlled test is E65 farming-focused
+  rewards with E67 phase staggering, compared against both parents. NOT
+  implemented/submitted. If it improves CS, independently replicate and then
+  restore/validate the intended full objective before claiming a solution.
 - E64 longer discount horizon remains prepared, dry-run passed, NOT submitted.
 
 Older E40 mirror training remains interrupted at5795updates; checkpoint
