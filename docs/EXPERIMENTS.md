@@ -7,9 +7,12 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E74b_combat_feature_preflight` |10-01| GPU diagnostic | E74 retry at production precision, finite fountain encoding |No learned result|20min cap| Slurm1850 submitted, startup watch pending | Same tolerance, added zero-period regression |
-| `E75b_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76b |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | Requires E74b and initial frozen retention |
-| `E76b_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Combat stats/readiness, unchanged GRU/PPO/reward |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15 |
+| `E74c_combat_feature_preflight` |10-01| GPU diagnostic | E74b retry: worker uses launcher source metadata |No learned result|20min cap| Prepared, not submitted | Same13tests; artifact writer fix only |
+| `E75c_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76c |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | Requires E74c and initial frozen retention |
+| `E76c_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Combat package, unchanged GRU/PPO/reward |E67/freshAdam|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15 |
+| `E74b_combat_feature_preflight` |10-01| GPU diagnostic | E74 retry at production precision, finite fountain encoding |No learned result|20min cap| FAILED1850/1:0,4m22s;13tests passed, artifact Git path failed | Same tolerance, added zero-period regression |
+| `E75b_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76b |E67/freshAdam|512updates8.389M,1h cap| Superseded before submission by E75c | Requires E74c and initial frozen retention |
+| `E76b_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Combat stats/readiness, unchanged GRU/PPO/reward |E67/freshAdam|512updates8.389M,1h cap| Superseded before submission by E76c | FinalCS>=10.921875 and control+1, deaths<=.15 |
 | `E74_combat_feature_preflight` |10-01| GPU diagnostic | Tencent-documented combat package canaries |No learned result|20min cap| FAILED1848/1:0,1m48s;4tests passed, migration tolerance failed | Visibility/bar precision, migration/gradient, nonzero likelihood/reset/update and v3 regression |
 | `E75_combat_feature_control` |10-01| JAX AFK PPO control | Original E67 inputs, matched E76 |E67/freshAdam|512updates8.389M,1h cap| Superseded before submission by E75b | Requires E74b and initial frozen retention |
 | `E76_combat_feature_inputs` |10-01| JAX AFK PPO inputs | Applicable combat stats/readiness package, unchanged GRU/PPO/reward |E67/freshAdam, zero projections|512updates8.389M,1h cap| Superseded before submission by E76b | FinalCS>=10.921875 and control+1, deaths<=.15 |

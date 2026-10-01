@@ -19,15 +19,16 @@ feature package; current GRU/PPO/reward/action heads retained. v6 implementation
 and tests prepared, no learned result. Field provenance, video-readiness gap and
 remaining reference differences are explicit. No full Tencent reproduction claim.
 
-E74/1848 FAILED1:0,1m48s: four tests passed, migration precision mismatch.
-E74b submitted as Slurm1850; startup watch in progress. Production highest precision, same tolerance; finite fountain
-attack-speed encoding with regression. E75bcontrol/E76bfeature prepared,
-512updates8.389M each/1hSlurmcap, not submitted. E74b and initial64-game
-retention required. Final gate featureCS>=10.921875 and control+1, deaths<=.15.
-E75/E76 never submitted, superseded by new preflight references.
-E74b/1850 is the only submitted project job, ETA~5–10min after start.
-No training submitted. E74 failed before
-canary marker, so no bridge was armed. Unrelated jobs untouched.
+E74b/1850 FAILED1:0,4m22s after all13GPUtests passed; artifact writer Git
+path was unavailable on desktop. E74c prepared with launcher-metadata writer
+fix only; feature code unchanged. Earlier E74 migration precision failure is
+resolved at production highest precision, same tolerance. Fountain AS finite
+regression passes. No learned result yet.
+E75ccontrol/E76cfeature prepared,512updates8.389M each/1hSlurmcap. Initial64-game
+E67 retention and passed E74c required. Primary final gate featureCS>=10.921875
+and control+1, deaths<=.15. Earlier control/feature configs never submitted.
+No project jobs running/queued; no training-result ETA. E74b was actively
+reviewed at failure, so no watcher was armed. Unrelated jobs untouched.
 
 ## Narrow investigation completed
 
