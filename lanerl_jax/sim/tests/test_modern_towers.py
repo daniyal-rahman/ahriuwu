@@ -135,3 +135,25 @@ def test_locked_lane_growth_clock_and_minion_tier_damage():
     assert t.advance(inner,590.,False,False).growth_active
     np.testing.assert_allclose(t.minion_shot_damage(1000.,2,tier=jnp.arange(4)),[140,110,80,80])
     np.testing.assert_allclose(t.minion_shot_damage(1000.,3,100.),50/1.7)
+
+
+def test_explicit_growth_approximation_endpoints_and_finite_runtime():
+    low,high=jax.jit(t.overgrowth_level_fractions)(jnp.array([1.,9.5,18.,20.]))
+    np.testing.assert_allclose(low,[.02,.054,.088,.088])
+    np.testing.assert_allclose(high,[.033,.111,.189,.189])
+    state=exposed(100.)
+    hit=jax.jit(lambda s:t.apply_turret_damage(s,100.,0.,0.,0.,champion_attack=True,average_team_level=9.5))(state)
+    np.testing.assert_allclose(hit.damage,486.,rtol=1e-5)
+    assert jnp.isfinite(hit.state.hp)
+    assert hit.state.plates.dtype == state.plates.dtype
+
+
+def test_jitted_scan_preserves_state_dtypes_through_plate_and_growth():
+    def body(state,now):
+        state=t.advance(state,now,jnp.bool_(True),jnp.bool_(False))
+        hit=t.apply_turret_damage(state,now,jnp.float32(40),jnp.float32(0),jnp.float32(0),
+                                  champion_attack=True,average_team_level=jnp.float32(3))
+        return hit.state,hit.damage
+    result,damage=jax.jit(lambda state:jax.lax.scan(body,state,jnp.arange(30,120,dtype=jnp.float32)))(t.init_outer_turret())
+    assert result.plates==2 and jnp.all(jnp.isfinite(damage))
+    assert result.growth_since==100

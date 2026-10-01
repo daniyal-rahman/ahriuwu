@@ -129,6 +129,17 @@ def champion_structure_attack(base_ad, bonus_ad, ap):
     return base_ad + bonus_ad + .6 * ap, .6 * ap > bonus_ad
 
 
+def overgrowth_level_fractions(average_team_level):
+    """APPROXIMATION: linear between Riot published level1/18 endpoints.
+
+    This is an explicit finite simulator profile, not a verified server curve.
+    Shipped client Lua contains only UI metadata. Clamp above18 rather than
+    inventing a further scaling curve for the modern top-quest level20 cap.
+    """
+    level_fraction = jnp.clip((jnp.asarray(average_team_level) - 1.) / 17., 0., 1.)
+    return .02 + .068 * level_fraction, .033 + .156 * level_fraction
+
+
 def overgrowth_damage(state, now, minimum_fraction, maximum_fraction):
     """Fractions are explicit: published level endpoints do not define curve.
 
@@ -144,16 +155,21 @@ def apply_turret_damage(state, now, physical, magic, true, *,
                         nearby_enemy_champions=1, melee_champion=False,
                         champion_attack=False, armor_pen_flat=0., armor_pen_percent=0.,
                         magic_pen_flat=0., magic_pen_percent=0.,
-                        growth_min_fraction=jnp.nan, growth_max_fraction=jnp.nan):
+                        growth_min_fraction=None, growth_max_fraction=None, average_team_level=1.):
     """Apply a damage packet and report plate/gold events for reward sharing.
 
-    Overgrowth coefficients must be supplied for champion procs; omitted values
-    deliberately yield NaN on a proc rather than silently disabling crystals.
+    Default Overgrowth uses the explicitly approximate linear-level profile.
+    Pass both fractions to replace that profile after live/server verification.
     Overgrowth is a separate turret-owned true packet, not melee-amplified.
     For minion hits caller scales AD by .60 (.84 cannon) before this function.
     Reward eligibility/sharing and first-turret global state belong to world.
     Bulwark acquired by this packet mitigates subsequent packets only.
     """
+    estimated_min, estimated_max = overgrowth_level_fractions(average_team_level)
+    if growth_min_fraction is None:
+        growth_min_fraction = estimated_min
+    if growth_max_fraction is None:
+        growth_max_fraction = estimated_max
     resist = resistance(state, now, nearby_enemy_champions)
     armor = jnp.maximum(0., resist * (1. - jnp.clip(armor_pen_percent, 0., 1.)) - armor_pen_flat)
     mr = jnp.maximum(0., resist * (1. - jnp.clip(magic_pen_percent, 0., 1.)) - magic_pen_flat)
@@ -165,7 +181,7 @@ def apply_turret_damage(state, now, physical, magic, true, *,
     damage = (normal * jnp.where(melee_champion, 1.2, 1.) + crystal) * jnp.where(backdoor, .2, 1.)
     hp = jnp.maximum(state.hp - damage, 0.)
     thresholds = state.max_hp * jnp.asarray([.9, .75, .55, .3, 0.])
-    plates = jnp.where(state.tier == NEXUS, 0, jnp.maximum(state.plates, jnp.sum(hp <= thresholds)))
+    plates = jnp.where(state.tier == NEXUS, 0, jnp.maximum(state.plates, jnp.sum(hp <= thresholds, dtype=jnp.int32)))
     gained = plates - state.plates
     slots = jnp.arange(4)
     expiry = jnp.where((slots >= state.plates) & (slots < plates), now + 20., state.bulwark_until)

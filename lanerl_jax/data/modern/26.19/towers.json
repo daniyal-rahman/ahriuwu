@@ -67,12 +67,17 @@
       0.088,
       0.189
     ],
-    "level_interpolation": null,
+    "level_interpolation": "linear_between_published_level_endpoints",
     "suppression_radius": null,
-    "bonus_melee_range_formula": null
+    "bonus_melee_range_formula": null,
+    "level_curve_verified": false,
+    "level_clamp": [
+      1,
+      18
+    ]
   },
   "unresolved": [
-    "Exact Overgrowth team-level formula: endpoint ranges do not establish interpolation. apply_turret_damage takes explicit fractions and produces NaN if a proc occurs without them; never silently disable the mechanic.",
+    "Exact Overgrowth team-level formula remains unknown. Runtime explicitly approximates linear_between_published_level_endpoints and clamps1\u201318 (top role quest permits level20). Supply measured/server coefficients to replace it; do not label this profile exact26.19 fidelity.",
     "Overgrowth suppression and backdoor proximity radii must be supplied by world after evidence review; booleans deliberately isolate unknown geometry.",
     "Overgrowth initial timestamp: wiki says90s and1:40 game time; init defaults targetability10s, caller can supply verified targetability timestamp.",
     "Melee Overgrowth bonus attack-range curve and whether turret-owned crystal damage receives melee amplification require client/live verification; crystal packet currently not amplified.",
@@ -139,5 +144,37 @@
     },
     "nexus_respawn_seconds": 180,
     "nexus_respawn_hp_fraction": 0.4
+  },
+  "client_script_evidence": {
+    "build": "16.19.8230722",
+    "manifest_sha256": "f7b09f71ae917190df3cb7e7b254724e3fb485417a02f1d20b19f6866adea73c",
+    "assets": {
+      "data/shared/spells/sr_2026_s1_turretovergrowthminionmanager.luabin64": {
+        "wad": "DATA/FINAL/Scripts.wad.client",
+        "sha256": "555deb06a31b918896aac04a956b0e2b801a9daf8c2d05ddaab133bc0961c8c9",
+        "bytes": 98
+      },
+      "data/shared/spells/turretovergrowthcooldown.luabin64": {
+        "wad": "DATA/FINAL/Scripts.wad.client",
+        "sha256": "a4614e53fdab95c6c7e4f54315fe568ab8441e70e4e1d35781f3daa6cdbfc094",
+        "bytes": 117
+      },
+      "data/shared/spells/turretovergrowthmanager.luabin64": {
+        "wad": "DATA/FINAL/Scripts.wad.client",
+        "sha256": "d1d72226a3468cc45b544fa5265d3c71bfd2dc9ee269faf883901c2612cef9a6",
+        "bytes": 145
+      },
+      "data/shared/spells/turretovergrowthmeleebuffer.luabin64": {
+        "wad": "DATA/FINAL/Scripts.wad.client",
+        "sha256": "948faeb3aee3c3caa77de1c286415df7daa6a61eaaf2f9ada4013ab1a3610886",
+        "bytes": 120
+      },
+      "data/shared/spells/turretovergrowthready.luabin64": {
+        "wad": "DATA/FINAL/Scripts.wad.client",
+        "sha256": "1e6142dddf0289a3d8a0aeef852a3609e2c1ca8fceec08b0459e8fd558553d7d",
+        "bytes": 114
+      }
+    },
+    "finding": "Lua5.1 binaries98\u2013145bytes contain BuffName/UI metadata only, no server calculation bodies. Turret/Overgrowth CharacterRecord binaries likewise lack the level-damage formula."
   }
 }
