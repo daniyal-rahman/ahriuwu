@@ -79,3 +79,15 @@ def test_combat_zero_period_profile_has_finite_encoding():
     row = int(np.flatnonzero(np.asarray(old.slot_unit)==2)[0])
     assert np.isfinite(new.entities).all() and np.isfinite(new.self_vec).all()
     assert float(new.entities[row,16+ENTITY_FEATURES.index('attack_speed')]) == 5.
+
+
+def test_movement_and_recall_mask_follow_own_cast_locks():
+    s,p=scene()
+    from lanerl_jax.train.action_masks import available_buttons
+    from lanerl_rl.constants import BUTTON_INDEX
+    for field in ('r_cast_ms','recall_windup_ms'):
+        locked=s.replace(**{field:getattr(s,field).at[0].set(100.)})
+        mask=np.asarray(available_buttons(observe(locked,p)[1].self_vec))
+        assert mask[BUTTON_INDEX['noop']] and mask.sum()==1
+    cooldown=s.replace(aa_cooldown=s.aa_cooldown.at[0].set(1.))
+    assert bool(available_buttons(observe(cooldown,p)[1].self_vec)[BUTTON_INDEX['attack_move']])

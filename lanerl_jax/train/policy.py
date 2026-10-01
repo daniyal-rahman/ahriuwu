@@ -138,6 +138,8 @@ class PolicyConfig(NamedTuple):
     #: the loss uses the same masked log-prob. No parameters change; the
     #: collector supplies the mask per step from the champion's position.
     click_mask: bool = False
+    #: Mask unavailable buttons from own observed readiness (combat interface).
+    action_mask: bool = False
     #: Stop the critic's gradient at the shared trunk: the value head trains
     #: only its own weights (E12a's regime), the actor trains the trunk. The
     #: decisive test of "the critic drags the trunk" (PPO-16 follow-up).
@@ -256,6 +258,8 @@ class LanePolicy(nn.Module):
         combat = c.observation_interface == COMBAT_INTERFACE
         if combat and (c.entity_dim != COMBAT_ENTITY_DIM or c.self_dim != COMBAT_SELF_DIM):
             raise ValueError('combat observation dimensions do not match the declared feature contract')
+        if c.action_mask and not combat:
+            raise ValueError('action masking requires combat readiness observations')
         if history and (c.entity_dim != HISTORY_ENTITY_DIM or c.self_dim != 16):
             raise ValueError('visible-history observations require 76 entity and 16 self features')
         # Static shapes, so this is a trace-time check with no runtime cost.
@@ -320,6 +324,9 @@ class LanePolicy(nn.Module):
             value=nn.Dense(1, name=VALUE_HEAD_NAME, **VALUE)(
                 jax.lax.stop_gradient(h) if c.detach_critic else h)[..., 0],
         )
+        if c.action_mask:
+            from .action_masks import available_buttons
+            logits = logits._replace(button=jnp.where(available_buttons(self_vec), logits.button, -1e4))
         if c.click_proposals:
             from .click_proposals import proposal_cells, mixture_click_logits
             query = nn.Dense(c.d_model, name='click_proposal_query',

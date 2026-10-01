@@ -1,0 +1,6 @@
+{
+  "id": "E77_combat_mask_preflight",
+  "engine": "combat-feature-audit",
+  "slurm_time": "00:20:00",
+  "question": "LEARN-AFK-30: user-requested own action availability and map screen masks, direct current/max HP. Automatic GPU regression checks: masked actor/learner likelihood across resets, no probability on unavailable buttons or blocked map cells, finite PPO update, queued attack-move remains legal on AA cooldown, own cast locks, visibility, original v3 regression. No learning experiment; projectiles excluded."
+}

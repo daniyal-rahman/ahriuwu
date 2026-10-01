@@ -5,8 +5,9 @@ unset XLA_FLAGS
 export JAX_PLATFORMS=cuda,cpu XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4 MKL_NUM_THREADS=4
 ./.venv-gpu/bin/python -m pytest -q lanerl_jax/obs/tests/test_combat_features.py lanerl_jax/train/tests/test_combat_features.py
+./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_click_mask.py
 ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_vec_train.py -k 'relative_reward or gru-afk'
-echo 'CANARY PASSED: combat visibility, bar quantization, migration, nonzero actor/learner, reset/update and original v3 AFK collector'
+echo 'CANARY PASSED: combat visibility, direct HP, action/map masks, migration, actor/learner/reset/update and v3 collector'
 ./.venv-gpu/bin/python - "$1" <<'PY'
 import json, os, sys
 from pathlib import Path

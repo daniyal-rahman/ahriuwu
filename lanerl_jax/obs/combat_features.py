@@ -23,6 +23,7 @@ SELF_FEATURES = (
     'attack_available', 'q_active', 'w_active', 'e_active',
     'q_rank', 'w_rank', 'e_rank', 'r_rank',
     'q_available', 'w_available', 'e_available', 'r_available',
+    'move_available', 'recall_available',
 )
 COMBAT_ENTITY_DIM = 16 + len(ENTITY_FEATURES)
 COMBAT_SELF_DIM = 16 + len(SELF_FEATURES)
@@ -71,6 +72,8 @@ not whether attacking any particular minion will work on the next sim tick.
         attack_available.astype(obs.self_vec.dtype),
         state.buffs.q.active[me], state.buffs.w.active[me], state.buffs.e.active[me],
     ]), state.spell_level[me] / jnp.array([5., 5., 5., 3.]),
-        status.can_cast[me].astype(obs.self_vec.dtype)]).astype(obs.self_vec.dtype)
+        status.can_cast[me].astype(obs.self_vec.dtype),
+        jnp.stack([state.alive[me] & (state.recall_windup_ms[me] <= 0) & (state.r_cast_ms[me] <= 0),
+                   status.may_cast[me]]).astype(obs.self_vec.dtype)]).astype(obs.self_vec.dtype)
     return obs._replace(entities=jnp.concatenate([obs.entities, extra], -1),
                         self_vec=jnp.concatenate([obs.self_vec, own]))

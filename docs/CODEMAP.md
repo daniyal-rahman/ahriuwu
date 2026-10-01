@@ -76,3 +76,5 @@ LIVE (opt-in experimental, LEARN-AFK-29): `obs/combat_features.py` v6 appends vi
 TOOL: `slurm/combat_feature_audit.sbatch` / `combat-feature-audit` runs E74 GPU contract/regression tests and writes a passed preflight artifact; no learned result.
 
 TOOL: `ops/score_combat_features.py` reads completed E75c/E76c frozen evaluations, checks matched specs/cohorts and E67 initial retention, and scores only update512 against LEARN-AFK-29 gates; no training/checkpoint mutation.
+
+LIVE (opt-in): `train/action_masks.py` masks buttons using own observed availability; shared policy forward keeps actor/learner identical. `wave_scenario_train.py` exposes action_mask/click_mask experiment switches. Existing `actions.py` map mask supplies standable screen cells. LEARN-AFK-30, E77 automatic GPU canary.

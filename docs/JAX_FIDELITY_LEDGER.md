@@ -901,3 +901,27 @@ No training submitted at this planning/implementation entry.
 | LEARN-AFK-29 control final | E75c/1856 COMPLETED0:0,41m26s,512updates/8.389M decisions;512metric rows,zero reported nonfinite losses,no traceback. Manifest matches spec and all64initial games/bothteams retain E67. Final frozen64:9.453125CS/.109375deaths/764.71753personal towerHP; initial9.921875/.140625/802.39920. LowHP32:9.25CS/.09375deaths; fullHP32:9.65625/.125. Final checkpoint SHA256 cfe534cbeca916fde8f8329c30a44ef7814ed0faf905781c5d458fa7b9de44b6. | Extra unchanged-input training yields -.46875CS and -.03125deaths; no farming improvement or feature conclusion. This is the declared final control, not a selected intermediate. E76c dry-run passed but remains unsubmitted while automatic goal continuation is paused at user stand-down request. Bridge notification accepted; service inactive and registry entry absent. No running/queued project jobs. |
 
 | LEARN-AFK-29 user HP revision | User requests direct HP/maxHP for the reference baseline. Opt-in combat extras now read current HP for already-visible units and self, retaining maxHP and unchanged original v3 columns. Regression checks direct1.7HP even when the original bar rounds to0; hidden-unit masking remains. Syntax checked only; revised GPU canaries pending. | Supersedes bar-reconstruction semantics above for future runs; earlier E74c gate is not evidence for this revision. Exact HP is a simulator-reference input, not a demonstrated video measurement. No new experiment launched. Projectile draft is separate/uncommitted, scratch initialization pending. |
+
+### LEARN-AFK-30 — requested legality masks, projectile idea remains separate
+
+User authorizes button/map masks. Combat self vector grows33→35 with own
+move/recall availability. Shared policy forward masks dead/locked buttons and
+unavailable Q/W/E/R, preserving E cancel and queueable attack-move on AA cooldown.
+NOOP always legal. No target IDs or tactical kill thresholds. R target/range
+and target-conditioned click masks remain unimplemented: this is own readiness
+plus map masking, not complete Tencent action parity. Existing joint screen
+mask excludes unstandable map cells and minimap; all-true fallback only when no
+standable cells exist. Actor and learner use identical masked distributions.
+Scenario launcher exposes both switches. Existing automatic combat submission
+suite now tests masked sampling/logprob/reset/finite update; E77 verifies these
+and existing map-mask/v3 regressions. No trained result or new training launch.
+Projectile integration draft removed from live imports; untracked draft remains
+untested and outside this study. Direct HP follows preceding user revision.
+
+Re-read official491-field environment table: fields256–259 describe nearest
+enemy-hero projectile x/z/distance. Listed18-field minion block has visibility,
+alive/team/type, positions/distances,HP/fraction/maxHP,AD,income,buff mark;
+no explicit target, cooldown, windup or animation phase. This is specific to
+that documented interface, not proof about the original2020professional model
+or later725-field baseline. Raw game state availability is not actor-feature
+availability. Source: https://aiarena.tencent.com/hok/doc/environments/index.html

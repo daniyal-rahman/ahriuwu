@@ -50,6 +50,7 @@ def test_combat_nonzero_features_collector_learner_and_update():
     from lanerl_jax.train.ppo import factored_log_prob
     cfg=VecConfig(n_envs=2,rollout_steps=4,n_minibatches=2,opponent='afk',policy=config(),
                   episode_s=120.3,stagger_initial=False)
+    cfg=cfg._replace(policy=cfg.policy._replace(action_mask=True,click_mask=True))
     states=[raw_state(SimpleNamespace(params=lane_params()),seed) for seed in (0,1)]
     bank=jax.tree.map(lambda a,b:jnp.stack([a,b]),*states)
     built=make_vec_train(cfg,SimConfig.training().replace(step_ticks=6),bank)
@@ -62,8 +63,32 @@ def test_combat_nonzero_features_collector_learner_and_update():
     assert np.asarray(tr.obs_self[...,16:]).any()
     assert np.asarray(tr.done).any(), 'exercise episode reset'
     lg=built['loss'].forward(r.params,batch)
-    lp=factored_log_prob((lg.button,lg.screen_x,lg.screen_y),batch['action'],batch['uses_screen'])
+    lp=factored_log_prob((lg.button,lg.screen_x,lg.screen_y),batch['action'],batch['uses_screen'],click_mask=batch['click_mask'])
     np.testing.assert_allclose(lp,batch['log_prob'],atol=1e-5,rtol=1e-4)
+    from lanerl_jax.train.action_masks import available_buttons
+    allowed=available_buttons(batch['self'])
+    chosen=jnp.take_along_axis(allowed,batch['action'][0][...,None],axis=-1)[...,0]
+    assert np.asarray(chosen).all()
+    button_prob=jax.nn.softmax(lg.button,axis=-1)
+    assert float(jnp.where(allowed,0.,button_prob).sum()) == 0.
+    ax,ay=batch['action'][1:]
+    flat=batch['click_mask'].reshape((-1,96,54))
+    assert np.asarray(flat[jnp.arange(flat.shape[0]),ax.reshape(-1),ay.reshape(-1)]).all()
     trained,metrics=jax.jit(built['run_chunk'],static_argnums=1)(r2,1)
     assert np.isfinite(np.asarray(metrics['policy_loss'])).all()
     assert all(np.isfinite(x).all() for x in jax.tree.leaves(trained.params))
+
+
+def test_button_mask_keeps_queueable_attack_move_and_noop():
+    from lanerl_jax.obs.combat_features import SELF_FEATURES
+    from lanerl_jax.train.action_masks import available_buttons
+    from lanerl_rl.constants import BUTTON_INDEX
+    sv=jnp.zeros((2,COMBAT_SELF_DIM),jnp.float32)
+    sv=sv.at[:,16+SELF_FEATURES.index('move_available')].set(1.)
+    sv=sv.at[0,16+SELF_FEATURES.index('e_available')].set(1.)
+    sv=sv.at[1,14].set(1.)
+    allowed=np.asarray(available_buttons(sv))
+    assert allowed[0,BUTTON_INDEX['attack_move']], 'AA readiness0 must not prohibit a queued order'
+    assert allowed[0,BUTTON_INDEX['e']], 'E cancellation uses existing cast availability'
+    assert not allowed[0,BUTTON_INDEX['q']] and not allowed[0,BUTTON_INDEX['r']]
+    assert allowed[1,BUTTON_INDEX['noop']] and allowed[1].sum()==1

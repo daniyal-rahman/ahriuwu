@@ -134,6 +134,8 @@ def main():
             setup.write_text(json.dumps(rows,indent=2))
     calibrate(bank,sim,out)
     pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=spec.get('detach_critic',True))
+    pcfg=pcfg._replace(click_mask=spec.get('click_mask',False),
+                      action_mask=spec.get('action_mask',False))
     if spec.get('click_proposals', False):
         if spec.get('opponent') != 'afk':
             raise ValueError('click-proposal experiment currently supports AFK evaluation only')
