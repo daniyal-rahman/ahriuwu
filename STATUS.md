@@ -1,22 +1,21 @@
-# STATUS — 2026-10-01 18:57 UTC
+# STATUS — 2026-10-01 19:07 UTC
 
-Current authorization: renewed research budget in this thread, narrow E68
-caster investigation first; no broad PPO/LR sweeps. The old budget/window below
-are historical. Feature experiment conditional on execution checks.
+Current authorization: fresh research budget, narrow E68 execution audit first,
+then bounded visible-history experiment if justified; no broad PPO/LR sweeps.
 
-E69 Slurm1835 FAILED/1:0 at5m36s: full1201frame E68 reproduction exact on all
-checked state/action fields,12CS/0deaths, correct checkpointSHA. Probe then
-failed converting typed JAX PRNG key in all-state-leaf comparator. No valid
-branch conclusion. Comparator repaired; E69b prepared from saved baseline
-state/carry/key, same76branches and30min cap, Slurm1836 running;12canaries/180s startup watch passed.
-E69 watcher stopped after review; inactive/registry clean verified.
-E69b/1836 is the only project job. Unrelated1803/1736 untouched.
-Restored baseline states match E68 exactly. Tick compilation/branches pending,
-no valid branch findings yet. Rough ETA5–20min; hard Slurm end19:27UTC.
-Bridge `lanerl-event-1836.service` active; expiry 2026-10-01 20:00 UTC.
-On wake inspect E69b/result.json and unit15/unit19 event timelines; require
-all-state instrumentation agreement. Compare target CS AND local total CS;
-check unit19 Q reset. Verify watcher/registry cleanup after active review.
+E69b Slurm1836 COMPLETED/0:0 in8m52s. Exact E68 reproduction (E69,1201frames)
+and both tick/ordinary baselines maxerror0. Caster15 killed by minion14 at
+80.953438s while ownwindup.196147s; caster19 killed by minion20 at113.280203s
+while ownCD.784716s after normal+Q nonlethal hits. No missing champion hit/CS
+credit in either baseline; no simultaneous champion/minion lethal race.
+76physical-option branches: caster15 can be secured but local totalCS<=baseline1;
+caster19 can be secured with localCS1 versusbaseline0. Findings LEARN-AFK-24.
+No global farming fix or C# parity claim. E69b watcher stopped; verify cleanup.
+
+Next: narrow timing refinement preserving unit15's earlier unit7 kill and
+unit19's first normal hit, with one ground move then NOOP before delayed AA/Q.
+No project jobs currently running. Unrelated1803/1736 untouched.
+Feature experiment remains conditional on completed execution/timing review.
 
 ## Previous handoff (historical)
 
