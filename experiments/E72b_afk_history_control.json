@@ -1,0 +1,46 @@
+{
+  "id": "E72b_afk_history_control",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "LEARN-AFK-26 paired visible-history test. E69/E70 exact audits establish local delayed-hit opportunities; precedent LEARN-AFK-23, not proof of missing-input causality. Same E67final/sourceSHA7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55, freshAdam, original LR1e-4/4epochs/gamma.99/entropy.001, XP0/HP100/personal tower900/death300, phase staggering.512updates8.389M decisions perarm,1hSlurm/55minworker. Originalv3 control E72b versus observed-history E73b. Frozen64games0/128/256/512; initial all-game CS/deaths/kills/spell selections must exactly match E67final and gold/HP/tower/reward agree within numeric tolerance before learning. Final endpoint is primary: history CS>=10.921875 AND >=control+1, deaths<=.15; independent seed confirmation only if promising. Stop on nonfinite/contract/preflight/initial retention failure or time cap; no blind extension. No target IDs, hidden timings or projectile targets in actor. Failure only rejects this bounded fine-tuning implementation. This is the original-input control.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 300.0,
+  "stagger_initial": true,
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/evaluations.jsonl",
+    "update": 512
+  },
+  "preflight_gate": "/mnt/nfs/shared/E71b_visible_history_preflight/result.json",
+  "visible_history": false,
+  "init_sha256": "7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55"
+}
