@@ -216,7 +216,7 @@ def main():
         from slurm_event_test import launch
         launch(spec, a.dry_run)
         return
-    if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab", "bush-ab", "vision-smoke", "paired-vec", "replay-pair", "escape-counterfactual", "wave-scenario", "wave-replay", "credit-audit", "behavior-audit"):
+    if spec.get("engine") in ("gru-profile", "full-profile", "vision-ab", "bush-ab", "vision-smoke", "paired-vec", "replay-pair", "escape-counterfactual", "wave-scenario", "wave-replay", "credit-audit", "behavior-audit", "afk-counterfactual"):
         from gru_profile_launch import launch
         launch(spec, a.dry_run, resume=a.resume)
         return

@@ -1,0 +1,9 @@
+{
+  "id": "E59_afk_caster_forks",
+  "engine": "afk-counterfactual",
+  "slurm_time": "00:40:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E57_afk_four_epochs/vec-s0-20261001-061021-5056795c/ckpt_002097152.msgpack",
+  "max_cases": 16,
+  "seeds": 4,
+  "question": "Capture up to16 visible onehit caster opportunities on32 frozen120s AFK paths; paired natural vs2s directed caster option then frozen policy,4continuations/case. Compare CS,discounted true reward at2/8/end,health rescore100/25/0,critic GAE. Hypothesis: credit/reward fails to favor reachable caster option despite improvedCS. Descriptive if targetdies beforearrival; do not assume harvestable. Stop40min/no cases/nonfinite; no trained model changes. Overnight authorized."
+}

@@ -56,3 +56,5 @@ TOOL: `ops/figures/afk_lr_comparison.py` regenerates the E50–E53 frozen CS/dea
 TOOL: `slurm/credit_audit.sbatch` / `credit-audit` launcher engine executes indexed E54 AFK learning diagnostic; `Transition.cs_delta` is exact per-decision CS telemetry.
 
 | `slurm/behavior_audit.sbatch` | TOOL | E58 bounded GPU frozen behavior audit via launcher; probe indexed in probes/README |
+
+| `slurm/counterfactual_audit.sbatch` | TOOL | E59 bounded GPU same-state caster forks via launcher |
