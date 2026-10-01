@@ -87,6 +87,33 @@ def test_loop_runs_and_actor_learner_agree(core, opponent):
         assert batch["carry0"].shape == (cfg.n_envs * cfg.learn_agents, 32)
 
 
+def test_stagger_warmup_preserves_weights_and_full_episode_contract():
+    from lanerl_jax.train.wave_scenario_train import warmup_staggered_runner
+    pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,
+        d_model=16,n_layers=1,n_heads=4,ffn_dim=32,ctx_dim=32,core_dim=32,
+        mlp_hidden=32,mlp_layers=1)
+    cfg=VecConfig(n_envs=4,rollout_steps=6,n_minibatches=2,episode_s=2.,
+        opponent='afk',policy=pcfg,stagger_initial=True)
+    built=make_vec_train(cfg,_sim(),_bank())
+    initial=built['initial_runner'](jax.random.key(13))
+    warmed,info=warmup_staggered_runner(built,initial,cfg)
+    for field in ('params','opt_state','step'):
+        for before,after in zip(jax.tree.leaves(getattr(initial,field)),
+                               jax.tree.leaves(getattr(warmed,field))):
+            np.testing.assert_array_equal(before,after)
+    assert info['untrained_environment_decisions']==5*6*4
+    assert info['clock_max_ms']>info['clock_min_ms']+100
+    np.testing.assert_array_equal(warmed.deadline_ms,2000.)
+    # Every future reset is a normal full game; no artificial warmup terminal
+    # can enter learning. Real recurrent carry must agree with recomputation.
+    _,tr,batch=jax.jit(built['rollout'])(warmed)
+    np.testing.assert_array_equal(tr.done,tr.done_full)
+    lg=built['loss'].forward(warmed.params,batch)
+    lp=factored_log_prob((lg.button,lg.screen_x,lg.screen_y),batch['action'],batch['uses_screen'])
+    np.testing.assert_allclose(lp,batch['log_prob'],rtol=1e-4,atol=1e-5)
+    assert np.asarray(warmed.carry).any()
+
+
 def test_relative_reward_afk_death_cost_is_once_per_event():
     p = init_lane(seed=0)
     dead = p.replace(alive=p.alive.at[0].set(False), hp=p.hp.at[0].set(0),

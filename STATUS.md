@@ -62,7 +62,10 @@ Approximate completion10:10–10:20UTC, subject to measured runtime.
   Tests farming learnability without secondary reward tradeoffs. Success>=10.5625CS
   and<=.05deaths; not a substitute for the intended farming-plus-tower objective.
   Estimated35–40min after start. E64 longer discount horizon remains prepared,
-  dry-run validated, **NOT submitted**.
+  dry-run validated, **NOT submitted**. E67 training-phase staggering is also
+  prepared/dry-run passed, NOT submitted; GPU warmup/likelihood canary pending.
+  It discards shortened warmup episodes before learning and preserves full120s
+  training/evaluation games; LEARN-AFK-20 records evidence and limits.
 
 Older E40 mirror training remains interrupted at5795updates; checkpoint
 `/mnt/nfs/checkpoints/lanerl-jax/E40_tower_wave_extended/vec-s0-20260930-150246-c731fd96/ckpt_189890560.msgpack`

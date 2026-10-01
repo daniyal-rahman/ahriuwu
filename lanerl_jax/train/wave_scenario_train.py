@@ -59,6 +59,33 @@ def alive_spell_count(buttons, self_obs):
     return ((buttons >= 3) & (buttons <= 6) & alive).sum(axis=0)
 
 
+def warmup_staggered_runner(built, runner, cfg, stop=lambda: False):
+    """Discard the shortened first episodes; learn only full-length games.
+
+    Existing collector staggering randomizes the first deadline. Collect with
+    fixed parameters until every such deadline has passed, retaining real
+    environment/carry/RNG state but no training transitions or optimizer steps.
+    Subsequent resets all use the normal full episode deadline.
+    """
+    remaining_s = cfg.episode_s - float(np.asarray(runner.env_state.t_ms).min()) / 1000.
+    chunks = int(np.ceil(remaining_s * cfg.decision_hz / cfg.rollout_steps)) + 1
+    advance = jax.jit(lambda r: built['collect'](r)[0])
+    initial_step = int(runner.step)
+    for _ in range(chunks):
+        if stop():
+            raise InterruptedError('stopped during stagger warmup; no learning performed')
+        runner = jax.block_until_ready(advance(runner))
+    np.testing.assert_array_equal(np.asarray(runner.deadline_ms), cfg.episode_s * 1000.)
+    assert int(runner.step) == initial_step, 'warmup must not increment learner decisions'
+    clocks = np.asarray(runner.env_state.t_ms)
+    if cfg.n_envs > 1 and np.ptp(clocks) <= 1000. / cfg.decision_hz:
+        raise RuntimeError('stagger warmup did not diversify training phases')
+    return runner, dict(rollouts=chunks,
+        untrained_environment_decisions=chunks*cfg.rollout_steps*cfg.n_envs,
+        clock_min_ms=float(clocks.min()), clock_max_ms=float(clocks.max()),
+        all_deadlines_full=True, discarded_shortened_episodes=True)
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('experiment');parser.add_argument('--resume',type=Path)
@@ -106,7 +133,8 @@ def main():
     if own_action:
         pcfg=pcfg._replace(observation_interface=OWN_ACTION_INTERFACE,self_dim=20)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
-        episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,stagger_initial=False,
+        episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,
+        stagger_initial=spec.get('stagger_initial',False),
         bank_size=len(bank.t_ms),lr_anneal=spec.get("lr_anneal",True),policy=pcfg,
         xp_scale=spec.get("xp_scale",0.008),
         opponent=spec.get("opponent","mirror"),health_loss_gold=spec.get("health_loss_gold",0.),
@@ -145,12 +173,18 @@ def main():
             runner=runner._replace(rng=jax.random.fold_in(runner.rng,update))
             continuity='legacy checkpoint: new episodes/carries/RNG; optimizer and schedule preserved'
         print('RESUME',update,continuity,flush=True)
+    warmup = None
+    if cfg.stagger_initial and not args.resume:
+        print('STAGGER WARMUP: fixed policy; shortened episodes discarded',flush=True)
+        runner,warmup=warmup_staggered_runner(built,runner,cfg,stop)
+        print('STAGGER READY',json.dumps(warmup),flush=True)
     run=RunDir(out,f'vec-s{train_seed}',dict(train={'policy':pcfg._asdict()},ppo=cfg.ppo._asdict(),
         vec={k:v for k,v in cfg._asdict().items() if k not in ('policy','ppo')},
         collector=dict(episode_s=cfg.episode_s,step_ticks=6,unwalkable_click='noop'),
         scenario=spec,environment='jax-vectorised',opponent=spec.get("opponent","mirror-self-play"),
         initialization=('same experiment continuation; optimizer/schedule retained' if args.resume else 'init_from checkpoint parameters only; fresh optimizer and schedule'),
         continuation=dict(checkpoint=str(args.resume),sha256=file_sha256(args.resume),start_update=update,continuity=continuity) if args.resume else None,
+        stagger_warmup=warmup,
         init_source_sha256=file_sha256(source),eval_opponent_source=str(opponent_source),
         eval_opponent_sha256=file_sha256(opponent_source),sim=sim.describe(),sim_fingerprint=sim.fingerprint()),
         notes='Finite tower-wave task; not a ten-minute lane score. Frozen evals by initial HP role; AFK parks red at fountain.')
@@ -176,7 +210,7 @@ def main():
     update_fn=jax.jit(lambda r:built['run_chunk'](r,1)).lower(runner).compile()
     evaluations={}
     for mode in (('afk',) if spec.get('opponent')=='afk' else ('mirror','frozen')):
-        ecfg=cfg._replace(n_envs=64,opponent=mode,bank_size=len(eval_bank.t_ms))
+        ecfg=cfg._replace(n_envs=64,opponent=mode,bank_size=len(eval_bank.t_ms),stagger_initial=False)
         eb=make_vec_train(ecfg,sim,eval_bank,opponent_params=opponent_params if mode=='frozen' else None)
         er=eb['initial_runner'](jax.random.key(int(spec.get('eval_seed',2007))),params)
         indices=jnp.arange(ecfg.n_envs)%len(eval_bank.t_ms)

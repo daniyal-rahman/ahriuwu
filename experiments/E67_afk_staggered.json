@@ -1,0 +1,39 @@
+{
+  "id": "E67_afk_staggered",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "LEARN-AFK-20: wave worker disables existing collector staggering. SavedE54 all128envs reset together; freshu1 noCS/reward but mean chosen-action logprob change-.2453, matureu136 noCS/nearlyzero reward and-.0284. Bootstrap credit can be legitimate; not proof of bad gradient. Test temporal batch diversity only againstE63: originalv3/E46/freshAdam/LR1e-4/4epochs/gamma.99/XP0/HP100/personal tower900/death300,512updates8.389M. Random first deadlines then discard all warmup transitions before any optimization; subsequent training episodes and every frozen evaluation remain full120seconds. Warmup extra~180224environmentdecisions reported separately; no learned steps or optimizer changes. RSL-RL on_policy_runner init_at_random_ep_len is implementation precedent, not evidence of a gain here. Frozen64games0/128/256/512, require unchangedinitial9.5625CS and final>=10.5625CS/<=.05deaths, then independentseed validation.1hSlurm/55minworker; GPUwarmup/GRUcanary must pass, stop nonfinite/contract failure, no blind extension.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 300.0,
+  "stagger_initial": true
+}
