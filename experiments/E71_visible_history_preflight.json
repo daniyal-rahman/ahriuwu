@@ -1,0 +1,9 @@
+{
+  "id": "E71_visible_history_preflight",
+  "engine": "visible-history-audit",
+  "slurm_time": "00:20:00",
+  "reference_trace": "/mnt/nfs/shared/E68_afk_current_video/low_team_1/trace.npz",
+  "minimum_precision": 0.999,
+  "minimum_one_step_coverage": 0.8,
+  "question": "LEARN-AFK-26 preflight, no training: GPU visible-history migration/gradients, nonzero actor/learner likelihood, episode reset and checkpoint resume plus unchanged v3 AFK path canaries. Reconstruct E68 visible entity tables and self position, append15past HP/position/known samples using position/type matching only, score against offline identity+spawn labels. Require>=99.9percent claimed-sample precision and>=80percent consecutive-visible-minion one-step coverage, finite/padded-safe features and report both incidents. Thresholds engineering estimates, not literature guarantees.20min cap; fail rather than launch PPO if gates fail. No model export or C# parity claim."
+}

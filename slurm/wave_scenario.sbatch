@@ -9,6 +9,9 @@ echo "host $(hostname) job $SLURM_JOB_ID $(date -u)"
 if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(not json.load(open("experiments/"+sys.argv[1]+".json")).get("click_proposals",False))' "$1"; then
     ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_click_proposals.py
 fi
+if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(not json.load(open("experiments/"+sys.argv[1]+".json")).get("visible_history",False))' "$1"; then
+    ./.venv-gpu/bin/python -m pytest -q lanerl_jax/obs/tests/test_visible_history.py lanerl_jax/train/tests/test_visible_history.py
+fi
 if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(not json.load(open("experiments/"+sys.argv[1]+".json")).get("stagger_initial",False))' "$1"; then
     ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_vec_train.py -k stagger_warmup
 fi

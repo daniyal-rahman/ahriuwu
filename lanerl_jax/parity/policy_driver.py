@@ -497,7 +497,7 @@ def load_params(path: str):
         saved = json.loads(manifest_path.read_text()).get("config", {}).get("train", {}).get("policy", {})
         if saved.get("action_interface") != "screen-click-v2":
             raise ValueError("entity-pointer checkpoints cannot evaluate as screen-click-v2; train a new policy")
-        if saved.get("observation_interface") not in ("viewport-structured-v3", "viewport-structured-v4-own-action"):
+        if saved.get("observation_interface") not in ("viewport-structured-v3", "viewport-structured-v4-own-action", "viewport-structured-v5-visible-history"):
             raise ValueError("checkpoint does not declare v3 authoritative life-state observations; use its historical capture")
         scripted = json.loads(manifest_path.read_text()).get("scripted")
         if scripted:
@@ -509,6 +509,11 @@ def load_params(path: str):
     policy = LanePolicy(cfg)
     obs0 = build_observation(init_lane(), 0, frame, params=lane_params(),
         own_action_state=cfg.observation_interface == "viewport-structured-v4-own-action")
+    if cfg.observation_interface == 'viewport-structured-v5-visible-history':
+        from ..obs.visible_history import append_visible_history, empty_visible_history
+        entities, _ = append_visible_history(obs0.entities, obs0.entity_pad_mask,
+                                            obs0.self_vec, empty_visible_history())
+        obs0 = obs0._replace(entities=entities)
     init_args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
     if cfg.core == "gru":
         init_args = init_args + (policy.initial_carry(()),)
@@ -735,6 +740,8 @@ class PolicyDriver:
                  rebuilder: Optional["StateRebuilder"] = None):
         if getattr(policy.cfg, "observation_interface", "") == "viewport-structured-v4-own-action":
             raise ValueError("Experimental own-action policy requires own AA telemetry absent from this server wire; use the JAX scenario evaluator")
+        if getattr(policy.cfg, "observation_interface", "") == "viewport-structured-v5-visible-history":
+            raise ValueError('Experimental visible-history policy requires the tested 10 Hz history collector; use the JAX scenario evaluator until the wire history path is validated')
         self.team = int(team)
         self.wire_team = 100 if self.team == Team.BLUE else 200
         self.rebuilder = rebuilder if rebuilder is not None else StateRebuilder()

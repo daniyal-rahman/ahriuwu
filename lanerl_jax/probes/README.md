@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `visible_history_audit.py` | Does observable position/type matching supply correct E68 histories without actor IDs? | LEARN-AFK-26 / E71; offline identity labels only score accuracy; no learning |2026-10-01|
 | `afk_tick_audit.py` | Exact E68 caster15/19 replay, tick damage attribution and earlier/delayed physical clicks | LEARN-AFK-24/25 / E69/E70; diagnostic return-only instrumentation with matched baseline gates |2026-10-01|
 | `afk_credit_audit.py` | AFK actualCS→GAE→PPO probability/retention, E54 | LEARN-AFK-09; isolated copies, no policy export |2026-10-01|
 | `caster_learning_audit.py` | Caster sensitivity, full-horizon MC and isolated on-policy PPO | LEARN-PAIR-09; invoked by E45 wave replay | 2026-09-30 |

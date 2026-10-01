@@ -93,6 +93,7 @@ from lanerl_rl.constants import (
     N_SLOTS,
     SELF_DIM,
 )
+from ..obs.visible_history import VISIBLE_HISTORY_INTERFACE, HISTORY_ENTITY_DIM
 
 __all__ = ["PolicyConfig", "LanePolicy", "ActionLogits", "apply_flattened_batch"]
 
@@ -176,6 +177,22 @@ def merge_click_proposal_params(initialized, source):
     return result
 
 
+def merge_visible_history_params(initialized, source):
+    """Add only the zero-weight history projection; preserve all v3 weights."""
+    result = jax.tree.map(lambda x: x, initialized)
+    new, old = result['params'], source['params']
+    if set(new)-set(old) != {'visible_history'} or set(old)-set(new):
+        raise ValueError('visible-history migration requires a v3 source and one new projection')
+    for name, value in old.items():
+        if (jax.tree.structure(value) != jax.tree.structure(new[name]) or
+            any(a.shape != b.shape for a,b in zip(jax.tree.leaves(value), jax.tree.leaves(new[name])))):
+            raise ValueError(f'incompatible checkpoint parameter: {name}')
+        new[name] = value
+    if any(bool(jnp.any(x != 0)) for x in jax.tree.leaves(new['visible_history'])):
+        raise ValueError('history projection must start at zero')
+    return result
+
+
 #: the standard PPO recipe -- see the module docstring
 TRUNK = dict(kernel_init=nn.initializers.orthogonal(2.0 ** 0.5),
              bias_init=nn.initializers.zeros)
@@ -213,10 +230,13 @@ class LanePolicy(nn.Module):
         c = self.cfg
         if c.action_interface != "screen-click-v2":
             raise ValueError("policy requires screen-click-v2; pointer checkpoints need retraining")
-        if c.observation_interface not in ("viewport-structured-v3", OWN_ACTION_INTERFACE):
+        if c.observation_interface not in ("viewport-structured-v3", OWN_ACTION_INTERFACE, VISIBLE_HISTORY_INTERFACE):
             raise ValueError("unsupported observation interface")
         if c.observation_interface == OWN_ACTION_INTERFACE and c.self_dim != 20:
             raise ValueError("own-action observations require self_dim=20")
+        history = c.observation_interface == VISIBLE_HISTORY_INTERFACE
+        if history and (c.entity_dim != HISTORY_ENTITY_DIM or c.self_dim != 16):
+            raise ValueError('visible-history observations require 76 entity and 16 self features')
         # Static shapes, so this is a trace-time check with no runtime cost.
         got = (tuple(entities.shape[-2:]), tuple(pad_mask.shape[-1:]),
                tuple(self_vec.shape[-1:]), tuple(global_vec.shape[-1:]))
@@ -226,7 +246,12 @@ class LanePolicy(nn.Module):
             raise ValueError(
                 f"observation widths {got} do not match PolicyConfig {want} "
                 "(entities, pad_mask, self_vec, global_vec)")
-        tokens = nn.Dense(c.d_model, **TRUNK)(entities)
+        tokens = nn.Dense(c.d_model, **TRUNK)(entities[..., :16] if history else entities)
+        if history:
+            # Separate projection preserves the original GEMM shape and all
+            # checkpoint weights. No bias: unknown/ablated history is inert.
+            tokens = tokens + nn.Dense(c.d_model, use_bias=False,
+                kernel_init=nn.initializers.zeros, name='visible_history')(entities[..., 16:])
         # `key_padding_mask=~valid` in the PyTorch model: masked slots must not
         # be attended to. An empty slot is all-zero, which is NOT the same as
         # absent -- a zero row still moves an unmasked mean.

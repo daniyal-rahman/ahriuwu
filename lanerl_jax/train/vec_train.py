@@ -51,6 +51,8 @@ from ..sim.step import env_step
 from .actions import click_mask_from_position, orders_from
 from .learner import make_learner
 from .policy import LanePolicy, PolicyConfig, OWN_ACTION_INTERFACE
+from ..obs.visible_history import (
+    VISIBLE_HISTORY_INTERFACE, empty_visible_history, append_visible_history)
 from .ppo import PPOConfig, factored_log_prob, gae, update_epochs
 from .reward import lane_corridor_distance
 
@@ -104,6 +106,8 @@ class VecRunner(NamedTuple):
     #: (n_envs,) game-ms at which each env's CURRENT episode ends; the first
     #: episode is cut short at random to stagger phases (see `trainer.py`).
     deadline_ms: jax.Array
+    # Observer-only memory, absent on all original v3/v4 paths.
+    visible_history: object = None
 
 
 class Transition(NamedTuple):
@@ -196,6 +200,9 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         raise ValueError("unwalkable_click must be noop or resolve")
     frames = _lane_frames()
     policy = LanePolicy(cfg.policy)
+    use_history = cfg.policy.observation_interface == VISIBLE_HISTORY_INTERFACE
+    if use_history and (cfg.step_ticks != 6 or cfg.opponent != 'afk'):
+        raise ValueError('visible-history experiment currently requires 10 Hz AFK scenarios')
     recurrent = cfg.policy.core == "gru"
     use_mask = bool(cfg.policy.click_mask)
     scripted = None
@@ -222,6 +229,16 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
                                  own_action_state=cfg.policy.observation_interface == OWN_ACTION_INTERFACE) for t in (0, 1)]
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), *per)
 
+    def observe(state, history=None):
+        obs = _obs(state)
+        if use_history:
+            if history is None:
+                history = empty_visible_history((2,))
+            entities, history = jax.vmap(append_visible_history)(
+                obs.entities, obs.entity_pad_mask, obs.self_vec, history)
+            obs = obs._replace(entities=entities)
+        return obs, history
+
     def _apply(params, obs, carry):
         if recurrent:
             return policy.apply(params, obs.entities, obs.entity_pad_mask,
@@ -238,9 +255,9 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
     def _env_step(runner: VecRunner, _):
         rng, sk = jax.random.split(runner.rng)
 
-        def one(state, carry, deadline, key):
+        def one(state, carry, deadline, key, history):
             k_act, k_reset = jax.random.split(key)
-            obs = _obs(state)
+            obs, history = observe(state, history)
             logits, new_carry = _apply(runner.params, obs, carry)
             if cfg.opponent == "frozen":
                 fixed, fixed_carry = _apply(opponent_params, obs, carry)
@@ -275,19 +292,21 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
             fresh = jax.tree.map(lambda b: b[idx], bank)
             nxt = jax.tree.map(lambda a, b: jnp.where(done, b, a), nxt, fresh)
             new_carry = jnp.where(done, jnp.zeros_like(new_carry), new_carry)
+            if use_history:
+                history = jax.tree.map(lambda x: jnp.where(done, jnp.zeros_like(x), x), history)
             t = Transition(obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
                            action, log_prob, uses_screen, uses_target, logits.value,
                            reward, jnp.broadcast_to(done, reward.shape), terms,
                            cs_at_done, cs_delta, gold_at_done, xp_at_done,
                            jnp.broadcast_to(done_full, reward.shape), deaths, lane_dist, cm,
                            hp_at_end, tower_damage_at_end, kills_at_end)
-            return nxt, new_carry, deadline, t
+            return nxt, new_carry, deadline, history, t
 
         keys = jax.random.split(sk, cfg.n_envs)
-        env_state, carry, deadline_ms, tr = jax.vmap(one)(
-            runner.env_state, runner.carry, runner.deadline_ms, keys)
+        env_state, carry, deadline_ms, history, tr = jax.vmap(one)(
+            runner.env_state, runner.carry, runner.deadline_ms, keys, runner.visible_history)
         return runner._replace(env_state=env_state, carry=carry,
-                               deadline_ms=deadline_ms, rng=rng), tr
+                               deadline_ms=deadline_ms, visible_history=history, rng=rng), tr
 
     def _batch(tr: Transition, adv, returns, carry0):
         # [T, n_envs, 2, ...] -> learning agents only -> agent-major [N, T, ...]
@@ -319,7 +338,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
 
     def learn(runner: VecRunner, tr: Transition, carry0):
         """The unchanged update half, exposed for separate timing/memory checks."""
-        last_obs = jax.vmap(_obs)(runner.env_state)
+        last_obs, _ = jax.vmap(observe)(runner.env_state, runner.visible_history)
         last_logits, _ = jax.vmap(lambda o, c: _apply(runner.params, o, c))(last_obs, runner.carry)
         adv, returns = gae(tr.reward, tr.value, tr.done, last_logits.value,
                            cfg.ppo.gamma, cfg.ppo.gae_lambda)
@@ -370,7 +389,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         return learn(*collect(runner))
 
     def init_params(rng):
-        obs0 = _obs(jax.tree.map(lambda b: b[0], bank))
+        obs0, _ = observe(jax.tree.map(lambda b: b[0], bank))
         carry = policy.initial_carry((2,)) if recurrent else None
         return policy.init(rng, obs0.entities, obs0.entity_pad_mask, obs0.self_vec,
                            obs0.global_vec, carry) if recurrent else \
@@ -390,7 +409,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         if not cfg.stagger_initial:
             deadline_ms = jnp.full((cfg.n_envs,), full_ms)
         return VecRunner(params, tx.init(params), env_state, carry, rng,
-                         jnp.asarray(0, jnp.int32), deadline_ms)
+                         jnp.asarray(0, jnp.int32), deadline_ms,
+                         empty_visible_history((cfg.n_envs, 2)) if use_history else None)
 
     def run_chunk(runner: VecRunner, n: int):
         return jax.lax.scan(_update, runner, None, length=n)
@@ -405,7 +425,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
 
     return dict(initial_runner=initial_runner, run_chunk=run_chunk, rollout=rollout,
                 init_params=init_params, policy=policy, loss=loss,
-                collect=collect, learn=learn)
+                collect=collect, learn=learn, observe=observe)
 
 
 def build_parser() -> argparse.ArgumentParser:

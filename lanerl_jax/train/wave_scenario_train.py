@@ -11,7 +11,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.serialization import from_state_dict, msgpack_restore
-from .policy import PolicyConfig, OWN_ACTION_INTERFACE, expand_own_action_inputs, merge_click_proposal_params
+from .policy import (PolicyConfig, OWN_ACTION_INTERFACE, expand_own_action_inputs,
+                     merge_click_proposal_params, merge_visible_history_params)
+from ..obs.visible_history import VISIBLE_HISTORY_INTERFACE, HISTORY_ENTITY_DIM
 from .ppo import PPOConfig
 from .run_manifest import RunDir, file_sha256
 from .vec_train import VecConfig, make_vec_train
@@ -91,6 +93,10 @@ def main():
     parser.add_argument('experiment');parser.add_argument('--resume',type=Path)
     args=parser.parse_args()
     spec=json.loads(Path('experiments',args.experiment+'.json').read_text())
+    if spec.get('preflight_gate'):
+        audit=json.loads(Path(spec['preflight_gate']).read_text())
+        if not audit['passed']:
+            raise RuntimeError('required visible-history preflight did not pass')
     train_seed = int(spec.get('train_seed', 0))
     if args.resume:
         previous=json.loads((args.resume.parent/'manifest.json').read_text())
@@ -105,6 +111,8 @@ def main():
     scratch=Path('/scratch')/(spec['id']+'-'+os.environ['SLURM_JOB_ID']);scratch.mkdir(parents=True)
     shutil.copytree(DEFAULT_ROUTE_ARTIFACT,scratch/'routes')
     source=Path(spec['init_from']);shutil.copyfile(source,scratch/'initial.msgpack')
+    if spec.get('init_sha256') and file_sha256(scratch/'initial.msgpack') != spec['init_sha256']:
+        raise RuntimeError('initial checkpoint SHA does not match experiment specification')
     opponent_source=Path(spec.get('eval_opponent_from',spec['init_from']))
     shutil.copyfile(opponent_source,scratch/'eval_opponent.msgpack')
     out=Path('/mnt/nfs/checkpoints/lanerl-jax')/spec['id'];out.mkdir(parents=True,exist_ok=True)
@@ -132,6 +140,11 @@ def main():
     own_action = spec.get('own_action_state', False)
     if own_action:
         pcfg=pcfg._replace(observation_interface=OWN_ACTION_INTERFACE,self_dim=20)
+    history = spec.get('visible_history', False)
+    if history:
+        if own_action or pcfg.click_proposals or spec.get('opponent') != 'afk':
+            raise ValueError('visible-history experiment is AFK-only and separate from own-action/proposal experiments')
+        pcfg=pcfg._replace(observation_interface=VISIBLE_HISTORY_INTERFACE, entity_dim=HISTORY_ENTITY_DIM)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
         episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,
         stagger_initial=spec.get('stagger_initial',False),
@@ -153,9 +166,15 @@ def main():
     if pcfg.click_proposals:
         initial_params=merge_click_proposal_params(initialized,initial_params)
         other_params=merge_click_proposal_params(initialized,other_params)
+    if history:
+        if 'visible_history' not in initial_params['params']:
+            initial_params=merge_visible_history_params(initialized, initial_params)
+        if 'visible_history' not in other_params['params']:
+            other_params=merge_visible_history_params(initialized, other_params)
     params=from_state_dict(initialized,initial_params)
     opponent_params=from_state_dict(params,other_params)
     runner=built['initial_runner'](jax.random.key(train_seed),params)
+    rollout_fields=('env_state','carry','rng','deadline_ms') + (('visible_history',) if history else ())
     update=0
     if args.resume:
         payload=msgpack_restore(args.resume.read_bytes())
@@ -166,7 +185,7 @@ def main():
         assert int(runner.step)==update*cfg.n_envs*cfg.learn_agents*cfg.rollout_steps
         if 'rollout_state' in payload:
             from .replay_audit import restore_replay_state
-            template={k:getattr(runner,k) for k in ('env_state','carry','rng','deadline_ms')}
+            template={k:getattr(runner,k) for k in rollout_fields}
             runner=runner._replace(**restore_replay_state(template,payload['rollout_state']))
             continuity='full runner restored'
         else:
@@ -191,7 +210,7 @@ def main():
     run.keep_checkpoints=0;failed=False
     def save():
         from .replay_audit import serialize_replay_state
-        rollout={k:getattr(runner,k) for k in ('env_state','carry','rng','deadline_ms')}
+        rollout={k:getattr(runner,k) for k in rollout_fields}
         run.save(int(runner.step),update,dict(params=runner.params,opt_state=runner.opt_state,
             step=runner.step,rollout_state=serialize_replay_state(rollout)))
         (out/'study.json').write_text(json.dumps(dict(job=os.environ['SLURM_JOB_ID'],path=str(run.path),
@@ -202,7 +221,7 @@ def main():
     obs_builder=built['policy']; from ..obs.builder import build_observation
     from ..parity.policy_driver import _lane_frames
     sample=jax.tree.map(lambda x:x[0],bank)
-    obs=build_observation(sample,0,_lane_frames()[0],params=sim.params,horizon_s=600.,vision=sim.vision,own_action_state=own_action)
+    obs=jax.tree.map(lambda x:x[0],built['observe'](sample)[0])
     logits,_=obs_builder.apply(params,obs.entities[None],obs.entity_pad_mask[None],obs.self_vec[None],obs.global_vec[None],obs_builder.initial_carry((1,)))
     assert np.isfinite(np.asarray(logits.button)).all()
     print('SCENARIO READY: actual checkpoint, level3,12minions, both HP roles, next-wave timing verified',flush=True)
@@ -280,6 +299,23 @@ def main():
                         k:float(np.mean([x['reward_terms'][k] for x in cohort])) for k in reward_terms}
             result=dict(update=update,frozen=True,opponent=mode,duration_s=spec['duration_s'],games=64,
                         summaries=summaries,episodes=rows)
+            if update == 0 and spec.get('initial_eval_reference'):
+                reference=spec['initial_eval_reference']
+                saved=[json.loads(line) for line in Path(reference['path']).read_text().splitlines()]
+                matches=[r for r in saved if r['update']==reference['update'] and r['opponent']==mode]
+                if len(matches)!=1:
+                    raise RuntimeError('initial frozen reference must identify exactly one evaluation')
+                prior={(r['env'],r['team']):r for r in matches[0]['episodes']}
+                assert len(prior)==len(rows)
+                for row in rows:
+                    previous=prior[(row['env'],row['team'])]
+                    for field in ('cs','deaths','kills','spell_selections','low_hp'):
+                        if row[field]!=previous[field]:
+                            raise RuntimeError(f'initial frozen trajectory changed: env{row["env"]}/team{row["team"]}/{field}')
+                    for field in ('gold','gold_diff','tower_damage','hp_fraction','reward'):
+                        np.testing.assert_allclose(row[field],previous[field],rtol=1e-5,atol=1e-4,
+                            err_msg=f'initial frozen reference: {field}')
+                print('INITIAL FROZEN REFERENCE PASSED: all64games, bothteams, E67source',flush=True)
             with (run.path/'evaluations.jsonl').open('a') as f:f.write(json.dumps(result)+'\n')
             print('FROZEN',mode,update,json.dumps(summaries),flush=True)
     try:

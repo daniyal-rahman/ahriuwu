@@ -17,7 +17,9 @@ E69/E69b/E70 watchers stopped; inactive and registry clean verified.
 Next: opt-in visible HP/position history implementation/preflight, then matched
 E67 original-input control versus history input experiment if gates pass.
 Standalone tracking tests5passed; small policy migration/gradient test passed.
-Collector/reset/resume/GPU and real-trace tracking checks remain. LEARN-AFK-26
+Collector/reset/resume/GPU and real-trace tracking checks remain; E71 preflight
+prepared. E72 original-input control and E73 history arm prepared with unique
+configs and512update/1h caps each, not submitted. LEARN-AFK-26
 states hypothesis, matched budget and frozen success criteria. No training
 submitted yet. Experimental files in progress are not a validated policy.
 

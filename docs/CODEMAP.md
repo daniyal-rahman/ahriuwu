@@ -66,3 +66,7 @@ LIVE (opt-in experimental): `lanerl_jax/train/click_proposals.py` projects visib
 LIVE (opt-in): `wave_scenario_train.py:warmup_staggered_runner` discards initial shortened episodes without learning, then starts E67 from varied real game phases; frozen evaluation remains full-length and synchronized. Default off; LEARN-AFK-20.
 
 TOOL: `slurm/afk_tick_audit.sbatch` / `afk-tick-audit` launcher engine runs the indexed E69 frozen tick diagnostic; no training or production simulator changes.
+
+LIVE (opt-in experimental, LEARN-AFK-26): `obs/visible_history.py` associates existing visible entity rows by position/type and appends15past health/position samples plus known bits. `train/policy.py` v5 adds a zero-weight projection; `vec_train.py` carries/resets/checkpoints observer memory. Enabled only for10Hz AFK scenarios; C# driver refuses until wire history is validated. Actor never receives diagnostic IDs.
+
+TOOL: `slurm/visible_history_audit.sbatch` / `visible-history-audit` launcher engine runs E71 GPU canaries and the indexed E68 visible association audit before bounded paired learning.

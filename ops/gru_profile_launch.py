@@ -22,7 +22,8 @@ def launch(spec, dry, resume=None):
     if out.exists():
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
     full = spec['engine'] == 'full-profile'
-    script = {'afk-tick-audit': 'slurm/afk_tick_audit.sbatch',
+    script = {'visible-history-audit': 'slurm/visible_history_audit.sbatch',
+              'afk-tick-audit': 'slurm/afk_tick_audit.sbatch',
               'afk-counterfactual': 'slurm/counterfactual_audit.sbatch',
               'behavior-audit': 'slurm/behavior_audit.sbatch',
               'credit-audit': 'slurm/credit_audit.sbatch',
