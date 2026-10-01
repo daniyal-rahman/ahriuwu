@@ -1,0 +1,22 @@
+{
+  "id": "E58b_afk_behavior_audit",
+  "engine": "behavior-audit",
+  "slurm_time": "00:30:00",
+  "games": 32,
+  "policies": [
+    {
+      "name": "E46",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack"
+    },
+    {
+      "name": "E57",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E57_afk_four_epochs/vec-s0-20261001-061021-5056795c/ckpt_002097152.msgpack"
+    },
+    {
+      "name": "scripted",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+      "scripted": true
+    }
+  ],
+  "question": "Systematic diagnostic,32 frozen120s episodes perpolicy, same heldout bank/seeds. Observation-only scripted positive control, reward decomposition, ready inrange onehit opportunities, chosen execution and locked spell frequencies, full-horizon MC values. Own AA timer observation alias check. Stop invariant/nonfinite/wall30min. No trained weights or gameplay fix claimed. Distinguish visibility/action/execution/reward/credit bottlenecks; opportunities not guaranteed harvestable. Overnight authorized until2026-10-01 15:37UTC,1Mtoken goal. Retry E58 helper tracing fix: growth_sum explicitly uses jax.numpy."
+}

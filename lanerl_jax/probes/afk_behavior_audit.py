@@ -52,7 +52,7 @@ def main():
    dist=jnp.hypot(s.x-s.x[0],s.y-s.y[0]);enemy=s.alive&(s.kind==Kind.LANE_MINION)&(s.team==1)
    # slot_unit is used ONLY by diagnostic, never policy.
    visible=jnp.zeros_like(enemy).at[jnp.maximum(o.slot_unit,0)].max(~o.entity_pad_mask)
-   p=sim.params;ad=p['attack_damage'][s.model[0]]+p['ad_per_level'][s.model[0]]*growth_sum(s.level[0])
+   p=sim.params;ad=p['attack_damage'][s.model[0]]+p['ad_per_level'][s.model[0]]*growth_sum(s.level[0],jnp)
    dmg=ad*100/(100+jnp.maximum(p['armor'][s.model],0.))
    killable=enemy&visible&(s.hp<=dmg)
    reach=p['attack_range'][s.model[0]]+p['collision_radius'][s.model]
