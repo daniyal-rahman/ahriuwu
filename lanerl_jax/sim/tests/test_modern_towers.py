@@ -54,7 +54,7 @@ def test_growth_clock_and_separate_melee_packet():
     s=exposed(100.)
     np.testing.assert_allclose([t.overgrowth_damage(s,x,.02,.033) for x in [100.,160.,280.,400.]], [180,180,238.5,297])
     h=t.apply_turret_damage(s,100.,160,0,0,champion_attack=True,melee_champion=True,growth_min_fraction=.02,growth_max_fraction=.033)
-    assert h.damage == 300 #100physical*1.2 plus180 crystal
+    np.testing.assert_allclose(h.damage,300.) #100physical*1.2 plus180 crystal
 
 
 def test_ap_attack_uses_both_contributions():
@@ -98,3 +98,40 @@ def test_reward_assist_ignores_death_and_range():
     assert t.local_reward_eligible(False,5000.,90.,100.)
     assert not t.local_reward_eligible(False,5000.,89.99,100.)
     assert t.local_reward_eligible(True,1200.,-jnp.inf,100.)
+
+
+def test_all_tiers_hp_damage_and_plate_rules():
+    states=jax.vmap(t.init_turret)(jnp.arange(4))
+    np.testing.assert_allclose(states.hp,[9000,5000,4750,3500])
+    np.testing.assert_allclose(jax.vmap(t.attack_damage,in_axes=(0,None))(jnp.arange(4),180.),[218,203,203,181])
+    np.testing.assert_allclose(jax.vmap(t.resistance,in_axes=(0,None,None))(states,1000.,1),[0,60,60,60])
+    for tier in [t.INNER,t.INHIBITOR]:
+        state=t.advance(t.init_turret(tier),1000.,True,False)
+        hit=t.apply_turret_damage(state,1000.,0,0,state.hp)
+        assert hit.plates==5 and hit.local_gold==600
+    nexus=t.advance(t.init_turret(t.NEXUS),1000.,True,False)
+    hit=t.apply_turret_damage(nexus,1000.,0,0,nexus.hp)
+    assert hit.plates==0 and hit.local_gold==0 and not nexus.growth_active
+
+
+def test_base_regen_segments_and_nexus_respawn():
+    base=t.init_turret(t.INHIBITOR)
+    for frac,cap in [(.2,.3),(.5,.75),(.9,1.)]:
+        state=base._replace(hp=base.max_hp*frac)
+        assert t.regenerate_and_respawn(state,500.,10000.).hp==base.max_hp*cap
+    nexus=t.advance(t.init_turret(t.NEXUS),1000.,True,False)
+    hit=t.apply_turret_damage(nexus,1000.,0,0,nexus.hp)
+    assert t.regenerate_and_respawn(hit.state,1179.,1.).hp==0
+    returned=t.regenerate_and_respawn(hit.state,1180.,1.)
+    assert returned.hp==1400 and jnp.isinf(returned.respawn_at)
+    assert t.regenerate_and_respawn(returned,1181.,1000.).hp==1400
+
+
+def test_locked_lane_growth_clock_and_minion_tier_damage():
+    inner=t.init_turret(t.INNER,jnp.inf)
+    assert not t.advance(inner,500.,False,False).growth_active
+    inner=t.unlock(inner,500.)
+    assert not t.advance(inner,589.,False,False).growth_active
+    assert t.advance(inner,590.,False,False).growth_active
+    np.testing.assert_allclose(t.minion_shot_damage(1000.,2,tier=jnp.arange(4)),[140,110,80,80])
+    np.testing.assert_allclose(t.minion_shot_damage(1000.,3,100.),50/1.7)

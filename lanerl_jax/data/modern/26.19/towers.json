@@ -1,6 +1,6 @@
 {
   "patch": "26.19",
-  "scope": "Summoner's Rift outer lane turrets; pure rules integrated by world caller",
+  "scope": "Summoner's Rift outer/inner/inhibitor/Nexus turrets; pure rules integrated by world caller",
   "sources": [
     "https://wiki.leagueoflegends.com/en-us/Turret?oldid=4070072",
     "https://wiki.leagueoflegends.com/en-us/Siege_minion",
@@ -11,9 +11,21 @@
   "outer": {
     "health": 9000,
     "resistance": 60,
-    "plate_remaining_hp_fractions": [0.9, 0.75, 0.55, 0.3, 0],
+    "plate_remaining_hp_fractions": [
+      0.9,
+      0.75,
+      0.55,
+      0.3,
+      0
+    ],
     "plate_gold": 120,
-    "bulwark_resists_by_champion_count": [30, 35, 40, 45, 50],
+    "bulwark_resists_by_champion_count": [
+      30,
+      35,
+      40,
+      45,
+      50
+    ],
     "bulwark_duration_seconds": 20,
     "bulwark_champion_radius": 850,
     "bulwark_independent_expiry": true,
@@ -47,8 +59,14 @@
     "cooldown_seconds": 90,
     "minimum_hold_seconds": 60,
     "ramp_seconds": 240,
-    "published_level_1_fractions": [0.02, 0.033],
-    "published_level_18_fractions": [0.088, 0.189],
+    "published_level_1_fractions": [
+      0.02,
+      0.033
+    ],
+    "published_level_18_fractions": [
+      0.088,
+      0.189
+    ],
     "level_interpolation": null,
     "suppression_radius": null,
     "bonus_melee_range_formula": null
@@ -61,7 +79,8 @@
     "Outer decay wording conflicts: Riot says starting minute11, wiki says11:00 until15:00. Implement first decrement11:00, capped14:00; retain explicit evidence gap.",
     "Wiki AD tooltip gives cap13:30; Riot26.1 prose says14minutes. Tooltip's detailed schedule implemented.",
     "Same-tick multiple-plate packets apply newly gained Bulwark on following packet; live event ordering unverified.",
-    "Slot order is deterministic tie-break convention when target priority and distance tie; exact server tie order unknown."
+    "Slot order is deterministic tie-break convention when target priority and distance tie; exact server tie order unknown.",
+    "26.1 Nexus section mistakenly lists plates while its overview and current wiki explicitly exclude Nexus plates and Overgrowth. Implement no Nexus plates/Overgrowth."
   ],
   "caller_responsibilities": [
     "Visibility, range, targetability and outgoing windup/projectile scheduling",
@@ -70,5 +89,55 @@
     "Eligible local plate/first-turret reward sharing; global destruction gold",
     "Scale minion incoming raw turret damage by0.60 or0.84 cannon",
     "Resolve champion kit effects and supported on-hits outside this module"
-  ]
+  ],
+  "other_tiers": {
+    "health": [
+      5000,
+      4750,
+      3500
+    ],
+    "resistance": [
+      60,
+      60,
+      60
+    ],
+    "ad_base": [
+      187,
+      187,
+      165
+    ],
+    "ad_growth": 16,
+    "ad_first_second": 180,
+    "ad_interval_seconds": 60,
+    "ad_max_steps": 15,
+    "global_gold_per_champion": [
+      25,
+      25,
+      50
+    ],
+    "plate_gold": [
+      120,
+      120,
+      0
+    ],
+    "hp_regen_per_second": [
+      0,
+      3,
+      6
+    ],
+    "regen_thresholds": {
+      "inhibitor": [
+        0.3,
+        0.75,
+        1.0
+      ],
+      "nexus": [
+        0.4,
+        0.7,
+        1.0
+      ]
+    },
+    "nexus_respawn_seconds": 180,
+    "nexus_respawn_hp_fraction": 0.4
+  }
 }
