@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 from flax.serialization import msgpack_restore,from_state_dict
 from lanerl_jax.sim.config import SimConfig,DEFAULT_ROUTE_ARTIFACT
+from lanerl_jax.train.run_manifest import git_provenance,file_sha256
 from lanerl_jax.train.wave_scenario import prepare_scenario_bank,park_afk_opponent
 from lanerl_jax.train.policy import PolicyConfig
 from lanerl_jax.train.ppo import PPOConfig,gae,factored_log_prob
@@ -43,10 +44,11 @@ def main():
   lp=factored_log_prob((lg.button,lg.screen_x,lg.screen_y),b['action'],b['uses_screen'])
   return lp,lg.value
  def rows(x):return np.asarray(x)[:,:,0].T
- report={'spec':spec,'stages':{},'limitations':'Diagnostic updates on isolated copies, no saved policy. Same recorded observations/carry for probability comparisons. Cohorts are correlations, not counterfactual action causality. Future-hit windows limited to1s within each128-step rollout; no crossing episode ends. Normalized advantages average actual4 epoch minibatch normalizations. Anchor compares fixed old recurrent histories, not new-policy state coverage.'}
+ report={'spec':spec,'source':git_provenance(),'checkpoint_sha256':{},'stages':{},'limitations':'Diagnostic updates on isolated copies, no saved policy. Same recorded observations/carry for probability comparisons. Cohorts are correlations, not counterfactual action causality. Future-hit windows limited to1s within each128-step rollout; no crossing episode ends. Normalized advantages average actual4 epoch minibatch normalizations. Anchor compares fixed old recurrent histories, not new-policy state coverage.'}
  for stage in spec['stages']:
   name=stage['name'];dest=out/name;dest.mkdir();source=Path(stage['checkpoint'])
   shutil.copyfile(source,scratch/(name+'.msgpack'));payload=msgpack_restore((scratch/(name+'.msgpack')).read_bytes())
+  report['checkpoint_sha256'][name]=file_sha256(scratch/(name+'.msgpack'))
   params=from_state_dict(built['init_params'](jax.random.key(0)),payload['params'])
   runner=built['initial_runner'](jax.random.key(0),params)
   if stage['restore_runner']:
