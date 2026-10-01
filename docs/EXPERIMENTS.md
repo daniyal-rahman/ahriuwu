@@ -7,7 +7,7 @@ labelled `train`.
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
 | `E60_afk_own_action` |10-01| JAX AFK PPO | Own combat state inputs, zero-weight migration |E46/freshAdam,4epochs|256updates4.194M| Slurm1827 complete23m29s; final6.1719CS/.78125deaths/361towerHP; reward9.852 versus6.329initial; farming gate failed | Compare E57@128/E61@256, original9.56CS |
-| `E66_afk_click_proposals` |10-01| JAX AFK PPO | Learned observed-entity screen-cell proposals |E46/freshAdam,v3,4epochs|512updates8.389M| Prepared; CPU tests pass, GPU canary pending | Requires gain over both old and new initial policy; physical clicks unchanged |
+| `E66_afk_click_proposals` |10-01| JAX AFK PPO | Learned observed-entity screen-cell proposals |E46/freshAdam,v3,4epochs|512updates8.389M| Slurm1831 queued behind1830; GPU canary/watch pending | Requires gain over both old and new initial policy; physical clicks unchanged |
 | `E65_afk_cs_focus` |10-01| JAX AFK PPO diagnostic | Farming-only positive objective; death300 retained |E46/freshAdam,v3,4epochs|512updates8.389M| Prepared, not submitted | Separate farming learnability from HP/tower reward tradeoffs; not final task |
 | `E64_afk_long_horizon` |10-01| JAX AFK PPO | Gamma.999 with corrected death reward/v3 |E46/freshAdam,4epochs|512updates8.389M| Prepared, conditional; not submitted | One-factor discount comparison against E63 |
 | `E63_afk_death_control` |10-01| JAX AFK PPO | Death300gold with original v3 inputs |E46/freshAdam,4epochs|512updates8.389M| Slurm1830 healthy;15canaries/watch;bridge armed | Match E61 reward-only change and E62 input comparison |
