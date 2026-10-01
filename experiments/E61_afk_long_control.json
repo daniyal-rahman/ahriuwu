@@ -1,0 +1,36 @@
+{
+  "id": "E61_afk_long_control",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "Matched v3 control for E60 at128/256 updates, also test whether prior2M decision continuation was too short via512updates8.389M. Same E46start/freshAdam/LR1e-4/4epochs/reward/seed; expected128point reproducesE57. Frozen64games eachpoint; require >=1CS overinitial9.5625 without>.05 deaths for promising result; independentseed repeat needed. Budget512updates/55min worker/1hSlurm. User authorized systematic overnight experiments to15:37UTC.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4
+}

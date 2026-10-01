@@ -50,7 +50,7 @@ from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
 from ..sim.step import env_step
 from .actions import click_mask_from_position, orders_from
 from .learner import make_learner
-from .policy import LanePolicy, PolicyConfig
+from .policy import LanePolicy, PolicyConfig, OWN_ACTION_INTERFACE
 from .ppo import PPOConfig, factored_log_prob, gae, update_epochs
 from .reward import lane_corridor_distance
 
@@ -210,7 +210,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
 
     def _obs(state):
         per = [build_observation(state, t, frames[t], params=sim.params,
-                                 horizon_s=cfg.observation_horizon_s or cfg.episode_s, vision=sim.vision) for t in (0, 1)]
+                                 horizon_s=cfg.observation_horizon_s or cfg.episode_s, vision=sim.vision,
+                                 own_action_state=cfg.policy.observation_interface == OWN_ACTION_INTERFACE) for t in (0, 1)]
         return jax.tree.map(lambda a, b: jnp.stack([a, b]), *per)
 
     def _apply(params, obs, carry):

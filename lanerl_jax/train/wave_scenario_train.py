@@ -11,7 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from flax.serialization import from_state_dict, msgpack_restore
-from .policy import PolicyConfig
+from .policy import PolicyConfig, OWN_ACTION_INTERFACE, expand_own_action_inputs
 from .ppo import PPOConfig
 from .run_manifest import RunDir, file_sha256
 from .vec_train import VecConfig, make_vec_train
@@ -97,6 +97,9 @@ def main():
             setup.write_text(json.dumps(rows,indent=2))
     calibrate(bank,sim,out)
     pcfg=PolicyConfig(core='gru',core_norm=True,core_residual=True,detach_critic=spec.get('detach_critic',True))
+    own_action = spec.get('own_action_state', False)
+    if own_action:
+        pcfg=pcfg._replace(observation_interface=OWN_ACTION_INTERFACE,self_dim=20)
     cfg=VecConfig(n_envs=128,rollout_steps=128,n_updates=spec['updates'],n_minibatches=4,
         episode_s=START_MS/1000+spec['duration_s'],observation_horizon_s=600.,stagger_initial=False,
         bank_size=len(bank.t_ms),lr_anneal=spec.get("lr_anneal",True),policy=pcfg,
@@ -106,8 +109,13 @@ def main():
         tower_damage_personal=spec.get("tower_damage_personal",False),
         ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef'],epochs=spec.get('ppo_epochs',4)))
     built=make_vec_train(cfg,sim,bank)
-    params=from_state_dict(built['init_params'](jax.random.key(0)),msgpack_restore((scratch/'initial.msgpack').read_bytes())['params'])
-    opponent_params=from_state_dict(params,msgpack_restore((scratch/'eval_opponent.msgpack').read_bytes())['params'])
+    initial_params=msgpack_restore((scratch/'initial.msgpack').read_bytes())['params']
+    other_params=msgpack_restore((scratch/'eval_opponent.msgpack').read_bytes())['params']
+    if own_action:
+        initial_params=expand_own_action_inputs(initial_params)
+        other_params=expand_own_action_inputs(other_params)
+    params=from_state_dict(built['init_params'](jax.random.key(0)),initial_params)
+    opponent_params=from_state_dict(params,other_params)
     runner=built['initial_runner'](jax.random.key(0),params)
     update=0
     if args.resume:
@@ -149,7 +157,7 @@ def main():
     obs_builder=built['policy']; from ..obs.builder import build_observation
     from ..parity.policy_driver import _lane_frames
     sample=jax.tree.map(lambda x:x[0],bank)
-    obs=build_observation(sample,0,_lane_frames()[0],params=sim.params,horizon_s=600.,vision=sim.vision)
+    obs=build_observation(sample,0,_lane_frames()[0],params=sim.params,horizon_s=600.,vision=sim.vision,own_action_state=own_action)
     logits,_=obs_builder.apply(params,obs.entities[None],obs.entity_pad_mask[None],obs.self_vec[None],obs.global_vec[None],obs_builder.initial_carry((1,)))
     assert np.isfinite(np.asarray(logits.button)).all()
     print('SCENARIO READY: actual checkpoint, level3,12minions, both HP roles, next-wave timing verified',flush=True)

@@ -49,7 +49,8 @@ def main():
     @jax.jit
     def act(state,carry,key):
         input_carry=carry
-        ob=[build_observation(state,t,frames[t],params=sim.params,horizon_s=600.,vision=sim.vision) for t in (0,1)]
+        ob=[build_observation(state,t,frames[t],params=sim.params,horizon_s=600.,vision=sim.vision,
+            own_action_state=policy.cfg.observation_interface == 'viewport-structured-v4-own-action') for t in (0,1)]
         obs=jax.tree.map(lambda a,b:jnp.stack([a,b]),*ob)
         lg,carry=policy.apply(params,obs.entities,obs.entity_pad_mask,obs.self_vec,obs.global_vec,carry)
         if old_params is not None:

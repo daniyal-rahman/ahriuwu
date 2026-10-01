@@ -133,7 +133,8 @@ def _topk_slots(score: jax.Array, eligible: jax.Array, k: int):
 
 
 def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
-                      horizon_s: float = 600.0, visibility=None, vision=None) -> Observation:
+                      horizon_s: float = 600.0, visibility=None, vision=None,
+                      own_action_state: bool = False) -> Observation:
     """Build one agent's observation. ``me`` is the champion's unit index.
 
     ``params`` is the profile table used by ``step_decision``.  It is explicit
@@ -271,6 +272,16 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
         (~state.alive[me]).astype(jnp.float32),
         (state.recall_channel_ms[me] > 0).astype(jnp.float32),
     ])
+
+    # Experimental v4: own observable combat state, never enemy timers.
+    # Default v3 remains byte-for-byte compatible with existing checkpoints.
+    if own_action_state:
+        self_vec = jnp.concatenate([self_vec, jnp.stack([
+            jnp.clip(state.aa_cooldown[me] / 2.0, 0.0, 1.0),
+            jnp.clip(state.aa_windup[me], 0.0, 1.0),
+            state.is_attacking[me].astype(jnp.float32),
+            state.buffs.e.active[me].astype(jnp.float32),
+        ])])
 
     # ---- global ----------------------------------------------------------
     enemy_champ_visible = (enemy_champ[0] >= 0).astype(jnp.float32)

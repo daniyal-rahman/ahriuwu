@@ -1,0 +1,37 @@
+{
+  "id": "E60_afk_own_action",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 256,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    64,
+    128,
+    256
+  ],
+  "question": "Targeted information ablation: append own AA cooldown/windup/attacking/Eactive (v4,JAX only), zero-expand context weights so initial policy mathematically preserved; migration and new-feature gradient tests. Same E46start/freshAdam/LR1e-4/4epochs/rewards/seed asE57.128update comparison then256update budget4.194M; E61long control planned with same frozen points. Success >=1CS above original9.5625 and matched control with <=.05 extra deaths; independently replicate before solution. Input alias inE58 and missing sampled-action feedback motivate, not proved cause; metaRL example of action-history inputs arxiv1611.05763, not proof these features optimal. Stopnonfinite/budget; no serverdeployment (wire lacks ownAA telemetry).",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": true
+}

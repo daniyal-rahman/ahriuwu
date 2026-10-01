@@ -58,3 +58,5 @@ TOOL: `slurm/credit_audit.sbatch` / `credit-audit` launcher engine executes inde
 | `slurm/behavior_audit.sbatch` | TOOL | E58 bounded GPU frozen behavior audit via launcher; probe indexed in probes/README |
 
 | `slurm/counterfactual_audit.sbatch` | TOOL | E59 bounded GPU same-state caster forks via launcher |
+
+| `obs/builder.py`, `train/policy.py` own-action v4 option | LIVE (opt-in experiment) | E60 ownAA/E state inputs with zero-weight checkpoint migration; defaultv3 unchanged, C#wire guard |

@@ -497,7 +497,7 @@ def load_params(path: str):
         saved = json.loads(manifest_path.read_text()).get("config", {}).get("train", {}).get("policy", {})
         if saved.get("action_interface") != "screen-click-v2":
             raise ValueError("entity-pointer checkpoints cannot evaluate as screen-click-v2; train a new policy")
-        if saved.get("observation_interface") != "viewport-structured-v3":
+        if saved.get("observation_interface") not in ("viewport-structured-v3", "viewport-structured-v4-own-action"):
             raise ValueError("checkpoint does not declare v3 authoritative life-state observations; use its historical capture")
         scripted = json.loads(manifest_path.read_text()).get("scripted")
         if scripted:
@@ -507,7 +507,8 @@ def load_params(path: str):
             return ScriptedPolicy(PLAYERS[scripted]), {}, f"scripted:{scripted}"
         cfg = PolicyConfig(**saved)
     policy = LanePolicy(cfg)
-    obs0 = build_observation(init_lane(), 0, frame, params=lane_params())
+    obs0 = build_observation(init_lane(), 0, frame, params=lane_params(),
+        own_action_state=cfg.observation_interface == "viewport-structured-v4-own-action")
     init_args = (obs0.entities, obs0.entity_pad_mask, obs0.self_vec, obs0.global_vec)
     if cfg.core == "gru":
         init_args = init_args + (policy.initial_carry(()),)
@@ -732,6 +733,8 @@ class PolicyDriver:
     def __init__(self, policy, params, *, team: int = Team.BLUE,
                  deterministic: bool = False, seed: int = 0,
                  rebuilder: Optional["StateRebuilder"] = None):
+        if getattr(policy.cfg, "observation_interface", "") == "viewport-structured-v4-own-action":
+            raise ValueError("Experimental own-action policy requires own AA telemetry absent from this server wire; use the JAX scenario evaluator")
         self.team = int(team)
         self.wire_team = 100 if self.team == Team.BLUE else 200
         self.rebuilder = rebuilder if rebuilder is not None else StateRebuilder()

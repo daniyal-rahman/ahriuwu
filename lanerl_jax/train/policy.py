@@ -63,6 +63,26 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 
+OWN_ACTION_INTERFACE = "viewport-structured-v4-own-action"
+
+
+def expand_own_action_inputs(variables):
+    """Preserve a v3 policy while inserting four zero-weight self features.
+
+    Context input order is self then global; insert before the six global
+    rows. This deliberately rejects other schemas instead of guessing.
+    """
+    result = jax.tree.map(lambda x: x, variables)
+    kernel = result["params"]["Dense_1"]["kernel"]
+    if kernel.shape[0] == 26:
+        return result
+    if kernel.shape[0] != 22:
+        raise ValueError("own-action migration requires 16 self + 6 global inputs")
+    result["params"]["Dense_1"]["kernel"] = jnp.concatenate([
+        kernel[:16], jnp.zeros((4, kernel.shape[1]), kernel.dtype), kernel[16:]
+    ])
+    return result
+
 from lanerl_rl.constants import (
     ENTITY_DIM,
     GLOBAL_DIM,
@@ -165,8 +185,10 @@ class LanePolicy(nn.Module):
         c = self.cfg
         if c.action_interface != "screen-click-v2":
             raise ValueError("policy requires screen-click-v2; pointer checkpoints need retraining")
-        if c.observation_interface != "viewport-structured-v3":
-            raise ValueError("policy requires viewport-structured-v3 observations")
+        if c.observation_interface not in ("viewport-structured-v3", OWN_ACTION_INTERFACE):
+            raise ValueError("unsupported observation interface")
+        if c.observation_interface == OWN_ACTION_INTERFACE and c.self_dim != 20:
+            raise ValueError("own-action observations require self_dim=20")
         # Static shapes, so this is a trace-time check with no runtime cost.
         got = (tuple(entities.shape[-2:]), tuple(pad_mask.shape[-1:]),
                tuple(self_vec.shape[-1:]), tuple(global_vec.shape[-1:]))
