@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E52_afk_entropy` |09-30| JAX PPO AFK | LR1e-4; entropy.01 vs E51 .001 | Same E46final |128updates/2.097M| Slurm1813 submitted; startup gate pending | Frozen CS/deaths/personal tower |
+| `E52_afk_entropy` |09-30| JAX PPO AFK | LR1e-4; entropy.01 vs E51 .001 | Same E46final |128updates/2.097M| RUNNING1813;11 GPU canaries/180s watch passed; bridge armed | Frozen CS/deaths/personal tower |
 | `E53_afk_shared_critic` |09-30| JAX PPO AFK | LR1e-4; enable critic shared-feature gradients | Same E46final |128updates/2.097M| Prepared | Same actor/value at init; entropy.001 |
 | `E50_afk_personal_lr3e5` |09-30| JAX PPO AFK | Zero XP, personal tower; constantLR3e-5 | E46 final, fresh optimizer |128updates/2.097M | COMPLETE1804 exit0,15m14s; frozenCS9.56→8.03,deaths0→.172,towerHP0→20.15 | Matched control for E51 |
 | `E51_afk_personal_lr1e4` |09-30| JAX PPO AFK | Same rewards; constantLR1e-4 | E46 final, fresh optimizer |128updates/2.097M | COMPLETE1805 exit0,14m21s; frozen8.86CS/0deaths/0personal towerHP; below9.56 baseline | Frozen CS/deaths/personal tower, same seeds |
