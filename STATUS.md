@@ -8,9 +8,9 @@ E69 Slurm1835 FAILED/1:0 at5m36s: full1201frame E68 reproduction exact on all
 checked state/action fields,12CS/0deaths, correct checkpointSHA. Probe then
 failed converting typed JAX PRNG key in all-state-leaf comparator. No valid
 branch conclusion. Comparator repaired; E69b prepared from saved baseline
-state/carry/key, same76branches and30min cap, not submitted yet.
-E69 watcher stopped after review; verify inactive/registry clean.
-No current project jobs. Unrelated1803/1736 untouched.
+state/carry/key, same76branches and30min cap, Slurm1836 submitted; startup watch in progress.
+E69 watcher stopped after review; inactive/registry clean verified.
+E69b/1836 is the only project job. Unrelated1803/1736 untouched.
 
 ## Previous handoff (historical)
 
