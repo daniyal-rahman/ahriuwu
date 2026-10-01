@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E59_afk_caster_forks` |10-01| GPU diagnostic | Paired natural/directed caster continuations |E57 frozen;<=16cases x4seeds x2branches|40min cap| Slurm1826 startup pending | Reward/credit mechanism; no training |
+| `E59_afk_caster_forks` |10-01| GPU diagnostic | Paired natural/directed caster continuations |E57 frozen;<=16cases x4seeds x2branches|40min cap| Slurm1826 healthy;6canaries/watch;bridge armed | Reward/credit mechanism; no training |
 | `E58b_afk_behavior_audit` |10-01| GPU frozen diagnostic | E58 corrected JAX helper |32games each120s|30min cap| COMPLETE1825 0:0,5m40s;CS9.91/8.91/13.5;read-only | Same audit, no trained weights |
 | `E58_afk_behavior_audit` |10-01| GPU frozen diagnostic | E46/E57/scripted positive control, opportunity/execution/reward/MC value |32games each120s|30min cap| FAILED1824: diagnostic NumPy tracing helper; no results | No policy changes; onehit windows descriptive |
 | `E56_afk_one_epoch` |10-01| JAX AFK PPO | 1 epochs per batch | E46final/freshAdam/seed0 |128updates2.097M| COMPLETE1822 exit0,11m57s;CS9.56→5.53→3.64,0deaths/0towerHP;reject extension | Matched frozen CS/deaths/towerHP and elapsed comparison |
