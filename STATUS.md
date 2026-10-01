@@ -1,37 +1,30 @@
 # STATUS — 2026-10-01 CS-only continuation
 
-Current user task: run the existing policy with CS reward only for roughly40min,
-while discussing better diagnostic options than requiring human play. E78 selected after LR clarification:
-E67 parameters, fresh optimizer, unchanged v3/GRU/actions/PPO, LR1e-4,512updates/8.389M
-learner decisions; literal+1/CS, no other environment reward. Frozen64games at
-0/128/256/512; initial physical behavior retained, reward intentionally changed.
-Final primary gate CS>=10.921875; deaths/tower damage reported as outcomes.
-Code adds integrated CS-isolation smoke test and frozen reward=CS assertions.
-No manual-play client or new teacher/curriculum experiment authorized by this
-ideation alone. Recommendations recorded in LEARN-AFK-33.
+E78 CS-only continuation completed. Literal+1/CS, no other environment reward;
+E67 parameters/freshAdam, original v3/GRU/actions, LR1e-4,512updates/8.389Mdecisions.
+Frozen64games per checkpoint,120s AFK: CS9.921875→10.765625→11.375→10.0 at
+updates0/128/256/512. Final gain+.078125 versus initial; +.546875 versus E75c
+unchanged-reward continuation9.453125. Fails declared finalCS>=10.921875 gate.
+Intermediate improvement was not retained; no best-intermediate success claim.
+Final deaths.078125 versus initial.140625; personal towerHP181.035824 versus802.399197.
+All256frozen games (both teams) satisfy reward=CS and other terms0. Initial physical
+retention passed. MedianpostKL.026605, maximum.047038; no obvious KL explosion.
+These are one training seed's results, not a diagnosis of LR/representation or
+proof that more training cannot help. No new experiment authorized by this event.
 
 ## Jobs
 
-**E78_afk_cs_only RUNNING, Slurm2161;17canaries and180s launcher watch passed.**
-LR1e-4,512updates/8.389M,~40min,55minworker/1hSlurm cap. Dry-run passed; sourcecf0ff0b.
-Completion bridge lanerl-event-2161.service armed; expires2026-10-02T00:18:41.052256+00:00.
-Service active, registry entry present, result timestamp advancement verified. Rough completion3:52PM Pacific (PDT);
-Slurm hard limit4:10PM Pacific (PDT). Full-worker compilation/initial frozen retention pending;
-no learned result yet.
-E79/2160 CANCELLED/0:0 after46s during canaries; zero training, no bridge.
-Dani clarified the objective is sensible policy movement, not arbitrary LR increase.
-Recent E75c movement was stable; KL/clipping alone do not prove excessive steps;
-older3e-5arm performed worse. E78 retains established1e-4 and isolates CS reward.
-E77_combat_mask_preflight / Slurm1857 COMPLETED0:0 in4m27s, ended21:28:35UTC.
-Existing log:19GPU tests passed, CANARY PASSED and PROFILE COMPLETE; result.json
-passed for matching job/spec/sourceb63227e5. This resolves the previous interrupted
-handoff's pending gate. No1857 event service or registry entry. No tests rerun.
-E77 checks direct HP, own action availability, standable-map masks and shared
-actor/learner/reset/update behavior; it is not a learned farming result.
-
-Other workstreams have their own jobs: modern-sim replay extraction2010/2011 and
-analysis2022 were active/queued during review; touchline1803 also runs. Those jobs,
-their compute and their handoffs are outside this RL session; none were stopped.
+**No RL jobs running or queued; no pending ETA or watcher.**
+E78 / Slurm2161 COMPLETED0:0 in42m28s, ended3:53PM Pacific (PDT).
+17integrated canaries and180s launcher watch passed.512metric rows, no reported
+nonfinite loss flags or traceback. Final checkpoint/latest SHA256:
+cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91.
+Run: /mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/.
+Bridge2161 delivery accepted; lanerl-event-2161.service inactive, registry entry
+absent. No restart, extension, LR sweep, curriculum or feature run submitted.
+E79/2160 was cancelled after46s during canaries, before any training.
+E77mask/directHP preflight1857 completed19tests; no learned feature result.
+Other projects and their jobs remain outside this workstream.
 
 ## Three active worktrees
 
@@ -82,7 +75,8 @@ Use it as an implementation reference; direct weight transfer is not a quick fix
 Human play is currently inconvenient; defer client work. E58b already showed
 scripted13.5CS versus policies~9–10 on its diagnostic cohort. Prefer a short
 randomized last-hit curriculum or reuse existing scripted BC/DAgger if needed
-after E78; avoid repeating a broad teacher audit. These remain discussion options. Existing older BC/DAgger
+after E78; avoid repeating a broad teacher audit. The temporary CS gain now also
+makes retention across PPO updates a concrete question. These remain discussion options. Existing older BC/DAgger
 success makes this plausible; those longer mirror-task scores are not comparable
 to current120s AFK. LEARN-AFK-32 records sample-budget estimates and hypotheses,
 including short reward horizon/personal tower credit for pushing. No experiment
@@ -95,5 +89,4 @@ channels through convolutions, not RGB screenshots. Tencent5v5 separately has
 6x17x17 maps including skill bullets; caster-AA coverage remains unestablished.
 Recommend retaining compact structured inputs with a separately trained video
 adapter; small spatial CNN remains an optional hypothesis. No code/run change.
-E78bridge still reports RUNNING during this review; completion estimate3:52PM
-Pacific (PDT), roughly a few minutes remaining; no additional RL jobs submitted.
+E78 completed; no additional RL jobs submitted.
