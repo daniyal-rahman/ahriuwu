@@ -685,3 +685,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | LEARN-AFK-20 launch | E67 Slurm1833 queued after1832 via launcher after renewed dry-run; startup session14791 active, GPUcanary/watch pending. | Standing user authorization: bounded controlled follow-up from measured batch synchronization.512updates8.389M +180224warmup decisions; full E63 objective retained. Bridge must be armed after healthy-start watch. |
 
 | LEARN-AFK-18 startup validated | E65 Slurm1832 passed15GPUcanaries in367.68s and launcher180s startup watch. Bridge lanerl-event-1832.service verified active/result updating, expires2026-10-01T12:15:35.617291+00:00. | Fullsize worker/evaluation compilation next; no new performance result. E67 remains queued Slurm1833 with startupwatch14791 attached. |
+
+| LEARN-AFK-18 initial | E65 fullsize compilation/endpoint canary passed; frozen64game u0 exactly9.5625CS/0deaths/0towerHP. Reward7.312540699 entirely gold/CS; approach/death/XP0, HP/tower disabled. New component accounting invariant passed. | Same initial physical behavior asE63/E46, with simpler objective. Training active, no improvement result yet. |
