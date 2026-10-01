@@ -22,7 +22,9 @@ passed. Fullsize compilation and endpoint-before-reset canary passed.
 Frozen u0: **8.890625 CS, .015625 deaths, 4.044495 personal towerHP**;
 new initial distribution differs from old E46 despite retaining old weights.
 Training active; first27updates median3.6155s, versus E63 median3.3476s.
-Frozen u128: **6.203125 CS,0 deaths,0 towerHP**, worse than its own initial.
+Frozen u128: **6.203125 CS,0 deaths,0 towerHP**; u256: **7.8125 CS,
+0 deaths,0 towerHP**, both below its own initial. u256 reward5.36288 exceeds
+initial4.98031 despite lower CS; total reward is not the success metric.
 Training continues through the predeclared512-update budget. At update141
 all losses finite; no targeting win established.
 These are training diagnostics, not performance results.

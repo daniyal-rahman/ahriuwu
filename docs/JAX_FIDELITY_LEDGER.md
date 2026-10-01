@@ -671,3 +671,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | LEARN-AFK-19 u128 | E66 frozen64games6.203125CS/0deaths/0towerHP/reward3.93398 versusowninitial8.890625CS. | No targeting improvement at first checkpoint; finish predeclared512budget. E65 diagnostic queued next after correctedreward controls failed farming gate. |
 
 | LEARN-AFK-18 launch | E65 Slurm1832 queued after dry-run; launcher89112 awaits canary/watch. OriginalE46/v3/PPO/death300 asE63; HP/tower rewards0. | Tests whether simplified objective supports better farming; neither isolates individual removed term nor solves intended multitask objective alone. Frozen>=10.5625CS/<=.05deaths gate;512updates8.389M,1hSlurm. |
+
+| LEARN-AFK-19 u256 | E66 frozen64games7.8125CS/0deaths/0towerHP/reward5.3628768 versusowninitial8.890625CS/.015625deaths/4.044495towerHP/reward4.9803097. | Partial recovery fromu1286.203125CS but belowinitial. Higher total reward with lower CS again shows objective tradeoffs; no architecture win. Continue512budget, E65 queued. |
