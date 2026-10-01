@@ -14,8 +14,8 @@ No global farming fix or C# parity claim. E69b watcher stopped; inactive/registr
 
 Next: narrow timing refinement preserving unit15's earlier unit7 kill and
 unit19's first normal hit, with one ground move then NOOP before delayed AA/Q.
-E70 prepared:20 local timing branches,30min CPU cap; dry-run next.
-No project jobs currently running. Unrelated1803/1736 untouched.
+E70 Slurm1837 running:20 local timing branches,30min CPU cap; dry-run passed,
+startup watch in progress. It is the only project job. Unrelated1803/1736 untouched.
 Feature experiment remains conditional on completed execution/timing review.
 
 ## Previous handoff (historical)
