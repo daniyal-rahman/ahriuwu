@@ -1,6 +1,4 @@
-**E68 video:** Slurm1834 passed canaries/180s startup watch; rendering in progress. Bridge lanerl-event-1834.service verified active/result updating, expiry2026-10-01T15:01:18.546514+00:00.
-
-**User-requested video:** E68 Slurm1834 is running startup checks for a frozen full120s/1x replay of latestE67, fullHP blue versusAFK, seed7. Separate new request; no research training resumed.
+**E68 VIDEO COMPLETE:** User-requested latestE67 full120s replay, Slurm1834 COMPLETED/0:0 in4m40s. Canaries/180s watch passed; checkpointSHA matches E67final. Both map and combat MP4s verified120.1s/10fps. Seed7/fullHP blue versusAFK:12CS/0deaths, one diagnostic game. Combat video `/mnt/nfs/shared/E68_afk_current_video/low_team_1/combat/replay.mp4`; map sibling `replay.mp4`. Watcher1834 stopped after active review; inactive/registryclean. No training resumed; no active jobs from this request.
 
 # STATUS — 2026-10-01 11:30 UTC
 

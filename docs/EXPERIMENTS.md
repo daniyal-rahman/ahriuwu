@@ -7,7 +7,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E68_afk_current_video` |10-01| CPU frozen replay | LatestE67 full120s video at1x |E67u512 frozen|1game,30min cap| Slurm1834 submitted; startup watch attached | No training; seed7/fullHP, matched prior video setup |
+| `E68_afk_current_video` |10-01| CPU frozen replay | LatestE67 full120s video at1x |E67u512 frozen|1game,30min cap| Slurm1834 COMPLETED/0:0,4m40s;120.1s videos;12CS/0deaths;bridge cleaned | No training; seed7/fullHP, matched prior video setup |
 | `E60_afk_own_action` |10-01| JAX AFK PPO | Own combat state inputs, zero-weight migration |E46/freshAdam,4epochs|256updates4.194M| Slurm1827 complete23m29s; final6.1719CS/.78125deaths/361towerHP; reward9.852 versus6.329initial; farming gate failed | Compare E57@128/E61@256, original9.56CS |
 | `E67_afk_staggered` |10-01| JAX AFK PPO | Unsynchronized training phases, full-game evaluation |E46/v3/freshAdam, E63 rewards|512updates8.389M +180224untrained warmup decisions| Slurm1833 COMPLETED/0:0,41m44s;final9.921875CS/.140625deaths/802.40towerHP;farming/survival gate failed | Tests batch temporal diversity; requires original frozen baseline and independent replication |
 | `E66_afk_click_proposals` |10-01| JAX AFK PPO | Learned observed-entity screen-cell proposals |E46/freshAdam,v3,4epochs|512updates8.389M| Slurm1831 COMPLETED/0:0,43m32s;final9.34375CS/0deaths/75.22towerHP;farming gate failed | Requires gain over both old and new initial policy; physical clicks unchanged |
