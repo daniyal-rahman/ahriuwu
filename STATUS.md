@@ -19,12 +19,14 @@ feature package; current GRU/PPO/reward/action heads retained. v6 implementation
 and tests prepared, no learned result. Field provenance, video-readiness gap and
 remaining reference differences are explicit. No full Tencent reproduction claim.
 
-E74 combat preflight prepared (20minGPUcap), E75control/E76feature prepared
-(512updates/8.389M each,1hSlurmcap), none submitted yet. Initial64-game E67
+E74 combat preflight submitted as Slurm1848 (20minGPUcap), startup watch
+in progress. E75control/E76feature prepared
+(512updates/8.389M each,1hSlurmcap), training not submitted. Initial64-game E67
 retention and E74pass required. Final primary gate featureCS>=10.921875 and
 control+1, deaths<=.15; confirm independently if promising. E72b1840 was
 intentionally cancelled at startup; E73b history-only remains deferred.
-No project jobs running/queued; no training-result ETA. No watcher needed.
+E74/1848 is the only submitted project job. Preflight ETA~5–10min after
+start; no training-result ETA. Event bridge required if unattended after startup.
 
 ## Narrow investigation completed
 
