@@ -8,9 +8,15 @@ E69 Slurm1835 FAILED/1:0 at5m36s: full1201frame E68 reproduction exact on all
 checked state/action fields,12CS/0deaths, correct checkpointSHA. Probe then
 failed converting typed JAX PRNG key in all-state-leaf comparator. No valid
 branch conclusion. Comparator repaired; E69b prepared from saved baseline
-state/carry/key, same76branches and30min cap, Slurm1836 submitted; startup watch in progress.
+state/carry/key, same76branches and30min cap, Slurm1836 running;12canaries/180s startup watch passed.
 E69 watcher stopped after review; inactive/registry clean verified.
 E69b/1836 is the only project job. Unrelated1803/1736 untouched.
+Restored baseline states match E68 exactly. Tick compilation/branches pending,
+no valid branch findings yet. Rough ETA5–20min; hard Slurm end19:27UTC.
+Bridge `lanerl-event-1836.service` active; expiry 2026-10-01 20:00 UTC.
+On wake inspect E69b/result.json and unit15/unit19 event timelines; require
+all-state instrumentation agreement. Compare target CS AND local total CS;
+check unit19 Q reset. Verify watcher/registry cleanup after active review.
 
 ## Previous handoff (historical)
 
