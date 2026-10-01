@@ -25,14 +25,20 @@ verifier now reports1853 complete/canary passed. Added marker for future runs.
 No repeat tests for reporting-only fix. E74b had already passed tests but failed
 its Git-path writer; E74 precision discrepancy resolved at production precision.
 
-E75c control submitted as Slurm1856; startup watch in progress. E76c feature
+E75c control RUNNING Slurm1856.16startup checks passed; launcher reported
+healthy after180s. E76c feature
 prepared, not submitted.512updates8.389M each/1hSlurmcap. Both require
 initial64-game E67 retention. Primary final gate featureCS>=10.921875 and
 control+1, deaths<=.15. No learned improvement claimed. Earlier training IDs
 never submitted; history-only arm remains deferred.
-E75c/1856 is the only submitted project job, rough45–55min ETA after start.
-Preflight completed under active review, no watcher needed. Next: finish
-control startup, arm completion bridge, stand down. Unrelated jobs untouched.
+E75c/1856 is the only running project job; none queued. Rough35–45min
+remaining at20:25UTC, hard deadline21:16UTC. Initial frozen retention still
+pending after fixed-policy stagger warmup; no new frozen result claimed.
+Bridge lanerl-event-1856.service active and result checked_at advancing
+1790886241.198212→1790886301.5603607; expiry2026-10-01T21:53:59UTC.
+On wake inspect State+ExitCode, logs/initial retention/final frozen results and
+checkpoints, then clean watcher/registry. E76c remains unsubmitted until
+control review. Stand down after this verified handoff. Unrelated jobs untouched.
 
 ## Narrow investigation completed
 
