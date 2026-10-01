@@ -104,7 +104,7 @@ def main():
         opponent=spec.get("opponent","mirror"),health_loss_gold=spec.get("health_loss_gold",0.),
         tower_damage_gold=spec.get("tower_damage_gold",0.),
         tower_damage_personal=spec.get("tower_damage_personal",False),
-        ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef']))
+        ppo=PPOConfig.standard(lr=spec['lr'],entropy_coef=spec['entropy_coef'],epochs=spec.get('ppo_epochs',4)))
     built=make_vec_train(cfg,sim,bank)
     params=from_state_dict(built['init_params'](jax.random.key(0)),msgpack_restore((scratch/'initial.msgpack').read_bytes())['params'])
     opponent_params=from_state_dict(params,msgpack_restore((scratch/'eval_opponent.msgpack').read_bytes())['params'])

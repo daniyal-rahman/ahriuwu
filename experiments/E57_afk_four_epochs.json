@@ -1,0 +1,35 @@
+{
+  "id": "E57_afk_four_epochs",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 128,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    64,
+    128
+  ],
+  "question": "Authorized E56/E57 matched one-versus-four PPO epochs, same E46final init/fresh Adam/seed0/rewards/LR1e-4/entropy.001,128updates2.097M decisions each. E55b suggests fewer passes preserve recorded hit buttons but not proven CS. PPO paper arxiv1707.06347 motivates sample reuse, not optimal task epoch count. Frozen64games at0/64/128, same HP roles/seeds; compare CS/deaths/personal towerHP and median steady update seconds. Directional success >=0.5CS over fourepoch with <=0.05 extra deaths/game; separately require exceeding initial9.5625CS for actual improvement. One trainingseed, no significance/generalization claim. Stop128updates/nonfinite/wall budget. Both arms authorized; after E56 bridge inspect and launch E57 without asking. Do not extend a failed candidate.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4
+}

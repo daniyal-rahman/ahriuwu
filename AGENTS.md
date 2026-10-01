@@ -57,3 +57,5 @@ History = `legacy/`, `docs/archive/`.
     This tool currently handles single job IDs, not arrays; OPS047 is the array
     test. If bridge delivery is unavailable, say so explicitly; do not claim a
     scheduled check. A notification does not authorize a new experiment.
+
+11. Dani's standing research authorization: proceed with bounded, reversible follow-up experiments on available Slurm compute when evidence makes them worth testing; do not wait for another confirmation. Preserve experiment IDs, budgets, canaries, frozen comparisons and event bridges. Before ending a turn, state actual running/queued jobs (or explicitly none), the experiment and rough ETA; distinguish planned follow-ups from submitted jobs. Irreversible actions still require approval.
