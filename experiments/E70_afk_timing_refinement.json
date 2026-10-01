@@ -1,0 +1,57 @@
+{
+  "id": "E70_afk_timing_refinement",
+  "engine": "afk-tick-audit",
+  "backend": "cpu",
+  "slurm_time": "00:30:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack",
+  "checkpoint_sha256": "7f12479d61db507d23806822a6c5b1d4b129bd58fd9e83b2bed1c06621d0fe55",
+  "reference_trace": "/mnt/nfs/shared/E68_afk_current_video/low_team_1/trace.npz",
+  "cases": [
+    {
+      "target": 15,
+      "base_index": 770,
+      "decisions": 60,
+      "attack_indices": [
+        24,
+        26,
+        28,
+        30,
+        32,
+        34,
+        36,
+        38,
+        40
+      ],
+      "wait_start": 22,
+      "modes": [
+        "delay"
+      ],
+      "stationary_wait": true,
+      "require_direct_clicks": true
+    },
+    {
+      "target": 19,
+      "base_index": 1100,
+      "decisions": 50,
+      "attack_indices": [
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34
+      ],
+      "wait_start": 25,
+      "modes": [
+        "delay_q"
+      ],
+      "stationary_wait": true,
+      "require_direct_clicks": true
+    }
+  ],
+  "question": "LEARN-AFK-25 narrow timing refinement of E69b.20 local branches including2 natural baselines,30min CPU cap. Preserve unit7 kill before unit15 intervention at79.2196s; withhold only upcoming nonlethal caster AA then release at79.4196..81.0196 in200ms steps. Preserve unit19 first normal AA112.5133s; intervene112.53s before Q and release Q112.63..113.43 in100ms steps, then physical targeted attack. Waiting is one decoded ground MOVE then NOOP, with zero-start/zero-hit/no-held-target canaries; all direct clicks must resolve caster. Exact E68 restored baseline and ordinary env_step state agreement required. Hypothesis: these two local timings can recover caster CS without sacrificing preceding kill/normal hit. Report target and total localCS, positions and full tick damage; not global performance or C# parity. No training or physics changes. Stop mismatch/nonfinite/30min; no automatic extension.",
+  "restore_bases": "/mnt/nfs/shared/E69_afk_tick_audit"
+}

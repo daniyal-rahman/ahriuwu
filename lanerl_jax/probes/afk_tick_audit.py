@@ -129,6 +129,25 @@ def main():
         return (jnp.where(wait, 1, 2).astype(jnp.int32),
                 jnp.where(wait, wx, sx), jnp.where(wait, wy, sy))
 
+    # A single physical ground click clears the held target; following NOOPs
+    # let that short movement finish without repeated near-self click drift.
+    # Check the actual decoder rather than assuming a cell denotes ground.
+    offsets = np.asarray([(0., 0.)] + [(r*x, r*y) for r in (24., 48., 96., 128.)
+                         for x, y in ((1,0),(-1,0),(0,1),(0,-1),(1,1),(-1,1),(1,-1),(-1,-1))])
+    cells = jax.jit(jax.vmap(cell_for_offset))(jnp.asarray(offsets[:, 0], jnp.float32),
+                                            jnp.asarray(offsets[:, 1], jnp.float32))
+    ground_cells = list(zip(np.asarray(cells[0]), np.asarray(cells[1])))
+
+    def clear_with_ground(s):
+        for sx, sy in ground_cells:
+            f = (jnp.int32(1), jnp.int32(sx), jnp.int32(sy))
+            a = tuple(jnp.stack([x, jnp.int32(0)]) for x in f)
+            o = decode(a, s)
+            if int(o.kind[0]) == 1:
+                assert bool(o.clear_target[0])
+                return f
+        raise RuntimeError('No nearby executable ground click; cannot label branch waiting')
+
     ref = dict(np.load(spec['reference_trace']))
     carry, key = policy.initial_carry((2,)), jax.random.key(7)
     bases, errors = {}, {}
@@ -184,26 +203,40 @@ def main():
         target, length = case['target'], case['decisions']
         seq = int(base.spawn_seq[target])
         variants = [('baseline', -1)]
-        variants += [('early', t) for t in case['attack_indices']]
-        variants += [('delay', t) for t in case['attack_indices']]
+        variants += [(mode, t) for mode in case.get('modes', ['early', 'delay'])
+                     for t in case['attack_indices']]
         for mode, attack_index in variants:
             s, c, k = base, bc, bk
             chunks, order_rows, instrument_error = [], [], 0.
-            forced_count = directed_count = wait_count = wait_moves = 0
+            forced_count = directed_count = wait_count = wait_moves = q_casts = 0
+            wait_start = case.get('wait_start', 0)
+            stationary_wait = case.get('stationary_wait', False)
             for j in range(length):
                 a, c, k = act(s, c, k)
                 same = bool(s.alive[target]) and int(s.spawn_seq[target]) == seq
-                wait = mode == 'delay' and j < attack_index
+                wait = mode in ('delay', 'delay_q') and wait_start <= j < attack_index
                 force = same and mode != 'baseline' and (j >= attack_index or wait)
+                cast_q = force and mode == 'delay_q' and j == attack_index
                 if force:
-                    f = click(s, target, wait)
+                    if wait and stationary_wait:
+                        f = clear_with_ground(s) if j == wait_start else (jnp.int32(0),)*3
+                    elif cast_q:
+                        f = (jnp.int32(3), jnp.int32(0), jnp.int32(0))
+                    else:
+                        f = click(s, target, wait)
                     a = tuple(x.at[0].set(y) for x, y in zip(a, f))
                 o = decode(a, s)
-                forced_count += int(force and not wait)
-                directed_count += int(force and not wait and int(o.target[0]) == target)
+                forced_count += int(force and not wait and not cast_q)
+                directed_count += int(force and not wait and not cast_q and int(o.target[0]) == target)
                 wait_count += int(force and wait)
                 wait_moves += int(force and wait and int(o.kind[0]) == 1)
+                q_casts += int(cast_q)
                 nxt, d = jax.block_until_ready(detailed(s, o, jnp.int32(target)))
+                if force and wait and stationary_wait:
+                    assert not np.asarray(d['start']).any() and not np.asarray(d['hit']).any(), 'withholding failed'
+                    assert int(nxt.target[0]) < 0, 'waiting retained/acquired a target'
+                if force and not wait and not cast_q and case.get('require_direct_clicks', False):
+                    assert int(o.target[0]) == target, 'directed click missed intended caster'
                 if mode == 'baseline':
                     ordinary = jax.block_until_ready(step(s, o))
                     instrument_error = max(instrument_error, max_tree_error(nxt, ordinary))
@@ -214,7 +247,7 @@ def main():
                 chunks.append(jax.tree.map(np.asarray, d))
                 order_rows.append(dict(index=case['base_index']+j, seconds=(float(s.t_ms)-120000)/1000,
                     button=int(a[0][0]), order_kind=int(o.kind[0]), order_target=int(o.target[0]),
-                    force=force, wait=wait, pre_cd=float(s.aa_cooldown[0]), pre_windup=float(s.aa_windup[0])))
+                    force=force, wait=wait, cast_q=cast_q, pre_cd=float(s.aa_cooldown[0]), pre_windup=float(s.aa_windup[0])))
                 s = nxt
             data = {name: np.concatenate([d[name] for d in chunks]) for name in chunks[0]}
             tag = f"unit{target}_{mode}_{attack_index}"
@@ -231,12 +264,13 @@ def main():
                 target_cs=bool(len(death) and data['killer'][death[0]] == 0),
                 instrument_max_error=instrument_error, forced_clicks=forced_count,
                 directed_clicks=directed_count, wait_clicks=wait_count, wait_moves=wait_moves,
+                wait_start=wait_start, stationary_wait=stationary_wait, q_casts=q_casts,
                 events=events, orders=order_rows)
             (out/(tag+'.json')).write_text(json.dumps(row, indent=2))
             results.append({name: value for name, value in row.items() if name not in ('events', 'orders')})
             print('BRANCH', json.dumps(results[-1]), flush=True)
     report = dict(spec=spec, source=git_provenance(), reproduction=reproduction, results=results,
-        limits='Two selected incidents, not aggregate performance. Same initial recurrent history and random numbers; policy observes changed branch states. Early holds directed clicks from chosen time; delay uses repeated near-self move clicks first. These are multi-action physical options, not single-action effects or C# parity proof. Same-tick damage attribution follows production simulator approximation. Raw target IDs are diagnostic only.')
+        limits='Two selected incidents, not aggregate performance. Same initial recurrent history and random numbers; policy observes changed branch states. Early holds directed clicks from chosen time. Default delay uses repeated near-self moves; stationary_wait instead uses one decoded ground MOVE then NOOP, starting at wait_start. delay_q releases Q then targets on the next decision. These are multi-action physical options with movement, not single-action effects or C# parity proof. Same-tick damage attribution follows production simulator approximation. Raw target IDs are diagnostic only.')
     (out/'result.json').write_text(json.dumps(report, indent=2))
     print('PROFILE COMPLETE', flush=True)
 

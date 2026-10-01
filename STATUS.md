@@ -10,10 +10,11 @@ while ownCD.784716s after normal+Q nonlethal hits. No missing champion hit/CS
 credit in either baseline; no simultaneous champion/minion lethal race.
 76physical-option branches: caster15 can be secured but local totalCS<=baseline1;
 caster19 can be secured with localCS1 versusbaseline0. Findings LEARN-AFK-24.
-No global farming fix or C# parity claim. E69b watcher stopped; verify cleanup.
+No global farming fix or C# parity claim. E69b watcher stopped; inactive/registry clean verified.
 
 Next: narrow timing refinement preserving unit15's earlier unit7 kill and
 unit19's first normal hit, with one ground move then NOOP before delayed AA/Q.
+E70 prepared:20 local timing branches,30min CPU cap; dry-run next.
 No project jobs currently running. Unrelated1803/1736 untouched.
 Feature experiment remains conditional on completed execution/timing review.
 

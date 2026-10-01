@@ -7,6 +7,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E70_afk_timing_refinement` |10-01| CPU frozen tick diagnostic | Preserve preceding kill/hit, delay caster AA/Q only |E67final unchanged|20 local branches,30min cap| Prepared | One ground move then NOOP with withholding/target gates; no learning |
 | `E69b_afk_tick_audit` |10-01| CPU frozen tick diagnostic | Correct E69 typed-key comparator; restore exact saved baseline states |E67final unchanged|76 local branches,30min cap| COMPLETED1836/0:0,8m52s;76branches, exact baselines;caster19 locally recoverable;watcher cleaned | Same protocol and matched baseline gates; no learning |
 | `E69_afk_tick_audit` |10-01| CPU frozen tick diagnostic | Exact E68 caster15/19 attribution and earlier/delayed physical clicks |E67final unchanged|120s replay +76 local branches,30min cap| FAILED1835/1:0,5m36s; full replay exact; diagnostic typed-key comparator failed before branches | Require exact replay and instrumented/ordinary state agreement; no learning or aggregate claim |
 | `E68_afk_current_video` |10-01| CPU frozen replay | LatestE67 full120s video at1x |E67u512 frozen|1game,30min cap| Slurm1834 COMPLETED/0:0,4m40s;120.1s videos;12CS/0deaths;bridge cleaned | No training; seed7/fullHP, matched prior video setup |
