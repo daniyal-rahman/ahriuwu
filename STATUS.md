@@ -8,6 +8,15 @@ sweeps; no farming solution demonstrated. Long-term C# gate remains >30CS in
 
 ## Current phase
 
+Latest user direction: explain remaining Tencent gaps; projectile idea is separate.
+No new run submitted. Direct current/max HP now replaces reconstructed bar HP in
+the opt-in combat additions; original v3 inputs unchanged. Corresponding regression
+updated, syntax checked; revised behavior has NOT rerun GPU canaries. Prior E74c
+preflight does not certify this revision. Projectile draft/integration edits remain
+uncommitted and untested, excluded from the original feature-run scope. Scratch
+initialization is not implemented yet. No running/queued project jobs or active ETA.
+
+
 E71b preflight COMPLETE1839/0:0,4m16s.14GPU tests passed. E68 visible-history
 audit:97022claimed historical samples,zero mismatches; one-step visible-minion
 coverage97.26658%.15past samples available in all four inspected incident

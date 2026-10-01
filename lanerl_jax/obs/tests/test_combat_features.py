@@ -1,4 +1,4 @@
-"""Combat schema provenance: bar quantization, visibility and own readiness."""
+"""Combat schema provenance: direct HP, visibility and own readiness."""
 from types import SimpleNamespace
 import jax
 import jax.numpy as jnp
@@ -24,14 +24,15 @@ def observe(s, p, visibility=None):
     return o, append_combat_features(o, s, 0, f, p)
 
 
-def test_combat_preserves_bar_information_and_masks_padding():
+def test_combat_direct_hp_preserves_base_columns_and_masks_padding():
     s, p = scene()
     old, new = observe(s, p, jnp.ones_like(s.alive))
     row = int(np.flatnonzero(np.asarray(old.slot_unit)==2)[0])
-    hp = 16+ENTITY_FEATURES.index('bar_hp_points')
+    hp = 16+ENTITY_FEATURES.index('hp_points')
     maxhp = 16+ENTITY_FEATURES.index('max_hp')
-    np.testing.assert_allclose(new.entities[row,hp], old.entities[row,3]*s.max_hp[2]/3000.)
-    assert float(new.entities[row,hp]) == 0., 'must not recover subpixel HP from simulator'
+    np.testing.assert_allclose(new.entities[row,hp], s.hp[2]/3000.)
+    assert float(old.entities[row,3]) == 0. and float(new.entities[row,hp]) > 0.
+    np.testing.assert_allclose(new.self_vec[16+SELF_FEATURES.index('hp_points')], s.hp[0]/3000.)
     np.testing.assert_allclose(new.entities[row,maxhp], s.max_hp[2]/3000.)
     np.testing.assert_array_equal(new.entities[:,:16], old.entities)
     np.testing.assert_array_equal(new.self_vec[:16], old.self_vec)
