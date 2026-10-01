@@ -1,3 +1,5 @@
+**E68 video:** Slurm1834 passed canaries/180s startup watch; rendering in progress. Bridge lanerl-event-1834.service verified active/result updating, expiry2026-10-01T15:01:18.546514+00:00.
+
 **User-requested video:** E68 Slurm1834 is running startup checks for a frozen full120s/1x replay of latestE67, fullHP blue versusAFK, seed7. Separate new request; no research training resumed.
 
 # STATUS — 2026-10-01 11:30 UTC
