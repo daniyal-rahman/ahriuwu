@@ -1,0 +1,38 @@
+{
+  "id": "E63_afk_death_control",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 100.0,
+  "tower_damage_gold": 900.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "Complete matched reward/input comparison: E61 v3 longcontrol learned1death/game and462towerHP while CS fell6.06 and rewarddoubled. Same E46start/freshAdam/LR1e-4/4epochs/512updates; only change versusE61 is300gold death cost. Same death reward asE62 but original v3inputs. Compare frozen64game128/256/512 to E61 and E62; success >=10.5625CS with <=.05deaths, also track safe towerHP/common rescored reward. Budget512updates8.389M/55minworker/1hSlurm. No extension without frozen improvement; independentseed repeat needed.300gold engineering scale matches simulator champion base gold, not published optimum.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 300.0
+}
