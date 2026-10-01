@@ -15,8 +15,8 @@ ideation alone. Recommendations recorded in LEARN-AFK-33.
 **E78_afk_cs_only RUNNING, Slurm2161;17canaries and180s launcher watch passed.**
 LR1e-4,512updates/8.389M,~40min,55minworker/1hSlurm cap. Dry-run passed; sourcecf0ff0b.
 Completion bridge lanerl-event-2161.service armed; expires2026-10-02T00:18:41.052256+00:00.
-Service active, registry entry present, result timestamp advancement verified. Rough completion22:52UTC;
-Slurm hard limit23:10UTC. Full-worker compilation/initial frozen retention pending;
+Service active, registry entry present, result timestamp advancement verified. Rough completion3:52PM Pacific (PDT);
+Slurm hard limit4:10PM Pacific (PDT). Full-worker compilation/initial frozen retention pending;
 no learned result yet.
 E79/2160 CANCELLED/0:0 after46s during canaries; zero training, no bridge.
 Dani clarified the objective is sensible policy movement, not arbitrary LR increase.
@@ -89,3 +89,11 @@ including short reward horizon/personal tower credit for pushing. No experiment
 created from these discussion ideas. Long-term gate remains >30CS in10minute C#
 mirror trials across seeds. Future submitted runs use normal launcher, integrated
 canaries/startup watch and bounded completion bridge; no repeated model polling.
+
+Latest discussion (LEARN-AFK-34): Solo uses obstacle/hero-position game-core
+channels through convolutions, not RGB screenshots. Tencent5v5 separately has
+6x17x17 maps including skill bullets; caster-AA coverage remains unestablished.
+Recommend retaining compact structured inputs with a separately trained video
+adapter; small spatial CNN remains an optional hypothesis. No code/run change.
+E78bridge still reports RUNNING during this review; completion estimate3:52PM
+Pacific (PDT), roughly a few minutes remaining; no additional RL jobs submitted.

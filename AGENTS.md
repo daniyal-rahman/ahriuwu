@@ -67,5 +67,6 @@ History = `legacy/`, `docs/archive/`.
     idea is concrete or Dani explicitly asks. Use the existing launcher, integrated
     smoke tests and completion bridge; do not repeatedly poll or rerun checks without
     a new failure or change. Group coherent edits into useful commits. Keep replies
-    direct: explain an experiment's setup alongside its ID, distinguish observations
+    direct: give ETAs in Pacific time (PDT/PST) or relative minutes; explain an
+    experiment's setup alongside its ID, distinguish observations
     from hypotheses, and never assume a plateau proves the model cannot learn.

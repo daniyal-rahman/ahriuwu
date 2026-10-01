@@ -1087,3 +1087,39 @@ experiment, observation change or Tencent port implemented in this turn.
 | LEARN-AFK-33 existing automated comparator | Re-read E58b: observation-only scripted control already achieved13.5CS versus E46policy9.90625 and E57policy8.90625 on the same32diagnostic120s starts; no deaths. These are a different cohort/checkpoint from current E67frozen64, and scripted duplicate trajectories are not independent samples. | Do not repeat a broad teacher audit just to rediscover achievable improvement. Prefer reusing the existing teacher/BC path or a short randomized last-hit curriculum if E78does not help. No human-play interface required for either option. |
 
 | LEARN-AFK-33 E78 startup | Slurm2161 RUNNING;17integrated GPU tests passed including new literal-CS isolation, original collector/actor likelihood and stagger warmup. Launcher reports healthy after180s. Sourcecf0ff0b; existing E67weights, LR1e-4,512updates. | Full worker/initial frozen retention still pending; no learned outcome. Bridge lanerl-event-2161.service armed, expiry2026-10-02T00:18:41.052256+00:00; service active, registry present and result timestamp advancement verified. |
+
+### LEARN-AFK-34 — Tencent image channels and the future video adapter
+
+Question-only source review; no implementation or new experiment. Re-read
+[Tencent Solo Figure2/architecture/System Setup](https://arxiv.org/pdf/1912.09729):
+image features use convolutions; unit vectors and game-state vectors use FCs,
+including FC/ReLU unit encoders. Their encodings combine before the LSTM. The
+specified image inputs are two game-core channels: obstacles and hero positions,
+not rendered RGB footage. Thus that image branch does not establish a hidden
+source of caster-projectile observations.
+
+The separate [Tencent5v5 paper Table1, page15](https://arxiv.org/pdf/2011.12692)
+uses6x17x17 spatial features: ally/enemy skill-damage regions, ally/enemy skill
+bullets, obstacles and bushes. This is concrete projectile-map precedent but
+neither raw screenshot perception nor proof of all minion auto-attack projectile
+coverage. Keep these systems separate from Solo and later HoKoff checkpoints.
+
+Recommendation under discussion: retain a compact policy interface and train
+video perception separately with supervised recorded-footage labels. Define and
+validate observable feature estimates early, including missing detections, health
+precision and latency, rather than assuming exact simulator inputs can simply be
+replaced later. The adapter can output tracked entities/projectiles and optional
+small spatial channels; it need not force the policy to consume raw pixels.
+A small CNN on compact semantic maps is plausible on our5080 but needs a measured
+throughput comparison. For last-hit timing, continuous projectile position/motion
+features may preserve precision better than a coarse occupancy grid. This is an
+engineering hypothesis, not a selected implementation or proven learning benefit.
+
+Compute distinction: end-to-end pixels add rendering, image-encoder training and
+perception sample complexity. At128envs x128steps, even256x256RGB frames occupy
+3GiB as uncompresseduint8 (12GiBfloat32), before activations, model/optimizer or
+multiple frames; streaming, compression and cached encodings can reduce this, so
+it is an illustrative storage calculation, not a measured throughput limit.
+Current JAX state simulation supplies no game-faithful League RGB renderer.
+Compact maps/lists can instead be generated in simulation and estimated by the
+future video adapter. E78continues unchanged; no new feature branch launched.
