@@ -6,6 +6,7 @@ Run from the desktop with `/mnt/nfs` paths (see `slurm/server_train.sbatch`).
 
 | File | Question | Answer / ledger row | Date |
 |---|---|---|---|
+| `afk_credit_audit.py` | AFK actualCS→GAE→PPO probability/retention, E54 | LEARN-AFK-09; isolated copies, no policy export |2026-10-01|
 | `caster_learning_audit.py` | Caster sensitivity, full-horizon MC and isolated on-policy PPO | LEARN-PAIR-09; invoked by E45 wave replay | 2026-09-30 |
 | `wave_audit_summary.py` | Aggregate recorded windows, spell attempts/activations and branches | LEARN-PAIR-08; descriptive read-only summary, no lifetime census | 2026-09-30 |
 | `aa_cancel_boundary.py` | Can suppression on the final windup tick still deal damage? | LEARN-PAIR-08: NumPy routine repro; compare server CastCancelCheck ordering, no simulation changes | 2026-09-30 |

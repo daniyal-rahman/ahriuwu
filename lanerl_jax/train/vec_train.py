@@ -119,6 +119,7 @@ class Transition(NamedTuple):
     done: jax.Array
     reward_terms: dict
     cs: jax.Array
+    cs_delta: jax.Array
     gold: jax.Array
     xp: jax.Array
     done_full: jax.Array
@@ -252,6 +253,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
             done = nxt.t_ms >= deadline
             done_full = done & (deadline >= full_ms)
             deadline = jnp.where(done, full_ms, deadline)
+            cs_delta = (nxt.cs[:2] - state.cs[:2]).astype(jnp.float32)
             cs_at_done = jnp.where(done_full, nxt.cs[:2].astype(jnp.float32), 0.0)
             gold_at_done = jnp.where(done_full, nxt.gold[:2].astype(jnp.float32), 0.0)
             xp_at_done = jnp.where(done_full, nxt.xp[:2].astype(jnp.float32), 0.0)
@@ -267,7 +269,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
             t = Transition(obs.entities, obs.entity_pad_mask, obs.self_vec, obs.global_vec,
                            action, log_prob, uses_screen, uses_target, logits.value,
                            reward, jnp.broadcast_to(done, reward.shape), terms,
-                           cs_at_done, gold_at_done, xp_at_done,
+                           cs_at_done, cs_delta, gold_at_done, xp_at_done,
                            jnp.broadcast_to(done_full, reward.shape), deaths, lane_dist, cm,
                            hp_at_end, tower_damage_at_end, kills_at_end)
             return nxt, new_carry, deadline, t

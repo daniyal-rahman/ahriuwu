@@ -1,0 +1,20 @@
+{
+  "id": "E54_afk_credit_audit",
+  "engine": "credit-audit",
+  "slurm_time": "00:45:00",
+  "stages": [
+    {
+      "name": "from_E46",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E46_afk_farm/vec-s0-20260930-214903-32499e76/ckpt_010027008.msgpack",
+      "restore_runner": false,
+      "updates": 16
+    },
+    {
+      "name": "after_E51",
+      "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E51_afk_personal_lr1e4/vec-s0-20260930-231817-279e25e5/ckpt_002097152.msgpack",
+      "restore_runner": true,
+      "updates": 16
+    }
+  ],
+  "question": "User-authorized causal learning investigation. Production128env/128step/4epoch/4minibatch AFK PPO on isolated copies. E46fresh and E51full-runner restoration,16updates each. Exact CS deltas, independent NumPy GAE, actor/learner logprob/value agreement, actual minibatch-normalized advantage signs, before/after action probabilities, and old fixed-batch retention through later updates. Stop on invariants/nonfinite or32update cap; no weights exported. Identify whether sparse credit, normalization, or update interference is implicated; correlations not counterfactual proof."
+}
