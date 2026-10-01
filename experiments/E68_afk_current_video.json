@@ -1,0 +1,17 @@
+{
+  "id": "E68_afk_current_video",
+  "engine": "wave-replay",
+  "backend": "cpu",
+  "slurm_time": "00:30:00",
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E67_afk_staggered/vec-s0-20261001-105559-3d1c1096/ckpt_008388608.msgpack",
+  "update": 512,
+  "seconds": 120,
+  "seed": 7,
+  "offset": -45,
+  "low_teams": [
+    1
+  ],
+  "opponent": "afk",
+  "label": "E67 final | blue 100% HP | AFK opponent | 120 seconds | 1x",
+  "question": "User-requested current-model behavior video. E67 final frozen checkpoint, same seed7/offset-45/fullHP setup as priorE49 video. Full120seconds at1x, combat and map views. One diagnostic game; no training or aggregate-performance claim."
+}
