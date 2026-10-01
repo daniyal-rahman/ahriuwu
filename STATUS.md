@@ -4,10 +4,11 @@ Dani renewed research authorization and supplied a fresh budget in this thread.
 The old thread budget boundary and15:37 compute window below are historical;
 current work follows the explicit narrow-first instruction, not broad PPO/LR sweeps.
 
-Current: E69 submitted as Slurm1835 (CPU,30min cap), startup watch in progress. Reproduce exact E68 seed7 game, then
+Current: E69 submitted as Slurm1835 (CPU,30min cap), 12 canaries and launcher180s startup watch passed. Reproduce exact E68 seed7 game, then
 caster15/19 tick-level attack/damage/credit and earlier/delayed physical-click
 branches. E69 is the only project job; unrelated1803/1736 remain untouched.
 Hypothesis/budget/gates: experiments/E69_afk_tick_audit.json and LEARN-AFK-24.
+Bridge `lanerl-event-1835.service` active; result JSON verified updating, expiry 2026-10-01 19:53 UTC.
 Feature experiment remains conditional on these execution checks.
 
 ## Previous handoff (historical)
