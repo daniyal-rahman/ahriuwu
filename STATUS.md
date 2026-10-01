@@ -12,7 +12,8 @@ History and evidence: `docs/EXPERIMENTS.md`, `docs/JAX_FIDELITY_LEDGER.md`.
 15 GPU canaries passed (367.68s), launcher180s healthy-start watch passed.
 Bridge lanerl-event-1832.service verified active/result updating; expiry2026-10-01T12:15:35.617291+00:00.
 Fullsize compilation/endpoint canary passed. Frozen u0 exactly9.5625CS/0deaths/0towerHP,
-reward7.3125407 entirely gold/CS; component accounting passed. Training active.
+reward7.3125407 entirely gold/CS; component accounting passed. Training active. Frozen u128:5.359375CS/.109375deaths/0towerHP/reward2.317232;
+no early farming rescue from removing HP/tower rewards.
 Run `/mnt/nfs/checkpoints/lanerl-jax/E65_afk_cs_focus/vec-s0-20261001-101545-cb09e527/`.
 E46 weights, fresh Adam, original v3 inputs, LR1e-4,4epochs,gamma.99,lambda.95;
 XP0, HP-loss reward0, tower reward0, death300gold. Same objective asE63 except

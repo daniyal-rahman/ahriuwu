@@ -687,3 +687,5 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | LEARN-AFK-18 startup validated | E65 Slurm1832 passed15GPUcanaries in367.68s and launcher180s startup watch. Bridge lanerl-event-1832.service verified active/result updating, expires2026-10-01T12:15:35.617291+00:00. | Fullsize worker/evaluation compilation next; no new performance result. E67 remains queued Slurm1833 with startupwatch14791 attached. |
 
 | LEARN-AFK-18 initial | E65 fullsize compilation/endpoint canary passed; frozen64game u0 exactly9.5625CS/0deaths/0towerHP. Reward7.312540699 entirely gold/CS; approach/death/XP0, HP/tower disabled. New component accounting invariant passed. | Same initial physical behavior asE63/E46, with simpler objective. Training active, no improvement result yet. |
+
+| LEARN-AFK-18 u128 | E65 frozen64games5.359375CS/.109375deaths/0towerHP/reward2.31723246 versusinitial9.5625CS/0deaths. | No early rescue from eliminating HP/tower rewards. Complete512budget; result does not yet prove secondary rewards irrelevant, but simple reward removal is not sufficient at128updates. E67 phase test queued next with fullobjective. |
