@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E60_afk_own_action` |10-01| JAX AFK PPO | Own combat state inputs, zero-weight migration |E46/freshAdam,4epochs|256updates4.194M| Slurm1827 startup pending | Compare E57@128/E61@256, original9.56CS |
+| `E60_afk_own_action` |10-01| JAX AFK PPO | Own combat state inputs, zero-weight migration |E46/freshAdam,4epochs|256updates4.194M| Slurm1827 healthy;14canaries/watch;bridge armed | Compare E57@128/E61@256, original9.56CS |
 | `E61_afk_long_control` |10-01| JAX AFK PPO | Original v3 longer control |E46/freshAdam,4epochs|512updates8.389M| Prepared, not submitted | Match E60@256 and duration test |
 | `E59_afk_caster_forks` |10-01| GPU diagnostic | Paired natural/directed caster continuations |E57 frozen;<=16cases x4seeds x2branches|40min cap| COMPLETE1826 0:0,4m53s;16cases,small mixedgain;no training | Reward/credit mechanism; no training |
 | `E58b_afk_behavior_audit` |10-01| GPU frozen diagnostic | E58 corrected JAX helper |32games each120s|30min cap| COMPLETE1825 0:0,5m40s;CS9.91/8.91/13.5;read-only | Same audit, no trained weights |
