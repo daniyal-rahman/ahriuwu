@@ -6,7 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E54_afk_credit_audit` |10-01| GPU isolated diagnostic | CS→GAE→PPO probability and retention | E46fresh + E51runner copies |16updates each,no exported weights| Prepared | Actual-CS cohorts, independent GAE and likelihood checks |
+| `E54_afk_credit_audit` |10-01| GPU isolated diagnostic | CS→GAE→PPO probability and retention | E46fresh + E51runner copies |16updates each,no exported weights| Slurm1815 submitted; startup gate pending | Actual-CS cohorts, independent GAE and likelihood checks |
 | `E52_afk_entropy` |09-30| JAX PPO AFK | LR1e-4; entropy.01 vs E51 .001 | Same E46final |128updates/2.097M| COMPLETE1813 exit0,14m24s; final2.94CS/0deaths/0towerHP, reject extension | Frozen CS/deaths/personal tower |
 | `E53_afk_shared_critic` |09-30| JAX PPO AFK | LR1e-4; enable critic shared-feature gradients | Same E46final |128updates/2.097M| COMPLETE1814 exit0,14m29s; final7.97CS/0deaths/0towerHP; no extension | Same actor/value at init; entropy.001 |
 | `E50_afk_personal_lr3e5` |09-30| JAX PPO AFK | Zero XP, personal tower; constantLR3e-5 | E46 final, fresh optimizer |128updates/2.097M | COMPLETE1804 exit0,15m14s; frozenCS9.56→8.03,deaths0→.172,towerHP0→20.15 | Matched control for E51 |

@@ -74,6 +74,8 @@ def main():
     for ids in perm.reshape(cfg.n_minibatches,-1):
      a=adv[ids];normalized[ids]+=(a-a.mean())/(a.std()+1e-8)/cfg.ppo.epochs
    runner,metrics=jax.block_until_ready(learn(after,tr,before.carry))
+   assert not bool(metrics["loss_nonfinite"]), "nonfinite diagnostic update"
+   assert all(np.isfinite(np.asarray(v)).all() for v in jax.tree.leaves(runner.params))
    new_lp,_=forward(runner.params,batch);delta_lp=np.asarray(new_lp)-lp
    hits=rows(tr.cs_delta)>0;gold=rows(tr.reward_terms['cs']);buttons=rows(tr.action[0])
    future=np.zeros_like(hits);eligible=np.ones_like(hits)
