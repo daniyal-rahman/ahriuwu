@@ -1,8 +1,7 @@
 # STATUS — 2026-10-01 19:22 UTC
 
 Current authorization: fresh budget; E68 narrow execution audit then bounded
-visible-history experiment. No broad PPO/LR sweeps. No project jobs running;
-unrelated1803/1736 untouched.
+visible-history experiment. No broad PPO/LR sweeps. E71 preflight is the only project job; unrelated1803/1736 untouched.
 
 Narrow investigation COMPLETE (LEARN-AFK-24/25): E69 exact1201frame E68
 reproduction; E69b1836 COMPLETED/0:0; E701837 COMPLETED/0:0,6m28s. Tick versus
@@ -18,7 +17,7 @@ Next: opt-in visible HP/position history implementation/preflight, then matched
 E67 original-input control versus history input experiment if gates pass.
 Standalone tracking tests5passed; small policy migration/gradient test passed.
 Collector/reset/resume/GPU and real-trace tracking checks remain; E71 preflight
-prepared. E72 original-input control and E73 history arm prepared with unique
+Slurm1838 submitted, startup watch in progress. E72 original-input control and E73 history arm prepared with unique
 configs and512update/1h caps each, not submitted. LEARN-AFK-26
 states hypothesis, matched budget and frozen success criteria. No training
 submitted yet. Experimental files in progress are not a validated policy.

@@ -7,7 +7,7 @@ CS (changing weights) is labelled `train`; diagnostic scores are not transfer re
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
-| `E71_visible_history_preflight` |10-01| GPU diagnostic | History identity/migration/likelihood/reset/resume gates, E68 offline accuracy |No updates|20min cap| Prepared | Require99.9% precision/80% one-step minion coverage before paired PPO |
+| `E71_visible_history_preflight` |10-01| GPU diagnostic | History identity/migration/likelihood/reset/resume gates, E68 offline accuracy |No updates|20min cap| Slurm1838 submitted; startup watch pending | Require99.9% precision/80% one-step minion coverage before paired PPO |
 | `E72_afk_history_control` |10-01| JAX AFK PPO control | Original v3 continuation from E67 |E67/freshAdam, matched E73|512updates8.389M,1h cap| Prepared, not submitted | Initial per-game E67 frozen retention; final control for history arm |
 | `E73_afk_visible_history` |10-01| JAX AFK PPO feature test |15past visible HP/position samples per entity |E67/freshAdam, zero-weight added projection|512updates8.389M,1h cap| Prepared, not submitted | FinalCS>=10.921875 and control+1, deaths<=.15; no claim from reward alone |
 | `E70_afk_timing_refinement` |10-01| CPU frozen tick diagnostic | Preserve preceding kill/hit, delay caster AA/Q only |E67final unchanged|20 local branches,30min cap| COMPLETED1837/0:0,6m28s; exact baselines/prefixes; delayedAA localCS1→2, delayedQ0→1;watcher cleaned | One ground move then NOOP with withholding/target gates; no learning |
