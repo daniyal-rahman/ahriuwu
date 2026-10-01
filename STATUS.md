@@ -31,9 +31,10 @@ prepared, not submitted.512updates8.389M each/1hSlurmcap. Both require
 initial64-game E67 retention. Primary final gate featureCS>=10.921875 and
 control+1, deaths<=.15. No learned improvement claimed. Earlier training IDs
 never submitted; history-only arm remains deferred.
-E75c/1856 is the only running project job; none queued. Rough35–45min
-remaining at20:25UTC, hard deadline21:16UTC. Initial frozen retention still
-pending after fixed-policy stagger warmup; no new frozen result claimed.
+E75c/1856 is the only running project job; none queued. Rough20–25min
+remaining at20:36UTC, hard deadline21:16UTC. Initial frozen retention PASSED for all64games/bothteams:9.921875CS and
+.140625deaths. Control frozen update128:8.640625CS/.328125deaths (initial9.921875/.140625).
+Intermediate regression; continue predeclared final512 endpoint, no LR change.
 Bridge lanerl-event-1856.service active and result checked_at advancing
 1790886241.198212→1790886301.5603607; expiry2026-10-01T21:53:59UTC.
 On wake inspect State+ExitCode, logs/initial retention/final frozen results and
