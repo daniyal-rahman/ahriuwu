@@ -54,3 +54,5 @@ TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training
 TOOL: `ops/figures/afk_lr_comparison.py` regenerates the E50–E53 frozen CS/deaths/personal tower comparison in `docs/figures/E50_E51_comparison.png`.
 
 TOOL: `slurm/credit_audit.sbatch` / `credit-audit` launcher engine executes indexed E54 AFK learning diagnostic; `Transition.cs_delta` is exact per-decision CS telemetry.
+
+| `slurm/behavior_audit.sbatch` | TOOL | E58 bounded GPU frozen behavior audit via launcher; probe indexed in probes/README |

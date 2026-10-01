@@ -22,7 +22,8 @@ def launch(spec, dry, resume=None):
     if out.exists():
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
     full = spec['engine'] == 'full-profile'
-    script = {'credit-audit': 'slurm/credit_audit.sbatch',
+    script = {'behavior-audit': 'slurm/behavior_audit.sbatch',
+              'credit-audit': 'slurm/credit_audit.sbatch',
               'full-profile': 'slurm/full_profile.sbatch',
               'gru-profile': 'slurm/gru_profile.sbatch',
               'vision-ab': 'slurm/vision_ab.sbatch',

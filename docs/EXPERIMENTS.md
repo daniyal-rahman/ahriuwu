@@ -6,6 +6,7 @@ labelled `train`.
 
 | Run dir (under `lanerl_jax/runs/`) | Date | Engine | Task | Learner | Budget | Result | Verdict |
 |---|---|---|---|---|---|---|---|
+| `E58_afk_behavior_audit` |10-01| GPU frozen diagnostic | E46/E57/scripted positive control, opportunity/execution/reward/MC value |32games each120s|30min cap| Preparing | No policy changes; onehit windows descriptive |
 | `E56_afk_one_epoch` |10-01| JAX AFK PPO | 1 epochs per batch | E46final/freshAdam/seed0 |128updates2.097M| COMPLETE1822 exit0,11m57s;CS9.56→5.53→3.64,0deaths/0towerHP;reject extension | Matched frozen CS/deaths/towerHP and elapsed comparison |
 | `E57_afk_four_epochs` |10-01| JAX AFK PPO | 4 epochs per batch | E46final/freshAdam/seed0 |128updates2.097M| COMPLETE1823 exit0,14m22s;CS9.56→8.84→8.86;0deaths/towerHP;matches E51 | Matched frozen CS/deaths/towerHP and elapsed comparison |
 | `E55b_afk_update_branches` |10-01| GPU diagnostic | E55 corrected production learn invocation | Same checkpoints |6 trajectory updates,8 branches,45min cap| COMPLETE1821 exit0,4m04s; standard params exact; watcher cleaned | One epoch improves mean recorded hit-button likelihood both batches; no frozen CS verdict or exported weights |
