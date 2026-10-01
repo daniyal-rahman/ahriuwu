@@ -725,3 +725,53 @@ History lives in `docs/EXPERIMENTS.md` and `docs/JAX_FIDELITY_LEDGER.md`.
 | LEARN-AFK-26 preflight fixture repair | E71 FAILED1838/1:0 at1m01s before history audit or training.6GPU tests passed; collector test inserted jax.random.normal weights without dtype while pytest enablesx64, promoting GRU output fromfloat32 tofloat64. Fixture now explicitlyfloat32 (kernel.dtype); production history code unchanged. E71b retains original gates/20min cap; prepared training configs superseded by E72b/E73b to point at E71b gate. | Test bug, not an observed production failure or a passed collector gate. GPU collector/reset/resume and E68 association tests remain required. No watcher was armed because startup canary failed. |
 
 | LEARN-AFK-26 preflight passed | E71b COMPLETED1839/0:0 in4m16s; launcher reported complete/canary passed.14GPU tests cover history invariance/masking, float32 zero-weight migration/gradients, nonzero-history actor/learner likelihood, reset/resume/update, unchanged v3 AFK/rewards. E68 audit1201frames:97022/97022 claimed historical samples agree with offline identity+spawn labels (zero mismatches); consecutive-visible-minion one-step coverage6761/6951=97.26658%. All15past samples present at caster15 frames792/808 and caster19 frames1125/1129. | Predeclared99.9% precision/80% coverage gates passed on this one game, not general CV robustness or farming improvement. No actor IDs or raw attack timing used. Artifacts /mnt/nfs/shared/E71b_visible_history_preflight/{result.json,visible_histories.npz}. No watcher needed: completed during active startup watch/review. Proceed with matched E72b/E73b, original hyperparameters, initial frozen retention and final CS/death gate. |
+
+
+### LEARN-AFK-27 — reference-deviation inventory (2026-10-01)
+
+Dani redirected the next step from a history-only ablation to listing deviations,
+then implementing a coherent published reference before ablations. E72b/1840
+cancelled during startup checks; E73b never submitted. E71b established input
+implementation correctness on one trace, not necessity or learned benefit.
+A GRU can learn temporal information; no evidence establishes that ours cannot.
+It sees pooled entity embeddings, not the raw per-unit sequence. This describes
+its inference burden, not a demonstrated bottleneck. Pooling before recurrence
+also exists in the references; slot permutation is not a bug.
+
+Reference anchors: Tencent Solo AAAI2020 (LEARN-AFK-23 link, Figure2, algorithm,
+implementation section and Table6) for the intended 1v1 system; OpenAI Five
+AppendixE/Table4 for the more explicit feature inventory. Tencent5v5 is a
+separate reference, not an undocumented specification of Tencent Solo. Do not
+call a combination of these papers an exact reproduction. Current-side checks:
+obs/builder.py, train/policy.py, train/ppo.py, train/vec_train.py,
+train/wave_scenario_train.py and experiments/E67_afk_staggered.json.
+
+| Component | Actual E67 path | Published comparison / evidence status | Priority / constraint |
+|---|---|---|---|
+| Unit health and combat stats | Rounded current HP fraction (1/60), relative position, type/team/subtype; no per-unit maxHP, damage, attack speed/range | Five Table4 supplies maxHP and richer combat stats. Tencent Solo's detailed inventory is underspecified; 5v5's is richer but separate | High feature gap; distinguish visible static/stat estimates from hidden state |
+| Attack phase and incoming damage | No entity attack animation/timing or projectile inputs; no own AA cooldown/windup in E67 | Five supplies timing, incoming creep-projectile ETA and estimated melee attackers; some are scripted estimates. Tencent5v5 has spatial bullet channels | High feature gap; observable estimation required for future video. No privileged minion target IDs |
+| Per-unit temporal inputs | Current frame only; global GRU learns memory | Five explicitly has last16 HP samples. Tencent Solo does not establish an explicit HP stack | High inventory item, not proof of necessity. Our15past position+HP stack is an adaptation, not a faithful full Five interface |
+| Previous action and own status | No previous sampled action; own four ability cooldown/lock scalars, AD/AP/armor/MR/death/recall, but sparse buff/action state | Five includes previous action and richer status. AlphaStar includes orders/buffs/CD; not a mandate to use hidden state | Include in feature contract; earlier E62 own-action-only failure does not test complete reference inputs |
+| Spatial encoder | Visible entities plus self/global vectors; no local-map CNN/channel input | Tencent Solo encodes local obstacles with CNN alongside unit/game features; Tencent5v5 includes additional spatial channels | Confirmed architecture/input difference; likely less specific to these in-lane misses |
+| Target/action structure | Separate button,96-bin x,54-bin y heads from same core; no sampled-action-conditioned target head in E67 | Tencent Solo target attention and control dependencies; Five action-conditioned unit selection | High secondary suspect. E66 mixture proposals were not a complete reference implementation. Preserve physical clicks by projecting a chosen observed entity to screen |
+| Action availability | E67 click_mask=False; cooldowns observed but no full button availability mask. Decoder rejects/changes some invalid requests | Tencent Solo explicitly masks unavailable actions and physical restrictions | Confirmed exploration difference; mask only observable/known legality |
+| Recurrent trunk | Shared128d,2-layer/4-head entity attention; max+mean pooling;4x1024 MLP;512 GRU with input norm/residual | Tencent Solo type encoders/pooling and1024 LSTM; Five4096 LSTM | Confirmed difference, not evidence GRU fails. Reproduce chosen reference before cell/size ablations; no requirement to copy Five's full scale |
+| Critic gradient path | detach_critic=True: value head cannot train shared representation | Current code confirms deliberate deviation; exact equivalent gradient treatment in chosen paper not yet established | Explicit verification item, not a confirmed paper mismatch or higher-ranked cause |
+| PPO and temporal credit | Standard clipped PPO,4epochs,gamma.99 at10Hz (~10s discount horizon),lambda.95;128-step recurrent sequences | Tencent dual-clip PPO and16-step LSTM sequences; Five much longer discount horizons,32-step iterations and different sample reuse | Confirmed algorithm/training differences; hyperparameters interact with collection regime. Do not restart sweeps or assume larger gamma fixes seconds-scale timing |
+| Reward | Gold difference + lane approach shaping; XP0, HP-loss100/death300/personal tower900 in gold units; no extra CS-event reward | Tencent Table6 includes explicit last-hit bonus alongside gold, XP and other terms; zero-sum design | Confirmed objective difference. Compare definitions/scales, not raw coefficients across games. E65 farming-only failure is not reproduction of Tencent reward |
+| Task, initialization and scale |120s AFK Garen scenario, fixed offset banks, inherited E46/E67 weights,128envs; bounded fine-tunes | Tencent full-game zero-start/self-play and much larger distributed training; Five different game/team task and scale | Intentional task/resource adaptations. Fine-tuning alone cannot establish failure of a newly matched architecture trained from scratch |
+
+Working ranking: feature coverage first as a *hypothesis*, action/target design
+and availability next; reward/credit/critic and recurrent implementation remain
+real audit items. No newly established cause outranks feature coverage. The
+exact two-incident tick tests lower suspicion of lost damage/CS there, but do
+not certify simulator parity globally. Existing failures of individual add-ons
+are not negative tests of a coherent published system.
+
+Next deliverable is a reference contract: Tencent Solo as the intended primary
+architecture/algorithm anchor, explicit unknown feature details, and a separately
+labelled Five-inspired feature supplement where needed. Map every chosen input
+to video/HUD/static knowledge or an observable estimator; list unavoidable game
+and compute adaptations. Then train that declared baseline and compare frozen
+outcomes, only afterward remove/add components. No new training submitted under
+this direction yet. Do not silently resume E72b/E73b or label a hybrid exact parity.

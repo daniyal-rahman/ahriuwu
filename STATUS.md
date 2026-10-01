@@ -1,4 +1,4 @@
-# STATUS — 2026-10-01 19:36 UTC
+# STATUS — 2026-10-01 19:46 UTC
 
 Dani renewed the research budget in this thread. The old thread token limit and
 15:37 compute window are obsolete. Current task: diagnose E68 caster misses,
@@ -13,16 +13,19 @@ audit:97022claimed historical samples,zero mismatches; one-step visible-minion
 coverage97.26658%.15past samples available in all four inspected incident
 frames. Single-game association evidence, not CV robustness or a learned gain.
 
-E72b original-input control submitted as Slurm1840; startup watch in progress.
-E73b visible-history arm prepared, not submitted. Each starts from E67final with fresh optimizer,512updates8.389M
-learner decisions plus discarded stagger warmup,1hSlurm/55minworker cap.
-Only history switch differs: same LR1e-4/4epochs/entropy.001/gamma.99,
-XP0/HP100/personal tower900/death300. Frozen64games at0/128/256/512.
-Initial per-game frozen outcomes must match E67 before learning. Primary final
-gate: historyCS>=10.921875 AND control+1, deaths<=.15; independently confirm if
-promising. No extension on reward alone. Both arms require passed E71b artifact.
-E72b/1840 is the only submitted project job;1hSlurm cap, rough40–50min ETA
-after start. Unrelated1803/1736 untouched.
+Dani redirected the next step: list deviations from known working systems,
+then establish a coherent published-reference baseline before component ablations.
+LEARN-AFK-27 records the code-checked inventory, confirmed differences, unknowns,
+and working priorities. Feature coverage remains the leading hypothesis, not
+an established cause; global GRU can learn history. No GRU incapacity demonstrated.
+
+E72b/1840 CANCELLED during startup at19:42UTC after5m02s (job0:0,batch0:15).
+No canary-passed marker or training/frozen result; this is an intentional stop,
+not evidence against training. E73b is deferred and never submitted. Opt-in
+history implementation and successful E71b preflight remain preserved.
+No project jobs running/queued; no result ETA. Next is reference-contract work,
+not a submitted experiment. Unrelated1842/1803/1736 untouched. No1840 watcher
+was armed because the startup gate was not reached; launcher exited on cancellation.
 
 ## Narrow investigation completed
 
