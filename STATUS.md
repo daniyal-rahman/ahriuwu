@@ -13,15 +13,16 @@ audit:97022claimed historical samples,zero mismatches; one-step visible-minion
 coverage97.26658%.15past samples available in all four inspected incident
 frames. Single-game association evidence, not CV robustness or a learned gain.
 
-E72b original-input control and E73b visible-history arm prepared; neither
-submitted yet. Each starts from E67final with fresh optimizer,512updates8.389M
+E72b original-input control submitted as Slurm1840; startup watch in progress.
+E73b visible-history arm prepared, not submitted. Each starts from E67final with fresh optimizer,512updates8.389M
 learner decisions plus discarded stagger warmup,1hSlurm/55minworker cap.
 Only history switch differs: same LR1e-4/4epochs/entropy.001/gamma.99,
 XP0/HP100/personal tower900/death300. Frozen64games at0/128/256/512.
 Initial per-game frozen outcomes must match E67 before learning. Primary final
 gate: historyCS>=10.921875 AND control+1, deaths<=.15; independently confirm if
 promising. No extension on reward alone. Both arms require passed E71b artifact.
-No project jobs currently running/queued. Unrelated1803/1736 untouched.
+E72b/1840 is the only submitted project job;1hSlurm cap, rough40–50min ETA
+after start. Unrelated1803/1736 untouched.
 
 ## Narrow investigation completed
 
