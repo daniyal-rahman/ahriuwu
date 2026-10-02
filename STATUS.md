@@ -1,6 +1,6 @@
 # STATUS — 2026-10-02 twelve-hour CS-only continuation
 
-Dani explicitly requested a 12-hour same-setup run. E80 is prepared for launch:
+Dani explicitly requested a 12-hour same-setup run. E80 / Slurm2171 is submitted:
 E78 FINAL parameters/fresh Adam, literal +1/CS only, constant LR1e-4, same v3
 GRU/PPO/actions and staggered 120s AFK task. Budget 11,520 updates / 188,743,680
 additional learner decisions; 11h45 worker cap / 12h Slurm cap. Estimate about
@@ -23,14 +23,20 @@ authorizes E80; the earlier completion event alone did not.
 
 ## Jobs
 
-**E80 prepared, not yet submitted; no RL job running/queued or active watcher.**
+**E80 / Slurm2171 RUNNING on gpup; integrated canaries and launcher180s health watch passed.**
+Source b7130a5. Started October1 5:28PM PDT; expected finish October2 around
+5:20AM PDT, hard Slurm cutoff5:28AM PDT (12h).
+Bridge lanerl-event-2171.service active and registered; result checked_at advanced
+1790901400.7045598→1790901430.7986884 with RUNNING accounting.
+Bridge expires 2026-10-02T14:36:09.928633+00:00 (Oct02 07:36AM PDT).
+Completion/failure review is automatic through this bridge. No other RL jobs submitted.
 E78 / Slurm2161 COMPLETED0:0 in42m28s, ended3:53PM Pacific (PDT).
 17integrated canaries and180s launcher watch passed.512metric rows, no reported
 nonfinite loss flags or traceback. Final checkpoint/latest SHA256:
 cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91.
 Run: /mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/.
 Bridge2161 delivery accepted; lanerl-event-2161.service inactive, registry entry
-absent. E80 submission pending; no LR sweep, curriculum or feature run submitted.
+absent. E80 submitted as2171; no LR sweep, curriculum or feature run submitted.
 E79/2160 was cancelled after46s during canaries, before any training.
 E77mask/directHP preflight1857 completed19tests; no learned feature result.
 Other projects and their jobs remain outside this workstream.
@@ -98,4 +104,6 @@ channels through convolutions, not RGB screenshots. Tencent5v5 separately has
 6x17x17 maps including skill bullets; caster-AA coverage remains unestablished.
 Recommend retaining compact structured inputs with a separately trained video
 adapter; small spatial CNN remains an optional hypothesis. No code/run change.
-E78 completed; E80 twelve-hour continuation prepared on explicit user request.
+E78 completed; E80 twelve-hour continuation running as2171 on explicit user request.
+LEARN-AFK-36 records discussion of diagnostic options and literature analogies;
+no teacher, curriculum, projectile or optimizer experiment submitted from those ideas.

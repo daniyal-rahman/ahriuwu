@@ -1160,3 +1160,61 @@ incomplete against the declared endpoint, not a completed success. No automatic
 extension; one training seed cannot establish generalization or grokking.
 
 | LEARN-AFK-35 setup | E80_afk_cs_only_12h prepared; E78 final SHA256 cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91. | Submission/startup/bridge pending; no new outcome. |
+
+| LEARN-AFK-35 startup | E80 Slurm2171 RUNNING; source b7130a5; integrated canaries and launcher180s healthy signal passed. Started2026-10-02T00:28:42UTC (Oct1 5:28PM PDT); 12h hard cutoff Oct2 5:28AM PDT, expected about5:20AM. | Bridge lanerl-event-2171.service active/registered and result timestamp advances; expiry 2026-10-02T14:36:09.928633+00:00. No frozen learning outcome yet. |
+
+### LEARN-AFK-36 — diagnostic discussion while E80 runs
+
+Dani asks to discuss likely causes, fixes and parallels; this is not an instruction
+to implement another hypothesis. E80 continues unchanged. E78's frozen rise from
+9.921875 to11.375 followed by10.0 makes acquisition versus retention a concrete
+question, not proof of catastrophic forgetting, a representation ceiling or an
+incorrect LR. E54's earlier hit-associated probability drift motivates that
+question but does not identify causal actions; E56's one-epoch failure already
+shows that improving such a proxy need not improve gameplay. Avoid repeating
+unfocused LR/epoch sweeps.
+
+Existing E58b scripted comparator gets13.5CS versus E46/E57 9.90625/8.90625 on its
+32-game diagnostic cohort. It uses observation tensors plus declared public
+static combat knowledge, no hidden LaneState. This establishes improvement is
+possible through current inputs/clicks on that cohort, not that the present GRU
+can already implement it or that near-perfect CS needs no projectile information.
+E69/E70 establish two locally recoverable attacks without missing damage/CS in
+those traces; they do not rule out other simulator faults.
+
+Recommended discriminating next step, discussion only: adapt the existing
+scripted-teacher BC/DAgger path to this exact 120s AFK task and GRU/action contract,
+evaluate actual closed-loop CS on held-out starts, then test retention under
+unchanged CS-only PPO. Labels should also cover states visited by the clone;
+rare attack/wait decisions matter more than aggregate imitation accuracy. A
+successful clone followed by PPO regression points toward update/credit problems;
+failure to clone is ambiguous until labels, optimization and a smaller randomized
+last-hit task are checked. Preserve/recompute recurrent observation histories
+when comparing timing decisions; identical single frames do not imply identical
+information for a recurrent policy. No human-play interface is needed.
+
+If a local task becomes necessary: randomize HP, range and attack timing in short
+last-hit situations, retain original controls and history, then validate transfer
+to full waves. A restricted attack/wait action diagnostic can isolate targeting
+from timing, but is not a deployable policy result. Add observations only when a
+matched diagnostic supports an information bottleneck; privileged teacher labels
+are distinct from giving hidden state to the deployable actor.
+
+Relevant primary literature, analogies rather than diagnoses:
+- DAgger, https://arxiv.org/abs/1011.0686: a learner's own actions change which
+  states it encounters; training only on expert trajectories can compound errors.
+  This matches the older repository BC/DAgger history, on a different task.
+- Reverse Curriculum Generation, https://arxiv.org/abs/1707.05300: learn difficult
+  manipulation from starts near success, then expand the start distribution.
+  Analogous proposed use is short timing tasks before whole-wave farming.
+- No Representation, No Trust, https://arxiv.org/abs/2405.00662: PPO on Atari and
+  MuJoCo can lose representational capacity and performance despite critic fit.
+  We have not measured that mechanism here; ordinary policy-gradient interference
+  is distinct from established representation collapse. No PFO/reset implemented.
+
+Strategic distinction: at10Hz gamma.99 gives a6.90s reward half-life (a CS30s
+away has weight about.049). This makes delayed pushing/proxy benefits less
+valuable than immediate CS; short120s starts and pure-CS reward also change the
+objective. It does not prove why seconds-scale last hits are missed, and perfect
+CS does not necessarily imply maximal tower damage. E80 tests longer training
+within the existing task, not longer in-game planning or discovery of every strategy.
