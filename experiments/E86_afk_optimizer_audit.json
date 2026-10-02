@@ -1,0 +1,10 @@
+{
+  "id": "E86_afk_optimizer_audit",
+  "engine": "afk-optimizer-audit",
+  "slurm_time": "00:30:00",
+  "max_seconds": 1200,
+  "batches": 2,
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E82_afk_clone_ppo_retention/vec-s0-20261002-021315-9c16cef5/ckpt_008388608.msgpack",
+  "checkpoint_sha256": "d5529d6c4d1362b27f28c2bad539a26ff42c2abe7311c414c3fcf82bca7bc357",
+  "question": "LEARN-AFK-41: On two real E82 full-wave CS-only on-policy batches, does the detached value head materially determine the global gradient clip scale and suppress actor updates? Start from E82 weights, compare fresh and restored E82 Adam states on identical batches after staggered full-episode warmup. Reproduce production learn exactly for each state, then change only actor clip scale to exclude value-head norm; preserve critic standard clip scale, Adam state, shuffles, losses and batch. Record raw norms, clip scales, per-module parameter deltas and exact joint-action KL on stored recurrent histories. Positive-advantage singleton sanity uses no advantage normalization. No learned-policy export or farming improvement claim."
+}

@@ -32,6 +32,7 @@ PERF006 reuses `perf005_vision_ab.py --bush-ab`: paired fused-ray versus static 
 | `escape_counterfactual.py` | Do spells or alternate movement rescue the exact trapped-wave state? | LEARN-PAIR-05 / E37; frozen reactive opponent, restored full history | 2026-09-29 |
 
 | `afk_credit_audit.py` (branch mode) | E55 same-batch headwise LR/epoch/entropy audit | LEARN-AFK-10; isolated parameters only | 2026-10-01 |
+| `afk_optimizer_audit.py` | E86 E82 full-wave same-batch detached-critic global-clip comparison with fresh/restored Adam | LEARN-AFK-41; production update reproduction, isolated parameters, no policy export | 2026-10-02 |
 
 | `afk_behavior_audit.py` | E58 frozen policy/scripted control, opportunity/execution/reward/MC credit audit | LEARN-AFK-12; no training | 2026-10-01 |
 

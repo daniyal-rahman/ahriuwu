@@ -42,6 +42,7 @@ def launch(spec, dry, resume=None):
         raise SystemExit(f'REFUSED: diagnostic output already exists: {out}')
     full = spec['engine'] == 'full-profile'
     script = {'afk-action-search': 'slurm/action_search.sbatch',
+              'afk-optimizer-audit': 'slurm/optimizer_audit.sbatch',
               'afk-local-skill': 'slurm/wave_scenario.sbatch',
               'afk-imitation': 'slurm/wave_scenario.sbatch',
               'combat-feature-audit': 'slurm/combat_feature_audit.sbatch',

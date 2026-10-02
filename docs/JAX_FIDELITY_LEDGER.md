@@ -1483,3 +1483,35 @@ E54/E55/E69/E70; budgets/gates are engineering choices, not literature constants
 | LEARN-AFK-40 held-out action effects | Best-menu oneclick: mean8sCSdelta+.046875, remaining-episodedelta+.0078125; best of32original-policy samples +.0625/+.0703125. Separate1s repeated-menu-cell arm−.2734375/−.3828125. Menu remainingCS improves11cases/equal5/worsens16; sampled14/11/7; repeated8/2/22. | Only2/32cases (6,22) pass the predeclared8s>=+.5 and remaining>=0 gate, below required8. Discovery best-menu8sgain+.21875 shrinks to+.046875 on new seeds; original sample+.109375→+.0625. Does not establish isolated click search as the broad bottleneck, or rule out learned compact actions/positioning/multi-action sequences. No target-centre option selected as discovery winner; many ties choose first listed NOOP. This protocol samples near-low-HP opportunities, not independently certified recoverable misses. |
 | LEARN-AFK-40 credit description | Mean discounted-return delta menu/sample/repeated +.01128507/+.02900158/−.30462716; mean GAE delta−.01005903/+.03091998/−.26466563. Exploratory sign agreement where absolute mean discounted-return delta>=.05: menu16/20, sampled15/17, repeated19/23. Mean original-policy discovery useful-sample fraction.037109375, a noisy2seed discovery estimate including physical ground attack-move. | Credit is not universally reversed in these branches; noisy small effects and partial sign mismatches do not diagnose a numerical learner bug or certify adequate credit. Forced branches remain diagnostic only, not ordinary on-policy advantages. Retained original trajectories permit the update audit. No exact aggregate useful-action probability or optimal-policy claim. |
 | LEARN-AFK-40 artifact and baseline scope | `/mnt/nfs/shared/E85_afk_action_search/` contains complete result.json, full histories.npz, cases.msgpack, candidate_actions.npz, discovery.npz and validation.npz.32original frozen diagnostic games mean14.875CS; natural continuation remainingCS10.7734375, menu10.78125, sampled10.84375, repeated10.390625. | Different diagnostic RNG/cohort from the standard64game E82 suite; retain14.125CS as the established full-task baseline. Continuation deltas are not learned model gains. No new physical/simulator/input delays or production features. |
+
+### LEARN-AFK-41 — E86 detached-critic optimizer audit, prepared
+
+E82's `detach_critic=True` stops value loss at shared features, but Optax's
+global clip norm still includes the value head. E82's last64 update metrics
+report mean raw gradient norm about7.23 and clipping fraction1.0; this does not
+partition actor/value gradients or tell us the resulting Adam parameter step.
+E86 tests whether the value head materially suppresses actor learning on real
+full-wave data. It is a diagnostic, not a proposed production optimizer change.
+
+From the SHA-checked E82 final actor/critic checkpoint, warm up staggered
+near-wave starts without learning, then collect two128-env×128-step on-policy
+CS-only batches. On each identical batch, compare production global clipping
+to a variant whose actor gradient is clipped using actor norm only; the value
+head retains the ordinary total-gradient clip scale. Reuse the same losses,
+minibatch order,4epochs,LR1e-4,Adam eps1e-5 and batch. Compare both fresh and
+restored E82 Adam states. The standard path must reproduce `built.learn` params,
+optimizer state and RNG (maximum error1e-6), while actor/learner old likelihood
+must agree within1e-4. A tiny positive-advantage action update uses disabled
+advantage normalization to avoid the zero-gradient singleton trap. Require finite
+outputs and write no policy checkpoint. Budget2 batches,20minworker/30minSlurm;
+integrated reward/GRU/PPO canaries and normal launcher health watch precede it.
+
+Report raw total/actor/value-head norms, inferred first-minibatch clip scales,
+module parameter deltas, stored-history exact joint-action KL and sampled
+positive-advantage/CS-event probability movement. Recurrent comparisons replay
+stored initial carries and the full128-step batch, not new-policy trajectories.
+Adam can cancel a common gradient scale, especially at fresh initialization;
+gradient clipping alone therefore cannot establish useful-action suppression or
+farming gain. E85 useful-action full-prefix analysis remains separate. A small
+or absent parameter/probability difference would lower priority of this coupling
+without explaining E82's remaining misses. E86 prepared only; no result yet.

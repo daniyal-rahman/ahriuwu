@@ -1,5 +1,12 @@
 # STATUS — 2026-10-02 overnight AFK diagnostics and continuation
 
+E86_afk_optimizer_audit is prepared on isolated branch
+`lane-rl/e86-optimizer-audit` for integration after E85; no E86 job has been
+submitted from this worktree. It compares production global clipping with an
+actor-only clip norm on two real E82 batches under fresh and restored Adam.
+The probe exports diagnostics only. The current main checkout owns live job
+status and the overnight deadline; reconcile this staging note there on merge.
+
 E81→E82→E83 is complete. The best full-task endpoint in this sequence is **E82:
 14.125 CS, zero deaths, zero personal tower damage**, over64 frozen120s AFK games.
 Teaching on full waves improved the earlier10.0CS policy to11.75; subsequent
