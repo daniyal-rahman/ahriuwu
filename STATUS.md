@@ -44,6 +44,26 @@ survival/retention, not explain all minions missed by the original E82 policy.
 Rising sampled KL and smaller-step comparisons remain hypotheses, not LR proof.
 No new training submitted. Do not automatically restart cancelled E87.
 
+**Independent-baseline design discussion:** Dani asks which implementation to
+try. Recommend pinned SB3-Contrib RecurrentPPO v2.9.0/PyTorch,
+MultiInputLstmPolicy with one256-unit LSTM each for actor/critic and small64x64
+heads. Existing v3 numeric observations/masks, original8/96/54 physical actions,
+CS-only120s AFK at10Hz; flatten numeric inputs with invalid entity rows zeroed.
+Keep SB3's collection/buffer/GAE/recurrent minibatching/loss/optimizer code.
+A batched VecEnv adapter handles JAX simulation and exact episode-end semantics.
+Our current PPO is already adapted from PureJaxRL31756b, so another port of that
+reference would share ancestry. SB3's LSTM and unconditional MultiDiscrete
+likelihood differ from our GRU and conditional screen likelihood: this is a
+whole-training-setup comparison, not an isolated learner-bug test.
+Proposed initial comparison: fresh initialization for both SB3 and existing
+JAX recipe,1024updates x128envs x128steps =16,777,216decisions/arm, same frozen
+suite, match LR1e-4/4epochs/4minibatches/gamma.99/lambda.95/entropy.001. Replicate
+a positive difference on a second training seed before calling it reliable.
+JAX→NumPy→Torch collection overhead needs measurement before a wall-time budget;
+no implementation, experiment ID, job or weight conversion authorized by this
+design question alone. Existing E88 census work is separate and untouched.
+Reference: https://sb3-contrib.readthedocs.io/en/master/modules/ppo_recurrent.html
+
 E83's short-task curriculum improved local PPO farming but badly regressed
 normal farming. Do not promote either E83 checkpoint or call it a timing fix.
 
@@ -57,7 +77,10 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**No running or queued AFK RL jobs.** E87_afk_long_continuation / Slurm2186 ended
+**No new training from this design discussion.** Existing AFK census diagnostics
+E88d/2193 and E88e/2194 were observed RUNNING,~34–35min remaining to their Slurm
+limits at the read-only check. They belong to already ongoing census work;
+their code/launchers/jobs were left untouched. E87_afk_long_continuation / Slurm2186 ended
 2026-10-02T16:24:16UTC (**9:24:16AM PDT**), CANCELLED by1000/0:0; batch finished
 cleanly at16:24:20UTC. Sourcef53965c, started08:54:54UTC. All17startup tests and
 required180s watch passed. Log records cancellation then PROFILE COMPLETE;
