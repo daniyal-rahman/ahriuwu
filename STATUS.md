@@ -1,12 +1,5 @@
 # STATUS — 2026-10-02 overnight AFK diagnostics and continuation
 
-E86_afk_optimizer_audit is prepared on isolated branch
-`lane-rl/e86-optimizer-audit` for integration after E85; no E86 job has been
-submitted from this worktree. It compares production global clipping with an
-actor-only clip norm on two real E82 batches under fresh and restored Adam.
-The probe exports diagnostics only. The current main checkout owns live job
-status and the overnight deadline; reconcile this staging note there on merge.
-
 E81→E82→E83 is complete. The best full-task endpoint in this sequence is **E82:
 14.125 CS, zero deaths, zero personal tower damage**, over64 frozen120s AFK games.
 Teaching on full waves improved the earlier10.0CS policy to11.75; subsequent
@@ -52,13 +45,15 @@ multi-action search. No confirmed learning bug or information ceiling.
 Artifacts `/mnt/nfs/shared/E85_afk_action_search/`: complete result.json,
 histories.npz, cases.msgpack, candidate_actions.npz, discovery.npz, validation.npz.
 
-**Next, already authorized:** integrate and launch E86_afk_optimizer_audit after
-E85. Sol is implementing it in branch lane-rl/e86-optimizer-audit, isolated worktree
-`/mnt/nfs/projects/_archive/ahriuwu-sol-learning-audit-20261002`; agent owns no Slurm
-job and must hand off its commit. Compare standard versus actor-only clipping norm
+**Next, already authorized: launch E86_afk_optimizer_audit.** Sol commit6090710
+was rebased/integrated as8d42460; agent worktree retained under _archive, no agent
+Slurm job. Root added E85 full-prefix action-probability readout, signal handling
+and per-module parameter norms, plus separated PPO canaries so test filtering
+does not omit them. No production optimizer change. Compare standard versus actor-only clipping norm
 with matched real on-policy data, Adam state, actual parameter/policy movement and
-production-update equivalence. Optional E85 full-prefix action-probability readout
-connects validated alternatives to update movement.30minSlurm budget.
+production-update equivalence. E85 full-prefix action-probability readout
+connects the representative selected clicks to update movement; only2E85cases
+pass the recovery gate, so it cannot establish a broad causal learning defect.30minSlurm budget.
 
 Then interpret BOTH diagnostics, run an additional fitting/information discriminator
 only if warranted, and submit ONE long checkpointed run within the overnight window

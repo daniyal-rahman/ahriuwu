@@ -1512,6 +1512,19 @@ positive-advantage/CS-event probability movement. Recurrent comparisons replay
 stored initial carries and the full128-step batch, not new-policy trajectories.
 Adam can cancel a common gradient scale, especially at fresh initialization;
 gradient clipping alone therefore cannot establish useful-action suppression or
-farming gain. E85 useful-action full-prefix analysis remains separate. A small
+farming gain. Parent integration adds E85 selected-click full-prefix analysis below. A small
 or absent parameter/probability difference would lower priority of this coupling
 without explaining E82's remaining misses. E86 prepared only; no result yet.
+
+
+E86 integration: Sol6090710 rebased onto root0dcda89, cherry-picked8d42460.
+Root adds E85 full-prefix replay at EVERY old/new parameter set. Source E85 values
+must reproduce within1e-4; representative best-menu/best-sampled one-action log
+probabilities reported per case for standard/variant and fresh/restored Adam.
+Only2E85cases passed its recovery gate; do not infer aggregate useful-action mass
+from one representative coordinate or call individual mixed-batch regressions
+bugs. Whole-prefix readout supplements the stored-carry128-step training KL.
+Per-module parameter norms accompany delta norms for relative step computation.
+Signal/time bounds preserve partial diagnostic status; no exported weights.
+Integrated PPO tests use a separate invocation, preventing the vector-test -k
+filter from silently deselecting them. E86 remains20minworker/30minSlurm.

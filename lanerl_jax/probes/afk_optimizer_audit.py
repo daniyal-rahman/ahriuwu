@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import sys
 import time
 from pathlib import Path
@@ -21,8 +22,8 @@ from flax.serialization import from_state_dict, msgpack_restore
 from lanerl_jax.sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
 from lanerl_jax.train.learner import make_learner
 from lanerl_jax.train.policy import PolicyConfig, VALUE_HEAD_NAME
-from lanerl_jax.train.ppo import PPOConfig, factored_log_prob, gae, policy_loss, update_epochs
-from lanerl_jax.train.run_manifest import file_sha256
+from lanerl_jax.train.ppo import PPOConfig, factored_log_prob, gae, policy_loss, update_epochs, screen_head_usage
+from lanerl_jax.train.run_manifest import file_sha256, git_provenance
 from lanerl_jax.train.vec_train import VecConfig, make_vec_train
 from lanerl_jax.train.wave_scenario import START_MS, park_afk_opponent, prepare_scenario_bank
 from lanerl_jax.train.wave_scenario_train import warmup_staggered_runner
@@ -119,10 +120,63 @@ def _single_positive_advantage_sanity(cfg):
             'gradient': np.asarray(gradient).tolist()}
 
 
+def _e85_anchors(policy, spec, source_params):
+    """Fixed E85 observations, with the WHOLE prefix replayed at each weight set."""
+    path = Path(spec['e85_cases'])
+    result = json.loads((path/'result.json').read_text())
+    assert result['status'] == 'complete'
+    assert result['spec']['checkpoint_sha256'] == spec['checkpoint_sha256']
+    rows = result['rows']
+    ids = np.asarray([row['case'] for row in rows])
+    data = np.load(path/'histories.npz')
+    stops = jnp.asarray(data['found_at'][ids])
+    length = int(np.max(stops)) + 1
+    obs = tuple(jnp.asarray(data[k][:length, ids]) for k in ('entities', 'mask', 'self', 'global_'))
+    actions = jnp.asarray([[row['chosen_actions'][i] for i in (1, 2)] for row in rows])
+    expected = jnp.asarray([row['original_value'] for row in rows])
+
+    @jax.jit
+    def forward(params, obs, stops, actions):
+        def step(state, xs):
+            c, b, x, y, v = state
+            t, e, m, sv, gv = xs
+            lg, nc = policy.apply(params, e, m, sv, gv, c)
+            take = t == stops
+            return (jnp.where((t < stops)[:, None], nc, c),
+                    jnp.where(take[:, None], lg.button, b),
+                    jnp.where(take[:, None], lg.screen_x, x),
+                    jnp.where(take[:, None], lg.screen_y, y),
+                    jnp.where(take, lg.value, v)), None
+        n = actions.shape[0]
+        initial = (policy.initial_carry((n,)), jnp.zeros((n, 8)),
+                   jnp.zeros((n, 96)), jnp.zeros((n, 54)), jnp.zeros(n))
+        (_, b, x, y, v), _ = jax.lax.scan(step, initial, (jnp.arange(obs[0].shape[0]), *obs))
+        action = tuple(actions[..., i] for i in range(3))
+        logits = tuple(jnp.broadcast_to(z[:, None], (n, 2, z.shape[-1])) for z in (b, x, y))
+        lp = factored_log_prob(logits, action, screen_head_usage(action[0])[0])
+        return lp, v
+
+    def probabilities(params):
+        lp, v = forward(params, obs, stops, actions)
+        return np.asarray(lp), np.asarray(v)
+    _, actual = probabilities(source_params)
+    error = float(np.max(np.abs(actual - np.asarray(expected))))
+    assert error < 1e-4, ('E85 full-prefix value reproduction', error)
+    return probabilities, dict(cases=ids.tolist(), source_value_max_error=error,
+        menu_recovery_gate=[row['validation_8s_delta_mean'][1] >= .5 and
+                           row['validation_cs_delta_mean'][1] >= 0 for row in rows],
+        columns=['selected_menu_one_action', 'selected_original_sample'],
+        limitation='Representative click probability, not aggregate mass of equivalent actions. Only two E85 cases pass its recovery gate. Observations held fixed; prefixes recomputed at new weights. Mixed-batch regression on an individual case is not itself a bug.')
+
+
 def main():
     spec = json.loads((Path('experiments') / (sys.argv[1] + '.json')).read_text())
     assert spec['id'] == 'E86_afk_optimizer_audit' and 1 <= spec['batches'] <= 2
     started = time.monotonic()
+    stopped = []
+    for sig in (signal.SIGTERM, signal.SIGUSR1, signal.SIGINT):
+        signal.signal(sig, lambda *_: stopped.append(True))
+    stop = lambda: bool(stopped) or time.monotonic()-started >= spec['max_seconds']
     out = Path('/mnt/nfs/shared') / spec['id']
     out.mkdir(exist_ok=False)
     scratch = Path('/scratch') / (spec['id'] + '-' + os.environ['SLURM_JOB_ID'])
@@ -154,16 +208,19 @@ def main():
     # states on each identical batch. No E82 rollout/RNG state is restored.
     runner = runner._replace(opt_state=saved_state)
     runner, warmup = warmup_staggered_runner(built, runner, cfg,
-        stop=lambda: time.monotonic()-started >= spec['max_seconds'])
+        stop=stop)
     tx, loss = make_learner(built['policy'], ppo._replace(n_minibatches=cfg.n_minibatches))
     variant_tx = optax.chain(_clip_without_value_for_actor(ppo.max_grad_norm),
                              optax.adam(ppo.lr, eps=1e-5))
     assert jax.tree.structure(tx.init(params)) == jax.tree.structure(variant_tx.init(params))
     report = {'experiment': spec['id'], 'checkpoint_sha256': actual_sha,
+              'source': git_provenance(),
               'optimizer': 'fresh and E82 saved Adam compared on each identical batch; E82 rollout/RNG not restored',
               'warmup': warmup, 'single_action_sanity': _single_positive_advantage_sanity(ppo),
               'batches': [], 'complete': False,
               'interpretation_limit': 'Identical-batch updates are diagnostic only. Adam can cancel a common gradient scale, especially with fresh moments; a clip-scale difference need not produce an equal parameter or policy difference. No frozen CS outcome or causal action attribution.'}
+    anchor_fn, anchor_info = _e85_anchors(built['policy'], spec, params)
+    report['e85_full_prefix'] = anchor_info
     (out/'result.json').write_text(json.dumps(report, indent=2))
     rollout = jax.jit(built['rollout'])
     production_learn = jax.jit(built['learn'])
@@ -180,7 +237,7 @@ def main():
         variant_tx, p, s, b, k, epochs=ppo.epochs, n_minibatches=cfg.n_minibatches,
         max_grad_norm=ppo.max_grad_norm))
     for index in range(spec['batches']):
-        if time.monotonic()-started >= spec['max_seconds']:
+        if stop():
             raise TimeoutError('E86 max worker duration before next batch')
         before = runner
         after, tr, batch = jax.block_until_ready(rollout(before))
@@ -203,13 +260,17 @@ def main():
         actor_scale = 1. if actor_norm < ppo.max_grad_norm else ppo.max_grad_norm/actor_norm
         cs = rows(tr.cs_delta) > 0
         record = {'index': index, 'cs_events': int(jnp.sum(cs)),
+                  'module_parameter_norm': _module_deltas(jax.tree.map(jnp.zeros_like, before.params), before.params),
                   'actor_learner_old_logprob_max_error': likelihood_error,
                   'first_minibatch': {'total_raw_gradient_norm': total_norm,
                       'actor_raw_gradient_norm': actor_norm, 'value_head_raw_gradient_norm': value_norm,
                       'standard_clip_scale': standard_scale, 'actor_only_clip_scale': actor_scale},
                   'optimizers': {}}
+        anchor_before, _ = anchor_fn(before.params)
         saved_production = None
         for mode, state in (('fresh', fresh_state), ('restored_e82', after.opt_state)):
+            if stop():
+                raise TimeoutError('E86 signal/time bound before optimizer comparison')
             isolated = after._replace(opt_state=state)
             prod, metrics = jax.block_until_ready(production_learn(isolated, tr, before.carry))
             std_params, std_state, std_key, _ = jax.block_until_ready(
@@ -233,6 +294,12 @@ def main():
                     'probability_stored_carry_replay': _probability_report(loss, before.params, alt_params, batch, cs)},
                 'standard_vs_variant_parameter_max_error': _max_tree_error(std_params, alt_params),
                 'standard_metrics': {k: float(v) for k, v in metrics.items()}}
+            anchor_std, _ = anchor_fn(std_params)
+            anchor_alt, _ = anchor_fn(alt_params)
+            record['optimizers'][mode]['e85_full_prefix'] = dict(
+                before_logprob=anchor_before.tolist(),
+                standard_delta_logprob=(anchor_std-anchor_before).tolist(),
+                variant_delta_logprob=(anchor_alt-anchor_before).tolist())
             if mode == 'restored_e82':
                 saved_production = prod
         report['batches'].append(record)

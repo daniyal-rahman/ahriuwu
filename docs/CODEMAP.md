@@ -122,3 +122,5 @@ are evaluator-only. TOOL: `slurm/wave_scenario.sbatch` dispatches `afk-local-ski
 and includes `train/tests/test_afk_local_skill.py` in its integrated canaries.
 
 TOOL: `slurm/action_search.sbatch` / `afk-action-search` engine runs indexed E85 real-wave action/credit probe. Complete histories and paired diagnostic forks are saved under `/mnt/nfs/shared/E85_afk_action_search/`; no training or production action change.
+
+TOOL: `slurm/optimizer_audit.sbatch` / `afk-optimizer-audit` runs indexed E86 diagnostic, using unchanged production PPO as control and isolated clip scaling variants. Reads E85 full histories for selected-action probability at recomputed prefixes; no optimizer default changes or policy export.
