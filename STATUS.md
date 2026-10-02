@@ -99,11 +99,23 @@ Original E78 final10.0CS and E75c9.453125CS are weaker continuation endpoints,
 not evidence that longer training cannot help. E78 reward accounting was literal
 CS-only; final ckpt008388608 SHA cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91.
 
-Recommendation, NOT a submitted experiment: preserve the full-wave distribution
-that worked in E81/E82; first check E82 on a broader held-out start/seed suite,
-then decide a bounded full-wave continuation or replication. Keep short tasks
-as diagnostics unless a mixed curriculum demonstrates full-task retention.
-Do not infer a projectile requirement, exact timing cause or LR failure from E83.
+Current discussion: Dani challenges the sample efficiency of basic CS learning;
+partial improvement does not resolve that concern. E82 alone used8,388,608decisions
+(~233simulated hours at10Hz) for+2.375CS. This is not a sample-efficiency benchmark
+against another learner, and repeated decision frames are not independent cases.
+Revise the next-step recommendation: before a long continuation, diagnose actual
+recoverable misses from normal waves end to end—physical alternatives, current
+probability of useful action sequences, their assigned credit, and whether a
+learner update increases useful-action probability with correct GRU history.
+E69/E70 validated two physical alternatives; E54/E55 audited credit/likelihood
+but actions at reward time need not have caused the CS. Those are partial checks,
+not a completed causal learning audit. Specify a bounded experiment only after
+this protocol is concrete; none submitted or implemented in this discussion.
+Keep E82 as the reference. Full-wave generalization/continuation remain subsequent
+options, not a substitute for resolving the learning-efficiency question.
+Action search, credit/update interference and missing observable information are
+hypotheses, not established causes. Frame-level ambiguity alone does not prove a
+feature ceiling because the GRU also receives history. No projectile/LR changes.
 No automatic12h restart or new feature port. Dani's standing bounded-research
 authorization remains; the explicitly requested E81–E83 sequence is complete.
 Any next run needs its own concrete hypothesis/spec/ID/gates and launcher/bridge.
