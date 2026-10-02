@@ -19,18 +19,31 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**Running: E85_afk_action_search / Slurm2183**, source c5297d5, submitted
-2026-10-02T08:11:57UTC (~1:12AM PDT). Eight integrated tests passed in160.40s;
-launcher reports healthy after180s. Frozen real-wave action/credit probe, no model
-training/export:32observed E82 cases, menu versus sampled clicks, separate held-out
-continuations and original/forced credit.45minworker/1hSlurm cap; expected finish
-within~30–50min after startup, hard cutoff about **2:12AM PDT**.
+**No RL Slurm job running or queued at this completion review.** E85/2183
+COMPLETED0:0 in10m23s, ended2026-10-02T08:22:45UTC (**1:22:45AM PDT**).
+All32real-wave cases completed; eight integrated tests, full-prefix replay
+(maxerror2.332e-6), literal CS reward, duplicate-control and finite gates passed.
+Bridge delivery accepted, service inactive, registry entry absent.
 
-Bridge **lanerl-event-2183.service** active/registered, delivery pending, expiry
-2026-10-02T10:15:30.990UTC (**3:15AM PDT**). Bridge2183 heartbeat advanced1790928932.1467395→1790928992.3467414; service active and registry entry present at startup. On wake,
-inspect `/mnt/nfs/shared/slurm-events/2183/result.json`, worker log and
-`/mnt/nfs/shared/E85_afk_action_search/`; classify State AND ExitCode, review frozen
-case outcomes/credit and runtime gates, update ledgers and verify watcher cleanup.
+E85 result: the chosen menu single click adds+.046875CS over8s and+.0078125CS
+through episode end versus paired natural continuation; best sampled original
+click adds+.0625/+.0703125. Repeating the chosen menu cell for1s loses−.2734375/
+−.3828125CS. Only2/32cases (6,22) pass the prespecified +.5CS8s/nonnegative-tail
+criterion, below the>=8gate. Discovery menu advantage+.21875CS shrinks on new
+seeds. No broad isolated-click recovery demonstrated, no weights exported.
+These are selected-state counterfactual deltas, NOT full-game checkpoint gains.
+The32original diagnostic games average14.875CS under different RNG than the
+standard64suite; retain14.125 as the established E82 comparison.
+
+Credit diagnostic: for mean absolute discounted-return differences>=.05,
+GAE difference has the same sign in16/20menu and15/17sampled-action cases;
+separate repeated-action arm19/23. This exploratory thresholded description
+suggests credit is not universally reversed, not proof of an unbiased or adequate
+critic. Only4validation continuations/case and opportunity selection, not a census
+of recoverable misses; single-click intervention cannot rule out positioning or
+multi-action search. No confirmed learning bug or information ceiling.
+Artifacts `/mnt/nfs/shared/E85_afk_action_search/`: complete result.json,
+histories.npz, cases.msgpack, candidate_actions.npz, discovery.npz, validation.npz.
 
 **Next, already authorized:** integrate and launch E86_afk_optimizer_audit after
 E85. Sol is implementing it in branch lane-rl/e86-optimizer-audit, isolated worktree
