@@ -13,7 +13,7 @@ Same-cohort scripted teacher13.5; final passes declared11.475 threshold.
 Final deaths.0625, personal towerHP0. Paired gain+1.75CS;40better/11equal/13worse.
 Current inputs/GRU can acquire better farming with teaching; this is not perfect
 CS, proof of a sole PPO mechanism, or a matched isolation of relabelling versus
-more supervised training. E82 is now next under the existing authorization.
+more supervised training. E82 is submitted as2174 under the existing authorization.
 
 E78 CS-only continuation completed. Literal+1/CS, no other environment reward;
 E67 parameters/freshAdam, original v3/GRU/actions, LR1e-4,512updates/8.389Mdecisions.
@@ -30,7 +30,15 @@ then cancelled as recorded above.
 
 ## Jobs
 
-**E81 complete; E82 ready for immediate submission. No RL jobs currently submitted/running.**
+**E82 / Slurm2174 RUNNING on gpup;17GPU canaries and180s launcher health passed.**
+Source9c16cef. Started Oct1 7:04:45PM PDT; expected finish around7:45PM PDT,
+hard cutoff8:04:45PM.512updates/8.389Mdecisions, same CS-only PPO/LR1e-4.
+Bridge lanerl-event-2174.service active/registered; heartbeat advanced
+1790907170.9956532→1790907201.1002336 with RUNNING accounting.
+Expiry2026-10-02T05:12:49.306819+00:00 (Oct1 10:12:49PM PDT).
+No learned E82 result yet. On its wake, review retention, verify cleanup, and
+implement/launch the already-authorized E83 short timing diagnostic.
+E81 complete; E80 remains cancelled.
 E81 source f4cdde7;21integrated canaries passed; full70supervised epochs and
 512value-head minibatches completed. Final checkpoint and exported copy SHA256:
 1b8ed30cf913132b8d7045e45f40cd09d9cec205a86a5a3301e99532b08f24e0.
@@ -41,7 +49,7 @@ Critic fit completed, but no held-out critic-quality gate was imposed; do not
 assume critic error is ruled out if subsequent PPO regresses.
 Bridge2172 delivered accepted, service inactive and registry entry absent.
 E82 starts from final11.75CS, retains it at declared tolerance if final>=10.75,
-and improves if>=12.75. Its fixed512updates/~40min experiment is next.
+and improves if>=12.75. Its fixed512updates/~40min experiment is running.
 E83 remains authorized for the subsequent short timing diagnosis.
 E80 saved /mnt/nfs/checkpoints/lanerl-jax/E80_afk_cs_only_12h/vec-s0-20261002-003708-b7130a5c/ckpt_013254656.msgpack.
 Slurm accounting CANCELLED/0:0 is authoritative despite generic PROFILE COMPLETE
@@ -111,8 +119,8 @@ scripted action choice, never an injected latency or forced pause.
    competence threshold11.475 passed. All planned stages complete; final actor
    unchanged by value-head fit. Export/handoff verified; bridge cleanup complete.
    No automatic extension or selection of an intermediate checkpoint.
-3. E82_afk_clone_ppo_retention is configured and dry-run validated, NOT submitted.
-   After E81 terminal review and complete handoff, launch via the same launcher.
+3. E82_afk_clone_ppo_retention RUNNING2174 after verified E81 handoff.
+   Integrated17tests/health watch passed; bridge verified, no learned result yet.
    Uses E81 FINAL parameters and calibrated value head, verified handoff SHA,
    fresh Adam and unchanged E78 CS-only PPO;512updates/~40min,1hSlurm cap.
    Frozen64 at0/128/256/512; initial trajectory equality with E81final required.
