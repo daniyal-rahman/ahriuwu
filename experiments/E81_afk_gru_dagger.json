@@ -1,0 +1,53 @@
+{
+  "id": "E81_afk_gru_dagger",
+  "engine": "afk-imitation",
+  "opponent": "afk",
+  "duration_s": 120,
+  "max_seconds": 6300,
+  "slurm_time": "02:00:00",
+  "train_seed": 0,
+  "bc_lr": 0.0001,
+  "teacher_episodes": 32,
+  "dagger_episodes": 64,
+  "epochs_per_round": [
+    30,
+    20,
+    20
+  ],
+  "seq_len": 128,
+  "batch_episodes": 8,
+  "attack_weight": 4.0,
+  "critic_updates": 512,
+  "train_offsets": [
+    -120,
+    -104,
+    -88,
+    -72,
+    -56,
+    -40,
+    -24,
+    -8,
+    8,
+    24,
+    40,
+    56,
+    72,
+    88,
+    104,
+    120
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/ckpt_008388608.msgpack",
+  "init_sha256": "cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91",
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/evaluations.jsonl",
+    "update": 512,
+    "compare_reward": true
+  },
+  "question": "LEARN-AFK-37, authorized sequence stage1 after E80: can the current v3/GRU/click network acquire better AFK farming through the existing observation-only scripted teacher? E78 FINAL parameters, fresh supervised Adam1e-4, no entropy penalty, used-head likelihood, attack-label weight4, gradient clip.5.32 teacher episodes and two rounds of64 sampled-clone episodes relabelled by the script; aggregate all data,30/20/20 epochs, batch8episodes x128steps. Full observation prefix replay at current parameters for every window; no artificial timing delay or actor hidden state. Training offsets16 evenly spaced -120..120 with two HP roles; unchanged64 held-out games/seed2007. Frozen initial E78 retention, teacher comparator, BC and both DAgger endpoints. Final stage3 is the endpoint, not best intermediate; competence requires CS>=max(11,.85*teacherCS). Then fit detached value head only for512 minibatches on separate frozen-clone MonteCarlo CS returns, with fresh optimizer and exact actor-invariance gate. Export only after complete protocol and finite checks. Estimated45-90min (unmeasured), worker105min/Slurm2h cap. Failed/capped runs export no complete handoff; no claim of observation insufficiency from failed fitting alone. Follow with E82 and the reserved E83 local timing task; no human demonstrations required."
+}

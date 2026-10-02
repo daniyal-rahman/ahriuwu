@@ -1218,3 +1218,75 @@ valuable than immediate CS; short120s starts and pure-CS reward also change the
 objective. It does not prove why seconds-scale last hits are missed, and perfect
 CS does not necessarily imply maximal tower damage. E80 tests longer training
 within the existing task, not longer in-game planning or discovery of every strategy.
+
+### LEARN-AFK-37 — authorized acquisition, retention and local-skill sequence
+
+Dani explicitly requests running/managing all proposed stages in order, then
+clarifies that artificial delays must not be added to the model. E69/E70's
+withheld attacks were counterfactual diagnostic interventions only. This sequence
+adds no latency or mandatory wait and changes no combat physics. E80 continues.
+
+E81 hypothesis: current v3/GRU/click interface can learn stronger AFK farming
+when given explicit labels from the existing observation-only scripted player.
+Teacher uses declared static combat knowledge, never LaneState or unit IDs.
+Initialize from E78 FINAL, not its better intermediate. Use original architecture
+and interfaces with fresh supervised Adam1e-4, gradient clip.5, no entropy loss,
+used-coordinate-head cross entropy, weight4 for attack_move labels. Stage0:
+32teacher episodes on16train offsets (-120..120 step16), paired HP roles. Stage1
+and2: each64sampled learner episodes on the same bank, relabel and aggregate
+all previous data.30/20/20epochs, batch8episodes x128steps. Approximate valid
+samples depend on terminal timing;1280padded samples/episode imply7,782,400
+supervised training samples across stages. Replay the full observation prefix
+with CURRENT parameters before each differentiated window; never zero the GRU
+at arbitrary window boundaries. Labels/physics retain native10Hz timing.
+
+Frozen64 unchanged held-out offset/HP/seed2007 cohort at initial, BC, DAgger1,
+DAgger2 plus the scripted teacher on that SAME cohort. Initial E78-final physical
+and reward retention required. Primary endpoint is final DAgger2 CS>=max(11,
+.85*teacherCS); no best-stage selection. Training starts are expanded from E78's
+four offsets to16 to give32distinct scripted traces; this is an explicit teaching
+data choice, not an isolated reward/optimizer comparison against E80. Full-game
+CS is the outcome; imitation accuracy alone cannot pass the gate. Scripted
+deterministic duplicates in the64eval suite are not64independent teacher trials.
+
+Before export, collect64separate frozen-clone training episodes and fit the
+DETACHED value head to discounted finite-episode CS returns for512minibatches,
+using a fresh Adam state. Require exact equality of every actor parameter before
+and after. This reduces the stale/untrained-critic confound in E82; it does not
+guarantee critic accuracy. The final actor's frozen stage3 result is unchanged by
+this value-only fit. Export final.msgpack, evaluations.jsonl and handoff.json only
+after complete protocol, with SHA and competence flag.2hSlurm/105minworker cap;
+45–90min is an unmeasured engineering estimate. Interruptions/nonfinite/contract
+failures export no complete handoff. Existing canaries plus history/reset, used
+heads, teacher-label execution/PPO refusal, and frozen-actor regression tests are
+integrated into the launcher; no separate GPU smoke job or login-node training.
+
+E82 hypothesis: CS-only PPO can preserve a demonstrated farming skill. Use E81
+FINAL parameters/calibrated value head, fresh Adam and the unchanged E78 settings
+(LR1e-4,entropy.001,gamma.99,4epochs,128envs x128steps,staggered120s,original four
+training offsets).512updates/8.389Mdecisions,55minworker/1hSlurm; expect~40min.
+Handoff SHA and frozen64initial physical/reward equality required. Fixed frozen
+0/128/256/512; final drop>1CS flags retention failure, within1CS is retention at
+that tolerance, gain>=1CS is improvement. Report paired episode differences and
+all checkpoints without selecting the best. Preserve the original E81 artifact
+as the immutable frozen control. If E81 fails competence, still execute this
+authorized continuation but do not call it preservation of a demonstrated stronger
+skill. Retention change alone does not distinguish critic, gradient interference,
+entropy or representation mechanisms. No adaptive LR/reset/anchor loss added.
+
+E83 is authorized/reserved after E82, with a proposed <=1hSlurm cap. Finalize
+the implementation against their evidence: short randomized last-hit starts,
+original GRU/observations/clicks and native physics, teaching/PPO comparison,
+held-out targeting/timing outcomes and full120s transfer. Do not introduce forced
+pauses, latency or privileged actor features. Full recurrent history matters;
+a failed local learning run is not by itself proof of an information bottleneck.
+It is not implemented/submitted yet; exact budget/seed/cohort/success criteria
+must be recorded in its own spec before launch.
+
+Primary methodology references already reviewed in LEARN-AFK-36: DAgger
+https://arxiv.org/abs/1011.0686 for learner-state relabelling;
+https://arxiv.org/abs/1707.05300 for near-goal starts in sparse-reward manipulation.
+Neither establishes our hyperparameters or predicts a result. These are
+prior-assisted diagnostics, not from-scratch PPO or C# transfer successes.
+
+| LEARN-AFK-37 staging | E81 implementation and E81/E82 JSON specs prepared; Python syntax checks and launcher dry-runs pass. GPU integration tests will run with E81 after E80 releases the GPU. | Only E80/2171 currently submitted/running; its active bridge is the next wake. On wake, review E80 then launch E81 without asking again; repeat existing health watch/event bridge for each successor. No extra timer/service created. E83 remains an authorized subsequent implementation, not a claimed queued job. |

@@ -196,7 +196,7 @@ def prepare_bank(cfg: VecConfig, sim: SimConfig, out: Path, seed: int):
     return states
 
 
-def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, opponent_params=None):
+def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, opponent_params=None, blue_actor=None):
     """Build the jittable pieces. `bank` is the stacked reset pytree."""
     from ..parity.policy_driver import _lane_frames
     from .trainer import _sample
@@ -204,6 +204,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         raise ValueError(f"unknown opponent {cfg.opponent!r}")
     if cfg.unwalkable_click not in ("noop", "resolve"):
         raise ValueError("unwalkable_click must be noop or resolve")
+    if blue_actor is not None and cfg.opponent != "afk":
+        raise ValueError("scripted blue collection is AFK-only and cannot feed PPO")
     frames = _lane_frames()
     policy = LanePolicy(cfg.policy)
     use_history = cfg.policy.observation_interface == VISIBLE_HISTORY_INTERFACE
@@ -280,6 +282,12 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
                 action = tuple(a.at[1].set(jnp.asarray(r, a.dtype)) for a, r in zip(action, red))
             if cfg.opponent == "afk":
                 action = tuple(a.at[1].set(0) for a in action)
+            if blue_actor is not None:
+                blue = blue_actor(jax.tree.map(lambda a: a[0], obs), k_act)
+                action = tuple(a.at[0].set(jnp.asarray(b, a.dtype)) for a,b in zip(action, blue))
+                from .ppo import screen_head_usage
+                uses_screen, uses_target = screen_head_usage(action[0])
+                log_prob = log_prob.at[0].set(0.)  # deterministic teacher, never a PPO batch
             orders = orders_from(action, state, None, frames[0], snap_moves=False,
                                  params=sim.params, vision=sim.vision,
                                  drop_unwalkable_moves=(cfg.unwalkable_click == "noop"))
@@ -347,6 +355,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
 
     def learn(runner: VecRunner, tr: Transition, carry0):
         """The unchanged update half, exposed for separate timing/memory checks."""
+        if blue_actor is not None:
+            raise ValueError("PPO must not learn from a teacher-overridden rollout")
         last_obs, _ = jax.vmap(observe)(runner.env_state, runner.visible_history)
         last_logits, _ = jax.vmap(lambda o, c: _apply(runner.params, o, c))(last_obs, runner.carry)
         adv, returns = gae(tr.reward, tr.value, tr.done, last_logits.value,

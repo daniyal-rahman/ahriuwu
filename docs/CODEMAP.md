@@ -101,3 +101,14 @@ their jobs are outside this cleanup.
 LIVE (opt-in, LEARN-AFK-33): `VecConfig.cs_only` and wave-scenario spec
 `cs_only` select literal per-champion deltaCS reward, bypassing every shaping/gold
 term. Frozen evaluation asserts episode reward=CS. E78 retains E67 inputs/actions/LR; E79 larger-LR attempt cancelled.
+
+LIVE (opt-in study, LEARN-AFK-37): `train/afk_imitation.py` collects scripted and
+learner trajectories through `vec_train` and trains the existing GRU with
+observation-only script labels, full-prefix replay and DAgger aggregation. Its
+`blue_actor` collector hook is AFK-only and explicitly refuses PPO learning.
+`train/wave_evaluation.py` shares the existing frozen evaluation implementation
+between PPO and imitation; `wave_scenario_train.py` accepts a complete immutable
+imitation handoff with checkpoint SHA and initial physical-retention gate.
+TOOL: existing `slurm/wave_scenario.sbatch` dispatches `afk-imitation` and runs
+`train/tests/test_afk_imitation.py` within the integrated startup suite. E81/E82
+configs are staged after E80; no new training is currently running from this code.

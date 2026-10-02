@@ -1,0 +1,48 @@
+{
+  "id": "E82_afk_clone_ppo_retention",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 512,
+  "max_seconds": 3300,
+  "slurm_time": "01:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 0.0,
+  "tower_damage_gold": 0.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E81_afk_gru_dagger/final.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    256,
+    512
+  ],
+  "question": "LEARN-AFK-37, authorized stage2 after E81: does unchanged CS-only PPO retain the final taught GRU? Initialize E81 FINAL actor and fitted value head, SHA read from its complete handoff; fresh Adam, same LR1e-4/entropy.001/gamma.99/four epochs/128envs/staggered120s and original E78 training starts.512updates/8.389M decisions,55minworker/1hSlurm. Frozen64 same cohort at0/128/256/512; initial trajectories must match E81 final stage3, after actor-invariant critic fit. Compare every checkpoint with the immutable frozen E81 copy; no selecting an intermediate. Retention failure flag final meanCS < initial-1, retained if >=initial-1; improvement flag >=initial+1; report paired changes, deaths/tower, no significance claim from one seed. Interpret as preservation of a better acquired skill only if E81 competence gate passed; otherwise a continuation of an unsuccessful clone, not a retention proof. Stop nonfinite/contract/cap. E83 short timing diagnostics follow under the same user authorization.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 0.0,
+  "stagger_initial": true,
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E81_afk_gru_dagger/evaluations.jsonl",
+    "update": 3,
+    "compare_reward": true
+  },
+  "preflight_gate": "/mnt/nfs/shared/E77_combat_mask_preflight/result.json",
+  "combat_features": false,
+  "cs_only": true,
+  "init_handoff": "/mnt/nfs/checkpoints/lanerl-jax/E81_afk_gru_dagger/handoff.json"
+}

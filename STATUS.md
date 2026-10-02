@@ -1,4 +1,4 @@
-# STATUS — 2026-10-02 twelve-hour CS-only continuation
+# STATUS — 2026-10-02 authorized AFK diagnosis sequence
 
 Dani explicitly requested a 12-hour same-setup run. E80 / Slurm2171 is submitted:
 E78 FINAL parameters/fresh Adam, literal +1/CS only, constant LR1e-4, same v3
@@ -30,6 +30,8 @@ Bridge lanerl-event-2171.service active and registered; result checked_at advanc
 1790901400.7045598→1790901430.7986884 with RUNNING accounting.
 Bridge expires 2026-10-02T14:36:09.928633+00:00 (Oct02 07:36AM PDT).
 Completion/failure review is automatic through this bridge. No other RL jobs submitted.
+On the E80 wake, continue the explicitly authorized E81→E82→E83 sequence below;
+the user has already asked us to run and manage all stages in order.
 E78 / Slurm2161 COMPLETED0:0 in42m28s, ended3:53PM Pacific (PDT).
 17integrated canaries and180s launcher watch passed.512metric rows, no reported
 nonfinite loss flags or traceback. Final checkpoint/latest SHA256:
@@ -79,31 +81,57 @@ preserved. R target-conditioned legality remains absent. v5/v6 C# drivers still
 reject unsupported observation extensions. Untracked obs/projectiles.py is an
 untested, disconnected draft preserved untouched; not part of E77 or any result.
 
-## Recommendations under discussion
+## Authorized next sequence — execute on completion wakes
 
-Tencent HoKoff publishes later1v1 TensorFlow512LSTM checkpoints, not established
-original2020Solo weights. Published strongest-level comparison:70% wins vs next
-level with LuBan; no perfect-CS benchmark. Inputs725 and six action heads differ
-from ours. Full input semantics and cross-game transfer benefit remain unverified.
-Use it as an implementation reference; direct weight transfer is not a quick fix.
+Dani: "Ok j run ur set of expirements in order all of em/ u manage".
+Subsequent constraint: no artificial delay added to the model. All stages keep
+native10Hz actions and simulator timing; holding off an attack is a learned or
+scripted action choice, never an injected latency or forced pause.
 
-Human play is currently inconvenient; defer client work. E58b already showed
-scripted13.5CS versus policies~9–10 on its diagnostic cohort. Prefer a short
-randomized last-hit curriculum or reuse existing scripted BC/DAgger if needed
-after E78; avoid repeating a broad teacher audit. The temporary CS gain now also
-makes retention across PPO updates a concrete question. These remain discussion options. Existing older BC/DAgger
-success makes this plausible; those longer mirror-task scores are not comparable
-to current120s AFK. LEARN-AFK-32 records sample-budget estimates and hypotheses,
-including short reward horizon/personal tower credit for pushing. No experiment
-created from these discussion ideas. Long-term gate remains >30CS in10minute C#
-mirror trials across seeds. Future submitted runs use normal launcher, integrated
-canaries/startup watch and bounded completion bridge; no repeated model polling.
+1. E80/2171 remains running to its existing endpoint. Inspect final frozen
+   results and bridge cleanup when it wakes this thread. Do not replace E80.
+2. E81_afk_gru_dagger is implemented and dry-run validated, NOT submitted.
+   Launch after E80 frees the GPU using `python3 ops/launch.py E81_afk_gru_dagger`.
+   Existing integrated canaries plus new imitation contracts run automatically.
+   Teach the existing v3/GRU/physical-click policy from E78 FINAL weights using
+   32scripted episodes, then two rounds of64learner episodes relabelled by the
+   script. Aggregate data;30/20/20epochs, LR1e-4,128step windows with full-prefix
+   recurrent replay, attack-label weight4. Frozen64 held-out games after each
+   stage and a same-cohort teacher comparator. Final competence gate is
+   CS>=max(11,.85*teacherCS); no best-stage selection. Fit detached value head
+   on frozen-clone returns, asserting exact actor preservation, before export.
+   Estimated45–90min, first-use estimate; hard2hSlurm/105minworker cap.
+3. E82_afk_clone_ppo_retention is configured and dry-run validated, NOT submitted.
+   After E81 terminal review and complete handoff, launch via the same launcher.
+   Uses E81 FINAL parameters and calibrated value head, verified handoff SHA,
+   fresh Adam and unchanged E78 CS-only PPO;512updates/~40min,1hSlurm cap.
+   Frozen64 at0/128/256/512; initial trajectory equality with E81final required.
+   Compare against the immutable frozen clone; flag >1CS final regression.
+   If E81 is below competence gate, still run this authorized stage, but label
+   it unsuccessful-clone continuation rather than preservation of proven skill.
+4. E83 reserved for the short timing diagnostic, not implemented/submitted yet.
+   After E82, implement/run a bounded <=1h comparison of scripted teaching and
+   CS-only PPO on short last-hit starts, with original inputs/clicks and ordinary
+   physics. Randomize observable HP/range and normal wave configurations;
+   separate target-choice and attack-timing outcomes. No injected action delays.
+   Preserve correct recurrent history; use held-out starts and full120s transfer
+   evaluation. Finalize the concrete scenario/spec and integrated canaries from
+   E81/E82 evidence before launch; no need to ask Dani for another approval.
 
-Latest discussion (LEARN-AFK-34): Solo uses obstacle/hero-position game-core
-channels through convolutions, not RGB screenshots. Tencent5v5 separately has
-6x17x17 maps including skill bullets; caster-AA coverage remains unestablished.
-Recommend retaining compact structured inputs with a separately trained video
-adapter; small spatial CNN remains an optional hypothesis. No code/run change.
-E78 completed; E80 twelve-hour continuation running as2171 on explicit user request.
-LEARN-AFK-36 records discussion of diagnostic options and literature analogies;
-no teacher, curriculum, projectile or optimizer experiment submitted from those ideas.
+Arm/verify a bounded event bridge after each launch's required health watch,
+record unit/expiry, then let it run without manual training polling. If a stage
+fails technically, diagnose/repair with a unique retry ID and redirect unsubmitted
+successors to that completed handoff; never consume a partial/best checkpoint.
+All stages are authorized; findings do not authorize unrelated feature ports.
+GPU execution tests for new code are pending E81's integrated startup suite;
+syntax, shell parsing and both launcher dry-runs are the completed local checks.
+LEARN-AFK-37 contains the protocol, evidence limits and source references.
+
+## Other recommendations under discussion
+
+Tencent implementation transfer, video adapter, richer observations and action
+representation remain discussion options. LEARN-AFK-34 clarifies that Solo's
+image channels are structured game-core maps, not RGB screenshots. No projectile,
+vision, manual-play client or Tencent-weight port is included in this sequence.
+The existing untracked projectile draft remains untouched. Long-term transfer
+gate remains >30CS in10minute C# mirror trials across seeds.
