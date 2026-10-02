@@ -171,7 +171,7 @@ def _e85_anchors(policy, spec, source_params):
 
 def main():
     spec = json.loads((Path('experiments') / (sys.argv[1] + '.json')).read_text())
-    assert spec['id'] == 'E86_afk_optimizer_audit' and 1 <= spec['batches'] <= 2
+    assert spec['engine'] == 'afk-optimizer-audit' and 1 <= spec['batches'] <= 2
     started = time.monotonic()
     stopped = []
     for sig in (signal.SIGTERM, signal.SIGUSR1, signal.SIGINT):

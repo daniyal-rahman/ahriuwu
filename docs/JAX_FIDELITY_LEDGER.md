@@ -1528,3 +1528,6 @@ Per-module parameter norms accompany delta norms for relative step computation.
 Signal/time bounds preserve partial diagnostic status; no exported weights.
 Integrated PPO tests use a separate invocation, preventing the vector-test -k
 filter from silently deselecting them. E86 remains20minworker/30minSlurm.
+
+
+| LEARN-AFK-41 E86 wrapper failure | E86/2184 FAILED5:0 in2m14s, ended2026-10-02T08:41:08UTC. Eight JAX reward/GRU canaries passed in130.97s; test_ppo.py imports Torch with module-level importorskip, so the unavailable reference module yields1skip and pytest exit5. Worker never executed. | No optimizer evidence or learner failure. No bridge armed; service inactive and registry absent. E86b repeats the same design without this optional unavailable module, retaining8JAX canaries, positive-advantage sanity, exact production-update reproduction and E85 full-prefix gates. No package installation or broad test reruns outside launcher. |
