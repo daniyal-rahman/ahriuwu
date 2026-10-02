@@ -44,3 +44,31 @@ only checks self-reported identity and accidental array corruption. Neither
 loader resolves latest or substitutes the legacy map. Shared validated arrays:
 `/mnt/nfs/datasets/league/26.19/map11-base/`. Raw extraction receipts:
 `/mnt/nfs/shared/modern-world-map-research/live-16.19.8230722/`.
+
+`modern_items_bench.py` is a TOOL for the modern item system (MODERN-013). It
+times one full `modern_item_effects.runtime.item_tick` (two champions with six
+items each, 66 units) single and vmapped; run it capped:
+`ops/login_capped.sh 8G 2 .venv-jax/bin/python -m ops.modern_items_bench 64`.
+The item table is rebuilt from the cached 16.19 client bins with
+`python -m lanerl_jax.data.build_modern_items` (sources and sha256s are
+recorded in `items_client.json`).
+
+`replay_oracle_extract.py` + `replay_oracle_extract.sbatch` are a TOOL
+(MODERN-015) that extracts raw client-memory observations (gold, deaths and
+respawns, fountain stretches, level-ups, max-HP changes) from the 147-game
+16.9 replay corpus `/mnt/nfs/datasets/lol_replays_16_9_772/`, independent of
+the simulator. Submit with `sbatch ops/replay_oracle_extract.sbatch` (CPU
+partition, job array); per-game output, the index and job logs (`logs/`) go to
+`/mnt/nfs/shared/replay-oracle-16.9/`, the compact summary to
+`lanerl_jax/data/modern/oracle/replay_16_9_observations.json.gz`, which
+`lanerl_jax/sim/tests/test_modern_economy_oracle.py` reads. The 16.9 champion
+HP records it is paired with (`oracle/champion_hp_16_9.json`) were fetched from
+CommunityDragon 16.9 into `/mnt/nfs/shared/replay-oracle-16.9/champions-16.9/`.
+
+`riot_stats_oracle.py` is a TOOL (MODERN-016). `extract` turns Riot match-v5
+match + timeline JSON (fetched to `/mnt/nfs/shared/riot-match-v5-16.9/` by
+`fetch_matches.py` there; API key from `RIOT_API_KEY`, never written to disk)
+into the anonymised `lanerl_jax/data/modern/oracle/riot_16_9_frames.json.gz`;
+`predict` (used by `tests/test_modern_stats_riot_oracle.py`) recomputes Riot's
+`championStats` through the modern stat pipeline, shards, rune and item stat
+hooks with 16.9 records (`oracle/client_16_9_stats.json`).

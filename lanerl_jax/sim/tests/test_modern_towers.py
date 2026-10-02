@@ -76,7 +76,8 @@ def test_shot_ramp_across_targets_and_expiry():
 
 
 def test_minion_hits_and_target_lock():
-    np.testing.assert_allclose(t.minion_shot_damage(1000.,jnp.arange(4)),[450,700,140,50])
+    # Changed: super shot is 7 % of max HP (client item 1511), not 5 % (TOWERS D3).
+    np.testing.assert_allclose(t.minion_shot_damage(1000.,jnp.arange(4)),[450,700,140,70])
     e=jnp.array([True,True,True]); d=jnp.array([100.,200.,300.]); p=jnp.array([t.CHAMPION,t.MELEE,t.CANNON_SUPER])
     none=jnp.zeros(3,bool)
     assert t.select_target(-1,e,d,p,none)==2
@@ -134,13 +135,21 @@ def test_locked_lane_growth_clock_and_minion_tier_damage():
     assert not t.advance(inner,589.,False,False).growth_active
     assert t.advance(inner,590.,False,False).growth_active
     np.testing.assert_allclose(t.minion_shot_damage(1000.,2,tier=jnp.arange(4)),[140,110,80,80])
-    np.testing.assert_allclose(t.minion_shot_damage(1000.,3,100.),50/1.7)
+    # Changed: 7 % super shot, and by default the %-max-HP amount is not
+    # reduced by armor (README X-3, MINIONS U-14); the TOWERS §4.2 mitigated
+    # reading stays available behind mitigated=True.
+    np.testing.assert_allclose(t.minion_shot_damage(1000.,3,100.),70.)
+    np.testing.assert_allclose(t.minion_shot_damage(1000.,3,100.,mitigated=True),70/1.7)
+    np.testing.assert_allclose(t.minion_shot_damage(2000.,3,100.,mitigated=True),82.3529,rtol=1e-5)
 
 
 def test_explicit_growth_approximation_endpoints_and_finite_runtime():
+    # Changed: client item-1524 curve (TOWERS §6.2/D1/D2) replaces the linear
+    # max interpolation and the 1-18 clamp: max = (1.6+0.4L)% x
+    # (1.65 + 0.5 clip((L-1)/17)); L9.5 high 0.111 -> 0.1026, L20 extends.
     low,high=jax.jit(t.overgrowth_level_fractions)(jnp.array([1.,9.5,18.,20.]))
-    np.testing.assert_allclose(low,[.02,.054,.088,.088])
-    np.testing.assert_allclose(high,[.033,.111,.189,.189])
+    np.testing.assert_allclose(low,[.02,.054,.088,.096],rtol=1e-6)
+    np.testing.assert_allclose(high,[.033,.1026,.1892,.2064],rtol=1e-5)
     state=exposed(100.)
     hit=jax.jit(lambda s:t.apply_turret_damage(s,100.,0.,0.,0.,champion_attack=True,average_team_level=9.5))(state)
     np.testing.assert_allclose(hit.damage,486.,rtol=1e-5)
@@ -157,3 +166,42 @@ def test_jitted_scan_preserves_state_dtypes_through_plate_and_growth():
     result,damage=jax.jit(lambda state:jax.lax.scan(body,state,jnp.arange(30,120,dtype=jnp.float32)))(t.init_outer_turret())
     assert result.plates==2 and jnp.all(jnp.isfinite(damage))
     assert result.growth_since==100
+
+
+def test_overgrowth_client_curve_fixtures():
+    # TOWERS §13.3: outer 9000 HP, og(L, g) at g<=60 / 180 / >=300.
+    s=t.init_outer_turret()   # cooldown start 10 -> appears 100
+    for level,lo,mid,hi in [(1,180.,238.5,297.),(3,252.,341.3,430.6),(6,360.,503.5,646.9),
+                            (9,468.,675.2,882.3),(12,576.,856.4,1136.8),(18,792.,1247.4,1702.8),
+                            (20,864.,1360.8,1857.6)]:
+        a,b=t.overgrowth_level_fractions(float(level))
+        got=[t.overgrowth_damage(s,100.+g,a,b) for g in (60.,180.,300.)]
+        np.testing.assert_allclose(got,[lo,mid,hi],atol=.06)
+    inner=t.init_turret(t.INNER,100.)
+    a,b=t.overgrowth_level_fractions(6.)
+    np.testing.assert_allclose([t.overgrowth_damage(inner,250.,a,b),t.overgrowth_damage(inner,490.,a,b)],
+                               [200.,359.4],atol=.06)
+
+
+def test_negative_resist_is_kept_not_clamped():
+    # Decayed outer turret (0 base resist) shredded below zero by flat pen
+    # stays at 0 (flat pen cannot cross zero), but a resist that is already
+    # negative keeps the negative mitigation branch (DAMAGE D1, README item 4).
+    np.testing.assert_allclose(t.resistance_multiplier(-20.),2-100/120)
+    s=t.advance(t.init_outer_turret(),900.,True,False)
+    hit=t.apply_turret_damage(s,900.,100.,0.,0.,armor_pen_flat=30.)
+    np.testing.assert_allclose(hit.damage,100.)
+
+
+def test_buildings_regen_respawn_and_no_plates():
+    inhib=t.init_turret(t.INHIBITOR_BUILDING); nexus=t.init_turret(t.NEXUS_BUILDING)
+    assert inhib.max_hp==4000 and nexus.max_hp==5500
+    np.testing.assert_allclose(t.regenerate_and_respawn(inhib._replace(hp=jnp.float32(1000.)),0.,10.).hp,1150.)
+    np.testing.assert_allclose(t.regenerate_and_respawn(nexus._replace(hp=jnp.float32(1000.)),0.,10.).hp,1200.)
+    hit=t.apply_turret_damage(t.advance(inhib,100.,False,False),100.,0.,0.,4000.)
+    assert hit.destroyed and hit.plates==0 and hit.damage==4000   # no backdoor DR on buildings
+    assert hit.state.respawn_at==400.
+    assert t.regenerate_and_respawn(hit.state,399.,1.).hp==0
+    assert t.regenerate_and_respawn(hit.state,400.,1.).hp==4000
+    np.testing.assert_allclose(t.ATTACK_PERIOD,1.20048,rtol=1e-5)
+    np.testing.assert_allclose(t.WINDUP_S,.1669,rtol=1e-3)

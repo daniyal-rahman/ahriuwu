@@ -39,7 +39,7 @@
     "ad_first_second": 30,
     "ad_interval_seconds": 60,
     "ad_max_steps": 14,
-    "attack_period_seconds": 1.2,
+    "attack_period_seconds": 1.2004801920768309,
     "gameplay_radius": 88.4,
     "attack_range_edge": 750,
     "projectile_speed": 1200,
@@ -67,17 +67,17 @@
       0.088,
       0.189
     ],
-    "level_interpolation": "linear_between_published_level_endpoints",
+    "level_interpolation": "client curve: modern_towers.overgrowth_level_fractions (exact; L9 maximum 882.3)",
     "suppression_radius": null,
     "bonus_melee_range_formula": null,
-    "level_curve_verified": false,
+    "level_curve_verified": true,
     "level_clamp": [
       1,
-      18
+      20
     ]
   },
   "unresolved": [
-    "Exact Overgrowth team-level formula remains unknown. Runtime explicitly approximates linear_between_published_level_endpoints and clamps1\u201318 (top role quest permits level20). Supply measured/server coefficients to replace it; do not label this profile exact26.19 fidelity.",
+    "Superseded 2026-10-02: Overgrowth uses the exact client curve in modern_towers.overgrowth_level_fractions (TOWERS \u00a76; L9 maximum 882.3), extending to level 20 for the top role quest.",
     "Overgrowth suppression and backdoor proximity radii must be supplied by world after evidence review; booleans deliberately isolate unknown geometry.",
     "Overgrowth initial timestamp: wiki says90s and1:40 game time; init defaults targetability10s, caller can supply verified targetability timestamp.",
     "Melee Overgrowth bonus attack-range curve and whether turret-owned crystal damage receives melee amplification require client/live verification; crystal packet currently not amplified.",
@@ -176,5 +176,8 @@
       }
     },
     "finding": "Lua5.1 binaries98\u2013145bytes contain BuffName/UI metadata only, no server calculation bodies. Turret/Overgrowth CharacterRecord binaries likewise lack the level-damage formula."
-  }
+  },
+  "notes_2026_10_02": [
+    "attack_period_seconds = 1/0.833 (client attackSpeed); Overgrowth uses the exact client curve, extending past 18 (modern_lane_ai agent fix)."
+  ]
 }

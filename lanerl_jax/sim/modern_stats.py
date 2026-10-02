@@ -46,14 +46,36 @@ def adaptive_force_total(adaptive_force: Any, *, converts_to_ad: Any,
                          xp: Any = np) -> tuple[Any, Any]:
     """Split adaptive force using current client GameplayConfig ratios.
 
-    Returns ``(bonus_attack_damage, bonus_ability_power)``. `converts_to_ad`
-    is selected when the champion's adaptive stat is AD; this is a loadout
-    property, not inferred from an in-tick comparison.
+    Returns ``(bonus_attack_damage, bonus_ability_power)`` for an already
+    chosen adaptive stat; ``resolve_adaptive`` makes the dynamic choice.
     """
     amount = xp.asarray(adaptive_force)
-    ad = xp.where(converts_to_ad, amount * 0.6, xp.zeros_like(amount))
+    ad = xp.where(converts_to_ad, amount * ADAPTIVE_AD_RATIO, xp.zeros_like(amount))
     ap = xp.where(converts_to_ad, xp.zeros_like(amount), amount)
     return ad, ap
+
+
+ADAPTIVE_AD_RATIO = 0.6   # GameplayConfig: 1 AF = 0.6 bonus AD or 1 AP
+
+
+def adaptive_is_ad(bonus_ad: Any, ability_power: Any, adaptive_physical: Any = True,
+                   xp: Any = np) -> Any:
+    """Adaptive choice (DAMAGE_AND_STATS §3.5, RUNES §1.2).
+
+    Bonus AD > AP picks AD, AP > bonus AD picks AP, a tie (including 0/0)
+    uses the champion's adaptive type. Callers pass stats *excluding* every
+    adaptive-force grant (RUNES U-21 default: no feedback).
+    """
+    bonus_ad, ability_power = xp.asarray(bonus_ad), xp.asarray(ability_power)
+    return xp.where(bonus_ad > ability_power, True,
+                    xp.where(ability_power > bonus_ad, False, xp.asarray(adaptive_physical, bool)))
+
+
+def resolve_adaptive(adaptive_force: Any, bonus_ad: Any, ability_power: Any,
+                     adaptive_physical: Any = True, xp: Any = np) -> tuple[Any, Any]:
+    """STAT.50: ``(bonus AD, AP)`` granted by ``adaptive_force``."""
+    return adaptive_force_total(adaptive_force, converts_to_ad=adaptive_is_ad(
+        bonus_ad, ability_power, adaptive_physical, xp), xp=xp)
 
 
 def change_max_health(current_hp: Any, old_max_hp: Any, new_max_hp: Any,
@@ -74,18 +96,16 @@ def armor_after_modifiers(
 ) -> Any:
     """Attacker-effective armor, in League's documented operation order.
 
-    Flat armor reduction may create negative armor; percentage reduction is
-    multiplicative and ignored at nonpositive armor; penetration cannot take
-    armor below zero. Flat armor reduction's distribution between base and
-    bonus armor is deliberately not exposed because published wiki prose
-    conflicts on which pool is reduced first. For total armor, the order and
-    final total here are equivalent while the percentage stages use total.
-    Lethality is full flat penetration since patch 14.1.
+    Flat reduction first (may make armor negative), then percentage
+    reduction and percentage penetration (only while armor is positive),
+    then flat penetration/lethality, which cannot take positive armor below
+    zero. Negative armor from reduction survives every later stage
+    (DAMAGE_AND_STATS §4.2, D1). Lethality is full flat penetration since 14.1.
     """
     r = armor - flat_reduction
     r = xp.where(r > 0.0, r * (1.0 - percent_reduction), r)
     r = xp.where(r > 0.0, r * (1.0 - percent_penetration), r)
-    return xp.maximum(0.0, r - flat_penetration - lethality)
+    return xp.where(r > 0.0, xp.maximum(0.0, r - flat_penetration - lethality), r)
 
 
 def magic_resist_after_modifiers(
@@ -97,7 +117,7 @@ def magic_resist_after_modifiers(
     r = resist - flat_reduction
     r = xp.where(r > 0.0, r * (1.0 - percent_reduction), r)
     r = xp.where(r > 0.0, r * (1.0 - percent_penetration), r)
-    return xp.maximum(0.0, r - flat_penetration)
+    return xp.where(r > 0.0, xp.maximum(0.0, r - flat_penetration), r)
 
 
 def mitigation_multiplier(resist: Any, xp: Any = np) -> Any:
@@ -115,17 +135,20 @@ def post_mitigation_damage(raw: Any, resist: Any, xp: Any = np) -> Any:
 def apply_damage_modifiers(
     raw: Any, *, attacker_amp: Any = 0.0, attacker_reduction: Any = 0.0,
     target_vulnerability: Any = 0.0, target_reduction: Any = 0.0,
-    xp: Any = np,
+    is_true: Any = False, xp: Any = np,
 ) -> Any:
-    """Compose independent damage modifiers multiplicatively.
+    """DMG.40/DMG.60 modifier composition (DAMAGE_AND_STATS §5.5, §5.7).
 
-    This helper applies the modifier products to a raw source amount. Callers
-    choose where mitigation occurs for their event type; League's armor/MR
-    multiplier is itself one received-damage modifier.
+    Source-side modifiers share one additive sum: ``attacker_amp`` is the
+    *sum* of every dealt amp (runes, items) and ``attacker_reduction`` joins
+    that sum (Exhaust), except on true damage. Target-side modifiers multiply;
+    damage reduction does not apply to true damage, vulnerability does.
+    ``target_reduction`` is the combined ``1 - prod(1 - r)``.
     """
-    mult = ((1.0 + attacker_amp) * (1.0 - attacker_reduction)
-            * (1.0 + target_vulnerability) * (1.0 - target_reduction))
-    return xp.maximum(raw * mult, 0.0)
+    is_true = xp.asarray(is_true, bool)
+    dealt = 1.0 + attacker_amp - xp.where(is_true, 0.0, attacker_reduction)
+    received = (1.0 + target_vulnerability) * xp.where(is_true, 1.0, 1.0 - target_reduction)
+    return xp.maximum(raw * xp.maximum(dealt, 0.0) * received, 0.0)
 
 
 def damage_after_resist(raw: Any, resist: Any, damage_type: Any,

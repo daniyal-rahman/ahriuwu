@@ -1,0 +1,2465 @@
+{
+ "schema": "lanerl-client-sr-runes-v1",
+ "patch": "26.19",
+ "client_build": "16.19.8230722",
+ "sources": {
+  "perks.cdtb.bin.json": "1427c70c4d1172198a1a9787362224c871a90cc4f66f3f769ef5830cbcd401b1",
+  "cdragon-perks.json": "dd0948288ac0293caf71675cabbd138a7ad512b7a7cbb15c084fa9662233c13a"
+ },
+ "styles": {
+  "8100": {
+   "name": "Domination",
+   "rows": [
+    [
+     8112,
+     8128,
+     9923
+    ],
+    [
+     8126,
+     8139,
+     8143
+    ],
+    [
+     8137,
+     8140,
+     8141
+    ],
+    [
+     8135,
+     8105,
+     8106
+    ]
+   ],
+   "allowed_sub_styles": [
+    8300,
+    8400,
+    8200,
+    8000
+   ],
+   "default_stat_mods": {
+    "8300": [
+     5008,
+     5008,
+     5001
+    ],
+    "8000": [
+     5005,
+     5008,
+     5001
+    ],
+    "8400": [
+     5008,
+     5001,
+     5001
+    ],
+    "8200": [
+     5008,
+     5008,
+     5001
+    ]
+   }
+  },
+  "8300": {
+   "name": "Inspiration",
+   "rows": [
+    [
+     8351,
+     8360,
+     8369
+    ],
+    [
+     8306,
+     8304,
+     8321
+    ],
+    [
+     8313,
+     8352,
+     8345
+    ],
+    [
+     8347,
+     8410,
+     8316
+    ]
+   ],
+   "allowed_sub_styles": [
+    8100,
+    8200,
+    8400,
+    8000
+   ],
+   "default_stat_mods": {
+    "8100": [
+     5008,
+     5008,
+     5001
+    ],
+    "8000": [
+     5005,
+     5008,
+     5001
+    ],
+    "8400": [
+     5007,
+     5001,
+     5001
+    ],
+    "8200": [
+     5008,
+     5008,
+     5001
+    ]
+   }
+  },
+  "8400": {
+   "name": "Resolve",
+   "rows": [
+    [
+     8437,
+     8439,
+     8465
+    ],
+    [
+     8446,
+     8463,
+     8401
+    ],
+    [
+     8429,
+     8444,
+     8473
+    ],
+    [
+     8451,
+     8453,
+     8242
+    ]
+   ],
+   "allowed_sub_styles": [
+    8000,
+    8100,
+    8200,
+    8300
+   ],
+   "default_stat_mods": {
+    "8100": [
+     5008,
+     5001,
+     5001
+    ],
+    "8300": [
+     5007,
+     5001,
+     5001
+    ],
+    "8000": [
+     5005,
+     5001,
+     5001
+    ],
+    "8200": [
+     5008,
+     5001,
+     5001
+    ]
+   }
+  },
+  "8200": {
+   "name": "Sorcery",
+   "rows": [
+    [
+     8214,
+     8229,
+     8230,
+     8992
+    ],
+    [
+     8224,
+     8226,
+     8275
+    ],
+    [
+     8210,
+     8234,
+     8233
+    ],
+    [
+     8237,
+     8232,
+     8236
+    ]
+   ],
+   "allowed_sub_styles": [
+    8000,
+    8300,
+    8400,
+    8100
+   ],
+   "default_stat_mods": {
+    "8100": [
+     5008,
+     5008,
+     5001
+    ],
+    "8300": [
+     5008,
+     5008,
+     5001
+    ],
+    "8000": [
+     5005,
+     5008,
+     5001
+    ],
+    "8400": [
+     5008,
+     5008,
+     5001
+    ]
+   }
+  },
+  "8000": {
+   "name": "Precision",
+   "rows": [
+    [
+     8005,
+     8008,
+     8021,
+     8010
+    ],
+    [
+     9101,
+     9111,
+     8009
+    ],
+    [
+     9104,
+     9105,
+     9103
+    ],
+    [
+     8014,
+     8017,
+     8299
+    ]
+   ],
+   "allowed_sub_styles": [
+    8200,
+    8400,
+    8300,
+    8100
+   ],
+   "default_stat_mods": {
+    "8100": [
+     5005,
+     5008,
+     5001
+    ],
+    "8300": [
+     5005,
+     5008,
+     5001
+    ],
+    "8400": [
+     5005,
+     5001,
+     5001
+    ],
+    "8200": [
+     5005,
+     5008,
+     5001
+    ]
+   }
+  }
+ },
+ "shard_slots": [
+  [
+   5008,
+   5005,
+   5007
+  ],
+  [
+   5008,
+   5010,
+   5001
+  ],
+  [
+   5011,
+   5013,
+   5001
+  ]
+ ],
+ "perks": {
+  "5001": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    1,
+    2
+   ],
+   "name": "Health Scaling",
+   "bin_name": "HealthScaling",
+   "enabled": true,
+   "stackable": true,
+   "script": "ASSETS/Perks/StatMods/StatModHealthScaling.lua",
+   "effect_amount": {
+    "StatGainMin": 10.0,
+    "StatGainMax": 180.0
+   },
+   "calculations": {}
+  },
+  "5005": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    0
+   ],
+   "name": "Attack Speed",
+   "bin_name": "AttackSpeed",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/StatMods/StatModAttackSpeed.lua",
+   "effect_amount": {
+    "StatGain": 10.0
+   },
+   "calculations": {}
+  },
+  "5007": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    0
+   ],
+   "name": "Ability Haste",
+   "bin_name": "CDRScaling",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/StatMods/StatModCDRScaling.lua",
+   "effect_amount": {
+    "HasteGain": 8.0
+   },
+   "calculations": {}
+  },
+  "5008": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    0,
+    1
+   ],
+   "name": "Adaptive Force",
+   "bin_name": "Adaptive",
+   "enabled": true,
+   "stackable": true,
+   "script": "ASSETS/Perks/StatMods/StatModAdaptive.lua",
+   "effect_amount": {
+    "StatGain2": 9.0,
+    "StatGain1": 5.400000095367432
+   },
+   "calculations": {}
+  },
+  "5010": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    1
+   ],
+   "name": "Move Speed",
+   "bin_name": "MovementSpeed",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/StatMods/StatModMovementSpeed.lua",
+   "effect_amount": {
+    "StatGain1": 2.5
+   },
+   "calculations": {}
+  },
+  "5011": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    2
+   ],
+   "name": "Health",
+   "bin_name": "Health",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/StatMods/StatModHealth.lua",
+   "effect_amount": {
+    "StatGain": 65.0
+   },
+   "calculations": {}
+  },
+  "5013": {
+   "style": 0,
+   "row": -1,
+   "shard_slots": [
+    2
+   ],
+   "name": "Tenacity and Slow Resist",
+   "bin_name": "Tenacity",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/StatMods/StatModTenacity.lua",
+   "effect_amount": {
+    "StatGain": 15.0
+   },
+   "calculations": {}
+  },
+  "8005": {
+   "style": 8000,
+   "row": 0,
+   "name": "Press the Attack",
+   "bin_name": "PressTheAttack",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/PressTheAttack/PressTheAttack.lua",
+   "effect_amount": {
+    "MinDamage": 40.0,
+    "MaxDamage": 160.0,
+    "BonusADRatio": 0.0,
+    "APRatio": 0.0,
+    "LethalityRatio": 0.0,
+    "HitsRequired": 3.0,
+    "TimeBetweenHits": 4.0,
+    "AmpPotencyMaxSelf": 0.07999999821186066,
+    "AmpDuration": 5.0,
+    "AmpPotencyMaxOthers": 0.07999999821186066,
+    "AmpPotencyStartSelf": 0.07999999821186066,
+    "AmpPotencyStartOthers": 0.07999999821186066,
+    "BonusPercentDamage": 0.07999999821186066,
+    "OutOfCombatTimer": 5.0,
+    "Cooldown": 6.0
+   },
+   "calculations": {}
+  },
+  "8008": {
+   "style": 8000,
+   "row": 0,
+   "name": "Lethal Tempo",
+   "bin_name": "LethalTempo",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/LethalTempo/LethalTempo.lua",
+   "effect_amount": {
+    "Duration": 6.0,
+    "MaxStacks": 6.0,
+    "TTASPerStackMelee": 0.05999999865889549,
+    "PerfectlyTimedForgivance": 0.25,
+    "TTASPerStackRanged": 0.03999999910593033,
+    "TTMinNoteDamageMelee": 9.0,
+    "TTMaxNoteDamageMelee": 30.0,
+    "TTMinNoteDamageRanged": 6.0,
+    "TTMaxNoteDamageRanged": 24.0
+   },
+   "calculations": {
+    "NoteDamage": {
+     "mMultiplier": {
+      "mSubparts": [
+       {
+        "mNumber": 1.0,
+        "__type": "NumberCalculationPart"
+       },
+       {
+        "mStat": 4,
+        "mStatFormula": 2,
+        "mCoefficient": 1.0,
+        "__type": "StatByCoefficientCalculationPart"
+       }
+      ],
+      "__type": "SumOfSubPartsCalculationPart"
+     },
+     "mFormulaParts": [
+      {
+       "mStartValue": 9.0,
+       "mEndValue": 30.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "mPrecision": 1,
+     "mRangedMultiplier": {
+      "mNumber": 0.6669999957084656,
+      "__type": "NumberCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    },
+    "ASPerStack": {
+     "mFormulaParts": [
+      {
+       "mNumber": 0.05999999865889549,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "mDisplayAsPercent": true,
+     "mPrecision": 1,
+     "mRangedMultiplier": {
+      "mNumber": 0.800000011920929,
+      "__type": "NumberCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    }
+   }
+  },
+  "8009": {
+   "style": 8000,
+   "row": 1,
+   "name": "Presence of Mind",
+   "bin_name": "PresenceOfMind",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/PresenceOfMind/PresenceOfMind.lua",
+   "effect_amount": {
+    "PercentManaRestore": 0.15000000596046448,
+    "CooldownDuration": 8.0,
+    "MinFlatRestore": 6.0,
+    "MaxFlatRestore": 50.0,
+    "EnergyRestore": 6.0
+   },
+   "calculations": {
+    "RegenAmount": {
+     "mFormulaParts": [
+      {
+       "values": [
+        6.0,
+        6.0,
+        6.800000190734863,
+        7.599999904632568,
+        8.399999618530273,
+        9.199999809265137,
+        10.0,
+        12.0,
+        14.0,
+        16.0,
+        18.0,
+        20.0,
+        23.200000762939453,
+        26.399999618530273,
+        29.600000381469727,
+        32.79999923706055,
+        36.0,
+        40.0,
+        44.0,
+        52.0,
+        56.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0,
+        60.0
+       ],
+       "__type": "ByCharLevelFormulaCalculationPart"
+      }
+     ],
+     "mPrecision": 1,
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8010": {
+   "style": 8000,
+   "row": 0,
+   "name": "Conqueror",
+   "bin_name": "Conqueror",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/Conqueror/Conqueror.lua",
+   "effect_amount": {
+    "MinAdaptivePerStack": 1.7999999523162842,
+    "MaxAdaptivePerStack": 4.0,
+    "MaxStacks": 12.0,
+    "BuffDuration": 5.0,
+    "TimeUntilNextStackFromSameSpell": 4.0,
+    "HealingPercent": 0.07999999821186066,
+    "RangedHealingPercent": 0.05000000074505806
+   },
+   "calculations": {}
+  },
+  "8014": {
+   "style": 8000,
+   "row": 3,
+   "name": "Coup de Grace",
+   "bin_name": "CoupDeGrace",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/CoupDeGrace/CoupDeGrace.lua",
+   "effect_amount": {
+    "EnemyHealthPercentageThreshold": 0.4000000059604645,
+    "BonusPercentDamage": 0.07999999821186066
+   },
+   "calculations": {}
+  },
+  "8017": {
+   "style": 8000,
+   "row": 3,
+   "name": "Cut Down",
+   "bin_name": "CutDown",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/CutDown/CutDown.lua",
+   "effect_amount": {
+    "MinBonusDamagePercent": 0.05000000074505806,
+    "MaxBonusDamagePercent": 0.15000000596046448,
+    "MinHealthDifference": 0.10000000149011612,
+    "MaxHealthDifference": 1.0,
+    "EnemyHealthPercentageThreshold": 0.6000000238418579,
+    "BonusPercentDamage": 0.07999999821186066
+   },
+   "calculations": {}
+  },
+  "8021": {
+   "style": 8000,
+   "row": 0,
+   "name": "Fleet Footwork",
+   "bin_name": "FleetFootwork",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/FleetFootwork/FleetFootwork.lua",
+   "effect_amount": {
+    "HealBonusADRatio": 0.10000000149011612,
+    "HealAPRatio": 0.05000000074505806,
+    "HealBase": 15.0,
+    "HealMax": 160.0,
+    "MSBuff": 0.20000000298023224,
+    "MSDuration": 1.0,
+    "RangedMSMod": 0.75,
+    "RangedHealMod": 0.6000000238418579,
+    "MinionHealMod": 0.15000000596046448
+   },
+   "calculations": {
+    "HealAmount": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 15.0,
+       "mEndValue": 160.0,
+       "mScaleByStatProgressionMultiplier": true,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "HealBonusADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mDataValue": "HealAPRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "mRangedMultiplier": {
+      "mDataValue": "RangedHealMod",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    },
+    "{ad820ad4}": {
+     "mFormulaParts": [
+      {
+       "mStartValue": 5.0,
+       "mEndValue": 100.0,
+       "mScaleByStatProgressionMultiplier": true,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "MoveSpeedCalc": {
+     "mFormulaParts": [
+      {
+       "mDataValue": "MSBuff",
+       "__type": "NamedDataValueCalculationPart"
+      }
+     ],
+     "mDisplayAsPercent": true,
+     "mRangedMultiplier": {
+      "mDataValue": "RangedMSMod",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    }
+   }
+  },
+  "8105": {
+   "style": 8100,
+   "row": 3,
+   "name": "Relentless Hunter",
+   "bin_name": "RelentlessHunter",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/RelentlessHunter/RelentlessHunter.lua",
+   "effect_amount": {
+    "OOCMS": 8.0,
+    "StartingOOCMS": 0.0
+   },
+   "calculations": {}
+  },
+  "8106": {
+   "style": 8100,
+   "row": 3,
+   "name": "Ultimate Hunter",
+   "bin_name": "UltimateHunter",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/UltimateHunter/UltimateHunter.lua",
+   "effect_amount": {
+    "AdditionalUltAH": 5.0,
+    "StartingUltAH": 6.0
+   },
+   "calculations": {}
+  },
+  "8112": {
+   "style": 8100,
+   "row": 0,
+   "name": "Electrocute",
+   "bin_name": "Electrocute",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/Electrocute/Electrocute.lua",
+   "effect_amount": {
+    "Cooldown": 20.0,
+    "DamageBase": 70.0,
+    "DamageMax": 240.0,
+    "BonusADRatio": 0.10000000149011612,
+    "WindowDuration": 3.0,
+    "APRatio": 0.05000000074505806,
+    "CooldownMin": 20.0
+   },
+   "calculations": {
+    "TotalDamage": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 70.0,
+       "mEndValue": 240.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "BonusADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8126": {
+   "style": 8100,
+   "row": 1,
+   "name": "Cheap Shot",
+   "bin_name": "CheapShot",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/CheapShot/CheapShot.lua",
+   "effect_amount": {
+    "DamageIncMin": 10.0,
+    "DamageIncMax": 45.0,
+    "Cooldown": 4.0
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 10.0,
+       "mEndValue": 45.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8128": {
+   "style": 8100,
+   "row": 0,
+   "name": "Dark Harvest",
+   "bin_name": "DarkHarvest",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/DarkHarvest/DarkHarvest.lua",
+   "effect_amount": {
+    "HarvestThreshold": 0.5,
+    "Cooldown": 35.0,
+    "BaseDamage": 30.0,
+    "ADRatio": 0.10000000149011612,
+    "APRatio": 0.05000000074505806,
+    "DamagePerSoulEssence": 11.0,
+    "CooldownResetValue": 1.0
+   },
+   "calculations": {
+    "TotalDamage": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mDataValue": "BaseDamage",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "ADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8135": {
+   "style": 8100,
+   "row": 3,
+   "name": "Treasure Hunter",
+   "bin_name": "TreasureHunter",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/TreasureHunter/TreasureHunter.lua",
+   "effect_amount": {
+    "BaseGoldAmount": 50.0,
+    "GoldGrowth": 20.0,
+    "TOOLTIPMaxGoldAmount": 130.0
+   },
+   "calculations": {}
+  },
+  "8137": {
+   "style": 8100,
+   "row": 2,
+   "name": "Sixth Sense",
+   "bin_name": "SixthSense",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/SixthSense/SixthSense_SEASONAL.lua",
+   "effect_amount": {
+    "{d3bd04a2}": 900.0,
+    "MeleeItemCalcValue": 250.0,
+    "RangedItemCalcValue": 250.0,
+    "LevelThreshold": 11.0,
+    "RevealDuration": 10.0
+   },
+   "calculations": {
+    "ChampRange": {
+     "mSimpleTooltipCalculationDisplay": 5,
+     "mExpandedTooltipCalculationDisplay": 5,
+     "mDefaultGameCalculation": "{792cf56b}",
+     "mConditionalGameCalculation": "{06387172}",
+     "mConditionalCalculationRequirements": {
+      "__type": "IsRangedCastRequirement"
+     },
+     "__type": "GameCalculationConditional"
+    },
+    "{792cf56b}": {
+     "mFormulaParts": [
+      {
+       "mNumber": 1.0,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "{06387172}": {
+     "mFormulaParts": [
+      {
+       "mNumber": 2.0,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8139": {
+   "style": 8100,
+   "row": 1,
+   "name": "Taste of Blood",
+   "bin_name": "TasteOfBlood",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/TasteOfBlood/TasteOfBloodTemp.lua",
+   "effect_amount": {
+    "HealAmount": 16.0,
+    "Cooldown": 20.0,
+    "HealAmountMax": 40.0,
+    "RegenDuration": 4.0,
+    "ADRatio": 0.10000000149011612,
+    "APRatio": 0.05000000074505806
+   },
+   "calculations": {
+    "HealCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 16.0,
+       "mEndValue": 40.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "ADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8140": {
+   "style": 8100,
+   "row": 2,
+   "name": "Grisly Mementos",
+   "bin_name": "GrislyMementos",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/GrislyMementos/GrislyMementos.lua",
+   "effect_amount": {
+    "TrinketAH": 6.0,
+    "StacksPerTakedown": 1.0,
+    "SummonerAH": 3.0,
+    "MaxStacks": 18.0
+   },
+   "calculations": {}
+  },
+  "8141": {
+   "style": 8100,
+   "row": 2,
+   "name": "Deep Ward",
+   "bin_name": "DeepWard",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/DeepWard/DeepWard.lua",
+   "effect_amount": {
+    "ExtraHealth": 1.0,
+    "LevelThreshold": 9.0,
+    "TTDurationIncreaseMin": 30.0,
+    "TTDurationIncreaseMax": 45.0,
+    "TTTrinketDurationIncreaseMin": 45.0,
+    "TTTrinketDurationIncreaseMax": 150.0
+   },
+   "calculations": {
+    "DurationIncrease": {
+     "mFormulaParts": [
+      {
+       "mStartValue": 30.0,
+       "mEndValue": 45.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "TrinketDurationIncrease": {
+     "mFormulaParts": [
+      {
+       "mStartValue": 45.0,
+       "mEndValue": 150.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8143": {
+   "style": 8100,
+   "row": 1,
+   "name": "Sudden Impact",
+   "bin_name": "SuddenImpact",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/SuddenImpact/SuddenImpact.lua",
+   "effect_amount": {
+    "ArmedDuration": 4.0,
+    "Cooldown": 10.0,
+    "MinDamageTooltip": 20.0,
+    "MaxDamageTooltip": 80.0
+   },
+   "calculations": {
+    "BaseDamage": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 20.0,
+       "mEndValue": 80.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8210": {
+   "style": 8200,
+   "row": 2,
+   "name": "Transcendence",
+   "bin_name": "Transcendence",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/Transcendence/Transcendence.lua",
+   "effect_amount": {
+    "HasteBonus1": 0.05000000074505806,
+    "LevelToTurnOn": 5.0,
+    "LevelToTurnOn2": 8.0,
+    "HasteBonus2": 0.05000000074505806,
+    "KillCooldownRefund": 0.20000000298023224,
+    "LevelToTurnOn3": 11.0
+   },
+   "calculations": {}
+  },
+  "8214": {
+   "style": 8200,
+   "row": 0,
+   "name": "Summon Aery",
+   "bin_name": "SummonAery",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/SummonAery/SummonAery.lua",
+   "effect_amount": {
+    "ShieldBase": 20.0,
+    "ShieldMax": 100.0,
+    "ShieldRatio": 0.05000000074505806,
+    "DamageMax": 50.0,
+    "DamageBase": 10.0,
+    "DamageAPRatio": 0.05000000074505806,
+    "DamageADRatio": 0.10000000149011612,
+    "ShieldRatioAD": 0.10000000149011612,
+    "ShieldDuration": 2.5
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 10.0,
+       "mEndValue": 50.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mDataValue": "DamageAPRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "DamageADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "ShieldCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 20.0,
+       "mEndValue": 100.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mDataValue": "ShieldRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "ShieldRatioAD",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8224": {
+   "style": 8200,
+   "row": 1,
+   "name": "Axiom Arcanist",
+   "bin_name": "NullifyingOrb",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/NullifyingOrb/AxiomArcanist.lua",
+   "effect_amount": {
+    "UltimateRefundBase": 7.0,
+    "DamageAmp": 0.11999999731779099,
+    "AOEAmp": 0.07999999821186066
+   },
+   "calculations": {}
+  },
+  "8226": {
+   "style": 8200,
+   "row": 1,
+   "name": "Manaflow Band",
+   "bin_name": "ManaflowBand",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/ManaflowBand/ManaflowBand.lua",
+   "effect_amount": {
+    "{2f748280}": 0.10000000149011612,
+    "Cooldown": 15.0,
+    "{2cde474e}": 0.4000000059604645,
+    "ManaIncrease": 25.0,
+    "MaxManaIncrease": 250.0,
+    "PercentManaRestore": 0.009999999776482582,
+    "PercentManaRestoreCooldown": 5.0
+   },
+   "calculations": {}
+  },
+  "8229": {
+   "style": 8200,
+   "row": 0,
+   "name": "Arcane Comet",
+   "bin_name": "ArcaneComet",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/ArcaneComet/ArcaneCometSnipe.lua",
+   "effect_amount": {
+    "RechargeTime": 20.0,
+    "DamageBase": 15.0,
+    "DamageMax": 100.0,
+    "APRatio": 0.05000000074505806,
+    "ADRatio": 0.10000000149011612,
+    "RechargeTimeMin": 8.0,
+    "PercentRefund": 0.20000000298023224,
+    "DotPercentRefund": 0.05000000074505806,
+    "AoEPercentRefund": 0.10000000149011612,
+    "MaxDamageAmp": 1.0,
+    "MaxRange": 750.0
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 15.0,
+       "mEndValue": 100.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "ADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "CooldownCalc": {
+     "mFormulaParts": [
+      {
+       "mCeiling": 20.0,
+       "mFloor": 0.30000001192092896,
+       "mSubparts": [
+        {
+         "mStartValue": 20.0,
+         "mEndValue": 8.0,
+         "__type": "ByCharLevelInterpolationCalculationPart"
+        }
+       ],
+       "__type": "ClampSubPartsCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8230": {
+   "style": 8200,
+   "row": 0,
+   "name": "Stormraider's Surge",
+   "bin_name": "PhaseRush",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/PhaseRush/StormraidersSurge.lua",
+   "effect_amount": {
+    "SlowResist": 0.5,
+    "Duration": 4.0,
+    "Window": 3.0,
+    "MinCooldown": 10.0,
+    "MaxCooldown": 20.0,
+    "RangedEffectiveness": 0.75,
+    "DamageThreshold": 0.25,
+    "HasteMax": 0.47999998927116394
+   },
+   "calculations": {
+    "CooldownCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 20.0,
+       "mEndValue": 10.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "MoveSpeedCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 0.47999998927116394,
+       "mEndValue": 0.47999998927116394,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "mDisplayAsPercent": true,
+     "mRangedMultiplier": {
+      "mDataValue": "RangedEffectiveness",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    }
+   }
+  },
+  "8232": {
+   "style": 8200,
+   "row": 3,
+   "name": "Waterwalking",
+   "bin_name": "Waterwalking",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/Waterwalking/Waterwalking.lua",
+   "effect_amount": {
+    "MovementSpeed": 10.0,
+    "{6f2f0d30}": 1.0,
+    "MinAdaptive": 13.0,
+    "MaxAdaptive": 30.0
+   },
+   "calculations": {
+    "AdaptiveForceCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 13.0,
+       "mEndValue": 30.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8233": {
+   "style": 8200,
+   "row": 2,
+   "name": "Absolute Focus",
+   "bin_name": "AbsoluteFocus",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/AbsoluteFocus/AbsoluteFocus.lua",
+   "effect_amount": {
+    "HealthPercent": 0.699999988079071,
+    "MinAdaptive": 3.0,
+    "MaxAdaptive": 30.0
+   },
+   "calculations": {
+    "AdaptiveForceCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 3.0,
+       "mEndValue": 30.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8234": {
+   "style": 8200,
+   "row": 2,
+   "name": "Celerity",
+   "bin_name": "Celerity",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/Celerity/Celerity.lua",
+   "effect_amount": {
+    "PercentHasteMod": 0.07000000029802322,
+    "PercentMS": 0.009999999776482582
+   },
+   "calculations": {}
+  },
+  "8236": {
+   "style": 8200,
+   "row": 3,
+   "name": "Gathering Storm",
+   "bin_name": "GatheringStorm",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/GatheringStorm/GatheringStorm.lua",
+   "effect_amount": {
+    "UpdateAfterMinutes": 10.0,
+    "AdaptiveAP": 8.0,
+    "AdaptiveAD": 6.0,
+    "{c5d14564}": 8.0
+   },
+   "calculations": {}
+  },
+  "8237": {
+   "style": 8200,
+   "row": 3,
+   "name": "Scorch",
+   "bin_name": "Scorch",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/Scorch/Scorch.lua",
+   "effect_amount": {
+    "BurnlockoutDuration": 10.0,
+    "Damage": 20.0,
+    "DamageMax": 40.0,
+    "DotDuration": 1.0,
+    "OOCTimer": 0.0,
+    "{89367404}": 0.10000000149011612
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 20.0,
+       "mEndValue": 40.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8242": {
+   "style": 8400,
+   "row": 3,
+   "name": "Unflinching",
+   "bin_name": "Unflinching",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/UnflinchingResists/UnflinchingResists.lua",
+   "effect_amount": {
+    "ResistMin": 10.0,
+    "ResistMax": 10.0,
+    "Duration": 2.0
+   },
+   "calculations": {}
+  },
+  "8275": {
+   "style": 8200,
+   "row": 1,
+   "name": "Nimbus Cloak",
+   "bin_name": "NimbusCloak",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/NimbusCloak/NimbusCloak.lua",
+   "effect_amount": {
+    "Duration": 2.0,
+    "LowCDMSBoost": 0.15000000596046448,
+    "{1c32110c}": 0.3499999940395355,
+    "HighCDMSBoost": 0.44999998807907104,
+    "{2fd68801}": 100.0,
+    "{b0d06764}": 250.0
+   },
+   "calculations": {}
+  },
+  "8299": {
+   "style": 8000,
+   "row": 3,
+   "name": "Last Stand",
+   "bin_name": "LastStand",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/LastStand/LastStand.lua",
+   "effect_amount": {
+    "MinBonusDamagePercent": 0.05000000074505806,
+    "MaxBonusDamagePercent": 0.10999999940395355,
+    "HealthThresholdStart": 0.6000000238418579,
+    "HealthThresholdEnd": 0.30000001192092896
+   },
+   "calculations": {}
+  },
+  "8304": {
+   "style": 8300,
+   "row": 1,
+   "name": "Magical Footwear",
+   "bin_name": "MagicalFootwear",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/MagicalFootwear/MagicalFootwear.lua",
+   "effect_amount": {
+    "GiveBootsAtMinute": 12.0,
+    "{c07791e4}": 300.0,
+    "SecondsSoonerPerTakedown": 45.0,
+    "AdditionalMovementSpeed": 10.0
+   },
+   "calculations": {}
+  },
+  "8306": {
+   "style": 8300,
+   "row": 1,
+   "name": "Hextech Flashtraption",
+   "bin_name": "HextechFlashtraption",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/HextechFlashtraption/HextechFlashtraption.lua",
+   "effect_amount": {
+    "ChannelDuration": 2.0,
+    "{c85ef93c}": 10.0,
+    "CooldownTime": 20.0,
+    "ChampionCombatCooldown": 10.0,
+    "MinimumChannelDuration": 1.0,
+    "{d6487c09}": 0.5
+   },
+   "calculations": {}
+  },
+  "8313": {
+   "style": 8300,
+   "row": 2,
+   "name": "Triple Tonic",
+   "bin_name": "PerfectTiming",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/TillGottenGains/TillGottenGains.lua",
+   "effect_amount": {
+    "FirstElixirLevel": 3.0,
+    "SecondElixirLevel": 6.0,
+    "ThirdElixirLevel": 9.0
+   },
+   "calculations": {}
+  },
+  "8316": {
+   "style": 8300,
+   "row": 3,
+   "name": "Jack Of All Trades",
+   "bin_name": "JackOfAllTrades",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/JackOfAllTrades/JackOfAllTrades.lua",
+   "effect_amount": {
+    "{1b48f5ea}": 8.0,
+    "{55d14eea}": 20.0,
+    "HastePerStack": 1.0
+   },
+   "calculations": {}
+  },
+  "8321": {
+   "style": 8300,
+   "row": 1,
+   "name": "Cash Back",
+   "bin_name": "CashBack",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/CashBack/CashBack.lua",
+   "effect_amount": {
+    "{d856a8af}": 0.0,
+    "GoldLowerBoundPerMinute": 8.0,
+    "{c0de5a7f}": 8.0,
+    "DebtAccumulationStartsAtMinute": 2.0,
+    "{7957e8a3}": 20.0,
+    "{8d08b1b5}": 0.0,
+    "ExcessCostPenaltyFlat": 50.0,
+    "GoldLowerBoundInitial": 100.0,
+    "{fa03b4f1}": 150.0,
+    "{ebbc116e}": -150.0,
+    "PercentRefund": 0.07500000298023224
+   },
+   "calculations": {}
+  },
+  "8345": {
+   "style": 8300,
+   "row": 2,
+   "name": "Biscuit Delivery",
+   "bin_name": "BiscuitDelivery",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/BiscuitDelivery/BiscuitDelivery.lua",
+   "effect_amount": {
+    "BiscuitMinuteInterval": 2.0,
+    "SwapOverMinute": 6.0,
+    "PermanentHP": 30.0,
+    "HealthHealPercent": 0.014999999664723873,
+    "DurationOfEffect": 5.0,
+    "FlatHeal": 20.0,
+    "{936e8fc2}": 0.30000001192092896,
+    "MaximumHealIncrease": 1.0
+   },
+   "calculations": {}
+  },
+  "8347": {
+   "style": 8300,
+   "row": 3,
+   "name": "Cosmic Insight",
+   "bin_name": "CosmicInsight",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/CosmicInsight/CosmicInsight.lua",
+   "effect_amount": {
+    "ItemHaste": 10.0,
+    "SummonerHaste": 18.0
+   },
+   "calculations": {}
+  },
+  "8351": {
+   "style": 8300,
+   "row": 0,
+   "name": "Glacial Augment",
+   "bin_name": "GlacialAugment",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/GlacialAugment/GlacialAugment.lua",
+   "effect_amount": {
+    "SlowZoneDuration": 3.0,
+    "SlowZoneSlowBase": 20.0,
+    "SlowZoneLength": 700.0,
+    "SlowZoneWidth": 80.0,
+    "RayCount": 3.0,
+    "Cooldown": 25.0,
+    "BeamPosIndent": 100.0,
+    "CCCarryOverRatio": 100.0,
+    "DmgReduction": 0.15000000596046448,
+    "SlowZoneSlowAPRatio": 0.05999999865889549,
+    "SlowZoneSlowbADRatio": 0.07000000029802322,
+    "SlowZoneSlowHealShieldRatio": 90.0
+   },
+   "calculations": {
+    "SlowZoneCalc": {
+     "mMultiplier": {
+      "mNumber": 0.009999999776482582,
+      "__type": "NumberCalculationPart"
+     },
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mDataValue": "SlowZoneSlowBase",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mDataValue": "SlowZoneSlowAPRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "SlowZoneSlowbADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 34,
+       "mDataValue": "SlowZoneSlowHealShieldRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "mDisplayAsPercent": true,
+     "mPrecision": 1,
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8352": {
+   "style": 8300,
+   "row": 2,
+   "name": "Time Warp Tonic",
+   "bin_name": "TimeWarpTonic",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/TimeWarpTonic/TimeWarpTonic_SRI.lua",
+   "effect_amount": {
+    "BonusMS": 0.0,
+    "RestorationPercentage": 0.4000000059604645,
+    "Cooldown": 20.0
+   },
+   "calculations": {}
+  },
+  "8360": {
+   "style": 8300,
+   "row": 0,
+   "name": "Unsealed Spellbook",
+   "bin_name": "UnsealedSpellbook",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/UnsealedSpellbook/UnsealedSpellbook.lua",
+   "effect_amount": {
+    "{ea768132}": 1.0,
+    "{9a847429}": 0.0,
+    "{0f920874}": 1.0,
+    "ShardRechargeMinutes": 4.5,
+    "ShardFirstMinutes": 6.0,
+    "{9d01feeb}": 5.0,
+    "{b7e0131f}": 5.0,
+    "NumSummonersBeforeRepeat": 3.0,
+    "ShardRechargeReductionSeconds": 25.0,
+    "{a8402a49}": 10.0,
+    "{0bb7b933}": 6.0
+   },
+   "calculations": {}
+  },
+  "8369": {
+   "style": 8300,
+   "row": 0,
+   "name": "First Strike",
+   "bin_name": "FirstStrike",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Inspiration/FirstStrike/FirstStrike.lua",
+   "effect_amount": {
+    "Duration": 3.0,
+    "DamageAmp": 0.07000000029802322,
+    "OOCTimer": 10.0,
+    "GoldProcBonus": 10.0,
+    "GoldPercentBonus": 0.5,
+    "GoldPercentBonusRanged": 0.3499999940395355,
+    "GraceWindow": 0.25,
+    "TooltipOnlyCooldownStartAmount": 25.0,
+    "TooltipOnlyCooldownEndAmount": 15.0,
+    "MissileNoiseNumberLimiter": 3.0,
+    "MissileNoiseRangeLimiter": 1500.0,
+    "ModesCooldownReduction": 1.0,
+    "{b50bc5ec}": 0.5,
+    "{7563bf99}": 0.699999988079071
+   },
+   "calculations": {
+    "Cooldown": {
+     "mFormulaParts": [
+      {
+       "mPart1": {
+        "mStartValue": 25.0,
+        "mEndValue": 15.0,
+        "mScalePastDefaultMaxLevel": false,
+        "__type": "ByCharLevelInterpolationCalculationPart"
+       },
+       "mPart2": {
+        "mDataValue": "ModesCooldownReduction",
+        "__type": "NamedDataValueCalculationPart"
+       },
+       "__type": "ProductOfSubPartsCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "ChampRange": {
+     "mSimpleTooltipCalculationDisplay": 5,
+     "mExpandedTooltipCalculationDisplay": 5,
+     "mDefaultGameCalculation": "{792cf56b}",
+     "mConditionalGameCalculation": "{06387172}",
+     "mConditionalCalculationRequirements": {
+      "__type": "IsRangedCastRequirement"
+     },
+     "__type": "GameCalculationConditional"
+    },
+    "MeleeItemCalcValue": {
+     "mSimpleTooltipCalculationDisplay": 6,
+     "mExpandedTooltipCalculationDisplay": 6,
+     "mFormulaParts": [
+      {
+       "mDataValue": "{b50bc5ec}",
+       "__type": "NamedDataValueCalculationPart"
+      }
+     ],
+     "mDisplayAsPercent": true,
+     "__type": "GameCalculation"
+    },
+    "RangedItemCalcValue": {
+     "mMultiplier": {
+      "mDataValue": "{7563bf99}",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "mModifiedGameCalculation": "MeleeItemCalcValue",
+     "__type": "GameCalculationModified"
+    },
+    "{792cf56b}": {
+     "mFormulaParts": [
+      {
+       "mNumber": 1.0,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "{06387172}": {
+     "mFormulaParts": [
+      {
+       "mNumber": 2.0,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8401": {
+   "style": 8400,
+   "row": 1,
+   "name": "Shield Bash",
+   "bin_name": "ShieldBash",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/ShieldBash/ShieldBash.lua",
+   "effect_amount": {
+    "ProcDuration": 2.0,
+    "ShieldRatio": 15.0,
+    "BonusHealthRatio": 2.5,
+    "BonusShieldMult": 0.10000000149011612,
+    "ProcBaseMin": 5.0,
+    "ProcBaseMax": 30.0
+   },
+   "calculations": {}
+  },
+  "8410": {
+   "style": 8300,
+   "row": 3,
+   "name": "Approach Velocity",
+   "bin_name": "ApproachVelocity",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/ApproachVelocity/ApproachVelocity.lua",
+   "effect_amount": {
+    "MovementSpeedPercentBonus": 0.15000000596046448,
+    "ActivationDistance": 1000.0
+   },
+   "calculations": {}
+  },
+  "8429": {
+   "style": 8400,
+   "row": 2,
+   "name": "Conditioning",
+   "bin_name": "Conditioning",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/Conditioning/Conditioning.lua",
+   "effect_amount": {
+    "ArmorBase": 8.0,
+    "MRBase": 8.0,
+    "ExtraResist": 0.029999999329447746,
+    "Range": 800.0,
+    "MinutesRequired": 12.0
+   },
+   "calculations": {
+    "ArmorCalcTooltip": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mDataValue": "ArmorBase",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 1,
+       "mDataValue": "ExtraResist",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "MagicResistCalcTooltip": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mDataValue": "MRBase",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 6,
+       "mDataValue": "ExtraResist",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8437": {
+   "style": 8400,
+   "row": 0,
+   "name": "Grasp of the Undying",
+   "bin_name": "GraspOfTheUndying",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/GraspOfTheUndying/GraspOfTheUndying.lua",
+   "effect_amount": {
+    "PercentHealthDamage": 0.03500000014901161,
+    "Window": 5.0,
+    "TriggerTime": 4.0,
+    "PercentHealthHeal": 0.013000000268220901,
+    "MaxHealthPerProc": 5.0,
+    "RangedPenaltyMod": 0.4000000059604645,
+    "RangedHealthPerProc": 2.0,
+    "MeleeFlatHeal": 0.0
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStat": 12,
+       "mDataValue": "PercentHealthDamage",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "mRangedMultiplier": {
+      "mDataValue": "RangedPenaltyMod",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    },
+    "HealCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStat": 12,
+       "mDataValue": "PercentHealthHeal",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "mRangedMultiplier": {
+      "mDataValue": "RangedPenaltyMod",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    }
+   }
+  },
+  "8439": {
+   "style": 8400,
+   "row": 0,
+   "name": "Aftershock",
+   "bin_name": "Aftershock",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/VeteranAftershock/VeteranAftershock.lua",
+   "effect_amount": {
+    "DamageRadius": 350.0,
+    "Cooldown": 20.0,
+    "StartingBaseDamage": 25.0,
+    "MaxBaseDamage": 120.0,
+    "DelayBeforeBurst": 2.5,
+    "HealthRatio": 0.07999999821186066,
+    "FlatResists": 45.0,
+    "BonusResistMin": 80.0,
+    "BonusResistMax": 150.0,
+    "PercentBonusResist": 0.75
+   },
+   "calculations": {
+    "MaxResistCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 80.0,
+       "mEndValue": 150.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "ArmorBuff": {
+     "mSimpleTooltipCalculationDisplay": 2,
+     "mFormulaParts": [
+      {
+       "mDataValue": "FlatResists",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 1,
+       "mStatFormula": 2,
+       "mDataValue": "PercentBonusResist",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "MagicResistBuff": {
+     "mSimpleTooltipCalculationDisplay": 2,
+     "mFormulaParts": [
+      {
+       "mDataValue": "FlatResists",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 6,
+       "mStatFormula": 2,
+       "mDataValue": "PercentBonusResist",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 25.0,
+       "mEndValue": 120.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mStat": 12,
+       "mStatFormula": 2,
+       "mDataValue": "HealthRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8444": {
+   "style": 8400,
+   "row": 2,
+   "name": "Second Wind",
+   "bin_name": "SecondWind",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/SecondWind/SecondWind.lua",
+   "effect_amount": {
+    "RegenSeconds": 10.0,
+    "RegenPercentMax": 0.03999999910593033,
+    "RegenFlat": 0.0
+   },
+   "calculations": {}
+  },
+  "8446": {
+   "style": 8400,
+   "row": 1,
+   "name": "Demolish",
+   "bin_name": "Demolish",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/Demolish/Demolish_SEASONAL.lua",
+   "effect_amount": {
+    "CooldownSeconds": 30.0,
+    "{8d810998}": 8.0,
+    "{97664ba4}": 3.0,
+    "BaseDamageMelee": 85.0,
+    "BaseDamageRanged": 50.0,
+    "HPRatioMelee": 0.2800000011920929,
+    "HPRatioRanged": 0.20000000298023224
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mDefaultGameCalculation": "{4e3f20aa}",
+     "mConditionalGameCalculation": "{5fecac03}",
+     "mConditionalCalculationRequirements": {
+      "__type": "IsMeleeCastRequirement"
+     },
+     "__type": "GameCalculationConditional"
+    },
+    "{4e3f20aa}": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "{72c5c2a8}": 0,
+     "mFormulaParts": [
+      {
+       "mDataValue": "BaseDamageRanged",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 12,
+       "mDataValue": "HPRatioRanged",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "{5fecac03}": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "{72c5c2a8}": 0,
+     "mFormulaParts": [
+      {
+       "mDataValue": "BaseDamageMelee",
+       "__type": "NamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 12,
+       "mDataValue": "HPRatioMelee",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8451": {
+   "style": 8400,
+   "row": 3,
+   "name": "Overgrowth",
+   "bin_name": "Overgrowth",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/Overgrowth/Overgrowth.lua",
+   "effect_amount": {
+    "{1663f8e7}": 0.75,
+    "Range": 1400.0,
+    "UnitsPerTier": 8.0,
+    "{ca029a2b}": 2.0,
+    "FlatHealthPerTier": 3.0,
+    "ThresholdUnits": 120.0,
+    "ThresholdMaxHealthRatio": 0.03500000014901161
+   },
+   "calculations": {}
+  },
+  "8453": {
+   "style": 8400,
+   "row": 3,
+   "name": "Revitalize",
+   "bin_name": "Revitalize",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/Revitalize/Revitalize.lua",
+   "effect_amount": {
+    "HealShieldPower": 0.05000000074505806,
+    "HealthCutOff": 40.0,
+    "ExtraAmp": 10.0
+   },
+   "calculations": {}
+  },
+  "8463": {
+   "style": 8400,
+   "row": 1,
+   "name": "Font of Life",
+   "bin_name": "FontOfLife",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/FontOfLife/FontOfLife.lua",
+   "effect_amount": {
+    "Cooldown": 20.0,
+    "RangedMod": 0.699999988079071
+   },
+   "calculations": {
+    "BaseHeal": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 10.0,
+       "mEndValue": 50.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "mRangedMultiplier": {
+      "mDataValue": "RangedMod",
+      "__type": "NamedDataValueCalculationPart"
+     },
+     "__type": "{e9a3c91d}"
+    }
+   }
+  },
+  "8465": {
+   "style": 8400,
+   "row": 0,
+   "name": "Guardian",
+   "bin_name": "Guardian",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/Guardian/Guardian.lua",
+   "effect_amount": {
+    "SnuggleRange": 350.0,
+    "ShieldBase": 40.0,
+    "ShieldMax": 150.0,
+    "APRatio": 0.20000000298023224,
+    "HPRatio": 0.05999999865889549,
+    "ShieldDuration": 1.5,
+    "Cooldown": 75.0,
+    "GuardDuration": 2.5,
+    "CooldownMaxLevel": 40.0,
+    "ThresholdMin": 50.0,
+    "ThresholdMax": 165.0
+   },
+   "calculations": {
+    "ThresholdCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 40.0,
+       "mEndValue": 150.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "ShieldCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 40.0,
+       "mEndValue": 150.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mStatFormula": 2,
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 12,
+       "mStatFormula": 2,
+       "mDataValue": "HPRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "CooldownCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 75.0,
+       "mEndValue": 40.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8473": {
+   "style": 8400,
+   "row": 2,
+   "name": "Bone Plating",
+   "bin_name": "BonePlating",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Resolve/BonePlating/BonePlating.lua",
+   "effect_amount": {
+    "BlockBase": 30.0,
+    "BlockMax": 60.0,
+    "BlockCount": 3.0,
+    "BlockDuration": 1.5,
+    "Cooldown": 55.0
+   },
+   "calculations": {
+    "BlockCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 30.0,
+       "mEndValue": 60.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "8992": {
+   "style": 8200,
+   "row": 0,
+   "name": "Deathfire Touch",
+   "bin_name": "DeathfireTouch",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Sorcery/DeathfireTouch/DeathfireTouchManager.lua",
+   "effect_amount": {
+    "ADRatio": 0.07000000029802322,
+    "APRatio": 0.02500000037252903,
+    "Duration": 4.0,
+    "TimeToAmp": 3.0,
+    "DamageMultiplier": 0.75,
+    "AoEDuration": 2.0,
+    "DotDuration": 1.0,
+    "Level1DamageTOOLTIP": 3.0,
+    "{2156e250}": 12.0,
+    "TicksPerSecond": 2.0,
+    "APRatioTT": 2.5,
+    "ADRatioTT": 7.0
+   },
+   "calculations": {
+    "DamageCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStartValue": 3.0,
+       "mEndValue": 12.0,
+       "__type": "ByCharLevelInterpolationCalculationPart"
+      },
+      {
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "ADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "9101": {
+   "style": 8000,
+   "row": 1,
+   "name": "Absorb Life",
+   "bin_name": "AbsorbLife",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/AbsorbLife/AbsorbLife.lua",
+   "effect_amount": {
+    "TooltipMinHeal": 1.0,
+    "TooltipMaxHeal": 23.0
+   },
+   "calculations": {
+    "HealAmount": {
+     "mFormulaParts": [
+      {
+       "mLevel1Value": 1.0,
+       "mInitialBonusPerLevel": 0.25,
+       "mBreakpoints": [
+        {
+         "mLevel": 6,
+         "mBonusPerLevelAtAndAfter": 1.0,
+         "__type": "Breakpoint"
+        },
+        {
+         "mLevel": 11,
+         "mBonusPerLevelAtAndAfter": 2.0,
+         "__type": "Breakpoint"
+        }
+       ],
+       "__type": "ByCharLevelBreakpointsCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "9103": {
+   "style": 8000,
+   "row": 2,
+   "name": "Legend: Bloodline",
+   "bin_name": "LegendBloodline",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/LegendBloodline/LegendBloodline.lua",
+   "effect_amount": {
+    "LifeStealPerStack": 0.44999998807907104,
+    "LifeStealBase": 0.0,
+    "MaxLegendStacks": 15.0,
+    "{3e1fdd4a}": 100.0,
+    "{8fb410e2}": 100.0,
+    "{f6570baa}": 100.0,
+    "LargeMonsterKillValue": 25.0,
+    "MinionKillValue": 4.0,
+    "BonusHealth": 85.0
+   },
+   "calculations": {}
+  },
+  "9104": {
+   "style": 8000,
+   "row": 2,
+   "name": "Legend: Alacrity",
+   "bin_name": "LegendAlacrity",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/LegendAlacrity/LegendAlacrity.lua",
+   "effect_amount": {
+    "AttackSpeedPerStack": 0.014999999664723873,
+    "AttackSpeedBase": 0.029999999329447746,
+    "MaxLegendStacks": 10.0,
+    "{3e1fdd4a}": 100.0,
+    "{8fb410e2}": 100.0,
+    "{f6570baa}": 100.0,
+    "LargeMonsterKillValue": 25.0,
+    "MinionKillValue": 4.0
+   },
+   "calculations": {}
+  },
+  "9105": {
+   "style": 8000,
+   "row": 2,
+   "name": "Legend: Haste",
+   "bin_name": "LegendHaste",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/LegendHaste/LegendHaste.lua",
+   "effect_amount": {
+    "HastePerStack": 1.5,
+    "HasteBase": 0.0,
+    "MaxLegendStacks": 10.0,
+    "{3e1fdd4a}": 100.0,
+    "{8fb410e2}": 100.0,
+    "{f6570baa}": 100.0,
+    "LargeMonsterKillValue": 25.0,
+    "MinionKillValue": 4.0
+   },
+   "calculations": {}
+  },
+  "9111": {
+   "style": 8000,
+   "row": 1,
+   "name": "Triumph",
+   "bin_name": "Triumph",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Precision/Triumph.lua",
+   "effect_amount": {
+    "MissingHealthRestored": 0.05000000074505806,
+    "BonusGold": 20.0,
+    "TriumphMaxHealthRestored": 0.02500000037252903
+   },
+   "calculations": {
+    "MaxHealthCalc": {
+     "mSimpleTooltipCalculationDisplay": 4,
+     "mFormulaParts": [
+      {
+       "mStat": 12,
+       "mDataValue": "TriumphMaxHealthRestored",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  },
+  "9923": {
+   "style": 8100,
+   "row": 0,
+   "name": "Hail of Blades",
+   "bin_name": "HailOfBlades",
+   "enabled": true,
+   "stackable": false,
+   "script": "ASSETS/Perks/Styles/Domination/HailOfBlades/HailOfBlades.lua",
+   "effect_amount": {
+    "NumHits": 3.0,
+    "Duration": 3.0,
+    "ASBoost": 0.8999999761581421,
+    "Cooldown": 10.0,
+    "ASBoostRanged": 0.6000000238418579,
+    "BonusDamageMin": 2.0,
+    "BonusDamageMax": 20.0,
+    "BonusADRatio": 0.11999999731779099,
+    "APRatio": 0.10000000149011612,
+    "MaxBonusHits": 2.0
+   },
+   "calculations": {
+    "MeleeItemCalcValue": {
+     "mMultiplier": {
+      "mNumber": 100.0,
+      "__type": "NumberCalculationPart"
+     },
+     "mFormulaParts": [
+      {
+       "mDataValue": "ASBoost",
+       "__type": "NamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "RangedItemCalcValue": {
+     "mMultiplier": {
+      "mNumber": 100.0,
+      "__type": "NumberCalculationPart"
+     },
+     "mFormulaParts": [
+      {
+       "mDataValue": "ASBoostRanged",
+       "__type": "NamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "ChampRange": {
+     "mDefaultGameCalculation": "{792cf56b}",
+     "mConditionalGameCalculation": "{06387172}",
+     "mConditionalCalculationRequirements": {
+      "__type": "IsRangedCastRequirement"
+     },
+     "__type": "GameCalculationConditional"
+    },
+    "{792cf56b}": {
+     "mFormulaParts": [
+      {
+       "mNumber": 1.0,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "{06387172}": {
+     "mFormulaParts": [
+      {
+       "mNumber": 2.0,
+       "__type": "NumberCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    },
+    "BonusDamage": {
+     "mFormulaParts": [
+      {
+       "{0589a59c}": "BonusDamageMin",
+       "{0b65bc23}": "BonusDamageMax",
+       "__type": "{ee18a47b}"
+      },
+      {
+       "mDataValue": "APRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      },
+      {
+       "mStat": 2,
+       "mStatFormula": 2,
+       "mDataValue": "BonusADRatio",
+       "__type": "StatByNamedDataValueCalculationPart"
+      }
+     ],
+     "__type": "GameCalculation"
+    }
+   }
+  }
+ },
+ "not_selectable": [
+  5002,
+  5003,
+  5004,
+  5006,
+  5009,
+  5012,
+  7000,
+  8004,
+  8006,
+  8007,
+  8016,
+  8109,
+  8114,
+  8115,
+  8120,
+  8124,
+  8127,
+  8134,
+  8136,
+  8138,
+  8205,
+  8207,
+  8208,
+  8220,
+  8318,
+  8319,
+  8320,
+  8339,
+  8344,
+  8359,
+  8414,
+  8415,
+  8416,
+  8430,
+  8435,
+  8454,
+  8472
+ ]
+}

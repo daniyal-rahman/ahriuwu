@@ -1,15 +1,15 @@
 """Pure JAX rules for 26.19 Summoner's Rift lane minions.
 
-Scope is the top lane wave schedule, composition, profile facts, and target
-selection/Call-for-Help rules.  Movement/pathing, combat resolution, inhibitor
-respawn suppression, and the server's fuzzy target reevaluation timer belong
-to the world step.  All clock values are seconds and map coordinates are XZ.
+Scope is the wave schedule, composition, per-upgrade stats, profile facts,
+target selection/Call-for-Help rules, movement-speed timing and bounties
+(docs/modern/MINIONS.md). The per-tick AI that drives these rules is
+``modern_lane_ai``; movement/pathing and combat resolution belong to the world
+step. All clock values are seconds and map coordinates are XZ.
 
-The ``*_PROFILE`` values are current Wiki base/profile values, not a claim
-that a minion keeps those values after its 90-second upgrades. The per-upgrade
-stat curve is not exposed here: the Wiki gives current endpoints, but does not
-document a complete per-upgrade curve for every stat. In particular, do not
-linearly interpolate those endpoints.
+Per-upgrade stats follow the client CLASSIC ``MinionUpgradeConfig``
+(MINIONS §1.3): ``stat(U) = base + min(Up*U + UpLate*max(U-5, 0), MaxBonus)``
+with the upgrade index ``U`` latched at spawn (U-1 default). The ``*_PROFILE``
+tuples are U=1 (first-wave) snapshots of that formula.
 """
 from __future__ import annotations
 
@@ -28,7 +28,12 @@ __all__ = [
     "select_target", "target_priority", "shared_xp_fraction",
     "minion_pushing_modifiers", "gold_bounty",
     "lane_minion_current_hp_bonus", "call_for_help_applies",
-    "call_for_help_trigger",
+    "call_for_help_trigger", "MinionUpgradeStats", "minion_upgrade_stats",
+    "melee_armor", "ACQUISITION_RANGE", "FIRST_ACQUISITION_RANGE",
+    "WAKE_UP_RANGE", "WINDUP_S", "MISSILE_SPEED", "ATTACK_SPEED",
+    "ATTACK_RANGE", "GAMEPLAY_RADIUS", "XP_BASE", "base_move_speed",
+    "sidelane_bonus_move_speed", "move_speed_soft_cap",
+    "MINION_SLAYER_FRACTION", "CFH_GENERIC_RADIUS", "CFH_CHAMPION_RADIUS",
 ]
 
 
@@ -58,8 +63,9 @@ class TargetPriority:
 
 
 class MinionProfile(NamedTuple):
-    # Profile stats at base/upgrades endpoints. Growth between endpoints is
-    # deliberately not synthesized until a complete current curve is sourced.
+    # U=1 snapshot (``health_base``/``attack_damage_base``/``gold_base``) and
+    # stat caps of the client upgrade formula; ``minion_upgrade_stats`` gives
+    # every other upgrade index.
     health_base: float
     health_cap: float
     attack_damage_base: float
@@ -77,20 +83,51 @@ class MinionProfile(NamedTuple):
     move_speed_base: float
 
 
-# League Wiki current pages, standard SR. These fields are useful as factual
-# profile data; callers needing time-varying stats must supply the separately
-# verified game state rather than assume a linear curve.
+# Client CharacterRecords + CLASSIC barracks config (MINIONS §1.1-1.4).
 MELEE_PROFILE = MinionProfile(465., 1550., 11., 80., 1.25, 110., 0., 20., 0.,
                               48., 35.7437, 20., 0., 62., 350.)
 CASTER_PROFILE = MinionProfile(284., 600., 21., 125., .667, 550., 0., 0., 0.,
                                48., 35.7437, 14., 0., 31., 350.)
 CANNON_PROFILE = MinionProfile(835., 5850., 37.5, 126., 1., 300., 0., 0., 0.,
                                65., 55.7437, 50., 1., 75., 350.)
-SUPER_PROFILE = MinionProfile(1600., 7500., 180., 480., .85, 170., 100., 100.,
+# Super AD at U=1 is 180 + 5 = 185 (the old 180 mixed in the U=0 value).
+SUPER_PROFILE = MinionProfile(1600., 7500., 185., 480., .85, 170., 100., 100.,
                               -30., 65., 55.5208, 50., 1., 75., 350.)
 
 WAVE_FIRST_S = 30.
-WAVE_UNIT_GAP_S = .792
+# Client ``MinionSpawnIntervalSecs`` 0.800000011920929 (MINIONS §2.4, U-13);
+# the former 0.792 had no client source.
+WAVE_UNIT_GAP_S = .8
+
+# Per-type tables, indexed by MinionType (melee, caster, siege, super).
+# Client values (MINIONS §1.1, §3.2); first-wave ranges are melee/caster only.
+ATTACK_SPEED = (1.25, .667, 1., .85)
+ATTACK_RANGE = (110., 550., 300., 170.)
+GAMEPLAY_RADIUS = (48., 48., 65., 65.)
+WINDUP_S = (.393, .47, .3, .5 / 1.44 / .85)
+MISSILE_SPEED = (0., 650., 1200., 0.)        # 0 = melee (hit at launch)
+ACQUISITION_RANGE = (750., 700., 750., 600.)
+FIRST_ACQUISITION_RANGE = (1000., 900., 750., 600.)
+WAKE_UP_RANGE = (450., 635., 750., 600.)
+XP_BASE = (62., 31., 75., 75.)
+# Minion Slayer / lane-minion bonus vs lane minions, x target current HP
+# (items 1509/1510/1508; MINIONS §4.2).
+MINION_SLAYER_FRACTION = (.02, .035, .05, 0.)
+# Call-for-Help listener radii (wiki; MINIONS §3.2/§3.3, U-9).
+CFH_GENERIC_RADIUS = 500.
+CFH_CHAMPION_RADIUS = 1000.
+
+# MinionUpgradeConfig (CLASSIC Order barracks {147211fb}; MINIONS §1.2).
+_BASE_HP = (430., 275., 750., 1500.)
+_HP_UP = (35., 9., 85., 100.)
+_HP_MAX_BONUS = (1120., 325., 5100., 6000.)
+_BASE_AD = (11., 19.5, 36., 180.)
+_AD_UP = (0., 1.5, 1.5, 5.)
+_AD_UP_LATE = (3., 2.5, 2.5, 0.)
+_AD_MAX_BONUS = (69., 105.5, 90., 300.)
+_BASE_ARMOR = (0., 0., 0., 100.)
+_BASE_MR = (0., 0., 0., -30.)
+UPGRADES_BEFORE_LATE = 5
 
 
 class SpawnEvent(NamedTuple):
@@ -146,38 +183,47 @@ def cannon_wave(wave_index: jax.Array) -> jax.Array:
 
 def wave_composition(wave_index: jax.Array, time_s: jax.Array,
                      enemy_inhibitor_down: jax.Array = False,
-                     all_enemy_inhibitors_down: jax.Array = False):
+                     all_enemy_inhibitors_down: jax.Array = False,
+                     inhibitor_respawn_at: jax.Array = jnp.inf):
     """Return per-wave counts ``(supers, melee, cannon, casters)``.
 
     ``enemy_inhibitor_down`` means the inhibitor in this lane is down.
-    ``all_enemy_inhibitors_down`` overrides it with two supers in this lane.
-    A super wave replaces the cannon; post-14:00 melee pruning only applies
-    when a cannon actually spawns. At 30:00 each wave loses one caster.
+    ``all_enemy_inhibitors_down`` overrides it with two supers in this lane
+    (``SpawnCountPerInhibitorDown [1,1,2]``). A super wave replaces the cannon.
+    Melee counts follow the client rotation independently of the cannon/super
+    (``3`` before 14:00, ``[2,3]`` by wave parity until 25:00, then ``2``;
+    MINIONS §2.3, U-12). At 30:00 each wave loses one caster. Supers stop two
+    waves before the lane inhibitor respawns (``inhibitor_respawn_at``;
+    MINIONS §2.3, INFERRED L on the comparison).
     """
     i = jnp.asarray(wave_index, jnp.int32)
     t = jnp.asarray(time_s, jnp.float32)
     supers = jnp.where(jnp.asarray(all_enemy_inhibitors_down, bool), 2,
                        jnp.where(jnp.asarray(enemy_inhibitor_down, bool), 1, 0))
+    respawn_soon = (jnp.asarray(inhibitor_respawn_at, jnp.float32) - t) < 2. * wave_interval_s(t)
+    supers = jnp.where(respawn_soon, 0, supers)
     has_cannon = cannon_wave(i) & (supers == 0)
-    melee = 3 - ((t >= 840.) & has_cannon).astype(jnp.int32)
+    melee = jnp.where(t < 840., 3, jnp.where(t < 1500., jnp.where(i % 2 == 0, 2, 3), 2))
     casters = 3 - (t >= 1800.).astype(jnp.int32)
-    return supers.astype(jnp.int32), melee, has_cannon.astype(jnp.int32), casters
+    return (supers.astype(jnp.int32), melee.astype(jnp.int32),
+            has_cannon.astype(jnp.int32), casters)
 
 
 def spawn_event(wave_index: jax.Array, unit_index: jax.Array,
                 enemy_inhibitor_down: jax.Array = False,
-                all_enemy_inhibitors_down: jax.Array = False) -> SpawnEvent:
+                all_enemy_inhibitors_down: jax.Array = False,
+                inhibitor_respawn_at: jax.Array = jnp.inf) -> SpawnEvent:
     """Unit type and event time for one unit in a wave.
 
     Unit order is supers, melee, cannon, casters; each successive unit event
-    is 0.792 seconds after the previous event. Indices beyond wave length are
+    is 0.8 seconds after the previous event. Indices beyond wave length are
     marked invalid and return ``MinionType.NONE``.
     """
     i = jnp.asarray(wave_index, jnp.int32)
     u = jnp.asarray(unit_index, jnp.int32)
     t = wave_spawn_time(i)
     ns, nm, nc, nr = wave_composition(i, t, enemy_inhibitor_down,
-                                      all_enemy_inhibitors_down)
+                                      all_enemy_inhibitors_down, inhibitor_respawn_at)
     after_super = u - ns
     after_melee = after_super - nm
     after_cannon = after_melee - nc
@@ -195,6 +241,76 @@ def upgrade_index_at(time_s: jax.Array) -> jax.Array:
     t = jnp.asarray(time_s, jnp.float32)
     return jnp.where(t < 30., 0,
                      1 + jnp.floor((t - 30.) / 90.).astype(jnp.int32))
+
+
+class MinionUpgradeStats(NamedTuple):
+    max_hp: jax.Array
+    attack_damage: jax.Array
+    armor: jax.Array
+    magic_resist: jax.Array
+    gold: jax.Array
+    xp: jax.Array
+
+
+def melee_armor(upgrade_index: jax.Array) -> jax.Array:
+    """Melee ``ArmorUpgradeGrowth 0.085`` (wiki shape, MINIONS §1.3, U-2 L).
+
+    ``0.085*(U-6)*(U-5)/2`` from U=6, capped at 20: 0 @6, 0.085 @7, 0.85 @10.
+    """
+    u = jnp.asarray(upgrade_index, jnp.float32)
+    return jnp.where(u >= 6., jnp.minimum(.085 * (u - 6.) * (u - 5.) / 2., 20.), 0.)
+
+
+def minion_upgrade_stats(minion_type: jax.Array, upgrade_index: jax.Array,
+                         team: jax.Array = 0) -> MinionUpgradeStats:
+    """Client per-upgrade stats of a lane minion latched at upgrade ``U``.
+
+    ``bonus(U) = Up*U + UpLate*max(U-5, 0)``, capped at ``Max*`` (a cap on
+    the bonus). Gold: siege/super ``min(49+U, 90)``; Chaos (team 1) supers
+    have no GoldUpgrade in the client and stay at 49 (MINIONS §1.3).
+    """
+    k = jnp.clip(jnp.asarray(minion_type, jnp.int32), 0, 3)
+    u = jnp.maximum(jnp.asarray(upgrade_index, jnp.int32), 0).astype(jnp.float32)
+    late = jnp.maximum(u - UPGRADES_BEFORE_LATE, 0.)
+    tab = lambda v: jnp.asarray(v, jnp.float32)[k]
+    hp = tab(_BASE_HP) + jnp.minimum(tab(_HP_UP) * u, tab(_HP_MAX_BONUS))
+    ad = tab(_BASE_AD) + jnp.minimum(tab(_AD_UP) * u + tab(_AD_UP_LATE) * late, tab(_AD_MAX_BONUS))
+    armor = tab(_BASE_ARMOR) + jnp.where(k == MinionType.MELEE, melee_armor(u), 0.)
+    return MinionUpgradeStats(hp, ad, armor, tab(_BASE_MR),
+                              gold_bounty(k, u.astype(jnp.int32), team), tab(XP_BASE))
+
+
+def base_move_speed(time_s: jax.Array) -> jax.Array:
+    """350 + 25 per increase at 10:30, 15:30, 20:30, 25:30 (MINIONS §2.6 A, U-3).
+
+    Global: applies to living minions immediately (default, INFERRED L).
+    """
+    t = jnp.asarray(time_s, jnp.float32)
+    steps = jnp.clip(jnp.floor((t - 630.) / 300.) + 1., 0., 4.)
+    return 350. + 25. * steps
+
+
+def sidelane_bonus_move_speed(wave_number: jax.Array, lane: jax.Array,
+                              wave_time_s: jax.Array, since_spawn_s: jax.Array) -> jax.Array:
+    """Flat side-lane bonus MS (MINIONS §2.7). ``wave_number`` is 1-based.
+
+    Lanes 0 (bot) and 2 (top) only, waves 2+ spawning before 14:00:
+    ``B = max(0, 120 - 4.5 n)`` stepping down by 15 every 7 s, removed at 25 s.
+    """
+    n = jnp.asarray(wave_number, jnp.float32)
+    tau = jnp.asarray(since_spawn_s, jnp.float32)
+    b = jnp.maximum(0., 120. - 4.5 * n)
+    step = jnp.floor(jnp.maximum(tau, 0.) / 7.)
+    bonus = jnp.maximum(0., b - 15. * step)
+    ok = ((jnp.asarray(lane) != 1) & (n >= 2.) & (jnp.asarray(wave_time_s) < 840.)
+          & (tau >= 0.) & (tau < 25.))
+    return jnp.where(ok, bonus, 0.)
+
+
+def move_speed_soft_cap(raw: jax.Array) -> jax.Array:
+    """Movement-speed soft caps (DAMAGE_AND_STATS §9.2; MINIONS §2.7, U-11)."""
+    raw = jnp.asarray(raw, jnp.float32)
+    return jnp.where(raw > 490., .5 * raw + 230., jnp.where(raw > 415., .8 * raw + 83., raw))
 
 
 def target_priority(candidate_kind: jax.Array, attacking_victim_kind: jax.Array) -> jax.Array:
@@ -225,30 +341,40 @@ def target_priority(candidate_kind: jax.Array, attacking_victim_kind: jax.Array)
 
 
 def shared_xp_fraction(nearby_enemy_champions: jax.Array) -> jax.Array:
-    """26.1 SR XP share per champion (1..6); zero if none are nearby."""
+    """SR XP share per champion (1..6); zero if none are nearby.
+
+    Client ``ExperienceModData.mPlayerMinionSplitXp`` floats (MINIONS §5.2).
+    """
     n = jnp.asarray(nearby_enemy_champions, jnp.int32)
-    fractions = jnp.asarray([0., 1., .65, 13. / 30., .325, .26, 13. / 60.], jnp.float32)
+    fractions = jnp.asarray([0., 1., .65, .433, .325, .26, .217], jnp.float32)
     return fractions[jnp.clip(n, 0, 6)]
 
 
-def gold_bounty(minion_type: jax.Array, upgrade_index: jax.Array) -> jax.Array:
-    """Current Summoner's Rift minion kill-gold bounty at an upgrade count."""
+def gold_bounty(minion_type: jax.Array, upgrade_index: jax.Array,
+                team: jax.Array = 0) -> jax.Array:
+    """Minion kill-gold bounty at a (spawn-latched) upgrade count.
+
+    Melee 20, caster 14, siege ``min(49 + U, 90)`` (client goldGivenOnDeath
+    49 + GoldUpgrade 1, GoldMax 90 as a total cap). Supers: Order the same,
+    Chaos (team 1) a flat 49 because its barracks lacks GoldUpgrade
+    (MINIONS §1.3, client data, probably a Riot data bug).
+    """
     kind = jnp.asarray(minion_type, jnp.int32)
     upgrades = jnp.maximum(jnp.asarray(upgrade_index, jnp.int32), 0)
+    scaled = jnp.minimum(49. + upgrades.astype(jnp.float32), 90.)
+    chaos_super = (kind == MinionType.SUPER) & (jnp.asarray(team) == 1)
     return jnp.select(
-        [kind == MinionType.MELEE, kind == MinionType.CASTER,
+        [kind == MinionType.MELEE, kind == MinionType.CASTER, chaos_super,
          (kind == MinionType.CANNON) | (kind == MinionType.SUPER)],
-        [20., 14., 50. + upgrades.astype(jnp.float32)], default=0.)
+        [20., 14., 49., scaled], default=0.)
 
 
 def lane_minion_current_hp_bonus(attacker_minion_type: jax.Array,
                                  target_current_hp: jax.Array) -> jax.Array:
     """26.09+ extra on-hit physical damage to lane minions by current HP."""
     kind = jnp.asarray(attacker_minion_type, jnp.int32)
-    fraction = jnp.select(
-        [kind == MinionType.MELEE, kind == MinionType.CASTER,
-         kind == MinionType.CANNON],
-        [.02, .035, .05], default=0.)
+    fraction = jnp.where((kind >= 0) & (kind <= 3),
+                         jnp.asarray(MINION_SLAYER_FRACTION, jnp.float32)[jnp.clip(kind, 0, 3)], 0.)
     return jnp.asarray(target_current_hp, jnp.float32) * fraction
 
 
@@ -262,7 +388,9 @@ def minion_pushing_modifiers(*, team_level_advantage: jax.Array,
     each floored at zero). Level advantage caps at 3. The buff starts at
     03:30, applies to existing minions, and modifiers update with advantages.
     Returns ``(bonus_damage_fraction, damage_divisor)``; divide minion-on-
-    minion incoming damage by the latter.
+    minion incoming damage by the latter. The client refreshes it every 1.0 s
+    (``mvm_UpdateInterval``): callers evaluate it on 1-s boundaries and hold
+    the result; a one-champion team's average level is that champion's level.
     """
     level = jnp.minimum(jnp.maximum(jnp.asarray(team_level_advantage, jnp.float32), 0.), 3.)
     towers = jnp.maximum(jnp.asarray(lane_turret_advantage, jnp.float32), 0.)
@@ -300,14 +428,15 @@ def select_target(candidate_priority: jax.Array, distance_sq: jax.Array,
 
 
 def call_for_help_applies(distance: jax.Array, victim_is_allied_champion_under_attack: jax.Array,
-                          acquisition_range: jax.Array) -> jax.Array:
-    """Distance gate for an eligible attacker/victim Call-for-Help pair.
+                          generic_radius: jax.Array = CFH_GENERIC_RADIUS) -> jax.Array:
+    """Listener-to-victim distance gate for a Call-for-Help pair.
 
-    Normally 500 units; the allied champion being attacked by an enemy
-    champion may be up to 1000 units away. ``acquisition_range`` is explicit
-    because minion attack range is minion-specific in the current Wiki.
+    500 units generally; an allied champion attacked by an enemy champion may
+    be up to 1000 units away (wiki, MINIONS §3.3, U-9). The generic radius is
+    no longer the listener's acquisition range (MINIONS §9 diff); the
+    attacker must separately be inside the listener's scan range.
     """
-    r = jnp.where(victim_is_allied_champion_under_attack, 1000., acquisition_range)
+    r = jnp.where(victim_is_allied_champion_under_attack, CFH_CHAMPION_RADIUS, generic_radius)
     return jnp.asarray(distance, jnp.float32) <= r
 
 

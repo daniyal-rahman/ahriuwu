@@ -1,0 +1,5394 @@
+{
+"source_champions": "https://raw.communitydragon.org/16.9/game/data/characters/<name>/<name>.bin.json",
+"source_items": "https://raw.communitydragon.org/16.9/game/items.cdtb.bin.json",
+"items_sha256": "b1f37bb18911c2158d063b6300d7cbae6c82b21e2d109a1d058a073a902984a3",
+"patch": "16.9",
+"retrieved": "2026-10-01",
+"champions": {
+"aatrox": {
+"base_hp": 650.0,
+"hp_per_level": 114.0,
+"base_ad": 60.0,
+"ad_per_level": 5.0,
+"base_armor": 38.0,
+"armor_per_level": 4.800000190734863,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6510000228881836,
+"attack_speed_ratio": 0.6510000228881836,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "bc34b23513cbad2978a26429bb40104438b1d037384a62d8be66a5ce53faf3e8",
+"mr_per_level": 2.049999952316284
+},
+"ahri": {
+"base_hp": 590.0,
+"hp_per_level": 104.0,
+"base_ad": 53.0,
+"ad_per_level": 3.0,
+"base_armor": 21.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6679999828338623,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.200000047683716,
+"bin_sha256": "e7a828573fcd8c0ca24bf4baf65bfaeb3e43b5b948d5082bda5006f9b8b35dcc",
+"mr_per_level": 1.2999999523162842
+},
+"akali": {
+"base_hp": 600.0,
+"hp_per_level": 119.0,
+"base_ad": 62.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 23.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 37.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.200000047683716,
+"bin_sha256": "f66b4d8484099769b46bed2f4ed51c8253e8982d905b2ccb01cca8766bb5e4d1",
+"mr_per_level": 2.049999952316284
+},
+"akshan": {
+"base_hp": 610.0,
+"hp_per_level": 107.0,
+"base_ad": 52.0,
+"ad_per_level": 3.0,
+"base_armor": 26.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 500.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.4000000059604645,
+"attack_speed_per_level": 4.0,
+"bin_sha256": "a85dfa0e56a720af95b7cf0efef33512027e3f90a426cead5fe808759fdba465",
+"mr_per_level": 1.2999999523162842
+},
+"alistar": {
+"base_hp": 685.0,
+"hp_per_level": 120.0,
+"base_ad": 62.0,
+"ad_per_level": 3.75,
+"base_armor": 40.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 330.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.125,
+"bin_sha256": "27cbc357e3441da2bbc2864484fb78efbd837ca662cb18e0555056034f23863b",
+"mr_per_level": 2.049999952316284
+},
+"ambessa": {
+"base_hp": 630.0,
+"hp_per_level": 110.0,
+"base_ad": 63.0,
+"ad_per_level": 3.0,
+"base_armor": 35.0,
+"armor_per_level": 4.900000095367432,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "9210066fbc830388e6d54c05f3742d35d32600f275525dd5badb2ff4a2f7e477",
+"mr_per_level": 2.049999952316284
+},
+"amumu": {
+"base_hp": 685.0,
+"hp_per_level": 94.0,
+"base_ad": 57.0,
+"ad_per_level": 3.799999952316284,
+"base_armor": 33.0,
+"armor_per_level": 4.0,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.7360000014305115,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 2.180000066757202,
+"bin_sha256": "d17d01c5b7c06cb55f3a883cc26aa710242dfd339ae6a664e3d30b2840d0fb66",
+"mr_per_level": 2.049999952316284
+},
+"anivia": {
+"base_hp": 550.0,
+"hp_per_level": 92.0,
+"base_ad": 51.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 21.0,
+"armor_per_level": 4.5,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 600.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.6799999475479126,
+"bin_sha256": "885b5f0ca8aa476a792ea469bfe08414ba3ba32589eb802d1798545f2453b853",
+"mr_per_level": 1.2999999523162842
+},
+"annie": {
+"base_hp": 560.0,
+"hp_per_level": 96.0,
+"base_ad": 50.0,
+"ad_per_level": 2.6500000953674316,
+"base_armor": 23.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 625.0,
+"attack_speed": 0.6100000143051147,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.3600000143051147,
+"bin_sha256": "add99fbe68eb8da73c5a4ffd15edcd5634a5e86174bb3ebdde9b942eb5fe21b7",
+"mr_per_level": 1.2999999523162842
+},
+"aphelios": {
+"base_hp": 600.0,
+"hp_per_level": 102.0,
+"base_ad": 55.0,
+"ad_per_level": 2.299999952316284,
+"base_armor": 26.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.6650000214576721,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.0999999046325684,
+"bin_sha256": "b1370cd9ab3b3f9fc07d532ac8afc18b27f18623048a520bdadf31da63620f70",
+"mr_per_level": 1.2999999523162842
+},
+"ashe": {
+"base_hp": 610.0,
+"hp_per_level": 101.0,
+"base_ad": 59.0,
+"ad_per_level": 3.5,
+"base_armor": 26.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 600.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "d5074498616ef6561f5801da6c10c497438b4b4f06be3a78fee7dcb43317179c",
+"mr_per_level": 1.2999999523162842
+},
+"aurelionsol": {
+"base_hp": 600.0,
+"hp_per_level": 90.0,
+"base_ad": 58.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 22.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "2344f124c17a0cb9b8b8fae1bfe5f5b8626e79d837b2e11ffc1e7ed4ef2a4aa8",
+"mr_per_level": 1.2999999523162842
+},
+"aurora": {
+"base_hp": 607.0,
+"hp_per_level": 110.0,
+"base_ad": 53.0,
+"ad_per_level": 3.0,
+"base_armor": 23.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 550.0,
+"attack_speed": 0.6679999828338623,
+"attack_speed_ratio": 0.6679999828338623,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "d60411838a10f0c63088e211bd49c061beb14b9d9690458d85a1f2b8e7b1247d",
+"mr_per_level": 1.2999999523162842
+},
+"azir": {
+"base_hp": 575.0,
+"hp_per_level": 108.0,
+"base_ad": 56.0,
+"ad_per_level": 3.5,
+"base_armor": 25.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.6940000057220459,
+"attack_speed_per_level": 5.0,
+"bin_sha256": "7c3ef322465dd388346ae10fe39d018818eb6d5a6cc41bf7c46ff06b2447df23",
+"mr_per_level": 1.2999999523162842
+},
+"bard": {
+"base_hp": 630.0,
+"hp_per_level": 103.0,
+"base_ad": 52.0,
+"ad_per_level": 3.0,
+"base_armor": 34.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 500.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "e5442aaee5bac533a75cbb668cdaf8f2143c0750fcb31186244301c9c33b57ca",
+"mr_per_level": 1.2999999523162842
+},
+"belveth": {
+"base_hp": 610.0,
+"hp_per_level": 105.0,
+"base_ad": 60.0,
+"ad_per_level": 1.5,
+"base_armor": 32.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 150.0,
+"attack_speed": 0.8500000238418579,
+"attack_speed_ratio": 0.8500000238418579,
+"bin_sha256": "987261360ef10aa5c3fbce5fe1ca636940b49b2855a32f3317ac5d27d974f5de",
+"mr_per_level": 2.049999952316284,
+"attack_speed_per_level": 0.0
+},
+"blitzcrank": {
+"base_hp": 600.0,
+"hp_per_level": 109.0,
+"base_ad": 62.0,
+"ad_per_level": 3.5,
+"base_armor": 37.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 325.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.1299999952316284,
+"bin_sha256": "43f3e35ff5bb314da84528074005fd9b5d4d42b183212ef9764cf1ca3ede76b8",
+"mr_per_level": 2.049999952316284
+},
+"brand": {
+"base_hp": 570.0,
+"hp_per_level": 105.0,
+"base_ad": 57.0,
+"ad_per_level": 3.0,
+"base_armor": 27.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 550.0,
+"attack_speed": 0.6809999942779541,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "60191ac483197cf53ca336321be297d5a270ad5b80a04ad1ce29a8ec37ebd3f9",
+"mr_per_level": 1.2999999523162842
+},
+"braum": {
+"base_hp": 610.0,
+"hp_per_level": 112.0,
+"base_ad": 55.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 35.0,
+"armor_per_level": 5.0,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "0eebea1142dc6a144c913f43d5d533ee656d82ec9f07566c09df1435a6feb7f4",
+"mr_per_level": 2.049999952316284
+},
+"briar": {
+"base_hp": 625.0,
+"hp_per_level": 95.0,
+"base_ad": 60.0,
+"ad_per_level": 2.5,
+"base_armor": 30.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6690000295639038,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "89cf8fc4df66d7bc44b11acebe55815dc0aad41c35f82a9f1f7bfa5291079573",
+"mr_per_level": 2.049999952316284
+},
+"caitlyn": {
+"base_hp": 580.0,
+"hp_per_level": 107.0,
+"base_ad": 62.0,
+"ad_per_level": 3.799999952316284,
+"base_armor": 27.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 650.0,
+"attack_speed": 0.6809999942779541,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 4.0,
+"bin_sha256": "58e994f5d75572a9ed9d893fd9c81f4df6eb84f77ff445c2dd51a1ed9b7c66f4",
+"mr_per_level": 1.2999999523162842
+},
+"camille": {
+"base_hp": 650.0,
+"hp_per_level": 99.0,
+"base_ad": 68.0,
+"ad_per_level": 3.799999952316284,
+"base_armor": 35.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "5701dc67304083d1d780838dcff6ff9e1d18c23a6b0fe3a7bc6e5da45dbbfe4d",
+"mr_per_level": 2.049999952316284
+},
+"cassiopeia": {
+"base_hp": 630.0,
+"hp_per_level": 104.0,
+"base_ad": 53.0,
+"ad_per_level": 3.0,
+"base_armor": 18.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 550.0,
+"attack_speed": 0.6470000147819519,
+"attack_speed_ratio": 0.6470000147819519,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "00aa5b27f42f724f45e1efb6d51d43739a001763a5e5eca35fe81b8cfae47aba",
+"mr_per_level": 1.2999999523162842
+},
+"chogath": {
+"base_hp": 644.0,
+"hp_per_level": 94.0,
+"base_ad": 69.0,
+"ad_per_level": 4.199999809265137,
+"base_armor": 38.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.440000057220459,
+"bin_sha256": "5881839ce7027b0b0dd5408ce9dd651760f4428941931a83d7c7273fd27562ca",
+"mr_per_level": 2.049999952316284
+},
+"corki": {
+"base_hp": 610.0,
+"hp_per_level": 100.0,
+"base_ad": 52.0,
+"ad_per_level": 2.0,
+"base_armor": 27.0,
+"armor_per_level": 4.5,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 2.799999952316284,
+"bin_sha256": "83e85164f10dd6e2b3105b046feffc5932f84e1b02ba0767086a91279c2cd1f0",
+"mr_per_level": 1.2999999523162842
+},
+"darius": {
+"base_hp": 652.0,
+"hp_per_level": 114.0,
+"base_ad": 64.0,
+"ad_per_level": 5.0,
+"base_armor": 37.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.0,
+"bin_sha256": "dbf0680139ff7ee7a184c2c8036d5b8d6cfb41375dc09bdb6cb103b57e412c2a",
+"mr_per_level": 2.049999952316284
+},
+"diana": {
+"base_hp": 640.0,
+"hp_per_level": 109.0,
+"base_ad": 57.0,
+"ad_per_level": 3.0,
+"base_armor": 31.0,
+"armor_per_level": 4.299999713897705,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 150.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.6940000057220459,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "7bcd87925820a498d63c65e731a0db3cd4ecc133661562efb5e340f36c8f1ac5",
+"mr_per_level": 2.049999952316284
+},
+"draven": {
+"base_hp": 675.0,
+"hp_per_level": 104.0,
+"base_ad": 62.0,
+"ad_per_level": 3.4000000953674316,
+"base_armor": 29.0,
+"armor_per_level": 4.5,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6790000200271606,
+"attack_speed_ratio": 0.6790000200271606,
+"attack_speed_per_level": 2.700000047683716,
+"bin_sha256": "697c61a90aa43e846f5852a28d6ec0d8ebfcebcb60b14ffeb0cfe9f992219042",
+"mr_per_level": 1.2999999523162842
+},
+"drmundo": {
+"base_hp": 640.0,
+"hp_per_level": 103.0,
+"base_ad": 61.0,
+"ad_per_level": 2.5,
+"base_armor": 32.0,
+"armor_per_level": 4.5,
+"base_mr": 29.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6700000166893005,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.299999952316284,
+"bin_sha256": "c32ff8da91f72f731bc450dd7e920a01d089172ca940e4a6c6e21120dbdbcdf2",
+"mr_per_level": 2.299999952316284
+},
+"ekko": {
+"base_hp": 655.0,
+"hp_per_level": 99.0,
+"base_ad": 58.0,
+"ad_per_level": 3.0,
+"base_armor": 32.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.6880000233650208,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.299999952316284,
+"bin_sha256": "f3e558f5decd94291cd55e1b07a3de4e20f0cd0a0a33b67910e77dc5b1c5c07c",
+"mr_per_level": 2.049999952316284
+},
+"elise": {
+"base_hp": 620.0,
+"hp_per_level": 109.0,
+"base_ad": 55.0,
+"ad_per_level": 3.0,
+"base_armor": 30.0,
+"armor_per_level": 4.5,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.75,
+"bin_sha256": "6e3c40c65845bbbca9d11e6143506631e45ca4f2ae7c9fa510aa8adbfef76ccb",
+"mr_per_level": 1.2999999523162842
+},
+"ezreal": {
+"base_hp": 600.0,
+"hp_per_level": 102.0,
+"base_ad": 60.0,
+"ad_per_level": 3.75,
+"base_armor": 24.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "179eb63f411e7b10e467e99ae91533670b4507febc251603afd4943c3541dd07",
+"mr_per_level": 1.2999999523162842
+},
+"fiddlesticks": {
+"base_hp": 650.0,
+"hp_per_level": 106.0,
+"base_ad": 55.0,
+"ad_per_level": 2.6500000953674316,
+"base_armor": 34.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 480.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "caa1d7cee06682d5accac8b9df43b01801d3a0ec1b2d5454883307aff601a8a1",
+"mr_per_level": 1.2999999523162842
+},
+"fiora": {
+"base_hp": 620.0,
+"hp_per_level": 99.0,
+"base_ad": 66.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 33.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 150.0,
+"attack_speed": 0.6899999976158142,
+"attack_speed_ratio": 0.6899999976158142,
+"attack_speed_per_level": 3.200000047683716,
+"bin_sha256": "bd65cf17082059057b0612039fbe4483d2cb4a7d64f156146e5274c0726faca0",
+"mr_per_level": 2.049999952316284
+},
+"fizz": {
+"base_hp": 640.0,
+"hp_per_level": 106.0,
+"base_ad": 58.0,
+"ad_per_level": 3.0,
+"base_armor": 26.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 175.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.0999999046325684,
+"bin_sha256": "a9a1312cfbf633aa268d00e9beff3d2702ad293e0e61cc57da8c7296bc2ab77a",
+"mr_per_level": 2.049999952316284
+},
+"galio": {
+"base_hp": 600.0,
+"hp_per_level": 126.0,
+"base_ad": 59.0,
+"ad_per_level": 3.5,
+"base_armor": 24.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 150.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "7c915b7712c079c4cce17f2794b1c070ca517c26cf4e34e7d6a49b22b594a187",
+"mr_per_level": 2.049999952316284
+},
+"gangplank": {
+"base_hp": 630.0,
+"hp_per_level": 114.0,
+"base_ad": 64.0,
+"ad_per_level": 4.199999809265137,
+"base_armor": 31.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6899999976158142,
+"attack_speed_per_level": 3.200000047683716,
+"bin_sha256": "f5c985b8a03670863bebd983712b9f71dcea050ad1bb324ff8cfece1a4e13af8",
+"mr_per_level": 2.049999952316284
+},
+"garen": {
+"base_hp": 690.0,
+"hp_per_level": 98.0,
+"base_ad": 69.0,
+"ad_per_level": 4.5,
+"base_armor": 38.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.6500000953674316,
+"bin_sha256": "4693a7341bfa2b5bc3ca073e561dba4dc4e63cfdbfeeda88b041065e68014183",
+"mr_per_level": 1.5499999523162842
+},
+"gnar": {
+"base_hp": 540.0,
+"hp_per_level": 79.0,
+"base_ad": 60.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 32.0,
+"armor_per_level": 3.700000047683716,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 6.0,
+"bin_sha256": "2ceb8592368aa359b64f2a265f7676f4f7199ccf8740ddb0ec053a7a77d5a9c9",
+"mr_per_level": 1.2999999523162842
+},
+"gragas": {
+"base_hp": 640.0,
+"hp_per_level": 115.0,
+"base_ad": 64.0,
+"ad_per_level": 3.5,
+"base_armor": 38.0,
+"armor_per_level": 5.0,
+"base_mr": 32.0,
+"base_ms": 330.0,
+"attack_range": 125.0,
+"attack_speed": 0.675000011920929,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.049999952316284,
+"bin_sha256": "869d609c51b8ca0f117377b76949e56d7b61f1dbd6452f8f143e7ca3390c5227",
+"mr_per_level": 2.049999952316284
+},
+"graves": {
+"base_hp": 625.0,
+"hp_per_level": 106.0,
+"base_ad": 66.0,
+"ad_per_level": 4.0,
+"base_armor": 33.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 425.0,
+"attack_speed": 0.4749999940395355,
+"attack_speed_ratio": 0.49000000953674316,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "e407ff1204dfb2c1553727a0e3ce04be152672f91704fb22345a7bf76224fdd1",
+"mr_per_level": 1.2999999523162842
+},
+"gwen": {
+"base_hp": 620.0,
+"hp_per_level": 115.0,
+"base_ad": 63.0,
+"ad_per_level": 3.0,
+"base_armor": 39.0,
+"armor_per_level": 4.900000095367432,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 150.0,
+"attack_speed": 0.6899999976158142,
+"attack_speed_ratio": 0.6899999976158142,
+"attack_speed_per_level": 2.25,
+"bin_sha256": "2aa97252a1d75ec0e4391739d9cb784d22b49078d4ea6fbed7bd91ca741c815c",
+"mr_per_level": 2.049999952316284
+},
+"hecarim": {
+"base_hp": 625.0,
+"hp_per_level": 106.0,
+"base_ad": 66.0,
+"ad_per_level": 3.700000047683716,
+"base_armor": 32.0,
+"armor_per_level": 5.449999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6700000166893005,
+"attack_speed_ratio": 0.6700000166893005,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "fe731934a189db5d360c264f8b40b94271821450821e73f479002574b6e3edc2",
+"mr_per_level": 2.049999952316284
+},
+"hwei": {
+"base_hp": 580.0,
+"hp_per_level": 109.0,
+"base_ad": 54.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 21.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6899999976158142,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "5c2317f6b6e821c1ed2f6def0fe40be0c88c6192b0e6cb5bf31697529c8947a5",
+"mr_per_level": 1.2999999523162842
+},
+"illaoi": {
+"base_hp": 656.0,
+"hp_per_level": 115.0,
+"base_ad": 65.0,
+"ad_per_level": 5.0,
+"base_armor": 35.0,
+"armor_per_level": 5.0,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "cf949d2bcb8f63966c7f6e12a5b34e5ae2322f489c2b448603b10f3fc756f09f",
+"mr_per_level": 2.049999952316284
+},
+"irelia": {
+"base_hp": 630.0,
+"hp_per_level": 115.0,
+"base_ad": 65.0,
+"ad_per_level": 3.5,
+"base_armor": 36.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 200.0,
+"attack_speed": 0.656000018119812,
+"attack_speed_ratio": 0.656000018119812,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "521b4da4e18fdbfd779b44684f37b1d33c92d7d9d4f9108a4971210c17cfffb0",
+"mr_per_level": 2.049999952316284
+},
+"ivern": {
+"base_hp": 630.0,
+"hp_per_level": 99.0,
+"base_ad": 50.0,
+"ad_per_level": 3.0,
+"base_armor": 27.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 475.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 3.4000000953674316,
+"bin_sha256": "1228c36790e4824baa95b9f74e53da8344f78b6a0edc0e47879c96c89faeef48",
+"mr_per_level": 1.2999999523162842
+},
+"janna": {
+"base_hp": 570.0,
+"hp_per_level": 90.0,
+"base_ad": 47.0,
+"ad_per_level": 2.5,
+"base_armor": 28.0,
+"armor_per_level": 4.5,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "3e85174aa2c20dec49f79b880ff6903d725e935d4cbe5dced34fa63f4598b1d8",
+"mr_per_level": 1.2999999523162842
+},
+"jarvaniv": {
+"base_hp": 640.0,
+"hp_per_level": 104.0,
+"base_ad": 64.0,
+"ad_per_level": 3.0,
+"base_armor": 36.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "d986274fef0f0be05c2c346ed37aa86df50eb5567e826fe9272013466c0ddd19",
+"mr_per_level": 2.049999952316284
+},
+"jax": {
+"base_hp": 650.0,
+"hp_per_level": 103.0,
+"base_ad": 68.0,
+"ad_per_level": 4.25,
+"base_armor": 36.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 125.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 3.4000000953674316,
+"bin_sha256": "5ff804b7a75cfa5964c4bc94e4d360d260e6747624601347c72d07995a6a1479",
+"mr_per_level": 2.049999952316284
+},
+"jayce": {
+"base_hp": 590.0,
+"hp_per_level": 109.0,
+"base_ad": 59.0,
+"ad_per_level": 4.25,
+"base_armor": 22.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "9c4eead11bc594acce2ece57afe6e29d578e638a6b02158620f69ec2a0c9bb97",
+"mr_per_level": 1.2999999523162842
+},
+"jhin": {
+"base_hp": 655.0,
+"hp_per_level": 107.0,
+"base_ad": 61.0,
+"ad_per_level": 4.400000095367432,
+"base_armor": 24.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.0,
+"bin_sha256": "86cdd1f72b24da2925ed05eed5890be8942e653d3af2969a9e26934848cf0df9",
+"mr_per_level": 1.2999999523162842,
+"attack_speed_per_level": 0.0
+},
+"jinx": {
+"base_hp": 630.0,
+"hp_per_level": 105.0,
+"base_ad": 59.0,
+"ad_per_level": 3.25,
+"base_armor": 26.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 525.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.0,
+"bin_sha256": "f7fb0bed85c475503cdebbae82ecab52f7fe7ecf9bf92d10f185df97922e00dd",
+"mr_per_level": 1.2999999523162842
+},
+"kaisa": {
+"base_hp": 640.0,
+"hp_per_level": 102.0,
+"base_ad": 59.0,
+"ad_per_level": 2.5999999046325684,
+"base_armor": 25.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 525.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 1.7999999523162842,
+"bin_sha256": "b3c1cf37a6c40709dab1aa766ea2a0b0eb35724d6f907819ce77ffd464cff16a",
+"mr_per_level": 1.2999999523162842
+},
+"kalista": {
+"base_hp": 560.0,
+"hp_per_level": 114.0,
+"base_ad": 57.0,
+"ad_per_level": 4.75,
+"base_armor": 24.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.6940000057220459,
+"attack_speed_ratio": 0.6940000057220459,
+"attack_speed_per_level": 4.5,
+"bin_sha256": "e64eedb9760c65b57b0b1eaa9f66e2f31a2e440a6c21e9f3d62ad22ca1bbfc6e",
+"mr_per_level": 1.2999999523162842
+},
+"karma": {
+"base_hp": 630.0,
+"hp_per_level": 109.0,
+"base_ad": 49.0,
+"ad_per_level": 3.0,
+"base_armor": 28.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 525.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.299999952316284,
+"bin_sha256": "03e5fa24d336fe1093e7314c41105f71f5d761e231aae7262ee6937b9d36288f",
+"mr_per_level": 1.2999999523162842
+},
+"karthus": {
+"base_hp": 620.0,
+"hp_per_level": 110.0,
+"base_ad": 46.0,
+"ad_per_level": 3.25,
+"base_armor": 21.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 450.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "66ed91dd3b1c9fdd2ac50cdc220f8174ffdc75700aced5eac99175761afb66e8",
+"mr_per_level": 1.2999999523162842
+},
+"kassadin": {
+"base_hp": 646.0,
+"hp_per_level": 113.0,
+"base_ad": 59.0,
+"ad_per_level": 3.9000000953674316,
+"base_armor": 21.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 150.0,
+"attack_speed": 0.6399999856948853,
+"attack_speed_ratio": 0.6399999856948853,
+"attack_speed_per_level": 3.700000047683716,
+"bin_sha256": "43c89d5afcbf4ad2c7b8223cd1616055e59edc7074f462af2b6b3c7592cdb326",
+"mr_per_level": 1.2999999523162842
+},
+"katarina": {
+"base_hp": 672.0,
+"hp_per_level": 108.0,
+"base_ad": 58.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 32.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.740000009536743,
+"bin_sha256": "4c924b4fd07d489995f32600cbbeb4f2d4d9375ffe3ac44a0c644c08b25ea7b0",
+"mr_per_level": 2.049999952316284
+},
+"kayle": {
+"base_hp": 670.0,
+"hp_per_level": 92.0,
+"base_ad": 50.0,
+"ad_per_level": 2.5,
+"base_armor": 26.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 22.0,
+"base_ms": 335.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.6669999957084656,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "62c2917d738fed12af9a32325d0bb30ef145b6f1df3dc3d6aacc18ffad041c3f",
+"mr_per_level": 1.2999999523162842
+},
+"kayn": {
+"base_hp": 655.0,
+"hp_per_level": 103.0,
+"base_ad": 68.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 38.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.6690000295639038,
+"attack_speed_ratio": 0.6690000295639038,
+"attack_speed_per_level": 2.700000047683716,
+"bin_sha256": "306982665688c47b79c6cc8d5553854701332ce202b826108f6d1c56318c7afd",
+"mr_per_level": 2.049999952316284
+},
+"kennen": {
+"base_hp": 580.0,
+"hp_per_level": 98.0,
+"base_ad": 48.0,
+"ad_per_level": 3.75,
+"base_armor": 29.0,
+"armor_per_level": 4.949999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.6899999976158142,
+"attack_speed_per_level": 3.4000000953674316,
+"bin_sha256": "51881bac792d8cbbe92ca88233ef965c10fa0fa9894fe6f89831edea97da4933",
+"mr_per_level": 1.2999999523162842
+},
+"khazix": {
+"base_hp": 643.0,
+"hp_per_level": 99.0,
+"base_ad": 60.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 32.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6679999828338623,
+"attack_speed_ratio": 0.6679999828338623,
+"attack_speed_per_level": 2.700000047683716,
+"bin_sha256": "6cd72d14f6f554982df0bba1d51c4a70da471bf1da5174f3e622771080f3336c",
+"mr_per_level": 2.049999952316284
+},
+"kindred": {
+"base_hp": 595.0,
+"hp_per_level": 104.0,
+"base_ad": 65.0,
+"ad_per_level": 3.25,
+"base_armor": 29.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 500.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "2951b93cd95c9a576ede6c5ab25a9535daaa4bf63d1038e8b1b0698cb56939da",
+"mr_per_level": 1.2999999523162842
+},
+"kled": {
+"base_hp": 410.0,
+"hp_per_level": 84.0,
+"base_ad": 65.0,
+"ad_per_level": 3.5,
+"base_armor": 35.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 28.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "c8403fa616dd1ca1558034830aeb90bdaf73e4d63cc6f597206a247941f3b132",
+"mr_per_level": 2.049999952316284
+},
+"kogmaw": {
+"base_hp": 635.0,
+"hp_per_level": 99.0,
+"base_ad": 61.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 24.0,
+"armor_per_level": 4.449999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 500.0,
+"attack_speed": 0.6650000214576721,
+"attack_speed_ratio": 0.6650000214576721,
+"attack_speed_per_level": 2.6500000953674316,
+"bin_sha256": "c880cab63b6385e4d88c403b51ea9ecf059f7f4d5689db158f3b539cc2d82ccb",
+"mr_per_level": 1.2999999523162842
+},
+"ksante": {
+"base_hp": 625.0,
+"hp_per_level": 120.0,
+"base_ad": 64.0,
+"ad_per_level": 3.5,
+"base_armor": 36.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 150.0,
+"attack_speed": 0.6880000233650208,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "d579e6f470ea3c940f064626eb2db379fd92f47d2eb98b13e42c709a3bc38dde",
+"mr_per_level": 2.0999999046325684
+},
+"leblanc": {
+"base_hp": 598.0,
+"hp_per_level": 108.0,
+"base_ad": 55.0,
+"ad_per_level": 2.200000047683716,
+"base_armor": 22.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 525.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.4000000059604645,
+"attack_speed_per_level": 2.3499999046325684,
+"bin_sha256": "11d3fdbb42089fc362ca4d04da97e18719d9b7217bce3b98d1f4075f916d5cc9",
+"mr_per_level": 1.2999999523162842
+},
+"leesin": {
+"base_hp": 645.0,
+"hp_per_level": 108.0,
+"base_ad": 66.0,
+"ad_per_level": 3.700000047683716,
+"base_armor": 36.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6510000228881836,
+"attack_speed_ratio": 0.6510000228881836,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "b59561aec0a738e96cb335e1630979f859c45ad27b0197f49e38c60d9a83fdf3",
+"mr_per_level": 2.049999952316284
+},
+"leona": {
+"base_hp": 646.0,
+"hp_per_level": 101.0,
+"base_ad": 60.0,
+"ad_per_level": 3.0,
+"base_armor": 43.0,
+"armor_per_level": 4.799999713897705,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.9000000953674316,
+"bin_sha256": "12dbbfb4dda6aec955b3c88cd66954812c2976dd720b2b665b2d72b59096838b",
+"mr_per_level": 2.049999952316284
+},
+"lillia": {
+"base_hp": 605.0,
+"hp_per_level": 105.0,
+"base_ad": 61.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 22.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 330.0,
+"attack_range": 325.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.700000047683716,
+"bin_sha256": "64d38b75c7fc85216d2eca37114de6be1ca10337e2637f9dd8d087b92195108a",
+"mr_per_level": 1.5499999523162842
+},
+"lissandra": {
+"base_hp": 620.0,
+"hp_per_level": 110.0,
+"base_ad": 55.0,
+"ad_per_level": 2.700000047683716,
+"base_armor": 22.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.656000018119812,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "3d8923ecd1fe4c1099976278daf19e4e47b747e7d03d2aaaf13eae79b30f0e31",
+"mr_per_level": 1.2999999523162842
+},
+"lucian": {
+"base_hp": 641.0,
+"hp_per_level": 100.0,
+"base_ad": 60.0,
+"ad_per_level": 2.5,
+"base_armor": 28.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 500.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "cfdbf97a0f919e9a23df5d2112901a17af81e51fde107615244c18fe788d0a4b",
+"mr_per_level": 1.2999999523162842
+},
+"lulu": {
+"base_hp": 565.0,
+"hp_per_level": 92.0,
+"base_ad": 47.0,
+"ad_per_level": 2.5999999046325684,
+"base_armor": 26.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.25,
+"bin_sha256": "06f45fad67d29059aadb62a7fe91c8743f3579c74011f30aaebdd69dfddc6381",
+"mr_per_level": 1.2999999523162842
+},
+"lux": {
+"base_hp": 580.0,
+"hp_per_level": 99.0,
+"base_ad": 54.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 21.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6690000295639038,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "b4cdab45079eb8ee951e61eebfca05f4d27026f2e1702b1dddf0b74654f5e4fb",
+"mr_per_level": 1.2999999523162842
+},
+"malphite": {
+"base_hp": 665.0,
+"hp_per_level": 104.0,
+"base_ad": 62.0,
+"ad_per_level": 4.0,
+"base_armor": 40.0,
+"armor_per_level": 4.949999809265137,
+"base_mr": 28.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.7360000014305115,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 3.4000000953674316,
+"bin_sha256": "6450436aef15880fa4f103058450887e4ad0e62c36d496c0f5ac092497981870",
+"mr_per_level": 2.049999952316284
+},
+"malzahar": {
+"base_hp": 580.0,
+"hp_per_level": 101.0,
+"base_ad": 55.0,
+"ad_per_level": 3.0,
+"base_armor": 18.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 500.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "8e39c8ba624438a42ea283b7565312633ddb18dceba25ca9cbc7f17d631527e6",
+"mr_per_level": 1.2999999523162842
+},
+"maokai": {
+"base_hp": 665.0,
+"hp_per_level": 109.0,
+"base_ad": 64.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 35.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.800000011920929,
+"attack_speed_ratio": 0.6949999928474426,
+"attack_speed_per_level": 2.125,
+"bin_sha256": "a1b4ea40df2df0317d9726e5db58c480b6d6edd51db914241dfddb6a0d92896a",
+"mr_per_level": 2.049999952316284
+},
+"masteryi": {
+"base_hp": 640.0,
+"hp_per_level": 105.0,
+"base_ad": 65.0,
+"ad_per_level": 2.5,
+"base_armor": 33.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 355.0,
+"attack_range": 175.0,
+"attack_speed": 0.6790000200271606,
+"attack_speed_ratio": 0.6790000200271606,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "8d9bfe0c275676b83e54b1cfa0bce3ef51ef47694df3606c203d017807f23528",
+"mr_per_level": 2.049999952316284
+},
+"mel": {
+"base_hp": 630.0,
+"hp_per_level": 99.0,
+"base_ad": 54.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 21.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "f4301f7c4169644186bdca17bd6bfd293a118256df067a2040c1144b7925bcc7",
+"mr_per_level": 1.2999999523162842
+},
+"milio": {
+"base_hp": 560.0,
+"hp_per_level": 88.0,
+"base_ad": 48.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 26.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "4b98c601d922ed4260c55d1d09353487e8d2f57ab09d6a0e49cec29e4b93fc10",
+"mr_per_level": 1.2999999523162842
+},
+"missfortune": {
+"base_hp": 625.0,
+"hp_per_level": 100.0,
+"base_ad": 55.0,
+"ad_per_level": 2.4000000953674316,
+"base_armor": 25.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.656000018119812,
+"attack_speed_ratio": 0.656000018119812,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "a8b6bb86e6bb82b587ecd1b7c6d553d99a310b4c3432b09101d164a29cb814f9",
+"mr_per_level": 1.2999999523162842
+},
+"monkeyking": {
+"base_hp": 610.0,
+"hp_per_level": 99.0,
+"base_ad": 66.0,
+"ad_per_level": 3.5,
+"base_armor": 31.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 28.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.6899999976158142,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "fc58e8b7b80a49c55284e37284dbd34fb9ed3693418fb48ac2b8f63c4b43f20e",
+"mr_per_level": 2.049999952316284
+},
+"mordekaiser": {
+"base_hp": 645.0,
+"hp_per_level": 104.0,
+"base_ad": 61.0,
+"ad_per_level": 4.0,
+"base_armor": 37.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.0,
+"bin_sha256": "5fc85a95671bde4dbe64c267d1d76339dc83084072a11ca21fe77788e5bc5ee9",
+"mr_per_level": 2.049999952316284
+},
+"morgana": {
+"base_hp": 630.0,
+"hp_per_level": 104.0,
+"base_ad": 56.0,
+"ad_per_level": 3.5,
+"base_armor": 25.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 450.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.5299999713897705,
+"bin_sha256": "fb434a2bdcd5436b5b7e2e7f96ececa92519284b82f29a2948df0551dca2960d",
+"mr_per_level": 1.2999999523162842
+},
+"naafiri": {
+"base_hp": 610.0,
+"hp_per_level": 105.0,
+"base_ad": 55.0,
+"ad_per_level": 2.0,
+"base_armor": 28.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.6629999876022339,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0999999046325684,
+"bin_sha256": "958e6545bfcbd8f1fd778542022c15fd30eb4d848d63bc850b3da530b0c6c3c2",
+"mr_per_level": 2.049999952316284
+},
+"nami": {
+"base_hp": 560.0,
+"hp_per_level": 88.0,
+"base_ad": 54.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 29.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 550.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 2.609999895095825,
+"bin_sha256": "ee04fc91ac7ba2bac9300f842976c79fea5d558dad08e216c901710c1d47980a",
+"mr_per_level": 1.2999999523162842
+},
+"nasus": {
+"base_hp": 650.0,
+"hp_per_level": 104.0,
+"base_ad": 67.0,
+"ad_per_level": 4.0,
+"base_armor": 34.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 125.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 3.4800000190734863,
+"bin_sha256": "b3f8e786dd3be1850ecd2137b24d72058f5dd33792f35dfe2d1ea05d54f651d2",
+"mr_per_level": 2.049999952316284
+},
+"nautilus": {
+"base_hp": 646.0,
+"hp_per_level": 100.0,
+"base_ad": 61.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 39.0,
+"armor_per_level": 4.949999809265137,
+"base_mr": 32.0,
+"base_ms": 325.0,
+"attack_range": 175.0,
+"attack_speed": 0.7059999704360962,
+"attack_speed_ratio": 0.6119999885559082,
+"attack_speed_per_level": 1.0,
+"bin_sha256": "0b167e59e859325256689f402eb1aad424e1f108f2e1e8aaa09918038e0d1af0",
+"mr_per_level": 2.049999952316284
+},
+"neeko": {
+"base_hp": 610.0,
+"hp_per_level": 104.0,
+"base_ad": 48.0,
+"ad_per_level": 2.5,
+"base_armor": 21.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.6700000166893005,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "499ea34b2d7fa7a97318fb94e027bf94e6dda5163ec32f46e670e6fd6cdf8ff0",
+"mr_per_level": 1.2999999523162842
+},
+"nidalee": {
+"base_hp": 610.0,
+"hp_per_level": 109.0,
+"base_ad": 58.0,
+"ad_per_level": 3.5,
+"base_armor": 32.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 525.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 3.2200000286102295,
+"bin_sha256": "a791d1db47ab5371707fe1bade95d2e96ee671ed88a460c85edb0128795f4493",
+"mr_per_level": 1.4500000476837158
+},
+"nilah": {
+"base_hp": 570.0,
+"hp_per_level": 101.0,
+"base_ad": 58.0,
+"ad_per_level": 2.0,
+"base_armor": 27.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 225.0,
+"attack_speed": 0.6970000267028809,
+"attack_speed_ratio": 0.6700000166893005,
+"attack_speed_per_level": 1.25,
+"bin_sha256": "f751e6eb46775ffc396118629aef7ff6d836d45f7bb94fa5fecc269f2d020318",
+"mr_per_level": 2.049999952316284
+},
+"nocturne": {
+"base_hp": 655.0,
+"hp_per_level": 109.0,
+"base_ad": 62.0,
+"ad_per_level": 2.5999999046325684,
+"base_armor": 38.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.7210000157356262,
+"attack_speed_ratio": 0.7210000157356262,
+"attack_speed_per_level": 2.700000047683716,
+"bin_sha256": "1bc46673f930501287c754296452c865b131f7d40cd6930886af64f0e4df7c65",
+"mr_per_level": 1.5499999523162842
+},
+"nunu": {
+"base_hp": 610.0,
+"hp_per_level": 90.0,
+"base_ad": 61.0,
+"ad_per_level": 3.0,
+"base_armor": 29.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.25,
+"bin_sha256": "d7df5207d01429e5558510591f397e1789c90de1685e69f3c8fa21a28bfbc560",
+"mr_per_level": 2.049999952316284
+},
+"olaf": {
+"base_hp": 645.0,
+"hp_per_level": 119.0,
+"base_ad": 68.0,
+"ad_per_level": 4.699999809265137,
+"base_armor": 35.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 125.0,
+"attack_speed": 0.7200000286102295,
+"attack_speed_ratio": 0.6940000057220459,
+"attack_speed_per_level": 2.700000047683716,
+"bin_sha256": "580b02f545332bc875ac83836048af82bad3666935fbafc23f467791b50c7d79",
+"mr_per_level": 2.049999952316284
+},
+"orianna": {
+"base_hp": 585.0,
+"hp_per_level": 110.0,
+"base_ad": 44.0,
+"ad_per_level": 2.5999999046325684,
+"base_armor": 20.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 26.0,
+"base_ms": 325.0,
+"attack_range": 525.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "5b3b5546562e1cf51b20d69d4f519a1a0449d86bd3c352e1f801f2cfa0b25f43",
+"mr_per_level": 1.2999999523162842
+},
+"ornn": {
+"base_hp": 660.0,
+"hp_per_level": 109.0,
+"base_ad": 69.0,
+"ad_per_level": 3.5,
+"base_armor": 33.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "d4133c7781bf0033a4c97244165ea2ced6c6763ec5815e553066b0fe2696a546",
+"mr_per_level": 2.049999952316284
+},
+"pantheon": {
+"base_hp": 650.0,
+"hp_per_level": 109.0,
+"base_ad": 64.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 40.0,
+"armor_per_level": 4.949999809265137,
+"base_mr": 28.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.950000047683716,
+"bin_sha256": "15ee9698a740066158aa35ab9540f4336f8a33516711e07fac2ac86984dc3125",
+"mr_per_level": 2.049999952316284
+},
+"poppy": {
+"base_hp": 610.0,
+"hp_per_level": 110.0,
+"base_ad": 60.0,
+"ad_per_level": 4.0,
+"base_armor": 35.0,
+"armor_per_level": 5.0,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "406204e019d7e7f29362b85337bafe3f900d746da3d11a0f9817e6ef3223d55b",
+"mr_per_level": 2.049999952316284
+},
+"pyke": {
+"base_hp": 670.0,
+"hp_per_level": 110.0,
+"base_ad": 62.0,
+"ad_per_level": 2.0,
+"base_armor": 37.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 330.0,
+"attack_range": 150.0,
+"attack_speed": 0.6669999957084656,
+"attack_speed_ratio": 0.6669999957084656,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "e30809f32e45719fb572c280edd45dcefc10f41ebab7bbaafe9684edd286650b",
+"mr_per_level": 2.049999952316284
+},
+"qiyana": {
+"base_hp": 590.0,
+"hp_per_level": 115.0,
+"base_ad": 64.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 31.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 150.0,
+"attack_speed": 0.6880000233650208,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0999999046325684,
+"bin_sha256": "d13fea932010e227a734235182ecd5a2084f7bae8de9da975863effcbb257c93",
+"mr_per_level": 2.049999952316284
+},
+"quinn": {
+"base_hp": 565.0,
+"hp_per_level": 107.0,
+"base_ad": 59.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 28.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.6679999828338623,
+"attack_speed_ratio": 0.6679999828338623,
+"attack_speed_per_level": 3.0999999046325684,
+"bin_sha256": "9a9dacbfba2664d714cdb0edd55c44a4d20a298dee6801bab69d15a500dea7ae",
+"mr_per_level": 1.2999999523162842
+},
+"rakan": {
+"base_hp": 610.0,
+"hp_per_level": 99.0,
+"base_ad": 62.0,
+"ad_per_level": 3.5,
+"base_armor": 30.0,
+"armor_per_level": 4.900000095367432,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 300.0,
+"attack_speed": 0.6349999904632568,
+"attack_speed_ratio": 0.6349999904632568,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "fe3a3461d220aebd5d2ab07def825e8240d259baced698fd58e61e8276746ccd",
+"mr_per_level": 2.049999952316284
+},
+"reksai": {
+"base_hp": 600.0,
+"hp_per_level": 99.0,
+"base_ad": 62.0,
+"ad_per_level": 3.0,
+"base_armor": 35.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.6669999957084656,
+"attack_speed_ratio": 0.6669999957084656,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "f31e318d6035748f043799035ea17daccdf458fcaf524c8617cbccde7adf120a",
+"mr_per_level": 2.049999952316284
+},
+"rell": {
+"base_hp": 620.0,
+"hp_per_level": 104.0,
+"base_ad": 55.0,
+"ad_per_level": 3.0,
+"base_armor": 30.0,
+"armor_per_level": 4.0,
+"base_mr": 28.0,
+"base_ms": 315.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "7124980162e22623796133034dbc98122bef92f3703988c1c00e2ebe5de0d20d",
+"mr_per_level": 1.7999999523162842
+},
+"renata": {
+"base_hp": 545.0,
+"hp_per_level": 94.0,
+"base_ad": 49.0,
+"ad_per_level": 3.0,
+"base_armor": 27.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "3ff0ff86e9d0bcb21c5914ade2e263fc956accc4d21e3b0a6ee84391190e01f1",
+"mr_per_level": 1.2999999523162842
+},
+"renekton": {
+"base_hp": 660.0,
+"hp_per_level": 111.0,
+"base_ad": 69.0,
+"ad_per_level": 4.150000095367432,
+"base_armor": 35.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 28.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6650000214576721,
+"attack_speed_ratio": 0.6650000214576721,
+"attack_speed_per_level": 2.75,
+"bin_sha256": "b0a2918e71b6c8fd3997cdf19be080856f63bdc579e4ee02bb7f8a09c63e8d8c",
+"mr_per_level": 2.049999952316284
+},
+"rengar": {
+"base_hp": 590.0,
+"hp_per_level": 104.0,
+"base_ad": 68.0,
+"ad_per_level": 3.0,
+"base_armor": 34.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6669999957084656,
+"attack_speed_ratio": 0.6669999957084656,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "aab8a232117fe7904ac2c5e32fcc7f4c44d3585c69a1a47a8a910f8065bcec7b",
+"mr_per_level": 2.049999952316284
+},
+"riven": {
+"base_hp": 630.0,
+"hp_per_level": 100.0,
+"base_ad": 64.0,
+"ad_per_level": 3.0,
+"base_armor": 33.0,
+"armor_per_level": 4.400000095367432,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "aefd91aa92e3c24b7bb4d1c85efc2e2dbcd2edcc96b423716abcdebedc10a1ac",
+"mr_per_level": 2.049999952316284
+},
+"rumble": {
+"base_hp": 640.0,
+"hp_per_level": 105.0,
+"base_ad": 64.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 36.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 28.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 1.850000023841858,
+"bin_sha256": "cd386e079c35c82d194a607e265cf33fd3b9f6bec4344e466ee012c9665881dc",
+"mr_per_level": 1.5499999523162842
+},
+"ryze": {
+"base_hp": 645.0,
+"hp_per_level": 124.0,
+"base_ad": 58.0,
+"ad_per_level": 3.0,
+"base_armor": 22.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 550.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "e98beff55b21d60b76fa74987fc4b85660a2f51e0d1de0fe1440d3fb57e5e6d2",
+"mr_per_level": 1.2999999523162842
+},
+"samira": {
+"base_hp": 630.0,
+"hp_per_level": 108.0,
+"base_ad": 57.0,
+"ad_per_level": 3.0,
+"base_armor": 26.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 500.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.299999952316284,
+"bin_sha256": "75d789a3f3879827fbe3bf8fac1b6d6679ad202d89337cadcdbaa3db931bd5dd",
+"mr_per_level": 1.2999999523162842
+},
+"sejuani": {
+"base_hp": 630.0,
+"hp_per_level": 114.0,
+"base_ad": 66.0,
+"ad_per_level": 4.0,
+"base_armor": 34.0,
+"armor_per_level": 5.449999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 150.0,
+"attack_speed": 0.6880000233650208,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "7d7384d9754a6f2af18c3ff0f48109fe7348d6ab77afde0e739f0de28ed8965e",
+"mr_per_level": 2.049999952316284
+},
+"senna": {
+"base_hp": 530.0,
+"hp_per_level": 89.0,
+"base_ad": 50.0,
+"base_armor": 25.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 600.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.4000000059604645,
+"attack_speed_per_level": 2.5999999046325684,
+"bin_sha256": "f0bc7acdc41bd90241d49f2bd57182fb9e7274cd733a4927cf43dd8ec67937b9",
+"mr_per_level": 1.2999999523162842
+},
+"seraphine": {
+"base_hp": 570.0,
+"hp_per_level": 95.0,
+"base_ad": 50.0,
+"ad_per_level": 3.0,
+"base_armor": 26.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.6690000295639038,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "22d4008cad293cdfbade253f9e947e0402d692c9d196dc7fd8ab87ca8add4e2b",
+"mr_per_level": 1.2999999523162842
+},
+"sett": {
+"base_hp": 670.0,
+"hp_per_level": 114.0,
+"base_ad": 60.0,
+"ad_per_level": 4.0,
+"base_armor": 33.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 28.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.75,
+"bin_sha256": "80558b436f3ad88b79111d79e3a49ad5688a1215ae322c16d2c2d45ba5303555",
+"mr_per_level": 2.049999952316284
+},
+"shaco": {
+"base_hp": 630.0,
+"hp_per_level": 99.0,
+"base_ad": 63.0,
+"ad_per_level": 3.0,
+"base_armor": 30.0,
+"armor_per_level": 4.0,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6940000057220459,
+"attack_speed_ratio": 0.6940000057220459,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "0a5589647e36f65e3406837c51b68795b6399f3182652f551e894c9473d6db6f",
+"mr_per_level": 2.049999952316284
+},
+"shen": {
+"base_hp": 610.0,
+"hp_per_level": 99.0,
+"base_ad": 64.0,
+"ad_per_level": 3.0,
+"base_armor": 34.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.7509999871253967,
+"attack_speed_ratio": 0.6510000228881836,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "462b0e0be3b7c7cd9778f47524337d621ac5eb7bbe20228a711d1e48e127bd16",
+"mr_per_level": 2.049999952316284
+},
+"shyvana": {
+"base_hp": 625.0,
+"hp_per_level": 100.0,
+"base_ad": 62.0,
+"ad_per_level": 4.0,
+"base_armor": 35.0,
+"armor_per_level": 4.0,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 150.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "9c224f343c06c238d5ff7542079b8d7aba7118664032a8c856189f14ef018955",
+"mr_per_level": 2.049999952316284
+},
+"singed": {
+"base_hp": 650.0,
+"hp_per_level": 96.0,
+"base_ad": 63.0,
+"ad_per_level": 3.4000000953674316,
+"base_armor": 34.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.699999988079071,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.899999976158142,
+"bin_sha256": "595250039a200a04a20f8e252f51edc2754b50fe005c5fae345c6e10ca84a738",
+"mr_per_level": 2.049999952316284
+},
+"sion": {
+"base_hp": 655.0,
+"hp_per_level": 87.0,
+"base_ad": 68.0,
+"ad_per_level": 4.0,
+"base_armor": 36.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6790000200271606,
+"attack_speed_ratio": 0.6790000200271606,
+"attack_speed_per_level": 1.2999999523162842,
+"bin_sha256": "96d53f7aea3e3eb48ed79abd1d84c595cf7660d6e1b82ffd52f7d5521d7cfa40",
+"mr_per_level": 2.049999952316284
+},
+"sivir": {
+"base_hp": 600.0,
+"hp_per_level": 104.0,
+"base_ad": 60.0,
+"ad_per_level": 2.5,
+"base_armor": 30.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 500.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.600000023841858,
+"bin_sha256": "f71a1787b16602628ca18dbe5f03e44c9f1f2b379e584267a4af636c26cb51b2",
+"mr_per_level": 1.2999999523162842
+},
+"skarner": {
+"base_hp": 630.0,
+"hp_per_level": 110.0,
+"base_ad": 63.0,
+"ad_per_level": 5.0,
+"base_armor": 33.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 150.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "5893201ae154746126022039c74d58c0193b9ac053ece1eb0064b908c63762ee",
+"mr_per_level": 2.049999952316284
+},
+"smolder": {
+"base_hp": 575.0,
+"hp_per_level": 100.0,
+"base_ad": 60.0,
+"ad_per_level": 2.299999952316284,
+"base_armor": 24.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 4.0,
+"bin_sha256": "b75518ce752e5884b84997e6a78701768006ac270f385926136c75c2b23e2829",
+"mr_per_level": 1.2999999523162842
+},
+"sona": {
+"base_hp": 550.0,
+"hp_per_level": 91.0,
+"base_ad": 49.0,
+"ad_per_level": 3.0,
+"base_armor": 26.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 2.299999952316284,
+"bin_sha256": "f36d60545f5d2af0dc07a203452e5c73bf12edec9036c0ee1bce43f7d6aec977",
+"mr_per_level": 1.2999999523162842
+},
+"soraka": {
+"base_hp": 605.0,
+"hp_per_level": 88.0,
+"base_ad": 50.0,
+"ad_per_level": 3.0,
+"base_armor": 32.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.140000104904175,
+"bin_sha256": "62df0bb9603140d82d4f76a60bb4379b8f51aa046d93710c2c968e08f3c4debf",
+"mr_per_level": 1.2999999523162842
+},
+"swain": {
+"base_hp": 595.0,
+"hp_per_level": 99.0,
+"base_ad": 58.0,
+"ad_per_level": 2.700000047683716,
+"base_armor": 25.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 31.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "5d85829e4150969e6df5d60aab274b9ba381c0a3aeb22d7edcd704cbaf76c75f",
+"mr_per_level": 1.5499999523162842
+},
+"sylas": {
+"base_hp": 600.0,
+"hp_per_level": 122.0,
+"base_ad": 61.0,
+"ad_per_level": 3.0,
+"base_armor": 29.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.6449999809265137,
+"attack_speed_ratio": 0.6449999809265137,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "e279f4b7e4096e5bb8eb0cf6fbeca2b20e191479e236a95ff21ab86cbf267b68",
+"mr_per_level": 2.549999952316284
+},
+"syndra": {
+"base_hp": 563.0,
+"hp_per_level": 100.0,
+"base_ad": 54.0,
+"ad_per_level": 2.9000000953674316,
+"base_armor": 25.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "9830359bbacd8cf16a947b299a0580be146d2f16e3b3253c7b3a56740b2ef8a2",
+"mr_per_level": 1.2999999523162842
+},
+"tahmkench": {
+"base_hp": 640.0,
+"hp_per_level": 103.0,
+"base_ad": 56.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 39.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 175.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "9e24bc25b05e928c541435f289f9ac88047282f2605efbb5810c9deb3b2ef517",
+"mr_per_level": 2.049999952316284
+},
+"taliyah": {
+"base_hp": 550.0,
+"hp_per_level": 104.0,
+"base_ad": 58.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 18.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 28.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.3600000143051147,
+"bin_sha256": "dcdc5ede6927166534adbda9dc7bff787e6a74b1baf099ea4e4cc98c98bc8024",
+"mr_per_level": 1.2999999523162842
+},
+"talon": {
+"base_hp": 658.0,
+"hp_per_level": 109.0,
+"base_ad": 68.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 30.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 36.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.9000000953674316,
+"bin_sha256": "50b849f1289864f46436054960943d79973bfe1cff6a27ad468c13b2d579548d",
+"mr_per_level": 2.049999952316284
+},
+"taric": {
+"base_hp": 645.0,
+"hp_per_level": 99.0,
+"base_ad": 55.0,
+"ad_per_level": 3.5,
+"base_armor": 40.0,
+"armor_per_level": 4.300000190734863,
+"base_mr": 28.0,
+"base_ms": 340.0,
+"attack_range": 150.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "81e69a08d78bde48b3c56f471f36f7c7c10dd11265cb155f65ed9c91faf69f36",
+"mr_per_level": 2.049999952316284
+},
+"teemo": {
+"base_hp": 615.0,
+"hp_per_level": 104.0,
+"base_ad": 54.0,
+"ad_per_level": 3.0,
+"base_armor": 24.0,
+"armor_per_level": 4.949999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 500.0,
+"attack_speed": 0.6899999976158142,
+"attack_speed_ratio": 0.6899999976158142,
+"attack_speed_per_level": 3.380000114440918,
+"bin_sha256": "993ce2ffe6ed41339540ccbd61b90fb9c95573901183c48fa7c169391613af99",
+"mr_per_level": 1.2999999523162842
+},
+"thresh": {
+"base_hp": 620.0,
+"hp_per_level": 120.0,
+"base_ad": 56.0,
+"ad_per_level": 2.200000047683716,
+"base_armor": 33.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 450.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "df94b3bd5520dd99cc9500d0b159750f38380d71ed665608c41e656fedb8e229",
+"mr_per_level": 1.5499999523162842
+},
+"tristana": {
+"base_hp": 640.0,
+"hp_per_level": 102.0,
+"base_ad": 60.0,
+"ad_per_level": 2.9000000953674316,
+"base_armor": 30.0,
+"armor_per_level": 4.0,
+"base_mr": 28.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.656000018119812,
+"attack_speed_ratio": 0.6940000057220459,
+"attack_speed_per_level": 1.5,
+"bin_sha256": "76bfe833c4add2789d12dede89df687f9ab9ac63d38a66f10d711b15ceb647ce",
+"mr_per_level": 1.2999999523162842
+},
+"trundle": {
+"base_hp": 650.0,
+"hp_per_level": 110.0,
+"base_ad": 68.0,
+"ad_per_level": 4.5,
+"base_armor": 37.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 175.0,
+"attack_speed": 0.6700000166893005,
+"attack_speed_ratio": 0.6700000166893005,
+"attack_speed_per_level": 2.9000000953674316,
+"bin_sha256": "d4d688c11d0ab07c02b59d5dc1152c56f6f17c9c276d23cf4a52a3ade38bbc9d",
+"mr_per_level": 2.049999952316284
+},
+"tryndamere": {
+"base_hp": 696.0,
+"hp_per_level": 108.0,
+"base_ad": 66.0,
+"ad_per_level": 4.5,
+"base_armor": 33.0,
+"armor_per_level": 4.800000190734863,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6700000166893005,
+"attack_speed_ratio": 0.7250000238418579,
+"attack_speed_per_level": 3.4000000953674316,
+"bin_sha256": "f7f3ba35b64e32d49bc17eed572f854abeec80d061110609dbecb9ec3df43f71",
+"mr_per_level": 2.049999952316284
+},
+"twistedfate": {
+"base_hp": 604.0,
+"hp_per_level": 108.0,
+"base_ad": 52.0,
+"ad_per_level": 2.5,
+"base_armor": 24.0,
+"armor_per_level": 4.349999904632568,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.6510000228881836,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "ecc5ca6b7fc7b77ac510227de5a1e8b158e282d0ded88d5818eb9407837e6f3b",
+"mr_per_level": 1.2999999523162842
+},
+"twitch": {
+"base_hp": 630.0,
+"hp_per_level": 98.0,
+"base_ad": 59.0,
+"ad_per_level": 3.0,
+"base_armor": 27.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6790000200271606,
+"attack_speed_ratio": 0.6790000200271606,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "1cb6d49d5649e49d84d406369f771fb3cf7d2ace7fc8f50edcedb3e9b2d35a99",
+"mr_per_level": 1.2999999523162842
+},
+"udyr": {
+"base_hp": 664.0,
+"hp_per_level": 92.0,
+"base_ad": 62.0,
+"ad_per_level": 4.0,
+"base_armor": 31.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 350.0,
+"attack_range": 125.0,
+"attack_speed": 0.6499999761581421,
+"attack_speed_ratio": 0.6499999761581421,
+"attack_speed_per_level": 3.0,
+"bin_sha256": "a9ad9b6d8e4cb5c7c9e9f907e229439698258befc7aa9a2b94e962b1f4c390a2",
+"mr_per_level": 2.049999952316284
+},
+"urgot": {
+"base_hp": 655.0,
+"hp_per_level": 102.0,
+"base_ad": 63.0,
+"ad_per_level": 4.0,
+"base_armor": 36.0,
+"armor_per_level": 5.0,
+"base_mr": 32.0,
+"base_ms": 330.0,
+"attack_range": 350.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.75,
+"bin_sha256": "11332915b1d38b29d9e5c3e8473cdd426d64c49c102888d46f68d1a49348c495",
+"mr_per_level": 2.049999952316284
+},
+"varus": {
+"base_hp": 600.0,
+"hp_per_level": 105.0,
+"base_ad": 59.0,
+"ad_per_level": 3.4000000953674316,
+"base_armor": 24.0,
+"armor_per_level": 4.0,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 575.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "614d45d0d53a32108d266d4ead1544d110cea99843e3aab0a81be8c588e3fe1a",
+"mr_per_level": 1.2999999523162842
+},
+"vayne": {
+"base_hp": 550.0,
+"hp_per_level": 103.0,
+"base_ad": 60.0,
+"ad_per_level": 2.3499999046325684,
+"base_armor": 23.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.299999952316284,
+"bin_sha256": "d6bd8316d27ceac7d764ee509e7b1142ee7d0cef15578ad192edb438556e05b1",
+"mr_per_level": 1.2999999523162842
+},
+"veigar": {
+"base_hp": 580.0,
+"hp_per_level": 108.0,
+"base_ad": 52.0,
+"ad_per_level": 2.700000047683716,
+"base_armor": 18.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 550.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.240000009536743,
+"bin_sha256": "31911e98a9f4b562856fc85cdc539d5ddb058ed2c610b677e61dcc1495fb05b7",
+"mr_per_level": 1.2999999523162842
+},
+"velkoz": {
+"base_hp": 590.0,
+"hp_per_level": 102.0,
+"base_ad": 55.0,
+"ad_per_level": 3.1415927410125732,
+"base_armor": 22.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 525.0,
+"attack_speed": 0.6430000066757202,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.590000033378601,
+"bin_sha256": "50ccc508211bb443fc0061839d55d6f0c486d4501360fc62cb4163c26364fc3a",
+"mr_per_level": 1.2999999523162842
+},
+"vex": {
+"base_hp": 590.0,
+"hp_per_level": 104.0,
+"base_ad": 54.0,
+"ad_per_level": 2.75,
+"base_armor": 23.0,
+"armor_per_level": 4.449999809265137,
+"base_mr": 28.0,
+"base_ms": 335.0,
+"attack_range": 550.0,
+"attack_speed": 0.6690000295639038,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.0,
+"bin_sha256": "c3c1f3a177d9df541193cfa2be1d279a08a3705d0935c997e49e1f95caae3026",
+"mr_per_level": 1.2999999523162842
+},
+"vi": {
+"base_hp": 655.0,
+"hp_per_level": 105.0,
+"base_ad": 63.0,
+"ad_per_level": 3.5,
+"base_armor": 30.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 125.0,
+"attack_speed": 0.6439999938011169,
+"attack_speed_ratio": 0.6439999938011169,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "389db8a2da764580833fa73454d440819fb7b5f3002ec70eaf23f37f2bd115c2",
+"mr_per_level": 2.049999952316284
+},
+"viego": {
+"base_hp": 630.0,
+"hp_per_level": 109.0,
+"base_ad": 57.0,
+"ad_per_level": 3.5,
+"base_armor": 34.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 200.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.75,
+"bin_sha256": "87249fbdde46535db56d8ac62bfc87188e665576ce385fabb44de4faeaa93f10",
+"mr_per_level": 2.049999952316284
+},
+"viktor": {
+"base_hp": 600.0,
+"hp_per_level": 100.0,
+"base_ad": 53.0,
+"ad_per_level": 3.0,
+"base_armor": 23.0,
+"armor_per_level": 4.400000095367432,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 525.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "938480c1dd7a04be045667ff32ee4e8357faa8f36c74174e6659514ffec1bb3b",
+"mr_per_level": 1.2999999523162842
+},
+"vladimir": {
+"base_hp": 600.0,
+"hp_per_level": 110.0,
+"base_ad": 55.0,
+"ad_per_level": 3.0,
+"base_armor": 24.0,
+"armor_per_level": 4.5,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 450.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "f0462408eb7ccc2c04f6a8e51da8b98907d6ea4b4c8e40575efba7de7d06b06d",
+"mr_per_level": 1.2999999523162842
+},
+"volibear": {
+"base_hp": 650.0,
+"hp_per_level": 104.0,
+"base_ad": 65.0,
+"ad_per_level": 3.5,
+"base_armor": 35.0,
+"armor_per_level": 5.199999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 150.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.699999988079071,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "fe4d5f2960bfd8e153493efe9b317fca9b80fdf5fe64fa4dfa2bc8bb9ffd5437",
+"mr_per_level": 2.049999952316284
+},
+"warwick": {
+"base_hp": 620.0,
+"hp_per_level": 99.0,
+"base_ad": 65.0,
+"ad_per_level": 2.5,
+"base_armor": 33.0,
+"armor_per_level": 4.400000095367432,
+"base_mr": 32.0,
+"base_ms": 335.0,
+"attack_range": 125.0,
+"attack_speed": 0.6380000114440918,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "e831dea25d48a2006726b609b64e3a7942e518eafcdbd1727cfc609bfc5a711a",
+"mr_per_level": 2.049999952316284
+},
+"xayah": {
+"base_hp": 630.0,
+"hp_per_level": 107.0,
+"base_ad": 60.0,
+"ad_per_level": 3.5,
+"base_armor": 25.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 525.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.6579999923706055,
+"attack_speed_per_level": 3.9000000953674316,
+"bin_sha256": "947c4216701658daaecc6fdf174a0fe009cc0230550b77718683396740882fd8",
+"mr_per_level": 1.2999999523162842
+},
+"xerath": {
+"base_hp": 596.0,
+"hp_per_level": 106.0,
+"base_ad": 55.0,
+"ad_per_level": 3.0,
+"base_armor": 22.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 525.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.3600000143051147,
+"bin_sha256": "9cfecea143d94dddb8075469dda5b8996bf8140d2049d2d3274e3ad37f710652",
+"mr_per_level": 1.2999999523162842
+},
+"xinzhao": {
+"base_hp": 620.0,
+"hp_per_level": 106.0,
+"base_ad": 63.0,
+"ad_per_level": 3.0,
+"base_armor": 35.0,
+"armor_per_level": 4.400000095367432,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6449999809265137,
+"attack_speed_ratio": 0.6449999809265137,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "83afeef2611da9081e9f7a78fa98b691a7f9dff4236c326e3605416e213e35ce",
+"mr_per_level": 2.049999952316284
+},
+"yasuo": {
+"base_hp": 590.0,
+"hp_per_level": 110.0,
+"base_ad": 60.0,
+"ad_per_level": 2.5,
+"base_armor": 32.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.6970000267028809,
+"attack_speed_ratio": 0.6700000166893005,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "d41b416bf5b5f8bf006d314805edbfc1119f4a18f63a8856f65ad903d1d160d7",
+"mr_per_level": 2.049999952316284
+},
+"yone": {
+"base_hp": 620.0,
+"hp_per_level": 105.0,
+"base_ad": 62.0,
+"ad_per_level": 2.0,
+"base_armor": 33.0,
+"armor_per_level": 4.599999904632568,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 3.5,
+"bin_sha256": "471e1549ee94e851bfcd596c2b0188a3feee61db9b26eb2151533d1f6f580bac",
+"mr_per_level": 2.049999952316284
+},
+"yorick": {
+"base_hp": 650.0,
+"hp_per_level": 114.0,
+"base_ad": 62.0,
+"ad_per_level": 5.0,
+"base_armor": 36.0,
+"armor_per_level": 4.5,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "00bf1f9eda87a0d3df52dadfaab0c5faa856bc93fa34f0e5b18bbc58b692fd32",
+"mr_per_level": 2.049999952316284
+},
+"yunara": {
+"base_hp": 590.0,
+"hp_per_level": 110.0,
+"base_ad": 55.0,
+"ad_per_level": 2.5,
+"base_armor": 25.0,
+"armor_per_level": 4.400000095367432,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 575.0,
+"attack_speed": 0.6499999761581421,
+"attack_speed_ratio": 0.6499999761581421,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "b0de75c0085431fe7e6a1ee6b37750b36a4f7a8bb5a6e5a6010b0fa91fa16873",
+"mr_per_level": 1.2999999523162842
+},
+"yuumi": {
+"base_hp": 500.0,
+"hp_per_level": 69.0,
+"base_ad": 49.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 25.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 25.0,
+"base_ms": 330.0,
+"attack_range": 425.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 1.0,
+"bin_sha256": "fc0e196ff5dc162a44efa2d65d91fc1a7530a4cfeadf9592e034feb72706f9c9",
+"mr_per_level": 1.100000023841858
+},
+"zaahen": {
+"base_hp": 640.0,
+"hp_per_level": 114.0,
+"base_ad": 63.0,
+"ad_per_level": 4.0,
+"base_armor": 36.0,
+"armor_per_level": 5.0,
+"base_mr": 32.0,
+"base_ms": 345.0,
+"attack_range": 175.0,
+"attack_speed": 0.625,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "35023f2f3cfb3562bd9424caee1ece39a7819721d80d7d93ae4c72091c3db169",
+"mr_per_level": 2.049999952316284
+},
+"zac": {
+"base_hp": 685.0,
+"hp_per_level": 109.0,
+"base_ad": 60.0,
+"ad_per_level": 3.4000000953674316,
+"base_armor": 33.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 32.0,
+"base_ms": 340.0,
+"attack_range": 175.0,
+"attack_speed": 0.7360000014305115,
+"attack_speed_ratio": 0.6380000114440918,
+"attack_speed_per_level": 1.600000023841858,
+"bin_sha256": "9b2a6e1a8174213d95df13b41b50eac8af502913ab648498dc14b9179b1f4834",
+"mr_per_level": 2.049999952316284
+},
+"zed": {
+"base_hp": 654.0,
+"hp_per_level": 99.0,
+"base_ad": 63.0,
+"ad_per_level": 3.4000000953674316,
+"base_armor": 32.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 29.0,
+"base_ms": 345.0,
+"attack_range": 125.0,
+"attack_speed": 0.6510000228881836,
+"attack_speed_ratio": 0.6510000228881836,
+"attack_speed_per_level": 3.299999952316284,
+"bin_sha256": "7ff961a0a34dc4cbd9f396dcd8587a25fd5524daeb11853373cb2c1317aae82f",
+"mr_per_level": 2.049999952316284
+},
+"zeri": {
+"base_hp": 600.0,
+"hp_per_level": 110.0,
+"base_ad": 56.0,
+"ad_per_level": 2.0,
+"base_armor": 24.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 330.0,
+"attack_range": 550.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "e6a0252c36fac87632b092576bf7261d84f41236c6ab632e75b1b332a05e848b",
+"mr_per_level": 1.2999999523162842
+},
+"ziggs": {
+"base_hp": 606.0,
+"hp_per_level": 106.0,
+"base_ad": 55.0,
+"ad_per_level": 3.0999999046325684,
+"base_armor": 21.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 325.0,
+"attack_range": 550.0,
+"attack_speed": 0.656000018119812,
+"attack_speed_ratio": 0.656000018119812,
+"attack_speed_per_level": 2.0,
+"bin_sha256": "583fc127c7151dabbdd4c27d05acc6339ab695aa2a185e9336272611450c87d2",
+"mr_per_level": 1.2999999523162842
+},
+"zilean": {
+"base_hp": 574.0,
+"hp_per_level": 96.0,
+"base_ad": 52.0,
+"ad_per_level": 3.0,
+"base_armor": 24.0,
+"armor_per_level": 5.0,
+"base_mr": 30.0,
+"base_ms": 335.0,
+"attack_range": 550.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.130000114440918,
+"bin_sha256": "56c03a1de1336449d5b982c421f985f9871fc1dfee83104d2d0619455af41c2d",
+"mr_per_level": 1.2999999523162842
+},
+"zoe": {
+"base_hp": 630.0,
+"hp_per_level": 106.0,
+"base_ad": 58.0,
+"ad_per_level": 3.299999952316284,
+"base_armor": 21.0,
+"armor_per_level": 4.699999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 550.0,
+"attack_speed": 0.6579999923706055,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.5,
+"bin_sha256": "255b7080d4764bc04e27d3af909fae355a5b1004f86c5765ad780ad94d77d339",
+"mr_per_level": 1.2999999523162842
+},
+"zyra": {
+"base_hp": 574.0,
+"hp_per_level": 93.0,
+"base_ad": 53.0,
+"ad_per_level": 3.200000047683716,
+"base_armor": 29.0,
+"armor_per_level": 4.199999809265137,
+"base_mr": 30.0,
+"base_ms": 340.0,
+"attack_range": 575.0,
+"attack_speed": 0.6809999942779541,
+"attack_speed_ratio": 0.625,
+"attack_speed_per_level": 2.109999895095825,
+"bin_sha256": "68d0ee463e1ef8105cc7ff75d3cc5b74d9f8ee815f093f03315a20f3e9c3daf3",
+"mr_per_level": 1.2999999523162842
+}
+},
+"items": {
+"2141": {},
+"447122": {
+"health": 900.0,
+"ability_haste": 25.0
+},
+"224633": {
+"health": 350.0,
+"ability_power": 60.0,
+"ability_haste": 15.0
+},
+"3073": {
+"health": 450.0,
+"attack_damage": 40.0,
+"attack_speed": 0.20000000298023224
+},
+"223109": {
+"health": 400.0,
+"armor": 50.0,
+"ability_haste": 15.0
+},
+"447121": {
+"attack_damage": 70.0,
+"ability_power": 100.0
+},
+"3513": {},
+"3050": {
+"health": 300.0,
+"armor": 25.0,
+"magic_resist": 25.0,
+"ability_haste": 10.0
+},
+"3181": {
+"health": 500.0,
+"attack_damage": 40.0,
+"percent_move_speed": 0.03999999910593033
+},
+"4644": {
+"health": 250.0,
+"ability_power": 85.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"6616": {
+"ability_power": 35.0,
+"ability_haste": 10.0,
+"percent_base_mana_regen": 1.25,
+"heal_shield_power": 0.10000000149011612
+},
+"4401": {
+"health": 400.0,
+"magic_resist": 55.0,
+"percent_move_speed": 0.03999999910593033
+},
+"2403": {},
+"3179": {
+"attack_damage": 60.0,
+"ability_haste": 15.0,
+"lethality": 18.0
+},
+"3071": {
+"health": 400.0,
+"attack_damage": 40.0,
+"ability_haste": 20.0
+},
+"2523": {
+"attack_damage": 55.0,
+"crit_chance": 0.25
+},
+"224637": {
+"health": 350.0,
+"ability_power": 75.0
+},
+"6696": {
+"attack_damage": 55.0,
+"ability_haste": 20.0,
+"lethality": 18.0
+},
+"3173": {
+"magic_resist": 30.0,
+"move_speed": 45.0,
+"tenacity": 0.30000001192092896
+},
+"447118": {
+"health": 400.0,
+"ability_haste": 15.0
+},
+"3121": {
+"health": 550.0,
+"ability_haste": 15.0,
+"mana": 1000.0
+},
+"6699": {
+"attack_damage": 55.0,
+"ability_haste": 10.0,
+"lethality": 10.0
+},
+"663146": {
+"attack_damage": 45.0,
+"ability_power": 90.0,
+"omnivamp": 0.15000000596046448
+},
+"224636": {
+"health": 300.0,
+"ability_power": 90.0,
+"ability_haste": 25.0
+},
+"3026": {
+"attack_damage": 55.0,
+"armor": 45.0
+},
+"9408": {},
+"226631": {
+"health": 375.0,
+"attack_damage": 40.0,
+"attack_speed": 0.15000000596046448
+},
+"2530": {
+"health": 200.0,
+"mana": 1000.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.07999999821186066
+},
+"3302": {
+"attack_damage": 30.0,
+"attack_speed": 0.3499999940395355
+},
+"6660": {
+"health": 150.0,
+"ability_haste": 5.0
+},
+"6693": {
+"attack_damage": 55.0,
+"ability_haste": 15.0,
+"lethality": 22.0
+},
+"1101": {},
+"2508": {
+"ability_power": 30.0
+},
+"447113": {
+"ability_power": 90.0,
+"ability_haste": 20.0,
+"mana": 600.0,
+"magic_pen": 12.0
+},
+"6333": {
+"attack_damage": 60.0,
+"armor": 50.0,
+"ability_haste": 15.0
+},
+"4633": {
+"health": 350.0,
+"ability_power": 70.0,
+"ability_haste": 15.0
+},
+"220010": {},
+"223069": {
+"health": 1000.0,
+"armor": 100.0,
+"magic_resist": 80.0,
+"ability_haste": 25.0,
+"percent_base_health_regen": 2.0
+},
+"3137": {
+"ability_power": 75.0,
+"ability_haste": 20.0,
+"percent_magic_pen": 0.30000001192092896
+},
+"322526": {
+"health": 200.0,
+"mana": 300.0,
+"percent_base_mana_regen": 0.75,
+"heal_shield_power": 0.07999999821186066
+},
+"6617": {
+"health": 200.0,
+"ability_power": 25.0,
+"ability_haste": 20.0,
+"percent_base_mana_regen": 1.25
+},
+"6630": {
+"health": 400.0,
+"attack_damage": 55.0,
+"omnivamp": 0.07999999821186066,
+"ability_haste": 20.0
+},
+"223039": {
+"health": 700.0,
+"crit_chance": 0.20000000298023224
+},
+"1039": {},
+"223040": {
+"ability_power": 60.0,
+"ability_haste": 25.0,
+"mana": 1200.0
+},
+"2420": {
+"ability_power": 40.0,
+"armor": 25.0
+},
+"228020": {
+"health": 350.0,
+"magic_resist": 50.0,
+"ability_haste": 15.0
+},
+"447108": {
+"ability_power": 80.0,
+"percent_move_speed": 0.03999999910593033,
+"ability_haste": 20.0
+},
+"663193": {
+"armor": 55.0,
+"magic_resist": 55.0,
+"percent_move_speed": 0.07999999821186066,
+"ability_haste": 10.0
+},
+"2421": {
+"ability_power": 40.0,
+"armor": 25.0
+},
+"3869": {
+"health": 200.0,
+"percent_base_health_regen": 0.75,
+"percent_base_mana_regen": 0.75
+},
+"6655": {
+"ability_power": 100.0,
+"ability_haste": 10.0,
+"mana": 600.0
+},
+"443079": {
+"health": 600.0
+},
+"223042": {
+"attack_damage": 40.0,
+"ability_haste": 15.0,
+"mana": 1000.0
+},
+"3084": {
+"health": 900.0,
+"percent_base_health_regen": 1.0
+},
+"446667": {
+"health": 400.0,
+"armor": 35.0,
+"magic_resist": 35.0,
+"heal_shield_power": 0.11999999731779099
+},
+"2422": {
+"move_speed": 25.0
+},
+"1054": {
+"health": 110.0,
+"health_regen": 0.800000011920929
+},
+"444637": {
+"health": 700.0,
+"ability_power": 80.0
+},
+"4637": {
+"health": 350.0,
+"ability_power": 75.0
+},
+"4628": {
+"ability_power": 75.0,
+"ability_haste": 25.0
+},
+"6664": {
+"health": 400.0,
+"magic_resist": 40.0,
+"ability_haste": 10.0,
+"percent_base_health_regen": 1.0
+},
+"443061": {
+"health": 900.0,
+"crit_chance": 0.25,
+"ability_haste": 30.0
+},
+"1055": {
+"health": 80.0,
+"attack_damage": 10.0,
+"omnivamp": 0.02500000037252903
+},
+"223036": {
+"attack_damage": 30.0,
+"crit_chance": 0.25,
+"percent_armor_pen": 0.4000000059604645
+},
+"4636": {
+"health": 300.0,
+"ability_power": 90.0,
+"ability_haste": 25.0
+},
+"223184": {
+"attack_damage": 25.0,
+"attack_speed": 0.3499999940395355,
+"life_steal": 0.05000000074505806
+},
+"3876": {
+"health": 200.0,
+"percent_base_health_regen": 0.75,
+"percent_base_mana_regen": 0.75
+},
+"4004": {
+"attack_damage": 50.0,
+"percent_move_speed": 0.03999999910593033,
+"lethality": 15.0
+},
+"224004": {
+"attack_damage": 55.0,
+"lethality": 21.0
+},
+"222517": {
+"attack_damage": 60.0,
+"omnivamp": 0.05000000074505806,
+"tenacity": 0.20000000298023224
+},
+"2052": {},
+"1056": {
+"health": 90.0,
+"ability_power": 18.0
+},
+"124011": {
+"health": 200.0,
+"ability_power": 45.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.11999999731779099
+},
+"223047": {
+"armor": 25.0,
+"move_speed": 30.0
+},
+"4635": {
+"health": 250.0,
+"ability_power": 20.0,
+"omnivamp": 0.05000000074505806
+},
+"3118": {
+"ability_power": 90.0,
+"ability_haste": 15.0,
+"mana": 600.0
+},
+"223121": {
+"health": 400.0,
+"ability_haste": 15.0,
+"mana": 1000.0
+},
+"223185": {
+"attack_damage": 25.0,
+"ability_haste": 10.0,
+"lethality": 11.0
+},
+"222510": {
+"health": 300.0,
+"ability_power": 60.0,
+"attack_speed": 0.20000000298023224,
+"ability_haste": 20.0
+},
+"1027": {
+"mana": 300.0
+},
+"1057": {
+"magic_resist": 45.0
+},
+"4645": {
+"ability_power": 110.0,
+"magic_pen": 15.0
+},
+"223046": {
+"attack_speed": 0.6000000238418579,
+"crit_chance": 0.25,
+"percent_move_speed": 0.07999999821186066
+},
+"223026": {
+"attack_damage": 55.0,
+"armor": 45.0
+},
+"226630": {
+"health": 400.0,
+"attack_damage": 55.0,
+"omnivamp": 0.10000000149011612,
+"ability_haste": 20.0
+},
+"1026": {
+"ability_power": 45.0
+},
+"226665": {
+"health": 350.0,
+"armor": 35.0,
+"magic_resist": 35.0
+},
+"223031": {
+"attack_damage": 55.0,
+"crit_chance": 0.25,
+"crit_damage": 0.4000000059604645
+},
+"6671": {
+"attack_damage": 50.0,
+"attack_speed": 0.15000000596046448,
+"crit_chance": 0.20000000298023224,
+"percent_move_speed": 0.07000000029802322
+},
+"222512": {
+"attack_speed": 0.4000000059604645,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"222504": {
+"health": 350.0,
+"magic_resist": 80.0
+},
+"1029": {
+"armor": 15.0
+},
+"3124": {
+"attack_damage": 30.0,
+"ability_power": 30.0,
+"attack_speed": 0.25
+},
+"223032": {
+"attack_damage": 45.0,
+"attack_speed": 0.4000000059604645
+},
+"4632": {
+"ability_power": 40.0,
+"magic_resist": 25.0
+},
+"226632": {
+"health": 300.0,
+"attack_damage": 40.0,
+"ability_haste": 20.0
+},
+"223124": {
+"attack_damage": 20.0,
+"ability_power": 25.0,
+"attack_speed": 0.25
+},
+"2150": {},
+"443081": {
+"health": 500.0,
+"attack_speed": 0.75,
+"percent_move_speed": 0.03999999910593033
+},
+"222503": {
+"ability_power": 60.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"1028": {
+"health": 150.0
+},
+"1052": {
+"ability_power": 20.0
+},
+"223033": {
+"attack_damage": 30.0,
+"crit_chance": 0.25,
+"percent_armor_pen": 0.30000001192092896
+},
+"223181": {
+"health": 500.0,
+"attack_damage": 40.0,
+"percent_move_speed": 0.03999999910593033
+},
+"2151": {},
+"222502": {
+"health": 350.0,
+"armor": 50.0,
+"ability_haste": 10.0
+},
+"4005": {
+"ability_power": 60.0,
+"ability_haste": 20.0,
+"percent_base_mana_regen": 1.25
+},
+"1053": {
+"attack_damage": 15.0,
+"life_steal": 0.07000000029802322
+},
+"4630": {
+"ability_power": 25.0,
+"percent_magic_pen": 0.12999999523162842
+},
+"6665": {
+"health": 350.0,
+"armor": 45.0,
+"magic_resist": 45.0
+},
+"2152": {},
+"223193": {
+"armor": 60.0,
+"magic_resist": 60.0,
+"ability_haste": 15.0
+},
+"223020": {
+"move_speed": 55.0,
+"magic_pen": 20.0
+},
+"3155": {
+"attack_damage": 25.0,
+"magic_resist": 25.0
+},
+"447102": {
+"health": 300.0,
+"ability_power": 80.0,
+"attack_speed": 0.4000000059604645
+},
+"446671": {
+"attack_damage": 65.0,
+"attack_speed": 0.30000001192092896,
+"crit_chance": 0.25,
+"percent_move_speed": 0.05999999865889549
+},
+"1102": {},
+"4629": {
+"health": 350.0,
+"ability_power": 70.0,
+"percent_move_speed": 0.03999999910593033,
+"ability_haste": 25.0
+},
+"3068": {
+"health": 350.0,
+"armor": 50.0,
+"ability_haste": 10.0
+},
+"6029": {
+"attack_damage": 30.0
+},
+"6697": {
+"attack_damage": 55.0,
+"ability_haste": 10.0,
+"lethality": 18.0
+},
+"223190": {
+"health": 400.0,
+"armor": 25.0,
+"magic_resist": 35.0,
+"ability_haste": 25.0
+},
+"6698": {
+"attack_damage": 55.0,
+"ability_haste": 10.0,
+"lethality": 18.0
+},
+"1058": {
+"ability_power": 65.0
+},
+"2065": {
+"ability_power": 50.0,
+"percent_move_speed": 0.03999999910593033,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.25
+},
+"667112": {
+"health": 500.0,
+"ability_haste": 20.0
+},
+"222530": {
+"health": 200.0,
+"mana": 1000.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.07999999821186066
+},
+"3142": {
+"attack_damage": 55.0,
+"percent_move_speed": 0.03999999910593033,
+"lethality": 18.0
+},
+"2520": {
+"attack_damage": 55.0,
+"ability_haste": 15.0,
+"lethality": 22.0
+},
+"4638": {
+"health": 150.0,
+"armor": 10.0,
+"magic_resist": 15.0,
+"ability_haste": 10.0
+},
+"222525": {
+"health": 600.0,
+"ability_haste": 15.0
+},
+"3190": {
+"health": 200.0,
+"armor": 25.0,
+"magic_resist": 25.0,
+"ability_haste": 10.0
+},
+"1038": {
+"attack_damage": 40.0
+},
+"8001": {
+"health": 650.0,
+"ability_haste": 20.0
+},
+"222524": {
+"health": 200.0,
+"armor": 25.0,
+"magic_resist": 25.0,
+"ability_haste": 10.0
+},
+"1103": {},
+"550002": {},
+"3078": {
+"health": 333.0,
+"attack_damage": 36.0,
+"attack_speed": 0.30000001192092896,
+"ability_haste": 15.0
+},
+"3211": {
+"health": 200.0,
+"magic_resist": 35.0,
+"percent_base_health_regen": 1.0
+},
+"2138": {},
+"444644": {
+"health": 350.0,
+"ability_power": 85.0,
+"ability_haste": 25.0,
+"mana": 600.0
+},
+"4646": {
+"ability_power": 90.0,
+"percent_move_speed": 0.05999999865889549,
+"magic_pen": 15.0
+},
+"1036": {
+"attack_damage": 10.0
+},
+"446656": {
+"health": 250.0,
+"ability_power": 100.0,
+"ability_haste": 25.0,
+"mana": 600.0
+},
+"3599": {},
+"6631": {
+"health": 450.0,
+"attack_damage": 40.0,
+"attack_speed": 0.25
+},
+"3152": {
+"health": 300.0,
+"ability_power": 70.0,
+"ability_haste": 20.0
+},
+"223105": {
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 10.0
+},
+"223119": {
+"health": 400.0,
+"ability_haste": 15.0,
+"mana": 600.0
+},
+"3877": {
+"health": 200.0,
+"percent_base_health_regen": 0.75,
+"percent_base_mana_regen": 0.75
+},
+"2139": {},
+"3128": {
+"ability_power": 120.0,
+"ability_haste": 10.0
+},
+"222526": {
+"health": 200.0,
+"mana": 300.0,
+"percent_base_mana_regen": 0.75,
+"heal_shield_power": 0.07999999821186066
+},
+"1037": {
+"attack_damage": 25.0
+},
+"994403": {
+"health": 200.0,
+"attack_damage": 90.0,
+"ability_power": 110.0,
+"armor": 20.0,
+"magic_resist": 20.0,
+"attack_speed": 0.4000000059604645,
+"crit_chance": 0.15000000596046448,
+"life_steal": 0.10000000149011612,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 20.0,
+"percent_base_health_regen": 0.5,
+"mana": 200.0,
+"percent_base_mana_regen": 1.0
+},
+"223118": {
+"ability_power": 70.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"1106": {},
+"223107": {
+"ability_power": 30.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.1599999964237213
+},
+"1035": {},
+"1107": {},
+"323121": {
+"health": 550.0,
+"ability_haste": 15.0,
+"mana": 1000.0
+},
+"223100": {
+"ability_power": 80.0,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 20.0
+},
+"223116": {
+"health": 350.0,
+"ability_power": 60.0
+},
+"3814": {
+"health": 250.0,
+"attack_damage": 50.0,
+"lethality": 15.0
+},
+"222523": {
+"attack_damage": 50.0,
+"crit_chance": 0.25
+},
+"1104": {},
+"6672": {
+"attack_damage": 45.0,
+"attack_speed": 0.4000000059604645,
+"percent_move_speed": 0.03999999910593033
+},
+"223115": {
+"ability_power": 70.0,
+"attack_speed": 0.44999998807907104,
+"ability_haste": 10.0
+},
+"222522": {
+"ability_power": 90.0,
+"ability_haste": 10.0,
+"mana": 300.0
+},
+"1033": {
+"magic_resist": 20.0
+},
+"1105": {},
+"3001": {
+"health": 200.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 20.0
+},
+"447110": {
+"health": 400.0,
+"ability_power": 85.0,
+"tenacity": 0.30000001192092896
+},
+"223102": {
+"ability_power": 80.0,
+"magic_resist": 40.0
+},
+"447105": {
+"ability_power": 70.0,
+"ability_haste": 30.0,
+"percent_base_mana_regen": 1.25,
+"heal_shield_power": 0.18000000715255737
+},
+"3051": {
+"attack_damage": 20.0,
+"attack_speed": 0.20000000298023224
+},
+"6620": {
+"health": 200.0,
+"ability_power": 35.0,
+"ability_haste": 20.0,
+"percent_base_mana_regen": 1.25
+},
+"6691": {
+"attack_damage": 60.0,
+"ability_haste": 15.0,
+"lethality": 18.0
+},
+"6656": {
+"health": 250.0,
+"ability_power": 70.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"2020": {
+"attack_damage": 25.0,
+"ability_haste": 10.0,
+"lethality": 5.0
+},
+"1031": {
+"armor": 40.0
+},
+"223112": {
+"ability_power": 55.0,
+"ability_haste": 25.0
+},
+"223005": {
+"move_speed": 70.0
+},
+"2021": {
+"health": 250.0,
+"attack_damage": 15.0
+},
+"6692": {
+"attack_damage": 60.0,
+"ability_haste": 15.0
+},
+"223111": {
+"magic_resist": 30.0,
+"move_speed": 30.0,
+"tenacity": 0.30000001192092896
+},
+"2022": {
+"ability_haste": 5.0
+},
+"2524": {
+"health": 200.0,
+"armor": 20.0,
+"magic_resist": 20.0,
+"ability_haste": 15.0
+},
+"2143": {},
+"223110": {
+"armor": 90.0,
+"ability_haste": 15.0,
+"mana": 450.0
+},
+"4016": {
+"ability_power": 50.0,
+"ability_haste": 25.0,
+"heal_shield_power": 0.25
+},
+"2033": {},
+"667666": {
+"attack_damage": 50.0,
+"crit_chance": 0.25,
+"lethality": 10.0
+},
+"3002": {
+"health": 250.0,
+"armor": 40.0,
+"percent_move_speed": 0.03999999910593033
+},
+"447103": {
+"attack_damage": 70.0,
+"omnivamp": 0.15000000596046448,
+"ability_haste": 30.0
+},
+"226620": {
+"health": 300.0,
+"ability_power": 40.0,
+"ability_haste": 30.0,
+"percent_base_mana_regen": 1.5
+},
+"2031": {},
+"2055": {},
+"226621": {
+"ability_power": 45.0,
+"percent_base_mana_regen": 2.0,
+"heal_shield_power": 0.1599999964237213
+},
+"6657": {
+"health": 350.0,
+"ability_power": 45.0,
+"mana": 500.0
+},
+"447101": {
+"attack_speed": 0.699999988079071,
+"percent_move_speed": 0.07999999821186066,
+"ability_haste": 40.0
+},
+"3008": {
+"omnivamp": 0.03999999910593033,
+"move_speed": 45.0
+},
+"6032": {},
+"224401": {
+"health": 400.0,
+"magic_resist": 50.0,
+"percent_move_speed": 0.03999999910593033
+},
+"443064": {},
+"2056": {},
+"224644": {
+"health": 250.0,
+"ability_power": 85.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"224403": {
+"health": 250.0,
+"attack_damage": 90.0,
+"ability_power": 125.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"attack_speed": 0.6000000238418579,
+"crit_chance": 0.25,
+"omnivamp": 0.10000000149011612,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 20.0,
+"percent_base_health_regen": 1.0,
+"mana": 250.0,
+"percent_base_mana_regen": 1.0
+},
+"2510": {
+"health": 300.0,
+"ability_power": 60.0,
+"attack_speed": 0.20000000298023224,
+"ability_haste": 20.0
+},
+"2051": {
+"health": 150.0,
+"health_regen": 4.0
+},
+"447104": {
+"health": 200.0,
+"ability_power": 70.0,
+"ability_haste": 20.0
+},
+"2050": {
+"health": 300.0,
+"ability_power": 35.0,
+"ability_haste": 15.0
+},
+"3146": {
+"attack_damage": 40.0,
+"ability_power": 80.0,
+"omnivamp": 0.10000000149011612
+},
+"3107": {
+"ability_power": 30.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.10000000149011612
+},
+"220004": {},
+"123430": {
+"ability_power": 55.0,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033,
+"ability_haste": 10.0
+},
+"2525": {
+"health": 600.0,
+"ability_haste": 20.0
+},
+"220005": {},
+"3193": {
+"armor": 60.0,
+"magic_resist": 60.0,
+"ability_haste": 15.0
+},
+"447119": {
+"health": 500.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 20.0
+},
+"3087": {
+"attack_damage": 40.0,
+"ability_power": 45.0,
+"attack_speed": 0.30000001192092896,
+"percent_move_speed": 0.03999999910593033
+},
+"550001": {},
+"220006": {},
+"2049": {
+"ability_power": 20.0,
+"ability_haste": 20.0,
+"heal_shield_power": 0.15000000596046448
+},
+"1120": {
+"health": 110.0,
+"armor": 10.0,
+"magic_resist": 10.0
+},
+"220007": {},
+"323004": {
+"attack_damage": 35.0,
+"ability_haste": 15.0,
+"mana": 500.0
+},
+"3363": {},
+"4010": {
+"health": 350.0,
+"ability_power": 60.0,
+"ability_haste": 15.0
+},
+"3077": {
+"attack_damage": 20.0
+},
+"220000": {},
+"220001": {},
+"323002": {
+"health": 300.0,
+"armor": 45.0,
+"percent_move_speed": 0.05999999865889549
+},
+"323050": {
+"health": 350.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 10.0
+},
+"6667": {
+"health": 350.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 10.0
+},
+"326657": {
+"health": 350.0,
+"ability_power": 45.0,
+"mana": 500.0
+},
+"220002": {},
+"323003": {
+"ability_power": 70.0,
+"ability_haste": 25.0,
+"mana": 600.0
+},
+"220003": {},
+"3156": {
+"attack_damage": 60.0,
+"magic_resist": 40.0,
+"ability_haste": 15.0
+},
+"220012": {},
+"3364": {},
+"220011": {},
+"3044": {
+"health": 200.0,
+"attack_damage": 15.0
+},
+"447109": {
+"ability_power": 80.0,
+"armor": 30.0,
+"magic_resist": 30.0
+},
+"6610": {
+"health": 400.0,
+"attack_damage": 45.0,
+"ability_haste": 10.0
+},
+"226656": {
+"health": 250.0,
+"ability_power": 70.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"220008": {},
+"4013": {
+"ability_power": 70.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"tenacity": 0.30000001192092896
+},
+"220009": {},
+"3330": {},
+"1208": {},
+"4402": {
+"health": 400.0,
+"attack_damage": 30.0,
+"ability_haste": 10.0,
+"mana": 300.0
+},
+"3143": {
+"health": 350.0,
+"armor": 75.0
+},
+"4403": {
+"health": 250.0,
+"attack_damage": 70.0,
+"ability_power": 120.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"attack_speed": 0.5,
+"crit_chance": 0.30000001192092896,
+"life_steal": 0.10000000149011612,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 20.0,
+"percent_base_health_regen": 1.0,
+"mana": 250.0,
+"percent_base_mana_regen": 1.0
+},
+"3399": {},
+"3011": {
+"ability_power": 35.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 0.75,
+"heal_shield_power": 0.10000000149011612
+},
+"3398": {},
+"2145": {},
+"3153": {
+"attack_damage": 40.0,
+"attack_speed": 0.25,
+"life_steal": 0.10000000149011612
+},
+"222065": {
+"ability_power": 55.0,
+"percent_move_speed": 0.05999999865889549,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.5
+},
+"443059": {
+"health": 300.0,
+"magic_resist": 100.0
+},
+"2512": {
+"attack_speed": 0.44999998807907104,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"326616": {
+"ability_power": 45.0,
+"ability_haste": 10.0,
+"percent_base_mana_regen": 1.5,
+"heal_shield_power": 0.10000000149011612
+},
+"6662": {
+"health": 300.0,
+"armor": 50.0,
+"ability_haste": 15.0
+},
+"322065": {
+"ability_power": 65.0,
+"percent_move_speed": 0.05999999865889549,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.5
+},
+"223748": {
+"health": 400.0,
+"attack_damage": 40.0
+},
+"326617": {
+"health": 400.0,
+"ability_power": 35.0,
+"ability_haste": 20.0,
+"percent_base_mana_regen": 1.5
+},
+"226617": {
+"health": 200.0,
+"ability_power": 35.0,
+"ability_haste": 30.0,
+"percent_base_mana_regen": 1.25
+},
+"3116": {
+"health": 400.0,
+"ability_power": 65.0
+},
+"447115": {
+"attack_damage": 60.0,
+"percent_move_speed": 0.07999999821186066,
+"lethality": 15.0
+},
+"3074": {
+"attack_damage": 65.0,
+"life_steal": 0.11999999731779099,
+"ability_haste": 15.0
+},
+"3075": {
+"health": 150.0,
+"armor": 75.0
+},
+"3076": {
+"armor": 30.0
+},
+"667101": {
+"percent_move_speed": 0.15000000596046448,
+"ability_haste": 10.0,
+"lethality": 15.0,
+"magic_pen": 15.0
+},
+"3067": {
+"health": 200.0,
+"ability_haste": 10.0
+},
+"3032": {
+"attack_damage": 50.0,
+"attack_speed": 0.4000000059604645
+},
+"3070": {
+"mana": 240.0
+},
+"3066": {
+"health": 200.0,
+"percent_move_speed": 0.03999999910593033
+},
+"223742": {
+"health": 300.0,
+"armor": 40.0,
+"percent_move_speed": 0.07000000029802322,
+"slow_resist": 0.25
+},
+"221053": {
+"attack_damage": 15.0,
+"life_steal": 0.07000000029802322
+},
+"221043": {
+"attack_speed": 0.15000000596046448
+},
+"3039": {
+"health": 700.0,
+"crit_chance": 0.20000000298023224,
+"ability_haste": 10.0
+},
+"3065": {
+"health": 400.0,
+"magic_resist": 50.0,
+"ability_haste": 10.0,
+"percent_base_health_regen": 1.0
+},
+"443063": {
+"armor": 50.0,
+"magic_resist": 50.0,
+"ability_haste": 25.0
+},
+"550004": {},
+"3072": {
+"attack_damage": 80.0,
+"life_steal": 0.15000000596046448
+},
+"223050": {
+"health": 300.0,
+"armor": 25.0,
+"magic_resist": 30.0,
+"ability_haste": 15.0
+},
+"2142": {},
+"1520": {},
+"221057": {
+"magic_resist": 30.0
+},
+"1521": {},
+"221058": {
+"ability_power": 120.0
+},
+"221026": {
+"ability_power": 45.0
+},
+"1522": {},
+"6701": {
+"attack_damage": 55.0,
+"lethality": 18.0
+},
+"1523": {},
+"6700": {
+"attack_damage": 50.0,
+"armor": 30.0,
+"percent_move_speed": 0.05000000074505806,
+"ability_haste": 10.0
+},
+"9183": {},
+"1524": {},
+"9180": {},
+"3031": {
+"attack_damage": 75.0,
+"crit_chance": 0.25,
+"crit_damage": 0.30000001192092896
+},
+"6702": {},
+"9181": {},
+"447112": {
+"health": 500.0,
+"ability_haste": 20.0
+},
+"328020": {
+"health": 350.0,
+"magic_resist": 50.0,
+"ability_haste": 15.0
+},
+"1506": {},
+"3033": {
+"attack_damage": 35.0,
+"crit_chance": 0.25,
+"percent_armor_pen": 0.30000001192092896
+},
+"3053": {
+"health": 400.0,
+"tenacity": 0.20000000298023224
+},
+"1507": {},
+"9187": {},
+"1504": {},
+"550005": {},
+"9184": {},
+"9168": {},
+"3035": {
+"attack_damage": 20.0,
+"percent_armor_pen": 0.18000000715255737
+},
+"1505": {},
+"226035": {
+"health": 300.0,
+"attack_damage": 40.0,
+"magic_resist": 40.0
+},
+"3109": {
+"health": 200.0,
+"armor": 40.0,
+"ability_haste": 10.0,
+"percent_base_health_regen": 1.0
+},
+"9185": {},
+"3036": {
+"attack_damage": 35.0,
+"crit_chance": 0.25,
+"percent_armor_pen": 0.3499999940395355
+},
+"1502": {},
+"6653": {
+"health": 300.0,
+"ability_power": 60.0
+},
+"9190": {},
+"3057": {
+"ability_haste": 10.0
+},
+"3047": {
+"armor": 25.0,
+"move_speed": 45.0
+},
+"3184": {
+"health": 150.0,
+"attack_damage": 25.0,
+"life_steal": 0.05000000074505806
+},
+"1503": {},
+"9193": {},
+"3046": {
+"attack_speed": 0.6499999761581421,
+"crit_chance": 0.25,
+"percent_move_speed": 0.10000000149011612
+},
+"1500": {},
+"3508": {
+"attack_damage": 50.0,
+"crit_chance": 0.25,
+"ability_haste": 20.0
+},
+"443069": {
+"attack_damage": 45.0,
+"attack_speed": 0.4000000059604645,
+"crit_chance": 0.25
+},
+"9188": {},
+"9192": {},
+"3041": {
+"health": 100.0,
+"ability_power": 20.0
+},
+"1501": {},
+"9189": {},
+"3040": {
+"ability_power": 70.0,
+"ability_haste": 25.0,
+"mana": 1000.0
+},
+"3157": {
+"ability_power": 105.0,
+"armor": 50.0
+},
+"3110": {
+"armor": 75.0,
+"ability_haste": 20.0,
+"mana": 400.0
+},
+"2504": {
+"health": 400.0,
+"magic_resist": 80.0,
+"percent_base_health_regen": 1.0
+},
+"3108": {
+"ability_power": 25.0,
+"ability_haste": 10.0
+},
+"447123": {
+"attack_speed": 0.30000001192092896,
+"ability_haste": 40.0,
+"percent_base_mana_regen": 1.5,
+"heal_shield_power": 0.15000000596046448
+},
+"3600": {},
+"4014": {
+"health": 600.0,
+"attack_speed": 0.6000000238418579
+},
+"3042": {
+"attack_damage": 35.0,
+"ability_haste": 15.0,
+"mana": 1000.0
+},
+"3853": {
+"health": 75.0,
+"ability_power": 40.0,
+"percent_base_mana_regen": 1.0
+},
+"447120": {
+"attack_speed": 0.30000001192092896
+},
+"6621": {
+"ability_power": 45.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.1599999964237213
+},
+"3850": {
+"health": 25.0,
+"ability_power": 10.0,
+"percent_base_mana_regen": 0.25
+},
+"223008": {
+"omnivamp": 0.03999999910593033,
+"move_speed": 45.0
+},
+"3851": {
+"health": 70.0,
+"ability_power": 15.0,
+"percent_base_mana_regen": 0.5
+},
+"3870": {
+"health": 200.0,
+"percent_base_health_regen": 0.75,
+"percent_base_mana_regen": 0.75
+},
+"2517": {
+"attack_damage": 65.0,
+"omnivamp": 0.05000000074505806,
+"tenacity": 0.20000000298023224
+},
+"3168": {
+"omnivamp": 0.03999999910593033,
+"move_speed": 45.0
+},
+"3857": {
+"health": 250.0,
+"attack_damage": 15.0,
+"percent_base_health_regen": 1.0
+},
+"1508": {},
+"3119": {
+"health": 550.0,
+"ability_haste": 15.0,
+"mana": 500.0
+},
+"3854": {
+"health": 50.0,
+"attack_damage": 4.0,
+"percent_base_health_regen": 0.5
+},
+"443055": {
+"attack_damage": 55.0,
+"attack_speed": 0.44999998807907104,
+"percent_move_speed": 0.15000000596046448
+},
+"1509": {},
+"323222": {
+"health": 400.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.15000000596046448
+},
+"3742": {
+"health": 350.0,
+"armor": 55.0,
+"percent_move_speed": 0.03999999910593033,
+"slow_resist": 0.15000000596046448
+},
+"2146": {},
+"3855": {
+"health": 100.0,
+"attack_damage": 6.0,
+"percent_base_health_regen": 0.75
+},
+"443056": {},
+"3100": {
+"ability_power": 100.0,
+"percent_move_speed": 0.03999999910593033,
+"ability_haste": 10.0
+},
+"6632": {
+"health": 300.0,
+"attack_damage": 40.0,
+"ability_haste": 20.0
+},
+"3858": {
+"health": 50.0,
+"ability_power": 7.0,
+"percent_base_health_regen": 0.5
+},
+"443054": {
+"armor": 55.0,
+"attack_speed": 0.5,
+"percent_move_speed": 0.05000000074505806
+},
+"3010": {
+"move_speed": 40.0
+},
+"6695": {
+"attack_damage": 55.0,
+"lethality": 15.0
+},
+"3102": {
+"ability_power": 105.0,
+"magic_resist": 40.0
+},
+"3222": {
+"health": 250.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.11999999731779099
+},
+"3859": {
+"health": 100.0,
+"ability_power": 10.0,
+"percent_base_health_regen": 0.75
+},
+"3113": {
+"ability_power": 30.0,
+"percent_move_speed": 0.03999999910593033
+},
+"664011": {
+"health": 150.0,
+"ability_power": 35.0,
+"ability_haste": 10.0,
+"heal_shield_power": 0.10000000149011612
+},
+"4012": {
+"health": 300.0,
+"armor": 45.0,
+"magic_resist": 45.0,
+"tenacity": 0.30000001192092896
+},
+"3112": {
+"health": 150.0,
+"ability_power": 50.0
+},
+"3105": {
+"armor": 25.0,
+"magic_resist": 25.0,
+"ability_haste": 10.0
+},
+"3111": {
+"magic_resist": 20.0,
+"move_speed": 45.0,
+"tenacity": 0.30000001192092896
+},
+"6673": {
+"attack_damage": 55.0,
+"crit_chance": 0.25
+},
+"3161": {
+"health": 450.0,
+"attack_damage": 45.0
+},
+"3175": {
+"move_speed": 45.0,
+"magic_pen": 18.0,
+"percent_magic_pen": 0.07999999821186066
+},
+"443058": {
+"health": 300.0,
+"armor": 100.0
+},
+"447107": {
+"attack_speed": 0.5,
+"percent_move_speed": 0.07999999821186066
+},
+"3158": {
+"move_speed": 45.0,
+"ability_haste": 10.0
+},
+"3174": {
+"armor": 35.0,
+"move_speed": 45.0
+},
+"9292": {},
+"3117": {
+"move_speed": 45.0
+},
+"3177": {
+"health": 150.0,
+"attack_damage": 30.0,
+"ability_haste": 15.0
+},
+"2163": {},
+"9293": {},
+"3176": {
+"move_speed": 55.0
+},
+"3748": {
+"health": 600.0,
+"attack_damage": 40.0
+},
+"3901": {},
+"9290": {},
+"3115": {
+"ability_power": 80.0,
+"attack_speed": 0.5,
+"ability_haste": 15.0
+},
+"3165": {
+"health": 350.0,
+"ability_power": 75.0,
+"ability_haste": 15.0
+},
+"3171": {
+"move_speed": 45.0,
+"ability_haste": 20.0
+},
+"2503": {
+"ability_power": 80.0,
+"ability_haste": 20.0,
+"mana": 600.0
+},
+"3902": {},
+"3114": {
+"percent_base_mana_regen": 0.5,
+"heal_shield_power": 0.07999999821186066
+},
+"3170": {
+"move_speed": 65.0,
+"slow_resist": 0.25
+},
+"222141": {},
+"3903": {},
+"663056": {},
+"3172": {
+"attack_speed": 0.4000000059604645,
+"life_steal": 0.05000000074505806,
+"move_speed": 45.0
+},
+"447116": {
+"health": 400.0,
+"ability_haste": 30.0
+},
+"223142": {
+"attack_damage": 55.0,
+"percent_move_speed": 0.03999999910593033,
+"lethality": 22.0
+},
+"447114": {
+"armor": 35.0,
+"magic_resist": 35.0,
+"attack_speed": 0.4000000059604645
+},
+"224628": {
+"ability_power": 90.0,
+"ability_haste": 25.0
+},
+"3916": {
+"ability_power": 25.0
+},
+"224629": {
+"health": 350.0,
+"ability_power": 65.0,
+"percent_move_speed": 0.03999999910593033,
+"ability_haste": 35.0
+},
+"3095": {
+"attack_damage": 50.0,
+"attack_speed": 0.20000000298023224,
+"crit_chance": 0.25
+},
+"447111": {
+"health": 400.0,
+"attack_damage": 40.0
+},
+"223071": {
+"health": 350.0,
+"attack_damage": 40.0,
+"ability_haste": 20.0
+},
+"223072": {
+"attack_damage": 70.0,
+"life_steal": 0.18000000715255737
+},
+"223073": {
+"health": 450.0,
+"attack_damage": 40.0,
+"attack_speed": 0.30000001192092896
+},
+"4003": {
+"attack_damage": 25.0,
+"percent_move_speed": 0.03999999910593033,
+"lethality": 5.0
+},
+"223074": {
+"attack_damage": 70.0,
+"life_steal": 0.15000000596046448,
+"ability_haste": 15.0
+},
+"223075": {
+"health": 300.0,
+"armor": 60.0
+},
+"223011": {
+"ability_power": 35.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 0.75,
+"heal_shield_power": 0.10000000149011612
+},
+"663039": {
+"health": 500.0,
+"crit_chance": 0.20000000298023224
+},
+"9308": {},
+"223004": {
+"attack_damage": 40.0,
+"ability_haste": 15.0,
+"mana": 600.0
+},
+"323504": {
+"ability_power": 55.0,
+"percent_move_speed": 0.05999999865889549,
+"percent_base_mana_regen": 1.5,
+"heal_shield_power": 0.10000000149011612
+},
+"223067": {
+"health": 200.0,
+"ability_haste": 10.0
+},
+"223057": {
+"ability_haste": 10.0
+},
+"223078": {
+"health": 333.0,
+"attack_damage": 35.0,
+"attack_speed": 0.25,
+"ability_haste": 20.0
+},
+"223006": {
+"attack_speed": 0.3499999940395355,
+"move_speed": 55.0
+},
+"663058": {
+"health": 250.0,
+"armor": 80.0
+},
+"324005": {
+"ability_power": 65.0,
+"ability_haste": 20.0,
+"percent_base_mana_regen": 1.5
+},
+"223065": {
+"health": 300.0,
+"magic_resist": 40.0,
+"ability_haste": 10.0
+},
+"223001": {
+"health": 200.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 20.0
+},
+"663059": {
+"health": 250.0,
+"magic_resist": 60.0
+},
+"8010": {
+"health": 400.0,
+"ability_power": 65.0,
+"ability_haste": 15.0
+},
+"2502": {
+"health": 400.0,
+"armor": 50.0,
+"ability_haste": 15.0
+},
+"223053": {
+"health": 300.0,
+"tenacity": 0.20000000298023224
+},
+"223003": {
+"ability_power": 55.0,
+"ability_haste": 25.0,
+"mana": 600.0
+},
+"224646": {
+"ability_power": 90.0,
+"percent_move_speed": 0.03999999910593033,
+"magic_pen": 15.0
+},
+"223002": {
+"health": 300.0,
+"armor": 45.0,
+"percent_move_speed": 0.05999999865889549
+},
+"9300": {},
+"223068": {
+"health": 350.0,
+"armor": 40.0,
+"ability_haste": 10.0
+},
+"4017": {
+"attack_damage": 35.0,
+"lethality": 12.0
+},
+"9301": {},
+"443193": {
+"armor": 65.0,
+"magic_resist": 65.0,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 15.0
+},
+"224645": {
+"ability_power": 90.0,
+"magic_pen": 10.0
+},
+"3504": {
+"ability_power": 45.0,
+"percent_move_speed": 0.03999999910593033,
+"percent_base_mana_regen": 1.25,
+"heal_shield_power": 0.10000000149011612
+},
+"9302": {},
+"9303": {},
+"1090": {},
+"223009": {
+"move_speed": 70.0,
+"slow_resist": 0.4000000059604645
+},
+"223089": {
+"ability_power": 65.0
+},
+"9304": {},
+"1091": {},
+"226697": {
+"attack_damage": 50.0,
+"ability_haste": 10.0,
+"lethality": 18.0
+},
+"6035": {
+"health": 300.0,
+"attack_damage": 40.0,
+"magic_resist": 40.0
+},
+"9305": {},
+"1092": {},
+"9306": {},
+"1093": {},
+"1083": {
+"attack_damage": 7.0
+},
+"4641": {
+"health": 80.0,
+"percent_base_mana_regen": 0.25
+},
+"9307": {},
+"1094": {},
+"1082": {
+"health": 50.0,
+"ability_power": 15.0
+},
+"322530": {
+"health": 200.0,
+"mana": 1000.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.07999999821186066
+},
+"223091": {
+"magic_resist": 40.0,
+"attack_speed": 0.5,
+"tenacity": 0.20000000298023224
+},
+"223085": {
+"attack_speed": 0.44999998807907104,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"223143": {
+"health": 300.0,
+"armor": 75.0
+},
+"223153": {
+"attack_damage": 30.0,
+"attack_speed": 0.20000000298023224,
+"life_steal": 0.10000000149011612
+},
+"223084": {
+"health": 700.0
+},
+"223152": {
+"health": 400.0,
+"ability_power": 95.0,
+"ability_haste": 20.0
+},
+"3430": {
+"ability_power": 50.0,
+"crit_chance": 0.25,
+"ability_haste": 15.0
+},
+"223087": {
+"attack_damage": 40.0,
+"ability_power": 45.0,
+"attack_speed": 0.30000001192092896,
+"percent_move_speed": 0.03999999910593033
+},
+"223135": {
+"ability_power": 65.0,
+"percent_magic_pen": 0.4000000059604645
+},
+"223094": {
+"attack_speed": 0.30000001192092896,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"223146": {
+"attack_damage": 45.0,
+"ability_power": 90.0,
+"omnivamp": 0.15000000596046448
+},
+"446693": {
+"attack_damage": 60.0,
+"ability_haste": 20.0,
+"lethality": 20.0
+},
+"1086": {
+"attack_damage": 6.0,
+"attack_speed": 0.15000000596046448,
+"omnivamp": 0.014999999664723873
+},
+"1018": {
+"crit_chance": 0.15000000596046448
+},
+"226693": {
+"attack_damage": 55.0,
+"ability_haste": 15.0,
+"lethality": 22.0
+},
+"223095": {
+"attack_damage": 50.0,
+"attack_speed": 0.20000000298023224,
+"crit_chance": 0.25
+},
+"223157": {
+"ability_power": 80.0,
+"armor": 50.0
+},
+"223137": {
+"ability_power": 60.0,
+"ability_haste": 15.0,
+"percent_magic_pen": 0.30000001192092896
+},
+"446632": {
+"health": 350.0,
+"attack_damage": 55.0,
+"ability_haste": 20.0
+},
+"226692": {
+"attack_damage": 50.0,
+"ability_haste": 10.0
+},
+"223156": {
+"attack_damage": 50.0,
+"magic_resist": 40.0,
+"ability_haste": 15.0
+},
+"6676": {
+"attack_damage": 50.0,
+"crit_chance": 0.25,
+"lethality": 10.0
+},
+"2144": {},
+"446691": {
+"attack_damage": 50.0,
+"ability_haste": 20.0,
+"lethality": 20.0
+},
+"226691": {
+"attack_damage": 60.0,
+"ability_haste": 15.0,
+"lethality": 22.0
+},
+"223165": {
+"health": 250.0,
+"ability_power": 90.0,
+"ability_haste": 15.0
+},
+"1043": {
+"attack_speed": 0.15000000596046448
+},
+"663172": {
+"attack_speed": 0.4000000059604645,
+"percent_move_speed": 0.07999999821186066,
+"ability_haste": 25.0,
+"tenacity": 0.20000000298023224
+},
+"3871": {
+"health": 200.0,
+"percent_base_health_regen": 0.75,
+"percent_base_mana_regen": 0.75
+},
+"1042": {
+"attack_speed": 0.10000000149011612
+},
+"226657": {
+"health": 350.0,
+"ability_power": 60.0,
+"mana": 300.0
+},
+"226696": {
+"attack_damage": 45.0,
+"ability_haste": 20.0,
+"lethality": 18.0
+},
+"2522": {
+"ability_power": 90.0,
+"ability_haste": 10.0,
+"mana": 300.0
+},
+"1040": {},
+"226695": {
+"attack_damage": 55.0,
+"lethality": 19.0
+},
+"226609": {
+"health": 450.0,
+"attack_damage": 45.0,
+"ability_haste": 15.0
+},
+"226655": {
+"ability_power": 85.0,
+"ability_haste": 25.0,
+"mana": 600.0
+},
+"223161": {
+"health": 350.0,
+"attack_damage": 40.0
+},
+"226694": {
+"attack_damage": 40.0,
+"ability_haste": 10.0,
+"percent_armor_pen": 0.4000000059604645
+},
+"223158": {
+"move_speed": 45.0,
+"ability_haste": 40.0
+},
+"2140": {},
+"226653": {
+"health": 250.0,
+"ability_power": 50.0
+},
+"2147": {},
+"1011": {
+"health": 350.0
+},
+"3009": {
+"move_speed": 55.0,
+"slow_resist": 0.25
+},
+"226699": {
+"attack_damage": 50.0,
+"ability_haste": 20.0,
+"lethality": 18.0
+},
+"223139": {
+"attack_damage": 45.0,
+"magic_resist": 40.0,
+"life_steal": 0.10000000149011612
+},
+"443062": {
+"ability_power": 80.0,
+"ability_haste": 20.0,
+"heal_shield_power": 0.15000000596046448
+},
+"226698": {
+"attack_damage": 50.0,
+"ability_haste": 15.0,
+"lethality": 18.0
+},
+"1001": {
+"move_speed": 25.0
+},
+"223172": {
+"attack_speed": 0.5,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 30.0,
+"tenacity": 0.20000000298023224
+},
+"3866": {
+"health": 100.0,
+"percent_base_health_regen": 0.5,
+"percent_base_mana_regen": 0.5
+},
+"667109": {
+"ability_power": 60.0,
+"armor": 25.0,
+"magic_resist": 25.0
+},
+"4642": {
+"ability_power": 20.0,
+"ability_haste": 10.0,
+"percent_base_mana_regen": 1.0
+},
+"226662": {
+"health": 300.0,
+"armor": 45.0,
+"ability_haste": 10.0
+},
+"1006": {
+"percent_base_health_regen": 1.0
+},
+"4643": {
+"health": 250.0,
+"armor": 25.0,
+"magic_resist": 30.0,
+"ability_haste": 20.0
+},
+"223177": {
+"health": 250.0,
+"attack_damage": 25.0,
+"ability_haste": 15.0
+},
+"323190": {
+"health": 250.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 10.0
+},
+"226660": {
+"health": 150.0,
+"ability_haste": 5.0
+},
+"550006": {},
+"1004": {
+"percent_base_mana_regen": 0.5
+},
+"226675": {
+"attack_speed": 0.3499999940395355,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"2161": {},
+"2162": {},
+"1111": {
+"armor": 25.0,
+"magic_resist": 20.0,
+"attack_speed": 0.25,
+"move_speed": 100.0,
+"ability_haste": 10.0,
+"magic_pen": 12.0,
+"tenacity": 0.30000001192092896,
+"slow_resist": 0.25
+},
+"226610": {
+"health": 350.0,
+"attack_damage": 40.0,
+"ability_haste": 10.0
+},
+"664403": {
+"health": 250.0,
+"attack_damage": 90.0,
+"ability_power": 125.0,
+"armor": 10.0,
+"magic_resist": 10.0,
+"attack_speed": 0.30000001192092896,
+"crit_chance": 0.25,
+"life_steal": 0.10000000149011612,
+"ability_haste": 20.0,
+"percent_base_health_regen": 1.0,
+"mana": 250.0,
+"percent_base_mana_regen": 1.0
+},
+"226667": {
+"health": 350.0,
+"armor": 30.0,
+"magic_resist": 30.0,
+"ability_haste": 10.0
+},
+"226616": {
+"ability_power": 65.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.5,
+"heal_shield_power": 0.14000000059604645
+},
+"226664": {
+"health": 450.0,
+"magic_resist": 40.0,
+"ability_haste": 10.0
+},
+"226676": {
+"attack_damage": 45.0,
+"crit_chance": 0.25,
+"lethality": 12.0
+},
+"226671": {
+"attack_damage": 50.0,
+"attack_speed": 0.15000000596046448,
+"crit_chance": 0.20000000298023224,
+"percent_move_speed": 0.07000000029802322
+},
+"223814": {
+"health": 375.0,
+"attack_damage": 45.0,
+"lethality": 14.0
+},
+"443060": {
+"crit_chance": 0.5
+},
+"226673": {
+"attack_damage": 55.0,
+"crit_chance": 0.25
+},
+"226672": {
+"attack_damage": 40.0,
+"attack_speed": 0.3499999940395355,
+"percent_move_speed": 0.07000000029802322
+},
+"323119": {
+"health": 550.0,
+"ability_haste": 15.0,
+"mana": 500.0
+},
+"7050": {},
+"550003": {},
+"2007": {},
+"323042": {
+"attack_damage": 35.0,
+"ability_haste": 15.0,
+"mana": 1000.0
+},
+"323109": {
+"health": 300.0,
+"armor": 50.0,
+"ability_haste": 10.0,
+"percent_base_health_regen": 1.5
+},
+"444636": {
+"health": 300.0,
+"ability_power": 90.0,
+"ability_haste": 25.0
+},
+"2019": {
+"attack_damage": 15.0,
+"armor": 30.0
+},
+"323040": {
+"ability_power": 70.0,
+"ability_haste": 25.0,
+"mana": 1000.0
+},
+"326621": {
+"ability_power": 50.0,
+"percent_base_mana_regen": 1.5,
+"heal_shield_power": 0.20000000298023224
+},
+"2002": {},
+"323107": {
+"health": 400.0,
+"ability_power": 30.0,
+"ability_haste": 15.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.10000000149011612
+},
+"3144": {
+"attack_speed": 0.20000000298023224
+},
+"326620": {
+"health": 250.0,
+"ability_power": 35.0,
+"ability_haste": 20.0,
+"percent_base_mana_regen": 1.5
+},
+"2003": {},
+"228008": {
+"health": 600.0,
+"attack_damage": 65.0,
+"ability_power": 85.0,
+"armor": 50.0,
+"attack_speed": 0.30000001192092896,
+"crit_chance": 0.20000000298023224,
+"percent_move_speed": 0.10000000149011612,
+"ability_haste": 25.0
+},
+"323110": {
+"armor": 75.0,
+"ability_haste": 25.0,
+"mana": 500.0
+},
+"228009": {},
+"1222": {},
+"2001": {},
+"1221": {},
+"1220": {},
+"228004": {
+"health": 800.0,
+"armor": 50.0,
+"magic_resist": 100.0,
+"percent_move_speed": 0.05000000074505806,
+"ability_haste": 10.0
+},
+"228005": {
+"health": 700.0,
+"attack_damage": 70.0,
+"ability_haste": 40.0
+},
+"228006": {
+"attack_damage": 130.0,
+"attack_speed": 0.4000000059604645,
+"life_steal": 0.30000001192092896,
+"ability_haste": 15.0
+},
+"1209": {},
+"2010": {},
+"2008": {},
+"228001": {
+"health": 650.0,
+"ability_haste": 20.0
+},
+"1210": {},
+"2015": {
+"attack_damage": 15.0
+},
+"228002": {
+"ability_power": 300.0,
+"armor": 50.0,
+"ability_haste": 20.0
+},
+"1211": {},
+"8020": {
+"health": 350.0,
+"magic_resist": 45.0,
+"ability_haste": 15.0
+},
+"228003": {
+"attack_damage": 150.0,
+"crit_chance": 0.20000000298023224,
+"crit_damage": 0.44999998807907104,
+"lethality": 20.0
+},
+"1201": {},
+"1200": {},
+"443090": {
+"attack_speed": 0.5,
+"multiplicative_attack_speed": 0.15000000596046448,
+"percent_move_speed": 0.05000000074505806
+},
+"1203": {},
+"1202": {},
+"1205": {},
+"3348": {},
+"1204": {},
+"323075": {
+"health": 200.0,
+"armor": 85.0
+},
+"3349": {},
+"1207": {},
+"3003": {
+"ability_power": 70.0,
+"ability_haste": 25.0,
+"mana": 600.0
+},
+"1206": {},
+"3005": {
+"move_speed": 45.0
+},
+"226333": {
+"attack_damage": 60.0,
+"armor": 45.0,
+"ability_haste": 10.0
+},
+"3004": {
+"attack_damage": 35.0,
+"ability_haste": 15.0,
+"mana": 500.0
+},
+"323070": {
+"mana": 240.0
+},
+"3097": {
+"attack_damage": 50.0,
+"attack_speed": 0.20000000298023224,
+"crit_chance": 0.25
+},
+"3094": {
+"attack_speed": 0.3499999940395355,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"3006": {
+"attack_speed": 0.25,
+"move_speed": 45.0
+},
+"3340": {},
+"3089": {
+"ability_power": 130.0
+},
+"6670": {
+"attack_damage": 15.0,
+"crit_chance": 0.20000000298023224
+},
+"221031": {
+"armor": 40.0
+},
+"6675": {
+"attack_speed": 0.4000000059604645,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"3091": {
+"magic_resist": 45.0,
+"attack_speed": 0.5,
+"tenacity": 0.20000000298023224
+},
+"6677": {
+"attack_speed": 0.25
+},
+"126697": {
+"attack_damage": 55.0,
+"ability_haste": 10.0,
+"lethality": 18.0
+},
+"221038": {
+"attack_damage": 40.0
+},
+"3083": {
+"health": 1000.0,
+"percent_base_health_regen": 1.0
+},
+"3023": {
+"health": 150.0,
+"armor": 25.0,
+"ability_haste": 5.0
+},
+"3082": {
+"armor": 40.0
+},
+"3131": {
+"attack_damage": 30.0,
+"attack_speed": 0.25,
+"lethality": 18.0
+},
+"3085": {
+"attack_speed": 0.4000000059604645,
+"crit_chance": 0.25,
+"percent_move_speed": 0.03999999910593033
+},
+"550007": {},
+"1519": {},
+"3020": {
+"move_speed": 45.0,
+"magic_pen": 12.0
+},
+"1518": {},
+"3133": {
+"attack_damage": 20.0,
+"ability_haste": 10.0
+},
+"4011": {
+"health": 200.0,
+"ability_power": 45.0,
+"ability_haste": 15.0,
+"heal_shield_power": 0.11999999731779099
+},
+"3086": {
+"attack_speed": 0.15000000596046448,
+"crit_chance": 0.15000000596046448,
+"percent_move_speed": 0.03999999910593033
+},
+"3135": {
+"ability_power": 95.0,
+"percent_magic_pen": 0.4000000059604645
+},
+"3145": {
+"ability_power": 45.0
+},
+"6609": {
+"health": 450.0,
+"attack_damage": 45.0,
+"ability_haste": 15.0
+},
+"3134": {
+"attack_damage": 20.0,
+"lethality": 10.0
+},
+"9179": {},
+"3024": {
+"armor": 25.0,
+"ability_haste": 10.0,
+"mana": 300.0
+},
+"3012": {
+"health": 200.0,
+"percent_base_mana_regen": 0.5
+},
+"3147": {
+"health": 200.0,
+"ability_power": 30.0
+},
+"9178": {},
+"3013": {
+"move_speed": 45.0
+},
+"3140": {
+"magic_resist": 30.0
+},
+"223508": {
+"attack_damage": 50.0,
+"crit_chance": 0.25,
+"ability_haste": 20.0
+},
+"3139": {
+"attack_damage": 50.0,
+"magic_resist": 35.0,
+"life_steal": 0.10000000149011612
+},
+"1511": {},
+"1510": {},
+"221011": {
+"health": 300.0
+},
+"443080": {},
+"9173": {},
+"443083": {
+"health": 1100.0,
+"percent_move_speed": 0.03999999910593033
+},
+"1512": {},
+"9172": {},
+"1515": {},
+"6694": {
+"attack_damage": 45.0,
+"ability_haste": 15.0,
+"percent_armor_pen": 0.3499999940395355
+},
+"9171": {},
+"1517": {},
+"9177": {},
+"2526": {
+"health": 200.0,
+"mana": 300.0,
+"percent_base_mana_regen": 0.75,
+"heal_shield_power": 0.07999999821186066
+},
+"222051": {
+"health": 300.0,
+"health_regen": 4.0
+},
+"1516": {},
+"9274": {},
+"9176": {},
+"9275": {},
+"6690": {
+"attack_damage": 15.0,
+"percent_move_speed": 0.03999999910593033
+},
+"9175": {},
+"9276": {},
+"9174": {},
+"9277": {},
+"223504": {
+"ability_power": 40.0,
+"percent_move_speed": 0.05999999865889549,
+"percent_base_mana_regen": 1.5,
+"heal_shield_power": 0.11999999731779099
+},
+"9289": {},
+"9271": {},
+"3801": {
+"health": 200.0,
+"percent_base_health_regen": 1.0
+},
+"223222": {
+"health": 400.0,
+"percent_base_mana_regen": 1.0,
+"heal_shield_power": 0.1599999964237213
+},
+"9288": {},
+"9272": {},
+"9273": {},
+"3803": {
+"health": 300.0,
+"mana": 375.0
+},
+"3802": {
+"ability_power": 40.0,
+"ability_haste": 10.0,
+"mana": 300.0
+},
+"222022": {
+"ability_haste": 5.0
+},
+"3123": {
+"attack_damage": 15.0
+},
+"447106": {},
+"663060": {
+"crit_chance": 0.5
+},
+"3867": {
+"health": 200.0,
+"percent_base_health_regen": 0.75,
+"percent_base_mana_regen": 0.75
+},
+"9278": {},
+"447100": {
+"attack_speed": 0.6000000238418579,
+"percent_move_speed": 0.05999999865889549
+},
+"2501": {
+"health": 550.0,
+"attack_damage": 30.0
+},
+"9281": {},
+"9279": {},
+"224005": {
+"ability_power": 60.0,
+"ability_haste": 35.0,
+"percent_base_mana_regen": 1.5
+},
+"3865": {
+"health": 30.0,
+"percent_base_health_regen": 0.25,
+"percent_base_mana_regen": 0.25
+},
+"9280": {},
+"3864": {
+"health": 75.0,
+"attack_damage": 20.0,
+"percent_base_mana_regen": 1.0
+},
+"663064": {},
+"9283": {},
+"9407": {},
+"3863": {
+"health": 60.0,
+"attack_damage": 10.0,
+"percent_base_mana_regen": 0.5
+},
+"9406": {},
+"3862": {
+"health": 25.0,
+"attack_damage": 6.0,
+"percent_base_mana_regen": 0.25
+},
+"9285": {},
+"9405": {},
+"4015": {
+"ability_power": 60.0,
+"percent_move_speed": 0.05000000074505806,
+"percent_armor_pen": 0.2199999988079071,
+"percent_magic_pen": 0.30000001192092896
+},
+"9284": {},
+"9404": {},
+"3860": {
+"health": 250.0,
+"ability_power": 20.0,
+"percent_base_health_regen": 1.0
+},
+"664644": {
+"health": 250.0,
+"ability_power": 65.0,
+"ability_haste": 15.0,
+"mana": 600.0
+},
+"9287": {},
+"9403": {},
+"226701": {
+"attack_damage": 50.0,
+"lethality": 15.0
+},
+"9402": {},
+"9401": {},
+"9400": {},
+"223302": {
+"attack_damage": 30.0,
+"attack_speed": 0.25
+},
+"3400": {}
+},
+"notes": "mr_per_level read from hash field {01262a25} (Garen 1.55 matches the 26.19 record mrPerLevel)"
+}

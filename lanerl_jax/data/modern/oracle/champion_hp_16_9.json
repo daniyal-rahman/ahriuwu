@@ -1,0 +1,854 @@
+{
+ "source": "https://raw.communitydragon.org/16.9/game/data/characters/<name>/<name>.bin.json",
+ "patch": "16.9",
+ "retrieved": "2026-10-01",
+ "cache": "/mnt/nfs/shared/replay-oracle-16.9/champions-16.9",
+ "champions": {
+  "aatrox": {
+   "base_hp": 650.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "bc34b23513cbad2978a26429bb40104438b1d037384a62d8be66a5ce53faf3e8"
+  },
+  "ahri": {
+   "base_hp": 590.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "e7a828573fcd8c0ca24bf4baf65bfaeb3e43b5b948d5082bda5006f9b8b35dcc"
+  },
+  "akali": {
+   "base_hp": 600.0,
+   "hp_per_level": 119.0,
+   "bin_sha256": "f66b4d8484099769b46bed2f4ed51c8253e8982d905b2ccb01cca8766bb5e4d1"
+  },
+  "akshan": {
+   "base_hp": 610.0,
+   "hp_per_level": 107.0,
+   "bin_sha256": "a85dfa0e56a720af95b7cf0efef33512027e3f90a426cead5fe808759fdba465"
+  },
+  "alistar": {
+   "base_hp": 685.0,
+   "hp_per_level": 120.0,
+   "bin_sha256": "27cbc357e3441da2bbc2864484fb78efbd837ca662cb18e0555056034f23863b"
+  },
+  "ambessa": {
+   "base_hp": 630.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "9210066fbc830388e6d54c05f3742d35d32600f275525dd5badb2ff4a2f7e477"
+  },
+  "amumu": {
+   "base_hp": 685.0,
+   "hp_per_level": 94.0,
+   "bin_sha256": "d17d01c5b7c06cb55f3a883cc26aa710242dfd339ae6a664e3d30b2840d0fb66"
+  },
+  "anivia": {
+   "base_hp": 550.0,
+   "hp_per_level": 92.0,
+   "bin_sha256": "885b5f0ca8aa476a792ea469bfe08414ba3ba32589eb802d1798545f2453b853"
+  },
+  "annie": {
+   "base_hp": 560.0,
+   "hp_per_level": 96.0,
+   "bin_sha256": "add99fbe68eb8da73c5a4ffd15edcd5634a5e86174bb3ebdde9b942eb5fe21b7"
+  },
+  "aphelios": {
+   "base_hp": 600.0,
+   "hp_per_level": 102.0,
+   "bin_sha256": "b1370cd9ab3b3f9fc07d532ac8afc18b27f18623048a520bdadf31da63620f70"
+  },
+  "ashe": {
+   "base_hp": 610.0,
+   "hp_per_level": 101.0,
+   "bin_sha256": "d5074498616ef6561f5801da6c10c497438b4b4f06be3a78fee7dcb43317179c"
+  },
+  "aurelionsol": {
+   "base_hp": 600.0,
+   "hp_per_level": 90.0,
+   "bin_sha256": "2344f124c17a0cb9b8b8fae1bfe5f5b8626e79d837b2e11ffc1e7ed4ef2a4aa8"
+  },
+  "aurora": {
+   "base_hp": 607.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "d60411838a10f0c63088e211bd49c061beb14b9d9690458d85a1f2b8e7b1247d"
+  },
+  "azir": {
+   "base_hp": 575.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "7c3ef322465dd388346ae10fe39d018818eb6d5a6cc41bf7c46ff06b2447df23"
+  },
+  "bard": {
+   "base_hp": 630.0,
+   "hp_per_level": 103.0,
+   "bin_sha256": "e5442aaee5bac533a75cbb668cdaf8f2143c0750fcb31186244301c9c33b57ca"
+  },
+  "belveth": {
+   "base_hp": 610.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "987261360ef10aa5c3fbce5fe1ca636940b49b2855a32f3317ac5d27d974f5de"
+  },
+  "blitzcrank": {
+   "base_hp": 600.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "43f3e35ff5bb314da84528074005fd9b5d4d42b183212ef9764cf1ca3ede76b8"
+  },
+  "brand": {
+   "base_hp": 570.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "60191ac483197cf53ca336321be297d5a270ad5b80a04ad1ce29a8ec37ebd3f9"
+  },
+  "braum": {
+   "base_hp": 610.0,
+   "hp_per_level": 112.0,
+   "bin_sha256": "0eebea1142dc6a144c913f43d5d533ee656d82ec9f07566c09df1435a6feb7f4"
+  },
+  "briar": {
+   "base_hp": 625.0,
+   "hp_per_level": 95.0,
+   "bin_sha256": "89cf8fc4df66d7bc44b11acebe55815dc0aad41c35f82a9f1f7bfa5291079573"
+  },
+  "caitlyn": {
+   "base_hp": 580.0,
+   "hp_per_level": 107.0,
+   "bin_sha256": "58e994f5d75572a9ed9d893fd9c81f4df6eb84f77ff445c2dd51a1ed9b7c66f4"
+  },
+  "camille": {
+   "base_hp": 650.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "5701dc67304083d1d780838dcff6ff9e1d18c23a6b0fe3a7bc6e5da45dbbfe4d"
+  },
+  "cassiopeia": {
+   "base_hp": 630.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "00aa5b27f42f724f45e1efb6d51d43739a001763a5e5eca35fe81b8cfae47aba"
+  },
+  "chogath": {
+   "base_hp": 644.0,
+   "hp_per_level": 94.0,
+   "bin_sha256": "5881839ce7027b0b0dd5408ce9dd651760f4428941931a83d7c7273fd27562ca"
+  },
+  "corki": {
+   "base_hp": 610.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "83e85164f10dd6e2b3105b046feffc5932f84e1b02ba0767086a91279c2cd1f0"
+  },
+  "darius": {
+   "base_hp": 652.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "dbf0680139ff7ee7a184c2c8036d5b8d6cfb41375dc09bdb6cb103b57e412c2a"
+  },
+  "diana": {
+   "base_hp": 640.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "7bcd87925820a498d63c65e731a0db3cd4ecc133661562efb5e340f36c8f1ac5"
+  },
+  "draven": {
+   "base_hp": 675.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "697c61a90aa43e846f5852a28d6ec0d8ebfcebcb60b14ffeb0cfe9f992219042"
+  },
+  "drmundo": {
+   "base_hp": 640.0,
+   "hp_per_level": 103.0,
+   "bin_sha256": "c32ff8da91f72f731bc450dd7e920a01d089172ca940e4a6c6e21120dbdbcdf2"
+  },
+  "ekko": {
+   "base_hp": 655.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "f3e558f5decd94291cd55e1b07a3de4e20f0cd0a0a33b67910e77dc5b1c5c07c"
+  },
+  "elise": {
+   "base_hp": 620.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "6e3c40c65845bbbca9d11e6143506631e45ca4f2ae7c9fa510aa8adbfef76ccb"
+  },
+  "ezreal": {
+   "base_hp": 600.0,
+   "hp_per_level": 102.0,
+   "bin_sha256": "179eb63f411e7b10e467e99ae91533670b4507febc251603afd4943c3541dd07"
+  },
+  "fiddlesticks": {
+   "base_hp": 650.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "caa1d7cee06682d5accac8b9df43b01801d3a0ec1b2d5454883307aff601a8a1"
+  },
+  "fiora": {
+   "base_hp": 620.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "bd65cf17082059057b0612039fbe4483d2cb4a7d64f156146e5274c0726faca0"
+  },
+  "fizz": {
+   "base_hp": 640.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "a9a1312cfbf633aa268d00e9beff3d2702ad293e0e61cc57da8c7296bc2ab77a"
+  },
+  "galio": {
+   "base_hp": 600.0,
+   "hp_per_level": 126.0,
+   "bin_sha256": "7c915b7712c079c4cce17f2794b1c070ca517c26cf4e34e7d6a49b22b594a187"
+  },
+  "gangplank": {
+   "base_hp": 630.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "f5c985b8a03670863bebd983712b9f71dcea050ad1bb324ff8cfece1a4e13af8"
+  },
+  "garen": {
+   "base_hp": 690.0,
+   "hp_per_level": 98.0,
+   "bin_sha256": "4693a7341bfa2b5bc3ca073e561dba4dc4e63cfdbfeeda88b041065e68014183"
+  },
+  "gnar": {
+   "base_hp": 540.0,
+   "hp_per_level": 79.0,
+   "bin_sha256": "2ceb8592368aa359b64f2a265f7676f4f7199ccf8740ddb0ec053a7a77d5a9c9"
+  },
+  "gragas": {
+   "base_hp": 640.0,
+   "hp_per_level": 115.0,
+   "bin_sha256": "869d609c51b8ca0f117377b76949e56d7b61f1dbd6452f8f143e7ca3390c5227"
+  },
+  "graves": {
+   "base_hp": 625.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "e407ff1204dfb2c1553727a0e3ce04be152672f91704fb22345a7bf76224fdd1"
+  },
+  "gwen": {
+   "base_hp": 620.0,
+   "hp_per_level": 115.0,
+   "bin_sha256": "2aa97252a1d75ec0e4391739d9cb784d22b49078d4ea6fbed7bd91ca741c815c"
+  },
+  "hecarim": {
+   "base_hp": 625.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "fe731934a189db5d360c264f8b40b94271821450821e73f479002574b6e3edc2"
+  },
+  "hwei": {
+   "base_hp": 580.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "5c2317f6b6e821c1ed2f6def0fe40be0c88c6192b0e6cb5bf31697529c8947a5"
+  },
+  "illaoi": {
+   "base_hp": 656.0,
+   "hp_per_level": 115.0,
+   "bin_sha256": "cf949d2bcb8f63966c7f6e12a5b34e5ae2322f489c2b448603b10f3fc756f09f"
+  },
+  "irelia": {
+   "base_hp": 630.0,
+   "hp_per_level": 115.0,
+   "bin_sha256": "521b4da4e18fdbfd779b44684f37b1d33c92d7d9d4f9108a4971210c17cfffb0"
+  },
+  "ivern": {
+   "base_hp": 630.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "1228c36790e4824baa95b9f74e53da8344f78b6a0edc0e47879c96c89faeef48"
+  },
+  "janna": {
+   "base_hp": 570.0,
+   "hp_per_level": 90.0,
+   "bin_sha256": "3e85174aa2c20dec49f79b880ff6903d725e935d4cbe5dced34fa63f4598b1d8"
+  },
+  "jarvaniv": {
+   "base_hp": 640.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "d986274fef0f0be05c2c346ed37aa86df50eb5567e826fe9272013466c0ddd19"
+  },
+  "jax": {
+   "base_hp": 650.0,
+   "hp_per_level": 103.0,
+   "bin_sha256": "5ff804b7a75cfa5964c4bc94e4d360d260e6747624601347c72d07995a6a1479"
+  },
+  "jayce": {
+   "base_hp": 590.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "9c4eead11bc594acce2ece57afe6e29d578e638a6b02158620f69ec2a0c9bb97"
+  },
+  "jhin": {
+   "base_hp": 655.0,
+   "hp_per_level": 107.0,
+   "bin_sha256": "86cdd1f72b24da2925ed05eed5890be8942e653d3af2969a9e26934848cf0df9"
+  },
+  "jinx": {
+   "base_hp": 630.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "f7fb0bed85c475503cdebbae82ecab52f7fe7ecf9bf92d10f185df97922e00dd"
+  },
+  "kaisa": {
+   "base_hp": 640.0,
+   "hp_per_level": 102.0,
+   "bin_sha256": "b3c1cf37a6c40709dab1aa766ea2a0b0eb35724d6f907819ce77ffd464cff16a"
+  },
+  "kalista": {
+   "base_hp": 560.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "e64eedb9760c65b57b0b1eaa9f66e2f31a2e440a6c21e9f3d62ad22ca1bbfc6e"
+  },
+  "karma": {
+   "base_hp": 630.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "03e5fa24d336fe1093e7314c41105f71f5d761e231aae7262ee6937b9d36288f"
+  },
+  "karthus": {
+   "base_hp": 620.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "66ed91dd3b1c9fdd2ac50cdc220f8174ffdc75700aced5eac99175761afb66e8"
+  },
+  "kassadin": {
+   "base_hp": 646.0,
+   "hp_per_level": 113.0,
+   "bin_sha256": "43c89d5afcbf4ad2c7b8223cd1616055e59edc7074f462af2b6b3c7592cdb326"
+  },
+  "katarina": {
+   "base_hp": 672.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "4c924b4fd07d489995f32600cbbeb4f2d4d9375ffe3ac44a0c644c08b25ea7b0"
+  },
+  "kayle": {
+   "base_hp": 670.0,
+   "hp_per_level": 92.0,
+   "bin_sha256": "62c2917d738fed12af9a32325d0bb30ef145b6f1df3dc3d6aacc18ffad041c3f"
+  },
+  "kayn": {
+   "base_hp": 655.0,
+   "hp_per_level": 103.0,
+   "bin_sha256": "306982665688c47b79c6cc8d5553854701332ce202b826108f6d1c56318c7afd"
+  },
+  "kennen": {
+   "base_hp": 580.0,
+   "hp_per_level": 98.0,
+   "bin_sha256": "51881bac792d8cbbe92ca88233ef965c10fa0fa9894fe6f89831edea97da4933"
+  },
+  "khazix": {
+   "base_hp": 643.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "6cd72d14f6f554982df0bba1d51c4a70da471bf1da5174f3e622771080f3336c"
+  },
+  "kindred": {
+   "base_hp": 595.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "2951b93cd95c9a576ede6c5ab25a9535daaa4bf63d1038e8b1b0698cb56939da"
+  },
+  "kled": {
+   "base_hp": 410.0,
+   "hp_per_level": 84.0,
+   "bin_sha256": "c8403fa616dd1ca1558034830aeb90bdaf73e4d63cc6f597206a247941f3b132"
+  },
+  "kogmaw": {
+   "base_hp": 635.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "c880cab63b6385e4d88c403b51ea9ecf059f7f4d5689db158f3b539cc2d82ccb"
+  },
+  "ksante": {
+   "base_hp": 625.0,
+   "hp_per_level": 120.0,
+   "bin_sha256": "d579e6f470ea3c940f064626eb2db379fd92f47d2eb98b13e42c709a3bc38dde"
+  },
+  "leblanc": {
+   "base_hp": 598.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "11d3fdbb42089fc362ca4d04da97e18719d9b7217bce3b98d1f4075f916d5cc9"
+  },
+  "leesin": {
+   "base_hp": 645.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "b59561aec0a738e96cb335e1630979f859c45ad27b0197f49e38c60d9a83fdf3"
+  },
+  "leona": {
+   "base_hp": 646.0,
+   "hp_per_level": 101.0,
+   "bin_sha256": "12dbbfb4dda6aec955b3c88cd66954812c2976dd720b2b665b2d72b59096838b"
+  },
+  "lillia": {
+   "base_hp": 605.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "64d38b75c7fc85216d2eca37114de6be1ca10337e2637f9dd8d087b92195108a"
+  },
+  "lissandra": {
+   "base_hp": 620.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "3d8923ecd1fe4c1099976278daf19e4e47b747e7d03d2aaaf13eae79b30f0e31"
+  },
+  "lucian": {
+   "base_hp": 641.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "cfdbf97a0f919e9a23df5d2112901a17af81e51fde107615244c18fe788d0a4b"
+  },
+  "lulu": {
+   "base_hp": 565.0,
+   "hp_per_level": 92.0,
+   "bin_sha256": "06f45fad67d29059aadb62a7fe91c8743f3579c74011f30aaebdd69dfddc6381"
+  },
+  "lux": {
+   "base_hp": 580.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "b4cdab45079eb8ee951e61eebfca05f4d27026f2e1702b1dddf0b74654f5e4fb"
+  },
+  "malphite": {
+   "base_hp": 665.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "6450436aef15880fa4f103058450887e4ad0e62c36d496c0f5ac092497981870"
+  },
+  "malzahar": {
+   "base_hp": 580.0,
+   "hp_per_level": 101.0,
+   "bin_sha256": "8e39c8ba624438a42ea283b7565312633ddb18dceba25ca9cbc7f17d631527e6"
+  },
+  "maokai": {
+   "base_hp": 665.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "a1b4ea40df2df0317d9726e5db58c480b6d6edd51db914241dfddb6a0d92896a"
+  },
+  "masteryi": {
+   "base_hp": 640.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "8d9bfe0c275676b83e54b1cfa0bce3ef51ef47694df3606c203d017807f23528"
+  },
+  "mel": {
+   "base_hp": 630.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "f4301f7c4169644186bdca17bd6bfd293a118256df067a2040c1144b7925bcc7"
+  },
+  "milio": {
+   "base_hp": 560.0,
+   "hp_per_level": 88.0,
+   "bin_sha256": "4b98c601d922ed4260c55d1d09353487e8d2f57ab09d6a0e49cec29e4b93fc10"
+  },
+  "missfortune": {
+   "base_hp": 625.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "a8b6bb86e6bb82b587ecd1b7c6d553d99a310b4c3432b09101d164a29cb814f9"
+  },
+  "monkeyking": {
+   "base_hp": 610.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "fc58e8b7b80a49c55284e37284dbd34fb9ed3693418fb48ac2b8f63c4b43f20e"
+  },
+  "mordekaiser": {
+   "base_hp": 645.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "5fc85a95671bde4dbe64c267d1d76339dc83084072a11ca21fe77788e5bc5ee9"
+  },
+  "morgana": {
+   "base_hp": 630.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "fb434a2bdcd5436b5b7e2e7f96ececa92519284b82f29a2948df0551dca2960d"
+  },
+  "naafiri": {
+   "base_hp": 610.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "958e6545bfcbd8f1fd778542022c15fd30eb4d848d63bc850b3da530b0c6c3c2"
+  },
+  "nami": {
+   "base_hp": 560.0,
+   "hp_per_level": 88.0,
+   "bin_sha256": "ee04fc91ac7ba2bac9300f842976c79fea5d558dad08e216c901710c1d47980a"
+  },
+  "nasus": {
+   "base_hp": 650.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "b3f8e786dd3be1850ecd2137b24d72058f5dd33792f35dfe2d1ea05d54f651d2"
+  },
+  "nautilus": {
+   "base_hp": 646.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "0b167e59e859325256689f402eb1aad424e1f108f2e1e8aaa09918038e0d1af0"
+  },
+  "neeko": {
+   "base_hp": 610.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "499ea34b2d7fa7a97318fb94e027bf94e6dda5163ec32f46e670e6fd6cdf8ff0"
+  },
+  "nidalee": {
+   "base_hp": 610.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "a791d1db47ab5371707fe1bade95d2e96ee671ed88a460c85edb0128795f4493"
+  },
+  "nilah": {
+   "base_hp": 570.0,
+   "hp_per_level": 101.0,
+   "bin_sha256": "f751e6eb46775ffc396118629aef7ff6d836d45f7bb94fa5fecc269f2d020318"
+  },
+  "nocturne": {
+   "base_hp": 655.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "1bc46673f930501287c754296452c865b131f7d40cd6930886af64f0e4df7c65"
+  },
+  "nunu": {
+   "base_hp": 610.0,
+   "hp_per_level": 90.0,
+   "bin_sha256": "d7df5207d01429e5558510591f397e1789c90de1685e69f3c8fa21a28bfbc560"
+  },
+  "olaf": {
+   "base_hp": 645.0,
+   "hp_per_level": 119.0,
+   "bin_sha256": "580b02f545332bc875ac83836048af82bad3666935fbafc23f467791b50c7d79"
+  },
+  "orianna": {
+   "base_hp": 585.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "5b3b5546562e1cf51b20d69d4f519a1a0449d86bd3c352e1f801f2cfa0b25f43"
+  },
+  "ornn": {
+   "base_hp": 660.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "d4133c7781bf0033a4c97244165ea2ced6c6763ec5815e553066b0fe2696a546"
+  },
+  "pantheon": {
+   "base_hp": 650.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "15ee9698a740066158aa35ab9540f4336f8a33516711e07fac2ac86984dc3125"
+  },
+  "poppy": {
+   "base_hp": 610.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "406204e019d7e7f29362b85337bafe3f900d746da3d11a0f9817e6ef3223d55b"
+  },
+  "pyke": {
+   "base_hp": 670.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "e30809f32e45719fb572c280edd45dcefc10f41ebab7bbaafe9684edd286650b"
+  },
+  "qiyana": {
+   "base_hp": 590.0,
+   "hp_per_level": 115.0,
+   "bin_sha256": "d13fea932010e227a734235182ecd5a2084f7bae8de9da975863effcbb257c93"
+  },
+  "quinn": {
+   "base_hp": 565.0,
+   "hp_per_level": 107.0,
+   "bin_sha256": "9a9dacbfba2664d714cdb0edd55c44a4d20a298dee6801bab69d15a500dea7ae"
+  },
+  "rakan": {
+   "base_hp": 610.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "fe3a3461d220aebd5d2ab07def825e8240d259baced698fd58e61e8276746ccd"
+  },
+  "reksai": {
+   "base_hp": 600.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "f31e318d6035748f043799035ea17daccdf458fcaf524c8617cbccde7adf120a"
+  },
+  "rell": {
+   "base_hp": 620.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "7124980162e22623796133034dbc98122bef92f3703988c1c00e2ebe5de0d20d"
+  },
+  "renata": {
+   "base_hp": 545.0,
+   "hp_per_level": 94.0,
+   "bin_sha256": "3ff0ff86e9d0bcb21c5914ade2e263fc956accc4d21e3b0a6ee84391190e01f1"
+  },
+  "renekton": {
+   "base_hp": 660.0,
+   "hp_per_level": 111.0,
+   "bin_sha256": "b0a2918e71b6c8fd3997cdf19be080856f63bdc579e4ee02bb7f8a09c63e8d8c"
+  },
+  "rengar": {
+   "base_hp": 590.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "aab8a232117fe7904ac2c5e32fcc7f4c44d3585c69a1a47a8a910f8065bcec7b"
+  },
+  "riven": {
+   "base_hp": 630.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "aefd91aa92e3c24b7bb4d1c85efc2e2dbcd2edcc96b423716abcdebedc10a1ac"
+  },
+  "rumble": {
+   "base_hp": 640.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "cd386e079c35c82d194a607e265cf33fd3b9f6bec4344e466ee012c9665881dc"
+  },
+  "ryze": {
+   "base_hp": 645.0,
+   "hp_per_level": 124.0,
+   "bin_sha256": "e98beff55b21d60b76fa74987fc4b85660a2f51e0d1de0fe1440d3fb57e5e6d2"
+  },
+  "samira": {
+   "base_hp": 630.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "75d789a3f3879827fbe3bf8fac1b6d6679ad202d89337cadcdbaa3db931bd5dd"
+  },
+  "sejuani": {
+   "base_hp": 630.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "7d7384d9754a6f2af18c3ff0f48109fe7348d6ab77afde0e739f0de28ed8965e"
+  },
+  "senna": {
+   "base_hp": 530.0,
+   "hp_per_level": 89.0,
+   "bin_sha256": "f0bc7acdc41bd90241d49f2bd57182fb9e7274cd733a4927cf43dd8ec67937b9"
+  },
+  "seraphine": {
+   "base_hp": 570.0,
+   "hp_per_level": 95.0,
+   "bin_sha256": "22d4008cad293cdfbade253f9e947e0402d692c9d196dc7fd8ab87ca8add4e2b"
+  },
+  "sett": {
+   "base_hp": 670.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "80558b436f3ad88b79111d79e3a49ad5688a1215ae322c16d2c2d45ba5303555"
+  },
+  "shaco": {
+   "base_hp": 630.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "0a5589647e36f65e3406837c51b68795b6399f3182652f551e894c9473d6db6f"
+  },
+  "shen": {
+   "base_hp": 610.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "462b0e0be3b7c7cd9778f47524337d621ac5eb7bbe20228a711d1e48e127bd16"
+  },
+  "shyvana": {
+   "base_hp": 625.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "9c224f343c06c238d5ff7542079b8d7aba7118664032a8c856189f14ef018955"
+  },
+  "singed": {
+   "base_hp": 650.0,
+   "hp_per_level": 96.0,
+   "bin_sha256": "595250039a200a04a20f8e252f51edc2754b50fe005c5fae345c6e10ca84a738"
+  },
+  "sion": {
+   "base_hp": 655.0,
+   "hp_per_level": 87.0,
+   "bin_sha256": "96d53f7aea3e3eb48ed79abd1d84c595cf7660d6e1b82ffd52f7d5521d7cfa40"
+  },
+  "sivir": {
+   "base_hp": 600.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "f71a1787b16602628ca18dbe5f03e44c9f1f2b379e584267a4af636c26cb51b2"
+  },
+  "skarner": {
+   "base_hp": 630.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "5893201ae154746126022039c74d58c0193b9ac053ece1eb0064b908c63762ee"
+  },
+  "smolder": {
+   "base_hp": 575.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "b75518ce752e5884b84997e6a78701768006ac270f385926136c75c2b23e2829"
+  },
+  "sona": {
+   "base_hp": 550.0,
+   "hp_per_level": 91.0,
+   "bin_sha256": "f36d60545f5d2af0dc07a203452e5c73bf12edec9036c0ee1bce43f7d6aec977"
+  },
+  "soraka": {
+   "base_hp": 605.0,
+   "hp_per_level": 88.0,
+   "bin_sha256": "62df0bb9603140d82d4f76a60bb4379b8f51aa046d93710c2c968e08f3c4debf"
+  },
+  "swain": {
+   "base_hp": 595.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "5d85829e4150969e6df5d60aab274b9ba381c0a3aeb22d7edcd704cbaf76c75f"
+  },
+  "sylas": {
+   "base_hp": 600.0,
+   "hp_per_level": 122.0,
+   "bin_sha256": "e279f4b7e4096e5bb8eb0cf6fbeca2b20e191479e236a95ff21ab86cbf267b68"
+  },
+  "syndra": {
+   "base_hp": 563.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "9830359bbacd8cf16a947b299a0580be146d2f16e3b3253c7b3a56740b2ef8a2"
+  },
+  "tahmkench": {
+   "base_hp": 640.0,
+   "hp_per_level": 103.0,
+   "bin_sha256": "9e24bc25b05e928c541435f289f9ac88047282f2605efbb5810c9deb3b2ef517"
+  },
+  "taliyah": {
+   "base_hp": 550.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "dcdc5ede6927166534adbda9dc7bff787e6a74b1baf099ea4e4cc98c98bc8024"
+  },
+  "talon": {
+   "base_hp": 658.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "50b849f1289864f46436054960943d79973bfe1cff6a27ad468c13b2d579548d"
+  },
+  "taric": {
+   "base_hp": 645.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "81e69a08d78bde48b3c56f471f36f7c7c10dd11265cb155f65ed9c91faf69f36"
+  },
+  "teemo": {
+   "base_hp": 615.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "993ce2ffe6ed41339540ccbd61b90fb9c95573901183c48fa7c169391613af99"
+  },
+  "thresh": {
+   "base_hp": 620.0,
+   "hp_per_level": 120.0,
+   "bin_sha256": "df94b3bd5520dd99cc9500d0b159750f38380d71ed665608c41e656fedb8e229"
+  },
+  "tristana": {
+   "base_hp": 640.0,
+   "hp_per_level": 102.0,
+   "bin_sha256": "76bfe833c4add2789d12dede89df687f9ab9ac63d38a66f10d711b15ceb647ce"
+  },
+  "trundle": {
+   "base_hp": 650.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "d4d688c11d0ab07c02b59d5dc1152c56f6f17c9c276d23cf4a52a3ade38bbc9d"
+  },
+  "tryndamere": {
+   "base_hp": 696.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "f7f3ba35b64e32d49bc17eed572f854abeec80d061110609dbecb9ec3df43f71"
+  },
+  "twistedfate": {
+   "base_hp": 604.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "ecc5ca6b7fc7b77ac510227de5a1e8b158e282d0ded88d5818eb9407837e6f3b"
+  },
+  "twitch": {
+   "base_hp": 630.0,
+   "hp_per_level": 98.0,
+   "bin_sha256": "1cb6d49d5649e49d84d406369f771fb3cf7d2ace7fc8f50edcedb3e9b2d35a99"
+  },
+  "udyr": {
+   "base_hp": 664.0,
+   "hp_per_level": 92.0,
+   "bin_sha256": "a9ad9b6d8e4cb5c7c9e9f907e229439698258befc7aa9a2b94e962b1f4c390a2"
+  },
+  "urgot": {
+   "base_hp": 655.0,
+   "hp_per_level": 102.0,
+   "bin_sha256": "11332915b1d38b29d9e5c3e8473cdd426d64c49c102888d46f68d1a49348c495"
+  },
+  "varus": {
+   "base_hp": 600.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "614d45d0d53a32108d266d4ead1544d110cea99843e3aab0a81be8c588e3fe1a"
+  },
+  "vayne": {
+   "base_hp": 550.0,
+   "hp_per_level": 103.0,
+   "bin_sha256": "d6bd8316d27ceac7d764ee509e7b1142ee7d0cef15578ad192edb438556e05b1"
+  },
+  "veigar": {
+   "base_hp": 580.0,
+   "hp_per_level": 108.0,
+   "bin_sha256": "31911e98a9f4b562856fc85cdc539d5ddb058ed2c610b677e61dcc1495fb05b7"
+  },
+  "velkoz": {
+   "base_hp": 590.0,
+   "hp_per_level": 102.0,
+   "bin_sha256": "50ccc508211bb443fc0061839d55d6f0c486d4501360fc62cb4163c26364fc3a"
+  },
+  "vex": {
+   "base_hp": 590.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "c3c1f3a177d9df541193cfa2be1d279a08a3705d0935c997e49e1f95caae3026"
+  },
+  "vi": {
+   "base_hp": 655.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "389db8a2da764580833fa73454d440819fb7b5f3002ec70eaf23f37f2bd115c2"
+  },
+  "viego": {
+   "base_hp": 630.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "87249fbdde46535db56d8ac62bfc87188e665576ce385fabb44de4faeaa93f10"
+  },
+  "viktor": {
+   "base_hp": 600.0,
+   "hp_per_level": 100.0,
+   "bin_sha256": "938480c1dd7a04be045667ff32ee4e8357faa8f36c74174e6659514ffec1bb3b"
+  },
+  "vladimir": {
+   "base_hp": 600.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "f0462408eb7ccc2c04f6a8e51da8b98907d6ea4b4c8e40575efba7de7d06b06d"
+  },
+  "volibear": {
+   "base_hp": 650.0,
+   "hp_per_level": 104.0,
+   "bin_sha256": "fe4d5f2960bfd8e153493efe9b317fca9b80fdf5fe64fa4dfa2bc8bb9ffd5437"
+  },
+  "warwick": {
+   "base_hp": 620.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "e831dea25d48a2006726b609b64e3a7942e518eafcdbd1727cfc609bfc5a711a"
+  },
+  "xayah": {
+   "base_hp": 630.0,
+   "hp_per_level": 107.0,
+   "bin_sha256": "947c4216701658daaecc6fdf174a0fe009cc0230550b77718683396740882fd8"
+  },
+  "xerath": {
+   "base_hp": 596.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "9cfecea143d94dddb8075469dda5b8996bf8140d2049d2d3274e3ad37f710652"
+  },
+  "xinzhao": {
+   "base_hp": 620.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "83afeef2611da9081e9f7a78fa98b691a7f9dff4236c326e3605416e213e35ce"
+  },
+  "yasuo": {
+   "base_hp": 590.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "d41b416bf5b5f8bf006d314805edbfc1119f4a18f63a8856f65ad903d1d160d7"
+  },
+  "yone": {
+   "base_hp": 620.0,
+   "hp_per_level": 105.0,
+   "bin_sha256": "471e1549ee94e851bfcd596c2b0188a3feee61db9b26eb2151533d1f6f580bac"
+  },
+  "yorick": {
+   "base_hp": 650.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "00bf1f9eda87a0d3df52dadfaab0c5faa856bc93fa34f0e5b18bbc58b692fd32"
+  },
+  "yunara": {
+   "base_hp": 590.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "b0de75c0085431fe7e6a1ee6b37750b36a4f7a8bb5a6e5a6010b0fa91fa16873"
+  },
+  "yuumi": {
+   "base_hp": 500.0,
+   "hp_per_level": 69.0,
+   "bin_sha256": "fc0e196ff5dc162a44efa2d65d91fc1a7530a4cfeadf9592e034feb72706f9c9"
+  },
+  "zaahen": {
+   "base_hp": 640.0,
+   "hp_per_level": 114.0,
+   "bin_sha256": "35023f2f3cfb3562bd9424caee1ece39a7819721d80d7d93ae4c72091c3db169"
+  },
+  "zac": {
+   "base_hp": 685.0,
+   "hp_per_level": 109.0,
+   "bin_sha256": "9b2a6e1a8174213d95df13b41b50eac8af502913ab648498dc14b9179b1f4834"
+  },
+  "zed": {
+   "base_hp": 654.0,
+   "hp_per_level": 99.0,
+   "bin_sha256": "7ff961a0a34dc4cbd9f396dcd8587a25fd5524daeb11853373cb2c1317aae82f"
+  },
+  "zeri": {
+   "base_hp": 600.0,
+   "hp_per_level": 110.0,
+   "bin_sha256": "e6a0252c36fac87632b092576bf7261d84f41236c6ab632e75b1b332a05e848b"
+  },
+  "ziggs": {
+   "base_hp": 606.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "583fc127c7151dabbdd4c27d05acc6339ab695aa2a185e9336272611450c87d2"
+  },
+  "zilean": {
+   "base_hp": 574.0,
+   "hp_per_level": 96.0,
+   "bin_sha256": "56c03a1de1336449d5b982c421f985f9871fc1dfee83104d2d0619455af41c2d"
+  },
+  "zoe": {
+   "base_hp": 630.0,
+   "hp_per_level": 106.0,
+   "bin_sha256": "255b7080d4764bc04e27d3af909fae355a5b1004f86c5765ad780ad94d77d339"
+  },
+  "zyra": {
+   "base_hp": 574.0,
+   "hp_per_level": 93.0,
+   "bin_sha256": "68d0ee463e1ef8105cc7ff75d3cc5b74d9f8ee815f093f03315a20f3e9c3daf3"
+  }
+ },
+ "missing": []
+}

@@ -25,9 +25,11 @@ def test_resistance_order_and_negative_armor():
                                         percent_penetration=.25,
                                         lethality=10)
     assert armor == pytest.approx(32)
+    # Negative armor from flat reduction survives % reduction and penetration (D1).
     assert stats.armor_after_modifiers(10, flat_reduction=25,
                                        percent_reduction=.5,
-                                       flat_penetration=40) == 0
+                                       flat_penetration=40) == pytest.approx(-15)
+    assert stats.armor_after_modifiers(30, flat_penetration=40) == 0
     assert stats.mitigation_multiplier(-50) == pytest.approx(1.3333333333)
     assert stats.post_mitigation_damage(100, 0) == 100
     with pytest.raises(ValueError, match="damage type"):
@@ -50,8 +52,12 @@ def test_adaptive_force_and_shards():
     shard = items.stat_shard_stats(level=18)
     assert shard.attack_damage == pytest.approx(10.8)
     assert shard.health == pytest.approx(65)
+    # Scaling health is 10 per level (180 at 18), extrapolated to level 20 (README X-1).
     scaling = items.stat_shard_stats(("adaptive", "health_scaling", "health_scaling"), level=20)
-    assert scaling.health == pytest.approx(360)
+    assert scaling.health == pytest.approx(400)
+    flex = items.stat_shard_stats(("attack_speed", "move_speed", "tenacity"))
+    assert flex.percent_move_speed == pytest.approx(0.025)
+    assert flex.tenacity == pytest.approx(0.15) and flex.slow_resist == pytest.approx(0.15)
     with pytest.raises(ValueError):
         items.stat_shard_stats(("armor", "adaptive", "health_flat"))
     shard = jax.jit(lambda level, adaptive: items.stat_shard_stats(
@@ -63,34 +69,22 @@ def test_adaptive_force_and_shards():
 
 
 def test_patch_pinned_items_and_strict_effect_gate():
-    data = json.loads((items.DATA_DIR / "items.json").read_text())
-    assert data["patch"] == "26.19" and data["game_version"] == "16.19.1"
-    assert items.ITEMS[6631].name == "Stridebreaker"
-    assert items.ITEMS[3077].stats.attack_damage == 25
+    from lanerl_jax.sim.modern_item_data import catalog
+    assert catalog()[6631].name == "Stridebreaker"
+    assert catalog()[3077].stats.attack_damage == 25
     # Component and upgrade cannot both be equipped; exact SR item IDs matter.
-    with pytest.raises(ValueError, match="Hydra"):
-        items.validate_item_loadout([3077, 6631])
-    with pytest.raises(NotImplementedError, match="effects"):
-        items.item_loadout_stats([3071])  # Cleaver stacks its own armor shred.
+    with pytest.raises(ValueError, match="group"):
+        items.item_loadout_stats([3077, 6631])
+    # Effects exist in modern_item_effects but the world tick does not run them yet.
+    with pytest.raises(NotImplementedError, match="not dispatched"):
+        items.item_loadout_stats([3071])
     stats_out, unmodeled = items.item_loadout_stats([1036, 1036], strict_effects=True)
     assert stats_out.attack_damage == 20 and not unmodeled
-    with pytest.raises(NotImplementedError, match="rune"):
+    stats_out, unmodeled = items.item_loadout_stats([3071], strict_effects=False)
+    assert stats_out.health == 400 and unmodeled == (3071,)
+    assert items.validate_rune_page([]) is None
+    with pytest.raises(TypeError):
         items.validate_rune_page([8010])
-
-
-def test_supported_active_kernels_are_jittable():
-    dmg, hit = jax.jit(lambda x: items.tiamat_crescent(
-        100., x, jnp.zeros_like(x), 1., 0., xp=jnp))(
-            jnp.array([100., 500., -200.]))
-    np.testing.assert_allclose(dmg, [75., 0., 0.])
-    np.testing.assert_array_equal(hit, [True, False, False])
-    d, hit, slow, ms = jax.jit(lambda d, c: items.stridebreaker_active(
-        100., d, champion_target=c, xp=jnp))(
-            jnp.array([300., 451.]), jnp.array([True, True]))
-    np.testing.assert_allclose(d, [80., 0.])
-    np.testing.assert_array_equal(hit, [True, False])
-    np.testing.assert_allclose(slow, [.35, 0.])
-    assert ms == pytest.approx(.35)
 
 
 def test_rune_catalog_is_patch_pinned():
