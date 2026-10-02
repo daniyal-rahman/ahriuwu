@@ -1,12 +1,13 @@
 # STATUS — 2026-10-02 authorized AFK diagnosis sequence
 
-Dani explicitly requested a 12-hour same-setup run. E80 / Slurm2171 is submitted:
-E78 FINAL parameters/fresh Adam, literal +1/CS only, constant LR1e-4, same v3
-GRU/PPO/actions and staggered 120s AFK task. Budget 11,520 updates / 188,743,680
-additional learner decisions; 11h45 worker cap / 12h Slurm cap. Estimate about
-11h50 including startup from E78 throughput. Frozen 64-game evaluations at start,
-512, 1024, then roughly hourly through final11520; final target >=11.0CS versus
-10.0 starting baseline. No adaptive LR or new features. LEARN-AFK-35.
+Dani cancelled E80 and explicitly prioritized E81→E82→E83 first.
+E80/2171 CANCELLED0:0 after58m17s at Oct1 6:26:59PM PDT. The worker handled
+termination and saved update809 /13,254,656 decisions, status interrupted.
+Last completed frozen64 evaluation was update512:11.328125CS/.03125deaths,
+versus initial10.0CS/.078125deaths; towerHP10.180336 versus181.035824.
+No frozen evaluation at the stopped809checkpoint and no11520endpoint result.
+Do not label the cancelled duration experiment successful or restart it.
+E81 is next for immediate submission under the existing sequence authorization.
 
 E78 CS-only continuation completed. Literal+1/CS, no other environment reward;
 E67 parameters/freshAdam, original v3/GRU/actions, LR1e-4,512updates/8.389Mdecisions.
@@ -23,22 +24,20 @@ authorizes E80; the earlier completion event alone did not.
 
 ## Jobs
 
-**E80 / Slurm2171 RUNNING on gpup; integrated canaries and launcher180s health watch passed.**
-Source b7130a5. Started October1 5:28PM PDT; expected finish October2 around
-5:20AM PDT, hard Slurm cutoff5:28AM PDT (12h).
-Bridge lanerl-event-2171.service active and registered; result checked_at advanced
-1790901400.7045598→1790901430.7986884 with RUNNING accounting.
-Bridge expires 2026-10-02T14:36:09.928633+00:00 (Oct02 07:36AM PDT).
-Completion/failure review is automatic through this bridge. No other RL jobs submitted.
-On the E80 wake, continue the explicitly authorized E81→E82→E83 sequence below;
-the user has already asked us to run and manage all stages in order.
+**E80 cancelled; E81 immediate launch pending. No RL job currently running/queued.**
+E80 saved /mnt/nfs/checkpoints/lanerl-jax/E80_afk_cs_only_12h/vec-s0-20261002-003708-b7130a5c/ckpt_013254656.msgpack.
+Slurm accounting CANCELLED/0:0 is authoritative despite generic PROFILE COMPLETE
+log footer. Worker study/manifest correctly say interrupted809. Bridge2171 stopped;
+service inactive and registry entry absent. Its stopped_unconfirmed result retains
+stale RUNNING accounting from the preceding poll, not the final Slurm state.
+Continue E81→E82→E83 now, without another user prompt.
 E78 / Slurm2161 COMPLETED0:0 in42m28s, ended3:53PM Pacific (PDT).
 17integrated canaries and180s launcher watch passed.512metric rows, no reported
 nonfinite loss flags or traceback. Final checkpoint/latest SHA256:
 cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91.
 Run: /mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/.
 Bridge2161 delivery accepted; lanerl-event-2161.service inactive, registry entry
-absent. E80 submitted as2171; no LR sweep, curriculum or feature run submitted.
+absent. E80 subsequently cancelled by Dani; next job is E81.
 E79/2160 was cancelled after46s during canaries, before any training.
 E77mask/directHP preflight1857 completed19tests; no learned feature result.
 Other projects and their jobs remain outside this workstream.
@@ -88,10 +87,10 @@ Subsequent constraint: no artificial delay added to the model. All stages keep
 native10Hz actions and simulator timing; holding off an attack is a learned or
 scripted action choice, never an injected latency or forced pause.
 
-1. E80/2171 remains running to its existing endpoint. Inspect final frozen
-   results and bridge cleanup when it wakes this thread. Do not replace E80.
+1. E80/2171 cancelled on Dani's request; terminal review and watcher cleanup done.
+   Dani explicitly says to do E81/E82/E83 first. Do not resume E80 automatically.
 2. E81_afk_gru_dagger is implemented and dry-run validated, NOT submitted.
-   Launch after E80 frees the GPU using `python3 ops/launch.py E81_afk_gru_dagger`.
+   Launch now using `python3 ops/launch.py E81_afk_gru_dagger`.
    Existing integrated canaries plus new imitation contracts run automatically.
    Teach the existing v3/GRU/physical-click policy from E78 FINAL weights using
    32scripted episodes, then two rounds of64learner episodes relabelled by the
