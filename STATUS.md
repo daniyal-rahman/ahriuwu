@@ -35,7 +35,14 @@ then cancelled as recorded above.
 
 ## Jobs
 
-**No RL job currently running or queued. E83 is prepared for launch next.**
+**E83 / Slurm2176 RUNNING;24GPU tests and launcher health watch passed.**
+Source f5b8677; started Oct1 7:58:48PM PDT,1h cap8:58:48PM.
+Expected finish8:30–8:50PM PDT. No learned E83 result yet.
+Bridge lanerl-event-2176.service active/registered; verified heartbeat
+1790910523.3273835→1790910613.6237524, accounting RUNNING.
+Expiry 2026-10-02T06:08:42.562201+00:00 (Oct01 11:08:42PM PDT).
+On completion, inspect both fixed arms/held-out and full-wave results, then
+update these ledgers and verify watcher cleanup. No E80 restart.
 E82/2174 COMPLETED0:0;512updates/8.389Mdecisions. All4 frozen cohorts/bothteams
 reward=CS, other terms0; initial E81 retention and endpoint checks passed.
 Paired final-minus-initial:+2.375CS, median3;43better/12equal/9worse, range−3..7.
@@ -46,8 +53,8 @@ All512 loss_nonfinite flags0;60rows have NaN episode summaries because no episod
 ended in that update, not nonfinite optimization. postKL median.0426335/max.141981;
 these are sampled-action rollout diagnostics, not exact whole-policy KL.
 Bridge2174 delivery accepted, service inactive and registry entry absent.
-E83 short-task teaching/PPO comparison implemented; integrated canaries and
-launch still pending. E80 remains cancelled; no automatic12h restart.
+E83 short-task teaching/PPO comparison running after all24integrated canaries
+and required startup watch passed; bounded completion bridge verified. E80 remains cancelled; no automatic12h restart.
 E81 source f4cdde7;21integrated canaries passed; full70supervised epochs and
 512value-head minibatches completed. Final checkpoint and exported copy SHA256:
 1b8ed30cf913132b8d7045e45f40cd09d9cec205a86a5a3301e99532b08f24e0.
@@ -130,7 +137,7 @@ scripted action choice, never an injected latency or forced pause.
 3. E82_afk_clone_ppo_retention COMPLETED2174: fixed512updates, final14.125CS,
    deaths0; initial equality and both declared gates passed. Source/checkpoint,
    pureCS accounting and completion bridge cleanup verified.
-4. E83_afk_local_skill implemented/prepared, not submitted yet. Matched E78 final
+4. E83_afk_local_skill RUNNING2176;24canaries/health passed and bridge verified. Matched E78 final
    starts: scripted64 short episodes/40epochs then learner64 relabelled/20epochs
    versus256 CS-only PPO updates (4.194M decisions), fresh optimizers/LR1e-4.
   64 train and64 unseen test starts:12.8s,1 or3 enemy minions plus allied
@@ -143,8 +150,8 @@ scripted action choice, never an injected latency or forced pause.
    >=.85teacher fraction if teacher>=.5 each; transfer gate>=11CS vs initial10.
    E82 14.125 remains the established full-task result.1hSlurm/50minworker cap,
    expected30–50min. Unequal training budgets; exploratory, not equal-compute
-   algorithm ranking. Protocol/spec LEARN-AFK-38; run integrated canaries and
-   existing health watch, arm bridge before handoff.
+   algorithm ranking. Protocol/spec LEARN-AFK-38; integrated canaries and
+   existing health watch passed, bounded bridge armed and heartbeat verified.
 
 Arm/verify a bounded event bridge after each launch's required health watch,
 record unit/expiry, then let it run without manual training polling. If a stage

@@ -1357,3 +1357,12 @@ identical physical transitions and terminal CS for diagnostic vs normal rollout.
 Reference rationale remains DAgger https://arxiv.org/abs/1011.0686 and near-goal
 curricula https://arxiv.org/abs/1707.05300 already reviewed in LEARN-AFK-36/37;
 neither validates this synthetic geometry, budget or a LoL performance prediction.
+
+Interpretation guard: if a short-task stratum already starts above.85 collected
+fraction, the+.15 gain gate has insufficient ceiling; report existing local
+competence/headroom, not an inability to learn. Command diagnostics count decision
+frames, not independent opportunities or guaranteed missed kills. If spells solve
+the short task, that is legitimate farming performance but not proof of precise
+AA timing; existing frozen spell-selection telemetry remains available.
+
+| LEARN-AFK-38 startup | E83/2176 RUNNING from source f5b8677, started2026-10-02T02:58:48UTC (Oct1 7:58:48PM PDT). All24integrated GPU tests passed:16base in364.45s plus8imitation/local contracts in198.51s. Launcher reports healthy after180s. | No learned result yet. Expected finish8:30–8:50PM PDT,1h hard cutoff8:58:48PM. Bridge lanerl-event-2176.service active/registered, checked_at advances1790910523.3273835→1790910613.6237524; expiry2026-10-02T06:08:42.562201+00:00. Review both fixed arms, transfer and diagnostic limitations on completion wake; verify cleanup. E80 remains cancelled. |
