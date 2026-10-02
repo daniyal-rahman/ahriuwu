@@ -1,0 +1,57 @@
+{
+  "id": "E80_afk_cs_only_12h",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 11520,
+  "max_seconds": 42300,
+  "slurm_time": "12:00:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 0.0,
+  "tower_damage_gold": 0.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/ckpt_008388608.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    512,
+    1024,
+    2048,
+    3072,
+    4096,
+    5120,
+    6144,
+    7168,
+    8192,
+    9216,
+    10240,
+    11520
+  ],
+  "question": "LEARN-AFK-35: user-requested 12-hour continuation of E78 literal CS-only PPO/GRU. Hypothesis: a substantially longer budget can acquire and retain better last hitting after the short run showed a temporary gain; a short plateau does not establish inability to learn. Initialize from E78 FINAL update512 parameters, not its best intermediate; fresh Adam/schedule/budget per launcher contract. All learning settings remain E78: +1 per own credited CS only, original v3 observations and unmasked actions, constant LR1e-4, entropy.001, gamma.99, 4 PPO epochs, 128envs x128steps, seed0, staggered120s AFK episodes. Budget11520updates/188743680 additional learner decisions; estimated about11h50 including startup from measured E78 throughput, worker cap42300s and Slurm cap12h. Frozen64games on the existing fixed cohort at0 and configured eval_updates; initial physical AND reward retention against E78final10.0CS. Primary endpoint final update11520 meanCS>=11.0 (start+1); report paired episode differences and every frozen checkpoint. Secondary retention check: all final three scheduled means>=11.0. Deaths/tower damage remain diagnostics, not reward or success constraints. No best-checkpoint selection, adaptive LR, new observations, curriculum or teacher. Stop for nonfinite/contract/canary failure, signal or cap. If capped before update11520, report the actual budget and available frozen results as incomplete against the declared endpoint. No automatic extension; this one training seed is not a generalization or grokking claim.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 0.0,
+  "stagger_initial": true,
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/evaluations.jsonl",
+    "update": 512,
+    "compare_reward": true
+  },
+  "preflight_gate": "/mnt/nfs/shared/E77_combat_mask_preflight/result.json",
+  "init_sha256": "cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91",
+  "combat_features": false,
+  "cs_only": true
+}

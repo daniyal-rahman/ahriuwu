@@ -1127,3 +1127,36 @@ future video adapter. E78continues unchanged; no new feature branch launched.
 | LEARN-AFK-33 E78 final | Slurm2161 COMPLETED0:0 in42m28s, ended2026-10-01 3:53PM Pacific(PDT);512updates/8,388,608decisions. Frozen64games120s at0/128/256/512: CS9.921875/10.765625/11.375/10.0; deaths.140625/.015625/.015625/.078125; personal towerHP802.399197/48.152639/7.814034/181.035824. Final lowHP32:10.25CS/.0625deaths; fullHP32:9.75CS/.09375deaths. Final pairedCS delta versus initial mean+.078125,median0,30better/8equal/26worse,range−7to+6; final versus E75c9.453125 is+.546875. | Fails predeclared final>=10.921875CS. Temporary improvement at256 was not retained at512; do not promote the intermediate to a successful endpoint. Reward removal alone did not produce the targeted sustained improvement at this budget/LR. One training seed, not proof longer training/features cannot help or causal evidence LR is too high. |
 | LEARN-AFK-33 E78 contract/diagnostics | Manifest confirms cs_only=True, LR1e-4,gamma.99,4epochs,staggered128envs,originalv3 and exact E67initSHA. Initial physical-retention marker passed. Independently checked all4frozen cohorts/bothteams: episode reward=CS=CSreward term, every other reward term0.512metric rows/nonfinite flags0/no traceback; full completion marker. Final8388608checkpoint/latest SHA identical:cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91. Run /mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/. | No extra evaluation or test rerun. Median sampledpostKL.026605,max.047038; first/last32means.024414/.026747. Clip fraction first/last32mean.203589/.205034; entropy7.41933→6.58365; EV.750704→.867087; value loss.086421→.020467. These train diagnostics show no obvious runaway policy-KL spike, but do not certify recurrent behavioral stability or identify the cause of CS decline. |
 | LEARN-AFK-33 E78 bridge cleanup | Result delivery accepted with authoritative COMPLETED/0:0 accounting; lanerl-event-2161.service inactive and registry entry absent. | Completed as budgeted; no RL job running/queued, no follow-up submitted. Review supports discussing retention of improved timing under continued PPO, alongside existing curriculum/teacher options; no new experiment authorized by the event. |
+
+### LEARN-AFK-35 — E80 twelve-hour CS-only continuation
+
+Explicit user request: queue the same setup for 12 hours. Continue from E78's
+**final** update512 parameters (10.0 frozen CS), with fresh Adam as required for
+a new experiment. Do not select E78's better intermediate checkpoint. Keep
+constant LR1e-4, entropy.001, gamma.99, four PPO epochs, original v3/GRU/unmasked
+actions, 128 environments x128 steps, seed0 and staggered 120s AFK episodes.
+Environment reward remains exactly +1 per own credited CS and nothing else.
+
+Hypothesis: longer training can acquire and retain better last-hit behavior;
+E78's transient rise to11.375 then fall to10.0 does not establish a learning
+ceiling. Existing PPO reference (https://arxiv.org/abs/1707.06347) and E78's
+stable sampled policy-KL support retaining the established update configuration,
+not predicting success. Duration estimate is engineering extrapolation from
+E78's mean3.632849s/update plus startup/compilation/evaluation overhead.
+
+Budget: 11,520 updates /188,743,680 additional learner decisions; expected about
+11h50 including startup, worker cap42,300s (11h45), Slurm cap12h. Existing
+integrated canaries, checkpoint cadence and signal handling are reused. Frozen
+64-game suite at0,512,1024,2048,3072,4096,5120,6144,7168,8192,9216,10240,11520.
+Initial physical and reward trajectories must reproduce E78final; every frozen
+episode must satisfy reward=CS with all other reward terms zero.
+
+Primary endpoint: final update11520 meanCS>=11.0 (start+1); report paired episode
+deltas and all scheduled means. Secondary retention: each of the final three
+scheduled means >=11.0. Deaths and tower damage are diagnostics. No selection of
+the best intermediate, human demonstrations, feature changes or adaptive LR.
+Stop for nonfinite/contract/canary failure, signal or cap. An early cap is
+incomplete against the declared endpoint, not a completed success. No automatic
+extension; one training seed cannot establish generalization or grokking.
+
+| LEARN-AFK-35 setup | E80_afk_cs_only_12h prepared; E78 final SHA256 cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91. | Submission/startup/bridge pending; no new outcome. |

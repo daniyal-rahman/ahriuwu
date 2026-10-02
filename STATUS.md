@@ -1,4 +1,12 @@
-# STATUS — 2026-10-01 CS-only continuation
+# STATUS — 2026-10-02 twelve-hour CS-only continuation
+
+Dani explicitly requested a 12-hour same-setup run. E80 is prepared for launch:
+E78 FINAL parameters/fresh Adam, literal +1/CS only, constant LR1e-4, same v3
+GRU/PPO/actions and staggered 120s AFK task. Budget 11,520 updates / 188,743,680
+additional learner decisions; 11h45 worker cap / 12h Slurm cap. Estimate about
+11h50 including startup from E78 throughput. Frozen 64-game evaluations at start,
+512, 1024, then roughly hourly through final11520; final target >=11.0CS versus
+10.0 starting baseline. No adaptive LR or new features. LEARN-AFK-35.
 
 E78 CS-only continuation completed. Literal+1/CS, no other environment reward;
 E67 parameters/freshAdam, original v3/GRU/actions, LR1e-4,512updates/8.389Mdecisions.
@@ -10,18 +18,19 @@ Final deaths.078125 versus initial.140625; personal towerHP181.035824 versus802.
 All256frozen games (both teams) satisfy reward=CS and other terms0. Initial physical
 retention passed. MedianpostKL.026605, maximum.047038; no obvious KL explosion.
 These are one training seed's results, not a diagnosis of LR/representation or
-proof that more training cannot help. No new experiment authorized by this event.
+proof that more training cannot help. The subsequent explicit user request
+authorizes E80; the earlier completion event alone did not.
 
 ## Jobs
 
-**No RL jobs running or queued; no pending ETA or watcher.**
+**E80 prepared, not yet submitted; no RL job running/queued or active watcher.**
 E78 / Slurm2161 COMPLETED0:0 in42m28s, ended3:53PM Pacific (PDT).
 17integrated canaries and180s launcher watch passed.512metric rows, no reported
 nonfinite loss flags or traceback. Final checkpoint/latest SHA256:
 cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91.
 Run: /mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/.
 Bridge2161 delivery accepted; lanerl-event-2161.service inactive, registry entry
-absent. No restart, extension, LR sweep, curriculum or feature run submitted.
+absent. E80 submission pending; no LR sweep, curriculum or feature run submitted.
 E79/2160 was cancelled after46s during canaries, before any training.
 E77mask/directHP preflight1857 completed19tests; no learned feature result.
 Other projects and their jobs remain outside this workstream.
@@ -89,4 +98,4 @@ channels through convolutions, not RGB screenshots. Tencent5v5 separately has
 6x17x17 maps including skill bullets; caster-AA coverage remains unestablished.
 Recommend retaining compact structured inputs with a separately trained video
 adapter; small spatial CNN remains an optional hypothesis. No code/run change.
-E78 completed; no additional RL jobs submitted.
+E78 completed; E80 twelve-hour continuation prepared on explicit user request.
