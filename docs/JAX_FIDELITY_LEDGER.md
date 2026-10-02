@@ -1581,3 +1581,18 @@ existing64game suite, not a perfect-CS, sample-efficiency, grokking or generaliz
 claim. Same PPO method as https://arxiv.org/abs/1707.06347 and existing E82;
 step budget/gates/time estimates are our engineering choices. No new feature,
 optimizer/controller, action restriction, teacher, artificial delay or reward term.
+
+
+E87 interpretation boundary: current gamma.99 at10Hz weights a reward10s later
+by.3660 and30s later by.0490; an AA landing.3s later retains.9703weight. Thus
+short return horizon is an open explanation for weak long-horizon positioning/
+proxy incentives, but does not by itself explain a nearby one-swing timing miss.
+These are discount arithmetic, not measured causal findings. E87 holds discount
+fixed to isolate additional training; its unweighted episode-CS evaluation is
+not identical to the discounted return target. Do not infer perfect-total-CS
+optimality or information sufficiency from the continuation alone.
+
+
+| LEARN-AFK-42 startup | E87/2186 RUNNING fromf53965c, started2026-10-02T08:54:54UTC /1:54:54AM PDT. All17integrated tests pass:16base367.52s,staggerwarmup1test79.85s. Required launcher180s watch healthy; scenario calibration passed, worker fixed-policy stagger warmup underway. | No learned result/initial frozen-equality claim yet; worker enforces it before learning. Budget8192updates/134.218M, checkpoint50updates; expected finish10:05–10:30AM PDT, Slurm hard cutoff10:39:54AM. Bridge lanerl-event-2186.service active/registered, pending delivery, bounded expiry2026-10-02T19:02:47.112UTC /12:02:47PM PDT. On wake review actual budget, immutable/final frozen results and cleanup; no active model polling or automatic extension. |
+
+| LEARN-AFK-42 bridge verification | Heartbeat advanced1790931767.5958192→1790931887.98177; service active and registry present. | Delivery pending; unattended handoff uses the registered bridge, not model polling. |

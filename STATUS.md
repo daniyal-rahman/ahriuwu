@@ -19,7 +19,29 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**No RL Slurm job running or queued at completion review.** E86b/2185
+**Running: E87_afk_long_continuation / Slurm2186**, submitted2026-10-02T08:54:42UTC
+(~1:55AM PDT), sourcef53965c. Started2026-10-02T08:54:54UTC (**1:54:54AM PDT**). All17integrated tests passed
+(16base in367.52s,1stagger warmup in79.85s); launcher reports healthy after180s.
+Scenario calibration passed; fixed-policy stagger warmup underway at handoff.
+No learned result or initial frozen-equality pass claimed yet; those are enforced
+by the worker. No other RL job queued.
+Expected finish **10:05–10:30AM PDT**; Slurm hard cutoff **10:39:54AM PDT**.
+Worker also has8h30relative and10:50AM PDT absolute bounds.
+
+**Completion bridge:** lanerl-event-2186.service active/registered, pending delivery,
+expiry2026-10-02T19:02:47.112UTC (**12:02:47PM PDT**), bounded10h lifetime includes
+queue/delivery margin. Heartbeat advanced1790931767.5958192→1790931887.98177; service active and registry present. Do not actively poll training.
+On wake: inspect `/mnt/nfs/shared/slurm-events/2186/result.json`, Slurm State AND
+ExitCode, `/mnt/nfs/shared/E87_afk_long_continuation-2186.out`, and
+`/mnt/nfs/checkpoints/lanerl-jax/E87_afk_long_continuation/study.json` for exact run
+path. Review actual budget/checkpoints, initial trajectory equality, all frozen
+scores including final8192, finite learner diagnostics and literal reward=CS.
+Distinguish an interrupted budget/missing final evaluation from completion, even
+if process exit0. Report paired final differences and primary/secondary gates;
+update existing ledgers/STATUS and verify service/registry cleanup. Preserve final
+and intermediate checkpoints. No automatic extension beyond the overnight window.
+
+E86b/2185
 COMPLETED0:0 in5m05s, ended2026-10-02T08:48:59UTC (**1:48:59AM PDT**).
 Both batches and fresh/restored Adam comparisons complete. Production params,
 optimizer and RNG reproduce exactly; old likelihood maxerror1.431e-5, E85
@@ -37,7 +59,7 @@ recovery-case representative clicks increase under all standard updates with
 complete GRU prefixes replayed at new weights. Two batches/two such cases are
 limited evidence, not a guarantee of correct credit or efficient optimal farming.
 
-**Selected long run: E87_afk_long_continuation**, prepared, not submitted yet.
+**Selected long run: E87_afk_long_continuation**, submitted as2186 above.
 E82final/freshAdam, unchanged CS-only full-wave PPO and LR1e-4;8192updates/
 134,217,728additional decisions. Checkpoint every50updates (~3min); frozen64 at
 0/128/512, then every1024through8192. Initial trajectories must equal E82final.
@@ -274,3 +296,7 @@ Last64 sampledpostKL mean.03956, explainedvariance.92120, rawgradnorm7.22556,
 clippedfraction1.0. These alone do not identify an LR error. E87 uses the same
 LR to isolate a larger training budget from the stronger E82 initialization.
 A plateau still would not prove an information ceiling or impossibility of learning.
+
+Open distinction for interpretation: gamma.99 at10Hz weights10s-later CS by.366,
+30s-later by.049, but.3s-later by.970. This may matter for pushing/proxy planning;
+it does not itself explain a one-swing last-hit error. E87 holds discount fixed.
