@@ -1616,3 +1616,29 @@ optimality or information sufficiency from the continuation alone.
 | LEARN-AFK-42 independent-baseline design, not launched | Following Dani's further objection to repeated diagnostics and question about implementation choice: recommend pinned SB3-Contrib RecurrentPPO v2.9.0/PyTorch, stock MultiInputLstmPolicy, separate actor/critic1x256LSTM and64x64heads; existing v3numeric inputs/masks, zero masked entity rows, original MultiDiscrete[8,96,54] commands, CS-only120s AFK/10Hz. Batched JAX VecEnv adapter; SB3 owns collector/buffer/GAE/recurrent sequence handling/loss/optimizer. Initial proposed16,777,216decisions/arm (1024x128x128), fresh initialization for both reference/current recipes, matched LR1e-4,4epochs/4minibatches,gamma.99/lambda.95,entropy.001 and frozen suite; repeat promising gain with a second seed. | Current train/ppo.py already derives from PureJaxRL31756b197773a52db763fdbe6d635e4b46522a73, so another PureJaxRL port is not strongly independent. Stock SB3 changes architecture and distribution: it sums likelihood of all MultiDiscrete components whereas our implementation excludes unused screen coordinates. Success would implicate our combined recipe, not prove a PPO bug or simulator correctness. Both failing is inconclusive. No new target/projectile feature, simplified action interface or E82-to-LSTM weight migration. CPU/GPU transfer overhead and memory coexistence require integrated throughput measurement before time estimates. Proposal only; existing E88 census work untouched. |
 
 | LEARN-AFK-42 baseline primary references | Official RecurrentPPO supports Dict observations, MultiDiscrete actions and LSTM policies: https://sb3-contrib.readthedocs.io/en/master/modules/ppo_recurrent.html ; releasedv2.9.0: https://github.com/Stable-Baselines-Team/stable-baselines3-contrib/releases/tag/v2.9.0 ; VecEnv requires terminal_observation and explicit truncation semantics: https://stable-baselines3.readthedocs.io/en/master/guide/vec_envs.html ; stock MultiCategorical distribution: https://stable-baselines3.readthedocs.io/en/master/_modules/stable_baselines3/common/distributions.html . | Read official documentation/source for feasibility; no SB3 farm-learning result, dependency installation, adapter implementation or training launch. Matching commanded actions does not mean identical policy-loss parameterization. Budget/settings are proposed engineering choices, not a published optimal farming recipe. |
+
+### CODE-REVIEW-ASTRA-01 — two independent read-only reviews (2026-10-02)
+
+User explicitly requested Astra reviewers without the preceding discussion or
+performance hypotheses. Both spawned as gpt-6-astra with fork_turns=none.
+General prompt: "Can you do a read-only code review of
+/srv/nfs/projects/ahriuwu-lanerl-jax and report your findings?"
+Second prompt requested actionable correctness bugs, inconsistent contracts and
+structural problems with concrete maintenance impact; deprioritized cosmetic
+style, speculative optimizations and unsupported rewrites. Neither prompt
+mentioned a performance symptom. Both reviewers read repository context normally.
+
+| Finding | Evidence and trigger | Suggested correction / limits |
+|---|---|---|
+| Interrupted final evaluation can be reported complete; both reviewers | wave_evaluation.py:25 returns None when stop() is true; wave_scenario_train.py:290 ignores the return. Its save() at242 and finalization295/298 classify completion solely by update==n_updates. Signal/worker deadline during the mandatory final evaluation can leave a complete study without the required evaluation. | Track which required evaluations completed and propagate interruption explicitly. The branch is established by static call paths, not a new reproduced incident. |
+| Nonfinite failure can overwrite healthy latest checkpoint; both reviewers | wave_scenario_train.py:280 installs the updated runner,286–287 detects nonfinite metrics,finally295 calls save(); helper239 uses RunDir.save with default latest=True. run_manifest.py:340–352 then replaces ckpt_latest. vec_train.py:583–586 already saves divergence with latest=False. | Preserve the last healthy latest pointer and save rejected state separately. Prior periodic files remain because this worker sets keep_checkpoints=0. Do not infer every metric failure necessarily makes every parameter nonfinite. |
+| Optional KL-prior CLI cannot initialize; general reviewer | vec_train.py:501/505 puts a positive kl_prior_coef in cfg,544 calls make_vec_train without prior params, which calls make_learner at229; learner.py:28–29 raises immediately. Checkpoint loading547–549 and intended prior-aware rebuild551–552 are unreachable. | Build parameter template without requiring a prior, restore the checkpoint, then construct the prior-aware learner. This affects the optional CLI flag, not default zero-prior runs. |
+
+Root independently read the cited branches and default checkpoint semantics.
+Reviewers made no edits and ran no tests/jobs/GPU work. Root changed only review
+records. Their scope overlapped shared PPO/learner, vector collection, wave
+training/evaluation and checkpoint lifecycle; no claim of exhaustive simulator,
+vendor or repository coverage. Structural conclusion: duplicate lifecycle logic
+has diverged in concrete safeguards; centralize those narrow contracts before
+considering a broad directory reorganization. User requested review; no fixes
+implemented. Existing E89/2197 training and E88h/2204 census continue untouched.

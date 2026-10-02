@@ -1,5 +1,20 @@
 # STATUS — 2026-10-02 overnight AFK diagnostics and continuation
 
+**Oct2 independent Astra code reviews complete:** Dani requested two fresh-context
+read-only reviewers: one minimal general prompt, one prioritizing actionable
+correctness/contract/maintenance issues over cosmetic changes. Both independently
+found interrupted endpoint evaluation can be labelled complete and nonfinite
+failure can replace the healthy latest checkpoint. The general reviewer also
+found `vec_train --kl-prior >0` fails during its first learner construction,
+before the prior checkpoint is loaded. Root checked the cited call paths.
+Record: CODE-REVIEW-ASTRA-01 in the existing fidelity ledger. No production edits,
+tests or new Slurm jobs; scope covered learner/vector/wave/evaluation/checkpoint
+code, not an exhaustive repository review. Proposed structural improvement is
+shared completion/checkpoint rules across training entrypoints.
+Latest read-only Slurm observation during this review: E89/2197 training RUNNING
+with~65min allocation remaining; E88h/2204 checkpoint census RUNNING with~56min
+remaining. Existing jobs and uncommitted census/launcher/render changes untouched.
+
 E81→E82→E83 is complete. The best completed full-task endpoint in this sequence is **E82:
 14.125 CS, zero deaths, zero personal tower damage**, over64 frozen120s AFK games.
 Teaching on full waves improved the earlier10.0CS policy to11.75; subsequent
@@ -77,7 +92,7 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**No new training from this design discussion.** Existing AFK census diagnostics
+**Earlier SB3 design-discussion snapshot; superseded by review observation above.** AFK census diagnostics
 E88d/2193 and E88e/2194 were observed RUNNING,~34–35min remaining to their Slurm
 limits at the read-only check. They belong to already ongoing census work;
 their code/launchers/jobs were left untouched. E87_afk_long_continuation / Slurm2186 ended
