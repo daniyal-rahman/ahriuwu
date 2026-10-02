@@ -15,6 +15,22 @@ Latest read-only Slurm observation during this review: E89/2197 training RUNNING
 with~65min allocation remaining; E88h/2204 checkpoint census RUNNING with~56min
 remaining. Existing jobs and uncommitted census/launcher/render changes untouched.
 
+**Architecture-level second pass:** Dani wanted a hierarchical mental model,
+so both Astra reviewers reassessed responsibilities/boundaries rather than
+isolated bugs. Shared simulator/observation/learner organization is reasonably
+coherent; the weaker contracts are around experiments and backend compatibility.
+Both identify mutable execution identity: launcher records metadata but the
+batch script/canaries/worker consume the live checkout and reread live JSON.
+Both identify fragmented study outcome rules; completion and checkpoint bugs
+above are symptoms. The general reviewer also identifies simulator-shaped
+policy input as a portability boundary: C# reconstructs LaneState and rejects
+unsupported v4–v6 interfaces. That rejection is an intentional safeguard, not
+a demonstrated transfer defect. Proposed corrections: preserve an immutable
+launch bundle including dirty source/spec; share an explicit attempt outcome
+and validated-checkpoint publication rule; specify policy/backend capabilities
+centrally. No broad rewrite or structural edits implemented. Detailed evidence
+is under CODE-REVIEW-ASTRA-01 in the existing ledger.
+
 E81→E82→E83 is complete. The best completed full-task endpoint in this sequence is **E82:
 14.125 CS, zero deaths, zero personal tower damage**, over64 frozen120s AFK games.
 Teaching on full waves improved the earlier10.0CS policy to11.75; subsequent

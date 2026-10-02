@@ -1642,3 +1642,29 @@ vendor or repository coverage. Structural conclusion: duplicate lifecycle logic
 has diverged in concrete safeguards; centralize those narrow contracts before
 considering a broad directory reorganization. User requested review; no fixes
 implemented. Existing E89/2197 training and E88h/2204 census continue untouched.
+
+#### Architecture-level follow-up requested by Dani
+
+User wanted a hierarchical review based on a mental model of the system. Both
+same Astra reviewers received a second read-only task: map intended design,
+responsibilities, boundaries, sources of truth and data flow; report architectural
+cause→concrete consequences→smallest useful correction, separating intentional
+tradeoffs from accidental complexity. No performance symptom was supplied.
+
+The shared numerical core is reasonably coherent in the reviewed paths:
+simulator→shared observation/policy→collector trajectories→shared PPO learner;
+SimConfig is an existing useful boundary. This is a structural assessment, not
+certification of numerical correctness or full-repository coverage.
+
+| Architectural issue | Concrete evidence / consequence | Bounded correction |
+|---|---|---|
+| Execution identity is metadata rather than an immutable input; both reviewers | gru_profile_launch.py:65–92 submits an ID into the shared checkout, then records spec/HEAD. wave_scenario.sbatch:3,9–35 executes there and rereads live JSON for test selection; wave_scenario_train.py:90 reads it again. Queued edits or edits between canaries and worker can change the tested/executed program relative to the launch record. run_manifest.py:150–170 hashes current lanerl_jax Python, excludes live lanerl_rl/projection/constants, and does not preserve source contents on this wave path. | Resolve source/spec once into an immutable launch bundle, including relevant uncommitted source and input identities; canaries/worker/evaluation consume that bundle and record its digest. Keep ordinary working-tree edits available. This is an execution-boundary correction, not a requirement for a clean commit before every run. |
+| No component owns the full study outcome; both reviewers | Slurm/log markers, study.json, manifest.json, evaluation JSONL, spec question prose and ledger separately encode completion/evidence/success. Required endpoint evaluation can be interrupted while update count publishes complete; PROFILE COMPLETE prints even on interruption and gru_profile_launch.py:100–107 treats it as success. Successful execution of a budget is distinct from complete evidence and meeting a research criterion. | One explicit attempt outcome containing budget status, required evaluation milestones, criterion outcome and separate Slurm termination; publish manifest/status/log views from it. Bind evaluation to checkpoint/cohort identities. Reuse a shared rule for saving diagnostic state versus promoting validated latest weights; this addresses the earlier checkpoint bug. |
+| Shared policy tensors do not fully specify backend compatibility; general reviewer | builder.py:135 accepts full simulator LaneState and params. C# StateRebuilder at policy_driver.py:163 reconstructs simulator-shaped state and derived earnings/cast/buff history. Action decoding/settings and policy loading have multiple backend entrypoints. Interface versions exist; policy_driver.py:744–749 intentionally rejects v4–v6 without required wire/history support. | Central policy-facing contract should declare fields/availability/history, physical action semantics, reset/termination semantics and adapter capabilities. Preserve existing builder/sampler/parity tests and fail-closed guards. This is a capability/maintenance boundary, not proof that current v3 transfer is semantically wrong or that all adapters should be rewritten now. |
+
+Prioritization: first immutable execution inputs and common outcome/checkpoint
+publication rules; central capability declarations can precede any larger adapter
+refactor. Separate collectors, compiled reset banks, recurrent rollouts and opt-in
+features have documented purposes and do not alone establish bad architecture.
+Root read the referenced launcher/batch/worker/provenance and adapter boundaries;
+no new tests, GPU work, implementation fixes or changes to ongoing jobs.
