@@ -1425,3 +1425,50 @@ Do not repeat low click-probability findings as proof of a root cause.
 | LEARN-AFK-39 Sol source audit | User-requested GPT-6-Sol read-only review E84_sol_bug_audit completed at isolated c6ecdd9 snapshot. No new confirmed live correctness defect. Inspected CS-delta reward, post-action done/carry reset, agent-major recurrent sequence layout, GAE and matching sampled/learned likelihood paths: vec_train.py:266–368, learner.py:42–90, ppo.py:65–145. No code changes, runtime tests or Slurm jobs by the agent. | Static review narrows hypotheses; it does not certify the whole system or replace a targeted reproducer. Existing E54/E55 numerical contracts make another generic GAE/likelihood check low value. Audit snapshot retained under _archive and logged in MANIFEST.tsv; no new active project workstream. |
 | LEARN-AFK-39 clipping coupling | E82 enables detach_critic (wave_scenario_train.py:136), and policy.py:323–325 stops value gradients at shared features. However learner.py:36–39 globally clips the combined actor and value-head gradient before Adam. Thus value-head gradient magnitude changes the common scaling applied to actor gradients. | This confirms gradient coupling, NOT smaller actual Adam steps or a root cause. Adam can largely cancel uniform scaling, especially with fresh moments. Proposed matched same-batch/same-optimizer diagnostic: retain versus exclude value-head gradient contribution from the clipping norm; report actor parameter delta, full-prefix policy KL and useful-action probability, not only gradient norms. Isolated diagnostic branch, not a production optimizer change. |
 | LEARN-AFK-39 action/information hypotheses | Sol confirms known absence of previous sampled action and own AA phase in E82's v3 actor inputs; independent button/x/y heads and unconditional coordinate entropy are existing design choices. Prior E59/E66 sparse direct-click/proposal results remain relevant, including auto-acquisition and failed farming-gain caveats. | No claim that the20-direction menu solves the problem or that missing features impose a demonstrated perfect-CS ceiling. User's12h proposal remains deferred pending cheaper diagnostic discussion; no model/action-port implementation or training submission. First proposed bundle measures actual alternatives and original/compact-menu coverage, credit accuracy and update response; held-out information comparison is a later discriminator if necessary. |
+
+
+### LEARN-AFK-40 — overnight real-state search/credit diagnosis (E85)
+
+Dani authorizes autonomous diagnostics for9–10hours from2026-10-02T07:57UTC,
+then ONE long checkpointed run for the remaining window, ending no later than
+17:57UTC /10:57AM PDT. Prefer the most informative continuation; if undecided use
+his20direction/visible-target action proposal. Cancelled E80 remains cancelled.
+This is explicit successor-run authorization; completion events should continue
+the sequence within this budget. Sol implements E86 isolated optimizer comparison.
+
+Hypothesis: E82 misses recoverable CS because useful native click choices are
+poorly explored, assigned poor credit, or quickly overwritten. E85 freezes E82's
+14.125CS checkpoint SHA d5529d6c4d1362b27f28c2bad539a26ff42c2abe7311c414c3fcf82bca7bc357.
+Capture32original120s full-wave episodes, one case per episode after prespecified
+128/145/165/185s thresholds: observable enemy minion at30–500range and<=1.5estimated
+AA damage using HP upper bound. No own-AA-readiness selection. Require>=16cases.
+Keep all observation prefixes, sampled actions, exactCS rewards and values.
+Source recurrent carries must reproduce from full prefixes within1e-4.
+
+Single-action alternatives:20directions at250units,12visible-minion centre clicks,
+NOOP/Q/W/E/R/recall, plus32independent actions drawn from the original factorized
+policy. Invalid minion slots excluded. All use unchanged physical screen decoding,
+native10Hz control and simulator rules. Ground attack-move auto-acquisition is
+included in the sampled-action outcomes; do not substitute direct-centre mass for
+all useful-action probability. Discovery uses2paired continuation seeds and total
+8sCS. Best menu and best sampled alternative validate on4new paired seeds through
+the original episode deadline. Separate arm repeats the selected menu screen cell
+for1s; this is a sequence intervention, not delayed input or altered cooldown.
+Two duplicate natural controls must agree exactly. No target-ID lock is added.
+
+Predeclared action-search signal:>=8cases with held-out menu gain>=.5CS at8s and
+nonnegative remaining-episode gain. Report all case deltas, not only successes.
+Original on-policy GAE and forced-branch GAE/discounted returns are separate;
+forced trajectories never enter PPO. Useful original-action fraction is a noisy
+Monte Carlo discovery estimate, not exact aggregate probability or a proof of
+optimality. Complete histories support a later fit/information discriminator if
+needed. This study alone does not establish an information ceiling, justify a
+particular LR, or prove the compact menu can be learned.
+
+45minworker/1hSlurm cap. Runtime gates: SHA, complete original episodes, literal
+reward=CS, full-prefix carry equality, duplicate physical continuations, finite
+metrics. Integrated existing reward/GRU likelihood tests run via launcher; no
+standalone GPU tests. Stop on signal, cap or contract failure; partial outputs
+remain marked incomplete. No exported/promoted weights. Methods are controlled
+counterfactual continuations and PPO GAE (https://arxiv.org/abs/1707.06347), following
+E54/E55/E69/E70; budgets/gates are engineering choices, not literature constants.

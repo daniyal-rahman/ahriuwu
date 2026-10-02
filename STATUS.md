@@ -1,4 +1,4 @@
-# STATUS — 2026-10-02 completed AFK diagnosis sequence
+# STATUS — 2026-10-02 overnight AFK diagnostics and continuation
 
 E81→E82→E83 is complete. The best full-task endpoint in this sequence is **E82:
 14.125 CS, zero deaths, zero personal tower damage**, over64 frozen120s AFK games.
@@ -11,11 +11,24 @@ normal farming. Do not promote either E83 checkpoint or call it a timing fix.
 
 ## Jobs and completion bridges
 
-**No Slurm training/evaluation jobs running or queued.**
-User-requested Sol subagent source audit E84_sol_bug_audit is complete,
-read-only at c6ecdd9; no new confirmed correctness bug. The proposed12h20-direction/target action run is deferred
-by Dani's subsequent request to consider cheaper diagnostic experiments first.
-No new model/action-interface implementation or GPU experiment submitted.
+**Overnight authority:** Dani explicitly authorizes9–10hours from approximately
+2026-10-02T07:57UTC (12:57AM PDT), aiming to finish by9:57AM PDT and no later
+than **10:57AM PDT /2026-10-02T17:57UTC**. Run and interpret the bounded diagnostics,
+then submit ONE long checkpointed run using the remaining window. Choose from the
+results; if undecided, use the requested20circular movement choices plus visible
+target interface. This authorizes successive experiments after completion wakes;
+the event alone need not supply new authorization. Do not revive cancelled E80.
+
+**No RL Slurm job submitted yet.** E85_afk_action_search is being implemented:
+32real-wave E82 situations, compact physical clicks versus sampled original actions,
+held-out continuations, critic/GAE comparison;45minworker/1hSlurm cap. E86 optimizer
+comparison is being implemented by the requested Sol agent in its isolated archive
+worktree;30minSlurm cap. Launch E85 first, then E86, interpret saved evidence, run
+an additional fitting/information discriminator if warranted, and launch one long
+run for the remaining time. Keep original full-wave frozen comparisons, checkpoints,
+startup watches and individual completion bridges. Conditional follow-ups are
+planned, not queued. Record every actual submission and bridge below.
+
 E83 / Slurm2176 COMPLETED0:0 in30m56s, ended Oct1 **8:29:44PM PDT**.
 Both fixed arms completed:40+20supervised epochs and256PPO updates.
 All24integrated GPU tests and required launcher health watch passed.
@@ -113,19 +126,19 @@ probability of useful action sequences, their assigned credit, and whether a
 learner update increases useful-action probability with correct GRU history.
 E69/E70 validated two physical alternatives; E54/E55 audited credit/likelihood
 but actions at reward time need not have caused the CS. Those are partial checks,
-not a completed causal learning audit. Specify a bounded experiment only after
-this protocol is concrete; none submitted or implemented in this discussion.
+not a completed causal learning audit. The subsequent overnight authorization makes the concrete E85/E86 protocol active;
+see jobs above for submission status.
 Keep E82 as the reference. Full-wave generalization/continuation remain subsequent
 options, not a substitute for resolving the learning-efficiency question.
 Action search, credit/update interference and missing observable information are
 hypotheses, not established causes. Frame-level ambiguity alone does not prove a
 feature ceiling because the GRU also receives history. No projectile/LR changes.
-No automatic12h restart or new feature port. Dani's standing bounded-research
-authorization remains; the explicitly requested E81–E83 sequence is complete.
+E80 remains cancelled. The subsequent overnight instruction authorizes a NEW
+long experiment chosen after the diagnostics, within the window above.
 Any next run needs its own concrete hypothesis/spec/ID/gates and launcher/bridge.
 
 
-Discussion protocol for cheaper action/credit tests (not submitted): use one
+Diagnostic rationale (E85/E86 implement bounded portions of this chain): use one
 bank of actual E82 full-wave situations, retain complete observation prefixes,
 and replay native physical alternatives with paired continuation seeds. First
 validate which alternatives recover CS and whether the compact20-direction plus

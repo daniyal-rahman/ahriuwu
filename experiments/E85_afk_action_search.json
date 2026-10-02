@@ -1,0 +1,15 @@
+{
+  "id": "E85_afk_action_search",
+  "engine": "afk-action-search",
+  "slurm_time": "01:00:00",
+  "max_seconds": 2700,
+  "cases": 32,
+  "minimum_cases": 16,
+  "policy_samples": 32,
+  "discovery_seeds": 2,
+  "validation_seeds": 4,
+  "useful_case_gate": 8,
+  "checkpoint": "/mnt/nfs/checkpoints/lanerl-jax/E82_afk_clone_ppo_retention/vec-s0-20261002-021315-9c16cef5/ckpt_008388608.msgpack",
+  "checkpoint_sha256": "d5529d6c4d1362b27f28c2bad539a26ff42c2abe7311c414c3fcf82bca7bc357",
+  "question": "LEARN-AFK-40: do legal compact-menu single actions recover CS from actual E82 full-wave histories, and do frozen critic/GAE signals rank those alternatives correctly? One observable near-low-HP-minion case per32 full120s episodes, eligibility begins at128/145/165/185s by episode; require>=16cases. No readiness selection. Menu:20 movement directions at250units,12 visible enemy minion centres,noop/Q/W/E/R/recall;32 independent original-policy action samples including ground attack-move. Two paired continuations rank total8s CS; select best menu and best original sample, validate each with4 separate seeds through episode end. Separate1s repeated-screen-click arm tests sequence consistency. Runtime gates: checkpointSHA, full-prefix carry equality<1e-4, literal reward=CS, duplicate controls bit-equal, finite metrics. Search signal gate>=8cases with validated menu +.5CS at8s and nonnegative remaining-episode gain. No promoted weights; noisy discovery Monte Carlo probability, not exact click mass or global optimality. Save full on-policy histories/cases/candidates/discovery/validation for follow-up fitting and information tests. Stop signal/cap/nonfinite/contracts.45minworker/1hSlurm; user overnight authority through2026-10-02T17:57UTC."
+}
