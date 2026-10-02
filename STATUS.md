@@ -6,16 +6,22 @@ Teaching on full waves improved the earlier10.0CS policy to11.75; subsequent
 CS-only PPO improved it to14.125. This is evidence of learning with the existing
 observations/GRU/clicks, not perfect CS or an isolated explanation of the plateau.
 
-**Oct2 8:22AM PDT discussion/curve snapshot:** E87 remains running. Frozen64 CS at
-updates0/128/512/1024/2048/3072/4096/5120 is
-14.125/11.296875/13.28125/14.328125/13.4375/10.640625/12.34375/13.6875.
-Latest evaluated weights have83.886M additional decisions; latest plotted train
-update5994 has98.206M. No sustained improvement yet; best intermediate+0.203125
-is not an endpoint success. Deaths grow from0 to.640625/.703125 during the late
-regression, then.296875 at5120. E87 initial reference equality passed; through
-the inspected5986metrics no nonfinite loss and reward exactly equals CS.
+**Oct2 9:24AM PDT terminal review:** E87/2186 CANCELLED by UID1000, ExitCode0:0,
+after7h29m22s. Worker handled the interruption and saved update6982;
+114,393,088additional decisions, versus planned8192/134,217,728.
+Cancellation reason beyond the recorded UID is not established. No learner
+exception/nonfinite failure observed; this was not the scheduled time limit.
+Frozen64 CS at updates0/128/512/1024/2048/3072/4096/5120/6144 is
+14.125/11.296875/13.28125/14.328125/13.4375/10.640625/12.34375/13.6875/13.4375.
+Latest evaluated weights have100.663M additional decisions; saved update6982
+has no frozen evaluation. Latest deaths.46875/game, personal towerHP2.55924;
+paired CS change−.6875 (27better/8equal/29worse) versus initialization.
+No sustained gain observed; best intermediate+0.203125 is not endpoint success.
+Planned8192primary/retention and final-three secondary gates were not completed.
+Initial exact E82 equality passed; all6982updates have finite core learner
+metrics and literal reward=CS, every other logged reward component zero.
 Curves: `docs/figures/E87_training_curve.png` and `afk_checkpoint_history.png`;
-CSV retains81frozen evaluations across22training arms, including repeated starts.
+CSV retains82frozen evaluations across22training arms, including repeated starts.
 History separates different setups; saved but unevaluated weights have no score.
 
 Current recommendation is discussion, not a newly submitted study: establish a
@@ -29,7 +35,7 @@ An independent simple policy-gradient reference on the same small task would
 help distinguish our PPO implementation from task/interface difficulty. Rising
 sampled post-update KL (~.040 early,~.064 late) and behavioral regressions make
 update stability worth a controlled comparison, not proof LR is too high.
-No new training or alteration of E87 from this discussion.
+No new training submitted. Do not automatically restart cancelled E87.
 
 E83's short-task curriculum improved local PPO farming but badly regressed
 normal farming. Do not promote either E83 checkpoint or call it a timing fix.
@@ -44,31 +50,23 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**Running: E87_afk_long_continuation / Slurm2186**, submitted2026-10-02T08:54:42UTC
-(~1:55AM PDT), sourcef53965c. Started2026-10-02T08:54:54UTC (**1:54:54AM PDT**). All17integrated tests passed
-(16base in367.52s,1stagger warmup in79.85s); launcher reports healthy after180s.
-Scenario calibration, stagger warmup and exact initial E82 reference passed.
-Current frozen results are above. No other RL job queued.
-Revised expected stop **about10:30–10:40AM PDT** (~2h10remaining at8:22AM),
-Slurm hard cutoff **10:39:54AM PDT**. Recent updates take~3.79s versus the3.53s
-planning estimate;8192may not fit the worker time cap. An early stop is an
-incomplete planned endpoint, even if the process exits0; keep saved weights.
-Worker also has8h30relative and10:50AM PDT absolute bounds.
+**No running or queued AFK RL jobs.** E87_afk_long_continuation / Slurm2186 ended
+2026-10-02T16:24:16UTC (**9:24:16AM PDT**), CANCELLED by1000/0:0; batch finished
+cleanly at16:24:20UTC. Sourcef53965c, started08:54:54UTC. All17startup tests and
+required180s watch passed. Log records cancellation then PROFILE COMPLETE;
+study and manifest correctly say interrupted. No restart or replacement queued.
+The queued modern-world benchmark belongs to the separate modern-simulator
+workstream; leave it and unrelated jobs untouched.
 
-**Completion bridge:** lanerl-event-2186.service active/registered, pending delivery,
-expiry2026-10-02T19:02:47.112UTC (**12:02:47PM PDT**), bounded10h lifetime includes
-queue/delivery margin. Heartbeat advanced1790931767.5958192→1790931887.98177;
-on the user-requested curve check checked_at1790954253.007447, stateRUNNING,
-service active and registry present. Do not actively poll training.
-On wake: inspect `/mnt/nfs/shared/slurm-events/2186/result.json`, Slurm State AND
-ExitCode, `/mnt/nfs/shared/E87_afk_long_continuation-2186.out`, and
-`/mnt/nfs/checkpoints/lanerl-jax/E87_afk_long_continuation/study.json` for exact run
-path. Review actual budget/checkpoints, initial trajectory equality, all frozen
-scores including final8192, finite learner diagnostics and literal reward=CS.
-Distinguish an interrupted budget/missing final evaluation from completion, even
-if process exit0. Report paired final differences and primary/secondary gates;
-update existing ledgers/STATUS and verify service/registry cleanup. Preserve final
-and intermediate checkpoints. No automatic extension beyond the overnight window.
+**Completion bridge cleaned:** delivery accepted2026-10-02T16:24:19.735UTC;
+lanerl-event-2186.service inactive/dead, Resultsuccess, REGISTRY entry absent.
+`/mnt/nfs/shared/slurm-events/2186/result.json` records terminal accounting.
+No further watcher needed. All149manifest checkpoint records point to existing
+files. Final `ckpt_114393088.msgpack` and `ckpt_latest.msgpack` both83,083,080bytes,
+SHA256 d76ff8fdd995719cec58b9b8965253d040aa84d6a031f657c74f7bb0e55f0e5e.
+Run: `/mnt/nfs/checkpoints/lanerl-jax/E87_afk_long_continuation/vec-s0-20261002-090325-f53965ce/`.
+Preserve final/intermediate checkpoints. Final6982performance is unknown;
+6144is the last frozen score. No8192endpoint or final-three gate claim.
 
 E86b/2185
 COMPLETED0:0 in5m05s, ended2026-10-02T08:48:59UTC (**1:48:59AM PDT**).
@@ -88,7 +86,7 @@ recovery-case representative clicks increase under all standard updates with
 complete GRU prefixes replayed at new weights. Two batches/two such cases are
 limited evidence, not a guarantee of correct credit or efficient optimal farming.
 
-**Selected long run: E87_afk_long_continuation**, submitted as2186 above.
+**Interrupted long-run protocol: E87_afk_long_continuation**, was2186 above.
 E82final/freshAdam, unchanged CS-only full-wave PPO and LR1e-4;8192updates/
 134,217,728additional decisions. Checkpoint every50updates (~3min); frozen64 at
 0/128/512, then every1024through8192. Initial trajectories must equal E82final.
@@ -103,8 +101,9 @@ learning settings fixed and resolve whether longer exposure improves this strong
 endpoint. The20direction/visible-target proposal remains a possible later study,
 not a demonstrated fix. Missing information/longer action sequences remain open;
 only2E85recovery cases cannot support a credible held-out feature comparison.
-This completes the requested diagnostic bundle to its stated limits; spend the
-remaining window on the explicitly authorized long run, not broad new probes.
+The diagnostic bundle and interrupted long-run evidence are recorded. Further
+diagnostic recommendations remain discussion; this cancellation wake starts no
+new experiment or automatic extension of the overnight window.
 
 E86/2184 FAILED5:0 in2m14s,
 ended2026-10-02T08:41:08UTC (1:41:08AM PDT), before the worker ran.

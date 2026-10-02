@@ -79,6 +79,7 @@ def main():
     current = next(a for a in arms if a[0] == "E87")
     run = current[2].parent
     manifest = json.loads((run / "manifest.json").read_text())
+    run_status = manifest.get("results", {}).get("status", "running")
     metrics = read_rows(run / "metrics.jsonl")
     checkpoints = sorted(manifest["checkpoints"], key=lambda c: c["update"])
     cu = np.array([c["update"] for c in checkpoints])
@@ -119,8 +120,8 @@ def main():
         ax.set(xlabel="Hours since initial checkpoint (startup excluded)", xlim=(-.04, tx[-1] + .12))
         ax.grid(alpha=.18)
     fig.suptitle("E87: longer CS-only PPO from the 14.125-CS E82 checkpoint\n"
-                 f"Frozen: same 64 games, 120s each | last evaluated update {rows[-1]['update']:,} | "
-                 f"training through {metrics[-1]['update']:,}", fontsize=13)
+                 f"{run_status.upper()} | 64 frozen games, 120s each | last evaluated {rows[-1]['update']:,} | "
+                 f"trained through {metrics[-1]['update']:,}", fontsize=13)
     fig.savefig(args.out / "E87_training_curve.png", dpi=170)
     plt.close(fig)
 
@@ -158,7 +159,7 @@ def main():
                       "Same metric; rewards, inputs and budgets vary.\n"
                       "Dashed line = that arm's starting score.\n\n"
                       "E83 shows full-wave transfer, not local-task CS.\n"
-                      "E80 was cancelled; E87 is still running.\n"
+                      f"E80 was cancelled; E87 status: {run_status}.\n"
                       "Saved but unevaluated weights have no score.\n"
                       "One training seed per arm; no across-seed CI.\n\n"
                       f"Snapshot: {snapshot}", va="top", fontsize=9, linespacing=1.6)
@@ -168,7 +169,7 @@ def main():
     fig.savefig(args.out / "afk_checkpoint_history.png", dpi=170)
     plt.close(fig)
     with (args.out / "afk_checkpoint_history.csv").open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(csv_rows[0]))
+        writer = csv.DictWriter(f, fieldnames=list(csv_rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(csv_rows)
     print(json.dumps(dict(snapshot_utc=snapshot, arms=len(arms), points=point_count,
