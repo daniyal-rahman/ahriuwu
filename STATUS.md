@@ -7,7 +7,13 @@ Last completed frozen64 evaluation was update512:11.328125CS/.03125deaths,
 versus initial10.0CS/.078125deaths; towerHP10.180336 versus181.035824.
 No frozen evaluation at the stopped809checkpoint and no11520endpoint result.
 Do not label the cancelled duration experiment successful or restart it.
-E81 / Slurm2172 is submitted under the existing sequence authorization.
+E81 / Slurm2172 COMPLETED0:0 in33m06s, ended Oct1 7:01:50PM PDT.
+Frozen64 CS:10.0 initial →7.28125 BC →10.84375 DAgger1 →11.75 DAgger2.
+Same-cohort scripted teacher13.5; final passes declared11.475 threshold.
+Final deaths.0625, personal towerHP0. Paired gain+1.75CS;40better/11equal/13worse.
+Current inputs/GRU can acquire better farming with teaching; this is not perfect
+CS, proof of a sole PPO mechanism, or a matched isolation of relabelling versus
+more supervised training. E82 is now next under the existing authorization.
 
 E78 CS-only continuation completed. Literal+1/CS, no other environment reward;
 E67 parameters/freshAdam, original v3/GRU/actions, LR1e-4,512updates/8.389Mdecisions.
@@ -24,15 +30,19 @@ then cancelled as recorded above.
 
 ## Jobs
 
-**E81 / Slurm2172 RUNNING on gpup; E80 cancelled.**
-Source f4cdde7. Started Oct1 6:28:44PM PDT. Estimated finish7:15–8:00PM PDT;
-hard cutoff8:28:44PM PDT. All21 integrated GPU tests passed (16existing +5new),
-and launcher reported healthy after180s. No learned E81 result yet.
-Bridge lanerl-event-2172.service active/registered; result timestamp advanced
-1790905005.8164654→1790905035.9146721 with RUNNING accounting.
-Expiry2026-10-02T05:36:45.323792+00:00 (Oct1 10:36:45PM PDT).
-On completion/failure wake: inspect E81, update ledgers/cleanup, then continue
-the authorized E82→E83 sequence. E82 and E83 are not submitted.
+**E81 complete; E82 ready for immediate submission. No RL jobs currently submitted/running.**
+E81 source f4cdde7;21integrated canaries passed; full70supervised epochs and
+512value-head minibatches completed. Final checkpoint and exported copy SHA256:
+1b8ed30cf913132b8d7045e45f40cd09d9cec205a86a5a3301e99532b08f24e0.
+Run: /mnt/nfs/checkpoints/lanerl-jax/E81_afk_gru_dagger/gru-dagger-s0-20261002-013626-f4cdde73/.
+Handoff complete/competent; export matches final checkpoint and frozen JSONL.
+Initial retention and exact actor preservation during value fitting passed.
+Critic fit completed, but no held-out critic-quality gate was imposed; do not
+assume critic error is ruled out if subsequent PPO regresses.
+Bridge2172 delivered accepted, service inactive and registry entry absent.
+E82 starts from final11.75CS, retains it at declared tolerance if final>=10.75,
+and improves if>=12.75. Its fixed512updates/~40min experiment is next.
+E83 remains authorized for the subsequent short timing diagnosis.
 E80 saved /mnt/nfs/checkpoints/lanerl-jax/E80_afk_cs_only_12h/vec-s0-20261002-003708-b7130a5c/ckpt_013254656.msgpack.
 Slurm accounting CANCELLED/0:0 is authoritative despite generic PROFILE COMPLETE
 log footer. Worker study/manifest correctly say interrupted809. Bridge2171 stopped;
@@ -45,7 +55,7 @@ nonfinite loss flags or traceback. Final checkpoint/latest SHA256:
 cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91.
 Run: /mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/.
 Bridge2161 delivery accepted; lanerl-event-2161.service inactive, registry entry
-absent. E80 subsequently cancelled by Dani; next job is E81.
+absent. E80 subsequently cancelled by Dani; E81 completed; next job is E82.
 E79/2160 was cancelled after46s during canaries, before any training.
 E77mask/directHP preflight1857 completed19tests; no learned feature result.
 Other projects and their jobs remain outside this workstream.
@@ -97,17 +107,10 @@ scripted action choice, never an injected latency or forced pause.
 
 1. E80/2171 cancelled on Dani's request; terminal review and watcher cleanup done.
    Dani explicitly says to do E81/E82/E83 first. Do not resume E80 automatically.
-2. E81_afk_gru_dagger RUNNING as2172 via the standard launcher.
-   Integrated21tests/health watch passed and bridge verified; no learned result yet.
-   Existing integrated canaries plus new imitation contracts run automatically.
-   Teach the existing v3/GRU/physical-click policy from E78 FINAL weights using
-   32scripted episodes, then two rounds of64learner episodes relabelled by the
-   script. Aggregate data;30/20/20epochs, LR1e-4,128step windows with full-prefix
-   recurrent replay, attack-label weight4. Frozen64 held-out games after each
-   stage and a same-cohort teacher comparator. Final competence gate is
-   CS>=max(11,.85*teacherCS); no best-stage selection. Fit detached value head
-   on frozen-clone returns, asserting exact actor preservation, before export.
-   Estimated45–90min, first-use estimate; hard2hSlurm/105minworker cap.
+2. E81_afk_gru_dagger COMPLETED2172; final frozen11.75CS versus teacher13.5,
+   competence threshold11.475 passed. All planned stages complete; final actor
+   unchanged by value-head fit. Export/handoff verified; bridge cleanup complete.
+   No automatic extension or selection of an intermediate checkpoint.
 3. E82_afk_clone_ppo_retention is configured and dry-run validated, NOT submitted.
    After E81 terminal review and complete handoff, launch via the same launcher.
    Uses E81 FINAL parameters and calibrated value head, verified handoff SHA,
@@ -130,8 +133,8 @@ record unit/expiry, then let it run without manual training polling. If a stage
 fails technically, diagnose/repair with a unique retry ID and redirect unsubmitted
 successors to that completed handoff; never consume a partial/best checkpoint.
 All stages are authorized; findings do not authorize unrelated feature ports.
-E81's integrated21GPU tests passed; syntax, shell parsing and both launcher
-dry-runs also passed. Full learning and checkpoint handoff remain pending.
+E81's integrated21GPU tests and full learning/handoff passed; syntax, shell
+parsing and both launcher dry-runs also passed. E82/E83 outcomes remain pending.
 LEARN-AFK-37 contains the protocol, evidence limits and source references.
 
 ## Other recommendations under discussion
