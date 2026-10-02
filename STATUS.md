@@ -24,17 +24,24 @@ Curves: `docs/figures/E87_training_curve.png` and `afk_checkpoint_history.png`;
 CSV retains82frozen evaluations across22training arms, including repeated starts.
 History separates different setups; saved but unevaluated weights have no score.
 
-Current recommendation is discussion, not a newly submitted study: establish a
-small bank of real-wave misses with verified successful native action sequences;
-require the current network to overfit those and actually recover CS, then test
-PPO on the same cases and expand to held-out perturbations/full waves. The E83
-teacher failure and E85's mostly unverified opportunities leave this diagnostic
-unfinished. If imitation works but PPO fails, isolate credit/search/update issues;
-if both work locally but fail in full waves, isolate generalization/retention.
-An independent simple policy-gradient reference on the same small task would
-help distinguish our PPO implementation from task/interface difficulty. Rising
-sampled post-update KL (~.040 early,~.064 late) and behavioral regressions make
-update stability worth a controlled comparison, not proof LR is too high.
+**Recommendation revised after Dani's duplication objection:** the proposed
+imitation→small-task PPO→full-wave progression substantially repeats E81/E83/
+E85/E86. Their limitations alone do not justify another broad sequence. First
+separate remaining last-hit misses in the zero-death E82 policy from the loss
+of survival during E87 continuation. Existing frozen episode data now locate
+the latter: at6144,34surviving games improve paired CS14.05882→15.47059(+1.41176);
+30games with death regress14.2→11.13333(−3.06667). All initial E82 games survived.
+At3072,23surviving games add6CS total;41games with death lose229CS total.
+These are post-outcome groups and associations, not a causal effect of death,
+proof of improved last-hit timing, or independent confirmation of a hypothesis.
+Next proposed diagnostic: compare good/bad checkpoints on matched full-wave
+trajectories, identify death source and preceding decisions, and separate CS
+lost before/after danger/death. This directly targets continuation regression.
+If risky pursuit of near-term CS is supported, longer discount horizon under
+the same CS-only reward is an untested comparison; gamma.99 discounts a30s-later
+reward to.049 versus.741at.999. No such run is submitted. This would address
+survival/retention, not explain all minions missed by the original E82 policy.
+Rising sampled KL and smaller-step comparisons remain hypotheses, not LR proof.
 No new training submitted. Do not automatically restart cancelled E87.
 
 E83's short-task curriculum improved local PPO farming but badly regressed
