@@ -19,12 +19,22 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**No RL Slurm job running or queued.** E86/2184 FAILED5:0 in2m14s,
+**Running: E86b_afk_optimizer_audit / Slurm2185**, submitted2026-10-02T08:43:30UTC
+(~1:44AM PDT), source26428df. Eight integrated JAX tests passed in131.17s; launcher healthy after180s.
+20minworker/30minSlurm; expected another~10–20min, hard cutoff about2:14AM PDT.
+Bridge lanerl-event-2185.service active/registered, expiry2026-10-02T10:47:17.259UTC
+(**3:47AM PDT**), delivery pending; Heartbeat advanced1790930837.7018847→1790930927.984604; active service/registry verified. On completion,
+inspect `/mnt/nfs/shared/slurm-events/2185/result.json`, worker log and
+`/mnt/nfs/shared/E86b_afk_optimizer_audit/result.json`; verify both optimizer modes
+and both batches, production equality, finite steps/KL, whole-prefix selected-click
+movement, then clean watcher/registry and submit the chosen long run.
+
+E86/2184 FAILED5:0 in2m14s,
 ended2026-10-02T08:41:08UTC (1:41:08AM PDT), before the worker ran.
 Eight JAX canaries passed in130.97s; separate test_ppo.py skipped wholesale
 because Torch is unavailable, producing pytest exit5. No optimizer result or
 checkpoint. Bridge was never armed; service inactive and registry absent.
-**E86b_afk_optimizer_audit** is prepared as the same diagnostic with that optional
+**E86b_afk_optimizer_audit** is submitted as the same diagnostic with that optional
 reference invocation removed;8JAX tests and all runtime equivalence/history gates
 remain.30minSlurm/20minworker cap. This is a wrapper retry, not a changed hypothesis.
 
@@ -54,11 +64,11 @@ multi-action search. No confirmed learning bug or information ceiling.
 Artifacts `/mnt/nfs/shared/E85_afk_action_search/`: complete result.json,
 histories.npz, cases.msgpack, candidate_actions.npz, discovery.npz, validation.npz.
 
-**Next: E86b_afk_optimizer_audit retry.** Sol commit6090710
+**Current: E86b_afk_optimizer_audit retry.** Sol commit6090710
 was rebased/integrated as8d42460; agent worktree retained under _archive, no agent
 Slurm job. Root added E85 full-prefix action-probability readout, signal handling
-and per-module parameter norms, plus separated PPO canaries so test filtering
-does not omit them. No production optimizer change. Compare standard versus actor-only clipping norm
+and per-module parameter norms. The optional Torch-reference invocation was
+removed for E86b after the documented environment skip; native runtime gates remain. No production optimizer change. Compare standard versus actor-only clipping norm
 with matched real on-policy data, Adam state, actual parameter/policy movement and
 production-update equivalence. E85 full-prefix action-probability readout
 connects the representative selected clicks to update movement; only2E85cases
@@ -72,7 +82,7 @@ If choosing the20direction/visible-target interface, keep ordinary screen decodi
 all abilities and native timing, and compare initial/final full-wave behavior;
 prior E66 mixture failure is relevant but is a different action design. Choose
 fixed update count conservatively from measured throughput and remaining time,
-leave room for startup/evaluation, and arm its own completion bridge. E86b submission status is above; the long run is **not submitted/queued yet**.
+leave room for startup/evaluation, and arm its own completion bridge. E86b is running above; the long run is **not submitted/queued yet**.
 No other RL jobs are active.
 
 E83 / Slurm2176 COMPLETED0:0 in30m56s, ended Oct1 **8:29:44PM PDT**.

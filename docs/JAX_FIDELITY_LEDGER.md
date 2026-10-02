@@ -1531,3 +1531,8 @@ filter from silently deselecting them. E86 remains20minworker/30minSlurm.
 
 
 | LEARN-AFK-41 E86 wrapper failure | E86/2184 FAILED5:0 in2m14s, ended2026-10-02T08:41:08UTC. Eight JAX reward/GRU canaries passed in130.97s; test_ppo.py imports Torch with module-level importorskip, so the unavailable reference module yields1skip and pytest exit5. Worker never executed. | No optimizer evidence or learner failure. No bridge armed; service inactive and registry absent. E86b repeats the same design without this optional unavailable module, retaining8JAX canaries, positive-advantage sanity, exact production-update reproduction and E85 full-prefix gates. No package installation or broad test reruns outside launcher. |
+
+
+| LEARN-AFK-41 E86b startup | E86b/2185 RUNNING, source26428df, submitted2026-10-02T08:43:30UTC (~1:44AM PDT). Eight integrated JAX canaries pass in131.17s; required180s watch healthy. | No optimizer result yet.20minworker/30minSlurm, hard cutoff~2:14AM PDT. Bridge lanerl-event-2185.service active/registered, expires2026-10-02T10:47:17.259UTC /3:47AM PDT. Review both batches/fresh/restored modes and full-prefix E85 readout on wake, then select one long run within17:57UTC overnight deadline. Sol agent finished; archived worktree retention manifest updated, no new active workstream. |
+
+| LEARN-AFK-41 bridge verification | Heartbeat advanced1790930837.7018847→1790930927.984604; active service/registry verified. | Delivery pending; no active model polling after handoff. |
