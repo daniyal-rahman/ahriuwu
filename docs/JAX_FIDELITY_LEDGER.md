@@ -1472,3 +1472,8 @@ standalone GPU tests. Stop on signal, cap or contract failure; partial outputs
 remain marked incomplete. No exported/promoted weights. Methods are controlled
 counterfactual continuations and PPO GAE (https://arxiv.org/abs/1707.06347), following
 E54/E55/E69/E70; budgets/gates are engineering choices, not literature constants.
+
+
+| LEARN-AFK-40 startup | E85/2183 submitted2026-10-02T08:11:57UTC (~1:12AM PDT), source c5297d5. Eight integrated reward/GRU tests pass in160.40s and required180s startup watch healthy. | Frozen diagnostic only, no result claimed yet.45minworker/1hSlurm; hard cutoff~2:12AM PDT. Bridge lanerl-event-2183.service active/registered, expiry2026-10-02T10:15:30.990UTC /3:15AM PDT. E86 remains a Sol implementation, not queued; overnight authority requires diagnostic interpretation then one long checkpointed run within10:57AM PDT deadline. |
+
+| LEARN-AFK-40 bridge verification | Bridge2183 heartbeat advanced1790928932.1467395→1790928992.3467414; service active and registry entry present at startup. | Pending completion delivery; no active model polling after handoff. |

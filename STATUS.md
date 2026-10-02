@@ -19,15 +19,37 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**No RL Slurm job submitted yet.** E85_afk_action_search is being implemented:
-32real-wave E82 situations, compact physical clicks versus sampled original actions,
-held-out continuations, critic/GAE comparison;45minworker/1hSlurm cap. E86 optimizer
-comparison is being implemented by the requested Sol agent in its isolated archive
-worktree;30minSlurm cap. Launch E85 first, then E86, interpret saved evidence, run
-an additional fitting/information discriminator if warranted, and launch one long
-run for the remaining time. Keep original full-wave frozen comparisons, checkpoints,
-startup watches and individual completion bridges. Conditional follow-ups are
-planned, not queued. Record every actual submission and bridge below.
+**Running: E85_afk_action_search / Slurm2183**, source c5297d5, submitted
+2026-10-02T08:11:57UTC (~1:12AM PDT). Eight integrated tests passed in160.40s;
+launcher reports healthy after180s. Frozen real-wave action/credit probe, no model
+training/export:32observed E82 cases, menu versus sampled clicks, separate held-out
+continuations and original/forced credit.45minworker/1hSlurm cap; expected finish
+within~30–50min after startup, hard cutoff about **2:12AM PDT**.
+
+Bridge **lanerl-event-2183.service** active/registered, delivery pending, expiry
+2026-10-02T10:15:30.990UTC (**3:15AM PDT**). Bridge2183 heartbeat advanced1790928932.1467395→1790928992.3467414; service active and registry entry present at startup. On wake,
+inspect `/mnt/nfs/shared/slurm-events/2183/result.json`, worker log and
+`/mnt/nfs/shared/E85_afk_action_search/`; classify State AND ExitCode, review frozen
+case outcomes/credit and runtime gates, update ledgers and verify watcher cleanup.
+
+**Next, already authorized:** integrate and launch E86_afk_optimizer_audit after
+E85. Sol is implementing it in branch lane-rl/e86-optimizer-audit, isolated worktree
+`/mnt/nfs/projects/_archive/ahriuwu-sol-learning-audit-20261002`; agent owns no Slurm
+job and must hand off its commit. Compare standard versus actor-only clipping norm
+with matched real on-policy data, Adam state, actual parameter/policy movement and
+production-update equivalence. Optional E85 full-prefix action-probability readout
+connects validated alternatives to update movement.30minSlurm budget.
+
+Then interpret BOTH diagnostics, run an additional fitting/information discriminator
+only if warranted, and submit ONE long checkpointed run within the overnight window
+above. This is a required remaining task, not merely a recommendation. Preserve
+normal-wave frozen comparisons and checkpoint every50updates (existing worker).
+If choosing the20direction/visible-target interface, keep ordinary screen decoding,
+all abilities and native timing, and compare initial/final full-wave behavior;
+prior E66 mixture failure is relevant but is a different action design. Choose
+fixed update count conservatively from measured throughput and remaining time,
+leave room for startup/evaluation, and arm its own completion bridge. E86 and the
+long run are planned, **not submitted/queued yet**. No other RL jobs are active.
 
 E83 / Slurm2176 COMPLETED0:0 in30m56s, ended Oct1 **8:29:44PM PDT**.
 Both fixed arms completed:40+20supervised epochs and256PPO updates.
