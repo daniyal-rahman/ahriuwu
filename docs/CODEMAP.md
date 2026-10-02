@@ -51,6 +51,8 @@ TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failur
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
 
+TOOL: `ops/figures/afk_checkpoint_history.py` regenerates `docs/figures/E87_training_curve.png`, `afk_checkpoint_history.png` and the underlying frozen-point CSV. Reads study-selected 120s AFK evaluations, separates training arms, excludes teacher/local-task scores and deduplicates E81's exported evaluation copy. Run with `ops/login_capped.sh 2G 1 python3 ops/figures/afk_checkpoint_history.py`; it does not evaluate checkpoint weights.
+
 TOOL: `ops/figures/afk_lr_comparison.py` regenerates the E50–E53 frozen CS/deaths/personal tower comparison in `docs/figures/E50_E51_comparison.png`; `--group debug` plots available E60/E61/E62/E63/E65/E66/E67 frozen results in `docs/figures/afk_debug_comparison.png` (skips runs without results).
 
 TOOL: `slurm/credit_audit.sbatch` / `credit-audit` launcher engine executes indexed E54 AFK learning diagnostic; `Transition.cs_delta` is exact per-decision CS telemetry.

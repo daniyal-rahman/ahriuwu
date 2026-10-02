@@ -1,10 +1,35 @@
 # STATUS — 2026-10-02 overnight AFK diagnostics and continuation
 
-E81→E82→E83 is complete. The best full-task endpoint in this sequence is **E82:
+E81→E82→E83 is complete. The best completed full-task endpoint in this sequence is **E82:
 14.125 CS, zero deaths, zero personal tower damage**, over64 frozen120s AFK games.
 Teaching on full waves improved the earlier10.0CS policy to11.75; subsequent
 CS-only PPO improved it to14.125. This is evidence of learning with the existing
 observations/GRU/clicks, not perfect CS or an isolated explanation of the plateau.
+
+**Oct2 8:22AM PDT discussion/curve snapshot:** E87 remains running. Frozen64 CS at
+updates0/128/512/1024/2048/3072/4096/5120 is
+14.125/11.296875/13.28125/14.328125/13.4375/10.640625/12.34375/13.6875.
+Latest evaluated weights have83.886M additional decisions; latest plotted train
+update5994 has98.206M. No sustained improvement yet; best intermediate+0.203125
+is not an endpoint success. Deaths grow from0 to.640625/.703125 during the late
+regression, then.296875 at5120. E87 initial reference equality passed; through
+the inspected5986metrics no nonfinite loss and reward exactly equals CS.
+Curves: `docs/figures/E87_training_curve.png` and `afk_checkpoint_history.png`;
+CSV retains81frozen evaluations across22training arms, including repeated starts.
+History separates different setups; saved but unevaluated weights have no score.
+
+Current recommendation is discussion, not a newly submitted study: establish a
+small bank of real-wave misses with verified successful native action sequences;
+require the current network to overfit those and actually recover CS, then test
+PPO on the same cases and expand to held-out perturbations/full waves. The E83
+teacher failure and E85's mostly unverified opportunities leave this diagnostic
+unfinished. If imitation works but PPO fails, isolate credit/search/update issues;
+if both work locally but fail in full waves, isolate generalization/retention.
+An independent simple policy-gradient reference on the same small task would
+help distinguish our PPO implementation from task/interface difficulty. Rising
+sampled post-update KL (~.040 early,~.064 late) and behavioral regressions make
+update stability worth a controlled comparison, not proof LR is too high.
+No new training or alteration of E87 from this discussion.
 
 E83's short-task curriculum improved local PPO farming but badly regressed
 normal farming. Do not promote either E83 checkpoint or call it a timing fix.
@@ -22,15 +47,19 @@ the event alone need not supply new authorization. Do not revive cancelled E80.
 **Running: E87_afk_long_continuation / Slurm2186**, submitted2026-10-02T08:54:42UTC
 (~1:55AM PDT), sourcef53965c. Started2026-10-02T08:54:54UTC (**1:54:54AM PDT**). All17integrated tests passed
 (16base in367.52s,1stagger warmup in79.85s); launcher reports healthy after180s.
-Scenario calibration passed; fixed-policy stagger warmup underway at handoff.
-No learned result or initial frozen-equality pass claimed yet; those are enforced
-by the worker. No other RL job queued.
-Expected finish **10:05–10:30AM PDT**; Slurm hard cutoff **10:39:54AM PDT**.
+Scenario calibration, stagger warmup and exact initial E82 reference passed.
+Current frozen results are above. No other RL job queued.
+Revised expected stop **about10:30–10:40AM PDT** (~2h10remaining at8:22AM),
+Slurm hard cutoff **10:39:54AM PDT**. Recent updates take~3.79s versus the3.53s
+planning estimate;8192may not fit the worker time cap. An early stop is an
+incomplete planned endpoint, even if the process exits0; keep saved weights.
 Worker also has8h30relative and10:50AM PDT absolute bounds.
 
 **Completion bridge:** lanerl-event-2186.service active/registered, pending delivery,
 expiry2026-10-02T19:02:47.112UTC (**12:02:47PM PDT**), bounded10h lifetime includes
-queue/delivery margin. Heartbeat advanced1790931767.5958192→1790931887.98177; service active and registry present. Do not actively poll training.
+queue/delivery margin. Heartbeat advanced1790931767.5958192→1790931887.98177;
+on the user-requested curve check checked_at1790954253.007447, stateRUNNING,
+service active and registry present. Do not actively poll training.
 On wake: inspect `/mnt/nfs/shared/slurm-events/2186/result.json`, Slurm State AND
 ExitCode, `/mnt/nfs/shared/E87_afk_long_continuation-2186.out`, and
 `/mnt/nfs/checkpoints/lanerl-jax/E87_afk_long_continuation/study.json` for exact run
