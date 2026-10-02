@@ -1301,3 +1301,59 @@ prior-assisted diagnostics, not from-scratch PPO or C# transfer successes.
 | LEARN-AFK-37 E81 bridge and next stage | Completion delivery accepted; lanerl-event-2172.service inactive, registry entry absent. | E82 already authorized by Dani's sequence instruction, now launch from the verified final E81 handoff. Fixed512updates/8.389Mdecisions of original CS-only PPO; frozen64 initial must match11.75, final>=10.75 is retention at predeclared1CS tolerance, >=12.75 improvement. E83 remains authorized afterward; no E80 restart. |
 
 | LEARN-AFK-37 E82 startup | E82/2174 RUNNING from source9c16cef; started2026-10-02T02:04:45UTC (Oct1 7:04:45PM PDT).17integrated GPU canaries pass (16base+stagger warmup); launcher reports healthy after180s. Uses verified E81final11.75CS actor/value-head handoff, unchanged planned512update CS-only PPO. | No learned result yet. Estimated finish7:45PM PDT;1h hard cutoff8:04:45PM. lanerl-event-2174.service active/registered, heartbeat1790907170.9956532→1790907201.1002336; expiry2026-10-02T05:12:49.306819+00:00 (Oct1 10:12:49PM PDT). On wake review frozen retention and proceed with authorized E83; E80 stays cancelled. |
+
+
+| LEARN-AFK-37 E82 final | Slurm2174 COMPLETED/0:0 in40m24s, ended2026-10-02T02:45:09UTC (Oct1 7:45:09PM PDT). Frozen64 CS11.75/12.171875/12.953125/14.125 at0/128/256/512; deaths.0625/0/.015625/0; towerHP0 throughout. Final low/fullHP14.21875/14.03125. Paired final-initial:+2.375CS,median3,43better/12equal/9worse,range−3..7. | Passes retention>=10.75 and improvement>=12.75. Exceeds same-cohort scripted teacher13.5 by.625. The taught actor plus fitted critic can improve under this PPO setup; no inevitable-forgetting or no-learning diagnosis. Supports acquisition/distribution hypothesis, does not isolate supervised actor changes from critic fitting, establish seed robustness, perfect CS, pushing optimality or C# transfer. |
+| LEARN-AFK-37 E82 integrity | All4frozen cohorts/bothteams reward=CS and other terms0; initial E81 trajectory-retention gate and endpoint canary passed.512metric rows, loss_nonfinite0 throughout;60NaN CS/gold/XP train episode summaries correspond to updates without episode completions, no optimization nonfinites. Sampled postKL median.04263349/max.14198102 (not exact whole-policy KL). Final ckpt_008388608.msgpack and ckpt_latest.msgpack SHA256 d5529d6c4d1362b27f28c2bad539a26ff42c2abe7311c414c3fcf82bca7bc357. | Run /mnt/nfs/checkpoints/lanerl-jax/E82_afk_clone_ppo_retention/vec-s0-20261002-021315-9c16cef5/. Manifest source SHA matches E81 handoff; study complete512, manifest finished512. Bridge delivery accepted; lanerl-event-2174.service inactive and registry entry absent. Next E83 follows Dani's existing sequence authorization, not authority conferred by the wake event. E80 remains cancelled. |
+
+### LEARN-AFK-38 — short farming acquisition and transfer (E83)
+
+E82 improved the taught policy to14.125CS; the previous policy's10CS plateau
+is not evidence the network cannot learn. Hypothesis: useful local farming
+behavior is hard to discover under the old full-wave distribution. Concentrated
+opportunities may help PPO acquire it without labels. Contrast with supervised
+teaching from the SAME E78final actor/critic; do not initialize PPO from the
+successful E82 and call that independent acquisition.
+
+E83_afk_local_skill: unmodified simulator and10Hz controls, original v3/GRU512,
+all spells remain available. Fresh level3 starts on the native top-lane midpoint;
+1 or3 enemy minions with matching allied competition, normal melee/caster stats,
+enemyHP uniform.10–.65 of max, hero initial along-path distance100–300. Train64
+seed73; unseen64 seed9073; half each enemy count; rollout evaluation seed2007.
+12.8s horizon, next ordinary wave at30s, no imposed delay or cooldown. Every
+recurrent history begins at the actual task start; no stale/zeroed midgame carry.
+These are synthetic initial conditions, not an assertion of natural-state
+frequency. All actor features still come through the original observation builder.
+
+Independent fresh-optimizer arms from immutable E78final:
+(1)64scripted episodes,40epochs;64own-policy episodes relabelled and aggregated,
+20epochs,8episodes x128windows, attack-label weight4, LR1e-4/clip.5 and current
+parameter full-prefix replay. (2)256standard CS-only PPO updates,128envs x128steps
+=4,194,304decisions,4epochs,LR1e-4 constant,entropy.001,gamma.99. No adaptive LR,
+extra feature, forced wait, or reset of production model weights. BC and PPO
+budgets differ: this is an exploratory feasibility study, not equal-compute ranking.
+Short reset timing and distribution both change; no isolated sparse-credit claim.
+
+Frozen initial, scripted comparator and both fixed final short cohorts. Primary
+score is CS/initial enemy count separately in1 and3 enemy strata; useful local
+improvement requires+.15 absolute fraction in BOTH versus initialization.
+Teaching feasibility requires>=.85 of teacher fraction in BOTH, interpretable
+only if teacher>=.5 each. Original64x120s suite at initial (exact E78 retention)
+and both learned endpoints: transfer improvement>=11CS versus initial10;
+E82's14.125 remains the established full-task baseline. No best-checkpoint pick
+and no automatic promotion for short-task scores alone. Log direct decoded
+same-target/different-target/no-attack commands when script requests an attack
+and native AA clocks are ready; also attacks while script positions. MOVE can
+decode into ATTACK, so button labels alone are insufficient. These are script
+agreement counts, NOT optimality, actual swing counts or causal lost-CS counts;
+spells and existing held orders can be valid alternatives. Diagnostic state never
+enters actor inputs. Diagnostic collection must reproduce frozen per-game CS.
+
+Worker50min/Slurm1h bound; expected30–50min including startup (engineering
+estimate). Stop on integration/retention/nonfinite failure, signal or time bound;
+both fixed arms required for completion. Integrated tests cover fresh reset
+clocks/health/count/split, recurrent imitation contracts, decoded target categories,
+identical physical transitions and terminal CS for diagnostic vs normal rollout.
+Reference rationale remains DAgger https://arxiv.org/abs/1011.0686 and near-goal
+curricula https://arxiv.org/abs/1707.05300 already reviewed in LEARN-AFK-36/37;
+neither validates this synthetic geometry, budget or a LoL performance prediction.

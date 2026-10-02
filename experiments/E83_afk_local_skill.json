@@ -1,0 +1,31 @@
+{
+  "id": "E83_afk_local_skill",
+  "engine": "afk-local-skill",
+  "opponent": "afk",
+  "duration_s": 12.8,
+  "max_seconds": 3000,
+  "slurm_time": "01:00:00",
+  "train_seed": 0,
+  "bank_train_seed": 73,
+  "bank_eval_seed": 9073,
+  "lr": 0.0001,
+  "updates": 256,
+  "epochs_per_round": [
+    40,
+    20
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/ckpt_008388608.msgpack",
+  "init_sha256": "cd136aa512550c22c8df6e0a7ea58d9ebea3ae520bf0478b5331ea5b7a69be91",
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E78_afk_cs_only/vec-s0-20261001-221924-cf0ff0bb/evaluations.jsonl",
+    "update": 512,
+    "compare_reward": true
+  },
+  "question": "LEARN-AFK-38. Does concentrating last-hit opportunities allow CS-only PPO to acquire local farming without teaching? Two independent arms from E78 FINAL parameters/fresh optimizers: (1) 64 scripted 12.8s episodes, 40 supervised epochs then 64 own-policy relabelled episodes aggregated for20 epochs, batch8 x128, attack weight4; (2)256 standard PPO updates,128envs x128decisions,4epochs,constantLR1e-4,gamma.99,entropy.001,CS-only reward. Fixed endpoints, no best-checkpoint selection. Original v3/GRU/physical clicks and unmodified10Hz timing; all spells available. Reset64 balanced1/3enemy-minion encounters with1/3allied competitors on native midlane path, level3 Garen, ready native AA/spell clocks, enemyHP fractions uniform.10-.65 and initial champion distance100-300; next ordinary wave at30s beyond12.8s task. Trainbankseed73, unseen64evalbankseed9073, native rollout RNG2007. Preserve recurrent history from fresh episode start. Frozen initial/script/teaching/PPO short cohorts, original64x120s initial-retention and both-arm transfer. Primary local score: mean CS/enemy count separately for1 and3 enemies; useful local improvement >=.15 absolute fraction in BOTH strata vs matched initialization. Teaching feasibility >=.85 of scripted fraction in BOTH strata, only interpretable if teacher>=.5 in each. Transfer improvement >=1CS vs initial10.0; compare separately to established E82 14.125, no promotion merely for toy-task success. Decoded command diagnostics log ready teacher-attack opportunities and same/different/no direct attack; not causal missed-CS counts, scripts are not timing oracles and spells/held orders remain legal. Stop on canary/finite/retention failure,signal or50min worker;1hSlurm total. Both arms must finish for complete comparison. Budgets intentionally unequal, exploratory curriculum/teaching comparison not equal-compute algorithm ranking or proof of information sufficiency. Expected30-50min including startup; automatic bridge required."
+}

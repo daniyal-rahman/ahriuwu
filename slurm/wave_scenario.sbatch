@@ -21,6 +21,11 @@ fi
 if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(not json.load(open("experiments/"+sys.argv[1]+".json")).get("click_mask",False))' "$1"; then
     ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_click_mask.py
 fi
+if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(json.load(open("experiments/"+sys.argv[1]+".json")).get("engine") != "afk-local-skill")' "$1"; then
+    ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_afk_imitation.py lanerl_jax/train/tests/test_afk_local_skill.py
+    echo 'CANARY PASSED: scenario, GRU history, teaching, short resets and decoded diagnostics'
+    exec ./.venv-gpu/bin/python -m lanerl_jax.train.afk_local_skill "$@"
+fi
 if ./.venv-gpu/bin/python -c 'import json,sys; sys.exit(json.load(open("experiments/"+sys.argv[1]+".json")).get("engine") != "afk-imitation")' "$1"; then
     ./.venv-gpu/bin/python -m pytest -q lanerl_jax/train/tests/test_afk_imitation.py
     echo 'CANARY PASSED: scenario, likelihood/reward, teacher collection, recurrent history, frozen actor'

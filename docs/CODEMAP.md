@@ -112,3 +112,11 @@ imitation handoff with checkpoint SHA and initial physical-retention gate.
 TOOL: existing `slurm/wave_scenario.sbatch` dispatches `afk-imitation` and runs
 `train/tests/test_afk_imitation.py` within the integrated startup suite. E81/E82
 configs select this path; STATUS records actual run state and completion bridges.
+
+
+LIVE (opt-in study, LEARN-AFK-38): `train/afk_local_skill.py` builds short fresh
+farming resets and compares independent supervised/PPO arms from a fixed source,
+using existing collectors, recurrent imitation and frozen wave evaluations.
+Original simulator/observation/actions unchanged; decoded-command diagnostics
+are evaluator-only. TOOL: `slurm/wave_scenario.sbatch` dispatches `afk-local-skill`
+and includes `train/tests/test_afk_local_skill.py` in its integrated canaries.
