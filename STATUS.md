@@ -7,7 +7,7 @@ Last completed frozen64 evaluation was update512:11.328125CS/.03125deaths,
 versus initial10.0CS/.078125deaths; towerHP10.180336 versus181.035824.
 No frozen evaluation at the stopped809checkpoint and no11520endpoint result.
 Do not label the cancelled duration experiment successful or restart it.
-E81 is next for immediate submission under the existing sequence authorization.
+E81 / Slurm2172 is submitted under the existing sequence authorization.
 
 E78 CS-only continuation completed. Literal+1/CS, no other environment reward;
 E67 parameters/freshAdam, original v3/GRU/actions, LR1e-4,512updates/8.389Mdecisions.
@@ -19,12 +19,20 @@ Final deaths.078125 versus initial.140625; personal towerHP181.035824 versus802.
 All256frozen games (both teams) satisfy reward=CS and other terms0. Initial physical
 retention passed. MedianpostKL.026605, maximum.047038; no obvious KL explosion.
 These are one training seed's results, not a diagnosis of LR/representation or
-proof that more training cannot help. The subsequent explicit user request
-authorizes E80; the earlier completion event alone did not.
+proof that more training cannot help. E80 was subsequently explicitly authorized,
+then cancelled as recorded above.
 
 ## Jobs
 
-**E80 cancelled; E81 immediate launch pending. No RL job currently running/queued.**
+**E81 / Slurm2172 RUNNING on gpup; E80 cancelled.**
+Source f4cdde7. Started Oct1 6:28:44PM PDT. Estimated finish7:15–8:00PM PDT;
+hard cutoff8:28:44PM PDT. All21 integrated GPU tests passed (16existing +5new),
+and launcher reported healthy after180s. No learned E81 result yet.
+Bridge lanerl-event-2172.service active/registered; result timestamp advanced
+1790905005.8164654→1790905035.9146721 with RUNNING accounting.
+Expiry2026-10-02T05:36:45.323792+00:00 (Oct1 10:36:45PM PDT).
+On completion/failure wake: inspect E81, update ledgers/cleanup, then continue
+the authorized E82→E83 sequence. E82 and E83 are not submitted.
 E80 saved /mnt/nfs/checkpoints/lanerl-jax/E80_afk_cs_only_12h/vec-s0-20261002-003708-b7130a5c/ckpt_013254656.msgpack.
 Slurm accounting CANCELLED/0:0 is authoritative despite generic PROFILE COMPLETE
 log footer. Worker study/manifest correctly say interrupted809. Bridge2171 stopped;
@@ -89,8 +97,8 @@ scripted action choice, never an injected latency or forced pause.
 
 1. E80/2171 cancelled on Dani's request; terminal review and watcher cleanup done.
    Dani explicitly says to do E81/E82/E83 first. Do not resume E80 automatically.
-2. E81_afk_gru_dagger is implemented and dry-run validated, NOT submitted.
-   Launch now using `python3 ops/launch.py E81_afk_gru_dagger`.
+2. E81_afk_gru_dagger RUNNING as2172 via the standard launcher.
+   Integrated21tests/health watch passed and bridge verified; no learned result yet.
    Existing integrated canaries plus new imitation contracts run automatically.
    Teach the existing v3/GRU/physical-click policy from E78 FINAL weights using
    32scripted episodes, then two rounds of64learner episodes relabelled by the
@@ -122,8 +130,8 @@ record unit/expiry, then let it run without manual training polling. If a stage
 fails technically, diagnose/repair with a unique retry ID and redirect unsubmitted
 successors to that completed handoff; never consume a partial/best checkpoint.
 All stages are authorized; findings do not authorize unrelated feature ports.
-GPU execution tests for new code are pending E81's integrated startup suite;
-syntax, shell parsing and both launcher dry-runs are the completed local checks.
+E81's integrated21GPU tests passed; syntax, shell parsing and both launcher
+dry-runs also passed. Full learning and checkpoint handoff remain pending.
 LEARN-AFK-37 contains the protocol, evidence limits and source references.
 
 ## Other recommendations under discussion

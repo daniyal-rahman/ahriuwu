@@ -111,4 +111,4 @@ between PPO and imitation; `wave_scenario_train.py` accepts a complete immutable
 imitation handoff with checkpoint SHA and initial physical-retention gate.
 TOOL: existing `slurm/wave_scenario.sbatch` dispatches `afk-imitation` and runs
 `train/tests/test_afk_imitation.py` within the integrated startup suite. E81/E82
-configs are staged after E80; no new training is currently running from this code.
+configs select this path; STATUS records actual run state and completion bridges.
