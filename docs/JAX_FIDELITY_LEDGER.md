@@ -1377,3 +1377,51 @@ AA timing; existing frozen spell-selection telemetry remains available.
 
 
 | LEARN-AFK-38 interpretation discussion | Dani questions whether imperfect CS after substantial experience indicates a bug or severe sample inefficiency. E82's8,388,608decisions at10Hz equal~233simulated hours for+2.375frozenCS; many frames repeat similar situations, so this is not233hours of distinct examples or a formal efficiency comparison. Current code uses independent button/96x/54y heads, used-coordinate likelihood, on-policy PPO, gamma.99/lambda.95 and detached critic features. | E81/E82 establish some learning, not efficient acquisition or near-perfect-CS sufficiency. Plausible failures include searching an unnecessarily difficult click/action space, credit or shared-parameter update interference, and insufficient information in the available history. No new bug found by this read. E69/E70 physical alternatives and E54/E55 reward-time likelihood audits only cover parts of the chain. Discussion recommendation: a bounded actual-wave decision audit connecting known useful sequences to their sampling probability, credit and post-update probability, with true recurrent prefixes, before a long extension. Not an implemented/spec'd/submitted experiment; retain E82, no E80 restart. |
+
+
+### LEARN-AFK-39 — user-requested Sol audit and cheaper action-search diagnostics
+
+Dani requests a Sol bug-hunting subagent and proposes20circular movement choices
+plus an optional visible target, then explicitly asks for cheaper tests before
+a12h training run. Sol read-only audit E84_sol_bug_audit launched against isolated
+c6ecdd9 snapshot /mnt/nfs/projects/_archive/ahriuwu-sol-learning-audit-20261002.
+No model/action-interface change or Slurm experiment has been submitted here.
+Archive manifest records retention; only the three original project workstreams
+remain active. Final audit findings follow below when available.
+
+Proposed bounded protocol, still discussion rather than a launch spec:
+1. Build a shared test bank from real E82 full-wave episodes with complete GRU
+   histories. Compare legal physical move/attack/hold/ability choices and short
+   sequences under paired continuations. Rank by actual total CS, not target-only
+   kills, and validate selected alternatives on separate continuation seeds.
+   Check whether20directions+visible-target choices cover useful alternatives.
+   Sum original-policy probability over equivalent useful actions; include ground
+   attack-move auto-acquisition. Low centre-click mass alone is insufficient.
+2. On the same cases, compare empirical action-return differences against learned
+   values/credit. Separate one-step action comparisons from forced multi-action
+   options. Forced forks provide diagnostic labels only; do not feed them to PPO
+   as on-policy samples. Sampling uncertainty and fixed continuation matter.
+3. Use ordinary on-policy data and isolated optimizer/parameter copies to measure
+   the change in useful-action probability after a normal update; recompute full
+   prefixes for the recurrent comparison. If needed, fit a small verified decision
+   set with supervised labels to distinguish fitting from search/credit. Individual
+   example regressions under a mixed batch are not by themselves a learner bug.
+4. If warranted, compare held-out prediction of verified action outcomes from
+   current observation histories versus histories plus diagnostic own-attack and
+   projectile state. Split by episode; provide privileged fields only to the
+   diagnostic model. A gap motivates feature/representation work, not a proof
+   that a different recurrent encoder could not infer that information.
+
+First bundle intended60–90min Slurm cap (engineering estimate; not launched),
+with reusable canaries and completion bridge. Exact case counts, candidate set,
+seeds, comparisons and gates must be fixed in a new JSON before submission.
+Relevant evidence already exists: E69/E70 physical recoveries; E54/E55 numerical
+credit/update contracts; LEARN-AFK-19 direct-click mass and E66proposal trial.
+E66 final9.34375CS versus original9.5625 did not solve farming; its earlier reward,
+initialization and mixture design differ from the proposed categorical menu.
+Do not repeat low click-probability findings as proof of a root cause.
+
+
+| LEARN-AFK-39 Sol source audit | User-requested GPT-6-Sol read-only review E84_sol_bug_audit completed at isolated c6ecdd9 snapshot. No new confirmed live correctness defect. Inspected CS-delta reward, post-action done/carry reset, agent-major recurrent sequence layout, GAE and matching sampled/learned likelihood paths: vec_train.py:266–368, learner.py:42–90, ppo.py:65–145. No code changes, runtime tests or Slurm jobs by the agent. | Static review narrows hypotheses; it does not certify the whole system or replace a targeted reproducer. Existing E54/E55 numerical contracts make another generic GAE/likelihood check low value. Audit snapshot retained under _archive and logged in MANIFEST.tsv; no new active project workstream. |
+| LEARN-AFK-39 clipping coupling | E82 enables detach_critic (wave_scenario_train.py:136), and policy.py:323–325 stops value gradients at shared features. However learner.py:36–39 globally clips the combined actor and value-head gradient before Adam. Thus value-head gradient magnitude changes the common scaling applied to actor gradients. | This confirms gradient coupling, NOT smaller actual Adam steps or a root cause. Adam can largely cancel uniform scaling, especially with fresh moments. Proposed matched same-batch/same-optimizer diagnostic: retain versus exclude value-head gradient contribution from the clipping norm; report actor parameter delta, full-prefix policy KL and useful-action probability, not only gradient norms. Isolated diagnostic branch, not a production optimizer change. |
+| LEARN-AFK-39 action/information hypotheses | Sol confirms known absence of previous sampled action and own AA phase in E82's v3 actor inputs; independent button/x/y heads and unconditional coordinate entropy are existing design choices. Prior E59/E66 sparse direct-click/proposal results remain relevant, including auto-acquisition and failed farming-gain caveats. | No claim that the20-direction menu solves the problem or that missing features impose a demonstrated perfect-CS ceiling. User's12h proposal remains deferred pending cheaper diagnostic discussion; no model/action-port implementation or training submission. First proposed bundle measures actual alternatives and original/compact-menu coverage, credit accuracy and update response; held-out information comparison is a later discriminator if necessary. |

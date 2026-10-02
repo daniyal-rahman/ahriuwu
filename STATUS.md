@@ -11,7 +11,11 @@ normal farming. Do not promote either E83 checkpoint or call it a timing fix.
 
 ## Jobs and completion bridges
 
-**No RL training/evaluation jobs running or queued. No next run submitted.**
+**No Slurm training/evaluation jobs running or queued.**
+User-requested Sol subagent source audit E84_sol_bug_audit is complete,
+read-only at c6ecdd9; no new confirmed correctness bug. The proposed12h20-direction/target action run is deferred
+by Dani's subsequent request to consider cheaper diagnostic experiments first.
+No new model/action-interface implementation or GPU experiment submitted.
 E83 / Slurm2176 COMPLETED0:0 in30m56s, ended Oct1 **8:29:44PM PDT**.
 Both fixed arms completed:40+20supervised epochs and256PPO updates.
 All24integrated GPU tests and required launcher health watch passed.
@@ -120,6 +124,39 @@ No automatic12h restart or new feature port. Dani's standing bounded-research
 authorization remains; the explicitly requested E81–E83 sequence is complete.
 Any next run needs its own concrete hypothesis/spec/ID/gates and launcher/bridge.
 
+
+Discussion protocol for cheaper action/credit tests (not submitted): use one
+bank of actual E82 full-wave situations, retain complete observation prefixes,
+and replay native physical alternatives with paired continuation seeds. First
+validate which alternatives recover CS and whether the compact20-direction plus
+visible-target menu covers them. Score total CS as well as the selected minion;
+validate chosen alternatives on separate continuation seeds. Measure aggregate
+probability over equivalent useful clicks, including ground attack-move effects,
+not only one target-centre pixel. This is a local comparison, not a perfect-CS oracle.
+Then compare actual outcome differences with critic/GAE credit and audit one
+normal on-policy PPO update on isolated weights. Forced branches are diagnostic
+labels, never fed into the ordinary learner as though they were on-policy data.
+Track useful-action probability using full prefixes recomputed at new parameters;
+a single positively credited example need not improve under a mixed batch.
+A small supervised fit can distinguish failure to fit known decisions from
+failure to discover them. If needed, compare current-history inputs with diagnostic
+own-attack/projectile inputs on held-out episodes; a gain shows useful predictive
+information/representation, not proof of an information-theoretic ceiling.
+Sol identified code-confirmed gradient coupling, not a measured training defect:
+actor and value-head gradients are globally clipped together despite detach_critic.
+Measure actual actor parameter/policy movement with and without value-head
+contribution on the same batch/optimizer state; Adam may cancel uniform gradient
+scaling, so gradient norms alone cannot establish actor-step suppression.
+Intended first bundled diagnostic budget:60–90min Slurm maximum, implementation
+and exact acceptance gates still to be finalized; no12h run until evidence review.
+
+Prior related action experiment must not be forgotten: LEARN-AFK-19/E66 found
+low direct-target click mass on16selected older cases, but its learned10%proposal
+mixture did not beat the original farming baseline. Different reward/init from
+E82 and not equivalent to a compact categorical action menu; neither a proof
+that the20-direction idea works nor a decisive refutation. Do not repeat that
+experiment and describe the action-search suspicion as a new discovery.
+
 ## Earlier diagnosis and preserved drafts
 
 E69b/E70 exactly reproduce selected E68 caster misses and establish recoverable
@@ -148,3 +185,7 @@ preserved. Old /srv/nfs/projects/ahriuwu is a compatibility symlink to archived
 main, which owns the shared Git store. Worktree registrations repaired; archived
 worktrees deliberately remain registered. Vendor/build dependencies retained.
 T3 metadata read only; no messages sent or thread records changed.
+
+Sol audit snapshot: /mnt/nfs/projects/_archive/ahriuwu-sol-learning-audit-20261002,
+detached c6ecdd9, read-only and logged in archive MANIFEST.tsv. Retained registered
+under _archive with manual-deletion approval required; not a fourth active project.
