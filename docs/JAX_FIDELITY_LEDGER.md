@@ -1536,3 +1536,48 @@ filter from silently deselecting them. E86 remains20minworker/30minSlurm.
 | LEARN-AFK-41 E86b startup | E86b/2185 RUNNING, source26428df, submitted2026-10-02T08:43:30UTC (~1:44AM PDT). Eight integrated JAX canaries pass in131.17s; required180s watch healthy. | No optimizer result yet.20minworker/30minSlurm, hard cutoff~2:14AM PDT. Bridge lanerl-event-2185.service active/registered, expires2026-10-02T10:47:17.259UTC /3:47AM PDT. Review both batches/fresh/restored modes and full-prefix E85 readout on wake, then select one long run within17:57UTC overnight deadline. Sol agent finished; archived worktree retention manifest updated, no new active workstream. |
 
 | LEARN-AFK-41 bridge verification | Heartbeat advanced1790930837.7018847→1790930927.984604; active service/registry verified. | Delivery pending; no active model polling after handoff. |
+
+
+| LEARN-AFK-41 completion | E86b/2185 COMPLETED0:0,5m05s, ended2026-10-02T08:48:59UTC /1:48:59AM PDT. Worker169.719s, two128x128batches/154and191CS-event frames, both fresh/restored Adam modes complete. Production params and optimizer maxerror0, RNG exact; actor/learner likelihood errors1.0014e-5/1.4305e-5; E85 full-prefix value maxerror8.3447e-7. Positive-singleton chosenlogprob+.00665557. | No checkpoint export or live learner change. Source26428df, expected docs/status in-flight edits and preexisting obs/projectiles.py in provenance. Bridge delivered accepted; service inactive/registry absent. Eight integrated JAX canaries pass; E86 wrapper failure is separate from successful E86b diagnostic. |
+| LEARN-AFK-41 gradient/step verdict | First-minibatch total/actor/value norms1.976949/1.968349/.184202 and3.266272/3.261933/.168299. Value-head squared-norm shares.86816%/.26550%, actor-only clip scale increases.43693%/.13301%. Actor total parameter-step norm standard→variant: fresh.613420→.613152 and.523994→.524567; restored.488447→.475237 and.364972→.363474. | No material actor suppression by value-head clipping demonstrated in these batches. Global gradient clipping remains active, but actor gradients dominate. Variant is not promoted; small or even smaller actual steps refute using raw clipping frequency alone as evidence for this fix. Adam histories and subsequent minibatches matter; no universal claim about other stages. |
+| LEARN-AFK-41 policy update evidence | Exact stored-carry128-step joint-action KL standard fresh.053558/.066097, restored.048496/.034774; variant.056403/.065041 and.045591/.034608. Standard mean chosenlogprob changes on positive raw advantages+.041767/+.017452 fresh,+.025023/+.023502 restored; on CS-event frames+.064270/+.036878 and+.053411/+.045508. | Policies move appreciably and average positively credited/CS-event actions gain probability here. CS-event action need not cause the kill; raw advantages differ from per-minibatch normalized training advantages. These are update diagnostics, not frozen farming gains or a calibrated optimal LR. No evidence for a10xLR increase or an adaptive controller. |
+| LEARN-AFK-41 complete-history anchors | E85 recovery cases6/22 selected-menu logprob deltas standard fresh[1.05135,.21916] then[.38401,.45868]; restored[1.30948,.39336] then[.44243,.14930]. Both representative actions increase under all4standard updates with whole prefixes recomputed. Mean menu logprob increases over32cases range+.18119 to+.36657 standard; original-sampled actions are mixed. Relative GRU step.26–.48%, buttonhead.62–1.21%, screenheads1.08–1.88%, valuehead3.48–5.04% in standard arms. | This covers the full recurrent prefix, unlike stored-carry training KL. Only2cases pass E85's recovery gate; individual representative coordinates do not measure aggregate equivalent-action probability. Variant offers no consistent direction advantage. The tested learning chain works in these limited examples; it does not explain all remaining misses, prove efficient learning, or establish information sufficiency. |
+
+### LEARN-AFK-42 — authorized long E82 continuation after diagnostics (E87)
+
+Dani authorizes diagnostics then ONE long checkpointed run within the9–10hour
+window ending2026-10-02T17:57UTC. Choose E82 continuation: its frozen means still
+increased11.75→12.171875→12.953125→14.125, while E85 failed its broad single-click
+recovery gate and E86b did not validate the proposed clipping fix. This choice
+uses the granted discretion; the20direction/visible-target fallback is not being
+claimed disproven. Known local-curriculum transfer failure argues for keeping
+normal full-wave training exposure. No reliable large verified decision bank was
+produced for a held-out privileged-feature comparison; do not manufacture one
+from two positive cases or spend the long-run window on a broad new suite.
+
+Hypothesis: a substantially longer budget improves farming from the stronger
+E82final endpoint. Source SHA d5529d6c4d1362b27f28c2bad539a26ff42c2abe7311c414c3fcf82bca7bc357,
+parameters only, fresh Adam/RNG/schedule under new E87 ID (cancelled E80 stays
+cancelled). Keep E82 settings:128envs x128steps,4epochs,constantLR1e-4,entropy.001,
+gamma.99/lambda.95,originalv3 GRU/physical screen clicks,native10Hz,staggered120s
+AFK full-wave episodes,literal+1per ownCS with every other reward zero.
+
+8192updates=134,217,728additional learner decisions. Existing E82 throughput
+mean3.53118s/update implies~8htraining plus startup/frozen evaluation. Worker
+30600s/8h30,Slurm8h45,timezone-aware absolute worker cutoff17:50UTC/10:50AM PDT
+leaves cleanup before17:57. New optional wall-clock bound joins existing relative
+and signal bounds; no algorithm change. Checkpoints every50updates (~3min) retain
+params,Adam and full collector state. Initial64game frozen trajectories and reward
+must reproduce E82final exactly; evaluate0/128/512,then every1024through8192.
+
+Primary fixed endpoint: final8192meanCS>=15.125 (source+1). Retention flag>=13.125
+(source−1); secondary sustained improvement: final3scheduled means all>=15.125.
+Report paired final differences, deaths/tower and every checkpoint; no selection
+of an intermediate peak as endpoint success. If stopped early, report actual
+updates/available frozen results as an incomplete planned budget. Stop on
+nonfinite/contract failure,signal or either time cap; finally save last checkpoint.
+No automatic extension beyond this window. This is one training seed and the
+existing64game suite, not a perfect-CS, sample-efficiency, grokking or generalization
+claim. Same PPO method as https://arxiv.org/abs/1707.06347 and existing E82;
+step budget/gates/time estimates are our engineering choices. No new feature,
+optimizer/controller, action restriction, teacher, artificial delay or reward term.

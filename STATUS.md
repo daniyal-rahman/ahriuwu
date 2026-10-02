@@ -19,22 +19,48 @@ results; if undecided, use the requested20circular movement choices plus visible
 target interface. This authorizes successive experiments after completion wakes;
 the event alone need not supply new authorization. Do not revive cancelled E80.
 
-**Running: E86b_afk_optimizer_audit / Slurm2185**, submitted2026-10-02T08:43:30UTC
-(~1:44AM PDT), source26428df. Eight integrated JAX tests passed in131.17s; launcher healthy after180s.
-20minworker/30minSlurm; expected another~10–20min, hard cutoff about2:14AM PDT.
-Bridge lanerl-event-2185.service active/registered, expiry2026-10-02T10:47:17.259UTC
-(**3:47AM PDT**), delivery pending; Heartbeat advanced1790930837.7018847→1790930927.984604; active service/registry verified. On completion,
-inspect `/mnt/nfs/shared/slurm-events/2185/result.json`, worker log and
-`/mnt/nfs/shared/E86b_afk_optimizer_audit/result.json`; verify both optimizer modes
-and both batches, production equality, finite steps/KL, whole-prefix selected-click
-movement, then clean watcher/registry and submit the chosen long run.
+**No RL Slurm job running or queued at completion review.** E86b/2185
+COMPLETED0:0 in5m05s, ended2026-10-02T08:48:59UTC (**1:48:59AM PDT**).
+Both batches and fresh/restored Adam comparisons complete. Production params,
+optimizer and RNG reproduce exactly; old likelihood maxerror1.431e-5, E85
+full-prefix value error8.345e-7. Bridge delivered accepted, service inactive,
+registry entry absent. No model exported.
+
+E86b verdict: no evidence that detached value-head clipping materially suppresses
+actor learning here. Its first-minibatch squared-gradient share is.868%/.265%;
+excluding it changes actor clip scale by+.437%/+.133%. Actor total step norm
+standard→variant: fresh.613420→.613152/.523994→.524567; restored.488447→.475237/
+.364972→.363474. Exact training-sequence KL standard .05356/.06610 fresh,
+.04850/.03477 restored: policy steps are not vanishing. Positive-advantage and
+CS-event mean log probabilities increase in all standard comparisons. Both E85
+recovery-case representative clicks increase under all standard updates with
+complete GRU prefixes replayed at new weights. Two batches/two such cases are
+limited evidence, not a guarantee of correct credit or efficient optimal farming.
+
+**Selected long run: E87_afk_long_continuation**, prepared, not submitted yet.
+E82final/freshAdam, unchanged CS-only full-wave PPO and LR1e-4;8192updates/
+134,217,728additional decisions. Checkpoint every50updates (~3min); frozen64 at
+0/128/512, then every1024through8192. Initial trajectories must equal E82final.
+Final improvement gate>=15.125CS; retention>=13.125; final3scheduled means>=15.125
+is a secondary sustained-improvement check. No best-checkpoint substitution.
+Worker8h30/Slurm8h45, plus absolute worker cutoff **10:50AM PDT/17:50UTC** to
+leave cleanup before10:57AM. Expected~8htraining plus startup/evaluation.
+
+Choice rationale: E82's frozen curve was still increasing; E85 did not show broad
+single-click recovery and E86b did not validate the proposed clipping fix. Keep
+learning settings fixed and resolve whether longer exposure improves this stronger
+endpoint. The20direction/visible-target proposal remains a possible later study,
+not a demonstrated fix. Missing information/longer action sequences remain open;
+only2E85recovery cases cannot support a credible held-out feature comparison.
+This completes the requested diagnostic bundle to its stated limits; spend the
+remaining window on the explicitly authorized long run, not broad new probes.
 
 E86/2184 FAILED5:0 in2m14s,
 ended2026-10-02T08:41:08UTC (1:41:08AM PDT), before the worker ran.
 Eight JAX canaries passed in130.97s; separate test_ppo.py skipped wholesale
 because Torch is unavailable, producing pytest exit5. No optimizer result or
 checkpoint. Bridge was never armed; service inactive and registry absent.
-**E86b_afk_optimizer_audit** is submitted as the same diagnostic with that optional
+E86b repeated the same diagnostic with that optional
 reference invocation removed;8JAX tests and all runtime equivalence/history gates
 remain.30minSlurm/20minworker cap. This is a wrapper retry, not a changed hypothesis.
 
@@ -64,26 +90,10 @@ multi-action search. No confirmed learning bug or information ceiling.
 Artifacts `/mnt/nfs/shared/E85_afk_action_search/`: complete result.json,
 histories.npz, cases.msgpack, candidate_actions.npz, discovery.npz, validation.npz.
 
-**Current: E86b_afk_optimizer_audit retry.** Sol commit6090710
-was rebased/integrated as8d42460; agent worktree retained under _archive, no agent
-Slurm job. Root added E85 full-prefix action-probability readout, signal handling
-and per-module parameter norms. The optional Torch-reference invocation was
-removed for E86b after the documented environment skip; native runtime gates remain. No production optimizer change. Compare standard versus actor-only clipping norm
-with matched real on-policy data, Adam state, actual parameter/policy movement and
-production-update equivalence. E85 full-prefix action-probability readout
-connects the representative selected clicks to update movement; only2E85cases
-pass the recovery gate, so it cannot establish a broad causal learning defect.30minSlurm budget.
-
-Then interpret BOTH diagnostics, run an additional fitting/information discriminator
-only if warranted, and submit ONE long checkpointed run within the overnight window
-above. This is a required remaining task, not merely a recommendation. Preserve
-normal-wave frozen comparisons and checkpoint every50updates (existing worker).
-If choosing the20direction/visible-target interface, keep ordinary screen decoding,
-all abilities and native timing, and compare initial/final full-wave behavior;
-prior E66 mixture failure is relevant but is a different action design. Choose
-fixed update count conservatively from measured throughput and remaining time,
-leave room for startup/evaluation, and arm its own completion bridge. E86b is running above; the long run is **not submitted/queued yet**.
-No other RL jobs are active.
+E86b implementation: Sol6090710 integrated as8d42460; root added full-prefix
+readout and parameter norms. Archived agent worktree remains registered with
+manual deletion approval, branch lane-rl/e86-optimizer-audit@6090710; manifest
+updated after handoff. Only the three original active project workstreams remain.
 
 E83 / Slurm2176 COMPLETED0:0 in30m56s, ended Oct1 **8:29:44PM PDT**.
 Both fixed arms completed:40+20supervised epochs and256PPO updates.
@@ -255,32 +265,12 @@ main, which owns the shared Git store. Worktree registrations repaired; archived
 worktrees deliberately remain registered. Vendor/build dependencies retained.
 T3 metadata read only; no messages sent or thread records changed.
 
-Sol audit snapshot: /mnt/nfs/projects/_archive/ahriuwu-sol-learning-audit-20261002,
-detached c6ecdd9, read-only and logged in archive MANIFEST.tsv. Retained registered
-under _archive with manual-deletion approval required; not a fourth active project.
-
-
-Overnight decision handoff after E86: do not mistake its stored-carry training KL
-for whole-history behavior; use the added E85 full-prefix readout, and normalize
-module deltas by recorded parameter norms. Global clipping is a design coupling,
-not automatically a defect; Adam can compensate. If no material update defect is
-isolated, prefer a long E82 full-wave continuation to resolve the still-open time
-question: its frozen11.75→12.171875→12.953125→14.125 curve was still increasing.
-E85 did not validate broad isolated-menu gains, so no positive evidence yet
-justifies treating the20direction interface as a fix. This is a reasoned choice
-under Dani's discretion, not proof the interface is irrelevant. If genuinely
-undecided, use his requested20direction/visible-target fallback.
+Sol audit worktree: /mnt/nfs/projects/_archive/ahriuwu-sol-learning-audit-20261002,
+branch lane-rl/e86-optimizer-audit@6090710, agent finished and integrated. Retained
+registered under _archive, logged in MANIFEST.tsv, manual deletion approval required.
 
 Reference throughput: E82updates6–512 mean3.53118s, median3.53682s,90th3.61401s.
 Last64 sampledpostKL mean.03956, explainedvariance.92120, rawgradnorm7.22556,
-clippedfraction1.0. These do not alone identify an LR error. At that throughput,
-8192updates/134,217,728additional decisions take~8htraining;7168take~7h. Choose
-actual fixed budget, worker and Slurm caps after E86, leaving startup/evaluation
-margin before17:57UTC. Retain initial full-suite equality, every50updatecheckpoint,
-frozen0/128/512 then each512or1024updates and final. State a final improvement
-criterion versus14.125 before launch; do not select only a transient best score.
-A null result here does not prove an information ceiling or impossibility of
-learning. Keep expensive feature/teacher studies conditional on a useful verified
-decision set; E85's only2passing cases cannot support a strong held-out feature
-comparison. Do not spend the remaining window building broad diagnostic suites
-instead of the explicitly required long run.
+clippedfraction1.0. These alone do not identify an LR error. E87 uses the same
+LR to isolate a larger training budget from the stronger E82 initialization.
+A plateau still would not prove an information ceiling or impossibility of learning.

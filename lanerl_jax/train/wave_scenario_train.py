@@ -1,5 +1,6 @@
 """Bounded E39 curriculum run with frozen role-separated evaluations."""
 import argparse
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -104,9 +105,18 @@ def main():
         if previous['config']['scenario'] != spec:
             raise ValueError('Resume requires the identical experiment specification')
     start=time.monotonic();stopping=[]
+    stop_at = float('inf')
+    if spec.get('stop_at_utc'):
+        deadline = datetime.fromisoformat(spec['stop_at_utc'])
+        if deadline.tzinfo is None:
+            raise ValueError('stop_at_utc must include a timezone')
+        stop_at = deadline.timestamp()
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGUSR1):
         signal.signal(sig,lambda signum,frame:stopping.append(signum))
-    def stop():return bool(stopping) or time.monotonic()-start>=spec['max_seconds']
+    def stop():
+        return bool(stopping) or time.monotonic()-start>=spec['max_seconds'] or time.time()>=stop_at
+    if stop():
+        raise InterruptedError('experiment time window already ended')
     jax.config.update('jax_default_matmul_precision','highest')
     jax.config.update('jax_compilation_cache_dir','/scratch/lanerl-jax-compilation-cache')
     scratch=Path('/scratch')/(spec['id']+'-'+os.environ['SLURM_JOB_ID']);scratch.mkdir(parents=True)

@@ -1,0 +1,56 @@
+{
+  "id": "E87_afk_long_continuation",
+  "engine": "wave-scenario",
+  "opponent": "afk",
+  "duration_s": 120,
+  "updates": 8192,
+  "max_seconds": 30600,
+  "slurm_time": "08:45:00",
+  "lr": 0.0001,
+  "entropy_coef": 0.001,
+  "health_loss_gold": 0.0,
+  "tower_damage_gold": 0.0,
+  "init_from": "/mnt/nfs/checkpoints/lanerl-jax/E82_afk_clone_ppo_retention/vec-s0-20261002-021315-9c16cef5/ckpt_008388608.msgpack",
+  "train_offsets": [
+    -60,
+    -20,
+    20,
+    60
+  ],
+  "eval_offsets": [
+    -45,
+    -5,
+    35,
+    75
+  ],
+  "eval_updates": [
+    128,
+    512,
+    1024,
+    2048,
+    3072,
+    4096,
+    5120,
+    6144,
+    7168,
+    8192
+  ],
+  "question": "LEARN-AFK-42: user-authorized overnight long run after E85/E86b. E82 frozenCS was still rising11.75\u219212.171875\u219212.953125\u219214.125; E85 isolated-menu recovery gate failed and E86b found no material actor suppression from value-head clipping. Test whether substantially more standard full-wave PPO experience improves the strongest endpoint. Initialize E82 FINAL parameters, SHA checked, fresh Adam/schedule/RNG as a new experiment. Keep E82 learner/physics/obs/actions/reward:128envs x128steps,4epochs,constant LR1e-4,entropy.001,gamma.99/lambda.95,staggered120s AFK,originalv3 inputs,unmaskedscreen clicks,+1ownCS only.8192updates/134217728 additional learner decisions; measured3.53118s/update implies~8htraining plus startup/evaluation. Worker8h30/Slurm8h45 and absolute worker cutoff2026-10-02T17:50UTC leave cleanup before17:57UTC overnight deadline. Checkpoint params/Adam/collector every50updates (~3min), frozen64original cohort at0/128/512 and every1024through8192; initial physical and reward trajectory equality with E82final required. Primary endpoint final update8192 meanCS>=15.125 (source+1); retention flag final>=13.125 (source\u22121); secondary sustained improvement final three scheduled means>=15.125. Report all checkpoints, paired final episode differences, deaths/tower and actual completed budget; no best-intermediate substitution for endpoint. If bounded before8192, report incomplete budget and available frozen results, never claim the endpoint was tested. Stop for contract/nonfinite failure, signal, worker/absolute time cap; final checkpoint via existing finally handler. No adaptive LR, new features, action restriction, teacher, or production optimizer change. This tests longer training from a different stronger initialization than cancelled E80, not a proof of grokking, efficient learning, perfect CS, or information sufficiency. One training seed and existing64game suite limit generalization; no automatic extension beyond overnight window.",
+  "lr_anneal": false,
+  "xp_scale": 0.0,
+  "tower_damage_personal": true,
+  "ppo_epochs": 4,
+  "own_action_state": false,
+  "death_loss_gold": 0.0,
+  "stagger_initial": true,
+  "initial_eval_reference": {
+    "path": "/mnt/nfs/checkpoints/lanerl-jax/E82_afk_clone_ppo_retention/vec-s0-20261002-021315-9c16cef5/evaluations.jsonl",
+    "update": 512,
+    "compare_reward": true
+  },
+  "preflight_gate": "/mnt/nfs/shared/E77_combat_mask_preflight/result.json",
+  "combat_features": false,
+  "cs_only": true,
+  "stop_at_utc": "2026-10-02T17:50:00+00:00",
+  "init_sha256": "d5529d6c4d1362b27f28c2bad539a26ff42c2abe7311c414c3fcf82bca7bc357"
+}
