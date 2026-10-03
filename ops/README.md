@@ -72,3 +72,14 @@ into the anonymised `lanerl_jax/data/modern/oracle/riot_16_9_frames.json.gz`;
 `predict` (used by `tests/test_modern_stats_riot_oracle.py`) recomputes Riot's
 `championStats` through the modern stat pipeline, shards, rune and item stat
 hooks with 16.9 records (`oracle/client_16_9_stats.json`).
+
+`modern_world_bench.py` is a TOOL (MODERN-017/018). It times `lax.scan` of the
+modern world tick (`modern_step.step`) under `jit(vmap)` for several batch
+sizes with scripted in-scan orders and prints one JSON line per batch size.
+World-variant flags (`--fog rays|fast|off`, `--no-jungle`, `--no-objectives`,
+`--lanes`) build ablated worlds, to measure what each system costs.
+`modern_world_profile.py` (TOOL, MODERN-021) traces the same scan with
+`jax.profiler` and attributes device op time to source files and lines (joined
+through the compiled HLO's stack-frame tables); use it to find hotspots before
+optimising. Run both on the desktop through Slurm (`gpup` for GPU, `cpu` for
+CPU) from an NFS code snapshot, because the desktop cannot see the worktree.

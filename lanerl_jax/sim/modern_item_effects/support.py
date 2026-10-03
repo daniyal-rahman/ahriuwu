@@ -147,15 +147,15 @@ KV_HEAL = dv(KNIGHTS_VOW, "AllyHealingConversion")
 KV_RANGE = dv(KNIGHTS_VOW, "TetherRange")
 
 COVERAGE = {
-    SHURELYA: "no passive; Inspiring Speech active (30% MS 4 s, r1000, cd 75) DEFERRED MODERN-009",
+    SHURELYA: "no passive; Inspiring Speech active (30% MS 4 s, r1000, cd 75) in modern_item_actives",
     BANDLEPIPES: "Fanfare via on_cc (slow/immobilize enemy champion): 8 s (ranged 4 s) +20 MS and 30% "
                  "(ranged x0.667) AS to self; ally AS aura r900 via bandlepipes_aura (no allies in 1v1)",
     ZEKES: "15 ultimate haste; Frostfire Tempest: ult cast (cd 45 from cast) readies 5 s, storm on enemy "
            "champion within 350 or at window end, 5 s, 30 magic/s (1 Hz) to champions+monsters, 30% slow",
-    REDEMPTION: "no passive; Intervention active DEFERRED MODERN-009 (redemption_heal helper)",
-    KNIGHTS_VOW: "Sacrifice needs a Pledged ally (active DEFERRED MODERN-009); knights_vow_* helpers only",
-    LOCKET: "no passive; Devotion active DEFERRED MODERN-009 (locket_shield helper)",
-    MIKAELS: "no passive; Purify active DEFERRED MODERN-009 (mikael_heal helper)",
+    REDEMPTION: "no passive; Intervention active in modern_item_actives (redemption_heal helper)",
+    KNIGHTS_VOW: "Sacrifice needs a Pledged ally (Pledge is ally-only: inert, modern_item_actives.INERT); knights_vow_* helpers only",
+    LOCKET: "no passive; Devotion active in modern_item_actives (locket_shield helper)",
+    MIKAELS: "no passive; Purify is ally-only: inert (modern_item_actives.INERT; mikael_heal helper)",
     CENSER: "Sanctify via on_ally_support: holder 25% AS + 20 magic on-hit for 6 s; ally buff returned "
             "in AllyBenefit (no allies in 1v1)",
     MANDATE: "Command via on_cc immobilize: target 7% vulnerable (received_amp) 4 s, refresh not stack; "

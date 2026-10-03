@@ -18,9 +18,24 @@ import jax.numpy as jnp
 from . import modern_damage as D
 
 # Unit kinds of the modern world (``state.Kind`` keeps the legacy 0..3 meanings).
-KIND_NONE, KIND_CHAMPION, KIND_MINION, KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS = range(6)
+KIND_NONE, KIND_CHAMPION, KIND_MINION, KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS, KIND_MONSTER, KIND_WARD = range(8)
 STRUCTURE_KINDS = (KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS)
 BLUE, RED = 0, 1
+NEUTRAL = 2                 # team of jungle monsters (never equal to a champion's team)
+
+# World unit layout (slot ranges, in this order; ``modern_world.unit_ranges``):
+#   champions [0, C) | lane minions, all three lanes [C, C+M) | monsters [.., +MAX_MONSTERS)
+#   | wards [.., +2*MAX_WARDS_PER_TEAM) | structures (22 turrets, 6 inhibitors, 2 Nexuses) last.
+# Structures stay last so "fogged" units are exactly the slots before them.
+MAX_MINIONS_PER_LANE = 40
+MAX_MONSTERS = 48
+MAX_WARDS_PER_TEAM = 8
+
+
+def is_structure(kind: Any) -> Any:
+    """Turret, inhibitor or Nexus."""
+    kind = jnp.asarray(kind)
+    return (kind == KIND_TURRET) | (kind == KIND_INHIBITOR) | (kind == KIND_NEXUS)
 
 
 def damage_class(kind: Any) -> Any:
@@ -28,7 +43,8 @@ def damage_class(kind: Any) -> Any:
     kind = jnp.asarray(kind)
     return jnp.where(kind == KIND_CHAMPION, D.CLASS_CHAMPION,
                      jnp.where((kind == KIND_TURRET) | (kind == KIND_INHIBITOR) | (kind == KIND_NEXUS),
-                               D.CLASS_STRUCTURE, D.CLASS_MINION)).astype(jnp.int32)
+                               D.CLASS_STRUCTURE,
+                               jnp.where(kind == KIND_MONSTER, D.CLASS_MONSTER, D.CLASS_MINION))).astype(jnp.int32)
 
 
 class WorldUnits(NamedTuple):
@@ -38,8 +54,10 @@ class WorldUnits(NamedTuple):
     is the champion/minion/turret stat range (edge-to-edge rule: an attack
     reaches when ``dist <= attack_range + radius_attacker + radius_target``,
     DAMAGE_AND_STATS §8.3). ``sub`` is the minion type (0 melee, 1 caster,
-    2 siege, 3 super; ``modern_minions.MinionType``) or the turret tier
-    (0 outer, 1 inner, 2 inhibitor, 3 nexus); 0 for others.
+    2 siege, 3 super; ``modern_minions.MinionType``), the turret tier
+    (0 outer, 1 inner, 2 inhibitor, 3 nexus), the monster type
+    (``modern_jungle.Monster``) or the ward type (``modern_wards.WardType``);
+    0 for others.
     """
     kind: Any
     sub: Any

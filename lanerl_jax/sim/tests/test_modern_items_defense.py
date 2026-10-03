@@ -31,7 +31,7 @@ def pk(src, dst, raw, dtype=D.TRUE, flags=0, item=0):
 def test_coverage_matches_assignment():
     assert set(M.COVERAGE) == ASSIGNED
     for iid in (3140, 2420, 3157, 3143):
-        assert "DEFERRED" in M.COVERAGE[iid]
+        assert "modern_item_actives" in M.COVERAGE[iid]   # actives moved there
 
 
 def test_f7_steraks_claws_and_lifeline_absorbs_trigger_packet():

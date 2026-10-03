@@ -34,6 +34,8 @@ __all__ = [
     "ATTACK_RANGE", "GAMEPLAY_RADIUS", "XP_BASE", "base_move_speed",
     "sidelane_bonus_move_speed", "move_speed_soft_cap",
     "MINION_SLAYER_FRACTION", "CFH_GENERIC_RADIUS", "CFH_CHAMPION_RADIUS",
+    "N_LANES", "LaneSpawnState", "init_lane_spawn", "super_count", "wave_unit_type",
+    "LaneSpawnDue", "lane_spawn_step", "first_wave_ghost_s",
 ]
 
 
@@ -459,3 +461,106 @@ def call_for_help_trigger(*, champion_hit_enemy_champion: jax.Array,
                  & jnp.asarray(outside_turret_range, bool))
     blocked = jnp.asarray(minion_attacking_turret, bool) & ~jnp.asarray(is_first_wave, bool)
     return (damage_call | path_call) & ~blocked
+
+
+# --- all-lane spawn schedule (MINIONS §2.2-2.4; LANES_TERRAIN.md §1) ---------
+N_LANES = 3                       # geometry lane ids: 0 bot, 1 mid, 2 top
+N_TEAMS = 2
+
+
+class LaneSpawnState(NamedTuple):
+    """Per (team, lane) wave cursor, shape (2, 3).
+
+    ``supers`` is the super count latched when the wave's first unit spawns
+    (-1: not latched yet), so an inhibitor dying or respawning during the
+    4-5 s spawn window cannot reorder or duplicate units of that wave
+    (INFERRED M: the client builds a wave's unit list once per wave).
+    """
+    wave: jax.Array               # int32 zero-based wave index of the next unit
+    unit: jax.Array               # int32 unit index inside that wave
+    supers: jax.Array             # int32 latched super count, -1 = none yet
+
+
+def init_lane_spawn() -> LaneSpawnState:
+    z = jnp.zeros((N_TEAMS, N_LANES), jnp.int32)
+    return LaneSpawnState(z, z, z - 1)
+
+
+def super_count(enemy_inhibitor_down, all_enemy_inhibitors_down, inhibitor_respawn_at, time_s):
+    """Supers per wave in one lane: 1 if this lane's enemy inhibitor is down,
+    2 in every lane if all three are (``SpawnCountPerInhibitorDown [1,1,2]``),
+    0 within two wave intervals of that inhibitor's respawn (MINIONS §2.3).
+
+    With all three down, a lane whose inhibitor is about to respawn still
+    counts as "all down" until it actually respawns (INFERRED L)."""
+    t = jnp.asarray(time_s, jnp.float32)
+    down = jnp.asarray(enemy_inhibitor_down, bool)
+    s = jnp.where(jnp.asarray(all_enemy_inhibitors_down, bool), 2, jnp.where(down, 1, 0))
+    soon = (jnp.asarray(inhibitor_respawn_at, jnp.float32) - t) < 2. * wave_interval_s(t)
+    return jnp.where(down & soon, 0, s).astype(jnp.int32)
+
+
+def wave_unit_type(wave_index, unit_index, supers):
+    """Type of unit ``unit_index`` of wave ``wave_index`` with ``supers`` supers.
+
+    Same order and counts as ``spawn_event`` (supers, melee, cannon, casters;
+    a super replaces the cannon), but from an explicit super count.
+    Returns ``(type, valid)``; ``MinionType.NONE`` past the wave's end."""
+    i = jnp.asarray(wave_index, jnp.int32)
+    u = jnp.asarray(unit_index, jnp.int32)
+    ns = jnp.maximum(jnp.asarray(supers, jnp.int32), 0)
+    t = wave_spawn_time(i)
+    nm = jnp.where(t < 840., 3, jnp.where(t < 1500., jnp.where(i % 2 == 0, 2, 3), 2))
+    nc = (cannon_wave(i) & (ns == 0)).astype(jnp.int32)
+    nr = 3 - (t >= 1800.).astype(jnp.int32)
+    a = u - ns
+    b = a - nm
+    c = b - nc
+    kind = jnp.where(u < ns, MinionType.SUPER, jnp.where(a < nm, MinionType.MELEE,
+                     jnp.where(b < nc, MinionType.CANNON, jnp.where(c < nr, MinionType.CASTER, MinionType.NONE))))
+    valid = (i >= 0) & (u >= 0) & (kind != MinionType.NONE)
+    return jnp.where(valid, kind, MinionType.NONE).astype(jnp.int32), valid
+
+
+class LaneSpawnDue(NamedTuple):
+    """Units due this tick, shape (2, 3) by (team, lane)."""
+    due: jax.Array                # bool
+    minion_type: jax.Array        # int32 (NONE where not due)
+    wave: jax.Array               # int32 wave index of the unit
+    unit: jax.Array               # int32 unit index inside its wave
+
+
+def lane_spawn_step(state: LaneSpawnState, now, *, enemy_inhibitor_down=False,
+                    all_enemy_inhibitors_down=False, inhibitor_respawn_at=jnp.inf):
+    """Advance the per-(team, lane) wave cursors to ``now``.
+
+    Inputs broadcast to (2, 3) ``[team, lane]`` and describe *that team's
+    enemy*: ``enemy_inhibitor_down[t, l]`` = the inhibitor of team ``1-t`` in
+    lane ``l`` is dead (``modern_lane_ai.wave_inhibitor_inputs`` builds
+    them from ``TowersState``). At most one unit per (team, lane) per tick:
+    the 0.8 s stagger exceeds any tick length. Returns ``(state, due)``.
+    """
+    shape = (N_TEAMS, N_LANES)
+    now = jnp.asarray(now, jnp.float32)
+    down = jnp.broadcast_to(jnp.asarray(enemy_inhibitor_down, bool), shape)
+    all_down = jnp.broadcast_to(jnp.asarray(all_enemy_inhibitors_down, bool), shape)
+    respawn = jnp.broadcast_to(jnp.asarray(inhibitor_respawn_at, jnp.float32), shape)
+    wave = jnp.broadcast_to(jnp.asarray(state.wave, jnp.int32), shape)
+    unit = jnp.broadcast_to(jnp.asarray(state.unit, jnp.int32), shape)
+    latched = jnp.broadcast_to(jnp.asarray(state.supers, jnp.int32), shape)
+    t_wave = wave_spawn_time(wave)
+    supers = jnp.where(latched >= 0, latched, super_count(down, all_down, respawn, t_wave))
+    kind, valid = wave_unit_type(wave, unit, supers)
+    due = valid & (now >= t_wave + WAVE_UNIT_GAP_S * unit.astype(jnp.float32))
+    _, more = wave_unit_type(wave, unit + 1, supers)
+    close = due & ~more
+    new = LaneSpawnState(
+        wave=jnp.where(close, wave + 1, wave).astype(jnp.int32),
+        unit=jnp.where(close, 0, jnp.where(due, unit + 1, unit)).astype(jnp.int32),
+        supers=jnp.where(close, -1, jnp.where(due, supers, latched)).astype(jnp.int32))
+    return new, LaneSpawnDue(due, jnp.where(due, kind, MinionType.NONE).astype(jnp.int32), wave, unit)
+
+
+def first_wave_ghost_s(lane):
+    """First-wave ghosting after spawn: 28 s side lanes, 18 s mid (MINIONS §2.8, WIKI M)."""
+    return jnp.where(jnp.asarray(lane) == 1, 18., 28.)

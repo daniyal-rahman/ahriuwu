@@ -519,7 +519,7 @@ def init_recall(n_champions: int) -> Recall:
 
 
 def recall_step(state: Recall, now: Any, *, request: Any, cancel_action: Any, health_damage: Any,
-                disabled: Any, dead: Any) -> tuple[Recall, Any]:
+                disabled: Any, dead: Any, channel: Any = None) -> tuple[Recall, Any]:
     """§11.1: 8 s channel; returns (state, completed (C,)).
 
     ``cancel_action``: the holder moved/attacked/cast; ``health_damage``: damage
@@ -532,7 +532,7 @@ def recall_step(state: Recall, now: Any, *, request: Any, cancel_action: Any, he
     elapsed = now - t0
     grace = elapsed >= RECALL_CHANNEL - RECALL_DAMAGE_GRACE
     interrupted = ch & ~start & (cancel_action | (health_damage & ~grace) | disabled | dead)
-    done = ch & ~interrupted & (elapsed >= RECALL_CHANNEL)
+    done = ch & ~interrupted & (elapsed >= (RECALL_CHANNEL if channel is None else channel))
     return Recall(ch & ~interrupted & ~done, t0), done
 
 
@@ -637,6 +637,8 @@ class StructureEvents(NamedTuple):
     global_gold: Any
     is_turret: Any          # turret destroyed (vs plate)
     in_top_lane: Any
+    is_structure: Any = None  # (S,) bool: the unit is a structure every tick (§7 damage-credit marking,
+                              # independent of ``valid``); None = ``valid``
 
 
 class EconomyInputs(NamedTuple):
@@ -663,6 +665,12 @@ class EconomyInputs(NamedTuple):
     reached_endpoint: Any
     in_jungle: Any
     teleported: Any
+    extra_gold: Any = None  # (C,) gold from other systems this tick (jungle, objectives, wards)
+    extra_xp: Any = None    # (C,) XP from other systems this tick (monsters, objectives)
+    epic: Any = None        # (C,) epic-monster takedowns this tick (role quest points)
+    recall_channel: Any = None  # (C,) recall channel seconds (Empowered Recall 4 s), default 8
+    minion_gold_delta: Any = None   # (C,) gold change per lane-minion last hit (jungle-pet holders)
+    minion_xp_mult: Any = None      # (C,) lane-minion XP multiplier (jungle-pet holders)
 
 
 class EconomyOut(NamedTuple):
@@ -689,8 +697,8 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
     cls = jnp.full((n_units,), D.CLASS_MINION, jnp.int32).at[inp.unit].set(D.CLASS_CHAMPION)
     credit = state.credit
     if inp.report is not None:
-        cls = cls.at[inp.structures.unit].set(jnp.where(inp.structures.valid, D.CLASS_STRUCTURE,
-                                                        cls[inp.structures.unit]))
+        st_mark = inp.structures.valid if inp.structures.is_structure is None else inp.structures.is_structure
+        cls = cls.at[inp.structures.unit].set(jnp.where(st_mark, D.CLASS_STRUCTURE, cls[inp.structures.unit]))
         credit = credit_update(credit, inp.report, inp.unit, now, cls, inp.cc)
 
     # 2. Ambient gold (paid while dead, §2.4).
@@ -725,8 +733,11 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
     # Minion gold (last hit) and XP, with the top-quest early out-of-lane penalty.
     md = inp.minion_deaths
     penalty = Q.minion_penalty(state.quest, state.level, inp.minion_in_lane)
+    pet_xp = 1.0 if inp.minion_xp_mult is None else _cm(inp.minion_xp_mult, c, 1)
     m_gold, m_xp, last_hits = minion_rewards(md, inp.x, inp.y, inp.team, ~state.dead & ~died, dec,
-                                             Q.xp_bonus(state.quest), gold_mult=penalty, xp_mult=penalty)
+                                             Q.xp_bonus(state.quest), gold_mult=penalty, xp_mult=penalty * pet_xp)
+    if inp.minion_gold_delta is not None:
+        m_gold = jnp.maximum(m_gold + jnp.asarray(inp.minion_gold_delta, jnp.float32) * last_hits, 0.0)
     gold_gain = gold_gain + m_gold
     xp_gain = xp_gain + m_xp
     if md.unit is not None:
@@ -747,6 +758,10 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
         s_gold = s_gold + jnp.where(st.valid[k], g, 0.0)
         first_turret = first_turret | (st.valid[k] & st.is_turret[k])
     gold_gain = gold_gain + s_gold
+    if inp.extra_gold is not None:
+        gold_gain = gold_gain + jnp.asarray(inp.extra_gold, jnp.float32)
+    if inp.extra_xp is not None:
+        xp_gain = xp_gain + jnp.asarray(inp.extra_xp, jnp.float32)   # eligibility is the source's job
     # 7. Quest points and completion (before level-up).
     # Quest credit = local-gold eligibility (ROLE_QUESTS §2.1).
     near_struct = (jnp.stack(s_elig, axis=1) if s_elig else jnp.zeros((c, 0), bool)).astype(jnp.float32)
@@ -759,10 +774,12 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
         turrets_out=jnp.sum(near_struct * (st.is_turret & ~st.in_top_lane)[None, :], axis=1),
         plates_in_lane=jnp.sum(near_struct * (~st.is_turret & st.in_top_lane)[None, :], axis=1),
         plates_out=jnp.sum(near_struct * (~st.is_turret & ~st.in_top_lane)[None, :], axis=1),
-        takedowns=kills + assists, epic=jnp.zeros((c,), jnp.float32))
+        takedowns=kills + assists,
+        epic=jnp.zeros((c,), jnp.float32) if inp.epic is None else jnp.asarray(inp.epic, jnp.float32))
     # 11. Recall / Homeguard.
     recall, recalled = recall_step(state.recall, now, request=inp.recall_request, cancel_action=inp.cancel_action,
-                                   health_damage=inp.health_damage, disabled=inp.disabled, dead=state.dead | died)
+                                   health_damage=inp.health_damage, disabled=inp.disabled, dead=state.dead | died,
+                                   channel=inp.recall_channel)
     qs = Q.quest_step(state.quest, qe, now=now, dt=dt, in_lane=inp.in_quest_lane, alive=~state.dead & ~died,
                       level=state.level, recalled=recalled)
     xp_gain = xp_gain + jnp.where(qs.completed_now, Q.COMPLETION_XP, 0.0)

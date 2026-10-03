@@ -55,7 +55,7 @@ COVERAGE = {
     ASHES: "Inflame: ability damage burns 5/s magic for 3 s (0.5 s ticks), +15/s vs monsters",
     BLACKFIRE: "Baleful Blaze burn 20+2% AP/s (minion 20+2%AP, monster 40+2%AP) 3 s; "
                "Blackfire +4% AP per burning champion/monster (all monsters count as large)",
-    ACTUALIZER: "stats only; Mana Made Real active DEFERRED (MODERN-009)",
+    ACTUALIZER: "stats only; Mana Made Real active in modern_item_actives",
     RABADON: "Magical Opus: +30% total AP (pre-dynamic AP + this module's flat dynamic AP)",
     NASHOR: "Icathian Bite: on-hit 15 + 15% AP magic (life steal applies)",
     RYLAI: "Rimefrost: ability damage slows 30% for 1 s",
@@ -65,9 +65,9 @@ COVERAGE = {
     CRYPTBLOOM: "Life From Death: champion takedown within 3 s of damaging -> heal 100+20% AP (cd 60). "
                 "GAP: nova travel (1.75 s) and ally heals not modelled (no radius in data)",
     ALTERNATOR: "Revved: damaging an enemy champion deals 65 magic (cd 40)",
-    GUNBLADE: "stats only (10% omnivamp is static); Lightning Bolt active DEFERRED (MODERN-009)",
+    GUNBLADE: "stats only (10% omnivamp is static); Lightning Bolt active in modern_item_actives",
     GUISE: "Madness: +2%/s in champion combat up to 6% damage dealt",
-    ROCKETBELT: "stats only; Supersonic active DEFERRED (MODERN-009)",
+    ROCKETBELT: "stats only; Supersonic active in modern_item_actives",
     MORELLO: "Grievous Wounds 3 s on magic damage to enemy champions",
     CHAPTER: "Enlighten: level up restores 20% max mana over 3 s",
     CATALYST: "Eternity mana: 10% of pre-mitigation champion damage taken. GAP: heal 25% of mana "

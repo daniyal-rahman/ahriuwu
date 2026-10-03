@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+import jax
 import jax.numpy as jnp
 
 from ..modern_damage import MAGIC, PHYSICAL, Packets, empty_packets, has
@@ -256,11 +257,16 @@ def first_instance(p: Packets, sel: Any) -> Any:
     """(C, P) ``sel`` restricted to the first packet of each cast instance per
     (holder row, packet dst); ``cast_id`` 0 makes every packet its own instance."""
     P = p.valid.shape[0]
-    earlier = jnp.arange(P)[None, :] < jnp.arange(P)[:, None]                 # [p, q]: q before p
-    same = (p.cast_id[:, None] == p.cast_id[None, :]) & (p.cast_id[:, None] != 0) \
-        & (p.dst[:, None] == p.dst[None, :]) & (p.src[:, None] == p.src[None, :]) & earlier
-    dup = jnp.einsum("pq,cq->cp", same.astype(jnp.float32), sel.astype(jnp.float32)) > 0.0
-    return sel & ~dup
+    idx = jnp.arange(P)
+    # Instance groups: sort by (cast_id, src, dst); a group starts where the key changes.
+    order = jnp.lexsort((idx, p.dst, p.src, p.cast_id))
+    ks = (p.cast_id[order], p.src[order], p.dst[order])
+    start = jnp.concatenate([jnp.ones((1,), bool), (ks[0][1:] != ks[0][:-1]) | (ks[1][1:] != ks[1][:-1])
+                             | (ks[2][1:] != ks[2][:-1])])
+    group = jnp.zeros((P,), jnp.int32).at[order].set(jnp.cumsum(start, dtype=jnp.int32) - 1)
+    # First selected packet of each group, per holder row.
+    first = jax.vmap(lambda s: jax.ops.segment_min(jnp.where(s, idx, P), group, num_segments=P))(sel)
+    return sel & ((p.cast_id == 0)[None, :] | (first[:, group] == idx[None, :]))
 
 
 def delay_queue(n_champions: int, k: int):

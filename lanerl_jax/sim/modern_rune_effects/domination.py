@@ -52,6 +52,8 @@ from .core import (BIG, COMBAT_TIMEOUT, adaptive_damage_type, by_range, ea, effe
 ELECTROCUTE, DARK_HARVEST, HAIL_OF_BLADES = 8112, 8128, 9923
 CHEAP_SHOT, TASTE_OF_BLOOD, SUDDEN_IMPACT = 8126, 8139, 8143
 GRISLY_MEMENTOS = 8140
+SIXTH_SENSE, DEEP_WARD = 8137, 8141
+SIXTH_SENSE_RANGE_KEY = "{d3bd04a2}"   # unnamed client key = 900 (wiki "within 900 units")
 TREASURE_HUNTER, RELENTLESS_HUNTER, ULTIMATE_HUNTER = 8135, 8105, 8106
 
 ELEC_STACKS = 3            # RUNES §4.1 "3 stacks within 3 s"
@@ -78,7 +80,8 @@ COVERAGE = {
                     "(U-08); cd 20 s",
     SUDDEN_IMPACT: "dash/blink/Flash/TP/stealth exit arms 4 s; first damage to a champion: lin(20,80) true "
                    "proc; cd 10 s after use or expiry",
-    GRISLY_MEMENTOS: "+1 memento per champion takedown (max 18), +6 trinket haste each (trinkets deferred)",
+    GRISLY_MEMENTOS: "+1 memento per champion takedown (max 18), +6 trinket haste each (applied to trinket "
+                     "recharge by modern_wards.ward_step)",
     TREASURE_HUNTER: "Bounty Hunter stacks (unique champion takedowns, max 5): 50 + 20*stacks_before gold each",
     RELENTLESS_HUNTER: "+8 flat MS per Bounty Hunter stack while out of combat (5 s after the modern combat clock)",
     ULTIMATE_HUNTER: "6 + 5 per Bounty Hunter stack ultimate haste",
@@ -443,3 +446,46 @@ def stats(state: State, page, ctx, ev) -> ItemStats:
     return ItemStats(attack_speed=_f32(jnp.where(hob, hob_as, 0.0)),
                      attack_speed_cap_lift=_f32(jnp.where(hob, 1.0, 0.0)),
                      move_speed=_f32(ms), ultimate_haste=_f32(uh), trinket_haste=_f32(trinket))
+
+
+# ---- vision runes (run by the world's ward system, modern_wards.ward_step) ---------------
+
+def deep_ward(page, owner, owner_level, avg_level, in_enemy_jungle, in_river, is_trinket_stealth):
+    """Deep Ward 8141 for one placement per champion, (C,) inputs.
+
+    ``owner`` (C,) champion index of the placer (holder row of ``page``).
+    Returns ``(extra_hp, extra_duration)``. Client: ExtraHealth 1,
+    LevelThreshold 9, TrinketDurationIncrease ByCharLevelInterpolation 45→150
+    (evaluated at the average champion level per the wiki, WARDS U-W-6).
+    Only trinket Stealth Wards (Totem Wards) exist in the lane world; the
+    non-trinket ``DurationIncrease`` 30→45 has no ward to apply to.
+    """
+    has = has_rune(page, DEEP_WARD)[owner]
+    river_ok = in_river & (owner_level >= ea(DEEP_WARD, "LevelThreshold"))
+    deep = has & is_trinket_stealth & (in_enemy_jungle | river_ok)
+    hp = jnp.where(deep, ea(DEEP_WARD, "ExtraHealth"), 0.0)
+    dur = lin(ea(DEEP_WARD, "TTTrinketDurationIncreaseMin"), ea(DEEP_WARD, "TTTrinketDurationIncreaseMax"),
+              avg_level, scale_past_18=False)
+    return _f32(hp), _f32(jnp.where(deep, dur, 0.0)), deep
+
+
+def sixth_sense(page, cd_until, now, level, alive, cx, cy, cteam, ward_alive, wx, wy, wteam, unseen, tracked):
+    """Sixth Sense 8137. (C,) holders, (S,) ward slots, ``unseen`` (C, S).
+
+    Returns ``(cd_until, pick (C, S) one-hot, reveal (C,))``: a holder that is
+    alive and off cooldown senses the nearest enemy ward within 900 that is
+    not tracked and not seen by its team; it is tracked for the team, and from
+    level 11 also revealed for ``RevealDuration`` (10 s). Cooldown 250 s
+    (``MeleeItemCalcValue`` = ``RangedItemCalcValue``) starts on a trigger.
+    """
+    rng = ea(SIXTH_SENSE, SIXTH_SENSE_RANGE_KEY)
+    d2 = (wx[None, :] - cx[:, None]) ** 2 + (wy[None, :] - cy[:, None]) ** 2
+    cand = (ward_alive[None, :] & (wteam[None, :] != cteam[:, None]) & unseen & ~tracked[None, :]
+            & (d2 <= rng * rng))
+    ready = has_rune(page, SIXTH_SENSE) & alive & (now >= cd_until)
+    go = ready & jnp.any(cand, axis=1)
+    near = jnp.argmin(jnp.where(cand, d2, jnp.inf), axis=1)
+    pick = go[:, None] & (jnp.arange(wx.shape[0])[None, :] == near[:, None])
+    reveal = go & (level >= ea(SIXTH_SENSE, "LevelThreshold"))
+    cd = jnp.where(go, now + ea(SIXTH_SENSE, "MeleeItemCalcValue"), cd_until)
+    return _f32(cd), pick, reveal

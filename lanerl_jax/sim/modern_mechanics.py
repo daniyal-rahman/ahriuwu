@@ -33,14 +33,25 @@ def in_attack_range(units: W.WorldUnits, target: Any) -> Any:
     return (target >= 0) & (d <= units.attack_range + units.radius + units.radius[t])
 
 
+def att_target_ok(att: W.AttackState, units: W.WorldUnits) -> Any:
+    """(N,) the current windup's target is still alive, targetable, hostile and the same unit."""
+    n = units.x.shape[0]
+    t = jnp.clip(att.target, 0, n - 1)
+    return (att.target >= 0) & units.alive[t] & units.targetable[t] & (units.team[t] != units.team) \
+        & (units.spawn_seq[t] == att.target_seq)
+
+
 def attack_step(att: W.AttackState, units: W.WorldUnits, desired: Any, *, can_attack: Any, windup: Any,
-                dt: Any, reset: Any = None) -> tuple[W.AttackState, Any]:
+                dt: Any, reset: Any = None, period: Any = None, uncancellable: Any = None) -> tuple[W.AttackState, Any]:
     """Advance the attack machine one tick. Returns ``(state, launched)``.
 
     ``desired`` (N,) is the target each unit wants. Switching target, losing
     the target, leaving range or losing ``can_attack`` during the windup
     cancels it and resets the timer to 0 (U-08 default). ``reset`` (N,) is an
     attack reset (Garen Q, Jax W, Titanic): cooldown 0 and any windup cancelled.
+    ``period`` (N,) overrides the attack's total time when > 0 (Garen Q);
+    ``uncancellable`` (N,) keeps a started windup running through range loss
+    and a new order; it still ends if the target dies or becomes invalid.
     """
     n = units.x.shape[0]
     t = jnp.clip(desired, 0, n - 1)
@@ -49,6 +60,8 @@ def attack_step(att: W.AttackState, units: W.WorldUnits, desired: Any, *, can_at
     ready = valid & in_attack_range(units, desired) & can_attack & units.alive
     winding = att.windup_left > 0.0
     cancel = winding & ~(same & ready)
+    if uncancellable is not None:
+        cancel = cancel & ~(uncancellable & att_target_ok(att, units))
     if reset is not None:
         cancel = cancel | (reset & winding)
     cooldown = jnp.maximum(att.cooldown_left - dt, 0.0)
@@ -57,14 +70,20 @@ def attack_step(att: W.AttackState, units: W.WorldUnits, desired: Any, *, can_at
         cooldown = jnp.where(reset, 0.0, cooldown)
     left = jnp.where(cancel, 0.0, att.windup_left)
     start = ready & ~(winding & ~cancel) & (cooldown <= 0.0)
-    period = 1.0 / jnp.maximum(units.attack_speed, 1e-3)
+    stat_period = 1.0 / jnp.maximum(units.attack_speed, 1e-3)
+    period = stat_period if period is None else jnp.where(period > 0, period, stat_period)
     left = jnp.where(start, windup, left)
     cooldown = jnp.where(start, period, cooldown)
     # Fires on the first tick whose accumulated time reaches the windup (tick rounding, §1.3).
-    launched = (left > 0.0) & (left - dt <= 1e-5) & ready
+    held = ready if uncancellable is None else ready | (uncancellable & att_target_ok(att, units) & (left > 0.0))
+    launched = (left > 0.0) & (left - dt <= 1e-5) & held
     left = jnp.where(launched | (left <= 0.0), 0.0, jnp.maximum(left - dt, 0.0))
     target = jnp.where(valid, desired, -1)
     seq = jnp.where(valid, units.spawn_seq[t], att.target_seq)
+    if uncancellable is not None:
+        keep = uncancellable & winding & ~cancel
+        target = jnp.where(keep, att.target, target)
+        seq = jnp.where(keep, att.target_seq, seq)
     return W.AttackState(target.astype(jnp.int32), seq.astype(jnp.int32), left, cooldown), launched
 
 
@@ -202,8 +221,9 @@ def capabilities(cc: CCTimers, now: Any) -> dict:
 # ---- movement ----------------------------------------------------------------------
 
 def team_terrain(terrain: tuple, team: Any):
-    t0, t1 = terrain
-    return t0._replace(walkable=jnp.where(team == 0, t0.walkable, t1.walkable))
+    """Team 0's mask for team 0, team 1's otherwise (a layer view: no per-unit grid copy)."""
+    from .modern_terrain import team_view
+    return team_view(terrain, jnp.where(team == 0, 0, 1))
 
 
 def move_step(x: Any, y: Any, goal_x: Any, goal_y: Any, speed: Any, active: Any, team: Any, radius: Any,
@@ -221,7 +241,8 @@ def move_step(x: Any, y: Any, goal_x: Any, goal_y: Any, speed: Any, active: Any,
         dist = jnp.linalg.norm(d)
         step = jnp.minimum(sp * dt, dist)
         new = pos + jnp.where(dist > 1e-6, d / jnp.maximum(dist, 1e-6) * step, 0.0)
-        clear = segment_clear(pos, new, jnp.minimum(r, routes.radius), ter, samples=5, max_length=200.)
+        clear = segment_clear(pos, new, jnp.minimum(r, routes.radius), ter, samples=5, max_length=200.,
+                              max_radius=routes.radius)
         new = jnp.where(act & clear, new, pos)
         return new[0], new[1], ok | ~act
     return jax.vmap(one)(x, y, goal_x, goal_y, speed, active, team, radius)

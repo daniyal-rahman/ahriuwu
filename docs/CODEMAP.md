@@ -51,13 +51,17 @@ TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failur
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
 
-TOOL (modern port, not yet on the tick path): `lanerl_jax/data/modern_map.py`,
-`lanerl_jax/sim/modern_terrain.py`: patch-pinned Map11 ingestion and static JAX
-collision queries. `lanerl_jax/data/modern/26.19/map11.json` is the reviewed
-asset identity; normalized arrays live outside Git. `ops/fetch_modern_map.py`
-selectively extracts assets from an explicit Riot RMAN. MODERN-009–012 track
-scope, evidence and remaining integration; these do not switch existing runs.
-
+Modern 26.19 world (separate ruleset, not yet wired into a trainer; MODERN-013..021):
+`lanerl_jax/sim/modern_step.py` `step(state, orders, cfg)` is the whole-map tick
+(216 unit slots: 2 champions, lane minions, camps/epics, wards, structures);
+`modern_world.build_config` builds the static `WorldConfig`. Start with
+`docs/modern/WORLD_IMPLEMENTATION.md` (layout, tick order, gaps) and
+`docs/modern/README.md` (spec index). Observation/actions: `lanerl_jax/obs/modern_builder.py`,
+`lanerl_jax/train/modern_actions.py`. TOOL: `ops/modern_world_bench.py`,
+`ops/modern_world_profile.py` (throughput and per-source cost). Map ingestion:
+`lanerl_jax/data/modern_map.py`, `modern_routes.py`; `ops/fetch_modern_map.py`.
+The legacy `step.py` world and the "modern champion profile" below (modern
+Garen/Jax on the legacy map, `sim/modern.py`) are different systems.
 
 Modern champion profile (explicit opt-in, 26.19; CHAMP-003):
 
@@ -88,6 +92,6 @@ Launch through an experiment spec and `ops/launch.py`; its ordinary server/JAX
 launch modes still target the canonical checkout, so integrate this branch there
 before launching a normal production experiment. MOD validation snapshots this
 worktree explicitly and does not require that integration.
-Map/minions/turrets still use the existing world; this is not a modern map/items/runes port.
+This profile runs on the legacy map/minions/turrets; the modern world is `modern_step` above.
 
 TOOL: `lanerl_jax/data/modern_routes.py`, `lanerl_jax/sim/modern_pathing.py` bake/load/query conservative static-map routes; `ops/modern_world_validation.py`, `slurm/modern_world_validation.sbatch` launch snapshot correctness/artifact jobs through `ops/launch.py`. Patch geometry data are `lanerl_jax/data/modern/26.19/geometry.json`; tests are regressions.

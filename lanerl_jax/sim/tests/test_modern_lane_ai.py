@@ -1,3 +1,4 @@
+import pytest
 import functools
 
 import jax
@@ -579,3 +580,143 @@ def test_init_structures_from_world_config_layout():
     np.testing.assert_allclose(s.attack_range[1:8], [750, 750, 750, 0, 750, 750, 0])
     np.testing.assert_allclose(s.radius[1:5], [88.4, 88.4, 88.4, 213.75], rtol=1e-6)
     np.testing.assert_allclose(s.windup[1], .1669, rtol=1e-3)
+
+
+# --- all three lanes: spawning, movement goals, neutral teams -----------------
+from lanerl_jax.sim import modern_minions as MM
+from lanerl_jax.sim.modern_world_types import KIND_NONE
+
+
+def _empty_towers(n):
+    z = jnp.zeros((n,), jnp.float32)
+    k = jnp.zeros((n,), jnp.int32)
+    u = WorldUnits(k, k, k, jnp.zeros((n,), bool), jnp.zeros((n,), bool), z, z, z, z, z, z, z, z, z, z, z,
+                   jnp.arange(n, dtype=jnp.int32), z)
+    return L.init_towers(u, jnp.full((n,), -1, jnp.int32))
+
+
+def test_spawn_lane_minions_fills_each_lanes_slot_range_at_its_barracks():
+    n, slot0 = 2 + 120 + 4, 2
+    kind = jnp.zeros((n,), jnp.int32).at[:2].set(KIND_CHAMPION)
+    alive = jnp.zeros((n,), bool).at[:2].set(True)
+    sp, w, due = L.spawn_lane_minions(MM.init_lane_spawn(), _empty_towers(n), kind, alive, now=30.0, slot0=slot0)
+    picked = np.nonzero(np.asarray(w.pick))[0].tolist()
+    assert picked == [2, 3, 42, 43, 82, 83] and int(w.count) == 6 and int(w.overflow) == 0
+    assert np.asarray(w.lane)[picked].tolist() == [0, 0, 1, 1, 2, 2]
+    assert np.asarray(w.team)[picked].tolist() == [0, 1, 0, 1, 0, 1]
+    for s in picked:
+        np.testing.assert_allclose([float(w.x[s]), float(w.y[s])], L.BARRACKS[int(w.team[s]), int(w.lane[s])])
+        assert float(w.stats.max_hp[s]) == float(L.minion_spawn_stats(0, 30.0).max_hp)
+    assert np.asarray(w.seq_offset)[picked].tolist() == list(range(6))
+    # Static lane restriction (top-only scenario) leaves the other ranges empty.
+    _, w2, _ = L.spawn_lane_minions(MM.init_lane_spawn(), _empty_towers(n), kind, alive, now=30.0, slot0=slot0,
+                                    lanes=(2,))
+    assert np.nonzero(np.asarray(w2.pick))[0].tolist() == [82, 83]
+
+
+def test_full_lane_reports_overflow_instead_of_borrowing_another_lanes_slots():
+    n, slot0 = 2 + 120, 2
+    kind = jnp.zeros((n,), jnp.int32).at[2:42].set(KIND_MINION)        # bot range full and alive
+    alive = jnp.zeros((n,), bool).at[2:42].set(True)
+    _, w, _ = L.spawn_lane_minions(MM.init_lane_spawn(), _empty_towers(n), kind, alive, now=30.0, slot0=slot0)
+    assert int(w.overflow) == 2
+    assert not np.any(np.asarray(w.pick)[2:42]) and np.asarray(w.pick)[42:44].all()
+
+
+def test_slot_lane_mapping():
+    lanes = np.asarray(L.slot_lane(2 + 120 + 3, 2))
+    assert lanes[:2].tolist() == [-1, -1] and lanes[2] == 0 and lanes[41] == 0 and lanes[42] == 1 \
+        and lanes[121] == 2 and lanes[122] == -1
+
+
+def test_minions_walk_their_own_lane_paths_for_both_teams():
+    rows = []
+    for team in (0, 1):
+        for lane in (0, 1, 2):
+            bx, by = L.BARRACKS[team, lane]
+            rows.append(minion(team, float(bx), float(by), spawn_time=60.0))
+    units = world(rows)
+    ai, desired, goal, stop = step(L.init_lane_ai(units.kind.shape[0]), units, 60.0)
+    for k, (team, lane) in enumerate([(t, l) for t in (0, 1) for l in (0, 1, 2)]):
+        assert int(ai.lane[k]) == lane
+        np.testing.assert_allclose(np.asarray(goal[k]), L.LANE_PATHS[team, lane, 0], atol=1e-3)
+    # Side lanes get the speed buff on wave 2, mid does not.
+    ms = np.asarray(L.minion_move_speed(ai, units, 60.5))
+    assert ms[0] > 400 and ms[2] > 400 and ms[1] == 350.0
+
+
+def test_neutral_monsters_are_neither_allies_nor_targets_of_lane_minions():
+    rows = [minion(BLUE, 0.), minion(RED, 300.),
+            dict(kind=6, sub=0, team=2, x=100., y=0., radius=80., attack_range=150., hp=1000., max_hp=1000.)]
+    units = world(rows)
+    n = 3
+    ai, desired, _, _ = step(L.init_lane_ai(n), units, 100.0, dmg=pair(n, (2, 0)))
+    assert int(desired[0]) == 1 and int(desired[1]) == 0
+
+
+def test_first_wave_ghosting_is_lane_dependent():
+    units = world([minion(BLUE, 1000., 1000., spawn_time=30.0), minion(BLUE, 2000., 2000., spawn_time=30.0),
+                   minion(BLUE, 0., 0., spawn_time=60.0)])
+    ai = L.init_lane_ai(3)._replace(lane=jnp.asarray([2, 1, 2]))
+    g = np.asarray(L.minion_ghosted(ai, units, 50.0))
+    assert g.tolist() == [True, False, False]
+    assert np.asarray(L.minion_ghosted(ai, units, 47.0)).tolist() == [True, True, False]
+
+
+# --- attack-move and idle acquisition ------------------------------------------
+def _am_world():
+    return world([champ(BLUE, 0.), champ(RED, 900.), minion(RED, 380.), minion(RED, 300., 2000.),
+                  minion(BLUE, 200.)])
+
+
+def test_attack_move_acquires_nearest_enemy_to_the_champion_not_a_champion_first():
+    u = _am_world()
+    acq = jnp.asarray([400.0])
+    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([2000.]), jnp.asarray([0.]), jnp.asarray([-1]),
+                             jnp.asarray([0]), u, jnp.asarray([0]), None, acq)
+    assert int(out.target[0]) == 2 and bool(out.active[0])
+    assert float(out.goal_x[0]) == pytest.approx(380.)
+    # Target Champions Only: the champion at 900 is outside 400 -> keep walking.
+    out2 = L.attack_move_step(jnp.asarray([True]), jnp.asarray([2000.]), jnp.asarray([0.]), jnp.asarray([-1]),
+                              jnp.asarray([0]), u, jnp.asarray([0]), None, acq, champions_only=True)
+    assert int(out2.target[0]) == -1 and float(out2.goal_x[0]) == 2000.
+
+
+def test_attack_move_keeps_its_target_and_ends_at_the_point():
+    u = _am_world()
+    acq = jnp.asarray([2000.0])
+    # Held minion 3 stays even though minion 2 is nearer.
+    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([0.]), jnp.asarray([0.]), jnp.asarray([3]),
+                             u.spawn_seq[3:4], u, jnp.asarray([0]), None, acq)
+    assert int(out.target[0]) == 3
+    # Stale identity (slot reused) -> re-scan.
+    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([0.]), jnp.asarray([0.]), jnp.asarray([3]),
+                             jnp.asarray([999]), u, jnp.asarray([0]), None, acq)
+    assert int(out.target[0]) == 2
+    # Nothing in range and standing on the point: order done.
+    empty = world([champ(BLUE, 0.)])
+    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([5.]), jnp.asarray([0.]), jnp.asarray([-1]),
+                             jnp.asarray([0]), empty, jnp.asarray([0]), None, jnp.asarray([400.]))
+    assert int(out.target[0]) == -1 and not bool(out.active[0])
+
+
+def test_attack_move_on_cursor_and_fog():
+    u = _am_world()
+    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([900.]), jnp.asarray([0.]), jnp.asarray([-1]),
+                             jnp.asarray([0]), u, jnp.asarray([0]), None, jnp.asarray([400.]),
+                             cursor_x=jnp.asarray([880.]), cursor_y=jnp.asarray([0.]), cursor_radius=200.)
+    assert int(out.target[0]) == 1
+    vis = jnp.ones((1, 5), bool).at[0, 2].set(False)
+    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([2000.]), jnp.asarray([0.]), jnp.asarray([-1]),
+                             jnp.asarray([0]), u, jnp.asarray([0]), vis, jnp.asarray([400.]))
+    assert int(out.target[0]) == -1
+
+
+def test_idle_acquisition_uses_the_acquisition_radius_and_ignores_unaggroed_monsters():
+    u = world([champ(BLUE, 0.), minion(RED, 500.),
+               dict(kind=6, sub=0, team=2, x=150., y=0., radius=80., attack_range=150., hp=1000., max_hp=1000.)])
+    acq = L.champion_acquisition_range(jnp.asarray([175.]), jnp.asarray([175.]))
+    assert float(acq[0]) == 400.
+    assert int(L.idle_acquire(u, jnp.asarray([0]), None, acq)[0]) == 1         # edge 500-65-48 = 387
+    aggro = jnp.zeros((1, 3), bool).at[0, 2].set(True)
+    assert int(L.idle_acquire(u, jnp.asarray([0]), None, acq, monster_aggro=aggro)[0]) == 2

@@ -1,0 +1,1546 @@
+{
+ "schema": "lanerl-modern-objectives-v1",
+ "patch": "26.19",
+ "client_build": "16.19.8230722",
+ "evidence_tags": "CLIENT (16.19 bins/maps), WIKI (wiki.leagueoflegends.com 2026-10-02), PATCH (26.1-26.19 notes), INFERRED-M/-L",
+ "objectives_present": [
+  "voidgrubs",
+  "rift_herald",
+  "elemental_drakes",
+  "dragon_soul",
+  "elder_dragon",
+  "baron_nashor"
+ ],
+ "objectives_absent": {
+  "atakhan": "PATCH 26.1 removed",
+  "blood_roses": "PATCH 26.1 removed",
+  "feats_of_strength": "PATCH 26.1 removed"
+ },
+ "characters": {
+  "sru_baron": {
+   "hp": 16300.0,
+   "hp_per_level": 170.0,
+   "ad": 175.0,
+   "ad_per_level": 20.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 300.0,
+   "attack_range": 900.0,
+   "attack_speed": 0.625,
+   "acquisition_range": 400.0,
+   "xp": 0.0,
+   "gold": 100.0,
+   "xp_radius": 2000.0,
+   "global_gold": 150.0,
+   "global_xp": 650.0,
+   "radius": 105.0,
+   "tags": "Monster | Monster_Epic | Special_Void | Monster_Camp | Monster_Baron",
+   "attack_total_time": 1.600000023841858,
+   "attack_cast_time": 0.28299999237060547,
+   "spells": {
+    "BaronAttackMelee": {
+     "HealthPerMinute": 190.0,
+     "ADPerMinute": 10.0,
+     "MaxBonusAD": 370.0,
+     "BaronBuffDuration": 180.0
+    }
+   }
+  },
+  "sru_dragon_air": {
+   "hp": 3625.0,
+   "hp_per_level": 375.0,
+   "ad": 35.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 1.0,
+   "acquisition_range": 1000.0,
+   "xp": 160.0,
+   "gold": 75.0,
+   "xp_radius": 2000.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {
+    "SRU_Dragon_Cloud_Attack": {
+     "PercentCurrentHealthRatio": 0.03999999910593033,
+     "MoveSpeedRadius": 1200.0,
+     "MoveSpeedMod": 0.5
+    }
+   }
+  },
+  "sru_dragon_chemtech": {
+   "hp": 3625.0,
+   "hp_per_level": 375.0,
+   "ad": 47.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 0.5,
+   "acquisition_range": 1000.0,
+   "xp": 160.0,
+   "gold": 75.0,
+   "xp_radius": 2000.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {
+    "sru_dragon_chemtech_Attack": {
+     "PercentCurrentHealthRatio": 0.03999999910593033,
+     "ASMax": 2.0
+    }
+   }
+  },
+  "sru_dragon_earth": {
+   "hp": 4200.0,
+   "hp_per_level": 430.0,
+   "ad": 105.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 0.25,
+   "acquisition_range": 1000.0,
+   "xp": 160.0,
+   "gold": 75.0,
+   "xp_radius": 2000.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {
+    "SRU_Dragon_Mountain_Attack": {
+     "PercentCurrentHealthRatio": 0.07000000029802322
+    }
+   }
+  },
+  "sru_dragon_elder": {
+   "hp": 11500.0,
+   "hp_per_level": 575.0,
+   "ad": 150.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 0.5,
+   "acquisition_range": 1000.0,
+   "xp": 0.0,
+   "gold": 100.0,
+   "xp_radius": 2000.0,
+   "global_gold": 150.0,
+   "global_xp": 650.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {}
+  },
+  "sru_dragon_fire": {
+   "hp": 3625.0,
+   "hp_per_level": 375.0,
+   "ad": 70.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 0.5,
+   "acquisition_range": 1000.0,
+   "xp": 160.0,
+   "gold": 75.0,
+   "xp_radius": 2000.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {
+    "SRU_Dragon_Infernal_Attack": {
+     "PercentCurrentHealthRatio": 0.05000000074505806,
+     "AoERadius": 350.0
+    }
+   }
+  },
+  "sru_dragon_hextech": {
+   "hp": 3625.0,
+   "hp_per_level": 375.0,
+   "ad": 47.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 0.75,
+   "acquisition_range": 1000.0,
+   "xp": 160.0,
+   "gold": 75.0,
+   "xp_radius": 2000.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {
+    "sru_dragon_hextech_Attack": {
+     "SlowAmount": 0.4000000059604645,
+     "SlowDuration": 2.0,
+     "SlowDecayRanged": 0.05999999865889549,
+     "SlowDecayMelee": 0.10000000149011612,
+     "UnitsToHit": 4.0,
+     "BounceRadius": 700.0,
+     "EveryXAttacks": 4.0,
+     "PercentCurrentHealthRatio": 0.03999999910593033
+    }
+   }
+  },
+  "sru_dragon_water": {
+   "hp": 3625.0,
+   "hp_per_level": 375.0,
+   "ad": 70.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 330.0,
+   "attack_range": 500.0,
+   "attack_speed": 0.5,
+   "acquisition_range": 1000.0,
+   "xp": 160.0,
+   "gold": 75.0,
+   "xp_radius": 2000.0,
+   "radius": 125.0,
+   "tags": "Monster | Monster_Epic | Monster_Dragon | Monster_Camp",
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.800000011920929,
+   "spells": {
+    "SRU_Dragon_Ocean_Attack": {
+     "PercentCurrentHealthRatio": 0.05000000074505806
+    }
+   }
+  },
+  "sru_horde": {
+   "hp": 1300.0,
+   "hp_per_level": 200.0,
+   "ad": 12.0,
+   "ad_per_level": 2.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 350.0,
+   "attack_range": 500.0,
+   "attack_speed": 1.0,
+   "acquisition_range": 600.0,
+   "xp": 65.0,
+   "gold": 30.0,
+   "xp_radius": 2000.0,
+   "tags": "Monster | Monster_Large | Monster_Epic | Special_Void | Monster_Camp | Monster_Horde",
+   "attack_total_time": 1.5,
+   "attack_cast_time": 0.6000000238418579,
+   "spells": {}
+  },
+  "sru_horde_mini": {
+   "hp": 180.0,
+   "hp_per_level": 30.0,
+   "ad": 1.7999999523162842,
+   "ad_per_level": 0.30000001192092896,
+   "armor": 0.0,
+   "move_speed": 420.0,
+   "attack_range": 125.0,
+   "attack_speed": 2.0,
+   "acquisition_range": 600.0,
+   "xp": 0.0,
+   "gold": 1.0,
+   "tags": "Monster | Monster_Horde | Special_Void |",
+   "attack_total_time": 0.75,
+   "attack_cast_time": 0.30000001192092896,
+   "spells": {}
+  },
+  "sru_riftherald": {
+   "hp": 7000.0,
+   "hp_per_level": 700.0,
+   "ad": 60.0,
+   "ad_per_level": 10.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 325.0,
+   "attack_range": 250.0,
+   "attack_speed": 0.4000000059604645,
+   "xp": 240.0,
+   "gold": 100.0,
+   "xp_radius": 2000.0,
+   "radius": 110.0,
+   "tags": "Monster | Monster_Large | Monster_Epic | Special_Void | Monster_Camp | Monster_RiftHerald",
+   "tower_priority_boost": 10.0,
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.5,
+   "spells": {
+    "SRU_RiftHerald_Gaze": {
+     "GazeDuration": 8.0,
+     "GazeDR": 0.5
+    },
+    "HeraldLeapAttack": {
+     "TowerChargeBaseDMG": 1500.0,
+     "DamagePerLevelIncrement": 125.0,
+     "CurrentHealthRatioToSelf": 0.6600000262260437,
+     "TowerChargeBaseDMG_FirstHerald": 1500.0,
+     "MechaChargeBaseShield": 500.0,
+     "MechaChargeAvgLevelShield": 50.0,
+     "MechaChargeShieldDuration": 4.0
+    },
+    "RiftHeraldMercenary": {
+     "EncounterEyeCD": 6.0,
+     "EncounterEyeCDR": 0.20000000298023224,
+     "EncounterEyeMaxHPDmg": 0.11999999731779099,
+     "SkinScale": 0.800000011920929,
+     "NexusBlitzMSPenalty": -100.0,
+     "NexusBlitzHealthBonus": 0.75
+    }
+   }
+  },
+  "sru_riftherald_mercenary": {
+   "hp": 2500.0,
+   "hp_per_level": 270.0,
+   "ad": 48.0,
+   "ad_per_level": 8.0,
+   "armor": 34.0,
+   "armor_per_level": 8.0,
+   "mr": 32.0,
+   "mr_per_level": 4.0,
+   "move_speed": 425.0,
+   "attack_range": 250.0,
+   "attack_speed": 0.5,
+   "xp": 200.0,
+   "xp_radius": 600.0,
+   "radius": 110.0,
+   "tags": "Monster | Monster_Epic | Monster_Large | Special_Void",
+   "tower_priority_boost": 10.0,
+   "attack_total_time": 2.0,
+   "attack_cast_time": 0.5,
+   "spells": {}
+  },
+  "sru_atakhan": {
+   "hp": 8000.0,
+   "ad": 100.0,
+   "armor": 90.0,
+   "mr": 75.0,
+   "move_speed": 350.0,
+   "attack_range": 175.0,
+   "attack_speed": 1.0,
+   "xp": 150.0,
+   "xp_radius": 2000.0,
+   "global_gold": 50.0,
+   "global_xp": 100.0,
+   "radius": 150.0,
+   "tags": "Monster | Monster_Epic | Monster_Camp | Monster_Large | Monster_Atakhan",
+   "attack_total_time": 1.0,
+   "attack_cast_time": 0.25,
+   "spells": {
+    "Atakhan_CombatSpell": {
+     "SpecialCooldown": 7.5,
+     "BloodyRingWidth": 150.0,
+     "BloodyMaxRadius": 900.0,
+     "BloodyPercentCurrentHealth": 0.07999999821186066,
+     "BloodyFlatDamagePerLevel": 10.0,
+     "BloodyAoECount": 8.0,
+     "BloodyCastTime": 0.5,
+     "BloodyChannelTime": 2.75,
+     "PeacefulTickRate": 0.5,
+     "PeacefulMaxRadius": 500.0,
+     "PeacefulPercentMissingHealth": 0.0333000011742115,
+     "PeacefulFlatDamagePerLevel": 10.0,
+     "PeacefulCastTime": 0.5,
+     "PeacefulChannelTime": 2.75,
+     "PeacefulMaxTargets": 4.0,
+     "GenericCooldown": 4.0,
+     "GenericRange": 800.0,
+     "GenericWidthBase": 100.0,
+     "GenericWidthGrowth": 30.0,
+     "GenericCastTime": 0.5,
+     "GenericChannelTime": 1.75,
+     "GenericPulseCount": 4.0,
+     "GenericFlatDamagePerLevel": 4.25,
+     "GenericPercentCurrentHealth": 0.019999999552965164,
+     "ShredPerStack": -1.0,
+     "ShredMaxStacks": 50.0,
+     "ShredDuration": 4.0
+    }
+   }
+  }
+ },
+ "shared_spells": {
+  "SRX_DragonBuffInfernal": {
+   "ADandAPPercentIncrease": 0.029999999329447746
+  },
+  "SRX_DragonBuffMountain": {
+   "BonusDefenses": 0.05000000074505806
+  },
+  "SRX_DragonBuffOcean": {
+   "HealingPercent": 0.019999999552965164,
+   "HealFrequency": 5.0
+  },
+  "SRX_DragonBuffCloud": {
+   "SRAmountPerStack": 0.05000000074505806,
+   "MSAmountPerStack": 0.05000000074505806
+  },
+  "SRX_DragonBuffHextech": {
+   "AbilityHaste": 5.0,
+   "AttackSpeed": 0.05000000074505806
+  },
+  "SRX_DragonBuffChemTech": {
+   "TenacityPerStack": 0.05999999865889549,
+   "HealShieldPerStack": 0.05999999865889549
+  },
+  "SRX_DragonSoulBuffInfernal": {
+   "BaseDamage": 100.0,
+   "BlastRadius": 250.0,
+   "ProcCooldown": 3.0,
+   "BonusHPRatio": 0.027499999850988388,
+   "BonusADRatio": 0.22499999403953552,
+   "APRatio": 0.13500000536441803
+  },
+  "SRX_DragonSoulBuffMountain": {
+   "BaseShieldValue": 220.0,
+   "BonusHPRatio": 0.11999999731779099,
+   "BonusADRatio": 0.1599999964237213,
+   "APRatio": 0.11999999731779099,
+   "TimeWithoutTakingDamage": 5.0
+  },
+  "SRX_DragonSoulBuffOcean": {
+   "BaseHealValue": 150.0,
+   "MinionPenalty": 0.30000001192092896,
+   "BaseManaValue": 100.0,
+   "BonusHPRatio": 0.07000000029802322,
+   "BonusADRatio": 0.25999999046325684,
+   "APRatio": 0.17000000178813934,
+   "HealDuration": 4.0,
+   "ManaRatioForTooltip": 0.03500000014901161
+  },
+  "SRX_DragonSoulBuffCloud": {
+   "MSBuffDuration": 6.0,
+   "MSAmount": 0.5,
+   "MSBuffCooldown": 30.0,
+   "PersistentMSValue": 0.15000000596046448
+  },
+  "SRX_DragonSoulBuffHextech": {
+   "BaseSlowAmountMelee": 45.0,
+   "BaseUnitsToHit": 4.0,
+   "BaseBounceRange": 600.0,
+   "BaseTriggerCD": 8.0,
+   "SlowDuration": 2.0,
+   "SlowDecayRanged": 0.05999999865889549,
+   "SlowDecayMelee": 0.10000000149011612,
+   "BaseSlowAmountRanged": 35.0
+  },
+  "SRX_DragonSoulBuffChemTech": {
+   "TriggerThreshold": 0.5,
+   "DR": 0.12999999523162842,
+   "DamageAmp": 0.12999999523162842
+  },
+  "ElderDragonBuff": {
+   "PerTargetCooldown": 2.0,
+   "DebuffDuration": 3.0,
+   "BurnDamagePerSecondMin": 25.0,
+   "BurnDamagePerSecondMax": 75.0,
+   "BurnDamageTimeMultiplierMin": 25.0,
+   "BurnDamageTimeMultiplierMax": 45.0,
+   "ElderExecuteThresholdPercent": 0.20000000298023224,
+   "BurnDamageTimeMultiplierMin_Swiftplay": 15.0,
+   "BurnDamageTimeMultiplierMax_Swiftplay": 30.0
+  },
+  "SRT_2024_Horde_DoT": {
+   "DurationOfDoT": 4.0,
+   "DamagePerTickMelee": [
+    2.0,
+    4.0,
+    12.0,
+    16.0,
+    20.0,
+    24.0,
+    28.0
+   ],
+   "SecondsPerTick": 0.5,
+   "DamagePerTickRanged": [
+    21.0,
+    2.0,
+    6.0,
+    8.0,
+    10.0,
+    12.0,
+    14.0
+   ],
+   "MaxStacks": 3.0
+  },
+  "SRT_2024_Horde_Summoner": {
+   "SummonCD": 15.0,
+   "SpawnMaxLifetime": 5.5,
+   "SpawnRadius": 300.0,
+   "SummonMinionMSMult": 0.5,
+   "SummonMinionMaxRange": 1400.0
+  },
+  "SRT_2024_Horde_SpawnMinis": {
+   "SpawnCount": 4.0,
+   "SpawnRadius": 300.0,
+   "CastTime": 1.0,
+   "SpawnMinisCDMax": 12.0,
+   "SpawnMaxLifetime": 5.5
+  },
+  "SRT_2024_Horde_Shield": {
+   "PercentHealthShieldValue": 0.25,
+   "ShieldDuration": 10.0,
+   "PercentMissingHealthShieldValue": 0.25
+  },
+  "SRU_RiftHerald_ControlBattleSled": {
+   "JumpInCD": 0.75,
+   "JumpOutRangeMult": 0.75,
+   "JumpOutRangeBase": 200.0,
+   "MoveSpeedFlatMin": 150.0,
+   "MoveSpeedFlatMax": 600.0,
+   "MoveSpeedRampTime": 4.0,
+   "Duration": 14.0,
+   "JumpTime": 0.75,
+   "TerrainCollisionRadius": 150.0,
+   "EnemyCollisionRadius": 175.0,
+   "TargeterTime": 1.5,
+   "MoveSpeedTowerBonus": 0.75,
+   "MoveSpeedTowerProximityA": 2500.0,
+   "MoveSpeedTowerProximityB": 2000.0,
+   "MoveSpeedTowerProximityC": 1500.0,
+   "JumpOutSpeed": 1200.0,
+   "SledTrueDamage": 250.0,
+   "KnockUpDuration": 1.0,
+   "KnockUpHeight": 0.75
+  }
+ },
+ "eye_of_the_herald": {
+  "TransformDuration": 30.0,
+  "StatMultiplier": 0.3330000042915344,
+  "EyePercentHealthDamage": 0.25,
+  "GlimpseAndTrinketDuration": 300.0,
+  "EyePickUpDuration": 20.0,
+  "NexusBlitzGlimpseAndTrinketDuration": 180.0
+ },
+ "camps": {
+  "Horde": {
+   "x": 4909.56494140625,
+   "y": 10487.3232421875,
+   "stop_spawn_time": 885.0
+  },
+  "SRU_RiftHerald": {
+   "x": 4909.56494140625,
+   "y": 10487.3232421875,
+   "stop_spawn_time": 1185.0
+  },
+  "Baron": {
+   "x": 5007.0,
+   "y": 10471.0,
+   "stop_spawn_time": null
+  },
+  "Dragon": {
+   "x": 9837.673828125,
+   "y": 4397.76123046875,
+   "stop_spawn_time": null
+  }
+ },
+ "dragon_script": {
+  "values": {
+   "DragonSpawnRate": [
+    300,
+    150
+   ],
+   "ElderDragonSpawnRate": [
+    360,
+    300
+   ],
+   "DRAGONS_TO_ELDER": [
+    4
+   ],
+   "DRAGONS_TO_TERRAINCHANGE": [
+    2
+   ],
+   "NUM_ELEMENTAL_FLAVORS": [
+    6
+   ],
+   "CampSpawnLeadupSoft": [
+    60
+   ],
+   "CampSpawnLeadupBright": [
+    10
+   ]
+  },
+  "spawn_formulas": [
+   "ptp.InitialCountdown + 235",
+   "ptp.InitialCountdown + 175"
+  ],
+  "note": "first value of each list is the SR branch; the second (150/300, +175) is Swiftplay"
+ },
+ "rules": {
+  "atakhan_present": {
+   "value": false,
+   "evidence": "PATCH",
+   "source": "26.1: Atakhan removed, no longer spawns"
+  },
+  "feats_of_strength_present": {
+   "value": false,
+   "evidence": "PATCH",
+   "source": "26.1: Feats removed"
+  },
+  "objective_bounties": {
+   "value": false,
+   "evidence": "INFERRED-M",
+   "source": "exist on SR (wiki) but depend on hidden team-advantage weights; disabled like ECONOMY_PROGRESSION \u00a76.7"
+  },
+  "grubs_spawn": {
+   "value": 480.0,
+   "evidence": "WIKI",
+   "source": "Voidgrub camp: spawn 8:00 (V25.09), one group of 3, no respawn; PATCH 26.1 'spawn times unchanged'"
+  },
+  "grubs_count": {
+   "value": 3,
+   "evidence": "WIKI",
+   "source": "Voidgrub camp"
+  },
+  "grubs_despawn": {
+   "value": 885.0,
+   "evidence": "CLIENT",
+   "source": "NeutralCamp Horde StopSpawnTimeSecs 885 (14:45)"
+  },
+  "grubs_despawn_in_combat": {
+   "value": 895.0,
+   "evidence": "WIKI",
+   "source": "14:55 if in combat"
+  },
+  "grub_mites_per_wave": {
+   "value": 4,
+   "evidence": "CLIENT",
+   "source": "SRT_2024_Horde_SpawnMinis SpawnCount 4"
+  },
+  "grub_mite_wave_period": {
+   "value": 12.0,
+   "evidence": "CLIENT",
+   "source": "SpawnMinisCDMax 12"
+  },
+  "grub_mite_lifetime": {
+   "value": 5.5,
+   "evidence": "CLIENT",
+   "source": "SpawnMaxLifetime 5.5 (wiki: decay over 6 s)"
+  },
+  "grub_death_heal_max": {
+   "value": 0.3,
+   "evidence": "WIKI",
+   "source": "Defensive Measures 30% max + 30% missing, self true damage over 10 s"
+  },
+  "grub_death_heal_missing": {
+   "value": 0.3,
+   "evidence": "WIKI",
+   "source": "Defensive Measures"
+  },
+  "grub_death_self_damage_duration": {
+   "value": 10.0,
+   "evidence": "WIKI",
+   "source": "Defensive Measures"
+  },
+  "herald_spawn": {
+   "value": 900.0,
+   "evidence": "WIKI",
+   "source": "Rift Herald spawntime 15:00 (V25.09), once per game"
+  },
+  "herald_despawn": {
+   "value": 1185.0,
+   "evidence": "CLIENT",
+   "source": "NeutralCamp SRU_RiftHerald StopSpawnTimeSecs 1185 (19:45)"
+  },
+  "herald_despawn_in_combat": {
+   "value": 1195.0,
+   "evidence": "WIKI",
+   "source": "19:55 if in combat"
+  },
+  "herald_leash": {
+   "value": 1200.0,
+   "evidence": "WIKI",
+   "source": "Rift Herald infobox leash 1200"
+  },
+  "herald_charge_ad_ratio": {
+   "value": 2.0,
+   "evidence": "WIKI",
+   "source": "Charge 200% AD physical after 2.5 s windup at fight start"
+  },
+  "herald_charge_windup": {
+   "value": 2.5,
+   "evidence": "WIKI",
+   "source": "Charge"
+  },
+  "herald_swipe_thresholds": {
+   "value": [
+    0.6575,
+    0.3275
+   ],
+   "evidence": "WIKI",
+   "source": "Swipe at 65.75%/32.75% max HP"
+  },
+  "herald_swipe_ad_ratio": {
+   "value": 1.25,
+   "evidence": "WIKI",
+   "source": "Swipe 125% AD cone"
+  },
+  "herald_swipe_windup": {
+   "value": 1.5,
+   "evidence": "WIKI",
+   "source": "Swipe"
+  },
+  "herald_on_hit_current_hp": {
+   "value": 0.2,
+   "evidence": "WIKI",
+   "source": "Colossal Strength 20% current HP bonus physical (V25.09)"
+  },
+  "herald_eye_cooldown": {
+   "value": 6.0,
+   "evidence": "CLIENT",
+   "source": "RiftHeraldMercenary EncounterEyeCD 6 (PATCH 26.1 8 -> 6)"
+  },
+  "herald_eye_max_hp_damage": {
+   "value": 0.12,
+   "evidence": "CLIENT",
+   "source": "RiftHeraldMercenary EncounterEyeMaxHPDmg 0.12 (true damage INFERRED-M)"
+  },
+  "eye_pickup_duration": {
+   "value": 20.0,
+   "evidence": "CLIENT",
+   "source": "item 3513 EyePickUpDuration"
+  },
+  "eye_duration": {
+   "value": 300.0,
+   "evidence": "CLIENT",
+   "source": "item 3513 GlimpseAndTrinketDuration"
+  },
+  "merc_leap_damage": {
+   "value": 3000.0,
+   "evidence": "PATCH",
+   "source": "26.1 mercenary charge damage 3000 (client HeraldLeapAttack 1500+125/lvl is unreconciled)"
+  },
+  "merc_leap_decay": {
+   "value": 0.6666666666666666,
+   "evidence": "WIKI",
+   "source": "each later charge 66.67% of the previous"
+  },
+  "merc_leap_self_damage": {
+   "value": 0.66,
+   "evidence": "CLIENT",
+   "source": "HeraldLeapAttack CurrentHealthRatioToSelf 0.66"
+  },
+  "merc_leap_windup": {
+   "value": 2.5,
+   "evidence": "WIKI",
+   "source": "Leap Attack windup"
+  },
+  "merc_leap_range": {
+   "value": 1000.0,
+   "evidence": "INFERRED-L",
+   "source": "distance at which she starts the leap (not documented)"
+  },
+  "merc_on_hit_current_hp": {
+   "value": 0.0175,
+   "evidence": "WIKI",
+   "source": "1.75% of her current HP bonus physical"
+  },
+  "merc_kill_gold": {
+   "value": 25.0,
+   "evidence": "WIKI",
+   "source": "Mercenary 25 gold for the slayer"
+  },
+  "baron_spawn": {
+   "value": 1200.0,
+   "evidence": "PATCH",
+   "source": "26.1 Baron 25:00 -> 20:00; wiki 20:00"
+  },
+  "baron_respawn": {
+   "value": 360.0,
+   "evidence": "WIKI",
+   "source": "respawntime 6:00"
+  },
+  "baron_buff_duration": {
+   "value": 180.0,
+   "evidence": "CLIENT",
+   "source": "BaronAttackMelee BaronBuffDuration 180"
+  },
+  "baron_ability_every": {
+   "value": 6,
+   "evidence": "WIKI",
+   "source": "an ability every 6th basic attack, cyclic"
+  },
+  "baron_corrosion_ad_ratio": {
+   "value": 0.35,
+   "evidence": "PATCH",
+   "source": "26.1 Corrosion secondary 35% total AD (magic, WIKI)"
+  },
+  "baron_ability_ad_ratio": {
+   "value": 1.0,
+   "evidence": "PATCH",
+   "source": "26.1 Acid Pool/Acid Shot/Tentacle 100% AD (magic)"
+  },
+  "baron_pull_ad_ratio": {
+   "value": 1.4,
+   "evidence": "WIKI",
+   "source": "Territorial pull 140% AD (patch notes say 100%)"
+  },
+  "baron_void_corruption_per_stack": {
+   "value": 0.5,
+   "evidence": "WIKI",
+   "source": "Void Corruption -0.5 armor/MR per stack, 8 s"
+  },
+  "baron_void_corruption_max": {
+   "value": 100,
+   "evidence": "WIKI",
+   "source": "100 stacks (26.13 fix lowered an over-cap)"
+  },
+  "baron_void_corruption_duration": {
+   "value": 8.0,
+   "evidence": "WIKI",
+   "source": "8 s"
+  },
+  "baron_gaze_reduction": {
+   "value": 0.5,
+   "evidence": "CLIENT",
+   "source": "string game_buff_tooltip_sru_baron_target: target deals 50% less to Baron"
+  },
+  "baron_tentacle_knockup": {
+   "value": 1.25,
+   "evidence": "WIKI",
+   "source": "Tentacle Knockup 1.25 s"
+  },
+  "baron_acid_slow": {
+   "value": [
+    0.6,
+    2.5
+   ],
+   "evidence": "WIKI",
+   "source": "Acid Pool field 60% slow 2.5 s"
+  },
+  "baron_aoe_radius": {
+   "value": 300.0,
+   "evidence": "INFERRED-L",
+   "source": "ability footprint around the target"
+  },
+  "hand_of_baron_ad": {
+   "value": [
+    [
+     20,
+     12
+    ],
+    [
+     22,
+     14
+    ],
+    [
+     24,
+     16
+    ],
+    [
+     26,
+     19
+    ],
+    [
+     28,
+     22
+    ],
+    [
+     30,
+     26
+    ],
+    [
+     32,
+     30
+    ],
+    [
+     34,
+     34
+    ],
+    [
+     36,
+     39
+    ],
+    [
+     38,
+     43
+    ],
+    [
+     40,
+     48
+    ]
+   ],
+   "evidence": "WIKI",
+   "source": "Buff data Hand of Baron (minute, AD), latched at kill"
+  },
+  "hand_of_baron_ap": {
+   "value": [
+    [
+     20,
+     20
+    ],
+    [
+     22,
+     23
+    ],
+    [
+     24,
+     27
+    ],
+    [
+     26,
+     32
+    ],
+    [
+     28,
+     37
+    ],
+    [
+     30,
+     43
+    ],
+    [
+     32,
+     50
+    ],
+    [
+     34,
+     57
+    ],
+    [
+     36,
+     65
+    ],
+    [
+     38,
+     72
+    ],
+    [
+     40,
+     80
+    ]
+   ],
+   "evidence": "WIKI",
+   "source": "Buff data Hand of Baron (minute, AP)"
+  },
+  "baron_minion_acquire_radius": {
+   "value": 600.0,
+   "evidence": "WIKI",
+   "source": "Hand of Baron notes: unempowered minion within 600"
+  },
+  "baron_minion_empower_radius": {
+   "value": 1450.0,
+   "evidence": "WIKI",
+   "source": "empower all minions within 1450"
+  },
+  "baron_minion_lose_radius": {
+   "value": 1500.0,
+   "evidence": "WIKI",
+   "source": "lose empowerment beyond 1500"
+  },
+  "baron_minion_champion_dr": {
+   "value": [
+    [
+     20,
+     0.5
+    ],
+    [
+     40,
+     0.7
+    ]
+   ],
+   "evidence": "WIKI",
+   "source": "melee/caster DR from champions 50-70% by minute (V9.2: 50% + 1%/min)"
+  },
+  "baron_minion_melee_minion_dr": {
+   "value": 0.85,
+   "evidence": "WIKI",
+   "source": "melee 85% DR from minions"
+  },
+  "baron_minion_aoe_dr": {
+   "value": 0.15,
+   "evidence": "WIKI",
+   "source": "15% DR from AoE/persistent/proc (melee/caster)"
+  },
+  "baron_minion_range": {
+   "value": [
+    75.0,
+    100.0,
+    750.0,
+    0.0
+   ],
+   "evidence": "WIKI",
+   "source": "bonus attack range melee/caster/siege/super"
+  },
+  "baron_minion_ad": {
+   "value": [
+    0.0,
+    20.0,
+    50.0,
+    0.0
+   ],
+   "evidence": "WIKI",
+   "source": "bonus AD melee/caster/siege/super"
+  },
+  "baron_minion_missile_speed": {
+   "value": [
+    0.0,
+    900.0,
+    1600.0,
+    0.0
+   ],
+   "evidence": "WIKI",
+   "source": "missile speed caster/siege"
+  },
+  "baron_minion_attack_speed_mult": {
+   "value": [
+    1.0,
+    1.0,
+    0.5,
+    1.25
+   ],
+   "evidence": "WIKI",
+   "source": "siege 50% reduced, super +25%"
+  },
+  "baron_minion_ms_floor": {
+   "value": [
+    0.925,
+    500.0
+   ],
+   "evidence": "WIKI",
+   "source": "min MS 92.5% of nearby champions' average, cap 500"
+  },
+  "baron_minion_siege_structure": {
+   "value": [
+    2.0,
+    3.0
+   ],
+   "evidence": "WIKI",
+   "source": "siege vs structures 200% base AD + 300% bonus AD"
+  },
+  "baron_minion_siege_splash": {
+   "value": 200.0,
+   "evidence": "WIKI",
+   "source": "siege splash radius 200"
+  },
+  "empowered_recall_time": {
+   "value": 4.0,
+   "evidence": "WIKI",
+   "source": "Hand of Baron / Glimpse: channel halved (8 -> 4)"
+  },
+  "baron_homeguard_bonus": {
+   "value": 0.5,
+   "evidence": "WIKI",
+   "source": "+50% bonus MS from homeguard"
+  },
+  "dragon_first_spawn": {
+   "value": 300.0,
+   "evidence": "WIKI",
+   "source": "5:00; client SR_DragonLevelScript DragonSpawnTime = InitialCountdown + 235"
+  },
+  "dragon_respawn": {
+   "value": 300.0,
+   "evidence": "CLIENT",
+   "source": "DragonSpawnRate 300"
+  },
+  "elder_respawn": {
+   "value": 360.0,
+   "evidence": "CLIENT",
+   "source": "ElderDragonSpawnRate 360 (first Elder 360 s after the soul drake, wiki 14.3)"
+  },
+  "dragons_to_terrain_change": {
+   "value": 2,
+   "evidence": "CLIENT",
+   "source": "DRAGONS_TO_TERRAINCHANGE 2"
+  },
+  "dragons_to_soul": {
+   "value": 4,
+   "evidence": "CLIENT",
+   "source": "DRAGONS_TO_ELDER 4"
+  },
+  "rift_transform_delay": {
+   "value": 0.0,
+   "evidence": "INFERRED-M",
+   "source": "wiki: transforms after the 2nd drake is slain; client dragonAtTerrainChangeMomentIndex = 3 hints at the 3rd spawn"
+  },
+  "dragon_vengeance_per_stack": {
+   "value": 0.15,
+   "evidence": "PATCH",
+   "source": "26.1 Ancient Grudge 15/30/45%(/60%) DR vs champions per slayer-team stack"
+  },
+  "dragon_leash": {
+   "value": 1200.0,
+   "evidence": "INFERRED-L",
+   "source": "not documented"
+  },
+  "grub_leash": {
+   "value": 1000.0,
+   "evidence": "INFERRED-L",
+   "source": "not documented"
+  },
+  "dragon_local_xp": {
+   "value": [
+    160.0,
+    400.0
+   ],
+   "evidence": "PATCH",
+   "source": "26.1 local XP 160-400 for levels 6-18 (linear INFERRED-M)"
+  },
+  "comeback_xp": {
+   "value": [
+    0.25,
+    2.0
+   ],
+   "evidence": "PATCH",
+   "source": "26.1: +25% per level behind (enemy-team average, INFERRED-M), cap 2x; dragons/Elder/Baron"
+  },
+  "dragon_min_level": {
+   "value": 6,
+   "evidence": "PATCH",
+   "source": "26.1"
+  },
+  "elder_min_level": {
+   "value": 13,
+   "evidence": "PATCH",
+   "source": "26.1"
+  },
+  "baron_min_level": {
+   "value": 11,
+   "evidence": "PATCH",
+   "source": "26.1"
+  },
+  "herald_min_level": {
+   "value": 9,
+   "evidence": "PATCH",
+   "source": "26.1"
+  },
+  "grub_min_level": {
+   "value": 7,
+   "evidence": "PATCH",
+   "source": "26.1"
+  },
+  "monster_level_rounding": {
+   "value": "ceil",
+   "evidence": "WIKI",
+   "source": "average champion level rounded up (Voidgrub history)"
+  },
+  "baron_evolution_delay": {
+   "value": 30.0,
+   "evidence": "WIKI",
+   "source": "Delayed Evolution: levels only after 30 s out of combat"
+  },
+  "non_champion_damage_mult": {
+   "value": 1.5,
+   "evidence": "PATCH",
+   "source": "26.1: grubs/Herald deal 50% more to non-champions, matching Dragon and Baron"
+  },
+  "elder_buff_duration": {
+   "value": 150.0,
+   "evidence": "WIKI",
+   "source": "Aspect of the Dragon 150 s"
+  },
+  "elder_execute_delay": {
+   "value": 0.5,
+   "evidence": "WIKI",
+   "source": "Elder Immolation 0.5 s delay, 2 s per-target lockout"
+  },
+  "elder_burn_ticks": {
+   "value": [
+    0.25,
+    1.25,
+    2.25
+   ],
+   "evidence": "WIKI",
+   "source": "burn over 2.25 s, 3 ticks"
+  },
+  "touch_dot_duration": {
+   "value": 4.0,
+   "evidence": "CLIENT",
+   "source": "SRT_2024_Horde_DoT DurationOfDoT"
+  },
+  "touch_dot_tick": {
+   "value": 0.5,
+   "evidence": "CLIENT",
+   "source": "SecondsPerTick"
+  },
+  "hunger_voidmite_hp_melee_minion_ratio": {
+   "value": 1.0,
+   "evidence": "PATCH",
+   "source": "26.11 summoned Voidmite HP = 100% melee minion"
+  },
+  "hunger_voidmite_lifetime": {
+   "value": 20.0,
+   "evidence": "INFERRED-L",
+   "source": "summoned Voidmite lifetime not documented"
+  },
+  "merc_voidmites": {
+   "value": 5,
+   "evidence": "WIKI",
+   "source": "Rodeo impact spawns 5 (+Touch stacks) Voidmites (Rodeo itself deferred)"
+  },
+  "patience_soft_reset": {
+   "value": 6.0,
+   "evidence": "WIKI",
+   "source": "Monster: soft reset 6 s, heal 6% max HP/s, then hard reset"
+  },
+  "patience_soft_heal": {
+   "value": 0.06,
+   "evidence": "WIKI",
+   "source": "6% max HP per second"
+  },
+  "patience_hard_heal": {
+   "value": 0.25,
+   "evidence": "INFERRED-L",
+   "source": "'much faster' healing"
+  },
+  "patience_reset_ms_mult": {
+   "value": 1.2,
+   "evidence": "WIKI",
+   "source": "Template:Monster patience +20% MS when out of patience"
+  },
+  "patience_drain": {
+   "value": 0.25,
+   "evidence": "INFERRED-L",
+   "source": "patience fraction lost per second outside leash / without target (+ distance term)"
+  },
+  "monster_target": {
+   "value": "nearest champion",
+   "evidence": "WIKI",
+   "source": "aggroed monsters acquire the nearest champion regardless of sight; Baron the nearest unit"
+  }
+ },
+ "elements": [
+  "none",
+  "infernal",
+  "mountain",
+  "ocean",
+  "cloud",
+  "hextech",
+  "chemtech"
+ ],
+ "baron_forms": [
+  "hunting",
+  "territorial",
+  "all_seeing"
+ ],
+ "rift_terrain": {
+  "artifact": "/mnt/nfs/shared/modern-world-map-research/rift-variants-26.19",
+  "arrays_sha256": "4e19cfd1c8f3bf61b0eec0633ae1fb4d1368a14966ae96ca46c8a0bba65e40c8",
+  "manifest_sha256": "1b8c2dbde638b90e2416c7d557c8f3d31f76cd8dc6eb86dea003211aab2f4309",
+  "index": "variant = element * 3 + baron_form",
+  "changed_vs_base": {
+   "none/hunting": {
+    "walkable_cells_changed": 0,
+    "brush_cells_changed": 0
+   },
+   "none/territorial": {
+    "walkable_cells_changed": 135,
+    "brush_cells_changed": 0
+   },
+   "none/all_seeing": {
+    "walkable_cells_changed": 411,
+    "brush_cells_changed": 17
+   },
+   "infernal/hunting": {
+    "walkable_cells_changed": 64,
+    "brush_cells_changed": 0
+   },
+   "infernal/territorial": {
+    "walkable_cells_changed": 199,
+    "brush_cells_changed": 0
+   },
+   "infernal/all_seeing": {
+    "walkable_cells_changed": 475,
+    "brush_cells_changed": 17
+   },
+   "mountain/hunting": {
+    "walkable_cells_changed": 635,
+    "brush_cells_changed": 6
+   },
+   "mountain/territorial": {
+    "walkable_cells_changed": 770,
+    "brush_cells_changed": 6
+   },
+   "mountain/all_seeing": {
+    "walkable_cells_changed": 1046,
+    "brush_cells_changed": 23
+   },
+   "ocean/hunting": {
+    "walkable_cells_changed": 29,
+    "brush_cells_changed": 538
+   },
+   "ocean/territorial": {
+    "walkable_cells_changed": 164,
+    "brush_cells_changed": 538
+   },
+   "ocean/all_seeing": {
+    "walkable_cells_changed": 440,
+    "brush_cells_changed": 555
+   },
+   "cloud/hunting": {
+    "walkable_cells_changed": 0,
+    "brush_cells_changed": 0
+   },
+   "cloud/territorial": {
+    "walkable_cells_changed": 135,
+    "brush_cells_changed": 0
+   },
+   "cloud/all_seeing": {
+    "walkable_cells_changed": 411,
+    "brush_cells_changed": 17
+   },
+   "hextech/hunting": {
+    "walkable_cells_changed": 0,
+    "brush_cells_changed": 0
+   },
+   "hextech/territorial": {
+    "walkable_cells_changed": 135,
+    "brush_cells_changed": 0
+   },
+   "hextech/all_seeing": {
+    "walkable_cells_changed": 411,
+    "brush_cells_changed": 17
+   },
+   "chemtech/hunting": {
+    "walkable_cells_changed": 0,
+    "brush_cells_changed": 0
+   },
+   "chemtech/territorial": {
+    "walkable_cells_changed": 135,
+    "brush_cells_changed": 0
+   },
+   "chemtech/all_seeing": {
+    "walkable_cells_changed": 411,
+    "brush_cells_changed": 17
+   }
+  },
+  "overlay_rects_xzwh": {
+   "element_infernal": [
+    [
+     206,
+     85,
+     11,
+     9
+    ],
+    [
+     192,
+     98,
+     8,
+     6
+    ]
+   ],
+   "element_mountain": [
+    [
+     148,
+     47,
+     15,
+     19
+    ],
+    [
+     191,
+     85,
+     24,
+     19
+    ],
+    [
+     159,
+     100,
+     7,
+     11
+    ],
+    [
+     226,
+     118,
+     16,
+     16
+    ],
+    [
+     55,
+     163,
+     16,
+     16
+    ],
+    [
+     134,
+     231,
+     15,
+     18
+    ]
+   ],
+   "element_ocean": [
+    [
+     157,
+     62,
+     9,
+     6
+    ],
+    [
+     192,
+     76,
+     11,
+     5
+    ],
+    [
+     209,
+     84,
+     13,
+     11
+    ],
+    [
+     154,
+     93,
+     15,
+     5
+    ],
+    [
+     227,
+     108,
+     11,
+     12
+    ],
+    [
+     87,
+     135,
+     12,
+     8
+    ],
+    [
+     197,
+     155,
+     1,
+     3
+    ],
+    [
+     197,
+     155,
+     11,
+     9
+    ],
+    [
+     60,
+     180,
+     11,
+     6
+    ],
+    [
+     126,
+     198,
+     17,
+     5
+    ],
+    [
+     129,
+     228,
+     10,
+     7
+    ]
+   ],
+   "element_chemtech": [
+    [
+     189,
+     96,
+     4,
+     2
+    ]
+   ],
+   "pit_territorial": [
+    [
+     88,
+     192,
+     19,
+     10
+    ],
+    [
+     77,
+     203,
+     15,
+     12
+    ]
+   ],
+   "pit_all_seeing": [
+    [
+     95,
+     182,
+     32,
+     25
+    ],
+    [
+     91,
+     203,
+     1,
+     2
+    ],
+    [
+     109,
+     207,
+     1,
+     6
+    ],
+    [
+     75,
+     212,
+     19,
+     16
+    ],
+    [
+     108,
+     217,
+     6,
+     7
+    ],
+    [
+     100,
+     218,
+     3,
+     1
+    ],
+    [
+     92,
+     230,
+     2,
+     1
+    ]
+   ]
+  },
+  "evidence": "CLIENT navgrid overlays (map11.bin MapNavGridOverlays); Cloud/Hextech ship no navgrid overlay"
+ },
+ "sources_sha256": {
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_baron.bin.json": "d4aa8b2a65e4a4f48e38c954cf111e418ae2aa2b84036302df4f5086127fcf23",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_air.bin.json": "a74c241ca4c0ace5bc8ec0d847246f15b04e206c2449f9472464992d8e249113",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_chemtech.bin.json": "da0c393c4d4bcea5aa42cc874da64aaf14a0b169c78a940fc554b170f5568c58",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_earth.bin.json": "2447e8fcc38276ac28f5806bc2d6b847f01ffcc3633c51fd5d86e327979dc77e",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_elder.bin.json": "bb463ab8ac4df2899b8a55e4aad846a2d4552e5c2beb48550938c6f27a9f184d",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_fire.bin.json": "21d0cb285977fe44cefc2e62057c568f6d768bb816142dbc070c14be174c48d9",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_hextech.bin.json": "e84af13da2235b1e57014b5791173ffa491bdf8b0e512f23719640fbeef9c880",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_dragon_water.bin.json": "d79e11b8e775e7d578526ac4dd06eb83df861d0f40f28dd5101503ef3a80dc9f",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_horde.bin.json": "7503a15c99a5bb24b1efa058481bf13ec017824035fd4ba1d0ca7ceed69c79d0",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_horde_mini.bin.json": "0b0f830f3120c59c6cd1c55b7a6e87d872c47bf77293194a6461faffe3d989e3",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_riftherald.bin.json": "b76bd0a9c51b8abbed1a9ab0b358fdd0d8d7915f4bac59ddf311f7b443932132",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_riftherald_mercenary.bin.json": "7c18257795c8740b2e8afaae65616f2dd0ea4243d2837e1709ccc2044e9832b4",
+  "/mnt/nfs/shared/modern-world-map-research/objectives-16.19/sru_atakhan.bin.json": "32fae2fd408b389d4fc9d64d229494d588fead0239f3d76292c60859b03ea135",
+  "/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/shared.cdtb.bin.json": "34f68553ab38cfe344936473fcb48d99574d5fd51e4feb42994fa0c4fe50769e",
+  "/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/items.cdtb.bin.json": "6880f35d5a9d82f688192f764e280e6d4bc9c845112b001feb811e3f2ab62726",
+  "/mnt/nfs/shared/modern-world-map-research/geometry-decoded.json": "77c4d3bd62a70600d7ca1a4da4f04f60bbfb24c5f193e7f3aa8c4ccbc0495fb2",
+  "/mnt/nfs/shared/modern-world-map-research/map11-decoded.json": "3947d4dbb5cb10711546f2df9076ccc82d6dbff9ea5caefa906abdfdb8ebe145",
+  "/mnt/nfs/shared/modern-world-map-research/rift-overlays-16.19.8230722/assets/assets/maps/navgrid/navgrid_infernal_seasonal.ngrid_overlay": "3be8d74ce5ff9f31c3ab836f7065355ed9bcbe1230b035cdcfbba0727b054b48",
+  "/mnt/nfs/shared/modern-world-map-research/rift-overlays-16.19.8230722/assets/assets/maps/navgrid/navgrid_mountain_seasonal.ngrid_overlay": "5162cfbfffb3313ccb359826aef1e619078d491db0d6b100564f23fdc01fc996",
+  "/mnt/nfs/shared/modern-world-map-research/rift-overlays-16.19.8230722/assets/assets/maps/navgrid/navgrid_ocean_seasonal.ngrid_overlay": "b07fb3835f4a9b36e8d9e49c75491157eaadd2741b386fd757a328b2e02c1efd",
+  "/mnt/nfs/shared/modern-world-map-research/rift-overlays-16.19.8230722/assets/assets/maps/navgrid/navgrid_chemtech.ngrid_overlay": "5308b610d687a4bf22eb2df20a36f095f31e2d91132168c81b2c412173fb7be9",
+  "/mnt/nfs/shared/modern-world-map-research/baronpit-overlays-16.19.8230722/assets/assets/maps/navgrid/navgrid_cup_base.ngrid_overlay": "a5c8167f75433d2ee5cc9a7519c6e001069e529830f45f8ae7e203d46a14865e",
+  "/mnt/nfs/shared/modern-world-map-research/baronpit-overlays-16.19.8230722/assets/assets/maps/navgrid/navgrid_tunnel_base.ngrid_overlay": "dadc1b17160886f550b3e08d170ecf0f3447b6243a69b99e510195a2f361051e"
+ }
+}

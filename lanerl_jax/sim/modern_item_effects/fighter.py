@@ -70,7 +70,7 @@ COVERAGE = {
     WITS: "Fray: 45 bonus magic on-hit, LS",
     TERMINUS: "Shadow 30 + 10% bAD + 10% AP magic on-hit, LS; Juxtaposition alternating Light (+6/7/8 armor & MR) / "
               "Dark (+10% armor & magic pen) stacks vs champions, 3 each, 5 s",
-    MERCURIAL: "stats only; Quicksilver active DEFERRED (MODERN-009)",
+    MERCURIAL: "stats only; Quicksilver active in modern_item_actives",
 }
 
 

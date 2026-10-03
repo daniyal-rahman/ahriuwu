@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+import jax
 import jax.numpy as jnp
 
 from ..modern_damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE,
@@ -367,11 +368,10 @@ def in_circle(units: Units, px: Any, py: Any, radius: Any, *, edge: bool = True)
 
 
 def nearest_k(dist: Any, mask: Any, k: int) -> Any:
-    """(C, N) mask of the ``k`` smallest ``dist`` entries within ``mask``."""
+    """(C, N) mask of the ``k`` smallest ``dist`` entries within ``mask`` (ties: lower index)."""
     key = jnp.where(mask, dist, jnp.inf)
-    order = jnp.argsort(key, axis=-1)
-    rank = jnp.argsort(order, axis=-1)
-    return mask & (rank < k)
+    _, idx = jax.lax.top_k(-key, min(k, key.shape[-1]))                    # (C, k), stable on ties
+    return mask & jnp.any(idx[..., :, None] == jnp.arange(key.shape[-1]), axis=-2)
 
 
 def unit_pos(units: Units, idx: Any) -> tuple[Any, Any]:

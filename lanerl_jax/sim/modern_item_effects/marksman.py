@@ -132,7 +132,7 @@ COVERAGE = {
             "missing HP; stacks on-hit melee / on-attack ranged, 4 s",
     NAVORI: "Transcendence: on-attack basic-ability cooldowns x0.85 (basic_cooldown_scale helper)",
     COLLECTOR: "Death: execute champions left below 5% (PROP_EXECUTE, on_damage); Taxes +25 gold per kill",
-    YOUMUU: "Haunt: +20 (ranged 10) flat MS out of champion combat 3 s; Wraith Step active DEFERRED (MODERN-009)",
+    YOUMUU: "Haunt: +20 (ranged 10) flat MS out of champion combat 3 s; Wraith Step active in modern_item_actives",
     HUBRIS: "Eminence: champion takedown within 3 s of damage -> +12 +3 per stack AD for 90 s, permanent stack",
     AXIOM: "Flux: champion takedown within 3 s -> ult refund 10% + 0.25% per lethality (ult_refund_fraction helper)",
     UMBRAL: "stats only; Nightstalker and Blackout need vision -> DEFERRED (MODERN-009)",

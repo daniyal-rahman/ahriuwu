@@ -205,3 +205,134 @@ def test_buildings_regen_respawn_and_no_plates():
     assert t.regenerate_and_respawn(hit.state,400.,1.).hp==4000
     np.testing.assert_allclose(t.ATTACK_PERIOD,1.20048,rtol=1e-5)
     np.testing.assert_allclose(t.WINDUP_S,.1669,rtol=1e-3)
+
+
+# --- every lane: chain, plates, Nexus turrets, inhibitor respawn, game end ---
+import json
+from pathlib import Path
+from lanerl_jax.sim import modern_lane_ai as L
+from lanerl_jax.sim.modern_world_types import (KIND_CHAMPION, KIND_INHIBITOR, KIND_NEXUS, KIND_TURRET,
+                                               WorldUnits)
+
+_GEO = json.loads((Path(L.__file__).resolve().parents[1] / "data" / "modern" / "26.19" / "geometry.json").read_text())
+_TIER = {"outer": 0, "inner": 1, "inhibitor": 2, "nexus": 3}
+
+
+def _map_structures():
+    """Champions + all 30 structures from the client geometry (inhibitors at their placements)."""
+    from lanerl_jax.sim.modern_world import INHIBITORS, LANES
+    rows = [(KIND_CHAMPION, 0, 0, 500., 500., -1), (KIND_CHAMPION, 0, 1, 14000., 14000., -1)]
+    for o in _GEO["turrets"]:
+        rows.append((KIND_TURRET, _TIER[o["tier"]], o["team"], *o["position"], o["lane"]))
+    for (team, lane), p in INHIBITORS.items():
+        rows.append((KIND_INHIBITOR, 0, team, p[0], p[1], LANES.index(lane)))
+    rows += [(KIND_NEXUS, 0, 0, 1549., 1658., -1), (KIND_NEXUS, 0, 1, 13240., 13235., -1)]
+    a = np.asarray(rows, np.float64)
+    n = len(rows)
+    z = jnp.zeros((n,), jnp.float32)
+    units = WorldUnits(jnp.asarray(a[:, 0], jnp.int32), jnp.asarray(a[:, 1], jnp.int32), jnp.asarray(a[:, 2], jnp.int32),
+                       jnp.ones((n,), bool), jnp.ones((n,), bool), jnp.asarray(a[:, 3], jnp.float32),
+                       jnp.asarray(a[:, 4], jnp.float32), z + 88.4, z, z, z, z, z, z, z, z,
+                       jnp.arange(n, dtype=jnp.int32), z)
+    return units, jnp.asarray(a[:, 5], jnp.int32)
+
+
+def _slot(units, lane_arr, kind, team, lane=None, tier=None):
+    k, tm, sb, ln = (np.asarray(v) for v in (units.kind, units.team, units.sub, lane_arr))
+    m = (k == kind) & (tm == team)
+    if lane is not None:
+        m &= ln == lane
+    if tier is not None:
+        m &= sb == tier
+    idx = np.nonzero(m)[0]
+    return idx.tolist()
+
+
+def _kill(towers, slots, now):
+    hp = towers.turret.hp
+    after = hp.at[jnp.asarray(slots)].set(0.0)
+    return L.structure_damage_events(towers, hp, after, now=now)
+
+
+def test_vulnerability_chain_and_plates_in_every_lane():
+    units, lane = _map_structures()
+    tw = L.init_towers(units, lane)
+    for team in (0, 1):
+        for ln in (0, 1, 2):
+            outer, = _slot(units, lane, KIND_TURRET, team, ln, 0)
+            inner, = _slot(units, lane, KIND_TURRET, team, ln, 1)
+            inhib_t, = _slot(units, lane, KIND_TURRET, team, ln, 2)
+            inhib, = _slot(units, lane, KIND_INHIBITOR, team, ln)
+            assert bool(tw.targetable[outer]) and not bool(tw.targetable[inner])
+            t2, ev = _kill(tw, [outer], 300.)
+            assert int(ev.plates[outer]) == 5 and float(ev.global_gold[outer]) == 50.
+            assert bool(t2.targetable[inner]) and not bool(t2.targetable[inhib_t])
+            # Inner turret plate: 10 % of 5000 -> 1 plate, flat 120 g (no decay) at 15:00.
+            hp = t2.turret.hp
+            t3, ev3 = L.structure_damage_events(t2, hp, hp.at[inner].add(-500.), now=900.)
+            assert int(ev3.plates[inner]) == 1 and float(ev3.plate_gold[inner]) == 120.
+            t4, _ = _kill(t3, [inner], 901.)
+            assert bool(t4.targetable[inhib_t]) and not bool(t4.targetable[inhib])
+            t5, ev5 = _kill(t4, [inhib_t], 902.)
+            assert int(ev5.plates[inhib_t]) == 5 and bool(t5.targetable[inhib])
+
+
+def test_nexus_turrets_need_an_inhibitor_down_have_no_plates_and_respawn():
+    units, lane = _map_structures()
+    tw = L.init_towers(units, lane)
+    nt = _slot(units, lane, KIND_TURRET, 1, tier=3)
+    nexus, = _slot(units, lane, KIND_NEXUS, 1)
+    assert len(nt) == 2 and not any(bool(tw.targetable[i]) for i in nt)
+    chain = [s for ln in (0,) for s in (_slot(units, lane, KIND_TURRET, 1, ln, 0) + _slot(units, lane, KIND_TURRET, 1, ln, 1)
+                                        + _slot(units, lane, KIND_TURRET, 1, ln, 2))]
+    tw, _ = _kill(tw, chain, 1000.)
+    inhib, = _slot(units, lane, KIND_INHIBITOR, 1, 0)
+    tw, ev = _kill(tw, [inhib], 1001.)
+    assert float(ev.last_hit_gold[inhib]) == 50.
+    assert all(bool(tw.targetable[i]) for i in nt) and not bool(tw.targetable[nexus])
+    tw, ev = _kill(tw, nt, 1002.)
+    assert int(np.sum(np.asarray(ev.plates)[nt])) == 0 and float(ev.global_gold[nt[0]]) == 50.
+    assert bool(tw.targetable[nexus])
+    # Inhibitor respawns at 1301 (300 s, full HP): Nexus untargetable again.
+    tw = L.turret_tick(tw, units, now=1301.0, dt=1 / 30)
+    assert float(tw.turret.hp[inhib]) == 4000. and not bool(tw.targetable[nexus])
+    # Nexus turrets return 180 s after death at 40 % HP, untargetable while no inhibitor is down.
+    tw = L.turret_tick(tw, units, now=1182.5, dt=1 / 30)
+    assert float(tw.turret.hp[nt[0]]) == 1400. and not bool(tw.targetable[nt[0]])
+
+
+def test_nexus_destruction_ends_the_game_for_the_other_team():
+    units, lane = _map_structures()
+    tw = L.init_towers(units, lane)
+    assert not bool(L.game_result(tw).over) and int(L.game_result(tw).winner) == -1
+    nexus, = _slot(units, lane, KIND_NEXUS, 1)
+    tw, ev = _kill(tw, [nexus], 2000.)
+    assert bool(ev.nexus_destroyed[nexus])
+    res = L.game_result(tw)
+    assert bool(res.over) and int(res.winner) == 0
+
+
+def test_turrets_of_every_lane_shoot_enemy_minions_in_range():
+    units, lane = _map_structures()
+    n0 = units.kind.shape[0]
+    outers = _slot(units, lane, KIND_TURRET, 0, tier=0) + _slot(units, lane, KIND_TURRET, 1, tier=0)
+    # One enemy melee minion 400 units from each outer turret.
+    xs, ys, teams = [], [], []
+    for s in outers:
+        xs.append(float(units.x[s]) + 400.); ys.append(float(units.y[s])); teams.append(1 - int(units.team[s]))
+    m = len(xs)
+    cat = lambda a, b: jnp.concatenate([jnp.asarray(a), jnp.asarray(b, jnp.asarray(a).dtype)])
+    u = WorldUnits(cat(units.kind, [2] * m), cat(units.sub, [0] * m), cat(units.team, teams), cat(units.alive, [True] * m),
+                   cat(units.targetable, [True] * m), cat(units.x, xs), cat(units.y, ys), cat(units.radius, [48.] * m),
+                   cat(units.hp, [500.] * m), cat(units.max_hp, [500.] * m), cat(units.armor, [0.] * m),
+                   cat(units.magic_resist, [0.] * m), cat(units.attack_damage, [0.] * m),
+                   cat(units.attack_range, [110.] * m), cat(units.attack_speed, [1.] * m), cat(units.move_speed, [350.] * m),
+                   jnp.arange(n0 + m, dtype=jnp.int32), cat(units.spawn_time, [100.] * m))
+    u = u._replace(attack_range=jnp.where(u.kind == KIND_TURRET, 750., u.attack_range))
+    from lanerl_jax.sim.modern_world_types import init_attack_state
+    n = n0 + m
+    z = jnp.zeros((n, n), bool)
+    _, desired, _, _ = L.select_targets(L.init_lane_ai(n), u, init_attack_state(n), now=100., dt=1 / 30,
+                                        champion_attacked_champion=z, damage_events=z)
+    for k, s in enumerate(outers):
+        assert int(desired[s]) == n0 + k

@@ -1,29 +1,34 @@
 """Jax (24) 26.19 kit on the modern event/packet contract.
 
-Formulas and numbers are those of the legacy modern layer (``sim/modern.py``)
-read from the pinned 26.19 JSON:
+Numbers come from the pinned 16.19 client JSON (``data/modern_26_19``); rules
+from the client spell records/calculations, the wiki ability data and the
+26.1-26.19 patch notes (26.12: Q 50 mana, E 4% max HP; 26.1: level-19 passive
+breakpoint). Spec table with evidence levels: docs/modern/CHAMPIONS.md.
 
-* Passive: every launched attack grants a stack (max 8, 2.5 s); on expiry one
-  stack falls off every 0.35 s. ``0.05 + 0.015 * floor((min(lv, 18) - 1) / 3)``
-  bonus AS per stack.
-* Q: leap to a unit (ally or enemy, not a structure) within 700 center-to-edge
-  at 1400 units/s (landing time fixed at cast); on landing on the same living
-  enemy, ``Damage + 1.0 * bonus AD`` physical, plus W's damage if W is up
-  (consumes W). Cooldown at cast.
-* W: 10 s empowerment (+50 range, attack reset); next landed attack or Q deals
-  ``Damage + 0.6 * AP`` magic (x0.5 vs structures). Cooldown starts on
-  consumption, expiry or death.
-* E: 2 s Counter Strike: dodges non-structure basic attacks, takes 25% less AoE
-  damage; recast after 1 s or expiry releases ``BaseDamage + 0.7 * AP + 4%
-  target max HP`` magic to enemies within 375 (center-to-edge), +20% per dodge
-  (max 5), and a 1 s stun on everything hit. Cooldown at release; death ends it
+* Relentless Assault: every launched attack grants a stack (max 8, 2.5 s,
+  refreshed); on expiry one stack falls off every ``FallOffRate`` 0.35 s.
+  ``0.05 + 0.015`` per breakpoint at levels 4/7/10/13/16/19 bonus AS per stack.
+* Q: leap to a unit (ally or enemy, wards included, not structures) within 700
+  center-to-edge at 1400 units/s; not castable while rooted. On landing on the
+  same living enemy (not a ward), ``Damage + 1.0 * bonus AD`` physical, plus W's
+  damage if W is up (consumes W); an enemy champion target becomes the attack
+  order. Cooldown at cast.
+* W: 10 s empowerment (+50 range, attack reset, uncancellable windup); next
+  landed attack or Q deals ``Damage + 0.6 * AP`` magic (x0.5 vs structures) as a
+  separate instance. Cooldown starts on consumption, expiry or death.
+* E: 2 s Evasion: dodges non-turret basic attacks, takes 25% less AoE damage;
+  recast after 1 s or expiry releases ``(BaseDamage + 0.7 * AP + 4% target max
+  HP) * (1 + 0.2 * min(dodges, 5))`` magic to enemies within 375
+  (center-to-edge; %HP part capped at 9000 vs monsters) and a 1 s stun on every
+  enemy hit (champions, minions, monsters). Cooldown at release; death ends it
   without damage. Mana at start only.
-* R: after 0.25 s (no attacks meanwhile), ``SwingDamageBase + 1.0 * AP``
-  magic within 375; if a champion was hit, 8 s of ``BaseResists + 0.4 bonus
-  AD + (champions - 1) * (ResistsPerExtraTarget + 0.1 bonus AD)`` armor and
-  0.6x that MR. Passive: every 3rd landed attack (2nd under the resist buff)
-  deals ``PassiveBaseDamage + 0.6 * AP`` magic (x0.5 vs structures); the
-  counter resets 2.5 s after the last landed attack.
+* R: 0.25 s cast (can move, no attacks), then ``SwingDamageBase + 1.0 * AP``
+  magic within 375; only if a champion was hit, 8 s of ``BaseResists + 0.4
+  bonus AD + (champions - 1) * (ResistsPerExtraTarget + 0.1 bonus AD)`` armor
+  and ``MRMult`` 0.6x that MR. Passive: landed attacks build stacks (max 2,
+  2.5 s); the attack landing at 2 stacks (1 under the active) consumes them for
+  ``PassiveBaseDamage + 0.6 * AP`` magic (x0.5 vs structures) and has an
+  uncancellable windup; against wards it triggers without being consumed.
 """
 from __future__ import annotations
 
@@ -34,7 +39,7 @@ import jax.numpy as jnp
 from .. import modern_damage as D
 from ..modern_item_data import ItemStats
 from ..modern_item_effects.core import Debuffs, neutral_debuffs
-from ..modern_world_types import KIND_CHAMPION, KIND_NONE, CCOut, Dash
+from ..modern_world_types import KIND_CHAMPION, KIND_MONSTER, KIND_NONE, KIND_WARD, CCOut, Dash
 from .core import (CODE_JAX_R_PASSIVE, JAX, NEVER, KitAttackMods, KitDefense, KitOut, cc_matrix, cooldown_row,
                    due, enemies, f32, gather, holder_rows, is_structure, later, later_after_tick, make_cast_id,
                    mana_row, out, ranked, scalar, target_dist, within_edge)
@@ -58,6 +63,7 @@ E_PER_DODGE = scalar(NAME, "E", "PercentIncreasedPerDodge")
 E_MAX_DODGES = scalar(NAME, "E", "MaxDodgesForDamageIncrease")
 E_STUN = scalar(NAME, "E", "StunDuration")
 E_AOE_MULT = 1.0 - scalar(NAME, "E", "AoEDamageReduction") / 100.0
+E_MONSTER_CAP = 9000.0                                    # MonsterDamageCap on the %HP part
 R_DELAY = 0.25
 R_RADIUS = scalar(NAME, "R", "AoESize")                   # 375
 R_AP = 1.0
@@ -66,6 +72,8 @@ R_MR_MULT = scalar(NAME, "R", "MRMult")                   # 0.6
 R_PASSIVE_AP = 0.6
 R_FALLOFF = scalar(NAME, "R", "PassiveFallOffTime")       # 2.5
 R_STRUCTURE = scalar(NAME, "R", "StructureMod")
+R_PASSIVE_STACKS = 2                                      # stacks needed (1 under the active)
+P_LEVEL_CAP = 19.0                                        # last AttackSpeedPerStack breakpoint
 
 SPELL = D.TAG_ACTIVE_SPELL
 AOE_SPELL = D.TAG_AOE | D.TAG_ACTIVE_SPELL
@@ -123,6 +131,10 @@ def dodging(state: State, kctx) -> Any:
     return _mine(kctx) & state.e_on & kctx.alive
 
 
+def _r_needed(state: State) -> Any:
+    return jnp.where(state.r_buff_on, R_PASSIVE_STACKS - 1, R_PASSIVE_STACKS)
+
+
 def _w_damage(kctx) -> Any:
     return ranked(NAME, "W", "Damage", kctx.ranks[:, 1]) + W_AP * kctx.ap
 
@@ -132,7 +144,9 @@ def _release(state: State, kctx, units, mask) -> tuple[State, D.Packets, Any, An
     n = units.x.shape[0]
     hit = mask[:, None] & enemies(kctx, units) & within_edge(kctx, units, E_RADIUS)
     base = ranked(NAME, "E", "BaseDamage", kctx.ranks[:, 2]) + E_AP * kctx.ap
-    raw = (base[:, None] + E_PCT_HP * units.max_hp[None, :]) \
+    pct = E_PCT_HP * units.max_hp
+    pct = jnp.where(units.kind == KIND_MONSTER, jnp.minimum(pct, E_MONSTER_CAP), pct)
+    raw = (base[:, None] + pct[None, :]) \
         * (1.0 + E_PER_DODGE * jnp.minimum(state.e_dodges, E_MAX_DODGES))[:, None]
     p = D.packets(hit, kctx.unit[:, None], jnp.arange(n)[None, :], raw, D.MAGIC, AOE_SPELL,
                   cast_id=state.e_cast_id[:, None])
@@ -152,7 +166,8 @@ def cast(state: State, kctx, units, order) -> tuple[State, KitOut]:
     dist = target_dist(kctx, units, order.target)
     valid_q = (order.target >= 0) & (order.target != kctx.unit) & units.alive[t] & units.targetable[t] \
         & (units.kind[t] != KIND_NONE) & ~is_structure(units.kind[t]) & (dist <= Q_RANGE + units.radius[t])
-    q = want(0) & ready[:, 0] & valid_q & ~state.q_pending
+    rooted = jnp.zeros_like(j) if kctx.rooted is None else kctx.rooted
+    q = want(0) & ready[:, 0] & valid_q & ~state.q_pending & ~rooted
     w = want(1) & ready[:, 1] & ~state.w_on
     e_start = want(2) & ready[:, 2] & ~state.e_on
     e_release = want(2) & state.e_on & (kctx.now - state.e_start >= E_MIN - 1e-6)
@@ -198,7 +213,7 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     t = jnp.clip(state.q_target, 0, n - 1)
     target_ok = units.alive[t] & (units.spawn_seq[t] == state.q_seq)
     land = state.q_pending & due(kctx, state.q_land_at) & alive & target_ok
-    strike = land & (units.team[t] != kctx.team)
+    strike = land & (units.team[t] != kctx.team) & (units.kind[t] != KIND_WARD)
     q_raw = ranked(NAME, "Q", "Damage", r[:, 0]) + kctx.bonus_ad
     p_q = D.packets(strike, kctx.unit, t, q_raw, D.PHYSICAL, SPELL, cast_id=state.q_cast_id)
     w_on_q = strike & state.w_on
@@ -241,8 +256,9 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
         r_hits=r_hits.astype(jnp.int32), stacks=stacks.astype(jnp.int32), stack_until=stack_until)
     z = jnp.zeros((c, n), jnp.float32)
     cd_start = jnp.zeros((c, 4), bool).at[:, 1].set(w_end & j).at[:, 2].set(e_end & j)
+    follow = jnp.where(strike & (units.kind[t] == KIND_CHAMPION), state.q_target, -1).astype(jnp.int32)
     return state, out(c, n, packets=D.concat_packets(p_q, p_wq, p_e, p_r), cc=CCOut(stun, z, z, z, z, z, sid),
-                      cooldown_start=cd_start, base_cooldown=_base_cd(kctx))
+                      cooldown_start=cd_start, base_cooldown=_base_cd(kctx), attack_target=follow)
 
 
 def on_attack(state: State, kctx, units, launch) -> tuple[State, KitOut]:
@@ -264,14 +280,17 @@ def on_hit(state: State, kctx, units, launch, dodging_units) -> tuple[State, Kit
     w = landed & state.w_on
     p_w = D.packets(w, kctx.unit, t, _w_damage(kctx) * struct, D.MAGIC, SPELL, cast_id=state.w_cast_id)
     has_r = kctx.ranks[:, 3] > 0
-    proc = landed & has_r & (state.r_hits >= jnp.where(state.r_buff_on, 1, 2))
+    ward = units.kind[t] == KIND_WARD
+    ready = has_r & (state.r_hits >= _r_needed(state))
+    proc = landed & ready & ~ward          # vs wards: triggers, but neither consumed nor applied
     r_raw = (ranked(NAME, "R", "PassiveBaseDamage", kctx.ranks[:, 3]) + R_PASSIVE_AP * kctx.ap) \
         * jnp.where(is_structure(units.kind[t]), R_STRUCTURE, 1.0)
     p_r = D.packets(proc, kctx.unit, t, r_raw, D.MAGIC, R_PASSIVE_FLAGS,
                     cast_id=make_cast_id(kctx, CODE_JAX_R_PASSIVE))
     state = state._replace(
         w_on=state.w_on & ~w,
-        r_hits=jnp.where(landed & has_r, jnp.where(proc, 0, state.r_hits + 1), state.r_hits).astype(jnp.int32),
+        r_hits=jnp.where(landed & has_r, jnp.where(proc, 0, jnp.minimum(state.r_hits + 1, R_PASSIVE_STACKS)),
+                         state.r_hits).astype(jnp.int32),
         r_hit_until=jnp.where(landed, later_after_tick(kctx, R_FALLOFF), state.r_hit_until))
     cd_start = jnp.zeros((c, 4), bool).at[:, 1].set(w)
     return state, out(c, n, packets=D.concat_packets(p_w, p_r), cooldown_start=cd_start,
@@ -300,7 +319,7 @@ def on_takedown(state: State, kctx, units, kills) -> State:
 
 def stats(state: State, kctx) -> ItemStats:
     j = _mine(kctx)
-    lv = jnp.minimum(jnp.asarray(kctx.level, jnp.float32), 18.0)
+    lv = jnp.minimum(jnp.asarray(kctx.level, jnp.float32), P_LEVEL_CAP)
     per_stack = 0.05 + 0.015 * jnp.floor((lv - 1.0) / 3.0)
     buff = j & state.r_buff_on
     return ItemStats(attack_speed=f32(jnp.where(j, per_stack * state.stacks, 0.0)),
@@ -316,9 +335,11 @@ def defense(state: State, kctx) -> KitDefense:
 def attack_mods(state: State, kctx) -> KitAttackMods:
     j = _mine(kctx)
     c = kctx.unit.shape[0]
+    z = jnp.zeros((c,), jnp.float32)
+    empowered = j & (state.w_on | ((kctx.ranks[:, 3] > 0) & (state.r_hits >= _r_needed(state))))
     return KitAttackMods(f32(jnp.where(j & state.w_on, RANGE_BONUS, 0.0)),
                          j & (jnp.abs(kctx.now - state.reset_at) < 0.5 * kctx.dt),
-                         j & (state.q_pending | state.r_pending), jnp.zeros((c,), bool))
+                         j & (state.q_pending | state.r_pending), jnp.zeros((c,), bool), z, z, empowered)
 
 
 def debuffs(state: State, kctx, units) -> Debuffs:

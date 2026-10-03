@@ -55,6 +55,9 @@ __all__ = [
     "structure_defense_mods", "structure_unit_view", "PlateEvents",
     "structure_damage_events", "overgrowth_packets", "turret_offense",
     "turret_attack_damage",
+    "wave_inhibitor_inputs", "slot_lane", "SpawnWrite", "spawn_lane_minions", "minion_ghosted",
+    "minion_in_lane", "GameResult", "game_result", "CHAMPION_ACQUISITION_RANGE",
+    "champion_acquisition_range", "idle_acquire", "AttackMoveOut", "attack_move_step",
 ]
 
 # Legacy controller timings, the MINIONS §3.4/§3.1 defaults (U-6).
@@ -278,7 +281,10 @@ def select_targets(ai: LaneAIState, units: WorldUnits, att: AttackState, *, now,
         vis = jnp.ones((n, n), bool)
     else:
         vis = jnp.asarray(visible, bool)[team]
-    enemy = team[:, None] != team[None, :]
+    # Raw teams for relations: jungle monsters (team NEUTRAL=2) are nobody's ally, and the
+    # clipped ``team`` above is only for indexing per-team tables.
+    raw_team = jnp.asarray(units.team, jnp.int32)
+    enemy = raw_team[:, None] != raw_team[None, :]
     ally = ~enemy & alive[None, :]
     is_champ = kind == KIND_CHAMPION
     is_minion_k = kind == KIND_MINION
@@ -304,7 +310,10 @@ def select_targets(ai: LaneAIState, units: WorldUnits, att: AttackState, *, now,
     scan = jnp.where(is_champ[None, :], jnp.where(unengaged, wake, acq)[:, None],
                      jnp.where(is_minion_k[None, :], jnp.where(unengaged, first_acq, acq)[:, None],
                                acq[:, None] + radius[None, :]))
-    targetable_kind = is_champ | is_minion_k | is_struct
+    # Team-owned summons (Herald Mercenary, Hunger Voidmites: KIND_MONSTER with a team) are
+    # attacked like minions; neutral camps never are (OBJECTIVES integration).
+    owned_summon = (kind == 6) & (raw_team < 2)
+    targetable_kind = is_champ | is_minion_k | is_struct | owned_summon
     base_valid = (minion[:, None] & enemy & alive[None, :] & jnp.asarray(units.targetable, bool)[None, :]
                   & vis & targetable_kind[None, :] & (d < scan))
     cand = base_valid & (ai.ignore_until <= now)
@@ -368,7 +377,7 @@ def select_targets(ai: LaneAIState, units: WorldUnits, att: AttackState, *, now,
     cand_acq = cand & ~(restrict[:, None] & closest_min & ~fw_melee[None, :])
     onehot = (target[:, None] == cols[None, :]) & minion[:, None]
     # attackers[m, c] = allied (to m) minions currently targeting c
-    same_team = (team[:, None] == team[None, :]).astype(jnp.float32)
+    same_team = (raw_team[:, None] == raw_team[None, :]).astype(jnp.float32)
     attackers = same_team @ onehot.astype(jnp.float32)
     preferred = (unit_k[None, :] == (unit_k % 3)[:, None])
     spread = jnp.where(restrict[:, None] & fw_melee[None, :] & closest_min,
@@ -391,7 +400,7 @@ def select_targets(ai: LaneAIState, units: WorldUnits, att: AttackState, *, now,
     turret = (kind == KIND_TURRET) & alive
     t_range = d <= (jnp.asarray(units.attack_range, jnp.float32)[:, None] + radius[:, None] + radius[None, :])
     t_valid = (turret[:, None] & enemy & alive[None, :] & jnp.asarray(units.targetable, bool)[None, :]
-               & vis & (is_champ | is_minion_k)[None, :] & t_range)
+               & vis & (is_champ | is_minion_k | owned_summon)[None, :] & t_range)
     lock = jnp.where((ai.target >= 0) & (jnp.asarray(units.spawn_seq, jnp.int32)[jnp.clip(ai.target, 0, n - 1)]
                                           == ai.target_seq), ai.target, -1)
     hits_ally_champ = cac | (dmg & is_champ[:, None] & is_champ[None, :])
@@ -809,3 +818,239 @@ def overgrowth_packets(towers: TowersState, units: WorldUnits, champion_attack_h
     flags = D.TAG_PROC | D.PROP_NO_DAMAGE_MOD | D.PROP_NO_OMNIVAMP
     pk = D.packets(proc, attacker, jnp.arange(n, dtype=jnp.int32), jnp.where(proc, dmg, 0.), TRUE, flags=flags)
     return towers._replace(turret=st), pk
+
+
+# --- all three lanes: spawning into per-lane slot ranges (LANES_TERRAIN.md §1) ----
+def wave_inhibitor_inputs(towers: TowersState) -> dict:
+    """``modern_minions.lane_spawn_step`` keyword inputs from structure state.
+
+    Index ``[t, l]`` describes team ``t``'s *enemy* in lane ``l``: whether
+    the inhibitor of team ``1-t`` in lane ``l`` is dead, whether all three
+    of them are, and when that inhibitor respawns (inf when alive).
+    """
+    st = towers.turret
+    inhib = towers.is_structure & (st.tier == T.INHIBITOR_BUILDING)
+    dead = inhib & (st.hp <= 0.)
+    team = jnp.asarray(towers.team, jnp.int32)
+    lane = jnp.asarray(towers.lane, jnp.int32)
+    sel = lambda o, l: inhib & (team == o) & (lane == l)
+    down = jnp.stack([jnp.stack([jnp.any(dead & sel(o, l)) for l in range(3)]) for o in (0, 1)])
+    resp = jnp.stack([jnp.stack([jnp.min(jnp.where(dead & sel(o, l), st.respawn_at, jnp.inf)) for l in range(3)])
+                      for o in (0, 1)])
+    all_down = jnp.all(down, axis=1)
+    enemy = jnp.asarray([1, 0])
+    return dict(enemy_inhibitor_down=down[enemy], all_enemy_inhibitors_down=jnp.broadcast_to(
+        all_down[enemy][:, None], (2, 3)), inhibitor_respawn_at=resp[enemy].astype(jnp.float32))
+
+
+def slot_lane(n_units: int, slot0: int, per_lane: int = 40):
+    """(N,) lane id of each minion slot (``slot0 + 40*lane + k``), -1 outside the minion ranges."""
+    i = jnp.arange(n_units) - slot0
+    return jnp.where((i >= 0) & (i < 3 * per_lane), i // per_lane, -1).astype(jnp.int32)
+
+
+class SpawnWrite(NamedTuple):
+    """Minion slots to (re)initialise this tick, (N,) per world slot.
+
+    Write every listed field where ``pick``; also reset the slot's attack
+    state, CC timers and ``lane_wp`` to 0, set ``spawn_time = now``,
+    ``kind = KIND_MINION``, ``alive = targetable = True`` and
+    ``spawn_seq = next_seq + seq_offset`` (then ``next_seq += count``).
+    """
+    pick: Any               # bool
+    team: Any               # int32
+    sub: Any                # int32 minion type
+    lane: Any               # int32 0 bot, 1 mid, 2 top
+    x: Any                  # barracks position of (team, lane)
+    y: Any
+    stats: MinionStats      # (N,) spawn stats (hp, armor, ad, range, speed, gold, xp, windup, missile ...)
+    seq_offset: Any         # int32 0..count-1 among picked slots, -1 elsewhere
+    count: Any              # () int32 units spawned
+    overflow: Any           # () int32 due units dropped for lack of a free slot in their lane (must stay 0)
+
+
+def spawn_lane_minions(spawn: M.LaneSpawnState, towers: TowersState, kind, alive, *, now, slot0: int,
+                       per_lane: int = 40, lanes=(0, 1, 2)):
+    """All-lane wave spawning (MINIONS §2): ``(spawn_state, SpawnWrite, due)``.
+
+    Lane ``l`` owns slots ``[slot0 + per_lane*l, slot0 + per_lane*(l+1))``
+    shared by both teams; free = ``KIND_NONE`` or a dead minion. Blue's unit
+    takes the lowest free slot of the lane, then Red's. ``lanes`` restricts
+    which lanes spawn (static; e.g. ``(2,)`` for the top-only scenario);
+    the cursors of the other lanes still advance so enabling them later
+    stays on the global wave clock. Super minions follow the enemy
+    inhibitors of each lane (``wave_inhibitor_inputs``).
+    """
+    now = jnp.asarray(now, jnp.float32)
+    spawn, due = M.lane_spawn_step(spawn, now, **wave_inhibitor_inputs(towers))
+    kind = jnp.asarray(kind, jnp.int32)
+    n = kind.shape[0]
+    idx = jnp.arange(n)
+    free = (kind == KIND_NONE) | ((kind == KIND_MINION) & ~jnp.asarray(alive, bool))
+    pick = jnp.zeros((n,), bool)
+    team_o = jnp.zeros((n,), jnp.int32)
+    sub_o = jnp.zeros((n,), jnp.int32)
+    lane_o = jnp.full((n,), -1, jnp.int32)
+    overflow = jnp.int32(0)
+    for l in lanes:
+        m = free & (idx >= slot0 + per_lane * l) & (idx < slot0 + per_lane * (l + 1))
+        for t in (0, 1):
+            p = m & ((jnp.cumsum(m) - 1) == 0) & due.due[t, l]
+            pick, m = pick | p, m & ~p
+            team_o = jnp.where(p, t, team_o)
+            sub_o = jnp.where(p, due.minion_type[t, l], sub_o)
+            lane_o = jnp.where(p, l, lane_o)
+            overflow = overflow + (due.due[t, l] & ~jnp.any(p)).astype(jnp.int32)
+    stats = minion_spawn_stats(jnp.clip(sub_o, 0, 3), now, team_o)
+    stats = MinionStats(*(jnp.broadcast_to(jnp.asarray(v), (n,)) for v in stats))
+    bar = jnp.asarray(BARRACKS)[team_o, jnp.clip(lane_o, 0, 2)]
+    seq = jnp.where(pick, jnp.cumsum(pick) - 1, -1).astype(jnp.int32)
+    write = SpawnWrite(pick, team_o, sub_o, lane_o, bar[:, 0], bar[:, 1], stats, seq,
+                       jnp.sum(pick).astype(jnp.int32), overflow)
+    return spawn, write, due
+
+
+def minion_ghosted(ai: LaneAIState, units: WorldUnits, now):
+    """(N,) first-wave minions ignore unit collision for 28 s (side lanes) / 18 s (mid)
+    after spawning (MINIONS §2.8, WIKI M); feed it to the collision ``ghosted`` mask."""
+    first = (jnp.asarray(units.kind) == KIND_MINION) & jnp.asarray(units.alive, bool) \
+        & (M.wave_index_at(units.spawn_time) == 0)
+    return first & ((jnp.asarray(now, jnp.float32) - units.spawn_time) < M.first_wave_ghost_s(ai.lane))
+
+
+def minion_in_lane(ai: LaneAIState, units: WorldUnits, lane: int = LANE_TOP):
+    """(N,) lane minions of ``lane`` (spawn-lane assignment, ROLE_QUESTS §2.1 U-RQ-2 default):
+    ``EconomyInputs.minion_in_lane`` for the top quest's in-lane minion rules."""
+    return (jnp.asarray(units.kind) == KIND_MINION) & (ai.lane == lane)
+
+
+# --- game end (TOWERS §1.4) ---------------------------------------------------
+class GameResult(NamedTuple):
+    over: Any               # () bool: a Nexus is destroyed
+    winner: Any             # () int32 0 blue / 1 red; -1 while running or on a same-tick double kill
+
+
+def game_result(towers: TowersState) -> GameResult:
+    """Nexus destruction ends the game: the team whose Nexus stands wins.
+
+    Read it after ``structure_damage_events`` (whose ``nexus_destroyed``
+    flags the tick it happens). Nexuses never respawn, so the result is
+    sticky; ``modern_step`` should freeze or reset once ``over``.
+    """
+    st = towers.turret
+    nexus = towers.is_structure & (st.tier == T.NEXUS_BUILDING)
+    team = jnp.asarray(towers.team, jnp.int32)
+    lost = jnp.stack([jnp.any(nexus & (team == k) & (st.hp <= 0.)) for k in (0, 1)])
+    over = jnp.any(lost)
+    winner = jnp.where(lost[0] & ~lost[1], 1, jnp.where(lost[1] & ~lost[0], 0, -1)).astype(jnp.int32)
+    return GameResult(over, winner)
+
+
+# --- champion acquisition, idle auto-attack and attack-move (LANES_TERRAIN.md §4) --
+CHAMPION_ACQUISITION_RANGE = 400.0      # Garen and Jax CharacterRecord acquisitionRange (CLIENT)
+ATTACK_MOVE_ARRIVE = 10.0               # order point reached (INFERRED L)
+NEUTRAL_TEAM = 2
+
+
+def champion_acquisition_range(attack_range, base_attack_range, base_acquisition=CHAMPION_ACQUISITION_RANGE):
+    """Acquisition radius: the record's ``acquisitionRange`` shifted by attack-range
+    modifiers ("Attack range modifiers affect this value by the same amount", wiki
+    Champion statistic, WIKI H)."""
+    return jnp.asarray(base_acquisition, jnp.float32) + (jnp.asarray(attack_range, jnp.float32)
+                                                         - jnp.asarray(base_attack_range, jnp.float32))
+
+
+def _hostile(units: WorldUnits, champion_unit, visible, *, monster_aggro=None, champions_only=False,
+             wards=True):
+    """(C, N) valid attack-move / auto-acquire candidates (wiki Basic attack: champions, summons,
+    minions, turrets (structures), *attacked* monsters and wards)."""
+    kind = jnp.asarray(units.kind, jnp.int32)
+    team = jnp.asarray(units.team, jnp.int32)
+    me = jnp.asarray(champion_unit, jnp.int32)
+    c, n = me.shape[0], kind.shape[0]
+    kinds = (kind == KIND_CHAMPION) | (kind == KIND_MINION) | (kind == KIND_TURRET) | (kind == KIND_INHIBITOR) \
+        | (kind == KIND_NEXUS)
+    if wards:
+        kinds = kinds | (kind == 7)                                       # KIND_WARD
+    if champions_only:
+        kinds = kind == KIND_CHAMPION
+    enemy = (team[None, :] != team[me][:, None]) & (team[None, :] != NEUTRAL_TEAM) & kinds[None, :]
+    if monster_aggro is not None and not champions_only:
+        enemy = enemy | ((kind == 6)[None, :] & jnp.asarray(monster_aggro, bool))   # KIND_MONSTER
+    vis = jnp.ones((c, n), bool) if visible is None else jnp.asarray(visible, bool)
+    ok = enemy & jnp.asarray(units.alive, bool)[None, :] & jnp.asarray(units.targetable, bool)[None, :] & vis
+    return ok & (jnp.arange(n)[None, :] != me[:, None])
+
+
+def _nearest(mask, dist):
+    d = jnp.where(mask, dist, jnp.inf)
+    i = jnp.argmin(d, axis=1).astype(jnp.int32)
+    return jnp.where(jnp.isfinite(jnp.min(d, axis=1)), i, -1)
+
+
+def idle_acquire(units: WorldUnits, champion_unit, visible, acquisition_range, *, monster_aggro=None):
+    """(C,) target an idle champion auto-acquires: the nearest valid enemy whose hitbox is within
+    its acquisition radius (wiki Basic attack "Auto-attacking", WIKI H; edge distance and
+    center-distance ordering INFERRED M). The champion then chases it like an attack order."""
+    me = jnp.asarray(champion_unit, jnp.int32)
+    x, y, r = (jnp.asarray(v, jnp.float32) for v in (units.x, units.y, units.radius))
+    center = jnp.sqrt((x[None, :] - x[me][:, None]) ** 2 + (y[None, :] - y[me][:, None]) ** 2)
+    edge = center - r[None, :] - r[me][:, None]
+    ok = _hostile(units, me, visible, monster_aggro=monster_aggro, wards=False) \
+        & (edge <= jnp.asarray(acquisition_range, jnp.float32)[:, None])
+    return _nearest(ok, center)
+
+
+class AttackMoveOut(NamedTuple):
+    target: Any             # (C,) int32 unit to attack/chase; -1 = walk to the order point
+    target_seq: Any         # (C,) spawn_seq of target (identity for the next tick)
+    goal_x: Any             # (C,) where to walk this tick (target position, or the order point)
+    goal_y: Any
+    active: Any             # (C,) bool attack-move still in force (False once the point is reached)
+
+
+def attack_move_step(active, point_x, point_y, held, held_seq, units: WorldUnits, champion_unit, visible,
+                     acquisition_range, *, cursor_x=None, cursor_y=None, cursor_radius=None,
+                     champions_only=False, monster_aggro=None, arrive=ATTACK_MOVE_ARRIVE) -> AttackMoveOut:
+    """One tick of the client attack-move order (wiki Basic attack "Attack-move", WIKI H).
+
+    * While a previously acquired ``held`` target stays valid (same
+      ``spawn_seq``, alive, targetable, visible) the champion keeps it, like a
+      normal attack order: acquisition is not re-scanned (wiki "Acquisition").
+    * Otherwise it scans for the valid hostile nearest the *champion* whose
+      hitbox is within its acquisition radius (default client setting).
+      With "Attack move on cursor" (pass ``cursor_x/cursor_y``), units within
+      ``cursor_radius`` (default: the acquisition radius, INFERRED L) of the
+      cursor are tried first, nearest to the cursor; if none, the champion scan.
+    * No target: walk to the order point; within ``arrive`` of it the order
+      ends (``active`` False) and the champion falls back to idle acquisition.
+    No champion-over-minion priority exists (the "Target Champions Only"
+    toggle is ``champions_only``). Candidates: enemy champions, minions,
+    structures, wards, and monsters only where ``monster_aggro[c, j]``.
+    """
+    me = jnp.asarray(champion_unit, jnp.int32)
+    act = jnp.asarray(active, bool)
+    n = jnp.asarray(units.kind).shape[0]
+    x, y, r = (jnp.asarray(v, jnp.float32) for v in (units.x, units.y, units.radius))
+    hostile = _hostile(units, me, visible, monster_aggro=monster_aggro, champions_only=champions_only)
+    held = jnp.asarray(held, jnp.int32)
+    hs = jnp.clip(held, 0, n - 1)
+    rows = jnp.arange(me.shape[0])
+    keep = act & (held >= 0) & hostile[rows, hs] & (jnp.asarray(units.spawn_seq, jnp.int32)[hs]
+                                                    == jnp.asarray(held_seq, jnp.int32))
+    center = jnp.sqrt((x[None, :] - x[me][:, None]) ** 2 + (y[None, :] - y[me][:, None]) ** 2)
+    acq = jnp.asarray(acquisition_range, jnp.float32)[:, None]
+    scan = _nearest(hostile & (center - r[None, :] - r[me][:, None] <= acq), center)
+    if cursor_x is not None:
+        cr = acq[:, 0] if cursor_radius is None else jnp.broadcast_to(jnp.asarray(cursor_radius, jnp.float32), acq[:, 0].shape)
+        dc = jnp.sqrt((x[None, :] - jnp.asarray(cursor_x)[:, None]) ** 2 + (y[None, :] - jnp.asarray(cursor_y)[:, None]) ** 2)
+        near_cursor = _nearest(hostile & (dc - r[None, :] <= cr[:, None]), dc)
+        scan = jnp.where(near_cursor >= 0, near_cursor, scan)
+    target = jnp.where(keep, held, jnp.where(act, scan, -1)).astype(jnp.int32)
+    ts = jnp.clip(target, 0, n - 1)
+    px, py = jnp.asarray(point_x, jnp.float32), jnp.asarray(point_y, jnp.float32)
+    gx = jnp.where(target >= 0, x[ts], px)
+    gy = jnp.where(target >= 0, y[ts], py)
+    arrived = (target < 0) & (jnp.sqrt((x[me] - px) ** 2 + (y[me] - py) ** 2) <= arrive)
+    return AttackMoveOut(target, jnp.where(target >= 0, jnp.asarray(units.spawn_seq, jnp.int32)[ts], 0),
+                         gx, gy, act & ~arrived)

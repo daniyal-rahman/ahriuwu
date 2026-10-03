@@ -20,6 +20,12 @@ Hook protocol (both kits run for every holder, gated by ``champion_id``)::
     defense(state, kctx) -> KitDefense
     attack_mods(state, kctx) -> KitAttackMods
     debuffs(state, kctx, units) -> modern_item_effects.core.Debuffs   (target-side, (N,))
+    ghosted(state, kctx) -> (C,) bool                                 (Garen E ghosting)
+
+Optional world inputs/outputs (``None`` = the world does not supply/consume
+them yet; every kit keeps a safe fallback, see docs/modern/CHAMPIONS.md):
+``KitCtx.attack_target_kind`` / ``KitCtx.rooted``; ``KitOut.attack_target``;
+``KitAttackMods.windup`` / ``period`` / ``uncancellable``.
 
 Timing: ``now`` is the tick's time, constant across the hooks of one tick;
 the world calls ``cast`` before ``periodic`` (legacy ``apply_casts`` then
@@ -41,8 +47,8 @@ import jax.numpy as jnp
 from ...data.modern import cooldowns, spell, values
 from .. import modern_damage as D
 from ..modern_item_effects.core import ShieldGrant
-from ..modern_world_types import (KIND_CHAMPION, KIND_NONE, STRUCTURE_KINDS, CCOut, Dash, merge_cc, no_cc,
-                                  no_dash)
+from ..modern_world_types import (KIND_CHAMPION, KIND_NONE, KIND_WARD, STRUCTURE_KINDS, CCOut, Dash, merge_cc,
+                                  no_cc, no_dash)
 
 GAREN, JAX = 86, 24
 Q, W, E, R = range(4)
@@ -85,7 +91,10 @@ class KitCtx(NamedTuple):
     dt: Any                          # () seconds
     silenced: Any
     stunned: Any
-    in_combat_ms_since_damaged: Any  # seconds since the holder last took damage
+    in_combat_ms_since_damaged: Any  # seconds since the holder last took damage (unused by 26.19 kits)
+    # Optional world inputs (defaults keep the kits self-contained):
+    attack_target_kind: Any = None   # (C,) int32 world kind of the unit the holder attacks (KIND_NONE if none)
+    rooted: Any = None               # (C,) bool (Jax Q cantCastWhileRooted)
 
     @property
     def total_ad(self):
@@ -107,6 +116,8 @@ class KitOut(NamedTuple):
     cast_id: Any                     # (C,) int32, 0 none
     cast_lockout: Any                # (C,) seconds the champion can't move/attack
     cleanse_slow: Any = None         # (C,) bool: remove the holder's slows (Garen Q); None = never
+    attack_target: Any = None        # (C,) int32: issue a basic-attack order on this unit (-1 none; Jax Q
+                                     # on an enemy champion); None = never
 
 
 class KitDefense(NamedTuple):
@@ -120,7 +131,10 @@ class KitAttackMods(NamedTuple):
     extra_range: Any                 # (C,) attack range bonus
     attack_reset: Any                # (C,) bool: a reset was requested this tick
     cannot_attack: Any               # (C,) bool
-    cannot_crit: Any = None          # (C,) bool: the next attack is a non-crit spell attack (Garen Q)
+    cannot_crit: Any = None          # (C,) bool: the next attack cannot crit (no 26.19 kit sets it)
+    windup: Any = None               # (C,) seconds: override the next attack's windup (> 0), else the stat windup
+    period: Any = None               # (C,) seconds: override the next attack's total attack time (> 0)
+    uncancellable: Any = None        # (C,) bool: the next attack's windup cannot be cancelled
 
 
 def f32(x: Any) -> Any:
@@ -207,9 +221,10 @@ def onehot(idx: Any, n: int) -> Any:
 
 
 def enemies(kctx: KitCtx, units) -> Any:
-    """(C, N) living, targetable enemy non-structure units (spell AoE targets)."""
+    """(C, N) living, targetable enemy non-structure, non-ward units (spell AoE targets;
+    wards only take basic-attack hits)."""
     return (units.team[None, :] != kctx.team[:, None]) & units.alive[None, :] & units.targetable[None, :] \
-        & (units.kind[None, :] != KIND_NONE) & ~is_structure(units.kind)[None, :]
+        & (units.kind[None, :] != KIND_NONE) & (units.kind[None, :] != KIND_WARD) & ~is_structure(units.kind)[None, :]
 
 
 def center_dist(kctx: KitCtx, units) -> Any:
@@ -245,7 +260,7 @@ def no_out(c: int, n: int) -> KitOut:
                   ShieldGrant(zs, zs.astype(jnp.int32), zs, zs), zc,
                   jnp.zeros((c, 4), bool), jnp.zeros((c, 4), jnp.float32), jnp.zeros((c,), bool),
                   jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32), zc,
-                  jnp.zeros((c,), bool))
+                  jnp.zeros((c,), bool), jnp.full((c,), -1, jnp.int32))
 
 
 def out(c: int, n: int, **fields) -> KitOut:
@@ -256,6 +271,7 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
     acc = no_out(c, n)
     for p in parts:
         cs = p.cleanse_slow if p.cleanse_slow is not None else jnp.zeros((c,), bool)
+        at = p.attack_target if p.attack_target is not None else jnp.full((c,), -1, jnp.int32)
         acc = KitOut(
             D.concat_packets(acc.packets, p.packets), merge_cc(acc.cc, p.cc),
             Dash(*(jnp.where(p.dash.active, b, a) for a, b in zip(acc.dash, p.dash))),
@@ -266,7 +282,8 @@ def merge_out(parts: list[KitOut], c: int, n: int) -> KitOut:
             acc.attack_reset | p.attack_reset, acc.cast_started | p.cast_started,
             jnp.where(p.cast_started, p.cast_slot, acc.cast_slot),
             jnp.where(p.cast_started, p.cast_id, acc.cast_id),
-            jnp.maximum(acc.cast_lockout, p.cast_lockout), acc.cleanse_slow | cs)
+            jnp.maximum(acc.cast_lockout, p.cast_lockout), acc.cleanse_slow | cs,
+            jnp.where(at >= 0, at, acc.attack_target).astype(jnp.int32))
     return acc
 
 
@@ -284,4 +301,22 @@ def neutral_defense(c: int) -> KitDefense:
 
 def neutral_attack_mods(c: int) -> KitAttackMods:
     f = jnp.zeros((c,), bool)
-    return KitAttackMods(jnp.zeros((c,), jnp.float32), f, f, f)
+    z = jnp.zeros((c,), jnp.float32)
+    return KitAttackMods(z, f, f, f, z, z, f)
+
+
+def combine_attack_mods(a: KitAttackMods, b: KitAttackMods) -> KitAttackMods:
+    """Merge two holders' kit mods (kits are gated per holder, so at most one is non-neutral)."""
+    o = lambda x, d: d if x is None else x          # noqa: E731
+    c = a.extra_range.shape[0]
+    f, z = jnp.zeros((c,), bool), jnp.zeros((c,), jnp.float32)
+    return KitAttackMods(a.extra_range + b.extra_range, a.attack_reset | b.attack_reset,
+                         a.cannot_attack | b.cannot_attack, o(a.cannot_crit, f) | o(b.cannot_crit, f),
+                         jnp.maximum(o(a.windup, z), o(b.windup, z)), jnp.maximum(o(a.period, z), o(b.period, z)),
+                         o(a.uncancellable, f) | o(b.uncancellable, f))
+
+
+def pulses(kctx: KitCtx, period: float) -> Any:
+    """Number of ``period`` grid boundaries crossed by this tick (world HP-regen convention)."""
+    now = jnp.asarray(kctx.now, jnp.float32)
+    return jnp.floor(now / period + 1e-6) - jnp.floor((now - kctx.dt) / period + 1e-6)

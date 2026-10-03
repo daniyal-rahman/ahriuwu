@@ -22,7 +22,11 @@ from .core import Attack, CC, Cast, Ctx, Debuffs, Effects, HolderDefense, Kills,
 
 
 class UnitStatus(NamedTuple):
-    """Per-unit timed statuses written by item effects, shape (N,)."""
+    """Per-unit timed statuses written by item effects, shape (N,).
+
+    ``slow``/``slow_until`` are bookkeeping for item-only callers; the world tick (``modern_step``)
+    routes ``Effects.slow`` into ``modern_mechanics`` CC timers, the single slow state movement reads.
+    """
     slow: Any
     slow_until: Any
     grievous_until: Any

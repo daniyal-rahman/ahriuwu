@@ -11,8 +11,9 @@ from lanerl_jax.sim import modern_champions as K
 from lanerl_jax.sim import modern_damage as D
 from lanerl_jax.sim.modern_champions import core, garen as G
 from lanerl_jax.sim.modern_item_effects.core import Kills, Report
-from lanerl_jax.sim.modern_world_types import (KIND_CHAMPION, KIND_MINION, KIND_TURRET, AttackLaunch, CastOrder,
-                                               WorldUnits)
+from lanerl_jax.sim.modern_damage import Resolved
+from lanerl_jax.sim.modern_world_types import (KIND_CHAMPION, KIND_MINION, KIND_MONSTER, KIND_TURRET, KIND_WARD,
+                                               AttackLaunch, CastOrder, WorldUnits)
 
 DT = 1.0 / 30.0
 GAREN_UNIT, JAX_UNIT, MINION_RED, MINION_RED2, TURRET_RED, MINION_BLUE = range(6)
@@ -109,15 +110,26 @@ def test_garen_q_empowered_attack_silence_and_reset(rank):
     st = K.init(2, 6)
     st, out = K.cast(st, k, u, order([0, -1]))
     assert bool(out.cast_started[0]) and int(out.cast_slot[0]) == 0 and not bool(out.cast_started[1])
-    assert bool(out.cooldown_start[0, 0]) and bool(out.attack_reset[0]) and bool(out.cleanse_slow[0])
+    # Cooldown is post-effect (SpecialCase_DelayedCooldown): not started at cast.
+    assert not bool(out.cooldown_start[0, 0]) and bool(out.attack_reset[0]) and bool(out.cleanse_slow[0])
     np.testing.assert_allclose(float(out.base_cooldown[0, 0]), 8.0)
     assert float(out.mana_cost[0]) == 0.0
     cid = int(out.cast_id[0])
     assert cid > 0
     mods = K.attack_mods(st, k)
-    assert float(mods.extra_range[0]) == 50.0 and bool(mods.attack_reset[0]) and bool(mods.cannot_crit[0])
+    assert float(mods.extra_range[0]) == 50.0 and bool(mods.attack_reset[0])
+    # GarenQAttack rolls crit as a normal attack (only the bonus damage never crits).
+    assert not bool(mods.cannot_crit[0]) and bool(mods.uncancellable[0])
+    # mOverrideAttackTime: 1.7 - 0.2 * bonus AS (0.3 here), windup 20% of it.
+    np.testing.assert_allclose(float(mods.period[0]), 1.7 - 0.2 * 0.3, rtol=1e-6)
+    np.testing.assert_allclose(float(mods.windup[0]), 0.2 * (1.7 - 0.2 * 0.3), rtol=1e-6)
+    assert float(mods.period[1]) == 0.0 and not bool(mods.uncancellable[1])
     np.testing.assert_allclose(float(K.stats(st, k).percent_move_speed[0]), 0.35, rtol=1e-6)
+    # No recast while the empowered attack is pending.
+    _, again = K.cast(st, at(k, 10.2), u, order([0, -1]))
+    assert not bool(again.cast_started[0])
     st, out = K.on_hit(st, at(k, 10.5), u, launch([True, False], [JAX_UNIT, -1]))
+    assert bool(out.cooldown_start[0, 0]) and not bool(out.cooldown_start[1, 0])
     p = valid(out.packets)
     assert len(p["raw"]) == 1 and p["dst"][0] == JAX_UNIT and p["dtype"][0] == D.PHYSICAL
     # Total Q attack = BaseDamage + 1.5 total AD; the world's basic attack supplies 1.0 AD.
@@ -128,6 +140,10 @@ def test_garen_q_empowered_attack_silence_and_reset(rank):
     assert int(out.cc.cast_id[0, JAX_UNIT]) == cid
     assert float(out.cc.silence.sum()) == pytest.approx(1.5)
     assert not bool(st.garen.q_on[0])
+    # The Q attack's recovery (0.8 T after the hit) blocks the next attack.
+    lock = 10.5 + 0.8 * (1.7 - 0.2 * 0.3)
+    assert bool(K.attack_mods(st, at(k, lock - 0.05)).cannot_attack[0])
+    assert not bool(K.attack_mods(st, at(k, lock + 0.01)).cannot_attack[0])
     # Consumed: the next attack is plain.
     _, out = K.on_hit(st, at(k, 11.0), u, launch([True, False], [JAX_UNIT, -1]))
     assert not np.asarray(out.packets.valid).any()
@@ -142,8 +158,8 @@ def test_garen_q_haste_and_window_expire():
     st, _ = K.periodic(st, at(k, 10.0 + dur), units())
     assert float(K.stats(st, k).percent_move_speed[0]) == 0
     assert bool(st.garen.q_on[0])
-    st, _ = K.periodic(st, at(k, 14.5), units())
-    assert not bool(st.garen.q_on[0])
+    st, out = K.periodic(st, at(k, 14.5), units())
+    assert not bool(st.garen.q_on[0]) and bool(out.cooldown_start[0, 0])     # cooldown on expiry
 
 
 def test_garen_q_dodged_by_jax_e_consumes_without_effect():
@@ -204,6 +220,19 @@ def test_garen_w_passive_stacks_on_takedown():
     np.testing.assert_allclose(float(K.stats(st, k).armor[0]), 30.0, rtol=1e-6)
 
 
+def test_garen_w_stack_sources_and_learn_gate():
+    u = units(kind=[KIND_CHAMPION, KIND_CHAMPION, KIND_MONSTER, KIND_WARD, KIND_TURRET, KIND_MINION])
+    killed = jnp.zeros((2, 6), bool).at[0, 2].set(True).at[0, 3].set(True).at[0, 4].set(True)
+    kills = Kills(jnp.zeros(2), jnp.asarray([3.0, 0.0]), jnp.zeros(2), jnp.zeros(2, bool), killed)
+    # Monster kill: 1 stack; ward and turret kills and assists: none.
+    st = K.on_takedown(K.init(2, 6), ctx(), u, kills)
+    np.testing.assert_allclose(float(st.garen.w_stacks[0]), 1.0)
+    # V25.23: no stacks before W is learned.
+    unlearned = ctx(ranks=jnp.asarray([[1, 0, 1, 0], [1, 1, 1, 0]], jnp.int32))
+    st = K.on_takedown(K.init(2, 6), unlearned, u, kills._replace(minion_kill=jnp.asarray([5.0, 0.0])))
+    assert float(st.garen.w_stacks[0]) == 0.0
+
+
 @pytest.mark.parametrize("rank,bonus_as", [(1, 0.0), (3, 0.3), (5, 0.6)])
 def test_garen_e_spin_ticks_damage_and_ids(rank, bonus_as):
     k = ctx(ranks=jnp.asarray([[1, 1, rank, 0], [1, 1, 1, 0]], jnp.int32),
@@ -215,12 +244,13 @@ def test_garen_e_spin_ticks_damage_and_ids(rank, bonus_as):
     assert bool(K.attack_mods(st, k).cannot_attack[0])
     per_tick = jv("Garen", "E", "BaseDamagePerTick", rank) + jv("Garen", "E", "ADRatioPerTick", rank) * 130.0
     n_ticks = 7 + int(np.floor(bonus_as / 0.25))
-    ids, total, now, ended = [], 0, 10.0, None
+    ids, total, now, ended, times = [], 0, 10.0, None, []
     for i in range(int(3.2 / DT)):
         st, out = K.periodic(st, at(k, now), u)
         p = valid(out.packets)
         if len(p["raw"]):
             total += 1
+            times.append(now)
             assert set(p["dst"]) == {MINION_RED, MINION_RED2}
             np.testing.assert_allclose(p["raw"][p["dst"] == MINION_RED], per_tick * 1.25, rtol=1e-5)
             np.testing.assert_allclose(p["raw"][p["dst"] == MINION_RED2], per_tick, rtol=1e-5)
@@ -232,20 +262,54 @@ def test_garen_e_spin_ticks_damage_and_ids(rank, bonus_as):
             ended = now
         now += DT
     assert total == n_ticks
+    # Spin k lands when it completes, at k * 3 / n after the cast (tick whose end reaches it).
+    np.testing.assert_allclose(np.asarray(times) + DT, 10.0 + 3.0 * np.arange(1, n_ticks + 1) / n_ticks, atol=DT + 1e-4)
     assert len(set(ids)) == n_ticks       # one instance per tick (Conqueror stacks per tick)
     assert ended is not None and ended == pytest.approx(10.0 + 3.0 - DT, abs=DT)
     assert not bool(K.attack_mods(st, k).cannot_attack[0])
 
 
-def test_garen_e_cancel_after_one_second_and_crit():
-    k = ctx(crit_chance=jnp.ones((2,), jnp.float32))
+@pytest.mark.parametrize("crit_damage,mult", [(2.0, 1.3), (2.3, 1.39), (1.75, 1.225)])
+def test_garen_e_crit_uses_thirty_percent_of_bonus_crit_damage(crit_damage, mult):
+    # 26.1: E crit ratio 30% of bonus (1.3x base 200% crit, 1.39x with IE's +30%).
+    k = ctx(crit_chance=jnp.ones((2,), jnp.float32), crit_damage=jnp.full((2,), crit_damage, jnp.float32))
+    u = units(x=[0.0, 2000.0, 100.0, 2500.0, 3000.0, -100.0])
+    st, _ = K.cast(K.init(2, 6), k, u, order([2, -1]))
+    first = 10.0 + 3.0 / 8 - DT          # 8 spins at 30% bonus AS
+    st, out = K.periodic(st, at(k, first), u)
+    p = valid(out.packets)
+    per_tick = jv("Garen", "E", "BaseDamagePerTick", 3) + jv("Garen", "E", "ADRatioPerTick", 3) * 130.0
+    np.testing.assert_allclose(p["raw"], [per_tick * 1.25 * mult], rtol=1e-5)
+    assert p["flags"][0] & D.PROP_CRIT
+    np.testing.assert_allclose(float(G.e_crit_multiplier(crit_damage)), mult, rtol=1e-6)
+
+
+def test_garen_e_damage_tracks_live_ad_and_no_tick_at_cast():
+    k = ctx()
     u = units(x=[0.0, 2000.0, 100.0, 2500.0, 3000.0, -100.0])
     st, _ = K.cast(K.init(2, 6), k, u, order([2, -1]))
     st, out = K.periodic(st, k, u)
-    p = valid(out.packets)
-    per_tick = jv("Garen", "E", "BaseDamagePerTick", 3) + jv("Garen", "E", "ADRatioPerTick", 3) * 130.0
-    np.testing.assert_allclose(p["raw"], [per_tick * 1.25 * 1.3], rtol=1e-5)
-    assert p["flags"][0] & D.PROP_CRIT
+    assert not np.asarray(out.packets.valid).any()           # spin 1 completes at 3/8 s
+    assert bool(K.ghosted(st, k)[0]) and not bool(K.ghosted(st, k)[1])
+    k2 = at(k, 10.0 + 3.0 / 8 - DT)._replace(bonus_ad=jnp.full((2,), 80.0, jnp.float32))
+    st, out = K.periodic(st, k2, u)
+    per_tick = jv("Garen", "E", "BaseDamagePerTick", 3) + jv("Garen", "E", "ADRatioPerTick", 3) * 180.0
+    np.testing.assert_allclose(valid(out.packets)["raw"], [per_tick * 1.25], rtol=1e-5)
+
+
+def test_garen_r_interrupts_judgment():
+    k = ctx()
+    u = units()
+    st, _ = K.cast(K.init(2, 6), k, u, order([2, -1]))
+    st, out = K.cast(st, at(k, 10.3), u, order([3, -1], [JAX_UNIT, -1]))
+    assert bool(out.cast_started[0]) and int(out.cast_slot[0]) == 3
+    assert not bool(st.garen.e_on[0]) and bool(out.cooldown_start[0, 2]) and bool(out.cooldown_start[0, 3])
+
+
+def test_garen_e_cancel_after_one_second():
+    k = ctx()
+    u = units(x=[0.0, 2000.0, 100.0, 2500.0, 3000.0, -100.0])
+    st, _ = K.cast(K.init(2, 6), k, u, order([2, -1]))
     st, out = K.cast(st, at(k, 10.5), u, order([2, -1]))
     assert bool(st.garen.e_on[0]) and not bool(out.cooldown_start[0, 2])
     st, out = K.cast(st, at(k, 11.0), u, order([2, -1]))
@@ -267,6 +331,30 @@ def test_garen_e_shreds_champion_armor_at_six_hits():
     red = K.debuffs(st, at(k, now), u).percent_armor_reduction
     np.testing.assert_allclose(float(red[JAX_UNIT]), 0.25)
     assert float(red[MINION_RED]) == 0.0
+    assert int(st.garen.e_hits[0, JAX_UNIT]) == 6
+
+
+def test_garen_e_shred_refresh_carries_across_casts_while_active():
+    k = ctx(bonus_attack_speed=jnp.zeros((2,), jnp.float32))            # 7 spins
+    u = units(x=[0.0, 200.0, 2000.0, 2500.0, 3000.0, -100.0])
+    st, _ = K.cast(K.init(2, 6), k, u, order([2, -1]))
+    now = 10.0
+    while bool(st.garen.e_on[0]):
+        st, _ = K.periodic(st, at(k, now), u)
+        now += DT
+    assert int(st.garen.e_hits[0, JAX_UNIT]) == 7                       # shred applied at 6, refreshed at 7
+    first_end = float(st.garen.shred_until[0, JAX_UNIT])
+    # Recast while shredded: the count continues, so the 13th hit (6th of this cast) refreshes.
+    st, _ = K.cast(st, at(k, 15.0), u, order([2, -1]))
+    assert int(st.garen.e_hits[0, JAX_UNIT]) == 7
+    now = 15.0
+    while int(st.garen.e_hits[0, JAX_UNIT]) < 13:
+        st, _ = K.periodic(st, at(k, now), u)
+        now += DT
+    assert float(st.garen.shred_until[0, JAX_UNIT]) > first_end
+    # After the shred lapsed, a new cast restarts the count.
+    st, _ = K.cast(st._replace(garen=st.garen._replace(e_on=jnp.zeros(2, bool))), at(k, 40.0), u, order([2, -1]))
+    assert int(st.garen.e_hits[0, JAX_UNIT]) == 0
 
 
 @pytest.mark.parametrize("rank", [1, 2, 3])
@@ -310,15 +398,51 @@ def test_garen_r_requires_enemy_champion_in_range():
     assert bool(out.cast_started[0])
 
 
-def test_garen_passive_regen():
-    k = ctx(level=jnp.asarray([7, 7], jnp.int32), in_combat_ms_since_damaged=jnp.asarray([9.0, 9.0], jnp.float32))
-    _, out = K.periodic(K.init(2, 6), k, units())
-    np.testing.assert_allclose(float(out.heal[0]), 1500.0 * 3.3 / 100 / 5 * DT, rtol=1e-5)
-    assert float(out.heal[1]) == 0.0
-    _, out = K.periodic(K.init(2, 6), k._replace(in_combat_ms_since_damaged=jnp.asarray([7.0, 9.0])), units())
+def _report(src, dst, health_loss, n=6):
+    src, dst, loss = (jnp.asarray(v) for v in (src, dst, health_loss))
+    p = D.packets(jnp.ones(src.shape, bool), src, dst, 100.0, D.PHYSICAL, D.BASIC_ATTACK)
+    z = jnp.zeros(src.shape, jnp.float32)
+    res = Resolved(z, z, z, loss.astype(jnp.float32), jnp.zeros(src.shape, bool), jnp.zeros(n), jnp.zeros(n),
+                   None, jnp.zeros(n, bool), jnp.zeros(n), jnp.zeros(n, bool), jnp.int32(0))
+    return Report(p, res, jnp.zeros(n))
+
+
+def test_garen_passive_regen_pulses():
+    k = ctx(level=jnp.asarray([7, 7], jnp.int32))
+    # 0.5 s pulses of RegenCalc / 10: no heal mid-pulse, 1500 * 3.3% / 10 on the boundary.
+    _, out = K.periodic(K.init(2, 6), at(k, 10.2), units())
     assert float(out.heal[0]) == 0.0
-    np.testing.assert_allclose(np.asarray(G.regen_rate(jnp.asarray([1, 6, 13, 14, 18]))), [1.5, 2.5, 8.1, 8.5, 10.1],
-                               rtol=1e-6)
+    _, out = K.periodic(K.init(2, 6), at(k, 10.5 + DT / 2), units())
+    np.testing.assert_allclose(float(out.heal[0]), 1500.0 * 0.033 / 10, rtol=1e-5)
+    assert float(out.heal[1]) == 0.0
+    total, now = 0.0, 20.0
+    st = K.init(2, 6)
+    while now < 25.0 - 1e-6:
+        now += DT
+        _, out = K.periodic(st, at(k, now), units())
+        total += float(out.heal[0])
+    np.testing.assert_allclose(total, 1500.0 * 0.033, rtol=1e-4)            # RegenCalc per 5 s
+    np.testing.assert_allclose(np.asarray(G.regen_rate(jnp.asarray([1, 6, 7, 13, 14, 18, 19]))),
+                               [1.5, 2.5, 3.3, 8.1, 8.5, 10.1, 10.5], rtol=1e-6)
+
+
+def test_garen_passive_disabled_by_champion_and_turret_damage_only():
+    k = ctx(level=jnp.asarray([7, 7], jnp.int32))
+    u = units()
+    tick = at(k, 10.5 + DT / 2)
+    st = K.init(2, 6)
+    # Minion damage and shield-absorbed (0 health loss) champion damage do not disable it.
+    st, _ = K.on_damage(st, at(k, 10.0), u, _report([MINION_RED, JAX_UNIT], [GAREN_UNIT, GAREN_UNIT], [40.0, 0.0]))
+    _, out = K.periodic(st, tick, u)
+    assert float(out.heal[0]) > 0
+    for src in (JAX_UNIT, TURRET_RED):
+        s2, _ = K.on_damage(st, at(k, 10.0), u, _report([src], [GAREN_UNIT], [10.0]))
+        _, out = K.periodic(s2, tick, u)
+        assert float(out.heal[0]) == 0.0
+        _, out = K.periodic(s2, at(k, 18.0 + DT / 2), u)                  # DamageTimer 8 s, not hasted
+        assert float(out.heal[0]) > 0
+        _, out = K.periodic(s2, at(k, 17.5 + DT / 2), u)
+        assert float(out.heal[0]) == 0.0
 
 
 # ---- Jax ---------------------------------------------------------------------
@@ -365,6 +489,28 @@ def test_jax_q_on_ally_dashes_without_damage_and_rejects_structures():
     assert not bool(out.cast_started[1])
     _, out = K.cast(K.init(2, 6), k, u, order([-1, 0], [-1, JAX_UNIT]))
     assert not bool(out.cast_started[1])
+    # cantCastWhileRooted.
+    _, out = K.cast(K.init(2, 6), k._replace(rooted=jnp.asarray([False, True])), units(), order([-1, 0], [-1, 0]))
+    assert not bool(out.cast_started[1])
+
+
+def test_jax_q_on_enemy_ward_dashes_without_damage_and_keeps_w():
+    k = ctx()
+    u = units(kind=[KIND_CHAMPION, KIND_CHAMPION, KIND_MINION, KIND_MINION, KIND_TURRET, KIND_WARD])
+    st, _ = K.cast(K.init(2, 6), k, u, order([-1, 1]))
+    st, out = K.cast(st, at(k, 10.1), u, order([-1, 0], [-1, MINION_BLUE]))
+    assert bool(out.dash.active[1])
+    st, out = K.periodic(st, at(k, 10.4), u)
+    assert not np.asarray(out.packets.valid).any() and bool(st.jax.w_on[1])
+    assert int(out.attack_target[1]) == -1
+
+
+def test_jax_q_on_enemy_champion_orders_attack():
+    k = ctx()
+    u = units()
+    st, _ = K.cast(K.init(2, 6), k, u, order([-1, 0], [-1, GAREN_UNIT]))
+    st, out = K.periodic(st, at(k, 10.2), u)
+    assert int(out.attack_target[1]) == GAREN_UNIT and int(out.attack_target[0]) == -1
 
 
 @pytest.mark.parametrize("rank", [1, 5])
@@ -447,6 +593,19 @@ def test_jax_e_dodge_counter_and_stun(rank):
     assert not bool(K.defense(st, k).dodge_basic[1])
 
 
+def test_jax_e_percent_health_capped_vs_monsters_and_stuns_minions():
+    k = ctx()
+    u = units(kind=[KIND_CHAMPION, KIND_CHAMPION, KIND_MINION, KIND_MINION, KIND_TURRET, KIND_MONSTER],
+              team=[0, 1, 1, 1, 1, 2], hp=[1000.0, 1000.0, 477.0, 477.0, 5000.0, 4e5],
+              max_hp=[1500.0, 1600.0, 477.0, 477.0, 5000.0, 4e5])
+    st, _ = K.cast(K.init(2, 6), k, u, order([-1, 2]))
+    _, out = K.cast(st, at(k, 11.0), u, order([-1, 2]))
+    p = valid(out.packets)
+    base = jv("Jax", "E", "BaseDamage", 3) + 0.7 * 20.0
+    np.testing.assert_allclose(p["raw"][p["dst"] == MINION_BLUE], base + 9000.0, rtol=1e-5)
+    np.testing.assert_allclose(float(out.cc.stun[1, MINION_BLUE]), 1.0)          # monsters/minions are stunned
+
+
 def test_jax_e_expiry_releases_and_death_cancels():
     k = ctx()
     u = units()
@@ -476,6 +635,13 @@ def test_jax_passive_attack_speed_stacks():
         st, _ = K.periodic(st, at(k, now), u)
         now += DT
     assert int(st.jax.stacks[1]) in (5, 6)
+
+
+@pytest.mark.parametrize("level,per", [(1, 0.05), (3, 0.05), (4, 0.065), (18, 0.125), (19, 0.14), (20, 0.14)])
+def test_jax_passive_attack_speed_breakpoints(level, per):
+    k = ctx(level=jnp.asarray([level, level], jnp.int32))
+    st, _ = K.on_attack(K.init(2, 6), k, units(), launch([False, True], [-1, GAREN_UNIT]))
+    np.testing.assert_allclose(float(K.stats(st, k).attack_speed[1]), per, rtol=1e-5)
 
 
 @pytest.mark.parametrize("rank", [1, 2, 3])
@@ -519,10 +685,25 @@ def test_jax_r_passive_every_third_attack_without_buff():
         st, out = K.on_hit(st, at(k, 10.0 + i), units(), launch([False, True], [-1, MINION_BLUE]))
         n.append(int(np.asarray(out.packets.valid).sum()))
     assert n == [0, 0, 1, 0, 0, 1]
+    assert int(st.jax.r_hits[1]) == 0
     # Counter resets 2.5 s after the last landed attack.
     st, _ = K.on_hit(st, at(k, 20.0), units(), launch([False, True], [-1, MINION_BLUE]))
     st, _ = K.periodic(st, at(k, 22.6), units())
     assert int(st.jax.r_hits[1]) == 0
+
+
+def test_jax_r_passive_on_ward_triggers_without_consuming():
+    k = ctx()
+    u = units(kind=[KIND_CHAMPION, KIND_CHAMPION, KIND_MINION, KIND_MINION, KIND_TURRET, KIND_WARD])
+    st = K.init(2, 6)
+    for i in range(2):
+        st, _ = K.on_hit(st, at(k, 10.0 + i), u, launch([False, True], [-1, MINION_RED]))
+    assert int(st.jax.r_hits[1]) == 2 and bool(K.attack_mods(st, k).uncancellable[1])
+    st, out = K.on_hit(st, at(k, 12.0), u, launch([False, True], [-1, MINION_BLUE]))    # ward
+    assert not np.asarray(out.packets.valid).any() and int(st.jax.r_hits[1]) == 2
+    st, out = K.on_hit(st, at(k, 13.0), u, launch([False, True], [-1, GAREN_UNIT]))
+    assert int(np.asarray(out.packets.valid).sum()) == 1 and int(st.jax.r_hits[1]) == 0
+    assert not bool(K.attack_mods(st, k).uncancellable[1])
 
 
 # ---- isolation, jit ----------------------------------------------------------
@@ -589,5 +770,5 @@ def test_jit_all_hooks():
     assert jax.tree_util.tree_structure(st1) == jax.tree_util.tree_structure(st2)
     for a, b in zip(jax.tree_util.tree_leaves(st1), jax.tree_util.tree_leaves(st2)):
         assert a.dtype == b.dtype and a.shape == b.shape
-    assert int(np.asarray(outs[1].packets.valid).sum()) > 0       # Garen E first tick
-    assert bool(st1.jax.e_on[1])
+    assert bool(st1.garen.e_on[0]) and bool(st1.jax.e_on[1])
+    assert int(np.asarray(outs[1].packets.valid).sum()) == 0     # Garen spin 1 completes 3/n s after the cast

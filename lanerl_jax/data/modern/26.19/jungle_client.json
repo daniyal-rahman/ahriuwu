@@ -1,0 +1,1075 @@
+{
+ "camps": [
+  {
+   "camp_hash": "{1d30f232}",
+   "camp_level": null,
+   "index": 1,
+   "members": [
+    {
+     "character": "SRU_Blue",
+     "facing": [
+      -0.9455930590629578,
+      0.3253515958786011
+     ],
+     "name_hash": "{d85d3506}",
+     "x": 3821.488525390625,
+     "y": 7901.05419921875
+    }
+   ],
+   "minimap_icon": "BlueCamp",
+   "name": "Order Blue",
+   "scoreboard_timer": 1,
+   "spawn_group": "{b941449b}",
+   "x": 3893.85107421875,
+   "y": 7869.8251953125
+  },
+  {
+   "camp_hash": "{a023664b}",
+   "camp_level": null,
+   "index": 4,
+   "members": [
+    {
+     "character": "SRU_Red",
+     "facing": [
+      -0.6331676244735718,
+      -0.7712498903274536
+     ],
+     "name_hash": "{1c74a29d}",
+     "x": 7765.244140625,
+     "y": 4020.18701171875
+    }
+   ],
+   "minimap_icon": "RedCamp",
+   "name": "Order Red",
+   "scoreboard_timer": 2,
+   "spawn_group": "{b941449b}",
+   "x": 7765.244140625,
+   "y": 4020.18701171875
+  },
+  {
+   "camp_hash": "{ecc1be77}",
+   "camp_level": 0,
+   "index": 13,
+   "members": [
+    {
+     "character": "SRU_Gromp",
+     "facing": [
+      0.976000189781189,
+      -0.217769593000412
+     ],
+     "name_hash": "{b222f795}",
+     "x": 2110.6279296875,
+     "y": 8450.984375
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Order OwlBear",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 2177.7919921875,
+   "y": 8429.6884765625
+  },
+  {
+   "camp_hash": "{eddb26de}",
+   "camp_level": 0,
+   "index": 2,
+   "members": [
+    {
+     "character": "SRU_Murkwolf",
+     "facing": [
+      -0.6929230690002441,
+      -0.7210114598274231
+     ],
+     "name_hash": "{e8c71151}",
+     "x": 3780.6279296875,
+     "y": 6443.98388671875
+    },
+    {
+     "character": "SRU_MurkwolfMini",
+     "facing": [
+      -0.7533647418022156,
+      -0.657602846622467
+     ],
+     "name_hash": "{0c7659fc}",
+     "x": 3730.6279296875,
+     "y": 6593.98388671875
+    },
+    {
+     "character": "SRU_MurkwolfMini",
+     "facing": [
+      -0.594423770904541,
+      -0.8041518330574036
+     ],
+     "name_hash": "{0f765eb5}",
+     "x": 3980.6279296875,
+     "y": 6443.98388671875
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Order Wolves",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 3813.449951171875,
+   "y": 6466.75
+  },
+  {
+   "camp_hash": "{254af814}",
+   "camp_level": 0,
+   "index": 3,
+   "members": [
+    {
+     "character": "SRU_Razorbeak",
+     "facing": [
+      0.9980348944664001,
+      -0.06251147389411926
+     ],
+     "name_hash": "{d2f27813}",
+     "x": 6785.81298828125,
+     "y": 5483.47509765625
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      0.3898468017578125,
+      -0.9099029302597046
+     ],
+     "name_hash": "{a6c2632a}",
+     "x": 6852.22900390625,
+     "y": 5227.083984375
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      -0.051477279514074326,
+      -0.9986741542816162
+     ],
+     "name_hash": "{a3c25e71}",
+     "x": 6949.86962890625,
+     "y": 5585.83984375
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      0.8068832159042358,
+      -0.5727033019065857
+     ],
+     "name_hash": "{a2c25cde}",
+     "x": 6962.7177734375,
+     "y": 5354.35400390625
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      -0.958064079284668,
+      0.042678456753492355
+     ],
+     "name_hash": "{a5c26197}",
+     "x": 7060.4580078125,
+     "y": 5499.27392578125
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      0.22487735748291016,
+      -0.9743870496749878
+     ],
+     "name_hash": "{a4c26004}",
+     "x": 7106.22900390625,
+     "y": 5266.083984375
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Order Wraiths",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 6969.0,
+   "y": 5422.0
+  },
+  {
+   "camp_hash": "{fefc5e9c}",
+   "camp_level": 0,
+   "index": 5,
+   "members": [
+    {
+     "character": "SRU_Krug",
+     "facing": [
+      -8.742277657347586e-08,
+      -1.0
+     ],
+     "name_hash": "{ba5d8915}",
+     "x": 8482.470703125,
+     "y": 2705.947998046875
+    },
+    {
+     "character": "SRU_KrugMini",
+     "facing": [
+      -8.742277657347586e-08,
+      -1.0
+     ],
+     "name_hash": "{294a01f0}",
+     "x": 8275.470703125,
+     "y": 2688.947998046875
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Order Small Golems",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 8390.0,
+   "y": 2675.0
+  },
+  {
+   "camp_hash": "{dfaf7d32}",
+   "camp_level": null,
+   "index": 7,
+   "members": [
+    {
+     "character": "SRU_Blue",
+     "facing": [
+      0.8835846781730652,
+      -0.46827131509780884
+     ],
+     "name_hash": "{948aa02e}",
+     "x": 11031.728515625,
+     "y": 6990.84423828125
+    }
+   ],
+   "minimap_icon": "BlueCamp",
+   "name": "Chaos Blue",
+   "scoreboard_timer": 3,
+   "spawn_group": "{b941449b}",
+   "x": 11031.728515625,
+   "y": 6990.84423828125
+  },
+  {
+   "camp_hash": "{f15e2553}",
+   "camp_level": null,
+   "index": 10,
+   "members": [
+    {
+     "character": "SRU_Red",
+     "facing": [
+      0.682437539100647,
+      0.7309436798095703
+     ],
+     "name_hash": "{2a4fa545}",
+     "x": 7101.869140625,
+     "y": 10900.546875
+    }
+   ],
+   "minimap_icon": "RedCamp",
+   "name": "Chaos Red",
+   "scoreboard_timer": 4,
+   "spawn_group": "{b941449b}",
+   "x": 7101.869140625,
+   "y": 10900.546875
+  },
+  {
+   "camp_hash": "{da39a59f}",
+   "camp_level": null,
+   "index": 14,
+   "members": [
+    {
+     "character": "SRU_Gromp",
+     "facing": [
+      -0.8529210686683655,
+      -0.5220398306846619
+     ],
+     "name_hash": "{2df9af1d}",
+     "x": 12679.630859375,
+     "y": 6428.4287109375
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Chaos OwlBear",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 12625.5615234375,
+   "y": 6434.18896484375
+  },
+  {
+   "camp_hash": "{b2b16d8e}",
+   "camp_level": 0,
+   "index": 8,
+   "members": [
+    {
+     "character": "SRU_Murkwolf",
+     "facing": [
+      0.7001165151596069,
+      0.7140287160873413
+     ],
+     "name_hash": "{206b2bc9}",
+     "x": 11008.15234375,
+     "y": 8387.408203125
+    },
+    {
+     "character": "SRU_MurkwolfMini",
+     "facing": [
+      0.7919511795043945,
+      0.6105843186378479
+     ],
+     "name_hash": "{9176630d}",
+     "x": 10842.2314453125,
+     "y": 8442.0068359375
+    },
+    {
+     "character": "SRU_MurkwolfMini",
+     "facing": [
+      0.725938081741333,
+      0.6877601146697998
+     ],
+     "name_hash": "{8e765e54}",
+     "x": 11058.15234375,
+     "y": 8217.408203125
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Chaos Wolves",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 10979.7998046875,
+   "y": 8356.8896484375
+  },
+  {
+   "camp_hash": "{26868b34}",
+   "camp_level": 0,
+   "index": 9,
+   "members": [
+    {
+     "character": "SRU_Razorbeak",
+     "facing": [
+      -0.7273815274238586,
+      0.6862330436706543
+     ],
+     "name_hash": "{6ac8f3ab}",
+     "x": 7986.9970703125,
+     "y": 9471.388671875
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      0.8060013651847839,
+      0.5919137597084045
+     ],
+     "name_hash": "{999b577c}",
+     "x": 7724.22900390625,
+     "y": 9724.083984375
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      0.9818629622459412,
+      0.18959271907806396
+     ],
+     "name_hash": "{9b9b5aa2}",
+     "x": 7756.9970703125,
+     "y": 9451.388671875
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      -0.6878262758255005,
+      0.725875198841095
+     ],
+     "name_hash": "{979b5456}",
+     "x": 7854.38916015625,
+     "y": 9610.4736328125
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      0.0,
+      1.0
+     ],
+     "name_hash": "{9a9b590f}",
+     "x": 7886.99658203125,
+     "y": 9312.3896484375
+    },
+    {
+     "character": "SRU_RazorbeakMini",
+     "facing": [
+      -0.5634192824363708,
+      0.8261711597442627
+     ],
+     "name_hash": "{989b55e9}",
+     "x": 7997.22900390625,
+     "y": 9772.083984375
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Chaos Wraiths",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 7861.0,
+   "y": 9575.0
+  },
+  {
+   "camp_hash": "{62f15c2c}",
+   "camp_level": 0,
+   "index": 11,
+   "members": [
+    {
+     "character": "SRU_Krug",
+     "facing": [
+      0.0,
+      1.0
+     ],
+     "name_hash": "{c84fd45d}",
+     "x": 6317.09228515625,
+     "y": 12146.4580078125
+    },
+    {
+     "character": "SRU_KrugMini",
+     "facing": [
+      0.0,
+      1.0
+     ],
+     "name_hash": "{9d8ffed8}",
+     "x": 6547.09228515625,
+     "y": 12156.4580078125
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Chaos Small Golems",
+   "scoreboard_timer": null,
+   "spawn_group": "{21ccf67f}",
+   "x": 6449.0,
+   "y": 12199.0
+  },
+  {
+   "camp_hash": "{1bc07fa4}",
+   "camp_level": null,
+   "index": 16,
+   "members": [
+    {
+     "character": "Sru_Crab",
+     "facing": [
+      -0.7071067690849304,
+      -0.7071067690849304
+     ],
+     "name_hash": "{85ac5d85}",
+     "x": 4400.0,
+     "y": 9600.0
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Baron Crab",
+   "scoreboard_timer": null,
+   "spawn_group": "{9739ed53}",
+   "x": 4400.0,
+   "y": 9600.0
+  },
+  {
+   "camp_hash": "{03a70897}",
+   "camp_level": null,
+   "index": 15,
+   "members": [
+    {
+     "character": "Sru_Crab",
+     "facing": [
+      0.7071067690849304,
+      0.7071067690849304
+     ],
+     "name_hash": "{6ecff838}",
+     "x": 10500.0,
+     "y": 5170.0
+    }
+   ],
+   "minimap_icon": "LesserCamp",
+   "name": "Dragon Crab",
+   "scoreboard_timer": null,
+   "spawn_group": "{9739ed53}",
+   "x": 10500.0,
+   "y": 5170.0
+  }
+ ],
+ "client_build": "16.19.8230722",
+ "coordinates": "client (X, Z) = simulator (x, y)",
+ "crest_of_cinders": {
+  "calculations": {
+   "DamageOverTime": {
+    "__type": "GameCalculation",
+    "mFormulaParts": [
+     {
+      "__type": "ByCharLevelBreakpointsCalculationPart",
+      "mBreakpoints": [
+       {
+        "__type": "Breakpoint",
+        "mBonusPerLevelAtAndAfter": 3.0,
+        "mLevel": 6
+       }
+      ],
+      "mLevel1Value": 15.0
+     }
+    ]
+   },
+   "SlowPotency": {
+    "__type": "GameCalculation",
+    "mFormulaParts": [
+     {
+      "__type": "ByCharLevelBreakpointsCalculationPart",
+      "mBreakpoints": [
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": -0.05000000074505806,
+        "mLevel": 6
+       },
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": -0.10000000149011612,
+        "mLevel": 11
+       }
+      ],
+      "mLevel1Value": -0.10000000149011612
+     }
+    ]
+   },
+   "{670feb37}": {
+    "__type": "GameCalculation",
+    "mFormulaParts": [
+     {
+      "__type": "ByCharLevelBreakpointsCalculationPart",
+      "mBreakpoints": [
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": 0.004999999888241291,
+        "mLevel": 4
+       },
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": 0.004999999888241291,
+        "mLevel": 6
+       },
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": 0.014999999664723873,
+        "mLevel": 11
+       }
+      ],
+      "mLevel1Value": 0.004999999888241291
+     }
+    ]
+   }
+  },
+  "data_values": {
+   "DebuffDuration": 3.0,
+   "RangedSlowMod": 0.5
+  }
+ },
+ "crest_of_insight": {
+  "calculations": {
+   "{bda1b32b}": {
+    "__type": "GameCalculation",
+    "mFormulaParts": [
+     {
+      "__type": "ByCharLevelBreakpointsCalculationPart",
+      "mBreakpoints": [
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": 5.0,
+        "mLevel": 6
+       },
+       {
+        "__type": "Breakpoint",
+        "mAdditionalBonusAtThisLevel": 5.0,
+        "mLevel": 11
+       }
+      ],
+      "mLevel1Value": 10.0
+     }
+    ]
+   }
+  },
+  "data_values": {
+   "AbilityHaste": 10.0,
+   "FlatRestore": 5.0,
+   "PercentRestore": 1.0
+  }
+ },
+ "map_id": 11,
+ "monster_kill_heal": {
+  "BaseHealCap": 250.0,
+  "EnergyRestore": 15.0,
+  "HealBase": 70.0,
+  "HealPerLevel": 20.0,
+  "ManaBase": 15.0,
+  "ManaMaxMult": 2.25,
+  "ManaPerLevel": 4.0
+ },
+ "monsters": {
+  "SRU_Blue": {
+   "acquisition_range": null,
+   "armor": 42.0,
+   "attack_cast_time": 0.5669999718666077,
+   "attack_damage": 66.0,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": null,
+   "attack_speed": 0.49300000071525574,
+   "attack_spells": {
+    "SRU_BlueBasicAttack": {
+     "cast_frame": 17.0,
+     "missile_speed": null
+    },
+    "SRU_BlueBasicAttack2": {
+     "cast_frame": 17.0,
+     "missile_speed": null
+    },
+    "SRU_BlueBasicAttack3": {
+     "cast_frame": 17.0,
+     "missile_speed": null
+    }
+   },
+   "attack_total_time": 2.0299999713897705,
+   "character": "SRU_Blue",
+   "gameplay_radius": 131.0,
+   "gold": 90.0,
+   "hp": 2300.0,
+   "magic_resist": 42.0,
+   "minion_score": 4.0,
+   "move_speed": 275.0,
+   "pathing_radius": 30.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Blue | Monster_Camp | Monster_Buff",
+   "untargetable_spawn_time": null,
+   "xp": 95.0
+  },
+  "SRU_Gromp": {
+   "acquisition_range": null,
+   "armor": 42.0,
+   "attack_cast_time": null,
+   "attack_damage": 70.0,
+   "attack_delay_cast_offset_percent": -0.11999999731779099,
+   "attack_range": 150.0,
+   "attack_speed": 0.42500001192092896,
+   "attack_spells": {
+    "SRU_GrompBasicAttack": {
+     "cast_frame": 12.0,
+     "missile_speed": 1800.0
+    },
+    "SRU_GrompBasicAttackMelee": {
+     "cast_frame": 12.0,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": null,
+   "character": "SRU_Gromp",
+   "gameplay_radius": 120.0,
+   "gold": 80.0,
+   "hp": 2050.0,
+   "magic_resist": 42.0,
+   "minion_score": 4.0,
+   "move_speed": 330.0,
+   "pathing_radius": 40.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Gromp | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 120.0
+  },
+  "SRU_Krug": {
+   "acquisition_range": 300.0,
+   "armor": 42.0,
+   "attack_cast_time": 0.6000000238418579,
+   "attack_damage": 57.0,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": 150.0,
+   "attack_speed": 0.6129999756813049,
+   "attack_spells": {
+    "SRU_KrugBasicAttack": {
+     "cast_frame": 18.0,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugBasicAttack2": {
+     "cast_frame": 18.0,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugBasicAttack3": {
+     "cast_frame": 18.0,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": 1.6299999952316284,
+   "character": "SRU_Krug",
+   "gameplay_radius": 100.0,
+   "gold": 15.0,
+   "hp": 1400.0,
+   "magic_resist": 42.0,
+   "minion_score": 2.0,
+   "move_speed": 250.0,
+   "pathing_radius": 85.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Krug | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 15.0
+  },
+  "SRU_KrugMini": {
+   "acquisition_range": 300.0,
+   "armor": 20.0,
+   "attack_cast_time": null,
+   "attack_damage": 20.0,
+   "attack_delay_cast_offset_percent": 0.10999999940395355,
+   "attack_range": 110.0,
+   "attack_speed": 0.6129999756813049,
+   "attack_spells": {
+    "SRU_KrugMiniBasicAttack": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniBasicAttack2": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniBasicAttack3": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniBasicAttack4": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniBasicAttack5": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": null,
+   "character": "SRU_KrugMini",
+   "gameplay_radius": 50.0,
+   "gold": 10.0,
+   "hp": 650.0,
+   "magic_resist": 20.0,
+   "minion_score": 0.5,
+   "move_speed": 400.0,
+   "pathing_radius": 50.0,
+   "unit_tags": "Monster | Monster_Krug | Monster_Camp | Monster_Medium",
+   "untargetable_spawn_time": null,
+   "xp": 10.0
+  },
+  "SRU_KrugMiniMini": {
+   "acquisition_range": 300.0,
+   "armor": 20.0,
+   "attack_cast_time": null,
+   "attack_damage": 13.0,
+   "attack_delay_cast_offset_percent": 0.10999999940395355,
+   "attack_range": 110.0,
+   "attack_speed": 0.6129999756813049,
+   "attack_spells": {
+    "SRU_KrugMiniMiniBasicAttack": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniMiniBasicAttack2": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniMiniBasicAttack3": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniMiniBasicAttack4": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    },
+    "SRU_KrugMiniMiniBasicAttack5": {
+     "cast_frame": 12.555000305175781,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": null,
+   "character": "SRU_KrugMiniMini",
+   "gameplay_radius": 25.0,
+   "gold": 14.0,
+   "hp": 60.0,
+   "magic_resist": 20.0,
+   "minion_score": 0.25,
+   "move_speed": 400.0,
+   "pathing_radius": 30.0,
+   "unit_tags": "Monster | Monster_Krug | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 16.0
+  },
+  "SRU_Murkwolf": {
+   "acquisition_range": null,
+   "armor": 42.0,
+   "attack_cast_time": 0.5,
+   "attack_damage": 30.0,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": 175.0,
+   "attack_speed": 0.625,
+   "attack_spells": {
+    "SRU_MurkwolfBasicAttack": {
+     "cast_frame": 15.0,
+     "missile_speed": 0.0
+    },
+    "SRU_MurkwolfBasicAttack2": {
+     "cast_frame": 15.0,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": 1.600000023841858,
+   "character": "SRU_Murkwolf",
+   "gameplay_radius": 80.0,
+   "gold": 55.0,
+   "hp": 1600.0,
+   "magic_resist": 42.0,
+   "minion_score": 2.0,
+   "move_speed": 525.0,
+   "pathing_radius": 40.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Wolf | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 50.0
+  },
+  "SRU_MurkwolfMini": {
+   "acquisition_range": null,
+   "armor": 20.0,
+   "attack_cast_time": 0.5,
+   "attack_damage": null,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": 175.0,
+   "attack_speed": 0.625,
+   "attack_spells": {
+    "SRU_MurkwolfMiniBasicAttack": {
+     "cast_frame": 15.0,
+     "missile_speed": 0.0
+    },
+    "SRU_MurkwolfMiniBasicAttack2": {
+     "cast_frame": 15.0,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": 1.600000023841858,
+   "character": "SRU_MurkwolfMini",
+   "gameplay_radius": 50.0,
+   "gold": 15.0,
+   "hp": 630.0,
+   "magic_resist": 20.0,
+   "minion_score": null,
+   "move_speed": 525.0,
+   "pathing_radius": 31.52079963684082,
+   "unit_tags": "Monster | Monster_Wolf | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 15.0
+  },
+  "SRU_Razorbeak": {
+   "acquisition_range": null,
+   "armor": 42.0,
+   "attack_cast_time": 0.30000001192092896,
+   "attack_damage": 17.0,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": 200.0,
+   "attack_speed": 0.6669999957084656,
+   "attack_spells": {
+    "SRU_RazorbeakBasicAttack": {
+     "cast_frame": 9.0,
+     "missile_speed": 750.0
+    },
+    "SRU_RazorbeakBasicAttack2": {
+     "cast_frame": 9.0,
+     "missile_speed": 750.0
+    }
+   },
+   "attack_total_time": 1.5,
+   "character": "SRU_Razorbeak",
+   "gameplay_radius": 75.0,
+   "gold": 35.0,
+   "hp": 1200.0,
+   "magic_resist": 42.0,
+   "minion_score": 2.0,
+   "move_speed": 450.0,
+   "pathing_radius": 30.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Raptor | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 20.0
+  },
+  "SRU_RazorbeakMini": {
+   "acquisition_range": null,
+   "armor": 20.0,
+   "attack_cast_time": 0.4000000059604645,
+   "attack_damage": 7.0,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": 125.0,
+   "attack_speed": 1.0,
+   "attack_spells": {
+    "SRU_RazorbeakMiniBasicAttack": {
+     "cast_frame": 12.0,
+     "missile_speed": 0.0
+    },
+    "SRU_RazorbeakMiniBasicAttack2": {
+     "cast_frame": 12.0,
+     "missile_speed": 0.0
+    }
+   },
+   "attack_total_time": 1.0,
+   "character": "SRU_RazorbeakMini",
+   "gameplay_radius": 50.0,
+   "gold": 8.0,
+   "hp": 500.0,
+   "magic_resist": 20.0,
+   "minion_score": 0.4000000059604645,
+   "move_speed": 525.0,
+   "pathing_radius": 22.5,
+   "unit_tags": "Monster | Monster_Raptor | Monster_Camp",
+   "untargetable_spawn_time": null,
+   "xp": 10.0
+  },
+  "SRU_Red": {
+   "acquisition_range": null,
+   "armor": 42.0,
+   "attack_cast_time": 0.5299999713897705,
+   "attack_damage": 66.0,
+   "attack_delay_cast_offset_percent": null,
+   "attack_range": 200.0,
+   "attack_speed": 0.49300000071525574,
+   "attack_spells": {
+    "SRU_RedBasicAttack": {
+     "cast_frame": 16.0,
+     "missile_speed": null
+    },
+    "SRU_RedBasicAttack2": {
+     "cast_frame": 16.0,
+     "missile_speed": null
+    },
+    "SRU_RedBasicAttack3": {
+     "cast_frame": 16.0,
+     "missile_speed": null
+    }
+   },
+   "attack_total_time": 2.0299999713897705,
+   "character": "SRU_Red",
+   "gameplay_radius": 120.0,
+   "gold": 90.0,
+   "hp": 2300.0,
+   "magic_resist": 42.0,
+   "minion_score": 4.0,
+   "move_speed": 275.0,
+   "pathing_radius": 60.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Red | Monster_Camp | Monster_Buff",
+   "untargetable_spawn_time": null,
+   "xp": 95.0
+  },
+  "Sru_Crab": {
+   "acquisition_range": null,
+   "armor": 42.0,
+   "attack_cast_time": null,
+   "attack_damage": 35.0,
+   "attack_delay_cast_offset_percent": -0.11999999731779099,
+   "attack_range": 300.0,
+   "attack_speed": 0.6380000114440918,
+   "attack_spells": {},
+   "attack_total_time": null,
+   "character": "Sru_Crab",
+   "gameplay_radius": 50.0,
+   "gold": 55.0,
+   "hp": 1550.0,
+   "magic_resist": 42.0,
+   "minion_score": 4.0,
+   "move_speed": 255.0,
+   "pathing_radius": 100.0,
+   "unit_tags": "Monster | Monster_Large | Monster_Crab | Special_Peaceful | Monster_Camp",
+   "untargetable_spawn_time": 1.5,
+   "xp": 100.0
+  }
+ },
+ "patch": "26.19",
+ "schema": "modern-jungle-client/1",
+ "scuttle_shrine_effect_amounts": [
+  90.0,
+  0.30000001192092896,
+  2.0
+ ],
+ "smite": {
+  "ammo_recharge_time": 90.0,
+  "can_cast_while_disabled": true,
+  "cast_radius": 210.0,
+  "cast_range": 500.0,
+  "cast_range_use_bounding_boxes": true,
+  "cooldown": 15.0,
+  "cooldown_not_affected_by_cdr": true,
+  "data_values": {
+   "AoESmiteRatio": 1.0,
+   "FirstPVPDamage": 40.0,
+   "SecondPVPDamage": 40.0,
+   "Smite2ndUpgradedDamage": 1400.0,
+   "SmiteBaseDamage": 600.0,
+   "SmiteComebackXP": 50.0,
+   "SmiteSlowAmount": 0.20000000298023224,
+   "SmiteSlowDuration": 2.0,
+   "SmiteUpgradedDamage": 1000.0
+  },
+  "forgiveness_range": 125.0,
+  "max_ammo": 2,
+  "pet_dps": {
+   "__type": "GameCalculation",
+   "mExpandedTooltipCalculationDisplay": 6,
+   "mFormulaParts": [
+    {
+     "__type": "ByCharLevelInterpolationCalculationPart",
+     "mEndValue": 150.0,
+     "mStartValue": 20.0
+    },
+    {
+     "__type": "StatByCoefficientCalculationPart",
+     "mCoefficient": 0.10000000149011612,
+     "mStat": 2,
+     "mStatFormula": 2
+    },
+    {
+     "__type": "StatByCoefficientCalculationPart",
+     "mCoefficient": 0.1599999964237213
+    },
+    {
+     "__type": "StatByCoefficientCalculationPart",
+     "mCoefficient": 0.03999999910593033,
+     "mStat": 12,
+     "mStatFormula": 2
+    },
+    {
+     "__type": "StatByCoefficientCalculationPart",
+     "mCoefficient": 0.25,
+     "mStat": 1,
+     "mStatFormula": 2
+    },
+    {
+     "__type": "StatByCoefficientCalculationPart",
+     "mCoefficient": 0.25,
+     "mStat": 6,
+     "mStatFormula": 2
+    }
+   ]
+  },
+  "pet_hps": {
+   "__type": "GameCalculation",
+   "mFormulaParts": [
+    {
+     "__type": "ByCharLevelBreakpointsCalculationPart",
+     "mBreakpoints": [
+      {
+       "__type": "Breakpoint",
+       "mBonusPerLevelAtAndAfter": 2.0,
+       "mLevel": 4
+      }
+     ],
+     "mLevel1Value": 6.0
+    }
+   ]
+  },
+  "required_unit_tags": [
+   "Monster_Large",
+   "{592aa99b}",
+   "minion",
+   "{1d6fa889}"
+  ]
+ },
+ "sources": {
+  "geometry-decoded.json": "77c4d3bd62a70600d7ca1a4da4f04f60bbfb24c5f193e7f3aa8c4ccbc0495fb2",
+  "map11-decoded.json": "3947d4dbb5cb10711546f2df9076ccc82d6dbff9ea5caefa906abdfdb8ebe145",
+  "shared.cdtb.bin.json": "34f68553ab38cfe344936473fcb48d99574d5fd51e4feb42994fa0c4fe50769e",
+  "sru_blue.bin.json": "117f241374ac5931357ddd69b6b58ff04510f2a1c90e529d7d0b955d7aa86ff3",
+  "sru_crab.bin.json": "2b3b7cf88de6838f053c4f71fc7d2697dd657f683af31ab3ba32bfe74b8fceae",
+  "sru_gromp.bin.json": "2a31c5393dd046a8f0736ae60672d579b95635c1c097d50f4406c71ec8e087bd",
+  "sru_krug.bin.json": "9d5f8c52997c2f48bb9f681b5ceaf2b53cba9699a28ec0d9e0efd98b0370782a",
+  "sru_krugmini.bin.json": "6738f7d87f0d22e11f30b7768a1cda455de0cb9fc8a2ae658d5a9ca39372cb06",
+  "sru_krugminimini.bin.json": "e72d7f576b539d8afc8725d525e2747282d79ce8d68e71aab6d4e5f39cabf20f",
+  "sru_murkwolf.bin.json": "4aeb03329977d6d34c6ce8fbb542e68199c5d8302a13cd36047de1adf42c7511",
+  "sru_murkwolfmini.bin.json": "6977a28bbbfec3cba7744a68c8a0d004ecc969c5d7efa547ef469f0f0a822b1a",
+  "sru_razorbeak.bin.json": "4dac3b7e75c0d8b4a0cb69d29dc04a3195d359188dac90bb8b53988f54a48ad0",
+  "sru_razorbeakmini.bin.json": "f9adf0a257bf2f7bccea9a36c0edde908ba5eb115509d34d43ae8508b9729b32",
+  "sru_red.bin.json": "7c929abdf966651bb0feb5a066d5bc7fd568f4ad7ae65d1100fd42fd4f021371"
+ }
+}

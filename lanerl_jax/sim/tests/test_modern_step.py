@@ -54,7 +54,7 @@ def test_layout_and_structure_vulnerability():
     cfg, _, _ = world()
     s = MS.init_state(cfg)
     kinds = np.asarray(cfg.unit_kind)
-    assert cfg.n_units == 2 + MW.MAX_MINIONS + 30
+    assert cfg.n_units == 2 + MW.MAX_MINIONS + W.MAX_MONSTERS + 2 * W.MAX_WARDS_PER_TEAM + 30
     assert (kinds == W.KIND_TURRET).sum() == 22 and (kinds == W.KIND_INHIBITOR).sum() == 6
     assert (kinds == W.KIND_NEXUS).sum() == 2
     targ = np.asarray(s.targetable)
@@ -68,7 +68,7 @@ def test_layout_and_structure_vulnerability():
 def test_ambient_gold_waves_and_no_overflow():
     cfg, _, run = world()
     s = MS.init_state(cfg)
-    s, (po, mo) = run(s, MS.no_orders(), 3 * 1000)       # 100 s
+    s, (po, mo) = run(s, MS.no_orders(), 3 * 1000)       # 100 s (champions idle in the fountain)
     assert int(po.max()) == 0 and int(mo.max()) == 0
     gold = np.asarray(s.econ.gold)
     np.testing.assert_allclose(gold, 500 + float(E.ambient_payments(0.0, float(s.t))), atol=0.05)
@@ -105,6 +105,7 @@ def test_champion_kill_first_blood_and_death_timer():
     mx, my = lane[len(lane) // 2]
     s = s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 150.0), y=s.y.at[0].set(my).at[1].set(my),
                    hp=s.hp.at[1].set(5.0), t=jnp.float32(200.0))
+    s = MS.refresh_visibility(s, cfg)
     kill_t = None
     for k in range(60):
         s, e = step(s, orders(attack=[1, -1]))
@@ -132,3 +133,17 @@ def test_recall_returns_to_fountain():
     s, _ = step(s, orders(recall=[True, False]))
     s, _ = run(s, MS.no_orders(), 8 * 30 + 3)
     assert np.hypot(float(s.x[0]) - MW.FOUNTAINS[0][0], float(s.y[0]) - MW.FOUNTAINS[0][1]) < 1.0
+
+
+def test_idle_champions_auto_attack_in_range():
+    cfg, _, run = world()
+    s = MS.init_state(cfg)
+    lane = np.asarray(cfg.lane_path)
+    mx, my = lane[len(lane) // 2]
+    s = s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 200.0), y=s.y.at[0].set(my).at[1].set(my),
+                   t=jnp.float32(20.0))
+    s = MS.refresh_visibility(s, cfg)
+    hp0 = np.asarray(s.hp[:2])
+    s, _ = run(s, MS.no_orders(), 3 * 30)
+    hp = np.asarray(s.hp[:2])
+    assert (hp < hp0 - 50.0).all()                        # both traded basic attacks without orders

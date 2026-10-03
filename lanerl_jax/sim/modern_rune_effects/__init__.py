@@ -7,7 +7,9 @@ module.
 
 Coverage contract: every selectable rune is exactly one of
   * implemented by a module (``module.COVERAGE``),
-  * ``DEFERRED`` with a reason (MODERN-009 vision: wards, trinkets),
+  * ``WORLD``: run by a world subsystem (Sixth Sense, Deep Ward: domination
+    kernels called by ``modern_wards.ward_step``), or
+  * ``DEFERRED`` with a reason (currently none),
 and the seven stat shards are ``STATIC`` (``modern_items.stat_shard_stats``).
 ``coverage_report()`` and the tests enforce this.
 """
@@ -25,10 +27,15 @@ from . import precision, domination, sorcery, resolve, inspiration
 
 MODULES = (precision, domination, sorcery, resolve, inspiration)
 
-DEFERRED = {
-    8137: "Sixth Sense: ward tracking/reveal (vision, MODERN-009)",
-    8141: "Deep Ward: ward health/duration (vision, MODERN-009)",
+# Vision runes run by the world's ward system: kernels ``domination.sixth_sense`` /
+# ``domination.deep_ward``, called from ``modern_wards.ward_step`` (docs/modern/WARDS.md).
+WORLD = {
+    8137: "Sixth Sense (modern_wards via domination.sixth_sense): alive and off cd, track the nearest "
+          "untracked enemy ward within 900 unseen by the holder's team; from level 11 reveal it 10 s; cd 250 s",
+    8141: "Deep Ward (modern_wards via domination.deep_ward): trinket Totem Wards placed in the enemy jungle "
+          "(river too from level 9) get +1 HP and +lin(45, 150, avg level) s",
 }
+DEFERRED: dict[int, str] = {}
 STATIC = {
     5008: "shard: +9 adaptive force", 5005: "shard: +10% attack speed", 5007: "shard: +8 ability haste",
     5010: "shard: +2.5% move speed", 5001: "shard: +10·level health (extrapolated past 18)",
@@ -63,7 +70,7 @@ def coverage_report() -> dict[int, str]:
             if pid in out:
                 raise RuntimeError(f"rune {pid} covered twice: {out[pid]} / {_name(m)}")
             out[pid] = f"{_name(m)}: {what}"
-    for table, label in ((DEFERRED, "DEFERRED"), (STATIC, "STATIC")):
+    for table, label in ((WORLD, "WORLD"), (DEFERRED, "DEFERRED"), (STATIC, "STATIC")):
         for pid, why in table.items():
             if pid in out:
                 raise RuntimeError(f"rune {pid} is both {label} and {out[pid]}")
@@ -175,6 +182,6 @@ def outputs(state, page, ctx, ev) -> RuneOutputs:
     return merge_outputs(parts, c, i) if parts else no_outputs(c, i)
 
 
-__all__ = ["MODULES", "DEFERRED", "STATIC", "RuneEffectState", "init", "coverage_report", "stats",
+__all__ = ["MODULES", "WORLD", "DEFERRED", "STATIC", "RuneEffectState", "init", "coverage_report", "stats",
            "debuffs", "packet_amp", "packet_block", "heal_mult", "on_cast", "on_attack", "on_hit", "on_cc",
            "periodic", "on_damage", "on_takedown", "post_tick", "outputs"]

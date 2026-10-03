@@ -13,8 +13,8 @@ import jax.numpy as jnp
 from ..modern_item_data import combine_stats
 from ..modern_item_effects.core import Debuffs, combine_debuffs
 from . import garen, jax as jax_kit
-from .core import (GAREN, JAX, KitAttackMods, KitCtx, KitDefense, KitOut, merge_out, neutral_attack_mods,
-                   neutral_defense)
+from .core import (GAREN, JAX, KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
+                   neutral_attack_mods, neutral_defense)
 
 KITS = {GAREN: garen, JAX: jax_kit}
 
@@ -85,9 +85,13 @@ def defense(state: ChampionState, kctx: KitCtx) -> KitDefense:
 def attack_mods(state: ChampionState, kctx: KitCtx) -> KitAttackMods:
     out = neutral_attack_mods(kctx.unit.shape[0])
     for m in (garen.attack_mods(state.garen, kctx), jax_kit.attack_mods(state.jax, kctx)):
-        out = KitAttackMods(out.extra_range + m.extra_range, out.attack_reset | m.attack_reset,
-                            out.cannot_attack | m.cannot_attack, out.cannot_crit | m.cannot_crit)
+        out = combine_attack_mods(out, m)
     return out
+
+
+def ghosted(state: ChampionState, kctx: KitCtx) -> Any:
+    """(C,) bool: holder ignores unit collision (Garen E Judgment)."""
+    return garen.ghosted(state.garen, kctx)
 
 
 def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
@@ -98,4 +102,4 @@ def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
 
 __all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "GAREN", "JAX", "KITS", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
-           "attack_mods", "debuffs", "dodging_units"]
+           "attack_mods", "debuffs", "dodging_units", "ghosted"]

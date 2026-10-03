@@ -65,6 +65,17 @@
     "mrPerLevel": {
       "__type": "ModifiableFloat",
       "baseValue": 1.5499999523162842
+    },
+    "primaryAbilityResource": {
+      "{726ee5cd}": {
+        "baseValue": 0.0,
+        "__type": "ModifiableFloat"
+      },
+      "{c4ab3550}": {
+        "baseValue": 0.0,
+        "__type": "ModifiableFloat"
+      },
+      "__type": "AbilityResourceSlotInfo"
     }
   },
   "patch": "16.19",

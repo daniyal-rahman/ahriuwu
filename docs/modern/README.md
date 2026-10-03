@@ -21,6 +21,12 @@ regression oracle for the legacy ruleset only (ledger MODERN-006). `docs/MODERN_
 | [RUNES.md](RUNES.md) | Page legality, stat shards, every rune in all five trees (incl. Stormraider's Surge, which replaced Phase Rush in 26.9 under id 8230), automatic rune swaps, rune hooks | 1256 |
 | [SUMMONER_SPELLS.md](SUMMONER_SPELLS.md) | Flash, Teleport/Unleashed Teleport (role-quest interaction), Ignite, Exhaust, Barrier, Heal, Ghost, Cleanse, Hexflash; Smite listed and deferred | 551 |
 | [WORLD_IMPLEMENTATION.md](WORLD_IMPLEMENTATION.md) | **Implemented** modern world tick (`modern_step`): unit layout, tick order, how minions/turrets, kits, summoners, items, runes, economy and quest compose; verified symptoms; gaps | — |
+| [VISION.md](VISION.md) | **Implemented** fog of war: sight radii, walls, brush, structures, attack reveal, targeting gates; unresolved client constants | — |
+| [WARDS.md](WARDS.md) | **Implemented** wards and trinkets: Stealth/Control Ward, Farsight, Oracle Lens, stealth and true sight, ward gold, vision runes | — |
+| [JUNGLE.md](JUNGLE.md) | **Implemented** jungle camps and Scuttle Crab, monster AI (aggro, leash, reset), camp gold/XP, Smite, jungle pets | — |
+| [OBJECTIVES.md](OBJECTIVES.md) | **Implemented** 26.19 epic objectives (Voidgrubs, Rift Herald, Drakes/Soul/Elder, Baron), team buffs, Elemental Rift and Baron-pit terrain | — |
+| [CHAMPIONS.md](CHAMPIONS.md) | **Implemented** Garen and Jax 26.19 kits with evidence; remaining approximations | — |
+| [LANES_TERRAIN.md](LANES_TERRAIN.md) | **Implemented** all-lane waves, structure pads, map regions (quest lane, Homeguard, river), attack-move, game end, item actives | — |
 | [ECONOMY_IMPLEMENTATION.md](ECONOMY_IMPLEMENTATION.md) | **Implemented** economy/progression + Top quest, and the **replay oracle**: 145 real 16.9 games checking gold, death timers, kill/assist gold, fountain, level-up HP (spec corrections listed) | — |
 | [ECONOMY_PROGRESSION.md](ECONOMY_PROGRESSION.md) | Starting/ambient gold, XP curve to level 20, minion and kill XP sharing, comeback XP, kill credit/assists, 2026 bounty system, structure gold distribution, level-up, death timers, respawn, recall/Homeguard, fountain/shop | 310 |
 | [ROLE_QUESTS.md](ROLE_QUESTS.md) | Role binding, Top quest point sources and thresholds, completion event, rewards (level cap 20, XP, Teleport upgrade/shield), other roles briefly | 234 |

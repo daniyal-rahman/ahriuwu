@@ -187,3 +187,30 @@ def test_economy_step_first_blood_jit():
     assert bool(out.state.first_blood_done) and float(out.kills.champion_kill[0]) == 1
     assert float(out.state.bounty.b[0]) == 0.0                    # deferred: still in champion combat
     assert float(out.state.bounty.b[1]) < 0.0
+
+
+def test_structure_damage_credit_without_a_plate_falling():
+    """§7: a hit on a structure stamps ``last_structure_damage`` every tick (``is_structure``), not
+    only on the tick a plate/turret falls (``valid``), so the 10 s share window can see it."""
+    c, n = 2, 4
+    st = E.init_economy(c, n, [Q.ROLE_TOP, Q.ROLE_TOP])
+    hit = D.packets(jnp.ones(1, bool), 0, 3, 100.0, D.PHYSICAL, D.BASIC_ATTACK)
+    from lanerl_jax.sim.tests import item_harness as H
+    u = H.units(H.champions(x1=200.) + [dict(x=5000, y=0, team=0), dict(x=300, y=0, team=1)])
+    rep, _ = H.resolve(hit, u)
+    z = jnp.zeros((c,), bool)
+    md = E.MinionDeaths(jnp.zeros((1,), bool), jnp.zeros(1), jnp.zeros(1), jnp.asarray([1]), jnp.zeros(1),
+                        jnp.zeros(1), jnp.ones(1, jnp.int32), jnp.asarray([-1], jnp.int32))
+    se = E.StructureEvents(jnp.zeros((1,), bool), jnp.asarray([3]), jnp.zeros(1), jnp.zeros(1), jnp.asarray([1]),
+                           jnp.zeros(1), jnp.zeros(1), jnp.zeros((1,), bool), jnp.zeros((1,), bool))
+    inp = E.EconomyInputs(now=100.0, unit=jnp.asarray([0, 1]), x=jnp.asarray([0., 200.]), y=jnp.zeros(2),
+                          team=jnp.asarray([0, 1]), hp=jnp.asarray([500., 500.]), max_hp=jnp.asarray([800., 800.]),
+                          report=rep, cc=None, final_blow=jnp.asarray([-1, -1], jnp.int32), minion_deaths=md,
+                          minion_in_lane=jnp.zeros((1,), bool), structures=se,
+                          last_champion_combat=jnp.asarray([0., 0.]), in_fountain=z, in_quest_lane=~z,
+                          recall_request=z, cancel_action=z, health_damage=z, disabled=z, reached_endpoint=z,
+                          in_jungle=z, teleported=z)
+    plain = E.economy_step(st, inp).state.credit.last_structure_damage
+    marked = E.economy_step(st, inp._replace(structures=se._replace(is_structure=jnp.ones((1,), bool))))
+    assert float(plain[0, 3]) < 0.0                                # legacy: valid=False hides the structure
+    assert float(marked.state.credit.last_structure_damage[0, 3]) == 100.0

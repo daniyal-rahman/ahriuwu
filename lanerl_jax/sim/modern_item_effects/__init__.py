@@ -8,7 +8,9 @@ in one field of ``ItemEffectState`` named after the module.
 Coverage contract: every catalog item is exactly one of
   * implemented by a module (``module.COVERAGE``),
   * ``STATS_ONLY`` (no behaviour beyond static stats), or
-  * ``DEFERRED`` with a reason (MODERN-009: jungle, vision, non-Hydra actives).
+  * ``WORLD``: run by a world subsystem outside the item hooks (vision items:
+    ``modern_wards``), or
+  * ``DEFERRED`` with a reason (MODERN-009: jungle, non-Hydra actives).
 ``coverage_report()`` and the tests enforce this, so a newly added item can
 never silently run as stats only.
 """
@@ -23,9 +25,11 @@ from .core import (CC, ActiveOut, Attack, AttackMods, Cast, Ctx, Debuffs, Effect
                    Kills, Report, StatusFlags, Units, combine_debuffs, combine_defense, merge_effects,
                    neutral_debuffs, no_effects)
 from . import (consumables, starters, spellblade, hydra, fighter, defense, mage, marksman,
-               support, boots)
+               support, boots, jungle)
+from .. import modern_item_actives   # remaining 26.19 actives (stasis, cleanse, Randuin's, Gunblade, ...)
 
-MODULES = (consumables, starters, spellblade, hydra, fighter, defense, mage, marksman, support, boots)
+MODULES = (consumables, starters, spellblade, hydra, fighter, defense, mage, marksman, support, boots,
+           modern_item_actives, jungle)
 
 # Items whose entire 26.19 effect is their static stat line: no client data
 # values, calculations or spell (items_client.json), minus Phantom Dancer,
@@ -36,10 +40,19 @@ STATS_ONLY = {
     3067, 3086, 3108, 3113, 3114, 3133, 3135, 3801, 4630, 4642, 6690,
     2422,   # Slightly Magical Footwear (Magical Footwear's +10 MS is the rune's)
 }
+# Items whose behaviour is a world subsystem (no item hook): ward placement,
+# trinket charges and sweeps live in ``modern_wards`` (docs/modern/WARDS.md).
+WORLD = {
+    2055: "modern_wards: Control Ward (consumed on placement; 1 placed per player; 900 sight + true sight; "
+          "reveals/disables enemy wards; 4 HP with regen)",
+    3340: "modern_wards: Stealth Ward trinket (2 charges, 210->90 s recharge by avg level; 3 placed; "
+          "totem ward 90->120 s, stealthed after 2 s)",
+    3363: "modern_wards: Farsight Alteration trinket (level 9; 4000 range; 1 HP visible ward, 500 sight "
+          "unobstructed; dies 3 s after spotting a champion)",
+    3364: "modern_wards: Oracle Lens trinket (2 charges, 160->100 s; 8 s sweep 600->750 following the user; "
+          "reveals and disables stealthed wards, 2 s linger)",
+}
 DEFERRED = {
-    1101: "jungle pet (MODERN-009)", 1102: "jungle pet (MODERN-009)", 1103: "jungle pet (MODERN-009)",
-    2055: "Control Ward: vision (MODERN-009)", 3340: "Stealth Ward trinket: vision (MODERN-009)",
-    3363: "Farsight Alteration trinket: vision (MODERN-009)", 3364: "Oracle Lens trinket: vision (MODERN-009)",
     3330: "Scarecrow Effigy: Fiddlesticks-only trinket", 3599: "Kalista's Black Spear: Kalista-only",
     3600: "Kalista's Black Spear (Sylas copy): Kalista-only",
 }
@@ -56,6 +69,8 @@ class ItemEffectState(NamedTuple):
     marksman: Any
     support: Any
     boots: Any
+    modern_item_actives: Any
+    jungle: Any             # jungle pets 1101-1103 (rest of the pet rules: modern_jungle)
 
 
 def _name(m) -> str:
@@ -81,6 +96,10 @@ def coverage_report() -> dict[int, str]:
         if iid in out:
             raise RuntimeError(f"item {iid} is both STATS_ONLY and {out[iid]}")
         out[iid] = "stats only"
+    for iid, what in WORLD.items():
+        if iid in out:
+            raise RuntimeError(f"item {iid} is both WORLD and {out[iid]}")
+        out[iid] = f"WORLD {what}"
     for iid, why in DEFERRED.items():
         if iid in out:
             raise RuntimeError(f"item {iid} is both DEFERRED and {out[iid]}")
@@ -221,7 +240,7 @@ def active(state: ItemEffectState, own, ctx: Ctx, units: Units, request):
     return state, merge_effects(parts, c, n), out
 
 
-__all__ = ["MODULES", "STATS_ONLY", "DEFERRED", "ItemEffectState", "init", "coverage_report",
+__all__ = ["MODULES", "STATS_ONLY", "WORLD", "DEFERRED", "ItemEffectState", "init", "coverage_report",
            "dynamic_stats", "holder_defense", "status", "target_debuffs", "dealt_amp", "attack_mods",
            "packet_amp", "on_attack", "on_hit", "on_cast", "on_cc", "on_damage", "periodic", "on_takedown", "on_shop",
            "active", "no_effects"]

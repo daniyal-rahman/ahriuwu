@@ -74,7 +74,7 @@ COVERAGE = {
                 "physical on-hit (life steal), +10% of it as permanent max HP, 30 s per target (Goliath size n/a)",
     BANSHEES: "Annul spell shield, 40 s cd restarted by champion damage while cooling",
     FROZEN_HEART: "Winter's Caress: 20% AS cripple on enemy champions within 700 (debuffs)",
-    RANDUINS: "Resilience: critical basic attacks x0.7; Humility active DEFERRED (MODERN-009)",
+    RANDUINS: "Resilience: critical basic attacks x0.7; Humility active in modern_item_actives",
     HEXDRINKER: "Lifeline vs magic: magic shield 110-280 (ranged x0.75), 2.5 s, shared 90 s cd",
     MAW: "Lifeline vs magic: magic shield 200 + 1.5 bonus AD (ranged x0.75), 3 s; 10% omnivamp 5 s, "
          "extended 3 s by champion combat (INFERRED)",
@@ -89,9 +89,9 @@ COVERAGE = {
     JAKSHO: "Voidborn Resilience: after 5 s of champion combat bonus armor/MR x1.3 until combat ends",
     SHIELDBOW: "Lifeline: shield 400 (+30/level from 9, ranged x0.8), 3 s, shared 90 s cd",
     ABYSSAL: "Unmake: enemy champions within 700 take +12% magic damage (one Unmake at a time)",
-    QUICKSILVER: "no passive; Quicksilver cleanse active DEFERRED (MODERN-009)",
-    SEEKERS: "no passive; Time Stop stasis active DEFERRED (MODERN-009)",
-    ZHONYAS: "no passive; Time Stop stasis active DEFERRED (MODERN-009)",
+    QUICKSILVER: "no passive; Quicksilver cleanse active in modern_item_actives",
+    SEEKERS: "no passive; Time Stop stasis active in modern_item_actives",
+    ZHONYAS: "no passive; Time Stop stasis active in modern_item_actives",
 }
 
 

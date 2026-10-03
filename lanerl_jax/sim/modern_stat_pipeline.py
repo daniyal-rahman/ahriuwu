@@ -53,6 +53,11 @@ class ChampionBase(NamedTuple):
     mana_regen_per_level: Any = 0.0
 
 
+# AbilityResourceSlotInfo hashed fields (26.19 bins), identified from Jax's record: 339 base mana,
+# +52 per level, 1.64/s static regen, +0.14/s per level (Garen's manaless record has base 0, regen 0).
+AR_BASE, AR_PER_LEVEL, AR_REGEN, AR_REGEN_PER_LEVEL = "{726ee5cd}", "{6216bf7b}", "{c4ab3550}", "{3a509002}"
+
+
 def champion_base(names) -> ChampionBase:
     """Host-side: ``ChampionBase`` rows from the pinned 26.19 champion records."""
     from ..data.modern import champion
@@ -60,6 +65,11 @@ def champion_base(names) -> ChampionBase:
     def field(name, key, default=0.0):
         rec = champion(name)["character"]
         return float(rec[key]["baseValue"]) if key in rec else default
+
+    def resource(name, key):
+        # Mana lives in the record's primaryAbilityResource block under hashed names.
+        par = champion(name)["character"].get("primaryAbilityResource", {})
+        return float(par[key]["baseValue"]) if key in par else 0.0
 
     rows = []
     for name in names:
@@ -77,9 +87,8 @@ def champion_base(names) -> ChampionBase:
             windup_modifier=float(attack.get("mAttackDelayCastOffsetPercentAttackSpeedRatio", 1.0)),
             hp_regen=field(name, "baseStaticHPRegenModifiable"),
             hp_regen_per_level=field(name, "hpRegenPerLevelModifiable"),
-            base_mana=field(name, "baseMPModifiable"), mana_per_level=field(name, "mpPerLevelModifiable"),
-            mana_regen=field(name, "baseStaticMPRegenModifiable"),
-            mana_regen_per_level=field(name, "mpRegenPerLevelModifiable")))
+            base_mana=resource(name, AR_BASE), mana_per_level=resource(name, AR_PER_LEVEL),
+            mana_regen=resource(name, AR_REGEN), mana_regen_per_level=resource(name, AR_REGEN_PER_LEVEL)))
     return ChampionBase(*(jnp.asarray([getattr(r, f) for r in rows], jnp.float32) for f in ChampionBase._fields))
 
 

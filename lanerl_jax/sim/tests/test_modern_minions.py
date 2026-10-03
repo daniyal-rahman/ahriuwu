@@ -166,3 +166,84 @@ def test_move_speed_timing_and_sidelane_buff():
     assert float(sidelane_bonus_move_speed(1, 2, 30., 0.)) == 0
     assert float(sidelane_bonus_move_speed(2, 1, 60., 0.)) == 0
     np.testing.assert_allclose(move_speed_soft_cap(350. + 111.), 451.8, rtol=1e-6)
+
+
+# --- all-lane spawn schedule -------------------------------------------------
+from lanerl_jax.sim.modern_minions import (LaneSpawnState, init_lane_spawn, lane_spawn_step, super_count,
+                                           wave_unit_type)
+
+
+def _run_schedule(t_end, dt=1 / 30, **kw):
+    st, t, log = init_lane_spawn(), 0.0, []
+    while t < t_end:
+        t += dt
+        st, due = lane_spawn_step(st, jnp.float32(t), **kw)
+        for team, lane in zip(*np.nonzero(np.asarray(due.due))):
+            log.append((round(t, 3), int(team), int(lane), int(due.minion_type[team, lane])))
+    return st, log
+
+
+def test_every_lane_and_team_spawns_the_same_first_wave():
+    st, log = _run_schedule(35.0)
+    for team in (0, 1):
+        for lane in (0, 1, 2):
+            types = [k for (_, tm, ln, k) in log if tm == team and ln == lane]
+            assert types == [0, 0, 0, 1, 1, 1]
+    first = sorted({t for (t, *_) in log})
+    assert first[0] == pytest_approx(30.0, 1 / 30) and first[-1] == pytest_approx(34.0, 1 / 30)
+    np.testing.assert_array_equal(st.wave, np.ones((2, 3)))
+
+
+def pytest_approx(v, tol):
+    import pytest
+    return pytest.approx(v, abs=tol)
+
+
+def test_wave_unit_type_matches_spawn_event_without_supers():
+    for i in (0, 2, 27, 28, 53, 54, 66):
+        for u in range(8):
+            k, ok = wave_unit_type(i, u, 0)
+            ev = spawn_event(i, u)
+            assert int(k) == int(ev.minion_type) and bool(ok) == bool(ev.valid)
+
+
+def test_lane_with_enemy_inhibitor_down_gets_a_super_instead_of_the_cannon():
+    # Red's (team 1) top inhibitor down -> blue's top waves get one super; nothing else changes.
+    down = jnp.zeros((2, 3), bool).at[0, 2].set(True)
+    st = LaneSpawnState(jnp.full((2, 3), 2, jnp.int32), jnp.zeros((2, 3), jnp.int32), jnp.full((2, 3), -1, jnp.int32))
+    types = {}
+    t = 89.9
+    while t < 96.0:
+        t += 1 / 30
+        st, due = lane_spawn_step(st, jnp.float32(t), enemy_inhibitor_down=down)
+        for team, lane in zip(*np.nonzero(np.asarray(due.due))):
+            types.setdefault((int(team), int(lane)), []).append(int(due.minion_type[team, lane]))
+    assert types[(0, 2)] == [3, 0, 0, 0, 1, 1, 1]          # super first, no cannon
+    assert types[(0, 1)] == [0, 0, 0, 2, 1, 1, 1]          # mid keeps its cannon
+    assert types[(1, 2)] == [0, 0, 0, 2, 1, 1, 1]
+
+
+def test_super_counts_all_down_and_respawn_cutoff():
+    assert int(super_count(True, False, jnp.inf, 600.)) == 1
+    assert int(super_count(False, True, jnp.inf, 600.)) == 2
+    assert int(super_count(True, True, jnp.inf, 600.)) == 2
+    # Inhibitor respawns at 655: wave at 600 is within two 30-s intervals -> no super.
+    assert int(super_count(True, False, 655., 600.)) == 0
+    assert int(super_count(True, False, 661., 600.)) == 1
+
+
+def test_super_count_is_latched_for_the_whole_wave():
+    down = jnp.zeros((2, 3), bool).at[1, 0].set(True)       # blue bot inhibitor down -> red bot supers
+    st = LaneSpawnState(jnp.full((2, 3), 4, jnp.int32), jnp.zeros((2, 3), jnp.int32), jnp.full((2, 3), -1, jnp.int32))
+    st, due = lane_spawn_step(st, jnp.float32(150.0), enemy_inhibitor_down=down)
+    assert int(due.minion_type[1, 0]) == 3 and int(st.supers[1, 0]) == 1
+    # The inhibitor respawns mid-wave: the wave still completes with its latched list.
+    out = []
+    t = 150.0
+    while int(st.wave[1, 0]) == 4:
+        t += 1 / 30
+        st, due = lane_spawn_step(st, jnp.float32(t))
+        if bool(due.due[1, 0]):
+            out.append(int(due.minion_type[1, 0]))
+    assert out == [0, 0, 0, 1, 1, 1]
+    assert int(st.supers[1, 0]) == -1

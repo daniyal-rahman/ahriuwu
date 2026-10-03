@@ -6,16 +6,25 @@ arrays under jit/vmap; unsupported radii return blocked, never a partial check.
 """
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 
 
 class StaticTerrain(NamedTuple):
-    walkable: object
+    walkable: object          # (H, W) bool, or (L, H, W) stacked masks read through ``layer``
     cell_size: float
     min_x: float
     min_z: float
     max_x: float
     max_z: float
+    layer: object = None      # index into stacked ``walkable`` (e.g. per team); None = 2-D grid
+
+
+def team_view(terrain: tuple, layer) -> StaticTerrain:
+    """One team's terrain from the per-team tuple without copying a grid: the masks are stacked
+    and queries read ``layer`` directly, so a per-unit ``layer`` under vmap costs no grid copy."""
+    return terrain[0]._replace(walkable=jnp.stack([jnp.asarray(t.walkable, bool) for t in terrain]),
+                               layer=jnp.asarray(layer, jnp.int32))
 
 
 def is_walkable(x, z, radius, terrain: StaticTerrain, *, max_radius_cells: int = 3):
@@ -32,17 +41,24 @@ def is_walkable(x, z, radius, terrain: StaticTerrain, *, max_radius_cells: int =
     x, z, radius = (jnp.asarray(v, jnp.float32) for v in (x, z, radius))
     nx, nz = (x-terrain.min_x)/terrain.cell_size, (z-terrain.min_z)/terrain.cell_size
     r = radius/terrain.cell_size
-    width, height = terrain.walkable.shape[1], terrain.walkable.shape[0]
     base_x, base_z = jnp.floor(nx).astype(jnp.int32), jnp.floor(nz).astype(jnp.int32)
     offsets = jnp.arange(-max_radius_cells-1, max_radius_cells+2)
     ix, iz = base_x+offsets[None, :], base_z+offsets[:, None]
     dx = jnp.maximum(jnp.abs(nx-(ix+.5))-.5, 0)
     dz = jnp.maximum(jnp.abs(nz-(iz+.5))-.5, 0)
     touched = dx*dx + dz*dz <= r*r
-    valid = (ix >= 0) & (ix < width) & (iz >= 0) & (iz < height)
-    values = terrain.walkable[jnp.clip(iz, 0, height-1), jnp.clip(ix, 0, width-1)]
-    disk = jnp.all(~touched | (valid & values))
-    point = terrain.walkable[jnp.clip(base_z, 0, height-1), jnp.clip(base_x, 0, width-1)]
+    # The (k, k) window around the base cell in one slice of the grid padded with blocked cells
+    # (outside the grid = blocked). A base outside the grid only shifts the clamped window, and
+    # then the bounds tests below fail anyway.
+    m, k = max_radius_cells + 1, 2 * max_radius_cells + 3
+    pad = ((0, 0),) * (terrain.walkable.ndim - 2) + ((m, m), (m, m))
+    padded = jnp.pad(jnp.asarray(terrain.walkable, bool), pad)
+    if terrain.layer is None:
+        values = jax.lax.dynamic_slice(padded, (base_z, base_x), (k, k))
+    else:
+        values = jax.lax.dynamic_slice(padded, (terrain.layer, base_z, base_x), (1, k, k))[0]
+    disk = jnp.all(~touched | values)
+    point = values[m, m]
     point_bounds = ((x >= terrain.min_x) & (x < terrain.max_x)
                     & (z >= terrain.min_z) & (z < terrain.max_z))
     disk_bounds = ((x-radius > terrain.min_x) & (x+radius < terrain.max_x)

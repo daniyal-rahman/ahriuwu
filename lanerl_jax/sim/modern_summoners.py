@@ -31,7 +31,7 @@ Defaults for unresolved rules (spec §15):
 
 Not modelled here: Flash wall resolution (the world projects ``dash`` onto
 walkable terrain, U-S12), vision/reveal, stealth breaking, homeguard removal,
-Smite (DEFERRED: accepted in a loadout, requests do nothing) and Hexflash
+Smite (``modern_jungle.smite_step``: this step ignores Smite requests) and Hexflash
 (owned by ``modern_rune_effects.inspiration``; read ``flash_cooldown``).
 """
 from __future__ import annotations
@@ -53,7 +53,7 @@ SUMMONERS = {"flash": 4, "teleport": 12, "ignite": 14, "exhaust": 3, "barrier": 
              "cleanse": 1, "smite": 11}
 FLASH, TELEPORT, IGNITE, EXHAUST, BARRIER, HEAL, GHOST, CLEANSE, SMITE = (
     SUMMONERS[k] for k in ("flash", "teleport", "ignite", "exhaust", "barrier", "heal", "ghost", "cleanse", "smite"))
-DEFERRED = {SMITE: "jungle (spec §10): accepted in a loadout, requests are ignored"}
+DEFERRED = {SMITE: "run by modern_jungle.smite_step (charges, upgrades, pets); step() ignores Smite requests"}
 QUEST_SLOT = 2
 
 COOLDOWN = {FLASH: 300.0, TELEPORT: 300.0, IGNITE: 180.0, EXHAUST: 240.0, BARRIER: 180.0, HEAL: 240.0,
@@ -211,7 +211,7 @@ def _f32(x):
 
 
 def step(state: State, ctx, units: WorldUnits, *, request, now, dt, summoner_haste, can_cast,
-         channel_interrupted, quest_complete, took_champion_damage, rooted=None, suppressed=None,
+         channel_interrupted, quest_complete, took_champion_damage=None, rooted=None, suppressed=None,
          nearsighted=None) -> tuple[State, Effects, SummonerOut]:
     """One summoner tick: cooldown/haste upkeep, 10:00 upgrade, TP phases, casts, Ignite ticks.
 
