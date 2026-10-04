@@ -41,6 +41,30 @@ def test_attack_cancel_resets_timer_and_range_is_edge_to_edge():
     assert float(att.windup_left[0]) == 0 and float(att.cooldown_left[0]) == 0   # retarget cancels, timer reset
 
 
+def test_last_windup_tick_ignores_a_new_order_but_not_range_loss():
+    """Grace tick: a move order on the final windup tick still launches; losing range does not."""
+    u = units()
+    ones = jnp.ones(3, bool)
+    att = W.init_attack_state(3)
+    for _ in range(8):                                    # 0.3 s windup: launches on tick 9 (index 8)
+        att, launched = M.attack_step(att, u, jnp.asarray([1, -1, -1]), can_attack=ones,
+                                      windup=jnp.full((3,), 0.3), dt=1 / 30)
+        assert not bool(launched[0])
+    moved, launched = M.attack_step(att, u, jnp.asarray([-1, -1, -1]), can_attack=ones,
+                                    windup=jnp.full((3,), 0.3), dt=1 / 30)
+    assert bool(launched[0])                              # the move order arrived in the grace tick
+    far = units(x=(0.0, 900.0, 1000.0))
+    _, launched = M.attack_step(att, far, jnp.asarray([1, -1, -1]), can_attack=ones,
+                                windup=jnp.full((3,), 0.3), dt=1 / 30)
+    assert not bool(launched[0])                          # out of range: cancelled
+    early = W.init_attack_state(3)
+    early, _ = M.attack_step(early, u, jnp.asarray([1, -1, -1]), can_attack=ones, windup=jnp.full((3,), 0.3),
+                             dt=1 / 30)
+    early, _ = M.attack_step(early, u, jnp.asarray([-1, -1, -1]), can_attack=ones, windup=jnp.full((3,), 0.3),
+                             dt=1 / 30)
+    assert float(early.windup_left[0]) == 0               # earlier in the windup a move cancels
+
+
 def test_missile_homes_and_hits():
     u = units()
     ms = M.init_missiles(4)

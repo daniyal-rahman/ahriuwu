@@ -204,3 +204,125 @@ def test_a_dash_keeps_moving_after_its_start_tick():
     s, _ = run(s, MS.no_orders(), 10)
     s2 = np.hypot(float(s.x[0]) - x0, float(s.y[0]) - y0)
     assert s1 < 40.0 and s2 > s1 + 150.0, (s1, s2)          # 800 u/s for 10 more ticks: ~260 u
+
+
+def _arc(lane):
+    """Cumulative arc length of the (W, 2) lane polyline and a point->arc projector."""
+    seg = np.diff(lane, axis=0)
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(seg[:, 0], seg[:, 1]))])
+
+    def at(a):
+        i = int(np.clip(np.searchsorted(cum, a) - 1, 0, len(seg) - 1))
+        f = (a - cum[i]) / max(cum[i + 1] - cum[i], 1e-6)
+        return lane[i] + f * seg[i]
+
+    def project(p):
+        a = lane[:-1]
+        t = np.clip(np.einsum("ij,ij->i", p - a, seg) / np.maximum(np.einsum("ij,ij->i", seg, seg), 1e-6), 0, 1)
+        q = a + t[:, None] * seg
+        i = int(np.argmin(np.hypot(*(q - p).T)))
+        return cum[i] + t[i] * np.hypot(*seg[i])
+    return cum, at, project
+
+
+def test_champion_walks_back_through_its_own_wave_in_bounded_time():
+    """Unit collision (modern_collision): Garen walking toward base straight through his oncoming top
+    wave steers around the minions instead of being held by them."""
+    from lanerl_jax.sim import modern_lane_ai as LA
+    cfg, step, run, refresh = world()
+    s, _ = state_at_95s()
+    lane = np.asarray(cfg.lane_path)
+    _, at, project = _arc(lane)
+    k, a, team, ln = (np.asarray(v) for v in (s.kind, s.alive, s.team, s.lane_ai.lane))
+    wave = np.flatnonzero((k == W.KIND_MINION) & a & (team == 0) & (ln == LA.LANE_TOP))
+    arcs = np.array([project(np.array([float(s.x[m]), float(s.y[m])])) for m in wave])
+    front = arcs.max()
+    rear = arcs[arcs > front - 1200.0].min()
+    start, goal = at(front + 150.0), at(rear - 500.0)
+    length = front + 150.0 - (rear - 500.0)
+    s = refresh(s._replace(x=s.x.at[0].set(float(start[0])), y=s.y.at[0].set(float(start[1])),
+                           route_anchor=s.route_anchor.at[0].set(-1)))
+    pts = np.stack([np.asarray(s.x)[wave], np.asarray(s.y)[wave]], -1)
+    u = (goal - start) / np.hypot(*(goal - start))
+    d = np.abs(u[0] * (pts[:, 1] - start[1]) - u[1] * (pts[:, 0] - start[0]))
+    assert (d < 150.0).sum() >= 3                                       # the wave really is in the way
+    o = orders(move=[True, False], move_x=[float(goal[0]), 0.0], move_y=[float(goal[1]), 0.0])
+    bound = length / 340.0 * 1.35 + 1.0                                 # Garen 340 u/s base
+    s, _ = step(s, o)
+    s, _ = run(s, MS.no_orders(), int(bound * CHUNK))
+    assert np.hypot(float(s.x[0]) - goal[0], float(s.y[0]) - goal[1]) < 150.0, (length, bound)
+
+
+def test_top_waves_meet_and_fight_near_the_middle():
+    from lanerl_jax.sim import modern_lane_ai as LA
+    cfg, step, _, _ = world()
+    s, _ = state_at_95s()
+    xy = np.stack([np.asarray(s.x), np.asarray(s.y)], -1)
+
+    def top(s, t):
+        k, a, team, ln = (np.asarray(v) for v in (s.kind, s.alive, s.team, s.lane_ai.lane))
+        return (k == W.KIND_MINION) & a & (team == t) & (ln == LA.LANE_TOP)
+    b, r = top(s, 0), top(s, 1)
+    gap = np.hypot(*(xy[b][:, None] - xy[r][None, :]).transpose(2, 0, 1)).min()
+    assert gap < 700.0                                                  # in each other's attack range
+    hurt = np.zeros(2, bool)                                            # both sides take hits within 1 s
+    for _ in range(CHUNK):
+        s, _ = step(s, MS.no_orders())
+        dmg = np.asarray(s.hp) < np.asarray(s.max_hp) - 1.0
+        hurt |= [bool((dmg & top(s, 0)).any()), bool((dmg & top(s, 1)).any())]
+    assert hurt.all()
+
+
+def test_a_move_order_ends_on_arrival():
+    """MECHANICS_AUDIT #2: ``moving`` clears at the goal (it used to stay set, blocking idle auto-attack)."""
+    cfg, step, run, _ = world()
+    s = MS.init_state(cfg)
+    gx, gy = float(s.x[0]) + 300.0, float(s.y[0]) + 300.0
+    s, _ = step(s, orders(move=[True, False], move_x=[gx, 0.0], move_y=[gy, 0.0]))
+    assert bool(s.champ.moving[0])
+    s, _ = run(s, MS.no_orders(), 60)
+    assert np.hypot(float(s.x[0]) - gx, float(s.y[0]) - gy) < 10.0 and not bool(s.champ.moving[0])
+
+
+def test_an_out_of_range_jax_q_walks_into_range_and_casts():
+    """MECHANICS_AUDIT #4: a unit-targeted cast beyond range walks in, then casts (it used to fail)."""
+    cfg, step, run, refresh = world()
+    s = MS.init_state(cfg)
+    s = refresh(s._replace(x=s.x.at[0].set(BRUSH_EDGE[0]).at[1].set(BRUSH_EDGE[0] + 1100.0),
+                           y=s.y.at[0].set(BRUSH_EDGE[1]).at[1].set(BRUSH_EDGE[1]), t=jnp.float32(60.0),
+                           champ=s.champ._replace(ranks=s.champ.ranks.at[1, 0].set(1))))
+    assert bool(s.visible[1, 0])
+    s, _ = step(s, orders(cast_slot=[-1, 0], cast_target=[-1, 0]))
+    assert int(s.champ.queued_cast.slot[1]) == 0 and float(s.champ.cooldowns[1, 0]) == 0.0
+    s, _ = run(s, MS.no_orders(), 90)
+    assert float(s.champ.cooldowns[1, 0]) > 0.0 and int(s.champ.queued_cast.slot[1]) == -1
+
+
+def test_an_attack_target_lost_to_fog_is_chased_to_where_it_was_seen():
+    """MECHANICS_AUDIT #10: walk to the last seen position instead of standing still."""
+    cfg, step, run, refresh = world()
+    s = MS.init_state(cfg)
+    seen_at = BRUSH_EDGE                                       # just outside the lane brush
+    s = refresh(s._replace(x=s.x.at[0].set(BRUSH_EDGE[0] + 500.0).at[1].set(seen_at[0]),
+                           y=s.y.at[0].set(BRUSH_EDGE[1] - 200.0).at[1].set(seen_at[1]), t=jnp.float32(60.0)))
+    assert bool(s.visible[0, 1])
+    s, _ = step(s, orders(attack=[1, -1]))
+    s = refresh(s._replace(x=s.x.at[1].set(BRUSH[0]), y=s.y.at[1].set(BRUSH[1])))   # Jax ducks into brush
+    assert not bool(s.visible[0, 1])
+    s, _ = step(s, MS.no_orders())
+    assert int(s.champ.attack_order[0]) == -1 and bool(s.champ.moving[0])
+    np.testing.assert_allclose(np.asarray(s.champ.move_goal[0]), seen_at, atol=20.0)
+
+
+def test_minion_pushing_favours_the_higher_level_team():
+    """MECHANICS_AUDIT #6: from 3:30 a level lead buffs the leading team's lane minions."""
+    cfg, _, _, _ = world()
+    s, _ = state_at_95s()
+    s = s._replace(econ=s.econ._replace(level=jnp.asarray([3, 1], s.econ.level.dtype)))
+    bonus, div = MS._minion_pushing(s, cfg, s.lane_ai, 300.0)
+    minion = (np.asarray(s.kind) == W.KIND_MINION) & np.asarray(s.alive)
+    team = np.asarray(s.team)
+    assert np.allclose(np.asarray(bonus)[minion & (team == 0)], 0.10)   # (5% + 0 turret lead) x 2 levels
+    assert np.allclose(np.asarray(bonus)[minion & (team == 1)], 0.0)
+    assert np.allclose(np.asarray(MS._minion_pushing(s, cfg, s.lane_ai, 200.0)[0]), 0.0)   # before 3:30
+    assert np.allclose(np.asarray(div)[minion], 1.0)                   # equal turrets: no divisor

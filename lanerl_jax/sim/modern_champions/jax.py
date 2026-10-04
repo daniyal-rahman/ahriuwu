@@ -49,6 +49,7 @@ P_DURATION = scalar(NAME, "Passive", "BuffDuration")     # 2.5
 P_MAX = int(scalar(NAME, "Passive", "MaxStacks"))         # 8
 P_FALLOFF = scalar(NAME, "Passive", "FallOffRate")        # 0.35
 Q_RANGE = 700.0
+UNIT_TARGET_RANGE = (Q_RANGE, 0.0, 0.0, 0.0)   # per slot; 0 = not unit-targeted (walk-in casting)
 Q_SPEED = 1400.0
 W_DURATION = 10.0
 W_AP = 0.6

@@ -1,11 +1,12 @@
 """Decode screen-click actions into ``sim.modern_step.ModernOrders`` (MODERN-005).
 
-Profile ``modern-world-v1``: the legacy screen-click-v2 action ``(button,
+Profile ``modern-world-v2``: the legacy screen-click-v2 action ``(button,
 screen_x, screen_y)`` plus an optional fourth component ``choice``, with extra
 buttons appended after the legacy eight (``MODERN_BUTTONS``). The
 actor still supplies no entity identity; the world hit-tests the clicked point
-against the collision circles of units its team can see (nearest centre
-wins), exactly like ``train.actions.orders_from``.
+against the client selection circles of units its team can see (nearest centre
+wins; ``selection_radius``), like ``train.actions.orders_from``. v2 (MODERN-023)
+adds ``stop`` and uses selection radii instead of gameplay radii.
 
 Each champion acts in its own lane frame (``obs.modern_builder.modern_frames``),
 so the click offset is mapped back with that frame's axis and normal.
@@ -30,6 +31,7 @@ so the click offset is mapped back with that frame's axis and normal.
                   the cursor point / the hostile under it
     ward          use the trinket at the cursor (place a ward, or Oracle Lens sweep)
     control_ward  place a Control Ward at the cursor
+    stop          clear move/attack/attack-move orders (League's S)
 
 Clicks outside the screen or over the minimap are no-ops for every
 cursor-dependent button. There is no move-point snap (PATH-010 is a legacy
@@ -47,11 +49,11 @@ from .actions import _screen_to_centred_lane
 from ..sim import modern_world_types as W
 
 __all__ = ["PROFILE", "MODERN_BUTTONS", "MODERN_BUTTON_INDEX", "SCREEN_BUTTONS", "CHOICE_BUTTONS",
-           "screen_usage", "modern_orders_from"]
+           "screen_usage", "selection_radius", "modern_orders_from"]
 
-PROFILE = "modern-world-v1"
+PROFILE = "modern-world-v2"
 MODERN_BUTTONS = BUTTONS + ("summoner_d", "summoner_f", "level_q", "level_w", "level_e", "level_r",
-                            "buy", "sell", "use_item", "ward", "control_ward")
+                            "buy", "sell", "use_item", "ward", "control_ward", "stop")
 MODERN_BUTTON_INDEX = {name: i for i, name in enumerate(MODERN_BUTTONS)}
 N_INVENTORY_SLOTS = 7
 #: Buttons whose decoded order reads the cursor (point or unit under it). The
@@ -60,9 +62,21 @@ SCREEN_BUTTONS = ("move", "attack_move", "q", "w", "e", "r", "summoner_d", "summ
                   "control_ward")
 #: Buttons that need the fourth ``choice`` component (catalog row / inventory slot).
 CHOICE_BUTTONS = ("buy", "sell", "use_item")
-# Wards have a 1-unit collision radius in the world; a click cell is ~30x36 units, so hit-test
-# them with a champion-sized selection circle instead.
+# Client selection radii (cdragon ``selectionRadius``; wiki Unit_selection, MECHANICS_AUDIT #8): clicks
+# hit-test these, not the gameplay radii. Wards have a 1-unit world radius; a click cell is ~30x36
+# units, so they get a champion-sized circle.
+CHAMPION_SELECTION_RADIUS = 120.0
+MINION_SELECTION_RADIUS = (115.0, 115.0, 140.0, 145.0)        # melee, caster, siege, super
 WARD_CLICK_RADIUS = 65.0
+
+
+def selection_radius(state):
+    """(N,) click hit-test radius per unit: selection radii for champions and minions, the
+    ward circle, and the world radius for everything else (monsters, structures)."""
+    sub = jnp.clip(state.sub, 0, 3)
+    r = jnp.where(state.kind == W.KIND_CHAMPION, CHAMPION_SELECTION_RADIUS, state.radius)
+    r = jnp.where(state.kind == W.KIND_MINION, jnp.asarray(MINION_SELECTION_RADIUS, jnp.float32)[sub], r)
+    return jnp.where(state.kind == W.KIND_WARD, jnp.maximum(state.radius, WARD_CLICK_RADIUS), r)
 
 
 def screen_usage(button):
@@ -100,7 +114,7 @@ def modern_orders_from(action, state, frames, *, cfg_x: int = N_SCREEN_X, cfg_y:
     n = state.kind.shape[0]
     d2 = (state.x[None, :] - x[:, None]) ** 2 + (state.y[None, :] - y[:, None]) ** 2
     seen = state.visible[state.team[:c]]                                  # (C, N) team fog
-    pick_r = jnp.where(state.kind == W.KIND_WARD, jnp.maximum(state.radius, WARD_CLICK_RADIUS), state.radius)
+    pick_r = selection_radius(state)
     hit = seen & (state.alive & state.targetable & (state.kind != W.KIND_NONE))[None, :] \
         & (jnp.arange(n)[None, :] != jnp.arange(c)[:, None]) & (d2 <= pick_r[None, :] ** 2)
     any_hit = jnp.any(hit, axis=1)
@@ -142,4 +156,4 @@ def modern_orders_from(action, state, frames, *, cfg_x: int = N_SCREEN_X, cfg_y:
         cast_slot=cast_slot.astype(jnp.int32), cast_target=enemy_target.astype(jnp.int32), cast_x=x, cast_y=y,
         summoner_slot=summ_slot.astype(jnp.int32),
         summoner_target=jnp.where(any_hit, picked, -1).astype(jnp.int32), summoner_x=x, summoner_y=y,
-        recall=button == b["recall"])
+        recall=button == b["recall"], stop=button == b["stop"])

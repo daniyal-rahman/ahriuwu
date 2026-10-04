@@ -168,4 +168,4 @@ def test_end_to_end_tiny_update(opponent):
     assert float(np.asarray(m["cs_episodes"]).sum()) > 0          # a full episode ended
     assert int(runner3.step) == 5 * cfg.n_envs * 2 * cfg.rollout_steps
     assert float(np.asarray(runner3.env_state.world.t).max()) <= 2.0 + 1e-3   # reset from the bank
-    assert len(MODERN_BUTTONS) == 19
+    assert len(MODERN_BUTTONS) == 20 and MODERN_BUTTONS[-1] == "stop"

@@ -60,6 +60,25 @@ from .modern_world import MAX_MINIONS, N_CHAMPIONS, WorldConfig, unit_ranges
 from .modern_world import layout as MW_layout
 
 RECALL_MS_LOCK = True
+MOVE_ARRIVE_RADIUS = 5.0     # a move order is complete within this distance of its goal
+CAST_BUFFER_S = 0.5          # casts during a lockout / just before a cooldown ends are held this long (U: guess)
+CAST_RANGE_SLACK = 5.0       # walk-in casting stops this far inside the spell's range
+
+
+class QueuedCast(NamedTuple):
+    """(C,) a cast held for later (MECHANICS_AUDIT #4/#9): an out-of-range unit-targeted cast the
+    champion walks into range for (until a new order), or a cast made during a lockout or within
+    ``CAST_BUFFER_S`` of its cooldown ending (fires when allowed, expires after the buffer)."""
+    slot: Any               # int32, -1 none
+    target: Any             # int32 unit, -1 none
+    x: Any
+    y: Any
+    until: Any              # expiry time (inf: walk-in, until replaced)
+
+
+def no_queued_cast(c: int) -> QueuedCast:
+    z = jnp.zeros((c,), jnp.float32)
+    return QueuedCast(jnp.full((c,), -1, jnp.int32), jnp.full((c,), -1, jnp.int32), z, z, z)
 CAST_ID_STRIDE = 256        # attack cast ids tick*256+unit+1 stay < 2^30 (K.KIT_ID_BASE) for 2^22 ticks (~38.8 h)
 SKILL_ORDERS = {86: (2, 0, 1, 2, 2, 3, 2, 0, 2, 0, 3, 0, 0, 1, 1, 3, 1, 1),     # Garen E>Q>W (modern.skill_ranks)
                 24: (2, 0, 1, 1, 1, 3, 1, 2, 1, 2, 3, 2, 2, 0, 0, 3, 0, 0)}     # Jax W>E>Q
@@ -75,6 +94,8 @@ class ChampionLayer(NamedTuple):
     move_goal: Any          # (C, 2)
     moving: Any             # bool: walk to move_goal
     attack_order: Any       # int32 unit, -1 none
+    target_seen_at: Any     # (C, 2) where the team last saw the attack target (walked to if it enters fog)
+    queued_cast: Any        # QueuedCast: walk-in / buffered cast
     facing: Any             # (C, 2)
     dash_until: Any         # dash end time (inf = none)
     dash_target: Any        # int32 unit to follow, -1 point
@@ -235,6 +256,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         ranks=ranks, cooldowns=jnp.zeros((c, 4), jnp.float32), mana=st.max_mana, cast_lock_until=zc,
         item_cast_until=zc,
         move_goal=cfg.fountain, moving=jnp.zeros((c,), bool), attack_order=jnp.full((c,), -1, jnp.int32),
+        target_seen_at=cfg.fountain, queued_cast=no_queued_cast(c),
         facing=jnp.tile(jnp.asarray([[1.0, 1.0]], jnp.float32), (c, 1)) * jnp.asarray([[1.0], [-1.0]]),
         dash_until=zc - 1.0, dash_target=jnp.full((c,), -1, jnp.int32), dash_to=cfg.fountain, dash_speed=zc,
         last_damaged=zc - 1e9, inventory=inv,
@@ -749,6 +771,55 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     return jax.tree.map(lambda a, b: jnp.asarray(b, a.dtype) if hasattr(a, "dtype") else b, s0, new), events
 
 
+def _queue_casts(s: ModernState, cfg: WorldConfig, orders: ModernOrders, champ, seen, new_order, now):
+    """Walk-in and buffered casting (wiki Targeting / Cast time; MECHANICS_AUDIT #4/#9).
+
+    Returns ``(orders, queued, chase, walked_in)``: ``orders`` with this tick's cast (an incoming cast
+    that can go now, else a queued one that became possible), the queue to keep, champions walking
+    into range of a queued target, and champions whose walk-in cast fired this tick (ends the walk). A move, attack,
+    stop or attack-move order clears the queue; so does a new cast (it replaces it)."""
+    from . import modern_champions as KC
+    c, n = N_CHAMPIONS, cfg.n_units
+    ar = jnp.arange(c)
+    rng = KC.unit_target_ranges(cfg.champion_ids)                                   # (C, 4)
+
+    def needs(slot, target):
+        """(far, blocked) for a cast of ``slot`` at ``target`` now."""
+        sl = jnp.clip(slot, 0, 3)
+        r = rng[ar, sl]
+        t = jnp.clip(target, 0, n - 1)
+        d = jnp.sqrt((s.x[:c] - s.x[t]) ** 2 + (s.y[:c] - s.y[t]) ** 2)
+        far = (slot >= 0) & (target >= 0) & (r > 0) & (d > r + s.radius[t] - CAST_RANGE_SLACK)
+        cd = champ.cooldowns[ar, sl]
+        blocked = (slot >= 0) & ((now < champ.cast_lock_until) | (now < champ.item_cast_until)
+                                 | ((cd > 0) & (cd <= CAST_BUFFER_S)))
+        return far, blocked
+
+    incoming = orders.cast_slot >= 0
+    far_in, blocked_in = needs(orders.cast_slot, orders.cast_target)
+    hold_in = incoming & (far_in | blocked_in)
+    q = champ.queued_cast
+    keep = (q.slot >= 0) & ~incoming & ~new_order & (now < q.until) \
+        & ((q.target < 0) | (seen(q.target) & s.alive[jnp.clip(q.target, 0, n - 1)]))
+    q = QueuedCast(*(jnp.where(keep, a, b) for a, b in zip(q, no_queued_cast(c))))
+    q = QueuedCast(jnp.where(hold_in, orders.cast_slot, q.slot).astype(jnp.int32),
+                   jnp.where(hold_in, orders.cast_target, q.target).astype(jnp.int32),
+                   jnp.where(hold_in, orders.cast_x, q.x), jnp.where(hold_in, orders.cast_y, q.y),
+                   jnp.where(hold_in, jnp.where(far_in, jnp.inf, now + CAST_BUFFER_S), q.until))
+    far_q, blocked_q = needs(q.slot, q.target)
+    fire = (q.slot >= 0) & ~hold_in & ~far_q & ~blocked_q
+    go_now = incoming & ~hold_in
+    orders = orders._replace(
+        cast_slot=jnp.where(go_now, orders.cast_slot, jnp.where(fire, q.slot, -1)).astype(jnp.int32),
+        cast_target=jnp.where(go_now, orders.cast_target, jnp.where(fire, q.target, orders.cast_target)).astype(jnp.int32),
+        cast_x=jnp.where(go_now, orders.cast_x, jnp.where(fire, q.x, orders.cast_x)),
+        cast_y=jnp.where(go_now, orders.cast_y, jnp.where(fire, q.y, orders.cast_y)))
+    chase = (q.slot >= 0) & far_q & ~fire
+    walked_in = fire & jnp.isinf(q.until)                       # a walk-in cast arrived and fired
+    q = QueuedCast(*(jnp.where(fire, b, a) for a, b in zip(q, no_queued_cast(c))))
+    return orders, q, chase, walked_in
+
+
 def _input(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
            sc: TickScratch) -> tuple[ModernState, ModernOrders, TickScratch]:
     """1. INPUT: fog-filtered orders, attack-move, stasis, skill points, spawns, this tick's terrain.
@@ -774,12 +845,28 @@ def _input(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     attack_order = jnp.where(orders.stop | orders.move | am_req, -1, jnp.where(orders.attack >= 0, orders.attack, kept))
     moving = jnp.where(orders.stop | (orders.attack >= 0) | am_req, False, orders.move | champ.moving)
     goal = jnp.where(orders.move[:, None], jnp.stack([orders.move_x, orders.move_y], -1), champ.move_goal)
+    # A live attack target that enters fog: walk to where it was last seen (wiki Basic attack;
+    # MECHANICS_AUDIT #10) instead of standing still. The order itself is dropped.
+    t_old = jnp.clip(champ.attack_order, 0, n - 1)
+    lost = (champ.attack_order >= 0) & ~seen(champ.attack_order) & s.alive[t_old] & ~new_order
+    # Remember where this tick's target is seen (including a target just ordered), for later ticks.
+    t_now = jnp.clip(attack_order, 0, n - 1)
+    seen_at = jnp.where(seen(attack_order)[:, None], jnp.stack([s.x[t_now], s.y[t_now]], -1),
+                        champ.target_seen_at)
+    moving = moving | lost
+    goal = jnp.where(lost[:, None], champ.target_seen_at, goal)
+    orders, queued, cast_chase, cast_fired = _queue_casts(s, cfg, orders, champ, seen, new_order, now)
+    moving = jnp.where(cast_chase, True, jnp.where(cast_fired, False, moving))
+    attack_order = jnp.where(cast_chase, -1, attack_order)          # "move to cast" replaces an attack order
+    t_q = jnp.clip(queued.target, 0, n - 1)
+    goal = jnp.where(cast_chase[:, None], jnp.stack([s.x[t_q], s.y[t_q]], -1), goal)
     amove = s.amove
     amove = AttackMove(active=jnp.where(new_order, am_req, amove.active),
                        x=jnp.where(am_req, orders.move_x, amove.x), y=jnp.where(am_req, orders.move_y, amove.y),
                        held=jnp.where(new_order, -1, amove.held), held_seq=amove.held_seq)
     ranks = _skill_up(s, cfg, orders)
-    champ = champ._replace(attack_order=attack_order.astype(jnp.int32), moving=moving, move_goal=goal, ranks=ranks)
+    champ = champ._replace(attack_order=attack_order.astype(jnp.int32), moving=moving, move_goal=goal, ranks=ranks,
+                           target_seen_at=seen_at, queued_cast=queued)
     s = s._replace(champ=champ, amove=amove)
     s = _spawn_minions(s, cfg, now)
     caps = M.capabilities(s.cc, now)
@@ -1044,21 +1131,29 @@ def _move(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratc
     cx = jnp.where(s_out.teleport_arrive, s_out.teleport_x, cx)
     cy = jnp.where(s_out.teleport_arrive, s_out.teleport_y, cy)
     x, y = x.at[:c].set(cx.astype(x.dtype)), y.at[:c].set(cy.astype(y.dtype))
-    # Unit collision (static terrain checked by the movement clamp; dynamic terrain deferred).
-    from .collision import resolve_collisions
-    legacy_kind = jnp.where(s.kind == W.KIND_MONSTER, 2,
-                            jnp.where(s.kind >= W.KIND_TURRET, 3, s.kind)).astype(s.kind.dtype)
+    # Unit collision (modern_collision, COLLISION.md): avoidance steering of movers, then soft separation,
+    # pathing radii, never into terrain (movement clearance on the team mask, as the MOVE clamp and eject).
+    from . import modern_collision as UC
     ghost = (jnp.zeros((n,), bool).at[:c].set(s_out.ghosted | (now < dash_until) | K.ghosted(kits, kctx))
              | LA.minion_ghosted(lane_ai, units, now))
     # Wards have no collision; structures block through their navgrid pads (terrain), not as unit
     # obstacles: their collision circles reach past the pads that routes are baked around, which left
     # units pinned against them (red stuck at its top inhibitor).
     collide = s.alive & (s.kind != W.KIND_WARD) & ~W.is_structure(s.kind)
-    x, y = resolve_collisions(x, y, legacy_kind, collide, s.spawn_seq, s.radius, s.radius, ghosted=ghost)
+    x, y = UC.resolve(s.x, s.y, x, y, radius=UC.pathing_radius(s.kind, s.sub, s.radius), collide=collide,
+                      ghosted=ghost, moving=active, goal_x=gx, goal_y=gy, team=team_mv,
+                      clearance=jnp.minimum(s.radius, cfg.routes.radius), terrain=terrain, dt=dt,
+                      movers=MW_layout()["ward0"])
     facing = jnp.stack([x[:c] - s.x[:c], y[:c] - s.y[:c]], -1)
     norm = jnp.linalg.norm(facing, axis=-1, keepdims=True)
     facing = jnp.where(norm > 1e-3, facing / jnp.maximum(norm, 1e-6), champ.facing)
     moved = jnp.sqrt((x[:c] - s.x[:c]) ** 2 + (y[:c] - s.y[:c]) ** 2)
+    # A move order ends on arrival, or where the champion can make no more progress (unreachable or
+    # walled-off goal: League walks as far as it can and stops). Then idle auto-acquire resumes
+    # (MECHANICS_AUDIT #2; the flag used to stay set for the rest of the game).
+    to_goal = jnp.sqrt((x[:c] - champ.move_goal[:, 0]) ** 2 + (y[:c] - champ.move_goal[:, 1]) ** 2)
+    stuck = cact & (moved < 0.5) & ~in_dash
+    champ = champ._replace(moving=champ.moving & ~(to_goal <= MOVE_ARRIVE_RADIUS) & ~(stuck & ~chase))
     # Dash state and facing go to the working ChampionLayer too: it becomes the next state's ``champ``
     # (writing only ``s.champ`` dropped them every tick, so a Jax Q leap moved only on its start tick).
     champ = champ._replace(dash_until=dash_until, dash_target=dash_target.astype(jnp.int32),
@@ -1070,6 +1165,27 @@ def _move(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratc
     ictx = ictx._replace(x=x[:c], y=y[:c], facing_x=facing[:, 0], facing_y=facing[:, 1], moved=moved)
     return s, sc._replace(champ=champ, tp_lock=tp_lock, sres=sres, ms=ms, dstart=dstart, in_dash=in_dash,
                           units=units, ictx=ictx)
+
+
+def _minion_pushing(s: ModernState, cfg: WorldConfig, lane_ai, now) -> tuple[Any, Any]:
+    """(N,) Minion Pushing (MINIONS §4.4, MECHANICS_AUDIT #6): each lane minion's team bonus damage
+    and the divisor on minion damage it takes, from its team's level lead (one champion per team, so
+    the champion's level) and its lane's turret lead. Recomputed every tick (the client holds it for
+    1 s, so a level-up or turret kill applies up to 1 s earlier here)."""
+    from . import modern_minions as MM
+    n = s.kind.shape[0]
+    level = s.econ.level.astype(jnp.float32)
+    team = jnp.clip(s.team, 0, 1)
+    turret = (s.kind == W.KIND_TURRET) & s.alive
+    alive_t = jnp.stack([jnp.stack([jnp.sum(turret & (s.team == t) & (cfg.unit_lane == l)) for l in range(3)])
+                         for t in (0, 1)]).astype(jnp.float32)                                     # (team, lane)
+    lane = jnp.clip(lane_ai.lane, 0, 2)
+    lvl_adv = level[team] - level[1 - team]
+    tow_adv = alive_t[team, lane] - alive_t[1 - team, lane]
+    bonus, div = MM.minion_pushing_modifiers(team_level_advantage=lvl_adv, lane_turret_advantage=tow_adv,
+                                             time_s=jnp.floor(now))
+    minion = (s.kind == W.KIND_MINION) & (lane_ai.lane >= 0)
+    return jnp.where(minion, bonus, 0.0), jnp.where(minion, div, 1.0) * jnp.ones((n,), jnp.float32)
 
 
 def _attack(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
@@ -1123,9 +1239,10 @@ def _attack(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScra
     on_ward = (s.kind[atgt] == W.KIND_WARD) & (att.target >= 0)
     hit_c = launched[:c] & ~ranged_c & ~on_ward[:c]
     attack = Attack(launched[:c], hit_c, att.target[:c], jnp.where(launched[:c], craw, 0.0), crit)
+    push_bonus, push_div = _minion_pushing(s, cfg, lane_ai, now)
     lane_pk = LA.attack_packets(units, W.AttackLaunch(launched & (s.kind != W.KIND_CHAMPION), att.target,
                                                       s.missile_speed > 0, jnp.zeros((n,), bool), cast_ids),
-                                now=now, ai=lane_ai)
+                                now=now, ai=lane_ai, pushing_bonus=push_bonus, pushing_divisor=push_div)
     lane_pk = lane_pk._replace(cast_id=cast_ids)
     msl_speed = s.missile_speed if mbuf is None else jnp.where(mbuf.missile_speed > 0, mbuf.missile_speed,
                                                                s.missile_speed)

@@ -52,6 +52,9 @@ def attack_step(att: W.AttackState, units: W.WorldUnits, desired: Any, *, can_at
     ``period`` (N,) overrides the attack's total time when > 0 (Garen Q);
     ``uncancellable`` (N,) keeps a started windup running through range loss
     and a new order; it still ends if the target dies or becomes invalid.
+    Grace tick (wiki Basic attack, MECHANICS_AUDIT #5): in the last tick before the
+    launch a new order (move, stop, another target) does not cancel the windup; losing
+    the target, range or the ability to attack still does.
     """
     n = units.x.shape[0]
     t = jnp.clip(desired, 0, n - 1)
@@ -59,7 +62,9 @@ def attack_step(att: W.AttackState, units: W.WorldUnits, desired: Any, *, can_at
     same = (desired == att.target) & (units.spawn_seq[t] == att.target_seq)
     ready = valid & in_attack_range(units, desired) & can_attack & units.alive
     winding = att.windup_left > 0.0
-    cancel = winding & ~(same & ready)
+    grace = winding & (att.windup_left - dt <= 1e-5) & att_target_ok(att, units) \
+        & in_attack_range(units, att.target) & can_attack & units.alive
+    cancel = winding & ~(same & ready) & ~grace
     if uncancellable is not None:
         cancel = cancel & ~(uncancellable & att_target_ok(att, units))
     if reset is not None:
@@ -75,15 +80,18 @@ def attack_step(att: W.AttackState, units: W.WorldUnits, desired: Any, *, can_at
     left = jnp.where(start, windup, left)
     cooldown = jnp.where(start, period, cooldown)
     # Fires on the first tick whose accumulated time reaches the windup (tick rounding, §1.3).
-    held = ready if uncancellable is None else ready | (uncancellable & att_target_ok(att, units) & (left > 0.0))
+    held = ready | (grace & ~cancel)
+    if uncancellable is not None:
+        held = held | (uncancellable & att_target_ok(att, units) & (left > 0.0))
     launched = (left > 0.0) & (left - dt <= 1e-5) & held
     left = jnp.where(launched | (left <= 0.0), 0.0, jnp.maximum(left - dt, 0.0))
     target = jnp.where(valid, desired, -1)
     seq = jnp.where(valid, units.spawn_seq[t], att.target_seq)
+    keep = grace & ~cancel
     if uncancellable is not None:
-        keep = uncancellable & winding & ~cancel
-        target = jnp.where(keep, att.target, target)
-        seq = jnp.where(keep, att.target_seq, seq)
+        keep = keep | (uncancellable & winding & ~cancel)
+    target = jnp.where(keep, att.target, target)
+    seq = jnp.where(keep, att.target_seq, seq)
     return W.AttackState(target.astype(jnp.int32), seq.astype(jnp.int32), left, cooldown), launched
 
 

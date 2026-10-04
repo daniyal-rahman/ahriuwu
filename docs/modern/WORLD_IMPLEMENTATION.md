@@ -129,8 +129,9 @@ One-tick lags (the value is produced in this tick and read in the next):
 - **Routing:** a unit keeps steering by its route anchor while that node stays in sight; this replaced the per-tick
   25-candidate nearest-node search (MODERN-022: same or better arrival on 400 real-map routes, 4.2x cheaper
   movement). Units beyond the 16 searches per tick hold position for a tick.
-- **Collision:** unit collision uses the legacy `resolve_collisions` without the terrain grid; terrain is enforced by
-  the movement clamp and `modern_dynamic_terrain.eject`.
+- **Collision:** `modern_collision.resolve` (COLLISION.md): pathing radii, avoidance steering of movers, then soft
+  Jacobi separation that never pushes a unit into terrain (movement clearance on its team mask);
+  `modern_dynamic_terrain.eject` still frees units left inside closed terrain.
 - **Observations and actions:** profile `modern-world-v1` (MODERN-005).
   - `lanerl_jax/obs/modern_builder.py` returns `ModernObservation`: 32×20 entity slots (legacy 16 columns, a
     neutral-team column that is now used, then monster, epic monster, ward, Control Ward), the 6-column global

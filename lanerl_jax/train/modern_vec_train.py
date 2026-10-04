@@ -66,6 +66,7 @@ from ..obs import modern_builder as OB
 from ..sim import modern_world_types as W
 from .learner import make_learner
 from .modern_actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from, screen_usage
+from .modern_actions import PROFILE as MA_PROFILE
 from .policy import LanePolicy, PolicyConfig
 from .ppo import PPOConfig, factored_log_prob
 from .reward import LANE_HALF_WIDTH
@@ -88,6 +89,10 @@ class ModernVecConfig(NamedTuple):
     episode_s: float = 600.0
     start_s: float = 60.0
     step_ticks: int = 3
+    #: input latency: the decision's orders reach the world on tick ``action_delay_ticks`` of the
+    #: decision (0..step_ticks-1; ~33 ms each) instead of at once (MECHANICS_AUDIT #3). Clicks are
+    #: still decoded against the state the policy saw, as a client does.
+    action_delay_ticks: int = 0
     observation_horizon_s: float | None = None
     stagger_initial: bool = True
     bank_size: int = 16
@@ -135,7 +140,7 @@ class MaskedLanePolicy(LanePolicy):
 
 
 def modern_policy_config(**kw) -> PolicyConfig:
-    """``PolicyConfig`` with the modern-world-v1 widths (32x20 entities, 32 self, 6 global, 19 buttons)."""
+    """``PolicyConfig`` with the modern-world widths (32x20 entities, 32 self, 6 global, ``len(MODERN_BUTTONS)`` buttons)."""
     return PolicyConfig(**{**dict(entity_dim=OB.MODERN_ENTITY_DIM, self_dim=OB.MODERN_WORLD_SELF_DIM,
                                   n_buttons=len(MODERN_BUTTONS)), **kw})
 
@@ -252,13 +257,16 @@ def modern_relative_reward(prev, nxt, cfg: ModernVecConfig, env: ModernEnv):
 
 # ---- environment ------------------------------------------------------------------------
 
-def _advance(env: ModernEnv, world, orders, ticks: int):
-    """``ticks`` world ticks: ``orders`` on the first, ``no_orders`` after (one ``step`` call site)."""
+def _advance(env: ModernEnv, world, orders, ticks: int, delay: int = 0):
+    """``ticks`` world ticks: ``orders`` on tick ``delay`` (input latency), ``no_orders`` on the
+    others (one ``step`` call site)."""
     from ..sim import modern_step as MS
+    if not 0 <= delay < ticks:
+        raise ValueError("action delay must be in [0, step_ticks)")
     idle = MS.no_orders()
 
     def body(s, i):
-        o = jax.tree.map(lambda a, b: jnp.where(i == 0, a, b), orders, idle)
+        o = jax.tree.map(lambda a, b: jnp.where(i == delay, a, b), orders, idle)
         return MS.step(s, o, env.wcfg)[0], None
     return jax.lax.scan(body, world, jnp.arange(ticks))[0]
 
@@ -375,7 +383,7 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
             if cfg.opponent == "afk":
                 action = tuple(a.at[1].set(0) for a in action)
             orders = modern_orders_from(action, state, env.frames)
-            nxt = _advance(env, state, orders, cfg.step_ticks)
+            nxt = _advance(env, state, orders, cfg.step_ticks, cfg.action_delay_ticks)
             reward, terms, tower_hp = modern_relative_reward(state, nxt, cfg, env)
             died = (nxt.econ.dead[:2] & ~state.econ.dead[:2])
             kills = es.kills + died[::-1].astype(jnp.int32)
@@ -469,6 +477,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--episode-s", type=float, default=600.0, help="game clock at which episodes end")
     p.add_argument("--start-s", type=float, default=60.0, help="game clock of the reset bank")
     p.add_argument("--step-ticks", type=int, default=3, help="30 Hz world ticks per decision")
+    p.add_argument("--action-delay-ticks", type=int, default=0,
+                   help="input latency in world ticks (< step-ticks); 2 ~ 66 ms")
     p.add_argument("--bank-size", type=int, default=16)
     p.add_argument("--hold-offset", type=float, default=800.0)
     p.add_argument("--hold-jitter", type=float, default=300.0)
@@ -533,7 +543,8 @@ def main(argv=None) -> None:
             pcfg = PolicyConfig(**saved)
     buttons_off = tuple(b for b in a.buttons_off.split(",") if b)
     cfg = ModernVecConfig(n_envs=a.envs, rollout_steps=a.rollout, n_updates=a.updates, n_minibatches=a.minibatches,
-                          episode_s=a.episode_s, start_s=a.start_s, step_ticks=a.step_ticks, bank_size=a.bank_size,
+                          episode_s=a.episode_s, start_s=a.start_s, step_ticks=a.step_ticks, action_delay_ticks=a.action_delay_ticks,
+                          bank_size=a.bank_size,
                           hold_offset=a.hold_offset, hold_jitter=a.hold_jitter, opponent=a.opponent,
                           gold_scale=a.gold_scale, xp_scale=a.xp_scale, enemy_scale=a.enemy_scale,
                           health_loss_gold=a.health_loss_gold, tower_damage_gold=a.tower_damage_gold,
@@ -553,7 +564,7 @@ def main(argv=None) -> None:
         "train": {"policy": pcfg._asdict()}, "command": command, "cwd": str(Path.cwd()),
         "ppo": ppo._asdict(), "vec": {k: v for k, v in cfg._asdict().items() if k not in ("ppo", "policy")},
         "environment": "jax-vectorised-modern-world", "world": world_desc,
-        "observation": OB.PROFILE, "action": "modern-world-v1 (button, sx, sy); choice heads absent",
+        "observation": OB.PROFILE, "action": f"{MA_PROFILE} (button, sx, sy); choice heads absent",
         "buttons_off": buttons_off,
         "opponent": {"mirror": "mirror-self-play", "afk": "afk red (noop)", "frozen": f"frozen {a.opponent_from}"}[
             a.opponent],

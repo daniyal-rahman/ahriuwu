@@ -39,6 +39,16 @@ def _both(fn_name, state, kctx, units, *args):
     return ChampionState(sg, sj), merge_out([og, oj], c, n)
 
 
+def unit_target_ranges(champion_ids) -> Any:
+    """(C, 4) center-to-edge cast range of each slot's unit-targeted spell (0: not unit-targeted);
+    the world walks a champion into this range before casting (``UNIT_TARGET_RANGE`` per kit)."""
+    ids = jnp.asarray(champion_ids, jnp.int32)
+    out = jnp.zeros(ids.shape + (4,), jnp.float32)
+    for cid, mod in KITS.items():
+        out = jnp.where((ids == cid)[:, None], jnp.asarray(mod.UNIT_TARGET_RANGE, jnp.float32)[None, :], out)
+    return out
+
+
 def cast(state: ChampionState, kctx: KitCtx, units, order) -> tuple[ChampionState, KitOut]:
     return _both("cast", state, kctx, units, order)
 

@@ -75,6 +75,7 @@ E_SHRED = scalar(NAME, "E", "ShredAmount")            # 0.25
 E_SHRED_DURATION = scalar(NAME, "E", "ShredDuration")  # 6
 E_SHRED_HITS = int(scalar(NAME, "E", "StacksToShred"))  # 6
 R_RANGE = 400.0
+UNIT_TARGET_RANGE = (0.0, 0.0, 0.0, R_RANGE)   # per slot; 0 = not unit-targeted (walk-in casting)
 R_CAST_TIME = 0.435                                    # spellCastTime
 PASSIVE_DELAY = scalar(NAME, "Passive", "DamageTimer")   # 8 s
 PASSIVE_PULSE = 0.5                                    # wiki: (RegenCalc / 10) every 0.5 s
