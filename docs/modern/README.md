@@ -27,6 +27,7 @@ regression oracle for the legacy ruleset only (ledger MODERN-006). `docs/MODERN_
 | [OBJECTIVES.md](OBJECTIVES.md) | **Implemented** 26.19 epic objectives (Voidgrubs, Rift Herald, Drakes/Soul/Elder, Baron), team buffs, Elemental Rift and Baron-pit terrain | — |
 | [CHAMPIONS.md](CHAMPIONS.md) | **Implemented** Garen and Jax 26.19 kits with evidence; remaining approximations | — |
 | [LANES_TERRAIN.md](LANES_TERRAIN.md) | **Implemented** all-lane waves, structure pads, map regions (quest lane, Homeguard, river), attack-move, game end, item actives | — |
+| [REPLAY_FIDELITY.md](REPLAY_FIDELITY.md) | **Checks** against 145 recorded 26.9 games: death timers, passive gold, base stats, respawn, move speed OK; Homeguard soft-cap order and Recall cast time mismatched (tool `ops/modern_replay_fidelity.py`) | — |
 | [ECONOMY_IMPLEMENTATION.md](ECONOMY_IMPLEMENTATION.md) | **Implemented** economy/progression + Top quest, and the **replay oracle**: 145 real 16.9 games checking gold, death timers, kill/assist gold, fountain, level-up HP (spec corrections listed) | — |
 | [ECONOMY_PROGRESSION.md](ECONOMY_PROGRESSION.md) | Starting/ambient gold, XP curve to level 20, minion and kill XP sharing, comeback XP, kill credit/assists, 2026 bounty system, structure gold distribution, level-up, death timers, respawn, recall/Homeguard, fountain/shop | 310 |
 | [ROLE_QUESTS.md](ROLE_QUESTS.md) | Role binding, Top quest point sources and thresholds, completion event, rewards (level cap 20, XP, Teleport upgrade/shield), other roles briefly | 234 |

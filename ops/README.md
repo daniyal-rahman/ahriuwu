@@ -83,3 +83,18 @@ World-variant flags (`--fog rays|fast|off`, `--no-jungle`, `--no-objectives`,
 through the compiled HLO's stack-frame tables); use it to find hotspots before
 optimising. Run both on the desktop through Slurm (`gpup` for GPU, `cpu` for
 CPU) from an NFS code snapshot, because the desktop cannot see the worktree.
+
+`modern_perf_guard.py` + `slurm/modern_perf_guard.sbatch` are a TOOL: a
+throughput and memory regression guard for the modern world tick. It runs the
+`modern_world_bench.py` scan for one fixed config per backend (256 envs on GPU,
+16 on CPU; 1800 warm ticks, 150 ticks per call, fastest of 3 timed calls) and
+records env-ticks per second, the compiled program's temp buffer bytes and, on
+GPU, `peak_bytes_in_use` from `jax.devices()[0].memory_stats()`. It compares
+them to `modern_perf_baseline.json` (keyed by backend, device kind and config)
+and exits 1 on a throughput drop or memory growth over `--tolerance` (15%),
+3 when the key has no baseline. `--update-baseline` records the run as the new
+baseline for its key; commit the JSON with the change that moved it. Submit
+`sbatch slurm/modern_perf_guard.sbatch [--cpu] [--update-baseline]` (gpup,
+exclusive node, 45 min; log in `/mnt/nfs/shared/modern-perf-guard/`, create it
+first); set `CODE=<NFS snapshot> sbatch --export=ALL ...` to measure a snapshot
+instead of `/mnt/nfs/projects/ahriuwu-lanerl-jax`.

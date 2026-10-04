@@ -41,9 +41,6 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
-import optax
-
-from lanerl_rl.constants import BUTTONS
 
 from ..obs.builder import build_observation
 from ..sim.config import DEFAULT_ROUTE_ARTIFACT, SimConfig
@@ -51,10 +48,11 @@ from ..sim.step import env_step
 from .actions import click_mask_from_position, orders_from
 from .learner import make_learner
 from .policy import LanePolicy, PolicyConfig
-from .ppo import PPOConfig, factored_log_prob, gae, update_epochs
+from .ppo import PPOConfig
 from .reward import lane_corridor_distance
+from .scan_ppo import Transition, VecRunner, make_batch_fn, ppo_learn
 
-__all__ = ["VecConfig", "VecRunner", "make_vec_train", "main"]
+__all__ = ["VecConfig", "VecRunner", "Transition", "make_vec_train", "make_batch_fn", "ppo_learn", "main"]
 
 
 class VecConfig(NamedTuple):
@@ -90,44 +88,6 @@ class VecConfig(NamedTuple):
     @property
     def learn_agents(self) -> int:
         return 2 if self.opponent == "mirror" else 1
-
-
-class VecRunner(NamedTuple):
-    params: dict
-    opt_state: optax.OptState
-    env_state: object
-    #: (n_envs, 2, core_dim) GRU carry, or a (n_envs, 2, 0) placeholder for mlp.
-    carry: jax.Array
-    rng: jax.Array
-    step: jax.Array
-    #: (n_envs,) game-ms at which each env's CURRENT episode ends; the first
-    #: episode is cut short at random to stagger phases (see `trainer.py`).
-    deadline_ms: jax.Array
-
-
-class Transition(NamedTuple):
-    obs_entities: jax.Array
-    obs_mask: jax.Array
-    obs_self: jax.Array
-    obs_global: jax.Array
-    action: tuple
-    log_prob: jax.Array
-    uses_screen: jax.Array
-    uses_target: jax.Array
-    value: jax.Array
-    reward: jax.Array
-    done: jax.Array
-    reward_terms: dict
-    cs: jax.Array
-    gold: jax.Array
-    xp: jax.Array
-    done_full: jax.Array
-    deaths: jax.Array
-    lane_dist: jax.Array
-    click_mask: jax.Array | None
-    hp_at_end: jax.Array
-    tower_damage_at_end: jax.Array
-    kills_at_end: jax.Array
 
 
 def _relative_reward(prev, nxt, cfg: VecConfig):
@@ -278,28 +238,7 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         return runner._replace(env_state=env_state, carry=carry,
                                deadline_ms=deadline_ms, rng=rng), tr
 
-    def _batch(tr: Transition, adv, returns, carry0):
-        # [T, n_envs, 2, ...] -> learning agents only -> agent-major [N, T, ...]
-        def rows(x):
-            # [T, n_envs, A, ...] -> [n_envs, A, T, ...] -> [n_envs * A, T, ...].
-            # The agent axis must sit beside envs BEFORE the fold: a
-            # swapaxes(0, 1) alone gave [n_envs, T, A] and the fold then
-            # interleaved time and agent, scrambling every GRU sequence
-            # (caught by test_vec_train's actor/learner agreement).
-            x = jnp.moveaxis(x[:, :, :n_learn], 0, 2)
-            x = x.reshape((n_rows, cfg.rollout_steps) + x.shape[3:])
-            return x if recurrent else x.reshape((n_rows * cfg.rollout_steps,) + x.shape[2:])
-        b = {"entities": rows(tr.obs_entities), "mask": rows(tr.obs_mask),
-             "self": rows(tr.obs_self), "global": rows(tr.obs_global),
-             "action": tuple(rows(a) for a in tr.action), "log_prob": rows(tr.log_prob),
-             "uses_screen": rows(tr.uses_screen), "uses_target": rows(tr.uses_target),
-             "value": rows(tr.value), "adv": rows(adv), "returns": rows(returns)}
-        if use_mask:
-            b["click_mask"] = rows(tr.click_mask)
-        if recurrent:
-            b["done"] = rows(tr.done)
-            b["carry0"] = carry0[:, :n_learn].reshape(n_rows, core_dim)
-        return b
+    _batch = make_batch_fn(cfg, n_learn, recurrent, use_mask, core_dim)
 
     def collect(runner: VecRunner):
         carry0 = runner.carry
@@ -310,41 +249,8 @@ def make_vec_train(cfg: VecConfig, sim: SimConfig, bank, *, prior_params=None, o
         """The unchanged update half, exposed for separate timing/memory checks."""
         last_obs = jax.vmap(_obs)(runner.env_state)
         last_logits, _ = jax.vmap(lambda o, c: _apply(runner.params, o, c))(last_obs, runner.carry)
-        adv, returns = gae(tr.reward, tr.value, tr.done, last_logits.value,
-                           cfg.ppo.gamma, cfg.ppo.gae_lambda)
-        batch = _batch(tr, adv, returns, carry0)
-        params, opt_state, rng, metrics = update_epochs(
-            lambda p, b: loss(p, b, cfg.ppo), tx, runner.params, runner.opt_state,
-            batch, runner.rng, epochs=cfg.ppo.epochs, n_minibatches=cfg.n_minibatches,
-            max_grad_norm=cfg.ppo.max_grad_norm)
-        # post_kl: the updated policy's drift over the rollout it was trained on.
-        new_lg = loss.forward(params, batch)
-        new_lp = factored_log_prob((new_lg.button, new_lg.screen_x, new_lg.screen_y),
-                                   batch["action"], batch["uses_screen"],
-                                   click_mask=batch.get("click_mask"))
-        metrics["post_kl"] = jnp.mean(batch["log_prob"] - new_lp)
-        r_var = batch["returns"].var()
-        metrics["explained_variance"] = jnp.where(
-            r_var > 0, 1.0 - (batch["returns"] - batch["value"]).var() / r_var, jnp.nan)
-        learn = lambda x: x[:, :, :n_learn]
-        metrics["reward"] = learn(tr.reward).mean()
-        for k, v in tr.reward_terms.items():
-            metrics[f"reward_{k}"] = learn(v).mean()
-        n_done = learn(tr.done_full).sum()
-        for name, v in (("cs_at_10min", tr.cs), ("gold_at_10min", tr.gold), ("xp_at_10min", tr.xp)):
-            metrics[name] = jnp.where(n_done > 0, learn(v).sum() / jnp.maximum(n_done, 1), jnp.nan)
-        metrics["cs_episodes"] = n_done.astype(jnp.float32)
-        metrics["deaths_per_episode"] = learn(tr.deaths).mean() * cfg.episode_s * cfg.decision_hz
-        metrics["lane_dist"] = learn(tr.lane_dist).mean()
-        for i, b in enumerate(BUTTONS):
-            metrics[f"button_{b}"] = (learn(tr.action[0]) == i).mean()
-        alive = learn(tr.obs_self[..., 14]) < 0.5  # observation S_IS_DEAD
-        spell = (learn(tr.action[0]) >= 3) & (learn(tr.action[0]) <= 6)
-        metrics['alive_spell_decisions'] = (alive & spell).sum().astype(jnp.float32)
-        metrics['alive_spell_fraction'] = (alive & spell).sum() / jnp.maximum(alive.sum(), 1)
-        runner = runner._replace(params=params, opt_state=opt_state, rng=rng,
-                                 step=runner.step + n_rows * cfg.rollout_steps)
-        return runner, metrics
+        return ppo_learn(runner, tr, carry0, last_logits.value, cfg=cfg, tx=tx, loss=loss,
+                         batch_fn=_batch, n_learn=n_learn)
 
     def _update(runner: VecRunner, _):
         return learn(*collect(runner))

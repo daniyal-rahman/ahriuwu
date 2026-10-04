@@ -13,11 +13,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.sim import modern_rune_data as RD
-from lanerl_jax.sim import modern_world as MW
-from lanerl_jax.sim import modern_world_types as W
+from lanerl_jax.sim.tests import modern_world_harness as H
 
-if not MW.DEFAULT_MAP.exists() or not MW.DEFAULT_ROUTES.exists():
+if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
 from lanerl_jax.obs import modern_builder as OB  # noqa: E402
@@ -26,7 +24,6 @@ from lanerl_jax.sim import modern_step as MS  # noqa: E402
 from lanerl_jax.train import modern_actions as MA  # noqa: E402
 from lanerl_jax.train.actions import _screen_to_centred_lane  # noqa: E402
 
-JAX_PAGE = RD.RunePage(RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))
 SELF = {name: i for i, name in enumerate((
     "s", "n", "hp", "level", "gold", "cs", "cd_q", "cd_w", "cd_e", "cd_r", "ad", "ap", "armor", "mr", "dead",
     "recalling", "garen", "jax", "enemy_garen", "enemy_jax", "mana", "shield", "summ_d", "summ_f", "next_level",
@@ -35,14 +32,12 @@ SELF = {name: i for i, name in enumerate((
 
 @lru_cache(maxsize=1)
 def world():
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
-          MW.Loadout("Jax", items=(1055, 2003), rune_page=JAX_PAGE))
-    cfg = MW.build_config(lo)
+    """Shared world and visibility refresh (``modern_world_harness``) plus one jitted builder and decoder."""
+    cfg = H.world()
     frames = OB.modern_frames(cfg)
     obs = jax.jit(lambda s: tuple(OB.build_modern_observation(s, me, frames[me], cfg) for me in (0, 1)))
     decode = jax.jit(lambda a, s: MA.modern_orders_from(a, s, frames))
-    refresh = jax.jit(lambda s: MS.refresh_visibility(s, cfg))
-    return cfg, frames, obs, decode, refresh
+    return cfg, frames, obs, decode, H.refresh
 
 
 def lane_state(gap=250.0):

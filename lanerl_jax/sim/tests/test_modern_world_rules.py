@@ -4,64 +4,41 @@ Each test drives the real compiled tick and checks something a player would
 notice: waves walk down all three lanes, camps appear on the clock, a ward in
 brush shows the enemy hiding there, killing a camp pays its owner, attack-move
 picks up an enemy on the way, minion trades are symmetric between the teams,
-and a destroyed Nexus ends (freezes) the game. One step and one fixed-length
-scan are compiled for the module (several minutes on CPU).
+and a destroyed Nexus ends (freezes) the game. The world (Jax runs Overgrowth)
+and its one compiled tick program come from ``modern_world_harness``, shared
+with the other full-tick modules (several minutes to compile on CPU).
 """
 from functools import lru_cache
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.sim import modern_rune_data as RD
-from lanerl_jax.sim import modern_world as MW
 from lanerl_jax.sim import modern_world_types as W
+from lanerl_jax.sim.tests import modern_world_harness as H
 
-if not MW.DEFAULT_MAP.exists() or not MW.DEFAULT_ROUTES.exists():
+if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
 from lanerl_jax.sim import modern_jungle as J  # noqa: E402
 from lanerl_jax.sim import modern_step as MS  # noqa: E402
 
-JAX_PAGE = RD.RunePage(RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8451), (5005, 5008, 5001))  # Overgrowth
+assert 8451 in H.JAX_PAGE.secondary          # Overgrowth (test_overgrowth_counts_...)
 BRUSH = (2274.0, 13558.0)             # lane brush beside the top-lane midpoint (test_modern_vision)
 BRUSH_EDGE = (2469.0, 13357.0)        # just outside it
-CHUNK = 30                            # ticks per compiled scan call (1 s)
+CHUNK = 30                            # ticks per second
+orders = H.orders
 
 
-@lru_cache(maxsize=1)
 def world():
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
-          MW.Loadout("Jax", items=(1055, 2003), rune_page=JAX_PAGE))
-    cfg = MW.build_config(lo)
-    step = jax.jit(lambda s, o: MS.step(s, o, cfg))
-
-    def run(s, o):
-        def body(s, _):
-            s, e = MS.step(s, o, cfg)
-            return s, (e.packet_overflow, e.missile_overflow)
-        return jax.lax.scan(body, s, None, length=CHUNK)
-    refresh = jax.jit(lambda s: MS.refresh_visibility(s, cfg))
-    return cfg, step, jax.jit(run), refresh
-
-
-def orders(**kw):
-    o = MS.no_orders()._asdict()
-    for k, v in kw.items():
-        o[k] = jnp.asarray(v, o[k].dtype)
-    return MS.ModernOrders(**o)
+    return H.world(), H.step, H.run, H.refresh
 
 
 @lru_cache(maxsize=1)
 def state_at_95s():
     cfg, _, run, _ = world()
-    s = MS.init_state(cfg)
-    over = 0
-    for _ in range(95):
-        s, (po, mo) = run(s, MS.no_orders())
-        over = max(over, int(po.max()), int(mo.max()))
-    return s, over
+    s, (po, mo) = run(MS.init_state(cfg), MS.no_orders(), 95 * CHUNK)
+    return s, max(int(po), int(mo))
 
 
 def test_waves_in_every_lane_and_camps_on_the_clock():
@@ -82,8 +59,7 @@ def test_waves_in_every_lane_and_camps_on_the_clock():
 def test_minion_trades_are_symmetric_between_teams():
     cfg, _, run, _ = world()
     s, _ = state_at_95s()
-    for _ in range(120):                                      # to 3:35, idle champions in the fountains
-        s, _ = run(s, MS.no_orders())
+    s, _ = run(s, MS.no_orders(), 120 * CHUNK)               # to 3:35, idle champions in the fountains
     k, a, team = np.asarray(s.kind), np.asarray(s.alive), np.asarray(s.team)
     blue, red = ((k == W.KIND_MINION) & a & (team == t) for t in (0, 1))
     assert abs(int(blue.sum()) - int(red.sum())) <= 6
@@ -201,3 +177,30 @@ def test_slowed_minions_walk_slower():
         slow, _ = step(slow, MS.no_orders())
     d = lambda t: float(np.hypot(float(t.x[m]) - float(s1.x[m]), float(t.y[m]) - float(s1.y[m])))  # noqa: E731
     assert d(slow) < 0.7 * d(free)
+
+
+def test_both_champions_walk_from_base_to_the_top_lane():
+    """Routes from both fountains reach the lane (red used to stay pinned at its top inhibitor, whose
+    collision circle reached past the navgrid pad the routes are baked around)."""
+    cfg, step, run, _ = world()
+    lane = np.asarray(cfg.lane_path)
+    goal = lane[len(lane) // 2]
+    o = orders(move=[True, True], move_x=[goal[0]] * 2, move_y=[goal[1]] * 2)
+    s, _ = step(MS.init_state(cfg), o)
+    s, _ = run(s, MS.no_orders(), 60 * CHUNK)
+    d = np.hypot(np.asarray(s.x[:2]) - goal[0], np.asarray(s.y[:2]) - goal[1])
+    assert (d < 150.0).all(), d
+
+
+def test_a_dash_keeps_moving_after_its_start_tick():
+    """Dash state is kept across ticks (it used to be dropped after the start tick)."""
+    cfg, step, run, _ = world()
+    s = MS.init_state(cfg)
+    x0, y0 = float(s.x[0]), float(s.y[0])
+    dash = W.Dash(jnp.asarray([True, False]), jnp.asarray([x0 + 400.0, 0.0]), jnp.asarray([y0 + 400.0, 0.0]),
+                  jnp.asarray([800.0, 0.0]), jnp.asarray([-1, -1], jnp.int32), jnp.asarray([False, False]))
+    s, _ = step(s._replace(pending_dash=dash), MS.no_orders())
+    s1 = np.hypot(float(s.x[0]) - x0, float(s.y[0]) - y0)
+    s, _ = run(s, MS.no_orders(), 10)
+    s2 = np.hypot(float(s.x[0]) - x0, float(s.y[0]) - y0)
+    assert s1 < 40.0 and s2 > s1 + 150.0, (s1, s2)          # 800 u/s for 10 more ticks: ~260 u

@@ -37,7 +37,6 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
-import jax
 import jax.numpy as jnp
 
 from ..modern_damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE,
@@ -369,9 +368,15 @@ def in_circle(units: Units, px: Any, py: Any, radius: Any, *, edge: bool = True)
 
 def nearest_k(dist: Any, mask: Any, k: int) -> Any:
     """(C, N) mask of the ``k`` smallest ``dist`` entries within ``mask`` (ties: lower index)."""
+    # ``k`` (static, <= 10 in the item modules) rounds of argmin: cheap row reductions on every
+    # backend (``lax.top_k`` over 216 columns was the top GPU kernel); argmin keeps the lower index.
     key = jnp.where(mask, dist, jnp.inf)
-    _, idx = jax.lax.top_k(-key, min(k, key.shape[-1]))                    # (C, k), stable on ties
-    return mask & jnp.any(idx[..., :, None] == jnp.arange(key.shape[-1]), axis=-2)
+    cols = jnp.arange(key.shape[-1])
+    pick = jnp.zeros(key.shape, bool)
+    for _ in range(min(k, key.shape[-1])):
+        hit = cols == jnp.argmin(key, axis=-1)[..., None]
+        pick, key = pick | hit, jnp.where(hit, jnp.inf, key)
+    return mask & pick
 
 
 def unit_pos(units: Units, idx: Any) -> tuple[Any, Any]:

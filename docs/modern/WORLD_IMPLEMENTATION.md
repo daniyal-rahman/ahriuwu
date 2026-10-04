@@ -47,60 +47,38 @@ Positions come from:
 
 ## Tick order (`step`)
 
-1. **INPUT.** Orders become intents (move, attack, stop). Skill points are spent from `level_up` or the
-   champion's default order.
-2. **SPAWN.** Wave units spawn per `modern_minions.spawn_event`, 0.8 s apart, both teams, into free slots, with
-   `modern_lane_ai.minion_spawn_stats`.
-3. **STATS.** `modern_stat_pipeline.compose` combines:
-   - static items, shards and kit stats;
-   - last tick's dynamic stats from `combat_tick`;
-   - slows.
+`step` is a pipeline of phase functions `(s, orders, cfg, sc) -> (s, sc)`. `sc` is a `TickScratch` NamedTuple;
+its field list (each field commented with the phase that writes it) is the tick's data-flow map. Phases write
+`s` only where the table says so. Everything else travels in `sc`, and `_commit` assembles the next state. Then
+`step` freezes the world if a Nexus had already fallen and casts the state back to the incoming dtypes, so
+`lax.scan` carries stay stable.
 
-   Static max-HP changes are synced to current HP (STAT.70).
-4. **SHOP and CASTS.** Buy and sell happen in the shop area or while dead, with rune purchase blocks applied.
-   Then the kit `cast` and `periodic` hooks run, then `modern_summoners.step`.
-5. **AI.** The structure tick runs, then minion and turret target selection (last tick's damage matrix feeds
-   aggro). Champions attack their ordered target.
-6. **MOVE.** Movement steers along the route graph with a swept terrain clamp, at minion or champion speed.
-   Champion speed includes summoner MS and Homeguard. Then:
-   - kit dashes (Jax Q follows its target);
-   - Flash, landing on walkable terrain;
-   - Teleport arrival;
-   - unit collision (ghosting from Ghost or a dash).
-7. **ATTACK.** The attack machine runs for every unit (kit `cannot_attack`, cast lockout, Teleport and dash
-   gate it). Champion attacks:
-   - crit roll at launch (Bernoulli, X-8), with item forced crits;
-   - attacks on structures use the champion structure formula.
+| Phase | Function | Main reads | Main writes |
+|---|---|---|---|
+| 1. INPUT | `_input` | orders, `s.visible`, `s.champ`, `s.amove`, `s.cc`, item stasis, `s.terrain_variant` | Fog-filtered orders: a target in fog is dropped. Move/attack/stop intents and attack-move orders (`ModernOrders.attack_move`). Stasis gates orders and `targetable`. Skill points from `level_up` or the default order. Minion waves (`modern_minions.spawn_event`, 0.8 s apart, `minion_spawn_stats`) and camp spawns go into free slots. Writes `s.champ`, `s.amove`, the spawn slots and `sc.caps`. `sc.terrain` is this tick's walkable mask: the Rift variant, then the structure pads. |
+| 2. STATS | `_stats` | `s.champ.inventory`, `s.econ.level`, jungle/objective buffs, kits | `sc.static` and `sc.st_static`: items, shards, monster buffs (Blue, Red, shrine MS, drake stacks, soul, Hand of Baron) and kit stats. STAT.70 syncs champion HP to static max-HP changes (`s.hp`, `s.max_hp`, `s.champ.static_max_hp`). |
+| 2b. OBJ | `_objectives` | `units_view(s)`, `s.damage_matrix`, `s.obj` | `objectives_step`: epic spawns, abilities, Rift transformation. Writes `s.obj`, the epic slots, `s.terrain_variant` and `sc.so`. |
+| 3. CASTS | `_casts` | orders, `sc.st_static`, `s.champ.dyn`, slows | Shop: buy/sell in the shop area or while dead, with rune purchase blocks (`s.econ`, `s.champ`). `sc.st`: static stats plus last tick's dynamic stats and slows. Kit `cast` and `periodic`, `modern_summoners.step`, Smite (`smite_step`), kit attack mods and reach. |
+| 4. AI | `_ai` | `s.towers`, `s.lane_ai`, `s.att`, last tick's `s.damage_matrix` (aggro), `s.visible` | Structure tick, then minion/turret targets and goals. Jungle and epic monster AI. Hand of Baron minion buffs. Team summons are minion-like targets. Champions: the ordered target, else attack-move (`LA.attack_move_step`), else idle acquisition (`LA.idle_acquire`, range 400, chases). Writes structure/monster rows of `s` and `s.obj`. Desired targets and goals go to `sc`. |
+| 5. MOVE | `_move` | `sc` goals, `sc.st`, `sc.s_out`, `sc.kit_out`, `sc.terrain`, `s.pending_dash` | Route-graph steering from a cached per-unit route anchor (`s.route_anchor`; `modern_pathing.route_follow`, at most 16 full nearest-node searches per tick for units that lost theirs, only for the slots before the wards) with a swept terrain clamp. Champion speed: Ghost/Heal, Gustwalker and Homeguard are bonus % MS in the STAT pipeline, before the soft caps. Non-champion slows count slow resist. Monsters walk to their AI goals. Kit dashes follow their target (dash state persists across ticks); the Rocketbelt dash starts the tick after its active. Flash lands on walkable terrain; Teleport arrives. Collision: Ghost, dashes and first-wave minions are ghosted; wards and structures don't collide (structures block through their navgrid pads). Writes `s.x/y`, `s.route_anchor`, `s.lane_ai`, `s.towers`, the dash state and facing (`s.champ` and the working `champ`) and `sc.ms/sres/units/ictx`. |
+| 6. ATTACK | `_attack` | `sc.desired`, `sc.units`, `sc.kmods`, CC and lock gates | Attack machine for every unit (gated by kit `cannot_attack`, cast lockout, Teleport and dashes). Champion crit roll at launch (X-8) with item forced crits; the structure formula and melee ×1.2 vs turrets. Lane, jungle and epic attack packets; Baron siege multiplier vs structures. Ranged attacks become missiles; champion arrivals count as on-hit. Champion hits on wards become ward hits (1 HP each). Kit `on_attack`/`on_hit`, Overgrowth, jungle combat effects (Red, Scorchclaw, Gustwalker). Writes `s.obj` and `sc` packets, `att`, `missiles`, `kit_all`. |
+| 7. DAMAGE | `_damage` | all `sc` packets, `s.hp`, `s.shields`, `s.status`, `s.kills` | `modern_combat.combat_tick` runs items and runes around `modern_damage`, after `objectives_packet_mods`. Defense: champion armor/MR, turret resists with Bulwark, backdoor ×0.2, untargetable structures, Teleport and stasis invulnerability, kit DR/dodge/AoE reduction, Garen E shred, Baron's Void Corruption. Offense: turret 30% armor pen, Exhaust as dealt reduction. `RuneEvents` from world state: windups, cast ids, CC, summoner casts, blinks, deaths, purchases, grants, river, epic/large kills. Then kit `on_damage`. Writes `sc.out`, `sc.hp`, `sc.shields`, `sc.status`. |
+| 8. CC / HEAL | `_cc_heal` | `sc.kit_all`, `sc.s_eff`, `sc.jfx`, `sc.so`, `s.cc` | Kit, summoner, jungle and objective heals, mana and shields (HSP, incoming heal, Grievous Wounds). CC with tenacity (stat, Garen W, Cleanse) and slow resist. Scuttle is slow-immune with −100% tenacity. Monster CC is not champion-sourced. Exhaust and item/rune slows; Cleanse and item cleanse. Writes `sc.cc`. |
+| 9. DEATH | `_death` | `sc.out` resolved packets, `sc.hp`, start-of-tick `s.sight` and `s.cc` | Killer per unit, damage matrix, `death_seen`. Plates and destruction (`structure_damage_events`). `MinionDeaths` (last hitter; gold/XP/level fixed at spawn). Camp and objective rewards (`extra_gold/xp`, `epic`). Map regions give the quest lane, Homeguard endpoint, jungle and river flags. Hand of Baron's 4 s Empowered Recall. `economy_step`: gold, XP, levels, bounty, kill credit, death timers, respawn, Recall, Homeguard, quest. Kit `on_takedown`. Writes `s.obj` and `sc.econ/eco/died`. |
+| 10. TIMERS | `_timers` | `sc.eco`, `sc.out`, `sc.kit_all`, `sc.item_cleanse` | Respawn and Recall move the champion to the fountain. Kit cooldowns start hasted (basic vs ultimate), then rune refunds and item-active cooldown rate. Mana costs (item-active multiplier) and regen. HP regen in 0.5 s pulses, plus the fountain and Homeguard heal. Inventory: Tear and Armguard transforms, consumption, pet egg, rune grants into a free slot (acknowledged next tick). `ward_step`: ward gold, Control Ward use. Ward unit rows; dead minions free their slot. Ejection from terrain that closed. Results go to `sc` only. |
+| 11. FOG | `_fog` | `sc` final positions/units, `s0.visible` | Attack-reveal circles, then `visible`/`sight` for the next tick and the observation, with wards, the Rift brush and Scuttle shrines (`modern_vision`). `seen_cast` records casts the enemy saw. |
+| COMMIT | `_commit` | `s`, `sc` | Clears CC on units that died, builds `TickEvents` and `LA.game_result`. Champion stat columns mirror `sc.st`. Returns the next state. |
 
-   Minion and turret attacks come from `modern_lane_ai.attack_packets`. Ranged attacks become missiles, which
-   hit on arrival; champion missile arrivals count as on-hit. Kit `on_attack` and `on_hit` run, and turret
-   Crystalline Overgrowth is consumed.
-8. **DAMAGE.** World, kit and summoner packets go to `modern_combat.combat_tick`, which runs items and runes
-   around `modern_damage`. The tick supplies:
-   - defense: champion armor/MR, turret resists with Bulwark, the backdoor ×0.2 on every damage type,
-     untargetable structures, Teleport invulnerability, the kit DR/dodge/AoE reduction and Garen E shred;
-   - offense: turret 30% armor pen, Exhaust as dealt reduction;
-   - `RuneEvents` from world state: windup start/cancel/reset, cast ids, CC with cast ids, impairments,
-     summoner casts, blinks, Flash cooldown, deaths, purchases, grants, turret mask.
-9. **CC / HEAL.** Kit and summoner heals and shields are applied (HSP, incoming heal, Grievous Wounds). Kit CC
-   and the Exhaust slow are applied with tenacity (stat + Garen W + Cleanse); Cleanse removes CC.
-10. **DEATH / ECONOMY.**
-    - The killer per unit comes from the resolved packets.
-    - Minion deaths go out as `MinionDeaths` (last hitter, gold/XP/level fixed at spawn).
-    - Plates and destruction come from `structure_damage_events`.
-    - `modern_economy.economy_step` handles gold, XP, levels, bounty, kill credit, death timers, respawn,
-      Recall, Homeguard and the quest.
-11. **TIMERS / OUTPUTS / FOG.**
-    - **Fog:** attack-reveal circles open, then `visible`/`sight` are recomputed from final positions for the
-      next tick and the observation (`modern_vision`).
-    - **Cooldowns:** kit cooldowns start hasted (basic vs ultimate haste), rune refunds apply, and timers
-      count down.
-    - **Mana:** costs are paid and regen applied.
-    - **HP:** regen in 0.5 s pulses, plus the fountain and the Homeguard heal.
-    - **Respawn and Recall:** both move the champion to the fountain.
-    - **Inventory:** Tear transforms, consumption, and rune item grants into a free slot (acknowledged next
-      tick).
-    - **Dtypes:** the state is cast back to the incoming dtypes so `lax.scan` carries stay stable.
+One-tick lags (the value is produced in this tick and read in the next):
+- `damage_matrix`: lane AI aggro, Scorchclaw, objective AI.
+- `death_seen`: Overgrowth.
+- `epic_prev` and `large_prev`: rune events.
+- `pending_dash`: the Rocketbelt dash.
+- `champ.reset_next`: item attack resets.
+- `champ.dyn`: dynamic stats.
+- `champ.granted`: the rune-grant acknowledgement.
+- `visible` and `sight`: fog for orders and runes.
+- Gustwalker's brush entry, through jungle state.
 
 ## Verified
 
@@ -114,6 +92,8 @@ Positions come from:
   - Recall back to the fountain after 8 s.
 - **`tests/test_modern_mechanics.py`** covers the attack cadence (launch at 0.3 s, then every 1.0 s at 30 Hz),
   edge-to-edge range, cancel reset, missile homing, CC tenacity (DAMAGE F17) and strongest slow.
+- **`tests/test_modern_world_rules.py`** checks waves in all lanes and camps at 1:30, symmetric idle minion
+  trades, a ward revealing an enemy in brush, camp kill rewards, attack-move acquisition and the game-end freeze.
 - **Scripted 4-minute game** (both champions walk to lane, last-hit, fight with Q/E):
   - passive gold from 65 s;
   - first blood at ~75 s (+400);
@@ -133,32 +113,6 @@ Positions come from:
     of memory: `route_next` connection checks dominate per-env memory. Fog costs about 5% on GPU. Details in the MODERN-021 ledger row. Measure with `ops/modern_world_bench.py` and attribute with
     `ops/modern_world_profile.py`.
 
-## Integration added in MODERN-020
-
-- **INPUT:** attack-move orders (`ModernOrders.attack_move`), item stasis gating, the tick's terrain (Rift variant,
-  then structure pads), all-lane and camp spawns.
-- **STATS:** jungle buffs (Blue, Red, shrine MS) and team objective buffs (drake stacks, soul, Hand of Baron) are
-  static stat bonuses; then `objectives_step` (epic spawns, abilities, Rift transformation).
-- **CASTS:** Smite (`modern_jungle.smite_step`).
-- **AI:** monster and epic-monster AI, Hand of Baron minion empowerment, champion idle acquisition
-  (`LA.idle_acquire`, acquisition range 400, chases) and attack-move (`LA.attack_move_step`). Team-owned summons
-  (Mercenary, Hunger Voidmites) are minion-like targets for minions and turrets.
-- **MOVE:** monsters move with their AI goals; terrain comes from the Rift variant and the structure pads;
-  first-wave minions are ghosted; wards don't collide; the Rocketbelt dash starts the tick after its active.
-- **ATTACK:** jungle and epic monster attack packets replace the lane-AI packets on their slots; empowered siege
-  minions deal their Baron multiplier to structures; champion hits on wards become ward hits (1 HP each).
-- **DAMAGE / CC:** Smite, jungle (Red burn and slow, pets) and objective packets; `objectives_packet_mods`; Baron's
-  armor/MR shred; stasis invulnerability; monster CC is not champion-sourced; Scuttle slow immunity and −100%
-  tenacity; jungle and objective heals, mana and shields; item-active cleanse.
-- **DEATH:** camp and objective rewards go to the economy (`EconomyInputs.extra_gold/extra_xp/epic`) and to the
-  rune events (epic takedowns, large-monster kills) on the next tick. Map regions supply the quest lane, Homeguard
-  endpoint and jungle flags, and the river flag. Hand of Baron gives the 4 s Empowered Recall.
-- **TIMERS:** item-active mana-cost and cooldown-rate effects, Armguard transform, pet egg consumption, `ward_step`
-  (ward gold, Control Ward use), ward unit writes, ejection from closed terrain, fog with wards and the Rift brush,
-  game end (`LA.game_result`; the world freezes once a Nexus falls).
-- **Tests:** `tests/test_modern_world_rules.py` checks waves in all lanes and camps at 1:30, symmetric idle minion
-  trades, a ward revealing an enemy in brush, camp kill rewards, attack-move acquisition and the game-end freeze.
-
 ## Known gaps and approximations
 
 - **Champions:** only Garen and Jax, one per team. Ally-targeted item, rune and summoner effects are inert because
@@ -172,6 +126,9 @@ Positions come from:
 - **Integration simplifications:** empowered-minion splash (Hand of Baron) is not applied (it would need an N×N
   packet set); Gromp's magic bonus lands at launch, not missile arrival; neutral monsters walk the blue team's
   walkable mask. (The Scuttle shrine's 525 sight and the jungle-pet laner reward reductions are wired.)
+- **Routing:** a unit keeps steering by its route anchor while that node stays in sight; this replaced the per-tick
+  25-candidate nearest-node search (MODERN-022: same or better arrival on 400 real-map routes, 4.2x cheaper
+  movement). Units beyond the 16 searches per tick hold position for a tick.
 - **Collision:** unit collision uses the legacy `resolve_collisions` without the terrain grid; terrain is enforced by
   the movement clamp and `modern_dynamic_terrain.eject`.
 - **Observations and actions:** profile `modern-world-v1` (MODERN-005).
@@ -184,17 +141,17 @@ Positions come from:
     the legacy eight, `summoner_d/f`, `level_q..r`, `buy` (catalog row), `sell` / `use_item` (inventory slot),
     `ward` (trinket at the cursor) and `control_ward`. `attack_move` without a hit is a real attack-move order.
     `Loadout(auto_skill=False)` leaves skill points to the policy.
-  - Not wired into a trainer or reward yet.
+  - Wired into the scan PPO trainer `lanerl_jax/train/modern_vec_train.py` (TOOL, no experiment yet): reset bank
+    from `init_state` + scripted walk to a top-lane hold point until `start_s` (60 s), a decision every 3 ticks
+    (orders on the first tick, `no_orders` after), `vec_train`'s relative reward on `econ.gold_total`/`xp` with the
+    lane potential on `lane_path` between the top outer turrets. `LanePolicy` has no `choice` head, so `buy`/`sell`/
+    `use_item` (and `level_*`, with `auto_skill`) are masked off by default; champions keep their starting items.
 
 ## Structural debt (MODERN-021 review)
 
 These are next refactors, in order. None of them changes behaviour.
-1. **Phase functions.** `step` is about 650 lines with about 100 locals carried across phases.
-   - Split it into `_input`, `_stats`, …, `_fog` phase functions. Each takes `(s, cfg, scratch)`, where `scratch`
-     is a `TickScratch` NamedTuple of the values passed between phases: the stat snapshots, caps, kit/summoner
-     outputs, desired targets, packets, CC and rewards.
-   - Its fields are then the tick's data-flow map, and each phase can be tested and compiled on its own.
-   - Do it one phase at a time, using the step and world-rules tests as the safety net.
+1. **Phase functions.** *Done.* `step` is now a pipeline of `_input` … `_fog`, `_commit` over a `TickScratch`
+   (see the tick-order table). It was verified to be bitwise identical to the previous monolithic `step`.
 2. **World-subsystem protocol.** Jungle and objectives are wired into `step` by hand, through about 25
    `if cfg.jungle/objectives is not None` sites across seven phases.
    - Give them a hook protocol like the kits have: stats, ai, attack packets, effects, on-deaths.

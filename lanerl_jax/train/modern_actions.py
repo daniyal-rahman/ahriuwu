@@ -46,16 +46,32 @@ from lanerl_rl.projection import MINIMAP_X_MIN, MINIMAP_Y_MIN
 from .actions import _screen_to_centred_lane
 from ..sim import modern_world_types as W
 
-__all__ = ["PROFILE", "MODERN_BUTTONS", "MODERN_BUTTON_INDEX", "modern_orders_from"]
+__all__ = ["PROFILE", "MODERN_BUTTONS", "MODERN_BUTTON_INDEX", "SCREEN_BUTTONS", "CHOICE_BUTTONS",
+           "screen_usage", "modern_orders_from"]
 
 PROFILE = "modern-world-v1"
 MODERN_BUTTONS = BUTTONS + ("summoner_d", "summoner_f", "level_q", "level_w", "level_e", "level_r",
                             "buy", "sell", "use_item", "ward", "control_ward")
 MODERN_BUTTON_INDEX = {name: i for i, name in enumerate(MODERN_BUTTONS)}
 N_INVENTORY_SLOTS = 7
+#: Buttons whose decoded order reads the cursor (point or unit under it). The
+#: PPO likelihood counts the click heads only for these (``screen_usage``).
+SCREEN_BUTTONS = ("move", "attack_move", "q", "w", "e", "r", "summoner_d", "summoner_f", "use_item", "ward",
+                  "control_ward")
+#: Buttons that need the fourth ``choice`` component (catalog row / inventory slot).
+CHOICE_BUTTONS = ("buy", "sell", "use_item")
 # Wards have a 1-unit collision radius in the world; a click cell is ~30x36 units, so hit-test
 # them with a champion-sized selection circle instead.
 WARD_CLICK_RADIUS = 65.0
+
+
+def screen_usage(button):
+    """(...) float32: 1 where ``button`` uses the click (``SCREEN_BUTTONS``), the modern
+    counterpart of ``ppo.screen_head_usage``."""
+    used = jnp.zeros(jnp.shape(button), bool)
+    for name in SCREEN_BUTTONS:
+        used = used | (button == MODERN_BUTTON_INDEX[name])
+    return used.astype(jnp.float32)
 
 
 def shop_choice_mask():

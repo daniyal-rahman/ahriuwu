@@ -132,10 +132,19 @@ def test_recall_and_homeguard():
     kw = dict(cancel_action=jnp.asarray([False]), health_damage=jnp.asarray([False]),
               disabled=jnp.asarray([False]), dead=jnp.asarray([False]))
     r, done = E.recall_step(r, 10.0, request=jnp.asarray([True]), **kw)
-    r, done = E.recall_step(r, 17.95, request=jnp.asarray([False]), **{**kw, "health_damage": jnp.asarray([True])})
-    assert bool(r.channeling[0]) and not bool(done[0])          # last 0.1 s: damage does not interrupt
     r, done = E.recall_step(r, 18.0, request=jnp.asarray([False]), **kw)
+    assert bool(r.channeling[0]) and not bool(done[0])          # 0.5 s cast + 8 s channel
+    r, done = E.recall_step(r, 18.45, request=jnp.asarray([False]), **{**kw, "health_damage": jnp.asarray([True])})
+    assert bool(r.channeling[0]) and not bool(done[0])          # last 0.1 s: damage does not interrupt
+    r, done = E.recall_step(r, 18.5, request=jnp.asarray([False]), **kw)
     assert bool(done[0]) and not bool(r.channeling[0])
+    e = E.init_recall(1)                                        # Empowered Recall: 0.5 + 4 s, same grace
+    e, _ = E.recall_step(e, 10.0, request=jnp.asarray([True]), channel=jnp.asarray([4.0]), **kw)
+    e, done = E.recall_step(e, 14.45, request=jnp.asarray([False]), channel=jnp.asarray([4.0]),
+                            **{**kw, "health_damage": jnp.asarray([True])})
+    assert bool(e.channeling[0]) and not bool(done[0])
+    e, done = E.recall_step(e, 14.5, request=jnp.asarray([False]), channel=jnp.asarray([4.0]), **kw)
+    assert bool(done[0])
     assert float(E.homeguard_bonus_ms(300., 2.0)) == pytest.approx(0.6)
     assert float(E.homeguard_bonus_ms(900., 10.0)) == pytest.approx(0.65)
 

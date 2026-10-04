@@ -51,13 +51,16 @@ TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failur
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
 
-Modern 26.19 world (separate ruleset, not yet wired into a trainer; MODERN-013..021):
+Modern 26.19 world (separate ruleset; MODERN-013..021):
 `lanerl_jax/sim/modern_step.py` `step(state, orders, cfg)` is the whole-map tick
 (216 unit slots: 2 champions, lane minions, camps/epics, wards, structures);
 `modern_world.build_config` builds the static `WorldConfig`. Start with
 `docs/modern/WORLD_IMPLEMENTATION.md` (layout, tick order, gaps) and
 `docs/modern/README.md` (spec index). Observation/actions: `lanerl_jax/obs/modern_builder.py`,
-`lanerl_jax/train/modern_actions.py`. TOOL: `ops/modern_world_bench.py`,
+`lanerl_jax/train/modern_actions.py`. TOOL (trainer, no experiment yet): `lanerl_jax/train/modern_vec_train.py`, the
+`vec_train` scan PPO on `modern_step` (bank reset, masked shop/choice buttons, relative reward on the modern
+top lane; shares `train/scan_ppo.py` (`make_batch_fn`/`ppo_learn`) with `vec_train`, so it does not import the
+legacy sim). TOOL: `ops/modern_world_bench.py`,
 `ops/modern_world_profile.py` (throughput and per-source cost). Map ingestion:
 `lanerl_jax/data/modern_map.py`, `modern_routes.py`; `ops/fetch_modern_map.py`.
 The legacy `step.py` world and the "modern champion profile" below (modern

@@ -15,19 +15,21 @@ effects and slot writes; only this module writes ``ModernState``.
   modern_inventory    shop, grants, transforms         modern_wards       wards and trinkets
   modern_vision       fog of war                       modern_dynamic_terrain(_rift)  pads, Rift variants
 
-Tick order (docs/modern/WORLD_IMPLEMENTATION.md has the full table; one-tick lags are listed there):
-  1. INPUT     fog-filtered orders, attack-move, skill points, spawns, this tick's terrain
-  2. STATS     static stats (items, shards, monster buffs, kit); STAT.70 max-HP sync
-  2b. OBJ      epic monsters: spawns, abilities, Rift transformation
-  3. CASTS     shop; kit casts and periodic effects; summoner spells; Smite
-  4. AI        turret/minion/monster targets; champion orders, idle acquisition, attack-move
-  5. MOVE      route movement, dashes, Flash, Teleport; collision
-  6. ATTACK    attack machine, crits, attack packets, missiles, kit on-attack/on-hit
-  7. DAMAGE    every packet -> combat_tick (items, runes, damage pipeline)
-  8. CC/HEAL   heals, shields and CC (tenacity, slow resist)
-  9. DEATH     kills, plates, camp/objective rewards -> economy_step
- 10. TIMERS    cooldowns, mana/HP regen, fountain, inventory outputs, wards, terrain ejection
- 11. FOG       attack reveal, then next tick's visibility
+Tick order: ``step`` runs one phase function per row, passing a ``TickScratch`` (the tick's data-flow
+map; docs/modern/WORLD_IMPLEMENTATION.md has the full table and the one-tick lags):
+  1. INPUT     _input       fog-filtered orders, attack-move, skill points, spawns, this tick's terrain
+  2. STATS     _stats       static stats (items, shards, monster buffs, kit); STAT.70 max-HP sync
+  2b. OBJ      _objectives  epic monsters: spawns, abilities, Rift transformation
+  3. CASTS     _casts       shop; kit casts and periodic effects; summoner spells; Smite
+  4. AI        _ai          turret/minion/monster targets; champion orders, idle acquisition, attack-move
+  5. MOVE      _move        route movement, dashes, Flash, Teleport; collision
+  6. ATTACK    _attack      attack machine, crits, attack packets, missiles, kit on-attack/on-hit
+  7. DAMAGE    _damage      every packet -> combat_tick (items, runes, damage pipeline)
+  8. CC/HEAL   _cc_heal     heals, shields and CC (tenacity, slow resist)
+  9. DEATH     _death       kills, plates, camp/objective rewards -> economy_step
+ 10. TIMERS    _timers      cooldowns, mana/HP regen, fountain, inventory outputs, wards, terrain ejection
+ 11. FOG       _fog         attack reveal, then next tick's visibility
+     COMMIT    _commit      next state and TickEvents; ``step`` then applies the game-over freeze and dtypes
 
 Observations and actions live in ``obs/modern_builder.py`` and ``train/modern_actions.py``.
 """
@@ -148,6 +150,7 @@ class ModernState(NamedTuple):
     wards: Any              # modern_wards.Wards (ward slots, trinkets)
     amove: Any              # AttackMove: per-champion attack-move order state
     pending_dash: Any       # W.Dash: item-active dash (Rocketbelt) to start next tick
+    route_anchor: Any       # (N,) int32 route node each unit steers by (modern_mechanics.move_step); -1 = none
     epic_prev: Any          # (C,) epic takedowns last tick (rune events)
     large_prev: Any         # (C,) large-monster kills last tick (rune events)
     terrain_variant: Any    # () int32 Elemental Rift x Baron-pit terrain variant
@@ -282,7 +285,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         kills=Kills(zc, zc, zc, jnp.zeros((c,), bool), jnp.zeros((c, n), bool)),
         damage_matrix=jnp.zeros((n, n), bool), death_seen=jnp.zeros((c, n), bool),
         visible=vis, sight=sight, reveal=reveal, jungle=jungle, obj=obj, wards=wards, amove=amove,
-        pending_dash=W.no_dash(c), epic_prev=zc0, large_prev=zc0, terrain_variant=jnp.int32(0),
+        pending_dash=W.no_dash(c), route_anchor=M.init_route_anchor(n), epic_prev=zc0, large_prev=zc0, terrain_variant=jnp.int32(0),
         game_over=jnp.asarray(False), winner=jnp.int32(-1))
 
 
@@ -588,21 +591,176 @@ def _skill_up(s: ModernState, cfg: WorldConfig, orders: ModernOrders) -> Any:
     return ranks + (jnp.arange(4)[None, :] == slot[:, None]) * ok[:, None]
 
 
+class TickScratch(NamedTuple):
+    """Values passed between the phases of one ``step``: the tick's data-flow map.
+
+    Each comment names the phase that writes the field (later rewrites in brackets). A field exists when
+    a later phase needs a value that is not in ``s``, or that must keep its earlier value while ``s`` moves
+    on. ``s`` itself is written only where the phase comments say so; ``_commit`` builds the next state."""
+    # step (before INPUT)
+    s0: Any = None              # step: the incoming state (start-of-tick visibility for wards/reveal; freeze)
+    now: Any = None             # step: s.t + dt
+    key: Any = None             # step [OBJ]: PRNG key carried to the next tick
+    k_crit: Any = None          # step: crit-roll key (ATTACK)
+    # 1. INPUT
+    champ: Any = None           # INPUT [CASTS from s.champ, AI, DEATH, TIMERS, FOG]: working ChampionLayer; the
+                                # next state's champ. STATS and MOVE write s.champ only (see _move).
+    vis_c: Any = None           # INPUT: (C, N) the champion's team sees the unit (start of tick)
+    in_stasis: Any = None       # INPUT: (C,) item stasis (Zhonya's / Stopwatch)
+    caps: Any = None            # INPUT: M.capabilities at now, stasis-gated
+    terrain: Any = None         # INPUT: this tick's walkable masks (Rift variant, then structure pads)
+    attack_order: Any = None    # INPUT [AI: + idle acquisition]: (C,) ordered attack target
+    moving: Any = None          # INPUT: (C,) walking to move_goal
+    goal: Any = None            # INPUT [AI: attack-move goal]: (C, 2) champion move goal
+    amove: Any = None           # INPUT [AI]: AttackMove
+    # 2. STATS
+    static: Any = None          # STATS: ItemStats items + shards + monster buffs + kit (no dynamic stats)
+    st_static: Any = None       # STATS: ChampionStats composed from ``static``
+    # 2b. OBJECTIVES
+    so: Any = None              # OBJ: objectives_step output (None without objectives)
+    cinfo: Any = None           # OBJ: OBJ.ChampInfo (reused by DEATH)
+    # 3. CASTS
+    st: Any = None              # CASTS: ChampionStats with last tick's dynamic stats and slows (the tick's stats)
+    summ_world: Any = None      # CASTS: ItemStats static + last tick's dynamic stats
+    units: Any = None           # CASTS [AI, MOVE: champion range/AS, ATTACK: Hand of Baron]: WorldUnits view
+    kctx: Any = None            # CASTS: K.KitCtx
+    ictx: Any = None            # CASTS [MOVE: positions, facing, moved]: item Ctx
+    locked: Any = None          # CASTS: (C,) cast lockout (no casts, attacks or movement)
+    item_casting: Any = None    # CASTS: (C,) item-active cast that allows movement (Stridebreaker)
+    cast_order: Any = None      # CASTS: W.CastOrder the kits saw (gated by can_cast)
+    kits: Any = None            # CASTS [ATTACK, DAMAGE, DEATH]: kit state
+    kit_out: Any = None         # CASTS: merged kit cast + periodic output
+    kmods: Any = None           # CASTS: K.attack_mods
+    reach: Any = None           # CASTS: (C,) attack range incl. kit extra range
+    summ: Any = None            # CASTS: summoner state
+    s_eff: Any = None           # CASTS: summoner Effects (packets, heals, gold)
+    s_out: Any = None           # CASTS: summoner world outputs (Flash/Teleport, Exhaust, Ghost, Cleanse ...)
+    sm: Any = None              # CASTS: Smite output (None without jungle)
+    jungle: Any = None          # CASTS [AI, ATTACK, DEATH]: working JungleState (s.jungle stays stale)
+    shop_code: Any = None       # CASTS: (C,) buy/sell result code
+    bought: Any = None          # CASTS: (C,) item id bought this tick
+    sold: Any = None            # CASTS: (C,) item id sold this tick
+    # 4. AI
+    towers: Any = None          # AI [ATTACK: Overgrowth, DEATH: plates]: working structure state
+    lane_ai: Any = None         # AI: lane AI state
+    desired: Any = None         # AI: (N,) desired attack target per unit
+    lane_goal: Any = None       # AI: (N, 2) lane-minion movement goals
+    lane_stop: Any = None       # AI: (N,) lane minions holding position
+    mai: Any = None             # AI: jungle monster AI output (None without jungle)
+    mon_goal: Any = None        # AI: (N, 2) monster movement goals
+    mon_speed: Any = None       # AI: (N,) monster move speed
+    mon_move: Any = None        # AI: (N,) monster moving
+    mbuf: Any = None            # AI: Hand of Baron minion buffs (None without objectives)
+    attack_order_eff: Any = None  # AI: (C,) attack target incl. attack-move acquisition
+    t_ok_eff: Any = None        # AI: (C,) champion has a live attack target
+    moving_eff: Any = None      # AI: (C,) champion walks to ``goal``
+    # 5. MOVE
+    tp_lock: Any = None         # MOVE: (C,) Teleport channel/dash (no movement or attacks)
+    sres: Any = None            # MOVE: (N,) slow resist
+    ms: Any = None              # MOVE: (N,) move speed used this tick
+    dstart: Any = None          # MOVE: (C,) dash started this tick (kit or Rocketbelt)
+    in_dash: Any = None         # MOVE: (C,) dashing
+    # 6. ATTACK
+    att: Any = None             # ATTACK: AttackState after the attack machine
+    launched: Any = None        # ATTACK: (N,) attacks launched
+    started: Any = None         # ATTACK: (N,) windups started
+    cancelled: Any = None       # ATTACK: (N,) windups cancelled
+    reset: Any = None           # ATTACK: (N,) attack resets
+    attack: Any = None          # ATTACK: champion Attack (incl. missile arrivals as hits)
+    missiles: Any = None        # ATTACK: Missiles after spawn/advance
+    m_over: Any = None          # ATTACK: missile overflow
+    direct: Any = None          # ATTACK: melee attack packets
+    arrived: Any = None         # ATTACK: missile arrival packets
+    og_pk: Any = None           # ATTACK: Crystalline Overgrowth packets
+    extra_atk: Any = None       # ATTACK: list of extra monster attack packets (jungle bonus, objectives)
+    obj_cc: Any = None          # ATTACK: objective attack CC (None without objectives)
+    ward_hits: Any = None       # ATTACK: (2W,) champion hits per ward slot
+    ward_hitter: Any = None     # ATTACK: (2W,) hitting unit per ward slot
+    kit_all: Any = None         # ATTACK: kit output merged with on_attack/on_hit
+    jfx: Any = None             # ATTACK: jungle combat effects (None without jungle)
+    # 7. DAMAGE
+    out: Any = None             # DAMAGE: combat_tick output
+    kdef: Any = None            # DAMAGE: K.defense
+    k_dmg: Any = None           # DAMAGE: K.on_damage output
+    cc_now: Any = None          # DAMAGE: kit CC this tick
+    cc_items: Any = None        # DAMAGE: item CC flags (slowed, hard CC)
+    hp: Any = None              # DAMAGE [CC, DEATH, TIMERS]: (N,) working HP
+    max_hp: Any = None          # DAMAGE [TIMERS: ward rows]: (N,) working max HP
+    shields: Any = None         # DAMAGE [CC]: D.Shields
+    status: Any = None          # DAMAGE [CC]: UnitStatus
+    # 8. CC / HEAL
+    extra: Any = None           # CC: merged summoner/kit/monster heal and mana effects
+    item_cleanse: Any = None    # CC: item-active world effects (cleanse, cd rate, mana cost, transform, dash)
+    cc: Any = None              # CC: CCTimers after this tick's CC (deaths cleared in _commit)
+    # 9. DEATH
+    died: Any = None            # DEATH: (N,) died this tick
+    minion_died: Any = None     # DEATH: (N,)
+    dmg: Any = None             # DEATH: (N, N) damage matrix for the next tick
+    death_seen: Any = None      # DEATH: (C, N) own sight of units that died (Overgrowth, next tick)
+    plates: Any = None          # DEATH: PlateEvents
+    took_health: Any = None     # DEATH: (N,) took health damage
+    in_f: Any = None            # DEATH: (C,) in own fountain
+    epic: Any = None            # DEATH: (C,) epic takedowns (next tick's rune events)
+    large: Any = None           # DEATH: (C,) large-monster kills (next tick's rune events)
+    jrw: Any = None             # DEATH: jungle rewards (None without jungle)
+    eco: Any = None             # DEATH: EconomyOut
+    econ: Any = None            # DEATH [TIMERS: ward gold/XP]: next economy state
+    # 10. TIMERS (next-state unit columns and layers)
+    alive: Any = None           # TIMERS: (N,)
+    x: Any = None               # TIMERS: (N,) final positions
+    y: Any = None
+    kind: Any = None            # TIMERS: (N,) dead minions freed, ward units mirrored
+    sub: Any = None             # TIMERS: (N,) ward rows
+    team: Any = None            # TIMERS: (N,) ward rows
+    spawn_seq: Any = None       # TIMERS: (N,) ward rows
+    radius: Any = None          # TIMERS: (N,) ward rows
+    targetable: Any = None      # TIMERS: (N,) ward rows
+    wards: Any = None           # TIMERS: Wards
+    kills: Any = None           # TIMERS: Kills credited this tick (next tick's hooks)
+    cast_now: Any = None        # TIMERS: (C, 4) slot cast this tick
+    # 11. FOG
+    reveal: Any = None          # FOG: attack-reveal circles
+    visible: Any = None         # FOG: (2, N) next tick's visibility
+    sight: Any = None           # FOG: (N, N) next tick's own sight
+
+
 def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[ModernState, TickEvents]:
     """Advance the modern world one tick (``cfg.dt``); returns ``(state, events)``."""
-    from . import modern_item_effects as IE
     s0 = s
-    dt = cfg.dt
-    c, n = N_CHAMPIONS, cfg.n_units
-    now = s.t + jnp.float32(dt)
+    now = s.t + jnp.float32(cfg.dt)
     key, k_crit = jax.random.split(s.key)
-    cat = catalog()
-    champ = s.champ
+    sc = TickScratch(s0=s0, now=now, key=key, k_crit=k_crit)
+    s, orders, sc = _input(s, orders, cfg, sc)
+    s, sc = _stats(s, orders, cfg, sc)
+    s, sc = _objectives(s, orders, cfg, sc)
+    s, sc = _casts(s, orders, cfg, sc)
+    s, sc = _ai(s, orders, cfg, sc)
+    s, sc = _move(s, orders, cfg, sc)
+    s, sc = _attack(s, orders, cfg, sc)
+    s, sc = _damage(s, orders, cfg, sc)
+    s, sc = _cc_heal(s, orders, cfg, sc)
+    s, sc = _death(s, orders, cfg, sc)
+    s, sc = _timers(s, orders, cfg, sc)
+    s, sc = _fog(s, orders, cfg, sc)
+    new, events = _commit(s, cfg, sc)
+    # Game over (Nexus destroyed): the world freezes on the final state.
+    new = jax.tree.map(lambda a, b: jnp.where(s0.game_over, a, b), s0, new)
+    # Keep the carry stable under scan: subsystems may return wider/narrower dtypes.
+    return jax.tree.map(lambda a, b: jnp.asarray(b, a.dtype) if hasattr(a, "dtype") else b, s0, new), events
 
-    # ---- 1. INPUT -----------------------------------------------------------------------
+
+def _input(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
+           sc: TickScratch) -> tuple[ModernState, ModernOrders, TickScratch]:
+    """1. INPUT: fog-filtered orders, attack-move, stasis, skill points, spawns, this tick's terrain.
+
+    Writes ``s.champ`` (orders, ranks), ``s.amove``, spawns, champion ``targetable``; returns the
+    fog-filtered orders."""
+    c, n = N_CHAMPIONS, cfg.n_units
+    now = sc.now
+    champ = s.champ
     # Fog: a champion can only target what its team sees; a target that enters fog is dropped.
     vis_c = s.visible[s.team[:c]]                                                     # (C, N)
-    seen = lambda u: (u >= 0) & vis_c[jnp.arange(c), jnp.clip(u, 0, n - 1)]
+    seen = lambda u: (u >= 0) & vis_c[jnp.arange(c), jnp.clip(u, 0, n - 1)]          # noqa: E731
     orders = orders._replace(attack=jnp.where(seen(orders.attack), orders.attack, -1),
                              cast_target=jnp.where(seen(orders.cast_target), orders.cast_target, -1),
                              summoner_target=jnp.where(seen(orders.summoner_target), orders.summoner_target, -1))
@@ -636,10 +794,17 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
         terrain = terrain_pair(cfg.rift, s.terrain_variant)
     if cfg.footprints is not None:
         terrain = DTR.walkable_masks(terrain, cfg.footprints, s.alive, DTR.release_mask(cfg.unit_kind))
+    return s, orders, sc._replace(champ=champ, vis_c=vis_c, in_stasis=in_stasis, caps=caps, terrain=terrain,
+                                  attack_order=attack_order, moving=moving, goal=goal, amove=amove)
 
-    # ---- 2. STATS -----------------------------------------------------------------------
-    level = s.econ.level
-    static, st_static = _static_stats(s, cfg, caps, now, dt)
+
+def _stats(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """2. STATS: static stats (items, shards, monster buffs, kit); STAT.70 max-HP sync.
+
+    Writes champion ``s.hp``/``s.max_hp`` and ``s.champ.static_max_hp`` (not ``sc.champ``)."""
+    c = N_CHAMPIONS
+    champ = sc.champ
+    static, st_static = _static_stats(s, cfg, sc.caps, sc.now, cfg.dt)
     # STAT.70 for static max-HP changes (level-up, purchases, kit stacks); dynamic health is
     # synced by combat_tick.
     old_total = s.max_hp[:c]
@@ -648,23 +813,39 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     hp_c = jnp.where(s.alive[:c], hp_c, s.hp[:c])
     s = s._replace(hp=s.hp.at[:c].set(hp_c), max_hp=s.max_hp.at[:c].set(mx_c),
                    champ=champ._replace(static_max_hp=st_static.max_hp))
+    return s, sc._replace(static=static, st_static=st_static)
 
-    # ---- 2b. OBJECTIVES (epic monsters: spawns, abilities, Rift transformation) ------------
-    so = None
-    if cfg.objectives is not None:
-        from . import modern_objectives as OBJ
-        cinfo = OBJ.ChampInfo(level=level, bonus_ad=st_static.bonus_ad, ap=st_static.ap,
-                              bonus_hp=st_static.max_hp - st_static.base_hp, max_hp=s.max_hp[:c],
-                              max_mana=st_static.max_mana, adaptive_physical=cfg.adaptive_physical)
-        k_obj, key = jax.random.split(key)
-        obj, so = OBJ.objectives_step(s.obj, cfg.objectives, units_view(s), now=now, dt=jnp.float32(dt),
-                                      levels=level, damage_matrix=s.damage_matrix, champ=cinfo,
-                                      last_damaged=champ.last_damaged,
-                                      ult_cast=s.champ.last_cast[:, 3] >= s.t - 1e-6, key=k_obj)
-        s = _apply_objective_writes(s._replace(obj=obj), so, cfg)
 
-    # ---- 3. CASTS: shop, kits, summoners --------------------------------------------------
-    inv, gold, gcd, shop_code, bought, sold = _shop(s, cfg, orders, st_static, champ.forbid)
+def _objectives(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
+                sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """2b. OBJECTIVES: epic monsters (spawns, abilities, Rift transformation). Writes ``s.obj`` and the
+    epic slots."""
+    if cfg.objectives is None:
+        return s, sc._replace(so=None, cinfo=None)
+    from . import modern_objectives as OBJ
+    c, dt = N_CHAMPIONS, cfg.dt
+    now, key, champ, st_static = sc.now, sc.key, sc.champ, sc.st_static
+    level = s.econ.level
+    cinfo = OBJ.ChampInfo(level=level, bonus_ad=st_static.bonus_ad, ap=st_static.ap,
+                          bonus_hp=st_static.max_hp - st_static.base_hp, max_hp=s.max_hp[:c],
+                          max_mana=st_static.max_mana, adaptive_physical=cfg.adaptive_physical)
+    k_obj, key = jax.random.split(key)
+    obj, so = OBJ.objectives_step(s.obj, cfg.objectives, units_view(s), now=now, dt=jnp.float32(dt),
+                                  levels=level, damage_matrix=s.damage_matrix, champ=cinfo,
+                                  last_damaged=champ.last_damaged,
+                                  ult_cast=s.champ.last_cast[:, 3] >= s.t - 1e-6, key=k_obj)
+    s = _apply_objective_writes(s._replace(obj=obj), so, cfg)
+    return s, sc._replace(so=so, cinfo=cinfo, key=key)
+
+
+def _casts(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """3. CASTS: shop, kit casts and periodic effects, summoner spells, Smite; kit attack modifiers.
+
+    Writes ``s.econ`` (shop gold) and ``s.champ`` (inventory, group cooldowns)."""
+    c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
+    now, caps, static, st_static = sc.now, sc.caps, sc.static, sc.st_static
+    level = s.econ.level
+    inv, gold, gcd, shop_code, bought, sold = _shop(s, cfg, orders, st_static, sc.champ.forbid)
     econ = s.econ._replace(gold=gold, gold_total=s.econ.gold_total)
     champ = s.champ._replace(inventory=inv, group_cd=gcd)
     s = s._replace(econ=econ, champ=champ)
@@ -699,8 +880,22 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
 
     kmods = K.attack_mods(kits, kctx)
     reach = st.attack_range + kmods.extra_range                       # Garen Q / Jax W +50 (kit extra range)
+    return s, sc._replace(champ=champ, st=st, summ_world=summ_world, units=units, kctx=kctx, ictx=ictx,
+                          locked=locked, item_casting=item_casting, cast_order=order, kits=kits, kit_out=kit_out,
+                          kmods=kmods, reach=reach, summ=summ, s_eff=s_eff, s_out=s_out, sm=sm, jungle=jungle,
+                          shop_code=shop_code, bought=bought, sold=sold)
 
-    # ---- 4. AI: minion/turret targets, champion targets ------------------------------------
+
+def _ai(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """4. AI: structure tick, minion/turret/monster targets and goals, champion targets (idle acquisition,
+    attack-move).
+
+    Writes structure/monster ``s.hp``/``s.alive``/``s.targetable``/``s.kind`` and ``s.obj``; ``towers`` and
+    ``lane_ai`` stay in the scratch until MOVE."""
+    c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
+    now, units, jungle, so, champ = sc.now, sc.units, sc.jungle, sc.so, sc.champ
+    attack_order, moving, amove, goal = sc.attack_order, sc.moving, sc.amove, sc.goal
+    reach, vis_c = sc.reach, sc.vis_c
     towers = LA.turret_tick(s.towers, units, now=now, dt=jnp.float32(dt))
     hp_t, alive_t, targ_t = LA.structure_unit_view(towers, units)
     s = s._replace(hp=hp_t, alive=alive_t, targetable=targ_t)
@@ -730,6 +925,7 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
                        kind=s.kind.at[jsl].set(jnp.where(mai.despawn, W.KIND_NONE, s.kind[jsl])),
                        targetable=s.targetable.at[jsl].set(mai.targetable & live_j))
     if so is not None:
+        from . import modern_objectives as OBJ
         e0 = cfg.objectives.slot0
         esl = slice(e0, e0 + 8)
         desired = desired.at[esl].set(jnp.where(so.can_attack, so.desired, -1))
@@ -759,8 +955,28 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     moving_eff = moving | (am.active & ~t_ok_eff)
     desired = desired.at[:c].set(jnp.where(t_ok_eff, attack_order_eff, -1))
     champ = champ._replace(attack_order=attack_order)
+    return s, sc._replace(towers=towers, lane_ai=lane_ai, desired=desired, lane_goal=mgoal, lane_stop=stop,
+                          mai=mai, mon_goal=m_goal, mon_speed=m_speed, mon_move=m_move, mbuf=mbuf, units=units,
+                          attack_order=attack_order, attack_order_eff=attack_order_eff, t_ok_eff=t_ok_eff,
+                          goal=goal, moving_eff=moving_eff, champ=champ, amove=amove, jungle=jungle)
 
-    # ---- 5. MOVE ------------------------------------------------------------------------------
+
+def _move(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """5. MOVE: route movement, dashes, Flash, Teleport; collision.
+
+    Reads: ``now, caps, champ, units, st, reach, locked, s_out`` (Flash/Teleport/Ghost), ``kit_out`` (dash),
+    ``kits, kctx`` (kit ghosting), the AI goals ``attack_order_eff, t_ok_eff, goal, moving_eff, lane_goal,
+    lane_stop, mon_goal, mon_speed, mon_move``, ``mai, mbuf, so, jungle, lane_ai, towers, terrain, ictx`` and
+    ``s.pending_dash``.
+    Writes ``s.x, s.y, s.lane_ai, s.towers, s.route_anchor``, dash state and facing in both ``s.champ``
+    and ``champ``, and ``tp_lock, sres, ms, dstart, in_dash, units, ictx``."""
+    c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
+    now, caps, champ, units, st, reach = sc.now, sc.caps, sc.champ, sc.units, sc.st, sc.reach
+    locked, s_out, kit_out, kits, kctx = sc.locked, sc.s_out, sc.kit_out, sc.kits, sc.kctx
+    attack_order_eff, t_ok_eff, goal, moving_eff = sc.attack_order_eff, sc.t_ok_eff, sc.goal, sc.moving_eff
+    mgoal, stop, m_goal, m_speed, m_move = sc.lane_goal, sc.lane_stop, sc.mon_goal, sc.mon_speed, sc.mon_move
+    so, mai, mbuf, jungle, lane_ai, towers = sc.so, sc.mai, sc.mbuf, sc.jungle, sc.lane_ai, sc.towers
+    terrain, ictx = sc.terrain, sc.ictx
     tp_lock = s_out.teleport_channel | s_out.teleport_dash
     can_move_c = caps["can_move"][:c] & s.alive[:c] & ~locked & ~tp_lock & (now >= champ.dash_until)
     tgt = jnp.clip(attack_order_eff, 0, n - 1)
@@ -777,19 +993,30 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     hg_bonus = 0.0 if so is None else so.homeguard_bonus * s.econ.homeguard.active
     sres = jnp.zeros((n,), jnp.float32).at[:c].set(st.slow_resist)
     if mai is not None:                                               # Scuttler: slow immune while not fleeing
+        jsl = slice(cfg.jungle.monster0, cfg.jungle.monster0 + cfg.jungle.n_slots)
         sres = sres.at[jsl].set(mai.slow_resist)
     # Gustwalker's Gait from jungle state (brush entry detected at last tick's combat phase: 1 tick lag).
-    gust = 0.0 if cfg.jungle is None else J.gust_bonus_ms(jungle, now)
+    if cfg.jungle is None:
+        gust = 0.0
+    else:
+        from . import modern_jungle as J
+        gust = J.gust_bonus_ms(jungle, now)
     m_ms = LA.minion_move_speed(lane_ai, units, now)
     if mbuf is not None:
         m_ms = jnp.where(minion, jnp.maximum(m_ms, mbuf.ms_floor), m_ms)
     # Non-champion slows apply at use with slow resist (champions: STAT pipeline ``slow=``).
-    ms = (jnp.where(monster, m_speed, m_ms) * (1.0 - caps["slow"] * (1.0 - sres))).at[:c].set(
-        st.move_speed * (1.0 + s_out.bonus_ms_pct + gust)
-        + (champ.homeguard_ms + hg_bonus) * cfg.champion_base.base_ms)
+    # Champions: Ghost/Heal, Gustwalker and Homeguard are bonus % MS inside the STAT pipeline, before
+    # the soft caps (26.9 replays, REPLAY_FIDELITY; adding them after the caps ran ~60 u fast).
+    summ_world = sc.summ_world
+    extra_pct = s_out.bonus_ms_pct + gust + champ.homeguard_ms + hg_bonus
+    champ_ms = compose(cfg.champion_base, s.econ.level,
+                       summ_world._replace(percent_move_speed=summ_world.percent_move_speed + extra_pct),
+                       adaptive_physical=cfg.adaptive_physical, slow=caps["slow"][:c]).move_speed
+    ms = (jnp.where(monster, m_speed, m_ms) * (1.0 - caps["slow"] * (1.0 - sres))).at[:c].set(champ_ms)
     active = ((minion & ~stop | monster & m_move) & caps["can_move"]).at[:c].set(cact)
     team_mv = jnp.clip(s.team, 0, 1)                                  # neutral monsters walk the blue mask
-    x, y, _ = M.move_step(s.x, s.y, gx, gy, ms, active, team_mv, s.radius, cfg.routes, terrain, dt)
+    x, y, _, anchor = M.move_step(s.x, s.y, gx, gy, ms, active, team_mv, s.radius, cfg.routes, terrain, dt,
+                                  s.route_anchor, movers=MW_layout()["ward0"])
     # Kit dashes (Jax Q): follow the target unit at the dash speed (no terrain, it's a leap).
     dash = kit_out.dash
     pd = s.pending_dash                                               # item-active dash (Rocketbelt)
@@ -823,21 +1050,38 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
                             jnp.where(s.kind >= W.KIND_TURRET, 3, s.kind)).astype(s.kind.dtype)
     ghost = (jnp.zeros((n,), bool).at[:c].set(s_out.ghosted | (now < dash_until) | K.ghosted(kits, kctx))
              | LA.minion_ghosted(lane_ai, units, now))
-    collide = s.alive & (s.kind != W.KIND_WARD)                       # wards have no collision
+    # Wards have no collision; structures block through their navgrid pads (terrain), not as unit
+    # obstacles: their collision circles reach past the pads that routes are baked around, which left
+    # units pinned against them (red stuck at its top inhibitor).
+    collide = s.alive & (s.kind != W.KIND_WARD) & ~W.is_structure(s.kind)
     x, y = resolve_collisions(x, y, legacy_kind, collide, s.spawn_seq, s.radius, s.radius, ghosted=ghost)
     facing = jnp.stack([x[:c] - s.x[:c], y[:c] - s.y[:c]], -1)
     norm = jnp.linalg.norm(facing, axis=-1, keepdims=True)
     facing = jnp.where(norm > 1e-3, facing / jnp.maximum(norm, 1e-6), champ.facing)
     moved = jnp.sqrt((x[:c] - s.x[:c]) ** 2 + (y[:c] - s.y[:c]) ** 2)
-    s = s._replace(x=x, y=y, lane_ai=lane_ai, towers=towers,
-                   champ=champ._replace(dash_until=dash_until, dash_target=dash_target.astype(jnp.int32),
-                                        dash_to=jnp.where(dstart[:, None], jnp.stack([dx, dy], -1), champ.dash_to),
-                                        dash_speed=jnp.where(dstart, dash.speed, champ.dash_speed), facing=facing))
+    # Dash state and facing go to the working ChampionLayer too: it becomes the next state's ``champ``
+    # (writing only ``s.champ`` dropped them every tick, so a Jax Q leap moved only on its start tick).
+    champ = champ._replace(dash_until=dash_until, dash_target=dash_target.astype(jnp.int32),
+                           dash_to=jnp.where(dstart[:, None], jnp.stack([dx, dy], -1), champ.dash_to),
+                           dash_speed=jnp.where(dstart, dash.speed, champ.dash_speed), facing=facing)
+    s = s._replace(x=x, y=y, lane_ai=lane_ai, towers=towers, champ=champ, route_anchor=anchor)
     units = units_view(s)._replace(attack_range=s.arange.at[:c].set(reach),
                                    attack_speed=s.aspeed.at[:c].set(st.attack_speed))
     ictx = ictx._replace(x=x[:c], y=y[:c], facing_x=facing[:, 0], facing_y=facing[:, 1], moved=moved)
+    return s, sc._replace(champ=champ, tp_lock=tp_lock, sres=sres, ms=ms, dstart=dstart, in_dash=in_dash,
+                          units=units, ictx=ictx)
 
-    # ---- 6. ATTACK ------------------------------------------------------------------------------
+
+def _attack(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """6. ATTACK: attack machine, crits, attack packets, missiles, ward hits, kit on-attack/on-hit,
+    Overgrowth, jungle combat effects. Writes ``s.obj``."""
+    from . import modern_item_effects as IE
+    from .modern_champions.core import merge_out
+    c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
+    now, caps, champ, units, st, kmods = sc.now, sc.caps, sc.champ, sc.units, sc.st, sc.kmods
+    locked, item_casting, tp_lock, in_dash = sc.locked, sc.item_casting, sc.tp_lock, sc.in_dash
+    kit_out, kits, kctx, ictx, mbuf, so = sc.kit_out, sc.kits, sc.kctx, sc.ictx, sc.mbuf, sc.so
+    lane_ai, jungle, desired, k_crit = sc.lane_ai, sc.jungle, sc.desired, sc.k_crit
     can_attack = (caps["can_attack"] & s.alive).at[:c].set(
         caps["can_attack"][:c] & s.alive[:c] & ~kmods.cannot_attack & ~locked & ~item_casting & ~tp_lock
         & ~in_dash)
@@ -900,6 +1144,7 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
         extra_atk.append(j_bonus)
     obj_cc = None
     if so is not None:
+        from . import modern_objectives as OBJ
         obj, o_raw, o_dtype, o_flags, o_extra, obj_cc = OBJ.objectives_attack(s.obj, cfg.objectives, units,
                                                                             launch_all, now=now)
         s = s._replace(obj=obj)
@@ -946,18 +1191,31 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
         dmg_champ = jnp.where(jnp.any(dm_cc, axis=1), jnp.argmax(dm_cc, axis=1), -1).astype(jnp.int32)
         jungle, jfx = J.combat_effects(jungle, cfg.jungle, units, ictx, attack_hit=attack.hit,
                                        attack_target=attack.target, damaged_champion=dmg_champ,
-                                       in_brush=_in_brush(cfg, x[:c], y[:c], s.terrain_variant))
+                                       in_brush=_in_brush(cfg, s.x[:c], s.y[:c], s.terrain_variant))
+    return s, sc._replace(att=att, launched=launched, started=started, cancelled=cancelled, reset=reset,
+                          attack=attack, missiles=missiles, m_over=m_over, direct=direct, arrived=arrived,
+                          og_pk=og_pk, extra_atk=extra_atk, obj_cc=obj_cc, ward_hits=ward_hits,
+                          ward_hitter=ward_hitter, kits=kits, towers=towers, kit_all=kit_all, jfx=jfx,
+                          jungle=jungle, units=units)
 
-    # ---- 7. DAMAGE ---------------------------------------------------------------------------------
-    more = list(extra_atk)
+
+def _damage(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """7. DAMAGE: every packet -> combat_tick (items, runes, damage pipeline); kit on-damage."""
+    from . import modern_item_actives as A
+    c, n = N_CHAMPIONS, cfg.n_units
+    now, caps, champ, units, kits, kctx, ictx = sc.now, sc.caps, sc.champ, sc.units, sc.kits, sc.kctx, sc.ictx
+    so, sm, jfx, kit_all, s_eff, s_out, towers = sc.so, sc.sm, sc.jfx, sc.kit_all, sc.s_eff, sc.s_out, sc.towers
+    st_static, att, reset, in_stasis = sc.st_static, sc.att, sc.reset, sc.in_stasis
+    more = list(sc.extra_atk)
     if sm is not None:
         more.append(sm.packets)
     if jfx is not None:
         more.append(jfx.packets)
     if so is not None:
         more.append(so.packets)
-    base = D.concat_packets(direct, arrived, og_pk, kit_all.packets, s_eff.packets, *more)
+    base = D.concat_packets(sc.direct, sc.arrived, sc.og_pk, kit_all.packets, s_eff.packets, *more)
     if so is not None:
+        from . import modern_objectives as OBJ
         base = OBJ.objectives_packet_mods(s.obj, cfg.objectives, base, units, now=now)
     kdef = K.defense(kits, kctx)
     kdeb = K.debuffs(kits, kctx, units)
@@ -982,38 +1240,46 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     # Overgrowth (U-15): deaths last tick with own sight latched while the victim was alive
     # (``sight`` is end-of-tick and drops dead units, so it cannot show the death itself).
     deaths_prev = jnp.any(s.death_seen, axis=0)
-    ev = rune_events(ictx, n, game_time=now, attack_started=started[:c], attack_start_target=att.target[:c],
-                     attack_cancelled=cancelled[:c], attack_reset=reset[:c], cast_id=kit_all.cast_id,
+    ev = rune_events(ictx, n, game_time=now, attack_started=sc.started[:c], attack_start_target=att.target[:c],
+                     attack_cancelled=sc.cancelled[:c], attack_reset=reset[:c], cast_id=kit_all.cast_id,
                      cc_duration=jnp.maximum(cc_now.stun, cc_now.root), impaired=caps["impaired"],
                      movement_impaired=caps["movement_impaired"],
                      impaired_by_holder=(cc_now.slow > 0) | (cc_now.stun > 0) | (cc_now.root > 0),
                      holder_cc_from_champion=s.cc.champion_cc_until[:c] > now,
                      summoner_cast=s_out.cast_event, summoner_cooldown=s_out.cast_cooldown,
                      summoner_is_teleport=s_out.is_teleport,
-                     blinked=s_out.blinked | dstart, flash_cooldown=S.flash_cooldown(summ, now),
-                     deaths=deaths_prev, purchased=bought, sold=sold, granted=champ.granted,
+                     blinked=s_out.blinked | sc.dstart, flash_cooldown=S.flash_cooldown(sc.summ, now),
+                     deaths=deaths_prev, purchased=sc.bought, sold=sc.sold, granted=champ.granted,
                      uses_energy=cfg.uses_energy, adaptive_physical=cfg.adaptive_physical,
                      is_turret=s.kind == W.KIND_TURRET, cc_cast_id=cc_now.cast_id,
-                     cc_on_hit=jnp.zeros((c, n), bool), sight=s.sight[:c] | s.death_seen, visible=vis_c,
+                     cc_on_hit=jnp.zeros((c, n), bool), sight=s.sight[:c] | s.death_seen, visible=sc.vis_c,
                      epic_takedown=s.epic_prev, large_monster_kill=s.large_prev,
                      in_river=_in_river(cfg, s.x[:c], s.y[:c]))
-    from . import modern_item_actives as A
     items0 = s.combat.items
     items0 = items0._replace(modern_item_actives=A.with_aim(items0.modern_item_actives, orders.cast_target,
                                                             orders.cast_x, orders.cast_y))
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
     out = combat_tick(s.combat._replace(items=items0), IE_own(champ.inventory), cfg.rune_pages, ictx,
-                      _item_units(s), attack=attack,
-                      cast=Cast(kit_all.cast_started, kit_all.cast_slot, order.target),
+                      _item_units(s), attack=sc.attack,
+                      cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,
                       hp=s.hp, max_hp=s.max_hp, shields=s.shields, status=s.status, kills=s.kills,
-                      holder_stats=static, cc=cc_items, ev=ev)
+                      holder_stats=sc.static, cc=cc_items, ev=ev)
     hp, max_hp, shields, status = out.hp, out.max_hp, out.shields, out.status
     kits, k_dmg = K.on_damage(kits, kctx, units, out.report)
+    return s, sc._replace(out=out, kdef=kdef, k_dmg=k_dmg, cc_now=cc_now, cc_items=cc_items, hp=hp, max_hp=max_hp,
+                          shields=shields, status=status, kits=kits)
 
-    # ---- 8. CC / heals / shields from kits and summoners ------------------------------------------------
-    kit_shields = ShieldGrant(*(jnp.concatenate([u, v], axis=1) for u, v in zip(kit_all.shield, k_dmg.shield)))
+
+def _cc_heal(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """8. CC / HEAL: kit, summoner and monster heals and shields; CC with tenacity and slow resist."""
+    from . import modern_item_actives as A
     from .modern_item_effects.core import shield_grants
+    c, n = N_CHAMPIONS, cfg.n_units
+    now, st, kit_all, k_dmg, s_eff, s_out, out = sc.now, sc.st, sc.kit_all, sc.k_dmg, sc.s_eff, sc.s_out, sc.out
+    jfx, so, sm, mai, sres, kdef = sc.jfx, sc.so, sc.sm, sc.mai, sc.sres, sc.kdef
+    hp, max_hp, shields, status = sc.hp, sc.max_hp, sc.shields, sc.status
+    kit_shields = ShieldGrant(*(jnp.concatenate([u, v], axis=1) for u, v in zip(kit_all.shield, k_dmg.shield)))
     m_heal = jnp.zeros((c,), jnp.float32)
     m_mana = jnp.zeros((c,), jnp.float32)
     m_shield = jnp.zeros((c,), jnp.float32)
@@ -1025,8 +1291,8 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
                            effects(c, n, heal=kit_all.heal + k_dmg.heal, shields=kit_shields),
                            effects(c, n, heal=m_heal, mana=m_mana,
                                    shields=shield_grants(m_shield, duration=jnp.inf))], c, n)
-    hp, shields, status = apply_effects(extra, ictx, hp, max_hp, shields, status,
-                                        heal_power=st.heal_shield_power, incoming_heal=summ_world.incoming_heal)
+    hp, shields, status = apply_effects(extra, sc.ictx, hp, max_hp, shields, status,
+                                        heal_power=st.heal_shield_power, incoming_heal=sc.summ_world.incoming_heal)
     # Champion-sourced slows without a (C, N) source row: Exhaust, item/rune effects (Rylai's, Stridebreaker,
     # Spellblade fields ...). ``CCTimers`` is the only slow state movement reads; ``status.slow`` is unused.
     slow_cc = W.no_cc(3, n)._replace(slow=jnp.stack([s_out.exhaust_slow, out.effects.slow, extra.slow]),
@@ -1037,21 +1303,33 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     if mai is not None:                                               # Scuttler: slow immune, -100% tenacity
         jsl = slice(cfg.jungle.monster0, cfg.jungle.monster0 + cfg.jungle.n_slots)
         ten = ten.at[jsl].set(1.0 - mai.cc_duration_mult)
-    champ_cc = cc_now
+    champ_cc = sc.cc_now
     for extra_cc in ([] if sm is None else [sm.cc]) + ([] if jfx is None else [jfx.cc]) \
             + ([] if so is None else [so.champion_cc]):
         champ_cc = W.merge_cc(champ_cc, extra_cc)
     item_cleanse = A.world(out.state.items.modern_item_actives, now)
     cc = M.apply_cc(s.cc, champ_cc, ten, sres, now, source_is_champion=jnp.ones((c,), bool),
                     cleansed=jnp.zeros((n,), bool).at[:c].set(s_out.cleanse | item_cleanse.cleanse))
-    for mcc in ([] if so is None else [so.cc]) + ([] if obj_cc is None else [obj_cc]):
+    for mcc in ([] if so is None else [so.cc]) + ([] if sc.obj_cc is None else [sc.obj_cc]):
         cc = M.apply_cc(cc, mcc, ten, sres, now, source_is_champion=jnp.zeros((mcc.stun.shape[0],), bool))
     cc = M.apply_cc(cc, slow_cc, ten, sres, now, source_is_champion=jnp.ones((3,), bool))
     clean_slow = jnp.zeros((n,), bool) if kit_all.cleanse_slow is None else \
         jnp.zeros((n,), bool).at[:c].set(kit_all.cleanse_slow)
     cc = cc._replace(slow_until=jnp.where(clean_slow, now, cc.slow_until))
+    return s, sc._replace(extra=extra, hp=hp, shields=shields, status=status, item_cleanse=item_cleanse, cc=cc)
 
-    # ---- 9. DEATH and economy --------------------------------------------------------------------------
+
+def _death(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """9. DEATH: kills, plates, camp/objective rewards -> economy_step; kit on-takedown. Writes ``s.obj``.
+
+    Reads start-of-tick ``s.cc``/``caps`` for the recall interrupt (``sc.cc`` is this tick's CC)."""
+    from .modern_item_effects.core import Report
+    c, n = N_CHAMPIONS, cfg.n_units
+    now, caps, champ, units, st, out, so = sc.now, sc.caps, sc.champ, sc.units, sc.st, sc.out, sc.so
+    hp, max_hp, towers, jungle, lane_ai, kits = sc.hp, sc.max_hp, sc.towers, sc.jungle, sc.lane_ai, sc.kits
+    s_out, s_eff = sc.s_out, sc.s_eff
+    level = s.econ.level
+    x, y = s.x, s.y                                                   # MOVE's positions
     rp = D.concat_packets(out.report.packets, out.follow_up.packets)
     rr_killed = jnp.concatenate([out.report.resolved.killed, out.follow_up.resolved.killed])
     rr_loss = jnp.concatenate([out.report.resolved.health_loss, out.follow_up.resolved.health_loss])
@@ -1073,7 +1351,6 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
                             in_top_lane=cfg.unit_lane == 2, is_structure=struct)
     took_health = jnp.zeros((n,), bool).at[jnp.clip(rp.dst, 0, n - 1)].max(rp.valid & (rr_loss > 0))
     in_f = E.in_fountain(x[:c], y[:c], cfg.fountain[s.team[:c], 0], cfg.fountain[s.team[:c], 1])
-    from .modern_item_effects.core import Report
     # Monster and objective deaths: rewards to the killing champion / team (not MinionDeaths).
     dec = E.decimal_level(s.econ.xp, jnp.where(s.econ.quest.complete, E.QUEST_LEVEL_CAP, E.LEVEL_CAP))
     xg = jnp.zeros((c,), jnp.float32)
@@ -1083,6 +1360,7 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     killed_mon = jnp.zeros((c, n), bool)
     jrw = None
     if cfg.jungle is not None:
+        from . import modern_jungle as J
         jungle, jrw = J.death_step(jungle, cfg.jungle, units, now=now, died=died, killer=killer,
                                    avg_level=jnp.mean(dec), champion_level=dec, hp=hp[:c], max_hp=max_hp[:c],
                                    mana=champ.mana, max_mana=st.max_mana, champion_died=died[:c],
@@ -1091,11 +1369,10 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
         large = large + jrw.large_kills
         j0 = cfg.jungle.monster0
         killed_mon = killed_mon.at[:, j0:j0 + cfg.jungle.n_slots].set(jrw.killed)
-    orw = None
     if so is not None:
-        cinfo2 = cinfo
+        from . import modern_objectives as OBJ
         obj, orw = OBJ.objectives_after_damage(s.obj, cfg.objectives, units, rp, rr_loss, died=died, killer=killer,
-                                               hp_after=hp, now=now, levels=level, champ=cinfo2)
+                                               hp_after=hp, now=now, levels=level, champ=sc.cinfo)
         s = s._replace(obj=obj)
         gg, xg = gg + orw.gold, xg + orw.xp
         epic, large = epic + orw.epic_takedown, large + orw.large_monster_kill
@@ -1116,7 +1393,7 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
         J.minion_reward_mods(jungle, now=now, champion_level=dec, avg_level=jnp.mean(dec))
     einp = E.EconomyInputs(
         now=now, unit=jnp.arange(c, dtype=jnp.int32), x=x[:c], y=y[:c], team=s.team[:c], hp=hp[:c],
-        max_hp=max_hp[:c], report=Report(rp, None, None), cc=cc_items,
+        max_hp=max_hp[:c], report=Report(rp, None, None), cc=sc.cc_items,
         final_blow=jnp.where(killer[:c] < c, killer[:c], -1), minion_deaths=md,
         minion_in_lane=LA.minion_in_lane(lane_ai, units, 2), structures=sev,
         last_champion_combat=out.state.clocks.last_champion_combat, in_fountain=in_f,
@@ -1134,9 +1411,23 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     if jrw is not None:                                               # kill restores, pet egg consumed at evolution
         hp = hp.at[:c].set(jnp.minimum(hp[:c] + jrw.heal, max_hp[:c]))
         champ = champ._replace(mana=jnp.minimum(champ.mana + jrw.mana, st.max_mana))
-    kits = K.on_takedown(kits, kctx, units, eco.kills)
+    kits = K.on_takedown(kits, sc.kctx, units, eco.kills)
+    return s, sc._replace(dmg=dmg, died=died, death_seen=death_seen, towers=towers, plates=plates,
+                          minion_died=minion_died, took_health=took_health, in_f=in_f, epic=epic, large=large,
+                          jrw=jrw, jungle=jungle, eco=eco, econ=econ, hp=hp, champ=champ, kits=kits)
 
-    # ---- 10. TIMERS, respawn, recall, outputs ----------------------------------------------------------
+
+def _timers(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """10. TIMERS: respawn, recall, cooldowns, mana/HP regen, fountain, inventory outputs, wards, ward units,
+    terrain ejection. Leaves ``s`` untouched: the next-state columns go to the scratch for FOG/_commit."""
+    from . import modern_dynamic_terrain as DTR
+    from . import modern_wards as WD
+    c, dt = N_CHAMPIONS, cfg.dt
+    cat = catalog()
+    now, caps, champ, st, out, kit_all, extra = sc.now, sc.caps, sc.champ, sc.st, sc.out, sc.kit_all, sc.extra
+    hp, max_hp, eco, econ, jrw, in_f, died = sc.hp, sc.max_hp, sc.eco, sc.econ, sc.jrw, sc.in_f, sc.died
+    s0, s_out, in_stasis = sc.s0, sc.s_out, sc.in_stasis
+    x, y = s.x, s.y                                                   # MOVE's positions
     alive = s.alive & ~died
     champ_dead = ~alive[:c]
     respawn = eco.respawned
@@ -1148,7 +1439,7 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     hp = hp.at[:c].set(jnp.where(respawn, max_hp[:c], hp[:c]))
     # Cooldowns: kit starts (hasted), refunds from runes, decrement.
     haste = jnp.stack([st.basic_ability_haste] * 3 + [st.ultimate_haste], -1)
-    aw = item_cleanse                                                 # item-active world effects
+    aw = sc.item_cleanse                                              # item-active world effects
     cd_rate = jnp.concatenate([jnp.broadcast_to(aw.basic_cd_rate[:, None], (c, 3)), jnp.ones((c, 1))], axis=1)
     cds = jnp.maximum(champ.cooldowns - dt * cd_rate, 0.0)
     cds = jnp.where(kit_all.cooldown_start, cooldown(kit_all.base_cooldown, haste), cds)
@@ -1182,7 +1473,6 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
         held_pet = jnp.max(jnp.where(jnp.isin(inv.item, pet_rows), inv.item, -1), axis=1)
         inv = consume(inv, held_pet, jrw.consume_pet & (held_pet >= 0))
     # Wards and trinkets (modern_wards): placement, hits, expiry, rewards, Control Ward use.
-    from . import modern_wards as WD
     lay = MW_layout()
     w0, wn = lay["ward0"], 2 * W.MAX_WARDS_PER_TEAM
     ids = jnp.asarray(cat.arrays.item_id)
@@ -1196,8 +1486,8 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     wards, wev = WD.ward_step(s.wards, now=now, dt=jnp.float32(dt), request=wreq, x=x[:c], y=y[:c], team=s.team[:c],
                               alive=alive[:c], level=econ.level, trinket_id=trinket_id, control_count=control_count,
                               grid=cfg.ward_grid, can_use=alive[:c] & ~caps["stunned"][:c] & ~in_stasis,
-                              trinket_haste=st.item_haste + st.trinket_haste, hits=ward_hits, hitter=ward_hitter,
-                              rune_pages=cfg.rune_pages, ward_visible=s0.visible[:, w0:w0 + wn])
+                              trinket_haste=st.item_haste + st.trinket_haste, hits=sc.ward_hits,
+                              hitter=sc.ward_hitter, rune_pages=cfg.rune_pages, ward_visible=s0.visible[:, w0:w0 + wn])
     econ = econ._replace(gold=econ.gold + wev.gold, gold_total=econ.gold_total + wev.gold, xp=econ.xp + wev.xp)
     inv = consume(inv, jnp.full((c,), cw_row, jnp.int32), wev.consumed_control)
     grant_row = jnp.argmax(jnp.asarray(cat.arrays.item_id)[None, :] == ro.grant_item[:, None], axis=1)
@@ -1212,10 +1502,10 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     lock = jnp.maximum(lock, jnp.where(act.used & ~act.can_move, now + act.cast_time, 0.0))
     item_lock = jnp.maximum(champ.item_cast_until, jnp.where(act.used & act.can_move, now + act.cast_time, 0.0))
     cast_now = kit_all.cast_started[:, None] & (jnp.arange(4)[None, :] == kit_all.cast_slot[:, None])
-    last_dmg = jnp.where(took_health[:c], now, champ.last_damaged)
+    last_dmg = jnp.where(sc.took_health[:c], now, champ.last_damaged)
     champ = champ._replace(
         cooldowns=cds, mana=mana, cast_lock_until=lock, item_cast_until=item_lock, last_damaged=last_dmg, inventory=inv,
-        dyn=out.dynamic_stats, homeguard_ms=eco.homeguard_ms, blinked=s_out.blinked | dstart,
+        dyn=out.dynamic_stats, homeguard_ms=eco.homeguard_ms, blinked=s_out.blinked | sc.dstart,
         forbid=ro.forbid_purchase, reset_next=out.effects.attack_reset,
         bonus_points=champ.bonus_points + ro.skill_points, granted=jnp.where(can_grant, ro.grant_item, 0),
         cs=champ.cs + eco.kills.minion_kill.astype(jnp.int32),
@@ -1225,7 +1515,7 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
                                jnp.where(_kit_attack(kit_all) >= 0, _kit_attack(kit_all), champ.attack_order)))
     kills_next = eco.kills
     # Dead minions free their slot; dead champions keep theirs.
-    kind = jnp.where(minion_died, W.KIND_NONE, s.kind)
+    kind = jnp.where(sc.minion_died, W.KIND_NONE, s.kind)
     # Ward units mirror the ward slots.
     view, _ = WD.ward_view(wards, now=now, x=x[:c], y=y[:c], team=s.team[:c], alive=alive[:c], level=econ.level)
     wsl = slice(w0, w0 + wn)
@@ -1238,38 +1528,55 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     w_seq = s.spawn_seq.at[wsl].set((1 << 24) + wards.slots.seq)
     w_radius = s.radius.at[wsl].set(1.0)
     w_targ = s.targetable.at[wsl].set(view.alive)
-    # Units left inside terrain that closed (inhibitor respawn, Rift transformation) step out.
+    # Units left inside terrain that closed (inhibitor respawn, Rift transformation) step out. The test
+    # disk is the movement clearance (route radius), the disk the MOVE clamp keeps walkable: the full
+    # unit radius pulled champions walking along a structure pad back every tick.
     mobile = alive & ((kind == W.KIND_CHAMPION) | (kind == W.KIND_MINION))
-    x, y = DTR.eject(x, y, jnp.clip(s.team, 0, 1), s.radius, terrain, active=mobile)
-    # ---- FOG: attack reveal, then next tick's visibility (modern_vision) ------------------------
+    x, y = DTR.eject(x, y, jnp.clip(s.team, 0, 1), jnp.minimum(s.radius, cfg.routes.radius), sc.terrain,
+                     active=mobile)
+    return s, sc._replace(alive=alive, x=x, y=y, hp=hp, max_hp=max_hp, champ=champ, econ=econ, wards=wards,
+                          kills=kills_next, kind=kind, sub=w_sub, team=w_team, spawn_seq=w_seq, radius=w_radius,
+                          targetable=w_targ, cast_now=cast_now)
+
+
+def _fog(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
+    """11. FOG: attack reveal, then next tick's visibility (modern_vision); enemy-seen casts."""
+    c = N_CHAMPIONS
+    now, s0, x, y, champ = sc.now, sc.s0, sc.x, sc.y, sc.champ
     enemy_team = 1 - s.team[:c]
     hidden = ~s0.visible[enemy_team, jnp.arange(c)] & s0.alive[:c]
-    struck = launched[:c] | (kit_all.cast_started & (order.target >= 0))
+    struck = sc.launched[:c] | (sc.kit_all.cast_started & (sc.cast_order.target >= 0))
     reveal = MV.reveal_step(s.reveal, hidden, struck, x[:c], y[:c], now)
-    vis_next, sight_next = _visibility(cfg, x, y, kind, w_sub, w_team, alive, reveal, now, wards=wards,
-                                       level=econ.level, variant=s.terrain_variant, jungle=jungle)
+    vis_next, sight_next = _visibility(cfg, x, y, sc.kind, sc.sub, sc.team, sc.alive, reveal, now, wards=sc.wards,
+                                       level=sc.econ.level, variant=s.terrain_variant, jungle=sc.jungle)
     witnessed = vis_next[enemy_team, jnp.arange(c)] | ~hidden
-    champ = champ._replace(seen_cast=jnp.where(cast_now & witnessed[:, None], now, champ.seen_cast))
+    champ = champ._replace(seen_cast=jnp.where(sc.cast_now & witnessed[:, None], now, champ.seen_cast))
+    return s, sc._replace(reveal=reveal, visible=vis_next, sight=sight_next, champ=champ)
+
+
+def _commit(s: ModernState, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickEvents]:
+    """The next state (before the game-over freeze and dtype cast) and the tick's events."""
+    c = N_CHAMPIONS
+    st, out, cc, died, alive, hp = sc.st, sc.out, sc.cc, sc.died, sc.alive, sc.hp
     cc = cc._replace(**{f: jnp.where(died, 0.0, getattr(cc, f)) for f in M.CCTimers._fields})
-    events = TickEvents(out.report, out.follow_up, eco, plates, launched, out.packet_overflow, m_over, shop_code)
-    result = LA.game_result(towers)
+    events = TickEvents(out.report, out.follow_up, sc.eco, sc.plates, sc.launched, out.packet_overflow, sc.m_over,
+                        sc.shop_code)
+    result = LA.game_result(sc.towers)
     # Champion rows of the unit columns mirror this tick's stats (read through WorldUnits).
     champ_cols = dict(ad=s.ad.at[:c].set(st.base_ad + st.bonus_ad),
                       armor=s.armor.at[:c].set(st.base_armor + st.bonus_armor),
-                      mr=s.mr.at[:c].set(st.base_mr + st.bonus_mr), arange=s.arange.at[:c].set(reach),
-                      aspeed=s.aspeed.at[:c].set(st.attack_speed), mspeed=s.mspeed.at[:c].set(ms[:c]))
+                      mr=s.mr.at[:c].set(st.base_mr + st.bonus_mr), arange=s.arange.at[:c].set(sc.reach),
+                      aspeed=s.aspeed.at[:c].set(st.attack_speed), mspeed=s.mspeed.at[:c].set(sc.ms[:c]))
     new = s._replace(**champ_cols,
-        t=now, tick=s.tick + 1, key=key, kind=kind, alive=alive, x=x, y=y, hp=jnp.where(alive, hp, jnp.minimum(hp, 0.0)),
-        max_hp=max_hp, att=att, missiles=missiles, cc=cc, champ=champ, kits=kits, summoners=summ,
-        combat=out.state, econ=econ, lane_ai=lane_ai, towers=towers, shields=shields, status=status,
-        kills=kills_next, damage_matrix=dmg, death_seen=death_seen, visible=vis_next, sight=sight_next, reveal=reveal,
-        sub=w_sub, team=w_team, spawn_seq=w_seq, radius=w_radius, targetable=w_targ, jungle=jungle, wards=wards,
-        amove=amove, pending_dash=aw.dash, epic_prev=epic, large_prev=large, game_over=result.over,
-        winner=result.winner)
-    # Game over (Nexus destroyed): the world freezes on the final state.
-    new = jax.tree.map(lambda a, b: jnp.where(s0.game_over, a, b), s0, new)
-    # Keep the carry stable under scan: subsystems may return wider/narrower dtypes.
-    return jax.tree.map(lambda a, b: jnp.asarray(b, a.dtype) if hasattr(a, "dtype") else b, s0, new), events
+        t=sc.now, tick=s.tick + 1, key=sc.key, kind=sc.kind, alive=alive, x=sc.x, y=sc.y,
+        hp=jnp.where(alive, hp, jnp.minimum(hp, 0.0)),
+        max_hp=sc.max_hp, att=sc.att, missiles=sc.missiles, cc=cc, champ=sc.champ, kits=sc.kits, summoners=sc.summ,
+        combat=out.state, econ=sc.econ, lane_ai=sc.lane_ai, towers=sc.towers, shields=sc.shields, status=sc.status,
+        kills=sc.kills, damage_matrix=sc.dmg, death_seen=sc.death_seen, visible=sc.visible, sight=sc.sight,
+        reveal=sc.reveal, sub=sc.sub, team=sc.team, spawn_seq=sc.spawn_seq, radius=sc.radius,
+        targetable=sc.targetable, jungle=sc.jungle, wards=sc.wards, amove=sc.amove, pending_dash=sc.item_cleanse.dash,
+        epic_prev=sc.epic, large_prev=sc.large, game_over=result.over, winner=result.winner)
+    return new, events
 
 
 def IE_own(inv) -> Any:

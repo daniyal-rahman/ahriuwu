@@ -405,7 +405,18 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
     take = lambda a, fill: jnp.concatenate([a, jnp.asarray([fill], a.dtype)])[idx]
     xs = (take(seq, False), take(p.dst, 0), take(final, 0.0), take(p.dtype, PHYSICAL), take(execute, False))
     carry0 = (hp, max_hp, shields, jnp.zeros((n_units,), bool))
-    (hp_s, max_hp, shields, fired), (absorbed_c, stored_c, loss_c, killed_c) = jax.lax.scan(body, carry0, xs)
+    # Only the ``count`` real packets are stepped (padded steps are exact no-ops: ``go`` is False), so a
+    # vmapped batch runs as many steps as its busiest env instead of the full buffer.
+    count = jnp.minimum(jnp.sum(seq), cap)
+    outs0 = (jnp.zeros((cap,), jnp.float32), jnp.zeros((cap,), jnp.float32), jnp.zeros((cap,), jnp.float32),
+             jnp.zeros((cap,), bool))
+
+    def step_one(i, c):
+        carry, outs = c
+        carry, y = body(carry, jax.tree.map(lambda a: a[i], xs))
+        return carry, tuple(o.at[i].set(jnp.asarray(v, o.dtype)) for o, v in zip(outs, y))
+    (hp_s, max_hp, shields, fired), (absorbed_c, stored_c, loss_c, killed_c) = jax.lax.fori_loop(
+        0, count, step_one, (carry0, outs0))
 
     def back(vals, dtype):
         return jnp.zeros((n_packets + 1,), dtype).at[idx].set(vals.astype(dtype))[:n_packets]

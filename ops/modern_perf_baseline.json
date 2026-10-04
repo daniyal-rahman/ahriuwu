@@ -1,0 +1,15 @@
+{
+  "entries": {
+    "gpu|NVIDIA GeForce RTX 5080|envs=256|ticks=150|warm=1800|fog=rays|jungle=1|objectives=1|lanes=0,1,2": {
+      "commit": "596ed79 (+ uncommitted compile-cache patch)",
+      "env_ticks_per_s": 8174.2,
+      "overflow": 0,
+      "peak_device_bytes": 2951913984,
+      "program_temp_bytes": 1971626384,
+      "recorded": "2026-10-03",
+      "steady_s": 4.6977,
+      "warm_compile_and_run_s": 102.2
+    }
+  },
+  "status": "PENDING: CPU baseline (16 envs) not recorded yet; run `sbatch slurm/modern_perf_guard.sbatch --cpu --update-baseline`. GPU entry measured from 596ed79 by job 2256."
+}

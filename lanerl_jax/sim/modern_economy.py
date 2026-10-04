@@ -43,6 +43,7 @@ HOMEGUARD_LOCKOUT = 8.0
 HOMEGUARD_FOUNTAIN_HEAL = 0.08     # missing HP and mana every 0.5 s (§11.2.5)
 DEATHGUARD_MS = 0.75               # Respawn Homeguard before 14:00 (§10.3)
 RECALL_CHANNEL = 8.0
+RECALL_CAST = 0.5                  # cast before the channel: 8.5 s total (wiki Recall; 26.9 replays 8.50 s, REPLAY_FIDELITY)
 RECALL_DAMAGE_GRACE = 0.1          # damage in the last 0.1 s does not interrupt (§11.1.3)
 
 
@@ -520,7 +521,8 @@ def init_recall(n_champions: int) -> Recall:
 
 def recall_step(state: Recall, now: Any, *, request: Any, cancel_action: Any, health_damage: Any,
                 disabled: Any, dead: Any, channel: Any = None) -> tuple[Recall, Any]:
-    """§11.1: 8 s channel; returns (state, completed (C,)).
+    """§11.1: 0.5 s cast + 8 s channel (``channel`` overrides the channel, e.g. Empowered Recall 4 s);
+    returns (state, completed (C,)). The damage grace is the last 0.1 s of the whole recall.
 
     ``cancel_action``: the holder moved/attacked/cast; ``health_damage``: damage
     > 0 reached health this tick (shield-absorbed damage does not count);
@@ -530,9 +532,10 @@ def recall_step(state: Recall, now: Any, *, request: Any, cancel_action: Any, he
     ch = state.channeling | start
     t0 = jnp.where(start, now, state.start)
     elapsed = now - t0
-    grace = elapsed >= RECALL_CHANNEL - RECALL_DAMAGE_GRACE
+    total = RECALL_CAST + (RECALL_CHANNEL if channel is None else channel)
+    grace = elapsed >= total - RECALL_DAMAGE_GRACE
     interrupted = ch & ~start & (cancel_action | (health_damage & ~grace) | disabled | dead)
-    done = ch & ~interrupted & (elapsed >= (RECALL_CHANNEL if channel is None else channel))
+    done = ch & ~interrupted & (elapsed >= total)
     return Recall(ch & ~interrupted & ~done, t0), done
 
 

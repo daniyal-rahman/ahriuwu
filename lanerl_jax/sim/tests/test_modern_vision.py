@@ -8,18 +8,15 @@ absent from the observation and cannot be clicked or attacked, walls hide what
 open ground shows, structures never fog, an attack from brush reveals the
 attacker, and a cast nobody saw is not remembered.
 """
-from functools import lru_cache
-
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.sim import modern_rune_data as RD
 from lanerl_jax.sim import modern_world as MW
 from lanerl_jax.sim import modern_world_types as W
+from lanerl_jax.sim.tests import modern_world_harness as H
 
-if not MW.DEFAULT_MAP.exists() or not MW.DEFAULT_ROUTES.exists():
+if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
 from lanerl_jax.sim import modern_step as MS  # noqa: E402
@@ -31,25 +28,13 @@ BEHIND_WALL = (3062.0, 12087.0)       # walkable, 1069 u from LANE_MID, wall on 
 OPEN = (2193.0, 12487.0)              # walkable, 808 u from LANE_MID, clear segment
 BRUSH_EDGE = (2469.0, 13357.0)        # just outside the brush, 280 u from BRUSH towards LANE_MID
 OUTSIDE = (2588.0, 13236.0)           # outside the brush, 450 u from BRUSH
-JAX_PAGE = RD.RunePage(RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))
+orders = H.orders
+fast_world = H.fast_world
 
 
-@lru_cache(maxsize=1)
 def world():
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
-          MW.Loadout("Jax", items=(1055, 2003), rune_page=JAX_PAGE))
-    cfg = MW.build_config(lo)
-    refresh = jax.jit(lambda s: MS.refresh_visibility(s, cfg))
-    step = jax.jit(lambda s, o: MS.step(s, o, cfg))
-    return cfg, refresh, step
-
-
-@lru_cache(maxsize=1)
-def fast_world():
-    """Same world with ``fog="fast"`` (brush lookup, walls ignored); visibility only, no step."""
-    cfg, *_ = world()
-    fast = MW.build_config(cfg.loadouts, fog="fast")
-    return fast, jax.jit(lambda s: MS.refresh_visibility(s, fast))
+    """Shared world (``modern_world_harness``): ``(cfg, refresh, step)``."""
+    return H.world(), H.refresh, H.step
 
 
 def place(garen, jax_, t=30.0, *, fast=False):
@@ -58,13 +43,6 @@ def place(garen, jax_, t=30.0, *, fast=False):
     s = s._replace(x=s.x.at[0].set(garen[0]).at[1].set(jax_[0]), y=s.y.at[0].set(garen[1]).at[1].set(jax_[1]),
                    t=jnp.float32(t))
     return refresh(s)
-
-
-def orders(**kw):
-    o = MS.no_orders()._asdict()
-    for k, v in kw.items():
-        o[k] = jnp.asarray(v, o[k].dtype)
-    return MS.ModernOrders(**o)
 
 
 def test_fixtures_are_what_they_claim():

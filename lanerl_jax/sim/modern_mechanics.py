@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 
 from . import modern_world_types as W
-from .modern_pathing import route_next, segment_clear
+from .modern_pathing import route_follow, route_replan, segment_clear
 from .modern_stat_pipeline import cc_duration
 
 BIG = 1e9
@@ -226,26 +226,57 @@ def team_terrain(terrain: tuple, team: Any):
     return team_view(terrain, jnp.where(team == 0, 0, 1))
 
 
+ROUTE_REPLANS_PER_TICK = 16      # full nearest-node searches per tick; further units wait a tick
+
+
+def init_route_anchor(n: int) -> Any:
+    """(N,) cached route node per unit (``modern_pathing.route_follow``); -1 = none."""
+    return jnp.full((n,), -1, jnp.int32)
+
+
 def move_step(x: Any, y: Any, goal_x: Any, goal_y: Any, speed: Any, active: Any, team: Any, radius: Any,
-              routes, terrain: tuple, dt: Any) -> tuple[Any, Any, Any]:
+              routes, terrain: tuple, dt: Any, anchor: Any,
+              max_replans: int = ROUTE_REPLANS_PER_TICK, movers: int | None = None) -> tuple[Any, Any, Any, Any]:
     """Steer each active unit toward its goal along the route graph, one tick.
 
-    Returns ``(x, y, route_ok)``. Steps are clamped by a swept terrain check;
-    a blocked step leaves the unit in place (fail closed).
+    Returns ``(x, y, route_ok, anchor)``. Units follow their cached route ``anchor``
+    (``route_follow``); at most ``max_replans`` units that lost it (lowest slots first:
+    champions) get the full search this tick, the rest hold position until a later tick.
+    Steps are clamped by a swept terrain check; a blocked step leaves the unit in place
+    (fail closed). ``movers`` (static): only slots ``[0, movers)`` can move (the world's
+    wards and structures come after them); the rest are returned unchanged.
     """
-    def one(px, py, gx, gy, sp, act, tm, r):
+    if movers is not None and movers < x.shape[0]:
+        m = movers
+        mx, my, mok, ma = move_step(x[:m], y[:m], goal_x[:m], goal_y[:m], speed[:m], active[:m], team[:m],
+                                    radius[:m], routes, terrain, dt, anchor[:m], max_replans)
+        cat = lambda a, b: jnp.concatenate([a, b[m:]])                                  # noqa: E731
+        return cat(mx, x), cat(my, y), cat(mok, jnp.ones_like(active)), cat(ma, anchor)
+    pos = jnp.stack([x, y], -1)
+    goal = jnp.stack([goal_x, goal_y], -1)
+    rr = jnp.minimum(radius, routes.radius)
+    point, ok, anchor, replan = jax.vmap(
+        lambda p, g, r, a, tm: route_follow(p, g, r, a, routes, team_terrain(terrain, tm)))(pos, goal, rr, anchor, team)
+    n = x.shape[0]
+    (sel,) = jnp.nonzero(replan & active, size=min(max_replans, n), fill_value=n)
+    i = jnp.clip(sel, 0, n - 1)
+    rp, rok, ra = jax.vmap(
+        lambda p, g, r, tm: route_replan(p, g, r, routes, team_terrain(terrain, tm)))(pos[i], goal[i], rr[i], team[i])
+    point, ok, anchor = (point.at[sel].set(rp, mode="drop"), ok.at[sel].set(rok, mode="drop"),
+                         anchor.at[sel].set(ra, mode="drop"))
+
+    def one(p, nxt, sp, act, tm, r):
         ter = team_terrain(terrain, tm)
-        pos, goal = jnp.stack([px, py]), jnp.stack([gx, gy])
-        nxt, ok = route_next(pos, goal, jnp.minimum(r, routes.radius), routes, ter)
-        d = nxt - pos
+        d = nxt - p
         dist = jnp.linalg.norm(d)
         step = jnp.minimum(sp * dt, dist)
-        new = pos + jnp.where(dist > 1e-6, d / jnp.maximum(dist, 1e-6) * step, 0.0)
-        clear = segment_clear(pos, new, jnp.minimum(r, routes.radius), ter, samples=5, max_length=200.,
-                              max_radius=routes.radius)
-        new = jnp.where(act & clear, new, pos)
-        return new[0], new[1], ok | ~act
-    return jax.vmap(one)(x, y, goal_x, goal_y, speed, active, team, radius)
+        new = p + jnp.where(dist > 1e-6, d / jnp.maximum(dist, 1e-6) * step, 0.0)
+        # Dense samples keep the step check's inflation (<= 0.4 u for a 25 u step) inside the margin
+        # the route check verified, so a wall-hugging step on a verified segment is not refused.
+        clear = segment_clear(p, new, r, ter, samples=33, max_length=200., max_radius=routes.radius)
+        return jnp.where(act & clear, new, p)
+    new = jax.vmap(one)(pos, point, speed, active, team, rr)
+    return new[:, 0], new[:, 1], ok | ~active, anchor
 
 
 def blink_point(x0: Any, y0: Any, x1: Any, y1: Any, max_range: Any, team: Any, radius: Any, terrain: tuple,

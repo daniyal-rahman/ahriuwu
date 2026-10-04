@@ -3,51 +3,32 @@
 These tests check *symptoms across systems* rather than single functions:
 gold/XP/levels after real waves, a champion kill paying first blood and
 setting the death timer, shop purchases changing stats, Flash and Recall
-moving the champion, turrets defending, and nothing overflowing. One compiled
-step is shared by the module (compiling takes a few minutes on CPU).
+moving the champion, turrets defending, and nothing overflowing. The world and
+its one compiled tick program come from ``modern_world_harness`` (shared with the
+other full-tick modules; compiling takes a few minutes on CPU).
 """
-from functools import lru_cache
-
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from lanerl_jax.sim import modern_economy as E
-from lanerl_jax.sim import modern_rune_data as RD
 from lanerl_jax.sim import modern_world as MW
 from lanerl_jax.sim import modern_world_types as W
 from lanerl_jax.sim.modern_item_data import catalog
+from lanerl_jax.sim.tests import modern_world_harness as H
 
-if not MW.DEFAULT_MAP.exists() or not MW.DEFAULT_ROUTES.exists():
+if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
 from lanerl_jax.sim import modern_step as MS  # noqa: E402
 
 LONG_SWORD, DORAN_BLADE, HEALTH_POTION = 1036, 1055, 2003
-JAX_PAGE = RD.RunePage(RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))
+assert H.ITEMS == (DORAN_BLADE, HEALTH_POTION)
+orders = H.orders
 
 
-@lru_cache(maxsize=1)
 def world():
-    lo = (MW.Loadout("Garen", items=(DORAN_BLADE, HEALTH_POTION), rune_page=RD.GAREN_DEFAULT_PAGE),
-          MW.Loadout("Jax", items=(DORAN_BLADE, HEALTH_POTION), rune_page=JAX_PAGE))
-    cfg = MW.build_config(lo)
-    step = jax.jit(lambda s, o: MS.step(s, o, cfg))
-
-    def run(s, orders, ticks):
-        def body(s, _):
-            s, e = MS.step(s, orders, cfg)
-            return s, (e.packet_overflow, e.missile_overflow)
-        return jax.lax.scan(body, s, None, length=ticks)
-    return cfg, step, jax.jit(run, static_argnums=2)
-
-
-def orders(**kw):
-    o = MS.no_orders()._asdict()
-    for k, v in kw.items():
-        o[k] = jnp.asarray(v, o[k].dtype)
-    return MS.ModernOrders(**o)
+    return H.world(), H.step, H.run
 
 
 def test_layout_and_structure_vulnerability():
@@ -105,7 +86,7 @@ def test_champion_kill_first_blood_and_death_timer():
     mx, my = lane[len(lane) // 2]
     s = s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 150.0), y=s.y.at[0].set(my).at[1].set(my),
                    hp=s.hp.at[1].set(5.0), t=jnp.float32(200.0))
-    s = MS.refresh_visibility(s, cfg)
+    s = H.refresh(s)
     kill_t = None
     for k in range(60):
         s, e = step(s, orders(attack=[1, -1]))
@@ -131,7 +112,7 @@ def test_recall_returns_to_fountain():
     mx, my = lane[len(lane) // 2]
     s = s._replace(x=s.x.at[0].set(mx), y=s.y.at[0].set(my))
     s, _ = step(s, orders(recall=[True, False]))
-    s, _ = run(s, MS.no_orders(), 8 * 30 + 3)
+    s, _ = run(s, MS.no_orders(), round((E.RECALL_CAST + E.RECALL_CHANNEL) * 30) + 3)   # 0.5 s cast + 8 s
     assert np.hypot(float(s.x[0]) - MW.FOUNTAINS[0][0], float(s.y[0]) - MW.FOUNTAINS[0][1]) < 1.0
 
 
@@ -142,7 +123,7 @@ def test_idle_champions_auto_attack_in_range():
     mx, my = lane[len(lane) // 2]
     s = s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 200.0), y=s.y.at[0].set(my).at[1].set(my),
                    t=jnp.float32(20.0))
-    s = MS.refresh_visibility(s, cfg)
+    s = H.refresh(s)
     hp0 = np.asarray(s.hp[:2])
     s, _ = run(s, MS.no_orders(), 3 * 30)
     hp = np.asarray(s.hp[:2])

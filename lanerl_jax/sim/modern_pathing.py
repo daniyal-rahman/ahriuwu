@@ -55,6 +55,24 @@ def nearest_node(position, routes: FlowRoutes, terrain, *, check_connection):
     return ids[choice],jnp.any(valid)
 
 
+def _steer(position, goal, radius, source, source_ok, routes, terrain):
+    """Steering point from a ``source`` node: its successor toward the goal's node when that is
+    in sight, else the source itself. Returns ``(point, valid, anchor)``; ``anchor`` is the node
+    steered to (the next tick's source)."""
+    dest,dest_ok=nearest_node(goal,routes,terrain,check_connection=False)
+    nxt=routes.next_node[jnp.maximum(dest,0),jnp.maximum(source,0)]
+    source_point=routes.points[jnp.maximum(source,0)]
+    next_point=routes.points[jnp.maximum(nxt,0)]
+    next_clear=(nxt>=0)&segment_clear(position,next_point,radius,terrain,max_radius=routes.radius)
+    point=jnp.where(next_clear,next_point,source_point)
+    valid=source_ok&dest_ok&((nxt>=0)|(source==dest))&(radius<=routes.radius)
+    return point,valid,jnp.where(next_clear,nxt,source)
+
+
+def _direct(position, goal, radius, routes, terrain):
+    return segment_clear(position,goal,radius,terrain,max_radius=routes.radius)&(radius<=routes.radius)
+
+
 def route_next(position, goal, radius, routes, terrain):
     """Return one safe local steering point and success; no client parity claim.
 
@@ -62,15 +80,36 @@ def route_next(position, goal, radius, routes, terrain):
     to a graph node; the exact selected route is a simulation approximation.
     ``radius`` above ``routes.radius`` (the baked clearance) fails closed.
     """
-    direct=segment_clear(position,goal,radius,terrain,max_radius=routes.radius)&(radius<=routes.radius)
+    direct=_direct(position,goal,radius,routes,terrain)
     source,source_ok=nearest_node(position,routes,terrain,check_connection=True)
-    dest,dest_ok=nearest_node(goal,routes,terrain,check_connection=False)
-    nxt=routes.next_node[jnp.maximum(dest,0),jnp.maximum(source,0)]
-    source_point=routes.points[jnp.maximum(source,0)]
-    next_point=routes.points[jnp.maximum(nxt,0)]
-    next_clear=segment_clear(position,next_point,radius,terrain,max_radius=routes.radius)
-    same=source==dest
-    point=jnp.where((nxt>=0)&next_clear,next_point,source_point)
-    valid=source_ok&dest_ok&((nxt>=0)|same)&(radius<=routes.radius)
+    point,valid,_=_steer(position,goal,radius,source,source_ok,routes,terrain)
     point=jnp.where(direct,goal,jnp.where(valid,point,position))
     return point,direct|valid
+
+
+def route_follow(position, goal, radius, anchor, routes, terrain):
+    """``route_next`` from a cached ``anchor`` node instead of a fresh nearest-node search.
+
+    The anchor (the node the unit last steered to) is kept while it stays in sight, so a tick
+    costs three segment checks instead of the 25-candidate connection search. Returns
+    ``(point, ok, anchor, replan)``; ``replan``: the anchor is lost (none yet, or out of sight
+    after a blink/teleport/push), or reached with no successor in sight, and ``route_replan``
+    must pick a new one. Without a direct line
+    and an anchor the unit holds position (fail closed), like an invalid ``route_next``.
+    """
+    direct=_direct(position,goal,radius,routes,terrain)
+    a=jnp.maximum(anchor,0)
+    seen=(anchor>=0)&segment_clear(position,routes.points[a],radius,terrain,max_radius=routes.radius)
+    point,valid,nxt=_steer(position,goal,radius,a,seen,routes,terrain)
+    # Standing on the anchor with no successor in sight: this anchor leads nowhere from here.
+    stuck=seen&(nxt==a)&(jnp.sum((position-routes.points[a])**2)<1.0)
+    point=jnp.where(direct,goal,jnp.where(valid,point,position))
+    return point,direct|valid,jnp.where(seen,nxt,-1),~direct&(~seen|stuck)
+
+
+def route_replan(position, goal, radius, routes, terrain):
+    """Full search for a unit without a usable anchor: ``(point, ok, anchor)``. Point and ok equal
+    ``route_next`` for a unit with no direct line (the case ``route_follow`` asks for)."""
+    source,source_ok=nearest_node(position,routes,terrain,check_connection=True)
+    point,valid,nxt=_steer(position,goal,radius,source,source_ok,routes,terrain)
+    return jnp.where(valid,point,position),valid,jnp.where(source_ok,nxt,-1)

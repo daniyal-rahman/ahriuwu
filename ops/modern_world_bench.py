@@ -9,7 +9,8 @@ attack the nearest enemy" orders computed inside the scan (no host loop).
         [--no-jungle] [--no-objectives] [--lanes 0 1 2]
 
 Prints one JSON line per batch size: compile seconds, steady seconds per
-tick, env-ticks per second, packet/missile overflow.
+tick, env-ticks per second, packet/missile overflow and the peak valid
+packets per tick (main and follow-up pass; capacities 512 / 256).
 """
 from __future__ import annotations
 
@@ -62,7 +63,8 @@ def build_world(args):
     def run(s, ticks):
         def body(s, _):
             s, e = MS.step(s, scripted_orders(s, lane_mid), cfg)
-            return s, (e.packet_overflow, e.missile_overflow)
+            used = (jnp.sum(e.report.packets.valid), jnp.sum(e.follow_up.packets.valid))
+            return s, (e.packet_overflow, e.missile_overflow, used)
         return jax.lax.scan(body, s, None, length=ticks)
     return cfg, run
 
@@ -95,6 +97,8 @@ def main() -> None:
     ap.add_argument("--warm-ticks", type=int, default=1200, help="ticks before timing (waves on the map)")
     add_world_args(ap)
     args = ap.parse_args()
+    from lanerl_jax.jax_cache import enable_compile_cache
+    enable_compile_cache()
     cfg, run = build_world(args)
     print(json.dumps({"backend": jax.default_backend(), "devices": [str(d) for d in jax.devices()],
                       **world_label(args)}), flush=True)
@@ -104,18 +108,19 @@ def main() -> None:
         batch, _ = warm_up(timed, init_batch(cfg, b), args.warm_ticks, args.ticks)
         t_warm = time.time() - t0
         t0 = time.time()
-        out, (po, mo) = timed(batch)
+        out, (po, mo, _) = timed(batch)
         jax.block_until_ready(out.t)
         t_compile_run = time.time() - t0
         t0 = time.time()
-        out, (po, mo) = timed(out)
+        out, (po, mo, (pm, pf)) = timed(out)
         jax.block_until_ready(out.t)
         steady = time.time() - t0
         print(json.dumps({"envs": b, "ticks": args.ticks, "warm_compile_and_run_s": round(t_warm, 2),
                           "timed_second_call_s": round(t_compile_run, 2), "steady_s": round(steady, 3),
                           "s_per_tick": steady / args.ticks, "env_ticks_per_s": b * args.ticks / steady,
                           "game_time_s": float(out.t[0]), "packet_overflow": int(po.max()),
-                          "missile_overflow": int(mo.max())}), flush=True)
+                          "missile_overflow": int(mo.max()), "packets_max": int(pm.max()),
+                          "follow_up_packets_max": int(pf.max())}), flush=True)
 
 
 if __name__ == "__main__":
