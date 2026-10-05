@@ -63,6 +63,16 @@ def chaos_orders(s, k, lane_mid):
         ward_x=pt[:, 0], ward_y=pt[:, 1])
 
 
+def build(world: str):
+    """The Garen-vs-Jax ``WorldConfig`` of ``WORLDS[world]``."""
+    from lanerl_jax.modern.runes import catalog as RD
+    from lanerl_jax.modern.world import config as MW
+    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
+          MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(
+              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))))
+    return MW.build_config(lo, **WORLDS[world])
+
+
 def summary(s) -> dict:
     """Layout-independent game state: champions, lane minions per team, structures (the last 30 slots)."""
     import numpy as np
@@ -85,12 +95,7 @@ def fingerprint(world: str, ticks: int, every: int) -> list[dict]:
     import numpy as np
 
     from lanerl_jax.modern import world as MS
-    from lanerl_jax.modern.runes import catalog as RD
-    from lanerl_jax.modern.world import config as MW
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
-          MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(
-              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))))
-    cfg = MW.build_config(lo, **WORLDS[world])
+    cfg = build(world)
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
     key = jax.random.PRNGKey(1234)
 
