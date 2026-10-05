@@ -227,7 +227,7 @@ a mid laner placed top in an off-role scenario) would earn out-of-lane quest poi
 8. TP shield: max HP 2000 → 700 HP shield for 10 s after arrival.
 
 ## 11. Diff vs current implementation
-No role-quest code exists. `lanerl_jax/sim/modern.py`, `modern_world.py`, `rewards.py`,
+No role-quest code exists. `lanerl_jax/sim/modern_bridge.py`, `world/config.py`, `rewards.py`,
 `step.py` contain no role/quest/level-cap state; level is capped at 18 via 19-row tables
 (`profiles.py:333-375`, `rewards.level_for_xp` at `rewards.py:478`, `modern.skill_ranks` clips at
 18, `modern.py:99`; `step.py:1457` `_RANK_TABLE[clip(level,0,18)]`). `state.py` has no summoner-

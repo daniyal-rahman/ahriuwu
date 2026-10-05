@@ -18,7 +18,7 @@ to 26.18), which is re-verified below (§12).
 | C3 | CDragon `items.cdtb.bin.json` (`Items/Spells/Recall`) | sha256 `6880f35d…fd82da09` |
 | C4 | CDragon `game/data/characters/sruap_turret_order5/sruap_turret_order5.bin.json` (Nexus Obelisk) | `cdragon-16.19/sruap_turret_order5.bin.json` sha256 `94f04c3f…71675` |
 | C5 | CDragon `en_us/lol.stringtable.json` | `cdragon-16.19/en_us-lol.stringtable.json` sha256 `8c051cb2…8e8` |
-| C6 | `lanerl_jax/data/modern/26.19/minions.json` (`BarracksConfig.ExpRadius 1500`, `goldRadius 1250`) | repo |
+| C6 | `lanerl_jax/modern/data/26.19/minions.json` (`BarracksConfig.ExpRadius 1500`, `goldRadius 1250`) | repo |
 | R* | Riot notes 26.1–26.19 (URLs in `econ-notes-26.x/26-N.url`; 26.1–26.3 use `/patch-26-N-notes/`, others `/league-of-legends-patch-26-N-notes/`) | `econ-notes-26.x/*.txt` + SHA256SUMS |
 | W* | Wiki revisions (all `https://wiki.leagueoflegends.com/en-us/<Title>?oldid=<id>`): Experience (champion) **4053165**; Gold **4039269**; Champion gold bounties **4040646**; Kill **4053216**; Assist **4016680**; Death **4051174**; Recall **4015108**; Spawn (Fountain) **3994097**; Homeguard **4011966**; Teleport **4065272**; Shop **3982704**; Nexus Obelisk **4015143**; Objective bounties **3939821**; Turret **4070072**; Minion **4068797**; Champion statistic **4069636**; Champion ability **4062619** | `econ-wiki/*.wiki` + SHA256SUMS |
 
@@ -147,7 +147,7 @@ the legacy `KillSpree`/`DeathSpree`/`GoldFromMinions`/7-over-6 tier logic is obs
 ## 8. Level-up behaviour
 | # | Rule | Tag |
 |---|---|---|
-| 8.1 | Stat at level n: `base + g·(n−1)·(0.7025 + 0.0175·(n−1))`; per-level gain `g·(0.65 + 0.035·n)`; formula continues unchanged to levels 19–20 (L20 total = 19.665·g). Existing `modern_stats.level_growth_sum` implements this; it must accept n up to 20. | WIKI (H) |
+| 8.1 | Stat at level n: `base + g·(n−1)·(0.7025 + 0.0175·(n−1))`; per-level gain `g·(0.65 + 0.035·n)`; formula continues unchanged to levels 19–20 (L20 total = 19.665·g). Existing `core.stats.level_growth_sum` implements this; it must accept n up to 20. | WIKI (H) |
 | 8.2 | On level-up, **current HP increases by the full max-HP increase** (`ai_levelUp_healthGainNetGain = 1.0`, `ai_levelUp_healthGainPercentMissingPenalty = 0`). Mana: same (INF M). | CDV (H for HP) |
 | 8.3 | One skill point per level, levels 1–18 only (max 18 points; levels 19–20 give stats only). Rank limits: basic ability rank ≤ floor(level/2) beyond level 1 (so ranks at 1/3/5/7/9), R at 6/11/16. | WIKI (H) |
 | 8.4 | `ai_MaximumHPMaxPenalty = 0.5` — unknown use (likely max-HP reduction floor). Not level-related. | CDV (L meaning) |
@@ -245,7 +245,7 @@ quest state (ROLE_QUESTS §6). Tables to 21 rows (levels 0–20).
 ## 15. Diff vs current implementation
 | Location | Current | Modern (this spec) |
 |---|---|---|
-| `lanerl_jax/sim/modern_world.py:107` | `gold.at[:2].set(500.)` | ✓ matches 500 |
+| `lanerl_jax/modern/world/config.py:107` | `gold.at[:2].set(500.)` | ✓ matches 500 |
 | `rewards.py:99-101`, used by modern path at `step.py:1435` | ambient 0.95 g/500 ms after **90 s** (1.84 g/s effective) | 1.02 g/0.5 s after **65 s** (2.04 g/s) |
 | `rewards.py:128` `death_rewards` (XP radius `EXP_RADIUS=1600`, `rewards.py:119`; equal split `xp/count`) | 1600 radius, equal division, killer not guaranteed | 1500 radius + killer guaranteed; split table [1, .65, .433, …] per champion; comeback bonus vs minion level |
 | `rewards.py:255` `champion_kill_rewards`, constants `rewards.py:69-83` | 4.20 tier system (300·(7/6)^k cap 500, feed 275·0.8^…, min 50, `DeathSpree`/`GoldFromMinions` 1000 g) and double-increment bug | level-scaled base 300→420, continuous bounty B (§6), assist gold (missing entirely today), early-assist factor |

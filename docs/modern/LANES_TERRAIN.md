@@ -3,8 +3,8 @@
 Patch 26.19, client 16.19.8230722, Summoner's Rift CLASSIC. Evidence levels: **CLIENT** (client data), **WIKI**
 (wiki revision cited), **PATCH** (Riot notes), **INFERRED-M / INFERRED-L** (our reading, medium / low confidence).
 
-Code: `lanerl_jax/sim/modern_minions.py` (schedule), `modern_lane_ai.py` (spawn writes, AI, attack-move, game end),
-`modern_towers.py` (structure rules), `modern_dynamic_terrain.py`, `modern_map_regions.py`, `modern_item_actives.py`.
+Code: `lanerl_jax/modern/lane/minions.py` (schedule), `lane/ai.py` (spawn writes, AI, attack-move, game end),
+`lane/towers.py` (structure rules), `map/dynamic_terrain.py`, `map/regions.py`, `items/effects/actives.py`.
 Tests: `tests/test_modern_{minions,lane_ai,towers,dynamic_terrain,map_regions,item_actives}.py`.
 
 ## 1. All three lanes
@@ -18,15 +18,15 @@ Tests: `tests/test_modern_{minions,lane_ai,towers,dynamic_terrain,map_regions,it
 | Supers | per `(team, lane)` from the *enemy* inhibitor of that lane: 1 if it is down, 2 in every lane when all three are down, 0 within two wave intervals of its respawn; a super replaces the cannon | CLIENT `SpawnCountPerInhibitorDown [1,1,2]`, WIKI (inhibitor: "next 8 waves") |
 | Latching | the super count is fixed when a wave's first unit spawns, so the unit list of a wave never changes mid-wave | INFERRED-M |
 | Stagger | 0.8 s between units of a wave, one unit per `(team, lane)` per tick | CLIENT `MinionSpawnIntervalSecs` |
-| Position | the barracks of `(team, lane)` (`geometry.json`, `modern_lane_ai.BARRACKS[team, lane]`) | CLIENT `base_srx.materials.bin` |
+| Position | the barracks of `(team, lane)` (`geometry.json`, `lane.ai.BARRACKS[team, lane]`) | CLIENT `base_srx.materials.bin` |
 
-State: `modern_minions.LaneSpawnState` `(wave, unit, supers)`, each `(2, 3)` `[team, lane]`; `init_lane_spawn()`.
+State: `lane.minions.LaneSpawnState` `(wave, unit, supers)`, each `(2, 3)` `[team, lane]`; `init_lane_spawn()`.
 `lane_spawn_step(state, now, **wave_inhibitor_inputs(towers))` returns the units due this tick.
 
 Slot layout (types contract): lane `l` owns slots `[C + 40·l, C + 40·(l+1))`, shared by both teams (Blue takes the
 lowest free slot of the lane, then Red). Free = `KIND_NONE` or a dead minion. A due unit with no free slot in its
 lane is dropped and counted in `SpawnWrite.overflow` (it must stay 0; 40 slots hold about five full waves).
-`modern_lane_ai.spawn_lane_minions(spawn, towers, kind, alive, now=, slot0=C, lanes=(0, 1, 2))` returns
+`lane.ai.spawn_lane_minions(spawn, towers, kind, alive, now=, slot0=C, lanes=(0, 1, 2))` returns
 `(spawn_state, SpawnWrite, due)`. `lanes=(2,)` keeps the top-only scenario; the other cursors still advance.
 
 ### 1.2 Lane AI per lane
@@ -43,7 +43,7 @@ lane is dropped and counted in `SpawnWrite.overflow` (it must stay 0; 40 slots h
 
 ### 1.3 Structures in every lane
 
-Already lane-generic, now verified for all lanes and both teams (`test_modern_towers.py`):
+Already lane-generic, now verified for all lanes and both teams (`test_towers.py`):
 
 - **Vulnerability chain.** Outer, then inner, then inhibitor turret, then inhibitor, using lane prerequisites
   (TOWERS §2, WIKI-H).
@@ -77,10 +77,10 @@ Evidence:
 - **Inhibitor pads: no direct source.** Map11 ships navgrid overlays only for the Baron pit and dragon-soul
   terrain. Structure cells are in the static base grid. Default: inhibitor pads stay blocked as well
   (INFERRED-M).
-- **Nexus pad.** Its centroid is (1549, 1658) / (13240, 13235). `modern_world` infers the Nexus at
+- **Nexus pad.** Its centroid is (1549, 1658) / (13240, 13235). `world.config` infers the Nexus at
   (1716, 1790) / (12998, 12950), about 214 units off. This is CLIENT evidence for the Nexus position.
 
-API (`modern_dynamic_terrain`):
+API (`map.dynamic_terrain`):
 
 - `build_footprints(grid, unit_kind, unit_x, unit_y)` (host). Each 8-connected StructureWall component goes to the
   nearest structure unit within 450. It raises if a structure gets no pad.
@@ -126,7 +126,7 @@ is ≥ the endpoint. The endpoint is
 `max(progress(outermost living allied lane turret) − 500, progress(own inhibitor))`. After 14:00, or once an
 allied turret of that lane is down, it is at least `progress(furthest living allied minion of the lane) − 2000`.
 
-Minion lane for the quest's minion rules: `modern_lane_ai.minion_in_lane(ai, units, lane=2)`, i.e. the spawn lane
+Minion lane for the quest's minion rules: `lane.ai.minion_in_lane(ai, units, lane=2)`, i.e. the spawn lane
 (ROLE_QUESTS U-RQ-2 default).
 
 ## 4. Attack-move and idle acquisition
@@ -157,11 +157,11 @@ API: `attack_move_step(active, point_x, point_y, held, held_seq, units, champion
 
 ## 5. Game end
 
-`modern_lane_ai.game_result(towers) -> GameResult(over, winner)`. The team whose Nexus still stands wins. Nexuses
+`lane.ai.game_result(towers) -> GameResult(over, winner)`. The team whose Nexus still stands wins. Nexuses
 never respawn, so the result is sticky. `PlateEvents.nexus_destroyed` flags the tick it happens. A same-tick double
 Nexus kill gives `over=True, winner=-1`.
 
-## 6. Item actives (`modern_item_actives`, registered in `modern_item_effects.MODULES`)
+## 6. Item actives (`items.effects.actives`, registered in `items.effects.MODULES`)
 
 All 26.19 items with a non-vision active, other than consumables and the Hydra line.
 Values come from `items_client.json` (CLIENT). Rules come from tooltips and wiki ItemData (WIKI).
@@ -181,7 +181,7 @@ Values come from `items_client.json` (CLIENT). Rules come from tooltips and wiki
 | 3222 Mikael's, 3109 Knight's Vow | ally-only (Purify targets an ally champion, Pledge binds an ally) | inert: request refused, no cooldown |
 
 Notes:
-- Support quest items (3867, 3869–3877) have ward-placement actives, which belong to vision/wards (`modern_wards`).
+- Support quest items (3867, 3869–3877) have ward-placement actives, which belong to vision/wards (`wards`).
 - Item-active haste (`ItemStats.item_haste`, Cosmic Insight) is not applied, because the hook context lacks it.
 - Diminishing returns on repeated Locket/Intervention cannot occur in a 1v1.
 - Actualizer overflow rules (`OverflowAddition/Revert`) are not modelled.

@@ -501,8 +501,8 @@ cooldownTime 20, mCanMoveWhileChanneling true, mUseChargeChanneling`; rune
 | ID | Location | Current | Spec |
 |---|---|---|---|
 | S-D1 | `lanerl_jax/sim/` (modern) | **No summoner spell code exists.** grep finds no Flash/Teleport/Ignite/Exhaust/Barrier/Heal/Ghost/Cleanse in `modern_*.py`. ROLE_QUESTS.md also notes `state.py` has no summoner/Teleport state. | New: loadout validation, cooldown state, the §12 fields, the §13 hooks |
-| S-D2 | `lanerl_jax/sim/modern_items.py:22-38` `ItemStats` | No `summoner_haste` field. Lucidity's "Gain 10 Summoner Spell Haste" text is not parsed (the regex at `:80-85` only maps ability haste, health regen and tenacity). | Add `summoner_haste` and `item_haste`; map Lucidity (3158) +10 and Crimson Lucidity (3171) +20 |
-| S-D3 | `lanerl_jax/sim/modern_stats.py:115-128` | Dealt reductions are multiplicative with amps | Exhaust is in the additive dealt-modifier sum (RUNES.md U-19, D-6) |
+| S-D2 | `lanerl_jax/modern/items/loadout.py:22-38` `ItemStats` | No `summoner_haste` field. Lucidity's "Gain 10 Summoner Spell Haste" text is not parsed (the regex at `:80-85` only maps ability haste, health regen and tenacity). | Add `summoner_haste` and `item_haste`; map Lucidity (3158) +10 and Crimson Lucidity (3171) +20 |
+| S-D3 | `lanerl_jax/modern/core/stats.py:115-128` | Dealt reductions are multiplicative with amps | Exhaust is in the additive dealt-modifier sum (RUNES.md U-19, D-6) |
 | S-D4 | Legacy (4.20) Teleport in the old sim, if any | 4.20 values: 300 s, 3.5 s channel, instant blink, 240 s turret refund | All replaced by §3. The legacy ruleset is preserved separately per MODERN-001. |
 | S-D5 | `docs/MODERN_PATCH_DELTA.md` §11.4 | "Unleashed… +50% MS for 3s"; base dash 0.5–5 s | MS duration 3 s (wiki) vs 4 s (client 26.19); default 4 s (U-S8). The rest is confirmed. It omits the 26.19 quest values (390 s; −30 s) and the 26.12 shield (35%/10 s). |
 

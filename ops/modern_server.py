@@ -10,7 +10,7 @@ import shutil
 import hashlib
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from lanerl_jax.data.modern import champion, stat, cooldowns
+from lanerl_jax.modern.data.champions import champion, stat, cooldowns
 ROOT=Path(__file__).resolve().parents[1]
 VENDOR=Path('/srv/nfs/projects/lanerl-vendor/LoLServer')
 

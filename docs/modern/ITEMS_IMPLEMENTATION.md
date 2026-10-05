@@ -1,6 +1,6 @@
 # ITEMS_IMPLEMENTATION.md — 26.19 item system as implemented
 
-**Update (2026-10-01, runes pass):** items now run inside `modern_combat.combat_tick` together with runes
+**Update (2026-10-01, runes pass):** items now run inside `combat.combat_tick` together with runes
 (see [RUNES_IMPLEMENTATION.md](RUNES_IMPLEMENTATION.md)); `runtime.item_tick` is that tick with an empty rune
 page. Packets now carry `cast_id`; the catalog has 220 items (adds the rune-granted Biscuit 2010, Elixirs
 2150–2152 in `consumables`, and stats-only Slightly Magical Footwear 2422); dynamic armor/MR and max HP are
@@ -8,7 +8,7 @@ folded/synced by `combat_tick`.
 
 **Status (2026-10-01):** every Summoner's Rift item of client build 16.19.8230722 is classified, and every
 in-scope effect is implemented as pure, fixed-shape JAX with focused tests. The world tick
-(`modern_world.py`) does **not** dispatch items yet. Until it does, `modern_items.item_loadout_stats` rejects
+(`world/config.py`) does **not** dispatch items yet. Until it does, `items.loadout.item_loadout_stats` rejects
 any loadout containing an item with behaviour beyond its stat line, so nothing runs silently as stats only.
 
 The rules this implements are in [ITEMS.md](ITEMS.md) (per-item detail in [ITEMS_CATALOG.md](ITEMS_CATALOG.md)).
@@ -18,17 +18,17 @@ Global formulas are in [DAMAGE_AND_STATS.md](DAMAGE_AND_STATS.md).
 
 | File | Role |
 |---|---|
-| `lanerl_jax/data/build_modern_items.py` | Host tool. Rebuilds `items_client.json` from the cached 16.19 client bins: CLASSIC item lists, in-store items, transforms and quest components; stats from client fields; groups with max-ownable; recipes; data values; calculations; spells; effect amounts. Records source sha256s. |
-| `lanerl_jax/data/modern/26.19/items_client.json` | Pinned table: 215 items, 157 groups. |
-| `lanerl_jax/sim/modern_item_data.py` | `catalog()`, `ItemStats` (31 bonus-stat fields), stacking rules (tenacity, slow resist and %pen multiply), `lerp_level` (extrapolates past 18, README X-1), `level_bp`. |
-| `lanerl_jax/sim/modern_inventory.py` | 6 slots + trinket. `buy` (recursive recipe consumption, cost = total − owned components, group limits after consumption, stacks, level, ranged-only, purchase-buff gates, Elixir 5 s group cooldown, shop circle r=1000 or dead), `sell` (client sell modifiers), `replace_item`, `consume_one`, `inventory_stats`. |
-| `lanerl_jax/sim/modern_damage.py` | Shared DMG/HEAL/SHIELD pipeline: packets with client damage tags, source amps added together and target modifiers multiplied, unit-class ratios (minion→champion 0.55, →structure 0.60), resist order that keeps negative resist, Plating/Randuin's/Warden's slots, the Lifeline check before shields, typed decaying shields, Death's Dance storage (physical/magic only), spell shield, executes, life steal/omnivamp split (33% modified ratio), heal modifiers with 40% Grievous Wounds. |
-| `lanerl_jax/sim/modern_item_effects/` | `core.py` (contract), `__init__.py` (registry, dispatch, coverage), `runtime.py` (folding and the reference `item_tick`), one module per family: `starters`, `consumables`, `spellblade`, `hydra`, `fighter`, `defense`, `mage`, `marksman`, `support`, `boots`. |
-| `lanerl_jax/sim/modern_items.py` | Loadout stats and gate, stat shards (2.5% move speed, 15% tenacity/slow resist, health-scaling shard 10·level), rune catalog gate. |
+| `lanerl_jax/modern/data/build_items.py` | Host tool. Rebuilds `items_client.json` from the cached 16.19 client bins: CLASSIC item lists, in-store items, transforms and quest components; stats from client fields; groups with max-ownable; recipes; data values; calculations; spells; effect amounts. Records source sha256s. |
+| `lanerl_jax/modern/data/26.19/items_client.json` | Pinned table: 215 items, 157 groups. |
+| `lanerl_jax/modern/items/catalog.py` | `catalog()`, `ItemStats` (31 bonus-stat fields), stacking rules (tenacity, slow resist and %pen multiply), `lerp_level` (extrapolates past 18, README X-1), `level_bp`. |
+| `lanerl_jax/modern/items/inventory.py` | 6 slots + trinket. `buy` (recursive recipe consumption, cost = total − owned components, group limits after consumption, stacks, level, ranged-only, purchase-buff gates, Elixir 5 s group cooldown, shop circle r=1000 or dead), `sell` (client sell modifiers), `replace_item`, `consume_one`, `inventory_stats`. |
+| `lanerl_jax/modern/core/damage.py` | Shared DMG/HEAL/SHIELD pipeline: packets with client damage tags, source amps added together and target modifiers multiplied, unit-class ratios (minion→champion 0.55, →structure 0.60), resist order that keeps negative resist, Plating/Randuin's/Warden's slots, the Lifeline check before shields, typed decaying shields, Death's Dance storage (physical/magic only), spell shield, executes, life steal/omnivamp split (33% modified ratio), heal modifiers with 40% Grievous Wounds. |
+| `lanerl_jax/modern/items/effects/` | `core.py` (contract), `__init__.py` (registry, dispatch, coverage), `runtime.py` (folding and the reference `item_tick`), one module per family: `starters`, `consumables`, `spellblade`, `hydra`, `fighter`, `defense`, `mage`, `marksman`, `support`, `boots`. |
+| `lanerl_jax/modern/items/loadout.py` | Loadout stats and gate, stat shards (2.5% move speed, 15% tenacity/slow resist, health-scaling shard 10·level), rune catalog gate. |
 
 ## Coverage
 
-`modern_item_effects.coverage_report()` raises unless each of the 215 catalog items is exactly one of the following:
+`items.effects.coverage_report()` raises unless each of the 215 catalog items is exactly one of the following:
 
 - **Implemented by a module.** Each module's `COVERAGE` entry gives the item's line and any limitation.
 - **`STATS_ONLY`** (39). These items have no client data values, calculations or spell.
@@ -74,7 +74,7 @@ Hooks are listed in `core.py`. `runtime.item_tick` is the reference order, match
 
 ## Tests
 
-`ops/login_capped.sh 10G 4 .venv-jax/bin/python -m pytest -q lanerl_jax/sim/tests/test_modern_item_framework.py lanerl_jax/sim/tests/test_modern_item_runtime.py lanerl_jax/sim/tests/test_modern_items_*.py lanerl_jax/sim/tests/test_modern_stats_items.py lanerl_jax/sim/tests/test_modern_towers.py lanerl_jax/sim/tests/test_modern_minions.py`
+`ops/login_capped.sh 10G 4 .venv-jax/bin/python -m pytest -q lanerl_jax/modern/tests/test_item_framework.py lanerl_jax/modern/tests/test_item_runtime.py lanerl_jax/modern/tests/test_items_*.py lanerl_jax/modern/tests/test_stats_items.py lanerl_jax/modern/tests/test_towers.py lanerl_jax/modern/tests/test_minions.py`
 gave **195 passed in 10 min** on 2026-10-01.
 
 The files cover:
@@ -92,7 +92,7 @@ Overflow is reported in `ItemTickOut.packet_overflow` and must stay 0. Only pack
 stateful units (shields, Lifeline, Death's Dance) go through the sequential scan, capped at 64. All other
 packets resolve exactly in parallel, using per-target running sums in emission order.
 
-`ops/modern_items_bench.py` measured these on the login CPU with 2 cores, for two champions with six items
+`ops/modern/items_bench.py` measured these on the login CPU with 2 cores, for two champions with six items
 each and 66 units:
 - compile: about 18 s;
 - single world: 1.7 ms per tick;
@@ -106,7 +106,7 @@ the world-integration performance gate (MODERN-007).
 These are item outputs the world has to apply. Each is exposed by a documented function or field.
 
 - **Inventory changes.**
-  - Transforms: `starters.pending_transforms` → `modern_inventory.replace_item`.
+  - Transforms: `starters.pending_transforms` → `items.inventory.replace_item`.
   - Consumption: `state.consumables.consume_row` → `consume_one`.
   - Support line: World Atlas → Runic Compass. 3866 is not in the client catalog, so it needs a decision.
 - **Champion state.**

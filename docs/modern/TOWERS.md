@@ -343,7 +343,7 @@ Source: item 1502 (outer and inner), 1506 (inhibitor turret), 1505 (Nexus turret
   - Super minions are lane minions and do deactivate it.
 - **Deactivation is immediate** when a qualifying unit becomes nearby. **Re-activation** happens 3 s after the last qualifying unit leaves (or dies).
 - **Radius: not published in any source.** Default **1000 units (center-to-center)**. `[INFERRED L]` Choose and expose it as a parameter; see §12 U2.
-  - The current world uses 1200 (`modern_world.py:132`).
+  - The current world uses 1200 (`world/config.py:132`).
 - While active, Overgrowth cannot be consumed (§6).
 - **Applies to:** all four turret tiers (all four have a Reinforced item). Not to the inhibitor or Nexus.
 - Swiftplay/OFA overrides (90 %) are out of scope.
@@ -694,10 +694,10 @@ applies (irrelevant for true damage) and plates claimed by it are paid normally.
 ## 10. Diff vs current implementation
 
 Files:
-- `lanerl_jax/sim/modern_towers.py` (MT)
-- `lanerl_jax/sim/modern_world.py` (MW)
-- `lanerl_jax/data/modern/26.19/towers.json` (TJ)
-- `lanerl_jax/sim/tests/test_modern_towers.py` (TT)
+- `lanerl_jax/modern/lane/towers.py` (MT)
+- `lanerl_jax/modern/world/config.py` (MW)
+- `lanerl_jax/modern/data/26.19/towers.json` (TJ)
+- `lanerl_jax/modern/tests/test_towers.py` (TT)
 
 Line numbers are as of the working tree at research time.
 
@@ -723,7 +723,7 @@ Line numbers are as of the working tree at research time.
 | D18 | MT:196–203 `champion_shot_impact` | 1.0/1.5/2.0/2.5 ✓. 5 s from the last champion hit ✓. 30 % armor pen on positive armor ✓. The stack advances even on a 0-damage hit (shield) ✓ (a hit is a hit) | OK | — |
 | D19 | TJ `outer.global_gold_on_destroy_per_champion 50`, `other_tiers.global_gold_per_champion [25,25,50]`, `first_turret_local_bonus 300`, `local_gold_radius 1200`, `local_gold_assist_window_seconds 10` | All ✓ client/wiki. **Missing:** destroy XP = 0 (state it explicitly), inhibitor last-hit 50 g, inhibitor respawn 300 s, `SpawnCountPerInhibitorDown [1,1,2]` | Add with provenance | LOW |
 | D20 | TJ `sources` | Missing client provenance for the numbers it already has (item 1500/1502/1503/1515/1524 data values) | Add the item ids + `items.cdtb.bin.json` sha256 | LOW |
-| D21 | `lanerl_jax/sim/modern.py:286` (champion-owned) | Jax W/R magic halved vs turrets (`*0.5`). Not a generic structure rule in 26.19 | Flag to the champion agent. Not a tower-module change | — |
+| D21 | `lanerl_jax/sim/modern_bridge.py:286` (champion-owned) | Jax W/R magic halved vs turrets (`*0.5`). Not a generic structure rule in 26.19 | Flag to the champion agent. Not a tower-module change | — |
 | D22 | MT:127 `champion_structure_attack` | Strict `0.6AP > bonusAD` → magic, so a tie → physical ✓ (convention) | OK | — |
 
 ## 11. Conflicts between sources (and the default chosen)

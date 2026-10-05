@@ -119,7 +119,7 @@ def main():
         sim = SimConfig.training(route_artifact=args.route_artifact).replace(
             step_ticks=args.step_ticks)
         if args.modern_champions:
-            from ..sim.modern import make_params
+            from ..sim.modern_bridge import make_params
             sim = sim.replace(params=make_params(args.modern_champions))
         if sim.route_table is None or sim.vision is None or sim.lane_path is None:
             raise RuntimeError('JAX farming requires production routes, map visibility and waves')

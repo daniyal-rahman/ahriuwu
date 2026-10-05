@@ -889,7 +889,7 @@ def status(buffs: Buffs, *, alive, spell_level, spell_cooldown, silenced_ms,
 def status_of(state) -> Status:
     """:func:`status` of a whole ``LaneState``."""
     if state.modern:
-        from .modern import status as modern_status
+        from .modern_bridge import status as modern_status
         return modern_status(state)
     return status(state.buffs, alive=state.alive, spell_level=state.spell_level,
                   spell_cooldown=state.spell_cooldown,

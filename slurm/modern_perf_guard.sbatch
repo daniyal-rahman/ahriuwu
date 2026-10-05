@@ -8,7 +8,7 @@
 #SBATCH --no-requeue
 #SBATCH --output=/mnt/nfs/shared/modern-perf-guard/%x-%j.out
 #
-# Throughput / memory regression guard for the modern world tick (ops/modern_perf_guard.py).
+# Throughput / memory regression guard for the modern world tick (ops/modern/perf_guard.py).
 # Exclusive node so nothing else skews the timing. Runs from CODE (an NFS checkout or snapshot;
 # the desktop cannot see login-node worktrees). Exit 0 ok, 1 regression, 3 no baseline.
 #
@@ -17,7 +17,7 @@
 #   sbatch slurm/modern_perf_guard.sbatch --cpu                 # CPU backend, 16 envs
 #   CODE=/mnt/nfs/shared/<snapshot> sbatch --export=ALL slurm/modern_perf_guard.sbatch --update-baseline
 #
-# --update-baseline rewrites $CODE/ops/modern_perf_baseline.json; copy it back and commit it.
+# --update-baseline rewrites $CODE/ops/modern/perf_baseline.json; copy it back and commit it.
 set -euo pipefail
 CODE=${CODE:-/mnt/nfs/projects/ahriuwu-lanerl-jax}
 PY=/mnt/nfs/projects/ahriuwu-lanerl-jax/.venv-gpu/bin/python
@@ -32,4 +32,4 @@ fi
 trap 'exit 143' TERM          # gpup pre-emption: no partial result is recorded
 echo "host $(hostname) job ${SLURM_JOB_ID:-none} $(date -u) code $CODE platforms $JAX_PLATFORMS args: $*"
 nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader || true
-"$PY" -m ops.modern_perf_guard "$@"
+"$PY" -m ops.modern.perf_guard "$@"

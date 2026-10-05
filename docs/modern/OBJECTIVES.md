@@ -1,10 +1,10 @@
 # Epic objectives and the Elemental Rift (26.19, client 16.19.8230722)
 
-Code: `lanerl_jax/sim/modern_objectives.py` (rules, AI, buffs, rewards),
-`lanerl_jax/sim/modern_dynamic_terrain_rift.py` (terrain variants).
-Data: `lanerl_jax/data/modern/26.19/objectives_client.json`, built by
-`python -m lanerl_jax.data.build_modern_objectives`. Tests:
-`lanerl_jax/sim/tests/test_modern_objectives.py`.
+Code: `lanerl_jax/modern/jungle/objectives.py` (rules, AI, buffs, rewards),
+`lanerl_jax/modern/map/rift.py` (terrain variants).
+Data: `lanerl_jax/modern/data/26.19/objectives_client.json`, built by
+`python -m lanerl_jax.modern.data.build_objectives`. Tests:
+`lanerl_jax/modern/tests/test_objectives.py`.
 
 Evidence tags: **CLIENT** (16.19 bins, map scripts, navgrid overlays), **WIKI**
 (wiki.leagueoflegends.com, fetched 2026-10-02, archived with sha256 in
@@ -153,7 +153,7 @@ Implementation notes for the buffs:
 ## 6. Elemental Rift and Baron-pit terrain
 
 **Real client data.** `map11.bin` `MapNavGridOverlays` lists navgrid overlays. We extracted
-them from the pinned 16.19 manifest with `ops/fetch_modern_map.py`:
+them from the pinned 16.19 manifest with `ops/modern/fetch_map.py`:
 
 | Overlay | sha256 prefix | Rects |
 |---|---|---|
@@ -198,7 +198,7 @@ Baron spawn.
 
 - Rodeo (champion-driven Herald charge).
 - Hex-gates and Cloud speed zones; Infernal cinders, Chemtech plants, Faelights.
-- Corrupted and Draconic jungle camps (owned by `modern_jungle`).
+- Corrupted and Draconic jungle camps (owned by `jungle.camps`).
 - The 20 s Eye pickup window.
 - Ocean, Cloud, Hextech and Mountain drake attack riders.
 - Monstrous Toughness caps.

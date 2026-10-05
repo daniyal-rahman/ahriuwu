@@ -233,7 +233,7 @@ def build_observation(state: LaneState, me: int, frame: LaneFrame, *, params,
     )
 
     if state.modern:
-        from ..sim import modern
+        from ..sim import modern_bridge as modern
         all_growth=growth_sum(state.level,jnp)
         modern_armor,modern_mr=modern.effective_stats(state,params,
             params['armor'][state.model]+params['armor_per_level'][state.model]*all_growth,

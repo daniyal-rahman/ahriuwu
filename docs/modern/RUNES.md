@@ -33,7 +33,7 @@ SHA256 line in that directory's `SHA256SUMS`.
 | `items.cdtb.bin.json` | item bins (Total Biscuit 2010, potions, elixirs) | `6880f35d5a9d82f688192f764e280e6d4bc9c845112b001feb811e3f2ab62726` |
 | `shared.cdtb.bin.json` | shared spells (summoner spells, Hexflash) | `34f68553ab38cfe344936473fcb48d99574d5fd51e4feb42994fa0c4fe50769e` |
 | `en_us-lol.stringtable.json` (fetched 2026-10-01 from `https://raw.communitydragon.org/16.19/game/en_us/data/menu/en_us/lol.stringtable.json`) | localized tooltips | `8c051cb2a24b31f3fa9af95d39085b832b0da2b8cf51093f98c4ab0620ecb8e8` |
-| Repo `lanerl_jax/data/modern/26.19/runes.json` | DDragon `16.19.1/data/en_US/runesReforged.json` | upstream `74d1e211…0fc44` (in file); local file `e11961b6a3e81c09f31c52550f7d97fbcd6811ec564e62c4114da4eb76945e7c` |
+| Repo `lanerl_jax/modern/data/26.19/runes.json` | DDragon `16.19.1/data/en_US/runesReforged.json` | upstream `74d1e211…0fc44` (in file); local file `e11961b6a3e81c09f31c52550f7d97fbcd6811ec564e62c4114da4eb76945e7c` |
 
 The rune Lua scripts (`ASSETS/Perks/Styles/**.lua`) are compiled, and **were not decompiled**.
 So the bin gives the numbers, but trigger logic not stated in data comes from the wiki and the
@@ -105,7 +105,7 @@ The bin uses three level-scaling primitives. These are the **only** formulas imp
    `g(L) = n*(0.7025 + 0.0175*n) / 17`, where `n = L - 1`.
    This is CLIENT: `GlobalPerLevelStatsFactor` in `globals.cdtb.bin.json` has per-level steps
    0.72, 0.755, … (+0.035/level), whose cumulative sum equals `n(0.7025+0.0175n)`. It matches
-   `modern_stats.level_growth_sum`.
+   `core.stats.level_growth_sum`.
 2. **`ByCharLevelBreakpointsCalculationPart(level1, initialBonusPerLevel, breakpoints[])`** is
    piecewise per-level increments:
    `v(1) = level1`, and for each level k = 2..L, `v += perLevel(k) + additionalAt(k)`.
@@ -139,7 +139,7 @@ same default and list each in the Unresolved register (U-01).
 **dynamically**, not fixed per loadout: if bonus AD > AP, the AF goes to AD; if AP > bonus AD, it
 goes to AP; on a tie (including 0/0), the champion's "adaptive type" decides (physical gives AD).
 This is WIKI (Adaptive force 4063874). The 0.6/1.0 ratios are CLIENT (GameplayConfig, already
-used in `modern_stats.adaptive_force_total`).
+used in `core.stats.adaptive_force_total`).
 
 - Bonus AD/AP from champion passives does **not** count toward the comparison. Item stats and a
   listed set of item passives do.
@@ -1190,16 +1190,16 @@ parameters, so no dynamic dispatch happens in the tick.
 
 | ID | Location | Current | Spec | Severity |
 |---|---|---|---|---|
-| D-1 | `lanerl_jax/sim/modern_items.py:211` | Move-speed shard `+0.02` | **+0.025** (CLIENT `StatGain1 2.5`) | HIGH (wrong number) |
-| D-2 | `lanerl_jax/sim/modern_items.py:218-219` | Tenacity/slow-resist shard `0.10` each | **0.15** each (CLIENT `StatGain 15`) | HIGH |
-| D-3 | `lanerl_jax/sim/modern_items.py:215-216` and test `tests/test_modern_stats_items.py:53-54` | HP scaling clamped at level 18 (360 for two shards at L20) | `10*L`, extrapolating to 200/400 at L20 (U-01 default) | MED (only matters at L19–20, top quest) |
-| D-4 | `lanerl_jax/sim/modern_items.py:189-193` docstring | "move speed +2%… tenacity/slow-resist +10%" | Fix to 2.5% and 15% | LOW |
-| D-5 | `lanerl_jax/sim/modern_stats.py:45-56` `adaptive_force_total(converts_to_ad=)` | Static loadout flag | Dynamic: bonus AD vs AP comparison with an adaptive-type tie-break (§1.2). This is equivalent for Garen; it differs for hybrid builds. | LOW for the top-lane AD milestone |
-| D-6 | `lanerl_jax/sim/modern_stats.py:115-128` `apply_damage_modifiers` | `(1+amp)*(1-attacker_reduction)*…` | Outgoing amps and Exhaust in **one additive sum** per the wiki (U-19). Callers must sum the amps before passing them. Target vulnerability/reduction stays multiplicative. | MED |
-| D-7 | `lanerl_jax/sim/modern_items.py:164-174` `validate_rune_page` | Rejects every non-empty page | Implement §2.2: legality, substitution and the deferred-vision flag. Keep fail-closed for runes whose kernels are not yet implemented. | Expected (not a bug) |
-| D-8 | `lanerl_jax/sim/modern_items.py:177-182` `STAT_SHARD_OPTIONS` | String keys | OK as a set. Add id mapping 5008/5005/5007/5010/5001/5011/5013 so DDragon pages validate. | LOW |
-| D-9 | `lanerl_jax/sim/modern_items.py:22-38` `ItemStats` | Has `ability_haste` only | Also needs `basic_ability_haste`, `ultimate_haste`, `summoner_haste`, `item_haste`, `trinket_haste`, `heal_shield_power`, `life_steal` (present) and `bonus_as` vs AS ratio, as separate haste buckets (WIKI Haste). Cosmic Insight and Lucidity grant **summoner** haste, not AH. | MED |
-| D-10 | `lanerl_jax/data/modern/26.19/runes.json` | Names come from DDragon (8230 is named Stormraider's Surge, key `PhaseRush`) | The kernel registry must key on **id**, not `key`. A Phase Rush implementation keyed on `PhaseRush` would be wrong. | MED |
+| D-1 | `lanerl_jax/modern/items/loadout.py:211` | Move-speed shard `+0.02` | **+0.025** (CLIENT `StatGain1 2.5`) | HIGH (wrong number) |
+| D-2 | `lanerl_jax/modern/items/loadout.py:218-219` | Tenacity/slow-resist shard `0.10` each | **0.15** each (CLIENT `StatGain 15`) | HIGH |
+| D-3 | `lanerl_jax/modern/items/loadout.py:215-216` and test `modern/tests/test_stats_items.py:53-54` | HP scaling clamped at level 18 (360 for two shards at L20) | `10*L`, extrapolating to 200/400 at L20 (U-01 default) | MED (only matters at L19–20, top quest) |
+| D-4 | `lanerl_jax/modern/items/loadout.py:189-193` docstring | "move speed +2%… tenacity/slow-resist +10%" | Fix to 2.5% and 15% | LOW |
+| D-5 | `lanerl_jax/modern/core/stats.py:45-56` `adaptive_force_total(converts_to_ad=)` | Static loadout flag | Dynamic: bonus AD vs AP comparison with an adaptive-type tie-break (§1.2). This is equivalent for Garen; it differs for hybrid builds. | LOW for the top-lane AD milestone |
+| D-6 | `lanerl_jax/modern/core/stats.py:115-128` `apply_damage_modifiers` | `(1+amp)*(1-attacker_reduction)*…` | Outgoing amps and Exhaust in **one additive sum** per the wiki (U-19). Callers must sum the amps before passing them. Target vulnerability/reduction stays multiplicative. | MED |
+| D-7 | `lanerl_jax/modern/items/loadout.py:164-174` `validate_rune_page` | Rejects every non-empty page | Implement §2.2: legality, substitution and the deferred-vision flag. Keep fail-closed for runes whose kernels are not yet implemented. | Expected (not a bug) |
+| D-8 | `lanerl_jax/modern/items/loadout.py:177-182` `STAT_SHARD_OPTIONS` | String keys | OK as a set. Add id mapping 5008/5005/5007/5010/5001/5011/5013 so DDragon pages validate. | LOW |
+| D-9 | `lanerl_jax/modern/items/loadout.py:22-38` `ItemStats` | Has `ability_haste` only | Also needs `basic_ability_haste`, `ultimate_haste`, `summoner_haste`, `item_haste`, `trinket_haste`, `heal_shield_power`, `life_steal` (present) and `bonus_as` vs AS ratio, as separate haste buckets (WIKI Haste). Cosmic Insight and Lucidity grant **summoner** haste, not AH. | MED |
+| D-10 | `lanerl_jax/modern/data/26.19/runes.json` | Names come from DDragon (8230 is named Stormraider's Surge, key `PhaseRush`) | The kernel registry must key on **id**, not `key`. A Phase Rush implementation keyed on `PhaseRush` would be wrong. | MED |
 | D-11 | No kernels exist for any rune | — | Implement first: Conqueror, Grasp, Second Wind, Bone Plating, Conditioning, Overgrowth, Unflinching, Triumph, Legend: Haste/Alacrity, Last Stand/Coup/Cut Down, PTA, Fleet, Lethal Tempo, Stormraider's, Demolish, Biscuits, Approach Velocity, Electrocute, ToB, Sudden Impact. | — |
 
 ## 12. Corrections to `docs/MODERN_PATCH_DELTA.md` §7 and §11 (26.18-pinned)

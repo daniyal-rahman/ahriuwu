@@ -38,7 +38,7 @@ Client files (cache dir `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19
 | `/mnt/nfs/shared/modern-world-map-research/map11-decoded.json` | (map11.bin SHA 45d16148616eb3da612e31f422afb46d756d5fc615f8387b7429343bda5da88a, per ledger MODERN-010) | `BarracksConfig {147211fb}` (Order) / `{e61e55a3}` (Chaos); `GameModeConstants {6cf687be}` (CLASSIC); `GameplayConfig {a6506f8a}`; `ExperienceModData {0059202c}` |
 | LeagueToolkit `lol-meta-classes` dump `dumps/16.19.8217343.json` (same patch, build 8217343; not cached — re-fetch from `https://raw.githubusercontent.com/LeagueToolkit/lol-meta-classes/main/dumps/16.19.8217343.json`) | — | class **default values** (e.g. `CharacterRecord.acquisitionRange` default = 750) and full field lists of `MinionUpgradeConfig` |
 | CDTB hash lists `hashes.binfields.txt`, `hashes.binhashes.txt` (raw.communitydragon.org/data/hashes/lol/) | — | resolving hashed constant names |
-| `lanerl_jax/data/modern/26.19/geometry.json` | source `base_srx.materials.bin` ce17dbee…2f55 | barracks positions, `MinionPath_*` lane splines |
+| `lanerl_jax/modern/data/26.19/geometry.json` | source `base_srx.materials.bin` ce17dbee…2f55 | barracks positions, `MinionPath_*` lane splines |
 
 Hash identities resolved this pass (FNV-1a lowercase): `{726ae049}` = `GoldUpgrade`; `{fee040bc}` in `BarracksMinionConfig` = link to the minion object definition (`{4cdad893}` = Order melee, `{2f33d8db}` = Chaos melee, etc.). The two 90-s BarracksConfigs `{147211fb}`/`{e61e55a3}` are the Order and Chaos barracks of the same mode (they differ only in those links and one super-minion field, §1.4).
 
@@ -48,7 +48,7 @@ Riot patch notes (all fetched 2026-10-01; URL form recorded):
 Wiki (wiki.leagueoflegends.com/en-us), revisions read:
 [Minion oldid 4068797](https://wiki.leagueoflegends.com/en-us/Minion?oldid=4068797) (2026-09-28), [Melee minion oldid 4068807](https://wiki.leagueoflegends.com/en-us/Melee_minion?oldid=4068807), [Caster minion oldid 4015019](https://wiki.leagueoflegends.com/en-us/Caster_minion?oldid=4015019), [Siege minion oldid 4013294](https://wiki.leagueoflegends.com/en-us/Siege_minion?oldid=4013294), [Super minion oldid 4068820](https://wiki.leagueoflegends.com/en-us/Super_minion?oldid=4068820), [Experience (champion) oldid 4053165](https://wiki.leagueoflegends.com/en-us/Experience_(champion)?oldid=4053165), [Kill oldid 4053216](https://wiki.leagueoflegends.com/en-us/Kill?oldid=4053216), [Gold oldid 4039269](https://wiki.leagueoflegends.com/en-us/Gold?oldid=4039269), [Turret oldid 4070072](https://wiki.leagueoflegends.com/en-us/Turret?oldid=4070072), [Inhibitor oldid 4070357](https://wiki.leagueoflegends.com/en-us/Inhibitor?oldid=4070357), [Movement speed oldid 4064468](https://wiki.leagueoflegends.com/en-us/Movement_speed?oldid=4064468), [Sight oldid 4035710](https://wiki.leagueoflegends.com/en-us/Sight?oldid=4035710). Historical diffs used: Minion 4003116→4017998 (26.10 priority removal), 3953340→3953637 (death-grace delay 0.35→0.035 s), 3978992→3978998 (minion-pushing DR "×100" revert).
 
-Project context read: `docs/MODERN_PATCH_DELTA.md` §5 (pinned 26.18; re-verified here — several of its numbers are corrected below), `docs/JAX_FIDELITY_LEDGER.md` MODERN-001..012, `docs/LEAGUE_MECHANICS_CONCEPTS.md` §2–3, `docs/PORT_AUDIT_AI.md`, `lanerl_jax/sim/modern_minions.py`, `modern_world.py` (uncommitted, read only), `targeting.py`, `minion_ai.py`, `profiles.py`, `data/modern/26.19/minions.json`, `geometry.json`.
+Project context read: `docs/MODERN_PATCH_DELTA.md` §5 (pinned 26.18; re-verified here — several of its numbers are corrected below), `docs/JAX_FIDELITY_LEDGER.md` MODERN-001..012, `docs/LEAGUE_MECHANICS_CONCEPTS.md` §2–3, `docs/PORT_AUDIT_AI.md`, `lanerl_jax/modern/lane/minions.py`, `world/config.py` (uncommitted, read only), `targeting.py`, `minion_ai.py`, `profiles.py`, `modern/data/26.19/minions.json`, `geometry.json`.
 
 ### 0.3 Headline corrections vs. prior research (`MODERN_PATCH_DELTA.md` §5) and wiki
 
@@ -124,7 +124,7 @@ goldRadius                        1250.0
 
 Other `MinionUpgradeConfig` fields exist in the 16.19 class (`HPUpgradeGrowth`, `HPUpgradeGrowthLate`, `HPInhibitor`, `DamageInhibitor`, `MagicResistance(Upgrade)`, `LocalGoldGivenOnLastHit`, `ExpUpgrade`, two unnamed) — all **unset (0)** for CLASSIC SR.
 
-`lanerl_jax/data/modern/26.19/minions.json` copies this config faithfully (Order barracks). Its note "HP/AD growth caps interpreted as bonus caps; armor growth is accumulated per-upgrade growth" is correct for HP/AD (§1.3) — but the file does not record the Chaos variant or the class default acquisitionRange.
+`lanerl_jax/modern/data/26.19/minions.json` copies this config faithfully (Order barracks). Its note "HP/AD growth caps interpreted as bonus caps; armor growth is accumulated per-upgrade growth" is correct for HP/AD (§1.3) — but the file does not record the Chaos variant or the class default acquisitionRange.
 
 ### 1.3 Per-upgrade stat formulas — the authoritative definitions
 
@@ -640,7 +640,7 @@ All tests: Custom game or Practice Tool is NOT acceptable for wave timing (Pract
 
 ## 9. Diff vs current implementation
 
-`lanerl_jax/sim/modern_minions.py` (HEAD):
+`lanerl_jax/modern/lane/minions.py` (HEAD):
 
 | Loc | Issue | Fix |
 |---|---|---|
@@ -648,7 +648,7 @@ All tests: Custom game or Practice Tool is NOT acceptable for wave timing (Pract
 | `:89` `SUPER_PROFILE` | Mixes U=1 HP (1600) with U=0 AD (180); U=1 AD is 185. | Derive from formula. |
 | `:83-90` | No acquisition / first-acquisition / wake-up ranges, windup, missile speed. | Add per type: acq 750/700/750/600; first 1000/900; wake 450/635; windup 0.393/0.47/0.30/0.408 s; missile 650 (caster), 1200 (siege). |
 | `:93` `WAVE_UNIT_GAP_S = .792` | Client `MinionSpawnIntervalSecs = 0.8`. | 0.8 (U-13). |
-| `:162` melee pruning `(t>=840) & has_cannon` | Client melee rotation `[2,3]` (even i ⇒ 2) and constant 2 from 1500 are independent of super replacement; code gives 3 melee in super waves. | `melee = 3 if t<840 else (2 if i%2==0 else 3) if t<1500 else 2`. Test `test_modern_minions.py` composition `(28, 865, True) → [1,3,0,3]` must become `[1,2,0,3]`; `(54,1515,False,True)` → `[2,2,0,3]`. |
+| `:162` melee pruning `(t>=840) & has_cannon` | Client melee rotation `[2,3]` (even i ⇒ 2) and constant 2 from 1500 are independent of super replacement; code gives 3 melee in super waves. | `melee = 3 if t<840 else (2 if i%2==0 else 3) if t<1500 else 2`. Test `test_minions.py` composition `(28, 865, True) → [1,3,0,3]` must become `[1,2,0,3]`; `(54,1515,False,True)` → `[2,2,0,3]`. |
 | `:147-163` | `enemy_inhibitor_down`/`all_…` booleans approximate `[1,1,2]` by count — OK; missing "no supers within two waves of inhibitor respawn". | Add respawn-time gate (§2.3). |
 | `:230` XP fractions `13/30`, `13/60` | Client floats 0.433, 0.217. | Use client list. |
 | `:241` `gold_bounty` siege/super `50 + U` | **Off by one**: client `49 + U` (50 at U=1). Test asserts 55 at U=5; correct is 54. Red supers: flat 49. No GoldMax 90 cap. | `min(49 + U, 90)`; team-aware super. |
@@ -656,7 +656,7 @@ All tests: Custom game or Practice Tool is NOT acceptable for wave timing (Pract
 | `:302-311` `call_for_help_applies` | Uses caller-supplied acquisition range for the generic case; wiki 500. | Use 500 for generic CFH, 1000 for champion-on-champion (U-9). |
 | — | No sidelane buff, MS time increases, first-wave rules, ghosting, death grace, damage ratios (0.55/0.6), Minion Slayer applied in combat, comeback XP, XP radius. Helpers exist for slayer (`:244`) but nothing calls them. | Implement per §2.6–2.8, §4, §5. |
 
-`lanerl_jax/sim/modern_world.py` (uncommitted; read only):
+`lanerl_jax/modern/world/config.py` (uncommitted; read only):
 
 | Loc | Issue |
 |---|---|
@@ -671,11 +671,11 @@ Shared path used by modern mode (`step.py`, `targeting.py`, `minion_ai.py`):
 | `targeting.py:65,140` + `step.py:1347-1359` (CFH enabled by default, `step.py:241`) | `CHAMPION_ATTACKING_MINION` (=5) is still produced by `help_priority_for`, so champion hits on minions still pull aggro — **violates 26.10** in modern mode. Gate it off when `state.modern`. |
 | `targeting.py:86-106` `base_priority` | Legacy type ordering cannon(7)<caster(8)<melee(9); modern spec is distance-only (U-5). |
 | `targeting.py:124-192` `call_for_help_map` | Uses victim acquisitionRange for both distances; modern: 500 / 1000 (§3.3). |
-| `step.py` damage pipeline (`:1153` region) | No minion→champion 0.55 / minion→minion slayer / pushing multipliers in the shared minion attack path; modern towers docstring (`modern_towers.py:164`) expects the caller to scale minion→turret by 0.60/0.84. Verify the caller exists. |
-| `modern_towers.py:210` `minion_shot_damage` | Super fraction **0.05**; client tooltip (item 1511) says **7 %**. Also applies armor (with 30 % pen) to a percent-max-HP shot — tooltip/wiki describe a fixed % (U-14). |
+| `step.py` damage pipeline (`:1153` region) | No minion→champion 0.55 / minion→minion slayer / pushing multipliers in the shared minion attack path; modern towers docstring (`lane/towers.py:164`) expects the caller to scale minion→turret by 0.60/0.84. Verify the caller exists. |
+| `lane/towers.py:210` `minion_shot_damage` | Super fraction **0.05**; client tooltip (item 1511) says **7 %**. Also applies armor (with 30 % pen) to a percent-max-HP shot — tooltip/wiki describe a fixed % (U-14). |
 | `minion_ai.py:96-103` | 250 ms / 4 s / 0.5 s / 25 u margin — legacy values, acceptable defaults (U-6). |
 
-`lanerl_jax/data/modern/26.19/minions.json`: correct copy of the Order barracks and Chaos unit records; lacks Chaos barracks (`GoldUpgrade` missing for Chaos super), lacks class defaults (acquisitionRange 750, experienceRadius 0), lacks CLASSIC `GameModeConstants` (dr_*, mvm_*, aiExp_*), `ExperienceModData`, `GameplayConfig` death-grace fields, and rule-item data values (1508–1510). Its note on armor ("accumulated per-upgrade growth") is consistent with §1.3 but the offset is unresolved.
+`lanerl_jax/modern/data/26.19/minions.json`: correct copy of the Order barracks and Chaos unit records; lacks Chaos barracks (`GoldUpgrade` missing for Chaos super), lacks class defaults (acquisitionRange 750, experienceRadius 0), lacks CLASSIC `GameModeConstants` (dr_*, mvm_*, aiExp_*), `ExperienceModData`, `GameplayConfig` death-grace fields, and rule-item data values (1508–1510). Its note on armor ("accumulated per-upgrade growth") is consistent with §1.3 but the offset is unresolved.
 
 `docs/MODERN_PATCH_DELTA.md` §5 corrections: §5.2 siege AD lacks +4 late growth; §5.8 "60 % to champions" → 55 %; §5.9 death grace delay 0.066 → 0.035 s; §5.4 "XP radius unverified" → 1500 (barracks); §5.9 acquisition table "melee unset" → class default 750.
 

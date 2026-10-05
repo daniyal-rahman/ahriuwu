@@ -259,7 +259,7 @@ def tick(state: LaneState, params: UnitParams,
     dtype = state.x.dtype
     # Every stat is a gather through the unit's profile row: a minion slot is
     # reused by whatever spawns into it, so stats cannot be baked per slot.
-    from . import modern as modern_rules
+    from . import modern_bridge as modern_rules
     was_dashing = state.champion.dash_ms > 0
     P = lambda k: params[k][state.model]          # noqa: E731
     # `Game.Update` (`Game.cs:474-497`): `GameTime += diff` runs BEFORE

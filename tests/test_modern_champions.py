@@ -2,7 +2,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from lanerl_jax.sim import modern as m
+from lanerl_jax.sim import modern_bridge as m
 from lanerl_jax.sim.orders import Orders, OrderKind as O, apply_orders
 from lanerl_jax.sim.autoattack import AutoAttackOut
 from lanerl_jax.sim.state import Kind

@@ -35,7 +35,7 @@ These are in the cache `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/
 | `en_us.lol.stringtable.json` (fetched by this research from `…/16.19/game/en_us/data/menu/en_us/lol.stringtable.json`, appended to SHA256SUMS) | `8c051cb2a24b31f3fa9af95d39085b832b0da2b8cf51093f98c4ab0620ecb8e8` | tooltip text, passive names |
 | `../map11-decoded.json` (map11.bin, EUW1 16.19.8230722 extraction) | `3947d4dbb5cb10711546f2df9076ccc82d6dbff9ea5caefa906abdfdb8ebe145` | CLASSIC `GameModeMapData` (hash `{0b03bf5a}`, mode `{48246d53}` = fnv1a("CLASSIC")): 11 `itemLists` define the SR item pool. `mItemShopData` `{8f58df52}` |
 | `../geometry-decoded.json` | `77c4d3bd62a70600d7ca1a4da4f04f60bbfb24c5f193e7f3aa8c4ccbc0495fb2` | shopkeeper objects, `ShopGeComponentDef`, `Order/ChaosShopArea*` locators |
-| repo `lanerl_jax/data/modern/26.19/items.json` (DDragon 16.19.1, `source_sha256 72c996d0…`) | (repo file) | sell-value cross-check: 210/210 SR store items agree with total × sellBackModifier (default 0.7) |
+| repo `lanerl_jax/modern/data/26.19/items.json` (DDragon 16.19.1, `source_sha256 72c996d0…`) | (repo file) | sell-value cross-check: 210/210 SR store items agree with total × sellBackModifier (default 0.7) |
 
 Hash names were resolved with 32-bit FNV-1a over the lowercased path, e.g. `fnv1a("Items/1001") = {9d24457e}`.
 
@@ -765,7 +765,7 @@ There are no Hydra/Tiamat-line rule changes in 26.x apart from Tiamat AD. The la
 
 ## 14. Diff vs current implementation
 
-Files: `lanerl_jax/sim/modern_items.py`, `lanerl_jax/data/modern/26.19/items.json`, `lanerl_jax/sim/modern_stats.py`. All line numbers are in `modern_items.py` unless marked.
+Files: `lanerl_jax/modern/items/loadout.py`, `lanerl_jax/modern/data/26.19/items.json`, `lanerl_jax/modern/core/stats.py`. All line numbers are in `items/loadout.py` unless marked.
 
 | Location | Current | Required (this spec) | Severity |
 |---|---|---|---|
@@ -782,8 +782,8 @@ Files: `lanerl_jax/sim/modern_items.py`, `lanerl_jax/data/modern/26.19/items.jso
 | `:236–245` `stridebreaker_active` | `distance ≤ 450` from the caster; MS bonus `0.35 × champions_hit` with no duration or decay; slow returned with no duration | same circle as above; slow 0.35 for 3 s; MS buff decays to 0 over 3 s; cooldown 15 s from cast start; movement allowed during the cast | HIGH |
 | `:248–255` `tiamat_cleave` | 350 radius around the primary, 40%/20% AD, excludes the primary ✓ | + cap 10 nearest, exclude structures, skip when the attack target is a structure, Profane 0-damage rule, Ravenous life-steal flag, Titanic separate kernel (on-hit 1%/0.5% max HP + cone 3%/1.5%) | MED |
 | `:150–166` `item_loadout_stats` | sums static stats only | add dependent-stat pass (§2.1): Sterak's, Overlord's, Warmog's Vitality and others | MED |
-| `modern_stats.py:64–75` `adaptive_force_total` | AD = 0.6 × AF | ✓ matches Swiftmarch/elixir adaptive force usage | OK |
-| `modern_stats.py` | no crit-damage constant | base crit multiplier **2.00** (26.1) + IE 0.30 (owner: stats/damage agent) | MED |
+| `core/stats.py:64–75` `adaptive_force_total` | AD = 0.6 × AF | ✓ matches Swiftmarch/elixir adaptive force usage | OK |
+| `core/stats.py` | no crit-damage constant | base crit multiplier **2.00** (26.1) + IE 0.30 (owner: stats/damage agent) | MED |
 | (missing) | no shop/inventory model | §3–4: buy/sell/combine/undo, shop area radius 1000, starting gold 500, sell rates | HIGH for any modern economy |
 | (missing) | no Spellblade, Lifeline, GW, Carve, Immolate, Plating, vamp hooks | §6–§10 | HIGH for the top-lane item set |
 

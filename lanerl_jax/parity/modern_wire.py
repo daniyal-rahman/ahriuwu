@@ -1,7 +1,7 @@
 """Explicit 26.19 observation reconstruction; never a resumable sim snapshot."""
 from dataclasses import fields
 import numpy as np
-from ..data.modern import IDS
+from ..modern.data.champions import IDS
 
 
 def validate(frame, names):

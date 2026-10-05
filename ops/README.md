@@ -31,13 +31,13 @@ it does not install or run League. Use an isolated Python3.11 environment with
 `login_capped.sh`. Both extraction and normalization require new output dirs.
 
 ```sh
-ops/login_capped.sh 4G 2 /path/to/asset-venv/bin/python ops/fetch_modern_map.py --manifest https://lol.dyn.riotcdn.net/channels/public/releases/4D2A50D5EDAB724A.manifest --build 16.19.8230722 --out /path/to/new-extraction --asset assets/maps/navgrid/map11/aipath_srx_2.aimesh_ngrid --asset assets/maps/deprecated/map11/cfg/objectcfg_srx.cfg --asset data/maps/shipping/map11/map11.bin
-ops/login_capped.sh 4G 2 /path/to/numpy-python -m lanerl_jax.data.modern_map import --ngrid /path/to/new-extraction/assets/assets/maps/navgrid/map11/aipath_srx_2.aimesh_ngrid --out /path/to/new-grid --patch 26.19 --source https://lol.dyn.riotcdn.net/channels/public/releases/4D2A50D5EDAB724A.manifest --retrieved-at 2026-09-30
+ops/login_capped.sh 4G 2 /path/to/asset-venv/bin/python ops/modern/fetch_map.py --manifest https://lol.dyn.riotcdn.net/channels/public/releases/4D2A50D5EDAB724A.manifest --build 16.19.8230722 --out /path/to/new-extraction --asset assets/maps/navgrid/map11/aipath_srx_2.aimesh_ngrid --asset assets/maps/deprecated/map11/cfg/objectcfg_srx.cfg --asset data/maps/shipping/map11/map11.bin
+ops/login_capped.sh 4G 2 /path/to/numpy-python -m lanerl_jax.modern.data.navgrid import --ngrid /path/to/new-extraction/assets/assets/maps/navgrid/map11/aipath_srx_2.aimesh_ngrid --out /path/to/new-grid --patch 26.19 --source https://lol.dyn.riotcdn.net/channels/public/releases/4D2A50D5EDAB724A.manifest --retrieved-at 2026-09-30
 ```
 
 The date above reproduces the existing artifact's provenance; a new source
 retrieval should use its actual date and receive a reviewed new manifest pin.
-Compare the extraction hashes to `lanerl_jax/data/modern/26.19/map11.json`.
+Compare the extraction hashes to `lanerl_jax/modern/data/26.19/map11.json`.
 `load_patch_map(path, patch="26.19")` requires that profile's exact manifest
 hash and checks its arrays; `load_artifact` without an external manifest pin
 only checks self-reported identity and accidental array corruption. Neither
@@ -45,48 +45,48 @@ loader resolves latest or substitutes the legacy map. Shared validated arrays:
 `/mnt/nfs/datasets/league/26.19/map11-base/`. Raw extraction receipts:
 `/mnt/nfs/shared/modern-world-map-research/live-16.19.8230722/`.
 
-`modern_items_bench.py` is a TOOL for the modern item system (MODERN-013). It
-times one full `modern_item_effects.runtime.item_tick` (two champions with six
+`ops.modern.items_bench.py` is a TOOL for the modern item system (MODERN-013). It
+times one full `items.effects.runtime.item_tick` (two champions with six
 items each, 66 units) single and vmapped; run it capped:
-`ops/login_capped.sh 8G 2 .venv-jax/bin/python -m ops.modern_items_bench 64`.
+`ops/login_capped.sh 8G 2 .venv-jax/bin/python -m ops.modern.items_bench 64`.
 The item table is rebuilt from the cached 16.19 client bins with
-`python -m lanerl_jax.data.build_modern_items` (sources and sha256s are
+`python -m lanerl_jax.modern.data.build_items` (sources and sha256s are
 recorded in `items_client.json`).
 
 `replay_oracle_extract.py` + `replay_oracle_extract.sbatch` are a TOOL
 (MODERN-015) that extracts raw client-memory observations (gold, deaths and
 respawns, fountain stretches, level-ups, max-HP changes) from the 147-game
 16.9 replay corpus `/mnt/nfs/datasets/lol_replays_16_9_772/`, independent of
-the simulator. Submit with `sbatch ops/replay_oracle_extract.sbatch` (CPU
+the simulator. Submit with `sbatch ops/modern/replay_oracle_extract.sbatch` (CPU
 partition, job array); per-game output, the index and job logs (`logs/`) go to
 `/mnt/nfs/shared/replay-oracle-16.9/`, the compact summary to
-`lanerl_jax/data/modern/oracle/replay_16_9_observations.json.gz`, which
-`lanerl_jax/sim/tests/test_modern_economy_oracle.py` reads. The 16.9 champion
+`lanerl_jax/modern/data/oracle/replay_16_9_observations.json.gz`, which
+`lanerl_jax/modern/tests/test_economy_oracle.py` reads. The 16.9 champion
 HP records it is paired with (`oracle/champion_hp_16_9.json`) were fetched from
 CommunityDragon 16.9 into `/mnt/nfs/shared/replay-oracle-16.9/champions-16.9/`.
 
 `riot_stats_oracle.py` is a TOOL (MODERN-016). `extract` turns Riot match-v5
 match + timeline JSON (fetched to `/mnt/nfs/shared/riot-match-v5-16.9/` by
 `fetch_matches.py` there; API key from `RIOT_API_KEY`, never written to disk)
-into the anonymised `lanerl_jax/data/modern/oracle/riot_16_9_frames.json.gz`;
-`predict` (used by `tests/test_modern_stats_riot_oracle.py`) recomputes Riot's
+into the anonymised `lanerl_jax/modern/data/oracle/riot_16_9_frames.json.gz`;
+`predict` (used by `modern/tests/test_stats_riot_oracle.py`) recomputes Riot's
 `championStats` through the modern stat pipeline, shards, rune and item stat
 hooks with 16.9 records (`oracle/client_16_9_stats.json`).
 
-`modern_world_bench.py` is a TOOL (MODERN-017/018). It times `lax.scan` of the
-modern world tick (`modern_step.step`) under `jit(vmap)` for several batch
+`ops.modern.bench.py` is a TOOL (MODERN-017/018). It times `lax.scan` of the
+modern world tick (`world.tick.step`) under `jit(vmap)` for several batch
 sizes with scripted in-scan orders and prints one JSON line per batch size.
 World-variant flags (`--fog rays|fast|off`, `--no-jungle`, `--no-objectives`,
 `--lanes`) build ablated worlds, to measure what each system costs.
-`modern_world_profile.py` (TOOL, MODERN-021) traces the same scan with
+`ops.modern.profile_tick.py` (TOOL, MODERN-021) traces the same scan with
 `jax.profiler` and attributes device op time to source files and lines (joined
 through the compiled HLO's stack-frame tables); use it to find hotspots before
 optimising. Run both on the desktop through Slurm (`gpup` for GPU, `cpu` for
 CPU) from an NFS code snapshot, because the desktop cannot see the worktree.
 
-`modern_perf_guard.py` + `slurm/modern_perf_guard.sbatch` are a TOOL: a
+`ops.modern.perf_guard.py` + `slurm/modern_perf_guard.sbatch` are a TOOL: a
 throughput and memory regression guard for the modern world tick. It runs the
-`modern_world_bench.py` scan for one fixed config per backend (256 envs on GPU,
+`ops.modern.bench.py` scan for one fixed config per backend (256 envs on GPU,
 16 on CPU; 1800 warm ticks, 150 ticks per call, fastest of 3 timed calls) and
 records env-ticks per second, the compiled program's temp buffer bytes and, on
 GPU, `peak_bytes_in_use` from `jax.devices()[0].memory_stats()`. It compares

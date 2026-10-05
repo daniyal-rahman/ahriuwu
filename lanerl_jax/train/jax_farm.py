@@ -95,7 +95,7 @@ class JaxFarmCollector:
         self.sim = (SimConfig.training() if sim_config is None else sim_config).replace(
             step_ticks=int(step_ticks))
         if self.modern_champions:
-            from ..sim.modern import make_params
+            from ..sim.modern_bridge import make_params
             self.sim = self.sim.replace(params=make_params(self.modern_champions))
         if self.sim.vision is None or self.sim.lane_path is None:
             raise ValueError('farming requires map visibility and top-lane waves')
@@ -199,7 +199,7 @@ class JaxFarmCollector:
         # Separate deterministic streams; episode reset preserves all base stats.
         seed = self.seed + i + self.n_envs * self.episodes[i * self.T]
         if self.modern_champions:
-            from ..sim.modern import init_lane as modern_init
+            from ..sim.modern_bridge import init_lane as modern_init
             return modern_init(self.modern_champions, seed=seed)
         return init_lane(seed=seed)
 

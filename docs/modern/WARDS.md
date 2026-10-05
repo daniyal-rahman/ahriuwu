@@ -1,9 +1,9 @@
 # WARDS.md — 26.19 wards, trinkets, stealth and true sight (modern world)
 
-**Status (2026-10-02).** The rules are implemented in `lanerl_jax/sim/modern_wards.py` (ward slots, trinket
-charges, placement, hits, rewards, Oracle sweeps, Deep Ward and Sixth Sense) and `lanerl_jax/sim/modern_vision.py`
+**Status (2026-10-02).** The rules are implemented in `lanerl_jax/modern/wards.py` (ward slots, trinket
+charges, placement, hits, rewards, Oracle sweeps, Deep Ward and Sixth Sense) and `lanerl_jax/modern/vision.py`
 (ward sight radii and the optional stealth / true sight / unobstructed / exposed inputs). Tests:
-`lanerl_jax/sim/tests/test_modern_wards.py`. The world tick (`modern_step`) does not call them yet. Integration
+`lanerl_jax/modern/tests/test_wards.py`. The world tick (`world.tick`) does not call them yet. Integration
 is the lead's job (see "Integration contract").
 
 Evidence levels:
@@ -143,13 +143,13 @@ replacements are Sixth Sense, Grisly Mementos and Deep Ward (WIKI V25.S1.1).
 
 ## Integration contract (for the world tick)
 
-See the `modern_wards` docstring and `ward_step` / `ward_view` / `vision_kwargs` signatures. Summary:
+See the `wards` docstring and `ward_step` / `ward_view` / `vision_kwargs` signatures. Summary:
 - `cfg.ward_grid = ward_grid(map_grid)` on the host.
 - `Wards` (`init_wards(C, trinket_ids)`) is carried in the state.
 - `ward_step` runs once per tick after DEATH/economy, on final positions.
 - Its `gold` goes to the champions' gold, and `consumed_control` removes one 2055.
 - `ward_view` is written onto the `KIND_WARD` unit slots.
-- `vision_kwargs` goes into `modern_vision.visibility`. `n_fogged` must include the ward slots.
+- `vision_kwargs` goes into `vision.visibility`. `n_fogged` must include the ward slots.
 - Champion attack packets whose target is a ward slot become `hits` / `hitter` and are removed from the damage
   pipeline.
 - Lane AI, idle auto-attack and kits must skip `KIND_WARD`.

@@ -6,26 +6,26 @@
 (the wiki's Homeguard history has no change after 26.1; Recall timing has no SR change), so the
 mismatches below are sim bugs, not patch differences.
 
-This adds to the economy replay oracle (`ops/replay_oracle_extract.py`, `test_modern_economy_oracle.py`,
+This adds to the economy replay oracle (`ops/modern/replay_oracle_extract.py`, `test_economy_oracle.py`,
 [ECONOMY_IMPLEMENTATION.md](ECONOMY_IMPLEMENTATION.md)). That oracle already checks starting gold,
 the ambient-gold phase, the death-timer table and scaling, kill/assist gold, fountain regen, level-up HP and
 HP growth. Its tests and the Riot match-v5 stat oracle still pass on the current code (25 passed).
 
 ## Tool
 
-`ops/modern_replay_fidelity.py`:
+`ops/modern/replay_fidelity.py`:
 - `extract`: standard library only. Reads `raw_mem.json` and the `labels.json` recall actions, never
   `frames/`. Writes one `<match>.json.gz` per game.
-- `analyze`: imports `modern_economy`, `modern_stat_pipeline` and `modern_world` constants (no tick compile)
+- `analyze`: imports `economy`, `core.stat_pipeline` and `world.config` constants (no tick compile)
   plus the Riot extract, and prints the table below (`--json` writes it).
 
 ```
-ops/login_capped.sh 8G 3 .venv-jax/bin/python ops/modern_replay_fidelity.py extract \
+ops/login_capped.sh 8G 3 .venv-jax/bin/python ops/modern/replay_fidelity.py extract \
     /mnt/nfs/datasets/lol_replays_16_9_772/NA1_* --out /mnt/nfs/shared/TMP_fid --jobs 3   # ~25 min
-ops/login_capped.sh 6G 1 .venv-jax/bin/python ops/modern_replay_fidelity.py analyze --out /mnt/nfs/shared/TMP_fid
+ops/login_capped.sh 6G 1 .venv-jax/bin/python ops/modern/replay_fidelity.py analyze --out /mnt/nfs/shared/TMP_fid
 ```
 
-`lanerl_jax/sim/tests/test_modern_replay_fidelity_oracle.py` runs the same checks on one smoke-test game
+`lanerl_jax/modern/tests/test_replay_fidelity_oracle.py` runs the same checks on one smoke-test game
 (about 10 s) and is skipped when the dataset is absent. Its Homeguard check tests the client rule (bonus % MS before the soft caps); the strict xfail that
 recorded the sim bug was removed when the bug was fixed (MODERN-022).
 
@@ -58,18 +58,18 @@ recorded the sim bug was removed when the bug was fixed (MODERN-022).
 
 ## Likely sim bugs
 
-**Status (MODERN-022): bugs 1–3 are fixed.** Homeguard, Ghost/Heal and Gustwalker now enter the STAT pipeline as bonus % MS before the soft caps (`modern_step._move`); Recall has `RECALL_CAST = 0.5` before the channel and the damage grace is measured on the whole recall (`modern_economy.recall_step`).
+**Status (MODERN-022): bugs 1–3 are fixed.** Homeguard, Ghost/Heal and Gustwalker now enter the STAT pipeline as bonus % MS before the soft caps (`world.tick._move`); Recall has `RECALL_CAST = 0.5` before the channel and the damage grace is measured on the whole recall (`economy.recall_step`).
 
-1. **Homeguard MS skips the soft caps** (`lanerl_jax/sim/modern_step.py:1007-1009`). The code adds
+1. **Homeguard MS skips the soft caps** (`lanerl_jax/modern/world/tick.py:1007-1009`). The code adds
    `(homeguard_ms + hg_bonus) * base_ms` after `st.move_speed`. The client treats it as **bonus % MS inside
    the raw sum, before the soft caps**: `softcap((base+flat)·(1+add%+hg))`. After 14:00 the sim is about 60 u
    too fast (for example 640 vs 576 at v0 = 420). The same line also applies `s_out.bonus_ms_pct` (Ghost, Heal
    and similar) after the caps. That was not measured here, but it is likely the same issue.
-2. **Recall takes 8.5 s, not 8.0 s** (`modern_economy.py:45` `RECALL_CHANNEL`, and `modern_step.py:1378`
+2. **Recall takes 8.5 s, not 8.0 s** (`economy.py:45` `RECALL_CHANNEL`, and `world/tick.py:1378`
    empowered 4.0). There is a 0.5 s cast before the channel (movement locked, 4.5 s empowered).
 3. **Code reading, not measured:** `recall_step`'s damage grace uses `RECALL_CHANNEL - 0.1`
-   (`modern_economy.py:533`) even when `channel = 4.0`. For an empowered recall, the last-0.1 s grace therefore
+   (`economy.py:533`) even when `channel = 4.0`. For an empowered recall, the last-0.1 s grace therefore
    never applies.
-4. **Spec note:** `deathguard_ms` (75%, `modern_economy.py:505`) is defined but unused. The replays show respawn
+4. **Spec note:** `deathguard_ms` (75%, `economy.py:505`) is defined but unused. The replays show respawn
    exits get exactly Homeguard's 80%→40% / 150%→65%, so not wiring it is correct for 26.9. ECONOMY §10.3 should
    say so.

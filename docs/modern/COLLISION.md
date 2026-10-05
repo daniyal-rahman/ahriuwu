@@ -1,7 +1,7 @@
 # COLLISION.md — unit-vs-unit collision and avoidance (26.19)
 
-**Status (2026-10-04):** implemented in `lanerl_jax/sim/modern_collision.py`, called from
-`modern_step._move`. It replaces the legacy C# port (`collision.resolve_collisions`, which is still
+**Status (2026-10-04):** implemented in `lanerl_jax/modern/collision.py`, called from
+`world.tick._move`. It replaces the legacy C# port (`collision.resolve_collisions`, which is still
 used, unchanged, by the legacy `step.py` world and its parity tests).
 
 Tags: `CLIENT` (26.19 client bins), `WIKI` (wiki.leagueoflegends.com), `RIOT` (patch notes / dev posts),
@@ -27,7 +27,7 @@ Tags: `CLIENT` (26.19 client bins), `WIKI` (wiki.leagueoflegends.com), `RIOT` (p
   per-unit A* that checks collisions with other minions along the path.
 - Client bins (CommunityDragon 16.19, `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/`):
   `garen.bin`/`jax.bin` `pathfindingCollisionRadius = 35`; minion records (MINIONS §1.1); camp records
-  (`data/modern/26.19/jungle_client.json` `pathing_radius`). `map11.bin` Characters constants
+  (`modern/data/26.19/jungle_client.json` `pathing_radius`). `map11.bin` Characters constants
   `ai_PostAvoidanceFilterDuration 0.3`, `ai_PostAvoidanceRotFilterStrength 0.2`,
   `ai_PostAvoidanceRotFilterStrengthAccel 0.125`. Their semantics are unpublished. The names suggest a 0.3 s
   low-pass filter on the heading after an avoidance turn.
@@ -38,14 +38,14 @@ Tags: `CLIENT` (26.19 client bins), `WIKI` (wiki.leagueoflegends.com), `RIOT` (p
 |---|---|---|
 | C-1 | Every live champion, lane minion and jungle monster collides with every other one: allied and enemy champions (body-blocking), champion–minion, minion–minion, champion–monster. There are no team or type exceptions. | WIKI H |
 | C-2 | Collision uses the **pathing radius**, not the gameplay radius. Garen/Jax 35; melee/caster 35.74; siege 55.74; super 55.52; camps per record (Krug 85, Red 60, Gromp 40, Blue 30, Scuttle 100, ...). The gameplay radius (champions 65, minions 48/65) is only the hitbox / attack-range edge. | WIKI H, CLIENT H |
-| C-3 | Contact distance: a unit's *centre* may not enter another unit's pathing disk, so a pair stops at `max(r_i, r_j)`; champions stop 35 u apart, not 70 or 130 (`modern_collision.PAIR_RULE = "max"`). Replays (§3) rule out both 2×65 and 2×35. | WIKI M, REPLAY M |
+| C-3 | Contact distance: a unit's *centre* may not enter another unit's pathing disk, so a pair stops at `max(r_i, r_j)`; champions stop 35 u apart, not 70 or 130 (`collision.PAIR_RULE = "max"`). Replays (§3) rule out both 2×65 and 2×35. | WIKI M, REPLAY M |
 | C-4 | Ghosted units neither block nor are blocked. Sources: Ghost, Garen E, most dashes/blinks while travelling, first-wave minions (28 s side / 18 s mid after spawning), stealth while unseen, and many kit effects. Terrain still applies. | WIKI H |
 | C-5 | Wards don't collide. Structures block through their navgrid pads (terrain), not as unit circles. | INFERRED M (wiki silent; pads are terrain in the client navgrid) |
 | C-6 | Movers path/steer **around** blocking units. Being blocked shows up as detours and, behind a same-direction wave, as a temporary slowdown ("creep block"). Units are not teleported apart, and no source says that standing units get shoved. | WIKI H (avoidance exists), RIOT M (algorithm opaque) |
 | C-7 | Creep block still exists after the first wave. No published number; its size depends on geometry. | WIKI M |
 | C-8 | Baron, the pit Herald and champion-made terrain block even ghosted units. They're not modelled (no ghost-immune unit in the 1v1 top world). | WIKI H |
 
-## 2. Implementation (`modern_collision.resolve`)
+## 2. Implementation (`collision.resolve`)
 
 Two vectorized phases with fixed shapes and no per-unit sequential loop (O(N²) pair math). Only slots before the
 wards take part (`movers=layout()["ward0"]` = 170: 2 champions, 120 minions, 48 monsters). Ghosted, dead,
@@ -72,16 +72,16 @@ ward and structure slots are excluded from both roles (C-4, C-5).
 
 Cost: 11 headings × N² contact-time solves, plus 6 `is_walkable` disk checks per unit per tick.
 
-Tests: `lanerl_jax/sim/tests/test_modern_collision.py` covers the function: radii, soft overlap resolution,
+Tests: `lanerl_jax/modern/tests/test_collision.py` covers the function: radii, soft overlap resolution,
 mobility split, ghosting, no wall push, determinism and permutation invariance, coincident units, steering past
 a stander or a clump, head-on passing, no swerve on the chase target, and no steering into walls.
-`test_modern_world_rules.py` covers the world: both champions walk base→lane, Garen walks back through his
+`test_world_rules.py` covers the world: both champions walk base→lane, Garen walks back through his
 oncoming top wave within 1.35× the straight-line time, top waves meet and fight, and minion trades stay
 symmetric.
 
 ## 3. Replay evidence and sim comparison
 
-**Replays** (`ops/modern_collision_replay.py`; 131 of the 147 games in `lol_replays_16_9_772`, patch 26.9).
+**Replays** (`ops/modern/collision_replay.py`; 131 of the 147 games in `lol_replays_16_9_772`, patch 26.9).
 raw_mem has hero positions only, with **no minion positions**. labels `waypoint` is always null, so the latest
 `clicks.json` move target was used (≤ 1 s old, ≥ 300 u away). `movement.speed` is a 0.5 s look-ahead
 displacement and isn't usable as instantaneous speed.
@@ -105,7 +105,7 @@ Lane walking stalls about 25× as often as off-lane walking, but the stalls are 
 is unaffected. 30 Hz position steps add about ±10 % jitter. The excess over off-lane (about 2.7 short stalls/min)
 is an upper bound on creep block: lane-only micro-stops such as last-hit hesitation count too.
 
-**Sim** (`ops/modern_collision_creepblock.py`: Garen walks the top lane between points 1000 u inside the two outer
+**Sim** (`ops/modern/collision_creepblock.py`: Garen walks the top lane between points 1000 u inside the two outer
 turrets, 90–390 s, through both teams' waves; same path-speed metric, 30 Hz):
 
 | world | path p1 / p5 / p10 | < 0.6 | stalls / min (median, p90 s) | chord 0.5 s near minions p1 / p5 | detours (straightness < 0.9, near) |

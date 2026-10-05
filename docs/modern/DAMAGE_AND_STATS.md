@@ -110,7 +110,7 @@ Confidence is H / M / L. Where sources disagree, the default choice and the reas
    - The legacy port runs 60 Hz (`autoattack.py:164` `delta_ms = 1000/60`). That was a LeagueSandbox property, not a Riot one.
    - The modern profile must make tick length a config value and default to 1/30 s once U-01 confirms it. Every timer in this doc must be evaluated with "fires on the first tick whose accumulated time ≥ deadline".
 4. **One damage instance = one packet.** Every damaging effect produces packets with the fields in §3.1. Never fold several sources into one number before the pipeline: shields, kill credit and vamp all need per-packet attribution.
-5. **Pure, vectorised.** Every rule below is written so it can be an elementwise `xp` function, like `modern_stats.py`. Data-dependent branches become `where`.
+5. **Pure, vectorised.** Every rule below is written so it can be an elementwise `xp` function, like `core/stats.py`. Data-dependent branches become `where`.
 
 ---
 
@@ -200,7 +200,7 @@ grown(stat) = base + growth · G(level)
 ```
 - G(18) = 17.000, G(19) = 18.315, G(20) = 19.665 (levels 19–20 reachable via top role quest, 26.1 [RIOT]).
 - **All growth counts as base** for every stat **except attack speed**, whose growth is **bonus AS** [WIKI Champion statistic, H].
-- `modern_stats.level_growth_sum` and `combat.growth_sum` are both algebraically equal to this; keep one (`modern_stats`) and make it read the client table for level>20 safety (they agree to float precision anyway).
+- `core.stats.level_growth_sum` and `combat.growth_sum` are both algebraically equal to this; keep one (`core.stats`) and make it read the client table for level>20 safety (they agree to float precision anyway).
 
 ### 3.3 Composition order for a generic stat — [WIKI + INFERRED, M]
 ```
@@ -211,7 +211,7 @@ total       = total_pre · Π (1 + multiplicative_i)                     STAT.40
 bonus(stat) = total − base_total     # what "bonus AD/armor/HP" ratios read
 ```
 - Most stats have **no** percent stage in SR 26.19 (items give flat AD/HP/AR/MR/AP). Percent stages that exist: MS (§9), AS (special, §8.1), `mPercentBaseHPRegenMod` / base mana regen % (multiplies **base** regen only: `regen = base_regen·(1+Σ%base) + flat_regen`) [WIKI Health regeneration "stacks additively, flat and percentage"; CLIENT field name `PercentBase…`, H], `mPercentHealingAmountMod` (= HSP, a stat on its own).
-- The legacy `Stat.Total` form `((base+baseBonus)(1+pBase)+flat)(1+p)` (`modern_stats.stat_total`, `modern_stats.py:26`) is a superset that can express all of the above (`pBase` = %base, `p` = %total). Keep it, but document per stat which slot each source uses; **do not** let % bonuses that are "% of base" land in the outer slot.
+- The legacy `Stat.Total` form `((base+baseBonus)(1+pBase)+flat)(1+p)` (`core.stats.stat_total`, `core/stats.py:26`) is a superset that can express all of the above (`pBase` = %base, `p` = %total). Keep it, but document per stat which slot each source uses; **do not** let % bonuses that are "% of base" land in the outer slot.
 - Percent **reductions** of a stat (e.g., Black Cleaver armor shred) are not stat modifiers: they are **resist reduction** (§4) and must not be fed through `stat_total`.
 
 ### 3.4 Item / shard stat aggregation — [CLIENT items/perks bins, H]
@@ -244,7 +244,7 @@ mult(R) = 100/(100+R)          if R ≥ 0
         = 2 − 100/(100−R)      if R < 0        # ∈ (1, 2); −100 ⇒ 1.5
 post = raw · mult(R_eff)
 ```
-`modern_stats.mitigation_multiplier` (`modern_stats.py:103`) is correct (boundary R=0 → both branches = 1).
+`core.stats.mitigation_multiplier` (`core/stats.py:103`) is correct (boundary R=0 → both branches = 1).
 
 ### 4.2 Effective resist (attacker-specific), exact order — [WIKI Armor penetration / Magic penetration, H for order]
 ```
@@ -263,7 +263,7 @@ Key edge cases:
 - Lethality = **flat armor pen, 1:1, not level-scaled** since V14.1 (handled as an innate stat since V14.9). No 26.x patch changed this [WIKI H; RIOT 26.1–26.19 audit H].
 - %pen and %reduction stacking: multiplicative (`1−(1−a)(1−b)`).
 - Reductions are applied to the **target's** stat (and so change ratios that scale with target armor, e.g., "bonus armor" scalings on the target? — reductions reduce the target's bonus pool first, see 4.3), penetration only in this packet's calculation.
-- Turrets have 30% armor penetration (applies to champions *and* minions) [WIKI Armor penetration notes, H]; already used in `modern_towers.py:199,212`.
+- Turrets have 30% armor penetration (applies to champions *and* minions) [WIKI Armor penetration notes, H]; already used in `lane/towers.py:199,212`.
 
 ### 4.3 Base/bonus pool allocation (affects bonus-only %pen and "bonus resist" ratios only)
 Two wiki statements conflict on the same revision: "Flat reductions affect the target's bonus amount first, then their base amount" (Order of calculations) vs. "distributed proportionally between base and bonus" (Flat armor reduction section, with worked example 20/40 −15 → 15/30). The total `R1` is identical either way; only (a) bonus-armor %pen (Serylda-type, not in top-lane scope) and (b) ratios on target **bonus** resist differ.
@@ -492,7 +492,7 @@ can_dash   = can_move ∧ ¬ground
 
 ## 11. Max-health changes and level-up
 
-- **Max-HP increase** (items, buffs, shards, level): current HP += same delta. **Decrease**: current HP unchanged unless > new max, then clamped [WIKI Health, H]. Not healing (no HSP/GW) [WIKI Healing, H]. `modern_stats.change_max_health` (`modern_stats.py:59`) is correct.
+- **Max-HP increase** (items, buffs, shards, level): current HP += same delta. **Decrease**: current HP unchanged unless > new max, then clamped [WIKI Health, H]. Not healing (no HSP/GW) [WIKI Healing, H]. `core.stats.change_max_health` (`core/stats.py:59`) is correct.
 - **Level-up:** stats gain `growth·F[new_level]`; current HP gains `ΔmaxHP · (ai_levelUp_healthGainNetGain − ai_levelUp_healthGainPercentMissingPenalty·missing_frac)` with client values **1.0** and **0 (unset)** ⇒ full delta [CLIENT, H for values; INFERRED formula, M]. Wiki Healing "actual health regained is lower depending on how wounded" contradicts this for SR — default to client (penalty 0) (U-12). Mana likewise gains full delta (INFERRED, M).
 - Max mana changes follow the same increase/decrease rule (INFERRED, M).
 
@@ -546,14 +546,14 @@ can_dash   = can_move ∧ ¬ground
 
 | # | Location | Current | Required (this spec) | Severity |
 |---|---|---|---|---|
-| D1 | `modern_stats.py:88`, `:100` (`armor_after_modifiers`, `magic_resist_after_modifiers`) | `max(0, r − flat_pen − lethality)` unconditionally | `where(r > 0, max(0, r − pen), r)` — negative resist from reduction must survive (wiki ex. B −12). Current returns 0 for negative armor **even with zero penetration**, removing the negative-armor amplification branch for every caller. | **HIGH** |
-| D2 | `lanerl_jax/sim/tests/test_modern_stats_items.py` (`armor_after_modifiers(10, flat_reduction=25, …)==0`) | test asserts the bug | expected **−15** | HIGH |
-| D3 | `modern_stats.py:69-100` signature | one scalar each for %red/%pen | callers must pre-combine `1−Π(1−x)`; add bonus-only %pen (`base,bonus` split) and pool allocation per §4.3 | MED |
-| D4 | `modern_stats.py:115-128` `apply_damage_modifiers` | all four factors multiplied | dealt modifiers **additive** (26.09); received multiplicative; received DR skipped for TRUE; amplifiers apply to TRUE; packets without `ApplyDamageModifier` skip; add unit-class ratio slot; order relative to resist per §5.7 (commutative for multiplicative parts, but flat pre/post reductions are not) | MED |
-| D5 | `modern_stats.py:45-56` `adaptive_force_total` | adaptive type is a static loadout flag | dynamic bonus-AD vs AP comparison, tie → champion type (§3.5) | MED (matters once AP or AD items are mixed) |
-| D6 | `modern_items.py:41-49`, `:80-85` stat extraction | Data Dragon `stats` + regex on description; ItemStats lacks lethality, %armor pen, flat/% MPen, omnivamp, HSP, crit damage, base-HP-regen % (label "base health regen" is not matched → silently dropped), base mana regen %, slow resist, adaptive | read client `items.cdtb.bin.json` fields (§3.4 map); extend `ItemStats`; fail on unknown stat fields | **HIGH** for any build with Black Cleaver/Profane/IE/Spirit Visage/boots |
-| D7 | `modern_items.py:152` `item_loadout_stats` | tenacity (and slow resist) summed | multiplicative within tenacity group A; slow resist multiplicative | MED |
-| D8 | `modern_items.py:207-219` stat shards | MS +2%, tenacity/SR +10% | **MS +2.5%, tenacity +15%, slow resist +15%** [CLIENT perks 5010, 5013] (coordinate with RUNES.md) | MED |
+| D1 | `core/stats.py:88`, `:100` (`armor_after_modifiers`, `magic_resist_after_modifiers`) | `max(0, r − flat_pen − lethality)` unconditionally | `where(r > 0, max(0, r − pen), r)` — negative resist from reduction must survive (wiki ex. B −12). Current returns 0 for negative armor **even with zero penetration**, removing the negative-armor amplification branch for every caller. | **HIGH** |
+| D2 | `lanerl_jax/modern/tests/test_stats_items.py` (`armor_after_modifiers(10, flat_reduction=25, …)==0`) | test asserts the bug | expected **−15** | HIGH |
+| D3 | `core/stats.py:69-100` signature | one scalar each for %red/%pen | callers must pre-combine `1−Π(1−x)`; add bonus-only %pen (`base,bonus` split) and pool allocation per §4.3 | MED |
+| D4 | `core/stats.py:115-128` `apply_damage_modifiers` | all four factors multiplied | dealt modifiers **additive** (26.09); received multiplicative; received DR skipped for TRUE; amplifiers apply to TRUE; packets without `ApplyDamageModifier` skip; add unit-class ratio slot; order relative to resist per §5.7 (commutative for multiplicative parts, but flat pre/post reductions are not) | MED |
+| D5 | `core/stats.py:45-56` `adaptive_force_total` | adaptive type is a static loadout flag | dynamic bonus-AD vs AP comparison, tie → champion type (§3.5) | MED (matters once AP or AD items are mixed) |
+| D6 | `items/loadout.py:41-49`, `:80-85` stat extraction | Data Dragon `stats` + regex on description; ItemStats lacks lethality, %armor pen, flat/% MPen, omnivamp, HSP, crit damage, base-HP-regen % (label "base health regen" is not matched → silently dropped), base mana regen %, slow resist, adaptive | read client `items.cdtb.bin.json` fields (§3.4 map); extend `ItemStats`; fail on unknown stat fields | **HIGH** for any build with Black Cleaver/Profane/IE/Spirit Visage/boots |
+| D7 | `items/loadout.py:152` `item_loadout_stats` | tenacity (and slow resist) summed | multiplicative within tenacity group A; slow resist multiplicative | MED |
+| D8 | `items/loadout.py:207-219` stat shards | MS +2%, tenacity/SR +10% | **MS +2.5%, tenacity +15%, slow resist +15%** [CLIENT perks 5010, 5013] (coordinate with RUNES.md) | MED |
 | D9 | `modern.py:72-74` + `step.py:996-1000` | windup = `T_base·(0.3+offset)`, then both period and windup divided by `(1 + growth + bonus)` | AS = base + ratio·bonus (ratio = base for Garen/Jax, so period OK), clamp [0.2, 3.003]; windup per §8.2 with **Garen windup modifier 0.5** (lvl6 + 25% AS: 0.2473 s vs current 0.2066 s) | **HIGH** (last-hit timing) |
 | D10 | `autoattack.py:285-287` | `crit_chance > 0` ⇒ **every** attack crits | roll per attack (Bernoulli default, PRD later), multiplier `crit_mult = 2.0 + Σ crit_dmg` | HIGH once any crit source exists |
 | D11 | `autoattack.py:140-148` `ideal_attack_range` | `range + target_radius` | `range + attacker_radius + target_radius` (edge-to-edge) for the modern profile; coordinate with minion/tower specs | **HIGH** (every engage distance shifts 65 u) |
@@ -562,11 +562,11 @@ can_dash   = can_move ∧ ¬ground
 | D14 | `step.py:1119-1131` | single ALL-type shield scalar, consumed by cumulative rows | shield list with type/expiry ordering (§6) | MED (needed for Sterak's, Overheal, runes) |
 | D15 | `modern.py:190` (Garen passive) and world regen | continuous per-tick integration | 0.5 s regen ticks; GW ×0.6 on regen | LOW |
 | D16 | `modern.py:219-220` (Garen E crit) | Bernoulli, ×1.3 fixed | ×(1 + 0.3·(crit_mult−1)) → 1.3 base, 1.39 with IE [RIOT 26.1]; champion owners | LOW (champion spec) |
-| D17 | `modern_towers.py:174-175` | own resist math `max(0, R·(1−p) − flat)` | call shared `modern_stats` (same D1 bug duplicated; also no reduction stage) | MED |
+| D17 | `lane/towers.py:174-175` | own resist math `max(0, R·(1−p) − flat)` | call shared `core.stats` (same D1 bug duplicated; also no reduction stage) | MED |
 | D18 | (absent) | no unit-class ratio (`dr_UnitToHero 0.55`, `dr_UnitToBuilding 0.6`) | apply exactly once (minion spec decides where) | MED (U-05) |
 | D19 | (absent) | no GW, HSP, vamp, omnivamp minion penalty | §7 | MED |
-| D20 | `modern_stats.py:59-66` `change_max_health` | matches wiki | keep; also call on level-up with full delta (§11) | OK |
-| D21 | `modern_stats.py:34-42` | matches client table | OK; prefer client table lookup for L>20 robustness | OK |
+| D20 | `core/stats.py:59-66` `change_max_health` | matches wiki | keep; also call on level-up with full delta (§11) | OK |
+| D21 | `core/stats.py:34-42` | matches client table | OK; prefer client table lookup for L>20 robustness | OK |
 
 ---
 

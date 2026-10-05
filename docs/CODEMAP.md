@@ -52,17 +52,17 @@ TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failur
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
 
 Modern 26.19 world (separate ruleset; MODERN-013..021):
-`lanerl_jax/sim/modern_step.py` `step(state, orders, cfg)` is the whole-map tick
+`lanerl_jax/modern/world/tick.py` `step(state, orders, cfg)` is the whole-map tick
 (216 unit slots: 2 champions, lane minions, camps/epics, wards, structures);
-`modern_world.build_config` builds the static `WorldConfig`. Start with
+`world.config.build_config` builds the static `WorldConfig`. Start with
 `docs/modern/WORLD_IMPLEMENTATION.md` (layout, tick order, gaps) and
-`docs/modern/README.md` (spec index). Observation/actions: `lanerl_jax/obs/modern_builder.py`,
-`lanerl_jax/train/modern_actions.py`. TOOL (trainer, no experiment yet): `lanerl_jax/train/modern_vec_train.py`, the
-`vec_train` scan PPO on `modern_step` (bank reset, masked shop/choice buttons, relative reward on the modern
+`docs/modern/README.md` (spec index). Observation/actions: `lanerl_jax/modern/obs.py`,
+`lanerl_jax/modern/actions.py`. TOOL (trainer, no experiment yet): `lanerl_jax/modern/train.py`, the
+`vec_train` scan PPO on `world.tick` (bank reset, masked shop/choice buttons, relative reward on the modern
 top lane; shares `train/scan_ppo.py` (`make_batch_fn`/`ppo_learn`) with `vec_train`, so it does not import the
-legacy sim). TOOL: `ops/modern_world_bench.py`,
-`ops/modern_world_profile.py` (throughput and per-source cost). Map ingestion:
-`lanerl_jax/data/modern_map.py`, `modern_routes.py`; `ops/fetch_modern_map.py`.
+legacy sim). TOOL: `ops/modern/bench.py`,
+`ops/modern/profile_tick.py` (throughput and per-source cost). Map ingestion:
+`lanerl_jax/modern/data/navgrid.py`, `data/routes.py`; `ops/modern/fetch_map.py`.
 The legacy `step.py` world and the "modern champion profile" below (modern
 Garen/Jax on the legacy map, `sim/modern.py`) are different systems.
 
@@ -70,8 +70,8 @@ Modern champion profile (explicit opt-in, 26.19; CHAMP-003):
 
 | Path | Class | Role |
 |---|---|---|
-| `lanerl_jax/data/modern.py`, `modern_26_19/*.json` | LIVE | Pinned Garen/Jax BIN stats and spell values; no network at runtime |
-| `lanerl_jax/sim/modern.py`, `ChampionState` | LIVE | Champion dispatch, mana, buffs, dodge, dash, true/magic damage; initialize with `modern.init_lane(names)` and `SimConfig.modern(names)` |
+| `lanerl_jax/modern/data/champions.py`, `modern_26_19/*.json` | LIVE | Pinned Garen/Jax BIN stats and spell values; no network at runtime |
+| `lanerl_jax/sim/modern_bridge.py`, `ChampionState` | LIVE | Champion dispatch, mana, buffs, dodge, dash, true/magic damage; initialize with `modern.init_lane(names)` and `SimConfig.modern(names)` |
 | `lanerl/cfg/modern_garen_jax_26_19.json` | LIVE | Modern bare-champion C# matchup; use only the isolated modern build |
 | `lanerl/patches/modern-champions/ModernChampion.cs` | LIVE | Modern C# champion rules, materialized/exported by `ops/modern_server.py` |
 | `ops/modern_server.py`, `ops/modern_validation.py` | TOOL | Reproducible isolated server overlay/patch export and worktree-snapshot Slurm validation |
@@ -95,6 +95,6 @@ Launch through an experiment spec and `ops/launch.py`; its ordinary server/JAX
 launch modes still target the canonical checkout, so integrate this branch there
 before launching a normal production experiment. MOD validation snapshots this
 worktree explicitly and does not require that integration.
-This profile runs on the legacy map/minions/turrets; the modern world is `modern_step` above.
+This profile runs on the legacy map/minions/turrets; the modern world is `world.tick` above.
 
-TOOL: `lanerl_jax/data/modern_routes.py`, `lanerl_jax/sim/modern_pathing.py` bake/load/query conservative static-map routes; `ops/modern_world_validation.py`, `slurm/modern_world_validation.sbatch` launch snapshot correctness/artifact jobs through `ops/launch.py`. Patch geometry data are `lanerl_jax/data/modern/26.19/geometry.json`; tests are regressions.
+TOOL: `lanerl_jax/modern/data/routes.py`, `lanerl_jax/modern/map/pathing.py` bake/load/query conservative static-map routes; `ops/modern_world_validation.py`, `slurm/modern_world_validation.sbatch` launch snapshot correctness/artifact jobs through `ops/launch.py`. Patch geometry data are `lanerl_jax/modern/data/26.19/geometry.json`; tests are regressions.

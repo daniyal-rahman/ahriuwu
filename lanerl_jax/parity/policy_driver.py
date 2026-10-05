@@ -202,7 +202,7 @@ class StateRebuilder:
     def __init__(self, modern_champions=None):
         self.modern_champions = tuple(modern_champions) if modern_champions else None
         if self.modern_champions:
-            from ..sim import modern
+            from ..sim import modern_bridge as modern
             self.base = modern.init_lane(self.modern_champions)
             self.params = modern.make_params(self.modern_champions)
         else:

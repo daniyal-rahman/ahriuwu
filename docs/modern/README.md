@@ -1,7 +1,7 @@
 # docs/modern — implementer specs for the 26.19 modern world
 
 **Patch pin:** normal PC Summoner's Rift (CLASSIC), patch 26.19, client build **16.19.8230722**.
-**Researched:** 2026-10-01. **Status (2026-10-02):** implemented — see the `*_IMPLEMENTATION.md` docs; the modern world tick is `lanerl_jax/sim/modern_step.py`.
+**Researched:** 2026-10-01. **Status (2026-10-02):** implemented — see the `*_IMPLEMENTATION.md` docs; the modern world tick is `lanerl_jax/modern/world/tick.py`.
 
 These specs replace the old C# server as the reference for the modern JAX port. The C# server stays the
 regression oracle for the legacy ruleset only (ledger MODERN-006). `docs/MODERN_PATCH_DELTA.md`
@@ -17,18 +17,18 @@ regression oracle for the legacy ruleset only (ledger MODERN-006). `docs/MODERN_
 | [ITEMS.md](ITEMS.md) | Inventory and shop, uniqueness groups, shared named effects (Spellblade, Lifeline, ...), vamp rules, **Tiamat line and Stridebreaker in full**, item hooks, 26.x item changes | 1094 |
 | [ITEMS_CATALOG.md](ITEMS_CATALOG.md) | Per-item entries for 214 SR items (210 store + 4 transform), generated from client data, with hand-written hooks and notes | 2195 |
 | [ITEMS_IMPLEMENTATION.md](ITEMS_IMPLEMENTATION.md) | **Implemented** item system: layout, coverage, tick order, what the world integrator must still apply, known gaps | — |
-| [RUNES_IMPLEMENTATION.md](RUNES_IMPLEMENTATION.md) | **Implemented** runes, shards, STAT/DMG modifier ordering and the combined item+rune tick (`modern_combat`): layout, coverage, tick order, integrator duties, known gaps | — |
+| [RUNES_IMPLEMENTATION.md](RUNES_IMPLEMENTATION.md) | **Implemented** runes, shards, STAT/DMG modifier ordering and the combined item+rune tick (`combat`): layout, coverage, tick order, integrator duties, known gaps | — |
 | [RUNES.md](RUNES.md) | Page legality, stat shards, every rune in all five trees (incl. Stormraider's Surge, which replaced Phase Rush in 26.9 under id 8230), automatic rune swaps, rune hooks | 1256 |
 | [SUMMONER_SPELLS.md](SUMMONER_SPELLS.md) | Flash, Teleport/Unleashed Teleport (role-quest interaction), Ignite, Exhaust, Barrier, Heal, Ghost, Cleanse, Hexflash; Smite listed and deferred | 551 |
-| [WORLD_IMPLEMENTATION.md](WORLD_IMPLEMENTATION.md) | **Implemented** modern world tick (`modern_step`): unit layout, tick order, how minions/turrets, kits, summoners, items, runes, economy and quest compose; verified symptoms; gaps | — |
+| [WORLD_IMPLEMENTATION.md](WORLD_IMPLEMENTATION.md) | **Implemented** modern world tick (`world.tick`): unit layout, tick order, how minions/turrets, kits, summoners, items, runes, economy and quest compose; verified symptoms; gaps | — |
 | [VISION.md](VISION.md) | **Implemented** fog of war: sight radii, walls, brush, structures, attack reveal, targeting gates; unresolved client constants | — |
 | [WARDS.md](WARDS.md) | **Implemented** wards and trinkets: Stealth/Control Ward, Farsight, Oracle Lens, stealth and true sight, ward gold, vision runes | — |
 | [JUNGLE.md](JUNGLE.md) | **Implemented** jungle camps and Scuttle Crab, monster AI (aggro, leash, reset), camp gold/XP, Smite, jungle pets | — |
 | [OBJECTIVES.md](OBJECTIVES.md) | **Implemented** 26.19 epic objectives (Voidgrubs, Rift Herald, Drakes/Soul/Elder, Baron), team buffs, Elemental Rift and Baron-pit terrain | — |
 | [CHAMPIONS.md](CHAMPIONS.md) | **Implemented** Garen and Jax 26.19 kits with evidence; remaining approximations | — |
 | [LANES_TERRAIN.md](LANES_TERRAIN.md) | **Implemented** all-lane waves, structure pads, map regions (quest lane, Homeguard, river), attack-move, game end, item actives | — |
-| [COLLISION.md](COLLISION.md) | **Implemented** unit-vs-unit collision: pathing radii, who collides, ghosting, avoidance steering + soft separation (`modern_collision`), replay creep-block evidence | — |
-| [REPLAY_FIDELITY.md](REPLAY_FIDELITY.md) | **Checks** against 145 recorded 26.9 games: death timers, passive gold, base stats, respawn, move speed OK; Homeguard soft-cap order and Recall cast time mismatched (tool `ops/modern_replay_fidelity.py`) | — |
+| [COLLISION.md](COLLISION.md) | **Implemented** unit-vs-unit collision: pathing radii, who collides, ghosting, avoidance steering + soft separation (`collision`), replay creep-block evidence | — |
+| [REPLAY_FIDELITY.md](REPLAY_FIDELITY.md) | **Checks** against 145 recorded 26.9 games: death timers, passive gold, base stats, respawn, move speed OK; Homeguard soft-cap order and Recall cast time mismatched (tool `ops/modern/replay_fidelity.py`) | — |
 | [MECHANICS_AUDIT.md](MECHANICS_AUDIT.md) | **Audit** of moment-to-moment mechanics (orders, movement, attack/cast timing, minion/turret AI, collision, latency, click targeting) vs 26.19 League, ranked by impact; replay-measurable list | — |
 | [ECONOMY_IMPLEMENTATION.md](ECONOMY_IMPLEMENTATION.md) | **Implemented** economy/progression + Top quest, and the **replay oracle**: 145 real 16.9 games checking gold, death timers, kill/assist gold, fountain, level-up HP (spec corrections listed) | — |
 | [ECONOMY_PROGRESSION.md](ECONOMY_PROGRESSION.md) | Starting/ambient gold, XP curve to level 20, minion and kill XP sharing, comeback XP, kill credit/assists, 2026 bounty system, structure gold distribution, level-up, death timers, respawn, recall/Homeguard, fountain/shop | 310 |
@@ -85,23 +85,23 @@ Default order for procs from a single attack (RUNES U-18): main hit → item on-
 | X-2 | Where the minion→champion 0.55 / →structure 0.60 ratio applies | Once, at `DMG.45_UNIT_CLASS`, on raw minion AD before resists. It is **not** baked into minion AD. | MINIONS §4 (client `dr_UnitToHero`) resolves DAMAGE U-05. Siege→turret is 0.60 × the 1.4 siege bonus (MINIONS fixture 19.6875). |
 | X-3 | Turret shots on minions | % of max HP taken **before armor**: melee 45%, caster 70%, cannon 14/11/8% by tier, super 7% | TOWERS and MINIONS agree; current code uses 5% for supers and applies armor. |
 | X-4 | Life steal/omnivamp on damage a shield absorbed | Vamp reads `dmg_final` (`DMG.75`, **before** shields). ITEMS H6 places vamp "after the target's shields"; read that as hook position only, not the amount. | DAMAGE §7 / U-07. Measure: life steal attacking a shielded target. |
-| X-5 | Combining damage modifiers | Source-side amps (runes, items, Exhaust) **sum** at `DMG.40`; target-side modifiers **multiply** at `DMG.60` | DAMAGE §2.2 (wiki notes 26.09 change, marked untested); RUNES §1.4 agrees. Current `modern_stats.py:115-128` multiplies everything. |
-| X-6 | Stat shards | Adaptive 9 (5.4 AD); AS 10%; AH 8; **MS 2.5%**; HP 65; **scaling HP 10·L** (180 at 18, 200 at 20 per X-1); **tenacity and slow resist 15%** | Client perks; DAMAGE and RUNES agree. Current `modern_items.py:207-219` uses 2% and 10%. |
+| X-5 | Combining damage modifiers | Source-side amps (runes, items, Exhaust) **sum** at `DMG.40`; target-side modifiers **multiply** at `DMG.60` | DAMAGE §2.2 (wiki notes 26.09 change, marked untested); RUNES §1.4 agrees. Current `core/stats.py:115-128` multiplies everything. |
+| X-6 | Stat shards | Adaptive 9 (5.4 AD); AS 10%; AH 8; **MS 2.5%**; HP 65; **scaling HP 10·L** (180 at 18, 200 at 20 per X-1); **tenacity and slow resist 15%** | Client perks; DAMAGE and RUNES agree. Current `items/loadout.py:207-219` uses 2% and 10%. |
 | X-7 | Server tick | 30 Hz; timers rounded to ticks per DAMAGE §1 | DAMAGE U-01; affects windups (Garen windup modifier 0.5), Overgrowth timing, quest ticks. |
 | X-8 | Crit | Base crit damage 2.0 (26.1); IE +0.30; plain random roll until the pseudo-random table is known | DAMAGE §8 / U-09. `autoattack.py:286` crits on every attack whenever crit chance > 0. |
 
 ## Highest-impact code discrepancies (from the per-doc diff sections)
 
 1. **Turret and minion systems are not wired in.** Nothing calls the turret targeting, shot, damage or reward
-   functions, or the minion upgrade, Minion Slayer and damage-ratio helpers. `modern_world.py` spawns legacy-HP
+   functions, or the minion upgrade, Minion Slayer and damage-ratio helpers. `world/config.py` spawns legacy-HP
    minions. Nexus turrets are targetable at game start, and inhibitor/Nexus units are missing (TOWERS D4/D10, MINIONS §9).
 2. **The legacy aggro priority is still live in modern mode.** `targeting.py:140` keeps the "champion attacks
    allied minion" entry that 26.10 removed (MINIONS §3/§9).
-3. **Overgrowth maximum curve:** `modern_towers.py:132` interpolates linearly. At outer level 9 it gives 957.7;
+3. **Overgrowth maximum curve:** `lane/towers.py:132` interpolates linearly. At outer level 9 it gives 957.7;
    the exact value is 882.3 (TOWERS §6, D1).
-4. **Negative resists are clamped to 0:** `modern_stats.py:88,100` and `modern_towers.py:174`. The existing
+4. **Negative resists are clamped to 0:** `core/stats.py:88,100` and `lane/towers.py:174`. The existing
    unit test asserts the wrong answer (DAMAGE D1).
-5. **Item stats come from Data Dragon and description text** (`modern_items.py:40-85`). This drops lethality,
+5. **Item stats come from Data Dragon and description text** (`items/loadout.py:40-85`). This drops lethality,
    penetration, omnivamp, HSP, crit damage and slow resist, and it sums tenacity instead of multiplying it.
    Only the Hydra uniqueness group is enforced. Hydra and Stridebreaker active geometry is wrong. Switch to
    `items.cdtb.bin.json` (ITEMS §14).
@@ -109,7 +109,7 @@ Default order for procs from a single attack (RUNES U-18): main hit → item on-
    minion-XP split, 19-row level tables capped at 18, no game-time death factor, legacy fountain
    (ECONOMY §15). Role quests, Homeguard, summoner spells and Teleport state do not exist.
 7. **Small value bugs:**
-   - Siege/super gold `50+U` should be `49+U` (`modern_minions.py:241`).
+   - Siege/super gold `50+U` should be `49+U` (`lane/minions.py:241`).
    - Melee count is wrongly tied to cannon presence (`:162`).
    - Spawn spacing 0.792 s should be 0.8 s (`:93`).
    - Windup ignores the champion windup modifier (`modern.py:74`).

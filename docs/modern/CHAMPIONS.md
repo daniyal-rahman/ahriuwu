@@ -1,11 +1,11 @@
 # CHAMPIONS.md — Garen and Jax, 26.19 (client 16.19.8230722)
 
-**Status (2026-10-02).** Implemented in `lanerl_jax/sim/modern_champions/` (`garen.py`, `jax.py`, contract in
-`core.py`). Tests: `lanerl_jax/sim/tests/test_modern_champions.py`.
+**Status (2026-10-02).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, contract in
+`core.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`.
 
 ## Sources
 
-- **CLIENT**: the pinned BIN snapshots `lanerl_jax/data/modern_26_19/{garen,jax}.json` (spell data values,
+- **CLIENT**: the pinned BIN snapshots `lanerl_jax/modern/data/26.19/champions/{garen,jax}.json` (spell data values,
   cooldowns, mana), and the full CDragon 16.19 records in
   `/mnt/nfs/shared/modern-world-map-research/cdragon-16.19/{garen,jax}.bin.json`: spell calculations,
   `mOverrideAttackTime`, `mRollForCriticalHit`, cast times, spell tags, plus the 16.19 string table tooltips.
@@ -87,5 +87,5 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitAttackMods.windup` | (C,) s, 0 = stat windup | Windup of the next attack (Garen Q: `0.2 T`). |
 | `KitAttackMods.period` | (C,) s, 0 = 1/AS | Total attack time of the next attack (Garen Q: `T`). The kit already enforces the recovery with `cannot_attack`. |
 | `KitAttackMods.uncancellable` | (C,) bool | The next attack's windup cannot be cancelled (Garen Q, Jax W, the Jax R passive proc). |
-| `KitAttackMods.extra_range` | (C,) | Already in the contract, but `modern_step` does not read it. Garen Q and Jax W each give +50. |
+| `KitAttackMods.extra_range` | (C,) | Already in the contract, but `world.tick` does not read it. Garen Q and Jax W each give +50. |
 | `ghosted(state, kctx)` | (C,) bool | Garen E ghosting, to be ORed into the collision `ghost` mask. |

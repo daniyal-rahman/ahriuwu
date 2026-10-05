@@ -408,6 +408,6 @@ def apply_orders(state: LaneState, orders: Orders, params, *,
     )
 
     if state.modern:
-        from .modern import apply_casts
+        from .modern_bridge import apply_casts
         return apply_casts(result, orders, params, vision)
     return result

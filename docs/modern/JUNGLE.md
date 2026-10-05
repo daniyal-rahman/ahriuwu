@@ -1,8 +1,8 @@
 # JUNGLE.md — 26.19 regular camps, Rift Scuttler, monster AI, rewards, Smite, jungle pets
 
-Code: `lanerl_jax/sim/modern_jungle.py` (rules), `lanerl_jax/sim/modern_item_effects/jungle.py` (item 1101–1103
-damage modifier), `lanerl_jax/data/build_modern_jungle.py` → `lanerl_jax/data/modern/26.19/jungle_client.json`
-(client values only). Tests: `lanerl_jax/sim/tests/test_modern_jungle.py`.
+Code: `lanerl_jax/modern/jungle/camps.py` (rules), `lanerl_jax/modern/items/effects/jungle.py` (item 1101–1103
+damage modifier), `lanerl_jax/modern/data/build_jungle.py` → `lanerl_jax/modern/data/26.19/jungle_client.json`
+(client values only). Tests: `lanerl_jax/modern/tests/test_jungle.py`.
 
 Evidence levels: **CLIENT** (16.19.8230722 bins), **WIKI** (wiki.leagueoflegends.com, revisions below),
 **PATCH** (Riot notes 26.1–26.19, `patch-notes-26.x/p26-*.txt`), **INFERRED-M** (reasoned, medium
@@ -105,7 +105,7 @@ second packet emitted at launch (INFERRED-M; its main hit rides the missile).
   path INFERRED-L); champion damage makes it flee away from the attacker for 3 s (INFERRED-L) at full MS,
   clamped to ±1400 along the river. 100% slow resist while not fleeing, −100% tenacity (CC ×2) (WIKI).
   Untargetable 1.5 s after spawning (CLIENT `untargetableSpawnTime`).
-- Movement terrain/collision are the world's (`modern_mechanics.move_step`).
+- Movement terrain/collision are the world's (`mechanics.move_step`).
 
 ## 4. Rewards (to the champion landing the killing blow, WIKI Experience/Gold)
 

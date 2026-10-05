@@ -3,8 +3,8 @@
 **Status (2026-10-01):** every selectable Summoner's Rift rune of client build 16.19.8230722 (62 runes) and
 all 7 stat shards are classified. 60 runes are implemented as pure, fixed-shape JAX. 2 vision runes are
 deferred. The shared stat-modifier ordering (STAT.00–70) and damage-modifier ordering (DMG.40/60/70) are
-implemented in one place each. Items and runes run together in one reference tick, `modern_combat.combat_tick`.
-The world tick (`modern_world.py`) does **not** call it yet.
+implemented in one place each. Items and runes run together in one reference tick, `combat.combat_tick`.
+The world tick (`world/config.py`) does **not** call it yet.
 
 The rules this implements are in [RUNES.md](RUNES.md) and [DAMAGE_AND_STATS.md](DAMAGE_AND_STATS.md).
 The item side is in [ITEMS_IMPLEMENTATION.md](ITEMS_IMPLEMENTATION.md).
@@ -13,15 +13,15 @@ The item side is in [ITEMS_IMPLEMENTATION.md](ITEMS_IMPLEMENTATION.md).
 
 | File | Role |
 |---|---|
-| `lanerl_jax/data/build_modern_runes.py` | Host tool. Rebuilds `runes_client.json` from the cached 16.19 perk bin. It writes the PerkStyles (rows from `mSlots`, allowed secondaries, default shard sets), the 3 shard slots, and each perk's CLASSIC `mEffectAmount` and `mCalculations`. Mode overrides are dropped. Hash-named slots such as `{3ecd47e5}` (Legend: Haste) are resolved through `mPerkId`. It also records retired perks and source sha256s. |
-| `lanerl_jax/data/modern/26.19/runes_client.json` | Pinned table: 62 runes, 7 shards, 5 styles. |
-| `lanerl_jax/sim/modern_rune_data.py` | `rune_catalog()`, `ea()`, and the level primitives: `lin` (extrapolates past 18 unless `scale_past_18=False`), `lin_growth` (stat-progression fraction), `breakpoints`, `level_table`. Also `RunePage`, `validate_page` (§2.2 rules 1–3, rejects illegal pages), `substitute` and `prepare_page` (client game-start swaps), `page_counts` (the (C, R) matrix kernels close over) and `has_rune`. |
-| `lanerl_jax/sim/modern_rune_effects/` | `core.py` holds the contract: `RuneEvents`, `RuneOutputs`, `CombatClocks` and helpers. `__init__.py` holds the registry, dispatch and `coverage_report()`. There is one module per tree: `precision`, `domination`, `sorcery`, `resolve`, `inspiration`. |
-| `lanerl_jax/sim/modern_stat_pipeline.py` | STAT.* ordering: `compose` (growth as base except AS, flat → % → multiplicative, adaptive force at STAT.50, caps), `move_speed` (Celerity amp, strongest slow × slow resist, soft caps), `attack_speed` (cap 3.003, Hail of Blades lift), `windup` (champion modifier), `cooldown`, `rescale_cooldown`, `tenacity_total`, `cc_duration` (0.3 s floor), `sync_max_health`, and `champion_base(names)` from the pinned champion records. |
-| `lanerl_jax/sim/modern_stats.py` | Negative resist from reduction now survives % reduction and penetration (DAMAGE D1). `apply_damage_modifiers` puts dealt amps and Exhaust in **one additive sum** and multiplies the received modifiers; true damage ignores DR and Exhaust but keeps amps (D4). `resolve_adaptive` / `adaptive_is_ad` make the dynamic adaptive choice (D5). |
-| `lanerl_jax/sim/modern_damage.py` | Packets gained `cast_id`, where 0 means each packet is its own instance (RUNES §1.3), and `block`, a DMG.70 per-packet flat reduction on every damage type (Bone Plating). New tags: `TAG_INDIRECT`, `TAG_BURN`, etc. New properties: `PROP_ULTIMATE` (Axiom), `PROP_SUMMONER` (Ignite). Rune provenance is `item = -perk_id`. |
-| `lanerl_jax/sim/modern_combat.py` | `CombatState`, `combat_tick`: the single reference tick for items and runes (order below). |
-| `lanerl_jax/sim/modern_items.py` | `stat_shard_stats` takes shard names or perk ids and reads its values from client data. With `adaptive_to_ad=None` it leaves the adaptive force unresolved. `validate_rune_page(page, traits)` validates a page and applies the substitutions; `None` or an empty page selects the no-runes ruleset. |
+| `lanerl_jax/modern/data/build_runes.py` | Host tool. Rebuilds `runes_client.json` from the cached 16.19 perk bin. It writes the PerkStyles (rows from `mSlots`, allowed secondaries, default shard sets), the 3 shard slots, and each perk's CLASSIC `mEffectAmount` and `mCalculations`. Mode overrides are dropped. Hash-named slots such as `{3ecd47e5}` (Legend: Haste) are resolved through `mPerkId`. It also records retired perks and source sha256s. |
+| `lanerl_jax/modern/data/26.19/runes_client.json` | Pinned table: 62 runes, 7 shards, 5 styles. |
+| `lanerl_jax/modern/runes/catalog.py` | `rune_catalog()`, `ea()`, and the level primitives: `lin` (extrapolates past 18 unless `scale_past_18=False`), `lin_growth` (stat-progression fraction), `breakpoints`, `level_table`. Also `RunePage`, `validate_page` (§2.2 rules 1–3, rejects illegal pages), `substitute` and `prepare_page` (client game-start swaps), `page_counts` (the (C, R) matrix kernels close over) and `has_rune`. |
+| `lanerl_jax/modern/runes/effects/` | `core.py` holds the contract: `RuneEvents`, `RuneOutputs`, `CombatClocks` and helpers. `__init__.py` holds the registry, dispatch and `coverage_report()`. There is one module per tree: `precision`, `domination`, `sorcery`, `resolve`, `inspiration`. |
+| `lanerl_jax/modern/core/stat_pipeline.py` | STAT.* ordering: `compose` (growth as base except AS, flat → % → multiplicative, adaptive force at STAT.50, caps), `move_speed` (Celerity amp, strongest slow × slow resist, soft caps), `attack_speed` (cap 3.003, Hail of Blades lift), `windup` (champion modifier), `cooldown`, `rescale_cooldown`, `tenacity_total`, `cc_duration` (0.3 s floor), `sync_max_health`, and `champion_base(names)` from the pinned champion records. |
+| `lanerl_jax/modern/core/stats.py` | Negative resist from reduction now survives % reduction and penetration (DAMAGE D1). `apply_damage_modifiers` puts dealt amps and Exhaust in **one additive sum** and multiplies the received modifiers; true damage ignores DR and Exhaust but keeps amps (D4). `resolve_adaptive` / `adaptive_is_ad` make the dynamic adaptive choice (D5). |
+| `lanerl_jax/modern/core/damage.py` | Packets gained `cast_id`, where 0 means each packet is its own instance (RUNES §1.3), and `block`, a DMG.70 per-packet flat reduction on every damage type (Bone Plating). New tags: `TAG_INDIRECT`, `TAG_BURN`, etc. New properties: `PROP_ULTIMATE` (Axiom), `PROP_SUMMONER` (Ignite). Rune provenance is `item = -perk_id`. |
+| `lanerl_jax/modern/combat.py` | `CombatState`, `combat_tick`: the single reference tick for items and runes (order below). |
+| `lanerl_jax/modern/items/loadout.py` | `stat_shard_stats` takes shard names or perk ids and reads its values from client data. With `adaptive_to_ad=None` it leaves the adaptive force unresolved. `validate_rune_page(page, traits)` validates a page and applies the substitutions; `None` or an empty page selects the no-runes ruleset. |
 
 `ItemStats` gained the rune and shard buckets: `adaptive_force` (unresolved), `item_haste`, `trinket_haste`,
 `percent_armor`, `percent_magic_resist`, `percent_health`, `bonus_ms_amp`, `silent_health` and
@@ -29,12 +29,12 @@ The item side is in [ITEMS_IMPLEMENTATION.md](ITEMS_IMPLEMENTATION.md).
 
 The rune-granted items are now real catalog items, so the catalog has 220 items:
 - Total Biscuit 2010 and Elixirs of Skill, Avarice and Force (2150–2152) are implemented in
-  `modern_item_effects.consumables`.
+  `items.effects.consumables`.
 - Slightly Magical Footwear 2422 is stats-only.
 
 ## Coverage
 
-`modern_rune_effects.coverage_report()` raises unless each of the 69 perks is exactly one of the following:
+`runes.effects.coverage_report()` raises unless each of the 69 perks is exactly one of the following:
 - implemented by a tree module;
 - **DEFERRED**: Sixth Sense 8137 and Deep Ward 8141, both vision (MODERN-009);
 - **STATIC**: the 7 shards, applied host-side by `stat_shard_stats`.
@@ -73,14 +73,14 @@ Stormraider's Surge with no Phase Rush logic (RUNES D-10).
 8. **End of tick.** on_takedown; then heals and shields (HSP, incoming, Revitalize via `heal_mult`, GW);
    then rune `post_tick` (with `ev.shield_gained`); then item on_shop; then rune `outputs`.
 
-`modern_item_effects.runtime.item_tick` is now `combat_tick` with an empty page, no max-HP sync and no carry.
+`items.effects.runtime.item_tick` is now `combat_tick` with an empty page, no max-HP sync and no carry.
 
 ## What the world integrator must still do
 
 **Carry the tick state forward.** Keep `CombatState`, and carry `out.max_hp` and `out.hp`. Don't add
 `dynamic_stats.health` to max HP: `combat_tick` already does that sync. Do add `dynamic_stats` (AD/AP with
 adaptive force already resolved, AS, MS buckets, haste) to the champion's own stat reads, for example
-through `modern_stat_pipeline.compose`.
+through `core.stat_pipeline.compose`.
 
 **Supply `RuneEvents`** (`core.rune_events` builds quiet defaults):
 - **Combat:** attack windup start, cancel and reset; cast instance ids; CC with durations; the impaired masks;
@@ -144,12 +144,12 @@ through `modern_stat_pipeline.compose`.
 ## Tests
 
 Test files:
-- `test_modern_rune_framework.py`: catalog, legality and substitution F-35, level primitives F-4/F-11/F-33, shards
+- `test_rune_framework.py`: catalog, legality and substitution F-35, level primitives F-4/F-11/F-33, shards
   F-1–F-3, resist order, additive amps F-25, DMG.70 block, adaptive choice, and composition fixtures
   DAMAGE F12–F22.
-- `test_modern_combat.py`: max-HP sync including silent HP, combat clocks, all perks classified, and every rune at
+- `test_combat.py`: max-HP sync including silent HP, combat clocks, all perks classified, and every rune at
   once through the jitted `combat_tick`.
-- `test_modern_runes_{precision,domination,sorcery,resolve,inspiration}.py`: 41 + 23 + 22 + 23 + 21 tests
+- `test_runes_{precision,domination,sorcery,resolve,inspiration}.py`: 41 + 23 + 22 + 23 + 21 tests
   covering the RUNES §13 fixtures. The Resolve, Inspiration and combat files include end-to-end
   `combat_tick` runs (Bone Plating F-16, Grasp max HP, First Strike).
 

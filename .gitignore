@@ -73,6 +73,7 @@ node_modules/
 # the fix belongs to whoever owns it. Negating the paths that need it instead.
 data/
 !lanerl_jax/data/
+!lanerl_jax/modern/data/
 !src/ahriuwu/data/
 !scratchpad/.gitkeep
 recordings/

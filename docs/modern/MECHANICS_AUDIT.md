@@ -2,20 +2,20 @@
 
 **Status (2026-10-04).** Report only; no code was changed. This audit covers the "small mechanics" that shape
 lane play: orders, movement, attack timing, casting, minion and turret AI, collision, tick/latency, vision and
-lifecycle timers. Each one is checked against `lanerl_jax/sim/modern_step.py` and its modules at HEAD `d2d35be`.
+lifecycle timers. Each one is checked against `lanerl_jax/modern/world/tick.py` and its modules at HEAD `d2d35be`.
 It also lists what the 26.9 replay corpus can check.
 
-**Fixed in MODERN-023** (tests in `test_modern_world_rules.py`, `test_modern_step_helpers.py`,
-`test_modern_mechanics.py`):
-- **#1 Collision:** pathing radii and steering avoidance, in `modern_collision.py` (see [COLLISION.md](COLLISION.md)).
+**Fixed in MODERN-023** (tests in `test_world_rules.py`, `test_step_helpers.py`,
+`test_mechanics.py`):
+- **#1 Collision:** pathing radii and steering avoidance, in `collision.py` (see [COLLISION.md](COLLISION.md)).
 - **#2 Move orders:** they end on arrival or when the champion can make no progress (`_move`).
-- **#3 Latency:** `--action-delay-ticks` in `modern_vec_train`. The default is 0; picking a value is a user decision.
+- **#3 Latency:** `--action-delay-ticks` in `train`. The default is 0; picking a value is a user decision.
 - **#4 and #9:** out-of-range unit-targeted casts walk into range, and casts made during a lockout or within 0.5 s
   of a cooldown ending are buffered (`QueuedCast`, `_queue_casts`; ranges in each kit's `UNIT_TARGET_RANGE`).
-- **#5 Attack windup:** a one-tick grace before launch, in `modern_mechanics.attack_step`.
+- **#5 Attack windup:** a one-tick grace before launch, in `mechanics.attack_step`.
 - **#6 Minion Pushing:** wired up (`_minion_pushing`; recomputed every tick rather than held for 1 s).
 - **#7 Stop:** a `stop` button was added (action profile `modern-world-v2`).
-- **#8 Clicks:** clicks hit-test the client selection radii (`modern_actions.selection_radius`).
+- **#8 Clicks:** clicks hit-test the client selection radii (`actions.selection_radius`).
 - **#10 Targets lost to fog:** the champion walks to the target's last-seen position (`ChampionLayer.target_seen_at`).
   Unlike League, the attack does not resume if the target reappears.
 
@@ -52,35 +52,35 @@ rule; **ok** = matches.
 
 | # | Item | Sim location | Status | Impact | Conf. sim wrong | Replay-checkable |
 |---|---|---|---|---|---|---|
-| 1 | Collision uses gameplay radius (65/48), not pathing radius (35/35.7); no path-around-units | `modern_step.py:1057`, radii `:248` | **wrong** | High | H (client bins) | partly (§M3) |
-| 2 | A move order never completes: `moving` stays True at the goal. Idle auto-acquire is dead after any move, and a pushed champion walks back to a stale goal | `modern_step.py:775`, `:945`, `:988` | **wrong** | High | H (code) | yes (§M6) |
-| 3 | No action/observation latency: the agent reacts in 0–100 ms on exact state | `modern_vec_train.py:16`, `modern_actions.py:83` | **missing** | High (RL) | H | yes (§M5) |
-| 4 | Out-of-range unit-targeted casts fail silently instead of walking into range and casting | `modern_champions/jax.py:166-168`, `garen.py:159` | **wrong** | Med-High | H (wiki) | partly |
-| 5 | No windup grace tick (last tick before launch is uncancellable) and no 1-tick post-launch lockout | `modern_mechanics.py:61-62` | **missing** | Med | H (wiki) | yes (§M4) |
-| 6 | Minion Pushing buff (level/turret advantage) not applied | `modern_step.py:1126` (no `pushing_*` args); helper `modern_minions.py:383` | **missing** | Med | H | no |
-| 7 | Policy has no Stop/Hold button; with #2 fixed, it cannot stand near a wave without auto-attacking | `lanerl_rl/constants.py:596`, `modern_actions.py:135` | **missing** | Med | H | yes (S key not logged; idle-near-wave proxy) |
-| 8 | Click hit-test uses gameplay radius (65/48), not selection radius (120/115/140) | `modern_actions.py:103` | **wrong** | Med | H (client bins) | no |
-| 9 | Cast/ability input buffering: a cast during a cast lockout is dropped | `modern_step.py:858-861` | **missing** | Med-Low | M | no |
-| 10 | Target lost to fog: the attack order is dropped and the champion goes idle; League walks to the last-seen position | `modern_step.py:764,772` | **wrong** | Med-Low | M (wiki) | partly |
+| 1 | Collision uses gameplay radius (65/48), not pathing radius (35/35.7); no path-around-units | `world/tick.py:1057`, radii `:248` | **wrong** | High | H (client bins) | partly (§M3) |
+| 2 | A move order never completes: `moving` stays True at the goal. Idle auto-acquire is dead after any move, and a pushed champion walks back to a stale goal | `world/tick.py:775`, `:945`, `:988` | **wrong** | High | H (code) | yes (§M6) |
+| 3 | No action/observation latency: the agent reacts in 0–100 ms on exact state | `train.py:16`, `actions.py:83` | **missing** | High (RL) | H | yes (§M5) |
+| 4 | Out-of-range unit-targeted casts fail silently instead of walking into range and casting | `champions/jax.py:166-168`, `garen.py:159` | **wrong** | Med-High | H (wiki) | partly |
+| 5 | No windup grace tick (last tick before launch is uncancellable) and no 1-tick post-launch lockout | `mechanics.py:61-62` | **missing** | Med | H (wiki) | yes (§M4) |
+| 6 | Minion Pushing buff (level/turret advantage) not applied | `world/tick.py:1126` (no `pushing_*` args); helper `lane/minions.py:383` | **missing** | Med | H | no |
+| 7 | Policy has no Stop/Hold button; with #2 fixed, it cannot stand near a wave without auto-attacking | `lanerl_rl/constants.py:596`, `actions.py:135` | **missing** | Med | H | yes (S key not logged; idle-near-wave proxy) |
+| 8 | Click hit-test uses gameplay radius (65/48), not selection radius (120/115/140) | `actions.py:103` | **wrong** | Med | H (client bins) | no |
+| 9 | Cast/ability input buffering: a cast during a cast lockout is dropped | `world/tick.py:858-861` | **missing** | Med-Low | M | no |
+| 10 | Target lost to fog: the attack order is dropped and the champion goes idle; League walks to the last-seen position | `world/tick.py:764,772` | **wrong** | Med-Low | M (wiki) | partly |
 | 11 | Minion death grace (HP held at 1 for 0.035 s) not applied | none (MINIONS §4.7) | **missing** | Low-Med (last-hit windows) | H | no |
 | 12 | Minion→champion damage ratio: client 0.55 vs wiki "60%" | DMG.45 (README X-2) | conflict | Low-Med | L | yes, from HP drops (§M7) |
-| 13 | Call-for-Help memory 2.0 s and minion re-evaluation cadence 0.25 s / 4 s give-up / 0.5 s ignore are INFERRED/legacy | `modern_lane_ai.py:64-67` | approx | Med | M | no (no minion positions) |
-| 14 | Route steering: at most 16 re-plans per tick, so excess units freeze for a tick; a blocked step leaves the unit in place (no wall slide) | `modern_mechanics.py:229,277` | approx | Low-Med | M | partly (§M3) |
-| 15 | Turret shot is not lost when the turret dies mid-flight | `modern_mechanics.py:142` (only target death fizzles) | **wrong** | Low | H (wiki) | no |
+| 13 | Call-for-Help memory 2.0 s and minion re-evaluation cadence 0.25 s / 4 s give-up / 0.5 s ignore are INFERRED/legacy | `lane/ai.py:64-67` | approx | Med | M | no (no minion positions) |
+| 14 | Route steering: at most 16 re-plans per tick, so excess units freeze for a tick; a blocked step leaves the unit in place (no wall slide) | `mechanics.py:229,277` | approx | Low-Med | M | partly (§M3) |
+| 15 | Turret shot is not lost when the turret dies mid-flight | `mechanics.py:142` (only target death fizzles) | **wrong** | Low | H (wiki) | no |
 | 16 | Unit-targeted cast range: strict, with no targeting forgiveness (175) | `jax.py:168`, `garen.py:159` | approx | Low | M | no |
 | 17 | Cost/cooldown at the end of the cast time (wiki), not at cast start | kits `cast` (Garen R) | approx | Low | M | no |
 | 18 | Super-minion aura (+35 armor/MR) not wired | none | **missing** | Low (top 1v1 early) | H | no |
 | 19 | Minion attack-timing jitter | none | unknown | Low | L (no source) | no |
-| 20 | Fog recomputed every tick (1-tick lag) | `modern_step.py:1542` | unknown | Low | L (rate undocumented) | no |
-| 21 | Instant acceleration / deceleration | `modern_mechanics.py:271-273` | **ok** | — | — | measured (§M1) |
-| 22 | Instant turning; facing = last displacement | `modern_step.py:1058-1060` | **ok** | — | — | measured (§M2) |
-| 23 | Attack machine: windup → launch → period, cancel resets timer to 0, per-unit timer survives target switch, attack reset, edge-to-edge range, homing missiles | `modern_mechanics.py:44-87` | **ok** | — | — | measured (§M4) |
-| 24 | Chase-then-attack (move into range, start windup the same tick) | `modern_step.py:986-988`, ATTACK after MOVE | **ok** | — | — | measured (§M4) |
-| 25 | Server tick 30 Hz, tick-rounded timers | `modern_world.py:87` `dt=1/30` | **ok** | — | — | — |
-| 26 | Minion priority list post-26.10, CFH 500/1000, strict-priority switch, first wave 0:30 + 28 s ghost, spawn 0.8 s, MS 350 + steps | `modern_lane_ai.py:256-397`, `modern_minions.py:99-120` | **ok** (some INFERRED parts, row 13) | — | — | no |
-| 27 | Turret sticky lock, champion protection 1400 (attempts count), Warming Up, plates 26.1 | `modern_lane_ai.py:399-423` | **ok** | — | — | no |
-| 28 | HP regen 0.5 s pulses, ambient gold, death timers, respawn, Recall 0.5 + 8 s | `modern_step.py:1452-1455`, economy | **ok** (REPLAY_FIDELITY) | — | — | done |
-| 29 | Decision rate 10 Hz vs human click cadence | `modern_vec_train.py:471` | **ok** | — | — | measured (§M5) |
+| 20 | Fog recomputed every tick (1-tick lag) | `world/tick.py:1542` | unknown | Low | L (rate undocumented) | no |
+| 21 | Instant acceleration / deceleration | `mechanics.py:271-273` | **ok** | — | — | measured (§M1) |
+| 22 | Instant turning; facing = last displacement | `world/tick.py:1058-1060` | **ok** | — | — | measured (§M2) |
+| 23 | Attack machine: windup → launch → period, cancel resets timer to 0, per-unit timer survives target switch, attack reset, edge-to-edge range, homing missiles | `mechanics.py:44-87` | **ok** | — | — | measured (§M4) |
+| 24 | Chase-then-attack (move into range, start windup the same tick) | `world/tick.py:986-988`, ATTACK after MOVE | **ok** | — | — | measured (§M4) |
+| 25 | Server tick 30 Hz, tick-rounded timers | `world/config.py:87` `dt=1/30` | **ok** | — | — | — |
+| 26 | Minion priority list post-26.10, CFH 500/1000, strict-priority switch, first wave 0:30 + 28 s ghost, spawn 0.8 s, MS 350 + steps | `lane/ai.py:256-397`, `lane/minions.py:99-120` | **ok** (some INFERRED parts, row 13) | — | — | no |
+| 27 | Turret sticky lock, champion protection 1400 (attempts count), Warming Up, plates 26.1 | `lane/ai.py:399-423` | **ok** | — | — | no |
+| 28 | HP regen 0.5 s pulses, ambient gold, death timers, respawn, Recall 0.5 + 8 s | `world/tick.py:1452-1455`, economy | **ok** (REPLAY_FIDELITY) | — | — | done |
+| 29 | Decision rate 10 Hz vs human click cadence | `train.py:471` | **ok** | — | — | measured (§M5) |
 
 ## Per-item sections
 
@@ -89,22 +89,22 @@ rule; **ok** = matches.
 **A1. Acceleration (ok).**
 - *League:* no acceleration or deceleration; units move at full MS from the first tick. REPLAY H: in §M1, speed
   goes 0→max and max→0 within one 25 ms position step (n = 1,331 starts, 1,627 stops).
-- *Sim:* full `speed·dt` on every active tick (`modern_mechanics.py:271-273`). Matches.
+- *Sim:* full `speed·dt` on every active tick (`mechanics.py:271-273`). Matches.
 
 **A2. Turning and facing (ok).**
 - *League:* champions in practice have no visible turn time. REPLAY H: heading changes complete within one
   20 Hz frame (p50 0.05 s, n = 5,242 turns), and the median click→direction-change delay is 0 s.
-- *Sim:* facing is the last displacement (`modern_step.py:1058-1060`). Matches. Abilities that depend on facing
+- *Sim:* facing is the last displacement (`world/tick.py:1058-1060`). Matches. Abilities that depend on facing
   would need an explicit facing rule; Garen and Jax have none.
 
 **A3. A move order never completes (wrong, High).**
 - *League:* when a path ends, the champion is idle, and an idle champion auto-acquires enemies within its
   acquisition range (400 for Garen/Jax, edge distance) [WIKI Basic attack H]. Collision displacement does not
   re-issue the old path.
-- *Sim:* `moving` is set by a move order (`modern_step.py:775`). It is cleared only by stop, attack, attack-move,
+- *Sim:* `moving` is set by a move order (`world/tick.py:775`). It is cleared only by stop, attack, attack-move,
   respawn, recall or death (`:775`, `:1513`), never on arrival. So:
   - `idle` (`:945`) requires `~moving`, which means idle auto-acquisition never fires after the first move order.
-    The trainer's reset bank issues exactly such an order (`modern_vec_train.py:287`), so every episode starts
+    The trainer's reset bank issues exactly such an order (`train.py:287`), so every episode starts
     with auto-attack disabled.
   - A champion pushed off its goal walks back to it (`:988`) indefinitely. This "anchoring" makes it harder to
     get displaced and holds positions that League would not hold.
@@ -115,11 +115,11 @@ rule; **ok** = matches.
 
 **A4. Click-move, path smoothing, unreachable points (approx, Low).**
 - *Sim:* a direct line when the segment is clear, otherwise route-graph nodes with a cached anchor
-  (`modern_pathing.py:90-107`). Non-walkable goals project to a graph node (`:76-87`, "no client parity claim").
+  (`map/pathing.py:90-107`). Non-walkable goals project to a graph node (`:76-87`, "no client parity claim").
 - *League:* the client paths to the nearest reachable point. The re-plan frequency is undocumented [L].
 - Lane terrain is mostly open, so the effect is small. The two artefacts that matter are in row 14:
   - at most 16 full searches per tick, so the remaining units hold position for a tick
-    (`modern_mechanics.py:229,260-266`);
+    (`mechanics.py:229,260-266`);
   - fail-closed terrain clamp: a blocked step leaves the unit in place instead of sliding along the wall (`:277`).
 
 **A5. Order spam and repath (ok).** League has no cost to re-clicking, and neither does the sim. Replay click
@@ -128,34 +128,34 @@ cadence is about 3 distinct path-target changes per second (§M5).
 **A6. Stop / Hold (missing, Med).**
 - *League:* S clears the move/attack orders and the current auto-acquire target. H (hold) prevents chasing
   [WIKI H].
-- *Sim:* `ModernOrders.stop` exists (`modern_step.py:176`), but the policy's button set (`noop, move,
-  attack_move, q, w, e, r, recall` + modern extras; `lanerl_rl/constants.py:596`, `modern_actions.py:53`) has
+- *Sim:* `ModernOrders.stop` exists (`world/tick.py:176`), but the policy's button set (`noop, move,
+  attack_move, q, w, e, r, recall` + modern extras; `lanerl_rl/constants.py:596`, `actions.py:53`) has
   no stop. Hold does not exist.
 - This matters once A3 is fixed. Without a stop button, an idle agent near a wave auto-attacks minions it might
   want to leave alone (freezing).
 
 **A7. Attack-move (approx, Low).**
 - *Sim:* nearest valid hostile to the champion within the acquisition range, edge distance; ends within 10 u of
-  the point (`modern_lane_ai.py:1012-1056`).
+  the point (`lane/ai.py:1012-1056`).
 - *League:* matches the wiki for the default setting. The cursor radius for "attack move on cursor" and the
   10 u arrival are INFERRED L. "Target champions only" is not exposed.
 
 **A8. Chase to attack (ok).**
 - *League:* walks until in range, then starts the windup immediately [WIKI H]. REPLAY: 82% of attack starts come
   straight out of movement (§M4).
-- *Sim:* MOVE (`modern_step.py:986-988`) and then ATTACK in the same tick, on post-move positions. Matches.
+- *Sim:* MOVE (`world/tick.py:986-988`) and then ATTACK in the same tick, on post-move positions. Matches.
 
 **A9. Target enters fog (wrong, Med-Low).**
 - *League:* a champion chasing a target that loses sight walks to the target's last-seen position, and the order
   resumes if the target reappears [WIKI M].
-- *Sim:* the attack order is dropped on fog (`modern_step.py:764,772`). The champion becomes idle and stands
+- *Sim:* the attack order is dropped on fog (`world/tick.py:764,772`). The champion becomes idle and stands
   still (or, given A3, keeps its stale move goal).
 - *Impact:* brush juking in top lane, and chasing into the bushes.
 
 ### B. Attack timing
 
 **B1. Windup, launch, period, cancel, reset, timer persistence (ok).**
-- Implemented in `modern_mechanics.attack_step` (`:44-87`):
+- Implemented in `mechanics.attack_step` (`:44-87`):
   - any cancel before launch resets the timer to 0;
   - the cooldown is per unit, so a target switch does not reset it;
   - an attack reset cancels a windup in progress;
@@ -167,7 +167,7 @@ cadence is about 3 distinct path-target changes per second (§M5).
 **B2. Grace tick and post-launch lockout (missing, Med).**
 - *League:* in the last server tick before launch, player commands cannot cancel the windup, and after launch
   there is a one-tick input lockout [WIKI Basic attack, H per research; DAMAGE §8.2].
-- *Sim:* `cancel = winding & ~(same & ready)` (`modern_mechanics.py:62`). A move order on the launch tick cancels
+- *Sim:* `cancel = winding & ~(same & ready)` (`mechanics.py:62`). A move order on the launch tick cancels
   the attack.
 - *Impact:*
   - Orb-walking at 10 Hz decisions is less forgiving in the sim than in League. A move issued one tick early
@@ -182,7 +182,7 @@ cadence is about 3 distinct path-target changes per second (§M5).
 
 **B4. Missile lifetime (wrong, Low).**
 - *League:* a turret shot is lost if the turret dies mid-flight [WIKI H].
-- *Sim:* `advance_missiles` fizzles only on target death or slot reuse (`modern_mechanics.py:142`).
+- *Sim:* `advance_missiles` fizzles only on target death or slot reuse (`mechanics.py:142`).
 - *Fix:* also check `units.alive[src]` for turret sources.
 
 **B5. Attack speed changing mid-swing (approx, Low).** The semantics of `gcd_AttackSpeedCatchupPercent 0.25`
@@ -194,7 +194,7 @@ are unknown (DAMAGE U-15). The sim fixes the period at swing start.
 - *League:* a unit-targeted spell cast out of range makes the champion walk into range and then cast; the cast is
   queued like an attack order [WIKI Ability H].
 - *Sim:*
-  - Jax Q requires `dist <= 700 + r_t` at the order tick (`modern_champions/jax.py:166-168`);
+  - Jax Q requires `dist <= 700 + r_t` at the order tick (`champions/jax.py:166-168`);
   - Garen R requires `<= R_RANGE + r_t` (`garen.py:159`);
   - otherwise the order is dropped with no movement.
 - *Impact:* Garen R executes and Jax Q engages are the lane's kill tools. The policy must hand-time range, and a
@@ -204,7 +204,7 @@ are unknown (DAMAGE U-15). The sim fixes the period at swing start.
 
 **C2. Cast buffering (missing, Med-Low).**
 - *League:* inputs during a cast time or lockout are queued and execute when it ends [M].
-- *Sim:* `can_cast` masks the order to -1 during `cast_lock_until` and item casts (`modern_step.py:858-861`). The
+- *Sim:* `can_cast` masks the order to -1 during `cast_lock_until` and item casts (`world/tick.py:858-861`). The
   order is lost.
 - *Fix:* the same `pending_cast` latch with a short expiry (~0.3–0.5 s, INFERRED).
 
@@ -213,7 +213,7 @@ are unknown (DAMAGE U-15). The sim fixes the period at swing start.
   (Flash is allowed), and only death interrupts. Cost and cooldown usually apply at the end of the cast [WIKI H].
 - *Sim:*
   - Garen R uses `R_CAST_TIME 0.435` with a lockout (`garen.py:78,197`).
-  - Movement/attack lockout goes through `cast_lock_until` (`modern_step.py:1500`).
+  - Movement/attack lockout goes through `cast_lock_until` (`world/tick.py:1500`).
   - The cooldown starts at cast (CHAMPIONS.md).
 - The cast-end versus cast-start difference only matters for interrupt-by-death edge cases.
 
@@ -226,9 +226,9 @@ are unknown (DAMAGE U-15). The sim fixes the period at swing start.
 
 **D1. Priority, Call for Help, hysteresis (ok, with INFERRED timers).**
 - Matches 26.10:
-  - champion hits on minions do not aggro (`modern_lane_ai.py:295-297`);
-  - CFH 500/1000 (`modern_minions.py:119-120`);
-  - strict-priority switching, not mid-windup (`modern_lane_ai.py:346-354`).
+  - champion hits on minions do not aggro (`lane/ai.py:295-297`);
+  - CFH 500/1000 (`lane/minions.py:119-120`);
+  - strict-priority switching, not mid-windup (`lane/ai.py:346-354`).
 - Still unsourced (row 13):
   - aggro memory of 2.0 s (`:67`);
   - re-evaluation every 0.25 s, 4 s give-up and 0.5 s ignore (`:64-66`, legacy 4.20 values).
@@ -237,14 +237,14 @@ are unknown (DAMAGE U-15). The sim fixes the period at swing start.
 
 **D2. Spawn, schedule, speed, first wave (ok).**
 - Implemented: first wave 0:30, 0.8 s spacing (client; wiki 0.79), base MS 350 plus the 5-minute steps and the
-  side-lane buff, first-wave 28 s ghosting and spread (`modern_minions.py:99-113`, `modern_lane_ai.py:369-391`,
+  side-lane buff, first-wave 28 s ghosting and spread (`lane/minions.py:99-113`, `lane/ai.py:369-391`,
   `:913-918`).
 - The wave meeting point follows from these. It is not checkable from replays, which carry no minion positions.
 
 **D3. Minion Pushing (missing, Med).**
-- `attack_packets` accepts `pushing_bonus` and `pushing_divisor` (`modern_lane_ai.py:452,490-493`), and
-  `modern_minions.minion_pushing_modifiers` exists (`:383`). But `_attack` calls `LA.attack_packets(units, …,
-  now=now, ai=lane_ai)` without them (`modern_step.py:1126`).
+- `attack_packets` accepts `pushing_bonus` and `pushing_divisor` (`lane/ai.py:452,490-493`), and
+  `lane.minions.minion_pushing_modifiers` exists (`:383`). But `_attack` calls `LA.attack_packets(units, …,
+  now=now, ai=lane_ai)` without them (`world/tick.py:1126`).
 - *Effect in League:* a level lead (≥ 3:30, client `mvm_StartTime 210`) makes your wave push, up to +15%
   minion-vs-minion damage in 1v1 with no turrets down [CLIENT H, MINIONS §4.4].
 - *Impact:* pushing and freezing incentives after a level lead.
@@ -259,7 +259,7 @@ implemented. The effect is a small widening of the last-hit window.
 - 0.60 is the structure ratio in the client. Keep 0.55 for champions unless measured (§M7).
 
 **D6. Attack jitter, siege/caster missiles (ok/unknown).**
-- Missile speeds are caster 650 and siege 1200 (`modern_minions.py:110`).
+- Missile speeds are caster 650 and siege 1200 (`lane/minions.py:110`).
 - No source describes minion attack-timing randomization [L]. Sim waves are fully deterministic.
 
 **D7. Super aura (missing, Low).** +35 armor/MR to nearby minions (MINIONS §4.5) has no code. It only matters
@@ -267,12 +267,12 @@ after an inhibitor falls.
 
 ### E. Turrets
 
-All of these are implemented per TOWERS §3–§5 (`modern_lane_ai.py:399-423`, `modern_towers.py`), and they agree
+All of these are implemented per TOWERS §3–§5 (`lane/ai.py:399-423`, `lane/towers.py`), and they agree
 with the research: sticky lock, champion protection within 1400 that counts zero/blocked attempts, Warming Up
-+50%/stack over 5 s, edge range `750 + 88.4 + r` (`modern_towers.py:156-158`) and the 26.1 plates.
++50%/stack over 5 s, edge range `750 + 88.4 + r` (`lane/towers.py:156-158`) and the 26.1 plates.
 
 Open items:
-- The CFH/protection trigger reads last tick's `damage_matrix` (1-tick lag, `modern_step.py:903`). Ranged
+- The CFH/protection trigger reads last tick's `damage_matrix` (1-tick lag, `world/tick.py:903`). Ranged
   attempts therefore count at impact, not at launch [L].
 - B4 (shot lost on turret death).
 - TOWERS U1/U3/U5.
@@ -280,13 +280,13 @@ Open items:
 ### F. Server tick, latency, decision rate
 
 **F1. Tick (ok).** Live servers run 30 Hz, 0.033 s [WIKI Tick and updates H]. Sim `dt = 1/30`
-(`modern_world.py:87`).
+(`world/config.py:87`).
 
 **F2. Latency (missing, High for RL).**
 - *Real player:* human reaction is ~200–250 ms, plus ping (NA ~30–60 ms) and server tick quantization.
 - *Sim agent:*
   - It observes the exact state at the decision tick, and its order applies on that same tick
-    (`modern_vec_train.py:16`; no delay anywhere in `obs/modern_builder.py` or `train/modern_actions.py`).
+    (`train.py:16`; no delay anywhere in `obs/modern_builder.py` or `train/modern_actions.py`).
   - Its effective reaction time is 0–100 ms, it sees exact HP, and it has no human-style misclick or input noise.
 - *Consequences:*
   - Last hits, Jax E dodges and turret-aggro timing become superhuman.
@@ -296,7 +296,7 @@ Open items:
 **F3. Decision rate (ok).**
 - REPLAY: about 3 distinct path-target changes per second, median inter-click gap ~260 ms, under 5% of gaps
   < 100 ms (§M5).
-- 10 Hz (`modern_vec_train.py:471`, `--step-ticks 3`) is therefore enough for movement intent.
+- 10 Hz (`train.py:471`, `--step-ticks 3`) is therefore enough for movement intent.
 - What 10 Hz quantizes is attack timing. B2 makes that harsher than League.
 
 ### G. Collision and creep block (brief; owned by the collision redesign)
@@ -307,7 +307,7 @@ Open items:
   - non-champion units treat each other ~20% larger (wiki, patch 5.23).
 
   Gameplay radius (65/48/65) is for attack range only. Units steer and path around blockers.
-- *Sim:* `resolve_collisions(…, s.radius, s.radius, …)` (`modern_step.py:1057`) uses **gameplay** radius
+- *Sim:* `resolve_collisions(…, s.radius, s.radius, …)` (`world/tick.py:1057`) uses **gameplay** radius
   (`:248`: 65 champion, 48 minion). Contacts are a legacy teleport-to-touching push with no avoidance. The
   champion–melee contact distance is therefore 113 u in the sim vs ~71 u in League, about 1.6× too wide.
   Lanes are more crowded, there is more creep block, and waves spread out more.
@@ -321,18 +321,18 @@ Open items:
 
 ### H. Vision
 
-Fog is recomputed every tick from final positions and read next tick (`modern_step.py:1542`). Riot does not
+Fog is recomputed every tick from final positions and read next tick (`world/tick.py:1542`). Riot does not
 document the fog update interval [L], so treat this as acceptable. The attack reveal (300 u, 2 s) is
 implemented (VISION.md).
 
 ### I. Lifecycle timers (ok, replay-checked)
 
 These are all verified in REPLAY_FIDELITY.md and the economy oracle:
-- HP regen in 0.5 s pulses (`modern_step.py:1452-1455`);
+- HP regen in 0.5 s pulses (`world/tick.py:1452-1455`);
 - ambient gold 2.04 g/s;
 - death timers;
 - respawn;
-- Recall 0.5 s cast + 8 s channel (`modern_economy.py:45-46`);
+- Recall 0.5 s cast + 8 s channel (`economy.py:45-46`);
 - Homeguard;
 - level-up HP;
 - shop usable only in the shop area or while dead.
@@ -344,7 +344,7 @@ These are all verified in REPLAY_FIDELITY.md and the economy oracle:
   - melee/caster minions 115;
   - siege 140, super 145;
   - turret 130 [CLIENT `selectionRadius`].
-- *Sim:* `pick_r = state.radius` (`modern_actions.py:103`), i.e. gameplay radius 65/48.
+- *Sim:* `pick_r = state.radius` (`actions.py:103`), i.e. gameplay radius 65/48.
 - *Effects:*
   - The policy must click 2–2.5× more precisely to target. On the 96×54 grid (~30×36 u cells) a minion is only
     ~3×3 cells.

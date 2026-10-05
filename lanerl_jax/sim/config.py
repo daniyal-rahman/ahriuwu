@@ -196,7 +196,7 @@ class SimConfig:
     @classmethod
     def modern(cls, names=("Garen", "Jax"), patch=None):
         """26.19 champions in the existing top-lane world; pair with modern.init_lane."""
-        from .modern import make_params
+        from .modern_bridge import make_params
         return cls.scripted(patch).replace(params=make_params(names,patch),name="modern_26_19_"+"_".join(names))
 
     @classmethod

@@ -1,7 +1,7 @@
 # VISION.md — 26.19 fog of war (modern world)
 
-**Status (2026-10-02).** Fog of war is implemented in `lanerl_jax/sim/modern_vision.py` and wired through
-`modern_step`. Wards, trinkets, stealth, true sight, Faelights, nearsight and dynamic terrain are deferred
+**Status (2026-10-02).** Fog of war is implemented in `lanerl_jax/modern/vision.py` and wired through
+`world.tick`. Wards, trinkets, stealth, true sight, Faelights, nearsight and dynamic terrain are deferred
 (MODERN-009).
 
 ## Rules
