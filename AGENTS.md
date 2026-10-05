@@ -1,59 +1,16 @@
-# Working here (read fully; it is short)
+# Working here
 
-**Start:** `STATUS.md` (what runs, what is next), then `docs/CODEMAP.md`
-(what is live). Findings go in `docs/JAX_FIDELITY_LEDGER.md` rows; runs go in
-`docs/EXPERIMENTS.md` rows. Do not write new status/report files.
-
-**Goal now:** PPO from random init reaching >30 CS in a 10-minute mirror trial
-on the C# server (frozen evaluation, several seeds). JAX is paused until then.
-
-**Layout:** C# server = `/srv/nfs/projects/lanerl-vendor/LoLServer` (patches:
-`lanerl/patches/`, canonical build `bin/DeadProbe`). RL = `lanerl_jax/train/`
-(`server_train.py` collector, `learner.py`, `policy.py`, `ppo.py`). JAX sim =
-`lanerl_jax/sim/`. Launchers = `experiments/`. One-offs = `lanerl_jax/probes/`.
-History = `legacy/`, `docs/archive/`.
+**Start:** `STATUS.md`, then `docs/CODEMAP.md` and `docs/modern/WORLD_IMPLEMENTATION.md`. Findings go in
+`docs/JAX_FIDELITY_LEDGER.md` rows; do not write new status or report files.
 
 **Rules**
-1. A run starts only via `ops/launch.py <ID>` from `experiments/<ID>.json`;
-   new config = new ID + row. Never build a launch in the shell: no `ls -d`
-   path capture (zsh drops the trailing slash), no env-var plumbing, no
-   `--resume` for a new experiment (use `--init-from`: fresh optimizer,
-   schedule and budget). `--dry-run` first; the canary must pass, and the launcher's 3-minute
-   post-start watch must report the job healthy before you move on.
-2. Starting or stopping a run, or ending a session, rewrites `STATUS.md` in
-   the same commit. No STATUS edit = not finished.
-3. Classify what you add: live path, tool, probe (with README row), or legacy.
-   Never leave scripts in `runs/` or `/tmp` that a ledger row depends on.
-4. Quote only frozen-policy evaluations as results; training CS is `train`.
-5. Reversible actions (git mv, tags, new files) proceed; irreversible ones
-   (delete branches/worktrees/builds/data, vendor edits) wait for Dani.
-6. Desktop: servers and GPU live there; keep port bases < 32768; one core
-   per server; cap login-node work with `ops/login_capped.sh`. Never yield to
-   `llm-serve`. Kill jobs by ID; never `pkill -f`.
-7. Never commit inside the vendor tree; server changes are patches in
-   `lanerl/patches/` with a README row and a rebuilt `DeadProbe`.
-8. Parallel agents: one git worktree and one experiment ID each; touch only
-   your ID's runs; commit small, rebase on `lane-rl/jax` before handoff.
-
-9. Learning experiments: research relevant literature, state a concrete hypothesis,
-   budget and success/stop criteria, implement, compare frozen results against
-   the existing baseline, then iterate. Prefer established defaults; distinguish
-   published evidence from our engineering estimates.
-
-10. Unattended Slurm runs: after the required startup watch, arm the event bridge
-    before ending the turn: `python3 ops/slurm_event_bridge.py arm --job JOB_ID
-    --experiment EXACT_SLURM_JOB_NAME --max-hours HOURS` (one shell line).
-    Set a bounded lifetime covering the remaining job time plus queue/delivery
-    margin; record the unit and expiry in STATUS. It discovers this T3 thread,
-    checks job ownership/name, registers a capped one-shot watcher, and sends
-    one idempotent completion/failure message only when this conversation is idle.
-    Use this for current and future runs; do not substitute an ETA or active
-    model polling for a wakeup. Verify the service is active and its result JSON
-    is updating before claiming it is armed. Classify Slurm State AND ExitCode
-    (TIMEOUT can have exit0). On wake, inspect logs/checkpoints/frozen evaluations,
-    update the existing ledgers/STATUS, and verify watcher/registry cleanup.
-    Stop with `systemctl --user stop lanerl-event-JOB_ID.service`; artifacts are
-    `/mnt/nfs/shared/slurm-events/JOB_ID/`. No credentials in logs or Git.
-    This tool currently handles single job IDs, not arrays; OPS047 is the array
-    test. If bridge delivery is unavailable, say so explicitly; do not claim a
-    scheduled check. A notification does not authorize a new experiment.
+1. Keep the code tight: short comments that say why or cite a source, no narrative history, no dead
+   code. Values come from the specs in `docs/modern/` (cite the section once).
+2. Refactors must preserve behaviour and show it: `python -m ops.modern.jaxpr_fingerprint --against REF`
+   (identical traced tick) or `python -m ops.modern.golden --compare REF` (identical trajectories).
+3. Starting or stopping a run, or ending a session, updates `STATUS.md` in the same commit.
+4. Reversible actions (git mv, tags, new files) proceed; irreversible ones (deleting branches, worktrees,
+   data) wait for Dani.
+5. All GPU and heavy CPU work goes through Slurm on the desktop (`gpup`, `cpu`); timing runs take the
+   whole node (`--exclusive`). Kill jobs by ID only.
+6. Parallel agents: one git worktree each; touch only your area; commit small.

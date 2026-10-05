@@ -1,33 +1,20 @@
-"""Observation for the 26.19 modern world (``world.tick.ModernState``).
+"""Observation of the 26.19 modern world for one champion (profile ``modern-world-v1``).
 
-Profile ``modern-world-v1`` (MODERN-005): the same ``Observation`` container,
-entity layout, slot blocks and global vector as ``obs.builder`` so the policy
-architecture is unchanged, with a modern ``self`` block of
-``MODERN_WORLD_SELF_DIM`` columns. Checkpoints trained on the legacy 16- or
-28-column ``self`` profiles are not compatible (different column meanings);
-``PROFILE`` names the contract so callers can reject a mismatched resume.
+    entities (32, 20)  valid, ds, dn, hp_frac, 6 type (champion, minion, turret, inhibitor, nexus, other),
+                       3 team (ally, enemy, neutral), 3 minion subtype (melee, caster, siege; super = siege),
+                       monster, epic monster, ward, control ward
+    self     (32,)     lane_s, lane_n, hp_frac, level/20, gold, cs, 4 cooldown fractions, ad, ap, armor, mr,
+                       is_dead, recalling, is_<kit> for me then the enemy (registry order), mana_frac,
+                       shield/max_hp, summoner D/F cooldowns, progress to the next level, quest progress,
+                       quest complete, in_combat, move_speed/500, attack_range/600, unspent skill points/4,
+                       trinket charges/2
+    inventory (7,)     catalog row per slot (-1 empty), with ``inventory_stack``
+    affordable (I,)    store rows the shop would sell this champion now
+    global   (6,)      clock, enemy_visible, 4x time since the enemy was seen casting Q/W/E/R
 
-    entities (32, 20)  valid, ds, dn, hp_frac, 6 type (champion, minion, turret,
-                       inhibitor, nexus, other), 3 team (ally, enemy, neutral),
-                       3 minion subtype (melee, caster, siege; super minions use
-                       siege), then monster, epic monster, ward, control ward
-    self     (32,)     lane_s, lane_n, hp_frac, level/20, gold, cs, 4 cooldown
-                       fractions, ad, ap, armor, mr, is_dead, recalling,
-                       is_garen, is_jax, enemy_is_garen, enemy_is_jax,
-                       mana_frac, shield/max_hp, summoner D/F cooldown fractions,
-                       fraction of the way to the next level, quest progress, quest complete,
-                       in_combat, move_speed/500, attack_range/600,
-                       unspent skill points/4, trinket charges/2
-    inventory (7,)     catalog row per inventory slot (-1 empty), ``inventory_stack`` (7,)
-    affordable (I,)    in-store catalog rows the shop would sell this champion now
-    global   (6,)      clock, enemy_visible, 4x time-since-observed-cast
-
-The rules of ``obs.builder`` carry over: only visible units are slotted
-(``state.visible`` from ``vision``, on screen; a fogged unit is
-absent, never kept with a stale position),
-there is no slot-index feature, health is quantised to the bar, max health is
-not fed, and the enemy's cast memory is witnessed events normalised by rank-1
-cooldowns so neither the enemy's level nor ranks leak.
+Only visible, on-screen units are slotted (fogged units are absent, never stale), nearest first per block
+(enemy champion 1, ally minions 12, enemy minions 12, structures 2, anything else 5). Health is quantised to
+the health bar; the enemy's cast memory is normalised by rank-1 cooldowns so its ranks do not leak.
 """
 from __future__ import annotations
 
@@ -37,31 +24,29 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from lanerl_rl.projection import target_on_screen
-
-from ..obs.builder import (GLOBAL_DIM, HP_BAR_STEPS, N_SLOTS, NORM_AD, NORM_CS, NORM_DIST, NORM_GOLD, NORM_XY,
-                           Observation, _topk_slots)
-from ..obs.frame import LaneFrame, delta_to_lane, make_lane_frame, to_lane
 from . import champions as K
 from . import economy as E
 from .champions.core import cooldown_row
 from .core import damage as D
 from .core import types as W
+from .frame import LaneFrame, delta_to_lane, make_lane_frame, to_lane
 from .items import inventory as I
 from .items.catalog import catalog
 from .role_quest import THRESHOLD
+from .screen import target_on_screen
 from .world.views import champion_stats
-
-__all__ = ["PROFILE", "MODERN_WORLD_SELF_DIM", "MODERN_ENTITY_DIM", "ModernObservation", "modern_frames",
-           "build_modern_observation"]
 
 PROFILE = "modern-world-v1"
 MODERN_WORLD_SELF_DIM = 32
 MODERN_ENTITY_DIM = 20
+N_SLOTS, GLOBAL_DIM = 32, 6
+NORM_DIST = NORM_XY = NORM_GOLD = 3000.0
+NORM_CS = NORM_AD = 200.0
+HP_BAR_STEPS = 60.0
 
 
 class ModernObservation(NamedTuple):
-    """``obs.builder.Observation`` fields plus the shop/inventory view (profile modern-world-v1)."""
+    """The policy inputs (entities, pad mask, self, global), ``slot_unit`` and the shop/inventory view."""
     entities: Any
     entity_pad_mask: Any
     self_vec: Any
@@ -73,6 +58,12 @@ class ModernObservation(NamedTuple):
 _TYPES = (W.KIND_CHAMPION, W.KIND_MINION, W.KIND_TURRET, W.KIND_INHIBITOR, W.KIND_NEXUS)
 
 
+def _topk_slots(score, eligible, k: int):
+    """Indices of the ``k`` smallest ``score`` among ``eligible`` (ties to the lowest index), -1 padded."""
+    neg, idx = jax.lax.top_k(-jnp.where(eligible, score, jnp.asarray(jnp.inf, score.dtype)), k)
+    return jnp.where(jnp.isfinite(-neg), idx, -1).astype(jnp.int32)
+
+
 def modern_frames(cfg) -> tuple[LaneFrame, LaneFrame]:
     """Per-team lane frames from the modern world's top outer turrets and Nexuses."""
     kind, team, sub, lane = (np.asarray(a) for a in (cfg.unit_kind, cfg.unit_team, cfg.unit_sub, cfg.unit_lane))
@@ -82,7 +73,7 @@ def modern_frames(cfg) -> tuple[LaneFrame, LaneFrame]:
     return (make_lane_frame(outer[0], outer[1], nexus[0]), make_lane_frame(outer[1], outer[0], nexus[1]))
 
 
-def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0) -> Observation:
+def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0) -> ModernObservation:
     """One champion's observation of the modern world. ``me`` is its unit index (0 or 1)."""
     n = state.kind.shape[0]
     other = 1 - me

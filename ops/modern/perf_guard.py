@@ -100,7 +100,7 @@ def main() -> int:
     ap.add_argument("--update-baseline", action="store_true", help="record this run as the baseline for its key")
     add_world_args(ap)
     args = ap.parse_args()
-    from lanerl_jax.jax_cache import enable_compile_cache
+    from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
     if args.envs is None:
         args.envs = DEFAULT_ENVS.get(jax.default_backend(), 16)

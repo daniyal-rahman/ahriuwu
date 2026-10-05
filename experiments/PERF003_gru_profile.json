@@ -1,6 +1,0 @@
-{
-  "id": "PERF003_gru_profile",
-  "engine": "gru-profile",
-  "question": "Separate actual vectorised GRU rollout and PPO costs and compiled memory at 16/128 environments; no saved training outputs.",
-  "protocol": "Cold 2-env/4-step split-versus-fused canary, then 16 and 128 envs, T=128, 4 epochs x 4 minibatches, four collector-prepared near-wave states, jitter 20s, seed 0. Three synchronized warmed repeats reuse identical inputs; optimizer results discarded. Highest matmul precision, FP32, norm/residual GRU, no click mask."
-}

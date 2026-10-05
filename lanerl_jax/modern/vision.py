@@ -1,51 +1,10 @@
-"""Fog of war for the 26.19 modern world (MODERN-009 vision slice).
+"""Fog of war (docs/modern/VISION.md): which units each team sees, recomputed every tick.
 
-``visibility`` answers, every tick, which units each team can see. Rules and
-evidence (docs/modern/VISION.md):
-
-* **Sight radius** belongs to the viewer and is measured centre to centre.
-  The values are 1350 for champions, super minions, turrets and the Nexus,
-  and 1200 for melee, caster and siege minions. Sources: the wiki Sight page
-  (2026-10) and the client ``perceptionBubbleRadius`` (1200 in the
-  ``SRU_*Minion{Melee,Ranged,Siege}`` records, 1350 in ``Nexus``). The
-  champion, turret and super-minion records carry no override, so their
-  values come from the wiki. Inhibitors grant no sight (no record value, not
-  listed; INFERRED-L, irrelevant to the top lane). Dead units grant none.
-* **Walls** block sight, except transparent walls (navgrid 0x40) and
-  always-visible cells (0x100) -- the default ``fog="rays"``. The optional
-  "fast" fog ignores walls (VIS-FAST-M).
-* **Brush** (navgrid bit 1) hides a unit from viewers outside it. From inside
-  a brush a unit sees out and sees its own brush patch. With ``fog="rays"`` a
-  ray passing through a brush is blocked too; the fast fog does not model that.
-* **Structures** are not affected by fog: turrets, inhibitors and Nexuses
-  are always visible to both teams.
-* **Own team**: a team always sees its own units.
-* **Attack reveal**: a champion that is hidden from the enemy team and starts
-  a basic attack or a unit-targeted ability reveals a 300-unit circle around
-  where it stood. The circle lasts 2 s, ignores walls and brush, and is shown
-  to the enemy team (wiki Sight/Brush). The client map constants
-  ``ca_RevealAttackerRange`` 400 / ``ca_RevealAttackerTimeOut`` 4.5 s exist
-  but their trigger is undocumented; they are kept as named alternatives and
-  not used (U-VIS-1).
-
-* **Wards** (``KIND_WARD``, ``sub`` = ``wards.WardType``) are ordinary
-  viewers with their own radius (900 Totem/Control, 500 Farsight; WARDS.md);
-  a ward in a brush sees that brush like any unit. Disabled wards get radius 0
-  through the ``radius`` override.
-* **Stealth / true sight** (optional, unit-agnostic): a ``stealthed`` unit is
-  hidden from the enemy team unless it lies within ``true_sight`` radius of a
-  live enemy unit (centre to centre, ignoring walls and brush, WARDS U-W-3);
-  turrets always carry 1100 true sight (wiki Turret). Attack-reveal circles
-  are standard sight and do not show stealthed units.
-* **Exposed** units (Sixth Sense / Oracle-hit reveals, a Control Ward that is
-  revealing a stealthed ward) are visible to the enemy team regardless of fog.
-* **Unobstructed** viewers (Farsight Ward) ignore walls and brush.
-
-Both modes reuse ``obs.vision.clear_ray`` over the modern navgrid (same flag
-bits as the legacy grid): the fast mode is its brush-id lookup (the legacy
-VIS-FAST lane approximation), the ray mode its supercover caster (fused CUDA
-kernel on GPU, reference loop on CPU). Faelights, nearsight and dynamic
-terrain are deferred.
+Sight radius belongs to the viewer, centre to centre (champions, super minions, turrets, Nexus 1350; other
+minions 1200; wards 900, Farsight 500; inhibitors 0). Walls block except transparent/always-visible cells
+(``fog="rays"``; ``"fast"`` ignores walls); brush hides units from viewers outside it. Structures and the
+own team are always visible. A hidden champion that starts an attack or unit-targeted cast reveals a 300-unit
+circle for 2 s. Stealthed units need enemy true sight (turrets 1100); exposed units are seen through fog.
 """
 from __future__ import annotations
 
@@ -53,13 +12,8 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ..obs.vision import VisionGrid, clear_ray, with_bush_ids
+from .rays import VisionGrid, clear_ray, with_bush_ids
 from .core import types as W
-
-__all__ = ["CHAMPION_SIGHT", "MINION_SIGHT", "SUPER_MINION_SIGHT", "TURRET_SIGHT", "NEXUS_SIGHT",
-           "INHIBITOR_SIGHT", "REVEAL_RADIUS", "REVEAL_DURATION", "CLIENT_REVEAL_ATTACKER_RANGE",
-           "CLIENT_REVEAL_ATTACKER_TIMEOUT", "Reveal", "init_reveal", "vision_grid", "sight_radius",
-           "visibility", "reveal_step", "WARD_SIGHT", "FARSIGHT_SIGHT", "TURRET_TRUE_SIGHT"]
 
 CHAMPION_SIGHT = 1350.0
 MINION_SIGHT = 1200.0
@@ -69,8 +23,6 @@ NEXUS_SIGHT = 1350.0
 INHIBITOR_SIGHT = 0.0
 REVEAL_RADIUS = 300.0
 REVEAL_DURATION = 2.0
-CLIENT_REVEAL_ATTACKER_RANGE = 400.0      # map11 ca_RevealAttackerRange (unused, U-VIS-1)
-CLIENT_REVEAL_ATTACKER_TIMEOUT = 4.5      # map11 ca_RevealAttackerTimeOut (unused, U-VIS-1)
 SUPER = 3                                  # lane.minions.MinionType.SUPER
 WARD_SIGHT = 900.0                         # client YellowTrinket/JammerDevice perceptionBubbleRadius
 FARSIGHT_SIGHT = 500.0                     # client BlueTrinket perceptionBubbleRadius
@@ -91,13 +43,7 @@ def init_reveal(c: int) -> Reveal:
 
 
 def vision_grid(grid, *, rays: bool = False) -> Any:
-    """``obs.vision.VisionGrid`` over a ``data.modern_map.ModernMapGrid`` (arrays [z, x]).
-
-    ``rays=False`` ("fast" fog): brush patches are labelled once and
-    visibility is a position lookup (target outside any brush, or in the
-    viewer's brush); walls do not block sight. ``rays=True``: the full
-    supercover ray rule (walls and brush along the ray).
-    """
+    """``VisionGrid`` of a navgrid; ``rays=False`` labels brush patches for the fast (lookup) fog."""
     import numpy as np
     g = VisionGrid(jnp.asarray(np.asarray(grid.flags, np.int32)), float(grid.cell_size),
                    float(grid.min_bounds[0]), float(grid.min_bounds[2]))
@@ -118,21 +64,12 @@ def sight_radius(kind, sub, alive) -> Any:
 
 def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fogged: int,
                radius=None, stealthed=None, true_sight=None, unobstructed=None, exposed=None, sources=None):
-    """Returns ``(visible (2, N), sight (N, N))``.
+    """``(visible (2, N), sight (N, N))``: team t sees unit j; unit i itself sees j (rune "own sight").
 
-    ``visible[t, j]``: team t sees unit j. ``sight[i, j]``: unit i itself has
-    j within its sight radius on a clear ray (the rune "own sight"). Units
-    ``n_fogged`` and above are structures (never fogged), so rays are only
-    cast to the first ``n_fogged`` slots (champions, minions, monsters, wards).
-
-    Optional (N,) inputs (None = rule off): ``radius`` overrides the sight
-    radius (wards: disabled = 0, Farsight 800/500); ``stealthed`` hides a unit
-    from enemies outside their ``true_sight`` radius (turrets add 1100);
-    ``unobstructed`` viewers ignore walls/brush; ``exposed`` units are shown to
-    the enemy team through fog. ``sources`` = ``(x, y, radius, team)`` (K,) extra
-    sight points that are not units (Scuttle Speed Shrine); they see like a unit
-    standing there (walls/brush rays, no true sight).
-    """
+    Units from ``n_fogged`` on are structures (never fogged). Optional (N,) inputs, None = off: ``radius``
+    overrides the sight radius, ``stealthed`` units need enemy ``true_sight``, ``unobstructed`` viewers ignore
+    walls and brush, ``exposed`` units are seen through fog. ``sources = (x, y, radius, team)`` are extra
+    sight points that are not units (Scuttle shrines)."""
     n = x.shape[0]
     live = alive & (kind != W.KIND_NONE)
     r = sight_radius(kind, sub, live) if radius is None else jnp.where(live, radius, 0.0).astype(jnp.float32)

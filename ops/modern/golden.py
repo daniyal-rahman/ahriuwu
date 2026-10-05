@@ -169,7 +169,7 @@ def main() -> None:
     if args.diff:
         sys.exit(1 if compare(json.load(open(args.diff[0])), json.load(open(args.diff[1]))) else 0)
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
-    from lanerl_jax.jax_cache import enable_compile_cache
+    from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
     prints = [cp for w in args.worlds for cp in fingerprint(w, args.ticks, args.every)]
     if args.out:

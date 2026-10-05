@@ -97,7 +97,7 @@ def main() -> None:
     ap.add_argument("--warm-ticks", type=int, default=1200, help="ticks before timing (waves on the map)")
     add_world_args(ap)
     args = ap.parse_args()
-    from lanerl_jax.jax_cache import enable_compile_cache
+    from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
     cfg, run = build_world(args)
     print(json.dumps({"backend": jax.default_backend(), "devices": [str(d) for d in jax.devices()],

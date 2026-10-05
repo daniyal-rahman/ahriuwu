@@ -1,100 +1,16 @@
-# Code map: what is live, what is tooling, what is history
+# Code map
 
-Updated 2026-09-25. LIVE = on the training or evaluation path today. TOOL =
-reusable, run by hand. DIAG = one-off diagnostic, versioned for reproduction.
-LEGACY = kept for history only; nothing imports it.
+Everything is the `lanerl_jax/modern/` package, layered so each layer imports only the ones above it:
 
-| Path | Class | Role |
-|---|---|---|
-| `slurm/wave_replay.sbatch` | TOOL | CPU-only E41 scenario recording/rendering through launcher; probe indexed in probes/README |
-| `lanerl_jax/train/wave_scenario.py`, `wave_scenario_train.py`, `slurm/wave_scenario.sbatch` | LIVE / TOOL | E39 level3 tower-wave curriculum, finite horizon, HP-role paired resets and frozen held-out evaluations |
-| `lanerl_jax/train/replay_audit.py` | TOOL | Optional frozen teacher/initial-policy comparison on full replay observation histories; no shadow action execution |
-| `ops/replay_pair.py`, `slurm/replay_pair.sbatch` | TOOL | Matched final-checkpoint minimap videos via launcher; existing frozen evaluator and renderer |
-| `lanerl_jax/train/paired_vec_train.py`, `slurm/paired_vec.sbatch` | LIVE / TOOL | Bounded paired initialization training using vec_train (BC/random or opt-in button-bias variant with frozen retention gate); checkpoint/signal handling and integrated frozen held-out evaluations |
-| `lanerl_jax/obs/ray_kernel.py` | LIVE | Fused CUDA full-visibility traversal; CPU reference in vision.py; PERF005/PERF006 |
-| `slurm/vision_smoke.sbatch` | TOOL | PERF007 production CUDA visibility integration gate via launcher |
-| `slurm/bush_ab.sbatch` | TOOL | PERF006 fused-ray vs static bush-ID A/B via launcher; no saved model |
-| `slurm/vision_ab.sbatch` | TOOL | PERF-005 bounded vision-kernel A/B via `ops/launch.py`; correctness first, no saved model or profiler |
-| `slurm/full_profile.sbatch` | TOOL | PERF-004 full GPU diagnostic via `ops/launch.py` and `gru_profile_launch.py`; canary first, fixed workload, source traces and memory dumps, no saved model |
-| `ops/gru_profile_launch.py`, `slurm/gru_profile.sbatch` | TOOL | Bounded PERF-003 GPU diagnostic through `ops/launch.py`; exact GRU split/fused canary, rollout/learner time and memory, no model checkpoints |
-| `lanerl_jax/train/server_train.py` | LIVE | C# server PPO collector (idle / mirror), resume, frozen eval; the entry point for all current runs |
-| `lanerl_jax/train/learner.py`, `ppo.py`, `policy.py` | LIVE | shared PPO loss/optimiser, factored heads, the network |
-| `lanerl_jax/obs/builder.py`, `obs/frame.py`, `obs/fog.py`, `obs/vision.py` | LIVE | observation contract `viewport-structured-v3` |
-| `lanerl_jax/parity/policy_driver.py` (`StateRebuilder`, wire helpers) | LIVE | wire frame → `LaneState` for the observation builder (shared with the evaluation driver) |
-| `lanerl_train/vec.py`, `ports.py`, `paths.py` | LIVE | server process launch, lockstep step, port allocation, node path translation |
-| `lanerl_rl/projection.py`, `constants.py`, `frame.py` | LIVE | camera model, click grid, button list, lane frame |
-| `lanerl_rl/ppo.py`, `model.py` | TOOL (reference only) | the original PyTorch PPO/GAE that `train/tests/test_ppo.py` checks the JAX port against |
-| `lanerl/patches/`, `lanerl/cfg/` | LIVE | vendor server patches (see its README) and the game configs |
-| `experiments/` | LIVE | one launcher per experiment ID; the only way runs start |
-| `ops/continue_heuristic_comparison.py` | TOOL | Registered one-shot E24 continuation: waits for training, runs six frozen comparisons via launcher, records/commits status and scores the fixed endpoint |
-| `ops/heuristic_improvement.py` | TOOL | Read-only paired frozen E25/E26/E27 scorer for the predeclared E24 teacher-improvement test; refuses missing/mismatched cohorts |
-| `ops/figures/readme_figures.py` | TOOL | regenerates every README figure (`docs/figures/`) from run metrics and `runs/EVAL/summary.jsonl`; read-only on runs |
-| `slurm/server_train.sbatch`, `ops/server_train_status.py`, `ops/desktop_suite.sh`, `ops/login_capped.sh` | TOOL | launch and monitor on the desktop; capped CPU work |
-| `lanerl_jax/train/jax_train.py`, `jax_farm.py`, `jax_eval.py` | TOOL (paused) | same learner on the JAX sim; not run until the C# gate is met |
-| `lanerl_jax/train/trainer.py`, `run_train.py`, `slurm/rl_train.sbatch` | TOOL (paused) | the Anakin JAX trainer (256 envs), migrated to the shared reference PPO update (PPO-17) |
-| `lanerl_jax/sim/` | TOOL (paused) | the JAX simulator; only used by the JAX arms |
-| `lanerl_jax/parity/policy_divergence.py`, `record.py`, `replay_server.py`, `render_recording.py`, `analyze_farming.py` | TOOL | sim-vs-server gate, recordings, replay viewers |
-| `lanerl_jax/parity/archive/`, `lanerl_jax/probes/` | DIAG | one-off probes with README indexes pointing at ledger rows |
-| `lanerl_jax/train/entropy_audit.py`, `throughput_audit.py`, `benchmark.py` | DIAG | audits cited by ledger rows |
-| `lanerl_jax/runs/` (ignored) | data | run directories; each has manifest, metrics, source tarball |
-| `lanerl_train/__main__.py`, `run.py`, `procactor.py`, `lanerl_rl/env.py`, `model.py`, `lanerl_bot/` | LEGACY (candidate) | the PyTorch server RL stack. Not on the current path, but `procactor.py` holds the process-parallel collector (4,829 dec/s at 96 servers) that `server_train.py` should adopt |
-| `legacy/` | LEGACY | August Dreamer pipeline (`src/`, `tests/`), `scripts/` (244 files), `scratchpad/` (367 files), `lanerl_spike/` (wine/Windows client and old server scripts), audit reports. Nothing imports them (checked 2026-09-25) |
-| `docs/archive/`, `docs/PORT_AUDIT_*.md`, `docs/TICK_*`, `docs/TIER*` | LEGACY docs | frozen investigations; cite, do not update |
+| layer | modules |
+|---|---|
+| contract and rule math | `core/` — `types` (WorldUnits, UnitWrite, attack/cast/CC/dash records), `stats`, `stat_pipeline` (STAT.*), `damage` (DMG.* packets, shields, heals) |
+| map | `map/` — `terrain`, `pathing` (route graph), `lanes`, `regions`, `dynamic_terrain` (structure pads), `rift` (Elemental Rift / Baron pit) |
+| rules | `mechanics` (attack machine, missiles, CC, movement), `collision`, `vision` + `rays`/`ray_kernel`, `lane/` (minions, towers, lane AI), `jungle/` (camps, objectives), `wards`, `economy`, `role_quest`, `champions/` (kit registry, Garen, Jax, summoners), `items/` (catalog, inventory, loadout, effects), `runes/` (catalog, effects), `combat` (items + runes around the damage pipeline) |
+| world | `world/` — `config` (build_config, Layout), `state`, `units`, `views`, `scratch`, `phases/*` (one module per tick phase), `tick` (`step`) |
+| interface | `obs`, `actions`, `screen`, `frame`, `train` + `rl/` (policy, PPO, learner, run directory) |
+| data | `data/` — pinned 26.19 tables (`26.19/`), replay/Riot oracles (`oracle/`), loaders and `build_*` regenerators |
 
-Every test under a package's `tests/` is a regression that runs in CI-style
-suites (`ops/desktop_suite.sh`); a file that measures one checkpoint once is a
-DIAG and lives in `probes/` or `parity/archive/`, never in `tests/`.
-
-TOOL: `ops/slurm_event_test.py`, `slurm/event_test.sbatch`: OPS047 bounded Slurm-to-T3 idle wake test, launched through `ops/launch.py`.
-
-TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failure wake into the current T3 conversation; arm after launcher health watch. OPS047 retains the separate array test.
-
-TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
-
-Modern 26.19 world (separate ruleset; MODERN-013..024): the `lanerl_jax/modern/` package.
-API: `lanerl_jax.modern.world` (`build_config`, `Loadout`, `init_state`, `no_orders`, `step`); the tick is
-`world/tick.py` running `world/phases/*.py` (one module per phase) over `ModernState` (`world/state.py`).
-Layers: `core/` (contract types, stats, damage) -> `map/` -> rules (`lane/`, `jungle/`, `champions/`, `items/`,
-`runes/`, `mechanics`, `collision`, `vision`, `wards`, `economy`, `combat`) -> `world/` -> `obs`, `actions`,
-`train`; pinned tables, loaders and builders in `modern/data/`; tests in `modern/tests/`. The unit layout
-(`world.config.Layout`) is sized by the scenario: 216 slots on the full map, 88 for top lane without jungle and
-objectives. Start with `docs/modern/WORLD_IMPLEMENTATION.md` (layout, tick order, gaps) and
-`docs/modern/README.md` (spec index). TOOL (trainer, no experiment yet): `lanerl_jax/modern/train.py`, the
-scan PPO on the modern world (shares `train/scan_ppo.py` with `vec_train`; does not import the legacy sim).
-TOOLs in `ops/modern/`: `bench.py`, `profile_tick.py`, `perf_guard.py`, `golden.py` (bitwise trajectory
-fingerprint for refactors), `replay_fidelity.py`, `collision_*.py`, `fetch_map.py`.
-The legacy `step.py` world and the "modern champion profile" below (modern
-Garen/Jax on the legacy map, `sim/modern_bridge.py`) are different systems.
-
-Modern champion profile (explicit opt-in, 26.19; CHAMP-003):
-
-| Path | Class | Role |
-|---|---|---|
-| `lanerl_jax/modern/data/champions.py`, `modern/data/26.19/champions/*.json` | LIVE | Pinned Garen/Jax BIN stats and spell values; no network at runtime |
-| `lanerl_jax/sim/modern_bridge.py`, `ChampionState` | LIVE | Champion dispatch, mana, buffs, dodge, dash, true/magic damage; initialize with `modern_bridge.init_lane(names)` and `SimConfig.modern(names)` |
-| `lanerl/cfg/modern_garen_jax_26_19.json` | LIVE | Modern bare-champion C# matchup; use only the isolated modern build |
-| `lanerl/patches/modern-champions/ModernChampion.cs` | LIVE | Modern C# champion rules, materialized/exported by `ops/modern_server.py` |
-| `ops/modern_server.py`, `ops/modern_validation.py` | TOOL | Reproducible isolated server overlay/patch export and worktree-snapshot Slurm validation |
-| `lanerl_jax/probes/modern_champions.py`, `ModernChampionSelfTest.cs` | PROBE | Wire/resource/reset,180s scripted lane, actual C# objects damage assertions; invoked by MOD experiments through `ops/launch.py` |
-| `tests/test_modern_champions.py` | TEST | Independent modern mechanic examples and JIT/vmap/observation regressions |
-
-| `lanerl_jax/train/champion_profile.py` | LIVE | Explicit pair/config generation, observation width, checkpoint contract checks (CHAMP-004) |
-| `lanerl_jax/parity/modern_wire.py` | LIVE | Schema2 snapshot to observation state; resource/buff/CC reconstruction, not a resumable simulation snapshot |
-| `tests/test_modern_collector.py` | TEST | Pairings, mismatch rejection, ranks, cast-event visibility, checkpoint/config contract, JAX collector reset |
-
-Modern observations have `MODERN_SELF_DIM=28`; create a new `PolicyConfig(self_dim=28)`.
-Legacy observations remain16-wide. `server_train` and `jax_train` accept
-`--modern-champions Garen,Jax` (BLUE,RED; either name on either side, including
-same-champion pairs). Policy width is selected automatically; checkpoint manifests
-must match the ordered pair and width. The C# path additionally requires an
-explicit isolated `--server-dir` and `LANERL_VENDOR_ROOT` for the runtime.
-Single-process and worker collectors preserve the profile across resets.
-Frozen evaluation uses `server_train --eval-episodes`; the older recording/
-parity driver is still a legacy-only path. Normal defaults remain historical.
-Launch through an experiment spec and `ops/launch.py`; its ordinary server/JAX
-launch modes still target the canonical checkout, so integrate this branch there
-before launching a normal production experiment. MOD validation snapshots this
-worktree explicitly and does not require that integration.
-This profile runs on the legacy map/minions/turrets; the modern world is `world.tick` above.
-
-TOOL: `lanerl_jax/modern/data/routes.py`, `lanerl_jax/modern/map/pathing.py` bake/load/query conservative static-map routes; `ops/modern_world_validation.py`, `slurm/modern_world_validation.sbatch` launch snapshot correctness/artifact jobs through `ops/launch.py`. Patch geometry data are `lanerl_jax/modern/data/26.19/geometry.json`; tests are regressions.
+Tests: `lanerl_jax/modern/tests/`. Tools: `ops/modern/` ([ops/README.md](../ops/README.md)). Specs:
+`docs/modern/`. Pinned map arrays and routes live on NFS (`/mnt/nfs/shared/modern-world-map-research/`,
+`/mnt/nfs/shared/WORLD001_map_routes/`).

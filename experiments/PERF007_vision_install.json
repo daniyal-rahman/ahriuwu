@@ -1,6 +1,0 @@
-{
-  "id": "PERF007_vision_install",
-  "engine": "vision-smoke",
-  "question": "Does the installed CUDA-dispatched fused visibility pass the existing GPU correctness gates?",
-  "protocol": "Exact ray/reference and nested batching gate, then all vision tests through production platform dispatch. PERF005 established full-update equivalence and speed; PERF006 rejected simplified bush lookup. No training or saved checkpoints."
-}

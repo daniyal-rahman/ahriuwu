@@ -1,11 +1,5 @@
-"""The modern-world scan trainer (``train.modern_vec_train``).
-
-Cheap checks (geometry, masked policy, reward, decoder on a modern state) use
-the shared ``tests.world_harness`` world without compiling the tick. The
-end-to-end test builds a tiny bank and runs a rollout plus two PPO updates; it
-compiles the full tick twice (bank and training program), minutes on CPU, so
-run it on the desktop through Slurm.
-"""
+"""The modern-world scan trainer (``modern.train``). The end-to-end test compiles the full tick twice
+(bank and training program): minutes on CPU, run it through Slurm."""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -23,14 +17,12 @@ if not H.artifacts_present():
 from lanerl_jax.modern import obs as OB  # noqa: E402
 from lanerl_jax.modern import train as MV  # noqa: E402
 from lanerl_jax.modern import world as MS  # noqa: E402
-from lanerl_jax.modern.actions import (  # noqa: E402
-    MODERN_BUTTON_INDEX,
-    MODERN_BUTTONS,
-    modern_orders_from,
-)
-from lanerl_jax.train.ppo import PPOConfig, factored_log_prob  # noqa: E402
+from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from  # noqa: E402
+from lanerl_jax.modern.frame import delta_to_lane  # noqa: E402
+from lanerl_jax.modern.rl.ppo import PPOConfig, factored_log_prob  # noqa: E402
+from lanerl_jax.modern.screen import N_SCREEN_X, N_SCREEN_Y, screen_to_lane  # noqa: E402
 
-SMALL = MV.modern_policy_config(core="gru", core_norm=True, core_residual=True, **MV.SMALL_POLICY)
+SMALL = MV.PolicyConfig(core="gru", core_norm=True, core_residual=True, **MV.SMALL_POLICY)
 
 
 @lru_cache(maxsize=1)
@@ -53,7 +45,7 @@ def test_lane_segment_spans_the_outer_turrets_and_corridor_distance():
 
 
 def test_masked_policy_shares_params_and_never_samples_masked_buttons():
-    pol = MV.MaskedLanePolicy(SMALL, tuple(MODERN_BUTTON_INDEX[b] for b in MV.DEFAULT_BUTTONS_OFF))
+    pol = MV.LanePolicy(SMALL, tuple(MODERN_BUTTON_INDEX[b] for b in MV.DEFAULT_BUTTONS_OFF))
     plain = MV.LanePolicy(SMALL)
     args = (jnp.zeros((4, 32, OB.MODERN_ENTITY_DIM)), jnp.zeros((4, 32), bool),
             jnp.zeros((4, OB.MODERN_WORLD_SELF_DIM)), jnp.zeros((4, 6)), jnp.zeros((4, SMALL.core_dim)))
@@ -107,11 +99,8 @@ def test_action_round_trip_on_the_modern_state():
     mv = decode((jnp.asarray([b["move"]] * 2), jnp.asarray([48, 48]), jnp.asarray([5, 5])), s)
     assert np.asarray(mv.move).all()
     # Click where the enemy is, in each champion's own lane frame.
-    from lanerl_jax.obs.frame import delta_to_lane
-    from lanerl_jax.train.actions import _screen_to_centred_lane
-    from lanerl_rl.constants import N_SCREEN_X, N_SCREEN_Y
     gx, gy = np.meshgrid(np.arange(N_SCREEN_X), np.arange(N_SCREEN_Y), indexing="ij")
-    ds, dn = _screen_to_centred_lane(jnp.asarray((gx + 0.5) / N_SCREEN_X, jnp.float32),
+    ds, dn = screen_to_lane(jnp.asarray((gx + 0.5) / N_SCREEN_X, jnp.float32),
                                      jnp.asarray((gy + 0.5) / N_SCREEN_Y, jnp.float32))
     clicks = []
     for me in (0, 1):
@@ -138,8 +127,6 @@ def test_observation_adapter_shapes():
     assert obs.entities.shape == (2, 32, OB.MODERN_ENTITY_DIM) and obs.self_vec.shape == (2, OB.MODERN_WORLD_SELF_DIM)
     assert obs.global_vec.shape == (2, 6) and obs.entity_pad_mask.shape == (2, 32)
     with pytest.raises(ValueError):
-        MV.make_modern_vec_train(cfg._replace(policy=MV.PolicyConfig()), e, bank)   # legacy widths rejected
-    with pytest.raises(ValueError):
         MV.make_modern_vec_train(cfg._replace(buttons_off=("noop",)), e, bank)
 
 
@@ -150,7 +137,7 @@ def test_end_to_end_tiny_update(opponent):
     e = env()
     cfg = MV.ModernVecConfig(n_envs=2, rollout_steps=4, n_updates=2, n_minibatches=2, bank_size=2, start_s=1.0,
                              episode_s=2.0, step_ticks=3, opponent=opponent, policy=SMALL,
-                             ppo=PPOConfig.standard(decision_hz=10.0))
+                             ppo=PPOConfig(decision_hz=10.0))
     bank = MV.prepare_modern_bank(cfg, e, seed=0)
     assert bank.world.t.shape == (2,) and np.allclose(np.asarray(bank.world.t), 1.0, atol=1e-3)
     assert not np.array_equal(np.asarray(bank.world.key[0]), np.asarray(bank.world.key[1]))

@@ -104,7 +104,7 @@ def main() -> None:
     args = ap.parse_args()
     if not args.keep_command_buffers:      # read at backend start, so before any jax computation
         os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_gpu_enable_command_buffer=").strip()
-    from lanerl_jax.jax_cache import enable_compile_cache
+    from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
     from jax.profiler import ProfileData
 

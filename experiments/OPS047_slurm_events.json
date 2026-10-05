@@ -1,7 +1,0 @@
-{
-  "id": "OPS047_slurm_events",
-  "engine": "slurm-event-test",
-  "thread_id": "6638ec1e-0a67-4ea7-bea9-5ecfd4b3d47c",
-  "thread_title": "Analyze JAX Server Throughput",
-  "cases": ["success", "compile_error", "exit7", "timeout"]
-}

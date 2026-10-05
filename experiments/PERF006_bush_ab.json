@@ -1,6 +1,0 @@
-{
-  "id": "PERF006_bush_ab",
-  "engine": "bush-ab",
-  "question": "Does removing traversal add enough speed over fused rays to justify simplified lane visibility?",
-  "protocol": "Same fixed N128/T128 standard GRU PPO, frozen E31, mid-game bank and four alternating samples as PERF005. Baseline fused full rays, candidate static bush IDs + existing radius/team/alive rules. GPU fused-ray equivalence and bush semantics gates first. Collection and complete-update timing. Output equality recorded, not required because semantics intentionally differ. No model checkpoint or training quality claim."
-}

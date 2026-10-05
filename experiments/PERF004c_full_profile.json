@@ -1,7 +1,0 @@
-{
-  "id": "PERF004c_full_profile",
-  "engine": "full-profile",
-  "question": "Whole simulation, observation/action and GRU PPO GPU kernel attribution and memory at fixed 128 environments; identify speed candidates before changing implementation.",
-  "protocol": "Original-versus-labelled AST, lowered computation and numerical canary at N2/T4. Main N128/T128, six ticks/decision, four bank states with 20s jitter, standard PPO 4x4, FP32/highest, norm/residual GRU. Random and frozen E31 parameters, snapshots at 0/14/35 preceding rollout calls; cohort initial deadlines set to600s to retain age. Three synchronized repeats from identical inputs for split collection, learning and fused update; discard all optimizer outputs. Trace six collections and middle-cohort learner/fused calls. Source-labelled optimized HLO and buffer assignment dumps. No environment-count sweep, performance edits, checkpoint writes or learning claim. Recovery: same six unprofiled timing cohorts; defer random-late collection, E31-late collection and E31-middle learner to one final profiler session, separated by synchronized annotations. Earlier random early/mid traces and original buffer dumps retained. No optimizer output is carried forward.",
-  "retry_of": "PERF004b_full_profile: SIGSEGV after repeated profiler sessions; saved early/mid random traces remain valid"
-}

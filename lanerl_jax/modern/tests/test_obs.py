@@ -21,8 +21,8 @@ if not H.artifacts_present():
 from lanerl_jax.modern import actions as MA  # noqa: E402
 from lanerl_jax.modern import obs as OB  # noqa: E402
 from lanerl_jax.modern import world as MS  # noqa: E402
-from lanerl_jax.obs.builder import GLOBAL_DIM, N_SLOTS, NORM_DIST  # noqa: E402
-from lanerl_jax.train.actions import _screen_to_centred_lane  # noqa: E402
+from lanerl_jax.modern.obs import GLOBAL_DIM, N_SLOTS, NORM_DIST  # noqa: E402
+from lanerl_jax.modern.screen import screen_to_lane  # noqa: E402
 
 SELF = {name: i for i, name in enumerate((
     "s", "n", "hp", "level", "gold", "cs", "cd_q", "cd_w", "cd_e", "cd_r", "ad", "ap", "armor", "mr", "dead",
@@ -85,7 +85,7 @@ def test_entity_offsets_reconstruct_world_positions():
 
 def _bin_for(ds, dn):
     gx, gy = np.meshgrid(np.arange(96), np.arange(54), indexing="ij")
-    a, b = _screen_to_centred_lane(jnp.asarray((gx + 0.5) / 96, jnp.float32), jnp.asarray((gy + 0.5) / 54, jnp.float32))
+    a, b = screen_to_lane(jnp.asarray((gx + 0.5) / 96, jnp.float32), jnp.asarray((gy + 0.5) / 54, jnp.float32))
     i = np.argmin((np.asarray(a) - ds) ** 2 + (np.asarray(b) - dn) ** 2)
     return int(gx.flat[i]), int(gy.flat[i])
 

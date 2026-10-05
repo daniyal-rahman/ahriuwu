@@ -1,82 +1,46 @@
-"""Decode screen-click actions into ``world.tick.ModernOrders`` (MODERN-005).
+"""Decode screen-click actions ``(button, screen_x, screen_y[, choice])`` into ``ModernOrders``
+(profile ``modern-world-v2``). The policy names no unit: a click hit-tests the client selection circles of
+units its team can see (nearest centre wins), in the acting champion's lane frame.
 
-Profile ``modern-world-v2``: the legacy screen-click-v2 action ``(button,
-screen_x, screen_y)`` plus an optional fourth component ``choice``, with extra
-buttons appended after the legacy eight (``MODERN_BUTTONS``). The
-actor still supplies no entity identity; the world hit-tests the clicked point
-against the client selection circles of units its team can see (nearest centre
-wins; ``selection_radius``), like ``train.actions.orders_from``. v2 (MODERN-023)
-adds ``stop`` and uses selection radii instead of gameplay radii.
+    move / attack_move  hostile under the cursor -> attack it, else move / attack-move to the point
+    q, w, e, r          cast; target = the hostile under the cursor (or -1), point = the cursor
+    summoner_d / f      cast; target = any unit under the cursor, point = the cursor
+    recall, stop        start Recall; clear move/attack orders
+    level_q..r          spend a skill point (otherwise the default skill order spends it)
+    buy / sell          catalog row / inventory slot ``choice`` (the world checks shop rules)
+    use_item            activate the item in slot ``choice``, aimed at the cursor
+    ward, control_ward  trinket / Control Ward at the cursor
 
-Each champion acts in its own lane frame (``obs.modern_builder.modern_frames``),
-so the click offset is mapped back with that frame's axis and normal.
-
-    move          hostile under the cursor -> attack it, else move to the point
-    attack_move   hostile under the cursor -> attack it, else an attack-move
-                  order to the point (attacks the nearest visible enemy within
-                  acquisition range on the way, ``lane.ai.attack_move_step``)
-    q/w/e/r       cast that slot; target = the hostile under the cursor (or -1),
-                  point = the cursor
-    recall        start Recall
-    summoner_d/f  cast that summoner; target = any unit under the cursor (Heal,
-                  Ignite, Exhaust, Teleport take a unit), point = the cursor
-                  (Flash)
-    level_q..r    spend a skill point on that slot (the world checks points/caps)
-    buy           buy catalog row ``choice`` (the world checks the shop area,
-                  gold, recipes and purchase blocks; ``shop_choice_mask`` lists
-                  the in-store rows)
-    sell          sell the item in inventory slot ``choice`` (0..6)
-    use_item      activate the item in inventory slot ``choice`` (potions,
-                  Tiamat line, Stridebreaker, elixirs, other actives); aimed actives use
-                  the cursor point / the hostile under it
-    ward          use the trinket at the cursor (place a ward, or Oracle Lens sweep)
-    control_ward  place a Control Ward at the cursor
-    stop          clear move/attack/attack-move orders (League's S)
-
-Clicks outside the screen or over the minimap are no-ops for every
-cursor-dependent button. There is no move-point snap (PATH-010 is a legacy
-server workaround): modern movement steers along the route graph with a terrain
-clamp. Without a ``level_q..r`` action the world spends skill points by the
-champion's default order.
+Clicks off screen or over the minimap are no-ops for every cursor button.
 """
 from __future__ import annotations
 
 import jax.numpy as jnp
 
-from lanerl_rl.constants import BUTTONS, N_SCREEN_X, N_SCREEN_Y
-from lanerl_rl.projection import MINIMAP_X_MIN, MINIMAP_Y_MIN
-
-from ..train.actions import _screen_to_centred_lane
 from .core import types as W
 from .items.catalog import catalog
+from .screen import MINIMAP_X_MIN, MINIMAP_Y_MIN, N_SCREEN_X, N_SCREEN_Y, screen_to_lane
 from .world.config import N_CHAMPIONS
 from .world.state import no_orders
 
-__all__ = ["PROFILE", "MODERN_BUTTONS", "MODERN_BUTTON_INDEX", "SCREEN_BUTTONS", "CHOICE_BUTTONS",
-           "screen_usage", "selection_radius", "modern_orders_from"]
-
 PROFILE = "modern-world-v2"
-MODERN_BUTTONS = BUTTONS + ("summoner_d", "summoner_f", "level_q", "level_w", "level_e", "level_r",
-                            "buy", "sell", "use_item", "ward", "control_ward", "stop")
+MODERN_BUTTONS = ("noop", "move", "attack_move", "q", "w", "e", "r", "recall", "summoner_d", "summoner_f",
+                  "level_q", "level_w", "level_e", "level_r", "buy", "sell", "use_item", "ward", "control_ward", "stop")
 MODERN_BUTTON_INDEX = {name: i for i, name in enumerate(MODERN_BUTTONS)}
 N_INVENTORY_SLOTS = 7
-#: Buttons whose decoded order reads the cursor (point or unit under it). The
-#: PPO likelihood counts the click heads only for these (``screen_usage``).
+# Buttons whose order reads the cursor; the PPO likelihood counts the click heads only for these.
 SCREEN_BUTTONS = ("move", "attack_move", "q", "w", "e", "r", "summoner_d", "summoner_f", "use_item", "ward",
                   "control_ward")
-#: Buttons that need the fourth ``choice`` component (catalog row / inventory slot).
 CHOICE_BUTTONS = ("buy", "sell", "use_item")
-# Client selection radii (cdragon ``selectionRadius``; wiki Unit_selection, MECHANICS_AUDIT #8): clicks
-# hit-test these, not the gameplay radii. Wards have a 1-unit world radius; a click cell is ~30x36
-# units, so they get a champion-sized circle.
+# Client selection radii (cdragon selectionRadius). Wards (world radius 1) get a click circle about one
+# click cell wide.
 CHAMPION_SELECTION_RADIUS = 120.0
 MINION_SELECTION_RADIUS = (115.0, 115.0, 140.0, 145.0)        # melee, caster, siege, super
 WARD_CLICK_RADIUS = 65.0
 
 
 def selection_radius(state):
-    """(N,) click hit-test radius per unit: selection radii for champions and minions, the
-    ward circle, and the world radius for everything else (monsters, structures)."""
+    """(N,) click hit-test radius: selection radii for champions/minions, the ward circle, else the world radius."""
     sub = jnp.clip(state.sub, 0, 3)
     r = jnp.where(state.kind == W.KIND_CHAMPION, CHAMPION_SELECTION_RADIUS, state.radius)
     r = jnp.where(state.kind == W.KIND_MINION, jnp.asarray(MINION_SELECTION_RADIUS, jnp.float32)[sub], r)
@@ -84,8 +48,7 @@ def selection_radius(state):
 
 
 def screen_usage(button):
-    """(...) float32: 1 where ``button`` uses the click (``SCREEN_BUTTONS``), the modern
-    counterpart of ``ppo.screen_head_usage``."""
+    """(...) float32: 1 where ``button`` uses the click."""
     used = jnp.zeros(jnp.shape(button), bool)
     for name in SCREEN_BUTTONS:
         used = used | (button == MODERN_BUTTON_INDEX[name])
@@ -106,7 +69,7 @@ def modern_orders_from(action, state, frames, *, cfg_x: int = N_SCREEN_X, cfg_y:
     choice = jnp.asarray(action[3], jnp.int32) if len(action) == 4 else jnp.zeros_like(button)
     screen_x = (sx + 0.5) / cfg_x
     screen_y = (sy + 0.5) / cfg_y
-    ds, dn = _screen_to_centred_lane(screen_x.astype(jnp.float32), screen_y.astype(jnp.float32))
+    ds, dn = screen_to_lane(screen_x.astype(jnp.float32), screen_y.astype(jnp.float32))
     axis = jnp.stack([jnp.asarray(f.axis, jnp.float32) for f in frames])
     normal = jnp.stack([jnp.asarray(f.normal, jnp.float32) for f in frames])
     x = state.x[:c] + ds * axis[:, 0] + dn * normal[:, 0]
@@ -136,7 +99,6 @@ def modern_orders_from(action, state, frames, *, cfg_x: int = N_SCREEN_X, cfg_y:
     cast_slot = jnp.where(cast & ~invalid, button - b["q"], -1)
     summ = (button == b["summoner_d"]) | (button == b["summoner_f"])
     summ_slot = jnp.where(summ & ~invalid, button - b["summoner_d"], -1)
-    # Shop / skills / items (no cursor needed).
     ids = jnp.asarray(catalog().ids, jnp.int32)
     n_rows = ids.shape[0]
     row_ok = (choice >= 0) & (choice < n_rows) & shop_choice_mask()[jnp.clip(choice, 0, n_rows - 1)]

@@ -41,6 +41,6 @@ _jax.config.update("jax_enable_x64", True)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 # Persistent compilation cache: full-tick tests compile for minutes; reruns load them.
-from lanerl_jax.jax_cache import enable_compile_cache  # noqa: E402
+from lanerl_jax.modern.jax_cache import enable_compile_cache  # noqa: E402
 
 enable_compile_cache()
