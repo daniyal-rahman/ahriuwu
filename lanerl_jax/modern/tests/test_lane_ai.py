@@ -607,10 +607,12 @@ def test_spawn_lane_minions_fills_each_lanes_slot_range_at_its_barracks():
         np.testing.assert_allclose([float(w.x[s]), float(w.y[s])], G.BARRACKS[int(w.team[s]), int(w.lane[s])])
         assert float(w.stats.max_hp[s]) == float(L.minion_spawn_stats(0, 30.0).max_hp)
     assert np.asarray(w.seq_offset)[picked].tolist() == list(range(6))
-    # Static lane restriction (top-only scenario) leaves the other ranges empty.
+    # Top-only scenario: the top lane owns the first (only) minion block (world.config.Layout).
     _, w2, _ = L.spawn_lane_minions(MM.init_lane_spawn(), _empty_towers(n), kind, alive, now=30.0, slot0=slot0,
                                     lanes=(2,))
-    assert np.nonzero(np.asarray(w2.pick))[0].tolist() == [82, 83]
+    assert np.nonzero(np.asarray(w2.pick))[0].tolist() == [2, 3]
+    assert np.asarray(w2.lane)[[2, 3]].tolist() == [2, 2]
+    np.testing.assert_array_equal(np.asarray(L.slot_lane(n, slot0, lanes=(2,)))[[1, 2, 41, 42]], [-1, 2, 2, -1])
 
 
 def test_full_lane_reports_overflow_instead_of_borrowing_another_lanes_slots():
