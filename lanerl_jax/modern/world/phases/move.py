@@ -11,9 +11,8 @@ from ...core import types as W
 from ...core.stat_pipeline import compose
 from ...jungle import camps as J
 from ...lane import ai as LA
-from .. import views as V
+from .. import units as U
 from ..config import N_CHAMPIONS, WorldConfig
-from ..config import layout as MW_layout
 from ..scratch import TickScratch
 from ..state import ModernOrders, ModernState
 
@@ -26,7 +25,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     Reads: ``now, caps, champ, units, st, reach, locked, s_out`` (Flash/Teleport/Ghost), ``kit_out`` (dash),
     ``kits, kctx`` (kit ghosting), the AI goals ``attack_order_eff, t_ok_eff, goal, moving_eff, lane_goal,
     lane_stop, mon_goal, mon_speed, mon_move``, ``mai, mbuf, so, jungle, lane_ai, towers, terrain, ictx`` and
-    ``s.pending_dash``.
+    ``s.prev.pending_dash``.
     Writes ``s.x, s.y, s.lane_ai, s.towers, s.route_anchor``, dash state and facing in both ``s.champ``
     and ``champ``, and ``tp_lock, sres, ms, dstart, in_dash, units, ictx``."""
     c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
@@ -52,7 +51,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     hg_bonus = 0.0 if so is None else so.homeguard_bonus * s.econ.homeguard.active
     sres = jnp.zeros((n,), jnp.float32).at[:c].set(st.slow_resist)
     if mai is not None:                                               # Scuttler: slow immune while not fleeing
-        jsl = slice(cfg.jungle.monster0, cfg.jungle.monster0 + cfg.jungle.n_slots)
+        jsl = cfg.jungle.slots
         sres = sres.at[jsl].set(mai.slow_resist)
     # Gustwalker's Gait from jungle state (brush entry detected at last tick's combat phase: 1 tick lag).
     if cfg.jungle is None:
@@ -74,10 +73,10 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     active = ((minion & ~stop | monster & m_move) & caps["can_move"]).at[:c].set(cact)
     team_mv = jnp.clip(s.team, 0, 1)                                  # neutral monsters walk the blue mask
     x, y, _, anchor = M.move_step(s.x, s.y, gx, gy, ms, active, team_mv, s.radius, cfg.routes, terrain, dt,
-                                  s.route_anchor, movers=MW_layout()["ward0"])
+                                  s.route_anchor, movers=cfg.layout.ward0)
     # Kit dashes (Jax Q): follow the target unit at the dash speed (no terrain, it's a leap).
     dash = kit_out.dash
-    pd = s.pending_dash                                               # item-active dash (Rocketbelt)
+    pd = s.prev.pending_dash                                               # item-active dash (Rocketbelt)
     dash = W.Dash(*(jnp.where(pd.active & ~dash.active, a, b) for a, b in zip(pd, dash)))
     dstart = dash.active & s.alive[:c]
     dt_ = jnp.clip(dash.target, 0, n - 1)
@@ -113,7 +112,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     x, y = UC.resolve(s.x, s.y, x, y, radius=UC.pathing_radius(s.kind, s.sub, s.radius), collide=collide,
                       ghosted=ghost, moving=active, goal_x=gx, goal_y=gy, team=team_mv,
                       clearance=jnp.minimum(s.radius, cfg.routes.radius), terrain=terrain, dt=dt,
-                      movers=MW_layout()["ward0"])
+                      movers=cfg.layout.ward0)
     facing = jnp.stack([x[:c] - s.x[:c], y[:c] - s.y[:c]], -1)
     norm = jnp.linalg.norm(facing, axis=-1, keepdims=True)
     facing = jnp.where(norm > 1e-3, facing / jnp.maximum(norm, 1e-6), champ.facing)
@@ -130,8 +129,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                            dash_to=jnp.where(dstart[:, None], jnp.stack([dx, dy], -1), champ.dash_to),
                            dash_speed=jnp.where(dstart, dash.speed, champ.dash_speed), facing=facing)
     s = s._replace(x=x, y=y, lane_ai=lane_ai, towers=towers, champ=champ, route_anchor=anchor)
-    units = V.units_view(s)._replace(attack_range=s.arange.at[:c].set(reach),
-                                   attack_speed=s.aspeed.at[:c].set(st.attack_speed))
+    units = U.units_view(s)._replace(attack_range=s.attack_range.at[:c].set(reach),
+                                   attack_speed=s.attack_speed.at[:c].set(st.attack_speed))
     ictx = ictx._replace(x=x[:c], y=y[:c], facing_x=facing[:, 0], facing_y=facing[:, 1], moved=moved)
     return s, sc._replace(champ=champ, tp_lock=tp_lock, sres=sres, ms=ms, dstart=dstart, in_dash=in_dash,
                           units=units, ictx=ictx)

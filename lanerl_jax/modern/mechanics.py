@@ -18,8 +18,9 @@ import jax
 import jax.numpy as jnp
 
 from .core import types as W
-from .map.pathing import route_follow, route_replan, segment_clear
 from .core.stat_pipeline import cc_duration
+from .map.pathing import route_follow, route_replan, segment_clear
+from .map.terrain import is_walkable, team_view
 
 BIG = 1e9
 
@@ -122,7 +123,6 @@ def init_missiles(m: int = 64) -> Missiles:
 def spawn_missiles(ms: Missiles, launch: Any, units: W.WorldUnits, target: Any, raw: Any, dtype: Any,
                    flags: Any, speed: Any, cast_id: Any, crit: Any) -> tuple[Missiles, Any]:
     """Add one missile per launching unit (N,) into free slots; returns overflow count."""
-    m = ms.alive.shape[0]
     free_rank = jnp.cumsum(~ms.alive) - 1                                   # rank of each free slot
     want_rank = jnp.cumsum(launch) - 1                                      # rank of each launcher
     take = (~ms.alive)[None, :] & (free_rank[None, :] == want_rank[:, None]) & launch[:, None]   # (N, M)
@@ -230,7 +230,6 @@ def capabilities(cc: CCTimers, now: Any) -> dict:
 
 def team_terrain(terrain: tuple, team: Any):
     """Team 0's mask for team 0, team 1's otherwise (a layer view: no per-unit grid copy)."""
-    from .map.terrain import team_view
     return team_view(terrain, jnp.where(team == 0, 0, 1))
 
 
@@ -296,7 +295,6 @@ def blink_point(x0: Any, y0: Any, x1: Any, y1: Any, max_range: Any, team: Any, r
     d = jnp.sqrt(dx * dx + dy * dy)
     s = jnp.minimum(1.0, max_range / jnp.maximum(d, 1e-6))
     tx, ty = x0 + dx * s, y0 + dy * s
-    from .map.terrain import is_walkable
 
     def one(ax, ay, bx, by, tm, r):
         ter = team_terrain(terrain, tm)

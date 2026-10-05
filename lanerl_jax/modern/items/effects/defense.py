@@ -33,7 +33,7 @@ from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_S
                             TAG_BASIC_ATTACK, TAG_ITEM, TAG_PERIODIC, TAG_PROC, concat_packets, has, packets,
                             shield_value)
 from ..catalog import DATA_PATH, STAT_INDEX, ItemStats, catalog, lerp_level, ranged_mult
-from .core import (BIG, HolderDefense, Debuffs, dv, effects, enemy_mask, holds, holds_any, in_circle,
+from .core import (BIG, Debuffs, HolderDefense, dv, effects, enemy_mask, holds, holds_any, in_circle,
                    neutral_defense, onehot_units, shield_grants, target_class)
 
 UNENDING, KAENIC, PROTOPLASM, GA, STERAKS = 2502, 2504, 2525, 3026, 3053

@@ -21,9 +21,13 @@ if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
 from lanerl_jax.modern import obs as OB  # noqa: E402
-from lanerl_jax.modern import world as MS  # noqa: E402
 from lanerl_jax.modern import train as MV  # noqa: E402
-from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from  # noqa: E402
+from lanerl_jax.modern import world as MS  # noqa: E402
+from lanerl_jax.modern.actions import (  # noqa: E402
+    MODERN_BUTTON_INDEX,
+    MODERN_BUTTONS,
+    modern_orders_from,
+)
 from lanerl_jax.train.ppo import PPOConfig, factored_log_prob  # noqa: E402
 
 SMALL = MV.modern_policy_config(core="gru", core_norm=True, core_residual=True, **MV.SMALL_POLICY)
@@ -104,8 +108,8 @@ def test_action_round_trip_on_the_modern_state():
     assert np.asarray(mv.move).all()
     # Click where the enemy is, in each champion's own lane frame.
     from lanerl_jax.obs.frame import delta_to_lane
-    from lanerl_rl.constants import N_SCREEN_X, N_SCREEN_Y
     from lanerl_jax.train.actions import _screen_to_centred_lane
+    from lanerl_rl.constants import N_SCREEN_X, N_SCREEN_Y
     gx, gy = np.meshgrid(np.arange(N_SCREEN_X), np.arange(N_SCREEN_Y), indexing="ij")
     ds, dn = _screen_to_centred_lane(jnp.asarray((gx + 0.5) / N_SCREEN_X, jnp.float32),
                                      jnp.asarray((gy + 0.5) / N_SCREEN_Y, jnp.float32))

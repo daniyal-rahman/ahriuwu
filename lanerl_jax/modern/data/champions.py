@@ -4,8 +4,8 @@ The small JSON snapshots are checked in so neither training nor tests fetch
 `latest`. Data Dragon incorrectly reports zero AD growth in this patch; use
 the BIN's damagePerLevelModifiable instead. Map/items/runes are separate scope.
 """
-from functools import lru_cache
 import json
+from functools import lru_cache
 
 from . import PATCH_DIR
 

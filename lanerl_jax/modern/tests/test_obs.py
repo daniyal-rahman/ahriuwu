@@ -18,10 +18,10 @@ from lanerl_jax.modern.tests import world_harness as H
 if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
-from lanerl_jax.modern import obs as OB  # noqa: E402
-from lanerl_jax.obs.builder import GLOBAL_DIM, N_SLOTS, NORM_DIST  # noqa: E402
-from lanerl_jax.modern import world as MS  # noqa: E402
 from lanerl_jax.modern import actions as MA  # noqa: E402
+from lanerl_jax.modern import obs as OB  # noqa: E402
+from lanerl_jax.modern import world as MS  # noqa: E402
+from lanerl_jax.obs.builder import GLOBAL_DIM, N_SLOTS, NORM_DIST  # noqa: E402
 from lanerl_jax.train.actions import _screen_to_centred_lane  # noqa: E402
 
 SELF = {name: i for i, name in enumerate((

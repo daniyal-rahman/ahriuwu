@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import jax
@@ -43,8 +42,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from .core import types as W
-from .map.terrain import is_walkable, team_view
 from .data import PATCH_DIR
+from .jungle.camps import CHARACTERS
+from .map.terrain import is_walkable, team_view
 
 # ---- radii (CLIENT H, 26.19 character records) -------------------------------------------------
 CHAMPION_PATHING_RADIUS = 35.0                               # garen.bin / jax.bin pathfindingCollisionRadius
@@ -69,7 +69,6 @@ _GOLDEN = 2.399963229728653                                  # coincident-pair f
 @lru_cache(maxsize=1)
 def monster_pathing_radii() -> tuple:
     """Pathing radius per jungle ``Monster`` type (``jungle.camps.CHARACTERS`` order), client records."""
-    from .jungle.camps import CHARACTERS
     data = json.loads(_JUNGLE.read_text())["monsters"]
     return tuple(float(data[c]["pathing_radius"]) for c in CHARACTERS)
 

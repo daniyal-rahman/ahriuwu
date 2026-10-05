@@ -1,7 +1,7 @@
 # docs/modern — implementer specs for the 26.19 modern world
 
 **Patch pin:** normal PC Summoner's Rift (CLASSIC), patch 26.19, client build **16.19.8230722**.
-**Researched:** 2026-10-01. **Status (2026-10-02):** implemented — see the `*_IMPLEMENTATION.md` docs; the modern world tick is `lanerl_jax/modern/world/tick.py`.
+**Researched:** 2026-10-01. **Status (2026-10-05):** implemented — see the `*_IMPLEMENTATION.md` docs. The code is the `lanerl_jax/modern/` package (layers and module map in [WORLD_IMPLEMENTATION.md](WORLD_IMPLEMENTATION.md#layout)); the world tick is `lanerl_jax/modern/world/tick.py`, tools are in `ops/modern/`.
 
 These specs replace the old C# server as the reference for the modern JAX port. The C# server stays the
 regression oracle for the legacy ruleset only (ledger MODERN-006). `docs/MODERN_PATCH_DELTA.md`
@@ -20,7 +20,7 @@ regression oracle for the legacy ruleset only (ledger MODERN-006). `docs/MODERN_
 | [RUNES_IMPLEMENTATION.md](RUNES_IMPLEMENTATION.md) | **Implemented** runes, shards, STAT/DMG modifier ordering and the combined item+rune tick (`combat`): layout, coverage, tick order, integrator duties, known gaps | — |
 | [RUNES.md](RUNES.md) | Page legality, stat shards, every rune in all five trees (incl. Stormraider's Surge, which replaced Phase Rush in 26.9 under id 8230), automatic rune swaps, rune hooks | 1256 |
 | [SUMMONER_SPELLS.md](SUMMONER_SPELLS.md) | Flash, Teleport/Unleashed Teleport (role-quest interaction), Ignite, Exhaust, Barrier, Heal, Ghost, Cleanse, Hexflash; Smite listed and deferred | 551 |
-| [WORLD_IMPLEMENTATION.md](WORLD_IMPLEMENTATION.md) | **Implemented** modern world tick (`world.tick`): unit layout, tick order, how minions/turrets, kits, summoners, items, runes, economy and quest compose; verified symptoms; gaps | — |
+| [WORLD_IMPLEMENTATION.md](WORLD_IMPLEMENTATION.md) | **Implemented** modern world tick (`world.tick`): package layers, unit layout, tick order, how minions/turrets, kits, summoners, items, runes, economy and quest compose; verified symptoms; gaps | — |
 | [VISION.md](VISION.md) | **Implemented** fog of war: sight radii, walls, brush, structures, attack reveal, targeting gates; unresolved client constants | — |
 | [WARDS.md](WARDS.md) | **Implemented** wards and trinkets: Stealth/Control Ward, Farsight, Oracle Lens, stealth and true sight, ward gold, vision runes | — |
 | [JUNGLE.md](JUNGLE.md) | **Implemented** jungle camps and Scuttle Crab, monster AI (aggro, leash, reset), camp gold/XP, Smite, jungle pets | — |

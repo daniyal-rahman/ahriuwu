@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.runes.effects import domination as M
 from lanerl_jax.modern.items.effects.core import CC
+from lanerl_jax.modern.runes.effects import domination as M
 from lanerl_jax.modern.runes.effects.core import rune_item
 from lanerl_jax.modern.tests import item_harness as H
 from lanerl_jax.modern.tests import rune_harness as RH

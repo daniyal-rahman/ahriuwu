@@ -1,6 +1,6 @@
 """Modern map ingestion must never reinterpret the legacy map as current."""
-import struct
 import hashlib
+import struct
 
 import numpy as np
 import pytest
@@ -109,6 +109,7 @@ def test_team_gates_and_structure_collision():
 def test_jit_vmap_agrees_with_independent_host_disk_queries():
     import jax
     import jax.numpy as jnp
+
     from lanerl_jax.modern.map.terrain import is_walkable
     g = open_grid()
     f = g.flags.copy()

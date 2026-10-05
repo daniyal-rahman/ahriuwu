@@ -4,11 +4,10 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import numpy as np
 
-from lanerl_jax.obs.vision import VisionGrid
-from lanerl_jax.modern import world as MS
+from lanerl_jax.modern.core import types as W
 from lanerl_jax.modern.world.phases.attack import CAST_ID_STRIDE
 from lanerl_jax.modern.world.views import in_brush
-from lanerl_jax.modern.core import types as W
+from lanerl_jax.obs.vision import VisionGrid
 
 
 def test_in_brush_reads_flag_bit_0_and_is_false_without_fog():
@@ -23,15 +22,15 @@ def test_in_brush_reads_flag_bit_0_and_is_false_without_fog():
 
 def test_cast_id_stride_covers_every_unit():
     from lanerl_jax.modern.champions.core import KIT_ID_BASE
-    from lanerl_jax.modern.world.config import layout
-    n = layout()["struct0"] + 30
+    from lanerl_jax.modern.world.config import Layout
+    n = Layout().n_units                                          # the largest (full-map) world
     assert n <= CAST_ID_STRIDE
     assert (1 << 22) * CAST_ID_STRIDE <= KIT_ID_BASE              # ticks < 2^22 (~38.8 h at 30 Hz)
 
 
 def test_ward_is_clickable_with_a_selection_radius():
-    from lanerl_jax.train.actions import _screen_to_centred_lane
     from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, modern_orders_from
+    from lanerl_jax.train.actions import _screen_to_centred_lane
     n = 3                                                             # Garen, Jax, a red ward
     sx, sy = 48, 27
     ds, dn = (float(v) for v in _screen_to_centred_lane(jnp.float32((sx + 0.5) / 96), jnp.float32((sy + 0.5) / 54)))

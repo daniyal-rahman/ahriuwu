@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
+
 from lanerl_jax.modern.lane import towers as t
 
 
@@ -209,10 +210,10 @@ def test_buildings_regen_respawn_and_no_plates():
 
 # --- every lane: chain, plates, Nexus turrets, inhibitor respawn, game end ---
 import json
-from pathlib import Path
-from lanerl_jax.modern.lane import ai as L
+
 from lanerl_jax.modern.core.types import KIND_CHAMPION, KIND_INHIBITOR, KIND_NEXUS, KIND_TURRET, WorldUnits
 from lanerl_jax.modern.data import PATCH_DIR
+from lanerl_jax.modern.lane import ai as L
 
 _GEO = json.loads((PATCH_DIR / "geometry.json").read_text())
 _TIER = {"outer": 0, "inner": 1, "inhibitor": 2, "nexus": 3}
@@ -220,12 +221,13 @@ _TIER = {"outer": 0, "inner": 1, "inhibitor": 2, "nexus": 3}
 
 def _map_structures():
     """Champions + all 30 structures from the client geometry (inhibitors at their placements)."""
-    from lanerl_jax.modern.world.config import INHIBITORS, LANES
+    from lanerl_jax.modern.map.lanes import LANE_NAMES
+    from lanerl_jax.modern.world.config import INHIBITORS
     rows = [(KIND_CHAMPION, 0, 0, 500., 500., -1), (KIND_CHAMPION, 0, 1, 14000., 14000., -1)]
     for o in _GEO["turrets"]:
         rows.append((KIND_TURRET, _TIER[o["tier"]], o["team"], *o["position"], o["lane"]))
     for (team, lane), p in INHIBITORS.items():
-        rows.append((KIND_INHIBITOR, 0, team, p[0], p[1], LANES.index(lane)))
+        rows.append((KIND_INHIBITOR, 0, team, p[0], p[1], LANE_NAMES.index(lane)))
     rows += [(KIND_NEXUS, 0, 0, 1549., 1658., -1), (KIND_NEXUS, 0, 1, 13240., 13235., -1)]
     a = np.asarray(rows, np.float64)
     n = len(rows)

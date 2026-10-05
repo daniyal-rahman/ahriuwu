@@ -6,13 +6,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import lanerl_jax.modern.items.effects as E
 from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.items import inventory as inv_mod
 from lanerl_jax.modern.items.catalog import catalog
 from lanerl_jax.modern.items.effects import consumables as CO
 from lanerl_jax.modern.items.effects import starters as S
 from lanerl_jax.modern.tests import item_harness as H
-import lanerl_jax.modern.items.effects as E
 
 
 def world(extra=()):

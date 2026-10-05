@@ -1,8 +1,13 @@
-"""26.19 champion kits (Garen 86, Jax 24) for the modern world tick.
+"""26.19 champion kits for the modern world tick, and the champion registry.
 
-Every hook runs both kits for every holder; each kit gates itself on
-``KitCtx.champion_id``, so holders are independent and shapes are fixed.
-See ``core`` for the contract and the cast-id scheme.
+``KITS`` lists one module per champion (Garen 86, Jax 24). A kit module defines ``NAME``, ``ID``,
+``SKILL_ORDER`` (default rank per level), ``TRAITS`` (rune legality), ``UNIT_TARGET_RANGE``, its
+``State``/``init`` and the hooks ``cast``, ``periodic``, ``on_attack``, ``on_hit``, ``on_damage``,
+``on_takedown``, ``stats``, ``defense``, ``attack_mods``, ``debuffs`` and optionally ``ghosted``
+(no unit collision) and ``dodging`` (dodges basic attacks). Every hook runs every kit for every
+holder; each kit gates itself on ``KitCtx.champion_id``, so holders are independent and shapes are
+fixed. Adding a champion is a new kit module appended to ``KITS``. See ``core`` for the contract
+and the cast-id scheme.
 """
 from __future__ import annotations
 
@@ -12,31 +17,32 @@ import jax.numpy as jnp
 
 from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
-from . import garen, jax as jax_kit
-from .core import (GAREN, JAX, KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
+from . import garen
+from . import jax as jax_kit
+from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = {GAREN: garen, JAX: jax_kit}
+KITS = (garen, jax_kit)
+BY_NAME = {k.NAME: k for k in KITS}
+
+ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit
 
 
-class ChampionState(NamedTuple):
-    garen: garen.State
-    jax: jax_kit.State
+def kit(name: str):
+    """Kit module of a champion name (host-side; unsupported champions raise)."""
+    if name not in BY_NAME:
+        raise ValueError(f"unsupported modern champion {name!r}")
+    return BY_NAME[name]
 
 
 def init(n_champions: int, n_units: int) -> ChampionState:
-    return ChampionState(garen.init(n_champions, n_units), jax_kit.init(n_champions, n_units))
+    return ChampionState(*(k.init(n_champions, n_units) for k in KITS))
 
 
-def _sizes(kctx, units):
-    return kctx.unit.shape[0], units.x.shape[0]
-
-
-def _both(fn_name, state, kctx, units, *args):
-    c, n = _sizes(kctx, units)
-    sg, og = getattr(garen, fn_name)(state.garen, kctx, units, *args)
-    sj, oj = getattr(jax_kit, fn_name)(state.jax, kctx, units, *args)
-    return ChampionState(sg, sj), merge_out([og, oj], c, n)
+def _all(fn_name, state, kctx, units, *args) -> tuple[ChampionState, KitOut]:
+    c, n = kctx.unit.shape[0], units.x.shape[0]
+    pairs = [getattr(k, fn_name)(st, kctx, units, *args) for k, st in zip(KITS, state)]
+    return ChampionState(*(p[0] for p in pairs)), merge_out([p[1] for p in pairs], c, n)
 
 
 def unit_target_ranges(champion_ids) -> Any:
@@ -44,48 +50,55 @@ def unit_target_ranges(champion_ids) -> Any:
     the world walks a champion into this range before casting (``UNIT_TARGET_RANGE`` per kit)."""
     ids = jnp.asarray(champion_ids, jnp.int32)
     out = jnp.zeros(ids.shape + (4,), jnp.float32)
-    for cid, mod in KITS.items():
-        out = jnp.where((ids == cid)[:, None], jnp.asarray(mod.UNIT_TARGET_RANGE, jnp.float32)[None, :], out)
+    for k in KITS:
+        out = jnp.where((ids == k.ID)[:, None], jnp.asarray(k.UNIT_TARGET_RANGE, jnp.float32)[None, :], out)
     return out
 
 
 def cast(state: ChampionState, kctx: KitCtx, units, order) -> tuple[ChampionState, KitOut]:
-    return _both("cast", state, kctx, units, order)
+    return _all("cast", state, kctx, units, order)
 
 
 def periodic(state: ChampionState, kctx: KitCtx, units) -> tuple[ChampionState, KitOut]:
-    return _both("periodic", state, kctx, units)
+    return _all("periodic", state, kctx, units)
 
 
 def on_attack(state: ChampionState, kctx: KitCtx, units, launch) -> tuple[ChampionState, KitOut]:
-    return _both("on_attack", state, kctx, units, launch)
+    return _all("on_attack", state, kctx, units, launch)
 
 
 def dodging_units(state: ChampionState, kctx: KitCtx, n_units: int) -> Any:
     """(N,) bool: world units currently dodging basic attacks (Jax E)."""
-    return jnp.zeros((n_units,), bool).at[kctx.unit].max(jax_kit.dodging(state.jax, kctx))
+    dodge = jnp.zeros(kctx.unit.shape, bool)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "dodging"):
+            dodge = dodge | k.dodging(st, kctx)
+    return jnp.zeros((n_units,), bool).at[kctx.unit].max(dodge)
 
 
 def on_hit(state: ChampionState, kctx: KitCtx, units, launch) -> tuple[ChampionState, KitOut]:
-    return _both("on_hit", state, kctx, units, launch, dodging_units(state, kctx, units.x.shape[0]))
+    return _all("on_hit", state, kctx, units, launch, dodging_units(state, kctx, units.x.shape[0]))
 
 
 def on_damage(state: ChampionState, kctx: KitCtx, units, report) -> tuple[ChampionState, KitOut]:
-    return _both("on_damage", state, kctx, units, report)
+    return _all("on_damage", state, kctx, units, report)
 
 
 def on_takedown(state: ChampionState, kctx: KitCtx, units, kills) -> ChampionState:
-    return ChampionState(garen.on_takedown(state.garen, kctx, units, kills),
-                         jax_kit.on_takedown(state.jax, kctx, units, kills))
+    return ChampionState(*(k.on_takedown(st, kctx, units, kills) for k, st in zip(KITS, state)))
 
 
 def stats(state: ChampionState, kctx: KitCtx):
-    return combine_stats(garen.stats(state.garen, kctx), jax_kit.stats(state.jax, kctx))
+    parts = [k.stats(st, kctx) for k, st in zip(KITS, state)]
+    out = parts[0]
+    for p in parts[1:]:
+        out = combine_stats(out, p)
+    return out
 
 
 def defense(state: ChampionState, kctx: KitCtx) -> KitDefense:
     out = neutral_defense(kctx.unit.shape[0])
-    for d in (garen.defense(state.garen, kctx), jax_kit.defense(state.jax, kctx)):
+    for d in (k.defense(st, kctx) for k, st in zip(KITS, state)):
         out = KitDefense(out.received_mult * d.received_mult, out.dodge_basic | d.dodge_basic,
                          out.aoe_received_mult * d.aoe_received_mult,
                          1.0 - (1.0 - out.tenacity_bonus) * (1.0 - d.tenacity_bonus))
@@ -94,22 +107,26 @@ def defense(state: ChampionState, kctx: KitCtx) -> KitDefense:
 
 def attack_mods(state: ChampionState, kctx: KitCtx) -> KitAttackMods:
     out = neutral_attack_mods(kctx.unit.shape[0])
-    for m in (garen.attack_mods(state.garen, kctx), jax_kit.attack_mods(state.jax, kctx)):
+    for m in (k.attack_mods(st, kctx) for k, st in zip(KITS, state)):
         out = combine_attack_mods(out, m)
     return out
 
 
 def ghosted(state: ChampionState, kctx: KitCtx) -> Any:
     """(C,) bool: holder ignores unit collision (Garen E Judgment)."""
-    return garen.ghosted(state.garen, kctx)
+    out = jnp.zeros(kctx.unit.shape, bool)
+    for k, st in zip(KITS, state):
+        if hasattr(k, "ghosted"):
+            out = out | k.ghosted(st, kctx)
+    return out
 
 
 def debuffs(state: ChampionState, kctx: KitCtx, units) -> Debuffs:
     """(N,) target-side reductions from kits (Garen E armor shred)."""
     n = units.x.shape[0]
-    return combine_debuffs([garen.debuffs(state.garen, kctx, units), jax_kit.debuffs(state.jax, kctx, units)], n)
+    return combine_debuffs([k.debuffs(st, kctx, units) for k, st in zip(KITS, state)], n)
 
 
-__all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "GAREN", "JAX", "KITS", "init",
+__all__ = ["ChampionState", "KitAttackMods", "KitCtx", "KitDefense", "KitOut", "KITS", "BY_NAME", "kit", "init",
            "cast", "periodic", "on_attack", "on_hit", "on_damage", "on_takedown", "stats", "defense",
            "attack_mods", "debuffs", "dodging_units", "ghosted"]

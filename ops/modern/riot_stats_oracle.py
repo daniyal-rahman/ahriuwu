@@ -109,8 +109,9 @@ def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bo
     AS) (fits 65% of frames vs 14% for 100 × AS / base AS on champions whose
     AS ratio differs from base AS) and truncates every stat to an integer.
     """
-    import numpy as np
     import jax.numpy as jnp
+    import numpy as np
+
     from lanerl_jax.modern.core import stat_pipeline as SP
     from lanerl_jax.modern.items.catalog import STAT_FIELDS, ItemStats, catalog, combine_stats
     from lanerl_jax.modern.items.loadout import stat_shard_stats
@@ -141,8 +142,8 @@ def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bo
     static = ItemStats(**{k: jnp.asarray(v) for k, v in bonus.items()})
     total = static
     if runes:
-        from lanerl_jax.modern.runes import effects as RE
         from lanerl_jax.modern.items.effects.core import Ctx
+        from lanerl_jax.modern.runes import effects as RE
         from lanerl_jax.modern.runes.effects.core import rune_events
         cat = rune_catalog()
         page = np.zeros((n, len(cat.ids)), np.int32)

@@ -1,15 +1,16 @@
 """Symptom tests for the 26.19 jungle (docs/modern/JUNGLE.md): camps, monster AI, rewards,
 Smite, crests, Scuttler and jungle pets. Eager JAX over a tiny world (2 champions + the 38
 jungle slots); ``world.tick.step`` is never compiled here."""
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.jungle import camps as J
 from lanerl_jax.modern.core.stats import MAGIC, PHYSICAL, TRUE
-from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_MONSTER, KIND_NONE, NEUTRAL, AttackLaunch,
+from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_MONSTER, KIND_NONE, NEUTRAL, UNIT_COLUMNS, AttackLaunch,
                                           CastOrder, WorldUnits, init_attack_state)
+from lanerl_jax.modern.jungle import camps as J
 
 M = J.Monster
 C = 2
@@ -30,31 +31,32 @@ class World:
         f = lambda v: np.full(n, v, np.float32)
         self.a = dict(kind=np.full(n, KIND_NONE, np.int32), sub=np.zeros(n, np.int32), team=np.full(n, NEUTRAL, np.int32),
                       alive=np.zeros(n, bool), targetable=np.zeros(n, bool), x=f(0.0), y=f(0.0), hp=f(0.0),
-                      max_hp=f(0.0), radius=f(50.0), armor=f(0.0), mr=f(0.0), ad=f(0.0), arange=f(0.0), aspeed=f(0.0),
-                      mspeed=f(0.0), windup=f(0.0), missile_speed=f(0.0), spawn_time=f(0.0),
+                      max_hp=f(0.0), radius=f(50.0), armor=f(0.0), magic_resist=f(0.0), attack_damage=f(0.0),
+                      attack_range=f(0.0), attack_speed=f(0.0), move_speed=f(0.0), windup=f(0.0),
+                      missile_speed=f(0.0), spawn_time=f(0.0),
                       spawn_seq=np.arange(n, dtype=np.int32))
         for c, (x, y) in enumerate(((3000.0, 3000.0), (12000.0, 12000.0))):
             self.a["kind"][c], self.a["team"][c], self.a["alive"][c], self.a["targetable"][c] = KIND_CHAMPION, c, True, True
             self.a["x"][c], self.a["y"][c], self.a["hp"][c], self.a["max_hp"][c] = x, y, 1000.0, 1000.0
-            self.a["radius"][c], self.a["arange"][c], self.a["mspeed"][c] = 65.0, 125.0, 345.0
+            self.a["radius"][c], self.a["attack_range"][c], self.a["move_speed"][c] = 65.0, 125.0, 345.0
         self.state = J.init_jungle(table, C, n)
         self.seq = n
 
     def units(self):
         a = {k: jnp.asarray(v) for k, v in self.a.items()}
-        return WorldUnits(kind=a["kind"], sub=a["sub"], team=a["team"], alive=a["alive"],
-                          targetable=a["targetable"] & a["alive"], x=a["x"], y=a["y"], radius=a["radius"], hp=a["hp"],
-                          max_hp=a["max_hp"], armor=a["armor"], magic_resist=a["mr"], attack_damage=a["ad"],
-                          attack_range=a["arange"], attack_speed=a["aspeed"], move_speed=a["mspeed"],
-                          spawn_seq=a["spawn_seq"], spawn_time=a["spawn_time"])
+        return WorldUnits(**{f: a[f] for f in WorldUnits._fields if f != "targetable"},
+                          targetable=a["targetable"] & a["alive"])
 
     def spawn(self, level=(1, 1)):
         self.state, w = J.spawn_step(self.state, self.table, now=self.now, champion_level=jnp.asarray(level))
-        keys = [k for k in self.a if k not in ("max_hp",)] + ["max_hp"]
-        out, self.seq = J.write_spawns(self.table, w, now=jnp.float32(self.now), next_seq=jnp.int32(self.seq),
-                                       **{k: jnp.asarray(self.a[k]) for k in keys})
-        for k, v in out.items():
-            self.a[k] = np.array(v)
+        u = jax.tree.map(np.asarray, J.unit_write(self.table, w, self.n))       # what world.units.write_units applies
+        for k in UNIT_COLUMNS:
+            self.a[k] = np.where(u.mask, getattr(u, k), self.a[k]).astype(self.a[k].dtype)
+        self.a["alive"] |= u.mask
+        self.a["targetable"] |= u.mask
+        self.a["spawn_time"] = np.where(u.new, self.now, self.a["spawn_time"]).astype(np.float32)
+        self.a["spawn_seq"] = np.where(u.new, self.seq + np.cumsum(u.new) - 1, self.a["spawn_seq"]).astype(np.int32)
+        self.seq += int(u.new.sum())
         return w
 
     def ai(self, dmg=None, dt=1.0 / 30.0):

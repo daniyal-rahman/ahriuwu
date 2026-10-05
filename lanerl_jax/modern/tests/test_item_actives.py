@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.items.effects import actives as A
 from lanerl_jax.modern.items import effects as E
+from lanerl_jax.modern.items.effects import actives as A
 from lanerl_jax.modern.tests import item_harness as H
 
 

@@ -397,7 +397,6 @@ def _champion_health_hits(report, ctx, units) -> Any:
 
 
 def on_damage(state: State, page, ctx, units, ev: RuneEvents):
-    c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     rep = ev.report
     p = rep.packets

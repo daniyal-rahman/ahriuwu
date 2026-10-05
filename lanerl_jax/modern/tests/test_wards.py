@@ -14,16 +14,16 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.world import config as MW
 from lanerl_jax.modern.core import types as W
+from lanerl_jax.modern.world import config as MW
 
 if not MW.DEFAULT_MAP.exists():
     pytest.skip("modern map artifact not present", allow_module_level=True)
 
-from lanerl_jax.modern.data.navgrid import load_patch_map  # noqa: E402
-from lanerl_jax.modern.runes import catalog as RD  # noqa: E402
 from lanerl_jax.modern import vision as MV  # noqa: E402
 from lanerl_jax.modern import wards as WD  # noqa: E402
+from lanerl_jax.modern.data.navgrid import load_patch_map  # noqa: E402
+from lanerl_jax.modern.runes import catalog as RD  # noqa: E402
 
 LANE_MID = (2720.0, 13100.0)
 BRUSH = (2274.0, 13558.0)             # lane brush (deepest cell)

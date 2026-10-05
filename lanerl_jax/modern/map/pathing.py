@@ -2,9 +2,11 @@
 import math
 import numbers
 from typing import NamedTuple
+
 import jax
 import jax.numpy as jnp
-from .terrain import is_walkable, StaticTerrain
+
+from .terrain import is_walkable
 
 
 class FlowRoutes(NamedTuple):

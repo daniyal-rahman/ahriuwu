@@ -34,12 +34,12 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         jnp.where(rp.valid & rr_killed, rp.src, -1).astype(jnp.int32))
     dmg = jnp.zeros((n, n), bool).at[jnp.clip(rp.src, 0, n - 1), jnp.clip(rp.dst, 0, n - 1)].max(rp.valid)
     died = s.alive & (hp <= 0.0)
-    death_seen = died[None, :] & s.sight[:c]                          # start-of-tick sight, victim alive (Overgrowth)
+    death_seen = died[None, :] & s.sight                          # start-of-tick sight, victim alive (Overgrowth)
     struct = W.is_structure(s.kind)
     towers, plates = LA.structure_damage_events(towers, s.hp, jnp.where(struct, hp, s.hp), now=now)
     minion_died = died & (s.kind == W.KIND_MINION)
     last_hitter = jnp.where(killer < c, killer, -1)
-    md = E.MinionDeaths(valid=minion_died, x=s.x, y=s.y, team=s.team, gold=s.m_gold, xp=s.m_xp, level=s.m_level,
+    md = E.MinionDeaths(valid=minion_died, x=s.x, y=s.y, team=s.team, gold=s.bounty_gold, xp=s.bounty_xp, level=s.bounty_level,
                         last_hitter=last_hitter, unit=jnp.arange(n, dtype=jnp.int32))
     sv = plates.plates > 0
     sev = E.StructureEvents(valid=sv | plates.destroyed, unit=jnp.arange(n, dtype=jnp.int32), x=s.x, y=s.y,
@@ -63,8 +63,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                                    champion_killer=jnp.where(killer[:c] < c, killer[:c], -1))
         gg, xg = gg + jrw.gold, xg + jrw.xp
         large = large + jrw.large_kills
-        j0 = cfg.jungle.monster0
-        killed_mon = killed_mon.at[:, j0:j0 + cfg.jungle.n_slots].set(jrw.killed)
+        killed_mon = killed_mon.at[:, cfg.jungle.slots].set(jrw.killed)
     if so is not None:
         obj, orw = OBJ.objectives_after_damage(s.obj, cfg.objectives, units, rp, rr_loss, died=died, killer=killer,
                                                hp_after=hp, now=now, levels=level, champ=sc.cinfo)
@@ -73,7 +72,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         epic, large = epic + orw.epic_takedown, large + orw.large_monster_kill
         # Epic takedowns for K.on_takedown / item+rune hooks: the killing team's champions (the
         # participation window is internal to jungle.objectives; exact with one champion per team).
-        esl = slice(cfg.objectives.slot0, cfg.objectives.slot0 + 8)
+        esl = cfg.objectives.slots
         o_td = orw.killed[None, :] & (orw.killer_team[None, :] == s.team[:c][:, None])
         killed_mon = killed_mon.at[:, esl].set(killed_mon[:, esl] | o_td)
     if cfg.regions is not None:

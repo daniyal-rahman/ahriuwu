@@ -48,8 +48,8 @@ def add_world_args(ap: argparse.ArgumentParser) -> None:
 
 def build_world(args):
     """``(cfg, run)``: the Garen-vs-Jax world for ``args`` and ``run(state, ticks) -> (state, overflow)``."""
-    from lanerl_jax.modern.runes import catalog as RD
     from lanerl_jax.modern import world as MS
+    from lanerl_jax.modern.runes import catalog as RD
     from lanerl_jax.modern.world import config as MW
     lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
           MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(

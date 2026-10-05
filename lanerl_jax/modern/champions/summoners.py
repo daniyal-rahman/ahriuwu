@@ -43,10 +43,10 @@ import numpy as np
 
 from .. import role_quest as RQ
 from ..core.damage import PROP_NO_DAMAGE_MOD, PROP_NO_OMNIVAMP, PROP_SUMMONER, TAG_PERIODIC, TRUE, packets
-from ..items.effects.core import BIG, Effects, ShieldGrant, effects, shield_grants
-from ..runes.catalog import lin
 from ..core.stat_pipeline import cooldown, rescale_cooldown
 from ..core.types import KIND_CHAMPION, KIND_INHIBITOR, KIND_MINION, KIND_NEXUS, KIND_TURRET, Dash, WorldUnits
+from ..items.effects.core import BIG, Effects, ShieldGrant, effects, shield_grants
+from ..runes.catalog import lin
 
 SUMMONERS = {"flash": 4, "teleport": 12, "ignite": 14, "exhaust": 3, "barrier": 21, "heal": 7, "ghost": 6,
              "cleanse": 1, "smite": 11}

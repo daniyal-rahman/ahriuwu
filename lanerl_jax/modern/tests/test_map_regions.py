@@ -1,13 +1,12 @@
 """Map11 region masks: lanes, jungle, river, bases, quest lane, Homeguard endpoint."""
-import json
 from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.map import regions as R
 from lanerl_jax.modern.core.types import KIND_CHAMPION, KIND_INHIBITOR, KIND_MINION, KIND_TURRET, WorldUnits
+from lanerl_jax.modern.map import regions as R
 
 MAP = Path("/mnt/nfs/shared/modern-world-map-research/grid-26.19-base")
 pytestmark = pytest.mark.skipif(not MAP.exists(), reason="pinned 26.19 navgrid not mounted")

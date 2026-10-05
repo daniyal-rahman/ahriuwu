@@ -12,15 +12,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.world import config as MW
 from lanerl_jax.modern.core import types as W
 from lanerl_jax.modern.tests import world_harness as H
+from lanerl_jax.modern.world import config as MW
 
 if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
-from lanerl_jax.modern import world as MS  # noqa: E402
 from lanerl_jax.modern import vision as MV  # noqa: E402
+from lanerl_jax.modern import world as MS  # noqa: E402
 
 LANE_MID = (2720.0, 13100.0)          # top-lane path midpoint (open ground)
 BRUSH = (2274.0, 13558.0)             # deepest walkable cell of the lane brush (639 u from LANE_MID)
@@ -46,7 +46,8 @@ def place(garen, jax_, t=30.0, *, fast=False):
 
 
 def test_fixtures_are_what_they_claim():
-    from lanerl_jax.modern.data.navgrid import BRUSH as BRUSH_BIT, load_patch_map
+    from lanerl_jax.modern.data.navgrid import BRUSH as BRUSH_BIT
+    from lanerl_jax.modern.data.navgrid import load_patch_map
     grid, _ = load_patch_map(MW.DEFAULT_MAP)
     flags = lambda p: int(grid.flags[grid.cell(*p)[1], grid.cell(*p)[0]])
     assert flags(BRUSH) & BRUSH_BIT and not flags(LANE_MID) & BRUSH_BIT
@@ -95,10 +96,10 @@ def test_reveal_circle_expires():
     rev = MV.reveal_step(s.reveal, jnp.asarray([False, True]), jnp.asarray([False, True]),
                          s.x[:2], s.y[:2], s.t)
     vis, _ = MV.visibility(s.x, s.y, s.kind, s.sub, s.team, s.alive, rev, s.t + 1.9, cfg.vision,
-                           n_fogged=MW.layout()["struct0"])
+                           n_fogged=cfg.layout.struct0)
     assert bool(vis[0, 1])
     vis, _ = MV.visibility(s.x, s.y, s.kind, s.sub, s.team, s.alive, rev, s.t + 2.01, cfg.vision,
-                           n_fogged=MW.layout()["struct0"])
+                           n_fogged=cfg.layout.struct0)
     assert not bool(vis[0, 1])
 
 

@@ -19,10 +19,10 @@ tests below assert that their sizes match the simulator's implementations.
 import gzip
 import json
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 import pytest
+
 from lanerl_jax.modern.data import ORACLE_DIR
 
 ORACLE = ORACLE_DIR
@@ -67,6 +67,7 @@ def test_first_death_bounty_is_base_gold_by_level():
     """A champion with no takedowns and < 2000 farmed gold has bounty 0 (the
     100-point positive buffer), so its first death pays base[V] (+100 first blood)."""
     from collections import Counter, defaultdict
+
     from lanerl_jax.modern import economy as E
     t = table()
     f = {k: i for i, k in enumerate(t["fields"])}

@@ -28,9 +28,9 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, PROP_NO_DAMAGE_MOD, PROP_SUMMONER,
-                            TAG_ACTIVE_SPELL, TAG_BASIC_ATTACK, TAG_NON_AMPABLE, TAG_ON_HIT, TAG_PET,
-                            TAG_PROC, concat_packets, has, packets)
+from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, PROP_NO_DAMAGE_MOD, PROP_SUMMONER, TAG_ACTIVE_SPELL,
+                            TAG_BASIC_ATTACK, TAG_NON_AMPABLE, TAG_ON_HIT, TAG_PET, TAG_PROC, concat_packets, has,
+                            packets)
 from ...items.catalog import ItemStats
 from .core import (BIG, adaptive_damage_type, breakpoints, by_range, ea, effects, first_instance, has_rune,
                    level_table, lin, lin_growth, rune_catalog, rune_item, target_class)

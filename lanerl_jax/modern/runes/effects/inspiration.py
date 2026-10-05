@@ -34,8 +34,8 @@ import numpy as np
 
 from ...core.damage import CLASS_CHAMPION, CLASS_STRUCTURE, TAG_INDIRECT, TAG_PROC, TRUE, packets
 from ...items.catalog import DATA_PATH, STAT_INDEX, ItemStats, catalog
-from .core import (BIG, Effects, RuneEvents, RuneOutputs, ea, effects, enemy_champions, has_rune, lin,
-                   no_outputs, rune_item)
+from .core import (BIG, Effects, RuneEvents, RuneOutputs, ea, effects, enemy_champions, has_rune, lin, no_outputs,
+                   rune_item)
 
 GLACIAL, SPELLBOOK, FIRST_STRIKE = 8351, 8360, 8369
 FLASHTRAPTION, FOOTWEAR, CASH_BACK = 8306, 8304, 8321

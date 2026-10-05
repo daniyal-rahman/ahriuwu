@@ -44,13 +44,11 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ..data.champions import cooldowns, spell, values
 from ..core import damage as D
+from ..core.types import KIND_CHAMPION, KIND_NONE, KIND_WARD, STRUCTURE_KINDS, CCOut, Dash, merge_cc, no_cc, no_dash
+from ..data.champions import cooldowns, spell, values
 from ..items.effects.core import ShieldGrant
-from ..core.types import (KIND_CHAMPION, KIND_NONE, KIND_WARD, STRUCTURE_KINDS, CCOut, Dash, merge_cc, no_cc,
-                          no_dash)
 
-GAREN, JAX = 86, 24
 Q, W, E, R = range(4)
 
 KIT_ID_BASE = 1 << 30

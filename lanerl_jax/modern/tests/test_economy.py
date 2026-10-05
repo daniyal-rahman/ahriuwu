@@ -6,9 +6,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern import economy as E
 from lanerl_jax.modern import role_quest as Q
+from lanerl_jax.modern.core import damage as D
 
 
 def test_client_tables():
@@ -172,7 +172,6 @@ def test_economy_step_first_blood_jit():
     st = E.init_economy(c, n, [Q.ROLE_TOP, Q.ROLE_TOP])
     st = st._replace(last_t=jnp.float32(149.9), level=jnp.asarray([3, 3]), xp=jnp.asarray([700., 700.]))
     hit = D.packets(jnp.ones(1, bool), 0, 1, 100.0, D.PHYSICAL, D.BASIC_ATTACK)
-    from lanerl_jax.modern.items.effects.core import Report
     from lanerl_jax.modern.tests import item_harness as H
     u = H.units(H.champions(x1=200.) + [dict(x=5000, y=0, team=0), dict(x=5000, y=0, team=1)])
     rep, _ = H.resolve(hit, u)

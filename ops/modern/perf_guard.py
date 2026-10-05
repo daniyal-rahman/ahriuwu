@@ -29,7 +29,7 @@ from pathlib import Path
 
 import jax
 
-BASELINE = Path(__file__).with_name("modern_perf_baseline.json")
+BASELINE = Path(__file__).with_name("perf_baseline.json")
 DEFAULT_ENVS = {"gpu": 256, "cpu": 16}
 
 

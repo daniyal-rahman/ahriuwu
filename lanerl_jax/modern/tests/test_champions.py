@@ -6,14 +6,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.data.champions import cooldowns, spell, values
 from lanerl_jax.modern import champions as K
+from lanerl_jax.modern.champions import core
+from lanerl_jax.modern.champions import garen as G
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.champions import core, garen as G
-from lanerl_jax.modern.items.effects.core import Kills, Report
 from lanerl_jax.modern.core.damage import Resolved
 from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_MINION, KIND_MONSTER, KIND_TURRET, KIND_WARD,
                                           AttackLaunch, CastOrder, WorldUnits)
+from lanerl_jax.modern.data.champions import cooldowns, spell, values
+from lanerl_jax.modern.items.effects.core import Kills, Report
 
 DT = 1.0 / 30.0
 GAREN_UNIT, JAX_UNIT, MINION_RED, MINION_RED2, TURRET_RED, MINION_BLUE = range(6)

@@ -2,14 +2,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from lanerl_jax.modern.lane.minions import (base_move_speed, minion_upgrade_stats, move_speed_soft_cap,
-                                            sidelane_bonus_move_speed, CANNON_PROFILE, CASTER_PROFILE,
-                                            MELEE_PROFILE, SUPER_PROFILE, MinionType, TargetKind,
-                                            TargetPriority, call_for_help_applies, call_for_help_trigger,
-                                            cannon_wave, gold_bounty, lane_minion_current_hp_bonus,
-                                            minion_pushing_modifiers, select_target, shared_xp_fraction,
-                                            spawn_event, target_priority, upgrade_index_at, wave_composition,
-                                            wave_index_at, wave_interval_s, wave_spawn_time)
+from lanerl_jax.modern.lane.minions import (CANNON_PROFILE, CASTER_PROFILE, MELEE_PROFILE, SUPER_PROFILE,
+                                            MinionType, TargetKind, base_move_speed, call_for_help_applies,
+                                            call_for_help_trigger, cannon_wave, gold_bounty,
+                                            lane_minion_current_hp_bonus, minion_pushing_modifiers,
+                                            minion_upgrade_stats, move_speed_soft_cap, select_target,
+                                            shared_xp_fraction, sidelane_bonus_move_speed, spawn_event,
+                                            target_priority, upgrade_index_at, wave_composition, wave_index_at,
+                                            wave_interval_s, wave_spawn_time)
 
 
 def test_wave_schedule_including_breakpoint_gap_and_cannon_sequence():
@@ -166,8 +166,7 @@ def test_move_speed_timing_and_sidelane_buff():
 
 
 # --- all-lane spawn schedule -------------------------------------------------
-from lanerl_jax.modern.lane.minions import (LaneSpawnState, init_lane_spawn, lane_spawn_step, super_count,
-                                            wave_unit_type)
+from lanerl_jax.modern.lane.minions import LaneSpawnState, init_lane_spawn, lane_spawn_step, super_count, wave_unit_type
 
 
 def _run_schedule(t_end, dt=1 / 30, **kw):

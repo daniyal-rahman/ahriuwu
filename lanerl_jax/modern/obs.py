@@ -36,13 +36,21 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 import numpy as np
+
 from lanerl_rl.projection import target_on_screen
 
-from ..obs.builder import (GLOBAL_DIM, HP_BAR_STEPS, NORM_AD, NORM_CS, NORM_DIST, NORM_GOLD, NORM_XY,
-                           N_SLOTS, Observation, _topk_slots)
+from ..obs.builder import (GLOBAL_DIM, HP_BAR_STEPS, N_SLOTS, NORM_AD, NORM_CS, NORM_DIST, NORM_GOLD, NORM_XY,
+                           Observation, _topk_slots)
 from ..obs.frame import LaneFrame, delta_to_lane, make_lane_frame, to_lane
+from . import champions as K
+from . import economy as E
+from .champions.core import cooldown_row
+from .core import damage as D
 from .core import types as W
-from .world.config import layout as MW_layout
+from .items import inventory as I
+from .items.catalog import catalog
+from .role_quest import THRESHOLD
+from .world.views import champion_stats
 
 __all__ = ["PROFILE", "MODERN_WORLD_SELF_DIM", "MODERN_ENTITY_DIM", "ModernObservation", "modern_frames",
            "build_modern_observation"]
@@ -76,11 +84,6 @@ def modern_frames(cfg) -> tuple[LaneFrame, LaneFrame]:
 
 def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s: float = 1200.0) -> Observation:
     """One champion's observation of the modern world. ``me`` is its unit index (0 or 1)."""
-    from .core import damage as D
-    from . import economy as E
-    from .champions.core import cooldown_row
-    from .role_quest import THRESHOLD
-    from .world.views import champion_stats
     n = state.kind.shape[0]
     other = 1 - me
     my_team = state.team[me]
@@ -118,9 +121,9 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
     sub = jnp.minimum(state.sub[u], 2)                                # super -> siege column
     sub_1h = jnp.where((k == W.KIND_MINION)[:, None],
                        jnp.stack([sub == 0, sub == 1, sub == 2], axis=-1).astype(jnp.float32), 0.0)
-    lay = MW_layout()
+    lay = cfg.layout
     is_mon = k == W.KIND_MONSTER
-    epic = is_mon & (u >= lay["epic0"]) & (u < lay["ward0"])
+    epic = is_mon & (u >= lay.epic0) & (u < lay.ward0)
     is_ward = k == W.KIND_WARD
     control = is_ward & (state.sub[u] == 1)                          # wards.WardType.CONTROL
     extra = jnp.stack([is_mon, epic, is_ward, control], axis=-1).astype(jnp.float32)
@@ -136,8 +139,12 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
     s_, n_ = to_lane(frame, state.x[me], state.y[me])
     my_hp = jnp.where(state.max_hp[me] > 0, state.hp[me] / state.max_hp[me], 0.0)
     cid = cfg.champion_ids
-    rank_cd = lambda who, ranks: jnp.where(cid[who] == 86, cooldown_row("Garen", ranks[None]),
-                                          cooldown_row("Jax", ranks[None]))[0]
+    def rank_cd(who, ranks):
+        """(4,) base cooldowns at ``ranks`` of the champion in slot ``who`` (kit registry order)."""
+        out = cooldown_row(K.KITS[-1].NAME, ranks[None])
+        for k in reversed(K.KITS[:-1]):
+            out = jnp.where(cid[who] == k.ID, cooldown_row(k.NAME, ranks[None]), out)
+        return out[0]
     base_cd = rank_cd(me, jnp.maximum(c.ranks[me], 1))
     cooldowns = jnp.where(c.ranks[me] > 0, jnp.clip(c.cooldowns[me] / jnp.maximum(base_cd, 1e-3), 0.0, 1.0), 1.0)
     shield = D.total_shield(state.shields, state.t)[me]
@@ -152,8 +159,8 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
         (st.base_ad[me] + st.bonus_ad[me]) / NORM_AD, st.ap[me] / NORM_AD,
         (st.base_armor[me] + st.bonus_armor[me]) / NORM_AD, (st.base_mr[me] + st.bonus_mr[me]) / NORM_AD,
         (~state.alive[me]).astype(jnp.float32), state.econ.recall.channeling[me].astype(jnp.float32),
-        (cid[me] == 86).astype(jnp.float32), (cid[me] == 24).astype(jnp.float32),
-        (cid[other] == 86).astype(jnp.float32), (cid[other] == 24).astype(jnp.float32),
+        *((cid[me] == k.ID).astype(jnp.float32) for k in K.KITS),
+        *((cid[other] == k.ID).astype(jnp.float32) for k in K.KITS),
         c.mana[me] / jnp.maximum(st.max_mana[me], 1.0), shield / jnp.maximum(state.max_hp[me], 1.0),
         summ_cd[0], summ_cd[1], nxt, jnp.clip(state.econ.quest.points[me] / THRESHOLD, 0.0, 1.0),
         state.econ.quest.complete[me].astype(jnp.float32), in_combat.astype(jnp.float32),
@@ -170,8 +177,6 @@ def build_modern_observation(state, me: int, frame: LaneFrame, cfg, *, horizon_s
     since_observed = jnp.where(c.seen_cast[other] > -1e8, jnp.clip(since / jnp.maximum(rank1, 1e-3), 0.0, 1.0), 1.0)
     global_vec = jnp.concatenate([jnp.stack([state.t / horizon_s, enemy_visible]), since_observed])
     assert global_vec.shape[0] == GLOBAL_DIM
-    from .items import inventory as I
-    from .items.catalog import catalog
     cat = catalog()
     in_shop = I.in_shop_area(state.x[me], state.y[me], my_team, ~state.alive[me])
     inv_me = I.Inventory(c.inventory.item[me], c.inventory.stack[me])

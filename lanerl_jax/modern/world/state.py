@@ -28,9 +28,6 @@ from ..lane import ai as LA
 from ..lane import minions as MM
 from . import views as V
 from .config import N_CHAMPIONS, WorldConfig
-from .config import layout as MW_layout
-
-RECALL_MS_LOCK = True
 
 
 class QueuedCast(NamedTuple):
@@ -83,6 +80,18 @@ class ChampionLayer(NamedTuple):
     seen_cast: Any          # (C, 4) game time each Q/W/E/R was last cast while visible to the enemy team
 
 
+class LastTick(NamedTuple):
+    """Events of the previous tick that this tick reads: the world's one-tick lags in one place
+    (``tick.commit`` writes them; docs/modern/WORLD_IMPLEMENTATION.md). Other carried values: the
+    start-of-tick fog ``ModernState.visible``/``sight`` and ``ChampionLayer.dyn``/``reset_next``."""
+    damage_matrix: Any      # (N, N) bool: unit i damaged unit j (lane/monster AI aggro, Scorchclaw)
+    death_seen: Any         # (C, N) bool: champion c had own sight of unit j when j died (Overgrowth)
+    kills: Kills            # takedowns credited (item/rune hooks)
+    epic: Any               # (C,) epic-monster takedowns (rune events)
+    large: Any              # (C,) large-monster kills (rune events)
+    pending_dash: Any       # W.Dash: item-active dash (Rocketbelt) that starts this tick
+
+
 class ModernState(NamedTuple):
     t: Any                  # () seconds
     tick: Any               # () int32
@@ -98,20 +107,19 @@ class ModernState(NamedTuple):
     max_hp: Any
     radius: Any
     armor: Any
-    mr: Any
-    ad: Any
-    arange: Any
-    aspeed: Any
-    mspeed: Any
+    magic_resist: Any
+    attack_damage: Any
+    attack_range: Any       # stat range (edge to edge, core.types.WorldUnits)
+    attack_speed: Any       # attacks per second
+    move_speed: Any
     windup: Any
     spawn_seq: Any
     spawn_time: Any
     targetable: Any
-    lane_wp: Any            # minion lane waypoint index
     missile_speed: Any      # (N,) ranged attack missile speed, 0 = melee
-    m_gold: Any             # minion bounty / xp at spawn
-    m_xp: Any
-    m_level: Any
+    bounty_gold: Any        # lane-minion gold / XP / level fixed at spawn
+    bounty_xp: Any
+    bounty_level: Any
     next_seq: Any           # () int32
     spawn: Any              # lane.minions.LaneSpawnState: per (team, lane) wave cursors
     att: W.AttackState
@@ -126,20 +134,15 @@ class ModernState(NamedTuple):
     towers: Any
     shields: D.Shields
     status: UnitStatus
-    kills: Kills            # takedowns credited last tick (fed to item/rune hooks)
-    damage_matrix: Any      # (N, N) bool: i damaged j last tick (lane AI, kill credit)
-    death_seen: Any         # (C, N) bool: champion i had own sight of unit j when j died last tick (Overgrowth)
+    prev: LastTick          # what the previous tick did, read by this one
     visible: Any            # (2, N) bool: team t sees unit j (vision, end of last tick)
-    sight: Any              # (N, N) bool: unit i's own sight of unit j (rune "own sight")
+    sight: Any              # (C, N) bool: champion c's own sight of unit j (rune "own sight")
     reveal: Any             # vision.Reveal: attack-reveal circle per champion
     jungle: Any             # jungle.camps.JungleState (camps, Smite, pets, red/blue)
     obj: Any                # jungle.objectives.ObjectiveState (grubs, Herald, drakes, Elder, Baron)
     wards: Any              # wards.Wards (ward slots, trinkets)
     amove: Any              # AttackMove: per-champion attack-move order state
-    pending_dash: Any       # W.Dash: item-active dash (Rocketbelt) to start next tick
     route_anchor: Any       # (N,) int32 route node each unit steers by (mechanics.move_step); -1 = none
-    epic_prev: Any          # (C,) epic takedowns last tick (rune events)
-    large_prev: Any         # (C,) large-monster kills last tick (rune events)
     terrain_variant: Any    # () int32 Elemental Rift x Baron-pit terrain variant
     game_over: Any          # () bool: a Nexus fell (the world freezes)
     winner: Any             # () int32 0 blue / 1 red / -1 none
@@ -234,34 +237,34 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         kind=kind, sub=cfg.unit_sub, team=cfg.unit_team, alive=alive, x=cfg.unit_x, y=cfg.unit_y,
         hp=hp, max_hp=hp, radius=radius,
         armor=jnp.where(structure, towers.armor, 0.0).astype(jnp.float32).at[:c].set(st.base_armor + st.bonus_armor),
-        mr=jnp.where(structure, towers.magic_resist, 0.0).astype(jnp.float32).at[:c].set(st.base_mr + st.bonus_mr),
-        ad=jnp.where(structure, towers.attack_damage, 0.0).astype(jnp.float32).at[:c].set(st.base_ad + st.bonus_ad),
-        arange=jnp.where(structure & (kind == W.KIND_TURRET), towers.attack_range, 0.0).astype(jnp.float32)
+        magic_resist=jnp.where(structure, towers.magic_resist, 0.0).astype(jnp.float32).at[:c].set(st.base_mr + st.bonus_mr),
+        attack_damage=jnp.where(structure, towers.attack_damage, 0.0).astype(jnp.float32).at[:c].set(st.base_ad + st.bonus_ad),
+        attack_range=jnp.where(structure & (kind == W.KIND_TURRET), towers.attack_range, 0.0).astype(jnp.float32)
         .at[:c].set(st.attack_range),
-        aspeed=jnp.where(kind == W.KIND_TURRET, towers.attack_speed, 0.0).astype(jnp.float32).at[:c].set(st.attack_speed),
-        mspeed=jnp.zeros((n,), jnp.float32).at[:c].set(st.move_speed),
+        attack_speed=jnp.where(kind == W.KIND_TURRET, towers.attack_speed, 0.0).astype(jnp.float32).at[:c].set(st.attack_speed),
+        move_speed=jnp.zeros((n,), jnp.float32).at[:c].set(st.move_speed),
         windup=jnp.where(kind == W.KIND_TURRET, towers.windup, 0.0).astype(jnp.float32).at[:c].set(st.attack_windup),
         spawn_seq=jnp.arange(n, dtype=jnp.int32), spawn_time=jnp.zeros((n,), jnp.float32),
         targetable=alive & ~structure | (structure & towers.targetable),
-        lane_wp=jnp.zeros((n,), jnp.int32),
-        missile_speed=jnp.where(kind == W.KIND_TURRET, LA.T.MISSILE_SPEED, 0.0).astype(jnp.float32), m_gold=jnp.zeros((n,), jnp.float32), m_xp=jnp.zeros((n,), jnp.float32),
-        m_level=jnp.ones((n,), jnp.int32), next_seq=jnp.int32(n), spawn=MM.init_lane_spawn(),
+        missile_speed=jnp.where(kind == W.KIND_TURRET, LA.T.MISSILE_SPEED, 0.0).astype(jnp.float32), bounty_gold=jnp.zeros((n,), jnp.float32), bounty_xp=jnp.zeros((n,), jnp.float32),
+        bounty_level=jnp.ones((n,), jnp.int32), next_seq=jnp.int32(n), spawn=MM.init_lane_spawn(),
         att=W.init_attack_state(n), missiles=M.init_missiles(64), cc=M.init_cc(n), champ=champ,
         kits=K.init(c, n), summoners=S.init(loadout), combat=_init_combat(cfg, c, n),
         econ=E.init_economy(c, n, [lo.role for lo in cfg.loadouts]), lane_ai=LA.init_lane_ai(n), towers=towers,
         shields=D.init_shields(n), status=init_status(n),
-        kills=Kills(zc, zc, zc, jnp.zeros((c,), bool), jnp.zeros((c, n), bool)),
-        damage_matrix=jnp.zeros((n, n), bool), death_seen=jnp.zeros((c, n), bool),
+        prev=LastTick(damage_matrix=jnp.zeros((n, n), bool), death_seen=jnp.zeros((c, n), bool),
+                      kills=Kills(zc, zc, zc, jnp.zeros((c,), bool), jnp.zeros((c, n), bool)), epic=zc0, large=zc0,
+                      pending_dash=W.no_dash(c)),
         visible=vis, sight=sight, reveal=reveal, jungle=jungle, obj=obj, wards=wards, amove=amove,
-        pending_dash=W.no_dash(c), route_anchor=M.init_route_anchor(n), epic_prev=zc0, large_prev=zc0, terrain_variant=jnp.int32(0),
+        route_anchor=M.init_route_anchor(n), terrain_variant=jnp.int32(0),
         game_over=jnp.asarray(False), winner=jnp.int32(-1))
 
 
 def _init_combat(cfg: WorldConfig, c: int, n: int) -> CombatState:
     """``init_combat`` with the jungle items' epic-monster mask (the 8 objective slots)."""
     comb = init_combat(c, n)
-    lay = MW_layout()
-    epic = jnp.zeros((n,), bool).at[lay["epic0"]:lay["ward0"]].set(cfg.objectives is not None)
+    lay = cfg.layout
+    epic = jnp.zeros((n,), bool).at[lay.epic0:lay.ward0].set(cfg.objectives is not None)
     items = comb.items
     return comb._replace(items=items._replace(jungle=items.jungle._replace(epic=epic)))
 

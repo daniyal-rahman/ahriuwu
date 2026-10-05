@@ -39,6 +39,7 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from ..core.types import KIND_INHIBITOR, KIND_MINION, KIND_TURRET
 from .lanes import LANE_PATH_LEN, LANE_PATHS
 
 SPAWN, BASE, TOP_LANE, MID_LANE, BOT_LANE, TOP_JUNGLE, BOT_JUNGLE, TOP_RIVER, BOT_RIVER, \
@@ -167,7 +168,6 @@ def homeguard_endpoint(team, lane, now, units, structure_lane, minion_lane):
     ``units`` is a ``WorldUnits``; ``structure_lane`` (N,) the structure lanes
     (``WorldConfig.unit_lane``); ``minion_lane`` (N,) the minions' lanes (``LaneAIState.lane``).
     """
-    from ..core.types import KIND_INHIBITOR, KIND_MINION, KIND_TURRET
     team = jnp.asarray(team, jnp.int32)
     lane = jnp.asarray(lane, jnp.int32)
     c = team.shape[0]

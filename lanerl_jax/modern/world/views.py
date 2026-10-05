@@ -16,7 +16,7 @@ from ..core import types as W
 from ..core.stat_pipeline import ChampionStats, compose
 from ..items import inventory as I
 from ..items.catalog import ItemStats, combine_stats, zero_stats
-from ..items.effects.core import Ctx, Units
+from ..items.effects.core import Ctx
 from ..items.loadout import stat_shard_stats
 from ..jungle import camps as J
 from ..jungle import objectives as OBJ
@@ -24,13 +24,9 @@ from ..map import regions as REG
 from ..map.rift import vision_for
 from ..runes.catalog import RunePage
 from .config import N_CHAMPIONS, WorldConfig
-from .config import layout as MW_layout
 
 if TYPE_CHECKING:
     from .state import ModernState
-
-SKILL_ORDERS = {86: (2, 0, 1, 2, 2, 3, 2, 0, 2, 0, 3, 0, 0, 1, 1, 3, 1, 1),     # Garen E>Q>W (modern.skill_ranks)
-                24: (2, 0, 1, 1, 1, 3, 1, 2, 1, 2, 3, 2, 2, 0, 0, 3, 0, 0)}     # Jax W>E>Q
 
 
 def shard_stats(cfg: WorldConfig, level) -> ItemStats:
@@ -48,29 +44,31 @@ def shard_stats(cfg: WorldConfig, level) -> ItemStats:
 
 def visibility(cfg: WorldConfig, x, y, kind, sub, team, alive, reveal, now, *, wards=None, level=None,
                 variant=None, jungle=None):
-    """``(visible (2, N), sight (N, N))``; everything live is visible when ``cfg.vision`` is None.
+    """``(visible (2, N), sight (C, N))``: team visibility and each champion's own sight (runes);
+    everything live is visible when ``cfg.vision`` is None.
 
     Wards (``wards``) add sight, stealth and true sight; ``variant`` selects the Elemental
     Rift / Baron-pit brush layout."""
     n = x.shape[0]
     if cfg.vision is None:
         live = alive & (kind != W.KIND_NONE)
-        return jnp.broadcast_to(live[None, :], (2, n)), jnp.broadcast_to(live[None, :], (n, n))
+        return jnp.broadcast_to(live[None, :], (2, n)), jnp.broadcast_to(live[None, :], (N_CHAMPIONS, n))
     grid = cfg.vision
     if cfg.rift is not None and variant is not None:
         grid = vision_for(cfg.rift, variant, cfg.vision)
     kw = {}
-    lay = MW_layout()
+    lay = cfg.layout
     if wards is not None:
         c = N_CHAMPIONS
         lv = jnp.ones((c,), jnp.int32) if level is None else level
         view, oracle = WD.ward_view(wards, now=now, x=x[:c], y=y[:c], team=team[:c], alive=alive[:c], level=lv)
-        kw = WD.vision_kwargs(view, oracle, kind, sub, alive, ward_start=lay["ward0"])
+        kw = WD.vision_kwargs(view, oracle, kind, sub, alive, ward_start=lay.ward0)
     if jungle is not None:                                            # Scuttle Speed Shrines (525 sight)
         on = jungle.shrine_until > now
         kw["sources"] = (jnp.asarray(J.SHRINE_POS, jnp.float32)[:, 0], jnp.asarray(J.SHRINE_POS, jnp.float32)[:, 1],
                          jnp.where(on, J.SHRINE_SIGHT, 0.0), jungle.shrine_team)
-    return MV.visibility(x, y, kind, sub, team, alive, reveal, now, grid, n_fogged=lay["struct0"], **kw)
+    visible, sight = MV.visibility(x, y, kind, sub, team, alive, reveal, now, grid, n_fogged=lay.struct0, **kw)
+    return visible, sight[:N_CHAMPIONS]
 
 
 def kit_attack_target(kit_out) -> Any:
@@ -131,14 +129,7 @@ def in_river(cfg: WorldConfig, x, y) -> Any:
 
 def skill_order(cfg: WorldConfig, c: int) -> tuple:
     lo = cfg.loadouts[c]
-    return tuple(lo.skill_order) or SKILL_ORDERS[{"Garen": 86, "Jax": 24}[lo.champion]]
-
-
-def units_view(s: ModernState) -> W.WorldUnits:
-    return W.WorldUnits(kind=s.kind, sub=s.sub, team=s.team, alive=s.alive, targetable=s.targetable & s.alive,
-                        x=s.x, y=s.y, radius=s.radius, hp=s.hp, max_hp=s.max_hp, armor=s.armor,
-                        magic_resist=s.mr, attack_damage=s.ad, attack_range=s.arange, attack_speed=s.aspeed,
-                        move_speed=s.mspeed, spawn_seq=s.spawn_seq, spawn_time=s.spawn_time)
+    return tuple(lo.skill_order) or K.kit(lo.champion).SKILL_ORDER
 
 
 def static_stats(s: ModernState, cfg: WorldConfig, caps: dict, now, dt) -> tuple[ItemStats, ChampionStats]:
@@ -193,22 +184,6 @@ def item_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, now, dt) -> Ct
                attack_windup=st.attack_windup, in_combat=(now - s.combat.clocks.last_combat) < 5.0,
                in_shop=I.in_shop_area(s.x[:c], s.y[:c], s.team[:c], ~s.alive[:c]),
                base_mana=cfg.champion_base.base_mana, attack_range=st.attack_range)
-
-
-def reset_slots(s: ModernState, mask) -> ModernState:
-    """Fresh attack state and CC timers for (re)spawned slots."""
-    put = lambda arr, v: jnp.where(mask, jnp.asarray(v, arr.dtype), arr)   # noqa: E731
-    return s._replace(att=s.att._replace(target=put(s.att.target, -1), windup_left=put(s.att.windup_left, 0.0),
-                                         cooldown_left=put(s.att.cooldown_left, 0.0)),
-                      cc=M.CCTimers(*(put(v, 0.0) for v in s.cc)))
-
-
-def item_units(s: ModernState) -> Any:
-    """``items.effects.core.Units`` view of the world."""
-    return Units(x=s.x, y=s.y, team=s.team, cls=W.damage_class(s.kind), alive=s.alive, hp=s.hp, max_hp=s.max_hp,
-                 radius=s.radius, targetable=s.targetable & s.alive & (s.kind != W.KIND_WARD),
-                 is_siege_or_super=(s.kind == W.KIND_MINION) & (s.sub >= 2),
-                 bonus_hp=jnp.zeros_like(s.hp), armor=s.armor, magic_resist=s.mr)
 
 
 def owned_items(inv) -> Any:

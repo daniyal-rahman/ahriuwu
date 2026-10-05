@@ -22,8 +22,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .catalog import (BUFF_CURRENCIES, EMPTY, MAX_RECIPE_NODES, N_SLOTS, TRINKET_SLOT, ItemStats,
-                      STAT_FIELDS, catalog)
+from .catalog import BUFF_CURRENCIES, EMPTY, MAX_RECIPE_NODES, N_SLOTS, STAT_FIELDS, TRINKET_SLOT, ItemStats, catalog
 
 STARTING_GOLD = 500.0
 SHOP_RADIUS = 1000.0

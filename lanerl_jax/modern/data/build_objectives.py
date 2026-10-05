@@ -40,7 +40,9 @@ import struct
 from pathlib import Path
 
 import numpy as np
+
 from . import PATCH_DIR
+from .navgrid import ModernMapGrid, load_patch_map
 
 RESEARCH = Path("/mnt/nfs/shared/modern-world-map-research")
 OBJ = RESEARCH / "objectives-16.19"
@@ -208,7 +210,6 @@ def dragon_script(sources: dict) -> dict:
 
 
 def rift_variants(sources: dict):
-    from .navgrid import ModernMapGrid, load_patch_map
     grid, manifest = load_patch_map(RESEARCH / "grid-26.19-base")
     rects = {}
     for e, fn in ELEMENT_OVERLAY.items():

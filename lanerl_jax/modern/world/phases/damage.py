@@ -13,6 +13,7 @@ from ...items.effects.core import CC, Cast
 from ...jungle import objectives as OBJ
 from ...lane import ai as LA
 from ...runes.effects.core import rune_events
+from .. import units as U
 from .. import views as V
 from ..config import N_CHAMPIONS, WorldConfig
 from ..scratch import TickScratch
@@ -57,7 +58,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cc_items = CC(cc_now.slow > 0, (cc_now.stun > 0) | (cc_now.root > 0) | (cc_now.knockup > 0))
     # Overgrowth (U-15): deaths last tick with own sight latched while the victim was alive
     # (``sight`` is end-of-tick and drops dead units, so it cannot show the death itself).
-    deaths_prev = jnp.any(s.death_seen, axis=0)
+    deaths_prev = jnp.any(s.prev.death_seen, axis=0)
     ev = rune_events(ictx, n, game_time=now, attack_started=sc.started[:c], attack_start_target=att.target[:c],
                      attack_cancelled=sc.cancelled[:c], attack_reset=reset[:c], cast_id=kit_all.cast_id,
                      cc_duration=jnp.maximum(cc_now.stun, cc_now.root), impaired=caps["impaired"],
@@ -70,19 +71,20 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                      deaths=deaths_prev, purchased=sc.bought, sold=sc.sold, granted=champ.granted,
                      uses_energy=cfg.uses_energy, adaptive_physical=cfg.adaptive_physical,
                      is_turret=s.kind == W.KIND_TURRET, cc_cast_id=cc_now.cast_id,
-                     cc_on_hit=jnp.zeros((c, n), bool), sight=s.sight[:c] | s.death_seen, visible=sc.vis_c,
-                     epic_takedown=s.epic_prev, large_monster_kill=s.large_prev,
+                     cc_on_hit=jnp.zeros((c, n), bool), sight=s.sight | s.prev.death_seen, visible=sc.vis_c,
+                     epic_takedown=s.prev.epic, large_monster_kill=s.prev.large,
                      in_river=V.in_river(cfg, s.x[:c], s.y[:c]))
     items0 = s.combat.items
     items0 = items0._replace(actives=A.with_aim(items0.actives, orders.cast_target,
                                                             orders.cast_x, orders.cast_y))
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
     out = combat_tick(s.combat._replace(items=items0), V.owned_items(champ.inventory), cfg.rune_pages, ictx,
-                      V.item_units(s), attack=sc.attack,
+                      U.item_units(s), attack=sc.attack,
                       cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,
-                      hp=s.hp, max_hp=s.max_hp, shields=s.shields, status=s.status, kills=s.kills,
-                      holder_stats=sc.static, cc=cc_items, ev=ev)
+                      hp=s.hp, max_hp=s.max_hp, shields=s.shields, status=s.status, kills=s.prev.kills,
+                      holder_stats=sc.static, cc=cc_items, ev=ev,
+                      main_capacity=cfg.layout.packet_capacity, follow_up_capacity=cfg.layout.follow_up_capacity)
     hp, max_hp, shields, status = out.hp, out.max_hp, out.shields, out.status
     kits, k_dmg = K.on_damage(kits, kctx, units, out.report)
     return s, sc._replace(out=out, kdef=kdef, k_dmg=k_dmg, cc_now=cc_now, cc_items=cc_items, hp=hp, max_hp=max_hp,

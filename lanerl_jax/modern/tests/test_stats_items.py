@@ -1,12 +1,11 @@
-import json
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.items import loadout as items
 from lanerl_jax.modern.core import stats
+from lanerl_jax.modern.items import loadout as items
 
 
 def test_stat_composition_and_health_change():

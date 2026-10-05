@@ -7,16 +7,15 @@ INFERRED-M / INFERRED-L.
 
 Like ``lane.ai`` this module owns *decisions and rule state* only; the world
 tick owns the unit arrays, the attack machine, missiles, movement and damage
-resolution. Fixed shapes: S jungle slots (``JungleTable.n_slots`` = 38, inside the
-first 40 of the world's ``MAX_MONSTERS`` monster slots; the last 8 are left to the
-epic objectives), K = 14 camps, C champions (world units ``0..C-1``), N world units.
+resolution. Fixed shapes: S jungle slots (``JungleTable.n_slots`` = 38, in the world's
+40-slot jungle block, ``world.config.Layout``), K = 14 camps, C champions (world units ``0..C-1``), N world units.
 Slot ``s`` is world unit ``table.monster0 + s``.
 
 Tick placement (``world.tick`` phases)::
 
     1 INPUT   state, w = spawn_step(state, tab, now=now, champion_level=lvl)      -> write_spawns(...)
     3 CASTS   state, sm = smite_step(state, tab, units, summoner_request, spells, now=..., ...)
-    4 AI      state, ai = monster_ai(state, tab, units, att, now=now, dt=dt, damage_events=s.damage_matrix)
+    4 AI      state, ai = monster_ai(state, tab, units, att, now=now, dt=dt, damage_events=s.prev.damage_matrix)
               (desired targets, move goals/speeds, reset heals, despawns, targetable)
     6 ATTACK  pk = monster_attack_packets(state, tab, units, launch)               (monster basic attacks)
               state, fx = combat_effects(state, tab, units, ictx, attack_hit=..., ...)  (red burn, pets, evolutions)
@@ -29,7 +28,6 @@ Nothing here compiles ``world.tick``; every function is pure JAX over the arrays
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, NamedTuple
 
 import jax
@@ -38,12 +36,13 @@ import numpy as np
 
 from ..core import damage as D
 from ..core.stats import MAGIC, PHYSICAL, TRUE
-from ..core.types import (KIND_CHAMPION, KIND_MINION, KIND_MONSTER, KIND_NONE, MAX_MONSTERS, NEUTRAL,
-                          AttackLaunch, AttackState, CastOrder, CCOut, WorldUnits, no_cc)
+from ..core.types import (JUNGLE_SLOTS, KIND_CHAMPION, KIND_MINION, KIND_MONSTER, KIND_NONE, NEUTRAL,
+                          AttackLaunch, AttackState, CastOrder, UnitWrite, WorldUnits, no_cc)
 from ..data import PATCH_DIR
+from ..items.catalog import catalog
 
 DATA = PATCH_DIR / "jungle_client.json"
-MAX_JUNGLE_SLOTS = MAX_MONSTERS - 8          # epic objectives own the last 8 monster slots
+MAX_JUNGLE_SLOTS = JUNGLE_SLOTS             # the world's jungle block (world.config.Layout)
 
 
 # ---- monster types (WorldUnits.sub of a KIND_MONSTER slot) --------------------------------------
@@ -214,6 +213,11 @@ class JungleTable(NamedTuple):
     mana_per_level: float
     mana_max_mult: float
     energy_restore: float
+
+    @property
+    def slots(self) -> slice:
+        """World unit slots of the jungle block."""
+        return slice(self.monster0, self.monster0 + self.n_slots)
 
 
 def _windup_frac(rec: dict) -> float:
@@ -510,23 +514,17 @@ def spawn_step(state: JungleState, table: JungleTable, *, now, champion_level) -
     return state, w
 
 
-def write_spawns(table: JungleTable, w: SpawnWrites, *, now, next_seq, **arrays) -> tuple[dict, Any]:
-    """Convenience scatter of ``SpawnWrites`` into world (N,) arrays passed by name (any subset of
-    kind, sub, team, alive, targetable, x, y, hp, max_hp, radius, armor, mr, ad, arange, aspeed, mspeed,
-    windup, missile_speed, spawn_time, spawn_seq). Returns ``(arrays, next_seq)``."""
-    m0, s = table.monster0, table.n_slots
-    seq = next_seq + jnp.cumsum(w.mask.astype(jnp.int32)) - 1
-    vals = {"kind": KIND_MONSTER, "sub": w.sub, "team": NEUTRAL, "alive": True,
-            "targetable": True, "x": w.x, "y": w.y, "hp": w.hp, "max_hp": w.hp, "radius": w.radius,
-            "armor": w.armor, "mr": w.magic_resist, "ad": w.attack_damage, "arange": w.attack_range,
-            "aspeed": w.attack_speed, "mspeed": w.move_speed, "windup": w.windup, "missile_speed": w.missile_speed,
-            "spawn_time": now, "spawn_seq": seq}
-    out = {}
-    for name, arr in arrays.items():
-        v = jnp.broadcast_to(jnp.asarray(vals[name], arr.dtype), (s,))
-        seg = arr[m0:m0 + s]
-        out[name] = arr.at[m0:m0 + s].set(jnp.where(w.mask, v, seg))
-    return out, next_seq + jnp.sum(w.mask.astype(jnp.int32))
+def unit_write(table: JungleTable, w: SpawnWrites, n_units: int) -> UnitWrite:
+    """``SpawnWrites`` as a world ``UnitWrite``: fresh camp monsters (neutral, full health)."""
+    s = table.n_slots
+    full = lambda v: jnp.zeros((n_units,), jnp.asarray(v).dtype).at[table.slots].set(v)    # noqa: E731
+    mask = full(w.mask)
+    return UnitWrite(mask=mask, new=mask, kind=full(jnp.full((s,), KIND_MONSTER, jnp.int32)), sub=full(w.sub),
+                     team=full(jnp.full((s,), NEUTRAL, jnp.int32)), x=full(w.x), y=full(w.y), hp=full(w.hp),
+                     max_hp=full(w.hp), radius=full(w.radius), armor=full(w.armor), magic_resist=full(w.magic_resist),
+                     attack_damage=full(w.attack_damage), attack_range=full(w.attack_range),
+                     attack_speed=full(w.attack_speed), move_speed=full(w.move_speed), windup=full(w.windup),
+                     missile_speed=full(w.missile_speed))
 
 
 # =================================================================================================
@@ -561,7 +559,7 @@ def monster_ai(state: JungleState, table: JungleTable, units: WorldUnits, att: A
     """Monster aggro, target selection, patience/leash resets, returning home, camp group aggro,
     marked-for-death and the Scuttler's patrol/flee (phase 4).
 
-    ``damage_events[i, j]``: i damaged j last tick (``ModernState.damage_matrix``). Aggro comes
+    ``damage_events[i, j]``: i damaged j last tick (``ModernState.prev.damage_matrix``). Aggro comes
     only from champion damage on any camp member (the whole camp aggroes). Targets: the nearest
     champion that damaged the camp during this aggro episode (straight-line, INFERRED-M for the
     client's path distance), regardless of vision.
@@ -908,7 +906,6 @@ def moss_shield(level) -> Any:
 
 def pet_type_from_inventory(own) -> Any:
     """(C,) PET_* from ``items.inventory.owned_counts`` (C, I)."""
-    from ..items.catalog import catalog
     out = jnp.zeros((own.shape[0],), jnp.int32)
     for iid, p in PET_ITEMS.items():
         out = jnp.where(own[:, catalog().row(iid)] > 0, p, out)

@@ -15,7 +15,6 @@ building them are asserted to fit worse.
 import gzip
 import json
 from functools import lru_cache
-from pathlib import Path
 
 import numpy as np
 import pytest

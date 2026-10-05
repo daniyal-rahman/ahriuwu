@@ -14,46 +14,31 @@ from ...jungle import camps as J
 from ...lane import ai as LA
 from ...map import dynamic_terrain as DTR
 from ...map.rift import terrain_pair
+from .. import units as U
 from .. import views as V
 from ..config import N_CHAMPIONS, WorldConfig
-from ..config import layout as MW_layout
 from ..scratch import TickScratch
 from ..state import AttackMove, ModernOrders, ModernState, QueuedCast, no_queued_cast
 
 CAST_BUFFER_S = 0.5          # casts during a lockout / just before a cooldown ends are held this long (U: guess)
-
-
 CAST_RANGE_SLACK = 5.0       # walk-in casting stops this far inside the spell's range
 
 
 def spawn_minions(s: ModernState, cfg: WorldConfig, now) -> ModernState:
     """MINIONS §2 for every enabled lane (``lane.ai.spawn_lane_minions``)."""
-    spawn, wr, _ = LA.spawn_lane_minions(s.spawn, s.towers, s.kind, s.alive, now=now, slot0=MW_layout()["minion0"],
-                                         per_lane=W.MAX_MINIONS_PER_LANE, lanes=cfg.lanes)
-    pick, st = wr.pick, wr.stats
-    put = lambda arr, v: jnp.where(pick, jnp.asarray(v, arr.dtype), arr)   # noqa: E731
-    s = s._replace(
-        kind=put(s.kind, W.KIND_MINION), sub=put(s.sub, wr.sub), team=put(s.team, wr.team),
-        alive=put(s.alive, True), targetable=put(s.targetable, True), x=put(s.x, wr.x), y=put(s.y, wr.y),
-        hp=put(s.hp, st.max_hp), max_hp=put(s.max_hp, st.max_hp), radius=put(s.radius, st.radius),
-        armor=put(s.armor, st.armor), mr=put(s.mr, st.magic_resist), ad=put(s.ad, st.attack_damage),
-        arange=put(s.arange, st.attack_range), aspeed=put(s.aspeed, st.attack_speed),
-        mspeed=put(s.mspeed, st.move_speed), windup=put(s.windup, st.windup),
-        missile_speed=put(s.missile_speed, st.missile_speed),
-        spawn_seq=put(s.spawn_seq, s.next_seq + wr.seq_offset), spawn_time=put(s.spawn_time, now),
-        m_gold=put(s.m_gold, st.gold), m_xp=put(s.m_xp, st.xp), m_level=put(s.m_level, jnp.max(s.econ.level)),
-        lane_wp=put(s.lane_wp, 0), next_seq=s.next_seq + wr.count, spawn=spawn)
-    s = V.reset_slots(s, pick)
+    spawn, wr, _ = LA.spawn_lane_minions(s.spawn, s.towers, s.kind, s.alive, now=now, slot0=cfg.layout.minion0,
+                                         per_lane=W.MINION_SLOTS_PER_LANE, lanes=cfg.layout.lanes)
+    st = wr.stats
+    s = U.write_units(s._replace(spawn=spawn), W.UnitWrite(
+        mask=wr.pick, new=wr.pick, kind=W.KIND_MINION, sub=wr.sub, team=wr.team, x=wr.x, y=wr.y, hp=st.max_hp,
+        max_hp=st.max_hp, radius=st.radius, armor=st.armor, magic_resist=st.magic_resist,
+        attack_damage=st.attack_damage, attack_range=st.attack_range, attack_speed=st.attack_speed,
+        move_speed=st.move_speed, windup=st.windup, missile_speed=st.missile_speed, bounty_gold=st.gold,
+        bounty_xp=st.xp, bounty_level=jnp.max(s.econ.level)), now)
     if cfg.jungle is not None:
         jst, w = J.spawn_step(s.jungle, cfg.jungle, now=now, champion_level=s.econ.level)
-        names = ("kind", "sub", "team", "alive", "targetable", "x", "y", "hp", "max_hp", "radius", "armor", "mr",
-                 "ad", "arange", "aspeed", "mspeed", "windup", "missile_speed", "spawn_time", "spawn_seq")
-        arrays, nseq = J.write_spawns(cfg.jungle, w, now=now, next_seq=s.next_seq,
-                                      **{k: getattr(s, k) for k in names})
-        m0 = cfg.jungle.monster0
-        mask = jnp.zeros((s.kind.shape[0],), bool).at[m0:m0 + cfg.jungle.n_slots].set(w.mask)
-        s = V.reset_slots(s._replace(jungle=J.latch_pets(jst, V.owned_items(s.champ.inventory)), next_seq=nseq, **arrays),
-                         mask)
+        s = U.write_units(s, J.unit_write(cfg.jungle, w, cfg.n_units), now)
+        s = s._replace(jungle=J.latch_pets(jst, V.owned_items(s.champ.inventory)))
     return s
 
 

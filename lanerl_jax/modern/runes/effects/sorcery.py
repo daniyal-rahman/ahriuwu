@@ -37,7 +37,7 @@ from ...core.damage import (CLASS_CHAMPION, MAGIC, PROP_SUMMONER, PROP_ULTIMATE,
                             TAG_BASIC_ATTACK, TAG_INDIRECT, TAG_ITEM, TAG_PERIODIC, TAG_PET, TAG_PROC,
                             concat_packets, has, packets)
 from ...items.catalog import ItemStats, catalog
-from .core import (BIG, RuneOutputs, adaptive_damage_type, effects, ea, has_rune, in_circle, lin, no_outputs,
+from .core import (BIG, RuneOutputs, adaptive_damage_type, ea, effects, has_rune, in_circle, lin, no_outputs,
                    rune_item, unit_pos, variable_damage_type)
 
 AERY, COMET, STORMRAIDER, DEATHFIRE = 8214, 8229, 8230, 8992

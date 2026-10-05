@@ -6,10 +6,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.map import dynamic_terrain as DT
-from lanerl_jax.modern.world import config as MW
-from lanerl_jax.modern.map.terrain import is_walkable
 from lanerl_jax.modern.data import PATCH_DIR
+from lanerl_jax.modern.map import dynamic_terrain as DT
+from lanerl_jax.modern.map.terrain import is_walkable
+from lanerl_jax.modern.world import config as MW
 
 MAP = Path("/mnt/nfs/shared/modern-world-map-research/grid-26.19-base")
 pytestmark = pytest.mark.skipif(not MAP.exists(), reason="pinned 26.19 navgrid not mounted")

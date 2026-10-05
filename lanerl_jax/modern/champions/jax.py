@@ -37,14 +37,18 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ..core import damage as D
+from ..core.types import KIND_CHAMPION, KIND_MONSTER, KIND_NONE, KIND_WARD, CCOut, Dash
 from ..items.catalog import ItemStats
 from ..items.effects.core import Debuffs, neutral_debuffs
-from ..core.types import KIND_CHAMPION, KIND_MONSTER, KIND_NONE, KIND_WARD, CCOut, Dash
-from .core import (CODE_JAX_R_PASSIVE, JAX, NEVER, KitAttackMods, KitDefense, KitOut, cc_matrix,
-                   cooldown_row, due, enemies, f32, gather, holder_rows, is_structure, later,
-                   later_after_tick, make_cast_id, mana_row, out, ranked, scalar, target_dist, within_edge)
+from ..runes.catalog import ChampionTraits
+from .core import (CODE_JAX_R_PASSIVE, NEVER, KitAttackMods, KitDefense, KitOut, cc_matrix, cooldown_row,
+                   due, enemies, f32, gather, holder_rows, is_structure, later, later_after_tick, make_cast_id,
+                   mana_row, out, ranked, scalar, target_dist, within_edge)
 
 NAME = "Jax"
+ID = 24
+SKILL_ORDER = (2, 0, 1, 1, 1, 3, 1, 2, 1, 2, 3, 2, 2, 0, 0, 3, 0, 0)    # default ranks per level: W > E > Q
+TRAITS = ChampionTraits(has_immobilize=True, resource="mana")          # rune legality: E stuns
 P_DURATION = scalar(NAME, "Passive", "BuffDuration")     # 2.5
 P_MAX = int(scalar(NAME, "Passive", "MaxStacks"))         # 8
 P_FALLOFF = scalar(NAME, "Passive", "FallOffRate")        # 0.35
@@ -120,7 +124,7 @@ def init(n_champions: int, n_units: int) -> State:
 
 
 def _mine(kctx) -> Any:
-    return kctx.champion_id == JAX
+    return kctx.champion_id == ID
 
 
 def _base_cd(kctx) -> Any:

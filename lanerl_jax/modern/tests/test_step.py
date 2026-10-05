@@ -12,10 +12,10 @@ import numpy as np
 import pytest
 
 from lanerl_jax.modern import economy as E
-from lanerl_jax.modern.world import config as MW
 from lanerl_jax.modern.core import types as W
 from lanerl_jax.modern.items.catalog import catalog
 from lanerl_jax.modern.tests import world_harness as H
+from lanerl_jax.modern.world import config as MW
 
 if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
@@ -35,7 +35,7 @@ def test_layout_and_structure_vulnerability():
     cfg, _, _ = world()
     s = MS.init_state(cfg)
     kinds = np.asarray(cfg.unit_kind)
-    assert cfg.n_units == 2 + MW.MAX_MINIONS + W.MAX_MONSTERS + 2 * W.MAX_WARDS_PER_TEAM + 30
+    assert cfg.n_units == cfg.layout.n_units == 2 + 3 * 40 + 40 + 8 + 2 * W.MAX_WARDS_PER_TEAM + 30 == 216
     assert (kinds == W.KIND_TURRET).sum() == 22 and (kinds == W.KIND_INHIBITOR).sum() == 6
     assert (kinds == W.KIND_NEXUS).sum() == 2
     targ = np.asarray(s.targetable)

@@ -25,7 +25,6 @@ Two measurements, both from the replay corpus (frames/ is never read):
 import argparse
 import gzip
 import json
-import math
 import os
 import sys
 from collections import Counter

@@ -46,8 +46,8 @@ import jax.numpy as jnp
 
 from ...core.damage import CLASS_CHAMPION, TAG_ON_HIT, TAG_PET, TAG_PROC, TRUE, concat_packets, has, packets
 from ...items.catalog import ItemStats
-from .core import (BIG, COMBAT_TIMEOUT, adaptive_damage_type, by_range, ea, effects, first_instance,
-                   has_rune, lin, rune_item, variable_damage_type)
+from .core import (BIG, COMBAT_TIMEOUT, adaptive_damage_type, by_range, ea, effects, first_instance, has_rune,
+                   lin, rune_item, variable_damage_type)
 
 ELECTROCUTE, DARK_HARVEST, HAIL_OF_BLADES = 8112, 8128, 9923
 CHEAP_SHOT, TASTE_OF_BLOOD, SUDDEN_IMPACT = 8126, 8139, 8143

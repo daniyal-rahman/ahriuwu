@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.combat import combat_tick, init_combat
+from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.items.catalog import zero_stats
 from lanerl_jax.modern.items.effects import runtime as R
 from lanerl_jax.modern.items.effects.core import CC, Cast

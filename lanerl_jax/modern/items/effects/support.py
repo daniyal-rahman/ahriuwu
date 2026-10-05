@@ -34,11 +34,11 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (MAGIC, ON_HIT_ITEM, PROP_EXECUTE, PROP_REACTIVE, TAG_AOE, TAG_BASIC_ATTACK,
-                            TAG_ITEM, TAG_ON_HIT, TAG_PERIODIC, TAG_PROC, TRUE, concat_packets, has, packets)
+from ...core.damage import (MAGIC, ON_HIT_ITEM, PROP_EXECUTE, PROP_REACTIVE, TAG_AOE, TAG_BASIC_ATTACK, TAG_ITEM,
+                            TAG_ON_HIT, TAG_PERIODIC, TAG_PROC, TRUE, concat_packets, has, packets)
 from ..catalog import STAT_INDEX, ItemStats, catalog, level_bp
 from .core import (CC, CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, Debuffs, Effects, dv,
-                   effects, enemy_mask, holds, in_circle, merge_effects, target_class, unit_pos)
+                   effects, enemy_mask, holds, in_circle, merge_effects, neutral_defense, target_class, unit_pos)
 
 SHURELYA, BANDLEPIPES, ZEKES, REDEMPTION, KNIGHTS_VOW = 2065, 2524, 3050, 3107, 3109
 LOCKET, MIKAELS, CENSER, MANDATE, FLOWING = 3190, 3222, 3504, 4005, 6616
@@ -348,7 +348,6 @@ def celestial_champion_damage_mult(state, own, ctx):
 
 def defense(state, own, ctx):
     """Celestial Opposition blessing: reduces damage from enemy champions only."""
-    from .core import neutral_defense
     return neutral_defense(ctx.level.shape[0])._replace(
         champion_received_mult=celestial_champion_damage_mult(state, own, ctx))
 

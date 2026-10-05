@@ -30,22 +30,9 @@ import jax.numpy as jnp
 from .. import mechanics as M
 from ..lane import ai as LA
 from .config import N_CHAMPIONS, WorldConfig
-from .phases import (
-    ai,
-    attack,
-    casts,
-    cc_heal,
-    damage,
-    death,
-    fog,
-    inputs,
-    move,
-    objectives,
-    stats,
-    timers,
-)
+from .phases import ai, attack, casts, cc_heal, damage, death, fog, inputs, move, objectives, stats, timers
 from .scratch import TickScratch
-from .state import ModernOrders, ModernState, TickEvents
+from .state import LastTick, ModernOrders, ModernState, TickEvents
 
 PHASES = (stats, objectives, casts, ai, move, attack, damage, cc_heal, death, timers, fog)   # after inputs
 
@@ -75,17 +62,21 @@ def commit(s: ModernState, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernSta
                         sc.shop_code)
     result = LA.game_result(sc.towers)
     # Champion rows of the unit columns mirror this tick's stats (read through WorldUnits).
-    champ_cols = dict(ad=s.ad.at[:c].set(st.base_ad + st.bonus_ad),
+    champ_cols = dict(attack_damage=s.attack_damage.at[:c].set(st.base_ad + st.bonus_ad),
                       armor=s.armor.at[:c].set(st.base_armor + st.bonus_armor),
-                      mr=s.mr.at[:c].set(st.base_mr + st.bonus_mr), arange=s.arange.at[:c].set(sc.reach),
-                      aspeed=s.aspeed.at[:c].set(st.attack_speed), mspeed=s.mspeed.at[:c].set(sc.ms[:c]))
+                      magic_resist=s.magic_resist.at[:c].set(st.base_mr + st.bonus_mr),
+                      attack_range=s.attack_range.at[:c].set(sc.reach),
+                      attack_speed=s.attack_speed.at[:c].set(st.attack_speed),
+                      move_speed=s.move_speed.at[:c].set(sc.ms[:c]))
     new = s._replace(**champ_cols,
         t=sc.now, tick=s.tick + 1, key=sc.key, kind=sc.kind, alive=alive, x=sc.x, y=sc.y,
         hp=jnp.where(alive, hp, jnp.minimum(hp, 0.0)),
         max_hp=sc.max_hp, att=sc.att, missiles=sc.missiles, cc=cc, champ=sc.champ, kits=sc.kits, summoners=sc.summ,
         combat=out.state, econ=sc.econ, lane_ai=sc.lane_ai, towers=sc.towers, shields=sc.shields, status=sc.status,
-        kills=sc.kills, damage_matrix=sc.dmg, death_seen=sc.death_seen, visible=sc.visible, sight=sc.sight,
+        prev=LastTick(damage_matrix=sc.dmg, death_seen=sc.death_seen, kills=sc.kills, epic=sc.epic, large=sc.large,
+                      pending_dash=sc.item_cleanse.dash),
+        visible=sc.visible, sight=sc.sight,
         reveal=sc.reveal, sub=sc.sub, team=sc.team, spawn_seq=sc.spawn_seq, radius=sc.radius,
-        targetable=sc.targetable, jungle=sc.jungle, wards=sc.wards, amove=sc.amove, pending_dash=sc.item_cleanse.dash,
-        epic_prev=sc.epic, large_prev=sc.large, game_over=result.over, winner=result.winner)
+        targetable=sc.targetable, jungle=sc.jungle, wards=sc.wards, amove=sc.amove,
+        game_over=result.over, winner=result.winner)
     return new, events

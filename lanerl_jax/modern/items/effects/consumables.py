@@ -42,10 +42,10 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_CHAMPION, CLASS_STRUCTURE, PHYSICAL, TAG_AOE, TAG_ITEM, TAG_PROC, TRUE,
-                            has, packets)
+from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_STRUCTURE, ON_HIT_ITEM, PHYSICAL, TAG_AOE,
+                            TAG_ITEM, TAG_PROC, TRUE, has, packets)
 from ..catalog import DATA_PATH, ItemStats
-from .core import ActiveOut, BIG, dealt_by_holder, dv, effects, holds, row
+from .core import BIG, ActiveOut, dealt_by_holder, dv, effects, holds, row, target_class
 
 HEALTH_POTION, REFILLABLE, IRON, SORCERY, WRATH = 2003, 2031, 2138, 2139, 2140
 BISCUIT, SKILL, AVARICE, FORCE = 2010, 2150, 2151, 2152
@@ -222,8 +222,6 @@ def periodic(state: State, own, ctx, units):
 def on_hit(state: State, own, ctx, units, attack):
     """Elixir of Avarice: +5 true damage on-hit against minions."""
     c, n = ctx.level.shape[0], units.x.shape[0]
-    from ...core.damage import CLASS_MINION, ON_HIT_ITEM
-    from .core import target_class
     go = attack.hit & (ctx.now < state.avarice_until) & (target_class(units, attack.target) == CLASS_MINION)
     p = packets(go, ctx.unit, jnp.maximum(attack.target, 0), dv(AVARICE, "OnHitDamage"), TRUE, ON_HIT_ITEM,
                 item=AVARICE)

@@ -7,14 +7,14 @@ inventory stores rows, never raw ids. Row ``EMPTY = -1`` is an empty slot.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
+
 from ..data import PATCH, PATCH_DIR
 
 CLIENT_BUILD = "16.19.8230722"

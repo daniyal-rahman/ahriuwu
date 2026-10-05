@@ -1,7 +1,7 @@
 # ITEMS_IMPLEMENTATION.md — 26.19 item system as implemented
 
 **Update (2026-10-01, runes pass):** items now run inside `combat.combat_tick` together with runes
-(see [RUNES_IMPLEMENTATION.md](RUNES_IMPLEMENTATION.md)); `runtime.item_tick` is that tick with an empty rune
+(see [RUNES_IMPLEMENTATION.md](RUNES_IMPLEMENTATION.md)); `combat.item_tick` is that tick with an empty rune
 page. Packets now carry `cast_id`; the catalog has 220 items (adds the rune-granted Biscuit 2010, Elixirs
 2150–2152 in `consumables`, and stats-only Slightly Magical Footwear 2422); dynamic armor/MR and max HP are
 folded/synced by `combat_tick`.
@@ -23,7 +23,7 @@ Global formulas are in [DAMAGE_AND_STATS.md](DAMAGE_AND_STATS.md).
 | `lanerl_jax/modern/items/catalog.py` | `catalog()`, `ItemStats` (31 bonus-stat fields), stacking rules (tenacity, slow resist and %pen multiply), `lerp_level` (extrapolates past 18, README X-1), `level_bp`. |
 | `lanerl_jax/modern/items/inventory.py` | 6 slots + trinket. `buy` (recursive recipe consumption, cost = total − owned components, group limits after consumption, stacks, level, ranged-only, purchase-buff gates, Elixir 5 s group cooldown, shop circle r=1000 or dead), `sell` (client sell modifiers), `replace_item`, `consume_one`, `inventory_stats`. |
 | `lanerl_jax/modern/core/damage.py` | Shared DMG/HEAL/SHIELD pipeline: packets with client damage tags, source amps added together and target modifiers multiplied, unit-class ratios (minion→champion 0.55, →structure 0.60), resist order that keeps negative resist, Plating/Randuin's/Warden's slots, the Lifeline check before shields, typed decaying shields, Death's Dance storage (physical/magic only), spell shield, executes, life steal/omnivamp split (33% modified ratio), heal modifiers with 40% Grievous Wounds. |
-| `lanerl_jax/modern/items/effects/` | `core.py` (contract), `__init__.py` (registry, dispatch, coverage), `runtime.py` (folding and the reference `item_tick`), one module per family: `starters`, `consumables`, `spellblade`, `hydra`, `fighter`, `defense`, `mage`, `marksman`, `support`, `boots`. |
+| `lanerl_jax/modern/items/effects/` | `core.py` (contract), `__init__.py` (registry, dispatch, coverage), `runtime.py` (defense/offense folding, packet resolution, effect application; the items-only reference tick is `combat.item_tick`), one module per family: `starters`, `consumables`, `spellblade`, `hydra`, `fighter`, `defense`, `mage`, `marksman`, `support`, `boots`. |
 | `lanerl_jax/modern/items/loadout.py` | Loadout stats and gate, stat shards (2.5% move speed, 15% tenacity/slow resist, health-scaling shard 10·level), rune catalog gate. |
 
 ## Coverage
@@ -53,7 +53,7 @@ Item actives other than the Tiamat line and Stridebreaker remain deferred under 
 
 ## Hook contract and tick order
 
-Hooks are listed in `core.py`. `runtime.item_tick` is the reference order, matching the README hook crosswalk:
+Hooks are listed in `core.py`. `combat.item_tick` is the reference order, matching the README hook crosswalk:
 
 1. `dynamic_stats` (STAT.50, read from pre-dynamic `Ctx`).
 2. `on_cast`.

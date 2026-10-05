@@ -14,14 +14,16 @@ normalisation so a future vision port need not re-extract them.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import json
 import math
-from pathlib import Path
 import struct
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
+
+from ..map.terrain import StaticTerrain
 
 SCHEMA = "lanerl-map-grid-v1"
 BRUSH, WALL, STRUCTURE, TRANSPARENT = 1, 2, 4, 64
@@ -138,7 +140,6 @@ class ModernMapGrid:
         return bool(np.all(~touched | (valid & values)))
 
     def as_jax(self, team: int | None = None):
-        from ..map.terrain import StaticTerrain
         import jax.numpy as jnp
         return StaticTerrain(jnp.asarray(self.walkable(team)), self.cell_size,
                              self.min_bounds[0], self.min_bounds[2],

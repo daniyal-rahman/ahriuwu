@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.champions import summoners as S
+from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.core.types import KIND_CHAMPION, KIND_MINION, KIND_TURRET, CastOrder, WorldUnits
 from lanerl_jax.modern.tests import item_harness as H
 

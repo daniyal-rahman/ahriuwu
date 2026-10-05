@@ -73,7 +73,7 @@ Stormraider's Surge with no Phase Rush logic (RUNES D-10).
 8. **End of tick.** on_takedown; then heals and shields (HSP, incoming, Revitalize via `heal_mult`, GW);
    then rune `post_tick` (with `ev.shield_gained`); then item on_shop; then rune `outputs`.
 
-`items.effects.runtime.item_tick` is now `combat_tick` with an empty page, no max-HP sync and no carry.
+`combat.item_tick` is `combat_tick` with an empty page, no max-HP sync and no carry.
 
 ## What the world integrator must still do
 

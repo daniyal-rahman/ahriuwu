@@ -28,8 +28,8 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
-from .terrain import StaticTerrain
 from ..data import PATCH_DIR
+from .terrain import StaticTerrain
 
 TABLE = PATCH_DIR / "objectives_client.json"
 N_ELEMENTS = 7

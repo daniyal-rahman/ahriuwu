@@ -28,7 +28,7 @@ from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_S
                             TAG_BASIC_ATTACK, TAG_ITEM, TAG_PERIODIC, TAG_PROC, TRUE, concat_packets, has,
                             packets)
 from ..catalog import ItemStats, catalog
-from .core import (AttackMods, Effects, dst_class, dv, effects, holds, merge_effects, neutral_defense,
+from .core import (AttackMods, dst_class, dv, effects, holds, merge_effects, neutral_debuffs, neutral_defense,
                    onehot_units, shield_grants, target_class)
 
 OVERLORD, HUNGER, BASTION, CLEAVER, HEXPLATE = 2501, 2517, 2520, 3071, 3073
@@ -251,7 +251,6 @@ def defense(state: State, own, ctx):
 
 
 def debuffs(state: State, own, ctx, units):
-    from .core import neutral_debuffs
     n = units.x.shape[0]
     stacks = jnp.where(holds(own, CLEAVER)[:, None] & (ctx.now < state.carve_until), state.carve, 0.0)
     keep = jnp.prod(1.0 - CARVE_PER_STACK * stacks, axis=0)
@@ -277,7 +276,6 @@ def shojin_ability_amp(state: State, own, ctx) -> Any:
 
 def packet_amp(state: State, own, ctx, units, p) -> Any:
     """(P,) Focused Will on the holder's ability damage (ActiveSpell, not item)."""
-    from ...core.damage import TAG_ACTIVE_SPELL, TAG_ITEM, has
     amp = shojin_ability_amp(state, own, ctx)
     src_is = p.src[:, None] == ctx.unit[None, :]
     ability = has(p.flags, TAG_ACTIVE_SPELL) & ~has(p.flags, TAG_ITEM)

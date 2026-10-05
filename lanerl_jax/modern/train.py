@@ -62,15 +62,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import obs as OB
-from .core import types as W
 from ..train.learner import make_learner
-from .actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from, screen_usage
-from .actions import PROFILE as MA_PROFILE
 from ..train.policy import LanePolicy, PolicyConfig
 from ..train.ppo import PPOConfig, factored_log_prob
 from ..train.reward import LANE_HALF_WIDTH
 from ..train.scan_ppo import Transition, VecRunner, make_batch_fn, ppo_learn
+from . import obs as OB
+from .actions import MODERN_BUTTON_INDEX, MODERN_BUTTONS, modern_orders_from, screen_usage
+from .actions import PROFILE as MA_PROFILE
+from .core import types as W
 
 __all__ = ["ModernVecConfig", "ModernEnvState", "MaskedLanePolicy", "DEFAULT_BUTTONS_OFF", "TICK_HZ",
            "default_loadouts", "make_env", "prepare_modern_bank", "modern_relative_reward",
@@ -519,9 +519,10 @@ SMALL_POLICY = dict(d_model=32, n_layers=1, ffn_dim=32, ctx_dim=32, core_dim=32,
 
 def main(argv=None) -> None:
     from flax.serialization import from_state_dict, msgpack_restore
+
     from ..jax_cache import enable_compile_cache
-    from .world import config as MW
     from ..train.run_manifest import RunDir, file_sha256
+    from .world import config as MW
     p = build_parser()
     a = p.parse_args(argv)
     if a.opponent == "frozen" and a.opponent_from is None:

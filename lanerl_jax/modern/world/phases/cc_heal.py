@@ -42,7 +42,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     ten = jnp.zeros((n,), jnp.float32).at[:c].set(
         1.0 - (1.0 - st.tenacity) * (1.0 - kdef.tenacity_bonus) * (1.0 - s_out.tenacity))
     if mai is not None:                                               # Scuttler: slow immune, -100% tenacity
-        jsl = slice(cfg.jungle.monster0, cfg.jungle.monster0 + cfg.jungle.n_slots)
+        jsl = cfg.jungle.slots
         ten = ten.at[jsl].set(1.0 - mai.cc_duration_mult)
     champ_cc = sc.cc_now
     for extra_cc in ([] if sm is None else [sm.cc]) + ([] if jfx is None else [jfx.cc]) \

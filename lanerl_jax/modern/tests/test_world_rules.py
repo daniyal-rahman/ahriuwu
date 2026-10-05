@@ -20,8 +20,8 @@ from lanerl_jax.modern.tests import world_harness as H
 if not H.artifacts_present():
     pytest.skip("modern map/route artifacts not present", allow_module_level=True)
 
-from lanerl_jax.modern.jungle import camps as J  # noqa: E402
 from lanerl_jax.modern import world as MS  # noqa: E402
+from lanerl_jax.modern.jungle import camps as J  # noqa: E402
 from lanerl_jax.modern.world.phases.attack import minion_pushing  # noqa: E402
 
 assert 8451 in H.JAX_PAGE.secondary          # Overgrowth (test_overgrowth_counts_...)
@@ -200,7 +200,7 @@ def test_a_dash_keeps_moving_after_its_start_tick():
     x0, y0 = float(s.x[0]), float(s.y[0])
     dash = W.Dash(jnp.asarray([True, False]), jnp.asarray([x0 + 400.0, 0.0]), jnp.asarray([y0 + 400.0, 0.0]),
                   jnp.asarray([800.0, 0.0]), jnp.asarray([-1, -1], jnp.int32), jnp.asarray([False, False]))
-    s, _ = step(s._replace(pending_dash=dash), MS.no_orders())
+    s, _ = step(s._replace(prev=s.prev._replace(pending_dash=dash)), MS.no_orders())
     s1 = np.hypot(float(s.x[0]) - x0, float(s.y[0]) - y0)
     s, _ = run(s, MS.no_orders(), 10)
     s2 = np.hypot(float(s.x[0]) - x0, float(s.y[0]) - y0)

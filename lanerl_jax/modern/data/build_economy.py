@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+
 from . import PATCH_DIR
 
 RESEARCH = Path("/mnt/nfs/shared/modern-world-map-research")

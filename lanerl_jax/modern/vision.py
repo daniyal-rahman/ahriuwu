@@ -53,6 +53,7 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
+from ..obs.vision import VisionGrid, clear_ray, with_bush_ids
 from .core import types as W
 
 __all__ = ["CHAMPION_SIGHT", "MINION_SIGHT", "SUPER_MINION_SIGHT", "TURRET_SIGHT", "NEXUS_SIGHT",
@@ -98,7 +99,6 @@ def vision_grid(grid, *, rays: bool = False) -> Any:
     supercover ray rule (walls and brush along the ray).
     """
     import numpy as np
-    from ..obs.vision import VisionGrid, with_bush_ids
     g = VisionGrid(jnp.asarray(np.asarray(grid.flags, np.int32)), float(grid.cell_size),
                    float(grid.min_bounds[0]), float(grid.min_bounds[2]))
     return g if rays else with_bush_ids(g)
@@ -133,7 +133,6 @@ def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fog
     sight points that are not units (Scuttle Speed Shrine); they see like a unit
     standing there (walls/brush rays, no true sight).
     """
-    from ..obs.vision import clear_ray
     n = x.shape[0]
     live = alive & (kind != W.KIND_NONE)
     r = sight_radius(kind, sub, live) if radius is None else jnp.where(live, radius, 0.0).astype(jnp.float32)

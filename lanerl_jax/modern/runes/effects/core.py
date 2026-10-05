@@ -39,12 +39,48 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 
-from ...core.damage import MAGIC, PHYSICAL, Packets, empty_packets, has
-from ...items.effects.core import (CC, Attack, Cast, Ctx, Effects, Kills, Report, Units, effects, enemy_mask,
-                                   merge_effects, no_effects, onehot_units, target_class, unit_pos,
-                                   dealt_by_holder, hit_by_holder, taken_by_holder, dist_to_point, in_circle,
-                                   nearest_k, neutral_debuffs, Debuffs, BIG, src_class, dst_class)
-from ..catalog import breakpoints, ea, has_rune, level_table, lin, lin_growth, rune_catalog, rune_count
+from ...core.damage import CLASS_CHAMPION, MAGIC, PHYSICAL, Packets, empty_packets, has
+
+# The item-effect helpers and rune catalog lookups below are re-exported: rune modules import their
+# whole toolkit from here (``from .core import ...``).
+from ...items.effects.core import (  # noqa: F401
+    BIG,
+    CC,
+    Attack,
+    Cast,
+    Ctx,
+    Debuffs,
+    Effects,
+    Kills,
+    Report,
+    Units,
+    dealt_by_holder,
+    dist_to_point,
+    dst_class,
+    effects,
+    enemy_mask,
+    hit_by_holder,
+    in_circle,
+    merge_effects,
+    nearest_k,
+    neutral_debuffs,
+    no_effects,
+    onehot_units,
+    src_class,
+    taken_by_holder,
+    target_class,
+    unit_pos,
+)
+from ..catalog import (  # noqa: F401
+    breakpoints,
+    ea,
+    has_rune,
+    level_table,
+    lin,
+    lin_growth,
+    rune_catalog,
+    rune_count,
+)
 
 
 def rune_item(perk_id: int) -> int:
@@ -223,7 +259,6 @@ def variable_damage_type(ad_term: Any, ap_term: Any) -> Any:
 
 def enemy_champions(ctx: Ctx, units: Units) -> Any:
     """(C, N) living enemy champion units."""
-    from ...core.damage import CLASS_CHAMPION
     return (units.cls[None, :] == CLASS_CHAMPION) & (units.team[None, :] != ctx.team[:, None]) \
         & units.alive[None, :]
 

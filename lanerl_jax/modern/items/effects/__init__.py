@@ -21,11 +21,10 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ..catalog import ItemStats, catalog, combine_stats, zero_stats
-from .core import (CC, ActiveOut, Attack, AttackMods, Cast, Ctx, Debuffs, Effects, HolderDefense, Kills,
-                   Report, StatusFlags, Units, combine_debuffs, combine_defense, merge_effects,
-                   neutral_debuffs, no_effects)
-from . import consumables, starters, spellblade, hydra, fighter, defense, mage, marksman, support, boots, jungle
-from . import actives  # remaining 26.19 actives (stasis, cleanse, Randuin's, Gunblade, ...)
+# One module per item family; ``actives`` holds the remaining 26.19 actives (stasis, cleanse, Randuin's, ...).
+from . import actives, boots, consumables, defense, fighter, hydra, jungle, mage, marksman, spellblade, starters, support
+from .core import (CC, ActiveOut, Attack, AttackMods, Cast, Ctx, Debuffs, HolderDefense, Kills, Report,
+                   StatusFlags, Units, combine_debuffs, combine_defense, merge_effects, no_effects)
 
 MODULES = (consumables, starters, spellblade, hydra, fighter, defense, mage, marksman, support, boots,
            actives, jungle)

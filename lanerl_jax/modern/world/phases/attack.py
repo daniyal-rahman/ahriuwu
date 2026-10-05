@@ -18,9 +18,9 @@ from ...jungle import camps as J
 from ...jungle import objectives as OBJ
 from ...lane import ai as LA
 from ...lane import minions as MM
+from .. import units as U
 from .. import views as V
 from ..config import N_CHAMPIONS, WorldConfig
-from ..config import layout as MW_layout
 from ..scratch import TickScratch
 from ..state import ModernOrders, ModernState
 
@@ -76,7 +76,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cancelled = (att_prev.windup_left > 0) & (att.windup_left <= 0) & ~launched
     atgt = jnp.clip(att.target, 0, n - 1)
     # Champions: crit roll at launch (X-8), Garen Q's spell attack cannot crit.
-    imods = IE.attack_mods(s.combat.items, V.owned_items(champ.inventory), ictx, V.item_units(s), att.target[:c])
+    imods = IE.attack_mods(s.combat.items, V.owned_items(champ.inventory), ictx, U.item_units(s), att.target[:c])
     no_crit = jnp.zeros((c,), bool) if kmods.cannot_crit is None else kmods.cannot_crit
     roll = jax.random.uniform(k_crit, (c,)) < st.crit_chance
     crit = launched[:c] & ~no_crit & (roll | imods.force_crit)
@@ -111,7 +111,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     launch_all = W.AttackLaunch(launched, att.target, s.missile_speed > 0, jnp.zeros((n,), bool), cast_ids)
     if cfg.jungle is not None:
         j_main, j_bonus = J.monster_attack_packets(jungle, cfg.jungle, units, launch_all)
-        jsl = slice(cfg.jungle.monster0, cfg.jungle.monster0 + cfg.jungle.n_slots)
+        jsl = cfg.jungle.slots
         lane_pk = lane_pk._replace(raw=lane_pk.raw.at[jsl].set(j_main.raw), dtype=lane_pk.dtype.at[jsl].set(j_main.dtype),
                                    flags=lane_pk.flags.at[jsl].set(j_main.flags))
         extra_atk.append(j_bonus)
@@ -120,7 +120,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         obj, o_raw, o_dtype, o_flags, o_extra, obj_cc = OBJ.objectives_attack(s.obj, cfg.objectives, units,
                                                                             launch_all, now=now)
         s = s._replace(obj=obj)
-        esl = slice(cfg.objectives.slot0, cfg.objectives.slot0 + 8)
+        esl = cfg.objectives.slots
         on = (jnp.zeros((n,), bool).at[esl].set(True)) & (o_raw > 0)
         lane_pk = lane_pk._replace(raw=jnp.where(on, o_raw, lane_pk.raw), dtype=jnp.where(on, o_dtype, lane_pk.dtype),
                                    flags=jnp.where(on, o_flags, lane_pk.flags))
@@ -130,8 +130,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     raw_all = lane_pk.raw.at[:c].set(craw)
     dtype_all = lane_pk.dtype.at[:c].set(cdtype)
     flags_all = lane_pk.flags.at[:c].set(flags_c)
-    lay = MW_layout()
-    w0 = lay["ward0"]
+    lay = cfg.layout
+    w0 = lay.ward0
     missiles, m_over = M.spawn_missiles(s.missiles, ranged & ~on_ward, units, att.target, raw_all, dtype_all,
                                         flags_all, msl_speed, cast_ids, jnp.zeros((n,), bool).at[:c].set(crit))
     missiles, arrive = M.advance_missiles(missiles, units, dt)
@@ -159,7 +159,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     jfx = None
     if cfg.jungle is not None:
         # Scorchclaw: enemy champion damaged (last tick's damage_matrix, 1 tick lag); Gustwalker: in brush.
-        dm_cc = s.damage_matrix[:c, :c] & (s.team[:c][:, None] != s.team[:c][None, :])
+        dm_cc = s.prev.damage_matrix[:c, :c] & (s.team[:c][:, None] != s.team[:c][None, :])
         dmg_champ = jnp.where(jnp.any(dm_cc, axis=1), jnp.argmax(dm_cc, axis=1), -1).astype(jnp.int32)
         jungle, jfx = J.combat_effects(jungle, cfg.jungle, units, ictx, attack_hit=attack.hit,
                                        attack_target=attack.target, damaged_champion=dmg_champ,

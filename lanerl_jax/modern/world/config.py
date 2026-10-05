@@ -5,12 +5,14 @@ closes over: Map11 terrain per team and the route graph, structure and lane
 geometry, champion records, loadouts (items, rune pages, summoner spells,
 roles). No Map1/legacy fallback: missing assets raise.
 
-Unit layout (fixed shapes; ``unit_ranges`` / ``core.types`` layout comment):
-  0..1                      champions (holder c = unit c; team c)
-  then MAX_MINIONS          lane-minion slots, 40 per lane (bot, mid, top), both teams
-  then MAX_MONSTERS         jungle camps (``jungle.camps``, 38 used) + 8 epic slots (``jungle.objectives``)
-  then 2*MAX_WARDS_PER_TEAM ward slots, blue's 8 then red's 8 (``wards``)
-  then                      22 turrets, 6 inhibitors, 2 Nexuses (structures last: the unfogged block)
+Unit layout (``Layout``; fixed shapes, sized by the scenario: disabled systems get no slots):
+  0..1          champions (holder c = unit c; team c)
+  minion block  40 lane-minion slots per spawning lane (in ``lanes`` order), both teams
+  jungle block  40 camp slots (``jungle.camps``, 38 used), if the jungle is on
+  epic block    8 epic-monster slots (``jungle.objectives``), if objectives are on
+  ward block    16 ward slots, blue's 8 then red's 8 (``wards``)
+  structures    22 turrets, 6 inhibitors, 2 Nexuses (last: the unfogged block)
+The full map is 216 units; top lane without jungle and objectives is 88.
 
 Geometry sources (``modern/data/26.19/geometry.json``, client
 ``base_srx.materials.bin``): turrets and minion barracks from placement
@@ -29,14 +31,28 @@ from typing import Any
 import jax.numpy as jnp
 import numpy as np
 
+from .. import champions as K
+from .. import vision as MV
+from .. import wards as WD
 from ..core import types as W
+from ..core.stat_pipeline import champion_base
 from ..data import PATCH_DIR
+from ..data.navgrid import load_patch_map
+from ..data.routes import load_routes
+from ..items.inventory import validate_item_loadout
+from ..items.loadout import validate_rune_page
+from ..jungle import camps as J
+from ..jungle import objectives as OBJ
+from ..map import dynamic_terrain as DTR
+from ..map import regions as REG
+from ..map import rift as RIFT
+from ..map.lanes import LANE_NAMES
+from ..runes import catalog as RD
 
 DEFAULT_MAP = Path("/mnt/nfs/shared/modern-world-map-research/grid-26.19-base")
 DEFAULT_ROUTES = Path("/mnt/nfs/shared/WORLD001_map_routes/routes")
-MAX_MINIONS = 3 * W.MAX_MINIONS_PER_LANE
 N_CHAMPIONS = 2
-N_WARD_SLOTS = 2 * W.MAX_WARDS_PER_TEAM
+N_STRUCTURES = 30                   # 22 turrets, 6 inhibitors, 2 Nexuses
 NEXUS_POSITIONS = ((1549.0, 1658.0), (13240.0, 13235.0))    # navgrid Nexus pad centres (blue, red)
 FOUNTAINS = ((394.0, 461.0), (14340.0, 14391.0))            # __Spawn_T1 / __Spawn_T2
 SHOP_CENTERS = ((412.9, 416.2), (14297.2, 14388.3))         # Order/ChaosShopAreaCenter
@@ -44,7 +60,6 @@ INHIBITORS = {  # (team, lane) -> position, from SRUAP_*_Inhibitor_Idle placemen
     (0, "top"): (1171.6, 3569.7), (0, "mid"): (3198.6, 3218.5), (0, "bot"): (3456.0, 1200.1),
     (1, "top"): (11256.2, 13675.8), (1, "mid"): (11600.0, 11671.4), (1, "bot"): (13598.7, 11311.9),
 }
-LANES = ("bot", "mid", "top")         # geometry.json lane ids: 0 bot, 1 mid, 2 top
 TIERS = {"outer": 0, "inner": 1, "inhibitor": 2, "nexus": 3}
 # Structure stats not in towers.json (TOWERS §1.3–1.4, D4).
 INHIBITOR_HP, INHIBITOR_ARMOR, INHIBITOR_REGEN, INHIBITOR_RESPAWN = 4000.0, 20.0, 15.0, 300.0
@@ -54,13 +69,55 @@ NEXUS_HP, NEXUS_ARMOR, NEXUS_REGEN = 5500.0, 20.0, 20.0
 @dataclass(frozen=True)
 class Loadout:
     """One champion's game setup (host-side, validated at build time)."""
-    champion: str                       # "Garen" | "Jax"
+    champion: str                       # a kit name in ``champions.KITS`` ("Garen", "Jax")
     items: tuple[int, ...] = ()
     rune_page: Any = None               # runes.catalog.RunePage or None (no-runes ruleset)
     summoners: tuple[int, int] = (4, 12)  # Flash, Teleport
     role: int = 1                       # role_quest.ROLE_TOP
     skill_order: tuple[int, ...] = ()   # slot per level 1..18; empty = champion default
     auto_skill: bool = True             # spend unassigned skill points by skill_order (False: only level_up orders)
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Start index of every unit block (module doc), from the scenario's enabled systems."""
+    lanes: tuple = (0, 1, 2)            # lanes whose waves spawn, one minion block each, in this order
+    jungle: bool = True
+    objectives: bool = True
+
+    @property
+    def minion0(self) -> int:
+        return N_CHAMPIONS
+
+    @property
+    def monster0(self) -> int:
+        return self.minion0 + len(self.lanes) * W.MINION_SLOTS_PER_LANE
+
+    @property
+    def epic0(self) -> int:
+        return self.monster0 + (W.JUNGLE_SLOTS if self.jungle else 0)
+
+    @property
+    def ward0(self) -> int:
+        return self.epic0 + (W.EPIC_SLOTS if self.objectives else 0)
+
+    @property
+    def struct0(self) -> int:
+        return self.ward0 + 2 * W.MAX_WARDS_PER_TEAM
+
+    @property
+    def n_units(self) -> int:
+        return self.struct0 + N_STRUCTURES
+
+    @property
+    def packet_capacity(self) -> int:
+        """Damage packets per tick after compaction: the power of two >= 2 per unit (512 on the full map)."""
+        return 1 << (2 * self.n_units - 1).bit_length()
+
+    @property
+    def follow_up_capacity(self) -> int:
+        """Packets of the follow-up (trigger) pass: half the main pass."""
+        return self.packet_capacity // 2
 
 
 @dataclass(frozen=True)
@@ -93,27 +150,11 @@ class WorldConfig:
     regions: Any = None                 # map.regions.MapRegions
     footprints: Any = None              # map.dynamic_terrain.Footprints (structure pads)
     ward_grid: Any = None               # wards.WardGrid
-    lanes: tuple = (0, 1, 2)            # lanes whose waves spawn (static)
+    layout: Layout = Layout()           # unit blocks (static)
 
     @property
     def n_units(self) -> int:
         return int(self.unit_kind.shape[0])
-
-
-def unit_ranges():
-    """``(champions, minions, structure0)`` slices/index (legacy signature)."""
-    r = layout()
-    return slice(0, N_CHAMPIONS), slice(r["minion0"], r["monster0"]), r["struct0"]
-
-
-def layout() -> dict:
-    """Start index of every unit block."""
-    minion0 = N_CHAMPIONS
-    monster0 = minion0 + MAX_MINIONS
-    ward0 = monster0 + W.MAX_MONSTERS
-    struct0 = ward0 + N_WARD_SLOTS
-    return {"minion0": minion0, "monster0": monster0, "epic0": monster0 + W.MAX_MONSTERS - 8, "ward0": ward0,
-            "struct0": struct0}
 
 
 def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, dt=1.0 / 30.0,
@@ -127,23 +168,13 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
     """
     if fog not in (False, "fast", "rays"):
         raise ValueError("fog must be 'fast', 'rays' or False")
-    from .. import vision as MV
-    from ..core.stat_pipeline import champion_base
-    from ..data.navgrid import load_patch_map
-    from ..data.routes import load_routes
-    from ..items.inventory import validate_item_loadout
-    from ..items.loadout import validate_rune_page
-    from ..runes import catalog as RD
-    lanes_on = tuple(int(v) for v in lanes)
+    lay = Layout(tuple(int(v) for v in lanes), bool(jungle), bool(objectives))
     if len(loadouts) != N_CHAMPIONS:
         raise ValueError("the modern lane world has exactly two champions")
-    ids = {"Garen": 86, "Jax": 24}
     pages = []
     for lo in loadouts:
-        if lo.champion not in ids:
-            raise ValueError(f"unsupported modern champion {lo.champion!r}")
+        traits = K.kit(lo.champion).TRAITS
         validate_item_loadout(tuple(lo.items))
-        traits = RD.CHAMPION_TRAITS[lo.champion]
         traits = RD.ChampionTraits(traits.has_immobilize, traits.resource, traits.special,
                                    flash_equipped=4 in lo.summoners, adaptive_physical=traits.adaptive_physical)
         pages.append(validate_rune_page(lo.rune_page, traits))
@@ -153,45 +184,36 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
     terrain = tuple(grid.as_jax(team) for team in (0, 1))
 
     kinds, teams, subs, xs, ys, lanes = [], [], [], [], [], []
+
+    def empty(count, team=lambda k: 0):      # slots written at spawn (KIND_NONE until then)
+        for k in range(count):
+            kinds.append(W.KIND_NONE); teams.append(team(k)); subs.append(0); xs.append(0.0); ys.append(0.0)
+            lanes.append(-1)
     for c in range(N_CHAMPIONS):
         kinds.append(W.KIND_CHAMPION); teams.append(c); subs.append(0)
         xs.append(FOUNTAINS[c][0]); ys.append(FOUNTAINS[c][1]); lanes.append(-1)
-    for _ in range(MAX_MINIONS):
-        kinds.append(W.KIND_NONE); teams.append(0); subs.append(0); xs.append(0.0); ys.append(0.0); lanes.append(-1)
-    from .. import wards as WD
-    from ..jungle import camps as J
-    from ..jungle import objectives as OBJ
-    from ..map import dynamic_terrain as DTR
-    from ..map import regions as REG
-    from ..map import rift as RIFT
-    monster0 = len(kinds)
-    jtab = J.build_table(monster0) if jungle else None
-    for _ in range(W.MAX_MONSTERS):            # monsters are written at spawn (KIND_NONE until then)
-        kinds.append(W.KIND_NONE); teams.append(W.NEUTRAL); subs.append(0); xs.append(0.0); ys.append(0.0)
-        lanes.append(-1)
-    otab = OBJ.load_table(monster0 + W.MAX_MONSTERS - 8) if objectives else None
-    for k in range(N_WARD_SLOTS):
-        kinds.append(W.KIND_NONE); teams.append(k // W.MAX_WARDS_PER_TEAM); subs.append(0); xs.append(0.0)
-        ys.append(0.0); lanes.append(-1)
-    s0 = len(kinds)
+    empty(lay.monster0 - lay.minion0)
+    empty(lay.ward0 - lay.monster0, team=lambda k: W.NEUTRAL)
+    empty(lay.struct0 - lay.ward0, team=lambda k: k // W.MAX_WARDS_PER_TEAM)
+    jtab = J.build_table(lay.monster0) if jungle else None
+    otab = OBJ.load_table(lay.epic0) if objectives else None
     index = {}
     for o in geometry["turrets"]:
-        lane = o["lane"] if isinstance(o["lane"], int) else LANES.index(o["lane"])
+        lane = o["lane"] if isinstance(o["lane"], int) else LANE_NAMES.index(o["lane"])
         index[(o["team"], lane, o["tier"])] = len(kinds)
         kinds.append(W.KIND_TURRET); teams.append(o["team"]); subs.append(TIERS[o["tier"]])
         xs.append(o["position"][0]); ys.append(o["position"][1]); lanes.append(lane)
     for (team, lane_name), pos in INHIBITORS.items():
-        index[(team, LANES.index(lane_name), "inhib")] = len(kinds)
+        index[(team, LANE_NAMES.index(lane_name), "inhib")] = len(kinds)
         kinds.append(W.KIND_INHIBITOR); teams.append(team); subs.append(0)
-        xs.append(pos[0]); ys.append(pos[1]); lanes.append(LANES.index(lane_name))
-    nexus_turrets = {t: [o["position"] for o in geometry["turrets"] if o["team"] == t and o["tier"] == "nexus"]
-                     for t in (0, 1)}
+        xs.append(pos[0]); ys.append(pos[1]); lanes.append(LANE_NAMES.index(lane_name))
     for team in (0, 1):
         pos = NEXUS_POSITIONS[team]
         index[(team, -1, "nexus")] = len(kinds)
         kinds.append(W.KIND_NEXUS); teams.append(team); subs.append(0)
         xs.append(float(pos[0])); ys.append(float(pos[1])); lanes.append(-1)
     n = len(kinds)
+    assert n == lay.n_units, (n, lay)
     prereq = np.full(n, -1, np.int32)
     prereq2 = np.full(n, -1, np.int32)
     for (team, lane, tier), slot in index.items():
@@ -206,16 +228,16 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
     spawns = np.asarray([next(o["position"] for o in geometry["barracks"]
                               if o["team"] == t and o["lane"] in (2, "top")) for t in (0, 1)], np.float32)
     champion_names = [lo.champion for lo in loadouts]
-    traits = [RD.CHAMPION_TRAITS[nm] for nm in champion_names]
+    traits = [K.kit(nm).TRAITS for nm in champion_names]
     profile = {"patch": "26.19", "mode": "CLASSIC", "map_id": 11, "lane": "top", "dt": dt,
                "map_arrays_sha256": manifest["arrays_sha256"], "routes": route_meta,
                "nexus_position": "navgrid Nexus pad centre (STRUCTURE cells, LANES_TERRAIN)",
-               "lanes": tuple(lanes_on), "jungle": jungle, "objectives": objectives,
+               "lanes": lay.lanes, "jungle": jungle, "objectives": objectives,
                "vision": f"fog={fog!r}: sight radii, brush{', walls' if fog == 'rays' else ''}, structures always visible, attack reveal",
-               "deferred": ["allied champions (ally-targeted effects inert)", "other champions than Garen/Jax"]}
+               "deferred": ["allied champions (ally-targeted effects inert)", "champions without a kit module"]}
     return WorldConfig(
         terrain=terrain, routes=routes, loadouts=tuple(loadouts),
-        champion_ids=jnp.asarray([ids[nm] for nm in champion_names], jnp.int32),
+        champion_ids=jnp.asarray([K.kit(nm).ID for nm in champion_names], jnp.int32),
         champion_base=champion_base(champion_names),
         rune_pages=jnp.asarray(RD.page_counts(pages)),
         adaptive_physical=jnp.asarray([t.adaptive_physical for t in traits]),
@@ -230,4 +252,4 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
         jungle=jtab, objectives=otab, rift=RIFT.load_rift_terrain() if objectives else None,
         regions=REG.build_regions(grid), footprints=DTR.build_footprints(grid, np.asarray(kinds), np.asarray(xs),
                                                                          np.asarray(ys)),
-        ward_grid=WD.ward_grid(grid), lanes=tuple(lanes_on))
+        ward_grid=WD.ward_grid(grid), layout=lay)

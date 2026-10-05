@@ -13,6 +13,7 @@ from ...core.stat_pipeline import ChampionStats, compose
 from ...items import inventory as I
 from ...items.catalog import catalog, combine_stats
 from ...jungle import camps as J
+from .. import units as U
 from .. import views as V
 from ..config import N_CHAMPIONS, WorldConfig
 from ..scratch import TickScratch
@@ -61,7 +62,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     summ_world = combine_stats(static, s.champ.dyn)
     st = compose(cfg.champion_base, level, summ_world, adaptive_physical=cfg.adaptive_physical,
                  slow=caps["slow"][:c])
-    units = V.units_view(s)
+    units = U.units_view(s)
     kctx = V.kit_ctx(s, cfg, st, caps, now, dt)
     ictx = V.item_ctx(s, cfg, st_static, now, dt)
     locked = now < champ.cast_lock_until

@@ -35,8 +35,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .terrain import StaticTerrain, is_walkable, team_view
 from ..core import types as W
+from .terrain import is_walkable, team_view
 
 STRUCTURE_FLAG = 4
 WALL_FLAG = 2

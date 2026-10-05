@@ -8,12 +8,12 @@ The manifest URL/build are explicit: never resolve 'latest' during reproduction.
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import hashlib
-from importlib.metadata import version
 import json
-from pathlib import Path
 import urllib.request
+from datetime import datetime, timezone
+from importlib.metadata import version
+from pathlib import Path
 
 WAD = "DATA/FINAL/Maps/Shipping/Map11.wad.client"
 

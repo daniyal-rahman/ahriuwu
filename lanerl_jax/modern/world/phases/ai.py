@@ -7,7 +7,7 @@ from ...core import types as W
 from ...jungle import camps as J
 from ...jungle import objectives as OBJ
 from ...lane import ai as LA
-from .. import views as V
+from .. import units as U
 from ..config import N_CHAMPIONS, WorldConfig
 from ..scratch import TickScratch
 from ..state import ModernOrders, ModernState
@@ -26,11 +26,11 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     towers = LA.turret_tick(s.towers, units, now=now, dt=jnp.float32(dt))
     hp_t, alive_t, targ_t = LA.structure_unit_view(towers, units)
     s = s._replace(hp=hp_t, alive=alive_t, targetable=targ_t)
-    units = V.units_view(s)
-    champ_vs_champ = s.damage_matrix & (s.kind == W.KIND_CHAMPION)[:, None] & (s.kind == W.KIND_CHAMPION)[None, :]
+    units = U.units_view(s)
+    champ_vs_champ = s.prev.damage_matrix & (s.kind == W.KIND_CHAMPION)[:, None] & (s.kind == W.KIND_CHAMPION)[None, :]
     lane_ai, desired, mgoal, stop = LA.select_targets(s.lane_ai, units, s.att, now=now, dt=jnp.float32(dt),
                                                       champion_attacked_champion=champ_vs_champ,
-                                                      damage_events=s.damage_matrix, visible=s.visible)
+                                                      damage_events=s.prev.damage_matrix, visible=s.visible)
     # Monsters: jungle camps and epic objectives choose their own targets and goals.
     mai = None
     m_goal = jnp.stack([s.x, s.y], -1)
@@ -38,9 +38,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     m_move = jnp.zeros((n,), bool)
     if cfg.jungle is not None:
         jungle, mai = J.monster_ai(jungle, cfg.jungle, units, s.att, now=now, dt=jnp.float32(dt),
-                                   damage_events=s.damage_matrix)
-        j0, jn = cfg.jungle.monster0, cfg.jungle.n_slots
-        jsl = slice(j0, j0 + jn)
+                                   damage_events=s.prev.damage_matrix)
+        jsl = cfg.jungle.slots
         desired = desired.at[jsl].set(mai.desired)
         m_goal = m_goal.at[jsl].set(jnp.stack([mai.goal_x, mai.goal_y], -1))
         m_speed, m_move = m_speed.at[jsl].set(mai.move_speed), m_move.at[jsl].set(mai.moving)
@@ -51,16 +50,15 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                        kind=s.kind.at[jsl].set(jnp.where(mai.despawn, W.KIND_NONE, s.kind[jsl])),
                        targetable=s.targetable.at[jsl].set(mai.targetable & live_j))
     if so is not None:
-        e0 = cfg.objectives.slot0
-        esl = slice(e0, e0 + 8)
+        esl = cfg.objectives.slots
         desired = desired.at[esl].set(jnp.where(so.can_attack, so.desired, -1))
         m_goal = m_goal.at[esl].set(so.goal)
         m_speed, m_move = m_speed.at[esl].set(so.move_speed), m_move.at[esl].set(so.move_active)
-        obj, mbuf = OBJ.baron_minion_buffs(s.obj, cfg.objectives, V.units_view(s), now=now)
+        obj, mbuf = OBJ.baron_minion_buffs(s.obj, cfg.objectives, U.units_view(s), now=now)
         s = s._replace(obj=obj)
     else:
         mbuf = None
-    units = V.units_view(s)
+    units = U.units_view(s)
 
     # Champions: ordered target, attack-move, or idle auto-acquisition (LA.idle_acquire; chases).
     t_ok = (attack_order >= 0) & s.alive[jnp.clip(attack_order, 0, n - 1)]

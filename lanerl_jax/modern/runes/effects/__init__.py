@@ -20,10 +20,10 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ...items.catalog import ItemStats, catalog, combine_stats, zero_stats
+from ...items.effects.core import Debuffs, combine_debuffs, merge_effects
 from ..catalog import rune_catalog
-from ...items.effects.core import Debuffs, Effects, combine_debuffs, merge_effects
+from . import domination, inspiration, precision, resolve, sorcery
 from .core import RuneEvents, RuneOutputs, merge_outputs, no_outputs
-from . import precision, domination, sorcery, resolve, inspiration
 
 MODULES = (precision, domination, sorcery, resolve, inspiration)
 

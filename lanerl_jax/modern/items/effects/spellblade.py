@@ -31,7 +31,7 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ...core.damage import (CLASS_CHAMPION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM, PHYSICAL,
-                            PROP_LIFESTEAL, concat_packets, packets)
+                            PROP_LIFESTEAL, packets)
 from ..catalog import ItemStats, catalog
 from .core import (Attack, Debuffs, Effects, dv, effects, enemy_mask, holds, holds_any, in_circle,
                    neutral_debuffs, onehot_units, target_class, unit_pos)

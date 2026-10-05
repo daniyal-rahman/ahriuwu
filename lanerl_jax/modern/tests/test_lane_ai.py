@@ -1,18 +1,17 @@
-import pytest
 import functools
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.lane import ai as L
-from lanerl_jax.modern.map import lanes as G
-from lanerl_jax.modern.lane import towers as T
 from lanerl_jax.modern.core.stats import PHYSICAL, TRUE
-from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_INHIBITOR, KIND_MINION, KIND_NEXUS,
-                                          KIND_TURRET, AttackLaunch, WorldUnits, damage_class,
-                                          init_attack_state)
+from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_INHIBITOR, KIND_MINION, KIND_NEXUS, KIND_TURRET,
+                                          AttackLaunch, WorldUnits, damage_class, init_attack_state)
+from lanerl_jax.modern.lane import ai as L
+from lanerl_jax.modern.lane import towers as T
+from lanerl_jax.modern.map import lanes as G
 
 MELEE, CASTER, SIEGE, SUPER = range(4)
 BLUE, RED = 0, 1
@@ -585,7 +584,6 @@ def test_init_structures_from_world_config_layout():
 
 # --- all three lanes: spawning, movement goals, neutral teams -----------------
 from lanerl_jax.modern.lane import minions as MM
-from lanerl_jax.modern.core.types import KIND_NONE
 
 
 def _empty_towers(n):

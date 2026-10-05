@@ -22,7 +22,7 @@ GAME = Path("/mnt/nfs/datasets/lol_replays_16_9_772_smoketest/NA1_5552036294")
 
 @lru_cache(maxsize=1)
 def tool():
-    spec = importlib.util.spec_from_file_location("ops.modern.replay_fidelity", REPO / "ops" / "ops.modern.replay_fidelity.py")
+    spec = importlib.util.spec_from_file_location("ops.modern.replay_fidelity", REPO / "ops" / "modern" / "replay_fidelity.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

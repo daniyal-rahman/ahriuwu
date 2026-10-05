@@ -9,8 +9,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.runes import catalog as RD
 from lanerl_jax.modern.items.effects.core import Report
+from lanerl_jax.modern.runes import catalog as RD
 from lanerl_jax.modern.runes.effects.core import CombatClocks, rune_events
 from lanerl_jax.modern.tests import item_harness as H
 

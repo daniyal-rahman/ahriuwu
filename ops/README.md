@@ -24,7 +24,9 @@ does not mean these jobs are currently running or the desktop is available.
 Status: `bash ops/bc_night.sh status`
 
 
-`fetch_modern_map.py` is a TOOL for the modern world port (MODERN-010). It
+Tools of the 26.19 modern world (`lanerl_jax/modern/`) live in `ops/modern/`.
+
+`ops/modern/fetch_map.py` is a TOOL for the modern world port (MODERN-010). It
 extracts requested Map11 WAD members from an explicitly pinned Riot manifest;
 it does not install or run League. Use an isolated Python3.11 environment with
 `riotmanifest==2.10.2`, `league-tools==1.2.1`, `zstd==1.5.7.2`. Run through
@@ -45,7 +47,7 @@ loader resolves latest or substitutes the legacy map. Shared validated arrays:
 `/mnt/nfs/datasets/league/26.19/map11-base/`. Raw extraction receipts:
 `/mnt/nfs/shared/modern-world-map-research/live-16.19.8230722/`.
 
-`ops.modern.items_bench.py` is a TOOL for the modern item system (MODERN-013). It
+`ops/modern/items_bench.py` is a TOOL for the modern item system (MODERN-013). It
 times one full `items.effects.runtime.item_tick` (two champions with six
 items each, 66 units) single and vmapped; run it capped:
 `ops/login_capped.sh 8G 2 .venv-jax/bin/python -m ops.modern.items_bench 64`.
@@ -53,7 +55,7 @@ The item table is rebuilt from the cached 16.19 client bins with
 `python -m lanerl_jax.modern.data.build_items` (sources and sha256s are
 recorded in `items_client.json`).
 
-`replay_oracle_extract.py` + `replay_oracle_extract.sbatch` are a TOOL
+`ops/modern/replay_oracle_extract.py` + `replay_oracle_extract.sbatch` are a TOOL
 (MODERN-015) that extracts raw client-memory observations (gold, deaths and
 respawns, fountain stretches, level-ups, max-HP changes) from the 147-game
 16.9 replay corpus `/mnt/nfs/datasets/lol_replays_16_9_772/`, independent of
@@ -73,24 +75,24 @@ into the anonymised `lanerl_jax/modern/data/oracle/riot_16_9_frames.json.gz`;
 `championStats` through the modern stat pipeline, shards, rune and item stat
 hooks with 16.9 records (`oracle/client_16_9_stats.json`).
 
-`ops.modern.bench.py` is a TOOL (MODERN-017/018). It times `lax.scan` of the
+`ops/modern/bench.py` is a TOOL (MODERN-017/018). It times `lax.scan` of the
 modern world tick (`world.tick.step`) under `jit(vmap)` for several batch
 sizes with scripted in-scan orders and prints one JSON line per batch size.
 World-variant flags (`--fog rays|fast|off`, `--no-jungle`, `--no-objectives`,
 `--lanes`) build ablated worlds, to measure what each system costs.
-`ops.modern.profile_tick.py` (TOOL, MODERN-021) traces the same scan with
+`ops/modern/profile_tick.py` (TOOL, MODERN-021) traces the same scan with
 `jax.profiler` and attributes device op time to source files and lines (joined
 through the compiled HLO's stack-frame tables); use it to find hotspots before
 optimising. Run both on the desktop through Slurm (`gpup` for GPU, `cpu` for
 CPU) from an NFS code snapshot, because the desktop cannot see the worktree.
 
-`ops.modern.perf_guard.py` + `slurm/modern_perf_guard.sbatch` are a TOOL: a
+`ops/modern/perf_guard.py` + `slurm/modern_perf_guard.sbatch` are a TOOL: a
 throughput and memory regression guard for the modern world tick. It runs the
-`ops.modern.bench.py` scan for one fixed config per backend (256 envs on GPU,
+`ops/modern/bench.py` scan for one fixed config per backend (256 envs on GPU,
 16 on CPU; 1800 warm ticks, 150 ticks per call, fastest of 3 timed calls) and
 records env-ticks per second, the compiled program's temp buffer bytes and, on
 GPU, `peak_bytes_in_use` from `jax.devices()[0].memory_stats()`. It compares
-them to `modern_perf_baseline.json` (keyed by backend, device kind and config)
+them to `ops/modern/perf_baseline.json` (keyed by backend, device kind and config)
 and exits 1 on a throughput drop or memory growth over `--tolerance` (15%),
 3 when the key has no baseline. `--update-baseline` records the run as the new
 baseline for its key; commit the JSON with the change that moved it. Submit
@@ -98,3 +100,10 @@ baseline for its key; commit the JSON with the change that moved it. Submit
 exclusive node, 45 min; log in `/mnt/nfs/shared/modern-perf-guard/`, create it
 first); set `CODE=<NFS snapshot> sbatch --export=ALL ...` to measure a snapshot
 instead of `/mnt/nfs/projects/ahriuwu-lanerl-jax`.
+
+`ops/modern/golden.py` is a TOOL (MODERN-024) for behaviour-preserving refactors of the modern world: it runs the
+full-map and top-lane worlds for 3600 ticks on CPU under a fixed stream of random "chaos" orders (moves, attacks,
+casts, summoners, items, buys, wards, recalls) and records a sha256 per state leaf every 600 ticks plus a
+layout-independent game summary. `--out FILE` saves a run, `--compare FILE` checks a run against it (by leaf name,
+or by leaf value when the state was renamed/restructured; summary differences for resized worlds). Run both sides
+on the same machine and JAX version; on the login node one world needs about 10 GB and 45 min to compile.

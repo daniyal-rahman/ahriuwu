@@ -5,13 +5,13 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from lanerl_jax.modern.champions import kit
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.runes import catalog as RD
 from lanerl_jax.modern.core import stat_pipeline as SP
 from lanerl_jax.modern.core import stats as S
 from lanerl_jax.modern.items.catalog import ItemStats, combine_stats
 from lanerl_jax.modern.items.loadout import stat_shard_stats
-
+from lanerl_jax.modern.runes import catalog as RD
 
 # ---- catalog ----------------------------------------------------------------
 
@@ -48,14 +48,14 @@ def test_page_legality_and_substitution():
     # Shards: Adaptive twice (offense + flex) and scaling HP twice (flex + defense) are legal.
     RD.validate_page(RD.RunePage(RD.PRECISION, 8010, (9111, 9105, 8299), RD.SORCERY, (8224, 8234),
                                  (5005, 5001, 5001)))
-    garen = RD.CHAMPION_TRAITS["Garen"]
+    garen = kit("Garen").TRAITS
     resolve = RD.RunePage(RD.RESOLVE, 8439, (8446, 8444, 8451), RD.PRECISION, (8009, 9105), page.shards)
     got = RD.prepare_page(resolve, garen)
     assert got.keystone == RD.GRASP and got.secondary[0] == RD.TRIUMPH
     sorc = RD.RunePage(RD.SORCERY, 8230, (8226, 8234, 8237), RD.INSPIRATION, (8306, 8347), page.shards)
     got = RD.prepare_page(sorc, RD.ChampionTraits(has_immobilize=True, resource="energy", flash_equipped=False))
     assert got.primary[0] == RD.AXIOM and got.secondary[0] == RD.CASH_BACK
-    assert RD.prepare_page(sorc, RD.CHAMPION_TRAITS["Jax"]) == sorc
+    assert RD.prepare_page(sorc, kit("Jax").TRAITS) == sorc
     counts = RD.page_counts([RD.prepare_page(page, garen), None])
     assert counts.shape == (2, len(RD.rune_catalog().ids)) and counts[0].sum() == 9 and counts[1].sum() == 0
     assert counts[0, RD.rune_catalog().row(5008)] == 2

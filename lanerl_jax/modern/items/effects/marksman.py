@@ -37,12 +37,11 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ...core.damage import (CLASS_CHAMPION, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM, PHYSICAL, PROP_CRIT,
-                            PROP_EXECUTE, PROP_LIFESTEAL, TAG_ACTIVE_SPELL, TAG_AOE, TAG_ITEM, TAG_PROC,
-                            TRUE, concat_packets, has, packets, shield_value)
+                            PROP_EXECUTE, PROP_LIFESTEAL, TAG_ACTIVE_SPELL, TAG_AOE, TAG_BASIC_ATTACK, TAG_ITEM,
+                            TAG_PROC, TRUE, concat_packets, has, packets, shield_value)
 from ..catalog import ItemStats, level_bp, ranged_mult
-from .core import (AttackMods, Effects, StatusFlags, dealt_by_holder, dv, effects, enemy_mask, hit_by_holder,
-                   holds, holds_any, in_circle, nearest_k, onehot_units, shield_grants, target_class,
-                   unit_pos)
+from .core import (AttackMods, StatusFlags, dealt_by_holder, dv, effects, enemy_mask, hit_by_holder, holds,
+                   holds_any, in_circle, nearest_k, onehot_units, shield_grants, target_class, unit_pos)
 
 RECURVE, FIENDHUNTER, HEXOPTICS, YUNTAL, LDR, PHANTOM, BLOODTHIRSTER = 1043, 2512, 2523, 3032, 3036, 3046, 3072
 RUNAANS, STATIKK, RFC, STORMRAZOR, GUINSOO, SLINGSHOT, NOONQUIVER = 3085, 3087, 3094, 3095, 3124, 3144, 6670
@@ -540,7 +539,6 @@ def basic_attack_amp(state: State, own, ctx, units):
 
 def packet_amp(state: State, own, ctx, units, p):
     """(P,) Hexoptics Magnification on the holder's basic-attack packets only."""
-    from ...core.damage import TAG_BASIC_ATTACK, has
     amp = basic_attack_amp(state, own, ctx, units)                     # (C, N)
     src_is = p.src[:, None] == ctx.unit[None, :]
     per = amp[:, jnp.clip(p.dst, 0, amp.shape[1] - 1)].T

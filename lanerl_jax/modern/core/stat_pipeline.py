@@ -19,6 +19,7 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
+from ..data.champions import champion
 from ..items.catalog import ItemStats
 from .stats import level_growth_sum, resolve_adaptive
 
@@ -60,7 +61,6 @@ AR_BASE, AR_PER_LEVEL, AR_REGEN, AR_REGEN_PER_LEVEL = "{726ee5cd}", "{6216bf7b}"
 
 def champion_base(names) -> ChampionBase:
     """Host-side: ``ChampionBase`` rows from the pinned 26.19 champion records."""
-    from ..data.champions import champion
 
     def field(name, key, default=0.0):
         rec = champion(name)["character"]

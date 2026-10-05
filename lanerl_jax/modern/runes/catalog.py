@@ -10,14 +10,14 @@ on the Data Dragon key (8230 is Stormraider's Surge, DDragon key
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
 import json
+from dataclasses import dataclass, replace
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
+
 from ..data import PATCH, PATCH_DIR
 
 CLIENT_BUILD = "16.19.8230722"
@@ -181,13 +181,6 @@ class ChampionTraits:
     special: str = ""               # Yorick, Bel'Veth, Samira, Elise, Jayce, Nidalee, Zoe
     flash_equipped: bool = True
     adaptive_physical: bool = True  # champion adaptive type for ties
-
-
-CHAMPION_TRAITS = {
-    # Garen: no immobilize (Q is a silence), manaless; Jax: E stuns, mana.
-    "Garen": ChampionTraits(has_immobilize=False, resource="none"),
-    "Jax": ChampionTraits(has_immobilize=True, resource="mana"),
-}
 
 
 def validate_page(page: RunePage) -> None:

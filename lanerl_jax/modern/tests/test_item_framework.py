@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.items import inventory as I
 from lanerl_jax.modern.items import effects as E
+from lanerl_jax.modern.items import inventory as I
 from lanerl_jax.modern.items.catalog import DATA_PATH, catalog, lerp_level, level_bp
 from lanerl_jax.modern.tests import item_harness as H
 

@@ -14,7 +14,6 @@ from ...items.catalog import catalog
 from ...map import dynamic_terrain as DTR
 from .. import views as V
 from ..config import N_CHAMPIONS, WorldConfig
-from ..config import layout as MW_layout
 from ..scratch import TickScratch
 from ..state import ModernOrders, ModernState
 
@@ -73,8 +72,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         held_pet = jnp.max(jnp.where(jnp.isin(inv.item, pet_rows), inv.item, -1), axis=1)
         inv = consume(inv, held_pet, jrw.consume_pet & (held_pet >= 0))
     # Wards and trinkets (wards): placement, hits, expiry, rewards, Control Ward use.
-    lay = MW_layout()
-    w0, wn = lay["ward0"], 2 * W.MAX_WARDS_PER_TEAM
+    lay = cfg.layout
+    w0, wn = lay.ward0, 2 * W.MAX_WARDS_PER_TEAM
     ids = jnp.asarray(cat.arrays.item_id)
     trow = inv.item[:, 6]
     trinket_id = jnp.where(trow >= 0, ids[jnp.clip(trow, 0, ids.shape[0] - 1)], 0)

@@ -24,12 +24,11 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_CHAMPION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM,
-                            PROP_LIFESTEAL, TAG_ACTIVE_SPELL, TAG_AOE, TAG_ITEM, TAG_PERIODIC, TAG_PET,
-                            TAG_PROC, TRUE, concat_packets, has, packets)
+from ...core.damage import (CLASS_CHAMPION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM, PROP_LIFESTEAL,
+                            TAG_ACTIVE_SPELL, TAG_AOE, TAG_ITEM, TAG_PERIODIC, TAG_PET, TAG_PROC, TRUE,
+                            concat_packets, has, packets)
 from ..catalog import ItemStats
-from .core import (BIG, Debuffs, Effects, dv, effects, enemy_mask, holds, in_circle, nearest_k, onehot_units,
-                   unit_pos)
+from .core import BIG, Debuffs, dv, effects, enemy_mask, holds, in_circle, nearest_k, onehot_units, unit_pos
 
 ASHES, BLACKFIRE, ACTUALIZER, RABADON = 2508, 2503, 2522, 3089
 NASHOR, RYLAI, MALIGNANCE, CRYPTBLOOM = 3115, 3116, 3118, 3137

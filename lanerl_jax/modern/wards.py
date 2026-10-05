@@ -50,6 +50,7 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
+from . import vision as MV
 from .core import types as W
 from .runes.effects import domination as DOM
 
@@ -525,7 +526,6 @@ def vision_kwargs(view: WardView, oracle, kind, sub, alive, *, ward_start: int) 
     """Optional ``vision.visibility`` inputs (N,) with the ward slots at
     ``[ward_start, ward_start + S)`` and champions at ``[0, C)``. ``kind``,
     ``sub`` and ``alive`` are the world arrays after the ward units are written."""
-    from . import vision as MV
     n = kind.shape[0]
     s = view.alive.shape[0]
     c = oracle.shape[0]

@@ -22,14 +22,16 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
 
+from . import role_quest as Q
 from .core import damage as D
 from .data import PATCH_DIR
+from .items.effects.core import Kills
+from .role_quest import init_quest
 
 BIG = 1e9
 LEVEL_CAP, QUEST_LEVEL_CAP, SKILL_POINT_LEVELS = 18, 20, 18
@@ -620,7 +622,6 @@ class EconomyState(NamedTuple):
 
 
 def init_economy(n_champions: int, n_units: int, roles) -> EconomyState:
-    from .role_quest import init_quest
     z = jnp.zeros((n_champions,), jnp.float32)
     g = z + starting_gold()
     return EconomyState(g, g, z, jnp.ones((n_champions,), jnp.int32), init_bounty(n_champions),
@@ -691,8 +692,6 @@ class EconomyOut(NamedTuple):
 
 def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
     """One tick of gold, XP, bounty, death and quest bookkeeping (§13)."""
-    from . import role_quest as Q
-    from .items.effects.core import Kills
     c = state.gold.shape[0]
     now = jnp.asarray(inp.now, jnp.float32)
     dt = now - state.last_t

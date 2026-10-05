@@ -51,27 +51,27 @@ TOOL: `ops/slurm_event_bridge.py`: reusable bounded single-job completion/failur
 
 TOOL: `ops/figures/afk_training_curve.py` regenerates `docs/figures/E46_training_curve.png` from frozen E46 evals and labeled train diagnostics.
 
-Modern 26.19 world (separate ruleset; MODERN-013..021):
-`lanerl_jax/modern/world/tick.py` `step(state, orders, cfg)` is the whole-map tick
-(216 unit slots: 2 champions, lane minions, camps/epics, wards, structures);
-`world.config.build_config` builds the static `WorldConfig`. Start with
-`docs/modern/WORLD_IMPLEMENTATION.md` (layout, tick order, gaps) and
-`docs/modern/README.md` (spec index). Observation/actions: `lanerl_jax/modern/obs.py`,
-`lanerl_jax/modern/actions.py`. TOOL (trainer, no experiment yet): `lanerl_jax/modern/train.py`, the
-`vec_train` scan PPO on `world.tick` (bank reset, masked shop/choice buttons, relative reward on the modern
-top lane; shares `train/scan_ppo.py` (`make_batch_fn`/`ppo_learn`) with `vec_train`, so it does not import the
-legacy sim). TOOL: `ops/modern/bench.py`,
-`ops/modern/profile_tick.py` (throughput and per-source cost). Map ingestion:
-`lanerl_jax/modern/data/navgrid.py`, `data/routes.py`; `ops/modern/fetch_map.py`.
+Modern 26.19 world (separate ruleset; MODERN-013..024): the `lanerl_jax/modern/` package.
+API: `lanerl_jax.modern.world` (`build_config`, `Loadout`, `init_state`, `no_orders`, `step`); the tick is
+`world/tick.py` running `world/phases/*.py` (one module per phase) over `ModernState` (`world/state.py`).
+Layers: `core/` (contract types, stats, damage) -> `map/` -> rules (`lane/`, `jungle/`, `champions/`, `items/`,
+`runes/`, `mechanics`, `collision`, `vision`, `wards`, `economy`, `combat`) -> `world/` -> `obs`, `actions`,
+`train`; pinned tables, loaders and builders in `modern/data/`; tests in `modern/tests/`. The unit layout
+(`world.config.Layout`) is sized by the scenario: 216 slots on the full map, 88 for top lane without jungle and
+objectives. Start with `docs/modern/WORLD_IMPLEMENTATION.md` (layout, tick order, gaps) and
+`docs/modern/README.md` (spec index). TOOL (trainer, no experiment yet): `lanerl_jax/modern/train.py`, the
+scan PPO on the modern world (shares `train/scan_ppo.py` with `vec_train`; does not import the legacy sim).
+TOOLs in `ops/modern/`: `bench.py`, `profile_tick.py`, `perf_guard.py`, `golden.py` (bitwise trajectory
+fingerprint for refactors), `replay_fidelity.py`, `collision_*.py`, `fetch_map.py`.
 The legacy `step.py` world and the "modern champion profile" below (modern
-Garen/Jax on the legacy map, `sim/modern.py`) are different systems.
+Garen/Jax on the legacy map, `sim/modern_bridge.py`) are different systems.
 
 Modern champion profile (explicit opt-in, 26.19; CHAMP-003):
 
 | Path | Class | Role |
 |---|---|---|
-| `lanerl_jax/modern/data/champions.py`, `modern_26_19/*.json` | LIVE | Pinned Garen/Jax BIN stats and spell values; no network at runtime |
-| `lanerl_jax/sim/modern_bridge.py`, `ChampionState` | LIVE | Champion dispatch, mana, buffs, dodge, dash, true/magic damage; initialize with `modern.init_lane(names)` and `SimConfig.modern(names)` |
+| `lanerl_jax/modern/data/champions.py`, `modern/data/26.19/champions/*.json` | LIVE | Pinned Garen/Jax BIN stats and spell values; no network at runtime |
+| `lanerl_jax/sim/modern_bridge.py`, `ChampionState` | LIVE | Champion dispatch, mana, buffs, dodge, dash, true/magic damage; initialize with `modern_bridge.init_lane(names)` and `SimConfig.modern(names)` |
 | `lanerl/cfg/modern_garen_jax_26_19.json` | LIVE | Modern bare-champion C# matchup; use only the isolated modern build |
 | `lanerl/patches/modern-champions/ModernChampion.cs` | LIVE | Modern C# champion rules, materialized/exported by `ops/modern_server.py` |
 | `ops/modern_server.py`, `ops/modern_validation.py` | TOOL | Reproducible isolated server overlay/patch export and worktree-snapshot Slurm validation |

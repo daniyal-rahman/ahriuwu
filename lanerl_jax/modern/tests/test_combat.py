@@ -92,6 +92,7 @@ def test_all_runes_together_through_jitted_combat_tick():
     """Stress: holder 0 owns every rune at once (no legality), holder 1 the
     Garen page; several ticks of mutual basic attacks stay finite and bounded."""
     import numpy as np
+
     from lanerl_jax.modern.runes import catalog as RDm
     from lanerl_jax.modern.tests import rune_harness as RH
     u, own, item, ctx, dfn, off = setup(([3071, 3053], [3075]))

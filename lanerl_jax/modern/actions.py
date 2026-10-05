@@ -42,11 +42,15 @@ champion's default order.
 from __future__ import annotations
 
 import jax.numpy as jnp
+
 from lanerl_rl.constants import BUTTONS, N_SCREEN_X, N_SCREEN_Y
 from lanerl_rl.projection import MINIMAP_X_MIN, MINIMAP_Y_MIN
 
 from ..train.actions import _screen_to_centred_lane
 from .core import types as W
+from .items.catalog import catalog
+from .world.config import N_CHAMPIONS
+from .world.state import no_orders
 
 __all__ = ["PROFILE", "MODERN_BUTTONS", "MODERN_BUTTON_INDEX", "SCREEN_BUTTONS", "CHOICE_BUTTONS",
            "screen_usage", "selection_radius", "modern_orders_from"]
@@ -90,15 +94,11 @@ def screen_usage(button):
 
 def shop_choice_mask():
     """(I,) bool: catalog rows a ``buy`` choice may name (in-store items)."""
-    from .items.catalog import catalog
     return jnp.asarray(catalog().arrays.in_store, bool)
 
 
 def modern_orders_from(action, state, frames, *, cfg_x: int = N_SCREEN_X, cfg_y: int = N_SCREEN_Y):
     """``action = (button, sx, sy[, choice])``, each (C,) int; ``frames`` = one LaneFrame per champion."""
-    from .items.catalog import catalog
-    from .world.config import N_CHAMPIONS
-    from .world.state import no_orders
     if len(action) not in (3, 4):
         raise ValueError("screen-click actions are (button, screen_x, screen_y[, choice])")
     c = N_CHAMPIONS

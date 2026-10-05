@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.jungle import objectives as O
 from lanerl_jax.modern.core import types as W
+from lanerl_jax.modern.jungle import objectives as O
 
 C, SLOT0 = 2, 6
 N = 16
@@ -56,9 +56,9 @@ class World:
         w = jax.tree.map(np.asarray, out.writes)
         sl = slice(SLOT0, SLOT0 + 8)
         for name, src in (("kind", "kind"), ("sub", "sub"), ("team", "team"), ("x", "x"), ("y", "y"),
-                          ("hp", "hp"), ("max_hp", "max_hp"), ("armor", "armor"), ("magic_resist", "mr"),
-                          ("attack_damage", "ad"), ("attack_range", "arange"), ("attack_speed", "aspeed"),
-                          ("move_speed", "mspeed"), ("radius", "radius")):
+                          ("hp", "hp"), ("max_hp", "max_hp"), ("armor", "armor"), ("magic_resist", "magic_resist"),
+                          ("attack_damage", "attack_damage"), ("attack_range", "attack_range"),
+                          ("attack_speed", "attack_speed"), ("move_speed", "move_speed"), ("radius", "radius")):
             self.a[name][sl] = np.where(w.write, getattr(w, src), self.a[name][sl])
         self.a["alive"][sl] = (self.a["alive"][sl] | w.write) & ~w.despawn
         self.a["targetable"][sl] = self.a["alive"][sl]

@@ -39,8 +39,8 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, SHIELD_ALL,
-                            Packets, Resolved, concat_packets, empty_packets, has)
+from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, SHIELD_ALL, Packets,
+                            Resolved, concat_packets, empty_packets, has)
 from ..catalog import catalog
 
 BIG = 1e9

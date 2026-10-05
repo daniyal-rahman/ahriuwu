@@ -34,13 +34,16 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from .core import damage as D
-from .items.catalog import ItemStats, combine_stats
 from .core.stats import resolve_adaptive
-from .items.effects.core import Attack, CC, Cast, Ctx, Kills, Units, merge_effects
+from .items import effects as E
+from .items.catalog import ItemStats, combine_stats
+from .items.effects import marksman, spellblade, starters
+from .items.effects.core import CC, Attack, Cast, Ctx, Effects, Kills, Report, Units, combine_debuffs, merge_effects
 from .items.effects.runtime import (EXTRA_ON_HIT_SLOTS, FOLLOW_UP_CAPACITY, MAIN_PACKET_CAPACITY, UnitStatus,
                                     apply_effects, fold_defense, fold_offense, resolve_tick)
-from .runes.effects.core import (CHAMPION_COMBAT_GAP, CombatClocks, RuneEvents, RuneOutputs, init_clocks,
-                                 no_outputs, rune_events)
+from .runes import effects as RE
+from .runes.catalog import rune_catalog
+from .runes.effects.core import CHAMPION_COMBAT_GAP, CombatClocks, RuneEvents, RuneOutputs, init_clocks, rune_events
 
 CARRY_CAPACITY = 64
 
@@ -55,8 +58,6 @@ class CombatState(NamedTuple):
 
 
 def init_combat(n_champions: int, n_units: int) -> CombatState:
-    from .items import effects as E
-    from .runes import effects as RE
     z = jnp.zeros((n_champions,), jnp.float32)
     return CombatState(E.init(n_champions, n_units), RE.init(n_champions, n_units), init_clocks(n_champions),
                        z, z, D.empty_packets(CARRY_CAPACITY))
@@ -134,17 +135,19 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
                 request: Any, base_packets: D.Packets, base_offense: D.Offense, base_defense: D.Defense,
                 hp: Any, max_hp: Any, shields: D.Shields, status: UnitStatus, kills: Kills,
                 holder_stats: ItemStats, cc: CC | None = None, ev: RuneEvents | None = None,
-                sync_max_health: bool = True, carry: bool = True) -> CombatTickOut:
+                sync_max_health: bool = True, carry: bool = True, main_capacity: int = MAIN_PACKET_CAPACITY,
+                follow_up_capacity: int = FOLLOW_UP_CAPACITY) -> CombatTickOut:
     """One tick of all item and rune effects (see module docstring).
+
+    ``main_capacity`` / ``follow_up_capacity``: packet slots of the two resolution passes after
+    compaction (static; the world sizes them by its unit count, ``world.config.Layout``). Valid packets
+    beyond them are dropped and counted in ``packet_overflow``, which must stay 0.
 
     ``page`` is the (C, R) rune page-count matrix (``runes.catalog.page_counts``);
     an all-zero matrix runs no rune behaviour. ``ev`` carries the world
     events runes read; its attack/cast/cc/kills/own fields are overwritten
     with the arguments of this call so items and runes see the same tick.
     """
-    from .items import effects as E
-    from .runes import effects as RE
-    from .items.effects import marksman, spellblade, starters
 
     c, n = ctx.level.shape[0], units.x.shape[0]
     items, runes = state.items, state.runes
@@ -211,7 +214,6 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
 
     # 4. Defense / offense profiles for this pass.
     holder = E.holder_defense(items, own, ctx)
-    from .items.effects.core import combine_debuffs
     debuffs = combine_debuffs([E.target_debuffs(items, own, ctx, units), RE.debuffs(runes, page, ctx, units, ev)], n)
     dfn = fold_defense(base_defense, ctx, holder, debuffs, shield_power=stats.heal_shield_power,
                        incoming_heal=stats.incoming_heal)
@@ -228,8 +230,7 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
         return p._replace(block=p.block + RE.packet_block(runes, page, ctx, live, ev, p))
 
     # 5. Main resolution.
-    packets, overflow = D.compact_packets(D.concat_packets(state.carry, base_packets, pre.packets),
-                                          MAIN_PACKET_CAPACITY)
+    packets, overflow = D.compact_packets(D.concat_packets(state.carry, base_packets, pre.packets), main_capacity)
     packets = prepare(packets, units)
     report = resolve_tick(packets, off, dfn, hp, max_hp, shields, ctx.now, vamp)
     hp, max_hp, shields = report.resolved.hp, report.resolved.max_hp, report.resolved.shields
@@ -243,7 +244,7 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
     runes, eff_r = RE.on_damage(runes, page, ctx_d, live, ev_d)
 
     # 7. Follow-up pass; its trigger packets carry into the next tick.
-    follow, overflow2 = D.compact_packets(D.concat_packets(eff_i.packets, eff_r.packets), FOLLOW_UP_CAPACITY)
+    follow, overflow2 = D.compact_packets(D.concat_packets(eff_i.packets, eff_r.packets), follow_up_capacity)
     follow = prepare(follow, live)
     follow_up = resolve_tick(follow, off, dfn, hp, max_hp, shields, ctx.now, vamp)
     hp, max_hp, shields = follow_up.resolved.hp, follow_up.resolved.max_hp, follow_up.resolved.shields
@@ -284,5 +285,43 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
 
 
 def empty_page(n_champions: int) -> Any:
-    from .runes.catalog import rune_catalog
     return jnp.zeros((n_champions, len(rune_catalog().ids)), jnp.int32)
+
+
+class ItemTickOut(NamedTuple):
+    state: Any               # ItemEffectState
+    hp: Any                  # (N,)
+    max_hp: Any              # (N,)
+    shields: D.Shields
+    status: UnitStatus
+    packet_overflow: Any     # () valid packets dropped by compaction (must stay 0)
+    report: Report           # main resolution pass
+    follow_up: Report        # second pass for packets emitted by damage triggers
+    effects: Effects         # everything merged (gold, mana, revive, attack_reset ...)
+    active: Any              # ActiveOut
+    dynamic_stats: ItemStats  # STAT.50 contributions used for this tick
+    transforms: tuple        # (from_row, to_row, do) per holder (Tear line)
+    consume_row: Any         # (C,) catalog row to consume (-1 none)
+
+
+def item_tick(state, own, ctx: Ctx, units: Units, *, attack: Attack, cast: Cast, request: Any,
+              base_packets: D.Packets, base_offense: D.Offense, base_defense: D.Defense,
+              hp: Any, max_hp: Any, shields: D.Shields, status: UnitStatus, kills: Kills,
+              holder_stats: ItemStats, cc: CC | None = None) -> ItemTickOut:
+    """Items-only tick: ``combat_tick`` with an empty rune page.
+
+    Kept for item-level tests and callers that carry only ``ItemEffectState``.
+    It does not sync dynamic max HP and drops second-generation trigger
+    packets (no state to carry them); the world integration uses
+    ``combat_tick`` with a ``CombatState``.
+    """
+    c, n = ctx.level.shape[0], units.x.shape[0]
+    z = jnp.zeros((c,), jnp.float32)
+    cs = CombatState(state, RE.init(c, n), init_clocks(c), z, z, D.empty_packets(0))
+    out = combat_tick(cs, own, empty_page(c), ctx, units, attack=attack, cast=cast, request=request,
+                      base_packets=base_packets, base_offense=base_offense, base_defense=base_defense,
+                      hp=hp, max_hp=max_hp, shields=shields, status=status, kills=kills,
+                      holder_stats=holder_stats, cc=cc, sync_max_health=False, carry=False)
+    return ItemTickOut(out.state.items, out.hp, out.max_hp, out.shields, out.status, out.packet_overflow,
+                       out.report, out.follow_up, out.effects, out.active, out.dynamic_stats, out.transforms,
+                       out.consume_row)

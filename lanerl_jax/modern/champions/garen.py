@@ -45,14 +45,18 @@ import jax
 import jax.numpy as jnp
 
 from ..core import damage as D
+from ..core.types import KIND_CHAMPION, KIND_MONSTER, KIND_TURRET, CCOut
 from ..items.catalog import ItemStats
 from ..items.effects.core import Debuffs, neutral_debuffs, shield_grants
-from ..core.types import KIND_CHAMPION, KIND_MONSTER, KIND_TURRET, CCOut
-from .core import (CODE_GAREN_E_TICK, GAREN, NEVER, KitAttackMods, KitDefense, KitOut, cc_matrix,
-                   center_dist, cooldown_row, due, enemies, f32, gather, holder_rows, later,
-                   later_after_tick, make_cast_id, out, pulses, ranked, scalar, target_dist, tick_index)
+from ..runes.catalog import ChampionTraits
+from .core import (CODE_GAREN_E_TICK, NEVER, KitAttackMods, KitDefense, KitOut, cc_matrix, center_dist,
+                   cooldown_row, due, enemies, f32, gather, holder_rows, later, later_after_tick, make_cast_id,
+                   out, pulses, ranked, scalar, target_dist, tick_index)
 
 NAME = "Garen"
+ID = 86
+SKILL_ORDER = (2, 0, 1, 2, 2, 3, 2, 0, 2, 0, 3, 0, 0, 1, 1, 3, 1, 1)    # default ranks per level: E > Q > W
+TRAITS = ChampionTraits(has_immobilize=False, resource="none")         # rune legality: Q silences; manaless
 Q_WINDOW = scalar(NAME, "Q", "AttackWindow")          # 4.5
 Q_MS = scalar(NAME, "Q", "MovementSpeedAmount")       # 0.35
 Q_AD_RATIO = scalar(NAME, "Q", "tADRatio")            # 1.5 total AD (1.0 from the basic attack)
@@ -125,7 +129,7 @@ def init(n_champions: int, n_units: int) -> State:
 
 
 def _mine(kctx) -> Any:
-    return kctx.champion_id == GAREN
+    return kctx.champion_id == ID
 
 
 def _base_cd(kctx) -> Any:

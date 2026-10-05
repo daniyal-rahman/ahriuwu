@@ -5,13 +5,16 @@ edge is checked against the pinned collision grid. 100-unit graph spacing is
 an explicit approximation; narrow reachable passages may be rejected. There
 is never an unchecked straight-line fallback. Run full bakes through Slurm.
 """
-from pathlib import Path
 import argparse
 import hashlib
 import json
+from pathlib import Path
+
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra
+
+from ..map.pathing import FlowRoutes
 from .navgrid import load_patch_map
 
 
@@ -67,7 +70,6 @@ def build_routes(grid, out, *, spacing=100., radius=35.):
 
 
 def load_routes(path, grid):
-    from ..map.pathing import FlowRoutes
     import jax.numpy as jnp
     path=Path(path);m=json.loads((path/'manifest.json').read_text())
     if m['schema']!='map11-flow-v1' or m['patch']!='26.19':raise ValueError('route profile mismatch')

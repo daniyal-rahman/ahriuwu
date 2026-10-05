@@ -10,8 +10,9 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_STRUCTURE, ON_HIT_ITEM, PHYSICAL, PROP_LIFESTEAL, TAG_ACTIVE_SPELL,
-                            TAG_AOE, TAG_ITEM, TAG_PROC, packets)
+from ...core.damage import (CLASS_STRUCTURE, ON_HIT_ITEM, PHYSICAL, PROP_LIFESTEAL, TAG_ACTIVE_SPELL, TAG_AOE,
+                            TAG_ITEM, TAG_PROC, concat_packets, packets)
+from ..catalog import ItemStats
 from .core import (ActiveOut, Effects, dv, effects, enemy_mask, holds, in_circle, nearest_k, onehot_units,
                    target_class, unit_pos)
 
@@ -62,7 +63,6 @@ STRIDE_DECAY = dv(STRIDEBREAKER, "Duration")
 
 
 def stats(state: State, own, ctx):
-    from ..catalog import ItemStats
     left = jnp.clip(1.0 - (ctx.now - state.stride_ms_start) / STRIDE_DECAY, 0.0, 1.0)
     return ItemStats(percent_move_speed=state.stride_ms * left)
 
@@ -117,7 +117,6 @@ def on_hit(state: State, own, ctx, units, attack) -> tuple[State, Effects]:
                      PHYSICAL, TAG_AOE | TAG_PROC | TAG_ITEM, item=TITANIC)
     state = state._replace(titanic_until=jnp.where(empowered, -1e9, state.titanic_until),
                            cd_until=jnp.where(empowered, ctx.now + dv(TITANIC, "Cooldown"), state.cd_until))
-    from ...core.damage import concat_packets
     return state, effects(c, n, packets=concat_packets(p_titanic_hit, p_cleave, p_cone))
 
 
@@ -176,7 +175,6 @@ def active(state: State, own, ctx, units, request) -> tuple[State, Effects, Acti
             stride_ms = jnp.where(gain, dv(STRIDEBREAKER, "ActiveMS") * champs, stride_ms)
             stride_ms_start = jnp.where(gain, ctx.now, stride_ms_start)
     cast_item = jnp.where(finishing, 0, cast_item)
-    from ...core.damage import concat_packets
     state = State(cd_until, cast_item, cast_end, titanic_until, stride_ms, stride_ms_start)
     eff = effects(c, n, packets=concat_packets(*all_packets), slow=slow, slow_duration=slow_duration,
                   attack_reset=reset)

@@ -33,20 +33,18 @@ about column unit j.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from ..core import damage as D
-from . import minions as M
-from . import towers as T
 from ..core.stats import PHYSICAL, TRUE
 from ..core.types import (KIND_CHAMPION, KIND_INHIBITOR, KIND_MINION, KIND_NEXUS, KIND_NONE, KIND_TURRET,
                           AttackLaunch, AttackState, WorldUnits)
 from ..map.lanes import BARRACKS, LANE_PATH_LEN, LANE_PATHS, LANE_TOP
+from . import minions as M
+from . import towers as T
 
 __all__ = [
     "LaneAIState", "init_lane_ai", "select_targets", "attack_packets",
@@ -819,10 +817,12 @@ def wave_inhibitor_inputs(towers: TowersState) -> dict:
         all_down[enemy][:, None], (2, 3)), inhibitor_respawn_at=resp[enemy].astype(jnp.float32))
 
 
-def slot_lane(n_units: int, slot0: int, per_lane: int = 40):
-    """(N,) lane id of each minion slot (``slot0 + 40*lane + k``), -1 outside the minion ranges."""
+def slot_lane(n_units: int, slot0: int, per_lane: int = 40, lanes=(0, 1, 2)):
+    """(N,) lane id of each minion slot (block ``b`` = ``slot0 + per_lane*b + k`` holds lane ``lanes[b]``),
+    -1 outside the minion blocks."""
     i = jnp.arange(n_units) - slot0
-    return jnp.where((i >= 0) & (i < 3 * per_lane), i // per_lane, -1).astype(jnp.int32)
+    block = jnp.clip(i // per_lane, 0, len(lanes) - 1)
+    return jnp.where((i >= 0) & (i < len(lanes) * per_lane), jnp.asarray(lanes, jnp.int32)[block], -1).astype(jnp.int32)
 
 
 class SpawnWrite(NamedTuple):
@@ -849,12 +849,12 @@ def spawn_lane_minions(spawn: M.LaneSpawnState, towers: TowersState, kind, alive
                        per_lane: int = 40, lanes=(0, 1, 2)):
     """All-lane wave spawning (MINIONS §2): ``(spawn_state, SpawnWrite, due)``.
 
-    Lane ``l`` owns slots ``[slot0 + per_lane*l, slot0 + per_lane*(l+1))``
-    shared by both teams; free = ``KIND_NONE`` or a dead minion. Blue's unit
-    takes the lowest free slot of the lane, then Red's. ``lanes`` restricts
-    which lanes spawn (static; e.g. ``(2,)`` for the top-only scenario);
-    the cursors of the other lanes still advance so enabling them later
-    stays on the global wave clock. Super minions follow the enemy
+    Lane ``lanes[b]`` owns slots ``[slot0 + per_lane*b, slot0 + per_lane*(b+1))``
+    (``world.config.Layout``) shared by both teams; free = ``KIND_NONE`` or a dead
+    minion. Blue's unit takes the lowest free slot of the lane, then Red's. ``lanes``
+    are the lanes that spawn (static; e.g. ``(2,)`` for the top-only scenario); the
+    cursors of the other lanes still advance so enabling them later stays on the
+    global wave clock. Super minions follow the enemy
     inhibitors of each lane (``wave_inhibitor_inputs``).
     """
     now = jnp.asarray(now, jnp.float32)
@@ -868,8 +868,8 @@ def spawn_lane_minions(spawn: M.LaneSpawnState, towers: TowersState, kind, alive
     sub_o = jnp.zeros((n,), jnp.int32)
     lane_o = jnp.full((n,), -1, jnp.int32)
     overflow = jnp.int32(0)
-    for l in lanes:
-        m = free & (idx >= slot0 + per_lane * l) & (idx < slot0 + per_lane * (l + 1))
+    for b, l in enumerate(lanes):
+        m = free & (idx >= slot0 + per_lane * b) & (idx < slot0 + per_lane * (b + 1))
         for t in (0, 1):
             p = m & ((jnp.cumsum(m) - 1) == 0) & due.due[t, l]
             pick, m = pick | p, m & ~p

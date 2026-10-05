@@ -11,6 +11,7 @@ inhibitor and Nexus buildings (HP, regen, respawn; no plates, Overgrowth,
 Bulwark or Reinforced Armor; TOWERS §1.4).
 """
 from typing import NamedTuple
+
 import jax.numpy as jnp
 
 from ..core.stats import armor_after_modifiers, magic_resist_after_modifiers, mitigation_multiplier

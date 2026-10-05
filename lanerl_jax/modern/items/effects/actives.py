@@ -28,11 +28,12 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_CHAMPION, CLASS_STRUCTURE, MAGIC, TAG_ACTIVE_SPELL, TAG_AOE, TAG_ITEM,
-                            TRUE, concat_packets, empty_packets, has, packets)
+from ...core import types as W
+from ...core.damage import (CLASS_CHAMPION, CLASS_STRUCTURE, MAGIC, TAG_ACTIVE_SPELL, TAG_AOE, TAG_ITEM, TRUE,
+                            concat_packets, empty_packets, has, packets)
 from ..catalog import ItemStats, catalog
 from .core import ActiveOut, StatusFlags, dv, effects, enemy_mask, holds, in_circle, shield_grants
-from ...core import types as W
+from .support import locket_shield, redemption_heal
 
 ZHONYAS, SEEKERS, SHATTERED = 3157, 2420, 2421
 QUICKSILVER, MERCURIAL = 3140, 3139
@@ -162,7 +163,6 @@ def _lerp_level(level, lo, hi):
 
 def active(state: State, own, ctx, units, request):
     """Start actives (``request`` = item id) and resolve pending Interventions."""
-    from .support import locket_shield, redemption_heal
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     req = jnp.asarray(request, jnp.int32)

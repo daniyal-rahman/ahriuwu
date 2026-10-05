@@ -23,12 +23,12 @@ STRUCTURE_KINDS = (KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS)
 BLUE, RED = 0, 1
 NEUTRAL = 2                 # team of jungle monsters (never equal to a champion's team)
 
-# World unit layout (slot ranges, in this order; ``world.config.unit_ranges``):
-#   champions [0, C) | lane minions, all three lanes [C, C+M) | monsters [.., +MAX_MONSTERS)
-#   | wards [.., +2*MAX_WARDS_PER_TEAM) | structures (22 turrets, 6 inhibitors, 2 Nexuses) last.
-# Structures stay last so "fogged" units are exactly the slots before them.
-MAX_MINIONS_PER_LANE = 40
-MAX_MONSTERS = 48
+# Slot capacities of the world unit blocks (``world.config.Layout``: champions | lane minions per
+# spawning lane | jungle camps | epic monsters | wards | structures, structures last so "fogged"
+# units are exactly the slots before them).
+MINION_SLOTS_PER_LANE = 40
+JUNGLE_SLOTS = 40           # jungle.camps uses 38
+EPIC_SLOTS = 8              # jungle.objectives
 MAX_WARDS_PER_TEAM = 8
 
 
@@ -98,6 +98,41 @@ class AttackState(NamedTuple):
 def init_attack_state(n: int) -> AttackState:
     z = jnp.zeros((n,), jnp.float32)
     return AttackState(jnp.full((n,), -1, jnp.int32), jnp.zeros((n,), jnp.int32), z, z)
+
+
+class UnitWrite(NamedTuple):
+    """Rows a subsystem asks the world to (re)write, (N,) per unit slot, written where ``mask``
+    (``world.units.write_units``; subsystems never write the world arrays themselves).
+
+    Every written row becomes alive and targetable. ``new`` rows are fresh spawns: they also get the
+    next ``spawn_seq``, a ``spawn_time`` and a reset slot (attack state, CC timers). ``bounty_*`` are
+    lane-minion rewards fixed at spawn (None: column unchanged)."""
+    mask: Any
+    new: Any
+    kind: Any
+    sub: Any
+    team: Any
+    x: Any
+    y: Any
+    hp: Any
+    max_hp: Any
+    radius: Any
+    armor: Any
+    magic_resist: Any
+    attack_damage: Any
+    attack_range: Any
+    attack_speed: Any
+    move_speed: Any
+    windup: Any
+    missile_speed: Any
+    bounty_gold: Any = None
+    bounty_xp: Any = None
+    bounty_level: Any = None
+
+
+UNIT_COLUMNS = ("kind", "sub", "team", "x", "y", "hp", "max_hp", "radius", "armor", "magic_resist", "attack_damage",
+                "attack_range", "attack_speed", "move_speed", "windup", "missile_speed")    # written by UnitWrite
+assert UnitWrite._fields[2:2 + len(UNIT_COLUMNS)] == UNIT_COLUMNS
 
 
 class AttackLaunch(NamedTuple):

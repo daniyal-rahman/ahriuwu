@@ -9,15 +9,16 @@ used by world construction.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 
+from ..data import PATCH, PATCH_DIR
+from ..runes import catalog as R
 from . import inventory as I
 from .catalog import ItemStats, catalog
-from ..data import PATCH, PATCH_DIR
+from .effects import STATS_ONLY
 
 MAP_ID = 11
 
@@ -31,7 +32,6 @@ def item_loadout_stats(item_ids, *, strict_effects: bool = True) -> tuple[ItemSt
     run as stats only. With ``strict_effects=False`` the second value lists
     those items for the caller to handle.
     """
-    from .effects import STATS_ONLY
     ids = tuple(int(i) for i in item_ids)
     I.validate_item_loadout(ids)
     behavioural = tuple(i for i in ids if i not in STATS_ONLY)
@@ -59,7 +59,6 @@ def validate_rune_page(page, traits=None):
     sequence is the explicit no-runes ruleset (legacy/test switch, not a
     legal SR page). Returns the prepared page (or ``None``).
     """
-    from ..runes import catalog as R
     if page is None or (not isinstance(page, R.RunePage) and len(page) == 0):
         return None
     if not isinstance(page, R.RunePage):
@@ -88,7 +87,6 @@ def stat_shard_stats(shards=DEFAULT_STAT_SHARDS, *, level: Any = 1, adaptive_to_
     leaves the adaptive shards as unresolved ``adaptive_force`` for
     ``core.stats.resolve_adaptive`` (STAT.50 dynamic choice).
     """
-    from ..runes import catalog as R
     if len(shards) != 3:
         raise ValueError("a rune page has exactly three stat shard slots")
     names = {v: k for k, v in R.SHARD_NAMES.items()}

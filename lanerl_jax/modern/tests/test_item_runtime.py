@@ -1,14 +1,14 @@
 """End-to-end item tick: modules, dispatch, damage pipeline and effect application together."""
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pytest
 
+from lanerl_jax.modern.combat import item_tick
 from lanerl_jax.modern.core import damage as D
-from lanerl_jax.modern.items import inventory as I
 from lanerl_jax.modern.items import effects as E
-from lanerl_jax.modern.items.effects import runtime as R
+from lanerl_jax.modern.items import inventory as I
 from lanerl_jax.modern.items.catalog import catalog
+from lanerl_jax.modern.items.effects import runtime as R
 from lanerl_jax.modern.tests import item_harness as H
 
 BLUE = [3071, 3053, 3078]          # Black Cleaver, Sterak's Gage, Trinity Force
@@ -44,7 +44,7 @@ def setup():
 def tick(state, own, item, ctx, u, dfn, off, hp, shields, status, *, attack, cast, base, now):
     ctx = ctx._replace(now=jnp.float32(now), hp=hp[:2])
     u = u._replace(hp=hp)
-    return R.item_tick(state, own, ctx, u, attack=attack, cast=cast, request=jnp.zeros((2,), jnp.int32),
+    return item_tick(state, own, ctx, u, attack=attack, cast=cast, request=jnp.zeros((2,), jnp.int32),
                        base_packets=base, base_offense=off, base_defense=dfn, hp=hp, max_hp=u.max_hp,
                        shields=shields, status=status, kills=H.kills(u.x.shape[0]), holder_stats=item)
 

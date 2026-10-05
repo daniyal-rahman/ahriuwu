@@ -18,7 +18,7 @@ import jax.numpy as jnp
 
 from ...core import damage as D
 from ..catalog import ItemStats
-from .core import Attack, CC, Cast, Ctx, Debuffs, Effects, HolderDefense, Kills, Report, Units, merge_effects
+from .core import Ctx, Debuffs, Effects, HolderDefense, Report
 
 
 class UnitStatus(NamedTuple):
@@ -145,45 +145,3 @@ def apply_effects(eff: Effects, ctx: Ctx, hp: Any, max_hp: Any, shields: D.Shiel
 EXTRA_ON_HIT_SLOTS = 2   # Runaan's bolts (2 ranged) / Statikk secondary bounces get on-hit re-application
 MAIN_PACKET_CAPACITY = 512      # valid packets per tick (world + items) after compaction
 FOLLOW_UP_CAPACITY = 256
-
-
-class ItemTickOut(NamedTuple):
-    state: Any               # ItemEffectState
-    hp: Any                  # (N,)
-    max_hp: Any              # (N,)
-    shields: D.Shields
-    status: UnitStatus
-    packet_overflow: Any     # () valid packets dropped by compaction (must stay 0)
-    report: Report           # main resolution pass
-    follow_up: Report        # second pass for packets emitted by damage triggers
-    effects: Effects         # everything merged (gold, mana, revive, attack_reset ...)
-    active: Any              # ActiveOut
-    dynamic_stats: ItemStats  # STAT.50 contributions used for this tick
-    transforms: tuple        # (from_row, to_row, do) per holder (Tear line)
-    consume_row: Any         # (C,) catalog row to consume (-1 none)
-
-
-def item_tick(state, own, ctx: Ctx, units: Units, *, attack: Attack, cast: Cast, request: Any,
-              base_packets: D.Packets, base_offense: D.Offense, base_defense: D.Defense,
-              hp: Any, max_hp: Any, shields: D.Shields, status: UnitStatus, kills: Kills,
-              holder_stats: ItemStats, cc: CC | None = None) -> ItemTickOut:
-    """Items-only tick: ``combat.combat_tick`` with an empty rune page.
-
-    Kept for item-level tests and callers that carry only ``ItemEffectState``.
-    It does not sync dynamic max HP and drops second-generation trigger
-    packets (no state to carry them); the world integration uses
-    ``combat_tick`` with a ``CombatState``.
-    """
-    from ...runes import effects as RE
-    from ...combat import CombatState, combat_tick, empty_page
-    from ...runes.effects.core import init_clocks
-    c, n = ctx.level.shape[0], units.x.shape[0]
-    z = jnp.zeros((c,), jnp.float32)
-    cs = CombatState(state, RE.init(c, n), init_clocks(c), z, z, D.empty_packets(0))
-    out = combat_tick(cs, own, empty_page(c), ctx, units, attack=attack, cast=cast, request=request,
-                      base_packets=base_packets, base_offense=base_offense, base_defense=base_defense,
-                      hp=hp, max_hp=max_hp, shields=shields, status=status, kills=kills,
-                      holder_stats=holder_stats, cc=cc, sync_max_health=False, carry=False)
-    return ItemTickOut(out.state.items, out.hp, out.max_hp, out.shields, out.status, out.packet_overflow,
-                       out.report, out.follow_up, out.effects, out.active, out.dynamic_stats, out.transforms,
-                       out.consume_row)

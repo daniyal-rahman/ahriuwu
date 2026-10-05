@@ -6,8 +6,8 @@ Rules and evidence: docs/modern/OBJECTIVES.md; values: ``modern/data/26.19/objec
 INFERRED-M / INFERRED-L). Atakhan, Blood Roses and Feats of Strength do not exist on 26.19
 (removed in 26.1).
 
-This module owns the last 8 monster slots (monster indices 40..47); ``ObjectiveTable.slot0`` is
-the world index of local slot 0. Local slot layout:
+This module owns the world's 8-slot epic block (``world.config.Layout``); ``ObjectiveTable.slot0``
+is the world index of local slot 0. Local slot layout:
 
     0      pit monster: Voidgrub A (8:00-14:45), Rift Herald (15:00-19:45), Baron Nashor (20:00+)
     1, 2   Voidgrubs B, C
@@ -29,8 +29,8 @@ Like the other subsystems these are pure functions; the step owns the world arra
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -41,13 +41,14 @@ import numpy as np
 
 from ..core import damage as D
 from ..core import types as W
-from ..items.catalog import ItemStats, zero_stats
 from ..data import PATCH_DIR
+from ..items.catalog import ItemStats, zero_stats
+from ..lane.ai import minion_spawn_stats
+from ..map.rift import variant_index
 
 TABLE_PATH = PATCH_DIR / "objectives_client.json"
 
 N_SLOTS = 8
-FIRST_MONSTER_SLOT = 40                     # monster slots 40..47 of MAX_MONSTERS = 48
 S_PIT, S_GRUB_B, S_GRUB_C, S_DRAGON, S_MERC = 0, 1, 2, 3, 4
 S_MITES = (5, 6, 7)
 
@@ -108,6 +109,11 @@ class ObjectiveTable:
     dragon_pos: tuple
     r: dict = field(default_factory=dict)       # rules: python floats/lists
     buffs: dict = field(default_factory=dict)   # client buff DataValues
+
+    @property
+    def slots(self) -> slice:
+        """World unit slots of the epic block."""
+        return slice(self.slot0, self.slot0 + N_SLOTS)
 
 
 @lru_cache(maxsize=4)
@@ -294,11 +300,11 @@ class SlotWrites(NamedTuple):
     hp: Any
     max_hp: Any
     armor: Any
-    mr: Any
-    ad: Any
-    arange: Any
-    aspeed: Any
-    mspeed: Any
+    magic_resist: Any
+    attack_damage: Any
+    attack_range: Any
+    attack_speed: Any
+    move_speed: Any
     radius: Any
     windup: Any
     missile_speed: Any
@@ -306,6 +312,14 @@ class SlotWrites(NamedTuple):
     relocate: Any
     rx: Any
     ry: Any
+
+
+def unit_write(table: ObjectiveTable, w: SlotWrites, n_units: int) -> W.UnitWrite:
+    """The ``write`` rows of ``SlotWrites`` as a world ``UnitWrite`` (despawns, relocations and heals
+    stay with the caller)."""
+    full = lambda v: jnp.zeros((n_units,), jnp.asarray(v).dtype).at[table.slots].set(v)      # noqa: E731
+    return W.UnitWrite(mask=full(w.write), new=full(w.write & w.new_seq),
+                       **{f: full(getattr(w, f)) for f in W.UNIT_COLUMNS})
 
 
 class StepOut(NamedTuple):
@@ -386,7 +400,6 @@ def slot_stats(table: ObjectiveTable, mtype, element, level, now) -> dict:
     ad = jnp.where(dragon, jnp.asarray(table.e_ad)[el], a(table.ad) + a(table.ad_lvl) * g)
     aspeed = jnp.where(dragon, jnp.asarray(table.e_aspeed)[el], a(table.aspeed))
     # Hunger of the Void Voidmites: 100% melee-minion HP (26.11), melee-minion AD (INFERRED-L).
-    from ..lane.ai import minion_spawn_stats
     mm = minion_spawn_stats(0, now)
     ally = t == T_ALLY_MITE
     hp = jnp.where(ally, mm.max_hp, hp)
@@ -426,7 +439,6 @@ def comeback_mult(table: ObjectiveTable, levels, team) -> Any:
 
 
 def terrain_variant(obj: ObjectiveState, now) -> Any:
-    from ..map.rift import variant_index
     el = jnp.where(jnp.asarray(now) >= obj.rift_at, obj.rift_element, 0)
     return variant_index(el, jnp.maximum(obj.baron_form, 0))
 
@@ -521,8 +533,8 @@ def _writes_for(table, obj, spawn, despawn, pos, element, team, now, units, leve
     return SlotWrites(write=write, despawn=despawn & ~spawn, kind=jnp.full((N_SLOTS,), W.KIND_MONSTER, jnp.int32),
                       sub=(SUB_BASE + obj.mtype).astype(jnp.int32), team=team.astype(jnp.int32),
                       x=jnp.where(spawn, pos[:, 0], units.x[ws]), y=jnp.where(spawn, pos[:, 1], units.y[ws]),
-                      hp=hp, max_hp=st["hp"], armor=st["armor"], mr=st["mr"], ad=st["ad"], arange=st["arange"],
-                      aspeed=st["aspeed"], mspeed=st["mspeed"], radius=st["radius"], windup=st["windup"],
+                      hp=hp, max_hp=st["hp"], armor=st["armor"], magic_resist=st["mr"], attack_damage=st["ad"],
+                      attack_range=st["arange"], attack_speed=st["aspeed"], move_speed=st["mspeed"], radius=st["radius"], windup=st["windup"],
                       missile_speed=st["missile"], new_seq=spawn, relocate=jnp.zeros((N_SLOTS,), bool), rx=z, ry=z)
 
 
@@ -540,7 +552,6 @@ def objectives_step(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUn
     this tick (Cloud Soul); ``use_eye`` (C,) summon the Rift Herald Mercenary; ``key`` PRNG
     (Baron form). Returns the slot writes and this tick's AI, packets and buff outputs."""
     now = jnp.asarray(now, jnp.float32)
-    n = units.x.shape[0]
     c = obj.baron_until.shape[0]
     ws = _world(table)
     key = jax.random.PRNGKey(0) if key is None else key
@@ -612,7 +623,7 @@ def objectives_step(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUn
     sy = jnp.where(spawn, pos[:, 1], units.y[ws])
     shp = jnp.where(writes.write, writes.hp, units.hp[ws])
     smax = jnp.where(writes.write, writes.max_hp, units.max_hp[ws])
-    sad = jnp.where(writes.write, writes.ad, units.attack_damage[ws])
+    sad = jnp.where(writes.write, writes.attack_damage, units.attack_damage[ws])
     obj, ai = _monster_ai(obj, table, units, ws, alive, sx, sy, shp, smax, sad, team, now, dt, damage_matrix)
 
     # Periodic effects: DoTs, Elder executes, grub self damage, soul procs, heals, shields.
@@ -1136,7 +1147,6 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     n = units.x.shape[0]
     c = obj.baron_until.shape[0]
     ws = _world(table)
-    idx = jnp.arange(n)
     levels = jnp.asarray(levels, jnp.int32)
     valid = packets.valid & ((health_loss > 0) | (packets.raw > 0))
     src, dst = jnp.clip(packets.src, 0, n - 1), jnp.clip(packets.dst, 0, n - 1)

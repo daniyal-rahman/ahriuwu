@@ -8,7 +8,6 @@ import pytest
 
 from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.items.effects import defense as M
-from lanerl_jax.modern.items.effects.core import dv
 from lanerl_jax.modern.tests import item_harness as H
 
 ASSIGNED = {2502, 2504, 2525, 3026, 3053, 3065, 3068, 3075, 3076, 3082, 3083, 3084, 3102, 3110, 3143,
