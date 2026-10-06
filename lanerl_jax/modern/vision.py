@@ -12,7 +12,7 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from .rays import VisionGrid, clear_ray, with_bush_ids
+from .rays import VisionGrid, clear_pairs, clear_ray, with_bush_ids
 from .core import types as W
 
 CHAMPION_SIGHT = 1350.0
@@ -63,8 +63,10 @@ def sight_radius(kind, sub, alive) -> Any:
 
 
 def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fogged: int,
-               radius=None, stealthed=None, true_sight=None, unobstructed=None, exposed=None, sources=None):
-    """``(visible (2, N), sight (N, N))``: team t sees unit j; unit i itself sees j (rune "own sight").
+               radius=None, stealthed=None, true_sight=None, unobstructed=None, exposed=None, sources=None,
+               ray_capacity=None):
+    """``(visible (2, N), sight (N, N), dropped)``: team t sees unit j; unit i itself sees j (rune "own sight");
+    ``dropped`` sight rays past ``ray_capacity`` (``rays.clear_pairs``; must stay 0).
 
     Units from ``n_fogged`` on are structures (never fogged). Optional (N,) inputs, None = off: ``radius``
     overrides the sight radius, ``stealthed`` units need enemy ``true_sight``, ``unobstructed`` viewers ignore
@@ -78,7 +80,7 @@ def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fog
     in_range = (d2 <= (r ** 2)[:, None]) & (r > 0)[:, None] & live[:n_fogged][None, :]
     # Rays only where they can change the answer: an enemy viewer in range of a live unit.
     enemy = team[:, None] != team[None, :n_fogged]
-    clear = clear_ray(grid, x[:, None], y[:, None], tx[None, :], ty[None, :], enabled=in_range & enemy)
+    clear, dropped = clear_pairs(grid, x, y, tx, ty, in_range & enemy, ray_capacity)
     if unobstructed is not None:
         clear = clear | unobstructed[:, None]
     self_pair = jnp.arange(n)[:, None] == jnp.arange(n_fogged)[None, :]
@@ -116,7 +118,7 @@ def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fog
         seen = seen | jnp.any((pt[None, :, None] == teams[:, None, None]) & seen_p[None], axis=1)
     visible = jnp.concatenate([seen, jnp.ones((2, n - n_fogged), bool)], axis=1)
     visible = visible | (team[None, :] == teams[:, None])
-    return visible & live[None, :], sight
+    return visible & live[None, :], sight, dropped
 
 
 def reveal_step(reveal: Reveal, hidden, triggered, x, y, now) -> Reveal:

@@ -95,11 +95,11 @@ def test_reveal_circle_expires():
     s = place(LANE_MID, BRUSH)
     rev = MV.reveal_step(s.reveal, jnp.asarray([False, True]), jnp.asarray([False, True]),
                          s.x[:2], s.y[:2], s.t)
-    vis, _ = MV.visibility(s.x, s.y, s.kind, s.sub, s.team, s.alive, rev, s.t + 1.9, cfg.vision,
-                           n_fogged=cfg.layout.struct0)
+    vis, _, _ = MV.visibility(s.x, s.y, s.kind, s.sub, s.team, s.alive, rev, s.t + 1.9, cfg.vision,
+                              n_fogged=cfg.layout.struct0)
     assert bool(vis[0, 1])
-    vis, _ = MV.visibility(s.x, s.y, s.kind, s.sub, s.team, s.alive, rev, s.t + 2.01, cfg.vision,
-                           n_fogged=cfg.layout.struct0)
+    vis, _, _ = MV.visibility(s.x, s.y, s.kind, s.sub, s.team, s.alive, rev, s.t + 2.01, cfg.vision,
+                              n_fogged=cfg.layout.struct0)
     assert not bool(vis[0, 1])
 
 

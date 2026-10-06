@@ -52,6 +52,19 @@ def clear_ray(grid, x0, y0, x1, y1, *, enabled=True):
                                       cuda=fused, default=reference)
 
 
+def clear_pairs(grid, x0, y0, x1, y1, enabled, capacity=None):
+    """``clear_ray`` from (V,) viewers to (T,) targets as (V, T), cast only for the enabled pairs, compacted to
+    ``capacity`` rays (None = all). ``(clear, dropped)``: ``dropped`` enabled pairs past capacity read False."""
+    if capacity is None or capacity >= enabled.size or grid.bush_ids is not None:
+        return clear_ray(grid, x0[:, None], y0[:, None], x1[None, :], y1[None, :], enabled=enabled), jnp.int32(0)
+    flat = enabled.reshape(-1)
+    pair, = jnp.nonzero(flat, size=capacity, fill_value=flat.size)
+    v, t = pair // x1.shape[0], pair % x1.shape[0]                  # fill slots clamp on gather, drop on scatter
+    clear = clear_ray(grid, x0[v], y0[v], x1[t], y1[t], enabled=pair < flat.size)
+    clear = jnp.zeros_like(flat).at[pair].set(clear, mode="drop").reshape(enabled.shape)
+    return clear, jnp.maximum(jnp.sum(flat, dtype=jnp.int32) - capacity, 0)
+
+
 def clear_ray_reference(grid, x0, y0, x1, y1, *, enabled=True):
     """Broadcastable supercover rays; false outside the grid, past 64 cells or where disabled."""
     if grid.bush_ids is not None:

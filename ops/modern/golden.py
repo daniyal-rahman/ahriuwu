@@ -104,7 +104,7 @@ def fingerprint(world: str, ticks: int, every: int) -> list[dict]:
         def body(s, i):
             s, e = MS.step(s, chaos_orders(s, jax.random.fold_in(key, t0 + i), lane_mid), cfg)
             return s, jnp.stack([jnp.sum(e.report.packets.valid), jnp.sum(e.follow_up.packets.valid),
-                                 e.packet_overflow, e.missile_overflow]).astype(jnp.int32)
+                                 e.packet_overflow, e.missile_overflow, e.ray_overflow]).astype(jnp.int32)
         s, use = jax.lax.scan(body, s, jnp.arange(every))
         return s, jnp.max(use, axis=0)
 
@@ -114,7 +114,7 @@ def fingerprint(world: str, ticks: int, every: int) -> list[dict]:
     for t in range(0, ticks, every):
         s, use = run(s, t)
         leaves = jax.tree_util.tree_leaves(s)
-        peak = dict(zip(("packets_max", "follow_up_max", "packet_overflow", "missile_overflow"),
+        peak = dict(zip(("packets_max", "follow_up_max", "packet_overflow", "missile_overflow", "ray_overflow"),
                         map(int, np.asarray(use))))
         out.append({"world": world, "tick": t + every, "summary": summary(s), "peak": peak,
                     "leaves": {n: hashlib.sha256(np.asarray(v).tobytes()).hexdigest()[:16]

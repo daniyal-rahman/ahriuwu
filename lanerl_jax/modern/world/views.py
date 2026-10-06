@@ -38,12 +38,14 @@ def shard_stats(cfg: WorldConfig, level) -> ItemStats:
 
 def visibility(cfg: WorldConfig, x, y, kind, sub, team, alive, reveal, now, *, wards=None, level=None,
                 variant=None, jungle=None):
-    """``(visible (2, N), sight (C, N))``: team visibility and each champion's own sight; everything live is
-    visible when ``cfg.vision`` is None. ``variant`` selects the Rift / Baron-pit brush layout."""
+    """``(visible (2, N), sight (C, N), dropped)``: team visibility, each champion's own sight and the sight
+    rays past ``layout.ray_capacity``; everything live is visible when ``cfg.vision`` is None. ``variant``
+    selects the Rift / Baron-pit brush layout."""
     n = x.shape[0]
     if cfg.vision is None:
         live = alive & (kind != W.KIND_NONE)
-        return jnp.broadcast_to(live[None, :], (2, n)), jnp.broadcast_to(live[None, :], (N_CHAMPIONS, n))
+        return (jnp.broadcast_to(live[None, :], (2, n)), jnp.broadcast_to(live[None, :], (N_CHAMPIONS, n)),
+                jnp.int32(0))
     grid = cfg.vision
     if cfg.rift is not None and variant is not None:
         grid = vision_for(cfg.rift, variant, cfg.vision)
@@ -58,8 +60,9 @@ def visibility(cfg: WorldConfig, x, y, kind, sub, team, alive, reveal, now, *, w
         on = jungle.shrine_until > now
         kw["sources"] = (jnp.asarray(J.SHRINE_POS, jnp.float32)[:, 0], jnp.asarray(J.SHRINE_POS, jnp.float32)[:, 1],
                          jnp.where(on, J.SHRINE_SIGHT, 0.0), jungle.shrine_team)
-    visible, sight = MV.visibility(x, y, kind, sub, team, alive, reveal, now, grid, n_fogged=lay.struct0, **kw)
-    return visible, sight[:N_CHAMPIONS]
+    visible, sight, dropped = MV.visibility(x, y, kind, sub, team, alive, reveal, now, grid, n_fogged=lay.struct0,
+                                            ray_capacity=lay.ray_capacity, **kw)
+    return visible, sight[:N_CHAMPIONS], dropped
 
 
 def kit_attack_target(kit_out) -> Any:
@@ -70,7 +73,7 @@ def kit_attack_target(kit_out) -> Any:
 
 def refresh_visibility(s: ModernState, cfg: WorldConfig) -> ModernState:
     """Recompute ``visible``/``sight`` after editing a state by hand (``step`` does this every tick)."""
-    vis, sight = visibility(cfg, s.x, s.y, s.kind, s.sub, s.team, s.alive, s.reveal, s.t, wards=s.wards,
+    vis, sight, _ = visibility(cfg, s.x, s.y, s.kind, s.sub, s.team, s.alive, s.reveal, s.t, wards=s.wards,
                              level=s.econ.level, variant=s.terrain_variant, jungle=s.jungle)
     return s._replace(visible=vis, sight=sight)
 

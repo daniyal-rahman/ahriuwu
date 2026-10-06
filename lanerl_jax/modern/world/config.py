@@ -109,6 +109,12 @@ class Layout:
         """Packets of the follow-up (trigger) pass: half the main pass."""
         return self.packet_capacity // 2
 
+    @property
+    def ray_capacity(self) -> int:
+        """Sight rays per tick after compaction (enemy pairs in sight range): the power of two >= 16 per unit
+        (4096 on the full map; chaos play peaks near 1050 there, 640 on the top-lane world)."""
+        return 1 << (16 * self.n_units - 1).bit_length()
+
 
 @dataclass(frozen=True)
 class WorldConfig:

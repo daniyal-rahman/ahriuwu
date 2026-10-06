@@ -222,7 +222,7 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
     jungle = J.init_jungle(cfg.jungle, c, n, seed=seed) if cfg.jungle is not None else None
     obj = None if cfg.objectives is None else OBJ.init_objectives(cfg.objectives, n, c, jax.random.PRNGKey(seed + 1))
     amove = AttackMove(jnp.zeros((c,), bool), zc, zc, jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32))
-    vis, sight = V.visibility(cfg, cfg.unit_x, cfg.unit_y, kind, cfg.unit_sub, cfg.unit_team, alive, reveal,
+    vis, sight, _ = V.visibility(cfg, cfg.unit_x, cfg.unit_y, kind, cfg.unit_sub, cfg.unit_team, alive, reveal,
                              jnp.float32(0.0), wards=wards)
     return ModernState(
         t=jnp.float32(0.0), tick=jnp.int32(0), key=jax.random.PRNGKey(seed),
@@ -274,4 +274,5 @@ class TickEvents(NamedTuple):
     launched: Any           # (N,) attacks launched
     packet_overflow: Any    # () dropped packets (must stay 0)
     missile_overflow: Any
+    ray_overflow: Any       # () dropped sight rays (must stay 0)
     shop_code: Any          # (C,) buy/sell result code (0 ok)

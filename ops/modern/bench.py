@@ -57,7 +57,7 @@ def build_world(args):
         def body(s, _):
             s, e = MS.step(s, scripted_orders(s, lane_mid), cfg)
             used = (jnp.sum(e.report.packets.valid), jnp.sum(e.follow_up.packets.valid))
-            return s, (e.packet_overflow, e.missile_overflow, used)
+            return s, (e.packet_overflow, e.missile_overflow, e.ray_overflow, used)
         return jax.lax.scan(body, s, None, length=ticks)
     return cfg, run
 
@@ -104,15 +104,15 @@ def main() -> None:
         jax.block_until_ready(out.t)
         t_second = time.time() - t0
         t0 = time.time()
-        out, (po, mo, (pm, pf)) = timed(out)
+        out, (po, mo, ro, (pm, pf)) = timed(out)
         jax.block_until_ready(out.t)
         steady = time.time() - t0
         print(json.dumps({"envs": b, "ticks": args.ticks, "warm_compile_and_run_s": round(t_warm, 2),
                           "timed_second_call_s": round(t_second, 2), "steady_s": round(steady, 3),
                           "s_per_tick": steady / args.ticks, "env_ticks_per_s": b * args.ticks / steady,
                           "game_time_s": float(out.t[0]), "packet_overflow": int(po.max()),
-                          "missile_overflow": int(mo.max()), "packets_max": int(pm.max()),
-                          "follow_up_packets_max": int(pf.max())}), flush=True)
+                          "missile_overflow": int(mo.max()), "ray_overflow": int(ro.max()),
+                          "packets_max": int(pm.max()), "follow_up_packets_max": int(pf.max())}), flush=True)
 
 
 if __name__ == "__main__":

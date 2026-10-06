@@ -64,7 +64,7 @@ def vis_fn():
         al = jnp.concatenate([alive, view.alive])
         ux, uy = jnp.concatenate([x, view.x]), jnp.concatenate([y, view.y])
         kw = WD.vision_kwargs(view, orc, kind, sub, al, ward_start=2)
-        vis, sight = MV.visibility(ux, uy, kind, sub, team, al, MV.init_reveal(2), now, vg, n_fogged=N, **kw)
+        vis, sight, _ = MV.visibility(ux, uy, kind, sub, team, al, MV.init_reveal(2), now, vg, n_fogged=N, **kw)
         return vis, view
     return jax.jit(f)
 
@@ -385,13 +385,13 @@ def test_turret_true_sight_and_stealth_masks_are_optional():
     team = jnp.asarray([0, 1, 0, 1], jnp.int32)
     alive = jnp.ones((4,), bool)
     st = jnp.asarray([False, False, True, False])
-    vis, _ = MV.visibility(x, y, kind, sub, team, alive, MV.init_reveal(2), 0.0, vg, n_fogged=3, stealthed=st)
+    vis, _, _ = MV.visibility(x, y, kind, sub, team, alive, MV.init_reveal(2), 0.0, vg, n_fogged=3, stealthed=st)
     assert bool(vis[1, 2])
     far_turret = x.at[3].set(FAR[0] + 3000.0)
-    vis, _ = MV.visibility(far_turret, y, kind, sub, team, alive, MV.init_reveal(2), 0.0, vg, n_fogged=3,
-                           stealthed=st)
+    vis, _, _ = MV.visibility(far_turret, y, kind, sub, team, alive, MV.init_reveal(2), 0.0, vg, n_fogged=3,
+                              stealthed=st)
     assert not bool(vis[1, 2]) and bool(vis[0, 1])               # Jax (same brush) seen by the ward
-    vis2, _ = MV.visibility(far_turret, y, kind, sub, team, alive, MV.init_reveal(2), 0.0, vg, n_fogged=3)
+    vis2, _, _ = MV.visibility(far_turret, y, kind, sub, team, alive, MV.init_reveal(2), 0.0, vg, n_fogged=3)
     assert bool(vis2[1, 2])                                      # no stealth mask: plain unit
     assert float(MV.sight_radius(jnp.int32(W.KIND_WARD), jnp.int32(2), True)) == 500.0
 

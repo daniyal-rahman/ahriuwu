@@ -117,3 +117,4 @@ class TickScratch(NamedTuple):
     reveal: Any = None          # FOG: attack-reveal circles
     visible: Any = None         # FOG: (2, N) next tick's visibility
     sight: Any = None           # FOG: (C, N) next tick's own sight
+    ray_over: Any = None        # FOG: sight-ray overflow

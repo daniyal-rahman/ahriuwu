@@ -17,8 +17,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     hidden = ~s0.visible[enemy_team, jnp.arange(c)] & s0.alive[:c]
     struck = sc.launched[:c] | (sc.kit_all.cast_started & (sc.cast_order.target >= 0))
     reveal = MV.reveal_step(s.reveal, hidden, struck, x[:c], y[:c], now)
-    vis_next, sight_next = V.visibility(cfg, x, y, sc.kind, sc.sub, sc.team, sc.alive, reveal, now, wards=sc.wards,
-                                       level=sc.econ.level, variant=s.terrain_variant, jungle=sc.jungle)
+    vis_next, sight_next, ray_over = V.visibility(cfg, x, y, sc.kind, sc.sub, sc.team, sc.alive, reveal, now,
+                                                  wards=sc.wards, level=sc.econ.level, variant=s.terrain_variant,
+                                                  jungle=sc.jungle)
     witnessed = vis_next[enemy_team, jnp.arange(c)] | ~hidden
     champ = champ._replace(seen_cast=jnp.where(sc.cast_now & witnessed[:, None], now, champ.seen_cast))
-    return s, sc._replace(reveal=reveal, visible=vis_next, sight=sight_next, champ=champ)
+    return s, sc._replace(reveal=reveal, visible=vis_next, sight=sight_next, ray_over=ray_over, champ=champ)

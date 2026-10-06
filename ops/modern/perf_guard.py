@@ -45,10 +45,10 @@ def measure(args) -> dict:
     best, over, packets = float("inf"), 0, (0, 0)
     for _ in range(args.repeats):
         t0 = time.time()
-        batch, (po, mo, (pm, pf)) = timed(batch)       # (main, follow-up) valid packets per tick
+        batch, (po, mo, ro, (pm, pf)) = timed(batch)   # (main, follow-up) valid packets per tick
         jax.block_until_ready(batch.t)
         best = min(best, time.time() - t0)
-        over = max(over, int(po.max()), int(mo.max()))
+        over = max(over, int(po.max()), int(mo.max()), int(ro.max()))
         packets = (max(int(pm.max()), packets[0]), max(int(pf.max()), packets[1]))
     stats = jax.devices()[0].memory_stats() or {}
     peak = stats.get("peak_bytes_in_use")
