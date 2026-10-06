@@ -1,22 +1,8 @@
-"""Patch-26.19 SR economy and progression (docs/modern/ECONOMY_PROGRESSION.md).
+"""Patch-26.19 SR economy and progression (docs/modern/ECONOMY_PROGRESSION.md, § numbers below).
 
-Pure, fixed-shape JAX over C champions (holder ``c`` = world unit
-``unit[c]``) and N world units. Client values come from ``economy_client.json``
-(``lanerl_jax.modern.data.build_economy``, client 16.19.8230722) and the
-minion barracks config (``minions.json``); defaults for unresolved rules cite
-the ECONOMY U-E ids.
-
-Contents, in the doc's order:
-  §2 ambient gold      ``ambient_payments``
-  §3 levels            ``level_for_xp``, ``decimal_level``, ``skill_points``
-  §4 minion rewards    ``minion_rewards`` (1500 split table, comeback bonus, last-hit gold)
-  §5 kill credit, XP   ``Credit``/``credit_update``/``kill_credit``, ``kill_xp``
-  §6 kill gold/bounty  ``Bounty``, ``kill_gold``, ``assist_gold``, ``bounty_*``
-  §7 structure gold    ``structure_gold``
-  §8 level-up          ``level_up_sync``
-  §9–10 death/respawn  ``death_time``, ``respawn_due``
-  §11 recall/Homeguard ``Recall``/``recall_step``, ``homeguard_bonus_ms``, ``Homeguard``/``homeguard_step``
-  §12 fountain         ``fountain_regen``
+Fixed-shape JAX over C champions (holder ``c`` = world unit ``unit[c]``) and N world units. Client values come
+from ``economy_client.json`` (``data.build_economy``) and the barracks config (``minions.json``); unresolved rules
+cite the doc's U-E ids. ``economy_step`` runs one tick in the §13 order.
 """
 from __future__ import annotations
 
@@ -31,13 +17,12 @@ from . import role_quest as Q
 from .core import damage as D
 from .data import PATCH_DIR
 from .items.effects.core import Kills
-from .role_quest import init_quest
 
 BIG = 1e9
 LEVEL_CAP, QUEST_LEVEL_CAP, SKILL_POINT_LEVELS = 18, 20, 18
 AMBIENT_TICK = 0.5                 # wiki: paid every 0.5 s (§2.1)
 STRUCTURE_RADIUS = 1200.0          # plate/turret local-gold proximity (§7.1)
-STRUCTURE_WINDOW = 10.0            # damage participation window (U-E-5 default)
+STRUCTURE_WINDOW = 10.0            # damage participation window (U-E-5)
 FIRST_TURRET_BONUS = 300.0         # RN 26.1 (§7.3)
 HOMEGUARD_SWITCH = 840.0           # 14:00
 HOMEGUARD_DECAY = 4.0
@@ -45,7 +30,7 @@ HOMEGUARD_LOCKOUT = 8.0
 HOMEGUARD_FOUNTAIN_HEAL = 0.08     # missing HP and mana every 0.5 s (§11.2.5)
 DEATHGUARD_MS = 0.75               # Respawn Homeguard before 14:00 (§10.3)
 RECALL_CHANNEL = 8.0
-RECALL_CAST = 0.5                  # cast before the channel: 8.5 s total (wiki Recall; 26.9 replays 8.50 s, REPLAY_FIDELITY)
+RECALL_CAST = 0.5                  # cast before the channel: 8.5 s total (wiki; 26.9 replays, REPLAY_FIDELITY)
 RECALL_DAMAGE_GRACE = 0.1          # damage in the last 0.1 s does not interrupt (§11.1.3)
 
 
@@ -64,40 +49,16 @@ def _const(name):
 @lru_cache(maxsize=1)
 def _tables():
     e = econ()
-    need = np.zeros(QUEST_LEVEL_CAP + 2, np.float32)               # need[L] = XP to reach level L
-    need[2:QUEST_LEVEL_CAP + 1] = e["xp_required"][:QUEST_LEVEL_CAP - 1]
-    need[QUEST_LEVEL_CAP + 1] = e["xp_required"][QUEST_LEVEL_CAP - 1]  # level 21 boundary (decimal level)
-    kill_xp = np.asarray([0.0] + e["kill_xp"][:QUEST_LEVEL_CAP], np.float32)
-    shared = e["shared_kill_xp_mult"]
-    share = np.asarray([shared[0]] + [shared[min(v - 1, len(shared) - 1)] for v in range(1, QUEST_LEVEL_CAP + 1)],
-                       np.float32)
-    brw = e["death_time_per_level"]
-    death = np.asarray([brw[0]] + [brw[min(v - 1, len(brw) - 1)] for v in range(1, QUEST_LEVEL_CAP + 1)],
-                       np.float32)                                    # levels 19–20 clamp (U-E-6)
-    gold = e["base_kill_gold"]
-    base_gold = np.asarray([gold[0]] + [gold[min(v - 1, len(gold) - 1)] for v in range(1, QUEST_LEVEL_CAP + 1)],
-                           np.float32)
-    split = np.asarray(e["minion_split_xp"], np.float32)
-    barracks = json.loads((PATCH_DIR / "minions.json").read_text())
-    radius = float(_find(barracks, "ExpRadius"))
-    return dict(need=need, kill_xp=kill_xp, share=share, death=death, base_gold=base_gold, split=split,
-                minion_xp_radius=radius)
-
-
-def _find(x, key):
-    if isinstance(x, dict):
-        if key in x:
-            return x[key]
-        for v in x.values():
-            r = _find(v, key)
-            if r is not None:
-                return r
-    elif isinstance(x, list):
-        for v in x:
-            r = _find(v, key)
-            if r is not None:
-                return r
-    return None
+    # Per-level tables indexed by level 0..20; levels past the client table clamp to its last entry (U-E-6).
+    by_level = lambda v: np.asarray([v[0]] + [v[min(lv - 1, len(v) - 1)] for lv in range(1, QUEST_LEVEL_CAP + 1)],
+                                    np.float32)
+    need = np.zeros(QUEST_LEVEL_CAP + 2, np.float32)                  # need[L] = XP to reach level L
+    need[2:QUEST_LEVEL_CAP + 2] = e["xp_required"][:QUEST_LEVEL_CAP]   # need[21]: decimal-level boundary at 20
+    barracks = json.loads((PATCH_DIR / "minions.json").read_text())["barracks"]
+    return dict(need=need, kill_xp=np.asarray([0.0] + e["kill_xp"][:QUEST_LEVEL_CAP], np.float32),
+                share=by_level(e["shared_kill_xp_mult"]), death=by_level(e["death_time_per_level"]),
+                base_gold=by_level(e["base_kill_gold"]), split=np.asarray(e["minion_split_xp"], np.float32),
+                minion_xp_radius=float(barracks["ExpRadius"]))
 
 
 def table(name: str) -> Any:
@@ -111,10 +72,7 @@ def _lv(level):
 # ---- §2 ambient gold ---------------------------------------------------------
 
 def ambient_payments(t0: Any, t1: Any) -> Any:
-    """Gold paid in (t0, t1]: 1.02 g at 65.0 s and every 0.5 s after.
-
-    U-E-1 resolved by the 16.9 replay oracle (145 games): the first payment
-    lands at the start time itself (65.0 s), not one tick later."""
+    """Gold paid in (t0, t1]: 1.02 g at 65.0 s and every 0.5 s after (first payment at 65.0 s: replay oracle)."""
     start = _const("mission_AmbientGoldStartTime")
     per = _const("ai_AmbientGoldAmount") / _const("ai_AmbientGoldInterval") * AMBIENT_TICK
     k = lambda t: jnp.where(jnp.asarray(t, jnp.float32) >= start,
@@ -126,7 +84,7 @@ def ambient_payments(t0: Any, t1: Any) -> Any:
 
 def level_for_xp(xp: Any, cap: Any = LEVEL_CAP) -> Any:
     """``1 + #{L in 2..cap : xp >= need[L]}`` (multi-level jumps allowed)."""
-    need = table("need")[2:QUEST_LEVEL_CAP + 1]                       # levels 2..20
+    need = table("need")[2:QUEST_LEVEL_CAP + 1]
     levels = jnp.arange(2, QUEST_LEVEL_CAP + 1)
     xp = jnp.asarray(xp, jnp.float32)[..., None]
     reached = (xp >= need) & (levels <= jnp.asarray(cap)[..., None])
@@ -134,7 +92,7 @@ def level_for_xp(xp: Any, cap: Any = LEVEL_CAP) -> Any:
 
 
 def decimal_level(xp: Any, cap: Any = LEVEL_CAP) -> Any:
-    """``L + (xp − need[L]) / (need[L+1] − need[L])``; exactly ``L`` at the cap (§3.3)."""
+    """``L + (xp - need[L]) / (need[L+1] - need[L])``; exactly ``L`` at the cap (§3.3)."""
     lv = level_for_xp(xp, cap)
     need = table("need")
     lo, hi = need[lv], need[jnp.minimum(lv + 1, QUEST_LEVEL_CAP + 1)]
@@ -143,12 +101,12 @@ def decimal_level(xp: Any, cap: Any = LEVEL_CAP) -> Any:
 
 
 def skill_points(level: Any) -> Any:
-    """One point per level 1–18; levels 19–20 grant stats only (§8.3)."""
+    """One point per level 1-18; levels 19-20 grant stats only (§8.3)."""
     return jnp.minimum(jnp.asarray(level, jnp.int32), SKILL_POINT_LEVELS)
 
 
 def max_rank(level: Any, ultimate: bool = False) -> Any:
-    """Basic ranks ≤ ceil(level/2) up to 5; R at 6/11/16 (§8.3)."""
+    """Basic ranks <= ceil(level/2) up to 5; R at 6/11/16 (§8.3)."""
     lv = jnp.minimum(jnp.asarray(level, jnp.int32), SKILL_POINT_LEVELS)
     if ultimate:
         return jnp.sum(lv[..., None] >= jnp.asarray([6, 11, 16]), axis=-1)
@@ -163,7 +121,8 @@ def minion_comeback_mult(minion_level: Any, receiver_decimal_level: Any) -> Any:
     d = ml - jnp.asarray(receiver_decimal_level, jnp.float32)
     start = _const("aiExp_bonusExpLaneLevelStart")
     dmin = _const("aiExp_bonusExpLaneLevelDeltaMin")
-    c1, c1_ub = _const("aiExp_bonusExpPercentPerLaneMinionLevelC1"), _const("aiExp_bonusExpPercentPerLaneMinionLevelC1UBound")
+    c1 = _const("aiExp_bonusExpPercentPerLaneMinionLevelC1")
+    c1_ub = _const("aiExp_bonusExpPercentPerLaneMinionLevelC1UBound")
     c2, cap = _const("aiExp_bonusExpPercentPerLaneMinionLevelC2"), _const("aiExp_bonusExpLevelDeltaCap")
     bonus = jnp.where(d < c1_ub, c1 * d, c2 * jnp.minimum(d, cap))
     return 1.0 + jnp.where((ml > start) & (d > dmin), bonus, 0.0)
@@ -181,27 +140,25 @@ def _cm(v: Any, c: int, m: int) -> Any:
 
 
 class MinionDeaths(NamedTuple):
-    """Lane minions that died this tick, shape (M,) (padded with ``valid``)."""
+    """Lane minions that died this tick (M,), padded with ``valid``."""
     valid: Any
     x: Any
     y: Any
     team: Any               # owning team of the minion
     gold: Any               # bounty (lane.minions.gold_bounty)
-    xp: Any                 # XP value per minion type
+    xp: Any
     level: Any              # minion level at spawn (1v1: owning champion's level, U-E-11)
-    last_hitter: Any        # int32 holder index c that last-hit it, -1 = not a champion
-    unit: Any = None        # int32 world unit index (for Kills.killed_units), optional
+    last_hitter: Any        # int32 holder that last-hit it, -1 = not a champion
+    unit: Any = None        # int32 world unit (for Kills.killed_units)
 
 
 def minion_rewards(deaths: MinionDeaths, cx: Any, cy: Any, cteam: Any, calive: Any, cdec_level: Any,
                    xp_bonus: Any = 0.0, gold_mult: Any = 1.0, xp_mult: Any = 1.0) -> tuple[Any, Any, Any]:
-    """(gold (C,), xp (C,), last_hits (C,)) from this tick's minion deaths (§4).
+    """(gold, xp, last_hits) (C,) from this tick's minion deaths (§4).
 
-    XP: enemy champions alive within the barracks ExpRadius (1500) of the death
-    plus the last hitter always, each ``xp × split[n] × comeback × (1 + bonus)``.
-    Gold: full bounty to the champion last hitter only (§4.5). ``xp_bonus``
-    (C,) are additive regular XP modifiers (quest +11%), ``gold_mult``/``xp_mult``
-    (C, M) or (C,) extra multipliers (top quest out-of-lane −25%, ROLE_QUESTS §2.3).
+    XP goes to live enemy champions within the barracks ExpRadius plus the last hitter, each
+    ``xp * split[n] * comeback * xp_modifier(xp_bonus) * xp_mult``; the full bounty goes to the champion last
+    hitter (§4.5). ``gold_mult``/``xp_mult`` are scalar, (C,) or (C, M).
     """
     r = _tables()["minion_xp_radius"]
     c = cx.shape[0]
@@ -223,8 +180,7 @@ def minion_rewards(deaths: MinionDeaths, cx: Any, cy: Any, cteam: Any, calive: A
 # ---- §5 kill credit and champion-kill XP --------------------------------------
 
 class Credit(NamedTuple):
-    """Last time each holder affected each unit (damage incl. 0, CC), (C, N)."""
-    last_affect: Any
+    last_affect: Any                # (C, N) last time each holder affected each unit (damage incl. 0, CC)
     last_structure_damage: Any      # (C, N) last damage to structures (plate/turret share, §7)
 
 
@@ -249,12 +205,10 @@ def credit_update(credit: Credit, report, unit: Any, now: Any, units_cls: Any, c
 
 def kill_credit(credit: Credit, victim: Any, now: Any, killer_hint: Any = None,
                 window: Any = None) -> tuple[Any, Any, Any]:
-    """(killer (int32, -1 = execution), assisters (C,) bool, any_credit ()) for unit ``victim``.
+    """(killer (-1 = execution), assisters (C,), any_credit) for unit ``victim`` (§5.1.1).
 
-    The last holder that affected the victim within 15 s gets the kill, even
-    if a non-champion dealt the final blow; others in the window assist
-    (§5.1.1). ``killer_hint`` (int32, -1 none) is the holder that dealt the
-    final blow this tick, which wins ties.
+    The last holder that affected the victim within 15 s gets the kill even if a non-champion dealt the final
+    blow; others in the window assist. ``killer_hint``, the holder that dealt the final blow, wins ties.
     """
     w = econ()["assist_window"] if window is None else window
     t = credit.last_affect[:, victim]
@@ -269,7 +223,7 @@ def kill_credit(credit: Credit, victim: Any, now: Any, killer_hint: Any = None,
 
 
 def level_difference_xp_mult(victim_dec: Any, recipient_dec: Any) -> Any:
-    """§5.2.3: 0 for |Δ| ≤ 1, then ±20% per level; overleveled floor 40%."""
+    """§5.2.3: 0 for |delta| <= 1, then +-20% per level; overleveled floor 40%."""
     slope = econ()["level_difference_xp"][1]
     delta = jnp.asarray(victim_dec) - jnp.asarray(recipient_dec)
     m = slope * jnp.maximum(jnp.abs(delta) - 1.0, 0.0)
@@ -278,12 +232,7 @@ def level_difference_xp_mult(victim_dec: Any, recipient_dec: Any) -> Any:
 
 def kill_xp(victim_level: Any, victim_dec: Any, recipient_dec: Any, eligible: Any,
             takedown: Any = None, quest_flat: Any = 0.0) -> Any:
-    """(C,) XP for one champion death (§5.2).
-
-    ``eligible`` (C,): killer, assisters, and enemies of the victim alive within
-    1600 (or dead < 10 s ago, near their corpse). ``takedown`` (C,) marks kill
-    or assist (quest +80 flat applies to those, §5.2.4).
-    """
+    """(C,) XP for one champion death (§5.2); ``quest_flat`` goes to ``takedown`` holders (§5.2.4)."""
     v = _lv(victim_level)
     n = jnp.sum(eligible)
     pool = table("kill_xp")[v] * jnp.where(n >= 2, table("share")[v], 1.0)
@@ -294,7 +243,7 @@ def kill_xp(victim_level: Any, victim_dec: Any, recipient_dec: Any, eligible: An
 
 
 def kill_xp_eligible(victim_x, victim_y, victim_team, cx, cy, cteam, calive, cdead_since, now, takedown):
-    """Eligibility for champion-kill XP (§5.2.1)."""
+    """§5.2.1: takedowns, and enemies of the victim within range alive or dead for under 10 s."""
     r = _const("ai_ExpRadius2")
     dist = jnp.sqrt((cx - victim_x) ** 2 + (cy - victim_y) ** 2)
     recently_dead = ~calive & (now - cdead_since <= _const("aiExp_timeForKillCreditAfterDeath"))
@@ -304,8 +253,7 @@ def kill_xp_eligible(victim_x, victim_y, victim_team, cx, cy, cteam, calive, cde
 # ---- §6 kill gold and the bounty system ---------------------------------------
 
 class Bounty(NamedTuple):
-    """Per champion, shape (C,)."""
-    b: Any                  # applied bounty offset from base (may be negative)
+    b: Any                  # (C,) applied bounty offset from base (may be negative)
     buf: Any                # positive-entry buffer consumed (0..100)
     carry: Any              # extended bounty restored at respawn
     pending: Any            # deferred change (applied 5 s out of champion combat)
@@ -339,13 +287,8 @@ def early_assist_factor(t: Any) -> Any:
 
 
 def assist_gold(k_without_fb: Any, victim_level: Any, t: Any, n_assisters: Any, first_blood: Any = 0.0) -> Any:
-    """§6.2.2: assist pool ``(min(0.5·K, 0.5·base) + 0.5·FB)·early(t)``, split equally.
-
-    The first-blood bonus sits outside the 50%-of-base cap and is shared at
-    50% too: replay oracle (16.9, 145 first bloods) pays 200 to a lone
-    assister after 175 s, where ``min(0.5·K, 0.5·base)`` alone gives 150;
-    4,589 later assisted kills confirm the cap (pool / base median 0.5 on
-    shutdowns)."""
+    """§6.2.2: (each, total) of the assist pool ``(min(0.5 K, 0.5 base) + 0.5 FB) * early(t)``, split equally.
+    The first-blood half sits outside the base cap (replay oracle, test_economy_oracle)."""
     total = (jnp.minimum(0.5 * k_without_fb, 0.5 * base_kill_gold(victim_level)) + 0.5 * first_blood) \
         * early_assist_factor(t)
     return jnp.where(n_assisters > 0, total / jnp.maximum(n_assisters, 1), 0.0), \
@@ -363,14 +306,13 @@ def _accrue(b: Any, buf: Any, delta: Any) -> tuple[Any, Any]:
 
 
 def bounty_champion_gold(state: Bounty, gold: Any, shutdown_part: Any = 0.0) -> Bounty:
-    """§6.2.4: +1 per 3 g of kill/assist gold, deferred; shutdown gold above
-    base+100 is ignored while the earner is positive."""
+    """§6.2.4: +1 per 3 g of kill/assist gold, deferred; shutdown gold above base+100 is ignored while positive."""
     counted = gold - jnp.where(state.b > 0.0, shutdown_part, 0.0)
     return state._replace(pending=state.pending + counted / _b("kill_gold_per_bounty"))
 
 
 def bounty_gv(state: Bounty, gv_gold: Any) -> Bounty:
-    """§6.2.5: minion/monster gold, 1:20 while B ≥ 0, 1:7 while B < 0 (deferred)."""
+    """§6.2.5: minion/monster gold, 1:20 while B >= 0, 1:7 while B < 0 (deferred)."""
     rate = jnp.where(state.b + state.pending >= 0.0, _b("gv_gold_per_bounty_positive"),
                      _b("gv_gold_per_bounty_negative"))
     return state._replace(pending=state.pending + gv_gold / rate)
@@ -403,7 +345,7 @@ def bounty_on_respawn(state: Bounty, respawned: Any) -> Bounty:
 
 
 class KillPayout(NamedTuple):
-    gold: Any               # (C,) gold to each holder
+    gold: Any               # (C,)
     bounty: Bounty
     first_blood_done: Any
     killer: Any
@@ -412,11 +354,7 @@ class KillPayout(NamedTuple):
 
 def champion_kill(bounty: Bounty, victim: Any, victim_level: Any, killer: Any, assisters: Any,
                   now: Any, first_blood_done: Any, credited: Any) -> KillPayout:
-    """Gold and bounty for the death of holder ``victim`` (§6.2 steps 1–4).
-
-    ``killer`` is the credited holder (-1 execution: nothing is paid and the
-    victim's bounty is unchanged, §5.1.2).
-    """
+    """Gold and bounty for the death of holder ``victim`` (§6.2 steps 1-4); nothing without ``credited`` (§5.1.2)."""
     c = bounty.b.shape[0]
     fb = credited & ~first_blood_done
     k = kill_gold(bounty.b[victim], victim_level, fb)
@@ -436,7 +374,7 @@ def champion_kill(bounty: Bounty, victim: Any, victim_level: Any, killer: Any, a
 
 def structure_eligible(structure: Any, sx: Any, sy: Any, structure_team: Any, credit: Credit, now: Any,
                        cx: Any, cy: Any, cteam: Any, calive: Any) -> Any:
-    """(C,) local-gold (and quest-credit) eligibility for a plate or turret (§7.1)."""
+    """(C,) local-gold (and quest-credit) eligibility: enemies that damaged it in 10 s or are alive within 1200."""
     enemy = cteam != structure_team
     recent = (now - credit.last_structure_damage[:, structure]) <= STRUCTURE_WINDOW
     near = calive & (jnp.sqrt((cx - sx) ** 2 + (cy - sy) ** 2) <= STRUCTURE_RADIUS)
@@ -446,12 +384,8 @@ def structure_eligible(structure: Any, sx: Any, sy: Any, structure_team: Any, cr
 def structure_gold(local_gold: Any, global_gold: Any, structure: Any, sx: Any, sy: Any, structure_team: Any,
                    credit: Credit, now: Any, cx: Any, cy: Any, cteam: Any, calive: Any,
                    first_turret: Any = False) -> Any:
-    """(C,) gold for one plate or turret event (§7.1–7.3).
-
-    Local gold (+300 first-turret share) splits equally among enemy champions
-    that damaged it in the last 10 s (any range, alive or dead) or are alive
-    within 1200; global gold goes to every enemy champion.
-    """
+    """(C,) gold for one plate or turret (§7.1-7.3): local gold (+300 first turret) split among the eligible,
+    global gold to every enemy champion."""
     enemy = cteam != structure_team
     elig = structure_eligible(structure, sx, sy, structure_team, credit, now, cx, cy, cteam, calive)
     local = local_gold + jnp.where(first_turret, FIRST_TURRET_BONUS, 0.0)
@@ -463,7 +397,7 @@ def structure_gold(local_gold: Any, global_gold: Any, structure: Any, sx: Any, s
 
 def level_up_sync(hp: Any, max_hp_old: Any, max_hp_new: Any, mana: Any = 0.0, max_mana_old: Any = 0.0,
                   max_mana_new: Any = 0.0) -> tuple[Any, Any]:
-    """§8.2: current HP (and mana, INF M) gain the full max increase."""
+    """§8.2: current HP (and mana, INFERRED-M) gain the full max increase."""
     gain = _const("ai_levelUp_healthGainNetGain")
     penalty = _const("ai_levelUp_healthGainPercentMissingPenalty")
     missing = 1.0 - hp / jnp.maximum(max_hp_old, 1.0)
@@ -472,17 +406,11 @@ def level_up_sync(hp: Any, max_hp_old: Any, max_hp_new: Any, mana: Any = 0.0, ma
     return jnp.minimum(hp + dh, max_hp_new), jnp.minimum(mana + dm, max_mana_new)
 
 
-# ---- §9–10 death timer and respawn -----------------------------------------------
+# ---- §9-10 death timer and respawn -----------------------------------------------
 
 def time_increase_factor(t: Any) -> Any:
-    """§9 TIF: from 15:00, each scaling point adds its percent per 30 s,
-    accrued **continuously** (not in 30 s steps), capped at +50%.
-
-    Both shapes were checked against 6,025 replay deaths (16.9 oracle): the
-    wiki's per-segment ``ceil`` steps put 47% of post-15:00 deaths within
-    0.1 s, continuous accrual 94%. No scaling applies before 15:00 (U-E-7
-    resolved: deaths at 10:00–15:00 match the unscaled table).
-    """
+    """§9 TIF: from 15:00 each scaling point adds its percent per 30 s, accrued continuously, capped at +50%
+    (continuous accrual and no scaling before 15:00 per the replay oracle, U-E-7)."""
     e = econ()
     inc = float(e["death_scaling_increment"])
     cap = float(e["death_scaling_cap"]) - 1.0
@@ -496,25 +424,16 @@ def time_increase_factor(t: Any) -> Any:
 
 
 def death_time(level: Any, t: Any, reduction: Any = 0.0) -> Any:
-    """BRW[level at death] × (1 + TIF(t)), respawn-time mods clamped at −95%."""
+    """BRW[level at death] * (1 + TIF(t)), respawn-time mods clamped at -95%."""
     mod = jnp.maximum(-jnp.asarray(reduction, jnp.float32), _const("gcd_PercentRespawnTimeModMinimum"))
     return table("death")[_lv(level)] * (1.0 + time_increase_factor(t)) * (1.0 + mod)
-
-
-def respawn_due(dead: Any, respawn_at: Any, now: Any) -> Any:
-    return dead & (now >= respawn_at)
-
-
-def deathguard_ms(game_time: Any) -> Any:
-    """§10.3: respawn Homeguard 75% bonus MS before 14:00."""
-    return jnp.where(jnp.asarray(game_time) < HOMEGUARD_SWITCH, DEATHGUARD_MS, 0.0)
 
 
 # ---- §11 recall and Homeguard ------------------------------------------------------
 
 class Recall(NamedTuple):
     channeling: Any         # (C,) bool
-    start: Any              # (C,) seconds
+    start: Any              # (C,)
 
 
 def init_recall(n_champions: int) -> Recall:
@@ -523,13 +442,8 @@ def init_recall(n_champions: int) -> Recall:
 
 def recall_step(state: Recall, now: Any, *, request: Any, cancel_action: Any, health_damage: Any,
                 disabled: Any, dead: Any, channel: Any = None) -> tuple[Recall, Any]:
-    """§11.1: 0.5 s cast + 8 s channel (``channel`` overrides the channel, e.g. Empowered Recall 4 s);
-    returns (state, completed (C,)). The damage grace is the last 0.1 s of the whole recall.
-
-    ``cancel_action``: the holder moved/attacked/cast; ``health_damage``: damage
-    > 0 reached health this tick (shield-absorbed damage does not count);
-    ``disabled``: silence, ground, root or a stun-class CC.
-    """
+    """§11.1: (state, completed (C,)) for a 0.5 s cast + ``channel`` (8 s; Empowered Recall 4 s). Moving,
+    attacking, casting, damage to health outside the last 0.1 s, stun-class CC or death interrupt it."""
     start = request & ~state.channeling & ~dead
     ch = state.channeling | start
     t0 = jnp.where(start, now, state.start)
@@ -542,7 +456,7 @@ def recall_step(state: Recall, now: Any, *, request: Any, cancel_action: Any, he
 
 
 def homeguard_bonus_ms(game_time: Any, since_leaving_fountain: Any) -> Any:
-    """§11.2.2: 80% → 40% (150% → 65% after 14:00) linearly over 4 s, then flat."""
+    """§11.2.2: 80% -> 40% (150% -> 65% after 14:00) linearly over 4 s, then flat."""
     late = jnp.asarray(game_time) >= HOMEGUARD_SWITCH
     hi, lo = jnp.where(late, 1.5, 0.8), jnp.where(late, 0.65, 0.4)
     f = jnp.clip(jnp.asarray(since_leaving_fountain) / HOMEGUARD_DECAY, 0.0, 1.0)
@@ -551,7 +465,7 @@ def homeguard_bonus_ms(game_time: Any, since_leaving_fountain: Any) -> Any:
 
 class Homeguard(NamedTuple):
     active: Any             # (C,) bool
-    left_at: Any            # (C,) when the holder left the fountain (+inf while inside)
+    left_at: Any            # (C,) when the holder left the fountain (BIG while inside)
     lockout_until: Any      # (C,)
 
 
@@ -562,8 +476,8 @@ def init_homeguard(n_champions: int) -> Homeguard:
 
 def homeguard_step(state: Homeguard, now: Any, game_time: Any, *, in_fountain: Any, combat: Any,
                    reached_endpoint: Any, in_jungle: Any, teleported: Any, recalled: Any) -> tuple[Homeguard, Any]:
-    """§11.2: (state, bonus MS (C,)). Available from 0:20; lockout 8 s after
-    losing it to combat/jungle; Recall removes the lockout."""
+    """§11.2: (state, bonus MS (C,)). Available from 0:20; locked out 8 s after losing it to combat or the
+    jungle; Recall removes the lockout."""
     lock = jnp.where(recalled, -BIG, state.lockout_until)
     gain = in_fountain & (game_time >= 20.0) & (now >= lock)
     active = state.active | gain
@@ -580,9 +494,8 @@ def homeguard_step(state: Homeguard, now: Any, game_time: Any, *, in_fountain: A
 
 def fountain_regen(hp: Any, max_hp: Any, mana: Any, max_mana: Any, in_fountain: Any, t0: Any, t1: Any,
                    homeguard: Any = False) -> tuple[Any, Any]:
-    """§12.1 (+§11.2.5): +2% max HP and +2.5% max mana every 0.25 s within
-    1100 of the fountain; with Homeguard also +8% missing HP/mana every 0.5 s
-    (flat pulses first on coincident ticks, INF)."""
+    """§12.1 (+§11.2.5): +2% max HP and +2.5% max mana every 0.25 s in the fountain; with Homeguard also +8%
+    missing HP/mana every 0.5 s (flat pulses first on coincident ticks, INFERRED-M)."""
     period = _const("sp_RegenTickInterval")
     pulses = lambda p: jnp.floor(jnp.asarray(t1) / p + 1e-6) - jnp.floor(jnp.asarray(t0) / p + 1e-6)
     k = jnp.where(in_fountain, pulses(period), 0.0)
@@ -601,12 +514,12 @@ def starting_gold() -> float:
     return _const("ai_StartingGold")
 
 
-# ---- reference per-tick economy step (§13 ordering) ----------------------------------
+# ---- §13 per-tick economy step ----------------------------------------------------
 
 class EconomyState(NamedTuple):
-    gold: Any               # (C,) current gold
+    gold: Any               # (C,)
     gold_total: Any         # (C,) lifetime gold earned (starting gold included)
-    xp: Any                 # (C,)
+    xp: Any
     level: Any              # (C,) int32
     bounty: Bounty
     credit: Credit
@@ -614,8 +527,8 @@ class EconomyState(NamedTuple):
     homeguard: Homeguard
     quest: Any              # role_quest.QuestState
     dead: Any               # (C,) bool
-    dead_since: Any         # (C,)
-    respawn_at: Any         # (C,)
+    dead_since: Any
+    respawn_at: Any
     first_blood_done: Any   # () bool
     first_turret_done: Any  # () bool
     last_t: Any             # () game time of the previous step
@@ -626,12 +539,12 @@ def init_economy(n_champions: int, n_units: int, roles) -> EconomyState:
     g = z + starting_gold()
     return EconomyState(g, g, z, jnp.ones((n_champions,), jnp.int32), init_bounty(n_champions),
                         init_credit(n_champions, n_units), init_recall(n_champions), init_homeguard(n_champions),
-                        init_quest(roles), jnp.zeros((n_champions,), bool), z - BIG, z - BIG,
+                        Q.init_quest(roles), jnp.zeros((n_champions,), bool), z - BIG, z - BIG,
                         jnp.asarray(False), jnp.asarray(False), jnp.float32(0.0))
 
 
 class StructureEvents(NamedTuple):
-    """Plates/turrets destroyed this tick, shape (S,)."""
+    """Plates/turrets destroyed this tick (S,)."""
     valid: Any
     unit: Any               # structure unit index
     x: Any
@@ -641,8 +554,7 @@ class StructureEvents(NamedTuple):
     global_gold: Any
     is_turret: Any          # turret destroyed (vs plate)
     in_top_lane: Any
-    is_structure: Any = None  # (S,) bool: the unit is a structure every tick (§7 damage-credit marking,
-                              # independent of ``valid``); None = ``valid``
+    is_structure: Any = None  # (S,) bool: marks the unit for §7 damage credit every tick (None: ``valid``)
 
 
 class EconomyInputs(NamedTuple):
@@ -659,7 +571,7 @@ class EconomyInputs(NamedTuple):
     minion_deaths: MinionDeaths
     minion_in_lane: Any     # (M,) bool: the minion belongs to the top lane
     structures: StructureEvents
-    last_champion_combat: Any   # (C,) from combat clocks
+    last_champion_combat: Any   # (C,)
     in_fountain: Any
     in_quest_lane: Any
     recall_request: Any
@@ -669,9 +581,9 @@ class EconomyInputs(NamedTuple):
     reached_endpoint: Any
     in_jungle: Any
     teleported: Any
-    extra_gold: Any = None  # (C,) gold from other systems this tick (jungle, objectives, wards)
-    extra_xp: Any = None    # (C,) XP from other systems this tick (monsters, objectives)
-    epic: Any = None        # (C,) epic-monster takedowns this tick (role quest points)
+    extra_gold: Any = None  # (C,) gold from other systems (jungle, objectives, wards); eligibility is theirs
+    extra_xp: Any = None    # (C,) XP from other systems (monsters, objectives)
+    epic: Any = None        # (C,) epic-monster takedowns (role quest points)
     recall_channel: Any = None  # (C,) recall channel seconds (Empowered Recall 4 s), default 8
     minion_gold_delta: Any = None   # (C,) gold change per lane-minion last hit (jungle-pet holders)
     minion_xp_mult: Any = None      # (C,) lane-minion XP multiplier (jungle-pet holders)
@@ -703,9 +615,8 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
         cls = cls.at[inp.structures.unit].set(jnp.where(st_mark, D.CLASS_STRUCTURE, cls[inp.structures.unit]))
         credit = credit_update(credit, inp.report, inp.unit, now, cls, inp.cc)
 
-    # 2. Ambient gold (paid while dead, §2.4).
-    gold_gain = jnp.broadcast_to(ambient_payments(state.last_t, now), (c,))
-    # 4–5. Champion deaths: credit, kill gold, bounty.
+    gold_gain = jnp.broadcast_to(ambient_payments(state.last_t, now), (c,))     # paid while dead (§2.4)
+    # Champion deaths: credit, kill gold, bounty, kill XP.
     died = ~state.dead & (inp.hp <= 0.0)
     bounty, fb_done = state.bounty, state.first_blood_done
     kills = jnp.zeros((c,), jnp.float32)
@@ -763,14 +674,15 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
     if inp.extra_gold is not None:
         gold_gain = gold_gain + jnp.asarray(inp.extra_gold, jnp.float32)
     if inp.extra_xp is not None:
-        xp_gain = xp_gain + jnp.asarray(inp.extra_xp, jnp.float32)   # eligibility is the source's job
-    # 7. Quest points and completion (before level-up).
-    # Quest credit = local-gold eligibility (ROLE_QUESTS §2.1).
+        xp_gain = xp_gain + jnp.asarray(inp.extra_xp, jnp.float32)
+    # Quest points and completion before the level-up; structure credit = local-gold eligibility (ROLE_QUESTS §2.1).
     near_struct = (jnp.stack(s_elig, axis=1) if s_elig else jnp.zeros((c, 0), bool)).astype(jnp.float32)
     qe = Q.QuestEvents(
-        minions_in_lane=jnp.sum(jnp.where(inp.minion_in_lane[None, :] & (jnp.arange(c)[:, None] == md.last_hitter[None, :])
+        minions_in_lane=jnp.sum(jnp.where(inp.minion_in_lane[None, :]
+                                          & (jnp.arange(c)[:, None] == md.last_hitter[None, :])
                                           & md.valid[None, :], 1.0, 0.0), axis=1),
-        minions_out=jnp.sum(jnp.where(~inp.minion_in_lane[None, :] & (jnp.arange(c)[:, None] == md.last_hitter[None, :])
+        minions_out=jnp.sum(jnp.where(~inp.minion_in_lane[None, :]
+                                      & (jnp.arange(c)[:, None] == md.last_hitter[None, :])
                                       & md.valid[None, :], 1.0, 0.0), axis=1),
         turrets_in_lane=jnp.sum(near_struct * (st.is_turret & st.in_top_lane)[None, :], axis=1),
         turrets_out=jnp.sum(near_struct * (st.is_turret & ~st.in_top_lane)[None, :], axis=1),
@@ -778,33 +690,30 @@ def economy_step(state: EconomyState, inp: EconomyInputs) -> EconomyOut:
         plates_out=jnp.sum(near_struct * (~st.is_turret & ~st.in_top_lane)[None, :], axis=1),
         takedowns=kills + assists,
         epic=jnp.zeros((c,), jnp.float32) if inp.epic is None else jnp.asarray(inp.epic, jnp.float32))
-    # 11. Recall / Homeguard.
     recall, recalled = recall_step(state.recall, now, request=inp.recall_request, cancel_action=inp.cancel_action,
                                    health_damage=inp.health_damage, disabled=inp.disabled, dead=state.dead | died,
                                    channel=inp.recall_channel)
     qs = Q.quest_step(state.quest, qe, now=now, dt=dt, in_lane=inp.in_quest_lane, alive=~state.dead & ~died,
                       level=state.level, recalled=recalled)
     xp_gain = xp_gain + jnp.where(qs.completed_now, Q.COMPLETION_XP, 0.0)
-    # 8. Level-up with the (possibly raised) cap.
     xp = state.xp + xp_gain
     level = level_for_xp(xp, qs.level_cap)
-    # 10. Death timers (level at death) and respawn.
+    # Death timers (level at death), respawn, deferred bounty, Homeguard.
     duration = jnp.where(died, death_time(state.level, now), 0.0)
     respawn_at = jnp.where(died, now + duration, state.respawn_at)
     dead_since = jnp.where(died, now, state.dead_since)
     dead = state.dead | died
-    respawned = respawn_due(dead, respawn_at, now) & ~died
+    respawned = dead & (now >= respawn_at) & ~died
     dead = dead & ~respawned
     bounty = bounty_on_respawn(bounty, respawned)
-    # 11. Deferred bounty changes.
     bounty = bounty_apply_pending(bounty, now - inp.last_champion_combat)
     hg, hg_ms = homeguard_step(state.homeguard, now, now, in_fountain=inp.in_fountain & ~dead,
                                combat=(now - inp.last_champion_combat) <= 0.0, reached_endpoint=inp.reached_endpoint,
                                in_jungle=inp.in_jungle, teleported=inp.teleported, recalled=recalled)
-    hg_ms = jnp.where(respawned, jnp.maximum(hg_ms, deathguard_ms(now)), hg_ms)
-    gold_cap = _const("Gold_Max")
-    new = EconomyState(jnp.minimum(state.gold + gold_gain, gold_cap), state.gold_total + gold_gain, xp, level,
+    hg_ms = jnp.where(respawned, jnp.maximum(hg_ms, jnp.where(jnp.asarray(now) < HOMEGUARD_SWITCH, DEATHGUARD_MS, 0.0)),
+                      hg_ms)
+    new = EconomyState(jnp.minimum(state.gold + gold_gain, _const("Gold_Max")), state.gold_total + gold_gain, xp, level,
                        bounty, credit, recall, hg, qs.state, dead, dead_since, respawn_at, fb_done, first_turret, now)
-    kill_struct = Kills(kills, assists, last_hits, died, killed_units)
-    return EconomyOut(new, gold_gain, xp_gain, level - state.level, kill_struct, respawned, recalled, duration,
-                      hg_ms, qs.completed_now)
+    return EconomyOut(new, gold_gain, xp_gain, level - state.level,
+                      Kills(kills, assists, last_hits, died, killed_units), respawned, recalled, duration, hg_ms,
+                      qs.completed_now)

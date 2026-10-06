@@ -1,29 +1,11 @@
-"""Patch-26.19 regular jungle camps, Rift Scuttler, monster AI, jungle rewards, Smite and jungle pets.
+"""Patch-26.19 jungle camps, Rift Scuttler, monster AI, rewards, crests, Smite and jungle pets.
 
-Spec: ``docs/modern/JUNGLE.md`` (evidence levels per value). Client data comes from
-``modern/data/26.19/jungle_client.json`` (``data/build_modern_jungle.py``); wiki and
-patch-note values are the constants below, each tagged CLIENT / WIKI / PATCH /
-INFERRED-M / INFERRED-L.
-
-Like ``lane.ai`` this module owns *decisions and rule state* only; the world
-tick owns the unit arrays, the attack machine, missiles, movement and damage
-resolution. Fixed shapes: S jungle slots (``JungleTable.n_slots`` = 38, in the world's
-40-slot jungle block, ``world.config.Layout``), K = 14 camps, C champions (world units ``0..C-1``), N world units.
-Slot ``s`` is world unit ``table.monster0 + s``.
-
-Tick placement (``world.tick`` phases)::
-
-    1 INPUT   state, w = spawn_step(state, tab, now=now, champion_level=lvl)      -> write_spawns(...)
-    3 CASTS   state, sm = smite_step(state, tab, units, summoner_request, spells, now=..., ...)
-    4 AI      state, ai = monster_ai(state, tab, units, att, now=now, dt=dt, damage_events=s.prev.damage_matrix)
-              (desired targets, move goals/speeds, reset heals, despawns, targetable)
-    6 ATTACK  pk = monster_attack_packets(state, tab, units, launch)               (monster basic attacks)
-              state, fx = combat_effects(state, tab, units, ictx, attack_hit=..., ...)  (red burn, pets, evolutions)
-    9 DEATH   state, rw = death_step(state, tab, units, now=now, died=died, killer=killer, ...)
-              (gold/XP per champion -> economy, crest grants/transfers, treats, splits, respawn timers)
-    2 STATS   buff_stats(state, now=..., level=..., max_mana=..., max_hp=..., ...) next tick (AH, regen)
-
-Nothing here compiles ``world.tick``; every function is pure JAX over the arrays it is given.
+Spec: docs/modern/JUNGLE.md (evidence per value). Client data: ``data/26.19/jungle_client.json``
+(``data/build_jungle.py``); other constants are tagged CLIENT / WIKI / PATCH / INFERRED-M / INFERRED-L.
+Like ``lane.ai`` this owns decisions and rule state only; the world tick owns unit arrays, attacks, movement and
+damage. Shapes: S jungle slots (slot s = world unit ``table.monster0 + s``), K = 14 camps, C champions, N units.
+Phases: ``spawn_step`` INPUT, ``smite_step`` CASTS, ``monster_ai`` AI, ``monster_attack_packets`` and
+``combat_effects`` ATTACK, ``death_step`` DEATH, ``buff_stats`` STATS (next tick).
 """
 from __future__ import annotations
 
@@ -42,28 +24,25 @@ from ..data import PATCH_DIR
 from ..items.catalog import catalog
 
 DATA = PATCH_DIR / "jungle_client.json"
-MAX_JUNGLE_SLOTS = JUNGLE_SLOTS             # the world's jungle block (world.config.Layout)
 
 
-# ---- monster types (WorldUnits.sub of a KIND_MONSTER slot) --------------------------------------
-class Monster:
+class Monster:                  # WorldUnits.sub of a KIND_MONSTER jungle slot
     BLUE, RED, GROMP, WOLF, WOLF_MINI, RAPTOR, RAPTOR_MINI, KRUG, KRUG_MEDIUM, KRUG_MINI, SCUTTLE = range(11)
 
 
 N_TYPES = 11
-EPIC_SUB_BASE = 16              # proposal for the epic agent: epic monster ``sub`` values start here
 CHARACTERS = ("SRU_Blue", "SRU_Red", "SRU_Gromp", "SRU_Murkwolf", "SRU_MurkwolfMini", "SRU_Razorbeak",
               "SRU_RazorbeakMini", "SRU_Krug", "SRU_KrugMini", "SRU_KrugMiniMini", "Sru_Crab")
 SMALL, MEDIUM, LARGE = 0, 1, 2
 SIZE = (LARGE, LARGE, LARGE, LARGE, SMALL, LARGE, SMALL, LARGE, MEDIUM, SMALL, LARGE)  # CLIENT unit tags
-# Bonus damage on attacks, fraction of the target's current HP (WIKI camp pages "Notes").
+# Bonus damage on attacks as a fraction of the target's current HP (WIKI camp pages).
 BONUS_PHYS_CURRENT = (0.05, 0.05, 0.0, 0.03, 0.0, 0.03, 0.0, 0.03, 0.0, 0.0, 0.0)
 BONUS_MAGIC_CURRENT = (0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 HP_CURVE = (1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 2)    # 0 template, 1 buff camps, 2 Rift Scuttler (WIKI)
-DEFAULT_ATTACK_RANGE = 100.0                    # INFERRED-M: client record has no attackRange for Blue
-MURKWOLF_MINI_AD = 10.0                         # WIKI (client record has no baseDamage)
+DEFAULT_ATTACK_RANGE = 100.0                    # INFERRED-M: the Blue record has no attackRange
+MURKWOLF_MINI_AD = 10.0                         # WIKI: the record has no baseDamage
 
-# Level scaling (WIKI Template:Jungle monster stat; Blue/Red infobox; Rift Scuttler infobox).
+# Level scaling (WIKI Template:Jungle monster stat; Blue/Red and Rift Scuttler infoboxes).
 AD_MULT = (1.0, 1.0, 1.1, 1.15, 1.2, 1.25, 1.35, 1.45, 1.55, 1.65, 1.8, 1.95, 2.1, 2.25, 2.4, 2.6, 2.8, 3.0)
 XP_MULT = (1.0, 1.0, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5)          # capped at monster level 8 (V14.10)
 CRAB_GOLD_MULT = (1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2)
@@ -77,7 +56,7 @@ CAMP_NAMES = ("Order Blue", "Order Red", "Order OwlBear", "Order Wolves", "Order
 CAMP_TYPE = (CAMP_BLUE, CAMP_RED, CAMP_GROMP, CAMP_WOLVES, CAMP_RAPTORS, CAMP_KRUGS) * 2 + (CAMP_SCUTTLE,) * 2
 FIRST_SPAWN = {CAMP_BLUE: 55.0, CAMP_RED: 55.0, CAMP_WOLVES: 55.0, CAMP_RAPTORS: 55.0,   # PATCH 26.1
                CAMP_GROMP: 67.0, CAMP_KRUGS: 67.0, CAMP_SCUTTLE: 175.0}
-RESPAWN = {CAMP_BLUE: 300.0, CAMP_RED: 300.0, CAMP_GROMP: 135.0, CAMP_WOLVES: 135.0,    # WIKI (26.1 Swiftplay
+RESPAWN = {CAMP_BLUE: 300.0, CAMP_RED: 300.0, CAMP_GROMP: 135.0, CAMP_WOLVES: 135.0,    # WIKI (Swiftplay's
            CAMP_RAPTORS: 135.0, CAMP_KRUGS: 135.0, CAMP_SCUTTLE: 150.0}                # 270/120 is not SR)
 LEASH = {CAMP_BLUE: 650.0, CAMP_RED: 650.0, CAMP_GROMP: 450.0, CAMP_WOLVES: 650.0,     # WIKI infoboxes
          CAMP_RAPTORS: 650.0, CAMP_KRUGS: 650.0, CAMP_SCUTTLE: 1e9}
@@ -111,15 +90,14 @@ CRAB_CC_MULT = 2.0              # WIKI -100% tenacity (CC durations doubled)
 # ---- rewards / buffs -----------------------------------------------------------------------------
 CREST_DURATION = 120.0          # WIKI Buff data Crest of Insight / Cinders
 SHRINE_DURATION, SHRINE_RADIUS, SHRINE_SIGHT = 90.0, 500.0, 525.0   # CLIENT 90 s; WIKI est. radii
-SHRINE_POS = ((4400.0, 9600.0), (10500.0, 5170.0))                    # Baron / Dragon river (Scuttler camps, INFERRED-M)
-SHRINE_MS, SHRINE_MS_DURATION = 0.30, 1.5                           # CLIENT effect amounts 0.3 / 2.0? (WIKI 1.5)
+SHRINE_POS = ((4400.0, 9600.0), (10500.0, 5170.0))   # Baron / Dragon river (Scuttler camps, INFERRED-M)
+SHRINE_MS = 0.30                                     # CLIENT; lasts 1.5 s (WIKI)
 QUEST_GOLD, QUEST_XP = 10.0, 10.0           # PATCH 26.1 per large monster after the jungle quest
-QUEST_MS_IN_COMBAT, QUEST_MS_OUT = 0.04, 0.08   # PATCH 26.1 in jungle/river
 
 # ---- Smite (CLIENT SummonerSmite; WIKI Smite) ------------------------------------------------------
 SMITE = 11
 SMITE_START_CD = 15.0           # SUMMONER_SPELLS §1.3 start-of-game cooldown (charges unaffected)
-SMITE_SECOND_CHARGE_AT = 48.0   # WIKI/PATCH 26.1 recharge starts at 0:48 (26.12 bug fix)
+SMITE_SECOND_CHARGE_AT = 48.0   # WIKI/PATCH 26.1 recharge starts at 0:48 (26.12 fix: also while dead)
 SMITE_FLAGS = D.TAG_PROC | D.PROP_NO_DAMAGE_MOD | D.PROP_NO_OMNIVAMP | D.PROP_SUMMONER
 
 # ---- jungle pets (items 1101/1102/1103; CLIENT item data + WIKI Template:Jungle pet info) ----------
@@ -131,7 +109,6 @@ BONUS_TREAT_GOLD = 20.0
 TREAT_XP, FIRST_LARGE_XP = 80.0, 150.0      # WIKI (PuppyControllerBuff TreatXP / FirstMonsterBonusXP)
 COMEBACK_THRESHOLD, COMEBACK_XP = 1.1, 50.0  # WIKI; CLIENT SmiteComebackXP 50
 PET_RADIUS, PET_PERIOD = 650.0, 1.0
-PET_MONSTER_AMP = 0.10                      # PATCH 26.1 (item module packet_amp)
 PET_MONSTER_TAKEN = 0.50                    # PATCH 26.1 junglers take 50% from non-epic monsters
 PET_FLAGS = D.TAG_PET | D.TAG_AOE | D.TAG_PROC | D.PROP_NO_OMNIVAMP | D.PROP_NO_DAMAGE_MOD
 MONSTER_HUNTER_SHARE, MONSTER_HUNTER_GOLD, MONSTER_HUNTER_END = 0.40, 13.0, 840.0
@@ -140,7 +117,7 @@ SCORCH_STACKS_PER_S, SCORCH_MAX = 6.0, 100.0   # CLIENT StacksPerHalfSec 3, Avat
 GUST_DECAY_S = 1.5                              # CLIENT CampMSDuration
 MOSS_OOC_S = 10.0                               # CLIENT AvatarDamageCD
 
-# ---- damage-over-time slots per target (N, 2): 0 Crest of Cinders burn, 1 Scorchclaw burn --------
+# ---- damage over time, slots per target (N, 2) ----------------------------------------------------
 DOT_RED, DOT_SCORCH = 0, 1
 RED_BURN_S, RED_SLOW_S, RED_INSTANCES = 2.0, 3.0, 3     # CLIENT BurnDuration / DebuffDuration; WIKI 3 instances
 SCORCH_BURN_S, SCORCH_TICK = 4.0, 1.0
@@ -155,15 +132,11 @@ def _i(x):
     return jnp.asarray(x, jnp.int32)
 
 
-def client() -> dict:
-    return json.loads(DATA.read_text())
-
-
 # =================================================================================================
 # static table
 # =================================================================================================
 class JungleTable(NamedTuple):
-    """Static jungle layout and per-type stats (host-built; arrays are jnp)."""
+    """Static layout and per-type stats (host-built, jnp arrays)."""
     monster0: int               # world index of slot 0
     n_slots: int
     slot_camp: Any              # (S,) int32
@@ -216,12 +189,11 @@ class JungleTable(NamedTuple):
 
     @property
     def slots(self) -> slice:
-        """World unit slots of the jungle block."""
         return slice(self.monster0, self.monster0 + self.n_slots)
 
 
 def _windup_frac(rec: dict) -> float:
-    """Attack windup as a fraction of the attack period (client cast/total or 0.3 + offset)."""
+    """Windup as a fraction of the attack period (client cast/total, else 0.3 + offset)."""
     tot, cast = rec.get("attack_total_time"), rec.get("attack_cast_time")
     if tot and cast:
         return float(cast) / float(tot)
@@ -236,10 +208,9 @@ def _missile(rec: dict) -> float:
 
 
 def build_table(monster0: int = 0, data: dict | None = None) -> JungleTable:
-    """Static table for ``world.config.build_config`` (``monster0`` = world index of the first
-    monster slot). 38 slots: per side Blue, Red, Gromp, 3 wolves, 6 raptors, Ancient Krug + Krug
-    + 4 Mini-Krug reserve slots (6 minis: 2 reuse the parent slots); then 2 Scuttlers."""
-    data = client() if data is None else data
+    """38 slots: per side Blue, Red, Gromp, 3 wolves, 6 raptors, Ancient Krug, Krug and 4 Mini-Krug reserve slots
+    (the 6 minis reuse the 2 parent slots), then 2 Scuttlers. ``monster0``: world index of slot 0."""
+    data = json.loads(DATA.read_text()) if data is None else data
     recs = [data["monsters"][c] for c in CHARACTERS]
     t_hp = [r["hp"] for r in recs]
     t_ad = [r["attack_damage"] if r["attack_damage"] is not None else MURKWOLF_MINI_AD for r in recs]
@@ -263,31 +234,30 @@ def build_table(monster0: int = 0, data: dict | None = None) -> JungleTable:
                 offset.append(SPLIT_OFFSETS[j]); home.append((c["x"], c["y"]))
         camp_large.append(large)
     s = len(slot_camp)
-    if s > MAX_JUNGLE_SLOTS:
-        raise RuntimeError(f"jungle needs {s} slots > {MAX_JUNGLE_SLOTS}")
+    if s > JUNGLE_SLOTS:
+        raise RuntimeError(f"jungle needs {s} slots > {JUNGLE_SLOTS}")
     onehot = np.zeros((s, len(CAMP_NAMES)), np.float32)
     onehot[np.arange(s), slot_camp] = 1.0
     ctype = [CAMP_TYPE[k] for k in range(len(CAMP_NAMES))]
     sm = data["smite"]
     dv = sm["data_values"]
     hv = data["monster_kill_heal"]
-    f = lambda v: jnp.asarray(v, jnp.float32)
-    i = lambda v: jnp.asarray(v, jnp.int32)
     return JungleTable(
-        monster0=int(monster0), n_slots=s, slot_camp=i(slot_camp), slot_init_type=i(init_type),
-        slot_parent=i(parent), slot_offset=f(offset), slot_home=f(home),
-        camp_x=f([camps[n]["x"] for n in CAMP_NAMES]), camp_y=f([camps[n]["y"] for n in CAMP_NAMES]),
-        camp_type=i(ctype), camp_side=i([0] * 6 + [1] * 6 + [2] * 2),
-        camp_first=f([FIRST_SPAWN[t] for t in ctype]), camp_respawn=f([RESPAWN[t] for t in ctype]),
-        camp_leash=f([LEASH[t] for t in ctype]), camp_large=i(camp_large), camp_onehot=jnp.asarray(onehot),
-        t_hp=f(t_hp), t_ad=f(t_ad), t_armor=f([r["armor"] for r in recs]), t_mr=f([r["magic_resist"] for r in recs]),
-        t_ms=f([r["move_speed"] for r in recs]), t_aspeed=f([r["attack_speed"] for r in recs]),
-        t_range=f([r["attack_range"] or DEFAULT_ATTACK_RANGE for r in recs]),
-        t_windup_frac=f([_windup_frac(r) for r in recs]), t_missile=f([_missile(r) for r in recs]),
-        t_radius=f([r["gameplay_radius"] for r in recs]), t_gold=f([r["gold"] for r in recs]),
-        t_xp=f([r["xp"] for r in recs]), t_size=i(SIZE), t_curve=i(HP_CURVE),
-        t_bonus_phys=f(BONUS_PHYS_CURRENT), t_bonus_magic=f(BONUS_MAGIC_CURRENT),
-        smite_damage=f([dv["SmiteBaseDamage"], dv["SmiteUpgradedDamage"], dv["Smite2ndUpgradedDamage"]]),
+        monster0=int(monster0), n_slots=s, slot_camp=_i(slot_camp), slot_init_type=_i(init_type),
+        slot_parent=_i(parent), slot_offset=_f(offset), slot_home=_f(home),
+        camp_x=_f([camps[n]["x"] for n in CAMP_NAMES]), camp_y=_f([camps[n]["y"] for n in CAMP_NAMES]),
+        camp_type=_i(ctype), camp_side=_i([0] * 6 + [1] * 6 + [2] * 2),
+        camp_first=_f([FIRST_SPAWN[t] for t in ctype]), camp_respawn=_f([RESPAWN[t] for t in ctype]),
+        camp_leash=_f([LEASH[t] for t in ctype]), camp_large=_i(camp_large), camp_onehot=jnp.asarray(onehot),
+        t_hp=_f(t_hp), t_ad=_f(t_ad), t_armor=_f([r["armor"] for r in recs]),
+        t_mr=_f([r["magic_resist"] for r in recs]),
+        t_ms=_f([r["move_speed"] for r in recs]), t_aspeed=_f([r["attack_speed"] for r in recs]),
+        t_range=_f([r["attack_range"] or DEFAULT_ATTACK_RANGE for r in recs]),
+        t_windup_frac=_f([_windup_frac(r) for r in recs]), t_missile=_f([_missile(r) for r in recs]),
+        t_radius=_f([r["gameplay_radius"] for r in recs]), t_gold=_f([r["gold"] for r in recs]),
+        t_xp=_f([r["xp"] for r in recs]), t_size=_i(SIZE), t_curve=_i(HP_CURVE),
+        t_bonus_phys=_f(BONUS_PHYS_CURRENT), t_bonus_magic=_f(BONUS_MAGIC_CURRENT),
+        smite_damage=_f([dv["SmiteBaseDamage"], dv["SmiteUpgradedDamage"], dv["Smite2ndUpgradedDamage"]]),
         smite_pvp=float(dv["FirstPVPDamage"]), smite_slow=float(dv["SmiteSlowAmount"]),
         smite_slow_duration=float(dv["SmiteSlowDuration"]), smite_cooldown=float(sm["cooldown"]),
         smite_recharge=float(sm["ammo_recharge_time"]), smite_max_ammo=int(sm["max_ammo"]),
@@ -296,15 +266,6 @@ def build_table(monster0: int = 0, data: dict | None = None) -> JungleTable:
         heal_base=float(hv["HealBase"]), heal_per_level=float(hv["HealPerLevel"]), heal_cap=float(hv["BaseHealCap"]),
         mana_base=float(hv["ManaBase"]), mana_per_level=float(hv["ManaPerLevel"]),
         mana_max_mult=float(hv["ManaMaxMult"]), energy_restore=float(hv["EnergyRestore"]))
-
-
-def static_slots(table: JungleTable) -> dict:
-    """Host-side per-slot layout for ``build_config``: kind (KIND_NONE until spawned), team NEUTRAL,
-    sub (initial Monster type, 0 for reserves), x/y (home). Lists of length ``n_slots``."""
-    it = np.asarray(table.slot_init_type)
-    home = np.asarray(table.slot_home)
-    return {"kind": [KIND_NONE] * table.n_slots, "team": [NEUTRAL] * table.n_slots,
-            "sub": [int(max(t, 0)) for t in it], "x": home[:, 0].tolist(), "y": home[:, 1].tolist()}
 
 
 class MonsterStats(NamedTuple):
@@ -323,7 +284,7 @@ class MonsterStats(NamedTuple):
 
 
 def monster_stats(table: JungleTable, mtype, level, first_crab=False) -> MonsterStats:
-    """Stats of a monster of ``mtype`` spawning at camp ``level`` (WIKI level tables)."""
+    """Stats of ``mtype`` spawning at camp ``level`` (WIKI level tables)."""
     t = jnp.clip(_i(mtype), 0, N_TYPES - 1)
     lv = jnp.clip(_i(level), 1, 18)
     lf = lv.astype(jnp.float32)
@@ -345,14 +306,11 @@ def monster_stats(table: JungleTable, mtype, level, first_crab=False) -> Monster
                         table.t_radius[t], _f(gold), _f(xp))
 
 
-# =================================================================================================
-# state
-# =================================================================================================
 class SmiteState(NamedTuple):
     charges: Any                # (C,) float32
     max_charges: Any            # (C,) 1 until 0:48, then 2
     next_charge_at: Any         # (C,) inf when full
-    ready_at: Any               # (C,) 15 s between casts (not hasted)
+    ready_at: Any               # (C,) 15 s between casts, not hasted
 
 
 class PetState(NamedTuple):
@@ -381,7 +339,7 @@ class DotState(NamedTuple):
 
 
 class JungleState(NamedTuple):
-    exists: Any                 # (S,) spawned and not yet dead (jungle bookkeeping)
+    exists: Any                 # (S,) spawned and not yet dead
     mtype: Any                  # (S,) int32 current Monster type
     level: Any                  # (S,) int32 camp level at spawn
     first_crab: Any             # (S,) bool reduced first Scuttler
@@ -435,7 +393,8 @@ def init_jungle(table: JungleTable, n_champions: int, n_units: int, *, seed: int
     return JungleState(
         exists=bs, mtype=jnp.maximum(table.slot_init_type, 0), level=zs + 1, first_crab=bs, spawn_at=fs(jnp.inf),
         spawn_x=fs(0.0), spawn_y=fs(0.0), spawn_level=zs + 1, untargetable_until=fs(0.0),
-        camp_respawn_at=table.camp_first, camp_marked=jnp.zeros((k,), bool), camp_combat=jnp.full((k,), -1e9, jnp.float32),
+        camp_respawn_at=table.camp_first, camp_marked=jnp.zeros((k,), bool),
+        camp_combat=jnp.full((k,), -1e9, jnp.float32),
         camp_engaged=jnp.full((k, c), -1e9, jnp.float32), camp_aggro_start=jnp.zeros((k,), jnp.float32),
         target=zs - 1, aggro=bs, patience=fs(1.0), reset_mode=zs, reset_start=fs(0.0), grace_until=fs(0.0),
         home_since=fs(-1e9), sweep=fs(0.0), last_hit=fs(-1e9), flee_until=fs(-1e9), flee_sign=fs(1.0),
@@ -448,8 +407,7 @@ def init_jungle(table: JungleTable, n_champions: int, n_units: int, *, seed: int
 # 1. spawns
 # =================================================================================================
 class SpawnWrites(NamedTuple):
-    """(S,) per jungle slot; write where ``mask`` (kind KIND_MONSTER, team NEUTRAL, alive, new spawn_seq,
-    spawn_time now, attack/CC timers reset). ``targetable`` comes from ``monster_ai``."""
+    """(S,) fresh neutral monsters where ``mask`` (``unit_write``); ``targetable`` comes from ``monster_ai``."""
     mask: Any
     sub: Any
     x: Any
@@ -468,12 +426,12 @@ class SpawnWrites(NamedTuple):
 
 
 def camp_level(champion_level) -> Any:
-    """WIKI: average champion level, rounded, at spawn time."""
+    """WIKI: average champion level at spawn, rounded."""
     return jnp.clip(jnp.round(jnp.mean(_f(champion_level))), 1, 18).astype(jnp.int32)
 
 
 def spawn_step(state: JungleState, table: JungleTable, *, now, champion_level) -> tuple[JungleState, SpawnWrites]:
-    """Camp first spawns/respawns, the Scuttler cycle and pending Mini-Krug splits (phase 1)."""
+    """Camp spawns and respawns, the Scuttler cycle and pending Mini-Krug splits."""
     now = _f(now)
     lvl = camp_level(champion_level)
     is_crab_camp = table.camp_type == CAMP_SCUTTLE
@@ -489,8 +447,8 @@ def spawn_step(state: JungleState, table: JungleTable, *, now, champion_level) -
     initial_crab = regular & is_crab_camp[camp_of]
     split = (state.spawn_at <= now) & ~state.exists
     mask = (regular | crab | split) & ~state.exists
-    mtype = jnp.where(split & ~regular, Monster.KRUG_MINI, jnp.where(regular | crab, jnp.maximum(table.slot_init_type, 0),
-                                                                     state.mtype)).astype(jnp.int32)
+    mtype = jnp.where(split & ~regular, Monster.KRUG_MINI,
+                      jnp.where(regular | crab, jnp.maximum(table.slot_init_type, 0), state.mtype)).astype(jnp.int32)
     level = jnp.where(split & ~regular, state.spawn_level, lvl).astype(jnp.int32)
     first = jnp.where(mask, initial_crab, state.first_crab)
     st = monster_stats(table, mtype, level, first)
@@ -506,8 +464,10 @@ def spawn_step(state: JungleState, table: JungleTable, *, now, champion_level) -
         camp_respawn_at=jnp.where(due_camp, jnp.inf, state.camp_respawn_at).astype(jnp.float32),
         camp_marked=jnp.where(fresh_camp, False, state.camp_marked),
         target=put(-1, state.target).astype(jnp.int32), aggro=put(False, state.aggro),
-        patience=put(1.0, state.patience).astype(jnp.float32), reset_mode=put(NO_RESET, state.reset_mode).astype(jnp.int32),
-        last_hit=put(-1e9, state.last_hit).astype(jnp.float32), flee_until=put(-1e9, state.flee_until).astype(jnp.float32),
+        patience=put(1.0, state.patience).astype(jnp.float32),
+        reset_mode=put(NO_RESET, state.reset_mode).astype(jnp.int32),
+        last_hit=put(-1e9, state.last_hit).astype(jnp.float32),
+        flee_until=put(-1e9, state.flee_until).astype(jnp.float32),
         crab_respawn_at=jnp.where(crab_due, jnp.inf, state.crab_respawn_at).astype(jnp.float32), key=key)
     w = SpawnWrites(mask, mtype, _f(x), _f(y), st.hp, st.radius, st.armor, st.magic_resist, st.attack_damage,
                     st.attack_range, st.attack_speed, st.move_speed, st.windup, st.missile_speed, level)
@@ -515,7 +475,7 @@ def spawn_step(state: JungleState, table: JungleTable, *, now, champion_level) -
 
 
 def unit_write(table: JungleTable, w: SpawnWrites, n_units: int) -> UnitWrite:
-    """``SpawnWrites`` as a world ``UnitWrite``: fresh camp monsters (neutral, full health)."""
+    """``SpawnWrites`` as a world ``UnitWrite`` (neutral, full health)."""
     s = table.n_slots
     full = lambda v: jnp.zeros((n_units,), jnp.asarray(v).dtype).at[table.slots].set(v)    # noqa: E731
     mask = full(w.mask)
@@ -556,13 +516,10 @@ def _camp_any(table, mask_s):
 
 def monster_ai(state: JungleState, table: JungleTable, units: WorldUnits, att: AttackState, *, now, dt,
                damage_events) -> tuple[JungleState, MonsterAI]:
-    """Monster aggro, target selection, patience/leash resets, returning home, camp group aggro,
-    marked-for-death and the Scuttler's patrol/flee (phase 4).
+    """Aggro, targets, patience/leash resets, returning home, marked-for-death, the Scuttler's patrol/flee.
 
-    ``damage_events[i, j]``: i damaged j last tick (``ModernState.prev.damage_matrix``). Aggro comes
-    only from champion damage on any camp member (the whole camp aggroes). Targets: the nearest
-    champion that damaged the camp during this aggro episode (straight-line, INFERRED-M for the
-    client's path distance), regardless of vision.
+    ``damage_events[i, j]``: i damaged j last tick. Champion damage on any member aggroes the whole camp; the
+    target is the nearest champion that damaged the camp this episode (straight line, INFERRED-M), seen or not.
     """
     now, dt = _f(now), _f(dt)
     idx = _slot_idx(table)
@@ -577,7 +534,8 @@ def monster_ai(state: JungleState, table: JungleTable, units: WorldUnits, att: A
     d_home = jnp.sqrt((px - cx) ** 2 + (py - cy) ** 2)
     is_crab = state.mtype == Monster.SCUTTLE
     dmg = jnp.asarray(damage_events, bool)
-    champ_ok = jnp.asarray(units.alive)[:c] & jnp.asarray(units.targetable)[:c] & (jnp.asarray(units.kind)[:c] == KIND_CHAMPION)
+    champ_ok = jnp.asarray(units.alive)[:c] & jnp.asarray(units.targetable)[:c] \
+        & (jnp.asarray(units.kind)[:c] == KIND_CHAMPION)
     hit = dmg[:c][:, idx].T & alive[:, None]                                       # (S, C)
     hit_any = jnp.any(hit, axis=1)
     hits_champ = jnp.any(dmg[idx][:, :c], axis=1) & alive
@@ -700,8 +658,8 @@ def monster_ai(state: JungleState, table: JungleTable, units: WorldUnits, att: A
 
 
 def _clear_camps(state: JungleState, table: JungleTable, exists, now) -> JungleState:
-    """Update ``exists`` and start the respawn timer of camps whose last member is gone (no
-    pending Mini-Krug spawns). The Scuttler cycle is handled separately."""
+    """Set ``exists``; start the respawn timer of non-Scuttler camps whose last member (incl. pending
+    Mini-Krugs) is gone."""
     was = _camp_any(table, state.exists | jnp.isfinite(state.spawn_at))
     still = _camp_any(table, exists | jnp.isfinite(state.spawn_at))
     cleared = was & ~still & (table.camp_type != CAMP_SCUTTLE)
@@ -722,14 +680,11 @@ def holder_taken_mult(state: JungleState, n_units: int) -> Any:
 
 def monster_attack_packets(state: JungleState, table: JungleTable, units: WorldUnits,
                            launch: AttackLaunch) -> tuple[D.Packets, D.Packets]:
-    """``(main, bonus_magic)`` packets (S,) for jungle-monster basic attacks launched now.
+    """``(main, bonus_magic)`` packets (S,) for monster basic attacks launched now.
 
-    Main: AD (level-scaled at spawn, read from ``units.attack_damage``) + Blue/Red 5%, Greater
-    Wolf/Crimson Raptor/Ancient Krug 3% of the target's current HP, PHYSICAL, ``TAG_BASIC_ATTACK``
-    (no life steal). For ranged monsters (Gromp 1800, Crimson Raptor 750 missile speed) the world
-    sends ``main`` raw/dtype/flags on its missile. ``bonus_magic``: Gromp's 5% current HP magic,
-    emitted at launch (INFERRED-M: one tick-early vs the missile impact). Jungle-item holders take
-    50% (scaled raw: a multiplicative received modifier).
+    Main: AD + ``t_bonus_phys`` of the target's current HP, physical (ranged monsters carry it on their
+    missile). ``bonus_magic``: Gromp's current-HP magic, emitted at launch (INFERRED-M). Jungle-item holders
+    take 50% (scaled raw).
     """
     idx = _slot_idx(table)
     n = units.x.shape[0]
@@ -769,8 +724,8 @@ def pet_stage(state: JungleState) -> Any:
 
 
 def _smiteable(state: JungleState, table: JungleTable, units: WorldUnits, team, stage):
-    """(C, N) valid Smite targets: large/medium (incl. epic) monsters, enemy lane minions; enemy
-    champions after the first evolution (CLIENT mRequiredUnitTags; WIKI)."""
+    """(C, N): large/medium (incl. epic) monsters, enemy minions, and enemy champions after the first
+    evolution (CLIENT mRequiredUnitTags; WIKI)."""
     n = units.x.shape[0]
     kind = jnp.asarray(units.kind)
     sub = jnp.asarray(units.sub, jnp.int32)
@@ -788,18 +743,12 @@ def _smiteable(state: JungleState, table: JungleTable, units: WorldUnits, team, 
 
 def smite_step(state: JungleState, table: JungleTable, units: WorldUnits, request: CastOrder, spells, *, now,
                summoner_haste, alive) -> tuple[JungleState, SmiteOut]:
-    """Smite charges/recharge and casts (phase 3, next to ``champions.summoners.step``, which
-    ignores Smite requests). ``request`` is the summoner CastOrder (slot 0/1 = D/F of ``spells``
-    (C, 2), the loadout). Casts while disabled (CLIENT canCastWhileDisabled), not while dead.
+    """Smite charges, recharge and casts (``champions.summoners.step`` ignores Smite requests).
 
-    * Charges: 1 at start; max 2 from 0:48 when the recharge starts; 90 s recharge hasted by
-      summoner haste (``haste`` read at recharge start, INFERRED-M); 15 s between casts, not
-      hasted; first cast possible at 0:15 (start-of-game cooldown, INFERRED-M).
-    * Damage (TRUE, proc, no damage modifiers/omnivamp): 600 / 1000 (15 treats) / 1400 (35 treats)
-      to monsters and lane minions; Primal Smite also hits other monsters within 210 (CLIENT
-      castRadius, AoESmiteRatio 1). Champions (after 15 treats): 40 true + 20% slow for 2 s.
-    * Range 500 edge to edge (castRangeUseBoundingBoxes); with no valid unit under the request
-      the nearest smiteable monster within 125 of the cursor is taken (CLIENT forgiveness).
+    ``request`` is the summoner CastOrder (slot 0/1 of ``spells`` (C, 2)); casts while disabled, not dead.
+    Charges: 1 at start, 2 from 0:48; recharge hasted by summoner haste (INFERRED-M). Damage 600/1000/1400 by
+    pet stage; Primal Smite also hits monsters around the target; champions take 40 + slow. Range is edge to
+    edge; with no valid unit under the request the nearest monster within the forgiveness radius is taken.
     """
     now = _f(now)
     c = state.blue_until.shape[0]
@@ -807,7 +756,7 @@ def smite_step(state: JungleState, table: JungleTable, units: WorldUnits, reques
     sm = state.smite
     haste = _f(summoner_haste) * jnp.ones((c,), jnp.float32)
     rech = table.smite_recharge * 100.0 / (100.0 + haste)
-    # Second charge unlocks at 0:48 and starts recharging (26.12 fix: also when dead).
+    # Second charge unlocks at 0:48 and starts recharging.
     unlock = (sm.max_charges < table.smite_max_ammo) & (now >= SMITE_SECOND_CHARGE_AT)
     max_c = jnp.where(unlock, float(table.smite_max_ammo), sm.max_charges)
     nxt = jnp.where(unlock & (sm.charges < max_c), SMITE_SECOND_CHARGE_AT + rech, sm.next_charge_at)
@@ -904,26 +853,16 @@ def moss_shield(level) -> Any:
     return 200.0 + 20.0 * jnp.maximum(lv - 10.0, 0.0)
 
 
-def pet_type_from_inventory(own) -> Any:
-    """(C,) PET_* from ``items.inventory.owned_counts`` (C, I)."""
-    out = jnp.zeros((own.shape[0],), jnp.int32)
-    for iid, p in PET_ITEMS.items():
-        out = jnp.where(own[:, catalog().row(iid)] > 0, p, out)
-    return out
-
-
 def _dot_ticks(dots: DotState, kind: int, now, n):
     due = (dots.next_tick[:, kind] <= now + 1e-4) & (dots.next_tick[:, kind] <= dots.until[:, kind] + 1e-4)
     pk = D.packets(due & (dots.src[:, kind] >= 0), jnp.maximum(dots.src[:, kind], 0), jnp.arange(n),
                    jnp.where(due, dots.per_tick[:, kind], 0.0), TRUE, DOT_FLAGS)
-    period = 1.0
-    nt = jnp.where(due, dots.next_tick[:, kind] + period, dots.next_tick[:, kind])
+    nt = jnp.where(due, dots.next_tick[:, kind] + 1.0, dots.next_tick[:, kind])
     return pk, dots._replace(next_tick=dots.next_tick.at[:, kind].set(nt))
 
 
 def gust_bonus_ms(state: JungleState, now) -> Any:
-    """(C,) Gustwalker's Gait MS fraction at ``now`` from the pet state (``combat_effects`` latches the
-    brush entry; the world reads this at MOVE, one tick after the entry)."""
+    """(C,) Gustwalker's Gait MS at ``now``; the brush entry latched by ``combat_effects`` is read at MOVE."""
     pet = state.pet
     gust = (pet_stage(state) >= 2) & (pet.ptype == PET_GUSTWALKER)
     return jnp.where(gust, pet.gust_peak * jnp.clip(1.0 - (_f(now) - pet.gust_t0) / GUST_DECAY_S, 0.0, 1.0), 0.0)
@@ -931,20 +870,10 @@ def gust_bonus_ms(state: JungleState, now) -> Any:
 
 def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ctx, *, attack_hit, attack_target,
                    damaged_champion=None, in_brush=None) -> tuple[JungleState, JungleEffects]:
-    """Per-tick jungle combat effects (phase 6, merge ``packets`` into the DAMAGE pass, ``cc`` into
-    CC, ``heal``/``shield`` into the heal/shield effects, ``bonus_ms`` into champion move speed).
+    """Crest of Cinders on-hit slow and burn, burn ticks, pet attacks and heals, bonus treats and the evolution
+    buffs (Scorchclaw embers on ``damaged_champion``, Gustwalker on entering ``in_brush``, Mosstomper shield).
 
-    * Crest of Cinders: champion basic-attack hits (``attack_hit``/``attack_target`` (C,), on-hit,
-      incl. ranged arrivals) slow 10/15/25% (ranged half) for 3 s and burn 15 (+3/level from 6)
-      true over 3 instances (on hit, +1 s, +2 s); hits on a burning target only refresh it.
-    * Pets (holders of 1101-1103): every 1 s while a jungle monster within 650 targets the holder,
-      the pet deals ``pet_damage`` true (AoE/pet, no omnivamp) to each such monster, healing the
-      holder ``pet_heal`` (per pet attack). Bonus treats are stored every 60 s (90 s adult).
-    * Evolution buffs (35 treats): Scorchclaw embers (6/s, max 100, refilled by large kills;
-      ``damaged_champion`` (C,) int32 enemy champion the holder damaged this tick, -1 none:
-      consumes them to burn the target and enemies within 250 for 5% max HP true over 4 s and slow
-      30% for 3 s, decay not modelled), Gustwalker 30% MS decaying over 1.5 s on entering brush
-      (``in_brush`` (C,) optional), Mosstomper shield after 10 s out of combat.
+    ``attack_hit``/``attack_target`` (C,) are champion basic-attack hits this tick (ranged arrivals included).
     """
     now = _f(ctx.now)
     c = state.blue_until.shape[0]
@@ -957,7 +886,7 @@ def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ct
     tkind = jnp.asarray(units.kind)[ti]
     hostile = (tgt >= 0) & (jnp.asarray(units.team)[ti] != ctx.team) & jnp.asarray(units.alive)[ti] \
         & ((tkind == KIND_CHAMPION) | (tkind == KIND_MINION) | (tkind == KIND_MONSTER))
-    # ---- Crest of Cinders on-hit --------------------------------------------------------------
+    # ---- Crest of Cinders on-hit: slow, burn over 3 instances; hits on a burning target only refresh ----
     red_on = hit & hostile & (state.red_until > now)
     on = jnp.zeros((c, n), bool).at[jnp.arange(c), ti].set(red_on)                          # (C, N)
     any_on = jnp.any(on, axis=0)
@@ -975,7 +904,7 @@ def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ct
     slow = jnp.where(on, red_slow(ctx.level, ctx.is_ranged)[:, None], 0.0)
     slow_d = jnp.where(on, RED_SLOW_S, 0.0)
     red_pk, dots = _dot_ticks(dots, DOT_RED, now, n)
-    # ---- pets ---------------------------------------------------------------------------------
+    # ---- pets: every second, hit each nearby monster targeting the holder ----
     ptype = pet.ptype
     holder = (ptype > 0) & jnp.asarray(ctx.alive, bool)
     idx = _slot_idx(table)
@@ -999,7 +928,7 @@ def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ct
     store = (ptype > 0) & (now >= nb)
     bonus = jnp.where(store, pet.bonus + 1, pet.bonus)
     nb = jnp.where(store, nb + period, nb)
-    # ---- evolution buffs ----------------------------------------------------------------------
+    # ---- evolution buffs (Scorchclaw slow decay not modelled) ----
     adult = (stage >= 2)
     scorch = adult & (ptype == PET_SCORCHCLAW)
     embers = jnp.where(scorch, jnp.minimum(pet.embers + SCORCH_STACKS_PER_S * ctx.dt, SCORCH_MAX), 0.0)
@@ -1016,7 +945,8 @@ def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ct
     sc_per = 0.05 * _f(units.max_hp) * SCORCH_TICK / SCORCH_BURN_S
     dots = DotState(
         until=dots.until.at[:, DOT_SCORCH].set(jnp.where(sc_on, now + SCORCH_BURN_S, dots.until[:, DOT_SCORCH])),
-        next_tick=dots.next_tick.at[:, DOT_SCORCH].set(jnp.where(sc_on, now + SCORCH_TICK, dots.next_tick[:, DOT_SCORCH])),
+        next_tick=dots.next_tick.at[:, DOT_SCORCH].set(jnp.where(sc_on, now + SCORCH_TICK,
+                                                                 dots.next_tick[:, DOT_SCORCH])),
         per_tick=dots.per_tick.at[:, DOT_SCORCH].set(jnp.where(sc_on, sc_per, dots.per_tick[:, DOT_SCORCH])),
         src=dots.src.at[:, DOT_SCORCH].set(jnp.where(sc_on, sc_src, dots.src[:, DOT_SCORCH])))
     sc_pk, dots = _dot_ticks(dots, DOT_SCORCH, now, n)
@@ -1034,8 +964,8 @@ def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ct
     moss = adult & (ptype == PET_MOSSTOMPER) & jnp.asarray(ctx.alive, bool)
     in_combat = jnp.asarray(ctx.in_combat, bool)
     last_combat = jnp.where(in_combat, now, pet.last_combat)
-    # ``in_combat`` covers the 5 s after the last combat event, so 10 s out of combat is 5 s after
-    # it turns off (INFERRED-M); regrant only if a fight happened since the last grant.
+    # ``in_combat`` lasts 5 s past the last combat event, so 10 s out of combat is 5 s after it ends
+    # (INFERRED-M); regrant only after a fight since the last grant.
     ooc_long = ~in_combat & ((now - last_combat) >= MOSS_OOC_S - 5.0) & (pet.moss_granted_at < last_combat)
     grant = moss & (pet.moss_pending | ooc_long)
     shield = jnp.where(grant, moss_shield(ctx.level), 0.0)
@@ -1053,8 +983,7 @@ def combat_effects(state: JungleState, table: JungleTable, units: WorldUnits, ct
 # 6. deaths and rewards
 # =================================================================================================
 class JungleRewards(NamedTuple):
-    """Per champion (C,) unless noted; route gold/XP through the economy (GV accrual: monster gold
-    counts; XP gets the role-quest XP modifiers like minion XP)."""
+    """(C,) unless noted; gold and XP go through the economy."""
     gold: Any
     xp: Any
     heal: Any                   # jungle-item kill heal (route through heal power)
@@ -1073,16 +1002,9 @@ class JungleRewards(NamedTuple):
 def death_step(state: JungleState, table: JungleTable, units: WorldUnits, *, now, died, killer, avg_level,
                champion_level, hp, max_hp, mana, max_mana, champion_died=None, champion_killer=None,
                champion_takedowns=None, minion_gold=None) -> tuple[JungleState, JungleRewards]:
-    """Jungle deaths of this tick (phase 9).
-
-    ``died`` (N,) and ``killer`` (N,) int32 (killing-blow source, -1) as computed by the step.
-    ``avg_level`` () decimal average champion level; ``champion_level`` (C,) decimal levels;
-    ``hp/max_hp/mana/max_mana`` (C,) for the kill heal. Optional: ``champion_died`` (C,) bool and
-    ``champion_killer`` (C,) int32 (champion unit or -1) for Crest transfers; ``champion_takedowns``
-    (C,) int32 (pet treats); ``minion_gold`` (C,) minion gold earned this tick (Monster Hunter).
-
-    Rewards go to the champion landing the killing blow only (WIKI Experience: "full bounty to the
-    killer"); monsters killed by non-champions or despawned give nothing.
+    """Monster deaths this tick: rewards to the champion landing the killing blow only (WIKI), crest grants and
+    transfers (``champion_died``/``champion_killer``), pet treats, the Scuttler shrine and cycle, Krug splits and
+    camp timers. ``died``/``killer`` (N,); levels are decimal; ``hp``..``max_mana`` (C,) size the kill heal.
     """
     now = _f(now)
     idx = _slot_idx(table)
@@ -1096,7 +1018,7 @@ def death_step(state: JungleState, table: JungleTable, units: WorldUnits, *, now
     gold = jnp.sum(jnp.where(by, st.gold[:, None], 0.0), axis=0)
     xp = jnp.sum(jnp.where(by, st.xp[:, None], 0.0), axis=0)
     n_large = jnp.sum(large, axis=0).astype(jnp.int32)
-    # ---- jungle item --------------------------------------------------------------------------
+    # ---- jungle item ----
     pet = state.pet
     holder = pet.ptype > 0
     stage0 = pet_stage(state)
@@ -1136,7 +1058,7 @@ def death_step(state: JungleState, table: JungleTable, units: WorldUnits, *, now
         gust_t0=jnp.where(gust, now, pet.gust_t0).astype(jnp.float32),
         moss_pending=pet.moss_pending | moss_now | (completed & (pet.ptype == PET_MOSSTOMPER)),
         minion_gold=_f(pet.minion_gold + mg), monster_gold=_f(monster_gold))
-    # ---- crests -------------------------------------------------------------------------------
+    # ---- crests ----
     blue_k = by & (state.mtype == Monster.BLUE)[:, None]
     red_k = by & (state.mtype == Monster.RED)[:, None]
     blue_g, red_g = jnp.any(blue_k, axis=0), jnp.any(red_k, axis=0)
@@ -1151,7 +1073,7 @@ def death_step(state: JungleState, table: JungleTable, units: WorldUnits, *, now
         gain_r = jnp.zeros((c,), bool).at[jnp.clip(ck, 0, c - 1)].max(had_r & to)
         blue_until = jnp.where(cd, -1.0, jnp.where(gain_b, now + CREST_DURATION, blue_until))
         red_until = jnp.where(cd, -1.0, jnp.where(gain_r, now + CREST_DURATION, red_until))
-    # ---- Scuttler shrine and cycle --------------------------------------------------------------
+    # ---- Scuttler shrine and cycle ----
     crab_d = d & (state.mtype == Monster.SCUTTLE)
     river = jnp.where(table.slot_camp == 12, 0, 1)
     crab_by = by & (state.mtype == Monster.SCUTTLE)[:, None]
@@ -1165,10 +1087,10 @@ def death_step(state: JungleState, table: JungleTable, units: WorldUnits, *, now
     initial_dead = jnp.sum(crab_d & state.first_crab).astype(jnp.int32)
     left = state.crab_initial_left - initial_dead
     later_dead = n_crab - initial_dead
-    crab_respawn = jnp.where((initial_dead > 0) & (left <= 0) & (state.crab_initial_left > 0), now + RESPAWN[CAMP_SCUTTLE],
-                             state.crab_respawn_at)
+    crab_respawn = jnp.where((initial_dead > 0) & (left <= 0) & (state.crab_initial_left > 0),
+                             now + RESPAWN[CAMP_SCUTTLE], state.crab_respawn_at)
     crab_respawn = jnp.where(later_dead > 0, now + RESPAWN[CAMP_SCUTTLE], crab_respawn)
-    # ---- Krug splits, marked for death, camp timers -------------------------------------------
+    # ---- Krug splits, marked for death, camp timers ----
     splitting = d & ((state.mtype == Monster.KRUG) | (state.mtype == Monster.KRUG_MEDIUM))
     par = table.slot_parent
     pi = jnp.clip(par, 0, table.n_slots - 1)
@@ -1203,10 +1125,8 @@ class BuffStats(NamedTuple):
 
 def buff_stats(state: JungleState, *, now, level, max_mana, max_hp, x, y, team, champion_combat_recent,
                dealt_damage_recent=None, shrine_pos=None) -> BuffStats:
-    """Crest stats for the STATS phase (CLIENT CrestoftheAncientGolem / BlessingoftheLizardElder
-    calculations) and the Speed Shrine bonus (``shrine_pos`` (2, 2): river shrine centres, default
-    the Scuttler camp markers - INFERRED-M; the shrine also grants SHRINE_SIGHT vision to its team:
-    feed ``state.shrine_team/shrine_until`` to ``vision`` as a ward-like source)."""
+    """Crest stats (CLIENT CrestoftheAncientGolem / BlessingoftheLizardElder) and the Speed Shrine bonus near
+    ``shrine_pos`` (default ``SHRINE_POS``)."""
     now = _f(now)
     lv = _f(level)
     blue = state.blue_until > now
@@ -1224,9 +1144,8 @@ def buff_stats(state: JungleState, *, now, level, max_mana, max_hp, x, y, team, 
 
 
 def minion_reward_mods(state: JungleState, *, now, champion_level, avg_level) -> tuple[Any, Any]:
-    """``(gold_delta, xp_mult)`` (C,) on lane-minion rewards for jungle-item holders (WIKI):
-    XP -70% at 0:00 shrinking linearly to 0 at 20:00 unless 1.5+ levels behind; Monster Hunter
-    (minion gold > 40% of monster gold, before 14:00): -13 gold and -50% XP per minion."""
+    """``(gold_delta, xp_mult)`` (C,) on lane minions for jungle-item holders (WIKI): XP -70% shrinking to 0 at
+    20:00 unless 1.5 levels behind; Monster Hunter (minion gold > 40% of monster gold before 14:00): -13 g, -50% XP."""
     now = _f(now)
     holder = state.pet.ptype > 0
     behind = (_f(avg_level) - _f(champion_level)) >= MINION_XP_BEHIND
@@ -1237,21 +1156,9 @@ def minion_reward_mods(state: JungleState, *, now, champion_level, avg_level) ->
     return jnp.where(hunter, -MONSTER_HUNTER_GOLD, 0.0).astype(jnp.float32), _f(mult)
 
 
-def quest_jungle_ms(state: JungleState, *, in_jungle, in_combat) -> Any:
-    """(C,) jungle-quest MS fraction in the jungle/river (PATCH 26.1: 4%, 8% out of combat)."""
-    done = pet_stage(state) >= 2
-    return jnp.where(done & jnp.asarray(in_jungle, bool),
-                     jnp.where(jnp.asarray(in_combat, bool), QUEST_MS_IN_COMBAT, QUEST_MS_OUT), 0.0).astype(jnp.float32)
-
-
-def pet_mana_regen(state: JungleState, *, level, mana, max_mana, in_jungle) -> Any:
-    """(C,) mana/s in jungle or river for holders (WIKI): (8% + L*8*0.1/1.3%) of missing mana."""
-    pct = 0.08 + _f(level) * 8.0 * 0.1 / 1.3 / 100.0
-    return jnp.where((state.pet.ptype > 0) & jnp.asarray(in_jungle, bool),
-                     pct * jnp.maximum(_f(max_mana) - _f(mana), 0.0), 0.0).astype(jnp.float32)
-
-
 def latch_pets(state: JungleState, own) -> JungleState:
-    """Adopt pet types from the inventory (keep them after the egg is consumed)."""
-    p = pet_type_from_inventory(own)
+    """Adopt pet types from the owned-item counts (C, I); they persist after the egg is consumed."""
+    p = jnp.zeros((own.shape[0],), jnp.int32)
+    for iid, pet in PET_ITEMS.items():
+        p = jnp.where(own[:, catalog().row(iid)] > 0, pet, p)
     return state._replace(pet=state.pet._replace(ptype=jnp.where(p > 0, p, state.pet.ptype).astype(jnp.int32)))

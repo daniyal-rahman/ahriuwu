@@ -1,12 +1,5 @@
-"""Wards, trinkets, stealth and true sight (``wards`` + ``vision``).
-
-Symptom checks on real Map11 places by the top lane (same fixtures as
-``test_vision``): a ward in the lane brush shows an enemy hiding in it,
-an enemy Control Ward or Oracle sweep blinds that ward and shows it, trinket
-charges come back on the client schedule, wards die to a fixed number of hits
-and pay the killer, and the vision runes act on real wards. The world here is
-2 champions + the 16 ward slots; ``world.tick.step`` is never compiled.
-"""
+"""Wards, trinkets, stealth and true sight (``wards`` + ``vision``) at real top-lane places (the ``test_vision``
+fixtures), over 2 champions + the 16 ward slots."""
 from functools import lru_cache
 
 import jax

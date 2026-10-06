@@ -1,13 +1,10 @@
-"""Patch-26.19 epic objectives: Voidgrubs, Rift Herald, Elemental Drakes, Dragon Soul,
-Elder Dragon, Baron Nashor, their monster AI, team buffs, rewards and the Elemental Rift.
+"""Patch-26.19 epic objectives: Voidgrubs, Rift Herald, Drakes, Dragon Soul, Elder, Baron, their AI, team buffs,
+rewards and the Elemental Rift.
 
-Rules and evidence: docs/modern/OBJECTIVES.md; values: ``modern/data/26.19/objectives_client.json``
-(built by ``data/build_modern_objectives.py``; every value carries CLIENT / WIKI / PATCH /
-INFERRED-M / INFERRED-L). Atakhan, Blood Roses and Feats of Strength do not exist on 26.19
-(removed in 26.1).
-
-This module owns the world's 8-slot epic block (``world.config.Layout``); ``ObjectiveTable.slot0``
-is the world index of local slot 0. Local slot layout:
+Rules: docs/modern/OBJECTIVES.md (integration contract §9); values: ``data/26.19/objectives_client.json``
+(``data/build_objectives.py``, each tagged CLIENT / WIKI / PATCH / INFERRED-M / INFERRED-L). No Atakhan, Blood
+Roses or Feats of Strength on 26.19. Owns the world's 8-slot epic block (``ObjectiveTable.slot0`` = world index of
+local slot 0):
 
     0      pit monster: Voidgrub A (8:00-14:45), Rift Herald (15:00-19:45), Baron Nashor (20:00+)
     1, 2   Voidgrubs B, C
@@ -15,17 +12,8 @@ is the world index of local slot 0. Local slot layout:
     4      Rift Herald Mercenary (team-owned, summoned with the Eye of the Herald)
     5..7   Voidmites: camp mites (neutral) or Hunger of the Void summons (team-owned)
 
-Like the other subsystems these are pure functions; the step owns the world arrays
-(integration contract: OBJECTIVES.md §9):
-
-    INPUT   objectives_step       spawns/despawns/level-ups (writes), AI targets and moves,
-                                  ability / DoT / execute / soul packets, monster CC,
-                                  heals/shields, recall and terrain variant
-    STATS   team_buff_stats       ItemStats from Dragon Slayer, souls, Hand of Baron
-    AI      baron_minion_buffs    Hand of Baron minion empowerment (range, AD, AS, MS floor)
-    ATTACK  objectives_attack     raw damage of objective basic attacks + on-attack riders
-    DAMAGE  objectives_packet_mods  Ancient Grudge, Baron's Gaze, Baron-minion DR, Chemtech soul
-    DEATH   objectives_after_damage rewards, buffs, schedules, DoT/execute/soul triggers
+Phases: ``objectives_step`` (OBJ), ``team_buff_stats`` (STATS), ``baron_minion_buffs`` (AI),
+``objectives_attack`` (ATTACK), ``objectives_packet_mods`` (DAMAGE), ``objectives_after_damage`` (DEATH).
 """
 from __future__ import annotations
 
@@ -52,8 +40,7 @@ N_SLOTS = 8
 S_PIT, S_GRUB_B, S_GRUB_C, S_DRAGON, S_MERC = 0, 1, 2, 3, 4
 S_MITES = (5, 6, 7)
 
-# Objective monster types (local ``mtype``); world ``sub`` = SUB_BASE + mtype keeps them disjoint
-# from jungle.camps's camp ids.
+# Local ``mtype``; world ``sub`` = SUB_BASE + mtype, disjoint from jungle.camps.Monster.
 T_NONE, T_GRUB, T_HERALD, T_BARON, T_DRAKE, T_ELDER, T_MERC, T_MITE, T_ALLY_MITE = range(9)
 N_TYPES = 9
 SUB_BASE = 64
@@ -70,18 +57,15 @@ INF = jnp.float32(1e9)
 
 
 def _growth(level) -> Any:
-    """Champion-style per-level growth (L-1)(0.7025 + 0.0175(L-1)); matches the 26.1 ranges
-    (Baron 16300+170g: 17,792 at 11, 19,190 at 18)."""
+    """Champion-style growth (L-1)(0.7025 + 0.0175(L-1)); matches 26.1 (Baron 17,792 at 11, 19,190 at 18)."""
     l = jnp.asarray(level, jnp.float32) - 1.0
     return l * (0.7025 + 0.0175 * l)
 
 
-# ---- static table ----------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class ObjectiveTable:
-    """Host-side constants (closed over by jit). Per-type arrays are indexed by ``mtype`` (9,)
-    and per-element arrays by element (8,: 0 unused, 1..6 drakes, 7 Elder)."""
+    """Host constants. Per-type arrays are indexed by ``mtype`` (9,), per-element ones by element (8,: 1..6
+    drakes, 7 Elder)."""
     slot0: int
     hp: np.ndarray
     hp_lvl: np.ndarray
@@ -112,13 +96,11 @@ class ObjectiveTable:
 
     @property
     def slots(self) -> slice:
-        """World unit slots of the epic block."""
         return slice(self.slot0, self.slot0 + N_SLOTS)
 
 
 @lru_cache(maxsize=4)
 def load_table(slot0: int, path: str | None = None) -> ObjectiveTable:
-    """``slot0``: world index of objective slot 0 (= first monster slot + 40)."""
     d = json.loads(Path(path or TABLE_PATH).read_text())
     ch, rules = d["characters"], {k: v["value"] for k, v in d["rules"].items()}
     names = {T_GRUB: "sru_horde", T_HERALD: "sru_riftherald", T_BARON: "sru_baron", T_DRAKE: "sru_dragon_fire",
@@ -168,8 +150,6 @@ def load_table(slot0: int, path: str | None = None) -> ObjectiveTable:
                           dragon_pos=(camps["Dragon"]["x"], camps["Dragon"]["y"]),
                           r=rules, buffs=d["shared_spells"])
 
-
-# ---- state -----------------------------------------------------------------------------------
 
 class ObjectiveState(NamedTuple):
     # schedule
@@ -253,8 +233,8 @@ class ObjectiveState(NamedTuple):
 
 
 def init_objectives(table: ObjectiveTable, n_units: int, n_champions: int, key) -> ObjectiveState:
-    """Fresh game state. ``key`` pre-rolls the drake elements (three distinct, the third is the
-    rift element) and the first Baron ability; the Baron form is rolled at his first spawn."""
+    """``key`` pre-rolls three distinct drake elements (the third is the rift element) and the first Baron
+    ability; the Baron form is rolled at his first spawn."""
     c, n, s = n_champions, n_units, N_SLOTS
     k1, k2 = jax.random.split(key)
     perm = jax.random.permutation(k1, jnp.arange(1, 7, dtype=jnp.int32))
@@ -275,7 +255,8 @@ def init_objectives(table: ObjectiveTable, n_units: int, n_champions: int, key) 
         mtype=i(T_NONE, (s,)), level=i(1, (s,)), home=home, aggro=b(False, (s,)), target=i(-1, (s,)),
         patience=f(1, (s,)), soft_until=f(-1e9, (s,)), hard=b(False, (s,)), last_combat=f(-1e9, (s,)),
         cast_until=f(-1e9, (s,)), cast_kind=i(0, (s,)), cast_x=f(0, (s,)), cast_y=f(0, (s,)), cast_target=i(-1, (s,)),
-        swipes=i(0, (s,)), charged=b(False, (s,)), eye_ready=f(0, (s,)), facing=jnp.tile(jnp.asarray([[1.0, 0.0]], jnp.float32), (s, 1)),
+        swipes=i(0, (s,)), charged=b(False, (s,)), eye_ready=f(0, (s,)),
+        facing=jnp.tile(jnp.asarray([[1.0, 0.0]], jnp.float32), (s, 1)),
         attack_count=i(0, (s,)), expire=f(1e9, (s,)), next_wave=f(0, (s,)), self_dmg_rate=f(0, (s,)),
         self_dmg_until=f(-1e9, (s,)), leap_count=i(0, (s,)), leap_done=i(-1, (s,)), damaged_by=f(-1e9, (s, c)),
         pending=b(False, (s,)), owner=i(W.NEUTRAL, (s,)), heal_pending=f(0, (s,)),
@@ -285,11 +266,8 @@ def init_objectives(table: ObjectiveTable, n_units: int, n_champions: int, key) 
         exec_lock=f(-1e9, (n,)), empowered=b(False, (n,)))
 
 
-# ---- outputs ---------------------------------------------------------------------------------
-
 class SlotWrites(NamedTuple):
-    """Rows the step writes into the world arrays for the 8 objective slots (``write`` mask);
-    ``despawn`` frees a slot (kind NONE, alive False). ``relocate`` moves a live unit (dashes)."""
+    """World rows of the 8 slots where ``write``; ``despawn`` frees a slot; ``relocate`` moves a live unit."""
     write: Any
     despawn: Any
     kind: Any
@@ -315,8 +293,7 @@ class SlotWrites(NamedTuple):
 
 
 def unit_write(table: ObjectiveTable, w: SlotWrites, n_units: int) -> W.UnitWrite:
-    """The ``write`` rows of ``SlotWrites`` as a world ``UnitWrite`` (despawns, relocations and heals
-    stay with the caller)."""
+    """The ``write`` rows as a world ``UnitWrite`` (despawns, relocations and heals stay with the caller)."""
     full = lambda v: jnp.zeros((n_units,), jnp.asarray(v).dtype).at[table.slots].set(v)      # noqa: E731
     return W.UnitWrite(mask=full(w.write), new=full(w.write & w.new_seq),
                        **{f: full(getattr(w, f)) for f in W.UNIT_COLUMNS})
@@ -356,7 +333,7 @@ class Rewards(NamedTuple):
 
 
 class ChampInfo(NamedTuple):
-    """Per-champion numbers the soul effects scale with (C,), from the STATS phase."""
+    """(C,) numbers the soul effects scale with, from STATS."""
     level: Any
     bonus_ad: Any
     ap: Any
@@ -373,11 +350,9 @@ class MinionBuffs(NamedTuple):
     missile_speed: Any      # (N,) 0 = unchanged
     attack_speed_mult: Any
     ms_floor: Any           # (N,) minimum move speed (0 none)
-    siege_structure_mult: Any   # (N,) (base_mult, bonus_mult) folded: multiply siege raw vs structures
+    siege_structure_mult: Any   # (N,) multiplier on siege raw vs structures
     splash_radius: Any
 
-
-# ---- helpers ---------------------------------------------------------------------------------
 
 def _world(table: ObjectiveTable):
     return table.slot0 + jnp.arange(N_SLOTS, dtype=jnp.int32)
@@ -396,7 +371,8 @@ def slot_stats(table: ObjectiveTable, mtype, element, level, now) -> dict:
     a = lambda arr: jnp.asarray(arr, jnp.float32)[t]
     g = _growth(level)
     dragon = (t == T_DRAKE) | (t == T_ELDER)
-    hp = jnp.where(dragon, jnp.asarray(table.e_hp)[el] + jnp.asarray(table.e_hp_lvl)[el] * g, a(table.hp) + a(table.hp_lvl) * g)
+    hp = jnp.where(dragon, jnp.asarray(table.e_hp)[el] + jnp.asarray(table.e_hp_lvl)[el] * g,
+                   a(table.hp) + a(table.hp_lvl) * g)
     ad = jnp.where(dragon, jnp.asarray(table.e_ad)[el], a(table.ad) + a(table.ad_lvl) * g)
     aspeed = jnp.where(dragon, jnp.asarray(table.e_aspeed)[el], a(table.aspeed))
     # Hunger of the Void Voidmites: 100% melee-minion HP (26.11), melee-minion AD (INFERRED-L).
@@ -443,16 +419,12 @@ def terrain_variant(obj: ObjectiveState, now) -> Any:
     return variant_index(el, jnp.maximum(obj.baron_form, 0))
 
 
-def baron_buff_active(obj: ObjectiveState, now) -> Any:
-    return jnp.asarray(now) < obj.baron_until
-
-
-def elder_buff_active(obj: ObjectiveState, now) -> Any:
-    return jnp.asarray(now) < obj.elder_until
-
-
 def _dist(ax, ay, bx, by):
     return jnp.sqrt((ax - bx) ** 2 + (ay - by) ** 2)
+
+
+def _xy(units, i):
+    return jnp.stack([units.x[i], units.y[i]])
 
 
 def _structure(kind):
@@ -462,7 +434,7 @@ def _structure(kind):
 # ---- INPUT: spawns, schedule, AI, periodic effects --------------------------------------------
 
 def _spawn_rows(table, obj, units, now, levels, key):
-    """Decide spawns/despawns this tick; returns (obj, writes, spawn mask, despawn mask)."""
+    """Spawns and despawns this tick: (obj, spawn, despawn, pos (8, 2), element)."""
     ws = _world(table)
     alive = units.alive[ws] & (units.kind[ws] == W.KIND_MONSTER)
     r = table.r
@@ -471,15 +443,16 @@ def _spawn_rows(table, obj, units, now, levels, key):
     # Voidgrubs: 3 at 8:00, despawn 14:45 (14:55 in combat).
     grub_spawn = ~obj.grubs_spawned & (now >= r["grubs_spawn"]) & (now < r["grubs_despawn"])
     is_grub = alive & (obj.mtype == T_GRUB)
-    grub_gone = is_grub & ((now >= r["grubs_despawn_in_combat"]) | ((now >= r["grubs_despawn"]) & ~jnp.any(in_combat & is_grub)))
+    grub_gone = is_grub & ((now >= r["grubs_despawn_in_combat"])
+                           | ((now >= r["grubs_despawn"]) & ~jnp.any(in_combat & is_grub)))
     pit_free = pit_free | grub_gone[S_PIT]
-    herald_spawn = ~obj.herald_spawned & (now >= r["herald_spawn"]) & (now < r["herald_despawn"]) & pit_free & ~grub_spawn
+    herald_spawn = ~obj.herald_spawned & (now >= r["herald_spawn"]) & (now < r["herald_despawn"]) & pit_free \
+        & ~grub_spawn
     is_herald = alive & (obj.mtype == T_HERALD)
     herald_gone = is_herald & ((now >= r["herald_despawn_in_combat"]) | ((now >= r["herald_despawn"]) & ~in_combat))
     pit_free = (pit_free & ~herald_spawn) | herald_gone[S_PIT]
     baron_spawn = (now >= obj.baron_next) & pit_free & (now >= r["baron_spawn"])
     dragon_spawn = (now >= obj.dragon_next) & ~alive[S_DRAGON]
-    # Mites expire.
     mite = alive & ((obj.mtype == T_MITE) | (obj.mtype == T_ALLY_MITE))
     mite_gone = mite & (now >= obj.expire)
     despawn = grub_gone | herald_gone | mite_gone
@@ -490,8 +463,8 @@ def _spawn_rows(table, obj, units, now, levels, key):
     form = jnp.where(obj.baron_form >= 0, obj.baron_form, jax.random.randint(key, (), 0, 3).astype(jnp.int32))
     spawn = jnp.zeros((N_SLOTS,), bool).at[S_PIT].set(grub_spawn | herald_spawn | baron_spawn) \
         .at[S_GRUB_B].set(grub_spawn).at[S_GRUB_C].set(grub_spawn).at[S_DRAGON].set(dragon_spawn)
-    mtype = obj.mtype.at[S_PIT].set(jnp.where(grub_spawn, T_GRUB, jnp.where(herald_spawn, T_HERALD,
-                                                                             jnp.where(baron_spawn, T_BARON, obj.mtype[S_PIT]))))
+    mtype = obj.mtype.at[S_PIT].set(jnp.where(grub_spawn, T_GRUB, jnp.where(
+        herald_spawn, T_HERALD, jnp.where(baron_spawn, T_BARON, obj.mtype[S_PIT]))))
     mtype = mtype.at[S_GRUB_B].set(jnp.where(grub_spawn, T_GRUB, mtype[S_GRUB_B]))
     mtype = mtype.at[S_GRUB_C].set(jnp.where(grub_spawn, T_GRUB, mtype[S_GRUB_C]))
     mtype = mtype.at[S_DRAGON].set(jnp.where(dragon_spawn, d_type, mtype[S_DRAGON]))
@@ -515,9 +488,11 @@ def _spawn_rows(table, obj, units, now, levels, key):
         home=jnp.where(spawn[:, None], pos, obj.home),
         aggro=jnp.where(spawn | despawn, False, obj.aggro), target=jnp.where(spawn | despawn, -1, obj.target),
         patience=jnp.where(spawn, 1.0, obj.patience), hard=jnp.where(spawn, False, obj.hard),
-        soft_until=jnp.where(spawn, -INF, obj.soft_until), cast_until=jnp.where(spawn | despawn, -INF, obj.cast_until),
+        soft_until=jnp.where(spawn, -INF, obj.soft_until),
+        cast_until=jnp.where(spawn | despawn, -INF, obj.cast_until),
         swipes=jnp.where(spawn, 0, obj.swipes), charged=jnp.where(spawn, False, obj.charged),
-        attack_count=jnp.where(spawn, 0, obj.attack_count), damaged_by=jnp.where(spawn[:, None], -INF, obj.damaged_by),
+        attack_count=jnp.where(spawn, 0, obj.attack_count),
+        damaged_by=jnp.where(spawn[:, None], -INF, obj.damaged_by),
         next_wave=jnp.where(spawn, 0.0, obj.next_wave), self_dmg_until=jnp.where(spawn, -INF, obj.self_dmg_until))
     return obj, spawn, despawn, pos, element
 
@@ -534,8 +509,9 @@ def _writes_for(table, obj, spawn, despawn, pos, element, team, now, units, leve
                       sub=(SUB_BASE + obj.mtype).astype(jnp.int32), team=team.astype(jnp.int32),
                       x=jnp.where(spawn, pos[:, 0], units.x[ws]), y=jnp.where(spawn, pos[:, 1], units.y[ws]),
                       hp=hp, max_hp=st["hp"], armor=st["armor"], magic_resist=st["mr"], attack_damage=st["ad"],
-                      attack_range=st["arange"], attack_speed=st["aspeed"], move_speed=st["mspeed"], radius=st["radius"], windup=st["windup"],
-                      missile_speed=st["missile"], new_seq=spawn, relocate=jnp.zeros((N_SLOTS,), bool), rx=z, ry=z)
+                      attack_range=st["arange"], attack_speed=st["aspeed"], move_speed=st["mspeed"],
+                      radius=st["radius"], windup=st["windup"], missile_speed=st["missile"], new_seq=spawn,
+                      relocate=jnp.zeros((N_SLOTS,), bool), rx=z, ry=z)
 
 
 def _element_of_dragon(obj):
@@ -547,10 +523,9 @@ def _element_of_dragon(obj):
 def objectives_step(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUnits, *, now, dt, levels,
                     damage_matrix, champ: ChampInfo, last_damaged, ult_cast=None, use_eye=None,
                     key=None) -> tuple[ObjectiveState, StepOut]:
-    """INPUT phase. ``levels`` (C,) champion levels; ``damage_matrix`` (N, N) i damaged j last
-    tick; ``last_damaged`` (C,) last time each champion took damage; ``ult_cast`` (C,) R cast
-    this tick (Cloud Soul); ``use_eye`` (C,) summon the Rift Herald Mercenary; ``key`` PRNG
-    (Baron form). Returns the slot writes and this tick's AI, packets and buff outputs."""
+    """Spawns, AI, periodic packets and soul effects. ``damage_matrix`` (N, N): i damaged j last tick;
+    ``last_damaged`` (C,) last damage taken; ``ult_cast`` (C,) R cast (Cloud Soul); ``use_eye`` (C,) summon the
+    Mercenary; ``key`` rolls the Baron form."""
     now = jnp.asarray(now, jnp.float32)
     c = obj.baron_until.shape[0]
     ws = _world(table)
@@ -568,10 +543,11 @@ def objectives_step(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUn
     who = jnp.argmax(holder_ok)
     obj = obj._replace(eye_until=jnp.where(holder_ok & summon & (jnp.arange(c) == who), -INF, obj.eye_until))
     spawn = spawn.at[S_MERC].set(summon)
-    pos = pos.at[S_MERC].set(jnp.stack([units.x[who], units.y[who]]))
+    pos = pos.at[S_MERC].set(_xy(units, who))
     team = team.at[S_MERC].set(jnp.where(summon, units.team[who], team[S_MERC]))
     obj = obj._replace(owner=obj.owner.at[S_MERC].set(team[S_MERC]))
-    merc_lv = jnp.maximum(jnp.ceil(jnp.mean(levels.astype(jnp.float32)) - 1e-6), r["herald_min_level"]).astype(jnp.int32)
+    merc_lv = jnp.maximum(jnp.ceil(jnp.mean(levels.astype(jnp.float32)) - 1e-6),
+                          r["herald_min_level"]).astype(jnp.int32)
     obj = obj._replace(mtype=obj.mtype.at[S_MERC].set(jnp.where(summon, T_MERC, obj.mtype[S_MERC])),
                        level=obj.level.at[S_MERC].set(jnp.where(summon, merc_lv, obj.level[S_MERC])),
                        leap_count=obj.leap_count.at[S_MERC].set(jnp.where(summon, 0, obj.leap_count[S_MERC])),
@@ -589,14 +565,16 @@ def objectives_step(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUn
     src_grub = jnp.argmax(grub_fight)
     for j, s in enumerate(S_MITES):
         spawn = spawn.at[s].set(mite_new[j])
-        pos = pos.at[s].set(jnp.where(mite_new[j], (units_pos(units, ws[src_grub]) + jnp.asarray([60.0 * (j - 1), 60.0], jnp.float32)).astype(jnp.float32), pos[s]))
+        off = jnp.asarray([60.0 * (j - 1), 60.0], jnp.float32)
+        pos = pos.at[s].set(jnp.where(mite_new[j], (_xy(units, ws[src_grub]) + off).astype(jnp.float32), pos[s]))
     obj = obj._replace(next_wave=jnp.where(grub_fight, now + r["grub_mite_wave_period"], obj.next_wave))
     mt = obj.mtype
     for j, s in enumerate(S_MITES):
         mt = mt.at[s].set(jnp.where(mite_new[j], T_MITE, mt[s]))
     obj = obj._replace(mtype=mt, level=jnp.where(spawn & (jnp.arange(N_SLOTS) >= 5),
                                                  monster_level(levels, r["grub_min_level"]), obj.level),
-                       expire=jnp.where(spawn & (jnp.arange(N_SLOTS) >= 5), now + r["grub_mite_lifetime"], obj.expire),
+                       expire=jnp.where(spawn & (jnp.arange(N_SLOTS) >= 5), now + r["grub_mite_lifetime"],
+                                        obj.expire),
                        aggro=jnp.where(spawn & (jnp.arange(N_SLOTS) >= 5), True, obj.aggro),
                        home=jnp.where((spawn & (jnp.arange(N_SLOTS) >= 5))[:, None], pos, obj.home))
     team = jnp.where(spawn & (obj.mtype == T_MITE), W.NEUTRAL, team)
@@ -637,14 +615,11 @@ def objectives_step(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUn
     obj = obj._replace(heal_pending=jnp.zeros_like(obj.heal_pending))
     out = StepOut(writes=writes, desired=ai["desired"], goal=ai["goal"], move_speed=ai["speed"],
                   move_active=ai["active"], can_attack=ai["can_attack"], packets=pk, cc=ai["cc"],
-                  champion_cc=ccc, monster_heal=m_heal, heal=heal, mana=mana, shield=shield, armor_reduction=armor_red,
-                  empowered_recall=recall, homeguard_bonus=jnp.where(now < obj.baron_until, r["baron_homeguard_bonus"], 0.0),
+                  champion_cc=ccc, monster_heal=m_heal, heal=heal, mana=mana, shield=shield,
+                  armor_reduction=armor_red, empowered_recall=recall,
+                  homeguard_bonus=jnp.where(now < obj.baron_until, r["baron_homeguard_bonus"], 0.0),
                   terrain_variant=terrain_variant(obj, now))
     return obj, out
-
-
-def units_pos(units, i):
-    return jnp.stack([units.x[i], units.y[i]])
 
 
 def _seg_dist(px, py, ax, ay, bx, by):
@@ -669,14 +644,15 @@ def _monster_ai(obj, table, units, ws, alive, sx, sy, shp, smax, sad, team, now,
     hit_by = damage_matrix[:, ws].T & (units.team[None, :] != W.NEUTRAL)        # (8, N)
     hit = jnp.any(hit_by, axis=1) & alive
     first = jnp.argmax(hit_by & champ_unit[None, :], axis=1).astype(jnp.int32)
-    first = jnp.where(jnp.any(hit_by & champ_unit[None, :], axis=1), first, jnp.argmax(hit_by, axis=1).astype(jnp.int32))
+    first = jnp.where(jnp.any(hit_by & champ_unit[None, :], axis=1), first,
+                      jnp.argmax(hit_by, axis=1).astype(jnp.int32))
     hx, hy = obj.home[:, 0], obj.home[:, 1]
     leash = jnp.asarray(table.leash)[mtype]
     # Candidates: hostile monsters target champions (Baron and camp mites: any lane unit too).
     cand = units.alive & units.targetable & (units.team != W.NEUTRAL) & (units.kind != W.KIND_NONE)
     cand_champ = cand & (units.kind == W.KIND_CHAMPION)
     any_unit = (mtype == T_BARON) | (mtype == T_MITE)
-    pool = jnp.where(any_unit[:, None], cand & ~_structure(units.kind)[None, :], cand_champ[None, :])   # (8, N)
+    pool = jnp.where(any_unit[:, None], cand & ~_structure(units.kind)[None, :], cand_champ[None, :])  # (8, N)
     d_self = _dist(sx[:, None], sy[:, None], units.x[None, :], units.y[None, :])
     d_home = _dist(hx[:, None], hy[:, None], units.x[None, :], units.y[None, :])
     in_leash = d_home <= leash[:, None]
@@ -745,18 +721,20 @@ def _monster_ai(obj, table, units, ws, alive, sx, sy, shp, smax, sad, team, now,
     th = jnp.asarray(r["herald_swipe_thresholds"], jnp.float32)
     crossed = (frac[:, None] <= th[None, :]) & ((obj.swipes[:, None] >> jnp.arange(2)[None, :]) & 1 == 0)
     start_swipe = is_her & aggro & ~casting & ~start_charge & jnp.any(crossed, axis=1)
-    swipes = jnp.where(start_swipe, obj.swipes | jnp.max(jnp.where(crossed, 1 << jnp.arange(2)[None, :], 0), axis=1), obj.swipes)
+    swipes = jnp.where(start_swipe, obj.swipes | jnp.max(jnp.where(crossed, 1 << jnp.arange(2)[None, :], 0), axis=1),
+                       obj.swipes)
     # Mercenary leap at a new structure within range (2.5 s windup).
     is_merc = alive & (mtype == T_MERC)
     leap_t = near_s
-    leap_ok = is_merc & ~casting & jnp.isfinite(jnp.min(ds, axis=1)) & (jnp.min(ds, axis=1) <= r["merc_leap_range"]) \
-        & (leap_t != obj.leap_done)
+    leap_ok = is_merc & ~casting & jnp.isfinite(jnp.min(ds, axis=1)) \
+        & (jnp.min(ds, axis=1) <= r["merc_leap_range"]) & (leap_t != obj.leap_done)
     start = start_charge | start_swipe | leap_ok
     kind = jnp.where(start_charge, 1, jnp.where(start_swipe, 2, jnp.where(leap_ok, 3, obj.cast_kind)))
     ft = jnp.where(leap_ok, leap_t, tc)
     cast_x = jnp.where(start, units.x[jnp.clip(ft, 0, n - 1)], obj.cast_x)
     cast_y = jnp.where(start, units.y[jnp.clip(ft, 0, n - 1)], obj.cast_y)
-    windup = jnp.where(start_charge, r["herald_charge_windup"], jnp.where(start_swipe, r["herald_swipe_windup"], r["merc_leap_windup"]))
+    windup = jnp.where(start_charge, r["herald_charge_windup"],
+                       jnp.where(start_swipe, r["herald_swipe_windup"], r["merc_leap_windup"]))
     fire = alive & (obj.cast_until > -1e8) & (obj.cast_until <= now)
     cast_until = jnp.where(start, now + windup, jnp.where(fire | ~alive, -INF, obj.cast_until))
     cast_target = jnp.where(start, ft, obj.cast_target)
@@ -769,7 +747,8 @@ def _monster_ai(obj, table, units, ws, alive, sx, sy, shp, smax, sad, team, now,
     foe = (units.team[None, :] != team[:, None]) & units.alive[None, :] & (units.team[None, :] != W.NEUTRAL) \
         & (units.kind[None, :] != W.KIND_NONE)
     # Charge: 200% AD to enemies along the path (width 250, INFERRED-L), knock aside 0.5 s (INFERRED-L).
-    seg = _seg_dist(units.x[None, :], units.y[None, :], sx[:, None], sy[:, None], obj.cast_x[:, None], obj.cast_y[:, None])
+    seg = _seg_dist(units.x[None, :], units.y[None, :], sx[:, None], sy[:, None], obj.cast_x[:, None],
+                    obj.cast_y[:, None])
     f_charge = fire & (obj.cast_kind == 1)
     hit_c = f_charge[:, None] & foe & (seg <= 250.0)
     raw = raw + jnp.where(hit_c, r["herald_charge_ad_ratio"] * sad[:, None], 0.0)
@@ -797,8 +776,8 @@ def _monster_ai(obj, table, units, ws, alive, sx, sy, shp, smax, sad, team, now,
 
     valid_pk = (raw > 0) & alive[:, None]
     flags = jnp.where(dtype == D.TRUE, D.TAG_ACTIVE_SPELL, D.TAG_ACTIVE_SPELL | D.TAG_AOE)
-    ab = D.packets(valid_pk, jnp.broadcast_to(ws[:, None], (N_SLOTS, n)), jnp.broadcast_to(idx[None, :], (N_SLOTS, n)),
-                   raw, dtype, flags)
+    ab = D.packets(valid_pk, jnp.broadcast_to(ws[:, None], (N_SLOTS, n)),
+                   jnp.broadcast_to(idx[None, :], (N_SLOTS, n)), raw, dtype, flags)
     selfp = D.packets(self_dmg > 0, ws, ws, self_dmg, D.TRUE, D.PROP_NO_DAMAGE_MOD)
     packets = D.concat_packets(ab, selfp)
     cc = W.no_cc(1, n)._replace(knockup=knock[None, :])
@@ -843,7 +822,8 @@ def _periodic_packets(obj, table, units, ws, alive, now, dt):
     burn_next = jnp.where(b_due, obj.burn_next + 1.0, obj.burn_next)
     # Elder Immolation execute (0.5 s after the trigger): true damage = max HP, PROP_EXECUTE.
     e_due = (obj.exec_at <= now) & units.alive
-    ex = D.packets(e_due, jnp.maximum(obj.exec_src, 0), idx, units.max_hp, D.TRUE, D.PROP_EXECUTE | D.PROP_NO_DAMAGE_MOD)
+    ex = D.packets(e_due, jnp.maximum(obj.exec_src, 0), idx, units.max_hp, D.TRUE,
+                   D.PROP_EXECUTE | D.PROP_NO_DAMAGE_MOD)
     # Grub Defensive Measures self damage.
     g_due = alive & (now < obj.self_dmg_until)
     self_g = D.packets(g_due, ws, ws, obj.self_dmg_rate * dt, D.TRUE, D.PROP_NO_DAMAGE_MOD | D.TAG_PERIODIC)
@@ -884,9 +864,11 @@ def _soul_tick(obj, table, units, champ, now, dt, last_damaged, ult_cast):
     order = jnp.argsort(jnp.where(chain, dist_h, jnp.inf), axis=1)
     rank = jnp.argsort(order, axis=1)
     chain = chain & (rank < int(hb["BaseUnitsToHit"]))
-    hex_pk = D.packets(chain, jnp.arange(c)[:, None], idx[None, :], obj.soul_amount[:, 1][:, None], D.TRUE, D.TAG_PROC)
+    hex_pk = D.packets(chain, jnp.arange(c)[:, None], idx[None, :], obj.soul_amount[:, 1][:, None], D.TRUE,
+                       D.TAG_PROC)
     base = jnp.where(units.attack_range > 300.0, hb["BaseSlowAmountRanged"], hb["BaseSlowAmountMelee"])
-    slow = (base[None, :] + (0.5 * champ.bonus_hp / 100.0 + champ.ap / 100.0 + 3.0 * champ.bonus_ad / 100.0)[:, None]) / 100.0
+    slow = (base[None, :] + (0.5 * champ.bonus_hp / 100.0 + champ.ap / 100.0
+                             + 3.0 * champ.bonus_ad / 100.0)[:, None]) / 100.0
     # The slow decays over 2 s; a constant slow at half strength stands in for it (INFERRED-M).
     ccc = W.no_cc(c, n)._replace(slow=jnp.where(chain, 0.5 * slow, 0.0),
                                  slow_duration=jnp.where(chain, hb["SlowDuration"], 0.0))
@@ -917,17 +899,10 @@ def _soul_tick(obj, table, units, champ, now, dt, last_damaged, ult_cast):
         shield.astype(jnp.float32)
 
 
-# ---- STATS --------------------------------------------------------------------------------------
-
 def team_buff_stats(obj: ObjectiveState, table: ObjectiveTable, team, alive, total_ad, ap, *, now,
                     out_of_combat) -> ItemStats:
-    """(C,) bonus ItemStats from objective buffs (CLIENT values):
-
-    Dragon Slayer per stack: Infernal +3% AD and AP (as flat from ``total_ad``/``ap``, one-pass),
-    Mountain +5% armor and MR, Ocean (heal, see StepOut.heal), Cloud +5% slow resist and +5%
-    out-of-combat MS, Hextech +5 AH and +5% AS, Chemtech +6% tenacity and heal/shield power.
-    Cloud Soul +15% MS (+45% for 6 s after R). Hand of Baron AD/AP (latched at the kill).
-    """
+    """(C,) bonus ItemStats from Dragon Slayer stacks (Infernal % AD/AP as flat from ``total_ad``/``ap``), Cloud
+    Soul MS and Hand of Baron AD/AP (CLIENT values; Ocean heals through ``StepOut.heal``)."""
     b = table.buffs
     tm = jnp.clip(jnp.asarray(team), 0, 1)
     st = obj.stacks[tm].astype(jnp.float32)                    # (C, 7)
@@ -953,14 +928,10 @@ def team_buff_stats(obj: ObjectiveState, table: ObjectiveTable, team, alive, tot
         heal_shield_power=f(b["SRX_DragonBuffChemTech"]["HealShieldPerStack"] * st[:, E_CHEMTECH]))
 
 
-# ---- AI: Hand of Baron minions ----------------------------------------------------------------------
-
 def baron_minion_buffs(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUnits, *, now) -> tuple:
-    """Hand of Baron minion empowerment with the wiki's hysteresis: if an unempowered allied minion
-    is within 600 of a buffed champion, every allied minion within 1450 of that champion is
-    empowered; a minion loses it with no buffed champion within 1500. Voidmites (Hunger) count
-    as melee minions. Returns ``(obj, MinionBuffs)``; the DR parts are applied by
-    ``objectives_packet_mods`` from ``obj.empowered``."""
+    """Hand of Baron minion empowerment (WIKI hysteresis): an unempowered allied minion within 600 of a buffed
+    champion empowers every allied minion within 1450 of it; a minion loses it with no buffed champion within
+    1500. Hunger Voidmites count as melee minions. The DR is applied by ``objectives_packet_mods``."""
     r = table.r
     c = obj.baron_until.shape[0]
     buffed = (jnp.asarray(now) < obj.baron_until) & units.alive[:c]
@@ -969,7 +940,8 @@ def baron_minion_buffs(obj: ObjectiveState, table: ObjectiveTable, units: W.Worl
     minion = units.alive & ((units.kind == W.KIND_MINION) | ally_mite)
     same = units.team[None, :] == units.team[:c, None]
     d = _dist(units.x[None, :], units.y[None, :], units.x[:c, None], units.y[:c, None])     # (C, N)
-    trig = buffed & jnp.any(same & minion[None, :] & ~obj.empowered[None, :] & (d <= r["baron_minion_acquire_radius"]), axis=1)
+    trig = buffed & jnp.any(same & minion[None, :] & ~obj.empowered[None, :]
+                            & (d <= r["baron_minion_acquire_radius"]), axis=1)
     gain = jnp.any(trig[:, None] & same & minion[None, :] & (d <= r["baron_minion_empower_radius"]), axis=0)
     keep = jnp.any(buffed[:, None] & same & (d <= r["baron_minion_lose_radius"]), axis=0)
     emp = minion & ((obj.empowered & keep) | gain)
@@ -981,27 +953,21 @@ def baron_minion_buffs(obj: ObjectiveState, table: ObjectiveTable, units: W.Worl
     frac, cap = r["baron_minion_ms_floor"]
     sb, sbonus = r["baron_minion_siege_structure"]
     e = lambda v: jnp.where(emp, v, 0.0).astype(jnp.float32)
-    out = MinionBuffs(empowered=emp, bonus_range=e(pick(r["baron_minion_range"])), bonus_ad=e(pick(r["baron_minion_ad"])),
-                      missile_speed=e(pick(r["baron_minion_missile_speed"])),
-                      attack_speed_mult=jnp.where(emp, pick(r["baron_minion_attack_speed_mult"]), 1.0).astype(jnp.float32),
+    out = MinionBuffs(empowered=emp, bonus_range=e(pick(r["baron_minion_range"])),
+                      bonus_ad=e(pick(r["baron_minion_ad"])), missile_speed=e(pick(r["baron_minion_missile_speed"])),
+                      attack_speed_mult=jnp.where(emp, pick(r["baron_minion_attack_speed_mult"]),
+                                                  1.0).astype(jnp.float32),
                       ms_floor=e(jnp.minimum(frac * near_ms, cap)),
                       siege_structure_mult=jnp.where(emp & (sub == 2), sb, 1.0).astype(jnp.float32),
                       splash_radius=e(jnp.where(sub == 2, r["baron_minion_siege_splash"], 0.0)))
     return obj._replace(empowered=emp), out
 
 
-# ---- ATTACK -------------------------------------------------------------------------------------
-
 def objectives_attack(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUnits, launch: W.AttackLaunch, *,
                       now) -> tuple:
-    """Basic attacks of objective slots launched this tick.
-
-    Returns ``(obj, raw (N,), dtype (N,), flags (N,), extra Packets, cc CCOut(1, N))``; ``raw``
-    is non-zero only on objective slots (merge with ``where`` over the lane-AI raw). Damage:
-    AD + drake %current HP (bonus physical), Herald 20% current HP, Mercenary 1.75% of her own
-    current HP; x1.5 vs non-champions for grubs, Herald, drakes, Elder, Baron (26.1). Riders:
-    Infernal splash (350), Baron Corrosion (35% AD magic to the nearest unit with the fewest
-    Void Corruption stacks) and his every-6th-attack ability rotation.
+    """Basic attacks launched this tick: ``(obj, raw (N,), dtype, flags, extra Packets, cc CCOut(1, N))``, ``raw``
+    non-zero only on objective slots. Riders: Infernal splash, Baron Corrosion (nearest unit with the fewest Void
+    Corruption stacks) and his every-6th-attack ability rotation.
     """
     r = table.r
     n = units.x.shape[0]
@@ -1074,8 +1040,8 @@ def objectives_attack(obj: ObjectiveState, table: ObjectiveTable, units: W.World
     raw_b = raw_b * jnp.where(~champs, r["non_champion_damage_mult"], 1.0)
     raw_x = raw_x.at[S_PIT].add(jnp.where(bl, raw_b, 0.0))
     dtype_x = dtype_x.at[S_PIT].set(jnp.where(bl, D.MAGIC, D.PHYSICAL))
-    extra = D.packets(raw_x > 0, jnp.broadcast_to(ws[:, None], (N_SLOTS, n)), jnp.broadcast_to(idx[None, :], (N_SLOTS, n)),
-                      raw_x, dtype_x, D.TAG_ACTIVE_SPELL | D.TAG_AOE)
+    extra = D.packets(raw_x > 0, jnp.broadcast_to(ws[:, None], (N_SLOTS, n)),
+                      jnp.broadcast_to(idx[None, :], (N_SLOTS, n)), raw_x, dtype_x, D.TAG_ACTIVE_SPELL | D.TAG_AOE)
     slow_s, slow_d = r["baron_acid_slow"]
     cc = W.no_cc(1, n)._replace(knockup=jnp.where(m_tent, r["baron_tentacle_knockup"], 0.0)[None, :],
                                 slow=jnp.where(m_pool, slow_s, 0.0)[None, :],
@@ -1086,19 +1052,15 @@ def objectives_attack(obj: ObjectiveState, table: ObjectiveTable, units: W.World
     vs = jnp.minimum(stacks_now + add, r["baron_void_corruption_max"])
     obj = obj._replace(attack_count=count, ability_rot=jnp.where(ability, (rot + 1) % 4, rot).astype(jnp.int32),
                        void_stacks=jnp.where(hit_b, vs, obj.void_stacks),
-                       void_until=jnp.where(hit_b, jnp.asarray(now) + r["baron_void_corruption_duration"], obj.void_until))
+                       void_until=jnp.where(hit_b, jnp.asarray(now) + r["baron_void_corruption_duration"],
+                                            obj.void_until))
     return obj, raw, dtype, flags, extra, cc
 
 
-# ---- DAMAGE -------------------------------------------------------------------------------------
-
 def objectives_packet_mods(obj: ObjectiveState, table: ObjectiveTable, packets: D.Packets, units: W.WorldUnits, *,
                            now) -> D.Packets:
-    """Scale raw (multiplicative mods, so equivalent to DMG.60 except flat blocks) for:
-    Ancient Grudge (elemental drake takes 15% less per Dragon Slayer stack of the champion's
-    team), Baron's Gaze (Baron's current target deals 50% less to him), Hand of Baron minion
-    DR (champions 50-70% melee/caster, minions 85% melee, AoE/periodic/proc 15%), Chemtech
-    Soul (below 50% HP: 13% more damage dealt / 13% less taken). Executes are untouched."""
+    """Scale packet raw (multiplicative, like DMG.60) for Ancient Grudge, Baron's Gaze, Hand of Baron minion DR and
+    Chemtech Soul. Executes are untouched."""
     r = table.r
     n = units.x.shape[0]
     c = obj.baron_until.shape[0]
@@ -1133,14 +1095,10 @@ def objectives_packet_mods(obj: ObjectiveState, table: ObjectiveTable, packets: 
     return packets._replace(raw=(packets.raw * mult).astype(jnp.float32))
 
 
-# ---- DEATH --------------------------------------------------------------------------------------
-
 def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W.WorldUnits, packets: D.Packets,
                             health_loss, *, died, killer, hp_after, now, levels, champ: ChampInfo) -> tuple:
-    """DEATH phase. ``packets`` / ``health_loss``: this tick's resolved packets (main + follow-up);
-    ``died`` (N,) units that died this tick; ``killer`` (N,) final-blow unit (-1); ``hp_after``
-    (N,). Returns ``(obj, Rewards)``. Also arms Touch of the Void, Hunger summons (next tick),
-    Elder burns/executes, Herald's eye, Infernal/Hextech/Ocean soul procs, grub heals."""
+    """Rewards, buffs and schedules from this tick's resolved ``packets``/``health_loss`` and deaths; arms Touch of
+    the Void, Hunger summons (next tick), Elder burns/executes, Herald's eye, soul procs and grub heals."""
     r = table.r
     b = table.buffs
     now = jnp.asarray(now, jnp.float32)
@@ -1154,7 +1112,7 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     tm = jnp.clip(units.team, 0, 1)
     # Damage memory on objective slots (takedowns, XP participation, aggro already via damage_matrix).
     on_slot = (dst[:, None] == ws[None, :]) & champ_src[:, None]                # (P, 8)
-    hit_sc = jnp.any(on_slot[:, :, None] & (src[:, None, None] == jnp.arange(c)[None, None, :]), axis=0)   # (8, C)
+    hit_sc = jnp.any(on_slot[:, :, None] & (src[:, None, None] == jnp.arange(c)[None, None, :]), axis=0)  # (8, C)
     damaged_by = jnp.where(hit_sc, now, obj.damaged_by)
     obj = obj._replace(damaged_by=damaged_by,
                        last_combat=jnp.where(jnp.any(on_slot, axis=0), now, obj.last_combat))
@@ -1167,7 +1125,6 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     eye_hit = champ_src & (dst == her) & is_her & behind & D.has(packets.flags, D.TAG_BASIC_ATTACK)
     eye = jnp.any(eye_hit) & (now >= obj.eye_ready[S_PIT])
     eye_src = jnp.argmax(eye_hit)
-    # Executed through the Elder-execute channel would be wrong; use a one-off burn tick instead.
     eye_dmg = r["herald_eye_max_hp_damage"] * units.max_hp[her]
 
     # Touch of the Void on structures: non-proc champion damage or Hunger Voidmite hits.
@@ -1185,7 +1142,8 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     fresh = t_dst & (now >= obj.touch_until)
     obj = obj._replace(touch_until=jnp.where(t_dst, now + r["touch_dot_duration"], obj.touch_until),
                        touch_next=jnp.where(fresh, now + r["touch_dot_tick"], obj.touch_next),
-                       touch_dmg=jnp.where(t_dst, t_dmg, obj.touch_dmg), touch_src=jnp.where(t_dst, t_src, obj.touch_src))
+                       touch_dmg=jnp.where(t_dst, t_dmg, obj.touch_dmg),
+                       touch_src=jnp.where(t_dst, t_src, obj.touch_src))
     # Hunger of the Void: 3 stacks, champion damaged an enemy structure, 15 s cooldown -> Voidmite.
     hunger_c = jnp.zeros((c,), bool).at[jnp.clip(packets.src, 0, c - 1)].max(champ_src & struct_dst) \
         & (obj.grub_stacks[tm[:c]] >= 3) & (now >= obj.hunger_cd)
@@ -1202,7 +1160,7 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
         who = jnp.argmax(give & (crank == frank[j]))
         ok = free[j] & jnp.any(give & (crank == frank[j]))
         mt = mt.at[s].set(jnp.where(ok, T_ALLY_MITE, mt[s]))
-        home = home.at[s].set(jnp.where(ok, jnp.stack([units.x[who], units.y[who]]), home[s]))
+        home = home.at[s].set(jnp.where(ok, _xy(units, who), home[s]))
         expire = expire.at[s].set(jnp.where(ok, now + r["hunger_voidmite_lifetime"], expire[s]))
         aggro = aggro.at[s].set(jnp.where(ok, True, aggro[s]))
         lvl = lvl.at[s].set(jnp.where(ok, 1, lvl[s]))
@@ -1224,23 +1182,27 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
                        burn_dmg=jnp.where(b_dst, burn_tot / 3.0, obj.burn_dmg),
                        burn_src=jnp.where(b_dst, b_srcs, obj.burn_src))
     thr = b["ElderDragonBuff"]["ElderExecuteThresholdPercent"]
-    arm = b_dst & (hp_after > 0) & (hp_after < thr * units.max_hp) & (now >= obj.exec_lock) & (obj.exec_at > now + 1e3)
+    arm = b_dst & (hp_after > 0) & (hp_after < thr * units.max_hp) & (now >= obj.exec_lock) \
+        & (obj.exec_at > now + 1e3)
     obj = obj._replace(exec_at=jnp.where(arm, now + r["elder_execute_delay"], obj.exec_at),
                        exec_src=jnp.where(arm, b_srcs, obj.exec_src),
                        exec_lock=jnp.where(arm, now + b["ElderDragonBuff"]["PerTargetCooldown"], obj.exec_lock))
-    # Herald eye damage rides the burn channel as a single tick next tick.
+    # Herald eye damage rides the burn channel as one tick next tick (not the execute channel).
     obj = obj._replace(burn_until=obj.burn_until.at[her].set(jnp.where(eye, now + 0.5, obj.burn_until[her])),
                        burn_next=obj.burn_next.at[her].set(jnp.where(eye, now, obj.burn_next[her])),
                        burn_dmg=obj.burn_dmg.at[her].set(jnp.where(eye, eye_dmg, obj.burn_dmg[her])),
                        burn_src=obj.burn_src.at[her].set(jnp.where(eye, src[eye_src], obj.burn_src[her])),
-                       eye_ready=obj.eye_ready.at[S_PIT].set(jnp.where(eye, now + r["herald_eye_cooldown"], obj.eye_ready[S_PIT])))
+                       eye_ready=obj.eye_ready.at[S_PIT].set(jnp.where(eye, now + r["herald_eye_cooldown"],
+                                                                       obj.eye_ready[S_PIT])))
 
     # Souls (Infernal 3 s / Hextech 8 s procs on enemy champions or epic monsters; Ocean on any enemy).
     soul = obj.soul[tm[:c]]
     to_enemy = champ_src & (units.team[dst] != units.team[src]) & (units.kind[dst] != W.KIND_NONE)
-    epic_dst = (units.kind[dst] == W.KIND_CHAMPION) | ((units.kind[dst] == W.KIND_MONSTER) & jnp.any(dst[:, None] == ws[None, :4], axis=1))
+    epic_dst = (units.kind[dst] == W.KIND_CHAMPION) \
+        | ((units.kind[dst] == W.KIND_MONSTER) & jnp.any(dst[:, None] == ws[None, :4], axis=1))
     atk_or_spell = D.has(packets.flags, D.TAG_BASIC_ATTACK) | D.has(packets.flags, D.TAG_ACTIVE_SPELL)
     cs = jnp.clip(packets.src, 0, c - 1)
+
     def first_target(mask):
         m = jnp.zeros((c,), bool).at[cs].max(mask)
         t = jnp.full((c,), -1, jnp.int32).at[cs].max(jnp.where(mask, dst, -1).astype(jnp.int32))
@@ -1248,8 +1210,10 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     inf_m, inf_t = first_target(to_enemy & epic_dst & atk_or_spell & ~D.has(packets.flags, D.TAG_PROC))
     inf_ok = inf_m & (soul == E_INFERNAL) & (now >= obj.infernal_cd)
     ib = b["SRX_DragonSoulBuffInfernal"]
-    inf_amt = ib["BaseDamage"] + ib["BonusADRatio"] * champ.bonus_ad + ib["APRatio"] * champ.ap + ib["BonusHPRatio"] * champ.bonus_hp
-    hex_m, hex_t = first_target(to_enemy & (units.kind[dst] == W.KIND_CHAMPION) & atk_or_spell & ~D.has(packets.flags, D.TAG_PROC))
+    inf_amt = ib["BaseDamage"] + ib["BonusADRatio"] * champ.bonus_ad + ib["APRatio"] * champ.ap \
+        + ib["BonusHPRatio"] * champ.bonus_hp
+    hex_m, hex_t = first_target(to_enemy & (units.kind[dst] == W.KIND_CHAMPION) & atk_or_spell
+                                & ~D.has(packets.flags, D.TAG_PROC))
     hex_ok = hex_m & (soul == E_HEXTECH) & (now >= obj.hextech_cd)
     hex_amt = 25.0 + 25.0 * (jnp.clip(levels, 1, 18) - 1) / 17.0
     oc_m, oc_t = first_target(to_enemy & ~D.has(packets.flags, D.TAG_PROC))
@@ -1263,7 +1227,8 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     fresh_oc = oc_ok & (now >= obj.ocean_until)
     obj = obj._replace(
         soul_pending=jnp.stack([jnp.where(inf_ok, inf_t, -1), jnp.where(hex_ok, hex_t, -1)], -1).astype(jnp.int32),
-        soul_amount=jnp.stack([jnp.where(inf_ok, inf_amt, 0.0), jnp.where(hex_ok, hex_amt, 0.0)], -1).astype(jnp.float32),
+        soul_amount=jnp.stack([jnp.where(inf_ok, inf_amt, 0.0), jnp.where(hex_ok, hex_amt, 0.0)], -1)
+        .astype(jnp.float32),
         infernal_cd=jnp.where(inf_ok, now + ib["ProcCooldown"], obj.infernal_cd),
         hextech_cd=jnp.where(hex_ok, now + b["SRX_DragonSoulBuffHextech"]["BaseTriggerCD"], obj.hextech_cd),
         ocean_until=jnp.where(oc_ok, now + ob["HealDuration"], obj.ocean_until),
@@ -1281,7 +1246,8 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     last_c = jnp.argmax(obj.damaged_by, axis=1).astype(jnp.int32)
     has_c = jnp.max(obj.damaged_by, axis=1) > now - 10.0
     k_champ = jnp.where((k_champ < 0) & has_c, last_c, k_champ)
-    k_team = jnp.where((k_team < 0) | (k_team == W.NEUTRAL), jnp.where(k_champ >= 0, units.team[jnp.clip(k_champ, 0, n - 1)], -1), k_team)
+    k_team = jnp.where((k_team < 0) | (k_team == W.NEUTRAL),
+                       jnp.where(k_champ >= 0, units.team[jnp.clip(k_champ, 0, n - 1)], -1), k_team)
     mtype = obj.mtype
     ctm = units.team[:c]
     on_team = (ctm[None, :] == k_team[:, None]) & killed[:, None]               # (8, C)
@@ -1313,7 +1279,8 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     first_grub = (mtype == T_GRUB) & (jnp.sum(obj.grub_stacks) == 0)
     first_grub = first_grub & (jnp.cumsum(killed & (mtype == T_GRUB)) == 1)
     epic_count = jnp.sum(jnp.where(part & (epic_k & ((mtype != T_GRUB) | first_grub))[:, None], 1.0, 0.0), axis=0)
-    large = jnp.sum(jnp.where(is_k & ((mtype == T_GRUB) | (mtype == T_HERALD) | (mtype == T_MERC))[:, None], 1.0, 0.0), axis=0)
+    large = jnp.sum(jnp.where(is_k & ((mtype == T_GRUB) | (mtype == T_HERALD) | (mtype == T_MERC))[:, None], 1.0, 0.0),
+                    axis=0)
 
     # Team buffs.
     kt = lambda t: jnp.any(killed & (mtype == t))
@@ -1327,7 +1294,8 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
     grub_alive = s_alive_before & ~killed & (mtype == T_GRUB)
     gh = jnp.any(gk) & grub_alive
     g_max, g_hp = units.max_hp[ws], hp_after[ws]
-    g_heal = jnp.where(gh, r["grub_death_heal_max"] * g_max + r["grub_death_heal_missing"] * jnp.maximum(g_max - g_hp, 0.0), 0.0)
+    g_heal = jnp.where(gh, r["grub_death_heal_max"] * g_max
+                       + r["grub_death_heal_missing"] * jnp.maximum(g_max - g_hp, 0.0), 0.0)
     obj = obj._replace(heal_pending=obj.heal_pending + g_heal,
                        self_dmg_rate=jnp.where(gh, g_heal / r["grub_death_self_damage_duration"], obj.self_dmg_rate),
                        self_dmg_until=jnp.where(gh, now + r["grub_death_self_damage_duration"], obj.self_dmg_until))
@@ -1367,7 +1335,8 @@ def objectives_after_damage(obj: ObjectiveState, table: ObjectiveTable, units: W
                        elder_until=jnp.where(give_e, now + r["elder_buff_duration"], obj.elder_until))
     # Champion deaths drop Hand of Baron and Aspect of the Dragon.
     cd = died[:c]
-    obj = obj._replace(baron_until=jnp.where(cd, -INF, obj.baron_until), elder_until=jnp.where(cd, -INF, obj.elder_until),
+    obj = obj._replace(baron_until=jnp.where(cd, -INF, obj.baron_until),
+                       elder_until=jnp.where(cd, -INF, obj.elder_until),
                        mtype=jnp.where(killed, T_NONE, obj.mtype), aggro=jnp.where(killed, False, obj.aggro),
                        target=jnp.where(killed, -1, obj.target))
     rewards = Rewards(gold=jnp.sum(gold, axis=0).astype(jnp.float32), xp=jnp.sum(xp, axis=0).astype(jnp.float32),

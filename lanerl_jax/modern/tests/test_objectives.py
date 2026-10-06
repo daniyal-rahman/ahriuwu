@@ -1,8 +1,5 @@
-"""Symptom tests for the 26.19 epic objectives (docs/modern/OBJECTIVES.md).
-
-A small synthetic world (no world.tick): 2 champions, 4 lane minions, the 8 objective slots,
-two turrets. ``World.apply`` writes ``SlotWrites`` the way the step is expected to.
-"""
+"""Epic-objective symptom tests (docs/modern/OBJECTIVES.md) on a synthetic world: 2 champions, 4 lane minions,
+the 8 objective slots and two turrets; ``World.apply`` writes ``SlotWrites`` like the step."""
 from __future__ import annotations
 
 import jax
@@ -38,7 +35,6 @@ class World:
                       magic_resist=f(30.0), attack_damage=f(100.0), attack_range=f(175.0), attack_speed=f(1.0),
                       move_speed=f(340.0), spawn_seq=np.arange(N, dtype=np.int32), spawn_time=f(0.0))
         self.a["hp"][14:16] = self.a["max_hp"][14:16] = 5000.0
-        # Champions far from everything by default.
         self.place(0, 1000.0, 1000.0)
         self.place(1, 13000.0, 13000.0)
         for i in range(2, 6):
@@ -55,11 +51,9 @@ class World:
     def apply(self, out: O.StepOut):
         w = jax.tree.map(np.asarray, out.writes)
         sl = slice(SLOT0, SLOT0 + 8)
-        for name, src in (("kind", "kind"), ("sub", "sub"), ("team", "team"), ("x", "x"), ("y", "y"),
-                          ("hp", "hp"), ("max_hp", "max_hp"), ("armor", "armor"), ("magic_resist", "magic_resist"),
-                          ("attack_damage", "attack_damage"), ("attack_range", "attack_range"),
-                          ("attack_speed", "attack_speed"), ("move_speed", "move_speed"), ("radius", "radius")):
-            self.a[name][sl] = np.where(w.write, getattr(w, src), self.a[name][sl])
+        for name in ("kind", "sub", "team", "x", "y", "hp", "max_hp", "armor", "magic_resist", "attack_damage",
+                     "attack_range", "attack_speed", "move_speed", "radius"):
+            self.a[name][sl] = np.where(w.write, getattr(w, name), self.a[name][sl])
         self.a["alive"][sl] = (self.a["alive"][sl] | w.write) & ~w.despawn
         self.a["targetable"][sl] = self.a["alive"][sl]
         self.a["kind"][sl] = np.where(w.despawn, W.KIND_NONE, self.a["kind"][sl])

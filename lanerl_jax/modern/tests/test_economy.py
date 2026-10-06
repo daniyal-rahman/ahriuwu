@@ -1,6 +1,4 @@
-"""Economy/progression and Top quest against ECONOMY_PROGRESSION §18 and
-ROLE_QUESTS §10 fixtures (spec-derived; the replay oracle tests check the
-spec itself against real games)."""
+"""Economy and Top quest against the ECONOMY_PROGRESSION §18 and ROLE_QUESTS §10 fixtures."""
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -165,28 +163,31 @@ def test_quest_fixtures():                                                      
     assert float(Q.tp_arrival_shield(2000., True, True)) == 700.
 
 
-def test_economy_step_first_blood_jit():
-    """Holder 1 dies at 150 s to holder 0 (credited by a hit this tick): first
-    blood gold, kill XP, death timer, bounty deferral; jitted."""
-    c, n = 2, 4
-    st = E.init_economy(c, n, [Q.ROLE_TOP, Q.ROLE_TOP])
-    st = st._replace(last_t=jnp.float32(149.9), level=jnp.asarray([3, 3]), xp=jnp.asarray([700., 700.]))
-    hit = D.packets(jnp.ones(1, bool), 0, 1, 100.0, D.PHYSICAL, D.BASIC_ATTACK)
+def _step_inputs(now, hit_dst, unit3_x, hp, final_blow, last_combat):
+    """Two champions (0 at x=0, 1 at x=200) and units 2-3; champion 0 hits ``hit_dst`` this tick."""
     from lanerl_jax.modern.tests import item_harness as H
-    u = H.units(H.champions(x1=200.) + [dict(x=5000, y=0, team=0), dict(x=5000, y=0, team=1)])
-    rep, _ = H.resolve(hit, u)
-    z = jnp.zeros((c,), bool)
+    hit = D.packets(jnp.ones(1, bool), 0, hit_dst, 100.0, D.PHYSICAL, D.BASIC_ATTACK)
+    rep, _ = H.resolve(hit, H.units(H.champions(x1=200.) + [dict(x=5000, y=0, team=0), dict(x=unit3_x, y=0, team=1)]))
+    z = jnp.zeros((2,), bool)
     md = E.MinionDeaths(jnp.zeros((1,), bool), jnp.zeros(1), jnp.zeros(1), jnp.asarray([1]), jnp.zeros(1),
                         jnp.zeros(1), jnp.ones(1, jnp.int32), jnp.asarray([-1], jnp.int32))
     se = E.StructureEvents(jnp.zeros((1,), bool), jnp.asarray([3]), jnp.zeros(1), jnp.zeros(1), jnp.asarray([1]),
                            jnp.zeros(1), jnp.zeros(1), jnp.zeros((1,), bool), jnp.zeros((1,), bool))
-    inp = E.EconomyInputs(now=150.0, unit=jnp.asarray([0, 1]), x=jnp.asarray([0., 200.]), y=jnp.zeros(2),
-                          team=jnp.asarray([0, 1]), hp=jnp.asarray([500., 0.]), max_hp=jnp.asarray([800., 800.]),
-                          report=rep, cc=None, final_blow=jnp.asarray([-1, 0], jnp.int32), minion_deaths=md,
-                          minion_in_lane=jnp.zeros((1,), bool), structures=se,
-                          last_champion_combat=jnp.asarray([150., 150.]), in_fountain=z, in_quest_lane=~z,
-                          recall_request=z, cancel_action=z, health_damage=z, disabled=z, reached_endpoint=z,
-                          in_jungle=z, teleported=z)
+    return E.EconomyInputs(now=now, unit=jnp.asarray([0, 1]), x=jnp.asarray([0., 200.]), y=jnp.zeros(2),
+                           team=jnp.asarray([0, 1]), hp=jnp.asarray(hp), max_hp=jnp.asarray([800., 800.]),
+                           report=rep, cc=None, final_blow=jnp.asarray(final_blow, jnp.int32), minion_deaths=md,
+                           minion_in_lane=jnp.zeros((1,), bool), structures=se,
+                           last_champion_combat=jnp.asarray(last_combat), in_fountain=z, in_quest_lane=~z,
+                           recall_request=z, cancel_action=z, health_damage=z, disabled=z, reached_endpoint=z,
+                           in_jungle=z, teleported=z)
+
+
+def test_economy_step_first_blood_jit():
+    """Holder 1 dies at 150 s to holder 0 (credited by a hit this tick): first blood gold, kill XP, death timer,
+    bounty deferral; jitted."""
+    st = E.init_economy(2, 4, [Q.ROLE_TOP, Q.ROLE_TOP])
+    st = st._replace(last_t=jnp.float32(149.9), level=jnp.asarray([3, 3]), xp=jnp.asarray([700., 700.]))
+    inp = _step_inputs(150.0, 1, 5000, [500., 0.], [-1, 0], [150., 150.])
     out = jax.jit(E.economy_step)(st, inp)
     ambient = float(E.ambient_payments(149.9, 150.0))
     assert float(out.gold_gained[0]) == pytest.approx(400. + ambient)
@@ -198,27 +199,11 @@ def test_economy_step_first_blood_jit():
 
 
 def test_structure_damage_credit_without_a_plate_falling():
-    """§7: a hit on a structure stamps ``last_structure_damage`` every tick (``is_structure``), not
-    only on the tick a plate/turret falls (``valid``), so the 10 s share window can see it."""
-    c, n = 2, 4
-    st = E.init_economy(c, n, [Q.ROLE_TOP, Q.ROLE_TOP])
-    hit = D.packets(jnp.ones(1, bool), 0, 3, 100.0, D.PHYSICAL, D.BASIC_ATTACK)
-    from lanerl_jax.modern.tests import item_harness as H
-    u = H.units(H.champions(x1=200.) + [dict(x=5000, y=0, team=0), dict(x=300, y=0, team=1)])
-    rep, _ = H.resolve(hit, u)
-    z = jnp.zeros((c,), bool)
-    md = E.MinionDeaths(jnp.zeros((1,), bool), jnp.zeros(1), jnp.zeros(1), jnp.asarray([1]), jnp.zeros(1),
-                        jnp.zeros(1), jnp.ones(1, jnp.int32), jnp.asarray([-1], jnp.int32))
-    se = E.StructureEvents(jnp.zeros((1,), bool), jnp.asarray([3]), jnp.zeros(1), jnp.zeros(1), jnp.asarray([1]),
-                           jnp.zeros(1), jnp.zeros(1), jnp.zeros((1,), bool), jnp.zeros((1,), bool))
-    inp = E.EconomyInputs(now=100.0, unit=jnp.asarray([0, 1]), x=jnp.asarray([0., 200.]), y=jnp.zeros(2),
-                          team=jnp.asarray([0, 1]), hp=jnp.asarray([500., 500.]), max_hp=jnp.asarray([800., 800.]),
-                          report=rep, cc=None, final_blow=jnp.asarray([-1, -1], jnp.int32), minion_deaths=md,
-                          minion_in_lane=jnp.zeros((1,), bool), structures=se,
-                          last_champion_combat=jnp.asarray([0., 0.]), in_fountain=z, in_quest_lane=~z,
-                          recall_request=z, cancel_action=z, health_damage=z, disabled=z, reached_endpoint=z,
-                          in_jungle=z, teleported=z)
+    """§7: ``is_structure`` stamps ``last_structure_damage`` every tick, not only when a plate/turret falls."""
+    st = E.init_economy(2, 4, [Q.ROLE_TOP, Q.ROLE_TOP])
+    inp = _step_inputs(100.0, 3, 300, [500., 500.], [-1, -1], [0., 0.])
     plain = E.economy_step(st, inp).state.credit.last_structure_damage
+    se = inp.structures
     marked = E.economy_step(st, inp._replace(structures=se._replace(is_structure=jnp.ones((1,), bool))))
-    assert float(plain[0, 3]) < 0.0                                # legacy: valid=False hides the structure
+    assert float(plain[0, 3]) < 0.0                                # valid=False alone hides the structure
     assert float(marked.state.credit.last_structure_damage[0, 3]) == 100.0

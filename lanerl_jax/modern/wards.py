@@ -1,46 +1,9 @@
-"""Wards, trinkets, stealth and true sight for the 26.19 modern world (WARDS.md).
+"""Wards, trinkets, stealth and true sight (docs/modern/WARDS.md has the rules and evidence).
 
-Pure fixed-shape JAX. ``ward_step`` owns the ward slots and the per-champion
-trinket state; it returns events (placements, kills with the killer, gold,
-consumed Control Wards) and never writes world arrays. ``ward_view`` and
-``vision_kwargs`` turn the state into the per-slot world view the tick writes
-onto its ``KIND_WARD`` units and the optional ``vision.visibility``
-inputs (sight radius, stealth, true sight, unobstructed, exposed).
-
-Slots: ``S = 2 * MAX_WARDS_PER_TEAM``; team t owns slots ``[t*8, (t+1)*8)``.
-Champion c is holder c (team ``team[c]``), as everywhere in the modern world.
-
-Rules and evidence (WARDS.md has the full table):
-
-* **Totem Ward** (trinket 3340, "Stealth Ward"): client ``YellowTrinket``
-  3 HP, sight 900; 2 charges (``Effect5Amount``), recharge 210 -> 90 s and
-  duration 90 -> 120 s by average champion level (client data values, PATCH
-  26.3, WIKI); 3 placed per player (``MaxWardsPlaced``); range 625; stealthed
-  2 s after placement; 10 gold bounty; no XP (V14.19).
-* **Control Ward** (2055): 75 g item consumed on placement (client), 1 placed
-  per player (client ``maxNumberOfUnits`` 1), range 625, 4 HP (client
-  ``JammerDevice``), regen 1 HP / 3 s after 6 s undamaged (WIKI), sight 900,
-  true sight of stealthed units in its sight radius, disables enemy wards in
-  it, cannot be disabled, visible, exposed while revealing a stealthed ward;
-  30 gold bounty.
-* **Farsight Ward** (trinket 3363, level 9 by the shop): range 4000, 1 HP
-  (client ``BlueTrinket``), sight 500 (800 for the 2 s placement reveal and
-  once it spots an enemy champion, then it dies 3 s later), sees over walls
-  and into brush, visible, indefinite, no per-player limit; 15 gold; 1 charge,
-  recharge 198 -> 99 s by average level.
-* **Oracle Lens** (trinket 3364): 2 charges, recharge 160 -> 100 s by average
-  level, 8 s sweep around the user, radius 600 (level 1-4), 630 at 5, +30 per
-  3 levels to 750 at 17, edge range; reveals and disables stealthed enemy
-  wards (2 s linger after leaving the radius); while active, wards it hits are
-  revealed 2 s.
-* **Hits**: wards take 1 damage per champion basic attack hit, whatever the
-  damage; minions, turrets and abilities do not damage wards. A ward's first
-  hit within 10 s of placement pays 5 g and removes 5 g from its bounty.
-* **Trinket haste** (Grisly Mementos, Cosmic Insight item haste) shortens the
-  recharge: ``R * 100 / (100 + haste)``.
-* **Swap** (shop): the new trinket keeps the time-equivalent of the old one's
-  charges and progress (V9.24 "charges are converted into cooldown").
-* **Vision runes**: Deep Ward and Sixth Sense (domination kernels).
+``ward_step`` owns the ward slots and per-champion trinket state and returns events (placements, kills with the
+killer, gold, consumed Control Wards); it never writes world arrays. ``ward_view`` and ``vision_kwargs`` turn the
+state into the world rows of the ``KIND_WARD`` units and the optional ``vision.visibility`` inputs. Slots:
+``S = 2 * MAX_WARDS_PER_TEAM``, team t owns ``[t*8, (t+1)*8)``; champion c is holder c.
 """
 from __future__ import annotations
 
@@ -54,11 +17,6 @@ from . import vision as MV
 from .core import types as W
 from .runes.effects import domination as DOM
 
-__all__ = ["WardType", "TOTEM_ITEM", "CONTROL_ITEM", "FARSIGHT_ITEM", "ORACLE_ITEM", "REQ_NONE", "REQ_TRINKET",
-           "REQ_CONTROL", "WardGrid", "ward_grid", "WardState", "TrinketState", "Wards", "WardRequest",
-           "no_request", "WardEvents", "WardView", "init_wards", "ward_step", "ward_view", "oracle_radius",
-           "vision_kwargs", "COVERAGE"]
-
 
 class WardType(IntEnum):
     TOTEM = 0          # trinket "Stealth Ward" (3340): stealthed Totem Ward
@@ -67,18 +25,15 @@ class WardType(IntEnum):
 
 
 TOTEM_ITEM, CONTROL_ITEM, FARSIGHT_ITEM, ORACLE_ITEM = 3340, 2055, 3363, 3364
-TRINKETS = (TOTEM_ITEM, FARSIGHT_ITEM, ORACLE_ITEM)
 REQ_NONE, REQ_TRINKET, REQ_CONTROL = -1, 0, 1
 
-# Result codes (WardEvents.code)
+# WardEvents.code
 OK, ERR_NONE, ERR_DEAD, ERR_NO_ITEM, ERR_NO_CHARGE, ERR_LOCKED, ERR_RANGE, ERR_TERRAIN = 0, 1, 2, 3, 4, 5, 6, 7
 
-# ---- constants (evidence in WARDS.md) ---------------------------------------
 WARD_HP = (3.0, 4.0, 1.0)                  # CLIENT YellowTrinket/JammerDevice/BlueTrinket baseHP
 WARD_SIGHT = (900.0, 900.0, 500.0)         # CLIENT perceptionBubbleRadius
 WARD_BOUNTY = (10.0, 30.0, 15.0)           # WIKI Ward tip data
-WARD_XP = (0.0, 0.0, 0.0)                  # V14.19 removed ward XP (Control Ward: U-W-5)
-CONTROL_WARD_XP_HISTORIC = 40.0            # WIKI V6.22 value, not used (U-W-5)
+WARD_XP = (0.0, 0.0, 0.0)                  # V14.19 removed ward XP (U-W-5)
 WARD_RADIUS = 1.0                          # CLIENT overrideGameplayCollisionRadius
 TOTEM_RANGE = CONTROL_RANGE = 625.0        # CLIENT castRange TrinketTotemLvl1 / JammerDevice
 FARSIGHT_RANGE = 4000.0                    # CLIENT castRange TrinketOrbLvl3
@@ -108,12 +63,6 @@ EARLY_BONUS_GOLD = 5.0
 # Map regions for Deep Ward (NGRID v7 region bytes; FrankTheBoxMonster NavGridCell.cs enums).
 REGION_OTHER, REGION_BLUE_JUNGLE, REGION_RED_JUNGLE, REGION_RIVER = 0, 1, 2, 3
 
-COVERAGE = {
-    TOTEM_ITEM: "Totem Ward trinket", CONTROL_ITEM: "Control Ward", FARSIGHT_ITEM: "Farsight Alteration",
-    ORACLE_ITEM: "Oracle Lens",
-}
-INF = jnp.float32(jnp.inf)
-
 
 def _lerp(ab, level):
     a, b = ab
@@ -128,8 +77,6 @@ def oracle_radius(level) -> Any:
     return jnp.minimum(ORACLE_RADIUS[0] + 30.0 * steps, ORACLE_RADIUS[1]).astype(jnp.float32)
 
 
-# ---- placement grid -----------------------------------------------------------
-
 class WardGrid(NamedTuple):
     """Ward placement terrain and Deep Ward regions, arrays [z, x]."""
     walkable: Any           # (H, W) bool, team gates closed
@@ -140,12 +87,8 @@ class WardGrid(NamedTuple):
 
 
 def ward_grid(grid) -> WardGrid:
-    """Host: ``data.modern_map.ModernMapGrid`` -> ``WardGrid``.
-
-    Region bytes (NGRID v7 ``regions[..., 1]``): high nibble MainRegion
-    (5/6 top/bot-side jungle, 7/8 top/bot-side river), low nibble
-    JungleQuadrant (1 north, 2 east = red side; 3 west, 4 south = blue side).
-    """
+    """Host: ``ModernMapGrid`` -> ``WardGrid``. NGRID v7 ``regions[..., 1]``: high nibble MainRegion (5/6 jungle,
+    7/8 river), low nibble JungleQuadrant (1 north, 2 east = red side; 3 west, 4 south = blue side)."""
     main = np.asarray(grid.regions[..., 1] >> 4, np.int32)
     quad = np.asarray(grid.regions[..., 1] & 15, np.int32)
     jungle = (main == 5) | (main == 6)
@@ -164,8 +107,6 @@ def _lookup(g: WardGrid, x, y):
     cx, cz = jnp.clip(cx, 0, w - 1), jnp.clip(cz, 0, h - 1)
     return ok & g.walkable[cz, cx], jnp.where(ok, g.region[cz, cx], REGION_OTHER)
 
-
-# ---- state ----------------------------------------------------------------------
 
 class WardState(NamedTuple):
     """Ward slots (S,)."""
@@ -211,11 +152,6 @@ class WardRequest(NamedTuple):
     kind: Any
     x: Any
     y: Any
-
-
-def no_request(c: int) -> WardRequest:
-    z = jnp.zeros((c,), jnp.float32)
-    return WardRequest(jnp.full((c,), REQ_NONE, jnp.int32), z, z)
 
 
 class WardEvents(NamedTuple):
@@ -288,7 +224,7 @@ def _is_trinket(t):
     return (t == TOTEM_ITEM) | (t == FARSIGHT_ITEM) | (t == ORACLE_ITEM)
 
 
-def _control_cover(sl: WardState, now):
+def _control_cover(sl: WardState):
     """(S, S) bool: alive Control Ward i covers ward j of the other team (900 centre to centre)."""
     team = _slot_team(sl.x.shape[0])
     ctrl = sl.alive & (sl.type == WardType.CONTROL)
@@ -313,16 +249,12 @@ def _stealthed(sl: WardState, now):
 def ward_step(w: Wards, *, now, dt, request: WardRequest, x, y, team, alive, level, trinket_id,
               control_count, grid: WardGrid, can_use=None, trinket_haste=None, hits=None, hitter=None,
               rune_pages=None, ward_visible=None) -> tuple[Wards, WardEvents]:
-    """Advance wards and trinkets by one tick (call after DEATH, before FOG).
+    """Advance wards and trinkets one tick (after DEATH, before FOG).
 
-    Champion inputs are (C,) at the tick's final positions: ``x, y, team,
-    alive, level``; ``trinket_id`` item id in the trinket slot (0/-1 none);
-    ``control_count`` Control Wards (2055) held; ``can_use`` item actives
-    allowed (alive and not stunned/suppressed; default ``alive``);
-    ``trinket_haste`` item haste + trinket haste. Ward inputs (S,): ``hits``
-    champion basic-attack hits landed this tick, ``hitter`` champion that
-    landed them (-1). ``rune_pages`` (C, R) page counts (Deep Ward, Sixth
-    Sense); ``ward_visible`` (2, S) last tick's ``visible`` on the ward slots.
+    Champion inputs (C,) are at final positions; ``trinket_id`` is the trinket-slot item (0/-1 none),
+    ``control_count`` the 2055s held, ``can_use`` whether item actives are allowed. Ward inputs (S,): ``hits``
+    champion basic-attack hits this tick and the champion ``hitter`` (-1). ``rune_pages`` (C, R) enable Deep Ward
+    and Sixth Sense; ``ward_visible`` (2, S) is last tick's ``visible`` on the ward slots.
     """
     sl, tr = w.slots, w.trinket
     s, c = sl.x.shape[0], x.shape[0]
@@ -456,7 +388,7 @@ def ward_step(w: Wards, *, now, dt, request: WardRequest, x, y, team, alive, lev
     fr = jnp.where(now < sl.placed_at + FARSIGHT_REVEAL_TIME, FARSIGHT_REVEAL_SIGHT, WARD_SIGHT[2])
     d2c = (sl.x[:, None] - x[None, :]) ** 2 + (sl.y[:, None] - y[None, :]) ** 2           # (S, C)
     spot = jnp.any((d2c <= (fr ** 2)[:, None]) & alive[None, :] & (team[None, :] != steam[:, None]), axis=1)
-    disabled_now, _, _ = _disable(sl, tr, now, x, y, team, alive, level)
+    disabled_now, _ = _disable(sl, tr, now, x, y, team, alive, level)
     trig = sl.alive & (sl.type == WardType.FARSIGHT) & spot & ~disabled_now & ~jnp.isfinite(sl.triggered_at)
     sl = sl._replace(triggered_at=jnp.where(trig, now, sl.triggered_at))
 
@@ -474,10 +406,10 @@ def ward_step(w: Wards, *, now, dt, request: WardRequest, x, y, team, alive, lev
         sensed = jnp.any(pick, axis=1)
         picked = jnp.any(pick, axis=0)
         rev_s = jnp.any(pick & rev[:, None], axis=0)
-        sl = sl._replace(tracked=sl.tracked | picked,
-                         revealed_until=jnp.where(rev_s, jnp.maximum(sl.revealed_until,
-                                                                          now + DOM.ea(DOM.SIXTH_SENSE, "RevealDuration")),
-                                                  sl.revealed_until))
+        tracked = sl.tracked | picked
+        reveal = now + DOM.ea(DOM.SIXTH_SENSE, "RevealDuration")
+        sl = sl._replace(tracked=tracked,
+                         revealed_until=jnp.where(rev_s, jnp.maximum(sl.revealed_until, reveal), sl.revealed_until))
         tr = tr._replace(sixth_cd_until=cd)
 
     ev = WardEvents(code=code.astype(jnp.int32), placed=place, placed_slot=placed_slot, placed_type=place_type,
@@ -488,8 +420,8 @@ def ward_step(w: Wards, *, now, dt, request: WardRequest, x, y, team, alive, lev
 
 
 def _disable(sl: WardState, tr: TrinketState, now, cx, cy, cteam, calive, level):
-    """(disabled (S,), control_exposing (S,), oracle cover (C, S))."""
-    cover = _control_cover(sl, now)                                   # (S, S)
+    """(disabled (S,), Control Ward exposed by revealing a stealthed ward (S,))."""
+    cover = _control_cover(sl)                                        # (S, S)
     oc = _oracle_cover(sl, tr, now, cx, cy, cteam, calive, level)     # (C, S)
     stealth = _stealthed(sl, now)
     not_control = sl.type != WardType.CONTROL
@@ -497,16 +429,14 @@ def _disable(sl: WardState, tr: TrinketState, now, cx, cy, cteam, calive, level)
     by_oracle = (jnp.any(oc, axis=0) | (now < sl.disabled_until)) & stealth
     disabled = sl.alive & (by_control | by_oracle)
     exposing = sl.alive & (sl.type == WardType.CONTROL) & jnp.any(cover & stealth[None, :], axis=1)
-    return disabled, exposing, oc
+    return disabled, exposing
 
 
 def ward_view(w: Wards, *, now, x, y, team, alive, level) -> tuple[WardView, Any]:
-    """Per-slot world view (S,) and the Oracle true-sight radius per champion (C,).
-
-    Champion inputs are those passed to the visibility call (final positions)."""
+    """Per-slot world view (S,) and the Oracle true-sight radius per champion (C,), at final positions."""
     sl, tr = w.slots, w.trinket
     now = jnp.float32(now)
-    disabled, exposing, _ = _disable(sl, tr, now, x, y, team, alive, level)
+    disabled, exposing = _disable(sl, tr, now, x, y, team, alive, level)
     far = sl.type == WardType.FARSIGHT
     far_r = jnp.where((now < sl.placed_at + FARSIGHT_REVEAL_TIME) | jnp.isfinite(sl.triggered_at),
                       FARSIGHT_REVEAL_SIGHT, WARD_SIGHT[2])
@@ -523,9 +453,8 @@ def ward_view(w: Wards, *, now, x, y, team, alive, level) -> tuple[WardView, Any
 
 
 def vision_kwargs(view: WardView, oracle, kind, sub, alive, *, ward_start: int) -> dict:
-    """Optional ``vision.visibility`` inputs (N,) with the ward slots at
-    ``[ward_start, ward_start + S)`` and champions at ``[0, C)``. ``kind``,
-    ``sub`` and ``alive`` are the world arrays after the ward units are written."""
+    """Optional ``vision.visibility`` inputs (N,): ward slots at ``[ward_start, ward_start + S)``, champions at
+    ``[0, C)``; ``kind``, ``sub`` and ``alive`` are the world arrays after the ward rows are written."""
     n = kind.shape[0]
     s = view.alive.shape[0]
     c = oracle.shape[0]

@@ -1,17 +1,6 @@
-"""Economy rules against real games: the 16.9 replay-memory oracle.
-
-``lanerl_jax/modern/data/oracle/replay_16_9_observations.json.gz`` holds raw
-client-memory observations of 145 recorded games (all 10 champions, ~40 Hz),
-extracted by ``ops/modern/replay_oracle_extract.py`` without reference to the
-simulator. These tests compare ``economy`` against what the client
-actually did, so they catch errors in the *spec*, not just in the code.
-Patch 16.9 (26.9): no SR economy change to 26.19 (ECONOMY §19 audit).
-
-Each check asserts a population statistic (sampling is 40 Hz, values are
-rounded to 0.1, and windows can overlap minion kills), with thresholds set
-well inside the gap to the nearest wrong model; the wrong models found while
-building them are asserted to fit worse.
-"""
+"""Economy rules against the 16.9 replay-memory oracle (145 games of client observations at ~40 Hz, extracted by
+``ops/modern/replay_oracle_extract.py``; no SR economy change to 26.19, ECONOMY §19). Each check asserts a population
+statistic with thresholds inside the gap to the nearest wrong model, which is asserted to fit worse."""
 import gzip
 import json
 from functools import lru_cache
@@ -46,8 +35,7 @@ def test_oracle_coverage():
 
 
 def test_ambient_gold_phase_and_rate():
-    """Lifetime gold before any non-ambient income equals 500 + payments at
-    65.0, 65.5, ... (U-E-1); the spec's 65.5 start is one payment short."""
+    """Gold before other income = 500 + payments at 65.0, 65.5, ... (U-E-1); a 65.5 start is one payment short."""
     errs, errs_late = [], []
     for g in games():
         for inc in g["early_gold_total_increments"].values():
@@ -68,14 +56,12 @@ def test_ambient_gold_phase_and_rate():
 
 
 def test_death_timers_by_level_and_game_time():
-    """Dead duration = BRW[level] x (1 + TIF(t)); TIF accrues continuously
-    from 15:00 and is 0 before (U-E-7); levels 19–20 use the level-18 value
-    (U-E-6). The sampled duration runs ~1 sample
-    short, so allow [-0.15, +0.1] s."""
+    """Dead duration = BRW[level] x (1 + TIF(t)), TIF continuous from 15:00 (U-E-7), levels 19-20 clamped (U-E-6).
+    Samples run ~1 short, so allow [-0.15, +0.1] s."""
     obs, pred, step_pred, t_all = [], [], [], []
     for g in games():
         for x in real_deaths(g):
-            if x.get("dead_duration") is None:     # levels 19–20 included: table clamps (U-E-6)
+            if x.get("dead_duration") is None:
                 continue
             obs.append(x["dead_duration"])
             pred.append(float(E.death_time(x["level"], x["gt"])))
@@ -107,8 +93,7 @@ def _payouts(g, death):
 
 
 def test_first_blood_kill_and_assist_gold():
-    """First blood pays base + 100 to the killer; assisters share
-    (min(0.5K, 0.5 base) + 0.5 FB) x early(t)."""
+    """First blood pays base + 100; assisters share (min(0.5K, 0.5 base) + 0.5 FB) x early(t)."""
     kills, assist_ok, assist_n = 0, 0, 0
     for g in games():
         deaths = real_deaths(g)
@@ -136,8 +121,7 @@ def _assist_matches(ast, each):
 
 
 def test_assist_gold_cap_on_later_kills():
-    """Assist pool = min(0.5 K, 0.5 base) x early(t) for non-first-blood kills,
-    including shutdowns (K far above base): the pool stays at half the base."""
+    """Assist pool = min(0.5 K, 0.5 base) x early(t) for later kills; on shutdowns it stays at half the base."""
     ok, n, shut_ok, shut_n, uncapped_ok = 0, 0, 0, 0, 0
     for g in games():
         for x in real_deaths(g)[1:]:
@@ -173,8 +157,7 @@ def _sim_fountain(hp0, t, homeguard, phase_flat, phase_hg):
 
 
 def test_fountain_regen_after_recall():
-    """After a recall (Homeguard active) HP follows +2% max HP / 0.25 s plus
-    8% of missing HP / 0.5 s; without the Homeguard heal the fit is far worse."""
+    """After a recall HP follows +2% max HP / 0.25 s plus Homeguard's 8% missing HP / 0.5 s."""
     segs = []
     for g in games():
         for s in g["fountain_segments"]:
@@ -196,12 +179,8 @@ def test_fountain_regen_after_recall():
 
 
 def test_level_up_raises_current_hp_by_max_gain():
-    """On the sample where max HP rises at a level-up, current HP rises by the
-    same amount (ai_levelUp_healthGainNetGain 1.0, no missing-HP penalty).
-
-    Wounded champions sometimes gain a little more on that sample (life steal,
-    regen, junglers' +6 camp heal on the killing blow); a missing-HP penalty
-    would show as a shortfall instead, so assert there is none."""
+    """At a level-up current HP rises by the max-HP gain (no missing-HP penalty, which would show as a shortfall;
+    wounded champions may gain slightly more from regen or life steal on the same sample)."""
     diffs, full, penalised = [], [], []
     for g in games():
         f = {k: i for i, k in enumerate(g["levelups"]["fields"])}
@@ -226,11 +205,8 @@ def test_level_up_raises_current_hp_by_max_gain():
 
 
 def test_level_up_max_hp_growth_all_champions():
-    """Max-HP rise at each level-up = hpPerLevel x (G(L) − G(L−1)) + 10 per
-    scaling-HP shard (0, 1 or 2), using the 16.9 champion records of all 169
-    champions in the games. Checks the stat-growth curve (DAMAGE §3.2) and the
-    shard (10·level, RUNES §2.3) against the client; the linear growth curve
-    the legacy port used explains far less."""
+    """Max-HP rise per level-up = hpPerLevel x (G(L) - G(L-1)) + 10 per scaling-HP shard (DAMAGE §3.2, RUNES §2.3)
+    over all 169 champions; a linear growth curve explains far less."""
     from lanerl_jax.modern.core.stats import level_growth_sum
     path = ORACLE.parent / "champion_hp_16_9.json"
     champs = json.loads(path.read_text())["champions"]

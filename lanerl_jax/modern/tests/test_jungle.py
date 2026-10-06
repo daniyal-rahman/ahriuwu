@@ -1,6 +1,4 @@
-"""Symptom tests for the 26.19 jungle (docs/modern/JUNGLE.md): camps, monster AI, rewards,
-Smite, crests, Scuttler and jungle pets. Eager JAX over a tiny world (2 champions + the 38
-jungle slots); ``world.tick.step`` is never compiled here."""
+"""Jungle symptom tests (docs/modern/JUNGLE.md), eager over 2 champions + the 38 jungle slots."""
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -8,8 +6,8 @@ import pytest
 
 from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.core.stats import MAGIC, PHYSICAL, TRUE
-from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_MONSTER, KIND_NONE, NEUTRAL, UNIT_COLUMNS, AttackLaunch,
-                                          CastOrder, WorldUnits, init_attack_state)
+from lanerl_jax.modern.core.types import (JUNGLE_SLOTS, KIND_CHAMPION, KIND_MONSTER, KIND_NONE, NEUTRAL, UNIT_COLUMNS,
+                                          AttackLaunch, CastOrder, WorldUnits, init_attack_state)
 from lanerl_jax.modern.jungle import camps as J
 
 M = J.Monster
@@ -23,8 +21,6 @@ def table():
 
 
 class World:
-    """Minimal stand-in for the world arrays the step owns."""
-
     def __init__(self, table, now=0.0):
         n = M0 + table.n_slots
         self.table, self.n, self.now = table, n, now
@@ -106,7 +102,7 @@ def slot_type(table, s):
 # ---- table --------------------------------------------------------------------------------------
 
 def test_table_fits_the_regular_monster_budget(table):
-    assert table.n_slots <= J.MAX_JUNGLE_SLOTS == 40
+    assert table.n_slots <= JUNGLE_SLOTS == 40
     blue = slots_of(table, "Order Blue")
     assert [slot_type(table, s) for s in blue] == [M.BLUE]
     np.testing.assert_allclose(np.asarray(table.slot_home)[blue[0]], (3821.5, 7901.1), atol=0.2)   # client placement
@@ -121,7 +117,6 @@ def test_table_fits_the_regular_monster_budget(table):
     st = J.monster_stats(table, M.GROMP, 12)
     assert float(st.hp) == pytest.approx(2050 * 2.05)
     assert float(J.monster_stats(table, M.SCUTTLE, 1, True).hp) == pytest.approx(1550 * 0.65)
-    assert J.static_slots(table)["team"] == [NEUTRAL] * table.n_slots
 
 
 # ---- camps --------------------------------------------------------------------------------------
@@ -546,8 +541,7 @@ def test_minion_penalties_for_holders(table):
 
 
 def test_gustwalker_brush_entry_is_readable_from_state(table):
-    """The world reads Gustwalker's Gait at MOVE via ``gust_bonus_ms`` (state after the brush entry
-    latched by ``combat_effects``): 30% on entry, decaying to 0 over 1.5 s."""
+    """30% on brush entry (latched by ``combat_effects``), decaying to 0 over 1.5 s."""
     w = World(table, now=100.0)
     w.state = J.latch_pets(w.state, _own(table, {0: 1102}))
     w.state = w.state._replace(pet=w.state.pet._replace(treats=jnp.asarray([35, 0], jnp.int32)))
