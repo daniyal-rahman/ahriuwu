@@ -7,7 +7,7 @@ import numpy as np
 from lanerl_jax.modern.core import types as W
 from lanerl_jax.modern.world.phases.attack import CAST_ID_STRIDE
 from lanerl_jax.modern.world.views import in_brush
-from lanerl_jax.obs.vision import VisionGrid
+from lanerl_jax.modern.rays import VisionGrid
 
 
 def test_in_brush_reads_flag_bit_0_and_is_false_without_fog():
@@ -33,8 +33,8 @@ SX, SY = 48, 27                                                       # the scre
 
 def _click_state(kind, sub, radius, dx):
     """Garen at (5000, 5000), Jax far away, one red unit ``dx`` units right of champion 0's centre click."""
-    from lanerl_jax.train.actions import _screen_to_centred_lane
-    ds, dn = (float(v) for v in _screen_to_centred_lane(jnp.float32((SX + 0.5) / 96), jnp.float32((SY + 0.5) / 54)))
+    from lanerl_jax.modern.screen import screen_to_lane
+    ds, dn = (float(v) for v in screen_to_lane(jnp.float32((SX + 0.5) / 96), jnp.float32((SY + 0.5) / 54)))
     cx, cy = 5000.0 + ds, 5000.0 + dn
     n = 3
     state = SimpleNamespace(

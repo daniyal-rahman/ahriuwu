@@ -36,7 +36,7 @@ The rune-granted items are now real catalog items, so the catalog has 220 items:
 
 `runes.effects.coverage_report()` raises unless each of the 69 perks is exactly one of the following:
 - implemented by a tree module;
-- **DEFERRED**: Sixth Sense 8137 and Deep Ward 8141, both vision (MODERN-009);
+- **WORLD**: Sixth Sense 8137 and Deep Ward 8141, implemented by the ward system (`wards.py`);
 - **STATIC**: the 7 shards, applied host-side by `stat_shard_stats`.
 
 | Module | Runes |
