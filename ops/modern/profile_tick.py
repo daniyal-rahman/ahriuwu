@@ -1,19 +1,15 @@
-"""Attribute modern world tick device time to source files and lines.
+"""Attribute modern world tick device time to source files and lines (MODERN-021).
 
-TOOL (MODERN-021). Builds the same world and scripted scan as
-``ops.modern.bench`` (same variant flags), warms it, traces a few steady
-calls with ``jax.profiler.trace`` and joins every executed XLA op (``hlo_op``
-stat in the trace) to the innermost user source location recorded in the
-compiled HLO (``FileLocations``/``StackFrames`` tables). Fusions take the most
-common location among their fused instructions. Container ops (while, call,
-conditional) are skipped so time is not counted twice.
+Traces a few steady calls of the ``ops.modern.bench`` scan (same world flags) with ``jax.profiler.trace`` and
+joins every executed XLA op (``hlo_op`` trace stat) to the innermost user source location in the compiled HLO
+(``FileLocations``/``StackFrames``); fusions take their fused instructions' most common location. Container
+ops (while, call, conditional) are skipped so time is not counted twice.
 
     python -m ops.modern.profile_tick --envs 512 --ticks 100 [--top 40] [--trace-dir DIR]
 
-Prints JSON lines: totals, then per-file and per-(file, line) shares of op time.
-On CPU, parallel thunks overlap, so shares are of summed op time, not wall time.
-On GPU, CUDA command buffers are disabled while profiling (they replace kernel names
-with ``command_buffer_N``), so absolute times run a little slower than the bench.
+Prints JSON lines: totals, then per-file and per-(file, line) shares of op time. On CPU parallel thunks
+overlap, so shares are of summed op time. CUDA command buffers are disabled (they hide kernel names), so GPU
+times run a little slower than the bench.
 """
 from __future__ import annotations
 
@@ -98,12 +94,10 @@ def main() -> None:
     ap.add_argument("--calls", type=int, default=2, help="traced steady calls")
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument("--trace-dir", default=None)
-    ap.add_argument("--keep-command-buffers", action="store_true",
-                    help="GPU: keep CUDA command buffers (they hide per-kernel names from the trace)")
     add_world_args(ap)
     args = ap.parse_args()
-    if not args.keep_command_buffers:      # read at backend start, so before any jax computation
-        os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_gpu_enable_command_buffer=").strip()
+    # Read at backend start, so before any jax computation.
+    os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_gpu_enable_command_buffer=").strip()
     from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
     from jax.profiler import ProfileData

@@ -1,8 +1,6 @@
-"""Pinned 26.19 champion data, extracted from Riot's shipped BIN records.
+"""Pinned 26.19 Garen/Jax records extracted from Riot's shipped BIN files (no network at runtime).
 
-The small JSON snapshots are checked in so neither training nor tests fetch
-`latest`. Data Dragon incorrectly reports zero AD growth in this patch; use
-the BIN's damagePerLevelModifiable instead. Map/items/runes are separate scope.
+Data Dragon reports zero AD growth in this patch; the BIN's ``damagePerLevelModifiable`` is used instead.
 """
 import json
 from functools import lru_cache
@@ -24,10 +22,8 @@ def stat(name, key):
 
 
 def spell(name, slot):
-    suffix = f"/{name}{slot}"
-    if slot == "Passive":
-        suffix = f"/{name}Passive"
-    return next(v for k, v in champion(name)["spells"].items() if k.endswith(suffix))
+    """Spell record of ``slot`` (Q/W/E/R/Passive)."""
+    return next(v for k, v in champion(name)["spells"].items() if k.endswith(f"/{name}{slot}"))
 
 
 def values(name, slot, key):

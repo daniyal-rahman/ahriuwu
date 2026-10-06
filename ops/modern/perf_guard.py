@@ -1,21 +1,11 @@
 """Throughput / memory regression guard for the modern world tick.
 
-TOOL. Runs the ``ops.modern.bench`` scan (same world, scripted orders)
-for one fixed config per backend, measures steady env-ticks per second (best of
-``--repeats`` timed calls), the compiled program's temp buffer size
-(``memory_analysis``, any backend) and peak device memory
-(``jax.devices()[0].memory_stats()['peak_bytes_in_use']``, GPU only), and
-compares them to ``ops/modern/perf_baseline.json`` (keyed by backend, device
-kind and config). Exit status: 0 ok, 1 regression (throughput more than
-``--tolerance`` below baseline, or either memory figure more than
-``--tolerance`` above it), 3 no baseline for this key (record one with
-``--update-baseline``).
+Runs the ``ops.modern.bench`` scan for one config and compares steady env-ticks/s (best of ``--repeats``), the
+compiled program's temp buffer size and the peak device memory (GPU only) with ``perf_baseline.json`` (keyed
+by backend, device kind and config). Exit 0 ok, 1 regression beyond ``--tolerance``, 3 no baseline for this
+key (record one with ``--update-baseline``). Prints one JSON line.
 
     python -m ops.modern.perf_guard [--envs N] [--ticks 150] [--warm-ticks 1800] [--update-baseline]
-
-Defaults: 256 envs on GPU, 16 on CPU. Prints one JSON line with the
-measurement (also overflow and peak valid packets per tick, informational),
-the baseline entry and the verdict.
 """
 from __future__ import annotations
 
@@ -47,27 +37,25 @@ def measure(args) -> dict:
     timed = jax.jit(jax.vmap(lambda s: run(s, args.ticks)))
     batch = init_batch(cfg, args.envs)
     t0 = time.time()
-    timed = timed.lower(batch).compile()               # one compile; run this executable throughout
+    timed = timed.lower(batch).compile()               # one compile, run throughout
     temp = timed.memory_analysis()
     temp_bytes = None if temp is None else int(temp.temp_size_in_bytes)
     batch, _ = warm_up(timed, batch, args.warm_ticks, args.ticks)
     warm_s = time.time() - t0
-    best, over, packets = float("inf"), 0, None
+    best, over, packets = float("inf"), 0, (0, 0)
     for _ in range(args.repeats):
         t0 = time.time()
-        batch, (po, mo, *used) = timed(batch)
+        batch, (po, mo, (pm, pf)) = timed(batch)       # (main, follow-up) valid packets per tick
         jax.block_until_ready(batch.t)
         best = min(best, time.time() - t0)
         over = max(over, int(po.max()), int(mo.max()))
-        if used:                                       # (main, follow-up) valid packets per tick
-            pm, pf = (int(u.max()) for u in used[0])
-            packets = (max(pm, packets[0]), max(pf, packets[1])) if packets else (pm, pf)
+        packets = (max(int(pm.max()), packets[0]), max(int(pf.max()), packets[1]))
     stats = jax.devices()[0].memory_stats() or {}
     peak = stats.get("peak_bytes_in_use")
     return {"env_ticks_per_s": round(args.envs * args.ticks / best, 1), "steady_s": round(best, 4),
             "program_temp_bytes": temp_bytes, "peak_device_bytes": None if peak is None else int(peak),
             "warm_compile_and_run_s": round(warm_s, 1), "overflow": over,
-            "packets_max": packets and packets[0], "follow_up_packets_max": packets and packets[1]}
+            "packets_max": packets[0], "follow_up_packets_max": packets[1]}
 
 
 def compare(now: dict, base: dict, tol: float) -> list[str]:

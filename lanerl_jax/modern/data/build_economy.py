@@ -1,28 +1,19 @@
-"""Build the patch-pinned SR economy/progression table from 16.19.8230722 client data.
+"""Build ``26.19/economy_client.json`` (SR economy/progression) from 16.19.8230722 client data.
 
-Host-side tool, not imported by the simulator. Follows the CLASSIC
-``GameModeMapData`` record of the cached Map11 bin to its experience curve,
-experience mod data, death times and the kill-gold/bounty config, and reads
-the CLASSIC ``mGameModeConstants`` (``classic-constants.json``, byte-identical
-to map11 ``{6cf687be}``). Writes ``lanerl_jax/modern/data/26.19/economy_client.json``.
-
-Hashed config fields are kept under their hash; the names used by the runtime
-(``bounty.*``) follow docs/modern/ECONOMY_PROGRESSION.md §6.1, which matched
-each value to the wiki/Riot notes.
+Follows the CLASSIC ``GameModeMapData`` of the cached Map11 bin to its experience curve, experience mod
+data, death times and kill-gold/bounty config, and reads the CLASSIC ``mGameModeConstants``
+(``classic-constants.json``, byte-identical to map11 ``{6cf687be}``). Hashed config fields keep their hash;
+the runtime ``bounty.*`` names follow docs/modern/ECONOMY_PROGRESSION.md §6.1.
 
     python -m lanerl_jax.modern.data.build_economy [--research DIR] [--out PATH]
 """
 from __future__ import annotations
 
-import argparse
-import hashlib
 import json
 from pathlib import Path
 
-from . import PATCH_DIR
+from . import CLIENT_BUILD, PATCH, PATCH_DIR, build_main, sha256
 
-RESEARCH = Path("/mnt/nfs/shared/modern-world-map-research")
-OUT = PATCH_DIR / "economy_client.json"
 CLASSIC = "Maps/Shipping/Map11/Modes/CLASSIC"
 KILL_GOLD_CONFIG = "{4fd6b68d}"          # CLASSIC Configs entry with BaseGold/FirstBloodBonus
 BOUNTY_NAMES = {                          # ECONOMY_PROGRESSION.md §6.1 (CDV value, INF name)
@@ -43,10 +34,6 @@ CONSTANTS = (
 )
 
 
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def build(research: Path) -> dict:
     map_path = research / "cdragon-16.19" / "map11.bin.json"
     const_path = research / "classic-constants.json"
@@ -54,23 +41,18 @@ def build(research: Path) -> dict:
     mode = m[CLASSIC]
     if KILL_GOLD_CONFIG not in mode["Configs"]:
         raise RuntimeError("CLASSIC record no longer references the kill-gold config")
-    curve = m[mode["mExperienceCurveData"]]
-    mods = m[mode["mExperienceModData"]]
-    death = m[mode["mDeathTimes"]]
+    curve, mods, death = m[mode["mExperienceCurveData"]], m[mode["mExperienceModData"]], m[mode["mDeathTimes"]]
     gold = m[KILL_GOLD_CONFIG]
-    consts = {}
-    for group in json.loads(const_path.read_text())["mGroups"].values():
-        for name, rec in group.get("mConstants", {}).items():
-            consts[name] = rec.get("mValue", 0.0 if "Float" in rec.get("__type", "") else 0)
+    consts = {name: rec.get("mValue", 0.0 if "Float" in rec.get("__type", "") else 0)
+              for group in json.loads(const_path.read_text())["mGroups"].values()
+              for name, rec in group.get("mConstants", {}).items()}
     missing = [c for c in CONSTANTS if c not in consts]
     if missing:
         raise RuntimeError(f"CLASSIC constants missing: {missing}")
     bounty = {name: float(gold[h]) for h, name in BOUNTY_NAMES.items()}
     bounty["deferral_out_of_combat"] = float(gold["{a966473c}"]["{4b733ea3}"])
     return {
-        "schema": "lanerl-client-sr-economy-v1",
-        "patch": "26.19",
-        "client_build": "16.19.8230722",
+        "schema": "lanerl-client-sr-economy-v1", "patch": PATCH, "client_build": CLIENT_BUILD,
         "sources": {"map11.bin.json": sha256(map_path), "classic-constants.json": sha256(const_path)},
         "refs": {"experience_curve": mode["mExperienceCurveData"], "experience_mod": mode["mExperienceModData"],
                  "death_times": mode["mDeathTimes"], "kill_gold": KILL_GOLD_CONFIG},
@@ -95,15 +77,5 @@ def build(research: Path) -> dict:
     }
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--research", type=Path, default=RESEARCH)
-    ap.add_argument("--out", type=Path, default=OUT)
-    args = ap.parse_args()
-    payload = build(args.research)
-    args.out.write_text(json.dumps(payload, indent=1) + "\n")
-    print(f"wrote {args.out}")
-
-
 if __name__ == "__main__":
-    main()
+    build_main(__doc__, build, PATCH_DIR / "economy_client.json", lambda p, out: f"wrote {out}", indent=1)

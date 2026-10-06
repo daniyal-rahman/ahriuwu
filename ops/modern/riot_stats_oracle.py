@@ -1,16 +1,12 @@
-"""Compare the modern stat pipeline with Riot match-v5 timeline champion stats.
+"""Riot match-v5 oracle of the modern stat pipeline (MODERN-016).
 
-TOOL (MODERN-016). For every participant-minute of the recorded 16.9 games it
-rebuilds the inventory from the timeline's item events, then predicts max HP,
-AD, AP, armor, MR, ability haste, attack speed and move speed through
-``core.stat_pipeline.compose`` with 16.9 champion records, 16.9 item stats
-and the player's stat shards, and compares with Riot's ``championStats``.
+``extract`` writes a compact, anonymised table (no player names or PUUIDs) of the recorded 16.9 games: per
+participant-minute the observed ``championStats``, level, xp, gold, inventory (rebuilt from item events) and
+rune page, plus kill events with bounty/shutdown. ``predict`` (used by test_stats_riot_oracle.py) recomputes
+those stats through ``core.stat_pipeline.compose`` with 16.9 champion/item records, shards and rune/item hooks.
 
-    python -m ops.modern.riot_stats_oracle extract --matches DIR --out lanerl_jax/modern/data/oracle/riot_16_9_frames.json.gz
-
-``extract`` writes a compact, anonymised table (no player names or PUUIDs):
-per participant-minute the observed stats, level, xp, gold, inventory and the
-rune page, plus kill events with bounty/shutdown. Tests read that table.
+    python -m ops.modern.riot_stats_oracle extract --matches DIR \
+        --out lanerl_jax/modern/data/oracle/riot_16_9_frames.json.gz
 """
 from __future__ import annotations
 
@@ -27,8 +23,7 @@ STATS = ("healthMax", "attackDamage", "abilityPower", "armor", "magicResist", "a
 
 def inventory_timeline(events, pid):
     """Item multiset after each event for participant ``pid``: list of (t_ms, Counter)."""
-    inv = Counter()
-    out = []
+    inv, out = Counter(), []
     for e in events:
         if e.get("participantId") != pid:
             continue
@@ -98,16 +93,13 @@ CHUNK = 2000
 MULTIPLICATIVE = ("tenacity", "slow_resist", "percent_armor_pen", "percent_magic_pen")
 
 
-def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bool = True) -> dict:
+def predict(payload: dict, client: dict, *, runes: bool = True) -> dict:
     """Predicted Riot-style stats for every participant-minute after t=0.
 
-    Returns ``{"rows": [...], "obs": (R, S) array, "pred": {stat: (R,)}}``.
-    Static parts come from 16.9 champion/item records and the shards; rune
-    stats come from ``runes.effects.stats`` with every rune at its
-    initial state (dynamic stacks 0), evaluated at the frame's game time,
-    level, HP and inventory. Riot reports ``attackSpeed`` as 100 × (1 + bonus
-    AS) (fits 65% of frames vs 14% for 100 × AS / base AS on champions whose
-    AS ratio differs from base AS) and truncates every stat to an integer.
+    Returns ``{"rows", "obs": (R, S), "pred": {stat: (R,)}, ...}``. Rune and item-passive stats are evaluated
+    at their initial state (stacks 0) at the frame's time, level, HP and inventory. Riot reports
+    ``attackSpeed`` as 100 x (1 + bonus AS) (fits 65% of frames vs 14% for 100 x AS / base AS) and truncates
+    every stat to an integer.
     """
     import jax.numpy as jnp
     import numpy as np
@@ -142,6 +134,7 @@ def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bo
     static = ItemStats(**{k: jnp.asarray(v) for k, v in bonus.items()})
     total = static
     if runes:
+        from lanerl_jax.modern.items import effects as IE
         from lanerl_jax.modern.items.effects.core import Ctx
         from lanerl_jax.modern.runes import effects as RE
         from lanerl_jax.modern.runes.effects.core import rune_events
@@ -169,8 +162,7 @@ def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bo
                   life_steal=z, bonus_attack_speed=pre.bonus_attack_speed, ability_haste=z, lethality=z,
                   heal_shield_power=z, attack_windup=z, in_combat=jnp.zeros((n,), bool),
                   in_shop=jnp.zeros((n,), bool))
-        # Evaluate in chunks: rows act as independent "holders", and some hooks build
-        # holder x holder arrays (ally searches), so one 40k-row batch would be 40k^2.
+        # Chunks: rows are independent "holders" and some hooks build holder x holder arrays (ally searches).
         parts = []
         for lo in range(0, n, CHUNK):
             sl = slice(lo, min(lo + CHUNK, n))
@@ -178,11 +170,8 @@ def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bo
             c = c._replace(unit=jnp.arange(c.level.shape[0], dtype=jnp.int32))
             ev = rune_events(c, 1, game_time=t[sl], own=jnp.asarray(own[sl]))
             dyn = RE.stats(RE.init(c.level.shape[0], 1), jnp.asarray(page[sl]), c, ev)
-            if item_effects:
-                # Item passives that are stats (Rabadon's %AP, Sterak's, Overlord's ...), each
-                # at its initial state, through items.effects.dynamic_stats.
-                from lanerl_jax.modern.items import effects as IE
-                dyn = combine_stats(dyn, IE.dynamic_stats(IE.init(c.level.shape[0], 1), jnp.asarray(own[sl]), c))
+            # Item passives that are stats (Rabadon's %AP, Sterak's, Overlord's ...).
+            dyn = combine_stats(dyn, IE.dynamic_stats(IE.init(c.level.shape[0], 1), jnp.asarray(own[sl]), c))
             parts.append(dyn)
         sizes = [min(CHUNK, n - lo) for lo in range(0, n, CHUNK)]
         dyn = ItemStats(*(jnp.concatenate([jnp.broadcast_to(jnp.asarray(getattr(d, k), jnp.float32), (m,))
@@ -202,13 +191,11 @@ def predict(payload: dict, client: dict, *, runes: bool = True, item_effects: bo
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = ap.add_subparsers(dest="cmd", required=True)
-    e = sub.add_parser("extract")
+    e = ap.add_subparsers(dest="cmd", required=True).add_parser("extract")
     e.add_argument("--matches", required=True)
     e.add_argument("--out", required=True)
     args = ap.parse_args()
-    if args.cmd == "extract":
-        extract(args.matches, args.out)
+    extract(args.matches, args.out)
 
 
 if __name__ == "__main__":

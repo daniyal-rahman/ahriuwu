@@ -1,26 +1,19 @@
 #!/usr/bin/env python3
-"""Extract RAW ground-truth observations from recorded LoL replays (patch 16.9).
+"""Extract raw ground-truth observations from recorded 16.9 replays (economy oracle; ops/README.md).
 
-Independent oracle: this script only records what the client memory reader
-saw.  It deliberately encodes no game formula (no gold/xp/regen models); the
-only thresholds are the extraction parameters listed in PARAMS below, which are
-written into every output file.
+Independent oracle: records only what the client memory reader saw and encodes no game formula; the only
+thresholds are the ``PARAMS`` written into every output. Inputs per game dir, opened by exact path (frames/ is
+huge and never globbed): ``raw_mem.json`` (~40 Hz samples ``{wall, gt, heroes: {Name: {pos, hp, hp_max, gold,
+gold_total, level}}}``), the ``labels.json`` header and recorded-champion stats, optional ``item_track.json``.
 
-Inputs per game dir (opened by exact path, never globbed -- frames/ is huge):
-    raw_mem.json    list of ~40 Hz samples
-                    {"wall", "gt", "heroes": {Name: {"pos", "hp", "hp_max",
-                     "gold", "gold_total", "level"}}}
-    labels.json     header fields only: match_id, champion, team, slot, fps
-    item_track.json optional, recorded champion only (see item_timeline())
+    extract GAME_DIR... --out OUT_DIR                  one <match>.json.gz each
+    index --out OUT_DIR [--dataset-root DIR]           OUT_DIR/index.json
+    summarize --out OUT_DIR --summary PATH             compact all-game summary
 
-Modes:
-    extract  GAME_DIR [GAME_DIR ...] --out OUT_DIR   one <match>.json.gz each
-    index    --out OUT_DIR                            OUT_DIR/index.json
-    summarize --out OUT_DIR --summary PATH            compact all-game summary
-
-Pure standard library (the desktop's system python has no numpy).
+Pure standard library (the desktop's system python has no numpy); run via replay_oracle_extract.sbatch.
 """
 import argparse
+import bisect
 import datetime
 import gzip
 import hashlib
@@ -50,24 +43,18 @@ PARAMS = {
 CURRENT_GOLD_SANE = (-1.0, 1.0e5)    # outside this the raw current-gold read is garbage
 
 
-def sha256_file(path, bufsize=1 << 20):
+def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
-        while True:
-            b = f.read(bufsize)
-            if not b:
-                break
+        for b in iter(lambda: f.read(1 << 20), b""):
             h.update(b)
     return h.hexdigest()
 
 
 def r(x, nd=3):
-    if x is None:
-        return None
+    """Rounded float for JSON (non-finite as its repr); other values unchanged."""
     if isinstance(x, float):
-        if not math.isfinite(x):
-            return repr(x)
-        return round(x, nd)
+        return round(x, nd) if math.isfinite(x) else repr(x)
     return x
 
 
@@ -76,9 +63,7 @@ def dist(a, b):
 
 
 def pos2(p):
-    if p is None:
-        return None
-    return [r(float(p[0]), 1), r(float(p[1]), 1)]
+    return None if p is None else [r(float(p[0]), 1), r(float(p[1]), 1)]
 
 
 def sane_gold(g):
@@ -86,37 +71,21 @@ def sane_gold(g):
         and CURRENT_GOLD_SANE[0] <= g <= CURRENT_GOLD_SANE[1]
 
 
-# --------------------------------------------------------------------------
-# loading
-
 FIELDS = ("hp", "hp_max", "gold", "gold_total", "level")
 
 
 def load_raw(path):
-    """Return (gts, walls, heroes, per_hero_columns, load_notes).
-
-    Columns are python lists aligned to gts; a missing hero in a sample is None.
-    """
+    """``(gts, walls, heroes, columns, notes)``; columns are lists aligned to gts, None where a hero is missing."""
     with open(path) as f:
         samples = json.load(f)
-    heroes = []
-    seen = set()
-    for s in samples[:50]:
-        for name in s.get("heroes", {}):
-            if name not in seen:
-                seen.add(name)
-                heroes.append(name)
+    heroes = list(dict.fromkeys(name for s in samples[:50] for name in s.get("heroes", {})))
     n = len(samples)
-    gts = [None] * n
-    walls = [None] * n
+    gts = [s.get("gt") for s in samples]
+    walls = [s.get("wall") for s in samples]
     cols = {h: {k: [None] * n for k in FIELDS + ("x", "y")} for h in heroes}
-    extra_heroes = Counter()
-    pos_dims = Counter()
+    extra_heroes, pos_dims = Counter(), Counter()
     for i, s in enumerate(samples):
-        gts[i] = s.get("gt")
-        walls[i] = s.get("wall")
-        hs = s.get("heroes", {})
-        for name, d in hs.items():
+        for name, d in s.get("heroes", {}).items():
             c = cols.get(name)
             if c is None:
                 extra_heroes[name] += 1
@@ -138,19 +107,14 @@ def load_labels_header(path):
     with open(path) as f:
         d = json.load(f)
     frames = d.get("frames") or []
-    out = {k: d.get(k) for k in ("match_id", "champion", "team", "slot", "fps",
-                                  "total_frames")}
+    out = {k: d.get(k) for k in ("match_id", "champion", "team", "slot", "fps", "total_frames")}
     out["n_frames"] = len(frames)
     out["first_frame_gt"] = frames[0].get("gt") if frames else None
     out["last_frame_gt"] = frames[-1].get("gt") if frames else None
-    # recorded champion's own stats per frame (20 fps): used only to check
-    # whether the label-side current gold is a live value (raw_mem's is not).
-    stats = []
-    for fr in frames:
-        cs = (fr.get("label") or {}).get("champion_stats") or {}
-        stats.append((fr.get("gt"), cs.get("gold"), cs.get("gold_total"), cs.get("hp"),
-                      cs.get("hp_max"), cs.get("level")))
-    del d, frames
+    # Recorded champion's stats per frame (20 fps), to check whether the label-side current gold is live
+    # (raw_mem's is not).
+    stats = [(fr.get("gt"), *(((fr.get("label") or {}).get("champion_stats") or {}).get(k)
+                               for k in ("gold", "gold_total", "hp", "hp_max", "level"))) for fr in frames]
     return out, stats
 
 
@@ -183,30 +147,18 @@ def labels_gold_observations(stats):
             "gold_gain_minus_total_gain_hist": [[k, v] for k, v in Counter(gains_vs_total).most_common(10)]}
 
 
-# --------------------------------------------------------------------------
-# helpers on columns
-
-def nearest_index_le(gts, t, lo=0):
+def nearest_index_le(gts, t):
     """Largest i with gts[i] <= t (gts assumed nondecreasing); -1 if none."""
-    import bisect
-    return bisect.bisect_right(gts, t, lo) - 1
-
-
-def value_at(col, i):
-    return col[i] if 0 <= i < len(col) else None
+    return bisect.bisect_right(gts, t) - 1
 
 
 def sample_rate_stats(gts, walls):
-    steps = [gts[i + 1] - gts[i] for i in range(len(gts) - 1)
-             if gts[i] is not None and gts[i + 1] is not None]
+    pairs = [(i, a, b) for i, (a, b) in enumerate(zip(gts, gts[1:])) if a is not None and b is not None]
+    steps = [b - a for _, a, b in pairs]
     pos_steps = [s for s in steps if s > 0]
-    gaps = [{"gt_before": r(gts[i]), "gt_after": r(gts[i + 1]), "step": r(gts[i + 1] - gts[i])}
-            for i in range(len(gts) - 1)
-            if gts[i] is not None and gts[i + 1] is not None
-            and gts[i + 1] - gts[i] > PARAMS["gap_report_s"]]
-    back = [{"index": i + 1, "gt_before": r(gts[i]), "gt_after": r(gts[i + 1])}
-            for i in range(len(gts) - 1)
-            if gts[i] is not None and gts[i + 1] is not None and gts[i + 1] < gts[i]]
+    gaps = [{"gt_before": r(a), "gt_after": r(b), "step": r(b - a)}
+            for _, a, b in pairs if b - a > PARAMS["gap_report_s"]]
+    back = [{"index": i + 1, "gt_before": r(a), "gt_after": r(b)} for i, a, b in pairs if b < a]
     wsteps = [walls[i + 1] - walls[i] for i in range(len(walls) - 1)
               if walls[i] is not None and walls[i + 1] is not None]
     rate = None
@@ -239,18 +191,12 @@ def value_quirks(col):
     if not vals:
         return {"n": 0}
     n_int = sum(1 for v in vals if float(v).is_integer())
-    frac = Counter()
-    for v in vals:
-        f = round(abs(v) - math.floor(abs(v)), 4)
-        frac[f] += 1
+    frac = Counter(round(abs(v) - math.floor(abs(v)), 4) for v in vals)
     return {"n": len(vals), "frac_integer": r(n_int / len(vals), 4),
             "n_distinct_fractional_parts": len(frac),
             "top_fractional_parts": [[k, c] for k, c in frac.most_common(6)],
             "min": r(min(vals)), "max": r(max(vals))}
 
-
-# --------------------------------------------------------------------------
-# extraction
 
 def team_of(x, y):
     db = dist((x, y), PARAMS["spawn_blue"])
@@ -258,7 +204,7 @@ def team_of(x, y):
     return ("blue" if db < dr else "red"), db, dr
 
 
-def extract_game(game_dir, hash_files=True):
+def extract_game(game_dir):
     t0 = datetime.datetime.now(datetime.timezone.utc)
     game_dir = game_dir.rstrip("/")
     gid = os.path.basename(game_dir)
@@ -277,13 +223,9 @@ def extract_game(game_dir, hash_files=True):
         "params": PARAMS,
         "extracted_at": t0.isoformat(timespec="seconds"),
     }
-    if hash_files:
-        out["source_sha256"] = {k + ".json": sha256_file(p)
-                                for k, p in paths.items() if present[k]}
-        out["source_bytes"] = {k + ".json": os.path.getsize(p)
-                               for k, p in paths.items() if present[k]}
-    labels = None
-    label_stats = None
+    out["source_sha256"] = {k + ".json": sha256_file(p) for k, p in paths.items() if present[k]}
+    out["source_bytes"] = {k + ".json": os.path.getsize(p) for k, p in paths.items() if present[k]}
+    labels = label_stats = None
     if present["labels"]:
         try:
             labels, label_stats = load_labels_header(paths["labels"])
@@ -303,12 +245,8 @@ def extract_game(game_dir, hash_files=True):
         return out
 
     # ---- metadata / teams
-    first_i = {}
-    for h in heroes:
-        for i in range(n):
-            if C[h]["x"][i] is not None:
-                first_i[h] = i
-                break
+    first = {h: next((i for i in range(n) if C[h]["x"][i] is not None), None) for h in heroes}
+    first_i = {h: i for h, i in first.items() if i is not None}
     teams, team_evidence = {}, {}
     for h in heroes:
         i = first_i.get(h)
@@ -336,8 +274,7 @@ def extract_game(game_dir, hash_files=True):
     }
     out["meta"] = meta
 
-    # Indices sorted (stable) by gt are only needed if gt goes backwards; we keep
-    # the recorded sample order and report backward steps in meta.sampling.
+    # Sample order is kept as recorded; backward gt steps are reported in meta.sampling.
     lo, hi = PARAMS["early_window_s"]
     early_idx = [i for i in range(n) if gts[i] is not None and lo <= gts[i] <= hi]
 
@@ -402,11 +339,8 @@ def extract_game(game_dir, hash_files=True):
 
     # ---- deaths / respawns
     def gold_total_at(h, t):
-        i = nearest_index_le(gts, t)
-        if i < 0:
-            i = 0
-        # walk back over missing values
-        col = C[h]["gold_total"]
+        i = max(nearest_index_le(gts, t), 0)
+        col = C[h]["gold_total"]                            # walk back over missing values
         while i > 0 and col[i] is None:
             i -= 1
         return col[i], i
@@ -431,8 +365,8 @@ def extract_game(game_dir, hash_files=True):
                 w0, w1 = dgt + PARAMS["payout_window_rel_s"][0], dgt + PARAMS["payout_window_rel_s"][1]
                 payouts = {}
                 for o in heroes:
-                    a, ia = gold_total_at(o, w0)
-                    b, ib = gold_total_at(o, w1)
+                    a, _ = gold_total_at(o, w0)
+                    b, _ = gold_total_at(o, w1)
                     payouts[o] = {"delta": r(b - a, 3) if a is not None and b is not None else None,
                                   "team": teams.get(o)}
                 # individual chunks of others inside the window
@@ -470,7 +404,6 @@ def extract_game(game_dir, hash_files=True):
                     dead_hp = [hp[k] for k in range(di, j) if hp[k] is not None]
                     rec_d["dead_hp_values"] = sorted(set(r(x, 2) for x in dead_hp))[:10]
                     rec_d["n_dead_samples"] = j - di
-                    # position while dead: did it move?
                     rec_d["pos_last_dead_sample"] = pos2((C[h]["x"][j - 1], C[h]["y"][j - 1]))
                 else:
                     rec_d["respawn"] = None
@@ -488,8 +421,7 @@ def extract_game(game_dir, hash_files=True):
     # ---- fountains from respawn positions (fallback: game-start positions)
     fountains = {}
     for t in ("blue", "red"):
-        # only "full" respawns: >= 5 s at hp <= 0 and back at hp == hp_max.  Short
-        # hp<=0 blips (dead_duration < 2 s records) keep their field position.
+        # Only full respawns (>= 5 s dead, back at hp == hp_max): short hp<=0 blips keep their field position.
         rp = [d["respawn"]["pos"] for d in deaths
               if d.get("respawn") and d["team"] == t and (d.get("dead_duration") or 0) >= 5.0
               and d["respawn"].get("hp_equals_hp_max")]
@@ -501,11 +433,9 @@ def extract_game(game_dir, hash_files=True):
             rp = [team_evidence[h]["first_pos"] for h in heroes if teams.get(h) == t]
             src = "first_sample_median_fallback"
         if rp:
-            fountains[t] = {"pos": [r(statistics.median(p[0] for p in rp), 1),
-                                    r(statistics.median(p[1] for p in rp), 1)],
-                            "source": src, "n": len(rp),
-                            "spread_max": r(max(dist(p, (statistics.median(q[0] for q in rp),
-                                                          statistics.median(q[1] for q in rp))) for p in rp), 1)}
+            med = (statistics.median(p[0] for p in rp), statistics.median(p[1] for p in rp))
+            fountains[t] = {"pos": [r(med[0], 1), r(med[1], 1)], "source": src, "n": len(rp),
+                            "spread_max": r(max(dist(p, med) for p in rp), 1)}
     out["fountains"] = fountains
 
     # ---- fountain segments
@@ -525,7 +455,6 @@ def extract_game(game_dir, hash_files=True):
                 continue
             inside = HP[i] > 0 and dist((X[i], Y[i]), fp) <= R
             if inside and not inside_prev:
-                # classify the start
                 pi = i - 1
                 while pi >= 0 and (X[pi] is None or HP[pi] is None):
                     pi -= 1
@@ -534,13 +463,10 @@ def extract_game(game_dir, hash_files=True):
                 else:
                     jump = dist((X[i], Y[i]), (X[pi], Y[pi]))
                     k = pi
-                    recent_dead = False
-                    while k >= 0 and gts[k] is not None and gts[i] - gts[k] <= 2.0:
-                        if HP[k] is not None and HP[k] <= 0:
-                            recent_dead = True
-                            break
+                    while k >= 0 and gts[k] is not None and gts[i] - gts[k] <= 2.0 \
+                            and not (HP[k] is not None and HP[k] <= 0):
                         k -= 1
-                    if recent_dead:
+                    if k >= 0 and gts[k] is not None and gts[i] - gts[k] <= 2.0:      # died within 2 s
                         kind = "respawn"
                     elif jump > PARAMS["recall_jump_units"]:
                         kind = "recall"
@@ -607,7 +533,6 @@ def extract_game(game_dir, hash_files=True):
                         "level": L[i], "pos": pos2((C[h]["x"][i], C[h]["y"][i])),
                         "alive_before": (HP[prev] or 0) > 0, "alive_after": (HP[i] or 0) > 0})
             prev = i
-    # flag hp_max changes close to a level-up of the same hero
     lu_by_hero = {}
     for lu in levelups:
         lu_by_hero.setdefault(lu["hero"], []).append(lu["gt"])
@@ -653,16 +578,15 @@ def extract_game(game_dir, hash_files=True):
             k: {"n": len(v), "max_abs_diff": r(max(v)) if v else None,
                 "frac_exact": r(sum(1 for d in v if d == 0) / len(v), 4) if v else None}
             for k, v in diffs.items()}
-        out["labels_vs_raw_mem_recorded"]["note"] = "labels frame gt matched to last raw_mem sample with gt <= it, every 20th frame"
+        out["labels_vs_raw_mem_recorded"]["note"] = ("labels frame gt matched to last raw_mem sample with gt <= it, "
+                                                     "every 20th frame")
 
-    # ---- item_track
+    out["item_track"] = None
     if present["item_track"]:
         try:
             out["item_track"] = item_timeline(paths["item_track"])
         except Exception as e:  # noqa: BLE001
             out["item_track"] = {"error": repr(e)}
-    else:
-        out["item_track"] = None
 
     out["counts"] = {"deaths": len(deaths), "respawns": sum(1 for d in deaths if d.get("respawn")),
                      "levelups": sum(1 for l in levelups if not l.get("level_decrease")),
@@ -676,31 +600,21 @@ def extract_game(game_dir, hash_files=True):
 
 
 def item_timeline(path):
-    """item_track.json (recorded champion only) schema, as observed:
-    {match_id, champion, scanner:{speed, poll_interval_s, snapshot_every_gt,
-     patch_mod_size, scanned_at}, n_polls, n_drifts,
-     events:[{gt, slot, type in acquired|removed|changed|consume|active_fire|
-              active_flag_rise, item_id, [from_id], [from_uc,to_uc], [fire_t]}],
-     snapshots:[{gt, inv:[7 x null | {id, use_counter, last_fire_t, active_flag}]}]}
-    Slot 6 is the trinket slot.  We keep header + all events verbatim and the
-    snapshots reduced to inventory-id changes only.
-    """
+    """Header + all events of ``item_track.json`` (recorded champion) verbatim; snapshots reduced to
+    inventory-id changes. Observed schema: events ``{gt, slot, type, item_id, [from_id], [from_uc, to_uc],
+    [fire_t]}``, snapshots ``{gt, inv: 7 x (null | {id, use_counter, last_fire_t, active_flag})}``, slot 6 =
+    trinket."""
     with open(path) as f:
         d = json.load(f)
     snaps = d.get("snapshots") or []
-    inv_changes = []
-    last = None
+    inv_changes, last = [], None
     for s in snaps:
         ids = [x.get("id") if isinstance(x, dict) else None for x in (s.get("inv") or [])]
         if ids != last:
             inv_changes.append([r(s.get("gt")), ids])
             last = ids
-    ev = []
-    types = Counter()
-    for e in d.get("events") or []:
-        e2 = {k: (r(v) if isinstance(v, float) else v) for k, v in e.items()}
-        ev.append(e2)
-        types[e.get("type")] += 1
+    ev = [{k: r(v) for k, v in e.items()} for e in d.get("events") or []]
+    types = Counter(e.get("type") for e in d.get("events") or [])
     return {"champion": d.get("champion"), "match_id": d.get("match_id"),
             "scanner": d.get("scanner"), "n_polls": d.get("n_polls"), "n_drifts": d.get("n_drifts"),
             "n_snapshots": len(snaps),
@@ -710,9 +624,6 @@ def item_timeline(path):
             "event_type_counts": dict(types), "events": ev,
             "inventory_id_changes": inv_changes}
 
-
-# --------------------------------------------------------------------------
-# index / summary
 
 def write_json_gz(obj, path):
     tmp = path + ".tmp_partial"
@@ -741,12 +652,9 @@ def build_index(out_dir, dataset_root=None):
                         "recorded_champion": (g.get("meta") or {}).get("recorded_champion"),
                         "recorded_team_matches_labels": (g.get("meta") or {}).get("recorded_team_matches_labels"),
                         "counts": g.get("counts"), "elapsed_s": g.get("elapsed_s")})
-    missing = []
-    if dataset_root:
-        have = {e["game_id"] for e in entries}
-        for d in sorted(os.listdir(dataset_root)):
-            if d.startswith("NA1_") and d not in have:
-                missing.append(d)
+    have = {e["game_id"] for e in entries}
+    missing = [d for d in sorted(os.listdir(dataset_root)) if d.startswith("NA1_") and d not in have] \
+        if dataset_root else []
     idx = {"schema": "replay_oracle_index/v1", "patch": PATCH, "dataset_root": dataset_root,
            "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
            "n_games": len(entries), "games": entries, "game_dirs_without_output": missing}
@@ -778,10 +686,7 @@ def table(rows, fields):
 
 
 def build_summary(out_dir, summary_path, dataset_root):
-    games = []
-    hashes = {}
-    totals = Counter()
-    per_game_sha = set()
+    games, hashes, totals, per_game_sha = [], {}, Counter(), set()
     for p in game_outputs(out_dir):
         g = read_json_gz(p)
         gid = g["game_id"]
@@ -867,7 +772,8 @@ def build_summary(out_dir, summary_path, dataset_root):
                 "(gold_total delta over payout_window)",
                 "deaths[].window_gold_chunks: [hero, gt, delta] for |delta| > chunk_threshold inside "
                 "the window (per-game files also list the small periodic increments)",
-                "fountain series: dt = seconds since start_gt; hp_max/gold/level given as a scalar when constant over the stretch",
+                "fountain series: dt = seconds since start_gt; hp_max/gold/level given as a scalar when "
+                "constant over the stretch",
                 "levelups / hp_max_changes_not_at_levelup are {fields, rows} tables; hp_max changes "
                 "with near_levelup=true are within 1 s of a level-up of the same hero (kept, flagged)",
                 "raw_mem 'gold' (current gold) is constant per hero or garbage in this dataset; "
@@ -879,12 +785,8 @@ def build_summary(out_dir, summary_path, dataset_root):
         "games": games,
     }
     tmp = summary_path + ".tmp_partial"
-    if summary_path.endswith(".gz"):
-        with gzip.open(tmp, "wt", compresslevel=9) as f:
-            json.dump(summary, f, separators=(",", ":"))
-    else:
-        with open(tmp, "w") as f:
-            json.dump(summary, f, separators=(",", ":"))
+    with (gzip.open(tmp, "wt", compresslevel=9) if summary_path.endswith(".gz") else open(tmp, "w")) as f:
+        json.dump(summary, f, separators=(",", ":"))
     os.replace(tmp, summary_path)
     return summary["header"]["totals"]
 
@@ -896,15 +798,16 @@ def main(argv=None):
     ap.add_argument("--out", required=True)
     ap.add_argument("--dataset-root", default="/mnt/nfs/datasets/lol_replays_16_9_772")
     ap.add_argument("--summary")
-    ap.add_argument("--no-hash", action="store_true")
     a = ap.parse_args(argv)
+    if a.mode == "summarize" and not a.summary:
+        ap.error("--summary required")
     os.makedirs(a.out, exist_ok=True)
     if a.mode == "extract":
         rc = 0
         for gd in a.game_dirs:
             gid = os.path.basename(gd.rstrip("/"))
             try:
-                res = extract_game(gd, hash_files=not a.no_hash)
+                res = extract_game(gd)
             except Exception as e:  # noqa: BLE001 - record and continue
                 import traceback
                 res = {"schema": "replay_oracle_game/v1", "game_id": gid, "game_dir": gd,
@@ -916,12 +819,9 @@ def main(argv=None):
     if a.mode == "index":
         idx = build_index(a.out, a.dataset_root)
         print("indexed", idx["n_games"], "missing", idx["game_dirs_without_output"])
-        return 0
-    if a.mode == "summarize":
-        if not a.summary:
-            ap.error("--summary required")
+    else:
         print(json.dumps(build_summary(a.out, a.summary, a.dataset_root)))
-        return 0
+    return 0
 
 
 if __name__ == "__main__":

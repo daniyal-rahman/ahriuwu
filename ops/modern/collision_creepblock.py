@@ -1,19 +1,18 @@
-"""Creep-block proxy of the modern world tick (docs/modern/COLLISION.md §3), sim side.
+"""Creep-block proxy of the modern world tick, sim side (docs/modern/COLLISION.md §3).
 
-Garen walks up and down the top lane between points 1100 u outside the two outer turrets, from
-90 s for ``--seconds`` of game time, through both waves; Jax idles in his fountain. Per tick we
-record Garen's position and the distance to the nearest live minion, then report the same
-statistics as the replay measurement (``ops/modern/collision_replay.py``):
+Garen walks the top lane between points 1000 u inside the two outer turrets from 90 s for ``--seconds`` of
+game time, through both waves; Jax idles in his fountain. Reports the replay measurement's statistics
+(``ops/modern/collision_replay.py``), split by "near minions" (one within 300 u) vs "free", over ticks alive
+and >= 300 u from a turn-around point:
 
-  ratio      displacement speed over a 0.2 s / 0.5 s window / nominal speed (mode of free walking)
+  ratio      displacement speed over a 0.2 s / 0.5 s window / nominal speed (median free-walking speed)
   path       path-length speed over 0.25 s windows / nominal (the replay tool's speed)
   stalls     runs of path ratio < 0.6, per minute of qualifying time
   detour     fraction of 0.45 s windows with chord / path length < 0.9
 
-split by "near minions" (a minion within 300 u) vs "free". Qualifying ticks: alive, >= 300 u from
-the turn-around point. Run on the desktop through Slurm (one full-tick compile, ~8 GB):
+Run through Slurm (one full-tick compile, ~8 GB):
 
-    PYTHONPATH=<snapshot> python ops/modern/collision_creepblock.py --seconds 240 --json out.json
+    python -m ops.modern.collision_creepblock --seconds 240 --json out.json
 """
 from __future__ import annotations
 
@@ -23,11 +22,6 @@ import json
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-
-def build():
-    from lanerl_jax.modern.tests import world_harness as H
-    return H.world()
 
 
 def endpoints(cfg, margin=1000.0):
@@ -59,19 +53,14 @@ def endpoints(cfg, margin=1000.0):
 
 
 def main():
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--seconds", type=float, default=240.0)
-    ap.add_argument("--json", default=None)
-    ap.add_argument("--set", nargs="*", default=[], help="collision constant overrides NAME=VALUE")
+    ap.add_argument("--json", default=None, help="also save the result and a <json>_trace.npy of the run")
     args = ap.parse_args()
-    if args.set:
-        from lanerl_jax.modern import collision as UC
-        for kv in args.set:
-            k, v = kv.split("=")
-            setattr(UC, k, type(getattr(UC, k))(eval(v)))
     from lanerl_jax.modern import world as MS
     from lanerl_jax.modern.core import types as W
-    cfg = build()
+    from lanerl_jax.modern.tests import world_harness as H
+    cfg = H.world()
     ends = jnp.asarray(endpoints(cfg), jnp.float32)
     chunk = 300
 
@@ -114,7 +103,6 @@ def main():
 def analyze(rec, hz):
     t, x, y, alive, dmin, dend = rec.T
     n = len(t)
-    w2, w5, w45 = round(0.2 * hz), round(0.5 * hz), round(0.45 * hz)
     step = np.hypot(np.diff(x), np.diff(y)) * hz
     ok1 = (alive[1:] > 0) & (alive[:-1] > 0)
     nominal = float(np.median(step[ok1 & (dmin[1:] > 400) & (dend[1:] > 300) & (step > 100)]))
@@ -126,36 +114,33 @@ def analyze(rec, hz):
         ok = (alive[i] > 0) & (alive[i + w] > 0) & (np.minimum(dend[i], dend[i + w]) > 300)
         return sp / nominal, path, np.hypot(x[i + w] - x[i], y[i + w] - y[i]), ok, dmin[i]
     res = {"nominal_speed": nominal, "seconds": float(t[-1] - t[0])}
-    for name, w in (("0.2s", w2), ("0.5s", w5)):
+    for name, w in (("0.2s", round(0.2 * hz)), ("0.5s", round(0.5 * hz))):
         r, _, _, ok, dm = win(w)
         for cond, m in (("near", ok & (dm < 300)), ("free", ok & (dm >= 300)), ("all", ok)):
             v = r[m]
             res[f"ratio_{name}_{cond}"] = {"n": int(m.sum()), **{f"p{q}": float(np.percentile(v, q)) if len(v) else None
                                                                 for q in (1, 5, 10, 25, 50)}}
-    # Replay-comparable: path-length speed over ~0.25 s windows (ops/modern/collision_replay.py).
+    # Replay-comparable: path-length speed over ~0.25 s windows.
     w25 = round(0.25 * hz)
     _, path, _, ok, dm = win(w25)
     rp = path * hz / w25 / nominal
     res["path_ratio_0.25s_all"] = {"n": int(ok.sum()), **{f"p{q}": float(np.percentile(rp[ok], q))
                                                          for q in (1, 5, 10, 25, 50)},
                                    "frac_lt_0.6": float((rp[ok] < 0.6).mean())}
-    r = rp                                                       # stalls on the replay's path-speed windows
-    low = (r < 0.6) & ok
+    low = (rp < 0.6) & ok
     for cond, m in (("near", dm < 300), ("all", np.ones_like(ok))):
-        q = ok & m
-        lm = low & m
-        runs, cur = [], 0
-        for v in lm:
+        runs, cur = [], 0                                        # runs still open at the end are not counted
+        for v in low & m:
             if v:
                 cur += 1
             elif cur:
-                runs.append(cur); cur = 0
-        runs = [c for c in runs if c >= 1]                       # each start is a 0.2 s window below 60 %
-        minutes = q.sum() / hz / 60.0
+                runs.append(cur)
+                cur = 0
+        minutes = (ok & m).sum() / hz / 60.0
         res[f"stalls_{cond}"] = {"per_min": len(runs) / max(minutes, 1e-9), "minutes": float(minutes),
                                  "median_s": float(np.median(runs) / hz + w25 / hz) if runs else None,
                                  "p90_s": float(np.percentile(runs, 90) / hz + w25 / hz) if runs else None}
-    _, path, chord, ok, dm = win(w45)
+    _, path, chord, ok, dm = win(round(0.45 * hz))
     st = chord / np.maximum(path, 1e-6)
     moving = path > 0.3 * nominal * 0.45
     for cond, m in (("near", ok & moving & (dm < 300)), ("free", ok & moving & (dm >= 300))):
