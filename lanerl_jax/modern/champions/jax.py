@@ -277,11 +277,7 @@ def on_damage(state: State, kctx, units, report) -> tuple[State, KitOut]:
     p = report.packets
     src_kind = gather(units.kind, p.src)
     basic = p.valid & D.has(p.flags, D.TAG_BASIC_ATTACK) & ~D.has(p.flags, D.TAG_ON_HIT) & ~is_structure(src_kind)
-    cid = p.cast_id
-    P = cid.shape[0]
-    earlier = jnp.arange(P)[None, :] < jnp.arange(P)[:, None]
-    same = (cid[:, None] == cid[None, :]) & (cid[:, None] != 0) & (p.dst[:, None] == p.dst[None, :]) & earlier
-    first = basic & ~jnp.any(same & basic[None, :], axis=1)
+    first = basic & ((p.cast_id == 0) | D.first_per_key(basic[None, :], p.cast_id, p.dst)[0])
     on_me = (p.dst[None, :] == kctx.unit[:, None]) & first[None, :]
     count = jnp.sum(on_me, axis=1).astype(jnp.int32)
     state = state._replace(e_dodges=jnp.where(dodging(state, kctx), state.e_dodges + count, state.e_dodges))

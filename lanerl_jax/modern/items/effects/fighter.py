@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM,
                             PHYSICAL, PROP_LIFESTEAL, PROP_NO_DAMAGE_MOD, PROP_NO_OMNIVAMP, TAG_ACTIVE_SPELL,
                             TAG_BASIC_ATTACK, TAG_ITEM, TAG_PERIODIC, TAG_PROC, TRUE, concat_packets, has,
-                            packets)
+                            packets, per_unit)
 from ..catalog import ItemStats, catalog
 from .core import (AttackMods, by_range, dst_class, dv, effects, holds, holds_any, merge_effects, neutral_debuffs,
                    neutral_defense, onehot_units, shield_grants, target_class)
@@ -349,13 +349,11 @@ def on_damage(state: State, own, ctx, units, report):
     dcls = dst_class(report, units)
     landed = p.valid & (r.final > 0.0)
     src_is = p.src[None, :] == ctx.unit[:, None]                              # (C, P)
-    dst_oh = (p.dst[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)   # (P, N)
     enemy = units.team[None, :] != ctx.team[:, None]
 
     def hit(mask):
         """(C, N) bool: holder's selected packets reached enemy unit n."""
-        sel = (src_is & mask[None, :]).astype(jnp.float32)
-        return ((sel @ dst_oh) > 0.0) & enemy
+        return per_unit(src_is & mask[None, :], p.dst, n) & enemy
 
     is_phys = p.dtype == PHYSICAL
     basic = has(p.flags, TAG_BASIC_ATTACK)

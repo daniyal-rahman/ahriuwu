@@ -13,7 +13,7 @@ import jax.numpy as jnp
 
 from ...core.damage import (CLASS_CHAMPION, MAGIC, PROP_SUMMONER, PROP_ULTIMATE, TAG_ACTIVE_SPELL, TAG_AOE,
                             TAG_BASIC_ATTACK, TAG_INDIRECT, TAG_ITEM, TAG_PERIODIC, TAG_PET, TAG_PROC,
-                            concat_packets, has, packets)
+                            concat_packets, has, packets, per_unit)
 from ...items.catalog import ItemStats, catalog
 from .core import (BIG, RuneOutputs, adaptive_damage_type, ea, effects, has_rune, in_circle, lin, no_outputs,
                    rune_item, unit_pos, variable_damage_type)
@@ -153,13 +153,6 @@ def _first(sel):
     return jnp.any(sel, axis=1), jnp.argmax(sel, axis=1).astype(jnp.int32)
 
 
-def _per_unit(sel, p, n, value):
-    """(C, N) max of ``value`` (P,) over selected packets per destination unit (0 if none)."""
-    onehot = p.dst[:, None] == jnp.arange(n)[None, :]                         # (P, N)
-    v = jnp.where(sel[:, :, None] & onehot[None], value[None, :, None], 0.0)
-    return jnp.max(v, axis=1) if sel.shape[1] else jnp.zeros((sel.shape[0], n), jnp.float32)
-
-
 def _aery_return_time(dist, level):
     v0 = jnp.full(dist.shape, AERY_RETURN_SPEED[0][1], jnp.float32)
     for lv, v in AERY_RETURN_SPEED[1:]:
@@ -238,7 +231,7 @@ def on_damage(state: State, page, ctx, units, ev):
     stale = here & (state.sr_bucket != k)                                                  # (C, S)
     buf = jnp.where(stale[:, None, :], 0.0, state.sr_buf)
     bucket = jnp.where(here, k, state.sr_bucket)
-    add = _sum_per_unit(dealt, p, r.final, n)                                              # (C, N)
+    add = per_unit(jnp.where(dealt, r.final[None, :], 0.0), p.dst, n, "add")               # (C, N)
     buf = buf + jnp.where(here[:, None, :], add[:, :, None], 0.0)
     live = (bucket > k - SR_WINDOW_BUCKETS) & (bucket >= 0)
     window = jnp.sum(jnp.where(live[:, None, :], buf, 0.0), axis=2)
@@ -292,7 +285,7 @@ def on_damage(state: State, page, ctx, units, ev):
 
     # Deathfire Touch: per-target burn, §5.4 refresh rule.
     dur = jnp.where(has(f, TAG_PET) | has(f, TAG_PERIODIC), DFT_DOT, jnp.where(has(f, TAG_AOE), DFT_AOE, DFT_SPELL))
-    new_dur = _per_unit(ability, p, n, dur)                                                # (C, N)
+    new_dur = per_unit(jnp.where(ability, dur[None, :], 0.0), p.dst, n, "max")             # (C, N)
     burning = state.dft_next <= state.dft_end + EPS
     remaining = state.dft_end - now
     apply = has_rune(page, DEATHFIRE)[:, None] & (new_dur > 0.0) \
@@ -316,11 +309,6 @@ def on_damage(state: State, page, ctx, units, ev):
 
     state = _manaflow_stack(state, page, ctx, any_c)
     return state, effects(c, n)
-
-
-def _sum_per_unit(sel, p, amount, n):
-    onehot = (p.dst[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)
-    return jnp.where(sel, amount[None, :], 0.0) @ onehot
 
 
 def _manaflow_stack(state, page, ctx, trigger):

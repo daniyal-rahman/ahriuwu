@@ -10,8 +10,8 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, PROP_NO_DAMAGE_MOD, PROP_SUMMONER, TAG_ACTIVE_SPELL,
-                            TAG_BASIC_ATTACK, TAG_NON_AMPABLE, TAG_ON_HIT, TAG_PET, TAG_PROC, concat_packets, has,
-                            packets)
+                            TAG_BASIC_ATTACK, TAG_NON_AMPABLE, TAG_ON_HIT, TAG_PET, TAG_PROC, concat_packets,
+                            first_per_key, has, packets)
 from ...items.catalog import ItemStats
 from .core import (BIG, adaptive_damage_type, breakpoints, by_range, ea, effects, first_instance, has_rune,
                    level_table, lin, lin_growth, rune_catalog, rune_item, target_class)
@@ -307,10 +307,7 @@ def _conqueror(state: State, page, ctx, units, rep):
     basic = has(p.flags, TAG_BASIC_ATTACK) & ~proc
     spell = sel & (~basic & ~proc)[None, :]
     cid = p.cast_id
-    P = cid.shape[0]
-    earlier = jnp.arange(P)[None, :] < jnp.arange(P)[:, None]                     # [p, q]: q before p
-    same = (cid[:, None] == cid[None, :]) & (cid[:, None] != 0) & earlier
-    first = spell & ~(jnp.einsum("pq,cq->cp", same.astype(jnp.float32), spell.astype(jnp.float32)) > 0.0)
+    first = spell & ((cid == 0)[None, :] | first_per_key(spell, cid))
     recent = (now - state.conq_seen_t < CONQ_SAME_SPELL)[:, None, :] | has(p.flags, PROP_SUMMONER)[None, :, None]
     seen = jnp.any((state.conq_seen_id[:, None, :] == cid[None, :, None]) & recent, axis=2) & (cid != 0)[None, :]
     gain_spell = first & ~seen

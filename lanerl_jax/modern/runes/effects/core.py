@@ -23,10 +23,9 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
-import jax
 import jax.numpy as jnp
 
-from ...core.damage import CLASS_CHAMPION, MAGIC, PHYSICAL, Packets
+from ...core.damage import CLASS_CHAMPION, MAGIC, PHYSICAL, Packets, first_per_key
 
 # Rune modules import their whole toolkit from here.
 from ...items.effects.core import (BIG, CC, Attack, Cast, Ctx, Effects, Kills, Units, effects, in_circle,  # noqa: F401
@@ -198,12 +197,4 @@ def packet_src_cls(p: Packets, units: Units) -> Any:
 def first_instance(p: Packets, sel: Any) -> Any:
     """(C, P) ``sel`` restricted to the first packet of each (cast_id, src, dst) instance per holder row;
     ``cast_id`` 0 makes every packet its own instance."""
-    P = p.valid.shape[0]
-    idx = jnp.arange(P)
-    order = jnp.lexsort((idx, p.dst, p.src, p.cast_id))
-    ks = (p.cast_id[order], p.src[order], p.dst[order])
-    start = jnp.concatenate([jnp.ones((1,), bool), (ks[0][1:] != ks[0][:-1]) | (ks[1][1:] != ks[1][:-1])
-                             | (ks[2][1:] != ks[2][:-1])])
-    group = jnp.zeros((P,), jnp.int32).at[order].set(jnp.cumsum(start, dtype=jnp.int32) - 1)
-    first = jax.vmap(lambda s: jax.ops.segment_min(jnp.where(s, idx, P), group, num_segments=P))(sel)
-    return sel & ((p.cast_id == 0)[None, :] | (first[:, group] == idx[None, :]))
+    return sel & ((p.cast_id == 0)[None, :] | first_per_key(sel, p.cast_id, p.src, p.dst))

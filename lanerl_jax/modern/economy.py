@@ -194,8 +194,7 @@ def credit_update(credit: Credit, report, unit: Any, now: Any, units_cls: Any, c
     p = report.packets
     n = credit.last_affect.shape[1]
     src = p.valid[None, :] & (p.src[None, :] == unit[:, None])                    # (C, P)
-    onehot = (p.dst[:, None] == jnp.arange(n)[None, :]) & ~D.has(p.flags, D.PROP_REACTIVE)[:, None]
-    touched = (src.astype(jnp.float32) @ onehot.astype(jnp.float32)) > 0.0
+    touched = D.per_unit(src & ~D.has(p.flags, D.PROP_REACTIVE)[None, :], p.dst, n)
     if cc is not None:
         touched = touched | cc.slowed | cc.immobilized
     structure = touched & (units_cls[None, :] == D.CLASS_STRUCTURE)

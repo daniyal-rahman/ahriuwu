@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from ...core.damage import CLASS_CHAMPION, CLASS_STRUCTURE, TAG_INDIRECT, TAG_PROC, TRUE, packets
+from ...core.damage import CLASS_CHAMPION, CLASS_STRUCTURE, TAG_INDIRECT, TAG_PROC, TRUE, packets, per_unit
 from ...items.catalog import DATA_PATH, STAT_INDEX, ItemStats, catalog
 from .core import (BIG, Effects, RuneEvents, RuneOutputs, ea, effects, enemy_champions, has_rune, lin, no_outputs,
                    rune_item)
@@ -463,8 +463,7 @@ def on_damage(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Ef
     # Queue a share of post-mitigation champion damage while active.
     active = has_fs & (now <= fs_until)
     sel = mine & to_champ & ~fs_pkt & (r.final > 0.0)[None, :] & active[:, None]
-    onehot = (p.dst[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)
-    bonus = jnp.where(sel, FS_AMP * r.final[None, :], 0.0) @ onehot                       # (C, N)
+    bonus = per_unit(jnp.where(sel, FS_AMP * r.final[None, :], 0.0), p.dst, n, "add")      # (C, N)
     due, dsts, amt = state.fs_due, state.fs_dst, state.fs_amt
     t_new = now + FS_DELAY
     slots = jnp.arange(FS_SLOTS)[None, :]

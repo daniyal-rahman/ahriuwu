@@ -111,6 +111,33 @@ def has(flags: Any, bit: int) -> Any:
     return (jnp.asarray(flags) & bit) != 0
 
 
+def per_unit(val: Any, idx: Any, n_units: int, op: str = "any") -> Any:
+    """(C, P) per-packet ``val`` scattered onto (C, N) at unit ``idx`` (P,), negative dropped:
+    ``"any"`` (bool), ``"add"`` (packet order) or ``"max"`` (from 0)."""
+    rows = jnp.arange(val.shape[0])[:, None]
+    cols = jnp.where(idx >= 0, idx, n_units)[None, :]
+    if op == "any":
+        out = jnp.zeros((val.shape[0], n_units), bool)
+        return out.at[rows, jnp.where(val, cols, n_units)].set(True, mode="drop")
+    out = jnp.zeros((val.shape[0], n_units), val.dtype).at[rows, cols]
+    return out.add(val, mode="drop") if op == "add" else out.max(val, mode="drop")
+
+
+def first_per_key(sel: Any, *keys: Any) -> Any:
+    """(C, P) ``sel`` keeping, per row, only the first selected packet of each distinct ``keys`` (P,) tuple."""
+    P = sel.shape[-1]
+    idx = jnp.arange(P)
+    order = jnp.lexsort((idx,) + keys[::-1])
+    ks = [k[order] for k in keys]
+    new = ks[0][1:] != ks[0][:-1]
+    for k in ks[1:]:
+        new = new | (k[1:] != k[:-1])
+    start = jnp.concatenate([jnp.ones((1,), bool), new])
+    group = jnp.zeros((P,), jnp.int32).at[order].set(jnp.cumsum(start, dtype=jnp.int32) - 1)
+    first = jax.vmap(lambda s: jax.ops.segment_min(jnp.where(s, idx, P), group, num_segments=P))(sel)
+    return sel & (first[:, group] == idx[None, :])
+
+
 class Shields(NamedTuple):
     """Per-unit shield slots, (N, K); times absolute."""
     amount: Any         # remaining absorb before the decay cap

@@ -24,7 +24,7 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import SHIELD_ALL, Packets, Resolved, concat_packets, empty_packets
+from ...core.damage import SHIELD_ALL, Packets, Resolved, concat_packets, empty_packets, per_unit
 from ..catalog import catalog
 
 BIG = 1e9
@@ -377,18 +377,14 @@ def dealt_by_holder(report: Report, ctx: Ctx, n_units: int, mask: Any = None) ->
     p, r = report.packets, report.resolved
     sel = p.valid & (r.final > 0.0) if mask is None else p.valid & mask
     src_is = p.src[None, :] == ctx.unit[:, None]
-    contrib = jnp.where(src_is & sel[None, :], r.final[None, :], 0.0)
-    onehot = (p.dst[:, None] == jnp.arange(n_units)[None, :])
-    return contrib @ onehot.astype(jnp.float32)
+    return per_unit(jnp.where(src_is & sel[None, :], r.final[None, :], 0.0), p.dst, n_units, "add")
 
 
 def hit_by_holder(report: Report, ctx: Ctx, n_units: int, mask: Any) -> Any:
     """(C, N) bool: a selected packet from holder c reached unit n."""
     p = report.packets
     src_is = p.src[None, :] == ctx.unit[:, None]
-    sel = (src_is & (p.valid & mask)[None, :]).astype(jnp.float32)
-    onehot = (p.dst[:, None] == jnp.arange(n_units)[None, :]).astype(jnp.float32)
-    return (sel @ onehot) > 0.0
+    return per_unit(src_is & (p.valid & mask)[None, :], p.dst, n_units)
 
 
 def taken_by_holder(report: Report, ctx: Ctx, mask: Any = None) -> Any:

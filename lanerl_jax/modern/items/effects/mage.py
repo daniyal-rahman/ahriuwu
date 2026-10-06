@@ -14,7 +14,7 @@ import jax.numpy as jnp
 
 from ...core.damage import (CLASS_CHAMPION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM, PROP_LIFESTEAL,
                             TAG_ACTIVE_SPELL, TAG_AOE, TAG_ITEM, TAG_PERIODIC, TAG_PET, TAG_PROC, TRUE,
-                            concat_packets, has, packets)
+                            concat_packets, has, packets, per_unit)
 from ..catalog import ItemStats
 from .core import BIG, Debuffs, dv, effects, enemy_mask, holds, in_circle, nearest_k, onehot_units, unit_pos
 
@@ -156,17 +156,6 @@ def _roa_stacks(state, own):
     return jnp.where(holds(own, ROA), s, 0.0)
 
 
-def _to_units(mask_cp, p, n_units):
-    """(C, P) packet mask -> (C, N) bool over packet destinations."""
-    onehot = (p.dst[:, None] == jnp.arange(n_units)[None, :]).astype(jnp.float32)
-    return (mask_cp.astype(jnp.float32) @ onehot) > 0.0
-
-
-def _sum_units(val_cp, p, n_units):
-    onehot = (p.dst[:, None] == jnp.arange(n_units)[None, :]).astype(jnp.float32)
-    return val_cp @ onehot
-
-
 def _first_dst(mask_cp, p):
     """(C,) destination of the first selected packet, -1 if none."""
     any_ = jnp.any(mask_cp, axis=1)
@@ -269,8 +258,8 @@ def on_damage(state: State, own, ctx, units, report):
     start4 = jnp.where(event & (gap > dv(RIFTMAKER, "BuffCounterDuration")), now, state.combat_start4)
     combat_last = jnp.where(event, now, state.combat_last)
 
-    ab_hit = _to_units(dealt & (ability & ~struct)[None, :], p, n)                      # (C, N)
-    ab_pet_hit = _to_units(dealt & ((ability | pet) & ~struct)[None, :], p, n)
+    ab_hit = per_unit(dealt & (ability & ~struct)[None, :], p.dst, n)                   # (C, N)
+    ab_pet_hit = per_unit(dealt & ((ability | pet) & ~struct)[None, :], p.dst, n)
     trig = lambda item, m: m & holds(own, item)[:, None]
     ashes_until, ashes_next = _apply_timer(state.ashes_until, state.ashes_next, trig(ASHES, ab_hit), now,
                                            dv(ASHES, "BurnDuration"), dv(ASHES, "TickFrequency"))
@@ -287,7 +276,7 @@ def on_damage(state: State, own, ctx, units, report):
     slow_duration = jnp.where(rylai, dv(RYLAI, "SlowDuration"), 0.0)
 
     gw_holder = holds(own, MORELLO) | holds(own, ORB)
-    gw = jnp.any(_to_units(dealt & (magic & champ)[None, :], p, n) & gw_holder[:, None], axis=0)
+    gw = jnp.any(per_unit(dealt & (magic & champ)[None, :], p.dst, n) & gw_holder[:, None], axis=0)
     grievous = jnp.where(gw, dv(MORELLO, "GrievousDuration"), 0.0)
 
     luden_sel = dealt & (ability & ~struct)[None, :]
@@ -322,7 +311,7 @@ def on_damage(state: State, own, ctx, units, report):
     cosmic_until = jnp.where(cos, now + dv(COSMIC, "StackDuration"), state.cosmic_until)
 
     hd = jnp.sqrt((units.x[None, :] - ctx.x[:, None]) ** 2 + (units.y[None, :] - ctx.y[:, None]) ** 2)
-    hyper = _to_units(dealt & (ability & ~pet & champ)[None, :], p, n) \
+    hyper = per_unit(dealt & (ability & ~pet & champ)[None, :], p.dst, n) \
         & (hd >= dv(HORIZON, "SnipeRange")) & holds(own, HORIZON)[:, None]
     hz_until = jnp.where(hyper, jnp.maximum(state.hz_until, now + dv(HORIZON, "BuffDuration")), state.hz_until)
     focus = jnp.any(hyper, axis=1) & (now >= state.hz_cd)
@@ -335,9 +324,8 @@ def on_damage(state: State, own, ctx, units, report):
 
     ult_sel = dealt & ((ability | pet) & ~has(p.flags, TAG_PROC) & champ)[None, :] \
         & (now <= state.ult_until)[:, None] & holds(own, MALIGNANCE)[:, None]
-    onehot = p.dst[:, None] == jnp.arange(n)[None, :]                                  # (P, N)
-    inst = jnp.max(jnp.where(ult_sel[:, :, None] & onehot[None], r.final[None, :, None], 0.0), axis=1)
-    zone = _to_units(ult_sel, p, n) & (now >= state.mal_until)
+    inst = per_unit(jnp.where(ult_sel, r.final[None, :], 0.0), p.dst, n, "max")
+    zone = per_unit(ult_sel, p.dst, n) & (now >= state.mal_until)
     radius = jnp.minimum(dv(MALIGNANCE, "AOESize") + 2.0 ** (jnp.minimum(inst, 2000.0) / 100.0),
                          dv(MALIGNANCE, "MaxRadius"))
     mal_x = jnp.where(zone, units.x[None, :], state.mal_x)
@@ -346,14 +334,14 @@ def on_damage(state: State, own, ctx, units, report):
     mal_until = jnp.where(zone, now + dv(MALIGNANCE, "GroundDuration"), state.mal_until)
     mal_next = jnp.where(zone, now + MALIGNANCE_TICK, state.mal_next)
 
-    crypt_last = jnp.where(_to_units(dealt, p, n), now, state.crypt_last)
+    crypt_last = jnp.where(per_unit(dealt, p.dst, n), now, state.crypt_last)
 
     epoch = jnp.floor(now / STORM_BUCKET + EPS).astype(jnp.int32)
     slot = epoch % STORM_SLOTS
     slot_hot = jnp.arange(STORM_SLOTS) == slot                                          # (B,)
     stale = slot_hot[None, :] & (state.storm_epoch != epoch)                            # (C, B)
     hist = jnp.where(stale[:, None, :], 0.0, state.storm_hist)
-    amount = _sum_units(jnp.where(dealt & champ[None, :], r.final[None, :], 0.0), p, n)
+    amount = per_unit(jnp.where(dealt & champ[None, :], r.final[None, :], 0.0), p.dst, n, "add")
     hist = hist + jnp.where(slot_hot[None, None, :], amount[:, :, None], 0.0)
     storm_epoch = jnp.where(slot_hot[None, :], epoch, state.storm_epoch)
     recent = storm_epoch > epoch - STORM_SLOTS                                          # (C, B)
@@ -383,7 +371,7 @@ def on_damage(state: State, own, ctx, units, report):
     all_packets.append(packets(sf, p.src, p.dst, dv(SHADOWFLAME, "SpellItemDamageAmp") * p.raw, p.dtype,
                                sf_flags, amp=p.amp, item=SHADOWFLAME))
 
-    bl_hit = _to_units(dealt & (magic & ability & champ)[None, :], p, n) & holds(own, BLOODLETTER)[:, None] \
+    bl_hit = per_unit(dealt & (magic & ability & champ)[None, :], p.dst, n) & holds(own, BLOODLETTER)[:, None] \
         & (now >= state.bl_icd)
     live = state.bl_until > now
     bl_stacks = jnp.where(bl_hit, jnp.minimum(jnp.where(live, state.bl_stacks, 0.0) + 1.0,

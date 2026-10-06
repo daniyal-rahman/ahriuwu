@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM,
                             PHYSICAL, PROP_LIFESTEAL, PROP_REACTIVE, SHIELD_ALL, SHIELD_MAGIC, TAG_AOE,
                             TAG_BASIC_ATTACK, TAG_ITEM, TAG_PERIODIC, TAG_PROC, concat_packets, has, packets,
-                            shield_value)
+                            per_unit, shield_value)
 from ..catalog import STAT_INDEX, ItemStats, catalog, lerp_level, ranged_mult
 from .core import (BIG, Debuffs, HolderDefense, dv, effects, enemy_mask, holds, holds_any, in_circle,
                    neutral_defense, onehot_units, shield_grants, target_class)
@@ -324,10 +324,7 @@ def on_damage(state: State, own, ctx, units, report):
     fresh = ev & (now - state.champ_last > CHAMP_COMBAT_WINDOW)
     champ_start = jnp.where(fresh, now, state.champ_start)
     champ_last = jnp.where(ev, now, state.champ_last)
-    onehot_dst = (p.dst[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)   # (P, N)
-    onehot_src = (p.src[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)
-    dealt_to = (dealt.astype(jnp.float32) @ onehot_dst) > 0.0
-    dealt_t = jnp.where(dealt_to, now, state.dealt_t)
+    dealt_t = jnp.where(per_unit(dealt, p.dst, n), now, state.dealt_t)
 
     ll = r.lifeline_fired[ctx.unit] & _lifeline_ready(state, own, ctx)
     lifeline_cd = jnp.where(ll, now + _pick(own, {i: dv(i, "Cooldown") for i in LIFELINE}), state.lifeline_cd)
@@ -370,7 +367,7 @@ def on_damage(state: State, own, ctx, units, report):
     kslot = (sh.kind[ctx.unit] == SHIELD_MAGIC) & (sh.expires_at[ctx.unit] - now > KAENIC_TAG)
     kaenic_left = jnp.sum(jnp.where(kslot, val, 0.0), axis=1)
 
-    fon_hits = ((taken & magic & champ_src).astype(jnp.float32) @ onehot_src) > 0.0   # (C, N)
+    fon_hits = per_unit(taken & magic & champ_src, p.src, n)                   # (C, N)
     eligible = fon_hits & (now >= state.fon_src_ready) & holds(own, FORCE_OF_NATURE)[:, None]
     gained = jnp.sum(eligible, axis=1).astype(jnp.float32)
     expired = now >= state.fon_expire

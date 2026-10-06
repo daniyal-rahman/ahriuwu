@@ -11,7 +11,8 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import CLASS_CHAMPION, TAG_ON_HIT, TAG_PET, TAG_PROC, TRUE, concat_packets, has, packets
+from ...core.damage import (CLASS_CHAMPION, TAG_ON_HIT, TAG_PET, TAG_PROC, TRUE, concat_packets, first_per_key, has,
+                            packets, per_unit)
 from ...items.catalog import ItemStats
 from .core import (BIG, COMBAT_TIMEOUT, adaptive_damage_type, by_range, ea, effects, first_instance, has_rune,
                    lin, rune_item, variable_damage_type)
@@ -120,12 +121,6 @@ def _first_dst(sel, p):
     return jnp.any(sel, axis=1), p.dst[jnp.argmax(sel, axis=1)]
 
 
-def _per_unit(sel, p, n):
-    """(C, N) count of selected packets per destination."""
-    onehot = (p.dst[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)
-    return (sel.astype(jnp.float32) @ onehot).astype(jnp.int32)
-
-
 def _bounty_stacks(state):
     return jnp.minimum(jnp.sum(state.bounty, axis=1), BOUNTY_MAX).astype(jnp.float32)
 
@@ -175,16 +170,11 @@ def _elec_from_packets(state: State, page, ctx, units, ev, p) -> State:
                    & (state.elec_seen_dst[:, None, :] == p.dst[None, :, None]), axis=2) & (p.cast_id != 0)[None, :]
     inst = first & ~seen
     # A CC stack this tick pairs with the first damage instance on that champion.
-    onehot = p.dst[:, None] == jnp.arange(n)[None, :]           # (P, N)
     cc_now = state.elec_cc_t == ctx.now                          # (C, N)
-    cc_pkt = jnp.any(cc_now[:, None, :] & onehot[None, :, :], axis=2)   # (C, P)
-    earlier = jnp.arange(p.valid.shape[0])[None, :] < jnp.arange(p.valid.shape[0])[:, None]  # [p, q]
-    same_dst = (p.dst[:, None] == p.dst[None, :]) & earlier
-    has_earlier = jnp.einsum("pq,cq->cp", same_dst.astype(jnp.float32), inst.astype(jnp.float32)) > 0.0
-    paired = inst & cc_pkt & ~has_earlier
-    counted = inst & ~paired
-    new = _per_unit(counted, p, n)
-    used_cc = cc_now & (_per_unit(inst, p, n) > 0)
+    cc_pkt = cc_now[:, jnp.clip(p.dst, 0, n - 1)] & ((p.dst >= 0) & (p.dst < n))[None, :]   # (C, P)
+    paired = first_per_key(inst, p.dst) & cc_pkt
+    new = per_unit((inst & ~paired).astype(jnp.int32), p.dst, n, "add")
+    used_cc = cc_now & per_unit(inst, p.dst, n)
     # Record new non-zero cast ids in the ring.
     rec = inst & (p.cast_id != 0)[None, :]
     order = jnp.cumsum(rec.astype(jnp.int32), axis=1) - 1
