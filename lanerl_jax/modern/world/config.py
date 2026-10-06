@@ -27,6 +27,7 @@ from ..items.inventory import validate_item_loadout
 from ..items.loadout import validate_rune_page
 from ..jungle import camps as J
 from ..jungle import objectives as OBJ
+from ..lane.ai import AISlots
 from ..map import dynamic_terrain as DTR
 from ..map import regions as REG
 from ..map import rift as RIFT
@@ -90,6 +91,13 @@ class Layout:
     @property
     def n_units(self) -> int:
         return self.struct0 + N_STRUCTURES
+
+    @property
+    def ai_slots(self) -> AISlots:
+        """Lane AI rows (minion and structure blocks) and columns (champions, minions, objectives, structures)."""
+        n = self.n_units
+        return AISlots(np.arange(self.minion0, self.monster0), np.arange(self.struct0, n),
+                       np.r_[0:self.monster0, self.epic0:self.ward0, self.struct0:n])
 
     @property
     def packet_capacity(self) -> int:

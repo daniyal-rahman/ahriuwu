@@ -19,14 +19,15 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     now, units, jungle, so, champ = sc.now, sc.units, sc.jungle, sc.so, sc.champ
     attack_order, moving, amove, goal = sc.attack_order, sc.moving, sc.amove, sc.goal
     vis_c = sc.vis_c
-    towers = LA.turret_tick(s.towers, units, now=now, dt=jnp.float32(dt))
+    towers = LA.turret_tick(s.towers, units, now=now, dt=jnp.float32(dt), slots=cfg.layout.ai_slots)
     hp_t, alive_t, targ_t = LA.structure_unit_view(towers, units)
     s = s._replace(hp=hp_t, alive=alive_t, targetable=targ_t)
     units = U.units_view(s)
     champ_vs_champ = s.prev.damage_matrix & (s.kind == W.KIND_CHAMPION)[:, None] & (s.kind == W.KIND_CHAMPION)[None, :]
     lane_ai, desired, mgoal, stop = LA.select_targets(s.lane_ai, units, s.att, now=now, dt=jnp.float32(dt),
                                                       champion_attacked_champion=champ_vs_champ,
-                                                      damage_events=s.prev.damage_matrix, visible=s.visible)
+                                                      damage_events=s.prev.damage_matrix, visible=s.visible,
+                                                      slots=cfg.layout.ai_slots)
     mai = None
     m_goal = jnp.stack([s.x, s.y], -1)
     m_speed = jnp.zeros((n,), jnp.float32)
