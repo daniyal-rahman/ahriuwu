@@ -1,18 +1,10 @@
-"""26.19 SR inventory and shop rules as fixed-shape JAX kernels.
+"""26.19 SR inventory and shop rules as fixed-shape per-champion JAX kernels (ITEMS.md §3-5).
 
-ITEMS.md §3–5. One champion's inventory is ``item (7,)`` catalog rows
-(``EMPTY`` = -1; slot 6 is the trinket) and ``stack (7,)``. Kernels are
-written per champion; ``jax.vmap`` them over champions/environments.
-
-Buying consumes owned recipe components depth-first in pre-order (an owned
-component claims its whole subtree), pays ``total - Σ total(claimed)``, then
-checks item-group limits on the remaining inventory (combining a recipe
-therefore bypasses the limit for the consumed member, ITEMS.md §3), slot
-availability, gold, shop range/death, level, ranged-only and purchase-buff
-gates and the group purchase cooldown (Elixirs, 5 s).
-
-Known simplifications (ITEMS.md §4.2): no undo action; selling a stack sells
-one unit; champion-locked and Smite-gated items are not purchasable.
+An inventory is ``item (7,)`` catalog rows (``EMPTY`` = -1, slot 6 = trinket) and ``stack (7,)``; ``vmap`` the
+kernels over champions. Buying claims owned recipe components depth-first in pre-order (an owned component
+covers its whole subtree), pays ``total - sum(claimed totals)`` and checks group limits on what remains, so
+combining a recipe bypasses the limit for the consumed member (ITEMS.md §3).
+Simplifications (ITEMS.md §4.2): no undo; selling a stack sells one unit; champion/Smite-gated items are blocked.
 """
 from __future__ import annotations
 
@@ -26,20 +18,11 @@ from .catalog import BUFF_CURRENCIES, EMPTY, MAX_RECIPE_NODES, N_SLOTS, STAT_FIE
 
 STARTING_GOLD = 500.0
 SHOP_RADIUS = 1000.0
-# ShopAreaCenter locators from map11 geometry (ITEMS.md §4.1), (x, z) by team.
-SHOP_CENTER = ((412.9, 416.2), (14297.2, 14388.3))
+SHOP_CENTER = ((412.9, 416.2), (14297.2, 14388.3))   # map11 ShopAreaCenter (x, z) by team (ITEMS.md §4.1)
 STEALTH_WARD = 3340
 
-OK = 0
-ERR_NOT_IN_SHOP = 1
-ERR_NOT_PURCHASABLE = 2
-ERR_LEVEL = 3
-ERR_GOLD = 4
-ERR_GROUP = 5
-ERR_NO_SLOT = 6
-ERR_COOLDOWN = 7
-ERR_EMPTY_SLOT = 8
-ERR_NOT_SELLABLE = 9
+OK, ERR_NOT_IN_SHOP, ERR_NOT_PURCHASABLE, ERR_LEVEL, ERR_GOLD, ERR_GROUP, ERR_NO_SLOT, ERR_COOLDOWN = range(8)
+ERR_EMPTY_SLOT, ERR_NOT_SELLABLE = 8, 9
 
 
 class Inventory(NamedTuple):
@@ -47,21 +30,13 @@ class Inventory(NamedTuple):
     stack: Any      # (..., 7) int32
 
 
-def empty_inventory(n_champions: int = 2, *, trinket: bool = True) -> Inventory:
-    cat = catalog()
-    item = np.full((n_champions, N_SLOTS), EMPTY, np.int32)
-    stack = np.zeros((n_champions, N_SLOTS), np.int32)
-    if trinket:
-        item[:, TRINKET_SLOT] = cat.row(STEALTH_WARD)
-        stack[:, TRINKET_SLOT] = 1
-    return Inventory(jnp.asarray(item), jnp.asarray(stack))
-
-
 def inventory_from_ids(item_ids, *, trinket: bool = True) -> Inventory:
-    """Host helper: per champion a list of item ids (stackables may repeat)."""
+    """Host helper: per champion a list of item ids (stackables may repeat); Stealth Ward trinket by default."""
     cat = catalog()
-    inv = empty_inventory(len(item_ids), trinket=trinket)
-    item, stack = np.asarray(inv.item).copy(), np.asarray(inv.stack).copy()
+    item = np.full((len(item_ids), N_SLOTS), EMPTY, np.int32)
+    stack = np.zeros((len(item_ids), N_SLOTS), np.int32)
+    if trinket:
+        item[:, TRINKET_SLOT], stack[:, TRINKET_SLOT] = cat.row(STEALTH_WARD), 1
     for c, ids in enumerate(item_ids):
         slot = 0
         for iid in ids:
@@ -89,16 +64,11 @@ def owned_counts(inv: Inventory, n_items: int | None = None) -> Any:
 
 
 def owns(inv: Inventory, item_id: int) -> Any:
-    """(...,) bool: champion holds at least one ``item_id``."""
     return jnp.any(inv.item == catalog().row(item_id), axis=-1)
 
 
 def inventory_stats(inv: Inventory) -> ItemStats:
-    """Static item stats of each inventory (STAT.20 contributions).
-
-    Additive fields sum over slots; tenacity, slow resist and %pen stack as
-    ``1 - prod(1 - x)``. Stacked items contribute stats once per slot.
-    """
+    """Static item stats (STAT.20); a stacked slot counts once."""
     a = catalog().arrays
     rows = jnp.clip(inv.item, 0, a.stats.shape[0] - 1)
     present = (inv.item >= 0) & (inv.stack > 0)
@@ -126,7 +96,7 @@ class ShopResult(NamedTuple):
 
 def buy(inv: Inventory, gold: Any, row: Any, *, can_shop: Any, level: Any, is_ranged: Any,
         now: Any = 0.0, group_cd_until: Any = None, buff_currency: Any = None) -> ShopResult:
-    """Buy catalog ``row`` for one champion; failed purchases change nothing."""
+    """Buy catalog ``row`` for one champion; a failed purchase changes nothing."""
     a = catalog().arrays
     can_shop, is_ranged = jnp.asarray(can_shop, bool), jnp.asarray(is_ranged, bool)
     n_groups = a.groups.shape[1]
@@ -136,7 +106,6 @@ def buy(inv: Inventory, gold: Any, row: Any, *, can_shop: Any, level: Any, is_ra
     items, stacks = inv.item, inv.stack
     main = jnp.arange(N_SLOTS) < TRINKET_SLOT
 
-    # Recipe consumption over the static pre-order tree.
     node_item = jnp.asarray(a.node_item)[row]
     node_parent = jnp.asarray(a.node_parent)[row]
     node_total = jnp.asarray(a.node_total)[row]
@@ -167,8 +136,7 @@ def buy(inv: Inventory, gold: Any, row: Any, *, can_shop: Any, level: Any, is_ra
     free = (remaining_items < 0) & main
     has_stack = jnp.any(stackable)
 
-    # Group limits count occupied slots (a stack is one owned item); the
-    # trinket slot is replaced by a trinket purchase, never added to.
+    # Group limits count occupied slots; a trinket purchase replaces the trinket slot instead of adding.
     present = (remaining_items >= 0) & ~(trinket & (jnp.arange(N_SLOTS) == TRINKET_SLOT))
     slot_groups = jnp.where(present[:, None], groups[jnp.clip(remaining_items, 0)], False)
     held = jnp.sum(slot_groups, axis=0)
@@ -203,7 +171,7 @@ def buy(inv: Inventory, gold: Any, row: Any, *, can_shop: Any, level: Any, is_ra
 
 
 def sell(inv: Inventory, gold: Any, slot: Any, *, can_shop: Any) -> ShopResult:
-    """Sell one unit from ``slot`` at round_half_up(total × sellBackModifier)."""
+    """Sell one unit from ``slot`` at round_half_up(total x sellBackModifier)."""
     a = catalog().arrays
     can_shop = jnp.asarray(can_shop, bool)
     row = inv.item[slot]
@@ -220,7 +188,7 @@ def sell(inv: Inventory, gold: Any, slot: Any, *, can_shop: Any) -> ShopResult:
 
 
 def replace_item(inv: Inventory, from_row: Any, to_row: Any, enabled: Any = True) -> Inventory:
-    """Transform/distribute in place (Tear -> Muramana etc., ITEMS.md §3)."""
+    """Transform the first ``from_row`` in place (Tear -> Muramana etc., ITEMS.md §3)."""
     hit = (inv.item == from_row) & jnp.asarray(enabled)
     first = jnp.argmax(hit)
     do = jnp.any(hit)
@@ -228,7 +196,7 @@ def replace_item(inv: Inventory, from_row: Any, to_row: Any, enabled: Any = True
 
 
 def consume_one(inv: Inventory, slot: Any, enabled: Any = True) -> Inventory:
-    """Use one charge/unit of a consumed item (potions, elixirs)."""
+    """Use one unit of a consumed item (potions, elixirs)."""
     do = jnp.asarray(enabled) & (inv.item[slot] >= 0) & (inv.stack[slot] > 0)
     left = inv.stack[slot] - 1
     item = inv.item.at[slot].set(jnp.where(do & (left <= 0), EMPTY, inv.item[slot]))

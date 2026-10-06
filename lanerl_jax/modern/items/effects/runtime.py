@@ -1,14 +1,8 @@
-"""Glue between item effects and the damage pipeline for one tick.
+"""Item-side folding into the damage pipeline for one tick (the world owns the TICK.* order).
 
-The world integrator owns ordering (TICK.*); these helpers do the item-side
-folding so every caller applies item contributions the same way:
-
-* ``fold_defense`` / ``fold_offense``: holder defense, target debuffs and item
-  penetration stats into ``core.damage.Defense``/``Offense``.
-* ``apply_dealt_amp``: per-(holder, target) DMG.40 amps onto packets.
-* ``resolve_tick``: resolve packets, compute vamp, return a ``Report``.
-* ``apply_effects``: heals (HEAL.10–40), shields (SHIELD.*), slows, Grievous
-  Wounds, mana and gold from merged ``Effects``.
+``fold_defense``/``fold_offense`` add holder profiles, target debuffs and item penetration to
+``core.damage.Defense``/``Offense``; ``resolve_tick`` resolves packets with vamp; ``apply_effects`` applies heals
+(HEAL.10-40), shields (SHIELD.*), slows and Grievous Wounds from merged ``Effects``.
 """
 from __future__ import annotations
 
@@ -20,13 +14,14 @@ from ...core import damage as D
 from ..catalog import ItemStats
 from .core import Ctx, Debuffs, Effects, HolderDefense, Report
 
+EXTRA_ON_HIT_SLOTS = 2          # Runaan's bolts / Statikk secondary bounces that re-apply on-hit
+MAIN_PACKET_CAPACITY = 512      # valid packets per tick (world + items) after compaction
+FOLLOW_UP_CAPACITY = 256
+
 
 class UnitStatus(NamedTuple):
-    """Per-unit timed statuses written by item effects, shape (N,).
-
-    ``slow``/``slow_until`` are bookkeeping for item-only callers; the world tick (``world.tick``)
-    routes ``Effects.slow`` into ``mechanics`` CC timers, the single slow state movement reads.
-    """
+    """Per-unit timed statuses (N,). The world routes ``Effects.slow`` into mechanics CC timers instead of
+    ``slow``/``slow_until``, which only item-level callers read."""
     slow: Any
     slow_until: Any
     grievous_until: Any
@@ -39,14 +34,11 @@ def init_status(n_units: int) -> UnitStatus:
 
 def fold_defense(base: D.Defense, ctx: Ctx, holder: HolderDefense, debuffs: Debuffs, *,
                  shield_power: Any = 0.0, incoming_heal: Any = 0.0) -> D.Defense:
-    """Place holder rows at ``ctx.unit`` and add target-side debuffs everywhere.
+    """Write holder rows at ``ctx.unit`` and add target debuffs everywhere.
 
-    Lifeline shields are item base values; heal-and-shield power and the
-    holder's incoming heal/shield bonus (Spirit Visage) scale them here,
-    exactly once (SHIELD.10/20).
+    Lifeline shields are base values; heal-and-shield power and incoming heal scale them here, once (SHIELD.10/20).
     """
     u = ctx.unit
-    champ_mult = 1.0 if holder.champion_received_mult is None else holder.champion_received_mult
 
     def put(arr, rows):
         return arr.at[u].set(jnp.asarray(rows, arr.dtype))
@@ -62,7 +54,7 @@ def fold_defense(base: D.Defense, ctx: Ctx, holder: HolderDefense, debuffs: Debu
         lifeline_magic_only=put(base.lifeline_magic_only, holder.lifeline_magic_only),
         lifeline_shield=put(base.lifeline_shield,
                             holder.lifeline_shield * (1.0 + shield_power) * (1.0 + incoming_heal)),
-        champion_received_mult=base.champion_received_mult.at[u].multiply(champ_mult),
+        champion_received_mult=base.champion_received_mult.at[u].multiply(holder.champion_received_mult),
         lifeline_shield_kind=put(base.lifeline_shield_kind, holder.lifeline_shield_kind),
         lifeline_duration=put(base.lifeline_duration, holder.lifeline_duration),
         lifeline_decay_hold=put(base.lifeline_decay_hold, holder.lifeline_decay_hold),
@@ -78,7 +70,6 @@ def fold_defense(base: D.Defense, ctx: Ctx, holder: HolderDefense, debuffs: Debu
 
 
 def fold_offense(base: D.Offense, ctx: Ctx, stats: ItemStats) -> D.Offense:
-    """Item penetration (static + dynamic ``ItemStats`` of each holder)."""
     u = ctx.unit
     combine = lambda arr, pct: arr.at[u].set(1 - (1 - arr[u]) * (1 - pct))
     return base._replace(
@@ -86,15 +77,6 @@ def fold_offense(base: D.Offense, ctx: Ctx, stats: ItemStats) -> D.Offense:
         percent_armor_pen=combine(base.percent_armor_pen, stats.percent_armor_pen),
         magic_pen=base.magic_pen.at[u].add(stats.magic_pen),
         percent_magic_pen=combine(base.percent_magic_pen, stats.percent_magic_pen))
-
-
-def apply_dealt_amp(p: D.Packets, ctx: Ctx, amp: Any) -> D.Packets:
-    """Add (C, N) holder->target amps to packets sourced by holders (DMG.40)."""
-    src_is = p.src[:, None] == ctx.unit[None, :]                   # (P, C)
-    per = amp[:, jnp.clip(p.dst, 0, amp.shape[1] - 1)].T           # (P, C)
-    extra = jnp.sum(jnp.where(src_is, per, 0.0), axis=1)
-    keep = D.has(p.flags, D.PROP_NO_DAMAGE_MOD) | D.has(p.flags, D.TAG_NON_AMPABLE)
-    return p._replace(amp=p.amp + jnp.where(keep, 0.0, extra))
 
 
 def resolve_tick(p: D.Packets, off: D.Offense, dfn: D.Defense, hp: Any, max_hp: Any,
@@ -107,13 +89,10 @@ def resolve_tick(p: D.Packets, off: D.Offense, dfn: D.Defense, hp: Any, max_hp: 
 def apply_effects(eff: Effects, ctx: Ctx, hp: Any, max_hp: Any, shields: D.Shields,
                   status: UnitStatus, *, heal_power: Any, incoming_heal: Any, vamp_heal: Any = None,
                   shield_power: Any = None, heal_mult: Any = 1.0) -> tuple[Any, D.Shields, UnitStatus]:
-    """Apply heals/shields to holders and slows/GW to units.
+    """Apply holder heals/shields and unit slows/GW.
 
-    ``heal_power``/``incoming_heal`` are the holders' (C,) heal-and-shield
-    power and incoming heal bonus (Spirit Visage). ``vamp_heal`` (N,) from the
-    Report is healed here too (no HSP, incoming bonus and GW apply).
-    ``heal_mult`` (C,) is a separate multiplier on HSP-type heals and on
-    shields the holder receives (Revitalize ×1.10 below 40% HP).
+    ``vamp_heal`` (N,) gets incoming heal and GW but no HSP; ``heal_mult`` (C,) scales HSP-type heals and
+    received shields (Revitalize).
     """
     u = ctx.unit
     now = ctx.now
@@ -138,10 +117,3 @@ def apply_effects(eff: Effects, ctx: Ctx, hp: Any, max_hp: Any, shields: D.Shiel
                           jnp.where(eff.slow == active_slow, status.slow_until, 0.0)), status.slow_until)
     gw_until = jnp.maximum(status.grievous_until, jnp.where(eff.grievous > 0.0, now + eff.grievous, 0.0))
     return hp, shields, UnitStatus(new_slow, new_until, gw_until)
-
-
-# ---- reference one-tick orchestration --------------------------------------
-
-EXTRA_ON_HIT_SLOTS = 2   # Runaan's bolts (2 ranged) / Statikk secondary bounces get on-hit re-application
-MAIN_PACKET_CAPACITY = 512      # valid packets per tick (world + items) after compaction
-FOLLOW_UP_CAPACITY = 256

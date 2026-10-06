@@ -1,32 +1,9 @@
-"""Support items and the support quest line (ITEMS_CATALOG "Support quest line", ITEMS.md §10–12).
+"""Support items and the support quest line (ITEMS.md §10-12).
 
-Values are read from the 16.19.8230722 item data (``dv``). Hard-coded numbers
-come from wiki text where the client has no data value; each is marked.
-
-Framework scope limits and how this module handles them
--------------------------------------------------------
-* ``Effects`` heals/shields/mana target the HOLDER only, and the 1v1 lane has
-  no allied champions. Ally-side parts are exposed as pure helpers
-  (``on_ally_support``, ``bandlepipes_aura``, ``ally_*``) that return exact
-  amounts. ``units`` is used to find allied champions, so the holder-side
-  conditions ("near an ally") already work once allies exist.
-* The core protocol has no "holder applied crowd control" or "holder healed or
-  shielded an ally" event. This module adds two hooks with the standard
-  shape; the integrator calls them directly (they are not in
-  ``__init__._each``):
-      on_cc(state, own, ctx, units, cc: CC) -> (state, Effects)
-      on_ally_support(state, own, ctx, units, ev: AllySupport)
-          -> (state, Effects, AllyBenefit)
-  Slows emitted by this module (Zeke's storm, Celestial shockwave) are fed
-  to ``on_cc`` internally.
-* Celestial Opposition reduces damage from CHAMPIONS only. ``HolderDefense``
-  has no source-class mask, so ``defense`` cannot carry it. The multiplier is
-  exposed as ``celestial_champion_damage_mult``. The integrator multiplies the
-  raw damage of champion-sourced packets aimed at the holder by it before
-  resolution (pre-mitigation, wiki).
-* Item actives (Shurelya's, Locket, Redemption, Mikael's, Knight's Vow Pledge,
-  support-line Stealth Ward charges) are DEFERRED (MODERN-009). Amount
-  helpers are provided so an integrator can add them later.
+``Effects`` heal/shield only the holder and 1v1 has no allied champions, so ally-side parts are pure helpers
+(``on_ally_support``, ``bandlepipes_aura``) returning exact amounts; holder conditions ("near an ally") already read
+``units``. ``on_cc`` and ``on_ally_support`` are extra hooks; this module's own slows feed ``on_cc`` internally.
+Celestial Opposition only reduces champion damage, which ``HolderDefense.champion_received_mult`` carries.
 """
 from __future__ import annotations
 
@@ -34,46 +11,43 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (MAGIC, ON_HIT_ITEM, PROP_EXECUTE, PROP_REACTIVE, TAG_AOE, TAG_BASIC_ATTACK, TAG_ITEM,
-                            TAG_ON_HIT, TAG_PERIODIC, TAG_PROC, TRUE, concat_packets, has, packets)
+from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM,
+                            PROP_EXECUTE, PROP_REACTIVE, TAG_AOE, TAG_BASIC_ATTACK, TAG_ITEM, TAG_ON_HIT, TAG_PERIODIC,
+                            TAG_PROC, TRUE, concat_packets, has, packets)
 from ..catalog import STAT_INDEX, ItemStats, catalog, level_bp
-from .core import (CC, CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, Debuffs, Effects, dv,
-                   effects, enemy_mask, holds, in_circle, merge_effects, neutral_defense, target_class, unit_pos)
+from .core import (CC, Debuffs, Effects, dv, effects, enemy_mask, holds, in_circle, merge_effects, neutral_defense,
+                   target_class, unit_pos)
 
 SHURELYA, BANDLEPIPES, ZEKES, REDEMPTION, KNIGHTS_VOW = 2065, 2524, 3050, 3107, 3109
 LOCKET, MIKAELS, CENSER, MANDATE, FLOWING = 3190, 3222, 3504, 4005, 6616
 MOONSTONE, ECHOES, DAWNCORE = 6617, 6620, 6621
 ATLAS, BOUNTY, CELESTIAL, DREAM, ZAZZAK, SLEIGH = 3865, 3867, 3869, 3870, 3871, 3876
-BLOODSONG = 3877  # spellblade module; listed only for the gold table note below
 
 NEVER = -1e9
 
-# ---- client values ----------------------------------------------------------
-# Support-line gold generation, gold per 10 s (GP10). Bloodsong 3877 also has
-# GP10 = 9; it belongs to the spellblade module, which must emit it (see
-# ``support_line_gold``).
+# Gold per 10 s; Bloodsong's is emitted by the spellblade module.
 GP10 = {ATLAS: dv(ATLAS, "GP10"), BOUNTY: dv(BOUNTY, "GP10"), CELESTIAL: dv(CELESTIAL, "GP10"),
         DREAM: dv(DREAM, "GP10"), ZAZZAK: dv(ZAZZAK, "GP10"), SLEIGH: dv(SLEIGH, "GP10")}
 
-ATLAS_QUEST_GOLD = dv(ATLAS, "QuestGoldRequirement")          # 400
-ATLAS_MAX_CHARGES = dv(ATLAS, "MaxCharges")                   # 3
-ATLAS_CHARGE_CD = dv(ATLAS, "ChargeCooldown")                 # 20
-ATLAS_FIRST_CHARGE = dv(ATLAS, "FirstChargeOffset")           # 20
-ATLAS_ALLY_RADIUS = dv(ATLAS, "AllyChampNearbyRadius")        # 2000 (wiki: 1050)
-ATLAS_ALLY_RADIUS_MINION = dv(ATLAS, "AllyChampNearbyRadiusMinion")  # 1300
-ATLAS_GOLD_MELEE = dv(ATLAS, "GoldOnHitMelee")                # 18
-ATLAS_GOLD_RANGED = dv(ATLAS, "GoldOnHit")                    # 18
-ATLAS_MINION_GOLD = dv(ATLAS, "ExecuteMinionGold")            # 18
-ATLAS_CANNON_GOLD = dv(ATLAS, "ExecuteCannonGold")            # 20
-ATLAS_EXEC_MELEE = dv(ATLAS, "MeleeExecutePerc")              # 0.5
-ATLAS_EXEC_RANGED = dv(ATLAS, "RangedExecutePerc")            # 0.333 (wiki: 30%)
+ATLAS_QUEST_GOLD = dv(ATLAS, "QuestGoldRequirement")
+ATLAS_MAX_CHARGES = dv(ATLAS, "MaxCharges")
+ATLAS_CHARGE_CD = dv(ATLAS, "ChargeCooldown")
+ATLAS_FIRST_CHARGE = dv(ATLAS, "FirstChargeOffset")
+ATLAS_ALLY_RADIUS = dv(ATLAS, "AllyChampNearbyRadius")
+ATLAS_ALLY_RADIUS_MINION = dv(ATLAS, "AllyChampNearbyRadiusMinion")
+ATLAS_GOLD_MELEE = dv(ATLAS, "GoldOnHitMelee")
+ATLAS_GOLD_RANGED = dv(ATLAS, "GoldOnHit")
+ATLAS_MINION_GOLD = dv(ATLAS, "ExecuteMinionGold")
+ATLAS_CANNON_GOLD = dv(ATLAS, "ExecuteCannonGold")
+ATLAS_EXEC_MELEE = dv(ATLAS, "MeleeExecutePerc")
+ATLAS_EXEC_RANGED = dv(ATLAS, "RangedExecutePerc")
 
-BANDLE_DURATION = dv(BANDLEPIPES, "Duration")                 # 8, ranged x0.5 (calc BuffDuration)
-BANDLE_RANGED_DURATION_MULT = 0.5                             # client calc mRangedMultiplier
-BANDLE_MS = dv(BANDLEPIPES, "MoveSpeed")                      # 20 flat
-BANDLE_AS = dv(BANDLEPIPES, "MeleeAuraAttackSpeed")           # 0.30
-BANDLE_AS_RANGED_MULT = dv(BANDLEPIPES, "RangedAttackSpeedMultiplier")  # 0.667 -> 20%
-BANDLE_AURA = dv(BANDLEPIPES, "AuraRange")                    # 900
+BANDLE_DURATION = dv(BANDLEPIPES, "Duration")
+BANDLE_RANGED_DURATION_MULT = 0.5                             # calc BuffDuration mRangedMultiplier
+BANDLE_MS = dv(BANDLEPIPES, "MoveSpeed")
+BANDLE_AS = dv(BANDLEPIPES, "MeleeAuraAttackSpeed")
+BANDLE_AS_RANGED_MULT = dv(BANDLEPIPES, "RangedAttackSpeedMultiplier")
+BANDLE_AURA = dv(BANDLEPIPES, "AuraRange")
 
 ZEKE_ULT_HASTE = dv(ZEKES, "UltimateHaste")
 ZEKE_CD = dv(ZEKES, "Cooldown")
@@ -82,8 +56,8 @@ ZEKE_DURATION = dv(ZEKES, "Duration")
 ZEKE_DPS = dv(ZEKES, "DamagePerSecond")
 ZEKE_RADIUS = dv(ZEKES, "StormRadius")
 ZEKE_SLOW = dv(ZEKES, "SlowAmount")
-ZEKE_TICK = 1.0          # INFERRED M: DamagePerSecond applied as 1 Hz ticks, first at summon
-ZEKE_SLOW_REFRESH = 0.25  # INFERRED M: slow re-applied each tick while inside, lingers 0.25 s
+ZEKE_TICK = 1.0          # INFERRED M: 1 Hz ticks, the first at summon
+ZEKE_SLOW_REFRESH = 0.25  # INFERRED M: re-applied each tick inside the storm
 
 CENSER_AS = dv(CENSER, "AttackSpeedMin")
 CENSER_ONHIT = dv(CENSER, "OnHitMin")
@@ -106,7 +80,7 @@ MOONSTONE_SINGLE_SHIELD = dv(MOONSTONE, "SingleShield")
 ECHOES_RATE = dv(ECHOES, "DamageStorageRate")
 ECHOES_CONVERSION = dv(ECHOES, "ChargeToHealConversion")
 ECHOES_MIN_TRIGGER = dv(ECHOES, "MinimumHealToTrigger")
-ECHOES_CAP_L1, ECHOES_CAP_PER_LEVEL = 80.0, 10.0   # calc MaxCharges: L1 80, mInitialBonusPerLevel 10
+ECHOES_CAP_L1, ECHOES_CAP_PER_LEVEL = 80.0, 10.0   # calc MaxCharges
 
 DAWN_AP = dv(DAWNCORE, "APPerManaRegen")
 DAWN_HSP = dv(DAWNCORE, "HSPowerPerManaRegen")
@@ -128,56 +102,36 @@ ZAZ_BASE = dv(ZAZZAK, "BaseDamage")
 ZAZ_AP = dv(ZAZZAK, "APRatio")
 ZAZ_PCT = dv(ZAZZAK, "PercentHPDamage")
 ZAZ_MONSTER_CAP = dv(ZAZZAK, "MonsterDamageCap")
-ZAZ_CD = 10.0            # client calc Cooldown = NumberCalculationPart 10
-ZAZ_DELAY = 0.5          # WIKI "after a 0.5-second delay"
-ZAZ_RADIUS = 250.0       # INFERRED L: no client or wiki radius; edge-inclusive
+ZAZ_CD = 10.0            # calc Cooldown
+ZAZ_DELAY = 0.5          # wiki
+ZAZ_RADIUS = 250.0       # INFERRED L: no client or wiki radius
 
 SLEIGH_CD = dv(SLEIGH, "Cooldown")
 SLEIGH_DURATION = dv(SLEIGH, "BuffDuration")
 SLEIGH_MS = dv(SLEIGH, "MoveSpeedBuff")
 SLEIGH_RANGE = dv(SLEIGH, "MoveSpeedRange")
-SLEIGH_REQUIRES_ALLY = False   # tooltip "near allies"; wiki has no ally condition (default)
-
-LOCKET_RANGE = dv(LOCKET, "ShieldRange")
-REDEMPTION_DAMAGE = dv(REDEMPTION, "DamageToChampions")
-KV_REDIRECT = dv(KNIGHTS_VOW, "DamageRedirection")
-KV_THRESHOLD = dv(KNIGHTS_VOW, "DamageRedirectionThreshold")
-KV_HEAL = dv(KNIGHTS_VOW, "AllyHealingConversion")
-KV_RANGE = dv(KNIGHTS_VOW, "TetherRange")
+SLEIGH_REQUIRES_ALLY = False   # tooltip says "near allies", the wiki has no ally condition
 
 COVERAGE = {
-    SHURELYA: "no passive; Inspiring Speech active (30% MS 4 s, r1000, cd 75) in actives",
-    BANDLEPIPES: "Fanfare via on_cc (slow/immobilize enemy champion): 8 s (ranged 4 s) +20 MS and 30% "
-                 "(ranged x0.667) AS to self; ally AS aura r900 via bandlepipes_aura (no allies in 1v1)",
-    ZEKES: "15 ultimate haste; Frostfire Tempest: ult cast (cd 45 from cast) readies 5 s, storm on enemy "
-           "champion within 350 or at window end, 5 s, 30 magic/s (1 Hz) to champions+monsters, 30% slow",
-    REDEMPTION: "no passive; Intervention active in actives (redemption_heal helper)",
-    KNIGHTS_VOW: "Sacrifice needs a Pledged ally (Pledge is ally-only: inert, actives.INERT); knights_vow_* helpers only",
-    LOCKET: "no passive; Devotion active in actives (locket_shield helper)",
-    MIKAELS: "no passive; Purify is ally-only: inert (actives.INERT; mikael_heal helper)",
-    CENSER: "Sanctify via on_ally_support: holder 25% AS + 20 magic on-hit for 6 s; ally buff returned "
-            "in AllyBenefit (no allies in 1v1)",
-    MANDATE: "Command via on_cc immobilize: target 7% vulnerable (received_amp) 4 s, refresh not stack; "
-             "Control +20 AH on immobilizing abilities exposed as mandate_immobilize_haste (champion side)",
-    FLOWING: "Rapids via on_ally_support: holder +40 AP +15 AH 6 s; ally buff in AllyBenefit",
-    MOONSTONE: "ally-only chain heal/shield: amounts and chain target in AllyBenefit (no allies in 1v1)",
-    ECHOES: "Soul Charges 30% pre-mitigation damage to champions, cap 80+10/level; consumed by "
-            "on_ally_support into an ally heal in AllyBenefit",
-    DAWNCORE: "First Light: +2% HSP and +10 AP per 100% base mana regen from items (prorated; "
-              "Ctx lacks rune/shard base mana regen %)",
-    ATLAS: "GP10 3; Shared Riches charges (first at +20 s, 1/20 s, max 3) with ally champion nearby: "
-           "18 g on champion/structure damage (r2000), minion kill 18/20 g (r1300) + kill-gold redirect "
-           "count, basic-attack execute below 50%/33.3% HP + AD; quest gold toward 400 -> atlas_done",
-    BOUNTY: "GP10 5; Stealth Ward charges DEFERRED (vision, MODERN-009)",
-    CELESTIAL: "GP10 9; Blessing of the Mountain state machine (pop on champion damage, 2 s linger, 50% "
-               "slow r500 1.5 s, cd 18 restarted by champion damage); DR via "
-               "celestial_champion_damage_mult (needs integrator, see module doc); wards DEFERRED",
-    DREAM: "GP10 9; bubbles every 8 s granted to ally via on_ally_support (FlatDR/ProcDmg in "
-           "AllyBenefit; ally-only effect); wards DEFERRED",
-    ZAZZAK: "GP10 9; Void Explosion: ability damage to a champion -> 0.5 s delay, 10+15% AP+3% max HP "
-            "magic in r250 (radius INFERRED), monster cap 300, cd 10; wards DEFERRED",
-    SLEIGH: "GP10 9; Going Sledding via on_cc: heal 50 (+15/level from 7), 20% MS decaying 2.5 s, cd 30; "
-            "most wounded ally within 1500 in state.sleigh_ally; wards DEFERRED",
+    SHURELYA: "no passive; Inspiring Speech active in actives",
+    BANDLEPIPES: "Fanfare on CC applied: MS and AS to self; ally AS aura via bandlepipes_aura",
+    ZEKES: "ult haste; Frostfire Tempest readied by ult cast, storm on contact or window end: magic ticks and slow",
+    REDEMPTION: "no passive; Intervention active in actives",
+    KNIGHTS_VOW: "Sacrifice needs a Pledged ally: inert in 1v1",
+    LOCKET: "no passive; Devotion active in actives",
+    MIKAELS: "no passive; Purify is ally-only: inert in 1v1",
+    CENSER: "Sanctify via on_ally_support: AS and magic on-hit (ally buff in AllyBenefit)",
+    MANDATE: "Command: immobilized champions take more damage (refresh, no stack); Control haste helper",
+    FLOWING: "Rapids via on_ally_support: AP and AH (ally buff in AllyBenefit)",
+    MOONSTONE: "ally chain heal/shield amounts in AllyBenefit",
+    ECHOES: "Soul Charges from champion damage, level-capped, consumed into an ally heal (AllyBenefit)",
+    DAWNCORE: "First Light: HSP and AP per base mana regen from items (rune/shard regen not in Ctx)",
+    ATLAS: "gold; Shared Riches charges with an ally near: damage gold, minion execute/kill gold; quest -> atlas_done",
+    BOUNTY: "gold; ward charges deferred (vision)",
+    CELESTIAL: "gold; Blessing of the Mountain champion-damage reduction, pop, linger, shockwave slow; wards deferred",
+    DREAM: "gold; bubbles for an ally via on_ally_support; wards deferred",
+    ZAZZAK: "gold; Void Explosion after ability damage to a champion (radius INFERRED); wards deferred",
+    SLEIGH: "gold; Going Sledding on CC applied: heal and decaying MS, wounded ally in sleigh_ally; wards deferred",
 }
 
 
@@ -240,8 +194,6 @@ class AllyBenefit(NamedTuple):
     dream_proc: Any          # Purple Bubble: bonus magic damage (x0.333 AoE vs non-champions)
 
 
-# ---- small helpers -----------------------------------------------------------
-
 def _allies(ctx, units):
     """(C, N) living allied champions other than the holder."""
     n = units.x.shape[0]
@@ -265,7 +217,7 @@ def _enemy_champions(ctx, units):
 
 
 def _sel(report, ctx, units):
-    """(C, P) masks: packet from holder c that dealt damage, and dst class / team."""
+    """(C, P) holder packets that damaged an enemy, and (1, P) destination class."""
     p, r = report.packets, report.resolved
     dst = jnp.clip(p.dst, 0, units.x.shape[0] - 1)
     src_is = (p.src[None, :] == ctx.unit[:, None]) & (p.valid & (r.final > 0.0))[None, :]
@@ -278,50 +230,33 @@ def echoes_cap(level):
 
 
 def dream_values(level):
-    """(FlatDR, ProcDmg) of Dream Maker bubbles: level_bp(50, +12 at >=7), level_bp(40, +10 at >=7)."""
+    """Dream Maker bubbles (flat damage reduction, proc damage)."""
     return level_bp(50.0, 12.0, 7.0, level), level_bp(40.0, 10.0, 7.0, level)
 
 
 def sleigh_heal(level):
-    """BonusHealthBuff = level_bp(L1 50, +15/level at L>=7)."""
+    """Client BonusHealthBuff."""
     return level_bp(50.0, 15.0, 7.0, level)
 
 
 def locket_shield(level):
-    """Devotion shield (deferred active): level_bp(290, +7/level at L>=9); 25% within 20 s."""
+    """Devotion shield (the active is in actives)."""
     return level_bp(290.0, 7.0, 9.0, level)
 
 
 def redemption_heal(level):
-    """Intervention heal (deferred active): lerp 150 -> 350 by the target's level; 10% max HP true."""
+    """Intervention heal by the target's level (the active is in actives)."""
     lv = jnp.maximum(jnp.asarray(level, jnp.float32), 1.0)
     return dv(REDEMPTION, "HealMin") + (lv - 1.0) / 17.0 * (dv(REDEMPTION, "HealMax") - dv(REDEMPTION, "HealMin"))
 
 
-def mikael_heal(level):
-    """Purify heal (deferred active): lerp 100 -> 250 by level."""
-    lv = jnp.maximum(jnp.asarray(level, jnp.float32), 1.0)
-    return dv(MIKAELS, "HealAmountMin") + (lv - 1.0) / 17.0 * (dv(MIKAELS, "HealAmountMax") - dv(MIKAELS, "HealAmountMin"))
-
-
-def knights_vow_redirect(ally_raw_damage, holder_hp, holder_max_hp, tethered):
-    """Sacrifice: pre-mitigation damage moved from the Worthy ally to the holder (same type)."""
-    ok = tethered & (holder_hp > KV_THRESHOLD * holder_max_hp)
-    return jnp.where(ok, KV_REDIRECT * ally_raw_damage, 0.0)
-
-
-def knights_vow_heal(ally_post_damage_to_champions, tethered):
-    """Sacrifice: holder heals 12% of post-mitigation damage the Worthy ally deals to champions."""
-    return jnp.where(tethered, KV_HEAL * ally_post_damage_to_champions, 0.0)
-
-
 def mandate_immobilize_haste(own):
-    """(C,) Control: extra ability haste for the holder's abilities that immobilize."""
+    """(C,) Control: ability haste for the holder's immobilizing abilities."""
     return jnp.where(holds(own, MANDATE), MANDATE_IMMOBILIZE_AH, 0.0)
 
 
 def support_line_gold(own, dt, item_ids=tuple(GP10)):
-    """(C,) GP10 gold of this tick for the support-line items held."""
+    """(C,) support-line gold of this tick."""
     g = jnp.zeros(own.shape[:1], jnp.float32)
     for iid in item_ids:
         g = g + jnp.where(holds(own, iid), GP10[iid] / 10.0 * dt, 0.0)
@@ -329,7 +264,7 @@ def support_line_gold(own, dt, item_ids=tuple(GP10)):
 
 
 def _mana_regen_pct(own):
-    """(C,) bonus base-mana-regen ratio from held items (1.0 = 100%)."""
+    """(C,) bonus base-mana-regen ratio from held items."""
     col = jnp.asarray(catalog().arrays.stats[:, STAT_INDEX["percent_base_mana_regen"]], jnp.float32)
     return own.astype(jnp.float32) @ col
 
@@ -347,7 +282,6 @@ def celestial_champion_damage_mult(state, own, ctx):
 
 
 def defense(state, own, ctx):
-    """Celestial Opposition blessing: reduces damage from enemy champions only."""
     return neutral_defense(ctx.level.shape[0])._replace(
         champion_received_mult=celestial_champion_damage_mult(state, own, ctx))
 
@@ -359,8 +293,6 @@ def bandlepipes_aura(state, own, ctx, units):
     aspd = BANDLE_AS * jnp.where(ctx.is_ranged, BANDLE_AS_RANGED_MULT, 1.0)
     return jnp.where(_allies(ctx, units) & near & active[:, None], aspd[:, None], 0.0)
 
-
-# ---- hooks -------------------------------------------------------------------
 
 def stats(state: State, own, ctx) -> ItemStats:
     now = ctx.now
@@ -384,13 +316,13 @@ def stats(state: State, own, ctx) -> ItemStats:
 def debuffs(state: State, own, ctx, units):
     n = units.x.shape[0]
     marked = holds(own, MANDATE)[:, None] & (ctx.now < state.mandate_until)
-    amp = jnp.where(jnp.any(marked, axis=0), MANDATE_AMP, 0.0)   # refresh, never stacks
+    amp = jnp.where(jnp.any(marked, axis=0), MANDATE_AMP, 0.0)   # refreshes, never stacks
     z = jnp.zeros((n,), jnp.float32)
     return Debuffs(z, z, z, z, amp.astype(jnp.float32), z, z)
 
 
 def on_cc(state: State, own, ctx, units, cc: CC) -> tuple[State, Effects]:
-    """Holder applied slow/immobilize (Bandlepipes, Imperial Mandate, Solstice Sleigh)."""
+    """Holder slowed/immobilized an enemy champion (Bandlepipes, Imperial Mandate, Solstice Sleigh)."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     champs = _enemy_champions(ctx, units)
     any_cc = jnp.any((cc.slowed | cc.immobilized) & champs, axis=1) & ctx.alive
@@ -413,7 +345,7 @@ def on_cc(state: State, own, ctx, units, cc: CC) -> tuple[State, Effects]:
 
 
 def on_ally_support(state: State, own, ctx, units, ev: AllySupport):
-    """Holder healed/shielded another allied champion (Censer, Flowing Water, Echoes, Moonstone, Dream)."""
+    """Holder healed/shielded another allied champion (Censer, Flowing Water, Echoes, Moonstone, Dream Maker)."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     tgt = jnp.asarray(ev.target, jnp.int32)
     ti = jnp.clip(tgt, 0, n - 1)
@@ -452,11 +384,10 @@ def on_hit(state: State, own, ctx, units, attack) -> tuple[State, Effects]:
     c, n = ctx.level.shape[0], units.x.shape[0]
     hit = attack.hit & ctx.alive
     tgt = jnp.maximum(attack.target, 0)
-    # Ardent Censer: 20 magic on-hit while Sanctified.
     cen = hit & holds(own, CENSER) & (ctx.now < state.censer_until)
     p_cen = packets(cen, ctx.unit, tgt, CENSER_ONHIT, MAGIC, ON_HIT_ITEM, item=CENSER)
-    # World Atlas execute (client ExecuteHealthThreshold = pct x target max HP + AD; needs an
-    # allied champion within 1300 and a charge). The kill then consumes the charge in on_takedown.
+    # World Atlas execute below pct x max HP + AD (client ExecuteHealthThreshold) with a charge and an ally near;
+    # the kill consumes the charge in on_takedown.
     ti = jnp.clip(attack.target, 0, n - 1)
     pct = jnp.where(ctx.is_ranged, ATLAS_EXEC_RANGED, ATLAS_EXEC_MELEE)
     minion = (target_class(units, attack.target) == CLASS_MINION) & (units.team[ti] != ctx.team) \
@@ -485,12 +416,11 @@ def on_damage(state: State, own, ctx, units, report) -> tuple[State, Effects]:
     not_item = ~has(flags, TAG_ITEM) & ~has(flags, PROP_REACTIVE)
     to_champ = mine & (dcls == CLASS_CHAMPION)
 
-    # Echoes of Helia: 30% of pre-mitigation damage to champions.
+    # Echoes of Helia charges from pre-mitigation damage to champions.
     gain = ECHOES_RATE * jnp.sum(jnp.where(to_champ, p.raw[None, :], 0.0), axis=1)
     charges = jnp.where(holds(own, ECHOES),
                         jnp.minimum(state.echoes_charges + gain, echoes_cap(ctx.level)), state.echoes_charges)
 
-    # Zaz'Zak's: ability (not attack/on-hit/item) damage to a champion queues an explosion.
     ability = to_champ & not_item & ~has(flags, TAG_BASIC_ATTACK) & ~has(flags, TAG_ON_HIT)
     any_ab = jnp.any(ability, axis=1)
     if p.dst.shape[0] == 0:   # static: no packets this tick
@@ -500,12 +430,11 @@ def on_damage(state: State, own, ctx, units, report) -> tuple[State, Effects]:
     zx, zy = unit_pos(units, zt)
     zgo = any_ab & holds(own, ZAZZAK) & ctx.alive & (ctx.now >= state.zaz_cd) & jnp.isinf(state.zaz_at)
 
-    # World Atlas Shared Riches: champion/structure damage by attack or ability, ally within 2000.
     riches = holds(own, ATLAS) & (state.atlas_charges >= 1.0) & _ally_near(ctx, units, ATLAS_ALLY_RADIUS) \
         & jnp.any(mine & not_item & ((dcls == CLASS_CHAMPION) | (dcls == CLASS_STRUCTURE)), axis=1)
     rgold = jnp.where(riches, jnp.where(ctx.is_ranged, ATLAS_GOLD_RANGED, ATLAS_GOLD_MELEE), 0.0)
 
-    # Celestial Opposition: champion damage pops the blessing / restarts the cooldown.
+    # Celestial: champion damage pops the blessing or restarts the cooldown.
     src_cls = units.cls[jnp.clip(p.src, 0, n - 1)]
     src_team = units.team[jnp.clip(p.src, 0, n - 1)]
     champ_hit = jnp.any((p.dst[None, :] == ctx.unit[:, None]) & p.valid[None, :]
@@ -552,7 +481,6 @@ def periodic(state: State, own, ctx, units) -> tuple[State, Effects]:
     now = ctx.now
     parts = []
 
-    # Gold generation (all support-line items of this module) and World Atlas charges/quest.
     gold = support_line_gold(own, ctx.dt)
     atlas = holds(own, ATLAS)
     fresh = atlas & ~state.atlas_seen
@@ -561,14 +489,14 @@ def periodic(state: State, own, ctx, units) -> tuple[State, Effects]:
     grow = atlas & (charges < ATLAS_MAX_CHARGES) & (now >= nxt)
     charges = charges + grow.astype(jnp.float32)
     nxt = jnp.where(grow, nxt + ATLAS_CHARGE_CD, nxt)
-    nxt = jnp.where(atlas & (charges >= ATLAS_MAX_CHARGES), now + ATLAS_CHARGE_CD, nxt)  # paused while full
+    nxt = jnp.where(atlas & (charges >= ATLAS_MAX_CHARGES), now + ATLAS_CHARGE_CD, nxt)  # paused when full
     atlas_gold = state.atlas_gold + jnp.where(atlas, GP10[ATLAS] / 10.0 * ctx.dt, 0.0)
     state = state._replace(atlas_seen=atlas, atlas_charges=charges, atlas_next_charge=nxt,
                            atlas_gold=atlas_gold,
                            atlas_done=state.atlas_done | (atlas & (atlas_gold >= ATLAS_QUEST_GOLD)))
     parts.append(effects(c, n, gold=gold))
 
-    # Zeke's Convergence: readied storm summons on contact or at window end.
+    # Zeke's: a readied storm summons on contact or at window end.
     radius = jnp.full((c,), ZEKE_RADIUS)
     champs_in = jnp.any(in_circle(units, ctx.x, ctx.y, radius) & _enemy_champions(ctx, units), axis=1)
     readied = holds(own, ZEKES) & ctx.alive & (state.zeke_ready_until > NEVER / 2)
@@ -589,7 +517,6 @@ def periodic(state: State, own, ctx, units) -> tuple[State, Effects]:
                          slow_duration=jnp.where(any_z, ZEKE_SLOW_REFRESH, 0.0)))
     state = state._replace(zeke_storm_until=storm_until, zeke_next_tick=next_tick, zeke_ready_until=ready_until)
 
-    # Zaz'Zak's Realmspike: pending explosion.
     boom = holds(own, ZAZZAK) & (now >= state.zaz_at)
     hit = in_circle(units, state.zaz_x, state.zaz_y, jnp.full((c,), ZAZ_RADIUS)) & enemy_mask(ctx, units) \
         & (units.cls[None, :] != CLASS_STRUCTURE) & boom[:, None]
@@ -599,7 +526,7 @@ def periodic(state: State, own, ctx, units) -> tuple[State, Effects]:
                                                TAG_AOE | TAG_PROC | TAG_ITEM, item=ZAZZAK)))
     state = state._replace(zaz_at=jnp.where(now >= state.zaz_at, jnp.inf, state.zaz_at))
 
-    # Celestial Opposition: linger end -> shockwave slow and cooldown.
+    # Celestial: linger end -> shockwave slow and cooldown.
     end = holds(own, CELESTIAL) & state.cel_popped & (now >= state.cel_linger_until)
     wave = in_circle(units, ctx.x, ctx.y, jnp.full((c,), CEL_RADIUS)) & enemy_mask(ctx, units) \
         & (units.cls[None, :] != CLASS_STRUCTURE) & (end & ctx.alive)[:, None]
@@ -609,7 +536,6 @@ def periodic(state: State, own, ctx, units) -> tuple[State, Effects]:
     state = state._replace(cel_popped=state.cel_popped & ~end,
                            cel_cd_until=jnp.where(end, state.cel_linger_until + CEL_CD, state.cel_cd_until))
 
-    # Slows from this module feed the CC-applied passives.
     state, cc_eff = on_cc(state, own, ctx, units,
                           CC(zslow | wave, jnp.zeros((c, n), bool)))
     parts.append(cc_eff)

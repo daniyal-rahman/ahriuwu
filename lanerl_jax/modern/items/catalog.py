@@ -1,9 +1,6 @@
-"""Patch-26.19 SR item catalog from client build 16.19.8230722.
+"""Patch-26.19 SR item catalog (client build 16.19.8230722) as immutable NumPy tables (ITEMS.md §1-2).
 
-Host-side loading of ``items_client.json`` (built by
-``lanerl_jax.modern.data.build_items``) into immutable NumPy tables that JIT
-kernels close over. Item *rows* (0..n_items-1) index every table; the
-inventory stores rows, never raw ids. Row ``EMPTY = -1`` is an empty slot.
+Tables are indexed by item *row* (0..n_items-1); inventories store rows, ``EMPTY = -1`` is an empty slot.
 """
 from __future__ import annotations
 
@@ -20,17 +17,15 @@ from ..data import PATCH, PATCH_DIR
 CLIENT_BUILD = "16.19.8230722"
 DATA_PATH = PATCH_DIR / "items_client.json"
 EMPTY = -1
-N_SLOTS = 7           # six main slots + trinket (index 6)
+N_SLOTS = 7           # six main slots + trinket
 TRINKET_SLOT = 6
+MAX_RECIPE_NODES = 16
+BUFF_CURRENCIES = ("Feats_NoxianBootPurchaseBuff", "SupportItemPurchaseBuff",
+                   "S11Support_Quest_Completion_Buff", "Item2420")
 
 
 class ItemStats(NamedTuple):
-    """Bonus stats contributed by items/shards/effects (all ``bonus``).
-
-    Units: attack speed, crit, vamp, %pen, tenacity, slow resist, heal/shield
-    power and percent fields are fractions (0.25 = 25%); ``health_regen`` is
-    HP per second; ``percent_base_*_regen`` multiplies champion base regen.
-    """
+    """Bonus stats from items, shards and effects. Ratios are fractions (0.25 = 25%); regen is per second."""
     health: Any = 0.0
     attack_damage: Any = 0.0
     ability_power: Any = 0.0
@@ -56,26 +51,26 @@ class ItemStats(NamedTuple):
     magic_pen: Any = 0.0
     percent_magic_pen: Any = 0.0
     heal_shield_power: Any = 0.0
-    incoming_heal: Any = 0.0          # Spirit Visage-type received heal/shield/regen/vamp increase
+    incoming_heal: Any = 0.0          # Spirit Visage: received heal/shield/regen/vamp increase
     basic_ability_haste: Any = 0.0
     ultimate_haste: Any = 0.0
     summoner_haste: Any = 0.0
-    mana_regen: Any = 0.0             # flat mana per second
+    mana_regen: Any = 0.0
     # Rune/shard buckets (RUNES.md §8, DAMAGE_AND_STATS §3); no client item sets them.
-    adaptive_force: Any = 0.0         # unresolved AF; core.stats.resolve_adaptive splits it (STAT.50)
-    item_haste: Any = 0.0             # item actives (Cosmic Insight)
-    trinket_haste: Any = 0.0          # trinkets (Grisly Mementos)
-    percent_armor: Any = 0.0          # STAT.40 total-armor multiplier (Conditioning 3%)
-    percent_magic_resist: Any = 0.0   # STAT.40 total-MR multiplier
-    percent_health: Any = 0.0         # STAT.40 total max-HP multiplier (Overgrowth 3.5%)
-    bonus_ms_amp: Any = 0.0           # other bonus MS is (1 + amp) more effective (Celerity 7%)
+    adaptive_force: Any = 0.0         # unresolved; core.stats.resolve_adaptive splits it (STAT.50)
+    item_haste: Any = 0.0
+    trinket_haste: Any = 0.0
+    percent_armor: Any = 0.0          # STAT.40 total multipliers
+    percent_magic_resist: Any = 0.0
+    percent_health: Any = 0.0
+    bonus_ms_amp: Any = 0.0           # other bonus MS is (1 + amp) more effective (Celerity)
     silent_health: Any = 0.0          # part of ``health`` whose gains do not raise current HP (Biscuits)
     attack_speed_cap_lift: Any = 0.0  # > 0 lifts the attack-speed cap (Hail of Blades)
 
 
 STAT_FIELDS = ItemStats._fields
 STAT_INDEX = {name: i for i, name in enumerate(STAT_FIELDS)}
-# Fields that stack as 1 - prod(1 - x) across sources (DAMAGE_AND_STATS §3.4).
+# Stack as 1 - prod(1 - x) across sources (DAMAGE_AND_STATS §3.4); everything else adds.
 MULTIPLICATIVE_FIELDS = ("tenacity", "slow_resist", "percent_armor_pen", "percent_magic_pen")
 
 
@@ -84,7 +79,6 @@ def zero_stats(shape=(), xp: Any = jnp) -> ItemStats:
 
 
 def combine_stats(*parts: ItemStats) -> ItemStats:
-    """Combine contributions with the documented additive/multiplicative rules."""
     out = {}
     for name in STAT_FIELDS:
         values = [jnp.asarray(getattr(p, name), jnp.float32) for p in parts]
@@ -107,12 +101,10 @@ class ItemSpec:
     row: int
     name: str
     in_store: bool
-    price: int
     total: int
     sell_value: int
     can_be_sold: bool
     max_stack: int
-    consumed: bool
     consume_on_acquire: bool
     groups: tuple[str, ...]
     recipe: tuple[int, ...]
@@ -124,10 +116,8 @@ class ItemSpec:
     stats: ItemStats
     data_values: dict
     calculations: dict
-    spell: dict | None
-    sidegrades: tuple[int, ...]
     epicness: int
-    effect_amount: tuple[float, ...] = ()
+    effect_amount: tuple[float, ...] = ()   # client mEffectAmount
 
     def dv(self, name: str, default: float | None = None) -> float:
         if name in self.data_values:
@@ -137,66 +127,56 @@ class ItemSpec:
         return default
 
 
-MAX_RECIPE_NODES = 16
-
-
 class CatalogArrays(NamedTuple):
     """Static JIT tables, leading axis = item row."""
     item_id: Any            # (I,) int32
-    stats: Any              # (I, F) float32 per-unit stats
+    stats: Any              # (I, F) float32
     multiplicative: Any     # (F,) bool
     total: Any              # (I,) int32 recursive cost
     sell_value: Any         # (I,) int32
     can_be_sold: Any        # (I,) bool
     in_store: Any           # (I,) bool
     max_stack: Any          # (I,) int32
-    groups: Any             # (I, G) bool membership
+    groups: Any             # (I, G) bool
     group_max: Any          # (G,) int32, -1 = unlimited
     group_purchase_cd: Any  # (G,) float32
     trinket: Any            # (I,) bool
     required_level: Any     # (I,) int32
     ranged_only: Any        # (I,) bool
-    blocked: Any            # (I,) bool: champion/Smite-gated items (deferred)
-    required_buff: Any      # (I,) int32 index into BUFF_CURRENCIES, -1 none
+    blocked: Any            # (I,) bool: champion/Smite-gated (not purchasable)
+    required_buff: Any      # (I,) int32 index into BUFF_CURRENCIES, -1 none, -2 unknown buff
     consume_on_acquire: Any  # (I,) bool
     node_item: Any          # (I, M) int32 recipe tree pre-order (component rows), -1 pad
-    node_parent: Any        # (I, M) int32 node index of parent, -1 = direct component
-    node_total: Any         # (I, M) int32 total cost of node item
-
-
-BUFF_CURRENCIES = ("Feats_NoxianBootPurchaseBuff", "SupportItemPurchaseBuff",
-                   "S11Support_Quest_Completion_Buff", "Item2420")
+    node_parent: Any        # (I, M) int32 parent node index, -1 = direct component
+    node_total: Any         # (I, M) int32 total cost of the node item
 
 
 class Catalog:
-    """All SR items of the pinned patch; immutable after construction."""
+    """All SR items of the pinned patch."""
 
     def __init__(self, payload: dict):
         if payload.get("schema") != "lanerl-client-sr-items-v1" or payload.get("patch") != PATCH \
                 or payload.get("client_build") != CLIENT_BUILD:
             raise RuntimeError("modern item catalog has wrong schema, patch or client build")
-        self.sources = dict(payload["sources"])
         self.group_info = dict(payload["groups"])
         rows = sorted(payload["items"].items(), key=lambda kv: int(kv[0]))
         self.ids = tuple(int(k) for k, _ in rows)
         self.row_of = {iid: r for r, iid in enumerate(self.ids)}
         specs = []
         for r, (key, rec) in enumerate(rows):
-            stats = ItemStats(**{k: float(v) for k, v in rec["stats"].items()})
             total = int(rec["total"])
             specs.append(ItemSpec(
-                item_id=int(key), row=r, name=rec["name"], in_store=rec["in_store"],
-                price=int(rec["price"]), total=total,
+                item_id=int(key), row=r, name=rec["name"], in_store=rec["in_store"], total=total,
                 sell_value=int(np.floor(total * rec["sell_modifier"] + 0.5)) if rec["can_be_sold"] else 0,
                 can_be_sold=bool(rec["can_be_sold"]), max_stack=int(rec["max_stack"]),
-                consumed=bool(rec["consumed"]), consume_on_acquire=bool(rec["consume_on_acquire"]),
+                consume_on_acquire=bool(rec["consume_on_acquire"]),
                 groups=tuple(rec["groups"]), recipe=tuple(int(c) for c in rec["recipe"]),
                 required_level=int(rec["required_level"]), required_champion=rec["required_champion"],
                 required_spell=rec["required_spell"], required_buff=rec["required_buff"],
-                required_identities=tuple(rec["required_identities"]), stats=stats,
+                required_identities=tuple(rec["required_identities"]),
+                stats=ItemStats(**{k: float(v) for k, v in rec["stats"].items()}),
                 data_values=dict(rec["data_values"]), calculations=rec["calculations"],
-                spell=rec["spell"], sidegrades=tuple(rec["sidegrades"]), epicness=int(rec["epicness"]),
-                effect_amount=tuple(float(x) for x in rec["effect_amount"])))
+                epicness=int(rec["epicness"]), effect_amount=tuple(float(x) for x in rec["effect_amount"])))
         self.specs = tuple(specs)
         self.by_id = {s.item_id: s for s in specs}
         self.group_names = tuple(sorted({g for s in specs for g in s.groups}))
@@ -249,21 +229,20 @@ class Catalog:
         gmax = np.asarray([int(self.group_info[name]["max_ownable"]) for name in self.group_names], np.int32)
         gcd = np.asarray([float(self.group_info[name].get("purchase_cooldown", 0.0))
                           for name in self.group_names], np.float32)
-        spec_col = lambda fn, dt: np.asarray([fn(s) for s in self.specs], dt)
+        col = lambda fn, dt: np.asarray([fn(s) for s in self.specs], dt)
+        buff = lambda b: BUFF_CURRENCIES.index(b) if b in BUFF_CURRENCIES else (-1 if not b else -2)
         return CatalogArrays(
-            item_id=spec_col(lambda s: s.item_id, np.int32), stats=stats,
+            item_id=col(lambda s: s.item_id, np.int32), stats=stats,
             multiplicative=np.asarray([k in MULTIPLICATIVE_FIELDS for k in STAT_FIELDS]),
-            total=spec_col(lambda s: s.total, np.int32), sell_value=spec_col(lambda s: s.sell_value, np.int32),
-            can_be_sold=spec_col(lambda s: s.can_be_sold, bool), in_store=spec_col(lambda s: s.in_store, bool),
-            max_stack=spec_col(lambda s: s.max_stack, np.int32), groups=groups, group_max=gmax,
-            group_purchase_cd=gcd, trinket=spec_col(lambda s: "Trinket" in s.groups, bool),
-            required_level=spec_col(lambda s: s.required_level, np.int32),
-            ranged_only=spec_col(lambda s: "Ranged" in s.required_identities, bool),
-            blocked=spec_col(lambda s: bool(s.required_champion or s.required_spell), bool),
-            required_buff=spec_col(lambda s: BUFF_CURRENCIES.index(s.required_buff)
-                                   if s.required_buff in BUFF_CURRENCIES else (-1 if not s.required_buff else -2),
-                                   np.int32),
-            consume_on_acquire=spec_col(lambda s: s.consume_on_acquire, bool),
+            total=col(lambda s: s.total, np.int32), sell_value=col(lambda s: s.sell_value, np.int32),
+            can_be_sold=col(lambda s: s.can_be_sold, bool), in_store=col(lambda s: s.in_store, bool),
+            max_stack=col(lambda s: s.max_stack, np.int32), groups=groups, group_max=gmax,
+            group_purchase_cd=gcd, trinket=col(lambda s: "Trinket" in s.groups, bool),
+            required_level=col(lambda s: s.required_level, np.int32),
+            ranged_only=col(lambda s: "Ranged" in s.required_identities, bool),
+            blocked=col(lambda s: bool(s.required_champion or s.required_spell), bool),
+            required_buff=col(lambda s: buff(s.required_buff), np.int32),
+            consume_on_acquire=col(lambda s: s.consume_on_acquire, bool),
             node_item=nodes, node_parent=parents, node_total=node_total)
 
 
@@ -273,14 +252,13 @@ def catalog() -> Catalog:
 
 
 def lerp_level(start: Any, end: Any, level: Any) -> Any:
-    """``ByCharLevelInterpolation``: linear over 1..18, extrapolating to 19–20
-    (README X-1; client ``mScalePastDefaultMaxLevel`` absent)."""
+    """Client ``ByCharLevelInterpolation``: linear over 1..18, extrapolated past 18 (README X-1)."""
     lv = jnp.maximum(jnp.asarray(level, jnp.float32), 1.0)
     return start + (end - start) * (lv - 1.0) / 17.0
 
 
 def level_bp(start: Any, per_level: Any, from_level: Any, level: Any) -> Any:
-    """``mBonusPerLevelAtAndAfter``: +per_level for each level >= from_level."""
+    """Client ``mBonusPerLevelAtAndAfter``: +per_level for each level >= from_level."""
     lv = jnp.asarray(level, jnp.float32)
     return start + per_level * jnp.maximum(0.0, lv - from_level + 1.0)
 

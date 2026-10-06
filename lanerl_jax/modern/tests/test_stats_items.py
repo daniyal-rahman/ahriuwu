@@ -6,6 +6,8 @@ import pytest
 
 from lanerl_jax.modern.core import stats
 from lanerl_jax.modern.items import loadout as items
+from lanerl_jax.modern.items.catalog import catalog
+from lanerl_jax.modern.items.inventory import inventory_from_ids, inventory_stats, validate_item_loadout
 
 
 def test_stat_composition_and_health_change():
@@ -67,26 +69,13 @@ def test_adaptive_force_and_shards():
     assert compiled.health == pytest.approx(165.0)
 
 
-def test_patch_pinned_items_and_strict_effect_gate():
-    from lanerl_jax.modern.items.catalog import catalog
+def test_patch_pinned_items_and_rune_page_gate():
     assert catalog()[6631].name == "Stridebreaker"
     assert catalog()[3077].stats.attack_damage == 25
-    # Component and upgrade cannot both be equipped; exact SR item IDs matter.
-    with pytest.raises(ValueError, match="group"):
-        items.item_loadout_stats([3077, 6631])
-    # Effects exist in items.effects but the world tick does not run them yet.
-    with pytest.raises(NotImplementedError, match="not dispatched"):
-        items.item_loadout_stats([3071])
-    stats_out, unmodeled = items.item_loadout_stats([1036, 1036], strict_effects=True)
-    assert stats_out.attack_damage == 20 and not unmodeled
-    stats_out, unmodeled = items.item_loadout_stats([3071], strict_effects=False)
-    assert stats_out.health == 400 and unmodeled == (3071,)
+    with pytest.raises(ValueError, match="group"):          # component and upgrade cannot both be held
+        validate_item_loadout([3077, 6631])
+    s = inventory_stats(inventory_from_ids([[1036, 1036], [3071]], trinket=False))
+    assert float(s.attack_damage[0]) == 20 and float(s.health[1]) == 400
     assert items.validate_rune_page([]) is None
     with pytest.raises(TypeError):
         items.validate_rune_page([8010])
-
-
-def test_rune_catalog_is_patch_pinned():
-    data = items.load_rune_data()
-    assert data["patch"] == "26.19"
-    assert data["trees"]

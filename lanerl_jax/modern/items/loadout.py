@@ -1,64 +1,17 @@
-"""Patch-26.19 item loadout stats, stat shards and rune page preparation.
-
-Item data comes from client build 16.19.8230722 (``items.catalog``);
-inventory/shop rules live in ``items.inventory`` and every item passive or
-in-scope active in ``items.effects``; runes in ``runes.catalog`` and
-``runes.effects``. This module keeps the small host-side loadout API
-used by world construction.
-"""
+"""Loadout preparation used by world construction: rune page validation and stat shards (RUNES.md §2.3)."""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 
-from ..data import PATCH, PATCH_DIR
 from ..runes import catalog as R
-from . import inventory as I
-from .catalog import ItemStats, catalog
-from .effects import STATS_ONLY
-
-MAP_ID = 11
-
-
-def item_loadout_stats(item_ids, *, strict_effects: bool = True) -> tuple[ItemStats, tuple[int, ...]]:
-    """Static six-slot stats of a fixed loadout.
-
-    Item effects are implemented in ``items.effects`` but the world
-    tick does not dispatch them yet, so by default a loadout containing an
-    item with behaviour beyond its stat line is rejected rather than silently
-    run as stats only. With ``strict_effects=False`` the second value lists
-    those items for the caller to handle.
-    """
-    ids = tuple(int(i) for i in item_ids)
-    I.validate_item_loadout(ids)
-    behavioural = tuple(i for i in ids if i not in STATS_ONLY)
-    if strict_effects and behavioural:
-        names = ", ".join(f"{i} {catalog()[i].name}" for i in behavioural)
-        raise NotImplementedError(
-            f"item effects are not dispatched by the world tick yet for: {names}")
-    inv = I.inventory_from_ids([list(ids)], trinket=False)
-    stats = I.inventory_stats(inv)
-    return ItemStats(*(float(v[0]) for v in stats)), behavioural
-
-
-def load_rune_data() -> dict:
-    """Return the patch-pinned Data Dragon rune catalog (names and tree layout)."""
-    payload = json.loads((PATCH_DIR / "runes.json").read_text())
-    if payload.get("schema") != "lanerl-ddragon-runes-v1" or payload.get("patch") != PATCH:
-        raise RuntimeError("modern rune data has wrong schema, patch or client build")
-    return payload
+from .catalog import ItemStats
 
 
 def validate_rune_page(page, traits=None):
-    """Validate a page and apply the client's game-start substitutions.
-
-    ``page`` is a ``runes.catalog.RunePage``; ``None`` or an empty
-    sequence is the explicit no-runes ruleset (legacy/test switch, not a
-    legal SR page). Returns the prepared page (or ``None``).
-    """
+    """Apply the client's game-start substitutions to a ``RunePage``; ``None``/empty = no runes (test switch)."""
     if page is None or (not isinstance(page, R.RunePage) and len(page) == 0):
         return None
     if not isinstance(page, R.RunePage):
@@ -76,16 +29,10 @@ DEFAULT_STAT_SHARDS = ("adaptive", "adaptive", "health_flat")
 
 def stat_shard_stats(shards=DEFAULT_STAT_SHARDS, *, level: Any = 1, adaptive_to_ad: Any = True,
                      xp: Any = jnp) -> ItemStats:
-    """Compose the three 26.19 stat shards (client perks, RUNES.md §2.3).
+    """Stats of the three shards (names or perk ids, one per slot).
 
-    ``shards`` are names or perk ids (5008 Adaptive, 5005 AS, 5007 AH, 5010
-    MS, 5001 scaling HP, 5011 HP, 5013 tenacity), one per slot. Adaptive +9
-    (5.4 bonus AD or 9 AP), attack speed +10%, ability haste +8, move speed
-    +2.5%, health +65, scaling health ``10·level`` (10–180 over 1–18,
-    extrapolated to 200 at level 20 per README X-1), tenacity and slow
-    resist +15% (multiplicative with other sources). ``adaptive_to_ad=None``
-    leaves the adaptive shards as unresolved ``adaptive_force`` for
-    ``core.stats.resolve_adaptive`` (STAT.50 dynamic choice).
+    ``adaptive_to_ad=None`` leaves adaptive shards as unresolved ``adaptive_force`` (STAT.50); tenacity also
+    grants slow resist, both multiplicative with other sources.
     """
     if len(shards) != 3:
         raise ValueError("a rune page has exactly three stat shard slots")

@@ -1,8 +1,7 @@
-"""Hydra line and Stridebreaker: Cleave passives and all four actives (ITEMS.md §8).
+"""Hydra line and Stridebreaker: Cleave and the four actives (ITEMS.md §8).
 
-Values are read from the 16.19.8230722 item data (``dv``); geometry rules
-not encoded in data follow ITEMS.md §8 defaults (edge-inclusive radii U-2,
-nearest-10 splash cap U-11, Titanic cone U-3, Stridebreaker MS decay U-5).
+Geometry the data does not encode follows ITEMS.md §8: edge-inclusive radii (U-2), nearest-10 splash cap (U-11),
+Titanic cone (U-3), Stridebreaker MS decay (U-5).
 """
 from __future__ import annotations
 
@@ -18,24 +17,24 @@ from .core import (ActiveOut, Effects, dv, effects, enemy_mask, holds, in_circle
 
 TIAMAT, RAVENOUS, TITANIC, PROFANE, STRIDEBREAKER = 3077, 3074, 3748, 6698, 6631
 CLEAVE_ITEMS = (TIAMAT, RAVENOUS, STRIDEBREAKER, PROFANE)
-CLEAVE_RATIO_MELEE = 0.40     # MeleeItemCalcValue (all four)
+CLEAVE_RATIO_MELEE = 0.40     # MeleeItemCalcValue
 CLEAVE_RATIO_RANGED = 0.20    # RangedItemCalcValue
 MAX_SPLASH = int(dv(TIAMAT, "MaxProcPerAuto"))
 CLEAVE_RADIUS = dv(TIAMAT, "CleaveRadius")
 ACTIVE_OFFSET = 100.0         # spell castConeDistance
-# Titanic cone default (U-3): from the primary target, along attacker->target.
+# Titanic cone (U-3): from the primary target along attacker -> target.
 TITANIC_CONE_LENGTH = 300.0
 TITANIC_CONE_HALF_WIDTH = 210.0
 
 COVERAGE = {
-    TIAMAT: "Cleave; Crescent active (0.75 AD, r450 offset 100, cd 10 from cast end)",
-    RAVENOUS: "Cleave with life steal; Ravenous Crescent (0.8 AD, VampAmp 1.0, cd 10 from cast end)",
-    TITANIC: "Cleave on-hit 1% max HP + cone 3% max HP; Titanic Crescent empowered attack, attack reset",
-    PROFANE: "Cleave (not on 0-damage attacks); Heretical Cleave (0.8 AD, cd 10 from cast start)",
-    STRIDEBREAKER: "Cleave; Breaking Shockwave (0.8 AD, 35% slow 3 s, +35% MS per champion decaying 3 s)",
+    TIAMAT: "Cleave; Crescent active (cd from cast end)",
+    RAVENOUS: "Cleave with life steal; Ravenous Crescent (cd from cast end)",
+    TITANIC: "Cleave %max-HP on-hit and cone; Titanic Crescent empowered attack, attack reset",
+    PROFANE: "Cleave (not on 0-damage attacks); Heretical Cleave (cd from cast start)",
+    STRIDEBREAKER: "Cleave; Breaking Shockwave slow and per-champion decaying MS",
 }
 
-# Active table: item -> (ratio, radius, cooldown, base cast time, cd starts at cast start).
+# item -> (AD ratio, radius, cooldown, base cast time, cooldown starts at cast start)
 _ACTIVES = {
     TIAMAT: (dv(TIAMAT, "ActiveADRatio"), dv(TIAMAT, "Radius"), dv(TIAMAT, "Cooldown"), 0.2, False),
     RAVENOUS: (dv(RAVENOUS, "ActiveADRatio"), dv(RAVENOUS, "Radius"), dv(RAVENOUS, "Cooldown"), 0.2, False),
@@ -47,10 +46,10 @@ _ACTIVES = {
 
 class State(NamedTuple):
     cd_until: Any           # (C,) shared Hydra-group active cooldown (one Hydra ownable)
-    cast_item: Any          # (C,) int32 item id of the pending cast, 0 = none
+    cast_item: Any          # (C,) int32 pending cast item id, 0 = none
     cast_end: Any           # (C,) seconds
     titanic_until: Any      # (C,) empowered-attack window end
-    stride_ms: Any          # (C,) bonus MS fraction at grant
+    stride_ms: Any          # (C,) bonus MS at grant, decays linearly
     stride_ms_start: Any    # (C,) seconds
 
 
@@ -81,7 +80,6 @@ def on_hit(state: State, own, ctx, units, attack) -> tuple[State, Effects]:
     enemies = enemy_mask(ctx, units) & (units.cls[None, :] != CLASS_STRUCTURE) & ~primary
     dist = jnp.sqrt((units.x[None, :] - tx[:, None]) ** 2 + (units.y[None, :] - ty[:, None]) ** 2)
 
-    # Cleave (Tiamat/Ravenous/Stridebreaker/Profane): 350 around the primary.
     cleave_holder = holds(own, TIAMAT) | holds(own, RAVENOUS) | holds(own, STRIDEBREAKER) | holds(own, PROFANE)
     profane_zero = holds(own, PROFANE) & (attack.raw <= 0.0)
     do_cleave = hit & not_structure & cleave_holder & ~profane_zero
@@ -94,7 +92,7 @@ def on_hit(state: State, own, ctx, units, attack) -> tuple[State, Effects]:
     p_cleave = packets(splash, ctx.unit[:, None], jnp.arange(n)[None, :], cleave_dmg[:, None], PHYSICAL,
                        cleave_flags[:, None], item=cleave_item[:, None])
 
-    # Titanic: on-hit %max HP to the primary (also vs structures) + cone splash.
+    # Titanic: %max-HP on-hit to the primary (structures too) plus cone splash.
     titanic = hit & holds(own, TITANIC)
     empowered = titanic & (ctx.now < state.titanic_until)
     rmult = jnp.where(ctx.is_ranged, dv(TITANIC, "RangedEffectiveness"), 1.0)
@@ -121,7 +119,7 @@ def on_hit(state: State, own, ctx, units, attack) -> tuple[State, Effects]:
 
 
 def active(state: State, own, ctx, units, request) -> tuple[State, Effects, ActiveOut]:
-    """Start a Hydra-family cast; resolve casts whose cast time ends this tick."""
+    """Start a Hydra-family cast; resolve casts ending this tick."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     ready = (ctx.now >= state.cd_until) & (state.cast_item == 0) & ctx.alive
     out_used = jnp.zeros((c,), bool)
@@ -131,12 +129,12 @@ def active(state: State, own, ctx, units, request) -> tuple[State, Effects, Acti
     cast_item, cast_end, cd_until = state.cast_item, state.cast_end, state.cd_until
     titanic_until = state.titanic_until
 
-    # Titanic Crescent: instant, empowers the next attack and resets the attack timer.
+    # Titanic Crescent: instant attack reset; its cooldown starts when the empowered attack is used.
     t_go = ready & (request == TITANIC) & holds(own, TITANIC)
     titanic_until = jnp.where(t_go, ctx.now + dv(TITANIC, "Cooldown"), titanic_until)
-    cd_until = jnp.where(t_go, jnp.inf, cd_until)   # starts when the empowered attack is used
+    cd_until = jnp.where(t_go, jnp.inf, cd_until)
     out_used, reset = out_used | t_go, reset | t_go
-    # Expired unused empowerment starts the cooldown at window end (INFERRED M).
+    # An unused empowerment starts the cooldown at window end (INFERRED M).
     expired = jnp.isinf(cd_until) & (ctx.now >= titanic_until)
     cd_until = jnp.where(expired, titanic_until + dv(TITANIC, "Cooldown"), cd_until)
 
@@ -150,7 +148,6 @@ def active(state: State, own, ctx, units, request) -> tuple[State, Effects, Acti
         cast_time = jnp.where(go, t, cast_time)
         can_move = jnp.where(go, item == STRIDEBREAKER, can_move)
 
-    # Resolve casts ending this tick (zero-length casts resolve immediately).
     finishing = (cast_item != 0) & (ctx.now >= cast_end) & ctx.alive
     cx = ctx.x + ACTIVE_OFFSET * ctx.facing_x
     cy = ctx.y + ACTIVE_OFFSET * ctx.facing_y

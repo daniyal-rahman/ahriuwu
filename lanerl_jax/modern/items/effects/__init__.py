@@ -1,18 +1,9 @@
-"""Registry and dispatch for every 26.19 SR item effect.
+"""Registry and dispatch of every 26.19 SR item effect (ITEMS.md §10-11; hook protocol in ``core``).
 
-``MODULES`` lists effect modules in canonical emission order (README hook
-crosswalk: main hit -> item on-hits in this order). Dispatch calls each
-module's hook if it defines one and merges results; per-module state lives
-in one field of ``ItemEffectState`` named after the module.
-
-Coverage contract: every catalog item is exactly one of
-  * implemented by a module (``module.COVERAGE``),
-  * ``STATS_ONLY`` (no behaviour beyond static stats), or
-  * ``WORLD``: run by a world subsystem outside the item hooks (vision items:
-    ``wards``), or
-  * ``DEFERRED`` with a reason (MODERN-009: jungle, non-Hydra actives).
-``coverage_report()`` and the tests enforce this, so a newly added item can
-never silently run as stats only.
+``MODULES`` is the canonical emission order (main hit, then item on-hits in this order). Dispatch calls each
+module's hook if defined and merges the results; module state lives in the ``ItemEffectState`` field named after
+the module. Every catalog item is exactly one of: a module's ``COVERAGE``, ``STATS_ONLY``, ``WORLD`` (run by a world
+subsystem) or ``DEFERRED``; ``coverage_report`` enforces this so a new item never silently runs as stats only.
 """
 from __future__ import annotations
 
@@ -21,34 +12,25 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ..catalog import ItemStats, catalog, combine_stats, zero_stats
-# One module per item family; ``actives`` holds the remaining 26.19 actives (stasis, cleanse, Randuin's, ...).
-from . import actives, boots, consumables, defense, fighter, hydra, jungle, mage, marksman, spellblade, starters, support
-from .core import (CC, ActiveOut, Attack, AttackMods, Cast, Ctx, Debuffs, HolderDefense, Kills, Report,
-                   StatusFlags, Units, combine_debuffs, combine_defense, merge_effects, no_effects)
+from . import (actives, boots, consumables, defense, fighter, hydra, jungle, mage, marksman, spellblade, starters,
+               support)
+from .core import (ActiveOut, AttackMods, Ctx, Debuffs, HolderDefense, StatusFlags, Units, combine_debuffs,
+                   combine_defense, merge_effects)
 
 MODULES = (consumables, starters, spellblade, hydra, fighter, defense, mage, marksman, support, boots,
            actives, jungle)
 
-# Items whose entire 26.19 effect is their static stat line: no client data
-# values, calculations or spell (items_client.json), minus Phantom Dancer,
-# whose ghosting passive has no data values.
+# No client data values, calculations or spell: the stat line is the whole effect (Phantom Dancer's ghosting
+# has no data values and lives in marksman).
 STATS_ONLY = {
     1001, 1004, 1006, 1011, 1018, 1026, 1027, 1028, 1029, 1031, 1033, 1036, 1037, 1038,
     1042, 1052, 1053, 1055, 1057, 1058, 2021, 2022, 2421, 3024, 3031, 3035, 3051, 3066,
     3067, 3086, 3108, 3113, 3114, 3133, 3135, 3801, 4630, 4642, 6690,
-    2422,   # Slightly Magical Footwear (Magical Footwear's +10 MS is the rune's)
+    2422,   # Slightly Magical Footwear (the +10 MS belongs to the Magical Footwear rune)
 }
-# Items whose behaviour is a world subsystem (no item hook): ward placement,
-# trinket charges and sweeps live in ``wards`` (docs/modern/WARDS.md).
-WORLD = {
-    2055: "wards: Control Ward (consumed on placement; 1 placed per player; 900 sight + true sight; "
-          "reveals/disables enemy wards; 4 HP with regen)",
-    3340: "wards: Stealth Ward trinket (2 charges, 210->90 s recharge by avg level; 3 placed; "
-          "totem ward 90->120 s, stealthed after 2 s)",
-    3363: "wards: Farsight Alteration trinket (level 9; 4000 range; 1 HP visible ward, 500 sight "
-          "unobstructed; dies 3 s after spotting a champion)",
-    3364: "wards: Oracle Lens trinket (2 charges, 160->100 s; 8 s sweep 600->750 following the user; "
-          "reveals and disables stealthed wards, 2 s linger)",
+WORLD = {   # docs/modern/WARDS.md
+    2055: "wards: Control Ward", 3340: "wards: Stealth Ward trinket", 3363: "wards: Farsight Alteration trinket",
+    3364: "wards: Oracle Lens trinket",
 }
 DEFERRED = {
     3330: "Scarecrow Effigy: Fiddlesticks-only trinket", 3599: "Kalista's Black Spear: Kalista-only",
@@ -68,7 +50,7 @@ class ItemEffectState(NamedTuple):
     support: Any
     boots: Any
     actives: Any
-    jungle: Any             # jungle pets 1101-1103 (rest of the pet rules: jungle.camps)
+    jungle: Any
 
 
 def _name(m) -> str:
@@ -85,23 +67,13 @@ def init(n_champions: int, n_units: int) -> ItemEffectState:
 def coverage_report() -> dict[int, str]:
     """Item id -> provenance; raises on gaps or double coverage."""
     out: dict[int, str] = {}
-    for m in MODULES:
-        for iid, what in m.COVERAGE.items():
+    sources = [(m.COVERAGE, f"{_name(m)}: ") for m in MODULES]
+    sources += [(dict.fromkeys(STATS_ONLY, "stats only"), ""), (WORLD, "WORLD "), (DEFERRED, "DEFERRED: ")]
+    for table, prefix in sources:
+        for iid, what in table.items():
             if iid in out:
-                raise RuntimeError(f"item {iid} covered twice: {out[iid]} / {_name(m)}")
-            out[iid] = f"{_name(m)}: {what}"
-    for iid in STATS_ONLY:
-        if iid in out:
-            raise RuntimeError(f"item {iid} is both STATS_ONLY and {out[iid]}")
-        out[iid] = "stats only"
-    for iid, what in WORLD.items():
-        if iid in out:
-            raise RuntimeError(f"item {iid} is both WORLD and {out[iid]}")
-        out[iid] = f"WORLD {what}"
-    for iid, why in DEFERRED.items():
-        if iid in out:
-            raise RuntimeError(f"item {iid} is both DEFERRED and {out[iid]}")
-        out[iid] = f"DEFERRED: {why}"
+                raise RuntimeError(f"item {iid} covered twice: {out[iid]} / {prefix}{what}")
+            out[iid] = prefix + what
     missing = sorted(set(catalog().ids) - set(out))
     if missing:
         names = ", ".join(f"{i} {catalog()[i].name}" for i in missing)
@@ -140,8 +112,7 @@ def holder_defense(state: ItemEffectState, own, ctx: Ctx) -> HolderDefense:
 def status(state: ItemEffectState, own, ctx: Ctx) -> StatusFlags:
     out = StatusFlags(jnp.zeros(ctx.level.shape, bool))
     for m, fn in _each("status"):
-        r = fn(_sub(state, m), own, ctx)
-        out = StatusFlags(out.ghosted | r.ghosted)
+        out = StatusFlags(out.ghosted | fn(_sub(state, m), own, ctx).ghosted)
     return out
 
 
@@ -174,50 +145,27 @@ def attack_mods(state: ItemEffectState, own, ctx: Ctx, units: Units, target) -> 
     out = AttackMods(jnp.zeros((c,), bool), jnp.ones((c,), jnp.float32))
     for m, fn in _each("attack_mods"):
         r = fn(_sub(state, m), own, ctx, units, target)
-        out = AttackMods(out.force_crit | r.force_crit,
-                         jnp.where(r.force_crit, r.crit_scale, out.crit_scale))
+        out = AttackMods(out.force_crit | r.force_crit, jnp.where(r.force_crit, r.crit_scale, out.crit_scale))
     return out
 
 
-def _event(hook: str, state: ItemEffectState, own, ctx: Ctx, units: Units, *event):
-    c, n = ctx.level.shape[0], units.x.shape[0]
-    parts = []
-    for m, fn in _each(hook):
-        sub, eff = fn(_sub(state, m), own, ctx, units, *event)
-        state = _put(state, m, sub)
-        parts.append(eff)
-    return state, merge_effects(parts, c, n)
+def _event(hook: str):
+    def run(state: ItemEffectState, own, ctx: Ctx, units: Units, *event):
+        parts = []
+        for m, fn in _each(hook):
+            sub, eff = fn(_sub(state, m), own, ctx, units, *event)
+            state = _put(state, m, sub)
+            parts.append(eff)
+        return state, merge_effects(parts, ctx.level.shape[0], units.x.shape[0])
+    run.__name__ = hook
+    return run
 
 
-def on_attack(state, own, ctx, units, attack: Attack):
-    return _event("on_attack", state, own, ctx, units, attack)
+on_attack, on_hit, on_cast, on_cc, on_damage, periodic, on_takedown = map(
+    _event, ("on_attack", "on_hit", "on_cast", "on_cc", "on_damage", "periodic", "on_takedown"))
 
 
-def on_hit(state, own, ctx, units, attack: Attack):
-    return _event("on_hit", state, own, ctx, units, attack)
-
-
-def on_cast(state, own, ctx, units, cast: Cast):
-    return _event("on_cast", state, own, ctx, units, cast)
-
-
-def on_cc(state, own, ctx, units, cc: CC):
-    return _event("on_cc", state, own, ctx, units, cc)
-
-
-def on_damage(state, own, ctx, units, report: Report):
-    return _event("on_damage", state, own, ctx, units, report)
-
-
-def periodic(state, own, ctx, units):
-    return _event("periodic", state, own, ctx, units)
-
-
-def on_takedown(state, own, ctx, units, kills: Kills):
-    return _event("on_takedown", state, own, ctx, units, kills)
-
-
-def on_shop(state, own, ctx):
+def on_shop(state: ItemEffectState, own, ctx: Ctx) -> ItemEffectState:
     for m, fn in _each("on_shop"):
         state = _put(state, m, fn(_sub(state, m), own, ctx))
     return state
@@ -236,9 +184,3 @@ def active(state: ItemEffectState, own, ctx: Ctx, units: Units, request):
         out = ActiveOut(out.used | r.used, jnp.where(r.used, r.cast_time, out.cast_time),
                         jnp.where(r.used, r.can_move, out.can_move), out.attack_reset | r.attack_reset)
     return state, merge_effects(parts, c, n), out
-
-
-__all__ = ["MODULES", "STATS_ONLY", "WORLD", "DEFERRED", "ItemEffectState", "init", "coverage_report",
-           "dynamic_stats", "holder_defense", "status", "target_debuffs", "dealt_amp", "attack_mods",
-           "packet_amp", "on_attack", "on_hit", "on_cast", "on_cc", "on_damage", "periodic", "on_takedown", "on_shop",
-           "active", "no_effects"]

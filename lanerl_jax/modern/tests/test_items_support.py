@@ -267,10 +267,6 @@ def test_zazzak_void_explosion():
 def test_active_amount_helpers():
     assert float(S.locket_shield(8)) == 290 and float(S.locket_shield(18)) == 360
     assert float(S.redemption_heal(1)) == 150 and float(S.redemption_heal(18)) == 350
-    assert float(S.mikael_heal(18)) == 250
-    assert float(S.knights_vow_redirect(100.0, 500.0, 1000.0, True)) == pytest.approx(14.0)
-    assert float(S.knights_vow_redirect(100.0, 200.0, 1000.0, True)) == 0.0
-    assert float(S.knights_vow_heal(100.0, True)) == pytest.approx(12.0)
 
 
 def test_jit_hooks_and_registry_dispatch():

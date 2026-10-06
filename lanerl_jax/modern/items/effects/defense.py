@@ -1,29 +1,14 @@
-"""Tank, Lifeline, Annul, Thorns and Immolate items (ITEMS.md §6.3–6.7, §9.3).
+"""Tank, Lifeline, Annul, Thorns and Immolate items (ITEMS.md §6.3-6.7, §9.3).
 
-Values come from the 16.19.8230722 item data: data values via ``dv`` and
-client calculations through the small evaluator ``calc`` (no hand-copied
-numbers). Rules the data does not encode follow ITEMS.md / ITEMS_CATALOG
-defaults and are marked INFERRED below:
-
-* Champion combat (Unending Despair, Jak'Sho, Maw omnivamp) = any packet
-  between the holder and an enemy champion within the last 5 s
-  (DAMAGE_AND_STATS §13 default window).
-* Immolate first tick 1 s after activation, then 1 Hz while the 3 s aura is
-  refreshed (U-4); its own damage does not refresh the aura.
-* Unending Despair pulses as soon as champion combat starts, then at most
-  every ``Cooldown`` (4) s while it lasts.
-* Kaenic's shield persists until broken (very long duration); a regrant
-  only tops the remaining Kaenic shield up to 15% max HP.
-* Warmog's Heart heals on 0.5 s game-clock boundaries (regen convention).
-* Heartsteel charge accrues continuously while the enemy champion is in
-  range; leaving range for ``RangeTrackingBuffDuration`` (5 s) resets it.
-* Shield amounts (Lifeline, Kaenic) are BASE values: heal/shield power and
-  Spirit Visage ``incoming_heal`` (which also covers ShieldIncrease) are left
-  to the integrator (SHIELD.10/20), exactly like ``Effects.heal``.
+Values come from client data values (``dv``) and calculations (``calc``). Defaults the data does not encode
+(INFERRED): champion combat = any packet with an enemy champion within 5 s (DAMAGE_AND_STATS §13); Immolate first
+ticks 1 s after activation, then 1 Hz while refreshed, and its own damage does not refresh it (U-4); Unending
+Despair pulses on combat start, then every ``Cooldown``; Kaenic's shield lasts until broken and a regrant tops it up;
+Warmog's heals on 0.5 s game-clock boundaries; Heartsteel charge resets after ``RangeTrackingBuffDuration`` out of
+range. Lifeline/Kaenic shields are base values: the integrator applies heal-shield power and incoming heal.
 """
 from __future__ import annotations
 
-import json
 from typing import Any, NamedTuple
 
 import jax.numpy as jnp
@@ -32,7 +17,7 @@ from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_S
                             PHYSICAL, PROP_LIFESTEAL, PROP_REACTIVE, SHIELD_ALL, SHIELD_MAGIC, TAG_AOE,
                             TAG_BASIC_ATTACK, TAG_ITEM, TAG_PERIODIC, TAG_PROC, concat_packets, has, packets,
                             shield_value)
-from ..catalog import DATA_PATH, STAT_INDEX, ItemStats, catalog, lerp_level, ranged_mult
+from ..catalog import STAT_INDEX, ItemStats, catalog, lerp_level, ranged_mult
 from .core import (BIG, Debuffs, HolderDefense, dv, effects, enemy_mask, holds, holds_any, in_circle,
                    neutral_defense, onehot_units, shield_grants, target_class)
 
@@ -43,64 +28,46 @@ HEXDRINKER, MAW, SPECTRES, FORCE_OF_NATURE, VERDANT = 3155, 3156, 3211, 4401, 46
 EDGE_OF_NIGHT, BAMIS, HOLLOW, JAKSHO, SHIELDBOW = 3814, 6660, 6664, 6665, 6673
 ABYSSAL, QUICKSILVER, SEEKERS, ZHONYAS = 8020, 3140, 2420, 3157
 
-LIFELINE = (STERAKS, HEXDRINKER, MAW, SHIELDBOW, PROTOPLASM)   # Seraph's lives in mage.py
+LIFELINE = (STERAKS, HEXDRINKER, MAW, SHIELDBOW, PROTOPLASM)   # Seraph's is in starters
 ANNUL = (BANSHEES, VERDANT, EDGE_OF_NIGHT)
 THORNS = (BRAMBLE, THORNMAIL)
 IMMOLATE = (BAMIS, SUNFIRE, HOLLOW)
 
-CHAMP_COMBAT_WINDOW = 5.0       # INFERRED (DAMAGE_AND_STATS §13 default)
+CHAMP_COMBAT_WINDOW = 5.0
 KAENIC_DURATION = 1e9           # "until destroyed"
-KAENIC_TAG = 1e8                # remaining-life threshold identifying the Kaenic slot
+KAENIC_TAG = 1e8                # remaining life that identifies the Kaenic shield slot
 EPS = 1e-4
 
 COVERAGE = {
-    UNENDING: "Anguish: every 4 s in champion combat 3% bonus HP magic to enemy champions in 650, "
-              "heal 250% of post-mitigation damage (pulse immediately on combat start, INFERRED)",
-    KAENIC: "Magebane: magic shield 15% max HP after 15 s without magic damage; persists until broken",
-    PROTOPLASM: "Lifeline (shared 90 s cd): +100-300 max HP 5 s via lifeline_bonus_health + stats, heal "
-                "100-400 + 1.75 bonus armor/MR over 5 s, +10% MS / +25% tenacity while healing (size n/a)",
-    GA: "Rebirth: lethal packet -> Effects.revive, 4 s stasis, 50% base HP, 100% max mana on completion; "
-        "cd 300 s from revive end",
-    STERAKS: "Claws +50% base AD (stats); Lifeline shield 60% bonus HP, 4.5 s, decay after 0.75 s hold",
-    SPIRIT: "Boundless Vitality: incoming_heal +25% (stat; integrator applies to heals/regen/vamp/shields)",
-    SUNFIRE: "Immolate 20 + 1.5% bonus HP per s, r325, x1.5 minions x1.8 monsters",
-    THORNMAIL: "Thorns: on being struck by an enemy basic attack 20 + 10% bonus armor reactive magic; "
-               "GW 3 s on champion attackers",
-    BRAMBLE: "Thorns: 10 reactive magic; GW 3 s on champion attackers",
-    WARDENS: "Rock Solid: -15 vs champion basic attacks (20% cap in core.damage)",
-    WARMOGS: "Vitality +12% item HP (stats); Heart: >=2000 bonus HP, no champion damage 8 s / other 3 s -> "
-             "1.5% max HP per 0.5 s (heal_plain)",
-    HEARTSTEEL: "Colossal Consumption: 3 s near an enemy champion (700) charges it; next attack 70 + 6% max HP "
-                "physical on-hit (life steal), +10% of it as permanent max HP, 30 s per target (Goliath size n/a)",
-    BANSHEES: "Annul spell shield, 40 s cd restarted by champion damage while cooling",
-    FROZEN_HEART: "Winter's Caress: 20% AS cripple on enemy champions within 700 (debuffs)",
-    RANDUINS: "Resilience: critical basic attacks x0.7; Humility active in actives",
-    HEXDRINKER: "Lifeline vs magic: magic shield 110-280 (ranged x0.75), 2.5 s, shared 90 s cd",
-    MAW: "Lifeline vs magic: magic shield 200 + 1.5 bonus AD (ranged x0.75), 3 s; 10% omnivamp 5 s, "
-         "extended 3 s by champion combat (INFERRED)",
-    SPECTRES: "stats only: client HealthRegenPassive = 0 and no passive in the tooltip",
-    FORCE_OF_NATURE: "Steadfast: stack per enemy champion magic source per 1 s, 8 max, 7 s refresh; at 8: "
-                     "+70 MR, +6% MS (immobilize stacks need a CC event: not modelled)",
-    VERDANT: "Annul spell shield, 60 s cd restarted by champion damage while cooling",
-    EDGE_OF_NIGHT: "Annul spell shield, 40 s cd restarted by champion damage while cooling (lethality is a stat)",
-    BAMIS: "Immolate 15 per s, r325, x1.5 minions x2.0 monsters",
-    HOLLOW: "Immolate 15 + 1% bonus HP per s, r325, x1.25 minions/monsters; Desolate 2x tick r350 on "
-            "non-champion kills, 4x r500 on champion takedowns within 3 s of damaging them",
-    JAKSHO: "Voidborn Resilience: after 5 s of champion combat bonus armor/MR x1.3 until combat ends",
-    SHIELDBOW: "Lifeline: shield 400 (+30/level from 9, ranged x0.8), 3 s, shared 90 s cd",
-    ABYSSAL: "Unmake: enemy champions within 700 take +12% magic damage (one Unmake at a time)",
-    QUICKSILVER: "no passive; Quicksilver cleanse active in actives",
-    SEEKERS: "no passive; Time Stop stasis active in actives",
-    ZHONYAS: "no passive; Time Stop stasis active in actives",
+    UNENDING: "Anguish: bonus-HP magic pulse to nearby enemy champions in champion combat, heals from its damage",
+    KAENIC: "Magebane: magic shield after time without magic damage; persists until broken",
+    PROTOPLASM: "Lifeline (shared cd): temporary max HP, resist-scaled heal over time, MS and tenacity (size n/a)",
+    GA: "Rebirth: lethal damage -> revive after stasis with base-HP fraction and full mana",
+    STERAKS: "Claws base-AD bonus; Lifeline shield from bonus HP with decay hold",
+    SPIRIT: "Boundless Vitality: incoming_heal",
+    SUNFIRE: "Immolate aura with minion/monster multipliers",
+    THORNMAIL: "Thorns: reactive magic on enemy basic attacks, Grievous Wounds on champion attackers",
+    BRAMBLE: "Thorns: reactive magic, Grievous Wounds on champion attackers",
+    WARDENS: "Rock Solid: flat block vs champion basic attacks (cap in core.damage)",
+    WARMOGS: "Vitality (% item HP); Heart: out-of-combat %max-HP heal above the bonus-HP threshold",
+    HEARTSTEEL: "Colossal Consumption: charge near an enemy champion, on-hit %max-HP proc, permanent HP (size n/a)",
+    BANSHEES: "Annul spell shield; champion damage restarts the cooldown",
+    FROZEN_HEART: "Winter's Caress: AS cripple on nearby enemy champions",
+    RANDUINS: "Resilience: crits taken reduced; Humility active in actives",
+    HEXDRINKER: "Lifeline: magic shield (shared cd)",
+    MAW: "Lifeline: magic shield; omnivamp after it, extended by champion combat (INFERRED)",
+    SPECTRES: "stats only: client HealthRegenPassive = 0",
+    FORCE_OF_NATURE: "Steadfast: stacks per enemy champion magic source; MR and MS at max (immobilize stacks n/a)",
+    VERDANT: "Annul spell shield; champion damage restarts the cooldown",
+    EDGE_OF_NIGHT: "Annul spell shield; champion damage restarts the cooldown",
+    BAMIS: "Immolate", HOLLOW: "Immolate; Desolate bursts on non-champion kills and recent champion takedowns",
+    JAKSHO: "Voidborn Resilience: bonus resists after sustained champion combat",
+    SHIELDBOW: "Lifeline shield (shared cd)",
+    ABYSSAL: "Unmake: nearby enemy champions take more magic damage (one Unmake at a time)",
+    QUICKSILVER: "no passive; cleanse active in actives",
+    SEEKERS: "no passive; stasis active in actives",
+    ZHONYAS: "no passive; stasis active in actives",
 }
-
-
-# ---- client calculation evaluator ------------------------------------------
-
-def _effect_amount(item_id: int) -> list[float]:
-    """mEffectAmount (kept in items_client.json, not exposed by the catalog)."""
-    payload = json.loads(DATA_PATH.read_text())
-    return list(payload["items"][str(item_id)]["effect_amount"])
 
 
 def _stat(ctx, stat: int, formula: int | None, max_hp):
@@ -138,13 +105,13 @@ def _part(item_id: int, part: dict, ctx, max_hp):
             v = v + bp.get("mBonusPerLevelAtAndAfter", 0.0) * jnp.maximum(0.0, lv - k + 1.0)
             v = v + bp.get("mAdditionalBonusAtThisLevel", 0.0) * (lv >= k)
         return v
-    if t == "{f3cbe7b2}":   # reference to another calculation of the same item
+    if t == "{f3cbe7b2}":   # another calculation of the same item
         return calc(item_id, part["mSpellCalculationKey"], ctx, max_hp=max_hp)
     raise KeyError(f"item {item_id}: unsupported calculation part {t}")
 
 
 def calc(item_id: int, name: str, ctx, *, max_hp=None):
-    """Evaluate a client GameCalculation for every holder (C,)."""
+    """Evaluate a client GameCalculation per holder (C,); ``max_hp`` overrides ``ctx.max_hp``."""
     c = catalog()[item_id].calculations[name]
     t = c["__type"]
     if t == "GameCalculationModified":
@@ -161,11 +128,9 @@ def calc(item_id: int, name: str, ctx, *, max_hp=None):
     return jnp.asarray(v, jnp.float32)
 
 
-# Sanity: the 20% Rock Solid cap is hard-coded in core.damage.
-assert abs(dv(WARDENS, "WardenDamageMax") - 0.2) < 1e-6
+assert abs(dv(WARDENS, "WardenDamageMax") - 0.2) < 1e-6    # the cap is hard-coded in core.damage
 
-_GA = _effect_amount(GA)        # [base-HP fraction, stasis s, cd, max-mana fraction, 0]
-GA_HP, GA_DELAY, GA_MANA = _GA[0], _GA[1], _GA[3]
+GA_HP, GA_DELAY, _, GA_MANA, _ = catalog()[GA].effect_amount   # base-HP fraction, stasis s, cd, max-mana fraction
 GA_COOLDOWN = dv(GA, "Cooldown")
 
 
@@ -210,8 +175,6 @@ def init(n_champions: int, n_units: int) -> State:
         hs_charge=zn, hs_last_in=zn - BIG, hs_cd=zn - BIG, hs_hp=z, dealt_t=zn - BIG)
 
 
-# ---- shared helpers ----------------------------------------------------------
-
 def _item_hp(own):
     col = jnp.asarray(catalog().arrays.stats[:, STAT_INDEX["health"]])
     return own.astype(jnp.float32) @ col
@@ -226,7 +189,7 @@ def _vitality(own, ctx):
 
 
 def _max_hp(state, own, ctx):
-    """Max HP including this module's dynamic health."""
+    """Max HP including this module's dynamic health (Warmog's, Heartsteel, Protoplasm)."""
     return ctx.max_hp + _vitality(own, ctx) + state.hs_hp + jnp.where(_proto_active(state, ctx), state.proto_hp, 0.0)
 
 
@@ -235,7 +198,7 @@ def _in_champ_combat(state, ctx):
 
 
 def _pick(own, table: dict, default=0.0):
-    """Per-holder value selected by which item of ``table`` is held."""
+    """Per-holder value of the held item of ``table`` (later entries win)."""
     out = default
     for iid, v in table.items():
         out = jnp.where(holds(own, iid), v, out)
@@ -245,8 +208,6 @@ def _pick(own, table: dict, default=0.0):
 def _overlap(now, dt, start, end):
     return jnp.clip(jnp.minimum(now, end) - jnp.maximum(now - dt, start), 0.0, None)
 
-
-# ---- hooks -------------------------------------------------------------------
 
 def stats(state: State, own, ctx) -> ItemStats:
     now = ctx.now
@@ -358,7 +319,7 @@ def on_damage(state: State, own, ctx, units, report):
     took_champ = jnp.any(taken & champ_src, axis=1)
     took_other = jnp.any(taken & ~champ_src, axis=1)
 
-    # Champion combat bookkeeping (Jak'Sho, Unending Despair, Maw).
+    # Champion combat (Jak'Sho, Unending Despair, Maw).
     ev = jnp.any((to_h & enemy_src & champ_src) | (from_h & enemy_dst & champ_dst), axis=1)
     fresh = ev & (now - state.champ_last > CHAMP_COMBAT_WINDOW)
     champ_start = jnp.where(fresh, now, state.champ_start)
@@ -368,7 +329,6 @@ def on_damage(state: State, own, ctx, units, report):
     dealt_to = (dealt.astype(jnp.float32) @ onehot_dst) > 0.0
     dealt_t = jnp.where(dealt_to, now, state.dealt_t)
 
-    # Lifeline (one cooldown per champion).
     ll = r.lifeline_fired[ctx.unit] & _lifeline_ready(state, own, ctx)
     lifeline_cd = jnp.where(ll, now + _pick(own, {i: dv(i, "Cooldown") for i in LIFELINE}), state.lifeline_cd)
     proto = ll & holds(own, PROTOPLASM)
@@ -385,7 +345,6 @@ def on_damage(state: State, own, ctx, units, report):
     acd = _pick(own, {i: dv(i, "Cooldown") for i in ANNUL})
     annul_ready = jnp.where(popped | (cooling & took_champ), now + acd, state.annul_ready)
 
-    # Guardian Angel.
     lethal = jnp.any(to_h & r.killed[None, :], axis=1)
     revive = lethal & holds(own, GA) & (now >= state.ga_cd) & ctx.alive
     ga_cd = jnp.where(revive, now + GA_DELAY + GA_COOLDOWN, state.ga_cd)
@@ -398,11 +357,11 @@ def on_damage(state: State, own, ctx, units, report):
     immo_next = jnp.where(trig & ~active, now + 1.0 / dv(SUNFIRE, "TicksPerSecond"), state.immo_next)
     immo_until = jnp.where(trig, now + dv(SUNFIRE, "AuraDuration"), state.immo_until)
 
-    # Unending Despair drain heal: 250% of post-mitigation damage of its packets.
+    # Unending Despair heals from its own packets' damage.
     ud_dmg = jnp.sum(jnp.where(from_h & (p.item == UNENDING)[None, :], r.final[None, :], 0.0), axis=1)
     heal = jnp.where(holds(own, UNENDING), dv(UNENDING, "HealMultiplier") * ud_dmg, 0.0)
 
-    # Kaenic: magic damage resets the timer; read the remaining Kaenic shield.
+    # Kaenic: magic damage resets the timer; track the remaining Kaenic shield.
     magic_taken = jnp.any(to_h & magic & dmg, axis=1)
     kaenic_last = jnp.where(magic_taken, now, state.kaenic_last_magic)
     kaenic_granted = state.kaenic_granted & ~magic_taken
@@ -411,7 +370,6 @@ def on_damage(state: State, own, ctx, units, report):
     kslot = (sh.kind[ctx.unit] == SHIELD_MAGIC) & (sh.expires_at[ctx.unit] - now > KAENIC_TAG)
     kaenic_left = jnp.sum(jnp.where(kslot, val, 0.0), axis=1)
 
-    # Force of Nature stacks.
     fon_hits = ((taken & magic & champ_src).astype(jnp.float32) @ onehot_src) > 0.0   # (C, N)
     eligible = fon_hits & (now >= state.fon_src_ready) & holds(own, FORCE_OF_NATURE)[:, None]
     gained = jnp.sum(eligible, axis=1).astype(jnp.float32)
@@ -422,12 +380,10 @@ def on_damage(state: State, own, ctx, units, report):
     fon_expire = jnp.where(refresh, now + dv(FORCE_OF_NATURE, "BuffDuration"), state.fon_expire)
     fon_src_ready = jnp.where(eligible, now + dv(FORCE_OF_NATURE, "StackRefreshTimer"), state.fon_src_ready)
 
-    # Warmog's Heart disable timers.
     warmog_block = jnp.maximum(state.warmog_block, jnp.maximum(
         jnp.where(took_champ, now + dv(WARMOGS, "OOCTimerChampion"), -BIG),
         jnp.where(took_other, now + dv(WARMOGS, "OOCTimer"), -BIG)))
 
-    # Thorns: enemy basic attacks that struck the holder.
     struck = to_h & enemy_src & has(p.flags, TAG_BASIC_ATTACK)[None, :] & ~has(p.flags, PROP_REACTIVE)[None, :] \
         & (holds_any(own, THORNS) & ctx.alive)[:, None]
     thorn_dmg = jnp.where(holds(own, THORNMAIL), calc(THORNMAIL, "TotalDamage", ctx), calc(BRAMBLE, "TotalDamage", ctx))
@@ -458,10 +414,6 @@ _IMMO = {   # item -> (minion mult, monster mult)
 }
 
 
-def _immolate_dpt(own, ctx, mhp):
-    return _pick(own, {i: calc(i, "DamagePerTick", ctx, max_hp=mhp) for i in IMMOLATE})
-
-
 def periodic(state: State, own, ctx, units):
     c, n = ctx.level.shape[0], units.x.shape[0]
     now, dt = ctx.now, ctx.dt
@@ -471,23 +423,21 @@ def periodic(state: State, own, ctx, units):
     enemies = enemy_mask(ctx, units) & alive[:, None]
     cls = units.cls[None, :]
 
-    # Protoplasm heal over time.
     pdur = dv(PROTOPLASM, "Duration")
     heal = jnp.where(holds(own, PROTOPLASM) & alive,
                      state.proto_rate * _overlap(now, dt, state.proto_start, state.proto_start + pdur), 0.0)
 
-    # Guardian Angel revive completion: restore mana.
+    # Guardian Angel revive completion restores mana.
     done = now >= state.ga_revive_at
     mana = jnp.where(done, GA_MANA * ctx.max_mana, 0.0)
     ga_revive_at = jnp.where(done, BIG, state.ga_revive_at)
 
-    # Immolate ticks.
     period = 1.0 / dv(SUNFIRE, "TicksPerSecond")
     last = jnp.minimum(now, state.immo_until)
     due = (state.immo_next <= last + EPS) & holds_any(own, IMMOLATE) & alive
     n_due = jnp.where(due, jnp.floor((last - state.immo_next) / period + EPS) + 1.0, 0.0)
     immo_next = state.immo_next + n_due * period
-    dpt = _immolate_dpt(own, ctx, mhp)
+    dpt = _pick(own, {i: calc(i, "DamagePerTick", ctx, max_hp=mhp) for i in IMMOLATE})
     minion_m = _pick(own, {i: v[0] for i, v in _IMMO.items()}, 1.0)
     monster_m = _pick(own, {i: v[1] for i, v in _IMMO.items()}, 1.0)
     mult = jnp.where(cls == CLASS_MINION, minion_m[:, None], jnp.where(cls == CLASS_MONSTER, monster_m[:, None], 1.0))
@@ -498,7 +448,6 @@ def periodic(state: State, own, ctx, units):
                      TAG_AOE | TAG_PERIODIC | TAG_ITEM, item=immo_item[:, None])
     immo_until = jnp.where(alive, state.immo_until, -BIG)
 
-    # Unending Despair pulse.
     pulse = holds(own, UNENDING) & alive & _in_champ_combat(state, ctx) & (now >= state.ud_next)
     ud_t = enemies & (cls == CLASS_CHAMPION) & in_circle(units, ctx.x, ctx.y, full(dv(UNENDING, "DrainRange"))) \
         & pulse[:, None]
@@ -506,7 +455,6 @@ def periodic(state: State, own, ctx, units):
                    calc(UNENDING, "DrainCalc", ctx, max_hp=mhp)[:, None], MAGIC, TAG_AOE | TAG_ITEM, item=UNENDING)
     ud_next = jnp.where(pulse, now + dv(UNENDING, "Cooldown"), state.ud_next)
 
-    # Kaenic Rookern grant.
     target = calc(KAENIC, "ShieldCalc", ctx, max_hp=mhp)
     kgo = holds(own, KAENIC) & alive & ~state.kaenic_granted \
         & (now - state.kaenic_last_magic >= dv(KAENIC, "OutOfCombatDuration") - EPS)
@@ -515,14 +463,12 @@ def periodic(state: State, own, ctx, units):
     kaenic_left = jnp.where(kgo, jnp.maximum(target, state.kaenic_left), jnp.where(alive, state.kaenic_left, 0.0))
     shields = shield_grants(kamount, SHIELD_MAGIC, KAENIC_DURATION)
 
-    # Warmog's Heart (0.5 s game-clock boundaries).
     step = dv(WARMOGS, "SecondsPerHeal")
     ticks = jnp.floor(now / step + EPS) - jnp.floor((now - dt) / step + EPS)
     wgo = holds(own, WARMOGS) & alive & (mhp - ctx.base_hp >= dv(WARMOGS, "HealthThreshold")) \
         & (now >= state.warmog_block)
     heal_plain = jnp.where(wgo, ticks * calc(WARMOGS, "TotalHealing", ctx, max_hp=mhp), 0.0)
 
-    # Heartsteel charge.
     hs_in = enemies & (cls == CLASS_CHAMPION) & holds(own, HEARTSTEEL)[:, None] \
         & in_circle(units, ctx.x, ctx.y, full(dv(HEARTSTEEL, "DistanceToChampion")))
     demolish = dv(HEARTSTEEL, "TrackerTickRate") * dv(HEARTSTEEL, "NumTicksToTrigger")
@@ -530,7 +476,7 @@ def periodic(state: State, own, ctx, units):
     hs_charge = jnp.where(hs_in, jnp.minimum(state.hs_charge + dt, demolish), jnp.where(stale, 0.0, state.hs_charge))
     hs_last_in = jnp.where(hs_in, now, state.hs_last_in)
 
-    # Death clears buffs (FoN, Kaenic tracking above).
+    # Death clears Force of Nature stacks.
     fon_stacks = jnp.where(alive & (now < state.fon_expire), state.fon_stacks, 0.0)
 
     state = state._replace(ga_revive_at=ga_revive_at, immo_next=immo_next, immo_until=immo_until, ud_next=ud_next,
@@ -541,7 +487,7 @@ def periodic(state: State, own, ctx, units):
 
 
 def on_takedown(state: State, own, ctx, units, kills):
-    """Hollow Radiance Desolate."""
+    """Hollow Radiance Desolate: kill-centred bursts of its Immolate tick."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     go = holds(own, HOLLOW) & ctx.alive
     ku = kills.killed_units & go[:, None]

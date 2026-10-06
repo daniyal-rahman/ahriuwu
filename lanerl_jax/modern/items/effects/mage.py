@@ -1,22 +1,10 @@
-"""Mage items: burns, ability-damage passives, AP scaling and on-damage procs.
+"""Mage items: burns, ability-damage passives, AP scaling and on-damage procs (ITEMS_CATALOG wiki text).
 
-Values come from the 16.19.8230722 item data (``dv``). Rules the data does not
-encode follow the ITEMS_CATALOG wiki text and are tagged INFERRED below.
-
-Conventions used throughout this module:
-  * "Ability damage" = a holder-sourced packet tagged TAG_ACTIVE_SPELL and not
-    TAG_ITEM (item actives such as Tiamat's Crescent are not champion abilities),
-    with post-mitigation ``final > 0`` (shield-absorbed damage still counts).
-  * Burns and zones are per-(holder, target) timers that tick every
-    ``TickFrequency`` seconds after application. A refresh extends the end time and
-    keeps the tick phase, so a burn that is never refreshed always deals exactly
-    BurnDuration / TickFrequency ticks regardless of the simulator ``dt``.
-  * Damage formulas read ``ctx.ap`` as passed (the integrator owns whether event
-    hooks see pre- or post-dynamic stats).
-  * "In combat with enemy champions" (Madness, Suffering, Void Corruption) is this
-    module's own timer: dealing damage to, or taking damage from, an enemy champion.
-    Stacks = floor(seconds since that combat began), capped; combat ends when no such
-    event happens for BuffCounterDuration seconds (INFERRED M).
+"Ability damage" = holder packets tagged ActiveSpell and not Item with ``final > 0``. Burns and zones are
+per-(holder, target) timers ticking every ``TickFrequency`` after application; a refresh extends the end and keeps
+the phase, so an unrefreshed burn deals BurnDuration / TickFrequency ticks for any ``dt``. Champion combat
+(Madness, Suffering, Void Corruption) is this module's own timer: stacks = whole seconds since it began, and it ends
+after BuffCounterDuration without damage dealt to or taken from an enemy champion (INFERRED M).
 """
 from __future__ import annotations
 
@@ -39,57 +27,40 @@ STORMSURGE, LIANDRY, LUDEN, ROA, BLOODLETTER = 4646, 6653, 6655, 6657, 8010
 
 EPS = 1e-4
 
-# Malignance: the client has no ability-slot on damage packets, so damage is
-# attributed to the ultimate if it lands within this window after an R cast
-# started (INFERRED L; framework gap, see COVERAGE).
-ULT_ATTRIBUTION_WINDOW = 1.5
-MALIGNANCE_TICK = 0.25          # calc {8e8f7a34} = per-second damage x 0.25
-# Stormsurge sliding window resolution (ring buffer of WINDOW / BUCKET slots).
-STORM_BUCKET = 0.25
+ULT_ATTRIBUTION_WINDOW = 1.5    # INFERRED L: packets carry no ability slot; damage this soon after R counts as R
+MALIGNANCE_TICK = 0.25          # calc {8e8f7a34}
+STORM_BUCKET = 0.25             # Stormsurge sliding-window ring buffer resolution
 STORM_SLOTS = int(round(dv(STORMSURGE, "WindowDuration") / STORM_BUCKET))
-STORM_AOE = 600.0               # wiki: dies before Squall -> 600 radius (no client value)
+STORM_AOE = 600.0               # wiki: target dies before the Squall
 HORIZON_FOCUS_RADIUS = dv(HORIZON, "VisionRadius")
 
 COVERAGE = {
-    ASHES: "Inflame: ability damage burns 5/s magic for 3 s (0.5 s ticks), +15/s vs monsters",
-    BLACKFIRE: "Baleful Blaze burn 20+2% AP/s (minion 20+2%AP, monster 40+2%AP) 3 s; "
-               "Blackfire +4% AP per burning champion/monster (all monsters count as large)",
+    ASHES: "Inflame: ability damage burns (bonus vs monsters)",
+    BLACKFIRE: "Baleful Blaze burn by target class; Blackfire %AP per burning champion/monster",
     ACTUALIZER: "stats only; Mana Made Real active in actives",
-    RABADON: "Magical Opus: +30% total AP (pre-dynamic AP + this module's flat dynamic AP)",
-    NASHOR: "Icathian Bite: on-hit 15 + 15% AP magic (life steal applies)",
-    RYLAI: "Rimefrost: ability damage slows 30% for 1 s",
-    MALIGNANCE: "Scorn +20 ultimate haste; Hatefog zone (r = min(250 + 2^(dmg/100), 550)) 3 s, "
-                "60+5%AP magic/s in 0.25 s ticks, -10 MR while inside, 3 s per-target cd. GAP: ult "
-                "damage attributed by a 1.5 s window after an R cast (packets carry no slot)",
-    CRYPTBLOOM: "Life From Death: champion takedown within 3 s of damaging -> heal 100+20% AP (cd 60). "
-                "GAP: nova travel (1.75 s) and ally heals not modelled (no radius in data)",
-    ALTERNATOR: "Revved: damaging an enemy champion deals 65 magic (cd 40)",
-    GUNBLADE: "stats only (10% omnivamp is static); Lightning Bolt active in actives",
-    GUISE: "Madness: +2%/s in champion combat up to 6% damage dealt",
+    RABADON: "Magical Opus: % total AP",
+    NASHOR: "Icathian Bite magic on-hit",
+    RYLAI: "Rimefrost: ability damage slows",
+    MALIGNANCE: "Scorn ult haste; Hatefog zone on ult damage (MR shred, ticking magic damage); ult damage attributed "
+                "by a window after R",
+    CRYPTBLOOM: "Life From Death: heal on recent champion takedown (nova travel and ally heals not modelled)",
+    ALTERNATOR: "Revved: magic damage on damaging a champion",
+    GUNBLADE: "stats only; Lightning Bolt active in actives",
+    GUISE: "Madness: damage amp ramping in champion combat",
     ROCKETBELT: "stats only; Supersonic active in actives",
-    MORELLO: "Grievous Wounds 3 s on magic damage to enemy champions",
-    CHAPTER: "Enlighten: level up restores 20% max mana over 3 s",
-    CATALYST: "Eternity mana: 10% of pre-mitigation champion damage taken. GAP: heal 25% of mana "
-              "spent needs ability mana costs (not in Cast)",
-    ORB: "Grievous Wounds 3 s on magic damage to enemy champions",
-    HORIZON: "Hypershot: ability damage to a champion >= 600 from the holder marks it 6 s (+10% damage); "
-             "Focus marks other enemy champions within 1400 for 3 s (cd 30). Reveal (vision) DEFERRED. "
-             "GAP: distance from holder position at damage time, not cast position",
-    COSMIC: "Spelldance: magic/true damage to champions grants 20 flat MS for 4 s",
-    RIFTMAKER: "Void Infusion 2% bonus HP -> AP; Void Corruption +2%/s champion combat up to 8%, "
-               "10%/6% omnivamp at max",
-    SHADOWFLAME: "Cinderbloom: magic/true damage to enemies below 40% HP deals +20% as a follow-up packet "
-                 "(same type/flags, raw x 0.2; resolves with the next tick's packets)",
-    STORMSURGE: "Stormraider: 25% of a champion's max HP within 2.5 s (0.25 s buckets) -> Squall 125+10% AP "
-                "magic after 2 s (cd 30 from application); target death -> 600 AoE on enemy champions",
-    LIANDRY: "Torment: ability/pet damage burns 2% max HP/s magic for 3 s (0.5 s ticks; monsters capped "
-             "40/s); Suffering +2%/s champion combat up to 6%",
-    LUDEN: "Echo: ability damage fires 75+5% AP at target and up to 5 nearest enemies within 650; "
-           "unused echoes hit the primary for 20% each (cd 12)",
-    ROA: "Timeless +10 HP/+30 mana/+3 AP per 60 s held (max 10); Eternity mana as Catalyst. GAP: max-stack "
-         "level-up and mana-spent heal need framework support",
-    BLOODLETTER: "Vile Decay: magic ability damage to champions stacks 7.5% MR reduction (6 s, max 4, "
-                 "0.3 s ICD per holder-target)",
+    MORELLO: "Grievous Wounds on magic damage to champions",
+    CHAPTER: "Enlighten: level up restores mana over time",
+    CATALYST: "Eternity mana from champion damage taken (mana-spent heal needs ability mana costs)",
+    ORB: "Grievous Wounds on magic damage to champions",
+    HORIZON: "Hypershot long-range mark and Focus (vision reveal deferred; distance from position at damage time)",
+    COSMIC: "Spelldance: MS after magic/true damage to champions",
+    RIFTMAKER: "Void Infusion bonus HP -> AP; Void Corruption amp ramp, omnivamp at max",
+    SHADOWFLAME: "Cinderbloom: follow-up packet on magic/true damage to low-HP enemies (resolves next pass)",
+    STORMSURGE: "Stormraider: windowed champion damage threshold -> delayed Squall, AoE if the target dies first",
+    LIANDRY: "Torment %max-HP burn from ability/pet damage (monster cap); Suffering amp ramp",
+    LUDEN: "Echo: ability damage fires at the target and nearest enemies; unused echoes hit the target",
+    ROA: "Timeless stacks over time held; Eternity mana (max-stack level-up and mana-spent heal not modelled)",
+    BLOODLETTER: "Vile Decay: magic ability damage to champions stacks %MR shred",
 }
 
 
@@ -146,10 +117,8 @@ def init(n_champions: int, n_units: int) -> State:
         z(c, n), neg(c, n), neg(c, n))
 
 
-# ---- helpers -----------------------------------------------------------------
-
 def _ticks(until, nxt, now, period):
-    """Ticks due in (previous tick, now] for timers ticking at nxt, nxt+period, ... <= until."""
+    """(ticks due by now, next tick time) for a timer ticking at nxt, nxt + period, ... <= until."""
     end = jnp.minimum(now, until)
     k = jnp.where(nxt <= end + EPS, jnp.floor((end - nxt) / period + EPS) + 1.0, 0.0)
     return k, nxt + k * period
@@ -205,8 +174,6 @@ def _first_dst(mask_cp, p):
     return jnp.where(any_, p.dst[idx], -1)
 
 
-# ---- stats / defense-side hooks ------------------------------------------------
-
 def stats(state: State, own, ctx) -> ItemStats:
     now = ctx.now
     roa = _roa_stacks(state, own)
@@ -236,9 +203,8 @@ def dealt_amp(state: State, own, ctx, units):
 
 
 def _in_zones(state: State, own, ctx, units, *, inclusive: bool = False):
-    """(C, Z, N) units inside each active Hatefog zone (Z = N, keyed by the zoned champion).
-
-    ``inclusive`` keeps a zone on its final tick (until == now) for damage ticks."""
+    """(C, Z, N) enemies inside each Hatefog zone (Z = N, keyed by the zoned champion); ``inclusive`` keeps a
+    zone on its final tick for damage."""
     live = (state.mal_until + EPS >= ctx.now) if inclusive else (state.mal_until > ctx.now)
     active = holds(own, MALIGNANCE)[:, None] & live                                   # (C, Z)
     d = jnp.sqrt((units.x[None, None, :] - state.mal_x[:, :, None]) ** 2
@@ -252,13 +218,11 @@ def debuffs(state: State, own, ctx, units) -> Debuffs:
     n = units.x.shape[0]
     z = jnp.zeros((n,), jnp.float32)
     cursed = jnp.any(_in_zones(state, own, ctx, units), axis=(0, 1))
-    flat_mr = jnp.where(cursed, 10.0, 0.0)          # calc MagicResistanceShred = 10 (one curse, max over holders)
+    flat_mr = jnp.where(cursed, 10.0, 0.0)          # calc MagicResistanceShred; one curse at a time
     stacks = jnp.where(holds(own, BLOODLETTER)[:, None] & (state.bl_until > ctx.now), state.bl_stacks, 0.0)
     pct_mr = jnp.max(stacks, axis=0, initial=0.0) * dv(BLOODLETTER, "ShredPerStack")
     return Debuffs(z, z, pct_mr, flat_mr, z, z, z)
 
-
-# ---- event hooks ---------------------------------------------------------------
 
 def on_hit(state: State, own, ctx, units, attack):
     c, n = ctx.level.shape[0], units.x.shape[0]
@@ -298,7 +262,6 @@ def on_damage(state: State, own, ctx, units, report):
     enemies = enemy_mask(ctx, units) & (units.cls != CLASS_STRUCTURE)[None, :]
     all_packets = []
 
-    # Champion-combat timer (Madness / Suffering / Void Corruption).
     taken_champ = dst_is & (p.valid & (p.raw > 0.0) & (scls == CLASS_CHAMPION))[None, :] & enemy_src
     event = jnp.any(dealt & champ[None, :], axis=1) | jnp.any(taken_champ, axis=1)
     gap = now - state.combat_last
@@ -306,7 +269,6 @@ def on_damage(state: State, own, ctx, units, report):
     start4 = jnp.where(event & (gap > dv(RIFTMAKER, "BuffCounterDuration")), now, state.combat_start4)
     combat_last = jnp.where(event, now, state.combat_last)
 
-    # Burns.
     ab_hit = _to_units(dealt & (ability & ~struct)[None, :], p, n)                      # (C, N)
     ab_pet_hit = _to_units(dealt & ((ability | pet) & ~struct)[None, :], p, n)
     trig = lambda item, m: m & holds(own, item)[:, None]
@@ -320,17 +282,14 @@ def on_damage(state: State, own, ctx, units, report):
     lia_until, lia_next = _apply_timer(state.lia_until, state.lia_next, trig(LIANDRY, ab_pet_hit), now,
                                        dv(LIANDRY, "BurnDuration"), dv(LIANDRY, "TickFrequency"))
 
-    # Rylai's slow.
     rylai = jnp.any(trig(RYLAI, ab_hit), axis=0)
     slow = jnp.where(rylai, dv(RYLAI, "SlowAmount"), 0.0)
     slow_duration = jnp.where(rylai, dv(RYLAI, "SlowDuration"), 0.0)
 
-    # Grievous Wounds (Morellonomicon / Oblivion Orb).
     gw_holder = holds(own, MORELLO) | holds(own, ORB)
     gw = jnp.any(_to_units(dealt & (magic & champ)[None, :], p, n) & gw_holder[:, None], axis=0)
     grievous = jnp.where(gw, dv(MORELLO, "GrievousDuration"), 0.0)
 
-    # Luden's Echo.
     luden_sel = dealt & (ability & ~struct)[None, :]
     l_go = holds(own, LUDEN) & (now >= state.luden_cd) & jnp.any(luden_sel, axis=1)
     prim = jnp.where(l_go, _first_dst(luden_sel, p), -1)
@@ -352,19 +311,16 @@ def on_damage(state: State, own, ctx, units, report):
                 (dv(LUDEN, "RepeatDamageReduction") * left * l_dmg)[:, None], MAGIC, l_flags, item=LUDEN)]
     luden_cd = jnp.where(l_go, now + dv(LUDEN, "Cooldown"), state.luden_cd)
 
-    # Hextech Alternator.
     alt_sel = dealt & champ[None, :] & (p.item != ALTERNATOR)[None, :]
     a_go = holds(own, ALTERNATOR) & (now >= state.alt_cd) & jnp.any(alt_sel, axis=1) & ctx.alive
     a_tgt = _first_dst(alt_sel, p)
-    all_packets.append(packets(a_go, ctx.unit, jnp.maximum(a_tgt, 0), 65.0, MAGIC,  # calc DamageAmount = 65
+    all_packets.append(packets(a_go, ctx.unit, jnp.maximum(a_tgt, 0), 65.0, MAGIC,  # calc DamageAmount
                                TAG_ITEM | TAG_PROC, item=ALTERNATOR))
     alt_cd = jnp.where(a_go, now + dv(ALTERNATOR, "Cooldown"), state.alt_cd)
 
-    # Cosmic Drive.
     cos = holds(own, COSMIC) & jnp.any(dealt & (magic_true & champ)[None, :], axis=1)
     cosmic_until = jnp.where(cos, now + dv(COSMIC, "StackDuration"), state.cosmic_until)
 
-    # Horizon Focus.
     hd = jnp.sqrt((units.x[None, :] - ctx.x[:, None]) ** 2 + (units.y[None, :] - ctx.y[:, None]) ** 2)
     hyper = _to_units(dealt & (ability & ~pet & champ)[None, :], p, n) \
         & (hd >= dv(HORIZON, "SnipeRange")) & holds(own, HORIZON)[:, None]
@@ -377,7 +333,6 @@ def on_damage(state: State, own, ctx, units, report):
     hz_until = jnp.where(f_area, jnp.maximum(hz_until, now + dv(HORIZON, "SecondaryBuffDuration")), hz_until)
     hz_cd = jnp.where(focus, now + dv(HORIZON, "Cooldown"), state.hz_cd)
 
-    # Malignance Hatefog.
     ult_sel = dealt & ((ability | pet) & ~has(p.flags, TAG_PROC) & champ)[None, :] \
         & (now <= state.ult_until)[:, None] & holds(own, MALIGNANCE)[:, None]
     onehot = p.dst[:, None] == jnp.arange(n)[None, :]                                  # (P, N)
@@ -391,10 +346,8 @@ def on_damage(state: State, own, ctx, units, report):
     mal_until = jnp.where(zone, now + dv(MALIGNANCE, "GroundDuration"), state.mal_until)
     mal_next = jnp.where(zone, now + MALIGNANCE_TICK, state.mal_next)
 
-    # Cryptbloom damage memory.
     crypt_last = jnp.where(_to_units(dealt, p, n), now, state.crypt_last)
 
-    # Stormsurge sliding window.
     epoch = jnp.floor(now / STORM_BUCKET + EPS).astype(jnp.int32)
     slot = epoch % STORM_SLOTS
     slot_hot = jnp.arange(STORM_SLOTS) == slot                                          # (B,)
@@ -416,13 +369,12 @@ def on_damage(state: State, own, ctx, units, report):
     storm_x = jnp.where(s_go, sx, state.storm_x)
     storm_y = jnp.where(s_go, sy, state.storm_y)
 
-    # Eternity (Catalyst / Rod of Ages): mana from pre-mitigation champion damage taken.
+    # Eternity: mana from pre-mitigation champion damage taken.
     eternity = holds(own, CATALYST) | holds(own, ROA)
     taken_raw = jnp.sum(jnp.where(taken_champ & (p.valid & (scls == CLASS_CHAMPION))[None, :],
                                   p.raw[None, :], 0.0), axis=1)
     mana = jnp.where(eternity & ctx.alive, dv(CATALYST, "EternityManaRestore") * taken_raw, 0.0)
 
-    # Shadowflame Cinderbloom follow-up packets.
     hp_frac = units.hp[dst] / jnp.maximum(units.max_hp[dst], 1e-6)
     sf_src = jnp.any(src_is & holds(own, SHADOWFLAME)[:, None] & enemy_dst, axis=0)       # (P,)
     sf = sf_src & landed & magic_true & ~struct & (p.item != SHADOWFLAME) \
@@ -431,7 +383,6 @@ def on_damage(state: State, own, ctx, units, report):
     all_packets.append(packets(sf, p.src, p.dst, dv(SHADOWFLAME, "SpellItemDamageAmp") * p.raw, p.dtype,
                                sf_flags, amp=p.amp, item=SHADOWFLAME))
 
-    # Bloodletter's Curse.
     bl_hit = _to_units(dealt & (magic & ability & champ)[None, :], p, n) & holds(own, BLOODLETTER)[:, None] \
         & (now >= state.bl_icd)
     live = state.bl_until > now
@@ -463,7 +414,7 @@ def periodic(state: State, own, ctx, units):
     burn = TAG_PERIODIC | TAG_ITEM
     out = []
 
-    # Burns end when the target dies.
+    # Burns end with the target.
     ashes_until = jnp.where(alive, state.ashes_until, -BIG)
     bf_until = jnp.where(alive, state.bf_until, -BIG)
     lia_until = jnp.where(alive, state.lia_until, -BIG)
@@ -489,14 +440,13 @@ def periodic(state: State, own, ctx, units):
     out.append(packets((k > 0) & holds(own, LIANDRY)[:, None], src, idx, k * lrate * tf, MAGIC, burn,
                        item=LIANDRY))
 
-    # Malignance zones: each unit takes one curse tick per zone tick (max over zones).
+    # Hatefog: one tick per unit per zone tick (max over overlapping zones).
     kz, mal_next = _ticks(state.mal_until, state.mal_next, now, MALIGNANCE_TICK)        # (C, Z)
     inside = _in_zones(state, own, ctx, units, inclusive=True)                                       # (C, Z, N)
     kn = jnp.max(jnp.where(inside, kz[:, :, None], 0.0), axis=1)                        # (C, N)
     zdmg = (dv(MALIGNANCE, "BaseDamage") + dv(MALIGNANCE, "APRatio") * ctx.ap) * MALIGNANCE_TICK
     out.append(packets(kn > 0, src, idx, kn * zdmg[:, None], MAGIC, burn | TAG_AOE, item=MALIGNANCE))
 
-    # Stormsurge Squall.
     pending = state.storm_target >= 0
     t = jnp.maximum(state.storm_target, 0)
     t_alive = units.alive[t]
@@ -511,7 +461,6 @@ def periodic(state: State, own, ctx, units):
     out.append(packets(field, src, idx, sq_dmg[:, None], MAGIC, TAG_ITEM | TAG_PROC | TAG_AOE, item=STORMSURGE))
     storm_target = jnp.where(strike | burst | (pending & ~holds(own, STORMSURGE)), -1, state.storm_target)
 
-    # Lost Chapter: Enlighten.
     chapter = holds(own, CHAPTER)
     give = state.ch_rem * jnp.clip(dt / jnp.maximum(state.ch_until - now + dt, 1e-6), 0.0, 1.0)
     give = jnp.where(chapter, give, 0.0)
@@ -521,7 +470,7 @@ def periodic(state: State, own, ctx, units):
     rem = rem + jnp.where(up, dv(CHAPTER, "ManaRestorePercent") * ctx.max_mana * gained, 0.0)
     ch_until = jnp.where(up, now + dv(CHAPTER, "RestorationDuration"), state.ch_until)
 
-    # Rod of Ages: Timeless clock (resets when the item leaves the inventory).
+    # Rod of Ages clock resets when the item leaves the inventory.
     roa_elapsed = jnp.where(holds(own, ROA), state.roa_elapsed + dt, 0.0)
 
     state = state._replace(

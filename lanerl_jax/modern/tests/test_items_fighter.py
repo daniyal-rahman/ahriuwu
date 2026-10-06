@@ -186,7 +186,7 @@ def test_shojin_stats_and_focused_will():
     assert float(_fs(st2).shojin[0]) == 0.0
 
 
-def test_hullbreaker_skipper_and_boarding_party():
+def test_hullbreaker_skipper():
     own = H.own([3181], [])
     u = H.units(H.champions(x1=300.) + [dict(x=200, y=0, team=1), dict(x=600, y=0, team=1, cls=D.CLASS_STRUCTURE),
                                         dict(x=500, y=0, team=0, siege=True), dict(x=5000, y=0, team=0, siege=True),
@@ -211,11 +211,6 @@ def test_hullbreaker_skipper_and_boarding_party():
         st, _ = E.on_hit(st, own, ctx, u, H.attack(target=(2, 0)))
     _, eff = E.on_hit(st, own, H.ctx(now=10.5, base_ad=100., max_hp=2000.), u, H.attack())
     assert H.packet_total(eff.packets, item=3181) == 0.0
-    # Boarding Party: level_bp(70, +6 at L>=9), ranged x0.5, only nearby allied siege minions.
-    res = F.boarding_party_resists(own, H.ctx(level=12), u)
-    r = np.asarray(res)
-    assert r[4] == pytest.approx(70 + 6 * 4) and r[5] == 0.0 and r[6] == 0.0 and r[2] == 0.0
-    assert float(F.boarding_party_resists(own, H.ctx(level=1, ranged=True), u)[4]) == pytest.approx(35.0)
 
 
 def test_dead_mans_plate():

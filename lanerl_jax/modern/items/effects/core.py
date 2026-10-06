@@ -1,37 +1,22 @@
-"""Shared contract for 26.19 item passives and actives (ITEMS.md §10–11).
+"""Shared contract of the 26.19 item effect modules (ITEMS.md §10-11).
 
-Every effect module is pure and fixed-shape. Arrays with a leading ``C`` axis
-are per champion holder; ``N`` axes index world units. A champion holder ``c``
-is world unit ``ctx.unit[c]``. Modules never mutate world state: they return
-``Effects`` (damage packets, heals, shields, debuffs, gold) and contribute to
-stat, defense and offense profiles which the integrator folds into the
-damage pipeline (core.damage) in the canonical order of
-docs/modern/DAMAGE_AND_STATS.md §2.
+Modules are pure and fixed-shape: ``C`` axes are champion holders (holder c is world unit ``ctx.unit[c]``), ``N``
+axes are world units. They never write world state; they return ``Effects`` and stat/defense/debuff profiles that
+the integrator folds into ``core.damage`` in DAMAGE_AND_STATS §2 order. ``own`` is the (C, I) owned-count matrix
+(``inventory.owned_counts``). Hooks (all optional except ``init``/``COVERAGE``):
 
-Module protocol (all optional except ``init``/``COVERAGE``):
-
-    COVERAGE: dict[int, str]                      item id -> what is implemented
-    State: NamedTuple; init(n_champions, n_units) -> State
-    stats(state, own, ctx) -> ItemStats           STAT.50 dynamic bonus stats
-    defense(state, own, ctx) -> HolderDefense     holder-side DMG.10–80 inputs
-    status(state, own, ctx) -> StatusFlags        collision/movement flags
-    debuffs(state, own, ctx, units) -> Debuffs    target-side reductions/amps (N,)
-    dealt_amp(state, own, ctx, units) -> (C, N)   DMG.40 additive amp per target (all packets)
-    packet_amp(state, own, ctx, units, packets) -> (P,)  DMG.40 amp filtered by packet tags/type
-    on_cc(state, own, ctx, units, cc) -> (state, Effects)    holder slowed/immobilized units
-    attack_mods(state, own, ctx, units, target) -> AttackMods   at launch
-    on_attack(state, own, ctx, units, attack) -> (state, Effects)   launch
-    on_hit(state, own, ctx, units, attack) -> (state, Effects)      land
-    on_cast(state, own, ctx, units, cast) -> (state, Effects)
-    on_damage(state, own, ctx, units, report) -> (state, Effects)   after resolve
-    periodic(state, own, ctx, units) -> (state, Effects)            every tick
-    on_takedown(state, own, ctx, units, kills) -> (state, Effects)
-    active(state, own, ctx, units, request) -> (state, Effects, ActiveOut)
-                                                  called EVERY tick (request 0 = none) so
-                                                  pending cast times resolve
-    on_shop(state, own, ctx) -> state                               in shop area
-
-``own`` is the (C, I) owned-count matrix from ``items.inventory.owned_counts``.
+    COVERAGE: dict[int, str]; State; init(n_champions, n_units) -> State
+    stats(state, own, ctx) -> ItemStats                        STAT.50 dynamic bonus stats
+    defense(state, own, ctx) -> HolderDefense                  holder-side DMG inputs
+    status(state, own, ctx) -> StatusFlags
+    debuffs(state, own, ctx, units) -> Debuffs                 target-side (N,)
+    dealt_amp(state, own, ctx, units) -> (C, N)                DMG.40 amp on all packets
+    packet_amp(state, own, ctx, units, packets) -> (P,)        DMG.40 amp filtered by packet tags
+    attack_mods(state, own, ctx, units, target) -> AttackMods  at attack launch
+    on_attack / on_hit(..., attack), on_cast(..., cast), on_cc(..., cc), on_damage(..., report),
+    on_takedown(..., kills), periodic(state, own, ctx, units) -> (state, Effects)
+    active(state, own, ctx, units, request) -> (state, Effects, ActiveOut)   every tick (request 0 = none)
+    on_shop(state, own, ctx) -> state
 """
 from __future__ import annotations
 
@@ -39,8 +24,7 @@ from typing import Any, NamedTuple
 
 import jax.numpy as jnp
 
-from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_STRUCTURE, SHIELD_ALL, Packets,
-                            Resolved, concat_packets, empty_packets, has)
+from ...core.damage import SHIELD_ALL, Packets, Resolved, concat_packets, empty_packets
 from ..catalog import catalog
 
 BIG = 1e9
@@ -66,15 +50,15 @@ def dv(item_id: int, name: str, default: float | None = None) -> float:
     return catalog().dv(item_id, name, default)
 
 
-class Ctx(NamedTuple):
-    """Per-holder context for one tick, shape (C,) unless noted.
+def by_range(ctx, ranged_value: Any) -> Any:
+    """(C,) ``ranged_value`` for ranged holders, 1 for melee (ITEMS.md §2.3)."""
+    return jnp.where(ctx.is_ranged, ranged_value, 1.0)
 
-    Stats are the *pre-dynamic* values: champion base/growth plus static
-    item, shard and rune stats, before any module's ``stats`` contribution
-    (ITEMS.md §2.1 dependent-stat order).
-    """
-    now: Any                # () seconds
-    dt: Any                 # () seconds
+
+class Ctx(NamedTuple):
+    """Per-holder tick context (C,). Stats are pre-dynamic: base + static items/shards/runes (ITEMS.md §2.1)."""
+    now: Any                # ()
+    dt: Any                 # ()
     unit: Any               # int32 world unit index
     team: Any
     alive: Any
@@ -102,15 +86,15 @@ class Ctx(NamedTuple):
     crit_chance: Any
     crit_damage: Any        # total crit multiplier (2.0 base + items)
     life_steal: Any
-    bonus_attack_speed: Any  # bonus AS ratio (growth + items), e.g. 0.45
+    bonus_attack_speed: Any
     ability_haste: Any
     lethality: Any
     heal_shield_power: Any
-    attack_windup: Any      # current basic-attack windup (s)
+    attack_windup: Any      # seconds
     in_combat: Any          # dealt/took damage with an enemy in the last 5 s
     in_shop: Any
-    base_mana: Any = 0.0      # champion base + growth mana ("bonus mana" = max_mana - base_mana)
-    attack_range: Any = 125.0  # holder basic-attack range (center to edge of target radius)
+    base_mana: Any = 0.0
+    attack_range: Any = 125.0
 
     @property
     def total_ad(self):
@@ -134,34 +118,34 @@ class Ctx(NamedTuple):
 
 
 class Units(NamedTuple):
-    """World units visible to item effects, shape (N,)."""
+    """World units visible to item effects (N,)."""
     x: Any
     y: Any
     team: Any
-    cls: Any                # CLASS_* (core.damage)
+    cls: Any                # core.damage CLASS_*
     alive: Any
     hp: Any
     max_hp: Any
     radius: Any             # gameplay radius
     targetable: Any
-    is_siege_or_super: Any  # lane minion subtype for Hullbreaker
-    bonus_hp: Any           # LDR Giant Slayer reads target bonus HP
+    is_siege_or_super: Any
+    bonus_hp: Any
     armor: Any
     magic_resist: Any
 
 
 class Attack(NamedTuple):
     """At most one basic attack per holder per tick (C,)."""
-    launched: Any           # windup completed this tick (on-attack)
-    hit: Any                # attack landed this tick (on-hit)
+    launched: Any           # windup completed (on-attack)
+    hit: Any                # landed (on-hit)
     target: Any             # int32 unit index
-    raw: Any                # base attack pre-mitigation damage after crit
+    raw: Any                # pre-mitigation damage after crit
     is_crit: Any
-    natural_crit: Any = None  # crit from the crit-chance roll (not forced by attack_mods); None = is_crit
+    natural_crit: Any = None  # crit from the roll, not forced by attack_mods; None = unknown
 
 
 class Cast(NamedTuple):
-    started: Any            # (C,) bool: an ability cast started this tick
+    started: Any            # (C,) bool
     slot: Any               # (C,) int32 0..3 = Q/W/E/R
     target: Any             # (C,) int32 unit index or -1
 
@@ -177,24 +161,24 @@ class CC(NamedTuple):
 
 
 class Kills(NamedTuple):
-    champion_kill: Any      # (C,) count of champion kills credited this tick
-    champion_assist: Any    # (C,) assists
-    minion_kill: Any        # (C,) minions last-hit by the holder
+    champion_kill: Any      # (C,) counts this tick
+    champion_assist: Any
+    minion_kill: Any
     holder_died: Any        # (C,) bool
-    killed_units: Any       # (C, N) bool: holder had takedown on unit n this tick
+    killed_units: Any       # (C, N) bool: holder had a takedown on unit n
 
 
 class Report(NamedTuple):
-    """Resolved packets of the current tick (TICK.70)."""
+    """Resolved packets of the tick (TICK.70); vamp heals are per source unit (N,), before HEAL.20/30."""
     packets: Packets
     resolved: Resolved
-    life_steal_heal: Any    # (N,) life-steal heal per source unit (before HEAL.20/30)
-    omnivamp_heal: Any = None  # (N,) omnivamp heal per source unit (before HEAL.20/30)
+    life_steal_heal: Any
+    omnivamp_heal: Any = None
 
 
 class AttackMods(NamedTuple):
     force_crit: Any         # (C,) bool
-    crit_scale: Any         # (C,) crit-bonus multiplier (Sundered Sky 0.8)
+    crit_scale: Any         # (C,) crit-bonus multiplier
 
 
 class HolderDefense(NamedTuple):
@@ -212,8 +196,8 @@ class HolderDefense(NamedTuple):
     lifeline_duration: Any
     lifeline_decay_hold: Any
     lifeline_bonus_health: Any
-    spell_shield: Any       # Annul ready (Banshee's/Verdant Barrier/Edge of Night)
-    champion_received_mult: Any = None  # reduction on damage from enemy champions only (Celestial)
+    spell_shield: Any
+    champion_received_mult: Any   # damage from enemy champions only (Celestial)
 
 
 def neutral_defense(n: int) -> HolderDefense:
@@ -224,6 +208,7 @@ def neutral_defense(n: int) -> HolderDefense:
 
 
 def combine_defense(parts: list[HolderDefense], n: int) -> HolderDefense:
+    """Multipliers multiply, flats add; the last ready Lifeline wins."""
     out = neutral_defense(n)
     for p in parts:
         ready = p.lifeline_ready
@@ -237,20 +222,19 @@ def combine_defense(parts: list[HolderDefense], n: int) -> HolderDefense:
             jnp.where(ready, p.lifeline_duration, out.lifeline_duration),
             jnp.where(ready, p.lifeline_decay_hold, out.lifeline_decay_hold),
             jnp.where(ready, p.lifeline_bonus_health, out.lifeline_bonus_health),
-            out.spell_shield | p.spell_shield,
-            out.champion_received_mult * (1.0 if p.champion_received_mult is None else p.champion_received_mult))
+            out.spell_shield | p.spell_shield, out.champion_received_mult * p.champion_received_mult)
     return out
 
 
 class Debuffs(NamedTuple):
-    """Target-side modifiers from holders' effects, shape (N,)."""
+    """Target-side modifiers (N,)."""
     percent_armor_reduction: Any    # combined 1 - prod(1 - p)
     flat_armor_reduction: Any
     percent_mr_reduction: Any
     flat_mr_reduction: Any
-    received_amp: Any               # additive vulnerability, all damage types
-    magic_received_amp: Any         # additive, magic only (Abyssal Mask)
-    attack_speed_cripple: Any       # strongest-only AS reduction (Frozen Heart)
+    received_amp: Any               # additive, all damage types
+    magic_received_amp: Any         # additive, magic only
+    attack_speed_cripple: Any       # strongest only
 
 
 def neutral_debuffs(n: int) -> Debuffs:
@@ -271,7 +255,7 @@ def combine_debuffs(parts: list[Debuffs], n: int) -> Debuffs:
 
 
 class ShieldGrant(NamedTuple):
-    """Shields granted to holders this tick, shape (C, S)."""
+    """Shields granted to holders this tick (C, S)."""
     amount: Any
     kind: Any
     duration: Any
@@ -280,7 +264,7 @@ class ShieldGrant(NamedTuple):
 
 def shield_grants(amount: Any, kind: Any = SHIELD_ALL, duration: Any = 0.0,
                   decay_hold: Any = jnp.inf) -> ShieldGrant:
-    """Single grant per holder; ``amount`` (C,) with 0 meaning none."""
+    """One grant per holder; ``amount`` (C,), 0 = none."""
     a = jnp.asarray(amount, jnp.float32)
     b = lambda v, t=jnp.float32: jnp.broadcast_to(jnp.asarray(v, t), a.shape)[:, None]
     return ShieldGrant(a[:, None], b(kind, jnp.int32), b(duration), b(decay_hold))
@@ -289,18 +273,18 @@ def shield_grants(amount: Any, kind: Any = SHIELD_ALL, duration: Any = 0.0,
 class Effects(NamedTuple):
     """Everything a hook emits besides its own state."""
     packets: Packets
-    heal: Any               # (C,) self heal that benefits from heal and shield power
+    heal: Any               # (C,) self heal scaled by heal and shield power
     heal_plain: Any         # (C,) self heal without HSP (regen-like, potions)
-    mana: Any               # (C,) mana restored
+    mana: Any               # (C,)
     shields: ShieldGrant    # (C, S)
-    slow: Any               # (N,) slow strength applied this tick (strongest wins)
-    slow_duration: Any      # (N,) seconds for that slow
-    grievous: Any           # (N,) Grievous Wounds duration applied (0 = none)
-    gold: Any               # (C,) gold granted
+    slow: Any               # (N,) strongest wins
+    slow_duration: Any      # (N,)
+    grievous: Any           # (N,) Grievous Wounds duration (0 = none)
+    gold: Any               # (C,)
     attack_reset: Any       # (C,) bool
-    revive: Any             # (C,) bool: holder's lethal damage this tick is replaced by a revive
-    revive_delay: Any       # (C,) seconds of stasis before the revive completes
-    revive_hp: Any          # (C,) health on revive completion
+    revive: Any             # (C,) bool: lethal damage this tick is replaced by a revive
+    revive_delay: Any       # (C,) stasis seconds before the revive completes
+    revive_hp: Any          # (C,)
 
 
 def no_effects(n_champions: int, n_units: int) -> Effects:
@@ -331,24 +315,20 @@ def merge_effects(parts: list[Effects], n_champions: int, n_units: int) -> Effec
 
 
 def effects(n_champions: int, n_units: int, **fields) -> Effects:
-    """Build Effects with defaults for unspecified fields."""
     return no_effects(n_champions, n_units)._replace(**fields)
 
 
 class StatusFlags(NamedTuple):
-    """Holder movement/collision flags (C,) from the ``status`` hook."""
-    ghosted: Any            # ignores unit collision (Phantom Dancer)
+    ghosted: Any            # (C,) ignores unit collision
 
 
 class ActiveOut(NamedTuple):
-    """Per-holder result of an item active request (C,)."""
-    used: Any               # bool: the request started a cast
+    """Result of an item active request (C,)."""
+    used: Any
     cast_time: Any          # seconds of cast lockout
-    can_move: Any           # bool: movement allowed during the cast
-    attack_reset: Any       # bool
+    can_move: Any           # movement allowed during the cast
+    attack_reset: Any
 
-
-# ---- geometry helpers -------------------------------------------------------
 
 def enemy_mask(ctx: Ctx, units: Units) -> Any:
     """(C, N): living, targetable enemy units of each holder."""
@@ -361,15 +341,14 @@ def dist_to_point(units: Units, px: Any, py: Any) -> Any:
 
 
 def in_circle(units: Units, px: Any, py: Any, radius: Any, *, edge: bool = True) -> Any:
-    """(C, N) units whose hitbox (edge rule, U-2) touches the circle."""
+    """(C, N) units whose hitbox touches the circle (edge rule U-2), or whose center is inside."""
     reach = jnp.asarray(radius)[..., None] + (units.radius[None, :] if edge else 0.0)
     return dist_to_point(units, px, py) <= reach
 
 
 def nearest_k(dist: Any, mask: Any, k: int) -> Any:
     """(C, N) mask of the ``k`` smallest ``dist`` entries within ``mask`` (ties: lower index)."""
-    # ``k`` (static, <= 10 in the item modules) rounds of argmin: cheap row reductions on every
-    # backend (``lax.top_k`` over 216 columns was the top GPU kernel); argmin keeps the lower index.
+    # k rounds of argmin: lax.top_k over the unit axis was the slowest GPU kernel.
     key = jnp.where(mask, dist, jnp.inf)
     cols = jnp.arange(key.shape[-1])
     pick = jnp.zeros(key.shape, bool)
@@ -393,20 +372,18 @@ def onehot_units(idx: Any, n_units: int) -> Any:
     return (jnp.arange(n_units)[None, :] == idx[:, None]) & (idx[:, None] >= 0)
 
 
-# ---- report helpers ---------------------------------------------------------
-
 def dealt_by_holder(report: Report, ctx: Ctx, n_units: int, mask: Any = None) -> Any:
-    """(C, N) post-mitigation damage holder c dealt to unit n this tick."""
+    """(C, N) post-mitigation damage holder c dealt to unit n (default: every landed packet)."""
     p, r = report.packets, report.resolved
     sel = p.valid & (r.final > 0.0) if mask is None else p.valid & mask
-    src_is = p.src[None, :] == ctx.unit[:, None]                      # (C, P)
+    src_is = p.src[None, :] == ctx.unit[:, None]
     contrib = jnp.where(src_is & sel[None, :], r.final[None, :], 0.0)
-    onehot = (p.dst[:, None] == jnp.arange(n_units)[None, :])         # (P, N)
+    onehot = (p.dst[:, None] == jnp.arange(n_units)[None, :])
     return contrib @ onehot.astype(jnp.float32)
 
 
 def hit_by_holder(report: Report, ctx: Ctx, n_units: int, mask: Any) -> Any:
-    """(C, N) bool: some selected packet from holder c reached unit n."""
+    """(C, N) bool: a selected packet from holder c reached unit n."""
     p = report.packets
     src_is = p.src[None, :] == ctx.unit[:, None]
     sel = (src_is & (p.valid & mask)[None, :]).astype(jnp.float32)
@@ -428,7 +405,3 @@ def src_class(report: Report, units: Units) -> Any:
 
 def dst_class(report: Report, units: Units) -> Any:
     return units.cls[jnp.clip(report.packets.dst, 0, units.cls.shape[0] - 1)]
-
-
-__all__ = [n for n in dir() if not n.startswith("_")] + [
-    "CLASS_CHAMPION", "CLASS_MINION", "CLASS_MONSTER", "CLASS_STRUCTURE", "has"]

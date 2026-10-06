@@ -1,28 +1,10 @@
-"""Spellblade group plus Phage Rage (ITEMS.md §6.1; ITEMS_CATALOG Sheen/Trinity/
-Iceborn/Lich Bane/Essence Reaver/Dusk and Dawn/Bloodsong/Phage).
+"""Spellblade group and Phage Rage (ITEMS.md §6.1).
 
-One Spellblade per champion (group max 1, shared ``SheenDelay``):
-
-* armed at ability cast START (``on_cast``, ``cast.started``) when the
-  1.5 s static cooldown is over; the window is 10 s (Lich Bane
-  ``SpellBladeDuration``); a recast refreshes the window;
-* consumed by the next basic attack that LANDS (``on_hit``), on any target
-  including structures; the cooldown (``SpellbladeCooldown``) starts at
-  consumption;
-* damage reads BASE AD (``ctx.base_ad``), is not crit-scaled, and is an
-  on-hit proc packet.
-
-Coefficients come from ``items_client.json`` data values or calculation
-parts (``_part``); nothing that exists in client data is hand-copied.
-
-Dusk and Dawn "applies on-hit effects an additional time" (wiki: after a
-0.2 s delay). The framework has no re-entrant on-hit, so this module exposes
-it as state: ``periodic`` sets ``dd_extra_due``/``dd_due_target`` on the tick
-the delayed application fires. INTEGRATOR CONTRACT: after ``periodic``, build
-``extra_on_hit_attack(state.spellblade)`` and run the dispatcher's
-``on_hit`` once more with it (``launched=False``, ``raw=0``, ``is_crit=False``;
-only holders with ``hit=True`` act). The Spellblade itself cannot re-proc
-(it is on cooldown), so only the other on-hit effects apply again.
+One Spellblade per champion (group max 1): armed at ability cast start when its cooldown is over, for a 10 s window
+a recast refreshes; consumed by the next basic attack that lands (any target, structures included), which starts the
+cooldown. Damage reads base AD, is not crit-scaled and is an on-hit proc. Dusk and Dawn re-applies on-hits 0.2 s
+later (wiki): ``periodic`` sets ``dd_extra_due`` and the world re-runs ``on_hit`` with ``extra_on_hit_attack``; the
+Spellblade is then on cooldown, so only the other on-hits apply again.
 """
 from __future__ import annotations
 
@@ -46,9 +28,8 @@ def _part(item_id: int, calc: str, i: int) -> dict:
     return catalog()[item_id].calculations[calc]["mFormulaParts"][i]
 
 
-SB_COOLDOWN = dv(SHEEN, "SpellbladeCooldown")            # 1.5 s, static (§6.1 INFERRED M)
-SB_WINDOW = dv(LICH_BANE, "SpellBladeDuration")          # 10 s, shared by the group
-# Per-item proc coefficients (base AD, AP, crit chance).
+SB_COOLDOWN = dv(SHEEN, "SpellbladeCooldown")            # static (§6.1 INFERRED M)
+SB_WINDOW = dv(LICH_BANE, "SpellBladeDuration")          # shared by the group
 SHEEN_AD = _part(SHEEN, "SpellbladeDamage", 0)["mCoefficient"]
 TRINITY_AD = dv(TRINITY, "SpellbladeMultiplier")
 ICEBORN_AD = dv(ICEBORN, "SpellbladeMultiplier")
@@ -59,39 +40,30 @@ DD_AD = _part(DUSK_DAWN, "SpellbladeDamage", 0)["mCoefficient"]
 DD_AP = _part(DUSK_DAWN, "SpellbladeDamage", 1)["mCoefficient"]
 DD_HEAL_AP = _part(DUSK_DAWN, "SpellbladeHealing", 0)["mCoefficient"]
 DD_HEAL_BONUS_HP = _part(DUSK_DAWN, "SpellbladeHealing", 1)["mCoefficient"]
-DD_EXTRA_DELAY = 0.2      # wiki Dusk and Dawn: on-hit re-applied "after a 0.2-second delay" (no client value)
+DD_EXTRA_DELAY = 0.2      # wiki
 BS_AD = dv(BLOODSONG, "SheenMult")
-# Iceborn frost field.
 FIELD_RADIUS = dv(ICEBORN, "AoERadius")
 FIELD_DURATION = dv(ICEBORN, "SlowFieldDuration")
 FIELD_SLOW_MELEE, FIELD_SLOW_RANGED = dv(ICEBORN, "SlowAmount"), dv(ICEBORN, "RangedSlowAmount")
-ICEBORN_MONSTER = dv(ICEBORN, "MonsterMod")   # INFERRED L: proc damage x1.5 vs monsters (tooltip silent)
-# Re-applied every tick to units inside the field; lasts slightly past one
-# tick so it bridges the next tick's re-application regardless of hook order.
-FIELD_TICK_LINGER = 1.5   # x ctx.dt
+ICEBORN_MONSTER = dv(ICEBORN, "MonsterMod")   # INFERRED L: applied to proc damage vs monsters
+FIELD_TICK_LINGER = 1.5   # x dt: the per-tick field slow bridges to the next re-application in any hook order
 LICH_AS = dv(LICH_BANE, "SheenASBuff")
-# Quicken (Trinity) and Rage (Phage): different named passives, both apply.
+# Quicken (Trinity) and Rage (Phage) are different named passives: both apply.
 QUICKEN_MS, QUICKEN_DURATION = dv(TRINITY, "MoveSpeedBonus"), dv(TRINITY, "MSDuration")
 RAGE_MS, RAGE_DURATION, RAGE_RANGED = (dv(PHAGE, "MoveSpeedBonus"), dv(PHAGE, "MoveSpeedDuration"),
                                        dv(PHAGE, "RangedMod"))
-# Bloodsong Expose Weakness (support quest item).
 BS_AMP_MELEE, BS_AMP_RANGED = dv(BLOODSONG, "MeleeDamageAmp"), dv(BLOODSONG, "RangedDamageAmp")
 BS_DEBUFF_DURATION = dv(BLOODSONG, "DebuffDuration")
 BS_GP10 = dv(BLOODSONG, "GP10")
 
 COVERAGE = {
-    SHEEN: "Spellblade 1.0 x base AD physical on-hit (LS), armed at cast start, 10 s window, 1.5 s shared cd",
-    TRINITY: "Spellblade 2.0 x base AD physical (LS); Quicken +20 flat MS 2 s on every attack hit",
-    ICEBORN: "Spellblade 1.5 x base AD physical (LS; x1.5 vs monsters, INFERRED); 300-radius frost field 2 s "
-             "slowing enemies inside 25%/12.5% (melee/ranged holder), re-applied per tick; one field per holder",
-    LICH_BANE: "Spellblade 0.75 x base AD + 0.45 AP magic (LS); +50% bonus AS while armed",
-    ESSENCE_REAVER: "Spellblade 1.25 x base AD + 50 x crit chance physical (no LS: not OnHitAppliesLifeSteal); "
-                    "mana = 50% of proc damage (unused FlatManaRefund/ManaRefundRatio ignored)",
-    DUSK_DAWN: "Spellblade 0.75 x base AD + 0.1 AP magic (LS); heal 0.1 AP + 0.03 bonus HP (HSP); on-hit "
-               "re-application 0.2 s later exposed via dd_extra_due/extra_on_hit_attack (integrator re-runs on_hit)",
-    BLOODSONG: "Spellblade 1.0 x base AD physical (LS); champion target takes +8%/+5% (melee/ranged holder) "
-               "damage 4 s (received_amp, strongest holder); 9 gold/10 s; ward active DEFERRED (MODERN-009 vision)",
-    PHAGE: "Rage: +20 flat MS (ranged x0.5) for 2 s on attack hit, refresh",
+    SHEEN: "Spellblade physical on-hit", TRINITY: "Spellblade; Quicken MS on attack hit",
+    ICEBORN: "Spellblade (more vs monsters, INFERRED); frost field slowing enemies inside, one per holder",
+    LICH_BANE: "Spellblade magic; AS while armed",
+    ESSENCE_REAVER: "Spellblade with crit scaling, no life steal; mana from proc damage",
+    DUSK_DAWN: "Spellblade magic; HSP heal; delayed on-hit re-application (extra_on_hit_attack)",
+    BLOODSONG: "Spellblade; Expose Weakness on champions (strongest holder); gold; ward active deferred (vision)",
+    PHAGE: "Rage MS on attack hit",
 }
 
 
@@ -142,7 +114,7 @@ def on_cast(state: State, own, ctx, units, cast) -> tuple[State, Effects]:
 
 
 def _which(own) -> Any:
-    """(C,) item id of the held Spellblade item (group max 1; tie order fixed)."""
+    """(C,) item id of the held Spellblade item (group max 1)."""
     out = jnp.zeros(own.shape[:1], jnp.int32)
     for iid in reversed((TRINITY, ICEBORN, LICH_BANE, ESSENCE_REAVER, DUSK_DAWN, BLOODSONG, SHEEN)):
         out = jnp.where(holds(own, iid), iid, out)
@@ -179,7 +151,7 @@ def on_hit(state: State, own, ctx, units, attack: Attack) -> tuple[State, Effect
     mana = jnp.where(proc & (item == ESSENCE_REAVER), ER_MANA * dmg, 0.0)
     heal = jnp.where(proc & (item == DUSK_DAWN), DD_HEAL_AP * ctx.ap + DD_HEAL_BONUS_HP * ctx.bonus_hp, 0.0)
 
-    # Iceborn frost field at the target position; slow enemies inside now.
+    # Iceborn field at the target; slows enemies inside from this tick.
     ice = proc & (item == ICEBORN)
     tx, ty = unit_pos(units, attack.target)
     slow_val = jnp.where(ctx.is_ranged, FIELD_SLOW_RANGED, FIELD_SLOW_MELEE)
@@ -191,14 +163,12 @@ def on_hit(state: State, own, ctx, units, attack: Attack) -> tuple[State, Effect
     slow = jnp.max(jnp.where(inside, slow_val[:, None], 0.0), axis=0)
     slow_duration = jnp.where(slow > 0.0, FIELD_TICK_LINGER * ctx.dt, 0.0)
 
-    # Bloodsong Expose Weakness on champion targets.
     bs = proc & (item == BLOODSONG) & (tcls == CLASS_CHAMPION)
     on_t = onehot_units(attack.target, n) & bs[:, None]
     amp = jnp.where(ctx.is_ranged, BS_AMP_RANGED, BS_AMP_MELEE)
     maim_until = jnp.where(on_t, now + BS_DEBUFF_DURATION, state.maim_until)
     maim_amp = jnp.where(on_t, amp[:, None], state.maim_amp)
 
-    # Dusk and Dawn delayed on-hit re-application.
     dd = proc & (item == DUSK_DAWN)
     dd_at = jnp.where(dd, now + DD_EXTRA_DELAY, state.dd_extra_at)
     dd_target = jnp.where(dd, attack.target, state.dd_extra_target)
@@ -216,7 +186,7 @@ def on_hit(state: State, own, ctx, units, attack: Attack) -> tuple[State, Effect
 
 
 def _field_hits(units, ctx, fx, fy) -> Any:
-    """(C, N) enemy non-structure units touching each holder's field (edge rule, U-2)."""
+    """(C, N) enemy non-structures touching each holder's field (U-2)."""
     c = fx.shape[0]
     enemies = enemy_mask(ctx, units) & (units.cls[None, :] != CLASS_STRUCTURE)
     return in_circle(units, fx, fy, jnp.full((c,), FIELD_RADIUS)) & enemies
@@ -240,7 +210,7 @@ def periodic(state: State, own, ctx, units) -> tuple[State, Effects]:
 
 
 def extra_on_hit_attack(state: State) -> Attack:
-    """Attack for the Dusk and Dawn re-application due this tick (see module docstring)."""
+    """Attack for the Dusk and Dawn re-application due this tick."""
     z = jnp.zeros(state.dd_extra_due.shape, jnp.float32)
     return Attack(jnp.zeros_like(state.dd_extra_due), state.dd_extra_due, state.dd_due_target, z,
                   jnp.zeros_like(state.dd_extra_due))
@@ -249,10 +219,6 @@ def extra_on_hit_attack(state: State) -> Attack:
 def debuffs(state: State, own, ctx, units) -> Debuffs:
     n = units.x.shape[0]
     live = (ctx.now < state.maim_until) & holds(own, BLOODSONG)[:, None]
-    # Same named debuff from several Bloodsong holders does not stack: strongest.
+    # Same named debuff from several holders: strongest.
     amp = jnp.max(jnp.where(live, state.maim_amp, 0.0), axis=0)
     return neutral_debuffs(n)._replace(received_amp=amp)
-
-
-__all__ = ["COVERAGE", "State", "init", "stats", "on_cast", "on_hit", "periodic", "debuffs",
-           "extra_on_hit_attack", "proc_damage"]
