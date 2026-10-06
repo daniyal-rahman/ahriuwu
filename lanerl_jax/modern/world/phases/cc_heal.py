@@ -1,4 +1,5 @@
-"""Phase 8, CC / HEAL: heals and shields from kits, summoners and monsters; CC with tenacity."""
+"""Phase 8, CC / HEAL: heals, mana and shields from kits, summoners and monsters; CC with tenacity and slow
+resist."""
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -15,11 +16,10 @@ from ..state import ModernOrders, ModernState
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """8. CC / HEAL: kit, summoner and monster heals and shields; CC with tenacity and slow resist."""
     c, n = N_CHAMPIONS, cfg.n_units
-    now, st, kit_all, k_dmg, s_eff, s_out, out = sc.now, sc.st, sc.kit_all, sc.k_dmg, sc.s_eff, sc.s_out, sc.out
-    jfx, so, sm, mai, sres, kdef = sc.jfx, sc.so, sc.sm, sc.mai, sc.sres, sc.kdef
-    hp, max_hp, shields, status = sc.hp, sc.max_hp, sc.shields, sc.status
+    now, st, kit_all, k_dmg, s_out, out = sc.now, sc.st, sc.kit_all, sc.k_dmg, sc.s_out, sc.out
+    jfx, so, sm, mai, sres = sc.jfx, sc.so, sc.sm, sc.mai, sc.sres
+    hp, shields, status = sc.hp, sc.shields, sc.status
     kit_shields = ShieldGrant(*(jnp.concatenate([u, v], axis=1) for u, v in zip(kit_all.shield, k_dmg.shield)))
     m_heal = jnp.zeros((c,), jnp.float32)
     m_mana = jnp.zeros((c,), jnp.float32)
@@ -28,19 +28,18 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         m_heal, m_shield = m_heal + jfx.heal, jnp.maximum(m_shield, jfx.shield)
     if so is not None:
         m_heal, m_mana, m_shield = m_heal + so.heal, m_mana + so.mana, jnp.maximum(m_shield, so.shield)
-    extra = merge_effects([s_eff._replace(packets=D.empty_packets(0)),
+    extra = merge_effects([sc.s_eff._replace(packets=D.empty_packets(0)),
                            effects(c, n, heal=kit_all.heal + k_dmg.heal, shields=kit_shields),
                            effects(c, n, heal=m_heal, mana=m_mana,
                                    shields=shield_grants(m_shield, duration=jnp.inf))], c, n)
-    hp, shields, status = apply_effects(extra, sc.ictx, hp, max_hp, shields, status,
+    hp, shields, status = apply_effects(extra, sc.ictx, hp, sc.max_hp, shields, status,
                                         heal_power=st.heal_shield_power, incoming_heal=sc.summ_world.incoming_heal)
-    # Champion-sourced slows without a (C, N) source row: Exhaust, item/rune effects (Rylai's, Stridebreaker,
-    # Spellblade fields ...). ``CCTimers`` is the only slow state movement reads; ``status.slow`` is unused.
+    # Champion slows without a (C, N) source row: Exhaust, item/rune effects. Movement reads only ``CCTimers``.
     slow_cc = W.no_cc(3, n)._replace(slow=jnp.stack([s_out.exhaust_slow, out.effects.slow, extra.slow]),
                                      slow_duration=jnp.stack([s_out.exhaust_slow_duration, out.effects.slow_duration,
                                                               extra.slow_duration]))
     ten = jnp.zeros((n,), jnp.float32).at[:c].set(
-        1.0 - (1.0 - st.tenacity) * (1.0 - kdef.tenacity_bonus) * (1.0 - s_out.tenacity))
+        1.0 - (1.0 - st.tenacity) * (1.0 - sc.kdef.tenacity_bonus) * (1.0 - s_out.tenacity))
     if mai is not None:                                               # Scuttler: slow immune, -100% tenacity
         jsl = cfg.jungle.slots
         ten = ten.at[jsl].set(1.0 - mai.cc_duration_mult)

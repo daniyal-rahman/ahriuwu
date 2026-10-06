@@ -43,8 +43,8 @@ def run(state, now, units=None, c=None, *, slot=(-1, -1), target=(-1, -1), x=(0.
                   channel_interrupted=b(interrupted), quest_complete=b(quest), took_champion_damage=b(damaged), **kw)
 
 
-def ready(loadout=((FL, IG), (FL, EX)), t=20.0):
-    """State with every slot ready at time ``t``."""
+def ready(loadout=((FL, IG), (FL, EX))):
+    """State with both loadout slots ready."""
     st = S.init(np.asarray(loadout))
     return st._replace(ready_at=st.ready_at.at[:, :2].set(0.0))
 

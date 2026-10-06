@@ -1,12 +1,5 @@
-"""Integration: the modern world tick (``world.tick``) end to end.
-
-These tests check *symptoms across systems* rather than single functions:
-gold/XP/levels after real waves, a champion kill paying first blood and
-setting the death timer, shop purchases changing stats, Flash and Recall
-moving the champion, turrets defending, and nothing overflowing. The world and
-its one compiled tick program come from ``tests.world_harness`` (shared with the
-other full-tick modules; compiling takes a few minutes on CPU).
-"""
+"""The world tick end to end: gold/XP after real waves, first blood and the death timer, shop purchases, Flash and
+Recall, idle auto-attacks, no overflows. The world and its compiled tick come from ``world_harness``."""
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -81,9 +74,7 @@ def test_flash_blinks_and_goes_on_cooldown():
 def test_champion_kill_first_blood_and_death_timer():
     cfg, step, run = world()
     s = MS.init_state(cfg)
-    # Put Jax next to Garen at the top-lane midpoint with almost no HP.
-    lane = np.asarray(cfg.lane_path)
-    mx, my = lane[len(lane) // 2]
+    mx, my = H.lane_mid(cfg)                                # Jax next to Garen with almost no HP
     s = s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 150.0), y=s.y.at[0].set(my).at[1].set(my),
                    hp=s.hp.at[1].set(5.0), t=jnp.float32(200.0))
     s = H.refresh(s)
@@ -99,7 +90,6 @@ def test_champion_kill_first_blood_and_death_timer():
                                                             abs=0.05)
     assert float(e.economy.death_duration[1]) == pytest.approx(float(E.death_time(1, kill_t)))
     assert bool(s.econ.first_blood_done)
-    # Respawn at the fountain after the timer.
     s, _ = run(s, MS.no_orders(), int(10.5 * 30))
     assert bool(s.alive[1])
     assert np.hypot(float(s.x[1]) - MW.FOUNTAINS[1][0], float(s.y[1]) - MW.FOUNTAINS[1][1]) < 1.0
@@ -108,8 +98,7 @@ def test_champion_kill_first_blood_and_death_timer():
 def test_recall_returns_to_fountain():
     cfg, step, run = world()
     s = MS.init_state(cfg)
-    lane = np.asarray(cfg.lane_path)
-    mx, my = lane[len(lane) // 2]
+    mx, my = H.lane_mid(cfg)
     s = s._replace(x=s.x.at[0].set(mx), y=s.y.at[0].set(my))
     s, _ = step(s, orders(recall=[True, False]))
     s, _ = run(s, MS.no_orders(), round((E.RECALL_CAST + E.RECALL_CHANNEL) * 30) + 3)   # 0.5 s cast + 8 s
@@ -119,8 +108,7 @@ def test_recall_returns_to_fountain():
 def test_idle_champions_auto_attack_in_range():
     cfg, _, run = world()
     s = MS.init_state(cfg)
-    lane = np.asarray(cfg.lane_path)
-    mx, my = lane[len(lane) // 2]
+    mx, my = H.lane_mid(cfg)
     s = s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 200.0), y=s.y.at[0].set(my).at[1].set(my),
                    t=jnp.float32(20.0))
     s = H.refresh(s)

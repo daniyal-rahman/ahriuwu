@@ -1,6 +1,5 @@
-"""World state of the 26.19 modern world: ``ModernState`` (unit columns + every subsystem's state),
-the per-champion ``ChampionLayer``, ``ModernOrders`` (one order per champion per tick), ``TickEvents``,
-and ``init_state`` (the game at 0:00 for a ``WorldConfig``)."""
+"""State of the 26.19 world: ``ModernState`` (unit columns and every subsystem's state), ``ChampionLayer``,
+``ModernOrders``, ``TickEvents`` and ``init_state`` (the game at 0:00)."""
 from __future__ import annotations
 
 from typing import Any, NamedTuple
@@ -31,9 +30,8 @@ from .config import N_CHAMPIONS, WorldConfig
 
 
 class QueuedCast(NamedTuple):
-    """(C,) a cast held for later (MECHANICS_AUDIT #4/#9): an out-of-range unit-targeted cast the
-    champion walks into range for (until a new order), or a cast made during a lockout or within
-    ``CAST_BUFFER_S`` of its cooldown ending (fires when allowed, expires after the buffer)."""
+    """(C,) a held cast (MECHANICS_AUDIT #4/#9): out of range (walk in until a new order) or blocked by a
+    lockout or an ending cooldown (fires when allowed, expires after ``CAST_BUFFER_S``)."""
     slot: Any               # int32, -1 none
     target: Any             # int32 unit, -1 none
     x: Any
@@ -46,18 +44,17 @@ def no_queued_cast(c: int) -> QueuedCast:
     return QueuedCast(jnp.full((c,), -1, jnp.int32), jnp.full((c,), -1, jnp.int32), z, z, z)
 
 
-
 class ChampionLayer(NamedTuple):
     """Per-champion world state (C,)."""
     ranks: Any              # (C, 4) int32
     cooldowns: Any          # (C, 4) remaining seconds
     mana: Any
-    cast_lock_until: Any    # kit casts and item actives that root the caster: no casts, attacks or movement
-    item_cast_until: Any    # item-active cast that allows movement (Stridebreaker): no casts or attacks
+    cast_lock_until: Any    # no casts, attacks or movement (kit casts, rooting item actives)
+    item_cast_until: Any    # no casts or attacks (movable item-active cast: Stridebreaker)
     move_goal: Any          # (C, 2)
     moving: Any             # bool: walk to move_goal
     attack_order: Any       # int32 unit, -1 none
-    target_seen_at: Any     # (C, 2) where the team last saw the attack target (walked to if it enters fog)
+    target_seen_at: Any     # (C, 2) where the team last saw the attack target
     queued_cast: Any        # QueuedCast: walk-in / buffered cast
     facing: Any             # (C, 2)
     dash_until: Any         # dash end time (inf = none)
@@ -68,22 +65,20 @@ class ChampionLayer(NamedTuple):
     inventory: Any          # items.inventory.Inventory (C, 7)
     group_cd: Any           # (C, G) item-group purchase cooldowns
     dyn: Any                # ItemStats: last tick's dynamic stats (combat_tick)
-    static_max_hp: Any      # STAT max HP excluding dynamic health (for STAT.70 on level/items)
+    static_max_hp: Any      # STAT max HP without dynamic health (STAT.70)
     homeguard_ms: Any
     blinked: Any            # last tick blinked/dashed (Sudden Impact)
     forbid: Any             # (C, I) purchases blocked by runes (Magical Footwear)
     reset_next: Any         # (C,) attack reset requested by items last tick (Titanic, Sheen-like)
     bonus_points: Any       # (C,) extra skill points (Elixir of Skill)
     granted: Any            # (C,) int32 item id placed this tick for a rune grant (ack)
-    last_cast: Any          # (C, 4) game time each Q/W/E/R was last cast (-1e9 never); observed-cast memory
+    last_cast: Any          # (C, 4) time each Q/W/E/R was last cast (-1e9 never)
     cs: Any                 # (C,) int32 minions last-hit (creep score)
-    seen_cast: Any          # (C, 4) game time each Q/W/E/R was last cast while visible to the enemy team
+    seen_cast: Any          # (C, 4) time each Q/W/E/R was last cast while visible to the enemy
 
 
 class LastTick(NamedTuple):
-    """Events of the previous tick that this tick reads: the world's one-tick lags in one place
-    (``tick.commit`` writes them; docs/modern/WORLD_IMPLEMENTATION.md). Other carried values: the
-    start-of-tick fog ``ModernState.visible``/``sight`` and ``ChampionLayer.dyn``/``reset_next``."""
+    """Events of the previous tick that this tick reads (the one-tick lags; written by ``tick.commit``)."""
     damage_matrix: Any      # (N, N) bool: unit i damaged unit j (lane/monster AI aggro, Scorchclaw)
     death_seen: Any         # (C, N) bool: champion c had own sight of unit j when j died (Overgrowth)
     kills: Kills            # takedowns credited (item/rune hooks)
@@ -134,7 +129,7 @@ class ModernState(NamedTuple):
     towers: Any
     shields: D.Shields
     status: UnitStatus
-    prev: LastTick          # what the previous tick did, read by this one
+    prev: LastTick
     visible: Any            # (2, N) bool: team t sees unit j (vision, end of last tick)
     sight: Any              # (C, N) bool: champion c's own sight of unit j (rune "own sight")
     reveal: Any             # vision.Reveal: attack-reveal circle per champion
@@ -203,13 +198,12 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
     st = compose(cfg.champion_base, level, static, adaptive_physical=cfg.adaptive_physical)
     hp = hp.at[:c].set(st.max_hp)
     zc = jnp.zeros((c,), jnp.float32)
-    ranks = jnp.zeros((c, 4), jnp.int32)
     first = jnp.asarray([V.skill_order(cfg, i)[0] for i in range(c)])
-    ranks = ranks.at[jnp.arange(c), first].set(1)
+    ranks = jnp.zeros((c, 4), jnp.int32).at[jnp.arange(c), first].set(1)
     champ = ChampionLayer(
         ranks=ranks, cooldowns=jnp.zeros((c, 4), jnp.float32), mana=st.max_mana, cast_lock_until=zc,
-        item_cast_until=zc,
-        move_goal=cfg.fountain, moving=jnp.zeros((c,), bool), attack_order=jnp.full((c,), -1, jnp.int32),
+        item_cast_until=zc, move_goal=cfg.fountain, moving=jnp.zeros((c,), bool),
+        attack_order=jnp.full((c,), -1, jnp.int32),
         target_seen_at=cfg.fountain, queued_cast=no_queued_cast(c),
         facing=jnp.tile(jnp.asarray([[1.0, 1.0]], jnp.float32), (c, 1)) * jnp.asarray([[1.0], [-1.0]]),
         dash_until=zc - 1.0, dash_target=jnp.full((c,), -1, jnp.int32), dash_to=cfg.fountain, dash_speed=zc,
@@ -226,10 +220,8 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
     trinkets = [next((i for i in lo.items if i in (3340, 3363, 3364)), 3340) for lo in cfg.loadouts]
     wards = WD.init_wards(c, trinkets)
     jungle = J.init_jungle(cfg.jungle, c, n, seed=seed) if cfg.jungle is not None else None
-    obj = OBJ.init_objectives(cfg.objectives, n, c, jax.random.PRNGKey(seed + 1)) if cfg.objectives is not None \
-        else None
-    zc0 = jnp.zeros((c,), jnp.float32)
-    amove = AttackMove(jnp.zeros((c,), bool), zc0, zc0, jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32))
+    obj = None if cfg.objectives is None else OBJ.init_objectives(cfg.objectives, n, c, jax.random.PRNGKey(seed + 1))
+    amove = AttackMove(jnp.zeros((c,), bool), zc, zc, jnp.full((c,), -1, jnp.int32), jnp.zeros((c,), jnp.int32))
     vis, sight = V.visibility(cfg, cfg.unit_x, cfg.unit_y, kind, cfg.unit_sub, cfg.unit_team, alive, reveal,
                              jnp.float32(0.0), wards=wards)
     return ModernState(
@@ -237,23 +229,27 @@ def init_state(cfg: WorldConfig, *, seed: int = 0) -> ModernState:
         kind=kind, sub=cfg.unit_sub, team=cfg.unit_team, alive=alive, x=cfg.unit_x, y=cfg.unit_y,
         hp=hp, max_hp=hp, radius=radius,
         armor=jnp.where(structure, towers.armor, 0.0).astype(jnp.float32).at[:c].set(st.base_armor + st.bonus_armor),
-        magic_resist=jnp.where(structure, towers.magic_resist, 0.0).astype(jnp.float32).at[:c].set(st.base_mr + st.bonus_mr),
-        attack_damage=jnp.where(structure, towers.attack_damage, 0.0).astype(jnp.float32).at[:c].set(st.base_ad + st.bonus_ad),
+        magic_resist=jnp.where(structure, towers.magic_resist, 0.0).astype(jnp.float32)
+        .at[:c].set(st.base_mr + st.bonus_mr),
+        attack_damage=jnp.where(structure, towers.attack_damage, 0.0).astype(jnp.float32)
+        .at[:c].set(st.base_ad + st.bonus_ad),
         attack_range=jnp.where(structure & (kind == W.KIND_TURRET), towers.attack_range, 0.0).astype(jnp.float32)
         .at[:c].set(st.attack_range),
-        attack_speed=jnp.where(kind == W.KIND_TURRET, towers.attack_speed, 0.0).astype(jnp.float32).at[:c].set(st.attack_speed),
+        attack_speed=jnp.where(kind == W.KIND_TURRET, towers.attack_speed, 0.0).astype(jnp.float32)
+        .at[:c].set(st.attack_speed),
         move_speed=jnp.zeros((n,), jnp.float32).at[:c].set(st.move_speed),
         windup=jnp.where(kind == W.KIND_TURRET, towers.windup, 0.0).astype(jnp.float32).at[:c].set(st.attack_windup),
         spawn_seq=jnp.arange(n, dtype=jnp.int32), spawn_time=jnp.zeros((n,), jnp.float32),
         targetable=alive & ~structure | (structure & towers.targetable),
-        missile_speed=jnp.where(kind == W.KIND_TURRET, LA.T.MISSILE_SPEED, 0.0).astype(jnp.float32), bounty_gold=jnp.zeros((n,), jnp.float32), bounty_xp=jnp.zeros((n,), jnp.float32),
+        missile_speed=jnp.where(kind == W.KIND_TURRET, LA.T.MISSILE_SPEED, 0.0).astype(jnp.float32),
+        bounty_gold=jnp.zeros((n,), jnp.float32), bounty_xp=jnp.zeros((n,), jnp.float32),
         bounty_level=jnp.ones((n,), jnp.int32), next_seq=jnp.int32(n), spawn=MM.init_lane_spawn(),
         att=W.init_attack_state(n), missiles=M.init_missiles(64), cc=M.init_cc(n), champ=champ,
         kits=K.init(c, n), summoners=S.init(loadout), combat=_init_combat(cfg, c, n),
         econ=E.init_economy(c, n, [lo.role for lo in cfg.loadouts]), lane_ai=LA.init_lane_ai(n), towers=towers,
         shields=D.init_shields(n), status=init_status(n),
         prev=LastTick(damage_matrix=jnp.zeros((n, n), bool), death_seen=jnp.zeros((c, n), bool),
-                      kills=Kills(zc, zc, zc, jnp.zeros((c,), bool), jnp.zeros((c, n), bool)), epic=zc0, large=zc0,
+                      kills=Kills(zc, zc, zc, jnp.zeros((c,), bool), jnp.zeros((c, n), bool)), epic=zc, large=zc,
                       pending_dash=W.no_dash(c)),
         visible=vis, sight=sight, reveal=reveal, jungle=jungle, obj=obj, wards=wards, amove=amove,
         route_anchor=M.init_route_anchor(n), terrain_variant=jnp.int32(0),

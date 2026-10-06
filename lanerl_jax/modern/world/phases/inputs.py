@@ -1,5 +1,6 @@
 """Phase 1, INPUT: fog-filtered orders, walk-in/buffered casts, attack-move, item stasis, skill points,
-minion/camp spawns and this tick's walkable terrain."""
+minion/camp spawns and this tick's walkable terrain. Writes ``s.champ``, ``s.amove``, spawn slots and champion
+``targetable``."""
 from __future__ import annotations
 
 from typing import Any
@@ -10,6 +11,7 @@ from ... import champions as KC
 from ... import economy as E
 from ... import mechanics as M
 from ...core import types as W
+from ...items import inventory as I
 from ...jungle import camps as J
 from ...lane import ai as LA
 from ...map import dynamic_terrain as DTR
@@ -20,8 +22,8 @@ from ..config import N_CHAMPIONS, WorldConfig
 from ..scratch import TickScratch
 from ..state import AttackMove, ModernOrders, ModernState, QueuedCast, no_queued_cast
 
-CAST_BUFFER_S = 0.5          # casts during a lockout / just before a cooldown ends are held this long (U: guess)
-CAST_RANGE_SLACK = 5.0       # walk-in casting stops this far inside the spell's range
+CAST_BUFFER_S = 0.5          # a blocked cast is held this long (U: guess)
+CAST_RANGE_SLACK = 5.0       # walk-in casting stops this far inside the range
 
 
 def spawn_minions(s: ModernState, cfg: WorldConfig, now) -> ModernState:
@@ -38,7 +40,7 @@ def spawn_minions(s: ModernState, cfg: WorldConfig, now) -> ModernState:
     if cfg.jungle is not None:
         jst, w = J.spawn_step(s.jungle, cfg.jungle, now=now, champion_level=s.econ.level)
         s = U.write_units(s, J.unit_write(cfg.jungle, w, cfg.n_units), now)
-        s = s._replace(jungle=J.latch_pets(jst, V.owned_items(s.champ.inventory)))
+        s = s._replace(jungle=J.latch_pets(jst, I.owned_counts(s.champ.inventory)))
     return s
 
 
@@ -61,18 +63,13 @@ def skill_up(s: ModernState, cfg: WorldConfig, orders: ModernOrders) -> Any:
 
 
 def queue_casts(s: ModernState, cfg: WorldConfig, orders: ModernOrders, champ, seen, new_order, now):
-    """Walk-in and buffered casting (wiki Targeting / Cast time; MECHANICS_AUDIT #4/#9).
-
-    Returns ``(orders, queued, chase, walked_in)``: ``orders`` with this tick's cast (an incoming cast
-    that can go now, else a queued one that became possible), the queue to keep, champions walking
-    into range of a queued target, and champions whose walk-in cast fired this tick (ends the walk). A move, attack,
-    stop or attack-move order clears the queue; so does a new cast (it replaces it)."""
+    """Walk-in and buffered casting (wiki Targeting / Cast time; MECHANICS_AUDIT #4/#9): returns ``(orders with
+    this tick's cast, queue, walking into range, walk-in cast fired)``. Any new order clears the queue."""
     c, n = N_CHAMPIONS, cfg.n_units
     ar = jnp.arange(c)
     rng = KC.unit_target_ranges(cfg.champion_ids)                                   # (C, 4)
 
     def needs(slot, target):
-        """(far, blocked) for a cast of ``slot`` at ``target`` now."""
         sl = jnp.clip(slot, 0, 3)
         r = rng[ar, sl]
         t = jnp.clip(target, 0, n - 1)
@@ -99,25 +96,23 @@ def queue_casts(s: ModernState, cfg: WorldConfig, orders: ModernOrders, champ, s
     go_now = incoming & ~hold_in
     orders = orders._replace(
         cast_slot=jnp.where(go_now, orders.cast_slot, jnp.where(fire, q.slot, -1)).astype(jnp.int32),
-        cast_target=jnp.where(go_now, orders.cast_target, jnp.where(fire, q.target, orders.cast_target)).astype(jnp.int32),
+        cast_target=jnp.where(go_now, orders.cast_target,
+                              jnp.where(fire, q.target, orders.cast_target)).astype(jnp.int32),
         cast_x=jnp.where(go_now, orders.cast_x, jnp.where(fire, q.x, orders.cast_x)),
         cast_y=jnp.where(go_now, orders.cast_y, jnp.where(fire, q.y, orders.cast_y)))
     chase = (q.slot >= 0) & far_q & ~fire
-    walked_in = fire & jnp.isinf(q.until)                       # a walk-in cast arrived and fired
+    walked_in = fire & jnp.isinf(q.until)
     q = QueuedCast(*(jnp.where(fire, b, a) for a, b in zip(q, no_queued_cast(c))))
     return orders, q, chase, walked_in
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
-           sc: TickScratch) -> tuple[ModernState, ModernOrders, TickScratch]:
-    """1. INPUT: fog-filtered orders, attack-move, stasis, skill points, spawns, this tick's terrain.
-
-    Writes ``s.champ`` (orders, ranks), ``s.amove``, spawns, champion ``targetable``; returns the
-    fog-filtered orders."""
+        sc: TickScratch) -> tuple[ModernState, ModernOrders, TickScratch]:
+    """Also returns the fog-filtered orders."""
     c, n = N_CHAMPIONS, cfg.n_units
     now = sc.now
     champ = s.champ
-    # Fog: a champion can only target what its team sees; a target that enters fog is dropped.
+    # A champion can only target what its team sees.
     vis_c = s.visible[s.team[:c]]                                                     # (C, N)
     seen = lambda u: (u >= 0) & vis_c[jnp.arange(c), jnp.clip(u, 0, n - 1)]          # noqa: E731
     orders = orders._replace(attack=jnp.where(seen(orders.attack), orders.attack, -1),
@@ -125,7 +120,6 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
                              summoner_target=jnp.where(seen(orders.summoner_target), orders.summoner_target, -1))
     zb = jnp.zeros((c,), bool)
     am_req = zb if orders.attack_move is None else orders.attack_move
-    # Item stasis (Zhonya's / Stopwatch): no orders take effect while in stasis (actives).
     in_stasis = now < s.combat.items.actives.stasis_until
     am_req = am_req & ~in_stasis
     kept = jnp.where(seen(champ.attack_order), champ.attack_order, -1)
@@ -133,11 +127,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     attack_order = jnp.where(orders.stop | orders.move | am_req, -1, jnp.where(orders.attack >= 0, orders.attack, kept))
     moving = jnp.where(orders.stop | (orders.attack >= 0) | am_req, False, orders.move | champ.moving)
     goal = jnp.where(orders.move[:, None], jnp.stack([orders.move_x, orders.move_y], -1), champ.move_goal)
-    # A live attack target that enters fog: walk to where it was last seen (wiki Basic attack;
-    # MECHANICS_AUDIT #10) instead of standing still. The order itself is dropped.
+    # A live target that enters fog: walk to where it was last seen (MECHANICS_AUDIT #10).
     t_old = jnp.clip(champ.attack_order, 0, n - 1)
     lost = (champ.attack_order >= 0) & ~seen(champ.attack_order) & s.alive[t_old] & ~new_order
-    # Remember where this tick's target is seen (including a target just ordered), for later ticks.
     t_now = jnp.clip(attack_order, 0, n - 1)
     seen_at = jnp.where(seen(attack_order)[:, None], jnp.stack([s.x[t_now], s.y[t_now]], -1),
                         champ.target_seen_at)
@@ -145,7 +137,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     goal = jnp.where(lost[:, None], champ.target_seen_at, goal)
     orders, queued, cast_chase, cast_fired = queue_casts(s, cfg, orders, champ, seen, new_order, now)
     moving = jnp.where(cast_chase, True, jnp.where(cast_fired, False, moving))
-    attack_order = jnp.where(cast_chase, -1, attack_order)          # "move to cast" replaces an attack order
+    attack_order = jnp.where(cast_chase, -1, attack_order)
     t_q = jnp.clip(queued.target, 0, n - 1)
     goal = jnp.where(cast_chase[:, None], jnp.stack([s.x[t_q], s.y[t_q]], -1), goal)
     amove = s.amove
@@ -161,7 +153,6 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     stasis_n = jnp.zeros((n,), bool).at[:c].set(in_stasis)
     s = s._replace(targetable=s.targetable.at[:c].set(~in_stasis))
     caps = {k: (v & ~stasis_n if k.startswith("can_") else v) for k, v in caps.items()}
-    # Terrain this tick: Elemental Rift / Baron-pit variant, then destroyed-structure pads (policy).
     terrain = cfg.terrain
     if cfg.rift is not None:
         terrain = terrain_pair(cfg.rift, s.terrain_variant)

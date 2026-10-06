@@ -1,13 +1,6 @@
-"""Whole-world rule symptoms after the MODERN-020 integration (``world.tick`` with every system).
-
-Each test drives the real compiled tick and checks something a player would
-notice: waves walk down all three lanes, camps appear on the clock, a ward in
-brush shows the enemy hiding there, killing a camp pays its owner, attack-move
-picks up an enemy on the way, minion trades are symmetric between the teams,
-and a destroyed Nexus ends (freezes) the game. The world (Jax runs Overgrowth)
-and its one compiled tick program come from ``tests.world_harness``, shared
-with the other full-tick modules (several minutes to compile on CPU).
-"""
+"""Whole-world rule symptoms through the real compiled tick (``world_harness``): waves in every lane, camps on the
+clock, wards, camp rewards, attack-move, symmetric minion trades, Overgrowth, Stridebreaker, collision and routes,
+walk-in casting, fog chasing, Minion Pushing and the Nexus game over."""
 from functools import lru_cache
 
 import jax.numpy as jnp
@@ -105,8 +98,7 @@ def test_killing_a_camp_pays_the_killer():
 def test_attack_move_acquires_an_enemy_on_the_way():
     cfg, step, _, refresh = world()
     s = MS.init_state(cfg)
-    lane = np.asarray(cfg.lane_path)
-    mx, my = lane[len(lane) // 2]
+    mx, my = H.lane_mid(cfg)
     s = refresh(s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 300.0), y=s.y.at[0].set(my).at[1].set(my),
                            t=jnp.float32(30.0)))
     hp0 = float(s.hp[1])
@@ -151,8 +143,7 @@ def test_stridebreaker_cast_walks_but_cannot_attack_and_its_slow_lands_in_cc():
     from lanerl_jax.modern.items import inventory as I
     cfg, step, _, refresh = world()
     s = MS.init_state(cfg)
-    lane = np.asarray(cfg.lane_path)
-    mx, my = lane[len(lane) // 2]
+    mx, my = H.lane_mid(cfg)
     inv = I.inventory_from_ids([[1055, 2003, 6631], [1055, 2003]])
     s = refresh(s._replace(x=s.x.at[0].set(mx).at[1].set(mx + 150.0), y=s.y.at[0].set(my).at[1].set(my + 150.0),
                            t=jnp.float32(30.0), champ=s.champ._replace(inventory=inv)))
@@ -181,11 +172,8 @@ def test_slowed_minions_walk_slower():
 
 
 def test_both_champions_walk_from_base_to_the_top_lane():
-    """Routes from both fountains reach the lane (red used to stay pinned at its top inhibitor, whose
-    collision circle reached past the navgrid pad the routes are baked around)."""
     cfg, step, run, _ = world()
-    lane = np.asarray(cfg.lane_path)
-    goal = lane[len(lane) // 2]
+    goal = H.lane_mid(cfg)
     o = orders(move=[True, True], move_x=[goal[0]] * 2, move_y=[goal[1]] * 2)
     s, _ = step(MS.init_state(cfg), o)
     s, _ = run(s, MS.no_orders(), 60 * CHUNK)
@@ -194,7 +182,6 @@ def test_both_champions_walk_from_base_to_the_top_lane():
 
 
 def test_a_dash_keeps_moving_after_its_start_tick():
-    """Dash state is kept across ticks (it used to be dropped after the start tick)."""
     cfg, step, run, _ = world()
     s = MS.init_state(cfg)
     x0, y0 = float(s.x[0]), float(s.y[0])
@@ -227,8 +214,7 @@ def _arc(lane):
 
 
 def test_champion_walks_back_through_its_own_wave_in_bounded_time():
-    """Unit collision (collision): Garen walking toward base straight through his oncoming top
-    wave steers around the minions instead of being held by them."""
+    """Garen walking to base straight through his oncoming wave steers around it (COLLISION.md)."""
     from lanerl_jax.modern.lane import ai as LA
     cfg, step, run, refresh = world()
     s, _ = state_at_95s()
@@ -275,7 +261,7 @@ def test_top_waves_meet_and_fight_near_the_middle():
 
 
 def test_a_move_order_ends_on_arrival():
-    """MECHANICS_AUDIT #2: ``moving`` clears at the goal (it used to stay set, blocking idle auto-attack)."""
+    """MECHANICS_AUDIT #2."""
     cfg, step, run, _ = world()
     s = MS.init_state(cfg)
     gx, gy = float(s.x[0]) + 300.0, float(s.y[0]) + 300.0
@@ -286,7 +272,7 @@ def test_a_move_order_ends_on_arrival():
 
 
 def test_an_out_of_range_jax_q_walks_into_range_and_casts():
-    """MECHANICS_AUDIT #4: a unit-targeted cast beyond range walks in, then casts (it used to fail)."""
+    """MECHANICS_AUDIT #4."""
     cfg, step, run, refresh = world()
     s = MS.init_state(cfg)
     s = refresh(s._replace(x=s.x.at[0].set(BRUSH_EDGE[0]).at[1].set(BRUSH_EDGE[0] + 1100.0),
@@ -300,7 +286,7 @@ def test_an_out_of_range_jax_q_walks_into_range_and_casts():
 
 
 def test_an_attack_target_lost_to_fog_is_chased_to_where_it_was_seen():
-    """MECHANICS_AUDIT #10: walk to the last seen position instead of standing still."""
+    """MECHANICS_AUDIT #10."""
     cfg, step, run, refresh = world()
     s = MS.init_state(cfg)
     seen_at = BRUSH_EDGE                                       # just outside the lane brush

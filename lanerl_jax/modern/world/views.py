@@ -1,6 +1,5 @@
-"""Read-only views of a ``ModernState`` shared by the tick phases and the observation:
-unit/kit/item contexts, composed champion stats, fog (``visibility``), terrain lookups (brush,
-river), slot resets and small derived quantities. Nothing here writes the state."""
+"""Read-only views of a ``ModernState`` shared by the phases and the observation: kit/item contexts, composed
+champion stats, fog (``visibility``) and terrain lookups (brush, river)."""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
@@ -31,24 +30,16 @@ if TYPE_CHECKING:
 
 def shard_stats(cfg: WorldConfig, level) -> ItemStats:
     """Static shard stats per champion (adaptive left unresolved for STAT.50)."""
-    parts = []
-    for c, lo in enumerate(cfg.loadouts):
-        if isinstance(lo.rune_page, RunePage):
-            sh = stat_shard_stats(lo.rune_page.shards, level=level[c], adaptive_to_ad=None)
-        else:
-            sh = zero_stats(())
-        parts.append(sh)
+    parts = [stat_shard_stats(lo.rune_page.shards, level=level[c], adaptive_to_ad=None)
+             if isinstance(lo.rune_page, RunePage) else zero_stats(()) for c, lo in enumerate(cfg.loadouts)]
     return ItemStats(*(jnp.stack([jnp.asarray(getattr(p, k), jnp.float32) for p in parts])
                        for k in ItemStats._fields))
 
 
 def visibility(cfg: WorldConfig, x, y, kind, sub, team, alive, reveal, now, *, wards=None, level=None,
                 variant=None, jungle=None):
-    """``(visible (2, N), sight (C, N))``: team visibility and each champion's own sight (runes);
-    everything live is visible when ``cfg.vision`` is None.
-
-    Wards (``wards``) add sight, stealth and true sight; ``variant`` selects the Elemental
-    Rift / Baron-pit brush layout."""
+    """``(visible (2, N), sight (C, N))``: team visibility and each champion's own sight; everything live is
+    visible when ``cfg.vision`` is None. ``variant`` selects the Rift / Baron-pit brush layout."""
     n = x.shape[0]
     if cfg.vision is None:
         live = alive & (kind != W.KIND_NONE)
@@ -72,22 +63,20 @@ def visibility(cfg: WorldConfig, x, y, kind, sub, team, alive, reveal, now, *, w
 
 
 def kit_attack_target(kit_out) -> Any:
-    """(C,) unit a kit asks the champion to attack (Jax Q landing on a champion), -1 none."""
+    """(C,) unit a kit asks the champion to attack (Jax Q), -1 none."""
     at = kit_out.attack_target
     return jnp.full((N_CHAMPIONS,), -1, jnp.int32) if at is None else at
 
 
 def refresh_visibility(s: ModernState, cfg: WorldConfig) -> ModernState:
-    """Recompute ``visible``/``sight`` from the current positions (after editing a state by hand,
-    e.g. scenario resets); ``step`` does this itself at the end of every tick."""
+    """Recompute ``visible``/``sight`` after editing a state by hand (``step`` does this every tick)."""
     vis, sight = visibility(cfg, s.x, s.y, s.kind, s.sub, s.team, s.alive, s.reveal, s.t, wards=s.wards,
                              level=s.econ.level, variant=s.terrain_variant, jungle=s.jungle)
     return s._replace(visible=vis, sight=sight)
 
 
 def monster_buff_stats(s: ModernState, cfg: WorldConfig, st0: ChampionStats, now) -> ItemStats:
-    """Static bonuses from jungle buffs (Blue/Red/Scuttle shrine) and team objective buffs
-    (drake stacks and soul, Hand of Baron)."""
+    """Static bonuses from jungle buffs (Blue, Red, shrine) and team objective buffs (drakes, soul, Baron)."""
     c = N_CHAMPIONS
     parts = []
     if cfg.jungle is not None:
@@ -107,8 +96,7 @@ def monster_buff_stats(s: ModernState, cfg: WorldConfig, st0: ChampionStats, now
 
 
 def in_brush(cfg: WorldConfig, x, y, variant) -> Any:
-    """(C,) bool: the position is a brush cell (vision-grid flag bit 0x1, Rift variant aware); False
-    without fog (``cfg.vision`` None: no grid in the config)."""
+    """(C,) bool: a brush cell (vision-grid flag bit 0x1, Rift variant aware); False without fog."""
     if cfg.vision is None:
         return jnp.zeros(x.shape, bool)
     grid = cfg.vision
@@ -144,8 +132,7 @@ def static_stats(s: ModernState, cfg: WorldConfig, caps: dict, now, dt) -> tuple
 
 
 def champion_stats(s: ModernState, cfg: WorldConfig) -> ChampionStats:
-    """Displayed champion stats for the current state (items, shards, monster buffs, kit, last
-    tick's dynamic stats and slows): the stats the tick uses for casts (observation helper)."""
+    """Champion stats of the current state as the tick uses them for casts (observation helper)."""
     caps = M.capabilities(s.cc, s.t)
     static, _ = static_stats(s, cfg, caps, s.t, cfg.dt)
     return compose(cfg.champion_base, s.econ.level, combine_stats(static, s.champ.dyn),
@@ -184,10 +171,6 @@ def item_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, now, dt) -> Ct
                attack_windup=st.attack_windup, in_combat=(now - s.combat.clocks.last_combat) < 5.0,
                in_shop=I.in_shop_area(s.x[:c], s.y[:c], s.team[:c], ~s.alive[:c]),
                base_mana=cfg.champion_base.base_mana, attack_range=st.attack_range)
-
-
-def owned_items(inv) -> Any:
-    return I.owned_counts(inv)
 
 
 def decimal_team_level(s: ModernState) -> Any:

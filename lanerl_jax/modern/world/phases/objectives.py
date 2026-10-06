@@ -1,4 +1,5 @@
-"""Phase 2b, OBJECTIVES: epic monsters (``jungle.objectives``) and their slot writes."""
+"""Phase 2b, OBJECTIVES: epic monsters (``jungle.objectives``): spawns, abilities, Rift transformation.
+Writes ``s.obj``, the epic slots and ``s.terrain_variant``."""
 from __future__ import annotations
 
 import jax
@@ -26,22 +27,19 @@ def apply_writes(s: ModernState, so, cfg: WorldConfig) -> ModernState:
     return s._replace(hp=jnp.where(s.alive, hp, s.hp), terrain_variant=jnp.asarray(so.terrain_variant, jnp.int32))
 
 
-def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
-                sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """2b. OBJECTIVES: epic monsters (spawns, abilities, Rift transformation). Writes ``s.obj`` and the
-    epic slots."""
+def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
     if cfg.objectives is None:
         return s, sc._replace(so=None, cinfo=None)
     c, dt = N_CHAMPIONS, cfg.dt
-    now, key, champ, st_static = sc.now, sc.key, sc.champ, sc.st_static
+    key, st_static = sc.key, sc.st_static
     level = s.econ.level
     cinfo = OBJ.ChampInfo(level=level, bonus_ad=st_static.bonus_ad, ap=st_static.ap,
                           bonus_hp=st_static.max_hp - st_static.base_hp, max_hp=s.max_hp[:c],
                           max_mana=st_static.max_mana, adaptive_physical=cfg.adaptive_physical)
     k_obj, key = jax.random.split(key)
-    obj, so = OBJ.objectives_step(s.obj, cfg.objectives, U.units_view(s), now=now, dt=jnp.float32(dt),
+    obj, so = OBJ.objectives_step(s.obj, cfg.objectives, U.units_view(s), now=sc.now, dt=jnp.float32(dt),
                                   levels=level, damage_matrix=s.prev.damage_matrix, champ=cinfo,
-                                  last_damaged=champ.last_damaged,
+                                  last_damaged=sc.champ.last_damaged,
                                   ult_cast=s.champ.last_cast[:, 3] >= s.t - 1e-6, key=k_obj)
     s = apply_writes(s._replace(obj=obj), so, cfg)
     return s, sc._replace(so=so, cinfo=cinfo, key=key)

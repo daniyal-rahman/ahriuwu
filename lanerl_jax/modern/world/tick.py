@@ -1,26 +1,8 @@
-"""Patch-26.19 modern world tick: every modern system composed in one step.
+"""``step``: one 30 Hz tick of the 26.19 world (DAMAGE_AND_STATS §1.3).
 
-``step(state, orders, cfg)`` advances the modern Summoner's Rift world (all three lanes,
-jungle, objectives, fog) by ``cfg.dt`` (30 Hz default, DAMAGE_AND_STATS §1.3). Subsystems
-are pure: they read views (``world/views.py``: ``units_view``, ``KitCtx``, item ``Ctx``) and
-return packets, CC, effects and slot writes; only the phases below write ``ModernState``.
-
-Tick order: ``step`` runs one phase module per row (``world/phases/<name>.py``, each with
-``run``), passing a ``TickScratch`` (``world/scratch.py``: the tick's data-flow map;
-docs/modern/WORLD_IMPLEMENTATION.md has the full table and the one-tick lags):
-  1. inputs      fog-filtered orders, walk-in/buffered casts, attack-move, skill points, spawns, terrain
-  2. stats       static stats (items, shards, monster buffs, kit); STAT.70 max-HP sync
-  2b. objectives epic monsters: spawns, abilities, Rift transformation
-  3. casts       shop; kit casts and periodic effects; summoner spells; Smite
-  4. ai          turret/minion/monster targets; champion orders, idle acquisition, attack-move
-  5. move        route movement, dashes, Flash, Teleport; collision
-  6. attack      attack machine, crits, attack packets, missiles, kit on-attack/on-hit
-  7. damage      every packet -> combat_tick (items, runes, damage pipeline)
-  8. cc_heal     heals, shields and CC (tenacity, slow resist)
-  9. death       kills, plates, camp/objective rewards -> economy_step
- 10. timers      cooldowns, mana/HP regen, fountain, inventory outputs, wards, terrain ejection
- 11. fog         attack reveal, then next tick's visibility
-     commit      next state and TickEvents; ``step`` then applies the game-over freeze and dtypes
+Runs ``inputs`` then ``PHASES`` (``world/phases/<name>.py``), passing a ``TickScratch``, then ``commit``.
+Only the phases write ``ModernState``; subsystems read views and return packets, CC, effects and slot writes.
+Phase table and one-tick lags: docs/modern/WORLD_IMPLEMENTATION.md "Tick order".
 """
 from __future__ import annotations
 
@@ -47,9 +29,8 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     for phase in PHASES:
         s, sc = phase.run(s, orders, cfg, sc)
     new, events = commit(s, cfg, sc)
-    # Game over (Nexus destroyed): the world freezes on the final state.
-    new = jax.tree.map(lambda a, b: jnp.where(s0.game_over, a, b), s0, new)
-    # Keep the carry stable under scan: subsystems may return wider/narrower dtypes.
+    new = jax.tree.map(lambda a, b: jnp.where(s0.game_over, a, b), s0, new)        # a fallen Nexus freezes the world
+    # Cast back to the incoming dtypes so scan carries stay stable.
     return jax.tree.map(lambda a, b: jnp.asarray(b, a.dtype) if hasattr(a, "dtype") else b, s0, new), events
 
 
@@ -61,7 +42,7 @@ def commit(s: ModernState, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernSta
     events = TickEvents(out.report, out.follow_up, sc.eco, sc.plates, sc.launched, out.packet_overflow, sc.m_over,
                         sc.shop_code)
     result = LA.game_result(sc.towers)
-    # Champion rows of the unit columns mirror this tick's stats (read through WorldUnits).
+    # Champion rows of the unit columns mirror this tick's stats.
     champ_cols = dict(attack_damage=s.attack_damage.at[:c].set(st.base_ad + st.bonus_ad),
                       armor=s.armor.at[:c].set(st.base_armor + st.bonus_armor),
                       magic_resist=s.magic_resist.at[:c].set(st.base_mr + st.bonus_mr),

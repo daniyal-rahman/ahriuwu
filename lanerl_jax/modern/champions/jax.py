@@ -1,35 +1,5 @@
-"""Jax (24) 26.19 kit on the modern event/packet contract.
-
-Numbers come from the pinned 16.19 client JSON (``modern/data/26.19/champions``); rules
-from the client spell records/calculations, the wiki ability data and the
-26.1-26.19 patch notes (26.12: Q 50 mana, E 4% max HP; 26.1: level-19 passive
-breakpoint). Spec table with evidence levels: docs/modern/CHAMPIONS.md.
-
-* Relentless Assault: every launched attack grants a stack (max 8, 2.5 s,
-  refreshed); on expiry one stack falls off every ``FallOffRate`` 0.35 s.
-  ``0.05 + 0.015`` per breakpoint at levels 4/7/10/13/16/19 bonus AS per stack.
-* Q: leap to a unit (ally or enemy, wards included, not structures) within 700
-  center-to-edge at 1400 units/s; not castable while rooted. On landing on the
-  same living enemy (not a ward), ``Damage + 1.0 * bonus AD`` physical, plus W's
-  damage if W is up (consumes W); an enemy champion target becomes the attack
-  order. Cooldown at cast.
-* W: 10 s empowerment (+50 range, attack reset, uncancellable windup); next
-  landed attack or Q deals ``Damage + 0.6 * AP`` magic (x0.5 vs structures) as a
-  separate instance. Cooldown starts on consumption, expiry or death.
-* E: 2 s Evasion: dodges non-turret basic attacks, takes 25% less AoE damage;
-  recast after 1 s or expiry releases ``(BaseDamage + 0.7 * AP + 4% target max
-  HP) * (1 + 0.2 * min(dodges, 5))`` magic to enemies within 375
-  (center-to-edge; %HP part capped at 9000 vs monsters) and a 1 s stun on every
-  enemy hit (champions, minions, monsters). Cooldown at release; death ends it
-  without damage. Mana at start only.
-* R: 0.25 s cast (can move, no attacks), then ``SwingDamageBase + 1.0 * AP``
-  magic within 375; only if a champion was hit, 8 s of ``BaseResists + 0.4
-  bonus AD + (champions - 1) * (ResistsPerExtraTarget + 0.1 bonus AD)`` armor
-  and ``MRMult`` 0.6x that MR. Passive: landed attacks build stacks (max 2,
-  2.5 s); the attack landing at 2 stacks (1 under the active) consumes them for
-  ``PassiveBaseDamage + 0.6 * AP`` magic (x0.5 vs structures) and has an
-  uncancellable windup; against wards it triggers without being consumed.
-"""
+"""Jax (24), 26.19. Rules JAX.* and their evidence: docs/modern/CHAMPIONS.md; numbers from the pinned client
+JSON (``modern/data/26.19/champions``)."""
 from __future__ import annotations
 
 from typing import Any, NamedTuple
@@ -334,7 +304,8 @@ def stats(state: State, kctx) -> ItemStats:
 def defense(state: State, kctx) -> KitDefense:
     c = kctx.unit.shape[0]
     on = dodging(state, kctx)
-    return KitDefense(jnp.ones((c,), jnp.float32), on, f32(jnp.where(on, E_AOE_MULT, 1.0)), jnp.zeros((c,), jnp.float32))
+    return KitDefense(jnp.ones((c,), jnp.float32), on, f32(jnp.where(on, E_AOE_MULT, 1.0)),
+                      jnp.zeros((c,), jnp.float32))
 
 
 def attack_mods(state: State, kctx) -> KitAttackMods:

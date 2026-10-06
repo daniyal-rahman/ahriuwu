@@ -1,4 +1,5 @@
-"""Phase 7, DAMAGE: every packet of the tick through ``combat_tick`` (items, runes, damage pipeline)."""
+"""Phase 7, DAMAGE: every packet of the tick through ``combat_tick`` (items, runes, damage pipeline), then kit
+on-damage."""
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -8,6 +9,7 @@ from ...champions import summoners as S
 from ...combat import combat_tick
 from ...core import damage as D
 from ...core import types as W
+from ...items import inventory as I
 from ...items.effects import actives as A
 from ...items.effects.core import CC, Cast
 from ...jungle import objectives as OBJ
@@ -21,11 +23,10 @@ from ..state import ModernOrders, ModernState
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """7. DAMAGE: every packet -> combat_tick (items, runes, damage pipeline); kit on-damage."""
     c, n = N_CHAMPIONS, cfg.n_units
     now, caps, champ, units, kits, kctx, ictx = sc.now, sc.caps, sc.champ, sc.units, sc.kits, sc.kctx, sc.ictx
-    so, sm, jfx, kit_all, s_eff, s_out, towers = sc.so, sc.sm, sc.jfx, sc.kit_all, sc.s_eff, sc.s_out, sc.towers
-    st_static, att, reset, in_stasis = sc.st_static, sc.att, sc.reset, sc.in_stasis
+    so, sm, jfx, kit_all, s_out, towers = sc.so, sc.sm, sc.jfx, sc.kit_all, sc.s_out, sc.towers
+    st_static, in_stasis = sc.st_static, sc.in_stasis
     more = list(sc.extra_atk)
     if sm is not None:
         more.append(sm.packets)
@@ -33,7 +34,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         more.append(jfx.packets)
     if so is not None:
         more.append(so.packets)
-    base = D.concat_packets(sc.direct, sc.arrived, sc.og_pk, kit_all.packets, s_eff.packets, *more)
+    base = D.concat_packets(sc.direct, sc.arrived, sc.og_pk, kit_all.packets, sc.s_eff.packets, *more)
     if so is not None:
         base = OBJ.objectives_packet_mods(s.obj, cfg.objectives, base, units, now=now)
     kdef = K.defense(kits, kctx)
@@ -56,11 +57,10 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                                                                 dealt_reduction=s_out.exhaust_reduction))
     cc_now = kit_all.cc
     cc_items = CC(cc_now.slow > 0, (cc_now.stun > 0) | (cc_now.root > 0) | (cc_now.knockup > 0))
-    # Overgrowth (U-15): deaths last tick with own sight latched while the victim was alive
-    # (``sight`` is end-of-tick and drops dead units, so it cannot show the death itself).
+    # Overgrowth (U-15): last tick's deaths, with sight latched while the victim lived.
     deaths_prev = jnp.any(s.prev.death_seen, axis=0)
-    ev = rune_events(ictx, n, game_time=now, attack_started=sc.started[:c], attack_start_target=att.target[:c],
-                     attack_cancelled=sc.cancelled[:c], attack_reset=reset[:c], cast_id=kit_all.cast_id,
+    ev = rune_events(ictx, n, game_time=now, attack_started=sc.started[:c], attack_start_target=sc.att.target[:c],
+                     attack_cancelled=sc.cancelled[:c], attack_reset=sc.reset[:c], cast_id=kit_all.cast_id,
                      cc_duration=jnp.maximum(cc_now.stun, cc_now.root), impaired=caps["impaired"],
                      movement_impaired=caps["movement_impaired"],
                      impaired_by_holder=(cc_now.slow > 0) | (cc_now.stun > 0) | (cc_now.root > 0),
@@ -75,10 +75,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                      epic_takedown=s.prev.epic, large_monster_kill=s.prev.large,
                      in_river=V.in_river(cfg, s.x[:c], s.y[:c]))
     items0 = s.combat.items
-    items0 = items0._replace(actives=A.with_aim(items0.actives, orders.cast_target,
-                                                            orders.cast_x, orders.cast_y))
+    items0 = items0._replace(actives=A.with_aim(items0.actives, orders.cast_target, orders.cast_x, orders.cast_y))
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
-    out = combat_tick(s.combat._replace(items=items0), V.owned_items(champ.inventory), cfg.rune_pages, ictx,
+    out = combat_tick(s.combat._replace(items=items0), I.owned_counts(champ.inventory), cfg.rune_pages, ictx,
                       U.item_units(s), attack=sc.attack,
                       cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,

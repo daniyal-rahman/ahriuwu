@@ -1,20 +1,9 @@
-"""One shared modern world and ONE compiled tick program for the full-tick test modules.
+"""One shared world and ONE compiled tick program for the full-tick test modules.
 
-Compiling ``world.tick.step`` takes minutes and ~8 GB on CPU, and the config
-is closed over (its arrays become program constants), so every distinct
-``jit``/scan -- a different closure, a different ``length=``, a different rune
-page -- is another full compile. ``test_step``, ``test_world_rules``,
-``test_vision`` and ``obs/tests/test_obs`` therefore share:
-
-* ``world()``: one config (Garen default page; Jax Precision + Resolve with
-  Second Wind / Overgrowth, which ``test_world_rules`` needs);
-* ``advance(s, orders, ticks)``: one jitted ``fori_loop`` whose tick count is a
-  traced argument, so a single step and a 3000-tick run are the same program.
-  ``step``/``run`` are thin wrappers with the old call shapes;
-* ``refresh(s)``: one jitted ``refresh_visibility``.
-
-Only what needs a genuinely different program builds one (``fast_world`` for
-``fog="fast"``, the observation builder/decoder in ``test_obs``).
+Compiling ``step`` takes minutes and ~8 GB on CPU, and the config is closed over, so every distinct jit/scan is
+another full compile. ``test_step``, ``test_world_rules``, ``test_vision`` and ``obs/tests/test_obs`` share
+``world()`` (Jax runs Precision + Resolve with Overgrowth), ``advance`` (one jitted ``fori_loop`` whose tick count
+is traced; ``step``/``run`` wrap it) and ``refresh``. ``fast_world`` is the ``fog="fast"`` variant.
 """
 from __future__ import annotations
 
@@ -86,6 +75,12 @@ def fast_world():
     from lanerl_jax.modern import world as MS
     fast = MW.build_config(world().loadouts, fog="fast")
     return fast, jax.jit(lambda s: MS.refresh_visibility(s, fast))
+
+
+def lane_mid(cfg):
+    """(x, y) of the top-lane midpoint."""
+    lane = cfg.lane_path
+    return tuple(float(v) for v in lane[len(lane) // 2])
 
 
 def orders(**kw):

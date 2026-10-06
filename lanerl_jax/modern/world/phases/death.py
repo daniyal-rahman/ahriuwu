@@ -1,4 +1,5 @@
-"""Phase 9, DEATH: deaths, plates, camp and objective rewards, the economy step, kit takedowns."""
+"""Phase 9, DEATH: deaths, plates, camp and objective rewards, the economy step, kit takedowns. Writes
+``s.obj``. Reads start-of-tick ``s.cc``/``caps`` for the recall interrupt."""
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -18,13 +19,9 @@ from ..state import ModernOrders, ModernState
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """9. DEATH: kills, plates, camp/objective rewards -> economy_step; kit on-takedown. Writes ``s.obj``.
-
-    Reads start-of-tick ``s.cc``/``caps`` for the recall interrupt (``sc.cc`` is this tick's CC)."""
     c, n = N_CHAMPIONS, cfg.n_units
     now, caps, champ, units, st, out, so = sc.now, sc.caps, sc.champ, sc.units, sc.st, sc.out, sc.so
     hp, max_hp, towers, jungle, lane_ai, kits = sc.hp, sc.max_hp, sc.towers, sc.jungle, sc.lane_ai, sc.kits
-    s_out, s_eff = sc.s_out, sc.s_eff
     level = s.econ.level
     x, y = s.x, s.y                                                   # MOVE's positions
     rp = D.concat_packets(out.report.packets, out.follow_up.packets)
@@ -34,13 +31,13 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         jnp.where(rp.valid & rr_killed, rp.src, -1).astype(jnp.int32))
     dmg = jnp.zeros((n, n), bool).at[jnp.clip(rp.src, 0, n - 1), jnp.clip(rp.dst, 0, n - 1)].max(rp.valid)
     died = s.alive & (hp <= 0.0)
-    death_seen = died[None, :] & s.sight                          # start-of-tick sight, victim alive (Overgrowth)
+    death_seen = died[None, :] & s.sight                          # start-of-tick sight, victim alive
     struct = W.is_structure(s.kind)
     towers, plates = LA.structure_damage_events(towers, s.hp, jnp.where(struct, hp, s.hp), now=now)
     minion_died = died & (s.kind == W.KIND_MINION)
     last_hitter = jnp.where(killer < c, killer, -1)
-    md = E.MinionDeaths(valid=minion_died, x=s.x, y=s.y, team=s.team, gold=s.bounty_gold, xp=s.bounty_xp, level=s.bounty_level,
-                        last_hitter=last_hitter, unit=jnp.arange(n, dtype=jnp.int32))
+    md = E.MinionDeaths(valid=minion_died, x=s.x, y=s.y, team=s.team, gold=s.bounty_gold, xp=s.bounty_xp,
+                        level=s.bounty_level, last_hitter=last_hitter, unit=jnp.arange(n, dtype=jnp.int32))
     sv = plates.plates > 0
     sev = E.StructureEvents(valid=sv | plates.destroyed, unit=jnp.arange(n, dtype=jnp.int32), x=s.x, y=s.y,
                             team=s.team, local_gold=plates.plate_gold + plates.first_turret_gold,
@@ -48,7 +45,6 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
                             in_top_lane=cfg.unit_lane == 2, is_structure=struct)
     took_health = jnp.zeros((n,), bool).at[jnp.clip(rp.dst, 0, n - 1)].max(rp.valid & (rr_loss > 0))
     in_f = E.in_fountain(x[:c], y[:c], cfg.fountain[s.team[:c], 0], cfg.fountain[s.team[:c], 1])
-    # Monster and objective deaths: rewards to the killing champion / team (not MinionDeaths).
     dec = E.decimal_level(s.econ.xp, jnp.where(s.econ.quest.complete, E.QUEST_LEVEL_CAP, E.LEVEL_CAP))
     xg = jnp.zeros((c,), jnp.float32)
     gg = jnp.zeros((c,), jnp.float32)
@@ -70,8 +66,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         s = s._replace(obj=obj)
         gg, xg = gg + orw.gold, xg + orw.xp
         epic, large = epic + orw.epic_takedown, large + orw.large_monster_kill
-        # Epic takedowns for K.on_takedown / item+rune hooks: the killing team's champions (the
-        # participation window is internal to jungle.objectives; exact with one champion per team).
+        # Epic takedowns credit the killing team's champions (exact with one champion per team).
         esl = cfg.objectives.slots
         o_td = orw.killed[None, :] & (orw.killer_team[None, :] == s.team[:c][:, None])
         killed_mon = killed_mon.at[:, esl].set(killed_mon[:, esl] | o_td)
@@ -92,16 +87,17 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
         last_champion_combat=out.state.clocks.last_champion_combat, in_fountain=in_f,
         in_quest_lane=in_quest, recall_request=orders.recall,
         cancel_action=orders.move | (orders.attack >= 0) | (orders.cast_slot >= 0) | (orders.summoner_slot >= 0),
-        health_damage=took_health[:c], disabled=caps["stunned"][:c] | caps["silenced"][:c] | (s.cc.root_until[:c] > now),
-        reached_endpoint=reached, in_jungle=in_jg, teleported=s_out.teleport_arrive,
+        health_damage=took_health[:c],
+        disabled=caps["stunned"][:c] | caps["silenced"][:c] | (s.cc.root_until[:c] > now),
+        reached_endpoint=reached, in_jungle=in_jg, teleported=sc.s_out.teleport_arrive,
         extra_gold=gg, extra_xp=xg, epic=epic, recall_channel=recall_ch, minion_gold_delta=pet_gold,
         minion_xp_mult=pet_xp)
     eco = E.economy_step(s.econ, einp)
     econ = eco.state
-    gold_extra = out.effects.gold + s_eff.gold
+    gold_extra = out.effects.gold + sc.s_eff.gold
     econ = econ._replace(gold=jnp.minimum(econ.gold + gold_extra, 100000.0), gold_total=econ.gold_total + gold_extra)
     eco = eco._replace(kills=eco.kills._replace(killed_units=eco.kills.killed_units | killed_mon))
-    if jrw is not None:                                               # kill restores, pet egg consumed at evolution
+    if jrw is not None:                                               # camp-kill restores
         hp = hp.at[:c].set(jnp.minimum(hp[:c] + jrw.heal, max_hp[:c]))
         champ = champ._replace(mana=jnp.minimum(champ.mana + jrw.mana, st.max_mana))
     kits = K.on_takedown(kits, sc.kctx, units, eco.kills)

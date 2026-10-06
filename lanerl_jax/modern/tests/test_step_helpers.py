@@ -1,4 +1,4 @@
-"""Cheap checks of ``world.tick`` helpers and the modern click decoder (no full-tick compile)."""
+"""Cheap checks of world helpers and the modern click decoder (no full-tick compile)."""
 from types import SimpleNamespace
 
 import jax.numpy as jnp
@@ -28,31 +28,13 @@ def test_cast_id_stride_covers_every_unit():
     assert (1 << 22) * CAST_ID_STRIDE <= KIT_ID_BASE              # ticks < 2^22 (~38.8 h at 30 Hz)
 
 
-def test_ward_is_clickable_with_a_selection_radius():
-    from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, modern_orders_from
-    from lanerl_jax.train.actions import _screen_to_centred_lane
-    n = 3                                                             # Garen, Jax, a red ward
-    sx, sy = 48, 27
-    ds, dn = (float(v) for v in _screen_to_centred_lane(jnp.float32((sx + 0.5) / 96), jnp.float32((sy + 0.5) / 54)))
-    cx, cy = 5000.0 + ds, 5000.0 + dn                                 # click point for champion 0
-    state = SimpleNamespace(
-        x=jnp.asarray([5000.0, 9000.0, cx + 40.0]), y=jnp.asarray([5000.0, 9000.0, cy]),
-        kind=jnp.asarray([W.KIND_CHAMPION, W.KIND_CHAMPION, W.KIND_WARD]), team=jnp.asarray([0, 1, 1]),
-        sub=jnp.zeros((n,), jnp.int32),
-        alive=jnp.ones((n,), bool), targetable=jnp.ones((n,), bool), visible=jnp.ones((2, n), bool),
-        radius=jnp.asarray([65.0, 65.0, 1.0]),
-        champ=SimpleNamespace(inventory=SimpleNamespace(item=jnp.full((2, 7), -1, jnp.int32))))
-    frame = SimpleNamespace(axis=(1.0, 0.0), normal=(0.0, 1.0))
-    move = MODERN_BUTTON_INDEX["move"]
-    o = modern_orders_from(([move, move], [sx, sx], [sy, sy]), state, (frame, frame))
-    assert int(o.attack[0]) == 2 and not bool(o.move[0])              # 40 units off the 1-unit ward: still hit
+SX, SY = 48, 27                                                       # the screen centre cell
 
 
 def _click_state(kind, sub, radius, dx):
     """Garen at (5000, 5000), Jax far away, one red unit ``dx`` units right of champion 0's centre click."""
     from lanerl_jax.train.actions import _screen_to_centred_lane
-    sx, sy = 48, 27
-    ds, dn = (float(v) for v in _screen_to_centred_lane(jnp.float32((sx + 0.5) / 96), jnp.float32((sy + 0.5) / 54)))
+    ds, dn = (float(v) for v in _screen_to_centred_lane(jnp.float32((SX + 0.5) / 96), jnp.float32((SY + 0.5) / 54)))
     cx, cy = 5000.0 + ds, 5000.0 + dn
     n = 3
     state = SimpleNamespace(
@@ -61,21 +43,30 @@ def _click_state(kind, sub, radius, dx):
         sub=jnp.asarray([0, 0, sub], jnp.int32), alive=jnp.ones((n,), bool), targetable=jnp.ones((n,), bool),
         visible=jnp.ones((2, n), bool), radius=jnp.asarray([65.0, 65.0, radius]),
         champ=SimpleNamespace(inventory=SimpleNamespace(item=jnp.full((2, 7), -1, jnp.int32))))
-    return state, (sx, sy), SimpleNamespace(axis=(1.0, 0.0), normal=(0.0, 1.0))
+    return state
+
+
+def _click(state, button):
+    from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, modern_orders_from
+    b = MODERN_BUTTON_INDEX[button]
+    frame = SimpleNamespace(axis=(1.0, 0.0), normal=(0.0, 1.0))
+    return modern_orders_from(([b, b], [SX, SX], [SY, SY]), state, (frame, frame))
+
+
+def test_ward_is_clickable_with_a_selection_radius():
+    state = _click_state(W.KIND_WARD, 0, 1.0, 40.0)
+    o = _click(state, "move")
+    assert int(o.attack[0]) == 2 and not bool(o.move[0])              # 40 units off the 1-unit ward: still hit
 
 
 def test_clicks_use_selection_radii_not_hitboxes():
-    from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, modern_orders_from
-    move = MODERN_BUTTON_INDEX["move"]
     for dx, hit in ((100.0, True), (130.0, False)):                    # caster minion: hitbox 48, selection 115
-        state, (sx, sy), frame = _click_state(W.KIND_MINION, 1, 48.0, dx)
-        o = modern_orders_from(([move, move], [sx, sx], [sy, sy]), state, (frame, frame))
+        state = _click_state(W.KIND_MINION, 1, 48.0, dx)
+        o = _click(state, "move")
         assert (int(o.attack[0]) == 2) == hit and bool(o.move[0]) != hit, dx
 
 
 def test_stop_button_issues_a_stop_order():
-    from lanerl_jax.modern.actions import MODERN_BUTTON_INDEX, modern_orders_from
-    state, (sx, sy), frame = _click_state(W.KIND_MINION, 1, 48.0, 500.0)
-    stop = MODERN_BUTTON_INDEX["stop"]
-    o = modern_orders_from(([stop, stop], [sx, sx], [sy, sy]), state, (frame, frame))
+    state = _click_state(W.KIND_MINION, 1, 48.0, 500.0)
+    o = _click(state, "stop")
     assert bool(o.stop[0]) and not bool(o.move[0]) and int(o.attack[0]) == -1

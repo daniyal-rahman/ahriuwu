@@ -1,13 +1,10 @@
-"""26.19 champion kits for the modern world tick, and the champion registry.
+"""The 26.19 champion kits and their registry.
 
-``KITS`` lists one module per champion (Garen 86, Jax 24). A kit module defines ``NAME``, ``ID``,
-``SKILL_ORDER`` (default rank per level), ``TRAITS`` (rune legality), ``UNIT_TARGET_RANGE``, its
-``State``/``init`` and the hooks ``cast``, ``periodic``, ``on_attack``, ``on_hit``, ``on_damage``,
-``on_takedown``, ``stats``, ``defense``, ``attack_mods``, ``debuffs`` and optionally ``ghosted``
-(no unit collision) and ``dodging`` (dodges basic attacks). Every hook runs every kit for every
-holder; each kit gates itself on ``KitCtx.champion_id``, so holders are independent and shapes are
-fixed. Adding a champion is a new kit module appended to ``KITS``. See ``core`` for the contract
-and the cast-id scheme.
+``KITS`` holds one module per champion. A kit defines ``NAME``, ``ID``, ``SKILL_ORDER`` (default rank per level),
+``TRAITS`` (rune legality), ``UNIT_TARGET_RANGE``, ``State``/``init`` and the hooks ``cast``, ``periodic``,
+``on_attack``, ``on_hit``, ``on_damage``, ``on_takedown``, ``stats``, ``defense``, ``attack_mods``, ``debuffs`` and
+optionally ``ghosted`` and ``dodging`` (contract: ``core``). Every hook runs every kit for every holder and each kit
+gates itself on ``KitCtx.champion_id``, so shapes stay fixed.
 """
 from __future__ import annotations
 

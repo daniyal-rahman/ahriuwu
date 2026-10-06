@@ -1,42 +1,5 @@
-"""Garen (86) 26.19 kit on the modern event/packet contract.
-
-Numbers come from the pinned 16.19 client JSON (``modern/data/26.19/champions``); rules
-from the client spell records/calculations, the wiki ability data and the
-26.1-26.19 patch notes. Spec table with evidence levels: docs/modern/CHAMPIONS.md.
-
-* Perseverance: ``RegenCalc`` (1.5% + 0.2%/lv to 6, +0.8%/lv 7-13, +0.4%/lv
-  14+) of max HP per 5 s, paid as 1/10 of it on every 0.5 s grid boundary.
-  Disabled for ``DamageTimer`` (8 s, not hasted) after Garen loses health to an
-  enemy champion (attacks, abilities, summoner damage) or turret; minion and
-  monster damage, shield-absorbed and zero damage do not count. Tracked by the
-  kit from ``on_damage`` reports.
-* Q: removes slows, +35% MS for ``MovementSpeedDuration``; next attack within
-  4.5 s deals ``BaseDamage + 0.5 * AD`` bonus physical (``tADRatio`` 1.5 total,
-  the world's basic attack supplies 1.0 AD) and silences 1.5 s. The attack
-  itself rolls crit as normal (``GarenQAttack.mRollForCriticalHit``); the bonus
-  never crits. Attack reset; uncancellable windup; overridden attack time
-  ``T = 1.7 - 0.2 * bonus AS`` with windup ``0.2 T`` (``mOverrideAttackTime``),
-  so Garen cannot attack again until ``0.8 T`` after the Q hit. Lunge: +50
-  range against champions. Cooldown starts post-effect (hit, dodge, expiry or
-  death), not at cast; no recast while the window is open.
-* W: passive +0.2 armor/MR per stack, 150 stacks (30). One stack per enemy
-  champion killing blow (no assists), minion last hit or monster kill; wards
-  and structures give none; only once W is learned. Active: shield
-  ``BaseShield + 0.18 * bonus HP`` and 60% tenacity for 0.75 s, ``DRPercent``
-  damage reduction for 4 s. Cooldown at cast.
-* E: 3 s spin, ``7 + floor(bonus AS / 0.25)`` spins fixed at cast; spin ``k``
-  completes (and hits) at ``k * 3 / n`` after the cast. Per spin
-  ``BaseDamagePerTick + ADRatioPerTick * AD`` (evaluated live) to enemies within
-  325 (center-to-edge), +25% on the nearest; each spin rolls crit for
-  ``1 + 0.3 * (crit damage - 1)`` (``CriticalDamage`` calc). Enemy champions hit
-  6 times lose 25% armor for 6 s, refreshed on the 7th hit and every 6th after;
-  the hit count carries across casts while the shred is active. Recast after 1 s
-  or R ends it; cooldown starts at the end. No attacks, ghosted. Each spin is
-  its own cast instance (Conqueror stacks per spin).
-* R: enemy champion within 400 (center-to-edge), 0.435 s cast, then
-  ``BaseDamage + ExecuteDamage * missing HP`` true damage if the target is
-  still the same living unit (no Villain since its removal). Cooldown at cast.
-"""
+"""Garen (86), 26.19. Rules GAR.* and their evidence: docs/modern/CHAMPIONS.md; numbers from the pinned client
+JSON (``modern/data/26.19/champions``)."""
 from __future__ import annotations
 
 from typing import Any, NamedTuple
@@ -176,7 +139,7 @@ def cast(state: State, kctx, units, order) -> tuple[State, KitOut]:
     ticks = ranked(NAME, "E", "NumTicks", r[:, 2]) \
         + jnp.floor(jnp.maximum(kctx.bonus_attack_speed, 0.0) / ranked(NAME, "E", "ASPerTick", r[:, 2]) + 1e-6)
     shield = jnp.where(w, ranked(NAME, "W", "BaseShield", r[:, 1]) + W_SHIELD_RATIO * kctx.bonus_hp, 0.0)
-    # A new spin keeps the hit count on targets whose shred is still running (V25.12 fix).
+    # A new spin keeps the hit count on targets whose shred is still running (GAR.E4).
     keep = kctx.now < state.shred_until
     state = state._replace(
         q_on=state.q_on | q, q_until=jnp.where(q, later(kctx, Q_WINDOW), state.q_until),
@@ -226,7 +189,8 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
     bonus = jnp.where(jnp.arange(n)[None, :] == nearest[:, None], 1.0 + E_NEAREST, 1.0)
     roll = jax.random.uniform(jax.random.fold_in(state.key, tick_index(kctx)), (c,))
     crit = roll < kctx.crit_chance
-    power = ranked(NAME, "E", "BaseDamagePerTick", r[:, 2]) + ranked(NAME, "E", "ADRatioPerTick", r[:, 2]) * kctx.total_ad
+    power = ranked(NAME, "E", "BaseDamagePerTick", r[:, 2]) \
+        + ranked(NAME, "E", "ADRatioPerTick", r[:, 2]) * kctx.total_ad
     raw = (power * jnp.where(crit, e_crit_multiplier(kctx.crit_damage), 1.0))[:, None] * bonus
     tick_id = make_cast_id(kctx, CODE_GAREN_E_TICK)
     flags = E_FLAGS | jnp.where(crit, D.PROP_CRIT, 0)
@@ -250,8 +214,8 @@ def periodic(state: State, kctx, units) -> tuple[State, KitOut]:
 
     # Perseverance: RegenCalc per 5 s, paid in 0.5 s pulses while not disabled.
     on = g & alive & (kctx.now >= state.p_block_until - 1e-6)
-    heal = jnp.where(on, kctx.max_hp * regen_rate(kctx.level) / 100.0 * (PASSIVE_PULSE / 5.0) * pulses(kctx, PASSIVE_PULSE),
-                     0.0)
+    heal = jnp.where(on, kctx.max_hp * regen_rate(kctx.level) / 100.0 * (PASSIVE_PULSE / 5.0)
+                     * pulses(kctx, PASSIVE_PULSE), 0.0)
 
     state = state._replace(
         q_on=state.q_on & ~q_end, q_haste_on=q_haste_on, w_on=w_on, w_ten_on=w_ten_on,

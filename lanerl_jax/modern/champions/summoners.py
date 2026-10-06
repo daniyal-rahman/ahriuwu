@@ -1,38 +1,11 @@
-"""Patch-26.19 Summoner's Rift summoner spells (docs/modern/SUMMONER_SPELLS.md).
+"""Summoner's Rift summoner spells, 26.19 (docs/modern/SUMMONER_SPELLS.md).
 
-Pure, fixed-shape JAX over C champions with two loadout slots (D = 0, F = 1)
-plus the top-quest bonus slot 2 (free Unleashed Teleport, ROLE_QUESTS §4.2).
-Values are the spec's CLIENT 16.19.8230722 numbers (``shared.cdtb.bin.json``
-summoner objects) with RIOT 26.1/26.4/26.12/26.19 changes; quest numbers come
-from ``role_quest``. The world owns positions, CC, shields and HP:
-this module returns ``Effects`` (Ignite packets, Heal, Barrier and the TP
-quest shield) and a ``SummonerOut`` of movement/CC/rune events.
-
-Defaults for unresolved rules (spec §15):
-
-* U-S1  a summoner-haste change rescales every remaining cooldown proportionally.
-* U-S2  the 15 s start-of-game cooldown is not hasted (haste seen on the first
-  ``step`` is adopted without a rescale).
-* U-S3  Ignite's first tick lands 0.25 s after the cast (same tick if dt >= 0.25),
-  then every 1.056 s, 5 ticks.
-* U-S5  Teleport may target allied minions, turrets, inhibitors and the Nexus
-  (wards and summoned units are not world units yet).
-* U-S6  an interrupted TP channel puts the spell on its full cooldown from the interrupt.
-* U-S7  TP dash time is the wiki linear formula (0.5–5.0 s; Unleashed 0.5–4.0 s).
-* U-S8  Unleashed arrival MS lasts 4 s (client).
-* U-S9  at 10:00 the remaining TP cooldown becomes ``max(2, min(remaining, cd(L1)))``
-  with the hasted level-1 Unleashed cooldown (quest −30 included).
-* U-S10 Heal's repeat debuff window is 30 s (client).
-* U-S11 Ghost's unused ``lin(4,7)`` calc is ignored.
-* U-S13 the quest free TP is ready when granted (U-RQ-6).
-* INFERRED: the 390 s quest-TP cooldown is hasted like every Teleport; Exhaust's
-  650 range is centre-to-centre like Ignite's documented 600; Flash onto the
-  caster's own position does not move it.
-
-Not modelled here: Flash wall resolution (the world projects ``dash`` onto
-walkable terrain, U-S12), vision/reveal, stealth breaking, homeguard removal,
-Smite (``jungle.camps.smite_step``: this step ignores Smite requests) and Hexflash
-(owned by ``runes.effects.inspiration``; read ``flash_cooldown``).
+C champions with loadout slots D = 0, F = 1 and the top-quest free Unleashed Teleport slot 2 (ROLE_QUESTS §4.2).
+Values: client 16.19.8230722 summoner objects with the 26.1-26.19 patch changes; quest numbers from ``role_quest``.
+``step`` returns ``Effects`` (Ignite, Heal, Barrier, the TP quest shield) and a ``SummonerOut`` of movement, CC and
+rune events; the world owns positions, CC, shields and HP and resolves Flash against walls (U-S12). Smite is
+``jungle.camps.smite_step``; Hexflash reads ``flash_cooldown``. ``U-S*`` tags mark the spec §15 defaults for
+unresolved rules.
 """
 from __future__ import annotations
 
@@ -68,7 +41,7 @@ TP_DASH = (0.5, 4.5, 5000.0)   # base: 0.5 + 4.5·min(d, 5000)/5000 (U-S7)
 UTP_DASH = (0.5, 3.5, 18000.0)  # Unleashed: 0.5 + 3.5·min(d, 18000)/18000
 UTP_MS, UTP_MS_DURATION = 0.5, 4.0    # MSAmount / MSDuration (U-S8)
 TP_FORGIVE_DIST, TP_FORGIVE_RADIUS = 2000.0, 400.0
-TP_KINDS = (KIND_MINION, KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS)
+TP_KINDS = (KIND_MINION, KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS)   # U-S5
 IDLE, CHANNEL, DASHING = 0, 1, 2
 
 IGNITE_RANGE = 600.0           # centre range (WIKI)
@@ -78,7 +51,7 @@ IGNITE_PERIOD = 1.056          # WIKI
 GRIEVOUS_DURATION = 5.0        # DotDuration; GrievousAmount 0.4 lives in core.damage
 IGNITE_FLAGS = TAG_PERIODIC | PROP_SUMMONER | PROP_NO_DAMAGE_MOD | PROP_NO_OMNIVAMP
 
-EXHAUST_RANGE, EXHAUST_DURATION = 650.0, 3.0
+EXHAUST_RANGE, EXHAUST_DURATION = 650.0, 3.0   # centre range, like Ignite (INFERRED)
 EXHAUST_SLOW, EXHAUST_REDUCTION = 0.40, 0.35
 
 BARRIER_DURATION = 2.5
@@ -104,7 +77,7 @@ def heal_amount(level: Any) -> Any:
 
 
 def ghost_ms(level: Any) -> Any:
-    return lin(0.24, 0.48, level)
+    return lin(0.24, 0.48, level)                 # the unused lin(4, 7) calc is ignored (U-S11)
 
 
 def tp_dash_time(dist: Any, unleashed: Any) -> Any:
@@ -212,15 +185,10 @@ def _f32(x):
 def step(state: State, ctx, units: WorldUnits, *, request, now, dt, summoner_haste, can_cast,
          channel_interrupted, quest_complete, took_champion_damage=None, rooted=None, suppressed=None,
          nearsighted=None) -> tuple[State, Effects, SummonerOut]:
-    """One summoner tick: cooldown/haste upkeep, 10:00 upgrade, TP phases, casts, Ignite ticks.
+    """One summoner tick: haste upkeep, the 10:00 upgrade, TP phases, casts, Ignite ticks.
 
-    ``can_cast`` gates the spells that cast-inhibiting CC blocks (Flash,
-    Teleport). The optional ``rooted`` (root/ground: Flash, Teleport),
-    ``suppressed`` (stasis/suppression: every spell) and ``nearsighted``
-    (Teleport) masks default to False. ``took_champion_damage`` is accepted
-    for the world contract; no SR summoner reads it (TP ignores damage, S-F20;
-    Hexflash's combat break lives in the rune module).
-    """
+    ``can_cast`` gates Flash and Teleport; ``rooted`` (Flash, Teleport), ``suppressed`` (every spell) and
+    ``nearsighted`` (Teleport) default to False. ``took_champion_damage`` is unused (TP ignores damage, S-F20)."""
     del took_champion_damage
     c, n = state.spell.shape[0], units.x.shape[0]
     now, dt = _f32(now), _f32(dt)
@@ -256,7 +224,7 @@ def step(state: State, ctx, units: WorldUnits, *, request, now, dt, summoner_has
     ready = ready.at[:, :2].set(jnp.where(upgrade[:, None] & idle_tp, now + up_rem, ready[:, :2]))
     upgraded = state.upgraded | upgrade
 
-    def tp_cd(slot, unleashed):
+    def tp_cd(slot, unleashed):                                     # every Teleport is hasted (INFERRED)
         unl = cd(RQ.unleashed_tp_cooldown(level, quest_complete & (slot < QUEST_SLOT)))
         return jnp.where(slot == QUEST_SLOT, cd(RQ.FREE_TP_COOLDOWN), jnp.where(unleashed, unl, cd(COOLDOWN[TELEPORT])))
 
@@ -430,7 +398,8 @@ def step(state: State, ctx, units: WorldUnits, *, request, now, dt, summoner_has
         teleport_target=new_state.tp_target, arrival_shield=_f32(shield_tp), ghosted=ghosted,
         bonus_ms_pct=_f32(bonus_ms), tenacity=jnp.where(now < cleanse_until, CLEANSE_TENACITY, 0.0).astype(jnp.float32),
         exhaust_reduction=ex_red, exhaust_slow=ex_slow, exhaust_slow_duration=ex_slow_dur, cleanse=cleanse,
-        cast_event=cast_event, cast_cooldown=_f32(jnp.where(instant, spell_cd, jnp.where(done_channel, tp_event_cd, 0.0))),
+        cast_event=cast_event,
+        cast_cooldown=_f32(jnp.where(instant, spell_cd, jnp.where(done_channel, tp_event_cd, 0.0))),
         cast_spell=cast_spell, is_teleport=done_channel, blinked=flash | arrive,
         ignite_target=jnp.where(ignite, tgt, -1).astype(jnp.int32),
         cooldowns=_f32(jnp.maximum(ready[:, :2] - now, 0.0)), quest_cooldown=_f32(rem_q))

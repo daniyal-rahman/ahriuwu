@@ -1,4 +1,5 @@
-"""Phase 4, AI: structures, minion/turret/monster targets and goals, champion attack targets."""
+"""Phase 4, AI: structure tick, minion/turret/monster targets and goals, champion attack targets (idle
+acquisition, attack-move). Writes structure/monster rows of ``s`` and ``s.obj``."""
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -14,15 +15,10 @@ from ..state import ModernOrders, ModernState
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """4. AI: structure tick, minion/turret/monster targets and goals, champion targets (idle acquisition,
-    attack-move).
-
-    Writes structure/monster ``s.hp``/``s.alive``/``s.targetable``/``s.kind`` and ``s.obj``; ``towers`` and
-    ``lane_ai`` stay in the scratch until MOVE."""
     c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
     now, units, jungle, so, champ = sc.now, sc.units, sc.jungle, sc.so, sc.champ
     attack_order, moving, amove, goal = sc.attack_order, sc.moving, sc.amove, sc.goal
-    reach, vis_c = sc.reach, sc.vis_c
+    vis_c = sc.vis_c
     towers = LA.turret_tick(s.towers, units, now=now, dt=jnp.float32(dt))
     hp_t, alive_t, targ_t = LA.structure_unit_view(towers, units)
     s = s._replace(hp=hp_t, alive=alive_t, targetable=targ_t)
@@ -31,7 +27,6 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     lane_ai, desired, mgoal, stop = LA.select_targets(s.lane_ai, units, s.att, now=now, dt=jnp.float32(dt),
                                                       champion_attacked_champion=champ_vs_champ,
                                                       damage_events=s.prev.damage_matrix, visible=s.visible)
-    # Monsters: jungle camps and epic objectives choose their own targets and goals.
     mai = None
     m_goal = jnp.stack([s.x, s.y], -1)
     m_speed = jnp.zeros((n,), jnp.float32)
@@ -59,10 +54,9 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     else:
         mbuf = None
     units = U.units_view(s)
-
-    # Champions: ordered target, attack-move, or idle auto-acquisition (LA.idle_acquire; chases).
+    # Champions: ordered target, else idle auto-acquisition, else attack-move.
     t_ok = (attack_order >= 0) & s.alive[jnp.clip(attack_order, 0, n - 1)]
-    acq = LA.champion_acquisition_range(reach, cfg.champion_base.attack_range)
+    acq = LA.champion_acquisition_range(sc.reach, cfg.champion_base.attack_range)
     unit_c = jnp.arange(c, dtype=jnp.int32)
     auto = LA.idle_acquire(units, unit_c, vis_c, acq)
     idle = ~t_ok & ~moving & ~amove.active & s.alive[:c] & (auto >= 0)

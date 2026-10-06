@@ -11,7 +11,6 @@ from ..state import ModernOrders, ModernState
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """11. FOG: attack reveal, then next tick's visibility (vision); enemy-seen casts."""
     c = N_CHAMPIONS
     now, s0, x, y, champ = sc.now, sc.s0, sc.x, sc.y, sc.champ
     enemy_team = 1 - s.team[:c]

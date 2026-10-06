@@ -1,4 +1,5 @@
-"""Phase 3, CASTS: shop, champion kit casts and periodic effects, summoner spells, Smite."""
+"""Phase 3, CASTS: shop, kit casts and periodic effects, summoner spells, Smite, kit attack modifiers.
+Writes ``s.econ`` (shop gold) and ``s.champ`` (inventory, group cooldowns)."""
 from __future__ import annotations
 
 from typing import Any
@@ -26,8 +27,7 @@ def shop(s: ModernState, cfg: WorldConfig, orders: ModernOrders, st: ChampionSta
     ids = jnp.asarray(cat.arrays.item_id)
     inv, gold, gcd = s.champ.inventory, s.econ.gold, s.champ.group_cd
     can = I.in_shop_area(s.x[:N_CHAMPIONS], s.y[:N_CHAMPIONS], s.team[:N_CHAMPIONS], ~s.alive[:N_CHAMPIONS])
-    codes = []
-    items, stacks, golds, cds, bought, sold = [], [], [], [], [], []
+    items, stacks, golds, cds, codes, bought, sold = [], [], [], [], [], [], []
     for c in range(N_CHAMPIONS):
         inv_c = I.Inventory(inv.item[c], inv.stack[c])
         row = jnp.argmax(ids == orders.buy[c])
@@ -42,31 +42,28 @@ def shop(s: ModernState, cfg: WorldConfig, orders: ModernOrders, st: ChampionSta
         inv_c = r2.inv
         items.append(inv_c.item); stacks.append(inv_c.stack); golds.append(r2.gold); cds.append(r.group_cd_until)
         codes.append(jnp.where(want, r.code, jnp.where(has_it, r2.code, 0)))
-        bought.append(jnp.where(want & r.ok, orders.buy[c], 0)); sold.append(jnp.where(has_it & r2.ok, orders.sell[c], 0))
+        bought.append(jnp.where(want & r.ok, orders.buy[c], 0))
+        sold.append(jnp.where(has_it & r2.ok, orders.sell[c], 0))
     inv = I.Inventory(jnp.stack(items), jnp.stack(stacks))
     return (inv, jnp.stack(golds), jnp.stack(cds), jnp.stack(codes), jnp.stack(bought).astype(jnp.int32),
             jnp.stack(sold).astype(jnp.int32))
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """3. CASTS: shop, kit casts and periodic effects, summoner spells, Smite; kit attack modifiers.
-
-    Writes ``s.econ`` (shop gold) and ``s.champ`` (inventory, group cooldowns)."""
     c, n, dt = N_CHAMPIONS, cfg.n_units, cfg.dt
-    now, caps, static, st_static = sc.now, sc.caps, sc.static, sc.st_static
+    now, caps, st_static = sc.now, sc.caps, sc.st_static
     level = s.econ.level
     inv, gold, gcd, shop_code, bought, sold = shop(s, cfg, orders, st_static, sc.champ.forbid)
-    econ = s.econ._replace(gold=gold, gold_total=s.econ.gold_total)
     champ = s.champ._replace(inventory=inv, group_cd=gcd)
-    s = s._replace(econ=econ, champ=champ)
-    summ_world = combine_stats(static, s.champ.dyn)
+    s = s._replace(econ=s.econ._replace(gold=gold), champ=champ)
+    summ_world = combine_stats(sc.static, s.champ.dyn)
     st = compose(cfg.champion_base, level, summ_world, adaptive_physical=cfg.adaptive_physical,
                  slow=caps["slow"][:c])
     units = U.units_view(s)
     kctx = V.kit_ctx(s, cfg, st, caps, now, dt)
     ictx = V.item_ctx(s, cfg, st_static, now, dt)
     locked = now < champ.cast_lock_until
-    item_casting = now < champ.item_cast_until                       # Stridebreaker: walks, cannot cast/attack
+    item_casting = now < champ.item_cast_until
     can_cast = caps["can_cast"][:c] & s.alive[:c] & ~locked & ~item_casting
     order = W.CastOrder(jnp.where(can_cast, orders.cast_slot, -1).astype(jnp.int32), orders.cast_target,
                         orders.cast_x, orders.cast_y)
@@ -85,9 +82,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     if cfg.jungle is not None:
         jungle, sm = J.smite_step(jungle, cfg.jungle, units, summ_req, s.summoners.spell, now=now,
                                   summoner_haste=st.summoner_haste, alive=s.alive[:c] & caps["can_summoner"][:c])
-
     kmods = K.attack_mods(kits, kctx)
-    reach = st.attack_range + kmods.extra_range                       # Garen Q / Jax W +50 (kit extra range)
+    reach = st.attack_range + kmods.extra_range
     return s, sc._replace(champ=champ, st=st, summ_world=summ_world, units=units, kctx=kctx, ictx=ictx,
                           locked=locked, item_casting=item_casting, cast_order=order, kits=kits, kit_out=kit_out,
                           kmods=kmods, reach=reach, summ=summ, s_eff=s_eff, s_out=s_out, sm=sm, jungle=jungle,

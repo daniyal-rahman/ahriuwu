@@ -1,4 +1,5 @@
-"""Phase 2, STATS: static champion stats and the STAT.70 max-health sync."""
+"""Phase 2, STATS: static champion stats (items, shards, monster buffs, kit) and the STAT.70 max-HP sync.
+Writes champion ``s.hp``/``s.max_hp`` and ``s.champ.static_max_hp``."""
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -11,14 +12,10 @@ from ..state import ModernOrders, ModernState
 
 
 def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickScratch]:
-    """2. STATS: static stats (items, shards, monster buffs, kit); STAT.70 max-HP sync.
-
-    Writes champion ``s.hp``/``s.max_hp`` and ``s.champ.static_max_hp`` (not ``sc.champ``)."""
     c = N_CHAMPIONS
     champ = sc.champ
     static, st_static = V.static_stats(s, cfg, sc.caps, sc.now, cfg.dt)
-    # STAT.70 for static max-HP changes (level-up, purchases, kit stacks); dynamic health is
-    # synced by combat_tick.
+    # Dynamic health is synced by combat_tick.
     old_total = s.max_hp[:c]
     new_total = st_static.max_hp + s.combat.dyn_health
     hp_c, mx_c = sync_max_health(s.hp[:c], old_total, new_total)

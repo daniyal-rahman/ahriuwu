@@ -1,42 +1,12 @@
-"""Shared contract for the 26.19 champion kits (Garen, Jax).
+"""Contract shared by the 26.19 champion kits (docs/modern/CHAMPIONS.md).
 
-Kits are pure, fixed-shape functions over the per-holder ``KitCtx`` (C,) and
-the world view ``core.types.WorldUnits`` (N,). They never write world
-arrays: every damage instance is a RAW pre-mitigation ``core.damage`` packet
-(mitigation, shields, items and runes happen in the damage pipeline), crowd
-control is reported as ``CCOut`` with pre-tenacity durations, and stat
-contributions are ``items.catalog.ItemStats``.
+Kits are pure fixed-shape functions over the holder context ``KitCtx`` (C,) and ``core.types.WorldUnits`` (N,);
+they never write world arrays. Damage is raw pre-mitigation ``core.damage`` packets, CC is ``CCOut`` with
+pre-tenacity durations, stats are ``ItemStats``. ``now`` is fixed across one tick's hooks; ``cast`` runs before
+``periodic``. A timer ending at ``until`` expires on the tick whose end ``now + dt`` reaches it.
 
-Hook protocol (both kits run for every holder, gated by ``champion_id``)::
-
-    State: NamedTuple; init(n_champions, n_units) -> State
-    cast(state, kctx, units, order) -> (state, KitOut)
-    periodic(state, kctx, units) -> (state, KitOut)
-    on_attack(state, kctx, units, launch) -> (state, KitOut)
-    on_hit(state, kctx, units, launch, dodging) -> (state, KitOut)
-    on_damage(state, kctx, units, report) -> (state, KitOut)
-    on_takedown(state, kctx, units, kills) -> state
-    stats(state, kctx) -> ItemStats
-    defense(state, kctx) -> KitDefense
-    attack_mods(state, kctx) -> KitAttackMods
-    debuffs(state, kctx, units) -> items.effects.core.Debuffs   (target-side, (N,))
-    ghosted(state, kctx) -> (C,) bool                                 (Garen E ghosting)
-
-Optional world inputs/outputs (``None`` = the world does not supply/consume
-them yet; every kit keeps a safe fallback, see docs/modern/CHAMPIONS.md):
-``KitCtx.attack_target_kind`` / ``KitCtx.rooted``; ``KitOut.attack_target``;
-``KitAttackMods.windup`` / ``period`` / ``uncancellable``.
-
-Timing: ``now`` is the tick's time, constant across the hooks of one tick;
-the world calls ``cast`` before ``periodic`` (legacy ``apply_casts`` then
-``advance``). A timer set to ``until`` expires on the tick whose end
-``now + dt`` reaches it, matching the legacy ``remaining <= dt`` rule.
-
-Cast ids are world-unique and deterministic: ``KIT_ID_BASE + (tick * C +
-holder) * ID_STRIDE + code`` where ``code`` is the slot 0..3 for casts, or one
-of the ``CODE_*`` constants for kit instances that are not a cast (one Garen E
-tick, one Jax R passive proc). ``KIT_ID_BASE`` keeps kit ids clear of the
-world's attack ids.
+Cast ids: ``KIT_ID_BASE + (tick * C + holder) * ID_STRIDE + code``, ``code`` the slot 0..3 or a ``CODE_*`` for a
+non-cast instance (one Garen E spin, one Jax R passive proc). ``KIT_ID_BASE`` keeps them clear of attack ids.
 """
 from __future__ import annotations
 
@@ -45,7 +15,7 @@ from typing import Any, NamedTuple
 import jax.numpy as jnp
 
 from ..core import damage as D
-from ..core.types import KIND_CHAMPION, KIND_NONE, KIND_WARD, STRUCTURE_KINDS, CCOut, Dash, merge_cc, no_cc, no_dash
+from ..core.types import KIND_NONE, KIND_WARD, STRUCTURE_KINDS, CCOut, Dash, merge_cc, no_cc, no_dash
 from ..data.champions import cooldowns, spell, values
 from ..items.effects.core import ShieldGrant
 
@@ -139,8 +109,6 @@ def f32(x: Any) -> Any:
     return jnp.asarray(x, jnp.float32)
 
 
-# ---- pinned 26.19 data -------------------------------------------------------
-
 def ranked(name: str, slot: str, key: str, rank: Any) -> Any:
     """JSON value at ``rank`` (index 0 is the rank-0 entry, 1..5 ranks)."""
     return jnp.asarray(values(name, slot, key), jnp.float32)[jnp.clip(rank, 0, 6)]
@@ -172,8 +140,6 @@ def mana_row(name: str, ranks: Any) -> Any:
     return jnp.stack(cols, -1)
 
 
-# ---- time and ids ------------------------------------------------------------
-
 def tick_index(kctx: KitCtx) -> Any:
     return jnp.round(jnp.asarray(kctx.now) / jnp.maximum(jnp.asarray(kctx.dt), EPS)).astype(jnp.int32)
 
@@ -195,12 +161,9 @@ def later(kctx: KitCtx, seconds: Any) -> Any:
 
 
 def later_after_tick(kctx: KitCtx, seconds: Any) -> Any:
-    """``until`` for a timer the legacy layer set *after* its countdown ran this
-    tick (on-hit stacks, post-advance buffs): it starts counting next tick."""
+    """``until`` for a timer that starts counting next tick (on-hit stacks, post-advance buffs)."""
     return f32(kctx.now + kctx.dt + seconds)
 
-
-# ---- geometry ----------------------------------------------------------------
 
 def is_structure(kind: Any) -> Any:
     kind = jnp.asarray(kind)
@@ -212,10 +175,6 @@ def is_structure(kind: Any) -> Any:
 
 def gather(arr: Any, idx: Any) -> Any:
     return arr[jnp.clip(idx, 0, arr.shape[0] - 1)]
-
-
-def onehot(idx: Any, n: int) -> Any:
-    return (jnp.arange(n)[None, :] == idx[:, None]) & (idx[:, None] >= 0)
 
 
 def enemies(kctx: KitCtx, units) -> Any:
@@ -244,12 +203,6 @@ def holder_rows(x: Any, kctx: KitCtx) -> Any:
     x = jnp.asarray(x)
     return x if x.shape[0] == kctx.unit.shape[0] else x[kctx.unit]
 
-
-def is_champion_unit(units, idx: Any) -> Any:
-    return gather(units.kind, idx) == KIND_CHAMPION
-
-
-# ---- outputs -----------------------------------------------------------------
 
 def no_out(c: int, n: int) -> KitOut:
     zc = jnp.zeros((c,), jnp.float32)
