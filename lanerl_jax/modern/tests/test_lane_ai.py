@@ -10,6 +10,7 @@ from lanerl_jax.modern.core.stats import PHYSICAL, TRUE
 from lanerl_jax.modern.core.types import (KIND_CHAMPION, KIND_INHIBITOR, KIND_MINION, KIND_NEXUS, KIND_TURRET,
                                           AttackLaunch, WorldUnits, damage_class, init_attack_state)
 from lanerl_jax.modern.lane import ai as L
+from lanerl_jax.modern.lane import minions as MM
 from lanerl_jax.modern.lane import towers as T
 from lanerl_jax.modern.map import lanes as G
 
@@ -582,10 +583,7 @@ def test_init_structures_from_world_config_layout():
     np.testing.assert_allclose(s.windup[1], .1669, rtol=1e-3)
 
 
-# --- all three lanes: spawning, movement goals, neutral teams -----------------
-from lanerl_jax.modern.lane import minions as MM
-
-
+# --- all three lanes: spawning, movement goals, neutral teams --------------------------------------------------
 def _empty_towers(n):
     z = jnp.zeros((n,), jnp.float32)
     k = jnp.zeros((n,), jnp.int32)
@@ -664,53 +662,38 @@ def test_first_wave_ghosting_is_lane_dependent():
     assert np.asarray(L.minion_ghosted(ai, units, 47.0)).tolist() == [True, True, False]
 
 
-# --- attack-move and idle acquisition ------------------------------------------
+# --- attack-move and idle acquisition ---------------------------------------------------------------------------
 def _am_world():
     return world([champ(BLUE, 0.), champ(RED, 900.), minion(RED, 380.), minion(RED, 300., 2000.),
                   minion(BLUE, 200.)])
 
 
+def am(u, px, held=-1, seq=0, acq=400., visible=None, **kw):
+    """Attack-move of champion 0 toward ``(px, 0)``."""
+    a = lambda v, t=None: jnp.asarray([v], t)
+    return L.attack_move_step(a(True), a(px), a(0.), a(held), a(seq), u, a(0), visible, a(acq, jnp.float32), **kw)
+
+
 def test_attack_move_acquires_nearest_enemy_to_the_champion_not_a_champion_first():
-    u = _am_world()
-    acq = jnp.asarray([400.0])
-    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([2000.]), jnp.asarray([0.]), jnp.asarray([-1]),
-                             jnp.asarray([0]), u, jnp.asarray([0]), None, acq)
-    assert int(out.target[0]) == 2 and bool(out.active[0])
-    assert float(out.goal_x[0]) == pytest.approx(380.)
-    # Target Champions Only: the champion at 900 is outside 400 -> keep walking.
-    out2 = L.attack_move_step(jnp.asarray([True]), jnp.asarray([2000.]), jnp.asarray([0.]), jnp.asarray([-1]),
-                              jnp.asarray([0]), u, jnp.asarray([0]), None, acq, champions_only=True)
-    assert int(out2.target[0]) == -1 and float(out2.goal_x[0]) == 2000.
+    out = am(_am_world(), 2000.)
+    assert int(out.target[0]) == 2 and bool(out.active[0]) and float(out.goal_x[0]) == pytest.approx(380.)
+    out = am(_am_world(), 2000., champions_only=True)              # the champion at 900 is outside 400
+    assert int(out.target[0]) == -1 and float(out.goal_x[0]) == 2000.
 
 
 def test_attack_move_keeps_its_target_and_ends_at_the_point():
     u = _am_world()
-    acq = jnp.asarray([2000.0])
-    # Held minion 3 stays even though minion 2 is nearer.
-    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([0.]), jnp.asarray([0.]), jnp.asarray([3]),
-                             u.spawn_seq[3:4], u, jnp.asarray([0]), None, acq)
-    assert int(out.target[0]) == 3
-    # Stale identity (slot reused) -> re-scan.
-    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([0.]), jnp.asarray([0.]), jnp.asarray([3]),
-                             jnp.asarray([999]), u, jnp.asarray([0]), None, acq)
-    assert int(out.target[0]) == 2
-    # Nothing in range and standing on the point: order done.
-    empty = world([champ(BLUE, 0.)])
-    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([5.]), jnp.asarray([0.]), jnp.asarray([-1]),
-                             jnp.asarray([0]), empty, jnp.asarray([0]), None, jnp.asarray([400.]))
+    assert int(am(u, 0., 3, int(u.spawn_seq[3]), 2000.).target[0]) == 3   # held, though minion 2 is nearer
+    assert int(am(u, 0., 3, 999, 2000.).target[0]) == 2                   # stale identity: re-scan
+    out = am(world([champ(BLUE, 0.)]), 5.)                                # nothing in range, on the point
     assert int(out.target[0]) == -1 and not bool(out.active[0])
 
 
 def test_attack_move_on_cursor_and_fog():
     u = _am_world()
-    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([900.]), jnp.asarray([0.]), jnp.asarray([-1]),
-                             jnp.asarray([0]), u, jnp.asarray([0]), None, jnp.asarray([400.]),
-                             cursor_x=jnp.asarray([880.]), cursor_y=jnp.asarray([0.]), cursor_radius=200.)
+    out = am(u, 900., cursor_x=jnp.asarray([880.]), cursor_y=jnp.asarray([0.]), cursor_radius=200.)
     assert int(out.target[0]) == 1
-    vis = jnp.ones((1, 5), bool).at[0, 2].set(False)
-    out = L.attack_move_step(jnp.asarray([True]), jnp.asarray([2000.]), jnp.asarray([0.]), jnp.asarray([-1]),
-                             jnp.asarray([0]), u, jnp.asarray([0]), vis, jnp.asarray([400.]))
-    assert int(out.target[0]) == -1
+    assert int(am(u, 2000., visible=jnp.ones((1, 5), bool).at[0, 2].set(False)).target[0]) == -1
 
 
 def test_idle_acquisition_uses_the_acquisition_radius_and_ignores_unaggroed_monsters():

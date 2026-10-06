@@ -1,4 +1,4 @@
-"""JAX navigation on patch-pinned static geometry; all fallbacks fail closed."""
+"""Route-graph steering on the pinned static geometry (``FlowRoutes``); every fallback fails closed."""
 import math
 import numbers
 from typing import NamedTuple
@@ -20,20 +20,18 @@ class FlowRoutes(NamedTuple):
 
 
 def _window_cells(max_radius, cell_size, default=3):
-    """Static ``is_walkable`` cell window for query radii up to ``max_radius`` (``default`` if not static)."""
+    """Static ``is_walkable`` cell window for radii up to ``max_radius``."""
     if isinstance(max_radius, numbers.Real) and isinstance(cell_size, numbers.Real):
         return max(1, math.ceil(max_radius / cell_size))
     return default
 
 
 def segment_clear(start, end, radius, terrain, *, samples=65, max_length=600., max_radius=None):
-    """Swept-capsule check. ``max_radius`` (static) bounds ``radius``; it sizes the cell window of
-    each disk test (exact: inflated radii beyond it only occur past ``max_length``, which fails)."""
+    """Swept-capsule check by half-step-inflated disks (cannot tunnel through thin walls). ``max_radius`` (static)
+    bounds ``radius`` and sizes the cell window."""
     start,end=jnp.asarray(start),jnp.asarray(end)
     length=jnp.linalg.norm(end-start)
     cells=3 if max_radius is None else _window_cells(max_radius+max_length/(samples-1)/2,terrain.cell_size)
-    # Half-step inflated disks cover the entire swept capsule; failure may be
-    # conservative near walls, but sampling cannot tunnel through thin walls.
     p=start[None,:]+jnp.linspace(0.,1.,samples)[:,None]*(end-start)[None,:]
     open_=jax.vmap(lambda q:is_walkable(q[0],q[1],radius+length/(samples-1)/2,terrain,max_radius_cells=cells))(p)
     return (length<=max_length)&jnp.all(open_)
@@ -58,9 +56,8 @@ def nearest_node(position, routes: FlowRoutes, terrain, *, check_connection):
 
 
 def _steer(position, goal, radius, source, source_ok, routes, terrain):
-    """Steering point from a ``source`` node: its successor toward the goal's node when that is
-    in sight, else the source itself. Returns ``(point, valid, anchor)``; ``anchor`` is the node
-    steered to (the next tick's source)."""
+    """``(point, valid, anchor)``: the successor of ``source`` toward the goal's node if in sight, else
+    ``source``; ``anchor`` is the node steered to."""
     dest,dest_ok=nearest_node(goal,routes,terrain,check_connection=False)
     nxt=routes.next_node[jnp.maximum(dest,0),jnp.maximum(source,0)]
     source_point=routes.points[jnp.maximum(source,0)]
@@ -76,12 +73,7 @@ def _direct(position, goal, radius, routes, terrain):
 
 
 def route_next(position, goal, radius, routes, terrain):
-    """Return one safe local steering point and success; no client parity claim.
-
-    Recomputed from current position as units move. Nonwalkable goals project
-    to a graph node; the exact selected route is a simulation approximation.
-    ``radius`` above ``routes.radius`` (the baked clearance) fails closed.
-    """
+    """``(point, ok)``: one safe steering point from a fresh nearest-node search (not client parity)."""
     direct=_direct(position,goal,radius,routes,terrain)
     source,source_ok=nearest_node(position,routes,terrain,check_connection=True)
     point,valid,_=_steer(position,goal,radius,source,source_ok,routes,terrain)
@@ -90,15 +82,9 @@ def route_next(position, goal, radius, routes, terrain):
 
 
 def route_follow(position, goal, radius, anchor, routes, terrain):
-    """``route_next`` from a cached ``anchor`` node instead of a fresh nearest-node search.
+    """``route_next`` from the cached ``anchor`` while it is in sight: ``(point, ok, anchor, replan)``.
 
-    The anchor (the node the unit last steered to) is kept while it stays in sight, so a tick
-    costs three segment checks instead of the 25-candidate connection search. Returns
-    ``(point, ok, anchor, replan)``; ``replan``: the anchor is lost (none yet, or out of sight
-    after a blink/teleport/push), or reached with no successor in sight, and ``route_replan``
-    must pick a new one. Without a direct line
-    and an anchor the unit holds position (fail closed), like an invalid ``route_next``.
-    """
+    ``replan``: the anchor is lost or leads nowhere, so ``route_replan`` must pick one; meanwhile the unit holds."""
     direct=_direct(position,goal,radius,routes,terrain)
     a=jnp.maximum(anchor,0)
     seen=(anchor>=0)&segment_clear(position,routes.points[a],radius,terrain,max_radius=routes.radius)
@@ -110,8 +96,7 @@ def route_follow(position, goal, radius, anchor, routes, terrain):
 
 
 def route_replan(position, goal, radius, routes, terrain):
-    """Full search for a unit without a usable anchor: ``(point, ok, anchor)``. Point and ok equal
-    ``route_next`` for a unit with no direct line (the case ``route_follow`` asks for)."""
+    """Full search for a unit without a usable anchor: ``(point, ok, anchor)``."""
     source,source_ok=nearest_node(position,routes,terrain,check_connection=True)
     point,valid,nxt=_steer(position,goal,radius,source,source_ok,routes,terrain)
     return jnp.where(valid,point,position),valid,jnp.where(source_ok,nxt,-1)

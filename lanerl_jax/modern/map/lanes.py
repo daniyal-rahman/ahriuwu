@@ -1,10 +1,5 @@
-"""Lane geometry of 26.19 Map11: minion paths and barracks (client ``base_srx.materials.bin`` via
-``data/26.19/geometry.json``).
-
-``LANE_PATHS[team, lane]`` is the waypoint path a ``team`` minion walks in ``lane``
-(Order -> Chaos; Chaos uses it reversed), padded with its last point to a common
-length; ``LANE_PATH_LEN[lane]`` is the real waypoint count; ``BARRACKS[team, lane]``
-is the wave spawn point.
+"""Map11 lane geometry from ``data/26.19/geometry.json``: ``LANE_PATHS[team, lane]`` (Chaos walks the Order path
+reversed; padded with the last point), ``LANE_PATH_LEN[lane]`` and ``BARRACKS[team, lane]`` spawn points.
 """
 from __future__ import annotations
 

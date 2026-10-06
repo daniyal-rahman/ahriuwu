@@ -1,21 +1,9 @@
-"""26.19 damage-packet pipeline, typed shields and healing (DMG.*/HEAL.*/SHIELD.*).
+"""Damage packets, typed shields and healing (DMG.*/HEAL.*/SHIELD.*, DAMAGE_AND_STATS §2.2, §5-7).
 
-Implements the ordered per-packet contract of docs/modern/DAMAGE_AND_STATS.md
-§2.2 and §5–7 as pure, fixed-shape JAX:
-
-    DMG.10 prevent -> DMG.15 crit -> DMG.30 pre-mitigation flat
-    -> DMG.40 dealt modifiers (source-side, summed) -> DMG.45 unit class
-    -> DMG.50 resist (reduction then penetration) -> DMG.60 received (product)
-    -> DMG.70 post-mitigation flat -> DMG.75 final
-    -> Lifeline check (items, before shields) -> DMG.80 typed shields
-    -> Death's Dance storage -> DMG.85 health -> DMG.92 vamp (caller)
-
-Packets resolve sequentially (``lax.scan``) so each one sees the shields, HP
-and Lifeline state left by the previous packet; the caller fixes packet order
-(TICK.70 deterministic emission order). Every value a modifier needs is an
-explicit per-unit or per-packet input: items, runes and champions fill the
-``Defense``/``Offense`` profiles before resolution instead of being called
-from inside the scan.
+Per packet: DMG.10 prevent -> .15 crit -> .30 pre-mitigation flat -> .40 dealt (summed) -> .45 unit class
+-> .50 resist -> .60 received (product) -> .70 post-mitigation flat -> Lifeline -> .80 shields -> Death's Dance
+-> .85 health -> .92 vamp (caller). Packets on stateful units resolve sequentially in emission order; modifiers
+arrive as precomputed ``Defense``/``Offense`` profiles.
 """
 from __future__ import annotations
 
@@ -34,11 +22,9 @@ TAG_BASIC_ATTACK = 1 << 3
 TAG_ACTIVE_SPELL = 1 << 4
 TAG_PROC = 1 << 5
 TAG_PET = 1 << 6
-TAG_NON_REDIRECTABLE = 1 << 7
 TAG_ITEM = 1 << 8
 TAG_DOES_NOT_AGGRO_JUNGLE = 1 << 9
 TAG_ON_HIT = 1 << 10
-TAG_AUGMENT = 1 << 11
 TAG_BURN = 1 << 12
 TAG_NON_AMPABLE = 1 << 13
 PROP_LIFESTEAL = 1 << 16       # ApplyLifesteal
@@ -47,8 +33,8 @@ PROP_NO_DAMAGE_MOD = 1 << 18   # lacks ApplyDamageModifier
 PROP_REACTIVE = 1 << 19        # Thorns-style reflected damage
 PROP_CRIT = 1 << 20            # the crit-capable portion critically struck
 PROP_EXECUTE = 1 << 21         # destroys shields, deals current health
-PROP_ULTIMATE = 1 << 22        # emitted by the champion's R (Axiom Arcanist, Malignance)
-PROP_SUMMONER = 1 << 23        # summoner-spell damage (Ignite)
+PROP_ULTIMATE = 1 << 22        # champion's R
+PROP_SUMMONER = 1 << 23
 
 BASIC_ATTACK = TAG_BASIC_ATTACK | PROP_LIFESTEAL
 ON_HIT_ITEM = TAG_ON_HIT | TAG_PROC | TAG_ITEM
@@ -65,17 +51,14 @@ CLASS_MONSTER = 3
 UNIT_CLASS_RATIO = (
     # dst:  champion minion structure monster
     (1.00, 1.00, 1.00, 1.00),   # champion source
-    (0.55, 1.00, 0.60, 1.00),   # minion source (MINIONS.md §4, README X-2)
+    (0.55, 1.00, 0.60, 1.00),   # minion source (MINIONS §4)
     (1.00, 1.00, 1.00, 1.00),   # structure source
     (1.00, 1.00, 1.00, 1.00),   # monster source
 )
 OMNIVAMP_MODIFIED_RATIO = 0.333       # ov_OmnivampModifiedRatio
-GRIEVOUS_WOUNDS = 0.40                # every SR source, non-stacking
+GRIEVOUS_WOUNDS = 0.40                # non-stacking
 LIFELINE_THRESHOLD = 0.30
-# Maximum valid packets resolved sequentially per pass (packets on champions or
-# shielded units; two champions in lane receive far fewer). ``Resolved.overflow``
-# reports any excess.
-RESOLVE_CAPACITY = 64
+RESOLVE_CAPACITY = 64                 # sequential packets per pass; ``Resolved.overflow`` reports excess
 
 
 class Packets(NamedTuple):
@@ -83,17 +66,16 @@ class Packets(NamedTuple):
     valid: Any
     src: Any            # int32 unit index
     dst: Any            # int32 unit index
-    raw: Any            # pre-mitigation amount (crit already applied by emitter)
+    raw: Any            # pre-mitigation, crit applied
     dtype: Any          # int32 PHYSICAL/MAGIC/TRUE
-    flags: Any          # int32 TAG_*/PROP_* bitmask
-    amp: Any            # additive source-side modifier sum (DMG.40), e.g. +0.08
-    item: Any           # int32 provenance: item id > 0, rune perk id as -id, 0 for none
-    cast_id: Any        # int32 cast instance (world-assigned, > 0); 0 = the packet is its own instance
-    block: Any          # DMG.70 per-packet flat reduction on every damage type (Bone Plating)
+    flags: Any          # TAG_*/PROP_* bitmask
+    amp: Any            # DMG.40 additive source-side sum
+    item: Any           # provenance: item id > 0, rune perk as -id, 0 none
+    cast_id: Any        # cast instance (> 0); 0 = its own instance
+    block: Any          # flat reduction on every damage type (Bone Plating)
 
 
 def packets(valid, src, dst, raw, dtype, flags=0, amp=0.0, item=0, cast_id=0, block=0.0) -> Packets:
-    """Broadcast any packet fields to one flat batch."""
     valid = jnp.asarray(valid, bool)
     shape = jnp.broadcast_shapes(valid.shape, jnp.shape(src), jnp.shape(dst),
                                  jnp.shape(raw), jnp.shape(dtype), jnp.shape(flags),
@@ -117,11 +99,7 @@ def concat_packets(*batches: Packets) -> Packets:
 
 
 def compact_packets(p: Packets, capacity: int) -> tuple[Packets, Any]:
-    """Valid packets first, emission order kept, padded to ``capacity``.
-
-    Returns ``(packets, overflow)``; overflow counts valid packets that did not
-    fit (they are dropped, so callers must assert it stays 0).
-    """
+    """Valid packets first in emission order, padded to ``capacity``; ``(packets, dropped count)``."""
     n = p.valid.shape[0]
     (idx,) = jnp.nonzero(p.valid, size=capacity, fill_value=n)
     pad = lambda a: jnp.concatenate([a, jnp.zeros((1,), a.dtype)])[idx]
@@ -134,13 +112,13 @@ def has(flags: Any, bit: int) -> Any:
 
 
 class Shields(NamedTuple):
-    """Per-unit shield slots, shape (N, K)."""
-    amount: Any         # remaining absorb before decay cap
-    initial: Any        # amount at grant (decay cap reference)
-    kind: Any           # SHIELD_ALL / SHIELD_PHYSICAL / SHIELD_MAGIC
-    expires_at: Any     # absolute seconds; slot empty when amount <= 0
-    decay_start: Any    # absolute seconds; +inf for non-decaying shields
-    order: Any          # monotone grant counter (ties: earliest first)
+    """Per-unit shield slots, (N, K); times absolute."""
+    amount: Any         # remaining absorb before the decay cap
+    initial: Any        # amount at grant
+    kind: Any           # SHIELD_*
+    expires_at: Any
+    decay_start: Any    # +inf: no decay
+    order: Any          # grant counter
 
 
 def init_shields(n_units: int, k: int = 6) -> Shields:
@@ -151,7 +129,7 @@ def init_shields(n_units: int, k: int = 6) -> Shields:
 
 
 def shield_value(sh: Shields, now: Any) -> Any:
-    """Current absorb of each slot, including linear decay to 0 at expiry."""
+    """Current absorb per slot, decaying linearly to 0 at expiry."""
     span = jnp.maximum(sh.expires_at - sh.decay_start, 1e-6)
     frac = jnp.clip((sh.expires_at - now) / span, 0.0, 1.0)
     cap = jnp.where(now > sh.decay_start, sh.initial * frac, sh.initial)
@@ -183,35 +161,35 @@ def total_shield(sh: Shields, now: Any, kind: int | None = None) -> Any:
 
 
 class Defense(NamedTuple):
-    """Per-unit target-side profile for one resolution pass, shape (N,)."""
+    """Per-unit target-side profile for one resolution pass, (N,)."""
     armor: Any
     magic_resist: Any
     flat_armor_reduction: Any
     percent_armor_reduction: Any      # combined 1 - prod(1 - p) (Carve, Garen E)
     flat_mr_reduction: Any
     percent_mr_reduction: Any
-    received_mult: Any                # DMG.60 product of damage reductions (not on true damage)
-    champion_received_mult: Any       # DMG.60 reduction on damage from champions only
-    received_amp: Any                 # DMG.60 additive vulnerability, all damage types
-    magic_received_amp: Any           # DMG.60 additive vulnerability, magic only (Abyssal Mask)
+    received_mult: Any                # DMG.60 product of reductions (not on true damage)
+    champion_received_mult: Any       # ... on damage from champions only
+    received_amp: Any                 # DMG.60 additive vulnerability
+    magic_received_amp: Any           # ... magic only (Abyssal Mask)
     basic_attack_mult: Any            # Plating 0.9 on non-turret basic attacks
     crit_taken_mult: Any              # Randuin's 0.7 on critical basic attacks
     champion_attack_block: Any        # Warden's Mail flat block (15), capped 20%
     postmit_flat: Any                 # DMG.70 flat (Bone Plating etc.)
-    store_fraction: Any               # Death's Dance stored share (true over 3 s)
+    store_fraction: Any               # Death's Dance stored share
     invulnerable: Any
-    spell_shield: Any                 # blocks enemy-champion ActiveSpell packets this pass (Annul)
+    spell_shield: Any                 # blocks enemy-champion ActiveSpell packets (Annul)
     unit_class: Any                   # CLASS_*
     lifeline_ready: Any
     lifeline_magic_only: Any
-    lifeline_shield: Any              # shield granted on trigger
+    lifeline_shield: Any
     lifeline_shield_kind: Any
     lifeline_duration: Any
     lifeline_decay_hold: Any
-    lifeline_bonus_health: Any        # Protoplasm max-HP grant on trigger
-    dodge_basic: Any = None           # (N,) bool: non-turret basic attacks are dodged (Jax E); None = never
-    aoe_received_mult: Any = None     # (N,) DMG.60 multiplier on AoE-tagged packets (Jax E 0.75); None = 1
-    received_mult_all: Any = None     # (N,) DMG.60 multiplier on every damage type incl. true (turret backdoor 0.2)
+    lifeline_bonus_health: Any        # Protoplasm
+    dodge_basic: Any = None           # non-turret basic attacks dodged (Jax E); None = never
+    aoe_received_mult: Any = None     # on AoE packets (Jax E); None = 1
+    received_mult_all: Any = None     # on every type incl. true (turret backdoor); None = 1
 
 
 def default_defense(n: int, *, armor=0.0, magic_resist=0.0, unit_class=CLASS_MINION) -> Defense:
@@ -227,14 +205,14 @@ def default_defense(n: int, *, armor=0.0, magic_resist=0.0, unit_class=CLASS_MIN
 
 
 class Offense(NamedTuple):
-    """Per-unit attacker-side profile, shape (N,)."""
+    """Per-unit attacker-side profile, (N,)."""
     lethality: Any
     percent_armor_pen: Any
     magic_pen: Any
     percent_magic_pen: Any
-    dealt_reduction: Any              # Exhaust 0.35 (not on true damage)
+    dealt_reduction: Any              # Exhaust (not on true damage)
     unit_class: Any
-    is_turret: Any                    # turret basic attacks bypass Plating
+    is_turret: Any                    # turret attacks bypass basic-attack reductions
 
 
 def default_offense(n: int, *, unit_class=CLASS_MINION) -> Offense:
@@ -245,7 +223,7 @@ def default_offense(n: int, *, unit_class=CLASS_MINION) -> Offense:
 
 
 def effective_resist(resist, flat_red, pct_red, pct_pen, flat_pen):
-    """DMG.50 order (DAMAGE_AND_STATS §4.2); keeps negative resist."""
+    """DMG.50 order (§4.2); keeps negative resist."""
     r = resist - flat_red
     r = jnp.where(r > 0.0, r * (1.0 - pct_red), r)
     r = jnp.where(r > 0.0, r * (1.0 - pct_pen), r)
@@ -253,13 +231,11 @@ def effective_resist(resist, flat_red, pct_red, pct_pen, flat_pen):
 
 
 def premitigation_to_final(p: Packets, off: Offense, dfn: Defense) -> Any:
-    """DMG.15–75 for every packet in parallel (no HP/shield state needed)."""
+    """DMG.15-75 for every packet in parallel."""
     s, d = p.src, p.dst
     ratio = jnp.asarray(UNIT_CLASS_RATIO, jnp.float32)[off.unit_class[s], dfn.unit_class[d]]
     no_mod = has(p.flags, PROP_NO_DAMAGE_MOD)
     is_true = p.dtype == TRUE
-    # DMG.40: source-side amplifiers add; Exhaust reduction joins the same sum
-    # but does not reduce true damage.
     reduction = jnp.where(is_true, 0.0, off.dealt_reduction[s])
     dealt = jnp.where(no_mod, 1.0, jnp.maximum(1.0 + p.amp - reduction, 0.0))
     raw = p.raw * dealt * ratio
@@ -270,7 +246,7 @@ def premitigation_to_final(p: Packets, off: Offense, dfn: Defense) -> Any:
     mult = jnp.where(p.dtype == PHYSICAL, mitigation_multiplier(armor, jnp),
                      jnp.where(p.dtype == MAGIC, mitigation_multiplier(mr, jnp), 1.0))
     post = raw * mult
-    # DMG.60 received modifiers multiply; true damage keeps only amplifiers.
+    # DMG.60: true damage keeps only amplifiers.
     amp = 1.0 + dfn.received_amp[d] + jnp.where(p.dtype == MAGIC, dfn.magic_received_amp[d], 0.0)
     from_champion = off.unit_class[s] == CLASS_CHAMPION
     reduction_mult = dfn.received_mult[d] * jnp.where(from_champion, dfn.champion_received_mult[d], 1.0)
@@ -279,11 +255,9 @@ def premitigation_to_final(p: Packets, off: Offense, dfn: Defense) -> Any:
     received = received * jnp.where(basic & ~is_true, dfn.basic_attack_mult[d], 1.0)
     received = received * jnp.where(basic & has(p.flags, PROP_CRIT), dfn.crit_taken_mult[d], 1.0)
     post = jnp.where(no_mod, post, post * received)
-    # DMG.70: flat post-mitigation reductions (not true damage).
     champ_basic = basic & (off.unit_class[s] == CLASS_CHAMPION)
     block = jnp.where(champ_basic, jnp.minimum(dfn.champion_attack_block[d], 0.2 * post), 0.0)
     post = jnp.where(is_true, post, jnp.maximum(post - block - dfn.postmit_flat[d], 0.0))
-    # Per-packet flat reductions (Bone Plating) apply to every damage type.
     post = jnp.maximum(post - p.block, 0.0)
     if dfn.aoe_received_mult is not None:
         post = post * jnp.where(has(p.flags, TAG_AOE), dfn.aoe_received_mult[d], 1.0)
@@ -294,64 +268,60 @@ def premitigation_to_final(p: Packets, off: Offense, dfn: Defense) -> Any:
 
 
 def dodged(p: Packets, off: Offense, dfn: Defense) -> Any:
-    """DMG.10 dodge: a non-turret basic attack (and its on-hit packets) on a
-    dodging target deals nothing (Jax E Counter Strike)."""
+    """DMG.10: non-turret basic attacks and their on-hits on a dodging target deal nothing."""
     if dfn.dodge_basic is None:
         return jnp.zeros(p.valid.shape, bool)
     return p.valid & dfn.dodge_basic[p.dst] & has(p.flags, TAG_BASIC_ATTACK) & ~off.is_turret[p.src]
 
 
 def spell_blocked(p: Packets, off: Offense, dfn: Defense) -> Any:
-    """DMG.10 spell shield: an enemy champion's ActiveSpell packets are blocked.
-
-    The whole cast instance is blocked; without cast ids every ActiveSpell
-    packet from enemy champions in this pass counts as one instance
-    (DAMAGE_AND_STATS §5.2, INFERRED M).
-    """
+    """DMG.10: a spell shield blocks every enemy-champion ActiveSpell packet of the pass (§5.2)."""
     return p.valid & dfn.spell_shield[p.dst] & has(p.flags, TAG_ACTIVE_SPELL) \
         & (off.unit_class[p.src] == CLASS_CHAMPION) & (p.src != p.dst)
 
 
 class Resolved(NamedTuple):
-    final: Any          # (P,) post-mitigation damage (vamp and "damage dealt" triggers read this)
-    absorbed: Any       # (P,) taken by shields
-    stored: Any         # (P,) moved to Death's Dance pool
-    health_loss: Any    # (P,) actual HP removed (capped at remaining HP)
-    killed: Any         # (P,) this packet brought dst to <= 0
-    hp: Any             # (N,) after all packets
+    final: Any          # (P,) post-mitigation, before shields (vamp reads this)
+    absorbed: Any       # (P,)
+    stored: Any         # (P,) to the Death's Dance pool
+    health_loss: Any    # (P,) capped at remaining HP
+    killed: Any         # (P,)
+    hp: Any             # (N,)
     max_hp: Any         # (N,)
     shields: Shields
-    lifeline_fired: Any  # (N,) bool
-    dd_pool_add: Any    # (N,) newly stored Death's Dance damage
-    spell_shield_popped: Any  # (N,) bool: a spell shield blocked a packet
-    overflow: Any       # () valid packets beyond RESOLVE_CAPACITY (dropped; must stay 0)
+    lifeline_fired: Any  # (N,)
+    dd_pool_add: Any    # (N,)
+    spell_shield_popped: Any  # (N,)
+    overflow: Any       # () sequential packets beyond RESOLVE_CAPACITY (dropped)
 
 
 def sequential_units(dfn: Defense, shields: Shields, now: Any) -> Any:
-    """(N,) units whose packets need the sequential pass: champions, and any
-    unit with a live shield, a ready Lifeline or Death's Dance storage."""
+    """(N,) units needing the sequential pass: champions and units with shields, Lifeline or storage."""
     return (dfn.unit_class == CLASS_CHAMPION) | (total_shield(shields, now) > 0.0) \
         | dfn.lifeline_ready | (dfn.store_fraction > 0.0)
 
 
 def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
             shields: Shields, now: Any) -> Resolved:
-    """Sequential resolution: Lifeline -> shields -> Death's Dance -> HP."""
+    """Lifeline -> shields -> Death's Dance -> HP. Other units carry none of that state, so their packets
+    resolve in parallel with per-target running sums in emission order."""
     final = premitigation_to_final(p, off, dfn)
     execute = has(p.flags, PROP_EXECUTE)
     n_units = hp.shape[0]
+
+    def typed_value(sh, d, dtype):
+        value = shield_value(sh, now)[d]
+        typed = (sh.kind[d] == SHIELD_ALL) | ((sh.kind[d] == SHIELD_PHYSICAL) & (dtype == PHYSICAL)) \
+            | ((sh.kind[d] == SHIELD_MAGIC) & (dtype == MAGIC))
+        return value, typed
 
     def body(carry, x):
         hp, max_hp, sh, fired = carry
         valid, d, dmg, dtype, exe = x
         alive = hp[d] > 0.0
         go = valid & alive
-        # Lifeline: triggers on a packet that would leave HP below 30% after
-        # existing shields absorb it; the granted shield then absorbs this
-        # packet (ITEMS.md §6.3).
-        value = shield_value(sh, now)[d]
-        typed = (sh.kind[d] == SHIELD_ALL) | ((sh.kind[d] == SHIELD_PHYSICAL) & (dtype == PHYSICAL)) \
-            | ((sh.kind[d] == SHIELD_MAGIC) & (dtype == MAGIC))
+        # Lifeline: HP after existing shields would drop below 30%; its shield absorbs this packet (ITEMS §6.3).
+        value, typed = typed_value(sh, d, dtype)
         pre_shield = jnp.sum(jnp.where(typed, value, 0.0))
         trigger = go & ~exe & dfn.lifeline_ready[d] & ~fired[d] & (dmg > 0.0) \
             & (~dfn.lifeline_magic_only[d] | (dtype == MAGIC)) \
@@ -363,11 +333,8 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
         hp = hp.at[d].add(bonus.astype(hp.dtype))
         max_hp = max_hp.at[d].add(bonus.astype(max_hp.dtype))
         fired = fired.at[d].set(fired[d] | trigger)
-        # DMG.80: execute destroys shields; otherwise typed shields absorb in
-        # soonest-expiry, earliest-grant order.
-        value = shield_value(sh, now)[d]
-        typed = (sh.kind[d] == SHIELD_ALL) | ((sh.kind[d] == SHIELD_PHYSICAL) & (dtype == PHYSICAL)) \
-            | ((sh.kind[d] == SHIELD_MAGIC) & (dtype == MAGIC))
+        # DMG.80: execute destroys shields; else typed shields absorb soonest-expiry, earliest-grant first.
+        value, typed = typed_value(sh, d, dtype)
         usable = jnp.where(typed & go & ~exe, value, 0.0)
         key = jnp.where(usable > 0.0, sh.expires_at[d] * 1e3 + sh.order[d] * 1e-6, jnp.inf)
         order = jnp.argsort(key)
@@ -380,7 +347,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
         sh = sh._replace(amount=sh.amount.at[d].set(new_amount))
         sh = sh._replace(amount=jnp.where(exe & go, sh.amount.at[d].set(0.0), sh.amount))
         through = jnp.where(exe, hp[d], dmg - absorbed)
-        # Death's Dance stores physical and magic damage only (its own bleed is true).
+        # Death's Dance stores physical and magic only.
         stored = jnp.where(exe | (dtype == TRUE), 0.0, through * dfn.store_fraction[d])
         to_hp = jnp.where(go, through - stored, 0.0)
         loss = jnp.minimum(to_hp, jnp.maximum(hp[d], 0.0))
@@ -390,11 +357,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
         out = (jnp.where(go, absorbed, 0.0), jnp.where(go, stored, 0.0), loss, killed)
         return (hp, max_hp, sh, fired), out
 
-    # Packets on champions resolve sequentially (shields, Lifeline, Death's
-    # Dance, spell shields). Other units carry none of those, so their packets
-    # resolve exactly in parallel with per-target running sums in emission
-    # order. Sequential packets are compacted into a fixed buffer so the scan
-    # length does not scale with the dense (holder x unit) emission grids.
+    # Sequential packets go to a fixed buffer, independent of the emission grid size.
     n_packets = p.valid.shape[0]
     stateful = sequential_units(dfn, shields, now)
     on_champion = stateful[p.dst]
@@ -405,8 +368,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
     take = lambda a, fill: jnp.concatenate([a, jnp.asarray([fill], a.dtype)])[idx]
     xs = (take(seq, False), take(p.dst, 0), take(final, 0.0), take(p.dtype, PHYSICAL), take(execute, False))
     carry0 = (hp, max_hp, shields, jnp.zeros((n_units,), bool))
-    # Only the ``count`` real packets are stepped (padded steps are exact no-ops: ``go`` is False), so a
-    # vmapped batch runs as many steps as its busiest env instead of the full buffer.
+    # Only real packets are stepped (padding is a no-op): a vmapped batch runs as long as its busiest env.
     count = jnp.minimum(jnp.sum(seq), cap)
     outs0 = (jnp.zeros((cap,), jnp.float32), jnp.zeros((cap,), jnp.float32), jnp.zeros((cap,), jnp.float32),
              jnp.zeros((cap,), bool))
@@ -460,14 +422,10 @@ def vamp_heal(p: Packets, res: Resolved, vamp: Vamp, dst_class: Any,
 
 def vamp_heal_split(p: Packets, res: Resolved, vamp: Vamp, dst_class: Any,
                     *, lifesteal_scale: Any = None) -> tuple[Any, Any]:
-    """DMG.92: raw vamp healing per source unit (before HEAL.20/30).
+    """DMG.92 ``(life steal, omnivamp)`` heal per source unit from ``final``, before HEAL.20/30.
 
-    Life steal applies to packets with PROP_LIFESTEAL, never vs structures.
-    Omnivamp applies to every packet without PROP_NO_OMNIVAMP/PROP_REACTIVE;
-    AoE, pet and periodic packets heal 33.3% against minions and monsters.
-    Vamp reads ``final`` (post-mitigation, before shields; README X-4).
-    ``lifesteal_scale`` (P,) supports per-packet effectiveness (Ravenous VampAmp).
-    """
+    Never vs structures. Omnivamp skips PROP_NO_OMNIVAMP/PROP_REACTIVE; AoE, pet and periodic packets heal 33.3%
+    vs minions and monsters. ``lifesteal_scale`` (P,): per-packet effectiveness."""
     n = vamp.life_steal.shape[0]
     cls = dst_class[p.dst]
     scale = jnp.ones_like(res.final) if lifesteal_scale is None else lifesteal_scale
@@ -485,11 +443,11 @@ def vamp_heal_split(p: Packets, res: Resolved, vamp: Vamp, dst_class: Any,
 
 def heal_amount(base: Any, *, source_power: Any = 0.0, incoming: Any = 0.0,
                 grievous: Any = False) -> Any:
-    """HEAL.10–30: (1 + HSP_src) · (1 + Σ incoming) · (1 − 0.4·GW)."""
+    """HEAL.10-30 ``(1 + HSP) * (1 + sum incoming) * (1 - 0.4 GW)``."""
     gw = jnp.where(grievous, 1.0 - GRIEVOUS_WOUNDS, 1.0)
     return jnp.maximum(base, 0.0) * (1.0 + source_power) * (1.0 + incoming) * gw
 
 
 def apply_heal(hp: Any, max_hp: Any, amount: Any, alive: Any = True) -> Any:
-    """HEAL.40: no overheal; dead units are not healed."""
+    """HEAL.40: no overheal, dead units are not healed."""
     return jnp.where(alive, jnp.minimum(max_hp, hp + jnp.maximum(amount, 0.0)), hp)

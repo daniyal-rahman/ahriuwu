@@ -1,35 +1,14 @@
-"""Unit-vs-unit collision of the 26.19 modern world (docs/modern/COLLISION.md).
+"""Unit-vs-unit collision (docs/modern/COLLISION.md), two vectorized O(N^2) phases per tick.
 
-Replaces the legacy C# port (``collision.resolve_collisions``: sequential spawn-order escape
-teleports, no avoidance) in ``world.tick._move``. Current League (COLLISION §1):
+Live champions, lane minions and monsters collide with each other through their pathing radius; ghosted units,
+wards and structures do not (structures block through navgrid pads).
 
-* every live champion, lane minion and monster collides with every other one, allies and enemies
-  alike, through its **pathing radius** (client ``pathfindingCollisionRadius``: Garen/Jax 35,
-  melee/caster 35.74, siege 55.74, super 55.52, camps per record). The gameplay radius (48/65)
-  stays the hitbox / attack-range edge and is not used here;
-* ghosted units (Ghost, Garen E, dashes, first-wave minions) neither block nor are blocked; wards
-  and structures are not unit obstacles (structures block through their navgrid pads);
-* movers steer around blockers (avoidance) rather than shoving them; what still overlaps is
-  separated softly, the stationary side yielding less, never into terrain.
-
-Two vectorized phases, fixed shapes, no per-unit sequential loop (O(N^2) pair math):
-
-1. **Avoidance** (velocity level). Each mover's route step ``p1 - p0`` is tried at headings rotated
-   by ``AVOID_ANGLES_DEG``, preferring the side away from the nearest blocker. Per heading, the first
-   contact time against every obstacle over ``AVOID_HORIZON_S`` (relative motion, moving obstacles at
-   their own step) is solved. Per side, the pick is the smallest clear turn, else the latest contact.
-   Both picks are terrain-checked (end disk at movement clearance on the team mask) and the better
-   walkable one is taken at the route step's length (else the route step). A pick that still meets
-   an obstacle this tick stops at contact (``CONTACT_STOP``; at least ``CONTACT_MIN_FRAC`` of the
-   step). Obstacles on the mover's goal (its chase target) or past it are ignored.
-2. **Separation** (position level). ``SEPARATION_ITERS`` Jacobi rounds: each overlapping pair is
-   pushed apart along its centre line, split by mobility (movers ``1``, stationary units
-   ``STATIONARY_MOBILITY``), at most ``MAX_PUSH`` per round. A push whose end disk is not walkable
-   is refused and that unit is pinned (mobility ~0) for the remaining rounds so its partner takes
-   the whole push. Units that start in terrain are not held by the check (DTR.eject handles them).
-
-Deterministic: Jacobi sums are order-independent and exactly coincident pairs separate along an
-index-derived direction.
+1. Avoidance: each mover's route step is retried at headings rotated by ``AVOID_ANGLES_DEG`` (away from the nearest
+   blocker first), keeping per side the smallest clear turn else the latest first contact over ``AVOID_HORIZON_S``;
+   the better walkable pick wins. A pick that still meets an obstacle stops at contact (>= ``CONTACT_MIN_FRAC``).
+   Obstacles on or past the mover's goal are ignored.
+2. Separation: ``SEPARATION_ITERS`` Jacobi rounds push overlapping pairs apart by mobility (stationary units
+   ``STATIONARY_MOBILITY``), at most ``MAX_PUSH`` per round; a push into terrain is refused and pins that unit.
 """
 from __future__ import annotations
 
@@ -46,38 +25,31 @@ from .data import PATCH_DIR
 from .jungle.camps import CHARACTERS
 from .map.terrain import is_walkable, team_view
 
-# ---- radii (CLIENT H, 26.19 character records) -------------------------------------------------
-CHAMPION_PATHING_RADIUS = 35.0                               # garen.bin / jax.bin pathfindingCollisionRadius
+CHAMPION_PATHING_RADIUS = 35.0                               # client pathfindingCollisionRadius (Garen, Jax)
 MINION_PATHING_RADIUS = (35.7437, 35.7437, 55.7437, 55.5208)  # melee, caster, siege, super (MINIONS §1.1)
 _JUNGLE = PATCH_DIR / "jungle_client.json"
 
-# ---- tuning (INFERRED; client ai_PostAvoidance* semantics unknown, COLLISION §4) ----------------
-AVOID_ANGLES_DEG = (0.0, 20.0, 40.0, 60.0, 80.0, 100.0)     # candidate heading offsets, both sides
-AVOID_HORIZON_S = 0.3                                        # look-ahead (= ai_PostAvoidanceFilterDuration)
-AVOID_MAX_STEP = 60.0                                        # longer "steps" are blinks/teleports: no avoidance
-CONTACT_STOP = True                                          # wiki "collide upon meeting": step ends at contact
-CONTACT_MIN_FRAC = 0.25                                      # ... but never below this share (no deadlock)
+# Tuning, INFERRED (COLLISION §4).
+AVOID_ANGLES_DEG = (0.0, 20.0, 40.0, 60.0, 80.0, 100.0)     # heading offsets, both sides
+AVOID_HORIZON_S = 0.3                                        # = client ai_PostAvoidanceFilterDuration
+AVOID_MAX_STEP = 60.0                                        # longer steps are blinks: no avoidance
+CONTACT_MIN_FRAC = 0.25                                      # contact stop never below this share (no deadlock)
 SEPARATION_ITERS = 3
 STATIONARY_MOBILITY = 0.25                                   # share of a push a non-mover takes vs a mover
-MAX_PUSH = 20.0                                              # per separation round (soft: deep overlaps take ticks)
-# Contact distance of a pair. Wiki Unit_collision: "the center of a unit ... cannot enter another unit's
-# pathing radius" -> centres stay max(r_i, r_j) apart ("max"); "sum" is the disk-disk reading.
-PAIR_RULE = "max"
+MAX_PUSH = 20.0                                              # per round: deep overlaps take several ticks
 _GOLDEN = 2.399963229728653                                  # coincident-pair fallback direction step (rad)
 
 
 @lru_cache(maxsize=1)
 def monster_pathing_radii() -> tuple:
-    """Pathing radius per jungle ``Monster`` type (``jungle.camps.CHARACTERS`` order), client records."""
+    """Client pathing radius per jungle ``Monster`` type."""
     data = json.loads(_JUNGLE.read_text())["monsters"]
     return tuple(float(data[c]["pathing_radius"]) for c in CHARACTERS)
 
 
 def pathing_radius(kind: Any, sub: Any, gameplay_radius: Any) -> Any:
-    """(N,) unit-collision radius: champions 35, minions by type, camp monsters by record.
-
-    Epic monsters (``sub >= jungle.camps.EPIC_SUB_BASE``) and anything else keep their gameplay
-    radius (INFERRED L: Baron's client pathing radius is 0, yet it always blocks)."""
+    """(N,) collision radius: champions 35, minions by type, camp monsters by record; epic monsters and others keep
+    their gameplay radius (Baron's client pathing radius is 0, yet it blocks; INFERRED L)."""
     kind, sub = jnp.asarray(kind), jnp.asarray(sub, jnp.int32)
     r = jnp.asarray(gameplay_radius, jnp.float32)
     mon = jnp.asarray(monster_pathing_radii(), jnp.float32)
@@ -89,8 +61,8 @@ def pathing_radius(kind: Any, sub: Any, gameplay_radius: Any) -> Any:
 
 
 def contact_distance(ri, rj):
-    """Minimum centre distance of a colliding pair (``PAIR_RULE``)."""
-    return jnp.maximum(ri, rj) if PAIR_RULE == "max" else ri + rj
+    """Minimum centre distance of a pair: a centre cannot enter the other's pathing radius (wiki Unit collision)."""
+    return jnp.maximum(ri, rj)
 
 
 def _walkable(px, py, team, clearance, terrain):
@@ -104,7 +76,7 @@ def _rot(ux, uy, a):
 
 
 def avoid(x0, y0, x1, y1, radius, obstacle, mover, goal_x, goal_y, team, clearance, terrain, dt):
-    """Phase 1: steer each ``mover`` (N,) around ``obstacle`` units. Returns new ``(x1, y1)``."""
+    """Phase 1: steer each ``mover`` (N,) around ``obstacle`` units; returns the new ``(x1, y1)``."""
     n = x0.shape[0]
     vx, vy = x1 - x0, y1 - y0
     step = jnp.sqrt(vx * vx + vy * vy)
@@ -121,8 +93,8 @@ def avoid(x0, y0, x1, y1, radius, obstacle, mover, goal_x, goal_y, team, clearan
     walks = obstacle & (step <= AVOID_MAX_STEP)                                     # obstacle's own step
     ovx, ovy = jnp.where(walks, vx, 0.0), jnp.where(walks, vy, 0.0)
 
-    def contact_time(cx, cy):                                                       # (N,) heading -> (N,) ticks
-        """Earliest first-contact time over the horizon against any relevant obstacle (inf = clear)."""
+    def contact_time(cx, cy):
+        """(N,) heading -> earliest contact over the horizon in ticks (inf = clear), and the hit mask."""
         wx, wy = cx[:, None] * step[:, None] - ovx[None, :], cy[:, None] * step[:, None] - ovy[None, :]
         a = rx * wx + ry * wy
         ww = jnp.maximum(wx * wx + wy * wy, 1e-9)
@@ -136,12 +108,9 @@ def avoid(x0, y0, x1, y1, radius, obstacle, mover, goal_x, goal_y, team, clearan
     # Turn away from the nearest blocker of the straight heading (left of the path -> turn right).
     near = jnp.argmin(jnp.where(b0, dist, jnp.inf), axis=1)
     cross = ux * ry[jnp.arange(n), near] - uy * rx[jnp.arange(n), near]
-    # Dead-ahead ties: the map is mirror-symmetric between the teams (handedness flips), so mirror it.
+    # Dead-ahead ties: mirror the handedness between the teams, like the map.
     side = jnp.where(cross > 0.0, -1.0, jnp.where(cross < 0.0, 1.0, jnp.where(team == 1, -1.0, 1.0)))
-    angles = np.deg2rad(np.asarray(AVOID_ANGLES_DEG))                                # 0 first, both sides
-    # Per side: the smallest-turn clear heading, else the one whose first contact comes latest. Score
-    # = clear first, then smaller turn; uncleared ranked by contact time. Then terrain-check both sides'
-    # picks (two disk checks per mover) and take the better walkable one (the route step if neither).
+    angles = np.deg2rad(np.asarray(AVOID_ANGLES_DEG))
     picks = []
     for sgn in (1.0, -1.0):
         best = None
@@ -167,16 +136,14 @@ def avoid(x0, y0, x1, y1, radius, obstacle, mover, goal_x, goal_y, team, clearan
     k = jnp.where(use_a, ka, jnp.where(use_b, kb, 0))
     ok = act & (k > 0)
     nx, ny = jnp.where(ok, nx, x1), jnp.where(ok, ny, y1)
-    if CONTACT_STOP:
-        # The chosen heading still meets an obstacle this tick (every heading was blocked): stop at contact.
-        sc = jnp.where(use_a, sa, jnp.where(use_b, sb, jnp.where(jnp.isinf(t0), 1e6, t0)))
-        frac = jnp.where(act & (sc < 1.0), jnp.maximum(sc, CONTACT_MIN_FRAC), 1.0)
-        nx, ny = x0 + (nx - x0) * frac, y0 + (ny - y0) * frac
-    return nx, ny
+    # Every heading was blocked this tick: stop at contact (wiki "collide upon meeting").
+    sc = jnp.where(use_a, sa, jnp.where(use_b, sb, jnp.where(jnp.isinf(t0), 1e6, t0)))
+    frac = jnp.where(act & (sc < 1.0), jnp.maximum(sc, CONTACT_MIN_FRAC), 1.0)
+    return x0 + (nx - x0) * frac, y0 + (ny - y0) * frac
 
 
 def separate(x, y, radius, collide, moving, team, clearance, terrain, iters: int = SEPARATION_ITERS):
-    """Phase 2: soft Jacobi separation of overlapping ``collide`` units. Returns ``(x, y)``."""
+    """Phase 2: soft Jacobi separation of overlapping ``collide`` units; returns ``(x, y)``."""
     n = x.shape[0]
     idx = jnp.arange(n)
     pair = collide[:, None] & collide[None, :] & ~jnp.eye(n, dtype=bool)
@@ -209,15 +176,11 @@ def separate(x, y, radius, collide, moving, team, clearance, terrain, iters: int
 
 def resolve(x0, y0, x1, y1, *, radius, collide, ghosted, moving, goal_x, goal_y, team, clearance, terrain, dt,
             movers: int | None = None):
-    """Modern unit collision for one tick. Returns new ``(x, y)`` (N,).
+    """One tick of collision: new ``(x, y)`` (N,) from tick-start ``x0, y0`` and post-movement ``x1, y1``.
 
-    ``x0, y0``: positions at the start of the tick; ``x1, y1``: after route movement, dashes and
-    blinks. ``radius``: pathing radius (``pathing_radius``). ``collide``: live units that take part
-    (no wards/structures). ``ghosted``: excluded from both roles. ``moving``: units that walked a
-    route step this tick (avoidance applies to them; they also yield more in separation).
-    ``goal_x, goal_y``: each mover's goal (its chase target's position when chasing). ``team``:
-    terrain mask per unit (0/1). ``clearance``: (N,) movement clearance for the terrain checks.
-    ``movers`` (static): only slots ``[0, movers)`` take part; later slots are returned unchanged.
+    ``collide``: units taking part; ``ghosted``: excluded; ``moving``: walked a route step (avoid, yield more);
+    ``goal_*``: each mover's goal (chase target); ``team``: terrain mask; ``clearance``: terrain-check radius.
+    ``movers`` (static): only slots ``[0, movers)`` take part.
     """
     if movers is not None and movers < x1.shape[0]:
         m = movers
@@ -234,6 +197,3 @@ def resolve(x0, y0, x1, y1, *, radius, collide, ghosted, moving, goal_x, goal_y,
     x, y = avoid(x0, y0, x1, y1, radius, solid, solid & moving, goal_x, goal_y, team, clearance, terrain, dt)
     return separate(x, y, radius, solid, moving, team, clearance, terrain)
 
-
-__all__ = ["CHAMPION_PATHING_RADIUS", "MINION_PATHING_RADIUS", "monster_pathing_radii", "pathing_radius", "avoid",
-           "separate", "resolve"]

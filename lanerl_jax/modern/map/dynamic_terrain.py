@@ -1,31 +1,8 @@
-"""Structure footprints on the 26.19 Map11 navgrid and per-team dynamic walkable masks.
+"""Structure footprints on the 26.19 navgrid and per-team dynamic walkable masks (LANES_TERRAIN §2).
 
-Evidence (docs/modern/LANES_TERRAIN.md §2):
-
-* The navgrid marks every structure pedestal with the ``StructureWall`` flag
-  (0x4; always together with WALL|TRANSPARENT, flag value 70). Connected
-  components: 22 turret pads of 18-21 cells (5x5 cells = 250 units, the
-  turret pathfinding radius 125, CLIENT H), 6 inhibitor pads of 44-61 cells
-  (radius ~213.75, CLIENT H), 2 Nexus pads of 157/158 cells (radius ~304,
-  CLIENT H) and two small fountain-platform pieces (not structures).
-* Whether a footprint opens when its structure dies: turrets **do not**
-  ("Turrets are units located on top of impassable terrain. This terrain
-  remains even after the turret is destroyed", wiki Turret, WIKI H; the
-  client also has a ``TurretRubble`` character with pathfinding radius 100).
-  For inhibitors no source says either way; the client ships navgrid
-  overlays only for the Baron pit and the dragon-soul terrain, none for
-  structures, and the StructureWall cells are baked into the static base
-  grid, so the default is that inhibitor pads stay blocked too (INFERRED M).
-  A Nexus dying ends the game.
-
-So the default ``release`` policy keeps every footprint blocked, which makes
-``walkable_masks`` an identity on the base masks; the function exists so a
-ruleset (or a measurement proving otherwise) can release footprints per
-structure kind without touching the tick. Destroyed structures already stop
-blocking *units* (dead units are skipped by unit collision).
-
-Everything here is host-side numpy (``build_footprints``) or fixed-shape JAX
-(``walkable_masks``, ``eject``) over the ``StaticTerrain`` contract.
+Every structure pad carries the ``StructureWall`` navgrid flag. Turret pads stay blocked after death (wiki Turret);
+for inhibitors no source says, and the pads are baked into the static grid, so by default every footprint stays
+blocked (INFERRED M) and ``walkable_masks`` is the identity; ``RELEASE_ON_DEATH`` lets a ruleset open them.
 """
 from __future__ import annotations
 
@@ -39,10 +16,7 @@ from ..core import types as W
 from .terrain import is_walkable, team_view
 
 STRUCTURE_FLAG = 4
-WALL_FLAG = 2
-TRANSPARENT_FLAG = 64
 FOOTPRINT_MAX_DISTANCE = 450.0      # component centroid to structure position (largest pad radius ~400)
-# Release-on-death policy per structure kind (see module docstring).
 RELEASE_ON_DEATH = {W.KIND_TURRET: False, W.KIND_INHIBITOR: False, W.KIND_NEXUS: False}
 
 
@@ -53,14 +27,8 @@ class Footprints(NamedTuple):
 
 
 def build_footprints(grid, unit_kind, unit_x, unit_y, *, max_distance: float = FOOTPRINT_MAX_DISTANCE) -> Footprints:
-    """Assign each 8-connected StructureWall component of ``grid`` to the nearest structure unit.
-
-    ``grid`` is a ``data.modern_map.ModernMapGrid``; the unit arrays are the
-    static world layout (``WorldConfig.unit_kind/unit_x/unit_y``). Components
-    farther than ``max_distance`` from every structure (fountain platform
-    pieces) stay unowned, i.e. permanently blocked. Raises if a structure
-    gets no footprint, so a layout/navgrid mismatch cannot pass silently.
-    """
+    """Host-side: give each 8-connected StructureWall component to the nearest structure within ``max_distance``
+    (farther pieces stay blocked); raises if a structure gets no footprint."""
     from scipy import ndimage
     kind = np.asarray(unit_kind)
     xs, ys = np.asarray(unit_x, np.float64), np.asarray(unit_y, np.float64)
@@ -95,14 +63,8 @@ def release_mask(unit_kind, policy: dict | None = None) -> Any:
 
 
 def walkable_masks(terrain: tuple, footprints: Footprints, alive, release) -> tuple:
-    """Per-team ``StaticTerrain`` with the pads of dead, released structures opened.
-
-    ``terrain`` is ``WorldConfig.terrain`` (one StaticTerrain per team, gates
-    resolved); ``alive``/``release`` are (N,) bool. A released cell becomes
-    walkable for both teams (its WALL|TRANSPARENT bits belong to the pad);
-    a respawned structure (inhibitor) blocks its pad again, so call
-    ``eject`` for units standing on it. Pure and jit-safe; O(Z*X).
-    """
+    """Per-team terrain with the pads of dead, released structures opened for both teams; a respawn closes them
+    again (``eject`` units standing there)."""
     owner = footprints.owner
     n = jnp.asarray(alive).shape[0]
     o = jnp.clip(owner, 0, n - 1)
@@ -116,14 +78,8 @@ EJECT_MAX_UNITS = 16                     # ring searches per call; further stuck
 
 
 def eject(x, y, team, radius, terrain: tuple, active=None, max_units: int = EJECT_MAX_UNITS):
-    """Move each unit (N,) whose disk is not walkable to the nearest walkable point on
-    rings of 50-450 units (16 directions); units already clear, or inactive, stay put.
-    Use after a footprint closes (inhibitor respawn) or after a blink/dash ends.
-
-    Every unit is tested, but only the first ``max_units`` stuck units (slot order) are
-    searched per call: closures are rare and local, and the world calls this every tick,
-    so any remaining stuck units are moved on the following ticks.
-    """
+    """Move active units whose disk is not walkable to the nearest walkable point on rings of 50-450 (16
+    directions). Only the first ``max_units`` stuck units are searched per call; the rest move on later ticks."""
     x, y, r = (jnp.asarray(v, jnp.float32) for v in (x, y, radius))
     team = jnp.asarray(team, jnp.int32)
     act = jnp.ones(x.shape, bool) if active is None else jnp.asarray(active, bool)
@@ -144,12 +100,8 @@ def eject(x, y, team, radius, terrain: tuple, active=None, max_units: int = EJEC
 
     n = x.shape[0]
     stuck = act & ~jax.vmap(walkable)(x, y, team, r)
-    (sel,) = jnp.nonzero(stuck, size=min(max_units, n), fill_value=n)    # n = no unit (dropped below)
+    (sel,) = jnp.nonzero(stuck, size=min(max_units, n), fill_value=n)
     i = jnp.clip(sel, 0, n - 1)
     found, nx, ny = jax.vmap(search)(x[i], y[i], team[i], r[i])
     return (x.at[sel].set(jnp.where(found, nx, x[i]), mode="drop"),
             y.at[sel].set(jnp.where(found, ny, y[i]), mode="drop"))
-
-
-__all__ = ["STRUCTURE_FLAG", "RELEASE_ON_DEATH", "Footprints", "build_footprints", "release_mask",
-           "walkable_masks", "eject"]

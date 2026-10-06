@@ -48,7 +48,7 @@ def test_jungle_river_base_masks(regions):
     assert bool(R.in_jungle(3800., 7900., regions)) and not bool(R.in_jungle(1300., 8000., regions))
     assert bool(R.in_river(9870., 4409., regions)) and not bool(R.in_river(7400., 7400., regions))
     assert bool(R.in_base(2500., 2500., 0, regions)) and not bool(R.in_base(2500., 2500., 1, regions))
-    assert bool(R.in_spawn_platform(394., 461., 0, regions))
+    assert bool(R.in_base(394., 461., 0, regions))                          # fountain platform
 
 
 def test_lane_progress_increases_toward_the_enemy():

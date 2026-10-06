@@ -1,13 +1,8 @@
-"""Shared contract between the 26.19 modern world tick and its subsystems.
+"""Contract between the 26.19 world tick and its subsystems.
 
-``world.tick`` owns the world arrays and the tick order. Subsystems (lane AI
-for minions and turrets, champion kits, summoner spells) are pure functions
-over the types below and return events/packets; they never write world arrays
-themselves. Shapes: (N,) world units, (C,) champions (holder ``c`` is world
-unit ``champion_unit[c]``, champions occupy units 0..C-1).
-
-Damage always goes through ``core.damage`` packets, so items, runes and
-champions see every hit the same way (README hook crosswalk).
+``world.tick`` owns the world arrays; subsystems are pure functions over these types and return packets, CC,
+dashes and ``UnitWrite`` rows. Shapes: (N,) world units, (C,) champions (champion c is unit c). All damage goes
+through ``core.damage`` packets.
 """
 from __future__ import annotations
 
@@ -17,47 +12,36 @@ import jax.numpy as jnp
 
 from . import damage as D
 
-# Unit kinds of the modern world (``state.Kind`` keeps the legacy 0..3 meanings).
 KIND_NONE, KIND_CHAMPION, KIND_MINION, KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS, KIND_MONSTER, KIND_WARD = range(8)
 STRUCTURE_KINDS = (KIND_TURRET, KIND_INHIBITOR, KIND_NEXUS)
 BLUE, RED = 0, 1
-NEUTRAL = 2                 # team of jungle monsters (never equal to a champion's team)
+NEUTRAL = 2                 # jungle monsters' team
 
-# Slot capacities of the world unit blocks (``world.config.Layout``: champions | lane minions per
-# spawning lane | jungle camps | epic monsters | wards | structures, structures last so "fogged"
-# units are exactly the slots before them).
+# Slot capacities of the world unit blocks (``world.config.Layout``).
 MINION_SLOTS_PER_LANE = 40
 JUNGLE_SLOTS = 40           # jungle.camps uses 38
-EPIC_SLOTS = 8              # jungle.objectives
+EPIC_SLOTS = 8
 MAX_WARDS_PER_TEAM = 8
 
 
 def is_structure(kind: Any) -> Any:
-    """Turret, inhibitor or Nexus."""
     kind = jnp.asarray(kind)
     return (kind == KIND_TURRET) | (kind == KIND_INHIBITOR) | (kind == KIND_NEXUS)
 
 
 def damage_class(kind: Any) -> Any:
-    """World kind -> ``core.damage.CLASS_*`` (DMG.45 unit-class ratios)."""
+    """World kind -> ``core.damage.CLASS_*`` (DMG.45)."""
     kind = jnp.asarray(kind)
     return jnp.where(kind == KIND_CHAMPION, D.CLASS_CHAMPION,
-                     jnp.where((kind == KIND_TURRET) | (kind == KIND_INHIBITOR) | (kind == KIND_NEXUS),
-                               D.CLASS_STRUCTURE,
+                     jnp.where(is_structure(kind), D.CLASS_STRUCTURE,
                                jnp.where(kind == KIND_MONSTER, D.CLASS_MONSTER, D.CLASS_MINION))).astype(jnp.int32)
 
 
 class WorldUnits(NamedTuple):
-    """Read-only view of every world unit for one tick, shape (N,).
+    """Read-only view of every world unit for one tick, (N,).
 
-    ``attack_speed`` is attacks per second after STAT.60 caps; ``attack_range``
-    is the champion/minion/turret stat range (edge-to-edge rule: an attack
-    reaches when ``dist <= attack_range + radius_attacker + radius_target``,
-    DAMAGE_AND_STATS §8.3). ``sub`` is the minion type (0 melee, 1 caster,
-    2 siege, 3 super; ``lane.minions.MinionType``), the turret tier
-    (0 outer, 1 inner, 2 inhibitor, 3 nexus), the monster type
-    (``jungle.camps.Monster``) or the ward type (``wards.WardType``);
-    0 for others.
+    ``attack_speed`` is attacks/s after caps. An attack reaches when ``dist <= attack_range + r_attacker +
+    r_target`` (DAMAGE_AND_STATS §8.3). ``sub``: minion type, turret tier, monster type or ward type; else 0.
     """
     kind: Any
     sub: Any
@@ -76,21 +60,13 @@ class WorldUnits(NamedTuple):
     attack_speed: Any
     move_speed: Any
     spawn_seq: Any          # int32 identity, changes when a slot is reused
-    spawn_time: Any         # seconds the unit spawned (minions: upgrade count source)
+    spawn_time: Any
 
 
 class AttackState(NamedTuple):
-    """Generic basic-attack machine shared by champions, minions and turrets (N,).
-
-    A unit with ``target >= 0`` in range and ``cooldown_left <= 0`` starts a
-    windup (``windup_left = windup``); when the windup ends the attack
-    *launches* (on-attack) and ``cooldown_left`` is set to the attack period
-    from the windup start; melee attacks hit on launch, ranged ones spawn a
-    missile that hits on arrival. Any pre-launch cancel resets the timer to 0
-    (DAMAGE_AND_STATS §8.2, U-08 default).
-    """
+    """Basic-attack machine shared by all units (N,); see ``mechanics.attack_step`` (DAMAGE_AND_STATS §8.2)."""
     target: Any             # int32, -1 none
-    target_seq: Any         # spawn_seq of the target when it was chosen
+    target_seq: Any         # spawn_seq of the target when chosen
     windup_left: Any        # seconds, > 0 while winding up
     cooldown_left: Any      # seconds until the next windup may start
 
@@ -101,12 +77,10 @@ def init_attack_state(n: int) -> AttackState:
 
 
 class UnitWrite(NamedTuple):
-    """Rows a subsystem asks the world to (re)write, (N,) per unit slot, written where ``mask``
-    (``world.units.write_units``; subsystems never write the world arrays themselves).
+    """Rows a subsystem asks ``world.units.write_units`` to (re)write where ``mask``, (N,).
 
-    Every written row becomes alive and targetable. ``new`` rows are fresh spawns: they also get the
-    next ``spawn_seq``, a ``spawn_time`` and a reset slot (attack state, CC timers). ``bounty_*`` are
-    lane-minion rewards fixed at spawn (None: column unchanged)."""
+    Written rows become alive and targetable; ``new`` rows also get a fresh ``spawn_seq``/``spawn_time`` and a
+    reset slot (attack state, CC). ``bounty_*``: lane-minion rewards fixed at spawn (None: unchanged)."""
     mask: Any
     new: Any
     kind: Any
@@ -130,42 +104,35 @@ class UnitWrite(NamedTuple):
     bounty_level: Any = None
 
 
-UNIT_COLUMNS = ("kind", "sub", "team", "x", "y", "hp", "max_hp", "radius", "armor", "magic_resist", "attack_damage",
-                "attack_range", "attack_speed", "move_speed", "windup", "missile_speed")    # written by UnitWrite
-assert UnitWrite._fields[2:2 + len(UNIT_COLUMNS)] == UNIT_COLUMNS
+UNIT_COLUMNS = UnitWrite._fields[2:18]          # the columns a UnitWrite writes
 
 
 class AttackLaunch(NamedTuple):
-    """Basic attacks launched this tick (N,), produced by ``world.tick``."""
-    launched: Any           # bool
-    target: Any             # int32
-    ranged: Any             # bool: becomes a missile
-    is_crit: Any            # bool (champions; Bernoulli roll at launch, X-8)
-    cast_id: Any            # int32 attack instance id
+    """Basic attacks launched this tick (N,)."""
+    launched: Any
+    target: Any
+    ranged: Any             # becomes a missile
+    is_crit: Any            # champions: rolled at launch
+    cast_id: Any
 
 
 class CastOrder(NamedTuple):
     """One ability / summoner request per champion this tick (C,)."""
-    slot: Any               # int32: -1 none, 0..3 Q/W/E/R
-    target: Any             # int32 unit, -1 none
-    x: Any                  # target point
+    slot: Any               # -1 none, 0..3 Q/W/E/R
+    target: Any             # unit, -1 none
+    x: Any
     y: Any
 
 
 class CCOut(NamedTuple):
-    """Crowd control applied this tick by champion c to unit n, (C, N).
-
-    Durations are seconds *before* tenacity (``world.tick`` applies
-    ``core.stat_pipeline.cc_duration`` with the target's tenacity, except for
-    the types tenacity does not affect).
-    """
+    """CC applied this tick by champion c to unit n, (C, N); durations before tenacity."""
     stun: Any
     root: Any
     silence: Any
     knockup: Any
-    slow: Any               # strength (0..1); duration in ``slow_duration``
+    slow: Any               # strength 0..1
     slow_duration: Any
-    cast_id: Any            # (C, N) int32 instance that applied it (Cheap Shot / Electrocute pairing)
+    cast_id: Any            # int32 instance that applied it (Cheap Shot / Electrocute pairing)
 
 
 def no_cc(c: int, n: int) -> CCOut:
@@ -183,12 +150,12 @@ def merge_cc(a: CCOut, b: CCOut) -> CCOut:
 
 class Dash(NamedTuple):
     """Movement a kit or summoner imposes on its champion (C,)."""
-    active: Any             # bool: start a dash/blink this tick
+    active: Any
     to_x: Any
     to_y: Any
-    speed: Any              # units per second; inf = instant blink (Flash)
-    target: Any             # int32 unit to dash to (-1 = point)
-    blink: Any              # bool: counts as a blink for Sudden Impact / Flash rules
+    speed: Any              # units/s; inf = blink
+    target: Any             # unit to dash to, -1 = point
+    blink: Any
 
 
 def no_dash(c: int) -> Dash:

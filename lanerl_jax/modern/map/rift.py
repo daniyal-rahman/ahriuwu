@@ -1,20 +1,7 @@
-"""Elemental Rift and Baron-pit terrain variants as swappable JAX arrays (26.19).
+"""Elemental Rift and Baron-pit terrain variants (client navgrid overlays, OBJECTIVES §6) as gatherable arrays.
 
-The client ships the transformations as navgrid *overlays* (``map11.bin``
-``MapNavGridOverlays``): rectangles of replacement cell flags applied over the
-base navgrid ``AIPath_SRX_2``. ``data/build_modern_objectives.py`` applies them
-host-side and stores every variant (docs/modern/OBJECTIVES.md §6):
-
-    variant = element * 3 + baron_form
-    element    0 none, 1 Infernal, 2 Mountain, 3 Ocean, 4 Cloud, 5 Hextech, 6 Chemtech
-               (client MapFlagIndexOverride ids; Cloud and Hextech ship no navgrid overlay,
-               so their terrain equals the base map)
-    baron_form 0 Hunting (no change), 1 Territorial (Cup overlay), 2 All-Seeing (Tunnel overlay)
-
-``jungle.objectives.terrain_variant(state, now)`` gives the current index; the
-step swaps ``walkable[v, team]`` into ``StaticTerrain`` (movement, Flash) and
-``flags[v]``/``bush_ids[v]`` into the ``obs.vision.VisionGrid`` (fog). All
-selectors are fixed-shape gathers, safe under jit/vmap.
+``variant = element * 3 + baron_form``: element 0 none, 1 Infernal, 2 Mountain, 3 Ocean, 4 Cloud, 5 Hextech,
+6 Chemtech; baron_form 0 Hunting, 1 Territorial, 2 All-Seeing. Built by ``data/build_modern_objectives.py``.
 """
 from __future__ import annotations
 
@@ -37,9 +24,9 @@ N_BARON_FORMS = 3
 
 
 class RiftTerrain(NamedTuple):
-    walkable: Any       # (V, 2, H, W) bool per team (gates resolved like ModernMapGrid.walkable)
-    flags: Any          # (V, H, W) int32 navgrid flags (brush bit 1, wall bit 2, ...)
-    bush_ids: Any       # (V, H, W) int32 edge-connected brush labels (0 = no brush), per variant
+    walkable: Any       # (V, 2, H, W) bool per team
+    flags: Any          # (V, H, W) int32 navgrid flags
+    bush_ids: Any       # (V, H, W) int32 brush labels per variant (0 = none)
     cell_size: float
     min_x: float
     min_z: float
@@ -83,11 +70,6 @@ def terrain_pair(rt: RiftTerrain, variant) -> tuple:
 
 
 def vision_for(rt: RiftTerrain, variant, grid) -> Any:
-    """``obs.vision.VisionGrid`` with the variant's flags and brush labels.
-
-    ``grid`` is the base ``VisionGrid`` (``cfg.vision``); the fast fog uses
-    ``bush_ids``, the ray fog uses ``flags``. Brush ids are per-variant labels,
-    so equal ids mean "same brush patch" only within one variant.
-    """
+    """The base ``VisionGrid`` with the variant's flags and brush labels."""
     out = grid._replace(flags=rt.flags[variant])
     return out._replace(bush_ids=rt.bush_ids[variant]) if grid.bush_ids is not None else out
