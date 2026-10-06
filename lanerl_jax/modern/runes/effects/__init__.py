@@ -1,17 +1,9 @@
-"""Registry and dispatch for every 26.19 SR rune effect.
+"""Registry and dispatch of every 26.19 SR rune effect (RUNES.md §9).
 
-``MODULES`` (one per tree) run in this order after all item hooks, matching
-the README default "main hit -> item on-hits -> rune on-hits" (RUNES U-18).
-Per-module state lives in one ``RuneEffectState`` field named after the
-module.
-
-Coverage contract: every selectable rune is exactly one of
-  * implemented by a module (``module.COVERAGE``),
-  * ``WORLD``: run by a world subsystem (Sixth Sense, Deep Ward: domination
-    kernels called by ``wards.ward_step``), or
-  * ``DEFERRED`` with a reason (currently none),
-and the seven stat shards are ``STATIC`` (``items.loadout.stat_shard_stats``).
-``coverage_report()`` and the tests enforce this.
+``MODULES`` (one per tree) run in this order after all item hooks (main hit -> item on-hits -> rune on-hits,
+U-18); each module's state is the ``RuneEffectState`` field of its name. ``coverage_report`` enforces that
+every catalog perk is implemented by exactly one module, run by the world (``WORLD``), ``DEFERRED`` with a
+reason, or a ``STATIC`` stat shard (``items.loadout.stat_shard_stats``).
 """
 from __future__ import annotations
 
@@ -27,13 +19,9 @@ from .core import RuneEvents, RuneOutputs, merge_outputs, no_outputs
 
 MODULES = (precision, domination, sorcery, resolve, inspiration)
 
-# Vision runes run by the world's ward system: kernels ``domination.sixth_sense`` /
-# ``domination.deep_ward``, called from ``wards.ward_step`` (docs/modern/WARDS.md).
 WORLD = {
-    8137: "Sixth Sense (wards via domination.sixth_sense): alive and off cd, track the nearest "
-          "untracked enemy ward within 900 unseen by the holder's team; from level 11 reveal it 10 s; cd 250 s",
-    8141: "Deep Ward (wards via domination.deep_ward): trinket Totem Wards placed in the enemy jungle "
-          "(river too from level 9) get +1 HP and +lin(45, 150, avg level) s",
+    8137: "Sixth Sense: wards.ward_step via domination.sixth_sense",
+    8141: "Deep Ward: wards.ward_step via domination.deep_ward",
 }
 DEFERRED: dict[int, str] = {}
 STATIC = {
@@ -65,16 +53,13 @@ def init(n_champions: int, n_units: int) -> RuneEffectState:
 def coverage_report() -> dict[int, str]:
     """Perk id -> provenance; raises on gaps or double coverage."""
     out: dict[int, str] = {}
-    for m in MODULES:
-        for pid, what in m.COVERAGE.items():
-            if pid in out:
-                raise RuntimeError(f"rune {pid} covered twice: {out[pid]} / {_name(m)}")
-            out[pid] = f"{_name(m)}: {what}"
-    for table, label in ((WORLD, "WORLD"), (DEFERRED, "DEFERRED"), (STATIC, "STATIC")):
-        for pid, why in table.items():
+    tables = [(_name(m), m.COVERAGE) for m in MODULES] + [("WORLD", WORLD), ("DEFERRED", DEFERRED),
+                                                          ("STATIC", STATIC)]
+    for label, table in tables:
+        for pid, what in table.items():
             if pid in out:
                 raise RuntimeError(f"rune {pid} is both {label} and {out[pid]}")
-            out[pid] = f"{label}: {why}"
+            out[pid] = f"{label}: {what}"
     cat = rune_catalog()
     missing = sorted(set(cat.ids) - set(out))
     if missing:
@@ -87,101 +72,61 @@ def coverage_report() -> dict[int, str]:
 
 
 def _each(hook: str):
-    for m in MODULES:
-        fn = getattr(m, hook, None)
-        if fn is not None:
-            yield m, fn
-
-
-def _sub(state, m):
-    return getattr(state, _name(m))
-
-
-def _put(state, m, sub):
-    return state._replace(**{_name(m): sub})
+    """(module name, hook function) for the modules that define ``hook``."""
+    return [(_name(m), getattr(m, hook)) for m in MODULES if hasattr(m, hook)]
 
 
 def stats(state, page, ctx, ev: RuneEvents) -> ItemStats:
-    parts = [fn(_sub(state, m), page, ctx, ev) for m, fn in _each("stats")]
+    parts = [fn(getattr(state, m), page, ctx, ev) for m, fn in _each("stats")]
     return combine_stats(zero_stats(ctx.level.shape), *parts)
 
 
 def debuffs(state, page, ctx, units, ev) -> Debuffs:
-    parts = [fn(_sub(state, m), page, ctx, units, ev) for m, fn in _each("debuffs")]
+    parts = [fn(getattr(state, m), page, ctx, units, ev) for m, fn in _each("debuffs")]
     return combine_debuffs(parts, units.x.shape[0])
 
 
-def packet_amp(state, page, ctx, units, ev, packets):
-    out = jnp.zeros(packets.valid.shape, jnp.float32)
-    for m, fn in _each("packet_amp"):
-        out = out + fn(_sub(state, m), page, ctx, units, ev, packets)
-    return out
+def _packet_sum(hook: str):
+    def run(state, page, ctx, units, ev, packets):
+        out = jnp.zeros(packets.valid.shape, jnp.float32)
+        for m, fn in _each(hook):
+            out = out + fn(getattr(state, m), page, ctx, units, ev, packets)
+        return out
+    return run
 
 
-def packet_block(state, page, ctx, units, ev, packets):
-    out = jnp.zeros(packets.valid.shape, jnp.float32)
-    for m, fn in _each("packet_block"):
-        out = out + fn(_sub(state, m), page, ctx, units, ev, packets)
-    return out
+packet_amp, packet_block = _packet_sum("packet_amp"), _packet_sum("packet_block")
 
 
 def heal_mult(state, page, ctx, ev):
     out = jnp.ones(ctx.level.shape, jnp.float32)
     for m, fn in _each("heal_mult"):
-        out = out * fn(_sub(state, m), page, ctx, ev)
+        out = out * fn(getattr(state, m), page, ctx, ev)
     return out
 
 
-def _event(hook: str, state, page, ctx, units, ev):
-    c, n = ctx.level.shape[0], units.x.shape[0]
-    parts = []
-    for m, fn in _each(hook):
-        sub, eff = fn(_sub(state, m), page, ctx, units, ev)
-        state = _put(state, m, sub)
-        parts.append(eff)
-    return state, merge_effects(parts, c, n)
+def _event(hook: str):
+    def run(state, page, ctx, units, ev):
+        parts = []
+        for m, fn in _each(hook):
+            sub, eff = fn(getattr(state, m), page, ctx, units, ev)
+            state = state._replace(**{m: sub})
+            parts.append(eff)
+        return state, merge_effects(parts, ctx.level.shape[0], units.x.shape[0])
+    return run
 
 
-def on_cast(state, page, ctx, units, ev):
-    return _event("on_cast", state, page, ctx, units, ev)
-
-
-def on_attack(state, page, ctx, units, ev):
-    return _event("on_attack", state, page, ctx, units, ev)
-
-
-def on_hit(state, page, ctx, units, ev):
-    return _event("on_hit", state, page, ctx, units, ev)
-
-
-def on_cc(state, page, ctx, units, ev):
-    return _event("on_cc", state, page, ctx, units, ev)
-
-
-def periodic(state, page, ctx, units, ev):
-    return _event("periodic", state, page, ctx, units, ev)
-
-
-def on_damage(state, page, ctx, units, ev):
-    return _event("on_damage", state, page, ctx, units, ev)
-
-
-def on_takedown(state, page, ctx, units, ev):
-    return _event("on_takedown", state, page, ctx, units, ev)
+on_cast, on_attack, on_hit, on_cc, periodic, on_damage, on_takedown = map(
+    _event, ("on_cast", "on_attack", "on_hit", "on_cc", "periodic", "on_damage", "on_takedown"))
 
 
 def post_tick(state, page, ctx, units, ev):
     for m, fn in _each("post_tick"):
-        state = _put(state, m, fn(_sub(state, m), page, ctx, units, ev))
+        state = state._replace(**{m: fn(getattr(state, m), page, ctx, units, ev)})
     return state
 
 
 def outputs(state, page, ctx, ev) -> RuneOutputs:
     c, i = ctx.level.shape[0], len(catalog().ids)
-    parts = [fn(_sub(state, m), page, ctx, ev) for m, fn in _each("outputs")]
+    parts = [fn(getattr(state, m), page, ctx, ev) for m, fn in _each("outputs")]
     return merge_outputs(parts, c, i) if parts else no_outputs(c, i)
-
-
-__all__ = ["MODULES", "WORLD", "DEFERRED", "STATIC", "RuneEffectState", "init", "coverage_report", "stats",
-           "debuffs", "packet_amp", "packet_block", "heal_mult", "on_cast", "on_attack", "on_hit", "on_cc",
-           "periodic", "on_damage", "on_takedown", "post_tick", "outputs"]

@@ -1,42 +1,9 @@
-"""Domination tree 8100 (RUNES.md §4; client build 16.19.8230722).
+"""Domination tree 8100 (RUNES.md §4), plus the Sixth Sense / Deep Ward kernels run by ``wards.ward_step``.
 
-Numbers come from ``runes_client.json`` (``ea``); level scaling is
-``lin`` (RUNES §1.1, extrapolating past 18 per U-01). Hard-coded values are
-the ones the client data lacks, each citing RUNES.md:
-
-* Electrocute 0.25 s damage delay (§4.1, wiki); 3 stacks (§4.1).
-* Dark Harvest 1.75 s soul delay and the 2-damage floor (§4.2, §1.5).
-* Bounty Hunter cap of 5 unique champions (§4.8).
-
-Defaults for open rules:
-
-* Electrocute stacks: 1 per cast instance per champion (``first_instance``
-  within a tick plus an ``ELEC_SEEN``-slot (cast_id, dst) ring across
-  ticks); ``cast_id`` 0 packets are each their own instance. Proc packets
-  stack only with ``TAG_PET`` (§1.3). CC (``ev.cc``) on an enemy champion
-  adds a stack in ``on_cc``; the first damage instance on that champion in
-  the same tick is treated as the same instance (packets do not tie CC to a
-  cast). Stacks are not gained on cooldown. Damage is snapshotted at the
-  trigger and dealt after the delay even if the holder died; the target
-  must still be alive.
-* Dark Harvest: post-hit HP threshold (U-07) read from the resolved pass;
-  post-mitigation ``final >= 2``; the target must survive the trigger hit.
-  Two pending-soul slots (a takedown reset to 1 s can re-trigger inside the
-  1.75 s soul delay).
-* Hail of Blades: stacks are consumed by every on-attack while active (any
-  target); the duration refreshes only on attacks against champions. A
-  cancelled triggering windup locks the rune for ``HOB_CANCEL_LOCKOUT`` s
-  (wiki "brief cooldown"; no client value). The on-hit true damage goes to
-  the empowered attack's target when it lands.
-* Cheap Shot: ``ev.impaired`` is tick-start state, so CC applied in the same
-  tick never counts (the "CC applied on-hit by that instance" exception is
-  not modelled).
-* Taste of Blood: instant heal (U-08); any damage packet (incl. 0 and rune
-  procs) to an enemy champion while the holder is below max HP after the pass.
-* Sudden Impact: arms on ``ev.blinked``; triggers on any damage packet
-  (incl. 0) to an enemy champion except its own.
-* Relentless Hunter uses the generic ``last_combat`` clock (the "modern"
-  combat system is not tracked separately).
+Proc damage triggers nothing unless it is also pet damage (§1.3). Electrocute stacks once per cast instance per
+champion (``first_instance`` within a tick, a (cast_id, dst) ring across ticks); a CC stack pairs with the first
+damage instance on that champion in the same tick. Delayed damage is snapshotted at the trigger and dealt even if
+the holder died. Dark Harvest reads post-hit HP (U-07). Taste of Blood heals instantly (U-08).
 """
 from __future__ import annotations
 
@@ -53,45 +20,38 @@ ELECTROCUTE, DARK_HARVEST, HAIL_OF_BLADES = 8112, 8128, 9923
 CHEAP_SHOT, TASTE_OF_BLOOD, SUDDEN_IMPACT = 8126, 8139, 8143
 GRISLY_MEMENTOS = 8140
 SIXTH_SENSE, DEEP_WARD = 8137, 8141
-SIXTH_SENSE_RANGE_KEY = "{d3bd04a2}"   # unnamed client key = 900 (wiki "within 900 units")
+SIXTH_SENSE_RANGE_KEY = "{d3bd04a2}"   # unnamed client key = 900 (wiki range)
 TREASURE_HUNTER, RELENTLESS_HUNTER, ULTIMATE_HUNTER = 8135, 8105, 8106
 
-ELEC_STACKS = 3            # RUNES §4.1 "3 stacks within 3 s"
-ELEC_DELAY = 0.25          # RUNES §4.1 "after a 0.25 s delay"
+ELEC_STACKS = 3            # RUNES §4.1
+ELEC_DELAY = 0.25          # wiki, RUNES §4.1
 ELEC_SEEN = 8              # (cast_id, dst) ring per holder
 DH_SOUL_DELAY = 1.75       # RUNES §4.2
-DH_MIN_DAMAGE = 2.0        # RUNES §1.5 "Dark Harvest excludes damage < 2"
-DH_SOUL_SLOTS = 2
-HOB_CANCEL_LOCKOUT = 1.0   # RUNES §4.3 "brief cooldown" (no client value; default)
+DH_MIN_DAMAGE = 2.0        # RUNES §1.5
+DH_SOUL_SLOTS = 2          # a takedown cd reset can re-trigger inside the soul delay
+HOB_CANCEL_LOCKOUT = 1.0   # wiki "brief cooldown", RUNES §4.3
 BOUNTY_MAX = 5             # RUNES §4.8
 
 COVERAGE = {
-    ELECTROCUTE: "3 stacks (1 per cast instance per champion, incl. CC) within 3 s -> after 0.25 s "
-                 "lin(70,240) + 10% bonus AD + 5% AP variable damage, proc; cd 20 s",
-    DARK_HARVEST: "non-proc damage >= 2 to a champion below 50% (post-hit, U-07): 30 + 11/soul + 10% bonus AD "
-                  "+ 5% AP adaptive, proc; +1 soul after 1.75 s; cd 35 s, takedown -> 1 s; "
-                  "execute-credit souls while ready",
-    HAIL_OF_BLADES: "windup on a champion -> 3 empowered attacks (+2 per activation from attack resets), "
-                    "+90%/60% AS with cap lift, lin(2,20) + 12% bonus AD + 10% AP true on-hit proc; "
-                    "3 s refresh window; cd 10 s after the end; cancelled windup -> 1 s lockout (default)",
-    CHEAP_SHOT: "non-proc damage to an already-impaired champion: lin(10,45) true proc; cd 4 s "
-                "(on-hit same-instance CC counts via ev.cc_on_hit/cc_cast_id)",
-    TASTE_OF_BLOOD: "damage to a champion below full HP: instant heal lin(16,40) + 10% bonus AD + 5% AP "
-                    "(U-08); cd 20 s",
-    SUDDEN_IMPACT: "dash/blink/Flash/TP/stealth exit arms 4 s; first damage to a champion: lin(20,80) true "
-                   "proc; cd 10 s after use or expiry",
-    GRISLY_MEMENTOS: "+1 memento per champion takedown (max 18), +6 trinket haste each (applied to trinket "
-                     "recharge by wards.ward_step)",
-    TREASURE_HUNTER: "Bounty Hunter stacks (unique champion takedowns, max 5): 50 + 20*stacks_before gold each",
-    RELENTLESS_HUNTER: "+8 flat MS per Bounty Hunter stack while out of combat (5 s after the modern combat clock)",
-    ULTIMATE_HUNTER: "6 + 5 per Bounty Hunter stack ultimate haste",
+    ELECTROCUTE: "3 stacks (cast instances and CC) within 3 s -> delayed variable damage; no stacks on cooldown",
+    DARK_HARVEST: "non-proc damage >= 2 to a champion below 50% post-hit -> adaptive damage, soul after 1.75 s; "
+                  "takedown resets the cooldown to 1 s; execute-credit souls while ready",
+    HAIL_OF_BLADES: "windup on a champion -> empowered attacks (+ attack-reset bonus), AS with cap lift, true "
+                    "on-hit; refresh only on champion attacks; cancelled windup -> lockout (default)",
+    CHEAP_SHOT: "non-proc damage to a champion impaired at tick start, or by the same on-hit cast instance",
+    TASTE_OF_BLOOD: "any damage to a champion while below max HP -> instant heal",
+    SUDDEN_IMPACT: "blink/dash/stealth exit arms; first other damage to a champion deals true damage; cd after "
+                   "use or expiry",
+    GRISLY_MEMENTOS: "mementos per champion takedown -> trinket haste (applied by wards.ward_step)",
+    TREASURE_HUNTER: "Bounty Hunter stacks (unique champion takedowns) -> gold",
+    RELENTLESS_HUNTER: "flat MS per Bounty Hunter stack out of combat (modern combat clock)",
+    ULTIMATE_HUNTER: "ultimate haste per Bounty Hunter stack",
 }
-
 
 class State(NamedTuple):
     elec_first_t: Any       # (C, N) first stack of the current window
     elec_stacks: Any        # (C, N) int32
-    elec_cc_t: Any          # (C, N) tick of an unpaired CC stack (pairs with that tick's first damage)
+    elec_cc_t: Any          # (C, N) tick of an unpaired CC stack
     elec_seen_id: Any       # (C, K) int32 cast ids that already stacked
     elec_seen_dst: Any      # (C, K) int32 their target
     elec_seen_ptr: Any      # (C,) int32 ring write position
@@ -112,7 +72,7 @@ class State(NamedTuple):
     hob_inflight: Any       # (C,) bool launched empowered attack awaiting its hit
     cs_cd_until: Any        # (C,)
     tob_cd_until: Any       # (C,)
-    si_armed_until: Any     # (C,) BIG-negative = not armed
+    si_armed_until: Any     # (C,) -BIG = not armed
     si_cd_until: Any        # (C,)
     bounty: Any             # (C, N) bool unique enemy champion takedowns
     mementos: Any           # (C,)
@@ -134,14 +94,12 @@ def init(n_champions: int, n_units: int) -> State:
         jnp.zeros((c, n), bool), z)
 
 
-# ---- helpers ------------------------------------------------------------------
-
 def _f32(x):
     return jnp.asarray(x).astype(jnp.float32)
 
 
 def _enemy_champ_units(ctx, units):
-    """(C, N) enemy champion units (dead ones included: kills still count)."""
+    """(C, N) enemy champion units, dead included."""
     return (units.cls[None, :] == CLASS_CHAMPION) & (units.team[None, :] != ctx.team[:, None])
 
 
@@ -154,7 +112,6 @@ def _to_enemy_champ(p, ctx, units):
 
 
 def _non_proc(p):
-    """Proc damage never triggers unless it is also pet damage (RUNES §1.3)."""
     return ~has(p.flags, TAG_PROC) | has(p.flags, TAG_PET)
 
 
@@ -187,7 +144,7 @@ def _elec_damage(ctx, ev):
 
 
 def _elec_add(state: State, page, ctx, ev, new) -> State:
-    """Add ``new`` (C, N) stacks, expire 3 s windows, queue the delayed hit."""
+    """Add ``new`` (C, N) stacks, expire windows, queue the delayed hit."""
     now = ctx.now
     ready = has_rune(page, ELECTROCUTE) & (now >= state.elec_cd_until)
     new = jnp.where(ready[:, None], new, 0)
@@ -214,7 +171,6 @@ def _elec_from_packets(state: State, page, ctx, units, ev, p) -> State:
     n = units.x.shape[0]
     sel = _to_enemy_champ(p, ctx, units) & _non_proc(p)[None, :]
     first = first_instance(p, sel)
-    # Across ticks: drop instances whose (cast_id, dst) already stacked.
     seen = jnp.any((state.elec_seen_id[:, None, :] == p.cast_id[None, :, None])
                    & (state.elec_seen_dst[:, None, :] == p.dst[None, :, None]), axis=2) & (p.cast_id != 0)[None, :]
     inst = first & ~seen
@@ -257,10 +213,8 @@ def on_cc(state: State, page, ctx, units, ev):
     return _elec_add(state, page, ctx, ev, hit.astype(jnp.int32)), effects(c, n)
 
 
-# ---- action phase -----------------------------------------------------------------
-
 def on_cast(state: State, page, ctx, units, ev):
-    """Sudden Impact arming (RUNES §9 step 3); expiry starts the cooldown."""
+    """Sudden Impact arming; expiry starts the cooldown."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     armed = state.si_armed_until > -BIG / 2
@@ -280,12 +234,12 @@ def _hob_end(state: State, ended, at) -> State:
 
 
 def on_attack(state: State, page, ctx, units, ev):
-    """Hail of Blades: windup trigger, cancel, launch consumption, resets."""
+    """Hail of Blades."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     own = has_rune(page, HAIL_OF_BLADES)
     duration = ea(HAIL_OF_BLADES, "Duration")
-    # Timeout: 3 s without an attack.
+    # Timeout without an attack.
     state = _hob_end(state, state.hob_active & (now >= state.hob_expire), state.hob_expire)
     # Cancelled triggering windup: no stacks, brief lockout.
     cancel = state.hob_pending & ev.attack_cancelled
@@ -296,7 +250,7 @@ def on_attack(state: State, page, ctx, units, ev):
     on_champ = (units.cls[tgt] == CLASS_CHAMPION) & (units.team[tgt] != ctx.team) & (ev.attack_start_target >= 0)
     start = own & ev.attack_started & on_champ & ~state.hob_active & (now >= state.hob_cd_until)
     pending = state.hob_pending | start
-    # Launch: activation (triggering attack is the first empowered one) or consumption.
+    # Launch: activation (the triggering attack is the first empowered one) or consumption.
     launched = ev.attack.launched
     at = jnp.clip(ev.attack.target, 0, n - 1)
     at_champ = (units.cls[at] == CLASS_CHAMPION) & (units.team[at] != ctx.team)
@@ -320,7 +274,6 @@ def on_attack(state: State, page, ctx, units, ev):
 
 
 def on_hit(state: State, page, ctx, units, ev):
-    """Hail of Blades on-hit bonus true damage of an empowered attack."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     land = state.hob_inflight & ev.attack.hit & has_rune(page, HAIL_OF_BLADES)
     raw = lin(ea(HAIL_OF_BLADES, "BonusDamageMin"), ea(HAIL_OF_BLADES, "BonusDamageMax"), ctx.level) \
@@ -330,7 +283,6 @@ def on_hit(state: State, page, ctx, units, ev):
 
 
 def periodic(state: State, page, ctx, units, ev):
-    """Electrocute delayed hit; Dark Harvest soul delivery."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     due = now >= state.elec_due
@@ -343,10 +295,8 @@ def periodic(state: State, page, ctx, units, ev):
     return state, effects(c, n, packets=p)
 
 
-# ---- damage triggers ----------------------------------------------------------------
-
 def on_damage(state: State, page, ctx, units, ev):
-    """RUNES §9 4.6 order: Electrocute, Dark Harvest, Cheap Shot, Sudden Impact, Taste of Blood."""
+    """Order per RUNES §9: Electrocute, Dark Harvest, Cheap Shot, Sudden Impact, Taste of Blood."""
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     rep = ev.report
@@ -357,7 +307,7 @@ def on_damage(state: State, page, ctx, units, ev):
 
     state = _elec_from_packets(state, page, ctx, units, ev, p)
 
-    # Dark Harvest (post-hit HP, U-07).
+    # Dark Harvest.
     below = (units.hp[d] < ea(DARK_HARVEST, "HarvestThreshold") * units.max_hp[d]) & units.alive[d]
     dh_sel = champ & non_proc & (r.final >= DH_MIN_DAMAGE)[None, :] & below[None, :]
     dh_any, dh_dst = _first_dst(dh_sel, p)
@@ -371,10 +321,8 @@ def on_damage(state: State, page, ctx, units, ev):
     state = state._replace(dh_cd_until=_f32(jnp.where(dh_go, now + ea(DARK_HARVEST, "Cooldown"), state.dh_cd_until)),
                            dh_soul_due=_f32(jnp.where(put, now + DH_SOUL_DELAY, state.dh_soul_due)))
 
-    # Cheap Shot: target impaired at tick start, or impaired on-hit by the same
-    # cast instance this tick (RUNES §4.4 exception; ``ev.cc_on_hit`` / ``cc_cast_id``).
-    nn = units.x.shape[0]
-    dcl = jnp.clip(d, 0, nn - 1)
+    # Cheap Shot: impaired at tick start, or on-hit by the same cast instance this tick (§4.4).
+    dcl = jnp.clip(d, 0, n - 1)
     same_hit = ev.cc_on_hit[:, dcl] & (ev.cc.slowed | ev.cc.immobilized)[:, dcl] \
         & (ev.cc_cast_id[:, dcl] == p.cast_id[None, :]) & (p.cast_id[None, :] != 0)
     cs_sel = champ & non_proc & (ev.impaired[d][None, :] | same_hit)
@@ -384,7 +332,7 @@ def on_damage(state: State, page, ctx, units, ev):
                  TRUE, CHEAP_SHOT)
     state = state._replace(cs_cd_until=_f32(jnp.where(cs_go, now + ea(CHEAP_SHOT, "Cooldown"), state.cs_cd_until)))
 
-    # Sudden Impact: first damage while armed.
+    # Sudden Impact.
     si_sel = champ & (p.item != rune_item(SUDDEN_IMPACT))[None, :]
     si_any, si_dst = _first_dst(si_sel, p)
     armed = (state.si_armed_until > -BIG / 2) & (now < state.si_armed_until)
@@ -394,7 +342,7 @@ def on_damage(state: State, page, ctx, units, ev):
     state = state._replace(si_armed_until=_f32(jnp.where(si_go, -BIG, state.si_armed_until)),
                            si_cd_until=_f32(jnp.where(si_go, now + ea(SUDDEN_IMPACT, "Cooldown"), state.si_cd_until)))
 
-    # Taste of Blood: any damage, not at full HP.
+    # Taste of Blood.
     tob_go = jnp.any(champ, axis=1) & has_rune(page, TASTE_OF_BLOOD) & (now >= state.tob_cd_until) \
         & ctx.alive & (ctx.hp < ctx.max_hp)
     heal = lin(ea(TASTE_OF_BLOOD, "HealAmount"), ea(TASTE_OF_BLOOD, "HealAmountMax"), ctx.level) \
@@ -404,26 +352,25 @@ def on_damage(state: State, page, ctx, units, ev):
     return state, effects(c, n, packets=concat_packets(p_dh, p_cs, p_si), heal=jnp.where(tob_go, heal, 0.0))
 
 
-# ---- takedowns and stats ----------------------------------------------------------
-
 def on_takedown(state: State, page, ctx, units, ev):
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
     took = ev.kills.killed_units & _enemy_champ_units(ctx, units)
     n_took = jnp.sum(took, axis=1).astype(jnp.float32)
-    # Dark Harvest: takedown resets the remaining cooldown to 1 s; execute credit souls while ready.
+    # Dark Harvest.
     dh = has_rune(page, DARK_HARVEST)
     ready = now >= state.dh_cd_until
     extra = jnp.where(dh & ready, ev.execute_credit, 0.0)
     reset = dh & (n_took > 0)
     dh_cd = jnp.where(reset, jnp.minimum(state.dh_cd_until, now + ea(DARK_HARVEST, "CooldownResetValue")),
                       state.dh_cd_until)
-    # Bounty Hunter stacks (unique enemy champions) and Treasure Hunter gold.
+    # Bounty Hunter stacks and Treasure Hunter gold.
     before = _bounty_stacks(state)
     bounty = state.bounty | took
     after = jnp.minimum(jnp.sum(bounty, axis=1), BOUNTY_MAX).astype(jnp.float32)
     k = after - before
-    gold = ea(TREASURE_HUNTER, "BaseGoldAmount") * k + ea(TREASURE_HUNTER, "GoldGrowth") * (before * k + k * (k - 1) / 2)
+    gold = ea(TREASURE_HUNTER, "BaseGoldAmount") * k \
+        + ea(TREASURE_HUNTER, "GoldGrowth") * (before * k + k * (k - 1) / 2)
     gold = jnp.where(has_rune(page, TREASURE_HUNTER), gold, 0.0)
     memento = jnp.minimum(state.mementos + n_took, ea(GRISLY_MEMENTOS, "MaxStacks"))
     state = state._replace(dh_souls=_f32(state.dh_souls + extra), dh_cd_until=_f32(dh_cd), bounty=bounty,
@@ -448,18 +395,13 @@ def stats(state: State, page, ctx, ev) -> ItemStats:
                      move_speed=_f32(ms), ultimate_haste=_f32(uh), trinket_haste=_f32(trinket))
 
 
-# ---- vision runes (run by the world's ward system, wards.ward_step) ---------------
+# ---- vision runes (called by wards.ward_step) ------------------------------------
 
 def deep_ward(page, owner, owner_level, avg_level, in_enemy_jungle, in_river, is_trinket_stealth):
-    """Deep Ward 8141 for one placement per champion, (C,) inputs.
+    """Deep Ward for one placement per champion, (C,) inputs; ``owner`` is the placer's holder row.
 
-    ``owner`` (C,) champion index of the placer (holder row of ``page``).
-    Returns ``(extra_hp, extra_duration)``. Client: ExtraHealth 1,
-    LevelThreshold 9, TrinketDurationIncrease ByCharLevelInterpolation 45→150
-    (evaluated at the average champion level per the wiki, WARDS U-W-6).
-    Only trinket Stealth Wards (Totem Wards) exist in the lane world; the
-    non-trinket ``DurationIncrease`` 30→45 has no ward to apply to.
-    """
+    Returns ``(extra_hp, extra_duration, applies)``. The duration is evaluated at the average champion level
+    (wiki, WARDS U-W-6); only trinket wards exist, so the non-trinket ``DurationIncrease`` is unused."""
     has = has_rune(page, DEEP_WARD)[owner]
     river_ok = in_river & (owner_level >= ea(DEEP_WARD, "LevelThreshold"))
     deep = has & is_trinket_stealth & (in_enemy_jungle | river_ok)
@@ -470,14 +412,9 @@ def deep_ward(page, owner, owner_level, avg_level, in_enemy_jungle, in_river, is
 
 
 def sixth_sense(page, cd_until, now, level, alive, cx, cy, cteam, ward_alive, wx, wy, wteam, unseen, tracked):
-    """Sixth Sense 8137. (C,) holders, (S,) ward slots, ``unseen`` (C, S).
-
-    Returns ``(cd_until, pick (C, S) one-hot, reveal (C,))``: a holder that is
-    alive and off cooldown senses the nearest enemy ward within 900 that is
-    not tracked and not seen by its team; it is tracked for the team, and from
-    level 11 also revealed for ``RevealDuration`` (10 s). Cooldown 250 s
-    (``MeleeItemCalcValue`` = ``RangedItemCalcValue``) starts on a trigger.
-    """
+    """Sixth Sense, (C,) holders x (S,) ward slots. Returns ``(cd_until, pick (C, S) one-hot, reveal (C,))``:
+    a ready holder tracks the nearest untracked enemy ward in range its team does not see, and reveals it from
+    the level threshold. The cooldown is ``MeleeItemCalcValue`` (= ``RangedItemCalcValue``)."""
     rng = ea(SIXTH_SENSE, SIXTH_SENSE_RANGE_KEY)
     d2 = (wx[None, :] - cx[:, None]) ** 2 + (wy[None, :] - cy[:, None]) ** 2
     cand = (ward_alive[None, :] & (wteam[None, :] != cteam[:, None]) & unseen & ~tracked[None, :]

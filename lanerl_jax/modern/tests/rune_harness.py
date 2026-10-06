@@ -1,8 +1,5 @@
-"""Small fixed-shape helpers for rune-effect unit tests.
-
-Builds on ``item_harness`` (units, ctx, attack, cast, kills, resolve): unit 0
-and 1 are the two champions (holders 0 and 1, teams 0 and 1).
-"""
+"""Fixed-shape helpers for rune-effect unit tests, on top of ``item_harness`` (units 0 and 1 are the two
+champions: holders 0 and 1, teams 0 and 1)."""
 from __future__ import annotations
 
 import jax.numpy as jnp
@@ -13,6 +10,8 @@ from lanerl_jax.modern.items.effects.core import Report
 from lanerl_jax.modern.runes import catalog as RD
 from lanerl_jax.modern.runes.effects.core import CombatClocks, rune_events
 from lanerl_jax.modern.tests import item_harness as H
+
+ev = rune_events
 
 
 def perks(*lists):
@@ -25,21 +24,26 @@ def perks(*lists):
     return jnp.asarray(out)
 
 
-def ev(ctx, n_units, **kw):
-    return rune_events(ctx, n_units, **kw)
+def page(*ids):
+    """Holder 0 owns ``ids``; holder 1 has no runes."""
+    return perks(list(ids), [])
+
+
+def world(extra=(), **kw):
+    """The two champions (``item_harness.champions(**kw)``) plus ``extra`` unit rows."""
+    return H.units(H.champions(**kw) + list(extra))
 
 
 def clocks(n=2, *, last_combat=-1e9, last_champion_combat=-1e9, last_hit_by_champion=-1e9,
            champion_combat_start=-1e9, struck_first=False):
     v = lambda x: jnp.broadcast_to(jnp.asarray(x, jnp.float32), (n,))
     return CombatClocks(v(last_combat), v(last_champion_combat), v(last_hit_by_champion),
-                        v(champion_combat_start), jnp.broadcast_to(jnp.asarray(struck_first), (n,)))
+                        v(champion_combat_start), jnp.broadcast_to(jnp.asarray(struck_first), (n,)), v(last_combat))
 
 
 def report(p, u, **kw) -> Report:
-    """Resolve packets against units ``u`` (item_harness.resolve) and return the Report."""
-    rep, _ = H.resolve(p, u, **kw)
-    return rep
+    """Resolve packets against units ``u`` (``item_harness.resolve``)."""
+    return H.resolve(p, u, **kw)[0]
 
 
 def hit_packet(src, dst, raw, dtype=D.PHYSICAL, flags=D.BASIC_ATTACK, cast_id=0, item=0):

@@ -10,12 +10,9 @@ from lanerl_jax.modern.items.effects.core import CC
 from lanerl_jax.modern.runes.effects import sorcery as S
 from lanerl_jax.modern.tests import item_harness as H
 from lanerl_jax.modern.tests import rune_harness as R
+from lanerl_jax.modern.tests.rune_harness import world
 
 SPELL = D.TAG_ACTIVE_SPELL
-
-
-def world(extra=(), **kw):
-    return H.units(H.champions(**kw) + list(extra))
 
 
 def hit(state, page, ctx, u, raw, flags=D.BASIC_ATTACK, src=0, dst=1, **evkw):
@@ -51,7 +48,7 @@ def test_coverage_lists_every_sorcery_rune():
 
 def test_f29_stormraider_trigger_l9():
     u = world()
-    page = R.perks([S.STORMRAIDER], [])
+    page = R.page(S.STORMRAIDER)
     st = S.init(2, 2)
     st, _ = hit(st, page, H.ctx(now=0.0, level=9), u, 130.0)
     c = H.ctx(now=2.5, level=9)
@@ -69,7 +66,7 @@ def test_f29_stormraider_trigger_l9():
 
 def test_f29_stormraider_below_threshold_and_window():
     u = world()
-    page = R.perks([S.STORMRAIDER], [])
+    page = R.page(S.STORMRAIDER)
     st = S.init(2, 2)
     st, _ = hit(st, page, H.ctx(now=0.0, level=9), u, 120.0)
     st, _ = hit(st, page, H.ctx(now=2.5, level=9), u, 120.0)
@@ -87,7 +84,7 @@ def test_f29_stormraider_below_threshold_and_window():
 
 def test_stormraider_cooldown_and_ranged():
     u = world()
-    page = R.perks([S.STORMRAIDER], [])
+    page = R.page(S.STORMRAIDER)
     st = S.init(2, 2)
     st, _ = hit(st, page, H.ctx(now=0.0, level=1, ranged=True), u, 300.0)
     assert float(st.sr_cd_until[0]) == pytest.approx(20.0)
@@ -104,7 +101,7 @@ def test_stormraider_cooldown_and_ranged():
 
 def test_aery_damage_delay_and_return():
     u = world()
-    page = R.perks([S.AERY], [])
+    page = R.page(S.AERY)
     st = S.init(2, 2)
     st, _ = hit(st, page, H.ctx(now=0.0, bonus_ad=20.0), u, 50.0)
     assert float(st.aery_due[0]) == pytest.approx(0.45)
@@ -128,7 +125,7 @@ def test_aery_damage_delay_and_return():
 
 def test_aery_magic_on_ap_and_ignores_persistent_damage():
     u = world()
-    page = R.perks([S.AERY], [])
+    page = R.page(S.AERY)
     st, _ = hit(S.init(2, 2), page, H.ctx(now=0.0, ap=40.0), u, 50.0, flags=SPELL)
     assert int(st.aery_dtype[0]) == D.MAGIC
     assert float(st.aery_raw[0]) == pytest.approx(12.0)
@@ -144,7 +141,7 @@ def test_aery_magic_on_ap_and_ignores_persistent_damage():
 
 def test_comet_damage_distance_amp_and_cooldown():
     u = world(x1=300.0)
-    page = R.perks([S.COMET], [])
+    page = R.page(S.COMET)
     st = S.init(2, 2)
     st, _ = hit(st, page, H.ctx(now=0.0), u, 50.0, flags=D.BASIC_ATTACK)
     assert float(st.comet_due[0]) > 1e8                                 # attacks don't trigger
@@ -164,7 +161,7 @@ def test_comet_damage_distance_amp_and_cooldown():
 
 def test_comet_physical_bonus_ad_max_range_and_dodge():
     u = world(x1=1000.0)
-    page = R.perks([S.COMET], [])
+    page = R.page(S.COMET)
     st, _ = hit(S.init(2, 2), page, H.ctx(now=0.0, level=18, bonus_ad=100.0), u, 50.0, flags=SPELL)
     assert float(st.comet_raw[0]) == pytest.approx((100.0 + 10.0) * 2.0)
     assert int(st.comet_dtype[0]) == D.PHYSICAL
@@ -178,7 +175,7 @@ def test_comet_physical_bonus_ad_max_range_and_dodge():
 
 def test_deathfire_spell_burn_total_and_amp():
     u = world()
-    page = R.perks([S.DEATHFIRE], [])
+    page = R.page(S.DEATHFIRE)
     st, _ = hit(S.init(2, 2), page, H.ctx(now=0.0), u, 50.0, flags=SPELL)
     st, out = run_periodic(st, page, u, 1 / 30, 5.0)
     ticks = [R.total(p, rune=S.DEATHFIRE) for _, p in out if R.total(p, rune=S.DEATHFIRE) > 0]
@@ -192,7 +189,7 @@ def test_deathfire_spell_burn_total_and_amp():
 
 def test_deathfire_durations_snapshot_and_refresh_rule():
     u = world()
-    page = R.perks([S.DEATHFIRE], [])
+    page = R.page(S.DEATHFIRE)
     st, _ = hit(S.init(2, 2), page, H.ctx(now=0.0, level=18, ap=40.0), u, 50.0, flags=SPELL | D.TAG_AOE)
     assert float(st.dft_end[0, 1]) == pytest.approx(2.0)
     assert float(st.dft_dmg[0, 1]) == pytest.approx((12.0 + 1.0) / 2)
@@ -218,7 +215,7 @@ def test_deathfire_durations_snapshot_and_refresh_rule():
 
 def test_scorch_delay_and_cooldown():
     u = world()
-    page = R.perks([S.SCORCH], [])
+    page = R.page(S.SCORCH)
     st, _ = hit(S.init(2, 2), page, H.ctx(now=0.0, level=18), u, 50.0, flags=SPELL)
     st, out = run_periodic(st, page, u, 0.0, 1.2, level=18)
     hits = [(t, R.total(p, rune=S.SCORCH)) for t, p in out if R.total(p, rune=S.SCORCH) > 0]
@@ -234,7 +231,7 @@ def test_scorch_delay_and_cooldown():
 
 def test_axiom_packet_amp():
     u = world()
-    page = R.perks([S.AXIOM], [])
+    page = R.page(S.AXIOM)
     c = H.ctx()
     p = D.packets(jnp.ones(4, bool), jnp.asarray([0, 0, 0, 1]), jnp.asarray([1, 1, 1, 0]), 100.0, D.PHYSICAL,
                   jnp.asarray([SPELL | D.PROP_ULTIMATE, SPELL | D.PROP_ULTIMATE | D.TAG_AOE, SPELL,
@@ -262,7 +259,7 @@ def test_takedown_refunds_axiom_transcendence():
 
 
 def test_transcendence_haste_by_level():
-    page = R.perks([S.TRANSCENDENCE], [])
+    page = R.page(S.TRANSCENDENCE)
     for lv, ah in ((4, 0.0), (5, 5.0), (7, 5.0), (8, 10.0), (18, 10.0)):
         c = H.ctx(level=lv)
         assert float(S.stats(S.init(2, 2), page, c, R.ev(c, 2)).ability_haste[0]) == pytest.approx(ah)
@@ -271,7 +268,7 @@ def test_transcendence_haste_by_level():
 # ---- movement / AF minors ---------------------------------------------------
 
 def test_celerity_composes_with_move_speed():
-    page = R.perks([S.CELERITY], [])
+    page = R.page(S.CELERITY)
     c = H.ctx()
     s = S.stats(S.init(2, 2), page, c, R.ev(c, 2))
     ms = SP.move_speed(340.0, s.move_speed[0], s.percent_move_speed[0], bonus_ms_amp=s.bonus_ms_amp[0])
@@ -282,14 +279,14 @@ def test_celerity_composes_with_move_speed():
 
 
 def test_absolute_focus_threshold():
-    page = R.perks([S.ABSOLUTE_FOCUS], [])
+    page = R.page(S.ABSOLUTE_FOCUS)
     for hp, lv, af in ((800.0, 1, 3.0), (700.0, 1, 0.0), (701.0, 18, 30.0), (1000.0, 9, 3 + 27 * 8 / 17)):
         c = H.ctx(level=lv, max_hp=1000.0, hp=hp)
         assert float(S.stats(S.init(2, 2), page, c, R.ev(c, 2)).adaptive_force[0]) == pytest.approx(af, abs=1e-4)
 
 
 def test_gathering_storm_steps():
-    page = R.perks([S.GATHERING_STORM], [])
+    page = R.page(S.GATHERING_STORM)
     for t, af in ((599.0, 0.0), (600.0, 8.0), (1199.0, 8.0), (1200.0, 24.0), (1800.0, 48.0)):
         c = H.ctx(now=t)
         assert float(S.stats(S.init(2, 2), page, c, R.ev(c, 2, game_time=jnp.float32(t))).adaptive_force[0]) \
@@ -298,7 +295,7 @@ def test_gathering_storm_steps():
 
 def test_waterwalking_river_and_decay():
     u = world()
-    page = R.perks([S.WATERWALKING], [])
+    page = R.page(S.WATERWALKING)
     st = S.init(2, 2)
     c = H.ctx(now=5.0)
     river = jnp.asarray([True, True])
@@ -315,7 +312,7 @@ def test_waterwalking_river_and_decay():
 
 def test_nimbus_brackets_decay_and_ghosting():
     u = world()
-    page = R.perks([S.NIMBUS], [])
+    page = R.page(S.NIMBUS)
     yes = jnp.asarray([True, False])
     for cd, tp, ms in ((99.0, False, 0.15), (100.0, False, 0.35), (250.0, False, 0.35), (254.0, False, 0.45),
                        (300.0, False, 0.45), (50.0, True, 0.45)):
@@ -340,7 +337,7 @@ def test_nimbus_brackets_decay_and_ghosting():
 
 def test_manaflow_stacks_cap_and_restore():
     u = world()
-    page = R.perks([S.MANAFLOW], [])
+    page = R.page(S.MANAFLOW)
     st = S.init(2, 2)
     for i in range(12):
         st, _ = hit(st, page, H.ctx(now=15.0 * i), u, 50.0, flags=SPELL)

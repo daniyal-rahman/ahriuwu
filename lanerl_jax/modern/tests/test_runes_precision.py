@@ -8,17 +8,9 @@ from lanerl_jax.modern.core import damage as D
 from lanerl_jax.modern.runes.effects import precision as PR
 from lanerl_jax.modern.tests import item_harness as H
 from lanerl_jax.modern.tests import rune_harness as R
+from lanerl_jax.modern.tests.rune_harness import page, world
 
 approx = lambda v: pytest.approx(v, rel=1e-5, abs=1e-4)
-
-
-def world(extra=(), **kw):
-    return H.units(H.champions(**kw) + list(extra))
-
-
-def page(*ids):
-    """Holder 0 owns ``ids``; holder 1 has no runes (isolation)."""
-    return R.perks(list(ids), [])
 
 
 def at(c, t):

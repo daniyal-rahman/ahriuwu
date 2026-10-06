@@ -10,6 +10,7 @@ from lanerl_jax.modern.runes.effects import domination as M
 from lanerl_jax.modern.runes.effects.core import rune_item
 from lanerl_jax.modern.tests import item_harness as H
 from lanerl_jax.modern.tests import rune_harness as RH
+from lanerl_jax.modern.tests.rune_harness import page
 
 N = 2
 
@@ -17,10 +18,6 @@ N = 2
 def world(hp1=1000.0):
     u = H.units(H.champions())
     return u._replace(hp=u.hp.at[1].set(jnp.float32(hp1)))
-
-
-def page(*ids):
-    return RH.perks(list(ids), [])
 
 
 def rune_packets(eff, perk):

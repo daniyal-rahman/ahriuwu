@@ -1,26 +1,9 @@
-"""Inspiration tree (8300) for patch 26.19 (RUNES.md §7).
+"""Inspiration tree 8300 (RUNES.md §7). Values from client data (``ea``) and the item catalog.
 
-Values come from the 16.19.8230722 perk bin (``ea``) and the item catalog.
-Rules that the data does not state follow RUNES.md §7 and the archived wiki
-(``cdragon-16.19/wiki-2026-10-01``). Each default is marked INFERRED with a
-confidence level, and unresolved rules cite their RUNES.md §10 U-id.
-
-The world owns the summoner-spell effects themselves. That means the Flash,
-Hexflash blink and swapped-in spells, plus inventory placement. This module
-owns the rune's own timing and state machines, and reports results through
-``outputs``:
-
-* **Item grants** go through a per-holder pending queue (``grant_q``). The
-  queue holds Biscuits 2010, the Triple Tonic elixirs 2151/2152/2150 and
-  Slightly Magical Footwear 2422. ``outputs.grant_item`` repeats the head
-  every tick. ``periodic`` pops the head once ``ev.granted`` equals it, which
-  the world sets when it placed the item.
-* **First Strike** bonus damage is held in a fixed delay queue
-  (``fs_due/fs_dst/fs_amt``) and emitted from ``periodic`` 0.4 s later.
-* **Hexflash and Approach Velocity** run in ``post_tick`` because they read
-  this tick's champion-combat clocks and impairments. ``outputs`` and next
-  tick's ``stats`` read the results. For Approach Velocity this gives a
-  one-tick update lag, which is within the wiki's "about 0.5 s" refresh.
+The world owns summoner-spell effects (Flash, the Hexflash blink, swapped-in spells) and inventory placement;
+this module owns the runes' timing and state machines and reports through ``outputs``. Item grants go through a
+per-holder queue: ``outputs.grant_item`` repeats the head until ``ev.granted`` acknowledges it. Hexflash and
+Approach Velocity run in ``post_tick`` because they read this tick's clocks and impairments.
 """
 from __future__ import annotations
 
@@ -47,41 +30,27 @@ AVARICE, FORCE, SKILL = 2151, 2152, 2150
 HEALTH_POTION, REFILLABLE = 2003, 2031
 
 COVERAGE = {
-    GLACIAL: "immobilizing an enemy champion -> 3 rays 700x80 for 3 s + CC duration; slow 20% + 7%/100 bAD "
-             "+ 6%/100 AP + 0.9 HSP to enemies inside; -15% damage to the holder's allied champions "
-             "(packet_amp; never the holder, so 0 in a 1v1); cd 25 s. Spare rays fan +/-30 deg (INFERRED-L)",
-    SPELLBOOK: "swap availability state machine: first at 6:00, cd max(270 - 25 x unique, 120) s, out of combat "
-               "5 s, no repeat within the last 3 picks; spell effects, the 5/10 s slot cooldowns, the TP-channel "
-               "and already-equipped checks are world-owned (U-16)",
-    FIRST_STRIKE: "struck first within 0.25 s of a new champion-combat episode -> +10 g, 3 s buff: 7% of "
-                  "post-mitigation champion damage as proc+indirect true packets 0.4 s later; 50%/35% of the "
-                  "bonus as gold when the buff and its missiles end; struck first by a champion -> full cd; "
-                  "cd lin(25, 15) clamped at L18",
-    FLASHTRAPTION: "Hexflash state machine: available while Flash cd > 2 s; channel "
-                   "<= 2 s (move_locked), release >= 1 s blinks 200 + 40 per 0.3 s (cap 400), +50% MS 0.25 s, "
-                   "cd 20 s; early release or champion combat -> 10 s cd; cds scaled by Cosmic Insight "
-                   "summoner haste from ev.summoner_haste (all sources)",
-    FOOTWEAR: "Slightly Magical Footwear 2422 granted at 12:00 - 45 s per champion takedown (queued if the "
-              "inventory is full); Boots-group purchases forbidden until it arrives; +10 flat MS while "
-              "owning any Boots-group item",
-    CASH_BACK: "buying a Legendary (catalog epicness 5, non-Guardian) refunds 7.5% of its total cost; selling "
-               "a refunded unit takes the refund back (per item-row counts)",
-    TRIPLE_TONIC: "grants Elixir of Avarice / Force / Skill at levels 3 / 6 / 9 via the grant queue; Elixir of "
-                  "Skill is auto-consumed (skill_points) if the inventory is full at that moment",
-    TIME_WARP: "drinking a Health / Refillable Potion heals 40% of its HealAmount instantly (48 / 40, heal_plain); "
-               "biscuits excluded (U-17)",
-    BISCUITS: "Total Biscuit 2010 granted at 2:00, 4:00 and 6:00 via the grant queue; selling one gives +30 "
-              "silent max HP (eating is the item's, items.effects.consumables)",
-    COSMIC: "+18 summoner haste, +10 item haste",
-    APPROACH: "+15% MS facing (180 deg arc) enemy champions the holder impairs (any range, no vision); else "
-              "+7.5% facing visible movement-impaired enemy champions within 1000; Drowsy is world-side",
-    JACK: "+1 AH per eligible unique item stat type (wiki list: 23 item stat types incl. gold generation via the "
-          "GoldPer category; attack range has no item stat); 8 AF at 5, 20 AF at 10 types; item-effect stats (Sterak's, Yun Tal) not counted",
+    GLACIAL: "immobilizing a champion -> slowing ray zones (spare rays fan, INFERRED-L); enemies inside deal less "
+             "damage to the holder's allied champions (never the holder)",
+    SPELLBOOK: "swap availability: first time, unique-scaled cooldown, out of combat, no repeat of recent picks; "
+               "the swap itself and its slot cooldowns are world-owned (U-16)",
+    FIRST_STRIKE: "struck first early in a champion-combat episode -> gold + a buff turning % of post-mitigation "
+                  "champion damage into delayed true packets, paid back partly as gold at the end; struck first "
+                  "by a champion -> full cooldown (clamped at L18)",
+    FLASHTRAPTION: "Hexflash channel while Flash is on cooldown: blink scaled by channel time, MS; champion combat "
+                   "or early release -> combat cooldown; cooldowns scaled by summoner haste",
+    FOOTWEAR: "boots granted at a takedown-reduced time (queued if the inventory is full); Boots purchases "
+              "forbidden until then; flat MS while owning Boots",
+    CASH_BACK: "Legendary purchases refund a % of cost; selling a refunded unit takes it back",
+    TRIPLE_TONIC: "elixirs at three levels via the grant queue; Elixir of Skill auto-consumed if inventory is full",
+    TIME_WARP: "Health / Refillable Potion heals a % of its total instantly (biscuits excluded, U-17)",
+    BISCUITS: "biscuits at fixed minutes via the grant queue; selling one still gives its silent max HP",
+    COSMIC: "summoner haste and item haste",
+    APPROACH: "MS facing enemy champions the holder impairs, half facing visible impaired ones in range",
+    JACK: "AH per unique eligible item stat type (incl. gold generation), AF at 5 and 10; item-effect stats not "
+          "counted",
 }
 
-# ---- client data ------------------------------------------------------------
-
-# Glacial Augment.
 GA_RAYS = int(ea(GLACIAL, "RayCount"))
 GA_LENGTH = ea(GLACIAL, "SlowZoneLength")
 GA_WIDTH = ea(GLACIAL, "SlowZoneWidth")
@@ -89,26 +58,23 @@ GA_DURATION = ea(GLACIAL, "SlowZoneDuration")
 GA_CC_CARRY = ea(GLACIAL, "CCCarryOverRatio") / 100.0
 GA_COOLDOWN = ea(GLACIAL, "Cooldown")
 GA_REDUCTION = ea(GLACIAL, "DmgReduction")
-GA_INDENT = ea(GLACIAL, "BeamPosIndent")          # INFERRED-L: zone starts 100 behind the target
+GA_INDENT = ea(GLACIAL, "BeamPosIndent")          # zone starts behind the target (INFERRED-L)
 GA_SLOW_BASE = ea(GLACIAL, "SlowZoneSlowBase") / 100.0
-GA_SLOW_BAD = ea(GLACIAL, "SlowZoneSlowbADRatio") / 100.0      # per bonus AD (7% per 100)
-GA_SLOW_AP = ea(GLACIAL, "SlowZoneSlowAPRatio") / 100.0        # per AP (6% per 100)
-GA_SLOW_HSP = ea(GLACIAL, "SlowZoneSlowHealShieldRatio") / 100.0  # per 1.0 HSP (9% per 10%)
-GA_ALLY_RANGE = 1000.0      # INFERRED-L: "other nearby enemy champions" of the target
-GA_FAN = np.deg2rad(30.0)   # INFERRED-L: rays without an ally to aim at fan +/-30 deg off the holder ray
+GA_SLOW_BAD = ea(GLACIAL, "SlowZoneSlowbADRatio") / 100.0      # per bonus AD
+GA_SLOW_AP = ea(GLACIAL, "SlowZoneSlowAPRatio") / 100.0        # per AP
+GA_SLOW_HSP = ea(GLACIAL, "SlowZoneSlowHealShieldRatio") / 100.0  # per 1.0 HSP
+GA_ALLY_RANGE = 1000.0      # INFERRED-L
+GA_FAN = np.deg2rad(30.0)   # rays without an ally to aim at (INFERRED-L)
 
-# Unsealed Spellbook (WIKI T:3960876 vars: initial 360, base 270, -25 per unique, floor at 6 swaps).
+# Unsealed Spellbook (wiki T:3960876).
 SB_FIRST = ea(SPELLBOOK, "ShardFirstMinutes") * 60.0
 SB_BASE = ea(SPELLBOOK, "ShardRechargeMinutes") * 60.0
 SB_PER_UNIQUE = ea(SPELLBOOK, "ShardRechargeReductionSeconds")
 SB_CAP_SWAPS = ea(SPELLBOOK, "{0bb7b933}")         # 6 (wiki cdcap)
 SB_MIN = SB_BASE - SB_PER_UNIQUE * SB_CAP_SWAPS    # 120 s
 SB_NO_REPEAT = int(ea(SPELLBOOK, "NumSummonersBeforeRepeat"))
-SB_OOC = ea(SPELLBOOK, "{b7e0131f}")               # 5 s out of combat (world also applies 5 s select cd)
-SB_SELECT_CD = ea(SPELLBOOK, "{9d01feeb}")         # 5 s, world-owned
-SB_USE_LOCKOUT = ea(SPELLBOOK, "{a8402a49}")       # 10 s, world-owned
+SB_OOC = ea(SPELLBOOK, "{b7e0131f}")               # 5 s out of combat
 
-# First Strike.
 FS_GRACE = ea(FIRST_STRIKE, "GraceWindow")
 FS_DURATION = ea(FIRST_STRIKE, "Duration")
 FS_AMP = ea(FIRST_STRIKE, "DamageAmp")
@@ -118,8 +84,8 @@ FS_GOLD_RANGED = ea(FIRST_STRIKE, "GoldPercentBonusRanged")
 FS_CD_START = ea(FIRST_STRIKE, "TooltipOnlyCooldownStartAmount")
 FS_CD_END = ea(FIRST_STRIKE, "TooltipOnlyCooldownEndAmount")
 FS_MODE_CD = ea(FIRST_STRIKE, "ModesCooldownReduction")
-FS_DELAY = 0.4              # WIKI P:First Strike: fixed 0.4 s missile travel
-FS_SLOTS = 24               # delay-queue capacity per holder (>= 0.4 s of 2 pushes per pass at 30 Hz)
+FS_DELAY = 0.4              # wiki: missile travel
+FS_SLOTS = 24               # delay-queue slots (>= FS_DELAY of FS_PUSH per pass at 30 Hz)
 FS_PUSH = 2                 # distinct enemy champions queued per damage pass
 FS = rune_item(FIRST_STRIKE)
 
@@ -128,12 +94,11 @@ HX_CHANNEL = ea(FLASHTRAPTION, "ChannelDuration")
 HX_MIN = ea(FLASHTRAPTION, "MinimumChannelDuration")
 HX_COOLDOWN = ea(FLASHTRAPTION, "CooldownTime")
 HX_COMBAT_CD = ea(FLASHTRAPTION, "ChampionCombatCooldown")
-HX_MS = ea(FLASHTRAPTION, "{d6487c09}")            # 0.5 = +50% bonus MS after the blink
-HX_MS_DURATION = 0.25       # WIKI estimate
-HX_FLASH_GATE = 2.0         # Flash remaining cooldown must exceed 2 s
-HX_RANGE0, HX_RANGE_STEP, HX_RANGE_PERIOD, HX_RANGE_MAX = 200.0, 40.0, 0.3, 400.0
+HX_MS = ea(FLASHTRAPTION, "{d6487c09}")            # bonus MS after the blink
+HX_MS_DURATION = 0.25       # wiki estimate
+HX_FLASH_GATE = 2.0         # Flash remaining cooldown must exceed this
+HX_RANGE0, HX_RANGE_STEP, HX_RANGE_PERIOD, HX_RANGE_MAX = 200.0, 40.0, 0.3, 400.0   # wiki T:4011828
 
-# Magical Footwear.
 MF_AT = ea(FOOTWEAR, "GiveBootsAtMinute") * 60.0
 MF_PER_TAKEDOWN = ea(FOOTWEAR, "SecondsSoonerPerTakedown")
 MF_MS = ea(FOOTWEAR, "AdditionalMovementSpeed")
@@ -144,20 +109,19 @@ TONICS = ((int(ea(TRIPLE_TONIC, "FirstElixirLevel")), AVARICE), (int(ea(TRIPLE_T
 TWT_PCT = ea(TIME_WARP, "RestorationPercentage")
 BISCUIT_EVERY = ea(BISCUITS, "BiscuitMinuteInterval") * 60.0
 BISCUIT_LAST = ea(BISCUITS, "SwapOverMinute") * 60.0
-BISCUIT_COUNT = int(round(BISCUIT_LAST / BISCUIT_EVERY))   # 3: at 2:00, 4:00, 6:00
+BISCUIT_COUNT = int(round(BISCUIT_LAST / BISCUIT_EVERY))
 BISCUIT_HP = ea(BISCUITS, "PermanentHP")
 CI_SUMMONER = ea(COSMIC, "SummonerHaste")
 CI_ITEM = ea(COSMIC, "ItemHaste")
 AV_OWN = ea(APPROACH, "MovementSpeedPercentBonus")
-AV_OTHER = AV_OWN / 2.0     # RUNES §7.4 / WIKI: 7.5% for impairments from any source
+AV_OTHER = AV_OWN / 2.0     # wiki, RUNES §7.4: impairments from any source
 AV_RANGE = ea(APPROACH, "ActivationDistance")
 JACK_AH = ea(JACK, "HastePerStack")
-JACK_AF5, JACK_AF10 = ea(JACK, "{1b48f5ea}"), ea(JACK, "{55d14eea}")   # 8 at 5 stacks, 20 total at 10
+JACK_AF5, JACK_AF10 = ea(JACK, "{1b48f5ea}"), ea(JACK, "{55d14eea}")   # AF at 5 / 10 stacks
 
 GRANT_SLOTS = 8             # 3 biscuits + 3 elixirs + boots, plus slack
 
-# Jack of All Trades eligible stat types (WIKI P:Jack of All Trades 4047523). Each tuple is one type.
-# Slow resist is excluded, and attack range has no item stat. Gold generation uses the GoldPer category.
+# Jack of All Trades stat types (wiki 4047523), one tuple per type; gold generation is the GoldPer category.
 JACK_TYPES = (
     ("attack_damage",), ("attack_speed", "multiplicative_attack_speed"),
     ("ability_haste", "basic_ability_haste", "ultimate_haste"), ("ability_power",), ("armor",),
@@ -170,15 +134,13 @@ JACK_TYPES = (
 
 @lru_cache(maxsize=1)
 def _tables():
-    """Static per-item-row tables (NumPy, closed over by JIT)."""
+    """Static per-item-row NumPy tables."""
     cat = catalog()
     payload = json.loads(DATA_PATH.read_text())["items"]
     ids = np.asarray(cat.arrays.item_id, np.int32)
     groups = cat.group_names
     boots = np.asarray(cat.arrays.groups[:, groups.index("Boots")], bool)
-    # Legendary: client epicness 5 ("Legendary" tier; 4 = epic, 7 = tier-3 boots/elixirs). The wiki
-    # excludes "Guardian" items, which are ARAM-only items named "Guardian's ...". None of them is in
-    # the SR catalog, so the name test is a guard only (Guardian Angel is a normal Legendary).
+    # Legendary = client epicness 5; the wiki's "Guardian's" exclusion (ARAM items) is a guard only.
     legendary = np.asarray([s.epicness == 5 and not s.name.startswith("Guardian's") for s in cat.specs], bool)
     total = np.asarray(cat.arrays.total, np.float32)
     stats = np.asarray(cat.arrays.stats, np.float32) > 0.0
@@ -222,7 +184,6 @@ def spellbook_cooldown(unique: Any) -> Any:
 
 
 def hexflash_range(elapsed: Any) -> Any:
-    """WIKI T:4011828: 200 + 40 every 0.3 s of channel, capped at 400."""
     return jnp.minimum(HX_RANGE0 + HX_RANGE_STEP * jnp.floor(elapsed / HX_RANGE_PERIOD + 1e-4), HX_RANGE_MAX)
 
 
@@ -241,7 +202,7 @@ class State(NamedTuple):
     fs_due: Any             # (C, K) bonus-packet due time, BIG = free
     fs_dst: Any             # (C, K) int32
     fs_amt: Any             # (C, K)
-    fs_gold_acc: Any        # (C,) bonus true damage dealt during the current activation
+    fs_gold_acc: Any        # (C,) bonus damage dealt during the current activation
     fs_gold_tick: Any       # (C,) First Strike gold awarded this tick
     ga_cd_until: Any        # (C,)
     ga_until: Any           # (C,) zone end
@@ -258,7 +219,7 @@ class State(NamedTuple):
     hx_blink: Any           # (C,) bool blink released this tick
     hx_range: Any           # (C,)
     hx_ms_until: Any        # (C,)
-    av_bonus: Any           # (C,) Approach Velocity percent MS (refreshed in post_tick)
+    av_bonus: Any           # (C,) Approach Velocity percent MS
 
 
 def init(n_champions: int, n_units: int) -> State:
@@ -278,8 +239,6 @@ def init(n_champions: int, n_units: int) -> State:
         av_bonus=z)
 
 
-# ---- grant queue ------------------------------------------------------------
-
 def _push(q: Any, go: Any, item_id: int) -> Any:
     """Append ``item_id`` at the first empty slot where ``go`` (C,)."""
     empty = q == 0
@@ -292,8 +251,6 @@ def _pop(q: Any, go: Any) -> Any:
     shifted = jnp.concatenate([q[:, 1:], jnp.zeros((q.shape[0], 1), jnp.int32)], axis=1)
     return jnp.where(go[:, None], shifted, q)
 
-
-# ---- stats ------------------------------------------------------------------
 
 def jack_stacks(own: Any) -> Any:
     """(C,) unique eligible stat types granted by owned items."""
@@ -320,8 +277,6 @@ def stats(state: State, page, ctx, ev: RuneEvents) -> ItemStats:
                      summoner_haste=jnp.where(cosmic, CI_SUMMONER, 0.0), item_haste=jnp.where(cosmic, CI_ITEM, 0.0))
 
 
-# ---- Glacial Augment ----------------------------------------------------------
-
 def zone_mask(state: State, ctx, units) -> Any:
     """(C, N) units whose hitbox touches any of the holder's active icy zones."""
     active = (ctx.now < state.ga_until)[:, None]
@@ -342,8 +297,7 @@ def on_cc(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Effect
     tgt = jnp.argmax(imm, axis=1)
     tx, ty = units.x[tgt], units.y[tgt]
     dur = GA_DURATION + GA_CC_CARRY * jnp.take_along_axis(ev.cc_duration, tgt[:, None], axis=1)[:, 0]
-    # Ray 0 aims at the holder; rays 1-2 aim at the holder's nearest other allied champions near the
-    # target, else fan +/-30 deg off ray 0 (INFERRED-L).
+    # Ray 0 aims at the holder; the others at its nearest other allied champions near the target, else fan.
     hx, hy = units.x[ctx.unit], units.y[ctx.unit]
     d0x, d0y = hx - tx, hy - ty
     norm = jnp.sqrt(d0x ** 2 + d0y ** 2)
@@ -374,7 +328,7 @@ def on_cc(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Effect
         ga_dx=jnp.where(g, dx, state.ga_dx), ga_dy=jnp.where(g, dy, state.ga_dy),
         ga_until=jnp.where(go, ctx.now + dur, state.ga_until),
         ga_cd_until=jnp.where(go, ctx.now + GA_COOLDOWN, state.ga_cd_until))
-    # Slow every enemy (non-structure) unit inside a zone; re-applied each tick for one tick.
+    # Slow enemy non-structures inside a zone, for one tick at a time.
     targets = zone_mask(state, ctx, units) & (units.team[None, :] != ctx.team[:, None]) \
         & units.alive[None, :] & (units.cls[None, :] != CLASS_STRUCTURE) & has_rune(page, GLACIAL)[:, None]
     strength = glacial_slow(ev.bonus_ad, ev.ap, ctx.heal_shield_power)
@@ -384,7 +338,7 @@ def on_cc(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Effect
 
 
 def packet_amp(state: State, page, ctx, units, ev: RuneEvents, p) -> Any:
-    """Glacial: enemies in a zone deal 15% less damage to the holder's allied champions (not the holder)."""
+    """Glacial: enemies in a zone deal less damage to the holder's allied champions (not the holder)."""
     n = units.x.shape[0]
     zone = zone_mask(state, ctx, units) & (units.team[None, :] != ctx.team[:, None]) & has_rune(page, GLACIAL)[:, None]
     src, dst = jnp.clip(p.src, 0, n - 1), jnp.clip(p.dst, 0, n - 1)
@@ -395,24 +349,20 @@ def packet_amp(state: State, page, ctx, units, ev: RuneEvents, p) -> Any:
     return jnp.where(hit, -GA_REDUCTION, 0.0).astype(jnp.float32)
 
 
-# ---- periodic: grants, shop, potions, First Strike emission, Spellbook -----------
-
 def periodic(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Effects]:
     c, n = ctx.level.shape[0], units.x.shape[0]
     t = _tables()
     now, gt = ctx.now, ev.game_time
 
-    # Grant queue: pop the acknowledged head.
+    # Grant queue: pop the acknowledged head, push due grants.
     q = state.grant_q
     acked = (q[:, 0] != 0) & (ev.granted == q[:, 0])
     boots_received = state.boots_received | (acked & (q[:, 0] == BOOTS_ITEM))
     q = _pop(q, acked)
-    # Biscuits at 2:00 / 4:00 / 6:00.
     due_b = has_rune(page, BISCUITS) & (state.biscuits_sched < BISCUIT_COUNT) \
         & (gt >= BISCUIT_EVERY * (state.biscuits_sched + 1).astype(jnp.float32))
     q = _push(q, due_b, BISCUIT_ITEM)
     sched = state.biscuits_sched + due_b.astype(jnp.int32)
-    # Triple Tonic at levels 3 / 6 / 9; Elixir of Skill auto-consumes when the inventory is full.
     full = (_slots_used(ev.own) >= 6.0) if ev.own is not None else jnp.zeros((c,), bool)
     bits, skill_now = state.tonic_bits, jnp.zeros((c,), jnp.int32)
     for k, (lvl, item) in enumerate(TONICS):
@@ -422,13 +372,12 @@ def periodic(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Eff
             skill_now = jnp.where(go & full, 1, skill_now)
             go = go & ~full
         q = _push(q, go, item)
-    # Magical Footwear: 12:00 - 45 s per champion takedown.
     takedowns = state.takedowns + ev.kills.champion_kill + ev.kills.champion_assist
     boots_due = MF_AT - MF_PER_TAKEDOWN * takedowns
     go_boots = has_rune(page, FOOTWEAR) & ~state.boots_queued & (gt >= boots_due)
     q = _push(q, go_boots, BOOTS_ITEM)
 
-    # Cash Back: refund on Legendary purchase, take back on sale of a refunded unit.
+    # Cash Back.
     cb = has_rune(page, CASH_BACK)
     hot = jnp.arange(state.refunds.shape[1])[None, :]
     rs, vs = _row_of(ev.sold)
@@ -440,16 +389,15 @@ def periodic(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Eff
     total = jnp.asarray(t["total"])
     gold = jnp.where(bought, CB_REFUND * total[rb], 0.0) - jnp.where(sold_back, CB_REFUND * total[rs], 0.0)
 
-    # Time Warp Tonic: instant 40% of the potion's total restoration.
+    # Time Warp Tonic.
     pot = ev.potion_drunk
     heal = jnp.where(pot == HEALTH_POTION, TWT_PCT * t["heal"][HEALTH_POTION],
                      jnp.where(pot == REFILLABLE, TWT_PCT * t["heal"][REFILLABLE], 0.0))
     heal = jnp.where(has_rune(page, TIME_WARP) & ctx.alive, heal, 0.0)
 
-    # Biscuit Delivery: a sold biscuit still grants its +30 permanent HP.
     sold_biscuit = has_rune(page, BISCUITS) & (ev.sold == BISCUIT_ITEM)
 
-    # First Strike: emit due bonus packets; pay the gold once the buff and its missiles are done.
+    # First Strike: emit due packets; pay the gold once the buff and its missiles are done.
     due = state.fs_due <= now + 1e-4
     alive_dst = units.alive[jnp.clip(state.fs_dst, 0, n - 1)]
     p = packets(due & alive_dst & (state.fs_amt > 0.0), ctx.unit[:, None], state.fs_dst, state.fs_amt, TRUE,
@@ -461,7 +409,7 @@ def periodic(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Eff
     pay = jnp.where(done & (state.fs_gold_acc > 0.0), pct * state.fs_gold_acc, 0.0)
     fs_acc = jnp.where(done, 0.0, state.fs_gold_acc)
 
-    # Unsealed Spellbook: accept a swap request when available and not a recent pick.
+    # Unsealed Spellbook.
     req = ev.spellbook_request
     ready = spellbook_ready(state, page, ctx, ev)
     allowed = ready & (req > 0) & ~jnp.any(state.sb_recent == req[:, None], axis=1)
@@ -487,13 +435,6 @@ def spellbook_ready(state: State, page, ctx, ev: RuneEvents) -> Any:
     return has_rune(page, SPELLBOOK) & ctx.alive & (ev.game_time >= state.sb_ready_at) & ooc
 
 
-def spellbook_can_select(state: State, spell_id: Any) -> Any:
-    """(C,) ``spell_id`` is not among the last 3 picks (the already-equipped check is world-side)."""
-    return ~jnp.any(state.sb_recent == jnp.asarray(spell_id, jnp.int32)[..., None], axis=-1)
-
-
-# ---- First Strike activation and bonus ------------------------------------------
-
 def on_damage(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Effects]:
     c, n = ctx.level.shape[0], units.x.shape[0]
     rep = ev.report
@@ -506,7 +447,7 @@ def on_damage(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Ef
     now = ctx.now
     clk = ev.clocks
 
-    # Gold ledger: our own bonus packets resolving this pass.
+    # Gold ledger: own bonus packets resolving this pass.
     acc = state.fs_gold_acc + jnp.sum(jnp.where(mine & fs_pkt, r.final[None, :], 0.0), axis=1)
 
     ready = has_fs & (now >= state.fs_cd_until)
@@ -519,7 +460,7 @@ def on_damage(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Ef
     fs_until = jnp.where(fire, now + FS_DURATION, state.fs_until)
     flat = jnp.where(fire, FS_GOLD_FLAT, 0.0)
 
-    # 7% of post-mitigation champion damage while active, queued 0.4 s.
+    # Queue a share of post-mitigation champion damage while active.
     active = has_fs & (now <= fs_until)
     sel = mine & to_champ & ~fs_pkt & (r.final > 0.0)[None, :] & active[:, None]
     onehot = (p.dst[:, None] == jnp.arange(n)[None, :]).astype(jnp.float32)
@@ -535,7 +476,8 @@ def on_damage(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Ef
         free = due >= BIG / 2
         any_same, any_free = jnp.any(same, axis=1), jnp.any(free, axis=1)
         latest_same_dst = jnp.argmax(jnp.where(dsts == j[:, None], jnp.where(free, -BIG, due), -2 * BIG), axis=1)
-        k = jnp.where(any_same, jnp.argmax(same, axis=1), jnp.where(any_free, jnp.argmax(free, axis=1), latest_same_dst))
+        k = jnp.where(any_same, jnp.argmax(same, axis=1),
+                      jnp.where(any_free, jnp.argmax(free, axis=1), latest_same_dst))
         put = (slots == k[:, None]) & go[:, None]
         fresh = put & free
         due = jnp.where(fresh, t_new, due)
@@ -548,14 +490,10 @@ def on_damage(state: State, page, ctx, units, ev: RuneEvents) -> tuple[State, Ef
     return state, effects(c, n, gold=flat.astype(jnp.float32))
 
 
-# ---- post_tick: Hexflash, Approach Velocity ------------------------------------------
-
 def post_tick(state: State, page, ctx, units, ev: RuneEvents) -> State:
     now = ctx.now
-    # Hextech Flashtraption.
+    # Hextech Flashtraption; ev.summoner_haste is 0 when the event is not filled.
     hx = has_rune(page, FLASHTRAPTION)
-    # Total summoner haste (Cosmic Insight, Lucidity boots ...) from the runtime;
-    # Cosmic alone when the event is not filled.
     haste = jnp.maximum(ev.summoner_haste, jnp.where(has_rune(page, COSMIC), CI_SUMMONER, 0.0))
     haste_mult = 100.0 / (100.0 + haste)
     combat = hx & (ev.clocks.last_champion_combat >= now - 1e-6)
@@ -578,7 +516,7 @@ def post_tick(state: State, page, ctx, units, ev: RuneEvents) -> State:
         hx_range=jnp.where(blink, hexflash_range(elapsed), 0.0),
         hx_ms_until=jnp.where(blink, now + HX_MS_DURATION, state.hx_ms_until))
 
-    # Approach Velocity (facing within 90 deg; granted even while standing still, WIKI).
+    # Approach Velocity (facing within 90 deg, also while standing still; wiki).
     champs = enemy_champions(ctx, units)
     dx, dy = units.x[None, :] - ctx.x[:, None], units.y[None, :] - ctx.y[:, None]
     facing = dx * ctx.facing_x[:, None] + dy * ctx.facing_y[:, None] >= 0.0
@@ -588,8 +526,6 @@ def post_tick(state: State, page, ctx, units, ev: RuneEvents) -> State:
     bonus = jnp.where(own, AV_OWN, jnp.where(other, AV_OTHER, 0.0))
     return state._replace(av_bonus=jnp.where(has_rune(page, APPROACH) & ctx.alive, bonus, 0.0).astype(jnp.float32))
 
-
-# ---- outputs -----------------------------------------------------------------
 
 def outputs(state: State, page, ctx, ev: RuneEvents) -> RuneOutputs:
     c, i = ctx.level.shape[0], len(catalog().ids)

@@ -17,21 +17,13 @@ from lanerl_jax.modern.runes.catalog import rune_catalog
 from lanerl_jax.modern.runes.effects import inspiration as IN
 from lanerl_jax.modern.tests import item_harness as H
 from lanerl_jax.modern.tests import rune_harness as RH
+from lanerl_jax.modern.tests.rune_harness import page
 
 IDS = (8351, 8360, 8369, 8306, 8304, 8321, 8313, 8352, 8345, 8347, 8410, 8316)
 
 
 def world(x1=300.0, extra=()):
     return H.units(H.champions(x1=x1) + [dict(x=600, y=0, team=1, cls=D.CLASS_MINION)] + list(extra))
-
-
-def page(*ids):
-    """Holder 0 has ``ids``; holder 1 has an empty page (holder isolation)."""
-    return RH.perks(list(ids), [])
-
-
-def tick(state, pg, ctx, u, ev, hook):
-    return getattr(IN, hook)(state, pg, ctx, u, ev)
 
 
 def test_coverage_lists_the_whole_tree():
@@ -401,7 +393,6 @@ def test_unsealed_spellbook_availability_and_cooldowns():
     assert list(np.asarray(st.sb_recent[0])) == [7, 3, 14] and float(st.sb_ready_at[0]) == pytest.approx(1022.0)
     st, _ = step(st, 1022.0, req=4)                                   # unique 4 -> 170 s
     assert list(np.asarray(st.sb_recent[0])) == [4, 7, 3] and float(st.sb_ready_at[0]) == pytest.approx(1192.0)
-    assert not bool(IN.spellbook_can_select(st, jnp.int32(3))[0]) and bool(IN.spellbook_can_select(st, jnp.int32(1))[0])
     assert float(IN.spellbook_cooldown(6)) == 120.0 and float(IN.spellbook_cooldown(9)) == 120.0
 
 

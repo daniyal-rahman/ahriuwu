@@ -13,6 +13,7 @@ from lanerl_jax.modern.runes.effects import resolve as RS
 from lanerl_jax.modern.runes.effects.core import rune_item
 from lanerl_jax.modern.tests import item_harness as H
 from lanerl_jax.modern.tests import rune_harness as RH
+from lanerl_jax.modern.tests.rune_harness import world
 
 GRASP, AFTERSHOCK, GUARDIAN, DEMOLISH = 8437, 8439, 8465, 8446
 FONT, SHIELD_BASH, CONDITIONING, SECOND_WIND, BONE_PLATING = 8463, 8401, 8429, 8444, 8473
@@ -24,10 +25,6 @@ ALL = [GRASP, AFTERSHOCK, GUARDIAN, DEMOLISH, FONT, SHIELD_BASH, CONDITIONING, S
 def f(x, i=0):
     a = np.asarray(x)
     return float(a if a.ndim == 0 else a.reshape(a.shape[0], -1)[i, 0])
-
-
-def world(extra=(), **kw):
-    return H.units(H.champions(**kw) + list(extra))
 
 
 def no_attack():
@@ -55,7 +52,7 @@ def _prime(state, page, ctx, u, *, ticks, dt, combat_every_tick=True, t0=0.0):
 def test_grasp_f13_melee_proc_after_4s_of_combat():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([GRASP], [])
+    page = RH.page(GRASP)
     ctx = H.ctx(base_hp=1000.0, max_hp=1000.0, hp=500.0)
     st, lc = _prime(RS.init(2, n), page, ctx, u, ticks=8, dt=0.5)       # t = 0 .. 3.5
     assert f(RS.grasp_stacks(st)) == 3.0
@@ -79,7 +76,7 @@ def test_grasp_f13_melee_proc_after_4s_of_combat():
 def test_grasp_f14_ranged_and_scaled_hp():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([GRASP], [])
+    page = RH.page(GRASP)
     st = RS.init(2, n)._replace(grasp_acc=jnp.full((2,), 4.0, jnp.float32))
     c = H.ctx(base_hp=1000.0, max_hp=1000.0, ranged=True, now=1.0)
     st2, eff = RS.on_hit(st, page, c, u, RH.ev(c, n, attack=H.attack(), clocks=RH.clocks(last_combat=0.5)))
@@ -96,7 +93,7 @@ def test_grasp_f14_ranged_and_scaled_hp():
 def test_grasp_generation_stops_after_3s_and_decays_at_5s():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([GRASP], [])
+    page = RH.page(GRASP)
     ctx = H.ctx()
     # One combat event at t=0, then none: generation runs until t=3 -> 3 stacks.
     st, _ = _prime(RS.init(2, n), page, ctx, u, ticks=10, dt=0.5, combat_every_tick=False)   # t = 0 .. 4.5
@@ -120,7 +117,7 @@ def test_grasp_generation_stops_after_3s_and_decays_at_5s():
 def test_second_wind_f15_continuous_regen():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([SECOND_WIND], [])
+    page = RH.page(SECOND_WIND)
     ctx = H.ctx(base_hp=1000.0, max_hp=1000.0, hp=600.0)
     rep = RH.report(RH.hit_packet(1, 0, 50.0), u)
     st, _ = RS.on_damage(RS.init(2, n), page, ctx, u, RH.ev(ctx, n, report=rep))
@@ -142,7 +139,7 @@ def test_second_wind_f15_continuous_regen():
 def test_second_wind_needs_health_damage_from_champion():
     u = world([dict(x=100, y=0, team=1)])
     n = u.x.shape[0]
-    page = RH.perks([SECOND_WIND, BONE_PLATING], [])
+    page = RH.page(SECOND_WIND, BONE_PLATING)
     ctx = H.ctx()
     sh = D.grant_shield(D.init_shields(n), 0, 500.0, D.SHIELD_ALL, 0.0, 5.0)
     rep = RH.report(RH.hit_packet(1, 0, 50.0), u, shields=sh)          # fully absorbed
@@ -165,7 +162,7 @@ def _active_bp(n, level_until=1.5):
 def test_bone_plating_f17_floor_and_cast_instances():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([BONE_PLATING], [])
+    page = RH.page(BONE_PLATING)
     ctx = H.ctx(level=18, now=0.5)
     st = _active_bp(n)
     p = RH.hit_packet(1, 0, 50.0)
@@ -210,7 +207,7 @@ def _e2e(page, *, dt=0.5, holder_hp=1000.0, extra=()):
 
 
 def test_bone_plating_f16_end_to_end_combat_tick():
-    page = RH.perks([BONE_PLATING], [])
+    page = RH.page(BONE_PLATING)
     u, n, step = _e2e(page)
     cs, hp, max_hp = init_combat(2, n), u.hp, u.max_hp
     shields, status = D.init_shields(n), R.init_status(n)
@@ -229,7 +226,7 @@ def test_bone_plating_f16_end_to_end_combat_tick():
 def test_bone_plating_window_expiry_starts_cooldown():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([BONE_PLATING], [])
+    page = RH.page(BONE_PLATING)
     ctx = H.ctx(now=0.0)
     st, _ = RS.on_damage(RS.init(2, n), page, ctx, u, RH.ev(ctx, n, report=RH.report(RH.hit_packet(1, 0, 100.0), u)))
     assert f(st.bp_cd_until) == pytest.approx(1.5 + 55.0) and int(st.bp_source[0]) == 1
@@ -243,7 +240,7 @@ def test_bone_plating_window_expiry_starts_cooldown():
 # ---- Grasp max HP through the runtime ---------------------------------------------
 
 def test_grasp_end_to_end_max_hp_sync():
-    page = RH.perks([GRASP], [])
+    page = RH.page(GRASP)
     u, n, step = _e2e(page, holder_hp=500.0)
     cs, hp, max_hp = init_combat(2, n), u.hp, u.max_hp
     shields, status = D.init_shields(n), R.init_status(n)
@@ -265,7 +262,7 @@ def test_grasp_end_to_end_max_hp_sync():
 # ---- Conditioning (F-18), Overgrowth (F-19) -----------------------------------------
 
 def test_conditioning_f18():
-    page = RH.perks([CONDITIONING], [])
+    page = RH.page(CONDITIONING)
     st = RS.init(2, 2)
     ctx = H.ctx(base_armor=40.0, bonus_armor=20.0)
     for t, expect in ((719.9, 60.0), (720.0, 70.04)):
@@ -277,7 +274,7 @@ def test_conditioning_f18():
 
 
 def test_overgrowth_f19_and_counting():
-    page = RH.perks([OVERGROWTH], [])
+    page = RH.page(OVERGROWTH)
     ctx = H.ctx()
     for count, expect in ((119, 1542.0), (120, 1599.075)):
         st = RS.init(2, 2)._replace(og_count=jnp.asarray([count, 0], jnp.int32))
@@ -304,7 +301,7 @@ def test_aftershock_f30(level, bonus_armor, expect, burst):
             dict(x=900, y=0, team=1, cls=D.CLASS_CHAMPION)]
     u = world(rows)
     n = u.x.shape[0]
-    page = RH.perks([AFTERSHOCK], [])
+    page = RH.page(AFTERSHOCK)
     ctx = H.ctx(level=level, bonus_armor=bonus_armor, base_hp=600.0, max_hp=700.0)
     imm = jnp.zeros((2, n), bool).at[0, 1].set(True)
     cc = CC(jnp.zeros((2, n), bool), imm)
@@ -373,7 +370,7 @@ def test_demolish_ranged_and_consume_clears_other_turrets():
     turret = dict(x=200, y=0, team=1, cls=D.CLASS_STRUCTURE)
     u = world([turret, dict(turret, x=600)])
     n = u.x.shape[0]
-    page = RH.perks([DEMOLISH], [])
+    page = RH.page(DEMOLISH)
     ctx = H.ctx(base_hp=1000.0, max_hp=1000.0, ranged=True)
     st = RS.init(2, n)._replace(demo_stacks=jnp.zeros((2, n), jnp.int32).at[0, 2].set(2).at[0, 3].set(1))
     ev = RH.ev(ctx, n, attack=H.attack(target=(2, 0)), is_turret=jnp.asarray([False, False, True, True]))
@@ -387,7 +384,7 @@ def test_demolish_ranged_and_consume_clears_other_turrets():
 def test_unflinching_silence_fixture():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([UNFLINCHING], [])
+    page = RH.page(UNFLINCHING)
     ctx = H.ctx(dt=0.1)
     st = RS.init(2, n)
     active = {}
@@ -404,7 +401,7 @@ def test_unflinching_silence_fixture():
 
 
 def test_revitalize_heal_power_and_low_hp_mult():
-    page = RH.perks([REVITALIZE], [])
+    page = RH.page(REVITALIZE)
     st = RS.init(2, 2)
     hi = H.ctx(base_hp=1000.0, hp=500.0)
     lo = H.ctx(base_hp=1000.0, hp=399.0)
@@ -417,7 +414,7 @@ def test_revitalize_heal_power_and_low_hp_mult():
 def test_shield_bash_empowers_next_attack_on_champion():
     u = world()
     n = u.x.shape[0]
-    page = RH.perks([SHIELD_BASH], [])
+    page = RH.page(SHIELD_BASH)
     ctx = H.ctx(base_hp=600.0, max_hp=1000.0)
     st = RS.post_tick(RS.init(2, n), page, ctx, u, RH.ev(ctx, n, shield_gained=jnp.asarray([100.0, 100.0])))
     st = RS.post_tick(st, page, ctx, u, RH.ev(ctx, n, shield_gained=jnp.asarray([40.0, 0.0])))   # smaller: kept 100
@@ -464,7 +461,7 @@ def test_guardian_needs_ally_then_shields_both():
             dict(x=300, y=0, team=1, cls=D.CLASS_CHAMPION)]
     u = H.units(rows)
     n = u.x.shape[0]
-    page = RH.perks([GUARDIAN], [])
+    page = RH.page(GUARDIAN)
     ctx = H.ctx(team=(0, 0), x=jnp.asarray([0.0, 200.0]), base_hp=600.0, max_hp=1000.0)
     st = RS.init(2, n)
     p = RH.hit_packet(2, 1, 30.0)                                     # 30 on the ally: below 50
@@ -490,7 +487,7 @@ def test_guardian_unit_targeted_cast_guards_distant_ally():
             dict(x=1000, y=0, team=1, cls=D.CLASS_CHAMPION)]
     u = H.units(rows)
     n = u.x.shape[0]
-    page = RH.perks([GUARDIAN], [])
+    page = RH.page(GUARDIAN)
     ctx = H.ctx(team=(0, 0), x=jnp.asarray([0.0, 900.0]))
     cast = Cast(jnp.asarray([True, False]), jnp.zeros((2,), jnp.int32), jnp.asarray([1, -1], jnp.int32))
     st, _ = RS.on_cast(RS.init(2, n), page, ctx, u, RH.ev(ctx, n, cast=cast))

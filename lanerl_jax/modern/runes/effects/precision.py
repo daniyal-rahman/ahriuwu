@@ -1,26 +1,7 @@
-"""Precision tree (RUNES.md §3): keystones, row 1–3 minors.
+"""Precision tree 8000 (RUNES.md §3). Values from client data (``ea``); level values extrapolate past 18 (U-01).
 
-Numbers come from the 16.19.8230722 client data (``ea`` / the perk
-``calculations``); rules and defaults follow RUNES.md §3, §8–10:
-
-* Conqueror reproduces the level lock (U-03) and heals from ``final``
-  (post-mitigation, before shields, U-04). Spell stacks dedupe per cast
-  instance within a pass and through a ``CONQ_RING``-slot (cast_id, time)
-  ring across ticks (4 s same-spell rule); summoner-spell instances (Ignite)
-  stack once. Stacks accumulate in packet order, so the packet completing
-  the 12th stack and everything after it heals.
-* PTA amp lasts until 5 s after the last champion combat (INFERRED-M); damage
-  in the tick the amp is gained (the 3rd hit and its proc) is not amped.
-* Lethal Tempo decays 1 stack at expiry then 1 per 0.3 s (closed form); the
-  bolt fires on attacks launched at 6 stacks after the gain and lands with
-  that attack; ``PerfectlyTimedForgivance`` is ignored (U-05).
-* DMG.40 amps (PTA, Coup de Grace, Cut Down, Last Stand) apply to holder
-  packets on enemy champions of every damage type, never to packets with
-  PROP_NO_DAMAGE_MOD, TAG_NON_AMPABLE or PROP_SUMMONER (Smite/Ignite, §1.4).
-* Triumph and PoM takedown restores are delayed 1 s in small due-time queues;
-  Triumph delivers even if the holder died (U-06) and recomputes pending heals
-  from the newest missing HP (wiki bug).
-* Level values extrapolate past 18 (U-01).
+DMG.40 amps (PTA, Coup de Grace, Cut Down, Last Stand) apply to holder packets on enemy champions of every damage
+type, never with PROP_NO_DAMAGE_MOD, TAG_NON_AMPABLE or PROP_SUMMONER (§1.4).
 """
 from __future__ import annotations
 
@@ -41,36 +22,32 @@ ALACRITY, HASTE, BLOODLINE = 9104, 9105, 9103
 COUP_DE_GRACE, CUT_DOWN, LAST_STAND = 8014, 8017, 8299
 
 COVERAGE = {
-    PTA: "3 on-hit stacks per target (4 s, swap clears), lin(40,160) adaptive proc, +8% amp vs champions "
-         "until 5 s out of champion combat, 6 s cooldown; one stack per attack (no multi-on-hit)",
-    LETHAL_TEMPO: "on-attack stacks vs champions (6 s, max 6, 6%/4.8% AS), 0.3 s decay, bolt "
-                  "lin(9,30)x(1+bonus AS) (ranged x0.667) adaptive on the landing attack",
-    FLEET: "energy +6/attack, +6/on-hit ability packet, +1/24 units moved; energized hit heals "
-           "15-160 (stat growth) +10% bonus AD +5% AP (ranged x0.6, minion x0.15), +20%/15% MS 1 s; "
-           "no ward/plant exclusion (no such units)",
-    CONQUEROR: "stacks +2/+1 basic, +2 per cast instance (4 s re-stack, Ignite once), 5 s shared "
-               "duration, lin(1.8,4) AF level-locked (U-03), 8%/5% heal at 12 stacks; cannot tell "
-               "invulnerable targets from 0-damage hits",
-    ABSORB_LIFE: "breakpoint heal (1 ... 23) per champion/minion/large-monster kill (small monsters not counted)",
-    TRIUMPH: "1 s after a champion takedown: 2.5% max HP + 5% newest missing HP, +20 gold",
-    PRESENCE_OF_MIND: "damaging an enemy champion restores RegenAmount[L] mana (ranged x0.8) or 6 energy, "
-                      "8 s cd; takedown restores 15% max resource after 1 s (Effects.mana)",
-    ALACRITY: "legend points -> 3% + 1.5%/stack bonus AS (max 10)",
-    HASTE: "legend points -> 1.5 basic ability haste/stack (max 10)",
-    BLOODLINE: "legend points -> 0.45% life steal/stack (max 15), +85 max HP at max",
-    COUP_DE_GRACE: "+8% damage vs champions below 40% HP (tick-start HP)",
-    CUT_DOWN: "+8% damage vs champions above 60% HP (tick-start HP)",
-    LAST_STAND: "+5% to +11% damage vs champions, own HP 60% -> 30%",
+    PTA: "3 on-hit stacks per target (swap clears); proc + 8% amp until 5 s out of champion combat (INFERRED-M); "
+         "damage in the tick the amp is gained is not amped; one stack per attack",
+    LETHAL_TEMPO: "stacks on launch vs champions; decay 1 at expiry then 1 per 0.3 s; bolt on attacks launched at "
+                  "max stacks after the gain, landing with that attack (PerfectlyTimedForgivance ignored, U-05)",
+    FLEET: "energy per attack, ability on-hit instance and distance moved; energized hit heals and hastes",
+    CONQUEROR: "melee/ranged basic and per-cast-instance spell stacks (4 s same-spell ring, Ignite once), level "
+               "lock (U-03); heals from post-mitigation damage once the 12th stack is reached in packet order "
+               "(U-04); cannot tell invulnerable targets from 0-damage hits",
+    ABSORB_LIFE: "breakpoint heal per champion/minion/large-monster kill",
+    TRIUMPH: "1 s after a champion takedown (even if dead, U-06): max HP + newest missing HP %, gold",
+    PRESENCE_OF_MIND: "mana/energy on champion damage (8 s cd); takedown restores % max mana after 1 s",
+    ALACRITY: "legend stacks -> bonus AS",
+    HASTE: "legend stacks -> basic ability haste",
+    BLOODLINE: "legend stacks -> life steal, max HP at max stacks",
+    COUP_DE_GRACE: "amp vs champions below 40% HP (tick-start HP)",
+    CUT_DOWN: "amp vs champions above 60% HP (tick-start HP)",
+    LAST_STAND: "amp vs champions by own missing HP",
 }
 
-# ---- client values ----------------------------------------------------------
 CONQ_MIN, CONQ_MAX = ea(CONQUEROR, "MinAdaptivePerStack"), ea(CONQUEROR, "MaxAdaptivePerStack")
 CONQ_MAX_STACKS = ea(CONQUEROR, "MaxStacks")
 CONQ_DURATION = ea(CONQUEROR, "BuffDuration")
 CONQ_SAME_SPELL = ea(CONQUEROR, "TimeUntilNextStackFromSameSpell")
 CONQ_HEAL, CONQ_HEAL_RANGED = ea(CONQUEROR, "HealingPercent"), ea(CONQUEROR, "RangedHealingPercent")
-CONQ_RING = 8                  # cast instances remembered for the 4 s rule (sim choice)
-CONQ_MELEE_HIT, CONQ_RANGED_HIT, CONQ_SPELL = 2.0, 1.0, 2.0   # RUNES §3.1 (WIKI; not in data)
+CONQ_RING = 8                  # cast instances remembered for the 4 s rule
+CONQ_MELEE_HIT, CONQ_RANGED_HIT, CONQ_SPELL = 2.0, 1.0, 2.0   # wiki, RUNES §3.1
 
 PTA_MIN, PTA_MAX = ea(PTA, "MinDamage"), ea(PTA, "MaxDamage")
 PTA_HITS = ea(PTA, "HitsRequired")
@@ -86,13 +63,13 @@ LT_AS_RANGED = _LT["ASPerStack"]["mRangedMultiplier"]["mNumber"]
 LT_BOLT_MIN = _LT["NoteDamage"]["mFormulaParts"][0]["mStartValue"]
 LT_BOLT_MAX = _LT["NoteDamage"]["mFormulaParts"][0]["mEndValue"]
 LT_BOLT_RANGED = _LT["NoteDamage"]["mRangedMultiplier"]["mNumber"]
-LT_DECAY = 0.3                 # RUNES §3.3 (WIKI): one stack per 0.3 s after the first
+LT_DECAY = 0.3                 # wiki, RUNES §3.3
 
 FLEET_HEAL_MIN, FLEET_HEAL_MAX = ea(FLEET, "HealBase"), ea(FLEET, "HealMax")
 FLEET_AD, FLEET_AP = ea(FLEET, "HealBonusADRatio"), ea(FLEET, "HealAPRatio")
 FLEET_RANGED_HEAL, FLEET_MINION = ea(FLEET, "RangedHealMod"), ea(FLEET, "MinionHealMod")
 FLEET_MS, FLEET_MS_TIME, FLEET_RANGED_MS = ea(FLEET, "MSBuff"), ea(FLEET, "MSDuration"), ea(FLEET, "RangedMSMod")
-FLEET_FULL, FLEET_PER_HIT, FLEET_UNITS_PER_CHARGE = 100.0, 6.0, 24.0   # RUNES §3.4 (Energized template)
+FLEET_FULL, FLEET_PER_HIT, FLEET_UNITS_PER_CHARGE = 100.0, 6.0, 24.0   # Energized template, RUNES §3.4
 
 _AL = rune_catalog()[ABSORB_LIFE].calculations["HealAmount"]["mFormulaParts"][0]
 ABSORB_L1, ABSORB_PER = _AL["mLevel1Value"], _AL["mInitialBonusPerLevel"]
@@ -100,20 +77,20 @@ ABSORB_POINTS = tuple((b["mLevel"], b.get("mBonusPerLevelAtAndAfter", 0.0)) for 
 
 TRIUMPH_MISSING, TRIUMPH_MAX = ea(TRIUMPH, "MissingHealthRestored"), ea(TRIUMPH, "TriumphMaxHealthRestored")
 TRIUMPH_GOLD = ea(TRIUMPH, "BonusGold")
-DELAY = 1.0                    # RUNES §3.6/§3.7: Triumph missile and PoM takedown restore 1 s
+DELAY = 1.0                    # Triumph / PoM takedown restore delay, RUNES §3.6-3.7
 QUEUE = 4
 
 POM_TABLE = tuple(rune_catalog()[PRESENCE_OF_MIND].calculations["RegenAmount"]["mFormulaParts"][0]["values"])
 POM_CD, POM_ENERGY = ea(PRESENCE_OF_MIND, "CooldownDuration"), ea(PRESENCE_OF_MIND, "EnergyRestore")
 POM_TAKEDOWN = ea(PRESENCE_OF_MIND, "PercentManaRestore")
-POM_RANGED = 0.8               # RUNES §3.7 (WIKI); the client calc carries no ranged multiplier
+POM_RANGED = 0.8               # wiki, RUNES §3.7 (not in the client calc)
 
 LEGEND = (ALACRITY, HASTE, BLOODLINE)
 _hashed = {ea(ALACRITY, k) for k in ("{3e1fdd4a}", "{8fb410e2}", "{f6570baa}")}
 assert len(_hashed) == 1, "Legend takedown values differ; map the hashed keys"
-LEGEND_TAKEDOWN = _hashed.pop()        # champion and epic takedowns (hashed keys, all 100)
+LEGEND_TAKEDOWN = _hashed.pop()        # champion and epic takedowns
 LEGEND_MINION, LEGEND_LARGE = ea(ALACRITY, "MinionKillValue"), ea(ALACRITY, "LargeMonsterKillValue")
-LEGEND_PER_STACK = 100.0               # RUNES §3.8: stacks = floor(points / 100)
+LEGEND_PER_STACK = 100.0               # RUNES §3.8
 
 COUP_BELOW, COUP_AMP = ea(COUP_DE_GRACE, "EnemyHealthPercentageThreshold"), ea(COUP_DE_GRACE, "BonusPercentDamage")
 CUT_ABOVE, CUT_AMP = ea(CUT_DOWN, "EnemyHealthPercentageThreshold"), ea(CUT_DOWN, "BonusPercentDamage")
@@ -124,7 +101,7 @@ LS_START, LS_END = ea(LAST_STAND, "HealthThresholdStart"), ea(LAST_STAND, "Healt
 class State(NamedTuple):
     conq_stacks: Any        # (C,)
     conq_expire: Any
-    conq_level: Any         # level locked at the 0 -> >0 transition (U-03)
+    conq_level: Any         # level locked when stacks leave 0 (U-03)
     conq_seen_id: Any       # (C, CONQ_RING) int32 cast ids
     conq_seen_t: Any        # (C, CONQ_RING) last stack time per id
     pta_target: Any         # int32 unit carrying the holder's stacks
@@ -133,7 +110,7 @@ class State(NamedTuple):
     pta_cd: Any
     pta_amp: Any            # bool
     pta_amp_since: Any
-    lt_stacks: Any          # stacks at the last gain (decay is closed form)
+    lt_stacks: Any          # stacks at the last gain
     lt_expire: Any
     lt_bolt: Any            # bool: launched attack carries a bolt
     lt_bolt_target: Any
@@ -163,8 +140,6 @@ def init(n_champions: int, n_units: int) -> State:
                  q + BIG, q, z,
                  z - BIG, q + BIG, q, z)
 
-
-# ---- helpers ------------------------------------------------------------------
 
 def _enemy_champion_target(ctx, units, idx):
     i = jnp.clip(idx, 0, units.cls.shape[0] - 1)
@@ -204,8 +179,6 @@ def _pop(due, cnt, now):
     return jnp.where(fire, BIG, due), jnp.where(fire, 0.0, cnt), jnp.sum(jnp.where(fire, cnt, 0.0), axis=1)
 
 
-# ---- hooks ----------------------------------------------------------------------
-
 def stats(state: State, page, ctx, ev) -> ItemStats:
     now = ctx.now
     conq = has_rune(page, CONQUEROR) & (now < state.conq_expire)
@@ -230,12 +203,12 @@ def on_attack(state: State, page, ctx, units, ev):
     c, n = ctx.level.shape[0], units.x.shape[0]
     a, now = ev.attack, ctx.now
     launched = a.launched & ctx.alive
-    # Lethal Tempo: stack on launch vs an enemy champion; bolt at max stacks (after the gain).
+    # Lethal Tempo.
     lt_go = launched & has_rune(page, LETHAL_TEMPO) & _enemy_champion_target(ctx, units, a.target)
     lt_new = jnp.minimum(_lt_current(state, now) + 1.0, LT_MAX)
     bolt = lt_go & (lt_new >= LT_MAX)
     raw = lin(LT_BOLT_MIN, LT_BOLT_MAX, ctx.level) * (1.0 + ev.bonus_attack_speed) * by_range(ctx, 1.0, LT_BOLT_RANGED)
-    # Fleet: an attack launched at full energy is Energized; every launch adds 6.
+    # Fleet: an attack launched at full energy is Energized.
     fleet = launched & has_rune(page, FLEET)
     armed = jnp.where(fleet, state.fleet_energy >= FLEET_FULL, state.fleet_armed)
     energy = jnp.where(fleet, jnp.minimum(state.fleet_energy + FLEET_PER_HIT, FLEET_FULL), state.fleet_energy)
@@ -264,12 +237,12 @@ def on_hit(state: State, page, ctx, units, ev):
     p_pta = packets(burst, ctx.unit, tgt, lin(PTA_MIN, PTA_MAX, ctx.level), adaptive_damage_type(ev), TAG_PROC,
                     item=rune_item(PTA))
 
-    # Lethal Tempo bolt rides the attack that launched it.
+    # Lethal Tempo bolt.
     bolt = hit & state.lt_bolt & has_rune(page, LETHAL_TEMPO)
     p_lt = packets(bolt, ctx.unit, jnp.maximum(state.lt_bolt_target, 0), state.lt_bolt_raw, state.lt_bolt_dtype,
                    TAG_PROC, item=rune_item(LETHAL_TEMPO))
 
-    # Fleet Footwork energized hit.
+    # Fleet energized hit.
     fleet = hit & state.fleet_armed & has_rune(page, FLEET)
     minion = target_class(units, a.target) == CLASS_MINION
     heal = (lin_growth(FLEET_HEAL_MIN, FLEET_HEAL_MAX, ctx.level) + FLEET_AD * ev.bonus_ad + FLEET_AP * ev.ap) \
@@ -292,14 +265,11 @@ def on_hit(state: State, page, ctx, units, ev):
 def periodic(state: State, page, ctx, units, ev):
     c, n = ctx.level.shape[0], units.x.shape[0]
     now = ctx.now
-    # Expiries.
     conq_end = now >= state.conq_expire
     pta_live = now - jnp.maximum(ev.clocks.last_champion_combat, state.pta_amp_since) < PTA_OOC
-    # Fleet energy from movement.
     move = has_rune(page, FLEET) & ctx.alive
     energy = jnp.where(move, jnp.minimum(state.fleet_energy + ctx.moved / FLEET_UNITS_PER_CHARGE, FLEET_FULL),
                        state.fleet_energy)
-    # Delayed Triumph and PoM takedown restores.
     tri_due, tri_n, tri = _pop(state.tri_due, state.tri_n, now)
     tri = jnp.where(has_rune(page, TRIUMPH), tri, 0.0)
     tri_heal = tri * (TRIUMPH_MAX * ctx.max_hp + TRIUMPH_MISSING * state.tri_missing)
@@ -314,15 +284,14 @@ def periodic(state: State, page, ctx, units, ev):
 
 
 def packet_amp(state: State, page, ctx, units, ev, p):
-    """DMG.40 additive amps (P,): PTA, Coup de Grace, Cut Down, Last Stand."""
     sel = _ampable(ctx, units, p)
     d = jnp.clip(p.dst, 0, units.cls.shape[0] - 1)
     frac = (units.hp[d] / jnp.maximum(units.max_hp[d], 1.0))[None, :]
     own = ctx.hp / jnp.maximum(ctx.max_hp, 1.0)
     pta_on = state.pta_amp & (ctx.now > state.pta_amp_since) \
         & (ctx.now - jnp.maximum(ev.clocks.last_champion_combat, state.pta_amp_since) < PTA_OOC)
-    ls = jnp.where(own < LS_START, LS_MIN + (LS_MAX - LS_MIN) * jnp.clip((LS_START - own) / (LS_START - LS_END), 0.0, 1.0),
-                   0.0)
+    ls = jnp.where(own < LS_START,
+                   LS_MIN + (LS_MAX - LS_MIN) * jnp.clip((LS_START - own) / (LS_START - LS_END), 0.0, 1.0), 0.0)
     amp = jnp.where((has_rune(page, PTA) & pta_on)[:, None], PTA_AMP, 0.0) \
         + jnp.where(has_rune(page, COUP_DE_GRACE)[:, None] & (frac < COUP_BELOW), COUP_AMP, 0.0) \
         + jnp.where(has_rune(page, CUT_DOWN)[:, None] & (frac > CUT_ABOVE), CUT_AMP, 0.0) \
@@ -354,7 +323,7 @@ def _conqueror(state: State, page, ctx, units, rep):
     refresh = jnp.any(sel & ~proc[None, :], axis=1) & (new > 0)
     heal = jnp.sum(jnp.where(sel & (cum >= CONQ_MAX_STACKS), r.final[None, :], 0.0), axis=1) \
         * by_range(ctx, CONQ_HEAL, CONQ_HEAL_RANGED)
-    # Ring: write the r-th new instance into the r-th oldest slot.
+    # Write the r-th new instance into the r-th oldest ring slot.
     ring = gain_spell & (cid != 0)[None, :]
     rank = jnp.cumsum(ring, axis=1) - 1
     order = jnp.argsort(state.conq_seen_t, axis=1)
@@ -376,12 +345,12 @@ def on_damage(state: State, page, ctx, units, ev):
     rep = ev.report
     p = rep.packets
     state, heal = _conqueror(state, page, ctx, units, rep)
-    # Presence of Mind: any damage to an enemy champion, 8 s cooldown.
+    # Presence of Mind.
     hit = jnp.any(_to_enemy_champions(ctx, units, p), axis=1)
     pom = hit & has_rune(page, PRESENCE_OF_MIND) & ctx.alive & (ctx.now >= state.pom_cd)
     restore = jnp.where(ev.uses_energy, POM_ENERGY,
                         level_table(POM_TABLE, ctx.level) * by_range(ctx, 1.0, POM_RANGED))
-    # Fleet: +6 per ability hit that applies on-hit.
+    # Fleet: per ability instance that applies on-hit.
     own = p.valid[None, :] & (p.src[None, :] == ctx.unit[:, None]) \
         & (has(p.flags, TAG_ACTIVE_SPELL) & has(p.flags, TAG_ON_HIT))[None, :]
     k = jnp.sum(first_instance(p, own), axis=1).astype(jnp.float32)
@@ -397,16 +366,13 @@ def on_takedown(state: State, page, ctx, units, ev):
     c, n = ctx.level.shape[0], units.x.shape[0]
     kl, now = ev.kills, ctx.now
     takedowns = (kl.champion_kill + kl.champion_assist).astype(jnp.float32)
-    # Absorb Life: instant heal per last hit.
     kills = (kl.champion_kill + kl.minion_kill + ev.large_monster_kill).astype(jnp.float32)
     absorb = jnp.where(has_rune(page, ABSORB_LIFE),
                        kills * breakpoints(ABSORB_L1, ABSORB_PER, ABSORB_POINTS, ctx.level), 0.0)
-    # Triumph / PoM: queue the 1 s delayed restore; Triumph uses the newest missing HP.
     tri = jnp.where(has_rune(page, TRIUMPH), takedowns, 0.0)
     tri_due, tri_n = _enqueue(state.tri_due, state.tri_n, tri, now + DELAY)
     pom = jnp.where(has_rune(page, PRESENCE_OF_MIND), takedowns, 0.0)
     pom_due, pom_n = _enqueue(state.pom_due, state.pom_n, pom, now + DELAY)
-    # Legend points.
     legend = has_rune(page, ALACRITY) | has_rune(page, HASTE) | has_rune(page, BLOODLINE)
     pts = LEGEND_TAKEDOWN * (takedowns + ev.epic_takedown) + LEGEND_LARGE * ev.large_monster_kill \
         + LEGEND_MINION * kl.minion_kill
