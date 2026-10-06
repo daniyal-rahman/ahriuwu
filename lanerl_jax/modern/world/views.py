@@ -61,8 +61,8 @@ def visibility(cfg: WorldConfig, x, y, kind, sub, team, alive, reveal, now, *, w
         kw["sources"] = (jnp.asarray(J.SHRINE_POS, jnp.float32)[:, 0], jnp.asarray(J.SHRINE_POS, jnp.float32)[:, 1],
                          jnp.where(on, J.SHRINE_SIGHT, 0.0), jungle.shrine_team)
     visible, sight, dropped = MV.visibility(x, y, kind, sub, team, alive, reveal, now, grid, n_fogged=lay.struct0,
-                                            ray_capacity=lay.ray_capacity, **kw)
-    return visible, sight[:N_CHAMPIONS], dropped
+                                            ray_capacity=lay.ray_capacity, sight_rows=N_CHAMPIONS, **kw)
+    return visible, sight, dropped
 
 
 def kit_attack_target(kit_out) -> Any:

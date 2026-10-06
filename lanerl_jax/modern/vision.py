@@ -64,9 +64,10 @@ def sight_radius(kind, sub, alive) -> Any:
 
 def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fogged: int,
                radius=None, stealthed=None, true_sight=None, unobstructed=None, exposed=None, sources=None,
-               ray_capacity=None):
-    """``(visible (2, N), sight (N, N), dropped)``: team t sees unit j; unit i itself sees j (rune "own sight");
-    ``dropped`` sight rays past ``ray_capacity`` (``rays.clear_pairs``; must stay 0).
+               ray_capacity=None, sight_rows=None):
+    """``(visible (2, N), sight (V, N), dropped)``: team t sees unit j; unit i < V = ``sight_rows`` (None = N)
+    itself sees j (rune "own sight"); ``dropped`` sight rays past ``ray_capacity`` (``rays.clear_pairs``; must
+    stay 0).
 
     Units from ``n_fogged`` on are structures (never fogged). Optional (N,) inputs, None = off: ``radius``
     overrides the sight radius, ``stealthed`` units need enemy ``true_sight``, ``unobstructed`` viewers ignore
@@ -95,9 +96,10 @@ def visibility(x, y, kind, sub, team, alive, reveal: Reveal, now, grid, *, n_fog
         ts_in = (d2 <= (ts ** 2)[:, None]) & (ts > 0)[:, None]
         sight_f = jnp.where(hidden_t[None, :] & enemy, ts_in & live[:n_fogged][None, :], sight_f)
     structure = (kind == W.KIND_TURRET) | (kind == W.KIND_INHIBITOR) | (kind == W.KIND_NEXUS)
-    sight = jnp.concatenate([sight_f, jnp.broadcast_to((structure & live)[None, n_fogged:], (n, n - n_fogged))
-                             & ((x[:, None] - x[None, n_fogged:]) ** 2 + (y[:, None] - y[None, n_fogged:]) ** 2
-                                <= (r ** 2)[:, None])], axis=1)
+    v = n if sight_rows is None else sight_rows
+    sight = jnp.concatenate([sight_f[:v], (structure & live)[None, n_fogged:]
+                             & ((x[:v, None] - x[None, n_fogged:]) ** 2 + (y[:v, None] - y[None, n_fogged:]) ** 2
+                                <= (r[:v] ** 2)[:, None])], axis=1)
     teams = jnp.arange(2)
     seen = jnp.any((team[None, :, None] == teams[:, None, None]) & live[None, :, None] & sight_f[None], axis=1)
     # Attack reveal circles: champion c's circle is shown to the team that is not c's.
