@@ -53,7 +53,11 @@ inline int damage_class(int k) {
 struct Packet { int src, dst; float raw; int dtype, flags; float amp; };
 
 // Per-thread working arrays, sized on first use.
+// One live lane-AI column, copied out of the unit columns for the pair scans.
+struct Live { int c, u; float x, y, r; int kind, sub, team; bool targetable; };
+
 struct Scratch {
+    std::vector<Live> live, foes[2];
     std::vector<int32_t> desired, live_cols, ids;
     std::vector<float> gx, gy, ms, nx, ny, x0, y0, prad, start_x, start_y;
     std::vector<uint8_t> stop, active, can_move, launched, collide, ghost, minion_rows, turret_rows, newu;
@@ -79,6 +83,9 @@ struct Scratch {
     }
 };
 thread_local Scratch scratch;
+}  // namespace
+thread_local float* debug_route = nullptr;           // (ward0, 16) route inputs/outputs of the next step, or null
+namespace {
 
 // Per-phase wall time (ns), summed over the calling thread's ticks (ls_profile).
 enum Phase { P_SPAWN, P_TURRET, P_SELECT, P_MOVE_PREP, P_ROUTE, P_COLLIDE, P_ATTACK, P_DAMAGE, P_DEATH, P_TIMERS, P_FOG,
@@ -143,13 +150,32 @@ void turret_tick(const World& w, Env& e, float now) {
         float arg = (e.tw_targetable[i] && lane_turret) ? now : INF;
         if (std::isinf(e.tw_growth_since[i])) e.tw_growth_since[i] = arg;
     }
+    // live minions and champions among the columns: the only units that refresh backdoor or suppress a crystal
+    static thread_local std::vector<int32_t> walkers;
+    walkers.clear();
+    for (int c : w.cols)
+        if (e.alive[c] && (e.kind[c] == MINION || e.kind[c] == CHAMPION)) walkers.push_back(c);
+    float box[3][4];                  // per walker team: min x, max x, min y, max y
+    for (auto& b : box) b[0] = b[2] = INF, b[1] = b[3] = -INF;
+    for (int c : walkers) {
+        auto& b = box[clampi(e.team[c], 0, 2)];
+        b[0] = std::min(b[0], e.x[c]), b[1] = std::max(b[1], e.x[c]);
+        b[2] = std::min(b[2], e.y[c]), b[3] = std::max(b[3], e.y[c]);
+    }
+    const float reach_max = tower::ATTACK_RANGE + tower::GAMEPLAY_RADIUS + 400.f;   // > every walker's reach
+    auto far_from = [&](int i, int team) {
+        const auto& b = box[team];
+        return e.x[i] < b[0] - reach_max || e.x[i] > b[1] + reach_max || e.y[i] < b[2] - reach_max
+               || e.y[i] > b[3] + reach_max;
+    };
     for (int i = 0; i < n; ++i) {     // towers.advance; enemy pairs only over the structure rows
         bool minion_near = false, unit_near = false;
-        if (w.col_of[i] >= 0 && i >= w.struct0) {
-            for (int c : w.cols) {
-                if (!(e.tw_team[i] != e.team[c] && e.alive[c])) continue;
-                bool minion = e.kind[c] == MINION, champ = e.kind[c] == CHAMPION;
-                if (!minion && !champ) continue;
+        bool any_foe = false;
+        for (int tm = 0; tm < 3; ++tm) any_foe |= tm != e.tw_team[i] && !far_from(i, tm);
+        if (w.col_of[i] >= 0 && i >= w.struct0 && any_foe) {
+            for (int c : walkers) {
+                if (e.tw_team[i] == e.team[c]) continue;
+                bool minion = e.kind[c] == MINION;
                 if (beyond(e, i, c, std::max(tower::BACKDOOR_RADIUS,
                                              tower::ATTACK_RANGE + tower::GAMEPLAY_RADIUS + e.radius[c])))
                     continue;
@@ -376,34 +402,69 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
     sub.lap(S_RESET);
     const uint8_t* dmg = e.damage_matrix;
 
-    // Aggression memory: damage events (champions only champion-on-champion), then each live attacker's live victims
-    // (attacking[c, v]; a dead victim is never an ally near anyone, so it never raises a priority).
-    int n_live = 0;
-    int32_t* live = sc.live_cols.data();
-    for (size_t c = 0; c < K; ++c)
-        if (e.alive[cols[c]]) live[n_live++] = (int)c;
+    // Live columns as compact records (column order), and per team the others' records: rows of team t scan
+    // ``foes[t]`` (raw teams differ), still in column order so argmin ties keep the first column.
+    auto& live = sc.live;
+    live.clear();
+    for (size_t c = 0; c < K; ++c) {
+        int u = cols[c];
+        if (e.alive[u])
+            live.push_back({(int)c, u, e.x[u], e.y[u], e.radius[u], e.kind[u], e.sub[u], e.team[u], (bool)e.targetable[u]});
+    }
+    for (int t = 0; t < 2; ++t) {
+        sc.foes[t].clear();
+        for (const Live& L : live)
+            if (L.team != t) sc.foes[t].push_back(L);
+    }
+
+    // Aggression memory: damage events (champions only champion-on-champion), then the recent-attack list (pairs
+    // whose last event is within ATTACK_MEMORY_S; a native cache of last_attack's recent entries), then each live
+    // attacker's live victims (attacking[c, v]; a dead victim is never an ally near anyone).
+    const float before = *e.t;                                  // last tick's ``now``: the list was pruned with it
     for (int q = 0; q < *e.ev_n; ++q) {
         int s = e.ev_src[q], d = e.ev_dst[q], a = w.col_of[s], b = w.col_of[d];
-        if (a >= 0 && b >= 0 && (e.kind[s] != CHAMPION || e.kind[d] == CHAMPION)) e.last_attack[a * K + b] = now;
-    }
-    int32_t* off = sc.victims_off.data();
-    sc.victims.clear();
-    for (size_t c = 0; c < K; ++c) {
-        off[c] = (int)sc.victims.size();
-        int uc = cols[c];
-        if (!e.alive[uc]) continue;
-        bool winding = e.windup_left[uc] > 0.f;
-        for (int q = 0; q < n_live; ++q) {
-            int v = live[q];
-            if ((now - e.last_attack[c * K + v]) <= ATTACK_MEMORY_S || (winding && e.att_target[uc] == cols[v]))
-                sc.victims.push_back(v);
+        if (!(a >= 0 && b >= 0 && (e.kind[s] != CHAMPION || e.kind[d] == CHAMPION))) continue;
+        float& la = e.last_attack[a * K + b];
+        bool listed = (before - la) <= ATTACK_MEMORY_S;
+        la = now;
+        if (!listed) {
+            if ((size_t)*e.rec_n < K * K) e.rec[(*e.rec_n)++] = (int)(a * K + b);
+            else *e.rec_n = -1;                                 // overflow: rebuilt from the table below
         }
     }
-    off[K] = (int)sc.victims.size();
+    if (*e.rec_n < 0) {
+        *e.rec_n = 0;
+        for (size_t p = 0; p < K * K; ++p)
+            if ((now - e.last_attack[p]) <= ATTACK_MEMORY_S) e.rec[(*e.rec_n)++] = (int)p;
+    }
+    int kept = 0;
+    for (int q = 0; q < *e.rec_n; ++q)
+        if ((now - e.last_attack[e.rec[q]]) <= ATTACK_MEMORY_S) e.rec[kept++] = e.rec[q];
+    *e.rec_n = kept;
+    int32_t* off = sc.victims_off.data();
+    std::fill(off, off + K + 1, 0);
+    auto each_pair = [&](auto&& f) {
+        for (int q = 0; q < *e.rec_n; ++q) {
+            int a = e.rec[q] / (int)K, b = e.rec[q] % (int)K;
+            if (e.alive[cols[a]] && e.alive[cols[b]]) f(a, b);
+        }
+        for (const Live& L : live) {
+            int v = L.u == L.u ? w.col_of[clampi(e.att_target[L.u], 0, n - 1)] : -1;
+            if (e.windup_left[L.u] > 0.f && e.att_target[L.u] >= 0 && v >= 0 && e.alive[cols[v]]) f(L.c, v);
+        }
+    };
+    each_pair([&](int a, int) { ++off[a + 1]; });
+    for (size_t c = 0; c < K; ++c) off[c + 1] += off[c];
+    sc.victims.resize(off[K]);
+    {
+        static thread_local std::vector<int32_t> fill;
+        fill.assign(off, off + K);
+        each_pair([&](int a, int b) { sc.victims[fill[a]++] = cols[b]; });
+    }
     // Some ally of row unit i within ``radius`` of i that column c attacks, of the victim kind ``vkind``.
     auto attacks_ally_near = [&](int i, int c, int vkind, float radius) {
         for (int q = off[c]; q < off[c + 1]; ++q) {
-            int v = cols[sc.victims[q]];
+            int v = sc.victims[q];
             if (e.kind[v] == vkind && e.team[v] == e.team[i] && dist(e, i, v) < radius) return true;
         }
         return false;
@@ -419,17 +480,20 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         stop[i] = e.kind[i] != CHAMPION && e.kind[i] != MINION;
     }
 
-    // --- minions (rows R): pass A holds, calls for help and gives up; pass B acquires with the team's attacker counts.
-    struct Cell { float d; int8_t valid, prio; };
-    static thread_local std::vector<Cell> cell;
-    static thread_local std::vector<int32_t> tgt, tprio_v;
+    // --- minions (rows R): pass A holds, calls for help and gives up; pass B acquires with the team's attacker
+    // counts. Each row keeps only its valid candidates (base_valid), in column order.
+    struct Cell { int c; float d; int prio; };
+    static thread_local std::vector<Cell> cells;
+    static thread_local std::vector<int32_t> row_off, tgt, tprio_v;
     static thread_local std::vector<float> since_v, timer_v;
     static thread_local std::vector<uint8_t> acquire_v;
-    cell.resize(R * K);
+    cells.clear();
+    row_off.resize(R + 1);
     tgt.resize(R), tprio_v.resize(R), since_v.resize(R), timer_v.resize(R), acquire_v.resize(R);
     auto unit_k = [&](int u) { return (int)std::nearbyint((e.spawn_time[u] - minion::WAVE_FIRST_S) / minion::WAVE_UNIT_GAP_S); };
     for (size_t r = 0; r < R; ++r) {
         int i = w.rows_m[r];
+        row_off[r] = (int)cells.size();
         acquire_v[r] = 0;
         if (!(e.kind[i] == MINION && e.alive[i])) continue;
         int sub = clampi(e.sub[i], 0, 3);
@@ -437,41 +501,40 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         float acq = minion::ACQUISITION_RANGE[sub], first_acq = minion::FIRST_ACQUISITION_RANGE[sub];
         float wake = minion::WAKE_UP_RANGE[sub];
         const uint8_t* vis = e.visible + (size_t)clip_team(e.team[i]) * n;
-        Cell* row = cell.data() + r * K;
         const float reach = std::max(std::max(acq, first_acq), wake) + 320.f;   // + the largest structure radius
-        for (int q = 0; q < n_live; ++q) {
-            int c = live[q], u = cols[c];
-            if (e.team[i] == e.team[u] || beyond(e, i, u, reach)) {
-                row[c] = {INF, 0, (int8_t)NO_PRIORITY};
-                continue;
-            }
-            float d = dist(e, i, u);
-            int k = e.kind[u];
-            bool tk = k == CHAMPION || k == MINION || is_structure(k) || (k == MONSTER && e.team[u] < 2);
+        const float xi = e.x[i], yi = e.y[i], lim = sq(reach + 1.f);
+        const auto& foes = sc.foes[e.team[i] == 1 ? 1 : 0];
+        for (const Live& L : foes) {
+            if (L.team == e.team[i]) continue;                   // raw teams (a team-2 row matches neither list)
+            float d2 = sq(xi - L.x) + sq(yi - L.y);
+            if (d2 > lim || !L.targetable || !vis[L.u]) continue;
+            int k = L.kind;
+            if (!(k == CHAMPION || k == MINION || is_structure(k) || (k == MONSTER && L.team < 2))) continue;
+            float d = std::sqrt(d2);
             float scan = k == CHAMPION ? (unengaged ? wake : acq)
-                       : (k == MINION ? (unengaged ? first_acq : acq) : acq + e.radius[u]);
-            bool valid = e.team[i] != e.team[u] && e.targetable[u] && vis[u] && tk && d < scan;
-            int prio = NO_PRIORITY;
-            if (valid) {
-                if (k == CHAMPION)
-                    prio = attacks_ally_near(i, c, CHAMPION, minion::CFH_CHAMPION_RADIUS) ? 1 : 6;
-                else if (k == MINION)
-                    prio = attacks_ally_near(i, c, CHAMPION, minion::CFH_GENERIC_RADIUS) ? 2
-                         : (attacks_ally_near(i, c, MINION, minion::CFH_GENERIC_RADIUS) ? 3 : 5);
-                else if (k == TURRET)
-                    prio = attacks_ally_near(i, c, MINION, minion::CFH_GENERIC_RADIUS) ? 4 : 7;
-                else
-                    prio = 7;
-            }
-            row[c] = {d, (int8_t)valid, (int8_t)prio};
+                       : (k == MINION ? (unengaged ? first_acq : acq) : acq + L.r);
+            if (!(d < scan)) continue;
+            int prio;
+            if (k == CHAMPION)
+                prio = attacks_ally_near(i, L.c, CHAMPION, minion::CFH_CHAMPION_RADIUS) ? 1 : 6;
+            else if (k == MINION)
+                prio = attacks_ally_near(i, L.c, CHAMPION, minion::CFH_GENERIC_RADIUS) ? 2
+                     : (attacks_ally_near(i, L.c, MINION, minion::CFH_GENERIC_RADIUS) ? 3 : 5);
+            else if (k == TURRET)
+                prio = attacks_ally_near(i, L.c, MINION, minion::CFH_GENERIC_RADIUS) ? 4 : 7;
+            else
+                prio = 7;
+            cells.push_back({L.c, d, prio});
         }
-        // Columns not live are never valid.
+        const Cell* row = cells.data() + row_off[r];
+        const int nrow = (int)cells.size() - row_off[r];
         float* ign = e.ignore_until + r * K;
-        auto base_valid = [&](int c) { return e.alive[cols[c]] && row[c].valid; };
         int held = e.ai_target[i];
         int hs = clampi(held, 0, n - 1);
         int held_c = w.col_of[hs];
-        bool held_ok = held >= 0 && e.spawn_seq[hs] == e.ai_target_seq[i] && held_c >= 0 && base_valid(std::max(held_c, 0));
+        bool held_valid = false;
+        for (int q = 0; q < nrow && !held_valid; ++q) held_valid = row[q].c == held_c;
+        bool held_ok = held >= 0 && e.spawn_seq[hs] == e.ai_target_seq[i] && held_c >= 0 && held_valid;
         bool just_lost = held >= 0 && !held_ok;
         int target = held_ok ? held : -1;
         int tprio = held_ok ? e.ai_priority[i] : NO_PRIORITY;
@@ -482,10 +545,8 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         // Call for Help: a strictly better P1-P4 class switches at once, except holding a turret (not first wave) or
         // mid-windup.
         Best cfh;
-        for (int q = 0; q < n_live; ++q) {
-            int c = live[q];
-            if (row[c].valid && ign[c] <= now && row[c].prio <= 4) cfh.offer(c, row[c].prio, row[c].d);
-        }
+        for (int q = 0; q < nrow; ++q)
+            if (ign[row[q].c] <= now && row[q].prio <= 4) cfh.offer(row[q].c, row[q].prio, row[q].d);
         bool blocked = target >= 0 && e.kind[safe] == TURRET && !e.ai_first_wave[i];
         bool sw = cfh.c >= 0 && cfh.p < tprio && !blocked && !in_windup;
         if (sw) target = cols[cfh.c], tprio = cfh.p, since = 0.f;
@@ -501,6 +562,7 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         tgt[r] = target, tprio_v[r] = tprio, since_v[r] = since, timer_v[r] = timer;
         acquire_v[r] = sweep && target < 0;
     }
+    row_off[R] = (int)cells.size();
     sub.lap(S_PASS_A);
     // attackers[team][c]: live minion rows of the team currently targeting column c
     static thread_local std::vector<float> by_team;
@@ -525,7 +587,8 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
             e.ai_priority[i] = NO_PRIORITY, e.ai_since[i] = 0.f;
             continue;
         }
-        Cell* row = cell.data() + r * K;
+        const Cell* row = cells.data() + row_off[r];
+        const int nrow = row_off[r + 1] - row_off[r];
         float* ign = e.ignore_until + r * K;
         int target = tgt[r], tprio = tprio_v[r];
         float since = since_v[r];
@@ -538,21 +601,19 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
             };
             bool restrict_ = false;
             if (e.ai_first_wave[i])
-                for (int q = 0; q < n_live && !restrict_; ++q) {
-                    int c = live[q];
-                    restrict_ = row[c].valid && ign[c] <= now && fw_melee(c) && row[c].prio == 5;
-                }
+                for (int q = 0; q < nrow && !restrict_; ++q)
+                    restrict_ = ign[row[q].c] <= now && fw_melee(row[q].c) && row[q].prio == 5;
             int uk = unit_k(i), want = ((uk % 3) + 3) % 3;
             const float* attackers = by_team.data() + clampi(e.team[i], 0, 2) * K;
             Best acq;
-            for (int q = 0; q < n_live; ++q) {
-                int c = live[q];
-                if (!(row[c].valid && ign[c] <= now)) continue;
-                bool closest_min = row[c].prio == 5, fw = fw_melee(c);
+            for (int q = 0; q < nrow; ++q) {
+                int c = row[q].c;
+                if (!(ign[c] <= now)) continue;
+                bool closest_min = row[q].prio == 5, fw = fw_melee(c);
                 if (restrict_ && closest_min && !fw) continue;
                 float spread = (restrict_ && fw && closest_min)
                                    ? (unit_k(cols[c]) == want ? 0.f : 1e5f) + 1e4f * attackers[c] : 0.f;
-                acq.offer(c, row[c].prio, row[c].d + spread);
+                acq.offer(c, row[q].prio, row[q].d + spread);
             }
             if (acq.c >= 0) target = cols[acq.c], tprio = acq.p, since = 0.f;
         }
@@ -572,7 +633,8 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
     }
 
     sub.lap(S_PASS_B);
-    // --- turrets (rows S)
+    // --- turrets (rows S): one pass over the foes keeps, per priority class, the nearest (first on ties); the lock;
+    // and the nearest champion-protection aggressor (towers.select_target).
     for (int i : w.rows_s) {
         bool turret = e.kind[i] == TURRET && e.alive[i];
         if (!turret) {
@@ -582,45 +644,44 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         const uint8_t* vis = e.visible + (size_t)clip_team(e.team[i]) * n;
         int held = e.ai_target[i], hs = clampi(held, 0, n - 1);
         int lock = (held >= 0 && e.spawn_seq[hs] == e.ai_target_seq[i]) ? w.col_of[hs] : -1;
-        // towers.select_target: stable lock, preempted by champion protection; else nearest of the best class.
-        int best_p = 100, nearest = -1, aggressor = -1;
-        float nearest_d = INF, aggressor_d = INF;
+        float near_d[7];
+        int near_c[7];
+        for (int p = 0; p < 7; ++p) near_d[p] = INF, near_c[p] = -1;
+        int best_p = 100, aggressor = -1;
+        float aggressor_d = INF;
         bool any = false, any_aggr = false, lock_ok = false;
-        for (int pass = 0; pass < 2; ++pass)
-            for (int q = 0; q < n_live; ++q) {
-                int c = live[q], u = cols[c];
-                int k = e.kind[u];
-                if (e.team[i] == e.team[u] || !e.targetable[u] || !vis[u]) continue;
-                if (!(k == CHAMPION || k == MINION || (k == MONSTER && e.team[u] < 2))) continue;
-                float reach = e.range[i] + e.radius[i] + e.radius[u];
-                if (beyond(e, i, u, reach)) continue;
-                float d = dist(e, i, u);
-                if (!(d <= reach)) continue;
-                int p = k == CHAMPION ? tower::CHAMPION_P
-                      : (e.sub[u] >= minion::CANNON ? tower::CANNON_SUPER
-                         : (e.sub[u] == minion::MELEE ? tower::MELEE_P : tower::CASTER_P));
-                if (pass == 0) {
-                    any = true;
-                    best_p = std::min(best_p, p);
-                    if (c == lock) lock_ok = true;
-                    if (k == CHAMPION) {
-                        // aggressive: an enemy champion that damaged (this tick's matrix) an ally champion within 1400
-                        bool aggr = false;
-                        for (int q2 = 0; q2 < n_live && !aggr; ++q2) {
-                            int v = cols[live[q2]];
-                            aggr = e.kind[v] == CHAMPION && e.team[v] == e.team[i]
-                                   && dist(e, i, v) <= tower::PROTECTION_RADIUS && dmg[(size_t)u * n + v];
-                        }
-                        if (aggr) {
-                            any_aggr = true;
-                            if (d < aggressor_d) aggressor_d = d, aggressor = c;
-                        }
-                    }
-                } else if (p == best_p && d < nearest_d) {
-                    nearest_d = d, nearest = c;
+        const float xi = e.x[i], yi = e.y[i], base = e.range[i] + e.radius[i];
+        for (const Live& L : sc.foes[e.team[i] == 1 ? 1 : 0]) {
+            int k = L.kind;
+            if (L.team == e.team[i] || !L.targetable) continue;
+            if (!(k == CHAMPION || k == MINION || (k == MONSTER && L.team < 2))) continue;
+            float reach = base + L.r;
+            float d2 = sq(xi - L.x) + sq(yi - L.y);
+            if (d2 > sq(reach + 1.f) || !vis[L.u]) continue;
+            float d = std::sqrt(d2);
+            if (!(d <= reach)) continue;
+            int p = k == CHAMPION ? tower::CHAMPION_P
+                  : (L.sub >= minion::CANNON ? tower::CANNON_SUPER
+                     : (L.sub == minion::MELEE ? tower::MELEE_P : tower::CASTER_P));
+            any = true;
+            best_p = std::min(best_p, p);
+            if (L.c == lock) lock_ok = true;
+            if (d < near_d[p]) near_d[p] = d, near_c[p] = L.c;
+            if (k == CHAMPION) {
+                // aggressive: an enemy champion that damaged (last tick) an ally champion within 1400
+                bool aggr = false;
+                for (int q = 0; q < *e.ev_n && !aggr; ++q) {
+                    int v = e.ev_dst[q];
+                    aggr = e.ev_src[q] == L.u && w.col_of[v] >= 0 && e.alive[v] && e.kind[v] == CHAMPION
+                           && e.team[v] == e.team[i] && dist(e, i, v) <= tower::PROTECTION_RADIUS;
+                }
+                if (aggr) {
+                    any_aggr = true;
+                    if (d < aggressor_d) aggressor_d = d, aggressor = L.c;
                 }
             }
-        int pick = !any ? -1 : (any_aggr ? aggressor : (lock >= 0 && lock_ok ? lock : nearest));
+        }
+        int pick = !any ? -1 : (any_aggr ? aggressor : (lock >= 0 && lock_ok ? lock : near_c[best_p]));
         int t_target = pick >= 0 ? cols[pick] : -1;
         e.ai_champion_aggro[i] = any_aggr ? 1 : (e.ai_champion_aggro[i] && t_target == held && t_target >= 0);
         bool hit_champ = false;
@@ -660,6 +721,12 @@ void move_step(const World& w, Env& e, const float* gx, const float* gy, const f
             continue;
         }
         Routes::Follow f = routes.follow(w.terrain[team], e.x[i], e.y[i], gx[i], gy[i], rr, e.route_anchor[i]);
+        if (debug_route) {                                // x, y, gx, gy, rr, anchor in, active, follow x/y/ok/anchor/replan
+            float* o = debug_route + 24 * i;
+            o[0] = e.x[i], o[1] = e.y[i], o[2] = gx[i], o[3] = gy[i], o[4] = rr, o[5] = (float)e.route_anchor[i];
+            o[6] = active[i], o[7] = f.x, o[8] = f.y, o[9] = f.ok, o[10] = (float)f.anchor, o[11] = f.replan;
+            o[12] = o[13] = o[14] = o[15] = NAN;
+        }
         bool fixed = !active[i] && f.anchor == e.route_anchor[i];
         memo[0] = e.x[i], memo[1] = e.y[i], memo[2] = gx[i], memo[3] = gy[i];
         e.memo_anchor[i] = fixed ? f.anchor : -3;
@@ -674,6 +741,10 @@ void move_step(const World& w, Env& e, const float* gx, const float* gy, const f
         float rr = std::min(e.radius[i], routes.radius);
         Routes::Follow f = routes.replan(w.terrain[team], e.x[i], e.y[i], gx[i], gy[i], rr);
         px[i] = f.x, py[i] = f.y, e.route_anchor[i] = f.anchor;
+        if (debug_route) {                                // replan x/y/ok/anchor
+            float* o = debug_route + 24 * i;
+            o[12] = f.x, o[13] = f.y, o[14] = f.ok, o[15] = (float)f.anchor;
+        }
     }
     for (int i = 0; i < w.n; ++i) nx[i] = e.x[i], ny[i] = e.y[i];
     for (int i = 0; i < m; ++i) {
@@ -709,7 +780,10 @@ void collide(const World& w, Env& e, const float* x1, const float* y1, const flo
     const float h = w.avoid_horizon_ticks;
     static thread_local std::vector<float> rad, vx, vy, step, ux, uy, ovx, ovy, ax_, ay_, clr;
     static thread_local std::vector<uint8_t> act;
-    static thread_local std::vector<int32_t> rel_off, rel;
+    // An obstacle j relevant to mover i, with the heading-independent terms of contact_time.
+    struct Rel { int j; float rx, ry, d, c, ovx, ovy; };
+    static thread_local std::vector<int32_t> rel_off;
+    static thread_local std::vector<Rel> rel;
     for (auto* v : {&rad, &vx, &vy, &step, &ux, &uy, &ovx, &ovy, &ax_, &ay_, &clr}) v->resize(m);
     act.resize(m), rel_off.resize(m + 1);
     const float* x0 = e.x;
@@ -726,40 +800,43 @@ void collide(const World& w, Env& e, const float* x1, const float* y1, const flo
         ax_[i] = x0[i] + (x1[i] - x0[i]) * 1.f, ay_[i] = y0[i] + (y1[i] - y0[i]) * 1.f;   // frac 1 (JAX form)
     }
     // Phase 1, avoid: obstacles j relevant to mover i (rel), then the best heading per side.
+    static thread_local std::vector<int32_t> solids;
+    solids.clear();
+    for (int j = 0; j < m; ++j)
+        if (solid[j]) solids.push_back(j);
     rel.clear();
     for (int i = 0; i < m; ++i) {
         rel_off[i] = (int)rel.size();
         if (!act[i]) continue;
         float gdist = std::sqrt(sq(gx[i] - x0[i]) + sq(gy[i] - y0[i]));
-        for (int j = 0; j < m; ++j) {
-            if (j == i || !solid[j]) continue;
+        for (int j : solids) {
+            if (j == i) continue;
             float rx = x0[j] - x0[i], ry = y0[j] - y0[i];
             float rsum = std::max(rad[i], rad[j]);
             if (rx * rx + ry * ry > sq(rsum + (step[i] + AVOID_MAX_STEP) * h + 1.f)) continue;
             float d = std::sqrt(rx * rx + ry * ry);
             bool on_goal = std::sqrt(sq(x0[j] - gx[i]) + sq(y0[j] - gy[i])) < rsum;
-            if (!on_goal && d - rsum < gdist && d < rsum + (step[i] + AVOID_MAX_STEP) * h) rel.push_back(j);
+            if (!on_goal && d - rsum < gdist && d < rsum + (step[i] + AVOID_MAX_STEP) * h)
+                rel.push_back({j, rx, ry, d, d * d - sq(rsum - .5f), ovx[j], ovy[j]});
         }
     }
     rel_off[m] = (int)rel.size();
     auto contact_time = [&](int i, float cx, float cy, int* nearest) {
         float best = INF, nd = INF;
         int near = 0;
+        const float sx = cx * step[i], sy = cy * step[i];
         for (int q = rel_off[i]; q < rel_off[i + 1]; ++q) {
-            int j = rel[q];
-            float rx = x0[j] - x0[i], ry = y0[j] - y0[i];
-            float d = std::sqrt(rx * rx + ry * ry);
-            float rsum = std::max(rad[i], rad[j]);
-            float wx = cx * step[i] - ovx[j], wy = cy * step[i] - ovy[j];
-            float a = rx * wx + ry * wy;
+            const Rel& o = rel[q];
+            float wx = sx - o.ovx, wy = sy - o.ovy;
+            float a = o.rx * wx + o.ry * wy;
+            if (!(a > 0.f)) continue;
             float ww = std::max(wx * wx + wy * wy, 1e-9f);
-            float c = d * d - sq(rsum - .5f);
-            float disc = a * a - ww * c;
-            float t_hit = c <= 0.f ? 0.f : (a - std::sqrt(std::max(disc, 0.f))) / ww;
-            bool hit = a > 0.f && disc > 0.f && t_hit <= h;
-            if (hit) {
+            float disc = a * a - ww * o.c;
+            if (!(disc > 0.f)) continue;
+            float t_hit = o.c <= 0.f ? 0.f : (a - std::sqrt(disc)) / ww;
+            if (t_hit <= h) {
                 if (t_hit < best) best = t_hit;
-                if (d < nd) nd = d, near = j;
+                if (o.d < nd) nd = o.d, near = o.j;
             }
         }
         if (nearest) *nearest = near;
@@ -809,6 +886,8 @@ void collide(const World& w, Env& e, const float* x1, const float* y1, const flo
         ax_[i] = x0[i] + (nx - x0[i]) * frac;
         ay_[i] = y0[i] + (ny - y0[i]) * frac;
     }
+    if (debug_route)
+        for (int i = 0; i < m; ++i) debug_route[24 * i + 19] = ax_[i], debug_route[24 * i + 20] = ay_[i];
     // Phase 2, separate: Jacobi pushes between overlapping solid pairs.
     static thread_local std::vector<float> mob, px, py;
     static thread_local std::vector<uint8_t> start_ok;
@@ -829,8 +908,8 @@ void collide(const World& w, Env& e, const float* x1, const float* y1, const flo
     for (int i = 0; i < m; ++i) {
         pair_off[i] = (int)pair_j.size();
         if (!solid[i]) continue;
-        for (int j = 0; j < m; ++j) {
-            if (j == i || !solid[j]) continue;
+        for (int j : solids) {
+            if (j == i) continue;
             float dx = x[i] - x[j], dy = y[i] - y[j], lim = std::max(rad[i], rad[j]) + reach;
             if (dx * dx + dy * dy < lim * lim) pair_j.push_back(j);
         }
@@ -866,6 +945,9 @@ void collide(const World& w, Env& e, const float* x1, const float* y1, const flo
         }
     }
     for (int i = 0; i < w.n; ++i) ox[i] = i < m ? x[i] : x1[i], oy[i] = i < m ? y[i] : y1[i];
+    if (debug_route)
+        for (int i = 0; i < m; ++i)
+            debug_route[24 * i + 21] = x[i], debug_route[24 * i + 22] = y[i], debug_route[24 * i + 23] = solid[i];
 }
 
 // --- attacks (mechanics.attack_step, lane.ai.attack_packets, spawn/advance_missiles) -------------------------------
@@ -962,6 +1044,9 @@ TickStats step(const World& w, Env& e) {
     float *mx = sc.nx.data(), *my = sc.ny.data();
     clk.lap(P_MOVE_PREP);
     move_step(w, e, gx, gy, ms, active, mx, my);
+    if (debug_route)
+        for (int i = 0; i < w.ward0; ++i)
+            debug_route[24 * i + 16] = ms[i], debug_route[24 * i + 17] = mx[i], debug_route[24 * i + 18] = my[i];
     clk.lap(P_ROUTE);
     float *cx = sc.start_x.data(), *cy = sc.start_y.data();
     collide(w, e, mx, my, gx, gy, active, solid, cx, cy);
@@ -1071,7 +1156,7 @@ TickStats step(const World& w, Env& e) {
         if (e.kind[i] == TURRET) {
             int n850 = 0;
             if (w.col_of[i] >= 0)
-                for (int c : w.cols)
+                for (int c = 0; c < N_CHAMPIONS; ++c)        // champions are units [0, C), all in the columns
                     if (e.kind[c] == CHAMPION && e.alive[c] && e.tw_team[i] != e.team[c] && dist(e, i, c) <= tower::BULWARK_RADIUS)
                         ++n850;
             int count = clampi(n850, 1, 5);
@@ -1187,12 +1272,20 @@ TickStats step(const World& w, Env& e) {
                 bool seen = false;
                 if (j >= nf || e.team[j] == t) seen = true;
                 else if (live_j) {
+                    // Seen if any in-range viewer of the team has a clear ray: try the nearest first (short rays).
+                    static thread_local std::vector<std::pair<float, int>> cand;
+                    cand.clear();
                     for (int i : viewers) {
                         if (e.team[i] != t) continue;
                         float d2 = sq(e.x[i] - e.x[j]) + sq(e.y[i] - e.y[j]);
-                        if (!(d2 <= sight[i] * sight[i])) continue;
-                        ++pairs;
-                        if (!seen && (!w.fog || w.vision.clear(e.x[i], e.y[i], e.x[j], e.y[j]))) seen = true;
+                        if (d2 <= sight[i] * sight[i]) cand.push_back({d2, i});
+                    }
+                    pairs += (int)cand.size();
+                    if (!w.fog) seen = !cand.empty();
+                    else if (!cand.empty()) {
+                        std::sort(cand.begin(), cand.end());
+                        for (const auto& [d2, i] : cand)
+                            if (w.vision.clear(e.x[i], e.y[i], e.x[j], e.y[j])) { seen = true; break; }
                     }
                     for (int c = 0; c < N_CHAMPIONS && !seen; ++c)
                         seen = t != e.team[c] && now < e.reveal_until[c]

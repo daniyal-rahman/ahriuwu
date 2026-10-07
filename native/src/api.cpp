@@ -216,4 +216,7 @@ void ls_batch_get(void* bp, int k, void* const* ptrs) {
 
 void ls_profile(double* out, int reset) { profile(out, reset != 0); }
 
+// Record route inputs/outputs of the movers (ward0 x 24 floats) during the calling thread's next steps.
+void ls_debug_route(float* out) { debug_route = out; }
+
 }  // extern "C"

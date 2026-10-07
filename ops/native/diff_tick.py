@@ -18,7 +18,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "native" / "python"))
 
-SKIP = {"memo_route", "memo_anchor", "ev_n", "ev_src", "ev_dst"}
+SKIP = {"memo_route", "memo_anchor", "ev_n", "ev_src", "ev_dst", "rec_n", "rec"}
 # Champion rows the slice does not simulate (idle champions: their route anchors steer by the move goal).
 CHAMPION_ROWS = {"route_anchor", "ad", "aspd", "ms", "armor", "mr", "range", "windup", "hp", "max_hp"}
 ULP_REL = 1e-6                    # float differences at or below this relative size are rounding (reported apart)

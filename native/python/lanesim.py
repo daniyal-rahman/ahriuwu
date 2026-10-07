@@ -25,7 +25,7 @@ def _lib():
            "ls_world_array": ([P, S, P, L], I), "ls_world_finish": ([P], None),
            "ls_step": ([P, P, P], None), "ls_batch_new": ([P, I, P], P), "ls_batch_free": ([P], None),
            "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None),
-           "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None)}
+           "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None)}
     for name, (args, res) in sig.items():
         f = getattr(lib, name)
         f.argtypes, f.restype = args, res
@@ -213,6 +213,9 @@ def env_from_state(world: NativeWorld, s, env: dict | None = None) -> dict:
     src, dst = np.nonzero(env["damage_matrix"].reshape(n, n))
     env["ev_n"][0] = len(src)
     env["ev_src"][:len(src)], env["ev_dst"][:len(dst)] = src, dst
+    rec = np.flatnonzero(np.isfinite(env["last_attack"]))         # pruned to the attack memory on the next tick
+    env["rec_n"][0] = len(rec)
+    env["rec"][:len(rec)] = rec
     return env
 
 

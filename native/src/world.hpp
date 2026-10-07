@@ -51,7 +51,8 @@ struct World {
 
 // Sizes: S scalar, N units, M missiles, L (team, lane) cursors, C champions, RK minion rows x cols, KK cols x cols,
 // N4 bulwark stacks, NN unit pairs, TN (team, unit), P packets. ``memo_*`` (route-follow memo) and ``ev_*`` (last
-// tick's damage events as a list: the nonzeros of ``damage_matrix``) are native-only caches.
+// tick's damage events as a list: the nonzeros of ``damage_matrix``) and ``rec*`` (last_attack entries within the
+// attack memory, as flat (cols, cols) indices) are native-only caches.
 #define LANESIM_ENV_FIELDS(X)                                                                                   \
     X(float, t, S) X(int32_t, tick, S) X(int32_t, next_seq, S) X(uint8_t, game_over, S) X(int32_t, winner, S)    \
     X(int32_t, kind, N) X(int32_t, sub, N) X(int32_t, team, N) X(int32_t, spawn_seq, N)                          \
@@ -80,7 +81,7 @@ struct World {
     X(float, reveal_x, C) X(float, reveal_y, C) X(float, reveal_until, C)                                        \
     X(int32_t, route_anchor, N)                                                                                  \
     X(float, memo_route, N4) X(int32_t, memo_anchor, N)                                                          \
-    X(int32_t, ev_n, S) X(int32_t, ev_src, P) X(int32_t, ev_dst, P)
+    X(int32_t, ev_n, S) X(int32_t, ev_src, P) X(int32_t, ev_dst, P) X(int32_t, rec_n, S) X(int32_t, rec, KK)
 
 struct Env {
 #define LANESIM_PTR(type, name, size) type* name;
@@ -114,5 +115,6 @@ TickStats step(const World& w, Env& e);
 // Per-phase nanoseconds of the calling thread: spawn, turret, select, move prep, route, collide, attack, damage,
 // death, timers, fog.
 void profile(double* out, bool reset);
+extern thread_local float* debug_route;
 
 }  // namespace lanesim

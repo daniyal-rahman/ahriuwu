@@ -36,20 +36,16 @@ def main() -> None:
     for _ in range(args.warm):
         world.step(env)
     print(json.dumps({"start_game_s": float(env["t"][0]), "minions": int(np.sum((env["kind"] == 2) & (env["alive"] > 0)))}))
+    one = LS.Batch(world, env, 1)                           # runs on this thread: per-phase profile
     LS.profile()
-    for _ in range(args.ticks):                             # single env on this thread: per-phase profile
-        world.step(env)
+    t0 = time.perf_counter()
+    one.run(args.ticks, 1)
+    sec = time.perf_counter() - t0
     prof = LS.profile()
     tot = sum(v for k, v in prof.items() if "." not in k)
     print(json.dumps({"profile_us_per_tick": {k: round(v / args.ticks * 1e6, 2) for k, v in prof.items()},
-                      "total_us_per_tick": round(tot / args.ticks * 1e6, 2)}), flush=True)
-    env = LS.env_from_state(world, MS.init_state(cfg))
-    for _ in range(args.warm):
-        world.step(env)
-    one = LS.Batch(world, env, 1)
-    t0 = time.perf_counter()
-    one.run(args.ticks, 1)
-    print(json.dumps({"batch_of_one_us_per_tick": round((time.perf_counter() - t0) / args.ticks * 1e6, 2)}), flush=True)
+                      "phases_us_per_tick": round(tot / args.ticks * 1e6, 2),
+                      "wall_us_per_tick": round(sec / args.ticks * 1e6, 2)}), flush=True)
     for th in args.threads:
         batch = LS.Batch(world, env, args.envs)
         batch.run(30, th)                                   # first touch / thread start
