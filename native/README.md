@@ -36,3 +36,16 @@ as lists (`ev_*`, `rec*`, native-only caches), fog stops at the first clear ray 
 
 The Minion Pushing bonus (`amp` from `minion_pushing`) is computed in `lane.ai.attack_packets` but the
 direct and missile packets are built without it, so it is never applied; only the divisor is.
+
+## Throughput (fb3505f, top lane at 5:00-6:00 game time, champions idle)
+
+| Machine | Threads | env-ticks/s | us per env-tick per thread |
+|---|---|---|---|
+| Ryzen 9800X3D (desktop) | 1 | 80.6k | 12.4 |
+| | 4 | 322k | 12.4 |
+| | 8 | 480k | 16.7 |
+| | 12 (SMT, 4 cores held by a training job) | 571k | 21.0 |
+| i5-8600K (login) | 1 | ~18k | ~55 (noisy node) |
+
+Per tick on the 9800X3D: collision 3.2 us, targeting 2.5, route following 2.1, fog 2.0, the rest under 1 each.
+For reference the JAX world on the RTX 5080 runs the top lane (with champions and items) at ~105k env-ticks/s.
