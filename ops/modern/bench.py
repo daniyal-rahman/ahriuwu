@@ -41,6 +41,7 @@ def add_world_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--lanes", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--packet-capacity", type=int, default=0, help="damage packets per tick (0: two per unit)")
     ap.add_argument("--allowlist", action="store_true", help="restrict each champion to its top-lane allow-list")
+    ap.add_argument("--lane-structures", action="store_true", help="only the spawning lanes' structures")
 
 
 def build_world(args):
@@ -56,7 +57,7 @@ def build_world(args):
               allowed_items=shop("Jax")))
     cfg = MW.build_config(lo, fog=False if args.fog == "off" else args.fog, lanes=tuple(args.lanes),
                           jungle=not args.no_jungle, objectives=not args.no_objectives,
-                          packet_capacity=args.packet_capacity)
+                          packet_capacity=args.packet_capacity, lane_structures=args.lane_structures)
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
 
     def run(s, ticks):
@@ -86,7 +87,8 @@ def warm_up(timed, batch, warm_ticks: int, ticks: int):
 def world_label(args) -> dict:
     return {"fog": args.fog, "jungle": not args.no_jungle, "objectives": not args.no_objectives,
             "lanes": list(args.lanes), **({"packet_capacity": args.packet_capacity} if args.packet_capacity else {}),
-            **({"allowlist": True} if args.allowlist else {})}
+            **({"allowlist": True} if args.allowlist else {}),
+            **({"lane_structures": True} if args.lane_structures else {})}
 
 
 def main() -> None:

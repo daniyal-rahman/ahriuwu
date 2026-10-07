@@ -32,7 +32,7 @@ WORLDS = {"full": dict(lanes=(0, 1, 2), jungle=True, objectives=True),
 ITEMS = (1055, 2003, 1036, 1001, 3044, 3071, 3078, 2055, 3340)
 
 
-def chaos_orders(s, k, lane_mid):
+def chaos_orders(s, k, lane_mid, targetable=True):
     import jax
     import jax.numpy as jnp
 
@@ -41,7 +41,7 @@ def chaos_orders(s, k, lane_mid):
     c = 2
     ks = jax.random.split(k, 12)
     d = jnp.sqrt((s.x[None, :] - s.x[:c, None]) ** 2 + (s.y[None, :] - s.y[:c, None]) ** 2)
-    enemy = (s.team[None, :] != s.team[:c, None]) & s.alive[None, :] & (s.kind[None, :] != W.KIND_NONE)
+    enemy = (s.team[None, :] != s.team[:c, None]) & s.alive[None, :] & (s.kind[None, :] != W.KIND_NONE) & targetable
     near = jnp.argmin(jnp.where(enemy, d, jnp.inf), axis=1).astype(jnp.int32)
     kind = jax.random.randint(ks[0], (c,), 0, 12)
     pt = lane_mid[None, :] + jax.random.normal(ks[1], (c, 2)) * 1500.0
@@ -63,7 +63,7 @@ def chaos_orders(s, k, lane_mid):
         ward_x=pt[:, 0], ward_y=pt[:, 1])
 
 
-def build(world: str, allowed: bool = False):
+def build(world: str, allowed: bool = False, lane_structures: bool = False):
     """The Garen-vs-Jax ``WorldConfig`` of ``WORLDS[world]``; ``allowed`` restricts both champions to the items the
     chaos orders buy (behaviour must not change)."""
     from lanerl_jax.modern.runes import catalog as RD
@@ -73,11 +73,21 @@ def build(world: str, allowed: bool = False):
           MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(
               RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001)),
               allowed_items=shop))
-    return MW.build_config(lo, **WORLDS[world])
+    return MW.build_config(lo, **WORLDS[world], **({"lane_structures": True} if lane_structures else {}))
 
 
-def summary(s) -> dict:
-    """Layout-independent game state: champions, lane minions per team, structures (the last 30 slots)."""
+def lane_targets(cfg):
+    """Units a one-lane world keeps: everything but the other lanes' turrets and inhibitors (``lane_structures``)."""
+    from lanerl_jax.modern.core import types as W
+    from lanerl_jax.modern.world import config as MW
+    kind, lane, sub = (np.asarray(v) for v in (cfg.unit_kind, cfg.unit_lane, cfg.unit_sub))
+    lane_struct = ((kind == W.KIND_TURRET) & (sub != MW.TIERS["nexus"])) | (kind == W.KIND_INHIBITOR)
+    return ~lane_struct | np.isin(lane, cfg.layout.lanes)
+
+
+def summary(s, cfg) -> dict:
+    """Layout-independent game state: champions, lane minions per team, structures (the last 30 slots, and by
+    ``team/lane/kind/tier`` so worlds with fewer structures compare on the ones they share)."""
     import numpy as np
 
     from lanerl_jax.modern.core import types as W
@@ -89,23 +99,30 @@ def summary(s) -> dict:
             "cs": a(s.champ.cs).tolist(),
             "minions": [int((minion & (team == t)).sum()) for t in (0, 1)],
             "minion_hp": [float(a(s.hp)[minion & (team == t)].sum()) for t in (0, 1)],
-            "structure_hp": a(s.hp[-30:]).tolist()}
+            "structure_hp": a(s.hp[-30:]).tolist(),
+            "structures": {f"{t}/{ln}/{k}/{u}": float(h) for t, ln, k, u, h in zip(
+                *(np.asarray(v)[-cfg.layout.n_structures:] for v in (cfg.unit_team, cfg.unit_lane, cfg.unit_kind,
+                                                                      cfg.unit_sub, s.hp)))}}
 
 
-def fingerprint(world: str, ticks: int, every: int, allowed: bool = False) -> list[dict]:
+def fingerprint(world: str, ticks: int, every: int, allowed: bool = False, lane_structures: bool = False,
+                lane_only: bool = False) -> list[dict]:
+    """``lane_only``: the chaos orders never target the other lanes' structures, so a ``lane_structures`` world can be
+    compared with the full one."""
     import jax
     import jax.numpy as jnp
     import numpy as np
 
     from lanerl_jax.modern import world as MS
-    cfg = build(world, allowed)
+    cfg = build(world, allowed, lane_structures)
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
+    targetable = jnp.asarray(lane_targets(cfg)) if lane_only or lane_structures else True
     key = jax.random.PRNGKey(1234)
 
     @jax.jit
     def run(s, t0):
         def body(s, i):
-            s, e = MS.step(s, chaos_orders(s, jax.random.fold_in(key, t0 + i), lane_mid), cfg)
+            s, e = MS.step(s, chaos_orders(s, jax.random.fold_in(key, t0 + i), lane_mid, targetable), cfg)
             return s, jnp.stack([jnp.sum(e.report.packets.valid), jnp.sum(e.follow_up.packets.valid),
                                  e.packet_overflow, e.missile_overflow, e.ray_overflow]).astype(jnp.int32)
         s, use = jax.lax.scan(body, s, jnp.arange(every))
@@ -119,13 +136,21 @@ def fingerprint(world: str, ticks: int, every: int, allowed: bool = False) -> li
         leaves = jax.tree_util.tree_leaves(s)
         peak = dict(zip(("packets_max", "follow_up_max", "packet_overflow", "missile_overflow", "ray_overflow"),
                         map(int, np.asarray(use))))
-        out.append({"world": world, "tick": t + every, "summary": summary(s), "peak": peak,
+        out.append({"world": world, "tick": t + every, "summary": summary(s, cfg), "peak": peak,
                     "leaves": {n: hashlib.sha256(np.asarray(v).tobytes()).hexdigest()[:16]
                                for n, v in zip(names, leaves)}})
         print(json.dumps({"world": world, "tick": t + every, "game_s": float(s.t),
                           "alive": int(jnp.sum(s.alive & (s.kind != 0))), **peak}), flush=True)
     return out
 
+
+
+def _gap(new, old):
+    """Largest absolute difference: dicts over their shared keys; arrays of another shape are reported as such."""
+    if isinstance(new, dict):
+        return max((abs(new[k] - old[k]) for k in new.keys() & old.keys()), default=0.0)
+    a, b = np.asarray(new, float), np.asarray(old, float)
+    return float(np.max(np.abs(a - b))) if a.shape == b.shape else "shape"
 
 def compare(ref_prints: list[dict], prints: list[dict]) -> int:
     """Print the differences of ``prints`` against ``ref_prints``; returns the number of differing checkpoints.
@@ -152,8 +177,7 @@ def compare(ref_prints: list[dict], prints: list[dict]) -> int:
                               "dropped_unique": named[:12]}))
         if diff:
             bad += 1
-            gap = {k: float(np.max(np.abs(np.asarray(v, float) - np.asarray(old["summary"][k], float))))
-                   for k, v in cp["summary"].items() if k in old.get("summary", {})}
+            gap = {k: _gap(v, old["summary"][k]) for k, v in cp["summary"].items() if k in old.get("summary", {})}
             print(json.dumps({"world": cp["world"], "tick": cp["tick"], "differs": diff[:12],
                               "n_differ": len(diff), "summary_max_abs_diff": gap}))
     print(json.dumps({"verdict": "identical" if bad == 0 else "differs", "checkpoints_differing": bad}))
@@ -166,6 +190,9 @@ def main() -> None:
     ap.add_argument("--every", type=int, default=600)
     ap.add_argument("--worlds", nargs="+", default=list(WORLDS))
     ap.add_argument("--allowed", action="store_true", help="restrict the shop to the items the chaos orders buy")
+    ap.add_argument("--lane-structures", action="store_true", help="only the spawning lanes' structures")
+    ap.add_argument("--lane-only", action="store_true",
+                    help="chaos orders target only the structures --lane-structures keeps (its reference run)")
     ap.add_argument("--out")
     ap.add_argument("--compare", help="saved run to check this run against")
     ap.add_argument("--diff", nargs=2, metavar=("REF", "NEW"), help="compare two saved runs (no simulation)")
@@ -175,7 +202,8 @@ def main() -> None:
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
-    prints = [cp for w in args.worlds for cp in fingerprint(w, args.ticks, args.every, args.allowed)]
+    prints = [cp for w in args.worlds for cp in fingerprint(w, args.ticks, args.every, args.allowed,
+                                                          args.lane_structures, args.lane_only)]
     if args.out:
         with open(args.out, "w") as f:
             json.dump(prints, f)

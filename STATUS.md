@@ -22,6 +22,11 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 - `--packet-capacity`: runs peak at 3-6 packets per tick against 512/256 slots. Drop it for 1v1; measure on real
   5v5 RL runs before changing the default.
 - Minion slots stay at 40 per lane (guaranteed to hold any wave); revisit with RL data.
+- `--lane-structures`: only the spawning lanes' turrets and inhibitors plus the base (top lane 88 -> 72 units).
+  Same game as the full set when nothing targets the other lanes' structures (golden `--lane-only` vs
+  `--lane-structures`, 3600 chaos ticks: champions, minions and every shared structure identical); opt-in.
+- Walkability (`terrain.row_gaps`): exact `is_walkable` from per-row nearest-blocked gaps, golden-identical;
+  +54% top lane / +25% full map on the GTX 1060.
 
 **Open.**
 - GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.

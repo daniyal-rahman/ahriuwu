@@ -411,6 +411,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-jungle", action="store_true")
     p.add_argument("--no-objectives", action="store_true")
     p.add_argument("--packet-capacity", type=int, default=0, help="damage packets per tick (0: two per unit)")
+    p.add_argument("--lane-structures", action="store_true", help="only the spawning lanes' structures")
     p.add_argument("--opponent", choices=("mirror", "afk", "frozen"), default="mirror")
     p.add_argument("--opponent-from", type=Path, default=None, help="checkpoint for --opponent frozen")
     p.add_argument("--buttons-off", default=",".join(DEFAULT_BUTTONS_OFF),
@@ -477,12 +478,13 @@ def main(argv=None) -> None:
     fog = False if a.fog == "off" else a.fog
     t0 = time.perf_counter()
     wcfg = MS.build_config(default_loadouts(names), fog=fog, lanes=tuple(a.lanes), jungle=not a.no_jungle,
-                           objectives=not a.no_objectives, packet_capacity=a.packet_capacity)
+                           objectives=not a.no_objectives, packet_capacity=a.packet_capacity,
+                           lane_structures=a.lane_structures)
     env = make_env(wcfg)
     command = shlex.join([sys.executable, "-m", "lanerl_jax.modern.train", *sys.argv[1:]])
     world_desc = {"ruleset": "modern 26.19 (world.tick)", "champions": names, "fog": a.fog,
                   "lanes": a.lanes, "jungle": not a.no_jungle, "objectives": not a.no_objectives,
-                  "packet_capacity": wcfg.layout.packet_capacity,
+                  "packet_capacity": wcfg.layout.packet_capacity, "lane_structures": a.lane_structures,
                   "loadouts": [repr(lo) for lo in wcfg.loadouts], "profile": wcfg.profile,
                   "tick_hz": TICK_HZ}
     run = RunDir(a.out, f"modern-vec-s{a.seed}", {

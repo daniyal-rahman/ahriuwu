@@ -70,3 +70,23 @@ def test_stop_button_issues_a_stop_order():
     state = _click_state(W.KIND_MINION, 1, 48.0, 500.0)
     o = _click(state, "stop")
     assert bool(o.stop[0]) and not bool(o.move[0]) and int(o.attack[0]) == -1
+
+
+def test_lane_structures_keep_the_lane_chain_and_the_base():
+    import pytest
+
+    from lanerl_jax.modern.tests import world_harness as H
+    from lanerl_jax.modern.world import config as MW
+    if not H.artifacts_present():
+        pytest.skip("modern map/route artifacts not present")
+    cfg = MW.build_config(H.world().loadouts, lanes=(2,), jungle=False, objectives=False, lane_structures=True)
+    lay = cfg.layout
+    assert lay.n_structures == 14 and cfg.n_units == lay.n_units == 72
+    kind, lane, sub = (np.asarray(a)[lay.struct0:] for a in (cfg.unit_kind, cfg.unit_lane, cfg.unit_sub))
+    turret = kind == W.KIND_TURRET
+    assert sorted(sub[turret & (lane == 2)].tolist()) == [0, 0, 1, 1, 2, 2]          # outer, inner, inhibitor
+    assert (turret & (sub == 3)).sum() == 4                                          # Nexus turrets
+    assert (kind == W.KIND_INHIBITOR).sum() == 2 and (lane[kind == W.KIND_INHIBITOR] == 2).all()
+    assert (kind == W.KIND_NEXUS).sum() == 2
+    prereq = np.asarray(cfg.structure_prereq)[lay.struct0:]
+    assert (prereq[turret & (lane == 2) & (sub > 0)] >= 0).all()                     # the lane chain is intact

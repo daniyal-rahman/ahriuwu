@@ -38,6 +38,7 @@ DEFAULT_MAP = Path("/mnt/nfs/shared/modern-world-map-research/grid-26.19-base")
 DEFAULT_ROUTES = Path("/mnt/nfs/shared/WORLD001_map_routes/routes")
 N_CHAMPIONS = 2
 N_STRUCTURES = 30                   # 22 turrets, 6 inhibitors, 2 Nexuses
+BASE_STRUCTURES = 3                 # per team: 2 Nexus turrets and the Nexus
 NEXUS_POSITIONS = ((1549.0, 1658.0), (13240.0, 13235.0))    # navgrid Nexus pad centres (blue, red)
 FOUNTAINS = ((394.0, 461.0), (14340.0, 14391.0))            # __Spawn_T1 / __Spawn_T2
 INHIBITORS = {  # (team, lane) -> position, from SRUAP_*_Inhibitor_Idle placements
@@ -69,6 +70,7 @@ class Layout:
     jungle: bool = True
     objectives: bool = True
     packets: int = 0                    # main-pass packet capacity; 0 = two per unit (``packet_capacity``)
+    lane_structures: bool = False       # only the spawning lanes' turrets and inhibitors (plus the base)
 
     @property
     def minion0(self) -> int:
@@ -91,8 +93,13 @@ class Layout:
         return self.ward0 + 2 * W.MAX_WARDS_PER_TEAM
 
     @property
+    def n_structures(self) -> int:
+        """All 30, or per team 3 turrets and an inhibitor per spawning lane plus the base."""
+        return 2 * (4 * len(self.lanes) + BASE_STRUCTURES) if self.lane_structures else N_STRUCTURES
+
+    @property
     def n_units(self) -> int:
-        return self.struct0 + N_STRUCTURES
+        return self.struct0 + self.n_structures
 
     @property
     def ai_slots(self) -> AISlots:
@@ -166,17 +173,20 @@ def _item_allowed(loadouts):
 
 def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, dt=1.0 / 30.0,
                  fog: bool | str = "rays", lanes=(0, 1, 2), jungle: bool = True,
-                 objectives: bool = True, packet_capacity: int = 0) -> WorldConfig:
+                 objectives: bool = True, packet_capacity: int = 0, lane_structures: bool = False) -> WorldConfig:
     """Validate loadouts and build the static world (host-side).
 
     ``fog``: ``"rays"`` (default; walls and brush along the ray), ``"fast"`` (brush lookup, walls
     ignored) or ``False`` (every unit visible). See ``vision``. ``lanes``: lanes whose minion
     waves spawn (0 bot, 1 mid, 2 top). ``jungle`` / ``objectives``: spawn camps / epic monsters.
-    ``packet_capacity``: damage packets per tick (0: ``Layout.packet_capacity`` default).
+    ``packet_capacity``: damage packets per tick (0: ``Layout.packet_capacity`` default). ``lane_structures``: only
+    the spawning lanes' turrets and inhibitors, plus the Nexus turrets and Nexuses (a one-lane game never reaches the
+    others).
     """
     if fog not in (False, "fast", "rays"):
         raise ValueError("fog must be 'fast', 'rays' or False")
-    lay = Layout(tuple(int(v) for v in lanes), bool(jungle), bool(objectives), int(packet_capacity))
+    lay = Layout(tuple(int(v) for v in lanes), bool(jungle), bool(objectives), int(packet_capacity),
+                 bool(lane_structures))
     if len(loadouts) != N_CHAMPIONS:
         raise ValueError("the modern lane world has exactly two champions")
     pages = []
@@ -206,12 +216,15 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
     for k in range(lay.struct0 - lay.ward0):
         add(W.KIND_NONE, k // W.MAX_WARDS_PER_TEAM)
     index = {}
+    kept = lambda lane, tier: not lay.lane_structures or tier == "nexus" or lane in lay.lanes   # noqa: E731
     for o in geometry["turrets"]:
         lane = o["lane"] if isinstance(o["lane"], int) else LANE_NAMES.index(o["lane"])
-        index[(o["team"], lane, o["tier"])] = add(W.KIND_TURRET, o["team"], TIERS[o["tier"]], o["position"], lane)
+        if kept(lane, o["tier"]):
+            index[(o["team"], lane, o["tier"])] = add(W.KIND_TURRET, o["team"], TIERS[o["tier"]], o["position"], lane)
     for (team, lane_name), pos in INHIBITORS.items():
         lane = LANE_NAMES.index(lane_name)
-        index[(team, lane, "inhib")] = add(W.KIND_INHIBITOR, team, 0, pos, lane)
+        if kept(lane, "inhib"):
+            index[(team, lane, "inhib")] = add(W.KIND_INHIBITOR, team, 0, pos, lane)
     for team in (0, 1):
         add(W.KIND_NEXUS, team, 0, NEXUS_POSITIONS[team])
     n = len(kinds)
@@ -225,7 +238,7 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
     profile = {"patch": "26.19", "mode": "CLASSIC", "map_id": 11, "lane": "top", "dt": dt,
                "map_arrays_sha256": manifest["arrays_sha256"], "routes": route_meta,
                "nexus_position": "navgrid Nexus pad centre (STRUCTURE cells, LANES_TERRAIN)",
-               "lanes": lay.lanes, "jungle": jungle, "objectives": objectives,
+               "lanes": lay.lanes, "jungle": jungle, "objectives": objectives, "lane_structures": lay.lane_structures,
                "vision": f"fog={fog!r}: sight radii, brush{', walls' if fog == 'rays' else ''}, structures always "
                          "visible, attack reveal",
                "deferred": ["allied champions (ally-targeted effects inert)", "champions without a kit module"]}
