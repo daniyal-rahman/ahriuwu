@@ -108,3 +108,6 @@ lanerl_bot/tests/artifacts/
 #            and the policy are pure jax/numpy.
 .venv-jax/
 .venv-gpu/
+
+# native builds
+native/build*/
