@@ -105,6 +105,7 @@ class Transition(NamedTuple):
     done_full: jax.Array      # the episode ran to ``episode_s`` (not a staggered first episode)
     deaths: jax.Array
     lane_dist: jax.Array
+    overflow: jax.Array       # dropped packets/missiles/rays in the decision's ticks (must stay 0)
 
 
 def make_batch_fn(cfg, n_learn: int, recurrent: bool, core_dim: int):
@@ -156,6 +157,7 @@ def ppo_learn(runner: VecRunner, tr: Transition, carry0, last_value, *, cfg, tx,
     metrics["cs_episodes"] = n_done.astype(jnp.float32)
     metrics["deaths_per_episode"] = learn(tr.deaths).mean() * cfg.episode_s * cfg.decision_hz
     metrics["lane_dist"] = learn(tr.lane_dist).mean()
+    metrics["sim_overflow_max"] = tr.overflow.max()
     for i, b in enumerate(buttons):
         metrics[f"button_{b}"] = (learn(tr.action[0]) == i).mean()
     return runner._replace(params=params, opt_state=opt_state, rng=rng,

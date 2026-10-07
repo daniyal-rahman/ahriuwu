@@ -10,8 +10,20 @@ PPO and learner live in `modern/rl/`; the camera/screen model in `modern/screen.
 (`ops/modern/golden.py`); the 88-unit top-lane layout is game-identical to the 216-unit one. Fidelity
 checks against 26.9 replays and Riot timelines: docs/modern/REPLAY_FIDELITY.md, MECHANICS_AUDIT.md.
 
+**Throughput (2026-10-07, MODERN-026).** Lane AI on its minion/structure rows and target columns, scatter
+packet hooks, compacted fog rays and a cumsum compaction (`core.arrays.first_true`, `jnp.nonzero` is slow on
+GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top lane 89k -> 105k at 1024/4096 envs
+(per change, RTX 5080); combined numbers pending. Item allow-lists (`Loadout.allowed_items`,
+`data/loadouts.py`: LoLalytics 16.19 Emerald+, 6-8 completed items per champion, Riot's recommended rune pages;
+`/mnt/nfs/shared/build-research/`) compile out item code no champion can hold. Every capacity has a counter in
+`TickEvents` and in the trainer's `sim_overflow_max`, which must stay 0.
+
+**Free wins held back.**
+- `--packet-capacity`: runs peak at 3-6 packets per tick against 512/256 slots. Drop it for 1v1; measure on real
+  5v5 RL runs before changing the default.
+- Minion slots stay at 40 per lane (guaranteed to hold any wave); revisit with RL data.
+
 **Open.**
-- GPU timing of the full map vs the top-lane layout and the legacy 4.20 lane: queued (desktop was in
-  Windows), job `THROWAWAY-m024-gpu-bench`.
+- GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.
 - No training experiment on the modern world yet; decisions open: reward weights, input latency
   (`--action-delay-ticks`), start state, shop handling.

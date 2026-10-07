@@ -15,7 +15,7 @@ import jax.numpy as jnp
 from ...core.damage import (CLASS_CHAMPION, CLASS_MONSTER, CLASS_STRUCTURE, MAGIC, ON_HIT_ITEM, PHYSICAL,
                             PROP_LIFESTEAL, packets)
 from ..catalog import ItemStats, catalog
-from .core import (Attack, Debuffs, Effects, dv, effects, enemy_mask, holds, holds_any, in_circle,
+from .core import (Attack, Debuffs, Effects, counts, dv, effects, enemy_mask, holds, holds_any, in_circle,
                    neutral_debuffs, onehot_units, target_class, unit_pos)
 
 SHEEN, TRINITY, ICEBORN, LICH_BANE, ESSENCE_REAVER, DUSK_DAWN, BLOODSONG = (
@@ -115,7 +115,7 @@ def on_cast(state: State, own, ctx, units, cast) -> tuple[State, Effects]:
 
 def _which(own) -> Any:
     """(C,) item id of the held Spellblade item (group max 1)."""
-    out = jnp.zeros(own.shape[:1], jnp.int32)
+    out = jnp.zeros(counts(own).shape[:1], jnp.int32)
     for iid in reversed((TRINITY, ICEBORN, LICH_BANE, ESSENCE_REAVER, DUSK_DAWN, BLOODSONG, SHEEN)):
         out = jnp.where(holds(own, iid), iid, out)
     return out

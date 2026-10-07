@@ -17,7 +17,7 @@ from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_STRUCTURE, ON_HI
                             TAG_ACTIVE_SPELL, TAG_AOE, TAG_BASIC_ATTACK, TAG_ITEM, TAG_PERIODIC, TAG_PROC,
                             concat_packets, has, packets)
 from ..catalog import STAT_INDEX, ItemStats, catalog
-from .core import (BIG, dv, effects, enemy_mask, hit_by_holder, holds, holds_any, in_circle, neutral_defense,
+from .core import (BIG, counts, dv, effects, enemy_mask, hit_by_holder, holds, holds_any, in_circle, neutral_defense,
                    onehot_units, row, shield_grants, target_class)
 
 DORANS_SHIELD, DORANS_RING, DARK_SEAL, MEJAIS, CULL, DORANS_BOW, DORANS_HELM = \
@@ -110,7 +110,7 @@ def init(n_champions: int, n_units: int) -> State:
 
 def _manaflow_value(own, name: str) -> Any:
     """(C,) data value of the held Manaflow item (0 if none)."""
-    out = jnp.zeros(own.shape[:1], jnp.float32)
+    out = jnp.zeros(counts(own).shape[:1], jnp.float32)
     for iid in MANAFLOW_ITEMS:
         out = jnp.where(holds(own, iid), dv(iid, name), out)
     return out
@@ -118,7 +118,7 @@ def _manaflow_value(own, name: str) -> Any:
 
 def item_bonus_mana(state: State, own) -> Any:
     """(C,) bonus mana: static item mana + Manaflow stacks."""
-    static = jnp.asarray(own, jnp.float32) @ jnp.asarray(_ITEM_MANA)
+    static = jnp.asarray(counts(own), jnp.float32) @ jnp.asarray(_ITEM_MANA)
     return static + jnp.where(holds_any(own, MANAFLOW_ITEMS), state.tear_mana, 0.0)
 
 
@@ -128,7 +128,7 @@ def _max_mana(state: State, own, ctx) -> Any:
 
 def pending_transforms(state: State, own):
     """Tear-line transforms due now: ``(from_row, to_row, do)`` (C,), rows -1 = none."""
-    c = own.shape[0]
+    c = counts(own).shape[0]
     frm = jnp.full((c,), -1, jnp.int32)
     to = jnp.full((c,), -1, jnp.int32)
     for a, b in TRANSFORMS:

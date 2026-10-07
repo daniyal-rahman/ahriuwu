@@ -194,15 +194,18 @@ def modern_relative_reward(prev, nxt, cfg: ModernVecConfig, env: ModernEnv):
 
 
 def _advance(env: ModernEnv, world, orders, ticks: int, delay: int = 0):
-    """``ticks`` world ticks with ``orders`` on tick ``delay`` and ``no_orders`` on the others."""
+    """``ticks`` world ticks with ``orders`` on tick ``delay`` and ``no_orders`` on the others: ``(world, overflow)``,
+    the largest per-tick count of dropped packets, missiles, sight rays or disallowed held items (must stay 0)."""
     if not 0 <= delay < ticks:
         raise ValueError("action delay must be in [0, step_ticks)")
     idle = MS.no_orders()
 
     def body(s, i):
         o = jax.tree.map(lambda a, b: jnp.where(i == delay, a, b), orders, idle)
-        return MS.step(s, o, env.wcfg)[0], None
-    return jax.lax.scan(body, world, jnp.arange(ticks))[0]
+        s, e = MS.step(s, o, env.wcfg)
+        return s, jnp.max(jnp.stack([e.packet_overflow, e.missile_overflow, e.ray_overflow, e.item_overflow]))
+    world, overflow = jax.lax.scan(body, world, jnp.arange(ticks))
+    return world, jnp.max(overflow)
 
 
 def hold_points(env: ModernEnv, cfg: ModernVecConfig, k: int, seed: int) -> np.ndarray:
@@ -226,7 +229,7 @@ def prepare_modern_bank(cfg: ModernVecConfig, env: ModernEnv, seed: int, out: Pa
 
     def one(s, tgt):
         o = MS.no_orders()._replace(move=jnp.ones((2,), bool), move_x=tgt[:, 0], move_y=tgt[:, 1])
-        return _advance(env, s, o, ticks)
+        return _advance(env, s, o, ticks)[0]
     worlds = jax.jit(jax.vmap(one))(batch, targets)
     bank = ModernEnvState(worlds, jnp.zeros((k, 2), jnp.int32), jnp.zeros((k, 2), jnp.float32))
     xy = np.stack([np.asarray(worlds.x[:, :2]), np.asarray(worlds.y[:, :2])], -1)
@@ -307,7 +310,7 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
             if cfg.opponent == "afk":
                 action = tuple(a.at[1].set(0) for a in action)
             orders = modern_orders_from(action, state, env.frames)
-            nxt = _advance(env, state, orders, cfg.step_ticks, cfg.action_delay_ticks)
+            nxt, overflow = _advance(env, state, orders, cfg.step_ticks, cfg.action_delay_ticks)
             reward, terms, tower_hp = modern_relative_reward(state, nxt, cfg, env)
             died = (nxt.econ.dead[:2] & ~state.econ.dead[:2])
             kills = es.kills + died[::-1].astype(jnp.int32)
@@ -323,7 +326,8 @@ def make_modern_vec_train(cfg: ModernVecConfig, env: ModernEnv, bank, *, prior_p
                            at_end(nxt.econ.gold_total[:2].astype(jnp.float32)),
                            at_end(nxt.econ.xp[:2].astype(jnp.float32)),
                            jnp.broadcast_to(done_full, reward.shape), died.astype(jnp.float32),
-                           lane_path_distance(nxt.x[:2], nxt.y[:2], env.segment))
+                           lane_path_distance(nxt.x[:2], nxt.y[:2], env.segment),
+                           jnp.broadcast_to(overflow, reward.shape).astype(jnp.float32))
             nes = ModernEnvState(nxt, kills, tower_damage)
             idx = jax.random.randint(k_reset, (), 0, K)
             fresh = jax.tree.map(lambda b: b[idx], bank)
@@ -406,6 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lanes", type=int, nargs="+", default=[0, 1, 2])
     p.add_argument("--no-jungle", action="store_true")
     p.add_argument("--no-objectives", action="store_true")
+    p.add_argument("--packet-capacity", type=int, default=0, help="damage packets per tick (0: two per unit)")
     p.add_argument("--opponent", choices=("mirror", "afk", "frozen"), default="mirror")
     p.add_argument("--opponent-from", type=Path, default=None, help="checkpoint for --opponent frozen")
     p.add_argument("--buttons-off", default=",".join(DEFAULT_BUTTONS_OFF),
@@ -472,11 +477,12 @@ def main(argv=None) -> None:
     fog = False if a.fog == "off" else a.fog
     t0 = time.perf_counter()
     wcfg = MS.build_config(default_loadouts(names), fog=fog, lanes=tuple(a.lanes), jungle=not a.no_jungle,
-                           objectives=not a.no_objectives)
+                           objectives=not a.no_objectives, packet_capacity=a.packet_capacity)
     env = make_env(wcfg)
     command = shlex.join([sys.executable, "-m", "lanerl_jax.modern.train", *sys.argv[1:]])
     world_desc = {"ruleset": "modern 26.19 (world.tick)", "champions": names, "fog": a.fog,
                   "lanes": a.lanes, "jungle": not a.no_jungle, "objectives": not a.no_objectives,
+                  "packet_capacity": wcfg.layout.packet_capacity,
                   "loadouts": [repr(lo) for lo in wcfg.loadouts], "profile": wcfg.profile,
                   "tick_hz": TICK_HZ}
     run = RunDir(a.out, f"modern-vec-s{a.seed}", {

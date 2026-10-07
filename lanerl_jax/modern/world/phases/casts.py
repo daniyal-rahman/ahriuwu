@@ -32,6 +32,8 @@ def shop(s: ModernState, cfg: WorldConfig, orders: ModernOrders, st: ChampionSta
         inv_c = I.Inventory(inv.item[c], inv.stack[c])
         row = jnp.argmax(ids == orders.buy[c])
         want = (orders.buy[c] > 0) & jnp.any(ids == orders.buy[c]) & ~forbid[c, row]
+        if cfg.item_allowed is not None:
+            want = want & jnp.asarray(cfg.item_allowed[c])[row]
         r = I.buy(inv_c, gold[c], row, can_shop=can[c] & want, level=s.econ.level[c],
                   is_ranged=st.attack_range[c] > 300.0, now=s.t, group_cd_until=gcd[c])
         inv_c, g = r.inv, r.gold

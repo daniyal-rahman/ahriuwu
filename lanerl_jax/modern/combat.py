@@ -16,7 +16,8 @@ from .core.stats import resolve_adaptive
 from .items import effects as E
 from .items.catalog import ItemStats, combine_stats
 from .items.effects import marksman, spellblade, starters
-from .items.effects.core import CC, Attack, Cast, Ctx, Effects, Kills, Report, Units, combine_debuffs, merge_effects
+from .items.effects.core import (CC, Attack, Cast, Ctx, Effects, Kills, Report, Units, combine_debuffs, counts,
+                                  merge_effects)
 from .items.effects.runtime import (EXTRA_ON_HIT_SLOTS, FOLLOW_UP_CAPACITY, MAIN_PACKET_CAPACITY, UnitStatus,
                                     apply_effects, fold_defense, fold_offense, resolve_tick)
 from .runes import effects as RE
@@ -121,7 +122,7 @@ def combat_tick(state: CombatState, own, page, ctx: Ctx, units: Units, *, attack
     items, runes = state.items, state.runes
     cc_ev = cc if cc is not None else CC(jnp.zeros((c, n), bool), jnp.zeros((c, n), bool))
     ev = rune_events(ctx, n) if ev is None else ev
-    ev = ev._replace(attack=attack, cast=cast, cc=cc_ev, kills=kills, own=own, clocks=state.clocks, report=None)
+    ev = ev._replace(attack=attack, cast=cast, cc=cc_ev, kills=kills, own=counts(own), clocks=state.clocks, report=None)
 
     # 1. STAT.50; adaptive force split once from the pre-adaptive bonus AD/AP.
     dyn = combine_stats(E.dynamic_stats(items, own, ctx), RE.stats(runes, page, ctx, ev))

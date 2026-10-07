@@ -39,25 +39,31 @@ def add_world_args(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--no-jungle", action="store_true")
     ap.add_argument("--no-objectives", action="store_true")
     ap.add_argument("--lanes", type=int, nargs="+", default=[0, 1, 2])
+    ap.add_argument("--packet-capacity", type=int, default=0, help="damage packets per tick (0: two per unit)")
+    ap.add_argument("--allowlist", action="store_true", help="restrict each champion to its top-lane allow-list")
 
 
 def build_world(args):
     """``(cfg, run)``: the Garen-vs-Jax world for ``args`` and ``run(state, ticks) -> (state, per-tick stats)``."""
     from lanerl_jax.modern import world as MS
     from lanerl_jax.modern.runes import catalog as RD
+    from lanerl_jax.modern.data.loadouts import allowed_items
     from lanerl_jax.modern.world import config as MW
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
+    shop = (lambda name: allowed_items(name)) if args.allowlist else (lambda name: ())      # noqa: E731
+    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE, allowed_items=shop("Garen")),
           MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(
-              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))))
+              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001)),
+              allowed_items=shop("Jax")))
     cfg = MW.build_config(lo, fog=False if args.fog == "off" else args.fog, lanes=tuple(args.lanes),
-                          jungle=not args.no_jungle, objectives=not args.no_objectives)
+                          jungle=not args.no_jungle, objectives=not args.no_objectives,
+                          packet_capacity=args.packet_capacity)
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
 
     def run(s, ticks):
         def body(s, _):
             s, e = MS.step(s, scripted_orders(s, lane_mid), cfg)
             used = (jnp.sum(e.report.packets.valid), jnp.sum(e.follow_up.packets.valid))
-            return s, (e.packet_overflow, e.missile_overflow, e.ray_overflow, used)
+            return s, (e.packet_overflow, e.missile_overflow, e.ray_overflow, e.item_overflow, used)
         return jax.lax.scan(body, s, None, length=ticks)
     return cfg, run
 
@@ -79,7 +85,8 @@ def warm_up(timed, batch, warm_ticks: int, ticks: int):
 
 def world_label(args) -> dict:
     return {"fog": args.fog, "jungle": not args.no_jungle, "objectives": not args.no_objectives,
-            "lanes": list(args.lanes)}
+            "lanes": list(args.lanes), **({"packet_capacity": args.packet_capacity} if args.packet_capacity else {}),
+            **({"allowlist": True} if args.allowlist else {})}
 
 
 def main() -> None:
@@ -104,7 +111,7 @@ def main() -> None:
         jax.block_until_ready(out.t)
         t_second = time.time() - t0
         t0 = time.time()
-        out, (po, mo, ro, (pm, pf)) = timed(out)
+        out, (po, mo, ro, io, (pm, pf)) = timed(out)
         jax.block_until_ready(out.t)
         steady = time.time() - t0
         print(json.dumps({"envs": b, "ticks": args.ticks, "warm_compile_and_run_s": round(t_warm, 2),
@@ -112,7 +119,8 @@ def main() -> None:
                           "s_per_tick": steady / args.ticks, "env_ticks_per_s": b * args.ticks / steady,
                           "game_time_s": float(out.t[0]), "packet_overflow": int(po.max()),
                           "missile_overflow": int(mo.max()), "ray_overflow": int(ro.max()),
-                          "packets_max": int(pm.max()), "follow_up_packets_max": int(pf.max())}), flush=True)
+                          "item_overflow": int(io.max()), "packets_max": int(pm.max()),
+                          "follow_up_packets_max": int(pf.max())}), flush=True)
 
 
 if __name__ == "__main__":

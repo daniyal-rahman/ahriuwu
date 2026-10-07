@@ -14,7 +14,7 @@ from ...core import damage as D
 from ...core import types as W
 from ...items import effects as IE
 from ...items import inventory as I
-from ...items.effects.core import Attack
+from ...items.effects.core import Attack, Owned
 from ...jungle import camps as J
 from ...jungle import objectives as OBJ
 from ...lane import ai as LA
@@ -72,7 +72,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     cancelled = (att_prev.windup_left > 0) & (att.windup_left <= 0) & ~launched
     atgt = jnp.clip(att.target, 0, n - 1)
     # Champion crit roll at launch (X-8).
-    imods = IE.attack_mods(s.combat.items, I.owned_counts(champ.inventory), ictx, U.item_units(s), att.target[:c])
+    imods = IE.attack_mods(s.combat.items, Owned(I.owned_counts(champ.inventory), cfg.item_allowed), ictx,
+                           U.item_units(s), att.target[:c])
     no_crit = jnp.zeros((c,), bool) if kmods.cannot_crit is None else kmods.cannot_crit
     roll = jax.random.uniform(sc.k_crit, (c,)) < st.crit_chance
     crit = launched[:c] & ~no_crit & (roll | imods.force_crit)

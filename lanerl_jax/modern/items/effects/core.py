@@ -3,7 +3,8 @@
 Modules are pure and fixed-shape: ``C`` axes are champion holders (holder c is world unit ``ctx.unit[c]``), ``N``
 axes are world units. They never write world state; they return ``Effects`` and stat/defense/debuff profiles that
 the integrator folds into ``core.damage`` in DAMAGE_AND_STATS §2 order. ``own`` is the (C, I) owned-count matrix
-(``inventory.owned_counts``). Hooks (all optional except ``init``/``COVERAGE``):
+(``inventory.owned_counts``), optionally as ``Owned`` with the static items each holder can hold.
+Hooks (all optional except ``init``/``COVERAGE``):
 
     COVERAGE: dict[int, str]; State; init(n_champions, n_units) -> State
     stats(state, own, ctx) -> ItemStats                        STAT.50 dynamic bonus stats
@@ -34,13 +35,33 @@ def row(item_id: int) -> int:
     return catalog().row(item_id)
 
 
+class Owned(NamedTuple):
+    """Owned counts (C, I) and the static (C, I) numpy mask of items each holder can ever hold (None: any). An item
+    no holder can hold is a compile-time ``holds`` False, so the compiler drops the code that depends on it."""
+    counts: Any
+    allowed: Any = None
+
+
+def counts(own: Any) -> Any:
+    """The (C, I) owned counts of ``own`` (an ``Owned`` or the bare matrix)."""
+    return own.counts if isinstance(own, Owned) else own
+
+
+def can_hold(own: Any, item_ids) -> bool:
+    """Static: some holder may ever hold one of ``item_ids``."""
+    return not isinstance(own, Owned) or own.allowed is None \
+        or bool(own.allowed[:, [row(i) for i in item_ids]].any())
+
+
 def holds(own: Any, item_id: int) -> Any:
     """(C,) bool: holder owns ``item_id``."""
-    return own[:, row(item_id)] > 0
+    if not can_hold(own, (item_id,)):
+        return jnp.zeros(own.counts.shape[:1], bool)
+    return counts(own)[:, row(item_id)] > 0
 
 
 def holds_any(own: Any, item_ids) -> Any:
-    out = jnp.zeros(own.shape[:1], bool)
+    out = jnp.zeros(counts(own).shape[:1], bool)
     for iid in item_ids:
         out = out | holds(own, iid)
     return out

@@ -63,13 +63,16 @@ def chaos_orders(s, k, lane_mid):
         ward_x=pt[:, 0], ward_y=pt[:, 1])
 
 
-def build(world: str):
-    """The Garen-vs-Jax ``WorldConfig`` of ``WORLDS[world]``."""
+def build(world: str, allowed: bool = False):
+    """The Garen-vs-Jax ``WorldConfig`` of ``WORLDS[world]``; ``allowed`` restricts both champions to the items the
+    chaos orders buy (behaviour must not change)."""
     from lanerl_jax.modern.runes import catalog as RD
     from lanerl_jax.modern.world import config as MW
-    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE),
+    shop = ITEMS if allowed else ()
+    lo = (MW.Loadout("Garen", items=(1055, 2003), rune_page=RD.GAREN_DEFAULT_PAGE, allowed_items=shop),
           MW.Loadout("Jax", items=(1055, 2003), rune_page=RD.RunePage(
-              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001))))
+              RD.PRECISION, 8010, (9111, 9104, 8299), RD.RESOLVE, (8444, 8242), (5005, 5008, 5001)),
+              allowed_items=shop))
     return MW.build_config(lo, **WORLDS[world])
 
 
@@ -89,13 +92,13 @@ def summary(s) -> dict:
             "structure_hp": a(s.hp[-30:]).tolist()}
 
 
-def fingerprint(world: str, ticks: int, every: int) -> list[dict]:
+def fingerprint(world: str, ticks: int, every: int, allowed: bool = False) -> list[dict]:
     import jax
     import jax.numpy as jnp
     import numpy as np
 
     from lanerl_jax.modern import world as MS
-    cfg = build(world)
+    cfg = build(world, allowed)
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
     key = jax.random.PRNGKey(1234)
 
@@ -162,6 +165,7 @@ def main() -> None:
     ap.add_argument("--ticks", type=int, default=3600)
     ap.add_argument("--every", type=int, default=600)
     ap.add_argument("--worlds", nargs="+", default=list(WORLDS))
+    ap.add_argument("--allowed", action="store_true", help="restrict the shop to the items the chaos orders buy")
     ap.add_argument("--out")
     ap.add_argument("--compare", help="saved run to check this run against")
     ap.add_argument("--diff", nargs=2, metavar=("REF", "NEW"), help="compare two saved runs (no simulation)")
@@ -171,7 +175,7 @@ def main() -> None:
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     from lanerl_jax.modern.jax_cache import enable_compile_cache
     enable_compile_cache()
-    prints = [cp for w in args.worlds for cp in fingerprint(w, args.ticks, args.every)]
+    prints = [cp for w in args.worlds for cp in fingerprint(w, args.ticks, args.every, args.allowed)]
     if args.out:
         with open(args.out, "w") as f:
             json.dump(prints, f)

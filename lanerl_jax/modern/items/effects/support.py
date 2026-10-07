@@ -15,8 +15,8 @@ from ...core.damage import (CLASS_CHAMPION, CLASS_MINION, CLASS_MONSTER, CLASS_S
                             PROP_EXECUTE, PROP_REACTIVE, TAG_AOE, TAG_BASIC_ATTACK, TAG_ITEM, TAG_ON_HIT, TAG_PERIODIC,
                             TAG_PROC, TRUE, concat_packets, has, packets)
 from ..catalog import STAT_INDEX, ItemStats, catalog, level_bp
-from .core import (CC, Debuffs, Effects, dv, effects, enemy_mask, holds, in_circle, merge_effects, neutral_defense,
-                   target_class, unit_pos)
+from .core import (CC, Debuffs, Effects, counts, dv, effects, enemy_mask, holds, in_circle, merge_effects,
+                   neutral_defense, target_class, unit_pos)
 
 SHURELYA, BANDLEPIPES, ZEKES, REDEMPTION, KNIGHTS_VOW = 2065, 2524, 3050, 3107, 3109
 LOCKET, MIKAELS, CENSER, MANDATE, FLOWING = 3190, 3222, 3504, 4005, 6616
@@ -257,7 +257,7 @@ def mandate_immobilize_haste(own):
 
 def support_line_gold(own, dt, item_ids=tuple(GP10)):
     """(C,) support-line gold of this tick."""
-    g = jnp.zeros(own.shape[:1], jnp.float32)
+    g = jnp.zeros(counts(own).shape[:1], jnp.float32)
     for iid in item_ids:
         g = g + jnp.where(holds(own, iid), GP10[iid] / 10.0 * dt, 0.0)
     return g
@@ -266,7 +266,7 @@ def support_line_gold(own, dt, item_ids=tuple(GP10)):
 def _mana_regen_pct(own):
     """(C,) bonus base-mana-regen ratio from held items."""
     col = jnp.asarray(catalog().arrays.stats[:, STAT_INDEX["percent_base_mana_regen"]], jnp.float32)
-    return own.astype(jnp.float32) @ col
+    return counts(own).astype(jnp.float32) @ col
 
 
 def celestial_blessed(state, own, ctx):

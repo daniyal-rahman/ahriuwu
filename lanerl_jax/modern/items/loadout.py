@@ -1,4 +1,5 @@
-"""Loadout preparation used by world construction: rune page validation and stat shards (RUNES.md §2.3)."""
+"""Loadout preparation used by world construction: rune page validation, stat shards (RUNES.md §2.3) and the items a
+champion restricted to an allow-list can hold."""
 from __future__ import annotations
 
 from typing import Any
@@ -7,7 +8,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..runes import catalog as R
-from .catalog import ItemStats
+from ..runes.effects import inspiration
+from .catalog import ItemStats, catalog
+from .effects import actives, starters
+from .inventory import STEALTH_WARD
 
 
 def validate_rune_page(page, traits=None):
@@ -67,3 +71,21 @@ def stat_shard_stats(shards=DEFAULT_STAT_SHARDS, *, level: Any = 1, adaptive_to_
             totals["tenacity"] = 1.0 - (1.0 - totals["tenacity"]) * keep
             totals["slow_resist"] = 1.0 - (1.0 - totals["slow_resist"]) * keep
     return ItemStats(**totals)
+
+
+# Items that enter an inventory without a purchase: the starting trinket, Tear-line and Seeker's transforms, and
+# rune grants.
+TRANSFORMS = (*starters.TRANSFORMS, (actives.SEEKERS, actives.SHATTERED))
+RUNE_GRANTS = (inspiration.BISCUIT_ITEM, inspiration.BOOTS_ITEM, inspiration.AVARICE, inspiration.FORCE,
+               inspiration.SKILL)
+
+
+def acquirable_rows(item_ids) -> np.ndarray:
+    """(I,) bool catalog rows a champion that may buy only ``item_ids`` can hold: those items, the starting trinket,
+    what they transform into, and every rune-granted item."""
+    held = set(item_ids) | set(RUNE_GRANTS) | {STEALTH_WARD}
+    held |= {b for a, b in TRANSFORMS if a in held}
+    cat = catalog()
+    rows = np.zeros(len(cat.ids), bool)
+    rows[[cat.row(i) for i in held]] = True
+    return rows

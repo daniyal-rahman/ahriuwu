@@ -24,7 +24,7 @@ from ..data import PATCH_DIR
 from ..data.navgrid import load_patch_map
 from ..data.routes import load_routes
 from ..items.inventory import validate_item_loadout
-from ..items.loadout import validate_rune_page
+from ..items.loadout import acquirable_rows, validate_rune_page
 from ..jungle import camps as J
 from ..jungle import objectives as OBJ
 from ..lane.ai import AISlots
@@ -58,6 +58,7 @@ class Loadout:
     role: int = 1                       # role_quest.ROLE_TOP
     skill_order: tuple[int, ...] = ()   # slot per level 1..18; empty = champion default
     auto_skill: bool = True             # spend unassigned skill points by skill_order (False: only level_up orders)
+    allowed_items: tuple[int, ...] = () # the only items this champion may buy (empty: the whole shop)
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,7 @@ class Layout:
     lanes: tuple = (0, 1, 2)            # lanes whose waves spawn, one minion block each, in this order
     jungle: bool = True
     objectives: bool = True
+    packets: int = 0                    # main-pass packet capacity; 0 = two per unit (``packet_capacity``)
 
     @property
     def minion0(self) -> int:
@@ -101,8 +103,9 @@ class Layout:
 
     @property
     def packet_capacity(self) -> int:
-        """Damage packets per tick after compaction: the power of two >= 2 per unit (512 on the full map)."""
-        return 1 << (2 * self.n_units - 1).bit_length()
+        """Damage packets per tick after compaction: ``packets``, else the power of two >= 2 per unit (512 on the
+        full map). Overflowing packets are dropped and counted (``packet_overflow``)."""
+        return self.packets or 1 << (2 * self.n_units - 1).bit_length()
 
     @property
     def follow_up_capacity(self) -> int:
@@ -145,24 +148,35 @@ class WorldConfig:
     footprints: Any = None              # map.dynamic_terrain.Footprints (structure pads)
     ward_grid: Any = None               # wards.WardGrid
     layout: Layout = Layout()           # unit blocks (static)
+    item_allowed: Any = None            # (C, I) numpy bool: items each champion can ever hold (None: any)
 
     @property
     def n_units(self) -> int:
         return int(self.unit_kind.shape[0])
 
 
+
+def _item_allowed(loadouts):
+    """(C, I) bool items each champion can hold (its allow-list and starting items, closed over transforms and rune
+    grants); None when no champion is restricted."""
+    if not any(lo.allowed_items for lo in loadouts):
+        return None
+    return np.stack([acquirable_rows((*lo.allowed_items, *lo.items)) if lo.allowed_items
+                     else np.ones_like(acquirable_rows(())) for lo in loadouts])
+
 def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, dt=1.0 / 30.0,
                  fog: bool | str = "rays", lanes=(0, 1, 2), jungle: bool = True,
-                 objectives: bool = True) -> WorldConfig:
+                 objectives: bool = True, packet_capacity: int = 0) -> WorldConfig:
     """Validate loadouts and build the static world (host-side).
 
     ``fog``: ``"rays"`` (default; walls and brush along the ray), ``"fast"`` (brush lookup, walls
     ignored) or ``False`` (every unit visible). See ``vision``. ``lanes``: lanes whose minion
     waves spawn (0 bot, 1 mid, 2 top). ``jungle`` / ``objectives``: spawn camps / epic monsters.
+    ``packet_capacity``: damage packets per tick (0: ``Layout.packet_capacity`` default).
     """
     if fog not in (False, "fast", "rays"):
         raise ValueError("fog must be 'fast', 'rays' or False")
-    lay = Layout(tuple(int(v) for v in lanes), bool(jungle), bool(objectives))
+    lay = Layout(tuple(int(v) for v in lanes), bool(jungle), bool(objectives), int(packet_capacity))
     if len(loadouts) != N_CHAMPIONS:
         raise ValueError("the modern lane world has exactly two champions")
     pages = []
@@ -234,4 +248,4 @@ def build_config(loadouts, *, map_path=DEFAULT_MAP, route_path=DEFAULT_ROUTES, d
         rift=RIFT.load_rift_terrain() if objectives else None,
         regions=REG.build_regions(grid), footprints=DTR.build_footprints(grid, np.asarray(kinds), np.asarray(xs),
                                                                          np.asarray(ys)),
-        ward_grid=WD.ward_grid(grid), layout=lay)
+        ward_grid=WD.ward_grid(grid), layout=lay, item_allowed=_item_allowed(loadouts))

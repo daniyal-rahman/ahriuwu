@@ -34,13 +34,22 @@ def step(s: ModernState, orders: ModernOrders, cfg: WorldConfig) -> tuple[Modern
     return jax.tree.map(lambda a, b: jnp.asarray(b, a.dtype) if hasattr(a, "dtype") else b, s0, new), events
 
 
+
+def _item_overflow(s: ModernState, cfg: WorldConfig):
+    """Held items outside ``cfg.item_allowed`` (0 when unrestricted)."""
+    if cfg.item_allowed is None:
+        return jnp.int32(0)
+    item = s.champ.inventory.item
+    ok = jnp.asarray(cfg.item_allowed)[jnp.arange(item.shape[0])[:, None], jnp.maximum(item, 0)]
+    return jnp.sum((item >= 0) & ~ok, dtype=jnp.int32)
+
 def commit(s: ModernState, cfg: WorldConfig, sc: TickScratch) -> tuple[ModernState, TickEvents]:
     """The next state (before the game-over freeze and dtype cast) and the tick's events."""
     c = N_CHAMPIONS
     st, out, cc, died, alive, hp = sc.st, sc.out, sc.cc, sc.died, sc.alive, sc.hp
     cc = cc._replace(**{f: jnp.where(died, 0.0, getattr(cc, f)) for f in M.CCTimers._fields})
     events = TickEvents(out.report, out.follow_up, sc.eco, sc.plates, sc.launched, out.packet_overflow, sc.m_over,
-                        sc.ray_over, sc.shop_code)
+                        sc.ray_over, _item_overflow(s, cfg), sc.shop_code)
     result = LA.game_result(sc.towers)
     # Champion rows of the unit columns mirror this tick's stats.
     champ_cols = dict(attack_damage=s.attack_damage.at[:c].set(st.base_ad + st.bonus_ad),

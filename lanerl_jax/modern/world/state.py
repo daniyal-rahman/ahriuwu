@@ -275,4 +275,5 @@ class TickEvents(NamedTuple):
     packet_overflow: Any    # () dropped packets (must stay 0)
     missile_overflow: Any
     ray_overflow: Any       # () dropped sight rays (must stay 0)
+    item_overflow: Any      # () held items outside the champions' allow-lists (must stay 0)
     shop_code: Any          # (C,) buy/sell result code (0 ok)

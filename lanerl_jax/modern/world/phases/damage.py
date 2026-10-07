@@ -11,7 +11,7 @@ from ...core import damage as D
 from ...core import types as W
 from ...items import inventory as I
 from ...items.effects import actives as A
-from ...items.effects.core import CC, Cast
+from ...items.effects.core import CC, Cast, Owned
 from ...jungle import objectives as OBJ
 from ...lane import ai as LA
 from ...runes.effects.core import rune_events
@@ -77,7 +77,8 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig, sc: TickScratch)
     items0 = s.combat.items
     items0 = items0._replace(actives=A.with_aim(items0.actives, orders.cast_target, orders.cast_x, orders.cast_y))
     item_req = A.request_allowed(orders.item_active, disabled=caps["stunned"][:c], in_stasis=in_stasis)
-    out = combat_tick(s.combat._replace(items=items0), I.owned_counts(champ.inventory), cfg.rune_pages, ictx,
+    own = Owned(I.owned_counts(champ.inventory), cfg.item_allowed)
+    out = combat_tick(s.combat._replace(items=items0), own, cfg.rune_pages, ictx,
                       U.item_units(s), attack=sc.attack,
                       cast=Cast(kit_all.cast_started, kit_all.cast_slot, sc.cast_order.target),
                       request=item_req, base_packets=base, base_offense=off, base_defense=dfn,

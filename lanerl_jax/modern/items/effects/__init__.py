@@ -14,7 +14,7 @@ import jax.numpy as jnp
 from ..catalog import ItemStats, catalog, combine_stats, zero_stats
 from . import (actives, boots, consumables, defense, fighter, hydra, jungle, mage, marksman, spellblade, starters,
                support)
-from .core import (ActiveOut, AttackMods, Ctx, Debuffs, HolderDefense, StatusFlags, Units, combine_debuffs,
+from .core import (ActiveOut, AttackMods, Ctx, Debuffs, HolderDefense, StatusFlags, Units, can_hold, combine_debuffs,
                    combine_defense, merge_effects)
 
 MODULES = (consumables, starters, spellblade, hydra, fighter, defense, mage, marksman, support, boots,
@@ -84,10 +84,11 @@ def coverage_report() -> dict[int, str]:
     return out
 
 
-def _each(hook: str):
+def _each(hook: str, own):
+    """Modules defining ``hook`` whose items (``COVERAGE`` and ``ACTIVE_ITEMS``) some holder can hold."""
     for m in MODULES:
         fn = getattr(m, hook, None)
-        if fn is not None:
+        if fn is not None and can_hold(own, (*m.COVERAGE, *getattr(m, "ACTIVE_ITEMS", ()))):
             yield m, fn
 
 
@@ -100,30 +101,30 @@ def _put(state: ItemEffectState, m, sub) -> ItemEffectState:
 
 
 def dynamic_stats(state: ItemEffectState, own, ctx: Ctx) -> ItemStats:
-    parts = [fn(_sub(state, m), own, ctx) for m, fn in _each("stats")]
+    parts = [fn(_sub(state, m), own, ctx) for m, fn in _each("stats", own)]
     return combine_stats(zero_stats(ctx.level.shape), *parts)
 
 
 def holder_defense(state: ItemEffectState, own, ctx: Ctx) -> HolderDefense:
-    parts = [fn(_sub(state, m), own, ctx) for m, fn in _each("defense")]
+    parts = [fn(_sub(state, m), own, ctx) for m, fn in _each("defense", own)]
     return combine_defense(parts, ctx.level.shape[0])
 
 
 def status(state: ItemEffectState, own, ctx: Ctx) -> StatusFlags:
     out = StatusFlags(jnp.zeros(ctx.level.shape, bool))
-    for m, fn in _each("status"):
+    for m, fn in _each("status", own):
         out = StatusFlags(out.ghosted | fn(_sub(state, m), own, ctx).ghosted)
     return out
 
 
 def target_debuffs(state: ItemEffectState, own, ctx: Ctx, units: Units) -> Debuffs:
-    parts = [fn(_sub(state, m), own, ctx, units) for m, fn in _each("debuffs")]
+    parts = [fn(_sub(state, m), own, ctx, units) for m, fn in _each("debuffs", own)]
     return combine_debuffs(parts, units.x.shape[0])
 
 
 def dealt_amp(state: ItemEffectState, own, ctx: Ctx, units: Units):
     amp = jnp.zeros((ctx.level.shape[0], units.x.shape[0]), jnp.float32)
-    for m, fn in _each("dealt_amp"):
+    for m, fn in _each("dealt_amp", own):
         amp = amp + fn(_sub(state, m), own, ctx, units)
     return amp
 
@@ -135,7 +136,7 @@ def packet_amp(state: ItemEffectState, own, ctx: Ctx, units: Units, packets):
     src_is = p.src[:, None] == ctx.unit[None, :]
     per = amp[:, jnp.clip(p.dst, 0, amp.shape[1] - 1)].T
     out = jnp.sum(jnp.where(src_is, per, 0.0), axis=1)
-    for m, fn in _each("packet_amp"):
+    for m, fn in _each("packet_amp", own):
         out = out + fn(_sub(state, m), own, ctx, units, p)
     return out
 
@@ -143,7 +144,7 @@ def packet_amp(state: ItemEffectState, own, ctx: Ctx, units: Units, packets):
 def attack_mods(state: ItemEffectState, own, ctx: Ctx, units: Units, target) -> AttackMods:
     c = ctx.level.shape[0]
     out = AttackMods(jnp.zeros((c,), bool), jnp.ones((c,), jnp.float32))
-    for m, fn in _each("attack_mods"):
+    for m, fn in _each("attack_mods", own):
         r = fn(_sub(state, m), own, ctx, units, target)
         out = AttackMods(out.force_crit | r.force_crit, jnp.where(r.force_crit, r.crit_scale, out.crit_scale))
     return out
@@ -152,7 +153,7 @@ def attack_mods(state: ItemEffectState, own, ctx: Ctx, units: Units, target) -> 
 def _event(hook: str):
     def run(state: ItemEffectState, own, ctx: Ctx, units: Units, *event):
         parts = []
-        for m, fn in _each(hook):
+        for m, fn in _each(hook, own):
             sub, eff = fn(_sub(state, m), own, ctx, units, *event)
             state = _put(state, m, sub)
             parts.append(eff)
@@ -166,7 +167,7 @@ on_attack, on_hit, on_cast, on_cc, on_damage, periodic, on_takedown = map(
 
 
 def on_shop(state: ItemEffectState, own, ctx: Ctx) -> ItemEffectState:
-    for m, fn in _each("on_shop"):
+    for m, fn in _each("on_shop", own):
         state = _put(state, m, fn(_sub(state, m), own, ctx))
     return state
 
@@ -177,7 +178,7 @@ def active(state: ItemEffectState, own, ctx: Ctx, units: Units, request):
     parts = []
     out = ActiveOut(jnp.zeros((c,), bool), jnp.zeros((c,), jnp.float32),
                     jnp.ones((c,), bool), jnp.zeros((c,), bool))
-    for m, fn in _each("active"):
+    for m, fn in _each("active", own):
         sub, eff, r = fn(_sub(state, m), own, ctx, units, request)
         state = _put(state, m, sub)
         parts.append(eff)
