@@ -9,6 +9,7 @@
 #include <omp.h>
 #endif
 
+#include "champ/marshal.hpp"
 #include "world.hpp"
 
 using namespace lanesim;
@@ -259,5 +260,36 @@ void ls_profile(double* out, int reset) { profile(out, reset != 0); }
 
 // Record route inputs/outputs of the movers (ward0 x 24 floats) during the calling thread's next steps.
 void ls_debug_route(float* out) { debug_route = out; }
+
+// --- registered native functions (hook differential tests) ---------------------------------------------------
+// Names, ';'-separated.
+const char* ls_test_names() {
+    static std::string s;
+    s.clear();
+    for (auto& [name, e] : marshal::registry()) s += name + ";";
+    return s.c_str();
+}
+
+// Leaf type codes of the arguments, then '|' and the leaf count of each argument (','-separated).
+const char* ls_test_signature(const char* name) {
+    static std::string s;
+    auto it = marshal::registry().find(name);
+    if (it == marshal::registry().end()) return nullptr;
+    s = it->second.signature + "|";
+    for (int k : it->second.arg_leaves) s += std::to_string(k) + ",";
+    return s.c_str();
+}
+
+void* ls_test_call(const char* name, void* const* ptrs, const long* counts) {
+    auto it = marshal::registry().find(name);
+    if (it == marshal::registry().end()) return nullptr;
+    return new std::vector<marshal::Leaf>(it->second.call(ptrs, counts));
+}
+
+long ls_result_leaves(void* h) { return (long)static_cast<std::vector<marshal::Leaf>*>(h)->size(); }
+char ls_result_code(void* h, long i) { return (*static_cast<std::vector<marshal::Leaf>*>(h))[i].code; }
+long ls_result_count(void* h, long i) { return (*static_cast<std::vector<marshal::Leaf>*>(h))[i].count; }
+const void* ls_result_data(void* h, long i) { return (*static_cast<std::vector<marshal::Leaf>*>(h))[i].bytes.data(); }
+void ls_result_free(void* h) { delete static_cast<std::vector<marshal::Leaf>*>(h); }
 
 }  // extern "C"

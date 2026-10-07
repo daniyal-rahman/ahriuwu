@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-LIB = Path(os.environ.get("LANESIM_LIB", Path(__file__).resolve().parents[1] / "build" / "liblanesim.so"))
+LIB = Path(os.environ.get("LANESIM_LIB", Path(__file__).resolve().parents[1] / "build-clang" / "liblanesim.so"))
 _CTYPES = {"float": np.float32, "int32_t": np.int32, "uint8_t": np.uint8, "uint32_t": np.uint32}
 
 
@@ -27,7 +27,11 @@ def _lib():
            "ls_world_array": ([P, S, P, L], I), "ls_world_finish": ([P], None),
            "ls_step": ([P, P, P, P], None), "ls_batch_new": ([P, I, P, I], P), "ls_batch_free": ([P], None),
            "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None),
-           "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None)}
+           "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None),
+           "ls_test_names": ([], S), "ls_test_signature": ([S], S), "ls_test_call": ([S, P, P], P),
+           "ls_result_leaves": ([P], L), "ls_result_code": ([P, L], ctypes.c_char), "ls_result_count": ([P, L], L),
+           "ls_result_data": ([P, L], P), "ls_result_free": ([P], None),
+           "ls_data_put": ([S, P, L], None)}
     for name, (args, res) in sig.items():
         f = getattr(lib, name)
         f.argtypes, f.restype = args, res
@@ -38,9 +42,13 @@ _L = None
 
 
 def lib():
+    """The library, with the named constants (native/python/consts) loaded on first use."""
     global _L
     if _L is None:
         _L = _lib()
+        import consts
+        for k, v in consts.all_consts().items():
+            _L.ls_data_put(k.encode(), v.ctypes.data, v.size)
     return _L
 
 
@@ -229,6 +237,64 @@ def state_from_env(world: NativeWorld, env: dict, like):
     names = [name for name, _ in _leaves(like)]
     return jax.tree_util.tree_unflatten(tree, [jnp.asarray(env[name].reshape(np.shape(v)).astype(np.asarray(v).dtype))
                                                for name, v in zip(names, leaves)])
+
+
+_CODES = {"f": np.float32, "i": np.int32, "u": np.uint32, "b": np.uint8}
+
+
+def test_names() -> list[str]:
+    return [s for s in lib().ls_test_names().decode().split(";") if s]
+
+
+def _empty_report():
+    from lanerl_jax.modern.core import damage as D
+    from lanerl_jax.modern.items.effects.core import Report
+    z = lambda k: [np.zeros(0)] * k                                                    # noqa: E731
+    return Report(D.Packets(*z(10)), D.Resolved(*z(7), D.Shields(*z(6)), *z(4)), np.zeros(0), np.zeros(0))
+
+
+def _prepare(tree):
+    """Native argument conventions: RuneEvents always carries a Report (empty outside on_damage)."""
+    import jax
+    from lanerl_jax.modern.runes.effects.core import RuneEvents
+
+    def fix(v):
+        return v._replace(report=_empty_report()) if isinstance(v, RuneEvents) and v.report is None else v
+    return jax.tree_util.tree_map(fix, tree, is_leaf=lambda v: isinstance(v, RuneEvents))
+
+
+def _flat(tree):
+    """Leaves of a pytree in JAX flatten order, ``None`` fields as empty arrays (the native optional)."""
+    import jax
+    return jax.tree_util.tree_leaves(_prepare(tree), is_leaf=lambda v: v is None)
+
+
+def call(name: str, *args) -> list[np.ndarray]:
+    """Call the registered native function ``name`` on JAX arguments (pytrees); returns its flat output leaves.
+    Fields the native side does not take (``RuneEvents.report``) must be None in ``args``... and are dropped."""
+    sig = lib().ls_test_signature(name.encode())
+    if sig is None:
+        raise KeyError(name)
+    codes, counts = sig.decode().split("|")
+    per_arg = [int(k) for k in counts.split(",") if k]
+    leaves = []
+    for a, k in zip(args, per_arg):
+        flat = [np.zeros(0) if v is None else np.asarray(v) for v in _flat(a)]
+        if len(flat) != k:
+            raise ValueError(f"{name}: argument has {len(flat)} leaves, native expects {k}")
+        leaves += flat
+    arrs = [np.ascontiguousarray(np.asarray(v).astype(_CODES[c]).ravel()) for v, c in zip(leaves, codes)]
+    ptrs = (ctypes.c_void_p * len(arrs))(*[a.ctypes.data for a in arrs])
+    cnts = np.asarray([a.size for a in arrs], np.int64)
+    h = lib().ls_test_call(name.encode(), ptrs, cnts.ctypes.data)
+    out = []
+    for i in range(lib().ls_result_leaves(h)):
+        code, n = lib().ls_result_code(h, i).decode(), lib().ls_result_count(h, i)
+        dt = _CODES[code]
+        buf = (ctypes.c_char * (n * np.dtype(dt).itemsize)).from_address(lib().ls_result_data(h, i)) if n else b""
+        out.append(np.frombuffer(bytes(buf), dt).copy())
+    lib().ls_result_free(h)
+    return out
 
 
 PHASES = ("spawn", "turret", "select", "move_prep", "route", "collide", "attack", "damage", "death", "timers", "fog",
