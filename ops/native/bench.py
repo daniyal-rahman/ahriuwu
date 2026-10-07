@@ -23,6 +23,7 @@ def main() -> None:
     ap.add_argument("--ticks", type=int, default=1800)
     ap.add_argument("--warm", type=int, default=1800, help="native ticks before timing (0:00 -> 1:00)")
     ap.add_argument("--threads", type=int, nargs="+", default=[1])
+    ap.add_argument("--orders", type=int, default=0, help="0 none, 1 the JAX bench scripted orders")
     args = ap.parse_args()
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     import numpy as np
@@ -36,7 +37,7 @@ def main() -> None:
     for _ in range(args.warm):
         world.step(env)
     print(json.dumps({"start_game_s": float(env["t"][0]), "minions": int(np.sum((env["kind"] == 2) & (env["alive"] > 0)))}))
-    one = LS.Batch(world, env, 1)                           # runs on this thread: per-phase profile
+    one = LS.Batch(world, env, 1, args.orders)                           # runs on this thread: per-phase profile
     LS.profile()
     t0 = time.perf_counter()
     one.run(args.ticks, 1)
@@ -47,7 +48,7 @@ def main() -> None:
                       "phases_us_per_tick": round(tot / args.ticks * 1e6, 2),
                       "wall_us_per_tick": round(sec / args.ticks * 1e6, 2)}), flush=True)
     for th in args.threads:
-        batch = LS.Batch(world, env, args.envs)
+        batch = LS.Batch(world, env, args.envs, args.orders)
         batch.run(30, th)                                   # first touch / thread start
         t0 = time.perf_counter()
         over = batch.run(args.ticks, th)

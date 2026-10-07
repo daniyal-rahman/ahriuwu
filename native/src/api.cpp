@@ -15,31 +15,53 @@ using namespace lanesim;
 
 namespace {
 
-struct Batch {
-    const World* world;
-    int n_envs;
-    size_t env_bytes;
-    std::vector<uint8_t> storage;
-    std::vector<Env> envs;
-};
-
-struct FieldInfo { const char* type; const char* name; const char* size; size_t elem; };
+struct FieldInfo { const char* type; const char* name; size_t elem; };
 
 const std::vector<FieldInfo>& fields() {
     static const std::vector<FieldInfo> f = {
-#define LANESIM_INFO(type, name, size) {#type, #name, #size, sizeof(type)},
-        LANESIM_ENV_FIELDS(LANESIM_INFO)
-#undef LANESIM_INFO
+#define X(type, name) {#type, #name, sizeof(type)},
+#include "gen/env_fields.inc"
+#undef X
     };
     return f;
 }
 
-Env env_from(void* const* ptrs) {
-    Env e;
-    void** dst = reinterpret_cast<void**>(&e);
-    for (size_t k = 0; k < fields().size(); ++k) dst[k] = ptrs[k];
-    return e;
+const std::vector<FieldInfo>& order_fields() {
+    static const std::vector<FieldInfo> f = {
+#define X(type, name) {#type, #name, sizeof(type)},
+#include "gen/orders_fields.inc"
+#undef X
+    };
+    return f;
 }
+
+template <class T>
+T from_ptrs(void* const* ptrs, size_t count) {
+    T out;
+    void** dst = reinterpret_cast<void**>(&out);
+    for (size_t k = 0; k < count; ++k) dst[k] = ptrs[k];
+    return out;
+}
+
+// Order fields are (C,) each and at most 4 bytes wide.
+struct OrderStore {
+    uint8_t bytes[32][N_CHAMPIONS * 4];
+    Orders view() {
+        Orders o;
+        void** dst = reinterpret_cast<void**>(&o);
+        for (size_t k = 0; k < order_fields().size(); ++k) dst[k] = bytes[k];
+        return o;
+    }
+};
+
+struct Batch {
+    const World* world;
+    int n_envs;
+    int order_mode;
+    size_t env_bytes;
+    std::vector<uint8_t> storage;
+    std::vector<Env> envs;
+};
 
 size_t align8(size_t v) { return (v + 7) & ~size_t(7); }
 
@@ -47,15 +69,27 @@ size_t align8(size_t v) { return (v + 7) & ~size_t(7); }
 
 extern "C" {
 
-// "type name size;" per Env field, in struct order.
+// "type name;" per Env field, in struct order.
 const char* ls_env_fields() {
     static std::string s;
     if (s.empty())
-        for (const auto& f : fields()) s += std::string(f.type) + " " + f.name + " " + f.size + ";";
+        for (const auto& f : fields()) s += std::string(f.type) + " " + f.name + ";";
     return s.c_str();
 }
 
-long ls_field_count(void* world, const char* size) { return (long)field_count(*static_cast<World*>(world), size); }
+// "type name;" per Orders field.
+const char* ls_order_fields() {
+    static std::string s;
+    if (s.empty())
+        for (const auto& f : order_fields()) s += std::string(f.type) + " " + f.name + ";";
+    return s.c_str();
+}
+
+// Element count of every Env field (ls_env_fields order), from the JAX state shapes.
+void ls_world_env_counts(void* wp, const long* counts, long n) {
+    auto& v = static_cast<World*>(wp)->env_counts;
+    v.assign(counts, counts + n);
+}
 
 void* ls_world_new() { return new World(); }
 void ls_world_free(void* w) { delete static_cast<World*>(w); }
@@ -123,6 +157,7 @@ int ls_world_array(void* wp, const char* name, const void* p, long count) {
     else if (k == "lane_paths") floats(w.lane_paths);
     else if (k == "lane_len") for (long i = 0; i < count; ++i) w.lane_len[i] = ((const int32_t*)p)[i];
     else if (k == "barracks") std::memcpy(w.barracks, p, sizeof(w.barracks));
+    else if (k == "lane_mid") std::memcpy(w.lane_mid, p, sizeof(w.lane_mid));
     else if (k == "avoid_cos") std::memcpy(w.avoid_cos, fp, sizeof(w.avoid_cos));
     else if (k == "avoid_sin") std::memcpy(w.avoid_sin, fp, sizeof(w.avoid_sin));
     else if (k == "sep_fx") floats(w.sep_fx);
@@ -151,9 +186,10 @@ void ls_world_finish(void* wp) {
 
 // One tick of an env whose fields are ``ptrs`` (ls_env_fields order). ``stats``: packet, missile, ray overflow,
 // packets, rays.
-void ls_step(void* wp, void* const* ptrs, int32_t* stats) {
-    Env e = env_from(ptrs);
-    TickStats st = step(*static_cast<World*>(wp), e);
+void ls_step(void* wp, void* const* ptrs, void* const* order_ptrs, int32_t* stats) {
+    Env e = from_ptrs<Env>(ptrs, fields().size());
+    Orders o = from_ptrs<Orders>(order_ptrs, order_fields().size());
+    TickStats st = step(*static_cast<World*>(wp), e, o);
     if (stats) {
         stats[0] = st.packet_overflow, stats[1] = st.missile_overflow, stats[2] = st.ray_overflow;
         stats[3] = st.packets, stats[4] = st.rays;
@@ -161,13 +197,14 @@ void ls_step(void* wp, void* const* ptrs, int32_t* stats) {
 }
 
 // ``n_envs`` copies of the env at ``ptrs``, owned by the library.
-void* ls_batch_new(void* wp, int n_envs, void* const* ptrs) {
+// ``order_mode``: champion orders each tick (scripted_orders: 0 none, 1 the JAX bench's walk-and-attack).
+void* ls_batch_new(void* wp, int n_envs, void* const* ptrs, int order_mode) {
     const World& w = *static_cast<World*>(wp);
-    auto* b = new Batch{&w, n_envs, 0, {}, {}};
+    auto* b = new Batch{&w, n_envs, order_mode, 0, {}, {}};
     std::vector<size_t> offset;
     for (const auto& f : fields()) {
         offset.push_back(b->env_bytes);
-        b->env_bytes += align8(field_count(w, f.size) * f.elem);
+        b->env_bytes += align8(w.env_counts[&f - fields().data()] * f.elem);
     }
     b->env_bytes = (b->env_bytes + 63) & ~size_t(63);
     b->storage.assign(b->env_bytes * n_envs, 0);
@@ -177,7 +214,7 @@ void* ls_batch_new(void* wp, int n_envs, void* const* ptrs) {
         void** dst = reinterpret_cast<void**>(&b->envs[k]);
         for (size_t f = 0; f < fields().size(); ++f) {
             dst[f] = base + offset[f];
-            std::memcpy(dst[f], ptrs[f], field_count(w, fields()[f].size) * fields()[f].elem);
+            std::memcpy(dst[f], ptrs[f], w.env_counts[f] * fields()[f].elem);
         }
     }
     return b;
@@ -196,12 +233,16 @@ void ls_batch_run(void* bp, int ticks, int threads, int32_t* stats) {
     if (threads > 0) omp_set_num_threads(threads);
 #pragma omp parallel for schedule(dynamic, 4) reduction(max : po, mo, ro)
 #endif
-    for (int k = 0; k < b.n_envs; ++k)
+    for (int k = 0; k < b.n_envs; ++k) {
+        OrderStore store;
+        Orders o = store.view();
         for (int t = 0; t < ticks; ++t) {
-            TickStats st = step(*b.world, b.envs[k]);
+            scripted_orders(*b.world, b.envs[k], o, b.order_mode);
+            TickStats st = step(*b.world, b.envs[k], o);
             po = std::max(po, st.packet_overflow), mo = std::max(mo, st.missile_overflow);
             ro = std::max(ro, st.ray_overflow);
         }
+    }
     if (stats) stats[0] = po, stats[1] = mo, stats[2] = ro;
 }
 
@@ -211,7 +252,7 @@ void ls_batch_get(void* bp, int k, void* const* ptrs) {
     const World& w = *b.world;
     void* const* src = reinterpret_cast<void* const*>(&b.envs[k]);
     for (size_t f = 0; f < fields().size(); ++f)
-        std::memcpy(ptrs[f], src[f], field_count(w, fields()[f].size) * fields()[f].elem);
+        std::memcpy(ptrs[f], src[f], w.env_counts[f] * fields()[f].elem);
 }
 
 void ls_profile(double* out, int reset) { profile(out, reset != 0); }

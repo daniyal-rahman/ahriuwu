@@ -19,19 +19,20 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "native" / "python"))
 
 SKIP = {"memo_route", "memo_anchor", "ev_n", "ev_src", "ev_dst", "rec_n", "rec"}
-# Champion rows the slice does not simulate (idle champions: their route anchors steer by the move goal).
-CHAMPION_ROWS = {"route_anchor", "ad", "aspd", "ms", "armor", "mr", "range", "windup", "hp", "max_hp"}
+# The lane slice's fields (``--fields slice``), and the champion rows of them it does not simulate.
+SLICE = set(['alive', 'armor', 'att_cooldown_left', 'att_target', 'att_target_seq', 'att_windup_left', 'attack_damage', 'attack_range', 'attack_speed', 'bounty_gold', 'bounty_level', 'bounty_xp', 'cc_champion_cc_until', 'cc_knockup_until', 'cc_root_until', 'cc_silence_until', 'cc_slow', 'cc_slow_until', 'cc_stun_until', 'econ_level', 'game_over', 'hp', 'kind', 'lane_ai_champion_aggro', 'lane_ai_engaged', 'lane_ai_first_wave', 'lane_ai_ignore_until', 'lane_ai_lane', 'lane_ai_last_attack', 'lane_ai_seq', 'lane_ai_since_attack', 'lane_ai_sweep_timer', 'lane_ai_target', 'lane_ai_target_priority', 'lane_ai_target_seq', 'lane_ai_warm_stacks', 'lane_ai_warm_until', 'lane_ai_waypoint', 'magic_resist', 'max_hp', 'missile_speed', 'missiles_alive', 'missiles_cast_id', 'missiles_crit', 'missiles_dst', 'missiles_dst_seq', 'missiles_dtype', 'missiles_flags', 'missiles_raw', 'missiles_speed', 'missiles_src', 'missiles_x', 'missiles_y', 'move_speed', 'next_seq', 'prev_damage_matrix', 'radius', 'reveal_until', 'reveal_x', 'reveal_y', 'route_anchor', 'spawn_seq', 'spawn_supers', 'spawn_time', 'spawn_unit', 'spawn_wave', 'sub', 't', 'targetable', 'team', 'tick', 'towers_first_turret_taken', 'towers_is_structure', 'towers_lane', 'towers_prereq', 'towers_targetable', 'towers_team', 'towers_turret_backdoor_until', 'towers_turret_bulwark_until', 'towers_turret_growth_active', 'towers_turret_growth_since', 'towers_turret_hp', 'towers_turret_max_hp', 'towers_turret_plates', 'towers_turret_respawn_at', 'towers_turret_tier', 'towers_turret_warm_stacks', 'towers_turret_warm_until', 'visible', 'windup', 'winner', 'x', 'y'])
+CHAMPION_ROWS = {"route_anchor", "attack_damage", "attack_speed", "move_speed", "armor", "magic_resist",
+                 "attack_range", "windup", "hp", "max_hp"}
 ULP_REL = 1e-6                    # float differences at or below this relative size are rounding (reported apart)
 
 
-def compare(world, got: dict, want: dict) -> dict:
+def compare(world, got: dict, want: dict, only=None) -> dict:
     out = {}
-    n = world.cfg.n_units
-    for name, _, size in world.fields:
-        if name in SKIP:
+    for name, _ in world.fields:
+        if name in SKIP or (only is not None and name not in only):
             continue
         a, b = got[name], want[name]
-        if name in CHAMPION_ROWS:
+        if only is not None and name in CHAMPION_ROWS:
             a, b = a[2:], b[2:]
         if a.dtype.kind == "f":
             bad = ~((a == b) | (np.isnan(a) & np.isnan(b)))
@@ -57,6 +58,9 @@ def main() -> None:
     ap.add_argument("--free", action="store_true")
     ap.add_argument("--every", type=int, default=300)
     ap.add_argument("--max-report", type=int, default=40)
+    ap.add_argument("--fields", choices=("slice", "all"), default="all")
+    ap.add_argument("--orders", choices=("none", "scripted", "chaos"), default="none",
+                    help="champion orders: none, the JAX bench's scripted ones, or golden's chaos orders")
     args = ap.parse_args()
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     import jax
@@ -68,16 +72,26 @@ def main() -> None:
     enable_compile_cache()
     cfg = build("top")
     world = LS.NativeWorld(cfg)
-    step = jax.jit(lambda s: MS.step(s, MS.no_orders(), cfg)[0])
+    from ops.modern.bench import scripted_orders
+    from ops.modern.golden import chaos_orders
+    lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
+    key = jax.random.PRNGKey(1234)
+    make_orders = {"none": lambda s, t: MS.no_orders(), "scripted": lambda s, t: scripted_orders(s, lane_mid),
+                   "chaos": lambda s, t: chaos_orders(s, jax.random.fold_in(key, t), lane_mid)}[args.orders]
+    orders_at = jax.jit(make_orders)
+    step = jax.jit(lambda s, o: MS.step(s, o, cfg)[0])
+    only = SLICE if args.fields == "slice" else None
     s = MS.init_state(cfg)
     free = LS.env_from_state(world, s) if args.free else None
     totals, reported, first_free = {}, 0, None
     for t in range(args.ticks):
-        s1 = step(s)
+        o = orders_at(s, t)
+        s1 = step(s, o)
+        no = LS.orders_from(o)
         env = LS.env_from_state(world, s)
-        stats = world.step(env)
+        stats = world.step(env, no)
         want = LS.env_from_state(world, s1)
-        diff = compare(world, env, want)
+        diff = compare(world, env, want, only)
         for k, v in diff.items():
             key = k + (" (rounding)" if v.get("rounding") else "")
             totals.setdefault(key, [0, t])[0] += 1
@@ -86,8 +100,8 @@ def main() -> None:
             print(json.dumps({"tick": t, "game_s": float(s1.t), "diff": serious}), flush=True)
             reported += 1
         if free is not None:
-            world.step(free)
-            fd = compare(world, free, want)
+            world.step(free, LS.orders_from(make_orders(LS.state_from_env(world, free, s), t)))
+            fd = compare(world, free, want, only)
             if fd and first_free is None:
                 first_free = t
                 print(json.dumps({"free_run_parts_at": t, "fields": sorted(fd)}), flush=True)

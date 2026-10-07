@@ -105,19 +105,19 @@ void vulnerable(const World& w, Env& e) {
     int n = w.n;
     bool inhib_dead[2] = {false, false}, nexus_t_alive[2] = {false, false};
     for (int i = 0; i < n; ++i) {
-        bool alive = e.tw_is_structure[i] && e.tw_hp[i] > 0.f;
-        int t = clip_team(e.tw_team[i]);
-        if (e.tw_is_structure[i] && e.tw_tier[i] == tower::INHIBITOR_BUILDING && !alive) inhib_dead[t] = true;
-        if (e.tw_is_structure[i] && e.tw_tier[i] == tower::NEXUS_TURRET && alive) nexus_t_alive[t] = true;
+        bool alive = e.towers_is_structure[i] && e.towers_turret_hp[i] > 0.f;
+        int t = clip_team(e.towers_team[i]);
+        if (e.towers_is_structure[i] && e.towers_turret_tier[i] == tower::INHIBITOR_BUILDING && !alive) inhib_dead[t] = true;
+        if (e.towers_is_structure[i] && e.towers_turret_tier[i] == tower::NEXUS_TURRET && alive) nexus_t_alive[t] = true;
     }
     for (int i = 0; i < n; ++i) {
-        bool alive = e.tw_is_structure[i] && e.tw_hp[i] > 0.f;
-        int pre = clampi(e.tw_prereq[i], 0, n - 1);
-        bool pre_dead = e.tw_prereq[i] < 0 || !(e.tw_is_structure[pre] && e.tw_hp[pre] > 0.f);
-        int t = clip_team(e.tw_team[i]);
-        bool ok = e.tw_tier[i] == tower::NEXUS_TURRET ? inhib_dead[t]
-                : (e.tw_tier[i] == tower::NEXUS_BUILDING ? inhib_dead[t] && !nexus_t_alive[t] : pre_dead);
-        e.tw_targetable[i] = alive && ok;
+        bool alive = e.towers_is_structure[i] && e.towers_turret_hp[i] > 0.f;
+        int pre = clampi(e.towers_prereq[i], 0, n - 1);
+        bool pre_dead = e.towers_prereq[i] < 0 || !(e.towers_is_structure[pre] && e.towers_turret_hp[pre] > 0.f);
+        int t = clip_team(e.towers_team[i]);
+        bool ok = e.towers_turret_tier[i] == tower::NEXUS_TURRET ? inhib_dead[t]
+                : (e.towers_turret_tier[i] == tower::NEXUS_BUILDING ? inhib_dead[t] && !nexus_t_alive[t] : pre_dead);
+        e.towers_targetable[i] = alive && ok;
     }
 }
 
@@ -126,8 +126,8 @@ void turret_tick(const World& w, Env& e, float now) {
     float dt = w.dt;
     static const float RATE[6] = {0.f, 0.f, 3.f, 6.f, 15.f, 20.f};
     for (int i = 0; i < n; ++i) {     // towers.regenerate_and_respawn on every row (vmapped in JAX)
-        int tier = e.tw_tier[i];
-        float hp = e.tw_hp[i], mx = e.tw_max_hp[i];
+        int tier = e.towers_turret_tier[i];
+        float hp = e.towers_turret_hp[i], mx = e.towers_turret_max_hp[i];
         float frac = hp / mx;
         float low = tier == tower::NEXUS_TURRET ? .4f : .3f, high = tier == tower::NEXUS_TURRET ? .7f : .75f;
         float cap = (frac <= low ? low : (frac <= high ? high : 1.f)) * mx;
@@ -135,20 +135,20 @@ void turret_tick(const World& w, Env& e, float now) {
         float rate = RATE[clampi(tier, 0, 5)];
         float nh = hp > 0.f ? std::min(cap, hp + rate * std::max(dt, 0.f)) : 0.f;
         bool respawn = (tier == tower::NEXUS_TURRET || tier == tower::INHIBITOR_BUILDING) && hp <= 0.f
-                       && now >= e.tw_respawn_at[i];
+                       && now >= e.towers_turret_respawn_at[i];
         float back = tier == tower::NEXUS_TURRET ? .4f : 1.f;
-        e.tw_hp[i] = respawn ? mx * back : nh;
+        e.towers_turret_hp[i] = respawn ? mx * back : nh;
         if (respawn) {
-            e.tw_respawn_at[i] = INF;
-            e.tw_warm_stacks[i] = 0;
-            e.tw_warm_until[i] = 0.f;
+            e.towers_turret_respawn_at[i] = INF;
+            e.towers_turret_warm_stacks[i] = 0;
+            e.towers_turret_warm_until[i] = 0.f;
         }
     }
     vulnerable(w, e);
     for (int i = 0; i < n; ++i) {     // towers.unlock
-        bool lane_turret = e.tw_is_structure[i] && e.tw_tier[i] < tower::NEXUS_TURRET;
-        float arg = (e.tw_targetable[i] && lane_turret) ? now : INF;
-        if (std::isinf(e.tw_growth_since[i])) e.tw_growth_since[i] = arg;
+        bool lane_turret = e.towers_is_structure[i] && e.towers_turret_tier[i] < tower::NEXUS_TURRET;
+        float arg = (e.towers_targetable[i] && lane_turret) ? now : INF;
+        if (std::isinf(e.towers_turret_growth_since[i])) e.towers_turret_growth_since[i] = arg;
     }
     // live minions and champions among the columns: the only units that refresh backdoor or suppress a crystal
     static thread_local std::vector<int32_t> walkers;
@@ -171,10 +171,10 @@ void turret_tick(const World& w, Env& e, float now) {
     for (int i = 0; i < n; ++i) {     // towers.advance; enemy pairs only over the structure rows
         bool minion_near = false, unit_near = false;
         bool any_foe = false;
-        for (int tm = 0; tm < 3; ++tm) any_foe |= tm != e.tw_team[i] && !far_from(i, tm);
+        for (int tm = 0; tm < 3; ++tm) any_foe |= tm != e.towers_team[i] && !far_from(i, tm);
         if (w.col_of[i] >= 0 && i >= w.struct0 && any_foe) {
             for (int c : walkers) {
-                if (e.tw_team[i] == e.team[c]) continue;
+                if (e.towers_team[i] == e.team[c]) continue;
                 bool minion = e.kind[c] == MINION;
                 if (beyond(e, i, c, std::max(tower::BACKDOOR_RADIUS,
                                              tower::ATTACK_RANGE + tower::GAMEPLAY_RADIUS + e.radius[c])))
@@ -183,25 +183,25 @@ void turret_tick(const World& w, Env& e, float now) {
                 if (minion && d <= tower::BACKDOOR_RADIUS) minion_near = true;
                 if (d <= tower::ATTACK_RANGE + tower::GAMEPLAY_RADIUS + e.radius[c]) unit_near = true;
             }
-            minion_near = minion_near && e.tw_is_structure[i];
+            minion_near = minion_near && e.towers_is_structure[i];
         }
-        bool alive = e.tw_hp[i] > 0.f;
-        if (minion_near && alive) e.tw_backdoor[i] = now + 3.f;
-        bool lane_turret = e.tw_is_structure[i] && e.tw_tier[i] < tower::NEXUS_TURRET;
-        e.tw_growth_active[i] = alive && e.tw_tier[i] < tower::NEXUS_TURRET
-                                && (e.tw_growth_active[i] || (now >= e.tw_growth_since[i] + tower::OG_PROC_COOLDOWN
+        bool alive = e.towers_turret_hp[i] > 0.f;
+        if (minion_near && alive) e.towers_turret_backdoor_until[i] = now + 3.f;
+        bool lane_turret = e.towers_is_structure[i] && e.towers_turret_tier[i] < tower::NEXUS_TURRET;
+        e.towers_turret_growth_active[i] = alive && e.towers_turret_tier[i] < tower::NEXUS_TURRET
+                                && (e.towers_turret_growth_active[i] || (now >= e.towers_turret_growth_since[i] + tower::OG_PROC_COOLDOWN
                                                               && !unit_near))
                                 && lane_turret;
-        if (now >= e.tw_warm_until[i]) e.tw_warm_stacks[i] = 0;
+        if (now >= e.towers_turret_warm_until[i]) e.towers_turret_warm_stacks[i] = 0;
     }
     for (int i = 0; i < n; ++i) {     // structure_unit_view over the units view (targetable implies alive)
-        if (!e.tw_is_structure[i]) {
+        if (!e.towers_is_structure[i]) {
             e.targetable[i] = e.targetable[i] && e.alive[i];
             continue;
         }
-        e.hp[i] = e.tw_hp[i];
-        e.alive[i] = e.tw_hp[i] > 0.f;
-        e.targetable[i] = e.tw_targetable[i];
+        e.hp[i] = e.towers_turret_hp[i];
+        e.alive[i] = e.towers_turret_hp[i] > 0.f;
+        e.targetable[i] = e.towers_targetable[i];
     }
 }
 
@@ -210,33 +210,33 @@ void structure_damage_events(const World& w, Env& e, const float* before, const 
     int n = w.n;
     bool any_kill = false, first_done = false;
     for (int i = 0; i < n; ++i) {
-        bool s = e.tw_is_structure[i];
-        int tier = e.tw_tier[i];
-        float after = s ? std::max(hp_after[i], 0.f) : e.tw_hp[i];
-        int plates = e.tw_plates[i];
+        bool s = e.towers_is_structure[i];
+        int tier = e.towers_turret_tier[i];
+        float after = s ? std::max(hp_after[i], 0.f) : e.towers_turret_hp[i];
+        int plates = e.towers_turret_plates[i];
         if (s && tier < tower::NEXUS_TURRET) {
             int cnt = 0;
-            for (float th : THR) cnt += after <= e.tw_max_hp[i] * th;
+            for (float th : THR) cnt += after <= e.towers_turret_max_hp[i] * th;
             plates = std::max(plates, cnt);
         }
         for (int k = 0; k < 4; ++k)
-            if (k >= e.tw_plates[i] && k < plates) e.tw_bulwark[i * 4 + k] = now + 20.f;
+            if (k >= e.towers_turret_plates[i] && k < plates) e.towers_turret_bulwark_until[i * 4 + k] = now + 20.f;
         bool destroyed = s && before[i] > 0.f && after <= 0.f;
         bool turret_kill = destroyed && tier <= tower::NEXUS_TURRET;
         if (turret_kill) {
-            if (!first_done && !*e.tw_first_turret) { /* first turret gold: an econ event */ }
+            if (!first_done && !*e.towers_first_turret_taken) { /* first turret gold: an econ event */ }
             first_done = true;
             any_kill = true;
         }
         if (destroyed) {
-            e.tw_respawn_at[i] = now + tower::respawn_delay(tier);
-            e.tw_warm_stacks[i] = 0;
+            e.towers_turret_respawn_at[i] = now + tower::respawn_delay(tier);
+            e.towers_turret_warm_stacks[i] = 0;
         }
-        e.tw_plates[i] = plates;
-        e.tw_hp[i] = after;
-        e.tw_growth_active[i] = e.tw_growth_active[i] && after > 0.f;
+        e.towers_turret_plates[i] = plates;
+        e.towers_turret_hp[i] = after;
+        e.towers_turret_growth_active[i] = e.towers_turret_growth_active[i] && after > 0.f;
     }
-    if (any_kill) *e.tw_first_turret = 1;
+    if (any_kill) *e.towers_first_turret_taken = 1;
     vulnerable(w, e);
 }
 
@@ -247,31 +247,31 @@ void spawn(const World& w, Env& e, float now) {
     float resp[2][3];
     for (auto& r : resp) for (float& v : r) v = INF;
     for (int i = 0; i < n; ++i) {
-        if (!(e.tw_is_structure[i] && e.tw_tier[i] == tower::INHIBITOR_BUILDING && e.tw_hp[i] <= 0.f)) continue;
-        int o = e.tw_team[i], l = e.tw_lane[i];
+        if (!(e.towers_is_structure[i] && e.towers_turret_tier[i] == tower::INHIBITOR_BUILDING && e.towers_turret_hp[i] <= 0.f)) continue;
+        int o = e.towers_team[i], l = e.towers_lane[i];
         if (o < 0 || o > 1 || l < 0 || l > 2) continue;
         down[o][l] = true;
-        resp[o][l] = std::min(resp[o][l], e.tw_respawn_at[i]);
+        resp[o][l] = std::min(resp[o][l], e.towers_turret_respawn_at[i]);
     }
     for (int o = 0; o < 2; ++o) all_down[o] = down[o][0] && down[o][1] && down[o][2];
     int due_type[2][3];
     for (int t = 0; t < 2; ++t)
         for (int l = 0; l < 3; ++l) {           // minions.lane_spawn_step; inputs describe the enemy's inhibitors
             int k = t * 3 + l, o = 1 - t;
-            int wave = e.wave[k], unit = e.unit[k], latched = e.supers[k];
+            int wave = e.spawn_wave[k], unit = e.spawn_unit[k], latched = e.spawn_supers[k];
             float t_wave = minion::wave_spawn_time(wave);
             int supers = latched >= 0 ? latched : minion::super_count(down[o][l], all_down[o], resp[o][l], t_wave);
             int kind = minion::wave_unit_type(wave, unit, supers);
             bool due = kind != minion::NONE && now >= t_wave + minion::WAVE_UNIT_GAP_S * (float)unit;
             bool more = minion::wave_unit_type(wave, unit + 1, supers) != minion::NONE;
             bool close = due && !more;
-            e.wave[k] = close ? wave + 1 : wave;
-            e.unit[k] = close ? 0 : (due ? unit + 1 : unit);
-            e.supers[k] = close ? -1 : (due ? supers : latched);
+            e.spawn_wave[k] = close ? wave + 1 : wave;
+            e.spawn_unit[k] = close ? 0 : (due ? unit + 1 : unit);
+            e.spawn_supers[k] = close ? -1 : (due ? supers : latched);
             due_type[t][l] = due ? kind : -1;
         }
     int level = 0;
-    for (int c = 0; c < N_CHAMPIONS; ++c) level = std::max(level, e.level[c]);
+    for (int c = 0; c < N_CHAMPIONS; ++c) level = std::max(level, e.econ_level[c]);
     int u = minion::upgrade_index_at(now);
     float uf = (float)std::max(u, 0), late = std::max(uf - 5.f, 0.f);
     int count = 0;
@@ -304,20 +304,20 @@ void spawn(const World& w, Env& e, float now) {
         e.x[i] = w.barracks[t][l][0], e.y[i] = w.barracks[t][l][1];
         e.hp[i] = hp, e.max_hp[i] = hp, e.radius[i] = minion::GAMEPLAY_RADIUS[k];
         e.armor[i] = minion::BASE_ARMOR[k] + (k == minion::MELEE ? minion::melee_armor(uf) : 0.f);
-        e.mr[i] = minion::BASE_MR[k];
-        e.ad[i] = minion::BASE_AD[k] + std::min(minion::AD_UP[k] * uf + minion::AD_UP_LATE[k] * late, minion::AD_MAX_BONUS[k]);
-        e.range[i] = minion::ATTACK_RANGE[k], e.aspd[i] = minion::ATTACK_SPEED[k];
-        e.ms[i] = minion::base_move_speed(now), e.windup[i] = minion::WINDUP_S[k];
+        e.magic_resist[i] = minion::BASE_MR[k];
+        e.attack_damage[i] = minion::BASE_AD[k] + std::min(minion::AD_UP[k] * uf + minion::AD_UP_LATE[k] * late, minion::AD_MAX_BONUS[k]);
+        e.attack_range[i] = minion::ATTACK_RANGE[k], e.attack_speed[i] = minion::ATTACK_SPEED[k];
+        e.move_speed[i] = minion::base_move_speed(now), e.windup[i] = minion::WINDUP_S[k];
         e.missile_speed[i] = minion::MISSILE_SPEED[k];
         e.bounty_gold[i] = minion::gold_bounty(k, u, t), e.bounty_xp[i] = minion::XP_BASE[k];
         e.bounty_level[i] = level;
         e.alive[i] = 1, e.targetable[i] = 1;
         e.spawn_seq[i] = *e.next_seq + count++;
         e.spawn_time[i] = now;
-        e.att_target[i] = -1, e.windup_left[i] = 0.f, e.cooldown_left[i] = 0.f;
+        e.att_target[i] = -1, e.att_windup_left[i] = 0.f, e.att_cooldown_left[i] = 0.f;
         e.memo_anchor[i] = -3;
-        e.stun_until[i] = e.root_until[i] = e.silence_until[i] = e.knockup_until[i] = 0.f;
-        e.slow[i] = e.slow_until[i] = e.champion_cc_until[i] = 0.f;
+        e.cc_stun_until[i] = e.cc_root_until[i] = e.cc_silence_until[i] = e.cc_knockup_until[i] = 0.f;
+        e.cc_slow[i] = e.cc_slow_until[i] = e.cc_champion_cc_until[i] = 0.f;
     }
     *e.next_seq += count;
 }
@@ -327,7 +327,7 @@ void reset_new_units(const World& w, Env& e, uint8_t* newu) {
     int n = w.n;
     size_t k = w.cols.size();
     for (int i = 0; i < n; ++i) {
-        newu[i] = e.spawn_seq[i] != e.ai_seq[i];
+        newu[i] = e.spawn_seq[i] != e.lane_ai_seq[i];
         if (newu[i]) {
             int t = clip_team(e.team[i]);
             int lane = 0;
@@ -337,31 +337,31 @@ void reset_new_units(const World& w, Env& e, uint8_t* newu) {
                 if (d < best) best = d, lane = l;
             }
             bool is_minion = e.kind[i] == MINION;
-            e.ai_seq[i] = e.spawn_seq[i];
-            e.ai_target[i] = -1, e.ai_target_seq[i] = 0, e.ai_priority[i] = NO_PRIORITY;
-            e.ai_sweep[i] = SWEEP_INTERVAL_S, e.ai_since[i] = 0.f;
-            e.ai_lane[i] = is_minion ? lane : -1, e.ai_waypoint[i] = 0;
-            e.ai_first_wave[i] = is_minion && e.spawn_time[i] < FIRST_WAVE_END_S;
-            e.ai_engaged[i] = 0, e.ai_champion_aggro[i] = 0;
+            e.lane_ai_seq[i] = e.spawn_seq[i];
+            e.lane_ai_target[i] = -1, e.lane_ai_target_seq[i] = 0, e.lane_ai_target_priority[i] = NO_PRIORITY;
+            e.lane_ai_sweep_timer[i] = SWEEP_INTERVAL_S, e.lane_ai_since_attack[i] = 0.f;
+            e.lane_ai_lane[i] = is_minion ? lane : -1, e.lane_ai_waypoint[i] = 0;
+            e.lane_ai_first_wave[i] = is_minion && e.spawn_time[i] < FIRST_WAVE_END_S;
+            e.lane_ai_engaged[i] = 0, e.lane_ai_champion_aggro[i] = 0;
             int r = w.row_m_of[i];
-            if (r >= 0) std::fill(e.ignore_until + r * k, e.ignore_until + (r + 1) * k, -INF);
+            if (r >= 0) std::fill(e.lane_ai_ignore_until + r * k, e.lane_ai_ignore_until + (r + 1) * k, -INF);
             int c = w.col_of[i];
             if (c >= 0) {
-                std::fill(e.last_attack + c * k, e.last_attack + (c + 1) * k, -INF);
-                for (size_t a = 0; a < k; ++a) e.last_attack[a * k + c] = -INF;
+                std::fill(e.lane_ai_last_attack + c * k, e.lane_ai_last_attack + (c + 1) * k, -INF);
+                for (size_t a = 0; a < k; ++a) e.lane_ai_last_attack[a * k + c] = -INF;
             }
         }
-        if (newu[i] || !e.alive[i]) e.ai_warm_stacks[i] = 0, e.ai_warm_until[i] = 0.f;
+        if (newu[i] || !e.alive[i]) e.lane_ai_warm_stacks[i] = 0, e.lane_ai_warm_until[i] = 0.f;
     }
 }
 
 // lane.ai._lane_goal for one minion row.
 void lane_goal(const World& w, const Env& e, int i, int* waypoint, float* gx, float* gy) {
-    int team = clip_team(e.team[i]), lane = clampi(e.ai_lane[i], 0, 2);
+    int team = clip_team(e.team[i]), lane = clampi(e.lane_ai_lane[i], 0, 2);
     const float* path = w.path(team, lane);
     int length = w.lane_len[lane], cap = w.path_cap;
     float px = e.x[i], py = e.y[i];
-    int k = e.ai_waypoint[i];
+    int k = e.lane_ai_waypoint[i];
     for (int it = 0; it < 3; ++it) {
         const float* wp = path + 2 * clampi(k, 0, cap - 1);
         const float* nx = path + 2 * clampi(k + 1, 0, cap - 1);
@@ -400,7 +400,7 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
     Clock sub;
     reset_new_units(w, e, sc.newu.data());
     sub.lap(S_RESET);
-    const uint8_t* dmg = e.damage_matrix;
+    const uint8_t* dmg = e.prev_damage_matrix;
 
     // Live columns as compact records (column order), and per team the others' records: rows of team t scan
     // ``foes[t]`` (raw teams differ), still in column order so argmin ties keep the first column.
@@ -424,7 +424,7 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
     for (int q = 0; q < *e.ev_n; ++q) {
         int s = e.ev_src[q], d = e.ev_dst[q], a = w.col_of[s], b = w.col_of[d];
         if (!(a >= 0 && b >= 0 && (e.kind[s] != CHAMPION || e.kind[d] == CHAMPION))) continue;
-        float& la = e.last_attack[a * K + b];
+        float& la = e.lane_ai_last_attack[a * K + b];
         bool listed = (before - la) <= ATTACK_MEMORY_S;
         la = now;
         if (!listed) {
@@ -435,11 +435,11 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
     if (*e.rec_n < 0) {
         *e.rec_n = 0;
         for (size_t p = 0; p < K * K; ++p)
-            if ((now - e.last_attack[p]) <= ATTACK_MEMORY_S) e.rec[(*e.rec_n)++] = (int)p;
+            if ((now - e.lane_ai_last_attack[p]) <= ATTACK_MEMORY_S) e.rec[(*e.rec_n)++] = (int)p;
     }
     int kept = 0;
     for (int q = 0; q < *e.rec_n; ++q)
-        if ((now - e.last_attack[e.rec[q]]) <= ATTACK_MEMORY_S) e.rec[kept++] = e.rec[q];
+        if ((now - e.lane_ai_last_attack[e.rec[q]]) <= ATTACK_MEMORY_S) e.rec[kept++] = e.rec[q];
     *e.rec_n = kept;
     int32_t* off = sc.victims_off.data();
     std::fill(off, off + K + 1, 0);
@@ -450,7 +450,7 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         }
         for (const Live& L : live) {
             int v = L.u == L.u ? w.col_of[clampi(e.att_target[L.u], 0, n - 1)] : -1;
-            if (e.windup_left[L.u] > 0.f && e.att_target[L.u] >= 0 && v >= 0 && e.alive[cols[v]]) f(L.c, v);
+            if (e.att_windup_left[L.u] > 0.f && e.att_target[L.u] >= 0 && v >= 0 && e.alive[cols[v]]) f(L.c, v);
         }
     };
     each_pair([&](int a, int) { ++off[a + 1]; });
@@ -497,7 +497,7 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         acquire_v[r] = 0;
         if (!(e.kind[i] == MINION && e.alive[i])) continue;
         int sub = clampi(e.sub[i], 0, 3);
-        bool unengaged = e.ai_first_wave[i] && !e.ai_engaged[i];
+        bool unengaged = e.lane_ai_first_wave[i] && !e.lane_ai_engaged[i];
         float acq = minion::ACQUISITION_RANGE[sub], first_acq = minion::FIRST_ACQUISITION_RANGE[sub];
         float wake = minion::WAKE_UP_RANGE[sub];
         const uint8_t* vis = e.visible + (size_t)clip_team(e.team[i]) * n;
@@ -528,29 +528,29 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         }
         const Cell* row = cells.data() + row_off[r];
         const int nrow = (int)cells.size() - row_off[r];
-        float* ign = e.ignore_until + r * K;
-        int held = e.ai_target[i];
+        float* ign = e.lane_ai_ignore_until + r * K;
+        int held = e.lane_ai_target[i];
         int hs = clampi(held, 0, n - 1);
         int held_c = w.col_of[hs];
         bool held_valid = false;
         for (int q = 0; q < nrow && !held_valid; ++q) held_valid = row[q].c == held_c;
-        bool held_ok = held >= 0 && e.spawn_seq[hs] == e.ai_target_seq[i] && held_c >= 0 && held_valid;
+        bool held_ok = held >= 0 && e.spawn_seq[hs] == e.lane_ai_target_seq[i] && held_c >= 0 && held_valid;
         bool just_lost = held >= 0 && !held_ok;
         int target = held_ok ? held : -1;
-        int tprio = held_ok ? e.ai_priority[i] : NO_PRIORITY;
+        int tprio = held_ok ? e.lane_ai_target_priority[i] : NO_PRIORITY;
         int safe = clampi(target, 0, n - 1);
-        bool in_windup = e.windup_left[i] > 0.f;
+        bool in_windup = e.att_windup_left[i] > 0.f;
         bool hit_target = (in_windup && e.att_target[i] == target) || dmg[(size_t)i * n + safe];
-        float since = target >= 0 ? (hit_target ? 0.f : e.ai_since[i] + dt) : 0.f;
+        float since = target >= 0 ? (hit_target ? 0.f : e.lane_ai_since_attack[i] + dt) : 0.f;
         // Call for Help: a strictly better P1-P4 class switches at once, except holding a turret (not first wave) or
         // mid-windup.
         Best cfh;
         for (int q = 0; q < nrow; ++q)
             if (ign[row[q].c] <= now && row[q].prio <= 4) cfh.offer(row[q].c, row[q].prio, row[q].d);
-        bool blocked = target >= 0 && e.kind[safe] == TURRET && !e.ai_first_wave[i];
+        bool blocked = target >= 0 && e.kind[safe] == TURRET && !e.lane_ai_first_wave[i];
         bool sw = cfh.c >= 0 && cfh.p < tprio && !blocked && !in_windup;
         if (sw) target = cols[cfh.c], tprio = cfh.p, since = 0.f;
-        float timer = e.ai_sweep[i] + dt;
+        float timer = e.lane_ai_sweep_timer[i] + dt;
         bool sweep = !sw && (just_lost || timer >= SWEEP_INTERVAL_S);
         if (sweep || sw) timer = 0.f;
         bool give_up = sweep && target >= 0 && since >= GIVE_UP_S;
@@ -579,17 +579,17 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         if (e.kind[i] == MINION) {
             int wp; float lgx, lgy;
             lane_goal(w, e, i, &wp, &lgx, &lgy);
-            e.ai_waypoint[i] = wp;
+            e.lane_ai_waypoint[i] = wp;
             gx[i] = lgx, gy[i] = lgy;
         }
         if (!minion) {
             gx[i] = e.x[i], gy[i] = e.y[i];
-            e.ai_priority[i] = NO_PRIORITY, e.ai_since[i] = 0.f;
+            e.lane_ai_target_priority[i] = NO_PRIORITY, e.lane_ai_since_attack[i] = 0.f;
             continue;
         }
         const Cell* row = cells.data() + row_off[r];
         const int nrow = row_off[r + 1] - row_off[r];
-        float* ign = e.ignore_until + r * K;
+        float* ign = e.lane_ai_ignore_until + r * K;
         int target = tgt[r], tprio = tprio_v[r];
         float since = since_v[r];
         if (acquire_v[r]) {
@@ -597,10 +597,10 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
             // attacked, then the closest.
             auto fw_melee = [&](int c) {
                 int u = cols[c];
-                return e.kind[u] == MINION && e.sub[u] == minion::MELEE && e.ai_first_wave[u] && e.alive[u];
+                return e.kind[u] == MINION && e.sub[u] == minion::MELEE && e.lane_ai_first_wave[u] && e.alive[u];
             };
             bool restrict_ = false;
-            if (e.ai_first_wave[i])
+            if (e.lane_ai_first_wave[i])
                 for (int q = 0; q < nrow && !restrict_; ++q)
                     restrict_ = ign[row[q].c] <= now && fw_melee(row[q].c) && row[q].prio == 5;
             int uk = unit_k(i), want = ((uk % 3) + 3) % 3;
@@ -618,18 +618,18 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
             if (acq.c >= 0) target = cols[acq.c], tprio = acq.p, since = 0.f;
         }
         int safe = clampi(target, 0, n - 1);
-        if (target >= 0 && e.kind[safe] == MINION) e.ai_engaged[i] = 1;
+        if (target >= 0 && e.kind[safe] == MINION) e.lane_ai_engaged[i] = 1;
         float d_held = std::sqrt(sq(e.x[i] - e.x[safe]) + sq(e.y[i] - e.y[safe]));
-        bool in_range = d_held <= e.range[i] + e.radius[i] + e.radius[safe];
+        bool in_range = d_held <= e.attack_range[i] + e.radius[i] + e.radius[safe];
         if (target >= 0) {
             gx[i] = in_range ? e.x[i] : e.x[safe];
             gy[i] = in_range ? e.y[i] : e.y[safe];
         }
         stop[i] = target >= 0 && in_range;
         desired[i] = target;
-        e.ai_priority[i] = target >= 0 ? tprio : NO_PRIORITY;
-        e.ai_sweep[i] = timer_v[r];
-        e.ai_since[i] = since;
+        e.lane_ai_target_priority[i] = target >= 0 ? tprio : NO_PRIORITY;
+        e.lane_ai_sweep_timer[i] = timer_v[r];
+        e.lane_ai_since_attack[i] = since;
     }
 
     sub.lap(S_PASS_B);
@@ -638,19 +638,19 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
     for (int i : w.rows_s) {
         bool turret = e.kind[i] == TURRET && e.alive[i];
         if (!turret) {
-            e.ai_champion_aggro[i] = 0, e.ai_warm_stacks[i] = 0, e.ai_warm_until[i] = 0.f;
+            e.lane_ai_champion_aggro[i] = 0, e.lane_ai_warm_stacks[i] = 0, e.lane_ai_warm_until[i] = 0.f;
             continue;
         }
         const uint8_t* vis = e.visible + (size_t)clip_team(e.team[i]) * n;
-        int held = e.ai_target[i], hs = clampi(held, 0, n - 1);
-        int lock = (held >= 0 && e.spawn_seq[hs] == e.ai_target_seq[i]) ? w.col_of[hs] : -1;
+        int held = e.lane_ai_target[i], hs = clampi(held, 0, n - 1);
+        int lock = (held >= 0 && e.spawn_seq[hs] == e.lane_ai_target_seq[i]) ? w.col_of[hs] : -1;
         float near_d[7];
         int near_c[7];
         for (int p = 0; p < 7; ++p) near_d[p] = INF, near_c[p] = -1;
         int best_p = 100, aggressor = -1;
         float aggressor_d = INF;
         bool any = false, any_aggr = false, lock_ok = false;
-        const float xi = e.x[i], yi = e.y[i], base = e.range[i] + e.radius[i];
+        const float xi = e.x[i], yi = e.y[i], base = e.attack_range[i] + e.radius[i];
         for (const Live& L : sc.foes[e.team[i] == 1 ? 1 : 0]) {
             int k = L.kind;
             if (L.team == e.team[i] || !L.targetable) continue;
@@ -683,21 +683,21 @@ void select_targets(const World& w, Env& e, float now, Scratch& sc) {
         }
         int pick = !any ? -1 : (any_aggr ? aggressor : (lock >= 0 && lock_ok ? lock : near_c[best_p]));
         int t_target = pick >= 0 ? cols[pick] : -1;
-        e.ai_champion_aggro[i] = any_aggr ? 1 : (e.ai_champion_aggro[i] && t_target == held && t_target >= 0);
+        e.lane_ai_champion_aggro[i] = any_aggr ? 1 : (e.lane_ai_champion_aggro[i] && t_target == held && t_target >= 0);
         bool hit_champ = false;
         for (int q = 0; q < *e.ev_n && !hit_champ; ++q)
             hit_champ = e.ev_src[q] == i && w.col_of[e.ev_dst[q]] >= 0 && e.kind[e.ev_dst[q]] == CHAMPION;
-        int stacks_now = now < e.ai_warm_until[i] ? e.ai_warm_stacks[i] : 0;
-        if (hit_champ) e.ai_warm_stacks[i] = std::min(stacks_now + 1, 3), e.ai_warm_until[i] = now + 5.f;
+        int stacks_now = now < e.lane_ai_warm_until[i] ? e.lane_ai_warm_stacks[i] : 0;
+        if (hit_champ) e.lane_ai_warm_stacks[i] = std::min(stacks_now + 1, 3), e.lane_ai_warm_until[i] = now + 5.f;
         desired[i] = t_target;
     }
     sub.lap(S_TURRETS);
     // Rows outside S keep no turret memory; every row's held target is this tick's choice.
     for (int i = 0; i < n; ++i) {
-        if (i < w.struct0) e.ai_champion_aggro[i] = 0, e.ai_warm_stacks[i] = 0, e.ai_warm_until[i] = 0.f;
-        if (w.row_m_of[i] < 0) e.ai_priority[i] = NO_PRIORITY, e.ai_since[i] = 0.f;
-        e.ai_target[i] = desired[i];
-        e.ai_target_seq[i] = desired[i] >= 0 ? e.spawn_seq[desired[i]] : 0;
+        if (i < w.struct0) e.lane_ai_champion_aggro[i] = 0, e.lane_ai_warm_stacks[i] = 0, e.lane_ai_warm_until[i] = 0.f;
+        if (w.row_m_of[i] < 0) e.lane_ai_target_priority[i] = NO_PRIORITY, e.lane_ai_since_attack[i] = 0.f;
+        e.lane_ai_target[i] = desired[i];
+        e.lane_ai_target_seq[i] = desired[i] >= 0 ? e.spawn_seq[desired[i]] : 0;
     }
 }
 
@@ -953,7 +953,7 @@ void collide(const World& w, Env& e, const float* x1, const float* y1, const flo
 // --- attacks (mechanics.attack_step, lane.ai.attack_packets, spawn/advance_missiles) -------------------------------
 bool in_range(const Env& e, int i, int target) {
     if (target < 0) return false;
-    return dist(e, i, target) <= e.range[i] + e.radius[i] + e.radius[target];
+    return dist(e, i, target) <= e.attack_range[i] + e.radius[i] + e.radius[target];
 }
 
 bool hostile_ok(const Env& e, int i, int t) {
@@ -966,27 +966,27 @@ void attack_step(const World& w, Env& e, const int32_t* desired, const uint8_t* 
     for (int i = 0; i < n; ++i) {
         int des = desired[i], t = clampi(des, 0, n - 1);
         bool valid = des >= 0 && hostile_ok(e, i, t);
-        bool same = des == e.att_target[i] && e.spawn_seq[t] == e.att_seq[i];
+        bool same = des == e.att_target[i] && e.spawn_seq[t] == e.att_target_seq[i];
         bool ready = valid && in_range(e, i, des) && can_attack[i] && e.alive[i];
-        bool winding = e.windup_left[i] > 0.f;
+        bool winding = e.att_windup_left[i] > 0.f;
         int at = e.att_target[i], tt = clampi(at, 0, n - 1);
-        bool target_ok = at >= 0 && hostile_ok(e, i, tt) && e.spawn_seq[tt] == e.att_seq[i];
-        bool grace = winding && (e.windup_left[i] - dt <= 1e-5f) && target_ok && in_range(e, i, at) && can_attack[i]
+        bool target_ok = at >= 0 && hostile_ok(e, i, tt) && e.spawn_seq[tt] == e.att_target_seq[i];
+        bool grace = winding && (e.att_windup_left[i] - dt <= 1e-5f) && target_ok && in_range(e, i, at) && can_attack[i]
                      && e.alive[i];
         bool cancel = winding && !(same && ready) && !grace;
-        float cooldown = std::max(e.cooldown_left[i] - dt, 0.f);
+        float cooldown = std::max(e.att_cooldown_left[i] - dt, 0.f);
         if (cancel) cooldown = 0.f;
-        float left = cancel ? 0.f : e.windup_left[i];
+        float left = cancel ? 0.f : e.att_windup_left[i];
         bool start = ready && !(winding && !cancel) && cooldown <= 0.f;
-        float period = 1.f / std::max(e.aspd[i], 1e-3f);
+        float period = 1.f / std::max(e.attack_speed[i], 1e-3f);
         if (start) left = e.windup[i], cooldown = period;
         bool held = ready || (grace && !cancel);
         bool fire = left > 0.f && (left - dt <= 1e-5f) && held;
         left = (fire || left <= 0.f) ? 0.f : std::max(left - dt, 0.f);
         int target = valid ? des : -1;
-        int seq = valid ? e.spawn_seq[t] : e.att_seq[i];
-        if (grace && !cancel) target = at, seq = e.att_seq[i];
-        e.att_target[i] = target, e.att_seq[i] = seq, e.windup_left[i] = left, e.cooldown_left[i] = cooldown;
+        int seq = valid ? e.spawn_seq[t] : e.att_target_seq[i];
+        if (grace && !cancel) target = at, seq = e.att_target_seq[i];
+        e.att_target[i] = target, e.att_target_seq[i] = seq, e.att_windup_left[i] = left, e.att_cooldown_left[i] = cooldown;
         launched[i] = fire;
     }
 }
@@ -1001,7 +1001,7 @@ void profile(double* out, bool reset) {
     }
 }
 
-TickStats step(const World& w, Env& e) {
+TickStats step(const World& w, Env& e, const Orders& o) {
     TickStats st;
     if (*e.game_over) return st;                       // a fallen Nexus freezes the world
     Scratch& sc = scratch;
@@ -1025,20 +1025,20 @@ TickStats step(const World& w, Env& e) {
     float *gx = sc.gx.data(), *gy = sc.gy.data(), *ms = sc.ms.data();
     uint8_t *active = sc.active.data(), *solid = sc.collide.data();
     for (int i = 0; i < n; ++i) {
-        bool can_move = !(e.stun_until[i] > now || e.root_until[i] > now || e.knockup_until[i] > now);
+        bool can_move = !(e.cc_stun_until[i] > now || e.cc_root_until[i] > now || e.cc_knockup_until[i] > now);
         bool minion = e.kind[i] == MINION && e.alive[i];
-        float slow = e.slow_until[i] > now ? e.slow[i] : 0.f;
-        float base = e.ms[i];
+        float slow = e.cc_slow_until[i] > now ? e.cc_slow[i] : 0.f;
+        float base = e.move_speed[i];
         if (e.kind[i] == MINION) {
             int idx = minion::wave_index_at(e.spawn_time[i]);
-            float bonus = minion::sidelane_bonus(idx + 1, e.ai_lane[i], minion::wave_spawn_time(idx), now - e.spawn_time[i]);
+            float bonus = minion::sidelane_bonus(idx + 1, e.lane_ai_lane[i], minion::wave_spawn_time(idx), now - e.spawn_time[i]);
             base = minion::soft_cap(minion::base_move_speed(now) + bonus);
         }
         ms[i] = base * (1.f - slow * (1.f - 0.f));
         active[i] = minion && !sc.stop[i] && can_move;
         if (!minion) gx[i] = e.x[i], gy[i] = e.y[i];
         bool ghost = e.kind[i] == MINION && e.alive[i] && minion::wave_index_at(e.spawn_time[i]) == 0
-                     && (now - e.spawn_time[i]) < minion::first_wave_ghost_s(e.ai_lane[i]);
+                     && (now - e.spawn_time[i]) < minion::first_wave_ghost_s(e.lane_ai_lane[i]);
         solid[i] = e.alive[i] && e.kind[i] != WARD && !is_structure(e.kind[i]) && !ghost;
     }
     float *mx = sc.nx.data(), *my = sc.ny.data();
@@ -1056,7 +1056,7 @@ TickStats step(const World& w, Env& e) {
 
     // 6. ATTACK: the attack machine on the moved positions, packets at launch, missiles.
     uint8_t* can_attack = sc.can_move.data();
-    for (int i = 0; i < n; ++i) can_attack[i] = !(e.stun_until[i] > now || e.knockup_until[i] > now) && e.alive[i];
+    for (int i = 0; i < n; ++i) can_attack[i] = !(e.cc_stun_until[i] > now || e.cc_knockup_until[i] > now) && e.alive[i];
     uint8_t* launched = sc.launched.data();
     attack_step(w, e, sc.desired.data(), can_attack, launched);
     // Minion Pushing (attack.minion_pushing): level and lane-turret leads.
@@ -1070,9 +1070,9 @@ TickStats step(const World& w, Env& e) {
     int32_t* dtype_all = sc.dtype_all.data();
     for (int i = 0; i < n; ++i) {
         float bonus = 0.f, div = 1.f;
-        if (e.kind[i] == MINION && e.ai_lane[i] >= 0) {
-            int t = clip_team(e.team[i]), l = clampi(e.ai_lane[i], 0, 2);
-            minion::pushing((float)e.level[t] - (float)e.level[1 - t], alive_t[t][l] - alive_t[1 - t][l],
+        if (e.kind[i] == MINION && e.lane_ai_lane[i] >= 0) {
+            int t = clip_team(e.team[i]), l = clampi(e.lane_ai_lane[i], 0, 2);
+            minion::pushing((float)e.econ_level[t] - (float)e.econ_level[1 - t], alive_t[t][l] - alive_t[1 - t][l],
                             std::floor(now), &bonus, &div);
         }
         push_div[i] = div;
@@ -1085,11 +1085,11 @@ TickStats step(const World& w, Env& e) {
         bool is_minion = e.kind[i] == MINION, is_turret = e.kind[i] == TURRET;
         bool t_minion = t_kind == MINION, t_champ = t_kind == CHAMPION;
         bool t_building = t_kind == INHIBITOR || t_kind == NEXUS;
-        float m_raw = e.ad[i] + (t_minion ? minion::SLAYER[sub] * e.hp[t] : 0.f);
+        float m_raw = e.attack_damage[i] + (t_minion ? minion::SLAYER[sub] * e.hp[t] : 0.f);
         m_raw = m_raw * ((sub == minion::CANNON && t_kind == TURRET) ? SIEGE_TURRET_BONUS : 1.f);
         m_raw = m_raw * ((sub == minion::SUPER && t_building) ? SUPER_BUILDING_SCALE : 1.f);
         m_raw = m_raw / ((is_minion && t_minion) ? push_div[t] : 1.f);
-        int stacks = now < e.ai_warm_until[i] ? e.ai_warm_stacks[i] : 0;
+        int stacks = now < e.lane_ai_warm_until[i] ? e.lane_ai_warm_stacks[i] : 0;
         float champ_raw = tower::attack_damage(sub, now) * tower::warming(stacks);
         float shot_raw = tower::shot_fraction(t_sub, sub) * e.max_hp[t];
         bool valid = tgt >= 0 && e.alive[i] && ((is_minion && t_kind != NONE) || (is_turret && (t_champ || t_minion)));
@@ -1115,26 +1115,26 @@ TickStats step(const World& w, Env& e) {
             int tgt = e.att_target[i];
             bool on_ward = tgt >= 0 && e.kind[clampi(tgt, 0, n - 1)] == WARD;
             if (!(launched[i] && e.missile_speed[i] > 0.f && !on_ward)) continue;
-            while (slot < M && e.m_alive[slot]) ++slot;
+            while (slot < M && e.missiles_alive[slot]) ++slot;
             if (slot >= M) { ++st.missile_overflow; continue; }
             int t = clampi(tgt, 0, n - 1);
-            e.m_alive[slot] = 1, e.m_src[slot] = i, e.m_dst[slot] = tgt, e.m_dst_seq[slot] = e.spawn_seq[t];
-            e.m_x[slot] = e.x[i], e.m_y[slot] = e.y[i], e.m_speed[slot] = e.missile_speed[i];
-            e.m_raw[slot] = raw_all[i], e.m_dtype[slot] = dtype_all[i], e.m_flags[slot] = BASIC_ATTACK;
-            e.m_cast[slot] = tick0 * CAST_ID_STRIDE + i + 1, e.m_crit[slot] = 0;
+            e.missiles_alive[slot] = 1, e.missiles_src[slot] = i, e.missiles_dst[slot] = tgt, e.missiles_dst_seq[slot] = e.spawn_seq[t];
+            e.missiles_x[slot] = e.x[i], e.missiles_y[slot] = e.y[i], e.missiles_speed[slot] = e.missile_speed[i];
+            e.missiles_raw[slot] = raw_all[i], e.missiles_dtype[slot] = dtype_all[i], e.missiles_flags[slot] = BASIC_ATTACK;
+            e.missiles_cast_id[slot] = tick0 * CAST_ID_STRIDE + i + 1, e.missiles_crit[slot] = 0;
             ++slot;
         }
         for (int s = 0; s < M; ++s) {      // advance_missiles (every slot, as in JAX)
-            int t = clampi(e.m_dst[s], 0, n - 1);
-            bool gone = !e.alive[t] || e.spawn_seq[t] != e.m_dst_seq[s];
-            float dx = e.x[t] - e.m_x[s], dy = e.y[t] - e.m_y[s];
+            int t = clampi(e.missiles_dst[s], 0, n - 1);
+            bool gone = !e.alive[t] || e.spawn_seq[t] != e.missiles_dst_seq[s];
+            float dx = e.x[t] - e.missiles_x[s], dy = e.y[t] - e.missiles_y[s];
             float d = std::sqrt(dx * dx + dy * dy);
-            float stp = e.m_speed[s] * dt;
-            bool arrive = e.m_alive[s] && !gone && (d - e.radius[t] <= stp);
+            float stp = e.missiles_speed[s] * dt;
+            bool arrive = e.missiles_alive[s] && !gone && (d - e.radius[t] <= stp);
             float f = d > 0.f ? std::min(stp / std::max(d, 1e-6f), 1.f) : 1.f;
-            e.m_x[s] = std::fma(dx, f, e.m_x[s]), e.m_y[s] = std::fma(dy, f, e.m_y[s]);
-            e.m_alive[s] = e.m_alive[s] && !gone && !arrive;
-            if (arrive) pk.push_back({e.m_src[s], e.m_dst[s], e.m_raw[s], e.m_dtype[s], e.m_flags[s], 0.f});
+            e.missiles_x[s] = std::fma(dx, f, e.missiles_x[s]), e.missiles_y[s] = std::fma(dy, f, e.missiles_y[s]);
+            e.missiles_alive[s] = e.missiles_alive[s] && !gone && !arrive;
+            if (arrive) pk.push_back({e.missiles_src[s], e.missiles_dst[s], e.missiles_raw[s], e.missiles_dtype[s], e.missiles_flags[s], 0.f});
         }
     }
     st.packets = (int)pk.size();
@@ -1151,21 +1151,21 @@ TickStats step(const World& w, Env& e) {
     for (int i = 0; i < n; ++i) {
         armor[i] = e.armor[i];
         t_mult[i] = 1.f;
-        invuln[i] = e.tw_is_structure[i] && !e.tw_targetable[i];
-        if (!e.tw_is_structure[i]) continue;
+        invuln[i] = e.towers_is_structure[i] && !e.towers_targetable[i];
+        if (!e.towers_is_structure[i]) continue;
         if (e.kind[i] == TURRET) {
             int n850 = 0;
             if (w.col_of[i] >= 0)
                 for (int c = 0; c < N_CHAMPIONS; ++c)        // champions are units [0, C), all in the columns
-                    if (e.kind[c] == CHAMPION && e.alive[c] && e.tw_team[i] != e.team[c] && dist(e, i, c) <= tower::BULWARK_RADIUS)
+                    if (e.kind[c] == CHAMPION && e.alive[c] && e.towers_team[i] != e.team[c] && dist(e, i, c) <= tower::BULWARK_RADIUS)
                         ++n850;
             int count = clampi(n850, 1, 5);
             float per_stack = 30.f + 5.f * (float)(count - 1);
             int stacks = 0;
-            for (int k = 0; k < 4; ++k) stacks += e.tw_bulwark[i * 4 + k] > now;
-            armor[i] = 60.f - (e.tw_tier[i] == tower::OUTER ? 15.f * tower::decay_steps(now) : 0.f)
+            for (int k = 0; k < 4; ++k) stacks += e.towers_turret_bulwark_until[i * 4 + k] > now;
+            armor[i] = 60.f - (e.towers_turret_tier[i] == tower::OUTER ? 15.f * tower::decay_steps(now) : 0.f)
                        + per_stack * (float)stacks;
-            if (e.tw_hp[i] > 0.f && now >= e.tw_backdoor[i]) t_mult[i] = .2f;
+            if (e.towers_turret_hp[i] > 0.f && now >= e.towers_turret_backdoor_until[i]) t_mult[i] = .2f;
         } else if (e.kind[i] == INHIBITOR || e.kind[i] == NEXUS) {
             armor[i] = tower::BUILDING_ARMOR;
         }
@@ -1185,7 +1185,7 @@ TickStats step(const World& w, Env& e) {
         r = r > 0.f ? r * (1.f - 0.f) : r;
         r = r > 0.f ? r * (1.f - pen) : r;
         r = r > 0.f ? std::max(0.f, r - 0.f) : r;
-        float mult = p.dtype == PHYSICAL ? mitigation(r) : (p.dtype == MAGIC ? mitigation(e.mr[d]) : 1.f);
+        float mult = p.dtype == PHYSICAL ? mitigation(r) : (p.dtype == MAGIC ? mitigation(e.magic_resist[d]) : 1.f);
         float post = raw * mult;
         post = is_true ? post : std::max(post - 0.f - 0.f, 0.f);
         post = std::max(post - 0.f, 0.f);
@@ -1205,10 +1205,10 @@ TickStats step(const World& w, Env& e) {
         for (int i = 0; i < n; ++i) after[i] = is_structure(e.kind[i]) ? hp_new[i] : e.hp[i];
         structure_damage_events(w, e, e.hp, after.data(), now);
     }
-    for (int q = 0; q < *e.ev_n; ++q) e.damage_matrix[(size_t)e.ev_src[q] * n + e.ev_dst[q]] = 0;
+    for (int q = 0; q < *e.ev_n; ++q) e.prev_damage_matrix[(size_t)e.ev_src[q] * n + e.ev_dst[q]] = 0;
     *e.ev_n = 0;
     for (const Packet& p : pk) {
-        uint8_t& m = e.damage_matrix[(size_t)p.src * n + p.dst];
+        uint8_t& m = e.prev_damage_matrix[(size_t)p.src * n + p.dst];
         if (!m) m = 1, e.ev_src[*e.ev_n] = p.src, e.ev_dst[*e.ev_n] = p.dst, ++*e.ev_n;
     }
 
@@ -1218,8 +1218,8 @@ TickStats step(const World& w, Env& e) {
         if (died[i]) {
             e.alive[i] = 0;
             if (e.kind[i] == MINION) e.kind[i] = NONE;
-            e.stun_until[i] = e.root_until[i] = e.silence_until[i] = e.knockup_until[i] = 0.f;
-            e.slow[i] = e.slow_until[i] = e.champion_cc_until[i] = 0.f;
+            e.cc_stun_until[i] = e.cc_root_until[i] = e.cc_silence_until[i] = e.cc_knockup_until[i] = 0.f;
+            e.cc_slow[i] = e.cc_slow_until[i] = e.cc_champion_cc_until[i] = 0.f;
         }
         e.hp[i] = e.alive[i] ? hp_new[i] : std::min(hp_new[i], 0.f);
     }
@@ -1304,12 +1304,38 @@ TickStats step(const World& w, Env& e) {
     *e.tick = tick0 + 1;
     bool lost[2] = {false, false};
     for (int i = 0; i < n; ++i)
-        if (e.tw_is_structure[i] && e.tw_tier[i] == tower::NEXUS_BUILDING && e.tw_hp[i] <= 0.f && e.tw_team[i] >= 0
-            && e.tw_team[i] < 2)
-            lost[e.tw_team[i]] = true;
+        if (e.towers_is_structure[i] && e.towers_turret_tier[i] == tower::NEXUS_BUILDING && e.towers_turret_hp[i] <= 0.f && e.towers_team[i] >= 0
+            && e.towers_team[i] < 2)
+            lost[e.towers_team[i]] = true;
     *e.game_over = lost[0] || lost[1];
     *e.winner = (lost[0] && !lost[1]) ? 1 : ((lost[1] && !lost[0]) ? 0 : -1);
     return st;
+}
+
+void scripted_orders(const World& w, const Env& e, Orders& o, int mode) {
+    for (int c = 0; c < N_CHAMPIONS; ++c) {          // world.state.no_orders
+        o.move[c] = 0, o.move_x[c] = 0.f, o.move_y[c] = 0.f, o.attack[c] = -1, o.stop[c] = 0;
+        o.cast_slot[c] = -1, o.cast_target[c] = -1, o.cast_x[c] = 0.f, o.cast_y[c] = 0.f;
+        o.summoner_slot[c] = -1, o.summoner_target[c] = -1, o.summoner_x[c] = 0.f, o.summoner_y[c] = 0.f;
+        o.item_active[c] = 0, o.buy[c] = 0, o.sell[c] = 0, o.recall[c] = 0, o.level_up[c] = -1;
+        o.attack_move[c] = 0, o.ward_kind[c] = -1, o.ward_x[c] = 0.f, o.ward_y[c] = 0.f;
+    }
+    if (mode != 1) return;
+    // ops/modern/bench.scripted_orders: attack the nearest live enemy (not Nexus or inhibitor) within 700, else
+    // walk to the lane midpoint.
+    for (int c = 0; c < N_CHAMPIONS; ++c) {
+        float best = INF;
+        int pick = -1;
+        for (int j = 0; j < w.n; ++j) {
+            int k = e.kind[j];
+            if (e.team[j] == e.team[c] || !e.alive[j] || k == NONE || k == NEXUS || k == INHIBITOR) continue;
+            float d = std::sqrt(sq(e.x[j] - e.x[c]) + sq(e.y[j] - e.y[c]));
+            if (d < 700.f && d < best) best = d, pick = j;
+        }
+        o.attack[c] = pick;
+        o.move[c] = pick < 0;
+        o.move_x[c] = w.lane_mid[0], o.move_y[c] = w.lane_mid[1];
+    }
 }
 
 }  // namespace lanesim

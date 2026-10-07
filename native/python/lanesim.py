@@ -2,7 +2,8 @@
 
 ``NativeWorld(cfg)`` builds the C++ ``World`` from a JAX ``WorldConfig`` (layout, terrain gap tables, route graph,
 vision grid, lane paths, and the few float32 constants XLA evaluates: avoidance rotations, separation fallback
-directions, eject rings). ``env_from_state`` / ``state_fields`` map a ``ModernState`` to the native env fields;
+directions, eject rings). The native env has one field per ``ModernState`` leaf (``ops/native/gen_state.py``) plus
+native caches; ``env_from_state`` / ``state_from_env`` convert, ``orders_from`` converts ``ModernOrders``.
 ``step`` advances an env held in numpy arrays; ``Batch`` runs many envs the library owns.
 """
 from __future__ import annotations
@@ -14,16 +15,17 @@ from pathlib import Path
 import numpy as np
 
 LIB = Path(os.environ.get("LANESIM_LIB", Path(__file__).resolve().parents[1] / "build" / "liblanesim.so"))
-_CTYPES = {"float": np.float32, "int32_t": np.int32, "uint8_t": np.uint8}
+_CTYPES = {"float": np.float32, "int32_t": np.int32, "uint8_t": np.uint8, "uint32_t": np.uint32}
 
 
 def _lib():
     lib = ctypes.CDLL(str(LIB))
     P, I, L, D, S = ctypes.c_void_p, ctypes.c_int, ctypes.c_long, ctypes.c_double, ctypes.c_char_p
-    sig = {"ls_env_fields": ([], S), "ls_field_count": ([P, S], L), "ls_world_new": ([], P),
+    sig = {"ls_env_fields": ([], S), "ls_order_fields": ([], S), "ls_world_env_counts": ([P, P, L], None),
+           "ls_world_new": ([], P),
            "ls_world_free": ([P], None), "ls_world_int": ([P, S, L], I), "ls_world_float": ([P, S, D], I),
            "ls_world_array": ([P, S, P, L], I), "ls_world_finish": ([P], None),
-           "ls_step": ([P, P, P], None), "ls_batch_new": ([P, I, P], P), "ls_batch_free": ([P], None),
+           "ls_step": ([P, P, P, P], None), "ls_batch_new": ([P, I, P, I], P), "ls_batch_free": ([P], None),
            "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None),
            "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None)}
     for name, (args, res) in sig.items():
@@ -42,14 +44,23 @@ def lib():
     return _L
 
 
-def env_fields() -> list[tuple[str, str, str]]:
-    """``(name, ctype, size class)`` per native env field, in struct order."""
-    out = []
-    for item in lib().ls_env_fields().decode().split(";"):
-        if item:
-            t, name, size = item.split()
-            out.append((name, t, size))
-    return out
+def _fields(text: bytes) -> list[tuple[str, str]]:
+    return [tuple(item.split()[::-1]) for item in text.decode().split(";") if item]
+
+
+def env_fields() -> list[tuple[str, str]]:
+    """``(name, ctype)`` per native env field, in struct order."""
+    return _fields(lib().ls_env_fields())
+
+
+def order_fields() -> list[tuple[str, str]]:
+    return _fields(lib().ls_order_fields())
+
+
+def _leaves(tree) -> list[tuple[str, np.ndarray]]:
+    import jax
+    return [(jax.tree_util.keystr(p).lstrip(".").replace(".", "_"), np.asarray(v))
+            for p, v in jax.tree_util.tree_flatten_with_path(tree)[0]]
 
 
 def xla_constants(cfg) -> dict:
@@ -110,7 +121,8 @@ class NativeWorld:
                       cols=np.asarray(sl.cols, np.int32), lane_paths=np.asarray(LANE_PATHS, np.float32).ravel(),
                       lane_len=np.asarray(LANE_PATH_LEN, np.int32), barracks=np.asarray(BARRACKS, np.float32).ravel(),
                       route_points_xy=np.asarray(rt.points, np.float32), route_cells=np.asarray(rt.cells, np.int32),
-                      route_next=np.asarray(rt.next_node))
+                      route_next=np.asarray(rt.next_node),
+                      lane_mid=np.asarray(cfg.lane_path, np.float32)[np.asarray(cfg.lane_path).shape[0] // 2])
         if arrays["route_next"].dtype != np.int16:
             raise ValueError("route next-hop table must be int16")
         for team in (0, 1):
@@ -134,89 +146,89 @@ class NativeWorld:
             self._keep.append(v)
             assert L.ls_world_array(self.ptr, k.encode(), v.ctypes.data, v.size) == 0, k
         L.ls_world_finish(self.ptr)
+        from lanerl_jax.modern import world as MS
         self.fields = env_fields()
-        self.counts = {name: L.ls_field_count(self.ptr, size.encode()) for name, _, size in self.fields}
+        shapes = {name: v.shape for name, v in _leaves(MS.init_state(cfg))}
+        n, k, p = cfg.n_units, len(sl.cols), lay.packet_capacity
+        shapes.update(memo_route=(n, 4), memo_anchor=(n,), ev_n=(1,), ev_src=(p,), ev_dst=(p,), rec_n=(1,),
+                      rec=(k * k,))
+        if set(shapes) != {name for name, _ in self.fields}:
+            raise ValueError("native env fields differ from the JAX state: rerun ops/native/gen_state.py")
+        self.shapes = shapes
+        self.counts = {name: int(np.prod(shapes[name], dtype=np.int64)) for name, _ in self.fields}
+        counts = np.asarray([self.counts[name] for name, _ in self.fields], np.int64)
+        L.ls_world_env_counts(self.ptr, counts.ctypes.data, len(counts))
+        self.order_fields = order_fields()
 
     def __del__(self):
         if getattr(self, "ptr", None):
             lib().ls_world_free(self.ptr)
 
     def empty_env(self) -> dict:
-        return {name: np.zeros(self.counts[name], _CTYPES[t]) for name, t, _ in self.fields}
+        return {name: np.zeros(self.counts[name], _CTYPES[t]) for name, t in self.fields}
 
     def pointers(self, env: dict):
         arr = (ctypes.c_void_p * len(self.fields))()
-        for k, (name, t, _) in enumerate(self.fields):
+        for k, (name, t) in enumerate(self.fields):
             a = env[name]
             assert a.dtype == _CTYPES[t] and a.flags.c_contiguous and a.size == self.counts[name], name
             arr[k] = a.ctypes.data
         return arr
 
-    def step(self, env: dict) -> np.ndarray:
+    def order_pointers(self, orders: dict):
+        arr = (ctypes.c_void_p * len(self.order_fields))()
+        for k, (name, t) in enumerate(self.order_fields):
+            a = orders[name]
+            assert a.dtype == _CTYPES[t] and a.flags.c_contiguous and a.size == 2, name
+            arr[k] = a.ctypes.data
+        return arr
+
+    def step(self, env: dict, orders: dict | None = None) -> np.ndarray:
         """One tick in place; returns (packet, missile, ray overflow, packets, rays)."""
+        orders = no_orders() if orders is None else orders
         stats = np.zeros(5, np.int32)
-        lib().ls_step(self.ptr, self.pointers(env), stats.ctypes.data)
+        lib().ls_step(self.ptr, self.pointers(env), self.order_pointers(orders), stats.ctypes.data)
         return stats
 
 
-# ModernState -> native env field: (path in the state, dtype).
-STATE_FIELDS = {
-    "t": "t", "tick": "tick", "next_seq": "next_seq", "game_over": "game_over", "winner": "winner",
-    **{k: k for k in ("kind", "sub", "team", "spawn_seq", "bounty_level", "alive", "targetable", "x", "y", "hp",
-                      "max_hp", "radius", "armor", "windup", "spawn_time", "missile_speed", "bounty_gold",
-                      "bounty_xp")},
-    "mr": "magic_resist", "ad": "attack_damage", "range": "attack_range", "aspd": "attack_speed", "ms": "move_speed",
-    "wave": "spawn.wave", "unit": "spawn.unit", "supers": "spawn.supers",
-    "att_target": "att.target", "att_seq": "att.target_seq", "windup_left": "att.windup_left",
-    "cooldown_left": "att.cooldown_left",
-    **{f"m_{k}": f"missiles.{v}" for k, v in dict(alive="alive", src="src", dst="dst", dst_seq="dst_seq", x="x", y="y",
-                                                  speed="speed", raw="raw", dtype="dtype", flags="flags",
-                                                  cast="cast_id", crit="crit").items()},
-    **{k: f"cc.{k}" for k in ("stun_until", "root_until", "silence_until", "knockup_until", "slow", "slow_until",
-                              "champion_cc_until")},
-    "level": "econ.level",
-    **{f"ai_{k}": f"lane_ai.{v}" for k, v in dict(seq="seq", target="target", target_seq="target_seq",
-                                                  priority="target_priority", sweep="sweep_timer",
-                                                  since="since_attack", lane="lane", waypoint="waypoint",
-                                                  first_wave="first_wave", engaged="engaged",
-                                                  champion_aggro="champion_aggro", warm_stacks="warm_stacks",
-                                                  warm_until="warm_until").items()},
-    "ignore_until": "lane_ai.ignore_until", "last_attack": "lane_ai.last_attack",
-    **{f"tw_{k}": f"towers.turret.{v}" for k, v in dict(hp="hp", max_hp="max_hp", tier="tier", respawn_at="respawn_at",
-                                                        plates="plates", bulwark="bulwark_until",
-                                                        backdoor="backdoor_until", growth_since="growth_since",
-                                                        growth_active="growth_active", warm_stacks="warm_stacks",
-                                                        warm_until="warm_until").items()},
-    **{f"tw_{k}": f"towers.{v}" for k, v in dict(is_structure="is_structure", team="team", lane="lane",
-                                                 prereq="prereq", targetable="targetable",
-                                                 first_turret="first_turret_taken").items()},
-    "damage_matrix": "prev.damage_matrix", "visible": "visible",
-    "reveal_x": "reveal.x", "reveal_y": "reveal.y", "reveal_until": "reveal.until", "route_anchor": "route_anchor",
-}
+def orders_from(o) -> dict:
+    """Native order fields of a ``ModernOrders``."""
+    return {name: np.ascontiguousarray(np.broadcast_to(v, (2,)).astype(_CTYPES[t]))
+            for (name, v), (_, t) in zip(_leaves(o), order_fields())}
 
 
-def _get(s, path):
-    for part in path.split("."):
-        s = getattr(s, part)
-    return np.asarray(s)
+def no_orders() -> dict:
+    from lanerl_jax.modern import world as MS
+    return orders_from(MS.no_orders())
 
 
 def env_from_state(world: NativeWorld, s, env: dict | None = None) -> dict:
-    """Native env fields of a ``ModernState`` (the route memo starts empty)."""
+    """Native env fields of a ``ModernState`` (native caches rebuilt: empty route memo, events and recent attacks
+    from the damage matrix and last_attack)."""
     env = world.empty_env() if env is None else env
-    for name, t, _ in world.fields:
-        if name in STATE_FIELDS:
-            env[name][...] = _get(s, STATE_FIELDS[name]).astype(_CTYPES[t]).ravel()
+    names = dict(world.fields)
+    for name, v in _leaves(s):
+        env[name][...] = v.astype(_CTYPES[names[name]]).ravel()
     env["memo_route"][...] = np.nan
     env["memo_anchor"][...] = -3
     n = world.cfg.n_units
-    src, dst = np.nonzero(env["damage_matrix"].reshape(n, n))
+    src, dst = np.nonzero(env["prev_damage_matrix"].reshape(n, n))
     env["ev_n"][0] = len(src)
     env["ev_src"][:len(src)], env["ev_dst"][:len(dst)] = src, dst
-    rec = np.flatnonzero(np.isfinite(env["last_attack"]))         # pruned to the attack memory on the next tick
+    rec = np.flatnonzero(np.isfinite(env["lane_ai_last_attack"]))   # pruned to the attack memory next tick
     env["rec_n"][0] = len(rec)
     env["rec"][:len(rec)] = rec
     return env
+
+
+def state_from_env(world: NativeWorld, env: dict, like):
+    """The ``ModernState`` (structure and dtypes of ``like``) holding the native env's values."""
+    import jax
+    import jax.numpy as jnp
+    leaves, tree = jax.tree_util.tree_flatten(like)
+    names = [name for name, _ in _leaves(like)]
+    return jax.tree_util.tree_unflatten(tree, [jnp.asarray(env[name].reshape(np.shape(v)).astype(np.asarray(v).dtype))
+                                               for name, v in zip(names, leaves)])
 
 
 PHASES = ("spawn", "turret", "select", "move_prep", "route", "collide", "attack", "damage", "death", "timers", "fog",
@@ -233,9 +245,10 @@ def profile(reset: bool = True) -> dict:
 class Batch:
     """``n_envs`` copies of an env, stepped by the library's threads."""
 
-    def __init__(self, world: NativeWorld, env: dict, n_envs: int):
+    def __init__(self, world: NativeWorld, env: dict, n_envs: int, order_mode: int = 0):
+        """``order_mode``: 0 no orders, 1 the JAX bench's scripted walk-and-attack."""
         self.world, self.n = world, n_envs
-        self.ptr = lib().ls_batch_new(world.ptr, n_envs, world.pointers(env))
+        self.ptr = lib().ls_batch_new(world.ptr, n_envs, world.pointers(env), order_mode)
 
     def __del__(self):
         if getattr(self, "ptr", None):
