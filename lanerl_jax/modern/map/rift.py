@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..data import PATCH_DIR
-from .terrain import StaticTerrain
+from .terrain import StaticTerrain, row_gaps
 
 TABLE = PATCH_DIR / "objectives_client.json"
 N_ELEMENTS = 7
@@ -25,6 +25,7 @@ N_BARON_FORMS = 3
 
 class RiftTerrain(NamedTuple):
     walkable: Any       # (V, 2, H, W) bool per team
+    gaps: Any           # row_gaps(walkable)
     flags: Any          # (V, H, W) int32 navgrid flags
     bush_ids: Any       # (V, H, W) int32 brush labels per variant (0 = none)
     cell_size: float
@@ -54,14 +55,15 @@ def load_rift_terrain(artifact: str | None = None) -> RiftTerrain:
         walk, flags, bush = a["walkable"], a["flags"], a["bush_ids"]
     if walk.shape[0] != N_ELEMENTS * N_BARON_FORMS:
         raise ValueError("unexpected variant count")
-    return RiftTerrain(jnp.asarray(walk), jnp.asarray(flags.astype(np.int32)), jnp.asarray(bush),
+    return RiftTerrain(jnp.asarray(walk), row_gaps(walk), jnp.asarray(flags.astype(np.int32)), jnp.asarray(bush),
                        float(m["cell_size"]), float(m["min_bounds"][0]), float(m["min_bounds"][2]),
                        float(m["max_bounds"][0]), float(m["max_bounds"][2]))
 
 
 def terrain_for(rt: RiftTerrain, variant, team: int) -> StaticTerrain:
     """``StaticTerrain`` of one team for a (traced) variant index."""
-    return StaticTerrain(rt.walkable[variant, team], rt.cell_size, rt.min_x, rt.min_z, rt.max_x, rt.max_z)
+    return StaticTerrain(rt.walkable[variant, team], rt.cell_size, rt.min_x, rt.min_z, rt.max_x, rt.max_z,
+                         gaps=rt.gaps[variant, team])
 
 
 def terrain_pair(rt: RiftTerrain, variant) -> tuple:

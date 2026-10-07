@@ -14,7 +14,7 @@ import numpy as np
 
 from ..core import types as W
 from ..core.arrays import first_true
-from .terrain import is_walkable, team_view
+from .terrain import is_walkable, row_gaps, team_view
 
 STRUCTURE_FLAG = 4
 FOOTPRINT_MAX_DISTANCE = 450.0      # component centroid to structure position (largest pad radius ~400)
@@ -70,7 +70,8 @@ def walkable_masks(terrain: tuple, footprints: Footprints, alive, release) -> tu
     n = jnp.asarray(alive).shape[0]
     o = jnp.clip(owner, 0, n - 1)
     opened = (owner >= 0) & ~jnp.asarray(alive, bool)[o] & jnp.asarray(release, bool)[o]
-    return tuple(t._replace(walkable=jnp.asarray(t.walkable, bool) | opened) for t in terrain)
+    walk = tuple(jnp.asarray(t.walkable, bool) | opened for t in terrain)
+    return tuple(t._replace(walkable=w, gaps=row_gaps(w)) for t, w in zip(terrain, walk))
 
 
 _EJECT_RINGS = (50.0, 100.0, 150.0, 200.0, 275.0, 350.0, 450.0)

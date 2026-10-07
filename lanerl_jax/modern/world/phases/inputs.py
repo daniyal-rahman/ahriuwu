@@ -156,7 +156,7 @@ def run(s: ModernState, orders: ModernOrders, cfg: WorldConfig,
     terrain = cfg.terrain
     if cfg.rift is not None:
         terrain = terrain_pair(cfg.rift, s.terrain_variant)
-    if cfg.footprints is not None:
+    if cfg.footprints is not None and any(DTR.RELEASE_ON_DEATH.values()):     # else every pad stays blocked
         terrain = DTR.walkable_masks(terrain, cfg.footprints, s.alive, DTR.release_mask(cfg.unit_kind))
     return s, orders, sc._replace(champ=champ, vis_c=vis_c, in_stasis=in_stasis, caps=caps, terrain=terrain,
                                   attack_order=attack_order, moving=moving, goal=goal, amove=amove)

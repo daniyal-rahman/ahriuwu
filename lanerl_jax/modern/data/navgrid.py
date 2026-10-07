@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from . import PATCH, PATCH_DIR
-from ..map.terrain import StaticTerrain
+from ..map.terrain import StaticTerrain, row_gaps
 
 SCHEMA = "lanerl-map-grid-v1"
 COORDINATES = "world-xz; arrays[z,x]"
@@ -130,9 +130,9 @@ class ModernMapGrid:
 
     def as_jax(self, team: int | None = None):
         import jax.numpy as jnp
-        return StaticTerrain(jnp.asarray(self.walkable(team)), self.cell_size,
-                             self.min_bounds[0], self.min_bounds[2],
-                             self.max_bounds[0], self.max_bounds[2])
+        walk = jnp.asarray(self.walkable(team))
+        return StaticTerrain(walk, self.cell_size, self.min_bounds[0], self.min_bounds[2],
+                             self.max_bounds[0], self.max_bounds[2], gaps=row_gaps(walk))
 
 
 def read_ngrid(data: bytes) -> ModernMapGrid:
