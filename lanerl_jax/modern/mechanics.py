@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 
 from .core import types as W
+from .core.arrays import first_true
 from .core.stat_pipeline import cc_duration
 from .map.pathing import route_follow, route_replan, segment_clear
 from .map.terrain import is_walkable, team_view
@@ -230,7 +231,7 @@ def move_step(x: Any, y: Any, goal_x: Any, goal_y: Any, speed: Any, active: Any,
     point, ok, anchor, replan = jax.vmap(
         lambda p, g, r, a, tm: route_follow(p, g, r, a, routes, team_terrain(terrain, tm)))(pos, goal, rr, anchor, team)
     n = x.shape[0]
-    (sel,) = jnp.nonzero(replan & active, size=min(max_replans, n), fill_value=n)
+    sel, _ = first_true(replan & active, min(max_replans, n))
     i = jnp.clip(sel, 0, n - 1)
     rp, rok, ra = jax.vmap(
         lambda p, g, r, tm: route_replan(p, g, r, routes, team_terrain(terrain, tm)))(pos[i], goal[i], rr[i], team[i])

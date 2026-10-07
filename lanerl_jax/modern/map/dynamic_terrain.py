@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..core import types as W
+from ..core.arrays import first_true
 from .terrain import is_walkable, team_view
 
 STRUCTURE_FLAG = 4
@@ -100,7 +101,7 @@ def eject(x, y, team, radius, terrain: tuple, active=None, max_units: int = EJEC
 
     n = x.shape[0]
     stuck = act & ~jax.vmap(walkable)(x, y, team, r)
-    (sel,) = jnp.nonzero(stuck, size=min(max_units, n), fill_value=n)
+    sel, _ = first_true(stuck, min(max_units, n))
     i = jnp.clip(sel, 0, n - 1)
     found, nx, ny = jax.vmap(search)(x[i], y[i], team[i], r[i])
     return (x.at[sel].set(jnp.where(found, nx, x[i]), mode="drop"),

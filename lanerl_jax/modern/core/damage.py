@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 
 from .stats import MAGIC, PHYSICAL, TRUE, mitigation_multiplier
+from .arrays import first_true
 
 # Packet tags (client DamageSourceSettings) plus engine properties, one bitmask.
 TAG_AOE = 1 << 0
@@ -100,11 +101,10 @@ def concat_packets(*batches: Packets) -> Packets:
 
 def compact_packets(p: Packets, capacity: int) -> tuple[Packets, Any]:
     """Valid packets first in emission order, padded to ``capacity``; ``(packets, dropped count)``."""
-    n = p.valid.shape[0]
-    (idx,) = jnp.nonzero(p.valid, size=capacity, fill_value=n)
+    idx, count = first_true(p.valid, capacity)
     pad = lambda a: jnp.concatenate([a, jnp.zeros((1,), a.dtype)])[idx]
     out = Packets(*(pad(getattr(p, f)) for f in Packets._fields))
-    return out, jnp.maximum(jnp.sum(p.valid) - capacity, 0)
+    return out, jnp.maximum(count - capacity, 0)
 
 
 def has(flags: Any, bit: int) -> Any:
@@ -391,7 +391,7 @@ def resolve(p: Packets, off: Offense, dfn: Defense, hp: Any, max_hp: Any,
     seq = p.valid & on_champion
     par = p.valid & ~on_champion
     cap = min(n_packets, RESOLVE_CAPACITY)
-    (idx,) = jnp.nonzero(seq, size=cap, fill_value=n_packets)
+    idx, _ = first_true(seq, cap)
     take = lambda a, fill: jnp.concatenate([a, jnp.asarray([fill], a.dtype)])[idx]
     xs = (take(seq, False), take(p.dst, 0), take(final, 0.0), take(p.dtype, PHYSICAL), take(execute, False))
     carry0 = (hp, max_hp, shields, jnp.zeros((n_units,), bool))
