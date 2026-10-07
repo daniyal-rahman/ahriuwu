@@ -31,7 +31,7 @@ def _lib():
            "ls_test_names": ([], S), "ls_test_signature": ([S], S), "ls_test_call": ([S, P, P], P),
            "ls_result_leaves": ([P], L), "ls_result_code": ([P, L], ctypes.c_char), "ls_result_count": ([P, L], L),
            "ls_result_data": ([P, L], P), "ls_result_free": ([P], None),
-           "ls_data_put": ([S, P, L], None)}
+           "ls_data_put": ([S, P, L], None), "ls_world_table": ([P, S, P, L], None), "ls_env_index": ([S], L)}
     for name, (args, res) in sig.items():
         f = getattr(lib, name)
         f.argtypes, f.restype = args, res
@@ -99,6 +99,43 @@ def xla_constants(cfg) -> dict:
                 eject_r=np.asarray(jnp.repeat(rings, DTR._EJECT_DIRS), np.float32))
 
 
+def champion_tables(cfg) -> dict:
+    """Per-world champion data for ``World::tables`` (float32 tables; ints exact)."""
+    from lanerl_jax.modern import champions as K
+    from lanerl_jax.modern.core.stat_pipeline import ChampionBase
+    from lanerl_jax.modern.items.catalog import ItemStats
+    from lanerl_jax.modern.items.loadout import stat_shard_stats
+    from lanerl_jax.modern.runes import catalog as R
+    from lanerl_jax.modern.world import views as V
+    c = len(cfg.loadouts)
+    order = np.zeros((c, 20), np.int64)
+    for i in range(c):
+        so = list(V.skill_order(cfg, i))
+        order[i, :len(so)] = so[:20]
+    shard_const, shard_hs = [], []
+    for lo in cfg.loadouts:
+        shards = lo.rune_page.shards
+        st = stat_shard_stats(shards, level=1, adaptive_to_ad=None, xp=np)
+        hs = R.SHARD_HEALTH_SCALING in shards
+        # Health scaling is the only level-dependent shard (slot 3, so the only health shard when present): its
+        # health is lin(start, end, level), added per tick; everything else is constant.
+        shard_const.append([0.0 if (hs and f == "health") else float(getattr(st, f)) for f in ItemStats._fields])
+        start, end = (R.ea(R.SHARD_HEALTH_SCALING, "StatGainMin"), R.ea(R.SHARD_HEALTH_SCALING, "StatGainMax"))
+        shard_hs.append([float(hs), start, end - start])
+    out = {
+        "champion_ids": np.asarray(cfg.champion_ids), "rune_pages": np.asarray(cfg.rune_pages),
+        "champion_base": np.stack([np.asarray(getattr(cfg.champion_base, f)) for f in ChampionBase._fields]),
+        "adaptive_physical": np.asarray(cfg.adaptive_physical), "uses_energy": np.asarray(cfg.uses_energy),
+        "fountain": np.asarray(cfg.fountain), "skill_order": order,
+        "auto_skill": np.asarray([lo.auto_skill for lo in cfg.loadouts]),
+        "unit_target_ranges": np.asarray(K.unit_target_ranges(cfg.champion_ids)),
+        "shard_const": np.asarray(shard_const), "shard_hs": np.asarray(shard_hs),
+    }
+    if cfg.item_allowed is not None:
+        out["item_allowed"] = np.asarray(cfg.item_allowed)
+    return out
+
+
 class NativeWorld:
     """The C++ ``World`` of a JAX ``WorldConfig`` (keeps the borrowed tables alive)."""
 
@@ -153,6 +190,10 @@ class NativeWorld:
             v = np.ascontiguousarray(v)
             self._keep.append(v)
             assert L.ls_world_array(self.ptr, k.encode(), v.ctypes.data, v.size) == 0, k
+        for k, v in champion_tables(cfg).items():
+            v = np.ascontiguousarray(np.asarray(v, np.float64).astype(np.float32).ravel())
+            self._keep.append(v)
+            L.ls_world_table(self.ptr, k.encode(), v.ctypes.data, v.size)
         L.ls_world_finish(self.ptr)
         from lanerl_jax.modern import world as MS
         self.fields = env_fields()
@@ -169,8 +210,8 @@ class NativeWorld:
         self.order_fields = order_fields()
 
     def __del__(self):
-        if getattr(self, "ptr", None):
-            lib().ls_world_free(self.ptr)
+        if getattr(self, "ptr", None) and _L is not None:
+            _L.ls_world_free(self.ptr)
 
     def empty_env(self) -> dict:
         return {name: np.zeros(self.counts[name], _CTYPES[t]) for name, t in self.fields}
@@ -298,7 +339,7 @@ def call(name: str, *args) -> list[np.ndarray]:
 
 
 PHASES = ("spawn", "turret", "select", "move_prep", "route", "collide", "attack", "damage", "death", "timers", "fog",
-          "select.reset", "select.victims", "select.minions_a", "select.minions_b", "select.turrets")
+          "select.reset", "select.victims", "select.minions_a", "select.minions_b", "select.turrets", "champ")
 
 
 def profile(reset: bool = True) -> dict:

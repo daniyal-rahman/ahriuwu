@@ -9,6 +9,7 @@
 #include <omp.h>
 #endif
 
+#include "champ/envio.hpp"
 #include "champ/marshal.hpp"
 #include "world.hpp"
 
@@ -67,6 +68,12 @@ struct Batch {
 size_t align8(size_t v) { return (v + 7) & ~size_t(7); }
 
 }  // namespace
+
+long lanesim::env_index(const char* name) {
+    for (size_t k = 0; k < fields().size(); ++k)
+        if (std::string(fields()[k].name) == name) return (long)k;
+    return -1;
+}
 
 extern "C" {
 
@@ -175,6 +182,14 @@ int ls_world_array(void* wp, const char* name, const void* p, long count) {
     else return -1;
     return 0;
 }
+
+// A per-world table (see World::tables).
+void ls_world_table(void* wp, const char* name, const float* p, long count) {
+    static_cast<World*>(wp)->tables[name] = std::vector<float>(p, p + count);
+}
+
+// Index of the Env field ``name`` (ls_env_fields order), -1 if none.
+long ls_env_index(const char* name) { return lanesim::env_index(name); }
 
 void ls_world_finish(void* wp) {
     World& w = *static_cast<World*>(wp);

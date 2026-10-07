@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "geom.hpp"
@@ -44,6 +45,10 @@ struct World {
     std::vector<float> sep_fx, sep_fy;             // (ward0, ward0) coincident-pair fallback directions
     std::vector<float> eject_dx, eject_dy, eject_r; // dynamic_terrain.eject ring offsets (7 rings x 16 directions)
     std::vector<size_t> env_counts;                // element count of every Env field
+    // Per-world champion data from the binding (champion bases, rune pages, allow-lists, skill orders, shards...):
+    // name -> flat float32 table (ints stored as floats are exact below 2^24).
+    std::unordered_map<std::string, std::vector<float>> tables;
+    const std::vector<float>& tab(const std::string& k) const { return tables.at(k); }
     float avoid_horizon_ticks = 9.f;
 
     const float* path(int team, int lane) const {
