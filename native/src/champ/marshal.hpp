@@ -32,6 +32,25 @@ template <class T, class = void> struct has_visit : std::false_type {};
 template <class T>
 struct has_visit<T, std::void_t<decltype(std::declval<T&>().visit(AnyVisitor{}))>> : std::true_type {};
 
+// Bitwise equality of two values of a generated type: every leaf (nested fields included), element counts too.
+struct BytesVisitor {
+    std::vector<std::pair<const void*, size_t>>* out;
+    template <class U> void operator()(U& m) {
+        if constexpr (std::is_arithmetic_v<U>) out->push_back({&m, sizeof(U)});
+        else if constexpr (has_visit<U>::value) m.visit(*this);
+        else out->push_back({m.data(), m.size() * sizeof(m[0])});
+    }
+};
+template <class T> bool same_bits(const T& a, const T& b) {
+    static thread_local std::vector<std::pair<const void*, size_t>> la, lb;
+    la.clear(), lb.clear();
+    BytesVisitor va{&la}, vb{&lb};
+    va(const_cast<T&>(a)), vb(const_cast<T&>(b));
+    for (size_t i = 0; i < la.size(); ++i)
+        if (la[i].second != lb[i].second || std::memcmp(la[i].first, lb[i].first, la[i].second) != 0) return false;
+    return true;
+}
+
 // One flat leaf: element type code, element count, data.
 struct Leaf {
     char code;

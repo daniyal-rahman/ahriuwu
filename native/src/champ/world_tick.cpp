@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "../prof.hpp"
 #include "../slice.hpp"
 #include "combat.hpp"
 #include "damage.hpp"
@@ -138,7 +139,18 @@ struct ChampData {
     Arr<uint8_t> adaptive_physical, uses_energy, allowed;
     Arr<float> fountain, unit_target_ranges, shard_const, shard_hs;
     int n_runes = 0;
+    bool has_initial = false;
+    ItemEffectState initial_items;                          // the dormancy references (dispatch.hpp)
+    RuneEffectState initial_runes;
     explicit ChampData(const World& w) {
+        if (!w.initial.empty()) {
+            Env e0;
+            void** dst = reinterpret_cast<void**>(&e0);
+            for (size_t f = 0; f < w.initial.size(); ++f) dst[f] = const_cast<uint8_t*>(w.initial[f].data());
+            CombatState combat;
+            env_load(w, e0, roots().combat, combat);
+            initial_items = std::move(combat.items), initial_runes = std::move(combat.runes), has_initial = true;
+        }
         auto ints = [&](const char* k) { Arr<int32_t> a; for (float v : w.tab(k)) a.push_back((int32_t)v); return a; };
         auto bools = [&](const char* k) { Arr<uint8_t> a; for (float v : w.tab(k)) a.push_back(v != 0.f); return a; };
         auto floats = [&](const char* k) { Arr<float> a; for (float v : w.tab(k)) a.push_back(v); return a; };
@@ -987,6 +999,7 @@ void phase_damage(const World& w, Env& e, const ChampData& cd, Layer& L, const O
     // Base packets: direct, arrived, Overgrowth, kit, summoner (combat_tick prepends the carry).
     Packets base = ao.direct;
     append(base, ao.arrived), append(base, ao.og_pk), append(base, sc.kit_all.packets), append(base, sc.s_eff.packets);
+    prof::Laps laps;
     d.kdef = api::K_defense(L.kits, sc.kctx);
     Debuffs kdeb = api::K_debuffs(L.kits, sc.kctx, sc.units);
     // lane.ai.turret_defense / structure_defense_mods
@@ -1040,12 +1053,14 @@ void phase_damage(const World& w, Env& e, const ChampData& cd, Layer& L, const O
         dfn.invulnerable[h] = dfn.invulnerable[h] || sc.s_out.teleport_dash[h] || sc.in_stasis[h];
         dfn.dodge_basic[h] = d.kdef.dodge_basic[h], dfn.aoe_received_mult[h] = d.kdef.aoe_received_mult[h];
     }
+    LS_LAP(laps, "damage.0_base_defense");
     d.cc_now = sc.kit_all.cc;
     d.cc_items.slowed.resize((size_t)c * n), d.cc_items.immobilized.resize((size_t)c * n);
     for (size_t k = 0; k < (size_t)c * n; ++k) {
         d.cc_items.slowed[k] = d.cc_now.slow[k] > 0.f;
         d.cc_items.immobilized[k] = d.cc_now.stun[k] > 0.f || d.cc_now.root[k] > 0.f || d.cc_now.knockup[k] > 0.f;
     }
+    LS_LAP(laps, "damage.1_cc");
     // rune_events(ictx, n, ...)
     RuneEvents ev;
     const Ctx& ictx = sc.ictx;
@@ -1097,6 +1112,7 @@ void phase_damage(const World& w, Env& e, const ChampData& cd, Layer& L, const O
     ev.clocks.last_combat.assign(c, -BIG), ev.clocks.last_champion_combat.assign(c, -BIG);
     ev.clocks.last_hit_by_champion.assign(c, -BIG), ev.clocks.champion_combat_start.assign(c, -BIG);
     ev.clocks.struck_first.assign(c, 0), ev.clocks.last_combat_modern.assign(c, -BIG);
+    LS_LAP(laps, "damage.2_rune_events");
     // Item actives: this tick's aim, then the request (only cleanses while disabled, nothing in stasis).
     CombatState combat = L.combat;
     with_aim(combat.items.actives, arr(o.cast_target, c), arr(o.cast_x, c), arr(o.cast_y, c));
@@ -1109,11 +1125,15 @@ void phase_damage(const World& w, Env& e, const ChampData& cd, Layer& L, const O
     cast.started = sc.kit_all.cast_started, cast.slot = sc.kit_all.cast_slot, cast.target = sc.cast_order.target;
     Shields shields = L.shields;
     UnitStatus status = L.status;
-    d.out = combat_tick(combat, own, cd.pages, ictx, item_units(w, e), ao.attack, cast, item_req, base, off, dfn,
-                        arr(e.hp, n), arr(e.max_hp, n), shields, status, L.prev_kills, sc.stat, d.cc_items, ev,
-                        w.packet_capacity, w.packet_capacity / 2);
+    LS_LAP(laps, "damage.3_prep");
+    d.out = combat_tick(std::move(combat), std::move(own), cd.pages, ictx, item_units(w, e), ao.attack, std::move(cast),
+                        std::move(item_req), std::move(base), std::move(off), std::move(dfn), arr(e.hp, n),
+                        arr(e.max_hp, n), std::move(shields), std::move(status), L.prev_kills, sc.stat, d.cc_items,
+                        std::move(ev), w.packet_capacity, w.packet_capacity / 2);
+    LS_LAP(laps, "damage.4_combat_tick");
     d.hp = d.out.hp, d.max_hp = d.out.max_hp, d.shields = d.out.shields, d.status = d.out.status;
     std::tie(L.kits, d.k_dmg) = api::K_on_damage(L.kits, sc.kctx, sc.units, d.out.report);
+    LS_LAP(laps, "damage.5_kits_on_damage");
 }
 
 // --- phase 8, CC / HEAL (world/phases/cc_heal.py) ------------------------------------------------------------------
@@ -1564,6 +1584,8 @@ TickStats step_full(const World& w, Env& e, Orders& o) {
     const ChampData& cd = champ_data(w);
     slice::Scratch& ss = slice::scratch();
     ss.size(w);
+    prof::Laps laps;
+    DormancyScope dormancy(cd.has_initial ? &cd.initial_items : nullptr, cd.has_initial ? &cd.initial_runes : nullptr);
     Layer L;
     load(w, e, L);
     TS sc;
@@ -1572,9 +1594,13 @@ TickStats step_full(const World& w, Env& e, Orders& o) {
     sc.key = rng::split(key, 0), sc.k_crit = rng::split(key, 1);
     Arr<uint8_t> vis0 = arr(e.visible, (size_t)2 * n), alive0 = arr(e.alive, n);
     Clock clk;
+    LS_LAP(laps, "tick.0_load");
     phase_input(w, e, cd, L, o, sc);
+    LS_LAP(laps, "tick.1_input");
     phase_stats(w, e, cd, L, sc);
+    LS_LAP(laps, "tick.2_stats");
     phase_casts(w, e, cd, L, o, sc);
+    LS_LAP(laps, "tick.3_casts");
     clk.lap(slice::P_CHAMP);
     // AI: structures, minion and turret targets, champion acquisition.
     slice::turret_tick(w, e, sc.now);
@@ -1583,21 +1609,29 @@ TickStats step_full(const World& w, Env& e, Orders& o) {
     slice::select_targets(w, e, sc.now, ss);
     clk.lap(slice::P_SELECT);
     phase_ai_champions(w, e, cd, L, sc, ss.desired.data());
+    LS_LAP(laps, "tick.4_ai");
     phase_move(w, e, cd, L, sc, ss);
+    LS_LAP(laps, "tick.5_move");
     clk.lap(slice::P_ROUTE);
     AttackOut ao;
     phase_attack(w, e, cd, L, sc, ss, ao, st);
+    LS_LAP(laps, "tick.6_attack");
     clk.lap(slice::P_ATTACK);
     DamageOut d;
     phase_damage(w, e, cd, L, o, sc, ao, d);
+    LS_LAP(laps, "tick.7_damage");
     ActiveWorld aw = phase_cc_heal(w, e, L, sc, d);
+    LS_LAP(laps, "tick.8_cc_heal");
     clk.lap(slice::P_DAMAGE);
     DeathOut dd;
     phase_death(w, e, cd, L, o, sc, d, dd);
+    LS_LAP(laps, "tick.9_death");
     clk.lap(slice::P_DEATH);
     phase_timers(w, e, cd, L, o, sc, ao, d, dd, aw, vis0);
+    LS_LAP(laps, "tick.10_timers");
     clk.lap(slice::P_TIMERS);
     phase_fog(w, e, L, sc, ao, vis0, alive0, st);
+    LS_LAP(laps, "tick.11_fog");
     clk.lap(slice::P_FOG);
     // commit: CC of the dead cleared, champion unit columns from this tick's stats, the next state.
     for (int j = 0; j < n; ++j)
@@ -1616,7 +1650,7 @@ TickStats step_full(const World& w, Env& e, Orders& o) {
         e.hp[j] = e.alive[j] ? d.hp[j] : std::min(d.hp[j], 0.f);
         e.max_hp[j] = d.max_hp[j];
     }
-    L.combat = d.out.state;
+    L.combat = std::move(d.out.state);
     L.shields = d.shields, L.status = d.status;
     L.prev_kills = dd.eco.kills;
     L.prev_epic.assign(c, 0.f), L.prev_large.assign(c, 0.f);
@@ -1628,6 +1662,7 @@ TickStats step_full(const World& w, Env& e, Orders& o) {
             && e.towers_team[i] >= 0 && e.towers_team[i] < 2)
             lost[e.towers_team[i]] = true;
     *e.game_over = lost[0] || lost[1];
+    LS_LAP(laps, "tick.12_commit");
     *e.winner = (lost[0] && !lost[1]) ? 1 : ((lost[1] && !lost[0]) ? 0 : -1);
     st.packet_overflow = d.out.packet_overflow;
     return st;

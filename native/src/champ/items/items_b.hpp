@@ -110,54 +110,54 @@ void push_grid(Packets& out, const Ctx& ctx, int n, Valid valid, Raw raw, int dt
 
 namespace fighter {
 using State = items_fighter_State;
-ItemStats stats(State state, Owned own, Ctx ctx);
-HolderDefense defense(State state, Owned own, Ctx ctx);
-Debuffs debuffs(State state, Owned own, Ctx ctx, Units units);
-AttackMods attack_mods(State state, Owned own, Ctx ctx, Units units, Arr<int32_t> target);
-Arr<float> packet_amp(State state, Owned own, Ctx ctx, Units units, Packets p);
-std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units, Cast cast);
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack);
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report);
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units);
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills);
+ItemStats stats(State state, const Owned& own, const Ctx& ctx);
+HolderDefense defense(State state, const Owned& own, const Ctx& ctx);
+Debuffs debuffs(State state, const Owned& own, const Ctx& ctx, const Units& units);
+AttackMods attack_mods(State state, const Owned& own, const Ctx& ctx, const Units& units, Arr<int32_t> target);
+Arr<float> packet_amp(State state, const Owned& own, const Ctx& ctx, const Units& units, const Packets& p);
+std::tuple<State, Effects> on_cast(State state, const Owned& own, const Ctx& ctx, const Units& units, const Cast& cast);
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack);
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report);
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units);
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills);
 }  // namespace fighter
 
 namespace defense {
 using State = items_defense_State;
-ItemStats stats(State state, Owned own, Ctx ctx);
-HolderDefense defense(State state, Owned own, Ctx ctx);
-Debuffs debuffs(State state, Owned own, Ctx ctx, Units units);
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack);
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report);
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units);
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills);
+ItemStats stats(State state, const Owned& own, const Ctx& ctx);
+HolderDefense defense(State state, const Owned& own, const Ctx& ctx);
+Debuffs debuffs(State state, const Owned& own, const Ctx& ctx, const Units& units);
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack);
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report);
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units);
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills);
 }  // namespace defense
 
 namespace mage {
 using State = items_mage_State;
-ItemStats stats(State state, Owned own, Ctx ctx);
-Arr<float> dealt_amp(State state, Owned own, Ctx ctx, Units units);
-Debuffs debuffs(State state, Owned own, Ctx ctx, Units units);
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack);
-std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units, Cast cast);
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report);
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units);
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills);
+ItemStats stats(State state, const Owned& own, const Ctx& ctx);
+Arr<float> dealt_amp(State state, const Owned& own, const Ctx& ctx, const Units& units);
+Debuffs debuffs(State state, const Owned& own, const Ctx& ctx, const Units& units);
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack);
+std::tuple<State, Effects> on_cast(State state, const Owned& own, const Ctx& ctx, const Units& units, const Cast& cast);
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report);
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units);
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills);
 }  // namespace mage
 
 namespace marksman {
 using State = items_marksman_State;
-ItemStats stats(State state, Owned own, Ctx ctx);
-StatusFlags status(State state, Owned own, Ctx ctx);
-Arr<float> dealt_amp(State state, Owned own, Ctx ctx, Units units);
-AttackMods attack_mods(State state, Owned own, Ctx ctx, Units units, Arr<int32_t> target);
-Arr<float> packet_amp(State state, Owned own, Ctx ctx, Units units, Packets p);
-std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units, Cast cast);
-std::tuple<State, Effects> on_attack(State state, Owned own, Ctx ctx, Units units, Attack attack);
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack);
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report);
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units);
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills);
+ItemStats stats(State state, const Owned& own, const Ctx& ctx);
+StatusFlags status(State state, const Owned& own, const Ctx& ctx);
+Arr<float> dealt_amp(State state, const Owned& own, const Ctx& ctx, const Units& units);
+AttackMods attack_mods(State state, const Owned& own, const Ctx& ctx, const Units& units, Arr<int32_t> target);
+Arr<float> packet_amp(State state, const Owned& own, const Ctx& ctx, const Units& units, const Packets& p);
+std::tuple<State, Effects> on_cast(State state, const Owned& own, const Ctx& ctx, const Units& units, const Cast& cast);
+std::tuple<State, Effects> on_attack(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack);
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack);
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report);
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units);
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills);
 }  // namespace marksman
 
 }  // namespace lanesim::items

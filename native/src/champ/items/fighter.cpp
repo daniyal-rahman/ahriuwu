@@ -73,7 +73,7 @@ float terminus_resist(float level) {
 }  // namespace
 
 // fighter.stats
-ItemStats stats(State state, Owned own, Ctx ctx) {
+ItemStats stats(State state, const Owned& own, const Ctx& ctx) {
     const K& q = k();
     float now = ctx.now;
     ItemStats o = itemsb::stats_out({&ItemStats::attack_damage, &ItemStats::ability_haste, &ItemStats::omnivamp, &ItemStats::move_speed, &ItemStats::attack_speed, &ItemStats::percent_move_speed, &ItemStats::ultimate_haste, &ItemStats::basic_ability_haste, &ItemStats::health, &ItemStats::armor, &ItemStats::magic_resist, &ItemStats::percent_armor_pen, &ItemStats::percent_magic_pen});
@@ -105,7 +105,7 @@ ItemStats stats(State state, Owned own, Ctx ctx) {
 }
 
 // fighter.defense: Death's Dance store fraction.
-HolderDefense defense(State state, Owned own, Ctx ctx) {
+HolderDefense defense(State state, const Owned& own, const Ctx& ctx) {
     const K& q = k();
     HolderDefense d = neutral_defense(C);
     for (int c = 0; c < C; ++c)
@@ -114,7 +114,7 @@ HolderDefense defense(State state, Owned own, Ctx ctx) {
 }
 
 // fighter.debuffs: Black Cleaver Carve shred.
-Debuffs debuffs(State state, Owned own, Ctx ctx, Units units) {
+Debuffs debuffs(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     const K& q = k();
     int n = itemsb::n_units(units);
     Debuffs d = neutral_debuffs(n);
@@ -132,7 +132,7 @@ Debuffs debuffs(State state, Owned own, Ctx ctx, Units units) {
 }
 
 // fighter.attack_mods: Sundered Sky forced crit per target.
-AttackMods attack_mods(State state, Owned own, Ctx ctx, Units units, Arr<int32_t> target) {
+AttackMods attack_mods(State state, const Owned& own, const Ctx& ctx, const Units& units, Arr<int32_t> target) {
     int n = itemsb::n_units(units);
     AttackMods m;
     m.force_crit.assign(C, 0), m.crit_scale.assign(C, 1.f);
@@ -147,7 +147,7 @@ AttackMods attack_mods(State state, Owned own, Ctx ctx, Units units, Arr<int32_t
 }
 
 // fighter.packet_amp: Shojin Focused Will on ability packets.
-Arr<float> packet_amp(State state, Owned own, Ctx ctx, Units units, Packets p) {
+Arr<float> packet_amp(State state, const Owned& own, const Ctx& ctx, const Units& units, const Packets& p) {
     float amp[C];
     for (int c = 0; c < C; ++c) {   // shojin_ability_amp
         float stacks = holds(own, SHOJIN, c) && ctx.now < state.shojin_until[c] ? state.shojin[c] : 0.0f;
@@ -163,7 +163,7 @@ Arr<float> packet_amp(State state, Owned own, Ctx ctx, Units units, Packets p) {
 }
 
 // fighter.on_cast: Hexplate Overdrive timers, Shojin fresh cast.
-std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units, Cast cast) {
+std::tuple<State, Effects> on_cast(State state, const Owned& own, const Ctx& ctx, const Units& units, const Cast& cast) {
     int n = itemsb::n_units(units);
     for (int c = 0; c < C; ++c) {
         bool go = cast.started[c] && ctx.alive[c];
@@ -176,7 +176,7 @@ std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units,
 }
 
 // fighter.on_hit
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack) {
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack) {
     const K& q = k();
     int n = itemsb::n_units(units);
     float now = ctx.now;
@@ -277,7 +277,7 @@ std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, 
 }
 
 // fighter.on_damage
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report) {
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report) {
     const K& q = k();
     int n = itemsb::n_units(units);
     float now = ctx.now;
@@ -424,7 +424,7 @@ std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units unit
 }
 
 // fighter.periodic: DMP momentum, Death's Dance bleed and heal, Sabotage burn.
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units) {
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     const K& q = k();
     int n = itemsb::n_units(units);
     float now = ctx.now, dt = ctx.dt;
@@ -458,7 +458,7 @@ std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units
 }
 
 // fighter.on_takedown: Feast, Defy, Sabotage.
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills) {
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills) {
     const K& q = k();
     int n = itemsb::n_units(units);
     float now = ctx.now;

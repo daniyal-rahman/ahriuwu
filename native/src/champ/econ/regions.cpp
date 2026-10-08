@@ -159,7 +159,7 @@ F1 lane_progress_test(Arr<float> x, Arr<float> y, Arr<int32_t> team, Arr<int32_t
     return o;
 }
 std::tuple<Arr<uint8_t>, Arr<uint8_t>> homeguard_flags_test(Arr<float> x, Arr<float> y, Arr<int32_t> team, float now,
-                                                            WorldUnits units, Arr<int32_t> structure_lane,
+                                                            const WorldUnits& units, Arr<int32_t> structure_lane,
                                                             Arr<int32_t> minion_lane) {
     return homeguard_flags(x, y, team, now, units, structure_lane, minion_lane);
 }

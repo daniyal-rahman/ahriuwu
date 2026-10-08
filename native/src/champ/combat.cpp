@@ -8,6 +8,7 @@
 #include "damage.hpp"
 #include "dispatch.hpp"
 #include "marshal.hpp"
+#include "../prof.hpp"
 #include "stats.hpp"
 
 namespace lanesim::champ {
@@ -179,7 +180,7 @@ void shield_gained(const Effects& eff, const ItemStats& st, const Report& report
 
 Packets concat(std::initializer_list<const Packets*> parts) {
     Packets out = empty_packets(0);
-    for (const Packets* p : parts) append(out, *p);
+    for (const Packets* p : parts) append_valid(out, *p);
     return out;
 }
 }  // namespace
@@ -191,6 +192,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
                           int32_t follow_up_capacity) {
     const int c = (int)ctx.unit.size(), n = (int)units.x.size();
     const bool have_cc = cc.slowed.size() > 0;
+    prof::Laps laps;
     ItemEffectState& items = state.items;
     RuneEffectState& runes = state.runes;
     ev.attack = attack, ev.cast = cast;
@@ -201,6 +203,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
     ev.kills = kills, ev.own = own.counts, ev.clocks = state.clocks;
     ev.report = Report{};
 
+    LS_LAP(laps, "combat.0_events");
     // 1. STAT.50; adaptive force split once from the pre-adaptive bonus AD/AP.
     ItemStats dyn = stats::combine2(items::dynamic_stats(items, own, ctx), runes::stats(runes, page, ctx, ev));
     for (int h = 0; h < c; ++h) {
@@ -220,6 +223,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
         ev.summoner_haste[h] = st.summoner_haste[h];
     }
 
+    LS_LAP(laps, "combat.1_stats");
     // 2. STAT.70 max-HP sync: gains heal (except silent_health), losses clamp.
     Arr<float> target(c);
     for (int h = 0; h < c; ++h) {
@@ -236,6 +240,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
     units.hp = hp, units.max_hp = max_hp;
     Arr<float> dyn_silent = dyn.silent_health;
 
+    LS_LAP(laps, "combat.2_maxhp");
     // 3. Action phase: items first, then runes, in each hook.
     std::vector<Effects> parts;
     parts.push_back(items::on_cast(items, own, ctx, units, cast));
@@ -250,9 +255,19 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
         again.hit[h] = again.hit[h] | ph;
         if (ph) again.target[h] = attack.target[h];
     }
-    parts.push_back(items::on_hit(items, own, ctx, units, again));
+    // The repeat and extra-slot passes only matter where they hit: every item on_hit gates its packets, effects
+    // and state on a hit, apart from normalizations the first pass above already applied this tick (expired
+    // BotRK counts, stale Statikk targets), so a pass without hits leaves state and effects as they are.
+    auto any_hit = [&](const Attack& a) {
+        for (int h = 0; h < c; ++h)
+            if (a.hit[h]) return true;
+        return false;
+    };
+    if (any_hit(again)) parts.push_back(items::on_hit(items, own, ctx, units, again));
     Arr<uint8_t> extra = items::marksman_extra_on_hit_targets(items.marksman, ctx);
-    for (int k = 0; k < EXTRA_ON_HIT_SLOTS; ++k) {
+    bool any_extra = false;
+    for (size_t k = 0; k < extra.size(); ++k) any_extra = any_extra || extra[k];
+    for (int k = 0; k < (any_extra ? EXTRA_ON_HIT_SLOTS : 0); ++k) {
         Attack a;
         a.launched.assign(c, 0), a.hit.assign(c, 0), a.target.assign(c, 0), a.raw.assign(c, 0.f), a.is_crit.assign(c, 0);
         for (int h = 0; h < c; ++h) {     // argsort(where(extra, 0, 1)): the extra units first, then the rest
@@ -267,7 +282,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
             a.target[h] = pick;
             a.hit[h] = extra[(size_t)h * n + pick];
         }
-        parts.push_back(items::on_hit(items, own, ctx, units, a));
+        if (any_hit(a)) parts.push_back(items::on_hit(items, own, ctx, units, a));
     }
     parts.push_back(runes::on_hit(runes, page, ctx, units, ev));
     ActiveOut act;
@@ -277,9 +292,11 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
     parts.push_back(runes::periodic(runes, page, ctx, units, ev));
     if (have_cc) parts.push_back(items::on_cc(items, own, ctx, units, cc));
     parts.push_back(runes::on_cc(runes, page, ctx, units, ev));
+    LS_LAP(laps, "combat.3_actions");
     Effects pre = no_effects(c, n);
     for (const Effects& e : parts) merge_into(pre, e);
 
+    LS_LAP(laps, "combat.3_merge");
     // 4. Defense / offense.
     HolderDefense holder = items::holder_defense(items, own, ctx);
     Debuffs id = items::target_debuffs(items, own, ctx, units), rd = runes::debuffs(runes, page, ctx, units, ev);
@@ -301,10 +318,11 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
         for (size_t i = 0; i < size(p); ++i) p.block[i] = p.block[i] + rb[i];
     };
 
+    LS_LAP(laps, "combat.4_defense");
     // 5. Main resolution.
     CombatTickOut out;
     Packets packets;
-    int overflow = compact(concat({&state.carry, &base_packets, &pre.packets}), (size_t)main_capacity, packets);
+    int overflow = compact(concat({&state.carry, &base_packets, &pre.packets}), (size_t)main_capacity, packets, false);
     prepare(packets, units);
     out.report = resolve_tick(packets, off, dfn, hp, max_hp, shields, ctx.now, vamp);
     hp = out.report.resolved.hp, max_hp = out.report.resolved.max_hp, shields = out.report.resolved.shields;
@@ -315,15 +333,17 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
     Ctx ctx_d = ctx;
     for (int h = 0; h < c; ++h) ctx_d.hp[h] = hp[ctx.unit[h]], ctx_d.max_hp[h] = max_hp[ctx.unit[h]];
 
+    LS_LAP(laps, "combat.5_resolve");
     // 6. On-damage triggers.
     RuneEvents ev_d = ev;
     ev_d.report = out.report, ev_d.clocks = clocks;
     Effects eff_i = items::on_damage(items, own, ctx_d, live, out.report);
     Effects eff_r = runes::on_damage(runes, page, ctx_d, live, ev_d);
 
+    LS_LAP(laps, "combat.6_on_damage");
     // 7. Follow-up pass; its own trigger packets carry into the next tick.
     Packets follow;
-    int overflow2 = compact(concat({&eff_i.packets, &eff_r.packets}), (size_t)follow_up_capacity, follow);
+    int overflow2 = compact(concat({&eff_i.packets, &eff_r.packets}), (size_t)follow_up_capacity, follow, false);
     prepare(follow, live);
     out.follow_up = resolve_tick(follow, off, dfn, hp, max_hp, shields, ctx.now, vamp);
     hp = out.follow_up.resolved.hp, max_hp = out.follow_up.resolved.max_hp, shields = out.follow_up.resolved.shields;
@@ -338,6 +358,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
     Packets carried;
     int overflow3 = compact(concat({&eff_i2.packets, &eff_r2.packets}), CARRY_CAPACITY, carried);
 
+    LS_LAP(laps, "combat.7_follow_up");
     // 8. Takedowns, heals/shields, end of tick.
     RuneEvents ev_t = ev_f;
     ev_t.report = Report{};
@@ -350,6 +371,7 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
         merge_into(total, *e);
     }
     total.packets = empty_packets(0);
+    LS_LAP(laps, "combat.8_takedown_merge");
     Arr<float> vamp_heal(n);
     for (int j = 0; j < n; ++j)
         vamp_heal[j] = out.report.life_steal_heal[j] + out.report.omnivamp_heal[j] + out.follow_up.life_steal_heal[j]
@@ -364,22 +386,25 @@ CombatTickOut combat_tick(CombatState state, Owned own, Arr<int32_t> page, Ctx c
     for (int h = 0; h < c; ++h) ctx_p.hp[h] = hp[ctx.unit[h]], ctx_p.max_hp[h] = max_hp[ctx.unit[h]];
     Units live_p = live;
     live_p.hp = hp;
+    LS_LAP(laps, "combat.9_heal_shield");
     runes::post_tick(runes, page, ctx_p, live_p, ev_p);
     items::on_shop(items, own, ctx);
     out.rune_outputs = runes::outputs(runes, page, ctx, ev_p);
     state.clocks = clocks;
     state.dyn_health = target;
     state.dyn_silent = dyn_silent;
-    state.carry = carried;
-    out.state = state;
-    out.hp = hp, out.max_hp = max_hp, out.shields = shields, out.status = status;
+    state.carry = std::move(carried);
+    out.hp = std::move(hp), out.max_hp = std::move(max_hp), out.shields = std::move(shields);
+    out.status = std::move(status);
     out.packet_overflow = overflow + overflow2 + overflow3;
-    out.effects = total;
-    out.active = act;
-    out.dynamic_stats = dyn;
+    out.effects = std::move(total);
+    out.active = std::move(act);
+    out.dynamic_stats = std::move(dyn);
     items::starters_pending_transforms(state.items.starters, own, out.transform_from, out.transform_to, out.transform_do);
     out.consume_row = state.items.consumables.consume_row;
-    out.events = ev_p;
+    out.state = std::move(state);
+    out.events = std::move(ev_p);
+    LS_LAP(laps, "combat.10_end");
     return out;
 }
 

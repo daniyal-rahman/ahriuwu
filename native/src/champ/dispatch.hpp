@@ -6,6 +6,9 @@
 
 namespace lanesim::champ::items {
 
+// The dormancy reference of the item modules (dispatch.cpp; null: every module runs). See DormancyScope.
+void set_dormancy(const ItemEffectState* initial);
+
 ItemStats dynamic_stats(const ItemEffectState& s, const Owned& own, const Ctx& ctx);
 HolderDefense holder_defense(const ItemEffectState& s, const Owned& own, const Ctx& ctx);
 StatusFlags status(const ItemEffectState& s, const Owned& own, const Ctx& ctx);
@@ -36,6 +39,9 @@ void starters_pending_transforms(const items_starters_State& s, const Owned& own
 
 namespace lanesim::champ::runes {
 
+// The dormancy reference of the rune trees (dispatch.cpp; null: every tree runs). See DormancyScope.
+void set_dormancy(const RuneEffectState* initial);
+
 ItemStats stats(const RuneEffectState& s, const Arr<int32_t>& page, const Ctx& ctx, const RuneEvents& ev);
 Debuffs debuffs(const RuneEffectState& s, const Arr<int32_t>& page, const Ctx& ctx, const Units& units,
                 const RuneEvents& ev);
@@ -56,3 +62,18 @@ void post_tick(RuneEffectState& s, const Arr<int32_t>& page, const Ctx& ctx, con
 RuneOutputs outputs(const RuneEffectState& s, const Arr<int32_t>& page, const Ctx& ctx, const RuneEvents& ev);
 
 }  // namespace lanesim::champ::runes
+
+namespace lanesim::champ {
+
+// While alive on this thread, dormant item modules and rune trees are skipped: no holder owns one of the module's
+// items (no page has one of the tree's runes) and its state equals the world's initial one, so its hooks are
+// identities with neutral outputs. step_full holds one for the tick; direct calls (hook replays) run everything.
+class DormancyScope {
+  public:
+    DormancyScope(const ItemEffectState* items, const RuneEffectState* runes);
+    ~DormancyScope();
+    DormancyScope(const DormancyScope&) = delete;
+    DormancyScope& operator=(const DormancyScope&) = delete;
+};
+
+}  // namespace lanesim::champ

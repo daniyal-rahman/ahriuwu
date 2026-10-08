@@ -50,6 +50,9 @@ struct World {
     std::unordered_map<std::string, std::vector<float>> tables;
     const std::vector<float>& tab(const std::string& k) const { return tables.at(k); }
     float avoid_horizon_ticks = 9.f;
+    // The world's initial state (ModernState at 0:00, every Env field's bytes; empty if the binding gave none):
+    // the reference of the champion layer's dormant item modules.
+    std::vector<std::vector<uint8_t>> initial;
 
     const float* path(int team, int lane) const {
         return lane_paths.data() + ((size_t)(team * 3 + lane) * path_cap) * 2;

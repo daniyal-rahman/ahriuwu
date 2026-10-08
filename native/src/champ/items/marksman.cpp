@@ -99,7 +99,7 @@ void energized(State& state, const Owned& own, const Ctx& ctx, const Units& unit
 }  // namespace
 
 // marksman.stats
-ItemStats stats(State state, Owned own, Ctx ctx) {
+ItemStats stats(State state, const Owned& own, const Ctx& ctx) {
     float now = ctx.now;
     ItemStats o = itemsb::stats_out({&ItemStats::attack_speed, &ItemStats::crit_chance, &ItemStats::percent_move_speed, &ItemStats::move_speed, &ItemStats::lethality, &ItemStats::attack_damage, &ItemStats::ultimate_haste});
     for (int c = 0; c < C; ++c) {
@@ -121,7 +121,7 @@ ItemStats stats(State state, Owned own, Ctx ctx) {
 }
 
 // marksman.status: Phantom Dancer Spectral Waltz.
-StatusFlags status(State state, Owned own, Ctx ctx) {
+StatusFlags status(State state, const Owned& own, const Ctx& ctx) {
     StatusFlags s;
     s.ghosted.assign(C, 0);
     for (int c = 0; c < C; ++c) s.ghosted[c] = holds(own, PHANTOM, c) && ctx.alive[c];
@@ -129,7 +129,7 @@ StatusFlags status(State state, Owned own, Ctx ctx) {
 }
 
 // marksman.dealt_amp: Lord Dominik's Giant Slayer. (C, N)
-Arr<float> dealt_amp(State state, Owned own, Ctx ctx, Units units) {
+Arr<float> dealt_amp(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     int n = itemsb::n_units(units);
     Arr<float> out((size_t)C * n, 0.f);
     for (int c = 0; c < C; ++c)
@@ -141,7 +141,7 @@ Arr<float> dealt_amp(State state, Owned own, Ctx ctx, Units units) {
 }
 
 // marksman.attack_mods: Fiendhunter Opening Barrage forced crit.
-AttackMods attack_mods(State state, Owned own, Ctx ctx, Units units, Arr<int32_t> target) {
+AttackMods attack_mods(State state, const Owned& own, const Ctx& ctx, const Units& units, Arr<int32_t> target) {
     AttackMods m;
     m.force_crit.assign(C, 0), m.crit_scale.assign(C, KK("FH_CRIT"));
     for (int c = 0; c < C; ++c)
@@ -150,7 +150,7 @@ AttackMods attack_mods(State state, Owned own, Ctx ctx, Units units, Arr<int32_t
 }
 
 // marksman.packet_amp: Hexoptics Magnification on basic attacks.
-Arr<float> packet_amp(State state, Owned own, Ctx ctx, Units units, Packets p) {
+Arr<float> packet_amp(State state, const Owned& own, const Ctx& ctx, const Units& units, const Packets& p) {
     int n = itemsb::n_units(units);
     std::vector<float> amp((size_t)C * n);   // basic_attack_amp
     for (int c = 0; c < C; ++c) {
@@ -171,7 +171,7 @@ Arr<float> packet_amp(State state, Owned own, Ctx ctx, Units units, Packets p) {
 }
 
 // marksman.on_cast: Fiendhunter Opening Barrage after R.
-std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units, Cast cast) {
+std::tuple<State, Effects> on_cast(State state, const Owned& own, const Ctx& ctx, const Units& units, const Cast& cast) {
     for (int c = 0; c < C; ++c) {
         bool go = cast.started[c] && cast.slot[c] == 3 && holds(own, FIENDHUNTER, c) && ctx.now >= state.fh_cd_until[c] && ctx.alive[c];
         if (go) state.fh_charges[c] = KK("FH_N"), state.fh_until[c] = ctx.now + KK("FH_DUR"), state.fh_cd_until[c] = ctx.now + KK("FH_CD");
@@ -180,7 +180,7 @@ std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units,
 }
 
 // marksman.on_attack
-std::tuple<State, Effects> on_attack(State state, Owned own, Ctx ctx, Units units, Attack attack) {
+std::tuple<State, Effects> on_attack(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack) {
     int n = itemsb::n_units(units);
     float now = ctx.now;
     Effects e = no_effects(C, n);
@@ -259,7 +259,7 @@ std::tuple<State, Effects> on_attack(State state, Owned own, Ctx ctx, Units unit
 }
 
 // marksman.on_hit
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack) {
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack) {
     int n = itemsb::n_units(units);
     float now = ctx.now;
     Effects e = no_effects(C, n);
@@ -307,7 +307,7 @@ std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, 
 }
 
 // marksman.on_damage
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report) {
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report) {
     int n = itemsb::n_units(units);
     float now = ctx.now;
     const Packets& p = report.packets;
@@ -391,7 +391,7 @@ std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units unit
 }
 
 // marksman.periodic: Energize charge from movement.
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units) {
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     for (int c = 0; c < C; ++c) {
         float gain = holds_any(own, ENERGIZED_ITEMS, c) && ctx.alive[c] ? ctx.moved[c] / KK("ENERGY_UNITS_PER_STACK") : 0.0f;
         state.energy[c] = std::min(KK("ENERGY_MAX"), state.energy[c] + gain);
@@ -400,7 +400,7 @@ std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units
 }
 
 // marksman.on_takedown: Hubris, Hexoptics Arcane Aim, Axiom Arc, Collector gold.
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills) {
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills) {
     int n = itemsb::n_units(units);
     float now = ctx.now;
     Effects e = no_effects(C, n);

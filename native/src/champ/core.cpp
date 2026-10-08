@@ -4,7 +4,7 @@
 
 namespace lanesim::champ {
 
-int compact(const Packets& in, size_t capacity, Packets& out) {
+int compact(const Packets& in, size_t capacity, Packets& out, bool pad) {
     out = empty_packets(capacity);
     size_t k = 0;
     int dropped = 0;
@@ -16,24 +16,24 @@ int compact(const Packets& in, size_t capacity, Packets& out) {
         out.cast_id[k] = in.cast_id[i], out.block[k] = in.block[i];
         ++k;
     }
+    if (!pad) out.visit([&](auto& m) { m.resize(k); });
     return dropped;
 }
 
-namespace {
-const std::unordered_map<int, int>& rows(const char* key) {
-    static thread_local std::unordered_map<std::string, std::unordered_map<int, int>> cache;
-    auto& m = cache[key];
-    if (m.empty()) {
-        const auto& ids = data::table(key);
-        for (size_t i = 0; i < ids.size(); ++i) m[(int)ids[i]] = (int)i;
-    }
-    return m;
+RowTable::RowTable(const char* key) {
+    const auto& ids = data::table(key);
+    int mx = -1;
+    for (float id : ids) mx = std::max(mx, (int)id);    // ids are small non-negative integers
+    row.assign(mx + 1, -1);
+    for (size_t i = 0; i < ids.size(); ++i)
+        if (ids[i] >= 0) row[(int)ids[i]] = (int)i;                 // a repeated id maps to its last row
+    n = (int)ids.size();
 }
-}  // namespace
 
-int item_row(int item_id) { return rows("catalog.ids").at(item_id); }
-int n_items() { return (int)data::table("catalog.ids").size(); }
-int rune_row(int perk_id) { return rows("runes.ids").at(perk_id); }
+int rune_row(int perk_id) {
+    static const RowTable t("runes.ids");
+    return t.at(perk_id);
+}
 
 bool can_hold(const Owned& own, std::initializer_list<int> item_ids) {
     if (own.allowed.size() == 0) return true;
@@ -80,7 +80,7 @@ void concat_shields(ShieldGrant& a, const ShieldGrant& b, size_t c) {
 
 void merge_into(Effects& out, const Effects& p) {
     size_t c = out.heal.size(), n = out.slow.size();
-    append(out.packets, p.packets);
+    append_valid(out.packets, p.packets);
     for (size_t h = 0; h < c; ++h) {
         out.heal[h] = out.heal[h] + p.heal[h], out.heal_plain[h] = out.heal_plain[h] + p.heal_plain[h];
         out.mana[h] = out.mana[h] + p.mana[h];
@@ -237,7 +237,7 @@ KitOut no_out(int c, int n) {
 }
 
 void merge_out_into(KitOut& acc, const KitOut& p, int c, int n) {
-    append(acc.packets, p.packets);
+    append_valid(acc.packets, p.packets);
     merge_cc_into(acc.cc, p.cc);
     for (int h = 0; h < c; ++h) {
         if (p.dash.active[h]) {

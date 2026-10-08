@@ -450,7 +450,7 @@ struct WardGridArg {
 // Keyword arguments arrive in the captured (sorted) key order.
 std::tuple<Wards, WardEvents> ward_step_test(Wards w, Arr<uint8_t> alive, Arr<uint8_t> can_use,
                                              Arr<int32_t> control_count, float dt, WardGridArg grid, Arr<int32_t> hits,
-                                             Arr<int32_t> hitter, Arr<int32_t> level, float now, WardRequest request,
+                                             Arr<int32_t> hitter, Arr<int32_t> level, float now, const WardRequest& request,
                                              Arr<int32_t> rune_pages, Arr<int32_t> team, Arr<float> trinket_haste,
                                              Arr<int32_t> trinket_id, Arr<uint8_t> ward_visible, Arr<float> x,
                                              Arr<float> y) {

@@ -18,6 +18,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "native" / "python"
 ROUNDING = 1e-5          # float leaves within this relative difference count as rounding (XLA fuses FMAs)
 
 
+def valid_packets(tree, leaves: list) -> list:
+    """``leaves`` (flat, in ``tree``'s layout) with every Packets node reduced to its valid packets in order, and a
+    Report's per-packet Resolved arrays with them: the native side drops invalid (padding) packets between hooks
+    and in the tick's reports (core.hpp push/append_valid, compact pad=false); JAX pads to fixed shapes."""
+    import jax
+    from lanesim import _prepare
+    from lanerl_jax.modern.core.damage import Packets
+    from lanerl_jax.modern.items.effects.core import Report
+    is_leaf = lambda v: v is None or isinstance(v, (Packets, Report))           # noqa: E731
+    nodes, _ = jax.tree_util.tree_flatten(_prepare(tree), is_leaf=is_leaf)
+    out, k = [], 0
+    for node in nodes:
+        m = len(jax.tree_util.tree_leaves(node, is_leaf=lambda v: v is None)) if node is not None else 1
+        fields = [np.asarray(v).ravel() for v in leaves[k:k + m]]
+        if isinstance(node, (Packets, Report)):
+            per_packet = len(Packets._fields) + (5 if isinstance(node, Report) else 0)   # final..killed
+            keep = fields[0].astype(bool)
+            fields = [f[keep] if i < per_packet and f.size == keep.size else f for i, f in enumerate(fields)]
+        out += fields
+        k += m
+    return out
+
+
 def compare(name: str, want, got: list) -> bool:
     """``want``: JAX output pytree; ``got``: native flat leaves."""
     import jax
@@ -26,6 +49,7 @@ def compare(name: str, want, got: list) -> bool:
     if len(w) != len(got):
         print(f"FAIL {name}: {len(got)} native leaves vs {len(w)} JAX")
         return False
+    w, got = valid_packets(want, w), valid_packets(want, got)
     bad, rounding = [], [0]
     for i, (a, b) in enumerate(zip(w, got)):
         a = a.ravel()

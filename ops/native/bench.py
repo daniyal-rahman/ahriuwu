@@ -28,6 +28,7 @@ def main() -> None:
                     help="bit 0: the JAX bench's scripted orders (else none); bit 1: the full tick with champions")
     ap.add_argument("--world", choices=("golden", "bench"), default="golden",
                     help="golden top lane, or ops/modern/bench --allowlist top lane (the JAX benchmark's world)")
+    ap.add_argument("--sections", type=int, default=0, help="print the N slowest named sections of the profiled env")
     args = ap.parse_args()
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     import numpy as np
@@ -64,6 +65,15 @@ def main() -> None:
     one.run(args.ticks, 1)
     sec = time.perf_counter() - t0
     prof = LS.profile()
+    if args.sections:
+        LS.lib().ls_prof_enable(1)
+        LS.sections()
+        one.run(args.ticks, 1)
+        LS.lib().ls_prof_enable(0)
+        top = sorted(LS.sections().items(), key=lambda kv: -kv[1][0])[:args.sections]
+        for name, (s, calls) in top:
+            print(json.dumps({"section": name, "us_per_tick": round(s / args.ticks * 1e6, 2),
+                              "calls_per_tick": round(calls / args.ticks, 2)}), flush=True)
     tot = sum(v for k, v in prof.items() if "." not in k)
     print(json.dumps({"profile_us_per_tick": {k: round(v / args.ticks * 1e6, 2) for k, v in prof.items()},
                       "phases_us_per_tick": round(tot / args.ticks * 1e6, 2),

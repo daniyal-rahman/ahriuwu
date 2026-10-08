@@ -84,7 +84,7 @@ bool enemy_alive(const Ctx& ctx, const Units& u, int c, int j) { return enemy(ct
 }  // namespace
 
 // defense.stats
-ItemStats stats(State state, Owned own, Ctx ctx) {
+ItemStats stats(State state, const Owned& own, const Ctx& ctx) {
     float now = ctx.now;
     ItemStats o = itemsb::stats_out({&ItemStats::attack_damage, &ItemStats::incoming_heal, &ItemStats::health, &ItemStats::percent_move_speed, &ItemStats::tenacity, &ItemStats::omnivamp, &ItemStats::magic_resist, &ItemStats::armor});
     for (int c = 0; c < C; ++c) {
@@ -107,7 +107,7 @@ ItemStats stats(State state, Owned own, Ctx ctx) {
 }
 
 // defense.defense: Lifeline, Annul, Randuin's, Warden's.
-HolderDefense defense(State state, Owned own, Ctx ctx) {
+HolderDefense defense(State state, const Owned& own, const Ctx& ctx) {
     HolderDefense d = neutral_defense(C);
     for (int c = 0; c < C; ++c) {
         d.crit_taken_mult[c] = holds(own, RANDUINS, c) ? KK("RANDUIN_CRIT_MULT") : 1.0f;
@@ -126,7 +126,7 @@ HolderDefense defense(State state, Owned own, Ctx ctx) {
 }
 
 // defense.debuffs: Frozen Heart cripple, Abyssal Mask Unmake.
-Debuffs debuffs(State state, Owned own, Ctx ctx, Units units) {
+Debuffs debuffs(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     int n = itemsb::n_units(units);
     Debuffs d = neutral_debuffs(n);
     for (int j = 0; j < n; ++j) {
@@ -144,7 +144,7 @@ Debuffs debuffs(State state, Owned own, Ctx ctx, Units units) {
 }
 
 // defense.on_hit: Heartsteel Colossal Consumption.
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack) {
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack) {
     int n = itemsb::n_units(units);
     Effects e = no_effects(C, n);
     for (int c = 0; c < C; ++c) {
@@ -168,7 +168,7 @@ std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, 
 }
 
 // defense.on_damage
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report) {
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report) {
     int n = itemsb::n_units(units);
     float now = ctx.now;
     const Packets& p = report.packets;
@@ -298,7 +298,7 @@ std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units unit
 }
 
 // defense.periodic
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units) {
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     int n = itemsb::n_units(units);
     float now = ctx.now, dt = ctx.dt;
     const float EPS_ = KK("EPS");
@@ -379,7 +379,7 @@ std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units
 }
 
 // defense.on_takedown: Hollow Radiance Desolate (bursts not ported: they need the item; raw 0 otherwise).
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills) {
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills) {
     int n = itemsb::n_units(units);
     Effects e = no_effects(C, n);
     for (int c = 0; c < C; ++c)

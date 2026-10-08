@@ -26,13 +26,17 @@ def _lib():
            "ls_world_free": ([P], None), "ls_world_int": ([P, S, L], I), "ls_world_float": ([P, S, D], I),
            "ls_world_array": ([P, S, P, L], I), "ls_world_finish": ([P], None),
            "ls_step": ([P, P, P, P], None), "ls_step_full": ([P, P, P, P], None), "ls_batch_new": ([P, I, P, I], P), "ls_batch_free": ([P], None),
-           "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None), "ls_batch_set": ([P, I, P], None),
+           "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None), "ls_batch_set": ([P, I, P], None), "ls_world_initial": ([P, P], None),
+           "ls_prof_enable": ([I], None), "ls_prof_dump": ([I], ctypes.c_char_p),
            "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None),
            "ls_test_names": ([], S), "ls_test_signature": ([S], S), "ls_test_call": ([S, P, P], P),
            "ls_result_leaves": ([P], L), "ls_result_code": ([P, L], ctypes.c_char), "ls_result_count": ([P, L], L),
            "ls_result_data": ([P, L], P), "ls_result_free": ([P], None),
            "ls_data_put": ([S, P, L], None), "ls_world_table": ([P, S, P, L], None), "ls_env_index": ([S], L)}
+    optional = {"ls_world_initial"}                      # absent in older builds (A/B timing): feature off
     for name, (args, res) in sig.items():
+        if name in optional and not hasattr(lib, name):
+            continue
         f = getattr(lib, name)
         f.argtypes, f.restype = args, res
     return lib
@@ -208,6 +212,8 @@ class NativeWorld:
         counts = np.asarray([self.counts[name] for name, _ in self.fields], np.int64)
         L.ls_world_env_counts(self.ptr, counts.ctypes.data, len(counts))
         self.order_fields = order_fields()
+        if hasattr(L, "ls_world_initial"):                 # the dormancy reference (champ/dispatch.hpp)
+            L.ls_world_initial(self.ptr, self.pointers(env_from_state(self, MS.init_state(cfg))))
 
     def __del__(self):
         if getattr(self, "ptr", None) and _L is not None:
@@ -349,6 +355,16 @@ def profile(reset: bool = True) -> dict:
     out = np.zeros(len(PHASES))
     lib().ls_profile(out.ctypes.data, int(reset))
     return dict(zip(PHASES, (out * 1e-9).tolist()))
+
+
+def sections(reset: bool = True) -> dict:
+    """Named-section seconds and calls of this thread's native ticks (``LS_PROF`` / ``LS_LAP``, collected while
+    ``lib().ls_prof_enable(1)``)."""
+    out = {}
+    for line in lib().ls_prof_dump(int(reset)).decode().splitlines():
+        name, ns, calls = line.rsplit(" ", 2)
+        out[name] = (float(ns) * 1e-9, int(calls))
+    return out
 
 
 class Batch:

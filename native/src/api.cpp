@@ -12,6 +12,7 @@
 #include "champ/envio.hpp"
 #include "champ/marshal.hpp"
 #include "champ/world_tick.hpp"
+#include "prof.hpp"
 #include "world.hpp"
 
 using namespace lanesim;
@@ -192,6 +193,16 @@ void ls_world_table(void* wp, const char* name, const float* p, long count) {
 // Index of the Env field ``name`` (ls_env_fields order), -1 if none.
 long ls_env_index(const char* name) { return lanesim::env_index(name); }
 
+// The world's initial env (fields at ``ptrs``, ls_env_fields order).
+void ls_world_initial(void* wp, void* const* ptrs) {
+    World& w = *static_cast<World*>(wp);
+    w.initial.resize(fields().size());
+    for (size_t f = 0; f < fields().size(); ++f) {
+        const uint8_t* p = static_cast<const uint8_t*>(ptrs[f]);
+        w.initial[f].assign(p, p + w.env_counts[f] * fields()[f].elem);
+    }
+}
+
 void ls_world_finish(void* wp) {
     World& w = *static_cast<World*>(wp);
     for (auto& t : w.terrain) t.build_cheb();
@@ -284,6 +295,14 @@ void ls_batch_set(void* bp, int k, void* const* ptrs) {
 }
 
 void ls_profile(double* out, int reset) { profile(out, reset != 0); }
+
+// Named sections (prof.hpp): enable/disable, and this thread's "name ns calls" lines.
+void ls_prof_enable(int on) { lanesim::prof::enabled = on != 0; }
+const char* ls_prof_dump(int reset) {
+    static thread_local std::string s;
+    s = lanesim::prof::dump(reset != 0);
+    return s.c_str();
+}
 
 // Record route inputs/outputs of the movers (ward0 x 24 floats) during the calling thread's next steps.
 void ls_debug_route(float* out) { debug_route = out; }

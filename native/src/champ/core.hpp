@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "../gen/types.hpp"
@@ -49,19 +51,46 @@ inline void append(Packets& a, const Packets& b) {
     a.dtype.append(b.dtype), a.flags.append(b.flags), a.amp.append(b.amp), a.item.append(b.item);
     a.cast_id.append(b.cast_id), a.block.append(b.block);
 }
-// One packet appended (core.damage.packets with scalar fields).
+// Packets between hooks are sparse: the JAX modules emit fixed-shape padded arrays, but invalid packets of hook
+// effects only ever reach ``compact`` (which drops them and keeps the valid ones in order), so push and
+// append_valid drop them early. ``append`` stays a plain concatenation (reports have parallel per-packet arrays).
+inline void append_valid(Packets& a, const Packets& b) {
+    for (size_t i = 0; i < size(b); ++i) {
+        if (!b.valid[i]) continue;
+        a.valid.push_back(1), a.src.push_back(b.src[i]), a.dst.push_back(b.dst[i]), a.raw.push_back(b.raw[i]);
+        a.dtype.push_back(b.dtype[i]), a.flags.push_back(b.flags[i]), a.amp.push_back(b.amp[i]);
+        a.item.push_back(b.item[i]), a.cast_id.push_back(b.cast_id[i]), a.block.push_back(b.block[i]);
+    }
+}
+// One packet appended if valid (core.damage.packets with scalar fields).
 inline void push(Packets& p, bool valid, int src, int dst, float raw, int dtype, int flags = 0, float amp = 0.f,
                  int item = 0, int cast_id = 0, float block = 0.f) {
+    if (!valid) return;
     p.valid.push_back(valid), p.src.push_back(src), p.dst.push_back(dst), p.raw.push_back(raw);
     p.dtype.push_back(dtype), p.flags.push_back(flags), p.amp.push_back(amp), p.item.push_back(item);
     p.cast_id.push_back(cast_id), p.block.push_back(block);
 }
-// compact_packets: valid packets first in emission order, padded to ``capacity``; returns the dropped count.
-int compact(const Packets& in, size_t capacity, Packets& out);
+// compact_packets: valid packets first in emission order, padded to ``capacity`` (``pad``: the env's fixed-size
+// carry; unpadded for the tick's reports, which only ever read valid packets); returns the dropped count.
+int compact(const Packets& in, size_t capacity, Packets& out, bool pad = true);
 
 // --- ownership (items.effects.core) ------------------------------------------------------------------------------
-int item_row(int item_id);                              // catalog row (consts "catalog.ids")
-int n_items();
+// Id -> row of a consts id table, dense (built on first use: consts are loaded before any tick).
+struct RowTable {
+    std::vector<int> row;                               // -1: not in the table
+    int n = 0;
+    explicit RowTable(const char* key);
+    int at(int id) const {
+        if (id < 0 || id >= (int)row.size() || row[id] < 0) throw std::out_of_range("lanesim: unknown id " + std::to_string(id));
+        return row[id];
+    }
+};
+inline const RowTable& item_rows() {
+    static const RowTable t("catalog.ids");
+    return t;
+}
+inline int item_row(int item_id) { return item_rows().at(item_id); }   // catalog row (consts "catalog.ids")
+inline int n_items() { return item_rows().n; }
 // Static: some holder may ever hold one of the items (an empty ``allowed`` is no restriction).
 bool can_hold(const Owned& own, std::initializer_list<int> item_ids);
 // (C,) holder owns ``item_id`` (false everywhere when no holder can hold it).

@@ -72,7 +72,7 @@ bool in_zone(const State& s, const Owned& own, const Ctx& ctx, const Units& u, i
 }  // namespace
 
 // mage.stats
-ItemStats stats(State state, Owned own, Ctx ctx) {
+ItemStats stats(State state, const Owned& own, const Ctx& ctx) {
     int n = (int)(state.bf_until.size() / C);
     float now = ctx.now;
     ItemStats o = itemsb::stats_out({&ItemStats::health, &ItemStats::mana, &ItemStats::ability_power, &ItemStats::omnivamp, &ItemStats::ultimate_haste, &ItemStats::move_speed});
@@ -99,7 +99,7 @@ ItemStats stats(State state, Owned own, Ctx ctx) {
 }
 
 // mage.dealt_amp: Madness / Suffering / Void Corruption ramps, Hypershot mark. (C, N)
-Arr<float> dealt_amp(State state, Owned own, Ctx ctx, Units units) {
+Arr<float> dealt_amp(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     int n = itemsb::n_units(units);
     Arr<float> out((size_t)C * n, 0.f);
     for (int c = 0; c < C; ++c) {
@@ -114,25 +114,34 @@ Arr<float> dealt_amp(State state, Owned own, Ctx ctx, Units units) {
 }
 
 // mage.debuffs: Hatefog flat MR shred, Bloodletter's %MR shred.
-Debuffs debuffs(State state, Owned own, Ctx ctx, Units units) {
+Debuffs debuffs(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     int n = itemsb::n_units(units);
     Debuffs d = neutral_debuffs(n);
+    // Any live zone (c, z) covering j curses it: the zone checks hoisted out of the per-unit loop (in_zone).
+    std::vector<uint8_t> cursed(n, 0);
+    for (int c = 0; c < C; ++c) {
+        if (!holds(own, MALIGNANCE, c)) continue;
+        for (int z = 0; z < n; ++z) {
+            size_t cz = (size_t)c * n + z;
+            if (!(state.mal_until[cz] > ctx.now)) continue;
+            for (int j = 0; j < n; ++j)
+                if (!cursed[j]) cursed[j] = in_zone(state, own, ctx, units, c, z, j, false);
+        }
+    }
     for (int j = 0; j < n; ++j) {
-        bool cursed = false;
         float mx = 0.0f;
         for (int c = 0; c < C; ++c) {
-            for (int z = 0; z < n && !cursed; ++z) cursed = in_zone(state, own, ctx, units, c, z, j, false);
             size_t cj = (size_t)c * n + j;
             mx = std::max(mx, holds(own, BLOODLETTER, c) && state.bl_until[cj] > ctx.now ? state.bl_stacks[cj] : 0.0f);
         }
-        d.flat_mr_reduction[j] = cursed ? 10.0f : 0.0f;   // calc MagicResistanceShred
+        d.flat_mr_reduction[j] = cursed[j] ? 10.0f : 0.0f;   // calc MagicResistanceShred
         d.percent_mr_reduction[j] = mx * DV(BLOODLETTER, "ShredPerStack");
     }
     return d;
 }
 
 // mage.on_hit: Nashor's Tooth.
-std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, Attack attack) {
+std::tuple<State, Effects> on_hit(State state, const Owned& own, const Ctx& ctx, const Units& units, const Attack& attack) {
     int n = itemsb::n_units(units);
     Effects e = no_effects(C, n);
     for (int c = 0; c < C; ++c) {
@@ -144,14 +153,14 @@ std::tuple<State, Effects> on_hit(State state, Owned own, Ctx ctx, Units units, 
 }
 
 // mage.on_cast: Malignance ult attribution window.
-std::tuple<State, Effects> on_cast(State state, Owned own, Ctx ctx, Units units, Cast cast) {
+std::tuple<State, Effects> on_cast(State state, const Owned& own, const Ctx& ctx, const Units& units, const Cast& cast) {
     for (int c = 0; c < C; ++c)
         if (cast.started[c] && cast.slot[c] == 3) state.ult_until[c] = ctx.now + KK("ULT_ATTRIBUTION_WINDOW");
     return {state, no_effects(C, itemsb::n_units(units))};
 }
 
 // mage.on_damage
-std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units units, Report report) {
+std::tuple<State, Effects> on_damage(State state, const Owned& own, const Ctx& ctx, const Units& units, const Report& report) {
     int n = itemsb::n_units(units);
     float now = ctx.now;
     const Packets& p = report.packets;
@@ -378,7 +387,7 @@ std::tuple<State, Effects> on_damage(State state, Owned own, Ctx ctx, Units unit
 }
 
 // mage.periodic: burns, Hatefog ticks, Stormsurge Squall, Enlighten mana, Rod of Ages clock.
-std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units) {
+std::tuple<State, Effects> periodic(State state, const Owned& own, const Ctx& ctx, const Units& units) {
     int n = itemsb::n_units(units);
     float now = ctx.now, dt = ctx.dt;
     const State s0 = state;
@@ -463,7 +472,7 @@ std::tuple<State, Effects> periodic(State state, Owned own, Ctx ctx, Units units
 }
 
 // mage.on_takedown: Cryptbloom Life From Death heal.
-std::tuple<State, Effects> on_takedown(State state, Owned own, Ctx ctx, Units units, Kills kills) {
+std::tuple<State, Effects> on_takedown(State state, const Owned& own, const Ctx& ctx, const Units& units, const Kills& kills) {
     int n = itemsb::n_units(units);
     Effects e = no_effects(C, n);
     for (int c = 0; c < C; ++c) {
