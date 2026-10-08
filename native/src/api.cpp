@@ -11,6 +11,7 @@
 
 #include "champ/envio.hpp"
 #include "champ/marshal.hpp"
+#include "champ/world_tick.hpp"
 #include "world.hpp"
 
 using namespace lanesim;
@@ -293,6 +294,17 @@ const char* ls_test_signature(const char* name) {
     s = it->second.signature + "|";
     for (int k : it->second.arg_leaves) s += std::to_string(k) + ",";
     return s.c_str();
+}
+
+// One full tick (champions, champ/world_tick.cpp); orders are read and may be rewritten (fog, queued casts).
+void ls_step_full(void* wp, void* const* ptrs, void* const* order_ptrs, int32_t* stats) {
+    Env e = from_ptrs<Env>(ptrs, fields().size());
+    Orders o = from_ptrs<Orders>(order_ptrs, order_fields().size());
+    TickStats st = lanesim::champ::step_full(*static_cast<World*>(wp), e, o);
+    if (stats) {
+        stats[0] = st.packet_overflow, stats[1] = st.missile_overflow, stats[2] = st.ray_overflow;
+        stats[3] = st.packets, stats[4] = st.rays;
+    }
 }
 
 void* ls_test_call(const char* name, void* const* ptrs, const long* counts) {

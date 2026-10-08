@@ -59,6 +59,9 @@ def main() -> None:
     ap.add_argument("--every", type=int, default=300)
     ap.add_argument("--max-report", type=int, default=40)
     ap.add_argument("--fields", choices=("slice", "all"), default="all")
+    ap.add_argument("--world", choices=("golden", "bench"), default="golden",
+                    help="golden: ops/modern/golden top lane; bench: ops/modern/bench --allowlist top lane")
+    ap.add_argument("--full", action="store_true", help="the native full tick (champions)")
     ap.add_argument("--orders", choices=("none", "scripted", "chaos"), default="none",
                     help="champion orders: none, the JAX bench's scripted ones, or golden's chaos orders")
     args = ap.parse_args()
@@ -70,7 +73,12 @@ def main() -> None:
     from ops.modern.golden import build
     import lanesim as LS
     enable_compile_cache()
-    cfg = build("top")
+    if args.world == "bench":
+        from ops.modern.bench import build_world
+        cfg, _ = build_world(argparse.Namespace(fog="rays", no_jungle=True, no_objectives=True, lanes=[2],
+                                                packet_capacity=0, allowlist=True))
+    else:
+        cfg = build("top")
     world = LS.NativeWorld(cfg)
     from ops.modern.bench import scripted_orders
     from ops.modern.golden import chaos_orders
@@ -89,7 +97,7 @@ def main() -> None:
         s1 = step(s, o)
         no = LS.orders_from(o)
         env = LS.env_from_state(world, s)
-        stats = world.step(env, no)
+        stats = world.step(env, no, full=args.full)
         want = LS.env_from_state(world, s1)
         diff = compare(world, env, want, only)
         for k, v in diff.items():
@@ -100,7 +108,7 @@ def main() -> None:
             print(json.dumps({"tick": t, "game_s": float(s1.t), "diff": serious}), flush=True)
             reported += 1
         if free is not None:
-            world.step(free, LS.orders_from(make_orders(LS.state_from_env(world, free, s), t)))
+            world.step(free, LS.orders_from(make_orders(LS.state_from_env(world, free, s), t)), full=args.full)
             fd = compare(world, free, want, only)
             if fd and first_free is None:
                 first_free = t

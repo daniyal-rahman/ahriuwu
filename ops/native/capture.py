@@ -52,8 +52,8 @@ def targets() -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--ticks", type=int, default=6000)
-    ap.add_argument("--stride", type=int, default=37, help="keep every stride-th call of each function")
-    ap.add_argument("--per", type=int, default=60, help="calls kept per function")
+    ap.add_argument("--stride", type=int, default=150, help="record on every stride-th tick")
+    ap.add_argument("--per", type=int, default=80, help="calls kept per function")
     ap.add_argument("--only", nargs="*", default=None, help="name prefixes to capture (default all)")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
@@ -69,15 +69,18 @@ def main() -> None:
     kept = collections.defaultdict(list)
     to_np = lambda tree: jax.tree.map(lambda v: np.asarray(v), tree)      # noqa: E731
 
+    sample = {"on": None}          # traced bool of the tick being traced: record only on sampled ticks
+
     def wrap(name, fn):
         def record(call):
             seen[name] += 1
-            if seen[name] % args.stride == 1 and len(kept[name]) < args.per:
+            if len(kept[name]) < args.per:
                 kept[name].append(to_np(call))
 
         def spied(*a, **kw):
             res = fn(*a, **kw)
-            jax.debug.callback(record, (a, kw, res))
+            if sample["on"] is not None:
+                jax.lax.cond(sample["on"], lambda: jax.debug.callback(record, (a, kw, res)), lambda: None)
             return res
         return spied
 
@@ -111,18 +114,27 @@ def main() -> None:
     @jax.jit
     def run(s, t0):
         def body(s, i):
-            return MS.step(s, orders(s, jax.random.fold_in(key, t0 + i)), cfg)[0], None
+            sample["on"] = (t0 + i) % args.stride == 0
+            out = MS.step(s, orders(s, jax.random.fold_in(key, t0 + i)), cfg)[0]
+            sample["on"] = None
+            return out, None
         return jax.lax.scan(body, s, jax.numpy.arange(300))[0]
 
     s = MS.init_state(cfg)
     s = s._replace(econ=s.econ._replace(gold=s.econ.gold + 30000.0))
+    args.out.mkdir(parents=True, exist_ok=True)
+
+    def save():
+        for name, calls in kept.items():
+            with open(args.out / f"{name}.pkl", "wb") as f:
+                pickle.dump(calls, f)
     for t in range(0, args.ticks, 300):
         s = run(s, t)
         jax.block_until_ready(s.t)
-    args.out.mkdir(parents=True, exist_ok=True)
-    for name, calls in kept.items():
-        with open(args.out / f"{name}.pkl", "wb") as f:
-            pickle.dump(calls, f)
+        if (t // 300) % 5 == 4:
+            save()
+            print({"tick": t + 300, "functions": len(kept)}, flush=True)
+    save()
     print({k: (seen[k], len(kept[k])) for k in sorted(kept)})
 
 

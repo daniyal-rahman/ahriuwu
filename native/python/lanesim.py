@@ -25,7 +25,7 @@ def _lib():
            "ls_world_new": ([], P),
            "ls_world_free": ([P], None), "ls_world_int": ([P, S, L], I), "ls_world_float": ([P, S, D], I),
            "ls_world_array": ([P, S, P, L], I), "ls_world_finish": ([P], None),
-           "ls_step": ([P, P, P, P], None), "ls_batch_new": ([P, I, P, I], P), "ls_batch_free": ([P], None),
+           "ls_step": ([P, P, P, P], None), "ls_step_full": ([P, P, P, P], None), "ls_batch_new": ([P, I, P, I], P), "ls_batch_free": ([P], None),
            "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None),
            "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None),
            "ls_test_names": ([], S), "ls_test_signature": ([S], S), "ls_test_call": ([S, P, P], P),
@@ -232,11 +232,12 @@ class NativeWorld:
             arr[k] = a.ctypes.data
         return arr
 
-    def step(self, env: dict, orders: dict | None = None) -> np.ndarray:
-        """One tick in place; returns (packet, missile, ray overflow, packets, rays)."""
-        orders = no_orders() if orders is None else orders
+    def step(self, env: dict, orders: dict | None = None, full: bool = False) -> np.ndarray:
+        """One tick in place (``full``: with champions); returns (packet, missile, ray overflow, packets, rays)."""
+        orders = no_orders() if orders is None else {k: v.copy() for k, v in orders.items()}
         stats = np.zeros(5, np.int32)
-        lib().ls_step(self.ptr, self.pointers(env), self.order_pointers(orders), stats.ctypes.data)
+        fn = lib().ls_step_full if full else lib().ls_step
+        fn(self.ptr, self.pointers(env), self.order_pointers(orders), stats.ctypes.data)
         return stats
 
 
