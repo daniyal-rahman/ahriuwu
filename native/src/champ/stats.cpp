@@ -31,21 +31,26 @@ ItemStats zero(size_t c) {
     return s;
 }
 
+// Fields broadcast like JAX: a size-1 field (a hook's scalar 0.0 default) applies to every holder, an empty one
+// is 0; the result has the widest size among the parts.
 ItemStats combine(const std::vector<const ItemStats*>& parts) {
-    ItemStats out = *parts[0];
+    ItemStats out;
     auto o = fields(out);
     std::vector<std::vector<Arr<float>*>> ps;
     for (const ItemStats* p : parts) ps.push_back(fields(const_cast<ItemStats&>(*p)));
+    auto at = [](const Arr<float>& a, size_t i) { return a.size() == 0 ? 0.f : a[a.size() == 1 ? 0 : i]; };
     for (size_t k = 0; k < o.size(); ++k) {
-        size_t n = o[k]->size();
+        size_t n = 0;
+        for (auto& p : ps) n = std::max(n, p[k]->size());
+        o[k]->resize(n);
         for (size_t i = 0; i < n; ++i) {
             if (multiplicative((int)k)) {
                 float keep = 1.f;
-                for (auto& p : ps) keep = keep * (1.f - (*p[k])[i]);
+                for (auto& p : ps) keep = keep * (1.f - at(*p[k], i));
                 (*o[k])[i] = 1.f - keep;
             } else {
-                float total = (*ps[0][k])[i];
-                for (size_t q = 1; q < ps.size(); ++q) total = total + (*ps[q][k])[i];
+                float total = at(*ps[0][k], i);
+                for (size_t q = 1; q < ps.size(); ++q) total = total + at(*ps[q][k], i);
                 (*o[k])[i] = total;
             }
         }
