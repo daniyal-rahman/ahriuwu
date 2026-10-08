@@ -42,7 +42,7 @@ def targets() -> dict:
              "economy.economy_step": ("lanerl_jax.modern.economy", "economy_step"),
              "wards.ward_step": ("lanerl_jax.modern.wards", "ward_step"),
              "wards.ward_view": ("lanerl_jax.modern.wards", "ward_view"),
-             "combat.combat_tick": ("lanerl_jax.modern.combat", "combat_tick"),
+             "combat.combat_tick": ("lanerl_jax.modern.world.phases.damage", "combat_tick"),
              "damage.resolve": ("lanerl_jax.modern.core.damage", "resolve")}
     for name, (mod, fn) in extra.items():
         out[name] = (importlib.import_module(mod), fn)
