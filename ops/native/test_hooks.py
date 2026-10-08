@@ -21,7 +21,7 @@ ROUNDING = 1e-5          # float leaves within this relative difference count as
 def compare(name: str, want, got: list) -> bool:
     """``want``: JAX output pytree; ``got``: native flat leaves."""
     import jax
-    from lanesim import _flat
+    from lanesim import _flat, _prepare
     w = [np.zeros(0) if v is None else np.asarray(v) for v in _flat(want)]
     if len(w) != len(got):
         print(f"FAIL {name}: {len(got)} native leaves vs {len(w)} JAX")
@@ -43,7 +43,7 @@ def compare(name: str, want, got: list) -> bool:
         elif not np.array_equal(a.astype(b.dtype), b):
             bad.append((i, f"values differ at {np.flatnonzero(a.astype(b.dtype) != b)[:4]}"))
     paths = [jax.tree_util.keystr(p) for p, _ in jax.tree_util.tree_flatten_with_path(
-        want, is_leaf=lambda v: v is None)[0]]
+        _prepare(want), is_leaf=lambda v: v is None)[0]]
     for i, msg in bad[:12]:
         print(f"  {name}{paths[i] if i < len(paths) else i}: {msg}")
     print(("ok  " if not bad else "FAIL") + f" {name}" + (f" ({len(bad)} leaves differ)" if bad else "")
@@ -320,15 +320,31 @@ def test_econ():
 CAPTURES = Path(os.environ.get("LANESIM_CAPTURES", "/mnt/nfs/shared/THROWAWAY-native001/captures"))
 
 
+# Natives taking keyword arguments in the JAX signature's order (captures store them sorted by name).
+SIGNATURE_ORDER = {"combat.combat_tick": "lanerl_jax.modern.combat:combat_tick"}
+
+
 def replay(name: str, limit: int | None = None) -> bool:
     """Replay the captured calls of ``name`` (``ops/native/capture.py``) against the native function of the same
-    name: positional arguments, then keyword arguments in call order."""
+    name: positional arguments, then keyword arguments (sorted, or in signature order: SIGNATURE_ORDER)."""
+    import importlib
+    import inspect
     import pickle
     import lanesim as LS
     calls = pickle.load(open(CAPTURES / f"{name}.pkl", "rb"))[:limit]
+    order = None
+    if name in SIGNATURE_ORDER:
+        mod, fn = SIGNATURE_ORDER[name].split(":")
+        order = list(inspect.signature(getattr(importlib.import_module(mod), fn)).parameters)
     ok = True
     for a, kw, res in calls:
-        ok &= compare(name, res, LS.call(name, *a, *kw.values()))
+        if order:
+            kw = {k: kw[k] for k in order if k in kw}
+        try:
+            ok &= compare(name, res, LS.call(name, *a, *kw.values()))
+        except Exception as exc:                                         # noqa: BLE001
+            print(f"FAIL {name}: {exc}")
+            return False
     return ok
 
 

@@ -292,7 +292,8 @@ def _empty_report():
     from lanerl_jax.modern.core import damage as D
     from lanerl_jax.modern.items.effects.core import Report
     z = lambda k: [np.zeros(0)] * k                                                    # noqa: E731
-    return Report(D.Packets(*z(10)), D.Resolved(*z(7), D.Shields(*z(6)), *z(4)), np.zeros(0), np.zeros(0))
+    return Report(D.Packets(*z(10)), D.Resolved(*z(7), D.Shields(*z(6)), *z(3), np.zeros((), np.int32)),  # overflow: scalar
+                  np.zeros(0), np.zeros(0))
 
 
 def _prepare(tree):
