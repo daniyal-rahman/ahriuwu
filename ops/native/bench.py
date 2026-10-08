@@ -23,7 +23,10 @@ def main() -> None:
     ap.add_argument("--ticks", type=int, default=1800)
     ap.add_argument("--warm", type=int, default=1800, help="native ticks before timing (0:00 -> 1:00)")
     ap.add_argument("--threads", type=int, nargs="+", default=[1])
-    ap.add_argument("--orders", type=int, default=0, help="0 none, 1 the JAX bench scripted orders")
+    ap.add_argument("--orders", type=int, default=0,
+                    help="bit 0: the JAX bench's scripted orders (else none); bit 1: the full tick with champions")
+    ap.add_argument("--world", choices=("golden", "bench"), default="golden",
+                    help="golden top lane, or ops/modern/bench --allowlist top lane (the JAX benchmark's world)")
     args = ap.parse_args()
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
     import numpy as np
@@ -31,11 +34,18 @@ def main() -> None:
     from lanerl_jax.modern import world as MS
     from ops.modern.golden import build
     import lanesim as LS
-    cfg = build("top")
+    if args.world == "bench":
+        from ops.modern.bench import build_world
+        cfg, _ = build_world(argparse.Namespace(fog="rays", no_jungle=True, no_objectives=True, lanes=[2],
+                                                packet_capacity=0, allowlist=True))
+    else:
+        cfg = build("top")
     world = LS.NativeWorld(cfg)
     env = LS.env_from_state(world, MS.init_state(cfg))
-    for _ in range(args.warm):
-        world.step(env)
+    if args.warm:
+        warm = LS.Batch(world, env, 1, args.orders)
+        warm.run(args.warm, 1)
+        env = warm.get(0)
     print(json.dumps({"start_game_s": float(env["t"][0]), "minions": int(np.sum((env["kind"] == 2) & (env["alive"] > 0)))}))
     one = LS.Batch(world, env, 1, args.orders)                           # runs on this thread: per-phase profile
     LS.profile()

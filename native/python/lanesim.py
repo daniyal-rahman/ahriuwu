@@ -354,7 +354,8 @@ class Batch:
     """``n_envs`` copies of an env, stepped by the library's threads."""
 
     def __init__(self, world: NativeWorld, env: dict, n_envs: int, order_mode: int = 0):
-        """``order_mode``: 0 no orders, 1 the JAX bench's scripted walk-and-attack."""
+        """``order_mode``: bit 0 the JAX bench's scripted walk-and-attack orders (else none), bit 1 the full tick
+        with champions (else the lane slice)."""
         self.world, self.n = world, n_envs
         self.ptr = lib().ls_batch_new(world.ptr, n_envs, world.pointers(env), order_mode)
 

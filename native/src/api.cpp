@@ -214,7 +214,8 @@ void ls_step(void* wp, void* const* ptrs, void* const* order_ptrs, int32_t* stat
 }
 
 // ``n_envs`` copies of the env at ``ptrs``, owned by the library.
-// ``order_mode``: champion orders each tick (scripted_orders: 0 none, 1 the JAX bench's walk-and-attack).
+// ``order_mode``: bit 0: champion orders each tick are the JAX bench's walk-and-attack (scripted_orders), else
+// none; bit 1: the full tick with champions (champ/world_tick.cpp), else the lane slice.
 void* ls_batch_new(void* wp, int n_envs, void* const* ptrs, int order_mode) {
     const World& w = *static_cast<World*>(wp);
     auto* b = new Batch{&w, n_envs, order_mode, 0, {}, {}};
@@ -254,8 +255,9 @@ void ls_batch_run(void* bp, int ticks, int threads, int32_t* stats) {
         OrderStore store;
         Orders o = store.view();
         for (int t = 0; t < ticks; ++t) {
-            scripted_orders(*b.world, b.envs[k], o, b.order_mode);
-            TickStats st = step(*b.world, b.envs[k], o);
+            scripted_orders(*b.world, b.envs[k], o, b.order_mode & 1);
+            TickStats st = (b.order_mode & 2) ? lanesim::champ::step_full(*b.world, b.envs[k], o)
+                                              : step(*b.world, b.envs[k], o);
             po = std::max(po, st.packet_overflow), mo = std::max(mo, st.missile_overflow);
             ro = std::max(ro, st.ray_overflow);
         }

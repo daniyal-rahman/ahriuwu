@@ -62,7 +62,7 @@ def main() -> None:
     ap.add_argument("--world", choices=("golden", "bench"), default="golden",
                     help="golden: ops/modern/golden top lane; bench: ops/modern/bench --allowlist top lane")
     ap.add_argument("--full", action="store_true", help="the native full tick (champions)")
-    ap.add_argument("--orders", choices=("none", "scripted", "chaos"), default="none",
+    ap.add_argument("--orders", choices=("none", "scripted", "chaos", "rich"), default="none",
                     help="champion orders: none, the JAX bench's scripted ones, or golden's chaos orders")
     args = ap.parse_args()
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -84,12 +84,32 @@ def main() -> None:
     from ops.modern.golden import chaos_orders
     lane_mid = cfg.lane_path[cfg.lane_path.shape[0] // 2]
     key = jax.random.PRNGKey(1234)
+    jnp = jax.numpy
+    from lanerl_jax.modern.data.loadouts import allowed_items
+    pool = [sorted(allowed_items(nm)) for nm in ("Garen", "Jax")]
+    width = max(len(p) for p in pool)
+    pool = jnp.asarray([p + p[:width - len(p)] for p in pool], jnp.int32)
+
+    def rich(s, t):
+        """Chaos orders buying and activating random allow-listed items, occasional recalls (ops/native/capture)."""
+        k = jax.random.fold_in(key, t)
+        o = chaos_orders(s, k, lane_mid)
+        k1, k2, k3 = jax.random.split(jax.random.fold_in(k, 99), 3)
+        pick = lambda kk: pool[jnp.arange(2), jax.random.randint(kk, (2,), 0, width)]     # noqa: E731
+        buy = jnp.where(jax.random.uniform(k1, (2,)) < 0.02, pick(k1), 0)
+        act = jnp.where(jax.random.uniform(k2, (2,)) < 0.03, pick(k2), 0)
+        return o._replace(buy=jnp.where(o.buy > 0, o.buy, buy),
+                          item_active=jnp.where(o.item_active > 0, o.item_active, act),
+                          recall=o.recall | (jax.random.uniform(k3, (2,)) < 0.002))
     make_orders = {"none": lambda s, t: MS.no_orders(), "scripted": lambda s, t: scripted_orders(s, lane_mid),
-                   "chaos": lambda s, t: chaos_orders(s, jax.random.fold_in(key, t), lane_mid)}[args.orders]
+                   "chaos": lambda s, t: chaos_orders(s, jax.random.fold_in(key, t), lane_mid),
+                   "rich": rich}[args.orders]
     orders_at = jax.jit(make_orders)
     step = jax.jit(lambda s, o: MS.step(s, o, cfg)[0])
     only = SLICE if args.fields == "slice" else None
     s = MS.init_state(cfg)
+    if args.orders == "rich":
+        s = s._replace(econ=s.econ._replace(gold=s.econ.gold + 30000.0))
     free = LS.env_from_state(world, s) if args.free else None
     totals, reported, first_free = {}, 0, None
     for t in range(args.ticks):
