@@ -77,6 +77,43 @@ def test_stats():
     return ok
 
 
+def test_actives_world():
+    """items.effects.actives functions the world phases call outside the hook dispatch (no captures)."""
+    import jax
+    import jax.numpy as jnp
+
+    from lanerl_jax.modern.items.effects import actives as A
+    import lanesim as LS
+    rng = np.random.default_rng(1)
+    ok = True
+    ids = np.asarray([0, *A.ACTIVE_ITEMS, 3077, 2003], np.int32)
+    for trial in range(20):
+        s = A.init(2, 88)
+        s = s._replace(stasis_until=jnp.asarray(rng.uniform(-5, 15, 2), jnp.float32),
+                       actualizer_until=jnp.asarray(rng.uniform(-5, 15, 2), jnp.float32),
+                       cleanse_now=jnp.asarray(rng.integers(0, 2, 2).astype(bool)),
+                       dash_now=jnp.asarray(rng.integers(0, 2, 2).astype(bool)),
+                       dash_x=jnp.asarray(rng.uniform(0, 15000, 2), jnp.float32),
+                       dash_y=jnp.asarray(rng.uniform(0, 15000, 2), jnp.float32),
+                       shatter_now=jnp.asarray(rng.integers(0, 2, 2).astype(bool)))
+        now = jnp.float32(rng.uniform(0, 10))
+        ok &= compare("items.actives.world", jax.jit(A.world)(s, now), LS.call("items.actives.world", s, now))
+        unit = jnp.asarray(rng.integers(-1, 88, 2), jnp.int32)
+        x, y = (jnp.asarray(rng.uniform(0, 15000, 2), jnp.float32) for _ in range(2))
+        ok &= compare("items.actives.with_aim", jax.jit(A.with_aim)(s, unit, x, y),
+                      LS.call("items.actives.with_aim", s, unit, x, y))
+        ok &= compare("items.actives.with_aim", A.with_aim(s, unit), LS.call("items.actives.with_aim", s, unit,
+                                                                               None, None))
+        req = jnp.asarray(rng.choice(ids, 2), jnp.int32)
+        dis, stas = (jnp.asarray(rng.integers(0, 2, 2).astype(bool)) for _ in range(2))
+        ok &= compare("items.actives.request_allowed",
+                      jax.jit(lambda r, d, i: A.request_allowed(r, disabled=d, in_stasis=i))(req, dis, stas),
+                      LS.call("items.actives.request_allowed", req, dis, stas))
+        ok &= compare("items.actives.request_allowed", A.request_allowed(req, disabled=dis),
+                      LS.call("items.actives.request_allowed", req, dis, None))
+    return ok
+
+
 CAPTURES = Path(os.environ.get("LANESIM_CAPTURES", "/mnt/nfs/shared/THROWAWAY-native001/captures"))
 
 
@@ -104,7 +141,7 @@ def test_captured(prefixes=()):
     return all([replay(n) for n in todo])
 
 
-TESTS = {"stats": test_stats, "captured": test_captured}
+TESTS = {"stats": test_stats, "captured": test_captured, "actives_world": test_actives_world}
 
 
 def main() -> None:
