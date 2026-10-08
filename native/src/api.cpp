@@ -274,6 +274,15 @@ void ls_batch_get(void* bp, int k, void* const* ptrs) {
         std::memcpy(ptrs[f], src[f], w.env_counts[f] * fields()[f].elem);
 }
 
+// Copy the env at ``ptrs`` into env ``k``.
+void ls_batch_set(void* bp, int k, void* const* ptrs) {
+    Batch& b = *static_cast<Batch*>(bp);
+    const World& w = *b.world;
+    void* const* dst = reinterpret_cast<void* const*>(&b.envs[k]);
+    for (size_t f = 0; f < fields().size(); ++f)
+        std::memcpy(dst[f], ptrs[f], w.env_counts[f] * fields()[f].elem);
+}
+
 void ls_profile(double* out, int reset) { profile(out, reset != 0); }
 
 // Record route inputs/outputs of the movers (ward0 x 24 floats) during the calling thread's next steps.

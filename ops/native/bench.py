@@ -1,9 +1,10 @@
-"""Throughput of the native lane-slice tick: env-ticks/s over a batch of top-lane envs (champions idle).
+"""Throughput of the native tick: env-ticks/s over a batch of top-lane envs.
 
-Starts every env from the JAX world at 0:00 (or after ``--warm`` native ticks, so waves are on the map), then
-times ``--ticks`` ticks of all envs per thread count.
+Same protocol as ops/modern/bench: every env starts from the JAX world at 0:00 with its own key
+(``split(PRNGKey(0), envs)``), runs ``--warm`` ticks (waves on the map), then ``--ticks`` ticks of all envs are
+timed per thread count. A single env is profiled per phase first.
 
-    python -m ops.native.bench --envs 256 --ticks 1800 --threads 1 8
+    python -m ops.native.bench --world bench --orders 3 --envs 256 --ticks 1800 --threads 1 8
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--envs", type=int, default=256)
     ap.add_argument("--ticks", type=int, default=1800)
-    ap.add_argument("--warm", type=int, default=1800, help="native ticks before timing (0:00 -> 1:00)")
+    ap.add_argument("--warm", type=int, default=1200, help="ticks before timing (as ops/modern/bench --warm-ticks)")
     ap.add_argument("--threads", type=int, nargs="+", default=[1])
     ap.add_argument("--orders", type=int, default=0,
                     help="bit 0: the JAX bench's scripted orders (else none); bit 1: the full tick with champions")
@@ -41,13 +42,23 @@ def main() -> None:
     else:
         cfg = build("top")
     world = LS.NativeWorld(cfg)
-    env = LS.env_from_state(world, MS.init_state(cfg))
-    if args.warm:
-        warm = LS.Batch(world, env, 1, args.orders)
-        warm.run(args.warm, 1)
-        env = warm.get(0)
+    import jax
+    s0 = MS.init_state(cfg)
+    keys = np.asarray(jax.random.split(jax.random.PRNGKey(0), args.envs))
+
+    def batch(n: int) -> "LS.Batch":
+        """``n`` envs at 0:00 with the JAX bench's keys, warmed for ``--warm`` ticks on every core."""
+        env = LS.env_from_state(world, s0)
+        b = LS.Batch(world, env, n, args.orders)
+        for k in range(n):
+            env["key"][:] = keys[k]
+            b.set(k, env)
+        b.run(args.warm, 0)
+        return b
+
+    one = batch(1)                                                       # runs on this thread: per-phase profile
+    env = one.get(0)
     print(json.dumps({"start_game_s": float(env["t"][0]), "minions": int(np.sum((env["kind"] == 2) & (env["alive"] > 0)))}))
-    one = LS.Batch(world, env, 1, args.orders)                           # runs on this thread: per-phase profile
     LS.profile()
     t0 = time.perf_counter()
     one.run(args.ticks, 1)
@@ -58,19 +69,17 @@ def main() -> None:
                       "phases_us_per_tick": round(tot / args.ticks * 1e6, 2),
                       "wall_us_per_tick": round(sec / args.ticks * 1e6, 2)}), flush=True)
     for th in args.threads:
-        batch = LS.Batch(world, env, args.envs, args.orders)
-        batch.run(30, th)                                   # first touch / thread start
+        b = batch(args.envs)
         t0 = time.perf_counter()
-        over = batch.run(args.ticks, th)
+        over = b.run(args.ticks, th)
         dt = time.perf_counter() - t0
-        end = batch.get(0)
+        end = b.get(0)
         print(json.dumps({"threads": th, "envs": args.envs, "ticks": args.ticks, "seconds": round(dt, 3),
                           "env_ticks_per_s": round(args.envs * args.ticks / dt, 1),
                           "us_per_env_tick_per_thread": round(dt * th / (args.envs * args.ticks) * 1e6, 2),
                           "overflow": over.tolist(), "end_game_s": float(end["t"][0]),
                           "minions_end": int(np.sum((end["kind"] == 2) & (end["alive"] > 0))),
-                          "env_kb": round(LS.lib().ls_batch_env_bytes(batch.ptr) / 1024, 1)}), flush=True)
-
+                          "env_kb": round(LS.lib().ls_batch_env_bytes(b.ptr) / 1024, 1)}), flush=True)
 
 if __name__ == "__main__":
     main()

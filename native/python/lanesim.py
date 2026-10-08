@@ -26,7 +26,7 @@ def _lib():
            "ls_world_free": ([P], None), "ls_world_int": ([P, S, L], I), "ls_world_float": ([P, S, D], I),
            "ls_world_array": ([P, S, P, L], I), "ls_world_finish": ([P], None),
            "ls_step": ([P, P, P, P], None), "ls_step_full": ([P, P, P, P], None), "ls_batch_new": ([P, I, P, I], P), "ls_batch_free": ([P], None),
-           "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None),
+           "ls_batch_run": ([P, I, I, P], None), "ls_batch_get": ([P, I, P], None), "ls_batch_set": ([P, I, P], None),
            "ls_batch_env_bytes": ([P], L), "ls_profile": ([P, I], None), "ls_debug_route": ([P], None),
            "ls_test_names": ([], S), "ls_test_signature": ([S], S), "ls_test_call": ([S, P, P], P),
            "ls_result_leaves": ([P], L), "ls_result_code": ([P, L], ctypes.c_char), "ls_result_count": ([P, L], L),
@@ -372,3 +372,6 @@ class Batch:
         env = self.world.empty_env()
         lib().ls_batch_get(self.ptr, k, self.world.pointers(env))
         return env
+
+    def set(self, k: int, env: dict) -> None:
+        lib().ls_batch_set(self.ptr, k, self.world.pointers(env))
