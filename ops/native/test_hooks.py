@@ -114,6 +114,209 @@ def test_actives_world():
     return ok
 
 
+def test_econ():
+    """Direct JAX-vs-native checks of the economy/quest/ward/inventory/region helpers the world phases call outside
+    the captured economy_step / ward_step / ward_view (random inputs, jitted JAX)."""
+    import jax
+    import jax.numpy as jnp
+
+    from lanerl_jax.modern import economy as E
+    from lanerl_jax.modern import role_quest as Q
+    from lanerl_jax.modern import wards as WD
+    from lanerl_jax.modern.core import types as W
+    from lanerl_jax.modern.items import inventory as I
+    from lanerl_jax.modern.items.catalog import catalog
+    from lanerl_jax.modern.map import regions as REG
+    from lanerl_jax.modern.map.lanes import LANE_PATHS
+    from ops.modern.golden import build
+    import lanesim as LS
+    cfg = build("top")
+    cat = catalog()
+    a = cat.arrays
+    n_rows = len(cat.ids)
+    rng = np.random.default_rng(1)
+    ok = True
+    f32, i32 = np.float32, np.int32
+
+    # economy helpers
+    k = 256
+    xp = rng.uniform(0, 30000, k).astype(f32)
+    xp[:40] = np.asarray(E._tables()["need"])[rng.integers(0, 22, 40)]          # exact level boundaries
+    cap = rng.choice([18, 20], k).astype(i32)
+    ok &= compare("economy.decimal_level", jax.jit(E.decimal_level)(xp, cap), LS.call("economy.decimal_level", xp, cap))
+    ok &= compare("economy.level_for_xp", jax.jit(E.level_for_xp)(xp, cap), LS.call("economy.level_for_xp", xp, cap))
+    lv = rng.integers(0, 22, k).astype(i32)
+    ok &= compare("economy.ranks", jax.jit(lambda l: (E.skill_points(l), E.max_rank(l), E.max_rank(l, ultimate=True)))(lv),
+                  LS.call("economy.ranks", lv))
+    fx = np.asarray(cfg.fountain)[rng.integers(0, 2, k)]
+    px = (fx[:, 0] + rng.normal(0, 900, k)).astype(f32)
+    py = (fx[:, 1] + rng.normal(0, 900, k)).astype(f32)
+    ok &= compare("economy.in_fountain", jax.jit(E.in_fountain)(px, py, fx[:, 0].astype(f32), fx[:, 1].astype(f32)),
+                  LS.call("economy.in_fountain", px, py, fx[:, 0].astype(f32), fx[:, 1].astype(f32)))
+    for trial in range(10):
+        mh = rng.uniform(500, 3000, k).astype(f32)
+        hp = (mh * rng.uniform(0, 1, k)).astype(f32)
+        mm = rng.uniform(0, 1500, k).astype(f32)
+        mana = (mm * rng.uniform(0, 1, k)).astype(f32)
+        inf_ = rng.integers(0, 2, k).astype(bool)
+        hg = rng.integers(0, 2, k).astype(bool)
+        t0 = f32(rng.uniform(0, 1500))
+        t1 = f32(t0 + (1 / 30 if trial < 8 else rng.uniform(0, 3)))
+        want = jax.jit(lambda *v: E.fountain_regen(*v[:7], homeguard=v[7]))(hp, mh, mana, mm, inf_, t0, t1, hg)
+        ok &= compare("economy.fountain_regen", want, LS.call("economy.fountain_regen", hp, mh, mana, mm, inf_, t0, t1, hg))
+    ok &= compare("economy.starting_gold", np.float32(E.starting_gold()), LS.call("economy.starting_gold", np.zeros(1)))
+    roles = np.asarray([Q.ROLE_TOP, Q.ROLE_TOP], i32)
+    ok &= compare("economy.init_economy", E.init_economy(2, cfg.n_units, roles),
+                  LS.call("economy.init_economy", i32(2), i32(cfg.n_units), roles))
+
+    # role quest
+    qs_jit = jax.jit(lambda st, ev, now, dt, il, al, lv, rc: Q.quest_step(st, ev, now=now, dt=dt, in_lane=il, alive=al,
+                                                                          level=lv, recalled=rc))
+    for trial in range(40):
+        st = Q.QuestState(np.asarray(rng.choice([0, 1, 1], 2), i32), rng.uniform(0, 1300, 2).astype(f32),
+                          rng.integers(0, 2, 2).astype(bool), rng.uniform(0, 70, 2).astype(f32),
+                          rng.uniform(0, 200, 2).astype(f32))
+        ev = Q.QuestEvents(*(rng.integers(0, 3, 2).astype(f32) for _ in range(8)))
+        args = (st, ev, f32(rng.uniform(0, 300)), f32(1 / 30), rng.integers(0, 2, 2).astype(bool),
+                rng.integers(0, 2, 2).astype(bool), rng.integers(1, 19, 2).astype(i32), rng.integers(0, 2, 2).astype(bool))
+        ok &= compare("role_quest.quest_step", qs_jit(*args), LS.call("role_quest.quest_step", *args))
+        mil = rng.integers(0, 2, 88).astype(bool)
+        ok &= compare("role_quest.minion_penalty", jax.jit(Q.minion_penalty)(st, args[6], mil),
+                      LS.call("role_quest.minion_penalty", st, args[6], mil))
+
+    # inventory / shop
+    ids = np.asarray(a.item_id)
+    stealth = cat.row(3340)
+    recipes = [r for r in range(n_rows) if (np.asarray(a.node_item)[r] >= 0).sum() > 1]
+
+    def random_inv():
+        item = np.full(7, -1, i32)
+        stack = np.zeros(7, i32)
+        n = rng.integers(0, 7)
+        rows = rng.integers(0, n_rows, n)
+        if rng.uniform() < 0.5 and recipes:                      # components of a recipe
+            r = recipes[rng.integers(len(recipes))]
+            comp = [c for c in np.asarray(a.node_item)[r][1:] if c >= 0]
+            rows = np.asarray(list(rng.permutation(comp))[:6] + list(rows))[:6]
+        for s_, r in enumerate(rows[:6]):
+            item[s_], stack[s_] = r, rng.integers(1, max(int(a.max_stack[r]), 1) + 1)
+        if rng.uniform() < 0.9:
+            item[6], stack[6] = stealth, 1
+        return I.Inventory(item, stack), (recipes[rng.integers(len(recipes))] if rng.uniform() < 0.5
+                                          else rng.integers(0, n_rows))
+    buy_jit = jax.jit(lambda inv, g, r, cs, lv, rg, now, gcd: I.buy(inv, g, r, can_shop=cs, level=lv, is_ranged=rg,
+                                                                     now=now, group_cd_until=gcd))
+    sell_jit = jax.jit(lambda inv, g, sl, cs: I.sell(inv, g, sl, can_shop=cs))
+    codes = set()
+    for trial in range(300):
+        inv, row = random_inv()
+        gold = f32(rng.choice([0.0, rng.uniform(0, 4000), 1e5]))
+        gcd = np.where(rng.uniform(size=a.group_max.shape[0]) < 0.3, rng.uniform(0, 200, a.group_max.shape[0]),
+                       0).astype(f32)
+        args = (inv, gold, i32(row), np.bool_(rng.uniform() < 0.9), i32(rng.integers(1, 19)), np.bool_(rng.uniform() < 0.3),
+                f32(rng.uniform(0, 300)), gcd)
+        want = buy_jit(*args)
+        codes.add(int(want.code))
+        ok &= compare("inventory.buy", want, LS.call("inventory.buy", *args, None))
+        slot = i32(rng.integers(0, 7))
+        args = (inv, gold, slot, np.bool_(rng.uniform() < 0.9))
+        ok &= compare("inventory.sell", sell_jit(*args), LS.call("inventory.sell", *args))
+        frm, to = i32(rng.choice([inv.item[rng.integers(7)], rng.integers(0, n_rows)])), i32(rng.integers(0, n_rows))
+        en = np.bool_(rng.uniform() < 0.8)
+        ok &= compare("inventory.replace_item", jax.jit(I.replace_item)(inv, frm, to, en),
+                      LS.call("inventory.replace_item", inv, frm, to, en))
+        ok &= compare("inventory.consume_one", jax.jit(I.consume_one)(inv, slot, en),
+                      LS.call("inventory.consume_one", inv, slot, en))
+    print("     buy result codes exercised:", sorted(codes))
+    for trial in range(20):
+        invs = [random_inv()[0] for _ in range(2)]
+        inv2 = I.Inventory(np.stack([v.item for v in invs]), np.stack([v.stack for v in invs]))
+        ok &= compare("inventory.owned_counts", jax.jit(I.owned_counts)(inv2), LS.call("inventory.owned_counts", inv2))
+        ok &= compare("inventory.inventory_stats", jax.jit(I.inventory_stats)(inv2),
+                      LS.call("inventory.inventory_stats", inv2))
+    team = rng.integers(0, 2, k).astype(i32)
+    sx = np.asarray(I.SHOP_CENTER, f32)[team]
+    x = (sx[:, 0] + rng.normal(0, 800, k)).astype(f32)
+    z = (sx[:, 1] + rng.normal(0, 800, k)).astype(f32)
+    dead = rng.uniform(size=k) < 0.1
+    ok &= compare("inventory.in_shop_area", jax.jit(I.in_shop_area)(x, z, team, dead),
+                  LS.call("inventory.in_shop_area", x, z, team, dead))
+    for lo in cfg.loadouts:
+        ids_ = [list(lo.items), list(lo.items)[:2]]
+        width = max(len(v) for v in ids_)
+        pad = np.asarray([v + [0] * (width - len(v)) for v in ids_], i32)
+        for tr in (True, False):
+            ok &= compare("inventory.inventory_from_ids", I.inventory_from_ids(ids_, trinket=tr),
+                          LS.call("inventory.inventory_from_ids", pad, i32(width), np.bool_(tr)))
+
+    # wards: init and vision_kwargs (ward_step / ward_view are captured)
+    for tids in ([3340, 3340], [3364, 3363], [3363, 1001]):
+        ok &= compare("wards.init_wards", WD.init_wards(2, tids), LS.call("wards.init_wards", i32(2), np.asarray(tids, i32)))
+    s0 = __import__("lanerl_jax.modern.world", fromlist=["init_state"]).init_state(cfg)
+    lay = cfg.layout
+    for trial in range(10):
+        w = s0.wards
+        sl = w.slots
+        S = sl.x.shape[0]
+        sl = sl._replace(alive=rng.uniform(size=S) < 0.6, type=rng.integers(0, 3, S).astype(i32),
+                         x=rng.uniform(0, 15000, S).astype(f32), y=rng.uniform(0, 15000, S).astype(f32),
+                         placed_at=rng.uniform(0, 100, S).astype(f32),
+                         triggered_at=np.where(rng.uniform(size=S) < 0.3, rng.uniform(0, 100, S), np.inf).astype(f32),
+                         revealed_until=rng.uniform(0, 120, S).astype(f32),
+                         disabled_until=rng.uniform(0, 120, S).astype(f32), tracked=rng.uniform(size=S) < 0.3)
+        w = w._replace(slots=sl, trinket=w.trinket._replace(oracle_until=rng.uniform(80, 120, 2).astype(f32)))
+        now = f32(100.0)
+        cx, cy = rng.uniform(0, 15000, 2).astype(f32), rng.uniform(0, 15000, 2).astype(f32)
+        args = dict(now=now, x=cx, y=cy, team=np.asarray([0, 1], i32), alive=np.asarray([True, rng.uniform() < .8]),
+                    level=rng.integers(1, 19, 2).astype(i32))
+        view, oracle = jax.jit(lambda w, a_: WD.ward_view(w, **a_))(w, args)
+        ok &= compare("wards.ward_view(direct)", (view, oracle), LS.call("wards.ward_view", w, *(args[k_] for k_ in sorted(args))))
+        kind = np.asarray(s0.kind).copy()
+        kind[lay.ward0:lay.ward0 + S] = np.where(view.alive, W.KIND_WARD, W.KIND_NONE)
+        sub = np.asarray(s0.sub).copy()
+        sub[lay.ward0:lay.ward0 + S] = view.sub
+        alive = np.asarray(s0.alive).copy() | (rng.uniform(size=kind.shape[0]) < 0.5)
+        want = jax.jit(lambda *v: WD.vision_kwargs(*v, ward_start=lay.ward0))(view, oracle, kind, sub, alive)
+        ok &= compare("wards.vision_kwargs", tuple(want[k_] for k_ in ("radius", "stealthed", "true_sight", "unobstructed",
+                                                                       "exposed")),
+                      LS.call("wards.vision_kwargs", view, oracle, kind, sub, alive, i32(lay.ward0)))
+
+    # map regions: point queries, lane progress, Homeguard flags
+    paths = np.asarray(LANE_PATHS, f32)
+    pts = paths[rng.integers(0, 2, 2000), rng.integers(0, 3, 2000), rng.integers(0, paths.shape[2], 2000)]
+    px = np.concatenate([(pts[:, 0] + rng.normal(0, 700, 2000)), rng.uniform(-500, 15500, 500)]).astype(f32)
+    py = np.concatenate([(pts[:, 1] + rng.normal(0, 700, 2000)), rng.uniform(-500, 15500, 500)]).astype(f32)
+    px[:3], py[:3] = [np.nan, np.inf, 5000.0], [100.0, 5000.0, -np.inf]
+    reg = cfg.regions
+    want = jax.jit(lambda x_, y_: (REG.region_of(x_, y_, reg), REG.lane_of(x_, y_, reg), REG.in_quest_lane(x_, y_, 2, reg),
+                                   REG.in_jungle(x_, y_, reg), REG.in_river(x_, y_, reg)))(px, py)
+    ok &= compare("regions.queries", want, LS.call("regions.queries", px, py))
+    tm, ln = rng.integers(0, 2, px.shape[0]).astype(i32), rng.integers(0, 3, px.shape[0]).astype(i32)
+    fin = np.isfinite(px) & np.isfinite(py)
+    ok &= compare("regions.lane_progress", jax.jit(REG.lane_progress)(px[fin], py[fin], tm[fin], ln[fin]),
+                  LS.call("regions.lane_progress", px[fin], py[fin], tm[fin], ln[fin]))
+    units0 = __import__("lanerl_jax.modern.world.units", fromlist=["units_view"]).units_view(s0)
+    n = cfg.n_units
+    hf_jit = jax.jit(lambda x_, y_, t_, now, u, sl_, ml: REG.homeguard_flags(x_, y_, t_, now, u, sl_, ml, reg))
+    for trial in range(60):
+        kind = np.asarray(units0.kind).copy()
+        mslots = np.arange(n)[kind == W.KIND_NONE]
+        kind[mslots] = np.where(rng.uniform(size=mslots.size) < 0.7, W.KIND_MINION, W.KIND_NONE)
+        lane_pts = paths[rng.integers(0, 2, n), 2, rng.integers(0, paths.shape[2], n)]
+        ux = np.where(kind == W.KIND_MINION, lane_pts[:, 0] + rng.normal(0, 300, n), units0.x).astype(f32)
+        uy = np.where(kind == W.KIND_MINION, lane_pts[:, 1] + rng.normal(0, 300, n), units0.y).astype(f32)
+        u = units0._replace(kind=kind.astype(i32), x=ux, y=uy,
+                            alive=np.asarray(units0.alive) | (rng.uniform(size=n) < 0.8) & (rng.uniform(size=n) < 0.9),
+                            team=np.where(kind == W.KIND_MINION, rng.integers(0, 2, n), units0.team).astype(i32))
+        minion_lane = np.where(kind == W.KIND_MINION, rng.choice([2, 2, 2, 1], n), -1).astype(i32)
+        cp = paths[[0, 1], 2, rng.integers(0, paths.shape[2], 2)]
+        cxy = (cp + rng.normal(0, 500, (2, 2))).astype(f32)
+        args = (cxy[:, 0], cxy[:, 1], np.asarray([0, 1], i32), f32(rng.choice([100.0, 900.0])), u,
+                np.asarray(cfg.unit_lane, i32), minion_lane)
+        ok &= compare("regions.homeguard_flags", hf_jit(*args), LS.call("regions.homeguard_flags", *args))
+    return ok
+
+
 CAPTURES = Path(os.environ.get("LANESIM_CAPTURES", "/mnt/nfs/shared/THROWAWAY-native001/captures"))
 
 
@@ -141,7 +344,7 @@ def test_captured(prefixes=()):
     return all([replay(n) for n in todo])
 
 
-TESTS = {"stats": test_stats, "captured": test_captured, "actives_world": test_actives_world}
+TESTS = {"stats": test_stats, "econ": test_econ, "actives_world": test_actives_world, "captured": test_captured}
 
 
 def main() -> None:
