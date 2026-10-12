@@ -1,5 +1,11 @@
 """Nasus through the real compiled tick: record radii, walk-in Spirit Fire, Wither's cripple on the target's attack
 speed, Siphoning Strike stacks from a lane last hit and Fury of the Sands health (one top-lane world, own compile)."""
+import pytest as _pytest
+
+_pytest.skip("Nasus is not registered until every rule is exact "
+             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
+
+
 from functools import lru_cache
 
 import jax

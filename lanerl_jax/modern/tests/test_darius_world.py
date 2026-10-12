@@ -1,6 +1,12 @@
 """Darius through the real compiled tick: Apprehend pulls Garen next to him (knocked up, then slowed),
 Hemorrhage ticks through the damage pipeline, Decimate heals, and the Guillotine resets on a rank-3 execution
 (one top-lane world, own compile)."""
+import pytest as _pytest
+
+_pytest.skip("Darius is not registered until every rule is exact "
+             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
+
+
 from functools import lru_cache
 
 import jax

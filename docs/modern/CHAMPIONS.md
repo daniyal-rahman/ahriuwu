@@ -1,4 +1,4 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius and Malphite, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen and Jax (registered); Nasus, Renekton, Darius, Malphite (pending), 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
 in `core.py`; `renekton.py`, `darius.py`, `malphite.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
@@ -62,6 +62,13 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
 | JAX.R1 | Cast time 0.25 s. Jax can move but not attack. The swing deals `SwingDamageBase + 1.0 × AP` magic damage within 375. Mana 100; the cooldown starts at cast. | 100/175/250; 110/100/90 s | CLIENT |
 | JAX.R2 | Only if the swing hits a champion: for 8 s, bonus armor equal to `BaseResists + 0.4 × bonus AD + (champions − 1) × (ResistsPerExtraTarget + 0.1 × bonus AD)`, and `MRMult` (0.6) × that as MR. The value is fixed when the swing lands. | 45/60/75, +20/25/30 | CLIENT `BaseArmor`/`BonusArmor`/`BaseMR`; WIKI "If this hits a champion". Snapshot: INFERRED-M |
 | JAX.R3 | Passive: each landed attack adds a stack (max 2, 2.5 s, refreshed). The attack that lands at 2 stacks (1 while R2 is active) consumes them and deals `PassiveBaseDamage + 0.6 × AP` magic damage as an on-hit proc, ×0.5 against structures. That attack's windup cannot be cancelled. Against wards the proc triggers but is not consumed and has no effect. Dodged attacks add no stacks. | 75/130/185 | CLIENT, WIKI |
+
+## Pending: Nasus, Renekton, Darius, Malphite
+
+These four kits are implemented but **not registered** (`champions.KITS`) and their tests skip. Each returns, one at
+a time, only when its approximation list below is empty: every engineering shortcut replaced by the exact rule, and
+every value no client, wiki or patch source gives measured in the live client (Practice Tool / custom-game protocol,
+results recorded here with the measurement). Order: Nasus, Renekton, Darius, Malphite.
 
 ## Nasus (75)
 

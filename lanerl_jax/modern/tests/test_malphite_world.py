@@ -1,6 +1,12 @@
 """Malphite through the real compiled tick: Granite Shield in the shield store (one instance, refilled after the
 delay), Ground Slam's cripple on Garen's attack speed and Unstoppable Force's
 dash and knock-up (one top-lane world, own compile)."""
+import pytest as _pytest
+
+_pytest.skip("Malphite is not registered until every rule is exact "
+             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
+
+
 from functools import lru_cache
 
 import jax

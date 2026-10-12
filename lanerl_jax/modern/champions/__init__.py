@@ -14,16 +14,13 @@ import jax.numpy as jnp
 
 from ..items.catalog import combine_stats
 from ..items.effects.core import Debuffs, combine_debuffs
-from . import darius
 from . import garen
 from . import jax as jax_kit
-from . import malphite
-from . import nasus
-from . import renekton
 from .core import (KitAttackMods, KitCtx, KitDefense, KitOut, combine_attack_mods, merge_out,
                    neutral_attack_mods, neutral_defense)
 
-KITS = (garen, jax_kit, nasus, renekton, darius, malphite)
+# Nasus, Renekton, Darius and Malphite stay out until every rule is exact (docs/modern/CHAMPIONS.md, Pending).
+KITS = (garen, jax_kit)
 BY_NAME = {k.NAME: k for k in KITS}
 
 ChampionState = NamedTuple("ChampionState", [(k.NAME.lower(), Any) for k in KITS])   # one state per kit

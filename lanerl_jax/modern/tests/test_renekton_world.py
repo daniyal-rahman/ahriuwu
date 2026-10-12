@@ -1,6 +1,12 @@
 """Renekton through the real compiled tick: Cull the Meek Fury and healing, a Slice dash that moves him and hits
 on the way, the empowered W stripping Garen's shield, Fury on the observation's resource bar and Dominus health
 (one top-lane world, own compile)."""
+import pytest as _pytest
+
+_pytest.skip("Renekton is not registered until every rule is exact "
+             "(docs/modern/CHAMPIONS.md, Pending)", allow_module_level=True)
+
+
 from functools import lru_cache
 
 import jax
