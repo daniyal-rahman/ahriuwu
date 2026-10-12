@@ -28,6 +28,8 @@ GPU): every change golden-identical. Full map 24.0k -> ~29k env-ticks/s and top 
 - Walkability (`terrain.row_gaps`): exact `is_walkable` from per-row nearest-blocked gaps, golden-identical;
   +54% top lane / +25% full map on the GTX 1060.
 
+**Champions (2026-10-12, MODERN-027..030).** Nasus, Renekton, Darius and Malphite join Garen and Jax (any pairing; specs and approximations in docs/modern/CHAMPIONS.md). New per-champion world pieces: record radii and acquisition, point walk-in, kit cripple, shield strip, kit displacement, sourced shields; a dash-speed bug fixed. Golden-identical for Garen vs Jax at every step. No training run with the new champions yet.
+
 **Open.**
 - GPU timing of the combined branch, packet capacity 64/32 (1v1) and the allow-list: queued, desktop in Windows.
 - No training experiment on the modern world yet; decisions open: reward weights, input latency

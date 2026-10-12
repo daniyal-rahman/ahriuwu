@@ -107,9 +107,10 @@ def apply_effects(eff: Effects, ctx: Ctx, hp: Any, max_hp: Any, shields: D.Shiel
     for k in range(eff.shields.amount.shape[1]):
         amt = eff.shields.amount[:, k] * (1.0 + sp) * (1.0 + incoming_heal) * heal_mult
         for c in range(u.shape[0]):
-            shields = D.grant_shield(shields, u[c], amt[c], eff.shields.kind[c, k], now,
+            code = eff.shields.kind[c, k]
+            shields = D.grant_shield(shields, u[c], amt[c], code % D.SOURCE_SHIFT, now,
                                      eff.shields.duration[c, k], decay_hold=eff.shields.decay_hold[c, k],
-                                     enabled=amt[c] > 0.0)
+                                     enabled=amt[c] > 0.0, source=code // D.SOURCE_SHIFT)
     active_slow = jnp.where(status.slow_until > now, status.slow, 0.0)
     stronger = eff.slow >= active_slow
     new_slow = jnp.where((eff.slow > 0.0) & stronger, eff.slow, status.slow)

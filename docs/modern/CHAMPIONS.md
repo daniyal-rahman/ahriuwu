@@ -1,8 +1,8 @@
-# CHAMPIONS.md — Garen, Jax, Nasus, Renekton and Darius, 26.19 (client 16.19.8230722)
+# CHAMPIONS.md — Garen, Jax, Nasus, Renekton, Darius and Malphite, 26.19 (client 16.19.8230722)
 
 **Status (2026-10-12).** Implemented in `lanerl_jax/modern/champions/` (`garen.py`, `jax.py`, `nasus.py`, contract
-in `core.py`; `renekton.py`, `darius.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, `test_nasus.py`,
-`test_nasus_world.py`, `test_renekton.py`, `test_renekton_world.py`, `test_darius.py`, `test_darius_world.py`.
+in `core.py`; `renekton.py`, `darius.py`, `malphite.py`). Tests: `lanerl_jax/modern/tests/test_champions.py`, and
+`test_<name>.py` / `test_<name>_world.py` for Nasus, Renekton, Darius and Malphite.
 Pinned records are regenerated from the client bins by `python -m lanerl_jax.modern.data.build_champions`.
 
 ## Sources
@@ -15,7 +15,7 @@ Pinned records are regenerated from the client bins by `python -m lanerl_jax.mod
   Calculation `mStat` numbers were checked against the item calculations: 2 is AD, 4 is attack speed, 6 is MR,
   7 is move speed, 8 is crit chance, 9 is crit damage and 12 is health.
 - **WIKI**: `Template:Data Garen/*` and `Template:Data Jax/*` ability data and the patch history pages,
-  fetched raw on 2026-10-02; `Template:Data {Nasus,Renekton,Darius}/*` and their patch histories cached raw in
+  fetched raw on 2026-10-02; `Template:Data {Nasus,Renekton,Darius,Malphite}/*` and their patch histories cached raw in
   `cdragon-16.19/wiki-2026-10-12-champions/`.
 - **PATCH**: Riot patch notes 26.1–26.19. These Summoner's Rift changes apply: 26.1 (Garen E crit is 30% of
   bonus crit damage; Jax passive gains a level-19 breakpoint), 26.5 (Garen Q MS duration, E AD ratio),
@@ -153,6 +153,27 @@ Rift patches since 26.1: 26.4 Hemorrhage monster damage ×2.5 (client `MonsterMo
    has no fear). The leap is a dash to the target over the cast time; it does not stop at thin walls.
 3. **Hemorrhage reveal** (sight of a target the bleed will kill) and Apprehend's sight are not modelled.
 
+## Malphite (54)
+
+| ID | Rule | Value (ranks 1–5 / 1–3) | Evidence |
+|---|---|---|---|
+| MAL.P1 | Granite Shield: a shield of 10% max health (no expiry) whenever Malphite has lost no health for 8 s (7 from level 7, 6 from 13) and the shield is below full. It refills the same shield instance (`D.SOURCE_KIT`): a new grant replaces the old one. Damage the shield absorbs does not reset the delay. | 10% max HP | CLIENT `TotalShield`, `PassiveCooldown`; WIKI notes |
+| MAL.Q1 | Enemy unit (not structures) within 625 (center to edge); 0.25 s cast time, then a 1200-speed shard: `BaseDamage + 0.6 AP` magic and a `SpeedSteal` % slow for 3 s; Malphite gains the target's current move speed × that slow as flat move speed for 3 s. Fizzles if the target dies. | 70–90 mana; 8 s; 70–270; 20–40% | CLIENT `castRange`, `missileSpeed`, `SpeedSteal`, `SlowDuration`; WIKI cast time, speed steal |
+| MAL.W1 | Passive: `BonusArmorPassive` % armor (STAT.40 total multiplier), ×3 while Granite Shield holds. | 10–30% | CLIENT `BonusArmorPassive`, `BonusArmorPassiveMultiplier` |
+| MAL.W2 | Active: attack reset; the next attack within 6 s gains 50 range and an uncancellable windup and deals `ThunderclapBaseDamage + 0.2 AP + 0.15 armor` physical on-hit. For 5 s every landed attack makes an aftershock: `ThunderclapSplashDamage + 0.3 AP + 0.15 armor` physical to enemies in a cone from Malphite toward the target, 400 long (the target takes it only if inside). ×1.8 against monsters. Cooldown at cast. | 30–50 mana; 10–8 s; 30–70; 15–55 | CLIENT calculations, `ThunderClapSplashRange`, `ThunderclapBuffDuration`, `MonsterDamageMod`; WIKI window, range, cone origin |
+| MAL.E1 | After its 0.2419 s cast time: `BaseDamage + 0.4 armor + 0.6 AP` magic to enemies within 400 (center to edge) and an `ASReduction` % attack-speed cripple for 3 s. | 50–70 mana; 7 s; 60–200; 30–50% | CLIENT `mCastTime`, `castRadius`, `EDamageCalc`, `ASReduction` |
+| MAL.R1 | Dashes to the cursor, at most 1000 (cast at max range), at `1500 + move speed`; CC does not stop it. On arrival: `BaseDamage + 0.9 AP` magic to enemies within 325 of the end point and a 1.5 s knock-up. Cooldown at cast. | 100 mana; 130/115/100 s; 200/300/400 | CLIENT `castRange`, `KnockupDuration`, `TotalDamage`; WIKI speed, radius (client `castRadius` 270) |
+
+### Malphite approximations
+
+1. **Thunderclap cone angle.** Neither the client data nor the wiki gives it; the kit uses a 45° half-angle
+   (INFERRED-L). Aftershocks fire once per landed attack, not as a separate on-hit item proc.
+2. **Seismic Shard speed steal** reads the target's current move speed (after its other slows and the soft caps),
+   not the raw value the wiki describes.
+3. **Ground Slam cripple** takes the strongest cripple on the target instead of stacking multiplicatively with
+   others (`combine_debuffs`). **Shard of the Monolith** size is not modelled.
+4. **Unstoppable Force** passes through terrain like the other kit dashes.
+
 ## Approximations that remain
 
 1. **Garen passive inputs.** The kit sees only damage packets. Zero-damage enemy abilities and summoner spells
@@ -191,7 +212,8 @@ These are optional fields with `None` defaults. Each kit falls back to the behav
 | `KitOut.cast_lockout` | (C,) | Now honoured from any hook, not only on a cast start (Renekton W post-strike lockout). |
 | `resource(state, champion_id)` | (C,) | A kit's own resource bar (Renekton Fury), NaN where the holder is another kit. |
 | `displacement(state, kctx, n)` | (N,) × 4 | Forced movement `(active, to_x, to_y, speed)` the move phase applies, ghosted (Darius E). |
+| `Shields.source` / `KitCtx.kit_shield` | (N, K) / (C,) | Shield source tag (`ShieldGrant.kind = SHIELD_* + 16 × SOURCE_*`): a sourced grant replaces the unit's earlier one; the remaining kit-sourced absorb is given to the kit (Malphite). |
 
 Per-champion record values the world reads from `ChampionBase`: `gameplay_radius`
 (`overrideGameplayCollisionRadius`, default 65; Nasus 80), `pathing_radius` (`pathfindingCollisionRadius`; Nasus 50)
-and `acquisition_range` (Nasus 350, Renekton and Darius 600).
+and `acquisition_range` (Nasus 350, Renekton and Darius 600); Malphite 80 / 50 / 400.

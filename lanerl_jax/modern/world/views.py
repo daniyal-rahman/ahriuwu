@@ -11,6 +11,7 @@ from .. import economy as E
 from .. import mechanics as M
 from .. import vision as MV
 from .. import wards as WD
+from ..core import damage as D
 from ..core import types as W
 from ..core.stat_pipeline import ChampionStats, compose
 from ..items import inventory as I
@@ -157,7 +158,9 @@ def _kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, no
                     attack_target_kind=jnp.where(s.champ.attack_order >= 0,
                                                  s.kind[jnp.clip(s.champ.attack_order, 0, s.kind.shape[0] - 1)],
                                                  W.KIND_NONE).astype(jnp.int32),
-                    rooted=s.cc.root_until[:c] > now, move_speed=st.move_speed)
+                    rooted=s.cc.root_until[:c] > now, move_speed=st.move_speed,
+                    kit_shield=jnp.sum(jnp.where(s.shields.source[:c] == D.SOURCE_KIT,
+                                                 D.shield_value(s.shields, now)[:c], 0.0), axis=1))
 
 
 def kit_ctx(s: ModernState, cfg: WorldConfig, st: ChampionStats, caps: dict, now, dt) -> K.KitCtx:

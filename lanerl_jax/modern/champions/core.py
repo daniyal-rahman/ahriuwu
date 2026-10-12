@@ -65,6 +65,8 @@ class KitCtx(NamedTuple):
     rooted: Any = None               # (C,) bool (Jax Q cantCastWhileRooted)
     tenacity: Any = None             # (C,) holders' tenacity (stats and kit sources); None = 0 (Nasus W ramp)
     move_speed: Any = None           # (C,) holders' move speed after slows (Renekton E dash speed); None = 0
+    kit_shield: Any = None           # (C,) remaining absorb of the holder's kit-sourced shield (Malphite
+                                     # Granite Shield); None = 0
 
     @property
     def total_ad(self):

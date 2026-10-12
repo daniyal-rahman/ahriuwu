@@ -146,13 +146,18 @@ class Shields(NamedTuple):
     expires_at: Any
     decay_start: Any    # +inf: no decay
     order: Any          # grant counter
+    source: Any         # SOURCE_*: 0 any; a sourced grant replaces the unit's earlier one (refill)
+
+
+SOURCE_NONE = 0
+SOURCE_KIT = 1          # the holder's kit passive shield (Malphite Granite Shield)
+SOURCE_SHIFT = 16       # ShieldGrant.kind = SHIELD_* + SOURCE_SHIFT * SOURCE_*
 
 
 def init_shields(n_units: int, k: int = 6) -> Shields:
     z = jnp.zeros((n_units, k), jnp.float32)
-    return Shields(z, z, jnp.zeros((n_units, k), jnp.int32), z,
-                   jnp.full((n_units, k), jnp.inf, jnp.float32),
-                   jnp.zeros((n_units, k), jnp.int32))
+    zi = jnp.zeros((n_units, k), jnp.int32)
+    return Shields(z, z, zi, z, jnp.full((n_units, k), jnp.inf, jnp.float32), zi, zi)
 
 
 def shield_value(sh: Shields, now: Any) -> Any:
@@ -165,19 +170,22 @@ def shield_value(sh: Shields, now: Any) -> Any:
 
 
 def grant_shield(sh: Shields, unit: Any, amount: Any, kind: Any, now: Any,
-                 duration: Any, *, decay_hold: Any = jnp.inf, enabled: Any = True) -> Shields:
-    """Insert one shield into the emptiest-soonest slot (SHIELD.40)."""
+                 duration: Any, *, decay_hold: Any = jnp.inf, enabled: Any = True, source: Any = 0) -> Shields:
+    """Insert one shield into the emptiest-soonest slot (SHIELD.40); a ``source`` > 0 grant first removes the
+    unit's earlier shield of that source."""
+    ok = jnp.asarray(enabled) & (jnp.asarray(amount) > 0.0)
+    same = ok & (jnp.asarray(source) > 0) & (sh.source[unit] == source)
+    sh = sh._replace(amount=sh.amount.at[unit].set(jnp.where(same, 0.0, sh.amount[unit])))
     value = shield_value(sh, now)
     slot_score = jnp.where(value[unit] > 0.0, sh.expires_at[unit], -jnp.inf)
     slot = jnp.argmin(slot_score)
-    ok = jnp.asarray(enabled) & (jnp.asarray(amount) > 0.0)
     order = jnp.max(sh.order) + 1
 
     def put(arr, val):
         return arr.at[unit, slot].set(jnp.where(ok, jnp.asarray(val, arr.dtype), arr[unit, slot]))
     return Shields(put(sh.amount, amount), put(sh.initial, amount), put(sh.kind, kind),
                    put(sh.expires_at, now + duration), put(sh.decay_start, now + decay_hold),
-                   put(sh.order, order))
+                   put(sh.order, order), put(sh.source, source))
 
 
 def total_shield(sh: Shields, now: Any, kind: int | None = None) -> Any:
